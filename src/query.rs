@@ -49,8 +49,9 @@ pub fn ask(graph: &Graph, ids: &IdMatcher, dense: Option<&dyn Fn(&str, usize) ->
     for id in exact.iter().take(opts.seeds) {
         if let Some(h) = hit(graph, id, 1.0, None) { answer.seeds.push(h); }
     }
-    let remaining = opts.seeds.saturating_sub(answer.seeds.len());
-    if remaining > 0 {
+    // An exact id or symbol is the whole question; topping the seeds up from fusion only
+    // appends neighbours nobody asked for (an id lookup measured 174 tokens with them, 68 without).
+    if answer.seeds.is_empty() {
         let lexical: Vec<String> = LexicalIndex::build(graph).search(&query, 20).into_iter().map(|(id, _)| id).collect();
         let mut lists = vec![lexical];
         if opts.dense {
@@ -226,6 +227,16 @@ mod tests {
         assert_eq!(a.expanded[0].via.as_deref(), Some("FR-PAY-22"));
         let ex: Vec<&str> = a.expanded.iter().map(|h| h.id.as_str()).collect();
         assert!(!ex.contains(&"file:docs/06.md"));
+    }
+
+    #[test]
+    fn exact_match_leaves_the_other_seed_slots_empty() {
+        let g = graph();
+        // "N-151" is also a lexical hit on FR-PAY-22's body; it must arrive by expansion, not as a seed.
+        let a = ask(&g, &ids(), None, &["N-151".to_string()], &opts());
+        assert_eq!(a.seeds.len(), 1);
+        assert_eq!(a.seeds[0].id, "N-151");
+        assert_eq!(a.expanded[0].id, "FR-PAY-22");
     }
 
     #[test]

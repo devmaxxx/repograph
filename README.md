@@ -20,7 +20,7 @@ LLM-extracted graph it replaces:
 | ------------------------- | ------------------------ | ------------------- |
 | paraphrase questions      | 0/14                     | 5/14                |
 | keyword questions         | 11/24                    | 24/24               |
-| tokens per answer         | 1027-1555                | 202 median, 218 p90 |
+| tokens per answer         | 1027-1555                | 201 median, 215 p90 |
 | tokens to build the graph | 14,597,195               | 0                   |
 
 Every number above came from running both tools; none is a target. See [Bench](#bench) for the full
@@ -268,15 +268,17 @@ time — so a release binary run outside its source tree needs `--cases`:
   Cyrillic answer at roughly double what an equivalent chars/4 reading would give a Latin one
 
 Measured, on the shipped binary against `beauty-crm`: `keyword 24/24  paraphrase 5/14  code 3/3
-p90 218 tok` (median 202) with embeddings; `keyword 24/24  paraphrase 2/14  code 3/3  p90 216 tok`
-with `--no-dense`.
+p90 215 tok` (median 201) with embeddings; `keyword 24/24  paraphrase 2/14  code 3/3  p90 216 tok`
+with `--no-dense`. Asking for one of 24 requirement ids verbatim returns its head line first every
+time, at 68 tokens median — an exact match fills the answer alone instead of being topped up with
+fused neighbours, which had cost 174 tokens for the same lookups.
 
 The design note that shaped this architecture predicted paraphrase recall would reach ≥12/14 once
 dense retrieval was fused in. It measured at 5/14 — a prediction that did not survive contact with
 measurement, not a bug; see
 [`docs/adr/ADR-001-paraphrase-recall-was-a-prediction.md`](docs/adr/ADR-001-paraphrase-recall-was-a-prediction.md)
 for what was ruled out and what wasn't. The floors above are that measurement, and the tool still
-beats the incumbent on every axis anyone has ever measured: 5/14 and 24/24 at 202 median tokens
+beats the incumbent on every axis anyone has ever measured: 5/14 and 24/24 at 201 median tokens
 against graphify's 0/14 and 11/24 at 1,027-1,555 tokens, built for 14.6 million tokens instead of
 zero.
 
