@@ -3,7 +3,7 @@ use crate::model::{EdgeKind, Extraction, Graph, NodeKind};
 use anyhow::{Context, Result};
 use serde::Deserialize;
 use std::collections::hash_map::Entry;
-use std::collections::{BTreeSet, HashMap};
+use std::collections::HashMap;
 
 /// A path the walker never yields, so `update` neither removes nor
 /// re-extracts the frozen layer imported from a graphify graph.
@@ -131,11 +131,19 @@ pub fn import(graph: &mut Graph, ids: &IdMatcher, json: &str) -> Result<Report> 
                         }
                     }
                     Resolved::Concept(id) => {
-                        report.concepts_created += 1;
-                        ex.node(NodeKind::LegacyConcept, id, &gn.label, "", &gn.source_file, 0);
-                        if let Some(n) = ex.nodes.last_mut() {
-                            n.files = BTreeSet::from([LEGACY_FILE.to_string()]);
-                            n.community = gn.community_name.clone();
+                        // A second import re-derives the same "legacy:<gid>" id (by_label
+                        // excludes concepts, so rules 1-2 can't redirect it); skip staging
+                        // once the node already exists so the counter reports concepts
+                        // actually created by this run, not ones re-derived from a prior one.
+                        if !graph.nodes.contains_key(id) {
+                            report.concepts_created += 1;
+                            // `file` is the legacy marker so `remove_file` on a real doc
+                            // path never touches it; the graphify source lives in `body`
+                            // instead, where it stays stable and stays searchable.
+                            ex.node(NodeKind::LegacyConcept, id, &gn.label, &gn.source_file, LEGACY_FILE, 0);
+                            if let Some(n) = ex.nodes.last_mut() {
+                                n.community = gn.community_name.clone();
+                            }
                         }
                     }
                 }
@@ -190,25 +198,47 @@ mod tests {
     fn resolves_by_id_then_label_then_creates_concepts() {
         let mut g = base();
         let r = run(&mut g);
-        assert_eq!(r, Report { edges_seen: 3, resolved_both: 2, resolved_one: 1, concepts_created: 1 });
+        assert_eq!(r, Report { edges_seen: 4, resolved_both: 2, resolved_one: 1, concepts_created: 3 });
         assert!(g.edges.iter().any(|e| e.source == "FR-PAY-22" && e.target == "N-151" && e.kind == EdgeKind::Legacy && e.context == "references"));
         assert!(g.edges.iter().any(|e| e.source == "FR-PAY-22" && e.target == "FR-TOOL-39" && e.context == "conceptually_related_to"));
         let ghost = &g.nodes["legacy:ghost"];
         assert_eq!(ghost.kind, NodeKind::LegacyConcept);
-        assert_eq!(ghost.file, "99-x.md");
+        assert_eq!(ghost.file, LEGACY_FILE);
+        assert_eq!(ghost.body, "99-x.md");
         assert_eq!(g.nodes["FR-PAY-22"].community.as_deref(), Some("Payments core"));
         assert!(!g.edges.iter().any(|e| e.target.contains("ast_sym")));
     }
 
     #[test]
     fn import_is_idempotent_and_survives_update_removal() {
+        // The fixture's `twin_a`/`twin_b` both miss rules 1-2 and share a label, so they
+        // land in `by_label` under the same key once created — but only under the key
+        // `(LEGACY_FILE, label)`, since a concept's `file` is now the constant `LEGACY_FILE`
+        // (finding 3), not its graphify `source_file`. Their own `source_file` is set to
+        // that same `LEGACY_FILE` string so a *second* run's lookup can actually collide with
+        // that stored entry — without the `by_label` filter on `NodeKind::LegacyConcept` in
+        // `import()`, one of the two would resolve to the other's concept id on a re-run,
+        // producing a different edge than the first run and breaking idempotence.
         let mut g = base();
-        run(&mut g);
+        let r1 = run(&mut g);
         let (n, e) = (g.nodes.len(), g.edges.len());
-        run(&mut g);
+        let r2 = run(&mut g);
         assert_eq!((g.nodes.len(), g.edges.len()), (n, e));
+        // `edges_seen`/`resolved_both`/`resolved_one` are pure functions of the input graph
+        // and must reproduce exactly; `concepts_created` legitimately drops to zero on a
+        // re-run because every concept from the first run already exists (that is the fix
+        // in src/legacy.rs guarding `Resolved::Concept` on `!graph.nodes.contains_key`).
+        assert_eq!((r2.edges_seen, r2.resolved_both, r2.resolved_one), (r1.edges_seen, r1.resolved_both, r1.resolved_one));
+        assert_eq!(r2.concepts_created, 0);
+
+        // "99-x.md" is `ghost`'s graphify source_file, now stored in `body`, not `file`.
+        // Removing it as a repograph-tracked path must not touch the concept at all.
+        g.remove_file("99-x.md");
         g.remove_file("docs/prd/06-payments.md");
         assert!(g.nodes.contains_key("legacy:ghost"));
+        let ghost = &g.nodes["legacy:ghost"];
+        assert_eq!(ghost.file, LEGACY_FILE);
+        assert_eq!(ghost.line, 0);
         assert!(g.edges.iter().any(|e| e.kind == EdgeKind::Legacy));
     }
 }
