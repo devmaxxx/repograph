@@ -21,4 +21,4 @@ jobs:
       - run: cargo build --release --target ${{ matrix.target }}
       - run: tar -C target/${{ matrix.target }}/release -czf repograph-${{ matrix.target }}.tar.gz repograph
       - uses: softprops/action-gh-release@v2
-        with: { files: repograph-${{ matrix.target }}.tar.gz }
+        with: { files: "repograph-${{ matrix.target }}.tar.gz" }
