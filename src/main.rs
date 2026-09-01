@@ -1,4 +1,5 @@
 mod config;
+mod doc;
 mod ids;
 mod model;
 mod store;
@@ -69,8 +70,9 @@ pub fn run_update(repo: &std::path::Path, cfg: &config::Config, ex: &Extractors,
     Ok(UpdateReport { changed: diff.changed.len(), removed: diff.removed.len(), nodes: graph.nodes.len(), edges: graph.edges.len() })
 }
 
-fn extractors(_cfg: &config::Config) -> Extractors {
-    Extractors { doc: Box::new(Noop), code: Box::new(Noop), registry: Box::new(Noop) }
+fn extractors(cfg: &config::Config) -> Extractors {
+    let ids = ids::IdMatcher::new(&cfg.id_families, &cfg.milestone_families);
+    Extractors { doc: Box::new(doc::DocExtractor::new(ids)), code: Box::new(Noop), registry: Box::new(Noop) }
 }
 
 fn main() -> anyhow::Result<()> {

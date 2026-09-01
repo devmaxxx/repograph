@@ -25,6 +25,8 @@ impl Default for Config {
             id_families: s(&[
                 "FR-DM", "FR-CAL", "FR-VIS", "FR-PAY", "FR-PH", "FR-SEC", "FR-APP", "FR-MKT",
                 "FR-AI", "FR-CRM", "FR-SHELL", "FR-TOOL", "FR-SVC", "FR-LIFE", "FR-WH", "FR-RPT",
+                "FR-MIG", "FR-WEB", "FR-OPS", "FR-STAFF",
+                "NFR-PH", "NFR-MKT", "NFR-MIG", "NFR-PAY", "NFR-DM", "NFR-RPT", "NFR-WEB", "NFR-SVC", "NFR-STAFF", "NFR",
                 "AC-DM", "AC-VIS", "INV", "ADR", "OD", "OQ", "N", "R", "M", "W", "D", "G",
                 "PREP", "CAL", "OR", "MON", "SEAM", "SG", "IDEA",
             ]),

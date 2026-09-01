@@ -32,6 +32,9 @@ impl IdMatcher {
         IdMatcher { single, range, slash }
     }
 
+    /// The bare id alternation, for callers that embed it in a larger expression.
+    pub fn single_pattern(&self) -> String { self.single.as_str().to_string() }
+
     pub fn is_id(&self, token: &str) -> bool {
         self.single.find(token).map(|m| m.start() == 0 && m.end() == token.len()).unwrap_or(false)
     }
@@ -135,5 +138,11 @@ mod tests {
         assert!(m().is_id("FR-PAY-22"));
         assert!(!m().is_id("FR-PAY-22."));
         assert!(!m().is_id("asGrosze"));
+    }
+
+    #[test]
+    fn nfr_and_fr_ops_do_not_collide_with_bare_families() {
+        assert_eq!(ids("N-151 и NFR-PH-01"), vec!["N-151", "NFR-PH-01"]);
+        assert_eq!(ids("OPS-M02 vs FR-OPS-12"), vec!["OPS-M02", "FR-OPS-12"]);
     }
 }
