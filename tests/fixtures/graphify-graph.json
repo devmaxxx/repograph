@@ -1,0 +1,39 @@
+{
+  "nodes": [
+    {
+      "id": "fr_pay_22",
+      "label": "FR-PAY-22 CancellationPolicy",
+      "source_file": "06-payments.md",
+      "community_name": "Payments core"
+    },
+    {
+      "id": "n_151",
+      "label": "N-151",
+      "source_file": "never-list.md",
+      "community_name": "Never list"
+    },
+    {
+      "id": "refund_flow",
+      "label": "Refund flow",
+      "source_file": "06-payments.md",
+      "community_name": "Payments core"
+    },
+    { "id": "ghost", "label": "Something unrelated", "source_file": "99-x.md" },
+    {
+      "id": "ast_sym",
+      "label": "asGrosze",
+      "_origin": "ast",
+      "source_file": "money.ts"
+    }
+  ],
+  "links": [
+    { "source": "fr_pay_22", "target": "n_151", "relation": "references" },
+    {
+      "source": "fr_pay_22",
+      "target": "refund_flow",
+      "relation": "conceptually_related_to"
+    },
+    { "source": "ghost", "target": "refund_flow", "relation": "cites" },
+    { "source": "fr_pay_22", "target": "ast_sym", "relation": "implements" }
+  ]
+}

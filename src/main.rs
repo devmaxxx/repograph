@@ -3,6 +3,7 @@ mod config;
 mod doc;
 mod ids;
 mod index;
+mod legacy;
 mod model;
 mod query;
 mod store;
@@ -138,6 +139,19 @@ fn main() -> anyhow::Result<()> {
             let (graph, _) = store::Store::new(&repo).load()?;
             print!("{}", query::verify(&graph));
             if graph.nodes.is_empty() { anyhow::bail!("graph is empty — run `repograph build`"); }
+            Ok(())
+        }
+        Cmd::ImportLegacy { graph_json } => {
+            let store = store::Store::new(&repo);
+            let (mut graph, manifest) = store.load()?;
+            let ids = ids::IdMatcher::new(&cfg.id_families, &cfg.milestone_families);
+            let text = std::fs::read_to_string(&graph_json)?;
+            let r = legacy::import(&mut graph, &ids, &text)?;
+            store.save(&graph, &manifest)?;
+            println!(
+                "legacy: {} edges, {} both endpoints resolved, {} one, {} concepts created",
+                r.edges_seen, r.resolved_both, r.resolved_one, r.concepts_created
+            );
             Ok(())
         }
         _ => anyhow::bail!("not implemented yet"),
