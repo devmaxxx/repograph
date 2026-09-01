@@ -93,6 +93,13 @@ mod tests {
     }
 
     #[test]
+    fn hyphenated_word_without_digits_stays_one_token() {
+        // No digit in this one, unlike an id: pins the hyphen branch on its own
+        // instead of riding along on the digit check.
+        assert_eq!(tokenize("long-standing"), vec!["long-standing".to_string()]);
+    }
+
+    #[test]
     fn bm25_ranks_the_body_match_first() {
         let mut g = Graph::default();
         let mut e = Extraction::default();
@@ -107,5 +114,21 @@ mod tests {
         assert_eq!(hits[1].0, "FR-PAY-26");
         assert_eq!(hits.len(), 2);
         assert!(idx.search("file", 5).is_empty());
+    }
+
+    #[test]
+    fn bm25_score_is_pinned_to_the_stated_constants() {
+        let mut g = Graph::default();
+        let mut e = Extraction::default();
+        e.node(NodeKind::Requirement, "FR-PAY-22", "правило отмены", "штраф считается по политике отмены", "a.md", 1);
+        e.node(NodeKind::Requirement, "FR-PAY-26", "списание штрафа", "штраф списывается автоматически", "a.md", 9);
+        e.node(NodeKind::Requirement, "FR-CAL-40", "коды конфликтов", "словарь кодов", "b.md", 1);
+        e.node(NodeKind::File, "file:a.md", "a.md", "", "a.md", 1);
+        g.apply(e);
+        let idx = LexicalIndex::build(&g);
+        let hits = idx.search("политика отмен штрафы", 5);
+        // Measured with K1 = 1.2, B = 0.75; a tolerance this tight catches
+        // either constant drifting to a materially different value.
+        assert!((hits[0].1 - 2.565_525).abs() < 0.001, "top score {} moved off the K1/B baseline", hits[0].1);
     }
 }
