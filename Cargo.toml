@@ -8,6 +8,7 @@ rust-version = "1.98"
 anyhow = "=1.0.104"
 blake3 = "=1.8.7"
 clap = { version = "=4.6.6", features = ["derive"] }
+globset = "=0.4.20"
 fastembed = "=6.0.2"
 ignore = "=0.4.33"
 rayon = "=1.12.0"

@@ -1,5 +1,6 @@
 mod config;
 mod ids;
+mod walk;
 
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
@@ -35,6 +36,7 @@ fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
     let repo = cli.repo.canonicalize()?;
     let cfg = config::Config::load(&repo)?;
+    #[allow(clippy::match_single_binding)]
     match cli.cmd {
         _ => {
             println!("repograph: {} families configured at {}", cfg.id_families.len(), repo.display());

@@ -2191,6 +2191,7 @@ dependencies = [
  "blake3",
  "clap",
  "fastembed",
+ "globset",
  "ignore",
  "rayon",
  "regex",
