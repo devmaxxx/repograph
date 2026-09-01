@@ -1,3 +1,4 @@
+pub mod idrefs;
 pub mod imports;
 pub mod symbols;
 
@@ -17,6 +18,10 @@ impl CodeExtractor {
 
 impl Extractor for CodeExtractor {
     fn extract(&self, rel: &str, text: &str) -> Extraction {
-        self.symbols.scan(rel, text)
+        let mut ex = self.symbols.scan(rel, text);
+        idrefs::scan(&self.ids, rel, text, &mut ex);
+        ex.edges.sort();
+        ex.edges.dedup();
+        ex
     }
 }
