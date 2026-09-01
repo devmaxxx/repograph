@@ -1,0 +1,4 @@
+doc_globs = ["**/*.md"]
+code_globs = ["**/*.ts", "**/*.tsx"]
+skip = ["**/node_modules/**", "**/dist/**", "**/TRACKER.md", "graphify-out/**", ".repograph/**"]
+registries = ["docs/constitution.yaml"]
