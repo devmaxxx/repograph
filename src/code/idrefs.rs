@@ -77,6 +77,12 @@ mod tests {
     }
 
     #[test]
+    fn template_literal_ids_use_string_context_and_attach_to_method() {
+        let r = refs("m.ts", "class A {\n  run() { return `see FR-SEC-21`; }\n}\n");
+        assert!(r.contains(&("sym:m.ts::A.run".into(), "FR-SEC-21".into(), "string".into())));
+    }
+
+    #[test]
     fn staff_controller_fixture_yields_fr_vis_35() {
         let text = std::fs::read_to_string(format!("{}/tests/fixtures/staff.controller.ts", env!("CARGO_MANIFEST_DIR"))).unwrap();
         let r = refs("c.ts", &text);
