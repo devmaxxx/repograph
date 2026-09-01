@@ -203,6 +203,13 @@ mod tests {
     }
 
     #[test]
+    fn head_without_modality_is_still_scanned() {
+        let ex = scan("docs/06.md", &fixture("06-payments.md"));
+        let n = ex.nodes.iter().find(|n| n.id == "FR-PAY-31").unwrap();
+        assert_eq!((n.label.as_str(), n.body.as_str()), ("Без штрафа возврат в течение суток.", ""));
+    }
+
+    #[test]
     fn edges_are_unique_per_key() {
         let ex = scan("docs/x.md", "**FR-PAY-22 · MUST · a**\n\nFR-PAY-26 и снова FR-PAY-26.\n");
         let n = ex.edges.iter().filter(|e| e.target == "FR-PAY-26").count();

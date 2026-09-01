@@ -6,6 +6,7 @@ pub struct IdHit {
     pub start: usize,
 }
 
+#[derive(Clone)]
 pub struct IdMatcher {
     single: Regex,
     range: Regex,

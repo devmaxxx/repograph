@@ -17,3 +17,5 @@ type CancellationPolicy = { freeUntilMinutes: number; feePercent: number };
 ## Не требование
 
 Обычный абзац с ссылкой на FR-CAL-40.
+
+**FR-PAY-31 · Без штрафа возврат в течение суток.**

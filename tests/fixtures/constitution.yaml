@@ -1,0 +1,22 @@
+version: 1
+source: docs/prd-2026-08-16/prd/01-vision-and-roles.md
+invariants:
+  - id: INV-01
+    statement: |-
+      **Ранжирование не зависит от платного признака.** Вход — белый список полей
+    mechanism: |-
+      CI-тест `ranking_input_whitelist_test`
+    test_ref: ranking_input_whitelist_test
+    owner: BE dev
+    basis: решение 1, `N-039`, `I-015`
+  - id: INV-06
+    statement: |-
+      **Контуры не пересекаются.**
+    mechanism: RLS
+    test_ref: packages/db/test/contours.spec.ts
+    owner: BE dev
+  - id: INV-02
+    statement: "**Нет платных мест.**"
+    mechanism: миграции
+    manual_checklist_ref: docs/ops/manual-acceptance-checklist.md#inv-02
+    owner: BE dev

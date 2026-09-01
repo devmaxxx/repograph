@@ -72,7 +72,11 @@ pub fn run_update(repo: &std::path::Path, cfg: &config::Config, ex: &Extractors,
 
 fn extractors(cfg: &config::Config) -> Extractors {
     let ids = ids::IdMatcher::new(&cfg.id_families, &cfg.milestone_families);
-    Extractors { doc: Box::new(doc::DocExtractor::new(ids)), code: Box::new(Noop), registry: Box::new(Noop) }
+    Extractors {
+        doc: Box::new(doc::DocExtractor::new(ids.clone())),
+        code: Box::new(Noop),
+        registry: Box::new(doc::registry::RegistryExtractor::new(ids)),
+    }
 }
 
 fn main() -> anyhow::Result<()> {

@@ -26,6 +26,9 @@ impl Default for Config {
                 "FR-DM", "FR-CAL", "FR-VIS", "FR-PAY", "FR-PH", "FR-SEC", "FR-APP", "FR-MKT",
                 "FR-AI", "FR-CRM", "FR-SHELL", "FR-TOOL", "FR-SVC", "FR-LIFE", "FR-WH", "FR-RPT",
                 "FR-MIG", "FR-WEB", "FR-OPS", "FR-STAFF",
+                // Bare "NFR" trails its ten "NFR-<SUB>" siblings, but alternation order can't
+                // cause a wrong match here: every branch requires digits right after its own
+                // literal suffix, so "NFR-PH-01" can only ever satisfy the "NFR-PH" arm.
                 "NFR-PH", "NFR-MKT", "NFR-MIG", "NFR-PAY", "NFR-DM", "NFR-RPT", "NFR-WEB", "NFR-SVC", "NFR-STAFF", "NFR",
                 "AC-DM", "AC-VIS", "INV", "ADR", "OD", "OQ", "N", "R", "M", "W", "D", "G",
                 "PREP", "CAL", "OR", "MON", "SEAM", "SG", "IDEA",
