@@ -19,7 +19,7 @@
 | petgraph multigraph         | `HashMap<NodeId, Vec<EdgeIdx>>` adjacency                                | only 1-hop expansion and `explain` walk the graph; no algorithms from petgraph are used                                      |
 | tree-sitter-md 0.5.3 for markdown | a line scanner: one regex for the requirement head, `#` lines as block boundaries, one regex for links | both dialects are line-anchored; a block grammar would still need the same regex on heading text, and the 417 intra-repo links are `[text](path)` — one dependency fewer, same output |
 
-None of these changes the accuracy gates. If Max wants rkyv/tantivy/petgraph back, the store and lexical modules are the only files that change.
+~~None of these changes the accuracy gates.~~ False for the tantivy row: reproducing the BM25-over-bodies prototype's configuration on the shipped hand-rolled index scores 2/14 paraphrase where tantivy recorded 4/14 — see [`docs/adr/0001-paraphrase-recall-was-a-prediction.md`](../../adr/0001-paraphrase-recall-was-a-prediction.md). The rkyv and petgraph rows are unaffected. If Max wants rkyv/tantivy/petgraph back, the store and lexical modules are the only files that change.
 
 ## Global Constraints
 

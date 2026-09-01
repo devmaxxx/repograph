@@ -1,4 +1,20 @@
+# repograph's own config for indexing itself. It sets every key to the shipped
+# default (see src/config.rs), so it also serves as the worked example the
+# README's Configure section walks through.
 doc_globs = ["**/*.md"]
 code_globs = ["**/*.ts", "**/*.tsx"]
 skip = ["**/node_modules/**", "**/dist/**", "**/TRACKER.md", "graphify-out/**", ".repograph/**"]
 registries = ["docs/constitution.yaml"]
+
+# Id prefixes to recognise. Deliberately strict — ambiguous one-letter families
+# collide with ordinary prose and are left out. This is beauty-crm's census,
+# not a generic default; a different repository should list its own families.
+id_families = [
+  "FR-DM", "FR-CAL", "FR-VIS", "FR-PAY", "FR-PH", "FR-SEC", "FR-APP", "FR-MKT",
+  "FR-AI", "FR-CRM", "FR-SHELL", "FR-TOOL", "FR-SVC", "FR-LIFE", "FR-WH", "FR-RPT",
+  "FR-MIG", "FR-WEB", "FR-OPS", "FR-STAFF",
+  "NFR-PH", "NFR-MKT", "NFR-MIG", "NFR-PAY", "NFR-DM", "NFR-RPT", "NFR-WEB", "NFR-SVC", "NFR-STAFF", "NFR",
+  "AC-DM", "AC-VIS", "INV", "ADR", "OD", "OQ", "N", "R", "M", "W", "D", "G",
+  "PREP", "CAL", "OR", "MON", "SEAM", "SG", "IDEA",
+]
+milestone_families = ["BE", "FE", "PLAT", "SYNC", "OPS", "AI"]

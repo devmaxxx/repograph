@@ -1,0 +1,32 @@
+name: ci
+on: [push, pull_request]
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.98.0
+        with: { components: clippy }
+      - run: cargo clippy --all-targets -- -D warnings
+      - run: cargo test
+  bench:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # `secrets` is not readable from a job-level `if`; a step output is.
+      - id: token
+        run: echo "present=${{ secrets.BENCH_REPO_TOKEN != '' }}" >> "$GITHUB_OUTPUT"
+      - if: steps.token.outputs.present == 'true'
+        uses: actions/checkout@v4
+        with:
+          repository: olkp1/beauty-crm
+          token: ${{ secrets.BENCH_REPO_TOKEN }}
+          path: corpus
+      - if: steps.token.outputs.present == 'true'
+        uses: dtolnay/rust-toolchain@1.98.0
+      - if: steps.token.outputs.present == 'true'
+        run: cargo build --release
+      - if: steps.token.outputs.present == 'true'
+        run: ./target/release/repograph --repo corpus --no-dense build
+      - if: steps.token.outputs.present == 'true'
+        run: ./target/release/repograph --repo corpus --no-dense bench
