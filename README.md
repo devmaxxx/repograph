@@ -141,7 +141,8 @@ repograph bench --cases other.jsonl  # a different case file, same 24/14/3 shape
    Cyrillic tokens, English otherwise, so `штрафа` and `штрафы` are the same term. Ids survive
    tokenization whole, so `FR-PAY-22` never becomes three tokens.
 3. **Dense.** A local embedding of the query, cosine-ranked against every node's stored vector
-   (see [Embeddings](#embeddings)). Skipped by `--no-dense` or when no model is cached.
+   (see [Embeddings](#embeddings)). Skipped by `--no-dense`, or when the model cannot be opened —
+   no cache and no network (see [Embeddings](#embeddings) for the fallback rules).
 4. **Fuse.** Reciprocal rank fusion (k = 60) merges the retrievers; the top seeds survive.
 5. **Expand.** One hop over `References`, `Implements`, `Declares`, `Links` and `Legacy` edges, in
    both directions. `File` nodes and decorator nodes are never expanded _to_ — they are hubs and
@@ -209,13 +210,14 @@ in full, not an empty config:
 | `code_globs`         | `["**/*.ts", "**/*.tsx"]`                                                                   |
 | `skip`               | `["**/node_modules/**", "**/dist/**", "**/TRACKER.md", "graphify-out/**", ".repograph/**"]` |
 | `registries`         | `["docs/constitution.yaml"]`                                                                |
-| `id_families`        | see below — 47 strict families                                                              |
+| `id_families`        | see below — 49 strict families                                                              |
 | `milestone_families` | `["BE", "FE", "PLAT", "SYNC", "OPS", "AI"]`                                                 |
 
 `id_families` and `milestone_families` default to the strict list `beauty-crm`'s census settled on —
-they are this project's development corpus, not a generic default. A one-letter or short family
-(`B1`, `C11`, `S3`) collides with ordinary prose and is deliberately left out; a different repository
-should replace both lists with its own families:
+they are this project's development corpus, not a generic default. Every family is matched as
+`FAMILY-<1–4 digits>`, hyphen included; hyphenless labels such as `B1`, `C11` or `S3` collide with
+ordinary prose and are deliberately not families at all. A different repository should replace both
+lists with its own:
 
 ```toml
 id_families = [
@@ -234,10 +236,13 @@ heading form; the modality is optional.
 ## Embeddings
 
 Dense retrieval embeds with `fastembed`'s `MultilingualE5Small` (`intfloat/multilingual-e5-small`,
-384-d, ONNX, ≈450 MB) — a one-time download cached under `FASTEMBED_CACHE_DIR` (or fastembed's own
-default cache directory if that is unset). Every command that touches the dense stage — `build`,
-`update`, `ask`, `bench` — reuses that cache; there are no further network calls after the first one.
-`--no-dense` skips the download and the embedding stage everywhere.
+384-d, ONNX, ≈470 MB on disk) — a one-time download cached under `FASTEMBED_CACHE_DIR`. Set that
+variable: fastembed's default is `.fastembed_cache` **relative to the current working directory**, so
+without it every directory you run `repograph` from downloads its own copy (and the copy lands in the
+repository you are indexing — gitignore `.fastembed_cache/` if you leave the default). Every command
+that touches the dense stage — `build`, `update`, `ask`, `bench` — reuses the cache; there are no
+further network calls once it is populated. `--no-dense` skips the download and the embedding stage
+everywhere.
 
 If the model can't be opened (no cache, no network), the two kinds of caller degrade differently, on
 purpose: `ask` and `update` fall back to lexical-only and print one line to stderr saying so, then
@@ -251,8 +256,10 @@ On `beauty-crm`'s 6,691 non-`File` nodes, the first embedding pass took ~135 s o
 
 ## Bench
 
-`repograph bench [--cases file]` runs the recorded 41 cases (24 keyword + 14 paraphrase + 3 code,
-`bench/cases.jsonl` by default) against a built graph and fails the process if any floor is missed:
+`repograph bench [--cases file]` runs the recorded 41 cases (24 keyword + 14 paraphrase + 3 code)
+against a built graph and fails the process if any floor is missed. Without `--cases` it reads
+`bench/cases.jsonl` from the checkout the binary was compiled in — an absolute path baked in at build
+time — so a release binary run outside its source tree needs `--cases`:
 
 - keyword 24/24
 - paraphrase ≥5/14 with embeddings, ≥2/14 with `--no-dense`
@@ -308,7 +315,7 @@ and [`docs/superpowers/plans/2026-09-01-repograph.md`](docs/superpowers/plans/20
 
 The plan's deviations table lists four simplifications against the spec, none of which change the
 node/edge model or the answer shape: `serde_json` with an atomic rename instead of `rkyv`; a
-~120-line hand-rolled BM25 over `rust-stemmers` instead of `tantivy`; adjacency lists instead of
+77-line hand-rolled BM25 over `rust-stemmers` instead of `tantivy`; adjacency lists instead of
 `petgraph`; and a line scanner (one regex for a requirement head, `#` lines as block boundaries, one
 regex for links) instead of `tree-sitter-md`. One of those four _did_ move a measured number: the
 `tantivy` swap cost paraphrase recall, not just code size — see

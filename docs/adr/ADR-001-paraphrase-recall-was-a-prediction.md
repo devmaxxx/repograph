@@ -6,11 +6,12 @@
 
 The design note ([`docs/superpowers/specs/2026-09-01-repograph-design.md`](../superpowers/specs/2026-09-01-repograph-design.md))
 proposed exact-id → BM25 → local embeddings, fused by reciprocal rank, then a one-hop expansion over
-the hand-written id graph. Its own alternatives table labels the fused approach's paraphrase score
-`≥12/14` as a **target** — the word the table itself uses next to every other row's measured number.
-That target then travelled unchanged into the implementation plan and its phase-4 gate
-(`docs/superpowers/plans/2026-09-01-repograph.md`, Phase 4: "paraphrase ≥12/14 on `bench/cases.jsonl`")
-as though it had been measured rather than guessed.
+the hand-written id graph. Its "Measurements that drive the design" table labels the fused
+approach's paraphrase score `target ≥12/14` — the one row whose number is not a measurement. Two
+sections later its alternatives table prints the same `≥12/14` bare, and its phase table makes it the
+phase-4 gate ("paraphrase ≥12/14 on `bench/cases.jsonl`"). From there it travelled unchanged into
+the implementation plan's gates line (`docs/superpowers/plans/2026-09-01-repograph.md`: "paraphrase
+≥7/14 with `--no-dense`, ≥12/14 with dense") as though it had been measured rather than guessed.
 
 It hadn't been. Every paraphrase number this project measured, in the order it measured them:
 
@@ -22,8 +23,8 @@ It hadn't been. Every paraphrase number this project measured, in the order it m
 | **repograph, shipped: exact → BM25 → dense, RRF-fused, one hop** | **5/14** at `--seeds 5` |
 
 `--seeds` trades cost for a little more recall — 4/14 at `--seeds 3`, 5/14 at `--seeds 5`, 6/14 at
-`--seeds 8` — about one extra hit per doubling, at roughly 1.5× the tokens. None of those points reach
-the ≥12/14 target.
+`--seeds 8` — one extra hit per step, each step costing roughly 1.5× the tokens (median 131 → 202 →
+297). None of those points reach the ≥12/14 target.
 
 ## Decision
 
@@ -47,7 +48,7 @@ negative:
 The real cause sits in the questions, not the retrievers: three of the fourteen paraphrase targets
 share zero stems with their query, and most of the rest share only high-document-frequency filler
 words. No BM25 variant ranks a document with no shared terms above one that shares even a rare term,
-and `MultilingualE5Small` places five of the eight misses outside its own top-50 of 6,691 candidates —
+and `MultilingualE5Small` places five of the missed targets outside its own top-50 of 6,691 candidates —
 the embedding model itself does not consider them close. The named next lever, if paraphrase recall
 needs to move further, is a larger embedding model (`MultilingualE5Base`), not more seeds and not a
 wider expansion cap.
@@ -55,12 +56,13 @@ wider expansion cap.
 ## Consequences
 
 - `bench`'s floors, and the README's Bench section, state 5/14 (dense) and 2/14 (`--no-dense`) as
-  what was measured. `repograph` still beats graphify — the only other measured system — on every
-  axis: paraphrase, keyword, tokens per answer, and tokens to build the graph.
+  what was measured. `repograph` still beats graphify — the incumbent it replaces — on every axis:
+  paraphrase, keyword, tokens per answer, and tokens to build the graph.
 - The implementation plan's deviations table (`docs/superpowers/plans/2026-09-01-repograph.md`)
   claims "None of these changes the accuracy gates" for its four spec deviations. That claim is false
   for one of the four: reproducing the BM25-over-bodies prototype's configuration on the shipped
   hand-rolled index scores 2/14, where `tantivy` recorded 4/14 on the same prototype. The claim has
   been struck from that table and replaced with a citation to this ADR.
 - If paraphrase recall needs to improve further, the next experiment is `MultilingualE5Base`, not
-  another seeds/hops tuning pass — both of those levers are now measured as exhausted.
+  another seeds/hops tuning pass — both of those levers are measured: each still buys about one hit,
+  and each pays for it with the token budget the bench exists to protect.
