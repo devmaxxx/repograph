@@ -18,6 +18,8 @@ struct Cli {
     /// Repository root; defaults to the current directory.
     #[arg(long, global = true, default_value = ".")]
     repo: PathBuf,
+    #[arg(long, global = true)]
+    no_dense: bool,
     #[command(subcommand)]
     cmd: Cmd,
 }
@@ -31,7 +33,6 @@ enum Cmd {
         #[arg(long)] json: bool,
         #[arg(long, default_value_t = 3)] seeds: usize,
         #[arg(long)] bodies: bool,
-        #[arg(long)] no_dense: bool,
     },
     Explain { node: String },
     Verify,
@@ -83,6 +84,14 @@ fn extractors(repo: &std::path::Path, cfg: &config::Config) -> anyhow::Result<Ex
     })
 }
 
+fn open_embedder(no_dense: bool) -> Option<index::dense::Embedder> {
+    if no_dense { return None; }
+    match index::dense::Embedder::open() {
+        Ok(e) => Some(e),
+        Err(err) => { eprintln!("dense: model unavailable, continuing lexical-only ({err:#})"); None }
+    }
+}
+
 fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
     let repo = cli.repo.canonicalize()?;
@@ -92,13 +101,29 @@ fn main() -> anyhow::Result<()> {
         Cmd::Build | Cmd::Update => {
             let r = run_update(&repo, &cfg, &extractors(&repo, &cfg)?, wipe)?;
             println!("changed {} removed {} nodes {} edges {}", r.changed, r.removed, r.nodes, r.edges);
+            if let Some(mut emb) = open_embedder(cli.no_dense) {
+                let store = store::Store::new(&repo);
+                let (graph, _) = store.load()?;
+                let mut dense = index::dense::DenseIndex::load(&store)?;
+                let t = std::time::Instant::now();
+                let n = dense.sync(&graph, &mut |texts| emb.passages(texts))?;
+                dense.save(&store)?;
+                println!("dense: embedded {n} nodes in {:.1}s", t.elapsed().as_secs_f32());
+            }
             Ok(())
         }
-        Cmd::Ask { words, json, seeds, bodies, no_dense } => {
-            let (graph, _) = store::Store::new(&repo).load()?;
+        Cmd::Ask { words, json, seeds, bodies } => {
+            let store = store::Store::new(&repo);
+            let (graph, _) = store.load()?;
             let ids = ids::IdMatcher::new(&cfg.id_families, &cfg.milestone_families);
-            let opts = query::Options { seeds, bodies, dense: !no_dense, json };
-            let answer = query::ask(&graph, &ids, None, &words, &opts);
+            let dense_idx = index::dense::DenseIndex::load(&store)?;
+            let embedder = std::cell::RefCell::new(open_embedder(cli.no_dense));
+            let dense_fn = |q: &str, k: usize| -> Vec<String> {
+                let mut e = embedder.borrow_mut();
+                match e.as_mut().and_then(|e| e.query(q).ok()) { Some(v) => dense_idx.search(&v, k), None => Vec::new() }
+            };
+            let opts = query::Options { seeds, bodies, dense: !cli.no_dense && !dense_idx.ids.is_empty(), json };
+            let answer = query::ask(&graph, &ids, Some(&dense_fn), &words, &opts);
             print!("{}", query::render(&answer, &graph, &opts));
             Ok(())
         }
