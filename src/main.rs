@@ -1,3 +1,4 @@
+mod code;
 mod config;
 mod doc;
 mod ids;
