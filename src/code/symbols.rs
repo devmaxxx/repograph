@@ -65,10 +65,6 @@ impl SymbolScanner {
         SymbolScanner { resolver }
     }
 
-    pub fn resolver(&self) -> &Resolver {
-        &self.resolver
-    }
-
     pub fn scan(&self, rel: &str, source: &str) -> Extraction {
         let mut ex = Extraction::default();
         let file_id = format!("file:{rel}");

@@ -8,8 +8,6 @@ pub struct Store { dir: PathBuf }
 impl Store {
     pub fn new(repo: &Path) -> Store { Store { dir: repo.join(".repograph") } }
 
-    pub fn dir(&self) -> &Path { &self.dir }
-
     pub fn load(&self) -> Result<(Graph, Manifest)> {
         let read = |name: &str| -> Result<Option<String>> {
             let p = self.dir.join(name);

@@ -95,11 +95,6 @@ pub trait Extractor {
     fn extract(&self, rel: &str, text: &str) -> Extraction;
 }
 
-pub struct Noop;
-impl Extractor for Noop {
-    fn extract(&self, _rel: &str, _text: &str) -> Extraction { Extraction::default() }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
