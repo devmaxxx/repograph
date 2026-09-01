@@ -44,7 +44,9 @@ pub fn ask(graph: &Graph, ids: &IdMatcher, dense: Option<&dyn Fn(&str, usize) ->
     let query = words.join(" ");
     let mut answer = Answer::default();
     let exact = exact_seeds(graph, ids, words);
-    for id in &exact {
+    // A name duplicated across generated clients (packages/contracts/src/generated/**) must not
+    // be able to spend the whole answer budget on itself.
+    for id in exact.iter().take(opts.seeds) {
         if let Some(h) = hit(graph, id, 1.0, None) { answer.seeds.push(h); }
     }
     let remaining = opts.seeds.saturating_sub(answer.seeds.len());
@@ -182,6 +184,30 @@ mod tests {
         g
     }
 
+    // The same symbol name declared under four generated-client flavours, as it is in
+    // packages/contracts/src/generated/** — nothing here caps how many exact matches exist.
+    fn duplicated_symbol_graph() -> Graph {
+        let mut g = Graph::default();
+        let mut e = Extraction::default();
+        for flavour in ["a", "b", "c", "d"] {
+            let file = format!("packages/contracts/src/generated/{flavour}/client.ts");
+            e.node(NodeKind::Symbol, &format!("sym:{file}::buildClientParams"), "buildClientParams", "", &file, 1);
+        }
+        g.apply(e);
+        g
+    }
+
+    // A seed whose only expandable neighbour is a File hub, to pin that hubs are never expanded to.
+    fn file_hub_only_graph() -> Graph {
+        let mut g = Graph::default();
+        let mut e = Extraction::default();
+        e.node(NodeKind::Requirement, "FR-X", "only points at a file hub", "", "docs/x.md", 1);
+        e.node(NodeKind::File, "file:docs/x.md", "docs/x.md", "", "docs/x.md", 1);
+        e.edge("FR-X", "file:docs/x.md", EdgeKind::References, "", "docs/x.md");
+        g.apply(e);
+        g
+    }
+
     fn ids() -> IdMatcher {
         let cfg = crate::config::Config::default();
         IdMatcher::new(&cfg.id_families, &cfg.milestone_families)
@@ -212,6 +238,27 @@ mod tests {
     }
 
     #[test]
+    fn exact_seeds_are_capped_at_options_seeds() {
+        let g = duplicated_symbol_graph();
+        let mut o = opts();
+        o.seeds = 2;
+        let a = ask(&g, &ids(), None, &["buildClientParams".to_string()], &o);
+        assert_eq!(a.seeds.len(), 2);
+        let ids: Vec<&str> = a.seeds.iter().map(|h| h.id.as_str()).collect();
+        assert_eq!(ids, vec![
+            "sym:packages/contracts/src/generated/a/client.ts::buildClientParams",
+            "sym:packages/contracts/src/generated/b/client.ts::buildClientParams",
+        ]);
+    }
+
+    #[test]
+    fn file_hub_is_never_expanded_to() {
+        let g = file_hub_only_graph();
+        let a = ask(&g, &ids(), None, &["FR-X".to_string()], &opts());
+        assert!(a.expanded.is_empty());
+    }
+
+    #[test]
     fn exact_symbol_name_resolves_to_its_file() {
         let g = graph();
         let a = ask(&g, &ids(), None, &["asGrosze".to_string()], &opts());
@@ -223,6 +270,16 @@ mod tests {
         let g = graph();
         let a = ask(&g, &ids(), None, &["политика".into(), "отмены".into(), "штраф".into()], &opts());
         assert_eq!(a.seeds[0].id, "FR-PAY-22");
+    }
+
+    #[test]
+    fn fused_score_is_pinned_to_rrf_k_sixty() {
+        let g = graph();
+        let a = ask(&g, &ids(), None, &["штраф".to_string()], &opts());
+        let fused = a.seeds.iter().find(|h| h.id == "FR-PAY-22").unwrap();
+        // Measured with a single lexical hit at rank 0 and k = 60.0 (1.0 / 61.0); a
+        // tolerance this tight catches k drifting to a materially different value.
+        assert!((fused.score - 0.016_393_442).abs() < 0.000_000_5, "fused score {} moved off the k=60 baseline", fused.score);
     }
 
     #[test]
