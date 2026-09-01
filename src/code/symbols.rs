@@ -141,7 +141,16 @@ impl SymbolScanner {
     fn declaration(&self, decl: Node, rel: &str, file_id: &str, src: &[u8], exported: bool, ex: &mut Extraction) -> Vec<String> {
         let ctx = if exported { "export" } else { "" };
         let line = decl.start_position().row as u32 + 1;
-        let signature = flatten(text(decl, src));
+        // A function's body is worth flattening into one preview line (the brief's own test
+        // pins this for `asGrosze`); a class/interface/enum/const body is not — Task 10's BM25
+        // documents are built from `id + label + body`, so a multi-kilobyte class body would
+        // drown the label terms that make the symbol findable. Header line matches the
+        // method/property signature rule below.
+        let signature = if decl.kind() == "function_declaration" {
+            flatten(text(decl, src))
+        } else {
+            text(decl, src).lines().next().unwrap_or("").trim().to_string()
+        };
         let signature = if exported && !signature.starts_with("export") { format!("export {signature}") } else { signature };
         let mut created = Vec::new();
         let mut declare = |name: &str, ex: &mut Extraction| -> String {
@@ -223,22 +232,14 @@ impl SymbolScanner {
             ex.node(NodeKind::Symbol, &id, &format!("{class_name}.{name}"), &signature, rel, m.start_position().row as u32 + 1);
             ex.edge(class_id, &id, EdgeKind::Declares, "", rel);
 
-            // `public_field_definition` carries its own decorator as a field, so both
-            // sources are read and deduped by (name, arg) rather than assuming one alone.
-            let mut decos = self.decorators_of(m, src);
-            for pair in pending.drain(..) {
-                if !decos.contains(&pair) {
-                    decos.push(pair);
-                }
-            }
-            let mut seen: Vec<(String, String)> = Vec::new();
+            // `method_definition`/`abstract_method_signature` have no `decorator` field of
+            // their own — the grammar hoists it to `class_body`, hence `pending` — while
+            // `public_field_definition` has one; the two sources are mutually exclusive per
+            // member kind, so no cross-source dedup is needed.
+            let decos = self.decorators_of(m, src).into_iter().chain(pending.drain(..));
             for (dname, arg) in decos {
-                if seen.contains(&(dname.clone(), arg.clone())) {
-                    continue;
-                }
                 ex.node(NodeKind::Symbol, &format!("deco:{dname}"), &dname, "", rel, m.start_position().row as u32 + 1);
                 ex.edge(&id, &format!("deco:{dname}"), EdgeKind::DecoratedBy, &arg, rel);
-                seen.push((dname, arg));
             }
         }
     }
