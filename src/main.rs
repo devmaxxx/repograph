@@ -2,6 +2,7 @@ mod code;
 mod config;
 mod doc;
 mod ids;
+mod index;
 mod model;
 mod store;
 mod walk;
