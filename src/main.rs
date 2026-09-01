@@ -144,7 +144,7 @@ fn main() -> anyhow::Result<()> {
         }
         Cmd::Bench { cases } => {
             let cases = cases.unwrap_or_else(|| std::path::PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/bench/cases.jsonl")));
-            if bench::run(&repo, &cfg, &cases, cli.no_dense)? { Ok(()) } else { anyhow::bail!("bench floors not met") }
+            if bench::run(&repo, &cases, cli.no_dense)? { Ok(()) } else { anyhow::bail!("bench floors not met") }
         }
         Cmd::ImportLegacy { graph_json } => {
             let store = store::Store::new(&repo);

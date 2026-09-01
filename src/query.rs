@@ -12,8 +12,8 @@ pub struct Hit { pub id: String, pub file: String, pub line: u32, pub label: Str
 pub struct Answer { pub seeds: Vec<Hit>, pub expanded: Vec<Hit> }
 
 const EXPAND: [EdgeKind; 5] = [EdgeKind::References, EdgeKind::Implements, EdgeKind::Declares, EdgeKind::Links, EdgeKind::Legacy];
-// Measured against the real graph: seeds=3 with this cap holds p90 at 124
-// tokens against the <=130 gate; the brief's cap of 8 measured p90 434.
+// Stays at 1: raising it to 8 buys at most one extra paraphrase hit while
+// roughly tripling answer cost, which bench's p90 floor exists to catch.
 const MAX_EXPANDED: usize = 1;
 
 fn hit(graph: &Graph, id: &str, score: f32, via: Option<&str>) -> Option<Hit> {
