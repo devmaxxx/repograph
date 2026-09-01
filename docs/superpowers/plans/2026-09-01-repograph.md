@@ -289,7 +289,7 @@ git commit -m "feat: scaffold repograph with config and CLI skeleton"
 
 **Interfaces:**
 
-- Produces: `IdMatcher::new(families: &[String], milestone_families: &[String]) -> IdMatcher`; `IdMatcher::find_all(&self, text: &str) -> Vec<IdHit>` where `IdHit { id: String, start: usize }` (byte offset); `IdMatcher::is_id(&self, token: &str) -> bool`. Expansion: `FR-RPT-42…48` → 42..=48; `R-1601…R-1603` → 3 ids; `INV-11/12/20` → 3 ids. Separators accepted: `…` (U+2026), `..`, `—`, `-` between two ids of the same family.
+- Produces: `IdMatcher::new(families: &[String], milestone_families: &[String]) -> IdMatcher`; `IdMatcher::find_all(&self, text: &str) -> Vec<IdHit>` where `IdHit { id: String, start: usize }` (byte offset); `IdMatcher::is_id(&self, token: &str) -> bool`. Expansion: `FR-RPT-42…48` → 42..=48; `R-1601…R-1603` → 3 ids; `INV-11/12/20` → 3 ids. Separators accepted: `…` (U+2026), `..`, `—` (U+2014), `–` (U+2013). A plain ASCII hyphen is **not** a separator: measured on the corpus, every `<id>-<n>` occurrence is a sub-numbered id (`R-08-1`), never a range.
 
 - [ ] **Step 1: Write the failing tests**
 
