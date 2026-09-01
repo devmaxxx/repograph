@@ -24,16 +24,6 @@
       "label": "asGrosze",
       "_origin": "ast",
       "source_file": "money.ts"
-    },
-    {
-      "id": "twin_a",
-      "label": "Same Concept",
-      "source_file": "legacy:graphify"
-    },
-    {
-      "id": "twin_b",
-      "label": "SAME CONCEPT",
-      "source_file": "legacy:graphify"
     }
   ],
   "links": [
@@ -44,7 +34,6 @@
       "relation": "conceptually_related_to"
     },
     { "source": "ghost", "target": "refund_flow", "relation": "cites" },
-    { "source": "fr_pay_22", "target": "ast_sym", "relation": "implements" },
-    { "source": "twin_a", "target": "twin_b", "relation": "duplicate_of" }
+    { "source": "fr_pay_22", "target": "ast_sym", "relation": "implements" }
   ]
 }

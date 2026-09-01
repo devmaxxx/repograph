@@ -95,16 +95,9 @@ pub fn import(graph: &mut Graph, ids: &IdMatcher, json: &str) -> Result<Report> 
         .map(|n| (n.id.as_str(), n))
         .collect();
 
-    // Rule 2 matches against real domain nodes only. Including LegacyConcept
-    // nodes here would make resolution depend on which concepts a prior
-    // import happened to create, breaking idempotence: two graphify nodes
-    // that share a (file, label) key and both miss rules 1-2 on the first
-    // import each get their own concept id, but a second import would see
-    // both concepts in the map and could collapse them onto one id.
     let by_label: HashMap<(String, String), String> = graph
         .nodes
         .values()
-        .filter(|n| n.kind != NodeKind::LegacyConcept)
         .map(|n| ((basename(&n.file).to_string(), n.label.to_lowercase()), n.id.clone()))
         .collect();
 
@@ -131,15 +124,21 @@ pub fn import(graph: &mut Graph, ids: &IdMatcher, json: &str) -> Result<Report> 
                         }
                     }
                     Resolved::Concept(id) => {
-                        // A second import re-derives the same "legacy:<gid>" id (by_label
-                        // excludes concepts, so rules 1-2 can't redirect it); skip staging
-                        // once the node already exists so the counter reports concepts
-                        // actually created by this run, not ones re-derived from a prior one.
+                        // A second import re-derives the same "legacy:<gid>" id (see the
+                        // `file = LEGACY_FILE` note below for why rules 1-2 can't redirect
+                        // it); skip staging once the node already exists so the counter
+                        // reports concepts actually created by this run, not ones
+                        // re-derived from a prior one.
                         if !graph.nodes.contains_key(id) {
                             report.concepts_created += 1;
-                            // `file` is the legacy marker so `remove_file` on a real doc
-                            // path never touches it; the graphify source lives in `body`
-                            // instead, where it stays stable and stays searchable.
+                            // `file = LEGACY_FILE` does double duty: it is what keeps
+                            // `remove_file` from ever touching a concept (the walker
+                            // never yields this path, same as for the edges below), and
+                            // it is what keeps a later import from re-resolving this
+                            // concept through rule 2 — `by_label`'s key is (basename of
+                            // a node's `file`, label), and no real graphify `source_file`
+                            // is ever the literal string `LEGACY_FILE`. The graphify
+                            // source lives in `body` instead, where it stays searchable.
                             ex.node(NodeKind::LegacyConcept, id, &gn.label, &gn.source_file, LEGACY_FILE, 0);
                             if let Some(n) = ex.nodes.last_mut() {
                                 n.community = gn.community_name.clone();
@@ -198,7 +197,7 @@ mod tests {
     fn resolves_by_id_then_label_then_creates_concepts() {
         let mut g = base();
         let r = run(&mut g);
-        assert_eq!(r, Report { edges_seen: 4, resolved_both: 2, resolved_one: 1, concepts_created: 3 });
+        assert_eq!(r, Report { edges_seen: 3, resolved_both: 2, resolved_one: 1, concepts_created: 1 });
         assert!(g.edges.iter().any(|e| e.source == "FR-PAY-22" && e.target == "N-151" && e.kind == EdgeKind::Legacy && e.context == "references"));
         assert!(g.edges.iter().any(|e| e.source == "FR-PAY-22" && e.target == "FR-TOOL-39" && e.context == "conceptually_related_to"));
         let ghost = &g.nodes["legacy:ghost"];
@@ -211,14 +210,6 @@ mod tests {
 
     #[test]
     fn import_is_idempotent_and_survives_update_removal() {
-        // The fixture's `twin_a`/`twin_b` both miss rules 1-2 and share a label, so they
-        // land in `by_label` under the same key once created — but only under the key
-        // `(LEGACY_FILE, label)`, since a concept's `file` is now the constant `LEGACY_FILE`
-        // (finding 3), not its graphify `source_file`. Their own `source_file` is set to
-        // that same `LEGACY_FILE` string so a *second* run's lookup can actually collide with
-        // that stored entry — without the `by_label` filter on `NodeKind::LegacyConcept` in
-        // `import()`, one of the two would resolve to the other's concept id on a re-run,
-        // producing a different edge than the first run and breaking idempotence.
         let mut g = base();
         let r1 = run(&mut g);
         let (n, e) = (g.nodes.len(), g.edges.len());
