@@ -1,3 +1,4 @@
+mod bench;
 mod code;
 mod config;
 mod doc;
@@ -32,7 +33,7 @@ enum Cmd {
     Ask {
         words: Vec<String>,
         #[arg(long)] json: bool,
-        #[arg(long, default_value_t = 3)] seeds: usize,
+        #[arg(long, default_value_t = 5)] seeds: usize,
         #[arg(long)] bodies: bool,
     },
     Explain { node: String },
@@ -141,6 +142,10 @@ fn main() -> anyhow::Result<()> {
             if graph.nodes.is_empty() { anyhow::bail!("graph is empty — run `repograph build`"); }
             Ok(())
         }
+        Cmd::Bench { cases } => {
+            let cases = cases.unwrap_or_else(|| std::path::PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/bench/cases.jsonl")));
+            if bench::run(&repo, &cfg, &cases, cli.no_dense)? { Ok(()) } else { anyhow::bail!("bench floors not met") }
+        }
         Cmd::ImportLegacy { graph_json } => {
             let store = store::Store::new(&repo);
             let (mut graph, manifest) = store.load()?;
@@ -154,6 +159,5 @@ fn main() -> anyhow::Result<()> {
             );
             Ok(())
         }
-        _ => anyhow::bail!("not implemented yet"),
     }
 }

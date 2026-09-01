@@ -1,0 +1,41 @@
+{"kind":"keyword","q":"расход виден салону","expect":"FR-AI-138"}
+{"kind":"keyword","q":"арендатор отдельный контур","expect":"FR-VIS-80"}
+{"kind":"keyword","q":"только нативном приложении","expect":"FR-PAY-110"}
+{"kind":"keyword","q":"панели отражающие обещания","expect":"FR-APP-64"}
+{"kind":"keyword","q":"изменение любой позиции","expect":"FR-PAY-133"}
+{"kind":"keyword","q":"групповое занятие кассе","expect":"FR-PAY-54"}
+{"kind":"keyword","q":"награда выдаётся против","expect":"FR-TOOL-18"}
+{"kind":"keyword","q":"паритет поверхностей","expect":"FR-WH-05"}
+{"kind":"keyword","q":"место содержимое занято","expect":"FR-APP-02"}
+{"kind":"keyword","q":"знаний салона ассистента","expect":"FR-AI-145"}
+{"kind":"keyword","q":"зачитывается автоматически","expect":"FR-PAY-28"}
+{"kind":"keyword","q":"сигнал блокирует работу","expect":"FR-VIS-55"}
+{"kind":"keyword","q":"денежные конфликты поведение","expect":"FR-PAY-143"}
+{"kind":"keyword","q":"черновик виден черновик","expect":"FR-SVC-04"}
+{"kind":"keyword","q":"режим тренировки сотрудника","expect":"FR-LIFE-29"}
+{"kind":"keyword","q":"списание штрафа происходит","expect":"FR-PAY-26"}
+{"kind":"keyword","q":"шаблоны ролей салона","expect":"FR-VIS-35"}
+{"kind":"keyword","q":"экономика аренды","expect":"FR-PAY-82"}
+{"kind":"keyword","q":"только клиентских поверхностях","expect":"FR-APP-67"}
+{"kind":"keyword","q":"единый медиа","expect":"FR-SVC-50"}
+{"kind":"keyword","q":"внутренняя система рассмотрения","expect":"FR-SEC-44"}
+{"kind":"keyword","q":"арендатор уходит своей","expect":"FR-VIS-85"}
+{"kind":"keyword","q":"отчёты склада","expect":"FR-WH-53"}
+{"kind":"keyword","q":"подсказка расписанию двигает","expect":"FR-AI-97"}
+{"kind":"paraphrase","q":"экспорт данных для налоговой отчётности","expect":"FR-PAY-104"}
+{"kind":"paraphrase","q":"перечень незыблемых требований продукта","expect":"FR-VIS-01"}
+{"kind":"paraphrase","q":"кто получатель платежа записан в документе","expect":"FR-PAY-03"}
+{"kind":"paraphrase","q":"как хранится код доступа сотрудника","expect":"FR-SEC-21"}
+{"kind":"paraphrase","q":"сколько времени держим записи кто решает","expect":"FR-AI-102"}
+{"kind":"paraphrase","q":"создать похожую услугу на основе существующей","expect":"FR-SVC-15"}
+{"kind":"paraphrase","q":"состояния задачи обратного звонка","expect":"FR-AI-66"}
+{"kind":"paraphrase","q":"удаление согласия клиента через сторонний мессенджер","expect":"FR-VIS-76"}
+{"kind":"paraphrase","q":"клиент должен сразу понять что говорит робот","expect":"FR-AI-21"}
+{"kind":"paraphrase","q":"выявление накрутки бонусов","expect":"FR-TOOL-22"}
+{"kind":"paraphrase","q":"как клиент получает фискальный документ","expect":"FR-PAY-49"}
+{"kind":"paraphrase","q":"бонус начисляется без участия сотрудника","expect":"FR-TOOL-18"}
+{"kind":"paraphrase","q":"прошлые визиты клиента какие услуги делали","expect":"FR-SVC-39"}
+{"kind":"paraphrase","q":"загрузить услуги из файла при регистрации","expect":"FR-LIFE-17"}
+{"kind":"code","q":"asGrosze","expect":"packages/contracts/src/money.ts"}
+{"kind":"code","q":"problemDetailsOf","expect":"packages/contracts/src/errors.ts"}
+{"kind":"code","q":"vitestBase","expect":"packages/config/vitest.base.ts"}
