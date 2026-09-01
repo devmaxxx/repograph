@@ -7,7 +7,7 @@ mod store;
 mod walk;
 
 use clap::{Parser, Subcommand};
-use model::{Extractor, Noop};
+use model::Extractor;
 use std::path::PathBuf;
 
 #[derive(Parser)]
@@ -71,13 +71,14 @@ pub fn run_update(repo: &std::path::Path, cfg: &config::Config, ex: &Extractors,
     Ok(UpdateReport { changed: diff.changed.len(), removed: diff.removed.len(), nodes: graph.nodes.len(), edges: graph.edges.len() })
 }
 
-fn extractors(cfg: &config::Config) -> Extractors {
+fn extractors(repo: &std::path::Path, cfg: &config::Config) -> anyhow::Result<Extractors> {
     let ids = ids::IdMatcher::new(&cfg.id_families, &cfg.milestone_families);
-    Extractors {
+    let resolver = code::imports::Resolver::new(repo)?;
+    Ok(Extractors {
         doc: Box::new(doc::DocExtractor::new(ids.clone())),
-        code: Box::new(Noop),
+        code: Box::new(code::CodeExtractor::new(resolver, ids.clone())),
         registry: Box::new(doc::registry::RegistryExtractor::new(ids)),
-    }
+    })
 }
 
 fn main() -> anyhow::Result<()> {
@@ -87,7 +88,7 @@ fn main() -> anyhow::Result<()> {
     let wipe = matches!(cli.cmd, Cmd::Build);
     match cli.cmd {
         Cmd::Build | Cmd::Update => {
-            let r = run_update(&repo, &cfg, &extractors(&cfg), wipe)?;
+            let r = run_update(&repo, &cfg, &extractors(&repo, &cfg)?, wipe)?;
             println!("changed {} removed {} nodes {} edges {}", r.changed, r.removed, r.nodes, r.edges);
             Ok(())
         }
