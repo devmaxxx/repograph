@@ -4,6 +4,7 @@ mod doc;
 mod ids;
 mod index;
 mod model;
+mod query;
 mod store;
 mod walk;
 
@@ -28,7 +29,7 @@ enum Cmd {
     Ask {
         words: Vec<String>,
         #[arg(long)] json: bool,
-        #[arg(long, default_value_t = 5)] seeds: usize,
+        #[arg(long, default_value_t = 3)] seeds: usize,
         #[arg(long)] bodies: bool,
         #[arg(long)] no_dense: bool,
     },
@@ -91,6 +92,27 @@ fn main() -> anyhow::Result<()> {
         Cmd::Build | Cmd::Update => {
             let r = run_update(&repo, &cfg, &extractors(&repo, &cfg)?, wipe)?;
             println!("changed {} removed {} nodes {} edges {}", r.changed, r.removed, r.nodes, r.edges);
+            Ok(())
+        }
+        Cmd::Ask { words, json, seeds, bodies, no_dense } => {
+            let (graph, _) = store::Store::new(&repo).load()?;
+            let ids = ids::IdMatcher::new(&cfg.id_families, &cfg.milestone_families);
+            let opts = query::Options { seeds, bodies, dense: !no_dense, json };
+            let answer = query::ask(&graph, &ids, None, &words, &opts);
+            print!("{}", query::render(&answer, &graph, &opts));
+            Ok(())
+        }
+        Cmd::Explain { node } => {
+            let (graph, _) = store::Store::new(&repo).load()?;
+            match query::explain(&graph, &node) {
+                Some(s) => { print!("{s}"); Ok(()) }
+                None => anyhow::bail!("no node matches {node}"),
+            }
+        }
+        Cmd::Verify => {
+            let (graph, _) = store::Store::new(&repo).load()?;
+            print!("{}", query::verify(&graph));
+            if graph.nodes.is_empty() { anyhow::bail!("graph is empty — run `repograph build`"); }
             Ok(())
         }
         _ => anyhow::bail!("not implemented yet"),
