@@ -10,6 +10,10 @@ jobs:
           - { os: macos-14, target: aarch64-apple-darwin }
           - { os: ubuntu-latest, target: x86_64-unknown-linux-gnu }
     runs-on: ${{ matrix.os }}
+    # New repos default GITHUB_TOKEN to read-only; softprops/action-gh-release's own
+    # README states it needs contents: write to create a release and upload assets.
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@1.98.0

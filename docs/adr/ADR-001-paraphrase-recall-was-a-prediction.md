@@ -1,4 +1,4 @@
-# 0001 · Paraphrase recall was a prediction, not a measurement
+# ADR-001 · Paraphrase recall was a prediction, not a measurement
 
 **Status:** Accepted, 2026-09-01
 

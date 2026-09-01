@@ -25,7 +25,7 @@ LLM-extracted graph it replaces:
 
 Every number above came from running both tools; none is a target. See [Bench](#bench) for the full
 floor set and how it was recorded, and
-[`docs/adr/0001-paraphrase-recall-was-a-prediction.md`](docs/adr/0001-paraphrase-recall-was-a-prediction.md)
+[`docs/adr/ADR-001-paraphrase-recall-was-a-prediction.md`](docs/adr/ADR-001-paraphrase-recall-was-a-prediction.md)
 for the one number in this project's history that travelled from a design note into a plan as though
 it had been measured, and hadn't been.
 
@@ -267,7 +267,7 @@ with `--no-dense`.
 The design note that shaped this architecture predicted paraphrase recall would reach ≥12/14 once
 dense retrieval was fused in. It measured at 5/14 — a prediction that did not survive contact with
 measurement, not a bug; see
-[`docs/adr/0001-paraphrase-recall-was-a-prediction.md`](docs/adr/0001-paraphrase-recall-was-a-prediction.md)
+[`docs/adr/ADR-001-paraphrase-recall-was-a-prediction.md`](docs/adr/ADR-001-paraphrase-recall-was-a-prediction.md)
 for what was ruled out and what wasn't. The floors above are that measurement, and the tool still
 beats the incumbent on every axis anyone has ever measured: 5/14 and 24/24 at 202 median tokens
 against graphify's 0/14 and 11/24 at 1,027-1,555 tokens, built for 14.6 million tokens instead of
@@ -312,7 +312,7 @@ node/edge model or the answer shape: `serde_json` with an atomic rename instead 
 `petgraph`; and a line scanner (one regex for a requirement head, `#` lines as block boundaries, one
 regex for links) instead of `tree-sitter-md`. One of those four _did_ move a measured number: the
 `tantivy` swap cost paraphrase recall, not just code size — see
-[`docs/adr/0001-paraphrase-recall-was-a-prediction.md`](docs/adr/0001-paraphrase-recall-was-a-prediction.md).
+[`docs/adr/ADR-001-paraphrase-recall-was-a-prediction.md`](docs/adr/ADR-001-paraphrase-recall-was-a-prediction.md).
 
 ## License
 
