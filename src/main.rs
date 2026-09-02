@@ -43,6 +43,8 @@ enum Cmd {
         #[arg(long)] rerank: bool,
         /// Candidates the reranking model is shown; tokens per question grow with it.
         #[arg(long, default_value_t = rerank::DEPTH)] depth: usize,
+        /// Answers from the store as it stands, without bringing it in line with the tree first.
+        #[arg(long)] stale: bool,
     },
     Explain { node: String },
     Verify,
@@ -73,12 +75,8 @@ pub struct Extractors {
 
 pub struct UpdateReport { pub changed: usize, pub removed: usize, pub nodes: usize, pub edges: usize }
 
-pub fn run_update(repo: &std::path::Path, cfg: &config::Config, ex: &Extractors, wipe: bool) -> anyhow::Result<UpdateReport> {
-    let store = store::Store::new(repo);
-    if wipe { store.wipe()?; }
-    let (mut graph, manifest) = store.load()?;
-    let entries = walk::walk(repo, cfg, &manifest)?;
-    let diff = manifest.diff(&entries);
+/// Re-extracts what the diff names, drops what is gone, and writes the store back.
+fn apply_diff(repo: &std::path::Path, store: &store::Store, graph: &mut model::Graph, entries: &[walk::Entry], diff: &walk::Diff, ex: &Extractors) -> anyhow::Result<UpdateReport> {
     let stale: std::collections::BTreeSet<&str> =
         diff.removed.iter().map(String::as_str).chain(diff.changed.iter().map(|e| e.rel.as_str())).collect();
     // A node's `path:line` comes from its primary declaring file. When that file goes, every
@@ -115,8 +113,46 @@ pub fn run_update(repo: &std::path::Path, cfg: &config::Config, ex: &Extractors,
         };
         graph.apply(extractor.extract(&e.rel, &text));
     }
-    store.save(&graph, &walk::Manifest::from_entries(&entries))?;
+    store.save(graph, &walk::Manifest::from_entries(entries))?;
     Ok(UpdateReport { changed: diff.changed.len(), removed: diff.removed.len(), nodes: graph.nodes.len(), edges: graph.edges.len() })
+}
+
+pub fn run_update(repo: &std::path::Path, cfg: &config::Config, ex: &Extractors, wipe: bool) -> anyhow::Result<UpdateReport> {
+    let store = store::Store::new(repo);
+    if wipe { store.wipe()?; }
+    let (mut graph, manifest) = store.load()?;
+    let entries = walk::walk(repo, cfg, &manifest)?;
+    let diff = manifest.diff(&entries);
+    apply_diff(repo, &store, &mut graph, &entries, &diff, ex)
+}
+
+/// Writes the manifest back when the walk saw stamps the stored one does not have — a store from
+/// before the stat cache, or a file touched without being changed. Without this a tree that never
+/// changes would be hashed in full on every question.
+fn record_stamps(store: &store::Store, manifest: &walk::Manifest, entries: &[walk::Entry]) -> anyhow::Result<bool> {
+    let now = walk::Manifest::from_entries(entries);
+    if now.stamps == manifest.stamps { return Ok(false); }
+    store.save_manifest(&now)?;
+    Ok(true)
+}
+
+/// The stored graph brought in line with the working tree, plus what that cost when the tree had
+/// moved. `ask` runs this before answering so an edit never has to be followed by an `update`;
+/// the extractors are built only when there is something to re-read.
+fn graph_for_ask(repo: &std::path::Path, cfg: &config::Config, store: &store::Store, stale: bool, timing: &Timing) -> anyhow::Result<(model::Graph, Option<UpdateReport>)> {
+    let (mut graph, manifest) = store.load()?;
+    timing.stage("graph loaded");
+    if stale { return Ok((graph, None)); }
+    let entries = walk::walk(repo, cfg, &manifest)?;
+    let diff = manifest.diff(&entries);
+    timing.stage("tree walked");
+    if diff.changed.is_empty() && diff.removed.is_empty() {
+        record_stamps(store, &manifest, &entries)?;
+        return Ok((graph, None));
+    }
+    let r = apply_diff(repo, store, &mut graph, &entries, &diff, &extractors(repo, cfg)?)?;
+    timing.stage("refreshed");
+    Ok((graph, Some(r)))
 }
 
 fn extractors(repo: &std::path::Path, cfg: &config::Config) -> anyhow::Result<Extractors> {
@@ -192,12 +228,17 @@ fn main() -> anyhow::Result<()> {
             println!("enrich: {} nodes written, {} dropped, {} still without questions, {} batches ({} failed) in {:.0}s", r.generated, r.dropped, r.left, r.batches, r.failed, t.elapsed().as_secs_f32());
             embed_all(&repo, cli.no_dense)
         }
-        Cmd::Ask { words, json, seeds, bodies, rerank, depth } => {
+        Cmd::Ask { words, json, seeds, bodies, rerank, depth, stale } => {
             let timing = Timing::new();
             let cfg = load_cfg()?;
             let store = store::Store::new(&repo);
-            let (graph, _) = store.load()?;
-            timing.stage("graph loaded");
+            let (graph, refreshed) = match graph_for_ask(&repo, &cfg, &store, stale, &timing) {
+                Ok(pair) => pair,
+                // A store that cannot be written (read-only checkout, a walk that failed) still
+                // holds an answer: say once that it may be behind, then give the stored one.
+                Err(err) => { eprintln!("refresh: skipped ({err:#})"); (store.load()?.0, None) }
+            };
+            if let Some(r) = &refreshed { eprintln!("refresh: {} changed, {} removed", r.changed, r.removed); }
             let ids = ids::IdMatcher::new(&cfg.id_families, &cfg.milestone_families);
             let questions = enrich::Questions::load(&store)?;
             timing.stage("ids and questions ready");
@@ -205,6 +246,11 @@ fn main() -> anyhow::Result<()> {
             // symbol match never asks for either, so both open on the first fused query.
             let embedder: std::cell::RefCell<Option<Option<index::embed::Embedder>>> = std::cell::RefCell::new(None);
             let dense_idx: std::cell::RefCell<Option<index::dense::DenseIndex>> = std::cell::RefCell::new(None);
+            // The refresh above moved passages the vectors were built from. This query needs the
+            // model open anyway, so the changed rows are re-embedded here — with `--no-dense` or
+            // on the exact-id path nothing opens, and the vectors catch up on the next fused
+            // query or `update`.
+            let resync = std::cell::Cell::new(refreshed.is_some());
             let dense_fn = |q: &str, k: usize| -> (Vec<String>, Vec<String>) {
                 let mut slot = embedder.borrow_mut();
                 let e = slot.get_or_insert_with(|| { let e = open_embedder(cli.no_dense); timing.stage("model opened"); e });
@@ -213,6 +259,19 @@ fn main() -> anyhow::Result<()> {
                     let i = index::dense::DenseIndex::load(&store).unwrap_or_else(|err| { eprintln!("dense: index unreadable, continuing lexical-only ({err:#})"); Default::default() });
                     timing.stage("vectors loaded"); i
                 });
+                if resync.replace(false) {
+                    if let Some(e) = e.as_mut() {
+                        match idx.sync(&graph, &questions, &mut |texts| e.embed(texts)) {
+                            Ok(0) => {}
+                            Ok(n) => {
+                                if let Err(err) = idx.save(&store) { eprintln!("refresh: vectors not saved ({err:#})"); }
+                                eprintln!("refresh: {n} vectors embedded");
+                            }
+                            Err(err) => eprintln!("refresh: vectors unchanged ({err:#})"),
+                        }
+                        timing.stage("vectors synced");
+                    }
+                }
                 let out = match e.as_mut().and_then(|e| e.query(q).ok()) { Some(v) => idx.search(&v, k), None => (Vec::new(), Vec::new()) };
                 timing.stage("query embedded and searched");
                 out
@@ -267,6 +326,84 @@ fn main() -> anyhow::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn doc_repo(body: &str) -> tempfile::TempDir {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("docs")).unwrap();
+        std::fs::write(dir.path().join("docs/a.md"), body).unwrap();
+        dir
+    }
+
+    const ONE: &str = "# A\n\n**FR-PAY-22 · MUST · cancellation window**\n\nbody\n";
+    const TWO: &str = "# A\n\n**FR-PAY-22 · MUST · cancellation window**\n\nbody\n\n**FR-PAY-23 · MUST · refund window**\n\nbody\n";
+
+    fn built(repo: &std::path::Path, cfg: &config::Config) {
+        run_update(repo, cfg, &extractors(repo, cfg).unwrap(), true).unwrap();
+    }
+
+    #[test]
+    fn an_ask_after_an_edit_answers_from_the_edited_file() {
+        let dir = doc_repo(ONE);
+        let (repo, cfg) = (dir.path(), config::Config::default());
+        built(repo, &cfg);
+        std::fs::write(repo.join("docs/a.md"), TWO).unwrap();
+        let store = store::Store::new(repo);
+        let (graph, refreshed) = graph_for_ask(repo, &cfg, &store, false, &Timing::new()).unwrap();
+        let r = refreshed.expect("the edit is a refresh");
+        assert_eq!((r.changed, r.removed), (1, 0));
+        let ids = ids::IdMatcher::new(&cfg.id_families, &cfg.milestone_families);
+        let opts = query::Options { seeds: 5, bodies: false, dense: false, json: false, depth: rerank::DEPTH };
+        let words = ["refund".to_string(), "window".to_string()];
+        let answer = query::ask(&graph, &ids, &enrich::Questions::default(), None, None, &words, &opts);
+        assert!(query::render(&answer, &graph, &opts).contains("FR-PAY-23"));
+        // The store carries the edit too, so the next reader has nothing left to redo.
+        assert!(store.load().unwrap().0.nodes.contains_key("FR-PAY-23"));
+    }
+
+    #[test]
+    fn an_ask_on_an_unchanged_tree_writes_nothing() {
+        let dir = doc_repo(ONE);
+        let (repo, cfg) = (dir.path(), config::Config::default());
+        built(repo, &cfg);
+        let saved = |name: &str| std::fs::metadata(repo.join(".repograph").join(name)).unwrap().modified().unwrap();
+        let (before_graph, before_manifest) = (saved("graph.json"), saved("manifest.json"));
+        let (graph, refreshed) = graph_for_ask(repo, &cfg, &store::Store::new(repo), false, &Timing::new()).unwrap();
+        assert!(refreshed.is_none());
+        assert!(graph.nodes.contains_key("FR-PAY-22"));
+        assert_eq!((saved("graph.json"), saved("manifest.json")), (before_graph, before_manifest));
+    }
+
+    // A store written before the stat cache carries no stamps. The first question records them,
+    // so the walk behind the next one is stat-only, and leaves the graph alone doing it.
+    #[test]
+    fn a_first_ask_on_a_store_without_stamps_records_them() {
+        let dir = doc_repo(ONE);
+        let (repo, cfg) = (dir.path(), config::Config::default());
+        built(repo, &cfg);
+        let store = store::Store::new(repo);
+        let files = store.load().unwrap().1.files;
+        store.save_manifest(&walk::Manifest { files, stamps: Default::default() }).unwrap();
+        let graph_before = std::fs::read(repo.join(".repograph/graph.json")).unwrap();
+        assert!(graph_for_ask(repo, &cfg, &store, false, &Timing::new()).unwrap().1.is_none());
+        let manifest = store.load().unwrap().1;
+        assert_eq!(manifest.stamps.len(), manifest.files.len());
+        assert_eq!(std::fs::read(repo.join(".repograph/graph.json")).unwrap(), graph_before);
+    }
+
+    #[test]
+    fn stale_answers_from_the_store_and_leaves_it_untouched() {
+        let dir = doc_repo(ONE);
+        let (repo, cfg) = (dir.path(), config::Config::default());
+        built(repo, &cfg);
+        let before = std::fs::read(repo.join(".repograph/graph.json")).unwrap();
+        std::fs::write(repo.join("docs/a.md"), TWO).unwrap();
+        let (graph, refreshed) = graph_for_ask(repo, &cfg, &store::Store::new(repo), true, &Timing::new()).unwrap();
+        assert!(refreshed.is_none());
+        assert!(!graph.nodes.contains_key("FR-PAY-23"));
+        assert_eq!(std::fs::read(repo.join(".repograph/graph.json")).unwrap(), before);
+    }
+
+
 
     // A `.ts` that is not UTF-8 is a binary that landed under a code glob; it is reported and
     // skipped. A NUL byte inside a string literal is valid TypeScript and is parsed like any other.

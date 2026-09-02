@@ -22,6 +22,12 @@ impl Store {
     pub fn save(&self, g: &Graph, m: &Manifest) -> Result<()> {
         std::fs::create_dir_all(&self.dir)?;
         self.write_atomic("graph.json", &serde_json::to_vec(g)?)?;
+        self.save_manifest(m)
+    }
+
+    /// The manifest alone: a walk that found no change can still have learned the stat stamps
+    /// that spare the next one from hashing the tree again.
+    pub fn save_manifest(&self, m: &Manifest) -> Result<()> {
         self.write_atomic("manifest.json", &serde_json::to_vec(m)?)
     }
 
