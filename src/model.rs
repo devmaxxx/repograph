@@ -144,4 +144,40 @@ mod tests {
         assert_eq!(g.neighbours("entity:CancellationPolicy").len(), 1);
         assert_eq!(g.neighbours("FR-PAY-22").len(), 2);
     }
+
+    #[test]
+    fn neighbours_of_an_unknown_id_is_empty() {
+        let mut g = Graph::default();
+        g.apply(ex("docs/06.md"));
+        assert!(g.neighbours("nope").is_empty());
+    }
+
+    #[test]
+    fn removing_a_non_primary_file_keeps_the_primary_file_field() {
+        let mut g = Graph::default();
+        g.apply(ex("docs/06.md"));
+        g.apply(ex("docs/07.md"));
+        // "docs/06.md" was applied first, so it stays the primary `file`.
+        g.remove_file("docs/07.md");
+        let n = &g.nodes["entity:CancellationPolicy"];
+        assert_eq!(n.file, "docs/06.md");
+        assert_eq!(n.files.len(), 1);
+    }
+
+    #[test]
+    fn reapplying_the_same_extraction_does_not_duplicate_edges_or_nodes() {
+        let mut g = Graph::default();
+        g.apply(ex("docs/06.md"));
+        g.apply(ex("docs/06.md"));
+        assert_eq!(g.nodes.len(), 2);
+        assert_eq!(g.edges.len(), 2);
+    }
+
+    #[test]
+    fn dangling_excludes_edges_whose_target_node_exists() {
+        let mut g = Graph::default();
+        g.apply(ex("docs/06.md"));
+        let dangling: Vec<&str> = g.dangling().into_iter().map(|e| e.target.as_str()).collect();
+        assert!(!dangling.contains(&"entity:CancellationPolicy"));
+    }
 }

@@ -82,4 +82,30 @@ mod tests {
         assert_eq!(cfg.skip, vec!["docs/**/TRACKER.md".to_string()]);
         assert!(cfg.id_families.contains(&"INV".to_string()));
     }
+
+    #[test]
+    fn an_unknown_key_is_rejected() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("repograph.toml"), "bogus_key = 1\n").unwrap();
+        let err = Config::load(dir.path()).unwrap_err().to_string();
+        assert!(err.contains("repograph.toml"), "{err}");
+    }
+
+    #[test]
+    fn malformed_toml_errors_naming_the_file() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("repograph.toml"), "skip = [\n").unwrap();
+        let err = Config::load(dir.path()).unwrap_err().to_string();
+        assert!(err.contains("repograph.toml"), "{err}");
+    }
+
+    #[test]
+    fn overriding_the_enrich_command_leaves_the_rerank_command_and_lists_at_their_defaults() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("repograph.toml"), "enrich_command = \"echo hi\"\n").unwrap();
+        let cfg = Config::load(dir.path()).unwrap();
+        assert_eq!(cfg.enrich_command, "echo hi");
+        assert_eq!(cfg.rerank_command, Config::default().rerank_command);
+        assert_eq!(cfg.doc_globs, Config::default().doc_globs);
+    }
 }

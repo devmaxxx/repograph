@@ -216,6 +216,72 @@ mod tests {
         assert!(!g.edges.iter().any(|e| e.target.contains("ast_sym")));
     }
 
+    fn ids() -> IdMatcher {
+        let cfg = crate::config::Config::default();
+        IdMatcher::new(&cfg.id_families, &cfg.milestone_families)
+    }
+
+    #[test]
+    fn malformed_json_errors_naming_the_parse_step() {
+        let mut g = Graph::default();
+        let err = import(&mut g, &ids(), "{ not json").unwrap_err();
+        assert!(err.to_string().contains("parse graphify graph.json"), "{err}");
+    }
+
+    #[test]
+    fn an_empty_graphify_graph_is_a_no_op() {
+        let mut g = base();
+        let (nodes, edges) = (g.nodes.len(), g.edges.len());
+        let r = import(&mut g, &ids(), r#"{"nodes": [], "links": []}"#).unwrap();
+        assert_eq!(r, Report::default());
+        assert_eq!((g.nodes.len(), g.edges.len()), (nodes, edges));
+    }
+
+    #[test]
+    fn two_unresolvable_nodes_create_two_concepts_and_count_as_neither_resolved_kind() {
+        let mut g = Graph::default();
+        let json = r#"{
+            "nodes": [
+                {"id": "x1", "label": "totally unrelated one", "source_file": "z1.md"},
+                {"id": "x2", "label": "totally unrelated two", "source_file": "z2.md"}
+            ],
+            "links": [{"source": "x1", "target": "x2", "relation": "cites"}]
+        }"#;
+        let r = import(&mut g, &ids(), json).unwrap();
+        assert_eq!(r, Report { edges_seen: 1, resolved_both: 0, resolved_one: 0, concepts_created: 2, self_loops: 0 });
+        assert!(g.nodes.contains_key("legacy:x1") && g.nodes.contains_key("legacy:x2"));
+        assert!(g.edges.iter().any(|e| e.source == "legacy:x1" && e.target == "legacy:x2"));
+    }
+
+    #[test]
+    fn a_non_empty_link_context_follows_the_relation_an_empty_one_is_dropped() {
+        // `base()`'s nodes must already exist for rule 1 (id match) to resolve them; an
+        // otherwise-empty graph would fall through to concepts, muddying the context check.
+        let mut g = base();
+        let json = r#"{
+            "nodes": [
+                {"id": "a", "label": "FR-PAY-22", "source_file": "x.md"},
+                {"id": "b", "label": "N-151", "source_file": "x.md"},
+                {"id": "c", "label": "FR-TOOL-39", "source_file": "x.md"}
+            ],
+            "links": [
+                {"source": "a", "target": "b", "relation": "references", "context": "see note"},
+                {"source": "a", "target": "c", "relation": "conceptually_related_to", "context": ""}
+            ]
+        }"#;
+        import(&mut g, &ids(), json).unwrap();
+        assert!(g.edges.iter().any(|e| e.source == "FR-PAY-22" && e.target == "N-151" && e.context == "references: see note"));
+        assert!(g.edges.iter().any(|e| e.source == "FR-PAY-22" && e.target == "FR-TOOL-39" && e.context == "conceptually_related_to"));
+    }
+
+    #[test]
+    fn a_prior_community_survives_a_legacy_import() {
+        let mut g = base();
+        g.nodes.get_mut("FR-PAY-22").unwrap().community = Some("Set before import".into());
+        run(&mut g);
+        assert_eq!(g.nodes["FR-PAY-22"].community.as_deref(), Some("Set before import"));
+    }
+
     #[test]
     fn import_is_idempotent_and_survives_update_removal() {
         let mut g = base();

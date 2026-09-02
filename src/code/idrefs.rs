@@ -127,4 +127,37 @@ mod tests {
         assert!(r.contains(&("file:c.ts".into(), "FR-VIS-35".into(), "comment".into())));
         assert!(r.contains(&("sym:c.ts::helper".into(), "FR-SEC-21".into(), "string".into())));
     }
+
+    #[test]
+    fn a_top_level_const_initializer_id_attaches_to_the_variable_symbol() {
+        let r = refs("m.ts", "export const LIMIT = 'FR-PAY-01';\n");
+        assert_eq!(r, vec![("sym:m.ts::LIMIT".into(), "FR-PAY-01".into(), "string".into())]);
+    }
+
+    #[test]
+    fn a_nested_function_is_climbed_through_to_its_top_level_owner() {
+        let r = refs("m.ts", "function outer() {\n  function inner() {\n    return 'FR-PAY-01';\n  }\n}\n");
+        assert_eq!(r, vec![("sym:m.ts::outer".into(), "FR-PAY-01".into(), "string".into())]);
+    }
+
+    #[test]
+    fn an_id_inside_a_decorator_argument_attaches_to_the_decorated_method() {
+        let r = refs("m.ts", "class A {\n  @RequireAction('FR-SEC-21')\n  run() {}\n}\n");
+        assert!(r.contains(&("sym:m.ts::A.run".into(), "FR-SEC-21".into(), "string".into())));
+    }
+
+    #[test]
+    fn interface_body_ids_attach_to_the_interface_symbol() {
+        let r = refs("m.ts", "interface X {\n  // FR-PAY-01\n  prop: string;\n}\n");
+        assert_eq!(r, vec![("sym:m.ts::X".into(), "FR-PAY-01".into(), "comment".into())]);
+    }
+
+    #[test]
+    fn two_ids_in_one_string_produce_two_edges_with_the_same_owner() {
+        let r = refs("m.ts", "const x = 'see FR-PAY-01 and N-1';\n");
+        assert_eq!(r.len(), 2);
+        assert!(r.iter().all(|(src, _, ctx)| src == "sym:m.ts::x" && ctx == "string"));
+        let targets: Vec<&str> = r.iter().map(|(_, t, _)| t.as_str()).collect();
+        assert!(targets.contains(&"FR-PAY-01") && targets.contains(&"N-1"));
+    }
 }

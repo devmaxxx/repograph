@@ -95,4 +95,46 @@ mod tests {
     fn a_failing_command_yields_no_picks() {
         assert!(run("exit 3", "q", &cands()).is_empty());
     }
+
+    #[test]
+    fn only_a_trailing_period_is_stripped_not_other_punctuation() {
+        let out = "N-151,\nFR-PAY-22.\n";
+        // The comma is left in place, so "N-151," never matches a shown id.
+        assert_eq!(parse(out, &cands()), vec!["FR-PAY-22".to_string()]);
+    }
+
+    #[test]
+    fn prompt_with_no_candidates_still_carries_the_question() {
+        let p = prompt("why", &[]);
+        assert!(p.contains("\"why\""));
+        assert!(p.ends_with("Nothing but ids.\n\n"));
+    }
+
+    #[test]
+    fn a_whitespace_only_body_falls_back_to_the_title_alone() {
+        let mut x = crate::model::Extraction::default();
+        x.node(crate::model::NodeKind::Requirement, "A-1", "title", "   \n\t  \n", "f.md", 1);
+        let n = x.nodes.remove(0);
+        assert_eq!(text(&n), "title");
+    }
+
+    #[test]
+    fn title_and_snippet_are_clipped_by_chars_not_bytes() {
+        let mut x = crate::model::Extraction::default();
+        let title: String = "ж".repeat(101);
+        let body: String = "щ".repeat(200);
+        x.node(crate::model::NodeKind::Requirement, "A-1", &title, &body, "f.md", 1);
+        let n = x.nodes.remove(0);
+        let t = text(&n);
+        assert!(t.starts_with(&"ж".repeat(100)));
+        assert!(!t.starts_with(&"ж".repeat(101)));
+        assert_eq!(t.chars().count(), 100 + 3 + SNIPPET + 1);
+        assert!(t.ends_with('…'));
+    }
+
+    #[test]
+    fn a_successful_commands_output_is_parsed_into_picks() {
+        let picked = run("printf 'N-151\\nFR-PAY-20\\n'", "q", &cands());
+        assert_eq!(picked, vec!["N-151".to_string(), "FR-PAY-20".to_string()]);
+    }
 }

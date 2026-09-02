@@ -187,4 +187,36 @@ mod tests {
         let v = pool(&[1.0, 1.0], &[0], 1, 2);
         assert_eq!(v, vec![vec![0.0, 0.0]]);
     }
+
+    #[test]
+    fn normalise_leaves_a_zero_vector_untouched() {
+        let mut v = [0.0f32, 0.0];
+        normalise(&mut v);
+        assert_eq!(v, [0.0, 0.0]);
+    }
+
+    #[test]
+    fn normalise_scales_a_nonzero_vector_to_unit_length() {
+        let mut v = [3.0f32, 4.0];
+        normalise(&mut v);
+        assert!((v[0] - 0.6).abs() < 1e-6 && (v[1] - 0.8).abs() < 1e-6);
+    }
+
+    #[test]
+    fn length_batches_keeps_original_order_among_equal_length_ties() {
+        let texts: Vec<String> = ["aa", "bb", "cc", "dd"].iter().map(|s| s.to_string()).collect();
+        // Every text is the same length: a stable sort must not reorder them.
+        assert_eq!(length_batches(&texts, 10), vec![vec![0, 1, 2, 3]]);
+    }
+
+    #[test]
+    fn length_batches_with_batch_larger_than_the_collection_yields_one_sorted_batch() {
+        let texts: Vec<String> = ["mm", "z", "a"].iter().map(|s| s.to_string()).collect();
+        assert_eq!(length_batches(&texts, 100), vec![vec![1, 2, 0]]);
+    }
+
+    #[test]
+    fn pool_with_zero_length_rows_yields_no_vectors_not_a_panic() {
+        assert!(pool(&[], &[], 0, 2).is_empty());
+    }
 }

@@ -62,4 +62,33 @@ mod tests {
     fn root_relative_links_keep_their_path() {
         assert_eq!(links("docs/a.md", "[c](/docs/constitution.yaml)"), vec![("file:docs/a.md".into(), "file:docs/constitution.yaml".into())]);
     }
+
+    #[test]
+    fn a_relative_link_from_a_root_level_file_has_no_directory_prefix() {
+        assert_eq!(normalise("a.md", "b.md"), "b.md");
+        assert_eq!(links("a.md", "[b](b.md)"), vec![("file:a.md".into(), "file:b.md".into())]);
+    }
+
+    #[test]
+    fn parent_traversal_past_the_root_drops_the_extra_dotdots_without_panicking() {
+        assert_eq!(normalise("a.md", "../../x.md"), "x.md");
+        assert_eq!(normalise("docs/a.md", "../../../x.md"), "x.md");
+    }
+
+    #[test]
+    fn current_dir_segments_are_collapsed_anywhere_in_the_target() {
+        assert_eq!(normalise("docs/a.md", "./b.md"), "docs/b.md");
+        assert_eq!(normalise("docs/a.md", "sub/./b.md"), "docs/sub/b.md");
+    }
+
+    #[test]
+    fn a_link_target_containing_a_space_is_not_captured() {
+        assert!(links("a.md", "[x](has space.md)").is_empty());
+    }
+
+    #[test]
+    fn the_same_link_twice_in_one_document_produces_two_edges() {
+        let l = links("a.md", "[x](b.md) and again [y](b.md)");
+        assert_eq!(l, vec![("file:a.md".into(), "file:b.md".into()), ("file:a.md".into(), "file:b.md".into())]);
+    }
 }

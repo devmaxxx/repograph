@@ -146,4 +146,32 @@ mod tests {
         assert_eq!(ids("N-151 и NFR-PH-01"), vec!["N-151", "NFR-PH-01"]);
         assert_eq!(ids("OPS-M02 vs FR-OPS-12"), vec!["OPS-M02", "FR-OPS-12"]);
     }
+
+    #[test]
+    fn a_descending_range_is_not_expanded_only_its_start_is_a_single_hit() {
+        assert_eq!(ids("FR-RPT-48…42"), vec!["FR-RPT-48"]);
+    }
+
+    #[test]
+    fn a_range_wider_than_fifty_is_left_unexpanded() {
+        assert_eq!(ids("FR-RPT-1…100"), vec!["FR-RPT-1"]);
+    }
+
+    #[test]
+    fn slash_list_elements_keep_their_own_written_digit_width() {
+        assert_eq!(ids("INV-01/02"), vec!["INV-01", "INV-02"]);
+    }
+
+    #[test]
+    fn the_same_id_repeated_in_prose_yields_two_hits_at_their_own_offsets() {
+        let hits = m().find_all("FR-PAY-22 ... позже снова FR-PAY-22");
+        assert_eq!(hits.len(), 2);
+        assert_ne!(hits[0].start, hits[1].start);
+        assert!(hits.iter().all(|h| h.id == "FR-PAY-22"));
+    }
+
+    #[test]
+    fn an_id_spanning_the_entire_text_satisfies_both_boundary_checks() {
+        assert_eq!(ids("FR-PAY-22"), vec!["FR-PAY-22"]);
+    }
 }
