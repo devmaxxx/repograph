@@ -40,16 +40,23 @@ pub fn tokenize(text: &str) -> Vec<String> {
 
 impl LexicalIndex {
     pub fn build(graph: &Graph) -> LexicalIndex {
-        let mut ids = Vec::new();
-        let mut lengths = Vec::new();
-        let mut postings: HashMap<String, Vec<(usize, u32)>> = HashMap::new();
-        for n in graph.nodes.values().filter(|n| n.kind != NodeKind::File) {
-            let doc = ids.len();
-            ids.push(n.id.clone());
+        use rayon::prelude::*;
+        let nodes: Vec<_> = graph.nodes.values().filter(|n| n.kind != NodeKind::File).collect();
+        // Stemming is the cost — three quarters of a no-dense answer on a 7,500-node graph
+        // when done one document at a time — and every document stems independently.
+        let docs: Vec<(String, HashMap<String, u32>, f32)> = nodes.par_iter().map(|n| {
             let toks = tokenize(&format!("{} {} {}", n.id, n.label, n.body));
-            lengths.push(toks.len() as f32);
+            let len = toks.len() as f32;
             let mut tf: HashMap<String, u32> = HashMap::new();
             for t in toks { *tf.entry(t).or_default() += 1; }
+            (n.id.clone(), tf, len)
+        }).collect();
+        let mut ids = Vec::with_capacity(docs.len());
+        let mut lengths = Vec::with_capacity(docs.len());
+        let mut postings: HashMap<String, Vec<(usize, u32)>> = HashMap::new();
+        for (doc, (id, tf, len)) in docs.into_iter().enumerate() {
+            ids.push(id);
+            lengths.push(len);
             for (t, c) in tf { postings.entry(t).or_default().push((doc, c)); }
         }
         let avg_len = if lengths.is_empty() { 1.0 } else { lengths.iter().sum::<f32>() / lengths.len() as f32 };
