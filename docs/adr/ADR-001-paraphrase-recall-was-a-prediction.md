@@ -1,6 +1,6 @@
 # ADR-001 · Paraphrase recall was a prediction, not a measurement
 
-**Status:** Accepted, 2026-09-01
+**Status:** Accepted, 2026-09-01; amended 2026-09-02 (see the last section)
 
 ## Context
 
@@ -66,3 +66,15 @@ wider expansion cap.
 - If paraphrase recall needs to improve further, the next experiment is `MultilingualE5Base`, not
   another seeds/hops tuning pass — both of those levers are measured: each still buys about one hit,
   and each pays for it with the token budget the bench exists to protect.
+
+## Amendment, 2026-09-02
+
+A per-case diagnostic showed five of the six paraphrase hits sitting at dense rank 2 and one
+target (`FR-SVC-39`) at dense rank 2 yet absent from the seeds: reciprocal rank fusion ranks ids
+that both lists agree on above a single list's second hit, and with 20 candidates per list there
+were enough such ids to fill five seeds. Replacing RRF with a dense-first interleave (rank 1 of each
+list, then rank 2 of each) measured 6/14 with embeddings, 24/24 keyword, 3/3 code, p90 217 tokens
+against 215; `--no-dense` is a single list and is unchanged at 2/14. The dense floor is now 6/14.
+Of the eight remaining misses, two targets are outside both lists' top 100 and six sit at dense
+rank 32–81, which no fusion rule reaches at five seeds — the gap to ≥12/14 stands and remains a
+retrieval question, not a fusion one.

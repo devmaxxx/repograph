@@ -59,12 +59,14 @@ pub fn ask(graph: &Graph, ids: &IdMatcher, dense: Option<&dyn Fn(&str, usize) ->
     // Topping an exact answer up from fusion only appends neighbours nobody asked for (an id
     // lookup measured 174 tokens with them, 68 without).
     if !whole_question {
-        let lexical: Vec<String> = LexicalIndex::build(graph).search(&query, 20).into_iter().map(|(id, _)| id).collect();
-        let mut lists = vec![lexical];
+        // Dense goes first: it is the retriever the paraphrase floor rests on, so it gets the
+        // odd seed when the two lists are interleaved.
+        let mut lists = Vec::new();
         if opts.dense {
             if let Some(d) = dense { lists.push(d(&query, 20)); }
         }
-        for (id, score) in fuse::rrf(&lists, 60.0) {
+        lists.push(LexicalIndex::build(graph).search(&query, 20).into_iter().map(|(id, _)| id).collect());
+        for (id, score) in fuse::interleave(&lists) {
             if answer.seeds.len() >= opts.seeds { break; }
             if exact.contains(&id) { continue; }
             if let Some(h) = hit(graph, &id, score, None) { answer.seeds.push(h); }
@@ -330,13 +332,13 @@ mod tests {
     }
 
     #[test]
-    fn fused_score_is_pinned_to_rrf_k_sixty() {
+    fn the_dense_top_hit_takes_the_first_seed_and_its_second_hit_the_third() {
         let g = graph();
-        let a = ask(&g, &ids(), None, &["штраф".to_string()], &opts());
-        let fused = a.seeds.iter().find(|h| h.id == "FR-PAY-22").unwrap();
-        // Measured with a single lexical hit at rank 0 and k = 60.0 (1.0 / 61.0); a
-        // tolerance this tight catches k drifting to a materially different value.
-        assert!((fused.score - 0.016_393_442).abs() < 0.000_000_5, "fused score {} moved off the k=60 baseline", fused.score);
+        // Lexical alone ranks FR-PAY-22 first for "штраф"; dense disagrees on both of its slots.
+        let dense = |_: &str, _: usize| vec!["N-151".to_string(), "FR-PAY-20".to_string()];
+        let a = ask(&g, &ids(), Some(&dense), &["штраф".to_string()], &Options { dense: true, ..opts() });
+        let order: Vec<&str> = a.seeds.iter().map(|h| h.id.as_str()).collect();
+        assert_eq!(&order[..3], ["N-151", "FR-PAY-22", "FR-PAY-20"]);
     }
 
     #[test]

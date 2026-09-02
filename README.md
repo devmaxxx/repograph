@@ -18,9 +18,9 @@ LLM-extracted graph it replaces:
 
 |                           | graphify (the incumbent) | repograph           |
 | ------------------------- | ------------------------ | ------------------- |
-| paraphrase questions      | 0/14                     | 5/14                |
+| paraphrase questions      | 0/14                     | 6/14                |
 | keyword questions         | 11/24                    | 24/24               |
-| tokens per answer         | 1027-1555                | 201 median, 215 p90 |
+| tokens per answer         | 1027-1555                | 201 median, 217 p90 |
 | tokens to build the graph | 14,597,195               | 0                   |
 
 Every number above came from running both tools; none is a target. See [Bench](#bench) for the full
@@ -146,7 +146,10 @@ repograph bench --cases other.jsonl  # a different case file, same 24/14/3 shape
 3. **Dense.** A local embedding of the query, cosine-ranked against every node's stored vector
    (see [Embeddings](#embeddings)). Skipped by `--no-dense`, or when the model cannot be opened —
    no cache and no network (see [Embeddings](#embeddings) for the fallback rules).
-4. **Fuse.** Reciprocal rank fusion (k = 60) merges the retrievers; the top seeds survive.
+4. **Fuse.** The two lists are interleaved, dense first — rank 1 of each, then rank 2 of each —
+   and the top seeds survive. Reciprocal rank fusion was measured to bury a retriever's second hit
+   under ids both lists merely agreed on; the interleave lifted paraphrase recall from 5/14 to 6/14
+   at +2 tokens p90.
 5. **Expand.** One hop over `References`, `Implements`, `Declares`, `Links` and `Legacy` edges, in
    both directions, keeping the single best-ranked neighbour — a second one measured +1 hit per
    extra neighbour against ~+90 tokens per answer. `File` nodes and decorator nodes are never
@@ -251,7 +254,8 @@ download and the embedding stage everywhere.
 ~30 ms and ~50 MB, a fused query in ~0.75 s and ~1.4 GB — the model, not the graph.
 
 The larger `MultilingualE5Base` (768-d, ≈1.1 GB) was measured on the same corpus and cases:
-paraphrase 6/14 against the small model's 5/14, everything else unchanged. One hit for 2.4× the
+paraphrase 6/14 against the small model's 5/14 under reciprocal rank fusion, everything else
+unchanged. One hit for 2.4× the
 download and double the embedding time is not a trade this tool makes; the small model stays.
 
 If the model can't be opened (no cache, no network), the two kinds of caller degrade differently, on
@@ -272,23 +276,23 @@ is compiled into the binary, so a release build benches from any directory; `--c
 different file of the same shape:
 
 - keyword 24/24
-- paraphrase ≥5/14 with embeddings, ≥2/14 with `--no-dense`
+- paraphrase ≥6/14 with embeddings, ≥2/14 with `--no-dense`
 - code 3/3
 - p90 ≤230 tokens, counted as rendered UTF-8 bytes / 4 — a conservative proxy, since it counts a
   Cyrillic answer at roughly double what an equivalent chars/4 reading would give a Latin one
 
-Measured, on the shipped binary against `beauty-crm`: `keyword 24/24  paraphrase 5/14  code 3/3
-p90 215 tok` (median 201) with embeddings; `keyword 24/24  paraphrase 2/14  code 3/3  p90 216 tok`
+Measured, on the shipped binary against `beauty-crm`: `keyword 24/24  paraphrase 6/14  code 3/3
+p90 217 tok` (median 201) with embeddings; `keyword 24/24  paraphrase 2/14  code 3/3  p90 216 tok`
 with `--no-dense`. Asking for one of 24 requirement ids verbatim returns its head line first every
 time, at 68 tokens median — an exact match fills the answer alone instead of being topped up with
 fused neighbours, which had cost 174 tokens for the same lookups.
 
 The design note that shaped this architecture predicted paraphrase recall would reach ≥12/14 once
-dense retrieval was fused in. It measured at 5/14 — a prediction that did not survive contact with
-measurement, not a bug; see
+dense retrieval was fused in. It measured at 5/14, 6/14 after the fusion change — a prediction that
+did not survive contact with measurement, not a bug; see
 [`docs/adr/ADR-001-paraphrase-recall-was-a-prediction.md`](docs/adr/ADR-001-paraphrase-recall-was-a-prediction.md)
 for what was ruled out and what wasn't. The floors above are that measurement, and the tool still
-beats the incumbent on every axis anyone has ever measured: 5/14 and 24/24 at 201 median tokens
+beats the incumbent on every axis anyone has ever measured: 6/14 and 24/24 at 201 median tokens
 against graphify's 0/14 and 11/24 at 1,027-1,555 tokens, built for 14.6 million tokens instead of
 zero.
 
