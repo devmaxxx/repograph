@@ -303,7 +303,12 @@ in every answer. `enrich_command` is any
 shell command that reads the prompt on stdin and writes `id<TAB>question` lines; the default is
 headless Claude Code with thinking off (`MAX_THINKING_TOKENS=0 claude -p --model haiku …`), which
 answers the same and 4–5× faster than with it. Generation is cached by passage hash in
-`.repograph/questions.json`, so a later `enrich` pays only for nodes whose text changed. On the
+`.repograph/questions.json`, so a later `enrich` pays only for nodes whose text changed. Two
+kinds of drift are refused on the way in and cleaned out of an older cache on load: a line
+whose letters are mostly neither Cyrillic nor Latin (the generator answered 12 ADR nodes of the
+development corpus in Urdu — 144 lines nobody could search for), and several questions
+tab-joined into one line around the node's own id (40 lines, each of which the exact stage
+answered for free). A node left without questions is asked again by the next `enrich`. On the
 1,971 eligible nodes of the corpus it took 16 minutes at 8-way parallelism and roughly $2.5 of
 Haiku; a node's questions run about 13 lines.
 

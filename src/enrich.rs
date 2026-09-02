@@ -37,7 +37,11 @@ pub fn eligible(n: &Node) -> bool { KINDS.contains(&n.kind) && !(n.kind == NodeK
 impl Questions {
     pub fn load(store: &Store) -> Result<Questions> {
         match store.read_bytes(FILE)? {
-            Some(b) => serde_json::from_slice(&b).context(FILE),
+            Some(b) => {
+                let mut q: Questions = serde_json::from_slice(&b).context(FILE)?;
+                clean(&mut q.entries);
+                Ok(q)
+            }
             None => Ok(Questions::default()),
         }
     }
@@ -92,16 +96,46 @@ pub fn prompt(nodes: &[&Node]) -> String {
     p
 }
 
-/// Lines of `id<TAB>question` for ids in the batch; anything else is ignored.
+/// Lines of `id<TAB>question` for ids in the batch; anything else is ignored. A line may carry
+/// several questions tab-joined, an id before each — the bench corpus had 40 such lines, each
+/// stored whole with its own id inside, which the exact stage then answered for free.
 pub fn parse(output: &str, batch: &[&Node]) -> BTreeMap<String, Vec<String>> {
     let mut out: BTreeMap<String, Vec<String>> = BTreeMap::new();
     for line in output.lines() {
-        let Some((id, q)) = line.split_once('\t') else { continue };
-        let (id, q) = (id.trim(), q.trim());
-        if q.is_empty() || !batch.iter().any(|n| n.id == id) { continue; }
-        out.entry(id.to_string()).or_default().extend(split_joined(q));
+        let mut current: Option<&str> = None;
+        for part in line.split('\t').map(str::trim).filter(|p| !p.is_empty()) {
+            if let Some(n) = batch.iter().find(|n| n.id == part) {
+                current = Some(&n.id);
+            } else if let Some(id) = current.filter(|_| readable(part)) {
+                out.entry(id.to_string()).or_default().extend(split_joined(part));
+            }
+        }
     }
     out
+}
+
+/// A question is searchable only in a script the readers write: the generator drifted into
+/// Urdu on 12 ADR nodes of the bench corpus, 144 lines that ranked for nobody and sat in both
+/// question indexes. Letters outside Cyrillic and Latin may not be the majority.
+fn readable(q: &str) -> bool {
+    let (mut letters, mut known) = (0usize, 0usize);
+    for c in q.chars().filter(|c| c.is_alphabetic()) {
+        letters += 1;
+        if c.is_ascii_alphabetic() || matches!(c, '\u{00C0}'..='\u{024F}' | '\u{0400}'..='\u{04FF}') { known += 1; }
+    }
+    known * 2 >= letters
+}
+
+/// Stored questions written before `parse` learned the two rules above: tab-joined lines are
+/// split and the entry's own id dropped, unreadable lines go, and an entry left without
+/// questions is forgotten so the next `enrich` asks for it again.
+fn clean(entries: &mut BTreeMap<String, Entry>) {
+    entries.retain(|id, e| {
+        e.questions = e.questions.iter()
+            .flat_map(|q| q.split('\t').map(str::trim).filter(|p| !p.is_empty() && p != id && readable(p)).map(String::from).collect::<Vec<_>>())
+            .collect();
+        !e.questions.is_empty()
+    });
 }
 
 /// The model sometimes packs a whole entry's questions into one comma-separated line without
@@ -208,6 +242,39 @@ mod tests {
         let p = parse(out, &batch);
         assert_eq!(p["FR-PAY-22"], vec!["как отменить запись", "штраф за неявку"]);
         assert!(!p.contains_key("FR-PAY-26"));
+    }
+
+    #[test]
+    fn parse_splits_tab_joined_questions_and_never_stores_the_id() {
+        let g = graph();
+        let batch: Vec<&Node> = vec![&g.nodes["FR-PAY-22"], &g.nodes["FR-PAY-26"]];
+        let out = "FR-PAY-22\tкак отменить запись\tFR-PAY-22\tштраф за неявку\tкто платит\tFR-PAY-26\tсколько спишут\n";
+        let p = parse(out, &batch);
+        assert_eq!(p["FR-PAY-22"], vec!["как отменить запись", "штраф за неявку", "кто платит"]);
+        assert_eq!(p["FR-PAY-26"], vec!["сколько спишут"]);
+        assert!(p.values().flatten().all(|q| !q.contains("FR-PAY")));
+    }
+
+    #[test]
+    fn parse_drops_a_line_in_a_script_nobody_searches_in() {
+        let g = graph();
+        let batch: Vec<&Node> = vec![&g.nodes["FR-PAY-22"]];
+        let out = "FR-PAY-22\tکیا میں بکنگ منسوخ کر سکتا ہوں؟\nFR-PAY-22\tчто делает asGrosze при отмене?\nFR-PAY-22\tCancellationPolicy — 24h?\n";
+        let p = parse(out, &batch);
+        assert_eq!(p["FR-PAY-22"], vec!["что делает asGrosze при отмене?", "CancellationPolicy — 24h?"]);
+    }
+
+    #[test]
+    fn load_cleans_questions_stored_before_the_guard_and_forgets_the_emptied() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::new(dir.path());
+        let mut qs = Questions::default();
+        qs.entries.insert("FR-PAY-22".into(), Entry { hash: "h".into(), questions: vec!["как отменить\tFR-PAY-22\tштраф".into()] });
+        qs.entries.insert("ADR-003".into(), Entry { hash: "h".into(), questions: vec!["کیا میں بکنگ منسوخ کر سکتا ہوں؟".into()] });
+        qs.save(&store).unwrap();
+        let loaded = Questions::load(&store).unwrap();
+        assert_eq!(loaded.get("FR-PAY-22"), ["как отменить", "штраф"]);
+        assert!(!loaded.entries.contains_key("ADR-003"));
     }
 
     // The generator is a shell command, so the test's generator is `awk` echoing the ids it was
