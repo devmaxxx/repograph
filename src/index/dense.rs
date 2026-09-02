@@ -2,6 +2,7 @@ use crate::model::{Graph, NodeKind};
 use crate::store::Store;
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
+use std::path::PathBuf;
 
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub struct DenseIndex {
@@ -94,10 +95,21 @@ impl DenseIndex {
     }
 }
 
+/// fastembed's own default is `.fastembed_cache` under the current directory, which re-downloads
+/// 470 MB per directory `repograph` is run from and fails outright on a read-only one.
+fn cache_dir() -> Result<PathBuf> {
+    if let Some(dir) = std::env::var_os("FASTEMBED_CACHE_DIR") {
+        return Ok(PathBuf::from(dir));
+    }
+    let home = std::env::var_os("HOME").context("neither FASTEMBED_CACHE_DIR nor HOME is set")?;
+    Ok(PathBuf::from(home).join(".cache").join("repograph").join("fastembed"))
+}
+
 impl Embedder {
     pub fn open() -> Result<Embedder> {
         use fastembed::{EmbeddingModel, TextEmbedding, TextInitOptions};
         let opts = TextInitOptions::new(EmbeddingModel::MultilingualE5Small)
+            .with_cache_dir(cache_dir()?)
             .with_show_download_progress(true)
             .with_max_length(256);
         Ok(Embedder { model: TextEmbedding::try_new(opts).context("open embedding model")? })

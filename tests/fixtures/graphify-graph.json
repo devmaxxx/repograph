@@ -18,22 +18,49 @@
       "source_file": "06-payments.md",
       "community_name": "Payments core"
     },
-    { "id": "ghost", "label": "Something unrelated", "source_file": "99-x.md" },
+    {
+      "id": "ghost",
+      "label": "Something unrelated",
+      "source_file": "99-x.md"
+    },
     {
       "id": "ast_sym",
       "label": "asGrosze",
       "_origin": "ast",
       "source_file": "money.ts"
+    },
+    {
+      "id": "cancellation_policy_dup",
+      "label": "CancellationPolicy (FR-PAY-22)",
+      "source_file": "06-payments.md",
+      "community_name": "Payments core"
     }
   ],
   "links": [
-    { "source": "fr_pay_22", "target": "n_151", "relation": "references" },
+    {
+      "source": "fr_pay_22",
+      "target": "n_151",
+      "relation": "references"
+    },
     {
       "source": "fr_pay_22",
       "target": "refund_flow",
       "relation": "conceptually_related_to"
     },
-    { "source": "ghost", "target": "refund_flow", "relation": "cites" },
-    { "source": "fr_pay_22", "target": "ast_sym", "relation": "implements" }
+    {
+      "source": "ghost",
+      "target": "refund_flow",
+      "relation": "cites"
+    },
+    {
+      "source": "fr_pay_22",
+      "target": "ast_sym",
+      "relation": "implements"
+    },
+    {
+      "source": "fr_pay_22",
+      "target": "cancellation_policy_dup",
+      "relation": "conceptually_related_to"
+    }
   ]
 }

@@ -27,7 +27,10 @@ pub fn passes(s: &Summary, dense: bool) -> bool {
     s.keyword.0 == s.keyword.1 && s.paraphrase.0 >= floor.min(s.paraphrase.1) && s.code.0 == s.code.1 && s.p90_tokens <= 230
 }
 
-pub fn run(repo: &Path, cases: &Path, no_dense: bool) -> Result<bool> {
+// The recorded cases travel inside the binary so a release build benches from any directory.
+const BUILT_IN_CASES: &str = include_str!("../bench/cases.jsonl");
+
+pub fn run(repo: &Path, cases: Option<&Path>, no_dense: bool) -> Result<bool> {
     // Resolved before `Config::load` so the override repo's own `repograph.toml` — not the
     // `--repo` one — is what the `IdMatcher` is built from.
     let repo = std::env::var("REPOGRAPH_BENCH_REPO").map(std::path::PathBuf::from).unwrap_or(repo.to_path_buf());
@@ -58,8 +61,10 @@ pub fn run(repo: &Path, cases: &Path, no_dense: bool) -> Result<bool> {
         let mut e = embedder.borrow_mut();
         match e.as_mut().and_then(|e| e.query(q).ok()) { Some(v) => dense_idx.search(&v, k), None => Vec::new() }
     };
-    let cases_path = cases.display().to_string();
-    let text = std::fs::read_to_string(cases).with_context(|| cases_path.clone())?;
+    let (cases_path, text) = match cases {
+        Some(p) => (p.display().to_string(), std::fs::read_to_string(p).with_context(|| p.display().to_string())?),
+        None => ("built-in bench/cases.jsonl".to_string(), BUILT_IN_CASES.to_string()),
+    };
     let cases: Vec<Case> = text.lines().filter(|l| !l.trim().is_empty())
         .map(|l| serde_json::from_str::<Case>(l).map_err(anyhow::Error::from))
         .collect::<Result<_>>()?;

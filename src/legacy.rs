@@ -44,6 +44,7 @@ pub struct Report {
     pub resolved_both: usize,
     pub resolved_one: usize,
     pub concepts_created: usize,
+    pub self_loops: usize,
 }
 
 fn basename(p: &str) -> &str {
@@ -152,6 +153,12 @@ pub fn import(graph: &mut Graph, ids: &IdMatcher, json: &str) -> Result<Report> 
 
         let sr = &resolved[e.source.as_str()];
         let tr = &resolved[e.target.as_str()];
+        // Two graphify nodes naming the same requirement collapse onto one node here; the edge
+        // between them says nothing once they are the same node.
+        if sr.id() == tr.id() {
+            report.self_loops += 1;
+            continue;
+        }
         match (sr.is_real(), tr.is_real()) {
             (true, true) => report.resolved_both += 1,
             (false, false) => {}
@@ -197,7 +204,8 @@ mod tests {
     fn resolves_by_id_then_label_then_creates_concepts() {
         let mut g = base();
         let r = run(&mut g);
-        assert_eq!(r, Report { edges_seen: 3, resolved_both: 2, resolved_one: 1, concepts_created: 1 });
+        assert_eq!(r, Report { edges_seen: 4, resolved_both: 2, resolved_one: 1, concepts_created: 1, self_loops: 1 });
+        assert!(!g.edges.iter().any(|e| e.source == e.target));
         assert!(g.edges.iter().any(|e| e.source == "FR-PAY-22" && e.target == "N-151" && e.kind == EdgeKind::Legacy && e.context == "references"));
         assert!(g.edges.iter().any(|e| e.source == "FR-PAY-22" && e.target == "FR-TOOL-39" && e.context == "conceptually_related_to"));
         let ghost = &g.nodes["legacy:ghost"];

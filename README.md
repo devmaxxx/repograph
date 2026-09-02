@@ -236,13 +236,15 @@ heading form; the modality is optional.
 ## Embeddings
 
 Dense retrieval embeds with `fastembed`'s `MultilingualE5Small` (`intfloat/multilingual-e5-small`,
-384-d, ONNX, ≈470 MB on disk) — a one-time download cached under `FASTEMBED_CACHE_DIR`. Set that
-variable: fastembed's default is `.fastembed_cache` **relative to the current working directory**, so
-without it every directory you run `repograph` from downloads its own copy (and the copy lands in the
-repository you are indexing — gitignore `.fastembed_cache/` if you leave the default). Every command
-that touches the dense stage — `build`, `update`, `ask`, `bench` — reuses the cache; there are no
-further network calls once it is populated. `--no-dense` skips the download and the embedding stage
-everywhere.
+384-d, ONNX, ≈470 MB on disk) — a one-time download cached under `FASTEMBED_CACHE_DIR` if that is
+set, else `~/.cache/repograph/fastembed`. (fastembed's own default is `.fastembed_cache` relative to
+the current directory, which downloads a copy per directory and fails on a read-only one; `repograph`
+does not use it.) Every command that touches the dense stage — `build`, `update`, `ask`, `bench` —
+reuses the cache; there are no further network calls once it is populated. `--no-dense` skips the
+download and the embedding stage everywhere.
+
+`ask` opens the model only when a fused query needs it: an exact id or symbol lookup answers in
+~30 ms and ~50 MB, a fused query in ~0.75 s and ~1.4 GB — the model, not the graph.
 
 If the model can't be opened (no cache, no network), the two kinds of caller degrade differently, on
 purpose: `ask` and `update` fall back to lexical-only and print one line to stderr saying so, then
@@ -257,9 +259,9 @@ On `beauty-crm`'s 6,691 non-`File` nodes, the first embedding pass took ~135 s o
 ## Bench
 
 `repograph bench [--cases file]` runs the recorded 41 cases (24 keyword + 14 paraphrase + 3 code)
-against a built graph and fails the process if any floor is missed. Without `--cases` it reads
-`bench/cases.jsonl` from the checkout the binary was compiled in — an absolute path baked in at build
-time — so a release binary run outside its source tree needs `--cases`:
+against a built graph and fails the process if any floor is missed. The recorded `bench/cases.jsonl`
+is compiled into the binary, so a release build benches from any directory; `--cases` substitutes a
+different file of the same shape:
 
 - keyword 24/24
 - paraphrase ≥5/14 with embeddings, ≥2/14 with `--no-dense`
@@ -286,7 +288,9 @@ zero.
 not just disk: importing `beauty-crm`'s graphify graph measured keyword dropping 24/24 → 23/24 and
 dense p90 rising 218 → 233 tokens, which breaches the p90 floor above. That is why `bench` above is
 always measured against a legacy-free store, and why `import-legacy` stays a separate, opt-in step
-rather than folding into `build`.
+rather than folding into `build`. Two graphify nodes that resolve to the same requirement collapse
+onto one node, and the edge between them is dropped rather than kept as a self-loop — 592 of the
+20,415 links on `beauty-crm`'s graph; the import prints the count.
 
 ## Measured
 
