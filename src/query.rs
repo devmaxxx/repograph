@@ -23,7 +23,7 @@ fn hit(graph: &Graph, id: &str, score: f32, via: Option<&str>) -> Option<Hit> {
 }
 
 /// Exact hits per word, and whether they answer the whole question: every word matched, and
-/// none is a plain lowercase word — `money` is a test helper and a topic, `asGrosze` only a name.
+/// each carries an uppercase letter — `money` and `utf8` are topics as much as names, `asGrosze` only a name.
 fn exact_seeds(graph: &Graph, ids: &IdMatcher, words: &[String]) -> (Vec<String>, bool) {
     let mut out = Vec::new();
     let mut whole = true;
@@ -37,7 +37,7 @@ fn exact_seeds(graph: &Graph, ids: &IdMatcher, words: &[String]) -> (Vec<String>
             .filter(|n| n.kind == NodeKind::Symbol && (n.label == *w || n.id.ends_with(&tail)))
             .map(|n| &n.id).collect();
         syms.sort();
-        whole &= !syms.is_empty() && !w.chars().all(char::is_lowercase);
+        whole &= !syms.is_empty() && w.chars().any(char::is_uppercase);
         out.extend(syms.into_iter().cloned());
     }
     let mut seen = BTreeSet::new();

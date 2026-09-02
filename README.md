@@ -137,9 +137,9 @@ repograph bench --cases other.jsonl  # a different case file, same 24/14/3 shape
 ## How a question becomes an answer
 
 1. **Exact.** A word that is a known id, or the name of an indexed symbol, wins outright and scores
-   above everything else. When every word is an id or a code-shaped name (`asGrosze`, `ZERO`), the
-   exact hits are the whole answer; a plain lowercase word that happens to be a symbol too (`money`
-   is a test helper) leads, and the fused retrievers fill the remaining seeds.
+   above everything else. When every word is an id or a name with an uppercase letter (`asGrosze`,
+   `ZERO`), the exact hits are the whole answer; a lowercase word that happens to be a symbol too
+   (`money` is a test helper) leads, and the fused retrievers fill the remaining seeds.
 2. **Lexical.** BM25 over `id + label + body` for every node, with Snowball stemming — Russian for
    Cyrillic tokens, English otherwise, so `штрафа` and `штрафы` are the same term. Ids survive
    tokenization whole, so `FR-PAY-22` never becomes three tokens.

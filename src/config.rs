@@ -3,7 +3,7 @@ use serde::Deserialize;
 use std::path::Path;
 
 #[derive(Debug, Clone, Deserialize)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct Config {
     pub doc_globs: Vec<String>,
     pub code_globs: Vec<String>,

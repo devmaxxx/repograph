@@ -58,15 +58,22 @@ pub fn run_update(repo: &std::path::Path, cfg: &config::Config, ex: &Extractors,
     let diff = manifest.diff(&entries);
     let stale: std::collections::BTreeSet<&str> =
         diff.removed.iter().map(String::as_str).chain(diff.changed.iter().map(|e| e.rel.as_str())).collect();
-    // A node's `path:line` comes from its primary declaring file. When that file goes, the
+    // A node's `path:line` comes from its primary declaring file. When that file goes, every
     // surviving declarer is re-read too, so line, label and body come from the file that is cited.
+    // Re-reading a file removes it first, which orphans the primaries it held in turn — hence the
+    // closure: shared decorator ids chain NestJS files together several hops deep.
     let by_rel: std::collections::BTreeMap<&str, &walk::Entry> = entries.iter().map(|e| (e.rel.as_str(), e)).collect();
-    let co_declared: std::collections::BTreeSet<&str> = graph.nodes.values()
-        .filter(|n| stale.contains(n.file.as_str()))
-        .flat_map(|n| n.files.iter().map(String::as_str))
-        .filter(|f| !stale.contains(f) && by_rel.contains_key(f))
-        .map(|f| by_rel[f].rel.as_str())
-        .collect();
+    let mut co_declared: std::collections::BTreeSet<&str> = std::collections::BTreeSet::new();
+    let mut frontier = stale.clone();
+    while !frontier.is_empty() {
+        frontier = graph.nodes.values()
+            .filter(|n| frontier.contains(n.file.as_str()))
+            .flat_map(|n| n.files.iter().map(String::as_str))
+            .filter(|f| !stale.contains(f) && !co_declared.contains(f) && by_rel.contains_key(f))
+            .map(|f| by_rel[f].rel.as_str())
+            .collect();
+        co_declared.extend(frontier.iter());
+    }
     for rel in stale.iter().chain(co_declared.iter()) { graph.remove_file(rel); }
     let reread = co_declared.iter().map(|rel| by_rel[rel]);
     for e in diff.changed.iter().chain(reread) {
@@ -203,5 +210,40 @@ mod tests {
         let (graph, _) = store::Store::new(repo).load().unwrap();
         let n = &graph.nodes["FR-PAY-22"];
         assert_eq!((n.file.as_str(), n.line, n.label.as_str()), ("docs/b.md", 7, "second"));
+    }
+
+    // Re-reading b.md for FR-PAY-22 removes b.md first, which was the primary of FR-PAY-20 as
+    // well; that node must not end up citing c.md with b.md's line.
+    #[test]
+    fn rereading_a_declarer_does_not_strand_the_nodes_it_was_primary_for() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = dir.path();
+        std::fs::create_dir_all(repo.join("docs")).unwrap();
+        std::fs::write(repo.join("docs/a.md"), "# A
+
+**FR-PAY-22 · MUST · x in a**
+").unwrap();
+        std::fs::write(repo.join("docs/b.md"), "# B
+
+**FR-PAY-22 · MUST · x in b**
+
+**FR-PAY-20 · MUST · y in b**
+").unwrap();
+        std::fs::write(repo.join("docs/c.md"), "# C
+
+intro
+
+more
+
+**FR-PAY-20 · MUST · y in c**
+").unwrap();
+        let cfg = config::Config::default();
+        let ex = extractors(repo, &cfg).unwrap();
+        run_update(repo, &cfg, &ex, true).unwrap();
+        std::fs::remove_file(repo.join("docs/a.md")).unwrap();
+        run_update(repo, &cfg, &ex, false).unwrap();
+        let (graph, _) = store::Store::new(repo).load().unwrap();
+        let y = &graph.nodes["FR-PAY-20"];
+        assert_eq!((y.file.as_str(), y.line, y.label.as_str()), ("docs/b.md", 5, "y in b"));
     }
 }
