@@ -287,10 +287,14 @@ different file of the same shape:
 
 Measured, on the shipped binary against `beauty-crm`: `keyword 24/24  paraphrase 7/14  code 3/3
 p90 219 tok` (median 203) with embeddings; `keyword 24/24  paraphrase 3/14  code 3/3  p90 218 tok`
-with `--no-dense`. One paraphrase case was rewritten on the way: its question asked about
-withdrawing consent through a messenger, while the entry it names (`FR-VIS-76`) is about who may
-leave a review — «отзыв» meant a review there, not a withdrawal — so no retriever could have
-answered it. The new question shares no word with the target line, as the others do. Asking for one of 24 requirement ids verbatim returns its head line first every
+with `--no-dense`. Three paraphrase cases were rewritten on the way. One asked about withdrawing
+consent through a messenger, while the entry it names (`FR-VIS-76`) is about who may leave a
+review — «отзыв» meant a review there, not a withdrawal — so no retriever could have answered it.
+Two more were under-specified rather than wrong: «export for tax reporting» names the corpus's
+DAC7 tax-reporting cluster better than its target, the accountant's export (`FR-PAY-104`), and
+«the product's inviolable requirements» fits the individual invariants as well as their registry
+(`FR-VIS-01`); a model shown both sets chose between them at random. Each new question still
+shares no word with its target line. Asking for one of 24 requirement ids verbatim returns its head line first every
 time, at 68 tokens median — an exact match fills the answer alone instead of being topped up with
 fused neighbours, which had cost 174 tokens for the same lookups.
 
