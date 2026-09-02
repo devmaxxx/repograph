@@ -4,8 +4,9 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
-/// (directory the tsconfig lives in, pattern -> targets), sorted nearest-first.
-type PathsTier = Vec<(String, Vec<(String, Vec<String>)>)>;
+/// (directory the tsconfig lives in, directory its targets are relative to — `baseUrl` —
+/// and pattern -> targets), sorted nearest-first.
+type PathsTier = Vec<(String, String, Vec<(String, Vec<String>)>)>;
 
 pub struct Resolver {
     repo: PathBuf,
@@ -24,6 +25,8 @@ struct TsConfig {
 struct CompilerOptions {
     #[serde(default)]
     paths: BTreeMap<String, Vec<String>>,
+    #[serde(default, rename = "baseUrl")]
+    base_url: Option<String>,
 }
 
 #[derive(Deserialize, Default)]
@@ -31,6 +34,10 @@ struct PackageJson {
     name: Option<String>,
     #[serde(default)]
     exports: serde_json::Value,
+    types: Option<String>,
+    typings: Option<String>,
+    module: Option<String>,
+    main: Option<String>,
 }
 
 fn trailing_comma_re() -> &'static regex::Regex {
@@ -88,7 +95,11 @@ impl Resolver {
                 let text = std::fs::read_to_string(p).with_context(|| p.display().to_string())?;
                 let cfg: TsConfig = serde_json::from_str(&strip_jsonc(&text)).unwrap_or_default();
                 if !cfg.compiler_options.paths.is_empty() {
-                    paths.push((rel_dir, cfg.compiler_options.paths.into_iter().collect()));
+                    let base = match cfg.compiler_options.base_url {
+                        Some(b) => crate::doc::links::normalise(&format!("{rel_dir}/x"), &b),
+                        None => rel_dir.clone(),
+                    };
+                    paths.push((rel_dir, base, cfg.compiler_options.paths.into_iter().collect()));
                 }
             } else if name == "package.json" && !rel_dir.contains("node_modules") {
                 let text = std::fs::read_to_string(p)?;
@@ -107,6 +118,12 @@ impl Resolver {
                                 if let Some(t) = export_target(other) {
                                     map.insert(".".into(), t);
                                 }
+                            }
+                        }
+                        // No `exports`: the entry point is whichever legacy field is set.
+                        if map.is_empty() {
+                            if let Some(t) = [pkg.types, pkg.typings, pkg.module, pkg.main].into_iter().flatten().next() {
+                                map.insert(".".into(), t);
                             }
                         }
                         packages.insert(pkg_name, (rel_dir, map));
@@ -152,7 +169,7 @@ impl Resolver {
         if spec.starts_with("node:") {
             return None;
         }
-        for (dir, patterns) in &self.paths {
+        for (dir, base, patterns) in &self.paths {
             if !dir.is_empty() && !from_rel.starts_with(&format!("{dir}/")) {
                 continue;
             }
@@ -165,7 +182,7 @@ impl Resolver {
                 let Some(rest) = matched else { continue };
                 for t in targets {
                     let t = t.replace('*', &rest);
-                    let joined = crate::doc::links::normalise(&format!("{dir}/x"), &t);
+                    let joined = crate::doc::links::normalise(&format!("{base}/x"), &t);
                     if let Some(hit) = self.exists(&joined) {
                         return Some(hit);
                     }
@@ -174,9 +191,20 @@ impl Resolver {
         }
         for (name, (dir, exports)) in &self.packages {
             let Some(rest) = spec.strip_prefix(name.as_str()) else { continue };
+            if !rest.is_empty() && !rest.starts_with('/') {
+                continue;
+            }
             let sub = if rest.is_empty() { ".".to_string() } else { format!(".{rest}") };
-            let Some(t) = exports.get(&sub) else { continue };
-            let joined = crate::doc::links::normalise(&format!("{dir}/x"), t);
+            // An exact subpath first; otherwise the first `./*`-style pattern that fits it.
+            let target = exports.get(&sub).cloned().or_else(|| {
+                exports.iter().find_map(|(pat, t)| {
+                    let (prefix, suffix) = pat.split_once('*')?;
+                    let inner = sub.strip_prefix(prefix)?.strip_suffix(suffix)?;
+                    Some(t.replace('*', inner))
+                })
+            });
+            let Some(t) = target else { continue };
+            let joined = crate::doc::links::normalise(&format!("{dir}/x"), &t);
             if let Some(hit) = self.exists(&joined) {
                 return Some(hit);
             }

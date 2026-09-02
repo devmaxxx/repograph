@@ -356,3 +356,118 @@ fn ambiguous_families_are_not_references() {
     assert!(edges(&ex, EdgeKind::References).is_empty(), "{:?}", edges(&ex, EdgeKind::References));
 }
 
+
+// ---- the import resolver ----
+
+fn resolver(files: &[(&str, &str)]) -> (Repo, Resolver) {
+    let repo = Repo::new(files);
+    let r = Resolver::new(repo.dir.path()).unwrap();
+    (repo, r)
+}
+
+#[test]
+fn package_exports_with_a_wildcard_subpath() {
+    let (_repo, r) = resolver(&[
+        ("packages/db/package.json", r#"{ "name": "@x/db", "exports": { ".": "./dist/index.js", "./*": { "types": "./dist/*.d.ts", "default": "./dist/*.js" } } }"#),
+        ("packages/db/src/index.ts", ""),
+        ("packages/db/src/seed/permissions.ts", ""),
+        ("packages/ui/package.json", r#"{ "name": "@x/ui", "exports": { "./components/*": "./dist/components/ui/*.js" } }"#),
+        ("packages/ui/src/components/ui/button.tsx", ""),
+    ]);
+    assert_eq!(r.resolve("apps/a.ts", "@x/db/seed/permissions").as_deref(), Some("packages/db/src/seed/permissions.ts"));
+    assert_eq!(r.resolve("apps/a.ts", "@x/db").as_deref(), Some("packages/db/src/index.ts"));
+    assert_eq!(r.resolve("apps/a.ts", "@x/ui/components/button").as_deref(), Some("packages/ui/src/components/ui/button.tsx"));
+    assert_eq!(r.resolve("apps/a.ts", "@x/db/missing"), None);
+}
+
+#[test]
+fn an_exact_export_wins_over_the_wildcard() {
+    let (_repo, r) = resolver(&[
+        ("packages/d/package.json", r#"{ "name": "@x/d", "exports": { "./time": "./dist/time/index.js", "./*": "./dist/*.js" } }"#),
+        ("packages/d/src/time/index.ts", ""),
+        ("packages/d/src/time.ts", ""),
+    ]);
+    assert_eq!(r.resolve("apps/a.ts", "@x/d/time").as_deref(), Some("packages/d/src/time/index.ts"));
+}
+
+#[test]
+fn a_package_name_that_is_a_prefix_of_another_does_not_capture_it() {
+    let (_repo, r) = resolver(&[
+        ("packages/ui/package.json", r#"{ "name": "@x/ui", "exports": { ".": "./src/index.ts", "./*": "./src/*.ts" } }"#),
+        ("packages/ui/src/index.ts", ""),
+        ("packages/ui/src/kit.ts", ""),
+        ("packages/ui-kit/package.json", r#"{ "name": "@x/ui-kit", "exports": { ".": "./src/index.ts" } }"#),
+        ("packages/ui-kit/src/index.ts", ""),
+    ]);
+    assert_eq!(r.resolve("apps/a.ts", "@x/ui-kit").as_deref(), Some("packages/ui-kit/src/index.ts"));
+    assert_eq!(r.resolve("apps/a.ts", "@x/ui/kit").as_deref(), Some("packages/ui/src/kit.ts"));
+}
+
+#[test]
+fn jsonc_tsconfig_with_comments_urls_and_trailing_commas() {
+    let (_repo, r) = resolver(&[
+        ("tsconfig.json", "{\n  // comment\n  \"$schema\": \"https://json.schemastore.org/tsconfig\",\n  /* block\n  comment */\n  \"compilerOptions\": {\n    \"paths\": {\n      \"@/*\": [\"./src/*\",],\n    },\n  },\n}\n"),
+        ("src/a.ts", ""),
+    ]);
+    assert_eq!(r.resolve("src/b.ts", "@/a").as_deref(), Some("src/a.ts"));
+}
+
+#[test]
+fn tsconfig_paths_honour_base_url() {
+    let (_repo, r) = resolver(&[
+        ("tsconfig.json", r#"{ "compilerOptions": { "baseUrl": "./src", "paths": { "~/*": ["lib/*"] } } }"#),
+        ("src/lib/util.ts", ""),
+    ]);
+    assert_eq!(r.resolve("src/app.ts", "~/util").as_deref(), Some("src/lib/util.ts"));
+}
+
+#[test]
+fn a_file_beats_a_directory_index_of_the_same_name() {
+    let (_repo, r) = resolver(&[("src/foo.ts", ""), ("src/foo/index.ts", ""), ("src/bar/index.tsx", "")]);
+    assert_eq!(r.resolve("src/a.ts", "./foo").as_deref(), Some("src/foo.ts"));
+    assert_eq!(r.resolve("src/a.ts", "./foo/index").as_deref(), Some("src/foo/index.ts"));
+    assert_eq!(r.resolve("src/a.ts", "./bar").as_deref(), Some("src/bar/index.tsx"));
+}
+
+#[test]
+fn non_source_specs_and_paths_outside_the_repo_are_none() {
+    let (_repo, r) = resolver(&[("src/a.ts", ""), ("src/data.json", ""), ("src/s.css", ""), ("src/dist/x.ts", "")]);
+    assert_eq!(r.resolve("src/a.ts", "./data.json"), None);
+    assert_eq!(r.resolve("src/a.ts", "./s.css"), None);
+    assert_eq!(r.resolve("src/a.ts", "../../../../etc/passwd"), None);
+    assert_eq!(r.resolve("src/a.ts", "./dist/x"), None, "build output is not indexed");
+    assert_eq!(r.resolve("src/a.ts", "./a.ts").as_deref(), Some("src/a.ts"), "an explicit extension still resolves");
+}
+
+#[test]
+fn a_package_inside_node_modules_is_not_a_workspace_package() {
+    let (_repo, r) = resolver(&[
+        ("node_modules/zod/package.json", r#"{ "name": "zod", "exports": { ".": "./index.ts" } }"#),
+        ("node_modules/zod/index.ts", ""),
+        ("src/a.ts", ""),
+    ]);
+    assert_eq!(r.resolve("src/a.ts", "zod"), None);
+}
+
+#[test]
+fn a_package_without_exports_falls_back_to_main_and_types() {
+    let (_repo, r) = resolver(&[
+        ("packages/m/package.json", r#"{ "name": "@x/m", "main": "./dist/index.js" }"#),
+        ("packages/m/src/index.ts", ""),
+        ("packages/t/package.json", r#"{ "name": "@x/t", "types": "./src/index.ts" }"#),
+        ("packages/t/src/index.ts", ""),
+    ]);
+    assert_eq!(r.resolve("apps/a.ts", "@x/m").as_deref(), Some("packages/m/src/index.ts"));
+    assert_eq!(r.resolve("apps/a.ts", "@x/t").as_deref(), Some("packages/t/src/index.ts"));
+}
+
+#[test]
+fn a_malformed_package_json_or_tsconfig_does_not_abort_the_walk() {
+    let (_repo, r) = resolver(&[
+        ("packages/bad/package.json", "{ not json"),
+        ("packages/bad/tsconfig.json", "{ also not json"),
+        ("packages/ok/package.json", r#"{ "name": "@x/ok", "exports": { ".": "./src/index.ts" } }"#),
+        ("packages/ok/src/index.ts", ""),
+    ]);
+    assert_eq!(r.resolve("apps/a.ts", "@x/ok").as_deref(), Some("packages/ok/src/index.ts"));
+}
