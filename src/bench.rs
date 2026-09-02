@@ -1,4 +1,5 @@
 use crate::config::Config;
+use crate::enrich::Questions;
 use crate::ids::IdMatcher;
 use crate::index::dense::DenseIndex;
 use crate::index::embed::Embedder;
@@ -31,7 +32,7 @@ pub fn passes(s: &Summary, dense: bool) -> bool {
 // The recorded cases travel inside the binary so a release build benches from any directory.
 const BUILT_IN_CASES: &str = include_str!("../bench/cases.jsonl");
 
-pub fn run(repo: &Path, cases: Option<&Path>, no_dense: bool) -> Result<bool> {
+pub fn run(repo: &Path, cases: Option<&Path>, no_dense: bool, rerank: bool, depth: usize) -> Result<bool> {
     // Resolved before `Config::load` so the override repo's own `repograph.toml` — not the
     // `--repo` one — is what the `IdMatcher` is built from.
     let repo = std::env::var("REPOGRAPH_BENCH_REPO").map(std::path::PathBuf::from).unwrap_or(repo.to_path_buf());
@@ -41,6 +42,7 @@ pub fn run(repo: &Path, cases: Option<&Path>, no_dense: bool) -> Result<bool> {
     if graph.nodes.is_empty() { anyhow::bail!("graph is empty at {} — run build first", repo.display()); }
     let ids = IdMatcher::new(&cfg.id_families, &cfg.milestone_families);
     let dense_idx = DenseIndex::load(&store)?;
+    let questions = Questions::load(&store)?;
     // `ask` degrading to lexical-only on a missing model is fine — a person reading the answer
     // sees the stderr notice and can judge it. `bench` speaks only through its exit code, so a
     // dense run that silently falls back and then grades against the weaker no-dense floor
@@ -58,9 +60,9 @@ pub fn run(repo: &Path, cases: Option<&Path>, no_dense: bool) -> Result<bool> {
     }
     let dense_on = !no_dense;
     let embedder = std::cell::RefCell::new(embedder);
-    let dense_fn = |q: &str, k: usize| -> Vec<String> {
+    let dense_fn = |q: &str, k: usize| -> (Vec<String>, Vec<String>) {
         let mut e = embedder.borrow_mut();
-        match e.as_mut().and_then(|e| e.query(q).ok()) { Some(v) => dense_idx.search(&v, k), None => Vec::new() }
+        match e.as_mut().and_then(|e| e.query(q).ok()) { Some(v) => dense_idx.search(&v, k), None => (Vec::new(), Vec::new()) }
     };
     let (cases_path, text) = match cases {
         Some(p) => (p.display().to_string(), std::fs::read_to_string(p).with_context(|| p.display().to_string())?),
@@ -84,12 +86,14 @@ pub fn run(repo: &Path, cases: Option<&Path>, no_dense: bool) -> Result<bool> {
     if (kw, pf, cd) != (24, 14, 3) {
         anyhow::bail!("{cases_path} has {kw} keyword / {pf} paraphrase / {cd} code cases, expected 24/14/3");
     }
-    let opts = Options { seeds: 5, bodies: false, dense: dense_on, json: false };
+    let opts = Options { seeds: 5, bodies: false, dense: dense_on, json: false, depth };
+    let rerank_fn = |q: &str, c: &[(String, String)]| crate::rerank::run(&cfg.rerank_command, q, c);
+    let rerank: Option<query::Rerank> = if rerank { Some(&rerank_fn) } else { None };
     let mut summary = Summary::default();
     let mut tokens = Vec::new();
     for case in &cases {
         let words: Vec<String> = case.q.split_whitespace().map(str::to_string).collect();
-        let answer = query::ask(&graph, &ids, Some(&dense_fn), &words, &opts);
+        let answer = query::ask(&graph, &ids, &questions, Some(&dense_fn), rerank, &words, &opts);
         let rendered = query::render(&answer, &graph, &opts);
         let tok = rendered.len() / 4;
         tokens.push(tok);
@@ -101,8 +105,8 @@ pub fn run(repo: &Path, cases: Option<&Path>, no_dense: bool) -> Result<bool> {
     }
     tokens.sort_unstable();
     summary.p90_tokens = tokens.get(tokens.len() * 9 / 10).copied().unwrap_or(0);
-    println!("\nkeyword {}/{}  paraphrase {}/{}  code {}/{}  p90 {} tok  dense={dense_on}",
-        summary.keyword.0, summary.keyword.1, summary.paraphrase.0, summary.paraphrase.1, summary.code.0, summary.code.1, summary.p90_tokens);
+    println!("\nkeyword {}/{}  paraphrase {}/{}  code {}/{}  p90 {} tok  dense={dense_on}{}",
+        summary.keyword.0, summary.keyword.1, summary.paraphrase.0, summary.paraphrase.1, summary.code.0, summary.code.1, summary.p90_tokens, if rerank.is_some() { format!(" rerank=true depth={depth}") } else { String::new() });
     Ok(passes(&summary, dense_on))
 }
 

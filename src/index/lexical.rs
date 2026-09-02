@@ -1,3 +1,4 @@
+use crate::enrich::Questions;
 use crate::model::{Graph, NodeKind};
 use rust_stemmers::{Algorithm, Stemmer};
 use std::collections::HashMap;
@@ -40,12 +41,21 @@ pub fn tokenize(text: &str) -> Vec<String> {
 
 impl LexicalIndex {
     pub fn build(graph: &Graph) -> LexicalIndex {
+        Self::build_with(graph, |n| format!("{} {} {}", n.id, n.label, n.body))
+    }
+
+    /// The generated questions alone: mixed into the passage text they cost a keyword hit.
+    pub fn build_questions(graph: &Graph, questions: &Questions) -> LexicalIndex {
+        Self::build_with(graph, |n| format!("{} {}", n.id, questions.get(&n.id).join(" ")))
+    }
+
+    fn build_with(graph: &Graph, text: impl Fn(&crate::model::Node) -> String + Sync) -> LexicalIndex {
         use rayon::prelude::*;
         let nodes: Vec<_> = graph.nodes.values().filter(|n| n.kind != NodeKind::File).collect();
         // Stemming is the cost — three quarters of a no-dense answer on a 7,500-node graph
         // when done one document at a time — and every document stems independently.
         let docs: Vec<(String, HashMap<String, u32>, f32)> = nodes.par_iter().map(|n| {
-            let toks = tokenize(&format!("{} {} {}", n.id, n.label, n.body));
+            let toks = tokenize(&text(n));
             let len = toks.len() as f32;
             let mut tf: HashMap<String, u32> = HashMap::new();
             for t in toks { *tf.entry(t).or_default() += 1; }
@@ -136,6 +146,20 @@ mod tests {
         assert_eq!(hits[1].0, "FR-PAY-26");
         assert_eq!(hits.len(), 2);
         assert!(idx.search("file", 5).is_empty());
+    }
+
+    #[test]
+    fn a_generated_question_reaches_its_node_through_the_questions_index_only() {
+        let mut g = Graph::default();
+        let mut e = Extraction::default();
+        e.node(NodeKind::Requirement, "FR-PAY-22", "правило отмены", "штраф считается по политике отмены", "a.md", 1);
+        e.node(NodeKind::Requirement, "FR-PAY-26", "списание штрафа", "штраф списывается автоматически", "a.md", 9);
+        g.apply(e);
+        let mut q = Questions::default();
+        q.entries.insert("FR-PAY-26".into(), crate::enrich::Entry { hash: String::new(), questions: vec!["когда деньги уходят сами".into()] });
+        let hits = LexicalIndex::build_questions(&g, &q).search("деньги уходят", 5);
+        assert_eq!(hits.iter().map(|(id, _)| id.as_str()).collect::<Vec<_>>(), vec!["FR-PAY-26"]);
+        assert!(LexicalIndex::build(&g).search("деньги уходят", 5).is_empty());
     }
 
     #[test]

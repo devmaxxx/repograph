@@ -18,3 +18,11 @@ id_families = [
   "PREP", "CAL", "OR", "MON", "SEAM", "SG", "IDEA",
 ]
 milestone_families = ["BE", "FE", "PLAT", "SYNC", "OPS", "AI", "MOB"]
+
+# The two stages that spend model tokens, both opt-in (`repograph enrich`,
+# `ask --rerank`). Each is a shell command that reads its prompt on stdin;
+# `enrich` expects `id<TAB>question` lines back, `rerank` the chosen ids one
+# per line. Headless Claude Code with thinking off answers the same 4-5x faster;
+# haiku writes questions as well as any model, sonnet picks seeds better.
+enrich_command = "MAX_THINKING_TOKENS=0 claude -p --model haiku --output-format text --tools \"\" --setting-sources \"\" --no-session-persistence"
+rerank_command = "MAX_THINKING_TOKENS=0 claude -p --model sonnet --output-format text --tools \"\" --setting-sources \"\" --no-session-persistence"

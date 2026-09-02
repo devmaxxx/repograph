@@ -85,20 +85,21 @@ impl Embedder {
         Ok(Embedder { session, tokenizer, wants_type_ids })
     }
 
-    pub fn passages(&mut self, texts: &[String]) -> Result<Vec<Vec<f32>>> {
+    /// Texts arrive already e5-prefixed (`dense::rows`): passages as `passage: `, generated
+    /// questions as `query: `.
+    pub fn embed(&mut self, texts: &[String]) -> Result<Vec<Vec<f32>>> {
         let mut out = Vec::with_capacity(texts.len());
         for chunk in texts.chunks(BATCH) {
-            let prefixed: Vec<String> = chunk.iter().map(|t| format!("passage: {t}")).collect();
-            out.extend(self.embed(&prefixed)?);
+            out.extend(self.forward(chunk)?);
         }
         Ok(out)
     }
 
     pub fn query(&mut self, text: &str) -> Result<Vec<f32>> {
-        Ok(self.embed(&[format!("query: {text}")])?.remove(0))
+        Ok(self.forward(&[format!("query: {text}")])?.remove(0))
     }
 
-    fn embed(&mut self, texts: &[String]) -> Result<Vec<Vec<f32>>> {
+    fn forward(&mut self, texts: &[String]) -> Result<Vec<Vec<f32>>> {
         let encodings = self.tokenizer
             .encode_batch(texts.iter().map(String::as_str).collect(), true)
             .map_err(|e| anyhow!("{e}"))?;

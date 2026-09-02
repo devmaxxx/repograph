@@ -39,6 +39,7 @@ Version 0.1.0. Every row below is implemented, not planned:
 | `ask`, `explain`, `verify` | working: exact id/symbol → BM25 → dense, fused, one hop out           |
 | `bench`                    | working; fails the process if a floor in [Bench](#bench) is missed    |
 | `import-legacy`            | working; costs recall at query time — see its note in [Bench](#bench) |
+| `enrich`, `ask --rerank`   | working; opt-in, the only two stages that spend model tokens — see [Spending tokens on purpose](#spending-tokens-on-purpose) |
 
 `--no-dense` skips the embedding stage everywhere it could apply — `build`, `update`, `ask`, `bench`.
 Without it, those commands use local embeddings once the model is cached (see [Embeddings](#embeddings)).
@@ -147,7 +148,8 @@ repograph bench --cases other.jsonl  # a different case file, same 24/14/3 shape
    (see [Embeddings](#embeddings)). Skipped by `--no-dense`, or when the model cannot be opened —
    no cache and no network (see [Embeddings](#embeddings) for the fallback rules).
 4. **Fuse.** The two lists are interleaved, dense first — rank 1 of each, then rank 2 of each —
-   and the top seeds survive. Reciprocal rank fusion was measured to bury a retriever's second hit
+   and the top seeds survive (with `--rerank`, a model picks them from a 200-deep pool instead —
+   see [Spending tokens on purpose](#spending-tokens-on-purpose)). Reciprocal rank fusion was measured to bury a retriever's second hit
    under ids both lists merely agreed on; the interleave lifted paraphrase recall from 5/14 to 6/14
    at +2 tokens p90.
 5. **Expand.** One hop over `References`, `Implements`, `Declares`, `Links` and `Legacy` edges, in
@@ -219,6 +221,8 @@ in full, not an empty config:
 | `registries`         | `["docs/constitution.yaml"]`                                                                |
 | `id_families`        | see below — 49 strict families                                                              |
 | `milestone_families` | `["BE", "FE", "PLAT", "SYNC", "OPS", "AI", "MOB"]`                                          |
+| `enrich_command`     | headless `claude -p --model haiku` with thinking off — see [Spending tokens on purpose](#spending-tokens-on-purpose) |
+| `rerank_command`     | the same with `--model sonnet`                                                              |
 
 `id_families` and `milestone_families` default to the strict list `beauty-crm`'s census settled on —
 they are this project's development corpus, not a generic default. Every family is matched as
@@ -272,6 +276,58 @@ measure.
 On `beauty-crm`'s 6,691 non-`File` nodes, the first embedding pass took ~135 s on an M3 Pro; a second
 `update` with nothing changed embeds 0 — only nodes whose passage hash changed are re-embedded.
 
+## Spending tokens on purpose
+
+Everything above runs at zero model tokens, and stays that way by default. Two stages can spend
+them, each behind an explicit switch, each measured on the development corpus:
+
+**`repograph enrich`** asks a model, once per requirement-like node, for twelve questions a reader
+might ask to find that node in everyday words plus a line of synonyms — the generated questions are
+embedded as rows of their own and indexed for BM25 beside the passages. `enrich_command` is any
+shell command that reads the prompt on stdin and writes `id<TAB>question` lines; the default is
+headless Claude Code with thinking off (`MAX_THINKING_TOKENS=0 claude -p --model haiku …`), which
+answers the same and 4–5× faster than with it. Generation is cached by passage hash in
+`.repograph/questions.json`, so a later `enrich` pays only for nodes whose text changed. On the
+1,971 eligible nodes of the corpus it took 16 minutes at 8-way parallelism and roughly $2.5 of
+Haiku; a node's questions run about 13 lines.
+
+On their own the questions buy nothing at five seeds — 6/14 paraphrase with them and without, on
+the case set before the three rewrites below — and
+that is why the plain `ask` never consults them: as extra dense rows pooled with the passages they
+bury targets (a passage at rank 2 fell to 87 behind other nodes' questions), mixed into the BM25
+text they cost a keyword hit, and as separate lists they change no seed. What they do is carry
+targets into a deeper candidate pool: with them, all six reachable paraphrase misses sit within the
+top 100 fused candidates; without them, two do not.
+
+**`ask --rerank`** builds a 200-deep pool — dense passages, dense questions, BM25 passages, BM25
+questions, interleaved — and hands the model each candidate's id, title and the first 120
+characters of its text to pick five from; `--depth` changes how deep, and tokens per question
+scale with it. `rerank_command` reads the prompt on stdin and writes the chosen ids one per line;
+a failing command is reported on stderr and the answer falls back to the fused order.
+
+What the model is shown decides more than which model it is. Shown titles only, haiku, sonnet and
+opus all read 10–11/14 whatever the depth, and a deeper pool made haiku worse; and because a
+title is not evidence, the fused top two had to stay pinned ahead of the model's picks or it
+dropped a keyword hit. Shown 120 characters of text, sonnet at depth 200 reads 13/14 with the two
+pins and 14/14 without them — the pins were the retrievers' guess taking two of the model's five
+slots. Haiku with the same prompt reads 11/14; opus 14/14 on paraphrase but 23/24 on keyword, in
+two runs of two. Measured (`bench --rerank`, one full run each unless stated; input tokens are the
+answering model's own, median over the 38 questions):
+
+|                                                | paraphrase | keyword | code | p90 tokens | model tokens per question | latency per question |
+| ---------------------------------------------- | ---------- | ------- | ---- | ---------- | ------------------------- | -------------------- |
+| `ask`                                          | 7/14       | 24/24   | 3/3  | 219        | 0                         | ~0.5 s               |
+| `--rerank`, haiku, depth 100, titles           | 10/14      | 24/24   | 3/3  | 222        | ≈4,600                    | ~3.5 s               |
+| `--rerank`, haiku, depth 100                   | 11/14      | 24/24   | 3/3  | 222        | ≈9,500                    | ~4 s                 |
+| `--rerank`, sonnet, depth 100                  | 13/14      | 24/24   | 3/3  | 222        | ≈10,900                   | ~4 s                 |
+| `--rerank`, sonnet, depth 200 (default), 3 runs| 14/14      | 24/24   | 3/3  | 221–226    | ≈19,200                   | ~4.3 s               |
+
+The `bench` floors are unchanged and apply to the zero-token path; `--rerank` is measured, not
+floored, because a model's pick can vary by one hit between identical runs — which is also why the
+default is the configuration that read 14/14 three times, not the one that read it once. A
+per-question query rewrite by the model was measured too — 20/24 keyword, 6/14 paraphrase,
+~3,100 tokens — and rejected: the added synonyms dilute exact matches and find no new targets.
+
 ## Bench
 
 `repograph bench [--cases file]` runs the recorded 41 cases (24 keyword + 14 paraphrase + 3 code)
@@ -299,11 +355,12 @@ time, at 68 tokens median — an exact match fills the answer alone instead of b
 fused neighbours, which had cost 174 tokens for the same lookups.
 
 The design note that shaped this architecture predicted paraphrase recall would reach ≥12/14 once
-dense retrieval was fused in. It measured at 5/14, 6/14 after the fusion change — a prediction that
+dense retrieval was fused in. It measured at 5/14, 6/14 after the fusion change and 7/14 once three ill-posed cases were
+rewritten — a prediction that
 did not survive contact with measurement, not a bug; see
 [`docs/adr/ADR-001-paraphrase-recall-was-a-prediction.md`](docs/adr/ADR-001-paraphrase-recall-was-a-prediction.md)
 for what was ruled out and what wasn't. The floors above are that measurement, and the tool still
-beats the incumbent on every axis anyone has ever measured: 6/14 and 24/24 at 201 median tokens
+beats the incumbent on every axis anyone has ever measured: 7/14 and 24/24 at 203 median tokens
 against graphify's 0/14 and 11/24 at 1,027-1,555 tokens, built for 14.6 million tokens instead of
 zero.
 
