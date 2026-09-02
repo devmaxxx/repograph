@@ -77,4 +77,10 @@ list, then rank 2 of each) measured 6/14 with embeddings, 24/24 keyword, 3/3 cod
 against 215; `--no-dense` is a single list and is unchanged at 2/14. The dense floor is now 6/14.
 Of the eight remaining misses, two targets are outside both lists' top 100 and six sit at dense
 rank 32–81, which no fusion rule reaches at five seeds — the gap to ≥12/14 stands and remains a
-retrieval question, not a fusion one.
+retrieval question, not a fusion one. Three retrieval levers were then measured under the
+interleave, each against the same eight misses: `MultilingualE5Base` 6/14 (a different six —
+`FR-AI-102` and `FR-AI-21` in, `FR-TOOL-22` and `FR-SVC-39` out) at p90 225; a 512-token passage
+cut 5/14 at 269 s of embedding against 132 s; a label-only second vector per node with max scoring
+6/14 at 244 s. None is adopted. The eight misses are the same under every variant, which points at
+the model's distance between these questions and their targets rather than at anything the index
+does with the vectors.

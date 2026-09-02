@@ -253,10 +253,12 @@ download and the embedding stage everywhere.
 `ask` opens the model only when a fused query needs it: an exact id or symbol lookup answers in
 ~30 ms and ~50 MB, a fused query in ~0.75 s and ~1.4 GB — the model, not the graph.
 
-The larger `MultilingualE5Base` (768-d, ≈1.1 GB) was measured on the same corpus and cases:
-paraphrase 6/14 against the small model's 5/14 under reciprocal rank fusion, everything else
-unchanged. One hit for 2.4× the
-download and double the embedding time is not a trade this tool makes; the small model stays.
+Three embedding-side levers were measured on the same corpus and cases and none moved recall past
+6/14: the larger `MultilingualE5Base` (768-d, ≈1.1 GB, 2.4× the download) scores 6/14 with a
+different hit set; raising the passage cut from 256 to 512 tokens scores 5/14 at double the
+embedding time (269 s against 132 s); a second vector per node for the label alone, max-scored
+against the passage vector, scores 6/14 at 1.85× the embedding time. The small model at 256 tokens,
+one vector per node, stays.
 
 If the model can't be opened (no cache, no network), the two kinds of caller degrade differently, on
 purpose: `ask` and `update` fall back to lexical-only and print one line to stderr saying so, then
