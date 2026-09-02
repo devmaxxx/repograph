@@ -31,7 +31,7 @@ pub fn passes(s: &Summary, dense: bool) -> bool {
 // The recorded cases travel inside the binary so a release build benches from any directory.
 const BUILT_IN_CASES: &str = include_str!("../bench/cases.jsonl");
 
-pub fn run(repo: &Path, cases: Option<&Path>, no_dense: bool, rerank: bool) -> Result<bool> {
+pub fn run(repo: &Path, cases: Option<&Path>, no_dense: bool, rerank: bool, depth: usize) -> Result<bool> {
     // Resolved before `Config::load` so the override repo's own `repograph.toml` — not the
     // `--repo` one — is what the `IdMatcher` is built from.
     let repo = std::env::var("REPOGRAPH_BENCH_REPO").map(std::path::PathBuf::from).unwrap_or(repo.to_path_buf());
@@ -85,7 +85,7 @@ pub fn run(repo: &Path, cases: Option<&Path>, no_dense: bool, rerank: bool) -> R
     if (kw, pf, cd) != (24, 14, 3) {
         anyhow::bail!("{cases_path} has {kw} keyword / {pf} paraphrase / {cd} code cases, expected 24/14/3");
     }
-    let opts = Options { seeds: 5, bodies: false, dense: dense_on, json: false };
+    let opts = Options { seeds: 5, bodies: false, dense: dense_on, json: false, depth };
     let rerank_fn = |q: &str, c: &[(String, String)]| crate::rerank::run(&cfg.rerank_command, q, c);
     let rerank: Option<query::Rerank> = if rerank { Some(&rerank_fn) } else { None };
     let mut summary = Summary::default();
@@ -105,7 +105,7 @@ pub fn run(repo: &Path, cases: Option<&Path>, no_dense: bool, rerank: bool) -> R
     tokens.sort_unstable();
     summary.p90_tokens = tokens.get(tokens.len() * 9 / 10).copied().unwrap_or(0);
     println!("\nkeyword {}/{}  paraphrase {}/{}  code {}/{}  p90 {} tok  dense={dense_on}{}",
-        summary.keyword.0, summary.keyword.1, summary.paraphrase.0, summary.paraphrase.1, summary.code.0, summary.code.1, summary.p90_tokens, if rerank.is_some() { " rerank=true" } else { "" });
+        summary.keyword.0, summary.keyword.1, summary.paraphrase.0, summary.paraphrase.1, summary.code.0, summary.code.1, summary.p90_tokens, if rerank.is_some() { format!(" rerank=true depth={depth}") } else { String::new() });
     Ok(passes(&summary, dense_on))
 }
 

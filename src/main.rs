@@ -40,6 +40,8 @@ enum Cmd {
         /// Lets the configured model command pick the seeds from the deep candidate list.
         /// Costs tokens per question; measured +4–5 paraphrase hits of 14 on the bench corpus.
         #[arg(long)] rerank: bool,
+        /// Candidates the reranking model is shown; tokens per question grow with it.
+        #[arg(long, default_value_t = rerank::DEPTH)] depth: usize,
     },
     Explain { node: String },
     Verify,
@@ -50,7 +52,7 @@ enum Cmd {
         #[arg(long, default_value_t = 8)] parallel: usize,
         #[arg(long)] limit: Option<usize>,
     },
-    Bench { #[arg(long)] cases: Option<PathBuf>, #[arg(long)] rerank: bool },
+    Bench { #[arg(long)] cases: Option<PathBuf>, #[arg(long)] rerank: bool, #[arg(long, default_value_t = rerank::DEPTH)] depth: usize },
     ImportLegacy { graph_json: PathBuf },
 }
 
@@ -179,7 +181,7 @@ fn main() -> anyhow::Result<()> {
                 let e = slot.get_or_insert_with(|| open_embedder(cli.no_dense));
                 match e.as_mut().and_then(|e| e.query(q).ok()) { Some(v) => dense_idx.search(&v, k), None => (Vec::new(), Vec::new()) }
             };
-            let opts = query::Options { seeds, bodies, dense: !cli.no_dense && !dense_idx.ids.is_empty(), json };
+            let opts = query::Options { seeds, bodies, dense: !cli.no_dense && !dense_idx.ids.is_empty(), json, depth };
             let rerank_fn = |q: &str, c: &[(String, String)]| rerank::run(&cfg.rerank_command, q, c);
             let rerank: Option<query::Rerank> = if rerank { Some(&rerank_fn) } else { None };
             let answer = query::ask(&graph, &ids, &questions, Some(&dense_fn), rerank, &words, &opts);
@@ -199,8 +201,8 @@ fn main() -> anyhow::Result<()> {
             if graph.nodes.is_empty() { anyhow::bail!("graph is empty — run `repograph build`"); }
             Ok(())
         }
-        Cmd::Bench { cases, rerank } => {
-            if bench::run(&repo, cases.as_deref(), cli.no_dense, rerank)? { Ok(()) } else { anyhow::bail!("bench floors not met") }
+        Cmd::Bench { cases, rerank, depth } => {
+            if bench::run(&repo, cases.as_deref(), cli.no_dense, rerank, depth)? { Ok(()) } else { anyhow::bail!("bench floors not met") }
         }
         Cmd::ImportLegacy { graph_json } => {
             let cfg = load_cfg()?;

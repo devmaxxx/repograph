@@ -5,7 +5,8 @@ use crate::model::{EdgeKind, Graph, NodeKind};
 use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet};
 
-pub struct Options { pub seeds: usize, pub bodies: bool, pub dense: bool, pub json: bool }
+/// `depth`: how many fused candidates a reranking model is shown; each retriever runs that deep.
+pub struct Options { pub seeds: usize, pub bodies: bool, pub dense: bool, pub json: bool, pub depth: usize }
 
 /// Dense retrieval for a question: the passage-row list and the question-row list, each `k` deep.
 pub type Dense<'a> = &'a dyn Fn(&str, usize) -> (Vec<String>, Vec<String>);
@@ -67,7 +68,7 @@ pub fn ask(graph: &Graph, ids: &IdMatcher, questions: &Questions, dense: Option<
     // Topping an exact answer up from fusion only appends neighbours nobody asked for (an id
     // lookup measured 174 tokens with them, 68 without).
     if !whole_question {
-        let depth = if rerank.is_some() { crate::rerank::DEPTH } else { 20 };
+        let depth = if rerank.is_some() { opts.depth } else { 20 };
         // Dense passages go first: they are the retriever the paraphrase floor rests on, so they
         // get the odd seed when the two lists are interleaved. The generated questions add
         // nothing at five seeds (measured 6/14 with and without) and cost a keyword seed in the
@@ -271,7 +272,7 @@ mod tests {
         IdMatcher::new(&cfg.id_families, &cfg.milestone_families)
     }
 
-    fn opts() -> Options { Options { seeds: 5, bodies: false, dense: false, json: false } }
+    fn opts() -> Options { Options { seeds: 5, bodies: false, dense: false, json: false, depth: crate::rerank::DEPTH } }
 
     #[test]
     fn exact_id_wins_and_expands_one_hop() {
