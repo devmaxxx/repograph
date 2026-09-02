@@ -45,7 +45,10 @@ impl Extractor for RegistryExtractor {
         let mut ex = Extraction::default();
         let file_id = format!("file:{rel}");
         ex.node(NodeKind::File, &file_id, rel, "", rel, 1);
-        let Ok(reg) = serde_yaml::from_str::<Registry>(text) else { return ex; };
+        let reg = match serde_yaml::from_str::<Registry>(text) {
+            Ok(r) => r,
+            Err(e) => { eprintln!("registry {rel}: {e}"); return ex; }
+        };
         for (i, row) in reg.invariants.iter().enumerate() {
             let label = label_of(&row.statement);
             // Row order is the only line information YAML gives cheaply; good enough for `path:line`.

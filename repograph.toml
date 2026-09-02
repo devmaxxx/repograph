@@ -17,4 +17,4 @@ id_families = [
   "AC-DM", "AC-VIS", "INV", "ADR", "OD", "OQ", "N", "R", "M", "W", "D", "G",
   "PREP", "CAL", "OR", "MON", "SEAM", "SG", "IDEA",
 ]
-milestone_families = ["BE", "FE", "PLAT", "SYNC", "OPS", "AI"]
+milestone_families = ["BE", "FE", "PLAT", "SYNC", "OPS", "AI", "MOB"]

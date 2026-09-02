@@ -38,8 +38,14 @@ fn trailing_comma_re() -> &'static regex::Regex {
     RE.get_or_init(|| regex::Regex::new(r",(\s*[}\]])").unwrap())
 }
 
+fn block_comment_re() -> &'static regex::Regex {
+    static RE: OnceLock<regex::Regex> = OnceLock::new();
+    RE.get_or_init(|| regex::Regex::new(r"(?s)/\*.*?\*/").unwrap())
+}
+
 fn strip_jsonc(text: &str) -> String {
-    let no_comments: String = text
+    let no_blocks = block_comment_re().replace_all(text, "");
+    let no_comments: String = no_blocks
         .lines()
         .map(|l| {
             // A `//` inside a string literal would be cut too; tsconfig paths never contain one,

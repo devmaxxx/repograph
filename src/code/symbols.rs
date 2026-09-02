@@ -137,11 +137,10 @@ impl SymbolScanner {
     fn declaration(&self, decl: Node, rel: &str, file_id: &str, src: &[u8], exported: bool, ex: &mut Extraction) -> Vec<String> {
         let ctx = if exported { "export" } else { "" };
         let line = decl.start_position().row as u32 + 1;
-        // A function's body is worth flattening into one preview line (the brief's own test
-        // pins this for `asGrosze`); a class/interface/enum/const body is not — Task 10's BM25
-        // documents are built from `id + label + body`, so a multi-kilobyte class body would
-        // drown the label terms that make the symbol findable. Header line matches the
-        // method/property signature rule below.
+        // A function's body is worth flattening into one preview line; a class/interface/enum/
+        // const body is not — BM25 documents are built from `id + label + body`, so a
+        // multi-kilobyte class body would drown the label terms that make the symbol findable.
+        // Header line matches the method/property signature rule below.
         let signature = if decl.kind() == "function_declaration" {
             flatten(text(decl, src))
         } else {
@@ -359,9 +358,8 @@ mod tests {
         assert!(ex.nodes.iter().any(|n| n.id == "deco:RequireAction" && n.kind == NodeKind::Symbol));
     }
 
-    /// Correction 1: a decorator on a method sits beside it in `class_body`, not inside the
+    /// A decorator on a method sits beside it in `class_body`, not inside the
     /// `method_definition`; a decorator on a property sits inside `public_field_definition`.
-    /// This covers the third target (property) the brief's own test never exercised.
     #[test]
     fn decorator_on_a_class_property_is_recorded() {
         let ex = scan(C, "staff.controller.ts");

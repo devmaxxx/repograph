@@ -33,7 +33,7 @@ impl Default for Config {
                 "AC-DM", "AC-VIS", "INV", "ADR", "OD", "OQ", "N", "R", "M", "W", "D", "G",
                 "PREP", "CAL", "OR", "MON", "SEAM", "SG", "IDEA",
             ]),
-            milestone_families: s(&["BE", "FE", "PLAT", "SYNC", "OPS", "AI"]),
+            milestone_families: s(&["BE", "FE", "PLAT", "SYNC", "OPS", "AI", "MOB"]),
             registries: s(&["docs/constitution.yaml"]),
         }
     }
