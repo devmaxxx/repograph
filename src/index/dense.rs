@@ -4,6 +4,9 @@ use crate::store::Store;
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
+/// Node ids best first, each with the cosine of its best row.
+pub type Scored = Vec<(String, f32)>;
+
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub struct DenseIndex {
     pub ids: Vec<String>,
@@ -98,17 +101,26 @@ impl DenseIndex {
     /// best row. Pooling both kinds into one list buries targets: a passage at rank 2 fell to 87
     /// behind other nodes' question rows.
     pub fn search(&self, query: &[f32], k: usize) -> (Vec<String>, Vec<String>) {
+        let (passages, generated) = self.search_scored(query, k, None);
+        (passages.into_iter().map(|(id, _)| id).collect(), generated.into_iter().map(|(id, _)| id).collect())
+    }
+
+    /// `search` with each node's best cosine, skipping the rows whose hash is `exclude`: a
+    /// query that is itself a stored question must not be answered by its own row.
+    pub fn search_scored(&self, query: &[f32], k: usize, exclude: Option<&str>) -> (Scored, Scored) {
         if self.dim == 0 || query.len() != self.dim { return (Vec::new(), Vec::new()); }
         let mut q = query.to_vec();
         normalise(&mut q);
-        let mut rows: Vec<(f32, &str, bool)> = self.ids.iter().enumerate().map(|(i, id)| {
-            let v = &self.vectors[i * self.dim..(i + 1) * self.dim];
-            (v.iter().zip(&q).map(|(a, b)| a * b).sum::<f32>(), id.as_str(), self.kinds.get(i).copied().unwrap_or(false))
-        }).collect();
+        let mut rows: Vec<(f32, &str, bool)> = self.ids.iter().enumerate()
+            .filter(|(i, _)| exclude.is_none_or(|h| self.hashes.get(*i).is_none_or(|x| x != h)))
+            .map(|(i, id)| {
+                let v = &self.vectors[i * self.dim..(i + 1) * self.dim];
+                (v.iter().zip(&q).map(|(a, b)| a * b).sum::<f32>(), id.as_str(), self.kinds.get(i).copied().unwrap_or(false))
+            }).collect();
         rows.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap().then(a.1.cmp(b.1)));
-        let pick = |want: bool| -> Vec<String> {
+        let pick = |want: bool| -> Scored {
             let mut seen = std::collections::HashSet::new();
-            rows.iter().filter(|r| r.2 == want).filter(|r| seen.insert(r.1)).take(k).map(|r| r.1.to_string()).collect()
+            rows.iter().filter(|r| r.2 == want).filter(|r| seen.insert(r.1)).take(k).map(|r| (r.1.to_string(), r.0)).collect()
         };
         (pick(false), pick(true))
     }
@@ -175,6 +187,26 @@ mod tests {
         // Dropping the questions re-embeds nothing and forgets the question rows.
         assert_eq!(idx.sync(&graph("x"), &Questions::default(), &mut fake).unwrap(), 0);
         assert_eq!(idx.ids.len(), 2);
+    }
+
+    // The probe is the stored question "a" itself; excluded by its hash, the node is reached
+    // only through its other question row, and the passage list does not move.
+    #[test]
+    fn excluding_a_row_by_hash_leaves_the_node_to_its_other_rows() {
+        let mut idx = DenseIndex::default();
+        let mut q = Questions::default();
+        q.entries.insert("FR-PAY-22".into(), crate::enrich::Entry { hash: String::new(), questions: vec!["a".into(), "bz".into()] });
+        idx.sync(&graph("x"), &q, &mut fake).unwrap();
+        let probe = fake(&["query: a".to_string()]).unwrap().remove(0);
+        let own = blake3::hash(b"query: a").to_hex().to_string();
+        let (with, _) = idx.search_scored(&probe, 5, None);
+        let (passages, generated) = idx.search_scored(&probe, 5, Some(&own));
+        assert_eq!(generated.iter().map(|(id, _)| id.as_str()).collect::<Vec<_>>(), vec!["FR-PAY-22"]);
+        assert!(generated[0].1 < 1.0 - 1e-6, "the surviving row is not the probe itself");
+        assert_eq!(passages.iter().map(|(id, _)| id.as_str()).collect::<Vec<_>>(), with.iter().map(|(id, _)| id.as_str()).collect::<Vec<_>>());
+        q.entries.get_mut("FR-PAY-22").unwrap().questions.truncate(1);
+        idx.sync(&graph("x"), &q, &mut fake).unwrap();
+        assert!(idx.search_scored(&probe, 5, Some(&own)).1.is_empty());
     }
 
     #[test]
