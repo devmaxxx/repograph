@@ -286,6 +286,15 @@ mod tests {
     }
 
     #[test]
+    fn a_file_matching_no_configured_glob_is_silently_excluded() {
+        let d = tempfile::tempdir().unwrap();
+        init(d.path());
+        std::fs::write(d.path().join("data.json"), "{}\n").unwrap();
+        let entries = walk(d.path(), &Config::default(), &Manifest::default()).unwrap();
+        assert!(entries.is_empty());
+    }
+
+    #[test]
     fn sorted_output_order_with_cyrillic_file_names() {
         let d = tempfile::tempdir().unwrap();
         init(d.path());
