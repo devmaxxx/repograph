@@ -1,3 +1,4 @@
+use crate::enrich::Questions;
 use crate::ids::IdMatcher;
 use crate::index::{fuse, lexical::LexicalIndex};
 use crate::model::{EdgeKind, Graph, NodeKind};
@@ -5,6 +6,12 @@ use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet};
 
 pub struct Options { pub seeds: usize, pub bodies: bool, pub dense: bool, pub json: bool }
+
+/// Dense retrieval for a question: the passage-row list and the question-row list, each `k` deep.
+pub type Dense<'a> = &'a dyn Fn(&str, usize) -> (Vec<String>, Vec<String>);
+
+/// Picks seeds for a question from `(id, label)` candidates, best first.
+pub type Rerank<'a> = &'a dyn Fn(&str, &[(String, String)]) -> Vec<String>;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct Hit { pub id: String, pub file: String, pub line: u32, pub label: String, pub score: f32, pub via: Option<String> }
@@ -16,6 +23,8 @@ const EXPAND: [EdgeKind; 5] = [EdgeKind::References, EdgeKind::Implements, EdgeK
 // Stays at 1: raising it to 8 buys at most one extra paraphrase hit and takes
 // p90 from 218 to 510 tokens, which bench's p90 floor exists to catch.
 const MAX_EXPANDED: usize = 1;
+/// Fused seeds kept ahead of the reranking model's picks.
+const PINNED: usize = 2;
 
 fn hit(graph: &Graph, id: &str, score: f32, via: Option<&str>) -> Option<Hit> {
     let n = graph.nodes.get(id)?;
@@ -46,8 +55,7 @@ fn exact_seeds(graph: &Graph, ids: &IdMatcher, words: &[String]) -> (Vec<String>
     (out, whole)
 }
 
-#[allow(clippy::type_complexity)]
-pub fn ask(graph: &Graph, ids: &IdMatcher, dense: Option<&dyn Fn(&str, usize) -> Vec<String>>, words: &[String], opts: &Options) -> Answer {
+pub fn ask(graph: &Graph, ids: &IdMatcher, questions: &Questions, dense: Option<Dense>, rerank: Option<Rerank>, words: &[String], opts: &Options) -> Answer {
     let query = words.join(" ");
     let mut answer = Answer::default();
     let (exact, whole_question) = exact_seeds(graph, ids, words);
@@ -59,14 +67,41 @@ pub fn ask(graph: &Graph, ids: &IdMatcher, dense: Option<&dyn Fn(&str, usize) ->
     // Topping an exact answer up from fusion only appends neighbours nobody asked for (an id
     // lookup measured 174 tokens with them, 68 without).
     if !whole_question {
-        // Dense goes first: it is the retriever the paraphrase floor rests on, so it gets the
-        // odd seed when the two lists are interleaved.
-        let mut lists = Vec::new();
+        let depth = if rerank.is_some() { crate::rerank::DEPTH } else { 20 };
+        // Dense passages go first: they are the retriever the paraphrase floor rests on, so they
+        // get the odd seed when the two lists are interleaved. The generated questions add
+        // nothing at five seeds (measured 6/14 with and without) and cost a keyword seed in the
+        // no-dense answer, but they carry targets into the reranker's pool (FR-AI-102 enters at
+        // 30, absent otherwise), so they are lists of their own there and nowhere else. Pooled
+        // into the passage rows they bury targets: a passage at rank 2 fell to 87.
+        let mut lists: Vec<Vec<String>> = Vec::new();
         if opts.dense {
-            if let Some(d) = dense { lists.push(d(&query, 20)); }
+            if let Some(d) = dense {
+                let (passages, generated) = d(&query, depth);
+                lists.push(passages);
+                if rerank.is_some() { lists.push(generated); }
+            }
         }
-        lists.push(LexicalIndex::build(graph).search(&query, 20).into_iter().map(|(id, _)| id).collect());
-        for (id, score) in fuse::interleave(&lists) {
+        lists.push(LexicalIndex::build(graph).search(&query, depth).into_iter().map(|(id, _)| id).collect());
+        if rerank.is_some() {
+            lists.push(LexicalIndex::build_questions(graph, questions).search(&query, depth).into_iter().map(|(id, _)| id).collect());
+        }
+        lists.retain(|l| !l.is_empty());
+        let mut fused = fuse::interleave(&lists);
+        if let Some(r) = rerank {
+            // The fused top two stay in front: they carry the exact evidence the model is not
+            // shown (it sees titles), and with the whole say it dropped a keyword hit and a
+            // paraphrase hit the retrievers had ranked second.
+            let candidates: Vec<(String, String)> = fused.iter().take(depth)
+                .map(|(id, _)| (id.clone(), graph.nodes[id].label.clone())).collect();
+            let mut order: Vec<String> = candidates.iter().take(PINNED).map(|(id, _)| id.clone()).collect();
+            for id in r(&query, &candidates) {
+                if !order.contains(&id) { order.push(id); }
+            }
+            let rest: Vec<(String, f32)> = fused.into_iter().filter(|(id, _)| !order.contains(id)).collect();
+            fused = order.iter().enumerate().map(|(rank, id)| (id.clone(), 1.0 / (rank as f32 + 1.0))).chain(rest).collect();
+        }
+        for (id, score) in fused {
             if answer.seeds.len() >= opts.seeds { break; }
             if exact.contains(&id) { continue; }
             if let Some(h) = hit(graph, &id, score, None) { answer.seeds.push(h); }
@@ -241,7 +276,7 @@ mod tests {
     #[test]
     fn exact_id_wins_and_expands_one_hop() {
         let g = graph();
-        let a = ask(&g, &ids(), None, &["FR-PAY-22".to_string()], &opts());
+        let a = ask(&g, &ids(), &Questions::default(), None, None, &["FR-PAY-22".to_string()], &opts());
         assert_eq!(a.seeds[0].id, "FR-PAY-22");
         assert_eq!(a.seeds[0].score, 1.0);
         assert_eq!(a.expanded.len(), 1);
@@ -254,8 +289,8 @@ mod tests {
     #[test]
     fn a_lowercase_word_that_is_also_a_symbol_leads_but_still_fuses() {
         let g = graph();
-        let dense = |_: &str, _: usize| vec!["FR-PAY-20".to_string()];
-        let a = ask(&g, &ids(), Some(&dense), &["money".to_string()], &Options { dense: true, ..opts() });
+        let dense = |_: &str, _: usize| (vec!["FR-PAY-20".to_string()], Vec::new());
+        let a = ask(&g, &ids(), &Questions::default(), Some(&dense), None, &["money".to_string()], &Options { dense: true, ..opts() });
         assert_eq!(a.seeds[0].id, "sym:packages/domain/test/money.spec.ts::money");
         assert!(a.seeds.iter().any(|h| h.id == "FR-PAY-20"));
     }
@@ -263,8 +298,8 @@ mod tests {
     #[test]
     fn a_code_shaped_name_is_the_whole_question() {
         let g = graph();
-        let dense = |_: &str, _: usize| vec!["FR-PAY-20".to_string()];
-        let a = ask(&g, &ids(), Some(&dense), &["asGrosze".to_string()], &Options { dense: true, ..opts() });
+        let dense = |_: &str, _: usize| (vec!["FR-PAY-20".to_string()], Vec::new());
+        let a = ask(&g, &ids(), &Questions::default(), Some(&dense), None, &["asGrosze".to_string()], &Options { dense: true, ..opts() });
         assert_eq!(a.seeds.len(), 1);
         assert_eq!(a.seeds[0].id, "sym:packages/contracts/src/money.ts::asGrosze");
     }
@@ -273,7 +308,7 @@ mod tests {
     fn a_symbol_asked_twice_is_one_seed() {
         let g = graph();
         let words: Vec<String> = ["asGrosze", "foo", "asGrosze"].iter().map(|s| s.to_string()).collect();
-        let a = ask(&g, &ids(), None, &words, &opts());
+        let a = ask(&g, &ids(), &Questions::default(), None, None, &words, &opts());
         assert_eq!(a.seeds.iter().filter(|h| h.id.ends_with("::asGrosze")).count(), 1);
     }
 
@@ -281,7 +316,7 @@ mod tests {
     fn exact_match_leaves_the_other_seed_slots_empty() {
         let g = graph();
         // "N-151" is also a lexical hit on FR-PAY-22's body; it must arrive by expansion, not as a seed.
-        let a = ask(&g, &ids(), None, &["N-151".to_string()], &opts());
+        let a = ask(&g, &ids(), &Questions::default(), None, None, &["N-151".to_string()], &opts());
         assert_eq!(a.seeds.len(), 1);
         assert_eq!(a.seeds[0].id, "N-151");
         assert_eq!(a.expanded[0].id, "FR-PAY-22");
@@ -290,7 +325,7 @@ mod tests {
     #[test]
     fn backticked_entity_is_reachable_by_expansion() {
         let g = single_neighbour_graph();
-        let a = ask(&g, &ids(), None, &["FR-PAY-22".to_string()], &opts());
+        let a = ask(&g, &ids(), &Questions::default(), None, None, &["FR-PAY-22".to_string()], &opts());
         assert_eq!(a.expanded.len(), 1);
         assert_eq!(a.expanded[0].id, "entity:CancellationPolicy");
         assert_eq!(a.expanded[0].via.as_deref(), Some("FR-PAY-22"));
@@ -301,7 +336,7 @@ mod tests {
         let g = duplicated_symbol_graph();
         let mut o = opts();
         o.seeds = 2;
-        let a = ask(&g, &ids(), None, &["buildClientParams".to_string()], &o);
+        let a = ask(&g, &ids(), &Questions::default(), None, None, &["buildClientParams".to_string()], &o);
         assert_eq!(a.seeds.len(), 2);
         let ids: Vec<&str> = a.seeds.iter().map(|h| h.id.as_str()).collect();
         assert_eq!(ids, vec![
@@ -313,21 +348,21 @@ mod tests {
     #[test]
     fn file_hub_is_never_expanded_to() {
         let g = file_hub_only_graph();
-        let a = ask(&g, &ids(), None, &["FR-X".to_string()], &opts());
+        let a = ask(&g, &ids(), &Questions::default(), None, None, &["FR-X".to_string()], &opts());
         assert!(a.expanded.is_empty());
     }
 
     #[test]
     fn exact_symbol_name_resolves_to_its_file() {
         let g = graph();
-        let a = ask(&g, &ids(), None, &["asGrosze".to_string()], &opts());
+        let a = ask(&g, &ids(), &Questions::default(), None, None, &["asGrosze".to_string()], &opts());
         assert_eq!(a.seeds[0].file, "packages/contracts/src/money.ts");
     }
 
     #[test]
     fn lexical_query_in_russian_finds_the_requirement() {
         let g = graph();
-        let a = ask(&g, &ids(), None, &["политика".into(), "отмены".into(), "штраф".into()], &opts());
+        let a = ask(&g, &ids(), &Questions::default(), None, None, &["политика".into(), "отмены".into(), "штраф".into()], &opts());
         assert_eq!(a.seeds[0].id, "FR-PAY-22");
     }
 
@@ -335,8 +370,8 @@ mod tests {
     fn the_dense_top_hit_takes_the_first_seed_and_its_second_hit_the_third() {
         let g = graph();
         // Lexical alone ranks FR-PAY-22 first for "штраф"; dense disagrees on both of its slots.
-        let dense = |_: &str, _: usize| vec!["N-151".to_string(), "FR-PAY-20".to_string()];
-        let a = ask(&g, &ids(), Some(&dense), &["штраф".to_string()], &Options { dense: true, ..opts() });
+        let dense = |_: &str, _: usize| (vec!["N-151".to_string(), "FR-PAY-20".to_string()], Vec::new());
+        let a = ask(&g, &ids(), &Questions::default(), Some(&dense), None, &["штраф".to_string()], &Options { dense: true, ..opts() });
         let order: Vec<&str> = a.seeds.iter().map(|h| h.id.as_str()).collect();
         assert_eq!(&order[..3], ["N-151", "FR-PAY-22", "FR-PAY-20"]);
     }
@@ -344,17 +379,17 @@ mod tests {
     #[test]
     fn dense_callback_is_fused_when_present() {
         let g = graph();
-        let dense = |_q: &str, _k: usize| vec!["FR-PAY-20".to_string()];
+        let dense = |_q: &str, _k: usize| (vec!["FR-PAY-20".to_string()], Vec::new());
         let mut o = opts();
         o.dense = true;
-        let a = ask(&g, &ids(), Some(&dense), &["ничего".into(), "похожего".into()], &o);
+        let a = ask(&g, &ids(), &Questions::default(), Some(&dense), None, &["ничего".into(), "похожего".into()], &o);
         assert_eq!(a.seeds[0].id, "FR-PAY-20");
     }
 
     #[test]
     fn render_shape_is_id_path_line_headline() {
         let g = graph();
-        let a = ask(&g, &ids(), None, &["FR-PAY-22".to_string()], &opts());
+        let a = ask(&g, &ids(), &Questions::default(), None, None, &["FR-PAY-22".to_string()], &opts());
         let out = render(&a, &g, &opts());
         let first = out.lines().next().unwrap();
         assert!(first.starts_with("FR-PAY-22  docs/06.md:385  `CancellationPolicy`"), "{first}");

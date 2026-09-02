@@ -39,6 +39,7 @@ Version 0.1.0. Every row below is implemented, not planned:
 | `ask`, `explain`, `verify` | working: exact id/symbol → BM25 → dense, fused, one hop out           |
 | `bench`                    | working; fails the process if a floor in [Bench](#bench) is missed    |
 | `import-legacy`            | working; costs recall at query time — see its note in [Bench](#bench) |
+| `enrich`, `ask --rerank`   | working; opt-in, the only two stages that spend model tokens — see [Spending tokens on purpose](#spending-tokens-on-purpose) |
 
 `--no-dense` skips the embedding stage everywhere it could apply — `build`, `update`, `ask`, `bench`.
 Without it, those commands use local embeddings once the model is cached (see [Embeddings](#embeddings)).
@@ -147,7 +148,8 @@ repograph bench --cases other.jsonl  # a different case file, same 24/14/3 shape
    (see [Embeddings](#embeddings)). Skipped by `--no-dense`, or when the model cannot be opened —
    no cache and no network (see [Embeddings](#embeddings) for the fallback rules).
 4. **Fuse.** The two lists are interleaved, dense first — rank 1 of each, then rank 2 of each —
-   and the top seeds survive. Reciprocal rank fusion was measured to bury a retriever's second hit
+   and the top seeds survive (with `--rerank`, a model picks them from a 100-deep pool instead —
+   see [Spending tokens on purpose](#spending-tokens-on-purpose)). Reciprocal rank fusion was measured to bury a retriever's second hit
    under ids both lists merely agreed on; the interleave lifted paraphrase recall from 5/14 to 6/14
    at +2 tokens p90.
 5. **Expand.** One hop over `References`, `Implements`, `Declares`, `Links` and `Legacy` edges, in
@@ -219,6 +221,8 @@ in full, not an empty config:
 | `registries`         | `["docs/constitution.yaml"]`                                                                |
 | `id_families`        | see below — 49 strict families                                                              |
 | `milestone_families` | `["BE", "FE", "PLAT", "SYNC", "OPS", "AI", "MOB"]`                                          |
+| `enrich_command`     | headless `claude -p --model haiku` with thinking off — see [Spending tokens on purpose](#spending-tokens-on-purpose) |
+| `rerank_command`     | the same                                                                                    |
 
 `id_families` and `milestone_families` default to the strict list `beauty-crm`'s census settled on —
 they are this project's development corpus, not a generic default. Every family is matched as
@@ -270,6 +274,52 @@ measure.
 
 On `beauty-crm`'s 6,691 non-`File` nodes, the first embedding pass took ~135 s on an M3 Pro; a second
 `update` with nothing changed embeds 0 — only nodes whose passage hash changed are re-embedded.
+
+## Spending tokens on purpose
+
+Everything above runs at zero model tokens, and stays that way by default. Two stages can spend
+them, each behind an explicit switch, each measured on the development corpus:
+
+**`repograph enrich`** asks a model, once per requirement-like node, for twelve questions a reader
+might ask to find that node in everyday words plus a line of synonyms — the generated questions are
+embedded as rows of their own and indexed for BM25 beside the passages. `enrich_command` is any
+shell command that reads the prompt on stdin and writes `id<TAB>question` lines; the default is
+headless Claude Code with thinking off (`MAX_THINKING_TOKENS=0 claude -p --model haiku …`), which
+answers the same and 4–5× faster than with it. Generation is cached by passage hash in
+`.repograph/questions.json`, so a later `enrich` pays only for nodes whose text changed. On the
+1,971 eligible nodes of the corpus it took 16 minutes at 8-way parallelism and roughly $2.5 of
+Haiku; a node's questions run about 13 lines.
+
+On their own the questions buy nothing at five seeds — 6/14 paraphrase with them and without — and
+that is why the plain `ask` never consults them: as extra dense rows pooled with the passages they
+bury targets (a passage at rank 2 fell to 87 behind other nodes' questions), mixed into the BM25
+text they cost a keyword hit, and as separate lists they change no seed. What they do is carry
+targets into a deeper candidate pool: with them, all six reachable paraphrase misses sit within the
+top 100 fused candidates; without them, two do not.
+
+**`ask --rerank`** builds that 100-deep pool — dense passages, dense questions, BM25 passages, BM25
+questions, interleaved — and hands the model the candidates' ids and titles to pick five from. The
+fused top two stay in front regardless: they carry the exact evidence the model is not shown, and
+with the whole say it dropped a keyword hit once in 24 and a paraphrase hit the retrievers had
+ranked second. `rerank_command` reads the prompt on stdin and writes the chosen ids one per line;
+a failing command is reported on stderr and the answer falls back to the fused order.
+
+Measured (`bench --rerank`, five runs):
+
+|                              | paraphrase | keyword | code | p90 tokens | model tokens per question | latency per question |
+| ---------------------------- | ---------- | ------- | ---- | ---------- | ------------------------- | -------------------- |
+| `ask`                        | 6/14       | 24/24   | 3/3  | 217        | 0                         | ~0.75 s              |
+| `ask --rerank`, no `enrich`  | 8/14       | 24/24   | 3/3  | 224        | ≈4,800                    | ~3.5 s               |
+| `ask --rerank` after `enrich`| 10–11/14   | 24/24   | 3/3  | 222        | ≈4,800                    | ~3.5 s               |
+
+The three that stay missed: one target no retriever surfaces (`FR-VIS-01`, the query says
+«незыблемые требования» where the entry says «инварианты»), one at pool rank 137 (`FR-TOOL-18`) and
+one bench case whose paraphrase describes something other than its target (`FR-VIS-76`, kept as is
+so the floors do not move by editing the exam). The `bench` floors are unchanged and apply to the
+zero-token path; `--rerank` is measured, not floored, because the model's pick varies by one hit
+between identical runs. A per-question query rewrite by the model was measured too — 20/24 keyword,
+6/14 paraphrase, ~3,100 tokens — and rejected: the added synonyms dilute exact matches and find no
+new targets.
 
 ## Bench
 

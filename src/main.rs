@@ -2,6 +2,8 @@ mod bench;
 mod code;
 mod config;
 mod doc;
+mod enrich;
+mod rerank;
 mod ids;
 mod index;
 mod legacy;
@@ -35,10 +37,20 @@ enum Cmd {
         #[arg(long)] json: bool,
         #[arg(long, default_value_t = 5)] seeds: usize,
         #[arg(long)] bodies: bool,
+        /// Lets the configured model command pick the seeds from the deep candidate list.
+        /// Costs tokens per question; measured +4–5 paraphrase hits of 14 on the bench corpus.
+        #[arg(long)] rerank: bool,
     },
     Explain { node: String },
     Verify,
-    Bench { #[arg(long)] cases: Option<PathBuf> },
+    /// Writes reader questions for every requirement-like node through the configured
+    /// command, then re-embeds. Costs model tokens once per passage; nothing per query.
+    Enrich {
+        #[arg(long, default_value_t = 12)] batch: usize,
+        #[arg(long, default_value_t = 8)] parallel: usize,
+        #[arg(long)] limit: Option<usize>,
+    },
+    Bench { #[arg(long)] cases: Option<PathBuf>, #[arg(long)] rerank: bool },
     ImportLegacy { graph_json: PathBuf },
 }
 
@@ -106,6 +118,19 @@ fn extractors(repo: &std::path::Path, cfg: &config::Config) -> anyhow::Result<Ex
     })
 }
 
+fn embed_all(repo: &std::path::Path, no_dense: bool) -> anyhow::Result<()> {
+    let Some(mut emb) = open_embedder(no_dense) else { return Ok(()) };
+    let store = store::Store::new(repo);
+    let (graph, _) = store.load()?;
+    let questions = enrich::Questions::load(&store)?;
+    let mut dense = index::dense::DenseIndex::load(&store)?;
+    let t = std::time::Instant::now();
+    let n = dense.sync(&graph, &questions, &mut |texts| emb.embed(texts))?;
+    dense.save(&store)?;
+    println!("dense: embedded {n} rows in {:.1}s", t.elapsed().as_secs_f32());
+    Ok(())
+}
+
 fn open_embedder(no_dense: bool) -> Option<index::dense::Embedder> {
     if no_dense { return None; }
     match index::dense::Embedder::open() {
@@ -126,33 +151,38 @@ fn main() -> anyhow::Result<()> {
             let cfg = load_cfg()?;
             let r = run_update(&repo, &cfg, &extractors(&repo, &cfg)?, wipe)?;
             println!("changed {} removed {} nodes {} edges {}", r.changed, r.removed, r.nodes, r.edges);
-            if let Some(mut emb) = open_embedder(cli.no_dense) {
-                let store = store::Store::new(&repo);
-                let (graph, _) = store.load()?;
-                let mut dense = index::dense::DenseIndex::load(&store)?;
-                let t = std::time::Instant::now();
-                let n = dense.sync(&graph, &mut |texts| emb.passages(texts))?;
-                dense.save(&store)?;
-                println!("dense: embedded {n} nodes in {:.1}s", t.elapsed().as_secs_f32());
-            }
-            Ok(())
+            embed_all(&repo, cli.no_dense)
         }
-        Cmd::Ask { words, json, seeds, bodies } => {
+        Cmd::Enrich { batch, parallel, limit } => {
+            let cfg = load_cfg()?;
+            let store = store::Store::new(&repo);
+            let (graph, _) = store.load()?;
+            if graph.nodes.is_empty() { anyhow::bail!("graph is empty — run `repograph build`"); }
+            let questions = enrich::Questions::load(&store)?;
+            let t = std::time::Instant::now();
+            let r = enrich::run(&store, &graph, questions, &cfg.enrich_command, batch, parallel, limit)?;
+            println!("enrich: {} nodes written, {} dropped, {} batches ({} failed) in {:.0}s", r.generated, r.dropped, r.batches, r.failed, t.elapsed().as_secs_f32());
+            embed_all(&repo, cli.no_dense)
+        }
+        Cmd::Ask { words, json, seeds, bodies, rerank } => {
             let cfg = load_cfg()?;
             let store = store::Store::new(&repo);
             let (graph, _) = store.load()?;
             let ids = ids::IdMatcher::new(&cfg.id_families, &cfg.milestone_families);
             let dense_idx = index::dense::DenseIndex::load(&store)?;
+            let questions = enrich::Questions::load(&store)?;
             // Opening the ONNX model costs ~0.6 s and 1.3 GB; an exact id or symbol match never
             // asks for it, so it is opened on the first fused query, not on every `ask`.
             let embedder: std::cell::RefCell<Option<Option<index::dense::Embedder>>> = std::cell::RefCell::new(None);
-            let dense_fn = |q: &str, k: usize| -> Vec<String> {
+            let dense_fn = |q: &str, k: usize| -> (Vec<String>, Vec<String>) {
                 let mut slot = embedder.borrow_mut();
                 let e = slot.get_or_insert_with(|| open_embedder(cli.no_dense));
-                match e.as_mut().and_then(|e| e.query(q).ok()) { Some(v) => dense_idx.search(&v, k), None => Vec::new() }
+                match e.as_mut().and_then(|e| e.query(q).ok()) { Some(v) => dense_idx.search(&v, k), None => (Vec::new(), Vec::new()) }
             };
             let opts = query::Options { seeds, bodies, dense: !cli.no_dense && !dense_idx.ids.is_empty(), json };
-            let answer = query::ask(&graph, &ids, Some(&dense_fn), &words, &opts);
+            let rerank_fn = |q: &str, c: &[(String, String)]| rerank::run(&cfg.rerank_command, q, c);
+            let rerank: Option<query::Rerank> = if rerank { Some(&rerank_fn) } else { None };
+            let answer = query::ask(&graph, &ids, &questions, Some(&dense_fn), rerank, &words, &opts);
             print!("{}", query::render(&answer, &graph, &opts));
             Ok(())
         }
@@ -169,8 +199,8 @@ fn main() -> anyhow::Result<()> {
             if graph.nodes.is_empty() { anyhow::bail!("graph is empty — run `repograph build`"); }
             Ok(())
         }
-        Cmd::Bench { cases } => {
-            if bench::run(&repo, cases.as_deref(), cli.no_dense)? { Ok(()) } else { anyhow::bail!("bench floors not met") }
+        Cmd::Bench { cases, rerank } => {
+            if bench::run(&repo, cases.as_deref(), cli.no_dense, rerank)? { Ok(()) } else { anyhow::bail!("bench floors not met") }
         }
         Cmd::ImportLegacy { graph_json } => {
             let cfg = load_cfg()?;

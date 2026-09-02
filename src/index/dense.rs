@@ -1,3 +1,4 @@
+use crate::enrich::Questions;
 use crate::model::{Graph, NodeKind};
 use crate::store::Store;
 use anyhow::{Context, Result};
@@ -8,13 +9,21 @@ use std::path::PathBuf;
 pub struct DenseIndex {
     pub ids: Vec<String>,
     pub hashes: Vec<String>,
+    /// True for a generated-question row; stores written before enrichment existed have none.
+    #[serde(default)] pub kinds: Vec<bool>,
     pub dim: usize,
     #[serde(skip)] pub vectors: Vec<f32>,
 }
 
 pub struct Embedder { model: fastembed::TextEmbedding }
 
-fn passage(n: &crate::model::Node) -> String { format!("{}\n{}", n.label, n.body) }
+/// Every text embedded for a node, e5-prefixed. The passage is the node itself; each generated
+/// question is embedded as a query, since the reader's question is one too (e5's symmetric case).
+fn rows(n: &crate::model::Node, questions: &Questions) -> Vec<String> {
+    let mut out = vec![format!("passage: {}\n{}", n.label, n.body)];
+    out.extend(questions.get(&n.id).iter().map(|q| format!("query: {q}")));
+    out
+}
 
 fn normalise(v: &mut [f32]) {
     let norm = v.iter().map(|x| x * x).sum::<f32>().sqrt();
@@ -43,25 +52,30 @@ impl DenseIndex {
     }
 
     #[allow(clippy::type_complexity)]
-    pub fn sync(&mut self, graph: &Graph, embed: &mut dyn FnMut(&[String]) -> Result<Vec<Vec<f32>>>) -> Result<usize> {
+    pub fn sync(&mut self, graph: &Graph, questions: &Questions, embed: &mut dyn FnMut(&[String]) -> Result<Vec<Vec<f32>>>) -> Result<usize> {
         let mut keep_ids = Vec::new();
         let mut keep_hashes = Vec::new();
+        let mut keep_kinds = Vec::new();
+        let mut todo_kinds = Vec::new();
         let mut keep_vecs: Vec<f32> = Vec::new();
         let mut todo_ids = Vec::new();
         let mut todo_texts = Vec::new();
         let mut todo_hashes = Vec::new();
-        let old: std::collections::HashMap<&str, (usize, &str)> =
-            self.ids.iter().enumerate().map(|(i, id)| (id.as_str(), (i, self.hashes[i].as_str()))).collect();
+        let old: std::collections::HashMap<(&str, &str), usize> =
+            self.ids.iter().enumerate().map(|(i, id)| ((id.as_str(), self.hashes[i].as_str()), i)).collect();
         for n in graph.nodes.values().filter(|n| n.kind != NodeKind::File) {
-            let text = passage(n);
-            let hash = blake3::hash(text.as_bytes()).to_hex().to_string();
-            match old.get(n.id.as_str()) {
-                Some((i, h)) if *h == hash && self.dim > 0 => {
-                    keep_ids.push(n.id.clone());
-                    keep_hashes.push(hash);
-                    keep_vecs.extend_from_slice(&self.vectors[i * self.dim..(i + 1) * self.dim]);
+            for text in rows(n, questions) {
+                let hash = blake3::hash(text.as_bytes()).to_hex().to_string();
+                let is_q = text.starts_with("query: ");
+                match old.get(&(n.id.as_str(), hash.as_str())).copied() {
+                    Some(i) if self.dim > 0 => {
+                        keep_ids.push(n.id.clone());
+                        keep_hashes.push(hash);
+                        keep_kinds.push(is_q);
+                        keep_vecs.extend_from_slice(&self.vectors[i * self.dim..(i + 1) * self.dim]);
+                    }
+                    _ => { todo_ids.push(n.id.clone()); todo_texts.push(text); todo_hashes.push(hash); todo_kinds.push(is_q); }
                 }
-                _ => { todo_ids.push(n.id.clone()); todo_texts.push(text); todo_hashes.push(hash); }
             }
         }
         let embedded = todo_ids.len();
@@ -69,29 +83,38 @@ impl DenseIndex {
             let mut vecs = embed(&todo_texts)?;
             for v in vecs.iter_mut() { normalise(v); }
             self.dim = vecs.first().map(|v| v.len()).unwrap_or(self.dim);
-            for (id, (hash, v)) in todo_ids.into_iter().zip(todo_hashes.into_iter().zip(vecs)) {
+            for ((id, (hash, v)), is_q) in todo_ids.into_iter().zip(todo_hashes.into_iter().zip(vecs)).zip(todo_kinds) {
                 keep_ids.push(id);
                 keep_hashes.push(hash);
+                keep_kinds.push(is_q);
                 keep_vecs.extend_from_slice(&v);
             }
         }
         self.ids = keep_ids;
         self.hashes = keep_hashes;
+        self.kinds = keep_kinds;
         self.vectors = keep_vecs;
         if self.ids.is_empty() { self.dim = 0; }
         Ok(embedded)
     }
 
-    pub fn search(&self, query: &[f32], k: usize) -> Vec<String> {
-        if self.dim == 0 || query.len() != self.dim { return Vec::new(); }
+    /// The passage rows and the question rows ranked separately, a node once per list by its
+    /// best row. Pooling both kinds into one list buries targets: a passage at rank 2 fell to 87
+    /// behind other nodes' question rows.
+    pub fn search(&self, query: &[f32], k: usize) -> (Vec<String>, Vec<String>) {
+        if self.dim == 0 || query.len() != self.dim { return (Vec::new(), Vec::new()); }
         let mut q = query.to_vec();
         normalise(&mut q);
-        let mut scored: Vec<(f32, &str)> = self.ids.iter().enumerate().map(|(i, id)| {
+        let mut rows: Vec<(f32, &str, bool)> = self.ids.iter().enumerate().map(|(i, id)| {
             let v = &self.vectors[i * self.dim..(i + 1) * self.dim];
-            (v.iter().zip(&q).map(|(a, b)| a * b).sum::<f32>(), id.as_str())
+            (v.iter().zip(&q).map(|(a, b)| a * b).sum::<f32>(), id.as_str(), self.kinds.get(i).copied().unwrap_or(false))
         }).collect();
-        scored.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap().then(a.1.cmp(b.1)));
-        scored.into_iter().take(k).map(|(_, id)| id.to_string()).collect()
+        rows.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap().then(a.1.cmp(b.1)));
+        let pick = |want: bool| -> Vec<String> {
+            let mut seen = std::collections::HashSet::new();
+            rows.iter().filter(|r| r.2 == want).filter(|r| seen.insert(r.1)).take(k).map(|r| r.1.to_string()).collect()
+        };
+        (pick(false), pick(true))
     }
 }
 
@@ -115,15 +138,16 @@ impl Embedder {
         Ok(Embedder { model: TextEmbedding::try_new(opts).context("open embedding model")? })
     }
 
-    pub fn passages(&mut self, texts: &[String]) -> Result<Vec<Vec<f32>>> {
-        let prefixed: Vec<String> = texts.iter().map(|t| format!("passage: {t}")).collect();
-        Ok(self.model.embed(&prefixed, Some(64))?)
+    /// Texts arrive already prefixed by `rows`.
+    pub fn embed(&mut self, texts: &[String]) -> Result<Vec<Vec<f32>>> {
+        Ok(self.model.embed(texts, Some(64))?)
     }
 
     pub fn query(&mut self, text: &str) -> Result<Vec<f32>> {
         Ok(self.model.embed(&[format!("query: {text}")], None)?.remove(0))
     }
 }
+
 
 #[cfg(test)]
 mod tests {
@@ -140,10 +164,11 @@ mod tests {
         g
     }
 
-    /// A stand-in embedder: a 3-d vector from the first three bytes, so tests are deterministic.
+    /// A stand-in embedder: a 3-d vector from the first three bytes after the e5 prefix, so
+    /// tests are deterministic.
     fn fake(texts: &[String]) -> Result<Vec<Vec<f32>>> {
         Ok(texts.iter().map(|t| {
-            let b = t.as_bytes();
+            let b = t.split_once(": ").map(|x| x.1).unwrap_or(t).as_bytes();
             vec![b[0] as f32, b.get(1).copied().unwrap_or(0) as f32, b.get(2).copied().unwrap_or(0) as f32]
         }).collect())
     }
@@ -151,22 +176,40 @@ mod tests {
     #[test]
     fn sync_embeds_only_changed_nodes_and_drops_removed_ones() {
         let mut idx = DenseIndex::default();
-        assert_eq!(idx.sync(&graph("политика"), &mut fake).unwrap(), 2);
+        assert_eq!(idx.sync(&graph("политика"), &Questions::default(), &mut fake).unwrap(), 2);
         assert_eq!(idx.ids.len(), 2);
-        assert_eq!(idx.sync(&graph("политика"), &mut fake).unwrap(), 0);
-        assert_eq!(idx.sync(&graph("другое"), &mut fake).unwrap(), 1);
+        assert_eq!(idx.sync(&graph("политика"), &Questions::default(), &mut fake).unwrap(), 0);
+        assert_eq!(idx.sync(&graph("другое"), &Questions::default(), &mut fake).unwrap(), 1);
         let mut g = graph("другое");
         g.remove_file("a.md");
-        assert_eq!(idx.sync(&g, &mut fake).unwrap(), 0);
+        assert_eq!(idx.sync(&g, &Questions::default(), &mut fake).unwrap(), 0);
         assert!(idx.ids.is_empty() && idx.vectors.is_empty());
     }
 
     #[test]
     fn search_is_cosine_descending() {
         let mut idx = DenseIndex::default();
-        idx.sync(&graph("x"), &mut fake).unwrap();
+        idx.sync(&graph("x"), &Questions::default(), &mut fake).unwrap();
         let q = fake(&["штраф".to_string()]).unwrap().remove(0);
-        assert_eq!(idx.search(&q, 2)[0], "FR-PAY-26");
+        assert_eq!(idx.search(&q, 2).0[0], "FR-PAY-26");
+    }
+
+    // The fake embeds the first three bytes, so a question row starting with "query: " lands far
+    // from a passage row; a query shaped like the question reaches the node through the question
+    // list alone, and once however many of its rows match.
+    #[test]
+    fn a_question_row_answers_for_its_node_once() {
+        let mut idx = DenseIndex::default();
+        let mut q = Questions::default();
+        q.entries.insert("FR-PAY-22".into(), crate::enrich::Entry { hash: String::new(), questions: vec!["a".into(), "b".into()] });
+        assert_eq!(idx.sync(&graph("x"), &q, &mut fake).unwrap(), 4);
+        let probe = fake(&["query: z".to_string()]).unwrap().remove(0);
+        let (passages, generated) = idx.search(&probe, 5);
+        assert_eq!(generated, vec!["FR-PAY-22".to_string()]);
+        assert_eq!(passages.len(), 2);
+        // Dropping the questions re-embeds nothing and forgets the question rows.
+        assert_eq!(idx.sync(&graph("x"), &Questions::default(), &mut fake).unwrap(), 0);
+        assert_eq!(idx.ids.len(), 2);
     }
 
     #[test]
@@ -174,7 +217,7 @@ mod tests {
         let d = tempfile::tempdir().unwrap();
         let store = Store::new(d.path());
         let mut idx = DenseIndex::default();
-        idx.sync(&graph("x"), &mut fake).unwrap();
+        idx.sync(&graph("x"), &Questions::default(), &mut fake).unwrap();
         idx.save(&store).unwrap();
         let back = DenseIndex::load(&store).unwrap();
         assert_eq!(back.ids, idx.ids);

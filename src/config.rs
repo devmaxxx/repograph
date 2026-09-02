@@ -11,7 +11,14 @@ pub struct Config {
     pub id_families: Vec<String>,
     pub milestone_families: Vec<String>,
     pub registries: Vec<String>,
+    /// Reads a prompt on stdin and writes `id<TAB>question` lines; `repograph enrich` runs it.
+    pub enrich_command: String,
+    /// Reads a prompt on stdin and writes the chosen ids one per line; `ask --rerank` runs it.
+    pub rerank_command: String,
 }
+
+// Headless Claude Code with thinking off: the same answers, 4-5× faster and cheaper.
+const MODEL_COMMAND: &str = "MAX_THINKING_TOKENS=0 claude -p --model haiku --output-format text --tools \"\" --setting-sources \"\" --no-session-persistence";
 
 impl Default for Config {
     fn default() -> Self {
@@ -35,6 +42,8 @@ impl Default for Config {
             ]),
             milestone_families: s(&["BE", "FE", "PLAT", "SYNC", "OPS", "AI", "MOB"]),
             registries: s(&["docs/constitution.yaml"]),
+            enrich_command: MODEL_COMMAND.into(),
+            rerank_command: MODEL_COMMAND.into(),
         }
     }
 }
