@@ -107,6 +107,21 @@ mod tests {
     }
 
     #[test]
+    fn empty_index_unknown_terms_and_empty_query_all_answer_empty() {
+        let empty = LexicalIndex::build(&Graph::default());
+        assert!(empty.search("отмена", 5).is_empty());
+        assert_eq!(empty.avg_len, 1.0, "no documents must not divide by zero");
+        let mut g = Graph::default();
+        let mut e = Extraction::default();
+        e.node(NodeKind::Requirement, "FR-PAY-22", "правило отмены", "штраф", "a.md", 1);
+        g.apply(e);
+        let idx = LexicalIndex::build(&g);
+        assert!(idx.search("", 5).is_empty());
+        assert!(idx.search("ъъъ !!!", 5).is_empty());
+        assert!(idx.search("отмена", 0).is_empty());
+    }
+
+    #[test]
     fn bm25_ranks_the_body_match_first() {
         let mut g = Graph::default();
         let mut e = Extraction::default();

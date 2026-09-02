@@ -69,6 +69,28 @@ mod tests {
     }
 
     #[test]
+    fn corrupt_graph_json_is_an_error_naming_the_file_not_a_panic() {
+        let d = tempfile::tempdir().unwrap();
+        let store = Store::new(d.path());
+        store.save(&Graph::default(), &Manifest::default()).unwrap();
+        std::fs::write(d.path().join(".repograph/graph.json"), "{ not json").unwrap();
+        let err = store.load().unwrap_err().to_string();
+        assert!(err.contains("graph.json"), "{err}");
+    }
+
+    #[test]
+    fn a_leftover_tmp_from_a_crashed_write_is_overwritten_not_read() {
+        let d = tempfile::tempdir().unwrap();
+        let store = Store::new(d.path());
+        std::fs::create_dir_all(d.path().join(".repograph")).unwrap();
+        std::fs::write(d.path().join(".repograph/graph.json.tmp"), "garbage").unwrap();
+        store.save(&Graph::default(), &Manifest::default()).unwrap();
+        let (g, _) = store.load().unwrap();
+        assert!(g.nodes.is_empty());
+        assert!(!d.path().join(".repograph/graph.json.tmp").exists());
+    }
+
+    #[test]
     fn load_absent_is_empty() {
         let d = tempfile::tempdir().unwrap();
         let (g, m) = Store::new(d.path()).load().unwrap();

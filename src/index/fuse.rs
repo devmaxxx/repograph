@@ -35,6 +35,16 @@ mod tests {
     }
 
     #[test]
+    fn empty_and_short_lists_neither_panic_nor_leave_gaps() {
+        let l = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        assert!(interleave(&[]).is_empty());
+        assert!(interleave(&[Vec::new(), Vec::new()]).is_empty());
+        let out = interleave(&[l(&["a"]), Vec::new(), l(&["b", "c", "d"])]);
+        assert_eq!(out.iter().map(|(id, _)| id.as_str()).collect::<Vec<_>>(), ["a", "b", "c", "d"]);
+        assert_eq!(out[3].1, 1.0 / 3.0);
+    }
+
+    #[test]
     fn single_list_keeps_its_order() {
         let r = interleave(&[ids(&["a", "b", "c"])]);
         assert_eq!(r.iter().map(|x| x.0.as_str()).collect::<Vec<_>>(), vec!["a", "b", "c"]);

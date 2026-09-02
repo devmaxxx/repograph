@@ -193,6 +193,39 @@ fn main() -> anyhow::Result<()> {
 mod tests {
     use super::*;
 
+    // A `.ts` that is not UTF-8 is a binary that landed under a code glob; it is reported and
+    // skipped. A NUL byte inside a string literal is valid TypeScript and is parsed like any other.
+    #[test]
+    fn a_binary_under_a_code_glob_is_skipped_and_a_nul_in_a_string_is_not() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = dir.path();
+        std::fs::write(repo.join("bin.ts"), b"export const x = 1;\n\xff\xfe\x00").unwrap();
+        std::fs::write(repo.join("nul.ts"), b"export const marker = 'a\x00b';\n").unwrap();
+        let cfg = config::Config::default();
+        let ex = extractors(repo, &cfg).unwrap();
+        let r = run_update(repo, &cfg, &ex, true).unwrap();
+        assert_eq!(r.changed, 2);
+        let (graph, _) = store::Store::new(repo).load().unwrap();
+        assert!(graph.nodes.contains_key("sym:nul.ts::marker"));
+        assert!(!graph.nodes.keys().any(|k| k.starts_with("sym:bin.ts::")));
+    }
+
+    #[test]
+    fn cyrillic_paths_are_walked_declared_and_cited() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = dir.path();
+        std::fs::create_dir_all(repo.join("docs/требования")).unwrap();
+        std::fs::write(repo.join("docs/требования/оплата.md"), "# Оплата\n\n**FR-PAY-22 · MUST · Отмена**\n\nтело\n").unwrap();
+        let cfg = config::Config::default();
+        let ex = extractors(repo, &cfg).unwrap();
+        run_update(repo, &cfg, &ex, true).unwrap();
+        let (graph, manifest) = store::Store::new(repo).load().unwrap();
+        assert!(manifest.files.contains_key("docs/требования/оплата.md"));
+        let n = &graph.nodes["FR-PAY-22"];
+        assert_eq!((n.file.as_str(), n.line), ("docs/требования/оплата.md", 3));
+        assert!(graph.nodes.contains_key("file:docs/требования/оплата.md"));
+    }
+
     // A requirement declared twice keeps a `path:line` that belongs to one file: when the primary
     // declarer goes, the survivor is re-read rather than relabelled with the primary's line.
     #[test]

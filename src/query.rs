@@ -363,6 +363,25 @@ mod tests {
     }
 
     #[test]
+    fn headline_truncates_by_character_not_byte() {
+        let cyrillic: String = "ж".repeat(100);
+        let h = headline(&cyrillic);
+        assert_eq!(h.chars().count(), 81);
+        assert!(h.ends_with('…'));
+        assert_eq!(headline(&"ж".repeat(80)), "ж".repeat(80));
+    }
+
+    #[test]
+    fn a_question_no_retriever_answers_yields_an_empty_answer_not_a_panic() {
+        let g = graph();
+        let a = ask(&g, &ids(), None, &["ъъъ".to_string(), "?!".to_string()], &opts());
+        assert!(a.seeds.is_empty() && a.expanded.is_empty());
+        assert_eq!(render(&a, &g, &opts()), "");
+        let a = ask(&g, &ids(), None, &[String::new()], &opts());
+        assert!(a.seeds.is_empty());
+    }
+
+    #[test]
     fn explain_groups_edges_by_kind() {
         let g = graph();
         let out = explain(&g, "CancellationPolicy").unwrap();
