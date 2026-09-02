@@ -14,7 +14,8 @@ door onto it.** A repository's requirement ids already form a dense, human-autho
 missing was a way in that finds the right entry point from a question phrased in ordinary words.
 
 Measured on the same corpus and the same 38 keyword/paraphrase questions against `graphify`, the
-LLM-extracted graph it replaces:
+LLM-extracted graph it replaces. That head-to-head is the case set as it stood then; the recorded
+set has since grown to 82 cases, which the [Bench](#bench) floors are measured on:
 
 |                           | graphify (the incumbent) | repograph           |
 | ------------------------- | ------------------------ | ------------------- |
@@ -131,8 +132,8 @@ needed a new `LegacyConcept`. It is opt-in and lossy by construction — see its
 Run the recorded benchmark:
 
 ```bash
-repograph bench                      # bench/cases.jsonl: 24 keyword + 14 paraphrase + 3 code
-repograph bench --cases other.jsonl  # a different case file, same 24/14/3 shape
+repograph bench                      # bench/cases.jsonl: 40 keyword + 30 paraphrase + 12 code
+repograph bench --cases other.jsonl  # a different case file, same 40/30/12 shape
 repograph dump --queries qs.jsonl --out lists.json   # every retriever's ranked list per question, 300 deep
 ```
 
@@ -335,8 +336,8 @@ title is not evidence, the fused top two had to stay pinned ahead of the model's
 dropped a keyword hit. Shown 120 characters of text, sonnet at depth 200 reads 13/14 with the two
 pins and 14/14 without them — the pins were the retrievers' guess taking two of the model's five
 slots. Haiku with the same prompt reads 11/14; opus 14/14 on paraphrase but 23/24 on keyword, in
-two runs of two. Measured (`bench --rerank`, one full run each unless stated; input tokens are the
-answering model's own, median over the 38 questions):
+two runs of two. Measured on the 41 cases then recorded (`bench --rerank`, one full run each unless
+stated; input tokens are the answering model's own, median over the 38 questions):
 
 |                                                | paraphrase | keyword | code | p90 tokens | model tokens per question | latency per question |
 | ---------------------------------------------- | ---------- | ------- | ---- | ---------- | ------------------------- | -------------------- |
@@ -346,7 +347,7 @@ answering model's own, median over the 38 questions):
 | `--rerank`, sonnet, depth 100                  | 13/14      | 24/24   | 3/3  | 222        | ≈10,900                   | ~4 s                 |
 | `--rerank`, sonnet, depth 200 (default), 3 runs| 14/14      | 24/24   | 3/3  | 221–226    | ≈19,200                   | ~4.3 s               |
 
-The `bench` floors are unchanged and apply to the zero-token path; `--rerank` is measured, not
+The `bench` floors apply to the zero-token path; `--rerank` is measured, not
 floored, because a model's pick can vary by one hit between identical runs — which is also why the
 default is the configuration that read 14/14 three times, not the one that read it once. A
 per-question query rewrite by the model was measured too — 20/24 keyword, 6/14 paraphrase,
@@ -354,60 +355,64 @@ per-question query rewrite by the model was measured too — 20/24 keyword, 6/14
 
 ## Bench
 
-`repograph bench [--cases file]` runs the recorded 41 cases (24 keyword + 14 paraphrase + 3 code)
+`repograph bench [--cases file]` runs the recorded 82 cases (40 keyword + 30 paraphrase + 12 code)
 against a built graph and fails the process if any floor is missed. The recorded `bench/cases.jsonl`
 is compiled into the binary, so a release build benches from any directory; `--cases` substitutes a
 different file of the same shape:
 
-- keyword 24/24
-- paraphrase ≥7/14 with embeddings, ≥6/14 with `--no-dense`
-- code 3/3
-- p90 ≤230 tokens with embeddings and ≤240 with `--no-dense`, counted as rendered UTF-8 bytes / 4 —
-  a conservative proxy, since it counts a Cyrillic answer at roughly double what an equivalent
-  chars/4 reading would give a Latin one. The no-dense arm seeds from the generated questions,
-  whose Cyrillic requirement headlines cost more bytes than the symbol and task nodes the passage
-  list used to return (+7 tokens at the median), which is why its floor sits ten tokens higher
+- keyword 40/40
+- paraphrase ≥14/30 with embeddings, ≥11/30 with `--no-dense`
+- code 12/12
+- p90 ≤230 tokens in both arms, counted as rendered UTF-8 bytes / 4 — a conservative proxy, since
+  it counts a Cyrillic answer at roughly double what an equivalent chars/4 reading would give a
+  Latin one. The no-dense arm seeds more of its answers from the generated questions, whose
+  Cyrillic requirement headlines cost more bytes than a symbol or task node's; that is worth three
+  tokens at p90 here, so one ceiling covers both arms
 
-Forty-one cases cannot tell 7/14 from 8/14 — Wilson 95% on 7/14 is 0.27–0.73 — so retrieval
-changes are judged on a second set: `repograph dump --queries qs.jsonl --out lists.json` writes,
+The paraphrase cases are the noisy half, and the set was grown to narrow them: Wilson 95% on 14/30
+is 0.30–0.64, against 0.27–0.73 when the same gate rested on 14 cases. It is still a wide interval,
+so retrieval changes are judged on a second set:
+`repograph dump --queries qs.jsonl --out lists.json` writes,
 for every question in a `{"q", "expect", "kind"}` JSONL, the four retriever lists 300 deep (dense
 and BM25, over passages and over the generated questions) with their scores, the query vector,
 the exact ids and the answer `ask` would give — and, for a question that is itself a stored
 generated question, leaves that row out of both question indexes while it is asked. Four hundred
 such held-out questions, one per node, give recall@5 a ±5-point interval and a paired exact
 McNemar test against the shipped rule; that is the bar a fusion or expansion change has to clear
-before the 41 real cases are consulted as the smoke test they are.
+before the 82 real cases are consulted as the smoke test they are.
 
-Measured, on the shipped binary against `beauty-crm` with its generated questions in the store:
-`keyword 24/24  paraphrase 7/14  code 3/3  p90 216 tok` with embeddings; `keyword 24/24
-paraphrase 6/14  code 3/3  p90 224 tok` with `--no-dense`. A store that `enrich` has never
-touched reads 24/24, 6/14, 3/3 and 24/24, 3/14, 3/3: the floors presume the questions. The
-dense arm read 8/14 for one build, on a label that still carried the prose after its closing
-`**`; the cleanup below took that hit with it (cosine margin 0.0004 at rank 6, the 400 held-out
-questions unmoved), so the floor sits at 7. Three paraphrase cases were rewritten on the way. One asked about withdrawing
+Measured, on the shipped binary against `beauty-crm` with its generated questions in the store,
+two runs of each arm agreeing to the case: `keyword 40/40  paraphrase 14/30  code 12/12  p90 225
+tok` with embeddings, 195 median; `keyword 40/40  paraphrase 11/30  code 12/12  p90 228 tok` with
+`--no-dense`, 200 median. A store that `enrich` has never touched reads 40/40, 9/30, 12/12 and
+39/40, 7/30, 12/12: the floors presume the questions, and without them even a keyword case goes.
+Every keyword and code case hits in both arms, which is why those two floors are exact rather than
+a fraction; only paraphrase is graded on a count.
+
+Three of the first fourteen paraphrase cases were rewritten on the way. One asked about withdrawing
 consent through a messenger, while the entry it names (`FR-VIS-76`) is about who may leave a
 review — «отзыв» meant a review there, not a withdrawal — so no retriever could have answered it.
 Two more were under-specified rather than wrong: «export for tax reporting» names the corpus's
 DAC7 tax-reporting cluster better than its target, the accountant's export (`FR-PAY-104`), and
 «the product's inviolable requirements» fits the individual invariants as well as their registry
 (`FR-VIS-01`); a model shown both sets chose between them at random. Each new question still
-shares no word with its target line. Asking for one of 24 requirement ids verbatim returns its head line first every
-time, at 68 tokens median — an exact match fills the answer alone instead of being topped up with
-fused neighbours, which had cost 174 tokens for the same lookups.
+shares no word with its target line. Asking for one of the 40 keyword cases' ids verbatim returns
+its head line first every time, at 68 tokens median — an exact match fills the answer alone instead
+of being topped up with fused neighbours, which had cost 174 tokens for the same lookups.
 
 The design note that shaped this architecture predicted paraphrase recall would reach ≥12/14 once
 dense retrieval was fused in. It measured at 5/14, 6/14 after the fusion change and 7/14 once three ill-posed cases were
 rewritten — a prediction that
 did not survive contact with measurement, not a bug; see
 [`docs/adr/ADR-001-paraphrase-recall-was-a-prediction.md`](docs/adr/ADR-001-paraphrase-recall-was-a-prediction.md)
-for what was ruled out and what wasn't. The floors above are that measurement, and the tool still
-beats the incumbent on every axis anyone has ever measured: 7/14 and 24/24 at 203 median tokens
-against graphify's 0/14 and 11/24 at 1,027-1,555 tokens, built for 14.6 million tokens instead of
-zero.
+for what was ruled out and what wasn't. The floors above are that measurement, and on the 38
+questions both tools were ever run against the tool still beats the incumbent on every axis anyone
+has measured: 7/14 and 24/24 at 203 median tokens against graphify's 0/14 and 11/24 at 1,027-1,555
+tokens, built for 14.6 million tokens instead of zero.
 
 **`import-legacy`'s coverage note.** Folding in a graphify graph costs recall and cost at query time,
 not just disk: importing `beauty-crm`'s graphify graph measured keyword dropping 24/24 → 23/24 and
-dense p90 rising 218 → 233 tokens, which breaches the p90 floor above. That is why `bench` above is
+dense p90 rising 218 → 233 tokens on the 41 cases then recorded, which breaches the p90 floor above. That is why `bench` above is
 always measured against a legacy-free store, and why `import-legacy` stays a separate, opt-in step
 rather than folding into `build`. Two graphify nodes that resolve to the same requirement collapse
 onto one node, and the edge between them is dropped rather than kept as a self-loop — 592 of the
@@ -427,10 +432,14 @@ out of 3,599 tracked:
 | Lexical index rebuild           | ~120 ms                                                                                                                      |
 | Tokens spent building any of it | 0                                                                                                                            |
 
+Retrieval on the recorded 82 cases against that graph, both arms run twice with identical results:
+keyword 40/40, paraphrase 14/30, code 12/12 at 195 median and 225 p90 tokens with embeddings;
+40/40, 11/30, 12/12 at 200 median and 228 p90 with `--no-dense`.
+
 The prior art on the same corpus was an LLM-extracted graph that cost **14.6 million input tokens
-over 13 runs** and, measured on the same questions, answered 0 of 14 paraphrase queries at ~1,555
-tokens per answer and 11 of 24 keyword queries at ~1,027. Cost is not the only reason to replace it,
-but it is the easiest one to state.
+over 13 runs** and, measured on the 38 questions of the day, answered 0 of 14 paraphrase queries at
+~1,555 tokens per answer and 11 of 24 keyword queries at ~1,027. Cost is not the only reason to
+replace it, but it is the easiest one to state.
 
 See [Bench](#bench) for the retrieval-quality floors these numbers are held to, and the ADR for the
 one figure that didn't hold up on first measurement.
