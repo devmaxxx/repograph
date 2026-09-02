@@ -281,4 +281,64 @@ mod tests {
         assert_eq!(r.resolve("apps/api/src/x.ts", "@nestjs/common"), None);
         assert_eq!(r.resolve("apps/api/src/x.ts", "node:fs"), None);
     }
+
+    #[test]
+    fn block_comments_in_tsconfig_json_are_stripped_before_parsing() {
+        let d = tempfile::tempdir().unwrap();
+        let w = |p: &str, c: &str| {
+            let full = d.path().join(p);
+            std::fs::create_dir_all(full.parent().unwrap()).unwrap();
+            std::fs::write(full, c).unwrap();
+        };
+        w("tsconfig.json", "{\n  /* a block comment\n     spanning lines */\n  \"compilerOptions\": { \"paths\": { \"@x/*\": [\"./src/*\"] } }\n}\n");
+        w("src/thing.ts", "export const x = 1;\n");
+        let r = Resolver::new(d.path()).unwrap();
+        assert_eq!(r.resolve("apps/y.ts", "@x/thing").as_deref(), Some("src/thing.ts"));
+    }
+
+    #[test]
+    fn trailing_commas_in_tsconfig_json_are_tolerated() {
+        let d = tempfile::tempdir().unwrap();
+        let w = |p: &str, c: &str| {
+            let full = d.path().join(p);
+            std::fs::create_dir_all(full.parent().unwrap()).unwrap();
+            std::fs::write(full, c).unwrap();
+        };
+        w("tsconfig.json", r#"{ "compilerOptions": { "paths": { "@x/*": ["./src/*"], }, }, }"#);
+        w("src/thing.ts", "export const x = 1;\n");
+        let r = Resolver::new(d.path()).unwrap();
+        assert_eq!(r.resolve("apps/y.ts", "@x/thing").as_deref(), Some("src/thing.ts"));
+    }
+
+    #[test]
+    fn a_path_alias_scoped_to_its_own_tsconfig_does_not_resolve_outside_it() {
+        let d = repo();
+        let r = Resolver::new(d.path()).unwrap();
+        // "@/*" is only declared under packages/ui/tsconfig.json; a file outside that
+        // directory must not see it, even though "packages/ui/src/button/index.tsx" exists.
+        assert_eq!(r.resolve("apps/api/src/x.ts", "@/button"), None);
+        assert_eq!(r.resolve("packages/ui/src/app.tsx", "@/button").as_deref(), Some("packages/ui/src/button/index.tsx"));
+    }
+
+    #[test]
+    fn a_wildcard_export_pattern_maps_through_its_prefix_and_suffix() {
+        let d = tempfile::tempdir().unwrap();
+        let w = |p: &str, c: &str| {
+            let full = d.path().join(p);
+            std::fs::create_dir_all(full.parent().unwrap()).unwrap();
+            std::fs::write(full, c).unwrap();
+        };
+        w("packages/pkg/package.json", r#"{ "name": "@x/pkg", "exports": { "./*": "./dist/*.js" } }"#);
+        // "/dist/" is redirected to "/src/" by `exists`, so the built .js target maps to this file.
+        w("packages/pkg/src/sub/thing.ts", "export const x = 1;\n");
+        let r = Resolver::new(d.path()).unwrap();
+        assert_eq!(r.resolve("apps/y.ts", "@x/pkg/sub/thing").as_deref(), Some("packages/pkg/src/sub/thing.ts"));
+    }
+
+    #[test]
+    fn mjs_extension_relative_imports_resolve_like_js() {
+        let d = repo();
+        let r = Resolver::new(d.path()).unwrap();
+        assert_eq!(r.resolve("packages/contracts/src/index.ts", "./money.mjs").as_deref(), Some("packages/contracts/src/money.ts"));
+    }
 }
