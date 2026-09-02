@@ -36,6 +36,12 @@ pub fn passes(s: &Summary, dense: bool) -> bool {
 // The recorded cases travel inside the binary so a release build benches from any directory.
 const BUILT_IN_CASES: &str = include_str!("../bench/cases.jsonl");
 
+fn parse_cases(text: &str) -> Result<Vec<Case>> {
+    text.lines().filter(|l| !l.trim().is_empty())
+        .map(|l| serde_json::from_str::<Case>(l).map_err(anyhow::Error::from))
+        .collect()
+}
+
 pub fn run(repo: &Path, cases: Option<&Path>, no_dense: bool, rerank: bool, depth: usize) -> Result<bool> {
     // Resolved before `Config::load` so the override repo's own `repograph.toml` — not the
     // `--repo` one — is what the `IdMatcher` is built from.
@@ -72,9 +78,7 @@ pub fn run(repo: &Path, cases: Option<&Path>, no_dense: bool, rerank: bool, dept
         Some(p) => (p.display().to_string(), std::fs::read_to_string(p).with_context(|| p.display().to_string())?),
         None => ("built-in bench/cases.jsonl".to_string(), BUILT_IN_CASES.to_string()),
     };
-    let cases: Vec<Case> = text.lines().filter(|l| !l.trim().is_empty())
-        .map(|l| serde_json::from_str::<Case>(l).map_err(anyhow::Error::from))
-        .collect::<Result<_>>()?;
+    let cases: Vec<Case> = parse_cases(&text)?;
     for c in &cases {
         if !matches!(c.kind.as_str(), "keyword" | "paraphrase" | "code") {
             anyhow::bail!("unrecognised case kind {:?} (expect {:?})", c.kind, c.expect);
@@ -179,5 +183,45 @@ mod tests {
         assert_eq!(cases.iter().filter(|c| c.kind == "keyword").count(), 40);
         assert_eq!(cases.iter().filter(|c| c.kind == "paraphrase").count(), 30);
         assert_eq!(cases.iter().filter(|c| c.kind == "code").count(), 12);
+    }
+
+    #[test]
+    fn keyword_hit_counts_a_seed_or_an_expanded_entry() {
+        let a = Answer { seeds: vec![h("FR-PAY-22", "d.md")], expanded: vec![h("FR-PAY-20", "e.md")] };
+        assert!(hit(&Case { kind: "keyword".into(), q: String::new(), expect: "FR-PAY-22".into() }, &a));
+        assert!(hit(&Case { kind: "keyword".into(), q: String::new(), expect: "FR-PAY-20".into() }, &a));
+    }
+
+    #[test]
+    fn paraphrase_hit_counts_a_seed_or_an_expanded_entry() {
+        let a = Answer { seeds: vec![h("FR-PAY-22", "d.md")], expanded: vec![h("FR-PAY-20", "e.md")] };
+        assert!(hit(&Case { kind: "paraphrase".into(), q: String::new(), expect: "FR-PAY-22".into() }, &a));
+        assert!(hit(&Case { kind: "paraphrase".into(), q: String::new(), expect: "FR-PAY-20".into() }, &a));
+    }
+
+    #[test]
+    fn code_hit_only_counts_a_seed_never_an_expanded_entry() {
+        let a = Answer { seeds: vec![h("sym:x.ts::f", "packages/x.ts")], expanded: vec![h("sym:y.ts::g", "packages/y.ts")] };
+        assert!(hit(&Case { kind: "code".into(), q: String::new(), expect: "packages/x.ts".into() }, &a));
+        assert!(!hit(&Case { kind: "code".into(), q: String::new(), expect: "packages/y.ts".into() }, &a));
+    }
+
+    #[test]
+    fn cases_file_parsing_skips_blank_lines() {
+        let text = "\n{\"kind\":\"keyword\",\"q\":\"a\",\"expect\":\"X\"}\n\n   \n{\"kind\":\"code\",\"q\":\"b\",\"expect\":\"Y\"}\n";
+        let cases = parse_cases(text).unwrap();
+        assert_eq!(cases.iter().map(|c| c.kind.as_str()).collect::<Vec<_>>(), ["keyword", "code"]);
+    }
+
+    #[test]
+    fn cases_file_of_only_blank_lines_yields_no_cases() {
+        assert!(parse_cases("\n\n   \n").unwrap().is_empty());
+    }
+
+    #[test]
+    fn cases_file_parsing_rejects_a_malformed_line() {
+        let good = "{\"kind\":\"keyword\",\"q\":\"a\",\"expect\":\"X\"}\n";
+        assert!(parse_cases(&format!("{good}not json\n")).is_err(), "invalid JSON");
+        assert!(parse_cases(&format!("{good}{{\"kind\":\"keyword\",\"q\":\"a\"}}\n")).is_err(), "missing required field");
     }
 }
