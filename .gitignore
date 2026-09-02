@@ -2,3 +2,6 @@
 /.repograph
 /.superpowers
 /.fastembed_cache
+/dist
+/npm/*/bin/repograph
+/npm/*/node_modules

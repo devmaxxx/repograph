@@ -48,13 +48,15 @@ Without it, those commands use local embeddings once the model is cached (see [E
 ## Install
 
 ```bash
-cargo install --path .
+pnpm add -D @devmaxxx/repograph    # npm: prebuilt binary for macOS arm64 and Linux x64
+cargo install --path .             # from source; Rust 1.98, pinned in rust-toolchain.toml
 ```
 
-Requires Rust 1.98 (pinned in `rust-toolchain.toml`).
-
-Tagged releases (`v*`) also publish prebuilt binaries for `aarch64-apple-darwin` and
-`x86_64-unknown-linux-gnu` as GitHub release assets, built by `.github/workflows/release.yml`.
+The npm package is a launcher: the binary comes from `@devmaxxx/repograph-darwin-arm64` or
+`@devmaxxx/repograph-linux-x64`, pulled in as an optional dependency, so a lockfile written on
+one platform installs on the other. Tagged releases (`v*`) build both binaries as GitHub release
+assets and cut the npm packages from those same files (`.github/workflows/release.yml`;
+`scripts/npm-pack.sh` does the same by hand).
 
 ## Use
 

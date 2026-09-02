@@ -1,0 +1,35 @@
+{
+  "name": "@devmaxxx/repograph",
+  "version": "0.2.0",
+  "description": "Knowledge graph of a repository's requirement docs and TypeScript code, built and refreshed at zero model tokens, asked by id, keyword or paraphrase",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/devmaxxx/repograph.git"
+  },
+  "homepage": "https://github.com/devmaxxx/repograph#readme",
+  "keywords": [
+    "knowledge-graph",
+    "requirements",
+    "traceability",
+    "typescript",
+    "search",
+    "bm25",
+    "embeddings",
+    "claude-code"
+  ],
+  "bin": {
+    "repograph": "bin/repograph.js"
+  },
+  "files": [
+    "bin/repograph.js",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "optionalDependencies": {
+    "@devmaxxx/repograph-darwin-arm64": "0.2.0",
+    "@devmaxxx/repograph-linux-x64": "0.2.0"
+  }
+}

@@ -22,3 +22,29 @@ jobs:
       - run: tar -C target/${{ matrix.target }}/release -czf repograph-${{ matrix.target }}.tar.gz repograph
       - uses: softprops/action-gh-release@v2
         with: { files: "repograph-${{ matrix.target }}.tar.gz" }
+  # The npm launcher and its two platform packages are cut from the release assets above, so the
+  # binary a `pnpm add` fetches is byte-for-byte the one on the release page. NPM_TOKEN is a
+  # repository secret; without it the job is skipped rather than failed, and the packages can
+  # still be published by hand with scripts/npm-pack.sh.
+  npm:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, registry-url: "https://registry.npmjs.org" }
+      - run: gh release download "$GITHUB_REF_NAME" --pattern 'repograph-*.tar.gz'
+        env: { GH_TOKEN: "${{ github.token }}" }
+      - run: |
+          mkdir -p bin/darwin-arm64 bin/linux-x64
+          tar -C bin/darwin-arm64 -xzf repograph-aarch64-apple-darwin.tar.gz
+          tar -C bin/linux-x64 -xzf repograph-x86_64-unknown-linux-gnu.tar.gz
+          scripts/npm-pack.sh "${GITHUB_REF_NAME#v}" darwin-arm64=bin/darwin-arm64/repograph linux-x64=bin/linux-x64/repograph
+      - if: env.NODE_AUTH_TOKEN != ''
+        run: |
+          for t in dist/npm/*-arm64-*.tgz dist/npm/*-x64-*.tgz; do npm publish --access public "$t"; done
+          npm publish --access public dist/npm/devmaxxx-repograph-"${GITHUB_REF_NAME#v}".tgz
