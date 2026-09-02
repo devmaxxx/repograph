@@ -20,8 +20,14 @@ impl Extractor for CodeExtractor {
     fn extract(&self, rel: &str, text: &str) -> Extraction {
         let mut ex = self.symbols.scan(rel, text);
         idrefs::scan(&self.ids, rel, text, &mut ex);
+        // Overloads, a getter/setter pair and repeated decorators name one symbol each.
+        let mut seen = std::collections::HashSet::new();
+        ex.nodes.retain(|n| seen.insert(n.id.clone()));
         ex.edges.sort();
         ex.edges.dedup();
         ex
     }
 }
+
+#[cfg(test)]
+mod cases;

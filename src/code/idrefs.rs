@@ -1,23 +1,60 @@
-use crate::code::symbols::parse;
+use crate::code::symbols::{is_top_level, member_name, parse};
 use crate::ids::IdMatcher;
 use crate::model::{EdgeKind, Extraction};
 use tree_sitter::Node;
 
-fn owner(mut n: Node, rel: &str, src: &[u8]) -> String {
+/// The symbol an id reference belongs to: the top-level function, class (with its method)
+/// or `const` that lexically contains it, else the file. Only top-level declarations are
+/// symbols, so a nested function or class is climbed through rather than named.
+pub(crate) fn owner(mut n: Node, rel: &str, src: &[u8]) -> String {
     let mut method: Option<String> = None;
     while let Some(p) = n.parent() {
-        let name = p.child_by_field_name("name").and_then(|c| c.utf8_text(src).ok()).map(str::to_string);
-        match (p.kind(), name) {
-            ("method_definition", Some(m)) => method = Some(m),
-            ("function_declaration", Some(f)) => return format!("sym:{rel}::{f}"),
-            ("class_declaration" | "abstract_class_declaration", Some(c)) => {
-                return match method { Some(m) => format!("sym:{rel}::{c}.{m}"), None => format!("sym:{rel}::{c}") };
+        match p.kind() {
+            // A decorator sits beside the member it decorates in `class_body`; the member is
+            // the next sibling that is not itself a decorator.
+            "decorator" if p.parent().is_some_and(|b| b.kind() == "class_body") => {
+                let mut s = p.next_named_sibling();
+                while let Some(m) = s {
+                    if m.kind() != "decorator" {
+                        method = member_name(m, src);
+                        break;
+                    }
+                    s = m.next_named_sibling();
+                }
+            }
+            "method_definition" | "public_field_definition" => {
+                if method.is_none() {
+                    method = member_name(p, src);
+                }
+            }
+            "function_declaration" | "function_signature" if is_top_level(p) => {
+                if let Some(f) = name_of(p, src) {
+                    return format!("sym:{rel}::{f}");
+                }
+            }
+            "class_declaration" | "abstract_class_declaration" => {
+                if is_top_level(p) {
+                    if let Some(c) = name_of(p, src) {
+                        return match method { Some(m) => format!("sym:{rel}::{c}.{m}"), None => format!("sym:{rel}::{c}") };
+                    }
+                }
+                // A nested class owns the method seen so far; it is not a symbol.
+                method = None;
+            }
+            "variable_declarator" if is_top_level(p) => {
+                if let Some(v) = p.child_by_field_name("name").filter(|x| x.kind() == "identifier") {
+                    return format!("sym:{rel}::{}", v.utf8_text(src).unwrap_or(""));
+                }
             }
             _ => {}
         }
         n = p;
     }
     format!("file:{rel}")
+}
+
+fn name_of(n: Node, src: &[u8]) -> Option<String> {
+    n.child_by_field_name("name").and_then(|c| c.utf8_text(src).ok()).map(str::to_string)
 }
 
 pub fn scan(ids: &IdMatcher, rel: &str, source: &str, ex: &mut Extraction) {

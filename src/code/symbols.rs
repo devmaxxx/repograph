@@ -34,13 +34,68 @@ fn flatten(s: &str) -> String {
     s.lines().map(str::trim).filter(|l| !l.is_empty()).collect::<Vec<_>>().join(" ")
 }
 
+fn unquote(s: &str) -> String {
+    s.trim_matches(|c| c == '\'' || c == '"' || c == '`').to_string()
+}
+
+/// The name a class member is known by: `'quoted'()` and `['computed']()` lose their quotes,
+/// a computed name that is not a string literal (`[Symbol.iterator]`) names nothing.
+pub(crate) fn member_name(m: Node, src: &[u8]) -> Option<String> {
+    let name = m.child_by_field_name("name")?;
+    match name.kind() {
+        "string" => Some(unquote(text(name, src))),
+        "computed_property_name" => {
+            let inner = name.named_child(0)?;
+            (inner.kind() == "string").then(|| unquote(text(inner, src)))
+        }
+        _ => Some(text(name, src).to_string()),
+    }
+}
+
+/// Every identifier a binding pattern introduces: `{ x, y: why, ...rest }`, `[a, , b = 1]`.
+fn bindings(n: Node, src: &[u8], out: &mut Vec<String>) {
+    match n.kind() {
+        "identifier" | "shorthand_property_identifier_pattern" => out.push(text(n, src).to_string()),
+        "pair_pattern" => {
+            if let Some(v) = n.child_by_field_name("value") {
+                bindings(v, src, out);
+            }
+        }
+        "assignment_pattern" => {
+            if let Some(l) = n.child_by_field_name("left") {
+                bindings(l, src, out);
+            }
+        }
+        _ => {
+            let mut cur = n.walk();
+            for c in n.named_children(&mut cur) {
+                bindings(c, src, out);
+            }
+        }
+    }
+}
+
+/// Whether a declaration sits directly in the program — possibly behind `export` or
+/// `declare` — rather than inside a function or a block.
+pub(crate) fn is_top_level(decl: Node) -> bool {
+    let mut p = decl.parent();
+    while let Some(n) = p {
+        match n.kind() {
+            "program" => return true,
+            "export_statement" | "ambient_declaration" | "lexical_declaration" | "variable_declaration" => p = n.parent(),
+            _ => return false,
+        }
+    }
+    false
+}
+
 /// First string literal inside a decorator's call arguments, without quotes; `""` when none.
 fn decorator_arg(call: Node, src: &[u8]) -> String {
     let Some(args) = call.child_by_field_name("arguments") else { return String::new() };
     let mut cur = args.walk();
     for a in args.named_children(&mut cur) {
-        if a.kind() == "string" {
-            return text(a, src).trim_matches(|c| c == '\'' || c == '"' || c == '`').to_string();
+        if matches!(a.kind(), "string" | "template_string") {
+            return unquote(text(a, src));
         }
     }
     String::new()
@@ -77,14 +132,16 @@ impl SymbolScanner {
             match stmt.kind() {
                 "export_statement" => self.export(stmt, rel, &file_id, src, &mut ex),
                 "import_statement" => self.import(stmt, rel, &file_id, src, &mut ex),
-                "function_declaration" | "class_declaration" | "abstract_class_declaration"
-                | "interface_declaration" | "type_alias_declaration" | "enum_declaration"
-                | "lexical_declaration" | "variable_declaration" => {
+                "function_declaration" | "function_signature" | "class_declaration" | "abstract_class_declaration"
+                | "interface_declaration" | "type_alias_declaration" | "enum_declaration" | "internal_module"
+                | "lexical_declaration" | "variable_declaration" | "ambient_declaration" => {
                     self.declaration(stmt, rel, &file_id, src, false, &mut ex);
                 }
                 _ => {}
             }
         }
+        self.export_clauses(root, &file_id, src, &mut ex);
+        self.dynamic_imports(root, rel, src, &mut ex);
         ex.edges.sort();
         ex.edges.dedup();
         ex
@@ -109,7 +166,7 @@ impl SymbolScanner {
                             }
                         }
                     }
-                    "namespace_export" => names.push("*".into()),
+                    "namespace_export" => names.push(c.named_child(0).map(|a| text(a, src)).unwrap_or("*").to_string()),
                     _ => {}
                 }
             }
@@ -136,7 +193,11 @@ impl SymbolScanner {
     /// Returns the symbol ids created at top level, so decorators on `export class` attach.
     fn declaration(&self, decl: Node, rel: &str, file_id: &str, src: &[u8], exported: bool, ex: &mut Extraction) -> Vec<String> {
         let ctx = if exported { "export" } else { "" };
-        let line = decl.start_position().row as u32 + 1;
+        // `declare const x` wraps the declaration it describes; `declare module 'm'` is not a
+        // symbol of this file and falls through the default arm below with a quoted name.
+        let decl = if decl.kind() == "ambient_declaration" { decl.named_child(0).unwrap_or(decl) } else { decl };
+        // A decorator is part of a class_declaration's extent; the name is not.
+        let line = decl.child_by_field_name("name").unwrap_or(decl).start_position().row as u32 + 1;
         // A function's body is worth flattening into one preview line; a class/interface/enum/
         // const body is not — BM25 documents are built from `id + label + body`, so a
         // multi-kilobyte class body would drown the label terms that make the symbol findable.
@@ -160,7 +221,11 @@ impl SymbolScanner {
                 let mut cur = decl.walk();
                 for d in decl.named_children(&mut cur) {
                     if d.kind() == "variable_declarator" {
-                        if let Some(n) = name_of(d, src) {
+                        let mut names = Vec::new();
+                        if let Some(pat) = d.child_by_field_name("name") {
+                            bindings(pat, src, &mut names);
+                        }
+                        for n in names {
                             declare(&n, ex);
                         }
                     }
@@ -176,7 +241,7 @@ impl SymbolScanner {
                 }
             }
             _ => {
-                if let Some(n) = name_of(decl, src) {
+                if let Some(n) = name_of(decl, src).filter(|n| !n.starts_with(['\'', '"'])) {
                     declare(&n, ex);
                 }
             }
@@ -217,7 +282,7 @@ impl SymbolScanner {
                 pending.clear();
                 continue;
             }
-            let Some(name) = name_of(m, src) else {
+            let Some(name) = member_name(m, src) else {
                 pending.clear();
                 continue;
             };
@@ -273,12 +338,19 @@ impl SymbolScanner {
     }
 
     fn import(&self, stmt: Node, rel: &str, file_id: &str, src: &[u8], ex: &mut Extraction) {
-        let Some(source) = stmt.child_by_field_name("source") else { return };
-        let spec = text(source, src).trim_matches(|c| c == '\'' || c == '"');
-        let Some(target) = self.resolver.resolve(rel, spec) else { return };
+        // `import x = require('y')` keeps its source on the clause, not the statement.
+        let mut cur = stmt.walk();
+        let require = stmt.named_children(&mut cur).find(|c| c.kind() == "import_require_clause");
+        let Some(source) = stmt.child_by_field_name("source").or_else(|| require?.child_by_field_name("source")) else { return };
+        let spec = unquote(text(source, src));
+        let Some(target) = self.resolver.resolve(rel, &spec) else { return };
         let mut names = Vec::new();
         let mut cur = stmt.walk();
         for c in stmt.named_children(&mut cur) {
+            if c.kind() == "import_require_clause" {
+                names.extend(c.named_child(0).map(|n| text(n, src).to_string()));
+                continue;
+            }
             if c.kind() != "import_clause" {
                 continue;
             }
@@ -302,6 +374,62 @@ impl SymbolScanner {
             }
         }
         ex.edge(file_id, &format!("file:{target}"), EdgeKind::Imports, &names.join(","), rel);
+    }
+
+    /// `export { a, b as c }`, `export default a` and `export = a` export symbols declared
+    /// elsewhere in the file: their `declares` edges are upgraded rather than re-created.
+    fn export_clauses(&self, root: Node, file_id: &str, src: &[u8], ex: &mut Extraction) {
+        let mut names: Vec<String> = Vec::new();
+        let mut cur = root.walk();
+        for stmt in root.named_children(&mut cur) {
+            if stmt.kind() != "export_statement" || stmt.child_by_field_name("source").is_some() || stmt.child_by_field_name("declaration").is_some() {
+                continue;
+            }
+            let mut sc = stmt.walk();
+            for c in stmt.named_children(&mut sc) {
+                match c.kind() {
+                    "identifier" => names.push(text(c, src).to_string()),
+                    "export_clause" => {
+                        let mut cc = c.walk();
+                        names.extend(c.named_children(&mut cc).filter(|s| s.kind() == "export_specifier").filter_map(|s| name_of(s, src)));
+                    }
+                    _ => {}
+                }
+            }
+        }
+        for e in &mut ex.edges {
+            if e.kind == EdgeKind::Declares && e.source == file_id {
+                if let Some(name) = e.target.rsplit("::").next() {
+                    if names.iter().any(|n| n == name) {
+                        e.context = "export".into();
+                    }
+                }
+            }
+        }
+    }
+
+    /// `import('./x')` and `require('./x')` anywhere in the file, attributed to the symbol
+    /// they sit in so a lazy route or a test's fixture load still reaches its file.
+    fn dynamic_imports(&self, root: Node, rel: &str, src: &[u8], ex: &mut Extraction) {
+        let mut stack = vec![root];
+        while let Some(n) = stack.pop() {
+            let mut cur = n.walk();
+            stack.extend(n.named_children(&mut cur));
+            if n.kind() != "call_expression" {
+                continue;
+            }
+            let Some(callee) = n.child_by_field_name("function") else { continue };
+            if !(callee.kind() == "import" || text(callee, src) == "require") {
+                continue;
+            }
+            let Some(arg) = n.child_by_field_name("arguments").and_then(|a| a.named_child(0)) else { continue };
+            if arg.kind() != "string" {
+                continue;
+            }
+            let Some(target) = self.resolver.resolve(rel, &unquote(text(arg, src))) else { continue };
+            let from = crate::code::idrefs::owner(n, rel, src);
+            ex.edge(&from, &format!("file:{target}"), EdgeKind::Imports, "", rel);
+        }
     }
 }
 
