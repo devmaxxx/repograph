@@ -45,6 +45,12 @@ impl Store {
         std::fs::metadata(self.dir.join(name)).map(|m| m.len() > 0).unwrap_or(false)
     }
 
+    /// What a `stat` says about a store file, for a poller that wants to know whether someone
+    /// else has written it without reading megabytes to find out.
+    pub fn stamp(&self, name: &str) -> Option<crate::walk::Stamp> {
+        crate::walk::stamp_of(&std::fs::metadata(self.dir.join(name)).ok()?)
+    }
+
     pub fn read_bytes(&self, name: &str) -> Result<Option<Vec<u8>>> {
         let p = self.dir.join(name);
         if !p.exists() { return Ok(None); }

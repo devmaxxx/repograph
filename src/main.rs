@@ -46,6 +46,16 @@ enum Cmd {
         /// Answers from the store as it stands, without bringing it in line with the tree first.
         #[arg(long)] stale: bool,
     },
+    /// Keeps the store in step with the tree for readers that do not refresh themselves —
+    /// editors, MCP servers. Polls, applies the same incremental update `ask` does, and embeds
+    /// what changed. Ctrl-C stops it; every write is a rename, so there is nothing to clean up.
+    Watch {
+        /// Seconds between polls.
+        #[arg(long, default_value_t = 30)] every: u64,
+        /// Files that have to be waiting before a poll refreshes; a smaller number of them is
+        /// carried to the next poll instead, at most three times in a row.
+        #[arg(long, default_value_t = 1)] batch: usize,
+    },
     Explain { node: String },
     Verify,
     /// Writes reader questions for every requirement-like node through the configured
@@ -155,6 +165,107 @@ fn graph_for_ask(repo: &std::path::Path, cfg: &config::Config, store: &store::St
     Ok((graph, Some(r)))
 }
 
+/// What a poll of the tree needs between rounds: the graph as this process last wrote it, and
+/// the stamp of the manifest that says whether someone else has written since.
+struct Watcher<'a> {
+    repo: &'a std::path::Path,
+    cfg: &'a config::Config,
+    store: store::Store,
+    ex: Extractors,
+    graph: model::Graph,
+    manifest: walk::Manifest,
+    seen: Option<walk::Stamp>,
+    deferred: u32,
+}
+
+/// A poll that changes nothing still writes a 10 MB graph, so a batch of one file per save is
+/// worth waiting a poll or two for. The cap is what keeps a lone edit from waiting for a second
+/// one that never comes: it lands within four polls whatever `--batch` says.
+const MAX_DEFERRALS: u32 = 3;
+
+fn refresh_now(pending: usize, batch: usize, deferred: u32) -> bool {
+    pending > 0 && (pending >= batch || deferred >= MAX_DEFERRALS)
+}
+
+enum Polled { Quiet, Deferred { pending: usize }, Refreshed(UpdateReport) }
+
+impl<'a> Watcher<'a> {
+    fn open(repo: &'a std::path::Path, cfg: &'a config::Config) -> anyhow::Result<Watcher<'a>> {
+        let store = store::Store::new(repo);
+        let (graph, manifest) = store.load()?;
+        let seen = store.stamp("manifest.json");
+        Ok(Watcher { repo, cfg, ex: extractors(repo, cfg)?, store, graph, manifest, seen, deferred: 0 })
+    }
+
+    /// Whatever the tree has moved since the last poll, applied and saved once `batch` files are
+    /// waiting. An `ask` or an `update` writing the store meanwhile is picked up rather than
+    /// overwritten, which is why the manifest stamp is checked before the graph in hand is used.
+    fn poll(&mut self, batch: usize) -> anyhow::Result<Polled> {
+        let on_disk = self.store.stamp("manifest.json");
+        if on_disk != self.seen {
+            let (graph, manifest) = self.store.load()?;
+            self.graph = graph;
+            self.manifest = manifest;
+            self.seen = on_disk;
+        }
+        let entries = walk::walk(self.repo, self.cfg, &self.manifest)?;
+        let diff = self.manifest.diff(&entries);
+        let pending = diff.changed.len() + diff.removed.len();
+        if !refresh_now(pending, batch, self.deferred) {
+            self.deferred = if pending > 0 { self.deferred + 1 } else { 0 };
+            // Only a quiet tree may record stamps: the entries of a deferred poll carry the new
+            // hashes, and storing those would retire the very changes still waiting to be read.
+            if pending == 0 && record_stamps(&self.store, &self.manifest, &entries)? {
+                self.manifest = walk::Manifest::from_entries(&entries);
+                self.seen = self.store.stamp("manifest.json");
+            }
+            return Ok(if pending > 0 { Polled::Deferred { pending } } else { Polled::Quiet });
+        }
+        self.deferred = 0;
+        let r = apply_diff(self.repo, &self.store, &mut self.graph, &entries, &diff, &self.ex)?;
+        self.manifest = walk::Manifest::from_entries(&entries);
+        self.seen = self.store.stamp("manifest.json");
+        Ok(Polled::Refreshed(r))
+    }
+}
+
+/// Keeps the store in step with the tree for readers that do not refresh themselves.
+fn run_watch(repo: &std::path::Path, cfg: &config::Config, every: u64, batch: usize, no_dense: bool) -> anyhow::Result<()> {
+    let mut w = Watcher::open(repo, cfg)?;
+    let mut embedder: Option<Option<index::embed::Embedder>> = None;
+    let mut dense: Option<index::dense::DenseIndex> = None;
+    let verbose = timing_on();
+    eprintln!("watch: {} every {every}s, batch {batch}; Ctrl-C to stop", repo.display());
+    loop {
+        let t = std::time::Instant::now();
+        match w.poll(batch)? {
+            Polled::Quiet => {}
+            Polled::Deferred { pending } => {
+                if verbose { eprintln!("watch: {pending} of {batch} pending, deferred {} of {MAX_DEFERRALS}", w.deferred); }
+            }
+            Polled::Refreshed(r) => {
+                let mut embedded = 0;
+                // The model costs ~0.6 s and 1.3 GB to open, so it waits for the first change; the
+                // vectors then stay in memory, since every later refresh syncs them again.
+                if let Some(e) = embedder.get_or_insert_with(|| open_embedder(no_dense)).as_mut() {
+                    let idx = match dense {
+                        Some(ref mut d) => d,
+                        None => dense.insert(index::dense::DenseIndex::load(&w.store)?),
+                    };
+                    let questions = enrich::Questions::load(&w.store)?;
+                    embedded = idx.sync(&w.graph, &questions, &mut |texts| e.embed(texts))?;
+                    if embedded > 0 { idx.save(&w.store)?; }
+                }
+                println!("refresh: {} changed, {} removed, {} nodes, {} edges, {embedded} vectors in {:.1}s",
+                    r.changed, r.removed, r.nodes, r.edges, t.elapsed().as_secs_f32());
+                use std::io::Write;
+                std::io::stdout().flush()?;
+            }
+        }
+        std::thread::sleep(std::time::Duration::from_secs(every));
+    }
+}
+
 fn extractors(repo: &std::path::Path, cfg: &config::Config) -> anyhow::Result<Extractors> {
     let ids = ids::IdMatcher::new(&cfg.id_families, &cfg.milestone_families);
     let resolver = code::imports::Resolver::new(repo)?;
@@ -181,10 +292,12 @@ fn embed_all(repo: &std::path::Path, no_dense: bool) -> anyhow::Result<()> {
 /// `REPOGRAPH_TIMING=1` prints where an `ask` spends its time, one line per stage on stderr.
 struct Timing { on: bool, start: std::time::Instant, last: std::cell::Cell<std::time::Instant> }
 
+fn timing_on() -> bool { std::env::var_os("REPOGRAPH_TIMING").is_some() }
+
 impl Timing {
     fn new() -> Timing {
         let now = std::time::Instant::now();
-        Timing { on: std::env::var_os("REPOGRAPH_TIMING").is_some(), start: now, last: std::cell::Cell::new(now) }
+        Timing { on: timing_on(), start: now, last: std::cell::Cell::new(now) }
     }
 
     fn stage(&self, what: &str) {
@@ -289,6 +402,7 @@ fn main() -> anyhow::Result<()> {
             timing.stage("printed");
             std::process::exit(0)
         }
+        Cmd::Watch { every, batch } => run_watch(&repo, &load_cfg()?, every, batch, cli.no_dense),
         Cmd::Explain { node } => {
             let (graph, _) = store::Store::new(&repo).load()?;
             match query::explain(&graph, &node) {
@@ -403,7 +517,85 @@ mod tests {
         assert_eq!(std::fs::read(repo.join(".repograph/graph.json")).unwrap(), before);
     }
 
+    #[test]
+    fn a_watch_poll_applies_an_edit_and_the_next_one_has_nothing_to_do() {
+        let dir = doc_repo(ONE);
+        let (repo, cfg) = (dir.path(), config::Config::default());
+        built(repo, &cfg);
+        let mut w = Watcher::open(repo, &cfg).unwrap();
+        assert!(matches!(w.poll(1).unwrap(), Polled::Quiet));
+        std::fs::write(repo.join("docs/a.md"), TWO).unwrap();
+        let Polled::Refreshed(r) = w.poll(1).unwrap() else { panic!("the edit is a refresh") };
+        assert_eq!((r.changed, r.removed), (1, 0));
+        assert!(store::Store::new(repo).load().unwrap().0.nodes.contains_key("FR-PAY-23"));
+        assert!(matches!(w.poll(1).unwrap(), Polled::Quiet));
+    }
 
+    // Under a batch a lone edit waits, but only for the three polls the cap allows — and the
+    // deferred polls must not retire it by recording the stamps of the files still to be read.
+    #[test]
+    fn a_lone_edit_under_a_batch_is_applied_by_the_fourth_poll() {
+        let dir = doc_repo(ONE);
+        let (repo, cfg) = (dir.path(), config::Config::default());
+        built(repo, &cfg);
+        let mut w = Watcher::open(repo, &cfg).unwrap();
+        std::fs::write(repo.join("docs/a.md"), TWO).unwrap();
+        for _ in 0..MAX_DEFERRALS {
+            assert!(matches!(w.poll(4).unwrap(), Polled::Deferred { pending: 1 }));
+        }
+        let Polled::Refreshed(r) = w.poll(4).unwrap() else { panic!("the cap releases the edit") };
+        assert_eq!((r.changed, r.removed), (1, 0));
+        assert!(store::Store::new(repo).load().unwrap().0.nodes.contains_key("FR-PAY-23"));
+    }
+
+    #[test]
+    fn a_full_batch_refreshes_without_waiting() {
+        let dir = doc_repo(ONE);
+        let (repo, cfg) = (dir.path(), config::Config::default());
+        built(repo, &cfg);
+        let mut w = Watcher::open(repo, &cfg).unwrap();
+        std::fs::write(repo.join("docs/a.md"), TWO).unwrap();
+        std::fs::write(repo.join("docs/b.md"), "# B\n\n**FR-PAY-24 · MUST · chargeback**\n\nbody\n").unwrap();
+        let Polled::Refreshed(r) = w.poll(2).unwrap() else { panic!("two files fill the batch") };
+        assert_eq!((r.changed, r.removed), (2, 0));
+    }
+
+    #[test]
+    fn a_batch_of_one_refreshes_on_the_first_pending_file() {
+        assert!(refresh_now(1, 1, 0));
+        assert!(refresh_now(9, 1, 0));
+    }
+
+    #[test]
+    fn a_batch_waits_for_its_files_and_the_cap_ends_the_wait() {
+        assert!(!refresh_now(2, 5, 0));
+        assert!(!refresh_now(2, 5, MAX_DEFERRALS - 1));
+        assert!(refresh_now(2, 5, MAX_DEFERRALS));
+        assert!(refresh_now(5, 5, 0));
+    }
+
+    #[test]
+    fn a_quiet_tree_never_refreshes_however_long_it_has_waited() {
+        assert!(!refresh_now(0, 1, 0));
+        assert!(!refresh_now(0, 1, MAX_DEFERRALS + 9));
+    }
+
+    // A watcher holds the graph between polls; another writer's `ask` or `update` must not be
+    // undone by the next poll writing a graph that predates it.
+    #[test]
+    fn a_watch_poll_takes_up_a_store_another_writer_has_moved() {
+        let dir = doc_repo(ONE);
+        let (repo, cfg) = (dir.path(), config::Config::default());
+        built(repo, &cfg);
+        let mut w = Watcher::open(repo, &cfg).unwrap();
+        std::fs::write(repo.join("docs/b.md"), TWO).unwrap();
+        built(repo, &cfg);
+        std::fs::write(repo.join("docs/c.md"), "# C\n\n**FR-PAY-25 · MUST · chargeback**\n\nbody\n").unwrap();
+        assert!(matches!(w.poll(1).unwrap(), Polled::Refreshed(_)), "c.md is a refresh");
+        let (stored, _) = store::Store::new(repo).load().unwrap();
+        assert!(stored.nodes.contains_key("FR-PAY-25"));
+        assert!(stored.nodes.contains_key("FR-PAY-23"), "the other writer's node survived the poll");
+    }
 
     // A `.ts` that is not UTF-8 is a binary that landed under a code glob; it is reported and
     // skipped. A NUL byte inside a string literal is valid TypeScript and is parsed like any other.
