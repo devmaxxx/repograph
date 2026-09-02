@@ -25,14 +25,12 @@ pub fn hit(case: &Case, answer: &Answer) -> bool {
 }
 
 pub fn passes(s: &Summary, dense: bool) -> bool {
-    // The no-dense answer seeds from the generated questions, whose Cyrillic requirement
-    // headlines cost more bytes than the symbol and task nodes the passage list used to return
-    // (+7 tokens at the median), so its token floor sits ten tokens above the dense arm's.
-    // The dense arm read 8/14 for one build: its eighth hit rode on a requirement whose
-    // label still carried the prose after its closing `**`, and left with it (cosine margin
-    // 0.0004; the 400 held-out questions did not move). The floor sits at what is measured.
-    let (paraphrase, p90) = if dense { (7, 230) } else { (6, 240) };
-    s.keyword.0 == s.keyword.1 && s.paraphrase.0 >= paraphrase && s.code.0 == s.code.1 && s.p90_tokens <= p90
+    // Every floor is the number the recorded cases measure; only the token ceiling is rounded,
+    // up to the next ten. Paraphrase is the one split the arms disagree on — three of its
+    // questions are reached by the dense passage list and by neither lexical list — so it
+    // carries a floor per arm, while the p90 (225 with dense, 228 without) fits under one.
+    let paraphrase = if dense { 14 } else { 11 };
+    s.keyword.0 == s.keyword.1 && s.paraphrase.0 >= paraphrase && s.code.0 == s.code.1 && s.p90_tokens <= 230
 }
 
 // The recorded cases travel inside the binary so a release build benches from any directory.
@@ -89,8 +87,8 @@ pub fn run(repo: &Path, cases: Option<&Path>, no_dense: bool, rerank: bool, dept
         cases.iter().filter(|c| c.kind == "paraphrase").count(),
         cases.iter().filter(|c| c.kind == "code").count(),
     );
-    if (kw, pf, cd) != (24, 14, 3) {
-        anyhow::bail!("{cases_path} has {kw} keyword / {pf} paraphrase / {cd} code cases, expected 24/14/3");
+    if (kw, pf, cd) != (40, 30, 12) {
+        anyhow::bail!("{cases_path} has {kw} keyword / {pf} paraphrase / {cd} code cases, expected 40/30/12");
     }
     let opts = Options { seeds: 5, bodies: false, dense: dense_on, json: false, depth };
     let rerank_fn = |q: &str, c: &[(String, String)]| crate::rerank::run(&cfg.rerank_command, q, c);
@@ -151,35 +149,35 @@ mod tests {
         // Fixtures sit exactly on each floor so a boundary shifted by one in either direction
         // reddens the corresponding call; a fixture comfortably clear of the floor (the
         // original mistake) would not notice such a shift.
-        let at_floor_nodense = Summary { keyword: (24, 24), paraphrase: (6, 14), code: (3, 3), p90_tokens: 240 };
-        let at_floor_dense = Summary { keyword: (24, 24), paraphrase: (7, 14), code: (3, 3), p90_tokens: 230 };
+        let at_floor_nodense = Summary { keyword: (40, 40), paraphrase: (11, 30), code: (12, 12), p90_tokens: 230 };
+        let at_floor_dense = Summary { keyword: (40, 40), paraphrase: (14, 30), code: (12, 12), p90_tokens: 230 };
         assert!(passes(&at_floor_nodense, false));
         assert!(passes(&at_floor_dense, true));
 
         // keyword must be exact: one short reddens in both dense arms.
-        assert!(!passes(&Summary { keyword: (23, 24), ..at_floor_nodense.clone() }, false));
-        assert!(!passes(&Summary { keyword: (23, 24), ..at_floor_dense.clone() }, true));
+        assert!(!passes(&Summary { keyword: (39, 40), ..at_floor_nodense.clone() }, false));
+        assert!(!passes(&Summary { keyword: (39, 40), ..at_floor_dense.clone() }, true));
 
         // code must be exact: one short reddens in both dense arms.
-        assert!(!passes(&Summary { code: (2, 3), ..at_floor_nodense.clone() }, false));
-        assert!(!passes(&Summary { code: (2, 3), ..at_floor_dense.clone() }, true));
+        assert!(!passes(&Summary { code: (11, 12), ..at_floor_nodense.clone() }, false));
+        assert!(!passes(&Summary { code: (11, 12), ..at_floor_dense.clone() }, true));
 
-        // p90: one token over the arm's own floor reddens it.
-        assert!(!passes(&Summary { p90_tokens: 241, ..at_floor_nodense.clone() }, false));
+        // p90: one token over the shared ceiling reddens either arm.
+        assert!(!passes(&Summary { p90_tokens: 231, ..at_floor_nodense.clone() }, false));
         assert!(!passes(&Summary { p90_tokens: 231, ..at_floor_dense.clone() }, true));
 
-        // paraphrase no-dense floor is 6: one short reddens the `dense: false` call.
-        assert!(!passes(&Summary { paraphrase: (5, 14), ..at_floor_nodense.clone() }, false));
-        // paraphrase dense floor is 7: one short reddens the `dense: true` call.
-        assert!(!passes(&Summary { paraphrase: (6, 14), ..at_floor_dense.clone() }, true));
+        // paraphrase no-dense floor is 11: one short reddens the `dense: false` call.
+        assert!(!passes(&Summary { paraphrase: (10, 30), ..at_floor_nodense.clone() }, false));
+        // paraphrase dense floor is 14: one short reddens the `dense: true` call.
+        assert!(!passes(&Summary { paraphrase: (13, 30), ..at_floor_dense.clone() }, true));
     }
 
     #[test]
     fn cases_file_parses_and_has_the_recorded_shape() {
         let text = std::fs::read_to_string(format!("{}/bench/cases.jsonl", env!("CARGO_MANIFEST_DIR"))).unwrap();
         let cases: Vec<Case> = text.lines().filter(|l| !l.trim().is_empty()).map(|l| serde_json::from_str(l).unwrap()).collect();
-        assert_eq!(cases.iter().filter(|c| c.kind == "keyword").count(), 24);
-        assert_eq!(cases.iter().filter(|c| c.kind == "paraphrase").count(), 14);
-        assert_eq!(cases.iter().filter(|c| c.kind == "code").count(), 3);
+        assert_eq!(cases.iter().filter(|c| c.kind == "keyword").count(), 40);
+        assert_eq!(cases.iter().filter(|c| c.kind == "paraphrase").count(), 30);
+        assert_eq!(cases.iter().filter(|c| c.kind == "code").count(), 12);
     }
 }
