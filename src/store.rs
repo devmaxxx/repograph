@@ -113,6 +113,22 @@ mod tests {
         assert!(!d.path().join(".repograph/graph.json.tmp").exists());
     }
 
+    // Bytes reach the store only through a rename, so a write that fails part-way — here the
+    // temp path is occupied by a directory — cannot leave a half-written graph behind.
+    #[test]
+    fn a_failed_write_leaves_the_stored_graph_intact() {
+        let d = tempfile::tempdir().unwrap();
+        let store = Store::new(d.path());
+        let mut g = Graph::default();
+        let mut e = Extraction::default();
+        e.node(NodeKind::File, "file:a.md", "a.md", "", "a.md", 1);
+        g.apply(e);
+        store.save(&g, &Manifest::default()).unwrap();
+        std::fs::create_dir(d.path().join(".repograph/graph.json.tmp")).unwrap();
+        assert!(store.save(&Graph::default(), &Manifest::default()).is_err());
+        assert_eq!(store.load().unwrap().0.nodes.len(), 1);
+    }
+
     #[test]
     fn has_means_present_and_non_empty() {
         let dir = tempfile::tempdir().unwrap();
