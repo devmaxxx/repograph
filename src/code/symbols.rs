@@ -519,4 +519,62 @@ mod tests {
         let n = ex.nodes.iter().find(|n| n.id.ends_with("::asGrosze")).unwrap();
         assert_eq!(n.body, "export function asGrosze(v: number): number { return Math.round(v * 100); }");
     }
+
+    fn inline(rel: &str, src: &str) -> Extraction {
+        let d = tempfile::tempdir().unwrap();
+        SymbolScanner::new(Resolver::new(d.path()).unwrap()).scan(rel, src)
+    }
+
+    #[test]
+    fn a_destructured_object_pattern_declares_each_bound_name_not_the_source_property() {
+        let ex = inline("m.ts", "const { x, y: why, ...rest } = obj;\n");
+        let ids: Vec<&str> = ex.nodes.iter().map(|n| n.id.as_str()).collect();
+        assert!(ids.contains(&"sym:m.ts::x"));
+        assert!(ids.contains(&"sym:m.ts::why"));
+        assert!(ids.contains(&"sym:m.ts::rest"));
+        assert!(!ids.iter().any(|i| i.ends_with("::y")));
+    }
+
+    #[test]
+    fn an_array_pattern_with_elision_and_a_default_declares_only_the_bound_names() {
+        let ex = inline("m.ts", "const [a, , b = 1] = arr;\n");
+        let ids: Vec<&str> = ex.nodes.iter().map(|n| n.id.as_str()).collect();
+        assert!(ids.contains(&"sym:m.ts::a"));
+        assert!(ids.contains(&"sym:m.ts::b"));
+        assert_eq!(ids.iter().filter(|i| i.starts_with("sym:")).count(), 2);
+    }
+
+    #[test]
+    fn a_decorator_group_is_fully_drained_and_never_leaks_to_the_next_method() {
+        let ex = inline("m.ts", "class A {\n  @Foo\n  one() {}\n  two() {}\n}\n");
+        assert!(has(&ex, "sym:m.ts::A.one", "deco:Foo", EdgeKind::DecoratedBy, ""));
+        assert!(!ex.edges.iter().any(|e| e.source == "sym:m.ts::A.two" && e.kind == EdgeKind::DecoratedBy));
+    }
+
+    #[test]
+    fn a_computed_member_name_that_is_not_a_string_literal_is_skipped() {
+        let ex = inline("m.ts", "class A {\n  [Symbol.iterator]() {}\n  bar() {}\n}\n");
+        assert!(!ex.nodes.iter().any(|n| n.id.contains("Symbol")));
+        assert!(ex.nodes.iter().any(|n| n.id == "sym:m.ts::A.bar"));
+    }
+
+    #[test]
+    fn a_quoted_member_name_is_unquoted() {
+        let ex = inline("m.ts", "class A {\n  'weird-name'() {}\n}\n");
+        assert!(ex.nodes.iter().any(|n| n.id == "sym:m.ts::A.weird-name"));
+    }
+
+    #[test]
+    fn a_non_string_decorator_argument_yields_an_empty_arg() {
+        let ex = inline("m.ts", "const SOME_CONST = 1;\nclass A {\n  @Foo(SOME_CONST)\n  bar() {}\n}\n");
+        assert!(has(&ex, "sym:m.ts::A.bar", "deco:Foo", EdgeKind::DecoratedBy, ""));
+    }
+
+    #[test]
+    fn import_equals_require_edge_carries_the_bound_name() {
+        let d = tempfile::tempdir().unwrap();
+        std::fs::write(d.path().join("thing.ts"), "export {};\n").unwrap();
+        let ex = SymbolScanner::new(Resolver::new(d.path()).unwrap()).scan("m.ts", "import thing = require('./thing');\n");
+        assert!(has(&ex, "file:m.ts", "file:thing.ts", EdgeKind::Imports, "thing"));
+    }
 }
