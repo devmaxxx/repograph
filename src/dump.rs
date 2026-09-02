@@ -108,3 +108,46 @@ pub fn run(repo: &Path, queries: &Path, out: &Path, depth: usize) -> Result<()> 
     println!("dump: {} queries, {} deep, {} rows × {} → {}", dump.meta.queries, depth, dump.meta.rows, dump.meta.dim, out.display());
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_query_line_deserializes_its_three_required_fields() {
+        let q: Query = serde_json::from_str(r#"{"q": "как отменить?", "expect": "FR-PAY-22", "kind": "keyword"}"#).unwrap();
+        assert_eq!((q.q.as_str(), q.expect.as_str(), q.kind.as_str()), ("как отменить?", "FR-PAY-22", "keyword"));
+    }
+
+    #[test]
+    fn a_query_line_missing_a_field_errors_naming_it() {
+        let err = serde_json::from_str::<Query>(r#"{"q": "x", "kind": "keyword"}"#).unwrap_err();
+        assert!(err.to_string().contains("expect"), "{err}");
+    }
+
+    // The dump is read offline by retrieval-math scripts (see module doc), so its field names
+    // are a contract independent of this binary; a silent rename here would break them quietly.
+    #[test]
+    fn a_record_serializes_with_the_names_the_offline_scripts_read() {
+        let record = Record {
+            q: "q".into(),
+            expect: "FR-PAY-22".into(),
+            kind: "keyword".into(),
+            exact: Exact { ids: vec!["FR-PAY-22".into()], whole_question: true },
+            qvec: vec![0.1, 0.2],
+            dense_passages: vec![("FR-PAY-22".into(), 0.9)],
+            dense_questions: vec![],
+            bm25_passages: vec![],
+            bm25_questions: vec![],
+            loo_hash: "abc".into(),
+            loo_rows: vec![3],
+            ask: Ask { seeds: vec![("FR-PAY-22".into(), 1.0)], expanded: vec![("N-151".into(), 0.5, "FR-PAY-22".into())] },
+        };
+        let v = serde_json::to_value(&record).unwrap();
+        for key in ["q", "expect", "kind", "exact", "qvec", "dense_passages", "dense_questions", "bm25_passages", "bm25_questions", "loo_hash", "loo_rows", "ask"] {
+            assert!(v.get(key).is_some(), "missing field {key}");
+        }
+        assert_eq!(v["exact"]["whole_question"], true);
+        assert_eq!(v["ask"]["expanded"][0][2], "FR-PAY-22");
+    }
+}
