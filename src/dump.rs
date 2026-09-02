@@ -4,7 +4,7 @@
 use crate::config::Config;
 use crate::enrich::Questions;
 use crate::ids::IdMatcher;
-use crate::index::{dense::DenseIndex, embed::Embedder, lexical::LexicalIndex};
+use crate::index::{dense::DenseIndex, embed::Embedder, lexical::{self, LexicalIndex}};
 use crate::query::{self, Options};
 use crate::store::Store;
 use anyhow::{Context, Result};
@@ -34,6 +34,13 @@ struct Record {
     loo_hash: String,
     loo_rows: Vec<usize>,
     ask: Ask,
+    /// Shipped Snowball tokens of the question and of the target's indexed text, whatever
+    /// `REPOGRAPH_BM25` says: the stem-mismatch measurement needs the baseline stems.
+    q_stems: Vec<String>,
+    expect_stems: Vec<String>,
+    /// The tokens the active variant actually scored the question by.
+    q_tokens: Vec<String>,
+    bm25_params: String,
 }
 
 #[derive(Serialize)]
@@ -97,6 +104,10 @@ pub fn run(repo: &Path, queries: &Path, out: &Path, depth: usize) -> Result<()> 
                 seeds: answer.seeds.iter().map(|h| (h.id.clone(), h.score)).collect(),
                 expanded: answer.expanded.iter().map(|h| (h.id.clone(), h.score, h.via.clone().unwrap_or_default())).collect(),
             },
+            q_stems: lexical::stems(&q.q),
+            expect_stems: graph.nodes.get(&q.expect).map(|n| lexical::stems(&format!("{} {} {}", n.id, n.label, n.body))).unwrap_or_default(),
+            q_tokens: lexical::tokenize(&q.q),
+            bm25_params: format!("{:?}", lexical::params()),
         });
         eprintln!("dump: {:<10} {:<14} {}", q.kind, q.expect, q.q);
     }
