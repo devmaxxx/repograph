@@ -1,20 +1,38 @@
 use crate::enrich::Questions;
 use crate::model::{Graph, NodeKind};
 use crate::store::Store;
+use crate::walk::Stamp;
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
 /// Node ids best first, each with the cosine of its best row.
 pub type Scored = Vec<(String, f32)>;
 
+/// Holes tolerated per live row before `sync` compacts. Compaction costs the whole-file rewrite
+/// the append exists to avoid, so it is worth a quarter of the file being dead weight.
+const HOLE_SHARE: usize = 4;
+
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub struct DenseIndex {
+    /// One entry per row of `vectors.f32`, in the file's own order: a row keeps its offset for
+    /// as long as it lives, which is what lets a sync append instead of rewriting 50 MB. A dead
+    /// row holds an empty id until the next compaction closes the gap.
     pub ids: Vec<String>,
     pub hashes: Vec<String>,
     /// True for a generated-question row; stores written before enrichment existed have none.
     #[serde(default)] pub kinds: Vec<bool>,
     pub dim: usize,
+    /// The dead rows, ascending. Left out of the file when there are none, so a store this
+    /// binary wrote and never punched a hole in still reads in one that predates the field.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")] free: Vec<usize>,
     #[serde(skip)] pub vectors: Vec<f32>,
+    /// The live rows, ascending — what `search` scans, so a dead row is not even a branch on
+    /// the hot path.
+    #[serde(skip)] live: Vec<usize>,
+    /// Leading rows of `vectors.f32` that already hold what memory holds, with the stamp of the
+    /// file they were counted in: an append may only extend a file no one else has rewritten.
+    #[serde(skip)] persisted: usize,
+    #[serde(skip)] stamp: Option<Stamp>,
 }
 
 /// Every text embedded for a node, e5-prefixed. The passage is the node itself; each generated
@@ -28,6 +46,11 @@ fn normalise(v: &mut [f32]) {
     let norm = v.iter().map(|x| x * x).sum::<f32>().sqrt();
     if norm > 0.0 { for x in v { *x /= norm; } }
 }
+fn le_bytes(v: &[f32]) -> Vec<u8> {
+    let mut raw = Vec::with_capacity(v.len() * 4);
+    for x in v { raw.extend_from_slice(&x.to_le_bytes()); }
+    raw
+}
 
 impl DenseIndex {
     /// Whether an index is on disk, without reading it: an exact-id or `--no-dense` answer
@@ -39,46 +62,70 @@ impl DenseIndex {
     pub fn load(store: &Store) -> Result<DenseIndex> {
         let Some(meta) = store.read_bytes("vectors.json")? else { return Ok(DenseIndex::default()) };
         let mut idx: DenseIndex = serde_json::from_slice(&meta).context("vectors.json")?;
+        // Stamped before the read, never after: a rewrite racing this read then leaves a stamp
+        // the next save cannot match, and it rewrites the file whole instead of appending to a
+        // prefix that is no longer ours.
+        idx.stamp = store.stamp("vectors.f32");
         let raw = store.read_bytes("vectors.f32")?.unwrap_or_default();
-        #[allow(clippy::chunks_exact_to_as_chunks)]
-        { idx.vectors = raw.chunks_exact(4).map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]])).collect(); }
-        if idx.vectors.len() != idx.ids.len() * idx.dim {
+        let want = idx.ids.len() * idx.dim;
+        if raw.len() / 4 < want {
             // A torn pair of files is treated as no index at all; the next sync rebuilds it.
             return Ok(DenseIndex::default());
         }
+        // Anything past the last row the metadata names is what a crash between an append and
+        // the metadata rename left: unreferenced, and overwritten by the next append.
+        #[allow(clippy::chunks_exact_to_as_chunks)]
+        { idx.vectors = raw[..want * 4].chunks_exact(4).map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]])).collect(); }
+        idx.persisted = idx.ids.len();
+        idx.reindex();
         Ok(idx)
     }
 
-    pub fn save(&self, store: &Store) -> Result<()> {
-        let mut raw = Vec::with_capacity(self.vectors.len() * 4);
-        for x in &self.vectors { raw.extend_from_slice(&x.to_le_bytes()); }
-        store.write_atomic("vectors.f32", &raw)?;
+    /// The per-row arrays lined up with the ids and the live scan order rebuilt. The resize is
+    /// for stores older than the `kinds` field: without it the first appended row would land at
+    /// index 0 of a short array and answer for someone else's row.
+    fn reindex(&mut self) {
+        self.hashes.resize(self.ids.len(), String::new());
+        self.kinds.resize(self.ids.len(), false);
+        let mut dead = vec![false; self.ids.len()];
+        for &i in &self.free { if let Some(d) = dead.get_mut(i) { *d = true; } }
+        self.free = dead.iter().enumerate().filter(|(_, d)| **d).map(|(i, _)| i).collect();
+        self.live = dead.iter().enumerate().filter(|(_, d)| !**d).map(|(i, _)| i).collect();
+    }
+
+    /// The new rows appended and the metadata renamed over the old, in that order: a crash
+    /// between the two leaves rows nothing points at, never metadata pointing at rows that are
+    /// not there. The whole file is rewritten instead when what is in hand is no longer an
+    /// extension of what is on disk — after a compaction, or when another process rewrote it.
+    pub fn save(&mut self, store: &Store) -> Result<()> {
+        let kept = self.persisted * self.dim;
+        let extends = self.persisted > 0 && kept <= self.vectors.len()
+            && self.stamp.is_some() && self.stamp == store.stamp("vectors.f32");
+        if extends {
+            store.append_after("vectors.f32", kept as u64 * 4, &le_bytes(&self.vectors[kept..]))?;
+        } else {
+            store.write_atomic("vectors.f32", &le_bytes(&self.vectors))?;
+        }
+        self.persisted = self.ids.len();
+        self.stamp = store.stamp("vectors.f32");
         store.write_atomic("vectors.json", &serde_json::to_vec(self)?)
     }
 
     #[allow(clippy::type_complexity)]
     pub fn sync(&mut self, graph: &Graph, questions: &Questions, embed: &mut dyn FnMut(&[String]) -> Result<Vec<Vec<f32>>>) -> Result<usize> {
-        let mut keep_ids = Vec::new();
-        let mut keep_hashes = Vec::new();
-        let mut keep_kinds = Vec::new();
-        let mut todo_kinds = Vec::new();
-        let mut keep_vecs: Vec<f32> = Vec::new();
+        let mut alive = vec![false; self.ids.len()];
         let mut todo_ids = Vec::new();
         let mut todo_texts = Vec::new();
         let mut todo_hashes = Vec::new();
+        let mut todo_kinds = Vec::new();
         let old: std::collections::HashMap<(&str, &str), usize> =
-            self.ids.iter().enumerate().map(|(i, id)| ((id.as_str(), self.hashes[i].as_str()), i)).collect();
+            self.live.iter().map(|&i| ((self.ids[i].as_str(), self.hashes[i].as_str()), i)).collect();
         for n in graph.nodes.values().filter(|n| n.kind != NodeKind::File) {
             for text in rows(n, questions) {
                 let hash = blake3::hash(text.as_bytes()).to_hex().to_string();
                 let is_q = text.starts_with("query: ");
                 match old.get(&(n.id.as_str(), hash.as_str())).copied() {
-                    Some(i) if self.dim > 0 => {
-                        keep_ids.push(n.id.clone());
-                        keep_hashes.push(hash);
-                        keep_kinds.push(is_q);
-                        keep_vecs.extend_from_slice(&self.vectors[i * self.dim..(i + 1) * self.dim]);
-                    }
+                    Some(i) if self.dim > 0 => alive[i] = true,
                     _ => { todo_ids.push(n.id.clone()); todo_texts.push(text); todo_hashes.push(hash); todo_kinds.push(is_q); }
                 }
             }
@@ -87,20 +134,54 @@ impl DenseIndex {
         if embedded > 0 {
             let mut vecs = embed(&todo_texts)?;
             for v in vecs.iter_mut() { normalise(v); }
-            self.dim = vecs.first().map(|v| v.len()).unwrap_or(self.dim);
+            let dim = vecs.first().map(|v| v.len()).unwrap_or(self.dim);
+            // A model of another width invalidates every stored offset, so the old rows cannot
+            // be appended to — they go, and the file is rewritten from the new ones alone.
+            if self.dim > 0 && dim != self.dim {
+                self.ids.clear(); self.hashes.clear(); self.kinds.clear(); self.vectors.clear();
+                alive.clear();
+                self.persisted = 0;
+            }
+            self.dim = dim;
             for ((id, (hash, v)), is_q) in todo_ids.into_iter().zip(todo_hashes.into_iter().zip(vecs)).zip(todo_kinds) {
-                keep_ids.push(id);
-                keep_hashes.push(hash);
-                keep_kinds.push(is_q);
-                keep_vecs.extend_from_slice(&v);
+                self.ids.push(id);
+                self.hashes.push(hash);
+                self.kinds.push(is_q);
+                self.vectors.extend_from_slice(&v);
+                alive.push(true);
             }
         }
-        self.ids = keep_ids;
-        self.hashes = keep_hashes;
-        self.kinds = keep_kinds;
-        self.vectors = keep_vecs;
-        if self.ids.is_empty() { self.dim = 0; }
+        self.free = alive.iter().enumerate().filter(|(_, a)| !**a).map(|(i, _)| i).collect();
+        // A hole keeps its row's floats — that is what holds the offsets still — but not its
+        // identity: nothing may match it again, and the metadata is rewritten on every save.
+        for &i in &self.free { self.ids[i].clear(); self.hashes[i].clear(); self.kinds[i] = false; }
+        self.reindex();
+        if self.free.len() * HOLE_SHARE > self.live.len() { self.compact(); }
         Ok(embedded)
+    }
+
+    /// The live rows closed up. Every offset moves, so the next save rewrites both files whole,
+    /// exactly as every save did before the rows became append-only.
+    fn compact(&mut self) {
+        let live = std::mem::take(&mut self.live);
+        let mut vectors = Vec::with_capacity(live.len() * self.dim);
+        let mut ids = Vec::with_capacity(live.len());
+        let mut hashes = Vec::with_capacity(live.len());
+        let mut kinds = Vec::with_capacity(live.len());
+        for &i in &live {
+            vectors.extend_from_slice(&self.vectors[i * self.dim..(i + 1) * self.dim]);
+            ids.push(std::mem::take(&mut self.ids[i]));
+            hashes.push(std::mem::take(&mut self.hashes[i]));
+            kinds.push(self.kinds[i]);
+        }
+        self.ids = ids;
+        self.hashes = hashes;
+        self.kinds = kinds;
+        self.vectors = vectors;
+        self.free.clear();
+        self.live = (0..self.ids.len()).collect();
+        self.persisted = 0;
+        if self.ids.is_empty() { self.dim = 0; }
     }
 
     /// The passage rows and the question rows ranked separately, a node once per list by its
@@ -117,11 +198,11 @@ impl DenseIndex {
         if self.dim == 0 || query.len() != self.dim { return (Vec::new(), Vec::new()); }
         let mut q = query.to_vec();
         normalise(&mut q);
-        let mut rows: Vec<(f32, &str, bool)> = self.ids.iter().enumerate()
-            .filter(|(i, _)| exclude.is_none_or(|h| self.hashes.get(*i).is_none_or(|x| x != h)))
-            .map(|(i, id)| {
+        let mut rows: Vec<(f32, &str, bool)> = self.live.iter().copied()
+            .filter(|&i| exclude.is_none_or(|h| self.hashes[i] != *h))
+            .map(|i| {
                 let v = &self.vectors[i * self.dim..(i + 1) * self.dim];
-                (v.iter().zip(&q).map(|(a, b)| a * b).sum::<f32>(), id.as_str(), self.kinds.get(i).copied().unwrap_or(false))
+                (v.iter().zip(&q).map(|(a, b)| a * b).sum::<f32>(), self.ids[i].as_str(), self.kinds[i])
             }).collect();
         rows.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap().then(a.1.cmp(b.1)));
         let pick = |want: bool| -> Scored {
@@ -147,6 +228,20 @@ mod tests {
         g
     }
 
+    /// Ten nodes with distinct three-byte labels, `edited` of them carrying a body that differs
+    /// from the default one. Wide enough that a handful of holes stays under the compaction
+    /// share, which is what the append path needs to be observable.
+    fn wide(edited: u32) -> Graph {
+        let mut g = Graph::default();
+        let mut e = Extraction::default();
+        for i in 0..10u32 {
+            let body = if i < edited { "изменённое" } else { "тело" };
+            e.node(NodeKind::Requirement, &format!("FR-W-{i}"), &format!("n{i}x"), body, "w.md", i + 1);
+        }
+        g.apply(e);
+        g
+    }
+
     /// A stand-in embedder: a 3-d vector from the first three bytes after the e5 prefix, so
     /// tests are deterministic.
     fn fake(texts: &[String]) -> Result<Vec<Vec<f32>>> {
@@ -154,6 +249,12 @@ mod tests {
             let b = t.split_once(": ").map(|x| x.1).unwrap_or(t).as_bytes();
             vec![b[0] as f32, b.get(1).copied().unwrap_or(0) as f32, b.get(2).copied().unwrap_or(0) as f32]
         }).collect())
+    }
+
+    fn synced(g: &Graph) -> DenseIndex {
+        let mut idx = DenseIndex::default();
+        idx.sync(g, &Questions::default(), &mut fake).unwrap();
+        idx
     }
 
     #[test]
@@ -171,10 +272,104 @@ mod tests {
 
     #[test]
     fn search_is_cosine_descending() {
-        let mut idx = DenseIndex::default();
-        idx.sync(&graph("x"), &Questions::default(), &mut fake).unwrap();
+        let idx = synced(&graph("x"));
         let q = fake(&["штраф".to_string()]).unwrap().remove(0);
         assert_eq!(idx.search(&q, 2).0[0], "FR-PAY-26");
+    }
+
+    #[test]
+    fn an_append_leaves_the_surviving_rows_at_their_offsets() {
+        let mut idx = synced(&wide(0));
+        let before = idx.vectors.clone();
+        assert_eq!(idx.sync(&wide(1), &Questions::default(), &mut fake).unwrap(), 1);
+        assert_eq!(idx.free, vec![0]);
+        assert_eq!(idx.ids.len(), 11);
+        assert_eq!(idx.vectors[idx.dim..before.len()], before[idx.dim..]);
+        assert_eq!(idx.ids[10], "FR-W-0");
+        assert_eq!(idx.live, (1..11).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn a_dead_row_is_never_returned() {
+        let mut idx = synced(&wide(0));
+        let stale = fake(&["passage: n0x\nтело".to_string()]).unwrap().remove(0);
+        idx.sync(&wide(1), &Questions::default(), &mut fake).unwrap();
+        let (passages, _) = idx.search(&stale, 20);
+        assert_eq!(passages.len(), 10, "one row per live node, the hole scanned by nobody");
+        assert!(!passages.iter().any(|id| id.is_empty()));
+    }
+
+    #[test]
+    fn compaction_fires_past_the_hole_share_and_searches_identically() {
+        let mut idx = synced(&wide(0));
+        // Three of ten rows die at once: past a quarter of the live rows, so the holes close.
+        idx.sync(&wide(3), &Questions::default(), &mut fake).unwrap();
+        assert!(idx.free.is_empty());
+        assert_eq!(idx.ids.len(), 10);
+        let fresh = synced(&wide(3));
+        let q = fake(&["passage: n7x\nтело".to_string()]).unwrap().remove(0);
+        assert_eq!(idx.search_scored(&q, 10, None), fresh.search_scored(&q, 10, None));
+    }
+
+    #[test]
+    fn an_append_saves_without_rewriting_the_rows_already_on_disk() {
+        let d = tempfile::tempdir().unwrap();
+        let store = Store::new(d.path());
+        let mut idx = synced(&wide(0));
+        idx.save(&store).unwrap();
+        let rows = d.path().join(".repograph/vectors.f32");
+        let before = std::fs::read(&rows).unwrap();
+        idx.sync(&wide(1), &Questions::default(), &mut fake).unwrap();
+        idx.save(&store).unwrap();
+        let after = std::fs::read(&rows).unwrap();
+        assert_eq!(after.len(), before.len() + idx.dim * 4, "one row longer, nothing rewritten");
+        assert_eq!(after[..before.len()], before[..]);
+        let back = DenseIndex::load(&store).unwrap();
+        let q = fake(&["passage: n4x\nтело".to_string()]).unwrap().remove(0);
+        assert_eq!(back.free, vec![0]);
+        assert_eq!(back.search_scored(&q, 10, None), idx.search_scored(&q, 10, None));
+    }
+
+    #[test]
+    fn a_store_written_before_the_holes_field_loads_unchanged() {
+        let d = tempfile::tempdir().unwrap();
+        let store = Store::new(d.path());
+        let idx = synced(&graph("x"));
+        // Neither `kinds` nor `free`, as the first release wrote it.
+        let meta = serde_json::json!({ "ids": idx.ids, "hashes": idx.hashes, "dim": idx.dim });
+        store.write_atomic("vectors.json", &serde_json::to_vec(&meta).unwrap()).unwrap();
+        store.write_atomic("vectors.f32", &le_bytes(&idx.vectors)).unwrap();
+        let back = DenseIndex::load(&store).unwrap();
+        assert_eq!(back.kinds, vec![false, false]);
+        let q = fake(&["штраф".to_string()]).unwrap().remove(0);
+        assert_eq!(back.search(&q, 2).0[0], "FR-PAY-26");
+    }
+
+    #[test]
+    fn a_store_with_no_holes_serialises_without_the_holes_field() {
+        let idx = synced(&graph("x"));
+        let json = String::from_utf8(serde_json::to_vec(&idx).unwrap()).unwrap();
+        assert!(!json.contains("free"), "{json}");
+    }
+
+    #[test]
+    fn rows_left_by_a_crash_before_the_metadata_rename_are_ignored_then_overwritten() {
+        let d = tempfile::tempdir().unwrap();
+        let store = Store::new(d.path());
+        let mut idx = synced(&wide(0));
+        idx.save(&store).unwrap();
+        let rows = d.path().join(".repograph/vectors.f32");
+        let good = std::fs::read(&rows).unwrap();
+        // What an append interrupted before its metadata reached disk leaves behind.
+        std::fs::write(&rows, [good.clone(), le_bytes(&[9.0, 9.0, 9.0])].concat()).unwrap();
+        let mut back = DenseIndex::load(&store).unwrap();
+        assert_eq!(back.vectors.len(), 10 * back.dim);
+        let q = fake(&["passage: n4x\nтело".to_string()]).unwrap().remove(0);
+        assert_eq!(back.search_scored(&q, 10, None), idx.search_scored(&q, 10, None));
+        back.sync(&wide(1), &Questions::default(), &mut fake).unwrap();
+        back.save(&store).unwrap();
+        assert_eq!(std::fs::metadata(&rows).unwrap().len() as usize, good.len() + back.dim * 4);
+        assert_eq!(DenseIndex::load(&store).unwrap().ids, back.ids);
     }
 
     // The fake embeds the first three bytes, so a question row starting with "query: " lands far
@@ -219,8 +414,7 @@ mod tests {
     fn round_trips_through_the_store() {
         let d = tempfile::tempdir().unwrap();
         let store = Store::new(d.path());
-        let mut idx = DenseIndex::default();
-        idx.sync(&graph("x"), &Questions::default(), &mut fake).unwrap();
+        let mut idx = synced(&graph("x"));
         idx.save(&store).unwrap();
         let back = DenseIndex::load(&store).unwrap();
         assert_eq!(back.ids, idx.ids);
@@ -239,8 +433,7 @@ mod tests {
     fn a_torn_pair_missing_its_vectors_file_is_treated_as_no_index() {
         let d = tempfile::tempdir().unwrap();
         let store = Store::new(d.path());
-        let mut idx = DenseIndex::default();
-        idx.sync(&graph("x"), &Questions::default(), &mut fake).unwrap();
+        let idx = synced(&graph("x"));
         // Only the metadata half is written, simulating a write interrupted between the two files.
         store.write_atomic("vectors.json", &serde_json::to_vec(&idx).unwrap()).unwrap();
         let back = DenseIndex::load(&store).unwrap();
@@ -252,24 +445,21 @@ mod tests {
         let d = tempfile::tempdir().unwrap();
         let store = Store::new(d.path());
         assert!(!DenseIndex::present(&store));
-        let mut idx = DenseIndex::default();
-        idx.sync(&graph("x"), &Questions::default(), &mut fake).unwrap();
+        let mut idx = synced(&graph("x"));
         idx.save(&store).unwrap();
         assert!(DenseIndex::present(&store));
     }
 
     #[test]
     fn a_query_of_the_wrong_dimension_yields_empty_lists_not_a_panic() {
-        let mut idx = DenseIndex::default();
-        idx.sync(&graph("x"), &Questions::default(), &mut fake).unwrap();
+        let idx = synced(&graph("x"));
         let (passages, generated) = idx.search(&[1.0, 2.0], 5);
         assert!(passages.is_empty() && generated.is_empty());
     }
 
     #[test]
     fn k_larger_than_the_collection_returns_every_row_without_padding() {
-        let mut idx = DenseIndex::default();
-        idx.sync(&graph("x"), &Questions::default(), &mut fake).unwrap();
+        let idx = synced(&graph("x"));
         let q = fake(&["штраф".to_string()]).unwrap().remove(0);
         let (passages, _) = idx.search(&q, 1000);
         assert_eq!(passages.len(), 2);
@@ -283,8 +473,7 @@ mod tests {
         e.node(NodeKind::Requirement, "FR-PAY-99", "same", "z", "a.md", 1);
         e.node(NodeKind::Requirement, "FR-PAY-11", "same", "z", "a.md", 2);
         g.apply(e);
-        let mut idx = DenseIndex::default();
-        idx.sync(&g, &Questions::default(), &mut fake).unwrap();
+        let idx = synced(&g);
         let q = fake(&["z".to_string()]).unwrap().remove(0);
         let (passages, _) = idx.search(&q, 5);
         assert_eq!(passages, vec!["FR-PAY-11".to_string(), "FR-PAY-99".to_string()]);

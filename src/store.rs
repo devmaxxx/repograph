@@ -39,6 +39,23 @@ impl Store {
         Ok(())
     }
 
+    /// Extends a store file whose first `keep` bytes the caller still stands behind, dropping
+    /// whatever follows them: bytes past that point are what an interrupted write left, and no
+    /// metadata names them. Durable before it returns, so the metadata written next never
+    /// points at rows a crash could still lose.
+    pub fn append_after(&self, name: &str, keep: u64, bytes: &[u8]) -> Result<()> {
+        use std::io::{Seek, SeekFrom, Write};
+        std::fs::create_dir_all(&self.dir)?;
+        let p = self.dir.join(name);
+        let mut f = std::fs::OpenOptions::new().write(true).create(true).truncate(false).open(&p)
+            .with_context(|| format!("open {}", p.display()))?;
+        f.set_len(keep).with_context(|| format!("truncate {}", p.display()))?;
+        f.seek(SeekFrom::Start(keep))?;
+        f.write_all(bytes).with_context(|| format!("append {}", p.display()))?;
+        f.sync_all()?;
+        Ok(())
+    }
+
     /// Whether a store file is there with something in it — a metadata read, so a caller can
     /// decide about a 50 MB file without loading it.
     pub fn has(&self, name: &str) -> bool {
@@ -153,6 +170,15 @@ mod tests {
         assert_eq!(s.read_bytes("vectors.f32").unwrap().as_deref(), Some(&b"v"[..]));
         assert_eq!(s.read_bytes("questions.json").unwrap().as_deref(), Some(&b"{}"[..]));
         s.wipe().unwrap();
+    }
+
+    #[test]
+    fn append_after_cuts_the_file_back_to_the_kept_bytes_before_extending_it() {
+        let d = tempfile::tempdir().unwrap();
+        let store = Store::new(d.path());
+        store.write_atomic("vectors.f32", b"keepGARBAGE").unwrap();
+        store.append_after("vectors.f32", 4, b"more").unwrap();
+        assert_eq!(store.read_bytes("vectors.f32").unwrap().as_deref(), Some(&b"keepmore"[..]));
     }
 
     #[test]
