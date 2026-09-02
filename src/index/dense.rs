@@ -228,6 +228,20 @@ mod tests {
         g
     }
 
+    /// Ten nodes with distinct three-byte labels, `edited` of them carrying a body that differs
+    /// from the default one. Wide enough that a handful of holes stays under the compaction
+    /// share, which is what the append path needs to be observable.
+    fn wide(edited: u32) -> Graph {
+        let mut g = Graph::default();
+        let mut e = Extraction::default();
+        for i in 0..10u32 {
+            let body = if i < edited { "изменённое" } else { "тело" };
+            e.node(NodeKind::Requirement, &format!("FR-W-{i}"), &format!("n{i}x"), body, "w.md", i + 1);
+        }
+        g.apply(e);
+        g
+    }
+
     /// A stand-in embedder: a 3-d vector from the first three bytes after the e5 prefix, so
     /// tests are deterministic.
     fn fake(texts: &[String]) -> Result<Vec<Vec<f32>>> {
@@ -261,6 +275,101 @@ mod tests {
         let idx = synced(&graph("x"));
         let q = fake(&["штраф".to_string()]).unwrap().remove(0);
         assert_eq!(idx.search(&q, 2).0[0], "FR-PAY-26");
+    }
+
+    #[test]
+    fn an_append_leaves_the_surviving_rows_at_their_offsets() {
+        let mut idx = synced(&wide(0));
+        let before = idx.vectors.clone();
+        assert_eq!(idx.sync(&wide(1), &Questions::default(), &mut fake).unwrap(), 1);
+        assert_eq!(idx.free, vec![0]);
+        assert_eq!(idx.ids.len(), 11);
+        assert_eq!(idx.vectors[idx.dim..before.len()], before[idx.dim..]);
+        assert_eq!(idx.ids[10], "FR-W-0");
+        assert_eq!(idx.live, (1..11).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn a_dead_row_is_never_returned() {
+        let mut idx = synced(&wide(0));
+        let stale = fake(&["passage: n0x\nтело".to_string()]).unwrap().remove(0);
+        idx.sync(&wide(1), &Questions::default(), &mut fake).unwrap();
+        let (passages, _) = idx.search(&stale, 20);
+        assert_eq!(passages.len(), 10, "one row per live node, the hole scanned by nobody");
+        assert!(!passages.iter().any(|id| id.is_empty()));
+    }
+
+    #[test]
+    fn compaction_fires_past_the_hole_share_and_searches_identically() {
+        let mut idx = synced(&wide(0));
+        // Three of ten rows die at once: past a quarter of the live rows, so the holes close.
+        idx.sync(&wide(3), &Questions::default(), &mut fake).unwrap();
+        assert!(idx.free.is_empty());
+        assert_eq!(idx.ids.len(), 10);
+        let fresh = synced(&wide(3));
+        let q = fake(&["passage: n7x\nтело".to_string()]).unwrap().remove(0);
+        assert_eq!(idx.search_scored(&q, 10, None), fresh.search_scored(&q, 10, None));
+    }
+
+    #[test]
+    fn an_append_saves_without_rewriting_the_rows_already_on_disk() {
+        let d = tempfile::tempdir().unwrap();
+        let store = Store::new(d.path());
+        let mut idx = synced(&wide(0));
+        idx.save(&store).unwrap();
+        let rows = d.path().join(".repograph/vectors.f32");
+        let before = std::fs::read(&rows).unwrap();
+        idx.sync(&wide(1), &Questions::default(), &mut fake).unwrap();
+        idx.save(&store).unwrap();
+        let after = std::fs::read(&rows).unwrap();
+        assert_eq!(after.len(), before.len() + idx.dim * 4, "one row longer, nothing rewritten");
+        assert_eq!(after[..before.len()], before[..]);
+        let back = DenseIndex::load(&store).unwrap();
+        let q = fake(&["passage: n4x\nтело".to_string()]).unwrap().remove(0);
+        assert_eq!(back.free, vec![0]);
+        assert_eq!(back.search_scored(&q, 10, None), idx.search_scored(&q, 10, None));
+    }
+
+    #[test]
+    fn a_store_written_before_the_holes_field_loads_unchanged() {
+        let d = tempfile::tempdir().unwrap();
+        let store = Store::new(d.path());
+        let idx = synced(&graph("x"));
+        // Neither `kinds` nor `free`, as the first release wrote it.
+        let meta = serde_json::json!({ "ids": idx.ids, "hashes": idx.hashes, "dim": idx.dim });
+        store.write_atomic("vectors.json", &serde_json::to_vec(&meta).unwrap()).unwrap();
+        store.write_atomic("vectors.f32", &le_bytes(&idx.vectors)).unwrap();
+        let back = DenseIndex::load(&store).unwrap();
+        assert_eq!(back.kinds, vec![false, false]);
+        let q = fake(&["штраф".to_string()]).unwrap().remove(0);
+        assert_eq!(back.search(&q, 2).0[0], "FR-PAY-26");
+    }
+
+    #[test]
+    fn a_store_with_no_holes_serialises_without_the_holes_field() {
+        let idx = synced(&graph("x"));
+        let json = String::from_utf8(serde_json::to_vec(&idx).unwrap()).unwrap();
+        assert!(!json.contains("free"), "{json}");
+    }
+
+    #[test]
+    fn rows_left_by_a_crash_before_the_metadata_rename_are_ignored_then_overwritten() {
+        let d = tempfile::tempdir().unwrap();
+        let store = Store::new(d.path());
+        let mut idx = synced(&wide(0));
+        idx.save(&store).unwrap();
+        let rows = d.path().join(".repograph/vectors.f32");
+        let good = std::fs::read(&rows).unwrap();
+        // What an append interrupted before its metadata reached disk leaves behind.
+        std::fs::write(&rows, [good.clone(), le_bytes(&[9.0, 9.0, 9.0])].concat()).unwrap();
+        let mut back = DenseIndex::load(&store).unwrap();
+        assert_eq!(back.vectors.len(), 10 * back.dim);
+        let q = fake(&["passage: n4x\nтело".to_string()]).unwrap().remove(0);
+        assert_eq!(back.search_scored(&q, 10, None), idx.search_scored(&q, 10, None));
+        back.sync(&wide(1), &Questions::default(), &mut fake).unwrap();
+        back.save(&store).unwrap();
+        assert_eq!(std::fs::metadata(&rows).unwrap().len() as usize, good.len() + back.dim * 4);
+        assert_eq!(DenseIndex::load(&store).unwrap().ids, back.ids);
     }
 
     // The fake embeds the first three bytes, so a question row starting with "query: " lands far
