@@ -81,6 +81,8 @@ retrieval question, not a fusion one. Three retrieval levers were then measured 
 interleave, each against the same eight misses: `MultilingualE5Base` 6/14 (a different six —
 `FR-AI-102` and `FR-AI-21` in, `FR-TOOL-22` and `FR-SVC-39` out) at p90 225; a 512-token passage
 cut 5/14 at 269 s of embedding against 132 s; a label-only second vector per node with max scoring
-6/14 at 244 s. None is adopted. The eight misses are the same under every variant, which points at
-the model's distance between these questions and their targets rather than at anything the index
-does with the vectors.
+6/14 at 244 s; `BGEM3` 5/14 at 1,454 s; the quantized paraphrase MiniLM 2/14 with keyword down to
+21/24. None is adopted. Six of the eight misses are shared by every E5 variant and the two that
+move (`FR-AI-102`, `FR-AI-21`, `FR-TOOL-18` under the larger models) come at the price of others,
+which points at the model's distance between these questions and their targets rather than at
+anything the index does with the vectors.
