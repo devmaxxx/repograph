@@ -227,4 +227,66 @@ mod tests {
         assert_eq!(back.vectors, idx.vectors);
         assert_eq!(back.dim, 3);
     }
+
+    #[test]
+    fn loading_with_nothing_on_disk_yields_a_default_index() {
+        let d = tempfile::tempdir().unwrap();
+        let idx = DenseIndex::load(&Store::new(d.path())).unwrap();
+        assert!(idx.ids.is_empty() && idx.vectors.is_empty() && idx.dim == 0);
+    }
+
+    #[test]
+    fn a_torn_pair_missing_its_vectors_file_is_treated_as_no_index() {
+        let d = tempfile::tempdir().unwrap();
+        let store = Store::new(d.path());
+        let mut idx = DenseIndex::default();
+        idx.sync(&graph("x"), &Questions::default(), &mut fake).unwrap();
+        // Only the metadata half is written, simulating a write interrupted between the two files.
+        store.write_atomic("vectors.json", &serde_json::to_vec(&idx).unwrap()).unwrap();
+        let back = DenseIndex::load(&store).unwrap();
+        assert!(back.ids.is_empty() && back.vectors.is_empty());
+    }
+
+    #[test]
+    fn present_requires_both_files_to_be_non_empty() {
+        let d = tempfile::tempdir().unwrap();
+        let store = Store::new(d.path());
+        assert!(!DenseIndex::present(&store));
+        let mut idx = DenseIndex::default();
+        idx.sync(&graph("x"), &Questions::default(), &mut fake).unwrap();
+        idx.save(&store).unwrap();
+        assert!(DenseIndex::present(&store));
+    }
+
+    #[test]
+    fn a_query_of_the_wrong_dimension_yields_empty_lists_not_a_panic() {
+        let mut idx = DenseIndex::default();
+        idx.sync(&graph("x"), &Questions::default(), &mut fake).unwrap();
+        let (passages, generated) = idx.search(&[1.0, 2.0], 5);
+        assert!(passages.is_empty() && generated.is_empty());
+    }
+
+    #[test]
+    fn k_larger_than_the_collection_returns_every_row_without_padding() {
+        let mut idx = DenseIndex::default();
+        idx.sync(&graph("x"), &Questions::default(), &mut fake).unwrap();
+        let q = fake(&["штраф".to_string()]).unwrap().remove(0);
+        let (passages, _) = idx.search(&q, 1000);
+        assert_eq!(passages.len(), 2);
+    }
+
+    #[test]
+    fn equal_cosine_scores_break_ties_by_id_ascending() {
+        let mut g = Graph::default();
+        let mut e = Extraction::default();
+        // Same label and body embed to the exact same fake vector, so their cosine ties.
+        e.node(NodeKind::Requirement, "FR-PAY-99", "same", "z", "a.md", 1);
+        e.node(NodeKind::Requirement, "FR-PAY-11", "same", "z", "a.md", 2);
+        g.apply(e);
+        let mut idx = DenseIndex::default();
+        idx.sync(&g, &Questions::default(), &mut fake).unwrap();
+        let q = fake(&["z".to_string()]).unwrap().remove(0);
+        let (passages, _) = idx.search(&q, 5);
+        assert_eq!(passages, vec!["FR-PAY-11".to_string(), "FR-PAY-99".to_string()]);
+    }
 }
