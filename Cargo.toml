@@ -12,7 +12,7 @@ anyhow = "=1.0.104"
 blake3 = "=1.8.7"
 clap = { version = "=4.6.6", features = ["derive"] }
 globset = "=0.4.20"
-fastembed = "=6.0.2"
+hf-hub = { version = "=0.5.0", default-features = false, features = ["ureq", "native-tls"] }
 ignore = "=0.4.33"
 rayon = "=1.12.0"
 regex = "=1.13.1"
@@ -20,8 +20,10 @@ rust-stemmers = "=1.2.0"
 serde = { version = "=1.0.229", features = ["derive"] }
 serde_json = "=1.0.151"
 serde_yaml = "=0.9.34"
+ort = { version = "=2.0.0-rc.13", default-features = false, features = ["std", "api-24", "download-binaries", "tls-native"] }
 streaming-iterator = "=0.1.9"
 toml = "=1.1.4"
+tokenizers = { version = "=0.22.2", default-features = false, features = ["onig"] }
 tree-sitter = "=0.27.0"
 tree-sitter-typescript = "=0.23.2"
 

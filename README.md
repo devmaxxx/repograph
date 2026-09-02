@@ -242,16 +242,17 @@ heading form; the modality is optional.
 
 ## Embeddings
 
-Dense retrieval embeds with `fastembed`'s `MultilingualE5Small` (`intfloat/multilingual-e5-small`,
-384-d, ONNX, ≈470 MB on disk) — a one-time download cached under `FASTEMBED_CACHE_DIR` if that is
-set, else `~/.cache/repograph/fastembed`. (fastembed's own default is `.fastembed_cache` relative to
-the current directory, which downloads a copy per directory and fails on a read-only one; `repograph`
-does not use it.) Every command that touches the dense stage — `build`, `update`, `ask`, `bench` —
+Dense retrieval embeds with `intfloat/multilingual-e5-small` (384-d, ONNX, ≈470 MB on disk) run
+through `ort` directly: the tokenizer and the session open concurrently at optimisation level 1,
+which halves model-open time against the library default. The files are a one-time Hugging Face
+download cached under `FASTEMBED_CACHE_DIR` if that is set, else `~/.cache/repograph/fastembed`
+(the layout is the hub client's, so a cache populated by an earlier release is reused as is). Every
+command that touches the dense stage — `build`, `update`, `ask`, `bench` —
 reuses the cache; there are no further network calls once it is populated. `--no-dense` skips the
 download and the embedding stage everywhere.
 
 `ask` opens the model only when a fused query needs it: an exact id or symbol lookup answers in
-~30 ms and ~50 MB, a fused query in ~0.75 s and ~1.4 GB — the model, not the graph.
+~30 ms and ~50 MB, a fused query in ~0.5 s and ~1.4 GB — the model, not the graph.
 
 Five embedding-side levers were measured on the same corpus and cases and none moved recall past
 6/14: the larger `MultilingualE5Base` (768-d, ≈1.1 GB, 2.4× the download) scores 6/14 with a

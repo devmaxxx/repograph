@@ -2,7 +2,6 @@ use crate::model::{Graph, NodeKind};
 use crate::store::Store;
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
 
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub struct DenseIndex {
@@ -11,8 +10,6 @@ pub struct DenseIndex {
     pub dim: usize,
     #[serde(skip)] pub vectors: Vec<f32>,
 }
-
-pub struct Embedder { model: fastembed::TextEmbedding }
 
 fn passage(n: &crate::model::Node) -> String { format!("{}\n{}", n.label, n.body) }
 
@@ -92,36 +89,6 @@ impl DenseIndex {
         }).collect();
         scored.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap().then(a.1.cmp(b.1)));
         scored.into_iter().take(k).map(|(_, id)| id.to_string()).collect()
-    }
-}
-
-/// fastembed's own default is `.fastembed_cache` under the current directory, which re-downloads
-/// 470 MB per directory `repograph` is run from and fails outright on a read-only one.
-fn cache_dir() -> Result<PathBuf> {
-    if let Some(dir) = std::env::var_os("FASTEMBED_CACHE_DIR") {
-        return Ok(PathBuf::from(dir));
-    }
-    let home = std::env::var_os("HOME").context("neither FASTEMBED_CACHE_DIR nor HOME is set")?;
-    Ok(PathBuf::from(home).join(".cache").join("repograph").join("fastembed"))
-}
-
-impl Embedder {
-    pub fn open() -> Result<Embedder> {
-        use fastembed::{EmbeddingModel, TextEmbedding, TextInitOptions};
-        let opts = TextInitOptions::new(EmbeddingModel::MultilingualE5Small)
-            .with_cache_dir(cache_dir()?)
-            .with_show_download_progress(true)
-            .with_max_length(256);
-        Ok(Embedder { model: TextEmbedding::try_new(opts).context("open embedding model")? })
-    }
-
-    pub fn passages(&mut self, texts: &[String]) -> Result<Vec<Vec<f32>>> {
-        let prefixed: Vec<String> = texts.iter().map(|t| format!("passage: {t}")).collect();
-        Ok(self.model.embed(&prefixed, Some(64))?)
-    }
-
-    pub fn query(&mut self, text: &str) -> Result<Vec<f32>> {
-        Ok(self.model.embed(&[format!("query: {text}")], None)?.remove(0))
     }
 }
 

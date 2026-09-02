@@ -106,9 +106,9 @@ fn extractors(repo: &std::path::Path, cfg: &config::Config) -> anyhow::Result<Ex
     })
 }
 
-fn open_embedder(no_dense: bool) -> Option<index::dense::Embedder> {
+fn open_embedder(no_dense: bool) -> Option<index::embed::Embedder> {
     if no_dense { return None; }
-    match index::dense::Embedder::open() {
+    match index::embed::Embedder::open() {
         Ok(e) => Some(e),
         Err(err) => { eprintln!("dense: model unavailable, continuing lexical-only ({err:#})"); None }
     }
@@ -145,7 +145,7 @@ fn main() -> anyhow::Result<()> {
             let dense_idx = index::dense::DenseIndex::load(&store)?;
             // Opening the ONNX model costs ~0.6 s and 1.3 GB; an exact id or symbol match never
             // asks for it, so it is opened on the first fused query, not on every `ask`.
-            let embedder: std::cell::RefCell<Option<Option<index::dense::Embedder>>> = std::cell::RefCell::new(None);
+            let embedder: std::cell::RefCell<Option<Option<index::embed::Embedder>>> = std::cell::RefCell::new(None);
             let dense_fn = |q: &str, k: usize| -> Vec<String> {
                 let mut slot = embedder.borrow_mut();
                 let e = slot.get_or_insert_with(|| open_embedder(cli.no_dense));

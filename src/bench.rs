@@ -1,6 +1,7 @@
 use crate::config::Config;
 use crate::ids::IdMatcher;
-use crate::index::dense::{DenseIndex, Embedder};
+use crate::index::dense::DenseIndex;
+use crate::index::embed::Embedder;
 use crate::model::Graph;
 use crate::query::{self, Answer, Options};
 use crate::store::Store;
