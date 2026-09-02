@@ -27,8 +27,12 @@ impl RequirementScanner {
         let id = ids.single_pattern();
         RequirementScanner {
             ids,
+            // The title stops where a bold head's `**` closes (136 heads on the bench corpus
+            // carry references after it — that tail opens the body, so no word is lost to
+            // retrieval) and before a modality hung off a dash (71 heads write
+            // `· title — MUST` instead of `· MUST · title`).
             head: Regex::new(&format!(
-                r"^(?:#{{1,6}}\s+|\*\*|\s*[-*]\s+\*\*)?({id})\s*·\s*(?:(MUST|SHOULD|LATER)\s*·\s*)?(.*?)\s*\**\s*$"
+                r"^(?:#{{1,6}}\s+|\*\*|\s*[-*]\s+\*\*)?({id})\s*·\s*(?:(MUST|SHOULD|LATER)\s*·\s*)?(.*?)\s*(?:[—–-]\s*(?:MUST|SHOULD|LATER))?\s*(?:\*\*(.*))?\s*\**\s*$"
             )).unwrap(),
             entity: Regex::new(r"`([A-Za-z][A-Za-z0-9_.]*)`").unwrap(),
             task: Regex::new(r"^\s*-\s+\[[ xX]\]\s+\*\*(T\d{2,3})\*\*\s*(.*)$").unwrap(),
@@ -42,26 +46,35 @@ impl RequirementScanner {
         let file_id = format!("file:{rel}");
         ex.node(NodeKind::File, &file_id, rel, "", rel, 1);
 
-        let lines: Vec<&str> = text.lines().collect();
-        let mut heads: Vec<(usize, String, String)> = Vec::new();
+        // An editor's byte-order mark would otherwise hide the first head from `^`.
+        let lines: Vec<&str> = text.trim_start_matches('\u{feff}').lines().collect();
+        let mut heads: Vec<(usize, String, String, String)> = Vec::new();
+        let mut fenced = false;
         for (i, line) in lines.iter().enumerate() {
+            // A head quoted inside a code fence is an example of the dialect, not a requirement.
+            if line.trim_start().starts_with("```") { fenced = !fenced; continue; }
+            if fenced { continue; }
             if let Some(c) = self.head.captures(line) {
-                heads.push((i, c[1].to_string(), c[3].trim().to_string()));
+                let tail = c.get(4).map(|m| m.as_str().trim().trim_end_matches('*').trim()).unwrap_or("");
+                heads.push((i, c[1].to_string(), c[3].trim().to_string(), tail.to_string()));
             }
         }
 
         let mut in_block = vec![false; lines.len()];
-        for (n, (start, id, title)) in heads.iter().enumerate() {
+        for (n, (start, id, title, tail)) in heads.iter().enumerate() {
             let mut end = heads.get(n + 1).map(|h| h.0).unwrap_or(lines.len());
             if let Some(j) = lines[start + 1..end].iter().position(|l| l.starts_with('#')) {
                 end = start + 1 + j;
             }
             let end = end.min(start + 1 + BODY_CAP);
-            let body = lines[start + 1..end].join("\n");
+            let mut body = lines[start + 1..end].join("\n");
+            if !tail.is_empty() { body = format!("{tail}\n{body}"); }
             in_block[*start..end].fill(true);
             ex.node(kind_for(id), id, title, body.trim(), rel, *start as u32 + 1);
             ex.edge(&file_id, id, EdgeKind::Declares, "", rel);
-            for cap in self.entity.captures_iter(title) {
+            // Backticked names after a bold head's closing `**` are entities as much as those
+            // inside it, so the whole head line is scanned, not the title alone.
+            for cap in self.entity.captures_iter(lines[*start]) {
                 let name = &cap[1];
                 if self.ids.is_id(name) { continue; }
                 let eid = format!("entity:{name}");

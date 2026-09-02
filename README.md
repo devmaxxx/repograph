@@ -20,7 +20,7 @@ LLM-extracted graph it replaces:
 | ------------------------- | ------------------------ | ------------------- |
 | paraphrase questions      | 0/14                     | 7/14                |
 | keyword questions         | 11/24                    | 24/24               |
-| tokens per answer         | 1027-1555                | 201 median, 220 p90 |
+| tokens per answer         | 1027-1555                | 197 median, 216 p90 |
 | tokens to build the graph | 14,597,195               | 0                   |
 
 Every number above came from running both tools; none is a target. See [Bench](#bench) for the full
@@ -177,7 +177,7 @@ relative to the graph.
 
 | Kind            | What becomes one                                                              |
 | --------------- | ----------------------------------------------------------------------------- |
-| `Requirement`   | a `<ID> · MUST\|SHOULD\|LATER · title` line, in either dialect                |
+| `Requirement`   | a `<ID> · MUST\|SHOULD\|LATER · title` line, in either dialect; a `· title — MUST` tail is the modality, not the title, and what follows a bold head's closing `**` opens the body |
 | `Entity`        | a backticked name inside a requirement's title                                |
 | `Invariant`     | an `INV-*` requirement, or a row in a `constitution.yaml`-shaped registry     |
 | `Adr`           | an `ADR-*` requirement, or the whole document of a file named after an ADR id |
@@ -338,7 +338,7 @@ answering model's own, median over the 38 questions):
 
 |                                                | paraphrase | keyword | code | p90 tokens | model tokens per question | latency per question |
 | ---------------------------------------------- | ---------- | ------- | ---- | ---------- | ------------------------- | -------------------- |
-| `ask`                                          | 8/14       | 24/24   | 3/3  | 220        | 0                         | ~0.5 s               |
+| `ask`                                          | 7/14       | 24/24   | 3/3  | 216        | 0                         | ~0.5 s               |
 | `--rerank`, haiku, depth 100, titles           | 10/14      | 24/24   | 3/3  | 222        | ≈4,600                    | ~3.5 s               |
 | `--rerank`, haiku, depth 100                   | 11/14      | 24/24   | 3/3  | 222        | ≈9,500                    | ~4 s                 |
 | `--rerank`, sonnet, depth 100                  | 13/14      | 24/24   | 3/3  | 222        | ≈10,900                   | ~4 s                 |
@@ -358,7 +358,7 @@ is compiled into the binary, so a release build benches from any directory; `--c
 different file of the same shape:
 
 - keyword 24/24
-- paraphrase ≥8/14 with embeddings, ≥6/14 with `--no-dense`
+- paraphrase ≥7/14 with embeddings, ≥6/14 with `--no-dense`
 - code 3/3
 - p90 ≤230 tokens with embeddings and ≤240 with `--no-dense`, counted as rendered UTF-8 bytes / 4 —
   a conservative proxy, since it counts a Cyrillic answer at roughly double what an equivalent
@@ -376,9 +376,13 @@ such held-out questions, one per node, give recall@5 a ±5-point interval and a 
 McNemar test against the shipped rule; that is the bar a fusion or expansion change has to clear
 before the 41 real cases are consulted as the smoke test they are.
 
-Measured, on the shipped binary against `beauty-crm`: `keyword 24/24  paraphrase 8/14  code 3/3
-p90 220 tok` (median 201) with embeddings; `keyword 24/24  paraphrase 6/14  code 3/3  p90 228 tok`
-with `--no-dense`. Three paraphrase cases were rewritten on the way. One asked about withdrawing
+Measured, on the shipped binary against `beauty-crm` with its generated questions in the store:
+`keyword 24/24  paraphrase 7/14  code 3/3  p90 216 tok` with embeddings; `keyword 24/24
+paraphrase 6/14  code 3/3  p90 224 tok` with `--no-dense`. A store that `enrich` has never
+touched reads 24/24, 6/14, 3/3 and 24/24, 3/14, 3/3: the floors presume the questions. The
+dense arm read 8/14 for one build, on a label that still carried the prose after its closing
+`**`; the cleanup below took that hit with it (cosine margin 0.0004 at rank 6, the 400 held-out
+questions unmoved), so the floor sits at 7. Three paraphrase cases were rewritten on the way. One asked about withdrawing
 consent through a messenger, while the entry it names (`FR-VIS-76`) is about who may leave a
 review — «отзыв» meant a review there, not a withdrawal — so no retriever could have answered it.
 Two more were under-specified rather than wrong: «export for tax reporting» names the corpus's

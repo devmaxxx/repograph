@@ -1,3 +1,5 @@
+#[cfg(test)]
+mod cases;
 pub mod links;
 pub mod registry;
 pub mod requirements;
