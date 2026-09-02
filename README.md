@@ -32,7 +32,7 @@ it had been measured, and hadn't been.
 
 ## Status
 
-Version 0.1.0. Every row below is implemented, not planned:
+Version 0.2.0. Every row below is implemented, not planned:
 
 | Command                    | State                                                                 |
 | -------------------------- | --------------------------------------------------------------------- |
