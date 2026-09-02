@@ -334,4 +334,56 @@ mod tests {
         let r = run(&store, &graph(), Questions::default(), "exit 3", 8, 1, None).unwrap();
         assert_eq!((r.generated, r.failed), (0, 1));
     }
+
+    #[test]
+    fn split_joined_splits_a_bare_comma_list_but_keeps_a_single_question_with_a_comma() {
+        assert_eq!(
+            split_joined("как отменить бронь, кто платит штраф, когда деньги спишут"),
+            vec!["как отменить бронь", "кто платит штраф", "когда деньги спишут"]
+        );
+        assert_eq!(split_joined("а если это оплата, ну как быть?"), vec!["а если это оплата, ну как быть?"]);
+    }
+
+    #[test]
+    fn readable_is_exactly_half_known_letters_at_the_boundary() {
+        // 2 Latin + 2 Urdu letters: known*2 (4) >= letters (4), so the `>=` boundary passes.
+        assert!(readable("ab کی"));
+        // 1 Latin + 2 Urdu: known*2 (2) < letters (3), just under the boundary.
+        assert!(!readable("a کی"));
+    }
+
+    #[test]
+    fn passage_truncates_the_body_to_the_documented_character_limit() {
+        let mut e = Extraction::default();
+        e.node(NodeKind::Requirement, "FR-PAY-22", "title", &"щ".repeat(PASSAGE_CHARS + 200), "a.md", 1);
+        let n = e.nodes.remove(0);
+        let p = passage(&n);
+        assert_eq!(p.chars().count(), "title".len() + 1 + PASSAGE_CHARS);
+    }
+
+    #[test]
+    fn an_entity_with_only_whitespace_body_is_not_eligible() {
+        let mut e = Extraction::default();
+        e.node(NodeKind::Entity, "entity:Money", "Money", "   \n\t", "a.md", 1);
+        assert!(!eligible(&e.nodes[0]));
+    }
+
+    #[test]
+    fn run_respects_the_limit_argument() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::new(dir.path());
+        let cmd = r#"awk '/^### /{printf "%s\tq for %s\n", $2, $2}'"#;
+        let r = run(&store, &graph(), Questions::default(), cmd, 1, 1, Some(1)).unwrap();
+        assert_eq!((r.generated, r.batches), (1, 1));
+    }
+
+    #[test]
+    fn a_batch_or_parallel_count_of_zero_does_not_panic_and_still_processes_everything() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::new(dir.path());
+        let cmd = r#"awk '/^### /{printf "%s\tq for %s\n", $2, $2}'"#;
+        let r = run(&store, &graph(), Questions::default(), cmd, 0, 0, None).unwrap();
+        assert_eq!(r.generated, 2);
+        assert!(Questions::load(&store).unwrap().get("FR-PAY-22").len() == 1);
+    }
 }
