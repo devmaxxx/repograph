@@ -17,8 +17,11 @@ pub struct Config {
     pub rerank_command: String,
 }
 
-// Headless Claude Code with thinking off: the same answers, 4-5× faster and cheaper.
-const MODEL_COMMAND: &str = "MAX_THINKING_TOKENS=0 claude -p --model haiku --output-format text --tools \"\" --setting-sources \"\" --no-session-persistence";
+// Headless Claude Code with thinking off: the same answers, 4-5× faster and cheaper. Haiku
+// writes the questions as well as any model; picking seeds from a 200-deep pool it does not
+// (11/14 against sonnet's 14/14), so the reranker defaults to sonnet.
+const ENRICH_COMMAND: &str = "MAX_THINKING_TOKENS=0 claude -p --model haiku --output-format text --tools \"\" --setting-sources \"\" --no-session-persistence";
+const RERANK_COMMAND: &str = "MAX_THINKING_TOKENS=0 claude -p --model sonnet --output-format text --tools \"\" --setting-sources \"\" --no-session-persistence";
 
 impl Default for Config {
     fn default() -> Self {
@@ -42,8 +45,8 @@ impl Default for Config {
             ]),
             milestone_families: s(&["BE", "FE", "PLAT", "SYNC", "OPS", "AI", "MOB"]),
             registries: s(&["docs/constitution.yaml"]),
-            enrich_command: MODEL_COMMAND.into(),
-            rerank_command: MODEL_COMMAND.into(),
+            enrich_command: ENRICH_COMMAND.into(),
+            rerank_command: RERANK_COMMAND.into(),
         }
     }
 }

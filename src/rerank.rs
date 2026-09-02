@@ -1,19 +1,32 @@
 //! `ask --rerank`: the configured model command picks the seeds from the deep fused candidate
-//! list. Costs tokens per question (≈4.8k on the bench corpus); nothing runs without the flag.
+//! list. Costs tokens per question (≈19k on the bench corpus); nothing runs without the flag.
 
 use crate::enrich::run_command;
 
 /// How far down the fused list the model looks. Measured on the bench corpus with questions
-/// enriched: 80 deep catches 9/14 paraphrases, 100 deep 11/14; the three left are one target
-/// no retriever surfaces, one at rank 137 and one mislabelled case.
-pub const DEPTH: usize = 100;
+/// enriched and a snippet per candidate: 100 deep leaves the target at pool rank 142 out of
+/// reach (13/14), 200 deep reaches it (14/14, three runs); tokens per question scale with it.
+pub const DEPTH: usize = 200;
+
+/// Characters of a candidate's body shown after its title.
+const SNIPPET: usize = 120;
+
+/// What the model sees of a candidate: its title, then the start of its text on one line.
+pub fn text(n: &crate::model::Node) -> String {
+    let title: String = n.label.chars().take(100).collect();
+    let body: Vec<&str> = n.body.split_whitespace().collect();
+    let mut snippet: String = body.join(" ").chars().take(SNIPPET).collect();
+    if snippet.is_empty() { return title; }
+    if n.body.chars().count() > SNIPPET { snippet.push('…'); }
+    format!("{title} — {snippet}")
+}
 
 pub fn prompt(question: &str, candidates: &[(String, String)]) -> String {
     let mut p = format!(
-        "Question: \"{question}\"\nBelow are candidate entries as `id<TAB>title`. Output the ids of up to \
-         5 entries most relevant to the question, one per line, most relevant first. Nothing but ids.\n\n");
-    for (id, label) in candidates {
-        p.push_str(&format!("{id}\t{}\n", label.chars().take(100).collect::<String>()));
+        "Question: \"{question}\"\nBelow are candidate entries as `id<TAB>title — start of text`. Output the ids \
+         of up to 5 entries most relevant to the question, one per line, most relevant first. Nothing but ids.\n\n");
+    for (id, text) in candidates {
+        p.push_str(&format!("{id}\t{text}\n"));
     }
     p
 }
@@ -57,12 +70,25 @@ mod tests {
     }
 
     #[test]
-    fn prompt_lists_every_candidate_with_a_clipped_title() {
-        let long = "x".repeat(150);
-        let p = prompt("why", &[("A-1".into(), long)]);
+    fn prompt_lists_every_candidate_verbatim() {
+        let p = prompt("why", &[("A-1".into(), "cancel — a visit…".into()), ("B-2".into(), "refund".into())]);
         assert!(p.contains("\"why\""));
-        assert!(p.contains(&format!("A-1\t{}\n", "x".repeat(100))));
-        assert!(!p.contains(&"x".repeat(101)));
+        assert!(p.contains("A-1\tcancel — a visit…\n"));
+        assert!(p.contains("B-2\trefund\n"));
+    }
+
+    #[test]
+    fn text_clips_the_title_and_shows_the_start_of_a_collapsed_body() {
+        let mut x = crate::model::Extraction::default();
+        x.node(crate::model::NodeKind::Requirement, "A-1", &"x".repeat(150), &format!("  first\n\n  line   {}", "y".repeat(200)), "f.md", 1);
+        let mut n = x.nodes.remove(0);
+        let t = text(&n);
+        assert!(t.starts_with(&format!("{} — first line yyy", "x".repeat(100))));
+        assert!(!t.contains(&"x".repeat(101)));
+        assert!(t.ends_with('…'));
+        assert_eq!(t.chars().count(), 100 + 3 + SNIPPET + 1);
+        n.body.clear();
+        assert_eq!(text(&n), "x".repeat(100));
     }
 
     #[test]

@@ -148,7 +148,7 @@ repograph bench --cases other.jsonl  # a different case file, same 24/14/3 shape
    (see [Embeddings](#embeddings)). Skipped by `--no-dense`, or when the model cannot be opened —
    no cache and no network (see [Embeddings](#embeddings) for the fallback rules).
 4. **Fuse.** The two lists are interleaved, dense first — rank 1 of each, then rank 2 of each —
-   and the top seeds survive (with `--rerank`, a model picks them from a 100-deep pool instead —
+   and the top seeds survive (with `--rerank`, a model picks them from a 200-deep pool instead —
    see [Spending tokens on purpose](#spending-tokens-on-purpose)). Reciprocal rank fusion was measured to bury a retriever's second hit
    under ids both lists merely agreed on; the interleave lifted paraphrase recall from 5/14 to 6/14
    at +2 tokens p90.
@@ -222,7 +222,7 @@ in full, not an empty config:
 | `id_families`        | see below — 49 strict families                                                              |
 | `milestone_families` | `["BE", "FE", "PLAT", "SYNC", "OPS", "AI", "MOB"]`                                          |
 | `enrich_command`     | headless `claude -p --model haiku` with thinking off — see [Spending tokens on purpose](#spending-tokens-on-purpose) |
-| `rerank_command`     | the same                                                                                    |
+| `rerank_command`     | the same with `--model sonnet`                                                              |
 
 `id_families` and `milestone_families` default to the strict list `beauty-crm`'s census settled on —
 they are this project's development corpus, not a generic default. Every family is matched as
@@ -297,29 +297,34 @@ text they cost a keyword hit, and as separate lists they change no seed. What th
 targets into a deeper candidate pool: with them, all six reachable paraphrase misses sit within the
 top 100 fused candidates; without them, two do not.
 
-**`ask --rerank`** builds that 100-deep pool — dense passages, dense questions, BM25 passages, BM25
-questions, interleaved — and hands the model the candidates' ids and titles to pick five from. The
-fused top two stay in front regardless: they carry the exact evidence the model is not shown, and
-with the whole say it dropped a keyword hit once in 24 and a paraphrase hit the retrievers had
-ranked second. `rerank_command` reads the prompt on stdin and writes the chosen ids one per line;
+**`ask --rerank`** builds a 200-deep pool — dense passages, dense questions, BM25 passages, BM25
+questions, interleaved — and hands the model each candidate's id, title and the first 120
+characters of its text to pick five from; `--depth` changes how deep, and tokens per question
+scale with it. `rerank_command` reads the prompt on stdin and writes the chosen ids one per line;
 a failing command is reported on stderr and the answer falls back to the fused order.
 
-Measured (`bench --rerank`, five runs):
+What the model is shown decides more than which model it is. Shown titles only, haiku, sonnet and
+opus all read 10–11/14 whatever the depth, and a deeper pool made haiku worse; and because a
+title is not evidence, the fused top two had to stay pinned ahead of the model's picks or it
+dropped a keyword hit. Shown 120 characters of text, sonnet at depth 200 reads 13/14 with the two
+pins and 14/14 without them — the pins were the retrievers' guess taking two of the model's five
+slots. Haiku with the same prompt reads 11/14; opus 14/14 on paraphrase but 23/24 on keyword, in
+two runs of two. Measured (`bench --rerank`, one full run each unless stated; input tokens are the
+answering model's own, median over the 38 questions):
 
-|                              | paraphrase | keyword | code | p90 tokens | model tokens per question | latency per question |
-| ---------------------------- | ---------- | ------- | ---- | ---------- | ------------------------- | -------------------- |
-| `ask`                        | 6/14       | 24/24   | 3/3  | 217        | 0                         | ~0.75 s              |
-| `ask --rerank`, no `enrich`  | 8/14       | 24/24   | 3/3  | 224        | ≈4,800                    | ~3.5 s               |
-| `ask --rerank` after `enrich`| 10–11/14   | 24/24   | 3/3  | 222        | ≈4,800                    | ~3.5 s               |
+|                                                | paraphrase | keyword | code | p90 tokens | model tokens per question | latency per question |
+| ---------------------------------------------- | ---------- | ------- | ---- | ---------- | ------------------------- | -------------------- |
+| `ask`                                          | 7/14       | 24/24   | 3/3  | 219        | 0                         | ~0.5 s               |
+| `--rerank`, haiku, depth 100, titles           | 10/14      | 24/24   | 3/3  | 222        | ≈4,600                    | ~3.5 s               |
+| `--rerank`, haiku, depth 100                   | 11/14      | 24/24   | 3/3  | 222        | ≈9,500                    | ~4 s                 |
+| `--rerank`, sonnet, depth 100                  | 13/14      | 24/24   | 3/3  | 222        | ≈10,900                   | ~4 s                 |
+| `--rerank`, sonnet, depth 200 (default), 3 runs| 14/14      | 24/24   | 3/3  | 221–226    | ≈19,200                   | ~4.3 s               |
 
-The three that stay missed: one target no retriever surfaces (`FR-VIS-01`, the query says
-«незыблемые требования» where the entry says «инварианты»), one at pool rank 137 (`FR-TOOL-18`) and
-one bench case whose paraphrase describes something other than its target (`FR-VIS-76`, kept as is
-so the floors do not move by editing the exam). The `bench` floors are unchanged and apply to the
-zero-token path; `--rerank` is measured, not floored, because the model's pick varies by one hit
-between identical runs. A per-question query rewrite by the model was measured too — 20/24 keyword,
-6/14 paraphrase, ~3,100 tokens — and rejected: the added synonyms dilute exact matches and find no
-new targets.
+The `bench` floors are unchanged and apply to the zero-token path; `--rerank` is measured, not
+floored, because a model's pick can vary by one hit between identical runs — which is also why the
+default is the configuration that read 14/14 three times, not the one that read it once. A
+per-question query rewrite by the model was measured too — 20/24 keyword, 6/14 paraphrase,
+~3,100 tokens — and rejected: the added synonyms dilute exact matches and find no new targets.
 
 ## Bench
 

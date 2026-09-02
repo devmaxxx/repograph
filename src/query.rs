@@ -24,8 +24,11 @@ const EXPAND: [EdgeKind; 5] = [EdgeKind::References, EdgeKind::Implements, EdgeK
 // Stays at 1: raising it to 8 buys at most one extra paraphrase hit and takes
 // p90 from 218 to 510 tokens, which bench's p90 floor exists to catch.
 const MAX_EXPANDED: usize = 1;
-/// Fused seeds kept ahead of the reranking model's picks.
-const PINNED: usize = 2;
+/// Fused seeds kept ahead of the reranking model's picks. Zero since the model sees a snippet
+/// of each candidate: shown titles only it dropped a keyword hit the retrievers had ranked
+/// first, so two seeds were pinned; shown text, the pins were the retrievers' guess taking two
+/// of the model's five slots, and unpinning them is what took paraphrase from 13/14 to 14/14.
+const PINNED: usize = 0;
 
 fn hit(graph: &Graph, id: &str, score: f32, via: Option<&str>) -> Option<Hit> {
     let n = graph.nodes.get(id)?;
@@ -90,11 +93,8 @@ pub fn ask(graph: &Graph, ids: &IdMatcher, questions: &Questions, dense: Option<
         lists.retain(|l| !l.is_empty());
         let mut fused = fuse::interleave(&lists);
         if let Some(r) = rerank {
-            // The fused top two stay in front: they carry the exact evidence the model is not
-            // shown (it sees titles), and with the whole say it dropped a keyword hit and a
-            // paraphrase hit the retrievers had ranked second.
             let candidates: Vec<(String, String)> = fused.iter().take(depth)
-                .map(|(id, _)| (id.clone(), graph.nodes[id].label.clone())).collect();
+                .map(|(id, _)| (id.clone(), crate::rerank::text(&graph.nodes[id]))).collect();
             let mut order: Vec<String> = candidates.iter().take(PINNED).map(|(id, _)| id.clone()).collect();
             for id in r(&query, &candidates) {
                 if !order.contains(&id) { order.push(id); }

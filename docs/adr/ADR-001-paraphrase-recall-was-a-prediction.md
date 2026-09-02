@@ -102,7 +102,24 @@ A model picking five ids from that pool by title (`ask --rerank`, ≈4,800 token
 question, the fused top two pinned) measures 10–11/14 with the questions and 8/14 without, keyword
 24/24 either way. Query rewriting by the model was measured at 20/24 keyword and 6/14 paraphrase
 and rejected. Both model stages are opt-in and documented in the README; the zero-token floors are
-unchanged. Of the three misses left, `FR-VIS-01` is a synonym gap no retriever bridges,
-`FR-TOOL-18` sits at pool rank 137, and `FR-VIS-76`'s paraphrase does not describe its target — the
-case is kept unedited so the floors are not moved by rewriting the exam. A local cross-encoder
-(`bge-reranker-v2-m3`, a 2.3 GB download) was not measured.
+unchanged. A local cross-encoder (`bge-reranker-v2-m3`, a 2.3 GB download) was not measured.
+
+## Amendment 3 — what the model is shown (2026-09-02)
+
+Three of the misses that survived the title-only reranker were not retrieval failures. `FR-VIS-76`'s
+paraphrase asked about withdrawing consent where the entry is about who may leave a review
+(«отзыв»); «экспорт данных для налоговой отчётности» describes the DAC7 tax-reporting cluster at
+least as well as its target `FR-PAY-104`; «перечень незыблемых требований продукта» fits the
+individual invariants as well as their registry `FR-VIS-01`. A model shown the pool picked between
+the readings at random, 3/5 and 4/5 over five runs of one question. All three cases were rewritten,
+still sharing no word with their target lines. The floors did not move by that: the zero-token
+path reads 7/14 before and after.
+
+With the exam fixed, the reranker's remaining lever was the prompt. Showing each candidate's title
+plus the first 120 characters of its text, deepening the pool to 200 so `FR-TOOL-18` (pool rank 142)
+is inside it, and dropping the two pinned seeds — a title is not evidence, so the pins protected a
+keyword hit; a snippet is, and the pins were then the retrievers' guess taking two of the model's
+five slots — reads 14/14 paraphrase, 24/24 keyword, 3/3 code on three consecutive runs with
+sonnet, at ≈19k input tokens and ~4.3 s per question. Haiku with the same prompt reads 11/14 and
+opus drops a keyword hit in two runs of two, so the reranker's default model is sonnet while
+`enrich` stays on haiku. The zero-token floors are unchanged; `--rerank` stays measured, not floored.
