@@ -77,7 +77,7 @@ pub fn run_update(repo: &std::path::Path, cfg: &config::Config, ex: &Extractors,
     let store = store::Store::new(repo);
     if wipe { store.wipe()?; }
     let (mut graph, manifest) = store.load()?;
-    let entries = walk::walk(repo, cfg)?;
+    let entries = walk::walk(repo, cfg, &manifest)?;
     let diff = manifest.diff(&entries);
     let stale: std::collections::BTreeSet<&str> =
         diff.removed.iter().map(String::as_str).chain(diff.changed.iter().map(|e| e.rel.as_str())).collect();
