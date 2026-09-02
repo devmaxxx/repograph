@@ -99,4 +99,47 @@ mod tests {
         assert_eq!(ex.nodes.len(), 1);
         assert!(ex.edges.is_empty());
     }
+
+    fn extractor() -> RegistryExtractor {
+        let cfg = crate::config::Config::default();
+        RegistryExtractor::new(IdMatcher::new(&cfg.id_families, &cfg.milestone_families))
+    }
+
+    #[test]
+    fn label_of_falls_back_to_the_trimmed_first_line_without_a_bold_span() {
+        assert_eq!(label_of("No bold marker here\nsecond line"), "No bold marker here");
+        assert_eq!(label_of("**stray unclosed marker\nsecond line"), "stray unclosed marker");
+    }
+
+    #[test]
+    fn label_of_takes_the_bold_spans_inner_text_even_across_lines() {
+        assert_eq!(label_of("**Ranked\nacross two lines.** trailing prose"), "Ranked\nacross two lines.");
+    }
+
+    #[test]
+    fn rows_declare_nodes_with_sequential_line_numbers_and_declares_edges() {
+        let yaml = "invariants:\n  - id: INV-A\n    statement: \"**A.**\"\n  - id: INV-B\n    statement: \"**B.**\"\n";
+        let ex = extractor().extract("docs/x.yaml", yaml);
+        let a = ex.nodes.iter().find(|n| n.id == "INV-A").unwrap();
+        let b = ex.nodes.iter().find(|n| n.id == "INV-B").unwrap();
+        assert_eq!((a.line, b.line), (1, 2));
+        assert!(ex.edges.iter().any(|e| e.source == "file:docs/x.yaml" && e.target == "INV-A" && e.kind == EdgeKind::Declares));
+        assert!(ex.edges.iter().any(|e| e.source == "file:docs/x.yaml" && e.target == "INV-B" && e.kind == EdgeKind::Declares));
+    }
+
+    #[test]
+    fn a_row_without_a_test_ref_has_no_implements_edge() {
+        let yaml = "invariants:\n  - id: INV-A\n    statement: \"**A.**\"\n";
+        let ex = extractor().extract("docs/x.yaml", yaml);
+        assert!(!ex.edges.iter().any(|e| e.kind == EdgeKind::Implements));
+    }
+
+    #[test]
+    fn a_row_missing_the_required_id_field_yields_only_the_file_node() {
+        let yaml = "invariants:\n  - statement: \"**Untitled.**\"\n";
+        let ex = extractor().extract("docs/x.yaml", yaml);
+        assert_eq!(ex.nodes.len(), 1);
+        assert_eq!(ex.nodes[0].kind, NodeKind::File);
+        assert!(ex.edges.is_empty());
+    }
 }
