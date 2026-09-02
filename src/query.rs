@@ -2,6 +2,7 @@ use crate::ids::IdMatcher;
 use crate::index::{fuse, lexical::LexicalIndex};
 use crate::model::{EdgeKind, Graph, NodeKind};
 use serde::Serialize;
+use std::collections::{BTreeMap, BTreeSet};
 
 pub struct Options { pub seeds: usize, pub bodies: bool, pub dense: bool, pub json: bool }
 
@@ -21,8 +22,11 @@ fn hit(graph: &Graph, id: &str, score: f32, via: Option<&str>) -> Option<Hit> {
     Some(Hit { id: n.id.clone(), file: n.file.clone(), line: n.line, label: n.label.clone(), score, via: via.map(str::to_string) })
 }
 
-fn exact_seeds(graph: &Graph, ids: &IdMatcher, words: &[String]) -> Vec<String> {
+/// Exact hits per word, and whether they answer the whole question: every word matched, and
+/// none is a plain lowercase word — `money` is a test helper and a topic, `asGrosze` only a name.
+fn exact_seeds(graph: &Graph, ids: &IdMatcher, words: &[String]) -> (Vec<String>, bool) {
     let mut out = Vec::new();
+    let mut whole = true;
     for w in words {
         if ids.is_id(w) && graph.nodes.contains_key(w) {
             out.push(w.clone());
@@ -33,25 +37,28 @@ fn exact_seeds(graph: &Graph, ids: &IdMatcher, words: &[String]) -> Vec<String> 
             .filter(|n| n.kind == NodeKind::Symbol && (n.label == *w || n.id.ends_with(&tail)))
             .map(|n| &n.id).collect();
         syms.sort();
+        whole &= !syms.is_empty() && !w.chars().all(char::is_lowercase);
         out.extend(syms.into_iter().cloned());
     }
-    out.dedup();
-    out
+    let mut seen = BTreeSet::new();
+    out.retain(|id| seen.insert(id.clone()));
+    let whole = whole && !out.is_empty();
+    (out, whole)
 }
 
 #[allow(clippy::type_complexity)]
 pub fn ask(graph: &Graph, ids: &IdMatcher, dense: Option<&dyn Fn(&str, usize) -> Vec<String>>, words: &[String], opts: &Options) -> Answer {
     let query = words.join(" ");
     let mut answer = Answer::default();
-    let exact = exact_seeds(graph, ids, words);
+    let (exact, whole_question) = exact_seeds(graph, ids, words);
     // A name duplicated across generated clients (packages/contracts/src/generated/**) must not
     // be able to spend the whole answer budget on itself.
     for id in exact.iter().take(opts.seeds) {
         if let Some(h) = hit(graph, id, 1.0, None) { answer.seeds.push(h); }
     }
-    // An exact id or symbol is the whole question; topping the seeds up from fusion only
-    // appends neighbours nobody asked for (an id lookup measured 174 tokens with them, 68 without).
-    if answer.seeds.is_empty() {
+    // Topping an exact answer up from fusion only appends neighbours nobody asked for (an id
+    // lookup measured 174 tokens with them, 68 without).
+    if !whole_question {
         let lexical: Vec<String> = LexicalIndex::build(graph).search(&query, 20).into_iter().map(|(id, _)| id).collect();
         let mut lists = vec![lexical];
         if opts.dense {
@@ -133,7 +140,6 @@ pub fn explain(graph: &Graph, needle: &str) -> Option<String> {
 }
 
 pub fn verify(graph: &Graph) -> String {
-    use std::collections::BTreeMap;
     let mut nodes: BTreeMap<String, usize> = BTreeMap::new();
     for n in graph.nodes.values() { *nodes.entry(format!("{:?}", n.kind)).or_default() += 1; }
     let mut edges: BTreeMap<String, usize> = BTreeMap::new();
@@ -144,12 +150,25 @@ pub fn verify(graph: &Graph) -> String {
         .map(|e| e.target.as_str()).collect();
     undeclared.sort();
     undeclared.dedup();
+    // A family that is never declared anywhere (task ids cited from code, say) is a corpus
+    // convention, not a broken link; only a gap inside a declared family is worth chasing.
+    let declared: BTreeSet<&str> = graph.nodes.keys().filter(|id| !id.contains(':')).map(|id| family(id)).collect();
+    let (gaps, cite_only): (Vec<&str>, Vec<&str>) = undeclared.iter().partition(|id| declared.contains(family(id)));
+    let cite_only_families: BTreeSet<&str> = cite_only.iter().map(|id| family(id)).collect();
+    let sample = |ids: &[&str]| ids.iter().take(10).cloned().collect::<Vec<_>>().join(" ");
     let mut out = String::new();
     out.push_str(&format!("nodes: {}  {:?}\n", graph.nodes.len(), nodes));
     out.push_str(&format!("edges: {}  {:?}\n", graph.edges.len(), edges));
     out.push_str(&format!("dangling edges: {}\n", dangling.len()));
-    out.push_str(&format!("undeclared ids: {}  {}\n", undeclared.len(), undeclared.iter().take(10).cloned().collect::<Vec<_>>().join(" ")));
+    out.push_str(&format!("undeclared ids: {}  {}\n", undeclared.len(), sample(&undeclared)));
+    out.push_str(&format!("  gaps in declared families: {}  {}\n", gaps.len(), sample(&gaps)));
+    out.push_str(&format!("  in families never declared: {}  {}\n", cite_only.len(),
+        cite_only_families.iter().cloned().collect::<Vec<_>>().join(" ")));
     out
+}
+
+fn family(id: &str) -> &str {
+    id.trim_end_matches(|c: char| c.is_ascii_digit() || c == '-' || c == '.')
 }
 
 #[cfg(test)]
@@ -165,6 +184,7 @@ mod tests {
         e.node(NodeKind::Requirement, "N-151", "never: free-text policies", "", "docs/never.md", 12);
         e.node(NodeKind::Entity, "entity:CancellationPolicy", "CancellationPolicy", "", "docs/06.md", 385);
         e.node(NodeKind::Symbol, "sym:packages/contracts/src/money.ts::asGrosze", "asGrosze", "export function asGrosze()", "packages/contracts/src/money.ts", 2);
+        e.node(NodeKind::Symbol, "sym:packages/domain/test/money.spec.ts::money", "money", "function money()", "packages/domain/test/money.spec.ts", 50);
         e.node(NodeKind::File, "file:docs/06.md", "docs/06.md", "", "docs/06.md", 1);
         e.edge("FR-PAY-22", "N-151", EdgeKind::References, "body", "docs/06.md");
         e.edge("FR-PAY-22", "entity:CancellationPolicy", EdgeKind::References, "title", "docs/06.md");
@@ -227,6 +247,32 @@ mod tests {
         assert_eq!(a.expanded[0].via.as_deref(), Some("FR-PAY-22"));
         let ex: Vec<&str> = a.expanded.iter().map(|h| h.id.as_str()).collect();
         assert!(!ex.contains(&"file:docs/06.md"));
+    }
+
+    #[test]
+    fn a_lowercase_word_that_is_also_a_symbol_leads_but_still_fuses() {
+        let g = graph();
+        let dense = |_: &str, _: usize| vec!["FR-PAY-20".to_string()];
+        let a = ask(&g, &ids(), Some(&dense), &["money".to_string()], &Options { dense: true, ..opts() });
+        assert_eq!(a.seeds[0].id, "sym:packages/domain/test/money.spec.ts::money");
+        assert!(a.seeds.iter().any(|h| h.id == "FR-PAY-20"));
+    }
+
+    #[test]
+    fn a_code_shaped_name_is_the_whole_question() {
+        let g = graph();
+        let dense = |_: &str, _: usize| vec!["FR-PAY-20".to_string()];
+        let a = ask(&g, &ids(), Some(&dense), &["asGrosze".to_string()], &Options { dense: true, ..opts() });
+        assert_eq!(a.seeds.len(), 1);
+        assert_eq!(a.seeds[0].id, "sym:packages/contracts/src/money.ts::asGrosze");
+    }
+
+    #[test]
+    fn a_symbol_asked_twice_is_one_seed() {
+        let g = graph();
+        let words: Vec<String> = ["asGrosze", "foo", "asGrosze"].iter().map(|s| s.to_string()).collect();
+        let a = ask(&g, &ids(), None, &words, &opts());
+        assert_eq!(a.seeds.iter().filter(|h| h.id.ends_with("::asGrosze")).count(), 1);
     }
 
     #[test]
@@ -328,10 +374,12 @@ mod tests {
         let mut g = graph();
         let mut e = Extraction::default();
         e.edge("FR-PAY-20", "FR-PAY-999", EdgeKind::References, "body", "docs/06.md");
+        e.edge("FR-PAY-20", "MOB-M01-T3", EdgeKind::References, "body", "docs/06.md");
         g.apply(e);
         let out = verify(&g);
-        assert!(out.contains("undeclared ids: 1"));
-        assert!(out.contains("FR-PAY-999"));
-        assert!(out.contains("dangling edges: 1"));
+        assert!(out.contains("undeclared ids: 2"));
+        assert!(out.contains("gaps in declared families: 1  FR-PAY-999"));
+        assert!(out.contains("in families never declared: 1  MOB-M"));
+        assert!(out.contains("dangling edges: 2"));
     }
 }

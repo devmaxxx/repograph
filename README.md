@@ -109,8 +109,9 @@ repograph explain asGrosze
 `explain` resolves its argument as an exact id, then as a symbol name, then as a case-insensitive
 label match.
 
-Check the graph's health — counts by kind, ids that are referenced but never declared, dangling
-edges:
+Check the graph's health — counts by kind, dangling edges, and ids that are referenced but never
+declared, split into gaps inside a declared family (worth chasing) and families that are only ever
+cited, such as milestone task ids named from code:
 
 ```bash
 repograph verify
@@ -136,7 +137,9 @@ repograph bench --cases other.jsonl  # a different case file, same 24/14/3 shape
 ## How a question becomes an answer
 
 1. **Exact.** A word that is a known id, or the name of an indexed symbol, wins outright and scores
-   above everything else.
+   above everything else. When every word is an id or a code-shaped name (`asGrosze`, `ZERO`), the
+   exact hits are the whole answer; a plain lowercase word that happens to be a symbol too (`money`
+   is a test helper) leads, and the fused retrievers fill the remaining seeds.
 2. **Lexical.** BM25 over `id + label + body` for every node, with Snowball stemming — Russian for
    Cyrillic tokens, English otherwise, so `штрафа` and `штрафы` are the same term. Ids survive
    tokenization whole, so `FR-PAY-22` never becomes three tokens.
@@ -145,8 +148,9 @@ repograph bench --cases other.jsonl  # a different case file, same 24/14/3 shape
    no cache and no network (see [Embeddings](#embeddings) for the fallback rules).
 4. **Fuse.** Reciprocal rank fusion (k = 60) merges the retrievers; the top seeds survive.
 5. **Expand.** One hop over `References`, `Implements`, `Declares`, `Links` and `Legacy` edges, in
-   both directions. `File` nodes and decorator nodes are never expanded _to_ — they are hubs and
-   would drown the answer.
+   both directions, keeping the single best-ranked neighbour — a second one measured +1 hit per
+   extra neighbour against ~+90 tokens per answer. `File` nodes and decorator nodes are never
+   expanded _to_ — they are hubs and would drown the answer.
 6. **Render.** `ID  path:line  headline`, headline cut to 80 characters.
 
 The lexical index is rebuilt in memory on every `ask` rather than stored on disk. It costs about
@@ -211,7 +215,7 @@ in full, not an empty config:
 | `skip`               | `["**/node_modules/**", "**/dist/**", "**/TRACKER.md", "graphify-out/**", ".repograph/**"]` |
 | `registries`         | `["docs/constitution.yaml"]`                                                                |
 | `id_families`        | see below — 49 strict families                                                              |
-| `milestone_families` | `["BE", "FE", "PLAT", "SYNC", "OPS", "AI"]`                                                 |
+| `milestone_families` | `["BE", "FE", "PLAT", "SYNC", "OPS", "AI", "MOB"]`                                          |
 
 `id_families` and `milestone_families` default to the strict list `beauty-crm`'s census settled on —
 they are this project's development corpus, not a generic default. Every family is matched as
@@ -294,7 +298,8 @@ onto one node, and the edge between them is dropped rather than kept as a self-l
 
 ## Measured
 
-On its development corpus — a 1,300-file TypeScript monorepo with a Russian-language PRD:
+On its development corpus — a TypeScript monorepo with a Russian-language PRD, 825 indexed files
+out of 3,599 tracked:
 
 |                                 |                                                                                                                              |
 | ------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
@@ -321,10 +326,10 @@ and [`docs/superpowers/plans/2026-09-01-repograph.md`](docs/superpowers/plans/20
 
 The plan's deviations table lists four simplifications against the spec, none of which change the
 node/edge model or the answer shape: `serde_json` with an atomic rename instead of `rkyv`; a
-77-line hand-rolled BM25 over `rust-stemmers` instead of `tantivy`; adjacency lists instead of
-`petgraph`; and a line scanner (one regex for a requirement head, `#` lines as block boundaries, one
-regex for links) instead of `tree-sitter-md`. One of those four _did_ move a measured number: the
-`tantivy` swap cost paraphrase recall, not just code size — see
+77-line hand-rolled BM25 over `rust-stemmers` instead of `tantivy`; a flat edge set scanned per
+hop instead of `petgraph`; and a line scanner (one regex for a requirement head, `#` lines as block
+boundaries, one regex for links) instead of `tree-sitter-md`. One of those four _did_ move a
+measured number: the `tantivy` swap cost paraphrase recall, not just code size — see
 [`docs/adr/ADR-001-paraphrase-recall-was-a-prediction.md`](docs/adr/ADR-001-paraphrase-recall-was-a-prediction.md).
 
 ## License
