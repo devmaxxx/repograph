@@ -142,4 +142,59 @@ mod tests {
         assert_eq!(ex.nodes[0].kind, NodeKind::File);
         assert!(ex.edges.is_empty());
     }
+
+    // The `id` field is what fails the row above; a row that parses but carries no `statement`
+    // is a different case — it is kept, just with an empty label.
+    #[test]
+    fn a_row_with_no_statement_field_is_kept_with_an_empty_label() {
+        let yaml = "invariants:\n  - id: INV-A\n";
+        let ex = extractor().extract("docs/x.yaml", yaml);
+        let n = ex.nodes.iter().find(|n| n.id == "INV-A").unwrap();
+        assert_eq!(n.label, "");
+    }
+
+    // One row failing to deserialize fails `serde_yaml::from_str::<Registry>` for the whole
+    // document, not just that row — every other row is dropped along with it.
+    #[test]
+    fn a_single_malformed_row_drops_every_row_in_the_registry_not_just_itself() {
+        let yaml = "invariants:\n  - id: INV-A\n    statement: \"**A.**\"\n  - statement: \"**no id.**\"\n  - id: INV-C\n    statement: \"**C.**\"\n";
+        let ex = extractor().extract("docs/x.yaml", yaml);
+        assert_eq!(ex.nodes.len(), 1);
+        assert_eq!(ex.nodes[0].kind, NodeKind::File);
+    }
+
+    // Nothing here dedups by id: the extractor trusts the registry file and declares whatever
+    // rows it's given, one node and one `Declares` edge per row.
+    #[test]
+    fn duplicate_ids_in_the_registry_produce_a_node_and_declares_edge_per_row() {
+        let yaml = "invariants:\n  - id: INV-DUP\n    statement: \"**First.**\"\n  - id: INV-DUP\n    statement: \"**Second.**\"\n";
+        let ex = extractor().extract("docs/x.yaml", yaml);
+        assert_eq!(ex.nodes.iter().filter(|n| n.id == "INV-DUP").count(), 2);
+        assert_eq!(ex.edges.iter().filter(|e| e.target == "INV-DUP" && e.kind == EdgeKind::Declares).count(), 2);
+    }
+
+    // The row's own id is never checked against `id_families` — only ids found inside `basis`
+    // go through the `IdMatcher`, so an unconfigured family on the row itself passes straight through.
+    #[test]
+    fn a_row_with_an_unconfigured_id_family_is_still_extracted_as_an_invariant() {
+        let yaml = "invariants:\n  - id: FR-X-1\n    statement: \"**Not a configured family.**\"\n";
+        let ex = extractor().extract("docs/x.yaml", yaml);
+        let n = ex.nodes.iter().find(|n| n.id == "FR-X-1").unwrap();
+        assert_eq!(n.kind, NodeKind::Invariant);
+    }
+
+    #[test]
+    fn a_basis_reference_to_an_unconfigured_family_produces_no_references_edge() {
+        let yaml = "invariants:\n  - id: INV-A\n    statement: \"**A.**\"\n    basis: \"по FR-X-1\"\n";
+        let ex = extractor().extract("docs/x.yaml", yaml);
+        assert!(!ex.edges.iter().any(|e| e.source == "INV-A" && e.kind == EdgeKind::References));
+    }
+
+    #[test]
+    fn a_basis_string_with_multiple_configured_ids_produces_an_edge_for_each() {
+        let yaml = "invariants:\n  - id: INV-A\n    statement: \"**A.**\"\n    basis: \"по FR-WEB-1 и FR-WEB-2\"\n";
+        let ex = extractor().extract("docs/x.yaml", yaml);
+        let refs: Vec<&str> = ex.edges.iter().filter(|e| e.source == "INV-A" && e.kind == EdgeKind::References).map(|e| e.target.as_str()).collect();
+        assert_eq!(refs, ["FR-WEB-1", "FR-WEB-2"]);
+    }
 }

@@ -206,3 +206,40 @@ fn an_empty_or_whitespace_document_yields_only_its_file_node() {
         assert!(ex.edges.is_empty());
     }
 }
+
+#[test]
+fn links_inside_a_requirement_document_resolve_dot_and_dotdot_and_drop_anchors() {
+    let ex = extract("docs/prd/06.md", "**FR-WEB-1 · MUST · первая**\nсм. [далее](./07.md) и [решение](../adr/ADR-1.md#x)\n");
+    let links: Vec<&str> = ex.edges.iter().filter(|e| e.kind == EdgeKind::Links).map(|e| e.target.as_str()).collect();
+    assert_eq!(links, ["file:docs/prd/07.md", "file:docs/adr/ADR-1.md"]);
+}
+
+#[test]
+fn a_link_to_a_file_not_present_in_the_graph_still_creates_a_links_edge() {
+    let ex = extract("docs/06.md", "**FR-WEB-1 · MUST · первая**\nсм. [нет такого](missing.md)\n");
+    assert!(has(&ex, "file:docs/06.md", "file:docs/missing.md", EdgeKind::Links));
+    assert!(ex.nodes.iter().all(|n| n.id != "file:docs/missing.md"), "the target is only an edge, not a declared node");
+}
+
+#[test]
+fn a_markdown_link_inside_a_fenced_code_block_is_not_extracted_as_a_link() {
+    let ex = extract("docs/06.md", "**FR-WEB-1 · MUST · первая**\nпример синтаксиса:\n```md\n[пример](example.md)\n```\nсм. [реальная](real.md)\n");
+    let links: Vec<&str> = ex.edges.iter().filter(|e| e.kind == EdgeKind::Links).map(|e| e.target.as_str()).collect();
+    assert_eq!(links, ["file:docs/real.md"]);
+}
+
+#[test]
+fn a_fence_toggle_holds_correctly_across_two_separate_code_blocks() {
+    let ex = extract("docs/06.md", "**FR-WEB-1 · MUST · первая**\n[a](a.md)\n```\n[x](x.md)\n```\n[b](b.md)\n```\n[y](y.md)\n```\n[c](c.md)\n");
+    let links: Vec<&str> = ex.edges.iter().filter(|e| e.kind == EdgeKind::Links).map(|e| e.target.as_str()).collect();
+    assert_eq!(links, ["file:docs/a.md", "file:docs/b.md", "file:docs/c.md"]);
+}
+
+// `RequirementScanner::scan` sorts and dedups its own edges before `links::scan` appends to the
+// same vec, so — unlike References or Declares — Links edges keep the order they were written in.
+#[test]
+fn multiple_links_stay_in_text_order_after_the_requirement_edges_are_sorted() {
+    let ex = extract("docs/06.md", "**FR-WEB-1 · MUST · первая**\n[б](b.md) [а](a.md) [в](v.md)\n");
+    let links: Vec<&str> = ex.edges.iter().filter(|e| e.kind == EdgeKind::Links).map(|e| e.target.as_str()).collect();
+    assert_eq!(links, ["file:docs/b.md", "file:docs/a.md", "file:docs/v.md"]);
+}

@@ -25,12 +25,19 @@ pub fn normalise(rel: &str, target: &str) -> String {
 }
 
 pub fn scan(rel: &str, text: &str, ex: &mut Extraction) {
-    for c in link_re().captures_iter(text) {
-        let t = &c[1];
-        if t.contains("://") || t.starts_with("mailto:") {
-            continue;
+    // A link quoted inside a code fence is an example of the syntax, not a real link — the
+    // requirement scanner already excludes fenced heads on the same reasoning.
+    let mut fenced = false;
+    for line in text.lines() {
+        if line.trim_start().starts_with("```") { fenced = !fenced; continue; }
+        if fenced { continue; }
+        for c in link_re().captures_iter(line) {
+            let t = &c[1];
+            if t.contains("://") || t.starts_with("mailto:") {
+                continue;
+            }
+            ex.edge(&format!("file:{rel}"), &format!("file:{}", normalise(rel, t)), EdgeKind::Links, "", rel);
         }
-        ex.edge(&format!("file:{rel}"), &format!("file:{}", normalise(rel, t)), EdgeKind::Links, "", rel);
     }
 }
 
@@ -90,5 +97,11 @@ mod tests {
     fn the_same_link_twice_in_one_document_produces_two_edges() {
         let l = links("a.md", "[x](b.md) and again [y](b.md)");
         assert_eq!(l, vec![("file:a.md".into(), "file:b.md".into()), ("file:a.md".into(), "file:b.md".into())]);
+    }
+
+    #[test]
+    fn a_link_inside_a_fenced_code_block_is_ignored() {
+        let l = links("a.md", "example:\n```\n[x](y.md)\n```\nreal [z](w.md)\n");
+        assert_eq!(l, vec![("file:a.md".into(), "file:w.md".into())]);
     }
 }
