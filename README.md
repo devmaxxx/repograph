@@ -201,11 +201,15 @@ From documents it takes requirement blocks in both `**ID · MUST · title**` and
 forms, ids referenced in prose (including ranges like `FR-RPT-42…48` and slash lists like
 `INV-11/12/20`), backticked entity names, markdown links, and `constitution.yaml`-shaped registries.
 
-From TypeScript it takes a `Symbol` per top-level export, class, method and decorated member;
-imports resolved through relative paths, `tsconfig` `paths` and `package.json` `exports`; decorators
-with their first string argument as context; and every id quoted in a comment or string literal,
-attributed to its enclosing symbol. That last layer is the doc↔code bridge an AST-only indexer
-misses entirely.
+From TypeScript it takes a `Symbol` per top-level declaration — exported or not, `declare`d,
+destructured, overloaded, a namespace or an enum — and per class member, quoted and computed
+names included; imports resolved through relative paths, `tsconfig` `paths` (with `baseUrl`) and
+`package.json` `exports` (wildcard subpaths included, `main`/`types` as the fallback), plus
+`import()` and `require()` calls; decorators with their first string argument as context; and
+every id quoted in a comment or string literal, attributed to the top-level function, class
+member, `const`, interface or enum that contains it. That last layer is the doc↔code bridge an
+AST-only indexer misses entirely. Each construct is pinned by one inline case in
+`src/code/cases.rs`; `.claude/skills/extractor-case/` is the loop for adding the next one.
 
 ## Configure
 
@@ -273,8 +277,11 @@ mode instead fails the run outright (exit 1): its only output is an exit code, a
 graded against the weaker no-dense floor would report green without having measured what it claims to
 measure.
 
-On `beauty-crm`'s 6,691 non-`File` nodes, the first embedding pass took ~135 s on an M3 Pro; a second
-`update` with nothing changed embeds 0 — only nodes whose passage hash changed are re-embedded.
+On `beauty-crm`'s 6,700 non-`File` nodes, the first embedding pass takes ~103 s on an M3 Pro — rows are
+batched by length, so a ten-token label no longer pads out to a 256-token batch (191 s before that,
+same vectors to six decimals); a second `update` with nothing changed embeds 0 — only nodes whose
+passage hash changed are re-embedded. `build` drops the graph and the manifest and nothing else: the
+vectors are reused by content hash and the questions cost tokens, so neither is paid for twice.
 
 ## Spending tokens on purpose
 
@@ -379,8 +386,8 @@ out of 3,599 tracked:
 
 |                                 |                                                                                                                              |
 | ------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
-| Nodes                           | 7,515 — 3,631 `Symbol`, 1,880 `Requirement`, 1,001 `Task`, 824 `File`, 72 `Entity`, 69 `Milestone`, 20 `Invariant`, 18 `Adr` |
-| Edges                           | 27,085                                                                                                                       |
+| Nodes                           | 7,525 — 3,640 `Symbol`, 1,880 `Requirement`, 1,001 `Task`, 825 `File`, 72 `Entity`, 69 `Milestone`, 20 `Invariant`, 18 `Adr` |
+| Edges                           | 27,412                                                                                                                       |
 | Graph on disk                   | 10.2 MB JSON                                                                                                                 |
 | Graph load                      | ~19 ms                                                                                                                       |
 | Lexical index rebuild           | ~120 ms                                                                                                                      |
