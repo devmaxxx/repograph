@@ -133,6 +133,7 @@ Run the recorded benchmark:
 ```bash
 repograph bench                      # bench/cases.jsonl: 24 keyword + 14 paraphrase + 3 code
 repograph bench --cases other.jsonl  # a different case file, same 24/14/3 shape
+repograph dump --queries qs.jsonl --out lists.json   # every retriever's ranked list per question, 300 deep
 ```
 
 ## How a question becomes an answer
@@ -364,6 +365,16 @@ different file of the same shape:
   chars/4 reading would give a Latin one. The no-dense arm seeds from the generated questions,
   whose Cyrillic requirement headlines cost more bytes than the symbol and task nodes the passage
   list used to return (+7 tokens at the median), which is why its floor sits ten tokens higher
+
+Forty-one cases cannot tell 7/14 from 8/14 — Wilson 95% on 7/14 is 0.27–0.73 — so retrieval
+changes are judged on a second set: `repograph dump --queries qs.jsonl --out lists.json` writes,
+for every question in a `{"q", "expect", "kind"}` JSONL, the four retriever lists 300 deep (dense
+and BM25, over passages and over the generated questions) with their scores, the query vector,
+the exact ids and the answer `ask` would give — and, for a question that is itself a stored
+generated question, leaves that row out of both question indexes while it is asked. Four hundred
+such held-out questions, one per node, give recall@5 a ±5-point interval and a paired exact
+McNemar test against the shipped rule; that is the bar a fusion or expansion change has to clear
+before the 41 real cases are consulted as the smoke test they are.
 
 Measured, on the shipped binary against `beauty-crm`: `keyword 24/24  paraphrase 8/14  code 3/3
 p90 220 tok` (median 201) with embeddings; `keyword 24/24  paraphrase 6/14  code 3/3  p90 228 tok`
