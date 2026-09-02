@@ -30,6 +30,12 @@ fn normalise(v: &mut [f32]) {
 }
 
 impl DenseIndex {
+    /// Whether an index is on disk, without reading it: an exact-id or `--no-dense` answer
+    /// never needs the vectors, and loading 50 MB of them cost every such `ask` 40 ms.
+    pub fn present(store: &Store) -> bool {
+        store.has("vectors.json") && store.has("vectors.f32")
+    }
+
     pub fn load(store: &Store) -> Result<DenseIndex> {
         let Some(meta) = store.read_bytes("vectors.json")? else { return Ok(DenseIndex::default()) };
         let mut idx: DenseIndex = serde_json::from_slice(&meta).context("vectors.json")?;

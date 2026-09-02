@@ -142,6 +142,23 @@ fn embed_all(repo: &std::path::Path, no_dense: bool) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// `REPOGRAPH_TIMING=1` prints where an `ask` spends its time, one line per stage on stderr.
+struct Timing { on: bool, start: std::time::Instant, last: std::cell::Cell<std::time::Instant> }
+
+impl Timing {
+    fn new() -> Timing {
+        let now = std::time::Instant::now();
+        Timing { on: std::env::var_os("REPOGRAPH_TIMING").is_some(), start: now, last: std::cell::Cell::new(now) }
+    }
+
+    fn stage(&self, what: &str) {
+        if !self.on { return; }
+        let now = std::time::Instant::now();
+        eprintln!("timing: {:>7.1} ms  (+{:>6.1} ms)  {what}", (now - self.start).as_secs_f64() * 1e3, (now - self.last.get()).as_secs_f64() * 1e3);
+        self.last.set(now);
+    }
+}
+
 fn open_embedder(no_dense: bool) -> Option<index::embed::Embedder> {
     if no_dense { return None; }
     match index::embed::Embedder::open() {
@@ -176,26 +193,42 @@ fn main() -> anyhow::Result<()> {
             embed_all(&repo, cli.no_dense)
         }
         Cmd::Ask { words, json, seeds, bodies, rerank, depth } => {
+            let timing = Timing::new();
             let cfg = load_cfg()?;
             let store = store::Store::new(&repo);
             let (graph, _) = store.load()?;
+            timing.stage("graph loaded");
             let ids = ids::IdMatcher::new(&cfg.id_families, &cfg.milestone_families);
-            let dense_idx = index::dense::DenseIndex::load(&store)?;
             let questions = enrich::Questions::load(&store)?;
-            // Opening the ONNX model costs ~0.6 s and 1.3 GB; an exact id or symbol match never
-            // asks for it, so it is opened on the first fused query, not on every `ask`.
+            timing.stage("ids and questions ready");
+            // Opening the ONNX model costs ~0.6 s and 1.3 GB, the vectors 50 MB; an exact id or
+            // symbol match never asks for either, so both open on the first fused query.
             let embedder: std::cell::RefCell<Option<Option<index::embed::Embedder>>> = std::cell::RefCell::new(None);
+            let dense_idx: std::cell::RefCell<Option<index::dense::DenseIndex>> = std::cell::RefCell::new(None);
             let dense_fn = |q: &str, k: usize| -> (Vec<String>, Vec<String>) {
                 let mut slot = embedder.borrow_mut();
-                let e = slot.get_or_insert_with(|| open_embedder(cli.no_dense));
-                match e.as_mut().and_then(|e| e.query(q).ok()) { Some(v) => dense_idx.search(&v, k), None => (Vec::new(), Vec::new()) }
+                let e = slot.get_or_insert_with(|| { let e = open_embedder(cli.no_dense); timing.stage("model opened"); e });
+                let mut idx = dense_idx.borrow_mut();
+                let idx = idx.get_or_insert_with(|| {
+                    let i = index::dense::DenseIndex::load(&store).unwrap_or_else(|err| { eprintln!("dense: index unreadable, continuing lexical-only ({err:#})"); Default::default() });
+                    timing.stage("vectors loaded"); i
+                });
+                let out = match e.as_mut().and_then(|e| e.query(q).ok()) { Some(v) => idx.search(&v, k), None => (Vec::new(), Vec::new()) };
+                timing.stage("query embedded and searched");
+                out
             };
-            let opts = query::Options { seeds, bodies, dense: !cli.no_dense && !dense_idx.ids.is_empty(), json, depth };
+            let opts = query::Options { seeds, bodies, dense: !cli.no_dense && index::dense::DenseIndex::present(&store), json, depth };
             let rerank_fn = |q: &str, c: &[(String, String)]| rerank::run(&cfg.rerank_command, q, c);
             let rerank: Option<query::Rerank> = if rerank { Some(&rerank_fn) } else { None };
             let answer = query::ask(&graph, &ids, &questions, Some(&dense_fn), rerank, &words, &opts);
+            timing.stage("answered");
             print!("{}", query::render(&answer, &graph, &opts));
-            Ok(())
+            // Nothing here is written back, and unwinding a 1.3 GB model session plus the graph
+            // costs a fused answer a measurable share of its wall time: leave without it.
+            use std::io::Write;
+            std::io::stdout().flush()?;
+            timing.stage("printed");
+            std::process::exit(0)
         }
         Cmd::Explain { node } => {
             let (graph, _) = store::Store::new(&repo).load()?;

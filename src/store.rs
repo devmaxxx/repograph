@@ -33,6 +33,12 @@ impl Store {
         Ok(())
     }
 
+    /// Whether a store file is there with something in it — a metadata read, so a caller can
+    /// decide about a 50 MB file without loading it.
+    pub fn has(&self, name: &str) -> bool {
+        std::fs::metadata(self.dir.join(name)).map(|m| m.len() > 0).unwrap_or(false)
+    }
+
     pub fn read_bytes(&self, name: &str) -> Result<Option<Vec<u8>>> {
         let p = self.dir.join(name);
         if !p.exists() { return Ok(None); }
@@ -93,6 +99,17 @@ mod tests {
         let (g, _) = store.load().unwrap();
         assert!(g.nodes.is_empty());
         assert!(!d.path().join(".repograph/graph.json.tmp").exists());
+    }
+
+    #[test]
+    fn has_means_present_and_non_empty() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::new(dir.path());
+        assert!(!store.has("vectors.f32"));
+        store.write_atomic("vectors.f32", b"").unwrap();
+        assert!(!store.has("vectors.f32"));
+        store.write_atomic("vectors.f32", &[0u8; 8]).unwrap();
+        assert!(store.has("vectors.f32"));
     }
 
     #[test]

@@ -269,7 +269,9 @@ reuses the cache; there are no further network calls once it is populated. `--no
 download and the embedding stage everywhere.
 
 `ask` opens the model only when a fused query needs it: an exact id or symbol lookup answers in
-~30 ms and ~50 MB, a fused query in ~0.5 s and ~1.4 GB — the model, not the graph.
+~30 ms and ~50 MB, a fused query in ~0.4 s and ~1.4 GB — the model, not the graph; an exact-id
+lookup answers in ~50 ms and a `--no-dense` question in ~0.1 s, since neither opens the model or
+reads the vectors. `REPOGRAPH_TIMING=1` prints where an `ask` spends its time, stage by stage.
 
 Five embedding-side levers were measured on the same corpus and cases and none moved recall past
 6/14: the larger `MultilingualE5Base` (768-d, ≈1.1 GB, 2.4× the download) scores 6/14 with a
@@ -338,7 +340,7 @@ answering model's own, median over the 38 questions):
 
 |                                                | paraphrase | keyword | code | p90 tokens | model tokens per question | latency per question |
 | ---------------------------------------------- | ---------- | ------- | ---- | ---------- | ------------------------- | -------------------- |
-| `ask`                                          | 7/14       | 24/24   | 3/3  | 216        | 0                         | ~0.5 s               |
+| `ask`                                          | 7/14       | 24/24   | 3/3  | 216        | 0                         | ~0.4 s               |
 | `--rerank`, haiku, depth 100, titles           | 10/14      | 24/24   | 3/3  | 222        | ≈4,600                    | ~3.5 s               |
 | `--rerank`, haiku, depth 100                   | 11/14      | 24/24   | 3/3  | 222        | ≈9,500                    | ~4 s                 |
 | `--rerank`, sonnet, depth 100                  | 13/14      | 24/24   | 3/3  | 222        | ≈10,900                   | ~4 s                 |
