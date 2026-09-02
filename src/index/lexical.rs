@@ -37,11 +37,13 @@ pub struct Params {
     pub dfmax: f32,
     /// Weight of an adjacent-stem bigram's contribution; zero emits no bigrams.
     pub bigram: f32,
+    /// Character n-gram length for `Tok::Gram` / `Tok::Both`.
+    pub gram: usize,
 }
 
 impl Default for Params {
     fn default() -> Self {
-        Params { k1: K1, b: B, label: 1, score: Score::Bm25, tok: Tok::Stem, gw: 1.0, dfmax: 1.0, bigram: 0.0 }
+        Params { k1: K1, b: B, label: 1, score: Score::Bm25, tok: Tok::Stem, gw: 1.0, dfmax: 1.0, bigram: 0.0, gram: GRAM }
     }
 }
 
@@ -58,6 +60,7 @@ impl Params {
                 "gw" => p.gw = num(),
                 "dfmax" => p.dfmax = num(),
                 "bigram" => p.bigram = num(),
+                "gram" => p.gram = num() as usize,
                 "score" => p.score = match v { "bm25" => Score::Bm25, "plus" => Score::Plus, "l" => Score::L, _ => panic!("REPOGRAPH_BM25: score={v}") },
                 "tok" => p.tok = match v { "stem" => Tok::Stem, "gram" => Tok::Gram, "both" => Tok::Both, _ => panic!("REPOGRAPH_BM25: tok={v}") },
                 _ => panic!("REPOGRAPH_BM25: unknown key {k}"),
@@ -105,13 +108,13 @@ fn stem(word: &str) -> String {
     if word.chars().any(|c| ('\u{0400}'..='\u{04FF}').contains(&c)) { ru.stem(word).into_owned() } else { en.stem(word).into_owned() }
 }
 
-/// Character `GRAM`-grams of a word, the word itself when it is shorter.
-fn grams(word: &str) -> Vec<String> {
+/// Character `n`-grams of a word, the word itself when it is shorter.
+fn grams(word: &str, n: usize) -> Vec<String> {
     let chars: Vec<char> = word.chars().collect();
-    if chars.len() <= GRAM {
+    if chars.len() <= n {
         return vec![format!("{GRAM_MARK}{word}")];
     }
-    chars.windows(GRAM).map(|w| { let mut s = String::from(GRAM_MARK); s.extend(w); s }).collect()
+    chars.windows(n).map(|w| { let mut s = String::from(GRAM_MARK); s.extend(w); s }).collect()
 }
 
 pub fn tokenize_with(text: &str, p: &Params) -> Vec<String> {
@@ -120,7 +123,7 @@ pub fn tokenize_with(text: &str, p: &Params) -> Vec<String> {
     for w in words(text) {
         let primary = if is_name(&w) { Some(w.clone()) } else if p.tok == Tok::Gram { None } else { Some(stem(&w)) };
         if !is_name(&w) && p.tok != Tok::Stem {
-            out.extend(grams(&w));
+            out.extend(grams(&w, p.gram));
         }
         if let Some(t) = primary {
             if p.bigram > 0.0 {
@@ -307,15 +310,15 @@ mod tests {
     #[test]
     fn default_params_are_the_shipped_constants() {
         let p = Params::default();
-        assert_eq!((p.k1, p.b, p.label, p.gw, p.dfmax, p.bigram), (1.2, 0.75, 1, 1.0, 1.0, 0.0));
+        assert_eq!((p.k1, p.b, p.label, p.gw, p.dfmax, p.bigram, p.gram), (1.2, 0.75, 1, 1.0, 1.0, 0.0, 4));
         assert_eq!((p.score, p.tok), (Score::Bm25, Tok::Stem));
         assert_eq!(tokenize_with("политика отмены FR-PAY-22", &p), stems("политика отмены FR-PAY-22"));
     }
 
     #[test]
     fn spec_parses_every_key_and_rejects_the_rest() {
-        let p = Params::parse("k1=0.9, b=0.5,label=3,score=l,tok=both,gw=0.5,dfmax=0.2,bigram=0.3");
-        assert_eq!((p.k1, p.b, p.label, p.gw, p.dfmax, p.bigram), (0.9, 0.5, 3, 0.5, 0.2, 0.3));
+        let p = Params::parse("k1=0.9, b=0.5,label=3,score=l,tok=both,gw=0.5,dfmax=0.2,bigram=0.3,gram=3");
+        assert_eq!((p.k1, p.b, p.label, p.gw, p.dfmax, p.bigram, p.gram), (0.9, 0.5, 3, 0.5, 0.2, 0.3, 3));
         assert_eq!((p.score, p.tok), (Score::L, Tok::Both));
         assert!(std::panic::catch_unwind(|| Params::parse("kk=1")).is_err());
     }
@@ -334,5 +337,7 @@ mod tests {
         assert_eq!(term_weight(&format!("{GRAM_MARK}штра"), &p), 1.0);
         assert_eq!(term_weight(&format!("{BIGRAM_MARK}a b"), &p), 0.5);
         assert_eq!(term_weight("штраф", &p), 1.0);
+        let p = Params { tok: Tok::Gram, gram: 3, ..Params::default() };
+        assert_eq!(tokenize_with("штрафы", &p).len(), 4);
     }
 }
