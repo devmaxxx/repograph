@@ -39,8 +39,13 @@ impl Store {
         Ok(Some(std::fs::read(&p)?))
     }
 
+    /// Drops what `build` recomputes and nothing else: the dense vectors are reused by
+    /// content hash, and the questions cost model tokens that a rebuild must not spend twice.
     pub fn wipe(&self) -> Result<()> {
-        if self.dir.exists() { std::fs::remove_dir_all(&self.dir)?; }
+        for name in ["graph.json", "manifest.json", "graph.json.tmp", "manifest.json.tmp"] {
+            let p = self.dir.join(name);
+            if p.exists() { std::fs::remove_file(&p).with_context(|| format!("remove {}", p.display()))?; }
+        }
         Ok(())
     }
 }
@@ -88,6 +93,21 @@ mod tests {
         let (g, _) = store.load().unwrap();
         assert!(g.nodes.is_empty());
         assert!(!d.path().join(".repograph/graph.json.tmp").exists());
+    }
+
+    #[test]
+    fn wipe_keeps_the_vectors_and_the_questions() {
+        let d = tempfile::tempdir().unwrap();
+        let s = Store::new(d.path());
+        s.save(&Graph::default(), &Manifest::default()).unwrap();
+        s.write_atomic("vectors.f32", b"v").unwrap();
+        s.write_atomic("questions.json", b"{}").unwrap();
+        s.wipe().unwrap();
+        assert!(!d.path().join(".repograph/graph.json").exists());
+        assert!(!d.path().join(".repograph/manifest.json").exists());
+        assert_eq!(s.read_bytes("vectors.f32").unwrap().as_deref(), Some(&b"v"[..]));
+        assert_eq!(s.read_bytes("questions.json").unwrap().as_deref(), Some(&b"{}"[..]));
+        s.wipe().unwrap();
     }
 
     #[test]

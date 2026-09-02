@@ -86,11 +86,15 @@ impl Embedder {
     }
 
     /// Texts arrive already e5-prefixed (`dense::rows`): passages as `passage: `, generated
-    /// questions as `query: `.
+    /// questions as `query: `. A batch is padded to its longest member, so texts are batched
+    /// by length — a ten-token label no longer rides in a 256-token batch.
     pub fn embed(&mut self, texts: &[String]) -> Result<Vec<Vec<f32>>> {
-        let mut out = Vec::with_capacity(texts.len());
-        for chunk in texts.chunks(BATCH) {
-            out.extend(self.forward(chunk)?);
+        let mut out: Vec<Vec<f32>> = vec![Vec::new(); texts.len()];
+        for chunk in length_batches(texts, BATCH) {
+            let batch: Vec<String> = chunk.iter().map(|&i| texts[i].clone()).collect();
+            for (i, v) in chunk.into_iter().zip(self.forward(&batch)?) {
+                out[i] = v;
+            }
         }
         Ok(out)
     }
@@ -130,6 +134,14 @@ impl Embedder {
     }
 }
 
+/// Indices of `texts` grouped `batch` at a time in ascending byte length, so every batch pads
+/// to a neighbour's length rather than to the corpus maximum.
+fn length_batches(texts: &[String], batch: usize) -> Vec<Vec<usize>> {
+    let mut order: Vec<usize> = (0..texts.len()).collect();
+    order.sort_by_key(|&i| texts[i].len());
+    order.chunks(batch).map(<[usize]>::to_vec).collect()
+}
+
 /// Mean pooling over the attention mask, then L2-normalised — the model card's recipe.
 fn pool(hidden: &[f32], mask: &[i64], len: usize, dim: usize) -> Vec<Vec<f32>> {
     let batch = mask.len().checked_div(len).unwrap_or(0);
@@ -160,6 +172,14 @@ mod tests {
         let r = 0.5f32.sqrt();
         assert!((v[0][0] - r).abs() < 1e-6 && (v[0][1] - r).abs() < 1e-6);
         assert!((v[1][0] - 0.6).abs() < 1e-6 && (v[1][1] - 0.8).abs() < 1e-6);
+    }
+
+    #[test]
+    fn length_batches_group_neighbours_and_cover_every_text_once() {
+        let texts: Vec<String> = ["aaaa", "b", "cc", "ddddd", "eee"].iter().map(|s| s.to_string()).collect();
+        let batches = length_batches(&texts, 2);
+        assert_eq!(batches, vec![vec![1, 2], vec![4, 0], vec![3]]);
+        assert!(length_batches(&[], 2).is_empty());
     }
 
     #[test]

@@ -351,6 +351,32 @@ fn ids_in_test_titles_and_describe_blocks_attach_to_the_file() {
 }
 
 #[test]
+fn ids_in_interfaces_enums_and_types_attach_to_that_symbol() {
+    let src = "export interface I {\n  /** FR-PAY-03 */\n  a: number;\n}\nenum E { A = 'INV-11' }\ntype T = { k: 'FR-SEC-21' };\nexport namespace N { export const q = 'FR-VIS-35'; }\n";
+    let ex = extract("a.ts", src);
+    let refs = edges(&ex, EdgeKind::References);
+    assert!(refs.contains(&("sym:a.ts::I", "FR-PAY-03", "comment")), "{refs:?}");
+    assert!(refs.contains(&("sym:a.ts::E", "INV-11", "string")), "{refs:?}");
+    assert!(refs.contains(&("sym:a.ts::T", "FR-SEC-21", "string")), "{refs:?}");
+    assert!(refs.contains(&("sym:a.ts::N", "FR-VIS-35", "string")), "{refs:?}");
+}
+
+#[test]
+fn ids_in_a_class_property_initialiser_attach_to_the_property() {
+    let ex = extract("a.ts", "class A {\n  handler = () => 'FR-PAY-03';\n  static {\n    console.log('INV-11');\n  }\n}\n");
+    let refs = edges(&ex, EdgeKind::References);
+    assert!(refs.contains(&("sym:a.ts::A.handler", "FR-PAY-03", "string")), "{refs:?}");
+    assert!(refs.contains(&("sym:a.ts::A", "INV-11", "string")), "{refs:?}");
+}
+
+#[test]
+fn ids_in_jsx_attributes_are_strings_of_the_component() {
+    let ex = extract("a.tsx", "export const View = () => <Route path=\"x\" title=\"FR-PAY-03\" />;\n");
+    let refs = edges(&ex, EdgeKind::References);
+    assert_eq!(refs, vec![("sym:a.tsx::View", "FR-PAY-03", "string")]);
+}
+
+#[test]
 fn ambiguous_families_are_not_references() {
     let ex = extract("a.ts", "// step B1, table C11, size S3, item I-015\n");
     assert!(edges(&ex, EdgeKind::References).is_empty(), "{:?}", edges(&ex, EdgeKind::References));
@@ -470,4 +496,16 @@ fn a_malformed_package_json_or_tsconfig_does_not_abort_the_walk() {
         ("packages/ok/src/index.ts", ""),
     ]);
     assert_eq!(r.resolve("apps/a.ts", "@x/ok").as_deref(), Some("packages/ok/src/index.ts"));
+}
+
+/// A development aid, not a test: prints the tree-sitter S-expression of `REPOGRAPH_DUMP`
+/// so a new case can be written against the grammar's real shape.
+/// `REPOGRAPH_DUMP='export * as ns from "./lib";' cargo test dump_tree -- --ignored --nocapture`
+#[test]
+#[ignore]
+fn dump_tree() {
+    let src = std::env::var("REPOGRAPH_DUMP").expect("set REPOGRAPH_DUMP to the source to parse");
+    let rel = if std::env::var_os("REPOGRAPH_DUMP_TSX").is_some() { "dump.tsx" } else { "dump.ts" };
+    let tree = crate::code::symbols::parse(rel, src.as_bytes()).unwrap();
+    println!("{}", tree.root_node().to_sexp());
 }

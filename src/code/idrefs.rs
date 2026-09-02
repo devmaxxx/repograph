@@ -27,7 +27,8 @@ pub(crate) fn owner(mut n: Node, rel: &str, src: &[u8]) -> String {
                     method = member_name(p, src);
                 }
             }
-            "function_declaration" | "function_signature" if is_top_level(p) => {
+            "function_declaration" | "function_signature" | "interface_declaration" | "type_alias_declaration"
+            | "enum_declaration" | "internal_module" if is_top_level(p) => {
                 if let Some(f) = name_of(p, src) {
                     return format!("sym:{rel}::{f}");
                 }
