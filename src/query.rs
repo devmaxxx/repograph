@@ -3,7 +3,7 @@ use crate::ids::IdMatcher;
 use crate::index::{fuse, lexical::LexicalIndex};
 use crate::model::{EdgeKind, Graph, NodeKind};
 use serde::Serialize;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 /// `depth`: how many fused candidates a reranking model is shown; each retriever runs that deep.
 pub struct Options { pub seeds: usize, pub bodies: bool, pub dense: bool, pub json: bool, pub depth: usize }
@@ -63,6 +63,7 @@ pub fn ask(graph: &Graph, ids: &IdMatcher, questions: &Questions, dense: Option<
     let query = words.join(" ");
     let mut answer = Answer::default();
     let (exact, whole_question) = exact_seeds(graph, ids, words);
+    let mut ranked: HashMap<String, usize> = HashMap::new();
     // A name duplicated across generated clients (packages/contracts/src/generated/**) must not
     // be able to spend the whole answer budget on itself.
     for id in exact.iter().take(opts.seeds) {
@@ -111,27 +112,36 @@ pub fn ask(graph: &Graph, ids: &IdMatcher, questions: &Questions, dense: Option<
             let rest: Vec<(String, f32)> = fused.into_iter().filter(|(id, _)| !order.contains(id)).collect();
             fused = order.iter().enumerate().map(|(rank, id)| (id.clone(), 1.0 / (rank as f32 + 1.0))).chain(rest).collect();
         }
-        for (id, score) in fused {
-            if answer.seeds.len() >= opts.seeds { break; }
-            if exact.contains(&id) { continue; }
-            if let Some(h) = hit(graph, &id, score, None) { answer.seeds.push(h); }
+        for (rank, (id, score)) in fused.into_iter().enumerate() {
+            if answer.seeds.len() < opts.seeds && !exact.contains(&id) {
+                if let Some(h) = hit(graph, &id, score, None) { answer.seeds.push(h); }
+            }
+            ranked.entry(id).or_insert(rank);
         }
     }
 
+    // The expanded line goes to the seed neighbour the retrievers ranked best, however far
+    // down; a neighbour no retriever ranked falls back to its seed's rank. Measured on 400
+    // held-out generated questions: 208 → 226 hits over the seed's rank alone (one lost,
+    // nineteen gained), 7/14 → 8/14 on the paraphrase cases, same one line of output.
     let seed_ids: Vec<String> = answer.seeds.iter().map(|h| h.id.clone()).collect();
-    let mut expanded: Vec<Hit> = Vec::new();
+    let mut candidates: Vec<(Option<usize>, f32, &str, &str)> = Vec::new();
     for seed in &answer.seeds {
         for e in graph.neighbours(&seed.id) {
             if !EXPAND.contains(&e.kind) { continue; }
             let other = if e.source == seed.id { &e.target } else { &e.source };
             if seed_ids.contains(other) || other.starts_with("file:") || other.starts_with("deco:") { continue; }
-            if expanded.iter().any(|h| &h.id == other) { continue; }
-            if let Some(h) = hit(graph, other, seed.score * 0.5, Some(&seed.id)) { expanded.push(h); }
+            if candidates.iter().any(|c| c.2 == other) { continue; }
+            candidates.push((ranked.get(other).copied(), seed.score * 0.5, other, &seed.id));
         }
     }
-    expanded.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap().then(a.id.cmp(&b.id)));
-    expanded.truncate(MAX_EXPANDED);
-    answer.expanded = expanded;
+    candidates.sort_by(|a, b| {
+        a.0.is_none().cmp(&b.0.is_none()).then(a.0.cmp(&b.0)).then(b.1.partial_cmp(&a.1).unwrap()).then(a.2.cmp(b.2))
+    });
+    answer.expanded = candidates.iter().take(MAX_EXPANDED).filter_map(|(rank, fallback, id, via)| {
+        let score = rank.map_or(*fallback, |r| 1.0 / (r as f32 + 1.0));
+        hit(graph, id, score, Some(via))
+    }).collect();
     answer
 }
 
@@ -412,6 +422,29 @@ mod tests {
         let a = ask(&g, &ids(), &qs, Some(&dense), None, &["штраф".to_string()], &Options { dense: true, ..opts() });
         let order: Vec<&str> = a.seeds.iter().map(|h| h.id.as_str()).collect();
         assert_eq!(&order[..3], ["N-151", "FR-PAY-20", "FR-PAY-22"]);
+    }
+
+    #[test]
+    fn the_expanded_line_is_the_neighbour_the_retrievers_ranked_not_the_top_seeds() {
+        // Seeds A1..A5 are the dense list; A1's neighbour X is unranked, A5's neighbour Y sits
+        // at fused rank 6. The old rule took X (best seed); the retrievers vouch for Y.
+        let mut g = Graph::default();
+        let mut e = Extraction::default();
+        for id in ["A1", "A2", "A3", "A4", "A5", "X", "Y"] {
+            e.node(NodeKind::Requirement, id, id, "", "docs/a.md", 1);
+        }
+        e.edge("A1", "X", EdgeKind::References, "body", "docs/a.md");
+        e.edge("A5", "Y", EdgeKind::References, "body", "docs/a.md");
+        g.apply(e);
+        let dense = |_: &str, _: usize| (["A1", "A2", "A3", "A4", "A5", "Y"].iter().map(|s| s.to_string()).collect(), Vec::new());
+        let a = ask(&g, &ids(), &Questions::default(), Some(&dense), None, &["ничего".into()], &Options { dense: true, ..opts() });
+        assert_eq!(a.seeds.iter().map(|h| h.id.as_str()).collect::<Vec<_>>(), ["A1", "A2", "A3", "A4", "A5"]);
+        assert_eq!(a.expanded.len(), 1);
+        assert_eq!((a.expanded[0].id.as_str(), a.expanded[0].via.as_deref()), ("Y", Some("A5")));
+        // Without a ranked neighbour the seed's own rank decides, as before.
+        let dense = |_: &str, _: usize| (["A1", "A2", "A3", "A4", "A5"].iter().map(|s| s.to_string()).collect(), Vec::new());
+        let a = ask(&g, &ids(), &Questions::default(), Some(&dense), None, &["ничего".into()], &Options { dense: true, ..opts() });
+        assert_eq!((a.expanded[0].id.as_str(), a.expanded[0].via.as_deref()), ("X", Some("A1")));
     }
 
     #[test]
