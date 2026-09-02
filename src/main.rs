@@ -161,10 +161,10 @@ fn main() -> anyhow::Result<()> {
             let questions = enrich::Questions::load(&store)?;
             let t = std::time::Instant::now();
             let r = enrich::run(&store, &graph, questions, &cfg.enrich_command, batch, parallel, limit)?;
-            println!("enrich: {} nodes written, {} dropped, {} batches ({} failed) in {:.0}s", r.generated, r.dropped, r.batches, r.failed, t.elapsed().as_secs_f32());
+            println!("enrich: {} nodes written, {} dropped, {} still without questions, {} batches ({} failed) in {:.0}s", r.generated, r.dropped, r.left, r.batches, r.failed, t.elapsed().as_secs_f32());
             embed_all(&repo, cli.no_dense)
         }
-        Cmd::Ask { words, json, seeds, bodies, rerank } => {
+        Cmd::Ask { words, json, seeds, bodies, rerank, depth } => {
             let cfg = load_cfg()?;
             let store = store::Store::new(&repo);
             let (graph, _) = store.load()?;

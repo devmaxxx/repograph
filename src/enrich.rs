@@ -20,7 +20,7 @@ pub struct Entry { pub hash: String, pub questions: Vec<String> }
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct Questions { pub entries: BTreeMap<String, Entry> }
 
-pub struct Report { pub generated: usize, pub dropped: usize, pub batches: usize, pub failed: usize }
+pub struct Report { pub generated: usize, pub dropped: usize, pub batches: usize, pub failed: usize, pub left: usize }
 
 fn passage(n: &Node) -> String {
     let body: String = n.body.chars().take(PASSAGE_CHARS).collect();
@@ -29,7 +29,10 @@ fn passage(n: &Node) -> String {
 
 fn hash(text: &str) -> String { blake3::hash(text.as_bytes()).to_hex().to_string() }
 
-pub fn eligible(n: &Node) -> bool { KINDS.contains(&n.kind) }
+/// An entity that is only a name (a backticked span in some title) gives the model nothing to
+/// ask about, and it says so by skipping the entry — 63 of them on the bench corpus, retried on
+/// every run until they were left out.
+pub fn eligible(n: &Node) -> bool { KINDS.contains(&n.kind) && !(n.kind == NodeKind::Entity && n.body.trim().is_empty()) }
 
 impl Questions {
     pub fn load(store: &Store) -> Result<Questions> {
@@ -133,7 +136,10 @@ pub fn run(store: &Store, graph: &Graph, questions: Questions, command: &str, ba
     let dropped = questions.prune(graph);
     let mut stale = questions.stale(graph);
     if let Some(l) = limit { stale.truncate(l); }
-    let batches: Vec<Vec<(&Node, String)>> = stale.chunks(batch.max(1)).map(|c| c.to_vec()).collect();
+    // A batch the model answers in prose instead of `id<TAB>text` leaves its nodes without
+    // questions and its exit status green; measured once on 172 batches, 7 came back that way
+    // and 195 nodes silently stayed unsearchable. The nodes an answer skipped go round once more.
+    let batches: Vec<(Vec<(&Node, String)>, bool)> = stale.chunks(batch.max(1)).map(|c| (c.to_vec(), false)).collect();
     let total = batches.len();
     let queue = Arc::new(Mutex::new(batches));
     let shared = Arc::new(Mutex::new((questions, 0usize, 0usize)));
@@ -141,7 +147,7 @@ pub fn run(store: &Store, graph: &Graph, questions: Questions, command: &str, ba
         for _ in 0..parallel.max(1) {
             let (queue, shared) = (Arc::clone(&queue), Arc::clone(&shared));
             s.spawn(move || loop {
-                let Some(b) = queue.lock().unwrap().pop() else { break };
+                let Some((b, retry)) = queue.lock().unwrap().pop() else { break };
                 let nodes: Vec<&Node> = b.iter().map(|(n, _)| *n).collect();
                 match run_command(command, &prompt(&nodes)) {
                     Ok(out) => {
@@ -154,7 +160,14 @@ pub fn run(store: &Store, graph: &Graph, questions: Questions, command: &str, ba
                             }
                         }
                         if let Err(e) = g.0.save(store) { eprintln!("enrich: save: {e:#}"); }
-                        eprintln!("enrich: batch done, {} of {} left", queue.lock().unwrap().len(), total);
+                        drop(g);
+                        let skipped: Vec<(&Node, String)> = b.iter().filter(|(n, _)| !parsed.contains_key(&n.id)).cloned().collect();
+                        let mut queue = queue.lock().unwrap();
+                        if !skipped.is_empty() && !retry {
+                            eprintln!("enrich: {} of {} nodes skipped by the model, retrying them", skipped.len(), b.len());
+                            queue.push((skipped, true));
+                        }
+                        eprintln!("enrich: batch done, {} of {} left", queue.len(), total);
                     }
                     Err(e) => { eprintln!("enrich: {e:#}"); shared.lock().unwrap().2 += 1; }
                 }
@@ -166,7 +179,8 @@ pub fn run(store: &Store, graph: &Graph, questions: Questions, command: &str, ba
         Err(_) => unreachable!("every worker has joined"),
     };
     questions.save(store)?;
-    Ok(Report { generated, dropped, batches: total, failed })
+    let left = questions.stale(graph).len();
+    Ok(Report { generated, dropped, batches: total, failed, left })
 }
 
 #[cfg(test)]
@@ -180,6 +194,7 @@ mod tests {
         e.node(NodeKind::Requirement, "FR-PAY-22", "отмена", "штраф по политике", "a.md", 1);
         e.node(NodeKind::Requirement, "FR-PAY-26", "штраф", "списание", "a.md", 9);
         e.node(NodeKind::Task, "BE-M01-T1", "task", "", "a.md", 12);
+        e.node(NodeKind::Entity, "entity:Money", "Money", "", "a.md", 1);
         e.node(NodeKind::File, "file:a.md", "a.md", "", "a.md", 1);
         g.apply(e);
         g
@@ -208,6 +223,7 @@ mod tests {
         let q = Questions::load(&store).unwrap();
         assert_eq!(q.get("FR-PAY-22"), ["q for FR-PAY-22"]);
         assert!(q.get("BE-M01-T1").is_empty(), "tasks are not enriched");
+        assert!(q.get("entity:Money").is_empty(), "a bare entity name is not enriched");
         // Nothing changed: nothing is generated again.
         let r = run(&store, &g, q, cmd, 8, 1, None).unwrap();
         assert_eq!((r.generated, r.batches), (0, 0));
@@ -218,6 +234,30 @@ mod tests {
         g2.apply(e);
         let r = run(&store, &g2, Questions::load(&store).unwrap(), cmd, 8, 1, None).unwrap();
         assert_eq!((r.generated, r.dropped), (1, 1));
+    }
+
+    // The generator answers for one id of two on the first call and for every id on the second,
+    // counting its calls in a file: the skipped node is asked again alone, and a second skip is
+    // not retried.
+    #[test]
+    fn nodes_a_model_answer_skipped_are_asked_once_more() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::new(dir.path());
+        let calls = dir.path().join("calls");
+        let cmd = format!(
+            r#"echo x >> "{c}"; n=$(wc -l < "{c}" | tr -d " "); awk -v n="$n" '/^### /{{ if (n > 1 || $2 == "FR-PAY-22") printf "%s\tq%s for %s\n", $2, n, $2 }}'"#,
+            c = calls.display());
+        let r = run(&store, &graph(), Questions::default(), &cmd, 8, 1, None).unwrap();
+        assert_eq!((r.generated, r.batches, r.failed, r.left), (2, 1, 0, 0));
+        let q = Questions::load(&store).unwrap();
+        assert_eq!(q.get("FR-PAY-22"), ["q1 for FR-PAY-22"]);
+        assert_eq!(q.get("FR-PAY-26"), ["q2 for FR-PAY-26"]);
+        assert_eq!(std::fs::read_to_string(&calls).unwrap().lines().count(), 2);
+
+        let silent = format!(r#"echo x >> "{}"; awk '/^### /{{ exit }}'"#, calls.display());
+        let r = run(&store, &graph(), Questions::default(), &silent, 8, 1, None).unwrap();
+        assert_eq!((r.generated, r.left), (0, 2));
+        assert_eq!(std::fs::read_to_string(&calls).unwrap().lines().count(), 4, "an answer that skips everything is retried once, not forever");
     }
 
     #[test]
