@@ -57,8 +57,8 @@ impl Graph {
     pub fn apply(&mut self, ex: Extraction) {
         for n in ex.nodes {
             match self.nodes.get_mut(&n.id) {
-                // The first declaring file stays primary so that `path:line` in an
-                // answer is stable across updates that touch a second declaring file.
+                // The first declaring file stays primary; `run_update` re-reads a surviving
+                // declarer whenever the primary goes, so `path:line` never mixes two files.
                 Some(existing) => { existing.files.extend(n.files); }
                 None => { self.nodes.insert(n.id.clone(), n); }
             }

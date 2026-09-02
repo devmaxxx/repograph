@@ -56,13 +56,26 @@ pub fn run_update(repo: &std::path::Path, cfg: &config::Config, ex: &Extractors,
     let (mut graph, manifest) = store.load()?;
     let entries = walk::walk(repo, cfg)?;
     let diff = manifest.diff(&entries);
-    for rel in &diff.removed { graph.remove_file(rel); }
-    for e in &diff.changed {
-        graph.remove_file(&e.rel);
+    let stale: std::collections::BTreeSet<&str> =
+        diff.removed.iter().map(String::as_str).chain(diff.changed.iter().map(|e| e.rel.as_str())).collect();
+    // A node's `path:line` comes from its primary declaring file. When that file goes, the
+    // surviving declarer is re-read too, so line, label and body come from the file that is cited.
+    let by_rel: std::collections::BTreeMap<&str, &walk::Entry> = entries.iter().map(|e| (e.rel.as_str(), e)).collect();
+    let co_declared: std::collections::BTreeSet<&str> = graph.nodes.values()
+        .filter(|n| stale.contains(n.file.as_str()))
+        .flat_map(|n| n.files.iter().map(String::as_str))
+        .filter(|f| !stale.contains(f) && by_rel.contains_key(f))
+        .map(|f| by_rel[f].rel.as_str())
+        .collect();
+    for rel in stale.iter().chain(co_declared.iter()) { graph.remove_file(rel); }
+    let reread = co_declared.iter().map(|rel| by_rel[rel]);
+    for e in diff.changed.iter().chain(reread) {
         let text = match std::fs::read(repo.join(&e.rel)) {
-            Ok(b) if !b.contains(&0) => String::from_utf8_lossy(&b).into_owned(),
-            // A NUL byte means a binary that matched a source glob; skip it, do not fail the run.
-            Ok(_) => continue,
+            // NUL is legal inside a TypeScript string literal; only invalid UTF-8 marks a binary.
+            Ok(b) => match String::from_utf8(b) {
+                Ok(s) => s,
+                Err(_) => { eprintln!("skipping {}: not UTF-8", e.rel); continue; }
+            },
             Err(err) => { eprintln!("read {}: {err}", e.rel); continue; }
         };
         let extractor = match e.kind {
@@ -166,5 +179,29 @@ fn main() -> anyhow::Result<()> {
             );
             Ok(())
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // A requirement declared twice keeps a `path:line` that belongs to one file: when the primary
+    // declarer goes, the survivor is re-read rather than relabelled with the primary's line.
+    #[test]
+    fn deleting_the_primary_declarer_rereads_the_survivor() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = dir.path();
+        std::fs::create_dir_all(repo.join("docs")).unwrap();
+        std::fs::write(repo.join("docs/a.md"), "# A\n\n**FR-PAY-22 · MUST · first**\n\nbody a\n").unwrap();
+        std::fs::write(repo.join("docs/b.md"), "# B\n\nintro\n\nmore\n\n**FR-PAY-22 · MUST · second**\n\nbody b\n").unwrap();
+        let cfg = config::Config::default();
+        let ex = extractors(repo, &cfg).unwrap();
+        run_update(repo, &cfg, &ex, true).unwrap();
+        std::fs::remove_file(repo.join("docs/a.md")).unwrap();
+        run_update(repo, &cfg, &ex, false).unwrap();
+        let (graph, _) = store::Store::new(repo).load().unwrap();
+        let n = &graph.nodes["FR-PAY-22"];
+        assert_eq!((n.file.as_str(), n.line, n.label.as_str()), ("docs/b.md", 7, "second"));
     }
 }

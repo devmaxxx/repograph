@@ -51,7 +51,10 @@ pub fn walk(repo: &Path, cfg: &Config) -> Result<Vec<Entry>> {
             else if docs.is_match(&rel) { FileKind::Doc }
             else if code.is_match(&rel) { FileKind::Code }
             else { continue };
-        let bytes = std::fs::read(dent.path()).with_context(|| format!("read {rel}"))?;
+        let bytes = match std::fs::read(dent.path()) {
+            Ok(b) => b,
+            Err(e) => { eprintln!("walk: skipping {rel}: {e}"); continue; }
+        };
         out.push(Entry { rel, kind, hash: blake3::hash(&bytes).to_hex().to_string() });
     }
     out.sort_by(|a, b| a.rel.cmp(&b.rel));
