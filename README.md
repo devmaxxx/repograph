@@ -20,7 +20,7 @@ LLM-extracted graph it replaces:
 | ------------------------- | ------------------------ | ------------------- |
 | paraphrase questions      | 0/14                     | 7/14                |
 | keyword questions         | 11/24                    | 24/24               |
-| tokens per answer         | 1027-1555                | 203 median, 219 p90 |
+| tokens per answer         | 1027-1555                | 202 median, 220 p90 |
 | tokens to build the graph | 14,597,195               | 0                   |
 
 Every number above came from running both tools; none is a target. See [Bench](#bench) for the full
@@ -147,11 +147,15 @@ repograph bench --cases other.jsonl  # a different case file, same 24/14/3 shape
 3. **Dense.** A local embedding of the query, cosine-ranked against every node's stored vector
    (see [Embeddings](#embeddings)). Skipped by `--no-dense`, or when the model cannot be opened —
    no cache and no network (see [Embeddings](#embeddings) for the fallback rules).
-4. **Fuse.** The two lists are interleaved, dense first — rank 1 of each, then rank 2 of each —
-   and the top seeds survive (with `--rerank`, a model picks them from a 200-deep pool instead —
-   see [Spending tokens on purpose](#spending-tokens-on-purpose)). Reciprocal rank fusion was measured to bury a retriever's second hit
-   under ids both lists merely agreed on; the interleave lifted paraphrase recall from 5/14 to 6/14
-   at +2 tokens p90.
+4. **Fuse.** The lists are interleaved — rank 1 of each, then rank 2 of each — dense passages
+   first, then BM25 over the generated questions (when `enrich` has written any), then BM25 over
+   the passages, and the top seeds survive (with `--rerank`, a model picks them from a 200-deep
+   pool instead — see [Spending tokens on purpose](#spending-tokens-on-purpose)). Reciprocal rank
+   fusion was measured to bury a retriever's second hit under ids both lists merely agreed on; the
+   interleave lifted paraphrase recall from 5/14 to 6/14 at +2 tokens p90. The question list was
+   measured on 400 held-out generated questions: recall@5 0.445 → 0.515 beside the dense list and
+   0.395 → 0.527 without it (exact McNemar p < 0.001 both), keyword and code cases unchanged, the
+   no-dense paraphrase cases 3/14 → 5/14, at +3 tokens p90 with embeddings and +15 without.
 5. **Expand.** One hop over `References`, `Implements`, `Declares`, `Links` and `Legacy` edges, in
    both directions, keeping the single best-ranked neighbour — a second one measured +1 hit per
    extra neighbour against ~+90 tokens per answer. `File` nodes and decorator nodes are never
@@ -290,7 +294,8 @@ them, each behind an explicit switch, each measured on the development corpus:
 
 **`repograph enrich`** asks a model, once per requirement-like node, for twelve questions a reader
 might ask to find that node in everyday words plus a line of synonyms — the generated questions are
-embedded as rows of their own and indexed for BM25 beside the passages. `enrich_command` is any
+embedded as rows of their own for the reranker's pool and indexed for BM25 as a list of their own
+in every answer. `enrich_command` is any
 shell command that reads the prompt on stdin and writes `id<TAB>question` lines; the default is
 headless Claude Code with thinking off (`MAX_THINKING_TOKENS=0 claude -p --model haiku …`), which
 answers the same and 4–5× faster than with it. Generation is cached by passage hash in
@@ -323,7 +328,7 @@ answering model's own, median over the 38 questions):
 
 |                                                | paraphrase | keyword | code | p90 tokens | model tokens per question | latency per question |
 | ---------------------------------------------- | ---------- | ------- | ---- | ---------- | ------------------------- | -------------------- |
-| `ask`                                          | 7/14       | 24/24   | 3/3  | 219        | 0                         | ~0.5 s               |
+| `ask`                                          | 7/14       | 24/24   | 3/3  | 220        | 0                         | ~0.5 s               |
 | `--rerank`, haiku, depth 100, titles           | 10/14      | 24/24   | 3/3  | 222        | ≈4,600                    | ~3.5 s               |
 | `--rerank`, haiku, depth 100                   | 11/14      | 24/24   | 3/3  | 222        | ≈9,500                    | ~4 s                 |
 | `--rerank`, sonnet, depth 100                  | 13/14      | 24/24   | 3/3  | 222        | ≈10,900                   | ~4 s                 |
@@ -343,13 +348,16 @@ is compiled into the binary, so a release build benches from any directory; `--c
 different file of the same shape:
 
 - keyword 24/24
-- paraphrase ≥7/14 with embeddings, ≥3/14 with `--no-dense`
+- paraphrase ≥7/14 with embeddings, ≥5/14 with `--no-dense`
 - code 3/3
-- p90 ≤230 tokens, counted as rendered UTF-8 bytes / 4 — a conservative proxy, since it counts a
-  Cyrillic answer at roughly double what an equivalent chars/4 reading would give a Latin one
+- p90 ≤230 tokens with embeddings and ≤240 with `--no-dense`, counted as rendered UTF-8 bytes / 4 —
+  a conservative proxy, since it counts a Cyrillic answer at roughly double what an equivalent
+  chars/4 reading would give a Latin one. The no-dense arm seeds from the generated questions,
+  whose Cyrillic requirement headlines cost more bytes than the symbol and task nodes the passage
+  list used to return (+7 tokens at the median), which is why its floor sits ten tokens higher
 
 Measured, on the shipped binary against `beauty-crm`: `keyword 24/24  paraphrase 7/14  code 3/3
-p90 219 tok` (median 203) with embeddings; `keyword 24/24  paraphrase 3/14  code 3/3  p90 218 tok`
+p90 220 tok` (median 202) with embeddings; `keyword 24/24  paraphrase 5/14  code 3/3  p90 233 tok`
 with `--no-dense`. Three paraphrase cases were rewritten on the way. One asked about withdrawing
 consent through a messenger, while the entry it names (`FR-VIS-76`) is about who may leave a
 review — «отзыв» meant a review there, not a withdrawal — so no retriever could have answered it.

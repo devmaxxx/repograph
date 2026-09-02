@@ -25,8 +25,11 @@ pub fn hit(case: &Case, answer: &Answer) -> bool {
 }
 
 pub fn passes(s: &Summary, dense: bool) -> bool {
-    let floor = if dense { 7 } else { 3 };
-    s.keyword.0 == s.keyword.1 && s.paraphrase.0 >= floor && s.code.0 == s.code.1 && s.p90_tokens <= 230
+    // The no-dense answer seeds from the generated questions, whose Cyrillic requirement
+    // headlines cost more bytes than the symbol and task nodes the passage list used to return
+    // (+7 tokens at the median), so its token floor sits ten tokens above the dense arm's.
+    let (paraphrase, p90) = if dense { (7, 230) } else { (5, 240) };
+    s.keyword.0 == s.keyword.1 && s.paraphrase.0 >= paraphrase && s.code.0 == s.code.1 && s.p90_tokens <= p90
 }
 
 // The recorded cases travel inside the binary so a release build benches from any directory.
@@ -145,7 +148,7 @@ mod tests {
         // Fixtures sit exactly on each floor so a boundary shifted by one in either direction
         // reddens the corresponding call; a fixture comfortably clear of the floor (the
         // original mistake) would not notice such a shift.
-        let at_floor_nodense = Summary { keyword: (24, 24), paraphrase: (3, 14), code: (3, 3), p90_tokens: 230 };
+        let at_floor_nodense = Summary { keyword: (24, 24), paraphrase: (5, 14), code: (3, 3), p90_tokens: 240 };
         let at_floor_dense = Summary { keyword: (24, 24), paraphrase: (7, 14), code: (3, 3), p90_tokens: 230 };
         assert!(passes(&at_floor_nodense, false));
         assert!(passes(&at_floor_dense, true));
@@ -158,12 +161,12 @@ mod tests {
         assert!(!passes(&Summary { code: (2, 3), ..at_floor_nodense.clone() }, false));
         assert!(!passes(&Summary { code: (2, 3), ..at_floor_dense.clone() }, true));
 
-        // p90: one token over the floor reddens in both dense arms.
-        assert!(!passes(&Summary { p90_tokens: 231, ..at_floor_nodense.clone() }, false));
+        // p90: one token over the arm's own floor reddens it.
+        assert!(!passes(&Summary { p90_tokens: 241, ..at_floor_nodense.clone() }, false));
         assert!(!passes(&Summary { p90_tokens: 231, ..at_floor_dense.clone() }, true));
 
-        // paraphrase no-dense floor is 3: one short reddens the `dense: false` call.
-        assert!(!passes(&Summary { paraphrase: (2, 14), ..at_floor_nodense.clone() }, false));
+        // paraphrase no-dense floor is 5: one short reddens the `dense: false` call.
+        assert!(!passes(&Summary { paraphrase: (4, 14), ..at_floor_nodense.clone() }, false));
         // paraphrase dense floor is 7: one short reddens the `dense: true` call.
         assert!(!passes(&Summary { paraphrase: (6, 14), ..at_floor_dense.clone() }, true));
     }
