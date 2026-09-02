@@ -22,6 +22,12 @@ impl Store {
     pub fn save(&self, g: &Graph, m: &Manifest) -> Result<()> {
         std::fs::create_dir_all(&self.dir)?;
         self.write_atomic("graph.json", &serde_json::to_vec(g)?)?;
+        self.save_manifest(m)
+    }
+
+    /// The manifest alone: a walk that found no change can still have learned the stat stamps
+    /// that spare the next one from hashing the tree again.
+    pub fn save_manifest(&self, m: &Manifest) -> Result<()> {
         self.write_atomic("manifest.json", &serde_json::to_vec(m)?)
     }
 
@@ -37,6 +43,12 @@ impl Store {
     /// decide about a 50 MB file without loading it.
     pub fn has(&self, name: &str) -> bool {
         std::fs::metadata(self.dir.join(name)).map(|m| m.len() > 0).unwrap_or(false)
+    }
+
+    /// What a `stat` says about a store file, for a poller that wants to know whether someone
+    /// else has written it without reading megabytes to find out.
+    pub fn stamp(&self, name: &str) -> Option<crate::walk::Stamp> {
+        crate::walk::stamp_of(&std::fs::metadata(self.dir.join(name)).ok()?)
     }
 
     pub fn read_bytes(&self, name: &str) -> Result<Option<Vec<u8>>> {
@@ -99,6 +111,22 @@ mod tests {
         let (g, _) = store.load().unwrap();
         assert!(g.nodes.is_empty());
         assert!(!d.path().join(".repograph/graph.json.tmp").exists());
+    }
+
+    // Bytes reach the store only through a rename, so a write that fails part-way — here the
+    // temp path is occupied by a directory — cannot leave a half-written graph behind.
+    #[test]
+    fn a_failed_write_leaves_the_stored_graph_intact() {
+        let d = tempfile::tempdir().unwrap();
+        let store = Store::new(d.path());
+        let mut g = Graph::default();
+        let mut e = Extraction::default();
+        e.node(NodeKind::File, "file:a.md", "a.md", "", "a.md", 1);
+        g.apply(e);
+        store.save(&g, &Manifest::default()).unwrap();
+        std::fs::create_dir(d.path().join(".repograph/graph.json.tmp")).unwrap();
+        assert!(store.save(&Graph::default(), &Manifest::default()).is_err());
+        assert_eq!(store.load().unwrap().0.nodes.len(), 1);
     }
 
     #[test]
