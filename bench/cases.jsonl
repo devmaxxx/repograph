@@ -22,6 +22,22 @@
 {"kind":"keyword","q":"арендатор уходит своей","expect":"FR-VIS-85"}
 {"kind":"keyword","q":"отчёты склада","expect":"FR-WH-53"}
 {"kind":"keyword","q":"подсказка расписанию двигает","expect":"FR-AI-97"}
+{"kind":"keyword","q":"как устроена выдача публикуется","expect":"FR-MKT-25"}
+{"kind":"keyword","q":"честный экран что не переезжает","expect":"FR-MIG-49"}
+{"kind":"keyword","q":"чат канал утечки контактов","expect":"FR-CRM-57"}
+{"kind":"keyword","q":"прайс аренды рабочих мест","expect":"FR-DM-128"}
+{"kind":"keyword","q":"осознанное наложение помечается навсегда","expect":"FR-CAL-43"}
+{"kind":"keyword","q":"понимает то что печатают","expect":"FR-SHELL-21"}
+{"kind":"keyword","q":"деньги и отработанная стоимость","expect":"FR-RPT-04"}
+{"kind":"keyword","q":"hreflang и мультирыночность","expect":"FR-WEB-22"}
+{"kind":"keyword","q":"рабочая локаль не показывается","expect":"FR-OPS-81"}
+{"kind":"keyword","q":"повторный найм новое членство","expect":"FR-STAFF-63"}
+{"kind":"keyword","q":"критерий готовности рыночному запуску","expect":"FR-PH-43"}
+{"kind":"keyword","q":"ведомость мастера не видна","expect":"NFR-STAFF-04"}
+{"kind":"keyword","q":"система делает сама человек отменяет","expect":"INV-19"}
+{"kind":"keyword","q":"role_id holds a role name","expect":"ADR-024"}
+{"kind":"keyword","q":"unfiscalized queue protocol adapters","expect":"BE-M11"}
+{"kind":"keyword","q":"каскадного сдвига дня нет","expect":"W-206"}
 {"kind":"paraphrase","q":"пакет платёжных бумаг за период для внешнего счетовода","expect":"FR-PAY-104"}
 {"kind":"paraphrase","q":"перечень незыблемых требований продукта, который проверяет сборка","expect":"FR-VIS-01"}
 {"kind":"paraphrase","q":"кто получатель платежа записан в документе","expect":"FR-PAY-03"}
@@ -36,6 +52,31 @@
 {"kind":"paraphrase","q":"бонус начисляется без участия сотрудника","expect":"FR-TOOL-18"}
 {"kind":"paraphrase","q":"прошлые визиты клиента какие услуги делали","expect":"FR-SVC-39"}
 {"kind":"paraphrase","q":"загрузить услуги из файла при регистрации","expect":"FR-LIFE-17"}
+{"kind":"paraphrase","q":"что видит посетитель каталога, если салон не хочет публиковать цену","expect":"FR-MKT-35"}
+{"kind":"paraphrase","q":"как делятся чаевые между теми, кто работал","expect":"FR-STAFF-45"}
+{"kind":"paraphrase","q":"что мешает стереть карточку клиента","expect":"FR-CRM-11"}
+{"kind":"paraphrase","q":"как сверяем итоговые числа отчёта с первичными строками","expect":"FR-RPT-13"}
+{"kind":"paraphrase","q":"можно ли оплатить сертификат в подарок другому человеку","expect":"FR-WEB-34"}
+{"kind":"paraphrase","q":"видит ли наш оператор переписку и визиты чужого бизнеса","expect":"FR-OPS-24"}
+{"kind":"paraphrase","q":"учитываются ли польские выходные и перевод стрелок","expect":"FR-CAL-06"}
+{"kind":"paraphrase","q":"как отдаём освободившееся окно тому, кто ждёт","expect":"FR-CAL-101"}
+{"kind":"paraphrase","q":"что будет, если нажать F5 или стрелку назад","expect":"FR-SHELL-52"}
+{"kind":"paraphrase","q":"что делаем с кривыми телефонными номерами из чужой выгрузки","expect":"FR-MIG-17"}
+{"kind":"paraphrase","q":"в каких полях сущности отмечено, что она ещё не ушла на сервер","expect":"FR-DM-66"}
+{"kind":"paraphrase","q":"как понять, что тюбик просрочен, и какую упаковку тратить первой","expect":"FR-WH-18"}
+{"kind":"paraphrase","q":"чем отличается момент на шкале от времени на стене","expect":"ADR-005"}
+{"kind":"paraphrase","q":"в каком виде храним суммы, чтобы не терять копейки","expect":"ADR-004"}
+{"kind":"paraphrase","q":"что запрещает передать сырую карточку клиента во внешнюю модель","expect":"INV-16"}
+{"kind":"paraphrase","q":"видно ли салону, из каких визитов сложилась пришедшая выплата","expect":"N-109"}
 {"kind":"code","q":"asGrosze","expect":"packages/contracts/src/money.ts"}
 {"kind":"code","q":"problemDetailsOf","expect":"packages/contracts/src/errors.ts"}
 {"kind":"code","q":"vitestBase","expect":"packages/config/vitest.base.ts"}
+{"kind":"code","q":"materialiseSegments","expect":"packages/domain/src/availability/segments.ts"}
+{"kind":"code","q":"localDayBounds","expect":"packages/domain/src/time/index.ts"}
+{"kind":"code","q":"classifyVersionalChange","expect":"packages/domain/src/sync/merge.ts"}
+{"kind":"code","q":"FiscalPort","expect":"packages/ports/src/fiscal.ts"}
+{"kind":"code","q":"resolveConnectionString","expect":"packages/db/src/connection.ts"}
+{"kind":"code","q":"loadAvailabilitySnapshot","expect":"apps/api/src/modules/availability/availability-snapshot.service.ts"}
+{"kind":"code","q":"splitByNamespace","expect":"apps/api/scripts/emit-openapi.ts"}
+{"kind":"code","q":"badgeVariants","expect":"packages/ui/src/components/ui/badge.tsx"}
+{"kind":"code","q":"staleClaims","expect":"tools/tasks/src/cli.ts"}
