@@ -114,7 +114,10 @@ A fused query opens the embedding model anyway, so the rows that changed are re-
 vectors stay in step too. `--no-dense` and the exact-id path open nothing: the lexical graph is
 fresh, and the vectors catch up on the next fused query or `update`. Measured on the development
 corpus (825 files, 7.5k nodes): the no-change check costs ~10 ms, and a one-file edit costs ~20 ms
-lexical, ~80 ms with the re-embedding. `REPOGRAPH_TIMING=1` prints the stages.
+lexical, ~40 ms with the re-embedding — the new rows are appended to `vectors.f32` and the rows
+they replace are left as holes, so nothing rewrites 50 MB to store a row of 1.5 kB. Holes past a
+quarter of the live rows are compacted away by the next refresh, which does rewrite both files.
+`REPOGRAPH_TIMING=1` prints the stages.
 
 ```bash
 repograph ask --stale отмена записи         # answer from the store as it stands, no check
