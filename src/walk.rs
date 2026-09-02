@@ -207,4 +207,101 @@ mod tests {
         let diff = manifest.diff(&after);
         assert!(diff.changed.is_empty() && diff.removed.is_empty());
     }
+
+    fn init(d: &Path) {
+        std::fs::create_dir_all(d.join(".git")).unwrap();
+    }
+
+    #[test]
+    fn skip_globs_win_over_doc_globs() {
+        let d = tempfile::tempdir().unwrap();
+        init(d.path());
+        std::fs::create_dir_all(d.path().join("docs")).unwrap();
+        // TRACKER.md matches the default doc glob "**/*.md" as much as it matches the skip glob.
+        std::fs::write(d.path().join("docs/TRACKER.md"), "generated\n").unwrap();
+        let entries = walk(d.path(), &Config::default(), &Manifest::default()).unwrap();
+        assert!(entries.is_empty());
+    }
+
+    #[test]
+    fn registry_beats_doc_for_the_same_path() {
+        let d = tempfile::tempdir().unwrap();
+        init(d.path());
+        std::fs::create_dir_all(d.path().join("docs")).unwrap();
+        std::fs::write(d.path().join("docs/constitution.yaml"), "version: 1\n").unwrap();
+        let mut cfg = Config::default();
+        cfg.doc_globs.push("**/*.yaml".to_string()); // now overlaps the registry glob for the same path
+        let entries = walk(d.path(), &cfg, &Manifest::default()).unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].kind, FileKind::Registry);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_non_utf8_file_name_is_skipped_without_failing() {
+        use std::os::unix::ffi::OsStrExt;
+        let d = tempfile::tempdir().unwrap();
+        init(d.path());
+        std::fs::write(d.path().join(std::ffi::OsStr::from_bytes(b"bad_\xFF\xFE.md")), "x\n").unwrap();
+        std::fs::write(d.path().join("good.md"), "y\n").unwrap();
+        let entries = walk(d.path(), &Config::default(), &Manifest::default()).unwrap();
+        assert_eq!(entries.iter().map(|e| e.rel.as_str()).collect::<Vec<_>>(), vec!["good.md"]);
+    }
+
+    #[test]
+    fn a_gitignored_file_is_not_walked() {
+        let d = tempfile::tempdir().unwrap();
+        init(d.path());
+        std::fs::write(d.path().join(".gitignore"), "secret.md\n").unwrap();
+        std::fs::write(d.path().join("secret.md"), "x\n").unwrap();
+        std::fs::write(d.path().join("public.md"), "y\n").unwrap();
+        let entries = walk(d.path(), &Config::default(), &Manifest::default()).unwrap();
+        assert_eq!(entries.iter().map(|e| e.rel.as_str()).collect::<Vec<_>>(), vec!["public.md"]);
+    }
+
+    #[test]
+    fn diff_puts_a_brand_new_file_in_changed_not_a_separate_list() {
+        // `Diff` has no third "added" list: a file `self.files` has never seen fails the same
+        // hash comparison as a changed one, so it surfaces through `changed` too.
+        let d = repo();
+        let before = walk(d.path(), &Config::default(), &Manifest::default()).unwrap();
+        let manifest = Manifest::from_entries(&before);
+        std::fs::write(d.path().join("docs/new.md"), "# new\n").unwrap();
+        let after = walk(d.path(), &Config::default(), &manifest).unwrap();
+        let diff = manifest.diff(&after);
+        assert_eq!(diff.changed.iter().map(|e| e.rel.as_str()).collect::<Vec<_>>(), vec!["docs/new.md"]);
+        assert!(diff.removed.is_empty());
+    }
+
+    #[test]
+    fn diff_lists_a_removed_file_only_in_removed_not_changed() {
+        let d = repo();
+        let before = walk(d.path(), &Config::default(), &Manifest::default()).unwrap();
+        let manifest = Manifest::from_entries(&before);
+        std::fs::remove_file(d.path().join("docs/a.md")).unwrap();
+        let after = walk(d.path(), &Config::default(), &manifest).unwrap();
+        let diff = manifest.diff(&after);
+        assert_eq!(diff.removed, vec!["docs/a.md".to_string()]);
+        assert!(diff.changed.is_empty());
+    }
+
+    #[test]
+    fn a_file_matching_no_configured_glob_is_silently_excluded() {
+        let d = tempfile::tempdir().unwrap();
+        init(d.path());
+        std::fs::write(d.path().join("data.json"), "{}\n").unwrap();
+        let entries = walk(d.path(), &Config::default(), &Manifest::default()).unwrap();
+        assert!(entries.is_empty());
+    }
+
+    #[test]
+    fn sorted_output_order_with_cyrillic_file_names() {
+        let d = tempfile::tempdir().unwrap();
+        init(d.path());
+        std::fs::write(d.path().join("яблоко.md"), "x\n").unwrap();
+        std::fs::write(d.path().join("абрикос.md"), "y\n").unwrap();
+        std::fs::write(d.path().join("a.md"), "z\n").unwrap();
+        let entries = walk(d.path(), &Config::default(), &Manifest::default()).unwrap();
+        assert_eq!(entries.iter().map(|e| e.rel.as_str()).collect::<Vec<_>>(), vec!["a.md", "абрикос.md", "яблоко.md"]);
+    }
 }
