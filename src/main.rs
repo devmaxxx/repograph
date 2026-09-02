@@ -2,6 +2,7 @@ mod bench;
 mod code;
 mod config;
 mod doc;
+mod dump;
 mod enrich;
 mod rerank;
 mod ids;
@@ -53,6 +54,14 @@ enum Cmd {
         #[arg(long)] limit: Option<usize>,
     },
     Bench { #[arg(long)] cases: Option<PathBuf>, #[arg(long)] rerank: bool, #[arg(long, default_value_t = rerank::DEPTH)] depth: usize },
+    /// Writes every retriever's ranked list for each question in a JSONL file
+    /// (`{"q","expect","kind"}` per line) so the mathematics can be done offline.
+    Dump {
+        #[arg(long)] queries: PathBuf,
+        #[arg(long)] out: PathBuf,
+        /// How deep each of the four lists is recorded.
+        #[arg(long, default_value_t = 300)] depth: usize,
+    },
     ImportLegacy { graph_json: PathBuf },
 }
 
@@ -204,6 +213,7 @@ fn main() -> anyhow::Result<()> {
         Cmd::Bench { cases, rerank, depth } => {
             if bench::run(&repo, cases.as_deref(), cli.no_dense, rerank, depth)? { Ok(()) } else { anyhow::bail!("bench floors not met") }
         }
+        Cmd::Dump { queries, out, depth } => dump::run(&repo, &queries, &out, depth),
         Cmd::ImportLegacy { graph_json } => {
             let cfg = load_cfg()?;
             let store = store::Store::new(&repo);

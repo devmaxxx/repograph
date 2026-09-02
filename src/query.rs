@@ -37,7 +37,7 @@ fn hit(graph: &Graph, id: &str, score: f32, via: Option<&str>) -> Option<Hit> {
 
 /// Exact hits per word, and whether they answer the whole question: every word matched, and
 /// each carries an uppercase letter — `money` and `utf8` are topics as much as names, `asGrosze` only a name.
-fn exact_seeds(graph: &Graph, ids: &IdMatcher, words: &[String]) -> (Vec<String>, bool) {
+pub(crate) fn exact_seeds(graph: &Graph, ids: &IdMatcher, words: &[String]) -> (Vec<String>, bool) {
     let mut out = Vec::new();
     let mut whole = true;
     for w in words {
