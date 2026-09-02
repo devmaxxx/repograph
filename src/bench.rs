@@ -24,7 +24,7 @@ pub fn hit(case: &Case, answer: &Answer) -> bool {
 
 pub fn passes(s: &Summary, dense: bool) -> bool {
     let floor = if dense { 5 } else { 2 };
-    s.keyword.0 == s.keyword.1 && s.paraphrase.0 >= floor.min(s.paraphrase.1) && s.code.0 == s.code.1 && s.p90_tokens <= 230
+    s.keyword.0 == s.keyword.1 && s.paraphrase.0 >= floor && s.code.0 == s.code.1 && s.p90_tokens <= 230
 }
 
 // The recorded cases travel inside the binary so a release build benches from any directory.

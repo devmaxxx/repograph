@@ -30,3 +30,7 @@ jobs:
         run: ./target/release/repograph --repo corpus --no-dense build
       - if: steps.token.outputs.present == 'true'
         run: ./target/release/repograph --repo corpus --no-dense bench
+      # A green job that ran nothing would read as a passed bench.
+      - if: steps.token.outputs.present != 'true'
+        run: echo "::warning::BENCH_REPO_TOKEN is not set; the bench did not run"
+

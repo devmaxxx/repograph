@@ -96,7 +96,7 @@ fn headline(label: &str) -> String {
 
 pub fn render(answer: &Answer, graph: &Graph, opts: &Options) -> String {
     if opts.json {
-        return serde_json::to_string_pretty(answer).unwrap();
+        return serde_json::to_string_pretty(answer).unwrap() + "\n";
     }
     let mut out = String::new();
     for h in &answer.seeds {

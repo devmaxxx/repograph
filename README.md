@@ -250,6 +250,10 @@ download and the embedding stage everywhere.
 `ask` opens the model only when a fused query needs it: an exact id or symbol lookup answers in
 ~30 ms and ~50 MB, a fused query in ~0.75 s and ~1.4 GB — the model, not the graph.
 
+The larger `MultilingualE5Base` (768-d, ≈1.1 GB) was measured on the same corpus and cases:
+paraphrase 6/14 against the small model's 5/14, everything else unchanged. One hit for 2.4× the
+download and double the embedding time is not a trade this tool makes; the small model stays.
+
 If the model can't be opened (no cache, no network), the two kinds of caller degrade differently, on
 purpose: `ask` and `update` fall back to lexical-only and print one line to stderr saying so, then
 exit 0 — a person reading the answer can judge a lexical-only one for what it is. `bench` in dense

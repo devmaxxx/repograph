@@ -31,7 +31,7 @@ enum Cmd {
     Build,
     Update,
     Ask {
-        words: Vec<String>,
+        #[arg(required = true)] words: Vec<String>,
         #[arg(long)] json: bool,
         #[arg(long, default_value_t = 5)] seeds: usize,
         #[arg(long)] bodies: bool,
