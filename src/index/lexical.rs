@@ -163,6 +163,47 @@ mod tests {
     }
 
     #[test]
+    fn a_leading_bom_does_not_become_a_spurious_token() {
+        assert_eq!(tokenize("\u{FEFF}штраф"), vec!["штраф".to_string()]);
+    }
+
+    #[test]
+    fn purely_numeric_tokens_bypass_stemming() {
+        // Digits route through the id branch, not the stemmers, so "42" and "421" stay distinct.
+        assert_eq!(tokenize("42 421"), vec!["42".to_string(), "421".to_string()]);
+    }
+
+    #[test]
+    fn a_token_mixing_cyrillic_and_latin_letters_uses_the_russian_stemmer() {
+        // Any Cyrillic letter routes the whole token to the Russian stemmer, not the English one.
+        let (ru, _) = stemmers();
+        assert_eq!(tokenize("аbC"), vec![ru.stem("аbc").into_owned()]);
+    }
+
+    #[test]
+    fn k_larger_than_the_corpus_returns_every_document_once() {
+        let mut g = Graph::default();
+        let mut e = Extraction::default();
+        e.node(NodeKind::Requirement, "FR-PAY-22", "штраф", "штраф", "a.md", 1);
+        e.node(NodeKind::Requirement, "FR-PAY-26", "штраф", "штраф", "a.md", 9);
+        g.apply(e);
+        let hits = LexicalIndex::build(&g).search("штраф", 1000);
+        assert_eq!(hits.len(), 2);
+    }
+
+    #[test]
+    fn tied_bm25_scores_break_ties_by_id_ascending() {
+        let mut g = Graph::default();
+        let mut e = Extraction::default();
+        e.node(NodeKind::Requirement, "FR-PAY-99", "штраф", "штраф", "a.md", 1);
+        e.node(NodeKind::Requirement, "FR-PAY-11", "штраф", "штраф", "a.md", 9);
+        g.apply(e);
+        let hits = LexicalIndex::build(&g).search("штраф", 5);
+        assert_eq!(hits.iter().map(|(id, _)| id.as_str()).collect::<Vec<_>>(), vec!["FR-PAY-11", "FR-PAY-99"]);
+        assert_eq!(hits[0].1, hits[1].1);
+    }
+
+    #[test]
     fn bm25_score_is_pinned_to_the_stated_constants() {
         let mut g = Graph::default();
         let mut e = Extraction::default();
