@@ -509,4 +509,153 @@ mod tests {
         assert!(out.contains("in families never declared: 1  MOB-M"));
         assert!(out.contains("dangling edges: 2"));
     }
+
+    #[test]
+    fn several_ids_in_one_question_all_become_seeds_in_word_order() {
+        let g = graph();
+        let words: Vec<String> = ["FR-PAY-22", "FR-PAY-20"].iter().map(|s| s.to_string()).collect();
+        let a = ask(&g, &ids(), &Questions::default(), None, None, &words, &opts());
+        assert_eq!(a.seeds.iter().map(|h| h.id.as_str()).collect::<Vec<_>>(), ["FR-PAY-22", "FR-PAY-20"]);
+    }
+
+    #[test]
+    fn an_id_shaped_word_absent_from_the_graph_yields_no_seeds() {
+        let g = graph();
+        let a = ask(&g, &ids(), &Questions::default(), None, None, &["FR-PAY-999".to_string()], &opts());
+        assert!(a.seeds.is_empty());
+        assert!(a.expanded.is_empty());
+    }
+
+    #[test]
+    fn a_symbol_and_an_id_together_both_become_exact_seeds() {
+        let g = graph();
+        let words: Vec<String> = ["asGrosze", "FR-PAY-22"].iter().map(|s| s.to_string()).collect();
+        let a = ask(&g, &ids(), &Questions::default(), None, None, &words, &opts());
+        assert_eq!(a.seeds.len(), 2);
+        assert_eq!(a.seeds[0].id, "sym:packages/contracts/src/money.ts::asGrosze");
+        assert_eq!(a.seeds[1].id, "FR-PAY-22");
+    }
+
+    #[test]
+    fn seeds_zero_drops_even_an_exact_match_and_its_expansion() {
+        let g = graph();
+        let mut o = opts();
+        o.seeds = 0;
+        let a = ask(&g, &ids(), &Questions::default(), None, None, &["FR-PAY-22".to_string()], &o);
+        assert!(a.seeds.is_empty());
+        assert!(a.expanded.is_empty());
+    }
+
+    #[test]
+    fn seeds_larger_than_the_pool_returns_only_what_exists() {
+        let g = duplicated_symbol_graph();
+        let mut o = opts();
+        o.seeds = 100;
+        let a = ask(&g, &ids(), &Questions::default(), None, None, &["buildClientParams".to_string()], &o);
+        assert_eq!(a.seeds.len(), 4);
+    }
+
+    #[test]
+    fn render_includes_body_lines_only_when_bodies_is_set() {
+        let g = graph();
+        let a = ask(&g, &ids(), &Questions::default(), None, None, &["FR-PAY-22".to_string()], &opts());
+        let mut with_bodies = opts();
+        with_bodies.bodies = true;
+        let out = render(&a, &g, &with_bodies);
+        assert!(out.lines().any(|l| l.starts_with("    ") && l.contains("штраф")));
+        let out = render(&a, &g, &opts());
+        assert!(!out.lines().any(|l| l.starts_with("    ")));
+    }
+
+    #[test]
+    fn json_render_is_valid_json_with_seeds_and_expanded_keys() {
+        let g = graph();
+        let a = ask(&g, &ids(), &Questions::default(), None, None, &["FR-PAY-22".to_string()], &opts());
+        let mut o = opts();
+        o.json = true;
+        let out = render(&a, &g, &o);
+        let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+        assert!(v.get("seeds").is_some());
+        assert!(v.get("expanded").is_some());
+        let seed = &v["seeds"][0];
+        for key in ["id", "file", "line", "label", "score", "via"] {
+            assert!(seed.get(key).is_some(), "missing {key}");
+        }
+    }
+
+    #[test]
+    fn explain_of_an_unknown_node_is_none() {
+        let g = graph();
+        assert!(explain(&g, "not-a-real-id-or-label").is_none());
+    }
+
+    #[test]
+    fn verify_on_an_empty_graph_reports_zero_everywhere() {
+        let g = Graph::default();
+        let out = verify(&g);
+        assert!(out.contains("nodes: 0"));
+        assert!(out.contains("edges: 0"));
+        assert!(out.contains("dangling edges: 0"));
+        assert!(out.contains("undeclared ids: 0"));
+    }
+
+    #[test]
+    fn verify_reports_a_single_dangling_edge_as_a_gap_in_a_declared_family() {
+        let mut g = Graph::default();
+        let mut e = Extraction::default();
+        e.node(NodeKind::Requirement, "FR-WEB-1", "первая", "", "docs/a.md", 1);
+        e.edge("FR-WEB-1", "FR-WEB-999", EdgeKind::References, "body", "docs/a.md");
+        g.apply(e);
+        let out = verify(&g);
+        assert!(out.contains("dangling edges: 1"));
+        assert!(out.contains("undeclared ids: 1  FR-WEB-999"));
+        assert!(out.contains("gaps in declared families: 1  FR-WEB-999"));
+    }
+
+    #[test]
+    fn a_question_of_only_punctuation_yields_an_empty_answer_not_a_panic() {
+        let g = graph();
+        let a = ask(&g, &ids(), &Questions::default(), None, None, &["???".to_string(), "!!!".to_string()], &opts());
+        assert!(a.seeds.is_empty() && a.expanded.is_empty());
+    }
+
+    #[test]
+    fn a_question_of_only_whitespace_words_yields_an_empty_answer_not_a_panic() {
+        let g = graph();
+        let a = ask(&g, &ids(), &Questions::default(), None, None, &["   ".to_string(), "\t".to_string()], &opts());
+        assert!(a.seeds.is_empty() && a.expanded.is_empty());
+    }
+
+    #[test]
+    fn a_single_cyrillic_word_reaches_the_lexical_path() {
+        let g = graph();
+        let a = ask(&g, &ids(), &Questions::default(), None, None, &["штраф".to_string()], &opts());
+        assert_eq!(a.seeds[0].id, "FR-PAY-22");
+    }
+
+    #[test]
+    fn expansion_skips_a_neighbour_that_is_already_a_seed() {
+        let g = graph();
+        let words: Vec<String> = ["FR-PAY-22", "N-151"].iter().map(|s| s.to_string()).collect();
+        let a = ask(&g, &ids(), &Questions::default(), None, None, &words, &opts());
+        assert_eq!(a.seeds.iter().map(|h| h.id.as_str()).collect::<Vec<_>>(), ["FR-PAY-22", "N-151"]);
+        assert_eq!(a.expanded.len(), 1);
+        assert_eq!(a.expanded[0].id, "entity:CancellationPolicy");
+        assert_eq!(a.expanded[0].via.as_deref(), Some("FR-PAY-22"));
+    }
+
+    #[test]
+    fn tied_neighbour_candidates_break_by_id_ascending() {
+        let mut g = Graph::default();
+        let mut e = Extraction::default();
+        for id in ["FR-WEB-1", "FR-WEB-30", "FR-WEB-40"] {
+            e.node(NodeKind::Requirement, id, id, "", "docs/a.md", 1);
+        }
+        e.edge("FR-WEB-1", "FR-WEB-40", EdgeKind::References, "body", "docs/a.md");
+        e.edge("FR-WEB-1", "FR-WEB-30", EdgeKind::References, "body", "docs/a.md");
+        g.apply(e);
+        let a = ask(&g, &ids(), &Questions::default(), None, None, &["FR-WEB-1".to_string()], &opts());
+        assert_eq!(a.expanded.len(), 1);
+        assert_eq!(a.expanded[0].id, "FR-WEB-30");
+    }
 }
