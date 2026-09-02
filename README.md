@@ -18,9 +18,9 @@ LLM-extracted graph it replaces:
 
 |                           | graphify (the incumbent) | repograph           |
 | ------------------------- | ------------------------ | ------------------- |
-| paraphrase questions      | 0/14                     | 6/14                |
+| paraphrase questions      | 0/14                     | 7/14                |
 | keyword questions         | 11/24                    | 24/24               |
-| tokens per answer         | 1027-1555                | 201 median, 217 p90 |
+| tokens per answer         | 1027-1555                | 203 median, 219 p90 |
 | tokens to build the graph | 14,597,195               | 0                   |
 
 Every number above came from running both tools; none is a target. See [Bench](#bench) for the full
@@ -280,14 +280,17 @@ is compiled into the binary, so a release build benches from any directory; `--c
 different file of the same shape:
 
 - keyword 24/24
-- paraphrase ≥6/14 with embeddings, ≥2/14 with `--no-dense`
+- paraphrase ≥7/14 with embeddings, ≥3/14 with `--no-dense`
 - code 3/3
 - p90 ≤230 tokens, counted as rendered UTF-8 bytes / 4 — a conservative proxy, since it counts a
   Cyrillic answer at roughly double what an equivalent chars/4 reading would give a Latin one
 
-Measured, on the shipped binary against `beauty-crm`: `keyword 24/24  paraphrase 6/14  code 3/3
-p90 217 tok` (median 201) with embeddings; `keyword 24/24  paraphrase 2/14  code 3/3  p90 216 tok`
-with `--no-dense`. Asking for one of 24 requirement ids verbatim returns its head line first every
+Measured, on the shipped binary against `beauty-crm`: `keyword 24/24  paraphrase 7/14  code 3/3
+p90 219 tok` (median 203) with embeddings; `keyword 24/24  paraphrase 3/14  code 3/3  p90 218 tok`
+with `--no-dense`. One paraphrase case was rewritten on the way: its question asked about
+withdrawing consent through a messenger, while the entry it names (`FR-VIS-76`) is about who may
+leave a review — «отзыв» meant a review there, not a withdrawal — so no retriever could have
+answered it. The new question shares no word with the target line, as the others do. Asking for one of 24 requirement ids verbatim returns its head line first every
 time, at 68 tokens median — an exact match fills the answer alone instead of being topped up with
 fused neighbours, which had cost 174 tokens for the same lookups.
 
