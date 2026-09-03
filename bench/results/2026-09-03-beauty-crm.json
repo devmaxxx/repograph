@@ -1,0 +1,3276 @@
+{
+ "corpus": "/Users/max/Documents/projects/beauty-crm",
+ "commit": "7733bd53",
+ "when": "2026-09-03T19:43:46",
+ "cases": {
+  "retrieval": 82,
+  "blast": 20
+ },
+ "tools": {
+  "repograph": {
+   "rows": [
+    {
+     "suite": "retrieval",
+     "kind": "keyword",
+     "q": "расход виден салону",
+     "expect": "FR-AI-138",
+     "strict": true,
+     "soft": true,
+     "ms": 930,
+     "chars": 540
+    },
+    {
+     "suite": "retrieval",
+     "kind": "keyword",
+     "q": "арендатор отдельный контур",
+     "expect": "FR-VIS-80",
+     "strict": true,
+     "soft": true,
+     "ms": 431,
+     "chars": 556
+    },
+    {
+     "suite": "retrieval",
+     "kind": "keyword",
+     "q": "только нативном приложении",
+     "expect": "FR-PAY-110",
+     "strict": true,
+     "soft": true,
+     "ms": 391,
+     "chars": 619
+    },
+    {
+     "suite": "retrieval",
+     "kind": "keyword",
+     "q": "панели отражающие обещания",
+     "expect": "FR-APP-64",
+     "strict": true,
+     "soft": true,
+     "ms": 387,
+     "chars": 647
+    },
+    {
+     "suite": "retrieval",
+     "kind": "keyword",
+     "q": "изменение любой позиции",
+     "expect": "FR-PAY-133",
+     "strict": true,
+     "soft": true,
+     "ms": 385,
+     "chars": 624
+    },
+    {
+     "suite": "retrieval",
+     "kind": "keyword",
+     "q": "групповое занятие кассе",
+     "expect": "FR-PAY-54",
+     "strict": true,
+     "soft": true,
+     "ms": 386,
+     "chars": 673
+    },
+    {
+     "suite": "retrieval",
+     "kind": "keyword",
+     "q": "награда выдаётся против",
+     "expect": "FR-TOOL-18",
+     "strict": true,
+     "soft": true,
+     "ms": 424,
+     "chars": 619
+    },
+    {
+     "suite": "retrieval",
+     "kind": "keyword",
+     "q": "паритет поверхностей",
+     "expect": "FR-WH-05",
+     "strict": true,
+     "soft": true,
+     "ms": 396,
+     "chars": 619
+    },
+    {
+     "suite": "retrieval",
+     "kind": "keyword",
+     "q": "место содержимое занято",
+     "expect": "FR-APP-02",
+     "strict": true,
+     "soft": true,
+     "ms": 437,
+     "chars": 593
+    },
+    {
+     "suite": "retrieval",
+     "kind": "keyword",
+     "q": "знаний салона ассистента",
+     "expect": "FR-AI-145",
+     "strict": true,
+     "soft": true,
+     "ms": 400,
+     "chars": 668
+    },
+    {
+     "suite": "retrieval",
+     "kind": "keyword",
+     "q": "зачитывается автоматически",
+     "expect": "FR-PAY-28",
+     "strict": true,
+     "soft": true,
+     "ms": 443,
+     "chars": 544
+    },
+    {
+     "suite": "retrieval",
+     "kind": "keyword",
+     "q": "сигнал блокирует работу",
+     "expect": "FR-VIS-55",
+     "strict": true,
+     "soft": true,
+     "ms": 441,
+     "chars": 591
+    },
+    {
+     "suite": "retrieval",
+     "kind": "keyword",
+     "q": "денежные конфликты поведение",
+     "expect": "FR-PAY-143",
+     "strict": true,
+     "soft": true,
+     "ms": 400,
+     "chars": 591
+    },
+    {
+     "suite": "retrieval",
+     "kind": "keyword",
+     "q": "черновик виден черновик",
+     "expect": "FR-SVC-04",
+     "strict": true,
+     "soft": true,
+     "ms": 387,
+     "chars": 591
+    },
+    {
+     "suite": "retrieval",
+     "kind": "keyword",
+     "q": "режим тренировки сотрудника",
+     "expect": "FR-LIFE-29",
+     "strict": true,
+     "soft": true,
+     "ms": 386,
+     "chars": 602
+    },
+    {
+     "suite": "retrieval",
+     "kind": "keyword",
+     "q": "списание штрафа происходит",
+     "expect": "FR-PAY-26",
+     "strict": true,
+     "soft": true,
+     "ms": 383,
+     "chars": 593
+    },
+    {
+     "suite": "retrieval",
+     "kind": "keyword",
+     "q": "шаблоны ролей салона",
+     "expect": "FR-VIS-35",
+     "strict": true,
+     "soft": true,
+     "ms": 388,
+     "chars": 617
+    },
+    {
+     "suite": "retrieval",
+     "kind": "keyword",
+     "q": "экономика аренды",
+     "expect": "FR-PAY-82",
+     "strict": true,
+     "soft": true,
+     "ms": 385,
+     "chars": 673
+    },
+    {
+     "suite": "retrieval",
+     "kind": "keyword",
+     "q": "только клиентских поверхностях",
+     "expect": "FR-APP-67",
+     "strict": true,
+     "soft": true,
+     "ms": 391,
+     "chars": 568
+    },
+    {
+     "suite": "retrieval",
+     "kind": "keyword",
+     "q": "единый медиа",
+     "expect": "FR-SVC-50",
+     "strict": true,
+     "soft": true,
+     "ms": 384,
+     "chars": 560
+    },
+    {
+     "suite": "retrieval",
+     "kind": "keyword",
+     "q": "внутренняя система рассмотрения",
+     "expect": "FR-SEC-44",
+     "strict": true,
+     "soft": true,
+     "ms": 385,
+     "chars": 642
+    },
+    {
+     "suite": "retrieval",
+     "kind": "keyword",
+     "q": "арендатор уходит своей",
+     "expect": "FR-VIS-85",
+     "strict": true,
+     "soft": true,
+     "ms": 389,
+     "chars": 717
+    },
+    {
+     "suite": "retrieval",
+     "kind": "keyword",
+     "q": "отчёты склада",
+     "expect": "FR-WH-53",
+     "strict": true,
+     "soft": true,
+     "ms": 385,
+     "chars": 575
+    },
+    {
+     "suite": "retrieval",
+     "kind": "keyword",
+     "q": "подсказка расписанию двигает",
+     "expect": "FR-AI-97",
+     "strict": true,
+     "soft": true,
+     "ms": 381,
+     "chars": 617
+    },
+    {
+     "suite": "retrieval",
+     "kind": "keyword",
+     "q": "как устроена выдача публикуется",
+     "expect": "FR-MKT-25",
+     "strict": true,
+     "soft": true,
+     "ms": 382,
+     "chars": 628
+    },
+    {
+     "suite": "retrieval",
+     "kind": "keyword",
+     "q": "честный экран что не переезжает",
+     "expect": "FR-MIG-49",
+     "strict": true,
+     "soft": true,
+     "ms": 385,
+     "chars": 608
+    },
+    {
+     "suite": "retrieval",
+     "kind": "keyword",
+     "q": "чат канал утечки контактов",
+     "expect": "FR-CRM-57",
+     "strict": true,
+     "soft": true,
+     "ms": 393,
+     "chars": 608
+    },
+    {
+     "suite": "retrieval",
+     "kind": "keyword",
+     "q": "прайс аренды рабочих мест",
+     "expect": "FR-DM-128",
+     "strict": true,
+     "soft": true,
+     "ms": 393,
+     "chars": 668
+    },
+    {
+     "suite": "retrieval",
+     "kind": "keyword",
+     "q": "осознанное наложение помечается навсегда",
+     "expect": "FR-CAL-43",
+     "strict": true,
+     "soft": true,
+     "ms": 908,
+     "chars": 581
+    },
+    {
+     "suite": "retrieval",
+     "kind": "keyword",
+     "q": "понимает то что печатают",
+     "expect": "FR-SHELL-21",
+     "strict": true,
+     "soft": true,
+     "ms": 387,
+     "chars": 663
+    },
+    {
+     "suite": "retrieval",
+     "kind": "keyword",
+     "q": "деньги и отработанная стоимость",
+     "expect": "FR-RPT-04",
+     "strict": true,
+     "soft": true,
+     "ms": 430,
+     "chars": 661
+    },
+    {
+     "suite": "retrieval",
+     "kind": "keyword",
+     "q": "hreflang и мультирыночность",
+     "expect": "FR-WEB-22",
+     "strict": true,
+     "soft": true,
+     "ms": 386,
+     "chars": 576
+    },
+    {
+     "suite": "retrieval",
+     "kind": "keyword",
+     "q": "рабочая локаль не показывается",
+     "expect": "FR-OPS-81",
+     "strict": true,
+     "soft": true,
+     "ms": 386,
+     "chars": 607
+    },
+    {
+     "suite": "retrieval",
+     "kind": "keyword",
+     "q": "повторный найм новое членство",
+     "expect": "FR-STAFF-63",
+     "strict": true,
+     "soft": true,
+     "ms": 384,
+     "chars": 548
+    },
+    {
+     "suite": "retrieval",
+     "kind": "keyword",
+     "q": "критерий готовности рыночному запуску",
+     "expect": "FR-PH-43",
+     "strict": true,
+     "soft": true,
+     "ms": 392,
+     "chars": 706
+    },
+    {
+     "suite": "retrieval",
+     "kind": "keyword",
+     "q": "ведомость мастера не видна",
+     "expect": "NFR-STAFF-04",
+     "strict": true,
+     "soft": true,
+     "ms": 392,
+     "chars": 612
+    },
+    {
+     "suite": "retrieval",
+     "kind": "keyword",
+     "q": "система делает сама человек отменяет",
+     "expect": "INV-19",
+     "strict": true,
+     "soft": true,
+     "ms": 397,
+     "chars": 605
+    },
+    {
+     "suite": "retrieval",
+     "kind": "keyword",
+     "q": "role_id holds a role name",
+     "expect": "ADR-024",
+     "strict": true,
+     "soft": true,
+     "ms": 383,
+     "chars": 777
+    },
+    {
+     "suite": "retrieval",
+     "kind": "keyword",
+     "q": "unfiscalized queue protocol adapters",
+     "expect": "BE-M11",
+     "strict": true,
+     "soft": true,
+     "ms": 390,
+     "chars": 1045
+    },
+    {
+     "suite": "retrieval",
+     "kind": "keyword",
+     "q": "каскадного сдвига дня нет",
+     "expect": "W-206",
+     "strict": true,
+     "soft": true,
+     "ms": 383,
+     "chars": 704
+    },
+    {
+     "suite": "retrieval",
+     "kind": "paraphrase",
+     "q": "пакет платёжных бумаг за период для внешнего счетовода",
+     "expect": "FR-PAY-104",
+     "strict": true,
+     "soft": true,
+     "ms": 391,
+     "chars": 648
+    },
+    {
+     "suite": "retrieval",
+     "kind": "paraphrase",
+     "q": "перечень незыблемых требований продукта, который проверяет сборка",
+     "expect": "FR-VIS-01",
+     "strict": false,
+     "soft": true,
+     "ms": 386,
+     "chars": 664
+    },
+    {
+     "suite": "retrieval",
+     "kind": "paraphrase",
+     "q": "кто получатель платежа записан в документе",
+     "expect": "FR-PAY-03",
+     "strict": true,
+     "soft": true,
+     "ms": 393,
+     "chars": 622
+    },
+    {
+     "suite": "retrieval",
+     "kind": "paraphrase",
+     "q": "как хранится код доступа сотрудника",
+     "expect": "FR-SEC-21",
+     "strict": false,
+     "soft": true,
+     "ms": 400,
+     "chars": 641
+    },
+    {
+     "suite": "retrieval",
+     "kind": "paraphrase",
+     "q": "сколько времени держим записи кто решает",
+     "expect": "FR-AI-102",
+     "strict": false,
+     "soft": false,
+     "ms": 394,
+     "chars": 576
+    },
+    {
+     "suite": "retrieval",
+     "kind": "paraphrase",
+     "q": "создать похожую услугу на основе существующей",
+     "expect": "FR-SVC-15",
+     "strict": true,
+     "soft": true,
+     "ms": 383,
+     "chars": 529
+    },
+    {
+     "suite": "retrieval",
+     "kind": "paraphrase",
+     "q": "состояния задачи обратного звонка",
+     "expect": "FR-AI-66",
+     "strict": true,
+     "soft": true,
+     "ms": 377,
+     "chars": 558
+    },
+    {
+     "suite": "retrieval",
+     "kind": "paraphrase",
+     "q": "кто может оценить визит после подтверждения по смс",
+     "expect": "FR-VIS-76",
+     "strict": true,
+     "soft": true,
+     "ms": 374,
+     "chars": 666
+    },
+    {
+     "suite": "retrieval",
+     "kind": "paraphrase",
+     "q": "клиент должен сразу понять что говорит робот",
+     "expect": "FR-AI-21",
+     "strict": false,
+     "soft": true,
+     "ms": 386,
+     "chars": 603
+    },
+    {
+     "suite": "retrieval",
+     "kind": "paraphrase",
+     "q": "выявление накрутки бонусов",
+     "expect": "FR-TOOL-22",
+     "strict": true,
+     "soft": true,
+     "ms": 379,
+     "chars": 586
+    },
+    {
+     "suite": "retrieval",
+     "kind": "paraphrase",
+     "q": "как клиент получает фискальный документ",
+     "expect": "FR-PAY-49",
+     "strict": false,
+     "soft": true,
+     "ms": 395,
+     "chars": 576
+    },
+    {
+     "suite": "retrieval",
+     "kind": "paraphrase",
+     "q": "бонус начисляется без участия сотрудника",
+     "expect": "FR-TOOL-18",
+     "strict": false,
+     "soft": true,
+     "ms": 390,
+     "chars": 622
+    },
+    {
+     "suite": "retrieval",
+     "kind": "paraphrase",
+     "q": "прошлые визиты клиента какие услуги делали",
+     "expect": "FR-SVC-39",
+     "strict": true,
+     "soft": true,
+     "ms": 387,
+     "chars": 605
+    },
+    {
+     "suite": "retrieval",
+     "kind": "paraphrase",
+     "q": "загрузить услуги из файла при регистрации",
+     "expect": "FR-LIFE-17",
+     "strict": true,
+     "soft": true,
+     "ms": 384,
+     "chars": 611
+    },
+    {
+     "suite": "retrieval",
+     "kind": "paraphrase",
+     "q": "что видит посетитель каталога, если салон не хочет публиковать цену",
+     "expect": "FR-MKT-35",
+     "strict": false,
+     "soft": true,
+     "ms": 372,
+     "chars": 663
+    },
+    {
+     "suite": "retrieval",
+     "kind": "paraphrase",
+     "q": "как делятся чаевые между теми, кто работал",
+     "expect": "FR-STAFF-45",
+     "strict": false,
+     "soft": true,
+     "ms": 383,
+     "chars": 619
+    },
+    {
+     "suite": "retrieval",
+     "kind": "paraphrase",
+     "q": "что мешает стереть карточку клиента",
+     "expect": "FR-CRM-11",
+     "strict": false,
+     "soft": true,
+     "ms": 386,
+     "chars": 660
+    },
+    {
+     "suite": "retrieval",
+     "kind": "paraphrase",
+     "q": "как сверяем итоговые числа отчёта с первичными строками",
+     "expect": "FR-RPT-13",
+     "strict": false,
+     "soft": true,
+     "ms": 372,
+     "chars": 551
+    },
+    {
+     "suite": "retrieval",
+     "kind": "paraphrase",
+     "q": "можно ли оплатить сертификат в подарок другому человеку",
+     "expect": "FR-WEB-34",
+     "strict": true,
+     "soft": true,
+     "ms": 384,
+     "chars": 589
+    },
+    {
+     "suite": "retrieval",
+     "kind": "paraphrase",
+     "q": "видит ли наш оператор переписку и визиты чужого бизнеса",
+     "expect": "FR-OPS-24",
+     "strict": true,
+     "soft": true,
+     "ms": 373,
+     "chars": 589
+    },
+    {
+     "suite": "retrieval",
+     "kind": "paraphrase",
+     "q": "учитываются ли польские выходные и перевод стрелок",
+     "expect": "FR-CAL-06",
+     "strict": true,
+     "soft": true,
+     "ms": 381,
+     "chars": 651
+    },
+    {
+     "suite": "retrieval",
+     "kind": "paraphrase",
+     "q": "как отдаём освободившееся окно тому, кто ждёт",
+     "expect": "FR-CAL-101",
+     "strict": false,
+     "soft": false,
+     "ms": 379,
+     "chars": 652
+    },
+    {
+     "suite": "retrieval",
+     "kind": "paraphrase",
+     "q": "что будет, если нажать F5 или стрелку назад",
+     "expect": "FR-SHELL-52",
+     "strict": true,
+     "soft": true,
+     "ms": 411,
+     "chars": 611
+    },
+    {
+     "suite": "retrieval",
+     "kind": "paraphrase",
+     "q": "что делаем с кривыми телефонными номерами из чужой выгрузки",
+     "expect": "FR-MIG-17",
+     "strict": false,
+     "soft": true,
+     "ms": 380,
+     "chars": 605
+    },
+    {
+     "suite": "retrieval",
+     "kind": "paraphrase",
+     "q": "в каких полях сущности отмечено, что она ещё не ушла на сервер",
+     "expect": "FR-DM-66",
+     "strict": true,
+     "soft": true,
+     "ms": 381,
+     "chars": 585
+    },
+    {
+     "suite": "retrieval",
+     "kind": "paraphrase",
+     "q": "как понять, что тюбик просрочен, и какую упаковку тратить первой",
+     "expect": "FR-WH-18",
+     "strict": false,
+     "soft": true,
+     "ms": 378,
+     "chars": 637
+    },
+    {
+     "suite": "retrieval",
+     "kind": "paraphrase",
+     "q": "чем отличается момент на шкале от времени на стене",
+     "expect": "ADR-005",
+     "strict": true,
+     "soft": true,
+     "ms": 379,
+     "chars": 617
+    },
+    {
+     "suite": "retrieval",
+     "kind": "paraphrase",
+     "q": "в каком виде храним суммы, чтобы не терять копейки",
+     "expect": "ADR-004",
+     "strict": true,
+     "soft": true,
+     "ms": 374,
+     "chars": 643
+    },
+    {
+     "suite": "retrieval",
+     "kind": "paraphrase",
+     "q": "что запрещает передать сырую карточку клиента во внешнюю модель",
+     "expect": "INV-16",
+     "strict": false,
+     "soft": true,
+     "ms": 375,
+     "chars": 595
+    },
+    {
+     "suite": "retrieval",
+     "kind": "paraphrase",
+     "q": "видно ли салону, из каких визитов сложилась пришедшая выплата",
+     "expect": "N-109",
+     "strict": true,
+     "soft": true,
+     "ms": 375,
+     "chars": 662
+    },
+    {
+     "suite": "retrieval",
+     "kind": "code",
+     "q": "asGrosze",
+     "expect": "packages/contracts/src/money.ts",
+     "strict": true,
+     "soft": true,
+     "ms": 43,
+     "chars": 190
+    },
+    {
+     "suite": "retrieval",
+     "kind": "code",
+     "q": "problemDetailsOf",
+     "expect": "packages/contracts/src/errors.ts",
+     "strict": true,
+     "soft": true,
+     "ms": 42,
+     "chars": 110
+    },
+    {
+     "suite": "retrieval",
+     "kind": "code",
+     "q": "vitestBase",
+     "expect": "packages/config/vitest.base.ts",
+     "strict": true,
+     "soft": true,
+     "ms": 43,
+     "chars": 93
+    },
+    {
+     "suite": "retrieval",
+     "kind": "code",
+     "q": "materialiseSegments",
+     "expect": "packages/domain/src/availability/segments.ts",
+     "strict": true,
+     "soft": true,
+     "ms": 42,
+     "chars": 140
+    },
+    {
+     "suite": "retrieval",
+     "kind": "code",
+     "q": "localDayBounds",
+     "expect": "packages/domain/src/time/index.ts",
+     "strict": true,
+     "soft": true,
+     "ms": 42,
+     "chars": 108
+    },
+    {
+     "suite": "retrieval",
+     "kind": "code",
+     "q": "classifyVersionalChange",
+     "expect": "packages/domain/src/sync/merge.ts",
+     "strict": true,
+     "soft": true,
+     "ms": 42,
+     "chars": 265
+    },
+    {
+     "suite": "retrieval",
+     "kind": "code",
+     "q": "FiscalPort",
+     "expect": "packages/ports/src/fiscal.ts",
+     "strict": true,
+     "soft": true,
+     "ms": 42,
+     "chars": 89
+    },
+    {
+     "suite": "retrieval",
+     "kind": "code",
+     "q": "resolveConnectionString",
+     "expect": "packages/db/src/connection.ts",
+     "strict": true,
+     "soft": true,
+     "ms": 42,
+     "chars": 117
+    },
+    {
+     "suite": "retrieval",
+     "kind": "code",
+     "q": "loadAvailabilitySnapshot",
+     "expect": "apps/api/src/modules/availability/availability-snapshot.service.ts",
+     "strict": true,
+     "soft": true,
+     "ms": 42,
+     "chars": 412
+    },
+    {
+     "suite": "retrieval",
+     "kind": "code",
+     "q": "splitByNamespace",
+     "expect": "apps/api/scripts/emit-openapi.ts",
+     "strict": true,
+     "soft": true,
+     "ms": 43,
+     "chars": 298
+    },
+    {
+     "suite": "retrieval",
+     "kind": "code",
+     "q": "badgeVariants",
+     "expect": "packages/ui/src/components/ui/badge.tsx",
+     "strict": true,
+     "soft": true,
+     "ms": 43,
+     "chars": 116
+    },
+    {
+     "suite": "retrieval",
+     "kind": "code",
+     "q": "staleClaims",
+     "expect": "tools/tasks/src/cli.ts",
+     "strict": true,
+     "soft": true,
+     "ms": 42,
+     "chars": 80
+    },
+    {
+     "suite": "blast",
+     "kind": "impact",
+     "target": "DatabaseService",
+     "tier": "hub",
+     "want_files": 49,
+     "found_files": 48,
+     "recall": 0.98,
+     "ms": 63,
+     "chars": 35410
+    },
+    {
+     "suite": "blast",
+     "kind": "impact",
+     "target": "TenantContextInterceptor",
+     "tier": "hub",
+     "want_files": 4,
+     "found_files": 3,
+     "recall": 0.75,
+     "ms": 41,
+     "chars": 714
+    },
+    {
+     "suite": "blast",
+     "kind": "impact",
+     "target": "ProblemException",
+     "tier": "hub",
+     "want_files": 24,
+     "found_files": 24,
+     "recall": 1.0,
+     "ms": 41,
+     "chars": 16351
+    },
+    {
+     "suite": "blast",
+     "kind": "impact",
+     "target": "ActorResolver",
+     "tier": "wide",
+     "want_files": 9,
+     "found_files": 9,
+     "recall": 1.0,
+     "ms": 41,
+     "chars": 1868
+    },
+    {
+     "suite": "blast",
+     "kind": "impact",
+     "target": "AuthService",
+     "tier": "wide",
+     "want_files": 10,
+     "found_files": 9,
+     "recall": 0.9,
+     "ms": 45,
+     "chars": 3959
+    },
+    {
+     "suite": "blast",
+     "kind": "impact",
+     "target": "OutboxPublisher",
+     "tier": "wide",
+     "want_files": 7,
+     "found_files": 6,
+     "recall": 0.857,
+     "ms": 41,
+     "chars": 1356
+    },
+    {
+     "suite": "blast",
+     "kind": "impact",
+     "target": "AvailabilityService",
+     "tier": "narrow",
+     "want_files": 3,
+     "found_files": 3,
+     "recall": 1.0,
+     "ms": 40,
+     "chars": 833
+    },
+    {
+     "suite": "blast",
+     "kind": "impact",
+     "target": "BookingCreateService",
+     "tier": "narrow",
+     "want_files": 3,
+     "found_files": 3,
+     "recall": 1.0,
+     "ms": 41,
+     "chars": 1021
+    },
+    {
+     "suite": "blast",
+     "kind": "impact",
+     "target": "AgreementsService",
+     "tier": "narrow",
+     "want_files": 3,
+     "found_files": 3,
+     "recall": 1.0,
+     "ms": 42,
+     "chars": 1012
+    },
+    {
+     "suite": "blast",
+     "kind": "impact",
+     "target": "SyncConflictService",
+     "tier": "narrow",
+     "want_files": 2,
+     "found_files": 2,
+     "recall": 1.0,
+     "ms": 42,
+     "chars": 513
+    },
+    {
+     "suite": "blast",
+     "kind": "trace",
+     "from": "AuthController",
+     "to": "DatabaseService",
+     "expect": "path",
+     "hit": true,
+     "says_none": false,
+     "ms": 65,
+     "chars": 521
+    },
+    {
+     "suite": "blast",
+     "kind": "trace",
+     "from": "DevicesController",
+     "to": "DatabaseService",
+     "expect": "path",
+     "hit": true,
+     "says_none": false,
+     "ms": 44,
+     "chars": 529
+    },
+    {
+     "suite": "blast",
+     "kind": "trace",
+     "from": "AgreementsController",
+     "to": "DatabaseService",
+     "expect": "path",
+     "hit": true,
+     "says_none": false,
+     "ms": 43,
+     "chars": 571
+    },
+    {
+     "suite": "blast",
+     "kind": "trace",
+     "from": "AvailabilityController",
+     "to": "AvailabilityService",
+     "expect": "path",
+     "hit": true,
+     "says_none": false,
+     "ms": 40,
+     "chars": 309
+    },
+    {
+     "suite": "blast",
+     "kind": "trace",
+     "from": "BookingController",
+     "to": "BookingCreateService",
+     "expect": "path",
+     "hit": true,
+     "says_none": false,
+     "ms": 40,
+     "chars": 299
+    },
+    {
+     "suite": "blast",
+     "kind": "trace",
+     "from": "SessionAuthGuard",
+     "to": "IdentityRepository",
+     "expect": "path",
+     "hit": true,
+     "says_none": false,
+     "ms": 41,
+     "chars": 412
+    },
+    {
+     "suite": "blast",
+     "kind": "trace",
+     "from": "SystemController",
+     "to": "DatabaseService",
+     "expect": "none",
+     "hit": true,
+     "says_none": true,
+     "ms": 42,
+     "chars": 176
+    },
+    {
+     "suite": "blast",
+     "kind": "trace",
+     "from": "DevicesRepository",
+     "to": "AuthService",
+     "expect": "none",
+     "hit": true,
+     "says_none": true,
+     "ms": 45,
+     "chars": 178
+    },
+    {
+     "suite": "blast",
+     "kind": "changes",
+     "base": "cbc931ba~1",
+     "want_files": 2,
+     "found_files": 2,
+     "want_symbols": 5,
+     "found_symbols": 5,
+     "ms": 165,
+     "chars": 6195
+    },
+    {
+     "suite": "blast",
+     "kind": "changes",
+     "base": "0f27d2d1",
+     "want_files": 18,
+     "found_files": 11,
+     "want_symbols": 38,
+     "found_symbols": 27,
+     "ms": 244,
+     "chars": 12032
+    }
+   ],
+   "summary": {
+    "retrieval": {
+     "by_kind": {
+      "keyword": {
+       "n": 40,
+       "strict": 40,
+       "soft": 40
+      },
+      "paraphrase": {
+       "n": 30,
+       "strict": 16,
+       "soft": 28
+      },
+      "code": {
+       "n": 12,
+       "strict": 12,
+       "soft": 12
+      }
+     },
+     "strict": 68,
+     "soft": 80,
+     "n": 82,
+     "ms_median": 385,
+     "chars_median": 606
+    },
+    "impact": {
+     "n": 10,
+     "recall_mean": 0.949,
+     "files_found": 110,
+     "files_want": 114,
+     "ms_median": 41,
+     "chars_median": 1188
+    },
+    "trace": {
+     "n": 8,
+     "hit": 8,
+     "path_hit": 6,
+     "path_n": 6,
+     "none_hit": 2,
+     "none_n": 2,
+     "ms_median": 42
+    },
+    "changes": {
+     "n": 2,
+     "symbols_found": 32,
+     "symbols_want": 43,
+     "files_found": 13,
+     "files_want": 20,
+     "ms_median": 204,
+     "chars_median": 9114
+    }
+   }
+  },
+  "graphify": {
+   "rows": [
+    {
+     "suite": "retrieval",
+     "kind": "keyword",
+     "q": "расход виден салону",
+     "expect": "FR-AI-138",
+     "strict": true,
+     "soft": true,
+     "ms": 1578,
+     "chars": 6930
+    },
+    {
+     "suite": "retrieval",
+     "kind": "keyword",
+     "q": "арендатор отдельный контур",
+     "expect": "FR-VIS-80",
+     "strict": false,
+     "soft": false,
+     "ms": 1534,
+     "chars": 6925
+    },
+    {
+     "suite": "retrieval",
+     "kind": "keyword",
+     "q": "только нативном приложении",
+     "expect": "FR-PAY-110",
+     "strict": false,
+     "soft": false,
+     "ms": 1503,
+     "chars": 6446
+    },
+    {
+     "suite": "retrieval",
+     "kind": "keyword",
+     "q": "панели отражающие обещания",
+     "expect": "FR-APP-64",
+     "strict": true,
+     "soft": true,
+     "ms": 1568,
+     "chars": 6653
+    },
+    {
+     "suite": "retrieval",
+     "kind": "keyword",
+     "q": "изменение любой позиции",
+     "expect": "FR-PAY-133",
+     "strict": false,
+     "soft": false,
+     "ms": 1518,
+     "chars": 6688
+    },
+    {
+     "suite": "retrieval",
+     "kind": "keyword",
+     "q": "групповое занятие кассе",
+     "expect": "FR-PAY-54",
+     "strict": false,
+     "soft": false,
+     "ms": 1519,
+     "chars": 6659
+    },
+    {
+     "suite": "retrieval",
+     "kind": "keyword",
+     "q": "награда выдаётся против",
+     "expect": "FR-TOOL-18",
+     "strict": true,
+     "soft": true,
+     "ms": 1503,
+     "chars": 2202
+    },
+    {
+     "suite": "retrieval",
+     "kind": "keyword",
+     "q": "паритет поверхностей",
+     "expect": "FR-WH-05",
+     "strict": true,
+     "soft": true,
+     "ms": 1560,
+     "chars": 6708
+    },
+    {
+     "suite": "retrieval",
+     "kind": "keyword",
+     "q": "место содержимое занято",
+     "expect": "FR-APP-02",
+     "strict": true,
+     "soft": true,
+     "ms": 1537,
+     "chars": 6876
+    },
+    {
+     "suite": "retrieval",
+     "kind": "keyword",
+     "q": "знаний салона ассистента",
+     "expect": "FR-AI-145",
+     "strict": true,
+     "soft": true,
+     "ms": 1548,
+     "chars": 6898
+    },
+    {
+     "suite": "retrieval",
+     "kind": "keyword",
+     "q": "зачитывается автоматически",
+     "expect": "FR-PAY-28",
+     "strict": false,
+     "soft": false,
+     "ms": 1541,
+     "chars": 6799
+    },
+    {
+     "suite": "retrieval",
+     "kind": "keyword",
+     "q": "сигнал блокирует работу",
+     "expect": "FR-VIS-55",
+     "strict": true,
+     "soft": true,
+     "ms": 1561,
+     "chars": 6870
+    },
+    {
+     "suite": "retrieval",
+     "kind": "keyword",
+     "q": "денежные конфликты поведение",
+     "expect": "FR-PAY-143",
+     "strict": false,
+     "soft": true,
+     "ms": 1559,
+     "chars": 6604
+    },
+    {
+     "suite": "retrieval",
+     "kind": "keyword",
+     "q": "черновик виден черновик",
+     "expect": "FR-SVC-04",
+     "strict": false,
+     "soft": true,
+     "ms": 1546,
+     "chars": 6809
+    },
+    {
+     "suite": "retrieval",
+     "kind": "keyword",
+     "q": "режим тренировки сотрудника",
+     "expect": "FR-LIFE-29",
+     "strict": false,
+     "soft": true,
+     "ms": 1569,
+     "chars": 6637
+    },
+    {
+     "suite": "retrieval",
+     "kind": "keyword",
+     "q": "списание штрафа происходит",
+     "expect": "FR-PAY-26",
+     "strict": false,
+     "soft": false,
+     "ms": 1566,
+     "chars": 6822
+    },
+    {
+     "suite": "retrieval",
+     "kind": "keyword",
+     "q": "шаблоны ролей салона",
+     "expect": "FR-VIS-35",
+     "strict": true,
+     "soft": true,
+     "ms": 1543,
+     "chars": 6854
+    },
+    {
+     "suite": "retrieval",
+     "kind": "keyword",
+     "q": "экономика аренды",
+     "expect": "FR-PAY-82",
+     "strict": false,
+     "soft": false,
+     "ms": 1538,
+     "chars": 6843
+    },
+    {
+     "suite": "retrieval",
+     "kind": "keyword",
+     "q": "только клиентских поверхностях",
+     "expect": "FR-APP-67",
+     "strict": true,
+     "soft": true,
+     "ms": 1538,
+     "chars": 6886
+    },
+    {
+     "suite": "retrieval",
+     "kind": "keyword",
+     "q": "единый медиа",
+     "expect": "FR-SVC-50",
+     "strict": false,
+     "soft": true,
+     "ms": 1566,
+     "chars": 6739
+    },
+    {
+     "suite": "retrieval",
+     "kind": "keyword",
+     "q": "внутренняя система рассмотрения",
+     "expect": "FR-SEC-44",
+     "strict": true,
+     "soft": true,
+     "ms": 1548,
+     "chars": 6883
+    },
+    {
+     "suite": "retrieval",
+     "kind": "keyword",
+     "q": "арендатор уходит своей",
+     "expect": "FR-VIS-85",
+     "strict": false,
+     "soft": true,
+     "ms": 1523,
+     "chars": 6853
+    },
+    {
+     "suite": "retrieval",
+     "kind": "keyword",
+     "q": "отчёты склада",
+     "expect": "FR-WH-53",
+     "strict": false,
+     "soft": false,
+     "ms": 1537,
+     "chars": 6689
+    },
+    {
+     "suite": "retrieval",
+     "kind": "keyword",
+     "q": "подсказка расписанию двигает",
+     "expect": "FR-AI-97",
+     "strict": true,
+     "soft": true,
+     "ms": 1519,
+     "chars": 6925
+    },
+    {
+     "suite": "retrieval",
+     "kind": "keyword",
+     "q": "как устроена выдача публикуется",
+     "expect": "FR-MKT-25",
+     "strict": true,
+     "soft": true,
+     "ms": 1514,
+     "chars": 6875
+    },
+    {
+     "suite": "retrieval",
+     "kind": "keyword",
+     "q": "честный экран что не переезжает",
+     "expect": "FR-MIG-49",
+     "strict": true,
+     "soft": true,
+     "ms": 1683,
+     "chars": 6762
+    },
+    {
+     "suite": "retrieval",
+     "kind": "keyword",
+     "q": "чат канал утечки контактов",
+     "expect": "FR-CRM-57",
+     "strict": true,
+     "soft": true,
+     "ms": 1549,
+     "chars": 6840
+    },
+    {
+     "suite": "retrieval",
+     "kind": "keyword",
+     "q": "прайс аренды рабочих мест",
+     "expect": "FR-DM-128",
+     "strict": true,
+     "soft": true,
+     "ms": 1564,
+     "chars": 6682
+    },
+    {
+     "suite": "retrieval",
+     "kind": "keyword",
+     "q": "осознанное наложение помечается навсегда",
+     "expect": "FR-CAL-43",
+     "strict": true,
+     "soft": true,
+     "ms": 1545,
+     "chars": 6614
+    },
+    {
+     "suite": "retrieval",
+     "kind": "keyword",
+     "q": "понимает то что печатают",
+     "expect": "FR-SHELL-21",
+     "strict": true,
+     "soft": true,
+     "ms": 1642,
+     "chars": 6456
+    },
+    {
+     "suite": "retrieval",
+     "kind": "keyword",
+     "q": "деньги и отработанная стоимость",
+     "expect": "FR-RPT-04",
+     "strict": true,
+     "soft": true,
+     "ms": 1638,
+     "chars": 6679
+    },
+    {
+     "suite": "retrieval",
+     "kind": "keyword",
+     "q": "hreflang и мультирыночность",
+     "expect": "FR-WEB-22",
+     "strict": true,
+     "soft": true,
+     "ms": 1631,
+     "chars": 6701
+    },
+    {
+     "suite": "retrieval",
+     "kind": "keyword",
+     "q": "рабочая локаль не показывается",
+     "expect": "FR-OPS-81",
+     "strict": true,
+     "soft": true,
+     "ms": 1655,
+     "chars": 6743
+    },
+    {
+     "suite": "retrieval",
+     "kind": "keyword",
+     "q": "повторный найм новое членство",
+     "expect": "FR-STAFF-63",
+     "strict": false,
+     "soft": false,
+     "ms": 1518,
+     "chars": 6888
+    },
+    {
+     "suite": "retrieval",
+     "kind": "keyword",
+     "q": "критерий готовности рыночному запуску",
+     "expect": "FR-PH-43",
+     "strict": true,
+     "soft": true,
+     "ms": 1519,
+     "chars": 6554
+    },
+    {
+     "suite": "retrieval",
+     "kind": "keyword",
+     "q": "ведомость мастера не видна",
+     "expect": "NFR-STAFF-04",
+     "strict": false,
+     "soft": false,
+     "ms": 1662,
+     "chars": 6924
+    },
+    {
+     "suite": "retrieval",
+     "kind": "keyword",
+     "q": "система делает сама человек отменяет",
+     "expect": "INV-19",
+     "strict": false,
+     "soft": true,
+     "ms": 1516,
+     "chars": 6747
+    },
+    {
+     "suite": "retrieval",
+     "kind": "keyword",
+     "q": "role_id holds a role name",
+     "expect": "ADR-024",
+     "strict": false,
+     "soft": false,
+     "ms": 1696,
+     "chars": 6436
+    },
+    {
+     "suite": "retrieval",
+     "kind": "keyword",
+     "q": "unfiscalized queue protocol adapters",
+     "expect": "BE-M11",
+     "strict": true,
+     "soft": true,
+     "ms": 1548,
+     "chars": 6719
+    },
+    {
+     "suite": "retrieval",
+     "kind": "keyword",
+     "q": "каскадного сдвига дня нет",
+     "expect": "W-206",
+     "strict": true,
+     "soft": true,
+     "ms": 1542,
+     "chars": 6753
+    },
+    {
+     "suite": "retrieval",
+     "kind": "paraphrase",
+     "q": "пакет платёжных бумаг за период для внешнего счетовода",
+     "expect": "FR-PAY-104",
+     "strict": false,
+     "soft": false,
+     "ms": 1689,
+     "chars": 7024
+    },
+    {
+     "suite": "retrieval",
+     "kind": "paraphrase",
+     "q": "перечень незыблемых требований продукта, который проверяет сборка",
+     "expect": "FR-VIS-01",
+     "strict": false,
+     "soft": false,
+     "ms": 1543,
+     "chars": 6897
+    },
+    {
+     "suite": "retrieval",
+     "kind": "paraphrase",
+     "q": "кто получатель платежа записан в документе",
+     "expect": "FR-PAY-03",
+     "strict": false,
+     "soft": false,
+     "ms": 1691,
+     "chars": 6866
+    },
+    {
+     "suite": "retrieval",
+     "kind": "paraphrase",
+     "q": "как хранится код доступа сотрудника",
+     "expect": "FR-SEC-21",
+     "strict": false,
+     "soft": true,
+     "ms": 1542,
+     "chars": 6989
+    },
+    {
+     "suite": "retrieval",
+     "kind": "paraphrase",
+     "q": "сколько времени держим записи кто решает",
+     "expect": "FR-AI-102",
+     "strict": false,
+     "soft": false,
+     "ms": 1562,
+     "chars": 6903
+    },
+    {
+     "suite": "retrieval",
+     "kind": "paraphrase",
+     "q": "создать похожую услугу на основе существующей",
+     "expect": "FR-SVC-15",
+     "strict": false,
+     "soft": false,
+     "ms": 1724,
+     "chars": 6656
+    },
+    {
+     "suite": "retrieval",
+     "kind": "paraphrase",
+     "q": "состояния задачи обратного звонка",
+     "expect": "FR-AI-66",
+     "strict": false,
+     "soft": false,
+     "ms": 1556,
+     "chars": 6933
+    },
+    {
+     "suite": "retrieval",
+     "kind": "paraphrase",
+     "q": "кто может оценить визит после подтверждения по смс",
+     "expect": "FR-VIS-76",
+     "strict": false,
+     "soft": true,
+     "ms": 1709,
+     "chars": 6818
+    },
+    {
+     "suite": "retrieval",
+     "kind": "paraphrase",
+     "q": "клиент должен сразу понять что говорит робот",
+     "expect": "FR-AI-21",
+     "strict": false,
+     "soft": false,
+     "ms": 1528,
+     "chars": 6780
+    },
+    {
+     "suite": "retrieval",
+     "kind": "paraphrase",
+     "q": "выявление накрутки бонусов",
+     "expect": "FR-TOOL-22",
+     "strict": false,
+     "soft": false,
+     "ms": 1466,
+     "chars": 188
+    },
+    {
+     "suite": "retrieval",
+     "kind": "paraphrase",
+     "q": "как клиент получает фискальный документ",
+     "expect": "FR-PAY-49",
+     "strict": false,
+     "soft": false,
+     "ms": 1510,
+     "chars": 6870
+    },
+    {
+     "suite": "retrieval",
+     "kind": "paraphrase",
+     "q": "бонус начисляется без участия сотрудника",
+     "expect": "FR-TOOL-18",
+     "strict": false,
+     "soft": false,
+     "ms": 1565,
+     "chars": 7023
+    },
+    {
+     "suite": "retrieval",
+     "kind": "paraphrase",
+     "q": "прошлые визиты клиента какие услуги делали",
+     "expect": "FR-SVC-39",
+     "strict": false,
+     "soft": false,
+     "ms": 1577,
+     "chars": 6659
+    },
+    {
+     "suite": "retrieval",
+     "kind": "paraphrase",
+     "q": "загрузить услуги из файла при регистрации",
+     "expect": "FR-LIFE-17",
+     "strict": false,
+     "soft": false,
+     "ms": 1699,
+     "chars": 6657
+    },
+    {
+     "suite": "retrieval",
+     "kind": "paraphrase",
+     "q": "что видит посетитель каталога, если салон не хочет публиковать цену",
+     "expect": "FR-MKT-35",
+     "strict": false,
+     "soft": false,
+     "ms": 1716,
+     "chars": 7107
+    },
+    {
+     "suite": "retrieval",
+     "kind": "paraphrase",
+     "q": "как делятся чаевые между теми, кто работал",
+     "expect": "FR-STAFF-45",
+     "strict": false,
+     "soft": false,
+     "ms": 1537,
+     "chars": 6816
+    },
+    {
+     "suite": "retrieval",
+     "kind": "paraphrase",
+     "q": "что мешает стереть карточку клиента",
+     "expect": "FR-CRM-11",
+     "strict": false,
+     "soft": true,
+     "ms": 1541,
+     "chars": 7065
+    },
+    {
+     "suite": "retrieval",
+     "kind": "paraphrase",
+     "q": "как сверяем итоговые числа отчёта с первичными строками",
+     "expect": "FR-RPT-13",
+     "strict": false,
+     "soft": false,
+     "ms": 1672,
+     "chars": 6727
+    },
+    {
+     "suite": "retrieval",
+     "kind": "paraphrase",
+     "q": "можно ли оплатить сертификат в подарок другому человеку",
+     "expect": "FR-WEB-34",
+     "strict": false,
+     "soft": false,
+     "ms": 1694,
+     "chars": 6828
+    },
+    {
+     "suite": "retrieval",
+     "kind": "paraphrase",
+     "q": "видит ли наш оператор переписку и визиты чужого бизнеса",
+     "expect": "FR-OPS-24",
+     "strict": false,
+     "soft": false,
+     "ms": 1716,
+     "chars": 6875
+    },
+    {
+     "suite": "retrieval",
+     "kind": "paraphrase",
+     "q": "учитываются ли польские выходные и перевод стрелок",
+     "expect": "FR-CAL-06",
+     "strict": false,
+     "soft": true,
+     "ms": 1695,
+     "chars": 6947
+    },
+    {
+     "suite": "retrieval",
+     "kind": "paraphrase",
+     "q": "как отдаём освободившееся окно тому, кто ждёт",
+     "expect": "FR-CAL-101",
+     "strict": false,
+     "soft": false,
+     "ms": 1502,
+     "chars": 6663
+    },
+    {
+     "suite": "retrieval",
+     "kind": "paraphrase",
+     "q": "что будет, если нажать F5 или стрелку назад",
+     "expect": "FR-SHELL-52",
+     "strict": true,
+     "soft": true,
+     "ms": 1670,
+     "chars": 7000
+    },
+    {
+     "suite": "retrieval",
+     "kind": "paraphrase",
+     "q": "что делаем с кривыми телефонными номерами из чужой выгрузки",
+     "expect": "FR-MIG-17",
+     "strict": false,
+     "soft": false,
+     "ms": 1685,
+     "chars": 6808
+    },
+    {
+     "suite": "retrieval",
+     "kind": "paraphrase",
+     "q": "в каких полях сущности отмечено, что она ещё не ушла на сервер",
+     "expect": "FR-DM-66",
+     "strict": false,
+     "soft": true,
+     "ms": 1730,
+     "chars": 7179
+    },
+    {
+     "suite": "retrieval",
+     "kind": "paraphrase",
+     "q": "как понять, что тюбик просрочен, и какую упаковку тратить первой",
+     "expect": "FR-WH-18",
+     "strict": false,
+     "soft": false,
+     "ms": 1747,
+     "chars": 6613
+    },
+    {
+     "suite": "retrieval",
+     "kind": "paraphrase",
+     "q": "чем отличается момент на шкале от времени на стене",
+     "expect": "ADR-005",
+     "strict": false,
+     "soft": true,
+     "ms": 1705,
+     "chars": 6771
+    },
+    {
+     "suite": "retrieval",
+     "kind": "paraphrase",
+     "q": "в каком виде храним суммы, чтобы не терять копейки",
+     "expect": "ADR-004",
+     "strict": false,
+     "soft": false,
+     "ms": 1713,
+     "chars": 7066
+    },
+    {
+     "suite": "retrieval",
+     "kind": "paraphrase",
+     "q": "что запрещает передать сырую карточку клиента во внешнюю модель",
+     "expect": "INV-16",
+     "strict": false,
+     "soft": true,
+     "ms": 1703,
+     "chars": 6903
+    },
+    {
+     "suite": "retrieval",
+     "kind": "paraphrase",
+     "q": "видно ли салону, из каких визитов сложилась пришедшая выплата",
+     "expect": "N-109",
+     "strict": false,
+     "soft": true,
+     "ms": 1705,
+     "chars": 7064
+    },
+    {
+     "suite": "retrieval",
+     "kind": "code",
+     "q": "asGrosze",
+     "expect": "packages/contracts/src/money.ts",
+     "strict": true,
+     "soft": true,
+     "ms": 1536,
+     "chars": 3146
+    },
+    {
+     "suite": "retrieval",
+     "kind": "code",
+     "q": "problemDetailsOf",
+     "expect": "packages/contracts/src/errors.ts",
+     "strict": true,
+     "soft": true,
+     "ms": 1528,
+     "chars": 4732
+    },
+    {
+     "suite": "retrieval",
+     "kind": "code",
+     "q": "vitestBase",
+     "expect": "packages/config/vitest.base.ts",
+     "strict": true,
+     "soft": true,
+     "ms": 1545,
+     "chars": 10802
+    },
+    {
+     "suite": "retrieval",
+     "kind": "code",
+     "q": "materialiseSegments",
+     "expect": "packages/domain/src/availability/segments.ts",
+     "strict": false,
+     "soft": false,
+     "ms": 1535,
+     "chars": 6725
+    },
+    {
+     "suite": "retrieval",
+     "kind": "code",
+     "q": "localDayBounds",
+     "expect": "packages/domain/src/time/index.ts",
+     "strict": false,
+     "soft": false,
+     "ms": 1550,
+     "chars": 14167
+    },
+    {
+     "suite": "retrieval",
+     "kind": "code",
+     "q": "classifyVersionalChange",
+     "expect": "packages/domain/src/sync/merge.ts",
+     "strict": true,
+     "soft": true,
+     "ms": 1502,
+     "chars": 6954
+    },
+    {
+     "suite": "retrieval",
+     "kind": "code",
+     "q": "FiscalPort",
+     "expect": "packages/ports/src/fiscal.ts",
+     "strict": false,
+     "soft": false,
+     "ms": 1523,
+     "chars": 7736
+    },
+    {
+     "suite": "retrieval",
+     "kind": "code",
+     "q": "resolveConnectionString",
+     "expect": "packages/db/src/connection.ts",
+     "strict": true,
+     "soft": true,
+     "ms": 1521,
+     "chars": 6244
+    },
+    {
+     "suite": "retrieval",
+     "kind": "code",
+     "q": "loadAvailabilitySnapshot",
+     "expect": "apps/api/src/modules/availability/availability-snapshot.service.ts",
+     "strict": true,
+     "soft": true,
+     "ms": 1508,
+     "chars": 6360
+    },
+    {
+     "suite": "retrieval",
+     "kind": "code",
+     "q": "splitByNamespace",
+     "expect": "apps/api/scripts/emit-openapi.ts",
+     "strict": true,
+     "soft": true,
+     "ms": 1530,
+     "chars": 5892
+    },
+    {
+     "suite": "retrieval",
+     "kind": "code",
+     "q": "badgeVariants",
+     "expect": "packages/ui/src/components/ui/badge.tsx",
+     "strict": true,
+     "soft": true,
+     "ms": 1512,
+     "chars": 1713
+    },
+    {
+     "suite": "retrieval",
+     "kind": "code",
+     "q": "staleClaims",
+     "expect": "tools/tasks/src/cli.ts",
+     "strict": true,
+     "soft": true,
+     "ms": 1516,
+     "chars": 11685
+    },
+    {
+     "suite": "blast",
+     "kind": "impact",
+     "target": "DatabaseService",
+     "tier": "hub",
+     "want_files": 49,
+     "found_files": 0,
+     "recall": 0.0,
+     "ms": 506,
+     "chars": 40
+    },
+    {
+     "suite": "blast",
+     "kind": "impact",
+     "target": "TenantContextInterceptor",
+     "tier": "hub",
+     "want_files": 4,
+     "found_files": 0,
+     "recall": 0.0,
+     "ms": 416,
+     "chars": 49
+    },
+    {
+     "suite": "blast",
+     "kind": "impact",
+     "target": "ProblemException",
+     "tier": "hub",
+     "want_files": 24,
+     "found_files": 24,
+     "recall": 1.0,
+     "ms": 426,
+     "chars": 10924
+    },
+    {
+     "suite": "blast",
+     "kind": "impact",
+     "target": "ActorResolver",
+     "tier": "wide",
+     "want_files": 9,
+     "found_files": 0,
+     "recall": 0.0,
+     "ms": 418,
+     "chars": 38
+    },
+    {
+     "suite": "blast",
+     "kind": "impact",
+     "target": "AuthService",
+     "tier": "wide",
+     "want_files": 10,
+     "found_files": 10,
+     "recall": 1.0,
+     "ms": 429,
+     "chars": 5033
+    },
+    {
+     "suite": "blast",
+     "kind": "impact",
+     "target": "OutboxPublisher",
+     "tier": "wide",
+     "want_files": 7,
+     "found_files": 0,
+     "recall": 0.0,
+     "ms": 417,
+     "chars": 40
+    },
+    {
+     "suite": "blast",
+     "kind": "impact",
+     "target": "AvailabilityService",
+     "tier": "narrow",
+     "want_files": 3,
+     "found_files": 3,
+     "recall": 1.0,
+     "ms": 428,
+     "chars": 1371
+    },
+    {
+     "suite": "blast",
+     "kind": "impact",
+     "target": "BookingCreateService",
+     "tier": "narrow",
+     "want_files": 3,
+     "found_files": 3,
+     "recall": 1.0,
+     "ms": 430,
+     "chars": 1353
+    },
+    {
+     "suite": "blast",
+     "kind": "impact",
+     "target": "AgreementsService",
+     "tier": "narrow",
+     "want_files": 3,
+     "found_files": 3,
+     "recall": 1.0,
+     "ms": 422,
+     "chars": 856
+    },
+    {
+     "suite": "blast",
+     "kind": "impact",
+     "target": "SyncConflictService",
+     "tier": "narrow",
+     "want_files": 2,
+     "found_files": 2,
+     "recall": 1.0,
+     "ms": 434,
+     "chars": 741
+    },
+    {
+     "suite": "blast",
+     "kind": "trace",
+     "from": "AuthController",
+     "to": "DatabaseService",
+     "expect": "path",
+     "hit": false,
+     "says_none": true,
+     "ms": 1558,
+     "chars": 205
+    },
+    {
+     "suite": "blast",
+     "kind": "trace",
+     "from": "DevicesController",
+     "to": "DatabaseService",
+     "expect": "path",
+     "hit": false,
+     "says_none": true,
+     "ms": 1565,
+     "chars": 208
+    },
+    {
+     "suite": "blast",
+     "kind": "trace",
+     "from": "AgreementsController",
+     "to": "DatabaseService",
+     "expect": "path",
+     "hit": false,
+     "says_none": true,
+     "ms": 1608,
+     "chars": 211
+    },
+    {
+     "suite": "blast",
+     "kind": "trace",
+     "from": "AvailabilityController",
+     "to": "AvailabilityService",
+     "expect": "path",
+     "hit": true,
+     "says_none": false,
+     "ms": 1614,
+     "chars": 135
+    },
+    {
+     "suite": "blast",
+     "kind": "trace",
+     "from": "BookingController",
+     "to": "BookingCreateService",
+     "expect": "path",
+     "hit": true,
+     "says_none": false,
+     "ms": 1636,
+     "chars": 131
+    },
+    {
+     "suite": "blast",
+     "kind": "trace",
+     "from": "SessionAuthGuard",
+     "to": "IdentityRepository",
+     "expect": "path",
+     "hit": true,
+     "says_none": false,
+     "ms": 1604,
+     "chars": 207
+    },
+    {
+     "suite": "blast",
+     "kind": "trace",
+     "from": "SystemController",
+     "to": "DatabaseService",
+     "expect": "none",
+     "hit": true,
+     "says_none": true,
+     "ms": 1603,
+     "chars": 207
+    },
+    {
+     "suite": "blast",
+     "kind": "trace",
+     "from": "DevicesRepository",
+     "to": "AuthService",
+     "expect": "none",
+     "hit": true,
+     "says_none": true,
+     "ms": 1596,
+     "chars": 129
+    }
+   ],
+   "summary": {
+    "retrieval": {
+     "by_kind": {
+      "keyword": {
+       "n": 40,
+       "strict": 23,
+       "soft": 29
+      },
+      "paraphrase": {
+       "n": 30,
+       "strict": 1,
+       "soft": 9
+      },
+      "code": {
+       "n": 12,
+       "strict": 9,
+       "soft": 9
+      }
+     },
+     "strict": 33,
+     "soft": 47,
+     "n": 82,
+     "ms_median": 1548,
+     "chars_median": 6812
+    },
+    "impact": {
+     "n": 10,
+     "recall_mean": 0.6,
+     "files_found": 45,
+     "files_want": 114,
+     "ms_median": 427,
+     "chars_median": 798
+    },
+    "trace": {
+     "n": 8,
+     "hit": 5,
+     "path_hit": 3,
+     "path_n": 6,
+     "none_hit": 2,
+     "none_n": 2,
+     "ms_median": 1604
+    }
+   }
+  },
+  "gitnexus": {
+   "rows": [
+    {
+     "suite": "retrieval",
+     "kind": "keyword",
+     "q": "расход виден салону",
+     "expect": "FR-AI-138",
+     "strict": false,
+     "soft": false,
+     "ms": 1851,
+     "chars": 6274
+    },
+    {
+     "suite": "retrieval",
+     "kind": "keyword",
+     "q": "арендатор отдельный контур",
+     "expect": "FR-VIS-80",
+     "strict": false,
+     "soft": true,
+     "ms": 1436,
+     "chars": 6282
+    },
+    {
+     "suite": "retrieval",
+     "kind": "keyword",
+     "q": "только нативном приложении",
+     "expect": "FR-PAY-110",
+     "strict": false,
+     "soft": false,
+     "ms": 1441,
+     "chars": 6294
+    },
+    {
+     "suite": "retrieval",
+     "kind": "keyword",
+     "q": "панели отражающие обещания",
+     "expect": "FR-APP-64",
+     "strict": false,
+     "soft": true,
+     "ms": 1427,
+     "chars": 7323
+    },
+    {
+     "suite": "retrieval",
+     "kind": "keyword",
+     "q": "изменение любой позиции",
+     "expect": "FR-PAY-133",
+     "strict": false,
+     "soft": true,
+     "ms": 1429,
+     "chars": 6533
+    },
+    {
+     "suite": "retrieval",
+     "kind": "keyword",
+     "q": "групповое занятие кассе",
+     "expect": "FR-PAY-54",
+     "strict": false,
+     "soft": true,
+     "ms": 1438,
+     "chars": 6933
+    },
+    {
+     "suite": "retrieval",
+     "kind": "keyword",
+     "q": "награда выдаётся против",
+     "expect": "FR-TOOL-18",
+     "strict": false,
+     "soft": true,
+     "ms": 1446,
+     "chars": 5657
+    },
+    {
+     "suite": "retrieval",
+     "kind": "keyword",
+     "q": "паритет поверхностей",
+     "expect": "FR-WH-05",
+     "strict": false,
+     "soft": true,
+     "ms": 1455,
+     "chars": 5920
+    },
+    {
+     "suite": "retrieval",
+     "kind": "keyword",
+     "q": "место содержимое занято",
+     "expect": "FR-APP-02",
+     "strict": false,
+     "soft": true,
+     "ms": 1458,
+     "chars": 6157
+    },
+    {
+     "suite": "retrieval",
+     "kind": "keyword",
+     "q": "знаний салона ассистента",
+     "expect": "FR-AI-145",
+     "strict": false,
+     "soft": true,
+     "ms": 1485,
+     "chars": 6477
+    },
+    {
+     "suite": "retrieval",
+     "kind": "keyword",
+     "q": "зачитывается автоматически",
+     "expect": "FR-PAY-28",
+     "strict": false,
+     "soft": true,
+     "ms": 1421,
+     "chars": 5900
+    },
+    {
+     "suite": "retrieval",
+     "kind": "keyword",
+     "q": "сигнал блокирует работу",
+     "expect": "FR-VIS-55",
+     "strict": false,
+     "soft": true,
+     "ms": 1427,
+     "chars": 6384
+    },
+    {
+     "suite": "retrieval",
+     "kind": "keyword",
+     "q": "денежные конфликты поведение",
+     "expect": "FR-PAY-143",
+     "strict": false,
+     "soft": true,
+     "ms": 1420,
+     "chars": 7475
+    },
+    {
+     "suite": "retrieval",
+     "kind": "keyword",
+     "q": "черновик виден черновик",
+     "expect": "FR-SVC-04",
+     "strict": false,
+     "soft": true,
+     "ms": 1483,
+     "chars": 6132
+    },
+    {
+     "suite": "retrieval",
+     "kind": "keyword",
+     "q": "режим тренировки сотрудника",
+     "expect": "FR-LIFE-29",
+     "strict": false,
+     "soft": true,
+     "ms": 1430,
+     "chars": 6127
+    },
+    {
+     "suite": "retrieval",
+     "kind": "keyword",
+     "q": "списание штрафа происходит",
+     "expect": "FR-PAY-26",
+     "strict": false,
+     "soft": true,
+     "ms": 1413,
+     "chars": 5833
+    },
+    {
+     "suite": "retrieval",
+     "kind": "keyword",
+     "q": "шаблоны ролей салона",
+     "expect": "FR-VIS-35",
+     "strict": false,
+     "soft": true,
+     "ms": 1390,
+     "chars": 6249
+    },
+    {
+     "suite": "retrieval",
+     "kind": "keyword",
+     "q": "экономика аренды",
+     "expect": "FR-PAY-82",
+     "strict": false,
+     "soft": false,
+     "ms": 1395,
+     "chars": 6302
+    },
+    {
+     "suite": "retrieval",
+     "kind": "keyword",
+     "q": "только клиентских поверхностях",
+     "expect": "FR-APP-67",
+     "strict": false,
+     "soft": true,
+     "ms": 1421,
+     "chars": 6081
+    },
+    {
+     "suite": "retrieval",
+     "kind": "keyword",
+     "q": "единый медиа",
+     "expect": "FR-SVC-50",
+     "strict": false,
+     "soft": true,
+     "ms": 1414,
+     "chars": 6179
+    },
+    {
+     "suite": "retrieval",
+     "kind": "keyword",
+     "q": "внутренняя система рассмотрения",
+     "expect": "FR-SEC-44",
+     "strict": false,
+     "soft": false,
+     "ms": 1437,
+     "chars": 6100
+    },
+    {
+     "suite": "retrieval",
+     "kind": "keyword",
+     "q": "арендатор уходит своей",
+     "expect": "FR-VIS-85",
+     "strict": false,
+     "soft": true,
+     "ms": 1413,
+     "chars": 6502
+    },
+    {
+     "suite": "retrieval",
+     "kind": "keyword",
+     "q": "отчёты склада",
+     "expect": "FR-WH-53",
+     "strict": false,
+     "soft": true,
+     "ms": 1420,
+     "chars": 6103
+    },
+    {
+     "suite": "retrieval",
+     "kind": "keyword",
+     "q": "подсказка расписанию двигает",
+     "expect": "FR-AI-97",
+     "strict": false,
+     "soft": true,
+     "ms": 1405,
+     "chars": 6122
+    },
+    {
+     "suite": "retrieval",
+     "kind": "keyword",
+     "q": "как устроена выдача публикуется",
+     "expect": "FR-MKT-25",
+     "strict": false,
+     "soft": true,
+     "ms": 1432,
+     "chars": 5799
+    },
+    {
+     "suite": "retrieval",
+     "kind": "keyword",
+     "q": "честный экран что не переезжает",
+     "expect": "FR-MIG-49",
+     "strict": false,
+     "soft": true,
+     "ms": 1407,
+     "chars": 6341
+    },
+    {
+     "suite": "retrieval",
+     "kind": "keyword",
+     "q": "чат канал утечки контактов",
+     "expect": "FR-CRM-57",
+     "strict": false,
+     "soft": true,
+     "ms": 1440,
+     "chars": 5895
+    },
+    {
+     "suite": "retrieval",
+     "kind": "keyword",
+     "q": "прайс аренды рабочих мест",
+     "expect": "FR-DM-128",
+     "strict": false,
+     "soft": true,
+     "ms": 1412,
+     "chars": 6226
+    },
+    {
+     "suite": "retrieval",
+     "kind": "keyword",
+     "q": "осознанное наложение помечается навсегда",
+     "expect": "FR-CAL-43",
+     "strict": false,
+     "soft": false,
+     "ms": 1402,
+     "chars": 6253
+    },
+    {
+     "suite": "retrieval",
+     "kind": "keyword",
+     "q": "понимает то что печатают",
+     "expect": "FR-SHELL-21",
+     "strict": false,
+     "soft": true,
+     "ms": 1422,
+     "chars": 6179
+    },
+    {
+     "suite": "retrieval",
+     "kind": "keyword",
+     "q": "деньги и отработанная стоимость",
+     "expect": "FR-RPT-04",
+     "strict": false,
+     "soft": false,
+     "ms": 1491,
+     "chars": 9206
+    },
+    {
+     "suite": "retrieval",
+     "kind": "keyword",
+     "q": "hreflang и мультирыночность",
+     "expect": "FR-WEB-22",
+     "strict": false,
+     "soft": false,
+     "ms": 1452,
+     "chars": 8671
+    },
+    {
+     "suite": "retrieval",
+     "kind": "keyword",
+     "q": "рабочая локаль не показывается",
+     "expect": "FR-OPS-81",
+     "strict": false,
+     "soft": true,
+     "ms": 1481,
+     "chars": 6525
+    },
+    {
+     "suite": "retrieval",
+     "kind": "keyword",
+     "q": "повторный найм новое членство",
+     "expect": "FR-STAFF-63",
+     "strict": false,
+     "soft": true,
+     "ms": 1452,
+     "chars": 7188
+    },
+    {
+     "suite": "retrieval",
+     "kind": "keyword",
+     "q": "критерий готовности рыночному запуску",
+     "expect": "FR-PH-43",
+     "strict": false,
+     "soft": true,
+     "ms": 1454,
+     "chars": 6323
+    },
+    {
+     "suite": "retrieval",
+     "kind": "keyword",
+     "q": "ведомость мастера не видна",
+     "expect": "NFR-STAFF-04",
+     "strict": false,
+     "soft": true,
+     "ms": 1435,
+     "chars": 6660
+    },
+    {
+     "suite": "retrieval",
+     "kind": "keyword",
+     "q": "система делает сама человек отменяет",
+     "expect": "INV-19",
+     "strict": false,
+     "soft": true,
+     "ms": 1452,
+     "chars": 6287
+    },
+    {
+     "suite": "retrieval",
+     "kind": "keyword",
+     "q": "role_id holds a role name",
+     "expect": "ADR-024",
+     "strict": false,
+     "soft": false,
+     "ms": 1527,
+     "chars": 8899
+    },
+    {
+     "suite": "retrieval",
+     "kind": "keyword",
+     "q": "unfiscalized queue protocol adapters",
+     "expect": "BE-M11",
+     "strict": false,
+     "soft": false,
+     "ms": 1455,
+     "chars": 7162
+    },
+    {
+     "suite": "retrieval",
+     "kind": "keyword",
+     "q": "каскадного сдвига дня нет",
+     "expect": "W-206",
+     "strict": false,
+     "soft": true,
+     "ms": 1429,
+     "chars": 5670
+    },
+    {
+     "suite": "retrieval",
+     "kind": "paraphrase",
+     "q": "пакет платёжных бумаг за период для внешнего счетовода",
+     "expect": "FR-PAY-104",
+     "strict": false,
+     "soft": true,
+     "ms": 1439,
+     "chars": 5942
+    },
+    {
+     "suite": "retrieval",
+     "kind": "paraphrase",
+     "q": "перечень незыблемых требований продукта, который проверяет сборка",
+     "expect": "FR-VIS-01",
+     "strict": false,
+     "soft": true,
+     "ms": 1458,
+     "chars": 6138
+    },
+    {
+     "suite": "retrieval",
+     "kind": "paraphrase",
+     "q": "кто получатель платежа записан в документе",
+     "expect": "FR-PAY-03",
+     "strict": false,
+     "soft": true,
+     "ms": 1481,
+     "chars": 6401
+    },
+    {
+     "suite": "retrieval",
+     "kind": "paraphrase",
+     "q": "как хранится код доступа сотрудника",
+     "expect": "FR-SEC-21",
+     "strict": false,
+     "soft": true,
+     "ms": 1545,
+     "chars": 5703
+    },
+    {
+     "suite": "retrieval",
+     "kind": "paraphrase",
+     "q": "сколько времени держим записи кто решает",
+     "expect": "FR-AI-102",
+     "strict": false,
+     "soft": false,
+     "ms": 1412,
+     "chars": 6243
+    },
+    {
+     "suite": "retrieval",
+     "kind": "paraphrase",
+     "q": "создать похожую услугу на основе существующей",
+     "expect": "FR-SVC-15",
+     "strict": false,
+     "soft": false,
+     "ms": 1418,
+     "chars": 8870
+    },
+    {
+     "suite": "retrieval",
+     "kind": "paraphrase",
+     "q": "состояния задачи обратного звонка",
+     "expect": "FR-AI-66",
+     "strict": false,
+     "soft": true,
+     "ms": 1418,
+     "chars": 6089
+    },
+    {
+     "suite": "retrieval",
+     "kind": "paraphrase",
+     "q": "кто может оценить визит после подтверждения по смс",
+     "expect": "FR-VIS-76",
+     "strict": false,
+     "soft": true,
+     "ms": 1465,
+     "chars": 5924
+    },
+    {
+     "suite": "retrieval",
+     "kind": "paraphrase",
+     "q": "клиент должен сразу понять что говорит робот",
+     "expect": "FR-AI-21",
+     "strict": false,
+     "soft": false,
+     "ms": 1534,
+     "chars": 6176
+    },
+    {
+     "suite": "retrieval",
+     "kind": "paraphrase",
+     "q": "выявление накрутки бонусов",
+     "expect": "FR-TOOL-22",
+     "strict": false,
+     "soft": true,
+     "ms": 1492,
+     "chars": 7769
+    },
+    {
+     "suite": "retrieval",
+     "kind": "paraphrase",
+     "q": "как клиент получает фискальный документ",
+     "expect": "FR-PAY-49",
+     "strict": false,
+     "soft": true,
+     "ms": 1427,
+     "chars": 5493
+    },
+    {
+     "suite": "retrieval",
+     "kind": "paraphrase",
+     "q": "бонус начисляется без участия сотрудника",
+     "expect": "FR-TOOL-18",
+     "strict": false,
+     "soft": false,
+     "ms": 1439,
+     "chars": 5865
+    },
+    {
+     "suite": "retrieval",
+     "kind": "paraphrase",
+     "q": "прошлые визиты клиента какие услуги делали",
+     "expect": "FR-SVC-39",
+     "strict": false,
+     "soft": false,
+     "ms": 1470,
+     "chars": 6007
+    },
+    {
+     "suite": "retrieval",
+     "kind": "paraphrase",
+     "q": "загрузить услуги из файла при регистрации",
+     "expect": "FR-LIFE-17",
+     "strict": false,
+     "soft": false,
+     "ms": 1427,
+     "chars": 5887
+    },
+    {
+     "suite": "retrieval",
+     "kind": "paraphrase",
+     "q": "что видит посетитель каталога, если салон не хочет публиковать цену",
+     "expect": "FR-MKT-35",
+     "strict": false,
+     "soft": true,
+     "ms": 1431,
+     "chars": 5888
+    },
+    {
+     "suite": "retrieval",
+     "kind": "paraphrase",
+     "q": "как делятся чаевые между теми, кто работал",
+     "expect": "FR-STAFF-45",
+     "strict": false,
+     "soft": false,
+     "ms": 1417,
+     "chars": 6078
+    },
+    {
+     "suite": "retrieval",
+     "kind": "paraphrase",
+     "q": "что мешает стереть карточку клиента",
+     "expect": "FR-CRM-11",
+     "strict": false,
+     "soft": true,
+     "ms": 1466,
+     "chars": 6380
+    },
+    {
+     "suite": "retrieval",
+     "kind": "paraphrase",
+     "q": "как сверяем итоговые числа отчёта с первичными строками",
+     "expect": "FR-RPT-13",
+     "strict": false,
+     "soft": true,
+     "ms": 1504,
+     "chars": 5819
+    },
+    {
+     "suite": "retrieval",
+     "kind": "paraphrase",
+     "q": "можно ли оплатить сертификат в подарок другому человеку",
+     "expect": "FR-WEB-34",
+     "strict": false,
+     "soft": false,
+     "ms": 1437,
+     "chars": 6073
+    },
+    {
+     "suite": "retrieval",
+     "kind": "paraphrase",
+     "q": "видит ли наш оператор переписку и визиты чужого бизнеса",
+     "expect": "FR-OPS-24",
+     "strict": false,
+     "soft": true,
+     "ms": 1426,
+     "chars": 6017
+    },
+    {
+     "suite": "retrieval",
+     "kind": "paraphrase",
+     "q": "учитываются ли польские выходные и перевод стрелок",
+     "expect": "FR-CAL-06",
+     "strict": false,
+     "soft": true,
+     "ms": 1435,
+     "chars": 6659
+    },
+    {
+     "suite": "retrieval",
+     "kind": "paraphrase",
+     "q": "как отдаём освободившееся окно тому, кто ждёт",
+     "expect": "FR-CAL-101",
+     "strict": false,
+     "soft": false,
+     "ms": 1454,
+     "chars": 6217
+    },
+    {
+     "suite": "retrieval",
+     "kind": "paraphrase",
+     "q": "что будет, если нажать F5 или стрелку назад",
+     "expect": "FR-SHELL-52",
+     "strict": false,
+     "soft": false,
+     "ms": 1556,
+     "chars": 5933
+    },
+    {
+     "suite": "retrieval",
+     "kind": "paraphrase",
+     "q": "что делаем с кривыми телефонными номерами из чужой выгрузки",
+     "expect": "FR-MIG-17",
+     "strict": false,
+     "soft": true,
+     "ms": 1454,
+     "chars": 5823
+    },
+    {
+     "suite": "retrieval",
+     "kind": "paraphrase",
+     "q": "в каких полях сущности отмечено, что она ещё не ушла на сервер",
+     "expect": "FR-DM-66",
+     "strict": false,
+     "soft": true,
+     "ms": 1443,
+     "chars": 6785
+    },
+    {
+     "suite": "retrieval",
+     "kind": "paraphrase",
+     "q": "как понять, что тюбик просрочен, и какую упаковку тратить первой",
+     "expect": "FR-WH-18",
+     "strict": false,
+     "soft": false,
+     "ms": 1484,
+     "chars": 5604
+    },
+    {
+     "suite": "retrieval",
+     "kind": "paraphrase",
+     "q": "чем отличается момент на шкале от времени на стене",
+     "expect": "ADR-005",
+     "strict": false,
+     "soft": false,
+     "ms": 1469,
+     "chars": 5938
+    },
+    {
+     "suite": "retrieval",
+     "kind": "paraphrase",
+     "q": "в каком виде храним суммы, чтобы не терять копейки",
+     "expect": "ADR-004",
+     "strict": false,
+     "soft": false,
+     "ms": 1474,
+     "chars": 5869
+    },
+    {
+     "suite": "retrieval",
+     "kind": "paraphrase",
+     "q": "что запрещает передать сырую карточку клиента во внешнюю модель",
+     "expect": "INV-16",
+     "strict": false,
+     "soft": true,
+     "ms": 1455,
+     "chars": 5803
+    },
+    {
+     "suite": "retrieval",
+     "kind": "paraphrase",
+     "q": "видно ли салону, из каких визитов сложилась пришедшая выплата",
+     "expect": "N-109",
+     "strict": false,
+     "soft": true,
+     "ms": 1455,
+     "chars": 6255
+    },
+    {
+     "suite": "retrieval",
+     "kind": "code",
+     "q": "asGrosze",
+     "expect": "packages/contracts/src/money.ts",
+     "strict": true,
+     "soft": true,
+     "ms": 1457,
+     "chars": 5151
+    },
+    {
+     "suite": "retrieval",
+     "kind": "code",
+     "q": "problemDetailsOf",
+     "expect": "packages/contracts/src/errors.ts",
+     "strict": true,
+     "soft": true,
+     "ms": 1431,
+     "chars": 9445
+    },
+    {
+     "suite": "retrieval",
+     "kind": "code",
+     "q": "vitestBase",
+     "expect": "packages/config/vitest.base.ts",
+     "strict": true,
+     "soft": true,
+     "ms": 1533,
+     "chars": 8402
+    },
+    {
+     "suite": "retrieval",
+     "kind": "code",
+     "q": "materialiseSegments",
+     "expect": "packages/domain/src/availability/segments.ts",
+     "strict": true,
+     "soft": true,
+     "ms": 1440,
+     "chars": 8327
+    },
+    {
+     "suite": "retrieval",
+     "kind": "code",
+     "q": "localDayBounds",
+     "expect": "packages/domain/src/time/index.ts",
+     "strict": true,
+     "soft": true,
+     "ms": 1427,
+     "chars": 9298
+    },
+    {
+     "suite": "retrieval",
+     "kind": "code",
+     "q": "classifyVersionalChange",
+     "expect": "packages/domain/src/sync/merge.ts",
+     "strict": true,
+     "soft": true,
+     "ms": 1422,
+     "chars": 6611
+    },
+    {
+     "suite": "retrieval",
+     "kind": "code",
+     "q": "FiscalPort",
+     "expect": "packages/ports/src/fiscal.ts",
+     "strict": true,
+     "soft": true,
+     "ms": 1506,
+     "chars": 6804
+    },
+    {
+     "suite": "retrieval",
+     "kind": "code",
+     "q": "resolveConnectionString",
+     "expect": "packages/db/src/connection.ts",
+     "strict": true,
+     "soft": true,
+     "ms": 1410,
+     "chars": 7323
+    },
+    {
+     "suite": "retrieval",
+     "kind": "code",
+     "q": "loadAvailabilitySnapshot",
+     "expect": "apps/api/src/modules/availability/availability-snapshot.service.ts",
+     "strict": true,
+     "soft": true,
+     "ms": 1421,
+     "chars": 9096
+    },
+    {
+     "suite": "retrieval",
+     "kind": "code",
+     "q": "splitByNamespace",
+     "expect": "apps/api/scripts/emit-openapi.ts",
+     "strict": true,
+     "soft": true,
+     "ms": 1439,
+     "chars": 8869
+    },
+    {
+     "suite": "retrieval",
+     "kind": "code",
+     "q": "badgeVariants",
+     "expect": "packages/ui/src/components/ui/badge.tsx",
+     "strict": true,
+     "soft": true,
+     "ms": 1413,
+     "chars": 7335
+    },
+    {
+     "suite": "retrieval",
+     "kind": "code",
+     "q": "staleClaims",
+     "expect": "tools/tasks/src/cli.ts",
+     "strict": true,
+     "soft": true,
+     "ms": 1413,
+     "chars": 8913
+    },
+    {
+     "suite": "blast",
+     "kind": "impact",
+     "target": "DatabaseService",
+     "tier": "hub",
+     "want_files": 49,
+     "found_files": 27,
+     "recall": 0.551,
+     "ms": 1302,
+     "chars": 24926
+    },
+    {
+     "suite": "blast",
+     "kind": "impact",
+     "target": "TenantContextInterceptor",
+     "tier": "hub",
+     "want_files": 4,
+     "found_files": 3,
+     "recall": 0.75,
+     "ms": 970,
+     "chars": 11282
+    },
+    {
+     "suite": "blast",
+     "kind": "impact",
+     "target": "ProblemException",
+     "tier": "hub",
+     "want_files": 24,
+     "found_files": 20,
+     "recall": 0.833,
+     "ms": 1001,
+     "chars": 53318
+    },
+    {
+     "suite": "blast",
+     "kind": "impact",
+     "target": "ActorResolver",
+     "tier": "wide",
+     "want_files": 9,
+     "found_files": 3,
+     "recall": 0.333,
+     "ms": 954,
+     "chars": 15511
+    },
+    {
+     "suite": "blast",
+     "kind": "impact",
+     "target": "AuthService",
+     "tier": "wide",
+     "want_files": 10,
+     "found_files": 6,
+     "recall": 0.6,
+     "ms": 946,
+     "chars": 3046
+    },
+    {
+     "suite": "blast",
+     "kind": "impact",
+     "target": "OutboxPublisher",
+     "tier": "wide",
+     "want_files": 7,
+     "found_files": 3,
+     "recall": 0.429,
+     "ms": 951,
+     "chars": 5304
+    },
+    {
+     "suite": "blast",
+     "kind": "impact",
+     "target": "AvailabilityService",
+     "tier": "narrow",
+     "want_files": 3,
+     "found_files": 2,
+     "recall": 0.667,
+     "ms": 946,
+     "chars": 6426
+    },
+    {
+     "suite": "blast",
+     "kind": "impact",
+     "target": "BookingCreateService",
+     "tier": "narrow",
+     "want_files": 3,
+     "found_files": 2,
+     "recall": 0.667,
+     "ms": 939,
+     "chars": 1797
+    },
+    {
+     "suite": "blast",
+     "kind": "impact",
+     "target": "AgreementsService",
+     "tier": "narrow",
+     "want_files": 3,
+     "found_files": 2,
+     "recall": 0.667,
+     "ms": 941,
+     "chars": 1770
+    },
+    {
+     "suite": "blast",
+     "kind": "impact",
+     "target": "SyncConflictService",
+     "tier": "narrow",
+     "want_files": 2,
+     "found_files": 2,
+     "recall": 1.0,
+     "ms": 922,
+     "chars": 1696
+    },
+    {
+     "suite": "blast",
+     "kind": "trace",
+     "from": "AuthController",
+     "to": "DatabaseService",
+     "expect": "path",
+     "hit": false,
+     "says_none": true,
+     "ms": 984,
+     "chars": 684
+    },
+    {
+     "suite": "blast",
+     "kind": "trace",
+     "from": "DevicesController",
+     "to": "DatabaseService",
+     "expect": "path",
+     "hit": false,
+     "says_none": true,
+     "ms": 985,
+     "chars": 687
+    },
+    {
+     "suite": "blast",
+     "kind": "trace",
+     "from": "AgreementsController",
+     "to": "DatabaseService",
+     "expect": "path",
+     "hit": false,
+     "says_none": true,
+     "ms": 918,
+     "chars": 696
+    },
+    {
+     "suite": "blast",
+     "kind": "trace",
+     "from": "AvailabilityController",
+     "to": "AvailabilityService",
+     "expect": "path",
+     "hit": false,
+     "says_none": true,
+     "ms": 934,
+     "chars": 713
+    },
+    {
+     "suite": "blast",
+     "kind": "trace",
+     "from": "BookingController",
+     "to": "BookingCreateService",
+     "expect": "path",
+     "hit": false,
+     "says_none": true,
+     "ms": 929,
+     "chars": 706
+    },
+    {
+     "suite": "blast",
+     "kind": "trace",
+     "from": "SessionAuthGuard",
+     "to": "IdentityRepository",
+     "expect": "path",
+     "hit": false,
+     "says_none": true,
+     "ms": 908,
+     "chars": 701
+    },
+    {
+     "suite": "blast",
+     "kind": "trace",
+     "from": "SystemController",
+     "to": "DatabaseService",
+     "expect": "none",
+     "hit": true,
+     "says_none": true,
+     "ms": 897,
+     "chars": 687
+    },
+    {
+     "suite": "blast",
+     "kind": "trace",
+     "from": "DevicesRepository",
+     "to": "AuthService",
+     "expect": "none",
+     "hit": true,
+     "says_none": true,
+     "ms": 906,
+     "chars": 692
+    },
+    {
+     "suite": "blast",
+     "kind": "changes",
+     "base": "cbc931ba~1",
+     "want_files": 2,
+     "found_files": 0,
+     "want_symbols": 5,
+     "found_symbols": 0,
+     "ms": 1170,
+     "chars": 1480
+    },
+    {
+     "suite": "blast",
+     "kind": "changes",
+     "base": "0f27d2d1",
+     "want_files": 18,
+     "found_files": 1,
+     "want_symbols": 38,
+     "found_symbols": 1,
+     "ms": 1371,
+     "chars": 2643
+    }
+   ],
+   "summary": {
+    "retrieval": {
+     "by_kind": {
+      "keyword": {
+       "n": 40,
+       "strict": 0,
+       "soft": 31
+      },
+      "paraphrase": {
+       "n": 30,
+       "strict": 0,
+       "soft": 17
+      },
+      "code": {
+       "n": 12,
+       "strict": 12,
+       "soft": 12
+      }
+     },
+     "strict": 12,
+     "soft": 60,
+     "n": 82,
+     "ms_median": 1438,
+     "chars_median": 6246
+    },
+    "impact": {
+     "n": 10,
+     "recall_mean": 0.65,
+     "files_found": 70,
+     "files_want": 114,
+     "ms_median": 948,
+     "chars_median": 5865
+    },
+    "trace": {
+     "n": 8,
+     "hit": 2,
+     "path_hit": 0,
+     "path_n": 6,
+     "none_hit": 2,
+     "none_n": 2,
+     "ms_median": 924
+    },
+    "changes": {
+     "n": 2,
+     "symbols_found": 1,
+     "symbols_want": 43,
+     "files_found": 1,
+     "files_want": 20,
+     "ms_median": 1270,
+     "chars_median": 2062
+    }
+   }
+  }
+ },
+ "notes": {
+  "graphify_graph": "rebuilt 2026-09-03 by `graphify update --force` in a worktree: 28868 nodes, 54769 edges, 0 tokens (semantic cache)",
+  "gitnexus_index": "analyzed 2026-09-03 10:04 at d04b19a4: 25745 nodes, 42654 edges",
+  "repograph_store": "0.4.0, enrich on opus: 8306 nodes, 32590 edges",
+  "gitnexus_changes_cap": "the CLI prints 15 changed symbols then `... and N more`; the MCP payload for base cbc931ba~1 names staffMember but not AvailabilityAnswer",
+  "graphify_impact": "`affected` refuses an ambiguous name: DatabaseService, TenantContextInterceptor, ActorResolver and OutboxPublisher each returned `No unique node match`",
+  "truth": "impact truth counts references in code with comments stripped; changes truth attributes a hunk to a declaration only when the hunk falls inside its bracket span, exported or not"
+ }
+}

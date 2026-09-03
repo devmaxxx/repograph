@@ -170,7 +170,7 @@ pub fn render(answer: &Answer, graph: &Graph, opts: &Options) -> String {
     out
 }
 
-fn resolve<'a>(graph: &'a Graph, needle: &str) -> Option<&'a crate::model::Node> {
+pub(crate) fn resolve<'a>(graph: &'a Graph, needle: &str) -> Option<&'a crate::model::Node> {
     if let Some(n) = graph.nodes.get(needle) { return Some(n); }
     let tail = format!("::{needle}");
     let mut c: Vec<&crate::model::Node> = graph.nodes.values().filter(|n| n.id.ends_with(&tail)).collect();

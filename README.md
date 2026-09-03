@@ -32,12 +32,13 @@ it had been measured, and hadn't been.
 
 ## Status
 
-Version 0.3.0. Every row below is implemented, not planned:
+Version 0.4.0. Every row below is implemented, not planned:
 
 | Command                    | State                                                                 |
 | -------------------------- | --------------------------------------------------------------------- |
 | `build`, `update`          | working; incremental; a no-op `update` is a fixed point               |
 | `ask`, `explain`, `verify` | working: exact id/symbol → BM25 → dense, fused, one hop out           |
+| `impact`, `trace`, `changes` | working: callers by depth through barrels, shortest call chain, the diff mapped onto symbols — see [Blast radius](#blast-radius) |
 | `bench`                    | working; fails the process if a floor in [Bench](#bench) is missed    |
 | `import-legacy`            | working; costs recall at query time — see its note in [Bench](#bench) |
 | `enrich`, `ask --rerank`   | working; opt-in, the only two stages that spend model tokens — see [Spending tokens on purpose](#spending-tokens-on-purpose) |
@@ -96,6 +97,17 @@ repograph ask --bodies отмена записи        # print full requirement
 repograph ask --json отмена записи          # machine-readable
 repograph ask --seeds 8 отмена записи       # widen the search beyond the default of 5; costs more tokens
 repograph ask --no-dense отмена записи      # lexical only, no embedding query
+```
+
+Ask it what depends on a symbol, what a symbol reaches, and how one reaches another:
+
+```bash
+repograph impact StaffService               # callers by depth, importing files, a risk line
+repograph impact --down StaffController     # what it calls, through injected services and barrels
+repograph impact --json --depth 1 asGrosze  # machine-readable; depth 1 is the "will break" list alone
+repograph trace StaffController StaffService  # shortest chain of calls between two symbols
+repograph changes                           # what the uncommitted diff touches, and who reaches it
+repograph changes --base main --depth 1     # the whole branch; depth 1 is the direct callers alone
 ```
 
 Answers are lines of the form:
@@ -273,7 +285,7 @@ relative to the graph.
 | `Extends`     | a class's `extends` clause                                                                                                  |
 | `DecoratedBy` | a decorator application, its first string argument as context                                                               |
 | `Legacy`      | an edge carried over by `import-legacy`                                                                                     |
-| `Calls`       | declared in the model, but no extractor emits it yet — reserved, not measured                                               |
+| `Calls`       | a call or `new` whose callee the file can prove: an imported name, a top-level declaration of the same file, `this.member()`, `Static.member()`, or `this.field.member()` through the field's declared type (constructor parameter properties included); a call through a barrel targets the barrel and is resolved by `impact` |
 
 An edge is unique on `(source, target, kind, context, file)` — `file` is part of the key on purpose,
 so a relationship that two different files both assert is recorded twice and survives either one
@@ -292,6 +304,53 @@ every id quoted in a comment or string literal, attributed to the top-level func
 member, `const`, interface or enum that contains it. That last layer is the doc↔code bridge an
 AST-only indexer misses entirely. Each construct is pinned by one inline case in
 `src/code/cases.rs`; `.claude/skills/extractor-case/` is the loop for adding the next one.
+
+## Blast radius
+
+`impact <symbol>` walks `Calls` and `Extends` edges towards the symbol: `d=1` are the direct
+callers ("will break"), `d=2` their callers, and so on to `--depth` (3). A class is walked
+through its members, and a caller that imported through a barrel is found because the barrel's
+`ReExports` edges are followed back to the declaration. `importers` are the files whose `import`
+names the symbol, whether or not a call site resolved. The risk line is four fixed thresholds
+on the direct count and the file count — `MEDIUM` from 5 direct or 3 files, `HIGH` from 15 or
+10, `CRITICAL` from 30 or 25 — printed with the counts, so the label can be argued with.
+
+```
+$ repograph --repo beauty-crm impact StaffService
+sym:apps/api/src/modules/staff/staff.service.ts::StaffService  apps/api/src/modules/staff/staff.service.ts:19
+d=1  will break (3)
+  file:apps/api/test/staffMembership.spec.ts  apps/api/test/staffMembership.spec.ts:1  Calls → sym:apps/api/src/modules/staff/staff.service.ts::StaffService
+  sym:apps/api/src/modules/staff/staff.controller.ts::MembershipController.memberships  apps/api/src/modules/staff/staff.controller.ts:56  Calls → sym:apps/api/src/modules/staff/staff.service.ts::StaffService.memberships
+  sym:apps/api/src/modules/staff/staff.controller.ts::StaffController.create  apps/api/src/modules/staff/staff.controller.ts:87  Calls → sym:apps/api/src/modules/staff/staff.service.ts::StaffService.create
+importers (3): apps/api/src/modules/staff/staff.controller.ts, apps/api/src/modules/staff/staff.module.ts, apps/api/test/staffMembership.spec.ts
+risk: MEDIUM — 3 direct, 3 total, 3 files
+```
+
+`--down` walks the other way; `trace <from> <to>` is the shortest chain between two symbols.
+What the graph cannot prove it does not list: a call through a chained expression, a
+destructured method, a callback parameter or a global has no edge, so confirm a "nothing uses
+this" with `rg -l` before deleting. A target the graph knows only by name — a member of an
+imported value it never saw declared — prints `?` in place of its `path:line`.
+
+`changes` maps `git diff -U0` (staged and unstaged, plus untracked files whole) onto symbol
+spans and unions the callers of every touched symbol into one list and one risk line. Run it
+before committing; `--base main` before opening a pull request. A hunk outside every symbol —
+an import line, a trailing comment — is reported on the file and walks every symbol the file
+declares; what is being changed is never listed as affected by itself. Deleted files do not
+appear: their symbols are gone from the graph, and their former callers surface as dangling
+edges in `verify`.
+
+```
+$ repograph --repo beauty-crm changes
+changed: 2 symbols in 1 file
+  file:apps/api/src/modules/staff/staff.service.ts  apps/api/src/modules/staff/staff.service.ts:1
+  sym:apps/api/src/modules/staff/staff.service.ts::StaffService.create  apps/api/src/modules/staff/staff.service.ts:31-43
+affected (depth 2): 3 symbols in 3 files
+  d=1  file:apps/api/test/staffMembership.spec.ts  apps/api/test/staffMembership.spec.ts:1  ← sym:apps/api/src/modules/staff/staff.service.ts::StaffService
+  d=1  sym:apps/api/src/modules/staff/staff.controller.ts::MembershipController.memberships  apps/api/src/modules/staff/staff.controller.ts:56  ← sym:apps/api/src/modules/staff/staff.service.ts::StaffService.memberships
+  d=1  sym:apps/api/src/modules/staff/staff.controller.ts::StaffController.create  apps/api/src/modules/staff/staff.controller.ts:87  ← sym:apps/api/src/modules/staff/staff.service.ts::StaffService.create
+risk: MEDIUM — 3 direct, 3 total, 3 files
+```
 
 ## Configure
 

@@ -1,0 +1,20 @@
+{"kind":"impact","target":"DatabaseService","file":"apps/api/src/shared/db/database.service.ts","tier":"hub"}
+{"kind":"impact","target":"TenantContextInterceptor","file":"apps/api/src/shared/context/tenant-context.interceptor.ts","tier":"hub"}
+{"kind":"impact","target":"ProblemException","file":"apps/api/src/shared/errors/problem.exception.ts","tier":"hub"}
+{"kind":"impact","target":"ActorResolver","file":"apps/api/src/shared/actor/actor-resolver.ts","tier":"wide"}
+{"kind":"impact","target":"AuthService","file":"apps/api/src/modules/identity/auth.service.ts","tier":"wide"}
+{"kind":"impact","target":"OutboxPublisher","file":"apps/api/src/shared/outbox/outbox.publisher.ts","tier":"wide"}
+{"kind":"impact","target":"AvailabilityService","file":"apps/api/src/modules/availability/availability.service.ts","tier":"narrow"}
+{"kind":"impact","target":"BookingCreateService","file":"apps/api/src/modules/availability/booking-create.service.ts","tier":"narrow"}
+{"kind":"impact","target":"AgreementsService","file":"apps/api/src/modules/agreements/agreements.service.ts","tier":"narrow"}
+{"kind":"impact","target":"SyncConflictService","file":"apps/api/src/modules/sync/sync-conflict.service.ts","tier":"narrow"}
+{"kind":"trace","from":"AuthController","to":"DatabaseService","expect":"path","via":["AuthService","IdentityRepository"]}
+{"kind":"trace","from":"DevicesController","to":"DatabaseService","expect":"path","via":["DevicesService","DevicesRepository"]}
+{"kind":"trace","from":"AgreementsController","to":"DatabaseService","expect":"path","via":["AgreementsService","AgreementsRepository"]}
+{"kind":"trace","from":"AvailabilityController","to":"AvailabilityService","expect":"path","via":["AvailabilityService"]}
+{"kind":"trace","from":"BookingController","to":"BookingCreateService","expect":"path","via":["BookingCreateService"]}
+{"kind":"trace","from":"SessionAuthGuard","to":"IdentityRepository","expect":"path","via":["AuthService"]}
+{"kind":"trace","from":"SystemController","to":"DatabaseService","expect":"none"}
+{"kind":"trace","from":"DevicesRepository","to":"AuthService","expect":"none"}
+{"kind":"changes","base":"cbc931ba~1","note":"nearest commit whose diff carries TypeScript"}
+{"kind":"changes","base":"0f27d2d1","note":"a wider base: 64 commits, docs and code together"}

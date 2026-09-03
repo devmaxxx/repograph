@@ -509,3 +509,150 @@ fn dump_tree() {
     let tree = crate::code::symbols::parse(rel, src.as_bytes()).unwrap();
     println!("{}", tree.root_node().to_sexp());
 }
+
+// ---- spans ----
+
+fn node<'a>(ex: &'a Extraction, id: &str) -> &'a crate::model::Node {
+    ex.nodes.iter().find(|n| n.id == id).unwrap_or_else(|| panic!("{id} not extracted"))
+}
+
+#[test]
+fn a_function_declaration_spans_its_body() {
+    let ex = extract("a.ts", "export function f() {\n  return 1;\n}\nconst x = 1;\n");
+    let f = node(&ex, "sym:a.ts::f");
+    assert_eq!((f.line, f.end), (1, 3));
+    let x = node(&ex, "sym:a.ts::x");
+    assert_eq!((x.line, x.end), (4, 4));
+}
+
+#[test]
+fn a_class_and_each_member_carry_their_own_span() {
+    let ex = extract("a.ts", "export class A {\n  one() {\n    return 1;\n  }\n\n  two() {}\n}\n");
+    assert_eq!((node(&ex, "sym:a.ts::A").line, node(&ex, "sym:a.ts::A").end), (1, 7));
+    assert_eq!((node(&ex, "sym:a.ts::A.one").line, node(&ex, "sym:a.ts::A.one").end), (2, 4));
+    assert_eq!((node(&ex, "sym:a.ts::A.two").line, node(&ex, "sym:a.ts::A.two").end), (6, 6));
+}
+
+#[test]
+fn a_decorated_export_class_still_starts_at_its_name_and_ends_at_its_brace() {
+    let ex = extract("a.ts", "@Injectable()\nexport class S {\n  run() {}\n}\n");
+    let s = node(&ex, "sym:a.ts::S");
+    assert_eq!((s.line, s.end), (2, 4));
+}
+
+#[test]
+fn a_decorator_node_has_no_span() {
+    let ex = extract("a.ts", "@Injectable()\nexport class S {}\n");
+    assert_eq!(node(&ex, "deco:Injectable").end, 0);
+}
+
+// ---- calls ----
+
+fn calls(ex: &Extraction) -> Vec<(&str, &str)> {
+    edges(ex, EdgeKind::Calls).into_iter().map(|(s, t, _)| (s, t)).collect()
+}
+
+#[test]
+fn a_call_to_an_imported_function_targets_the_symbol_in_its_file() {
+    let repo = Repo::new(&[("lib.ts", "export function helper() {}\n")]);
+    let ex = repo.extract("a.ts", "import { helper } from './lib';\nexport function run() { helper(); }\n");
+    assert_eq!(calls(&ex), vec![("sym:a.ts::run", "sym:lib.ts::helper")]);
+}
+
+#[test]
+fn new_of_an_imported_class_is_a_call() {
+    let repo = Repo::new(&[("foo.ts", "export class Foo {}\n")]);
+    let ex = repo.extract("a.ts", "import { Foo } from './foo';\nexport const make = () => new Foo();\n");
+    assert_eq!(calls(&ex), vec![("sym:a.ts::make", "sym:foo.ts::Foo")]);
+}
+
+#[test]
+fn an_aliased_import_is_resolved_to_the_name_its_file_declares() {
+    let repo = Repo::new(&[("lib.ts", "export function helper() {}\n")]);
+    let ex = repo.extract("a.ts", "import { helper as h } from './lib';\nexport function run() { h(); }\n");
+    assert_eq!(calls(&ex), vec![("sym:a.ts::run", "sym:lib.ts::helper")]);
+}
+
+#[test]
+fn a_call_to_a_local_top_level_function_stays_in_the_file() {
+    let ex = extract("a.ts", "function inner() {}\nexport function run() { inner(); }\n");
+    assert_eq!(calls(&ex), vec![("sym:a.ts::run", "sym:a.ts::inner")]);
+}
+
+#[test]
+fn a_call_to_a_name_the_file_cannot_prove_yields_no_edge() {
+    let ex = extract("a.ts", "export function run(cb: () => void) { console.log(1); cb(); fetch('/'); }\n");
+    assert!(calls(&ex).is_empty());
+}
+
+#[test]
+fn this_method_targets_the_enclosing_class_member() {
+    let ex = extract("a.ts", "export class A {\n  run() { this.other(); }\n  other() {}\n}\n");
+    assert_eq!(calls(&ex), vec![("sym:a.ts::A.run", "sym:a.ts::A.other")]);
+}
+
+#[test]
+fn a_static_call_on_an_imported_class_targets_its_member() {
+    let repo = Repo::new(&[("util.ts", "export class Util { static go() {} }\n")]);
+    let ex = repo.extract("a.ts", "import { Util } from './util';\nexport function run() { Util.go(); }\n");
+    assert_eq!(calls(&ex), vec![("sym:a.ts::run", "sym:util.ts::Util.go")]);
+}
+
+#[test]
+fn a_namespace_import_call_targets_the_bare_symbol() {
+    let repo = Repo::new(&[("n.ts", "export function fn() {}\n")]);
+    let ex = repo.extract("a.ts", "import * as ns from './n';\nexport function run() { ns.fn(); }\n");
+    assert_eq!(calls(&ex), vec![("sym:a.ts::run", "sym:n.ts::fn")]);
+}
+
+#[test]
+fn a_call_through_a_constructor_parameter_property_targets_the_injected_class_member() {
+    let repo = Repo::new(&[("s.ts", "export class StaffService { create() {} }\n")]);
+    let ex = repo.extract(
+        "c.ts",
+        "import { StaffService } from './s';\nexport class StaffController {\n  constructor(private readonly service: StaffService) {}\n  create(dto: unknown) { return this.service.create(dto); }\n}\n",
+    );
+    assert_eq!(calls(&ex), vec![("sym:c.ts::StaffController.create", "sym:s.ts::StaffService.create")]);
+}
+
+#[test]
+fn a_call_through_a_typed_field_targets_the_field_type_member() {
+    let repo = Repo::new(&[("r.ts", "export class Repo { find() {} }\n")]);
+    let ex = repo.extract("c.ts", "import { Repo } from './r';\nexport class C {\n  private repo: Repo;\n  run() { this.repo.find(); }\n}\n");
+    assert_eq!(calls(&ex), vec![("sym:c.ts::C.run", "sym:r.ts::Repo.find")]);
+}
+
+#[test]
+fn a_generic_field_type_uses_its_head_name() {
+    let repo = Repo::new(&[("r.ts", "export class Repository<T> { find() {} }\n")]);
+    let ex = repo.extract("c.ts", "import { Repository } from './r';\nexport class C {\n  constructor(private readonly users: Repository<User>) {}\n  run() { this.users.find(); }\n}\n");
+    assert_eq!(calls(&ex), vec![("sym:c.ts::C.run", "sym:r.ts::Repository.find")]);
+}
+
+#[test]
+fn a_call_through_a_barrel_points_at_the_barrel_and_stays_dangling() {
+    let repo = Repo::new(&[("lib/index.ts", "export * from './impl';\n"), ("lib/impl.ts", "export function helper() {}\n")]);
+    let ex = repo.extract("a.ts", "import { helper } from './lib';\nexport function run() { helper(); }\n");
+    assert_eq!(calls(&ex), vec![("sym:a.ts::run", "sym:lib/index.ts::helper")]);
+}
+
+#[test]
+fn a_call_outside_any_symbol_is_owned_by_the_file() {
+    let repo = Repo::new(&[("lib.ts", "export function boot() {}\n")]);
+    let ex = repo.extract("a.ts", "import { boot } from './lib';\nboot();\n");
+    assert_eq!(calls(&ex), vec![("file:a.ts", "sym:lib.ts::boot")]);
+}
+
+#[test]
+fn a_recursive_call_is_not_an_edge_and_a_repeated_call_is_one_edge() {
+    let repo = Repo::new(&[("lib.ts", "export function helper() {}\n")]);
+    let ex = repo.extract("a.ts", "import { helper } from './lib';\nexport function run(n: number) { helper(); helper(); if (n) run(n - 1); }\n");
+    assert_eq!(calls(&ex), vec![("sym:a.ts::run", "sym:lib.ts::helper")]);
+}
+
+#[test]
+fn a_chained_call_and_super_yield_nothing() {
+    let repo = Repo::new(&[("lib.ts", "export function get() { return { then() {} }; }\n")]);
+    let ex = repo.extract("a.ts", "import { get } from './lib';\nexport class A extends B {\n  run() { super.run(); get().then(); }\n}\n");
+    assert_eq!(calls(&ex), vec![("sym:a.ts::A.run", "sym:lib.ts::get")]);
+}
