@@ -209,9 +209,10 @@ impl SymbolScanner {
         };
         let signature = if exported && !signature.starts_with("export") { format!("export {signature}") } else { signature };
         let mut created = Vec::new();
+        let end = decl.end_position().row as u32 + 1;
         let mut declare = |name: &str, ex: &mut Extraction| -> String {
             let id = format!("sym:{rel}::{name}");
-            ex.node(NodeKind::Symbol, &id, name, &signature, rel, line);
+            ex.node_span(NodeKind::Symbol, &id, name, &signature, rel, (line, end));
             ex.edge(file_id, &id, EdgeKind::Declares, ctx, rel);
             created.push(id.clone());
             id
@@ -289,7 +290,7 @@ impl SymbolScanner {
             let class_name = class_id.rsplit("::").next().unwrap_or("");
             let id = format!("sym:{rel}::{class_name}.{name}");
             let signature = text(m, src).lines().find(|l| !l.trim_start().starts_with('@')).unwrap_or("").trim().to_string();
-            ex.node(NodeKind::Symbol, &id, &format!("{class_name}.{name}"), &signature, rel, m.start_position().row as u32 + 1);
+            ex.node_span(NodeKind::Symbol, &id, &format!("{class_name}.{name}"), &signature, rel, (m.start_position().row as u32 + 1, m.end_position().row as u32 + 1));
             ex.edge(class_id, &id, EdgeKind::Declares, "", rel);
 
             // `method_definition`/`abstract_method_signature` have no `decorator` field of

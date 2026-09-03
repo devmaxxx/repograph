@@ -15,6 +15,9 @@ pub struct Node {
     #[serde(default)] pub body: String,
     pub file: String,
     pub line: u32,
+    /// Last line of the declaration, for mapping a diff hunk onto the symbol it sits in; 0 on
+    /// nodes that have no extent of their own (decorators, files, document ids).
+    #[serde(default)] pub end: u32,
     #[serde(default)] pub files: BTreeSet<String>,
     #[serde(default)] pub community: Option<String>,
 }
@@ -35,8 +38,13 @@ impl Extraction {
     pub fn node(&mut self, kind: NodeKind, id: &str, label: &str, body: &str, file: &str, line: u32) {
         self.nodes.push(Node {
             id: id.to_string(), kind, label: label.to_string(), body: body.to_string(),
-            file: file.to_string(), line, files: BTreeSet::from([file.to_string()]), community: None,
+            file: file.to_string(), line, end: 0, files: BTreeSet::from([file.to_string()]), community: None,
         });
+    }
+
+    pub fn node_span(&mut self, kind: NodeKind, id: &str, label: &str, body: &str, file: &str, (line, end): (u32, u32)) {
+        self.node(kind, id, label, body, file, line);
+        self.nodes.last_mut().expect("node just pushed").end = end;
     }
 
     pub fn edge(&mut self, source: &str, target: &str, kind: EdgeKind, context: &str, file: &str) {

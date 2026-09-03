@@ -509,3 +509,39 @@ fn dump_tree() {
     let tree = crate::code::symbols::parse(rel, src.as_bytes()).unwrap();
     println!("{}", tree.root_node().to_sexp());
 }
+
+// ---- spans ----
+
+fn node<'a>(ex: &'a Extraction, id: &str) -> &'a crate::model::Node {
+    ex.nodes.iter().find(|n| n.id == id).unwrap_or_else(|| panic!("{id} not extracted"))
+}
+
+#[test]
+fn a_function_declaration_spans_its_body() {
+    let ex = extract("a.ts", "export function f() {\n  return 1;\n}\nconst x = 1;\n");
+    let f = node(&ex, "sym:a.ts::f");
+    assert_eq!((f.line, f.end), (1, 3));
+    let x = node(&ex, "sym:a.ts::x");
+    assert_eq!((x.line, x.end), (4, 4));
+}
+
+#[test]
+fn a_class_and_each_member_carry_their_own_span() {
+    let ex = extract("a.ts", "export class A {\n  one() {\n    return 1;\n  }\n\n  two() {}\n}\n");
+    assert_eq!((node(&ex, "sym:a.ts::A").line, node(&ex, "sym:a.ts::A").end), (1, 7));
+    assert_eq!((node(&ex, "sym:a.ts::A.one").line, node(&ex, "sym:a.ts::A.one").end), (2, 4));
+    assert_eq!((node(&ex, "sym:a.ts::A.two").line, node(&ex, "sym:a.ts::A.two").end), (6, 6));
+}
+
+#[test]
+fn a_decorated_export_class_still_starts_at_its_name_and_ends_at_its_brace() {
+    let ex = extract("a.ts", "@Injectable()\nexport class S {\n  run() {}\n}\n");
+    let s = node(&ex, "sym:a.ts::S");
+    assert_eq!((s.line, s.end), (2, 4));
+}
+
+#[test]
+fn a_decorator_node_has_no_span() {
+    let ex = extract("a.ts", "@Injectable()\nexport class S {}\n");
+    assert_eq!(node(&ex, "deco:Injectable").end, 0);
+}
