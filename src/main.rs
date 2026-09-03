@@ -6,6 +6,7 @@ mod dump;
 mod enrich;
 mod rerank;
 mod ids;
+mod impact;
 mod index;
 mod legacy;
 mod model;
