@@ -1,6 +1,6 @@
 {
   "name": "@devmaxxx/repograph-darwin-arm64",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "repograph binary for macOS on Apple silicon; installed through @devmaxxx/repograph",
   "license": "MIT",
   "repository": {
