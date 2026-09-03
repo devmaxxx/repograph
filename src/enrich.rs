@@ -3,7 +3,7 @@
 //! as the author's: measured on the development corpus they move no seed on their own, but
 //! carry every reachable paraphrase target into the pool the model picks from.
 use crate::model::{Graph, Node, NodeKind};
-use crate::store::Store;
+use crate::store::{Source, Store};
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -35,19 +35,28 @@ fn hash(text: &str) -> String { blake3::hash(text.as_bytes()).to_hex().to_string
 pub fn eligible(n: &Node) -> bool { KINDS.contains(&n.kind) && !(n.kind == NodeKind::Entity && n.body.trim().is_empty()) }
 
 impl Questions {
-    pub fn load(store: &Store) -> Result<Questions> {
-        match store.read_bytes(FILE)? {
-            Some(b) => {
-                let mut q: Questions = serde_json::from_slice(&b).context(FILE)?;
-                clean(&mut q.entries);
-                Ok(q)
-            }
-            None => Ok(Questions::default()),
-        }
+    pub fn load(store: &Store) -> Result<Questions> { Self::load_traced(store).map(|(q, _)| q) }
+
+    /// `load`, saying whether the JSON had to be parsed — the moment a reader that may write
+    /// leaves the mirror behind for the next one.
+    pub fn load_traced(store: &Store) -> Result<(Questions, Source)> {
+        let (q, source) = store.load_mirrored::<Questions>(FILE)?;
+        let mut q = q.unwrap_or_default();
+        // A mirror is written from entries the guard already passed; only the JSON, which may
+        // predate the guard, still needs it.
+        if source == Source::Json { clean(&mut q.entries); }
+        Ok((q, source))
     }
 
+    pub fn write_mirror(&self, store: &Store) -> Result<()> { store.write_mirror(FILE, self) }
+
     pub fn save(&self, store: &Store) -> Result<()> {
-        store.write_atomic(FILE, &serde_json::to_vec_pretty(self)?)
+        store.write_atomic(FILE, &serde_json::to_vec_pretty(self)?)?;
+        // The mirror holds what a load of this JSON would return, guard included, so the two
+        // paths can never disagree about an entry.
+        let mut mirrored = self.clone();
+        clean(&mut mirrored.entries);
+        mirrored.write_mirror(store)
     }
 
     pub fn get(&self, id: &str) -> &[String] {

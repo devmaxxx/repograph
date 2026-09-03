@@ -150,7 +150,7 @@ fn record_stamps(store: &store::Store, manifest: &walk::Manifest, entries: &[wal
 /// moved. `ask` runs this before answering so an edit never has to be followed by an `update`;
 /// the extractors are built only when there is something to re-read.
 fn graph_for_ask(repo: &std::path::Path, cfg: &config::Config, store: &store::Store, stale: bool, timing: &Timing) -> anyhow::Result<(model::Graph, Option<UpdateReport>)> {
-    let (mut graph, manifest) = store.load()?;
+    let (mut graph, manifest, source) = store.load_traced()?;
     timing.stage("graph loaded");
     if stale { return Ok((graph, None)); }
     let entries = walk::walk(repo, cfg, &manifest)?;
@@ -158,6 +158,12 @@ fn graph_for_ask(repo: &std::path::Path, cfg: &config::Config, store: &store::St
     timing.stage("tree walked");
     if diff.changed.is_empty() && diff.removed.is_empty() {
         record_stamps(store, &manifest, &entries)?;
+        // A store another release or a bare `graph.json` left without a mirror pays the JSON
+        // parse once; a refresh below writes the mirror on its own.
+        if source == store::Source::Json {
+            store.write_mirror("graph.json", &graph)?;
+            timing.stage("mirror written");
+        }
         return Ok((graph, None));
     }
     let r = apply_diff(repo, store, &mut graph, &entries, &diff, &extractors(repo, cfg)?)?;
@@ -353,8 +359,10 @@ fn main() -> anyhow::Result<()> {
             };
             if let Some(r) = &refreshed { eprintln!("refresh: {} changed, {} removed", r.changed, r.removed); }
             let ids = ids::IdMatcher::new(&cfg.id_families, &cfg.milestone_families);
-            let questions = enrich::Questions::load(&store)?;
-            timing.stage("ids and questions ready");
+            timing.stage("ids ready");
+            let (questions, source) = enrich::Questions::load_traced(&store)?;
+            if !stale && source == store::Source::Json { questions.write_mirror(&store)?; }
+            timing.stage("questions ready");
             // Opening the ONNX model costs ~0.6 s and 1.3 GB, the vectors 50 MB; an exact id or
             // symbol match never asks for either, so both open on the first fused query.
             let embedder: std::cell::RefCell<Option<Option<index::embed::Embedder>>> = std::cell::RefCell::new(None);

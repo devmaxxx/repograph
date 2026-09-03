@@ -5,23 +5,81 @@ use std::path::{Path, PathBuf};
 
 pub struct Store { dir: PathBuf }
 
+/// Where a load got its value. The JSON is what a store is defined by and what any other
+/// binary reads; the mirror is a postcard copy of the same value written beside it, because
+/// parsing 10 MB of graph JSON costs every `ask` 18 ms and decoding the same graph a few.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Source { Absent, Json, Mirror }
+
+const MIRROR_MAGIC: &[u8; 4] = b"RGM1";
+const MIRROR_HEADER: usize = 4 + 12 + 16 + 8;
+
+fn stamp(p: &Path) -> Option<(u128, u64)> {
+    let m = std::fs::metadata(p).ok()?;
+    let mtime = m.modified().ok()?.duration_since(std::time::UNIX_EPOCH).ok()?.as_nanos();
+    Some((mtime, m.len()))
+}
+
+/// What a mirror was written from. It is trusted only while the JSON's stat stamp and the
+/// release that wrote it both still match: postcard is not self-describing, so a struct that
+/// changed shape between releases would otherwise decode into a wrong graph without one error.
+fn mirror_header(stamp: (u128, u64)) -> [u8; MIRROR_HEADER] {
+    let mut h = [0u8; MIRROR_HEADER];
+    h[..4].copy_from_slice(MIRROR_MAGIC);
+    let v = env!("CARGO_PKG_VERSION").as_bytes();
+    let n = v.len().min(12);
+    h[4..4 + n].copy_from_slice(&v[..n]);
+    h[16..32].copy_from_slice(&stamp.0.to_le_bytes());
+    h[32..40].copy_from_slice(&stamp.1.to_le_bytes());
+    h
+}
+
+fn mirror_name(json: &str) -> String { format!("{}.bin", json.trim_end_matches(".json")) }
+
 impl Store {
     pub fn new(repo: &Path) -> Store { Store { dir: repo.join(".repograph") } }
 
-    pub fn load(&self) -> Result<(Graph, Manifest)> {
-        let read = |name: &str| -> Result<Option<String>> {
-            let p = self.dir.join(name);
-            if !p.exists() { return Ok(None); }
-            Ok(Some(std::fs::read_to_string(&p).with_context(|| format!("read {}", p.display()))?))
+    pub fn load(&self) -> Result<(Graph, Manifest)> { self.load_traced().map(|(g, m, _)| (g, m)) }
+
+    /// `load`, saying where the graph came from, so a reader that may write can leave the
+    /// mirror a JSON-only store is missing.
+    pub fn load_traced(&self) -> Result<(Graph, Manifest, Source)> {
+        let (g, source) = self.load_mirrored::<Graph>("graph.json")?;
+        let m = match self.read_bytes("manifest.json")? {
+            Some(b) => serde_json::from_slice(&b).context("manifest.json")?,
+            None => Manifest::default(),
         };
-        let g = match read("graph.json")? { Some(t) => serde_json::from_str(&t).context("graph.json")?, None => Graph::default() };
-        let m = match read("manifest.json")? { Some(t) => serde_json::from_str(&t).context("manifest.json")?, None => Manifest::default() };
-        Ok((g, m))
+        Ok((g.unwrap_or_default(), m, source))
+    }
+
+    /// A JSON store file, read through its mirror when the mirror still describes these bytes.
+    pub fn load_mirrored<T: serde::de::DeserializeOwned>(&self, json: &str) -> Result<(Option<T>, Source)> {
+        let p = self.dir.join(json);
+        let Some(now) = stamp(&p) else { return Ok((None, Source::Absent)) };
+        if let Some(bytes) = self.read_bytes(&mirror_name(json))? {
+            // A mirror that does not decode is one a crash or another release left behind; the
+            // JSON it mirrors is still there to answer from, so it is passed over, not reported.
+            if bytes.starts_with(&mirror_header(now)) {
+                if let Ok(v) = postcard::from_bytes::<T>(&bytes[MIRROR_HEADER..]) { return Ok((Some(v), Source::Mirror)); }
+            }
+        }
+        let bytes = std::fs::read(&p).with_context(|| format!("read {}", p.display()))?;
+        Ok((Some(serde_json::from_slice(&bytes).context(json.to_string())?), Source::Json))
+    }
+
+    /// The mirror of a JSON file as it stands on disk now. Nothing reads a mirror whose stamp
+    /// disagrees with its JSON, so writing it after the JSON can never leave a reader misled.
+    pub fn write_mirror<T: serde::Serialize>(&self, json: &str, value: &T) -> Result<()> {
+        let Some(now) = stamp(&self.dir.join(json)) else { return Ok(()) };
+        let mut bytes = mirror_header(now).to_vec();
+        bytes.extend(postcard::to_stdvec(value)?);
+        self.write_atomic(&mirror_name(json), &bytes)
     }
 
     pub fn save(&self, g: &Graph, m: &Manifest) -> Result<()> {
         std::fs::create_dir_all(&self.dir)?;
         self.write_atomic("graph.json", &serde_json::to_vec(g)?)?;
+        self.write_mirror("graph.json", g)?;
         self.save_manifest(m)
     }
 
@@ -89,6 +147,83 @@ impl Store {
 mod tests {
     use super::*;
     use crate::model::{EdgeKind, Extraction, NodeKind};
+
+    fn graph(label: &str) -> Graph {
+        let mut g = Graph::default();
+        let mut e = Extraction::default();
+        e.node(NodeKind::Requirement, "FR-WEB-01", label, "тело требования", "docs/a.md", 3);
+        e.edge("FR-WEB-01", "INV-01", EdgeKind::References, "ctx", "docs/a.md");
+        g.apply(e);
+        g
+    }
+
+    #[test]
+    fn a_saved_graph_loads_from_its_mirror_and_matches_the_json() {
+        let d = tempfile::tempdir().unwrap();
+        let store = Store::new(d.path());
+        let g = graph("Заголовок");
+        store.save(&g, &Manifest::default()).unwrap();
+        assert!(d.path().join(".repograph/graph.bin").exists());
+        let (g2, _, source) = store.load_traced().unwrap();
+        assert_eq!(source, Source::Mirror);
+        assert_eq!(g2.nodes, g.nodes);
+        assert_eq!(g2.edges, g.edges);
+    }
+
+    // The JSON is rewritten to a different length, so the mirror's stamp disagrees even on a
+    // file system with coarse mtimes.
+    #[test]
+    fn a_mirror_behind_a_rewritten_json_is_passed_over() {
+        let d = tempfile::tempdir().unwrap();
+        let store = Store::new(d.path());
+        store.save(&graph("old"), &Manifest::default()).unwrap();
+        store.write_atomic("graph.json", &serde_json::to_vec(&graph("a much longer new label")).unwrap()).unwrap();
+        let (g, _, source) = store.load_traced().unwrap();
+        assert_eq!(source, Source::Json);
+        assert_eq!(g.nodes["FR-WEB-01"].label, "a much longer new label");
+    }
+
+    #[test]
+    fn a_mirror_that_does_not_decode_falls_back_to_the_json() {
+        let d = tempfile::tempdir().unwrap();
+        let store = Store::new(d.path());
+        store.save(&graph("x"), &Manifest::default()).unwrap();
+        let p = d.path().join(".repograph/graph.bin");
+        let mut bytes = std::fs::read(&p).unwrap();
+        bytes.truncate(MIRROR_HEADER + 3);
+        std::fs::write(&p, bytes).unwrap();
+        let (g, _, source) = store.load_traced().unwrap();
+        assert_eq!(source, Source::Json);
+        assert_eq!(g.nodes.len(), 1);
+    }
+
+    #[test]
+    fn a_mirror_from_another_release_is_passed_over() {
+        let d = tempfile::tempdir().unwrap();
+        let store = Store::new(d.path());
+        store.save(&graph("x"), &Manifest::default()).unwrap();
+        let p = d.path().join(".repograph/graph.bin");
+        let mut bytes = std::fs::read(&p).unwrap();
+        bytes[4..10].copy_from_slice(b"9.9.9\0");
+        std::fs::write(&p, bytes).unwrap();
+        let (_, _, source) = store.load_traced().unwrap();
+        assert_eq!(source, Source::Json);
+    }
+
+    #[test]
+    fn a_store_without_a_mirror_reads_the_json_and_can_be_given_one() {
+        let d = tempfile::tempdir().unwrap();
+        let store = Store::new(d.path());
+        let g = graph("x");
+        store.save(&g, &Manifest::default()).unwrap();
+        std::fs::remove_file(d.path().join(".repograph/graph.bin")).unwrap();
+        let (_, _, source) = store.load_traced().unwrap();
+        assert_eq!(source, Source::Json);
+        store.write_mirror("graph.json", &g).unwrap();
+        let (g2, _, source) = store.load_traced().unwrap();
+        assert_eq!(source, Source::Mirror);
+        assert_eq!(g2.nodes, g.nodes);
+    }
 
     #[test]
     fn round_trip_and_atomic_write() {
