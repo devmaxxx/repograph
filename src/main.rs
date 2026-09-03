@@ -58,6 +58,24 @@ enum Cmd {
         #[arg(long, default_value_t = 1)] batch: usize,
     },
     Explain { node: String },
+    /// Who reaches a symbol (callers by depth, importing files, a risk line), or with `--down`
+    /// what it reaches. A class is walked through its members; a caller that imported through a
+    /// barrel is found all the same
+    Impact {
+        symbol: String,
+        #[arg(long, default_value_t = 3)] depth: usize,
+        #[arg(long)] down: bool,
+        #[arg(long)] json: bool,
+        /// Answers from the store as it stands, without bringing it in line with the tree first
+        #[arg(long)] stale: bool,
+    },
+    /// The shortest chain of calls from one symbol to another, or that there is none within the depth
+    Trace {
+        from: String,
+        to: String,
+        #[arg(long, default_value_t = 6)] depth: usize,
+        #[arg(long)] stale: bool,
+    },
     Verify,
     /// Writes reader questions for every requirement-like node through the configured
     /// command, then re-embeds. Costs model tokens once per passage; nothing per query.
@@ -323,6 +341,20 @@ fn open_embedder(no_dense: bool) -> Option<index::embed::Embedder> {
     }
 }
 
+/// The graph an answer is read from: refreshed against the tree unless `--stale`, and, when
+/// the store cannot be written, the stored one with a warning — the same contract as `ask`.
+fn graph_for(repo: &std::path::Path, cfg: &config::Config, stale: bool) -> anyhow::Result<model::Graph> {
+    let timing = Timing::new();
+    let store = store::Store::new(repo);
+    match graph_for_ask(repo, cfg, &store, stale, &timing) {
+        Ok((graph, refreshed)) => {
+            if let Some(r) = refreshed { eprintln!("refresh: {} changed, {} removed", r.changed, r.removed); }
+            Ok(graph)
+        }
+        Err(err) => { eprintln!("refresh: skipped ({err:#})"); Ok(store.load()?.0) }
+    }
+}
+
 fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
     let repo = cli.repo.canonicalize()?;
@@ -417,6 +449,28 @@ fn main() -> anyhow::Result<()> {
             match query::explain(&graph, &node) {
                 Some(s) => { print!("{s}"); Ok(()) }
                 None => anyhow::bail!("no node matches {node}"),
+            }
+        }
+        Cmd::Impact { symbol, depth, down, json, stale } => {
+            let graph = graph_for(&repo, &load_cfg()?, stale)?;
+            let Some(root) = query::resolve(&graph, &symbol) else { anyhow::bail!("no node matches {symbol}") };
+            let (imp, direction) = if down { (impact::downstream(&graph, &root.id, depth), "downstream") } else { (impact::upstream(&graph, &root.id, depth), "upstream") };
+            print!("{}", if json { impact::render_json(&graph, &imp, direction) } else { impact::render(&graph, &imp, direction) });
+            Ok(())
+        }
+        Cmd::Trace { from, to, depth, stale } => {
+            let graph = graph_for(&repo, &load_cfg()?, stale)?;
+            let Some(a) = query::resolve(&graph, &from) else { anyhow::bail!("no node matches {from}") };
+            let Some(b) = query::resolve(&graph, &to) else { anyhow::bail!("no node matches {to}") };
+            match impact::trace(&graph, &a.id, &b.id, depth) {
+                Some(path) => {
+                    for (i, id) in path.iter().enumerate() {
+                        let at = graph.nodes.get(id).map(|n| format!("{}:{}", n.file, n.line)).unwrap_or_default();
+                        println!("{}{id}  {at}", if i == 0 { "" } else { "  → " });
+                    }
+                    Ok(())
+                }
+                None => anyhow::bail!("no call path from {} to {} within {depth} hops", a.id, b.id),
             }
         }
         Cmd::Verify => {
