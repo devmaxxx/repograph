@@ -32,12 +32,13 @@ it had been measured, and hadn't been.
 
 ## Status
 
-Version 0.3.0. Every row below is implemented, not planned:
+Version 0.4.0. Every row below is implemented, not planned:
 
 | Command                    | State                                                                 |
 | -------------------------- | --------------------------------------------------------------------- |
 | `build`, `update`          | working; incremental; a no-op `update` is a fixed point               |
 | `ask`, `explain`, `verify` | working: exact id/symbol → BM25 → dense, fused, one hop out           |
+| `impact`, `trace`, `changes` | working: callers by depth through barrels, shortest call chain, the diff mapped onto symbols — see [Blast radius](#blast-radius) |
 | `bench`                    | working; fails the process if a floor in [Bench](#bench) is missed    |
 | `import-legacy`            | working; costs recall at query time — see its note in [Bench](#bench) |
 | `enrich`, `ask --rerank`   | working; opt-in, the only two stages that spend model tokens — see [Spending tokens on purpose](#spending-tokens-on-purpose) |
