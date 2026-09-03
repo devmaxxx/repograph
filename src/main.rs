@@ -1,4 +1,5 @@
 mod bench;
+mod changes;
 mod code;
 mod config;
 mod doc;
@@ -74,6 +75,14 @@ enum Cmd {
         from: String,
         to: String,
         #[arg(long, default_value_t = 6)] depth: usize,
+        #[arg(long)] stale: bool,
+    },
+    /// What the working tree's diff touches and who reaches it: hunks against `--base` (staged,
+    /// unstaged and untracked alike) mapped onto symbol spans, then the callers of each
+    Changes {
+        #[arg(long, default_value = "HEAD")] base: String,
+        #[arg(long, default_value_t = 2)] depth: usize,
+        #[arg(long)] json: bool,
         #[arg(long)] stale: bool,
     },
     Verify,
@@ -472,6 +481,13 @@ fn main() -> anyhow::Result<()> {
                 }
                 None => anyhow::bail!("no call path from {} to {} within {depth} hops", a.id, b.id),
             }
+        }
+        Cmd::Changes { base, depth, json, stale } => {
+            let graph = graph_for(&repo, &load_cfg()?, stale)?;
+            let hunks = changes::hunks_from_git(&repo, &base)?;
+            let r = changes::report(&graph, &hunks, depth);
+            print!("{}", if json { changes::render_json(&graph, &r) } else { changes::render(&graph, &r) });
+            Ok(())
         }
         Cmd::Verify => {
             let (graph, _) = store::Store::new(&repo).load()?;

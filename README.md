@@ -105,6 +105,8 @@ repograph impact StaffService               # callers by depth, importing files,
 repograph impact --down StaffController     # what it calls, through injected services and barrels
 repograph impact --json --depth 1 asGrosze  # machine-readable; depth 1 is the "will break" list alone
 repograph trace StaffController StaffService  # shortest chain of calls between two symbols
+repograph changes                           # what the uncommitted diff touches, and who reaches it
+repograph changes --base main --depth 1     # the whole branch; depth 1 is the direct callers alone
 ```
 
 Answers are lines of the form:
@@ -328,6 +330,26 @@ What the graph cannot prove it does not list: a call through a chained expressio
 destructured method, a callback parameter or a global has no edge, so confirm a "nothing uses
 this" with `rg -l` before deleting. A target the graph knows only by name — a member of an
 imported value it never saw declared — prints `?` in place of its `path:line`.
+
+`changes` maps `git diff -U0` (staged and unstaged, plus untracked files whole) onto symbol
+spans and unions the callers of every touched symbol into one list and one risk line. Run it
+before committing; `--base main` before opening a pull request. A hunk outside every symbol —
+an import line, a trailing comment — is reported on the file and walks every symbol the file
+declares; what is being changed is never listed as affected by itself. Deleted files do not
+appear: their symbols are gone from the graph, and their former callers surface as dangling
+edges in `verify`.
+
+```
+$ repograph --repo beauty-crm changes
+changed: 2 symbols in 1 file
+  file:apps/api/src/modules/staff/staff.service.ts  apps/api/src/modules/staff/staff.service.ts:1
+  sym:apps/api/src/modules/staff/staff.service.ts::StaffService.create  apps/api/src/modules/staff/staff.service.ts:31-43
+affected (depth 2): 3 symbols in 3 files
+  d=1  file:apps/api/test/staffMembership.spec.ts  apps/api/test/staffMembership.spec.ts:1  ← sym:apps/api/src/modules/staff/staff.service.ts::StaffService
+  d=1  sym:apps/api/src/modules/staff/staff.controller.ts::MembershipController.memberships  apps/api/src/modules/staff/staff.controller.ts:56  ← sym:apps/api/src/modules/staff/staff.service.ts::StaffService.memberships
+  d=1  sym:apps/api/src/modules/staff/staff.controller.ts::StaffController.create  apps/api/src/modules/staff/staff.controller.ts:87  ← sym:apps/api/src/modules/staff/staff.service.ts::StaffService.create
+risk: MEDIUM — 3 direct, 3 total, 3 files
+```
 
 ## Configure
 
