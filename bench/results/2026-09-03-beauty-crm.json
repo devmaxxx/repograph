@@ -859,7 +859,7 @@
      "want_files": 24,
      "found_files": 24,
      "recall": 1.0,
-     "ms": 40,
+     "ms": 41,
      "chars": 16351
     },
     {
@@ -870,7 +870,7 @@
      "want_files": 9,
      "found_files": 9,
      "recall": 1.0,
-     "ms": 40,
+     "ms": 41,
      "chars": 1868
     },
     {
@@ -881,7 +881,7 @@
      "want_files": 10,
      "found_files": 9,
      "recall": 0.9,
-     "ms": 43,
+     "ms": 45,
      "chars": 3959
     },
     {
@@ -903,7 +903,7 @@
      "want_files": 3,
      "found_files": 3,
      "recall": 1.0,
-     "ms": 41,
+     "ms": 40,
      "chars": 833
     },
     {
@@ -914,7 +914,7 @@
      "want_files": 3,
      "found_files": 3,
      "recall": 1.0,
-     "ms": 40,
+     "ms": 41,
      "chars": 1021
     },
     {
@@ -925,7 +925,7 @@
      "want_files": 3,
      "found_files": 3,
      "recall": 1.0,
-     "ms": 40,
+     "ms": 42,
      "chars": 1012
     },
     {
@@ -936,7 +936,7 @@
      "want_files": 2,
      "found_files": 2,
      "recall": 1.0,
-     "ms": 41,
+     "ms": 42,
      "chars": 513
     },
     {
@@ -947,7 +947,7 @@
      "expect": "path",
      "hit": true,
      "says_none": false,
-     "ms": 46,
+     "ms": 65,
      "chars": 521
     },
     {
@@ -958,7 +958,7 @@
      "expect": "path",
      "hit": true,
      "says_none": false,
-     "ms": 42,
+     "ms": 44,
      "chars": 529
     },
     {
@@ -991,7 +991,7 @@
      "expect": "path",
      "hit": true,
      "says_none": false,
-     "ms": 41,
+     "ms": 40,
      "chars": 299
     },
     {
@@ -1002,7 +1002,7 @@
      "expect": "path",
      "hit": true,
      "says_none": false,
-     "ms": 42,
+     "ms": 41,
      "chars": 412
     },
     {
@@ -1024,7 +1024,7 @@
      "expect": "none",
      "hit": true,
      "says_none": true,
-     "ms": 46,
+     "ms": 45,
      "chars": 178
     },
     {
@@ -1033,20 +1033,20 @@
      "base": "cbc931ba~1",
      "want_files": 2,
      "found_files": 2,
-     "want_symbols": 2,
-     "found_symbols": 1,
-     "ms": 177,
+     "want_symbols": 5,
+     "found_symbols": 5,
+     "ms": 165,
      "chars": 6195
     },
     {
      "suite": "blast",
      "kind": "changes",
      "base": "0f27d2d1",
-     "want_files": 8,
-     "found_files": 8,
-     "want_symbols": 13,
-     "found_symbols": 10,
-     "ms": 241,
+     "want_files": 18,
+     "found_files": 11,
+     "want_symbols": 38,
+     "found_symbols": 27,
+     "ms": 244,
      "chars": 12032
     }
    ],
@@ -1094,11 +1094,11 @@
     },
     "changes": {
      "n": 2,
-     "symbols_found": 11,
-     "symbols_want": 15,
-     "files_found": 10,
-     "files_want": 10,
-     "ms_median": 209,
+     "symbols_found": 32,
+     "symbols_want": 43,
+     "files_found": 13,
+     "files_want": 20,
+     "ms_median": 204,
      "chars_median": 9114
     }
    }
@@ -1933,7 +1933,7 @@
      "want_files": 49,
      "found_files": 0,
      "recall": 0.0,
-     "ms": 501,
+     "ms": 506,
      "chars": 40
     },
     {
@@ -1944,7 +1944,7 @@
      "want_files": 4,
      "found_files": 0,
      "recall": 0.0,
-     "ms": 423,
+     "ms": 416,
      "chars": 49
     },
     {
@@ -1955,7 +1955,7 @@
      "want_files": 24,
      "found_files": 24,
      "recall": 1.0,
-     "ms": 425,
+     "ms": 426,
      "chars": 10924
     },
     {
@@ -1966,7 +1966,7 @@
      "want_files": 9,
      "found_files": 0,
      "recall": 0.0,
-     "ms": 430,
+     "ms": 418,
      "chars": 38
     },
     {
@@ -1977,7 +1977,7 @@
      "want_files": 10,
      "found_files": 10,
      "recall": 1.0,
-     "ms": 427,
+     "ms": 429,
      "chars": 5033
     },
     {
@@ -1988,7 +1988,7 @@
      "want_files": 7,
      "found_files": 0,
      "recall": 0.0,
-     "ms": 431,
+     "ms": 417,
      "chars": 40
     },
     {
@@ -1999,7 +1999,7 @@
      "want_files": 3,
      "found_files": 3,
      "recall": 1.0,
-     "ms": 430,
+     "ms": 428,
      "chars": 1371
     },
     {
@@ -2010,7 +2010,7 @@
      "want_files": 3,
      "found_files": 3,
      "recall": 1.0,
-     "ms": 422,
+     "ms": 430,
      "chars": 1353
     },
     {
@@ -2021,7 +2021,7 @@
      "want_files": 3,
      "found_files": 3,
      "recall": 1.0,
-     "ms": 439,
+     "ms": 422,
      "chars": 856
     },
     {
@@ -2032,7 +2032,7 @@
      "want_files": 2,
      "found_files": 2,
      "recall": 1.0,
-     "ms": 437,
+     "ms": 434,
      "chars": 741
     },
     {
@@ -2043,7 +2043,7 @@
      "expect": "path",
      "hit": false,
      "says_none": true,
-     "ms": 1589,
+     "ms": 1558,
      "chars": 205
     },
     {
@@ -2054,7 +2054,7 @@
      "expect": "path",
      "hit": false,
      "says_none": true,
-     "ms": 1563,
+     "ms": 1565,
      "chars": 208
     },
     {
@@ -2065,7 +2065,7 @@
      "expect": "path",
      "hit": false,
      "says_none": true,
-     "ms": 1572,
+     "ms": 1608,
      "chars": 211
     },
     {
@@ -2076,7 +2076,7 @@
      "expect": "path",
      "hit": true,
      "says_none": false,
-     "ms": 1568,
+     "ms": 1614,
      "chars": 135
     },
     {
@@ -2087,7 +2087,7 @@
      "expect": "path",
      "hit": true,
      "says_none": false,
-     "ms": 1566,
+     "ms": 1636,
      "chars": 131
     },
     {
@@ -2098,7 +2098,7 @@
      "expect": "path",
      "hit": true,
      "says_none": false,
-     "ms": 1558,
+     "ms": 1604,
      "chars": 207
     },
     {
@@ -2109,7 +2109,7 @@
      "expect": "none",
      "hit": true,
      "says_none": true,
-     "ms": 1550,
+     "ms": 1603,
      "chars": 207
     },
     {
@@ -2120,7 +2120,7 @@
      "expect": "none",
      "hit": true,
      "says_none": true,
-     "ms": 1569,
+     "ms": 1596,
      "chars": 129
     }
    ],
@@ -2154,7 +2154,7 @@
      "recall_mean": 0.6,
      "files_found": 45,
      "files_want": 114,
-     "ms_median": 430,
+     "ms_median": 427,
      "chars_median": 798
     },
     "trace": {
@@ -2164,7 +2164,7 @@
      "path_n": 6,
      "none_hit": 2,
      "none_n": 2,
-     "ms_median": 1567
+     "ms_median": 1604
     }
    }
   },
@@ -2998,7 +2998,7 @@
      "want_files": 49,
      "found_files": 27,
      "recall": 0.551,
-     "ms": 1257,
+     "ms": 1302,
      "chars": 24926
     },
     {
@@ -3009,7 +3009,7 @@
      "want_files": 4,
      "found_files": 3,
      "recall": 0.75,
-     "ms": 944,
+     "ms": 970,
      "chars": 11282
     },
     {
@@ -3020,7 +3020,7 @@
      "want_files": 24,
      "found_files": 20,
      "recall": 0.833,
-     "ms": 1002,
+     "ms": 1001,
      "chars": 53318
     },
     {
@@ -3031,7 +3031,7 @@
      "want_files": 9,
      "found_files": 3,
      "recall": 0.333,
-     "ms": 951,
+     "ms": 954,
      "chars": 15511
     },
     {
@@ -3042,7 +3042,7 @@
      "want_files": 10,
      "found_files": 6,
      "recall": 0.6,
-     "ms": 1019,
+     "ms": 946,
      "chars": 3046
     },
     {
@@ -3053,7 +3053,7 @@
      "want_files": 7,
      "found_files": 3,
      "recall": 0.429,
-     "ms": 940,
+     "ms": 951,
      "chars": 5304
     },
     {
@@ -3064,7 +3064,7 @@
      "want_files": 3,
      "found_files": 2,
      "recall": 0.667,
-     "ms": 947,
+     "ms": 946,
      "chars": 6426
     },
     {
@@ -3075,7 +3075,7 @@
      "want_files": 3,
      "found_files": 2,
      "recall": 0.667,
-     "ms": 946,
+     "ms": 939,
      "chars": 1797
     },
     {
@@ -3086,7 +3086,7 @@
      "want_files": 3,
      "found_files": 2,
      "recall": 0.667,
-     "ms": 1061,
+     "ms": 941,
      "chars": 1770
     },
     {
@@ -3097,7 +3097,7 @@
      "want_files": 2,
      "found_files": 2,
      "recall": 1.0,
-     "ms": 953,
+     "ms": 922,
      "chars": 1696
     },
     {
@@ -3108,7 +3108,7 @@
      "expect": "path",
      "hit": false,
      "says_none": true,
-     "ms": 945,
+     "ms": 984,
      "chars": 684
     },
     {
@@ -3119,7 +3119,7 @@
      "expect": "path",
      "hit": false,
      "says_none": true,
-     "ms": 935,
+     "ms": 985,
      "chars": 687
     },
     {
@@ -3130,7 +3130,7 @@
      "expect": "path",
      "hit": false,
      "says_none": true,
-     "ms": 939,
+     "ms": 918,
      "chars": 696
     },
     {
@@ -3141,7 +3141,7 @@
      "expect": "path",
      "hit": false,
      "says_none": true,
-     "ms": 951,
+     "ms": 934,
      "chars": 713
     },
     {
@@ -3152,7 +3152,7 @@
      "expect": "path",
      "hit": false,
      "says_none": true,
-     "ms": 951,
+     "ms": 929,
      "chars": 706
     },
     {
@@ -3163,7 +3163,7 @@
      "expect": "path",
      "hit": false,
      "says_none": true,
-     "ms": 934,
+     "ms": 908,
      "chars": 701
     },
     {
@@ -3174,7 +3174,7 @@
      "expect": "none",
      "hit": true,
      "says_none": true,
-     "ms": 929,
+     "ms": 897,
      "chars": 687
     },
     {
@@ -3185,7 +3185,7 @@
      "expect": "none",
      "hit": true,
      "says_none": true,
-     "ms": 960,
+     "ms": 906,
      "chars": 692
     },
     {
@@ -3194,20 +3194,20 @@
      "base": "cbc931ba~1",
      "want_files": 2,
      "found_files": 0,
-     "want_symbols": 2,
+     "want_symbols": 5,
      "found_symbols": 0,
-     "ms": 1217,
+     "ms": 1170,
      "chars": 1480
     },
     {
      "suite": "blast",
      "kind": "changes",
      "base": "0f27d2d1",
-     "want_files": 8,
-     "found_files": 0,
-     "want_symbols": 13,
-     "found_symbols": 0,
-     "ms": 1366,
+     "want_files": 18,
+     "found_files": 1,
+     "want_symbols": 38,
+     "found_symbols": 1,
+     "ms": 1371,
      "chars": 2643
     }
    ],
@@ -3241,7 +3241,7 @@
      "recall_mean": 0.65,
      "files_found": 70,
      "files_want": 114,
-     "ms_median": 952,
+     "ms_median": 948,
      "chars_median": 5865
     },
     "trace": {
@@ -3251,15 +3251,15 @@
      "path_n": 6,
      "none_hit": 2,
      "none_n": 2,
-     "ms_median": 942
+     "ms_median": 924
     },
     "changes": {
      "n": 2,
-     "symbols_found": 0,
-     "symbols_want": 15,
-     "files_found": 0,
-     "files_want": 10,
-     "ms_median": 1292,
+     "symbols_found": 1,
+     "symbols_want": 43,
+     "files_found": 1,
+     "files_want": 20,
+     "ms_median": 1270,
      "chars_median": 2062
     }
    }
@@ -3270,6 +3270,7 @@
   "gitnexus_index": "analyzed 2026-09-03 10:04 at d04b19a4: 25745 nodes, 42654 edges",
   "repograph_store": "0.4.0, enrich on opus: 8306 nodes, 32590 edges",
   "gitnexus_changes_cap": "the CLI prints 15 changed symbols then `... and N more`; the MCP payload for base cbc931ba~1 names staffMember but not AvailabilityAnswer",
-  "graphify_impact": "`affected` refuses an ambiguous name: DatabaseService, TenantContextInterceptor, ActorResolver and OutboxPublisher each returned `No unique node match`"
+  "graphify_impact": "`affected` refuses an ambiguous name: DatabaseService, TenantContextInterceptor, ActorResolver and OutboxPublisher each returned `No unique node match`",
+  "truth": "impact truth counts references in code with comments stripped; changes truth attributes a hunk to a declaration only when the hunk falls inside its bracket span, exported or not"
  }
 }

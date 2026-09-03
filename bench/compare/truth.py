@@ -23,8 +23,10 @@ FIELD = re.compile(r"(?:private|public|protected|readonly)\s+(?:readonly\s+)?(\w
 # `this.db.run(` and `this.db\n  .run(` are the same call; tree-sitter sees no
 # newline and neither may we, or the truth undercounts what the tools find.
 CALL = re.compile(r"this\.(\w+)\s*\.\s*(\w+)\s*\(", re.S)
+# A hunk inside a file-private helper still touches a symbol a graph should name,
+# so the export keyword is optional here.
 TOP_LEVEL = re.compile(
-    r"^export\s+(?:default\s+)?(?:abstract\s+)?(?:async\s+)?"
+    r"^(?:export\s+(?:default\s+)?)?(?:abstract\s+)?(?:async\s+)?"
     r"(?:class|function|const|let|interface|type|enum)\s+(\w+)",
     re.M,
 )
@@ -110,6 +112,23 @@ def shortest_path(graph: dict, src: str, dst: str, max_hops: int = 6) -> list[st
     return None
 
 
+def declaration_end(lines: list[str], start: int) -> int:
+    """The last line of the declaration beginning at `start` (1-based).
+
+    Brackets, not indentation: a hunk between two declarations belongs to neither,
+    and attributing it to the one above would credit a tool for naming a symbol the
+    diff never touched.
+    """
+    depth = 0
+    for i in range(start - 1, len(lines)):
+        line = lines[i]
+        depth += line.count("{") + line.count("[") + line.count("(")
+        depth -= line.count("}") + line.count("]") + line.count(")")
+        if depth <= 0:
+            return i + 1
+    return len(lines)
+
+
 def changed_symbols(repo: Path, base: str) -> dict:
     """Code symbols the diff since `base` touches, by the declaration each hunk sits in."""
     diff = subprocess.run(
@@ -136,12 +155,13 @@ def changed_symbols(repo: Path, base: str) -> dict:
         if not path.exists():
             continue
         src = path.read_text(encoding="utf8", errors="replace")
+        lines = src.split("\n")
         starts = [(src[: m.start()].count("\n") + 1, m.group(1)) for m in TOP_LEVEL.finditer(src)]
         hit = set()
-        for lo, hi in spans:
-            enclosing = [name for line, name in starts if line <= hi]
-            if enclosing:
-                hit.add(enclosing[-1])
+        for start, name in starts:
+            end = declaration_end(lines, start)
+            if any(lo <= end and hi >= start for lo, hi in spans):
+                hit.add(name)
         if hit:
             symbols[rel] = sorted(hit)
     return {"files": sorted(hunks), "code_files": sorted(symbols), "symbols": symbols}
