@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 # Assembles the npm packages from prebuilt binaries and packs them into dist/npm/.
-# Publishing stays a separate, deliberate step: a publish cannot be undone after 72 hours.
+# Publishing stays a separate, deliberate step: a version number, once published, is spent —
+# GitHub Packages refuses a second upload of it even after the first is deleted. The registry
+# comes from each package's publishConfig; publishing by hand needs a classic PAT with
+# write:packages as //npm.pkg.github.com/:_authToken in ~/.npmrc.
 #
 #   scripts/npm-pack.sh [version] [darwin-arm64=<binary>] [linux-x64=<binary>]
 #
@@ -57,6 +60,6 @@ ls -1 "$out"
 echo
 echo "publish the platform packages first, the launcher last:"
 for t in "$out"/*-arm64-*.tgz "$out"/*-x64-*.tgz "$out"/devmaxxx-repograph-"$version".tgz; do
-  [ -e "$t" ] && echo "  npm publish --access public $t"
+  [ -e "$t" ] && echo "  npm publish $t"
 done
 true

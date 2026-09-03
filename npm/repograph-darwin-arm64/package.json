@@ -15,5 +15,8 @@
   ],
   "files": [
     "bin/repograph"
-  ]
+  ],
+  "publishConfig": {
+    "registry": "https://npm.pkg.github.com"
+  }
 }

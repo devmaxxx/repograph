@@ -4,6 +4,14 @@ One binary that builds a knowledge graph of a repository's markdown requirement 
 TypeScript code at zero model tokens, keeps it fresh while you work, and answers questions about
 it by exact id, keyword or paraphrase.
 
+It is published to GitHub Packages, which serves no anonymous reads, so once per machine
+`~/.npmrc` needs a scope and a classic personal access token carrying `read:packages`:
+
+```
+@devmaxxx:registry=https://npm.pkg.github.com
+//npm.pkg.github.com/:_authToken=<token>
+```
+
 ```bash
 npm install --save-dev @devmaxxx/repograph     # or: pnpm add -D @devmaxxx/repograph
 npx repograph build                             # once per clone, ~1 s per 800 files
