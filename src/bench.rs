@@ -1,5 +1,5 @@
 use crate::config::Config;
-use crate::enrich::{coverage, Questions};
+use crate::enrich::{self, coverage, Questions};
 use crate::ids::IdMatcher;
 use crate::index::dense::DenseIndex;
 use crate::index::embed::Embedder;
@@ -26,7 +26,7 @@ pub fn hit(case: &Case, answer: &Answer) -> bool {
 
 pub fn passes(s: &Summary, dense: bool, enriched: bool) -> bool {
     // Every floor is the number the recorded cases measure; only the token ceiling is rounded,
-    // up to the next ten, and the four p90s (221 to 228) fit under that one. A count equal to
+    // up to the next ten, and the four p90s (220 to 226) fit under that one. A count equal to
     // its total is an exact floor: `run` refuses a case file that is not 40/30/12 before any of
     // this is read.
     //
@@ -36,6 +36,10 @@ pub fn passes(s: &Summary, dense: bool, enriched: bool) -> bool {
     // arm reaches 39 of the 40 keyword cases, so even that floor is not exact there. Paraphrase is
     // the split the arms disagree on most — three of its questions are reached by the dense
     // passage list and by neither lexical list.
+    //
+    // The raw pair has no headroom, unlike the enriched one: 9 and 7 are two runs on one machine
+    // on one day sitting flush on the noisiest split, while 14 has a point of slack and weeks of
+    // runs under it. If the raw floors flap, they are the first thing to relax.
     let (keyword, paraphrase) = match (enriched, dense) {
         (true, true) => (40, 14),
         (true, false) => (40, 11),
@@ -65,10 +69,9 @@ pub fn run(repo: &Path, cases: Option<&Path>, no_dense: bool, rerank: bool, rera
     let ids = IdMatcher::new(&cfg.id_families, &cfg.milestone_families);
     let dense_idx = DenseIndex::load(&store)?;
     let questions = Questions::load(&store)?;
-    // A graph with nothing to enrich cannot be told from one nobody has enriched, and the
-    // recorded cases expect the corpus's requirements either way, so it is graded as raw.
+    // The threshold decides the floors; the counts printed on the summary line stay exact.
     let (covered, eligible) = coverage(&graph, &questions);
-    let enriched = eligible > 0 && covered == eligible;
+    let enriched = enrich::enriched(covered, eligible);
     // `ask` degrading to lexical-only on a missing model is fine — a person reading the answer
     // sees the stderr notice and can judge it. `bench` speaks only through its exit code, so a
     // dense run that silently falls back and then grades against the weaker no-dense floor

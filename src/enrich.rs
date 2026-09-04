@@ -45,6 +45,15 @@ pub fn coverage(graph: &Graph, questions: &Questions) -> (usize, usize) {
     (nodes.iter().filter(|n| !questions.get(&n.id).is_empty()).count(), nodes.len())
 }
 
+/// Whether a `coverage` reading has earned the enriched floors. A high-water mark rather than
+/// equality because the two mistakes are not symmetric: a store at 99% still measures the
+/// enriched numbers, so grading it enriched risks about no false red, while grading it raw drops
+/// it five paraphrase points and one keyword point onto floors it clears without trying, and
+/// `bench` speaks through its exit code. Over ~2 000 nodes equality is a cliff a single node
+/// walks off — one requirement added after the run, one node the model skipped past its retry,
+/// one entry `clean` drops on load — and a real regression behind that cliff exits 0.
+pub fn enriched(covered: usize, eligible: usize) -> bool { eligible > 0 && covered * 100 >= eligible * 99 }
+
 impl Questions {
     pub fn load(store: &Store) -> Result<Questions> { Self::load_traced(store).map(|(q, _)| q) }
 
@@ -397,8 +406,21 @@ mod tests {
         let cmd = r#"awk '/^### /{printf "%s\tq for %s\n", $2, $2}'"#;
         run(&store, &g, Questions::default(), cmd, 1, 1, Some(1)).unwrap();
         assert_eq!(coverage(&g, &Questions::load(&store).unwrap()), (1, 2), "a run stopped early covers part of the graph");
+        assert!(!enriched(1, 2), "half a two-node graph is nowhere near the mark");
         run(&store, &g, Questions::load(&store).unwrap(), cmd, 1, 1, None).unwrap();
         assert_eq!(coverage(&g, &Questions::load(&store).unwrap()), (2, 2));
+        assert!(enriched(2, 2));
+    }
+
+    #[test]
+    fn enriched_grades_at_the_high_water_mark_not_at_every_node() {
+        // The development corpus's own denominator, so the counts read as the summary line does.
+        assert!(enriched(1996, 1996));
+        assert!(enriched(1977, 1996), "the first count at or above 99 % — the mark is 1976.04");
+        assert!(!enriched(1976, 1996), "98.998 %, one node short of the mark rather than over it");
+        assert!(!enriched(1900, 1996));
+        // A graph with nothing to enrich cannot be told from one nobody has enriched.
+        assert!(!enriched(0, 0));
     }
 
     #[test]
