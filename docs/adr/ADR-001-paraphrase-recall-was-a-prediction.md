@@ -143,17 +143,38 @@ Seconds per question are the run's wall clock over its 82 cases, on an M-series 
 session opened once for the whole run; the control's 0.06 s is the same arithmetic and excludes
 the model open both arms pay.
 
+The depth-200 row is the one the decision rests on, so it was run twice and the second run is
+kept, both streams, in
+[`bench/results/2026-09-04-beauty-crm-task6-rerank-local-depth200.log`](../../bench/results/2026-09-04-beauty-crm-task6-rerank-local-depth200.log).
+**It reproduced case for case** — 39/40, 17/30, 12/12, p90 229, and the same HIT/miss on all 82
+questions — and the capture carries stderr, so the record shows that `score` never fell back to
+the fused order on any question. Its wall clock read 21.0 s a question rather than 17.9 s, under
+other load on the same machine; the table keeps the quiet run's figure and neither reading is
+within an order of magnitude of the bar.
+
 It stays opt-in, on two of the five conditions. Latency is the decisive one and it is not close:
 17.9 s a question at depth 200 is eighteen times the bar and four times what `--rerank` pays a
-remote model, because a cross-encoder is one forward pass **per candidate** — 200 pairs of
-(question, snippet) through a 568M-parameter XLM-R encoder, against one embedding of the query.
-Depth is the only dial and it trades the paraphrases away: 100 deep costs half the time and
+remote model. A cross-encoder is one forward pass **per candidate** — 200 pairs of (question,
+snippet) through a 568M-parameter XLM-R encoder, against one embedding of the query. Depth is the
+dial that was measured, and it trades the paraphrases away: 100 deep costs half the time and
 reads 14/30, 40 deep reads 15/30 at a p90 of 237 that is over the token ceiling on its own.
-Keyword is the second failure and it is the same one in all three arms: `NFR-STAFF-04`
-(«ведомость мастера не видна») is a hit for every retriever and the reranker scores it out of
-the five seeds at any depth. A model that never sees the exact-id evidence will do that; the
-pins that Amendment 3 removed for `--rerank` existed to prevent exactly this, and re-adding
-them here would cost two of the five slots the paraphrase gain comes from.
+`score` batches in fused order; the length-sorted batching `embed.rs` already uses, which would
+stop a batch padding to its longest member, was not tried here. It would not change the verdict —
+the gap is eighteen-fold, not marginal — but the claim is that no batching change plausibly
+closes it, not that none was available.
+
+Keyword is the second failure and it is the same case in all three arms: `NFR-STAFF-04`
+(«ведомость мастера не видна»). The cause is not the reranker's judgement. A candidate is shown
+`rerank::text` — the label plus the first **120** characters of the collapsed body — and the
+sentence the question quotes verbatim, «Ведомость мастера не видна другим мастерам», begins at
+character **139** of that 425-character body. The cross-encoder was ranking a snippet that did
+not contain the match, and its five picks are topically coherent; BM25 indexes the whole body and
+keeps the case. So **snippet length is a real and unmeasured dial for this arm**, and it is free
+here: the 120-character cap is a token-budget constant shaped for `--rerank`, which pays per
+character sent to an API. A local model pays nothing for a longer snippet but its own compute. It
+was not tried, deliberately: no snippet change moves an eighteen-fold latency gap, so measuring it
+would only sharpen the account of an arm already rejected. It is the first thing to measure if
+the latency problem is ever solved.
 
 Against the fourteen misses of `docs/bench/2026-09-03-three-graphs-results.md` — the store now
 reads 15/30, not that day's 16/30, so the control is the comparison, not the doc — depth 200
@@ -169,6 +190,7 @@ paraphrase bar is +2 paraphrase for −1 keyword, bought at 300× the latency.
 Adoption would in any case have been a separate change, with its own commit, moving the floor in
 `bench::passes` and the README's Bench list — this amendment records a number and does not move
 anything. The rule is not met, so there is nothing to adopt: `--rerank-local` ships opt-in and
-off every floor, as `--rerank` does. What it settles is the ADR's open question. Every lever
-named here is now measured, and none of them buys paraphrase recall at the zero-token,
-sub-second budget the floors are written to.
+off every floor, as `--rerank` does. What it settles is the ADR's open question — the local
+cross-encoder is measured, and it does not buy paraphrase recall at the zero-token, sub-second
+budget the floors are written to. Two dials remain untried on this arm and neither is a floor
+candidate on its own: snippet length above, and length-sorted batching.

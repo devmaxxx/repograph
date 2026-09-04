@@ -1,0 +1,90 @@
+# repograph bench --rerank-local (depth 200) against beauty-crm, both streams
+# binary: 1463941 (+ round-1 fixes), corpus: 2483d932
+# started: 2026-09-04T11:00:37Z
+keyword    FR-AI-138    HIT   187 tok  расход виден салону
+keyword    FR-VIS-80    HIT   214 tok  арендатор отдельный контур
+keyword    FR-PAY-110   HIT   214 tok  только нативном приложении
+keyword    FR-APP-64    HIT   195 tok  панели отражающие обещания
+keyword    FR-PAY-133   HIT   222 tok  изменение любой позиции
+keyword    FR-PAY-54    HIT   227 tok  групповое занятие кассе
+keyword    FR-TOOL-18   HIT   193 tok  награда выдаётся против
+keyword    FR-WH-05     HIT   211 tok  паритет поверхностей
+keyword    FR-APP-02    HIT   188 tok  место содержимое занято
+keyword    FR-AI-145    HIT   188 tok  знаний салона ассистента
+keyword    FR-PAY-28    HIT   179 tok  зачитывается автоматически
+keyword    FR-VIS-55    HIT   205 tok  сигнал блокирует работу
+keyword    FR-PAY-143   HIT   202 tok  денежные конфликты поведение
+keyword    FR-SVC-04    HIT   190 tok  черновик виден черновик
+keyword    FR-LIFE-29   HIT   181 tok  режим тренировки сотрудника
+keyword    FR-PAY-26    HIT   173 tok  списание штрафа происходит
+keyword    FR-VIS-35    HIT   174 tok  шаблоны ролей салона
+keyword    FR-PAY-82    HIT   243 tok  экономика аренды
+keyword    FR-APP-67    HIT   192 tok  только клиентских поверхностях
+keyword    FR-SVC-50    HIT   140 tok  единый медиа
+keyword    FR-SEC-44    HIT   215 tok  внутренняя система рассмотрения
+keyword    FR-VIS-85    HIT   185 tok  арендатор уходит своей
+keyword    FR-WH-53     HIT   188 tok  отчёты склада
+keyword    FR-AI-97     HIT   209 tok  подсказка расписанию двигает
+keyword    FR-MKT-25    HIT   249 tok  как устроена выдача публикуется
+keyword    FR-MIG-49    HIT   197 tok  честный экран что не переезжает
+keyword    FR-CRM-57    HIT   171 tok  чат канал утечки контактов
+keyword    FR-DM-128    HIT   200 tok  прайс аренды рабочих мест
+keyword    FR-CAL-43    HIT   217 tok  осознанное наложение помечается навсегда
+keyword    FR-SHELL-21  HIT   200 tok  понимает то что печатают
+keyword    FR-RPT-04    HIT   218 tok  деньги и отработанная стоимость
+keyword    FR-WEB-22    HIT   169 tok  hreflang и мультирыночность
+keyword    FR-OPS-81    HIT   158 tok  рабочая локаль не показывается
+keyword    FR-STAFF-63  HIT   230 tok  повторный найм новое членство
+keyword    FR-PH-43     HIT   212 tok  критерий готовности рыночному запуску
+keyword    NFR-STAFF-04 miss  194 tok  ведомость мастера не видна
+keyword    INV-19       HIT   183 tok  система делает сама человек отменяет
+keyword    ADR-024      HIT   217 tok  role_id holds a role name
+keyword    BE-M11       HIT   308 tok  unfiscalized queue protocol adapters
+keyword    W-206        HIT   246 tok  каскадного сдвига дня нет
+paraphrase FR-PAY-104   HIT   191 tok  пакет платёжных бумаг за период для внешнего счетовода
+paraphrase FR-VIS-01    miss  214 tok  перечень незыблемых требований продукта, который проверяет сборка
+paraphrase FR-PAY-03    miss  219 tok  кто получатель платежа записан в документе
+paraphrase FR-SEC-21    HIT   177 tok  как хранится код доступа сотрудника
+paraphrase FR-AI-102    HIT   226 tok  сколько времени держим записи кто решает
+paraphrase FR-SVC-15    HIT   218 tok  создать похожую услугу на основе существующей
+paraphrase FR-AI-66     HIT   166 tok  состояния задачи обратного звонка
+paraphrase FR-VIS-76    HIT   218 tok  кто может оценить визит после подтверждения по смс
+paraphrase FR-AI-21     miss  191 tok  клиент должен сразу понять что говорит робот
+paraphrase FR-TOOL-22   HIT   250 tok  выявление накрутки бонусов
+paraphrase FR-PAY-49    miss  185 tok  как клиент получает фискальный документ
+paraphrase FR-TOOL-18   miss  189 tok  бонус начисляется без участия сотрудника
+paraphrase FR-SVC-39    miss  223 tok  прошлые визиты клиента какие услуги делали
+paraphrase FR-LIFE-17   HIT   174 tok  загрузить услуги из файла при регистрации
+paraphrase FR-MKT-35    miss  251 tok  что видит посетитель каталога, если салон не хочет публиковать цену
+paraphrase FR-STAFF-45  miss  193 tok  как делятся чаевые между теми, кто работал
+paraphrase FR-CRM-11    miss  220 tok  что мешает стереть карточку клиента
+paraphrase FR-RPT-13    HIT   229 tok  как сверяем итоговые числа отчёта с первичными строками
+paraphrase FR-WEB-34    HIT   232 tok  можно ли оплатить сертификат в подарок другому человеку
+paraphrase FR-OPS-24    HIT   229 tok  видит ли наш оператор переписку и визиты чужого бизнеса
+paraphrase FR-CAL-06    HIT   193 tok  учитываются ли польские выходные и перевод стрелок
+paraphrase FR-CAL-101   miss  227 tok  как отдаём освободившееся окно тому, кто ждёт
+paraphrase FR-SHELL-52  HIT   198 tok  что будет, если нажать F5 или стрелку назад
+paraphrase FR-MIG-17    miss  198 tok  что делаем с кривыми телефонными номерами из чужой выгрузки
+paraphrase FR-DM-66     HIT   186 tok  в каких полях сущности отмечено, что она ещё не ушла на сервер
+paraphrase FR-WH-18     HIT   204 tok  как понять, что тюбик просрочен, и какую упаковку тратить первой
+paraphrase ADR-005      HIT   182 tok  чем отличается момент на шкале от времени на стене
+paraphrase ADR-004      miss  188 tok  в каком виде храним суммы, чтобы не терять копейки
+paraphrase INV-16       HIT   205 tok  что запрещает передать сырую карточку клиента во внешнюю модель
+paraphrase N-109        miss  206 tok  видно ли салону, из каких визитов сложилась пришедшая выплата
+code       packages/contracts/src/money.ts HIT    47 tok  asGrosze
+code       packages/contracts/src/errors.ts HIT    27 tok  problemDetailsOf
+code       packages/config/vitest.base.ts HIT    23 tok  vitestBase
+code       packages/domain/src/availability/segments.ts HIT    35 tok  materialiseSegments
+code       packages/domain/src/time/index.ts HIT    27 tok  localDayBounds
+code       packages/domain/src/sync/merge.ts HIT    70 tok  classifyVersionalChange
+code       packages/ports/src/fiscal.ts HIT    22 tok  FiscalPort
+code       packages/db/src/connection.ts HIT    29 tok  resolveConnectionString
+code       apps/api/src/modules/availability/availability-snapshot.service.ts HIT   107 tok  loadAvailabilitySnapshot
+code       apps/api/scripts/emit-openapi.ts HIT    75 tok  splitByNamespace
+code       packages/ui/src/components/ui/badge.tsx HIT    29 tok  badgeVariants
+code       tools/tasks/src/cli.ts HIT    20 tok  staleClaims
+
+keyword 39/40  paraphrase 17/30  code 12/12  p90 229 tok  dense=true rerank_local=true depth=200
+Error: bench floors not met
+$B --repo . bench --rerank-local  8853.40s user 133.52s system 521% cpu 28:43.37 total
+# finished: 2026-09-04T11:29:21Z

@@ -9,7 +9,8 @@ use ort::value::Tensor;
 use std::path::{Path, PathBuf};
 use tokenizers::{PaddingParams, PaddingStrategy, Tokenizer, TruncationParams};
 
-/// Question plus a 120-character snippet is well under this; the cap is the model's.
+/// Ours, not the model's — `max_position_embeddings` is 8194. A question plus the 120-character
+/// snippet `rerank::text` builds is well under it, so it only bounds a pathological label.
 const MAX_TOKENS: usize = 512;
 const BATCH: usize = 16;
 /// How many ids the reranker hands back, best first — `ask` shows five seeds.
@@ -24,13 +25,48 @@ pub fn default_dir() -> Result<PathBuf> {
     Ok(PathBuf::from(home).join(".cache").join("repograph").join("reranker"))
 }
 
+/// The pad token and its id as the model's own files declare them, the way the embedder reads
+/// them from the hub.
+fn pad(dir: &Path) -> Result<(String, u32)> {
+    let read = |f: &str| -> Result<serde_json::Value> {
+        let p = dir.join(f);
+        Ok(serde_json::from_slice(&std::fs::read(&p).with_context(|| format!("read {}", p.display()))?)?)
+    };
+    let config = read("config.json")?;
+    let tok_config = read("tokenizer_config.json")?;
+    let token = tok_config["pad_token"].as_str().context("tokenizer_config.json: pad_token")?.to_string();
+    Ok((token, config["pad_token_id"].as_u64().unwrap_or(0) as u32))
+}
+
+/// The exporter's `text-classification` head is `[batch, labels]`, and only a single-label head
+/// gives one score per pair. `reranker_dir` is user-configurable, so nothing guarantees the
+/// export was that one: a two-label head would interleave two logits per candidate and `pick`
+/// would read every second one as its neighbour's score, silently.
+fn one_logit_per_row(shape: &[i64], batch: usize) -> Result<()> {
+    let labels: i64 = shape.iter().skip(1).product();
+    if shape.first().copied() != Some(batch as i64) || labels != 1 {
+        anyhow::bail!("reranker logits are {shape:?}, expected [{batch}, 1] — this export has {labels} labels per pair, and only a single-label head can be ranked");
+    }
+    Ok(())
+}
+
 impl CrossEncoder {
-    /// `dir` holds `model.onnx` and `tokenizer.json` as the exporter writes them.
+    /// `dir` holds `model.onnx`, `tokenizer.json`, `config.json` and `tokenizer_config.json` as
+    /// the exporter writes them.
     pub fn open(dir: &Path) -> Result<CrossEncoder> {
         let mut tokenizer = Tokenizer::from_file(dir.join("tokenizer.json"))
             .map_err(|e| anyhow!("{e}")).with_context(|| format!("open reranker tokenizer in {}", dir.display()))?;
         tokenizer.with_truncation(Some(TruncationParams { max_length: MAX_TOKENS, ..Default::default() })).map_err(|e| anyhow!("{e}"))?;
-        tokenizer.with_padding(Some(PaddingParams { strategy: PaddingStrategy::BatchLongest, ..Default::default() }));
+        // The default pad id is 0, which is `<s>` for this model family and `<pad>` for others.
+        // The attention mask makes the difference invisible on a graph that honours it — and
+        // that is the assumption worth not making, so take the id the model itself declares.
+        let (pad_token, pad_id) = pad(dir)?;
+        tokenizer.with_padding(Some(PaddingParams {
+            strategy: PaddingStrategy::BatchLongest,
+            pad_token,
+            pad_id,
+            ..Default::default()
+        }));
         let session = Session::builder().map_err(|e| anyhow!("{e}"))?
             .with_optimization_level(GraphOptimizationLevel::Level1).map_err(|e| anyhow!("{e}"))?
             .commit_from_file(dir.join("model.onnx")).map_err(|e| anyhow!("{e}"))
@@ -67,8 +103,8 @@ impl CrossEncoder {
             let logits = outputs.get("logits")
                 .or_else(|| (outputs.len() == 1).then(|| &outputs[0]))
                 .context("reranker has no logits output")?;
-            // [batch, 1]: one logit per (question, text) pair.
-            let (_, data) = logits.try_extract_tensor::<f32>()?;
+            let (shape, data) = logits.try_extract_tensor::<f32>()?;
+            one_logit_per_row(shape, batch)?;
             out.extend(data.iter().copied());
         }
         Ok(out)
@@ -105,6 +141,25 @@ mod tests {
     #[test]
     fn a_nan_score_sorts_as_a_tie_not_a_panic() {
         assert_eq!(pick(&[f32::NAN, 1.0, 0.0], &cands(), 3).len(), 3);
+    }
+
+    #[test]
+    fn a_single_label_head_passes_whether_or_not_the_label_axis_is_kept() {
+        assert!(one_logit_per_row(&[3, 1], 3).is_ok());
+        assert!(one_logit_per_row(&[3], 3).is_ok());
+        assert!(one_logit_per_row(&[3, 1, 1], 3).is_ok());
+    }
+
+    #[test]
+    fn a_two_label_head_is_refused_by_name_rather_than_misread() {
+        let e = one_logit_per_row(&[3, 2], 3).unwrap_err().to_string();
+        assert!(e.contains("[3, 2]") && e.contains("2 labels"), "{e}");
+    }
+
+    #[test]
+    fn a_row_count_that_is_not_the_batch_is_refused() {
+        assert!(one_logit_per_row(&[2, 1], 3).is_err());
+        assert!(one_logit_per_row(&[], 3).is_err());
     }
 
     #[test]
