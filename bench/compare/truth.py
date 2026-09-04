@@ -47,16 +47,30 @@ def files_naming(repo: Path, token: str) -> list[str]:
 
 BLOCK_COMMENT = re.compile(r"/\*.*?\*/", re.S)
 LINE_COMMENT = re.compile(r"(?<!:)//[^\n]*")
+# Single- and double-quoted literals stay on one line; a template literal may not.
+STRING_LITERAL = re.compile(r"'(?:[^'\\\n]|\\.)*'|\"(?:[^\"\\\n]|\\.)*\"|`(?:[^`\\]|\\.)*`", re.S)
+
+
+def _blank(match: re.Match[str]) -> str:
+    # Keep the quotes and the newline count, drop everything else: a multi-line
+    # template literal must not pull the lines after it up to where it opened.
+    body = match.group(0)
+    return body[0] + "\n" * body.count("\n") + body[-1]
 
 
 def strip_comments(src: str) -> str:
-    """Prose is not a reference.
+    """Prose is not a reference, and neither is a string.
 
-    This corpus writes long docblocks that name the symbols they discuss, so a
-    plain grep counts a paragraph about `TenantContextInterceptor` as a file that
-    depends on it. Only code counts.
+    This corpus writes long docblocks that name the symbols they discuss, so a plain grep
+    counts a paragraph about `TenantContextInterceptor` as a file that depends on it. It also
+    names symbols in text: `'PinoLogger:OutboxPublisher'` is a logger's name and an error
+    message can mention an interceptor. Both counted on 2026-09-03 and put two impact targets
+    one file short of 1.0 for a dependency that did not exist. Only code counts. A literal's
+    body is blanked and its quotes kept, so line numbers and bracket depth survive; a
+    `${…}` inside a template literal is blanked with it, which is the one thing this loses.
     """
-    return LINE_COMMENT.sub("", BLOCK_COMMENT.sub("", src))
+    without_comments = LINE_COMMENT.sub("", BLOCK_COMMENT.sub("", src))
+    return STRING_LITERAL.sub(_blank, without_comments)
 
 
 def code_files_naming(repo: Path, token: str) -> list[str]:

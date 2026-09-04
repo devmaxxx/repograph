@@ -46,7 +46,7 @@ with the truth file is wrong about the repository, not about a rival's model.
 |---|---|---|
 | retrieval, strict | the expected id itself | the id appears in the answer |
 | retrieval, soft | every file that spells that id | one of those files appears in the answer |
-| impact | every file naming the symbol, minus the file declaring it | share of those files the answer names |
+| impact | every file naming the symbol in code — comments and string literals blanked — minus the file declaring it | share of those files the answer names |
 | trace | the chain through injected fields, found by breadth-first search | every intermediate name appears, and the tool does not say "no path" |
 | changes | the enclosing declaration of every hunk in the diff | share of those symbols the answer names |
 
