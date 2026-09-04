@@ -139,10 +139,12 @@ main suite uses.
 
 ## Reading a result file
 
-`bench/results/<date>-<repo>.json` carries the corpus path, the commit, the suites that
-ran with the case count of each — a `--suites blast` run has no retrieval count, because it
-asked no retrieval question — and per tool a `rows` array (one record per case) and a
-`summary`. Two result files from different dates are comparable when the commit and the
+`bench/results/<date>-<repo>.json` carries the corpus path, the commit, the case counts,
+and per tool a `rows` array (one record per case) and a `summary`. From 2026-09-04 it also
+names the `suites` that ran and counts cases for those alone — a `--suites blast` run has no
+retrieval count, because it asked no retrieval question. `2026-09-04-beauty-crm-mobile.json`
+is the first file with the field; every earlier one counts both suites whether or not both
+ran. Two result files from different dates are comparable when the commit and the
 tool versions in the header say they are — the numbers move with the corpus, not only
 with the tools.
 
@@ -171,6 +173,22 @@ altogether is refused rather than scored as a miss.
   runs' `changes` fractions are comparable only when both ran at the same corpus
   commit — it is in every result file's header, and a reader comparing `changes`
   across runs has to check it before comparing anything else.
+- **The `changes` truth does not blank comments and string literals, though the `impact`
+  truth does.** `strip_comments` is composed into `code_files_naming` and nowhere else, so a
+  name that appears only in a docblock or a string can enter a `changes` case's expected
+  symbol set, and a tool is scored as missing a symbol the diff never really declared. It
+  shares a root with the `declaration_end` regex-literal defect recorded beside the
+  2026-09-04 numbers — a literal read as though it were code — but it is a separate
+  limitation and the same change does not close both. Open because fixing it moves the
+  numbers in repograph's favour and needs the whole suite re-run to say by how much.
+- **The pattern that decides a rank over-matches.** `run.py`'s `ID_TOKEN` accepts more than
+  this corpus's ids: `UTF-8`, `SHA-256`, `RFC-7807` and `ISO-8601` all fit its shape. Any of
+  them standing in an answer ahead of the expected id counts as a competitor, inflating that
+  row's rank and pulling MRR down, so a published MRR — 0.635 on 2026-09-04 — may be
+  pessimistic by an unmeasured amount. The error only ever runs that way; it cannot flatter a
+  tool. `repograph.toml`'s `id_families` already lists the corpus's real families and is what
+  the pattern could read instead of guessing a shape. Open because restating the number means
+  asking all 82 questions again.
 
 ## When a blast delta counts
 
