@@ -1,7 +1,7 @@
 """Ground truth for the three-graph comparison, derived from the repository itself.
 
 No graph tool is consulted here. Every expectation is read from the source with
-ripgrep and a small TypeScript reader, so a tool that disagrees with this file is
+ripgrep and a small reader per language, so a tool that disagrees with this file is
 wrong about the repository, not about a rival's model.
 """
 
@@ -23,13 +23,6 @@ FIELD = re.compile(r"(?:private|public|protected|readonly)\s+(?:readonly\s+)?(\w
 # `this.db.run(` and `this.db\n  .run(` are the same call; tree-sitter sees no
 # newline and neither may we, or the truth undercounts what the tools find.
 CALL = re.compile(r"this\.(\w+)\s*\.\s*(\w+)\s*\(", re.S)
-# A hunk inside a file-private helper still touches a symbol a graph should name,
-# so the export keyword is optional here.
-TOP_LEVEL = re.compile(
-    r"^(?:export\s+(?:default\s+)?)?(?:abstract\s+)?(?:async\s+)?"
-    r"(?:class|function|const|let|interface|type|enum)\s+(\w+)",
-    re.M,
-)
 
 
 def rg(repo: Path, args: list[str]) -> list[str]:
@@ -45,54 +38,12 @@ def files_naming(repo: Path, token: str) -> list[str]:
     return sorted(rg(repo, ["-l", "--word-regexp", "--fixed-strings", token]))
 
 
-BLOCK_COMMENT = re.compile(r"/\*.*?\*/", re.S)
-LINE_COMMENT = re.compile(r"(?<!:)//[^\n]*")
-# A single- or double-quoted literal excludes a bare newline in its body, not a
-# template literal: a `\` line continuation still spans lines, but only via the
-# backslash-escape branch, not the character class.
-STRING_LITERAL = re.compile(r"'(?:[^'\\\n]|\\.)*'|\"(?:[^\"\\\n]|\\.)*\"|`(?:[^`\\]|\\.)*`", re.S)
-
-
-def _blank(match: re.Match[str]) -> str:
-    # Keep the quotes and the newline count, drop everything else: a multi-line
-    # template literal must not pull the lines after it up to where it opened.
-    body = match.group(0)
-    return body[0] + "\n" * body.count("\n") + body[-1]
-
-
-def _newlines(match: re.Match[str]) -> str:
-    # A docblock is dropped whole but its line count is kept, for the same reason: the
-    # declaration under a multi-line comment stays on the line it was written on.
-    return "\n" * match.group(0).count("\n")
-
-
-def strip_comments(src: str) -> str:
-    """Prose is not a reference, and neither is a string.
-
-    This corpus writes long docblocks that name the symbols they discuss, so a plain grep
-    counts a paragraph about `TenantContextInterceptor` as a file that depends on it. It also
-    names symbols in text: `'PinoLogger:OutboxPublisher'` is a logger's name and an error
-    message can mention an interceptor. Both counted on 2026-09-03 and put two impact targets
-    one file short of 1.0 for a dependency that did not exist. Only code counts. A literal's
-    body is blanked and its quotes kept, and a comment leaves its newlines behind, so line
-    numbers and bracket depth survive; a `${…}` inside a template literal is blanked with it,
-    which is the one thing this loses.
-    A regex literal containing a quote character (`/'/`) desyncs the scan for the rest of
-    that line: the quote branch opens on it and closes on the next real string's opening
-    quote, so a symbol named in that string can survive un-blanked. Closing that properly
-    needs a tokeniser, which is out of scope here.
-
-    This serves the impact search only, where the question is boolean and a stray line is a
-    stray line. `changed_symbols` needs bracket-exact and line-exact output and uses
-    `blank_typescript` instead.
-    """
-    without_comments = LINE_COMMENT.sub("", BLOCK_COMMENT.sub(_newlines, src))
-    return STRING_LITERAL.sub(_blank, without_comments)
-
-
 # A `/` opens a regular expression only in an operand position. After an identifier, a `)`
-# or a `]` the same character divides, so those must not be listed here.
-REGEX_OPENS_AFTER = set("=(,:[!&|?{};")
+# or a `]` the same character divides, so those must not be listed here. Nor does `}`:
+# `<A x={1} />` in a .tsx file would read its self-closing slash as a literal opening, and
+# the `} /re/` it would otherwise buy is a statement start, which the empty-prefix case
+# already covers.
+REGEX_OPENS_AFTER = set("=(,:[!&|?;")
 REGEX_OPENS_AFTER_WORD = re.compile(
     r"(?:^|[^\w$.])(?:return|typeof|instanceof|case|in|of|new|delete|void|throw|do|else|yield|await)\s*$"
 )
@@ -122,17 +73,27 @@ def _regex_end(src: str, start: int) -> int | None:
 def _blank_source(src: str, *, kotlin: bool) -> str:
     r"""Comments and text blanked out of `src`, line for line, in one left-to-right pass.
 
-    One pass rather than `strip_comments`' three substitutions, because `changed_symbols`
-    needs two things that a boolean search did not. Line numbers must survive exactly, since
-    hunk ranges are mapped onto declaration spans and a lost line shifts every declaration
-    under it. And brackets must survive exactly, since `declaration_end` balances them.
+    Prose is not a reference and neither is a string. This corpus writes long docblocks that
+    name the symbols they discuss, so a plain grep counts a paragraph about
+    `TenantContextInterceptor` as a file that depends on it; it also names symbols in text,
+    where `'PinoLogger:OutboxPublisher'` is a logger's name and an error message can mention an
+    interceptor. Both counted on 2026-09-03 and put two impact targets one file short of 1.0
+    for a dependency that did not exist.
 
-    Applying the pattern for comments before the pattern for strings gets both wrong on this
-    corpus: `'apps/*'` in packages/ui/test/boundary.test.ts opens a block comment that runs
-    until the next `*/` seventy lines below, and `'//'` in packages/config/test/config-boundary.test.ts
-    deletes the rest of its line. Both take the closing bracket of a real array with them, and
-    both then ran a declaration to the end of the file. A scanner cannot make that mistake:
-    whichever of the two opens first wins, which is what the language does.
+    One left-to-right pass rather than one substitution per construct, because the same output
+    also feeds `changed_symbols`, which needs two things a boolean search did not. Line numbers
+    must survive exactly, since hunk ranges are mapped onto declaration spans and a lost line
+    shifts every declaration under it. And brackets must survive exactly, since
+    `declaration_end` balances them.
+
+    Substituting comments before strings gets both wrong on this corpus: `'apps/*'` in
+    packages/ui/test/boundary.test.ts opens a block comment that runs until the next `*/`
+    seventy lines below, `'//'` in packages/config/test/config-boundary.test.ts deletes the rest
+    of its line, and a `//` after a ternary's colon survives because the pattern guarding
+    against `http://` cannot tell the two colons apart. The first two take the closing bracket
+    of a real array with them and ran a declaration to the end of the file. A scanner cannot
+    make any of those mistakes: whichever construct opens first wins, which is what the
+    language does.
 
     The two dialects differ in four ways, all of them load-bearing here. Kotlin nests block
     comments, so `/* a /* b */ c */` closes once. Kotlin has raw `\"\"\"…\"\"\"` strings that hold
@@ -228,10 +189,19 @@ def blank_kotlin(src: str) -> str:
     return _blank_source(src, kotlin=True)
 
 
+def blanked_source(rel: str, src: str) -> str:
+    """`src` with its comments and text blanked, in the dialect `rel`'s extension implies."""
+    return blank_kotlin(src) if rel.endswith(".kt") else blank_typescript(src)
+
+
+# Up to three levels of nesting, because `fun <reified E : Enum<E>> enum(…)` in
+# FixtureLoader.kt has two and a receiver such as `Map<String, List<Int>>` has two more.
+GENERIC = r"<(?:[^<>\n]|<(?:[^<>\n]|<[^<>\n]*>)*>)*>"
+
 KOTLIN_MODIFIER = (
     "public|private|internal|protected|open|final|abstract|sealed|data|enum|annotation|"
     "value|inner|expect|actual|override|lateinit|const|external|infix|inline|operator|"
-    "suspend|tailrec|companion"
+    "suspend|tailrec|companion|reified"
 )
 KOTLIN_NAME = r"`[^`\n]+`|\w+"
 # `fun interface` before `fun`, or the name of a `fun interface Renderer` reads as `interface`.
@@ -241,36 +211,91 @@ KOTLIN_DECL = re.compile(
     rf"^[ \t]*(?:@[\w.]+(?:\([^()\n]*\))?[ \t]*)*"
     rf"(?:(?:{KOTLIN_MODIFIER})[ \t]+)*"
     rf"(?P<kw>fun[ \t]+interface|class|interface|object|fun|val|var|typealias)\b"
-    rf"(?:[ \t]*<[^<>\n]*>)?"
-    rf"(?:[ \t]+(?:[\w.]+(?:<[^<>\n]*>)?\.)?(?P<name>{KOTLIN_NAME}))?"
+    rf"(?:[ \t]*{GENERIC})?"
+    rf"(?:[ \t]+(?:\w+(?:{GENERIC})?(?:\.\w+(?:{GENERIC})?)*\.)?(?P<name>{KOTLIN_NAME}))?"
 )
 # The bodies these open hold declarations; every other brace opens a block that holds statements.
 KOTLIN_TYPE_KEYWORDS = {"class", "interface", "object", "fun interface"}
 
+TS_MODIFIER = "export|default|declare|abstract|async|static|public|private|protected|readonly|override|accessor"
+TS_DECL = re.compile(
+    rf"^[ \t]*(?:@[\w.]+(?:\([^()\n]*\))?[ \t]*)*"
+    rf"(?:(?:{TS_MODIFIER})[ \t]+)*"
+    rf"(?P<kw>class|function|interface|enum|namespace|module|const|let|var|type)\b"
+    rf"(?:[ \t]*\*)?"
+    rf"(?:[ \t]+(?P<name>[\w$]+))?"
+)
+# A class or interface member carries no keyword at all — it is a name followed by a call
+# signature, a type annotation or an initialiser. Only reachable inside a type body, so a
+# `for (` or an `if (` in a function body can never be read as one.
+TS_MEMBER = re.compile(
+    rf"^[ \t]*(?:@[\w.]+(?:\([^()\n]*\))?[ \t]*)*"
+    rf"(?:(?:public|private|protected|readonly|static|abstract|override|async|declare|accessor)[ \t]+)*"
+    rf"(?:(?:get|set)[ \t]+)?"
+    rf"\*?[ \t]*"
+    rf"(?P<name>[\w$]+)"
+    rf"[ \t]*[?!]?[ \t]*(?:{GENERIC}[ \t]*)?[(:=;]"
+)
+TS_TYPE_KEYWORDS = {"class", "interface", "namespace", "module"}
 
-def kotlin_declarations(blanked: str) -> list[tuple[int, str]]:
-    """(line, name) for every Kotlin declaration in already-blanked source.
+# A declaration's header can outlive its line — `class Receipt(\n…\n) {` and
+# `interface Config<T>\n  extends Omit<…> {` both put the body brace lower down — but it must
+# not outlive the declaration, or a bodyless `class Empty` hands its type body to the next
+# unrelated brace and the locals inside that block are read as members. A header carries on
+# when the line before it ends open or the line after it starts as a continuation; anything
+# else ends it.
+HEADER_TAIL = set(",([:<=&|")
+HEADER_HEAD = set("{,):>&|")
+HEADER_WORD = r"extends|implements|where|by"
+HEADER_TAIL_WORD = re.compile(rf"(?:^|[^\w])(?:{HEADER_WORD})$")
+HEADER_HEAD_WORD = re.compile(rf"^(?:{HEADER_WORD})\b")
+
+
+def _scoped_declarations(
+    blanked: str,
+    *,
+    decl: re.Pattern[str],
+    member: re.Pattern[str] | None,
+    type_keywords: set[str],
+) -> list[tuple[int, str]]:
+    """(line, name) for every declaration in already-blanked source, by brace scope.
 
     Brace scope, not indentation. `val x = 1` at the head of a function body is a local and
-    `val x = 1` in a class body is a property: the two are written identically and only the
-    block they sit in tells them apart, so the stack records what each open brace belongs to.
-    A constructor parameter is left out — the hunk that touches a type's header touches the
-    type, which is already named — which is also where the TypeScript reader draws the line.
+    `val x = 1` in a class body is a property; `const x = 1` and `if (x) {` sit at the same
+    column in TypeScript. Only the block they are in tells them apart, so the stack records,
+    for each open brace, whether what it opened holds declarations or statements.
 
-    A name in backticks is reported without them: a tool that answers with the backticks still
-    contains the bare name, and one that answers without them would otherwise be marked wrong.
+    `decl` is the keyword form and is read at any declaring scope. `member` is the keyless
+    form — a TypeScript method or property — and is read only directly inside a type body,
+    which is what keeps a `for (` out of the truth. Kotlin passes none, because there a member
+    is spelled with the same `fun` or `val` as a top-level declaration.
+
+    A constructor parameter is left out in both dialects: the hunk that touches a type's
+    header touches the type, which is already named. So is an enum entry, and so is the
+    TypeScript `constructor`, which is a keyword rather than a name a graph would report.
     """
     found: list[tuple[int, str]] = []
     holds_declarations: list[bool] = []
     parens = 0
     pending: bool | None = None
+    open_header = False
     for index, line in enumerate(blanked.split("\n")):
-        if parens == 0 and (not holds_declarations or holds_declarations[-1]):
-            match = KOTLIN_DECL.match(line)
+        head = line.strip()
+        if pending is not None and parens == 0 and not open_header:
+            carries_on = bool(head) and (head[0] in HEADER_HEAD or HEADER_HEAD_WORD.search(head))
+            if not carries_on:
+                pending = None
+        inside_type = bool(holds_declarations) and holds_declarations[-1]
+        if parens == 0 and (not holds_declarations or inside_type):
+            match = member.match(line) if (member and inside_type) else None
             if match:
-                pending = " ".join(match.group("kw").split()) in KOTLIN_TYPE_KEYWORDS
-                if match.group("name"):
-                    found.append((index + 1, match.group("name").strip("`")))
+                pending = False
+            else:
+                match = decl.match(line)
+                if match:
+                    pending = " ".join(match.group("kw").split()) in type_keywords
+            if match and match.group("name") and match.group("name") != "constructor":
+                found.append((index + 1, match.group("name").strip("`")))
         for char in line:
             if char == "{":
                 # Only the first brace after a declaration is that declaration's body; a
@@ -283,23 +308,45 @@ def kotlin_declarations(blanked: str) -> list[tuple[int, str]]:
                 parens += 1
             elif char == ")" and parens:
                 parens -= 1
+        tail = line.rstrip()
+        open_header = bool(tail) and (tail[-1] in HEADER_TAIL or bool(HEADER_TAIL_WORD.search(tail)))
     return found
+
+
+def kotlin_declarations(blanked: str) -> list[tuple[int, str]]:
+    """(line, name) for every Kotlin declaration in already-blanked source.
+
+    A name in backticks is reported without them: a tool that answers with the backticks still
+    contains the bare name, and one that answers without them would otherwise be marked wrong.
+    """
+    return _scoped_declarations(blanked, decl=KOTLIN_DECL, member=None, type_keywords=KOTLIN_TYPE_KEYWORDS)
+
+
+def typescript_declarations(blanked: str) -> list[tuple[int, str]]:
+    """(line, name) for every TypeScript declaration in already-blanked source.
+
+    Class and interface members are read as well as top-level declarations, so that this
+    denominator asks a Kotlin file and a TypeScript file the same question. Anchoring at
+    column zero instead would ask a much easier one of TypeScript, and a mixed-language score
+    would then be two measurements added together.
+    """
+    return _scoped_declarations(blanked, decl=TS_DECL, member=TS_MEMBER, type_keywords=TS_TYPE_KEYWORDS)
 
 
 def declarations(rel: str, src: str) -> tuple[list[str], list[tuple[int, str]]]:
     """The blanked lines of one file and the (line, name) of every declaration in it."""
-    if rel.endswith(".kt"):
-        blanked = blank_kotlin(src)
-        return blanked.split("\n"), kotlin_declarations(blanked)
-    blanked = blank_typescript(src)
-    starts = [(blanked[: m.start()].count("\n") + 1, m.group(1)) for m in TOP_LEVEL.finditer(blanked)]
-    return blanked.split("\n"), starts
+    blanked = blanked_source(rel, src)
+    reader = kotlin_declarations if rel.endswith(".kt") else typescript_declarations
+    return blanked.split("\n"), reader(blanked)
 
 
 def code_files_naming(repo: Path, token: str) -> list[str]:
     word = re.compile(rf"\b{re.escape(token)}\b")
     hits = rg(repo, ["-l", "--word-regexp", "--fixed-strings", token, *CODE_GLOBS])
-    return sorted(f for f in hits if word.search(strip_comments((repo / f).read_text(encoding="utf8", errors="replace"))))
+    return sorted(
+        f for f in hits
+        if word.search(blanked_source(f, (repo / f).read_text(encoding="utf8", errors="replace")))
+    )
 
 
 def declaration_of(repo: Path, name: str) -> str | None:

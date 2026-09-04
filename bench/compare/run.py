@@ -216,6 +216,18 @@ def named(answer: str, paths: list[str]) -> list[str]:
     return [p for p in paths if p in answer]
 
 
+def spells(answer: str, symbol: str) -> bool:
+    """Whether `answer` names `symbol` as a whole word rather than as a run of characters.
+
+    The changes truth reads class members, and a member name is often three or four letters:
+    `has`, `key`, `now`, `code`, `next`, `parse`, `flag`, `lock`. A bare `in` test credits a
+    tool for those letters landing anywhere in its output — `has` inside `hash`, `key` inside
+    `keys` — which inflates the numerator exactly where the denominator grew, and the two
+    errors do not cancel. `$` counts as part of a name because JavaScript allows it in one.
+    """
+    return re.search(rf"(?<![\w$]){re.escape(symbol)}(?![\w$])", answer) is not None
+
+
 def score_retrieval(tool: Tool, cases: list[dict], truth: dict) -> list[dict]:
     rows = []
     for case in cases:
@@ -274,7 +286,7 @@ def score_blast(tool: Tool, cases: list[dict], truth: dict) -> list[dict]:
             rows.append({
                 "suite": "blast", "kind": "changes", "base": case["base"],
                 "want_files": len(files), "found_files": len(named(answer, files)),
-                "want_symbols": len(symbols), "found_symbols": sum(1 for s in symbols if s in answer),
+                "want_symbols": len(symbols), "found_symbols": sum(1 for s in symbols if spells(answer, s)),
                 "ms": round(ms), "chars": len(answer.strip()),
             })
     return rows

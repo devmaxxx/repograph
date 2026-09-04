@@ -17,6 +17,7 @@ from run import (
     load_id_families,
     rank_of,
     score_blast,
+    spells,
     summarise,
 )
 
@@ -266,6 +267,23 @@ class GitnexusUnansweredCallsDoNotScoreAsHits(unittest.TestCase):
         with mock.patch("run.subprocess.run", return_value=fake_proc(0, payload)):
             score_blast(tool, cases=[self._case(), self._case()], truth={})
         self.assertEqual(tool.failed_calls, 2)
+
+
+class SpellsSymbol(unittest.TestCase):
+    """A symbol is credited when the answer names it, not when the letters happen to occur."""
+
+    def test_a_short_name_is_not_credited_by_a_longer_word(self):
+        self.assertFalse(spells("the hash of the row", "has"))
+        self.assertFalse(spells("returns keys and values", "key"))
+        self.assertFalse(spells("parseAll(x)", "parse"))
+
+    def test_a_name_is_credited_when_the_answer_spells_it(self):
+        self.assertTrue(spells("calls has() on the row", "has"))
+        self.assertTrue(spells("changed: `key`, `code`", "key"))
+        self.assertTrue(spells("Registry.count", "count"))
+
+    def test_a_backticked_kotlin_test_name_is_matched_whole(self):
+        self.assertTrue(spells("fun `a rule holds`()", "a rule holds"))
 
 
 if __name__ == "__main__":
