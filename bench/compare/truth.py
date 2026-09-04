@@ -33,7 +33,10 @@ TOP_LEVEL = re.compile(
 
 
 def rg(repo: Path, args: list[str]) -> list[str]:
-    out = subprocess.run(["rg", *args, *EXCLUDE], cwd=repo, capture_output=True, text=True)
+    # stdin detached: ripgrep searches stdin instead of the tree when stdin is not a tty,
+    # which turned every truth list empty under a heredoc and would do the same in CI.
+    out = subprocess.run(["rg", *args, *EXCLUDE], cwd=repo, capture_output=True, text=True,
+                         stdin=subprocess.DEVNULL)
     return [line for line in out.stdout.split("\n") if line]
 
 

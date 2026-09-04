@@ -47,6 +47,7 @@ def main() -> None:
     row("strict, paraphrase", ret("strict", "paraphrase"))
     row("strict, code", ret("strict", "code"))
     row("soft, all", ret("soft"))
+    row("retrieval, MRR", lambda x: x.get("retrieval", {}).get("mrr"))
     row("answer, median chars", lambda x: x.get("retrieval", {}).get("chars_median"))
     row("answer, median ms", lambda x: x.get("retrieval", {}).get("ms_median"))
     row("impact, mean recall", lambda x: x.get("impact", {}).get("recall_mean"))

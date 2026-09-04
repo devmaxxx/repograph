@@ -23,6 +23,33 @@ import truth as T
 
 NO_PATH = re.compile(r"no call path|No directed path|\"status\":\s*\"no_path\"|no path", re.I)
 
+# What competes with an answer for the reader's eye: another id of the same shape, or for a
+# file case another path. `BE-M17`, `FR-AI-138`, `INV-16`, `N-137` all match the first;
+# `docs/prd/x.md` and `apps/api/src/y.ts` the second.
+ID_TOKEN = re.compile(r"\b[A-Z]{1,5}(?:-[A-Z]{1,6})?-[A-Z]?\d{1,4}\b")
+PATH_TOKEN = re.compile(r"[\w./-]+/[\w.-]+\.(?:tsx?|kt|md|json|ya?ml|sql)\b")
+
+
+def rank_of(answer: str, want: str) -> int | None:
+    """1 + the distinct competing answers a reader passes before `want`.
+
+    Strict is a substring test and says nothing about where in the answer the id sits — an id
+    fifth of five counted the same as first on 2026-09-03. This counts the other ids (for a
+    file case, the other paths) that appear before the first occurrence of `want`: first reads
+    1, buried behind four neighbours reads 5. Tool-agnostic on purpose: it reads the text every
+    tool prints, not a structure only one of them has.
+    """
+    at = answer.find(want)
+    if at < 0:
+        return None
+    pattern = PATH_TOKEN if "/" in want else ID_TOKEN
+    seen: list[str] = []
+    for m in pattern.finditer(answer[:at]):
+        token = m.group(0)
+        if token != want and token not in seen:
+            seen.append(token)
+    return len(seen) + 1
+
 
 class Tool:
     name = ""
@@ -102,6 +129,7 @@ def score_retrieval(tool: Tool, cases: list[dict], truth: dict) -> list[dict]:
         rows.append({
             "suite": "retrieval", "kind": case["kind"], "q": case["q"], "expect": want,
             "strict": want in answer, "soft": bool(named(answer, files)),
+            "rank": rank_of(answer, want),
             "ms": round(ms), "chars": len(answer.strip()),
         })
     return rows
@@ -166,9 +194,11 @@ def summarise(rows: list[dict]) -> dict:
             slot["n"] += 1
             slot["strict"] += r["strict"]
             slot["soft"] += r["soft"]
+        ranks = [r.get("rank") for r in ret]
         out["retrieval"] = {
             "by_kind": by_kind,
             "strict": sum(r["strict"] for r in ret), "soft": sum(r["soft"] for r in ret), "n": len(ret),
+            "mrr": round(statistics.mean(1 / r if r else 0.0 for r in ranks), 3),
             "ms_median": round(statistics.median(r["ms"] for r in ret)),
             "chars_median": round(statistics.median(r["chars"] for r in ret)),
         }

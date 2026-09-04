@@ -120,11 +120,16 @@ result files from different dates are comparable when the commit and the tool
 versions in the header say they are — the numbers move with the corpus, not only
 with the tools.
 
+Every retrieval row since 2026-09-04 also carries `rank`: 1 + the distinct competing ids (for
+a file case, paths) that appear in the answer before the expected one, or `null` when it is
+absent. The summary's `mrr` is the mean of `1/rank` over the suite with absences as 0. Strict
+says whether the answer is there; MRR says how far down. The 2026-09-03 file predates the field.
+
 ## Caveats that belong with every number
 
 - One run per row, no repeats. For a fraction out of 30 the confidence interval is
   wider than the gap between neighbouring rows.
-- The strict criterion is a substring: an id fifth of five counts the same as first.
+- The strict criterion is a substring; `rank` and `mrr` are what say where in the answer it sat.
 - Latency is wall clock for a whole process, so every tool pays its own start-up.
   gitnexus also has an `eval-server` that skips it; the numbers here do not use it,
   because the other two have no equivalent.
