@@ -75,11 +75,18 @@ pub fn ask(graph: &Graph, ids: &IdMatcher, questions: &Questions, dense: Option<
         let depth = if rerank.is_some() { opts.depth } else { 20 };
         // Dense passages go first: they are the retriever the paraphrase floor rests on, so they
         // get the odd seed. The BM25 list over the generated questions comes before the one over
-        // the passages: on 400 held-out generated questions it lifts recall@5 from 0.445 to 0.515
-        // beside the dense list and from 0.395 to 0.527 without it, with the keyword and
-        // paraphrase cases unchanged. Pooled into the passage rows instead it buries targets (a
-        // passage at rank 2 fell to 87), so it stays a list of its own. The dense rows over the
-        // generated questions add nothing at five seeds and only feed the reranker's pool.
+        // the passages: on 400 held-out generated questions it lifted recall@5 from 0.445 to
+        // 0.515 beside the dense list and from 0.395 to 0.527 without it. Pooled into the
+        // passage rows instead it buries targets (a passage at rank 2 fell to 87), so it stays a
+        // list of its own. The dense rows over the generated questions add nothing at five seeds
+        // and only feed the reranker's pool.
+        //
+        // That ordering is now known to cost something the held-out set did not show. Leading
+        // the merge, the questions list displaces exact keyword seeds: on the 82 recorded cases
+        // the no-dense arm reads 39/40 keyword on a raw store and 37/40 once the questions
+        // exist, losing FR-WH-53 and W-206. Paraphrase pays for it in the same arm, 7/30 to
+        // 15/30. The dense arm is untouched, because there the passage list leads. Which way
+        // that trade should go is open and measured in gap G7; nothing here decides it.
         let mut lists: Vec<Vec<String>> = Vec::new();
         let mut generated: Vec<String> = Vec::new();
         if opts.dense {

@@ -241,7 +241,10 @@ repograph dump --queries qs.jsonl --out lists.json   # every retriever's ranked 
    interleave lifted paraphrase recall from 5/14 to 6/14 at +2 tokens p90. The question list was
    measured on 400 held-out generated questions: recall@5 0.445 → 0.515 beside the dense list and
    0.395 → 0.527 without it (exact McNemar p < 0.001 both), keyword and code cases unchanged, the
-   no-dense paraphrase cases 3/14 → 5/14, at +3 tokens p90 with embeddings and +15 without.
+   no-dense paraphrase cases 3/14 → 5/14, at +3 tokens p90 with embeddings and +15 without — all
+   of that on the 14-case set of the day. On the 82 cases recorded since, the no-dense arm reads
+   keyword 39/40 without the questions and 37/40 with them, so leading the merge with that list
+   does cost exact seeds; see gap G7 and the Bench table below.
 5. **Expand.** One hop over `References`, `Implements`, `Declares`, `Links` and `Legacy` edges, in
    both directions, keeping the single neighbour the retrievers ranked best, however far down
    their lists; a neighbour no retriever ranked falls back to its seed's rank. Measured on 400
