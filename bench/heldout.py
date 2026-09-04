@@ -43,7 +43,10 @@ def cmd_build(args):
     rng = random.Random(args.seed)
     out = []
     for node in rng.sample(nodes, args.size):
-        out.append({"kind": "paraphrase", "q": rng.choice(entries[node]["questions"]), "expect": node})
+        # `synthetic` is the kind `dump` applies leave-one-out to. Any other kind leaves the
+        # question's own text in the index, and recall@5 then measures the index finding its
+        # own sentence: 0.955 on this corpus, against 0.28 once the text is actually held out.
+        out.append({"kind": "synthetic", "q": rng.choice(entries[node]["questions"]), "expect": node})
     Path(args.out).write_text("".join(json.dumps(r, ensure_ascii=False) + "\n" for r in out))
     print(f"{args.size} questions from {len(nodes)} enriched nodes, seed {args.seed} -> {args.out}")
 

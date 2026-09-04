@@ -79,8 +79,14 @@ pub fn run(repo: &Path, queries: &Path, out: &Path, depth: usize) -> Result<()> 
         let (dense_passages, dense_questions) = dense_idx.search_scored(&qvec, depth, Some(&loo_hash));
         // The same vector `ask` would embed for this question, so the recorded answer is the
         // binary's own and the offline replication can be checked against it query by query.
-        let dense_fn = |_: &str, k: usize| dense_idx.search(&qvec, k);
-        let answer = query::ask(&graph, &ids, &questions, Some(&dense_fn), None, &words, &opts);
+        // It answers from the same held-out indices the four lists come from: a synthetic
+        // query answered over the full store finds its own row, and `heldout.py compare`
+        // would then be scoring the leak rather than the binary.
+        let dense_fn = |_: &str, k: usize| {
+            let (p, g) = dense_idx.search_scored(&qvec, k, Some(&loo_hash));
+            (p.into_iter().map(|(id, _)| id).collect(), g.into_iter().map(|(id, _)| id).collect())
+        };
+        let answer = query::ask(&graph, &ids, &loo, Some(&dense_fn), None, &words, &opts);
         records.push(Record {
             q: q.q.clone(),
             expect: q.expect.clone(),

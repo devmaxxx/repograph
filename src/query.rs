@@ -29,6 +29,15 @@ const MAX_EXPANDED: usize = 1;
 /// first, so two seeds were pinned; shown text, the pins were the retrievers' guess taking two
 /// of the model's five slots, and unpinning them is what took paraphrase from 13/14 to 14/14.
 const PINNED: usize = 0;
+/// The generated-questions BM25 list joins the fusion only when its best score is at least
+/// this fraction of the passage list's best. Below it, on 400 held-out questions, the passage
+/// list is the one holding the answer (30% in its top five against 21%) and dropping the
+/// questions list costs nothing measurable (dense −7 +5, lexical −9 +5, exact McNemar
+/// p = 0.77 and 0.42); above it the questions list is the better retriever (24% against 12%).
+/// The value sits in the gap between the two constraints: the held-out set tolerates anything
+/// up to 0.90, and below 0.85 the keyword case `FR-WH-53` (ratio 0.80) keeps losing its seat.
+/// That gap is narrow, and gap G7 records it as narrow.
+const QUESTIONS_GATE: f32 = 0.85;
 
 fn hit(graph: &Graph, id: &str, score: f32, via: Option<&str>) -> Option<Hit> {
     let n = graph.nodes.get(id)?;
@@ -81,12 +90,14 @@ pub fn ask(graph: &Graph, ids: &IdMatcher, questions: &Questions, dense: Option<
         // list of its own. The dense rows over the generated questions add nothing at five seeds
         // and only feed the reranker's pool.
         //
-        // That ordering is now known to cost something the held-out set did not show. Leading
-        // the merge, the questions list displaces exact keyword seeds: on the 82 recorded cases
-        // the no-dense arm reads 39/40 keyword on a raw store and 37/40 once the questions
-        // exist, losing FR-WH-53 and W-206. Paraphrase pays for it in the same arm, 7/30 to
-        // 15/30. The dense arm is untouched, because there the passage list leads. Which way
-        // that trade should go is open and measured in gap G7; nothing here decides it.
+        // On a keyword-shaped question the questions list has little to say — over the forty
+        // recorded keyword cases it holds the answer in its top five eight times and lacks it
+        // outright ten — yet an equal turn in the round-robin hands it half of five seeds, and
+        // the exact passage row goes past the cut. Thinning its turns for every question was
+        // measured and rejected (gap G7): on held-out paraphrases it is the retriever doing the
+        // work. So it is admitted per question, on how strongly it matched against how strongly
+        // the passages did; the two BM25 indices share a corpus and a tokenizer, so their best
+        // scores compare. An empty store never clears the gate and the raw arms are untouched.
         let mut lists: Vec<Vec<String>> = Vec::new();
         let mut generated: Vec<String> = Vec::new();
         if opts.dense {
@@ -96,16 +107,19 @@ pub fn ask(graph: &Graph, ids: &IdMatcher, questions: &Questions, dense: Option<
                 generated = questions_rows;
             }
         }
-        let lexical = |index: LexicalIndex| -> Vec<String> { index.search(&query, depth).into_iter().map(|(id, _)| id).collect() };
+        let only_ids = |scored: Vec<(String, f32)>| -> Vec<String> { scored.into_iter().map(|(id, _)| id).collect() };
         if rerank.is_some() {
             lists.push(generated);
-            lists.push(lexical(LexicalIndex::build(graph)));
-            lists.push(lexical(LexicalIndex::build_questions(graph, questions)));
+            lists.push(only_ids(LexicalIndex::build(graph).search(&query, depth)));
+            lists.push(only_ids(LexicalIndex::build_questions(graph, questions).search(&query, depth)));
         } else {
-            if !questions.entries.is_empty() {
-                lists.push(lexical(LexicalIndex::build_questions(graph, questions)));
+            let passages = LexicalIndex::build(graph).search(&query, depth);
+            let generated_q = LexicalIndex::build_questions(graph, questions).search(&query, depth);
+            let best = |l: &[(String, f32)]| l.first().map(|(_, s)| *s).unwrap_or(0.0);
+            if best(&generated_q) >= QUESTIONS_GATE * best(&passages) && best(&generated_q) > 0.0 {
+                lists.push(only_ids(generated_q));
             }
-            lists.push(lexical(LexicalIndex::build(graph)));
+            lists.push(only_ids(passages));
         }
         lists.retain(|l| !l.is_empty());
         let mut fused = fuse::interleave(&lists);
@@ -422,13 +436,37 @@ mod tests {
     #[test]
     fn dense_leads_then_the_question_list_then_the_passages() {
         let g = graph();
-        // Lexical passages rank FR-PAY-22 first for «штраф»; the question list and dense each bring a node of their own.
+        // Lexical passages rank FR-PAY-22 first for «штраф отмену»; the question list and dense
+        // each bring a node of their own. Both query words sit in the stored question and only
+        // one in any passage, so the question list clears the gate (2.14 against 1.32).
         let dense = |_: &str, _: usize| (vec!["N-151".to_string()], Vec::new());
         let mut qs = questions();
         qs.entries.get_mut("FR-PAY-20").unwrap().questions.push("какой штраф за отмену".into());
-        let a = ask(&g, &ids(), &qs, Some(&dense), None, &["штраф".to_string()], &Options { dense: true, ..opts() });
+        let a = ask(&g, &ids(), &qs, Some(&dense), None, &["штраф".into(), "отмену".into()], &Options { dense: true, ..opts() });
         let order: Vec<&str> = a.seeds.iter().map(|h| h.id.as_str()).collect();
         assert_eq!(&order[..3], ["N-151", "FR-PAY-20", "FR-PAY-22"]);
+    }
+
+    #[test]
+    fn a_weakly_matched_question_list_does_not_take_a_seed_from_the_passages() {
+        // «штраф считается» is two words of FR-PAY-22's body and one word of the stored
+        // question, so the passage index scores 2.64 against the question index's 1.07 — a ratio
+        // of 0.41, well under the gate. Under an equal turn the question row led the answer.
+        let g = graph();
+        let mut qs = questions();
+        qs.entries.get_mut("FR-PAY-20").unwrap().questions.push("какой штраф за отмену".into());
+        let a = ask(&g, &ids(), &qs, None, None, &["штраф".into(), "считается".into()], &opts());
+        let order: Vec<&str> = a.seeds.iter().map(|h| h.id.as_str()).collect();
+        assert_eq!(order, ["FR-PAY-22"], "the weak question list took a seat: {order:?}");
+
+        // The gate is relative. «штраф отмену» is both words of the stored question and one of
+        // the passage, 2.14 against 1.32, and the question list leads as before.
+        let a = ask(&g, &ids(), &qs, None, None, &["штраф".into(), "отмену".into()], &opts());
+        assert_eq!(a.seeds[0].id, "FR-PAY-20");
+
+        // And a list that is the only one with anything to say always clears it.
+        let a = ask(&g, &ids(), &qs, None, None, &["аннулировать".into(), "бронь".into()], &opts());
+        assert_eq!(a.seeds[0].id, "FR-PAY-20");
     }
 
     #[test]
@@ -666,3 +704,4 @@ mod tests {
         assert_eq!(a.expanded[0].id, "FR-WEB-30");
     }
 }
+
