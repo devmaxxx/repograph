@@ -10,7 +10,15 @@ from pathlib import Path
 from unittest import mock
 
 import truth as T
-from run import Gitnexus, gitnexus_failed, load_id_families, rank_of, score_blast, summarise
+from run import (
+    Gitnexus,
+    gitnexus_failure_reason,
+    gitnexus_looks_like_a_result,
+    load_id_families,
+    rank_of,
+    score_blast,
+    summarise,
+)
 
 BENCH = Path(__file__).resolve().parent.parent
 
@@ -145,58 +153,119 @@ def fake_proc(returncode: int, stdout: str) -> subprocess.CompletedProcess:
     return subprocess.CompletedProcess(args=[], returncode=returncode, stdout=stdout, stderr="")
 
 
-class GitnexusFailed(unittest.TestCase):
-    """gitnexus-shaped failure payloads, captured from a live unregistered-repo call."""
+class GitnexusLooksLikeAResult(unittest.TestCase):
+    """Real success and failure shapes, read out of gitnexus 1.6.9's own source and a live
+    index (`dist/mcp/local/local-backend.js`), plus the one shape that mattered most: a
+    failure the whitelist has never seen before.
+    """
 
-    def test_repo_not_found_exits_nonzero_and_is_a_failure(self):
-        # impact/trace shape: exit 1, JSON `error` that echoes the query straight back.
-        payload = json.dumps({
-            "error": "Repository \"/tmp/bench-corpus-3g\" not found. Available: beauty-crm",
-            "to": {"name": "AvailabilityService"},
-        })
-        self.assertTrue(gitnexus_failed(fake_proc(1, payload)))
+    def test_query_success_has_a_processes_list(self):
+        payload = json.dumps({"processes": [], "process_symbols": [], "definitions": []})
+        self.assertTrue(gitnexus_looks_like_a_result("query", payload))
 
-    def test_a_crash_with_no_stdout_is_a_failure(self):
-        # query/detect-changes shape: uncaught exception, nothing on stdout, exit 1.
-        self.assertTrue(gitnexus_failed(fake_proc(1, "")))
+    def test_query_empty_query_error_has_no_processes_key(self):
+        payload = json.dumps({"error": "search_query (or legacy query) parameter is required."})
+        self.assertFalse(gitnexus_looks_like_a_result("query", payload))
 
-    def test_symbol_not_found_exits_zero_but_is_still_a_failure(self):
-        payload = json.dumps({"status": "not_found", "error": "Source symbol 'X' not found."})
-        self.assertTrue(gitnexus_failed(fake_proc(0, payload)))
+    def test_trace_path_found_is_status_ok(self):
+        payload = json.dumps({"status": "ok", "hopCount": 2, "hops": [], "edges": []})
+        self.assertTrue(gitnexus_looks_like_a_result("trace", payload))
 
-    def test_a_genuine_no_path_result_is_not_a_failure(self):
+    def test_trace_no_path_is_also_a_result(self):
         payload = json.dumps({"status": "no_path", "to": {"name": "AvailabilityService"}})
-        self.assertFalse(gitnexus_failed(fake_proc(0, payload)))
+        self.assertTrue(gitnexus_looks_like_a_result("trace", payload))
 
-    def test_a_genuine_result_is_not_a_failure(self):
+    def test_trace_symbol_not_found_is_not_a_result(self):
+        payload = json.dumps({"status": "not_found", "error": "Source symbol 'X' not found."})
+        self.assertFalse(gitnexus_looks_like_a_result("trace", payload))
+
+    def test_trace_ambiguous_is_not_a_result(self):
+        payload = json.dumps({"status": "ambiguous", "role": "from", "candidates": []})
+        self.assertFalse(gitnexus_looks_like_a_result("trace", payload))
+
+    def test_impact_success_has_impacted_count_and_no_error(self):
         payload = json.dumps({"target": {"name": "X"}, "impactedCount": 3, "risk": "LOW"})
-        self.assertFalse(gitnexus_failed(fake_proc(0, payload)))
+        self.assertTrue(gitnexus_looks_like_a_result("impact", payload))
+
+    def test_impact_target_not_found_carries_impacted_count_zero_but_also_error(self):
+        # The one shape that makes "impactedCount present" alone unsafe: gitnexus's own
+        # failure branches set `impactedCount: 0` too, so `error`'s absence is load-bearing.
+        payload = json.dumps({"error": "Target 'X' not found", "impactedCount": 0, "risk": "UNKNOWN"})
+        self.assertFalse(gitnexus_looks_like_a_result("impact", payload))
+
+    def test_detect_changes_success_is_plain_text_not_json(self):
+        self.assertTrue(gitnexus_looks_like_a_result("detect-changes", "No changes detected."))
+        self.assertTrue(gitnexus_looks_like_a_result(
+            "detect-changes", "Changes: 3 files, 12 symbols\n\nChanged symbols:\n  ..."))
+
+    def test_detect_changes_a_git_failure_is_plain_text_too_but_not_a_result(self):
+        # Observed live: a bad --base-ref exits 0 and prints this, not JSON, not either
+        # recognised opener — exactly the kind of shape a blacklist would have missed.
+        text = "fatal: ambiguous argument 'nope'\nError: Git diff failed: Command failed: git diff nope -U0\n"
+        self.assertFalse(gitnexus_looks_like_a_result("detect-changes", text))
+
+    def test_unparseable_stdout_is_not_a_result(self):
+        self.assertFalse(gitnexus_looks_like_a_result("trace", "not json at all"))
+
+    def test_an_unrecognized_exit_zero_shape_is_not_a_result(self):
+        # No `error` key, no recognised `status` — a shape the old blacklist (which only
+        # checked for a literal `error` key) would have scored as a real answer, with the
+        # echoed `"to"` field then satisfying the trace substring checks exactly as the
+        # original defect did.
+        payload = json.dumps({"problem": "no such repository", "to": {"name": "AvailabilityService"}})
+        self.assertFalse(gitnexus_looks_like_a_result("trace", payload))
 
 
-class GitnexusErrorDoesNotScoreAsAHit(unittest.TestCase):
-    """The defect this pins: an echoed query in an error payload must not read as an answer.
+class GitnexusFailureReason(unittest.TestCase):
+    def test_nonzero_exit_fails_regardless_of_stdout(self):
+        argv = ["gitnexus", "trace", "A", "B"]
+        reason = gitnexus_failure_reason(argv, fake_proc(1, json.dumps({"status": "ok"})))
+        self.assertIsNotNone(reason)
 
-    `via == [to]` is the shape that made this possible — the echoed `"to"` field alone used to
-    satisfy both the `via` and `to` substring checks for a `trace` "path" case, without a real
-    answer in sight.
+    def test_a_genuine_result_has_no_failure_reason(self):
+        argv = ["gitnexus", "impact", "X"]
+        payload = json.dumps({"target": {"name": "X"}, "impactedCount": 3, "risk": "LOW"})
+        self.assertIsNone(gitnexus_failure_reason(argv, fake_proc(0, payload)))
+
+
+class GitnexusUnansweredCallsDoNotScoreAsHits(unittest.TestCase):
+    """`via == [to]` is the shape that made the original defect possible — the echoed `"to"`
+    field alone satisfies both the `via` and `to` substring checks for a `trace` "path" case.
     """
 
     def _tool(self) -> Gitnexus:
         opts = argparse.Namespace(gitnexus_repo="/tmp/bench-corpus-3g", timeout=180, strip_prefix=[])
         return Gitnexus(Path("/tmp"), opts)
 
-    def test_repo_not_found_scores_the_trace_case_as_a_miss(self):
-        case = {"kind": "trace", "from": "AvailabilityController", "to": "AvailabilityService",
+    def _case(self):
+        return {"kind": "trace", "from": "AvailabilityController", "to": "AvailabilityService",
                 "expect": "path", "via": ["AvailabilityService"]}
+
+    def test_a_known_error_shape_scores_a_miss(self):
         payload = json.dumps({
             "error": "Repository \"/tmp/bench-corpus-3g\" not found. Available: beauty-crm",
-            "from": {"name": "AvailabilityController"},
             "to": {"name": "AvailabilityService"},
         })
         with mock.patch("run.subprocess.run", return_value=fake_proc(1, payload)):
-            rows = score_blast(self._tool(), cases=[case], truth={})
+            rows = score_blast(self._tool(), cases=[self._case()], truth={})
         self.assertEqual(rows[0]["hit"], False)
         self.assertEqual(rows[0]["chars"], 0)
+
+    def test_an_unrecognized_exit_zero_shape_also_scores_a_miss(self):
+        # This is the case that reproduces the old defect today: no `error` key, exit 0,
+        # still echoes the query. A blacklist keyed on `error` would score this a hit.
+        payload = json.dumps({"problem": "no such repository", "to": {"name": "AvailabilityService"}})
+        with mock.patch("run.subprocess.run", return_value=fake_proc(0, payload)):
+            rows = score_blast(self._tool(), cases=[self._case()], truth={})
+        self.assertEqual(rows[0]["hit"], False)
+        self.assertEqual(rows[0]["chars"], 0)
+
+    def test_failed_calls_are_counted_on_the_tool(self):
+        payload = json.dumps({"problem": "no such repository", "to": {"name": "AvailabilityService"}})
+        tool = self._tool()
+        with mock.patch("run.subprocess.run", return_value=fake_proc(0, payload)):
+            score_blast(tool, cases=[self._case(), self._case()], truth={})
+        self.assertEqual(tool.failed_calls, 2)
 
 
 if __name__ == "__main__":

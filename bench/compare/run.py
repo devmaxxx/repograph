@@ -16,6 +16,7 @@ import json
 import re
 import statistics
 import subprocess
+import sys
 import time
 import tomllib
 from pathlib import Path
@@ -85,6 +86,10 @@ class Tool:
     def __init__(self, repo: Path, opts: argparse.Namespace):
         self.repo = repo
         self.opts = opts
+        # Calls a tool refused to answer at all — distinct from a call it answered badly.
+        # Only Gitnexus increments this; it stays 0, and thus invisible in the report, for
+        # a tool whose failures don't need this filter.
+        self.failed_calls = 0
 
     def _exec(self, argv: list[str]) -> tuple[subprocess.CompletedProcess, float]:
         started = time.perf_counter()
@@ -133,23 +138,52 @@ class Graphify(Tool):
     def changes(self, base): return None
 
 
-def gitnexus_failed(proc: subprocess.CompletedProcess) -> bool:
-    """A repo or symbol gitnexus can't resolve is not an answer, whatever the exit code says.
+def gitnexus_looks_like_a_result(command: str, stdout: str) -> bool:
+    """Whether `stdout` positively looks like a `command` result — a whitelist, not a blacklist.
 
-    Repo-not-found exits 1 with a JSON `error` field that echoes the query (`impact`/`trace`)
-    or crashes to stderr with no stdout at all (`query`/`detect-changes`) — both non-zero.
-    Symbol-not-found instead exits 0 with `{"status": "not_found", "error": "..."}`. Scoring
-    either as text let an echoed `"to"` field satisfy the `trace` substring checks and counted
-    two hits gitnexus never earned (bench/results/2026-09-04-three-graphs.json's discarded
-    predecessor run).
+    A blacklist of known error shapes fails dangerous: any failure shape it doesn't recognise
+    — a renamed field, a different status, a crash that still exits 0 — falls through as an
+    answer, and an echoed query field can satisfy the scorer's substring checks exactly as it
+    did before (bench/results/2026-09-04-three-graphs.json's discarded predecessor run: 2
+    false `trace` hits). So instead this only recognises gitnexus 1.6.9's own success shapes,
+    read out of `dist/mcp/local/local-backend.js` and confirmed against a live index:
+    `query` always returns a `processes` list; `trace` returns `status: "ok"` (path found,
+    including from==to) or `"no_path"` — never `"not_found"`, `"ambiguous"` or `"error"`,
+    which are all failures; `impact` carries `impactedCount` and omits `error` (every failure
+    branch sets `error`, including the `impactedCount: 0` ones); `detect-changes` isn't JSON
+    at all, just one of two plain-text openers. Anything else scores as no answer.
     """
+    if command == "query":
+        try:
+            payload = json.loads(stdout)
+        except ValueError:
+            return False
+        return isinstance(payload, dict) and isinstance(payload.get("processes"), list)
+    if command == "trace":
+        try:
+            payload = json.loads(stdout)
+        except ValueError:
+            return False
+        return isinstance(payload, dict) and payload.get("status") in ("ok", "no_path")
+    if command == "impact":
+        try:
+            payload = json.loads(stdout)
+        except ValueError:
+            return False
+        return isinstance(payload, dict) and "impactedCount" in payload and "error" not in payload
+    if command in ("detect-changes", "detect_changes"):
+        return stdout.startswith("Changes:") or stdout.startswith("No changes detected.")
+    return False
+
+
+def gitnexus_failure_reason(argv: list[str], proc: subprocess.CompletedProcess) -> str | None:
+    """None for a genuine result; otherwise why it isn't one, for the stderr warning."""
     if proc.returncode != 0:
-        return True
-    try:
-        payload = json.loads(proc.stdout)
-    except ValueError:
-        return False
-    return isinstance(payload, dict) and "error" in payload
+        return f"exit {proc.returncode}"
+    command = argv[1] if len(argv) > 1 else ""
+    if not gitnexus_looks_like_a_result(command, proc.stdout):
+        return f"`{command}` output matched none of its known result shapes"
+    return None
 
 
 class Gitnexus(Tool):
@@ -160,7 +194,10 @@ class Gitnexus(Tool):
 
     def run(self, argv: list[str]) -> tuple[str, float]:
         proc, ms = self._exec(argv)
-        if gitnexus_failed(proc):
+        reason = gitnexus_failure_reason(argv, proc)
+        if reason:
+            self.failed_calls += 1
+            print(f"gitnexus: not counted as an answer, {reason}: {' '.join(argv)}", file=sys.stderr)
             return "", ms
         return self._clean(proc.stdout + proc.stderr), ms
 
@@ -363,8 +400,13 @@ def main() -> None:
             rows += score_retrieval(tool, cases, truth)
         if "blast" in suites:
             rows += score_blast(tool, cases=blast, truth=truth)
-        report["tools"][name] = {"rows": rows, "summary": summarise(rows)}
-        print(f"{name}: {json.dumps(summarise(rows), ensure_ascii=False)}", flush=True)
+        summary = summarise(rows)
+        # A tool that failed outright scored 0 for a different reason than one that answered
+        # badly — collapsing the two into the same 0 flatters nothing else in the comparison
+        # so consistently as it flatters whichever tool failed most.
+        report["tools"][name] = {"rows": rows, "summary": summary, "failed_calls": tool.failed_calls}
+        suffix = f" (failed_calls={tool.failed_calls})" if tool.failed_calls else ""
+        print(f"{name}: {json.dumps(summary, ensure_ascii=False)}{suffix}", flush=True)
 
     Path(args.out).write_text(json.dumps(report, ensure_ascii=False, indent=1), encoding="utf8")
     print(f"written: {args.out}")
