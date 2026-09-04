@@ -6,18 +6,36 @@ from pathlib import Path
 import track
 
 TRANSCRIPT = """\
+keyword    FR-AI-138    HIT  1/1  143 tok  расход виден салону
+keyword    FR-WH-53     miss 0/1  210 tok  склад списание
+paraphrase FR-PH-43     miss 0/1  198 tok  как клиент платит телефоном
+code       apps/api/src/main.ts HIT  1/1   88 tok  где точка входа
+paraphrase W-206        HIT  1/1  512 tok  предупреждение о переносе
+
+keyword 37/40  paraphrase 15/30  code 12/12  p90 220 tok  dense=true  enriched=true (1996/1996 nodes)  suite=built-in gated=true
+"""
+
+# What `bench` printed before the dev suite: no reached/want pair, no suite field.
+OLD_TRANSCRIPT = """\
 keyword    FR-AI-138    HIT   143 tok  расход виден салону
 keyword    FR-WH-53     miss  210 tok  склад списание
-paraphrase FR-PH-43     miss  198 tok  как клиент платит телефоном
 code       apps/api/src/main.ts HIT   88 tok  где точка входа
-paraphrase W-206        HIT   512 tok  предупреждение о переносе
 
 keyword 37/40  paraphrase 15/30  code 12/12  p90 220 tok  dense=true  enriched=true (1996/1996 nodes)
 """
 
+DEV_TRANSCRIPT = """\
+long       FR-CAL-96    HIT  1/1  201 tok  Гость набронировал пять окон и не приходит
+cross      FR-DM-30+packages/domain/src/availability/segments.ts miss 0/2  190 tok  где считается футпринт
+multi      FR-CAL-105+FR-CAL-106+FR-CAL-107 HIT  1/3  240 tok  лист ожидания целиком
+where      apps/api/src/modules/staff/staff.controller.ts HIT  1/1  150 tok  куда класть эндпоинт
+
+long 1/1  cross 0/1  multi 1/1  where 1/1  p90 240 tok  dense=true  enriched=true (1996/1996 nodes)  suite=dev-cases gated=false
+"""
+
 PROSE = """\
 // Sixteen lines of prose about the floors sit above `passes` in the real file, and they
-// discuss the floors in the notation the code uses: s.code.0 >= 11 && s.p90_tokens <= 200
+// discuss the floors in the notation the code uses: s.kind("code").0 >= 11 && s.p90_tokens <= 200
 // was the shape before the ceiling was rounded.
 """
 
@@ -31,7 +49,7 @@ pub fn passes(s: &Summary, dense: bool, enriched: bool) -> bool {
         (false, true) => (40, 9),
         (false, false) => (39, 7),
     };
-    s.keyword.0 >= keyword && s.paraphrase.0 >= paraphrase && s.code.0 >= 12 && s.p90_tokens <= 230
+    s.kind("keyword").0 >= keyword && s.kind("paraphrase").0 >= paraphrase && s.kind("code").0 >= 12 && s.p90_tokens <= 230
 }
 """
 
@@ -49,6 +67,35 @@ class ParseBench(unittest.TestCase):
         self.assertEqual(p["cases"]["keyword/FR-WH-53"], 0.0)
         self.assertEqual(p["cases"]["code/apps/api/src/main.ts"], 1.0)
         self.assertEqual(p["tokens"]["paraphrase/W-206"], 512)
+
+    def test_a_transcript_from_before_the_suite_field_still_reads(self):
+        p = track.parse_bench(OLD_TRANSCRIPT)
+        self.assertEqual(p["cases"]["keyword/FR-WH-53"], 0.0)
+        self.assertEqual(p["cases"]["code/apps/api/src/main.ts"], 1.0)
+        self.assertEqual(p["suite"], "built-in")
+        self.assertTrue(p["gated"], "the recorded shape was always graded")
+        self.assertEqual(track.arm_name(p), "bench:dense+enriched")
+
+    def test_a_dev_suite_transcript_reads_its_kinds_shares_and_suite(self):
+        p = track.parse_bench(DEV_TRANSCRIPT)
+        self.assertEqual(list(p["metrics"]), ["long", "cross", "multi", "where", "p90_tokens"])
+        self.assertEqual(p["metrics"]["multi"], [1, 1], "the summary counts entry points")
+        self.assertAlmostEqual(p["cases"]["multi/FR-CAL-105+FR-CAL-106+FR-CAL-107"], 0.3333, places=4)
+        self.assertEqual(p["cases"]["cross/FR-DM-30+packages/domain/src/availability/segments.ts"], 0.0)
+        self.assertEqual(p["suite"], "dev-cases")
+        self.assertFalse(p["gated"])
+        self.assertEqual(track.arm_name(p), "bench[dev-cases]:dense+enriched")
+
+    def test_a_row_for_an_ungated_run_carries_no_floors_and_no_verdict(self):
+        table = {(True, True): {"keyword": 40, "paraphrase": 14, "code": 12, "p90_tokens": 230}}
+        row = track.build_row(track.parse_bench(DEV_TRANSCRIPT), "beauty-crm", "502e8a6d", "", "abc", False, table)
+        self.assertEqual((row["floors"], row["headroom"], row["green"]), (None, None, None))
+        self.assertEqual((row["suite"], row["gated"]), ("dev-cases", False))
+        self.assertEqual(track.state_of(row), "measured, no floors")
+        graded = track.build_row(track.parse_bench(TRANSCRIPT), "beauty-crm", "502e8a6d", "", "abc", False, table)
+        self.assertEqual(graded["headroom"]["keyword"], -3)
+        self.assertFalse(graded["green"])
+        self.assertEqual(track.state_of(graded), "RED")
 
     def test_a_run_that_never_reached_the_summary_is_refused(self):
         # A crashed or interrupted run must not enter the history as a row of zeroes.
@@ -166,6 +213,29 @@ class Ordering(unittest.TestCase):
                               "2026-09-04T18:00:00+00:00"])
         finally:
             track.RUNS = before
+
+
+class ToolDirty(unittest.TestCase):
+    def test_the_run_file_alone_does_not_make_the_tree_dirty(self):
+        import subprocess
+        with tempfile.TemporaryDirectory() as d:
+            repo = Path(d)
+            runs = repo / track.RUNS.relative_to(track.REPO)
+            runs.parent.mkdir(parents=True)
+            runs.write_text("{}\n")
+            (repo / "other.txt").write_text("x")
+            env = {"GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t", "GIT_COMMITTER_NAME": "t",
+                   "GIT_COMMITTER_EMAIL": "t@t", "PATH": "/usr/bin:/bin:/usr/local/bin:/opt/homebrew/bin"}
+            for cmd in (["init", "-q"], ["add", "."], ["commit", "-q", "-m", "init"]):
+                subprocess.run(["git", "-C", d, *cmd], check=True, env=env, capture_output=True)
+            self.assertFalse(track.tool_dirty(repo))
+            # Recording the first arm appends to the run file; the second arm is not "dirty".
+            with runs.open("a") as f:
+                f.write("{}\n")
+            self.assertFalse(track.tool_dirty(repo))
+            # Anything else being modified is.
+            (repo / "other.txt").write_text("y")
+            self.assertTrue(track.tool_dirty(repo))
 
 
 class Headroom(unittest.TestCase):

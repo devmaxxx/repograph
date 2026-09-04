@@ -12,6 +12,9 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="$(cd "$HERE/../.." && pwd)"
 ARMS="${ARMS:-dense lexical}"
 NOTE="${NOTE:-}"
+# Another case file, e.g. bench/dev-cases.jsonl: measured and recorded under its own arm name,
+# never graded -- see `bench::run` on which shapes carry floors.
+CASES="${CASES:-}"
 OUT="$(mktemp -d)"
 trap 'rm -rf "$OUT"' EXIT
 
@@ -44,11 +47,12 @@ for arm in $ARMS; do
   # record, not a reason to skip the arms after it. `${flags[@]+...}` because bash 3.2, which
   # is what macOS ships, calls an empty array unbound under `set -u`.
   rc=0
-  "$BIN" --repo "$FIXTURE" ${flags[@]+"${flags[@]}"} bench > "$OUT/$arm.txt" 2>&1 || rc=$?
+  if [ -n "$CASES" ]; then flags+=(bench --cases "$CASES"); else flags+=(bench); fi
+  "$BIN" --repo "$FIXTURE" ${flags[@]+"${flags[@]}"} > "$OUT/$arm.txt" 2>&1 || rc=$?
   tail -2 "$OUT/$arm.txt"
   # A crash leaves no summary line, and a run with no summary must not enter the history at
   # all rather than entering it as a row of zeroes that later reads as a regression.
-  if grep -qE '^keyword [0-9]+/[0-9]+  paraphrase [0-9]+/[0-9]+' "$OUT/$arm.txt"; then
+  if grep -qE '^(\S+ [0-9]+/[0-9]+  )+p90 [0-9]+ tok' "$OUT/$arm.txt"; then
     python3 "$HERE/track.py" record "$OUT/$arm.txt" \
       --corpus beauty-crm --corpus-path "$FIXTURE" --note "$NOTE"
     [ "$rc" -eq 0 ] || status=$rc

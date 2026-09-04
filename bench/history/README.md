@@ -36,6 +36,23 @@ results here when you run it:
 bench/history/track.py import bench/results/<file>.json --note "what this run was for"
 ```
 
+## A second suite
+
+```
+CASES=bench/dev-cases.jsonl bench/history/run-repograph.sh
+```
+
+`bench/dev-cases.jsonl` holds sixty questions written the way a developer asks them while
+implementing — long, mixed product and code vocabulary, and often with several right places:
+`expect` may be a list, and a case's score in the history is the share of its anchors the answer
+reached, while the summary line counts entry points (at least one anchor). The file has no floors,
+so `bench` measures it, prints `gated=false`, and exits 0 whatever it reads; its runs are recorded
+under an arm of their own — `bench[dev-cases]:dense+enriched` — and never share a comparability
+window with the recorded suite. Kinds are `long`, `cross` (a requirement and the file that
+implements it), `multi` (several requirements), `where` (which file to edit) and `rule` (an
+invariant, ADR or NFR). Every anchor is checked against the graph before a question is asked, so a
+mistyped anchor stops the run instead of reading as a weak spot.
+
 ## Reading the report
 
 ```
