@@ -273,10 +273,35 @@ right kind and a recorded seed, and `dump`'s recorded answer comes from the held
 **What stays open.** `FR-PH-43` — «критерий готовности рыночному запуску» — sits at passage rank
 23 and no lexical path reaches it in either store; only the dense list does. That is a lexical
 retrieval limit, not an enrichment cost, and it is why both lexical-only floors are 39 rather than
-40. And the gate's plateau is narrow: held-out tolerates any threshold up to 0.90, and below 0.85
-`FR-WH-53` (ratio 0.80) loses its seat again. A threshold with one recorded case's ratio directly
-under it is a number to distrust, so it is published with both constraints, and any move of it is
-judged on the held-out set first — the order of operations in `bench/heldout.py`'s header.
+40. And the gate's window is narrow, and narrower than first published. The closing note said
+held-out tolerates any threshold up to 0.90; the review measured 0.87 and 0.90 reddening the arm
+with embeddings — paraphrase 13/30 under its floor of 14 — while held-out never binds at any value
+from 0.80 to 0.95 (p = 0.34 to 0.79). The window on the 82 is (0.802, 0.866]: below it `FR-WH-53`
+(ratio 0.801) loses its seat, at 0.87 a paraphrase (ratio 0.867) loses its list. The centre, 0.83,
+reads the same on the 82 and loses three more lexical held-out questions than 0.85 (109 → 106,
+none gained), so 0.85 stays, with 0.006 of room above. Why the ratio is a constant of this store
+and what would carry across stores is gap G8. Any move of it is judged on the held-out set first —
+the order of operations in `bench/heldout.py`'s header, which now covers both arms.
+
+---
+
+## G8 · The questions gate is a constant of one store
+
+**Raised (2026-09-05)** by the review of G7's fix. The gate compares the best BM25 score of the
+generated-questions list with the best of the passage list, and the two are only half
+comparable: the indices share the tokenizer, `K1`, `B`, the formula and the document count
+(7,408), but each normalises length against its own mean — 30.6 tokens a passage document, 51.8
+a question document — and weights terms by its own vocabulary, 10,762 terms against 21,839. So
+the ratio moves with enrichment coverage (1,996 of 7,408 nodes here) and with questions per node
+(~13), and 0.85 is where *this* store's two populations part — window (0.802, 0.866] on the 82,
+0.006 of room above. A store with short bodies, full enrichment or five questions per node lands
+somewhere else, and nothing in the code would say so.
+
+**Gate.** A scale-free form — each list's best against its own *k*-th score, or a z-score within
+its own list — replaces the constant only if it reproduces the four arms exactly on this store
+(`40/40 15/30 12/12`, `39/40 14/30 12/12`, raw `40/40 9/30`, `39/40 7/30`, p90 ≤ 230), is not
+significantly worse on the held-out set in either arm, and reads at least as well on the 60
+`dev-cases`. The order of operations is `bench/heldout.py`'s header. Not tried.
 
 ---
 
@@ -284,7 +309,8 @@ judged on the held-out set first — the order of operations in `bench/heldout.p
 
 | | gap | why here |
 |---|---|---|
-| 1 | ~~**G7** the questions list's share of the seeds~~ | closed 2026-09-05 — gated on the ratio of the two lists' best scores, held-out p = 0.77, lexical-only arm at raw parity; the narrow plateau is recorded above |
+| 1 | ~~**G7** the questions list's share of the seeds~~ | closed 2026-09-05 — gated on the ratio of the two lists' best scores, held-out p = 0.77, lexical-only arm at raw parity; the window (0.802, 0.866] is recorded above, corrected from the 0.85–0.90 first published |
+| 5 | **G8** the questions gate is a constant of one store | a scale-free form of the same gate; measured on the held-out set first, then on both suites |
 | 2 | **G5** rank + MRR | a scoring change over rows that already exist, and G2 cannot be argued without it |
 | 3 | **G1** unparsed files get a file node | the largest missing share of a real answer, and the fix is language-independent |
 | 4 | **G3** the three impact diagnostics | three files to read; it either finds a bug or writes an honest caveat |

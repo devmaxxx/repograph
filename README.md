@@ -461,10 +461,13 @@ Two ways of spending them were measured and rejected: as extra dense rows pooled
 they bury targets (a passage at rank 2 fell to 87 behind other nodes' questions), and mixed into a
 node's own BM25 text they cost a keyword hit. What ships is the third — a BM25 list of their own,
 which the plain `ask` fuses alongside the passage list — when that list has earned its turn. It
-joins the fusion only if its best BM25 score is at least 0.85 of the passage list's best: the two
-indices share a corpus and a tokenizer, so their best scores compare, and on 400 held-out generated
-questions the passage list is the one holding the answer below that ratio (30% in its top five
-against 21%) while the questions list is above it (24% against 12%). Before the gate an equal turn
+joins the fusion only if its best BM25 score is at least 0.85 of the passage list's best. On 400
+held-out generated questions the passage list is the one holding the answer below that ratio (30%
+in its top five against 21%) while the questions list is above it (24% against 12%). The 0.85 is a
+constant of this store, not of BM25 — the two indices share the tokenizer and the document count
+but normalise length against their own means and weight terms by their own vocabularies — and its
+window on the 82 recorded cases is (0.802, 0.866]: below it a keyword case loses its seat, at 0.87
+the arm with embeddings drops a paraphrase under its floor. Before the gate an equal turn
 cost the `--no-dense` arm two exact keyword seeds, 39/40 raw against 37/40 enriched; with it that
 arm reads 39/40 either way, paraphrase 7/30 raw against 14/30 enriched, and the held-out set moved
 by 5 gained and 7 lost, exact McNemar p = 0.77. The arm with embeddings was 40/40 throughout. (An

@@ -309,3 +309,63 @@ The plateau is narrow and is recorded as narrow. Held-out tolerates any threshol
 ratio directly under it is the kind of number this ADR exists to distrust, so it is stated here
 with its two constraints rather than presented as chosen — and the held-out set, now honest and
 reproducible, is what any move of it has to be judged on first.
+
+## Amendment 7 — the window, re-measured (2026-09-05)
+
+A second reader re-ran Amendment 6 and confirmed every number in it: all four arms case for case,
+both history rows, the held-out build byte-identical, 105 → 103 at p = 0.77, and the floor move
+sound — the new floor with the old fusion still exits 1 at 37/40, and at gate 0.80 the arm reddens
+on exactly `FR-WH-53`. What did not survive was the sentence about the plateau.
+
+**The published window was wrong in the unsafe direction.** "Held-out tolerates anything up to
+0.90" is true and does not bound anything: exact McNemar against the ungated fusion reads
+p = 0.34, 0.77, 0.79 and 0.45 at 0.80, 0.85, 0.90 and 0.95. The bound is the recorded suite's own
+floor. Measured across the constant on the enriched store:
+
+| gate | embeddings | `--no-dense` |
+|---|---|---|
+| 0.80 | — | 38/40 · 14/30 — red |
+| 0.85 | 40/40 · 15/30 · p90 220 | 39/40 · 14/30 · p90 215 |
+| 0.86 | 40/40 · 15/30 · p90 220 | 39/40 · 14/30 · p90 215 |
+| 0.87 | 40/40 · **13/30** — red | 39/40 · 12/30 |
+| 0.90 | 40/40 · **13/30** — red | 39/40 · 12/30 |
+
+The window is (0.802, 0.866]. Ten of the thirty paraphrase ratios sit in (0.85, 0.90) — 0.856,
+0.861, 0.865, 0.867, 0.868, 0.871, 0.875, 0.879, 0.892, 0.898 — so the upper edge is the foot of
+the population the gate exists to admit, and the rule's "flat across the gap" clause holds on the
+measured gap, not on the published one. The centre of the window, 0.83, was then measured under a
+rule written first: it moves the constant only if all four arms reproduce the 0.85 table and the
+held-out loss is not significant in either arm, and between two admissible values the one whose
+worse arm loses fewer held-out questions wins. It reproduces the four arms exactly; held-out reads
+105 → 102 with embeddings (+4 −7, p = 0.55) and 113 → 106 without (+2 −9, p = 0.065), against
+105 → 103 (p = 0.77) and 113 → 109 (+5 −9, p = 0.42) at 0.85. Paired directly, 0.85 → 0.83 gains
+nothing and loses three: a list admitted at a ratio just under 0.85 came in without the answer and
+took seats. The constant stays at 0.85, with 0.05 of room below and 0.006 above.
+
+**The ratio is a constant of this store.** Both indices share the tokenizer, `K1`, `B`, the formula
+and the 7,408 documents, and there the sharing stops: mean document length is 30.6 tokens in the
+passage index and 51.8 in the questions index, and the vocabularies are 10,762 and 21,839 terms.
+Length normalisation and idf are per index, so the ratio moves with enrichment coverage and with
+questions per node without retrieval quality moving. Amendment 6's "so their best scores compare"
+overstated it; the scale-free form is gap G8, not tried.
+
+**Three things made reproducible.** Amendment 6's before-column could not be produced from any
+commit, because the leave-one-out fix and the gate landed together and the older binary reads the
+leak (0.955). `REPOGRAPH_QUESTIONS_GATE=0` on the shipped binary now is that column, and reads
+105/400 and 113/400. The lexical held-out arm the amendment cites was an offline replication,
+because `dump` hard-coded the embeddings arm; `dump --no-dense` now records it, and `compare`
+refuses to pair the arms. And `bench:lexical+enriched`'s `tool_dirty: true` beside the dense row's
+`false`, same commit, same second, was the run file itself: recording the first arm appended to
+`runs.jsonl`, and the second arm read the tree as dirty. The check now excludes the run file; the
+two rows stay as recorded.
+
+**"Untouched by construction" was false.** The old guard on an empty questions store went missing
+with the gate, so a raw store built a questions index of id-only documents on every plain-path
+query — shorter than the passages, so an id-bearing term outscored the passage carrying it, and the
+list cleared any gate for the wrong reason. The raw arms measured identical only because no
+recorded case hit that path. The guard is back, in `lexical_lists`, and the raw arms measure
+`40/40 9/30 12/12 p90 221` and `39/40 7/30 12/12 p90 226` after it, identical case for case.
+
+The rerank path stays ungated, for the reason the review confirmed: with `PINNED = 0` the fused
+order there is a pool of `depth`, not five seats, so the questions list displaces nothing, and
+Amendment 2 measured it as what carries paraphrase targets into that pool.
