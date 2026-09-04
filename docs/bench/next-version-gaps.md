@@ -1,0 +1,197 @@
+# What the 2026-09-03 numbers say is weak
+
+Every item below is a gap the [three-graph run](2026-09-03-three-graphs-results.md)
+measured on repograph 0.4.0, not a wish. Each carries the number that exposed it, the
+diagnostic that would confirm the cause, the lever, and the gate that would tell us
+it worked. They are ordered by how much of a real answer is missing, not by effort.
+
+Two of them are the language work already scheduled for 0.6.0; what this file adds is
+that the bench says they are not a nice-to-have.
+
+---
+
+## G1 · A third of a large blast radius is invisible — `changes` 27/38 symbols
+
+**Measured.** `changes` scored 32/43 symbols and 13/20 files overall, and the split is
+the whole story: **5/5 symbols on a 2-file diff, 27/38 on an 18-file one.** Seven of
+the twenty files were never named at all.
+
+**Cause, and it is not ranking.** `code_globs = ["**/*.ts", "**/*.tsx"]`
+(`src/config.rs:31`). `changes::touched` intersects hunk line ranges with `Symbol`
+nodes; a file with no symbols falls back to its file node, and a file with no node at
+all is invisible. `beauty-crm`'s large diffs carry `.kt`, `.sql`, `.json`, `.yaml`
+and `.gradle.kts`, and its 18-file case is exactly that mix. A tool whose answer to
+"what does this change touch" silently omits a third of the change is worse than one
+that says it does not know.
+
+**Diagnostic before the lever.** Re-run the `0f27d2d1` case with the per-file list
+printed, and bucket the eleven missing symbols by extension. If they are all
+non-TypeScript, this is G1 and nothing else; if some are `.ts`, a second cause is
+hiding behind the first and it belongs in G3.
+
+**Lever.** The 0.6.0 language work — Kotlin, C#, Python — plus a decision this run
+makes urgent: **a file the extractor cannot parse still deserves a file node**, so
+`touched` reports it rather than dropping it. That is cheap, it is language-independent,
+and it converts a silent omission into an honest "this file changed, I cannot tell you
+which symbol".
+
+**Gate.** The 18-file case reaches ≥34/38 symbols and 18/20 files with the unparsed
+files reported as files. Add a third `changes` case whose diff is deliberately
+polyglot, so the suite keeps measuring this after the fix.
+
+---
+
+## G2 · Fourteen paraphrases, twelve of them a neighbour away — strict 16/30, soft 28/30
+
+**Measured.** Strict 16/30, soft 28/30. Twelve of the fourteen misses opened the right
+file and named a neighbouring requirement; only two (`FR-AI-102`
+«сколько времени держим записи кто решает», `FR-CAL-101`
+«как отдаём освободившееся окно тому, кто ждёт») failed to surface the file at all.
+
+**What is already exhausted.** [ADR-001](../adr/ADR-001-paraphrase-recall-was-a-prediction.md)
+and its three amendments measured and rejected: more seeds (one hit per 1.5× tokens),
+a wider one-hop cap (one hit, p90 218→510), `MultilingualE5Base` (6/14, a *different*
+six), 512-token passages (5/14 at 2× embedding time), label-only second vectors
+(6/14), `BGEM3` (5/14 at 1 454 s), quantized paraphrase MiniLM (2/14, keyword down to
+21/24), doc2query rows pooled with passages (4/14), and query rewriting (paraphrase
+6/14, keyword down to 20/24). None is adopted. Six of the eight misses on the old set
+were shared by every E5 variant, which points at the model's distance between question
+and target, not at the index.
+
+**What works and what it costs.** `ask --rerank` with candidate snippets, a pool of
+200 and no pinned seeds reads 14/14 paraphrase, 24/24 keyword, 3/3 code on three
+consecutive sonnet runs — at ≈19k input tokens and ~4.3 s per question. It is opt-in
+and deliberately not on a floor.
+
+**The one lever never measured.** A local cross-encoder — `bge-reranker-v2-m3`, a
+2.3 GB download — is named in ADR-001 as unmeasured. It is the only candidate that
+could give reranker-shaped gains at zero API cost and without a per-question latency
+in seconds. **Measure it before designing anything else for paraphrases.** If it lands
+between 10/30 and 14/30 at sub-second latency, the zero-token floor moves for the
+first time since 0.4.0; if it does not, the honest answer is that this corpus's
+paraphrases need a model and the floors stay where the measurement put them.
+
+**The two soft misses are a different bug.** They are coverage, not ranking: the
+target file never entered the pool. Diagnose them with
+`repograph dump --queries` and read the four retriever lists 300 deep. If the target
+is absent from all four, no reranker will ever help, and the question is what the
+extractor did with that requirement.
+
+**Gate.** The 400 held-out question set with a paired exact McNemar test against the
+shipped rule — the existing bar — before the 82 real cases are consulted as the smoke
+test they are. Do not move a floor on 30 noisy cases alone: Wilson 95% on 16/30 is
+0.35–0.69.
+
+---
+
+## G3 · Three hub targets short — `impact` 110/114
+
+**Measured.** Mean recall 0.949. Every narrow target is 1.0; the misses are all in the
+tiers an agent trusts most — `TenantContextInterceptor` 3/4, `OutboxPublisher` 6/7,
+`AuthService` 9/10.
+
+**Candidate cause, already documented.** The README names four constructs that produce
+no `Calls` edge: a chained expression, a destructured method, a callback parameter, a
+global. Four missing files out of 114 is small enough that a per-case read will name
+the construct exactly rather than leaving it to a guess.
+
+**Diagnostic.** For each of the three targets, diff the truth file list against the
+answer and open the missing file. One of three verdicts: a construct on the
+documented list (then the lever is that construct's extractor), a barrel path
+`impact` should have resolved (then it is a bug), or a reference in a string/template
+(then it is out of scope and the caveat should say so by name).
+
+**Why it is above its size.** `impact` is the command whose answer gets acted on
+destructively — someone deletes or renames on the strength of it. The README already
+says to confirm a "nothing uses this" with `rg -l`; a measured 0.949 is the number
+that decides whether that sentence is a caveat or a defect.
+
+**Gate.** 114/114 with the identified construct handled, or a named, measured
+exclusion in the README's blast-radius caveats. No silent 0.949.
+
+---
+
+## G4 · The blast suite has 20 cases and no confidence story
+
+**Measured.** One run per row, no repeats, on 10 + 8 + 2 cases. Retrieval has a real
+methodology behind it — 400 held-out questions, recall@5 with a ±5-point interval, a
+paired McNemar test. Blast has nothing equivalent, and `changes` rests on **two**
+cases, one of which carries most of the signal.
+
+**Why it matters now.** G1 and G3 both propose changes that will be judged on this
+suite. A suite that cannot distinguish a real gain from noise will approve whatever is
+tried first.
+
+**Lever.** Grow `blast.jsonl` where it is thinnest: `changes` from 2 to at least 8
+diffs spanning small/large and mono/polyglot, and `impact` with more narrow targets,
+which are the tier a mean over ten hubs hides. Then state a per-suite decision rule the
+way `bench` states its floors, so "did this help" has an answer before the change is
+written.
+
+**Gate.** A documented rule in `three-graphs.md` for when a blast delta counts, and a
+`changes` set large enough that one diff cannot carry the verdict.
+
+---
+
+## G5 · Strict is a substring, so ranking is unmeasured
+
+**Measured.** The protocol says it outright: an id ranked fifth of five counts the
+same as first. So 68/82 strict says nothing about whether the right answer is at the
+top of the answer or at the bottom of it.
+
+**Why it matters.** It is the difference between "the reranker is necessary" and "the
+answer only needs reordering" — G2's whole question. It also affects an agent
+directly: an agent reading an answer acts on the first plausible id.
+
+**Lever.** Record the rank of the expected id per row, and report MRR beside strict.
+The rows already exist; this is a scoring change in `report.py`, not new cases.
+
+**Gate.** Rank recorded on every retrieval row of the next result file, MRR in the
+summary, and the 2026-09-03 rows rescored so the two runs are comparable.
+
+---
+
+## G6 · One corpus, one language, one id census
+
+**Measured, structurally.** All 102 cases are `beauty-crm`. All 30 paraphrases are
+Russian. `repograph.toml` says of its own `id_families` list: "This is beauty-crm's
+census, not a generic default; a different repository should list its own families."
+Nothing in the suite measures the tool on a repository it was not tuned against.
+
+**Why it matters for the next version.** 0.6.0 targets C#, Kotlin and Python for
+`bonliva-crm-nx`, `beauty-crm/mobile` and `bonliva-erp`. Shipping language support
+with no cases from those corpora repeats exactly the mistake ADR-001 exists to record:
+a number that was a prediction travelling as though it had been measured.
+
+**Lever.** A second case file per new corpus — smaller is fine, 20–30 cases — built
+the same way: expectations recomputed from the repository at run time, so the set goes
+stale only when a name disappears. The retrieval half will need each corpus's own id
+families; the blast half needs nothing but symbols and should port directly.
+
+**Gate.** No language ships in 0.6.0 without at least one `impact`, one `trace` and
+one `changes` case in its own corpus, and a result file beside this one.
+
+---
+
+## Suggested order
+
+| | gap | why here |
+|---|---|---|
+| 1 | **G5** rank + MRR | a scoring change over rows that already exist, and G2 cannot be argued without it |
+| 2 | **G1** unparsed files get a file node | the largest missing share of a real answer, and the fix is language-independent |
+| 3 | **G3** the three impact diagnostics | three files to read; it either finds a bug or writes an honest caveat |
+| 4 | **G4** grow the blast set | must land before G1's and G6's changes are judged on it |
+| 5 | **G2** measure `bge-reranker-v2-m3` | the one unmeasured retrieval lever; everything cheaper is already rejected |
+| 6 | **G6** a case file per new corpus | ships with the 0.6.0 languages, not after them |
+
+## What is explicitly not on this list
+
+- **Importing graphify's edges.** Measured: 8 577 concept nodes and 23 117 edges move
+  the shipped bench from 40/15/12 to 38/16/12. Rolled back, and ADR-001's reasoning
+  says why more concept nodes do not help a question that shares no stem with its
+  target.
+- **More seeds, wider hops, a different E5 size.** All measured in ADR-001 and its
+  amendments; each buys about one hit and pays in the token budget the bench exists to
+  protect.
+- **Query rewriting by a model.** Measured at paraphrase 6/14 with keyword falling to
+  20/24, and rejected.

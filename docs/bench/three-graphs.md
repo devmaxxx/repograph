@@ -5,6 +5,14 @@ This file is the protocol; `bench/compare/` is the code that runs it. Re-running
 on a new commit, a new repository or a new version of any tool takes one command
 and produces a result file that can be set beside every earlier one.
 
+Three files sit around this one and each answers a different question:
+
+| | |
+|---|---|
+| [`2026-09-03-three-graphs-results.md`](2026-09-03-three-graphs-results.md) | what the last run measured, and what was decided because of it |
+| [`runbook.md`](runbook.md) | how to run it again — pre-flight, the six traps, the cleanup |
+| [`next-version-gaps.md`](next-version-gaps.md) | the weak spots those numbers exposed, each with its gate |
+
 ## What gets measured
 
 Two suites, both scored against the repository rather than against each other.
