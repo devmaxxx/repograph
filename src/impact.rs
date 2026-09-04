@@ -130,16 +130,22 @@ fn walk(graph: &Graph, root: &str, depth: usize, up: bool) -> Vec<Vec<Dependent>
     layers
 }
 
-/// Files that import the symbol by name, from its file or any barrel: one hop, the "who
-/// imports it" answer that survives even where no call site resolved.
+/// Files that name the symbol without necessarily calling it: every importer of its name from
+/// its file or any barrel, and the barrels themselves — a barrel that re-exports the symbol
+/// names it as surely as an importer does, and `export { AuthService } from './auth.service.js'`
+/// breaks before any caller when the class is renamed. It was the one file `impact AuthService`
+/// left out on the bench corpus (9 of 10, 2026-09-03).
 fn importers(graph: &Graph, root: &str) -> Vec<String> {
     let Some(n) = graph.nodes.get(root) else { return Vec::new() };
     let name = bare(name_of(root));
     let mut files: BTreeSet<String> = BTreeSet::from([format!("file:{}", n.file)]);
-    for a in aliases(graph, root) {
-        if let Some((f, _)) = a.trim_start_matches("sym:").rsplit_once("::") { files.insert(format!("file:{f}")); }
-    }
     let mut out: BTreeSet<String> = BTreeSet::new();
+    for a in aliases(graph, root) {
+        if let Some((f, _)) = a.trim_start_matches("sym:").rsplit_once("::") {
+            files.insert(format!("file:{f}"));
+            out.insert(f.to_string());
+        }
+    }
     for e in graph.edges.iter().filter(|e| e.kind == EdgeKind::Imports && files.contains(&e.target) && exports(e, name)) {
         out.insert(e.source.trim_start_matches("file:").to_string());
     }
@@ -305,7 +311,13 @@ mod tests {
         let d2: Vec<(&str, EdgeKind)> = imp.layers[1].iter().map(|d| (d.id.as_str(), d.kind)).collect();
         assert_eq!(d2, vec![("sym:j.ts::J", EdgeKind::Extends)]);
         assert_eq!(imp.layers.len(), 2);
-        assert_eq!(imp.importers, vec!["c.ts", "m.ts", "w.ts"]);
+        assert_eq!(imp.importers, vec!["c.ts", "index.ts", "m.ts", "w.ts"]);
+    }
+
+    #[test]
+    fn a_barrel_that_re_exports_the_symbol_is_an_importer() {
+        // Rename S and `export * from './s'` in index.ts is the first thing that breaks.
+        assert!(upstream(&graph(), "sym:s.ts::S", 1).importers.contains(&"index.ts".to_string()));
     }
 
     #[test]
@@ -359,8 +371,8 @@ mod tests {
         assert!(out.starts_with("sym:s.ts::S  s.ts:3"));
         assert!(out.contains("d=1  will break (3)\n"));
         assert!(out.contains("  sym:c.ts::C.create  c.ts:9  Calls → sym:s.ts::S.create\n"));
-        assert!(out.contains("importers (3): c.ts, m.ts, w.ts\n"));
-        assert!(out.ends_with("risk: MEDIUM — 3 direct, 4 total, 4 files\n"), "{out}");
+        assert!(out.contains("importers (4): c.ts, index.ts, m.ts, w.ts\n"));
+        assert!(out.ends_with("risk: MEDIUM — 3 direct, 4 total, 5 files\n"), "{out}");
     }
 
     #[test]
