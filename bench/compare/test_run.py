@@ -72,7 +72,7 @@ class BlastShape(unittest.TestCase):
         rows = T.read_jsonl(BENCH / "blast.jsonl")
         self.assertEqual(collections.Counter(r["kind"] for r in rows), {"impact": 16, "trace": 8, "changes": 8})
         tiers = collections.Counter(r["tier"] for r in rows if r["kind"] == "impact")
-        self.assertEqual(tiers, {"hub": 3, "wide": 3, "narrow": 10})
+        self.assertEqual(tiers, {"hub": 2, "wide": 3, "narrow": 11})
         self.assertEqual(len({r["target"] for r in rows if r["kind"] == "impact"}), 16)
 
 

@@ -251,8 +251,8 @@ def main() -> None:
 
     repo = Path(args.repo).resolve()
     bench = Path(__file__).resolve().parent.parent
-    cases_path = Path(args.cases) if args.cases else bench / "cases.jsonl"
-    blast_path = Path(args.blast) if args.blast else bench / "blast.jsonl"
+    cases_path = Path(args.cases).resolve() if args.cases else bench / "cases.jsonl"
+    blast_path = Path(args.blast).resolve() if args.blast else bench / "blast.jsonl"
     cases = T.read_jsonl(cases_path)
     blast = T.read_jsonl(blast_path)
     args.gitnexus_repo = args.gitnexus_repo or repo.name

@@ -1,5 +1,5 @@
 {"kind":"impact","target":"DatabaseService","file":"apps/api/src/shared/db/database.service.ts","tier":"hub"}
-{"kind":"impact","target":"TenantContextInterceptor","file":"apps/api/src/shared/context/tenant-context.interceptor.ts","tier":"hub"}
+{"kind":"impact","target":"TenantContextInterceptor","file":"apps/api/src/shared/context/tenant-context.interceptor.ts","tier":"narrow"}
 {"kind":"impact","target":"ProblemException","file":"apps/api/src/shared/errors/problem.exception.ts","tier":"hub"}
 {"kind":"impact","target":"ActorResolver","file":"apps/api/src/shared/actor/actor-resolver.ts","tier":"wide"}
 {"kind":"impact","target":"AuthService","file":"apps/api/src/modules/identity/auth.service.ts","tier":"wide"}

@@ -30,14 +30,16 @@ task id (`BE-M17`) or a file path.
 | `trace` | 8 | the call chain from A to B, or that there is none |
 | `changes` | 8 | what a diff since a base commit touches |
 
-The sixteen `impact` targets are spread by fan-in on purpose — three hubs (18 to 58
-referencing files), three wide, ten narrow — because a tool that answers hubs well
-can still miss a service with two callers, and the mean would hide it. Six narrow
-targets added 2026-09-04, each with two or three referencing files, because a mean
-over hubs hides a service with two callers. The eight `trace` cases are six real
-chains and two pairs with no path, so a tool that always finds something scores 6,
-not 8. `changes` grew the same day from two bases to eight, for the same reason: two
-diffs are too thin to read a delta from.
+The sixteen `impact` targets are spread by fan-in on purpose — two hubs (24 to 48
+referencing files), three wide (6 to 10), eleven narrow (2 to 3) — because a tool
+that answers hubs well can still miss a service with two callers, and a mean across
+tiers would hide it; six narrow targets were added 2026-09-04 for that reason. A
+seventh case, `TenantContextInterceptor`, was filed as a hub when the suite was
+first written but has only three referencing files; it was relabelled narrow the
+same day, which is why the suite holds two hubs rather than three. The eight
+`trace` cases are six real chains and two pairs with no path, so a tool that always
+finds something scores 6, not 8. `changes` grew the same day from two bases to
+eight, for the same reason: two diffs are too thin to read a delta from.
 
 ## How the answer is judged
 
@@ -159,7 +161,7 @@ One run per row, no repeats, so a rule is stated before a change is measured, no
 
 | suite | a change counts when | noise |
 |---|---|---|
-| impact | mean recall over 16 does not fall, and no case falls by more than one file | one file on one case |
+| impact | mean recall over 16 does not fall, no case falls by more than one file, and no case with fewer than five referencing files may fall at all | one file on a case with five or more referencing files |
 | trace | 8/8 stays 8/8 | none — a chain either resolves or it does not |
 | changes | `symbols_found / symbols_want` over 8 cases rises by ≥ 0.05 and `files_found / files_want` does not fall | ±1 symbol on one case |
 
