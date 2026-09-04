@@ -17,16 +17,44 @@ import re
 import statistics
 import subprocess
 import time
+import tomllib
 from pathlib import Path
 
 import truth as T
 
 NO_PATH = re.compile(r"no call path|No directed path|\"status\":\s*\"no_path\"|no path", re.I)
 
-# What competes with an answer for the reader's eye: another id of the same shape, or for a
-# file case another path. `BE-M17`, `FR-AI-138`, `INV-16`, `N-137` all match the first;
+REPO_ROOT = Path(__file__).resolve().parent.parent.parent
+
+
+def load_id_families(repograph_toml: Path = REPO_ROOT / "repograph.toml") -> list[str]:
+    """The corpus's own closed list of requirement-id families, e.g. `FR-AI`, `INV`, `N`.
+
+    A pattern built from anything looser than this list also matches `UTF-8`, `SHA-256`,
+    `RFC-7807` — tokens that look like an id but never compete with one for a reader's eye.
+    Failing loudly here beats falling back to that looser pattern, which was the defect.
+    """
+    if not repograph_toml.exists():
+        raise RuntimeError(f"cannot build the id pattern: {repograph_toml} does not exist")
+    with repograph_toml.open("rb") as f:
+        config = tomllib.load(f)
+    families = config.get("id_families")
+    if not families:
+        raise RuntimeError(f"cannot build the id pattern: no `id_families` key in {repograph_toml}")
+    return families
+
+
+def _id_token_pattern(families: list[str]) -> re.Pattern[str]:
+    # Longest-first: matched literally, so `NFR` would otherwise shadow `NFR-PH` at the same
+    # position (alternation takes the first branch that can match, not the longest overall).
+    alts = sorted((re.escape(f) for f in families), key=len, reverse=True)
+    return re.compile(rf"\b(?:{'|'.join(alts)})-[A-Z]?\d{{1,4}}\b")
+
+
+# What competes with an answer for the reader's eye: another id of a real family, or for a
+# file case another path. `FR-AI-138`, `INV-16`, `N-137` all match the first;
 # `docs/prd/x.md` and `apps/api/src/y.ts` the second.
-ID_TOKEN = re.compile(r"\b[A-Z]{1,5}(?:-[A-Z]{1,6})?-[A-Z]?\d{1,4}\b")
+ID_TOKEN = _id_token_pattern(load_id_families())
 PATH_TOKEN = re.compile(r"[\w./-]+/[\w.-]+\.(?:tsx?|kt|md|json|ya?ml|sql)\b")
 
 
@@ -58,15 +86,21 @@ class Tool:
         self.repo = repo
         self.opts = opts
 
-    def run(self, argv: list[str]) -> tuple[str, float]:
+    def _exec(self, argv: list[str]) -> tuple[subprocess.CompletedProcess, float]:
         started = time.perf_counter()
         proc = subprocess.run(argv, cwd=self.repo, capture_output=True, text=True, timeout=self.opts.timeout)
         ms = (time.perf_counter() - started) * 1000
-        out = proc.stdout + proc.stderr
+        return proc, ms
+
+    def _clean(self, out: str) -> str:
         # graphify reads the graph of a worktree, so its paths carry that directory.
         for prefix in self.opts.strip_prefix:
             out = out.replace(prefix.rstrip("/") + "/", "")
-        return out, ms
+        return out
+
+    def run(self, argv: list[str]) -> tuple[str, float]:
+        proc, ms = self._exec(argv)
+        return self._clean(proc.stdout + proc.stderr), ms
 
     def ask(self, q: str): raise NotImplementedError
     def impact(self, target: str): return None
@@ -99,11 +133,36 @@ class Graphify(Tool):
     def changes(self, base): return None
 
 
+def gitnexus_failed(proc: subprocess.CompletedProcess) -> bool:
+    """A repo or symbol gitnexus can't resolve is not an answer, whatever the exit code says.
+
+    Repo-not-found exits 1 with a JSON `error` field that echoes the query (`impact`/`trace`)
+    or crashes to stderr with no stdout at all (`query`/`detect-changes`) — both non-zero.
+    Symbol-not-found instead exits 0 with `{"status": "not_found", "error": "..."}`. Scoring
+    either as text let an echoed `"to"` field satisfy the `trace` substring checks and counted
+    two hits gitnexus never earned (bench/results/2026-09-04-three-graphs.json's discarded
+    predecessor run).
+    """
+    if proc.returncode != 0:
+        return True
+    try:
+        payload = json.loads(proc.stdout)
+    except ValueError:
+        return False
+    return isinstance(payload, dict) and "error" in payload
+
+
 class Gitnexus(Tool):
     name = "gitnexus"
 
     def r(self) -> list[str]:
         return ["-r", self.opts.gitnexus_repo]
+
+    def run(self, argv: list[str]) -> tuple[str, float]:
+        proc, ms = self._exec(argv)
+        if gitnexus_failed(proc):
+            return "", ms
+        return self._clean(proc.stdout + proc.stderr), ms
 
     def ask(self, q): return self.run(["gitnexus", "query", q, *self.r()])
     def impact(self, target):
@@ -272,7 +331,11 @@ def main() -> None:
     blast_path = Path(args.blast).resolve() if args.blast else bench / "blast.jsonl"
     cases = T.read_jsonl(cases_path)
     blast = T.read_jsonl(blast_path)
-    args.gitnexus_repo = args.gitnexus_repo or repo.name
+    # gitnexus registers a repo by a name it derives itself, not by directory basename — a
+    # worktree (or any corpus dir renamed from the clone gitnexus indexed) then matches nothing.
+    # The absolute path is what it actually resolves by, disambiguating even two worktrees
+    # registered under the same name (verified against a live index: 2026-09-04).
+    args.gitnexus_repo = args.gitnexus_repo or str(repo)
 
     if args.truth and Path(args.truth).exists():
         truth = json.loads(Path(args.truth).read_text(encoding="utf8"))
