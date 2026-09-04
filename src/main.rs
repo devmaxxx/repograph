@@ -46,7 +46,7 @@ enum Cmd {
         #[arg(long)] rerank: bool,
         /// Picks the seeds with a local cross-encoder instead of the model command — the same
         /// pool, zero tokens. Needs the exported model in `reranker_dir`.
-        #[arg(long)] rerank_local: bool,
+        #[arg(long, conflicts_with = "rerank")] rerank_local: bool,
         /// Candidates the reranking model is shown; tokens per question grow with it.
         #[arg(long, default_value_t = rerank::DEPTH)] depth: usize,
         /// Answers from the store as it stands, without bringing it in line with the tree first.
@@ -97,7 +97,7 @@ enum Cmd {
         #[arg(long, default_value_t = 8)] parallel: usize,
         #[arg(long)] limit: Option<usize>,
     },
-    Bench { #[arg(long)] cases: Option<PathBuf>, #[arg(long)] rerank: bool, #[arg(long)] rerank_local: bool, #[arg(long, default_value_t = rerank::DEPTH)] depth: usize },
+    Bench { #[arg(long)] cases: Option<PathBuf>, #[arg(long)] rerank: bool, #[arg(long, conflicts_with = "rerank")] rerank_local: bool, #[arg(long, default_value_t = rerank::DEPTH)] depth: usize },
     /// Writes every retriever's ranked list for each question in a JSONL file
     /// (`{"q","expect","kind"}` per line) so the mathematics can be done offline.
     Dump {
