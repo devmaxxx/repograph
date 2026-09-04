@@ -336,7 +336,9 @@ imported value it never saw declared — prints `?` in place of its `path:line`.
 spans and unions the callers of every touched symbol into one list and one risk line. Run it
 before committing; `--base main` before opening a pull request. A hunk outside every symbol —
 an import line, a trailing comment — is reported on the file and walks every symbol the file
-declares; what is being changed is never listed as affected by itself. Deleted files do not
+declares; a hunk in a file the graph does not index at all — a `.kt`, a `.sql`, a lockfile — is
+listed as that file with `not indexed` in place of a span, so the answer says the file changed
+rather than nothing; what is being changed is never listed as affected by itself. Deleted files do not
 appear: their symbols are gone from the graph, and their former callers surface as dangling
 edges in `verify`.
 
