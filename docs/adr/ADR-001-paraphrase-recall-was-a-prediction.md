@@ -139,9 +139,14 @@ a median under one second a question.
 | `--rerank-local --depth 100` | 39/40 | 14/30 | 12/12 | 230 | 8.9 |
 | `--rerank-local --depth 40` | 39/40 | 15/30 | 12/12 | 237 | 3.6 |
 
-Seconds per question are the run's wall clock over its 82 cases, on an M-series laptop with the
-session opened once for the whole run; the control's 0.06 s is the same arithmetic and excludes
-the model open both arms pay.
+Seconds per question are the run's **mean** wall clock over its 82 cases, on an M-series laptop
+with the session opened once for the whole run; the control's 0.06 s is the same arithmetic and
+excludes the model open both arms pay. The rule above names a **median**, and no per-question
+distribution was captured, so the rule and the number do not name the same statistic. A mean does
+not bound a median in general; here the cost of every question is dominated by a fixed 200 forward
+passes, so a median under a second behind a mean of 17.9 s would need a skew this arm cannot
+produce. The verdict is unaffected, but it rests on that argument rather than on the statistic the
+rule was written in.
 
 The depth-200 row is the one the decision rests on, so it was run twice and the second run is
 kept, both streams, in
@@ -151,6 +156,14 @@ questions — and the capture carries stderr, so the record shows that `score` n
 the fused order on any question. Its wall clock read 21.0 s a question rather than 17.9 s, under
 other load on the same machine; the table keeps the quiet run's figure and neither reading is
 within an order of magnitude of the bar.
+
+**Only that arm's output was kept.** The control, `--depth 100` and `--depth 40` streams were not
+captured, so three of the four rows in the table cannot be checked by a reader — and the control
+is the row everything else here is measured against. What rests on an uncaptured run: the
+control's 15/30 and its 0.06 s, the per-case in/out lists below, the +2-paraphrase-for-−1-keyword
+net, and the claim that `NFR-STAFF-04` is the same keyword loss in every arm. What does not: the
+depth-200 row itself, which is on disk twice over, and the verdict, which fails on latency
+against any control.
 
 It stays opt-in, on two of the five conditions. Latency is the decisive one and it is not close:
 17.9 s a question at depth 200 is eighteen times the bar and four times what `--rerank` pays a
@@ -178,14 +191,19 @@ the latency problem is ever solved.
 
 Against the fourteen misses of `docs/bench/2026-09-03-three-graphs-results.md` — the store now
 reads 15/30, not that day's 16/30, so the control is the comparison, not the doc — depth 200
-gains five and loses three. In: `FR-SEC-21`, `FR-AI-102`, `FR-RPT-13`, `FR-WH-18`, `INV-16`.
+gains five. In: `FR-SEC-21`, `FR-AI-102`, `FR-RPT-13`, `FR-WH-18`, `INV-16`.
 `FR-AI-102` is the more interesting of them, one of the two G2 named as never surfacing the
-right file at all; the reranker finds it. Out: `FR-PAY-03`, `FR-SVC-39`, `ADR-004` — three the
-fused order had right and the cross-encoder scored below five others. `FR-CAL-101`, the other of
+right file at all; the reranker finds it. Out, against the committed runs, **four**:
+`FR-PAY-03`, `FR-SVC-39`, `ADR-004` and `N-109` — the fused order had all four right and the
+cross-encoder scored them below five others. `N-109` is the one only the log settles: it is a
+**hit** in every committed run of this store at 16/30 (2026-09-03 and 2026-09-04 alike) and a
+miss in the depth-200 capture. So `15 + 5 − 3 = 17` closes only if the uncaptured control missed
+`N-109` as well, and nothing on disk shows that it did. `FR-CAL-101`, the other of
 G2's two, is missed by the control and by all three reranked arms, which is the coverage finding
 G2 predicts and not a reranker failure. `INV-16` is the only case that flips at every depth, so
-of the five gains four need the pool 200 deep. Net, the swing at the one depth that clears the
-paraphrase bar is +2 paraphrase for −1 keyword, bought at 300× the latency.
+of the five gains four need the pool 200 deep. Net against the control, the swing at the one depth
+that clears the paraphrase bar is +2 paraphrase for −1 keyword, bought at 300× the latency — a
+net that is arithmetic on a control row nobody can re-read.
 
 Adoption would in any case have been a separate change, with its own commit, moving the floor in
 `bench::passes` and the README's Bench list — this amendment records a number and does not move

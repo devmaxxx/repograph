@@ -314,7 +314,10 @@ through its members, and a caller that imported through a barrel is found becaus
 importers: it names the symbol, and a rename reaches it first. `importers` are the files whose
 `import` names the symbol, whether or not a call site resolved. The risk line is four fixed thresholds
 on the direct count and the file count — `MEDIUM` from 5 direct or 3 files, `HIGH` from 15 or
-10, `CRITICAL` from 30 or 25 — printed with the counts, so the label can be argued with.
+10, `CRITICAL` from 30 or 25 — printed with the counts, so the label can be argued with. Barrels
+count towards the file threshold, so a symbol re-exported by three barrels and called by nobody
+now reads `MEDIUM`: the counts beside the label are what say whether that is a real blast radius
+or a re-export chain.
 
 ```
 $ repograph --repo beauty-crm impact StaffService
@@ -485,8 +488,12 @@ stated; input tokens are the answering model's own, median over the 38 questions
 **`--rerank-local`** is the same pool and the same pick, scored by a local cross-encoder
 (`BAAI/bge-reranker-v2-m3`, exported to ONNX once with `optimum-cli export onnx --model
 BAAI/bge-reranker-v2-m3 --task text-classification ~/.cache/repograph/reranker`, ~2.2 GB) at
-zero tokens. Measured on the bench corpus on 2026-09-04 — see ADR-001, Amendment 4 — and not on
-any floor.
+zero tokens — and **measured and rejected** as a floor candidate on 2026-09-04: 17.9 seconds a
+question against a bar of one, and keyword 39/40. Those two figures are on the 82-case set (30
+paraphrase, 40 keyword), not the 14/24 arms in the table above; ADR-001, Amendment 4 has the
+rule that was fixed before the run and the case-by-case swing. It ships opt-in and on no floor,
+exactly as `--rerank` does, and the two flags are mutually exclusive: passing both is an error,
+not a silent preference for one of them.
 
 The `bench` floors apply to the zero-token path; `--rerank` is measured, not
 floored, because a model's pick can vary by one hit between identical runs — which is also why the

@@ -17,9 +17,16 @@ other — a gap is not closed because a task ran against it.
 
 ## G1 · A third of a large blast radius is invisible — `changes` 27/38 symbols
 
-**Status (2026-09-04):** the file half is **closed by Task 2** — `changes` names
-498/498 files over 8 diffs, and the case that read 11/18 files reads 25/25, because a
-hunk in a file the graph never indexed is now printed as that file rather than dropped.
+**Status (2026-09-04):** the file half is **closed by Task 2, against a narrow
+denominator** — `changes` names 498/498 files over 8 diffs, and the case that read 11/18
+files reads 25/25, because a hunk in a file the graph never indexed is now printed as that
+file rather than dropped. The denominator is `code_files`, the files the truth harness
+attributed a declaration to, not the files the diff touched: on `bc9db289~1` 119 files carry
+hunks and 18 are counted, the excluded 101 including fifteen TypeScript files and nine of
+sixteen Kotlin ones — the very files this gap is about. 498/498 is therefore evidence the
+tool stopped dropping the files it is asked about, not a measurement that it names every
+changed file.
+
 The symbol half is **baseline written; the extractor is 0.6.0's** — 57 of the 61 symbols
 still unnamed are Kotlin declarations, and the remaining 4 are one truth-side
 mis-attribution, not a repograph miss. Numbers and the bucketing:

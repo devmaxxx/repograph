@@ -5,7 +5,7 @@ This file is the protocol; `bench/compare/` is the code that runs it. Re-running
 on a new commit, a new repository or a new version of any tool takes one command
 and produces a result file that can be set beside every earlier one.
 
-Three files sit around this one and each answers a different question:
+Four files sit around this one and each answers a different question:
 
 | | |
 |---|---|
@@ -56,7 +56,7 @@ with the truth file is wrong about the repository, not about a rival's model.
 | retrieval, soft | every file that spells that id | one of those files appears in the answer |
 | impact | every file naming the symbol in code — comments and string literals blanked — minus the file declaring it | share of those files the answer names |
 | trace | the chain through injected fields, found by breadth-first search | every intermediate name appears, and the tool does not say "no path" |
-| changes | the enclosing declaration of every hunk in the diff | share of those symbols the answer names |
+| changes | the enclosing declaration of every hunk in the diff; a file whose hunks the TypeScript declaration reader attributes to no declaration is absent from the denominator as well as the numerator, on the file axis as much as the symbol one | share of those symbols the answer names |
 
 The soft criterion exists because graphify and gitnexus answer with files and
 symbols rather than requirement ids; without it the comparison would be unfair to
@@ -139,16 +139,19 @@ main suite uses.
 
 ## Reading a result file
 
-`bench/results/<date>-<repo>.json` carries the corpus path, the commit, the case
-counts, and per tool a `rows` array (one record per case) and a `summary`. Two
-result files from different dates are comparable when the commit and the tool
-versions in the header say they are — the numbers move with the corpus, not only
+`bench/results/<date>-<repo>.json` carries the corpus path, the commit, the suites that
+ran with the case count of each — a `--suites blast` run has no retrieval count, because it
+asked no retrieval question — and per tool a `rows` array (one record per case) and a
+`summary`. Two result files from different dates are comparable when the commit and the
+tool versions in the header say they are — the numbers move with the corpus, not only
 with the tools.
 
 Every retrieval row since 2026-09-04 also carries `rank`: 1 + the distinct competing ids (for
 a file case, paths) that appear in the answer before the expected one, or `null` when it is
-absent. The summary's `mrr` is the mean of `1/rank` over the suite with absences as 0. Strict
-says whether the answer is there; MRR says how far down. The 2026-09-03 file predates the field.
+absent. The summary's `mrr` is the mean of `1/rank` over the suite with absences as 0, and each
+`by_kind` slot carries its own `mrr` and a `rank1` count. Strict says whether the answer is
+there; MRR says how far down. The 2026-09-03 file predates the field, and a row missing `rank`
+altogether is refused rather than scored as a miss.
 
 ## Caveats that belong with every number
 
@@ -175,7 +178,7 @@ One run per row, no repeats, so a rule is stated before a change is measured, no
 
 | suite | a change counts when | noise |
 |---|---|---|
-| impact | mean recall over 16 does not fall, no case falls by more than one file, and no case with fewer than five referencing files may fall at all | one file on a case with five or more referencing files |
+| impact | mean recall over 16 does not fall, no case falls by more than one file, and no narrow case — 5 or fewer referencing files, the tier cutoff above — may fall at all | one file on a wide or hub case, so 6 or more referencing files |
 | trace | 8/8 stays 8/8 | none — a chain either resolves or it does not |
 | changes | `symbols_found / symbols_want` over 8 cases rises by ≥ 0.05 and `files_found / files_want` does not fall | ±1 symbol on one case |
 
