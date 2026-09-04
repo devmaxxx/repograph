@@ -1,7 +1,10 @@
 //! Questions a reader might ask to reach a node, written once by a language model and cached
-//! by passage hash. They give `ask --rerank`'s candidate pool the reader's vocabulary as well
-//! as the author's: measured on the development corpus they move no seed on their own, but
-//! carry every reachable paraphrase target into the pool the model picks from.
+//! by passage hash. They give every answer the reader's vocabulary as well as the author's:
+//! `query::ask` fuses them as a BM25 list of their own whenever the store holds entries, plain
+//! or reranked, and `--rerank` also pools them as dense rows. They therefore move seeds in both
+//! directions — on the development corpus the lexical-only arm reads paraphrase 7/30 raw against
+//! 15/30 enriched, and keyword 39/40 raw against 37/40 enriched, the keyword loss because the
+//! questions list is pushed into `fuse::interleave` ahead of the passage list and leads it.
 use crate::model::{Graph, Node, NodeKind};
 use crate::store::{Source, Store};
 use anyhow::{Context, Result};

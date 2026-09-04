@@ -129,7 +129,7 @@ opus drops a keyword hit in two runs of two, so the reranker's default model is 
 The one lever the second amendment left unmeasured. `bge-reranker-v2-m3`, exported to ONNX
 (`optimum-cli`, 2.27 GB, 1 min 12 s), loaded through the embedder's own `ort` path, scoring
 the same 200-deep pool `--rerank` shows the model command. Rule, written before the run: the
-zero-token floor moves only on paraphrase ≥ 17/30 with keyword 40/40, code 12/12, p90 ≤ 230 and
+paraphrase floors move only on paraphrase ≥ 17/30 with keyword 40/40, code 12/12, p90 ≤ 230 and
 a median under one second a question.
 
 | arm | keyword | paraphrase | code | p90 | s / question |
@@ -225,12 +225,32 @@ each arm run twice with identical results. Against a paraphrase floor of 14 and 
 keyword floor, `repograph bench` therefore failed on any honestly built index whose owner had not
 paid for enrichment, and read as a broken setup rather than as an option not taken.
 
-`bench::passes` now takes the store's state alongside the arm. A store whose requirement-like
-nodes all carry generated questions is graded 14 and 11; one missing any of them is graded 9 and
+`bench::passes` now takes the store's state alongside the arm. A store carrying questions on at
+least 99% of its requirement-like nodes is graded 14 and 11; one below that mark is graded 9 and
 7, with the keyword floor at 39 in the lexical-only arm, and the summary line prints
 `enriched=<bool> (<covered>/<eligible> nodes)` so a red run says which bar it was held to. The
 enriched floors did not move — they are still what this store measured; what moved is the claim
 that they describe a configuration nobody paid for. A part-enriched store is graded raw: the test
-is whether every eligible node carries questions, not whether their passage hashes are current, so
-an edited requirement does not reclassify a store that is otherwise complete while a `--limit` run
-does not earn the enriched bar.
+is coverage, not passage freshness, so an edited requirement does not reclassify a store that is
+otherwise complete while a `--limit` run does not earn the enriched bar. The mark is a high-water
+one and not every node because equality over 1 996 nodes is a cliff — one requirement added after
+the pass, one node the model skipped past its retry, one entry dropped on load — and a store that
+falls off it is regraded five paraphrase points lower, which is a blind spot a gate speaking
+through an exit code cannot afford.
+
+**The enriched lexical-only arm is red, and stays red.** Grading the store honestly exposed a
+second thing the old grading hid. Run today, the reference store reads
+`keyword 40/40  paraphrase 15/30  code 12/12  p90 226 tok  enriched=true (1996/1996 nodes)` with
+embeddings, and `keyword 37/40  paraphrase 15/30  code 12/12  p90 220 tok` with `--no-dense`,
+where `repograph bench` exits 1 on `FR-WH-53`, `FR-PH-43` and `W-206`. The mechanism is fusion
+order, not the floor: on the plain path `query::ask` pushes the generated-questions BM25 list into
+`fuse::interleave` before the passage list, so the questions lead the interleave and displace two
+exact keyword seeds; the arm with embeddings is unaffected because the dense passage list is
+pushed first and leads there. A raw store reads keyword 39/40 in that same arm, already missing
+`FR-PH-43`, so enrichment is what costs the other two.
+
+The floor is not lowered to 37. A floor that follows a regression down is not a floor, and the
+regression here is caused by the very stage the enriched floors exist to describe — lowering it
+would invert this amendment's own thesis. It is recorded as G7 in
+[`next-version-gaps.md`](../bench/next-version-gaps.md), to be measured across all four arms
+before a lever is chosen, and the arm is red in the meantime.

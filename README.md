@@ -454,13 +454,19 @@ answered for free). A node left without questions is asked again by the next `en
 1,971 eligible nodes of the corpus it took 16 minutes at 8-way parallelism and roughly $2.5 of
 Haiku; a node's questions run about 13 lines.
 
-On their own the questions buy nothing at five seeds — 6/14 paraphrase with them and without, on
-the case set before the three rewrites below — and
-that is why the plain `ask` never consults them: as extra dense rows pooled with the passages they
-bury targets (a passage at rank 2 fell to 87 behind other nodes' questions), mixed into the BM25
-text they cost a keyword hit, and as separate lists they change no seed. What they do is carry
-targets into a deeper candidate pool: with them, all six reachable paraphrase misses sit within the
-top 100 fused candidates; without them, two do not.
+Two ways of spending them were measured and rejected: as extra dense rows pooled with the passages
+they bury targets (a passage at rank 2 fell to 87 behind other nodes' questions), and mixed into a
+node's own BM25 text they cost a keyword hit. What ships is the third — a BM25 list of their own,
+which the plain `ask` fuses alongside the passage list whenever the store holds any entries. So
+enrichment moves the floors `bench` grades against, and it moves them in both directions. On the
+recorded cases the `--no-dense` arm reads paraphrase 7/30 raw against 15/30 enriched, keyword 39/40 raw
+against **37/40** enriched: the questions list is pushed into the interleave first, so it leads and
+displaces two exact keyword seeds. The arm with embeddings keeps 40/40, because there the dense
+passage list leads instead. (An older reading on the 14-case set — 6/14 paraphrase with the
+questions and without — is what this section used to cite for the claim that the plain `ask`
+ignores them; on the current set it does not.) The questions also carry targets into a deeper
+candidate pool for `--rerank`: with them, all six reachable paraphrase misses of that older set sat
+within the top 100 fused candidates; without them, two did not.
 
 **`ask --rerank`** builds a 200-deep pool — dense passages, dense questions, BM25 passages, BM25
 questions, interleaved — and hands the model each candidate's id, title and the first 120
@@ -512,9 +518,13 @@ different file of the same shape.
 
 The floors are not one set of numbers but two, because [`enrich`](#spending-tokens-on-purpose) is
 optional and paraphrase recall is what it buys. `bench` reads which state the store is in and says
-so on its summary line (`dense=true  enriched=true (1996/1996 nodes)`): a store whose
-requirement-like nodes all carry generated questions is graded against the enriched floors, any
-other — a fresh `build`, or a pass stopped early — against the raw ones.
+so on its summary line (`dense=true  enriched=true (1996/1996 nodes)`): a store carrying generated
+questions on at least 99% of its requirement-like nodes is graded against the enriched floors, any
+other — a fresh `build`, or a pass stopped early — against the raw ones. The bar is a high-water
+mark and not every node because equality over ~2 000 nodes is a cliff: one requirement added after
+the pass, one node the model skipped past its retry, one entry dropped on load would regrade a
+paid-for store to floors five paraphrase points lower, and `bench` says so only through its exit
+code. The printed counts stay exact either way.
 
 | | enriched store | store with no questions |
 | --- | --- | --- |
@@ -523,17 +533,30 @@ other — a fresh `build`, or a pass stopped early — against the raw ones.
 | code | 12/12 | 12/12 |
 | p90 | ≤230 tokens in every arm | ≤230 tokens in every arm |
 
+**One of those four arms is red today.** An enriched store run with `--no-dense` reads keyword
+**37/40**, missing `FR-WH-53`, `FR-PH-43` and `W-206`, and `repograph bench --no-dense` exits 1 on
+the reference store. The cause is known and is not the floor: the plain `ask` pushes the generated
+questions list into `fuse::interleave` ahead of the passage list, so it leads and displaces two
+exact keyword seeds — `FR-WH-53` and `W-206`; the third, `FR-PH-43`, is the one a raw lexical-only
+store misses too, which is why the raw floor in that arm is 39. See
+[G7](docs/bench/next-version-gaps.md) for the measurement that has to happen before a lever is
+picked. The floor stays at 40. Lowering it to 37 would bless a regression that enrichment causes,
+so the arm stays red until the retrieval work lands.
+
 A raw store is a supported way to run the tool, not a broken one: it answers every code case and,
 with embeddings, every keyword case, and `bench` passes on it. What `enrich` buys is the higher
-paraphrase bar. A part-enriched store — `--limit`, an interrupt, a batch the model never answered —
-is graded raw, since the enriched numbers describe a finished pass; the node counts on the summary
-line say how far the pass got.
+paraphrase bar. A store below the 99% mark — `--limit`, an interrupt, a batch the model never
+answered — is graded raw, since the enriched numbers describe a finished pass; the node counts on
+the summary line say how far the pass got. The raw floors themselves have no headroom: unlike the
+enriched paraphrase floor of 14, which has a point of slack and weeks of runs behind it, 9 and 7
+are two runs on one machine on one day sitting flush on the noisiest split, and they are the first
+thing to relax if they flap.
 
 The p90 is counted as rendered UTF-8 bytes / 4 — a conservative proxy, since it counts a Cyrillic
-answer at roughly double what an equivalent chars/4 reading would give a Latin one. The no-dense
-arm of an enriched store seeds more of its answers from the generated questions, whose Cyrillic
-requirement headlines cost more bytes than a symbol or task node's; that is worth three tokens at
-p90 there, and the four arms sit between 221 and 228, so one ceiling covers them all.
+answer at roughly double what an equivalent chars/4 reading would give a Latin one. An answer
+seeded from a requirement therefore costs more than one seeded from a symbol or a task node, and
+the arms differ by a few tokens at p90 according to where their seeds fall; the four sit between
+220 and 226, so one ceiling covers them all.
 
 The paraphrase cases are the noisy half, and the set was grown to narrow them: Wilson 95% on 14/30
 is 0.30–0.64, against 0.27–0.73 when the same gate rested on 14 cases. It is still a wide interval,
@@ -548,9 +571,10 @@ McNemar test against the shipped rule; that is the bar a fusion or expansion cha
 before the 82 real cases are consulted as the smoke test they are.
 
 Measured, on the shipped binary against `beauty-crm` with its generated questions in the store,
-two runs of each arm agreeing to the case: `keyword 40/40  paraphrase 14/30  code 12/12  p90 225
-tok` with embeddings, 195 median; `keyword 40/40  paraphrase 11/30  code 12/12  p90 228 tok` with
-`--no-dense`, 200 median. A store that `enrich` has never touched, built from scratch in a
+two runs of each arm agreeing to the case: `keyword 40/40  paraphrase 15/30  code 12/12  p90 226
+tok` with embeddings, 195 median; `keyword 37/40  paraphrase 15/30  code 12/12  p90 220 tok` with
+`--no-dense`, 196 median — that second arm is the red one, three keyword cases short of its floor
+of 40 for the reason given above. A store that `enrich` has never touched, built from scratch in a
 worktree of the same corpus at the same commit, reads `keyword 40/40  paraphrase 9/30  code 12/12
 p90 221 tok` with embeddings and `keyword 39/40  paraphrase 7/30  code 12/12  p90 226 tok` with
 `--no-dense`, each arm run twice with identical results — the raw floors in the table above are
@@ -602,12 +626,13 @@ out of 3,599 tracked:
 | Tokens spent building the graph and its vectors | 0                                                                                                             |
 
 Retrieval on the recorded 82 cases against that graph, both arms run twice with identical results:
-keyword 40/40, paraphrase 14/30, code 12/12 at 195 median and 225 p90 tokens with embeddings;
-40/40, 11/30, 12/12 at 200 median and 228 p90 with `--no-dense`. Those are the numbers with
+keyword 40/40, paraphrase 15/30, code 12/12 at 195 median and 226 p90 tokens with embeddings;
+**37/40**, 15/30, 12/12 at 196 median and 220 p90 with `--no-dense`. Those are the numbers with
 `enrich`'s generated questions in the store — the one thing above that was paid for, roughly $2.5
-of Haiku, once. The same corpus indexed and queried at zero tokens throughout reads 40/40, 9/30,
-12/12 at 221 p90 and 39/40, 7/30, 12/12 at 226; [Bench](#bench) floors each state on its own
-numbers.
+of Haiku, once — and the lexical-only arm is failing its keyword floor of 40 on them, which
+[Bench](#bench) explains and does not paper over. The same corpus indexed and queried at zero
+tokens throughout reads 40/40, 9/30, 12/12 at 221 p90 and 39/40, 7/30, 12/12 at 226;
+[Bench](#bench) floors each state on its own numbers.
 
 The prior art on the same corpus was an LLM-extracted graph that cost **14.6 million input tokens
 over 13 runs** and, measured on the 38 questions of the day, answered 0 of 14 paraphrase queries at

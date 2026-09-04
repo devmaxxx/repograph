@@ -13,6 +13,10 @@ Each heading now carries a status line from the 2026-09-04 run
 closed, one was measured and rejected, and two are closed on one half and deferred on the
 other — a gap is not closed because a task ran against it.
 
+G7 is the exception to both paragraphs above: it was raised after the 2026-09-04 run rather than
+by it, by re-measuring the enriched store once `bench` began grading stores by state, so it
+carries a raised line where the others carry a status one.
+
 ---
 
 ## G1 · A third of a large blast radius is invisible — `changes` 27/38 symbols
@@ -237,16 +241,67 @@ one `changes` case in its own corpus, and a result file beside this one.
 
 ---
 
+## G7 · Enrichment costs two exact keyword seeds — `--no-dense` keyword 37/40 against a raw 39/40
+
+**Raised (2026-09-04):** not by the three-graph run. It surfaced once `bench` began grading a
+store on the configuration it actually is
+([ADR-001 Amendment 5](../adr/ADR-001-paraphrase-recall-was-a-prediction.md)): the enriched
+lexical-only arm had been measured against the enriched floors all along, and reading it honestly
+made it red.
+
+**Measured.** On `beauty-crm` with its generated questions in the store,
+`repograph bench --no-dense` reads
+`keyword 37/40  paraphrase 15/30  code 12/12  p90 220 tok  enriched=true (1996/1996 nodes)` and
+exits 1. The three misses are `FR-WH-53` «отчёты склада», `FR-PH-43`
+«критерий готовности рыночному запуску» and `W-206` «каскадного сдвига дня нет» — exact-id
+keyword cases, the kind lexical retrieval is supposed to be unbeatable at. The same corpus with
+no questions in the store reads **39/40** in that arm, missing only `FR-PH-43`, so enrichment
+costs the other two; both states read 40/40 with embeddings. Paraphrase runs the other way on the
+same arm, 7/30 raw against 15/30 enriched, so this is a trade the fusion makes unasked, not a
+straight loss.
+
+**Candidate cause, named and not confirmed.** `src/query.rs:98-101`. On the plain, non-rerank
+path the generated-questions BM25 list is pushed into `lists` *before* the passage BM25 list, and
+`fuse::interleave` takes the leading list's head first, so a questions row of some other node
+outranks the exact passage row it should sit behind. With embeddings the dense passage list is
+pushed first and leads instead — which is exactly the arm that holds 40/40. Two exact seeds lost
+at a depth of five is the shape that order predicts.
+
+**Diagnostic before the lever.** `repograph dump --queries` on the three questions, reading the
+four retriever lists 300 deep with their scores. It confirms the cause only if the target sits in
+the passage BM25 list at a rank the interleave would have taken had that list led, and the rows
+that displaced it are other nodes' questions. If the target is missing from the passage list as
+well, this is not fusion order and it belongs with the extractor or the id census.
+
+**Why the floor is not the lever.** The enriched keyword floor stays at 40. Lowering it to 37
+would bless a regression enrichment itself causes, which is the inversion of what Amendment 5
+says. The arm stays red until this is fixed.
+
+**Lever, deliberately not chosen yet.** At least four are available — lead with the passage list,
+weight the interleave instead of alternating, drop the questions list from the plain path, or
+confine it to the rerank pool — and each pays differently on the paraphrase split the same
+fusion buys. It needs measuring across all four arms (dense/no-dense × raw/enriched), the way G2
+and G4 insist: a change judged on the lexical-only enriched arm alone could trade eight
+paraphrase hits for three keyword ones without anyone noticing.
+
+**Gate.** Enriched `--no-dense` back to keyword 40/40 with paraphrase no lower than its floor of
+11/30, and the other three arms unmoved at their measured numbers — on the 400 held-out question
+set with a paired exact McNemar test, before the 82 real cases are consulted as the smoke test
+they are. `repograph bench --no-dense` exits 0 on the reference store.
+
+---
+
 ## Suggested order
 
 | | gap | why here |
 |---|---|---|
-| 1 | **G5** rank + MRR | a scoring change over rows that already exist, and G2 cannot be argued without it |
-| 2 | **G1** unparsed files get a file node | the largest missing share of a real answer, and the fix is language-independent |
-| 3 | **G3** the three impact diagnostics | three files to read; it either finds a bug or writes an honest caveat |
-| 4 | **G4** grow the blast set | must land before G1's and G6's changes are judged on it |
-| 5 | **G2** measure `bge-reranker-v2-m3` | the one unmeasured retrieval lever; everything cheaper is already rejected |
-| 6 | **G6** a case file per new corpus | ships with the 0.6.0 languages, not after them |
+| 1 | **G7** the fusion order on the plain path | the only floor a shipped arm is currently failing; `bench --no-dense` exits 1 until it is settled |
+| 2 | **G5** rank + MRR | a scoring change over rows that already exist, and G2 cannot be argued without it |
+| 3 | **G1** unparsed files get a file node | the largest missing share of a real answer, and the fix is language-independent |
+| 4 | **G3** the three impact diagnostics | three files to read; it either finds a bug or writes an honest caveat |
+| 5 | **G4** grow the blast set | must land before G1's and G6's changes are judged on it |
+| 6 | **G2** measure `bge-reranker-v2-m3` | the one unmeasured retrieval lever; everything cheaper is already rejected |
+| 7 | **G6** a case file per new corpus | ships with the 0.6.0 languages, not after them |
 
 ## What is explicitly not on this list
 
