@@ -30,8 +30,10 @@ task id (`BE-M17`) or a file path.
 | `trace` | 8 | the call chain from A to B, or that there is none |
 | `changes` | 8 | what a diff since a base commit touches |
 
-The sixteen `impact` targets are spread by fan-in on purpose — two hubs (24 to 48
-referencing files), three wide (6 to 10), eleven narrow (2 to 3) — because a tool
+The sixteen `impact` targets are spread by fan-in on purpose. A tier is a count of
+referencing files, not a judgement call: narrow is 5 or fewer, wide is 6 to 19, hub is
+20 or more. By that cutoff the suite holds two hubs (24 to 48 referencing files),
+three wide (6 to 10), eleven narrow (2 to 3) — because a tool
 that answers hubs well can still miss a service with two callers, and a mean across
 tiers would hide it; six narrow targets were added 2026-09-04 for that reason. A
 seventh case, `TenantContextInterceptor`, was filed as a hub when the suite was
@@ -130,6 +132,9 @@ prose) are run with `--blast` / `--cases`; the result goes to `bench/results/<da
 The first one is `beauty-crm-mobile`: eight Kotlin `impact` targets that score 0 on every
 repograph before 0.6.0, written down so that the Kotlin extractor is measured on the day it
 lands rather than predicted. No language ships without its file here and a result beside it.
+This corpus has no Kotlin symbol at hub scale — its widest target has eight referencing
+files — so its tiers read wide and narrow only, not lopsided against the same cutoffs the
+main suite uses.
 
 ## Reading a result file
 

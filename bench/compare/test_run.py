@@ -79,7 +79,7 @@ class BlastShape(unittest.TestCase):
         rows = T.read_jsonl(BENCH / "corpora" / "beauty-crm-mobile" / "blast.jsonl")
         self.assertEqual(collections.Counter(r["kind"] for r in rows), {"impact": 8})
         self.assertTrue(all(r["file"].endswith(".kt") for r in rows))
-        self.assertEqual(collections.Counter(r["tier"] for r in rows), {"hub": 3, "wide": 2, "narrow": 3})
+        self.assertEqual(collections.Counter(r["tier"] for r in rows), {"wide": 1, "narrow": 7})
 
 
 if __name__ == "__main__":
