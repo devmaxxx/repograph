@@ -143,7 +143,9 @@ fn importers(graph: &Graph, root: &str) -> Vec<String> {
     for a in aliases(graph, root) {
         if let Some((f, _)) = a.trim_start_matches("sym:").rsplit_once("::") {
             files.insert(format!("file:{f}"));
-            out.insert(f.to_string());
+            // A re-export cycle can walk back to the declaring file itself; it names the
+            // symbol by declaring it, not by importing it.
+            if f != n.file { out.insert(f.to_string()); }
         }
     }
     for e in graph.edges.iter().filter(|e| e.kind == EdgeKind::Imports && files.contains(&e.target) && exports(e, name)) {
@@ -315,9 +317,23 @@ mod tests {
     }
 
     #[test]
-    fn a_barrel_that_re_exports_the_symbol_is_an_importer() {
-        // Rename S and `export * from './s'` in index.ts is the first thing that breaks.
-        assert!(upstream(&graph(), "sym:s.ts::S", 1).importers.contains(&"index.ts".to_string()));
+    fn a_re_export_cycle_does_not_name_the_declaring_file_as_its_own_importer() {
+        // b re-exports s, a re-exports b, and s re-exports a: aliases() walks the cycle all the
+        // way back to s.ts itself, which must not then claim to import the symbol it declares.
+        let mut g = Graph::default();
+        let mut e = Extraction::default();
+        e.node(NodeKind::File, "file:s.ts", "s.ts", "", "s.ts", 1);
+        e.node(NodeKind::Symbol, "sym:s.ts::S", "S", "", "s.ts", 3);
+        e.edge("file:s.ts", "sym:s.ts::S", EdgeKind::Declares, "export", "s.ts");
+        e.node(NodeKind::File, "file:b.ts", "b.ts", "", "b.ts", 1);
+        e.edge("file:b.ts", "file:s.ts", EdgeKind::ReExports, "*", "b.ts");
+        e.node(NodeKind::File, "file:a.ts", "a.ts", "", "a.ts", 1);
+        e.edge("file:a.ts", "file:b.ts", EdgeKind::ReExports, "*", "a.ts");
+        e.edge("file:s.ts", "file:a.ts", EdgeKind::ReExports, "*", "s.ts");
+        g.apply(e);
+        let imp = upstream(&g, "sym:s.ts::S", 1).importers;
+        assert!(!imp.contains(&"s.ts".to_string()), "{imp:?}");
+        assert_eq!(imp, vec!["a.ts", "b.ts"]);
     }
 
     #[test]
