@@ -48,7 +48,7 @@ for arm in $ARMS; do
   tail -2 "$OUT/$arm.txt"
   # A crash leaves no summary line, and a run with no summary must not enter the history at
   # all rather than entering it as a row of zeroes that later reads as a regression.
-  if grep -q '^keyword [0-9]*/' "$OUT/$arm.txt"; then
+  if grep -qE '^keyword [0-9]+/[0-9]+  paraphrase [0-9]+/[0-9]+' "$OUT/$arm.txt"; then
     python3 "$HERE/track.py" record "$OUT/$arm.txt" \
       --corpus beauty-crm --corpus-path "$FIXTURE" --note "$NOTE"
     [ "$rc" -eq 0 ] || status=$rc

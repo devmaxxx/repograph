@@ -49,9 +49,11 @@ Each arm prints its latest metrics and then, where the history supports it:
   on a regression. The raw floors were set at exactly what they measured, so they start here.
 - **improved / REGRESSED** — cases that changed state since the previous run of the same arm.
 - **NOT COMPARABLE** — printed instead, when the corpus commit moved, the case set changed size,
-  or the floors moved between the two runs. The differences are still listed, under words that
-  do not attribute them to the tool. This repository has made that attribution error twice and
-  documented both times; the check exists so it cannot be made silently again.
+  the floors moved, or a run did not record which corpus it ran against. The differences are
+  still listed, under words that do not attribute them to the tool. This repository has made
+  that attribution error twice and documented both times; the check exists so it cannot be made
+  silently again. The same check bounds the window below: chronic and flaky counts stop at the
+  first run the latest one cannot be read against, and the report says when it stopped early.
 - **chronic** — cases missing in most of the window, worst mean score first. A case needs at
   least two appearances before it can be called chronic. The mean travels with the count
   because a suite scored by recall can sit at 0.98 for six runs, which is a different problem
@@ -61,7 +63,8 @@ Each arm prints its latest metrics and then, where the history supports it:
 
 After the per-arm sections, two cross-arm readings: cases missed by every recorded arm, which
 are holes in retrieval rather than any one arm's defect, and cases missed by exactly one arm,
-which are that arm's own.
+which are that arm's own. Only arms whose latest run sits on the newest corpus commit take
+part, and the report names any it left out.
 
 ## The floors are not restated here
 
@@ -74,4 +77,10 @@ stops with an error rather than falling back to remembered numbers.
 
 `~/bench/beauty-crm-502e8a6d` — a detached worktree of the corpus pinned at `502e8a6d`,
 carrying the indexes for all three tools so none of them has to be rebuilt. Building it is
-described in `docs/bench/runbook.md`. Override the location with `FIXTURE=/path`.
+described in `docs/bench/runbook.md`.
+
+`FIXTURE=/path` moves where the runner looks; it does not change which commit is acceptable.
+The runner refuses anything but `502e8a6d`, because every row already in `runs.jsonl` was
+recorded against that corpus and a run against another one is not comparable to any of them.
+Changing the pinned commit is a deliberate act: edit the check, and expect the history to
+restart from there.

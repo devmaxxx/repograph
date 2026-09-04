@@ -15,6 +15,12 @@ paraphrase W-206        HIT   512 tok  предупреждение о пере�
 keyword 37/40  paraphrase 15/30  code 12/12  p90 220 tok  dense=true  enriched=true (1996/1996 nodes)
 """
 
+PROSE = """\
+// Sixteen lines of prose about the floors sit above `passes` in the real file, and they
+// discuss the floors in the notation the code uses: s.code.0 >= 11 && s.p90_tokens <= 200
+// was the shape before the ceiling was rounded.
+"""
+
 PASSES = """\
 pub fn passes(s: &Summary, dense: bool, enriched: bool) -> bool {
     // a comment mentioning (true, true) => (99, 99) inside prose
@@ -82,6 +88,16 @@ class Floors(unittest.TestCase):
         with self.assertRaises(SystemExit):
             track.floors(path)
 
+    def test_prose_above_passes_cannot_supply_the_code_floor_or_the_ceiling(self):
+        # The one way this parser could be wrong without saying so: reading a sentence about
+        # the floors instead of the floors.
+        with tempfile.NamedTemporaryFile("w", suffix=".rs", delete=False) as f:
+            f.write(PROSE + PASSES)
+            path = Path(f.name)
+        arm = track.floors(path)[(True, True)]
+        self.assertEqual(arm["code"], 12)
+        self.assertEqual(arm["p90_tokens"], 230)
+
     def test_the_live_source_still_parses(self):
         f = track.floors()
         self.assertEqual(set(f), {(True, True), (True, False), (False, True), (False, False)})
@@ -112,6 +128,25 @@ class Scored(unittest.TestCase):
             {"kind": "changes", "base": "b", "found_symbols": 0, "want_symbols": 0})[1], 1.0)
 
 
+class Ordering(unittest.TestCase):
+    def test_rows_are_read_newest_last_whatever_order_the_file_holds(self):
+        # runs.jsonl is merged with `merge=union`, so file order is not append order after two
+        # branches meet, and "the latest run" would otherwise be whichever line landed last.
+        import json as _json
+        d = Path(tempfile.mkdtemp())/"runs.jsonl"
+        rows = [{"when": "2026-09-04T18:00:00+00:00", "arm": "a", "cases": {}},
+                {"when": "2026-09-02T10:00:00", "arm": "a", "cases": {}},
+                {"when": "2026-09-03T10:00:00+00:00", "arm": "a", "cases": {}}]
+        d.write_text("\n".join(_json.dumps(r) for r in rows))
+        before, track.RUNS = track.RUNS, d
+        try:
+            self.assertEqual([r["when"] for r in track.load()],
+                             ["2026-09-02T10:00:00", "2026-09-03T10:00:00+00:00",
+                              "2026-09-04T18:00:00+00:00"])
+        finally:
+            track.RUNS = before
+
+
 class Headroom(unittest.TestCase):
     def test_negative_under_the_bar_positive_over_it(self):
         m = {"keyword": [37, 40], "paraphrase": [15, 30], "code": [12, 12], "p90_tokens": 220}
@@ -122,8 +157,9 @@ class Headroom(unittest.TestCase):
         self.assertEqual(r["p90_tokens"], 10)
 
 
-def run(cases):
-    return {"cases": cases, "when": "t", "source": "bench", "metrics": {}}
+def run(cases, when="2026-09-04T12:00:00+00:00", commit="502e8a6d"):
+    return {"cases": cases, "when": when, "source": "bench", "metrics": {},
+            "corpus_commit": commit}
 
 
 class Analysis(unittest.TestCase):
@@ -151,6 +187,11 @@ class Analysis(unittest.TestCase):
         # One appearance cannot show a pattern; calling it chronic invents a trend.
         w = [run({"a": 0.0, "b": 1.0}), run({"a": 0.0}), run({"a": 0.0, "c": 0.0})]
         self.assertEqual(track.weak(w, 0.66), ["a (3/3, mean 0.00)"])
+
+    def test_a_single_run_has_no_chronic_cases_at_all(self):
+        # A first run has no history to be chronic against, and reporting eighteen "chronic"
+        # cases from one run is the noise-versus-standing-hole confusion this is meant to end.
+        self.assertEqual(track.weak([run({"a": 0.0, "b": 0.0})], 0.66), [])
 
     def test_a_high_recall_chronic_reads_apart_from_a_zero(self):
         w = [run({"i": 0.98}), run({"i": 0.98})]
@@ -184,6 +225,26 @@ class Analysis(unittest.TestCase):
         a = {"corpus_commit": "c", "cases": {"x": 1.0}, "floors": {"keyword": 40}}
         b = {"corpus_commit": "c", "cases": {"x": 0.0}, "floors": {"keyword": 40}}
         self.assertIsNone(track.incomparable(a, b))
+
+    def test_a_missing_corpus_commit_is_not_treated_as_a_match(self):
+        # Unknown is not equal. Saying nothing would let an unchecked pair pass as checked.
+        a = {"corpus_commit": None, "cases": {"x": 1.0}}
+        b = {"corpus_commit": "502e8a6d", "cases": {"x": 0.0}}
+        self.assertIn("does not record which corpus commit", track.incomparable(a, b))
+        self.assertIn("does not record which corpus commit", track.incomparable(b, a))
+
+    def test_the_window_stops_at_the_first_incomparable_run(self):
+        # chronic and flaky count across the window, so the window must not cross a setup
+        # change -- counting flips over one is the attribution the report just refused.
+        old = run({"a": 1.0}, when="2026-09-01T12:00:00+00:00", commit="7733bd53")
+        mid = run({"a": 0.0}, when="2026-09-02T12:00:00+00:00")
+        new = run({"a": 0.0}, when="2026-09-03T12:00:00+00:00")
+        self.assertEqual(track.comparable_window([old, mid, new], 6), [mid, new])
+
+    def test_a_window_of_one_when_nothing_before_it_is_comparable(self):
+        old = run({"a": 1.0}, when="2026-09-01T12:00:00+00:00", commit="7733bd53")
+        new = run({"a": 0.0}, when="2026-09-03T12:00:00+00:00")
+        self.assertEqual(track.comparable_window([old, new], 6), [new])
 
     def test_metric_moves_only_report_what_changed(self):
         prev = {"metrics": {"keyword": [37, 40], "p90_tokens": 220}}

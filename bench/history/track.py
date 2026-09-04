@@ -44,7 +44,7 @@ RERANK = re.compile(r"rerank(_local)?=true depth=(\d+)")
 # The floors live in one place -- `passes` in src/bench.rs -- and are read from there rather
 # than restated here, because a floor that moves in Rust and not in Python would make every
 # headroom figure in the report quietly wrong.
-BLOCK = re.compile(r"match \(enriched, dense\) \{(.*?)\n\s*\};", re.S)
+FUNC = re.compile(r"pub fn passes\([^)]*\)\s*->\s*bool\s*\{\n(.*?)\n\}", re.S)
 ARMS = re.compile(
     r"\(true,\s*true\)\s*=>\s*\((\d+),\s*(\d+)\).*?"
     r"\(true,\s*false\)\s*=>\s*\((\d+),\s*(\d+)\).*?"
@@ -56,14 +56,18 @@ TAIL = re.compile(r"s\.code\.0 >= (\d+) && s\.p90_tokens <= (\d+)")
 
 
 def floors(source=None):
-    """The four (keyword, paraphrase) pairs plus the code floor and token ceiling."""
+    """The four (keyword, paraphrase) pairs plus the code floor and token ceiling.
+
+    Every number is read from inside `passes`, with that function's own comments stripped
+    first. Sixteen lines of prose about the floors sit directly above it and discuss them in
+    the same notation the code uses, so a search over the file would sooner or later read a
+    sentence instead of the code -- and quietly, which is the one failure this must not have.
+    """
     text = (source or REPO / "src" / "bench.rs").read_text()
-    block = BLOCK.search(text)
-    # The prose above `passes` discusses the arms in the same notation the arms use, so the
-    # match block is isolated first and its own comments dropped before any number is read.
-    body = re.sub(r"//[^\n]*", "", block.group(1)) if block else ""
-    arms, tail = ARMS.search(body), TAIL.search(text)
-    if not block or not arms or not tail:
+    fn = FUNC.search(text)
+    body = re.sub(r"//[^\n]*", "", fn.group(1)) if fn else ""
+    arms, tail = ARMS.search(body), TAIL.search(body)
+    if not fn or not arms or not tail:
         raise SystemExit("cannot read the floors out of src/bench.rs -- `passes` changed shape")
     n = [int(g) for g in arms.groups()]
     code, p90 = int(tail.group(1)), int(tail.group(2))
@@ -209,10 +213,24 @@ def append(row):
         f.write(json.dumps(row, ensure_ascii=False, sort_keys=True) + "\n")
 
 
+def when_of(row):
+    """A row's timestamp as an aware datetime, for ordering.
+
+    Imported comparison rows carry a naive stamp and recorded bench rows an aware one, so a
+    string sort would interleave them wrongly and a naive/aware comparison would raise.
+    """
+    t = datetime.fromisoformat(row["when"])
+    return t if t.tzinfo else t.replace(tzinfo=timezone.utc)
+
+
 def load():
     if not RUNS.exists():
         return []
-    return [json.loads(l) for l in RUNS.read_text().splitlines() if l.strip()]
+    rows = [json.loads(l) for l in RUNS.read_text().splitlines() if l.strip()]
+    # File order is append order until a union merge interleaves two branches' runs, after
+    # which "the latest row" would be whichever branch's line landed last -- and improved and
+    # REGRESSED would read backwards. Order by the stamp the row carries instead.
+    return sorted(rows, key=when_of)
 
 
 def by_arm(rows):
@@ -274,14 +292,20 @@ def cmd_report(args):
             for k, before, after in metric_moves(prev, latest):
                 print(f"  {k}: {before} -> {after}")
 
-        window = history[-args.window:]
+        # Counting misses and flips across a moved corpus or a changed case set attributes to
+        # the tool exactly what the line above just refused to attribute to it, so the window
+        # stops at the first run the latest one cannot be compared to.
+        window = comparable_window(history, args.window)
         chronic = weak(window, args.chronic)
         if chronic:
-            print(f"  chronic over the last {len(window)} run(s) "
+            print(f"  chronic over the last {len(window)} comparable run(s) "
                   f"(missed in >={args.chronic:.0%}), worst first: " + clip(chronic, args.top))
         flappy = flaky(window)
         if flappy:
-            print(f"  flaky over the last {len(window)} run(s): " + clip(flappy, args.top))
+            print(f"  flaky over the last {len(window)} comparable run(s): " + clip(flappy, args.top))
+        if len(window) < min(len(history), args.window):
+            print(f"  (window stops at {len(window)} of {len(history)} run(s): the older ones "
+                  f"were recorded against a different setup)")
 
     if not args.arm:
         systemic(groups, args.top)
@@ -298,6 +322,17 @@ def clip(items, top):
     return ", ".join(items[:top]) + f", +{len(items) - top} more"
 
 
+def comparable_window(history, size):
+    """The newest runs that can all be read against the latest one, newest `size` at most."""
+    latest = history[-1]
+    out = []
+    for row in reversed(history[-size:]):
+        if row is not latest and incomparable(row, latest):
+            break
+        out.append(row)
+    return list(reversed(out))
+
+
 def incomparable(prev, latest):
     """Why two runs of one arm cannot be read as a before and after, or None if they can.
 
@@ -307,8 +342,13 @@ def incomparable(prev, latest):
     """
     reasons = []
     a, b = prev.get("corpus_commit"), latest.get("corpus_commit")
-    if a != b:
-        reasons.append(f"the corpus moved {a or '?'} -> {b or '?'}")
+    if a is None or b is None:
+        # Unknown is not the same as equal: a row with no recorded corpus commit cannot be
+        # shown to describe the same corpus, and saying nothing here would let it pass as if
+        # it had been checked.
+        reasons.append("a run does not record which corpus commit it ran against")
+    elif a != b:
+        reasons.append(f"the corpus moved {a} -> {b}")
     ca, cb = set(prev.get("cases", {})), set(latest.get("cases", {}))
     if ca != cb:
         reasons.append(f"the case set changed ({len(ca)} -> {len(cb)}, "
@@ -357,9 +397,8 @@ def weak(window, threshold):
             seen[key] = seen.get(key, 0) + 1
             missed[key] = missed.get(key, 0) + (score < 1.0)
             total[key] = total.get(key, 0.0) + score
-    floor_n = min(2, len(window))
     out = [(k, missed[k], seen[k]) for k in seen
-           if seen[k] >= floor_n and missed[k] / seen[k] >= threshold]
+           if seen[k] >= 2 and missed[k] / seen[k] >= threshold]
     return [f"{k} ({m}/{n}, mean {total[k] / n:.2f})"
             for k, m, n in sorted(out, key=lambda t: (total[t[0]] / t[2], t[0]))]
 
@@ -376,8 +415,20 @@ def flaky(window):
 
 
 def systemic(groups, top):
-    """A case every arm misses is a hole in retrieval; one arm alone is that arm's own defect."""
+    """A case every arm misses is a hole in retrieval; one arm alone is that arm's own defect.
+
+    Only arms whose latest run sits on the newest corpus commit take part. Reading one arm's
+    answer at one commit against another arm's answer at a different one says nothing about
+    either arm.
+    """
     latest = {arm: h[-1] for arm, h in groups.items() if h and h[-1]["source"] == "bench"}
+    commits = {r.get("corpus_commit") for r in latest.values()}
+    if len(commits) > 1:
+        newest = max(latest.values(), key=when_of).get("corpus_commit")
+        dropped = sorted(a for a, r in latest.items() if r.get("corpus_commit") != newest)
+        latest = {a: r for a, r in latest.items() if r.get("corpus_commit") == newest}
+        print(f"\n(cross-arm reading covers {newest} only; "
+              f"{', '.join(dropped)} last ran against another corpus commit)")
     if len(latest) < 2:
         return
     keys = set.intersection(*(set(r["cases"]) for r in latest.values()))
