@@ -37,19 +37,19 @@ struct Record {
 }
 
 #[derive(Serialize)]
-struct Meta { store: String, depth: usize, rows: usize, dim: usize, queries: usize }
+struct Meta { store: String, depth: usize, rows: usize, dim: usize, queries: usize, dense: bool }
 
 #[derive(Serialize)]
 struct Dump { meta: Meta, queries: Vec<Record> }
 
-pub fn run(repo: &Path, queries: &Path, out: &Path, depth: usize) -> Result<()> {
+pub fn run(repo: &Path, queries: &Path, out: &Path, depth: usize, no_dense: bool) -> Result<()> {
     let cfg = Config::load(repo)?;
     let store = Store::new(repo);
     let (graph, _) = store.load()?;
     if graph.nodes.is_empty() { anyhow::bail!("graph is empty at {} — run build first", repo.display()); }
     let ids = IdMatcher::new(&cfg.id_families, &cfg.milestone_families);
     let dense_idx = DenseIndex::load(&store)?;
-    if dense_idx.ids.is_empty() { anyhow::bail!("dense index is empty at {} — run `repograph update` first", repo.display()); }
+    if !no_dense && dense_idx.ids.is_empty() { anyhow::bail!("dense index is empty at {} — run `repograph update` first", repo.display()); }
     let questions = Questions::load(&store)?;
     let text = std::fs::read_to_string(queries).with_context(|| queries.display().to_string())?;
     let queries: Vec<Query> = text.lines().filter(|l| !l.trim().is_empty())
@@ -64,19 +64,26 @@ pub fn run(repo: &Path, queries: &Path, out: &Path, depth: usize) -> Result<()> 
     }
     let lexical = LexicalIndex::build(&graph);
     let lexical_q = LexicalIndex::build_questions(&graph, &loo);
-    let mut embedder = match Embedder::open() {
-        Ok(e) => e,
-        Err(err) => anyhow::bail!("dense: model unavailable ({err:#})"),
+    // `--no-dense` records the lexical-only arm: the dense lists stay empty and `ask` answers
+    // without them, exactly as `ask --no-dense` would, so the held-out gate can be read in the
+    // arm the floors also grade.
+    let mut embedder = if no_dense {
+        None
+    } else {
+        match Embedder::open() {
+            Ok(e) => Some(e),
+            Err(err) => anyhow::bail!("dense: model unavailable ({err:#})"),
+        }
     };
-    let opts = Options { seeds: 5, bodies: false, dense: true, json: false, depth: crate::rerank::DEPTH };
+    let opts = Options { seeds: 5, bodies: false, dense: !no_dense, json: false, depth: crate::rerank::DEPTH };
     let mut records = Vec::with_capacity(queries.len());
     for q in &queries {
         let words: Vec<String> = q.q.split_whitespace().map(str::to_string).collect();
         let (exact_ids, whole_question) = query::exact_seeds(&graph, &ids, &words);
-        let qvec = embedder.query(&q.q)?;
+        let qvec = match embedder.as_mut() { Some(e) => e.query(&q.q)?, None => Vec::new() };
         let loo_hash = blake3::hash(format!("query: {}", q.q).as_bytes()).to_hex().to_string();
         let loo_rows: Vec<usize> = dense_idx.hashes.iter().enumerate().filter(|(_, h)| **h == loo_hash).map(|(i, _)| i).collect();
-        let (dense_passages, dense_questions) = dense_idx.search_scored(&qvec, depth, Some(&loo_hash));
+        let (dense_passages, dense_questions) = if no_dense { (Vec::new(), Vec::new()) } else { dense_idx.search_scored(&qvec, depth, Some(&loo_hash)) };
         // The same vector `ask` would embed for this question, so the recorded answer is the
         // binary's own and the offline replication can be checked against it query by query.
         // It answers from the same held-out indices the four lists come from: a synthetic
@@ -86,7 +93,8 @@ pub fn run(repo: &Path, queries: &Path, out: &Path, depth: usize) -> Result<()> 
             let (p, g) = dense_idx.search_scored(&qvec, k, Some(&loo_hash));
             (p.into_iter().map(|(id, _)| id).collect(), g.into_iter().map(|(id, _)| id).collect())
         };
-        let answer = query::ask(&graph, &ids, &loo, Some(&dense_fn), None, &words, &opts);
+        let dense_arm: Option<query::Dense> = if no_dense { None } else { Some(&dense_fn) };
+        let answer = query::ask(&graph, &ids, &loo, dense_arm, None, &words, &opts);
         records.push(Record {
             q: q.q.clone(),
             expect: q.expect.clone(),
@@ -107,11 +115,11 @@ pub fn run(repo: &Path, queries: &Path, out: &Path, depth: usize) -> Result<()> 
         eprintln!("dump: {:<10} {:<14} {}", q.kind, q.expect, q.q);
     }
     let dump = Dump {
-        meta: Meta { store: repo.join(".repograph").display().to_string(), depth, rows: dense_idx.ids.len(), dim: dense_idx.dim, queries: records.len() },
+        meta: Meta { store: repo.join(".repograph").display().to_string(), depth, rows: dense_idx.ids.len(), dim: dense_idx.dim, queries: records.len(), dense: !no_dense },
         queries: records,
     };
     std::fs::write(out, serde_json::to_vec(&dump)?).with_context(|| out.display().to_string())?;
-    println!("dump: {} queries, {} deep, {} rows × {} → {}", dump.meta.queries, depth, dump.meta.rows, dump.meta.dim, out.display());
+    println!("dump: {} queries, {} deep, {} rows × {}, dense={} → {}", dump.meta.queries, depth, dump.meta.rows, dump.meta.dim, dump.meta.dense, out.display());
     Ok(())
 }
 
