@@ -138,3 +138,8 @@ says whether the answer is there; MRR says how far down. The 2026-09-03 file pre
   reports; the payload was checked by hand and is quoted in the notes where it differs.
 - The case set lives in the repograph repository and was written against it.
   Keywords and code symbols are taken by all three; the paraphrases make the set hard.
+- A `changes` case's truth is the diff from its base to the corpus's live HEAD, not a
+  fixed window, so its want-totals grow as the corpus moves forward on its own. Two
+  runs' `changes` fractions are comparable only when both ran at the same corpus
+  commit — it is in every result file's header, and a reader comparing `changes`
+  across runs has to check it before comparing anything else.
