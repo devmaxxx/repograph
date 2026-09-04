@@ -253,4 +253,59 @@ The floor is not lowered to 37. A floor that follows a regression down is not a 
 regression here is caused by the very stage the enriched floors exist to describe — lowering it
 would invert this amendment's own thesis. It is recorded as G7 in
 [`next-version-gaps.md`](../bench/next-version-gaps.md), to be measured across all four arms
-before a lever is chosen, and the arm is red in the meantime.
+before a lever is chosen. Amendment 6 is that measurement.
+
+## Amendment 6 — the questions list earns its turn (2026-09-05)
+
+Amendment 5 named the mechanism as fusion order. It is not. Read 300 deep with `dump --queries`,
+leading with the passage list moves the three misses from fused rank 6, 10 and 42 to 6, 9 and 41:
+`fuse::interleave` is a round-robin, and with two lists the second takes every other slot whichever
+one leads. What costs the seeds is the questions list's **share**, and on a keyword-shaped question
+that share buys nothing — over the forty recorded keyword cases the passage list holds thirty-eight
+answers in its own top five and is never without one, while the questions list holds eight and lacks
+the answer outright ten times. Over the thirty paraphrase cases the two swap places almost exactly,
+which is why the same equal share is what buys 7/30 → 15/30 there.
+
+The obvious lever — thin the questions list's turns for every question — was measured first and
+rejected by the gate G7 wrote before the run. It recovers the keyword cases on the 82 and loses on
+400 held-out generated questions at every ratio, in both arms, gaining nothing: lexical recall@5
+0.283 → 0.255, 13 lost and 2 gained, exact McNemar p = 0.007. On a paraphrase the questions list is
+the retriever doing the work, and a rule that applies to every question pays there.
+
+The held-out set itself had to be rebuilt before that could be read. `dump` applies leave-one-out
+only to queries of kind `synthetic`; a first set written as `paraphrase` left each question's own
+text in the index and read recall@5 0.955, which is the index finding its own sentence. Held out,
+the same questions read 0.263 with embeddings and 0.283 without — the numbers everything below is
+measured against, reproducible from `bench/heldout.py build` with its recorded seed.
+
+What ships is a per-question admission: the generated-questions BM25 list joins the plain-path
+fusion only when its best score is at least 0.85 of the passage list's best. The two indices share
+a corpus and a tokenizer, so their best scores compare, and on the held-out set the ratio tracks
+which retriever holds the answer — below 0.85 the passage list does (30% of targets in its top
+five against the questions list's 21%), above it the questions list does (24% against 12%). The
+rule was fixed before the run: the change is accepted only if the held-out loss is not significant
+in either arm, the enriched lexical-only arm reaches raw parity on the 82 with paraphrase at or
+above its floor, and the result is flat across the gap between the two query populations rather
+than a knife-edge. Measured, on the shipped binary:
+
+| arm | before | after |
+|---|---|---|
+| enriched, embeddings | 40/40 · 15/30 · 12/12 · p90 226 | 40/40 · 15/30 · 12/12 · p90 220 |
+| enriched, `--no-dense` | 37/40 · 15/30 · 12/12 · p90 220 · exit 1 | **39/40** · 14/30 · 12/12 · p90 215 |
+| raw, embeddings | 40/40 · 9/30 · 12/12 · p90 221 | unchanged |
+| raw, `--no-dense` | 39/40 · 7/30 · 12/12 · p90 226 | unchanged |
+| 400 held-out, recall@5 | 105 | 103 — 5 gained, 7 lost, exact McNemar p = 0.77 |
+
+The enriched lexical-only arm misses `FR-PH-43` alone, which the raw store misses too: it sits at
+passage rank 23 and no lexical path reaches it. Enrichment now costs that arm no keyword case, and
+its floor moves from 40 to 39 — the number both stores measure at this corpus commit, and the same
+floor the raw arm already carried. It did not move while the arm read 37, and the difference
+matters: 37 was a cost enrichment imposed and a floor that follows it down blesses it; 39 is parity,
+and a floor above what the raw store can reach was never measuring enrichment at all. The 40 came
+from the earlier corpus commit.
+
+The plateau is narrow and is recorded as narrow. Held-out tolerates any threshold up to 0.90; below
+0.85 the keyword case `FR-WH-53`, ratio 0.80, keeps losing its seat. A threshold with one case's
+ratio directly under it is the kind of number this ADR exists to distrust, so it is stated here
+with its two constraints rather than presented as chosen — and the held-out set, now honest and
+reproducible, is what any move of it has to be judged on first.

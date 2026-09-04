@@ -186,8 +186,9 @@ altogether is refused rather than scored as a miss.
 - **repograph answers differently before and after `enrich`, and the build above leaves it
   before.** The generated questions are what its paraphrase floor rests on: on this corpus at
   `502e8a6d` the same binary reads 9/30 paraphrase without them and 15/30 with them, with
-  embeddings on, and code does not move. Keyword does move, but only without embeddings, where
-  the questions currently cost three cases rather than buying any. `enrich` spends model tokens
+  embeddings on, and code does not move. Keyword does not move either, now that the questions
+  list is admitted to the fusion only when it has matched the question at least as well as the
+  passages have; before that gate it cost the lexical-only arm two cases. `enrich` spends model tokens
   (~$2.5 of Haiku here), so a run of this protocol measures repograph's zero-token configuration
   unless it pays for one first — and either way the result should say which, as `bench`'s own
   summary line does with `enriched=`.

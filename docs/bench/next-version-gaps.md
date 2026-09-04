@@ -241,93 +241,42 @@ one `changes` case in its own corpus, and a result file beside this one.
 
 ---
 
-## G7 · Enrichment costs two exact keyword seeds — `--no-dense` keyword 37/40 against a raw 39/40
+## G7 · Enrichment cost two exact keyword seeds — closed 2026-09-05
 
 **Raised (2026-09-04):** not by the three-graph run. It surfaced once `bench` began grading a
 store on the configuration it actually is
 ([ADR-001 Amendment 5](../adr/ADR-001-paraphrase-recall-was-a-prediction.md)): the enriched
-lexical-only arm had been measured against the enriched floors all along, and reading it honestly
-made it red.
+lexical-only arm read `keyword 37/40` against the raw store's `39/40` on the same corpus, missing
+`FR-WH-53` and `W-206` that the raw store answered, and `repograph bench --no-dense` exited 1.
 
-**Measured.** On `beauty-crm` with its generated questions in the store,
-`repograph bench --no-dense` reads
-`keyword 37/40  paraphrase 15/30  code 12/12  p90 220 tok  enriched=true (1996/1996 nodes)` and
-exits 1. The three misses are `FR-WH-53` «отчёты склада», `FR-PH-43`
-«критерий готовности рыночному запуску» and `W-206` «каскадного сдвига дня нет» — exact-id
-keyword cases, the kind lexical retrieval is supposed to be unbeatable at. The same corpus with
-no questions in the store reads **39/40** in that arm, missing only `FR-PH-43`, so enrichment
-costs the other two; both states read 40/40 with embeddings. Paraphrase runs the other way on the
-same arm, 7/30 raw against 15/30 enriched, so this is a trade the fusion makes unasked, not a
-straight loss.
+**Closed by** the per-question gate on the generated-questions list described in
+[ADR-001 Amendment 6](../adr/ADR-001-paraphrase-recall-was-a-prediction.md): the list joins the
+plain-path fusion only when its best BM25 score is at least 0.85 of the passage list's. The
+enriched lexical-only arm reads `keyword 39/40  paraphrase 14/30  code 12/12  p90 215` — parity
+with the raw store, both runs identical case by case — the arm with embeddings is unchanged at
+40/40 and 15/30 with p90 down from 226 to 220, the raw arms are untouched by construction, and 400
+held-out questions moved by 5 gained and 7 lost, exact McNemar p = 0.77. The floor in that arm moved
+from 40 to 39, which is what both stores measure at this commit; it did not move while the arm read
+37, because 37 was a cost enrichment imposed.
 
-**Cause, measured — and it is not the one first named.** The first reading of this blamed the
-order of the lists at `src/query.rs:98-101`, where the generated-questions list is pushed ahead
-of the passage list on the plain path. `dump --queries` over the three misses says otherwise.
-Leading with the passage list instead moves them from fused rank 6, 10 and 42 to rank 6, 9 and
-41 — that is, nowhere. `fuse::interleave` is a round-robin: with two lists the second one takes
-every other slot whichever leads, so a target at passage rank 4 lands near fused rank 8 either
-way. The cost is the questions list's **share** of five seeds, not its position.
+**What the measurement corrected.** The cause first named here — the questions list pushed ahead of
+the passage list — was wrong: leading with the passage list moves the three misses from fused rank
+6, 10 and 42 to 6, 9 and 41. The cost was the list's *share* of five seeds in a round-robin, on
+questions it held no answer to (ten of the forty keyword cases, against zero for the passage list).
+Thinning that share for every question was the first lever tried and was rejected by this gap's own
+gate — lexical held-out recall@5 0.283 → 0.255, 13 lost and 2 gained, p = 0.007 — because on a
+paraphrase the questions list is the retriever doing the work. And the held-out set had to be
+rebuilt before any of that could be read: written as kind `paraphrase` instead of `synthetic`,
+`dump` had not held anything out, and the set read 0.955. `bench/heldout.py` now builds it with the
+right kind and a recorded seed, and `dump`'s recorded answer comes from the held-out indices too.
 
-Where each retriever actually puts the answer, over the recorded cases:
-
-| | rank 1 | in its top 5 | absent from its 300 |
-|---|---|---|---|
-| 40 keyword cases · `bm25_passages` | 32 | 38 | 0 |
-| 40 keyword cases · `bm25_questions` | 1 | 8 | **10** |
-| 30 paraphrase cases · `bm25_passages` | 2 | 7 | 9 |
-| 30 paraphrase cases · `bm25_questions` | 9 | 12 | 2 |
-
-An equal share therefore spends half a keyword query's seeds on a retriever that does not hold
-the answer at all a quarter of the time — and the two lists are near mirror images, which is why
-the same split is what buys paraphrase 7/30 → 15/30.
-
-One of the two lost cases is not a seed at all. `W-206` sits at passage rank 6, past the cut, and
-the raw store still answers it: measured directly on a store with the questions files removed,
-`--no-dense` reads 39/40 with `W-206` **HIT**. It arrives through the expansion step, from a
-neighbour of a seed. So the questions list costs it indirectly, by changing which seeds the
-expansion starts from.
-
-**Levers measured and rejected.** All four this gap originally listed, plus the gate that
-rejected the serious one.
-
-1. *Lead with the passage list.* No effect, above.
-2. *Thin the questions list's turns* — one per two rounds, or three, four, six. On the 82 cases
-   this is the lever that works: it recovers the keyword cases. On the 400 held-out questions it
-   loses, every ratio, in both arms, gaining nothing anywhere: dense recall@5 0.955 → 0.890
-   (26 lost, 0 gained, exact McNemar p < 0.0001) and lexical 0.970 → 0.955 (6 lost, 0 gained,
-   p = 0.031) at the mildest setting tried. **Rejected by the pre-registered gate below**, which
-   is the whole reason the gate is written before the run: two exact hits on forty hand-written
-   keyword cases against six to twenty-six losses on four hundred questions the corpus generated
-   is not a trade worth making, and reading the 82 first would have made it look like one.
-3. *Drop the questions list from the plain path.* That is the raw store, measured: paraphrase
-   15/30 → 7/30 in the same arm. Strictly worse.
-4. *Confine it to the rerank pool.* Same as 3 for anyone not paying for a reranker.
-
-**The lever not yet tried, and why it is not tried here.** The questions list's top BM25 score
-divided by the passage list's separates the query populations cleanly — median 0.52 over the
-recorded keyword cases against 1.28 over the held-out generated questions — which suggests
-letting the questions list take a slot only when it clears a threshold. It is not shipped
-because the same ratio does **not** separate, inside the keyword cases, the queries whose answer
-the questions list actually holds (median 0.52) from those where it is absent entirely (0.49).
-It is a signal about the shape of the query, not about whether the retriever knows anything, and
-a threshold chosen from these two sets would be fitted to the distance between them — the
-2026-09-04 keyword cases are terse phrases and the held-out set is full generated questions,
-while a real question sits somewhere between. Measuring it needs a third set drawn from neither.
-
-**Why the floor is not the lever.** The enriched keyword floor stays at 40. Lowering it to 37
-would bless a regression enrichment itself causes, which is the inversion of what Amendment 5
-says. The arm stays red until this is fixed.
-
-**Gate, unchanged and unmet.** Enriched `--no-dense` back to keyword 40/40 with paraphrase no
-lower than its floor of 11/30, and the other three arms unmoved at their measured numbers — on
-the 400 held-out question set with a paired exact McNemar test, before the 82 real cases are
-consulted as the smoke test they are. `repograph bench --no-dense` exits 0 on the reference
-store.
-
-The held-out set is no longer something to rebuild from scratch: `bench/heldout.py build`
-writes it deterministically from a store's `questions.json`, and `bench/heldout.py compare`
-runs the paired test between two `dump` outputs. The order of operations is in that file's
-header, and it is the order, not the test, that this gap keeps proving matters.
+**What stays open.** `FR-PH-43` — «критерий готовности рыночному запуску» — sits at passage rank
+23 and no lexical path reaches it in either store; only the dense list does. That is a lexical
+retrieval limit, not an enrichment cost, and it is why both lexical-only floors are 39 rather than
+40. And the gate's plateau is narrow: held-out tolerates any threshold up to 0.90, and below 0.85
+`FR-WH-53` (ratio 0.80) loses its seat again. A threshold with one recorded case's ratio directly
+under it is a number to distrust, so it is published with both constraints, and any move of it is
+judged on the held-out set first — the order of operations in `bench/heldout.py`'s header.
 
 ---
 
@@ -335,7 +284,7 @@ header, and it is the order, not the test, that this gap keeps proving matters.
 
 | | gap | why here |
 |---|---|---|
-| 1 | **G7** the questions list's share of the seeds | the only floor a shipped arm is currently failing; `bench --no-dense` exits 1 until it is settled. Four levers measured and all four rejected, so what is left is not a tweak — it needs a signal that says when the questions list knows anything, and a third question set to choose it on |
+| 1 | ~~**G7** the questions list's share of the seeds~~ | closed 2026-09-05 — gated on the ratio of the two lists' best scores, held-out p = 0.77, lexical-only arm at raw parity; the narrow plateau is recorded above |
 | 2 | **G5** rank + MRR | a scoring change over rows that already exist, and G2 cannot be argued without it |
 | 3 | **G1** unparsed files get a file node | the largest missing share of a real answer, and the fix is language-independent |
 | 4 | **G3** the three impact diagnostics | three files to read; it either finds a bug or writes an honest caveat |

@@ -460,14 +460,17 @@ Haiku; a node's questions run about 13 lines.
 Two ways of spending them were measured and rejected: as extra dense rows pooled with the passages
 they bury targets (a passage at rank 2 fell to 87 behind other nodes' questions), and mixed into a
 node's own BM25 text they cost a keyword hit. What ships is the third — a BM25 list of their own,
-which the plain `ask` fuses alongside the passage list whenever the store holds any entries. So
-enrichment moves the floors `bench` grades against, and it moves them in both directions. On the
-recorded cases the `--no-dense` arm reads paraphrase 7/30 raw against 15/30 enriched, keyword 39/40 raw
-against **37/40** enriched: the questions list is pushed into the interleave first, so it leads and
-displaces two exact keyword seeds. The arm with embeddings keeps 40/40, because there the dense
-passage list leads instead. (An older reading on the 14-case set — 6/14 paraphrase with the
-questions and without — is what this section used to cite for the claim that the plain `ask`
-ignores them; on the current set it does not.) The questions also carry targets into a deeper
+which the plain `ask` fuses alongside the passage list — when that list has earned its turn. It
+joins the fusion only if its best BM25 score is at least 0.85 of the passage list's best: the two
+indices share a corpus and a tokenizer, so their best scores compare, and on 400 held-out generated
+questions the passage list is the one holding the answer below that ratio (30% in its top five
+against 21%) while the questions list is above it (24% against 12%). Before the gate an equal turn
+cost the `--no-dense` arm two exact keyword seeds, 39/40 raw against 37/40 enriched; with it that
+arm reads 39/40 either way, paraphrase 7/30 raw against 14/30 enriched, and the held-out set moved
+by 5 gained and 7 lost, exact McNemar p = 0.77. The arm with embeddings was 40/40 throughout. (An
+older reading on the 14-case set — 6/14 paraphrase with the questions and without — is what this
+section used to cite for the claim that the plain `ask` ignores them; it does not.) The questions
+also carry targets into a deeper
 candidate pool for `--rerank`: with them, all six reachable paraphrase misses of that older set sat
 within the top 100 fused candidates; without them, two did not.
 
@@ -531,20 +534,18 @@ code. The printed counts stay exact either way.
 
 | | enriched store | store with no questions |
 | --- | --- | --- |
-| keyword | 40/40 in both arms | 40/40 with embeddings, 39/40 with `--no-dense` |
+| keyword | 40/40 with embeddings, 39/40 with `--no-dense` | 40/40 with embeddings, 39/40 with `--no-dense` |
 | paraphrase | ≥14/30 with embeddings, ≥11/30 with `--no-dense` | ≥9/30 with embeddings, ≥7/30 with `--no-dense` |
 | code | 12/12 | 12/12 |
 | p90 | ≤230 tokens in every arm | ≤230 tokens in every arm |
 
-**One of those four arms is red today.** An enriched store run with `--no-dense` reads keyword
-**37/40**, missing `FR-WH-53`, `FR-PH-43` and `W-206`, and `repograph bench --no-dense` exits 1 on
-the reference store. The cause is known and is not the floor: the plain `ask` pushes the generated
-questions list into `fuse::interleave` ahead of the passage list, so it leads and displaces two
-exact keyword seeds — `FR-WH-53` and `W-206`; the third, `FR-PH-43`, is the one a raw lexical-only
-store misses too, which is why the raw floor in that arm is 39. See
-[G7](docs/bench/next-version-gaps.md) for the measurement that has to happen before a lever is
-picked. The floor stays at 40. Lowering it to 37 would bless a regression that enrichment causes,
-so the arm stays red until the retrieval work lands.
+**Keyword is 39, not 40, in both lexical-only arms.** `FR-PH-43` sits at passage rank 23 and no
+lexical path reaches it, enriched or raw. The enriched arm read **37/40** until 2026-09-05, losing
+`FR-WH-53` and `W-206` as well, because the generated-questions list took an equal turn in the
+fusion on questions it had nothing to say about; the gate described under [Enrichment](#enrichment)
+put it level with the raw store. The floor moved to 39 only once it was level — at 37 it stayed 40,
+because 37 was a cost enrichment itself imposed and a floor that blesses one is not a floor. The
+measurement is in [G7](docs/bench/next-version-gaps.md).
 
 A raw store is a supported way to run the tool, not a broken one: it answers every code case and,
 with embeddings, every keyword case, and `bench` passes on it. What `enrich` buys is the higher
@@ -574,16 +575,15 @@ McNemar test against the shipped rule; that is the bar a fusion or expansion cha
 before the 82 real cases are consulted as the smoke test they are.
 
 Measured, on the shipped binary against `beauty-crm` with its generated questions in the store,
-two runs of each arm agreeing to the case: `keyword 40/40  paraphrase 15/30  code 12/12  p90 226
-tok` with embeddings, 195 median; `keyword 37/40  paraphrase 15/30  code 12/12  p90 220 tok` with
-`--no-dense`, 196 median — that second arm is the red one, three keyword cases short of its floor
-of 40 for the reason given above. A store that `enrich` has never touched, built from scratch in a
-worktree of the same corpus at the same commit, reads `keyword 40/40  paraphrase 9/30  code 12/12
-p90 221 tok` with embeddings and `keyword 39/40  paraphrase 7/30  code 12/12  p90 226 tok` with
-`--no-dense`, each arm run twice with identical results — the raw floors in the table above are
-those numbers, measured rather than assumed. Code is floored at the whole 12 and keyword at the
-whole 40 in every arm but that one, which is why they are counts rather than fractions; only
-paraphrase is a fraction wherever it is graded.
+two runs of each arm identical case by case: `keyword 40/40  paraphrase 15/30  code 12/12  p90 220
+tok` with embeddings and `keyword 39/40  paraphrase 14/30  code 12/12  p90 215 tok` with
+`--no-dense`, both arms green. A store that
+`enrich` has never touched — the same store with its questions files removed — reads `keyword
+40/40  paraphrase 9/30  code 12/12  p90 221 tok` with embeddings and `keyword 39/40  paraphrase
+7/30  code 12/12  p90 226 tok` with `--no-dense`; the raw floors in the table above are those
+numbers, measured rather than assumed. Code is floored at the whole 12 and keyword at the whole 40
+with embeddings, which is why they are counts rather than fractions; only paraphrase is a fraction
+wherever it is graded.
 
 Three of the first fourteen paraphrase cases were rewritten on the way. One asked about withdrawing
 consent through a messenger, while the entry it names (`FR-VIS-76`) is about who may leave a
