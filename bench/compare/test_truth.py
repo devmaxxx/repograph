@@ -204,6 +204,31 @@ class TypescriptDeclarations(unittest.TestCase):
         )
         self.assertEqual([name for _, name in declarations("a.ts", src)[1]], ["A", "run"])
 
+    def test_a_re_export_is_not_a_declaration(self):
+        # packages/domain/src/{availability,registry,schedule}/index.ts each write this, and
+        # the generator star let `type` step over the `*` and take `from` as the name.
+        src = "export type * from './snapshot.js';\nexport * from './other.js';\nexport const after = 1;\n"
+        self.assertEqual([name for _, name in declarations("a.ts", src)[1]], ["after"])
+
+    def test_a_generator_function_still_yields_its_name(self):
+        src = (
+            "export function* gen() {}\n"
+            "export function *gen2() {}\n"
+            "export async function* gen3() {}\n"
+        )
+        self.assertEqual([name for _, name in declarations("a.ts", src)[1]], ["gen", "gen2", "gen3"])
+
+    def test_a_construct_signature_is_not_a_member_but_a_property_named_new_is(self):
+        src = (
+            "export interface F {\n"
+            "  new (x: number): F;\n"
+            "  new<T>(x: T): F;\n"
+            "  new: () => F;\n"
+            "  make(): F;\n"
+            "}\n"
+        )
+        self.assertEqual([name for _, name in declarations("a.ts", src)[1]], ["F", "new", "make"])
+
     def test_an_enum_entry_is_not_a_declaration(self):
         # Kotlin leaves enum entries out, so TypeScript does too, or the same diff would
         # be scored against two different questions.

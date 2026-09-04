@@ -222,8 +222,12 @@ TS_DECL = re.compile(
     rf"^[ \t]*(?:@[\w.]+(?:\([^()\n]*\))?[ \t]*)*"
     rf"(?:(?:{TS_MODIFIER})[ \t]+)*"
     rf"(?P<kw>class|function|interface|enum|namespace|module|const|let|var|type)\b"
-    rf"(?:[ \t]*\*)?"
-    rf"(?:[ \t]+(?P<name>[\w$]+))?"
+    # The generator star belongs to `function` alone. Letting any keyword step over it read
+    # `export type * from './snapshot.js'` as a declaration named `from`, three times in
+    # packages/domain — a re-export names nothing, and a star after any other keyword is not
+    # a declaration either.
+    rf"(?:(?<=function)[ \t]*\*)?"
+    rf"(?:[ \t]*(?P<name>[\w$]+))?"
 )
 # A class or interface member carries no keyword at all — it is a name followed by a call
 # signature, a type annotation or an initialiser. Only reachable inside a type body, so a
@@ -233,6 +237,9 @@ TS_MEMBER = re.compile(
     rf"(?:(?:public|private|protected|readonly|static|abstract|override|async|declare|accessor)[ \t]+)*"
     rf"(?:(?:get|set)[ \t]+)?"
     rf"\*?[ \t]*"
+    # `constructor(…)` and `new (x): T` introduce a signature, not a name a graph reports.
+    # Only when a call follows: `new: () => T` really is a property named `new`.
+    rf"(?!(?:constructor|new)[ \t]*[(<])"
     rf"(?P<name>[\w$]+)"
     rf"[ \t]*[?!]?[ \t]*(?:{GENERIC}[ \t]*)?[(:=;]"
 )
@@ -271,8 +278,8 @@ def _scoped_declarations(
     is spelled with the same `fun` or `val` as a top-level declaration.
 
     A constructor parameter is left out in both dialects: the hunk that touches a type's
-    header touches the type, which is already named. So is an enum entry, and so is the
-    TypeScript `constructor`, which is a keyword rather than a name a graph would report.
+    header touches the type, which is already named. So is an enum entry, and so are the
+    TypeScript `constructor` and construct signatures, which `member` declines to match.
     """
     found: list[tuple[int, str]] = []
     holds_declarations: list[bool] = []
@@ -294,7 +301,7 @@ def _scoped_declarations(
                 match = decl.match(line)
                 if match:
                     pending = " ".join(match.group("kw").split()) in type_keywords
-            if match and match.group("name") and match.group("name") != "constructor":
+            if match and match.group("name"):
                 found.append((index + 1, match.group("name").strip("`")))
         for char in line:
             if char == "{":
