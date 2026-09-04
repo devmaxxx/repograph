@@ -26,16 +26,23 @@ pub fn default_dir() -> Result<PathBuf> {
 }
 
 /// The pad token and its id as the model's own files declare them, the way the embedder reads
-/// them from the hub.
+/// them from the hub. Both are required: a default here would be a guess at the very thing the
+/// files exist to state, and the wrong guess is silent — the attention mask hides it.
 fn pad(dir: &Path) -> Result<(String, u32)> {
     let read = |f: &str| -> Result<serde_json::Value> {
         let p = dir.join(f);
-        Ok(serde_json::from_slice(&std::fs::read(&p).with_context(|| format!("read {}", p.display()))?)?)
+        let bytes = std::fs::read(&p).with_context(|| format!("read {}", p.display()))?;
+        serde_json::from_slice(&bytes).with_context(|| format!("parse {}", p.display()))
     };
     let config = read("config.json")?;
     let tok_config = read("tokenizer_config.json")?;
-    let token = tok_config["pad_token"].as_str().context("tokenizer_config.json: pad_token")?.to_string();
-    Ok((token, config["pad_token_id"].as_u64().unwrap_or(0) as u32))
+    let token = tok_config["pad_token"].as_str()
+        .with_context(|| format!("{}: pad_token must be a string naming the model's pad token", dir.join("tokenizer_config.json").display()))?
+        .to_string();
+    let id = config["pad_token_id"].as_u64()
+        .and_then(|n| u32::try_from(n).ok())
+        .with_context(|| format!("{}: pad_token_id must be the pad token's integer id", dir.join("config.json").display()))?;
+    Ok((token, id))
 }
 
 /// The exporter's `text-classification` head is `[batch, labels]`, and only a single-label head
