@@ -8,9 +8,24 @@ it worked. They are ordered by how much of a real answer is missing, not by effo
 Two of them are the language work already scheduled for 0.6.0; what this file adds is
 that the bench says they are not a nice-to-have.
 
+Each heading now carries a status line from the 2026-09-04 run
+([`2026-09-04-repograph-0.5.0-results.md`](2026-09-04-repograph-0.5.0-results.md)). Three
+closed, one was measured and rejected, and two are closed on one half and deferred on the
+other — a gap is not closed because a task ran against it.
+
 ---
 
 ## G1 · A third of a large blast radius is invisible — `changes` 27/38 symbols
+
+**Status (2026-09-04):** the file half is **closed by Task 2** — `changes` names
+498/498 files over 8 diffs, and the case that read 11/18 files reads 25/25, because a
+hunk in a file the graph never indexed is now printed as that file rather than dropped.
+The symbol half is **baseline written; the extractor is 0.6.0's** — 57 of the 61 symbols
+still unnamed are Kotlin declarations, and the remaining 4 are one truth-side
+mis-attribution, not a repograph miss. Numbers and the bucketing:
+[`2026-09-04-repograph-0.5.0-results.md`](2026-09-04-repograph-0.5.0-results.md). The
+gate's "≥34/38 symbols on the 18-file case" cannot be checked as written: that case's
+want-total grew with the corpus, so the run reads 48/54 at a different HEAD.
 
 **Measured.** `changes` scored 32/43 symbols and 13/20 files overall, and the split is
 the whole story: **5/5 symbols on a 2-file diff, 27/38 on an 18-file one.** Seven of
@@ -42,6 +57,14 @@ polyglot, so the suite keeps measuring this after the fix.
 ---
 
 ## G2 · Fourteen paraphrases, twelve of them a neighbour away — strict 16/30, soft 28/30
+
+**Status (2026-09-04):** **measured and rejected, not closed** — Task 6 ran the local
+cross-encoder this gap named as the one unmeasured lever.
+[ADR-001 Amendment 4](../adr/ADR-001-paraphrase-recall-was-a-prediction.md) is the
+authority: `--rerank-local` at depth 200 reads paraphrase 17/30 against a control of
+15/30, but keyword 39/40 and 17.9 s a question against a bar of one second. Two of the
+five conditions fail, so no floor moved and the flag ships opt-in. The gap stays open;
+what closes is only the question of whether that lever was worth trying.
 
 **Measured.** Strict 16/30, soft 28/30. Twelve of the fourteen misses opened the right
 file and named a neighbouring requirement; only two (`FR-AI-102`
@@ -86,6 +109,14 @@ test they are. Do not move a floor on 30 noisy cases alone: Wilson 95% on 16/30 
 
 ## G3 · Three hub targets short — `impact` 110/114
 
+**Status (2026-09-04):** **closed by Tasks 3 and 4** — 123/123 files over 16 targets,
+mean recall 1.0, every target at 1.0. The gate asked for 114/114 or a named exclusion;
+what the diagnostic found is that the answer is both, in different files. Three of the
+114 were a symbol name inside a string literal — never a reference, so Task 3 removed
+them from the truth rather than excluding them in prose, which takes the original ten
+targets to 111/111. The fourth was real: `AuthService`'s tenth file imported it through
+a barrel, and Task 4 made a re-exporting barrel an importer.
+
 **Measured.** Mean recall 0.949. Every narrow target is 1.0; the misses are all in the
 tiers an agent trusts most — `TenantContextInterceptor` 3/4, `OutboxPublisher` 6/7,
 `AuthService` 9/10.
@@ -113,6 +144,13 @@ exclusion in the README's blast-radius caveats. No silent 0.949.
 
 ## G4 · The blast suite has 20 cases and no confidence story
 
+**Status (2026-09-04):** **closed by Task 5** — `blast.jsonl` is 32 cases: `impact` 10
+→ 16 (six narrow targets, the tier a mean over hubs hides), `changes` 2 → 8 diffs
+spanning small/large and mono/polyglot, `trace` unchanged at 8. The decision rule this
+gap asked for is written down in
+[`three-graphs.md`](three-graphs.md#when-a-blast-delta-counts), per suite, with a noise
+column — stated before the changes above were measured against it.
+
 **Measured.** One run per row, no repeats, on 10 + 8 + 2 cases. Retrieval has a real
 methodology behind it — 400 held-out questions, recall@5 with a ±5-point interval, a
 paired McNemar test. Blast has nothing equivalent, and `changes` rests on **two**
@@ -135,6 +173,14 @@ written.
 
 ## G5 · Strict is a substring, so ranking is unmeasured
 
+**Status (2026-09-04):** **closed by Task 1** — every retrieval row carries `rank`, the
+summary carries `mrr`, and this run measures **0.635** overall: keyword 0.816, code
+1.000, paraphrase **0.247** with 2 of 30 at rank 1. One clause of the gate is unmet and
+unmeetable: the 2026-09-03 rows cannot be rescored, because the harness stored counts
+and never the answer text, so the field starts here with no prior value. The paraphrase
+row also answers the question this gap was raised to serve — reordering cannot produce
+the 14 ids that are absent, and finding them would not by itself put them first.
+
 **Measured.** The protocol says it outright: an id ranked fifth of five counts the
 same as first. So 68/82 strict says nothing about whether the right answer is at the
 top of the answer or at the bottom of it.
@@ -152,6 +198,17 @@ summary, and the 2026-09-03 rows rescored so the two runs are comparable.
 ---
 
 ## G6 · One corpus, one language, one id census
+
+**Status (2026-09-04):** **baseline written; the extractor is 0.6.0's, and so are two
+thirds of this gate.** `bench/corpora/beauty-crm-mobile/blast.jsonl` holds eight Kotlin
+`impact` targets and
+[`../../bench/results/2026-09-04-beauty-crm-mobile.json`](../../bench/results/2026-09-04-beauty-crm-mobile.json)
+records what they read today: recall 0.0, 0/20 files, every case wanting at least one
+file. Zero is the intended number — there is no Kotlin extractor yet — and writing it
+down before the work is the whole point. The gate is **not** met: it asks for one
+`impact`, one `trace` **and** one `changes` case per corpus, and only the `impact` third
+was built; the retrieval half was not attempted either, because it needs that corpus's
+own `id_families` census. Second corpus, second language, still one id census.
 
 **Measured, structurally.** All 102 cases are `beauty-crm`. All 30 paraphrases are
 Russian. `repograph.toml` says of its own `id_families` list: "This is beauty-crm's

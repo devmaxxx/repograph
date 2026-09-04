@@ -9,7 +9,8 @@ Three files sit around this one and each answers a different question:
 
 | | |
 |---|---|
-| [`2026-09-03-three-graphs-results.md`](2026-09-03-three-graphs-results.md) | what the last run measured, and what was decided because of it |
+| [`2026-09-04-repograph-0.5.0-results.md`](2026-09-04-repograph-0.5.0-results.md) | the latest run — repograph alone, 32 blast cases, `rank` and `mrr`, and which comparisons to the run below are not deltas |
+| [`2026-09-03-three-graphs-results.md`](2026-09-03-three-graphs-results.md) | the three-tool run, and what was decided because of it |
 | [`runbook.md`](runbook.md) | how to run it again — pre-flight, the six traps, the cleanup |
 | [`next-version-gaps.md`](next-version-gaps.md) | the weak spots those numbers exposed, each with its gate |
 
