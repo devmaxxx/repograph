@@ -1274,17 +1274,23 @@
       "keyword": {
        "n": 40,
        "strict": 40,
-       "soft": 40
+       "soft": 40,
+       "rank1": 30,
+       "mrr": 0.816
       },
       "paraphrase": {
        "n": 30,
        "strict": 16,
-       "soft": 28
+       "soft": 28,
+       "rank1": 2,
+       "mrr": 0.247
       },
       "code": {
        "n": 12,
        "strict": 12,
-       "soft": 12
+       "soft": 12,
+       "rank1": 12,
+       "mrr": 1.0
       }
      },
      "strict": 68,
