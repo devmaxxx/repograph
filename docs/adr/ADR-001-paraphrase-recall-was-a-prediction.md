@@ -212,3 +212,25 @@ off every floor, as `--rerank` does. What it settles is the ADR's open question 
 cross-encoder is measured, and it does not buy paraphrase recall at the zero-token, sub-second
 budget the floors are written to. Two dials remain untried on this arm and neither is a floor
 candidate on its own: snippet length above, and length-sorted batching.
+
+## Amendment 5 — the floors name the store they grade (2026-09-04)
+
+Amendments 2 to 4 call the shipped numbers "the zero-token floors". Building, refreshing and
+querying do cost zero tokens, so the phrase was natural, but every floor those amendments left
+standing was measured against a store `enrich` had already filled — Amendment 4's control row is
+that store — and `enrich` spends money. Built from scratch on the same corpus at the same commit
+and never enriched, the store reads `keyword 40/40  paraphrase 9/30  code 12/12  p90 221 tok`
+with embeddings and `keyword 39/40  paraphrase 7/30  code 12/12  p90 226 tok` with `--no-dense`,
+each arm run twice with identical results. Against a paraphrase floor of 14 and 11 and an exact
+keyword floor, `repograph bench` therefore failed on any honestly built index whose owner had not
+paid for enrichment, and read as a broken setup rather than as an option not taken.
+
+`bench::passes` now takes the store's state alongside the arm. A store whose requirement-like
+nodes all carry generated questions is graded 14 and 11; one missing any of them is graded 9 and
+7, with the keyword floor at 39 in the lexical-only arm, and the summary line prints
+`enriched=<bool> (<covered>/<eligible> nodes)` so a red run says which bar it was held to. The
+enriched floors did not move — they are still what this store measured; what moved is the claim
+that they describe a configuration nobody paid for. A part-enriched store is graded raw: the test
+is whether every eligible node carries questions, not whether their passage hashes are current, so
+an edited requirement does not reclassify a store that is otherwise complete while a `--limit` run
+does not earn the enriched bar.

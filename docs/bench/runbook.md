@@ -59,8 +59,10 @@ gitnexus analyze -f --embeddings --skip-agents-md .
 `repograph enrich` (≈$2.50 on haiku, once) and `ask --rerank` (≈19k input tokens per
 question on sonnet) are opt-in and change the numbers. If either is on, say so in
 the notes — the 2026-09-03 run read paraphrase 16/30 with an opus `enrich` where the
-shipped zero-token floor is 14/30, and a reader who does not know that will read a
-regression into the next run.
+shipped floor for an enriched store is 14/30, and a reader who does not know that
+will read a regression into the next run. The build above runs neither, so its store
+is graded on the raw floors instead — 9/30 with embeddings, 7/30 with `--no-dense` —
+and `bench`'s summary line prints which of the two it used.
 
 ## Run both suites
 

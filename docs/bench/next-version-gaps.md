@@ -97,7 +97,7 @@ and deliberately not on a floor.
 2.3 GB download — is named in ADR-001 as unmeasured. It is the only candidate that
 could give reranker-shaped gains at zero API cost and without a per-question latency
 in seconds. **Measure it before designing anything else for paraphrases.** If it lands
-between 10/30 and 14/30 at sub-second latency, the zero-token floor moves for the
+between 10/30 and 14/30 at sub-second latency, the paraphrase floors move for the
 first time since 0.4.0; if it does not, the honest answer is that this corpus's
 paraphrases need a model and the floors stay where the measurement put them.
 

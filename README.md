@@ -39,7 +39,7 @@ Version 0.4.0. Every row below is implemented, not planned:
 | `build`, `update`          | working; incremental; a no-op `update` is a fixed point               |
 | `ask`, `explain`, `verify` | working: exact id/symbol → BM25 → dense, fused, one hop out           |
 | `impact`, `trace`, `changes` | working: callers by depth through barrels, shortest call chain, the diff mapped onto symbols — see [Blast radius](#blast-radius) |
-| `bench`                    | working; fails the process if a floor in [Bench](#bench) is missed    |
+| `bench`                    | working; fails the process if a floor in [Bench](#bench) is missed — a store with `enrich`'s questions and one without are held to their own floors |
 | `import-legacy`            | working; costs recall at query time — see its note in [Bench](#bench) |
 | `enrich`, `ask --rerank`   | working; opt-in, the only two stages that spend model tokens — see [Spending tokens on purpose](#spending-tokens-on-purpose) |
 
@@ -495,7 +495,9 @@ rule that was fixed before the run and the case-by-case swing. It ships opt-in a
 exactly as `--rerank` does, and the two flags are mutually exclusive: passing both is an error,
 not a silent preference for one of them.
 
-The `bench` floors apply to the zero-token path; `--rerank` is measured, not
+The `bench` floors apply to the zero-token query path in each of the two states a store can be
+in — with `enrich`'s generated questions and without them, each on its own numbers, see
+[Bench](#bench); `--rerank` is measured, not
 floored, because a model's pick can vary by one hit between identical runs — which is also why the
 default is the configuration that read 14/14 three times, not the one that read it once. A
 per-question query rewrite by the model was measured too — 20/24 keyword, 6/14 paraphrase,
@@ -506,16 +508,32 @@ per-question query rewrite by the model was measured too — 20/24 keyword, 6/14
 `repograph bench [--cases file]` runs the recorded 82 cases (40 keyword + 30 paraphrase + 12 code)
 against a built graph and fails the process if any floor is missed. The recorded `bench/cases.jsonl`
 is compiled into the binary, so a release build benches from any directory; `--cases` substitutes a
-different file of the same shape:
+different file of the same shape.
 
-- keyword 40/40
-- paraphrase ≥14/30 with embeddings, ≥11/30 with `--no-dense`
-- code 12/12
-- p90 ≤230 tokens in both arms, counted as rendered UTF-8 bytes / 4 — a conservative proxy, since
-  it counts a Cyrillic answer at roughly double what an equivalent chars/4 reading would give a
-  Latin one. The no-dense arm seeds more of its answers from the generated questions, whose
-  Cyrillic requirement headlines cost more bytes than a symbol or task node's; that is worth three
-  tokens at p90 here, so one ceiling covers both arms
+The floors are not one set of numbers but two, because [`enrich`](#spending-tokens-on-purpose) is
+optional and paraphrase recall is what it buys. `bench` reads which state the store is in and says
+so on its summary line (`dense=true  enriched=true (1996/1996 nodes)`): a store whose
+requirement-like nodes all carry generated questions is graded against the enriched floors, any
+other — a fresh `build`, or a pass stopped early — against the raw ones.
+
+| | enriched store | store with no questions |
+| --- | --- | --- |
+| keyword | 40/40 in both arms | 40/40 with embeddings, 39/40 with `--no-dense` |
+| paraphrase | ≥14/30 with embeddings, ≥11/30 with `--no-dense` | ≥9/30 with embeddings, ≥7/30 with `--no-dense` |
+| code | 12/12 | 12/12 |
+| p90 | ≤230 tokens in every arm | ≤230 tokens in every arm |
+
+A raw store is a supported way to run the tool, not a broken one: it answers every code case and,
+with embeddings, every keyword case, and `bench` passes on it. What `enrich` buys is the higher
+paraphrase bar. A part-enriched store — `--limit`, an interrupt, a batch the model never answered —
+is graded raw, since the enriched numbers describe a finished pass; the node counts on the summary
+line say how far the pass got.
+
+The p90 is counted as rendered UTF-8 bytes / 4 — a conservative proxy, since it counts a Cyrillic
+answer at roughly double what an equivalent chars/4 reading would give a Latin one. The no-dense
+arm of an enriched store seeds more of its answers from the generated questions, whose Cyrillic
+requirement headlines cost more bytes than a symbol or task node's; that is worth three tokens at
+p90 there, and the four arms sit between 221 and 228, so one ceiling covers them all.
 
 The paraphrase cases are the noisy half, and the set was grown to narrow them: Wilson 95% on 14/30
 is 0.30–0.64, against 0.27–0.73 when the same gate rested on 14 cases. It is still a wide interval,
@@ -532,10 +550,13 @@ before the 82 real cases are consulted as the smoke test they are.
 Measured, on the shipped binary against `beauty-crm` with its generated questions in the store,
 two runs of each arm agreeing to the case: `keyword 40/40  paraphrase 14/30  code 12/12  p90 225
 tok` with embeddings, 195 median; `keyword 40/40  paraphrase 11/30  code 12/12  p90 228 tok` with
-`--no-dense`, 200 median. A store that `enrich` has never touched reads 40/40, 9/30, 12/12 and
-39/40, 7/30, 12/12: the floors presume the questions, and without them even a keyword case goes.
-Every keyword and code case hits in both arms, which is why those two floors are exact rather than
-a fraction; only paraphrase is graded on a count.
+`--no-dense`, 200 median. A store that `enrich` has never touched, built from scratch in a
+worktree of the same corpus at the same commit, reads `keyword 40/40  paraphrase 9/30  code 12/12
+p90 221 tok` with embeddings and `keyword 39/40  paraphrase 7/30  code 12/12  p90 226 tok` with
+`--no-dense`, each arm run twice with identical results — the raw floors in the table above are
+those numbers, measured rather than assumed. Code is floored at the whole 12 and keyword at the
+whole 40 in every arm but that one, which is why they are counts rather than fractions; only
+paraphrase is a fraction wherever it is graded.
 
 Three of the first fourteen paraphrase cases were rewritten on the way. One asked about withdrawing
 consent through a messenger, while the entry it names (`FR-VIS-76`) is about who may leave a
@@ -578,11 +599,15 @@ out of 3,599 tracked:
 | Graph on disk                   | 10.2 MB JSON                                                                                                                 |
 | Graph load                      | ~19 ms                                                                                                                       |
 | Lexical index rebuild           | ~120 ms                                                                                                                      |
-| Tokens spent building any of it | 0                                                                                                                            |
+| Tokens spent building the graph and its vectors | 0                                                                                                             |
 
 Retrieval on the recorded 82 cases against that graph, both arms run twice with identical results:
 keyword 40/40, paraphrase 14/30, code 12/12 at 195 median and 225 p90 tokens with embeddings;
-40/40, 11/30, 12/12 at 200 median and 228 p90 with `--no-dense`.
+40/40, 11/30, 12/12 at 200 median and 228 p90 with `--no-dense`. Those are the numbers with
+`enrich`'s generated questions in the store — the one thing above that was paid for, roughly $2.5
+of Haiku, once. The same corpus indexed and queried at zero tokens throughout reads 40/40, 9/30,
+12/12 at 221 p90 and 39/40, 7/30, 12/12 at 226; [Bench](#bench) floors each state on its own
+numbers.
 
 The prior art on the same corpus was an LLM-extracted graph that cost **14.6 million input tokens
 over 13 runs** and, measured on the 38 questions of the day, answered 0 of 14 paraphrase queries at

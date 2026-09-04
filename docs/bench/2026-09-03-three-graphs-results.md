@@ -107,7 +107,8 @@ gitnexus's 1/43 is partly its CLI: `detect-changes` prints fifteen symbols then
 
 repograph's optional stages are separate and opt-in: `enrich` is ≈$2.50 once on
 haiku, `ask --rerank` is ≈19k input tokens per question on sonnet. Neither is on any
-floor, and the zero-token path is what the numbers above measure.
+floor, and the build costs above are the zero-token path's; the retrieval numbers in
+this document are not, since this store had had an `enrich` pass (see the caveats).
 
 ## What was decided
 
@@ -131,8 +132,9 @@ floor, and the zero-token path is what the numbers above measure.
   has an `eval-server` that skips it and was not used, because the other two have no
   equivalent.
 - repograph's 16/30 here is above the README's shipped floor of 14/30 because this
-  run used an `enrich` pass on opus. The floors are what the zero-token path
-  guarantees; this table is what one particular store measured.
+  run used an `enrich` pass on opus. That 14/30 is the floor for a store carrying
+  generated questions — a store without them is graded on its own lower numbers —
+  and this table is what one particular store measured.
 - The case set lives in this repository and was written against `beauty-crm`. The
   keyword and code halves are fair to all three; the paraphrases are what make the
   set hard, and they are hard in Russian, which is a property of this corpus.

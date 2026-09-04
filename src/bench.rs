@@ -1,5 +1,5 @@
 use crate::config::Config;
-use crate::enrich::Questions;
+use crate::enrich::{coverage, Questions};
 use crate::ids::IdMatcher;
 use crate::index::dense::DenseIndex;
 use crate::index::embed::Embedder;
@@ -24,13 +24,25 @@ pub fn hit(case: &Case, answer: &Answer) -> bool {
     all.into_iter().any(|h| h.id == case.expect)
 }
 
-pub fn passes(s: &Summary, dense: bool) -> bool {
+pub fn passes(s: &Summary, dense: bool, enriched: bool) -> bool {
     // Every floor is the number the recorded cases measure; only the token ceiling is rounded,
-    // up to the next ten. Paraphrase is the one split the arms disagree on — three of its
-    // questions are reached by the dense passage list and by neither lexical list — so it
-    // carries a floor per arm, while the p90 (225 with dense, 228 without) fits under one.
-    let paraphrase = if dense { 14 } else { 11 };
-    s.keyword.0 == s.keyword.1 && s.paraphrase.0 >= paraphrase && s.code.0 == s.code.1 && s.p90_tokens <= 230
+    // up to the next ten, and the four p90s (221 to 228) fit under that one. A count equal to
+    // its total is an exact floor: `run` refuses a case file that is not 40/30/12 before any of
+    // this is read.
+    //
+    // `enrich` spends model tokens and is optional, so the store it has never touched is graded
+    // on what it reads rather than on what the enriched store calibrated: paraphrase measures 9
+    // with embeddings and 7 without, against the 14 and 11 the questions buy, and the lexical-only
+    // arm reaches 39 of the 40 keyword cases, so even that floor is not exact there. Paraphrase is
+    // the split the arms disagree on most — three of its questions are reached by the dense
+    // passage list and by neither lexical list.
+    let (keyword, paraphrase) = match (enriched, dense) {
+        (true, true) => (40, 14),
+        (true, false) => (40, 11),
+        (false, true) => (40, 9),
+        (false, false) => (39, 7),
+    };
+    s.keyword.0 >= keyword && s.paraphrase.0 >= paraphrase && s.code.0 >= 12 && s.p90_tokens <= 230
 }
 
 // The recorded cases travel inside the binary so a release build benches from any directory.
@@ -53,6 +65,10 @@ pub fn run(repo: &Path, cases: Option<&Path>, no_dense: bool, rerank: bool, rera
     let ids = IdMatcher::new(&cfg.id_families, &cfg.milestone_families);
     let dense_idx = DenseIndex::load(&store)?;
     let questions = Questions::load(&store)?;
+    // A graph with nothing to enrich cannot be told from one nobody has enriched, and the
+    // recorded cases expect the corpus's requirements either way, so it is graded as raw.
+    let (covered, eligible) = coverage(&graph, &questions);
+    let enriched = eligible > 0 && covered == eligible;
     // `ask` degrading to lexical-only on a missing model is fine — a person reading the answer
     // sees the stderr notice and can judge it. `bench` speaks only through its exit code, so a
     // dense run that silently falls back and then grades against the weaker no-dense floor
@@ -127,13 +143,13 @@ pub fn run(repo: &Path, cases: Option<&Path>, no_dense: bool, rerank: bool, rera
     }
     tokens.sort_unstable();
     summary.p90_tokens = tokens.get(tokens.len() * 9 / 10).copied().unwrap_or(0);
-    println!("\nkeyword {}/{}  paraphrase {}/{}  code {}/{}  p90 {} tok  dense={dense_on}{}",
+    println!("\nkeyword {}/{}  paraphrase {}/{}  code {}/{}  p90 {} tok  dense={dense_on}  enriched={enriched} ({covered}/{eligible} nodes){}",
         summary.keyword.0, summary.keyword.1, summary.paraphrase.0, summary.paraphrase.1, summary.code.0, summary.code.1, summary.p90_tokens, match (rerank_local, rerank.is_some()) {
             (true, _) => format!(" rerank_local=true depth={depth}"),
             (false, true) => format!(" rerank=true depth={depth}"),
             _ => String::new(),
         });
-    Ok(passes(&summary, dense_on))
+    Ok(passes(&summary, dense_on, enriched))
 }
 
 #[cfg(test)]
@@ -173,25 +189,48 @@ mod tests {
         // original mistake) would not notice such a shift.
         let at_floor_nodense = Summary { keyword: (40, 40), paraphrase: (11, 30), code: (12, 12), p90_tokens: 230 };
         let at_floor_dense = Summary { keyword: (40, 40), paraphrase: (14, 30), code: (12, 12), p90_tokens: 230 };
-        assert!(passes(&at_floor_nodense, false));
-        assert!(passes(&at_floor_dense, true));
+        assert!(passes(&at_floor_nodense, false, true));
+        assert!(passes(&at_floor_dense, true, true));
 
         // keyword must be exact: one short reddens in both dense arms.
-        assert!(!passes(&Summary { keyword: (39, 40), ..at_floor_nodense.clone() }, false));
-        assert!(!passes(&Summary { keyword: (39, 40), ..at_floor_dense.clone() }, true));
+        assert!(!passes(&Summary { keyword: (39, 40), ..at_floor_nodense.clone() }, false, true));
+        assert!(!passes(&Summary { keyword: (39, 40), ..at_floor_dense.clone() }, true, true));
 
         // code must be exact: one short reddens in both dense arms.
-        assert!(!passes(&Summary { code: (11, 12), ..at_floor_nodense.clone() }, false));
-        assert!(!passes(&Summary { code: (11, 12), ..at_floor_dense.clone() }, true));
+        assert!(!passes(&Summary { code: (11, 12), ..at_floor_nodense.clone() }, false, true));
+        assert!(!passes(&Summary { code: (11, 12), ..at_floor_dense.clone() }, true, true));
 
         // p90: one token over the shared ceiling reddens either arm.
-        assert!(!passes(&Summary { p90_tokens: 231, ..at_floor_nodense.clone() }, false));
-        assert!(!passes(&Summary { p90_tokens: 231, ..at_floor_dense.clone() }, true));
+        assert!(!passes(&Summary { p90_tokens: 231, ..at_floor_nodense.clone() }, false, true));
+        assert!(!passes(&Summary { p90_tokens: 231, ..at_floor_dense.clone() }, true, true));
 
         // paraphrase no-dense floor is 11: one short reddens the `dense: false` call.
-        assert!(!passes(&Summary { paraphrase: (10, 30), ..at_floor_nodense.clone() }, false));
+        assert!(!passes(&Summary { paraphrase: (10, 30), ..at_floor_nodense.clone() }, false, true));
         // paraphrase dense floor is 14: one short reddens the `dense: true` call.
-        assert!(!passes(&Summary { paraphrase: (13, 30), ..at_floor_dense.clone() }, true));
+        assert!(!passes(&Summary { paraphrase: (13, 30), ..at_floor_dense.clone() }, true, true));
+    }
+
+    #[test]
+    fn a_store_without_questions_is_graded_on_the_numbers_it_reads() {
+        // Exactly what a store `enrich` has never touched measures on the corpus, so a shift of
+        // one in either direction is visible here.
+        let raw_dense = Summary { keyword: (40, 40), paraphrase: (9, 30), code: (12, 12), p90_tokens: 221 };
+        let raw_nodense = Summary { keyword: (39, 40), paraphrase: (7, 30), code: (12, 12), p90_tokens: 226 };
+        assert!(passes(&raw_dense, true, false));
+        assert!(passes(&raw_nodense, false, false));
+
+        // The same run against a store that paid for its questions is a failure, which is what
+        // keeps the enriched bar a bar.
+        assert!(!passes(&raw_dense, true, true));
+        assert!(!passes(&raw_nodense, false, true));
+
+        // One short of each raw floor reddens, the `--no-dense` keyword floor of 39 included.
+        assert!(!passes(&Summary { paraphrase: (8, 30), ..raw_dense.clone() }, true, false));
+        assert!(!passes(&Summary { paraphrase: (6, 30), ..raw_nodense.clone() }, false, false));
+        assert!(!passes(&Summary { keyword: (39, 40), ..raw_dense.clone() }, true, false));
+        assert!(!passes(&Summary { keyword: (38, 40), ..raw_nodense.clone() }, false, false));
+        assert!(!passes(&Summary { code: (11, 12), ..raw_dense.clone() }, true, false));
+        assert!(!passes(&Summary { p90_tokens: 231, ..raw_nodense.clone() }, false, false));
     }
 
     #[test]

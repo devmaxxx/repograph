@@ -76,7 +76,8 @@ blast radius that omits it is a blast radius its reader cannot trust.
 cd ~/Documents/projects/beauty-crm && git rev-parse --short HEAD
 
 # 2. each tool's index must be fresh, and how it got fresh is part of the result
-repograph --repo . build                  # or let `ask` refresh it
+repograph --repo . build                  # or let `ask` refresh it; zero tokens, and no
+                                          # generated questions unless `enrich` has been run
 graphify update <path> --force            # AST layer, semantic cache, 0 tokens
 gitnexus analyze -f --embeddings --skip-agents-md
 
@@ -182,6 +183,13 @@ altogether is refused rather than scored as a miss.
   2026-09-04 numbers — a literal read as though it were code — but it is a separate
   limitation and the same change does not close both. Open because fixing it moves the
   numbers in repograph's favour and needs the whole suite re-run to say by how much.
+- **repograph answers differently before and after `enrich`, and the build above leaves it
+  before.** The generated questions are what its paraphrase floor rests on: on this corpus and at
+  this commit the same binary reads 9/30 paraphrase without them and 14/30 with them, with
+  embeddings on, while keyword and code do not move in that arm. `enrich` spends model tokens
+  (~$2.5 of Haiku here), so a run of this protocol measures repograph's zero-token configuration
+  unless it pays for one first — and either way the result should say which, as `bench`'s own
+  summary line does with `enriched=`.
 - **The pattern that decides a rank over-matches.** `run.py`'s `ID_TOKEN` accepts more than
   this corpus's ids: `UTF-8`, `SHA-256`, `RFC-7807` and `ISO-8601` all fit its shape. Any of
   them standing in an answer ahead of the expected id counts as a competitor, inflating that

@@ -34,6 +34,17 @@ fn hash(text: &str) -> String { blake3::hash(text.as_bytes()).to_hex().to_string
 /// every run until they were left out.
 pub fn eligible(n: &Node) -> bool { KINDS.contains(&n.kind) && !(n.kind == NodeKind::Entity && n.body.trim().is_empty()) }
 
+/// Eligible nodes that carry questions, over eligible nodes. `run` saves after every batch, so
+/// a `--limit` run, an interrupt or a model that skipped a batch twice all leave a store with
+/// some questions in it; "any entry at all" would call such a store enriched and hold it to
+/// numbers only a finished run reaches. Passage freshness is left out on purpose: a question
+/// written for an older wording still finds its node, so one edited requirement should not
+/// reclassify the whole store.
+pub fn coverage(graph: &Graph, questions: &Questions) -> (usize, usize) {
+    let nodes: Vec<&Node> = graph.nodes.values().filter(|n| eligible(n)).collect();
+    (nodes.iter().filter(|n| !questions.get(&n.id).is_empty()).count(), nodes.len())
+}
+
 impl Questions {
     pub fn load(store: &Store) -> Result<Questions> { Self::load_traced(store).map(|(q, _)| q) }
 
@@ -375,6 +386,19 @@ mod tests {
         let mut e = Extraction::default();
         e.node(NodeKind::Entity, "entity:Money", "Money", "   \n\t", "a.md", 1);
         assert!(!eligible(&e.nodes[0]));
+    }
+
+    #[test]
+    fn coverage_counts_eligible_nodes_only_and_reads_full_after_a_whole_run() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::new(dir.path());
+        let g = graph();
+        assert_eq!(coverage(&g, &Questions::default()), (0, 2));
+        let cmd = r#"awk '/^### /{printf "%s\tq for %s\n", $2, $2}'"#;
+        run(&store, &g, Questions::default(), cmd, 1, 1, Some(1)).unwrap();
+        assert_eq!(coverage(&g, &Questions::load(&store).unwrap()), (1, 2), "a run stopped early covers part of the graph");
+        run(&store, &g, Questions::load(&store).unwrap(), cmd, 1, 1, None).unwrap();
+        assert_eq!(coverage(&g, &Questions::load(&store).unwrap()), (2, 2));
     }
 
     #[test]
