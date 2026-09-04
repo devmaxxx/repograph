@@ -22,19 +22,22 @@ Two suites, both scored against the repository rather than against each other.
 and 12 by code symbol. The expected answer is a requirement id (`FR-CAL-101`), a
 task id (`BE-M17`) or a file path.
 
-**Blast radius** — `bench/blast.jsonl`, 20 cases over the call graph:
+**Blast radius** — `bench/blast.jsonl`, 32 cases over the call graph:
 
 | kind | cases | asks |
 |---|---|---|
-| `impact` | 10 | who breaks if this symbol changes |
+| `impact` | 16 | who breaks if this symbol changes |
 | `trace` | 8 | the call chain from A to B, or that there is none |
-| `changes` | 2 | what a diff since a base commit touches |
+| `changes` | 8 | what a diff since a base commit touches |
 
-The ten `impact` targets are spread by fan-in on purpose — three hubs (18 to 58
-referencing files), three wide, four narrow — because a tool that answers hubs well
-can still miss a service with two callers, and the mean would hide it. The eight
-`trace` cases are six real chains and two pairs with no path, so a tool that always
-finds something scores 6, not 8.
+The sixteen `impact` targets are spread by fan-in on purpose — three hubs (18 to 58
+referencing files), three wide, ten narrow — because a tool that answers hubs well
+can still miss a service with two callers, and the mean would hide it. Six narrow
+targets added 2026-09-04, each with two or three referencing files, because a mean
+over hubs hides a service with two callers. The eight `trace` cases are six real
+chains and two pairs with no path, so a tool that always finds something scores 6,
+not 8. `changes` grew the same day from two bases to eight, for the same reason: two
+diffs are too thin to read a delta from.
 
 ## How the answer is judged
 
@@ -84,7 +87,9 @@ python3 run.py \
 Useful flags: `--tools repograph` to run one, `--suites blast` to skip the slow
 retrieval pass, `--strip-prefix <dir>` when graphify reads a graph built in a
 worktree and its paths carry that directory, `--truth <path>` to reuse a truth file
-instead of rebuilding it.
+instead of rebuilding it, `--cases <path>` / `--blast <path>` to run against a case
+file other than the tracked default — the result header's `case_files` records
+which one a run used.
 
 Every tool is invoked through its own command line, without hints:
 
@@ -111,6 +116,10 @@ Nothing but the case is written down. The files a target is referenced from, the
 chain a trace should follow and the symbols a diff touches are all recomputed from
 the repository at run time, so the set survives a refactor: it goes stale only when
 a name disappears.
+
+A `changes` case is everything since its base, so it grows as HEAD moves — see the
+caveat below on comparing `changes` across runs. The `note` records the mix the
+commit itself had when the case was chosen, not the mix a later run will find.
 
 ## Reading a result file
 
@@ -143,3 +152,15 @@ says whether the answer is there; MRR says how far down. The 2026-09-03 file pre
   runs' `changes` fractions are comparable only when both ran at the same corpus
   commit — it is in every result file's header, and a reader comparing `changes`
   across runs has to check it before comparing anything else.
+
+## When a blast delta counts
+
+One run per row, no repeats, so a rule is stated before a change is measured, not after:
+
+| suite | a change counts when | noise |
+|---|---|---|
+| impact | mean recall over 16 does not fall, and no case falls by more than one file | one file on one case |
+| trace | 8/8 stays 8/8 | none — a chain either resolves or it does not |
+| changes | `symbols_found / symbols_want` over 8 cases rises by ≥ 0.05 and `files_found / files_want` does not fall | ±1 symbol on one case |
+
+Anything inside the noise column is reported and not argued from.

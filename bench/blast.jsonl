@@ -8,6 +8,12 @@
 {"kind":"impact","target":"BookingCreateService","file":"apps/api/src/modules/availability/booking-create.service.ts","tier":"narrow"}
 {"kind":"impact","target":"AgreementsService","file":"apps/api/src/modules/agreements/agreements.service.ts","tier":"narrow"}
 {"kind":"impact","target":"SyncConflictService","file":"apps/api/src/modules/sync/sync-conflict.service.ts","tier":"narrow"}
+{"kind":"impact","target":"RateLimitInterceptor","file":"apps/api/src/modules/identity/rate-limit.interceptor.ts","tier":"narrow"}
+{"kind":"impact","target":"PlatformSessionGuard","file":"apps/api/src/modules/identity/platform-session.guard.ts","tier":"narrow"}
+{"kind":"impact","target":"ChangeLogCompactionService","file":"apps/api/src/modules/sync/change-log-compaction.service.ts","tier":"narrow"}
+{"kind":"impact","target":"ShutdownService","file":"apps/api/src/shared/lifecycle/shutdown.service.ts","tier":"narrow"}
+{"kind":"impact","target":"RbacInterceptor","file":"apps/api/src/shared/rbac/rbac.interceptor.ts","tier":"narrow"}
+{"kind":"impact","target":"SystemFacade","file":"apps/api/src/modules/system/system.facade.ts","tier":"narrow"}
 {"kind":"trace","from":"AuthController","to":"DatabaseService","expect":"path","via":["AuthService","IdentityRepository"]}
 {"kind":"trace","from":"DevicesController","to":"DatabaseService","expect":"path","via":["DevicesService","DevicesRepository"]}
 {"kind":"trace","from":"AgreementsController","to":"DatabaseService","expect":"path","via":["AgreementsService","AgreementsRepository"]}
@@ -18,3 +24,9 @@
 {"kind":"trace","from":"DevicesRepository","to":"AuthService","expect":"none"}
 {"kind":"changes","base":"cbc931ba~1","note":"nearest commit whose diff carries TypeScript"}
 {"kind":"changes","base":"0f27d2d1","note":"a wider base: 64 commits, docs and code together"}
+{"kind":"changes","base":"bc9db289~1","note":"polyglot, small when recorded: the commit itself is 3 ts + 2 kt"}
+{"kind":"changes","base":"a7acc0f4~1","note":"polyglot: the commit is 8 ts + 2 kt"}
+{"kind":"changes","base":"3441991c~1","note":"polyglot: the commit is 9 ts + 7 kt"}
+{"kind":"changes","base":"d9521668~1","note":"TypeScript only: 12 files in packages/ui"}
+{"kind":"changes","base":"68635fae~1","note":"TypeScript only: 21 files across apps/api sync, packages/db and packages/contracts"}
+{"kind":"changes","base":"5c61a72c~1","note":"a merge of 1 628 files, 25 ts + 37 kt among them"}

@@ -236,6 +236,8 @@ def summarise(rows: list[dict]) -> dict:
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--repo", required=True, help="corpus root")
+    ap.add_argument("--cases", default="", help="retrieval cases; default bench/cases.jsonl")
+    ap.add_argument("--blast", default="", help="blast cases; default bench/blast.jsonl")
     ap.add_argument("--tools", default="repograph,graphify,gitnexus")
     ap.add_argument("--suites", default="retrieval,blast")
     ap.add_argument("--repograph", default="repograph", help="repograph binary")
@@ -249,8 +251,10 @@ def main() -> None:
 
     repo = Path(args.repo).resolve()
     bench = Path(__file__).resolve().parent.parent
-    cases = T.read_jsonl(bench / "cases.jsonl")
-    blast = T.read_jsonl(bench / "blast.jsonl")
+    cases_path = Path(args.cases) if args.cases else bench / "cases.jsonl"
+    blast_path = Path(args.blast) if args.blast else bench / "blast.jsonl"
+    cases = T.read_jsonl(cases_path)
+    blast = T.read_jsonl(blast_path)
     args.gitnexus_repo = args.gitnexus_repo or repo.name
 
     if args.truth and Path(args.truth).exists():
@@ -264,7 +268,8 @@ def main() -> None:
                           capture_output=True, text=True).stdout.strip()
     report = {
         "corpus": str(repo), "commit": head, "when": time.strftime("%Y-%m-%dT%H:%M:%S"),
-        "cases": {"retrieval": len(cases), "blast": len(blast)}, "tools": {},
+        "cases": {"retrieval": len(cases), "blast": len(blast)},
+        "case_files": {"retrieval": str(cases_path), "blast": str(blast_path)}, "tools": {},
     }
     suites = args.suites.split(",")
     for name in args.tools.split(","):

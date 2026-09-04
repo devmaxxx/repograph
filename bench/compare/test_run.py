@@ -1,8 +1,13 @@
 """The scorer, on answers copied from real tool output."""
 
+import collections
 import unittest
+from pathlib import Path
 
+import truth as T
 from run import rank_of, summarise
+
+BENCH = Path(__file__).resolve().parent.parent
 
 # Each line carries one id but a different number of paths, so counting ids and counting
 # paths before "FR-B-2" disagree (1 vs. 3) — a `rank_of` that ignored `"/" in want` and
@@ -60,6 +65,15 @@ class Summarise(unittest.TestCase):
         ]
         # 1/1, 1/4, 0 (absent) -> (1 + 0.25 + 0) / 3 = 0.41666... -> round to 3 places: 0.417
         self.assertEqual(summarise(rows)["retrieval"]["mrr"], 0.417)
+
+
+class BlastShape(unittest.TestCase):
+    def test_blast_has_the_recorded_shape(self):
+        rows = T.read_jsonl(BENCH / "blast.jsonl")
+        self.assertEqual(collections.Counter(r["kind"] for r in rows), {"impact": 16, "trace": 8, "changes": 8})
+        tiers = collections.Counter(r["tier"] for r in rows if r["kind"] == "impact")
+        self.assertEqual(tiers, {"hub": 3, "wide": 3, "narrow": 10})
+        self.assertEqual(len({r["target"] for r in rows if r["kind"] == "impact"}), 16)
 
 
 if __name__ == "__main__":
