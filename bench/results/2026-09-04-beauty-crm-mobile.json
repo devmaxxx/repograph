@@ -1,0 +1,117 @@
+{
+ "corpus": "/Users/max/Documents/projects/beauty-crm",
+ "commit": "853188cc",
+ "when": "2026-09-04T13:43:55",
+ "cases": {
+  "retrieval": 82,
+  "blast": 8
+ },
+ "case_files": {
+  "retrieval": "/Users/max/Documents/projects/repograph/bench/cases.jsonl",
+  "blast": "/Users/max/Documents/projects/repograph/bench/corpora/beauty-crm-mobile/blast.jsonl"
+ },
+ "tools": {
+  "repograph": {
+   "rows": [
+    {
+     "suite": "blast",
+     "kind": "impact",
+     "target": "ReplicaKey",
+     "tier": "hub",
+     "want_files": 8,
+     "found_files": 0,
+     "recall": 0.0,
+     "ms": 43,
+     "chars": 33
+    },
+    {
+     "suite": "blast",
+     "kind": "impact",
+     "target": "SnapshotVerifier",
+     "tier": "hub",
+     "want_files": 2,
+     "found_files": 0,
+     "recall": 0.0,
+     "ms": 42,
+     "chars": 39
+    },
+    {
+     "suite": "blast",
+     "kind": "impact",
+     "target": "SigningKeyStore",
+     "tier": "hub",
+     "want_files": 4,
+     "found_files": 0,
+     "recall": 0.0,
+     "ms": 44,
+     "chars": 38
+    },
+    {
+     "suite": "blast",
+     "kind": "impact",
+     "target": "SessionTokens",
+     "tier": "wide",
+     "want_files": 2,
+     "found_files": 0,
+     "recall": 0.0,
+     "ms": 42,
+     "chars": 36
+    },
+    {
+     "suite": "blast",
+     "kind": "impact",
+     "target": "ReplicaKeyStore",
+     "tier": "wide",
+     "want_files": 1,
+     "found_files": 0,
+     "recall": 0.0,
+     "ms": 43,
+     "chars": 38
+    },
+    {
+     "suite": "blast",
+     "kind": "impact",
+     "target": "GapNotFittingRule",
+     "tier": "narrow",
+     "want_files": 1,
+     "found_files": 0,
+     "recall": 0.0,
+     "ms": 43,
+     "chars": 40
+    },
+    {
+     "suite": "blast",
+     "kind": "impact",
+     "target": "ParallelLimitRule",
+     "tier": "narrow",
+     "want_files": 1,
+     "found_files": 0,
+     "recall": 0.0,
+     "ms": 46,
+     "chars": 40
+    },
+    {
+     "suite": "blast",
+     "kind": "impact",
+     "target": "LocationClosedRule",
+     "tier": "narrow",
+     "want_files": 1,
+     "found_files": 0,
+     "recall": 0.0,
+     "ms": 49,
+     "chars": 41
+    }
+   ],
+   "summary": {
+    "impact": {
+     "n": 8,
+     "recall_mean": 0.0,
+     "files_found": 0,
+     "files_want": 20,
+     "ms_median": 43,
+     "chars_median": 38
+    }
+   }
+  }
+ }
+}

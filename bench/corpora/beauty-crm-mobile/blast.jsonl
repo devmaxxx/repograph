@@ -1,0 +1,8 @@
+{"kind":"impact","target":"ReplicaKey","file":"mobile/shared/core/src/commonMain/kotlin/pl/placeholder/crm/storage/ReplicaKey.kt","tier":"hub"}
+{"kind":"impact","target":"SnapshotVerifier","file":"mobile/shared/core/src/commonMain/kotlin/pl/placeholder/crm/auth/SnapshotVerifier.kt","tier":"hub"}
+{"kind":"impact","target":"SigningKeyStore","file":"mobile/shared/core/src/commonMain/kotlin/pl/placeholder/crm/auth/SigningKeyStore.kt","tier":"hub"}
+{"kind":"impact","target":"SessionTokens","file":"mobile/shared/core/src/commonMain/kotlin/pl/placeholder/crm/network/Tokens.kt","tier":"wide"}
+{"kind":"impact","target":"ReplicaKeyStore","file":"mobile/shared/core/src/commonMain/kotlin/pl/placeholder/crm/storage/ReplicaKeyStore.kt","tier":"wide"}
+{"kind":"impact","target":"GapNotFittingRule","file":"mobile/shared/domain/src/commonMain/kotlin/pl/placeholder/crm/domain/availability/AvailabilityOccupancyRules.kt","tier":"narrow"}
+{"kind":"impact","target":"ParallelLimitRule","file":"mobile/shared/domain/src/commonMain/kotlin/pl/placeholder/crm/domain/availability/AvailabilityOccupancyRules.kt","tier":"narrow"}
+{"kind":"impact","target":"LocationClosedRule","file":"mobile/shared/domain/src/commonMain/kotlin/pl/placeholder/crm/domain/availability/AvailabilityOccupancyRules.kt","tier":"narrow"}

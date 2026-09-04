@@ -75,6 +75,12 @@ class BlastShape(unittest.TestCase):
         self.assertEqual(tiers, {"hub": 2, "wide": 3, "narrow": 11})
         self.assertEqual(len({r["target"] for r in rows if r["kind"] == "impact"}), 16)
 
+    def test_mobile_baseline_has_eight_kotlin_impact_cases(self):
+        rows = T.read_jsonl(BENCH / "corpora" / "beauty-crm-mobile" / "blast.jsonl")
+        self.assertEqual(collections.Counter(r["kind"] for r in rows), {"impact": 8})
+        self.assertTrue(all(r["file"].endswith(".kt") for r in rows))
+        self.assertEqual(collections.Counter(r["tier"] for r in rows), {"hub": 3, "wide": 2, "narrow": 3})
+
 
 if __name__ == "__main__":
     unittest.main()

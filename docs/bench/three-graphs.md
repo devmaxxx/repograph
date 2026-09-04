@@ -123,6 +123,14 @@ A `changes` case is everything since its base, so it grows as HEAD moves — see
 caveat below on comparing `changes` across runs. The `note` records the mix the
 commit itself had when the case was chosen, not the mix a later run will find.
 
+## Adding a corpus
+
+`bench/corpora/<name>/blast.jsonl` (and `cases.jsonl` where the corpus has its own ids and
+prose) are run with `--blast` / `--cases`; the result goes to `bench/results/<date>-<name>.json`.
+The first one is `beauty-crm-mobile`: eight Kotlin `impact` targets that score 0 on every
+repograph before 0.6.0, written down so that the Kotlin extractor is measured on the day it
+lands rather than predicted. No language ships without its file here and a result beside it.
+
 ## Reading a result file
 
 `bench/results/<date>-<repo>.json` carries the corpus path, the commit, the case
