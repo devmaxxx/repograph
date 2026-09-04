@@ -98,6 +98,27 @@ class Floors(unittest.TestCase):
         self.assertEqual(arm["code"], 12)
         self.assertEqual(arm["p90_tokens"], 230)
 
+    def test_a_block_comment_inside_passes_cannot_supply_the_floors(self):
+        body = PASSES.replace("    let (keyword",
+                              "    /* s.code.0 >= 11 && s.p90_tokens <= 200 */\n    let (keyword")
+        with tempfile.NamedTemporaryFile("w", suffix=".rs", delete=False) as f:
+            f.write(body)
+            path = Path(f.name)
+        arm = track.floors(path)[(True, True)]
+        self.assertEqual((arm["code"], arm["p90_tokens"]), (12, 230))
+
+    def test_a_sibling_function_cannot_supply_the_floors(self):
+        # Braces are matched rather than trusting a closing one at column zero, so moving
+        # `passes` into an impl cannot silently extend its body over the next function.
+        inside_impl = ("impl Gate {\n" + "\n".join("    " + l for l in PASSES.splitlines()) +
+                       "\n    fn other(s: &Summary) -> bool {\n"
+                       "        s.code.0 >= 11 && s.p90_tokens <= 200\n    }\n}\n")
+        with tempfile.NamedTemporaryFile("w", suffix=".rs", delete=False) as f:
+            f.write(inside_impl)
+            path = Path(f.name)
+        arm = track.floors(path)[(True, True)]
+        self.assertEqual((arm["code"], arm["p90_tokens"]), (12, 230))
+
     def test_the_live_source_still_parses(self):
         f = track.floors()
         self.assertEqual(set(f), {(True, True), (True, False), (False, True), (False, False)})
@@ -240,6 +261,18 @@ class Analysis(unittest.TestCase):
         mid = run({"a": 0.0}, when="2026-09-02T12:00:00+00:00")
         new = run({"a": 0.0}, when="2026-09-03T12:00:00+00:00")
         self.assertEqual(track.comparable_window([old, mid, new], 6), [mid, new])
+
+    def test_a_window_size_below_one_still_means_one_run(self):
+        # `history[-0:]` is the whole history, which would silently widen the window past
+        # what the flag asked for.
+        h = [run({"a": 1.0}, when="2026-09-01T12:00:00+00:00"),
+             run({"a": 0.0}, when="2026-09-02T12:00:00+00:00")]
+        self.assertEqual(track.comparable_window(h, 0), [h[-1]])
+        self.assertEqual(track.comparable_window(h, -2), [h[-1]])
+
+    def test_an_unreadable_timestamp_stops_with_a_message(self):
+        with self.assertRaises(SystemExit):
+            track.when_of({"when": "yesterday"})
 
     def test_a_window_of_one_when_nothing_before_it_is_comparable(self):
         old = run({"a": 1.0}, when="2026-09-01T12:00:00+00:00", commit="7733bd53")

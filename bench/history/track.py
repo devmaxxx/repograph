@@ -44,7 +44,6 @@ RERANK = re.compile(r"rerank(_local)?=true depth=(\d+)")
 # The floors live in one place -- `passes` in src/bench.rs -- and are read from there rather
 # than restated here, because a floor that moves in Rust and not in Python would make every
 # headroom figure in the report quietly wrong.
-FUNC = re.compile(r"pub fn passes\([^)]*\)\s*->\s*bool\s*\{\n(.*?)\n\}", re.S)
 ARMS = re.compile(
     r"\(true,\s*true\)\s*=>\s*\((\d+),\s*(\d+)\).*?"
     r"\(true,\s*false\)\s*=>\s*\((\d+),\s*(\d+)\).*?"
@@ -55,6 +54,31 @@ ARMS = re.compile(
 TAIL = re.compile(r"s\.code\.0 >= (\d+) && s\.p90_tokens <= (\d+)")
 
 
+def passes_body(text):
+    """The braces-matched body of `passes`, or None.
+
+    Matching braces rather than looking for a closing one at column zero, so that moving the
+    function into an `impl` cannot silently extend the body to the end of that block and let
+    a sibling function supply the numbers.
+    """
+    m = re.search(r"\bfn passes\b", text)
+    if not m:
+        return None
+    try:
+        start = text.index("{", m.end())
+    except ValueError:
+        return None
+    depth = 0
+    for i in range(start, len(text)):
+        if text[i] == "{":
+            depth += 1
+        elif text[i] == "}":
+            depth -= 1
+            if depth == 0:
+                return text[start + 1:i]
+    return None
+
+
 def floors(source=None):
     """The four (keyword, paraphrase) pairs plus the code floor and token ceiling.
 
@@ -62,12 +86,16 @@ def floors(source=None):
     first. Sixteen lines of prose about the floors sit directly above it and discuss them in
     the same notation the code uses, so a search over the file would sooner or later read a
     sentence instead of the code -- and quietly, which is the one failure this must not have.
+
+    The one shape still able to fool it is a string literal inside `passes` spelling out the
+    tail. `passes` holds no strings, and if that changes the comment stripper would maul the
+    literal and the match would fail loudly rather than answer wrongly.
     """
     text = (source or REPO / "src" / "bench.rs").read_text()
-    fn = FUNC.search(text)
-    body = re.sub(r"//[^\n]*", "", fn.group(1)) if fn else ""
+    body = passes_body(text)
+    body = re.sub(r"//[^\n]*|/\*.*?\*/", "", body, flags=re.S) if body else ""
     arms, tail = ARMS.search(body), TAIL.search(body)
-    if not fn or not arms or not tail:
+    if not body or not arms or not tail:
         raise SystemExit("cannot read the floors out of src/bench.rs -- `passes` changed shape")
     n = [int(g) for g in arms.groups()]
     code, p90 = int(tail.group(1)), int(tail.group(2))
@@ -219,7 +247,10 @@ def when_of(row):
     Imported comparison rows carry a naive stamp and recorded bench rows an aware one, so a
     string sort would interleave them wrongly and a naive/aware comparison would raise.
     """
-    t = datetime.fromisoformat(row["when"])
+    try:
+        t = datetime.fromisoformat(row["when"])
+    except (KeyError, TypeError, ValueError) as e:
+        raise SystemExit(f"{RUNS}: a row has an unreadable `when` ({row.get('when')!r}): {e}")
     return t if t.tzinfo else t.replace(tzinfo=timezone.utc)
 
 
@@ -324,6 +355,9 @@ def clip(items, top):
 
 def comparable_window(history, size):
     """The newest runs that can all be read against the latest one, newest `size` at most."""
+    # `history[-0:]` is the whole history and a negative size drops the oldest rows, so a
+    # window smaller than one run means one run, not every run.
+    size = max(1, size)
     latest = history[-1]
     out = []
     for row in reversed(history[-size:]):
@@ -424,11 +458,17 @@ def systemic(groups, top):
     latest = {arm: h[-1] for arm, h in groups.items() if h and h[-1]["source"] == "bench"}
     commits = {r.get("corpus_commit") for r in latest.values()}
     if len(commits) > 1:
-        newest = max(latest.values(), key=when_of).get("corpus_commit")
+        # Only rows that recorded a commit can name the newest one. Letting an unrecorded row
+        # win would keep the arms that know nothing and drop the arms that do.
+        known = [r for r in latest.values() if r.get("corpus_commit")]
+        if not known:
+            print("\n(no cross-arm reading: no arm recorded which corpus commit it ran against)")
+            return
+        newest = max(known, key=when_of)["corpus_commit"]
         dropped = sorted(a for a, r in latest.items() if r.get("corpus_commit") != newest)
         latest = {a: r for a, r in latest.items() if r.get("corpus_commit") == newest}
         print(f"\n(cross-arm reading covers {newest} only; "
-              f"{', '.join(dropped)} last ran against another corpus commit)")
+              f"{', '.join(dropped)} did not record that commit)")
     if len(latest) < 2:
         return
     keys = set.intersection(*(set(r["cases"]) for r in latest.values()))
