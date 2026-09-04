@@ -49,8 +49,12 @@ pub fn touched(graph: &Graph, hunks: &[Hunk]) -> Vec<String> {
         // `+++ /dev/null` yields no hunk — so every id emitted is a file on the new side.
         if !any { out.insert(format!("file:{}", h.file)); }
     }
-    let members: Vec<String> = out.iter().cloned().collect();
-    out.retain(|id| !members.iter().any(|m| m.len() > id.len() && m.starts_with(id.as_str()) && m[id.len()..].starts_with('.')));
+    // Only symbol ids nest: `sym:f::C` contains `sym:f::C.m`. Two file ids that share a prefix
+    // across a dot are unrelated files — `Dockerfile` and `Dockerfile.dev`, `index.d.ts` and
+    // `index.d.ts.map` — and suppressing either would drop a file the diff really changed.
+    let members: Vec<String> = out.iter().filter(|id| id.starts_with("sym:")).cloned().collect();
+    out.retain(|id| !id.starts_with("sym:")
+        || !members.iter().any(|m| m.len() > id.len() && m.starts_with(id.as_str()) && m[id.len()..].starts_with('.')));
     out.into_iter().collect()
 }
 
@@ -213,6 +217,18 @@ mod tests {
     #[test]
     fn a_hunk_in_a_file_the_graph_never_indexed_is_reported_as_that_file() {
         assert_eq!(touched(&graph(), &[Hunk { file: "Foo.kt".into(), start: 1, end: 9 }]), vec!["file:Foo.kt"]);
+    }
+
+    #[test]
+    fn a_file_id_is_not_suppressed_by_a_longer_file_id_that_extends_it_with_a_dot() {
+        // `Dockerfile` / `Dockerfile.dev`, `index.d.ts` / `index.d.ts.map`, `LICENSE` / `LICENSE.md`:
+        // the member suppression reads the longer name as a member of the shorter one and the diff
+        // loses the shorter file outright.
+        let hunks = [
+            Hunk { file: "Dockerfile".into(), start: 1, end: 1 },
+            Hunk { file: "Dockerfile.dev".into(), start: 1, end: 1 },
+        ];
+        assert_eq!(touched(&graph(), &hunks), vec!["file:Dockerfile", "file:Dockerfile.dev"]);
     }
 
     #[test]
