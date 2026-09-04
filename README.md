@@ -371,6 +371,7 @@ in full, not an empty config:
 | `milestone_families` | `["BE", "FE", "PLAT", "SYNC", "OPS", "AI", "MOB"]`                                          |
 | `enrich_command`     | headless `claude -p --model haiku` with thinking off — see [Spending tokens on purpose](#spending-tokens-on-purpose) |
 | `rerank_command`     | the same with `--model sonnet`                                                              |
+| `reranker_dir`       | directory of the exported cross-encoder for `--rerank-local`; empty = `~/.cache/repograph/reranker` |
 
 `id_families` and `milestone_families` default to the strict list `beauty-crm`'s census settled on —
 they are this project's development corpus, not a generic default. Every family is matched as
@@ -480,6 +481,12 @@ stated; input tokens are the answering model's own, median over the 38 questions
 | `--rerank`, haiku, depth 100                   | 11/14      | 24/24   | 3/3  | 222        | ≈9,500                    | ~4 s                 |
 | `--rerank`, sonnet, depth 100                  | 13/14      | 24/24   | 3/3  | 222        | ≈10,900                   | ~4 s                 |
 | `--rerank`, sonnet, depth 200 (default), 3 runs| 14/14      | 24/24   | 3/3  | 221–226    | ≈19,200                   | ~4.3 s               |
+
+**`--rerank-local`** is the same pool and the same pick, scored by a local cross-encoder
+(`BAAI/bge-reranker-v2-m3`, exported to ONNX once with `optimum-cli export onnx --model
+BAAI/bge-reranker-v2-m3 --task text-classification ~/.cache/repograph/reranker`, ~2.2 GB) at
+zero tokens. Measured on the bench corpus on 2026-09-04 — see ADR-001, Amendment 4 — and not on
+any floor.
 
 The `bench` floors apply to the zero-token path; `--rerank` is measured, not
 floored, because a model's pick can vary by one hit between identical runs — which is also why the

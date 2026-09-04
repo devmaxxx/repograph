@@ -26,3 +26,7 @@ milestone_families = ["BE", "FE", "PLAT", "SYNC", "OPS", "AI", "MOB"]
 # haiku writes questions as well as any model, sonnet picks seeds better.
 enrich_command = "MAX_THINKING_TOKENS=0 claude -p --model haiku --output-format text --tools \"\" --setting-sources \"\" --no-session-persistence"
 rerank_command = "MAX_THINKING_TOKENS=0 claude -p --model sonnet --output-format text --tools \"\" --setting-sources \"\" --no-session-persistence"
+
+# `ask --rerank-local`: a local cross-encoder over the same 200-deep pool, zero tokens. Empty
+# means ~/.cache/repograph/reranker, where `optimum-cli export onnx` was pointed.
+reranker_dir = ""

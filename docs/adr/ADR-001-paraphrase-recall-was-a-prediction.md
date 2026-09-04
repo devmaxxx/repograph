@@ -123,3 +123,52 @@ five slots — reads 14/14 paraphrase, 24/24 keyword, 3/3 code on three consecut
 sonnet, at ≈19k input tokens and ~4.3 s per question. Haiku with the same prompt reads 11/14 and
 opus drops a keyword hit in two runs of two, so the reranker's default model is sonnet while
 `enrich` stays on haiku. The zero-token floors are unchanged; `--rerank` stays measured, not floored.
+
+## Amendment 4 — the cross-encoder, measured (2026-09-04)
+
+The one lever the second amendment left unmeasured. `bge-reranker-v2-m3`, exported to ONNX
+(`optimum-cli`, 2.27 GB, 1 min 12 s), loaded through the embedder's own `ort` path, scoring
+the same 200-deep pool `--rerank` shows the model command. Rule, written before the run: the
+zero-token floor moves only on paraphrase ≥ 17/30 with keyword 40/40, code 12/12, p90 ≤ 230 and
+a median under one second a question.
+
+| arm | keyword | paraphrase | code | p90 | s / question |
+|---|---|---|---|---|---|
+| control (this store, dense) | 40/40 | 15/30 | 12/12 | 226 | 0.06 |
+| `--rerank-local`, depth 200 | 39/40 | 17/30 | 12/12 | 229 | 17.9 |
+| `--rerank-local --depth 100` | 39/40 | 14/30 | 12/12 | 230 | 8.9 |
+| `--rerank-local --depth 40` | 39/40 | 15/30 | 12/12 | 237 | 3.6 |
+
+Seconds per question are the run's wall clock over its 82 cases, on an M-series laptop with the
+session opened once for the whole run; the control's 0.06 s is the same arithmetic and excludes
+the model open both arms pay.
+
+It stays opt-in, on two of the five conditions. Latency is the decisive one and it is not close:
+17.9 s a question at depth 200 is eighteen times the bar and four times what `--rerank` pays a
+remote model, because a cross-encoder is one forward pass **per candidate** — 200 pairs of
+(question, snippet) through a 568M-parameter XLM-R encoder, against one embedding of the query.
+Depth is the only dial and it trades the paraphrases away: 100 deep costs half the time and
+reads 14/30, 40 deep reads 15/30 at a p90 of 237 that is over the token ceiling on its own.
+Keyword is the second failure and it is the same one in all three arms: `NFR-STAFF-04`
+(«ведомость мастера не видна») is a hit for every retriever and the reranker scores it out of
+the five seeds at any depth. A model that never sees the exact-id evidence will do that; the
+pins that Amendment 3 removed for `--rerank` existed to prevent exactly this, and re-adding
+them here would cost two of the five slots the paraphrase gain comes from.
+
+Against the fourteen misses of `docs/bench/2026-09-03-three-graphs-results.md` — the store now
+reads 15/30, not that day's 16/30, so the control is the comparison, not the doc — depth 200
+gains five and loses three. In: `FR-SEC-21`, `FR-AI-102`, `FR-RPT-13`, `FR-WH-18`, `INV-16`.
+`FR-AI-102` is the more interesting of them, one of the two G2 named as never surfacing the
+right file at all; the reranker finds it. Out: `FR-PAY-03`, `FR-SVC-39`, `ADR-004` — three the
+fused order had right and the cross-encoder scored below five others. `FR-CAL-101`, the other of
+G2's two, is missed by the control and by all three reranked arms, which is the coverage finding
+G2 predicts and not a reranker failure. `INV-16` is the only case that flips at every depth, so
+of the five gains four need the pool 200 deep. Net, the swing at the one depth that clears the
+paraphrase bar is +2 paraphrase for −1 keyword, bought at 300× the latency.
+
+Adoption would in any case have been a separate change, with its own commit, moving the floor in
+`bench::passes` and the README's Bench list — this amendment records a number and does not move
+anything. The rule is not met, so there is nothing to adopt: `--rerank-local` ships opt-in and
+off every floor, as `--rerank` does. What it settles is the ADR's open question. Every lever
+named here is now measured, and none of them buys paraphrase recall at the zero-token,
+sub-second budget the floors are written to.

@@ -42,7 +42,7 @@ fn parse_cases(text: &str) -> Result<Vec<Case>> {
         .collect()
 }
 
-pub fn run(repo: &Path, cases: Option<&Path>, no_dense: bool, rerank: bool, depth: usize) -> Result<bool> {
+pub fn run(repo: &Path, cases: Option<&Path>, no_dense: bool, rerank: bool, rerank_local: bool, depth: usize) -> Result<bool> {
     // Resolved before `Config::load` so the override repo's own `repograph.toml` — not the
     // `--repo` one — is what the `IdMatcher` is built from.
     let repo = std::env::var("REPOGRAPH_BENCH_REPO").map(std::path::PathBuf::from).unwrap_or(repo.to_path_buf());
@@ -96,7 +96,21 @@ pub fn run(repo: &Path, cases: Option<&Path>, no_dense: bool, rerank: bool, dept
     }
     let opts = Options { seeds: 5, bodies: false, dense: dense_on, json: false, depth };
     let rerank_fn = |q: &str, c: &[(String, String)]| crate::rerank::run(&cfg.rerank_command, q, c);
-    let rerank: Option<query::Rerank> = if rerank { Some(&rerank_fn) } else { None };
+    let cross = std::cell::RefCell::new(if rerank_local {
+        let dir = if cfg.reranker_dir.is_empty() { crate::index::cross::default_dir()? } else { std::path::PathBuf::from(&cfg.reranker_dir) };
+        Some(crate::index::cross::CrossEncoder::open(&dir).context("--rerank-local")?)
+    } else { None });
+    let local_fn = |q: &str, c: &[(String, String)]| -> Vec<String> {
+        let mut m = cross.borrow_mut();
+        let Some(m) = m.as_mut() else { return Vec::new() };
+        let texts: Vec<String> = c.iter().map(|(_, t)| t.clone()).collect();
+        match m.score(q, &texts) {
+            Ok(s) => crate::index::cross::pick(&s, c, crate::index::cross::PICK),
+            // Like a failing rerank command: say so and answer from the fused order.
+            Err(e) => { eprintln!("rerank-local: {e:#}; answering from the fused order"); Vec::new() }
+        }
+    };
+    let rerank: Option<query::Rerank> = if rerank_local { Some(&local_fn) } else if rerank { Some(&rerank_fn) } else { None };
     let mut summary = Summary::default();
     let mut tokens = Vec::new();
     for case in &cases {
@@ -114,7 +128,11 @@ pub fn run(repo: &Path, cases: Option<&Path>, no_dense: bool, rerank: bool, dept
     tokens.sort_unstable();
     summary.p90_tokens = tokens.get(tokens.len() * 9 / 10).copied().unwrap_or(0);
     println!("\nkeyword {}/{}  paraphrase {}/{}  code {}/{}  p90 {} tok  dense={dense_on}{}",
-        summary.keyword.0, summary.keyword.1, summary.paraphrase.0, summary.paraphrase.1, summary.code.0, summary.code.1, summary.p90_tokens, if rerank.is_some() { format!(" rerank=true depth={depth}") } else { String::new() });
+        summary.keyword.0, summary.keyword.1, summary.paraphrase.0, summary.paraphrase.1, summary.code.0, summary.code.1, summary.p90_tokens, match (rerank_local, rerank.is_some()) {
+            (true, _) => format!(" rerank_local=true depth={depth}"),
+            (false, true) => format!(" rerank=true depth={depth}"),
+            _ => String::new(),
+        });
     Ok(passes(&summary, dense_on))
 }
 

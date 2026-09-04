@@ -15,6 +15,9 @@ pub struct Config {
     pub enrich_command: String,
     /// Reads a prompt on stdin and writes the chosen ids one per line; `ask --rerank` runs it.
     pub rerank_command: String,
+    /// Directory holding `model.onnx` and `tokenizer.json` for `ask --rerank-local`; empty
+    /// means `$HOME/.cache/repograph/reranker`.
+    pub reranker_dir: String,
 }
 
 // Headless Claude Code with thinking off: the same answers, 4-5× faster and cheaper. Haiku
@@ -47,6 +50,7 @@ impl Default for Config {
             registries: s(&["docs/constitution.yaml"]),
             enrich_command: ENRICH_COMMAND.into(),
             rerank_command: RERANK_COMMAND.into(),
+            reranker_dir: String::new(),
         }
     }
 }
