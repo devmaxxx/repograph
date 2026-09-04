@@ -184,21 +184,38 @@ def score_blast(tool: Tool, cases: list[dict], truth: dict) -> list[dict]:
     return rows
 
 
+def mrr(ranks: list[int | None]) -> float:
+    """Mean of 1/rank, an absent id scored 0."""
+    return round(statistics.mean(1 / r if r else 0.0 for r in ranks), 3)
+
+
 def summarise(rows: list[dict]) -> dict:
     ret = [r for r in rows if r["suite"] == "retrieval"]
     out: dict = {}
     if ret:
+        # `rank` present and null is a question the tool missed; `rank` absent is a result file
+        # written before the field existed. Scoring the second as the first would report a
+        # rescored old run as a measured zero, so it is an error rather than an absence.
+        stale = [r for r in ret if "rank" not in r]
+        if stale:
+            raise KeyError(
+                f"{len(stale)} retrieval rows carry no `rank`: this result predates the field "
+                "(pre-2026-09-04) and cannot be scored for MRR"
+            )
         by_kind: dict[str, dict] = {}
         for r in ret:
-            slot = by_kind.setdefault(r["kind"], {"n": 0, "strict": 0, "soft": 0})
+            slot = by_kind.setdefault(r["kind"], {"n": 0, "strict": 0, "soft": 0, "rank1": 0, "ranks": []})
             slot["n"] += 1
             slot["strict"] += r["strict"]
             slot["soft"] += r["soft"]
-        ranks = [r.get("rank") for r in ret]
+            slot["rank1"] += r["rank"] == 1
+            slot["ranks"].append(r["rank"])
+        for slot in by_kind.values():
+            slot["mrr"] = mrr(slot.pop("ranks"))
         out["retrieval"] = {
             "by_kind": by_kind,
             "strict": sum(r["strict"] for r in ret), "soft": sum(r["soft"] for r in ret), "n": len(ret),
-            "mrr": round(statistics.mean(1 / r if r else 0.0 for r in ranks), 3),
+            "mrr": mrr([r["rank"] for r in ret]),
             "ms_median": round(statistics.median(r["ms"] for r in ret)),
             "chars_median": round(statistics.median(r["chars"] for r in ret)),
         }
@@ -266,12 +283,16 @@ def main() -> None:
 
     head = subprocess.run(["git", "rev-parse", "--short", "HEAD"], cwd=repo,
                           capture_output=True, text=True).stdout.strip()
+    suites = args.suites.split(",")
+    # Only the suites that ran. A blast-only run that still printed the retrieval case count
+    # claimed 82 scored questions it never asked.
+    loaded = {"retrieval": (cases, cases_path), "blast": (blast, blast_path)}
     report = {
         "corpus": str(repo), "commit": head, "when": time.strftime("%Y-%m-%dT%H:%M:%S"),
-        "cases": {"retrieval": len(cases), "blast": len(blast)},
-        "case_files": {"retrieval": str(cases_path), "blast": str(blast_path)}, "tools": {},
+        "suites": suites,
+        "cases": {s: len(loaded[s][0]) for s in suites if s in loaded},
+        "case_files": {s: str(loaded[s][1]) for s in suites if s in loaded}, "tools": {},
     }
-    suites = args.suites.split(",")
     for name in args.tools.split(","):
         tool = TOOLS[name](repo, args)
         rows: list[dict] = []

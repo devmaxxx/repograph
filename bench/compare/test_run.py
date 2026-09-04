@@ -66,6 +66,28 @@ class Summarise(unittest.TestCase):
         # 1/1, 1/4, 0 (absent) -> (1 + 0.25 + 0) / 3 = 0.41666... -> round to 3 places: 0.417
         self.assertEqual(summarise(rows)["retrieval"]["mrr"], 0.417)
 
+    def test_by_kind_carries_the_rank_columns_the_write_up_prints(self):
+        rows = [
+            {"suite": "retrieval", "kind": "keyword", "strict": True, "soft": True,
+             "rank": 1, "ms": 10, "chars": 5},
+            {"suite": "retrieval", "kind": "paraphrase", "strict": True, "soft": True,
+             "rank": 2, "ms": 10, "chars": 5},
+            {"suite": "retrieval", "kind": "paraphrase", "strict": False, "soft": False,
+             "rank": None, "ms": 10, "chars": 5},
+        ]
+        by_kind = summarise(rows)["retrieval"]["by_kind"]
+        self.assertEqual(by_kind["keyword"], {"n": 1, "strict": 1, "soft": 1, "rank1": 1, "mrr": 1.0})
+        # 1/2 and an absence: (0.5 + 0) / 2, and neither of the two is at rank 1.
+        self.assertEqual(by_kind["paraphrase"], {"n": 2, "strict": 1, "soft": 1, "rank1": 0, "mrr": 0.25})
+
+    def test_a_row_with_no_rank_key_is_an_error_not_a_miss(self):
+        # A pre-2026-09-04 result file rescored: scoring it 0 would publish an old run's
+        # missing field as a measured MRR.
+        rows = [{"suite": "retrieval", "kind": "keyword", "strict": True, "soft": True,
+                 "ms": 10, "chars": 5}]
+        with self.assertRaises(KeyError):
+            summarise(rows)
+
 
 class BlastShape(unittest.TestCase):
     def test_blast_has_the_recorded_shape(self):

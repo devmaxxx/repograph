@@ -40,6 +40,14 @@ class StripComments(unittest.TestCase):
         self.assertEqual(out.count("\n"), src.count("\n"))
         self.assertIn("AuthService", out)
 
+    def test_a_multi_line_block_comment_keeps_the_declaration_after_it_on_its_own_line(self):
+        # The docstring promises line numbers survive, so a docblock must not pull the
+        # declaration below it up to the line where the comment opened.
+        src = "/* a\nb */ export function foo() {}\n"
+        out = strip_comments(src)
+        self.assertEqual(out.count("\n"), src.count("\n"))
+        self.assertIn("export function foo", out.split("\n")[1])
+
     def test_known_limitation_a_quote_in_a_regex_literal_desyncs_the_rest_of_the_line(self):
         # A tokeniser would know `/'/` is a regex, not a string; this scan does not.
         # It opens a string on that quote and closes on the real string's opening quote,
