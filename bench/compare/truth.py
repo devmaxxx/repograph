@@ -47,7 +47,9 @@ def files_naming(repo: Path, token: str) -> list[str]:
 
 BLOCK_COMMENT = re.compile(r"/\*.*?\*/", re.S)
 LINE_COMMENT = re.compile(r"(?<!:)//[^\n]*")
-# Single- and double-quoted literals stay on one line; a template literal may not.
+# A single- or double-quoted literal excludes a bare newline in its body, not a
+# template literal: a `\` line continuation still spans lines, but only via the
+# backslash-escape branch, not the character class.
 STRING_LITERAL = re.compile(r"'(?:[^'\\\n]|\\.)*'|\"(?:[^\"\\\n]|\\.)*\"|`(?:[^`\\]|\\.)*`", re.S)
 
 
@@ -68,6 +70,10 @@ def strip_comments(src: str) -> str:
     one file short of 1.0 for a dependency that did not exist. Only code counts. A literal's
     body is blanked and its quotes kept, so line numbers and bracket depth survive; a
     `${…}` inside a template literal is blanked with it, which is the one thing this loses.
+    A regex literal containing a quote character (`/'/`) desyncs the scan for the rest of
+    that line: the quote branch opens on it and closes on the next real string's opening
+    quote, so a symbol named in that string can survive un-blanked. Closing that properly
+    needs a tokeniser, which is out of scope here.
     """
     without_comments = LINE_COMMENT.sub("", BLOCK_COMMENT.sub("", src))
     return STRING_LITERAL.sub(_blank, without_comments)

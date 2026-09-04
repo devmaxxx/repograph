@@ -40,6 +40,15 @@ class StripComments(unittest.TestCase):
         self.assertEqual(out.count("\n"), src.count("\n"))
         self.assertIn("AuthService", out)
 
+    def test_known_limitation_a_quote_in_a_regex_literal_desyncs_the_rest_of_the_line(self):
+        # A tokeniser would know `/'/` is a regex, not a string; this scan does not.
+        # It opens a string on that quote and closes on the real string's opening quote,
+        # leaving the real string's body — and any symbol in it — un-blanked. Documented
+        # in strip_comments' docstring as a known loss; this pins today's actual output
+        # so a future fix is noticed here rather than silently changing behaviour.
+        src = "const r = /'/; const s = 'AuthService';\n"
+        self.assertEqual(strip_comments(src), "const r = /''AuthService';\n")
+
 
 if __name__ == "__main__":
     unittest.main()
