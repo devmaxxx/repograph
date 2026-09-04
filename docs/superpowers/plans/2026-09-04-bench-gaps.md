@@ -208,7 +208,7 @@ import truth as T; from pathlib import Path
 print(len(T.code_files_naming(Path(".").resolve(), "AuthService")))
 EOF
 ```
-Expected: `10` (was `0` before the change).
+Expected: `11` (was `0` before the change).
 
 - [ ] **Step 7: Write the definition down**
 

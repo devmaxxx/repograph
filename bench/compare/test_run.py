@@ -2,7 +2,12 @@
 
 import unittest
 
-from run import rank_of
+from run import rank_of, summarise
+
+# Each line carries one id but a different number of paths, so counting ids and counting
+# paths before "FR-B-2" disagree (1 vs. 3) — a `rank_of` that ignored `"/" in want` and
+# always counted paths would pass every other fixture here yet fail this one.
+MIXED_COUNTS = "FR-A-1  docs/aaa.md docs/bbb.md docs/ccc.md\nFR-B-2  docs/ddd.md\n"
 
 # `repograph ask "расход виден салону"` on beauty-crm at 2483d932, verbatim.
 ANSWER = (
@@ -38,6 +43,23 @@ class RankOf(unittest.TestCase):
 
     def test_the_same_token_repeated_is_one_competitor(self):
         self.assertEqual(rank_of("FR-A-1 x\nFR-A-1 y\nFR-B-2\n", "FR-B-2"), 2)
+
+    def test_an_id_want_counts_ids_even_when_the_answer_has_more_paths(self):
+        self.assertEqual(rank_of(MIXED_COUNTS, "FR-B-2"), 2)
+
+
+class Summarise(unittest.TestCase):
+    def test_mrr_is_the_mean_of_1_over_rank_with_absences_as_zero(self):
+        rows = [
+            {"suite": "retrieval", "kind": "keyword", "strict": True, "soft": True,
+             "rank": 1, "ms": 10, "chars": 5},
+            {"suite": "retrieval", "kind": "keyword", "strict": True, "soft": True,
+             "rank": 4, "ms": 10, "chars": 5},
+            {"suite": "retrieval", "kind": "keyword", "strict": False, "soft": False,
+             "rank": None, "ms": 10, "chars": 5},
+        ]
+        # 1/1, 1/4, 0 (absent) -> (1 + 0.25 + 0) / 3 = 0.41666... -> round to 3 places: 0.417
+        self.assertEqual(summarise(rows)["retrieval"]["mrr"], 0.417)
 
 
 if __name__ == "__main__":
