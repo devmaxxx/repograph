@@ -7,6 +7,52 @@ not have to be rediscovered.
 
 The last run is [`2026-09-03-three-graphs-results.md`](2026-09-03-three-graphs-results.md).
 
+## The pinned fixture — read this before rebuilding anything
+
+Everything below describes a full three-tool run, which needs both foreign indexes built and
+takes roughly half an hour. Most runs do not need that. There is a fixture that already has
+all three:
+
+```
+~/bench/beauty-crm-502e8a6d      # detached worktree of the corpus at 502e8a6d
+```
+
+| what | where | built by | cost to rebuild |
+|---|---|---|---|
+| corpus at `502e8a6d` | the worktree itself | — | 856 MB |
+| gitnexus index | `.gitnexus/` | gitnexus 1.6.9 | 218 s, 598 MB |
+| graphify graph | `graphify-out/graph.json` | graphify 0.9.48 | 24 s, 123 MB |
+| repograph store | `.repograph/` | see below | 78 MB |
+
+The repograph store carries the graph, the dense vectors and the enrichment questions, so the
+fixture answers in the enriched arm without anyone paying for `enrich` again. The vectors and
+`questions.json` were copied from the working clone's store at the same corpus commit rather
+than recomputed. That transfer is only valid because both stores were built from the same
+`502e8a6d` graph, so it was checked rather than assumed: one binary, both repositories, both
+arms, and all 82 cases came back identical case by case, not merely equal in total.
+
+| arm | fixture | working clone |
+|---|---|---|
+| dense | keyword 40/40, paraphrase 15/30, code 12/12, p90 226 | identical |
+| lexical | keyword 37/40, paraphrase 15/30, code 12/12, p90 220 | identical |
+
+**For a repograph-only run, use `bench/history/run-repograph.sh` and stop reading here.** It
+builds the binary, runs both arms against the fixture, records them into the run history and
+prints what improved, what regressed and what is chronically weak. Two minutes, no tokens.
+
+Two things about the fixture that will otherwise cost an afternoon:
+
+- **The fixture's `git status` is dirty by design.** `graphify-out/` is tracked in the corpus
+  and graphify rewrites it in place. Four modified files and one new `.sig` are the deliverable,
+  not debris. Judge cleanliness with `git status --porcelain -- ':(exclude)graphify-out'`.
+- **gitnexus registers the fixture under the name `beauty-crm`, which the working clone already
+  uses.** Plain-name resolution picks whichever was indexed last, silently, and a wrong name
+  does not error — it answers about the other repository. `run.py` already defaults
+  `--gitnexus-repo` to the corpus path, so the rule is simply never to override it with a name.
+
+Rebuild the fixture only if the corpus commit under test has to change. That invalidates every
+recorded run against it, which is the reason it is pinned.
+
 ## Before anything: the corpus is now hostile to two of the three tools
 
 `beauty-crm` keeps `graphify-out/` (tracked) and `.gitnexus/` (git-ignored) on disk

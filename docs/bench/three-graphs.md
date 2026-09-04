@@ -184,9 +184,10 @@ altogether is refused rather than scored as a miss.
   limitation and the same change does not close both. Open because fixing it moves the
   numbers in repograph's favour and needs the whole suite re-run to say by how much.
 - **repograph answers differently before and after `enrich`, and the build above leaves it
-  before.** The generated questions are what its paraphrase floor rests on: on this corpus and at
-  this commit the same binary reads 9/30 paraphrase without them and 14/30 with them, with
-  embeddings on, while keyword and code do not move in that arm. `enrich` spends model tokens
+  before.** The generated questions are what its paraphrase floor rests on: on this corpus at
+  `502e8a6d` the same binary reads 9/30 paraphrase without them and 15/30 with them, with
+  embeddings on, and code does not move. Keyword does move, but only without embeddings, where
+  the questions currently cost three cases rather than buying any. `enrich` spends model tokens
   (~$2.5 of Haiku here), so a run of this protocol measures repograph's zero-token configuration
   unless it pays for one first — and either way the result should say which, as `bench`'s own
   summary line does with `enriched=`.
