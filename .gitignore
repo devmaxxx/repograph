@@ -6,3 +6,7 @@
 /npm/*/bin/repograph
 /npm/*/node_modules
 /bench/compare/__pycache__
+
+# Python bytecode from the bench tooling
+__pycache__/
+*.pyc

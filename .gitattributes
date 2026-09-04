@@ -1,0 +1,4 @@
+# The run history is append-only and two branches will each have appended their own runs.
+# Taking the union keeps both sets; the default merge would ask a human to choose, and the
+# only correct answer is always "both".
+bench/history/runs.jsonl merge=union
