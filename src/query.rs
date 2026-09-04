@@ -29,15 +29,60 @@ const MAX_EXPANDED: usize = 1;
 /// first, so two seeds were pinned; shown text, the pins were the retrievers' guess taking two
 /// of the model's five slots, and unpinning them is what took paraphrase from 13/14 to 14/14.
 const PINNED: usize = 0;
-/// The generated-questions BM25 list joins the fusion only when its best score is at least
-/// this fraction of the passage list's best. Below it, on 400 held-out questions, the passage
-/// list is the one holding the answer (30% in its top five against 21%) and dropping the
-/// questions list costs nothing measurable (dense −7 +5, lexical −9 +5, exact McNemar
-/// p = 0.77 and 0.42); above it the questions list is the better retriever (24% against 12%).
-/// The value sits in the gap between the two constraints: the held-out set tolerates anything
-/// up to 0.90, and below 0.85 the keyword case `FR-WH-53` (ratio 0.80) keeps losing its seat.
-/// That gap is narrow, and gap G7 records it as narrow.
+/// The generated-questions BM25 list joins the plain-path fusion only when its best score is at
+/// least this fraction of the passage list's best. Below it, on 400 held-out questions, the
+/// passage list is the one holding the answer (30% in its top five against 21%) and dropping
+/// the questions list costs nothing measurable; above it the questions list is the better
+/// retriever (24% against 12%). The held-out set never binds the value — exact McNemar against
+/// the ungated fusion is p = 0.34 to 0.79 at every value from 0.80 to 0.95 — so the window is
+/// set by the 82 recorded cases alone: at 0.80 the keyword case `FR-WH-53` (ratio 0.801) loses
+/// its seat and the lexical arm reddens, and at 0.87 a paraphrase case (ratio 0.867) loses its
+/// list and the arm with embeddings reads 13/30 under its floor of 14. Ten of the thirty
+/// paraphrase ratios sit in (0.85, 0.90), so the window's upper edge is the foot of the very
+/// population the gate admits. The window's centre, 0.83, was measured too: identical on the 82
+/// in all four arms, but the lexical held-out arm loses three more questions to it (109 → 106,
+/// none gained) — a list admitted at a ratio just under 0.85 came in without the answer and
+/// took seats. So the value stays at 0.85, with 0.05 of room below and 0.006 above; the nearest
+/// paraphrase ratio is 0.856, and any change to the store's questions moves every ratio.
+///
+/// It is a constant of this store, not of BM25. The two indices share the tokenizer, the
+/// formula and the document count, but each normalises length against its own mean (30.6
+/// tokens a passage, 51.8 a question document) and weights terms by its own vocabulary (10.8k
+/// against 21.8k), so the ratio moves with enrichment coverage and questions per node. A
+/// scale-free form — each list's best against its own k-th — is gap G8, not tried.
 const QUESTIONS_GATE: f32 = 0.85;
+
+/// `REPOGRAPH_QUESTIONS_GATE` overrides the constant for a measurement and for nothing else:
+/// `0` reproduces the ungated fusion that ADR-001 Amendment 6's before-column was read against,
+/// which no commit's binary otherwise produces, and any other value re-reads the window above.
+fn questions_gate() -> f32 {
+    gate_from(std::env::var("REPOGRAPH_QUESTIONS_GATE").ok().as_deref())
+}
+
+fn gate_from(override_: Option<&str>) -> f32 {
+    override_.and_then(|v| v.trim().parse().ok()).unwrap_or(QUESTIONS_GATE)
+}
+
+/// The lexical lists for one question, in fusion order. A store `enrich` never touched has one:
+/// an index of id-only documents is shorter than the passages and ranks an id-bearing term above
+/// the passage that carries it, so on a raw store the questions list would clear any gate for the
+/// wrong reason and cost a build per question to do it. On the reranked path both lists are
+/// admitted unconditionally: the fused order there is a candidate pool of `depth`, not five
+/// seats, so the questions list displaces nothing, and Amendment 2 measured it as what carries
+/// paraphrase targets into that pool.
+fn lexical_lists(graph: &Graph, questions: &Questions, query: &str, depth: usize, reranked: bool) -> Vec<Vec<String>> {
+    let only_ids = |scored: Vec<(String, f32)>| -> Vec<String> { scored.into_iter().map(|(id, _)| id).collect() };
+    let passages = LexicalIndex::build(graph).search(query, depth);
+    if questions.entries.is_empty() { return vec![only_ids(passages)]; }
+    let generated = LexicalIndex::build_questions(graph, questions).search(query, depth);
+    if reranked { return vec![only_ids(passages), only_ids(generated)]; }
+    let best = |l: &[(String, f32)]| l.first().map(|(_, s)| *s).unwrap_or(0.0);
+    if best(&generated) >= questions_gate() * best(&passages) && best(&generated) > 0.0 {
+        vec![only_ids(generated), only_ids(passages)]
+    } else {
+        vec![only_ids(passages)]
+    }
+}
 
 fn hit(graph: &Graph, id: &str, score: f32, via: Option<&str>) -> Option<Hit> {
     let n = graph.nodes.get(id)?;
@@ -96,31 +141,18 @@ pub fn ask(graph: &Graph, ids: &IdMatcher, questions: &Questions, dense: Option<
         // the exact passage row goes past the cut. Thinning its turns for every question was
         // measured and rejected (gap G7): on held-out paraphrases it is the retriever doing the
         // work. So it is admitted per question, on how strongly it matched against how strongly
-        // the passages did; the two BM25 indices share a corpus and a tokenizer, so their best
-        // scores compare. An empty store never clears the gate and the raw arms are untouched.
+        // the passages did — `QUESTIONS_GATE`, and `lexical_lists` for what the two paths do
+        // with it. The raw arms are untouched by construction: a store without questions gets
+        // no questions list built at all.
         let mut lists: Vec<Vec<String>> = Vec::new();
-        let mut generated: Vec<String> = Vec::new();
         if opts.dense {
             if let Some(d) = dense {
                 let (passages, questions_rows) = d(&query, depth);
                 lists.push(passages);
-                generated = questions_rows;
+                if rerank.is_some() { lists.push(questions_rows); }
             }
         }
-        let only_ids = |scored: Vec<(String, f32)>| -> Vec<String> { scored.into_iter().map(|(id, _)| id).collect() };
-        if rerank.is_some() {
-            lists.push(generated);
-            lists.push(only_ids(LexicalIndex::build(graph).search(&query, depth)));
-            lists.push(only_ids(LexicalIndex::build_questions(graph, questions).search(&query, depth)));
-        } else {
-            let passages = LexicalIndex::build(graph).search(&query, depth);
-            let generated_q = LexicalIndex::build_questions(graph, questions).search(&query, depth);
-            let best = |l: &[(String, f32)]| l.first().map(|(_, s)| *s).unwrap_or(0.0);
-            if best(&generated_q) >= QUESTIONS_GATE * best(&passages) && best(&generated_q) > 0.0 {
-                lists.push(only_ids(generated_q));
-            }
-            lists.push(only_ids(passages));
-        }
+        lists.extend(lexical_lists(graph, questions, &query, depth, rerank.is_some()));
         lists.retain(|l| !l.is_empty());
         let mut fused = fuse::interleave(&lists);
         if let Some(r) = rerank {
@@ -421,6 +453,47 @@ mod tests {
         let mut qs = Questions::default();
         qs.entries.insert("FR-PAY-20".into(), crate::enrich::Entry { hash: String::new(), questions: vec!["можно ли аннулировать бронь самому".into()] });
         qs
+    }
+
+    #[test]
+    fn a_store_without_questions_gets_one_lexical_list_on_either_path() {
+        // The old guard was `!entries.is_empty()`; without it a raw store builds an index of
+        // id-only documents, and "FR-PAY-22" scores higher there than in the passage that
+        // carries it, so the list would clear the gate on the strength of its own shortness.
+        let g = graph();
+        let none = Questions::default();
+        for reranked in [false, true] {
+            let lists = lexical_lists(&g, &none, "FR-PAY-22 штраф", 10, reranked);
+            assert_eq!(lists.len(), 1, "reranked={reranked}: {lists:?}");
+            assert_eq!(lists[0][0], "FR-PAY-22");
+        }
+    }
+
+    #[test]
+    fn the_questions_list_leads_when_admitted_and_is_absent_when_not() {
+        let g = graph();
+        let mut qs = questions();
+        qs.entries.get_mut("FR-PAY-20").unwrap().questions.push("какой штраф за отмену".into());
+        // Ratio 0.41 (see the seat test above): passages only.
+        let weak = lexical_lists(&g, &qs, "штраф считается", 10, false);
+        assert_eq!(weak.len(), 1);
+        assert_eq!(weak[0][0], "FR-PAY-22");
+        // Ratio above the gate: the questions list first, then the passages.
+        let strong = lexical_lists(&g, &qs, "штраф отмену", 10, false);
+        assert_eq!(strong.len(), 2);
+        assert_eq!((strong[0][0].as_str(), strong[1][0].as_str()), ("FR-PAY-20", "FR-PAY-22"));
+        // Reranked: both lists whatever the ratio, passages first — a pool, not five seats.
+        let pool = lexical_lists(&g, &qs, "штраф считается", 10, true);
+        assert_eq!(pool.len(), 2);
+        assert_eq!(pool[0][0], "FR-PAY-22");
+    }
+
+    #[test]
+    fn the_gate_override_is_read_only_when_it_parses() {
+        assert_eq!(gate_from(None), QUESTIONS_GATE);
+        assert_eq!(gate_from(Some("0")), 0.0);
+        assert_eq!(gate_from(Some(" 0.9 ")), 0.9);
+        assert_eq!(gate_from(Some("high")), QUESTIONS_GATE, "an unparsable override is ignored, not treated as zero");
     }
 
     #[test]
