@@ -307,6 +307,20 @@ its own list — replaces the constant only if it reproduces the four arms exact
 significantly worse on the held-out set in either arm, and reads at least as well on the 60
 `dev-cases`. The order of operations is `bench/heldout.py`'s header. Not tried.
 
+**Status (2026-09-05, 0.5.0): measured, not closed.** All three scale-free forms the design note
+pre-registered were derived and scored offline over the fixture's dumps, in order, and all three
+failed the first clause — the exact reproduction of the four arms. `coverage` at c = 0.761 reads
+`40/40 15/30 12/12` with embeddings and `39/40 **15**/30 12/12` without, `peak` at c = 0.894 reads
+`40/40 14/30 12/12` and `38/40 14/30 12/12`, `z` at c = 0.548 reads `40/40 15/30 12/12` and
+`37/40 15/30 12/12`. The gate stays at 0.85 and `src/query.rs` is untouched, so there is no ADR-001
+amendment. Coverage fails only by being *better* — one paraphrase more in the lexical arm, both
+developer arms up, held-out up in both arms and significant in neither — and a plan that
+pre-registers "every floor held, developer suite not down, held-out not worse" can ship it on the
+recorded evidence without re-measuring. What that evidence still lacks is the fourth clause: the
+second population (the fixture's questions cut to five per node) was never built, so nothing yet
+shows the constant is a property of the query rather than of this store. Every number is in
+[the 0.5.0 gap results](2026-09-05-0.5.0-gaps-results.md), L1.
+
 ---
 
 ## G9 · Code is unreachable from prose — `where` 0/9
@@ -414,6 +428,16 @@ raw `40/40 9/30`, `39/40 7/30`, p90 ≤ 230), held-out not significantly worse i
 developer suite not down — then a second store, enriched to a different depth, reading the same
 admissions the ratio would have given it. Unmeasured.
 
+**Status (2026-09-05, 0.5.0): measured, not closed.** Three normalised admissions were built and
+scored — a list's best over what the query could attain in that index (`coverage`), over its own
+fifth score (`peak`), and as a z-score within its own list (`z`) — each with its constant derived
+from the 400 held-out questions in the `--no-dense` arm before either suite was opened, and each
+failing the exact-reproduction clause. The replay that produced them is not throwaway: `bench/admission.py`
+replays the plain fusion offline over `dump` records and reproduces the shipped binary case for case
+(82/82, 60/60, 400/400 in both arms) under the ratio, and `dump` now carries an `attainable_*` column
+per list, so the next attempt costs a replay rather than a build. The comparison is still between two
+units in the shipped binary. See [the 0.5.0 gap results](2026-09-05-0.5.0-gaps-results.md), L1.
+
 ## G13 · Ten `where` anchors sit at code-list rank 1–9 and six are below the gate
 
 **Raised (2026-09-05)** by A3's dumps (`dump --queries`, `--no-dense` arm, 300 deep). The ratio is
@@ -452,6 +476,15 @@ anything. The honest form is G12's, and this table is what it would be judged on
 significantly worse in either — the same three-way rule A2 to A4 were read against, which each of
 them failed. Not tried in this shape.
 
+**Status (2026-09-05, 0.5.0): regenerated, still open.** Stage B of the 0.5.0 admission work — the
+code list admitted to the plain fusion under a scale-free form at one seat — needs a shipped form
+and its constant, and no form shipped, so it was not run. `where` stays 0/9 and A4's price for one
+seat (six held-out questions lost in each arm, none gained, p = 0.031) is still the number to beat.
+The table above is regenerated with a column per candidate form, so the next attempt reads what each
+admission would have done to these anchors: six of its 27 rows clear the shipped ratio's 0.85, 14
+clear `coverage`'s 0.761, 14 clear `peak`'s 0.894 and 26 clear `z`'s 0.548. The regenerated table is
+in [the 0.5.0 gap results](2026-09-05-0.5.0-gaps-results.md), L1.
+
 ## G14 · The enrichment prompt does not know the document's kind
 
 **Raised (2026-09-05)** by D1, the strongest paraphrase lever this campaign measured and one it did
@@ -480,6 +513,20 @@ the recorded floors held. Until then `ENRICH_COMMAND` stays haiku; `enrich_comma
 configuration, so a store that wants sonnet's paraphrase recall today can have it in one line of
 `repograph.toml`, at roughly five times the token cost.
 
+**Status (2026-09-05, 0.5.0): the stated cause is measured and does not hold; the gap stays open.**
+The free diagnostic this gap asked for was run and stopped the lever before any prompt was written
+or any token spent. Haiku's and sonnet's questions for `ADR-005`, `ADR-031`, `INV-07` and `INV-10`
+were read side by side and each line counted rule-shaped or behaviour-shaped: sonnet carries fewer
+rule-shaped questions on 1 of the 4 lost nodes, against a pre-registered bar of 3 of 4. Because a
+hand count was deciding a lever, a second reader classified the same two files without seeing the
+first count or the plan and read 2 of 4. The two disagree on absolute counts and agree where it
+matters — `ADR-031` moves as G14 predicted, `ADR-005` and `INV-07` move the *wrong* way, sonnet
+asking *more* permission-shaped questions there. So the prompt's shape is not the difference the
+questions show, and the next attempt should read the retrieval side of those four nodes before
+writing a prompt. `ENRICH_COMMAND` stays haiku for the reason it always did, which is the developer
+suite and not this diagnostic. Both counts, question by question, are in
+[the 0.5.0 gap results](2026-09-05-0.5.0-gaps-results.md), L4.
+
 ---
 
 ## Suggested order
@@ -487,10 +534,11 @@ configuration, so a store that wants sonnet's paraphrase recall today can have i
 | | gap | why here |
 |---|---|---|
 | 1 | ~~**G7** the questions list's share of the seeds~~ | closed 2026-09-05 — gated on the ratio of the two lists' best scores, held-out p = 0.77, lexical-only arm at raw parity; the window (0.802, 0.866] is recorded above, corrected from the 0.85–0.90 first published |
-| 2 | **G8** the questions gate is a constant of one store | a scale-free form of the same gate; measured on the held-out set first, then on both suites |
-| 3 | **G12** the gate compares raw BM25 scores across two indices | the admission, not the retrieval, is what keeps `where` at 0/9 and what moved under A2; a scoring change over lists that already exist, no tokens, and it closes G8 with it |
-| 4 | **G14** the prompt does not know the document's kind | the paraphrase and held-out gains are already measured (+2/+2 recorded, +29/+19 held-out); a prompt per kind costs one `enrich` (≈ $13.62 on sonnet) and is judged on `rule` coming back to 5/9 |
-| 5 | **G13** ten `where` anchors ranked and gated out | the table G12 would be judged on; reading it again after a gate change is free, and on its own it buys nothing |
+| 2 | **G8** the questions gate is a constant of one store | measured, not closed (2026-09-05, 0.5.0) — three scale-free forms derived and scored, all three fail the exact-reproduction clause; `coverage` at c = 0.761 fails only by gaining a paraphrase, and a rule written as "every floor held" rather than "reproduced exactly" can ship it on the recorded numbers |
+| 3 | **G12** the gate compares raw BM25 scores across two indices | measured, not closed (2026-09-05, 0.5.0) — `coverage`, `peak` and `z` each built, each with its constant derived from the held-out set before either suite was opened, each failing clause (i); the comparison is still between two units, and the replay that scored them (`bench/admission.py`, plus `dump`'s `attainable_*` columns) makes the next attempt a replay rather than a build |
+| 4 | **G14** the prompt does not know the document's kind | measured, not closed (2026-09-05, 0.5.0) — the free diagnostic reads 1 of 4 lost nodes, and 2 of 4 on an independent second reading, against a bar of 3 of 4; two of the four move the wrong way, so the prompt's shape is not the difference the questions show. No tokens spent and no prompt written; the retrieval side of those four nodes is what a next attempt should read |
+| 5 | **G13** ten `where` anchors ranked and gated out | regenerated, still open (2026-09-05, 0.5.0) — stage B needs a shipped admission and none shipped, so `where` stays 0/9 and A4's six held-out questions per arm are still the price to beat; the table now carries a column per candidate form |
+| — | ~~the lexical arm's 49 ms~~ | closed 2026-09-05 (0.5.0) — the perf results left this number here and nowhere else. The BM25 indexes are built once by a resident context and kept: socket lexical 55.0 → 6.8 ms, median of 33 against a base spread of 0.9 ms, the design note's 30 ms target met; Rule 1 sixteen byte-identical verdicts and Rule 2 142/142 in four pairings |
 | — | ~~**G9** code is unreachable from prose~~ | measured 2026-09-05 — A1 to A4 each rejected by the rule; the code questions ship into an index of their own for the `ask --rerank` pool, `where` stays 0/9 in the plain fusion, and G12 is what would move it |
 | — | ~~**G10** five seeds over three lists~~ | measured 2026-09-05 — A4 prices one seat for a fourth list at 6 held-out questions in each arm, none gained, p = 0.031; closed as measured, not as fixed |
 | — | ~~**G11** the embedder for Russian paraphrase~~ | shipped 2026-09-05 as a store option — e5-large reads paraphrase 22/30 and held-out 103 → 119, at 0.8 s an `ask` and a 2.1 GB download; the default stays the small model |

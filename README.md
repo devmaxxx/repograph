@@ -44,7 +44,7 @@ it had been measured, and hadn't been.
 | `enrich`, `ask --rerank`   | working; opt-in, the only two stages that spend model tokens — see [Spending tokens on purpose](#spending-tokens-on-purpose) |
 | `ask --rerank-local`       | working; opt-in, the same pool picked by a local cross-encoder at zero tokens, measured and rejected as a floor candidate — see [Spending tokens on purpose](#spending-tokens-on-purpose) |
 | `embed`                    | working; writes the rows the dense index lacks with the configured model, rewriting it whole when the store was written by another — see [Embeddings](#embeddings) |
-| `serve`                    | working; opt-in resident answerer for `ask` — the same bytes, measured 66 ms per fused ask after the first against 326 ms in a fresh process — see [Asking a resident process](#asking-a-resident-process) |
+| `serve`                    | working; opt-in resident answerer for `ask` — the same bytes, measured 66 ms per fused ask after the first against 326 ms in a fresh process, and 6.8 ms in the lexical arm since the BM25 indexes stopped being rebuilt per question — see [Asking a resident process](#asking-a-resident-process) |
 
 `--no-dense` skips the embedding stage everywhere it could apply — `build`, `update`, `enrich`,
 `embed`, `watch`, `serve`, `ask`, `bench`, `dump`. Without it, those commands use local embeddings
@@ -226,14 +226,21 @@ in-process runs interleaved in one sitting:
 | | resident | one process |
 | --- | --- | --- |
 | fused question, dense | 66 ms | 326 ms |
-| lexical | 54 ms | 106 ms |
+| lexical, indexes rebuilt per question | 54 ms | 106 ms |
+| lexical, indexes built once and kept (0.5.0) | **6.8 ms** | not re-measured |
 
 The first question after a start still pays the model open — 0.26 s, against 0.07 s for the ones
-after it. What is left is a process start (5 ms), the socket round trip, and the BM25 build that
-`ask` still does per question: almost all of the remaining 49 ms of the lexical arm's 54, and the
-one expensive thing a resident process does not keep. The stage tables, the levers behind those
-numbers and the evidence that the bytes do not move are in
-[the perf results](docs/bench/2026-09-06-perf-results.md).
+after it. What is left is a process start (5 ms), the socket round trip and the answer itself. The
+BM25 indexes are no longer part of that: until 0.5.0 `ask` rebuilt them from the graph on every
+question, which was almost all of the remaining 49 ms of the lexical arm's 54 and the one expensive
+thing a resident process did not keep. A resident context now builds them on its first fusing answer
+and keeps them until the graph or the questions move, and that arm reads 55.0 ms against 6.8 ms —
+medians of 33 over base and head binaries alternating in one sitting, base spread 0.9 ms, which is
+the 30 ms this was aimed at. That is its own sitting on the same copy rather than a before-and-after
+of the table above, and the one-process column was not re-measured. The stage tables, the levers
+behind these numbers and the evidence that the bytes do not move are in
+[the perf results](docs/bench/2026-09-06-perf-results.md) and
+[the 0.5.0 gap results](docs/bench/2026-09-05-0.5.0-gaps-results.md).
 
 Git hooks are the free version of the same thing, for a repository whose changes arrive by pull:
 
@@ -319,12 +326,17 @@ repograph dump --queries qs.jsonl --out lists.json   # every retriever's ranked 
    expanded _to_ — they are hubs and would drown the answer.
 6. **Render.** `ID  path:line  headline`, headline cut to 80 characters.
 
-The lexical index is rebuilt in memory on every `ask` rather than stored on disk. It costs about
-120 ms on a 7,500-node graph, and in exchange there is no lexical state that can ever go stale
-relative to the graph. A later sitting bounds that build, the question index beside it, their
-scoring and the fusion at about 49 ms of a 54 ms lexical ask on the bench corpus, at 8.3k nodes —
-different sittings on different graphs, not a before and after; that bound and what it rests on
-are in [the perf results](docs/bench/2026-09-06-perf-results.md).
+The lexical index is built in memory rather than stored on disk, and since 0.5.0 it is built once
+per context rather than once per question: a one-shot `ask` pays one build, and a resident `serve`
+pays one on the first answer that fuses and then keeps it. Nothing lexical is on disk, so there is
+no stored lexical state to go stale; the copy a context holds is exactly what can drift from the
+graph, which is why it is dropped when the graph or the questions move rather than refreshed. The
+build costs about 120 ms on a 7,500-node graph. A later sitting bounds that build, the question
+index beside it, their scoring and the fusion at about 49 ms of a 54 ms lexical ask on the bench
+corpus at 8.3k nodes, and a later one still reads the same socket answer at 6.8 ms once the indexes
+are kept — different sittings on different graphs, not a before and after; those bounds and what
+they rest on are in [the perf results](docs/bench/2026-09-06-perf-results.md) and
+[the 0.5.0 gap results](docs/bench/2026-09-05-0.5.0-gaps-results.md).
 
 ## What ends up in the graph
 
@@ -518,10 +530,13 @@ stage earns its keep in proportion to the model behind it: on the small model it
 paraphrase and one keyword, which is why the model and the `--no-dense` switch are one decision
 rather than two.
 
-The floors in [Bench](#bench) were measured on the small model and have not been re-measured on the
-default. Only the two dense arms depend on the embedder at all, and the default clears them with
-room; until it has floors of its own, a green `bench` on a default store says less than a green one
-on a small-model store.
+The floors in [Bench](#bench) are keyed by the model the store's rows were written with, since
+0.5.0. Only the two dense arms depend on the embedder at all, and the default has floors of its own
+there now, measured on a copy of the fixture re-embedded under it and read twice per arm:
+`keyword 40/40  paraphrase 22/30  code 12/12  p90 224` with `enrich`'s questions and
+`40/40  17/30  12/12  p90 227` without. A store whose rows were written by any other model is
+measured and never graded — the summary line says `model=<name>` and `gated=false`. The numbers and
+how they were read are in [the 0.5.0 gap results](docs/bench/2026-09-05-0.5.0-gaps-results.md).
 
 `ask` opens the model only when a fused query needs it, and that open is most of what a fused
 answer costs: ~0.8 s and ~1.9 GB on the default model, ~0.30 s and ~1.4 GB on the small one — the
@@ -676,7 +691,7 @@ different file of the same shape.
 
 The floors are not one set of numbers but two, because [`enrich`](#spending-tokens-on-purpose) is
 optional and paraphrase recall is what it buys. `bench` reads which state the store is in and says
-so on its summary line (`dense=true  enriched=true (1996/1996 nodes)`): a store carrying generated
+so on its summary line (`dense=true  enriched=true (1996/1996 nodes) model=small`): a store carrying generated
 questions on at least 99% of its requirement-like nodes is graded against the enriched floors, any
 other — a fresh `build`, or a pass stopped early — against the raw ones. A store that also carries
 questions about code prints `code_questions=covered/eligible` beside those fields and is graded by
@@ -687,12 +702,24 @@ the pass, one node the model skipped past its retry, one entry dropped on load w
 paid-for store to floors five paraphrase points lower, and `bench` says so only through its exit
 code. The printed counts stay exact either way.
 
+The dense floors are keyed by the store's embedder as well, because a floor measured on one model
+says nothing about another: rows written by the small model or under no name at all are graded
+against the small model's numbers, rows written by the default against the default's, and a dense
+arm under any third model is measured and never graded — `model=<name>` and `gated=false` on the
+summary line, the way another case file is measured and not graded. The lexical arms have no
+embedder in them and keep one set of floors whatever the rows are.
+
 | | enriched store | store with no questions |
 | --- | --- | --- |
 | keyword | 40/40 with embeddings, 39/40 with `--no-dense` | 40/40 with embeddings, 39/40 with `--no-dense` |
-| paraphrase | ≥14/30 with embeddings, ≥11/30 with `--no-dense` | ≥9/30 with embeddings, ≥7/30 with `--no-dense` |
+| paraphrase, small-model rows | ≥14/30 with embeddings, ≥11/30 with `--no-dense` | ≥9/30 with embeddings, ≥7/30 with `--no-dense` |
+| paraphrase, default-model rows | ≥22/30 with embeddings | ≥17/30 with embeddings |
 | code | 12/12 | 12/12 |
 | p90 | ≤230 tokens in every arm | ≤230 tokens in every arm |
+
+The default model's two dense floors are the counts a copy of the fixture re-embedded under it read,
+twice per arm, in [the 0.5.0 gap results](docs/bench/2026-09-05-0.5.0-gaps-results.md); the `--no-dense` column is the small
+model's and applies to every store, since no embedder is in it.
 
 **Keyword is 39, not 40, in both lexical-only arms.** `FR-PH-43` sits at passage rank 23 and no
 lexical path reaches it, enriched or raw. The enriched arm read **37/40** until 2026-09-05, losing
@@ -780,7 +807,7 @@ out of 3,599 tracked:
 | Edges                           | 27,412                                                                                                                       |
 | Graph on disk                   | 10.2 MB JSON                                                                                                                 |
 | Graph load                      | ~19 ms                                                                                                                       |
-| Lexical index rebuild           | ~120 ms — a later sitting bounds that build, the question index beside it, their scoring and the fusion at ~49 ms on the bench corpus at 8.3k nodes ([the perf results](docs/bench/2026-09-06-perf-results.md)); different sittings, not a before and after |
+| Lexical index build             | ~120 ms, paid once per context since 0.5.0 rather than once per question — a later sitting bounds that build, the question index beside it, their scoring and the fusion at ~49 ms on the bench corpus at 8.3k nodes ([the perf results](docs/bench/2026-09-06-perf-results.md)), and a later one still reads that socket answer at 6.8 ms with the indexes kept ([the 0.5.0 gap results](docs/bench/2026-09-05-0.5.0-gaps-results.md)); different sittings, not a before and after |
 | Tokens spent building the graph and its vectors | 0                                                                                                             |
 
 Retrieval on the recorded 82 cases against that graph, both arms run twice with identical results:
