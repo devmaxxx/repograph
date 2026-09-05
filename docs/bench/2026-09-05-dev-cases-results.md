@@ -150,8 +150,8 @@ What shipped instead (`c3aef20`): the bodies stay extracted — doc comment ahea
 signature, head comments for files — for the enrichment prompt and for display; the passage index
 carries a symbol's declaring line only and no file; identifiers stay whole. The copy then reads
 exactly the fixture: 40/15/12 p90 220 and 39/14/12 p90 215, dev 36/60 and 37/60 with `where`
-0/9. The prose about code reaches retrieval through A2's questions instead of through the
-passages.
+0/9. The prose about code reaches retrieval through A2's questions, in the reranked pool, instead
+of through the passages — which is A4's ruling below, not A2's own.
 
 ### A2 — two defects found before a number was read, then the number
 
@@ -181,9 +181,13 @@ held-out dumps `ho-a2-*.json`, chain log `a2-chain.log`):
 | `--no-dense`, enriched | **38**/15/12 p90 220 — under the keyword floor of 39 | 39/60, `where` 1/9 | 109 → 113 (+13 −9), p = 0.52 |
 
 Rejected by rule (i), on one case: the `--no-dense` arm loses the keyword case `FR-WH-53` and gains
-a paraphrase (14/30 → 15/30). The dev suite moved in both arms — 36 → 40 with embeddings and
-37 → 39 without, `where` 0/9 → 1/9, `cross` and `rule` each up one in both arms, `multi` up one
-with embeddings and down one without — which is what the lever was for. The floor is what it cost.
+the paraphrase `FR-PAY-104` (14/30 → 15/30), while the arm with embeddings moves no recorded case
+at all. The dev suite moved in both arms and in the direction the lever was for — 36 → 40 with
+embeddings, 37 → 39 without — gaining the same three cases in each: the `where` file
+`packages/domain/src/schedule/subjectAvailability.ts`, the `rule` document `ADR-003`, and the
+`cross` case `FR-LIFE-05+apps/api/src/shared/db/terms-gate.ts`. `multi` is where the two arms part,
+the dense arm gaining `FR-SHELL-70+…` and the lexical arm losing `FR-MKT-21+…`. The floor is what
+it cost.
 
 The mechanism is BM25's length normalisation, not the fusion. Until A2 a code node was an id-only
 document in the documents' questions index; the 3,463 nodes that gained questions turned those
@@ -253,7 +257,8 @@ hit. It closes nothing for `--no-dense`, which has no dense list to improve, and
 The cost is in the README's [Embeddings](../../README.md#embeddings) section, measured there and
 not re-measured here: an `ask` at 0.8 s against 0.55 s with the model opening in 676 ms against
 418, 1.9 GB resident against 1.7, 2,680 s to embed the corpus's 33,525 rows against ~103 s, and a
-2.1 GB download.
+2.1 GB download. The rows themselves are 1024 floats instead of 384, so the store's `vectors.f32`
+is 137.3 MB against the fixture's 51.5 MB (`ls -l`, decimal megabytes).
 
 Shipped as a property of the store (`9f83517`, `a34214f`, `8142ebd`): `embed_model` in
 `repograph.toml` names what writers write with, `vectors.json` records it, readers open the model

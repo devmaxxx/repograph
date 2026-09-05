@@ -336,10 +336,11 @@ their own, admitted last on the 0.85 gate, cost `FR-WH-53` and `FR-CRM-11` and l
 held-out questions with none gained. A4: that list capped at one seat holds every floor and reads
 `where` 2/9, and still loses six held-out questions in each arm with none gained, p = 0.031. What
 ships is the machinery — doc comments and file heads extracted for the prompt and for display,
-`enrich --code` writing questions about 3,475 code nodes, and those questions in an index of their
-own that reaches the `ask --rerank` pool and never the plain fusion. `where` therefore stays 0/9 in
-the shipped configuration, and what would move it without taking a document seat is an admission
-rule that is not a ratio of two indices' raw scores — G12, with G13's table as what it is judged on.
+`enrich --code` writing questions about 3,463 of 3,475 code nodes, and those questions in an index
+of their own that reaches the `ask --rerank` pool and never the plain fusion. `where` therefore
+stays 0/9 in the shipped configuration, and what would move it without taking a document seat is an
+admission rule that is not a ratio of two indices' raw scores — G12, with G13's table as what it is
+judged on.
 
 ## G10 · Five seeds over three lists — the right answers that were ranked and not seated
 
@@ -506,8 +507,11 @@ configuration, so a store that wants sonnet's paraphrase recall today can have i
   the shipped bench from 40/15/12 to 38/16/12. Rolled back, and ADR-001's reasoning
   says why more concept nodes do not help a question that shares no stem with its
   target.
-- **More seeds, wider hops, a different E5 size.** All measured in ADR-001 and its
-  amendments; each buys about one hit and pays in the token budget the bench exists to
-  protect.
+- **More seeds and wider hops.** Both measured in ADR-001 and its amendments; each buys about one
+  hit and pays in the token budget the bench exists to protect. **A different E5 size** was on this
+  list for the same reason and is no longer: `e5-base` and `bge-m3` were measured without generated
+  questions in the index, and re-measuring the size with them — G11, 2026-09-05 — read paraphrase
+  22/30 against 15/30 and held-out 103 → 119. It pays in latency, memory and a 2.1 GB download
+  rather than in tokens, which is why it ships as a store option and not as the default.
 - **Query rewriting by a model.** Measured at paraphrase 6/14 with keyword falling to
   20/24, and rejected.

@@ -491,18 +491,20 @@ passage nowhere (its head comment in the passage index moved the BM25 statistics
 the plain fusion is measured, in three steps: inside the documents' questions index they lifted that
 index's average length until the gate admitted it over the passage that held the answer (keyword
 39/40 → 38/40 without embeddings); as a list of their own admitted last on the same 0.85 gate they
-took two document answers off the recorded suite; and capped at a single seat they read `where`
-0/9 → 2/9 on the developer suite and still lost six of 400 held-out questions in each arm, gaining
-none (p = 0.031). A store without code questions is therefore the old index byte for byte;
-`coverage` still counts documents, so the floors grade the same store the same way, and the summary
-line reports `code_questions=` beside it. What the questions buy, and what a seat for them costs, is
-measured in [the developer-questions results](docs/bench/2026-09-05-dev-cases-results.md).
+took two document answers off that same arm's recorded suite, the arm with embeddings unchanged; and
+capped at a single seat they read `where` 0/9 → 2/9 on the developer suite and still lost six of 400
+held-out questions in each arm, gaining none (p = 0.031). A store without code questions is
+therefore the old index byte for byte; `coverage` still counts documents, so the floors grade the
+same store the same way, and the summary line reports `code_questions=` beside it. What the
+questions buy, and what a seat for them costs, is measured in
+[the developer-questions results](docs/bench/2026-09-05-dev-cases-results.md).
 
-Two ways of spending them were measured and rejected: as extra dense rows pooled with the passages
-they bury targets (a passage at rank 2 fell to 87 behind other nodes' questions), and mixed into a
-node's own BM25 text they cost a keyword hit. What ships is the third — a BM25 list of their own,
-which the plain `ask` fuses alongside the passage list — when that list has earned its turn. It
-joins the fusion only if its best BM25 score is at least 0.85 of the passage list's best. On 400
+Two ways of spending the documents' generated questions were measured and rejected: as extra dense
+rows pooled with the passages they bury targets (a passage at rank 2 fell to 87 behind other nodes'
+questions), and mixed into a node's own BM25 text they cost a keyword hit. What ships for those
+questions is the third — a BM25 list of their own, which the plain `ask` fuses alongside the passage
+list — when that list has earned its turn. It joins the fusion only if its best BM25 score is at
+least 0.85 of the passage list's best. On 400
 held-out generated questions the passage list is the one holding the answer below that ratio (30%
 in its top five against 21%) while the questions list is above it (24% against 12%). The 0.85 is a
 constant of this store, not of BM25 — the two indices share the tokenizer and the document count
@@ -519,10 +521,11 @@ candidate pool for `--rerank`: with them, all six reachable paraphrase misses of
 within the top 100 fused candidates; without them, two did not.
 
 **`ask --rerank`** builds a 200-deep pool — dense passages, dense questions, BM25 passages, BM25
-questions, interleaved — and hands the model each candidate's id, title and the first 120
-characters of its text to pick five from; `--depth` changes how deep, and tokens per question
-scale with it. `rerank_command` reads the prompt on stdin and writes the chosen ids one per line;
-a failing command is reported on stderr and the answer falls back to the fused order.
+questions, and, when the store carries questions about code, those as a fifth list, interleaved —
+and hands the model each candidate's id, title and the first 120 characters of its text to pick five
+from; `--depth` changes how deep, and tokens per question scale with it. `rerank_command` reads the
+prompt on stdin and writes the chosen ids one per line; a failing command is reported on stderr and
+the answer falls back to the fused order.
 
 What the model is shown decides more than which model it is. Shown titles only, haiku, sonnet and
 opus all read 10–11/14 whatever the depth, and a deeper pool made haiku worse; and because a
