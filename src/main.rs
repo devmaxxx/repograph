@@ -364,6 +364,17 @@ fn open_embedder(no_dense: bool, model: &str) -> Option<index::embed::Embedder> 
     }
 }
 
+/// The model opens on a thread while `ask` builds its BM25 indexes — `query::ask` builds the
+/// lexical lists before it calls the dense retriever so that this open has them to overlap. Ids
+/// and the questions store are read before the vectors that name the model, so they are not part
+/// of it. A question that exact ids or symbols answer whole never opens the model, as before;
+/// with `--no-dense` or no vectors nothing starts.
+fn warm_model(dense: bool, whole: bool, model: &str) -> Option<std::thread::JoinHandle<Option<index::embed::Embedder>>> {
+    if !dense || whole { return None; }
+    let model = model.to_string();
+    Some(std::thread::spawn(move || open_embedder(false, &model)))
+}
+
 /// The graph an answer is read from: refreshed against the tree unless `--stale`, and, when
 /// the store cannot be written, the stored one with a warning — the same contract as `ask`.
 fn graph_for(repo: &std::path::Path, cfg: &config::Config, stale: bool) -> anyhow::Result<model::Graph> {
@@ -439,10 +450,14 @@ fn main() -> anyhow::Result<()> {
             let (questions, source) = enrich::Questions::load_traced(&store)?;
             if !stale && source == store::Source::Json { questions.write_mirror(&store)?; }
             timing.stage("questions ready");
+            let opts = query::Options { seeds, bodies, dense: !cli.no_dense && index::dense::DenseIndex::present(&store), json, depth };
             // Opening the ONNX model costs ~0.6 s and 1.3 GB, the vectors 50 MB; an exact id or
-            // symbol match never asks for either, so both open on the first fused query.
-            let embedder: std::cell::RefCell<Option<Option<index::embed::Embedder>>> = std::cell::RefCell::new(None);
+            // symbol match never asks for either, so on that path both still open lazily, on the
+            // first fused query that never comes. A fused question starts both below, once the
+            // last fallible step is behind them.
             let dense_idx: std::cell::RefCell<Option<index::dense::DenseIndex>> = std::cell::RefCell::new(None);
+            let warm: std::cell::Cell<Option<std::thread::JoinHandle<Option<index::embed::Embedder>>>> = std::cell::Cell::new(None);
+            let embedder: std::cell::RefCell<Option<Option<index::embed::Embedder>>> = std::cell::RefCell::new(None);
             // The refresh above moved passages the vectors were built from. This query needs the
             // model open anyway, so the changed rows are re-embedded here — with `--no-dense` or
             // on the exact-id path nothing opens, and the vectors catch up on the next fused
@@ -459,8 +474,13 @@ fn main() -> anyhow::Result<()> {
                 });
                 let mut slot = embedder.borrow_mut();
                 let e = slot.get_or_insert_with(|| {
-                    let model = index::embed::resolve(idx.model_of_rows().as_deref(), &cfg.embed_model);
-                    let e = open_embedder(cli.no_dense, &model);
+                    let e = match warm.take() {
+                        Some(handle) => handle.join().unwrap_or_else(|_| { eprintln!("dense: model thread panicked, continuing lexical-only"); None }),
+                        None => {
+                            let model = index::embed::resolve(idx.model_of_rows().as_deref(), &cfg.embed_model);
+                            open_embedder(cli.no_dense, &model)
+                        }
+                    };
                     timing.stage("model opened");
                     e
                 });
@@ -496,12 +516,30 @@ fn main() -> anyhow::Result<()> {
                 timing.stage("query embedded and searched");
                 out
             };
-            let opts = query::Options { seeds, bodies, dense: !cli.no_dense && index::dense::DenseIndex::present(&store), json, depth };
             let rerank_fn = |q: &str, c: &[(String, String)]| rerank::run(&cfg.rerank_command, q, c);
             let cross = std::cell::RefCell::new(if rerank_local {
                 let dir = if cfg.reranker_dir.is_empty() { index::cross::default_dir()? } else { std::path::PathBuf::from(&cfg.reranker_dir) };
                 Some(index::cross::CrossEncoder::open(&dir).context("--rerank-local")?)
             } else { None });
+            // Below the last `?`: an error returned between the spawn and the join drops the
+            // handle and leaves a thread mid-open of a 448 MB session. Nothing below this point
+            // can fail, and the only work above it the open might have overlapped is
+            // `--rerank-local`'s own session.
+            if opts.dense {
+                // The predicate `ask` fuses on, asked early so the model can start beside the
+                // BM25 builds. `exact_seeds` is pure, so asking it twice costs one graph scan and
+                // decides nothing differently — and only the dense arm can use the answer, so on
+                // `--no-dense` the scan never runs.
+                let (_, whole) = query::exact_seeds(&graph, &ids, &words);
+                if !whole {
+                    let idx = index::dense::DenseIndex::load(&store).unwrap_or_else(|err| { eprintln!("dense: index unreadable, continuing lexical-only ({err:#})"); Default::default() });
+                    timing.stage("vectors loaded");
+                    // The rows name the model, so nothing can start before they are read.
+                    let model = index::embed::resolve(idx.model_of_rows().as_deref(), &cfg.embed_model);
+                    warm.set(warm_model(true, whole, &model));
+                    dense_idx.replace(Some(idx));
+                }
+            }
             let local_fn = |q: &str, c: &[(String, String)]| -> Vec<String> {
                 let mut m = cross.borrow_mut();
                 let Some(m) = m.as_mut() else { return Vec::new() };
@@ -590,6 +628,12 @@ fn main() -> anyhow::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_model_is_not_warmed_for_an_exact_answer_or_a_lexical_arm() {
+        assert!(warm_model(false, false, "any").is_none());
+        assert!(warm_model(true, true, "any").is_none());
+    }
 
     fn doc_repo(body: &str) -> tempfile::TempDir {
         let dir = tempfile::tempdir().unwrap();
