@@ -442,6 +442,15 @@ small model is what that costs: an `ask` in 0.55 s against 0.8 s (the model open
 corpus's 33,525 rows against 2,680 s. It is one line and one `repograph embed` away, and a store
 already on it keeps answering by it.
 
+Turning the dense stage off altogether is the step below that, and what it costs depends on which
+model it replaces. The lexical lists do not know what is configured, so `--no-dense` reads keyword
+39/40, paraphrase 14/30, code 12/12 on the fixture's enriched store either way. Against the small
+model's 40/40, 15/30, 12/12 that is two hits of eighty-two, for a 470 MB download and ~0.45 s an
+`ask` saved; against the default's 40/40, 22/30, 12/12 it is nine, for 2.1 GB and ~0.7 s. The dense
+stage earns its keep in proportion to the model behind it: on the small model it is worth one
+paraphrase and one keyword, which is why the model and the `--no-dense` switch are one decision
+rather than two.
+
 The floors in [Bench](#bench) were measured on the small model and have not been re-measured on the
 default. Only the two dense arms depend on the embedder at all, and the default clears them with
 room; until it has floors of its own, a green `bench` on a default store says less than a green one
