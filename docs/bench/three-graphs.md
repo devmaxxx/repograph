@@ -175,14 +175,16 @@ altogether is refused rather than scored as a miss.
   runs' `changes` fractions are comparable only when both ran at the same corpus
   commit — it is in every result file's header, and a reader comparing `changes`
   across runs has to check it before comparing anything else.
-- **The `changes` truth does not blank comments and string literals, though the `impact`
-  truth does.** `strip_comments` is composed into `code_files_naming` and nowhere else, so a
-  name that appears only in a docblock or a string can enter a `changes` case's expected
-  symbol set, and a tool is scored as missing a symbol the diff never really declared. It
-  shares a root with the `declaration_end` regex-literal defect recorded beside the
-  2026-09-04 numbers — a literal read as though it were code — but it is a separate
-  limitation and the same change does not close both. Open because fixing it moves the
-  numbers in repograph's favour and needs the whole suite re-run to say by how much.
+- **The `changes` truth did not blank comments and string literals, though the `impact` truth
+  did — closed by `3f950ea`, 2026-09-04.** `strip_comments` was composed into
+  `code_files_naming` and nowhere else, so a name appearing only in a docblock or a string could
+  enter a `changes` case's expected symbol set, and a tool was scored as missing a symbol the
+  diff never really declared. It shares a root with the `declaration_end` regex-literal defect
+  recorded beside the 2026-09-04 numbers — a literal read as though it were code — but it is a
+  separate limitation and the same change does not close both. `declarations` now derives a
+  file's declarations from `blanked_source` in both dialects and `changed_symbols` reads them.
+  The 2026-09-04 numbers were taken before that fix, earlier the same day, and are not restated;
+  restating them moves the symbol fractions in repograph's favour by an unmeasured amount.
 - **repograph answers differently before and after `enrich`, and the build above leaves it
   before.** The generated questions are what its paraphrase floor rests on: on this corpus at
   `502e8a6d` the same binary reads 9/30 paraphrase without them and 15/30 with them, with
@@ -193,14 +195,14 @@ altogether is refused rather than scored as a miss.
   (~$2.5 of Haiku here), so a run of this protocol measures repograph's zero-token configuration
   unless it pays for one first — and either way the result should say which, as `bench`'s own
   summary line does with `enriched=`.
-- **The pattern that decides a rank over-matches.** `run.py`'s `ID_TOKEN` accepts more than
-  this corpus's ids: `UTF-8`, `SHA-256`, `RFC-7807` and `ISO-8601` all fit its shape. Any of
-  them standing in an answer ahead of the expected id counts as a competitor, inflating that
-  row's rank and pulling MRR down, so a published MRR — 0.635 on 2026-09-04 — may be
-  pessimistic by an unmeasured amount. The error only ever runs that way; it cannot flatter a
-  tool. `repograph.toml`'s `id_families` already lists the corpus's real families and is what
-  the pattern could read instead of guessing a shape. Open because restating the number means
-  asking all 82 questions again.
+- **The pattern that decided a rank over-matched — closed by `8e40a19`, 2026-09-04.** `run.py`'s
+  `ID_TOKEN` accepted more than this corpus's ids: `UTF-8`, `SHA-256`, `RFC-7807` and `ISO-8601`
+  all fit its shape. Any of them standing in an answer ahead of the expected id counted as a
+  competitor, inflating that row's rank and pulling MRR down, so an MRR published before the fix
+  — 0.635 on 2026-09-04 — may be pessimistic by an unmeasured amount. The error only ever ran
+  that way; it could not flatter a tool. `ID_TOKEN` is now built from `load_id_families()`, so
+  only the families `repograph.toml` lists compete. The 2026-09-04 numbers were taken before that
+  fix, earlier the same day, and restating them means asking all 82 questions again.
 
 ## When a blast delta counts
 

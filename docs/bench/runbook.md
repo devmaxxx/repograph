@@ -5,7 +5,7 @@ answer is judged. This file is the operational half — what to do, in order, on
 day someone re-runs it, the rule a retrieval change is judged by, and the seven things
 that went wrong on an earlier run so they do not have to be rediscovered.
 
-The last run is [`2026-09-03-three-graphs-results.md`](2026-09-03-three-graphs-results.md).
+The last run is [`2026-09-04-three-graphs-results.md`](2026-09-04-three-graphs-results.md).
 
 ## The pinned fixture — read this before rebuilding anything
 
@@ -35,6 +35,11 @@ arms, and all 82 cases came back identical case by case, not merely equal in tot
 |---|---|---|
 | dense | keyword 40/40, paraphrase 15/30, code 12/12, p90 226 | identical |
 | lexical | keyword 37/40, paraphrase 15/30, code 12/12, p90 220 | identical |
+
+Those readings are of 2026-09-04, before the questions-list gate; the same fixture now reads
+keyword 40/40, paraphrase 15/30, p90 220 in the dense arm and keyword 39/40, paraphrase 14/30,
+p90 215 in the lexical one (`bench/history/runs.jsonl`). What the transfer check established is
+that the two stores answer case by case alike, which the gate does not touch.
 
 **For a repograph-only run, use `bench/history/run-repograph.sh` and stop reading here.** It
 builds the binary, runs both arms against the fixture, records them into the run history and

@@ -494,12 +494,12 @@ configuration, so a store that wants sonnet's paraphrase recall today can have i
 | — | ~~**G9** code is unreachable from prose~~ | measured 2026-09-05 — A1 to A4 each rejected by the rule; the code questions ship into an index of their own for the `ask --rerank` pool, `where` stays 0/9 in the plain fusion, and G12 is what would move it |
 | — | ~~**G10** five seeds over three lists~~ | measured 2026-09-05 — A4 prices one seat for a fourth list at 6 held-out questions in each arm, none gained, p = 0.031; closed as measured, not as fixed |
 | — | ~~**G11** the embedder for Russian paraphrase~~ | shipped 2026-09-05 as a store option — e5-large reads paraphrase 22/30 and held-out 103 → 119, at 0.8 s an `ask` and a 2.1 GB download; the default stays the small model |
-| 6 | **G5** rank + MRR | a scoring change over rows that already exist, and G2 cannot be argued without it |
-| 7 | **G1** unparsed files get a file node | the largest missing share of a real answer, and the fix is language-independent |
-| 8 | **G3** the three impact diagnostics | three files to read; it either finds a bug or writes an honest caveat |
-| 9 | **G4** grow the blast set | must land before G1's and G6's changes are judged on it |
-| 10 | **G2** measure `bge-reranker-v2-m3` | the one unmeasured retrieval lever; everything cheaper is already rejected |
-| 11 | **G6** a case file per new corpus | ships with the 0.6.0 languages, not after them |
+| — | ~~**G5** rank + MRR~~ | closed by Task 1 (2026-09-04) — every retrieval row carries `rank`, the summary carries `mrr`, and the run reads 0.635; the 2026-09-03 rows cannot be rescored |
+| 6 | **G1** unparsed files get a file node | the file half is closed by Task 2 (2026-09-04) against a `code_files` denominator; the symbol half is 57 Kotlin declarations and waits on 0.6.0's extractor |
+| — | ~~**G3** the three impact diagnostics~~ | closed by Tasks 3 and 4 (2026-09-04) — 123/123 files over 16 targets, mean recall 1.0 |
+| — | ~~**G4** grow the blast set~~ | closed by Task 5 (2026-09-04) — `blast.jsonl` is 32 cases and the per-suite decision rule is written down before the changes judged on it |
+| 7 | **G2** fourteen paraphrases a neighbour away | the lever this row named is measured and rejected (2026-09-04): `--rerank-local` reads 17/30 against a control of 15/30, at 17.9 s a question; the gap stays open with nothing cheaper left to try |
+| 8 | **G6** a case file per new corpus | the `impact` third is a written baseline (2026-09-04); `trace` and `changes` ship with the 0.6.0 languages, not after them |
 
 ## What is explicitly not on this list
 

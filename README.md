@@ -32,7 +32,8 @@ it had been measured, and hadn't been.
 
 ## Status
 
-Version 0.4.0. Every row below is implemented, not planned:
+0.4.0 is the released version; the rows below are what `main` carries, implemented rather than
+planned and unreleased since 0.4.0:
 
 | Command                    | State                                                                 |
 | -------------------------- | --------------------------------------------------------------------- |
@@ -42,11 +43,12 @@ Version 0.4.0. Every row below is implemented, not planned:
 | `bench`                    | working; fails the process if a floor in [Bench](#bench) is missed — a store with `enrich`'s questions and one without are held to their own floors |
 | `import-legacy`            | working; costs recall at query time — see its note in [Bench](#bench) |
 | `enrich`, `ask --rerank`   | working; opt-in, the only two stages that spend model tokens — see [Spending tokens on purpose](#spending-tokens-on-purpose) |
+| `ask --rerank-local`       | working; opt-in, the same pool picked by a local cross-encoder at zero tokens, measured and rejected as a floor candidate — see [Spending tokens on purpose](#spending-tokens-on-purpose) |
 | `embed`                    | working; writes the rows the dense index lacks with the configured model, rewriting it whole when the store was written by another — see [Embeddings](#embeddings) |
 
 `--no-dense` skips the embedding stage everywhere it could apply — `build`, `update`, `enrich`,
-`embed`, `watch`, `ask`, `bench`. Without it, those commands use local embeddings once the model is
-cached (see [Embeddings](#embeddings)).
+`embed`, `watch`, `ask`, `bench`, `dump`. Without it, those commands use local embeddings once the
+model is cached (see [Embeddings](#embeddings)).
 
 ## Install
 
@@ -244,9 +246,11 @@ repograph dump --queries qs.jsonl --out lists.json   # every retriever's ranked 
    measured on 400 held-out generated questions: recall@5 0.445 → 0.515 beside the dense list and
    0.395 → 0.527 without it (exact McNemar p < 0.001 both), keyword and code cases unchanged, the
    no-dense paraphrase cases 3/14 → 5/14, at +3 tokens p90 with embeddings and +15 without — all
-   of that on the 14-case set of the day. On the 82 cases recorded since, the no-dense arm reads
-   keyword 39/40 without the questions and 37/40 with them, so leading the merge with that list
-   does cost exact seeds; see gap G7 and the Bench table below.
+   of that on the 14-case set of the day. On the 82 cases recorded since, leading the merge with
+   that list cost the no-dense arm two exact seeds — keyword 39/40 without the questions against
+   37/40 with them — until 2026-09-05, when the questions list was gated on its own confidence;
+   it now reads 39/40 either way. See [Spending tokens on purpose](#spending-tokens-on-purpose)
+   and the Bench table below.
 5. **Expand.** One hop over `References`, `Implements`, `Declares`, `Links` and `Legacy` edges, in
    both directions, keeping the single neighbour the retrievers ranked best, however far down
    their lists; a neighbour no retriever ranked falls back to its seed's rank. Measured on 400
@@ -692,12 +696,13 @@ out of 3,599 tracked:
 | Tokens spent building the graph and its vectors | 0                                                                                                             |
 
 Retrieval on the recorded 82 cases against that graph, both arms run twice with identical results:
-keyword 40/40, paraphrase 15/30, code 12/12 at 195 median and 226 p90 tokens with embeddings;
-**37/40**, 15/30, 12/12 at 196 median and 220 p90 with `--no-dense`. Those are the numbers with
-`enrich`'s generated questions in the store — the one thing above that was paid for, roughly $2.5
-of Haiku, once — and the lexical-only arm is failing its keyword floor of 40 on them, which
-[Bench](#bench) explains and does not paper over. The same corpus indexed and queried at zero
-tokens throughout reads 40/40, 9/30, 12/12 at 221 p90 and 39/40, 7/30, 12/12 at 226;
+keyword 40/40, paraphrase 15/30, code 12/12 at 220 p90 tokens with embeddings; 39/40, 14/30, 12/12
+at 215 p90 with `--no-dense`, both arms green. Those are the numbers with `enrich`'s generated
+questions in the store — the one thing above that was paid for, roughly $2.5 of Haiku, once. The
+lexical-only arm read **37/40** until 2026-09-05, when the gate described under
+[Spending tokens on purpose](#spending-tokens-on-purpose) put it level with the raw store; the
+floor it is held to is 39, which [Bench](#bench) explains. The same corpus indexed and queried at
+zero tokens throughout reads 40/40, 9/30, 12/12 at 221 p90 and 39/40, 7/30, 12/12 at 226;
 [Bench](#bench) floors each state on its own numbers.
 
 The prior art on the same corpus was an LLM-extracted graph that cost **14.6 million input tokens

@@ -34,8 +34,9 @@ trace hit count corrupted by that echo. It was not close to a real result and is
 file. This was worked around, without touching `bench/compare/`, by passing
 `--gitnexus-repo /private/tmp/bench-corpus-3g` (the worktree's absolute path), which resolves
 unambiguously between the two repositories gitnexus has registered under the same name. Every
-number below is from that corrected invocation. This is reported as a harness defect, not fixed;
-see the full run notes for the reproduction.
+number below is from that corrected invocation. It was reported as a harness defect and fixed in
+`8e40a19`, after this run: `run.py` defaults `--gitnexus-repo` to the corpus's absolute path. See
+the full run notes for the reproduction.
 
 ## Retrieval — 82 questions
 
@@ -182,14 +183,16 @@ numerically identical to 2026-09-03: 8/8, 5/8, 2/8.
 - One run per row, no repeats — the general caveat in `three-graphs.md` applies in full, including
   the `ID_TOKEN` over-match note that can make a published MRR pessimistic by an unmeasured amount.
 - Latency is whole-process wall clock; gitnexus's `eval-server` was not used, matching the runbook.
-- The `changes` truth does not blank comments/strings, though the `impact` truth does — an open
-  harness limitation carried over from `three-graphs.md`, not something this run changed.
+- The `changes` truth did not blank comments/strings, though the `impact` truth did — a harness
+  limitation carried over from `three-graphs.md`, fixed in `3f950ea`, after this run; the symbol
+  fractions above were scored before it and are not restated.
 - The gitnexus repo-resolution defect above is specific to running against a scratch worktree
   whose directory name does not match the name gitnexus itself assigns the repository. A run
   against the corpus's own working clone would not hit it — but running against the working clone
   is exactly what the runbook forbids, to avoid writing index artifacts into a repository someone
-  is working in. The workaround (`--gitnexus-repo <absolute path>`) is a per-invocation flag, not a
-  code change, and should be part of every future invocation of this harness against a worktree.
+  is working in. The workaround (`--gitnexus-repo <absolute path>`) was a per-invocation flag at
+  run time; `run.py` defaults it to the corpus's absolute path since `8e40a19`, after this run, so
+  a later invocation does not pass it.
 - graphify's four refusals were not "fixed" by disambiguating the name, per the runbook's explicit
   instruction — they are scored as the zero-recall misses they are for an agent that cannot
   disambiguate them either.
