@@ -15,7 +15,7 @@ copy of it with its source tree, never on the fixture, because `serve` refreshes
 
 ## The table is one sitting, and that is the point
 
-The four levers were implemented and measured over five separate sittings, and this machine drifts
+The levers were implemented and measured over five separate sittings, and this machine drifts
 by more than the effects under measurement. The *same* binary read 369.8 ms in one sitting and
 346.1 ms an hour later (Task 3), and one sitting ran under an unrelated job that Task 4's prose
 puts at ~590 % CPU — a figure read off `top` at the time, with no transcript behind it. Assembling

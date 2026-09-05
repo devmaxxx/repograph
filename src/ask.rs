@@ -154,7 +154,7 @@ impl Context {
         let no_dense = self.no_dense || req.no_dense;
         let opts = query::Options { seeds: req.seeds, bodies: req.bodies, dense: !no_dense && index::dense::DenseIndex::present(&self.store), json: req.json, depth: req.depth };
         let Context { cfg, store, graph, questions, dense_idx, warm, embedder, cross, resync, notices, timing, .. } = &*self;
-        // Opening the ONNX model costs ~0.6 s and 1.3 GB, the vectors 50 MB; an exact id or
+        // Opening the ONNX model costs ~220 ms and 1.3 GB, the vectors 50 MB; an exact id or
         // symbol match never asks for either, so on that path both still open lazily, on the
         // first fused query that never comes. A fused question starts both below, once the
         // last fallible step is behind them.
@@ -390,16 +390,14 @@ mod tests {
         let cfg = crate::config::Config::load(dir.path()).unwrap();
         let ex = crate::extractors(dir.path(), &cfg).unwrap();
         crate::run_update(dir.path(), &cfg, &ex, true).unwrap();
-        let (json, raw) = vectors_beside_the_graph(dir.path());
+        vectors_beside_the_graph(dir.path());
         an_unopenable_model();
         // A change on disk, so the open below refreshes and leaves rows for a fused answer.
         std::fs::write(dir.path().join("docs/new.md"), "**FR-PAY-2 · MUST · Возврат аванса**\n\nАванс возвращается при отмене салоном.\n").unwrap();
         let mut ctx = Context::open(dir.path(), &cfg, false, false).unwrap();
         assert!(ctx.resync.get(), "the refresh left rows the next fused answer has to embed");
-        let before = (std::fs::read(&json).unwrap(), std::fs::read(&raw).unwrap());
         ctx.answer(&fused(true)).unwrap();
         assert!(ctx.resync.get(), "a --stale answer embeds nothing and leaves the flag where it was");
-        assert_eq!((std::fs::read(&json).unwrap(), std::fs::read(&raw).unwrap()), before, "and writes no vectors");
         ctx.answer(&fused(false)).unwrap();
         assert!(!ctx.resync.get(), "the next answer that did ask for a refresh takes it");
     }

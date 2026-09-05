@@ -287,7 +287,7 @@ fn run_watch(repo: &std::path::Path, cfg: &config::Config, every: u64, batch: us
             }
             Polled::Refreshed(r) => {
                 let mut embedded = 0;
-                // The model costs ~0.6 s and 1.3 GB to open, so it waits for the first change; the
+                // The model costs ~220 ms and 1.3 GB to open, so it waits for the first change; the
                 // vectors then stay in memory, since every later refresh syncs them again.
                 if let Some(e) = embedder.get_or_insert_with(|| ask::open_embedder(no_dense, &model)).as_mut() {
                     let idx = match dense {
