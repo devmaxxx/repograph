@@ -105,7 +105,7 @@ pub fn floors_for(model: Option<&str>) -> Floors {
 /// `(enriched, dense, floors) → (keyword, paraphrase)`. Every number is one the recorded cases
 /// measured, never a target: the small model's four on the fixture (the paragraphs below), the
 /// large model's two dense arms on its copy of the same store, each read twice and agreeing both
-/// times (`$G/t5-large-enriched-{1,2}.txt`, `$G/t5-large-raw-{1,2}.txt`). The lexical rows carry
+/// times (`docs/bench/2026-09-05-0.5.0-gaps-results.md`). The lexical rows carry
 /// `Floors::Small` and are read for every model: no embedder is in them.
 /// `bench/history/track.py` reads this table out of the source; keep the rows one per line.
 const FLOORS: [(bool, bool, Floors, usize, usize); 6] = [
@@ -485,7 +485,7 @@ mod tests {
         // A model with no floors of its own is measured and never graded.
         assert!(!passes(&large_enriched, true, true, Floors::None));
         // The large model's raw store (no questions paid for) measures its own floor too
-        // ($G/t5-large-raw-1.txt).
+        // (`docs/bench/2026-09-05-0.5.0-gaps-results.md`).
         let large_raw = Summary::recorded((40, 40), (17, 30), (12, 12), 230);
         assert!(passes(&large_raw, true, false, Floors::Large));
         assert!(!passes(&large_raw.clone().with("paraphrase", (16, 30)), true, false, Floors::Large));

@@ -142,6 +142,19 @@ class ParseBench(unittest.TestCase):
         self.assertTrue(row["green"])
         self.assertEqual(row["floors"]["paraphrase"], 22, "the large floor, not the small model's 14")
 
+    def test_dense_arm_with_unknown_model_measures_without_grading(self):
+        # A dense arm under a model with no recorded floors is measured and reported,
+        # but carries no floor, headroom, or verdict field.
+        unknown_model_line = ("keyword 40/40  paraphrase 15/30  code 12/12  p90 220 tok  dense=true  enriched=true "
+                              "(1996/1996 nodes)  suite=built-in gated=false model=BAAI/bge-m3\n")
+        p = track.parse_bench(unknown_model_line)
+        self.assertEqual(p["model"], "BAAI/bge-m3")
+        table = {(True, True, "small"): {"keyword": 40, "paraphrase": 14, "code": 12, "p90_tokens": 230}}
+        row = track.build_row(p, "beauty-crm", "502e8a6d", "", "abc", False, table)
+        self.assertFalse(row["gated"])
+        self.assertEqual((row["floors"], row["headroom"], row["green"]), (None, None, None))
+        self.assertEqual(track.state_of(row), "measured, no floors")
+
     def test_a_run_that_never_reached_the_summary_is_refused(self):
         # A crashed or interrupted run must not enter the history as a row of zeroes.
         with self.assertRaises(SystemExit):
