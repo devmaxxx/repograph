@@ -153,7 +153,10 @@ def answer(rec, lists, nb, seats=SEATS, files=None):
     ranked = {}
     if not rec["exact"]["whole_question"]:
         for pos, (i, score) in enumerate(interleave(lists)):
-            if len(seeds) < seats and i not in exact:
+            # Mirrors `ask`'s seed loop: `if let Some(h) = hit(...)` seats nothing for an id
+            # with no node in the graph, and the loop moves on to the next-ranked candidate
+            # rather than leaving the seat empty.
+            if len(seeds) < seats and i not in exact and (files is None or i in files):
                 seeds.append((i, score))
             ranked.setdefault(i, pos)
     seed_ids = [i for i, _ in seeds]

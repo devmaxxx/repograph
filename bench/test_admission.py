@@ -74,6 +74,13 @@ class Expansion(unittest.TestCase):
         seeds, expanded = a.answer(rec, [["x", "y"]], {"FR-1": ["file:a.md", "N-2"]})
         self.assertEqual((seeds, expanded), (["FR-1"], ["N-2"]))
 
+    def test_a_seed_that_resolves_to_no_node_is_skipped_and_the_next_one_seated(self):
+        rec = {"exact": {"ids": [], "whole_question": False}}
+        lists = [["ghost", "s1"]]
+        seeds, expanded = a.answer(rec, lists, {}, files={"s1": "f.py"})
+        self.assertEqual(seeds, ["s1"])
+        self.assertEqual(expanded, [])
+
 
 if __name__ == "__main__":
     unittest.main()
