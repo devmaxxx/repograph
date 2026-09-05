@@ -139,9 +139,11 @@ impl LexicalIndex {
 /// cases, `dump` over a suite. Nothing here is written to disk — the indexes are term statistics
 /// over every document and a rebuild is the cheapest correct update — so only that on-disk half
 /// is stale-free; the copy a `Context` keeps in memory is exactly the state that can drift from
-/// the graph, which is why it gets dropped rather than trusted once the graph moves. What changed
-/// is who pays for the build: the lexical arm through the socket spent almost all of 49 of its 54
-/// ms rebuilding these per question (`docs/bench/2026-09-06-perf-results.md`).
+/// the graph or the questions, which is why it gets dropped whenever `Context::adopt` takes up a
+/// moved store — not on a `questions.json` rewrite alone, which reaches `adopt` only if a
+/// document changed alongside it. What changed is who pays for the build: the lexical arm
+/// through the socket spent almost all of 49 of its 54 ms rebuilding these per question
+/// (`docs/bench/2026-09-06-perf-results.md`).
 pub struct Lexical {
     pub passages: LexicalIndex,
     /// Absent on a store `enrich` never touched — see `build_questions`.
@@ -162,7 +164,10 @@ impl Lexical {
     /// never read — built fresh and cheap rather than kept, since caching it would starve the
     /// next question that does fuse.
     pub fn empty() -> Lexical {
-        Lexical { passages: LexicalIndex { ids: Vec::new(), lengths: Vec::new(), avg_len: 0.0, postings: HashMap::new() }, questions: None, code: None, code_seat: false }
+        // Built through the same constructor as every other index, not hand-rolled: `build`'s
+        // empty-corpus case already carries the `avg_len: 1.0` divide-by-zero guard, pinned by
+        // `empty_index_unknown_terms_and_empty_query_all_answer_empty` below.
+        Lexical { passages: LexicalIndex::build(&Graph::default()), questions: None, code: None, code_seat: false }
     }
 
     /// `code_seat` is the caller's promise that it can use a code list at all: `dump` and `bench`
@@ -418,7 +423,7 @@ mod tests {
     }
 
     #[test]
-    fn a_plain_build_skips_the_code_list_and_ensure_code_adds_it_without_a_rebuild() {
+    fn a_plain_build_skips_the_code_list_and_ensure_code_adds_it_without_changing_what_already_answered() {
         let mut g = Graph::default();
         let mut e = Extraction::default();
         e.node(NodeKind::Requirement, "FR-PAY-26", "списание штрафа", "штраф списывается", "a.md", 9);

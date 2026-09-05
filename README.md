@@ -39,7 +39,7 @@ it had been measured, and hadn't been.
 | `build`, `update`          | working; incremental; a no-op `update` is a fixed point               |
 | `ask`, `explain`, `verify` | working: exact id/symbol → BM25 → dense, fused, one hop out           |
 | `impact`, `trace`, `changes` | working: callers by depth through barrels, shortest call chain, the diff mapped onto symbols — see [Blast radius](#blast-radius) |
-| `bench`                    | working; fails the process if a floor in [Bench](#bench) is missed — a store with `enrich`'s questions and one without are held to their own floors |
+| `bench`                    | working; fails the process if a floor in [Bench](#bench) is missed — floors are keyed by enrichment (a store with `enrich`'s questions and one without) and by the dense embedder (small model, large model); a store under any other model is measured and not graded |
 | `import-legacy`            | working; costs recall at query time — see its note in [Bench](#bench) |
 | `enrich`, `ask --rerank`   | working; opt-in, the only two stages that spend model tokens — see [Spending tokens on purpose](#spending-tokens-on-purpose) |
 | `ask --rerank-local`       | working; opt-in, the same pool picked by a local cross-encoder at zero tokens, measured and rejected as a floor candidate — see [Spending tokens on purpose](#spending-tokens-on-purpose) |
@@ -238,7 +238,7 @@ after it. What is left is a process start (5 ms), the socket round trip and the 
 BM25 indexes are no longer part of that: until 0.5.0 `ask` rebuilt them from the graph on every
 question, which was almost all of the remaining 49 ms of the lexical arm's 54 and the one expensive
 thing a resident process did not keep. A resident context now builds them on its first fusing answer
-and keeps them until the graph or the questions move, and that arm reads 55.0 ms against 6.8 ms —
+and keeps them until the context takes up a moved store, and that arm reads 55.0 ms against 6.8 ms —
 medians of 33 over base and head binaries alternating in one sitting, base spread 0.9 ms, which is
 the 30 ms this was aimed at. That is its own sitting on the same copy rather than a before-and-after
 of the table above, and the one-process column was not re-measured. The stage tables, the levers
@@ -334,7 +334,8 @@ The lexical index is built in memory rather than stored on disk, and since 0.5.0
 per context rather than once per question: a one-shot `ask` pays one build, and a resident `serve`
 pays one on the first answer that fuses and then keeps it. Nothing lexical is on disk, so there is
 no stored lexical state to go stale; the copy a context holds is exactly what can drift from the
-graph, which is why it is dropped when the graph or the questions move rather than refreshed. The
+graph or the questions, which is why it is dropped rather than refreshed whenever the context takes
+up a moved store — not on a `questions.json` rewrite alone. The
 build costs about 120 ms on a 7,500-node graph. A later sitting bounds that build, the question
 index beside it, their scoring and the fusion at about 49 ms of a 54 ms lexical ask on the bench
 corpus at 8.3k nodes, and a later one still reads the same socket answer at 6.8 ms once the indexes

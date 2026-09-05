@@ -93,13 +93,36 @@ pub fn hit(case: &Case, answer: &Answer, is_id: &dyn Fn(&str) -> bool) -> bool {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Floors { Small, Large, None }
 
+/// The model the large-model floors were measured on. Pinned to the name, not to
+/// `crate::index::embed::DEFAULT_MODEL`: that constant is the *configured* default, which has
+/// already been flipped once and may flip again, and a row written under whatever the default
+/// becomes next would otherwise silently inherit these floors while genuine e5-large rows
+/// silently stopped being graded. `UNNAMED_MODEL` makes the same argument in prose for the small
+/// model, and `src/index/dense.rs`'s own tests pin this same name by literal for the same reason.
+const LARGE_MODEL: &str = "intfloat/multilingual-e5-large";
+
 pub fn floors_for(model: Option<&str>) -> Floors {
     match model {
         None => Floors::Small,
         Some(m) if m == crate::index::embed::UNNAMED_MODEL => Floors::Small,
-        Some(m) if m == crate::index::embed::DEFAULT_MODEL => Floors::Large,
+        Some(m) if m == LARGE_MODEL => Floors::Large,
         Some(_) => Floors::None,
     }
+}
+
+/// Floors and the printed `model=` field for one run, keyed to the same model throughout: the
+/// resolved dense model when a dense arm runs, else the store's recorded rows (the only model a
+/// lexical-only run has). Factored out of `run` so the override case — `resolved` naming a model
+/// the store was never written by — is reachable by a test without opening one.
+fn dense_grading(no_dense: bool, recorded: Option<&str>, resolved: Option<&str>) -> (Floors, String) {
+    let model = if no_dense { recorded } else { resolved };
+    let floors = floors_for(model);
+    let field = match floors {
+        Floors::Small => "small".to_string(),
+        Floors::Large => "large".to_string(),
+        Floors::None => model.unwrap_or_default().to_string(),
+    };
+    (floors, field)
 }
 
 /// `(enriched, dense, floors) → (keyword, paraphrase)`. Every number is one the recorded cases
@@ -206,10 +229,7 @@ pub fn run(repo: &Path, cases: Option<&Path>, no_dense: bool, rerank: bool, rera
     if graph.nodes.is_empty() { anyhow::bail!("graph is empty at {} — run build first", repo.display()); }
     let ids = IdMatcher::new(&cfg.id_families, &cfg.milestone_families);
     let dense_idx = DenseIndex::load(&store)?;
-    // The floors a dense arm is graded against follow the store, not the configured default: a
-    // store built under a model with no floors of its own is measured and not graded.
     let recorded = DenseIndex::recorded_model(&store)?;
-    let floors = floors_for(recorded.as_deref());
     let questions = Questions::load(&store)?;
     // One build serves every case in the run, so the code list's cost is paid once regardless
     // of whether any case reranks — unlike a resident `Context`, there is nothing to save here.
@@ -225,14 +245,20 @@ pub fn run(repo: &Path, cases: Option<&Path>, no_dense: bool, rerank: bool, rera
     // sees the stderr notice and can judge it. `bench` speaks only through its exit code, so a
     // dense run that silently falls back and then grades against the weaker no-dense floor
     // would report green without ever having checked what it claims to check.
-    let mut embedder = if no_dense {
-        None
-    } else {
-        let model = crate::index::embed::resolve(recorded.as_deref(), &cfg.embed_model);
-        match Embedder::open(&model) {
+    //
+    // Resolved before the embedder opens, so the floors and the printed model name key off the
+    // model that actually answers the queries — `REPOGRAPH_EMBED_MODEL` outranks the store's
+    // recorded rows here exactly as it does when `Embedder::open` reads it below. A store's own
+    // width says nothing about which model wrote it: an override of that width is still a
+    // foreign model, and must be graded (and reported) as itself, not borrow the store's floors.
+    let resolved = (!no_dense).then(|| crate::index::embed::resolve(recorded.as_deref(), &cfg.embed_model));
+    let (floors, model_field) = dense_grading(no_dense, recorded.as_deref(), resolved.as_deref());
+    let mut embedder = match &resolved {
+        None => None,
+        Some(model) => match Embedder::open(model) {
             Ok(e) => Some(e),
             Err(err) => anyhow::bail!("dense: model unavailable ({err:#})"),
-        }
+        },
     };
     if !no_dense && dense_idx.ids.is_empty() {
         anyhow::bail!("dense index is empty at {} — run `repograph update` first", repo.display());
@@ -310,13 +336,6 @@ pub fn run(repo: &Path, cases: Option<&Path>, no_dense: bool, rerank: bool, rera
     tokens.sort_unstable();
     summary.p90_tokens = tokens.get(tokens.len() * 9 / 10).copied().unwrap_or(0);
     let counts = summary.by_kind.iter().map(|(k, (h, t))| format!("{k} {h}/{t}")).collect::<Vec<_>>().join("  ");
-    // Named after the store's rows, not the CLI's configured default, so a copy re-embedded under
-    // another model reads its own name rather than borrowing the store it was copied from.
-    let model_field = match floors {
-        Floors::Small => "small".to_string(),
-        Floors::Large => "large".to_string(),
-        Floors::None => recorded.clone().unwrap_or_default(),
-    };
     println!("\n{counts}  p90 {} tok  dense={dense_on}  enriched={enriched} ({covered}/{eligible} nodes) model={model_field}{code_note}{}  suite={suite} gated={gated}",
         summary.p90_tokens, match (rerank_local, rerank.is_some()) {
             (true, _) => format!(" rerank_local=true depth={depth}"),
@@ -516,11 +535,36 @@ mod tests {
 
     #[test]
     fn the_floors_follow_the_model_the_rows_were_written_by() {
-        use crate::index::embed::{DEFAULT_MODEL, UNNAMED_MODEL};
+        use crate::index::embed::UNNAMED_MODEL;
         assert_eq!(floors_for(None), Floors::Small, "a store with no vectors is graded lexically, on floors the model never enters");
         assert_eq!(floors_for(Some(UNNAMED_MODEL)), Floors::Small);
-        assert_eq!(floors_for(Some(DEFAULT_MODEL)), Floors::Large);
+        // Pinned to the literal the floors were measured on, not to `DEFAULT_MODEL`: a flip of
+        // the configured default must not keep this green.
+        assert_eq!(floors_for(Some("intfloat/multilingual-e5-large")), Floors::Large);
         assert_eq!(floors_for(Some("BAAI/bge-m3")), Floors::None);
+    }
+
+    #[test]
+    fn dense_grading_follows_the_resolved_model_not_the_stores_recorded_one() {
+        // `REPOGRAPH_EMBED_MODEL` pointed at a foreign model of the store's own width: the width
+        // guard upstream would pass, but this model was never measured, so it must read
+        // `Floors::None` and print its own name — never the small model's floors it happens to
+        // share a dimension with.
+        let (floors, field) = dense_grading(false, Some(crate::index::embed::UNNAMED_MODEL), Some("BAAI/bge-small-en-v1.5"));
+        assert_eq!(floors, Floors::None);
+        assert_eq!(field, "BAAI/bge-small-en-v1.5");
+
+        // No override: the resolved model is what `resolve` would already have returned for
+        // this store, so grading is unchanged.
+        let (floors, field) = dense_grading(false, Some(crate::index::embed::UNNAMED_MODEL), Some(crate::index::embed::UNNAMED_MODEL));
+        assert_eq!(floors, Floors::Small);
+        assert_eq!(field, "small");
+
+        // `--no-dense`: there is no embedder to resolve, so grading stays keyed to the store's
+        // own recorded rows regardless of what `resolved` would have been.
+        let (floors, field) = dense_grading(true, Some(crate::index::embed::UNNAMED_MODEL), Some("BAAI/bge-small-en-v1.5"));
+        assert_eq!(floors, Floors::Small);
+        assert_eq!(field, "small");
     }
 
     #[test]
