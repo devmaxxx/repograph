@@ -142,11 +142,12 @@ class ParseBench(unittest.TestCase):
         self.assertTrue(row["green"])
         self.assertEqual(row["floors"]["paraphrase"], 22, "the large floor, not the small model's 14")
 
-    def test_dense_arm_with_unknown_model_measures_without_grading(self):
-        # A dense arm under a model with no recorded floors is measured and reported,
-        # but carries no floor, headroom, or verdict field.
+    def test_build_row_refuses_to_grade_a_model_the_table_has_no_floors_for(self):
+        # This binary always prints gated=false for a model it holds no floors for, so a
+        # gated=true transcript naming one is not something this build emits -- only a
+        # different one. build_row re-derives gated from the table rather than trusting it.
         unknown_model_line = ("keyword 40/40  paraphrase 15/30  code 12/12  p90 220 tok  dense=true  enriched=true "
-                              "(1996/1996 nodes)  suite=built-in gated=false model=BAAI/bge-m3\n")
+                              "(1996/1996 nodes)  suite=built-in gated=true model=BAAI/bge-m3\n")
         p = track.parse_bench(unknown_model_line)
         self.assertEqual(p["model"], "BAAI/bge-m3")
         table = {(True, True, "small"): {"keyword": 40, "paraphrase": 14, "code": 12, "p90_tokens": 230}}
