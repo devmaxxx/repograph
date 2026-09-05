@@ -57,12 +57,22 @@ def cmd_build(args):
     print(f"{args.size} questions from {len(nodes)} enriched nodes, seed {args.seed} -> {args.out}")
 
 
+def anchors(expect):
+    """`dump` writes `expect` in the shape the case file gave it: a bare string for one anchor,
+    a list for several. The developer suite anchors half its questions on more than one place."""
+    return [expect] if isinstance(expect, str) else list(expect)
+
+
 def hits(dump, at):
-    """Whether each question's own node came back in the first `at` seeds, keyed by question."""
+    """Whether a question's own anchors came back in the first `at` seeds, keyed by question."""
     out = {}
     for q in json.loads(Path(dump).read_text())["queries"]:
         seeds = [i for i, _ in q["ask"]["seeds"][:at]]
-        out[(q["q"], q["expect"])] = q["expect"] in seeds
+        # Any anchor, not all of them: a multi-anchor case names the places that would answer
+        # it, and finding one of them is the case answered. The key is a tuple because a list
+        # cannot be one, and the pairing is per question.
+        a = tuple(anchors(q["expect"]))
+        out[(q["q"], a)] = any(x in seeds for x in a)
     return out
 
 
@@ -108,7 +118,8 @@ def cmd_compare(args):
     if lost and p < args.alpha:
         print("\n  lost:")
         for (q, e) in sorted(k for k in shared if before[k] and not after[k])[:20]:
-            print(f"    {e:14} {q[:90]}")
+            # `+` is the separator `bench` prints a multi-anchor case's key with.
+            print(f"    {'+'.join(e):14} {q[:90]}")
 
 
 def main():
