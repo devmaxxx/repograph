@@ -225,8 +225,8 @@ in-process runs interleaved in one sitting:
 
 The first question after a start still pays the model open — 0.26 s, against 0.07 s for the ones
 after it. What is left is a process start (5 ms), the socket round trip, and the BM25 build that
-`ask` still does per question: that build is 49 of the lexical arm's 54 ms, and it is the one
-expensive thing a resident process does not keep. The stage tables, the levers behind those
+`ask` still does per question: almost all of the remaining 49 ms of the lexical arm's 54, and the
+one expensive thing a resident process does not keep. The stage tables, the levers behind those
 numbers and the evidence that the bytes do not move are in
 [the perf results](docs/bench/2026-09-06-perf-results.md).
 
