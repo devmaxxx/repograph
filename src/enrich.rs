@@ -252,7 +252,16 @@ pub fn run_command(command: &str, input: &str) -> Result<String> {
     let mut child = std::process::Command::new("sh").arg("-c").arg(command)
         .stdin(std::process::Stdio::piped()).stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::piped())
         .spawn().with_context(|| format!("spawn `{command}`"))?;
-    child.stdin.take().context("stdin")?.write_all(input.as_bytes())?;
+    // A command that answers without reading its whole prompt closes the pipe early — `claude -p`
+    // never does, a wrapper or a stub may — and the write then fails with EPIPE while the answer is
+    // already on stdout. The exit status and the output judge the run, not the write.
+    let mut stdin = child.stdin.take().context("stdin")?;
+    match stdin.write_all(input.as_bytes()) {
+        Ok(()) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::BrokenPipe => {}
+        Err(e) => return Err(e).with_context(|| format!("write the prompt to `{command}`")),
+    }
+    drop(stdin);
     let out = child.wait_with_output()?;
     if !out.status.success() {
         anyhow::bail!("`{command}` exited {}: {}", out.status, String::from_utf8_lossy(&out.stderr).trim());
@@ -495,6 +504,15 @@ mod tests {
         let r = run(&store, &graph(), Questions::default(), &silent, 8, 1, Scope::default()).unwrap();
         assert_eq!((r.generated, r.left), (0, 2));
         assert_eq!(std::fs::read_to_string(&calls).unwrap().lines().count(), 4, "an answer that skips everything is retried once, not forever");
+    }
+
+    #[test]
+    fn a_command_that_answers_without_reading_its_prompt_still_answers() {
+        // Larger than any pipe buffer, so the write blocks until the child closes its end of the
+        // pipe — the race the CI runner lost on the reranker's stub command, made deterministic.
+        let prompt = "x".repeat(1 << 20);
+        let out = run_command("exec 0<&-; printf 'answered\\n'", &prompt).unwrap();
+        assert_eq!(out, "answered\n");
     }
 
     #[test]
