@@ -1,3 +1,4 @@
+mod ask;
 mod bench;
 mod changes;
 mod code;
@@ -15,7 +16,6 @@ mod query;
 mod store;
 mod walk;
 
-use anyhow::Context;
 use clap::{Parser, Subcommand};
 use model::Extractor;
 use std::path::PathBuf;
@@ -124,7 +124,7 @@ pub struct Extractors {
 pub struct UpdateReport { pub changed: usize, pub removed: usize, pub nodes: usize, pub edges: usize }
 
 /// Re-extracts what the diff names, drops what is gone, and writes the store back.
-fn apply_diff(repo: &std::path::Path, store: &store::Store, graph: &mut model::Graph, entries: &[walk::Entry], diff: &walk::Diff, ex: &Extractors) -> anyhow::Result<UpdateReport> {
+pub(crate) fn apply_diff(repo: &std::path::Path, store: &store::Store, graph: &mut model::Graph, entries: &[walk::Entry], diff: &walk::Diff, ex: &Extractors) -> anyhow::Result<UpdateReport> {
     let stale: std::collections::BTreeSet<&str> =
         diff.removed.iter().map(String::as_str).chain(diff.changed.iter().map(|e| e.rel.as_str())).collect();
     // A node's `path:line` comes from its primary declaring file. When that file goes, every
@@ -177,36 +177,11 @@ pub fn run_update(repo: &std::path::Path, cfg: &config::Config, ex: &Extractors,
 /// Writes the manifest back when the walk saw stamps the stored one does not have — a store from
 /// before the stat cache, or a file touched without being changed. Without this a tree that never
 /// changes would be hashed in full on every question.
-fn record_stamps(store: &store::Store, manifest: &walk::Manifest, entries: &[walk::Entry]) -> anyhow::Result<bool> {
+pub(crate) fn record_stamps(store: &store::Store, manifest: &walk::Manifest, entries: &[walk::Entry]) -> anyhow::Result<bool> {
     let now = walk::Manifest::from_entries(entries);
     if now.stamps == manifest.stamps { return Ok(false); }
     store.save_manifest(&now)?;
     Ok(true)
-}
-
-/// The stored graph brought in line with the working tree, plus what that cost when the tree had
-/// moved. `ask` runs this before answering so an edit never has to be followed by an `update`;
-/// the extractors are built only when there is something to re-read.
-fn graph_for_ask(repo: &std::path::Path, cfg: &config::Config, store: &store::Store, stale: bool, timing: &Timing) -> anyhow::Result<(model::Graph, Option<UpdateReport>)> {
-    let (mut graph, manifest, source) = store.load_traced()?;
-    timing.stage("graph loaded");
-    if stale { return Ok((graph, None)); }
-    let entries = walk::walk(repo, cfg, &manifest)?;
-    let diff = manifest.diff(&entries);
-    timing.stage("tree walked");
-    if diff.changed.is_empty() && diff.removed.is_empty() {
-        record_stamps(store, &manifest, &entries)?;
-        // A store another release or a bare `graph.json` left without a mirror pays the JSON
-        // parse once; a refresh below writes the mirror on its own.
-        if source == store::Source::Json {
-            store.write_mirror("graph.json", &graph)?;
-            timing.stage("mirror written");
-        }
-        return Ok((graph, None));
-    }
-    let r = apply_diff(repo, store, &mut graph, &entries, &diff, &extractors(repo, cfg)?)?;
-    timing.stage("refreshed");
-    Ok((graph, Some(r)))
 }
 
 /// What a poll of the tree needs between rounds: the graph as this process last wrote it, and
@@ -279,7 +254,7 @@ fn run_watch(repo: &std::path::Path, cfg: &config::Config, every: u64, batch: us
     let model = index::embed::resolve(None, &cfg.embed_model);
     let mut embedder: Option<Option<index::embed::Embedder>> = None;
     let mut dense: Option<index::dense::DenseIndex> = None;
-    let verbose = timing_on();
+    let verbose = ask::timing_on();
     eprintln!("watch: {} every {every}s, batch {batch}; Ctrl-C to stop", repo.display());
     loop {
         let t = std::time::Instant::now();
@@ -292,7 +267,7 @@ fn run_watch(repo: &std::path::Path, cfg: &config::Config, every: u64, batch: us
                 let mut embedded = 0;
                 // The model costs ~0.6 s and 1.3 GB to open, so it waits for the first change; the
                 // vectors then stay in memory, since every later refresh syncs them again.
-                if let Some(e) = embedder.get_or_insert_with(|| open_embedder(no_dense, &model)).as_mut() {
+                if let Some(e) = embedder.get_or_insert_with(|| ask::open_embedder(no_dense, &model)).as_mut() {
                     let idx = match dense {
                         Some(ref mut d) => d,
                         None => dense.insert(index::dense::DenseIndex::load(&w.store)?),
@@ -312,7 +287,7 @@ fn run_watch(repo: &std::path::Path, cfg: &config::Config, every: u64, batch: us
     }
 }
 
-fn extractors(repo: &std::path::Path, cfg: &config::Config) -> anyhow::Result<Extractors> {
+pub(crate) fn extractors(repo: &std::path::Path, cfg: &config::Config) -> anyhow::Result<Extractors> {
     let ids = ids::IdMatcher::new(&cfg.id_families, &cfg.milestone_families);
     let resolver = code::imports::Resolver::new(repo)?;
     Ok(Extractors {
@@ -324,7 +299,7 @@ fn extractors(repo: &std::path::Path, cfg: &config::Config) -> anyhow::Result<Ex
 
 fn embed_all(repo: &std::path::Path, no_dense: bool, configured: &str) -> anyhow::Result<()> {
     let model = index::embed::resolve(None, configured);
-    let Some(mut emb) = open_embedder(no_dense, &model) else { return Ok(()) };
+    let Some(mut emb) = ask::open_embedder(no_dense, &model) else { return Ok(()) };
     let store = store::Store::new(repo);
     let (graph, _) = store.load()?;
     let questions = enrich::Questions::load(&store)?;
@@ -337,50 +312,12 @@ fn embed_all(repo: &std::path::Path, no_dense: bool, configured: &str) -> anyhow
     Ok(())
 }
 
-/// `REPOGRAPH_TIMING=1` prints where an `ask` spends its time, one line per stage on stderr.
-struct Timing { on: bool, start: std::time::Instant, last: std::cell::Cell<std::time::Instant> }
-
-fn timing_on() -> bool { std::env::var_os("REPOGRAPH_TIMING").is_some() }
-
-impl Timing {
-    fn new() -> Timing {
-        let now = std::time::Instant::now();
-        Timing { on: timing_on(), start: now, last: std::cell::Cell::new(now) }
-    }
-
-    fn stage(&self, what: &str) {
-        if !self.on { return; }
-        let now = std::time::Instant::now();
-        eprintln!("timing: {:>7.1} ms  (+{:>6.1} ms)  {what}", (now - self.start).as_secs_f64() * 1e3, (now - self.last.get()).as_secs_f64() * 1e3);
-        self.last.set(now);
-    }
-}
-
-fn open_embedder(no_dense: bool, model: &str) -> Option<index::embed::Embedder> {
-    if no_dense { return None; }
-    match index::embed::Embedder::open(model) {
-        Ok(e) => Some(e),
-        Err(err) => { eprintln!("dense: model unavailable, continuing lexical-only ({err:#})"); None }
-    }
-}
-
-/// The model opens on a thread while `ask` builds its BM25 indexes — `query::ask` builds the
-/// lexical lists before it calls the dense retriever so that this open has them to overlap. Ids
-/// and the questions store are read before the vectors that name the model, so they are not part
-/// of it. A question that exact ids or symbols answer whole never opens the model, as before;
-/// with `--no-dense` or no vectors nothing starts.
-fn warm_model(dense: bool, whole: bool, model: &str) -> Option<std::thread::JoinHandle<Option<index::embed::Embedder>>> {
-    if !dense || whole { return None; }
-    let model = model.to_string();
-    Some(std::thread::spawn(move || open_embedder(false, &model)))
-}
-
 /// The graph an answer is read from: refreshed against the tree unless `--stale`, and, when
 /// the store cannot be written, the stored one with a warning — the same contract as `ask`.
 fn graph_for(repo: &std::path::Path, cfg: &config::Config, stale: bool) -> anyhow::Result<model::Graph> {
-    let timing = Timing::new();
+    let timing = ask::Timing::new();
     let store = store::Store::new(repo);
-    match graph_for_ask(repo, cfg, &store, stale, &timing) {
+    match ask::graph_for_ask(repo, cfg, &store, stale, &timing) {
         Ok((graph, refreshed)) => {
             if let Some(r) = refreshed { eprintln!("refresh: {} changed, {} removed", r.changed, r.removed); }
             Ok(graph)
@@ -435,130 +372,19 @@ fn main() -> anyhow::Result<()> {
             }
         }
         Cmd::Ask { words, json, seeds, bodies, rerank, rerank_local, depth, stale } => {
-            let timing = Timing::new();
+            let req = ask::Request { words, json, seeds, bodies, rerank, rerank_local, depth, stale, no_dense: cli.no_dense };
             let cfg = load_cfg()?;
-            let store = store::Store::new(&repo);
-            let (graph, refreshed) = match graph_for_ask(&repo, &cfg, &store, stale, &timing) {
-                Ok(pair) => pair,
-                // A store that cannot be written (read-only checkout, a walk that failed) still
-                // holds an answer: say once that it may be behind, then give the stored one.
-                Err(err) => { eprintln!("refresh: skipped ({err:#})"); (store.load()?.0, None) }
-            };
-            if let Some(r) = &refreshed { eprintln!("refresh: {} changed, {} removed", r.changed, r.removed); }
-            let ids = ids::IdMatcher::new(&cfg.id_families, &cfg.milestone_families);
-            timing.stage("ids ready");
-            let (questions, source) = enrich::Questions::load_traced(&store)?;
-            if !stale && source == store::Source::Json { questions.write_mirror(&store)?; }
-            timing.stage("questions ready");
-            let opts = query::Options { seeds, bodies, dense: !cli.no_dense && index::dense::DenseIndex::present(&store), json, depth };
-            // Opening the ONNX model costs ~0.6 s and 1.3 GB, the vectors 50 MB; an exact id or
-            // symbol match never asks for either, so on that path both still open lazily, on the
-            // first fused query that never comes. A fused question starts both below, once the
-            // last fallible step is behind them.
-            let dense_idx: std::cell::RefCell<Option<index::dense::DenseIndex>> = std::cell::RefCell::new(None);
-            let warm: std::cell::Cell<Option<std::thread::JoinHandle<Option<index::embed::Embedder>>>> = std::cell::Cell::new(None);
-            let embedder: std::cell::RefCell<Option<Option<index::embed::Embedder>>> = std::cell::RefCell::new(None);
-            // The refresh above moved passages the vectors were built from. This query needs the
-            // model open anyway, so the changed rows are re-embedded here — with `--no-dense` or
-            // on the exact-id path nothing opens, and the vectors catch up on the next fused
-            // query or `update`.
-            let resync = std::cell::Cell::new(refreshed.is_some());
-            let dense_fn = |q: &str, k: usize| -> (Vec<String>, Vec<String>) {
-                // The vectors come first because they name the model: reading `vectors.json`
-                // again through `recorded_model` would parse 3 MB a second time for what the
-                // loaded index already holds.
-                let mut idx = dense_idx.borrow_mut();
-                let idx = idx.get_or_insert_with(|| {
-                    let i = index::dense::DenseIndex::load(&store).unwrap_or_else(|err| { eprintln!("dense: index unreadable, continuing lexical-only ({err:#})"); Default::default() });
-                    timing.stage("vectors loaded"); i
-                });
-                let mut slot = embedder.borrow_mut();
-                let e = slot.get_or_insert_with(|| {
-                    let e = match warm.take() {
-                        Some(handle) => handle.join().unwrap_or_else(|_| { eprintln!("dense: model thread panicked, continuing lexical-only"); None }),
-                        None => {
-                            let model = index::embed::resolve(idx.model_of_rows().as_deref(), &cfg.embed_model);
-                            open_embedder(cli.no_dense, &model)
-                        }
-                    };
-                    timing.stage("model opened");
-                    e
-                });
-                let qvec = e.as_mut().and_then(|e| e.query(q).ok());
-                // Decided before a single row is written: the resync below embeds and saves, so a
-                // store whose rows are not this model's width has to be refused here — after it,
-                // the notice would be an epitaph for the index the resync had already replaced.
-                if let (Some(v), Some(emb)) = (&qvec, e.as_ref()) {
-                    if idx.dim > 0 && v.len() != idx.dim {
-                        eprintln!("dense: {}; continuing lexical-only", index::embed::width_mismatch(idx.dim, emb.name(), v.len()));
-                        return (Vec::new(), Vec::new());
-                    }
-                }
-                if resync.replace(false) {
-                    if let Some(emb) = e.as_mut() {
-                        // A reader appends to the store's own rows and never re-embeds them into
-                        // another model's index: it claims the index for the model it opened, at
-                        // the width this very query just measured.
-                        let width = qvec.as_ref().map_or(idx.dim, |v| v.len());
-                        idx.written_by(emb.name(), width);
-                        match idx.sync(&graph, &questions, &mut |texts| emb.embed(texts)) {
-                            Ok(0) => {}
-                            Ok(n) => {
-                                if let Err(err) = idx.save(&store) { eprintln!("refresh: vectors not saved ({err:#})"); }
-                                eprintln!("refresh: {n} vectors embedded");
-                            }
-                            Err(err) => eprintln!("refresh: vectors unchanged ({err:#})"),
-                        }
-                        timing.stage("vectors synced");
-                    }
-                }
-                let out = match qvec { Some(v) => idx.search(&v, k), None => (Vec::new(), Vec::new()) };
-                timing.stage("query embedded and searched");
-                out
-            };
-            let rerank_fn = |q: &str, c: &[(String, String)]| rerank::run(&cfg.rerank_command, q, c);
-            let cross = std::cell::RefCell::new(if rerank_local {
-                let dir = if cfg.reranker_dir.is_empty() { index::cross::default_dir()? } else { std::path::PathBuf::from(&cfg.reranker_dir) };
-                Some(index::cross::CrossEncoder::open(&dir).context("--rerank-local")?)
-            } else { None });
-            // Below the last `?`: an error returned between the spawn and the join drops the
-            // handle and leaves a thread mid-open of a 448 MB session. Nothing below this point
-            // can fail, and the only work above it the open might have overlapped is
-            // `--rerank-local`'s own session.
-            if opts.dense {
-                // The predicate `ask` fuses on, asked early so the model can start beside the
-                // BM25 builds. `exact_seeds` is pure, so asking it twice costs one graph scan and
-                // decides nothing differently — and only the dense arm can use the answer, so on
-                // `--no-dense` the scan never runs.
-                let (_, whole) = query::exact_seeds(&graph, &ids, &words);
-                if !whole {
-                    let idx = index::dense::DenseIndex::load(&store).unwrap_or_else(|err| { eprintln!("dense: index unreadable, continuing lexical-only ({err:#})"); Default::default() });
-                    timing.stage("vectors loaded");
-                    // The rows name the model, so nothing can start before they are read.
-                    let model = index::embed::resolve(idx.model_of_rows().as_deref(), &cfg.embed_model);
-                    warm.set(warm_model(true, whole, &model));
-                    dense_idx.replace(Some(idx));
-                }
-            }
-            let local_fn = |q: &str, c: &[(String, String)]| -> Vec<String> {
-                let mut m = cross.borrow_mut();
-                let Some(m) = m.as_mut() else { return Vec::new() };
-                let texts: Vec<String> = c.iter().map(|(_, t)| t.clone()).collect();
-                match m.score(q, &texts) {
-                    Ok(s) => index::cross::pick(&s, c, index::cross::PICK),
-                    // Like a failing rerank command: say so and answer from the fused order.
-                    Err(e) => { eprintln!("rerank-local: {e:#}; answering from the fused order"); Vec::new() }
-                }
-            };
-            let rerank: Option<query::Rerank> = if rerank_local { Some(&local_fn) } else if rerank { Some(&rerank_fn) } else { None };
-            let answer = query::ask(&graph, &ids, &questions, Some(&dense_fn), rerank, &words, &opts);
-            timing.stage("answered");
-            print!("{}", query::render(&answer, &graph, &opts));
+            let mut ctx = ask::Context::open(&repo, &cfg, req.stale, cli.no_dense)?;
+            let text = ctx.answer(&req)?;
+            // Before the answer: a refresh line reached the reader ahead of it back when it was
+            // printed the moment it happened, and that is the order a human reads.
+            for n in ctx.notices() { eprintln!("{n}"); }
+            print!("{text}");
             // Nothing here is written back, and unwinding a 1.3 GB model session plus the graph
             // costs a fused answer a measurable share of its wall time: leave without it.
             use std::io::Write;
             std::io::stdout().flush()?;
-            timing.stage("printed");
+            ctx.timing().stage("printed");
             std::process::exit(0)
         }
         Cmd::Watch { every, batch } => run_watch(&repo, &load_cfg()?, every, batch, cli.no_dense),
@@ -629,12 +455,6 @@ fn main() -> anyhow::Result<()> {
 mod tests {
     use super::*;
 
-    #[test]
-    fn the_model_is_not_warmed_for_an_exact_answer_or_a_lexical_arm() {
-        assert!(warm_model(false, false, "any").is_none());
-        assert!(warm_model(true, true, "any").is_none());
-    }
-
     fn doc_repo(body: &str) -> tempfile::TempDir {
         let dir = tempfile::tempdir().unwrap();
         std::fs::create_dir_all(dir.path().join("docs")).unwrap();
@@ -656,7 +476,7 @@ mod tests {
         built(repo, &cfg);
         std::fs::write(repo.join("docs/a.md"), TWO).unwrap();
         let store = store::Store::new(repo);
-        let (graph, refreshed) = graph_for_ask(repo, &cfg, &store, false, &Timing::new()).unwrap();
+        let (graph, refreshed) = ask::graph_for_ask(repo, &cfg, &store, false, &ask::Timing::new()).unwrap();
         let r = refreshed.expect("the edit is a refresh");
         assert_eq!((r.changed, r.removed), (1, 0));
         let ids = ids::IdMatcher::new(&cfg.id_families, &cfg.milestone_families);
@@ -675,7 +495,7 @@ mod tests {
         built(repo, &cfg);
         let saved = |name: &str| std::fs::metadata(repo.join(".repograph").join(name)).unwrap().modified().unwrap();
         let (before_graph, before_manifest) = (saved("graph.json"), saved("manifest.json"));
-        let (graph, refreshed) = graph_for_ask(repo, &cfg, &store::Store::new(repo), false, &Timing::new()).unwrap();
+        let (graph, refreshed) = ask::graph_for_ask(repo, &cfg, &store::Store::new(repo), false, &ask::Timing::new()).unwrap();
         assert!(refreshed.is_none());
         assert!(graph.nodes.contains_key("FR-PAY-22"));
         assert_eq!((saved("graph.json"), saved("manifest.json")), (before_graph, before_manifest));
@@ -692,7 +512,7 @@ mod tests {
         let files = store.load().unwrap().1.files;
         store.save_manifest(&walk::Manifest { files, stamps: Default::default() }).unwrap();
         let graph_before = std::fs::read(repo.join(".repograph/graph.json")).unwrap();
-        assert!(graph_for_ask(repo, &cfg, &store, false, &Timing::new()).unwrap().1.is_none());
+        assert!(ask::graph_for_ask(repo, &cfg, &store, false, &ask::Timing::new()).unwrap().1.is_none());
         let manifest = store.load().unwrap().1;
         assert_eq!(manifest.stamps.len(), manifest.files.len());
         assert_eq!(std::fs::read(repo.join(".repograph/graph.json")).unwrap(), graph_before);
@@ -705,7 +525,7 @@ mod tests {
         built(repo, &cfg);
         let before = std::fs::read(repo.join(".repograph/graph.json")).unwrap();
         std::fs::write(repo.join("docs/a.md"), TWO).unwrap();
-        let (graph, refreshed) = graph_for_ask(repo, &cfg, &store::Store::new(repo), true, &Timing::new()).unwrap();
+        let (graph, refreshed) = ask::graph_for_ask(repo, &cfg, &store::Store::new(repo), true, &ask::Timing::new()).unwrap();
         assert!(refreshed.is_none());
         assert!(!graph.nodes.contains_key("FR-PAY-23"));
         assert_eq!(std::fs::read(repo.join(".repograph/graph.json")).unwrap(), before);
