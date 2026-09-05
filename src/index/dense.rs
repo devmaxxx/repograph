@@ -123,7 +123,10 @@ impl DenseIndex {
         let want = idx.ids.len() * idx.dim;
         if raw.len() / 4 < want {
             // A torn pair of files is treated as no index at all; the next sync rebuilds it.
-            return Ok(DenseIndex::default());
+            // The recorded name survives the empty index, though: dropped, the store would read
+            // as unnamed and a refreshing `ask` would rebuild it under the configured model
+            // rather than the one that wrote it.
+            return Ok(DenseIndex { model: idx.model, ..Default::default() });
         }
         // Anything past the last row the metadata names is what a crash between an append and
         // the metadata rename left: unreferenced, and overwritten by the next append.
@@ -369,6 +372,24 @@ mod tests {
         idx.save(&store).unwrap();
         assert_eq!(DenseIndex::recorded_model(&store).unwrap().as_deref(), Some("intfloat/multilingual-e5-large"));
         assert_eq!(DenseIndex::load(&store).unwrap().model, "intfloat/multilingual-e5-large");
+    }
+
+    #[test]
+    fn a_torn_vectors_file_is_no_index_and_still_names_its_model() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::new(dir.path());
+        let mut idx = synced(&graph("x"));
+        idx.written_by("intfloat/multilingual-e5-large", 3);
+        idx.sync(&graph("x"), &Questions::default(), &mut fake).unwrap();
+        idx.save(&store).unwrap();
+        // A crash between the two writes leaves metadata naming more rows than the file holds.
+        // The rows are gone either way; the name must not be, or `ask` reads the store as
+        // unnamed, resolves to the configured model, and its resync rebuilds the index under a
+        // model the store never chose — a reader moving a store, which cannot happen.
+        store.write_atomic("vectors.f32", &[0u8; 4]).unwrap();
+        let torn = DenseIndex::load(&store).unwrap();
+        assert!(torn.ids.is_empty(), "a torn pair of files is no index at all");
+        assert_eq!(torn.model_of_rows().as_deref(), Some("intfloat/multilingual-e5-large"));
     }
 
     #[test]

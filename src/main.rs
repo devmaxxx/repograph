@@ -323,10 +323,21 @@ fn extractors(repo: &std::path::Path, cfg: &config::Config) -> anyhow::Result<Ex
 }
 
 fn embed_all(repo: &std::path::Path, no_dense: bool, configured: &str) -> anyhow::Result<()> {
-    let model = index::embed::resolve(None, configured);
-    let Some(mut emb) = open_embedder(no_dense, &model) else { return Ok(()) };
+    // Said rather than left silent: `repograph --no-dense embed` otherwise exits 0 having done
+    // nothing, which reads exactly like an embed that found every row already in place.
+    if no_dense {
+        println!("dense: nothing embedded, --no-dense is set");
+        return Ok(());
+    }
     let store = store::Store::new(repo);
     let (graph, _) = store.load()?;
+    // Before the model opens, and for the same reason `enrich`, `bench` and `dump` bail: a sync
+    // against no graph marks every row dead and saves an index of nothing, and run before the
+    // first `build` it writes a `vectors.*` pair that makes `DenseIndex::present` true over no
+    // rows at all.
+    if graph.nodes.is_empty() { anyhow::bail!("graph is empty — run `repograph build`"); }
+    let model = index::embed::resolve(None, configured);
+    let Some(mut emb) = open_embedder(no_dense, &model) else { return Ok(()) };
     let questions = enrich::Questions::load(&store)?;
     let mut dense = index::dense::DenseIndex::load(&store)?;
     let t = std::time::Instant::now();
@@ -452,7 +463,7 @@ fn main() -> anyhow::Result<()> {
                 // the notice would be an epitaph for the index the resync had already replaced.
                 if let (Some(v), Some(emb)) = (&qvec, e.as_ref()) {
                     if idx.dim > 0 && v.len() != idx.dim {
-                        eprintln!("dense: the store's vectors are {}-d and {} gives {}-d — run `repograph embed`; continuing lexical-only", idx.dim, emb.name(), v.len());
+                        eprintln!("dense: {}; continuing lexical-only", index::embed::width_mismatch(idx.dim, emb.name(), v.len()));
                         return (Vec::new(), Vec::new());
                     }
                 }

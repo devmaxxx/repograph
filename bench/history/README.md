@@ -51,7 +51,11 @@ under an arm of their own — `bench[dev-cases]:dense+enriched` — and never sh
 window with the recorded suite. Kinds are `long`, `cross` (a requirement and the file that
 implements it), `multi` (several requirements), `where` (which file to edit) and `rule` (an
 invariant, ADR or NFR). Every anchor is checked against the graph before a question is asked, so a
-mistyped anchor stops the run instead of reading as a weak spot.
+mistyped anchor stops the run instead of reading as a weak spot. Two cases of one kind may point
+at the same place — two `rule` questions ask about ADR-031 — and each keeps its own score, the
+second under a `#2` suffix. Dev rows recorded before that suffix existed hold 59 keys for 60
+cases, so the next dev run reports `NOT COMPARABLE … the case set changed (59 -> 60)` once
+against them; that reading is honest, and the runs after it compare normally.
 
 ## Reading the report
 

@@ -135,6 +135,15 @@ def parse_bench(text):
         if m:
             kind, expect, verdict, reached, want, tok, _q = m.groups()
             key = f"{kind}/{expect}"
+            # Two questions of one kind may be pointed at the same place -- the dev suite asks
+            # two `rule` questions about ADR-031. Keyed by kind and anchor alone the later one
+            # overwrites the earlier, and the run is recorded holding fewer scores than the
+            # suite has cases, so a case that is always missed never reads as chronically weak.
+            if key in cases:
+                nth = 2
+                while f"{key}#{nth}" in cases:
+                    nth += 1
+                key = f"{key}#{nth}"
             if want:
                 cases[key] = round(int(reached) / int(want), 4) if int(want) else 0.0
             else:

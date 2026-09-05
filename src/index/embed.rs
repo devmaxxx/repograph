@@ -27,6 +27,14 @@ fn resolve_from(override_: Option<&str>, recorded: Option<&str>, configured: &st
     let named = |m: Option<&str>| m.map(str::trim).filter(|m| !m.is_empty()).map(str::to_string);
     named(override_).or_else(|| named(recorded)).unwrap_or_else(|| configured.to_string())
 }
+
+/// What `ask`, `bench` and `dump` say when the model they opened cannot search the store's rows.
+/// One sentence for the three of them: each keeps its own consequence — a warning and a
+/// lexical-only answer, or a refused run — but a caller wording the width differently from the
+/// others would send a reader looking for three separate faults.
+pub fn width_mismatch(dim: usize, model: &str, got: usize) -> String {
+    format!("the store's vectors are {dim}-d and {model} gives {got}-d — run `repograph embed`")
+}
 const MAX_TOKENS: usize = 256;
 const BATCH: usize = 64;
 

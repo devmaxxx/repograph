@@ -33,6 +33,13 @@ where      apps/api/src/modules/staff/staff.controller.ts HIT  1/1  150 tok  к�
 long 1/1  cross 0/1  multi 1/1  where 1/1  p90 240 tok  dense=true  enriched=true (1996/1996 nodes)  suite=dev-cases gated=false
 """
 
+DUPLICATE_ANCHOR_TRANSCRIPT = """\
+rule       ADR-031      HIT  1/1  180 tok  можно ли создать второй визит
+rule       ADR-031      miss 0/1  190 tok  повторный POST плодит бронь
+
+rule 1/2  p90 190 tok  dense=true  enriched=true (1996/1996 nodes)  suite=dev-cases gated=false
+"""
+
 PROSE = """\
 // Sixteen lines of prose about the floors sit above `passes` in the real file, and they
 // discuss the floors in the notation the code uses: s.kind("code").0 >= 11 && s.p90_tokens <= 200
@@ -85,6 +92,14 @@ class ParseBench(unittest.TestCase):
         self.assertEqual(p["suite"], "dev-cases")
         self.assertFalse(p["gated"])
         self.assertEqual(track.arm_name(p), "bench[dev-cases]:dense+enriched")
+
+    def test_two_cases_of_one_kind_expecting_the_same_anchor_keep_their_own_scores(self):
+        # The dev suite asks two `rule` questions about ADR-031. Keyed by kind and anchor alone
+        # the second overwrites the first, and the row carries one score fewer than the suite
+        # has cases -- a case that can never read as weak because it is never recorded.
+        p = track.parse_bench(DUPLICATE_ANCHOR_TRANSCRIPT)
+        self.assertEqual(p["cases"], {"rule/ADR-031": 1.0, "rule/ADR-031#2": 0.0})
+        self.assertEqual(p["tokens"], {"rule/ADR-031": 180, "rule/ADR-031#2": 190})
 
     def test_a_row_for_an_ungated_run_carries_no_floors_and_no_verdict(self):
         table = {(True, True): {"keyword": 40, "paraphrase": 14, "code": 12, "p90_tokens": 230}}

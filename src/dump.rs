@@ -82,7 +82,7 @@ pub fn run(repo: &Path, queries: &Path, out: &Path, depth: usize, no_dense: bool
         // dense lists, and the held-out gate would read them as the lexical-only arm.
         let width = e.dim()?;
         if dense_idx.dim > 0 && width != dense_idx.dim {
-            anyhow::bail!("the store's vectors are {}-d and {} gives {}-d — run `repograph embed`", dense_idx.dim, e.name(), width);
+            anyhow::bail!("{}", crate::index::embed::width_mismatch(dense_idx.dim, e.name(), width));
         }
     }
     let opts = Options { seeds: 5, bodies: false, dense: !no_dense, json: false, depth: crate::rerank::DEPTH };

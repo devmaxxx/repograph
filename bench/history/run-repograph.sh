@@ -13,8 +13,14 @@ REPO="$(cd "$HERE/../.." && pwd)"
 ARMS="${ARMS:-dense lexical}"
 NOTE="${NOTE:-}"
 # Another case file, e.g. bench/dev-cases.jsonl: measured and recorded under its own arm name,
-# never graded -- see `bench::run` on which shapes carry floors.
+# never graded -- see `bench::run` on which shapes carry floors. A relative path is resolved
+# against the repo, not left to the caller's working directory: the script never cd's, so the
+# documented `CASES=bench/dev-cases.jsonl` would otherwise run from the repo root and nowhere
+# else.
 CASES="${CASES:-}"
+if [ -n "$CASES" ]; then
+  case "$CASES" in /*) ;; *) CASES="$REPO/$CASES" ;; esac
+fi
 OUT="$(mktemp -d)"
 trap 'rm -rf "$OUT"' EXIT
 

@@ -204,7 +204,7 @@ pub fn run(repo: &Path, cases: Option<&Path>, no_dense: bool, rerank: bool, rera
         // dense lists as a lexical-only run and grade it against the wrong floors.
         let width = e.dim()?;
         if dense_idx.dim > 0 && width != dense_idx.dim {
-            anyhow::bail!("the store's vectors are {}-d and {} gives {}-d — run `repograph embed`", dense_idx.dim, e.name(), width);
+            anyhow::bail!("{}", crate::index::embed::width_mismatch(dense_idx.dim, e.name(), width));
         }
     }
     let dense_on = !no_dense;

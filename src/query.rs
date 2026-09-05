@@ -83,8 +83,9 @@ fn lexical_lists(graph: &Graph, questions: &Questions, query: &str, depth: usize
         // questions read `where` 0/9 → 2/9 on the developer suite but held-out 103 → 97 and
         // 109 → 103, 0 gained and 6 lost in each arm, p = 0.031 (2026-09-05): five seats are the
         // budget the floors were set on, and a seat given to code is a document question's answer
-        // lost. Here the pool is 200 deep rather than five seats, so the list costs the reranking
-        // model candidates and not seeds; what it is worth to that model is unmeasured.
+        // lost. Here the pool is `--depth` deep (200 by default) rather than five seats, so the
+        // list costs the reranking model candidates and not seeds; what it is worth to that
+        // model is unmeasured.
         let code = LexicalIndex::build_code_questions(graph, questions).search(query, depth);
         if !code.is_empty() { pool.push(only_ids(code)); }
         return pool;
@@ -515,12 +516,21 @@ mod tests {
         qs.entries.insert("sym:apps/a.ts::revoke".into(), entry("как выйти со всех устройств"));
         qs.entries.insert("sym:apps/a.ts::revokeOne".into(), entry("как выйти с одного устройства"));
         // Every query word but one is a code question's, and the list would clear the gate the
-        // documents' list is held to: the plain fusion is the passages alone all the same.
-        let plain = lexical_lists(&g, &qs, "штраф выйти всех устройств", 10, false);
+        // documents' list is held to: the plain fusion is the passages alone all the same. The
+        // premise is asserted rather than asserted-by-comment, so a scoring change that made the
+        // code list weak would fail here instead of leaving the plain-path check passing for the
+        // wrong reason.
+        let query = "штраф выйти всех устройств";
+        let best = |l: &[(String, f32)]| l.first().map(|(_, s)| *s).unwrap_or(0.0);
+        let code_best = best(&LexicalIndex::build_code_questions(&g, &qs).search(query, 10));
+        let passages_best = best(&LexicalIndex::build(&g).search(query, 10));
+        assert!(code_best >= QUESTIONS_GATE * passages_best,
+            "the code list must clear the gate for this test to say anything: {code_best} against {passages_best}");
+        let plain = lexical_lists(&g, &qs, query, 10, false);
         assert_eq!(plain.len(), 1, "{plain:?}");
         assert_eq!(plain[0][0], "FR-PAY-22");
         // The pool is `depth` deep, not five seats, so the code list joins it whole and last.
-        let pool = lexical_lists(&g, &qs, "штраф выйти всех устройств", 10, true);
+        let pool = lexical_lists(&g, &qs, query, 10, true);
         assert_eq!(pool.len(), 3, "{pool:?}");
         assert_eq!(pool[2], vec!["sym:apps/a.ts::revoke".to_string(), "sym:apps/a.ts::revokeOne".to_string()]);
         // No word of either code question: the list is absent from the pool, not empty.
