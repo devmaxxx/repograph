@@ -483,13 +483,20 @@ that asks four Russian and four English questions per node and forbids repeating
 developer's question is «где проверяется, что запрос принадлежит нужному бизнесу», not
 `TenantContextInterceptor`. Entries carry a `c<n>` key in the prompt because the model, asked to
 copy a `sym:apps/api/src/…::AvailabilityService` id, copies its label instead — half the batches
-came back without a usable line before the key. The code questions join the two questions lists,
-BM25 and dense, and nothing else: a symbol's passage row stays its declaring line, and a file is a
+came back without a usable line before the key. The code questions are an index of their own,
+searched for the `--rerank` pool and nowhere else: the plain `ask` fusion is byte for byte the
+fusion of a store without them, a symbol's passage row stays its declaring line, and a file is a
 passage nowhere (its head comment in the passage index moved the BM25 statistics against paraphrase,
-15/30 → 13/30 on 2026-09-05) and is present through its questions alone. A store without code
-questions is therefore the old index byte for byte; `coverage` still counts documents, so the floors
-grade the same store the same way, and the summary line reports `code_questions=` beside it. What
-the questions buy is measured in [the developer-questions results](docs/bench/2026-09-05-dev-cases-results.md).
+15/30 → 13/30 on 2026-09-05) and is present through its questions alone. Why they are kept out of
+the plain fusion is measured, in three steps: inside the documents' questions index they lifted that
+index's average length until the gate admitted it over the passage that held the answer (keyword
+39/40 → 38/40 without embeddings); as a list of their own admitted last on the same 0.85 gate they
+took two document answers off the recorded suite; and capped at a single seat they read `where`
+0/9 → 2/9 on the developer suite and still lost six of 400 held-out questions in each arm, gaining
+none (p = 0.031). A store without code questions is therefore the old index byte for byte;
+`coverage` still counts documents, so the floors grade the same store the same way, and the summary
+line reports `code_questions=` beside it. What the questions buy, and what a seat for them costs, is
+measured in [the developer-questions results](docs/bench/2026-09-05-dev-cases-results.md).
 
 Two ways of spending them were measured and rejected: as extra dense rows pooled with the passages
 they bury targets (a passage at rank 2 fell to 87 behind other nodes' questions), and mixed into a
@@ -563,8 +570,11 @@ The floors are not one set of numbers but two, because [`enrich`](#spending-toke
 optional and paraphrase recall is what it buys. `bench` reads which state the store is in and says
 so on its summary line (`dense=true  enriched=true (1996/1996 nodes)`): a store carrying generated
 questions on at least 99% of its requirement-like nodes is graded against the enriched floors, any
-other — a fresh `build`, or a pass stopped early — against the raw ones. The bar is a high-water
-mark and not every node because equality over ~2 000 nodes is a cliff: one requirement added after
+other — a fresh `build`, or a pass stopped early — against the raw ones. A store that also carries
+questions about code prints `code_questions=covered/eligible` beside those fields and is graded by
+the same document floors: `enriched` counts documents alone, and the code questions are searched for
+the `--rerank` pool rather than in the fusion the floors measure. The bar is a high-water mark and
+not every node because equality over ~2 000 nodes is a cliff: one requirement added after
 the pass, one node the model skipped past its retry, one entry dropped on load would regrade a
 paid-for store to floors five paraphrase points lower, and `bench` says so only through its exit
 code. The printed counts stay exact either way.
