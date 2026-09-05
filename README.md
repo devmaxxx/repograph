@@ -609,7 +609,7 @@ code. The printed counts stay exact either way.
 **Keyword is 39, not 40, in both lexical-only arms.** `FR-PH-43` sits at passage rank 23 and no
 lexical path reaches it, enriched or raw. The enriched arm read **37/40** until 2026-09-05, losing
 `FR-WH-53` and `W-206` as well, because the generated-questions list took an equal turn in the
-fusion on questions it had nothing to say about; the gate described under [Enrichment](#enrichment)
+fusion on questions it had nothing to say about; the gate described under [Spending tokens on purpose](#spending-tokens-on-purpose)
 put it level with the raw store. The floor moved to 39 only once it was level — at 37 it stayed 40,
 because 37 was a cost enrichment itself imposed and a floor that blesses one is not a floor. The
 measurement is in [G7](docs/bench/next-version-gaps.md).
