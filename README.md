@@ -384,7 +384,7 @@ in full, not an empty config:
 | `enrich_command`     | headless `claude -p --model haiku` with thinking off — see [Spending tokens on purpose](#spending-tokens-on-purpose) |
 | `rerank_command`     | the same with `--model sonnet`                                                              |
 | `reranker_dir`       | directory of the exported cross-encoder for `--rerank-local`; empty = `~/.cache/repograph/reranker` |
-| `embed_model`        | `intfloat/multilingual-e5-small`; the model the vectors are written with — see [Embeddings](#embeddings) |
+| `embed_model`        | `intfloat/multilingual-e5-large`; the model the vectors are written with — see [Embeddings](#embeddings) |
 
 `id_families` and `milestone_families` default to the strict list `beauty-crm`'s census settled on —
 they are this project's development corpus, not a generic default. Every family is matched as
@@ -408,8 +408,9 @@ heading form; the modality is optional.
 
 ## Embeddings
 
-Dense retrieval embeds by default with `intfloat/multilingual-e5-small` (384-d, ONNX, ≈470 MB on disk) run
-through `ort` directly: the tokenizer and the session open concurrently at optimisation level 1,
+Dense retrieval embeds by default with `intfloat/multilingual-e5-large` (1024-d, ONNX, ≈2.1 GB on
+disk) run through `ort` directly: the tokenizer and the session open concurrently at optimisation
+level 1,
 which halves model-open time against the library default. The files are a one-time Hugging Face
 download cached under `FASTEMBED_CACHE_DIR` if that is set, else `~/.cache/repograph/fastembed`
 (the layout is the hub client's, so a cache populated by an earlier release is reused as is). Every
@@ -420,10 +421,12 @@ skips the download and the embedding stage everywhere.
 The model is a property of the store. `embed_model` in `repograph.toml` names what `build`,
 `update`, `enrich`, `embed` and `watch` write vectors with; `vectors.json` records it, and `ask`,
 `bench` and `dump` open the recorded one, so a store keeps answering with the model that wrote it
-whatever the configuration says today. A store written before the field existed is the small
-model's, and a reader treats it so; only `build`, `update`, `enrich`, `embed` and `watch` move a
-store to the configured model. Switching is one line and one `repograph embed`: rows another
-model wrote are dropped and the file rewritten. The claim is on width as well as name, so a store
+whatever the configuration says today. A store written before the field existed records no model
+at all, and every one of those is the small model's — a reader opens that one however the default
+moves afterwards, so a new default never silently reinterprets an index nobody re-embedded. Only
+`build`, `update`, `enrich`, `embed` and `watch` move a store to the configured model. Switching is
+one line and one `repograph embed`: rows another model wrote are dropped and the file rewritten.
+The claim is on width as well as name, so a store
 the earlier `REPOGRAPH_EMBED_MODEL` recipe left holding another model's rows under no recorded name
 is re-embedded whole by the next `embed` rather than relabelled over rows it never wrote.
 `REPOGRAPH_EMBED_MODEL=<hub id>` outranks both for one command, which is how a copy of a store is
@@ -432,17 +435,32 @@ beside it — `bench` and `dump` read the store as it stands and need neither: a
 refreshes claims the index for the model the override named, and at the same width that re-embeds
 the very rows being measured (a different width the guard refuses, and the answer is lexical-only).
 It is the caveat trap 7 of the [runbook](docs/bench/runbook.md) carries. Measured on the fixture,
-`intfloat/multilingual-e5-large` (1024-d, 2.1 GB download) reads paraphrase **22/30** against the
-small model's 15/30 with keyword 40/40 and code 12/12 unchanged, held-out 103 → 119 of 400 (+19 −3,
-p = 0.0009), at 0.8 s an `ask` against 0.55 s (the model opens in 676 ms against 418), 1.9 GB
-resident against 1.7, and 2,680 s to embed the corpus's 33,525 rows against ~103 s. The floors in
-[Bench](#bench) are the small model's; a store embedded by another model is measured against them,
-not graded by them, until floors of its own are set.
+the default reads paraphrase **22/30** against `intfloat/multilingual-e5-small`'s 15/30 with
+keyword 40/40 and code 12/12 unchanged, and held-out 103 → 119 of 400 (+19 −3, p = 0.0009). The
+small model is what that costs: an `ask` in 0.55 s against 0.8 s (the model opens in 418 ms against
+676), 1.7 GB resident against 1.9, a 470 MB download against 2.1 GB, and ~103 s to embed the
+corpus's 33,525 rows against 2,680 s. It is one line and one `repograph embed` away, and a store
+already on it keeps answering by it.
+
+Turning the dense stage off altogether is the step below that, and what it costs depends on which
+model it replaces. The lexical lists do not know what is configured, so `--no-dense` reads keyword
+39/40, paraphrase 14/30, code 12/12 on the fixture's enriched store either way. Against the small
+model's 40/40, 15/30, 12/12 that is two hits of eighty-two, for a 470 MB download and ~0.45 s an
+`ask` saved; against the default's 40/40, 22/30, 12/12 it is nine, for 2.1 GB and ~0.7 s. The dense
+stage earns its keep in proportion to the model behind it: on the small model it is worth one
+paraphrase and one keyword, which is why the model and the `--no-dense` switch are one decision
+rather than two.
+
+The floors in [Bench](#bench) were measured on the small model and have not been re-measured on the
+default. Only the two dense arms depend on the embedder at all, and the default clears them with
+room; until it has floors of its own, a green `bench` on a default store says less than a green one
+on a small-model store.
 
 `ask` opens the model only when a fused query needs it: an exact id or symbol lookup answers in
-~30 ms and ~50 MB, a fused query in ~0.4 s and ~1.4 GB — the model, not the graph; an exact-id
-lookup answers in ~50 ms and a `--no-dense` question in ~0.1 s, since neither opens the model or
-reads the vectors. `REPOGRAPH_TIMING=1` prints where an `ask` spends its time, stage by stage.
+~30 ms and ~50 MB, a fused query in ~0.8 s and ~1.9 GB on the default model — the model, not the
+graph, and ~0.55 s and ~1.4 GB on the small one; an exact-id lookup answers in ~50 ms and a
+`--no-dense` question in ~0.1 s, since neither opens the model or reads the vectors.
+`REPOGRAPH_TIMING=1` prints where an `ask` spends its time, stage by stage.
 
 Five embedding-side levers were measured on the same corpus and cases — on the fourteen-case set,
 and before `enrich`'s generated questions were in the index — and none moved recall past 6/14: the
@@ -451,10 +469,9 @@ set; `BGEM3` (1024-d, ≈2.1 GB) scores 5/14 at eleven times the embedding time 
 132 s); the quantized `ParaphraseMLMiniLML12V2Q` scores 2/14 and drops keyword to 21/24; raising
 the passage cut from 256 to 512 tokens scores 5/14 at double the embedding time; a second vector
 per node for the label alone, max-scored against the passage vector, scores 6/14 at 1.85× the
-embedding time. The small model at 256 tokens, one vector per node, stays the default. Model size
-alone was re-measured with the questions in the index, which is the paragraph above: `e5-large`
-reads paraphrase 22/30 against 15/30, and ships as a store option rather than as the default
-because it pays in latency, memory and a 2.1 GB download.
+embedding time. What none of them had was size: re-measured with the questions in the index, which
+is the paragraph above, `e5-large` reads paraphrase 22/30 against 15/30 and is the default. The
+passage cut stays at 256 tokens and the node keeps one vector.
 
 If the model can't be opened (no cache, no network), the two kinds of caller degrade differently, on
 purpose: `ask` and `update` fall back to lexical-only and print one line to stderr saying so, then

@@ -12,7 +12,13 @@ use ort::value::Tensor;
 use std::path::{Path, PathBuf};
 use tokenizers::{PaddingParams, PaddingStrategy, Tokenizer, TruncationParams};
 
-pub const DEFAULT_MODEL: &str = "intfloat/multilingual-e5-small";
+pub const DEFAULT_MODEL: &str = "intfloat/multilingual-e5-large";
+
+/// What a store that records no model at all was written with. Pinned to the name rather than to
+/// `DEFAULT_MODEL`: every store written before the field existed holds small-model rows, and that
+/// stays true however the default moves afterwards. Tying the two together would tell a reader
+/// that yesterday's 384-d store is today's default, and re-embed it whole to find out otherwise.
+pub const UNNAMED_MODEL: &str = "intfloat/multilingual-e5-small";
 
 /// The model a command opens: `REPOGRAPH_EMBED_MODEL` when set — a measurement's switch that
 /// outranks both files — else what the store's vectors were written with, else the configured
@@ -46,8 +52,9 @@ pub struct Embedder {
     dim: Option<usize>,
 }
 
-/// The `.fastembed_cache`-under-cwd default of the hub client re-downloads 470 MB per directory
-/// `repograph` is run from and fails outright on a read-only one.
+/// The `.fastembed_cache`-under-cwd default of the hub client re-downloads the model per
+/// directory `repograph` is run from — 2.1 GB for the default one — and fails outright on a
+/// read-only one.
 fn cache_dir() -> Result<PathBuf> {
     if let Some(dir) = std::env::var_os("FASTEMBED_CACHE_DIR") {
         return Ok(PathBuf::from(dir));
