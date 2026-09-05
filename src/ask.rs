@@ -333,4 +333,83 @@ mod tests {
         let exact = ctx.answer(&Request { words: vec!["FR-CAL-1".into()], ..req }).unwrap();
         assert!(exact.starts_with("FR-CAL-1"), "{exact}");
     }
+
+    /// The dense arm as a machine without the model has it, prepared once for the whole binary:
+    /// a cache in hf-hub's layout whose model file is 64 MB of nothing. The fetch is answered
+    /// from disk — at that size the weights are taken to be inside the file, so nothing is looked
+    /// up over the network — and the session then refuses to open it. Without this the two tests
+    /// below would download 470 MB, or open the model already on the machine and embed with it.
+    fn an_unopenable_model() {
+        static CACHE: std::sync::OnceLock<tempfile::TempDir> = std::sync::OnceLock::new();
+        CACHE.get_or_init(|| {
+            let dir = tempfile::tempdir().unwrap();
+            let root = dir.path().join("models--intfloat--multilingual-e5-small");
+            let snap = root.join("snapshots/abc");
+            std::fs::create_dir_all(root.join("refs")).unwrap();
+            std::fs::create_dir_all(snap.join("onnx")).unwrap();
+            std::fs::write(root.join("refs/main"), "abc").unwrap();
+            std::fs::File::create(snap.join("onnx/model.onnx")).unwrap().set_len(64 << 20).unwrap();
+            std::fs::write(snap.join("tokenizer.json"), "{}").unwrap();
+            std::fs::write(snap.join("config.json"), r#"{"pad_token_id": 1}"#).unwrap();
+            std::fs::write(snap.join("tokenizer_config.json"), r#"{"pad_token": "<pad>"}"#).unwrap();
+            // Process-wide, which is why it is set once behind the lock: no other test in this
+            // binary opens an embedder — the rest are `--no-dense`, and the fetch tests are
+            // handed their cache by argument.
+            std::env::set_var("FASTEMBED_CACHE_DIR", dir.path());
+            dir
+        });
+    }
+
+    /// A store with vectors, so `answer` takes the dense arm at all. The rows are invented:
+    /// nothing here searches them, because the model will not open.
+    fn vectors_beside_the_graph(repo: &Path) -> (PathBuf, PathBuf) {
+        let (json, raw) = (repo.join(".repograph/vectors.json"), repo.join(".repograph/vectors.f32"));
+        std::fs::write(&json, r#"{"ids":["FR-PAY-1"],"hashes":["h"],"kinds":[false],"dim":4,"model":""}"#).unwrap();
+        std::fs::write(&raw, [0u8; 16]).unwrap();
+        (json, raw)
+    }
+
+    fn fused(stale: bool) -> Request {
+        Request { words: vec!["штраф".into()], json: false, seeds: 5, bodies: false, rerank: false, rerank_local: false, depth: crate::rerank::DEPTH, stale, no_dense: false }
+    }
+
+    #[test]
+    fn a_stale_answer_leaves_the_resync_standing_for_the_answer_that_asked_for_a_refresh() {
+        let dir = repo_with_two_docs();
+        let cfg = crate::config::Config::load(dir.path()).unwrap();
+        let ex = crate::extractors(dir.path(), &cfg).unwrap();
+        crate::run_update(dir.path(), &cfg, &ex, true).unwrap();
+        let (json, raw) = vectors_beside_the_graph(dir.path());
+        an_unopenable_model();
+        // A change on disk, so the open below refreshes and leaves rows for a fused answer.
+        std::fs::write(dir.path().join("docs/new.md"), "**FR-PAY-2 · MUST · Возврат аванса**\n\nАванс возвращается при отмене салоном.\n").unwrap();
+        let mut ctx = Context::open(dir.path(), &cfg, false, false).unwrap();
+        assert!(ctx.resync.get(), "the refresh left rows the next fused answer has to embed");
+        let before = (std::fs::read(&json).unwrap(), std::fs::read(&raw).unwrap());
+        ctx.answer(&fused(true)).unwrap();
+        assert!(ctx.resync.get(), "a --stale answer embeds nothing and leaves the flag where it was");
+        assert_eq!((std::fs::read(&json).unwrap(), std::fs::read(&raw).unwrap()), before, "and writes no vectors");
+        ctx.answer(&fused(false)).unwrap();
+        assert!(!ctx.resync.get(), "the next answer that did ask for a refresh takes it");
+    }
+
+    #[test]
+    fn vectors_another_process_rewrote_are_dropped_rather_than_kept() {
+        let dir = repo_with_two_docs();
+        let cfg = crate::config::Config::load(dir.path()).unwrap();
+        let ex = crate::extractors(dir.path(), &cfg).unwrap();
+        crate::run_update(dir.path(), &cfg, &ex, true).unwrap();
+        let (_, raw) = vectors_beside_the_graph(dir.path());
+        an_unopenable_model();
+        let mut ctx = Context::open(dir.path(), &cfg, true, false).unwrap();
+        ctx.answer(&fused(true)).unwrap();
+        assert!(ctx.dense_idx.borrow().is_some(), "the fused answer loaded the vectors");
+        let w = crate::Watcher::open(dir.path(), &cfg).unwrap();
+        ctx.adopt(&w, None).unwrap();
+        assert!(ctx.dense_idx.borrow().is_some(), "vectors nobody rewrote are the ones already in hand");
+        // What an `embed` in another process leaves behind: the same file, different rows.
+        std::fs::write(&raw, [0u8; 32]).unwrap();
+        ctx.adopt(&w, None).unwrap();
+        assert!(ctx.dense_idx.borrow().is_none(), "the next fused answer reads them off disk instead");
+    }
 }

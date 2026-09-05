@@ -197,11 +197,17 @@ new `serve` binds over a dead file. The answer is the same bytes either way; tha
 all 142 recorded and developer bench questions in both arms.
 
 The server refreshes before every answer with the same walk a one-shot `ask` does, and polls
-between them like `watch`, so a resident answer is never staler than a fresh process's. Under
-`--stale` it skips that walk, as a one-shot does, but still reads the store back when another
-process has written it: `--stale` means the store as it is on disk, resident or not, and a
+between them like `watch`, so its **graph** is never staler than a fresh process's. Under
+`--stale` it skips that walk, as a one-shot does, but still reads the graph back when another
+process has written it: `--stale` means the stored graph as it is on disk, resident or not, and a
 `--stale` question embeds nothing and writes nothing either way. It answers one question at a
 time; a second client waits for the first rather than being turned away.
+
+Both of those reads are decided by `manifest.json`, so a running server does not see the two
+commands that leave it alone: `enrich`, which writes `questions.json`, and `embed`, which writes
+`vectors.*`. Run either against a repo with a `serve` on it and the resident answers keep the
+questions and the vectors they started with — stop the server, or ask with `--no-serve`, to answer
+from the new ones.
 
 The configuration is read once, at start-up. Editing `repograph.toml` stops the server after its
 next poll — the next `ask` answers in its own process under the new file, and a new `serve` starts
