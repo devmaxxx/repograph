@@ -22,6 +22,9 @@ pub struct DenseIndex {
     /// True for a generated-question row; stores written before enrichment existed have none.
     #[serde(default)] pub kinds: Vec<bool>,
     pub dim: usize,
+    /// Hub id of the model every row was embedded with. Empty in a store written before the
+    /// field existed — which only the small model ever wrote.
+    #[serde(default)] pub model: String,
     /// The dead rows, ascending. Left out of the file when there are none, so a store this
     /// binary wrote and never punched a hole in still reads in one that predates the field.
     #[serde(default, skip_serializing_if = "Vec::is_empty")] free: Vec<usize>,
@@ -37,11 +40,25 @@ pub struct DenseIndex {
 
 /// Every text embedded for a node, e5-prefixed. The passage is the node itself; each generated
 /// question is embedded as a query, since the reader's question is one too (e5's symmetric case).
+/// A file has no passage row — its head comment is for the prompt, not the index — and is
+/// present through its questions alone, once `enrich --code` has asked about it.
 fn rows(n: &crate::model::Node, questions: &Questions) -> Vec<String> {
-    let mut out = vec![format!("passage: {}\n{}", n.label, n.body)];
+    let mut out = Vec::new();
+    if n.kind != NodeKind::File { out.push(format!("passage: {}\n{}", n.label, n.indexed_body())); }
     out.extend(questions.get(&n.id).iter().map(|q| format!("query: {q}")));
     out
 }
+
+/// Which model a store's rows belong to, given the name it records and whether it holds rows at
+/// all. Rows with no name are the small model's — the only model that ever wrote an unnamed store
+/// — so a reader opens that whatever the configuration says, and no reader can move a store to
+/// another model. `None` is for a store with no rows for a name to be wrong about, where the
+/// configuration is free to choose.
+fn model_of(named: &str, has_rows: bool) -> Option<String> {
+    if !named.is_empty() { return Some(named.to_string()); }
+    has_rows.then(|| crate::index::embed::DEFAULT_MODEL.to_string())
+}
+
 fn normalise(v: &mut [f32]) {
     let norm = v.iter().map(|x| x * x).sum::<f32>().sqrt();
     if norm > 0.0 { for x in v { *x /= norm; } }
@@ -59,6 +76,42 @@ impl DenseIndex {
         store.has("vectors.json") && store.has("vectors.f32")
     }
 
+    /// The model a store's rows belong to, read from `vectors.json` without loading the rows —
+    /// what a reader opens. The configured model takes effect at the next `build`, `update`,
+    /// `enrich`, `embed` or `watch`, which rewrites the index whole.
+    pub fn recorded_model(store: &Store) -> Result<Option<String>> {
+        #[derive(serde::Deserialize)]
+        struct Written { #[serde(default)] model: String }
+        let Some(meta) = store.read_bytes("vectors.json")? else { return Ok(None) };
+        let w: Written = serde_json::from_slice(&meta).context("vectors.json")?;
+        // `has` stats the file rather than reading it: 50 MB of rows must not be loaded to learn
+        // whether there are any.
+        Ok(model_of(&w.model, store.has("vectors.f32")))
+    }
+
+    /// `recorded_model`'s answer for an index already in hand, so a reader that has loaded the
+    /// vectors does not parse a 3 MB `vectors.json` again to learn the same thing.
+    pub fn model_of_rows(&self) -> Option<String> {
+        model_of(&self.model, !self.ids.is_empty())
+    }
+
+    /// Claims the index for `model`, whose vectors are `dim` wide, before a sync. Rows another
+    /// model wrote cannot be appended to or compared against, and neither can rows of another
+    /// width: the name alone would miss a store the `REPOGRAPH_EMBED_MODEL` recipe left holding
+    /// wide rows under no name, where a claim by the small model's name matches, `sync` then
+    /// matches every row by hash and embeds nothing, and the store is recorded as the small
+    /// model's over rows it never wrote — a state no later `embed` could reach. Either mismatch
+    /// drops the rows and the file is rewritten from the new ones alone.
+    pub fn written_by(&mut self, model: &str, dim: usize) {
+        let held = if self.model.is_empty() { crate::index::embed::DEFAULT_MODEL } else { self.model.as_str() };
+        if !self.ids.is_empty() && (held != model || (self.dim > 0 && self.dim != dim)) {
+            self.ids.clear(); self.hashes.clear(); self.kinds.clear(); self.vectors.clear();
+            self.free.clear(); self.live.clear();
+            self.persisted = 0; self.dim = 0;
+        }
+        self.model = model.to_string();
+    }
+
     pub fn load(store: &Store) -> Result<DenseIndex> {
         let Some(meta) = store.read_bytes("vectors.json")? else { return Ok(DenseIndex::default()) };
         let mut idx: DenseIndex = serde_json::from_slice(&meta).context("vectors.json")?;
@@ -70,7 +123,10 @@ impl DenseIndex {
         let want = idx.ids.len() * idx.dim;
         if raw.len() / 4 < want {
             // A torn pair of files is treated as no index at all; the next sync rebuilds it.
-            return Ok(DenseIndex::default());
+            // The recorded name survives the empty index, though: dropped, the store would read
+            // as unnamed and a refreshing `ask` would rebuild it under the configured model
+            // rather than the one that wrote it.
+            return Ok(DenseIndex { model: idx.model, ..Default::default() });
         }
         // Anything past the last row the metadata names is what a crash between an append and
         // the metadata rename left: unreferenced, and overwritten by the next append.
@@ -120,7 +176,7 @@ impl DenseIndex {
         let mut todo_kinds = Vec::new();
         let old: std::collections::HashMap<(&str, &str), usize> =
             self.live.iter().map(|&i| ((self.ids[i].as_str(), self.hashes[i].as_str()), i)).collect();
-        for n in graph.nodes.values().filter(|n| n.kind != NodeKind::File) {
+        for n in graph.nodes.values() {
             for text in rows(n, questions) {
                 let hash = blake3::hash(text.as_bytes()).to_hex().to_string();
                 let is_q = text.starts_with("query: ");
@@ -251,6 +307,12 @@ mod tests {
         }).collect())
     }
 
+    /// The same stand-in two floats wider, for the claims that turn on the model's width rather
+    /// than its name.
+    fn fake_wide(texts: &[String]) -> Result<Vec<Vec<f32>>> {
+        Ok(fake(texts)?.into_iter().map(|mut v| { v.extend_from_slice(&[0.0, 1.0]); v }).collect())
+    }
+
     fn synced(g: &Graph) -> DenseIndex {
         let mut idx = DenseIndex::default();
         idx.sync(g, &Questions::default(), &mut fake).unwrap();
@@ -268,6 +330,95 @@ mod tests {
         g.remove_file("a.md");
         assert_eq!(idx.sync(&g, &Questions::default(), &mut fake).unwrap(), 0);
         assert!(idx.ids.is_empty() && idx.vectors.is_empty());
+    }
+
+    #[test]
+    fn rows_of_another_model_go_before_a_sync_and_the_same_model_keeps_them() {
+        let mut idx = synced(&graph("x"));
+        idx.written_by(crate::index::embed::DEFAULT_MODEL, 3);
+        assert_eq!(idx.ids.len(), 2, "an unnamed store is the small model's and is kept");
+        idx.written_by("intfloat/multilingual-e5-large", 3);
+        assert!(idx.ids.is_empty() && idx.vectors.is_empty() && idx.dim == 0, "another model's rows cannot be appended to");
+        assert_eq!(idx.model, "intfloat/multilingual-e5-large");
+        assert_eq!(idx.sync(&graph("x"), &Questions::default(), &mut fake).unwrap(), 2);
+        idx.written_by("intfloat/multilingual-e5-large", 3);
+        assert_eq!(idx.ids.len(), 2, "the same model keeps its rows");
+    }
+
+    #[test]
+    fn an_unnamed_store_of_another_width_is_emptied_though_the_name_matches() {
+        // What `REPOGRAPH_EMBED_MODEL=<hub id>` + `embed` left behind: another model's rows under
+        // no name at all. Claimed by name alone it would keep them, `sync` would match every row
+        // by hash and embed nothing, and the store would be recorded as the small model's over
+        // rows the small model never wrote — with no later `embed` able to reach it.
+        let mut idx = synced(&graph("x"));
+        assert_eq!((idx.dim, idx.model.as_str()), (3, ""));
+        idx.written_by(crate::index::embed::DEFAULT_MODEL, 3);
+        assert_eq!(idx.ids.len(), 2, "the same name at the same width appends");
+        idx.written_by(crate::index::embed::DEFAULT_MODEL, 5);
+        assert!(idx.ids.is_empty() && idx.vectors.is_empty() && idx.dim == 0,
+            "rows of another width cannot be appended to, whatever the name says");
+        assert_eq!(idx.sync(&graph("x"), &Questions::default(), &mut fake_wide).unwrap(), 2);
+        assert_eq!(idx.dim, 5);
+    }
+
+    #[test]
+    fn the_recorded_model_is_read_from_the_metadata_alone() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::new(dir.path());
+        let mut idx = synced(&graph("x"));
+        idx.written_by("intfloat/multilingual-e5-large", 3);
+        idx.sync(&graph("x"), &Questions::default(), &mut fake).unwrap();
+        idx.save(&store).unwrap();
+        assert_eq!(DenseIndex::recorded_model(&store).unwrap().as_deref(), Some("intfloat/multilingual-e5-large"));
+        assert_eq!(DenseIndex::load(&store).unwrap().model, "intfloat/multilingual-e5-large");
+    }
+
+    #[test]
+    fn a_torn_vectors_file_is_no_index_and_still_names_its_model() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::new(dir.path());
+        let mut idx = synced(&graph("x"));
+        idx.written_by("intfloat/multilingual-e5-large", 3);
+        idx.sync(&graph("x"), &Questions::default(), &mut fake).unwrap();
+        idx.save(&store).unwrap();
+        // A crash between the two writes leaves metadata naming more rows than the file holds.
+        // The rows are gone either way; the name must not be, or `ask` reads the store as
+        // unnamed, resolves to the configured model, and its resync rebuilds the index under a
+        // model the store never chose — a reader moving a store, which cannot happen.
+        store.write_atomic("vectors.f32", &[0u8; 4]).unwrap();
+        let torn = DenseIndex::load(&store).unwrap();
+        assert!(torn.ids.is_empty(), "a torn pair of files is no index at all");
+        assert_eq!(torn.model_of_rows().as_deref(), Some("intfloat/multilingual-e5-large"));
+    }
+
+    #[test]
+    fn an_unnamed_store_with_rows_reads_as_the_small_model_and_an_empty_one_as_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::new(dir.path());
+        assert_eq!(DenseIndex::recorded_model(&store).unwrap(), None, "nothing written yet");
+        // Saved without `written_by`, as every store written before the field existed was.
+        synced(&graph("x")).save(&store).unwrap();
+        assert_eq!(DenseIndex::recorded_model(&store).unwrap().as_deref(), Some(crate::index::embed::DEFAULT_MODEL),
+            "an unnamed store holds the small model's rows, so a reader opens the small model");
+        let mut idx = synced(&graph("x"));
+        idx.written_by("intfloat/multilingual-e5-large", 3);
+        idx.sync(&graph("x"), &Questions::default(), &mut fake).unwrap();
+        idx.save(&store).unwrap();
+        assert_eq!(DenseIndex::recorded_model(&store).unwrap().as_deref(), Some("intfloat/multilingual-e5-large"));
+    }
+
+    #[test]
+    fn a_file_has_no_passage_row_and_is_present_through_its_questions() {
+        let mut idx = DenseIndex::default();
+        assert_eq!(idx.sync(&graph("x"), &Questions::default(), &mut fake).unwrap(), 2, "two requirements, no row for the file");
+        let mut q = Questions::default();
+        q.entries.insert("file:a.md".into(), crate::enrich::Entry { hash: String::new(), questions: vec!["где список".into()] });
+        assert_eq!(idx.sync(&graph("x"), &q, &mut fake).unwrap(), 1);
+        let v = fake(&["query: где список".to_string()]).unwrap().remove(0);
+        let (passages, questions) = idx.search(&v, 3);
+        assert_eq!(questions[0], "file:a.md");
+        assert!(!passages.contains(&"file:a.md".to_string()));
     }
 
     #[test]

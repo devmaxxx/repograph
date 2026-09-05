@@ -96,7 +96,13 @@ enum Cmd {
         #[arg(long, default_value_t = 12)] batch: usize,
         #[arg(long, default_value_t = 8)] parallel: usize,
         #[arg(long)] limit: Option<usize>,
+        /// Also asks about code: symbols with a doc comment or a body, files with a head comment.
+        #[arg(long)] code: bool,
     },
+    /// Embeds every row the dense index lacks, without re-reading the tree: a store copied
+    /// without its vectors is re-embedded from its graph and questions alone, which is how a
+    /// store is measured under another `REPOGRAPH_EMBED_MODEL`.
+    Embed,
     Bench { #[arg(long)] cases: Option<PathBuf>, #[arg(long)] rerank: bool, #[arg(long, conflicts_with = "rerank")] rerank_local: bool, #[arg(long, default_value_t = rerank::DEPTH)] depth: usize },
     /// Writes every retriever's ranked list for each question in a JSONL file
     /// (`{"q","expect","kind"}` per line) so the mathematics can be done offline.
@@ -270,6 +276,7 @@ impl<'a> Watcher<'a> {
 /// Keeps the store in step with the tree for readers that do not refresh themselves.
 fn run_watch(repo: &std::path::Path, cfg: &config::Config, every: u64, batch: usize, no_dense: bool) -> anyhow::Result<()> {
     let mut w = Watcher::open(repo, cfg)?;
+    let model = index::embed::resolve(None, &cfg.embed_model);
     let mut embedder: Option<Option<index::embed::Embedder>> = None;
     let mut dense: Option<index::dense::DenseIndex> = None;
     let verbose = timing_on();
@@ -285,12 +292,13 @@ fn run_watch(repo: &std::path::Path, cfg: &config::Config, every: u64, batch: us
                 let mut embedded = 0;
                 // The model costs ~0.6 s and 1.3 GB to open, so it waits for the first change; the
                 // vectors then stay in memory, since every later refresh syncs them again.
-                if let Some(e) = embedder.get_or_insert_with(|| open_embedder(no_dense)).as_mut() {
+                if let Some(e) = embedder.get_or_insert_with(|| open_embedder(no_dense, &model)).as_mut() {
                     let idx = match dense {
                         Some(ref mut d) => d,
                         None => dense.insert(index::dense::DenseIndex::load(&w.store)?),
                     };
                     let questions = enrich::Questions::load(&w.store)?;
+                    idx.written_by(&model, e.dim()?);
                     embedded = idx.sync(&w.graph, &questions, &mut |texts| e.embed(texts))?;
                     if embedded > 0 { idx.save(&w.store)?; }
                 }
@@ -314,13 +322,15 @@ fn extractors(repo: &std::path::Path, cfg: &config::Config) -> anyhow::Result<Ex
     })
 }
 
-fn embed_all(repo: &std::path::Path, no_dense: bool) -> anyhow::Result<()> {
-    let Some(mut emb) = open_embedder(no_dense) else { return Ok(()) };
+fn embed_all(repo: &std::path::Path, no_dense: bool, configured: &str) -> anyhow::Result<()> {
+    let model = index::embed::resolve(None, configured);
+    let Some(mut emb) = open_embedder(no_dense, &model) else { return Ok(()) };
     let store = store::Store::new(repo);
     let (graph, _) = store.load()?;
     let questions = enrich::Questions::load(&store)?;
     let mut dense = index::dense::DenseIndex::load(&store)?;
     let t = std::time::Instant::now();
+    dense.written_by(&model, emb.dim()?);
     let n = dense.sync(&graph, &questions, &mut |texts| emb.embed(texts))?;
     dense.save(&store)?;
     println!("dense: embedded {n} rows in {:.1}s", t.elapsed().as_secs_f32());
@@ -346,9 +356,9 @@ impl Timing {
     }
 }
 
-fn open_embedder(no_dense: bool) -> Option<index::embed::Embedder> {
+fn open_embedder(no_dense: bool, model: &str) -> Option<index::embed::Embedder> {
     if no_dense { return None; }
-    match index::embed::Embedder::open() {
+    match index::embed::Embedder::open(model) {
         Ok(e) => Some(e),
         Err(err) => { eprintln!("dense: model unavailable, continuing lexical-only ({err:#})"); None }
     }
@@ -372,7 +382,8 @@ fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
     let repo = cli.repo.canonicalize()?;
     // Loaded per command: `bench` reads its own from `REPOGRAPH_BENCH_REPO`, and `explain`/`verify`
-    // must not fail on a broken `repograph.toml` they never read.
+    // must not fail on a broken `repograph.toml` they never read. `embed` does read it — the model
+    // the vectors are written with lives there — so it fails on a broken one like the other writers.
     let load_cfg = || config::Config::load(&repo);
     let wipe = matches!(cli.cmd, Cmd::Build);
     match cli.cmd {
@@ -380,18 +391,37 @@ fn main() -> anyhow::Result<()> {
             let cfg = load_cfg()?;
             let r = run_update(&repo, &cfg, &extractors(&repo, &cfg)?, wipe)?;
             println!("changed {} removed {} nodes {} edges {}", r.changed, r.removed, r.nodes, r.edges);
-            embed_all(&repo, cli.no_dense)
+            embed_all(&repo, cli.no_dense, &cfg.embed_model)
         }
-        Cmd::Enrich { batch, parallel, limit } => {
+        Cmd::Enrich { batch, parallel, limit, code } => {
             let cfg = load_cfg()?;
             let store = store::Store::new(&repo);
             let (graph, _) = store.load()?;
             if graph.nodes.is_empty() { anyhow::bail!("graph is empty — run `repograph build`"); }
             let questions = enrich::Questions::load(&store)?;
             let t = std::time::Instant::now();
-            let r = enrich::run(&store, &graph, questions, &cfg.enrich_command, batch, parallel, limit)?;
+            let r = enrich::run(&store, &graph, questions, &cfg.enrich_command, batch, parallel, enrich::Scope { limit, code })?;
             println!("enrich: {} nodes written, {} dropped, {} still without questions, {} batches ({} failed) in {:.0}s", r.generated, r.dropped, r.left, r.batches, r.failed, t.elapsed().as_secs_f32());
-            embed_all(&repo, cli.no_dense)
+            embed_all(&repo, cli.no_dense, &cfg.embed_model)
+        }
+        Cmd::Embed => {
+            let cfg = load_cfg()?;
+            // The one command that reaches `embed_all` without having just written the graph
+            // itself, so the check is here rather than in it: a sync against an empty graph
+            // marks every row dead and saves an index of nothing, and run before the first
+            // `build` it writes a `vectors.*` pair that makes `DenseIndex::present` true over
+            // no rows. `build`, `update` and `enrich` over a tree that yields nothing keep
+            // writing their empty graph and exiting 0.
+            let (graph, _) = store::Store::new(&repo).load()?;
+            if graph.nodes.is_empty() { anyhow::bail!("graph is empty — run `repograph build`"); }
+            if cli.no_dense {
+                // Otherwise this exits 0 having printed nothing at all, which reads exactly
+                // like an embed that found every row already in place.
+                println!("dense: nothing embedded, --no-dense is set");
+                Ok(())
+            } else {
+                embed_all(&repo, cli.no_dense, &cfg.embed_model)
+            }
         }
         Cmd::Ask { words, json, seeds, bodies, rerank, rerank_local, depth, stale } => {
             let timing = Timing::new();
@@ -419,16 +449,39 @@ fn main() -> anyhow::Result<()> {
             // query or `update`.
             let resync = std::cell::Cell::new(refreshed.is_some());
             let dense_fn = |q: &str, k: usize| -> (Vec<String>, Vec<String>) {
-                let mut slot = embedder.borrow_mut();
-                let e = slot.get_or_insert_with(|| { let e = open_embedder(cli.no_dense); timing.stage("model opened"); e });
+                // The vectors come first because they name the model: reading `vectors.json`
+                // again through `recorded_model` would parse 3 MB a second time for what the
+                // loaded index already holds.
                 let mut idx = dense_idx.borrow_mut();
                 let idx = idx.get_or_insert_with(|| {
                     let i = index::dense::DenseIndex::load(&store).unwrap_or_else(|err| { eprintln!("dense: index unreadable, continuing lexical-only ({err:#})"); Default::default() });
                     timing.stage("vectors loaded"); i
                 });
+                let mut slot = embedder.borrow_mut();
+                let e = slot.get_or_insert_with(|| {
+                    let model = index::embed::resolve(idx.model_of_rows().as_deref(), &cfg.embed_model);
+                    let e = open_embedder(cli.no_dense, &model);
+                    timing.stage("model opened");
+                    e
+                });
+                let qvec = e.as_mut().and_then(|e| e.query(q).ok());
+                // Decided before a single row is written: the resync below embeds and saves, so a
+                // store whose rows are not this model's width has to be refused here — after it,
+                // the notice would be an epitaph for the index the resync had already replaced.
+                if let (Some(v), Some(emb)) = (&qvec, e.as_ref()) {
+                    if idx.dim > 0 && v.len() != idx.dim {
+                        eprintln!("dense: {}; continuing lexical-only", index::embed::width_mismatch(idx.dim, emb.name(), v.len()));
+                        return (Vec::new(), Vec::new());
+                    }
+                }
                 if resync.replace(false) {
-                    if let Some(e) = e.as_mut() {
-                        match idx.sync(&graph, &questions, &mut |texts| e.embed(texts)) {
+                    if let Some(emb) = e.as_mut() {
+                        // A reader appends to the store's own rows and never re-embeds them into
+                        // another model's index: it claims the index for the model it opened, at
+                        // the width this very query just measured.
+                        let width = qvec.as_ref().map_or(idx.dim, |v| v.len());
+                        idx.written_by(emb.name(), width);
+                        match idx.sync(&graph, &questions, &mut |texts| emb.embed(texts)) {
                             Ok(0) => {}
                             Ok(n) => {
                                 if let Err(err) = idx.save(&store) { eprintln!("refresh: vectors not saved ({err:#})"); }
@@ -439,7 +492,7 @@ fn main() -> anyhow::Result<()> {
                         timing.stage("vectors synced");
                     }
                 }
-                let out = match e.as_mut().and_then(|e| e.query(q).ok()) { Some(v) => idx.search(&v, k), None => (Vec::new(), Vec::new()) };
+                let out = match qvec { Some(v) => idx.search(&v, k), None => (Vec::new(), Vec::new()) };
                 timing.stage("query embedded and searched");
                 out
             };

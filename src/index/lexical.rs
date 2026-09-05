@@ -24,7 +24,9 @@ pub fn tokenize(text: &str) -> Vec<String> {
     let lower = text.to_lowercase();
     let mut out = Vec::new();
     // Hyphens stay inside a token so `fr-pay-22` is one term; every other
-    // non-alphanumeric byte splits.
+    // non-alphanumeric byte splits. An identifier stays one term: splitting `revokeAllSessions`
+    // into its words was measured and seated no file while costing a paraphrase, because the
+    // identifiers quoted in every requirement's text lengthened those documents too.
     for raw in lower.split(|c: char| !(c.is_alphanumeric() || c == '-')) {
         let t = raw.trim_matches('-');
         if t.chars().count() < 2 { continue; }
@@ -41,17 +43,33 @@ pub fn tokenize(text: &str) -> Vec<String> {
 
 impl LexicalIndex {
     pub fn build(graph: &Graph) -> LexicalIndex {
-        Self::build_with(graph, |n| format!("{} {} {}", n.id, n.label, n.body))
+        Self::build_with(graph, |n| n.kind != NodeKind::File, |n| format!("{} {} {}", n.id, n.label, n.indexed_body()))
     }
 
-    /// The generated questions alone: mixed into the passage text they cost a keyword hit.
+    /// The documents' questions, and them alone: mixed into the passage text they cost a keyword
+    /// hit. A symbol is an id-only document here and a file is absent from the index altogether,
+    /// both as they were before `enrich --code` existed. The questions about code are an index of
+    /// their own because putting them here moved this one's BM25 statistics: 3,463 one-token
+    /// symbol documents became sixty-token ones, the average length rose, length normalisation
+    /// lifted every document's score by a quarter while the passage scores the gate compares
+    /// against stayed put, and a keyword case that had kept the questions list out at 0.80
+    /// admitted it at 1.03.
     pub fn build_questions(graph: &Graph, questions: &Questions) -> LexicalIndex {
-        Self::build_with(graph, |n| format!("{} {}", n.id, questions.get(&n.id).join(" ")))
+        Self::build_with(graph, |n| n.kind != NodeKind::File,
+                         |n| if n.is_code() { n.id.clone() } else { format!("{} {}", n.id, questions.get(&n.id).join(" ")) })
     }
 
-    fn build_with(graph: &Graph, text: impl Fn(&crate::model::Node) -> String + Sync) -> LexicalIndex {
+    /// The code nodes' questions — symbols and files `enrich --code` has asked about. A file is
+    /// a passage nowhere but is present here: the developer's "which file" question wants the
+    /// file itself.
+    pub fn build_code_questions(graph: &Graph, questions: &Questions) -> LexicalIndex {
+        Self::build_with(graph, |n| n.is_code() && !questions.get(&n.id).is_empty(),
+                         |n| format!("{} {}", n.id, questions.get(&n.id).join(" ")))
+    }
+
+    fn build_with(graph: &Graph, keep: impl Fn(&crate::model::Node) -> bool, text: impl Fn(&crate::model::Node) -> String + Sync) -> LexicalIndex {
         use rayon::prelude::*;
-        let nodes: Vec<_> = graph.nodes.values().filter(|n| n.kind != NodeKind::File).collect();
+        let nodes: Vec<_> = graph.nodes.values().filter(|n| keep(n)).collect();
         // Stemming is the cost — three quarters of a no-dense answer on a 7,500-node graph
         // when done one document at a time — and every document stems independently.
         let docs: Vec<(String, HashMap<String, u32>, f32)> = nodes.par_iter().map(|n| {
@@ -160,6 +178,30 @@ mod tests {
         let hits = LexicalIndex::build_questions(&g, &q).search("деньги уходят", 5);
         assert_eq!(hits.iter().map(|(id, _)| id.as_str()).collect::<Vec<_>>(), vec!["FR-PAY-26"]);
         assert!(LexicalIndex::build(&g).search("деньги уходят", 5).is_empty());
+    }
+
+    #[test]
+    fn code_questions_are_an_index_of_their_own_and_the_documents_index_keeps_a_symbol_as_its_id() {
+        let mut g = Graph::default();
+        let mut e = Extraction::default();
+        e.node(NodeKind::Requirement, "FR-PAY-22", "правило отмены", "штраф считается по политике отмены", "a.md", 1);
+        e.node(NodeKind::File, "file:apps/a.ts", "a.ts", "Sessions and their revocation.", "apps/a.ts", 1);
+        e.node(NodeKind::Symbol, "sym:apps/a.ts::revoke", "revoke", "Ends every session.\nrevoke() {}", "apps/a.ts", 3);
+        g.apply(e);
+        let mut q = Questions::default();
+        let entry = |t: &str| crate::enrich::Entry { hash: String::new(), questions: vec![t.into()] };
+        q.entries.insert("file:apps/a.ts".into(), entry("где выйти со всех устройств"));
+        q.entries.insert("sym:apps/a.ts::revoke".into(), entry("как завершить чужую сессию"));
+        let code = LexicalIndex::build_code_questions(&g, &q);
+        assert_eq!(code.search("выйти со всех устройств", 5)[0].0, "file:apps/a.ts");
+        assert_eq!(code.search("завершить сессию", 5)[0].0, "sym:apps/a.ts::revoke");
+        assert!(code.search("штраф", 5).is_empty());
+        let docs = LexicalIndex::build_questions(&g, &q);
+        assert!(docs.search("выйти устройств завершить сессию", 5).is_empty(), "code questions never enter the documents' index");
+        assert_eq!(docs.search("sym:apps/a.ts::revoke", 5)[0].0, "sym:apps/a.ts::revoke", "a symbol stays an id-only document there");
+        // The file's own id retrieves the symbol that shares its path tokens and never the file.
+        assert!(docs.search("file:apps/a.ts", 5).iter().all(|(id, _)| id != "file:apps/a.ts"), "a file is absent from the documents' index");
+        assert!(LexicalIndex::build(&g).search("revocation", 5).is_empty());
     }
 
     #[test]

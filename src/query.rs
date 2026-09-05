@@ -67,21 +67,36 @@ fn gate_from(override_: Option<&str>) -> f32 {
 /// an index of id-only documents is shorter than the passages and ranks an id-bearing term above
 /// the passage that carries it, so on a raw store the questions list would clear any gate for the
 /// wrong reason and cost a build per question to do it. On the reranked path both lists are
-/// admitted unconditionally: the fused order there is a candidate pool of `depth`, not five
-/// seats, so the questions list displaces nothing, and Amendment 2 measured it as what carries
-/// paraphrase targets into that pool.
+/// admitted unconditionally: the fused order there is a candidate pool `depth` deep rather than
+/// five seats, so a list there costs the reranking model candidates and not seeds, and Amendment 2
+/// measured the questions list as what carries paraphrase targets into that pool. The questions
+/// about code are a third list on the reranked path and on no other: the plain fusion's five seats
+/// were measured to be worth more to the documents than to them.
 fn lexical_lists(graph: &Graph, questions: &Questions, query: &str, depth: usize, reranked: bool) -> Vec<Vec<String>> {
     let only_ids = |scored: Vec<(String, f32)>| -> Vec<String> { scored.into_iter().map(|(id, _)| id).collect() };
     let passages = LexicalIndex::build(graph).search(query, depth);
     if questions.entries.is_empty() { return vec![only_ids(passages)]; }
     let generated = LexicalIndex::build_questions(graph, questions).search(query, depth);
-    if reranked { return vec![only_ids(passages), only_ids(generated)]; }
-    let best = |l: &[(String, f32)]| l.first().map(|(_, s)| *s).unwrap_or(0.0);
-    if best(&generated) >= questions_gate() * best(&passages) && best(&generated) > 0.0 {
-        vec![only_ids(generated), only_ids(passages)]
-    } else {
-        vec![only_ids(passages)]
+    if reranked {
+        let mut pool = vec![only_ids(passages), only_ids(generated)];
+        // Not on the plain path. Given a seat there instead — one, on the same gate — the code
+        // questions read `where` 0/9 → 2/9 on the developer suite but held-out 103 → 97 and
+        // 109 → 103, 0 gained and 6 lost in each arm, p = 0.031 (2026-09-05): five seats are the
+        // budget the floors were set on, and a seat given to code is a document question's answer
+        // lost. Here the pool is `--depth` deep (200 by default) rather than five seats, so the
+        // list costs the reranking model candidates and not seeds; what it is worth to that
+        // model is unmeasured.
+        let code = LexicalIndex::build_code_questions(graph, questions).search(query, depth);
+        if !code.is_empty() { pool.push(only_ids(code)); }
+        return pool;
     }
+    let best = |l: &[(String, f32)]| l.first().map(|(_, s)| *s).unwrap_or(0.0);
+    let floor = questions_gate() * best(&passages);
+    let admitted = |l: &[(String, f32)]| best(l) >= floor && best(l) > 0.0;
+    let mut lists = Vec::with_capacity(2);
+    if admitted(&generated) { lists.push(only_ids(generated)); }
+    lists.push(only_ids(passages));
+    lists
 }
 
 fn hit(graph: &Graph, id: &str, score: f32, via: Option<&str>) -> Option<Hit> {
@@ -489,6 +504,40 @@ mod tests {
     }
 
     #[test]
+    fn code_questions_reach_the_reranked_pool_and_never_the_plain_fusion() {
+        let mut g = Graph::default();
+        let mut e = Extraction::default();
+        e.node(NodeKind::Requirement, "FR-PAY-22", "правило отмены", "штраф считается по политике отмены", "a.md", 1);
+        e.node(NodeKind::Symbol, "sym:apps/a.ts::revoke", "revoke", "Ends every session.\nrevoke() {}", "apps/a.ts", 3);
+        e.node(NodeKind::Symbol, "sym:apps/a.ts::revokeOne", "revokeOne", "Ends one session.\nrevokeOne() {}", "apps/a.ts", 9);
+        g.apply(e);
+        let mut qs = Questions::default();
+        let entry = |t: &str| crate::enrich::Entry { hash: String::new(), questions: vec![t.into()] };
+        qs.entries.insert("sym:apps/a.ts::revoke".into(), entry("как выйти со всех устройств"));
+        qs.entries.insert("sym:apps/a.ts::revokeOne".into(), entry("как выйти с одного устройства"));
+        // Every query word but one is a code question's, and the list would clear the gate the
+        // documents' list is held to: the plain fusion is the passages alone all the same. The
+        // premise is asserted rather than asserted-by-comment, so a scoring change that made the
+        // code list weak would fail here instead of leaving the plain-path check passing for the
+        // wrong reason.
+        let query = "штраф выйти всех устройств";
+        let best = |l: &[(String, f32)]| l.first().map(|(_, s)| *s).unwrap_or(0.0);
+        let code_best = best(&LexicalIndex::build_code_questions(&g, &qs).search(query, 10));
+        let passages_best = best(&LexicalIndex::build(&g).search(query, 10));
+        assert!(code_best >= QUESTIONS_GATE * passages_best,
+            "the code list must clear the gate for this test to say anything: {code_best} against {passages_best}");
+        let plain = lexical_lists(&g, &qs, query, 10, false);
+        assert_eq!(plain.len(), 1, "{plain:?}");
+        assert_eq!(plain[0][0], "FR-PAY-22");
+        // The pool is `depth` deep, not five seats, so the code list joins it whole and last.
+        let pool = lexical_lists(&g, &qs, query, 10, true);
+        assert_eq!(pool.len(), 3, "{pool:?}");
+        assert_eq!(pool[2], vec!["sym:apps/a.ts::revoke".to_string(), "sym:apps/a.ts::revokeOne".to_string()]);
+        // No word of either code question: the list is absent from the pool, not empty.
+        assert_eq!(lexical_lists(&g, &qs, "штраф считается", 10, true).len(), 2);
+    }
+
+    #[test]
     fn the_gate_override_is_read_only_when_it_parses() {
         assert_eq!(gate_from(None), QUESTIONS_GATE);
         assert_eq!(gate_from(Some("0")), 0.0);
@@ -777,4 +826,3 @@ mod tests {
         assert_eq!(a.expanded[0].id, "FR-WEB-30");
     }
 }
-

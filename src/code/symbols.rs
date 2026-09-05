@@ -34,6 +34,54 @@ fn flatten(s: &str) -> String {
     s.lines().map(str::trim).filter(|l| !l.is_empty()).collect::<Vec<_>>().join(" ")
 }
 
+/// A doc comment is capped so a class's essay does not drown the signature terms that make
+/// the symbol findable by name; a file head gets twice that, being the module's own account.
+const DOC_CHARS: usize = 600;
+const HEAD_CHARS: usize = 1200;
+
+/// Comment text without its markers: the `/** … */` fences, a leading `*` per line, `//`.
+fn comment_text(raw: &str) -> String {
+    let inner = raw.trim().trim_start_matches("/**").trim_start_matches("/*").trim_end_matches("*/");
+    inner.lines()
+        .map(|l| l.trim().trim_start_matches("//").trim_start_matches('*').trim())
+        .filter(|l| !l.is_empty())
+        .collect::<Vec<_>>().join("\n")
+}
+
+fn cap(s: String, n: usize) -> String { s.chars().take(n).collect() }
+
+/// The comment block ending on the line before `n` starts. A comment left standing a blank
+/// line above is a section heading, not this declaration's account of itself, and stays out.
+fn doc_comment(n: Node, src: &[u8]) -> String {
+    let mut parts = Vec::new();
+    let mut next = n;
+    while let Some(prev) = next.prev_sibling() {
+        if prev.kind() != "comment" || prev.end_position().row + 1 < next.start_position().row { break; }
+        parts.push(comment_text(text(prev, src)));
+        next = prev;
+    }
+    parts.reverse();
+    cap(parts.join("\n"), DOC_CHARS)
+}
+
+/// The comments at the top of a file, before its first statement.
+fn file_head(root: Node, src: &[u8]) -> String {
+    let mut cur = root.walk();
+    let mut parts = Vec::new();
+    for c in root.named_children(&mut cur) {
+        if c.kind() != "comment" { break; }
+        parts.push(comment_text(text(c, src)));
+    }
+    cap(parts.join("\n"), HEAD_CHARS)
+}
+
+/// A symbol's body: what its author wrote about it, then the line that declares it. The
+/// signature alone made code reachable by name only; a prose question about what the code does
+/// needs the prose the code carries.
+fn with_doc(doc: &str, signature: &str) -> String {
+    if doc.is_empty() { signature.to_string() } else { format!("{doc}\n{signature}") }
+}
+
 fn unquote(s: &str) -> String {
     s.trim_matches(|c| c == '\'' || c == '"' || c == '`').to_string()
 }
@@ -125,10 +173,10 @@ impl SymbolScanner {
     pub fn scan(&self, rel: &str, source: &str) -> Extraction {
         let mut ex = Extraction::default();
         let file_id = format!("file:{rel}");
-        ex.node(NodeKind::File, &file_id, rel, "", rel, 1);
         let src = source.as_bytes();
-        let Some(tree) = parse(rel, src) else { return ex };
+        let Some(tree) = parse(rel, src) else { ex.node(NodeKind::File, &file_id, rel, "", rel, 1); return ex };
         let root = tree.root_node();
+        ex.node(NodeKind::File, &file_id, rel, &file_head(root, src), rel, 1);
         let mut cur = root.walk();
         for stmt in root.named_children(&mut cur) {
             match stmt.kind() {
@@ -195,6 +243,10 @@ impl SymbolScanner {
     /// Returns the symbol ids created at top level, so decorators on `export class` attach.
     fn declaration(&self, decl: Node, rel: &str, file_id: &str, src: &[u8], exported: bool, ex: &mut Extraction) -> Vec<String> {
         let ctx = if exported { "export" } else { "" };
+        // The doc comment precedes the statement as written — the `export` wrapper when there
+        // is one — not the declaration inside it.
+        let outer = decl.parent().filter(|p| p.kind() == "export_statement").unwrap_or(decl);
+        let doc = doc_comment(outer, src);
         // `declare const x` wraps the declaration it describes; `declare module 'm'` is not a
         // symbol of this file and falls through the default arm below with a quoted name.
         let decl = if decl.kind() == "ambient_declaration" { decl.named_child(0).unwrap_or(decl) } else { decl };
@@ -210,11 +262,12 @@ impl SymbolScanner {
             text(decl, src).lines().next().unwrap_or("").trim().to_string()
         };
         let signature = if exported && !signature.starts_with("export") { format!("export {signature}") } else { signature };
+        let body = with_doc(&doc, &signature);
         let mut created = Vec::new();
         let end = decl.end_position().row as u32 + 1;
         let mut declare = |name: &str, ex: &mut Extraction| -> String {
             let id = format!("sym:{rel}::{name}");
-            ex.node_span(NodeKind::Symbol, &id, name, &signature, rel, (line, end));
+            ex.node_span(NodeKind::Symbol, &id, name, &body, rel, (line, end));
             ex.edge(file_id, &id, EdgeKind::Declares, ctx, rel);
             created.push(id.clone());
             id
@@ -292,7 +345,8 @@ impl SymbolScanner {
             let class_name = class_id.rsplit("::").next().unwrap_or("");
             let id = format!("sym:{rel}::{class_name}.{name}");
             let signature = text(m, src).lines().find(|l| !l.trim_start().starts_with('@')).unwrap_or("").trim().to_string();
-            ex.node_span(NodeKind::Symbol, &id, &format!("{class_name}.{name}"), &signature, rel, (m.start_position().row as u32 + 1, m.end_position().row as u32 + 1));
+            let body = with_doc(&doc_comment(m, src), &signature);
+            ex.node_span(NodeKind::Symbol, &id, &format!("{class_name}.{name}"), &body, rel, (m.start_position().row as u32 + 1, m.end_position().row as u32 + 1));
             ex.edge(class_id, &id, EdgeKind::Declares, "", rel);
 
             // `method_definition`/`abstract_method_signature` have no `decorator` field of
@@ -520,7 +574,7 @@ mod tests {
         assert!(has(&ex, "file:packages/contracts/src/money.ts", "sym:packages/contracts/src/money.ts::asGrosze", EdgeKind::Declares, "export"));
         assert!(has(&ex, "file:packages/contracts/src/money.ts", "sym:packages/contracts/src/money.ts::internal", EdgeKind::Declares, ""));
         let n = ex.nodes.iter().find(|n| n.id.ends_with("::asGrosze")).unwrap();
-        assert_eq!(n.body, "export function asGrosze(v: number): number { return Math.round(v * 100); }");
+        assert_eq!(n.body, "Money in grosze; see FR-PAY-03 and INV-11.\nexport function asGrosze(v: number): number { return Math.round(v * 100); }");
     }
 
     fn inline(rel: &str, src: &str) -> Extraction {

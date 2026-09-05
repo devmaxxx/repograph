@@ -30,3 +30,7 @@ rerank_command = "MAX_THINKING_TOKENS=0 claude -p --model sonnet --output-format
 # `ask --rerank-local`: a local cross-encoder over the same 200-deep pool, zero tokens. Empty
 # means ~/.cache/repograph/reranker, where `optimum-cli export onnx` was pointed.
 reranker_dir = ""
+
+# A store records the model its vectors were written with and `ask` opens that one, so this key
+# decides only what new rows are written with, not what an existing store answers by.
+embed_model = "intfloat/multilingual-e5-small"

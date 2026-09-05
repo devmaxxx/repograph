@@ -17,6 +17,10 @@ G7 is the exception to both paragraphs above: it was raised after the 2026-09-04
 by it, by re-measuring the enriched store once `bench` began grading stores by state, so it
 carries a raised line where the others carry a status one.
 
+G9, G10 and G11 were raised on 2026-09-05 by the first run of the developer-questions suite and
+carry a **Verdict** line from the six levers measured against them the same day
+([results](2026-09-05-dev-cases-results.md)); G12, G13 and G14 were raised by those measurements.
+
 ---
 
 ## G1 · A third of a large blast radius is invisible — `changes` 27/38 symbols
@@ -305,18 +309,197 @@ significantly worse on the held-out set in either arm, and reads at least as wel
 
 ---
 
+## G9 · Code is unreachable from prose — `where` 0/9
+
+**Raised (2026-09-05)** by the first run of the developer-questions suite
+([results](2026-09-05-dev-cases-results.md)). Nine questions describe a behaviour and ask which
+file to edit; none reaches its file in either arm, and 12 of the 13 file anchors are absent from
+every lexical list 300 deep. The store said nothing about what code does: a symbol's text was its
+name and signature line, a file node had no text and was not indexed, and `enrich` asked about
+documents only. The `cross` kind reads the same hole from the requirement's side — 12/15 reach the
+requirement, 11 of 15 file anchors are absent.
+
+**Levers, measured in that document.** A1: doc comments and file heads become node bodies,
+files with a head are indexed, identifiers are indexed by their words — no tokens. A2: `enrich
+--code` generates questions about code through a prompt of its own — tokens, opt-in, and the
+`enriched` grading of documents unchanged. Each ships only on the rule written there: every
+recorded floor held in all four arms, held-out not significantly worse in either, dev-suite hits
+up in both arms with `where` above zero.
+
+**Verdict (2026-09-05):** **partly closed, and not in the plain `ask`.** Four levers were measured
+against that rule and all four were rejected. A1: the bodies in the passage index moved the BM25
+statistics and cost paraphrase, 15/30 → 13/30. A2: the code questions inside the documents'
+questions index lifted that index's average length, every questions score rose by about a quarter
+(`N-071` 9.01 → 11.57), and the gate admitted the questions list over the passage holding the
+answer — keyword 39/40 → 38/40 without embeddings, `where` 1/9. A3: the same questions as a list of
+their own, admitted last on the 0.85 gate, cost `FR-WH-53` and `FR-CRM-11` and lost six and seven
+held-out questions with none gained. A4: that list capped at one seat holds every floor and reads
+`where` 2/9, and still loses six held-out questions in each arm with none gained, p = 0.031. What
+ships is the machinery — doc comments and file heads extracted for the prompt and for display,
+`enrich --code` writing questions about 3,463 of 3,475 code nodes, and those questions in an index
+of their own that reaches the `ask --rerank` pool and never the plain fusion. `where` therefore
+stays 0/9 in the shipped configuration, and what would move it without taking a document seat is an
+admission rule that is not a ratio of two indices' raw scores — G12, with G13's table as what it is
+judged on.
+
+## G10 · Five seeds over three lists — the right answers that were ranked and not seated
+
+**Raised (2026-09-05)** by the same run. 31 missed anchors sit at rank ≤ 20 of some retriever
+list and are not among the five seeds, most of them `multi` siblings (`FR-STAFF-20/21/22`,
+`FR-PAY-22/25/26/27`, `FR-CAL-110/111/112`): a round-robin over three lists gives each list at
+most two seeds, so a list's third right answer never surfaces. Seven of the recorded suite's
+fifteen paraphrase misses have the same shape (rank 3–9 of their best list). More seeds was
+measured and rejected in ADR-001 (~1.5× tokens a step for about one hit); a fourth list (dense
+questions) was simulated over the dumps and rejected (paraphrase unchanged at every gate,
+keyword −1, held-out 102 → 92–96). What remains untried is seating by *agreement between
+lists* rather than by turn — an id two lists rank in their top ten ahead of an id one list ranks
+second — which ADR-001's first amendment rejected as RRF for a different reason (it buried a
+dense rank-2 target) and which a sibling-aware expansion could serve instead: when a seed's
+document neighbours are themselves ranked, name them on the expanded line. Gate: `multi` and
+`rule` up on the dev suite, the recorded suite unchanged, held-out not worse.
+
+**Verdict (2026-09-05):** **confirmed as the binding constraint, and priced.** A4 is the
+measurement this gap was missing: a fourth list, admitted only when it clears the gate and capped
+at a single seat, reads `where` 0/9 → 2/9 on the developer suite and loses six of 400 held-out
+questions in each arm with none gained (p = 0.031); uncapped (A3) it loses six and seven and takes
+`FR-WH-53` and `FR-CRM-11` off the recorded suite as well. Five seeds are the budget the recorded
+floors were set on, and any list that earns its turn displaces a document seed. Closed as measured,
+not as fixed: seating by agreement between lists, the one shape still untried, is what this gap
+asks for.
+
+## G11 · The embedder, for Russian paraphrase
+
+**Raised (2026-09-05)**, sharpened from ADR-001's first amendment. Eight of the recorded
+suite's fifteen paraphrase misses sit at rank 31+ in every list while the store's own generated
+questions for the target are near-synonyms of the query — «Где лежит короткий код на
+устройстве?» against «как хранится код доступа сотрудника» at dense-questions rank 209. That is
+`multilingual-e5-small`'s distance between two Russian paraphrases, and no fusion rule repairs it.
+The first amendment measured `e5-base` and `bge-m3` on fourteen cases without generated questions
+and found no gain; neither was measured with the question rows in the index, which is where a
+stronger model would show. Lever: `REPOGRAPH_EMBED_MODEL` re-embeds a store copy under another
+hub model; `multilingual-e5-large` is the one measured in the results document. Gate: the same
+three-way rule, dense arms only, plus query latency under a second.
+
+**Verdict (2026-09-05):** **closed for the dense arm, as an option.**
+`intfloat/multilingual-e5-large` on a copy of the fixture store reads paraphrase **22/30** against
+the small model's 15/30 — seven of the fifteen misses — with keyword 40/40, code 12/12, p90 224,
+the developer suite 37/60 and held-out 103 → 119 of 400 (+19 −3, p = 0.0009): the whole three-way
+rule, in the arm it applies to, and query latency still under a second. It ships as a property of
+the store — `embed_model` in `repograph.toml`, recorded in `vectors.json`, opened by every reader —
+with the default still the small model, because the cost is real: an `ask` at 0.8 s against 0.55 s,
+1.9 GB resident against 1.7, 2,680 s to embed 33,525 rows against ~103 s, and a 2.1 GB download
+([README](../../README.md#embeddings)). Nothing here reaches the `--no-dense` arm, which has no
+dense list to improve.
+
+## G12 · The gate compares raw BM25 scores across two indices
+
+**Raised (2026-09-05)** by A2. The questions gate — and the code gate A3 gave the code list — divides
+one index's best score by another index's best score. Each index normalises length against its own
+mean and weights terms by its own vocabulary, so a population change in one of them moves the ratio
+while nothing about the query, the answer or the fusion changes. A2 is the proof: 3,463 code nodes
+gaining questions turned one-token documents in the questions index into question-length ones, every
+questions score rose by about a quarter (`N-071` 9.01 → 11.57) while the passage scores stayed,
+`FR-WH-53`'s ratio moved 0.80 → 1.03, and the questions list was admitted over the passage that held
+the answer — keyword 39/40 → 38/40 in the `--no-dense` arm, on a change that added no document to
+that arm's passage index. G8 says the constant's *value* is a property of one store; this says the
+comparison itself is between two units.
+
+**Lever.** A normalised admission: each list's best as a fraction of what the query could attain in
+that index, or each list's best against its own *k*-th score, so the constant is a property of the
+query rather than of the store's populations. That is the same shape G8 asks for, and closing it
+would close G8 with it.
+
+**Gate.** The four arms reproduced exactly on this store (`40/40 15/30 12/12`, `39/40 14/30 12/12`,
+raw `40/40 9/30`, `39/40 7/30`, p90 ≤ 230), held-out not significantly worse in either arm, and the
+developer suite not down — then a second store, enriched to a different depth, reading the same
+admissions the ratio would have given it. Unmeasured.
+
+## G13 · Ten `where` anchors sit at code-list rank 1–9 and six are below the gate
+
+**Raised (2026-09-05)** by A3's dumps (`dump --queries`, `--no-dense` arm, 300 deep). The ratio is
+the code list's best BM25 score over the passage list's best for the same query; A3 admits the code
+list at 0.85, so a file anchor at code-list rank 1 with a ratio of 0.45 is never seated.
+
+| kind | file anchor | code-list rank | ratio | best code | best passage |
+|---|---|---|---|---|---|
+| cross | apps/api/src/modules/availability/booking-create.service.ts | 1 | 0.86 | 30.06 | 34.86 |
+| where | packages/domain/src/schedule/subjectAvailability.ts | 1 | 1.44 | 25.59 | 17.75 |
+| where | packages/domain/src/money/index.ts | 1 | 0.64 | 23.61 | 36.92 |
+| where | packages/db/src/schema/salon/catalog.ts | 1 | 0.99 | 28.28 | 28.69 |
+| where | apps/api/src/shared/audit/pii-read.ts | 1 | 0.45 | 21.21 | 46.79 |
+| cross | packages/ports/src/llm.ts | 1 | 0.65 | 24.30 | 37.38 |
+| cross | packages/db/src/auditChain.ts | 1 | 0.56 | 19.53 | 34.80 |
+| where | packages/contracts/src/money.ts | 2 | 0.64 | 23.61 | 36.92 |
+| cross | packages/ports/src/fiscal.ts | 3 | 0.60 | 22.86 | 38.04 |
+| where | apps/api/src/shared/audit/contact-access.repository.ts | 3 | 0.45 | 21.21 | 46.79 |
+| where | apps/api/src/modules/identity/identity.repository.ts | 5 | 0.84 | 22.26 | 26.58 |
+| where | apps/api/src/shared/db/database.service.ts | 6 | 0.90 | 22.69 | 25.28 |
+| cross | packages/domain/src/availability/segments.ts | 8 | 0.61 | 17.80 | 29.09 |
+| cross | apps/api/src/modules/sync/change-log-compaction.service.ts | 8 | 0.51 | 17.99 | 35.56 |
+| where | apps/api/src/shared/context/tenant-context.interceptor.ts | 8 | 0.90 | 22.69 | 25.28 |
+| where | apps/api/src/modules/identity/auth.service.ts | 9 | 0.84 | 22.26 | 26.58 |
+| cross | apps/api/src/modules/identity/totp.ts | 15 | 0.69 | 22.60 | 32.90 |
+| cross | packages/domain/src/availability/core.ts | 17 | 0.74 | 26.68 | 36.05 |
+| cross | packages/contracts/src/generated/permissions.ts | 19 | 0.42 | 17.22 | 40.71 |
+
+Ten `where` file anchors sit at code-list rank 1–9: four clear the gate (1.44, 0.99, 0.90, 0.90) and
+six sit below it at 0.45–0.84. The retrieval is not the problem — the code questions put those files
+at the top of their own list — the admission is. A lower gate for the code list is not the lever: it
+is a second constant chosen by looking at the developer suite, which is how a suite stops measuring
+anything. The honest form is G12's, and this table is what it would be judged on.
+
+**Gate.** `where` above 0/9 in both arms with every recorded floor held and held-out not
+significantly worse in either — the same three-way rule A2 to A4 were read against, which each of
+them failed. Not tried in this shape.
+
+## G14 · The enrichment prompt does not know the document's kind
+
+**Raised (2026-09-05)** by D1, the strongest paraphrase lever this campaign measured and one it did
+not ship. The documents' questions regenerated by sonnet instead of haiku — 1,996 nodes, 27,394
+questions at a median of 13 a node, 1,283 s, ≈ $13.62 estimated from characters against ≈ $2.50 on
+haiku — read paraphrase 17/30 and 16/30 against 15/30 and 14/30 and held-out 103 → 132 (+46 −17,
+p = 0.0003) and 109 → 128 (+45 −26, p = 0.032), both arms significantly better. It fails the third
+rule on one kind: the developer suite's `rule` questions go 5/9 → 2/9 in both arms — `ADR-005`,
+`ADR-031`, `INV-07` and `INV-10` lost, `ADR-003` gained — which takes the `--no-dense` arm 37 → 36
+and the whole lever out of the default.
+
+**Candidate cause, and the diagnostic is cheap.** `enrich` asks the same
+twelve-questions-plus-synonyms prompt of a requirement, an ADR and an invariant alike; the four
+answers lost are two ADRs and two invariants, and the one gained is an ADR. Read the sonnet and
+haiku questions for `ADR-005`, `ADR-031`, `INV-07` and `INV-10` side by side before designing
+anything: either the sonnet lines drift towards "where do I find this" where the case asks "is this
+allowed", or the cause is elsewhere and a per-kind prompt is the wrong lever.
+
+**Lever.** A prompt per node kind: for ADR and INV documents, questions of the "is this allowed /
+what forbids it" shape rather than "where do I find this". Measured under the same three-way rule,
+on the same generator, so the prompt and the model are not changed in one step. A larger model is
+not the next step — opus only if a kind-aware sonnet still falls short.
+
+**Gate.** `rule` back to 5/9 or better in both arms with the paraphrase and held-out gains kept, and
+the recorded floors held. Until then `ENRICH_COMMAND` stays haiku; `enrich_command` is per-store
+configuration, so a store that wants sonnet's paraphrase recall today can have it in one line of
+`repograph.toml`, at roughly five times the token cost.
+
+---
+
 ## Suggested order
 
 | | gap | why here |
 |---|---|---|
 | 1 | ~~**G7** the questions list's share of the seeds~~ | closed 2026-09-05 — gated on the ratio of the two lists' best scores, held-out p = 0.77, lexical-only arm at raw parity; the window (0.802, 0.866] is recorded above, corrected from the 0.85–0.90 first published |
-| 5 | **G8** the questions gate is a constant of one store | a scale-free form of the same gate; measured on the held-out set first, then on both suites |
-| 2 | **G5** rank + MRR | a scoring change over rows that already exist, and G2 cannot be argued without it |
-| 3 | **G1** unparsed files get a file node | the largest missing share of a real answer, and the fix is language-independent |
-| 4 | **G3** the three impact diagnostics | three files to read; it either finds a bug or writes an honest caveat |
-| 5 | **G4** grow the blast set | must land before G1's and G6's changes are judged on it |
-| 6 | **G2** measure `bge-reranker-v2-m3` | the one unmeasured retrieval lever; everything cheaper is already rejected |
-| 7 | **G6** a case file per new corpus | ships with the 0.6.0 languages, not after them |
+| 2 | **G8** the questions gate is a constant of one store | a scale-free form of the same gate; measured on the held-out set first, then on both suites |
+| 3 | **G12** the gate compares raw BM25 scores across two indices | the admission, not the retrieval, is what keeps `where` at 0/9 and what moved under A2; a scoring change over lists that already exist, no tokens, and it closes G8 with it |
+| 4 | **G14** the prompt does not know the document's kind | the paraphrase and held-out gains are already measured (+2/+2 recorded, +29/+19 held-out); a prompt per kind costs one `enrich` (≈ $13.62 on sonnet) and is judged on `rule` coming back to 5/9 |
+| 5 | **G13** ten `where` anchors ranked and gated out | the table G12 would be judged on; reading it again after a gate change is free, and on its own it buys nothing |
+| — | ~~**G9** code is unreachable from prose~~ | measured 2026-09-05 — A1 to A4 each rejected by the rule; the code questions ship into an index of their own for the `ask --rerank` pool, `where` stays 0/9 in the plain fusion, and G12 is what would move it |
+| — | ~~**G10** five seeds over three lists~~ | measured 2026-09-05 — A4 prices one seat for a fourth list at 6 held-out questions in each arm, none gained, p = 0.031; closed as measured, not as fixed |
+| — | ~~**G11** the embedder for Russian paraphrase~~ | shipped 2026-09-05 as a store option — e5-large reads paraphrase 22/30 and held-out 103 → 119, at 0.8 s an `ask` and a 2.1 GB download; the default stays the small model |
+| — | ~~**G5** rank + MRR~~ | closed by Task 1 (2026-09-04) — every retrieval row carries `rank`, the summary carries `mrr`, and the run reads 0.635; the 2026-09-03 rows cannot be rescored |
+| 6 | **G1** unparsed files get a file node | the file half is closed by Task 2 (2026-09-04) against a `code_files` denominator; the symbol half is 57 Kotlin declarations and waits on 0.6.0's extractor |
+| — | ~~**G3** the three impact diagnostics~~ | closed by Tasks 3 and 4 (2026-09-04) — 123/123 files over 16 targets, mean recall 1.0 |
+| — | ~~**G4** grow the blast set~~ | closed by Task 5 (2026-09-04) — `blast.jsonl` is 32 cases and the per-suite decision rule is written down before the changes judged on it |
+| 7 | **G2** fourteen paraphrases a neighbour away | the lever this row named is measured and rejected (2026-09-04): `--rerank-local` reads 17/30 against a control of 15/30, at 17.9 s a question; the gap stays open with nothing cheaper left to try |
+| 8 | **G6** a case file per new corpus | the `impact` third is a written baseline (2026-09-04); `trace` and `changes` ship with the 0.6.0 languages, not after them |
 
 ## What is explicitly not on this list
 
@@ -324,8 +507,11 @@ significantly worse on the held-out set in either arm, and reads at least as wel
   the shipped bench from 40/15/12 to 38/16/12. Rolled back, and ADR-001's reasoning
   says why more concept nodes do not help a question that shares no stem with its
   target.
-- **More seeds, wider hops, a different E5 size.** All measured in ADR-001 and its
-  amendments; each buys about one hit and pays in the token budget the bench exists to
-  protect.
+- **More seeds and wider hops.** Both measured in ADR-001 and its amendments; each buys about one
+  hit and pays in the token budget the bench exists to protect. **A different E5 size** was on this
+  list for the same reason and is no longer: `e5-base` and `bge-m3` were measured without generated
+  questions in the index, and re-measuring the size with them — G11, 2026-09-05 — read paraphrase
+  22/30 against 15/30 and held-out 103 → 119. It pays in latency, memory and a 2.1 GB download
+  rather than in tokens, which is why it ships as a store option and not as the default.
 - **Query rewriting by a model.** Measured at paraphrase 6/14 with keyword falling to
   20/24, and rejected.

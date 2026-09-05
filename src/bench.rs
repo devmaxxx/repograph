@@ -8,27 +8,90 @@ use crate::query::{self, Answer, Options};
 use crate::store::Store;
 use anyhow::{Context, Result};
 use serde::Deserialize;
+use std::collections::HashSet;
 use std::path::Path;
 
+/// What a case expects the answer to reach: one node id or file path, or several when the
+/// honest answer to the question is more than one place.
 #[derive(Debug, Deserialize)]
-pub struct Case { pub kind: String, pub q: String, pub expect: String }
+#[serde(untagged)]
+pub enum Expect { One(String), Many(Vec<String>) }
 
-#[derive(Clone, Debug, Default)]
-pub struct Summary { pub keyword: (usize, usize), pub paraphrase: (usize, usize), pub code: (usize, usize), pub p90_tokens: usize }
-
-pub fn hit(case: &Case, answer: &Answer) -> bool {
-    let all = answer.seeds.iter().chain(answer.expanded.iter());
-    if case.kind == "code" {
-        return answer.seeds.iter().any(|h| h.file == case.expect);
+impl Expect {
+    pub fn anchors(&self) -> &[String] {
+        match self { Expect::One(a) => std::slice::from_ref(a), Expect::Many(v) => v }
     }
-    all.into_iter().any(|h| h.id == case.expect)
+
+    /// The per-case line and the history key: anchors joined by `+`, a character neither an
+    /// id nor a path contains.
+    pub fn key(&self) -> String { self.anchors().join("+") }
+}
+
+impl From<&str> for Expect {
+    fn from(a: &str) -> Self { Expect::One(a.to_string()) }
+}
+
+#[derive(Debug, Deserialize)]
+pub struct Case { pub kind: String, pub q: String, pub expect: Expect }
+
+/// Hits per kind, in the order the case file introduces the kinds, so the summary line reads
+/// in the order a person wrote the file.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Summary { pub by_kind: Vec<(String, (usize, usize))>, pub p90_tokens: usize }
+
+impl Summary {
+    #[cfg(test)]
+    pub fn recorded(keyword: (usize, usize), paraphrase: (usize, usize), code: (usize, usize), p90_tokens: usize) -> Summary {
+        let by_kind = vec![("keyword".to_string(), keyword), ("paraphrase".to_string(), paraphrase), ("code".to_string(), code)];
+        Summary { by_kind, p90_tokens }
+    }
+
+    /// `(hits, cases)` for one kind; a kind the file never named reads `(0, 0)`.
+    pub fn kind(&self, kind: &str) -> (usize, usize) {
+        self.by_kind.iter().find(|(k, _)| k == kind).map(|(_, c)| *c).unwrap_or((0, 0))
+    }
+
+    #[cfg(test)]
+    pub fn with(mut self, kind: &str, count: (usize, usize)) -> Summary {
+        *self.slot(kind) = count;
+        self
+    }
+
+    fn slot(&mut self, kind: &str) -> &mut (usize, usize) {
+        if let Some(i) = self.by_kind.iter().position(|(k, _)| k == kind) { return &mut self.by_kind[i].1; }
+        self.by_kind.push((kind.to_string(), (0, 0)));
+        &mut self.by_kind.last_mut().unwrap().1
+    }
+}
+
+/// How many of the case's anchors the answer reaches, over how many it has. An anchor that
+/// names a node counts anywhere in the answer, seeds or expansion; a file path counts only
+/// among the seeds, as `code` cases always have — the expansion names neighbours, and a file
+/// reached only as the neighbour of the wrong seed is not a file the developer was pointed at.
+/// `is_id` is the graph's knowledge of which strings are node ids, so the case file never has
+/// to say which shape an anchor has.
+pub fn found(case: &Case, answer: &Answer, is_id: &dyn Fn(&str) -> bool) -> (usize, usize) {
+    let anchors = case.expect.anchors();
+    let reached = anchors.iter().filter(|a| {
+        if is_id(a) {
+            answer.seeds.iter().chain(answer.expanded.iter()).any(|h| &h.id == *a)
+        } else {
+            answer.seeds.iter().any(|h| &h.file == *a)
+        }
+    }).count();
+    (reached, anchors.len())
+}
+
+/// One anchor reached is a hit: the developer has an entry point. `found` says how complete it was.
+pub fn hit(case: &Case, answer: &Answer, is_id: &dyn Fn(&str) -> bool) -> bool {
+    found(case, answer, is_id).0 >= 1
 }
 
 pub fn passes(s: &Summary, dense: bool, enriched: bool) -> bool {
     // Every floor is the number the recorded cases measure; only the token ceiling is rounded,
     // up to the next ten, and the four p90s (220 to 226) fit under that one. A count equal to
-    // its total is an exact floor: `run` refuses a case file that is not 40/30/12 before any of
-    // this is read.
+    // its total is an exact floor: `run` grades against these only when the case file has the
+    // recorded 40/30/12 shape.
     //
     // `enrich` spends model tokens and is optional, so the store it has never touched is graded
     // on what it reads rather than on what the enriched store calibrated: paraphrase measures 9
@@ -51,16 +114,55 @@ pub fn passes(s: &Summary, dense: bool, enriched: bool) -> bool {
         (false, true) => (40, 9),
         (false, false) => (39, 7),
     };
-    s.keyword.0 >= keyword && s.paraphrase.0 >= paraphrase && s.code.0 >= 12 && s.p90_tokens <= 230
+    s.kind("keyword").0 >= keyword && s.kind("paraphrase").0 >= paraphrase && s.kind("code").0 >= 12 && s.p90_tokens <= 230
 }
 
 // The recorded cases travel inside the binary so a release build benches from any directory.
 const BUILT_IN_CASES: &str = include_str!("../bench/cases.jsonl");
 
+/// The shape the floors were measured on. A file of this shape is graded; any other file is
+/// measured and reported, and its exit code claims nothing.
+const RECORDED_SHAPE: [(&str, usize); 3] = [("keyword", 40), ("paraphrase", 30), ("code", 12)];
+
 fn parse_cases(text: &str) -> Result<Vec<Case>> {
     text.lines().filter(|l| !l.trim().is_empty())
         .map(|l| serde_json::from_str::<Case>(l).map_err(anyhow::Error::from))
         .collect()
+}
+
+/// Kinds in order of first appearance, each with its count.
+fn shape(cases: &[Case]) -> Vec<(String, usize)> {
+    let mut out: Vec<(String, usize)> = Vec::new();
+    for c in cases {
+        match out.iter_mut().find(|(k, _)| *k == c.kind) {
+            Some((_, n)) => *n += 1,
+            None => out.push((c.kind.clone(), 1)),
+        }
+    }
+    out
+}
+
+fn is_recorded_shape(cases: &[Case]) -> bool {
+    let mut got = shape(cases);
+    got.sort();
+    let mut want: Vec<(String, usize)> = RECORDED_SHAPE.iter().map(|(k, n)| (k.to_string(), *n)).collect();
+    want.sort();
+    got == want
+}
+
+/// Every anchor must be a node id or a file some node declares. A mistyped anchor would
+/// otherwise score as a miss for as long as nobody read the transcript, and a weak spot that is
+/// really a typo is the one kind this suite must not report.
+fn check_anchors(cases_path: &str, cases: &[Case], graph: &Graph) -> Result<()> {
+    let files: HashSet<&str> = graph.nodes.values().map(|n| n.file.as_str()).collect();
+    for c in cases {
+        for a in c.expect.anchors() {
+            if !graph.nodes.contains_key(a) && !files.contains(a.as_str()) {
+                anyhow::bail!("{cases_path}: {:?} expects {a:?}, which is neither a node id nor a file any node declares", c.q);
+            }
+        }
+    }
+    Ok(())
 }
 
 pub fn run(repo: &Path, cases: Option<&Path>, no_dense: bool, rerank: bool, rerank_local: bool, depth: usize) -> Result<bool> {
@@ -77,14 +179,19 @@ pub fn run(repo: &Path, cases: Option<&Path>, no_dense: bool, rerank: bool, rera
     // The threshold decides the floors; the counts printed on the summary line stay exact.
     let (covered, eligible) = coverage(&graph, &questions);
     let enriched = enrich::enriched(covered, eligible);
+    // Code questions are a configuration of their own and the summary line says so; the floors
+    // read `enriched`, which counts documents alone.
+    let (code_covered, code_eligible) = enrich::code_coverage(&graph, &questions);
+    let code_note = if code_covered > 0 { format!(" code_questions={code_covered}/{code_eligible}") } else { String::new() };
     // `ask` degrading to lexical-only on a missing model is fine — a person reading the answer
     // sees the stderr notice and can judge it. `bench` speaks only through its exit code, so a
     // dense run that silently falls back and then grades against the weaker no-dense floor
     // would report green without ever having checked what it claims to check.
-    let embedder = if no_dense {
+    let mut embedder = if no_dense {
         None
     } else {
-        match Embedder::open() {
+        let model = crate::index::embed::resolve(DenseIndex::recorded_model(&store)?.as_deref(), &cfg.embed_model);
+        match Embedder::open(&model) {
             Ok(e) => Some(e),
             Err(err) => anyhow::bail!("dense: model unavailable ({err:#})"),
         }
@@ -92,32 +199,40 @@ pub fn run(repo: &Path, cases: Option<&Path>, no_dense: bool, rerank: bool, rera
     if !no_dense && dense_idx.ids.is_empty() {
         anyhow::bail!("dense index is empty at {} — run `repograph update` first", repo.display());
     }
+    if let Some(e) = embedder.as_mut() {
+        // A bench that silently searched 384-d queries against 1024-d rows would read empty
+        // dense lists as a lexical-only run and grade it against the wrong floors.
+        let width = e.dim()?;
+        if dense_idx.dim > 0 && width != dense_idx.dim {
+            anyhow::bail!("{}", crate::index::embed::width_mismatch(dense_idx.dim, e.name(), width));
+        }
+    }
     let dense_on = !no_dense;
     let embedder = std::cell::RefCell::new(embedder);
     let dense_fn = |q: &str, k: usize| -> (Vec<String>, Vec<String>) {
         let mut e = embedder.borrow_mut();
         match e.as_mut().and_then(|e| e.query(q).ok()) { Some(v) => dense_idx.search(&v, k), None => (Vec::new(), Vec::new()) }
     };
-    let (cases_path, text) = match cases {
-        Some(p) => (p.display().to_string(), std::fs::read_to_string(p).with_context(|| p.display().to_string())?),
-        None => ("built-in bench/cases.jsonl".to_string(), BUILT_IN_CASES.to_string()),
+    let built_in = cases.is_none();
+    let (cases_path, suite, text) = match cases {
+        Some(p) => {
+            let suite = p.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_else(|| p.display().to_string());
+            (p.display().to_string(), suite, std::fs::read_to_string(p).with_context(|| p.display().to_string())?)
+        }
+        None => ("built-in bench/cases.jsonl".to_string(), "built-in".to_string(), BUILT_IN_CASES.to_string()),
     };
     let cases: Vec<Case> = parse_cases(&text)?;
-    for c in &cases {
-        if !matches!(c.kind.as_str(), "keyword" | "paraphrase" | "code") {
-            anyhow::bail!("unrecognised case kind {:?} (expect {:?})", c.kind, c.expect);
-        }
+    if cases.is_empty() { anyhow::bail!("{cases_path} holds no cases"); }
+    // The recorded case set is a constant, not an input: a truncated or edited copy of it would
+    // otherwise still pass, since every floor is relative to whatever total showed up. Another
+    // file is another suite — measured, printed, never graded against floors it did not earn.
+    let gated = is_recorded_shape(&cases);
+    if built_in && !gated {
+        let got = shape(&cases).iter().map(|(k, n)| format!("{n} {k}")).collect::<Vec<_>>().join(" / ");
+        anyhow::bail!("{cases_path} has {got} cases, expected 40 keyword / 30 paraphrase / 12 code");
     }
-    // The recorded case set is a constant, not an input: a truncated or edited file would
-    // otherwise still pass, since every floor below is relative to whatever total showed up.
-    let (kw, pf, cd) = (
-        cases.iter().filter(|c| c.kind == "keyword").count(),
-        cases.iter().filter(|c| c.kind == "paraphrase").count(),
-        cases.iter().filter(|c| c.kind == "code").count(),
-    );
-    if (kw, pf, cd) != (40, 30, 12) {
-        anyhow::bail!("{cases_path} has {kw} keyword / {pf} paraphrase / {cd} code cases, expected 40/30/12");
-    }
+    check_anchors(&cases_path, &cases, &graph)?;
+    let is_id = |a: &str| graph.nodes.contains_key(a);
     let opts = Options { seeds: 5, bodies: false, dense: dense_on, json: false, depth };
     let rerank_fn = |q: &str, c: &[(String, String)]| crate::rerank::run(&cfg.rerank_command, q, c);
     let cross = std::cell::RefCell::new(if rerank_local {
@@ -143,21 +258,23 @@ pub fn run(repo: &Path, cases: Option<&Path>, no_dense: bool, rerank: bool, rera
         let rendered = query::render(&answer, &graph, &opts);
         let tok = rendered.len() / 4;
         tokens.push(tok);
-        let ok = hit(case, &answer);
-        let slot = match case.kind.as_str() { "keyword" => &mut summary.keyword, "paraphrase" => &mut summary.paraphrase, _ => &mut summary.code };
+        let (reached, want) = found(case, &answer, &is_id);
+        let ok = hit(case, &answer, &is_id);
+        let slot = summary.slot(&case.kind);
         slot.1 += 1;
         if ok { slot.0 += 1; }
-        println!("{:<10} {:<12} {} {:>4} tok  {}", case.kind, case.expect, if ok { "HIT " } else { "miss" }, tok, case.q);
+        println!("{:<10} {:<12} {} {reached}/{want} {:>4} tok  {}", case.kind, case.expect.key(), if ok { "HIT " } else { "miss" }, tok, case.q);
     }
     tokens.sort_unstable();
     summary.p90_tokens = tokens.get(tokens.len() * 9 / 10).copied().unwrap_or(0);
-    println!("\nkeyword {}/{}  paraphrase {}/{}  code {}/{}  p90 {} tok  dense={dense_on}  enriched={enriched} ({covered}/{eligible} nodes){}",
-        summary.keyword.0, summary.keyword.1, summary.paraphrase.0, summary.paraphrase.1, summary.code.0, summary.code.1, summary.p90_tokens, match (rerank_local, rerank.is_some()) {
+    let counts = summary.by_kind.iter().map(|(k, (h, t))| format!("{k} {h}/{t}")).collect::<Vec<_>>().join("  ");
+    println!("\n{counts}  p90 {} tok  dense={dense_on}  enriched={enriched} ({covered}/{eligible} nodes){code_note}{}  suite={suite} gated={gated}",
+        summary.p90_tokens, match (rerank_local, rerank.is_some()) {
             (true, _) => format!(" rerank_local=true depth={depth}"),
             (false, true) => format!(" rerank=true depth={depth}"),
             _ => String::new(),
         });
-    Ok(passes(&summary, dense_on, enriched))
+    Ok(!gated || passes(&summary, dense_on, enriched))
 }
 
 #[cfg(test)]
@@ -167,27 +284,114 @@ mod tests {
 
     fn h(id: &str, file: &str) -> Hit { Hit { id: id.into(), file: file.into(), line: 1, label: String::new(), score: 1.0, via: None } }
 
+    fn case(kind: &str, expect: Expect) -> Case { Case { kind: kind.into(), q: String::new(), expect } }
+
+    fn many(anchors: &[&str]) -> Expect { Expect::Many(anchors.iter().map(|a| a.to_string()).collect()) }
+
+    // Node ids in these fixtures never contain a slash; paths always do.
+    fn is_id(a: &str) -> bool { !a.contains('/') }
+
     #[test]
     fn hit_rules() {
         let a = Answer { seeds: vec![h("sym:x.ts::f", "packages/x.ts")], expanded: vec![h("FR-PAY-22", "d.md")] };
-        assert!(hit(&Case { kind: "paraphrase".into(), q: String::new(), expect: "FR-PAY-22".into() }, &a));
-        assert!(hit(&Case { kind: "code".into(), q: String::new(), expect: "packages/x.ts".into() }, &a));
-        assert!(!hit(&Case { kind: "keyword".into(), q: String::new(), expect: "FR-PAY-23".into() }, &a));
+        assert!(hit(&case("paraphrase", "FR-PAY-22".into()), &a, &is_id));
+        assert!(hit(&case("code", "packages/x.ts".into()), &a, &is_id));
+        assert!(!hit(&case("keyword", "FR-PAY-23".into()), &a, &is_id));
 
         // A substring of a real id is not a match: ids compare whole-string, not `contains`.
-        assert!(!hit(&Case { kind: "keyword".into(), q: String::new(), expect: "PAY-22".into() }, &a));
+        assert!(!hit(&case("keyword", "PAY-22".into()), &a, &is_id));
         // Ids compare verbatim, not case-folded.
-        assert!(!hit(&Case { kind: "keyword".into(), q: String::new(), expect: "fr-pay-22".into() }, &a));
-        // A keyword/paraphrase case matching a hit's file rather than its id does not count.
-        assert!(!hit(&Case { kind: "keyword".into(), q: String::new(), expect: "packages/x.ts".into() }, &a));
+        assert!(!hit(&case("keyword", "fr-pay-22".into()), &a, &is_id));
 
         // A code case's expected path is only a suffix of the hit's file: `file` compares
         // whole-string, not `ends_with`.
         let nested = Answer { seeds: vec![h("sym:packages/nested/x.ts::f", "packages/nested/x.ts")], expanded: vec![] };
-        assert!(!hit(&Case { kind: "code".into(), q: String::new(), expect: "x.ts".into() }, &nested));
-        // A code case only reachable through `expanded` does not count: code scores `seeds` only.
+        assert!(!hit(&case("code", "x.ts".into()), &nested, &is_id));
+        // A path only reachable through `expanded` does not count: paths score `seeds` only.
         let expanded_only = Answer { seeds: vec![], expanded: vec![h("sym:packages/x.ts::f", "packages/x.ts")] };
-        assert!(!hit(&Case { kind: "code".into(), q: String::new(), expect: "packages/x.ts".into() }, &expanded_only));
+        assert!(!hit(&case("code", "packages/x.ts".into()), &expanded_only, &is_id));
+    }
+
+    #[test]
+    fn an_anchor_matches_on_the_axis_its_shape_names_and_never_on_the_other() {
+        // The hit's id and its file are both present; an id anchor must not be satisfied by the
+        // file and a path anchor must not be satisfied by the id, or a case would score on a
+        // coincidence between two unrelated strings.
+        let a = Answer { seeds: vec![h("packages/x.ts", "FR-PAY-22")], expanded: vec![] };
+        assert!(!hit(&case("keyword", "FR-PAY-22".into()), &a, &is_id), "an id anchor read off the file field");
+        assert!(!hit(&case("code", "packages/x.ts".into()), &a, &is_id), "a path anchor read off the id field");
+    }
+
+    #[test]
+    fn a_case_with_several_anchors_reports_how_many_it_reached() {
+        let a = Answer { seeds: vec![h("FR-PAY-20", "p.md"), h("sym:x.ts::f", "packages/x.ts")], expanded: vec![h("FR-PAY-22", "d.md")] };
+        let c = case("multi", many(&["FR-PAY-20", "FR-PAY-22", "FR-PAY-99"]));
+        assert_eq!(found(&c, &a, &is_id), (2, 3));
+        assert!(hit(&c, &a, &is_id), "one anchor reached is an entry point");
+
+        // Mixed shapes: the id counts from the expansion, the path only from the seeds.
+        let cross = case("cross", many(&["FR-PAY-22", "packages/x.ts"]));
+        assert_eq!(found(&cross, &a, &is_id), (2, 2));
+        let expanded_path = Answer { seeds: vec![], expanded: vec![h("FR-PAY-22", "d.md"), h("sym:x.ts::f", "packages/x.ts")] };
+        assert_eq!(found(&cross, &expanded_path, &is_id), (1, 2));
+
+        // Nothing reached is a miss, whatever the anchor count.
+        assert_eq!(found(&case("multi", many(&["FR-A-1", "FR-A-2"])), &a, &is_id), (0, 2));
+        assert!(!hit(&case("multi", many(&["FR-A-1", "FR-A-2"])), &a, &is_id));
+    }
+
+    #[test]
+    fn the_graph_decides_which_anchors_are_ids() {
+        // A task id carries a slash and would otherwise read as a path; the graph knows better.
+        let a = Answer { seeds: vec![], expanded: vec![h("BE-M01/T01", "docs/m.md")] };
+        let graph_says_id = |x: &str| x == "BE-M01/T01";
+        assert!(hit(&case("keyword", "BE-M01/T01".into()), &a, &graph_says_id));
+        assert!(!hit(&case("keyword", "BE-M01/T01".into()), &a, &is_id), "as a path it is looked for among seed files");
+    }
+
+    #[test]
+    fn expect_parses_as_one_string_or_a_list() {
+        let one: Case = serde_json::from_str(r#"{"kind":"keyword","q":"a","expect":"FR-X-1"}"#).unwrap();
+        assert_eq!(one.expect.anchors(), ["FR-X-1"]);
+        assert_eq!(one.expect.key(), "FR-X-1");
+        let several: Case = serde_json::from_str(r#"{"kind":"multi","q":"a","expect":["FR-X-1","packages/x.ts"]}"#).unwrap();
+        assert_eq!(several.expect.anchors(), ["FR-X-1", "packages/x.ts"]);
+        assert_eq!(several.expect.key(), "FR-X-1+packages/x.ts");
+        assert!(serde_json::from_str::<Case>(r#"{"kind":"multi","q":"a","expect":7}"#).is_err());
+    }
+
+    #[test]
+    fn only_the_recorded_shape_is_gated() {
+        let mut recorded = Vec::new();
+        for (kind, n) in RECORDED_SHAPE { for _ in 0..n { recorded.push(case(kind, "X".into())); } }
+        assert!(is_recorded_shape(&recorded));
+        // Order of kinds in the file does not matter, the counts do.
+        recorded.reverse();
+        assert!(is_recorded_shape(&recorded));
+
+        let mut short = recorded.iter().map(|c| case(&c.kind, "X".into())).collect::<Vec<_>>();
+        short.pop();
+        assert!(!is_recorded_shape(&short), "one case short of the recorded shape");
+        let mut extra_kind = recorded.iter().map(|c| case(&c.kind, "X".into())).collect::<Vec<_>>();
+        extra_kind.push(case("long", "X".into()));
+        assert!(!is_recorded_shape(&extra_kind), "a fourth kind is another suite");
+        assert!(!is_recorded_shape(&[case("long", "X".into()), case("cross", "X".into())]));
+    }
+
+    #[test]
+    fn the_shape_keeps_the_order_the_file_introduced() {
+        let cases = [case("long", "X".into()), case("cross", "X".into()), case("long", "X".into())];
+        assert_eq!(shape(&cases), [("long".to_string(), 2), ("cross".to_string(), 1)]);
+    }
+
+    #[test]
+    fn a_summary_counts_kinds_in_file_order_and_reads_absent_kinds_as_zero() {
+        let s = Summary::default().with("long", (3, 5)).with("cross", (1, 2));
+        assert_eq!(s.by_kind, [("long".to_string(), (3, 5)), ("cross".to_string(), (1, 2))]);
+        assert_eq!(s.kind("cross"), (1, 2));
+        assert_eq!(s.kind("keyword"), (0, 0));
+        // `recorded` is the three graded kinds in their fixed order.
+        assert_eq!(Summary::recorded((40, 40), (14, 30), (12, 12), 220).kind("paraphrase"), (14, 30));
     }
 
     #[test]
@@ -195,35 +399,39 @@ mod tests {
         // Fixtures sit exactly on each floor so a boundary shifted by one in either direction
         // reddens the corresponding call; a fixture comfortably clear of the floor (the
         // original mistake) would not notice such a shift.
-        let at_floor_nodense = Summary { keyword: (39, 40), paraphrase: (11, 30), code: (12, 12), p90_tokens: 230 };
-        let at_floor_dense = Summary { keyword: (40, 40), paraphrase: (14, 30), code: (12, 12), p90_tokens: 230 };
+        let at_floor_nodense = Summary::recorded((39, 40), (11, 30), (12, 12), 230);
+        let at_floor_dense = Summary::recorded((40, 40), (14, 30), (12, 12), 230);
         assert!(passes(&at_floor_nodense, false, true));
         assert!(passes(&at_floor_dense, true, true));
 
         // keyword: one short of its floor reddens either arm — 38 without embeddings, 39 with.
-        assert!(!passes(&Summary { keyword: (38, 40), ..at_floor_nodense.clone() }, false, true));
-        assert!(!passes(&Summary { keyword: (39, 40), ..at_floor_dense.clone() }, true, true));
+        assert!(!passes(&at_floor_nodense.clone().with("keyword", (38, 40)), false, true));
+        assert!(!passes(&at_floor_dense.clone().with("keyword", (39, 40)), true, true));
 
         // code must be exact: one short reddens in both dense arms.
-        assert!(!passes(&Summary { code: (11, 12), ..at_floor_nodense.clone() }, false, true));
-        assert!(!passes(&Summary { code: (11, 12), ..at_floor_dense.clone() }, true, true));
+        assert!(!passes(&at_floor_nodense.clone().with("code", (11, 12)), false, true));
+        assert!(!passes(&at_floor_dense.clone().with("code", (11, 12)), true, true));
 
         // p90: one token over the shared ceiling reddens either arm.
         assert!(!passes(&Summary { p90_tokens: 231, ..at_floor_nodense.clone() }, false, true));
         assert!(!passes(&Summary { p90_tokens: 231, ..at_floor_dense.clone() }, true, true));
 
         // paraphrase no-dense floor is 11: one short reddens the `dense: false` call.
-        assert!(!passes(&Summary { paraphrase: (10, 30), ..at_floor_nodense.clone() }, false, true));
+        assert!(!passes(&at_floor_nodense.clone().with("paraphrase", (10, 30)), false, true));
         // paraphrase dense floor is 14: one short reddens the `dense: true` call.
-        assert!(!passes(&Summary { paraphrase: (13, 30), ..at_floor_dense.clone() }, true, true));
+        assert!(!passes(&at_floor_dense.clone().with("paraphrase", (13, 30)), true, true));
+
+        // A summary of another suite has none of the graded kinds and reads as every floor
+        // missed, which is why `run` never grades one.
+        assert!(!passes(&Summary::default().with("long", (15, 15)), true, true));
     }
 
     #[test]
     fn a_store_without_questions_is_graded_on_the_numbers_it_reads() {
         // Exactly what a store `enrich` has never touched measures on the corpus, so a shift of
         // one in either direction is visible here.
-        let raw_dense = Summary { keyword: (40, 40), paraphrase: (9, 30), code: (12, 12), p90_tokens: 221 };
-        let raw_nodense = Summary { keyword: (39, 40), paraphrase: (7, 30), code: (12, 12), p90_tokens: 226 };
+        let raw_dense = Summary::recorded((40, 40), (9, 30), (12, 12), 221);
+        let raw_nodense = Summary::recorded((39, 40), (7, 30), (12, 12), 226);
         assert!(passes(&raw_dense, true, false));
         assert!(passes(&raw_nodense, false, false));
 
@@ -233,42 +441,62 @@ mod tests {
         assert!(!passes(&raw_nodense, false, true));
 
         // One short of each raw floor reddens, the `--no-dense` keyword floor of 39 included.
-        assert!(!passes(&Summary { paraphrase: (8, 30), ..raw_dense.clone() }, true, false));
-        assert!(!passes(&Summary { paraphrase: (6, 30), ..raw_nodense.clone() }, false, false));
-        assert!(!passes(&Summary { keyword: (39, 40), ..raw_dense.clone() }, true, false));
-        assert!(!passes(&Summary { keyword: (38, 40), ..raw_nodense.clone() }, false, false));
-        assert!(!passes(&Summary { code: (11, 12), ..raw_dense.clone() }, true, false));
+        assert!(!passes(&raw_dense.clone().with("paraphrase", (8, 30)), true, false));
+        assert!(!passes(&raw_nodense.clone().with("paraphrase", (6, 30)), false, false));
+        assert!(!passes(&raw_dense.clone().with("keyword", (39, 40)), true, false));
+        assert!(!passes(&raw_nodense.clone().with("keyword", (38, 40)), false, false));
+        assert!(!passes(&raw_dense.clone().with("code", (11, 12)), true, false));
         assert!(!passes(&Summary { p90_tokens: 231, ..raw_nodense.clone() }, false, false));
     }
 
     #[test]
     fn cases_file_parses_and_has_the_recorded_shape() {
-        let text = std::fs::read_to_string(format!("{}/bench/cases.jsonl", env!("CARGO_MANIFEST_DIR"))).unwrap();
-        let cases: Vec<Case> = text.lines().filter(|l| !l.trim().is_empty()).map(|l| serde_json::from_str(l).unwrap()).collect();
-        assert_eq!(cases.iter().filter(|c| c.kind == "keyword").count(), 40);
-        assert_eq!(cases.iter().filter(|c| c.kind == "paraphrase").count(), 30);
-        assert_eq!(cases.iter().filter(|c| c.kind == "code").count(), 12);
+        let cases = parse_cases(BUILT_IN_CASES).unwrap();
+        assert!(is_recorded_shape(&cases));
+        assert!(cases.iter().all(|c| c.expect.anchors().len() == 1), "every recorded case expects one place");
     }
 
     #[test]
     fn keyword_hit_counts_a_seed_or_an_expanded_entry() {
         let a = Answer { seeds: vec![h("FR-PAY-22", "d.md")], expanded: vec![h("FR-PAY-20", "e.md")] };
-        assert!(hit(&Case { kind: "keyword".into(), q: String::new(), expect: "FR-PAY-22".into() }, &a));
-        assert!(hit(&Case { kind: "keyword".into(), q: String::new(), expect: "FR-PAY-20".into() }, &a));
+        assert!(hit(&case("keyword", "FR-PAY-22".into()), &a, &is_id));
+        assert!(hit(&case("keyword", "FR-PAY-20".into()), &a, &is_id));
     }
 
     #[test]
     fn paraphrase_hit_counts_a_seed_or_an_expanded_entry() {
         let a = Answer { seeds: vec![h("FR-PAY-22", "d.md")], expanded: vec![h("FR-PAY-20", "e.md")] };
-        assert!(hit(&Case { kind: "paraphrase".into(), q: String::new(), expect: "FR-PAY-22".into() }, &a));
-        assert!(hit(&Case { kind: "paraphrase".into(), q: String::new(), expect: "FR-PAY-20".into() }, &a));
+        assert!(hit(&case("paraphrase", "FR-PAY-22".into()), &a, &is_id));
+        assert!(hit(&case("paraphrase", "FR-PAY-20".into()), &a, &is_id));
     }
 
     #[test]
     fn code_hit_only_counts_a_seed_never_an_expanded_entry() {
         let a = Answer { seeds: vec![h("sym:x.ts::f", "packages/x.ts")], expanded: vec![h("sym:y.ts::g", "packages/y.ts")] };
-        assert!(hit(&Case { kind: "code".into(), q: String::new(), expect: "packages/x.ts".into() }, &a));
-        assert!(!hit(&Case { kind: "code".into(), q: String::new(), expect: "packages/y.ts".into() }, &a));
+        assert!(hit(&case("code", "packages/x.ts".into()), &a, &is_id));
+        assert!(!hit(&case("code", "packages/y.ts".into()), &a, &is_id));
+    }
+
+    #[test]
+    fn anchors_are_checked_against_the_graph_before_anything_is_asked() {
+        use crate::model::{Node, NodeKind};
+        let mut graph = Graph::default();
+        let node = |id: &str, file: &str| Node {
+            id: id.into(), kind: NodeKind::Requirement, label: String::new(), body: String::new(), file: file.into(), line: 1, end: 0,
+            files: ["docs/y.md".to_string()].into_iter().collect(), community: None,
+        };
+        graph.nodes.insert("FR-X-1".into(), node("FR-X-1", "docs/x.md"));
+        graph.nodes.insert("sym:a".into(), node("sym:a", "packages/a.ts"));
+        let good = [case("cross", many(&["FR-X-1", "packages/a.ts"])), case("long", "FR-X-1".into())];
+        assert!(check_anchors("f", &good, &graph).is_ok());
+        let bad_id = [case("long", "FR-X-2".into())];
+        let err = check_anchors("f", &bad_id, &graph).unwrap_err().to_string();
+        assert!(err.contains("FR-X-2"), "{err}");
+        let bad_path = [case("where", "packages/b.ts".into())];
+        assert!(check_anchors("f", &bad_path, &graph).is_err());
+        // A file some node lists as a secondary location is not the file a hit reports.
+        let also_listed = [case("where", "docs/y.md".into())];
+        assert!(check_anchors("f", &also_listed, &graph).is_err());
     }
 
     #[test]

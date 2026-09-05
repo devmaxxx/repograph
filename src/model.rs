@@ -22,6 +22,23 @@ pub struct Node {
     #[serde(default)] pub community: Option<String>,
 }
 
+impl Node {
+    /// Symbols and files: the population `enrich --code` asks about and the indexes keep apart.
+    pub fn is_code(&self) -> bool { matches!(self.kind, NodeKind::Symbol | NodeKind::File) }
+
+    /// What the retrievers index for this node. A document is its body; a symbol is the line
+    /// that declares it, not the comment above it — 4,300 doc comments in the passage index
+    /// moved BM25's length and term statistics enough to cost the recorded suite two paraphrases
+    /// without seating a single file, so the prose an author wrote about code reaches the index
+    /// only through the questions generated from it (`enrich --code`). A file is not indexed.
+    pub fn indexed_body(&self) -> &str {
+        match self.kind {
+            NodeKind::Symbol => self.body.lines().last().unwrap_or(""),
+            _ => &self.body,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct Edge {
     pub source: String,
@@ -189,3 +206,20 @@ mod tests {
         assert!(!dangling.contains(&"entity:CancellationPolicy"));
     }
 }
+
+#[cfg(test)]
+mod indexed_body_tests {
+    use super::*;
+
+    #[test]
+    fn a_symbol_indexes_its_declaring_line_and_a_document_its_body() {
+        let mut e = Extraction::default();
+        e.node(NodeKind::Symbol, "sym:a.ts::f", "f", "Ends every session.\nexport function f() {", "a.ts", 3);
+        e.node(NodeKind::Requirement, "FR-X-1", "t", "первая строка\nвторая", "d.md", 1);
+        e.node(NodeKind::Symbol, "deco:Injectable", "Injectable", "", "a.ts", 3);
+        assert_eq!(e.nodes[0].indexed_body(), "export function f() {");
+        assert_eq!(e.nodes[1].indexed_body(), "первая строка\nвторая");
+        assert_eq!(e.nodes[2].indexed_body(), "");
+    }
+}
+

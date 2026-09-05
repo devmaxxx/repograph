@@ -1,4 +1,4 @@
-//! The e5-small embedder over its own ONNX session.
+//! The e5 embedder over its own ONNX session, opened by hub id.
 //!
 //! fastembed opened the same files behind a private session builder: tokenizer first, then a
 //! session forced to the heaviest graph optimisation. Measured on the cached model, the
@@ -12,7 +12,29 @@ use ort::value::Tensor;
 use std::path::{Path, PathBuf};
 use tokenizers::{PaddingParams, PaddingStrategy, Tokenizer, TruncationParams};
 
-const MODEL: &str = "intfloat/multilingual-e5-small";
+pub const DEFAULT_MODEL: &str = "intfloat/multilingual-e5-small";
+
+/// The model a command opens: `REPOGRAPH_EMBED_MODEL` when set — a measurement's switch that
+/// outranks both files — else what the store's vectors were written with, else the configured
+/// one. A reader passes the recorded model so a store answers with what wrote it; a writer
+/// passes `None` and takes the configuration, and `DenseIndex::written_by` drops rows another
+/// model wrote before the sync.
+pub fn resolve(recorded: Option<&str>, configured: &str) -> String {
+    resolve_from(std::env::var("REPOGRAPH_EMBED_MODEL").ok().as_deref(), recorded, configured)
+}
+
+fn resolve_from(override_: Option<&str>, recorded: Option<&str>, configured: &str) -> String {
+    let named = |m: Option<&str>| m.map(str::trim).filter(|m| !m.is_empty()).map(str::to_string);
+    named(override_).or_else(|| named(recorded)).unwrap_or_else(|| configured.to_string())
+}
+
+/// What `ask`, `bench` and `dump` say when the model they opened cannot search the store's rows.
+/// One sentence for the three of them: each keeps its own consequence — a warning and a
+/// lexical-only answer, or a refused run — but a caller wording the width differently from the
+/// others would send a reader looking for three separate faults.
+pub fn width_mismatch(dim: usize, model: &str, got: usize) -> String {
+    format!("the store's vectors are {dim}-d and {model} gives {got}-d — run `repograph embed`")
+}
 const MAX_TOKENS: usize = 256;
 const BATCH: usize = 64;
 
@@ -20,6 +42,8 @@ pub struct Embedder {
     session: Session,
     tokenizer: Tokenizer,
     wants_type_ids: bool,
+    name: String,
+    dim: Option<usize>,
 }
 
 /// The `.fastembed_cache`-under-cwd default of the hub client re-downloads 470 MB per directory
@@ -35,11 +59,15 @@ fn cache_dir() -> Result<PathBuf> {
 struct Files { model: PathBuf, tokenizer: PathBuf, pad_token: String, pad_id: u32 }
 
 /// Cache hits never touch the network; the first run downloads with a progress bar.
-fn fetch() -> Result<Files> {
+fn fetch(model: &str) -> Result<Files> {
     let api = hf_hub::api::sync::ApiBuilder::new().with_cache_dir(cache_dir()?).with_progress(true).build()?;
-    let repo = api.model(MODEL.to_string());
-    let get = |f: &str| repo.get(f).with_context(|| format!("fetch {MODEL}/{f}"));
+    let name = model.to_string();
+    let repo = api.model(name.clone());
+    let get = |f: &str| repo.get(f).with_context(|| format!("fetch {name}/{f}"));
     let model = get("onnx/model.onnx")?;
+    // The larger models keep their weights beside the graph; the session resolves the file by
+    // its relative name, so it has to be fetched into the same snapshot. Absent for the small one.
+    let _ = repo.get("onnx/model.onnx_data");
     let tokenizer = get("tokenizer.json")?;
     let config: serde_json::Value = serde_json::from_slice(&std::fs::read(get("config.json")?)?)?;
     let tok_config: serde_json::Value = serde_json::from_slice(&std::fs::read(get("tokenizer_config.json")?)?)?;
@@ -72,8 +100,8 @@ fn normalise(v: &mut [f32]) {
 }
 
 impl Embedder {
-    pub fn open() -> Result<Embedder> {
-        let files = fetch()?;
+    pub fn open(model: &str) -> Result<Embedder> {
+        let files = fetch(model)?;
         let session = std::thread::scope(|s| {
             let tokenizer = s.spawn(|| load_tokenizer(&files));
             let session = load_session(&files.model).context("open embedding model")?;
@@ -82,7 +110,24 @@ impl Embedder {
         });
         let (session, tokenizer) = session?;
         let wants_type_ids = session.inputs().iter().any(|i| i.name() == "token_type_ids");
-        Ok(Embedder { session, tokenizer, wants_type_ids })
+        Ok(Embedder { session, tokenizer, wants_type_ids, name: model.to_string(), dim: None })
+    }
+
+    /// The hub id the vectors this embedder writes belong to; recorded in the store by `written_by`.
+    pub fn name(&self) -> &str { &self.name }
+
+    /// The width of the vectors this model gives. Only a forward pass knows it, so one short
+    /// string is embedded and the answer kept: a caller comparing the model against a store's
+    /// rows would otherwise pay that pass on every query.
+    pub fn dim(&mut self) -> Result<usize> {
+        match self.dim {
+            Some(d) => Ok(d),
+            None => {
+                let d = self.query("probe")?.len();
+                self.dim = Some(d);
+                Ok(d)
+            }
+        }
     }
 
     /// Texts arrive already e5-prefixed (`dense::rows`): passages as `passage: `, generated
@@ -162,6 +207,14 @@ fn pool(hidden: &[f32], mask: &[i64], len: usize, dim: usize) -> Vec<Vec<f32>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_override_outranks_the_store_which_outranks_the_config() {
+        assert_eq!(resolve_from(Some(" x/y "), Some("a/b"), "c/d"), "x/y");
+        assert_eq!(resolve_from(Some(""), Some("a/b"), "c/d"), "a/b");
+        assert_eq!(resolve_from(None, None, "c/d"), "c/d");
+        assert_eq!(resolve_from(None, Some("  "), "c/d"), "c/d");
+    }
 
     #[test]
     fn pooling_averages_only_unmasked_tokens_and_normalises() {

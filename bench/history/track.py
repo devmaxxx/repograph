@@ -32,14 +32,20 @@ def repo_root(start=HERE):
 
 REPO = repo_root()
 
-# `{:<10} {:<12} {} {:>4} tok  {}` from src/bench.rs. Expected ids and paths never contain
-# spaces, so the question is whatever follows the token count.
-CASE = re.compile(r"^(keyword|paraphrase|code)\s+(\S+)\s+(HIT|miss)\s+(\d+) tok  (.*)$")
+# `{:<10} {:<12} {} {reached}/{want} {:>4} tok  {}` from src/bench.rs. Anchors never contain
+# spaces, so the question is whatever follows the token count. The `reached/want` pair is
+# absent from transcripts older than the dev suite, which expected one place per case.
+CASE = re.compile(r"^(\S+)\s+(\S+)\s+(HIT|miss)(?:\s+(\d+)/(\d+))?\s+(\d+) tok  (.*)$")
+# One `kind hits/cases` pair per kind the case file named, in the order it named them, then
+# the fixed tail. Older transcripts end at `nodes)`; newer ones add `suite=… gated=…`.
 SUMMARY = re.compile(
-    r"^keyword (\d+)/(\d+)\s+paraphrase (\d+)/(\d+)\s+code (\d+)/(\d+)\s+"
-    r"p90 (\d+) tok\s+dense=(true|false)\s+enriched=(true|false) \((\d+)/(\d+) nodes\)(.*)$"
+    r"^((?:\S+ \d+/\d+\s+)+)p90 (\d+) tok\s+dense=(true|false)\s+enriched=(true|false) "
+    r"\((\d+)/(\d+) nodes\)(.*)$"
 )
+KIND = re.compile(r"(\S+) (\d+)/(\d+)")
 RERANK = re.compile(r"rerank(_local)?=true depth=(\d+)")
+SUITE = re.compile(r"suite=(\S+) gated=(true|false)")
+GRADED = ("keyword", "paraphrase", "code")
 
 # The floors live in one place -- `passes` in src/bench.rs -- and are read from there rather
 # than restated here, because a floor that moves in Rust and not in Python would make every
@@ -51,7 +57,7 @@ ARMS = re.compile(
     r"\(false,\s*false\)\s*=>\s*\((\d+),\s*(\d+)\)",
     re.S,
 )
-TAIL = re.compile(r"s\.code\.0 >= (\d+) && s\.p90_tokens <= (\d+)")
+TAIL = re.compile(r"s\.kind\(\"code\"\)\.0 >= (\d+) && s\.p90_tokens <= (\d+)")
 
 
 def passes_body(text):
@@ -116,43 +122,68 @@ def git(repo, *args):
 
 
 def parse_bench(text):
-    """A `repograph bench` transcript into per-case scores and the summary metrics."""
+    """A `repograph bench` transcript into per-case scores and the summary metrics.
+
+    A case's score is the share of its anchors the answer reached, so a case that expects three
+    places and is pointed at one scores 0.33 -- a partial answer, which the chronic and flaky
+    readings treat as a miss. The summary's per-kind counts stay what `bench` printed: cases
+    with at least one anchor reached, the developer's entry point.
+    """
     cases, tokens = {}, {}
     for line in text.splitlines():
         m = CASE.match(line.rstrip())
         if m:
-            kind, expect, verdict, tok, _q = m.groups()
-            cases[f"{kind}/{expect}"] = 1.0 if verdict == "HIT" else 0.0
-            tokens[f"{kind}/{expect}"] = int(tok)
+            kind, expect, verdict, reached, want, tok, _q = m.groups()
+            key = f"{kind}/{expect}"
+            # Two questions of one kind may be pointed at the same place -- the dev suite asks
+            # two `rule` questions about ADR-031. Keyed by kind and anchor alone the later one
+            # overwrites the earlier, and the run is recorded holding fewer scores than the
+            # suite has cases, so a case that is always missed never reads as chronically weak.
+            if key in cases:
+                nth = 2
+                while f"{key}#{nth}" in cases:
+                    nth += 1
+                key = f"{key}#{nth}"
+            if want:
+                cases[key] = round(int(reached) / int(want), 4) if int(want) else 0.0
+            else:
+                cases[key] = 1.0 if verdict == "HIT" else 0.0
+            tokens[key] = int(tok)
     tail = [SUMMARY.match(l.strip()) for l in text.splitlines()]
     tail = [m for m in tail if m]
     if not tail:
         raise SystemExit("no summary line in the transcript -- did the run reach the end?")
     g = tail[-1]
-    dense, enriched = g.group(8) == "true", g.group(9) == "true"
-    rr = RERANK.search(g.group(12) or "")
+    dense, enriched = g.group(3) == "true", g.group(4) == "true"
+    rr = RERANK.search(g.group(7) or "")
+    suite = SUITE.search(g.group(7) or "")
+    metrics = {kind: [int(h), int(n)] for kind, h, n in KIND.findall(g.group(1))}
+    metrics["p90_tokens"] = int(g.group(2))
     return {
         "dense": dense,
         "enriched": enriched,
-        "coverage": [int(g.group(10)), int(g.group(11))],
+        "coverage": [int(g.group(5)), int(g.group(6))],
         "rerank": ("local" if rr.group(1) else "command") if rr else None,
         "depth": int(rr.group(2)) if rr else None,
-        "metrics": {
-            "keyword": [int(g.group(1)), int(g.group(2))],
-            "paraphrase": [int(g.group(3)), int(g.group(4))],
-            "code": [int(g.group(5)), int(g.group(6))],
-            "p90_tokens": int(g.group(7)),
-        },
+        "metrics": metrics,
+        # A transcript from before the suite field is the recorded suite, which was the only
+        # one `bench` would run, and it was graded whenever it had the three graded kinds.
+        "suite": suite.group(1) if suite else "built-in",
+        "gated": (suite.group(2) == "true") if suite else all(k in metrics for k in GRADED),
         "cases": cases,
         "tokens": tokens,
     }
 
 
 def arm_name(parsed):
+    """`bench:dense+enriched` for the recorded suite; another suite names itself in brackets,
+    so its runs never share a history -- or a comparability window -- with the recorded one."""
     parts = ["dense" if parsed["dense"] else "lexical", "enriched" if parsed["enriched"] else "raw"]
     if parsed["rerank"]:
         parts.append(f"rerank-{parsed['rerank']}-{parsed['depth']}")
-    return "bench:" + "+".join(parts)
+    suite = parsed.get("suite") or "built-in"
+    prefix = "bench" if suite == "built-in" else f"bench[{suite}]"
+    return prefix + ":" + "+".join(parts)
 
 
 def headroom(metrics, floor):
@@ -165,34 +196,64 @@ def headroom(metrics, floor):
     }
 
 
-def cmd_record(args):
-    text = Path(args.transcript).read_text() if args.transcript != "-" else sys.stdin.read()
-    parsed = parse_bench(text)
-    floor = floors()[(parsed["enriched"], parsed["dense"])]
-    room = headroom(parsed["metrics"], floor)
-    row = {
+def tool_dirty(repo=None):
+    """Whether repograph's own tree differs from its commit, the run file itself excepted.
+
+    Recording the first arm of a run appends to `runs.jsonl`, so without the exception the
+    second arm of the same run would always read dirty against the same commit and the same
+    second -- which is what the two 2026-09-04 enriched rows show.
+    """
+    return bool(git(repo or REPO, "status", "--porcelain", "--", f":(exclude){RUNS.relative_to(REPO)}"))
+
+
+def build_row(parsed, corpus, corpus_commit, note, tool_commit, dirty, floor_table=None):
+    """One history row. Floors and headroom exist only for a graded run: a suite without floors
+    of its own is measured, and a `green` it never earned would read as a claim."""
+    gated = parsed["gated"]
+    floor = (floor_table or floors())[(parsed["enriched"], parsed["dense"])] if gated else None
+    room = headroom(parsed["metrics"], floor) if gated else None
+    return {
         "when": datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
         "tool": "repograph",
         "source": "bench",
         "arm": arm_name(parsed),
-        "tool_commit": git(REPO, "rev-parse", "--short", "HEAD"),
-        "tool_dirty": bool(git(REPO, "status", "--porcelain")),
-        "corpus": args.corpus,
-        "corpus_commit": git(args.corpus_path, "rev-parse", "--short", "HEAD") if args.corpus_path else None,
+        "suite": parsed["suite"],
+        "gated": gated,
+        "tool_commit": tool_commit,
+        "tool_dirty": dirty,
+        "corpus": corpus,
+        "corpus_commit": corpus_commit,
         "coverage": parsed["coverage"],
         "metrics": parsed["metrics"],
         "floors": floor,
         "headroom": room,
-        "green": all(v >= 0 for v in room.values()),
+        "green": all(v >= 0 for v in room.values()) if gated else None,
         "cases": parsed["cases"],
         "worst_tokens": sorted(parsed["tokens"].items(), key=lambda kv: -kv[1])[:3],
-        "note": args.note,
+        "note": note,
     }
+
+
+def state_of(row):
+    if row.get("gated") is False:
+        return "measured, no floors"
+    return "green" if row.get("green") else "RED"
+
+
+def counts_of(metrics):
+    return "  ".join(f"{k} {v[0]}/{v[1]}" if isinstance(v, list) else f"{k} {v}" for k, v in metrics.items())
+
+
+def cmd_record(args):
+    text = Path(args.transcript).read_text() if args.transcript != "-" else sys.stdin.read()
+    parsed = parse_bench(text)
+    row = build_row(
+        parsed, args.corpus,
+        git(args.corpus_path, "rev-parse", "--short", "HEAD") if args.corpus_path else None,
+        args.note, git(REPO, "rev-parse", "--short", "HEAD"), tool_dirty(),
+    )
     append(row)
-    print(f"{row['arm']}  {'green' if row['green'] else 'RED'}  "
-          f"keyword {row['metrics']['keyword'][0]}/{row['metrics']['keyword'][1]}  "
-          f"paraphrase {row['metrics']['paraphrase'][0]}/{row['metrics']['paraphrase'][1]}  "
-          f"p90 {row['metrics']['p90_tokens']}  -> {RUNS.name}")
+    print(f"{row['arm']}  {state_of(row)}  {counts_of(row['metrics'])}  -> {RUNS.name}")
 
 
 def scored(row):
@@ -285,10 +346,7 @@ def cmd_report(args):
         print(f"\n=== {arm} — {len(history)} run(s), latest {latest['when']} "
               f"@ {latest.get('tool_commit') or '?'} on {latest.get('corpus_commit') or '?'} ===")
         if latest.get("metrics"):
-            state = "green" if latest.get("green") else "RED"
-            print(f"  {state}: " + "  ".join(
-                f"{k} {v[0]}/{v[1]}" if isinstance(v, list) else f"{k} {v}"
-                for k, v in latest["metrics"].items()))
+            print(f"  {state_of(latest)}: {counts_of(latest['metrics'])}")
         if latest.get("headroom"):
             # Under the bar and close to it are different problems: one is failing now, the
             # other passes today and will fail on noise.
@@ -451,11 +509,21 @@ def flaky(window):
 def systemic(groups, top):
     """A case every arm misses is a hole in retrieval; one arm alone is that arm's own defect.
 
-    Only arms whose latest run sits on the newest corpus commit take part. Reading one arm's
-    answer at one commit against another arm's answer at a different one says nothing about
-    either arm.
+    Read suite by suite: the recorded suite and a dev suite ask different questions, and an
+    intersection across both would be empty. Only arms whose latest run sits on the newest
+    corpus commit take part. Reading one arm's answer at one commit against another arm's
+    answer at a different one says nothing about either arm.
     """
     latest = {arm: h[-1] for arm, h in groups.items() if h and h[-1]["source"] == "bench"}
+    suites = sorted({r.get("suite") or "built-in" for r in latest.values()})
+    for suite in suites:
+        rows = {a: r for a, r in latest.items() if (r.get("suite") or "built-in") == suite}
+        if len(suites) > 1:
+            print(f"\n--- suite {suite} ---")
+        systemic_suite(rows, top)
+
+
+def systemic_suite(latest, top):
     commits = {r.get("corpus_commit") for r in latest.values()}
     if len(commits) > 1:
         # Only rows that recorded a commit can name the newest one. Letting an unrecorded row
