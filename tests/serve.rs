@@ -14,15 +14,28 @@ fn repo_with_docs() -> tempfile::TempDir {
     dir
 }
 
-fn ask(dir: &std::path::Path, extra: &[&str], words: &[&str]) -> (String, String) {
-    let out = repograph().args(["--no-dense", "--repo"]).arg(dir).arg("ask").args(extra).args(words).output().unwrap();
+/// The arm a command is run in. The repo these tests build has no vectors, so the fused arm
+/// never opens the 448 MB model here — what it changes is the flag the handshake is decided on.
+const LEXICAL: &[&str] = &["--no-dense"];
+const FUSED: &[&str] = &[];
+
+fn ask_in(arm: &[&str], dir: &std::path::Path, extra: &[&str], words: &[&str]) -> (String, String) {
+    let out = repograph().args(arm).arg("--repo").arg(dir).arg("ask").args(extra).args(words).output().unwrap();
     assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
     (String::from_utf8(out.stdout).unwrap(), String::from_utf8(out.stderr).unwrap())
 }
 
-fn serve(dir: &std::path::Path, extra: &[&str]) -> std::process::Child {
-    repograph().args(["--no-dense", "--repo"]).arg(dir).arg("serve").args(extra)
+fn ask(dir: &std::path::Path, extra: &[&str], words: &[&str]) -> (String, String) {
+    ask_in(LEXICAL, dir, extra, words)
+}
+
+fn serve_in(arm: &[&str], dir: &std::path::Path, extra: &[&str]) -> std::process::Child {
+    repograph().args(arm).arg("--repo").arg(dir).arg("serve").args(extra)
         .stdout(Stdio::null()).stderr(Stdio::piped()).spawn().unwrap()
+}
+
+fn serve(dir: &std::path::Path, extra: &[&str]) -> std::process::Child {
+    serve_in(LEXICAL, dir, extra)
 }
 
 /// The answer once a server is the one giving it. A socket file that exists says a `serve` has
@@ -58,7 +71,7 @@ fn the_socket_answers_the_bytes_the_process_answers_and_sees_an_edit() {
     for (q, want) in questions.iter().zip(&direct) {
         let (got, err) = ask(dir.path(), &[], q);
         assert_eq!(&got, want, "question {q:?}");
-        assert!(err.contains("serve:"), "the client says it answered through the socket: {err}");
+        assert!(err.contains("serve: answered by the resident process"), "the client says it answered through the socket: {err}");
     }
     let json_direct = ask(dir.path(), &["--no-serve", "--json"], &["штраф"]).0;
     assert_eq!(ask(dir.path(), &["--json"], &["штраф"]).0, json_direct);
@@ -144,5 +157,62 @@ fn a_reply_from_another_version_is_ignored() {
     });
     let (out, _) = ask(dir.path(), &[], &["штраф"]);
     assert!(out.contains("FR-PAY-1") && !out.contains("WRONG"), "{out}");
+    fake.join().unwrap();
+}
+
+// The two tests below are the pairing the socket gate could not see for as long as every test
+// passed `--no-dense` on both sides: a server's arm and a client's are two facts, and only one
+// of the four pairings diverges.
+#[test]
+fn a_fused_question_is_refused_by_a_server_that_answers_lexical_only() {
+    let dir = repo_with_docs();
+    let want = ask_in(FUSED, dir.path(), &["--no-serve"], &["штраф"]).0;
+    let mut server = serve(dir.path(), &["--every", "3600", "--idle", "60"]);
+    wait_for_socket(dir.path());
+    // Asked until the refusal comes rather than once: a socket file says a `serve` bound, and
+    // only a reply says it is listening. The line asserted on has one producer, the handshake,
+    // so a server that is merely not up yet cannot pass this by falling back for another reason.
+    let start = Instant::now();
+    let (got, err) = loop {
+        let (got, err) = ask_in(FUSED, dir.path(), &[], &["штраф"]);
+        if err.contains("serve: the resident process answers lexical-only") { break (got, err); }
+        assert!(start.elapsed() < Duration::from_secs(20), "a fused question was answered lexical-only and told nothing: {err}");
+        std::thread::sleep(Duration::from_millis(50));
+    };
+    assert!(!err.contains("answered by the resident process"), "{err}");
+    assert_eq!(got, want, "the client answered it here, as it would have with no server at all");
+    server.kill().unwrap();
+    let _ = server.wait();
+}
+
+#[test]
+fn a_lexical_question_is_still_answered_by_a_server_holding_the_dense_arm() {
+    let dir = repo_with_docs();
+    let want = ask(dir.path(), &["--no-serve"], &["штраф"]).0;
+    let mut server = serve_in(FUSED, dir.path(), &["--every", "3600", "--idle", "60"]);
+    let (through, _) = ask_until_resident(dir.path(), &["штраф"]);
+    assert_eq!(through, want, "a server that opened the model narrows to the arm it was asked in");
+    server.kill().unwrap();
+    let _ = server.wait();
+}
+
+// Every development build of this repository answers `0.4.0`, so the version alone would let
+// yesterday's `serve` answer today's question — under `--idle 86400`, for a day.
+#[test]
+fn a_reply_from_another_build_of_this_version_is_ignored() {
+    let dir = repo_with_docs();
+    let sock = dir.path().join(".repograph/serve.sock");
+    let listener = std::os::unix::net::UnixListener::bind(&sock).unwrap();
+    let fake = std::thread::spawn(move || {
+        use std::io::{BufRead, Write};
+        let (mut s, _) = listener.accept().unwrap();
+        let mut line = String::new();
+        std::io::BufReader::new(s.try_clone().unwrap()).read_line(&mut line).unwrap();
+        // This version, and a stamp no executable on this machine carries.
+        writeln!(s, r#"{{"v":"{}","build":{{"mtime_ns":1,"len":1}},"no_dense":false,"stdout":"WRONG\n","stderr":[]}}"#, env!("CARGO_PKG_VERSION")).unwrap();
+    });
+    let (out, err) = ask(dir.path(), &[], &["штраф"]);
+    assert!(out.contains("FR-PAY-1") && !out.contains("WRONG"), "{out}");
+    assert!(err.contains("serve: the resident process is another build"), "{err}");
     fake.join().unwrap();
 }

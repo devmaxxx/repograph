@@ -142,9 +142,15 @@ impl Context {
         })
     }
 
+    /// The arm this context was opened in. A resident process hands it to every client in the
+    /// handshake: the `||` below cannot widen a lexical context back to a fused one, so a fused
+    /// question has to be refused before it is asked rather than answered lexically.
+    pub fn no_dense(&self) -> bool { self.no_dense }
+
     /// The text `ask` prints for this request — `render`'s output, byte for byte.
     pub fn answer(&mut self, req: &Request) -> anyhow::Result<String> {
-        // A context opened without the dense arm has no vectors and no model to grow one from.
+        // A context opened without the dense arm has no vectors and no model to grow one from,
+        // so it narrows a fused request and never the other way; `serve` refuses that pairing.
         let no_dense = self.no_dense || req.no_dense;
         let opts = query::Options { seeds: req.seeds, bodies: req.bodies, dense: !no_dense && index::dense::DenseIndex::present(&self.store), json: req.json, depth: req.depth };
         let Context { cfg, store, graph, questions, dense_idx, warm, embedder, cross, resync, notices, timing, .. } = &*self;
