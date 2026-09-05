@@ -45,10 +45,11 @@ planned and unreleased since 0.4.0:
 | `enrich`, `ask --rerank`   | working; opt-in, the only two stages that spend model tokens — see [Spending tokens on purpose](#spending-tokens-on-purpose) |
 | `ask --rerank-local`       | working; opt-in, the same pool picked by a local cross-encoder at zero tokens, measured and rejected as a floor candidate — see [Spending tokens on purpose](#spending-tokens-on-purpose) |
 | `embed`                    | working; writes the rows the dense index lacks with the configured model, rewriting it whole when the store was written by another — see [Embeddings](#embeddings) |
+| `serve`                    | working; opt-in resident answerer for `ask` — the same bytes, measured 66 ms per fused ask after the first against 326 ms in a fresh process — see [Asking a resident process](#asking-a-resident-process) |
 
 `--no-dense` skips the embedding stage everywhere it could apply — `build`, `update`, `enrich`,
-`embed`, `watch`, `ask`, `bench`, `dump`. Without it, those commands use local embeddings once the
-model is cached (see [Embeddings](#embeddings)).
+`embed`, `watch`, `serve`, `ask`, `bench`, `dump`. Without it, those commands use local embeddings
+once the model is cached (see [Embeddings](#embeddings)).
 
 ## Install
 
@@ -177,6 +178,64 @@ so interrupting it cannot leave half a graph behind. An idle poll is the walk an
 21 ms of CPU on the development corpus, under a tenth of a percent of a core at the default
 cadence.
 
+### Asking a resident process
+
+Most of a fused `ask` is the process opening things it then throws away: the embedding model
+alone costs about 220 ms of it. `serve` opens them once and answers over a Unix socket:
+
+```bash
+repograph serve                  # .repograph/serve.sock, poll every 30 s, exit after 30 min idle
+repograph serve --idle 86400     # a day rather than half an hour before it gives up
+repograph serve --no-dense       # lexical only; a fused `ask` is told so and answers in its own process
+repograph ask --no-serve отмена  # answer here even while one is listening
+```
+
+`ask` uses it without being told to, and answers in this process whenever it cannot: no socket, a
+socket nobody listens on, a server of another version, a server built from other code under the
+same version (the handshake carries the executable's own mtime and size, so a second copy of one
+build counts as another), a server started `--no-dense` asked a fused question, a timeout,
+`--no-serve`, or `REPOGRAPH_NO_SERVE` in the environment. Each of those prints a line: a question
+that quietly costs a cold process, or quietly gets a lexical answer, looks like nothing at all. The
+other arm pairing is not a mismatch — a server holding the model answers `--no-dense` lexically,
+which is what was asked for. A client never deletes the socket file — a refused connect is also
+what a live server with a full backlog gives — so only `serve` removes one, and only the one it
+bound itself. On a store neither `enrich` nor `embed` has moved under it, and a server of this
+build serving the arm asked for, the answer is the same bytes either way; that is checked on all
+142 recorded and developer bench questions, in every pairing of the server's arm with the
+client's.
+
+The server refreshes before every answer with the same walk a one-shot `ask` does, and polls
+between them like `watch`, so its **graph** is never staler than a fresh process's. Under
+`--stale` it skips that walk, as a one-shot does, but still reads the graph back when another
+process has written it: `--stale` means the stored graph as it is on disk, resident or not, and a
+`--stale` question embeds nothing and writes nothing either way. It answers one question at a
+time; a second client waits for the first rather than being turned away.
+
+Both of those reads are decided by `manifest.json`, so a running server does not see the two
+commands that leave it alone: `enrich`, which writes `questions.json`, and `embed`, which writes
+`vectors.*`. Run either against a repo with a `serve` on it and the resident answers keep the
+questions and the vectors they started with — stop the server, or ask with `--no-serve`, to answer
+from the new ones.
+
+The configuration is read once, at start-up. Editing `repograph.toml` stops the server after its
+next poll — the next `ask` answers in its own process under the new file, and a new `serve` starts
+under it too.
+
+Measured on the bench corpus (908 files, 8.3k nodes, enriched), median of eleven, socket and
+in-process runs interleaved in one sitting:
+
+| | resident | one process |
+| --- | --- | --- |
+| fused question, dense | 66 ms | 326 ms |
+| lexical | 54 ms | 106 ms |
+
+The first question after a start still pays the model open — 0.26 s, against 0.07 s for the ones
+after it. What is left is a process start (5 ms), the socket round trip, and the BM25 build that
+`ask` still does per question: almost all of the remaining 49 ms of the lexical arm's 54, and the
+one expensive thing a resident process does not keep. The stage tables, the levers behind those
+numbers and the evidence that the bytes do not move are in
+[the perf results](docs/bench/2026-09-06-perf-results.md).
+
 Git hooks are the free version of the same thing, for a repository whose changes arrive by pull:
 
 ```sh
@@ -263,7 +322,10 @@ repograph dump --queries qs.jsonl --out lists.json   # every retriever's ranked 
 
 The lexical index is rebuilt in memory on every `ask` rather than stored on disk. It costs about
 120 ms on a 7,500-node graph, and in exchange there is no lexical state that can ever go stale
-relative to the graph.
+relative to the graph. A later sitting bounds that build, the question index beside it, their
+scoring and the fusion at about 49 ms of a 54 ms lexical ask on the bench corpus, at 8.3k nodes —
+different sittings on different graphs, not a before and after; that bound and what it rests on
+are in [the perf results](docs/bench/2026-09-06-perf-results.md).
 
 ## What ends up in the graph
 
@@ -437,15 +499,21 @@ the very rows being measured (a different width the guard refuses, and the answe
 It is the caveat trap 7 of the [runbook](docs/bench/runbook.md) carries. Measured on the fixture,
 the default reads paraphrase **22/30** against `intfloat/multilingual-e5-small`'s 15/30 with
 keyword 40/40 and code 12/12 unchanged, and held-out 103 → 119 of 400 (+19 −3, p = 0.0009). The
-small model is what that costs: an `ask` in 0.55 s against 0.8 s (the model opens in 418 ms against
+small model is what that costs: an `ask` in 0.30 s against 0.8 s (the model opens in 220 ms against
 676), 1.7 GB resident against 1.9, a 470 MB download against 2.1 GB, and ~103 s to embed the
 corpus's 33,525 rows against 2,680 s. It is one line and one `repograph embed` away, and a store
 already on it keeps answering by it.
 
+The two open figures are not the same measurement twice. The small model's fell from 418 ms to
+220 when the cache lookup stopped asking the hub for a weights file it has never had and waiting
+out the 404; the default's 676 ms is untouched by that, because the large model's weights genuinely
+do live beside its graph and the lookup was always a cache hit. The saving is the small model's
+alone, and the default pays what it always paid.
+
 Turning the dense stage off altogether is the step below that, and what it costs depends on which
 model it replaces. The lexical lists do not know what is configured, so `--no-dense` reads keyword
 39/40, paraphrase 14/30, code 12/12 on the fixture's enriched store either way. Against the small
-model's 40/40, 15/30, 12/12 that is two hits of eighty-two, for a 470 MB download and ~0.45 s an
+model's 40/40, 15/30, 12/12 that is two hits of eighty-two, for a 470 MB download and ~0.2 s an
 `ask` saved; against the default's 40/40, 22/30, 12/12 it is nine, for 2.1 GB and ~0.7 s. The dense
 stage earns its keep in proportion to the model behind it: on the small model it is worth one
 paraphrase and one keyword, which is why the model and the `--no-dense` switch are one decision
@@ -456,11 +524,15 @@ default. Only the two dense arms depend on the embedder at all, and the default 
 room; until it has floors of its own, a green `bench` on a default store says less than a green one
 on a small-model store.
 
-`ask` opens the model only when a fused query needs it: an exact id or symbol lookup answers in
-~30 ms and ~50 MB, a fused query in ~0.8 s and ~1.9 GB on the default model — the model, not the
-graph, and ~0.55 s and ~1.4 GB on the small one; an exact-id lookup answers in ~50 ms and a
-`--no-dense` question in ~0.1 s, since neither opens the model or reads the vectors.
-`REPOGRAPH_TIMING=1` prints where an `ask` spends its time, stage by stage.
+`ask` opens the model only when a fused query needs it, and that open is most of what a fused
+answer costs: ~0.8 s and ~1.9 GB on the default model, ~0.30 s and ~1.4 GB on the small one — the
+model, not the graph. The bench fixture is a small-model store, and its 0.30 s is 220 ms of open —
+a cache lookup, then the 16 MB tokenizer and the 448 MB ONNX session opening concurrently — against
+410 ms before the levers below. An exact-id lookup answers in ~50 ms and ~50 MB, and a `--no-dense`
+question in ~0.1 s, since neither opens the model or reads the vectors. What is left of the open is
+paid once per process, which is what [`serve`](#asking-a-resident-process) is for.
+`REPOGRAPH_TIMING=1` prints where an `ask` spends its time, stage by stage; the stage tables and
+what each lever bought are in [the perf results](docs/bench/2026-09-06-perf-results.md).
 
 Five embedding-side levers were measured on the same corpus and cases — on the fourteen-case set,
 and before `enrich`'s generated questions were in the index — and none moved recall past 6/14: the
@@ -567,7 +639,7 @@ stated; input tokens are the answering model's own, median over the 38 questions
 
 |                                                | paraphrase | keyword | code | p90 tokens | model tokens per question | latency per question |
 | ---------------------------------------------- | ---------- | ------- | ---- | ---------- | ------------------------- | -------------------- |
-| `ask`                                          | 7/14       | 24/24   | 3/3  | 216        | 0                         | ~0.4 s               |
+| `ask`                                          | 7/14       | 24/24   | 3/3  | 216        | 0                         | ~0.30 s              |
 | `--rerank`, haiku, depth 100, titles           | 10/14      | 24/24   | 3/3  | 222        | ≈4,600                    | ~3.5 s               |
 | `--rerank`, haiku, depth 100                   | 11/14      | 24/24   | 3/3  | 222        | ≈9,500                    | ~4 s                 |
 | `--rerank`, sonnet, depth 100                  | 13/14      | 24/24   | 3/3  | 222        | ≈10,900                   | ~4 s                 |
@@ -709,7 +781,7 @@ out of 3,599 tracked:
 | Edges                           | 27,412                                                                                                                       |
 | Graph on disk                   | 10.2 MB JSON                                                                                                                 |
 | Graph load                      | ~19 ms                                                                                                                       |
-| Lexical index rebuild           | ~120 ms                                                                                                                      |
+| Lexical index rebuild           | ~120 ms — a later sitting bounds that build, the question index beside it, their scoring and the fusion at ~49 ms on the bench corpus at 8.3k nodes ([the perf results](docs/bench/2026-09-06-perf-results.md)); different sittings, not a before and after |
 | Tokens spent building the graph and its vectors | 0                                                                                                             |
 
 Retrieval on the recorded 82 cases against that graph, both arms run twice with identical results:

@@ -203,6 +203,80 @@ The rule is not re-read once the numbers are in. Six levers were measured agains
 and one passed; [the results](2026-09-05-dev-cases-results.md) say which, and what the other five
 cost.
 
+## Timing an ask
+
+**A performance change is judged on the dumps first.** It ships only if `dump` of both suites in
+both arms is byte-identical to the baseline and `bench` prints the same lines; a change that moves
+an answer is not a performance change, whatever the clock says. Take the baseline before the first
+edit, on the same fixture, and keep the four files:
+
+```bash
+S=~/bench/<scratch>                       # transcripts live outside the repo
+for arm in dense lexical; do
+  nd=""; [ $arm = lexical ] && nd="--no-dense"
+  repograph --repo ~/bench/beauty-crm-502e8a6d $nd dump --queries bench/cases.jsonl     --out $S/base-rec-$arm.json
+  repograph --repo ~/bench/beauty-crm-502e8a6d $nd dump --queries bench/dev-cases.jsonl --out $S/base-dev-$arm.json
+done
+shasum $S/base-*.json > $S/base-shasums.txt
+```
+
+Afterwards, the same four with a different tag, then `cmp` each pair and `bench` in all four arms.
+`dump` and `bench` read the store as it stands, so both are safe against the pinned fixture —
+unlike `serve`, which refreshes and writes and is measured on a copy.
+
+Note what those dumps cannot see: they build their own dense closure and call `query::ask`
+directly, so **the `ask` command's own arm is never executed by Rule 1**. A change to that arm is
+compared by running the ask shapes themselves against a binary built before the change, stdout and
+stderr separately — see [the perf results](2026-09-06-perf-results.md).
+
+Only then, the clock. `perf-time.sh` — five `REPOGRAPH_TIMING=1` runs per arm, medians per stage:
+
+```bash
+#!/bin/bash
+# usage: perf-time.sh <binary> <repo> <label>   — five REPOGRAPH_TIMING runs per arm, medians printed
+B=$1; R=$2; L=$3; S=~/bench/<scratch>
+for arm in dense lexical; do
+  nd=""; [ $arm = lexical ] && nd="--no-dense"
+  : > $S/$L-$arm.txt
+  for i in 1 2 3 4 5; do
+    (cd $R && REPOGRAPH_TIMING=1 $B ask --stale $nd 'штраф за отмену записи' 2>&1 >/dev/null | grep '^timing' >> $S/$L-$arm.txt)
+  done
+  echo "== $arm =="
+  python3 -P - "$S/$L-$arm.txt" <<'PY'
+import re, sys, statistics
+rows = {}
+for line in open(sys.argv[1]):
+    m = re.match(r'timing:\s+([\d.]+) ms\s+\(\+\s*([\d.]+) ms\)\s+(.*)', line)
+    if m: rows.setdefault(m.group(3), []).append((float(m.group(1)), float(m.group(2))))
+for stage, v in rows.items():
+    print(f"{stage:32} total median {statistics.median(x for x,_ in v):8.1f} ms   step median {statistics.median(y for _,y in v):7.1f} ms   n={len(v)}")
+PY
+done
+```
+
+Three things the 2026-09-06 run learned the hard way:
+
+- **Between-sitting drift on this machine exceeds the effects being measured**, so a before/after
+  pair has to be **interleaved in one sitting** — A, B, A, B, … — never five of one and then five
+  of the other, and never a fresh set against a median stored earlier in the day. The same binary
+  read 369.8 ms in one sitting and 346.1 ms an hour later; two five-run sets of identical code sat
+  44.9 ms apart, wider than the lever they were being used to judge. Build every arm's binary
+  first, then measure them round-robin, and write the machine's load into the transcript.
+- **`git archive` hands cargo a stale mtime, and cargo hands back the wrong binary.** Building each
+  arm from `git archive <commit>` into a shared `--target-dir` stamps the *commit's* mtimes, which
+  are older than the artifacts the previous arm left in that directory. Cargo calls the build fresh
+  and copies the earlier commit's binary out under the later commit's name. The first round of the
+  2026-09-06 builds produced four binaries with **the same sha** — one binary, which would have
+  been measured four times and published as a before/after table with nothing in it. `touch` the
+  extracted tree before building (`find $SRC -type f -exec touch {} +`), then `shasum` every binary
+  and check the four differ: that comparison is the only thing that catches it.
+- **`pkill -f 'repograph serve'` matches nothing**, because the command line reads
+  `repograph --repo <path> serve`. Match on the repo instead (`pkill -f '<repo-dir> serve'`). A
+  whole timing pair was lost to orphan servers that a `pkill` was believed to have killed: every
+  later `serve` refused to bind with `another serve answers`, and the "before" client was measured
+  against an "after" server. Before measuring a socket, start the server yourself, wait for its own
+  bind line in its own log, and refuse to send a request without it.
+
 ## What to write down
 
 The result file's header carries the corpus path, commit, timestamp and case counts

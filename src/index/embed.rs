@@ -52,10 +52,24 @@ pub struct Embedder {
     dim: Option<usize>,
 }
 
+/// A cache chosen from inside the process, consulted before the environment. It exists because a
+/// test cannot reach for `set_var`: a `setenv` racing another thread's `getenv` is undefined
+/// behaviour, and this binary reads the environment on every `ask`. Nothing outside the test
+/// binary sets it, so a real run resolves its cache exactly as it always has.
+static CACHE_OVERRIDE: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+
+#[cfg(test)]
+pub(crate) fn set_cache_dir(dir: PathBuf) {
+    let _ = CACHE_OVERRIDE.set(dir);
+}
+
 /// The `.fastembed_cache`-under-cwd default of the hub client re-downloads the model per
 /// directory `repograph` is run from — 2.1 GB for the default one — and fails outright on a
 /// read-only one.
 fn cache_dir() -> Result<PathBuf> {
+    if let Some(dir) = CACHE_OVERRIDE.get() {
+        return Ok(dir.clone());
+    }
     if let Some(dir) = std::env::var_os("FASTEMBED_CACHE_DIR") {
         return Ok(PathBuf::from(dir));
     }
@@ -65,16 +79,31 @@ fn cache_dir() -> Result<PathBuf> {
 
 struct Files { model: PathBuf, tokenizer: PathBuf, pad_token: String, pad_id: u32 }
 
+/// A graph-only `model.onnx` keeps its weights in `model.onnx_data` beside it and is a few MB;
+/// the small model's 448 MB file holds them itself. Asking the hub for a data file a model never
+/// had is a network round trip on every fused query — 240 ms measured, and a failure offline.
+const EXTERNAL_DATA_STUB: u64 = 64 << 20;
+
+fn keeps_weights_beside(model_len: u64) -> bool { model_len < EXTERNAL_DATA_STUB }
+
 /// Cache hits never touch the network; the first run downloads with a progress bar.
-fn fetch(model: &str) -> Result<Files> {
-    let api = hf_hub::api::sync::ApiBuilder::new().with_cache_dir(cache_dir()?).with_progress(true).build()?;
+fn fetch(model: &str) -> Result<Files> { fetch_from(&cache_dir()?, None, model) }
+
+fn fetch_from(cache: &Path, endpoint: Option<&str>, model: &str) -> Result<Files> {
+    let mut builder = hf_hub::api::sync::ApiBuilder::new().with_cache_dir(cache.to_path_buf()).with_progress(true);
+    if let Some(e) = endpoint { builder = builder.with_endpoint(e.to_string()); }
+    let api = builder.build()?;
     let name = model.to_string();
     let repo = api.model(name.clone());
     let get = |f: &str| repo.get(f).with_context(|| format!("fetch {name}/{f}"));
     let model = get("onnx/model.onnx")?;
     // The larger models keep their weights beside the graph; the session resolves the file by
-    // its relative name, so it has to be fetched into the same snapshot. Absent for the small one.
-    let _ = repo.get("onnx/model.onnx_data");
+    // its relative name, so it has to be fetched into the same snapshot. External data is legal
+    // at any graph size and the model is the reader's to choose, so 64 MB is a margin rather
+    // than a proof: a file that small cannot be holding 448 MB of weights itself, and the small
+    // model's does, so it clears the margin by a factor of seven and never pays the lookup.
+    let len = std::fs::metadata(&model).map(|m| m.len()).unwrap_or(0);
+    if keeps_weights_beside(len) { let _ = repo.get("onnx/model.onnx_data"); }
     let tokenizer = get("tokenizer.json")?;
     let config: serde_json::Value = serde_json::from_slice(&std::fs::read(get("config.json")?)?)?;
     let tok_config: serde_json::Value = serde_json::from_slice(&std::fs::read(get("tokenizer_config.json")?)?)?;
@@ -278,5 +307,95 @@ mod tests {
     #[test]
     fn pool_with_zero_length_rows_yields_no_vectors_not_a_panic() {
         assert!(pool(&[], &[], 0, 2).is_empty());
+    }
+}
+
+#[cfg(test)]
+mod fetch_tests {
+    use super::*;
+
+    /// A cache in hf-hub's layout for one model, with the model file sized as asked; the other
+    /// three files are small and valid enough for `fetch` to read them.
+    fn cache_with_model_of(dir: &std::path::Path, model_len: u64) {
+        let root = dir.join("models--intfloat--multilingual-e5-small");
+        std::fs::create_dir_all(root.join("refs")).unwrap();
+        std::fs::write(root.join("refs/main"), "abc").unwrap();
+        let snap = root.join("snapshots/abc");
+        std::fs::create_dir_all(snap.join("onnx")).unwrap();
+        let model = std::fs::File::create(snap.join("onnx/model.onnx")).unwrap();
+        model.set_len(model_len).unwrap();
+        std::fs::write(snap.join("tokenizer.json"), "{}").unwrap();
+        std::fs::write(snap.join("config.json"), r#"{"pad_token_id": 1}"#).unwrap();
+        std::fs::write(snap.join("tokenizer_config.json"), r#"{"pad_token": "<pad>"}"#).unwrap();
+    }
+
+    #[test]
+    fn a_model_that_holds_its_weights_is_fetched_without_the_network() {
+        let dir = tempfile::tempdir().unwrap();
+        cache_with_model_of(dir.path(), EXTERNAL_DATA_STUB);
+        // An endpoint nothing listens on: any lookup that leaves the cache fails at once.
+        let files = fetch_from(dir.path(), Some("http://127.0.0.1:9"), "intfloat/multilingual-e5-small").unwrap();
+        assert!(files.model.ends_with("onnx/model.onnx"));
+        assert_eq!(files.pad_token, "<pad>");
+        assert_eq!(files.pad_id, 1);
+    }
+
+    #[test]
+    fn a_graph_only_stub_asks_for_the_weights_beside_it() {
+        let dir = tempfile::tempdir().unwrap();
+        cache_with_model_of(dir.path(), 1 << 20);
+        // The stub's data file is not cached and the endpoint is dead, so the lookup fails; the
+        // fetch still answers, as it did before, and the session open reports the missing file.
+        let files = fetch_from(dir.path(), Some("http://127.0.0.1:9"), "intfloat/multilingual-e5-small").unwrap();
+        assert!(files.model.ends_with("onnx/model.onnx"));
+    }
+
+    #[test]
+    fn the_stub_threshold_separates_the_small_models_file_from_a_graph_only_one() {
+        assert!(!keeps_weights_beside(448 << 20));
+        assert!(!keeps_weights_beside(EXTERNAL_DATA_STUB));
+        assert!(keeps_weights_beside(EXTERNAL_DATA_STUB - 1));
+        assert!(keeps_weights_beside(2 << 20));
+    }
+
+    /// A listener that counts the connections a fetch opens. A dead port refuses every connection
+    /// alike, so only a socket that accepts can tell a lookup that was skipped from one that was
+    /// made and failed. Each accepted stream is dropped at once, so the client gives up instead of
+    /// waiting for a reply, and the accept loop polls a flag so it can never outlive the test.
+    fn counting_listener() -> (u16, impl FnOnce() -> usize) {
+        use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        listener.set_nonblocking(true).unwrap();
+        let seen = std::sync::Arc::new(AtomicUsize::new(0));
+        let stop = std::sync::Arc::new(AtomicBool::new(false));
+        let (counted, halt) = (seen.clone(), stop.clone());
+        let accepting = std::thread::spawn(move || {
+            while !halt.load(Ordering::SeqCst) {
+                match listener.accept() {
+                    Ok(_) => { counted.fetch_add(1, Ordering::SeqCst); }
+                    Err(_) => std::thread::sleep(std::time::Duration::from_millis(1)),
+                }
+            }
+        });
+        (port, move || {
+            stop.store(true, Ordering::SeqCst);
+            accepting.join().unwrap();
+            seen.load(Ordering::SeqCst)
+        })
+    }
+
+    #[test]
+    fn only_a_stub_sized_graph_opens_a_connection_for_the_weights_beside_it() {
+        let connections_for = |model_len: u64| {
+            let dir = tempfile::tempdir().unwrap();
+            cache_with_model_of(dir.path(), model_len);
+            let (port, connections) = counting_listener();
+            let endpoint = format!("http://127.0.0.1:{port}");
+            fetch_from(dir.path(), Some(&endpoint), "intfloat/multilingual-e5-small").unwrap();
+            connections()
+        };
+        assert_eq!(connections_for(EXTERNAL_DATA_STUB), 0, "a model that holds its weights asks the hub for nothing");
+        assert!(connections_for(1 << 20) >= 1, "a stub-sized graph asks the hub for the weights beside it");
     }
 }

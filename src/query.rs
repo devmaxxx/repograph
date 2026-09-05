@@ -159,6 +159,12 @@ pub fn ask(graph: &Graph, ids: &IdMatcher, questions: &Questions, dense: Option<
         // the passages did — `QUESTIONS_GATE`, and `lexical_lists` for what the two paths do
         // with it. The raw arms are untouched by construction: a store without questions gets
         // no questions list built at all.
+
+        // Built before the dense call rather than after it: the caller opens the embedding model
+        // on a thread and the first `d(…)` joins it, so these BM25 builds are the only work of
+        // any size that can run beside that open. Every list keeps the seat it had — dense
+        // passages, then the dense question rows on the reranked path, then these.
+        let lexical = lexical_lists(graph, questions, &query, depth, rerank.is_some());
         let mut lists: Vec<Vec<String>> = Vec::new();
         if opts.dense {
             if let Some(d) = dense {
@@ -167,7 +173,7 @@ pub fn ask(graph: &Graph, ids: &IdMatcher, questions: &Questions, dense: Option<
                 if rerank.is_some() { lists.push(questions_rows); }
             }
         }
-        lists.extend(lexical_lists(graph, questions, &query, depth, rerank.is_some()));
+        lists.extend(lexical);
         lists.retain(|l| !l.is_empty());
         let mut fused = fuse::interleave(&lists);
         if let Some(r) = rerank {
