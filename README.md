@@ -186,17 +186,23 @@ alone costs about 220 ms of it. `serve` opens them once and answers over a Unix 
 ```bash
 repograph serve                  # .repograph/serve.sock, poll every 30 s, exit after 30 min idle
 repograph serve --idle 86400     # a day rather than half an hour before it gives up
-repograph serve --no-dense       # lexical only, leaves the 1.3 GB model unopened
+repograph serve --no-dense       # lexical only; a fused `ask` is told so and answers in its own process
 repograph ask --no-serve отмена  # answer here even while one is listening
 ```
 
 `ask` uses it without being told to, and answers in this process whenever it cannot: no socket, a
-socket nobody listens on, a server of another version, a timeout, `--no-serve`, or
-`REPOGRAPH_NO_SERVE` in the environment. A client never deletes the socket file — a refused
-connect is also what a live server with a full backlog gives — so only `serve` removes one, and a
-new `serve` binds over a dead file. On a store neither `enrich` nor `embed` has moved under it,
-the answer is the same bytes either way; that is checked on all 142 recorded and developer bench
-questions in both arms.
+socket nobody listens on, a server of another version, a server built from other code under the
+same version (the handshake carries the executable's own mtime and size, so a second copy of one
+build counts as another), a server started `--no-dense` asked a fused question, a timeout,
+`--no-serve`, or `REPOGRAPH_NO_SERVE` in the environment. Each of those prints a line: a question
+that quietly costs a cold process, or quietly gets a lexical answer, looks like nothing at all. The
+other arm pairing is not a mismatch — a server holding the model answers `--no-dense` lexically,
+which is what was asked for. A client never deletes the socket file — a refused connect is also
+what a live server with a full backlog gives — so only `serve` removes one, and only the one it
+bound itself. On a store neither `enrich` nor `embed` has moved under it, and a server of this
+build serving the arm asked for, the answer is the same bytes either way; that is checked on all
+142 recorded and developer bench questions, in every pairing of the server's arm with the
+client's.
 
 The server refreshes before every answer with the same walk a one-shot `ask` does, and polls
 between them like `watch`, so its **graph** is never staler than a fresh process's. Under

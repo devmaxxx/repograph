@@ -29,6 +29,15 @@ fn config_stamp(repo: &Path) -> Option<crate::walk::Stamp> {
     crate::walk::stamp_of(&std::fs::metadata(repo.join("repograph.toml")).ok()?)
 }
 
+/// What a `stat` says about the running executable, or None where it cannot be found. The
+/// version alone cannot tell two builds apart: this repository has been unreleased since 0.4.0,
+/// so every development build answers `0.4.0`, and the README suggests `--idle 86400` — rebuild,
+/// ask while yesterday's `serve` is up, and yesterday's code answers with nothing to show for it.
+/// Two copies of one build stamp differently, which costs a fallback and never a wrong answer.
+fn build_stamp() -> Option<crate::walk::Stamp> {
+    crate::walk::stamp_of(&std::fs::metadata(std::env::current_exe().ok()?).ok()?)
+}
+
 /// The device and inode of a socket file, which is how a name is told from the thing that was
 /// bound to it: the path can hold a replacement server's socket by the time this one exits.
 fn socket_id(path: &Path) -> Option<(u64, u64)> {
@@ -37,14 +46,27 @@ fn socket_id(path: &Path) -> Option<(u64, u64)> {
     Some((m.dev(), m.ino()))
 }
 
+/// The client's half of the handshake. `req.no_dense` is the arm the question was asked in;
+/// the server's own arm comes back in the `Reply`, because only the server knows it.
 #[derive(serde::Serialize, serde::Deserialize)]
-pub struct Hello { pub v: String, pub req: ask::Request }
+pub struct Hello { pub v: String, #[serde(default)] pub build: Option<crate::walk::Stamp>, pub req: ask::Request }
 
+/// The server's half, and its answer. `no_dense` is the arm this process was started in — a
+/// server that opened no model can only answer lexically, and a client that asked a fused
+/// question has to be told rather than handed a lexical answer under a fused question's name.
+/// Both new fields default, so a reply in the older shape still parses and is refused by `v`.
 #[derive(serde::Serialize, serde::Deserialize)]
-pub struct Reply { pub v: String, pub stdout: String, pub stderr: Vec<String> }
+pub struct Reply {
+    pub v: String,
+    #[serde(default)] pub build: Option<crate::walk::Stamp>,
+    #[serde(default)] pub no_dense: bool,
+    pub stdout: String,
+    pub stderr: Vec<String>,
+}
 
 /// The resident answer, or None when this process has to answer: no socket, one nobody
-/// listens on, another version, a timeout, or a reply that does not parse.
+/// listens on, another version, another build of this version, a server that cannot answer in
+/// the arm the question was asked in, a timeout, or a reply that does not parse.
 ///
 /// Nothing here removes the socket file. A refused connect is a socket nobody listens on — or a
 /// live listener whose backlog is full for this instant, and errno does not tell the two apart;
@@ -58,7 +80,8 @@ pub fn try_ask(repo: &Path, req: &ask::Request) -> Option<Reply> {
     let mut stream = UnixStream::connect(&path).ok()?;
     stream.set_read_timeout(Some(IO_TIMEOUT)).ok()?;
     stream.set_write_timeout(Some(IO_TIMEOUT)).ok()?;
-    let hello = serde_json::to_string(&Hello { v: VERSION.into(), req: req.clone() }).ok()?;
+    let build = build_stamp();
+    let hello = serde_json::to_string(&Hello { v: VERSION.into(), build, req: req.clone() }).ok()?;
     writeln!(stream, "{hello}").ok()?;
     let mut line = String::new();
     BufReader::new(stream).read_line(&mut line).ok()?;
@@ -67,6 +90,18 @@ pub fn try_ask(repo: &Path, req: &ask::Request) -> Option<Reply> {
         // Said out loud: a leftover server from another build answers nothing and every
         // question quietly costs a cold process instead, which looks like nothing at all.
         eprintln!("serve: the resident process is version {}, this is {VERSION}; answering here", reply.v);
+        return None;
+    }
+    if reply.build != build {
+        eprintln!("serve: the resident process is another build of {VERSION}; answering here");
+        return None;
+    }
+    // Said out loud for the same reason, and it matters more: a lexical answer to a fused
+    // question is an answer, so nothing about it looks wrong. The other direction is not a
+    // mismatch — a server holding the model answers a `--no-dense` question lexically, which
+    // is what was asked for.
+    if reply.no_dense && !req.no_dense {
+        eprintln!("serve: the resident process answers lexical-only and this question is fused; answering here");
         return None;
     }
     Some(reply)
@@ -176,8 +211,11 @@ fn hello_line(stream: &UnixStream) -> Option<String> {
 fn answer(mut stream: UnixStream, watcher: &mut crate::Watcher, ctx: &mut ask::Context) -> Result<bool> {
     let Some(line) = hello_line(&stream) else { return Ok(false) };
     let hello: Hello = serde_json::from_str(&line).context("hello")?;
-    if hello.v != VERSION {
-        writeln!(stream, "{}", serde_json::to_string(&Reply { v: VERSION.into(), stdout: String::new(), stderr: vec![] })?)?;
+    // The refusals, all three under one reply: the client reads the version, the build and the
+    // arm off it and says which of them sent the question back to its own process. Answering
+    // first and refusing after would spend a fused answer's work on a reply nobody reads.
+    if hello.v != VERSION || hello.build != build_stamp() || (ctx.no_dense() && !hello.req.no_dense) {
+        writeln!(stream, "{}", serde_json::to_string(&header(ctx))?)?;
         return Ok(true);
     }
     // Anything still waiting predates this request — a poll's refresh, an answer that ended in
@@ -193,9 +231,15 @@ fn answer(mut stream: UnixStream, watcher: &mut crate::Watcher, ctx: &mut ask::C
         adopt_if_moved(watcher, ctx, 1)?;
     }
     let stdout = ctx.answer(&hello.req)?;
-    let reply = Reply { v: VERSION.into(), stdout, stderr: ctx.notices() };
+    let stderr = ctx.notices();
+    let reply = Reply { stdout, stderr, ..header(ctx) };
     writeln!(stream, "{}", serde_json::to_string(&reply)?)?;
     Ok(true)
+}
+
+/// What this process is, with no answer in it: the three fields a client decides on.
+fn header(ctx: &ask::Context) -> Reply {
+    Reply { v: VERSION.into(), build: build_stamp(), no_dense: ctx.no_dense(), stdout: String::new(), stderr: vec![] }
 }
 
 struct Unlink(PathBuf, Option<(u64, u64)>);
