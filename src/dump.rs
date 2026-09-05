@@ -1,6 +1,7 @@
 //! `repograph dump`: every retriever's ranked list for a set of questions, written once so the
 //! retrieval mathematics can be done offline, without the model and without this code.
 
+use crate::bench::Expect;
 use crate::config::Config;
 use crate::enrich::Questions;
 use crate::ids::IdMatcher;
@@ -11,8 +12,10 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
+/// `expect` is `bench`'s own type: `dump` is the offline record of the suites `bench` scores, so
+/// the two have to agree on what a case expects, list-valued anchors included.
 #[derive(Debug, Deserialize)]
-struct Query { q: String, expect: String, kind: String }
+struct Query { q: String, expect: Expect, kind: String }
 
 #[derive(Serialize)]
 struct Exact { ids: Vec<String>, whole_question: bool }
@@ -23,7 +26,7 @@ struct Ask { seeds: Vec<(String, f32)>, expanded: Vec<(String, f32, String)> }
 #[derive(Serialize)]
 struct Record {
     q: String,
-    expect: String,
+    expect: Expect,
     kind: String,
     exact: Exact,
     qvec: Vec<f32>,
@@ -61,7 +64,9 @@ pub fn run(repo: &Path, queries: &Path, out: &Path, depth: usize, no_dense: bool
     // because each node is sampled at most once; the dense list drops the row per query instead.
     let mut loo = questions.clone();
     for q in queries.iter().filter(|q| q.kind == "synthetic") {
-        if let Some(e) = loo.entries.get_mut(&q.expect) { e.questions.retain(|t| t != &q.q); }
+        for anchor in q.expect.anchors() {
+            if let Some(e) = loo.entries.get_mut(anchor) { e.questions.retain(|t| t != &q.q); }
+        }
     }
     let lexical = LexicalIndex::build(&graph);
     let lexical_q = LexicalIndex::build_questions(&graph, &loo);
@@ -123,7 +128,7 @@ pub fn run(repo: &Path, queries: &Path, out: &Path, depth: usize, no_dense: bool
                 expanded: answer.expanded.iter().map(|h| (h.id.clone(), h.score, h.via.clone().unwrap_or_default())).collect(),
             },
         });
-        eprintln!("dump: {:<10} {:<14} {}", q.kind, q.expect, q.q);
+        eprintln!("dump: {:<10} {:<14} {}", q.kind, q.expect.key(), q.q);
     }
     let dump = Dump {
         meta: Meta { store: repo.join(".repograph").display().to_string(), depth, rows: dense_idx.ids.len(), dim: dense_idx.dim, queries: records.len(), dense: !no_dense },
@@ -141,7 +146,20 @@ mod tests {
     #[test]
     fn a_query_line_deserializes_its_three_required_fields() {
         let q: Query = serde_json::from_str(r#"{"q": "как отменить?", "expect": "FR-PAY-22", "kind": "keyword"}"#).unwrap();
-        assert_eq!((q.q.as_str(), q.expect.as_str(), q.kind.as_str()), ("как отменить?", "FR-PAY-22", "keyword"));
+        assert_eq!((q.q.as_str(), q.expect.key().as_str(), q.kind.as_str()), ("как отменить?", "FR-PAY-22", "keyword"));
+    }
+
+    // Half the developer suite anchors a question on more than one place; a dump that joined
+    // those into one string would lose the anchors the offline retrieval maths scores against.
+    #[test]
+    fn a_query_line_takes_one_anchor_or_several_and_writes_back_the_shape_it_read() {
+        let one: Query = serde_json::from_str(r#"{"q": "a", "expect": "FR-PAY-22", "kind": "keyword"}"#).unwrap();
+        assert_eq!(one.expect.anchors(), ["FR-PAY-22"]);
+        assert_eq!(serde_json::to_value(&one.expect).unwrap(), serde_json::json!("FR-PAY-22"));
+
+        let many: Query = serde_json::from_str(r#"{"q": "b", "expect": ["FR-PAY-22", "packages/pay/refund.ts"], "kind": "multi"}"#).unwrap();
+        assert_eq!(many.expect.anchors(), ["FR-PAY-22", "packages/pay/refund.ts"]);
+        assert_eq!(serde_json::to_value(&many.expect).unwrap(), serde_json::json!(["FR-PAY-22", "packages/pay/refund.ts"]));
     }
 
     #[test]
@@ -173,6 +191,7 @@ mod tests {
         for key in ["q", "expect", "kind", "exact", "qvec", "dense_passages", "dense_questions", "bm25_passages", "bm25_questions", "bm25_code", "loo_hash", "loo_rows", "ask"] {
             assert!(v.get(key).is_some(), "missing field {key}");
         }
+        assert_eq!(v["expect"], "FR-PAY-22");
         assert_eq!(v["exact"]["whole_question"], true);
         assert_eq!(v["ask"]["expanded"][0][2], "FR-PAY-22");
     }
