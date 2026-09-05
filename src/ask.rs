@@ -27,12 +27,22 @@ impl Timing {
     }
 }
 
+/// What a model open yields, named because it also crosses a thread boundary.
+pub(crate) type Opened = Result<Option<index::embed::Embedder>, String>;
+
+/// The embedder, or the line that says why there is none — returned rather than printed, so a
+/// process whose stderr is a socket reply can hand that line to the client that asked. An arm
+/// with no dense side is `Ok(None)`: nothing was wanted and nothing is missing.
+pub(crate) fn embedder_or_notice(no_dense: bool, model: &str) -> Opened {
+    if no_dense { return Ok(None); }
+    index::embed::Embedder::open(model)
+        .map(Some)
+        .map_err(|err| format!("dense: model unavailable, continuing lexical-only ({err:#})"))
+}
+
+/// The same open for `watch` and `embed`, whose stderr is the reader's terminal.
 pub(crate) fn open_embedder(no_dense: bool, model: &str) -> Option<index::embed::Embedder> {
-    if no_dense { return None; }
-    match index::embed::Embedder::open(model) {
-        Ok(e) => Some(e),
-        Err(err) => { eprintln!("dense: model unavailable, continuing lexical-only ({err:#})"); None }
-    }
+    embedder_or_notice(no_dense, model).unwrap_or_else(|notice| { eprintln!("{notice}"); None })
 }
 
 /// The model opens on a thread while `ask` builds its BM25 indexes — `query::ask` builds the
@@ -40,10 +50,10 @@ pub(crate) fn open_embedder(no_dense: bool, model: &str) -> Option<index::embed:
 /// and the questions store are read before the vectors that name the model, so they are not part
 /// of it. A question that exact ids or symbols answer whole never opens the model, as before;
 /// with `--no-dense` or no vectors nothing starts.
-pub(crate) fn warm_model(dense: bool, whole: bool, model: &str) -> Option<std::thread::JoinHandle<Option<index::embed::Embedder>>> {
+pub(crate) fn warm_model(dense: bool, whole: bool, model: &str) -> Option<std::thread::JoinHandle<Opened>> {
     if !dense || whole { return None; }
     let model = model.to_string();
-    Some(std::thread::spawn(move || open_embedder(false, &model)))
+    Some(std::thread::spawn(move || embedder_or_notice(false, &model)))
 }
 
 /// The stored graph brought in line with the working tree, plus what that cost when the tree had
@@ -85,9 +95,12 @@ pub struct Context {
     graph: model::Graph,
     ids: ids::IdMatcher,
     questions: enrich::Questions,
+    /// What `questions.json` looked like when the questions in hand were read, so a refresh
+    /// that did not touch them does not pay to parse them again.
+    questions_stamp: Option<walk::Stamp>,
     no_dense: bool,
     dense_idx: RefCell<Option<index::dense::DenseIndex>>,
-    warm: RefCell<Option<std::thread::JoinHandle<Option<index::embed::Embedder>>>>,
+    warm: RefCell<Option<std::thread::JoinHandle<Opened>>>,
     embedder: RefCell<Option<Option<index::embed::Embedder>>>,
     cross: RefCell<Option<index::cross::CrossEncoder>>,
     resync: Cell<bool>,
@@ -113,9 +126,10 @@ impl Context {
         timing.stage("ids ready");
         let (questions, source) = enrich::Questions::load_traced(&store)?;
         if !stale && source == store::Source::Json { questions.write_mirror(&store)?; }
+        let questions_stamp = store.stamp(enrich::FILE);
         timing.stage("questions ready");
         Ok(Context {
-            cfg: cfg.clone(), store, graph, ids, questions, no_dense,
+            cfg: cfg.clone(), store, graph, ids, questions, questions_stamp, no_dense,
             dense_idx: RefCell::new(None),
             warm: RefCell::new(None),
             embedder: RefCell::new(None),
@@ -149,15 +163,18 @@ impl Context {
             });
             let mut slot = embedder.borrow_mut();
             let e = slot.get_or_insert_with(|| {
-                let e = match warm.borrow_mut().take() {
-                    Some(handle) => handle.join().unwrap_or_else(|_| { notices.borrow_mut().push("dense: model thread panicked, continuing lexical-only".to_string()); None }),
+                // Collected, never printed: on the warm thread this line used to race the main
+                // thread's own stderr, and over a socket it would land on the server's terminal
+                // instead of reaching the client whose answer went lexical-only because of it.
+                let opened = match warm.borrow_mut().take() {
+                    Some(handle) => handle.join().unwrap_or_else(|_| Err("dense: model thread panicked, continuing lexical-only".to_string())),
                     None => {
                         let model = index::embed::resolve(idx.model_of_rows().as_deref(), &cfg.embed_model);
-                        open_embedder(no_dense, &model)
+                        embedder_or_notice(no_dense, &model)
                     }
                 };
                 timing.stage("model opened");
-                e
+                opened.unwrap_or_else(|notice| { notices.borrow_mut().push(notice); None })
             });
             let qvec = e.as_mut().and_then(|e| e.query(q).ok());
             // Decided before a single row is written: the resync below embeds and saves, so a
@@ -191,7 +208,13 @@ impl Context {
             timing.stage("query embedded and searched");
             out
         };
-        let rerank_fn = |q: &str, c: &[(String, String)]| rerank::run(&cfg.rerank_command, q, c);
+        // Collected like the local reranker's failure beside it, so `--rerank` and
+        // `--rerank-local` tell a client the same thing when their model will not answer.
+        let rerank_fn = |q: &str, c: &[(String, String)]| {
+            let (picked, notice) = rerank::run_or_notice(&cfg.rerank_command, q, c);
+            if let Some(n) = notice { notices.borrow_mut().push(n); }
+            picked
+        };
         if req.rerank_local && cross.borrow().is_none() {
             let dir = if cfg.reranker_dir.is_empty() { index::cross::default_dir()? } else { PathBuf::from(&cfg.reranker_dir) };
             *cross.borrow_mut() = Some(index::cross::CrossEncoder::open(&dir).context("--rerank-local")?);
@@ -235,6 +258,25 @@ impl Context {
         let answer = query::ask(graph, &self.ids, questions, Some(&dense_fn), rerank, &req.words, &opts);
         timing.stage("answered");
         Ok(query::render(&answer, graph, &opts))
+    }
+
+    /// The watcher's graph taken over after a poll moved it, which is how a resident context
+    /// reaches the state a one-shot `ask` would have loaded from disk — without reading ten
+    /// megabytes back to learn what the poll already holds. `refreshed` is the poll's own
+    /// report when it applied a change and `None` when it only read a store someone else wrote.
+    pub(crate) fn adopt(&mut self, w: &crate::Watcher, refreshed: Option<crate::UpdateReport>) -> anyhow::Result<()> {
+        self.graph = w.graph.clone();
+        let stamp = self.store.stamp(enrich::FILE);
+        if stamp != self.questions_stamp {
+            self.questions = enrich::Questions::load(&self.store)?;
+            self.questions_stamp = stamp;
+        }
+        if let Some(r) = refreshed { self.notices.borrow_mut().push(format!("refresh: {} changed, {} removed", r.changed, r.removed)); }
+        // The passages the vectors were built from have moved, so the next fused answer
+        // re-embeds the rows that changed — the catch-up a one-shot `ask` does after its own
+        // refresh, and the only thing that keeps the held index true to the held graph.
+        self.resync.set(true);
+        Ok(())
     }
 
     /// Notices `ask` used to print on stderr for this answer (refresh lines, dense fallbacks), drained.

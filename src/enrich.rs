@@ -13,7 +13,7 @@ use std::collections::BTreeMap;
 use std::io::Write;
 use std::sync::{Arc, Mutex};
 
-const FILE: &str = "questions.json";
+pub(crate) const FILE: &str = "questions.json";
 const KINDS: [NodeKind; 5] = [NodeKind::Requirement, NodeKind::Invariant, NodeKind::Adr, NodeKind::Milestone, NodeKind::Entity];
 const PASSAGE_CHARS: usize = 1500;
 

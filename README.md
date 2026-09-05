@@ -47,8 +47,8 @@ planned and unreleased since 0.4.0:
 | `embed`                    | working; writes the rows the dense index lacks with the configured model, rewriting it whole when the store was written by another — see [Embeddings](#embeddings) |
 
 `--no-dense` skips the embedding stage everywhere it could apply — `build`, `update`, `enrich`,
-`embed`, `watch`, `ask`, `bench`, `dump`. Without it, those commands use local embeddings once the
-model is cached (see [Embeddings](#embeddings)).
+`embed`, `watch`, `serve`, `ask`, `bench`, `dump`. Without it, those commands use local embeddings
+once the model is cached (see [Embeddings](#embeddings)).
 
 ## Install
 
@@ -176,6 +176,39 @@ It prints one line per refresh and exits on Ctrl-C; every store write is a temp 
 so interrupting it cannot leave half a graph behind. An idle poll is the walk and nothing else —
 21 ms of CPU on the development corpus, under a tenth of a percent of a core at the default
 cadence.
+
+### Asking a resident process
+
+Most of a fused `ask` is the process opening things it then throws away: the embedding model
+alone costs about 300 ms. `serve` opens them once and answers over a Unix socket:
+
+```bash
+repograph serve                  # .repograph/serve.sock, poll every 30 s, exit after 30 min idle
+repograph serve --idle 86400     # a day rather than half an hour before it gives up
+repograph serve --no-dense       # lexical only, leaves the 1.3 GB model unopened
+repograph ask --no-serve отмена  # answer here even while one is listening
+```
+
+`ask` uses it without being told to, and answers in this process whenever it cannot: no socket, a
+socket nobody listens on — which it unlinks on the way past — a server of another version, a
+timeout, `--no-serve`, or `REPOGRAPH_NO_SERVE` in the environment. The answer is the same bytes
+either way; that is checked on all 142 recorded and developer bench questions in both arms.
+
+The server refreshes before every answer with the same walk a one-shot `ask` does, and polls
+between them like `watch`, so a resident answer is never staler than a fresh process's — except
+under `--stale`, which by definition skips the walk and then sees the graph as of the server's
+last poll. It answers one question at a time; a second client waits for the first rather than
+being turned away.
+
+Measured on the bench corpus (908 files, 8.3k nodes, enriched), median of ten:
+
+| | resident | one process |
+| --- | --- | --- |
+| fused question, dense | 72 ms | 385 ms |
+| lexical | 55 ms | 82 ms |
+
+The first question after a start still pays the model open (0.40 s). What is left is a process
+start (6 ms), the socket round trip, and the BM25 build that `ask` still does per question.
 
 Git hooks are the free version of the same thing, for a repository whose changes arrive by pull:
 
