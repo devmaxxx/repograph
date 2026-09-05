@@ -246,7 +246,7 @@ fn a_lexical_question_is_still_answered_by_a_server_holding_the_dense_arm() {
     let _ = server.wait();
 }
 
-// Every development build of this repository answers `0.4.0`, so the version alone would let
+// Every development build between two releases answers the same version, so it alone would let
 // yesterday's `serve` answer today's question — under `--idle 86400`, for a day.
 #[test]
 fn a_reply_from_another_build_of_this_version_is_ignored() {
