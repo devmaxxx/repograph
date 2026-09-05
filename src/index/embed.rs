@@ -35,6 +35,7 @@ pub struct Embedder {
     tokenizer: Tokenizer,
     wants_type_ids: bool,
     name: String,
+    dim: Option<usize>,
 }
 
 /// The `.fastembed_cache`-under-cwd default of the hub client re-downloads 470 MB per directory
@@ -101,11 +102,25 @@ impl Embedder {
         });
         let (session, tokenizer) = session?;
         let wants_type_ids = session.inputs().iter().any(|i| i.name() == "token_type_ids");
-        Ok(Embedder { session, tokenizer, wants_type_ids, name: model.to_string() })
+        Ok(Embedder { session, tokenizer, wants_type_ids, name: model.to_string(), dim: None })
     }
 
     /// The hub id the vectors this embedder writes belong to; recorded in the store by `written_by`.
     pub fn name(&self) -> &str { &self.name }
+
+    /// The width of the vectors this model gives. Only a forward pass knows it, so one short
+    /// string is embedded and the answer kept: a caller comparing the model against a store's
+    /// rows would otherwise pay that pass on every query.
+    pub fn dim(&mut self) -> Result<usize> {
+        match self.dim {
+            Some(d) => Ok(d),
+            None => {
+                let d = self.query("probe")?.len();
+                self.dim = Some(d);
+                Ok(d)
+            }
+        }
+    }
 
     /// Texts arrive already e5-prefixed (`dense::rows`): passages as `passage: `, generated
     /// questions as `query: `. A batch is padded to its longest member, so texts are batched

@@ -403,7 +403,7 @@ heading form; the modality is optional.
 
 ## Embeddings
 
-Dense retrieval embeds with `intfloat/multilingual-e5-small` (384-d, ONNX, ≈470 MB on disk) run
+Dense retrieval embeds by default with `intfloat/multilingual-e5-small` (384-d, ONNX, ≈470 MB on disk) run
 through `ort` directly: the tokenizer and the session open concurrently at optimisation level 1,
 which halves model-open time against the library default. The files are a one-time Hugging Face
 download cached under `FASTEMBED_CACHE_DIR` if that is set, else `~/.cache/repograph/fastembed`
@@ -418,8 +418,10 @@ The model is a property of the store. `embed_model` in `repograph.toml` names wh
 whatever the configuration says today. A store written before the field existed is the small
 model's, and a reader treats it so; only `build`, `update`, `enrich`, `embed` and `watch` move a
 store to the configured model. Switching is one line and one `repograph embed`: rows another
-model wrote are dropped and the file rewritten, since a width change would be caught and an equal
-width would not. `REPOGRAPH_EMBED_MODEL=<hub id>` outranks both for one command, which is how a copy
+model wrote are dropped and the file rewritten. The claim is on width as well as name, so a store
+the earlier `REPOGRAPH_EMBED_MODEL` recipe left holding another model's rows under no recorded name
+is re-embedded whole by the next `embed` rather than relabelled over rows it never wrote.
+`REPOGRAPH_EMBED_MODEL=<hub id>` outranks both for one command, which is how a copy
 of a store is measured under a second model without touching its files. Measured on the fixture,
 `intfloat/multilingual-e5-large` (1024-d, 2.1 GB download) reads paraphrase **22/30** against the
 small model's 15/30 with keyword 40/40 and code 12/12 unchanged, held-out 103 → 119 of 400 (+19 −3,

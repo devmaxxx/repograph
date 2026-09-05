@@ -202,7 +202,7 @@ pub fn run(repo: &Path, cases: Option<&Path>, no_dense: bool, rerank: bool, rera
     if let Some(e) = embedder.as_mut() {
         // A bench that silently searched 384-d queries against 1024-d rows would read empty
         // dense lists as a lexical-only run and grade it against the wrong floors.
-        let width = e.query("probe")?.len();
+        let width = e.dim()?;
         if dense_idx.dim > 0 && width != dense_idx.dim {
             anyhow::bail!("the store's vectors are {}-d and {} gives {}-d — run `repograph embed`", dense_idx.dim, e.name(), width);
         }

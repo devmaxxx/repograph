@@ -80,7 +80,7 @@ pub fn run(repo: &Path, queries: &Path, out: &Path, depth: usize, no_dense: bool
     if let Some(e) = embedder.as_mut() {
         // A dump that silently searched 384-d queries against 1024-d rows would record empty
         // dense lists, and the held-out gate would read them as the lexical-only arm.
-        let width = e.query("probe")?.len();
+        let width = e.dim()?;
         if dense_idx.dim > 0 && width != dense_idx.dim {
             anyhow::bail!("the store's vectors are {}-d and {} gives {}-d — run `repograph embed`", dense_idx.dim, e.name(), width);
         }

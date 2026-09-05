@@ -298,7 +298,7 @@ fn run_watch(repo: &std::path::Path, cfg: &config::Config, every: u64, batch: us
                         None => dense.insert(index::dense::DenseIndex::load(&w.store)?),
                     };
                     let questions = enrich::Questions::load(&w.store)?;
-                    idx.written_by(&model);
+                    idx.written_by(&model, e.dim()?);
                     embedded = idx.sync(&w.graph, &questions, &mut |texts| e.embed(texts))?;
                     if embedded > 0 { idx.save(&w.store)?; }
                 }
@@ -330,7 +330,7 @@ fn embed_all(repo: &std::path::Path, no_dense: bool, configured: &str) -> anyhow
     let questions = enrich::Questions::load(&store)?;
     let mut dense = index::dense::DenseIndex::load(&store)?;
     let t = std::time::Instant::now();
-    dense.written_by(&model);
+    dense.written_by(&model, emb.dim()?);
     let n = dense.sync(&graph, &questions, &mut |texts| emb.embed(texts))?;
     dense.save(&store)?;
     println!("dense: embedded {n} rows in {:.1}s", t.elapsed().as_secs_f32());
@@ -382,7 +382,8 @@ fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
     let repo = cli.repo.canonicalize()?;
     // Loaded per command: `bench` reads its own from `REPOGRAPH_BENCH_REPO`, and `explain`/`verify`
-    // must not fail on a broken `repograph.toml` they never read.
+    // must not fail on a broken `repograph.toml` they never read. `embed` does read it — the model
+    // the vectors are written with lives there — so it fails on a broken one like the other writers.
     let load_cfg = || config::Config::load(&repo);
     let wipe = matches!(cli.cmd, Cmd::Build);
     match cli.cmd {
@@ -430,25 +431,39 @@ fn main() -> anyhow::Result<()> {
             // query or `update`.
             let resync = std::cell::Cell::new(refreshed.is_some());
             let dense_fn = |q: &str, k: usize| -> (Vec<String>, Vec<String>) {
-                let mut slot = embedder.borrow_mut();
-                let e = slot.get_or_insert_with(|| {
-                    let model = index::embed::resolve(index::dense::DenseIndex::recorded_model(&store).ok().flatten().as_deref(), &cfg.embed_model);
-                    let e = open_embedder(cli.no_dense, &model);
-                    timing.stage("model opened");
-                    e
-                });
+                // The vectors come first because they name the model: reading `vectors.json`
+                // again through `recorded_model` would parse 3 MB a second time for what the
+                // loaded index already holds.
                 let mut idx = dense_idx.borrow_mut();
                 let idx = idx.get_or_insert_with(|| {
                     let i = index::dense::DenseIndex::load(&store).unwrap_or_else(|err| { eprintln!("dense: index unreadable, continuing lexical-only ({err:#})"); Default::default() });
                     timing.stage("vectors loaded"); i
                 });
+                let mut slot = embedder.borrow_mut();
+                let e = slot.get_or_insert_with(|| {
+                    let model = index::embed::resolve(idx.model_of_rows().as_deref(), &cfg.embed_model);
+                    let e = open_embedder(cli.no_dense, &model);
+                    timing.stage("model opened");
+                    e
+                });
+                let qvec = e.as_mut().and_then(|e| e.query(q).ok());
+                // Decided before a single row is written: the resync below embeds and saves, so a
+                // store whose rows are not this model's width has to be refused here — after it,
+                // the notice would be an epitaph for the index the resync had already replaced.
+                if let (Some(v), Some(emb)) = (&qvec, e.as_ref()) {
+                    if idx.dim > 0 && v.len() != idx.dim {
+                        eprintln!("dense: the store's vectors are {}-d and {} gives {}-d — run `repograph embed`; continuing lexical-only", idx.dim, emb.name(), v.len());
+                        return (Vec::new(), Vec::new());
+                    }
+                }
                 if resync.replace(false) {
-                    if let Some(e) = e.as_mut() {
+                    if let Some(emb) = e.as_mut() {
                         // A reader appends to the store's own rows and never re-embeds them into
-                        // another model's index: it claims the index for the model it opened,
-                        // which for an unnamed store is the small one `recorded_model` names.
-                        idx.written_by(e.name());
-                        match idx.sync(&graph, &questions, &mut |texts| e.embed(texts)) {
+                        // another model's index: it claims the index for the model it opened, at
+                        // the width this very query just measured.
+                        let width = qvec.as_ref().map_or(idx.dim, |v| v.len());
+                        idx.written_by(emb.name(), width);
+                        match idx.sync(&graph, &questions, &mut |texts| emb.embed(texts)) {
                             Ok(0) => {}
                             Ok(n) => {
                                 if let Err(err) = idx.save(&store) { eprintln!("refresh: vectors not saved ({err:#})"); }
@@ -457,15 +472,6 @@ fn main() -> anyhow::Result<()> {
                             Err(err) => eprintln!("refresh: vectors unchanged ({err:#})"),
                         }
                         timing.stage("vectors synced");
-                    }
-                }
-                let qvec = e.as_mut().and_then(|e| e.query(q).ok());
-                // Said once rather than swallowed: `search_scored` answers a query of the wrong
-                // width with empty lists, which reads exactly like a lexical-only run.
-                if let (Some(v), Some(e)) = (&qvec, e.as_ref()) {
-                    if idx.dim > 0 && v.len() != idx.dim {
-                        eprintln!("dense: the store's vectors are {}-d and {} gives {}-d — run `repograph embed`; continuing lexical-only", idx.dim, e.name(), v.len());
-                        return (Vec::new(), Vec::new());
                     }
                 }
                 let out = match qvec { Some(v) => idx.search(&v, k), None => (Vec::new(), Vec::new()) };

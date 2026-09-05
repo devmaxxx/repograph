@@ -48,6 +48,17 @@ fn rows(n: &crate::model::Node, questions: &Questions) -> Vec<String> {
     out.extend(questions.get(&n.id).iter().map(|q| format!("query: {q}")));
     out
 }
+
+/// Which model a store's rows belong to, given the name it records and whether it holds rows at
+/// all. Rows with no name are the small model's — the only model that ever wrote an unnamed store
+/// — so a reader opens that whatever the configuration says, and no reader can move a store to
+/// another model. `None` is for a store with no rows for a name to be wrong about, where the
+/// configuration is free to choose.
+fn model_of(named: &str, has_rows: bool) -> Option<String> {
+    if !named.is_empty() { return Some(named.to_string()); }
+    has_rows.then(|| crate::index::embed::DEFAULT_MODEL.to_string())
+}
+
 fn normalise(v: &mut [f32]) {
     let norm = v.iter().map(|x| x * x).sum::<f32>().sqrt();
     if norm > 0.0 { for x in v { *x /= norm; } }
@@ -65,30 +76,35 @@ impl DenseIndex {
         store.has("vectors.json") && store.has("vectors.f32")
     }
 
-    /// The model named in `vectors.json`, without reading the rows: what a reader opens. A store
-    /// that holds rows but names no model is the small model's — the only one that ever wrote an
-    /// unnamed store — so a reader opens that whatever the configuration says, and no reader can
-    /// move a store to another model. The configured one takes effect at the next `build`,
-    /// `update`, `enrich`, `embed` or `watch`, which rewrites the index whole. `None` is for a
-    /// store with no vectors at all, where there is nothing yet for a name to be wrong about.
+    /// The model a store's rows belong to, read from `vectors.json` without loading the rows —
+    /// what a reader opens. The configured model takes effect at the next `build`, `update`,
+    /// `enrich`, `embed` or `watch`, which rewrites the index whole.
     pub fn recorded_model(store: &Store) -> Result<Option<String>> {
         #[derive(serde::Deserialize)]
         struct Written { #[serde(default)] model: String }
         let Some(meta) = store.read_bytes("vectors.json")? else { return Ok(None) };
         let w: Written = serde_json::from_slice(&meta).context("vectors.json")?;
-        if !w.model.is_empty() { return Ok(Some(w.model)); }
         // `has` stats the file rather than reading it: 50 MB of rows must not be loaded to learn
         // whether there are any.
-        Ok(store.has("vectors.f32").then(|| crate::index::embed::DEFAULT_MODEL.to_string()))
+        Ok(model_of(&w.model, store.has("vectors.f32")))
     }
 
-    /// Claims the index for `model` before a sync. Rows another model wrote cannot be appended
-    /// to or compared against — a width change would be caught, an equal width would not — so
-    /// they go and the file is rewritten from the new rows alone. An unnamed store is the small
-    /// model's, the only one that wrote stores before the field existed.
-    pub fn written_by(&mut self, model: &str) {
+    /// `recorded_model`'s answer for an index already in hand, so a reader that has loaded the
+    /// vectors does not parse a 3 MB `vectors.json` again to learn the same thing.
+    pub fn model_of_rows(&self) -> Option<String> {
+        model_of(&self.model, !self.ids.is_empty())
+    }
+
+    /// Claims the index for `model`, whose vectors are `dim` wide, before a sync. Rows another
+    /// model wrote cannot be appended to or compared against, and neither can rows of another
+    /// width: the name alone would miss a store the `REPOGRAPH_EMBED_MODEL` recipe left holding
+    /// wide rows under no name, where a claim by the small model's name matches, `sync` then
+    /// matches every row by hash and embeds nothing, and the store is recorded as the small
+    /// model's over rows it never wrote — a state no later `embed` could reach. Either mismatch
+    /// drops the rows and the file is rewritten from the new ones alone.
+    pub fn written_by(&mut self, model: &str, dim: usize) {
         let held = if self.model.is_empty() { crate::index::embed::DEFAULT_MODEL } else { self.model.as_str() };
-        if !self.ids.is_empty() && held != model {
+        if !self.ids.is_empty() && (held != model || (self.dim > 0 && self.dim != dim)) {
             self.ids.clear(); self.hashes.clear(); self.kinds.clear(); self.vectors.clear();
             self.free.clear(); self.live.clear();
             self.persisted = 0; self.dim = 0;
@@ -288,6 +304,12 @@ mod tests {
         }).collect())
     }
 
+    /// The same stand-in two floats wider, for the claims that turn on the model's width rather
+    /// than its name.
+    fn fake_wide(texts: &[String]) -> Result<Vec<Vec<f32>>> {
+        Ok(fake(texts)?.into_iter().map(|mut v| { v.extend_from_slice(&[0.0, 1.0]); v }).collect())
+    }
+
     fn synced(g: &Graph) -> DenseIndex {
         let mut idx = DenseIndex::default();
         idx.sync(g, &Questions::default(), &mut fake).unwrap();
@@ -310,14 +332,31 @@ mod tests {
     #[test]
     fn rows_of_another_model_go_before_a_sync_and_the_same_model_keeps_them() {
         let mut idx = synced(&graph("x"));
-        idx.written_by(crate::index::embed::DEFAULT_MODEL);
+        idx.written_by(crate::index::embed::DEFAULT_MODEL, 3);
         assert_eq!(idx.ids.len(), 2, "an unnamed store is the small model's and is kept");
-        idx.written_by("intfloat/multilingual-e5-large");
+        idx.written_by("intfloat/multilingual-e5-large", 3);
         assert!(idx.ids.is_empty() && idx.vectors.is_empty() && idx.dim == 0, "another model's rows cannot be appended to");
         assert_eq!(idx.model, "intfloat/multilingual-e5-large");
         assert_eq!(idx.sync(&graph("x"), &Questions::default(), &mut fake).unwrap(), 2);
-        idx.written_by("intfloat/multilingual-e5-large");
+        idx.written_by("intfloat/multilingual-e5-large", 3);
         assert_eq!(idx.ids.len(), 2, "the same model keeps its rows");
+    }
+
+    #[test]
+    fn an_unnamed_store_of_another_width_is_emptied_though_the_name_matches() {
+        // What `REPOGRAPH_EMBED_MODEL=<hub id>` + `embed` left behind: another model's rows under
+        // no name at all. Claimed by name alone it would keep them, `sync` would match every row
+        // by hash and embed nothing, and the store would be recorded as the small model's over
+        // rows the small model never wrote — with no later `embed` able to reach it.
+        let mut idx = synced(&graph("x"));
+        assert_eq!((idx.dim, idx.model.as_str()), (3, ""));
+        idx.written_by(crate::index::embed::DEFAULT_MODEL, 3);
+        assert_eq!(idx.ids.len(), 2, "the same name at the same width appends");
+        idx.written_by(crate::index::embed::DEFAULT_MODEL, 5);
+        assert!(idx.ids.is_empty() && idx.vectors.is_empty() && idx.dim == 0,
+            "rows of another width cannot be appended to, whatever the name says");
+        assert_eq!(idx.sync(&graph("x"), &Questions::default(), &mut fake_wide).unwrap(), 2);
+        assert_eq!(idx.dim, 5);
     }
 
     #[test]
@@ -325,7 +364,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let store = Store::new(dir.path());
         let mut idx = synced(&graph("x"));
-        idx.written_by("intfloat/multilingual-e5-large");
+        idx.written_by("intfloat/multilingual-e5-large", 3);
         idx.sync(&graph("x"), &Questions::default(), &mut fake).unwrap();
         idx.save(&store).unwrap();
         assert_eq!(DenseIndex::recorded_model(&store).unwrap().as_deref(), Some("intfloat/multilingual-e5-large"));
@@ -342,7 +381,7 @@ mod tests {
         assert_eq!(DenseIndex::recorded_model(&store).unwrap().as_deref(), Some(crate::index::embed::DEFAULT_MODEL),
             "an unnamed store holds the small model's rows, so a reader opens the small model");
         let mut idx = synced(&graph("x"));
-        idx.written_by("intfloat/multilingual-e5-large");
+        idx.written_by("intfloat/multilingual-e5-large", 3);
         idx.sync(&graph("x"), &Questions::default(), &mut fake).unwrap();
         idx.save(&store).unwrap();
         assert_eq!(DenseIndex::recorded_model(&store).unwrap().as_deref(), Some("intfloat/multilingual-e5-large"));
