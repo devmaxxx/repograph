@@ -221,13 +221,17 @@ next poll — the next `ask` answers in its own process under the new file, and 
 under it too.
 
 Measured on the bench corpus (908 files, 8.3k nodes, enriched), median of eleven, socket and
-in-process runs interleaved in one sitting:
+in-process runs interleaved in one sitting, except where noted:
 
 | | resident | one process |
 | --- | --- | --- |
 | fused question, dense | 66 ms | 326 ms |
 | lexical, indexes rebuilt per question | 54 ms | 106 ms |
-| lexical, indexes built once and kept (0.5.0) | **6.8 ms** | not re-measured |
+| lexical, indexes built once and kept (0.5.0) | **6.8 ms**\* | not re-measured |
+
+\* A different sitting, median of 33 (three blocks of eleven, not the row above's eleven) against a
+pre-change base, two fix commits before the binary that shipped. The shipped binary's own socket
+median is 6.5 ms.
 
 The first question after a start still pays the model open — 0.26 s, against 0.07 s for the ones
 after it. What is left is a process start (5 ms), the socket round trip and the answer itself. The

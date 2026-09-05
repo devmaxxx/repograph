@@ -480,10 +480,12 @@ them failed. Not tried in this shape.
 code list admitted to the plain fusion under a scale-free form at one seat — needs a shipped form
 and its constant, and no form shipped, so it was not run. `where` stays 0/9 and A4's price for one
 seat (six held-out questions lost in each arm, none gained, p = 0.031) is still the number to beat.
-The table above is regenerated with a column per candidate form, so the next attempt reads what each
-admission would have done to these anchors: six of its 27 rows clear the shipped ratio's 0.85, 14
-clear `coverage`'s 0.761, 14 clear `peak`'s 0.894 and 26 clear `z`'s 0.548. The regenerated table is
-in [the 0.5.0 gap results](2026-09-05-0.5.0-gaps-results.md), L1.
+The table is not the one above with columns added: it is a fresh 27-row table, code-list rank
+1–286, from a new dump against a different store (`$G/bc-a1`, this plan's own copy, not the store
+the table above was read against), with a column per candidate form so the next attempt reads what
+each admission would have done to these anchors: six of its 27 rows clear the shipped ratio's 0.85,
+14 clear `coverage`'s 0.761, 14 clear `peak`'s 0.894 and 26 clear `z`'s 0.548. It is in
+[the 0.5.0 gap results](2026-09-05-0.5.0-gaps-results.md), L1.
 
 ## G14 · The enrichment prompt does not know the document's kind
 
