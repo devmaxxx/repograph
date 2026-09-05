@@ -23,6 +23,9 @@ pub struct Node {
 }
 
 impl Node {
+    /// Symbols and files: the population `enrich --code` asks about and the indexes keep apart.
+    pub fn is_code(&self) -> bool { matches!(self.kind, NodeKind::Symbol | NodeKind::File) }
+
     /// What the retrievers index for this node. A document is its body; a symbol is the line
     /// that declares it, not the comment above it — 4,300 doc comments in the passage index
     /// moved BM25's length and term statistics enough to cost the recorded suite two paraphrases

@@ -47,11 +47,21 @@ impl LexicalIndex {
     }
 
     /// The generated questions alone: mixed into the passage text they cost a keyword hit.
-    /// A file is a passage nowhere — its head comment in the passage index moved the BM25
-    /// statistics against paraphrase — but a file `enrich --code` has asked about is here: the
-    /// developer's "which file" question wants the file itself.
+    /// The documents' questions; a symbol is its id alone here, as it always was. Code questions
+    /// are an index of their own: added to this one, 3,463 one-token symbol documents became
+    /// sixty-token ones, the average length rose, BM25's length normalisation lifted every
+    /// document's score by a quarter while the passage scores the gate compares against stayed
+    /// put, and a keyword case that had kept the questions list out at 0.80 admitted it at 1.03.
     pub fn build_questions(graph: &Graph, questions: &Questions) -> LexicalIndex {
-        Self::build_with(graph, |n| n.kind != NodeKind::File || !questions.get(&n.id).is_empty(),
+        Self::build_with(graph, |n| n.kind != NodeKind::File,
+                         |n| if n.is_code() { n.id.clone() } else { format!("{} {}", n.id, questions.get(&n.id).join(" ")) })
+    }
+
+    /// The code nodes' questions — symbols and files `enrich --code` has asked about. A file is
+    /// a passage nowhere but is present here: the developer's "which file" question wants the
+    /// file itself.
+    pub fn build_code_questions(graph: &Graph, questions: &Questions) -> LexicalIndex {
+        Self::build_with(graph, |n| n.is_code() && !questions.get(&n.id).is_empty(),
                          |n| format!("{} {}", n.id, questions.get(&n.id).join(" ")))
     }
 
@@ -169,18 +179,25 @@ mod tests {
     }
 
     #[test]
-    fn a_file_is_indexed_through_its_questions_alone() {
+    fn code_questions_are_an_index_of_their_own_and_the_documents_index_keeps_a_symbol_as_its_id() {
         let mut g = Graph::default();
         let mut e = Extraction::default();
         e.node(NodeKind::Requirement, "FR-PAY-22", "правило отмены", "штраф считается по политике отмены", "a.md", 1);
         e.node(NodeKind::File, "file:apps/a.ts", "a.ts", "Sessions and their revocation.", "apps/a.ts", 1);
+        e.node(NodeKind::Symbol, "sym:apps/a.ts::revoke", "revoke", "Ends every session.\nrevoke() {}", "apps/a.ts", 3);
         g.apply(e);
         let mut q = Questions::default();
-        q.entries.insert("file:apps/a.ts".into(), crate::enrich::Entry { hash: String::new(), questions: vec!["где выйти со всех устройств".into()] });
-        let hits = LexicalIndex::build_questions(&g, &q).search("выйти со всех устройств", 5);
-        assert_eq!(hits.iter().map(|(id, _)| id.as_str()).collect::<Vec<_>>(), vec!["file:apps/a.ts"]);
+        let entry = |t: &str| crate::enrich::Entry { hash: String::new(), questions: vec![t.into()] };
+        q.entries.insert("file:apps/a.ts".into(), entry("где выйти со всех устройств"));
+        q.entries.insert("sym:apps/a.ts::revoke".into(), entry("как завершить чужую сессию"));
+        let code = LexicalIndex::build_code_questions(&g, &q);
+        assert_eq!(code.search("выйти со всех устройств", 5)[0].0, "file:apps/a.ts");
+        assert_eq!(code.search("завершить сессию", 5)[0].0, "sym:apps/a.ts::revoke");
+        assert!(code.search("штраф", 5).is_empty());
+        let docs = LexicalIndex::build_questions(&g, &q);
+        assert!(docs.search("выйти устройств завершить сессию", 5).is_empty(), "code questions never enter the documents' index");
+        assert_eq!(docs.search("sym:apps/a.ts::revoke", 5)[0].0, "sym:apps/a.ts::revoke", "a symbol stays an id-only document there");
         assert!(LexicalIndex::build(&g).search("revocation", 5).is_empty());
-        assert!(LexicalIndex::build_questions(&g, &Questions::default()).search("a.ts", 5).is_empty());
     }
 
     #[test]

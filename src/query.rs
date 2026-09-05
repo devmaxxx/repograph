@@ -1,7 +1,7 @@
 use crate::enrich::Questions;
 use crate::ids::IdMatcher;
 use crate::index::{fuse, lexical::LexicalIndex};
-use crate::model::{EdgeKind, Graph, NodeKind};
+use crate::model::{EdgeKind, Graph, Node, NodeKind};
 use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
@@ -69,19 +69,36 @@ fn gate_from(override_: Option<&str>) -> f32 {
 /// wrong reason and cost a build per question to do it. On the reranked path both lists are
 /// admitted unconditionally: the fused order there is a candidate pool of `depth`, not five
 /// seats, so the questions list displaces nothing, and Amendment 2 measured it as what carries
-/// paraphrase targets into that pool.
+/// paraphrase targets into that pool. The code list, when a store carries questions about code,
+/// is last and one seat wide.
 fn lexical_lists(graph: &Graph, questions: &Questions, query: &str, depth: usize, reranked: bool) -> Vec<Vec<String>> {
     let only_ids = |scored: Vec<(String, f32)>| -> Vec<String> { scored.into_iter().map(|(id, _)| id).collect() };
     let passages = LexicalIndex::build(graph).search(query, depth);
     if questions.entries.is_empty() { return vec![only_ids(passages)]; }
     let generated = LexicalIndex::build_questions(graph, questions).search(query, depth);
-    if reranked { return vec![only_ids(passages), only_ids(generated)]; }
-    let best = |l: &[(String, f32)]| l.first().map(|(_, s)| *s).unwrap_or(0.0);
-    if best(&generated) >= questions_gate() * best(&passages) && best(&generated) > 0.0 {
-        vec![only_ids(generated), only_ids(passages)]
+    let code = if questions.entries.keys().any(|id| graph.nodes.get(id).is_some_and(Node::is_code)) {
+        LexicalIndex::build_code_questions(graph, questions).search(query, depth)
     } else {
-        vec![only_ids(passages)]
+        Vec::new()
+    };
+    if reranked {
+        let mut pool = vec![only_ids(passages), only_ids(generated)];
+        if !code.is_empty() { pool.push(only_ids(code)); }
+        return pool;
     }
+    let best = |l: &[(String, f32)]| l.first().map(|(_, s)| *s).unwrap_or(0.0);
+    let floor = questions_gate() * best(&passages);
+    let admitted = |l: &[(String, f32)]| best(l) >= floor && best(l) > 0.0;
+    let mut lists = Vec::with_capacity(3);
+    if admitted(&generated) { lists.push(only_ids(generated)); }
+    lists.push(only_ids(passages));
+    // The code questions sit last, clear the same gate — pre-registered for them rather than
+    // measured — and hold one seat: admitted whole, the list took two document seats on the
+    // fixture's `--no-dense` arm (keyword FR-WH-53 and paraphrase FR-CRM-11), and five seats
+    // are the budget the floors were set on. One file pointer among five is what the
+    // developer's "which file" question is paid with.
+    if admitted(&code) { lists.push(only_ids(code).into_iter().take(1).collect()); }
+    lists
 }
 
 fn hit(graph: &Graph, id: &str, score: f32, via: Option<&str>) -> Option<Hit> {
@@ -489,6 +506,49 @@ mod tests {
     }
 
     #[test]
+    fn the_code_list_sits_last_and_clears_the_same_gate() {
+        let mut g = Graph::default();
+        let mut e = Extraction::default();
+        e.node(NodeKind::Requirement, "FR-PAY-22", "правило отмены", "штраф считается по политике отмены", "a.md", 1);
+        e.node(NodeKind::Symbol, "sym:apps/a.ts::revoke", "revoke", "Ends every session.\nrevoke() {}", "apps/a.ts", 3);
+        g.apply(e);
+        let mut qs = Questions::default();
+        qs.entries.insert("sym:apps/a.ts::revoke".into(), crate::enrich::Entry { hash: String::new(), questions: vec!["как выйти со всех устройств".into()] });
+        // Every query word but one is the code question's: the code list clears the gate and
+        // follows the passages, which lead with the requirement.
+        let with = lexical_lists(&g, &qs, "штраф выйти всех устройств", 10, false);
+        assert_eq!(with.len(), 2, "{with:?}");
+        assert_eq!((with[0][0].as_str(), with[1][0].as_str()), ("FR-PAY-22", "sym:apps/a.ts::revoke"));
+        // No word of the code question: the list is absent, not empty.
+        let without = lexical_lists(&g, &qs, "штраф считается", 10, false);
+        assert_eq!(without.len(), 1);
+        // Reranked: the pool takes it whatever the ratio, as long as it has a row to give.
+        assert_eq!(lexical_lists(&g, &qs, "штраф выйти", 10, true).len(), 3);
+        assert_eq!(lexical_lists(&g, &qs, "штраф считается", 10, true).len(), 2);
+    }
+
+    #[test]
+    fn the_code_list_gives_one_seat_and_the_pool_takes_it_whole() {
+        let mut g = Graph::default();
+        let mut e = Extraction::default();
+        e.node(NodeKind::Requirement, "FR-PAY-22", "правило отмены", "штраф считается по политике отмены", "a.md", 1);
+        e.node(NodeKind::Symbol, "sym:apps/a.ts::revoke", "revoke", "Ends every session.\nrevoke() {}", "apps/a.ts", 3);
+        e.node(NodeKind::Symbol, "sym:apps/a.ts::revokeOne", "revokeOne", "Ends one session.\nrevokeOne() {}", "apps/a.ts", 9);
+        g.apply(e);
+        let mut qs = Questions::default();
+        let entry = |t: &str| crate::enrich::Entry { hash: String::new(), questions: vec![t.into()] };
+        qs.entries.insert("sym:apps/a.ts::revoke".into(), entry("как выйти со всех устройств"));
+        qs.entries.insert("sym:apps/a.ts::revokeOne".into(), entry("как выйти с одного устройства"));
+        // Both code nodes match; the fused answer may seat only the better one.
+        let lists = lexical_lists(&g, &qs, "штраф выйти всех устройств", 10, false);
+        assert_eq!(lists.len(), 2, "{lists:?}");
+        assert_eq!(lists[1], vec!["sym:apps/a.ts::revoke".to_string()], "one seat, the top hit");
+        // The reranked pool is not five seats: it keeps every code row.
+        let pool = lexical_lists(&g, &qs, "штраф выйти всех устройств", 10, true);
+        assert_eq!(pool[2].len(), 2);
+    }
+
+    #[test]
     fn the_gate_override_is_read_only_when_it_parses() {
         assert_eq!(gate_from(None), QUESTIONS_GATE);
         assert_eq!(gate_from(Some("0")), 0.0);
@@ -777,4 +837,3 @@ mod tests {
         assert_eq!(a.expanded[0].id, "FR-WEB-30");
     }
 }
-

@@ -31,6 +31,7 @@ struct Record {
     dense_questions: Vec<(String, f32)>,
     bm25_passages: Vec<(String, f32)>,
     bm25_questions: Vec<(String, f32)>,
+    bm25_code: Vec<(String, f32)>,
     loo_hash: String,
     loo_rows: Vec<usize>,
     ask: Ask,
@@ -64,6 +65,7 @@ pub fn run(repo: &Path, queries: &Path, out: &Path, depth: usize, no_dense: bool
     }
     let lexical = LexicalIndex::build(&graph);
     let lexical_q = LexicalIndex::build_questions(&graph, &loo);
+    let lexical_c = LexicalIndex::build_code_questions(&graph, &loo);
     // `--no-dense` records the lexical-only arm: the dense lists stay empty and `ask` answers
     // without them, exactly as `ask --no-dense` would, so the held-out gate can be read in the
     // arm the floors also grade.
@@ -102,6 +104,7 @@ pub fn run(repo: &Path, queries: &Path, out: &Path, depth: usize, no_dense: bool
             exact: Exact { ids: exact_ids, whole_question },
             bm25_passages: lexical.search(&q.q, depth),
             bm25_questions: lexical_q.search(&q.q, depth),
+            bm25_code: lexical_c.search(&q.q, depth),
             dense_passages,
             dense_questions,
             loo_hash,
@@ -153,12 +156,13 @@ mod tests {
             dense_questions: vec![],
             bm25_passages: vec![],
             bm25_questions: vec![],
+            bm25_code: vec![],
             loo_hash: "abc".into(),
             loo_rows: vec![3],
             ask: Ask { seeds: vec![("FR-PAY-22".into(), 1.0)], expanded: vec![("N-151".into(), 0.5, "FR-PAY-22".into())] },
         };
         let v = serde_json::to_value(&record).unwrap();
-        for key in ["q", "expect", "kind", "exact", "qvec", "dense_passages", "dense_questions", "bm25_passages", "bm25_questions", "loo_hash", "loo_rows", "ask"] {
+        for key in ["q", "expect", "kind", "exact", "qvec", "dense_passages", "dense_questions", "bm25_passages", "bm25_questions", "bm25_code", "loo_hash", "loo_rows", "ask"] {
             assert!(v.get(key).is_some(), "missing field {key}");
         }
         assert_eq!(v["exact"]["whole_question"], true);
