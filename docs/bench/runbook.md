@@ -110,6 +110,11 @@ will read a regression into the next run. The build above runs neither, so its s
 is graded on the raw floors instead — 9/30 with embeddings, 7/30 with `--no-dense` —
 and `bench`'s summary line prints which of the two it used.
 
+Two more switches change the numbers and belong in the notes the same way: `enrich --code`
+adds questions about code (290 batches more on this corpus; the summary line then carries
+`code_questions=`), and `REPOGRAPH_EMBED_MODEL=<hub id>` with `repograph embed` measures a
+store under another embedder — on a copy of the store, never on the fixture.
+
 ## Run both suites
 
 ```bash

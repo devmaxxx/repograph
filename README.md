@@ -42,6 +42,7 @@ Version 0.4.0. Every row below is implemented, not planned:
 | `bench`                    | working; fails the process if a floor in [Bench](#bench) is missed — a store with `enrich`'s questions and one without are held to their own floors |
 | `import-legacy`            | working; costs recall at query time — see its note in [Bench](#bench) |
 | `enrich`, `ask --rerank`   | working; opt-in, the only two stages that spend model tokens — see [Spending tokens on purpose](#spending-tokens-on-purpose) |
+| `embed`                    | working; rewrites a store's vectors from its graph and questions — how a store is measured under another `REPOGRAPH_EMBED_MODEL`, see [Embeddings](#embeddings) |
 
 `--no-dense` skips the embedding stage everywhere it could apply — `build`, `update`, `ask`, `bench`.
 Without it, those commands use local embeddings once the model is cached (see [Embeddings](#embeddings)).
@@ -410,6 +411,12 @@ command that touches the dense stage — `build`, `update`, `ask`, `bench` —
 reuses the cache; there are no further network calls once it is populated. `--no-dense` skips the
 download and the embedding stage everywhere.
 
+`REPOGRAPH_EMBED_MODEL=<hub id>` swaps the model for every command that embeds, and `repograph
+embed` then rewrites the vectors from the graph and the questions alone — a model of another width
+invalidates every stored offset, so the file is rebuilt rather than appended to. That is how a store
+is measured under a second model without rebuilding or re-enriching it: copy the store, set the
+variable, `embed`, `bench`. The floors below were set with the small model.
+
 `ask` opens the model only when a fused query needs it: an exact id or symbol lookup answers in
 ~30 ms and ~50 MB, a fused query in ~0.4 s and ~1.4 GB — the model, not the graph; an exact-id
 lookup answers in ~50 ms and a `--no-dense` question in ~0.1 s, since neither opens the model or
@@ -456,6 +463,20 @@ tab-joined into one line around the node's own id (40 lines, each of which the e
 answered for free). A node left without questions is asked again by the next `enrich`. On the
 1,971 eligible nodes of the corpus it took 16 minutes at 8-way parallelism and roughly $2.5 of
 Haiku; a node's questions run about 13 lines.
+
+`enrich --code` extends the pass to code: symbols with a doc comment or a body of their own and
+files with a head comment — 3,475 nodes on the corpus, 290 batches — through a prompt of its own
+that asks four Russian and four English questions per node and forbids repeating the identifier: a
+developer's question is «где проверяется, что запрос принадлежит нужному бизнесу», not
+`TenantContextInterceptor`. Entries carry a `c<n>` key in the prompt because the model, asked to
+copy a `sym:apps/api/src/…::AvailabilityService` id, copies its label instead — half the batches
+came back without a usable line before the key. The code questions join the two questions lists,
+BM25 and dense, and nothing else: a symbol's passage row stays its declaring line, and a file is a
+passage nowhere (its head comment in the passage index moved the BM25 statistics against paraphrase,
+15/30 → 13/30 on 2026-09-05) and is present through its questions alone. A store without code
+questions is therefore the old index byte for byte; `coverage` still counts documents, so the floors
+grade the same store the same way, and the summary line reports `code_questions=` beside it. What
+the questions buy is measured in [the developer-questions results](docs/bench/2026-09-05-dev-cases-results.md).
 
 Two ways of spending them were measured and rejected: as extra dense rows pooled with the passages
 they bury targets (a passage at rank 2 fell to 87 behind other nodes' questions), and mixed into a

@@ -305,12 +305,63 @@ significantly worse on the held-out set in either arm, and reads at least as wel
 
 ---
 
+## G9 · Code is unreachable from prose — `where` 0/9
+
+**Raised (2026-09-05)** by the first run of the developer-questions suite
+([results](2026-09-05-dev-cases-results.md)). Nine questions describe a behaviour and ask which
+file to edit; none reaches its file in either arm, and 12 of the 13 file anchors are absent from
+every lexical list 300 deep. The store said nothing about what code does: a symbol's text was its
+name and signature line, a file node had no text and was not indexed, and `enrich` asked about
+documents only. The `cross` kind reads the same hole from the requirement's side — 12/15 reach the
+requirement, 11 of 15 file anchors are absent.
+
+**Levers, measured in that document.** A1: doc comments and file heads become node bodies,
+files with a head are indexed, identifiers are indexed by their words — no tokens. A2: `enrich
+--code` generates questions about code through a prompt of its own — tokens, opt-in, and the
+`enriched` grading of documents unchanged. Each ships only on the rule written there: every
+recorded floor held in all four arms, held-out not significantly worse in either, dev-suite hits
+up in both arms with `where` above zero.
+
+## G10 · Five seeds over three lists — the right answers that were ranked and not seated
+
+**Raised (2026-09-05)** by the same run. 31 missed anchors sit at rank ≤ 20 of some retriever
+list and are not among the five seeds, most of them `multi` siblings (`FR-STAFF-20/21/22`,
+`FR-PAY-22/25/26/27`, `FR-CAL-110/111/112`): a round-robin over three lists gives each list at
+most two seeds, so a list's third right answer never surfaces. Seven of the recorded suite's
+fifteen paraphrase misses have the same shape (rank 3–9 of their best list). More seeds was
+measured and rejected in ADR-001 (~1.5× tokens a step for about one hit); a fourth list (dense
+questions) was simulated over the dumps and rejected (paraphrase unchanged at every gate,
+keyword −1, held-out 102 → 92–96). What remains untried is seating by *agreement between
+lists* rather than by turn — an id two lists rank in their top ten ahead of an id one list ranks
+second — which ADR-001's first amendment rejected as RRF for a different reason (it buried a
+dense rank-2 target) and which a sibling-aware expansion could serve instead: when a seed's
+document neighbours are themselves ranked, name them on the expanded line. Gate: `multi` and
+`rule` up on the dev suite, the recorded suite unchanged, held-out not worse.
+
+## G11 · The embedder, for Russian paraphrase
+
+**Raised (2026-09-05)**, sharpened from ADR-001's first amendment. Eight of the recorded
+suite's fifteen paraphrase misses sit at rank 31+ in every list while the store's own generated
+questions for the target are near-synonyms of the query — «Где лежит короткий код на
+устройстве?» against «как хранится код доступа сотрудника» at dense-questions rank 209. That is
+`multilingual-e5-small`'s distance between two Russian paraphrases, and no fusion rule repairs it.
+The first amendment measured `e5-base` and `bge-m3` on fourteen cases without generated questions
+and found no gain; neither was measured with the question rows in the index, which is where a
+stronger model would show. Lever: `REPOGRAPH_EMBED_MODEL` re-embeds a store copy under another
+hub model; `multilingual-e5-large` is the one measured in the results document. Gate: the same
+three-way rule, dense arms only, plus query latency under a second.
+
+---
+
 ## Suggested order
 
 | | gap | why here |
 |---|---|---|
 | 1 | ~~**G7** the questions list's share of the seeds~~ | closed 2026-09-05 — gated on the ratio of the two lists' best scores, held-out p = 0.77, lexical-only arm at raw parity; the window (0.802, 0.866] is recorded above, corrected from the 0.85–0.90 first published |
 | 5 | **G8** the questions gate is a constant of one store | a scale-free form of the same gate; measured on the held-out set first, then on both suites |
+| 0 | **G9** code is unreachable from prose | the largest hole the developer-questions suite found, and A1 costs no tokens |
+| 6 | **G10** five seeds over three lists | the shape behind most `multi` and half the paraphrase misses; needs a rule that is not more seeds |
+| 7 | **G11** the embedder for Russian paraphrase | one measurement on a store copy says whether a larger local model is the lever |
 | 2 | **G5** rank + MRR | a scoring change over rows that already exist, and G2 cannot be argued without it |
 | 3 | **G1** unparsed files get a file node | the largest missing share of a real answer, and the fix is language-independent |
 | 4 | **G3** the three impact diagnostics | three files to read; it either finds a bug or writes an honest caveat |
