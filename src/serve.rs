@@ -29,11 +29,15 @@ fn config_stamp(repo: &Path) -> Option<crate::walk::Stamp> {
     crate::walk::stamp_of(&std::fs::metadata(repo.join("repograph.toml")).ok()?)
 }
 
-/// What a `stat` says about the running executable, or None where it cannot be found. The
-/// version alone cannot tell two builds apart: this repository has been unreleased since 0.4.0,
-/// so every development build answers `0.4.0`, and the README suggests `--idle 86400` — rebuild,
-/// ask while yesterday's `serve` is up, and yesterday's code answers with nothing to show for it.
-/// Two copies of one build stamp differently, which costs a fallback and never a wrong answer.
+/// What a `stat` says about the executable at this process's own path, or None where it cannot be
+/// found. The version alone cannot tell two builds apart: this repository has been unreleased
+/// since 0.4.0, so every development build answers `0.4.0`, and the README suggests `--idle
+/// 86400` — rebuild, ask while yesterday's `serve` is up, and yesterday's code answers with
+/// nothing to show for it. Read once per process and held, never per request: `current_exe` names
+/// a path, and a rebuild replaces the file at it, so a server that re-read this would answer with
+/// the stamp of the very binary the client is asking from and wave that pairing through. A
+/// short-lived `ask` reads it at the one instant it runs, which is the same thing. Two copies of
+/// one build stamp differently, which costs a fallback and never a wrong answer.
 fn build_stamp() -> Option<crate::walk::Stamp> {
     crate::walk::stamp_of(&std::fs::metadata(std::env::current_exe().ok()?).ok()?)
 }
@@ -113,6 +117,9 @@ pub fn run(repo: &Path, cfg: &config::Config, every: u64, batch: usize, idle: u6
     // and this process would then answer under the configuration from before the edit for as long
     // as it ran — the divergence the poll's check exists to prevent, narrowed to a start-up race.
     let cfg_stamp = config_stamp(repo);
+    // Read here and carried, for the reason `build_stamp` gives: this process runs the build that
+    // was at its path when it started, and nothing it stats later can still say so.
+    let build = build_stamp();
     let path = socket_path(repo);
     if path.exists() && UnixStream::connect(&path).is_ok() { anyhow::bail!("another serve answers at {}", path.display()); }
     let _ = std::fs::remove_file(&path);
@@ -150,7 +157,7 @@ pub fn run(repo: &Path, cfg: &config::Config, every: u64, batch: usize, idle: u6
             // a liveness probe — another `serve` deciding whether to bind, a client that gave
             // up — and treating one as a request keeps this process resident, holding 1.3 GB,
             // for as long as anything at all polls the socket.
-            Ok(stream) => match answer(stream, &mut watcher, &mut ctx) {
+            Ok(stream) => match answer(stream, &mut watcher, &mut ctx, build) {
                 Ok(asked) => if asked { last_request = Instant::now(); },
                 Err(e) => { last_request = Instant::now(); eprintln!("serve: {e:#}"); }
             },
@@ -208,14 +215,14 @@ fn hello_line(stream: &UnixStream) -> Option<String> {
 
 /// Whether a question was asked, which is what `--idle` counts — a peer that vanished before
 /// its hello asked nothing.
-fn answer(mut stream: UnixStream, watcher: &mut crate::Watcher, ctx: &mut ask::Context) -> Result<bool> {
+fn answer(mut stream: UnixStream, watcher: &mut crate::Watcher, ctx: &mut ask::Context, build: Option<crate::walk::Stamp>) -> Result<bool> {
     let Some(line) = hello_line(&stream) else { return Ok(false) };
     let hello: Hello = serde_json::from_str(&line).context("hello")?;
     // The refusals, all three under one reply: the client reads the version, the build and the
     // arm off it and says which of them sent the question back to its own process. Answering
     // first and refusing after would spend a fused answer's work on a reply nobody reads.
-    if hello.v != VERSION || hello.build != build_stamp() || (ctx.no_dense() && !hello.req.no_dense) {
-        writeln!(stream, "{}", serde_json::to_string(&header(ctx))?)?;
+    if hello.v != VERSION || hello.build != build || (ctx.no_dense() && !hello.req.no_dense) {
+        writeln!(stream, "{}", serde_json::to_string(&header(ctx, build))?)?;
         return Ok(true);
     }
     // Anything still waiting predates this request — a poll's refresh, an answer that ended in
@@ -232,14 +239,14 @@ fn answer(mut stream: UnixStream, watcher: &mut crate::Watcher, ctx: &mut ask::C
     }
     let stdout = ctx.answer(&hello.req)?;
     let stderr = ctx.notices();
-    let reply = Reply { stdout, stderr, ..header(ctx) };
+    let reply = Reply { stdout, stderr, ..header(ctx, build) };
     writeln!(stream, "{}", serde_json::to_string(&reply)?)?;
     Ok(true)
 }
 
 /// What this process is, with no answer in it: the three fields a client decides on.
-fn header(ctx: &ask::Context) -> Reply {
-    Reply { v: VERSION.into(), build: build_stamp(), no_dense: ctx.no_dense(), stdout: String::new(), stderr: vec![] }
+fn header(ctx: &ask::Context, build: Option<crate::walk::Stamp>) -> Reply {
+    Reply { v: VERSION.into(), build, no_dense: ctx.no_dense(), stdout: String::new(), stderr: vec![] }
 }
 
 struct Unlink(PathBuf, Option<(u64, u64)>);
