@@ -487,9 +487,10 @@ the very rows being measured (a different width the guard refuses, and the answe
 It is the caveat trap 7 of the [runbook](docs/bench/runbook.md) carries. Measured on the fixture,
 `intfloat/multilingual-e5-large` (1024-d, 2.1 GB download) reads paraphrase **22/30** against the
 small model's 15/30 with keyword 40/40 and code 12/12 unchanged, held-out 103 → 119 of 400 (+19 −3,
-p = 0.0009), at 0.8 s an `ask` against 0.55 s (the model opens in 676 ms against 418, both taken
-before the hub round trip was removed; only the small model's number moved, since the large model's
-weights genuinely do live beside its graph and that lookup was always a cache hit), 1.9 GB
+p = 0.0009), at 0.8 s an `ask` against 0.55 s, of which the model open is 676 ms against 418 (both
+pairs were taken before the hub round trip was removed, and only the small model's numbers moved,
+since the large model's weights genuinely do live beside its graph and that lookup was always a
+cache hit — the small model's fused `ask` is ~0.30 s today, as the paragraph below says), 1.9 GB
 resident against 1.7, and 2,680 s to embed the corpus's 33,525 rows against ~103 s. The floors in
 [Bench](#bench) are the small model's; a store embedded by another model is measured against them,
 not graded by them, until floors of its own are set.
