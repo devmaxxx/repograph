@@ -13,6 +13,10 @@ Each heading now carries a status line from the 2026-09-04 run
 closed, one was measured and rejected, and two are closed on one half and deferred on the
 other — a gap is not closed because a task ran against it.
 
+G7 is the exception to both paragraphs above: it was raised after the 2026-09-04 run rather than
+by it, by re-measuring the enriched store once `bench` began grading stores by state, so it
+carries a raised line where the others carry a status one.
+
 ---
 
 ## G1 · A third of a large blast radius is invisible — `changes` 27/38 symbols
@@ -97,7 +101,7 @@ and deliberately not on a floor.
 2.3 GB download — is named in ADR-001 as unmeasured. It is the only candidate that
 could give reranker-shaped gains at zero API cost and without a per-question latency
 in seconds. **Measure it before designing anything else for paraphrases.** If it lands
-between 10/30 and 14/30 at sub-second latency, the zero-token floor moves for the
+between 10/30 and 14/30 at sub-second latency, the paraphrase floors move for the
 first time since 0.4.0; if it does not, the honest answer is that this corpus's
 paraphrases need a model and the floors stay where the measurement put them.
 
@@ -237,16 +241,82 @@ one `changes` case in its own corpus, and a result file beside this one.
 
 ---
 
+## G7 · Enrichment cost two exact keyword seeds — closed 2026-09-05
+
+**Raised (2026-09-04):** not by the three-graph run. It surfaced once `bench` began grading a
+store on the configuration it actually is
+([ADR-001 Amendment 5](../adr/ADR-001-paraphrase-recall-was-a-prediction.md)): the enriched
+lexical-only arm read `keyword 37/40` against the raw store's `39/40` on the same corpus, missing
+`FR-WH-53` and `W-206` that the raw store answered, and `repograph bench --no-dense` exited 1.
+
+**Closed by** the per-question gate on the generated-questions list described in
+[ADR-001 Amendment 6](../adr/ADR-001-paraphrase-recall-was-a-prediction.md): the list joins the
+plain-path fusion only when its best BM25 score is at least 0.85 of the passage list's. The
+enriched lexical-only arm reads `keyword 39/40  paraphrase 14/30  code 12/12  p90 215` — parity
+with the raw store, both runs identical case by case — the arm with embeddings is unchanged at
+40/40 and 15/30 with p90 down from 226 to 220, the raw arms are untouched by construction, and 400
+held-out questions moved by 5 gained and 7 lost, exact McNemar p = 0.77. The floor in that arm moved
+from 40 to 39, which is what both stores measure at this commit; it did not move while the arm read
+37, because 37 was a cost enrichment imposed.
+
+**What the measurement corrected.** The cause first named here — the questions list pushed ahead of
+the passage list — was wrong: leading with the passage list moves the three misses from fused rank
+6, 10 and 42 to 6, 9 and 41. The cost was the list's *share* of five seeds in a round-robin, on
+questions it held no answer to (ten of the forty keyword cases, against zero for the passage list).
+Thinning that share for every question was the first lever tried and was rejected by this gap's own
+gate — lexical held-out recall@5 0.283 → 0.255, 13 lost and 2 gained, p = 0.007 — because on a
+paraphrase the questions list is the retriever doing the work. And the held-out set had to be
+rebuilt before any of that could be read: written as kind `paraphrase` instead of `synthetic`,
+`dump` had not held anything out, and the set read 0.955. `bench/heldout.py` now builds it with the
+right kind and a recorded seed, and `dump`'s recorded answer comes from the held-out indices too.
+
+**What stays open.** `FR-PH-43` — «критерий готовности рыночному запуску» — sits at passage rank
+23 and no lexical path reaches it in either store; only the dense list does. That is a lexical
+retrieval limit, not an enrichment cost, and it is why both lexical-only floors are 39 rather than
+40. And the gate's window is narrow, and narrower than first published. The closing note said
+held-out tolerates any threshold up to 0.90; the review measured 0.87 and 0.90 reddening the arm
+with embeddings — paraphrase 13/30 under its floor of 14 — while held-out never binds at any value
+from 0.80 to 0.95 (p = 0.34 to 0.79). The window on the 82 is (0.802, 0.866]: below it `FR-WH-53`
+(ratio 0.801) loses its seat, at 0.87 a paraphrase (ratio 0.867) loses its list. The centre, 0.83,
+reads the same on the 82 and loses three more lexical held-out questions than 0.85 (109 → 106,
+none gained), so 0.85 stays, with 0.006 of room above. Why the ratio is a constant of this store
+and what would carry across stores is gap G8. Any move of it is judged on the held-out set first —
+the order of operations in `bench/heldout.py`'s header, which now covers both arms.
+
+---
+
+## G8 · The questions gate is a constant of one store
+
+**Raised (2026-09-05)** by the review of G7's fix. The gate compares the best BM25 score of the
+generated-questions list with the best of the passage list, and the two are only half
+comparable: the indices share the tokenizer, `K1`, `B`, the formula and the document count
+(7,408), but each normalises length against its own mean — 30.6 tokens a passage document, 51.8
+a question document — and weights terms by its own vocabulary, 10,762 terms against 21,839. So
+the ratio moves with enrichment coverage (1,996 of 7,408 nodes here) and with questions per node
+(~13), and 0.85 is where *this* store's two populations part — window (0.802, 0.866] on the 82,
+0.006 of room above. A store with short bodies, full enrichment or five questions per node lands
+somewhere else, and nothing in the code would say so.
+
+**Gate.** A scale-free form — each list's best against its own *k*-th score, or a z-score within
+its own list — replaces the constant only if it reproduces the four arms exactly on this store
+(`40/40 15/30 12/12`, `39/40 14/30 12/12`, raw `40/40 9/30`, `39/40 7/30`, p90 ≤ 230), is not
+significantly worse on the held-out set in either arm, and reads at least as well on the 60
+`dev-cases`. The order of operations is `bench/heldout.py`'s header. Not tried.
+
+---
+
 ## Suggested order
 
 | | gap | why here |
 |---|---|---|
-| 1 | **G5** rank + MRR | a scoring change over rows that already exist, and G2 cannot be argued without it |
-| 2 | **G1** unparsed files get a file node | the largest missing share of a real answer, and the fix is language-independent |
-| 3 | **G3** the three impact diagnostics | three files to read; it either finds a bug or writes an honest caveat |
-| 4 | **G4** grow the blast set | must land before G1's and G6's changes are judged on it |
-| 5 | **G2** measure `bge-reranker-v2-m3` | the one unmeasured retrieval lever; everything cheaper is already rejected |
-| 6 | **G6** a case file per new corpus | ships with the 0.6.0 languages, not after them |
+| 1 | ~~**G7** the questions list's share of the seeds~~ | closed 2026-09-05 — gated on the ratio of the two lists' best scores, held-out p = 0.77, lexical-only arm at raw parity; the window (0.802, 0.866] is recorded above, corrected from the 0.85–0.90 first published |
+| 5 | **G8** the questions gate is a constant of one store | a scale-free form of the same gate; measured on the held-out set first, then on both suites |
+| 2 | **G5** rank + MRR | a scoring change over rows that already exist, and G2 cannot be argued without it |
+| 3 | **G1** unparsed files get a file node | the largest missing share of a real answer, and the fix is language-independent |
+| 4 | **G3** the three impact diagnostics | three files to read; it either finds a bug or writes an honest caveat |
+| 5 | **G4** grow the blast set | must land before G1's and G6's changes are judged on it |
+| 6 | **G2** measure `bge-reranker-v2-m3` | the one unmeasured retrieval lever; everything cheaper is already rejected |
+| 7 | **G6** a case file per new corpus | ships with the 0.6.0 languages, not after them |
 
 ## What is explicitly not on this list
 

@@ -516,7 +516,7 @@ fn main() -> anyhow::Result<()> {
         Cmd::Bench { cases, rerank, rerank_local, depth } => {
             if bench::run(&repo, cases.as_deref(), cli.no_dense, rerank, rerank_local, depth)? { Ok(()) } else { anyhow::bail!("bench floors not met") }
         }
-        Cmd::Dump { queries, out, depth } => dump::run(&repo, &queries, &out, depth),
+        Cmd::Dump { queries, out, depth } => dump::run(&repo, &queries, &out, depth, cli.no_dense),
         Cmd::ImportLegacy { graph_json } => {
             let cfg = load_cfg()?;
             let store = store::Store::new(&repo);

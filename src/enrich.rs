@@ -1,7 +1,10 @@
 //! Questions a reader might ask to reach a node, written once by a language model and cached
-//! by passage hash. They give `ask --rerank`'s candidate pool the reader's vocabulary as well
-//! as the author's: measured on the development corpus they move no seed on their own, but
-//! carry every reachable paraphrase target into the pool the model picks from.
+//! by passage hash. They give every answer the reader's vocabulary as well as the author's:
+//! `query::ask` fuses them as a BM25 list of their own — on the plain path only when that list
+//! matched the question at least 0.85 as strongly as the passage list did, on the reranked path
+//! always — and `--rerank` also pools them as dense rows. On the development corpus the
+//! lexical-only arm reads paraphrase 7/30 raw against 14/30 enriched and keyword 39/40 in both;
+//! before the gate an equal turn in the fusion cost that arm two keyword cases.
 use crate::model::{Graph, Node, NodeKind};
 use crate::store::{Source, Store};
 use anyhow::{Context, Result};
@@ -33,6 +36,26 @@ fn hash(text: &str) -> String { blake3::hash(text.as_bytes()).to_hex().to_string
 /// ask about, and it says so by skipping the entry — 63 of them on the bench corpus, retried on
 /// every run until they were left out.
 pub fn eligible(n: &Node) -> bool { KINDS.contains(&n.kind) && !(n.kind == NodeKind::Entity && n.body.trim().is_empty()) }
+
+/// Eligible nodes that carry questions, over eligible nodes. `run` saves after every batch, so
+/// a `--limit` run, an interrupt or a model that skipped a batch twice all leave a store with
+/// some questions in it; "any entry at all" would call such a store enriched and hold it to
+/// numbers only a finished run reaches. Passage freshness is left out on purpose: a question
+/// written for an older wording still finds its node, so one edited requirement should not
+/// reclassify the whole store.
+pub fn coverage(graph: &Graph, questions: &Questions) -> (usize, usize) {
+    let nodes: Vec<&Node> = graph.nodes.values().filter(|n| eligible(n)).collect();
+    (nodes.iter().filter(|n| !questions.get(&n.id).is_empty()).count(), nodes.len())
+}
+
+/// Whether a `coverage` reading has earned the enriched floors. A high-water mark rather than
+/// equality because the two mistakes are not symmetric: a store at 99% still measures the
+/// enriched numbers, so grading it enriched risks about no false red, while grading it raw drops
+/// it five paraphrase points and one keyword point onto floors it clears without trying, and
+/// `bench` speaks through its exit code. Over ~2 000 nodes equality is a cliff a single node
+/// walks off — one requirement added after the run, one node the model skipped past its retry,
+/// one entry `clean` drops on load — and a real regression behind that cliff exits 0.
+pub fn enriched(covered: usize, eligible: usize) -> bool { eligible > 0 && covered * 100 >= eligible * 99 }
 
 impl Questions {
     pub fn load(store: &Store) -> Result<Questions> { Self::load_traced(store).map(|(q, _)| q) }
@@ -375,6 +398,32 @@ mod tests {
         let mut e = Extraction::default();
         e.node(NodeKind::Entity, "entity:Money", "Money", "   \n\t", "a.md", 1);
         assert!(!eligible(&e.nodes[0]));
+    }
+
+    #[test]
+    fn coverage_counts_eligible_nodes_only_and_reads_full_after_a_whole_run() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::new(dir.path());
+        let g = graph();
+        assert_eq!(coverage(&g, &Questions::default()), (0, 2));
+        let cmd = r#"awk '/^### /{printf "%s\tq for %s\n", $2, $2}'"#;
+        run(&store, &g, Questions::default(), cmd, 1, 1, Some(1)).unwrap();
+        assert_eq!(coverage(&g, &Questions::load(&store).unwrap()), (1, 2), "a run stopped early covers part of the graph");
+        assert!(!enriched(1, 2), "half a two-node graph is nowhere near the mark");
+        run(&store, &g, Questions::load(&store).unwrap(), cmd, 1, 1, None).unwrap();
+        assert_eq!(coverage(&g, &Questions::load(&store).unwrap()), (2, 2));
+        assert!(enriched(2, 2));
+    }
+
+    #[test]
+    fn enriched_grades_at_the_high_water_mark_not_at_every_node() {
+        // The development corpus's own denominator, so the counts read as the summary line does.
+        assert!(enriched(1996, 1996));
+        assert!(enriched(1977, 1996), "the first count at or above 99 % — the mark is 1976.04");
+        assert!(!enriched(1976, 1996), "98.998 %, one node short of the mark rather than over it");
+        assert!(!enriched(1900, 1996));
+        // A graph with nothing to enrich cannot be told from one nobody has enriched.
+        assert!(!enriched(0, 0));
     }
 
     #[test]
