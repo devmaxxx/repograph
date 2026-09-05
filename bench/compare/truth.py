@@ -33,7 +33,10 @@ TOP_LEVEL = re.compile(
 
 
 def rg(repo: Path, args: list[str]) -> list[str]:
-    out = subprocess.run(["rg", *args, *EXCLUDE], cwd=repo, capture_output=True, text=True)
+    # stdin detached: ripgrep searches stdin instead of the tree when stdin is not a tty,
+    # which turned every truth list empty under a heredoc and would do the same in CI.
+    out = subprocess.run(["rg", *args, *EXCLUDE], cwd=repo, capture_output=True, text=True,
+                         stdin=subprocess.DEVNULL)
     return [line for line in out.stdout.split("\n") if line]
 
 
@@ -44,16 +47,43 @@ def files_naming(repo: Path, token: str) -> list[str]:
 
 BLOCK_COMMENT = re.compile(r"/\*.*?\*/", re.S)
 LINE_COMMENT = re.compile(r"(?<!:)//[^\n]*")
+# A single- or double-quoted literal excludes a bare newline in its body, not a
+# template literal: a `\` line continuation still spans lines, but only via the
+# backslash-escape branch, not the character class.
+STRING_LITERAL = re.compile(r"'(?:[^'\\\n]|\\.)*'|\"(?:[^\"\\\n]|\\.)*\"|`(?:[^`\\]|\\.)*`", re.S)
+
+
+def _blank(match: re.Match[str]) -> str:
+    # Keep the quotes and the newline count, drop everything else: a multi-line
+    # template literal must not pull the lines after it up to where it opened.
+    body = match.group(0)
+    return body[0] + "\n" * body.count("\n") + body[-1]
+
+
+def _newlines(match: re.Match[str]) -> str:
+    # A docblock is dropped whole but its line count is kept, for the same reason: the
+    # declaration under a multi-line comment stays on the line it was written on.
+    return "\n" * match.group(0).count("\n")
 
 
 def strip_comments(src: str) -> str:
-    """Prose is not a reference.
+    """Prose is not a reference, and neither is a string.
 
-    This corpus writes long docblocks that name the symbols they discuss, so a
-    plain grep counts a paragraph about `TenantContextInterceptor` as a file that
-    depends on it. Only code counts.
+    This corpus writes long docblocks that name the symbols they discuss, so a plain grep
+    counts a paragraph about `TenantContextInterceptor` as a file that depends on it. It also
+    names symbols in text: `'PinoLogger:OutboxPublisher'` is a logger's name and an error
+    message can mention an interceptor. Both counted on 2026-09-03 and put two impact targets
+    one file short of 1.0 for a dependency that did not exist. Only code counts. A literal's
+    body is blanked and its quotes kept, and a comment leaves its newlines behind, so line
+    numbers and bracket depth survive; a `${…}` inside a template literal is blanked with it,
+    which is the one thing this loses.
+    A regex literal containing a quote character (`/'/`) desyncs the scan for the rest of
+    that line: the quote branch opens on it and closes on the next real string's opening
+    quote, so a symbol named in that string can survive un-blanked. Closing that properly
+    needs a tokeniser, which is out of scope here.
     """
-    return LINE_COMMENT.sub("", BLOCK_COMMENT.sub("", src))
+    without_comments = LINE_COMMENT.sub("", BLOCK_COMMENT.sub(_newlines, src))
+    return STRING_LITERAL.sub(_blank, without_comments)
 
 
 def code_files_naming(repo: Path, token: str) -> list[str]:

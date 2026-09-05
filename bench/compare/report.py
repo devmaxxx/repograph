@@ -27,7 +27,9 @@ def main() -> None:
         print(f"| {label} | " + " | ".join(cell(get(s[t])) for t in tools) + " |")
 
     print(f"corpus {report['corpus']} @ {report['commit']} · {report['when']}")
-    print(f"cases: {report['cases']['retrieval']} retrieval, {report['cases']['blast']} blast\n")
+    # A blast-only run has no retrieval count to print, and printing one would invent cases.
+    counts = report["cases"]
+    print("cases: " + ", ".join(f"{counts[k]} {k}" for k in ("retrieval", "blast") if k in counts) + "\n")
     print("| | " + " | ".join(tools) + " |")
     print("|---|" + "---|" * len(tools))
 
@@ -37,9 +39,16 @@ def main() -> None:
             if not r:
                 return None
             if kind:
+                # A result file written before a per-kind field existed prints "—" for it.
                 slot = r["by_kind"].get(kind)
-                return f"{slot[key]}/{slot['n']}" if slot else None
+                return f"{slot[key]}/{slot['n']}" if slot and key in slot else None
             return f"{r[key]}/{r['n']}"
+        return get
+
+    def ret_mrr(kind):
+        def get(x):
+            slot = x.get("retrieval", {}).get("by_kind", {}).get(kind)
+            return slot.get("mrr") if slot else None
         return get
 
     row("strict, all", ret("strict"))
@@ -47,6 +56,13 @@ def main() -> None:
     row("strict, paraphrase", ret("strict", "paraphrase"))
     row("strict, code", ret("strict", "code"))
     row("soft, all", ret("soft"))
+    row("retrieval, MRR", lambda x: x.get("retrieval", {}).get("mrr"))
+    row("MRR, keyword", ret_mrr("keyword"))
+    row("MRR, paraphrase", ret_mrr("paraphrase"))
+    row("MRR, code", ret_mrr("code"))
+    row("at rank 1, keyword", ret("rank1", "keyword"))
+    row("at rank 1, paraphrase", ret("rank1", "paraphrase"))
+    row("at rank 1, code", ret("rank1", "code"))
     row("answer, median chars", lambda x: x.get("retrieval", {}).get("chars_median"))
     row("answer, median ms", lambda x: x.get("retrieval", {}).get("ms_median"))
     row("impact, mean recall", lambda x: x.get("impact", {}).get("recall_mean"))

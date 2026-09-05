@@ -1,0 +1,399 @@
+{
+ "corpus": "/Users/max/Documents/projects/beauty-crm",
+ "commit": "2483d932",
+ "when": "2026-09-04T11:39:23",
+ "cases": {
+  "retrieval": 82,
+  "blast": 32
+ },
+ "case_files": {
+  "retrieval": "/Users/max/Documents/projects/repograph/bench/cases.jsonl",
+  "blast": "/Users/max/Documents/projects/repograph/bench/blast.jsonl"
+ },
+ "tools": {
+  "repograph": {
+   "rows": [
+    {
+     "suite": "blast",
+     "kind": "impact",
+     "target": "DatabaseService",
+     "tier": "hub",
+     "want_files": 48,
+     "found_files": 48,
+     "recall": 1.0,
+     "ms": 864,
+     "chars": 35443
+    },
+    {
+     "suite": "blast",
+     "kind": "impact",
+     "target": "TenantContextInterceptor",
+     "tier": "hub",
+     "want_files": 3,
+     "found_files": 3,
+     "recall": 1.0,
+     "ms": 47,
+     "chars": 755
+    },
+    {
+     "suite": "blast",
+     "kind": "impact",
+     "target": "ProblemException",
+     "tier": "hub",
+     "want_files": 24,
+     "found_files": 24,
+     "recall": 1.0,
+     "ms": 47,
+     "chars": 16388
+    },
+    {
+     "suite": "blast",
+     "kind": "impact",
+     "target": "ActorResolver",
+     "tier": "wide",
+     "want_files": 9,
+     "found_files": 9,
+     "recall": 1.0,
+     "ms": 44,
+     "chars": 1904
+    },
+    {
+     "suite": "blast",
+     "kind": "impact",
+     "target": "AuthService",
+     "tier": "wide",
+     "want_files": 10,
+     "found_files": 10,
+     "recall": 1.0,
+     "ms": 48,
+     "chars": 4001
+    },
+    {
+     "suite": "blast",
+     "kind": "impact",
+     "target": "OutboxPublisher",
+     "tier": "wide",
+     "want_files": 6,
+     "found_files": 6,
+     "recall": 1.0,
+     "ms": 45,
+     "chars": 1393
+    },
+    {
+     "suite": "blast",
+     "kind": "impact",
+     "target": "AvailabilityService",
+     "tier": "narrow",
+     "want_files": 3,
+     "found_files": 3,
+     "recall": 1.0,
+     "ms": 43,
+     "chars": 833
+    },
+    {
+     "suite": "blast",
+     "kind": "impact",
+     "target": "BookingCreateService",
+     "tier": "narrow",
+     "want_files": 3,
+     "found_files": 3,
+     "recall": 1.0,
+     "ms": 43,
+     "chars": 1021
+    },
+    {
+     "suite": "blast",
+     "kind": "impact",
+     "target": "AgreementsService",
+     "tier": "narrow",
+     "want_files": 3,
+     "found_files": 3,
+     "recall": 1.0,
+     "ms": 44,
+     "chars": 1012
+    },
+    {
+     "suite": "blast",
+     "kind": "impact",
+     "target": "SyncConflictService",
+     "tier": "narrow",
+     "want_files": 2,
+     "found_files": 2,
+     "recall": 1.0,
+     "ms": 43,
+     "chars": 513
+    },
+    {
+     "suite": "blast",
+     "kind": "impact",
+     "target": "RateLimitInterceptor",
+     "tier": "narrow",
+     "want_files": 2,
+     "found_files": 2,
+     "recall": 1.0,
+     "ms": 43,
+     "chars": 641
+    },
+    {
+     "suite": "blast",
+     "kind": "impact",
+     "target": "PlatformSessionGuard",
+     "tier": "narrow",
+     "want_files": 2,
+     "found_files": 2,
+     "recall": 1.0,
+     "ms": 43,
+     "chars": 480
+    },
+    {
+     "suite": "blast",
+     "kind": "impact",
+     "target": "ChangeLogCompactionService",
+     "tier": "narrow",
+     "want_files": 2,
+     "found_files": 2,
+     "recall": 1.0,
+     "ms": 44,
+     "chars": 505
+    },
+    {
+     "suite": "blast",
+     "kind": "impact",
+     "target": "ShutdownService",
+     "tier": "narrow",
+     "want_files": 2,
+     "found_files": 2,
+     "recall": 1.0,
+     "ms": 44,
+     "chars": 268
+    },
+    {
+     "suite": "blast",
+     "kind": "impact",
+     "target": "RbacInterceptor",
+     "tier": "narrow",
+     "want_files": 2,
+     "found_files": 2,
+     "recall": 1.0,
+     "ms": 43,
+     "chars": 243
+    },
+    {
+     "suite": "blast",
+     "kind": "impact",
+     "target": "SystemFacade",
+     "tier": "narrow",
+     "want_files": 2,
+     "found_files": 2,
+     "recall": 1.0,
+     "ms": 43,
+     "chars": 248
+    },
+    {
+     "suite": "blast",
+     "kind": "trace",
+     "from": "AuthController",
+     "to": "DatabaseService",
+     "expect": "path",
+     "hit": true,
+     "says_none": false,
+     "ms": 51,
+     "chars": 521
+    },
+    {
+     "suite": "blast",
+     "kind": "trace",
+     "from": "DevicesController",
+     "to": "DatabaseService",
+     "expect": "path",
+     "hit": true,
+     "says_none": false,
+     "ms": 45,
+     "chars": 529
+    },
+    {
+     "suite": "blast",
+     "kind": "trace",
+     "from": "AgreementsController",
+     "to": "DatabaseService",
+     "expect": "path",
+     "hit": true,
+     "says_none": false,
+     "ms": 46,
+     "chars": 571
+    },
+    {
+     "suite": "blast",
+     "kind": "trace",
+     "from": "AvailabilityController",
+     "to": "AvailabilityService",
+     "expect": "path",
+     "hit": true,
+     "says_none": false,
+     "ms": 43,
+     "chars": 309
+    },
+    {
+     "suite": "blast",
+     "kind": "trace",
+     "from": "BookingController",
+     "to": "BookingCreateService",
+     "expect": "path",
+     "hit": true,
+     "says_none": false,
+     "ms": 43,
+     "chars": 299
+    },
+    {
+     "suite": "blast",
+     "kind": "trace",
+     "from": "SessionAuthGuard",
+     "to": "IdentityRepository",
+     "expect": "path",
+     "hit": true,
+     "says_none": false,
+     "ms": 44,
+     "chars": 412
+    },
+    {
+     "suite": "blast",
+     "kind": "trace",
+     "from": "SystemController",
+     "to": "DatabaseService",
+     "expect": "none",
+     "hit": true,
+     "says_none": true,
+     "ms": 45,
+     "chars": 176
+    },
+    {
+     "suite": "blast",
+     "kind": "trace",
+     "from": "DevicesRepository",
+     "to": "AuthService",
+     "expect": "none",
+     "hit": true,
+     "says_none": true,
+     "ms": 50,
+     "chars": 178
+    },
+    {
+     "suite": "blast",
+     "kind": "changes",
+     "base": "cbc931ba~1",
+     "want_files": 9,
+     "found_files": 9,
+     "want_symbols": 21,
+     "found_symbols": 21,
+     "ms": 283,
+     "chars": 18079
+    },
+    {
+     "suite": "blast",
+     "kind": "changes",
+     "base": "0f27d2d1",
+     "want_files": 25,
+     "found_files": 25,
+     "want_symbols": 54,
+     "found_symbols": 48,
+     "ms": 355,
+     "chars": 26057
+    },
+    {
+     "suite": "blast",
+     "kind": "changes",
+     "base": "bc9db289~1",
+     "want_files": 18,
+     "found_files": 18,
+     "want_symbols": 34,
+     "found_symbols": 28,
+     "ms": 314,
+     "chars": 20837
+    },
+    {
+     "suite": "blast",
+     "kind": "changes",
+     "base": "a7acc0f4~1",
+     "want_files": 115,
+     "found_files": 115,
+     "want_symbols": 478,
+     "found_symbols": 468,
+     "ms": 1257,
+     "chars": 101719
+    },
+    {
+     "suite": "blast",
+     "kind": "changes",
+     "base": "3441991c~1",
+     "want_files": 122,
+     "found_files": 122,
+     "want_symbols": 490,
+     "found_symbols": 480,
+     "ms": 1291,
+     "chars": 110625
+    },
+    {
+     "suite": "blast",
+     "kind": "changes",
+     "base": "d9521668~1",
+     "want_files": 64,
+     "found_files": 64,
+     "want_symbols": 250,
+     "found_symbols": 240,
+     "ms": 713,
+     "chars": 54904
+    },
+    {
+     "suite": "blast",
+     "kind": "changes",
+     "base": "68635fae~1",
+     "want_files": 101,
+     "found_files": 101,
+     "want_symbols": 430,
+     "found_symbols": 420,
+     "ms": 1166,
+     "chars": 94257
+    },
+    {
+     "suite": "blast",
+     "kind": "changes",
+     "base": "5c61a72c~1",
+     "want_files": 44,
+     "found_files": 44,
+     "want_symbols": 87,
+     "found_symbols": 78,
+     "ms": 524,
+     "chars": 33253
+    }
+   ],
+   "summary": {
+    "impact": {
+     "n": 16,
+     "recall_mean": 1.0,
+     "files_found": 123,
+     "files_want": 123,
+     "ms_median": 44,
+     "chars_median": 794
+    },
+    "trace": {
+     "n": 8,
+     "hit": 8,
+     "path_hit": 6,
+     "path_n": 6,
+     "none_hit": 2,
+     "none_n": 2,
+     "ms_median": 45
+    },
+    "changes": {
+     "n": 8,
+     "symbols_found": 1783,
+     "symbols_want": 1844,
+     "files_found": 498,
+     "files_want": 498,
+     "ms_median": 618,
+     "chars_median": 44078
+    }
+   }
+  }
+ }
+}

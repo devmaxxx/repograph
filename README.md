@@ -310,10 +310,14 @@ AST-only indexer misses entirely. Each construct is pinned by one inline case in
 `impact <symbol>` walks `Calls` and `Extends` edges towards the symbol: `d=1` are the direct
 callers ("will break"), `d=2` their callers, and so on to `--depth` (3). A class is walked
 through its members, and a caller that imported through a barrel is found because the barrel's
-`ReExports` edges are followed back to the declaration. `importers` are the files whose `import`
-names the symbol, whether or not a call site resolved. The risk line is four fixed thresholds
+`ReExports` edges are followed back to the declaration. The barrel itself is listed among the
+importers: it names the symbol, and a rename reaches it first. `importers` are the files whose
+`import` names the symbol, whether or not a call site resolved. The risk line is four fixed thresholds
 on the direct count and the file count — `MEDIUM` from 5 direct or 3 files, `HIGH` from 15 or
-10, `CRITICAL` from 30 or 25 — printed with the counts, so the label can be argued with.
+10, `CRITICAL` from 30 or 25 — printed with the counts, so the label can be argued with. Barrels
+count towards the file threshold, so a symbol re-exported by three barrels and called by nobody
+now reads `MEDIUM`: the counts beside the label are what say whether that is a real blast radius
+or a re-export chain.
 
 ```
 $ repograph --repo beauty-crm impact StaffService
@@ -336,7 +340,9 @@ imported value it never saw declared — prints `?` in place of its `path:line`.
 spans and unions the callers of every touched symbol into one list and one risk line. Run it
 before committing; `--base main` before opening a pull request. A hunk outside every symbol —
 an import line, a trailing comment — is reported on the file and walks every symbol the file
-declares; what is being changed is never listed as affected by itself. Deleted files do not
+declares; a hunk in a file the graph does not index at all — a `.kt`, a `.sql`, a lockfile — is
+listed as that file with `not indexed` in place of a span, so the answer says the file changed
+rather than nothing; what is being changed is never listed as affected by itself. Deleted files do not
 appear: their symbols are gone from the graph, and their former callers surface as dangling
 edges in `verify`.
 
@@ -368,6 +374,7 @@ in full, not an empty config:
 | `milestone_families` | `["BE", "FE", "PLAT", "SYNC", "OPS", "AI", "MOB"]`                                          |
 | `enrich_command`     | headless `claude -p --model haiku` with thinking off — see [Spending tokens on purpose](#spending-tokens-on-purpose) |
 | `rerank_command`     | the same with `--model sonnet`                                                              |
+| `reranker_dir`       | directory of the exported cross-encoder for `--rerank-local`; empty = `~/.cache/repograph/reranker` |
 
 `id_families` and `milestone_families` default to the strict list `beauty-crm`'s census settled on —
 they are this project's development corpus, not a generic default. Every family is matched as
@@ -477,6 +484,16 @@ stated; input tokens are the answering model's own, median over the 38 questions
 | `--rerank`, haiku, depth 100                   | 11/14      | 24/24   | 3/3  | 222        | ≈9,500                    | ~4 s                 |
 | `--rerank`, sonnet, depth 100                  | 13/14      | 24/24   | 3/3  | 222        | ≈10,900                   | ~4 s                 |
 | `--rerank`, sonnet, depth 200 (default), 3 runs| 14/14      | 24/24   | 3/3  | 221–226    | ≈19,200                   | ~4.3 s               |
+
+**`--rerank-local`** is the same pool and the same pick, scored by a local cross-encoder
+(`BAAI/bge-reranker-v2-m3`, exported to ONNX once with `optimum-cli export onnx --model
+BAAI/bge-reranker-v2-m3 --task text-classification ~/.cache/repograph/reranker`, ~2.2 GB) at
+zero tokens — and **measured and rejected** as a floor candidate on 2026-09-04: 17.9 seconds a
+question against a bar of one, and keyword 39/40. Those two figures are on the 82-case set (30
+paraphrase, 40 keyword), not the 14/24 arms in the table above; ADR-001, Amendment 4 has the
+rule that was fixed before the run and the case-by-case swing. It ships opt-in and on no floor,
+exactly as `--rerank` does, and the two flags are mutually exclusive: passing both is an error,
+not a silent preference for one of them.
 
 The `bench` floors apply to the zero-token path; `--rerank` is measured, not
 floored, because a model's pick can vary by one hit between identical runs — which is also why the

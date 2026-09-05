@@ -15,6 +15,7 @@ mod query;
 mod store;
 mod walk;
 
+use anyhow::Context;
 use clap::{Parser, Subcommand};
 use model::Extractor;
 use std::path::PathBuf;
@@ -43,6 +44,9 @@ enum Cmd {
         /// Lets the configured model command pick the seeds from the deep candidate list.
         /// Costs tokens per question; measured +4–5 paraphrase hits of 14 on the bench corpus.
         #[arg(long)] rerank: bool,
+        /// Picks the seeds with a local cross-encoder instead of the model command — the same
+        /// pool, zero tokens. Needs the exported model in `reranker_dir`.
+        #[arg(long, conflicts_with = "rerank")] rerank_local: bool,
         /// Candidates the reranking model is shown; tokens per question grow with it.
         #[arg(long, default_value_t = rerank::DEPTH)] depth: usize,
         /// Answers from the store as it stands, without bringing it in line with the tree first.
@@ -93,7 +97,7 @@ enum Cmd {
         #[arg(long, default_value_t = 8)] parallel: usize,
         #[arg(long)] limit: Option<usize>,
     },
-    Bench { #[arg(long)] cases: Option<PathBuf>, #[arg(long)] rerank: bool, #[arg(long, default_value_t = rerank::DEPTH)] depth: usize },
+    Bench { #[arg(long)] cases: Option<PathBuf>, #[arg(long)] rerank: bool, #[arg(long, conflicts_with = "rerank")] rerank_local: bool, #[arg(long, default_value_t = rerank::DEPTH)] depth: usize },
     /// Writes every retriever's ranked list for each question in a JSONL file
     /// (`{"q","expect","kind"}` per line) so the mathematics can be done offline.
     Dump {
@@ -389,7 +393,7 @@ fn main() -> anyhow::Result<()> {
             println!("enrich: {} nodes written, {} dropped, {} still without questions, {} batches ({} failed) in {:.0}s", r.generated, r.dropped, r.left, r.batches, r.failed, t.elapsed().as_secs_f32());
             embed_all(&repo, cli.no_dense)
         }
-        Cmd::Ask { words, json, seeds, bodies, rerank, depth, stale } => {
+        Cmd::Ask { words, json, seeds, bodies, rerank, rerank_local, depth, stale } => {
             let timing = Timing::new();
             let cfg = load_cfg()?;
             let store = store::Store::new(&repo);
@@ -441,7 +445,21 @@ fn main() -> anyhow::Result<()> {
             };
             let opts = query::Options { seeds, bodies, dense: !cli.no_dense && index::dense::DenseIndex::present(&store), json, depth };
             let rerank_fn = |q: &str, c: &[(String, String)]| rerank::run(&cfg.rerank_command, q, c);
-            let rerank: Option<query::Rerank> = if rerank { Some(&rerank_fn) } else { None };
+            let cross = std::cell::RefCell::new(if rerank_local {
+                let dir = if cfg.reranker_dir.is_empty() { index::cross::default_dir()? } else { std::path::PathBuf::from(&cfg.reranker_dir) };
+                Some(index::cross::CrossEncoder::open(&dir).context("--rerank-local")?)
+            } else { None });
+            let local_fn = |q: &str, c: &[(String, String)]| -> Vec<String> {
+                let mut m = cross.borrow_mut();
+                let Some(m) = m.as_mut() else { return Vec::new() };
+                let texts: Vec<String> = c.iter().map(|(_, t)| t.clone()).collect();
+                match m.score(q, &texts) {
+                    Ok(s) => index::cross::pick(&s, c, index::cross::PICK),
+                    // Like a failing rerank command: say so and answer from the fused order.
+                    Err(e) => { eprintln!("rerank-local: {e:#}; answering from the fused order"); Vec::new() }
+                }
+            };
+            let rerank: Option<query::Rerank> = if rerank_local { Some(&local_fn) } else if rerank { Some(&rerank_fn) } else { None };
             let answer = query::ask(&graph, &ids, &questions, Some(&dense_fn), rerank, &words, &opts);
             timing.stage("answered");
             print!("{}", query::render(&answer, &graph, &opts));
@@ -495,8 +513,8 @@ fn main() -> anyhow::Result<()> {
             if graph.nodes.is_empty() { anyhow::bail!("graph is empty — run `repograph build`"); }
             Ok(())
         }
-        Cmd::Bench { cases, rerank, depth } => {
-            if bench::run(&repo, cases.as_deref(), cli.no_dense, rerank, depth)? { Ok(()) } else { anyhow::bail!("bench floors not met") }
+        Cmd::Bench { cases, rerank, rerank_local, depth } => {
+            if bench::run(&repo, cases.as_deref(), cli.no_dense, rerank, rerank_local, depth)? { Ok(()) } else { anyhow::bail!("bench floors not met") }
         }
         Cmd::Dump { queries, out, depth } => dump::run(&repo, &queries, &out, depth),
         Cmd::ImportLegacy { graph_json } => {

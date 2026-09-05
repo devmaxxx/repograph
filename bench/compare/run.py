@@ -23,6 +23,33 @@ import truth as T
 
 NO_PATH = re.compile(r"no call path|No directed path|\"status\":\s*\"no_path\"|no path", re.I)
 
+# What competes with an answer for the reader's eye: another id of the same shape, or for a
+# file case another path. `BE-M17`, `FR-AI-138`, `INV-16`, `N-137` all match the first;
+# `docs/prd/x.md` and `apps/api/src/y.ts` the second.
+ID_TOKEN = re.compile(r"\b[A-Z]{1,5}(?:-[A-Z]{1,6})?-[A-Z]?\d{1,4}\b")
+PATH_TOKEN = re.compile(r"[\w./-]+/[\w.-]+\.(?:tsx?|kt|md|json|ya?ml|sql)\b")
+
+
+def rank_of(answer: str, want: str) -> int | None:
+    """1 + the distinct competing answers a reader passes before `want`.
+
+    Strict is a substring test and says nothing about where in the answer the id sits — an id
+    fifth of five counted the same as first on 2026-09-03. This counts the other ids (for a
+    file case, the other paths) that appear before the first occurrence of `want`: first reads
+    1, buried behind four neighbours reads 5. Tool-agnostic on purpose: it reads the text every
+    tool prints, not a structure only one of them has.
+    """
+    at = answer.find(want)
+    if at < 0:
+        return None
+    pattern = PATH_TOKEN if "/" in want else ID_TOKEN
+    seen: list[str] = []
+    for m in pattern.finditer(answer[:at]):
+        token = m.group(0)
+        if token != want and token not in seen:
+            seen.append(token)
+    return len(seen) + 1
+
 
 class Tool:
     name = ""
@@ -102,6 +129,7 @@ def score_retrieval(tool: Tool, cases: list[dict], truth: dict) -> list[dict]:
         rows.append({
             "suite": "retrieval", "kind": case["kind"], "q": case["q"], "expect": want,
             "strict": want in answer, "soft": bool(named(answer, files)),
+            "rank": rank_of(answer, want),
             "ms": round(ms), "chars": len(answer.strip()),
         })
     return rows
@@ -156,19 +184,38 @@ def score_blast(tool: Tool, cases: list[dict], truth: dict) -> list[dict]:
     return rows
 
 
+def mrr(ranks: list[int | None]) -> float:
+    """Mean of 1/rank, an absent id scored 0."""
+    return round(statistics.mean(1 / r if r else 0.0 for r in ranks), 3)
+
+
 def summarise(rows: list[dict]) -> dict:
     ret = [r for r in rows if r["suite"] == "retrieval"]
     out: dict = {}
     if ret:
+        # `rank` present and null is a question the tool missed; `rank` absent is a result file
+        # written before the field existed. Scoring the second as the first would report a
+        # rescored old run as a measured zero, so it is an error rather than an absence.
+        stale = [r for r in ret if "rank" not in r]
+        if stale:
+            raise KeyError(
+                f"{len(stale)} retrieval rows carry no `rank`: this result predates the field "
+                "(pre-2026-09-04) and cannot be scored for MRR"
+            )
         by_kind: dict[str, dict] = {}
         for r in ret:
-            slot = by_kind.setdefault(r["kind"], {"n": 0, "strict": 0, "soft": 0})
+            slot = by_kind.setdefault(r["kind"], {"n": 0, "strict": 0, "soft": 0, "rank1": 0, "ranks": []})
             slot["n"] += 1
             slot["strict"] += r["strict"]
             slot["soft"] += r["soft"]
+            slot["rank1"] += r["rank"] == 1
+            slot["ranks"].append(r["rank"])
+        for slot in by_kind.values():
+            slot["mrr"] = mrr(slot.pop("ranks"))
         out["retrieval"] = {
             "by_kind": by_kind,
             "strict": sum(r["strict"] for r in ret), "soft": sum(r["soft"] for r in ret), "n": len(ret),
+            "mrr": mrr([r["rank"] for r in ret]),
             "ms_median": round(statistics.median(r["ms"] for r in ret)),
             "chars_median": round(statistics.median(r["chars"] for r in ret)),
         }
@@ -206,6 +253,8 @@ def summarise(rows: list[dict]) -> dict:
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--repo", required=True, help="corpus root")
+    ap.add_argument("--cases", default="", help="retrieval cases; default bench/cases.jsonl")
+    ap.add_argument("--blast", default="", help="blast cases; default bench/blast.jsonl")
     ap.add_argument("--tools", default="repograph,graphify,gitnexus")
     ap.add_argument("--suites", default="retrieval,blast")
     ap.add_argument("--repograph", default="repograph", help="repograph binary")
@@ -219,8 +268,10 @@ def main() -> None:
 
     repo = Path(args.repo).resolve()
     bench = Path(__file__).resolve().parent.parent
-    cases = T.read_jsonl(bench / "cases.jsonl")
-    blast = T.read_jsonl(bench / "blast.jsonl")
+    cases_path = Path(args.cases).resolve() if args.cases else bench / "cases.jsonl"
+    blast_path = Path(args.blast).resolve() if args.blast else bench / "blast.jsonl"
+    cases = T.read_jsonl(cases_path)
+    blast = T.read_jsonl(blast_path)
     args.gitnexus_repo = args.gitnexus_repo or repo.name
 
     if args.truth and Path(args.truth).exists():
@@ -232,11 +283,16 @@ def main() -> None:
 
     head = subprocess.run(["git", "rev-parse", "--short", "HEAD"], cwd=repo,
                           capture_output=True, text=True).stdout.strip()
+    suites = args.suites.split(",")
+    # Only the suites that ran. A blast-only run that still printed the retrieval case count
+    # claimed 82 scored questions it never asked.
+    loaded = {"retrieval": (cases, cases_path), "blast": (blast, blast_path)}
     report = {
         "corpus": str(repo), "commit": head, "when": time.strftime("%Y-%m-%dT%H:%M:%S"),
-        "cases": {"retrieval": len(cases), "blast": len(blast)}, "tools": {},
+        "suites": suites,
+        "cases": {s: len(loaded[s][0]) for s in suites if s in loaded},
+        "case_files": {s: str(loaded[s][1]) for s in suites if s in loaded}, "tools": {},
     }
-    suites = args.suites.split(",")
     for name in args.tools.split(","):
         tool = TOOLS[name](repo, args)
         rows: list[dict] = []

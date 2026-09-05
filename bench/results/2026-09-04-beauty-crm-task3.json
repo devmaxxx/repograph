@@ -1,0 +1,263 @@
+{
+ "corpus": "/Users/max/Documents/projects/beauty-crm",
+ "commit": "2483d932",
+ "when": "2026-09-04T11:05:57",
+ "cases": {
+  "retrieval": 82,
+  "blast": 20
+ },
+ "tools": {
+  "repograph": {
+   "rows": [
+    {
+     "suite": "blast",
+     "kind": "impact",
+     "target": "DatabaseService",
+     "tier": "hub",
+     "want_files": 48,
+     "found_files": 48,
+     "recall": 1.0,
+     "ms": 82,
+     "chars": 35410
+    },
+    {
+     "suite": "blast",
+     "kind": "impact",
+     "target": "TenantContextInterceptor",
+     "tier": "hub",
+     "want_files": 3,
+     "found_files": 3,
+     "recall": 1.0,
+     "ms": 69,
+     "chars": 714
+    },
+    {
+     "suite": "blast",
+     "kind": "impact",
+     "target": "ProblemException",
+     "tier": "hub",
+     "want_files": 24,
+     "found_files": 24,
+     "recall": 1.0,
+     "ms": 44,
+     "chars": 16351
+    },
+    {
+     "suite": "blast",
+     "kind": "impact",
+     "target": "ActorResolver",
+     "tier": "wide",
+     "want_files": 9,
+     "found_files": 9,
+     "recall": 1.0,
+     "ms": 43,
+     "chars": 1868
+    },
+    {
+     "suite": "blast",
+     "kind": "impact",
+     "target": "AuthService",
+     "tier": "wide",
+     "want_files": 10,
+     "found_files": 9,
+     "recall": 0.9,
+     "ms": 47,
+     "chars": 3959
+    },
+    {
+     "suite": "blast",
+     "kind": "impact",
+     "target": "OutboxPublisher",
+     "tier": "wide",
+     "want_files": 6,
+     "found_files": 6,
+     "recall": 1.0,
+     "ms": 44,
+     "chars": 1356
+    },
+    {
+     "suite": "blast",
+     "kind": "impact",
+     "target": "AvailabilityService",
+     "tier": "narrow",
+     "want_files": 3,
+     "found_files": 3,
+     "recall": 1.0,
+     "ms": 43,
+     "chars": 833
+    },
+    {
+     "suite": "blast",
+     "kind": "impact",
+     "target": "BookingCreateService",
+     "tier": "narrow",
+     "want_files": 3,
+     "found_files": 3,
+     "recall": 1.0,
+     "ms": 42,
+     "chars": 1021
+    },
+    {
+     "suite": "blast",
+     "kind": "impact",
+     "target": "AgreementsService",
+     "tier": "narrow",
+     "want_files": 3,
+     "found_files": 3,
+     "recall": 1.0,
+     "ms": 43,
+     "chars": 1012
+    },
+    {
+     "suite": "blast",
+     "kind": "impact",
+     "target": "SyncConflictService",
+     "tier": "narrow",
+     "want_files": 2,
+     "found_files": 2,
+     "recall": 1.0,
+     "ms": 43,
+     "chars": 513
+    },
+    {
+     "suite": "blast",
+     "kind": "trace",
+     "from": "AuthController",
+     "to": "DatabaseService",
+     "expect": "path",
+     "hit": true,
+     "says_none": false,
+     "ms": 48,
+     "chars": 521
+    },
+    {
+     "suite": "blast",
+     "kind": "trace",
+     "from": "DevicesController",
+     "to": "DatabaseService",
+     "expect": "path",
+     "hit": true,
+     "says_none": false,
+     "ms": 44,
+     "chars": 529
+    },
+    {
+     "suite": "blast",
+     "kind": "trace",
+     "from": "AgreementsController",
+     "to": "DatabaseService",
+     "expect": "path",
+     "hit": true,
+     "says_none": false,
+     "ms": 46,
+     "chars": 571
+    },
+    {
+     "suite": "blast",
+     "kind": "trace",
+     "from": "AvailabilityController",
+     "to": "AvailabilityService",
+     "expect": "path",
+     "hit": true,
+     "says_none": false,
+     "ms": 43,
+     "chars": 309
+    },
+    {
+     "suite": "blast",
+     "kind": "trace",
+     "from": "BookingController",
+     "to": "BookingCreateService",
+     "expect": "path",
+     "hit": true,
+     "says_none": false,
+     "ms": 42,
+     "chars": 299
+    },
+    {
+     "suite": "blast",
+     "kind": "trace",
+     "from": "SessionAuthGuard",
+     "to": "IdentityRepository",
+     "expect": "path",
+     "hit": true,
+     "says_none": false,
+     "ms": 44,
+     "chars": 412
+    },
+    {
+     "suite": "blast",
+     "kind": "trace",
+     "from": "SystemController",
+     "to": "DatabaseService",
+     "expect": "none",
+     "hit": true,
+     "says_none": true,
+     "ms": 44,
+     "chars": 176
+    },
+    {
+     "suite": "blast",
+     "kind": "trace",
+     "from": "DevicesRepository",
+     "to": "AuthService",
+     "expect": "none",
+     "hit": true,
+     "says_none": true,
+     "ms": 49,
+     "chars": 178
+    },
+    {
+     "suite": "blast",
+     "kind": "changes",
+     "base": "cbc931ba~1",
+     "want_files": 9,
+     "found_files": 9,
+     "want_symbols": 21,
+     "found_symbols": 21,
+     "ms": 260,
+     "chars": 18079
+    },
+    {
+     "suite": "blast",
+     "kind": "changes",
+     "base": "0f27d2d1",
+     "want_files": 25,
+     "found_files": 25,
+     "want_symbols": 54,
+     "found_symbols": 48,
+     "ms": 348,
+     "chars": 26057
+    }
+   ],
+   "summary": {
+    "impact": {
+     "n": 10,
+     "recall_mean": 0.99,
+     "files_found": 110,
+     "files_want": 111,
+     "ms_median": 44,
+     "chars_median": 1188
+    },
+    "trace": {
+     "n": 8,
+     "hit": 8,
+     "path_hit": 6,
+     "path_n": 6,
+     "none_hit": 2,
+     "none_n": 2,
+     "ms_median": 44
+    },
+    "changes": {
+     "n": 2,
+     "symbols_found": 69,
+     "symbols_want": 75,
+     "files_found": 34,
+     "files_want": 34,
+     "ms_median": 304,
+     "chars_median": 22068
+    }
+   }
+  }
+ }
+}

@@ -42,11 +42,19 @@ pub fn touched(graph: &Graph, hunks: &[Hunk]) -> Vec<String> {
             let end = n.end.max(n.line);
             if n.line <= h.end && end >= h.start { out.insert(n.id.clone()); any = true; }
         }
-        let file_id = format!("file:{}", h.file);
-        if !any && graph.nodes.contains_key(&file_id) { out.insert(file_id); }
+        // A file the graph never indexed — a `.kt`, a `.sql`, a lockfile — is still a file the
+        // diff changed. Reported as its file id, so the answer says "this changed, I cannot say
+        // which symbol" instead of saying nothing: on the bench corpus the silence was a third of
+        // a large diff (2026-09-03, 11 of 18 files named). A deleted file never gets here — its
+        // `+++ /dev/null` yields no hunk — so every id emitted is a file on the new side.
+        if !any { out.insert(format!("file:{}", h.file)); }
     }
-    let members: Vec<String> = out.iter().cloned().collect();
-    out.retain(|id| !members.iter().any(|m| m.len() > id.len() && m.starts_with(id.as_str()) && m[id.len()..].starts_with('.')));
+    // Only symbol ids nest: `sym:f::C` contains `sym:f::C.m`. Two file ids that share a prefix
+    // across a dot are unrelated files — `Dockerfile` and `Dockerfile.dev`, `index.d.ts` and
+    // `index.d.ts.map` — and suppressing either would drop a file the diff really changed.
+    let members: Vec<String> = out.iter().filter(|id| id.starts_with("sym:")).cloned().collect();
+    out.retain(|id| !id.starts_with("sym:")
+        || !members.iter().any(|m| m.len() > id.len() && m.starts_with(id.as_str()) && m[id.len()..].starts_with('.')));
     out.into_iter().collect()
 }
 
@@ -102,14 +110,16 @@ fn span_of(graph: &Graph, id: &str) -> String {
     match graph.nodes.get(id) {
         Some(n) if n.end > n.line => format!("{}:{}-{}", n.file, n.line, n.end),
         Some(n) => format!("{}:{}", n.file, n.line),
+        None if id.starts_with("file:") => "not indexed".into(),
         None => "?".into(),
     }
 }
 
 pub fn render(graph: &Graph, r: &Report) -> String {
     if r.touched.is_empty() { return "changed: 0 symbols\n".into() }
-    let changed_files: BTreeSet<&str> = r.touched.iter().filter_map(|id| graph.nodes.get(id).map(|n| n.file.as_str())).collect();
-    let mut out = format!("changed: {} in {}\n", plural(r.touched.len(), "symbol"), plural(changed_files.len(), "file"));
+    let symbols = r.touched.iter().filter(|id| !id.starts_with("file:")).count();
+    let changed_files: BTreeSet<String> = r.touched.iter().map(|id| file_of(graph, id)).collect();
+    let mut out = format!("changed: {} in {}\n", plural(symbols, "symbol"), plural(changed_files.len(), "file"));
     for id in &r.touched { out.push_str(&format!("  {id}  {}\n", span_of(graph, id))); }
     out.push_str(&format!("affected (depth {}): {} in {}\n", r.depth, plural(r.affected.len(), "symbol"), plural(r.files.len(), "file")));
     for d in &r.affected {
@@ -122,7 +132,8 @@ pub fn render(graph: &Graph, r: &Report) -> String {
 }
 
 pub fn render_json(graph: &Graph, r: &Report) -> String {
-    let touched: Vec<serde_json::Value> = r.touched.iter().map(|id| serde_json::json!({ "id": id, "at": span_of(graph, id) })).collect();
+    let touched: Vec<serde_json::Value> = r.touched.iter()
+        .map(|id| serde_json::json!({ "id": id, "at": span_of(graph, id), "indexed": graph.nodes.contains_key(id) })).collect();
     let affected: Vec<serde_json::Value> = r.affected.iter().map(|d| serde_json::json!({
         "id": d.id, "at": graph.nodes.get(&d.id).map(|n| format!("{}:{}", n.file, n.line)), "depth": d.depth, "kind": format!("{:?}", d.kind), "via": d.via,
     })).collect();
@@ -204,8 +215,34 @@ mod tests {
     }
 
     #[test]
-    fn a_hunk_in_an_unknown_file_is_ignored() {
-        assert!(touched(&graph(), &[Hunk { file: "none.ts".into(), start: 1, end: 9 }]).is_empty());
+    fn a_hunk_in_a_file_the_graph_never_indexed_is_reported_as_that_file() {
+        assert_eq!(touched(&graph(), &[Hunk { file: "Foo.kt".into(), start: 1, end: 9 }]), vec!["file:Foo.kt"]);
+    }
+
+    #[test]
+    fn a_file_id_is_not_suppressed_by_a_longer_file_id_that_extends_it_with_a_dot() {
+        // `Dockerfile` / `Dockerfile.dev`, `index.d.ts` / `index.d.ts.map`, `LICENSE` / `LICENSE.md`:
+        // the member suppression reads the longer name as a member of the shorter one and the diff
+        // loses the shorter file outright.
+        let hunks = [
+            Hunk { file: "Dockerfile".into(), start: 1, end: 1 },
+            Hunk { file: "Dockerfile.dev".into(), start: 1, end: 1 },
+        ];
+        assert_eq!(touched(&graph(), &hunks), vec!["file:Dockerfile", "file:Dockerfile.dev"]);
+    }
+
+    #[test]
+    fn an_unindexed_file_renders_as_changed_with_no_span_and_reaches_nothing() {
+        let g = graph();
+        let r = report(&g, &[Hunk { file: "Foo.kt".into(), start: 1, end: 9 }], 2);
+        assert_eq!(r.touched, vec!["file:Foo.kt"]);
+        assert!(r.affected.is_empty());
+        assert_eq!(
+            render(&g, &r),
+            "changed: 0 symbols in 1 file\n  file:Foo.kt  not indexed\naffected (depth 2): 0 symbols in 0 files\nrisk: LOW — 0 direct, 0 total, 0 files\n"
+        );
+        let v: serde_json::Value = serde_json::from_str(&render_json(&g, &r)).unwrap();
+        assert_eq!(v["touched"][0]["indexed"], false);
     }
 
     #[test]
@@ -225,6 +262,16 @@ mod tests {
         assert_eq!(r.touched, vec!["file:s.ts"]);
         assert_eq!(r.affected.iter().map(|d| d.id.as_str()).collect::<Vec<_>>(), vec!["sym:c.ts::C.create"]);
         assert_eq!(r.files, BTreeSet::from(["c.ts".to_string()]));
+    }
+
+    #[test]
+    fn a_file_level_change_in_an_indexed_file_renders_zero_symbols_but_names_the_file() {
+        let g = graph();
+        let r = report(&g, &[Hunk { file: "s.ts".into(), start: 1, end: 1 }], 2);
+        assert_eq!(
+            render(&g, &r),
+            "changed: 0 symbols in 1 file\n  file:s.ts  s.ts:1\naffected (depth 2): 1 symbol in 1 file\n  d=1  sym:c.ts::C.create  c.ts:9  ← sym:s.ts::S.create\nrisk: LOW — 1 direct, 1 total, 1 file\n"
+        );
     }
 
     #[test]

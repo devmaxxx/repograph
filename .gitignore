@@ -5,3 +5,4 @@
 /dist
 /npm/*/bin/repograph
 /npm/*/node_modules
+/bench/compare/__pycache__
