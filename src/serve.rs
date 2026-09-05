@@ -65,6 +65,11 @@ pub fn try_ask(repo: &Path, req: &ask::Request) -> Option<Reply> {
 }
 
 pub fn run(repo: &Path, cfg: &config::Config, every: u64, batch: usize, idle: u64, no_dense: bool) -> Result<()> {
+    // Stamped first of all, because `cfg` was read before this call and the two opens below take
+    // seconds on a large store: a file edited inside that window would be stamped as the baseline
+    // and this process would then answer under the configuration from before the edit for as long
+    // as it ran — the divergence the poll's check exists to prevent, narrowed to a start-up race.
+    let cfg_stamp = config_stamp(repo);
     let path = socket_path(repo);
     if path.exists() && UnixStream::connect(&path).is_ok() { anyhow::bail!("another serve answers at {}", path.display()); }
     let _ = std::fs::remove_file(&path);
@@ -90,7 +95,6 @@ pub fn run(repo: &Path, cfg: &config::Config, every: u64, batch: usize, idle: u6
     let mut ctx = ask::Context::open(repo, cfg, true, no_dense)?;
     log(&mut ctx);
     eprintln!("serve: {} every {every}s, batch {batch}, idle {idle}s; Ctrl-C stops", path.display());
-    let cfg_stamp = config_stamp(repo);
     let (mut last_poll, mut last_request) = (Instant::now(), Instant::now());
     loop {
         match rx.recv_timeout(WAKE) {
