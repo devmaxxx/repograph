@@ -13,6 +13,14 @@ transcripts, which survive and are copied under `$S/perf5-spec-*.txt`. The fixtu
 `beauty-crm` worktree at `502e8a6d` (908 files, 8.3k nodes, enriched); `serve` is measured on a
 copy of it with its source tree, never on the fixture, because `serve` refreshes and writes.
 
+The fixture's store records no embedding model, so it resolves through `UNNAMED_MODEL` and answers
+as a small-model store. Every timing here is that store's. `main` has since made
+`intfloat/multilingual-e5-large` the default, which does not move these numbers — the store names
+its own model — but it does divide the levers: P1 removes a 404 for a weights file the small model
+has never had, and the large model's weights genuinely do live beside its graph, so that lookup was
+always a cache hit for it. P1's saving is the small model's. P2, P3a and `serve` are
+model-independent.
+
 ## The table is one sitting, and that is the point
 
 The levers were implemented and measured over five separate sittings, and this machine drifts
