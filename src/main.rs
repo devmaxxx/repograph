@@ -96,6 +96,8 @@ enum Cmd {
         #[arg(long, default_value_t = 12)] batch: usize,
         #[arg(long, default_value_t = 8)] parallel: usize,
         #[arg(long)] limit: Option<usize>,
+        /// Also asks about code: symbols with a doc comment or a body, files with a head comment.
+        #[arg(long)] code: bool,
     },
     Bench { #[arg(long)] cases: Option<PathBuf>, #[arg(long)] rerank: bool, #[arg(long, conflicts_with = "rerank")] rerank_local: bool, #[arg(long, default_value_t = rerank::DEPTH)] depth: usize },
     /// Writes every retriever's ranked list for each question in a JSONL file
@@ -382,14 +384,14 @@ fn main() -> anyhow::Result<()> {
             println!("changed {} removed {} nodes {} edges {}", r.changed, r.removed, r.nodes, r.edges);
             embed_all(&repo, cli.no_dense)
         }
-        Cmd::Enrich { batch, parallel, limit } => {
+        Cmd::Enrich { batch, parallel, limit, code } => {
             let cfg = load_cfg()?;
             let store = store::Store::new(&repo);
             let (graph, _) = store.load()?;
             if graph.nodes.is_empty() { anyhow::bail!("graph is empty — run `repograph build`"); }
             let questions = enrich::Questions::load(&store)?;
             let t = std::time::Instant::now();
-            let r = enrich::run(&store, &graph, questions, &cfg.enrich_command, batch, parallel, limit)?;
+            let r = enrich::run(&store, &graph, questions, &cfg.enrich_command, batch, parallel, enrich::Scope { limit, code })?;
             println!("enrich: {} nodes written, {} dropped, {} still without questions, {} batches ({} failed) in {:.0}s", r.generated, r.dropped, r.left, r.batches, r.failed, t.elapsed().as_secs_f32());
             embed_all(&repo, cli.no_dense)
         }

@@ -25,6 +25,14 @@ pub struct Questions { pub entries: BTreeMap<String, Entry> }
 
 pub struct Report { pub generated: usize, pub dropped: usize, pub batches: usize, pub failed: usize, pub left: usize }
 
+/// What one `enrich` run covers: at most `limit` stale nodes of each kind, and code only on request.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Scope { pub limit: Option<usize>, pub code: bool }
+
+/// One prompt's worth of nodes with their passage hashes; `retry` after the model skipped them
+/// once, `code` for the code prompt.
+struct Batch<'a> { nodes: Vec<(&'a Node, String)>, retry: bool, code: bool }
+
 fn passage(n: &Node) -> String {
     let body: String = n.body.chars().take(PASSAGE_CHARS).collect();
     format!("{}\n{}", n.label, body)
@@ -36,6 +44,26 @@ fn hash(text: &str) -> String { blake3::hash(text.as_bytes()).to_hex().to_string
 /// ask about, and it says so by skipping the entry — 63 of them on the bench corpus, retried on
 /// every run until they were left out.
 pub fn eligible(n: &Node) -> bool { KINDS.contains(&n.kind) && !(n.kind == NodeKind::Entity && n.body.trim().is_empty()) }
+
+/// Code a developer's question can reach: a symbol its author wrote something about or that
+/// has a body of its own, and a file with a head comment. A one-line declaration or a decorator
+/// name gives the model nothing to ask about. Opt-in (`enrich --code`): the doc floors are
+/// measured without these, and `coverage` counts documents alone, so a store with code questions
+/// is graded as the enriched store it also is.
+pub fn eligible_code(n: &Node) -> bool {
+    match n.kind {
+        NodeKind::File => !n.body.trim().is_empty(),
+        NodeKind::Symbol => !n.id.starts_with("deco:") && !n.body.trim().is_empty() && (n.body.contains('\n') || n.end > n.line + 2),
+        _ => false,
+    }
+}
+
+/// Code nodes that carry questions, over code nodes that could — reported beside `coverage`,
+/// never part of it.
+pub fn code_coverage(graph: &Graph, questions: &Questions) -> (usize, usize) {
+    let nodes: Vec<&Node> = graph.nodes.values().filter(|n| eligible_code(n)).collect();
+    (nodes.iter().filter(|n| !questions.get(&n.id).is_empty()).count(), nodes.len())
+}
 
 /// Eligible nodes that carry questions, over eligible nodes. `run` saves after every batch, so
 /// a `--limit` run, an interrupt or a model that skipped a batch twice all leave a store with
@@ -87,8 +115,8 @@ impl Questions {
     }
 
     /// Nodes whose cached questions are missing or were written for a different passage.
-    fn stale<'a>(&self, graph: &'a Graph) -> Vec<(&'a Node, String)> {
-        graph.nodes.values().filter(|n| eligible(n)).filter_map(|n| {
+    fn stale<'a>(&self, graph: &'a Graph, wanted: fn(&Node) -> bool) -> Vec<(&'a Node, String)> {
+        graph.nodes.values().filter(|n| wanted(n)).filter_map(|n| {
             let h = hash(&passage(n));
             match self.entries.get(&n.id) {
                 Some(e) if e.hash == h => None,
@@ -100,7 +128,8 @@ impl Questions {
     /// Drops entries for nodes the graph no longer has; returns how many went.
     fn prune(&mut self, graph: &Graph) -> usize {
         let before = self.entries.len();
-        self.entries.retain(|id, _| graph.nodes.get(id).is_some_and(eligible));
+        // Code questions stay whether or not this run asked for them.
+        self.entries.retain(|id, _| graph.nodes.get(id).is_some_and(|n| eligible(n) || eligible_code(n)));
         before - self.entries.len()
     }
 }
@@ -128,15 +157,52 @@ pub fn prompt(nodes: &[&Node]) -> String {
     p
 }
 
+/// Worded for code and measured on the development corpus's TypeScript. Its two languages are
+/// the corpus's — a Russian PRD over English identifiers — and a rewording is a re-measure.
+pub fn prompt_code(nodes: &[&Node]) -> String {
+    let mut p = String::from(
+        "Below are entries from a codebase: a key (c1, c2, ...), the id, the file path, then what the \
+         author wrote about the code and the line that declares it.\n\
+         For each entry write 8 short questions (4-12 words) that a developer implementing a feature \
+         could ask to find exactly this code without knowing its name: where something is handled, \
+         which file or function does a thing, what enforces a rule, where to add or change a \
+         behaviour. Describe what the code does in everyday product words. Never repeat the \
+         identifier itself; say what it does instead (TenantContextInterceptor -> где проверяется, \
+         что запрос принадлежит нужному бизнесу). Write four questions in Russian and four in \
+         English, every one about a different aspect of the entry. Then add one line \
+         `id<TAB>synonyms: ...` with 5-10 everyday words or phrases for what the code does, in both \
+         languages, comma-separated. Every entry gets its lines. Output exactly one question per \
+         line, in the form `key<TAB>text` with the entry's key (`c1`, `c2`, ...) copied exactly, and \
+         no other numbering and no commentary.\n\n");
+    for (i, n) in nodes.iter().enumerate() {
+        p.push_str(&format!("### c{}\n{}\n{}\n{}\n\n", i + 1, n.id, n.file, passage(n)));
+    }
+    p
+}
+
+/// What a code answer may open an entry with: the entry's `c<n>` key or its id. Asked for the
+/// id, the model copied the label of a long one — `AvailabilityService` for
+/// `sym:apps/api/src/…/availability.service.ts::AvailabilityService` — and half the batches of
+/// the development corpus came back without a usable line; a two-character key is copied whole.
+pub fn code_keys<'a>(nodes: &[&'a Node]) -> Vec<(String, &'a Node)> {
+    nodes.iter().enumerate().flat_map(|(i, n)| [(format!("c{}", i + 1), *n), (n.id.clone(), *n)]).collect()
+}
+
 /// Lines of `id<TAB>question` for ids in the batch; anything else is ignored. A line may carry
 /// several questions tab-joined, an id before each — the bench corpus had 40 such lines, each
 /// stored whole with its own id inside, which the exact stage then answered for free.
 pub fn parse(output: &str, batch: &[&Node]) -> BTreeMap<String, Vec<String>> {
+    let keys: Vec<(String, &Node)> = batch.iter().map(|n| (n.id.clone(), *n)).collect();
+    parse_keyed(output, &keys)
+}
+
+/// `parse` over any set of keys, several of which may open the same entry.
+pub fn parse_keyed(output: &str, keys: &[(String, &Node)]) -> BTreeMap<String, Vec<String>> {
     let mut out: BTreeMap<String, Vec<String>> = BTreeMap::new();
     for line in output.lines() {
         let mut current: Option<&str> = None;
         for part in line.split('\t').map(str::trim).filter(|p| !p.is_empty()) {
-            if let Some(n) = batch.iter().find(|n| n.id == part) {
+            if let Some((_, n)) = keys.iter().find(|(k, _)| k == part) {
                 current = Some(&n.id);
             } else if let Some(id) = current.filter(|_| readable(part)) {
                 out.entry(id.to_string()).or_default().extend(split_joined(part));
@@ -197,15 +263,19 @@ pub fn run_command(command: &str, input: &str) -> Result<String> {
 /// Generates questions for every stale node through `command` (prompt on stdin, lines on
 /// stdout), `parallel` batches at a time, saving after each batch so an interrupted run keeps
 /// what it paid for.
-pub fn run(store: &Store, graph: &Graph, questions: Questions, command: &str, batch: usize, parallel: usize, limit: Option<usize>) -> Result<Report> {
+pub fn run(store: &Store, graph: &Graph, questions: Questions, command: &str, batch: usize, parallel: usize, scope: Scope) -> Result<Report> {
+    let Scope { limit, code } = scope;
     let mut questions = questions;
     let dropped = questions.prune(graph);
-    let mut stale = questions.stale(graph);
-    if let Some(l) = limit { stale.truncate(l); }
+    let mut stale = questions.stale(graph, eligible);
+    let mut stale_code = if code { questions.stale(graph, eligible_code) } else { Vec::new() };
+    if let Some(l) = limit { stale.truncate(l); stale_code.truncate(l); }
     // A batch the model answers in prose instead of `id<TAB>text` leaves its nodes without
     // questions and its exit status green; measured once on 172 batches, 7 came back that way
     // and 195 nodes silently stayed unsearchable. The nodes an answer skipped go round once more.
-    let batches: Vec<(Vec<(&Node, String)>, bool)> = stale.chunks(batch.max(1)).map(|c| (c.to_vec(), false)).collect();
+    // Documents and code never share a batch: each kind has its own prompt.
+    let batches: Vec<Batch> = stale.chunks(batch.max(1)).map(|c| Batch { nodes: c.to_vec(), retry: false, code: false })
+        .chain(stale_code.chunks(batch.max(1)).map(|c| Batch { nodes: c.to_vec(), retry: false, code: true })).collect();
     let total = batches.len();
     let queue = Arc::new(Mutex::new(batches));
     let shared = Arc::new(Mutex::new((questions, 0usize, 0usize)));
@@ -213,11 +283,12 @@ pub fn run(store: &Store, graph: &Graph, questions: Questions, command: &str, ba
         for _ in 0..parallel.max(1) {
             let (queue, shared) = (Arc::clone(&queue), Arc::clone(&shared));
             s.spawn(move || loop {
-                let Some((b, retry)) = queue.lock().unwrap().pop() else { break };
+                let Some(Batch { nodes: b, retry, code: is_code }) = queue.lock().unwrap().pop() else { break };
                 let nodes: Vec<&Node> = b.iter().map(|(n, _)| *n).collect();
-                match run_command(command, &prompt(&nodes)) {
+                let p = if is_code { prompt_code(&nodes) } else { prompt(&nodes) };
+                match run_command(command, &p) {
                     Ok(out) => {
-                        let parsed = parse(&out, &nodes);
+                        let parsed = if is_code { parse_keyed(&out, &code_keys(&nodes)) } else { parse(&out, &nodes) };
                         let mut g = shared.lock().unwrap();
                         for (n, h) in &b {
                             if let Some(qs) = parsed.get(&n.id) {
@@ -231,7 +302,7 @@ pub fn run(store: &Store, graph: &Graph, questions: Questions, command: &str, ba
                         let mut queue = queue.lock().unwrap();
                         if !skipped.is_empty() && !retry {
                             eprintln!("enrich: {} of {} nodes skipped by the model, retrying them", skipped.len(), b.len());
-                            queue.push((skipped, true));
+                            queue.push(Batch { nodes: skipped, retry: true, code: is_code });
                         }
                         eprintln!("enrich: batch done, {} of {} left", queue.len(), total);
                     }
@@ -245,7 +316,7 @@ pub fn run(store: &Store, graph: &Graph, questions: Questions, command: &str, ba
         Err(_) => unreachable!("every worker has joined"),
     };
     questions.save(store)?;
-    let left = questions.stale(graph).len();
+    let left = questions.stale(graph, eligible).len() + if code { questions.stale(graph, eligible_code).len() } else { 0 };
     Ok(Report { generated, dropped, batches: total, failed, left })
 }
 
@@ -309,6 +380,73 @@ mod tests {
         assert!(!loaded.entries.contains_key("ADR-003"));
     }
 
+    #[test]
+    fn code_is_eligible_when_its_author_wrote_something_or_it_has_a_body() {
+        let mut e = Extraction::default();
+        e.node(NodeKind::File, "file:a.ts", "a.ts", "The auth surface's decisions.", "a.ts", 1);
+        e.node(NodeKind::File, "file:b.ts", "b.ts", "", "b.ts", 1);
+        e.node_span(NodeKind::Symbol, "sym:a.ts::doc", "doc", "Ends every session.\nrevoke() {}", "a.ts", (3, 3));
+        e.node_span(NodeKind::Symbol, "sym:a.ts::long", "long", "export function f() {", "a.ts", (5, 12));
+        e.node_span(NodeKind::Symbol, "sym:a.ts::one", "one", "export const k = 1;", "a.ts", (14, 14));
+        e.node(NodeKind::Symbol, "deco:Injectable", "Injectable", "", "a.ts", 3);
+        e.node(NodeKind::Requirement, "FR-X-1", "t", "body", "d.md", 1);
+        let by = |id: &str| eligible_code(e.nodes.iter().find(|n| n.id == id).unwrap());
+        assert!(by("file:a.ts") && by("sym:a.ts::doc") && by("sym:a.ts::long"));
+        assert!(!by("file:b.ts") && !by("sym:a.ts::one") && !by("deco:Injectable") && !by("FR-X-1"));
+        let mut g = Graph::default();
+        g.apply(e);
+        // Documents alone decide `coverage`; code has a count of its own.
+        assert_eq!(coverage(&g, &Questions::default()), (0, 1));
+        assert_eq!(code_coverage(&g, &Questions::default()), (0, 3));
+    }
+
+    #[test]
+    fn code_questions_are_generated_only_when_asked_for_and_kept_either_way() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::new(dir.path());
+        let mut e = Extraction::default();
+        e.node(NodeKind::Requirement, "FR-X-1", "t", "body", "d.md", 1);
+        e.node(NodeKind::File, "file:a.ts", "a.ts", "The auth surface's decisions.", "a.ts", 1);
+        let mut g = Graph::default();
+        g.apply(e);
+        let cmd = r#"awk '/^### /{printf "%s\tq for %s\n", $2, $2}'"#;
+        let r = run(&store, &g, Questions::default(), cmd, 8, 1, Scope::default()).unwrap();
+        assert_eq!((r.generated, r.batches), (1, 1), "without --code the file is not asked about");
+        assert!(Questions::load(&store).unwrap().get("file:a.ts").is_empty());
+        let r = run(&store, &g, Questions::load(&store).unwrap(), cmd, 8, 1, Scope { limit: None, code: true }).unwrap();
+        assert_eq!((r.generated, r.batches, r.left), (1, 1, 0));
+        assert_eq!(Questions::load(&store).unwrap().get("file:a.ts"), ["q for c1"]);
+        // A later run without the flag neither regenerates nor prunes the code questions.
+        let r = run(&store, &g, Questions::load(&store).unwrap(), cmd, 8, 1, Scope::default()).unwrap();
+        assert_eq!((r.generated, r.dropped), (0, 0));
+        assert_eq!(Questions::load(&store).unwrap().get("file:a.ts"), ["q for c1"]);
+        assert_eq!(code_coverage(&g, &Questions::load(&store).unwrap()), (1, 1));
+    }
+
+    #[test]
+    fn a_code_answer_opens_its_entry_by_key_or_by_id_and_never_by_label() {
+        let mut e = Extraction::default();
+        e.node_span(NodeKind::Symbol, "sym:apps/a.ts::revoke", "revoke", "Ends every session.\nrevoke() {}", "apps/a.ts", (3, 3));
+        e.node_span(NodeKind::Symbol, "sym:apps/b.ts::index", "index", "Barrel.\nexport * from './x'", "apps/b.ts", (1, 2));
+        let nodes: Vec<&Node> = e.nodes.iter().collect();
+        let out = "c1\tкак выйти отовсюду\nsym:apps/b.ts::index\twhere is the barrel\nrevoke\tlabel only\nc3\tno such entry\n";
+        let p = parse_keyed(out, &code_keys(&nodes));
+        assert_eq!(p["sym:apps/a.ts::revoke"], vec!["как выйти отовсюду"]);
+        assert_eq!(p["sym:apps/b.ts::index"], vec!["where is the barrel"]);
+        assert_eq!(p.len(), 2);
+    }
+
+    #[test]
+    fn the_code_prompt_shows_the_path_and_asks_in_both_languages() {
+        let mut e = Extraction::default();
+        e.node_span(NodeKind::Symbol, "sym:apps/a.ts::revoke", "revoke", "Ends every session.\nrevoke() {}", "apps/a.ts", (3, 3));
+        let p = prompt_code(&[&e.nodes[0]]);
+        assert!(p.contains("### c1\nsym:apps/a.ts::revoke\napps/a.ts\nrevoke\nEnds every session."), "{p}");
+        assert!(p.contains("in the form `key<TAB>text`"));
+        assert!(p.contains("four questions in Russian and four in English"));
+        assert!(p.contains("Never repeat the identifier"));
+    }
+
     // The generator is a shell command, so the test's generator is `awk` echoing the ids it was
     // given; a real model is never needed to prove the plumbing.
     #[test]
@@ -317,21 +455,21 @@ mod tests {
         let store = Store::new(dir.path());
         let g = graph();
         let cmd = r#"awk '/^### /{printf "%s\tq for %s\n", $2, $2}'"#;
-        let r = run(&store, &g, Questions::default(), cmd, 1, 2, None).unwrap();
+        let r = run(&store, &g, Questions::default(), cmd, 1, 2, Scope::default()).unwrap();
         assert_eq!((r.generated, r.dropped, r.batches, r.failed), (2, 0, 2, 0));
         let q = Questions::load(&store).unwrap();
         assert_eq!(q.get("FR-PAY-22"), ["q for FR-PAY-22"]);
         assert!(q.get("BE-M01-T1").is_empty(), "tasks are not enriched");
         assert!(q.get("entity:Money").is_empty(), "a bare entity name is not enriched");
         // Nothing changed: nothing is generated again.
-        let r = run(&store, &g, q, cmd, 8, 1, None).unwrap();
+        let r = run(&store, &g, q, cmd, 8, 1, Scope::default()).unwrap();
         assert_eq!((r.generated, r.batches), (0, 0));
         // A body edit regenerates that node; a removed node is pruned.
         let mut g2 = Graph::default();
         let mut e = Extraction::default();
         e.node(NodeKind::Requirement, "FR-PAY-22", "отмена", "другое тело", "a.md", 1);
         g2.apply(e);
-        let r = run(&store, &g2, Questions::load(&store).unwrap(), cmd, 8, 1, None).unwrap();
+        let r = run(&store, &g2, Questions::load(&store).unwrap(), cmd, 8, 1, Scope::default()).unwrap();
         assert_eq!((r.generated, r.dropped), (1, 1));
     }
 
@@ -346,7 +484,7 @@ mod tests {
         let cmd = format!(
             r#"echo x >> "{c}"; n=$(wc -l < "{c}" | tr -d " "); awk -v n="$n" '/^### /{{ if (n > 1 || $2 == "FR-PAY-22") printf "%s\tq%s for %s\n", $2, n, $2 }}'"#,
             c = calls.display());
-        let r = run(&store, &graph(), Questions::default(), &cmd, 8, 1, None).unwrap();
+        let r = run(&store, &graph(), Questions::default(), &cmd, 8, 1, Scope::default()).unwrap();
         assert_eq!((r.generated, r.batches, r.failed, r.left), (2, 1, 0, 0));
         let q = Questions::load(&store).unwrap();
         assert_eq!(q.get("FR-PAY-22"), ["q1 for FR-PAY-22"]);
@@ -354,7 +492,7 @@ mod tests {
         assert_eq!(std::fs::read_to_string(&calls).unwrap().lines().count(), 2);
 
         let silent = format!(r#"echo x >> "{}"; awk '/^### /{{ exit }}'"#, calls.display());
-        let r = run(&store, &graph(), Questions::default(), &silent, 8, 1, None).unwrap();
+        let r = run(&store, &graph(), Questions::default(), &silent, 8, 1, Scope::default()).unwrap();
         assert_eq!((r.generated, r.left), (0, 2));
         assert_eq!(std::fs::read_to_string(&calls).unwrap().lines().count(), 4, "an answer that skips everything is retried once, not forever");
     }
@@ -363,7 +501,7 @@ mod tests {
     fn a_failing_command_is_counted_not_fatal() {
         let dir = tempfile::tempdir().unwrap();
         let store = Store::new(dir.path());
-        let r = run(&store, &graph(), Questions::default(), "exit 3", 8, 1, None).unwrap();
+        let r = run(&store, &graph(), Questions::default(), "exit 3", 8, 1, Scope::default()).unwrap();
         assert_eq!((r.generated, r.failed), (0, 1));
     }
 
@@ -407,10 +545,10 @@ mod tests {
         let g = graph();
         assert_eq!(coverage(&g, &Questions::default()), (0, 2));
         let cmd = r#"awk '/^### /{printf "%s\tq for %s\n", $2, $2}'"#;
-        run(&store, &g, Questions::default(), cmd, 1, 1, Some(1)).unwrap();
+        run(&store, &g, Questions::default(), cmd, 1, 1, Scope { limit: Some(1), code: false }).unwrap();
         assert_eq!(coverage(&g, &Questions::load(&store).unwrap()), (1, 2), "a run stopped early covers part of the graph");
         assert!(!enriched(1, 2), "half a two-node graph is nowhere near the mark");
-        run(&store, &g, Questions::load(&store).unwrap(), cmd, 1, 1, None).unwrap();
+        run(&store, &g, Questions::load(&store).unwrap(), cmd, 1, 1, Scope::default()).unwrap();
         assert_eq!(coverage(&g, &Questions::load(&store).unwrap()), (2, 2));
         assert!(enriched(2, 2));
     }
@@ -431,7 +569,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let store = Store::new(dir.path());
         let cmd = r#"awk '/^### /{printf "%s\tq for %s\n", $2, $2}'"#;
-        let r = run(&store, &graph(), Questions::default(), cmd, 1, 1, Some(1)).unwrap();
+        let r = run(&store, &graph(), Questions::default(), cmd, 1, 1, Scope { limit: Some(1), code: false }).unwrap();
         assert_eq!((r.generated, r.batches), (1, 1));
     }
 
@@ -440,7 +578,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let store = Store::new(dir.path());
         let cmd = r#"awk '/^### /{printf "%s\tq for %s\n", $2, $2}'"#;
-        let r = run(&store, &graph(), Questions::default(), cmd, 0, 0, None).unwrap();
+        let r = run(&store, &graph(), Questions::default(), cmd, 0, 0, Scope::default()).unwrap();
         assert_eq!(r.generated, 2);
         assert!(Questions::load(&store).unwrap().get("FR-PAY-22").len() == 1);
     }

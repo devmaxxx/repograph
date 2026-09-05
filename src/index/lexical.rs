@@ -43,17 +43,21 @@ pub fn tokenize(text: &str) -> Vec<String> {
 
 impl LexicalIndex {
     pub fn build(graph: &Graph) -> LexicalIndex {
-        Self::build_with(graph, |n| format!("{} {} {}", n.id, n.label, n.indexed_body()))
+        Self::build_with(graph, |n| n.kind != NodeKind::File, |n| format!("{} {} {}", n.id, n.label, n.indexed_body()))
     }
 
     /// The generated questions alone: mixed into the passage text they cost a keyword hit.
+    /// A file is a passage nowhere — its head comment in the passage index moved the BM25
+    /// statistics against paraphrase — but a file `enrich --code` has asked about is here: the
+    /// developer's "which file" question wants the file itself.
     pub fn build_questions(graph: &Graph, questions: &Questions) -> LexicalIndex {
-        Self::build_with(graph, |n| format!("{} {}", n.id, questions.get(&n.id).join(" ")))
+        Self::build_with(graph, |n| n.kind != NodeKind::File || !questions.get(&n.id).is_empty(),
+                         |n| format!("{} {}", n.id, questions.get(&n.id).join(" ")))
     }
 
-    fn build_with(graph: &Graph, text: impl Fn(&crate::model::Node) -> String + Sync) -> LexicalIndex {
+    fn build_with(graph: &Graph, keep: impl Fn(&crate::model::Node) -> bool, text: impl Fn(&crate::model::Node) -> String + Sync) -> LexicalIndex {
         use rayon::prelude::*;
-        let nodes: Vec<_> = graph.nodes.values().filter(|n| n.kind != NodeKind::File).collect();
+        let nodes: Vec<_> = graph.nodes.values().filter(|n| keep(n)).collect();
         // Stemming is the cost — three quarters of a no-dense answer on a 7,500-node graph
         // when done one document at a time — and every document stems independently.
         let docs: Vec<(String, HashMap<String, u32>, f32)> = nodes.par_iter().map(|n| {
@@ -162,6 +166,21 @@ mod tests {
         let hits = LexicalIndex::build_questions(&g, &q).search("деньги уходят", 5);
         assert_eq!(hits.iter().map(|(id, _)| id.as_str()).collect::<Vec<_>>(), vec!["FR-PAY-26"]);
         assert!(LexicalIndex::build(&g).search("деньги уходят", 5).is_empty());
+    }
+
+    #[test]
+    fn a_file_is_indexed_through_its_questions_alone() {
+        let mut g = Graph::default();
+        let mut e = Extraction::default();
+        e.node(NodeKind::Requirement, "FR-PAY-22", "правило отмены", "штраф считается по политике отмены", "a.md", 1);
+        e.node(NodeKind::File, "file:apps/a.ts", "a.ts", "Sessions and their revocation.", "apps/a.ts", 1);
+        g.apply(e);
+        let mut q = Questions::default();
+        q.entries.insert("file:apps/a.ts".into(), crate::enrich::Entry { hash: String::new(), questions: vec!["где выйти со всех устройств".into()] });
+        let hits = LexicalIndex::build_questions(&g, &q).search("выйти со всех устройств", 5);
+        assert_eq!(hits.iter().map(|(id, _)| id.as_str()).collect::<Vec<_>>(), vec!["file:apps/a.ts"]);
+        assert!(LexicalIndex::build(&g).search("revocation", 5).is_empty());
+        assert!(LexicalIndex::build_questions(&g, &Questions::default()).search("a.ts", 5).is_empty());
     }
 
     #[test]

@@ -37,8 +37,11 @@ pub struct DenseIndex {
 
 /// Every text embedded for a node, e5-prefixed. The passage is the node itself; each generated
 /// question is embedded as a query, since the reader's question is one too (e5's symmetric case).
+/// A file has no passage row — its head comment is for the prompt, not the index — and is
+/// present through its questions alone, once `enrich --code` has asked about it.
 fn rows(n: &crate::model::Node, questions: &Questions) -> Vec<String> {
-    let mut out = vec![format!("passage: {}\n{}", n.label, n.indexed_body())];
+    let mut out = Vec::new();
+    if n.kind != NodeKind::File { out.push(format!("passage: {}\n{}", n.label, n.indexed_body())); }
     out.extend(questions.get(&n.id).iter().map(|q| format!("query: {q}")));
     out
 }
@@ -120,7 +123,7 @@ impl DenseIndex {
         let mut todo_kinds = Vec::new();
         let old: std::collections::HashMap<(&str, &str), usize> =
             self.live.iter().map(|&i| ((self.ids[i].as_str(), self.hashes[i].as_str()), i)).collect();
-        for n in graph.nodes.values().filter(|n| n.kind != NodeKind::File) {
+        for n in graph.nodes.values() {
             for text in rows(n, questions) {
                 let hash = blake3::hash(text.as_bytes()).to_hex().to_string();
                 let is_q = text.starts_with("query: ");
@@ -268,6 +271,19 @@ mod tests {
         g.remove_file("a.md");
         assert_eq!(idx.sync(&g, &Questions::default(), &mut fake).unwrap(), 0);
         assert!(idx.ids.is_empty() && idx.vectors.is_empty());
+    }
+
+    #[test]
+    fn a_file_has_no_passage_row_and_is_present_through_its_questions() {
+        let mut idx = DenseIndex::default();
+        assert_eq!(idx.sync(&graph("x"), &Questions::default(), &mut fake).unwrap(), 2, "two requirements, no row for the file");
+        let mut q = Questions::default();
+        q.entries.insert("file:a.md".into(), crate::enrich::Entry { hash: String::new(), questions: vec!["где список".into()] });
+        assert_eq!(idx.sync(&graph("x"), &q, &mut fake).unwrap(), 1);
+        let v = fake(&["query: где список".to_string()]).unwrap().remove(0);
+        let (passages, questions) = idx.search(&v, 3);
+        assert_eq!(questions[0], "file:a.md");
+        assert!(!passages.contains(&"file:a.md".to_string()));
     }
 
     #[test]

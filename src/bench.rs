@@ -179,6 +179,10 @@ pub fn run(repo: &Path, cases: Option<&Path>, no_dense: bool, rerank: bool, rera
     // The threshold decides the floors; the counts printed on the summary line stay exact.
     let (covered, eligible) = coverage(&graph, &questions);
     let enriched = enrich::enriched(covered, eligible);
+    // Code questions are a configuration of their own and the summary line says so; the floors
+    // read `enriched`, which counts documents alone.
+    let (code_covered, code_eligible) = enrich::code_coverage(&graph, &questions);
+    let code_note = if code_covered > 0 { format!(" code_questions={code_covered}/{code_eligible}") } else { String::new() };
     // `ask` degrading to lexical-only on a missing model is fine — a person reading the answer
     // sees the stderr notice and can judge it. `bench` speaks only through its exit code, so a
     // dense run that silently falls back and then grades against the weaker no-dense floor
@@ -255,7 +259,7 @@ pub fn run(repo: &Path, cases: Option<&Path>, no_dense: bool, rerank: bool, rera
     tokens.sort_unstable();
     summary.p90_tokens = tokens.get(tokens.len() * 9 / 10).copied().unwrap_or(0);
     let counts = summary.by_kind.iter().map(|(k, (h, t))| format!("{k} {h}/{t}")).collect::<Vec<_>>().join("  ");
-    println!("\n{counts}  p90 {} tok  dense={dense_on}  enriched={enriched} ({covered}/{eligible} nodes){}  suite={suite} gated={gated}",
+    println!("\n{counts}  p90 {} tok  dense={dense_on}  enriched={enriched} ({covered}/{eligible} nodes){code_note}{}  suite={suite} gated={gated}",
         summary.p90_tokens, match (rerank_local, rerank.is_some()) {
             (true, _) => format!(" rerank_local=true depth={depth}"),
             (false, true) => format!(" rerank=true depth={depth}"),
