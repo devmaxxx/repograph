@@ -23,8 +23,11 @@ This package is a launcher: the binary itself comes from a per-platform package 
 optional dependency (`@devmaxxx/repograph-darwin-arm64`, `@devmaxxx/repograph-linux-x64`). On any
 other platform the launcher explains how to build from source with `cargo install`.
 
-The dense retriever downloads a 470 MB embedding model into `~/.cache/repograph/fastembed` on
-its first fused query; `--no-dense` never touches it.
+The dense retriever downloads a 2.1 GB embedding model into `~/.cache/repograph/fastembed` on its
+first fused query; `--no-dense` never touches it, and `embed_model =
+"intfloat/multilingual-e5-small"`
+in `repograph.toml` swaps it for a 470 MB one that reads paraphrase 15/30 against the default's
+22/30.
 
 Full documentation, the measured comparison against graphify and GitNexus, and the bench live in
 the repository: https://github.com/devmaxxx/repograph

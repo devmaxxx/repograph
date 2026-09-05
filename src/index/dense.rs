@@ -56,7 +56,7 @@ fn rows(n: &crate::model::Node, questions: &Questions) -> Vec<String> {
 /// configuration is free to choose.
 fn model_of(named: &str, has_rows: bool) -> Option<String> {
     if !named.is_empty() { return Some(named.to_string()); }
-    has_rows.then(|| crate::index::embed::DEFAULT_MODEL.to_string())
+    has_rows.then(|| crate::index::embed::UNNAMED_MODEL.to_string())
 }
 
 fn normalise(v: &mut [f32]) {
@@ -103,7 +103,7 @@ impl DenseIndex {
     /// model's over rows it never wrote — a state no later `embed` could reach. Either mismatch
     /// drops the rows and the file is rewritten from the new ones alone.
     pub fn written_by(&mut self, model: &str, dim: usize) {
-        let held = if self.model.is_empty() { crate::index::embed::DEFAULT_MODEL } else { self.model.as_str() };
+        let held = if self.model.is_empty() { crate::index::embed::UNNAMED_MODEL } else { self.model.as_str() };
         if !self.ids.is_empty() && (held != model || (self.dim > 0 && self.dim != dim)) {
             self.ids.clear(); self.hashes.clear(); self.kinds.clear(); self.vectors.clear();
             self.free.clear(); self.live.clear();
@@ -335,7 +335,7 @@ mod tests {
     #[test]
     fn rows_of_another_model_go_before_a_sync_and_the_same_model_keeps_them() {
         let mut idx = synced(&graph("x"));
-        idx.written_by(crate::index::embed::DEFAULT_MODEL, 3);
+        idx.written_by(crate::index::embed::UNNAMED_MODEL, 3);
         assert_eq!(idx.ids.len(), 2, "an unnamed store is the small model's and is kept");
         idx.written_by("intfloat/multilingual-e5-large", 3);
         assert!(idx.ids.is_empty() && idx.vectors.is_empty() && idx.dim == 0, "another model's rows cannot be appended to");
@@ -353,9 +353,9 @@ mod tests {
         // rows the small model never wrote — with no later `embed` able to reach it.
         let mut idx = synced(&graph("x"));
         assert_eq!((idx.dim, idx.model.as_str()), (3, ""));
-        idx.written_by(crate::index::embed::DEFAULT_MODEL, 3);
+        idx.written_by(crate::index::embed::UNNAMED_MODEL, 3);
         assert_eq!(idx.ids.len(), 2, "the same name at the same width appends");
-        idx.written_by(crate::index::embed::DEFAULT_MODEL, 5);
+        idx.written_by(crate::index::embed::UNNAMED_MODEL, 5);
         assert!(idx.ids.is_empty() && idx.vectors.is_empty() && idx.dim == 0,
             "rows of another width cannot be appended to, whatever the name says");
         assert_eq!(idx.sync(&graph("x"), &Questions::default(), &mut fake_wide).unwrap(), 2);
@@ -393,13 +393,25 @@ mod tests {
     }
 
     #[test]
+    fn an_unnamed_store_stays_the_small_model_s_though_the_default_is_the_large_one() {
+        // The two constants were the same string until the default moved. Were the unnamed rule
+        // to follow the default again, every store written before the field existed would be
+        // claimed for a model that never wrote it, and re-embedded whole to discover otherwise.
+        assert_eq!(crate::index::embed::UNNAMED_MODEL, "intfloat/multilingual-e5-small");
+        let mut idx = synced(&graph("x"));
+        assert_eq!(idx.model, "");
+        idx.written_by(crate::index::embed::UNNAMED_MODEL, 3);
+        assert_eq!(idx.ids.len(), 2, "the model that wrote it keeps its rows");
+    }
+
+    #[test]
     fn an_unnamed_store_with_rows_reads_as_the_small_model_and_an_empty_one_as_nothing() {
         let dir = tempfile::tempdir().unwrap();
         let store = Store::new(dir.path());
         assert_eq!(DenseIndex::recorded_model(&store).unwrap(), None, "nothing written yet");
         // Saved without `written_by`, as every store written before the field existed was.
         synced(&graph("x")).save(&store).unwrap();
-        assert_eq!(DenseIndex::recorded_model(&store).unwrap().as_deref(), Some(crate::index::embed::DEFAULT_MODEL),
+        assert_eq!(DenseIndex::recorded_model(&store).unwrap().as_deref(), Some(crate::index::embed::UNNAMED_MODEL),
             "an unnamed store holds the small model's rows, so a reader opens the small model");
         let mut idx = synced(&graph("x"));
         idx.written_by("intfloat/multilingual-e5-large", 3);

@@ -21,10 +21,12 @@ pub struct Config {
     /// Hub id of the model the vectors are written with. `build`, `update`, `enrich`, `embed`
     /// and `watch` embed with it and rewrite the index whole when the store holds another
     /// model's rows; `ask`, `bench` and `dump` open the model the store records instead, so a
-    /// store keeps answering with what wrote it whatever this says today. The small model is
-    /// the default and the model the floors were set with; `intfloat/multilingual-e5-large`
-    /// read paraphrase 22/30 against its 15/30 on the fixture, at 0.8 s an `ask` against
-    /// 0.55 s, 1.9 GB resident against 1.7, and 26× the embedding time.
+    /// store keeps answering with what wrote it whatever this says today. The large model is
+    /// the default: it read paraphrase 22/30 against the small one's 15/30 on the fixture and
+    /// held-out 103 → 119 of 400 (p = 0.00086), for 0.8 s an `ask` against 0.55 s, 1.9 GB
+    /// resident against 1.7, a 2.1 GB download and an order more embedding time.
+    /// `intfloat/multilingual-e5-small` is the cheap way back, and the model the floors were
+    /// set with.
     pub embed_model: String,
 }
 
@@ -113,11 +115,11 @@ mod tests {
     }
 
     #[test]
-    fn the_embed_model_defaults_to_the_small_e5_and_reads_from_the_file() {
+    fn the_embed_model_defaults_to_the_large_e5_and_reads_from_the_file() {
         let dir = tempfile::tempdir().unwrap();
-        assert_eq!(Config::load(dir.path()).unwrap().embed_model, "intfloat/multilingual-e5-small");
-        std::fs::write(dir.path().join("repograph.toml"), "embed_model = \"intfloat/multilingual-e5-large\"\n").unwrap();
         assert_eq!(Config::load(dir.path()).unwrap().embed_model, "intfloat/multilingual-e5-large");
+        std::fs::write(dir.path().join("repograph.toml"), "embed_model = \"intfloat/multilingual-e5-small\"\n").unwrap();
+        assert_eq!(Config::load(dir.path()).unwrap().embed_model, "intfloat/multilingual-e5-small");
     }
 
     #[test]
