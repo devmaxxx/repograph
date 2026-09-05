@@ -7,13 +7,13 @@ use crate::model::Graph;
 use crate::query::{self, Answer, Options};
 use crate::store::Store;
 use anyhow::{Context, Result};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::path::Path;
 
 /// What a case expects the answer to reach: one node id or file path, or several when the
 /// honest answer to the question is more than one place.
-#[derive(Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(untagged)]
 pub enum Expect { One(String), Many(Vec<String>) }
 
