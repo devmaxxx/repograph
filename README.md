@@ -491,7 +491,7 @@ It is the caveat trap 7 of the [runbook](docs/bench/runbook.md) carries. Measure
 the default reads paraphrase **22/30** against `intfloat/multilingual-e5-small`'s 15/30 with
 keyword 40/40 and code 12/12 unchanged, and held-out 103 → 119 of 400 (+19 −3, p = 0.0009). The
 small model is what that costs: an `ask` in 0.30 s against 0.8 s (the model opens in 220 ms against
-676), 1.4 GB resident against 1.9, a 470 MB download against 2.1 GB, and ~103 s to embed the
+676), 1.7 GB resident against 1.9, a 470 MB download against 2.1 GB, and ~103 s to embed the
 corpus's 33,525 rows against 2,680 s. It is one line and one `repograph embed` away, and a store
 already on it keeps answering by it.
 

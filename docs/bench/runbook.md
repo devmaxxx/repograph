@@ -254,7 +254,7 @@ PY
 done
 ```
 
-Two things the 2026-09-06 run learned the hard way:
+Three things the 2026-09-06 run learned the hard way:
 
 - **Between-sitting drift on this machine exceeds the effects being measured**, so a before/after
   pair has to be **interleaved in one sitting** — A, B, A, B, … — never five of one and then five
@@ -262,6 +262,14 @@ Two things the 2026-09-06 run learned the hard way:
   read 369.8 ms in one sitting and 346.1 ms an hour later; two five-run sets of identical code sat
   44.9 ms apart, wider than the lever they were being used to judge. Build every arm's binary
   first, then measure them round-robin, and write the machine's load into the transcript.
+- **`git archive` hands cargo a stale mtime, and cargo hands back the wrong binary.** Building each
+  arm from `git archive <commit>` into a shared `--target-dir` stamps the *commit's* mtimes, which
+  are older than the artifacts the previous arm left in that directory. Cargo calls the build fresh
+  and copies the earlier commit's binary out under the later commit's name. The first round of the
+  2026-09-06 builds produced four binaries with **the same sha** — one binary, which would have
+  been measured four times and published as a before/after table with nothing in it. `touch` the
+  extracted tree before building (`find $SRC -type f -exec touch {} +`), then `shasum` every binary
+  and check the four differ: that comparison is the only thing that catches it.
 - **`pkill -f 'repograph serve'` matches nothing**, because the command line reads
   `repograph --repo <path> serve`. Match on the repo instead (`pkill -f '<repo-dir> serve'`). A
   whole timing pair was lost to orphan servers that a `pkill` was believed to have killed: every
