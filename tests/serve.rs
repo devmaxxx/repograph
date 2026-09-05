@@ -29,6 +29,22 @@ fn ask(dir: &std::path::Path, extra: &[&str], words: &[&str]) -> (String, String
     ask_in(LEXICAL, dir, extra, words)
 }
 
+/// The same question asked by a chosen binary rather than the one Cargo built, so a test can
+/// replace the file under a running server and still ask from the path it replaced.
+fn ask_from(bin: &std::path::Path, dir: &std::path::Path, words: &[&str]) -> (String, String) {
+    let out = Command::new(bin).args(LEXICAL).arg("--repo").arg(dir).arg("ask").args(words).output().unwrap();
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    (String::from_utf8(out.stdout).unwrap(), String::from_utf8(out.stderr).unwrap())
+}
+
+/// The two numbers the handshake's build stamp is made of, read the way `walk::stamp_of` reads
+/// them. The crate is a binary with no library, so a test computes them rather than calling it.
+fn stamp_of(path: &std::path::Path) -> (u64, u64) {
+    let m = std::fs::metadata(path).unwrap();
+    let ns = m.modified().unwrap().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+    (u64::try_from(ns).unwrap(), m.len())
+}
+
 fn serve_in(arm: &[&str], dir: &std::path::Path, extra: &[&str]) -> std::process::Child {
     repograph().args(arm).arg("--repo").arg(dir).arg("serve").args(extra)
         .stdout(Stdio::null()).stderr(Stdio::piped()).spawn().unwrap()
@@ -215,4 +231,47 @@ fn a_reply_from_another_build_of_this_version_is_ignored() {
     assert!(out.contains("FR-PAY-1") && !out.contains("WRONG"), "{out}");
     assert!(err.contains("serve: the resident process is another build"), "{err}");
     fake.join().unwrap();
+}
+
+/// `current_exe` names a path, and the file at a server's own path is the one a rebuild replaces.
+/// A server that stats it per request reports the stamp of the binary the client is asking from,
+/// the two agree, and yesterday's code answers today's question — the case the build stamp exists
+/// to refuse. Only a stamp taken once, at start, describes the build a process is running.
+#[test]
+fn a_binary_replaced_under_a_live_server_is_another_build_and_the_client_answers_here() {
+    let dir = repo_with_docs();
+    let bin = tempfile::tempdir().unwrap();
+    let path = bin.path().join("repograph");
+    std::fs::copy(env!("CARGO_BIN_EXE_repograph"), &path).unwrap();
+    let started_as = stamp_of(&path);
+    let want = ask(dir.path(), &["--no-serve"], &["штраф"]).0;
+    let mut server = Command::new(&path).args(LEXICAL).arg("--repo").arg(dir.path())
+        .args(["serve", "--every", "3600", "--idle", "60"])
+        .stdout(Stdio::null()).stderr(Stdio::piped()).spawn().unwrap();
+    // The one build on both ends answers over the socket, which is what makes the run below a
+    // test of the replacement rather than of a server that was never reachable.
+    let start = Instant::now();
+    loop {
+        let (_, err) = ask_from(&path, dir.path(), &["штраф"]);
+        if err.contains("serve: answered by the resident process") { break; }
+        assert!(start.elapsed() < Duration::from_secs(20), "serve never answered over the socket: {err}");
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    // A rebuild in place, as far as a stat can tell: the path now holds a file the running server
+    // did not start from. Renamed rather than written over — the running one keeps its inode.
+    let replacement = bin.path().join("replacement");
+    std::fs::copy(env!("CARGO_BIN_EXE_repograph"), &replacement).unwrap();
+    // `fs::copy` carries the source's mtime over on macOS, so the copy would stamp as the file it
+    // came from. A build writes its output now, and that is the stamp under test.
+    std::fs::File::options().write(true).open(&replacement).unwrap()
+        .set_times(std::fs::FileTimes::new().set_modified(std::time::SystemTime::now())).unwrap();
+    std::fs::rename(&replacement, &path).unwrap();
+    assert_ne!(started_as, stamp_of(&path), "the file at that path stamps differently now");
+    let (out, err) = ask_from(&path, dir.path(), &["штраф"]);
+    assert!(err.contains("serve: the resident process is another build"),
+        "the running server is not the build at its path, and the client says so: {err}");
+    assert!(!err.contains("answered by the resident process"), "{err}");
+    assert_eq!(out, want, "and the question was answered here instead");
+    server.kill().unwrap();
+    let _ = server.wait();
 }
