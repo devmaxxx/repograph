@@ -95,8 +95,9 @@ Cumulatively **537.6 → 297.0 ms, −240.6 ms, 1.81×**: P1 −198.3, P2 −42.
 | min / max of seven | 99.6 / 102.8 | 100.0 / 103.3 | 98.3 / 111.3 | 99.2 / 104.7 |
 | spread | 3.2 | 3.3 | 13.0 | 5.5 |
 
-The lexical arm is flat, which is the correct result: none of the three levers touches a path a
-`--no-dense` question walks. The 1.4 ms between the highest and the lowest of the four medians is
+The lexical arm is flat, which is the correct result: no lever changes what a `--no-dense`
+question measurably costs — P2 removed a dead `exact_seeds` scan from that path, worth 0.1–0.4 ms,
+and nothing else on it moved. The 1.4 ms between the highest and the lowest of the four medians is
 smaller than any one binary's own spread across its seven runs (3.2–13.0 ms).
 
 ### The check sitting
@@ -120,7 +121,7 @@ The `model opened` step falls **410.5 → 213.3 ms, −197.2 ms**, and the whole
 breakdown of the open, measured three times (`$S/perf5-spec-open-parts.txt`), named the right
 cause and the right order of magnitude and overshot the size by 21–30 %: the absent file cost
 238.2 / 255.5 / 242.6 ms of a 299.2 / 236.5 / 253.4 ms `fetch`, against the 197.2 ms actually
-recovered, while the four files that *are* cached resolved in 0.1–0.7 ms.
+recovered, while the four files that *are* cached resolved in 0.07–0.65 ms.
 
 It is also what makes the dense arm work offline: an unreachable hub used to cost the connect
 failure or its timeout on every question.
@@ -217,12 +218,16 @@ and reached the same verdict: 71.6 / 385.2 ms dense and 55.4 / 82.2 ms lexical
 
 Its in-process figures are not this sitting's, and they do not even differ in one direction: dense
 answered more slowly there (385.2 against 326.2 here) and lexical faster (82.2 against 106.2), and
-Task 4's own fix round measured that same lexical arm at 124.2 and 125.1 ms on unchanged code
-(`$S/perf4fix-timings.txt`). Three sittings have now read 82.2, 106.2 and 124.2/125.1 ms for a
-one-process lexical ask, on a path **no lever in this plan touches** — a spread of 43 ms, wider
-than P2's entire effect on the dense arm. That is this document's opening thesis turning up inside
-its own numbers. It is why Task 4's pair is cited for its verdict rather than for its absolute
-figures, and why only the interleaved table above is read as a before and after.
+Task 4's own fix round measured that same lexical arm at 124.2 and 125.1 ms across the
+`83aa8e1`/`e17eb21` pair — two binaries that do differ, in `serve`, `ask`, `main` and the dense
+index, but nowhere on the lexical answering path (`$S/perf4fix-timings.txt`). Three sittings have
+now read 82.2, 106.2 and 124.2/125.1 ms for a one-process lexical ask, on a path whose measurable
+cost **no lever in this plan changes** — a spread of 43 ms, wider than P2's entire effect on the
+dense arm. (The one lever that reached that path at all is P2's removal of a dead `exact_seeds`
+scan, worth 0.1–0.4 ms, below what this machine can resolve.) That is this document's opening
+thesis turning up inside its own numbers. It is why Task 4's pair is cited for its verdict rather
+than for its absolute figures, and why only the interleaved table above is read as a before and
+after.
 
 ### The lexical arm misses the 30 ms target, and the cause is one thing
 
@@ -382,9 +387,11 @@ than off the note's tables, and each agreed.
   `query::ask` rebuilds the lexical index and the question index from the graph on every question,
   resident process or not. The conclusion still stands for a fused ask, where P2 hides the build
   inside the model open and the socket answer is 66.5 ms. It does not stand for the lexical arm,
-  where that rebuild *is* the missed target — 49 of its 54 ms. Caching the indexes is a change to
-  `query::ask` rather than to `serve`: a lever in its own right, needing a pre-registered rule and
-  evidence of its own, and outside this plan, whose scope ends at P3. The number to beat is 49 ms.
+  where that rebuild *is* the missed target — almost all of 49 of its 54 ms, on evidence that
+  bounds the build rather than isolating it, as the lexical section above says. Caching the indexes
+  is a change to `query::ask` rather than to `serve`: a lever in its own right, needing a
+  pre-registered rule and evidence of its own, and outside this plan, whose scope ends at P3. The
+  number to beat is 49 ms.
 - **`mmap`-ing the vectors.** The note's non-goal list names this beside persisting the BM25
   indexes, and this plan measured neither a variant nor a prototype of it. It did not have to: the
   step `mmap` would attack is `vectors loaded`, which the table above puts at **+15.5 ms** in every
