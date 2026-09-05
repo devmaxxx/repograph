@@ -153,6 +153,12 @@ exactly the fixture: 40/15/12 p90 220 and 39/14/12 p90 215, dev 36/60 and 37/60 
 0/9. The prose about code reaches retrieval through A2's questions, in the reranked pool, instead
 of through the passages — which is A4's ruling below, not A2's own.
 
+One thing the bodies moved that no number above covers: `ask --rerank` shows the model the first
+120 characters of a candidate's body, so a symbol's snippet is now its doc comment rather than its
+declaring line. It was not re-measured, and the `--rerank` figures on record predate it. The
+reranked path is opt-in and on no floor, which is why the change ships unread rather than blocking
+on a run of its own.
+
 ### A2 — two defects found before a number was read, then the number
 
 The first `enrich --code` run was stopped after 12 batches: six had come back with every node

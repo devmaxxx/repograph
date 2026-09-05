@@ -44,8 +44,9 @@ Version 0.4.0. Every row below is implemented, not planned:
 | `enrich`, `ask --rerank`   | working; opt-in, the only two stages that spend model tokens — see [Spending tokens on purpose](#spending-tokens-on-purpose) |
 | `embed`                    | working; writes the rows the dense index lacks with the configured model, rewriting it whole when the store was written by another — see [Embeddings](#embeddings) |
 
-`--no-dense` skips the embedding stage everywhere it could apply — `build`, `update`, `ask`, `bench`.
-Without it, those commands use local embeddings once the model is cached (see [Embeddings](#embeddings)).
+`--no-dense` skips the embedding stage everywhere it could apply — `build`, `update`, `enrich`,
+`embed`, `watch`, `ask`, `bench`. Without it, those commands use local embeddings once the model is
+cached (see [Embeddings](#embeddings)).
 
 ## Install
 
@@ -408,9 +409,9 @@ through `ort` directly: the tokenizer and the session open concurrently at optim
 which halves model-open time against the library default. The files are a one-time Hugging Face
 download cached under `FASTEMBED_CACHE_DIR` if that is set, else `~/.cache/repograph/fastembed`
 (the layout is the hub client's, so a cache populated by an earlier release is reused as is). Every
-command that touches the dense stage — `build`, `update`, `ask`, `bench` —
-reuses the cache; there are no further network calls once it is populated. `--no-dense` skips the
-download and the embedding stage everywhere.
+command that touches the dense stage — `build`, `update`, `enrich`, `embed`, `watch`, `ask`,
+`bench` — reuses the cache; there are no further network calls once it is populated. `--no-dense`
+skips the download and the embedding stage everywhere.
 
 The model is a property of the store. `embed_model` in `repograph.toml` names what `build`,
 `update`, `enrich`, `embed` and `watch` write vectors with; `vectors.json` records it, and `ask`,
@@ -421,8 +422,12 @@ store to the configured model. Switching is one line and one `repograph embed`: 
 model wrote are dropped and the file rewritten. The claim is on width as well as name, so a store
 the earlier `REPOGRAPH_EMBED_MODEL` recipe left holding another model's rows under no recorded name
 is re-embedded whole by the next `embed` rather than relabelled over rows it never wrote.
-`REPOGRAPH_EMBED_MODEL=<hub id>` outranks both for one command, which is how a copy
-of a store is measured under a second model without touching its files. Measured on the fixture,
+`REPOGRAPH_EMBED_MODEL=<hub id>` outranks both for one command, which is how a copy of a store is
+measured under a second model. Query that copy with `ask --stale`, or with its tree unchanged
+beside it — `bench` and `dump` read the store as it stands and need neither: an `ask` that
+refreshes claims the index for the model the override named, and at the same width that re-embeds
+the very rows being measured (a different width the guard refuses, and the answer is lexical-only).
+It is the caveat trap 7 of the [runbook](docs/bench/runbook.md) carries. Measured on the fixture,
 `intfloat/multilingual-e5-large` (1024-d, 2.1 GB download) reads paraphrase **22/30** against the
 small model's 15/30 with keyword 40/40 and code 12/12 unchanged, held-out 103 → 119 of 400 (+19 −3,
 p = 0.0009), at 0.8 s an `ask` against 0.55 s (the model opens in 676 ms against 418), 1.9 GB
@@ -435,13 +440,17 @@ not graded by them, until floors of its own are set.
 lookup answers in ~50 ms and a `--no-dense` question in ~0.1 s, since neither opens the model or
 reads the vectors. `REPOGRAPH_TIMING=1` prints where an `ask` spends its time, stage by stage.
 
-Five embedding-side levers were measured on the same corpus and cases and none moved recall past
-6/14: the larger `MultilingualE5Base` (768-d, ≈1.1 GB, 2.4× the download) scores 6/14 with a
-different hit set; `BGEM3` (1024-d, ≈2.1 GB) scores 5/14 at eleven times the embedding time
-(1,454 s against 132 s); the quantized `ParaphraseMLMiniLML12V2Q` scores 2/14 and drops keyword to
-21/24; raising the passage cut from 256 to 512 tokens scores 5/14 at double the embedding time; a
-second vector per node for the label alone, max-scored against the passage vector, scores 6/14 at
-1.85× the embedding time. The small model at 256 tokens, one vector per node, stays.
+Five embedding-side levers were measured on the same corpus and cases — on the fourteen-case set,
+and before `enrich`'s generated questions were in the index — and none moved recall past 6/14: the
+larger `MultilingualE5Base` (768-d, ≈1.1 GB, 2.4× the download) scores 6/14 with a different hit
+set; `BGEM3` (1024-d, ≈2.1 GB) scores 5/14 at eleven times the embedding time (1,454 s against
+132 s); the quantized `ParaphraseMLMiniLML12V2Q` scores 2/14 and drops keyword to 21/24; raising
+the passage cut from 256 to 512 tokens scores 5/14 at double the embedding time; a second vector
+per node for the label alone, max-scored against the passage vector, scores 6/14 at 1.85× the
+embedding time. The small model at 256 tokens, one vector per node, stays the default. Model size
+alone was re-measured with the questions in the index, which is the paragraph above: `e5-large`
+reads paraphrase 22/30 against 15/30, and ships as a store option rather than as the default
+because it pays in latency, memory and a 2.1 GB download.
 
 If the model can't be opened (no cache, no network), the two kinds of caller degrade differently, on
 purpose: `ask` and `update` fall back to lexical-only and print one line to stderr saying so, then
@@ -504,21 +513,20 @@ rows pooled with the passages they bury targets (a passage at rank 2 fell to 87 
 questions), and mixed into a node's own BM25 text they cost a keyword hit. What ships for those
 questions is the third — a BM25 list of their own, which the plain `ask` fuses alongside the passage
 list — when that list has earned its turn. It joins the fusion only if its best BM25 score is at
-least 0.85 of the passage list's best. On 400
-held-out generated questions the passage list is the one holding the answer below that ratio (30%
-in its top five against 21%) while the questions list is above it (24% against 12%). The 0.85 is a
-constant of this store, not of BM25 — the two indices share the tokenizer and the document count
-but normalise length against their own means and weight terms by their own vocabularies — and its
-window on the 82 recorded cases is (0.802, 0.866]: below it a keyword case loses its seat, at 0.87
-the arm with embeddings drops a paraphrase under its floor. Before the gate an equal turn
-cost the `--no-dense` arm two exact keyword seeds, 39/40 raw against 37/40 enriched; with it that
-arm reads 39/40 either way, paraphrase 7/30 raw against 14/30 enriched, and the held-out set moved
-by 5 gained and 7 lost, exact McNemar p = 0.77. The arm with embeddings was 40/40 throughout. (An
-older reading on the 14-case set — 6/14 paraphrase with the questions and without — is what this
-section used to cite for the claim that the plain `ask` ignores them; it does not.) The questions
-also carry targets into a deeper
-candidate pool for `--rerank`: with them, all six reachable paraphrase misses of that older set sat
-within the top 100 fused candidates; without them, two did not.
+least 0.85 of the passage list's best. On 400 held-out generated questions the passage list is the
+one holding the answer below that ratio (30% in its top five against 21%) while the questions list
+is above it (24% against 12%). The 0.85 is a constant of this store, not of BM25 — the two indices
+share the tokenizer and the document count but normalise length against their own means and weight
+terms by their own vocabularies — and its window on the 82 recorded cases is (0.802, 0.866]: below
+it a keyword case loses its seat, at 0.87 the arm with embeddings drops a paraphrase under its
+floor. Before the gate an equal turn cost the `--no-dense` arm two exact keyword seeds, 39/40 raw
+against 37/40 enriched; with it that arm reads 39/40 either way, paraphrase 7/30 raw against 14/30
+enriched, and the held-out set moved by 5 gained and 7 lost, exact McNemar p = 0.77. The arm with
+embeddings was 40/40 throughout. (An older reading on the 14-case set — 6/14 paraphrase with the
+questions and without — is what this section used to cite for the claim that the plain `ask` ignores
+them; it does not.) The questions also carry targets into a deeper candidate pool for `--rerank`:
+with them, all six reachable paraphrase misses of that older set sat within the top 100 fused
+candidates; without them, two did not.
 
 **`ask --rerank`** builds a 200-deep pool — dense passages, dense questions, BM25 passages, BM25
 questions, and, when the store carries questions about code, those as a fifth list, interleaved —
@@ -543,6 +551,11 @@ stated; input tokens are the answering model's own, median over the 38 questions
 | `--rerank`, haiku, depth 100                   | 11/14      | 24/24   | 3/3  | 222        | ≈9,500                    | ~4 s                 |
 | `--rerank`, sonnet, depth 100                  | 13/14      | 24/24   | 3/3  | 222        | ≈10,900                   | ~4 s                 |
 | `--rerank`, sonnet, depth 200 (default), 3 runs| 14/14      | 24/24   | 3/3  | 221–226    | ≈19,200                   | ~4.3 s               |
+
+Those numbers were read before two later changes to what the flag builds, and neither was
+re-measured: a symbol's 120-character snippet is now its doc comment rather than its declaring
+line, and a store carrying `enrich --code` questions puts them into the pool as a fifth list. Both
+ship unread because `--rerank` is opt-in and on no floor.
 
 **`--rerank-local`** is the same pool and the same pick, scored by a local cross-encoder
 (`BAAI/bge-reranker-v2-m3`, exported to ONNX once with `optimum-cli export onnx --model

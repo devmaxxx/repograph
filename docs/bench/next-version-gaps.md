@@ -487,19 +487,19 @@ configuration, so a store that wants sonnet's paraphrase recall today can have i
 | | gap | why here |
 |---|---|---|
 | 1 | ~~**G7** the questions list's share of the seeds~~ | closed 2026-09-05 — gated on the ratio of the two lists' best scores, held-out p = 0.77, lexical-only arm at raw parity; the window (0.802, 0.866] is recorded above, corrected from the 0.85–0.90 first published |
-| 5 | **G8** the questions gate is a constant of one store | a scale-free form of the same gate; measured on the held-out set first, then on both suites |
-| 0 | **G12** the gate compares raw BM25 scores across two indices | the admission, not the retrieval, is what keeps `where` at 0/9 and what moved under A2; a scoring change over lists that already exist, no tokens, and it closes G8 with it |
-| 1 | **G14** the prompt does not know the document's kind | the paraphrase and held-out gains are already measured (+2/+2 recorded, +29/+19 held-out); a prompt per kind costs one `enrich` (≈ $13.62 on sonnet) and is judged on `rule` coming back to 5/9 |
-| 6 | **G13** ten `where` anchors ranked and gated out | the table G12 would be judged on; reading it again after a gate change is free, and on its own it buys nothing |
+| 2 | **G8** the questions gate is a constant of one store | a scale-free form of the same gate; measured on the held-out set first, then on both suites |
+| 3 | **G12** the gate compares raw BM25 scores across two indices | the admission, not the retrieval, is what keeps `where` at 0/9 and what moved under A2; a scoring change over lists that already exist, no tokens, and it closes G8 with it |
+| 4 | **G14** the prompt does not know the document's kind | the paraphrase and held-out gains are already measured (+2/+2 recorded, +29/+19 held-out); a prompt per kind costs one `enrich` (≈ $13.62 on sonnet) and is judged on `rule` coming back to 5/9 |
+| 5 | **G13** ten `where` anchors ranked and gated out | the table G12 would be judged on; reading it again after a gate change is free, and on its own it buys nothing |
 | — | ~~**G9** code is unreachable from prose~~ | measured 2026-09-05 — A1 to A4 each rejected by the rule; the code questions ship into an index of their own for the `ask --rerank` pool, `where` stays 0/9 in the plain fusion, and G12 is what would move it |
 | — | ~~**G10** five seeds over three lists~~ | measured 2026-09-05 — A4 prices one seat for a fourth list at 6 held-out questions in each arm, none gained, p = 0.031; closed as measured, not as fixed |
 | — | ~~**G11** the embedder for Russian paraphrase~~ | shipped 2026-09-05 as a store option — e5-large reads paraphrase 22/30 and held-out 103 → 119, at 0.8 s an `ask` and a 2.1 GB download; the default stays the small model |
-| 2 | **G5** rank + MRR | a scoring change over rows that already exist, and G2 cannot be argued without it |
-| 3 | **G1** unparsed files get a file node | the largest missing share of a real answer, and the fix is language-independent |
-| 4 | **G3** the three impact diagnostics | three files to read; it either finds a bug or writes an honest caveat |
-| 5 | **G4** grow the blast set | must land before G1's and G6's changes are judged on it |
-| 6 | **G2** measure `bge-reranker-v2-m3` | the one unmeasured retrieval lever; everything cheaper is already rejected |
-| 7 | **G6** a case file per new corpus | ships with the 0.6.0 languages, not after them |
+| 6 | **G5** rank + MRR | a scoring change over rows that already exist, and G2 cannot be argued without it |
+| 7 | **G1** unparsed files get a file node | the largest missing share of a real answer, and the fix is language-independent |
+| 8 | **G3** the three impact diagnostics | three files to read; it either finds a bug or writes an honest caveat |
+| 9 | **G4** grow the blast set | must land before G1's and G6's changes are judged on it |
+| 10 | **G2** measure `bge-reranker-v2-m3` | the one unmeasured retrieval lever; everything cheaper is already rejected |
+| 11 | **G6** a case file per new corpus | ships with the 0.6.0 languages, not after them |
 
 ## What is explicitly not on this list
 
