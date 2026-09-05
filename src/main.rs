@@ -99,6 +99,10 @@ enum Cmd {
         /// Also asks about code: symbols with a doc comment or a body, files with a head comment.
         #[arg(long)] code: bool,
     },
+    /// Embeds every row the dense index lacks, without re-reading the tree: a store copied
+    /// without its vectors is re-embedded from its graph and questions alone, which is how a
+    /// store is measured under another `REPOGRAPH_EMBED_MODEL`.
+    Embed,
     Bench { #[arg(long)] cases: Option<PathBuf>, #[arg(long)] rerank: bool, #[arg(long, conflicts_with = "rerank")] rerank_local: bool, #[arg(long, default_value_t = rerank::DEPTH)] depth: usize },
     /// Writes every retriever's ranked list for each question in a JSONL file
     /// (`{"q","expect","kind"}` per line) so the mathematics can be done offline.
@@ -395,6 +399,7 @@ fn main() -> anyhow::Result<()> {
             println!("enrich: {} nodes written, {} dropped, {} still without questions, {} batches ({} failed) in {:.0}s", r.generated, r.dropped, r.left, r.batches, r.failed, t.elapsed().as_secs_f32());
             embed_all(&repo, cli.no_dense)
         }
+        Cmd::Embed => embed_all(&repo, cli.no_dense),
         Cmd::Ask { words, json, seeds, bodies, rerank, rerank_local, depth, stale } => {
             let timing = Timing::new();
             let cfg = load_cfg()?;

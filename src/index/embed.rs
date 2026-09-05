@@ -13,6 +13,12 @@ use std::path::{Path, PathBuf};
 use tokenizers::{PaddingParams, PaddingStrategy, Tokenizer, TruncationParams};
 
 const MODEL: &str = "intfloat/multilingual-e5-small";
+
+/// `REPOGRAPH_EMBED_MODEL` names another hub model for a measurement — a store embedded with
+/// it is a store of its own, since the vectors do not mix — and for nothing else.
+fn model() -> String {
+    std::env::var("REPOGRAPH_EMBED_MODEL").ok().filter(|m| !m.trim().is_empty()).unwrap_or_else(|| MODEL.to_string())
+}
 const MAX_TOKENS: usize = 256;
 const BATCH: usize = 64;
 
@@ -37,9 +43,13 @@ struct Files { model: PathBuf, tokenizer: PathBuf, pad_token: String, pad_id: u3
 /// Cache hits never touch the network; the first run downloads with a progress bar.
 fn fetch() -> Result<Files> {
     let api = hf_hub::api::sync::ApiBuilder::new().with_cache_dir(cache_dir()?).with_progress(true).build()?;
-    let repo = api.model(MODEL.to_string());
-    let get = |f: &str| repo.get(f).with_context(|| format!("fetch {MODEL}/{f}"));
+    let name = model();
+    let repo = api.model(name.clone());
+    let get = |f: &str| repo.get(f).with_context(|| format!("fetch {name}/{f}"));
     let model = get("onnx/model.onnx")?;
+    // The larger models keep their weights beside the graph; the session resolves the file by
+    // its relative name, so it has to be fetched into the same snapshot. Absent for the small one.
+    let _ = repo.get("onnx/model.onnx_data");
     let tokenizer = get("tokenizer.json")?;
     let config: serde_json::Value = serde_json::from_slice(&std::fs::read(get("config.json")?)?)?;
     let tok_config: serde_json::Value = serde_json::from_slice(&std::fs::read(get("tokenizer_config.json")?)?)?;
