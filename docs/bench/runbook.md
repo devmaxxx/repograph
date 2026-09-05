@@ -2,8 +2,8 @@
 
 [`three-graphs.md`](three-graphs.md) is the protocol: what is measured and how an
 answer is judged. This file is the operational half — what to do, in order, on the
-day someone re-runs it, and the six things that went wrong the last time so they do
-not have to be rediscovered.
+day someone re-runs it, the rule a retrieval change is judged by, and the seven things
+that went wrong on an earlier run so they do not have to be rediscovered.
 
 The last run is [`2026-09-03-three-graphs-results.md`](2026-09-03-three-graphs-results.md).
 
@@ -136,7 +136,7 @@ expectations out of the repository with ripgrep, so a reused truth file from an 
 commit silently scores the new corpus against the old one. Reuse it only inside one
 run, across tools.
 
-## The six traps, in the order they bit
+## The seven traps, in the order they bit
 
 1. **`gitnexus analyze` writes six skill directories into `.claude/skills/gitnexus/`
    without being asked for `--skills`**, whose own help says that flag generates them.
@@ -163,6 +163,40 @@ run, across tools.
 6. **Latency is whole-process wall clock.** gitnexus has an `eval-server` that skips
    start-up; it was not used, because the other two have no equivalent. Turning it on
    for one tool makes the latency column meaningless.
+7. **An `ask` against a store copy that has no source tree beside it empties the graph.**
+   Every command that brings the store in line with the tree first — `ask`, `update`, `watch`,
+   `impact`, `trace`, `changes`, all of which take `--stale` — refreshes against what it finds on
+   disk, finds nothing, and removes every node. On 2026-09-05 one latency `ask` emptied a store
+   copy's graph, restored afterwards from the fixture's `graph.bin` and `graph.json`. Measure on a
+   copy that has the corpus beside it, or pass `--stale`; `bench` and `dump` read the store as it
+   stands and cannot cause this, which is why the damage surfaces one command later as
+   `graph is empty at <path> — run build first`. A store-only copy stays safe only while its
+   `manifest.json` is empty: a manifest naming files that are not there is what triggers the
+   refresh, so copying the fixture's manifest into such a copy re-arms the trap.
+
+## Judging a retrieval change: the three-way rule
+
+A lever is written down before it is measured, and read against all three of these — the four
+hundred held-out questions first, the 82 recorded cases second, because reading the 82 first is how
+a change gets fitted to the smoke test without anyone intending it:
+
+1. **Every recorded floor holds in all four arms**, p90 ≤ 230: `bench` and `bench --no-dense`, on
+   the enriched store and on a raw one.
+2. **Held-out recall@5 is not significantly worse in either arm.** `bench/heldout.py`'s header is
+   the order of operations — build the set, dump it on the old binary and on the new one, in both
+   arms, then `compare`. The set the 2026-09-05 levers were read against is `heldout-400-syn.jsonl`:
+   400 questions of kind `synthetic`, which is the kind `dump` applies leave-one-out to. A set
+   written under any other kind holds nothing out and reads about 0.95 whatever the change was —
+   that happened once, and G7 records it. The test is a paired exact McNemar, so what counts is the
+   questions that changed answer and in which direction, not the two totals.
+3. **The developer suite is not down in either arm**: `bench --cases bench/dev-cases.jsonl`, both
+   arms. It is ungated by design, so this one is read rather than enforced by an exit code. A lever
+   aimed at one kind of question says before the run what that kind has to reach — the 2026-09-05
+   code levers had to put `where` above 0/9 as well as leave the rest standing.
+
+The rule is not re-read once the numbers are in. Six levers were measured against it on 2026-09-05
+and one passed; [the results](2026-09-05-dev-cases-results.md) say which, and what the other five
+cost.
 
 ## What to write down
 
