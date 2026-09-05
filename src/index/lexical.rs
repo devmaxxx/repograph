@@ -149,14 +149,22 @@ pub struct Lexical {
     /// Absent when no code node carries a question, or when nobody asked `build` for one yet.
     pub code: Option<LexicalIndex>,
     /// Whether `code` was ever asked for. A plain answer's first build passes `false`: on a
-    /// store `enrich --code` touched, building it unasked cost 18.6 of a one-shot lexical `ask`'s
-    /// 128.3 ms median, for a list the plain fusion never seats (`lexical_lists`) —
-    /// `$G/t4fix-codeindex.txt`, pre-change vs head, medians of 33. `ensure_code` flips this once
-    /// a `--rerank` on the same context needs the list after all.
+    /// store `enrich --code` touched, building it unasked cost 18.5 ms of a one-shot lexical
+    /// `ask`'s 128.3 ms median, for a list the plain fusion never seats (`lexical_lists`) —
+    /// pre-change vs head, medians of 33 (`docs/bench/2026-09-05-0.5.0-gaps-results.md`).
+    /// `ensure_code` flips this once a `--rerank` on the same context needs the list after all.
     code_seat: bool,
 }
 
 impl Lexical {
+    /// What `Context::answer` hands `query::ask` for a question the exact ids or symbols answer
+    /// whole: `lexical_lists` is never reached on that path (`!whole_question`), so this is
+    /// never read — built fresh and cheap rather than kept, since caching it would starve the
+    /// next question that does fuse.
+    pub fn empty() -> Lexical {
+        Lexical { passages: LexicalIndex { ids: Vec::new(), lengths: Vec::new(), avg_len: 0.0, postings: HashMap::new() }, questions: None, code: None, code_seat: false }
+    }
+
     /// `code_seat` is the caller's promise that it can use a code list at all: `dump` and `bench`
     /// always can (one build serves a whole run, so the cost above is paid once regardless), and
     /// a `Context` can only once a request is reranked — `lexical_lists` never reads `code` on

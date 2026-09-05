@@ -238,25 +238,26 @@ impl Context {
         // handle and leaves a thread mid-open of a 448 MB session. Nothing below this point
         // can fail, and the only work above it the open might have overlapped is
         // `--rerank-local`'s own session.
-        if opts.dense {
-            // The predicate `ask` fuses on, asked early so the model can start beside the
-            // BM25 builds. `exact_seeds` is pure, so asking it twice costs one graph scan and
-            // decides nothing differently — and only the dense arm can use the answer, so on
-            // `--no-dense` the scan never runs.
-            let (_, whole) = query::exact_seeds(graph, &self.ids, &req.words);
-            if !whole {
-                let mut slot = dense_idx.borrow_mut();
-                let idx = slot.get_or_insert_with(|| {
-                    let i = index::dense::DenseIndex::load(store).unwrap_or_else(|err| { notices.borrow_mut().push(format!("dense: index unreadable, continuing lexical-only ({err:#})")); Default::default() });
-                    timing.stage("vectors loaded"); i
-                });
-                // The rows name the model, so nothing can start before they are read. A context
-                // that has already opened the model keeps it rather than starting a second one.
-                let mut handle = warm.borrow_mut();
-                if handle.is_none() && embedder.borrow().is_none() {
-                    let model = index::embed::resolve(idx.model_of_rows().as_deref(), &cfg.embed_model);
-                    *handle = warm_model(true, whole, &model);
-                }
+        //
+        // The predicate `ask` fuses on, asked once here so it can gate both the model warm-up
+        // below and the BM25 build further down: an exact id or symbol answers the question
+        // whole, and `query::ask` never reads a lexical list or a dense row on that path
+        // (`!whole_question`), so neither is worth paying for. `exact_seeds` is pure and
+        // `query::ask` re-asks it itself, so asking it here too costs one graph scan and
+        // decides nothing differently.
+        let (_, whole) = query::exact_seeds(graph, &self.ids, &req.words);
+        if opts.dense && !whole {
+            let mut slot = dense_idx.borrow_mut();
+            let idx = slot.get_or_insert_with(|| {
+                let i = index::dense::DenseIndex::load(store).unwrap_or_else(|err| { notices.borrow_mut().push(format!("dense: index unreadable, continuing lexical-only ({err:#})")); Default::default() });
+                timing.stage("vectors loaded"); i
+            });
+            // The rows name the model, so nothing can start before they are read. A context
+            // that has already opened the model keeps it rather than starting a second one.
+            let mut handle = warm.borrow_mut();
+            if handle.is_none() && embedder.borrow().is_none() {
+                let model = index::embed::resolve(idx.model_of_rows().as_deref(), &cfg.embed_model);
+                *handle = warm_model(true, whole, &model);
             }
         }
         let local_fn = |q: &str, c: &[(String, String)]| -> Vec<String> {
@@ -275,8 +276,18 @@ impl Context {
         // without discarding what already answered the plain ones fine.
         let code_seat = rerank.is_some();
         let mut guard = lexical.borrow_mut();
-        let lex = guard.get_or_insert_with(|| { let l = index::lexical::Lexical::build(graph, questions, code_seat); timing.stage("lexical built"); l });
-        if code_seat { lex.ensure_code(graph, questions); }
+        // A question `whole` answers never reaches `lexical_lists` either (same gate as the
+        // dense warm-up above), so building anything here would be pure loss — and caching an
+        // empty `Lexical` would leave the next question that does fuse answering from an index
+        // over nothing. `Lexical::empty()` is built fresh each time and dropped with this call.
+        let mut empty = None;
+        let lex: &index::lexical::Lexical = if whole {
+            empty.get_or_insert_with(index::lexical::Lexical::empty)
+        } else {
+            let l = guard.get_or_insert_with(|| { let l = index::lexical::Lexical::build(graph, questions, code_seat); timing.stage("lexical built"); l });
+            if code_seat { l.ensure_code(graph, questions); }
+            l
+        };
         let answer = query::ask(graph, &self.ids, lex, Some(&dense_fn), rerank, &req.words, &opts);
         timing.stage("answered");
         Ok(query::render(&answer, graph, &opts))
@@ -463,5 +474,30 @@ mod tests {
         assert!(ctx.lexical.borrow().is_none(), "an adopted graph invalidates the held indexes even when the questions did not move with it");
         ctx.answer(&fused(true)).unwrap();
         assert!(ctx.lexical.borrow().is_some(), "the next fused answer rebuilds them");
+    }
+
+    #[test]
+    fn a_plain_answer_is_unaffected_when_a_later_reranked_request_seats_the_code_list() {
+        let dir = repo_with_two_docs();
+        let mut cfg = crate::config::Config::load(dir.path()).unwrap();
+        // `sh -c ""` exits 0 with empty output — a real command's failure mode, not a stub, and
+        // no model or network needed to take the reranked branch.
+        cfg.rerank_command = String::new();
+        let ex = crate::extractors(dir.path(), &cfg).unwrap();
+        crate::run_update(dir.path(), &cfg, &ex, true).unwrap();
+        let mut ctx = Context::open(dir.path(), &cfg, true, true).unwrap();
+        // A code question sharing no word with either document, so only the reranked path's
+        // code list — never the plain fusion's, which does not seat one — can answer it.
+        let mut e = crate::model::Extraction::default();
+        e.node_span(crate::model::NodeKind::Symbol, "sym:app.ts::revokeAllSessions", "revokeAllSessions", "revoke() {\n  end();\n}", "app.ts", (1, 3));
+        ctx.graph.apply(e);
+        ctx.questions.entries.insert("sym:app.ts::revokeAllSessions".into(),
+            enrich::Entry { hash: String::new(), questions: vec!["как выйти со всех устройств".into()] });
+        let req = Request { words: vec!["выйти".into(), "устройств".into()], json: false, seeds: 5, bodies: false, rerank: false, rerank_local: false, depth: crate::rerank::DEPTH, stale: true, no_dense: true };
+        let plain = ctx.answer(&req).unwrap();
+        assert!(!plain.contains("revokeAllSessions"), "the plain fusion never seats the code list: {plain}");
+        let reranked = ctx.answer(&Request { rerank: true, ..req.clone() }).unwrap();
+        assert!(reranked.contains("revokeAllSessions"), "a reranked answer pools the code list ensure_code just built: {reranked}");
+        assert_eq!(ctx.answer(&req).unwrap(), plain, "ensure_code must not disturb the plain path's answer");
     }
 }
