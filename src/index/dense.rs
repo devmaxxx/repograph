@@ -38,7 +38,7 @@ pub struct DenseIndex {
 /// Every text embedded for a node, e5-prefixed. The passage is the node itself; each generated
 /// question is embedded as a query, since the reader's question is one too (e5's symmetric case).
 fn rows(n: &crate::model::Node, questions: &Questions) -> Vec<String> {
-    let mut out = vec![format!("passage: {}\n{}", n.label, n.body)];
+    let mut out = vec![format!("passage: {}\n{}", n.label, n.indexed_body())];
     out.extend(questions.get(&n.id).iter().map(|q| format!("query: {q}")));
     out
 }

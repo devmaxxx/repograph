@@ -24,7 +24,9 @@ pub fn tokenize(text: &str) -> Vec<String> {
     let lower = text.to_lowercase();
     let mut out = Vec::new();
     // Hyphens stay inside a token so `fr-pay-22` is one term; every other
-    // non-alphanumeric byte splits.
+    // non-alphanumeric byte splits. An identifier stays one term: splitting `revokeAllSessions`
+    // into its words was measured and seated no file while costing a paraphrase, because the
+    // identifiers quoted in every requirement's text lengthened those documents too.
     for raw in lower.split(|c: char| !(c.is_alphanumeric() || c == '-')) {
         let t = raw.trim_matches('-');
         if t.chars().count() < 2 { continue; }
@@ -41,7 +43,7 @@ pub fn tokenize(text: &str) -> Vec<String> {
 
 impl LexicalIndex {
     pub fn build(graph: &Graph) -> LexicalIndex {
-        Self::build_with(graph, |n| format!("{} {} {}", n.id, n.label, n.body))
+        Self::build_with(graph, |n| format!("{} {} {}", n.id, n.label, n.indexed_body()))
     }
 
     /// The generated questions alone: mixed into the passage text they cost a keyword hit.

@@ -125,6 +125,48 @@ fn a_symbol_body_is_its_signature_line_except_for_functions() {
 }
 
 #[test]
+fn a_doc_comment_becomes_the_symbol_body_ahead_of_its_signature() {
+    let ex = extract("a.ts", "/**\n * Revokes every session of the user: «выйти со всех устройств».\n * @see FR-SEC-23\n */\nexport function revokeAll(userId: string) {\n  return 1;\n}\n// One-line note.\nconst k = 1;\n");
+    let body = |id: &str| ex.nodes.iter().find(|n| n.id == id).unwrap().body.clone();
+    assert_eq!(body("sym:a.ts::revokeAll"), "Revokes every session of the user: «выйти со всех устройств».\n@see FR-SEC-23\nexport function revokeAll(userId: string) { return 1; }");
+    assert_eq!(body("sym:a.ts::k"), "One-line note.\nconst k = 1;");
+}
+
+#[test]
+fn a_comment_a_blank_line_above_is_a_section_heading_not_a_doc_comment() {
+    let ex = extract("a.ts", "// ---- helpers ----\n\nexport const a = 1;\n/** two */\n/** parts */\nexport const b = 2;\n");
+    let body = |id: &str| ex.nodes.iter().find(|n| n.id == id).unwrap().body.clone();
+    assert_eq!(body("sym:a.ts::a"), "export const a = 1;");
+    assert_eq!(body("sym:a.ts::b"), "two\nparts\nexport const b = 2;", "contiguous comments join, in order");
+}
+
+#[test]
+fn a_class_member_takes_its_own_doc_comment() {
+    let ex = extract("a.ts", "export class Svc {\n  /** Ends every session at once. */\n  revoke() {}\n\n  // plain\n  other() {}\n}\n");
+    let body = |id: &str| ex.nodes.iter().find(|n| n.id == id).unwrap().body.clone();
+    assert_eq!(body("sym:a.ts::Svc.revoke"), "Ends every session at once.\nrevoke() {}");
+    assert_eq!(body("sym:a.ts::Svc.other"), "plain\nother() {}");
+}
+
+#[test]
+fn the_file_node_carries_the_head_comment_and_nothing_else() {
+    let ex = extract("a.ts", "/**\n * The auth surface's decisions.\n *\n * Two contours over one row.\n */\n// and a line\nimport x from 'y';\n/** not the head: below the first statement */\nexport const a = 1;\n");
+    let file = ex.nodes.iter().find(|n| n.id == "file:a.ts").unwrap();
+    assert_eq!(file.body, "The auth surface's decisions.\nTwo contours over one row.\nand a line");
+    let bare = extract("b.ts", "import x from 'y';\nexport const a = 1;\n");
+    assert_eq!(bare.nodes.iter().find(|n| n.id == "file:b.ts").unwrap().body, "");
+}
+
+#[test]
+fn a_doc_comment_is_capped_so_the_signature_terms_survive() {
+    let essay = format!("/**\n * {}\n */\nexport const a = 1;\n", "слово ".repeat(400));
+    let ex = extract("a.ts", &essay);
+    let body = ex.nodes.iter().find(|n| n.id == "sym:a.ts::a").unwrap().body.clone();
+    assert!(body.ends_with("export const a = 1;"), "{body}");
+    assert!(body.chars().count() < 700, "{}", body.chars().count());
+}
+
+#[test]
 fn symbol_lines_point_at_the_declaration_not_its_decorator() {
     let ex = extract("a.ts", "\n@Injectable()\nexport class Svc {}\n\n@Injectable()\nclass Local {}\n");
     let line = |id: &str| ex.nodes.iter().find(|n| n.id == id).unwrap().line;
