@@ -415,7 +415,9 @@ download and the embedding stage everywhere.
 The model is a property of the store. `embed_model` in `repograph.toml` names what `build`,
 `update`, `enrich`, `embed` and `watch` write vectors with; `vectors.json` records it, and `ask`,
 `bench` and `dump` open the recorded one, so a store keeps answering with the model that wrote it
-whatever the configuration says today. Switching is one line and one `repograph embed`: rows another
+whatever the configuration says today. A store written before the field existed is the small
+model's, and a reader treats it so; only `build`, `update`, `enrich`, `embed` and `watch` move a
+store to the configured model. Switching is one line and one `repograph embed`: rows another
 model wrote are dropped and the file rewritten, since a width change would be caught and an equal
 width would not. `REPOGRAPH_EMBED_MODEL=<hub id>` outranks both for one command, which is how a copy
 of a store is measured under a second model without touching its files. Measured on the fixture,

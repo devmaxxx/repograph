@@ -444,6 +444,10 @@ fn main() -> anyhow::Result<()> {
                 });
                 if resync.replace(false) {
                     if let Some(e) = e.as_mut() {
+                        // A reader appends to the store's own rows and never re-embeds them into
+                        // another model's index: it claims the index for the model it opened,
+                        // which for an unnamed store is the small one `recorded_model` names.
+                        idx.written_by(e.name());
                         match idx.sync(&graph, &questions, &mut |texts| e.embed(texts)) {
                             Ok(0) => {}
                             Ok(n) => {

@@ -65,13 +65,21 @@ impl DenseIndex {
         store.has("vectors.json") && store.has("vectors.f32")
     }
 
-    /// The model named in `vectors.json`, without reading the rows: what a reader opens.
+    /// The model named in `vectors.json`, without reading the rows: what a reader opens. A store
+    /// that holds rows but names no model is the small model's — the only one that ever wrote an
+    /// unnamed store — so a reader opens that whatever the configuration says, and no reader can
+    /// move a store to another model. The configured one takes effect at the next `build`,
+    /// `update`, `enrich`, `embed` or `watch`, which rewrites the index whole. `None` is for a
+    /// store with no vectors at all, where there is nothing yet for a name to be wrong about.
     pub fn recorded_model(store: &Store) -> Result<Option<String>> {
         #[derive(serde::Deserialize)]
         struct Written { #[serde(default)] model: String }
         let Some(meta) = store.read_bytes("vectors.json")? else { return Ok(None) };
         let w: Written = serde_json::from_slice(&meta).context("vectors.json")?;
-        Ok(Some(w.model).filter(|m| !m.is_empty()))
+        if !w.model.is_empty() { return Ok(Some(w.model)); }
+        // `has` stats the file rather than reading it: 50 MB of rows must not be loaded to learn
+        // whether there are any.
+        Ok(store.has("vectors.f32").then(|| crate::index::embed::DEFAULT_MODEL.to_string()))
     }
 
     /// Claims the index for `model` before a sync. Rows another model wrote cannot be appended
@@ -316,13 +324,28 @@ mod tests {
     fn the_recorded_model_is_read_from_the_metadata_alone() {
         let dir = tempfile::tempdir().unwrap();
         let store = Store::new(dir.path());
-        assert_eq!(DenseIndex::recorded_model(&store).unwrap(), None);
         let mut idx = synced(&graph("x"));
         idx.written_by("intfloat/multilingual-e5-large");
         idx.sync(&graph("x"), &Questions::default(), &mut fake).unwrap();
         idx.save(&store).unwrap();
         assert_eq!(DenseIndex::recorded_model(&store).unwrap().as_deref(), Some("intfloat/multilingual-e5-large"));
         assert_eq!(DenseIndex::load(&store).unwrap().model, "intfloat/multilingual-e5-large");
+    }
+
+    #[test]
+    fn an_unnamed_store_with_rows_reads_as_the_small_model_and_an_empty_one_as_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::new(dir.path());
+        assert_eq!(DenseIndex::recorded_model(&store).unwrap(), None, "nothing written yet");
+        // Saved without `written_by`, as every store written before the field existed was.
+        synced(&graph("x")).save(&store).unwrap();
+        assert_eq!(DenseIndex::recorded_model(&store).unwrap().as_deref(), Some(crate::index::embed::DEFAULT_MODEL),
+            "an unnamed store holds the small model's rows, so a reader opens the small model");
+        let mut idx = synced(&graph("x"));
+        idx.written_by("intfloat/multilingual-e5-large");
+        idx.sync(&graph("x"), &Questions::default(), &mut fake).unwrap();
+        idx.save(&store).unwrap();
+        assert_eq!(DenseIndex::recorded_model(&store).unwrap().as_deref(), Some("intfloat/multilingual-e5-large"));
     }
 
     #[test]
