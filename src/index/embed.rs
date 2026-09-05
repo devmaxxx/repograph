@@ -98,8 +98,10 @@ fn fetch_from(cache: &Path, endpoint: Option<&str>, model: &str) -> Result<Files
     let get = |f: &str| repo.get(f).with_context(|| format!("fetch {name}/{f}"));
     let model = get("onnx/model.onnx")?;
     // The larger models keep their weights beside the graph; the session resolves the file by
-    // its relative name, so it has to be fetched into the same snapshot. Only a stub-sized graph
-    // can have one, so the small model never pays the lookup.
+    // its relative name, so it has to be fetched into the same snapshot. External data is legal
+    // at any graph size and the model is the reader's to choose, so 64 MB is a margin rather
+    // than a proof: a file that small cannot be holding 448 MB of weights itself, and the small
+    // model's does, so it clears the margin by a factor of seven and never pays the lookup.
     let len = std::fs::metadata(&model).map(|m| m.len()).unwrap_or(0);
     if keeps_weights_beside(len) { let _ = repo.get("onnx/model.onnx_data"); }
     let tokenizer = get("tokenizer.json")?;

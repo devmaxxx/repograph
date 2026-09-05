@@ -1,5 +1,5 @@
 //! `repograph serve`: the store, the vectors, the model and the indexes held by one process
-//! that answers `ask` over a Unix socket. A fused answer costs a process ~480 ms to open the
+//! that answers `ask` over a Unix socket. A fused answer costs a process ~220 ms to open the
 //! model (measured on the bench corpus) and 5 ms to use it; a resident one pays the open once.
 use crate::{ask, config};
 use anyhow::{Context as _, Result};

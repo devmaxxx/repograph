@@ -639,7 +639,7 @@ stated; input tokens are the answering model's own, median over the 38 questions
 
 |                                                | paraphrase | keyword | code | p90 tokens | model tokens per question | latency per question |
 | ---------------------------------------------- | ---------- | ------- | ---- | ---------- | ------------------------- | -------------------- |
-| `ask`                                          | 7/14       | 24/24   | 3/3  | 216        | 0                         | ~0.4 s               |
+| `ask`                                          | 7/14       | 24/24   | 3/3  | 216        | 0                         | ~0.30 s              |
 | `--rerank`, haiku, depth 100, titles           | 10/14      | 24/24   | 3/3  | 222        | ≈4,600                    | ~3.5 s               |
 | `--rerank`, haiku, depth 100                   | 11/14      | 24/24   | 3/3  | 222        | ≈9,500                    | ~4 s                 |
 | `--rerank`, sonnet, depth 100                  | 13/14      | 24/24   | 3/3  | 222        | ≈10,900                   | ~4 s                 |
