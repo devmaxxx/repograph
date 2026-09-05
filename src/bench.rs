@@ -176,7 +176,9 @@ pub fn run(repo: &Path, cases: Option<&Path>, no_dense: bool, rerank: bool, rera
     let ids = IdMatcher::new(&cfg.id_families, &cfg.milestone_families);
     let dense_idx = DenseIndex::load(&store)?;
     let questions = Questions::load(&store)?;
-    let lex = crate::index::lexical::Lexical::build(&graph, &questions);
+    // One build serves every case in the run, so the code list's cost is paid once regardless
+    // of whether any case reranks — unlike a resident `Context`, there is nothing to save here.
+    let lex = crate::index::lexical::Lexical::build(&graph, &questions, true);
     // The threshold decides the floors; the counts printed on the summary line stay exact.
     let (covered, eligible) = coverage(&graph, &questions);
     let enriched = enrich::enriched(covered, eligible);

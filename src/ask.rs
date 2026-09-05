@@ -45,11 +45,12 @@ pub(crate) fn open_embedder(no_dense: bool, model: &str) -> Option<index::embed:
     embedder_or_notice(no_dense, model).unwrap_or_else(|notice| { eprintln!("{notice}"); None })
 }
 
-/// The model opens on a thread while `ask` builds its BM25 indexes — `query::ask` builds the
-/// lexical lists before it calls the dense retriever so that this open has them to overlap. Ids
-/// and the questions store are read before the vectors that name the model, so they are not part
-/// of it. A question that exact ids or symbols answer whole never opens the model, as before;
-/// with `--no-dense` or no vectors nothing starts.
+/// The model opens on a thread this spawns, while `Context::answer` builds its BM25 indexes on
+/// the caller's own thread — `Lexical::build` runs between this spawn and the `query::ask` call,
+/// so the two overlap there rather than by anything ordered inside `ask` itself. Ids and the
+/// questions store are read before the vectors that name the model, so they are not part of it.
+/// A question that exact ids or symbols answer whole never opens the model, as before; with
+/// `--no-dense` or no vectors nothing starts.
 pub(crate) fn warm_model(dense: bool, whole: bool, model: &str) -> Option<std::thread::JoinHandle<Opened>> {
     if !dense || whole { return None; }
     let model = model.to_string();
@@ -269,8 +270,13 @@ impl Context {
             }
         };
         let rerank: Option<query::Rerank> = if req.rerank_local { Some(&local_fn) } else if req.rerank { Some(&rerank_fn) } else { None };
+        // Only a reranked request ever reads the code list (`lexical_lists`), so a plain first
+        // answer skips building it; a context that later takes a `--rerank` request adds it
+        // without discarding what already answered the plain ones fine.
+        let code_seat = rerank.is_some();
         let mut guard = lexical.borrow_mut();
-        let lex = guard.get_or_insert_with(|| { let l = index::lexical::Lexical::build(graph, questions); timing.stage("lexical built"); l });
+        let lex = guard.get_or_insert_with(|| { let l = index::lexical::Lexical::build(graph, questions, code_seat); timing.stage("lexical built"); l });
+        if code_seat { lex.ensure_code(graph, questions); }
         let answer = query::ask(graph, &self.ids, lex, Some(&dense_fn), rerank, &req.words, &opts);
         timing.stage("answered");
         Ok(query::render(&answer, graph, &opts))
@@ -289,7 +295,6 @@ impl Context {
         if stamp != self.questions_stamp {
             self.questions = enrich::Questions::load(&self.store)?;
             self.questions_stamp = stamp;
-            *self.lexical.borrow_mut() = None;
         }
         // The vectors another process rewrote, dropped so the next fused answer loads them —
         // reading what is on disk is what a one-shot does, and it is not the same as embedding

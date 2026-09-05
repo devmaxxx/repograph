@@ -94,9 +94,9 @@ impl LexicalIndex {
     /// BM25's idf for a term seen in `df` of this index's `n` documents.
     fn idf(n: f32, df: usize) -> f32 { ((n - df as f32 + 0.5) / (df as f32 + 0.5) + 1.0).ln() }
 
-    /// An index built over a store that carries no code questions is an index over nothing; a
-    /// later caller checks this before treating its empty list as a list that lost, rather than
-    /// a list that was never in contention.
+    /// An index built over a store that carries no code questions is an index over nothing;
+    /// `Lexical::build` checks this before treating its empty list as a list that lost, rather
+    /// than a list that was never in contention.
     pub fn is_empty(&self) -> bool { self.ids.is_empty() }
 
     /// What the query could reach in this index: the score of a document of average length that
@@ -137,24 +137,49 @@ impl LexicalIndex {
 /// The BM25 indexes an answer fuses, built once from a graph and its questions and kept by
 /// whoever answers more than one question over them: a resident `serve`, `bench` over its
 /// cases, `dump` over a suite. Nothing here is written to disk — the indexes are term statistics
-/// over every document, a rebuild is the cheapest correct update, and there is still no lexical
-/// state that can go stale relative to the graph. What changed is who pays for the build: the
-/// lexical arm through the socket spent almost all of 49 of its 54 ms rebuilding these per
-/// question (`docs/bench/2026-09-06-perf-results.md`).
+/// over every document and a rebuild is the cheapest correct update — so only that on-disk half
+/// is stale-free; the copy a `Context` keeps in memory is exactly the state that can drift from
+/// the graph, which is why it gets dropped rather than trusted once the graph moves. What changed
+/// is who pays for the build: the lexical arm through the socket spent almost all of 49 of its 54
+/// ms rebuilding these per question (`docs/bench/2026-09-06-perf-results.md`).
 pub struct Lexical {
     pub passages: LexicalIndex,
     /// Absent on a store `enrich` never touched — see `build_questions`.
     pub questions: Option<LexicalIndex>,
-    /// Absent unless some code node carries a question (`enrich --code`).
+    /// Absent when no code node carries a question, or when nobody asked `build` for one yet.
     pub code: Option<LexicalIndex>,
+    /// Whether `code` was ever asked for. A plain answer's first build passes `false`: on a
+    /// store `enrich --code` touched, building it unasked cost 18.6 of a one-shot lexical `ask`'s
+    /// 128.3 ms median, for a list the plain fusion never seats (`lexical_lists`) —
+    /// `$G/t4fix-codeindex.txt`, pre-change vs head, medians of 33. `ensure_code` flips this once
+    /// a `--rerank` on the same context needs the list after all.
+    code_seat: bool,
 }
 
 impl Lexical {
-    pub fn build(graph: &Graph, questions: &Questions) -> Lexical {
+    /// `code_seat` is the caller's promise that it can use a code list at all: `dump` and `bench`
+    /// always can (one build serves a whole run, so the cost above is paid once regardless), and
+    /// a `Context` can only once a request is reranked — `lexical_lists` never reads `code` on
+    /// the plain path.
+    pub fn build(graph: &Graph, questions: &Questions, code_seat: bool) -> Lexical {
         let passages = LexicalIndex::build(graph);
-        if questions.entries.is_empty() { return Lexical { passages, questions: None, code: None }; }
+        if questions.entries.is_empty() { return Lexical { passages, questions: None, code: None, code_seat }; }
+        let code = if code_seat { Self::code_index(graph, questions) } else { None };
+        Lexical { passages, questions: Some(LexicalIndex::build_questions(graph, questions)), code, code_seat }
+    }
+
+    fn code_index(graph: &Graph, questions: &Questions) -> Option<LexicalIndex> {
         let code = LexicalIndex::build_code_questions(graph, questions);
-        Lexical { passages, questions: Some(LexicalIndex::build_questions(graph, questions)), code: if code.is_empty() { None } else { Some(code) } }
+        if code.is_empty() { None } else { Some(code) }
+    }
+
+    /// Builds the code list a plain-first `build` skipped, for a context whose next request
+    /// turns out to be reranked — without discarding `passages`/`questions`, which already
+    /// answered the plain ones fine. A no-op once `code_seat` is already true.
+    pub fn ensure_code(&mut self, graph: &Graph, questions: &Questions) {
+        if self.code_seat { return; }
+        self.code = if self.questions.is_none() { None } else { Self::code_index(graph, questions) };
+        self.code_seat = true;
     }
 }
 
@@ -362,7 +387,7 @@ mod tests {
         let mut e = Extraction::default();
         e.node(NodeKind::Requirement, "FR-PAY-22", "штраф", "штраф", "a.md", 1);
         g.apply(e);
-        let lex = Lexical::build(&g, &Questions::default());
+        let lex = Lexical::build(&g, &Questions::default(), true);
         assert!(!lex.passages.is_empty());
         assert!(lex.questions.is_none() && lex.code.is_none());
     }
@@ -376,11 +401,31 @@ mod tests {
         g.apply(e);
         let mut q = Questions::default();
         q.entries.insert("FR-PAY-26".into(), crate::enrich::Entry { hash: String::new(), questions: vec!["когда деньги уходят сами".into()] });
-        let lex = Lexical::build(&g, &q);
+        let lex = Lexical::build(&g, &q, true);
         assert_eq!(lex.questions.as_ref().map(|i| i.search("деньги уходят", 5)[0].0.clone()), Some("FR-PAY-26".to_string()));
         assert!(lex.code.is_none(), "no code node carries a question, so there is no code index to search");
         q.entries.insert("sym:apps/a.ts::revoke".into(), crate::enrich::Entry { hash: String::new(), questions: vec!["как выйти со всех устройств".into()] });
-        let lex = Lexical::build(&g, &q);
+        let lex = Lexical::build(&g, &q, true);
         assert_eq!(lex.code.as_ref().map(|i| i.search("выйти устройств", 5)[0].0.clone()), Some("sym:apps/a.ts::revoke".to_string()));
+    }
+
+    #[test]
+    fn a_plain_build_skips_the_code_list_and_ensure_code_adds_it_without_a_rebuild() {
+        let mut g = Graph::default();
+        let mut e = Extraction::default();
+        e.node(NodeKind::Requirement, "FR-PAY-26", "списание штрафа", "штраф списывается", "a.md", 9);
+        e.node_span(NodeKind::Symbol, "sym:apps/a.ts::revoke", "revoke", "Ends every session.\nrevoke() {}", "apps/a.ts", (3, 3));
+        g.apply(e);
+        let mut q = Questions::default();
+        q.entries.insert("FR-PAY-26".into(), crate::enrich::Entry { hash: String::new(), questions: vec!["когда деньги уходят сами".into()] });
+        q.entries.insert("sym:apps/a.ts::revoke".into(), crate::enrich::Entry { hash: String::new(), questions: vec!["как выйти со всех устройств".into()] });
+        let mut lex = Lexical::build(&g, &q, false);
+        assert!(lex.code.is_none(), "a plain build never asks for a list `lexical_lists` would not seat anyway");
+        let passages_before = lex.passages.search("штраф", 5);
+        let questions_before = lex.questions.as_ref().map(|i| i.search("деньги уходят", 5));
+        lex.ensure_code(&g, &q);
+        assert_eq!(lex.code.as_ref().map(|i| i.search("выйти устройств", 5)[0].0.clone()), Some("sym:apps/a.ts::revoke".to_string()));
+        assert_eq!(lex.passages.search("штраф", 5), passages_before, "a later --rerank gets the code list without losing what already answered fine");
+        assert_eq!(lex.questions.as_ref().map(|i| i.search("деньги уходят", 5)), questions_before);
     }
 }

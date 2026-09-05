@@ -161,10 +161,10 @@ pub fn ask(graph: &Graph, ids: &IdMatcher, lex: &Lexical, dense: Option<Dense>, 
         // with it. The raw arms are untouched by construction: a store without questions gets
         // no questions list built at all.
 
-        // The builds now happen once in the caller, not here; what stays here is the order — the
-        // lexical lists are searched before the dense call so a first-question build in
-        // `Context::answer` still overlaps the model open. Every list keeps the seat it had —
-        // dense passages, then the dense question rows on the reranked path, then these.
+        // The builds now happen once in the caller, not here — the overlap with the model open
+        // lives there too, in `Context::answer`, where `Lexical::build` runs before this
+        // function is even called. What this order still decides is the seat: dense passages,
+        // then the dense question rows on the reranked path, then these.
         let lexical = lexical_lists(lex, &query, depth, rerank.is_some());
         let mut lists: Vec<Vec<String>> = Vec::new();
         if opts.dense {
@@ -310,7 +310,7 @@ mod tests {
     use crate::index::lexical::LexicalIndex;
     use crate::model::{EdgeKind, Extraction, NodeKind};
 
-    fn lex(g: &Graph, qs: &Questions) -> Lexical { Lexical::build(g, qs) }
+    fn lex(g: &Graph, qs: &Questions) -> Lexical { Lexical::build(g, qs, true) }
 
     fn graph() -> Graph {
         let mut g = Graph::default();
