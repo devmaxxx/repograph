@@ -222,16 +222,16 @@ Task 4's own fix round measured that same lexical arm at 124.2 and 125.1 ms acro
 `83aa8e1`/`e17eb21` pair — two binaries that do differ, in `serve`, `ask`, `main` and the dense
 index, and the difference reaches the lexical answering path, where `Cmd::Ask` now calls
 `load_cfg` above the socket attempt rather than below it, but nothing on it that changes what it
-costs: the hoist reorders one command's own statements, and the `ask.rs` edits beside it are
-gated on the dense callback and on a resident refresh. That round read its own numbers the same
-way — "The hoist of load_cfg and the stale manifest stamp cost nothing measurable"
-(`$S/perf4fix-timings.txt`). Three sittings have now read 82.2, 106.2 and 124.2/125.1 ms for a
-one-process lexical ask, on a path whose measurable cost **no lever in this plan changes** — a
-spread of 43 ms, wider than P2's entire effect on the dense arm. (The one lever that reached that
-path at all is P2's removal of a dead `exact_seeds` scan, worth 0.1–0.4 ms, below what this
-machine can resolve.) That is this document's opening thesis turning up inside its own numbers. It is why Task 4's pair is cited for its verdict rather
-than for its absolute figures, and why only the interleaved table above is read as a before and
-after.
+costs: the hoist adds one TOML parse on the socket path and moves one on the other, and the
+`ask.rs` edits beside it are gated on the dense callback and on a resident refresh. That round
+read its own numbers the same way — "The hoist of load_cfg and the stale manifest stamp cost
+nothing measurable" (`$S/perf4fix-timings.txt`). Three sittings have now read 82.2, 106.2 and
+124.2/125.1 ms for a one-process lexical ask, on a path whose measurable cost **no lever in this
+plan changes** — a spread of 43 ms, wider than P2's entire effect on the dense arm. (The one lever
+that reached that path at all is P2's removal of a dead `exact_seeds` scan, worth 0.1–0.4 ms,
+below what this machine can resolve.) That is this document's opening thesis turning up inside its
+own numbers. It is why Task 4's pair is cited for its verdict rather than for its absolute
+figures, and why only the interleaved table above is read as a before and after.
 
 ### The lexical arm misses the 30 ms target, and the cause is one thing
 

@@ -316,10 +316,10 @@ repograph dump --queries qs.jsonl --out lists.json   # every retriever's ranked 
 
 The lexical index is rebuilt in memory on every `ask` rather than stored on disk. It costs about
 120 ms on a 7,500-node graph, and in exchange there is no lexical state that can ever go stale
-relative to the graph. A later sitting bounds the same build at about 49 ms of a 54 ms lexical ask
-on the bench corpus, at 8.3k nodes — different sittings on different graphs, not a before and
-after; that bound and what it rests on are in
-[the perf results](docs/bench/2026-09-06-perf-results.md).
+relative to the graph. A later sitting bounds that build, the question index beside it, their
+scoring and the fusion at about 49 ms of a 54 ms lexical ask on the bench corpus, at 8.3k nodes —
+different sittings on different graphs, not a before and after; that bound and what it rests on
+are in [the perf results](docs/bench/2026-09-06-perf-results.md).
 
 ## What ends up in the graph
 
@@ -775,7 +775,7 @@ out of 3,599 tracked:
 | Edges                           | 27,412                                                                                                                       |
 | Graph on disk                   | 10.2 MB JSON                                                                                                                 |
 | Graph load                      | ~19 ms                                                                                                                       |
-| Lexical index rebuild           | ~120 ms — a later sitting bounds the same build at ~49 ms on the bench corpus at 8.3k nodes ([the perf results](docs/bench/2026-09-06-perf-results.md)); different sittings, not a before and after |
+| Lexical index rebuild           | ~120 ms — a later sitting bounds that build, the question index beside it, their scoring and the fusion at ~49 ms on the bench corpus at 8.3k nodes ([the perf results](docs/bench/2026-09-06-perf-results.md)); different sittings, not a before and after |
 | Tokens spent building the graph and its vectors | 0                                                                                                             |
 
 Retrieval on the recorded 82 cases against that graph, both arms run twice with identical results:
