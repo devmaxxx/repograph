@@ -29,6 +29,14 @@ fn config_stamp(repo: &Path) -> Option<crate::walk::Stamp> {
     crate::walk::stamp_of(&std::fs::metadata(repo.join("repograph.toml")).ok()?)
 }
 
+/// The device and inode of a socket file, which is how a name is told from the thing that was
+/// bound to it: the path can hold a replacement server's socket by the time this one exits.
+fn socket_id(path: &Path) -> Option<(u64, u64)> {
+    use std::os::unix::fs::MetadataExt;
+    let m = std::fs::metadata(path).ok()?;
+    Some((m.dev(), m.ino()))
+}
+
 #[derive(serde::Serialize, serde::Deserialize)]
 pub struct Hello { pub v: String, pub req: ask::Request }
 
@@ -41,9 +49,9 @@ pub struct Reply { pub v: String, pub stdout: String, pub stderr: Vec<String> }
 /// Nothing here removes the socket file. A refused connect is a socket nobody listens on — or a
 /// live listener whose backlog is full for this instant, and errno does not tell the two apart;
 /// deleting the file on that guess would strand a running server holding 1.3 GB, and its own
-/// exit would then take the replacement's socket with it. `serve` removes the file it is
-/// finished with, and removes a dead one before it binds. All a client owes the question is an
-/// answer, and it has one either way.
+/// exit would then take the replacement's socket with it. `serve` removes the file it bound
+/// itself, and removes a dead one before it binds. All a client owes the question is an answer,
+/// and it has one either way.
 pub fn try_ask(repo: &Path, req: &ask::Request) -> Option<Reply> {
     let path = socket_path(repo);
     if !path.exists() { return None; }
@@ -74,7 +82,12 @@ pub fn run(repo: &Path, cfg: &config::Config, every: u64, batch: usize, idle: u6
     if path.exists() && UnixStream::connect(&path).is_ok() { anyhow::bail!("another serve answers at {}", path.display()); }
     let _ = std::fs::remove_file(&path);
     let listener = UnixListener::bind(&path).with_context(|| format!("bind {}", path.display()))?;
-    let _guard = Unlink(path.clone());
+    // Stamped the instant it exists, and re-read on the way out: the probe above cannot tell a
+    // dead socket from a live server whose backlog is momentarily full, so a replacement may
+    // have unlinked this file and bound its own at the same name while this one ran. Removing
+    // the name rather than the socket would then strand the replacement — the same cascade the
+    // client's unlink was deleted to avoid, one process further along.
+    let _guard = Unlink(path.clone(), socket_id(&path));
     // The accept blocks on a thread of its own and hands each connection over, one at a time —
     // the answer still happens here, on the one thread that holds the context. A rendezvous
     // channel is what keeps it to one: the next connection is accepted but not delivered until
@@ -170,5 +183,9 @@ fn answer(mut stream: UnixStream, watcher: &mut crate::Watcher, ctx: &mut ask::C
     Ok(())
 }
 
-struct Unlink(PathBuf);
-impl Drop for Unlink { fn drop(&mut self) { let _ = std::fs::remove_file(&self.0); } }
+struct Unlink(PathBuf, Option<(u64, u64)>);
+impl Drop for Unlink {
+    fn drop(&mut self) {
+        if self.1.is_some() && socket_id(&self.0) == self.1 { let _ = std::fs::remove_file(&self.0); }
+    }
+}
