@@ -212,7 +212,10 @@ fn hello_line(stream: &UnixStream) -> Option<String> {
     stream.set_read_timeout(Some(IO_TIMEOUT)).ok()?;
     stream.set_write_timeout(Some(IO_TIMEOUT)).ok()?;
     let mut line = String::new();
-    let n = BufReader::new(stream.try_clone().ok()?).read_line(&mut line).ok()?;
+    let n = BufReader::new(stream.try_clone().ok()?).read_line(&mut line)
+        .inspect_err(|e| if matches!(e.kind(), std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut) {
+            eprintln!("serve: a client connected and said nothing for {}s; not counted as a question", IO_TIMEOUT.as_secs());
+        }).ok()?;
     (n > 0).then_some(line)
 }
 
