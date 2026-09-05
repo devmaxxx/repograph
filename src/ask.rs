@@ -339,11 +339,15 @@ mod tests {
     /// from disk — at that size the weights are taken to be inside the file, so nothing is looked
     /// up over the network — and the session then refuses to open it. Without this the two tests
     /// below would download 470 MB, or open the model already on the machine and embed with it.
+    /// It is laid out under the name `resolve` returns rather than under the default one, so
+    /// `REPOGRAPH_EMBED_MODEL` in the environment moves the fixture with it instead of missing
+    /// it and sending `repo.get` to the network.
     fn an_unopenable_model() {
         static CACHE: std::sync::OnceLock<tempfile::TempDir> = std::sync::OnceLock::new();
         CACHE.get_or_init(|| {
             let dir = tempfile::tempdir().unwrap();
-            let root = dir.path().join("models--intfloat--multilingual-e5-small");
+            let model = index::embed::resolve(None, index::embed::DEFAULT_MODEL);
+            let root = dir.path().join(format!("models--{model}").replace('/', "--"));
             let snap = root.join("snapshots/abc");
             std::fs::create_dir_all(root.join("refs")).unwrap();
             std::fs::create_dir_all(snap.join("onnx")).unwrap();
@@ -354,8 +358,9 @@ mod tests {
             std::fs::write(snap.join("tokenizer_config.json"), r#"{"pad_token": "<pad>"}"#).unwrap();
             // Process-wide, which is why it is set once behind the lock: no other test in this
             // binary opens an embedder — the rest are `--no-dense`, and the fetch tests are
-            // handed their cache by argument.
-            std::env::set_var("FASTEMBED_CACHE_DIR", dir.path());
+            // handed their cache by argument. Set through the crate rather than through the
+            // environment, which no test may write while the rest of the binary reads it.
+            index::embed::set_cache_dir(dir.path().to_path_buf());
             dir
         });
     }

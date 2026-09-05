@@ -193,8 +193,9 @@ repograph ask --no-serve отмена  # answer here even while one is listening
 socket nobody listens on, a server of another version, a timeout, `--no-serve`, or
 `REPOGRAPH_NO_SERVE` in the environment. A client never deletes the socket file — a refused
 connect is also what a live server with a full backlog gives — so only `serve` removes one, and a
-new `serve` binds over a dead file. The answer is the same bytes either way; that is checked on
-all 142 recorded and developer bench questions in both arms.
+new `serve` binds over a dead file. On a store neither `enrich` nor `embed` has moved under it,
+the answer is the same bytes either way; that is checked on all 142 recorded and developer bench
+questions in both arms.
 
 The server refreshes before every answer with the same walk a one-shot `ask` does, and polls
 between them like `watch`, so its **graph** is never staler than a fresh process's. Under

@@ -46,9 +46,23 @@ pub struct Embedder {
     dim: Option<usize>,
 }
 
+/// A cache chosen from inside the process, consulted before the environment. It exists because a
+/// test cannot reach for `set_var`: a `setenv` racing another thread's `getenv` is undefined
+/// behaviour, and this binary reads the environment on every `ask`. Nothing outside the test
+/// binary sets it, so a real run resolves its cache exactly as it always has.
+static CACHE_OVERRIDE: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+
+#[cfg(test)]
+pub(crate) fn set_cache_dir(dir: PathBuf) {
+    let _ = CACHE_OVERRIDE.set(dir);
+}
+
 /// The `.fastembed_cache`-under-cwd default of the hub client re-downloads 470 MB per directory
 /// `repograph` is run from and fails outright on a read-only one.
 fn cache_dir() -> Result<PathBuf> {
+    if let Some(dir) = CACHE_OVERRIDE.get() {
+        return Ok(dir.clone());
+    }
     if let Some(dir) = std::env::var_os("FASTEMBED_CACHE_DIR") {
         return Ok(PathBuf::from(dir));
     }
