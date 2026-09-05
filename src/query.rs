@@ -1,7 +1,7 @@
 use crate::enrich::Questions;
 use crate::ids::IdMatcher;
 use crate::index::{fuse, lexical::LexicalIndex};
-use crate::model::{EdgeKind, Graph, Node, NodeKind};
+use crate::model::{EdgeKind, Graph, NodeKind};
 use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
@@ -67,11 +67,11 @@ fn gate_from(override_: Option<&str>) -> f32 {
 /// an index of id-only documents is shorter than the passages and ranks an id-bearing term above
 /// the passage that carries it, so on a raw store the questions list would clear any gate for the
 /// wrong reason and cost a build per question to do it. On the reranked path both lists are
-/// admitted unconditionally: the fused order there is a candidate pool of `depth`, not five
-/// seats, so the questions list displaces nothing, and Amendment 2 measured it as what carries
-/// paraphrase targets into that pool. The questions about code are a third list on the reranked
-/// path and on no other: the plain fusion's five seats were measured to be worth more to the
-/// documents than to them.
+/// admitted unconditionally: the fused order there is a candidate pool `depth` deep rather than
+/// five seats, so a list there costs the reranking model candidates and not seeds, and Amendment 2
+/// measured the questions list as what carries paraphrase targets into that pool. The questions
+/// about code are a third list on the reranked path and on no other: the plain fusion's five seats
+/// were measured to be worth more to the documents than to them.
 fn lexical_lists(graph: &Graph, questions: &Questions, query: &str, depth: usize, reranked: bool) -> Vec<Vec<String>> {
     let only_ids = |scored: Vec<(String, f32)>| -> Vec<String> { scored.into_iter().map(|(id, _)| id).collect() };
     let passages = LexicalIndex::build(graph).search(query, depth);
@@ -79,17 +79,13 @@ fn lexical_lists(graph: &Graph, questions: &Questions, query: &str, depth: usize
     let generated = LexicalIndex::build_questions(graph, questions).search(query, depth);
     if reranked {
         let mut pool = vec![only_ids(passages), only_ids(generated)];
-        // Built here and nowhere else. Given a seat in the plain fusion instead — one, on the
-        // same gate — the code questions read `where` 0/9 → 2/9 on the developer suite but
-        // held-out 103 → 97 and 109 → 103, 0 gained and 6 lost in each arm, p = 0.031
-        // (2026-09-05): five seats are the budget the floors were set on, and a seat given to
-        // code is a document question's answer lost. The pool is `depth` deep, so here the list
-        // displaces nothing; what it is worth to a reranking model is unmeasured.
-        let code = if questions.entries.keys().any(|id| graph.nodes.get(id).is_some_and(Node::is_code)) {
-            LexicalIndex::build_code_questions(graph, questions).search(query, depth)
-        } else {
-            Vec::new()
-        };
+        // Not on the plain path. Given a seat there instead — one, on the same gate — the code
+        // questions read `where` 0/9 → 2/9 on the developer suite but held-out 103 → 97 and
+        // 109 → 103, 0 gained and 6 lost in each arm, p = 0.031 (2026-09-05): five seats are the
+        // budget the floors were set on, and a seat given to code is a document question's answer
+        // lost. Here the pool is 200 deep rather than five seats, so the list costs the reranking
+        // model candidates and not seeds; what it is worth to that model is unmeasured.
+        let code = LexicalIndex::build_code_questions(graph, questions).search(query, depth);
         if !code.is_empty() { pool.push(only_ids(code)); }
         return pool;
     }

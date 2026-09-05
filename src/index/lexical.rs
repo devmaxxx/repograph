@@ -46,12 +46,14 @@ impl LexicalIndex {
         Self::build_with(graph, |n| n.kind != NodeKind::File, |n| format!("{} {} {}", n.id, n.label, n.indexed_body()))
     }
 
-    /// The generated questions alone: mixed into the passage text they cost a keyword hit.
-    /// The documents' questions; a symbol is its id alone here, as it always was. Code questions
-    /// are an index of their own: added to this one, 3,463 one-token symbol documents became
-    /// sixty-token ones, the average length rose, BM25's length normalisation lifted every
-    /// document's score by a quarter while the passage scores the gate compares against stayed
-    /// put, and a keyword case that had kept the questions list out at 0.80 admitted it at 1.03.
+    /// The documents' questions, and them alone: mixed into the passage text they cost a keyword
+    /// hit. A symbol is an id-only document here and a file is absent from the index altogether,
+    /// both as they were before `enrich --code` existed. The questions about code are an index of
+    /// their own because putting them here moved this one's BM25 statistics: 3,463 one-token
+    /// symbol documents became sixty-token ones, the average length rose, length normalisation
+    /// lifted every document's score by a quarter while the passage scores the gate compares
+    /// against stayed put, and a keyword case that had kept the questions list out at 0.80
+    /// admitted it at 1.03.
     pub fn build_questions(graph: &Graph, questions: &Questions) -> LexicalIndex {
         Self::build_with(graph, |n| n.kind != NodeKind::File,
                          |n| if n.is_code() { n.id.clone() } else { format!("{} {}", n.id, questions.get(&n.id).join(" ")) })
@@ -197,6 +199,8 @@ mod tests {
         let docs = LexicalIndex::build_questions(&g, &q);
         assert!(docs.search("выйти устройств завершить сессию", 5).is_empty(), "code questions never enter the documents' index");
         assert_eq!(docs.search("sym:apps/a.ts::revoke", 5)[0].0, "sym:apps/a.ts::revoke", "a symbol stays an id-only document there");
+        // The file's own id retrieves the symbol that shares its path tokens and never the file.
+        assert!(docs.search("file:apps/a.ts", 5).iter().all(|(id, _)| id != "file:apps/a.ts"), "a file is absent from the documents' index");
         assert!(LexicalIndex::build(&g).search("revocation", 5).is_empty());
     }
 
