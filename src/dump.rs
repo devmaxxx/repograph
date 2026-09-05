@@ -35,6 +35,12 @@ struct Record {
     bm25_passages: Vec<(String, f32)>,
     bm25_questions: Vec<(String, f32)>,
     bm25_code: Vec<(String, f32)>,
+    /// What each query could reach in the index its list came from, the denominator of the
+    /// coverage admission (`LexicalIndex::attainable`). Recorded so an admission rule can be
+    /// replayed over these lists offline, one binary and no re-run per candidate rule.
+    attainable_passages: f32,
+    attainable_questions: f32,
+    attainable_code: f32,
     loo_hash: String,
     loo_rows: Vec<usize>,
     ask: Ask,
@@ -118,6 +124,9 @@ pub fn run(repo: &Path, queries: &Path, out: &Path, depth: usize, no_dense: bool
             bm25_passages: lexical.search(&q.q, depth),
             bm25_questions: lexical_q.search(&q.q, depth),
             bm25_code: lexical_c.search(&q.q, depth),
+            attainable_passages: lexical.attainable(&q.q),
+            attainable_questions: lexical_q.attainable(&q.q),
+            attainable_code: lexical_c.attainable(&q.q),
             dense_passages,
             dense_questions,
             loo_hash,
@@ -183,16 +192,23 @@ mod tests {
             bm25_passages: vec![],
             bm25_questions: vec![],
             bm25_code: vec![],
+            attainable_passages: 1.5,
+            attainable_questions: 0.0,
+            attainable_code: 0.0,
             loo_hash: "abc".into(),
             loo_rows: vec![3],
             ask: Ask { seeds: vec![("FR-PAY-22".into(), 1.0)], expanded: vec![("N-151".into(), 0.5, "FR-PAY-22".into())] },
         };
         let v = serde_json::to_value(&record).unwrap();
-        for key in ["q", "expect", "kind", "exact", "qvec", "dense_passages", "dense_questions", "bm25_passages", "bm25_questions", "bm25_code", "loo_hash", "loo_rows", "ask"] {
+        for key in ["q", "expect", "kind", "exact", "qvec", "dense_passages", "dense_questions", "bm25_passages", "bm25_questions", "bm25_code", "attainable_passages", "attainable_questions", "attainable_code", "loo_hash", "loo_rows", "ask"] {
             assert!(v.get(key).is_some(), "missing field {key}");
         }
         assert_eq!(v["expect"], "FR-PAY-22");
         assert_eq!(v["exact"]["whole_question"], true);
         assert_eq!(v["ask"]["expanded"][0][2], "FR-PAY-22");
+        let text = serde_json::to_string(&record).unwrap();
+        assert!(text.contains(r#""attainable_passages":1.5"#), "{text}");
+        assert!(text.contains(r#""attainable_questions":0.0"#), "{text}");
+        assert!(text.contains(r#""attainable_code":0.0"#), "{text}");
     }
 }

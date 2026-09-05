@@ -91,12 +91,37 @@ impl LexicalIndex {
         LexicalIndex { ids, lengths, avg_len, postings }
     }
 
+    /// BM25's idf for a term seen in `df` of this index's `n` documents.
+    fn idf(n: f32, df: usize) -> f32 { ((n - df as f32 + 0.5) / (df as f32 + 0.5) + 1.0).ln() }
+
+    /// An index built over a store that carries no code questions is an index over nothing; a
+    /// later caller checks this before treating its empty list as a list that lost, rather than
+    /// a list that was never in contention.
+    #[allow(dead_code, reason = "wired into the code-questions build path by a later change")]
+    pub fn is_empty(&self) -> bool { self.ids.is_empty() }
+
+    /// What the query could reach in this index: the score of a document of average length that
+    /// holds each of the query's terms exactly once, which BM25 makes the plain sum of their idf
+    /// — at tf = 1 and the mean length the term weight `(K1 + 1) / (1 + K1)` is one. A term this
+    /// index never saw adds nothing here, as it adds nothing to any document's score. A list's
+    /// best over this figure says how much of the query the best document answered, and unlike
+    /// the best score itself it compares across indices: each index normalises length against
+    /// its own mean and weights a term by its own vocabulary, so two indices' raw scores are in
+    /// two units and their ratio moves when either population does (gaps G8 and G12).
+    pub fn attainable(&self, query: &str) -> f32 {
+        let n = self.ids.len() as f32;
+        let mut seen = std::collections::HashSet::new();
+        tokenize(query).into_iter().filter(|t| seen.insert(t.clone()))
+            .filter_map(|t| self.postings.get(&t).map(|list| Self::idf(n, list.len())))
+            .sum()
+    }
+
     pub fn search(&self, query: &str, k: usize) -> Vec<(String, f32)> {
         let n = self.ids.len() as f32;
         let mut scores: HashMap<usize, f32> = HashMap::new();
         for term in tokenize(query) {
             let Some(list) = self.postings.get(&term) else { continue };
-            let idf = ((n - list.len() as f32 + 0.5) / (list.len() as f32 + 0.5) + 1.0).ln();
+            let idf = Self::idf(n, list.len());
             for (doc, tf) in list {
                 let tf = *tf as f32;
                 let norm = K1 * (1.0 - B + B * self.lengths[*doc] / self.avg_len);
@@ -259,5 +284,52 @@ mod tests {
         // Measured with K1 = 1.2, B = 0.75; a tolerance this tight catches
         // either constant drifting to a materially different value.
         assert!((hits[0].1 - 2.565_525).abs() < 0.001, "top score {} moved off the K1/B baseline", hits[0].1);
+    }
+
+    #[test]
+    fn attainable_is_the_sum_of_idf_over_the_query_terms_the_index_holds_each_counted_once() {
+        let mut g = Graph::default();
+        let mut e = Extraction::default();
+        e.node(NodeKind::Requirement, "FR-PAY-22", "правило отмены", "штраф считается по политике отмены", "a.md", 1);
+        e.node(NodeKind::Requirement, "FR-PAY-26", "списание штрафа", "штраф списывается автоматически", "a.md", 9);
+        e.node(NodeKind::Requirement, "FR-CAL-40", "коды конфликтов", "словарь кодов", "b.md", 1);
+        g.apply(e);
+        let idx = LexicalIndex::build(&g);
+        let n = 3.0_f32;
+        let idf = |df: f32| ((n - df + 0.5) / (df + 0.5) + 1.0).ln();
+        // «штраф» sits in two documents, «политике» in one, «ъъъ» in none; a term the query
+        // repeats is one term, as a document of average length holds it once.
+        assert!((idx.attainable("штраф политике ъъъ") - (idf(2.0) + idf(1.0))).abs() < 1e-6);
+        assert!((idx.attainable("штраф штраф") - idf(2.0)).abs() < 1e-6);
+        assert_eq!(idx.attainable("ъъъ"), 0.0);
+        assert_eq!(LexicalIndex::build(&Graph::default()).attainable("штраф"), 0.0);
+    }
+
+    #[test]
+    fn a_document_of_average_length_holding_a_term_once_scores_exactly_the_attainable() {
+        // Three documents of four tokens each, so every one is of average length; the term sits
+        // once in one of them, and BM25 at tf = 1 and the mean length reduces to the idf.
+        let mut g = Graph::default();
+        let mut e = Extraction::default();
+        e.node(NodeKind::Requirement, "FR-A-1", "aa", "штраф bb", "a.md", 1);
+        e.node(NodeKind::Requirement, "FR-A-2", "cc", "dd ee", "a.md", 5);
+        e.node(NodeKind::Requirement, "FR-A-3", "ff", "gg hh", "a.md", 9);
+        g.apply(e);
+        let idx = LexicalIndex::build(&g);
+        let hits = idx.search("штраф", 5);
+        assert_eq!(hits[0].0, "FR-A-1");
+        assert!((hits[0].1 - idx.attainable("штраф")).abs() < 1e-6, "{} against {}", hits[0].1, idx.attainable("штраф"));
+    }
+
+    #[test]
+    fn an_index_over_no_documents_says_so() {
+        assert!(LexicalIndex::build(&Graph::default()).is_empty());
+        let mut g = Graph::default();
+        let mut e = Extraction::default();
+        e.node(NodeKind::Requirement, "FR-PAY-22", "штраф", "штраф", "a.md", 1);
+        g.apply(e);
+        assert!(!LexicalIndex::build(&g).is_empty());
+        // No code node carries a question, so the code index is an index over nothing.
+        assert!(LexicalIndex::build_code_questions(&g, &Questions::default()).is_empty());
     }
 }
