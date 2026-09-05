@@ -1,4 +1,4 @@
-//! The e5-small embedder over its own ONNX session.
+//! The e5 embedder over its own ONNX session, opened by hub id.
 //!
 //! fastembed opened the same files behind a private session builder: tokenizer first, then a
 //! session forced to the heaviest graph optimisation. Measured on the cached model, the
@@ -12,12 +12,20 @@ use ort::value::Tensor;
 use std::path::{Path, PathBuf};
 use tokenizers::{PaddingParams, PaddingStrategy, Tokenizer, TruncationParams};
 
-const MODEL: &str = "intfloat/multilingual-e5-small";
+pub const DEFAULT_MODEL: &str = "intfloat/multilingual-e5-small";
 
-/// `REPOGRAPH_EMBED_MODEL` names another hub model for a measurement — a store embedded with
-/// it is a store of its own, since the vectors do not mix — and for nothing else.
-fn model() -> String {
-    std::env::var("REPOGRAPH_EMBED_MODEL").ok().filter(|m| !m.trim().is_empty()).unwrap_or_else(|| MODEL.to_string())
+/// The model a command opens: `REPOGRAPH_EMBED_MODEL` when set — a measurement's switch that
+/// outranks both files — else what the store's vectors were written with, else the configured
+/// one. A reader passes the recorded model so a store answers with what wrote it; a writer
+/// passes `None` and takes the configuration, and `DenseIndex::written_by` drops rows another
+/// model wrote before the sync.
+pub fn resolve(recorded: Option<&str>, configured: &str) -> String {
+    resolve_from(std::env::var("REPOGRAPH_EMBED_MODEL").ok().as_deref(), recorded, configured)
+}
+
+fn resolve_from(override_: Option<&str>, recorded: Option<&str>, configured: &str) -> String {
+    let named = |m: Option<&str>| m.map(str::trim).filter(|m| !m.is_empty()).map(str::to_string);
+    named(override_).or_else(|| named(recorded)).unwrap_or_else(|| configured.to_string())
 }
 const MAX_TOKENS: usize = 256;
 const BATCH: usize = 64;
@@ -26,6 +34,7 @@ pub struct Embedder {
     session: Session,
     tokenizer: Tokenizer,
     wants_type_ids: bool,
+    name: String,
 }
 
 /// The `.fastembed_cache`-under-cwd default of the hub client re-downloads 470 MB per directory
@@ -41,9 +50,9 @@ fn cache_dir() -> Result<PathBuf> {
 struct Files { model: PathBuf, tokenizer: PathBuf, pad_token: String, pad_id: u32 }
 
 /// Cache hits never touch the network; the first run downloads with a progress bar.
-fn fetch() -> Result<Files> {
+fn fetch(model: &str) -> Result<Files> {
     let api = hf_hub::api::sync::ApiBuilder::new().with_cache_dir(cache_dir()?).with_progress(true).build()?;
-    let name = model();
+    let name = model.to_string();
     let repo = api.model(name.clone());
     let get = |f: &str| repo.get(f).with_context(|| format!("fetch {name}/{f}"));
     let model = get("onnx/model.onnx")?;
@@ -82,8 +91,8 @@ fn normalise(v: &mut [f32]) {
 }
 
 impl Embedder {
-    pub fn open() -> Result<Embedder> {
-        let files = fetch()?;
+    pub fn open(model: &str) -> Result<Embedder> {
+        let files = fetch(model)?;
         let session = std::thread::scope(|s| {
             let tokenizer = s.spawn(|| load_tokenizer(&files));
             let session = load_session(&files.model).context("open embedding model")?;
@@ -92,8 +101,11 @@ impl Embedder {
         });
         let (session, tokenizer) = session?;
         let wants_type_ids = session.inputs().iter().any(|i| i.name() == "token_type_ids");
-        Ok(Embedder { session, tokenizer, wants_type_ids })
+        Ok(Embedder { session, tokenizer, wants_type_ids, name: model.to_string() })
     }
+
+    /// The hub id the vectors this embedder writes belong to; recorded in the store by `written_by`.
+    pub fn name(&self) -> &str { &self.name }
 
     /// Texts arrive already e5-prefixed (`dense::rows`): passages as `passage: `, generated
     /// questions as `query: `. A batch is padded to its longest member, so texts are batched
@@ -172,6 +184,14 @@ fn pool(hidden: &[f32], mask: &[i64], len: usize, dim: usize) -> Vec<Vec<f32>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_override_outranks_the_store_which_outranks_the_config() {
+        assert_eq!(resolve_from(Some(" x/y "), Some("a/b"), "c/d"), "x/y");
+        assert_eq!(resolve_from(Some(""), Some("a/b"), "c/d"), "a/b");
+        assert_eq!(resolve_from(None, None, "c/d"), "c/d");
+        assert_eq!(resolve_from(None, Some("  "), "c/d"), "c/d");
+    }
 
     #[test]
     fn pooling_averages_only_unmasked_tokens_and_normalises() {

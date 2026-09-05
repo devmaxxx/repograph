@@ -72,11 +72,19 @@ pub fn run(repo: &Path, queries: &Path, out: &Path, depth: usize, no_dense: bool
     let mut embedder = if no_dense {
         None
     } else {
-        match Embedder::open() {
+        match Embedder::open(&crate::index::embed::resolve(DenseIndex::recorded_model(&store)?.as_deref(), &cfg.embed_model)) {
             Ok(e) => Some(e),
             Err(err) => anyhow::bail!("dense: model unavailable ({err:#})"),
         }
     };
+    if let Some(e) = embedder.as_mut() {
+        // A dump that silently searched 384-d queries against 1024-d rows would record empty
+        // dense lists, and the held-out gate would read them as the lexical-only arm.
+        let width = e.query("probe")?.len();
+        if dense_idx.dim > 0 && width != dense_idx.dim {
+            anyhow::bail!("the store's vectors are {}-d and {} gives {}-d — run `repograph embed`", dense_idx.dim, e.name(), width);
+        }
+    }
     let opts = Options { seeds: 5, bodies: false, dense: !no_dense, json: false, depth: crate::rerank::DEPTH };
     let mut records = Vec::with_capacity(queries.len());
     for q in &queries {

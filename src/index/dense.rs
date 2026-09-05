@@ -22,6 +22,9 @@ pub struct DenseIndex {
     /// True for a generated-question row; stores written before enrichment existed have none.
     #[serde(default)] pub kinds: Vec<bool>,
     pub dim: usize,
+    /// Hub id of the model every row was embedded with. Empty in a store written before the
+    /// field existed — which only the small model ever wrote.
+    #[serde(default)] pub model: String,
     /// The dead rows, ascending. Left out of the file when there are none, so a store this
     /// binary wrote and never punched a hole in still reads in one that predates the field.
     #[serde(default, skip_serializing_if = "Vec::is_empty")] free: Vec<usize>,
@@ -60,6 +63,29 @@ impl DenseIndex {
     /// never needs the vectors, and loading 50 MB of them cost every such `ask` 40 ms.
     pub fn present(store: &Store) -> bool {
         store.has("vectors.json") && store.has("vectors.f32")
+    }
+
+    /// The model named in `vectors.json`, without reading the rows: what a reader opens.
+    pub fn recorded_model(store: &Store) -> Result<Option<String>> {
+        #[derive(serde::Deserialize)]
+        struct Written { #[serde(default)] model: String }
+        let Some(meta) = store.read_bytes("vectors.json")? else { return Ok(None) };
+        let w: Written = serde_json::from_slice(&meta).context("vectors.json")?;
+        Ok(Some(w.model).filter(|m| !m.is_empty()))
+    }
+
+    /// Claims the index for `model` before a sync. Rows another model wrote cannot be appended
+    /// to or compared against — a width change would be caught, an equal width would not — so
+    /// they go and the file is rewritten from the new rows alone. An unnamed store is the small
+    /// model's, the only one that wrote stores before the field existed.
+    pub fn written_by(&mut self, model: &str) {
+        let held = if self.model.is_empty() { crate::index::embed::DEFAULT_MODEL } else { self.model.as_str() };
+        if !self.ids.is_empty() && held != model {
+            self.ids.clear(); self.hashes.clear(); self.kinds.clear(); self.vectors.clear();
+            self.free.clear(); self.live.clear();
+            self.persisted = 0; self.dim = 0;
+        }
+        self.model = model.to_string();
     }
 
     pub fn load(store: &Store) -> Result<DenseIndex> {
@@ -271,6 +297,32 @@ mod tests {
         g.remove_file("a.md");
         assert_eq!(idx.sync(&g, &Questions::default(), &mut fake).unwrap(), 0);
         assert!(idx.ids.is_empty() && idx.vectors.is_empty());
+    }
+
+    #[test]
+    fn rows_of_another_model_go_before_a_sync_and_the_same_model_keeps_them() {
+        let mut idx = synced(&graph("x"));
+        idx.written_by(crate::index::embed::DEFAULT_MODEL);
+        assert_eq!(idx.ids.len(), 2, "an unnamed store is the small model's and is kept");
+        idx.written_by("intfloat/multilingual-e5-large");
+        assert!(idx.ids.is_empty() && idx.vectors.is_empty() && idx.dim == 0, "another model's rows cannot be appended to");
+        assert_eq!(idx.model, "intfloat/multilingual-e5-large");
+        assert_eq!(idx.sync(&graph("x"), &Questions::default(), &mut fake).unwrap(), 2);
+        idx.written_by("intfloat/multilingual-e5-large");
+        assert_eq!(idx.ids.len(), 2, "the same model keeps its rows");
+    }
+
+    #[test]
+    fn the_recorded_model_is_read_from_the_metadata_alone() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::new(dir.path());
+        assert_eq!(DenseIndex::recorded_model(&store).unwrap(), None);
+        let mut idx = synced(&graph("x"));
+        idx.written_by("intfloat/multilingual-e5-large");
+        idx.sync(&graph("x"), &Questions::default(), &mut fake).unwrap();
+        idx.save(&store).unwrap();
+        assert_eq!(DenseIndex::recorded_model(&store).unwrap().as_deref(), Some("intfloat/multilingual-e5-large"));
+        assert_eq!(DenseIndex::load(&store).unwrap().model, "intfloat/multilingual-e5-large");
     }
 
     #[test]

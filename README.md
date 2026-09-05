@@ -42,7 +42,7 @@ Version 0.4.0. Every row below is implemented, not planned:
 | `bench`                    | working; fails the process if a floor in [Bench](#bench) is missed — a store with `enrich`'s questions and one without are held to their own floors |
 | `import-legacy`            | working; costs recall at query time — see its note in [Bench](#bench) |
 | `enrich`, `ask --rerank`   | working; opt-in, the only two stages that spend model tokens — see [Spending tokens on purpose](#spending-tokens-on-purpose) |
-| `embed`                    | working; rewrites a store's vectors from its graph and questions — how a store is measured under another `REPOGRAPH_EMBED_MODEL`, see [Embeddings](#embeddings) |
+| `embed`                    | working; writes the rows the dense index lacks with the configured model, rewriting it whole when the store was written by another — see [Embeddings](#embeddings) |
 
 `--no-dense` skips the embedding stage everywhere it could apply — `build`, `update`, `ask`, `bench`.
 Without it, those commands use local embeddings once the model is cached (see [Embeddings](#embeddings)).
@@ -379,6 +379,7 @@ in full, not an empty config:
 | `enrich_command`     | headless `claude -p --model haiku` with thinking off — see [Spending tokens on purpose](#spending-tokens-on-purpose) |
 | `rerank_command`     | the same with `--model sonnet`                                                              |
 | `reranker_dir`       | directory of the exported cross-encoder for `--rerank-local`; empty = `~/.cache/repograph/reranker` |
+| `embed_model`        | `intfloat/multilingual-e5-small`; the model the vectors are written with — see [Embeddings](#embeddings) |
 
 `id_families` and `milestone_families` default to the strict list `beauty-crm`'s census settled on —
 they are this project's development corpus, not a generic default. Every family is matched as
@@ -411,11 +412,19 @@ command that touches the dense stage — `build`, `update`, `ask`, `bench` —
 reuses the cache; there are no further network calls once it is populated. `--no-dense` skips the
 download and the embedding stage everywhere.
 
-`REPOGRAPH_EMBED_MODEL=<hub id>` swaps the model for every command that embeds, and `repograph
-embed` then rewrites the vectors from the graph and the questions alone — a model of another width
-invalidates every stored offset, so the file is rebuilt rather than appended to. That is how a store
-is measured under a second model without rebuilding or re-enriching it: copy the store, set the
-variable, `embed`, `bench`. The floors below were set with the small model.
+The model is a property of the store. `embed_model` in `repograph.toml` names what `build`,
+`update`, `enrich`, `embed` and `watch` write vectors with; `vectors.json` records it, and `ask`,
+`bench` and `dump` open the recorded one, so a store keeps answering with the model that wrote it
+whatever the configuration says today. Switching is one line and one `repograph embed`: rows another
+model wrote are dropped and the file rewritten, since a width change would be caught and an equal
+width would not. `REPOGRAPH_EMBED_MODEL=<hub id>` outranks both for one command, which is how a copy
+of a store is measured under a second model without touching its files. Measured on the fixture,
+`intfloat/multilingual-e5-large` (1024-d, 2.1 GB download) reads paraphrase **22/30** against the
+small model's 15/30 with keyword 40/40 and code 12/12 unchanged, held-out 103 → 119 of 400 (+19 −3,
+p = 0.0009), at 0.8 s an `ask` against 0.55 s (the model opens in 676 ms against 418), 1.9 GB
+resident against 1.7, and 2,680 s to embed the corpus's 33,525 rows against ~103 s. The floors in
+[Bench](#bench) are the small model's; a store embedded by another model is measured against them,
+not graded by them, until floors of its own are set.
 
 `ask` opens the model only when a fused query needs it: an exact id or symbol lookup answers in
 ~30 ms and ~50 MB, a fused query in ~0.4 s and ~1.4 GB — the model, not the graph; an exact-id

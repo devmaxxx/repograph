@@ -276,6 +276,7 @@ impl<'a> Watcher<'a> {
 /// Keeps the store in step with the tree for readers that do not refresh themselves.
 fn run_watch(repo: &std::path::Path, cfg: &config::Config, every: u64, batch: usize, no_dense: bool) -> anyhow::Result<()> {
     let mut w = Watcher::open(repo, cfg)?;
+    let model = index::embed::resolve(None, &cfg.embed_model);
     let mut embedder: Option<Option<index::embed::Embedder>> = None;
     let mut dense: Option<index::dense::DenseIndex> = None;
     let verbose = timing_on();
@@ -291,12 +292,13 @@ fn run_watch(repo: &std::path::Path, cfg: &config::Config, every: u64, batch: us
                 let mut embedded = 0;
                 // The model costs ~0.6 s and 1.3 GB to open, so it waits for the first change; the
                 // vectors then stay in memory, since every later refresh syncs them again.
-                if let Some(e) = embedder.get_or_insert_with(|| open_embedder(no_dense)).as_mut() {
+                if let Some(e) = embedder.get_or_insert_with(|| open_embedder(no_dense, &model)).as_mut() {
                     let idx = match dense {
                         Some(ref mut d) => d,
                         None => dense.insert(index::dense::DenseIndex::load(&w.store)?),
                     };
                     let questions = enrich::Questions::load(&w.store)?;
+                    idx.written_by(&model);
                     embedded = idx.sync(&w.graph, &questions, &mut |texts| e.embed(texts))?;
                     if embedded > 0 { idx.save(&w.store)?; }
                 }
@@ -320,13 +322,15 @@ fn extractors(repo: &std::path::Path, cfg: &config::Config) -> anyhow::Result<Ex
     })
 }
 
-fn embed_all(repo: &std::path::Path, no_dense: bool) -> anyhow::Result<()> {
-    let Some(mut emb) = open_embedder(no_dense) else { return Ok(()) };
+fn embed_all(repo: &std::path::Path, no_dense: bool, configured: &str) -> anyhow::Result<()> {
+    let model = index::embed::resolve(None, configured);
+    let Some(mut emb) = open_embedder(no_dense, &model) else { return Ok(()) };
     let store = store::Store::new(repo);
     let (graph, _) = store.load()?;
     let questions = enrich::Questions::load(&store)?;
     let mut dense = index::dense::DenseIndex::load(&store)?;
     let t = std::time::Instant::now();
+    dense.written_by(&model);
     let n = dense.sync(&graph, &questions, &mut |texts| emb.embed(texts))?;
     dense.save(&store)?;
     println!("dense: embedded {n} rows in {:.1}s", t.elapsed().as_secs_f32());
@@ -352,9 +356,9 @@ impl Timing {
     }
 }
 
-fn open_embedder(no_dense: bool) -> Option<index::embed::Embedder> {
+fn open_embedder(no_dense: bool, model: &str) -> Option<index::embed::Embedder> {
     if no_dense { return None; }
-    match index::embed::Embedder::open() {
+    match index::embed::Embedder::open(model) {
         Ok(e) => Some(e),
         Err(err) => { eprintln!("dense: model unavailable, continuing lexical-only ({err:#})"); None }
     }
@@ -386,7 +390,7 @@ fn main() -> anyhow::Result<()> {
             let cfg = load_cfg()?;
             let r = run_update(&repo, &cfg, &extractors(&repo, &cfg)?, wipe)?;
             println!("changed {} removed {} nodes {} edges {}", r.changed, r.removed, r.nodes, r.edges);
-            embed_all(&repo, cli.no_dense)
+            embed_all(&repo, cli.no_dense, &cfg.embed_model)
         }
         Cmd::Enrich { batch, parallel, limit, code } => {
             let cfg = load_cfg()?;
@@ -397,9 +401,9 @@ fn main() -> anyhow::Result<()> {
             let t = std::time::Instant::now();
             let r = enrich::run(&store, &graph, questions, &cfg.enrich_command, batch, parallel, enrich::Scope { limit, code })?;
             println!("enrich: {} nodes written, {} dropped, {} still without questions, {} batches ({} failed) in {:.0}s", r.generated, r.dropped, r.left, r.batches, r.failed, t.elapsed().as_secs_f32());
-            embed_all(&repo, cli.no_dense)
+            embed_all(&repo, cli.no_dense, &cfg.embed_model)
         }
-        Cmd::Embed => embed_all(&repo, cli.no_dense),
+        Cmd::Embed => { let cfg = load_cfg()?; embed_all(&repo, cli.no_dense, &cfg.embed_model) }
         Cmd::Ask { words, json, seeds, bodies, rerank, rerank_local, depth, stale } => {
             let timing = Timing::new();
             let cfg = load_cfg()?;
@@ -427,7 +431,12 @@ fn main() -> anyhow::Result<()> {
             let resync = std::cell::Cell::new(refreshed.is_some());
             let dense_fn = |q: &str, k: usize| -> (Vec<String>, Vec<String>) {
                 let mut slot = embedder.borrow_mut();
-                let e = slot.get_or_insert_with(|| { let e = open_embedder(cli.no_dense); timing.stage("model opened"); e });
+                let e = slot.get_or_insert_with(|| {
+                    let model = index::embed::resolve(index::dense::DenseIndex::recorded_model(&store).ok().flatten().as_deref(), &cfg.embed_model);
+                    let e = open_embedder(cli.no_dense, &model);
+                    timing.stage("model opened");
+                    e
+                });
                 let mut idx = dense_idx.borrow_mut();
                 let idx = idx.get_or_insert_with(|| {
                     let i = index::dense::DenseIndex::load(&store).unwrap_or_else(|err| { eprintln!("dense: index unreadable, continuing lexical-only ({err:#})"); Default::default() });
@@ -446,7 +455,16 @@ fn main() -> anyhow::Result<()> {
                         timing.stage("vectors synced");
                     }
                 }
-                let out = match e.as_mut().and_then(|e| e.query(q).ok()) { Some(v) => idx.search(&v, k), None => (Vec::new(), Vec::new()) };
+                let qvec = e.as_mut().and_then(|e| e.query(q).ok());
+                // Said once rather than swallowed: `search_scored` answers a query of the wrong
+                // width with empty lists, which reads exactly like a lexical-only run.
+                if let (Some(v), Some(e)) = (&qvec, e.as_ref()) {
+                    if idx.dim > 0 && v.len() != idx.dim {
+                        eprintln!("dense: the store's vectors are {}-d and {} gives {}-d — run `repograph embed`; continuing lexical-only", idx.dim, e.name(), v.len());
+                        return (Vec::new(), Vec::new());
+                    }
+                }
+                let out = match qvec { Some(v) => idx.search(&v, k), None => (Vec::new(), Vec::new()) };
                 timing.stage("query embedded and searched");
                 out
             };

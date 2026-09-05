@@ -187,16 +187,25 @@ pub fn run(repo: &Path, cases: Option<&Path>, no_dense: bool, rerank: bool, rera
     // sees the stderr notice and can judge it. `bench` speaks only through its exit code, so a
     // dense run that silently falls back and then grades against the weaker no-dense floor
     // would report green without ever having checked what it claims to check.
-    let embedder = if no_dense {
+    let mut embedder = if no_dense {
         None
     } else {
-        match Embedder::open() {
+        let model = crate::index::embed::resolve(DenseIndex::recorded_model(&store)?.as_deref(), &cfg.embed_model);
+        match Embedder::open(&model) {
             Ok(e) => Some(e),
             Err(err) => anyhow::bail!("dense: model unavailable ({err:#})"),
         }
     };
     if !no_dense && dense_idx.ids.is_empty() {
         anyhow::bail!("dense index is empty at {} — run `repograph update` first", repo.display());
+    }
+    if let Some(e) = embedder.as_mut() {
+        // A bench that silently searched 384-d queries against 1024-d rows would read empty
+        // dense lists as a lexical-only run and grade it against the wrong floors.
+        let width = e.query("probe")?.len();
+        if dense_idx.dim > 0 && width != dense_idx.dim {
+            anyhow::bail!("the store's vectors are {}-d and {} gives {}-d — run `repograph embed`", dense_idx.dim, e.name(), width);
+        }
     }
     let dense_on = !no_dense;
     let embedder = std::cell::RefCell::new(embedder);
