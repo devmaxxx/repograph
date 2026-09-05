@@ -176,6 +176,7 @@ pub fn run(repo: &Path, cases: Option<&Path>, no_dense: bool, rerank: bool, rera
     let ids = IdMatcher::new(&cfg.id_families, &cfg.milestone_families);
     let dense_idx = DenseIndex::load(&store)?;
     let questions = Questions::load(&store)?;
+    let lex = crate::index::lexical::Lexical::build(&graph, &questions);
     // The threshold decides the floors; the counts printed on the summary line stay exact.
     let (covered, eligible) = coverage(&graph, &questions);
     let enriched = enrich::enriched(covered, eligible);
@@ -254,7 +255,7 @@ pub fn run(repo: &Path, cases: Option<&Path>, no_dense: bool, rerank: bool, rera
     let mut tokens = Vec::new();
     for case in &cases {
         let words: Vec<String> = case.q.split_whitespace().map(str::to_string).collect();
-        let answer = query::ask(&graph, &ids, &questions, Some(&dense_fn), rerank, &words, &opts);
+        let answer = query::ask(&graph, &ids, &lex, Some(&dense_fn), rerank, &words, &opts);
         let rendered = query::render(&answer, &graph, &opts);
         let tok = rendered.len() / 4;
         tokens.push(tok);

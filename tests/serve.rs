@@ -127,6 +127,38 @@ fn the_socket_answers_the_bytes_the_process_answers_and_sees_an_edit() {
     let _ = server.wait();
 }
 
+// The indexes a resident process now keeps are built from the questions it read, and `enrich`
+// rewrites `questions.json` under a live server. Verified against the pre-change binary first:
+// the per-request refresh walks the configured doc globs, not `.repograph/`, so a
+// `questions.json` edit with no document edit alongside it never reaches a resident context's
+// `adopt` — true before this task's change and after it, since neither touched the walk. So a
+// document is edited in the same window, which the refresh does see, and what this pins is this
+// task's own property: the answer after it is fused from indexes rebuilt over the new questions,
+// not the pair the first answer built and would otherwise still be holding.
+#[test]
+fn a_questions_file_rewritten_alongside_a_document_under_a_live_server_is_fused_on_the_next_answer() {
+    let dir = repo_with_docs();
+    let mut server = serve(dir.path(), &["--every", "1", "--idle", "60"]);
+    wait_for_socket(dir.path());
+    // A word no passage holds: only a generated question could reach FR-PAY-1 with it.
+    let (before, _) = ask(dir.path(), &[], &["аннулировать"]);
+    assert!(!before.contains("FR-PAY-1"), "{before}");
+    let questions = r#"{"entries":{"FR-PAY-1":{"hash":"","questions":["можно ли аннулировать бронь самому"]}}}"#;
+    std::fs::write(dir.path().join(".repograph/questions.json"), questions).unwrap();
+    std::fs::write(dir.path().join("docs/cal.md"), "**FR-CAL-1 · MUST · Перенос визита**\n\nПеренос теперь не считается отменой.\n").unwrap();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    let (mut after, mut after_err) = (String::new(), String::new());
+    while std::time::Instant::now() < deadline {
+        (after, after_err) = ask(dir.path(), &[], &["аннулировать"]);
+        if after.contains("FR-PAY-1") { break; }
+        std::thread::sleep(std::time::Duration::from_millis(250));
+    }
+    assert!(after.contains("FR-PAY-1"), "the resident process rebuilt its indexes from the new questions: {after}");
+    assert!(after_err.contains("serve: answered by the resident process"), "{after_err}");
+    server.kill().unwrap();
+    let _ = server.wait();
+}
+
 #[test]
 fn a_socket_nobody_listens_on_is_answered_here_and_left_for_the_next_serve() {
     let dir = repo_with_docs();

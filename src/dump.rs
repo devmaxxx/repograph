@@ -5,7 +5,7 @@ use crate::bench::Expect;
 use crate::config::Config;
 use crate::enrich::Questions;
 use crate::ids::IdMatcher;
-use crate::index::{dense::DenseIndex, embed::Embedder, lexical::LexicalIndex};
+use crate::index::{dense::DenseIndex, embed::Embedder, lexical::Lexical};
 use crate::query::{self, Options};
 use crate::store::Store;
 use anyhow::{Context, Result};
@@ -74,9 +74,7 @@ pub fn run(repo: &Path, queries: &Path, out: &Path, depth: usize, no_dense: bool
             if let Some(e) = loo.entries.get_mut(anchor) { e.questions.retain(|t| t != &q.q); }
         }
     }
-    let lexical = LexicalIndex::build(&graph);
-    let lexical_q = LexicalIndex::build_questions(&graph, &loo);
-    let lexical_c = LexicalIndex::build_code_questions(&graph, &loo);
+    let lex = Lexical::build(&graph, &loo);
     // `--no-dense` records the lexical-only arm: the dense lists stay empty and `ask` answers
     // without them, exactly as `ask --no-dense` would, so the held-out gate can be read in the
     // arm the floors also grade.
@@ -115,18 +113,21 @@ pub fn run(repo: &Path, queries: &Path, out: &Path, depth: usize, no_dense: bool
             (p.into_iter().map(|(id, _)| id).collect(), g.into_iter().map(|(id, _)| id).collect())
         };
         let dense_arm: Option<query::Dense> = if no_dense { None } else { Some(&dense_fn) };
-        let answer = query::ask(&graph, &ids, &loo, dense_arm, None, &words, &opts);
+        let answer = query::ask(&graph, &ids, &lex, dense_arm, None, &words, &opts);
         records.push(Record {
             q: q.q.clone(),
             expect: q.expect.clone(),
             kind: q.kind.clone(),
             exact: Exact { ids: exact_ids, whole_question },
-            bm25_passages: lexical.search(&q.q, depth),
-            bm25_questions: lexical_q.search(&q.q, depth),
-            bm25_code: lexical_c.search(&q.q, depth),
-            attainable_passages: lexical.attainable(&q.q),
-            attainable_questions: lexical_q.attainable(&q.q),
-            attainable_code: lexical_c.attainable(&q.q),
+            bm25_passages: lex.passages.search(&q.q, depth),
+            bm25_questions: lex.questions.as_ref().map(|i| i.search(&q.q, depth)).unwrap_or_default(),
+            bm25_code: lex.code.as_ref().map(|i| i.search(&q.q, depth)).unwrap_or_default(),
+            attainable_passages: lex.passages.attainable(&q.q),
+            // -0.0, not 0.0: an index with no documents contributes no terms, and `f32`'s `Sum`
+            // gives an empty sum that sign — the same value calling `attainable` on the empty
+            // index itself would still produce, so `Rule 1`'s dumps stay byte-identical.
+            attainable_questions: lex.questions.as_ref().map(|i| i.attainable(&q.q)).unwrap_or(-0.0),
+            attainable_code: lex.code.as_ref().map(|i| i.attainable(&q.q)).unwrap_or(-0.0),
             dense_passages,
             dense_questions,
             loo_hash,

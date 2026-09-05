@@ -97,7 +97,6 @@ impl LexicalIndex {
     /// An index built over a store that carries no code questions is an index over nothing; a
     /// later caller checks this before treating its empty list as a list that lost, rather than
     /// a list that was never in contention.
-    #[allow(dead_code, reason = "wired into the code-questions build path by a later change")]
     pub fn is_empty(&self) -> bool { self.ids.is_empty() }
 
     /// What the query could reach in this index: the score of a document of average length that
@@ -132,6 +131,30 @@ impl LexicalIndex {
         ranked.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap().then(a.0.cmp(&b.0)));
         ranked.truncate(k);
         ranked
+    }
+}
+
+/// The BM25 indexes an answer fuses, built once from a graph and its questions and kept by
+/// whoever answers more than one question over them: a resident `serve`, `bench` over its
+/// cases, `dump` over a suite. Nothing here is written to disk — the indexes are term statistics
+/// over every document, a rebuild is the cheapest correct update, and there is still no lexical
+/// state that can go stale relative to the graph. What changed is who pays for the build: the
+/// lexical arm through the socket spent almost all of 49 of its 54 ms rebuilding these per
+/// question (`docs/bench/2026-09-06-perf-results.md`).
+pub struct Lexical {
+    pub passages: LexicalIndex,
+    /// Absent on a store `enrich` never touched — see `build_questions`.
+    pub questions: Option<LexicalIndex>,
+    /// Absent unless some code node carries a question (`enrich --code`).
+    pub code: Option<LexicalIndex>,
+}
+
+impl Lexical {
+    pub fn build(graph: &Graph, questions: &Questions) -> Lexical {
+        let passages = LexicalIndex::build(graph);
+        if questions.entries.is_empty() { return Lexical { passages, questions: None, code: None }; }
+        let code = LexicalIndex::build_code_questions(graph, questions);
+        Lexical { passages, questions: Some(LexicalIndex::build_questions(graph, questions)), code: if code.is_empty() { None } else { Some(code) } }
     }
 }
 
@@ -331,5 +354,33 @@ mod tests {
         assert!(!LexicalIndex::build(&g).is_empty());
         // No code node carries a question, so the code index is an index over nothing.
         assert!(LexicalIndex::build_code_questions(&g, &Questions::default()).is_empty());
+    }
+
+    #[test]
+    fn a_store_without_questions_builds_the_passage_index_alone() {
+        let mut g = Graph::default();
+        let mut e = Extraction::default();
+        e.node(NodeKind::Requirement, "FR-PAY-22", "штраф", "штраф", "a.md", 1);
+        g.apply(e);
+        let lex = Lexical::build(&g, &Questions::default());
+        assert!(!lex.passages.is_empty());
+        assert!(lex.questions.is_none() && lex.code.is_none());
+    }
+
+    #[test]
+    fn a_store_with_document_questions_and_no_code_questions_builds_two_indexes() {
+        let mut g = Graph::default();
+        let mut e = Extraction::default();
+        e.node(NodeKind::Requirement, "FR-PAY-26", "списание штрафа", "штраф списывается", "a.md", 9);
+        e.node_span(NodeKind::Symbol, "sym:apps/a.ts::revoke", "revoke", "Ends every session.\nrevoke() {}", "apps/a.ts", (3, 3));
+        g.apply(e);
+        let mut q = Questions::default();
+        q.entries.insert("FR-PAY-26".into(), crate::enrich::Entry { hash: String::new(), questions: vec!["когда деньги уходят сами".into()] });
+        let lex = Lexical::build(&g, &q);
+        assert_eq!(lex.questions.as_ref().map(|i| i.search("деньги уходят", 5)[0].0.clone()), Some("FR-PAY-26".to_string()));
+        assert!(lex.code.is_none(), "no code node carries a question, so there is no code index to search");
+        q.entries.insert("sym:apps/a.ts::revoke".into(), crate::enrich::Entry { hash: String::new(), questions: vec!["как выйти со всех устройств".into()] });
+        let lex = Lexical::build(&g, &q);
+        assert_eq!(lex.code.as_ref().map(|i| i.search("выйти устройств", 5)[0].0.clone()), Some("sym:apps/a.ts::revoke".to_string()));
     }
 }

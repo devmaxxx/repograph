@@ -98,6 +98,10 @@ pub struct Context {
     /// What `questions.json` looked like when the questions in hand were read, so a refresh
     /// that did not touch them does not pay to parse them again.
     questions_stamp: Option<walk::Stamp>,
+    /// The BM25 indexes over `graph` and `questions`, built by the first answer that fuses and
+    /// kept until either moves. Built there rather than in `open` so that on the first fused
+    /// question the build still overlaps the model open, as it did when `query::ask` built it.
+    lexical: RefCell<Option<index::lexical::Lexical>>,
     no_dense: bool,
     dense_idx: RefCell<Option<index::dense::DenseIndex>>,
     warm: RefCell<Option<std::thread::JoinHandle<Opened>>>,
@@ -130,6 +134,7 @@ impl Context {
         timing.stage("questions ready");
         Ok(Context {
             cfg: cfg.clone(), store, graph, ids, questions, questions_stamp, no_dense,
+            lexical: RefCell::new(None),
             dense_idx: RefCell::new(None),
             warm: RefCell::new(None),
             embedder: RefCell::new(None),
@@ -153,7 +158,7 @@ impl Context {
         // so it narrows a fused request and never the other way; `serve` refuses that pairing.
         let no_dense = self.no_dense || req.no_dense;
         let opts = query::Options { seeds: req.seeds, bodies: req.bodies, dense: !no_dense && index::dense::DenseIndex::present(&self.store), json: req.json, depth: req.depth };
-        let Context { cfg, store, graph, questions, dense_idx, warm, embedder, cross, resync, notices, timing, .. } = &*self;
+        let Context { cfg, store, graph, questions, lexical, dense_idx, warm, embedder, cross, resync, notices, timing, .. } = &*self;
         // Opening the ONNX model costs ~220 ms and 1.3 GB, the vectors 50 MB; an exact id or
         // symbol match never asks for either, so on that path both still open lazily, on the
         // first fused query that never comes. A fused question starts both below, once the
@@ -264,7 +269,9 @@ impl Context {
             }
         };
         let rerank: Option<query::Rerank> = if req.rerank_local { Some(&local_fn) } else if req.rerank { Some(&rerank_fn) } else { None };
-        let answer = query::ask(graph, &self.ids, questions, Some(&dense_fn), rerank, &req.words, &opts);
+        let mut guard = lexical.borrow_mut();
+        let lex = guard.get_or_insert_with(|| { let l = index::lexical::Lexical::build(graph, questions); timing.stage("lexical built"); l });
+        let answer = query::ask(graph, &self.ids, lex, Some(&dense_fn), rerank, &req.words, &opts);
         timing.stage("answered");
         Ok(query::render(&answer, graph, &opts))
     }
@@ -275,10 +282,14 @@ impl Context {
     /// report when it applied a change and `None` when it only read a store someone else wrote.
     pub(crate) fn adopt(&mut self, w: &crate::Watcher, refreshed: Option<crate::UpdateReport>) -> anyhow::Result<()> {
         self.graph = w.graph.clone();
+        // An adopted graph is a new population whether or not the questions moved with it, so
+        // the indexes built over the old one cannot outlive this call.
+        *self.lexical.borrow_mut() = None;
         let stamp = self.store.stamp(enrich::FILE);
         if stamp != self.questions_stamp {
             self.questions = enrich::Questions::load(&self.store)?;
             self.questions_stamp = stamp;
+            *self.lexical.borrow_mut() = None;
         }
         // The vectors another process rewrote, dropped so the next fused answer loads them —
         // reading what is on disk is what a one-shot does, and it is not the same as embedding
@@ -427,5 +438,25 @@ mod tests {
         std::fs::write(&raw, [0u8; 32]).unwrap();
         ctx.adopt(&w, None).unwrap();
         assert!(ctx.dense_idx.borrow().is_none(), "the next fused answer reads them off disk instead");
+    }
+
+    // `serve`'s poll only ever calls `adopt` when it already decided something moved (a refresh
+    // or a reload), so `adopt` itself invalidates unconditionally rather than diffing — this
+    // pins that an answer built after one `adopt` is not the pair a stale answer would have
+    // fused from.
+    #[test]
+    fn lexical_indexes_built_by_an_answer_are_dropped_once_the_context_adopts_a_watcher() {
+        let dir = repo_with_two_docs();
+        let cfg = crate::config::Config::load(dir.path()).unwrap();
+        let ex = crate::extractors(dir.path(), &cfg).unwrap();
+        crate::run_update(dir.path(), &cfg, &ex, true).unwrap();
+        let mut ctx = Context::open(dir.path(), &cfg, true, true).unwrap();
+        ctx.answer(&fused(true)).unwrap();
+        assert!(ctx.lexical.borrow().is_some(), "the first fused answer built and kept the indexes");
+        let w = crate::Watcher::open(dir.path(), &cfg).unwrap();
+        ctx.adopt(&w, None).unwrap();
+        assert!(ctx.lexical.borrow().is_none(), "an adopted graph invalidates the held indexes even when the questions did not move with it");
+        ctx.answer(&fused(true)).unwrap();
+        assert!(ctx.lexical.borrow().is_some(), "the next fused answer rebuilds them");
     }
 }
