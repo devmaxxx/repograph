@@ -231,18 +231,24 @@ impl<'a> Watcher<'a> {
         Ok(Watcher { repo, cfg, ex: extractors(repo, cfg)?, store, graph, manifest, seen, deferred: 0, reloaded: false })
     }
 
+    /// The store read back when another process has written it, without the walk a poll does —
+    /// a `stat` and, only when it moved, a load. It is what a reader needs to be no older than
+    /// the store on disk, which is all a `--stale` answer ever promised to be.
+    fn reload_if_moved(&mut self) -> anyhow::Result<bool> {
+        let on_disk = self.store.stamp("manifest.json");
+        if on_disk == self.seen { return Ok(false); }
+        let (graph, manifest) = self.store.load()?;
+        self.graph = graph;
+        self.manifest = manifest;
+        self.seen = on_disk;
+        Ok(true)
+    }
+
     /// Whatever the tree has moved since the last poll, applied and saved once `batch` files are
     /// waiting. An `ask` or an `update` writing the store meanwhile is picked up rather than
     /// overwritten, which is why the manifest stamp is checked before the graph in hand is used.
     fn poll(&mut self, batch: usize) -> anyhow::Result<Polled> {
-        let on_disk = self.store.stamp("manifest.json");
-        self.reloaded = on_disk != self.seen;
-        if self.reloaded {
-            let (graph, manifest) = self.store.load()?;
-            self.graph = graph;
-            self.manifest = manifest;
-            self.seen = on_disk;
-        }
+        self.reloaded = self.reload_if_moved()?;
         let entries = walk::walk(self.repo, self.cfg, &self.manifest)?;
         let diff = self.manifest.diff(&entries);
         let pending = diff.changed.len() + diff.removed.len();
@@ -388,6 +394,9 @@ fn main() -> anyhow::Result<()> {
             }
         }
         Cmd::Ask { words, json, seeds, bodies, rerank, rerank_local, depth, stale, no_serve } => {
+            // Before the socket, not after it: a broken `repograph.toml` is the one thing a
+            // resident process would hide, and a TOML parse is nothing against a process start.
+            let cfg = load_cfg()?;
             let req = ask::Request { words, json, seeds, bodies, rerank, rerank_local, depth, stale, no_dense: cli.no_dense };
             // `bench` and `dump` build their own contexts and never reach this; the environment
             // variable is for everything else that must be measured against a cold process.
@@ -400,7 +409,6 @@ fn main() -> anyhow::Result<()> {
                 std::io::stdout().flush()?;
                 std::process::exit(0)
             }
-            let cfg = load_cfg()?;
             let mut ctx = ask::Context::open(&repo, &cfg, req.stale, cli.no_dense)?;
             let text = ctx.answer(&req)?;
             // Before the answer: a refresh line reached the reader ahead of it back when it was

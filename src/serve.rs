@@ -23,6 +23,12 @@ const WAKE: Duration = Duration::from_millis(250);
 
 pub fn socket_path(repo: &Path) -> PathBuf { repo.join(".repograph").join("serve.sock") }
 
+/// What a `stat` says about `repograph.toml`, or None where there is none — the configuration a
+/// one-shot `ask` would read, watched so a resident process cannot answer under an older one.
+fn config_stamp(repo: &Path) -> Option<crate::walk::Stamp> {
+    crate::walk::stamp_of(&std::fs::metadata(repo.join("repograph.toml")).ok()?)
+}
+
 #[derive(serde::Serialize, serde::Deserialize)]
 pub struct Hello { pub v: String, pub req: ask::Request }
 
@@ -30,15 +36,18 @@ pub struct Hello { pub v: String, pub req: ask::Request }
 pub struct Reply { pub v: String, pub stdout: String, pub stderr: Vec<String> }
 
 /// The resident answer, or None when this process has to answer: no socket, one nobody
-/// listens on (unlinked here, so the next start binds cleanly), another version, a timeout,
-/// or a reply that does not parse.
+/// listens on, another version, a timeout, or a reply that does not parse.
+///
+/// Nothing here removes the socket file. A refused connect is a socket nobody listens on — or a
+/// live listener whose backlog is full for this instant, and errno does not tell the two apart;
+/// deleting the file on that guess would strand a running server holding 1.3 GB, and its own
+/// exit would then take the replacement's socket with it. `serve` removes the file it is
+/// finished with, and removes a dead one before it binds. All a client owes the question is an
+/// answer, and it has one either way.
 pub fn try_ask(repo: &Path, req: &ask::Request) -> Option<Reply> {
     let path = socket_path(repo);
     if !path.exists() { return None; }
-    let Some(mut stream) = connect(&path) else {
-        let _ = std::fs::remove_file(&path);
-        return None;
-    };
+    let mut stream = UnixStream::connect(&path).ok()?;
     stream.set_read_timeout(Some(IO_TIMEOUT)).ok()?;
     stream.set_write_timeout(Some(IO_TIMEOUT)).ok()?;
     let hello = serde_json::to_string(&Hello { v: VERSION.into(), req: req.clone() }).ok()?;
@@ -46,16 +55,13 @@ pub fn try_ask(repo: &Path, req: &ask::Request) -> Option<Reply> {
     let mut line = String::new();
     BufReader::new(stream).read_line(&mut line).ok()?;
     let reply: Reply = serde_json::from_str(&line).ok()?;
-    if reply.v != VERSION { return None; }
+    if reply.v != VERSION {
+        // Said out loud: a leftover server from another build answers nothing and every
+        // question quietly costs a cold process instead, which looks like nothing at all.
+        eprintln!("serve: the resident process is version {}, this is {VERSION}; answering here", reply.v);
+        return None;
+    }
     Some(reply)
-}
-
-/// A refused connect is a socket nobody listens on — or a listener whose backlog is full for
-/// this instant, and the error does not tell the two apart. A dead socket refuses twice; a
-/// burst of clients rarely does, and unlinking a live server's socket would send every later
-/// question to a cold process for as long as that server ran.
-fn connect(path: &Path) -> Option<UnixStream> {
-    UnixStream::connect(path).or_else(|_| UnixStream::connect(path)).ok()
 }
 
 pub fn run(repo: &Path, cfg: &config::Config, every: u64, batch: usize, idle: u64, no_dense: bool) -> Result<()> {
@@ -84,6 +90,7 @@ pub fn run(repo: &Path, cfg: &config::Config, every: u64, batch: usize, idle: u6
     let mut ctx = ask::Context::open(repo, cfg, true, no_dense)?;
     log(&mut ctx);
     eprintln!("serve: {} every {every}s, batch {batch}, idle {idle}s; Ctrl-C stops", path.display());
+    let cfg_stamp = config_stamp(repo);
     let (mut last_poll, mut last_request) = (Instant::now(), Instant::now());
     loop {
         match rx.recv_timeout(WAKE) {
@@ -96,6 +103,14 @@ pub fn run(repo: &Path, cfg: &config::Config, every: u64, batch: usize, idle: u6
         }
         if last_poll.elapsed() >= Duration::from_secs(every) {
             last_poll = Instant::now();
+            // The configuration is read once, at start: an id family added, a model or a rerank
+            // command changed would otherwise divide this process's answers from a one-shot's
+            // for as long as it ran. Leaving is the whole of the fix — the next `ask` answers
+            // in its own process under the new file, and the next `serve` starts under it too.
+            if config_stamp(repo) != cfg_stamp {
+                eprintln!("serve: repograph.toml changed, exiting — start serve again to answer under it");
+                return Ok(());
+            }
             adopt_if_moved(&mut watcher, &mut ctx, batch)?;
             // A poll between requests answers nobody: its notices are the server's own.
             log(&mut ctx);
@@ -136,7 +151,12 @@ fn answer(mut stream: UnixStream, watcher: &mut crate::Watcher, ctx: &mut ask::C
     // Anything still waiting predates this request — a poll's refresh, an answer that ended in
     // an error. A client is told what its own answer did and nothing else.
     log(ctx);
-    if !hello.req.stale {
+    if hello.req.stale {
+        // `--stale` skips the walk, not the store. A one-shot answers from whatever is on disk
+        // at this instant, so a resident one reads the store back when another process has
+        // written it — the stat and a load, and none of the walk that was asked to be skipped.
+        if watcher.reload_if_moved()? { ctx.adopt(watcher, None)?; }
+    } else {
         // The same refresh a one-shot ask does before answering: batch 1 applies any change now.
         adopt_if_moved(watcher, ctx, 1)?;
     }
