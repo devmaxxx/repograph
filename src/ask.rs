@@ -373,9 +373,16 @@ mod tests {
 
     /// A store with vectors, so `answer` takes the dense arm at all. The rows are invented:
     /// nothing here searches them, because the model will not open.
+    ///
+    /// The rows name their model rather than leaving it blank, and they name the same constant
+    /// `an_unopenable_model` lays its cache out under. A blank one resolves through
+    /// `UNNAMED_MODEL` instead, which is deliberately *not* the default — so a blank field would
+    /// send this test looking for a model the fixture never cached, and out to the network to
+    /// find it.
     fn vectors_beside_the_graph(repo: &Path) -> (PathBuf, PathBuf) {
         let (json, raw) = (repo.join(".repograph/vectors.json"), repo.join(".repograph/vectors.f32"));
-        std::fs::write(&json, r#"{"ids":["FR-PAY-1"],"hashes":["h"],"kinds":[false],"dim":4,"model":""}"#).unwrap();
+        let model = index::embed::DEFAULT_MODEL;
+        std::fs::write(&json, format!(r#"{{"ids":["FR-PAY-1"],"hashes":["h"],"kinds":[false],"dim":4,"model":"{model}"}}"#)).unwrap();
         std::fs::write(&raw, [0u8; 16]).unwrap();
         (json, raw)
     }
