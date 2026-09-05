@@ -186,7 +186,10 @@ impl Context {
                     return (Vec::new(), Vec::new());
                 }
             }
-            if resync.replace(false) {
+            // `--stale` asks for the store as it is and pays for no walk; embedding rows and
+            // saving them is the most expensive thing this code does, and a one-shot `--stale`
+            // never reaches it — the flag stays set for the next answer that did ask.
+            if !req.stale && resync.replace(false) {
                 if let Some(emb) = e.as_mut() {
                     // A reader appends to the store's own rows and never re-embeds them into
                     // another model's index: it claims the index for the model it opened, at
@@ -271,11 +274,20 @@ impl Context {
             self.questions = enrich::Questions::load(&self.store)?;
             self.questions_stamp = stamp;
         }
-        if let Some(r) = refreshed { self.notices.borrow_mut().push(format!("refresh: {} changed, {} removed", r.changed, r.removed)); }
-        // The passages the vectors were built from have moved, so the next fused answer
-        // re-embeds the rows that changed — the catch-up a one-shot `ask` does after its own
-        // refresh, and the only thing that keeps the held index true to the held graph.
-        self.resync.set(true);
+        // The vectors another process rewrote, dropped so the next fused answer loads them —
+        // reading what is on disk is what a one-shot does, and it is not the same as embedding
+        // the rows again here, which would write a store nobody asked this process to write.
+        let moved = { let idx = self.dense_idx.borrow(); idx.as_ref().is_some_and(|i| i.read_at() != self.store.stamp("vectors.f32")) };
+        if moved { *self.dense_idx.borrow_mut() = None; }
+        // A refresh this process applied leaves the store's vectors behind its graph by exactly
+        // the rows that moved, so the next fused answer re-embeds them — the catch-up a one-shot
+        // `ask` does after a refresh of its own. Someone else's store, read back whole, is the
+        // other case and needs none of that: a one-shot loading it now would embed nothing
+        // either, and the line above has already taken their vectors along with their graph.
+        if let Some(r) = refreshed {
+            self.notices.borrow_mut().push(format!("refresh: {} changed, {} removed", r.changed, r.removed));
+            self.resync.set(true);
+        }
         Ok(())
     }
 

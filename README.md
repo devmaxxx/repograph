@@ -190,15 +190,22 @@ repograph ask --no-serve отмена  # answer here even while one is listening
 ```
 
 `ask` uses it without being told to, and answers in this process whenever it cannot: no socket, a
-socket nobody listens on — which it unlinks on the way past — a server of another version, a
-timeout, `--no-serve`, or `REPOGRAPH_NO_SERVE` in the environment. The answer is the same bytes
-either way; that is checked on all 142 recorded and developer bench questions in both arms.
+socket nobody listens on, a server of another version, a timeout, `--no-serve`, or
+`REPOGRAPH_NO_SERVE` in the environment. A client never deletes the socket file — a refused
+connect is also what a live server with a full backlog gives — so only `serve` removes one, and a
+new `serve` binds over a dead file. The answer is the same bytes either way; that is checked on
+all 142 recorded and developer bench questions in both arms.
 
 The server refreshes before every answer with the same walk a one-shot `ask` does, and polls
-between them like `watch`, so a resident answer is never staler than a fresh process's — except
-under `--stale`, which by definition skips the walk and then sees the graph as of the server's
-last poll. It answers one question at a time; a second client waits for the first rather than
-being turned away.
+between them like `watch`, so a resident answer is never staler than a fresh process's. Under
+`--stale` it skips that walk, as a one-shot does, but still reads the store back when another
+process has written it: `--stale` means the store as it is on disk, resident or not, and a
+`--stale` question embeds nothing and writes nothing either way. It answers one question at a
+time; a second client waits for the first rather than being turned away.
+
+The configuration is read once, at start-up. Editing `repograph.toml` stops the server after its
+next poll — the next `ask` answers in its own process under the new file, and a new `serve` starts
+under it too.
 
 Measured on the bench corpus (908 files, 8.3k nodes, enriched), median of ten:
 

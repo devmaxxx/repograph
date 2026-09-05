@@ -89,6 +89,11 @@ impl DenseIndex {
         Ok(model_of(&w.model, store.has("vectors.f32")))
     }
 
+    /// The stamp of the `vectors.f32` these rows were read from, for a reader that holds an
+    /// index across requests: a file that no longer matches was rewritten by someone else, and
+    /// what is in hand is no longer what an `ask` starting now would load.
+    pub fn read_at(&self) -> Option<Stamp> { self.stamp }
+
     /// `recorded_model`'s answer for an index already in hand, so a reader that has loaded the
     /// vectors does not parse a 3 MB `vectors.json` again to learn the same thing.
     pub fn model_of_rows(&self) -> Option<String> {
