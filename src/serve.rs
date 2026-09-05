@@ -111,10 +111,14 @@ pub fn run(repo: &Path, cfg: &config::Config, every: u64, batch: usize, idle: u6
     let (mut last_poll, mut last_request) = (Instant::now(), Instant::now());
     loop {
         match rx.recv_timeout(WAKE) {
-            Ok(stream) => {
-                last_request = Instant::now();
-                if let Err(e) = answer(stream, &mut watcher, &mut ctx) { eprintln!("serve: {e:#}"); }
-            }
+            // Only a question that arrived counts against `--idle`. A bare connect and close is
+            // a liveness probe — another `serve` deciding whether to bind, a client that gave
+            // up — and treating one as a request keeps this process resident, holding 1.3 GB,
+            // for as long as anything at all polls the socket.
+            Ok(stream) => match answer(stream, &mut watcher, &mut ctx) {
+                Ok(asked) => if asked { last_request = Instant::now(); },
+                Err(e) => { last_request = Instant::now(); eprintln!("serve: {e:#}"); }
+            },
             Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
             Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => anyhow::bail!("the listener stopped accepting"),
         }
@@ -154,16 +158,27 @@ fn adopt_if_moved(watcher: &mut crate::Watcher, ctx: &mut ask::Context, batch: u
     Ok(())
 }
 
-fn answer(mut stream: UnixStream, watcher: &mut crate::Watcher, ctx: &mut ask::Context) -> Result<()> {
-    stream.set_read_timeout(Some(IO_TIMEOUT))?;
-    stream.set_write_timeout(Some(IO_TIMEOUT))?;
-    let mut reader = BufReader::new(stream.try_clone()?);
+/// The client's hello, or None when the peer was gone before it said anything. A connect that
+/// closes with nothing on it is a probe, not a question: `serve`'s own check for another server
+/// makes exactly that shape, and so does a client that gave up. On macOS a socket with no other
+/// end refuses the `setsockopt` below with EINVAL, which reached the server's stderr as an
+/// unattributable `serve: Invalid argument (os error 22)`; elsewhere it is an empty read.
+fn hello_line(stream: &UnixStream) -> Option<String> {
+    stream.set_read_timeout(Some(IO_TIMEOUT)).ok()?;
+    stream.set_write_timeout(Some(IO_TIMEOUT)).ok()?;
     let mut line = String::new();
-    reader.read_line(&mut line)?;
+    let n = BufReader::new(stream.try_clone().ok()?).read_line(&mut line).ok()?;
+    (n > 0).then_some(line)
+}
+
+/// Whether a question was asked, which is what `--idle` counts — a peer that vanished before
+/// its hello asked nothing.
+fn answer(mut stream: UnixStream, watcher: &mut crate::Watcher, ctx: &mut ask::Context) -> Result<bool> {
+    let Some(line) = hello_line(&stream) else { return Ok(false) };
     let hello: Hello = serde_json::from_str(&line).context("hello")?;
     if hello.v != VERSION {
         writeln!(stream, "{}", serde_json::to_string(&Reply { v: VERSION.into(), stdout: String::new(), stderr: vec![] })?)?;
-        return Ok(());
+        return Ok(true);
     }
     // Anything still waiting predates this request — a poll's refresh, an answer that ended in
     // an error. A client is told what its own answer did and nothing else.
@@ -180,7 +195,7 @@ fn answer(mut stream: UnixStream, watcher: &mut crate::Watcher, ctx: &mut ask::C
     let stdout = ctx.answer(&hello.req)?;
     let reply = Reply { v: VERSION.into(), stdout, stderr: ctx.notices() };
     writeln!(stream, "{}", serde_json::to_string(&reply)?)?;
-    Ok(())
+    Ok(true)
 }
 
 struct Unlink(PathBuf, Option<(u64, u64)>);
