@@ -45,6 +45,35 @@ fn stamp_of(path: &std::path::Path) -> (u64, u64) {
     (u64::try_from(ns).unwrap(), m.len())
 }
 
+/// A hello in the shape the wire carries it, carrying no build — a stamp no server can match, so
+/// every server refuses it. Which of the three refusals it is does not matter to the tests below:
+/// what they are about is the shape of a refusal reply, which is one reply for all three.
+fn hello_with_no_build() -> String {
+    format!(
+        concat!(r#"{{"v":"{}","build":null,"req":{{"words":["штраф"],"json":false,"seeds":12,"#,
+                r#""bodies":false,"rerank":false,"rerank_local":false,"depth":2,"stale":true,"no_dense":true}}}}"#),
+        env!("CARGO_PKG_VERSION"))
+}
+
+/// The server's own reply, read straight off the socket with no `ask` in between. Asked until one
+/// comes rather than slept on: a socket file says a `serve` bound, only a reply says it listens.
+fn reply_to(dir: &std::path::Path, hello: &str) -> String {
+    use std::io::{BufRead, Write};
+    let sock = dir.join(".repograph/serve.sock");
+    let start = Instant::now();
+    loop {
+        if let Ok(mut s) = std::os::unix::net::UnixStream::connect(&sock) {
+            s.set_read_timeout(Some(Duration::from_secs(30))).unwrap();
+            if writeln!(s, "{hello}").is_ok() {
+                let mut line = String::new();
+                if std::io::BufReader::new(&s).read_line(&mut line).unwrap_or(0) > 0 { return line; }
+            }
+        }
+        assert!(start.elapsed() < Duration::from_secs(20), "serve never replied on its socket");
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
 fn serve_in(arm: &[&str], dir: &std::path::Path, extra: &[&str]) -> std::process::Child {
     repograph().args(arm).arg("--repo").arg(dir).arg("serve").args(extra)
         .stdout(Stdio::null()).stderr(Stdio::piped()).spawn().unwrap()
@@ -164,15 +193,20 @@ fn a_reply_from_another_version_is_ignored() {
     let dir = repo_with_docs();
     let sock = dir.path().join(".repograph/serve.sock");
     let listener = std::os::unix::net::UnixListener::bind(&sock).unwrap();
+    // Stamped as the asking binary is, so the version is the only field left to refuse it on —
+    // the client reads the build and the arm first, and a reply that failed those would prove
+    // nothing about the check this test is named for.
+    let (mtime_ns, len) = stamp_of(std::path::Path::new(env!("CARGO_BIN_EXE_repograph")));
     let fake = std::thread::spawn(move || {
         use std::io::{BufRead, Write};
         let (mut s, _) = listener.accept().unwrap();
         let mut line = String::new();
         std::io::BufReader::new(s.try_clone().unwrap()).read_line(&mut line).unwrap();
-        writeln!(s, r#"{{"v":"0.0.0","stdout":"WRONG\n","stderr":[]}}"#).unwrap();
+        writeln!(s, r#"{{"v":"0.0.0","build":{{"mtime_ns":{mtime_ns},"len":{len}}},"no_dense":true,"stdout":"WRONG\n","stderr":[]}}"#).unwrap();
     });
-    let (out, _) = ask(dir.path(), &[], &["штраф"]);
+    let (out, err) = ask(dir.path(), &[], &["штраф"]);
     assert!(out.contains("FR-PAY-1") && !out.contains("WRONG"), "{out}");
+    assert!(err.contains("serve: the resident process is version 0.0.0"), "{err}");
     fake.join().unwrap();
 }
 
@@ -272,6 +306,40 @@ fn a_binary_replaced_under_a_live_server_is_another_build_and_the_client_answers
         "the running server is not the build at its path, and the client says so: {err}");
     assert!(!err.contains("answered by the resident process"), "{err}");
     assert_eq!(out, want, "and the question was answered here instead");
+    server.kill().unwrap();
+    let _ = server.wait();
+}
+
+/// The refusal itself, with no `ask` between it and the assertion: a reply carrying the three
+/// fields a client decides on, no answer, and a version no build has.
+#[test]
+fn a_hello_the_server_will_not_answer_is_refused_with_a_header_and_no_answer() {
+    let dir = repo_with_docs();
+    let mut server = serve(dir.path(), &["--every", "3600", "--idle", "60"]);
+    let line = reply_to(dir.path(), &hello_with_no_build());
+    let reply: serde_json::Value = serde_json::from_str(&line).unwrap();
+    assert_eq!(reply["stdout"], "", "a refusal carries no answer: {line}");
+    assert_eq!(reply["no_dense"], true, "and still says which arm this server holds: {line}");
+    assert!(reply["build"].is_object(), "and which build it is running: {line}");
+    assert!(reply["v"].as_str().unwrap().starts_with(env!("CARGO_PKG_VERSION")), "{line}");
+    server.kill().unwrap();
+    let _ = server.wait();
+}
+
+/// A client older than the refusal path checks nothing but `v`. Handed a refusal it could match,
+/// it would print an empty stdout and exit 0 — no answer, no line, nothing to see: the same
+/// silent failure the refusal was written to stop, one binary generation on. No client, present
+/// or past, may take a refusal for an answer, so a refusal carries a version no build has.
+#[test]
+fn a_client_that_checks_only_the_version_cannot_take_a_refusal_for_an_answer() {
+    let dir = repo_with_docs();
+    let mut server = serve(dir.path(), &["--every", "3600", "--idle", "60"]);
+    let line = reply_to(dir.path(), &hello_with_no_build());
+    let reply: serde_json::Value = serde_json::from_str(&line).unwrap();
+    // What such a client would have printed, and the check that is all it has to stop it.
+    assert_eq!(reply["stdout"].as_str().unwrap(), "", "the answer it would have printed: {line}");
+    assert_ne!(reply["v"].as_str().unwrap(), env!("CARGO_PKG_VERSION"),
+        "the one check an older client makes sends it back to its own process: {line}");
     server.kill().unwrap();
     let _ = server.wait();
 }

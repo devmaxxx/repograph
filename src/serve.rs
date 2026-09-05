@@ -58,7 +58,8 @@ pub struct Hello { pub v: String, #[serde(default)] pub build: Option<crate::wal
 /// The server's half, and its answer. `no_dense` is the arm this process was started in — a
 /// server that opened no model can only answer lexically, and a client that asked a fused
 /// question has to be told rather than handed a lexical answer under a fused question's name.
-/// Both new fields default, so a reply in the older shape still parses and is refused by `v`.
+/// Both new fields default, so a reply in the older shape still parses. Under an unreleased 0.4.0
+/// the version it carries is this one, and what refuses it is the build it does not carry.
 #[derive(serde::Serialize, serde::Deserialize)]
 pub struct Reply {
     pub v: String,
@@ -90,22 +91,24 @@ pub fn try_ask(repo: &Path, req: &ask::Request) -> Option<Reply> {
     let mut line = String::new();
     BufReader::new(stream).read_line(&mut line).ok()?;
     let reply: Reply = serde_json::from_str(&line).ok()?;
-    if reply.v != VERSION {
-        // Said out loud: a leftover server from another build answers nothing and every
-        // question quietly costs a cold process instead, which looks like nothing at all.
-        eprintln!("serve: the resident process is version {}, this is {VERSION}; answering here", reply.v);
-        return None;
-    }
+    // Said out loud, all three: a question that quietly costs a cold process, or quietly gets a
+    // lexical answer, looks like nothing at all. The build and the arm come first because a
+    // refusal carries every field and only those two say which of them sent the question back;
+    // the version is last because a refusal's own `v` is unmatchable by construction, and this
+    // client should print the reason rather than that backstop.
     if reply.build != build {
         eprintln!("serve: the resident process is another build of {VERSION}; answering here");
         return None;
     }
-    // Said out loud for the same reason, and it matters more: a lexical answer to a fused
-    // question is an answer, so nothing about it looks wrong. The other direction is not a
-    // mismatch — a server holding the model answers a `--no-dense` question lexically, which
-    // is what was asked for.
+    // This one matters most: a lexical answer to a fused question is an answer, so nothing about
+    // it looks wrong. The other direction is not a mismatch — a server holding the model answers
+    // a `--no-dense` question lexically, which is what was asked for.
     if reply.no_dense && !req.no_dense {
         eprintln!("serve: the resident process answers lexical-only and this question is fused; answering here");
+        return None;
+    }
+    if reply.v != VERSION {
+        eprintln!("serve: the resident process is version {}, this is {VERSION}; answering here", reply.v);
         return None;
     }
     Some(reply)
@@ -218,11 +221,12 @@ fn hello_line(stream: &UnixStream) -> Option<String> {
 fn answer(mut stream: UnixStream, watcher: &mut crate::Watcher, ctx: &mut ask::Context, build: Option<crate::walk::Stamp>) -> Result<bool> {
     let Some(line) = hello_line(&stream) else { return Ok(false) };
     let hello: Hello = serde_json::from_str(&line).context("hello")?;
-    // The refusals, all three under one reply: the client reads the version, the build and the
-    // arm off it and says which of them sent the question back to its own process. Answering
-    // first and refusing after would spend a fused answer's work on a reply nobody reads.
+    // The refusals, all three under one reply: the build and the arm on it name which of them
+    // sent the question back, and the version on it matches no client, present or past, so none
+    // can take a refusal for an answer. Answering first and refusing after would spend a fused
+    // answer's work on a reply nobody reads.
     if hello.v != VERSION || hello.build != build || (ctx.no_dense() && !hello.req.no_dense) {
-        writeln!(stream, "{}", serde_json::to_string(&header(ctx, build))?)?;
+        writeln!(stream, "{}", serde_json::to_string(&refusal(ctx, build))?)?;
         return Ok(true);
     }
     // Anything still waiting predates this request — a poll's refresh, an answer that ended in
@@ -247,6 +251,16 @@ fn answer(mut stream: UnixStream, watcher: &mut crate::Watcher, ctx: &mut ask::C
 /// What this process is, with no answer in it: the three fields a client decides on.
 fn header(ctx: &ask::Context, build: Option<crate::walk::Stamp>) -> Reply {
     Reply { v: VERSION.into(), build, no_dense: ctx.no_dense(), stdout: String::new(), stderr: vec![] }
+}
+
+/// The same header under a version no build carries. An empty `stdout` is a refusal here and a
+/// perfectly good answer to a question nothing matched, and the two are told apart by fields a
+/// client older than this path never reads: such a client checks `v`, matches, prints nothing and
+/// exits 0 — the silent non-answer the refusal was written to stop, one binary generation on. A
+/// version it cannot match sends it back to its own process instead, and the fields a current
+/// client reads first still name the reason.
+fn refusal(ctx: &ask::Context, build: Option<crate::walk::Stamp>) -> Reply {
+    Reply { v: format!("{VERSION} (refused)"), ..header(ctx, build) }
 }
 
 struct Unlink(PathBuf, Option<(u64, u64)>);
