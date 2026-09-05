@@ -13,6 +13,7 @@ mod index;
 mod legacy;
 mod model;
 mod query;
+mod serve;
 mod store;
 mod walk;
 
@@ -51,6 +52,16 @@ enum Cmd {
         #[arg(long, default_value_t = rerank::DEPTH)] depth: usize,
         /// Answers from the store as it stands, without bringing it in line with the tree first.
         #[arg(long)] stale: bool,
+        /// Answers in this process even when a `serve` is listening.
+        #[arg(long)] no_serve: bool,
+    },
+    /// Answers `ask` from a resident process over `.repograph/serve.sock`: the model, the
+    /// vectors and the indexes open once. Refreshes before every answer the way `ask` does,
+    /// polls between them like `watch`, exits after `--idle` seconds without a question.
+    Serve {
+        #[arg(long, default_value_t = 30)] every: u64,
+        #[arg(long, default_value_t = 1)] batch: usize,
+        #[arg(long, default_value_t = 1800)] idle: u64,
     },
     /// Keeps the store in step with the tree for readers that do not refresh themselves —
     /// editors, MCP servers. Polls, applies the same incremental update `ask` does, and embeds
@@ -186,7 +197,7 @@ pub(crate) fn record_stamps(store: &store::Store, manifest: &walk::Manifest, ent
 
 /// What a poll of the tree needs between rounds: the graph as this process last wrote it, and
 /// the stamp of the manifest that says whether someone else has written since.
-struct Watcher<'a> {
+pub(crate) struct Watcher<'a> {
     repo: &'a std::path::Path,
     cfg: &'a config::Config,
     store: store::Store,
@@ -195,6 +206,10 @@ struct Watcher<'a> {
     manifest: walk::Manifest,
     seen: Option<walk::Stamp>,
     deferred: u32,
+    /// Whether the last poll found the store written by someone else and read it back. A poll
+    /// that only reads reports `Quiet`, and a reader holding the graph from before it would
+    /// then answer from a store older than the one a one-shot `ask` loads off disk.
+    reloaded: bool,
 }
 
 /// A poll that changes nothing still writes a 10 MB graph, so a batch of one file per save is
@@ -206,14 +221,14 @@ fn refresh_now(pending: usize, batch: usize, deferred: u32) -> bool {
     pending > 0 && (pending >= batch || deferred >= MAX_DEFERRALS)
 }
 
-enum Polled { Quiet, Deferred { pending: usize }, Refreshed(UpdateReport) }
+pub(crate) enum Polled { Quiet, Deferred { pending: usize }, Refreshed(UpdateReport) }
 
 impl<'a> Watcher<'a> {
     fn open(repo: &'a std::path::Path, cfg: &'a config::Config) -> anyhow::Result<Watcher<'a>> {
         let store = store::Store::new(repo);
         let (graph, manifest) = store.load()?;
         let seen = store.stamp("manifest.json");
-        Ok(Watcher { repo, cfg, ex: extractors(repo, cfg)?, store, graph, manifest, seen, deferred: 0 })
+        Ok(Watcher { repo, cfg, ex: extractors(repo, cfg)?, store, graph, manifest, seen, deferred: 0, reloaded: false })
     }
 
     /// Whatever the tree has moved since the last poll, applied and saved once `batch` files are
@@ -221,7 +236,8 @@ impl<'a> Watcher<'a> {
     /// overwritten, which is why the manifest stamp is checked before the graph in hand is used.
     fn poll(&mut self, batch: usize) -> anyhow::Result<Polled> {
         let on_disk = self.store.stamp("manifest.json");
-        if on_disk != self.seen {
+        self.reloaded = on_disk != self.seen;
+        if self.reloaded {
             let (graph, manifest) = self.store.load()?;
             self.graph = graph;
             self.manifest = manifest;
@@ -371,8 +387,19 @@ fn main() -> anyhow::Result<()> {
                 embed_all(&repo, cli.no_dense, &cfg.embed_model)
             }
         }
-        Cmd::Ask { words, json, seeds, bodies, rerank, rerank_local, depth, stale } => {
+        Cmd::Ask { words, json, seeds, bodies, rerank, rerank_local, depth, stale, no_serve } => {
             let req = ask::Request { words, json, seeds, bodies, rerank, rerank_local, depth, stale, no_dense: cli.no_dense };
+            // `bench` and `dump` build their own contexts and never reach this; the environment
+            // variable is for everything else that must be measured against a cold process.
+            let resident = if no_serve || std::env::var_os("REPOGRAPH_NO_SERVE").is_some() { None } else { serve::try_ask(&repo, &req) };
+            if let Some(reply) = resident {
+                for n in reply.stderr { eprintln!("{n}"); }
+                eprintln!("serve: answered by the resident process");
+                print!("{}", reply.stdout);
+                use std::io::Write;
+                std::io::stdout().flush()?;
+                std::process::exit(0)
+            }
             let cfg = load_cfg()?;
             let mut ctx = ask::Context::open(&repo, &cfg, req.stale, cli.no_dense)?;
             let text = ctx.answer(&req)?;
@@ -387,6 +414,7 @@ fn main() -> anyhow::Result<()> {
             ctx.timing().stage("printed");
             std::process::exit(0)
         }
+        Cmd::Serve { every, batch, idle } => serve::run(&repo, &load_cfg()?, every, batch, idle, cli.no_dense),
         Cmd::Watch { every, batch } => run_watch(&repo, &load_cfg()?, every, batch, cli.no_dense),
         Cmd::Explain { node } => {
             let (graph, _) = store::Store::new(&repo).load()?;

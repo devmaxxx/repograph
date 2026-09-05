@@ -43,16 +43,22 @@ pub fn parse(output: &str, candidates: &[(String, String)]) -> Vec<String> {
     picked
 }
 
-/// A failing command is reported and answered with an empty pick, so `ask` falls back to the
-/// fused order instead of failing the question.
-pub fn run(command: &str, question: &str, candidates: &[(String, String)]) -> Vec<String> {
+/// A failing command answered with an empty pick and the line that says why, so `ask` falls
+/// back to the fused order instead of failing the question. The line is returned rather than
+/// printed: a resident process's stderr is a socket reply, and a client that quietly loses this
+/// warning cannot tell a reranked answer from an unreranked one.
+pub fn run_or_notice(command: &str, question: &str, candidates: &[(String, String)]) -> (Vec<String>, Option<String>) {
     match run_command(command, &prompt(question, candidates)) {
-        Ok(out) => parse(&out, candidates),
-        Err(e) => {
-            eprintln!("rerank: {e:#}; answering from the fused order");
-            Vec::new()
-        }
+        Ok(out) => (parse(&out, candidates), None),
+        Err(e) => (Vec::new(), Some(format!("rerank: {e:#}; answering from the fused order"))),
     }
+}
+
+/// The same run for `bench`, whose stderr is the reader's terminal.
+pub fn run(command: &str, question: &str, candidates: &[(String, String)]) -> Vec<String> {
+    let (picked, notice) = run_or_notice(command, question, candidates);
+    if let Some(n) = notice { eprintln!("{n}"); }
+    picked
 }
 
 #[cfg(test)]
