@@ -323,21 +323,10 @@ fn extractors(repo: &std::path::Path, cfg: &config::Config) -> anyhow::Result<Ex
 }
 
 fn embed_all(repo: &std::path::Path, no_dense: bool, configured: &str) -> anyhow::Result<()> {
-    // Said rather than left silent: `repograph --no-dense embed` otherwise exits 0 having done
-    // nothing, which reads exactly like an embed that found every row already in place.
-    if no_dense {
-        println!("dense: nothing embedded, --no-dense is set");
-        return Ok(());
-    }
-    let store = store::Store::new(repo);
-    let (graph, _) = store.load()?;
-    // Before the model opens, and for the same reason `enrich`, `bench` and `dump` bail: a sync
-    // against no graph marks every row dead and saves an index of nothing, and run before the
-    // first `build` it writes a `vectors.*` pair that makes `DenseIndex::present` true over no
-    // rows at all.
-    if graph.nodes.is_empty() { anyhow::bail!("graph is empty — run `repograph build`"); }
     let model = index::embed::resolve(None, configured);
     let Some(mut emb) = open_embedder(no_dense, &model) else { return Ok(()) };
+    let store = store::Store::new(repo);
+    let (graph, _) = store.load()?;
     let questions = enrich::Questions::load(&store)?;
     let mut dense = index::dense::DenseIndex::load(&store)?;
     let t = std::time::Instant::now();
@@ -415,7 +404,25 @@ fn main() -> anyhow::Result<()> {
             println!("enrich: {} nodes written, {} dropped, {} still without questions, {} batches ({} failed) in {:.0}s", r.generated, r.dropped, r.left, r.batches, r.failed, t.elapsed().as_secs_f32());
             embed_all(&repo, cli.no_dense, &cfg.embed_model)
         }
-        Cmd::Embed => { let cfg = load_cfg()?; embed_all(&repo, cli.no_dense, &cfg.embed_model) }
+        Cmd::Embed => {
+            let cfg = load_cfg()?;
+            // The one command that reaches `embed_all` without having just written the graph
+            // itself, so the check is here rather than in it: a sync against an empty graph
+            // marks every row dead and saves an index of nothing, and run before the first
+            // `build` it writes a `vectors.*` pair that makes `DenseIndex::present` true over
+            // no rows. `build`, `update` and `enrich` over a tree that yields nothing keep
+            // writing their empty graph and exiting 0.
+            let (graph, _) = store::Store::new(&repo).load()?;
+            if graph.nodes.is_empty() { anyhow::bail!("graph is empty — run `repograph build`"); }
+            if cli.no_dense {
+                // Otherwise this exits 0 having printed nothing at all, which reads exactly
+                // like an embed that found every row already in place.
+                println!("dense: nothing embedded, --no-dense is set");
+                Ok(())
+            } else {
+                embed_all(&repo, cli.no_dense, &cfg.embed_model)
+            }
+        }
         Cmd::Ask { words, json, seeds, bodies, rerank, rerank_local, depth, stale } => {
             let timing = Timing::new();
             let cfg = load_cfg()?;
