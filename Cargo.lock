@@ -1708,6 +1708,7 @@ dependencies = [
  "toml",
  "tree-sitter",
  "tree-sitter-typescript",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
