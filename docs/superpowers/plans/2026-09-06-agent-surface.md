@@ -137,7 +137,7 @@ Verified from the Codex references during planning: hooks load from `~/.codex/ho
 
 `bench/agent/`: **12 tasks** on the fixture's corpus (`tasks.jsonl`), run through `claude -p --output-format stream-json --verbose` — the result message carries `usage`, `total_cost_usd` and `modelUsage` (per model: `inputTokens`, `outputTokens`, `cacheReadInputTokens`, `cacheCreationInputTokens`, `costUSD`; subagent work is *included* in `total_cost_usd` and `modelUsage` and *excluded* from `usage`, per the SDK cost-tracking reference), and the stream carries every `tool_use`, so the harness also counts how many times the agent ran `repograph` and how many times `rg`. Models `haiku` and `sonnet` (the resolved id is read from the `system/init` event). Three configurations as `.claude/` overlays in a disposable linked worktree of beauty-crm at `502e8a6d` — **A** no repograph (no binary on `PATH`, a CLAUDE.md without the repograph sections, no hooks, no skill), **B** today's surface (the fixture's `CLAUDE.md`, `settings.json`, the three hooks, the `repo-query` skill, verbatim), **C** the planned surface (`agent/install.mjs --claude` output on A's CLAUDE.md), and **C-rem** = C with `REPOGRAPH_HOOK_INTERCEPT=0`. The non-repograph skill set is the same in every overlay (none), so the skill list costs the same everywhere. Scoring: `hit` = every expected substring present in the final result text; tokens = the `modelUsage` buckets summed; `cost` = `total_cost_usd`; `turns` = `num_turns`; `asked`, `grepped` from the stream. Rows go to `bench/history/runs.jsonl` with `source: "agent"`, `suite: "agent"`, one row per (config, model) per run, cases keyed `<kind>/<task-id>`, never graded (`gated: false`) — the floors in this plan are read by the results document, not by `track.py`.
 
-**Why 12 and not 82.** Each run is a live agent at real prices. One run of one configuration on one model is 12 invocations, each capped at `--max-budget-usd 0.30`: a **$3.60 ceiling**. The sweep the tasks actually make — A and B once per model (Task 1), C and C-rem twice per model (Task 3), C-scout twice on sonnet (Task 4) — is 14 runs, 168 invocations, a **$50.40 ceiling**, with each task's file naming its share before it runs. The actual cost is what each run's `total_cost_usd` sums to and is the number the results document carries; the only figure known now is a lower bound on B's first turn — the fixture's CLAUDE.md alone is ≥ 7,385 tokens of input, about $0.015 on sonnet. With 12 tasks no significance is claimed; like the 82 cases these are counts, a smoke test with its fragility read across runs by the history, and the held-out analogue for the one retrieval change (escalate) is the 400-question dump set, not an agent run.
+**Why 12 and not 82.** Each run is a live agent at real prices. One run of one configuration on one model is 12 invocations, each capped at `--max-budget-usd 0.30`: a **$3.60 ceiling**. The parent model is sonnet throughout — haiku as a *parent* is not a workload Max runs, and haiku's part is the scout inside a sonnet parent (Max, 2026-09-07) — with one opus reading of the shipped configuration, because opus is what Max's sessions run. The sweep the tasks actually make — A and B once (Task 1), C and C-rem twice (Task 3), C-scout twice (Task 4), all on sonnet — is 8 runs, 96 invocations, a **$28.80 ceiling**, plus **C once on opus** at a cap set in Task 3 Step 3b from one measured task (12 invocations × that cap, named in `$M/task3.txt` before the run); each task's file names its share before it runs. The opus run is a reading, not a verdict: it has no opus baseline beside it, so it is recorded as counts — hits, `asked`, `grepped`, cost — and the F1–F3 verdicts are sonnet's. The actual cost is what each run's `total_cost_usd` sums to and is the number the results document carries; the only figure known now is a lower bound on B's first turn — the fixture's CLAUDE.md alone is ≥ 7,385 tokens of input, about $0.015 on sonnet. With 12 tasks no significance is claimed; like the 82 cases these are counts, a smoke test with its fragility read across runs by the history, and the held-out analogue for the one retrieval change (escalate) is the 400-question dump set, not an agent run.
 
 **Codex** is measured last and separately (`codex exec --json` emits JSONL events; whether they carry usage is verified in Task 5 before any run) — the plan's floors are Claude's, by Max's priority.
 
@@ -348,7 +348,7 @@ for r in $(seq "$REPEAT"); do
     (cd "$WT" && PATH="$BINPATH$PATH" claude -p "$prompt" --model "$MODEL" \
         --output-format stream-json --verbose --no-session-persistence \
         --setting-sources project --allowedTools "Bash,Read,Grep,Glob" --disallowedTools "Edit,Write,MultiEdit,NotebookEdit" \
-        --max-budget-usd 0.30 > "$OUT/$id.r$r.jsonl" 2> "$OUT/$id.r$r.err") || echo "$id r$r: exit $?" >> "$OUT/failures.txt"
+        --max-budget-usd "${CAP:-0.30}" > "$OUT/$id.r$r.jsonl" 2> "$OUT/$id.r$r.err") || echo "$id r$r: exit $?" >> "$OUT/failures.txt"
   done < "$OUT/tasks.tsv"
 done
 git -C "$WT" checkout -- . && git -C "$WT" clean -fdq -e .repograph
@@ -363,16 +363,16 @@ The `--setting-sources project` line is what keeps `~/.claude/settings.json`'s G
 
 Reads every `<task>.r<n>.jsonl`: `system/init` → resolved model; each `assistant` message's `tool_use` blocks → `asked` (a Bash command containing `repograph`), `grepped` (a Bash command matching `\b(rg|grep)\b`, or a Grep/Glob call), `reads` (Read calls); the `result` message → `result` text, `num_turns`, `total_cost_usd`, `modelUsage` summed into `input`, `output`, `cache_read`, `cache_create` (field spellings from `$M/task0.txt`); `hit` = every `expect` substring in the result text; `budget_hit` = `result.subtype == "error_max_budget_usd"`. Emits `{"config","model","resolved_model","tasks","hits","tokens","cost","asked","grepped","per_task":{id:{hit,tokens,cost,turns,asked,grepped,reads,budget_hit}}}` — `tokens` is the sum of all four buckets over all models, because cache reads are what a transcript costs to *carry* and that is the quantity this plan is about. Run: `python3 bench/agent/score.py "$M/runs/<probe>"` on Task 0's probe directory (copy the probe file in as `probe.r1.jsonl` with a one-line `tasks.jsonl`) → a row with `hits 1`.
 
-- [ ] **Step 6: The setting-sources proof, then A and B on both models**
+- [ ] **Step 6: The setting-sources proof, then A and B on sonnet**
 
 ```bash
-cd "$W" && bench/agent/run.sh B haiku 2>&1 | tail -2
-grep -l 'GitNexus' "$M"/runs/*-B-haiku/*.jsonl | wc -l; echo "(expected 0: the user-level hook did not run)"
-grep -l 'repograph knowledge graph in .repograph' "$M"/runs/*-B-haiku/*.jsonl | wc -l; echo "(the notice hook's full text: how many tasks it reached under today's surface)"
-for c in A B; do for m in haiku sonnet; do bench/agent/run.sh $c $m | tail -2; done; done
+cd "$W" && bench/agent/run.sh B sonnet 2>&1 | tail -2
+grep -l 'GitNexus' "$M"/runs/*-B-sonnet/*.jsonl | wc -l; echo "(expected 0: the user-level hook did not run)"
+grep -l 'repograph knowledge graph in .repograph' "$M"/runs/*-B-sonnet/*.jsonl | wc -l; echo "(the notice hook's full text: how many tasks it reached under today's surface)"
+bench/agent/run.sh A sonnet | tail -2
 ```
 
-Expected: no `GitNexus` string in any B transcript; the count of tasks the full notice reached, recorded; four summaries. This is the baseline: **A** is what an agent does with no graph, **B** is today. Record the four `total_cost_usd` sums in `$M/task1.txt` — that sum is the first honest "cost per run" figure, and Task 9 writes it into the results document.
+Expected: no `GitNexus` string in any B transcript; the count of tasks the full notice reached, recorded; two summaries. This is the baseline: **A** is what an agent does with no graph, **B** is today. Record the two `total_cost_usd` sums in `$M/task1.txt` — that sum is the first honest "cost per run" figure, and Task 9 writes it into the results document.
 
 - [ ] **Step 7: `track.py agent`, the planning scripts, commit**
 
@@ -382,7 +382,7 @@ Expected: no `GitNexus` string in any B transcript; the count of tasks the full 
 
 ```bash
 cd "$W" && python3 -m pytest -q bench/history/test_track.py 2>&1 | tail -1 && bash -n bench/agent/run.sh && python3 bench/agent/planning/transcripts.py ~/.claude/projects/-Users-max-Documents-projects-beauty-crm | head -8
-for c in A B; do for m in haiku sonnet; do python3 bench/history/track.py agent "$(ls -d "$M"/runs/*-$c-$m | tail -1)/summary.json" --note "agent-surface baseline, $c"; done; done
+for c in A B; do python3 bench/history/track.py agent "$(ls -d "$M"/runs/*-$c-sonnet | tail -1)/summary.json" --note "agent-surface baseline, $c"; done
 git -C "$W" add bench/agent bench/history/track.py bench/history/test_track.py bench/history/README.md bench/history/runs.jsonl
 git -C "$W" commit -F - <<'MSG'
 test(bench): twelve agent tasks on the fixture, run through headless Claude and scored on billed tokens
@@ -390,7 +390,7 @@ test(bench): twelve agent tasks on the fixture, run through headless Claude and 
 Three configurations as .claude/ overlays in a disposable worktree of the corpus: no repograph, today's
 surface, and the planned one. The scorer reads the stream the CLI emits: the result's modelUsage for
 tokens and cost, the tool_use blocks for how often the agent asked the graph and how often it grepped.
-The baseline rows for A and B on haiku and sonnet are recorded; the planning scripts that produced the
+The baseline rows for A and B on sonnet are recorded; the planning scripts that produced the
 plan's session-transcript and output-size numbers are kept beside them.
 MSG
 ```
@@ -639,10 +639,10 @@ Append to `$M/task3.txt` before running anything:
 > F2 — interception. `tokens_per_hit(C) < tokens_per_hit(C-rem)` on both models, both runs → interception ships on by default. Otherwise reminder-only ships (`REPOGRAPH_HOOK_INTERCEPT=0` in the fragment) and the interceptor stays in the script.
 > Recorded regardless: `asked`, `grepped` and the injections count per task (the §6 reconsideration number is the share of tasks with `asked == 0` and `hit == 0` where B or C-rem hit).
 
-- [ ] **Step 3: Run C and C-rem, both models, twice**
+- [ ] **Step 3: Run C and C-rem on sonnet, twice**
 
 ```bash
-cd "$W" && for r in 1 2; do for c in C C-rem; do for m in haiku sonnet; do bench/agent/run.sh $c $m | tail -2; done; done; done
+cd "$W" && for r in 1 2; do for c in C C-rem; do bench/agent/run.sh $c sonnet | tail -2; done; done
 for d in "$M"/runs/*-C*-*; do python3 bench/history/track.py agent "$d/summary.json" --note "agent-surface, $(basename $d)"; done
 python3 - <<'PY'
 import json,glob,collections
@@ -655,7 +655,25 @@ for arm,rs in sorted(by.items()):
 PY
 ```
 
-Expected: eight new rows (C ×4, C-rem ×4) beside the four baseline rows; the table above is what `$M/task3.txt` records, then the F1/F2 verdicts in the words of Step 2, then the per-task table for any failed clause. Cost: eight runs, ceiling $28.80; the actual sum of `total_cost_usd` goes in the file.
+Expected: four new rows (C ×2, C-rem ×2) beside the two baseline rows; the table above is what `$M/task3.txt` records, then the F1/F2 verdicts in the words of Step 2, then the per-task table for any failed clause. Cost: four runs, ceiling $14.40; the actual sum of `total_cost_usd` goes in the file.
+
+- [ ] **Step 3b: One reading of C on opus — the cap first, then the run**
+
+Opus is the model Max's sessions run; the harness's `$0.30` cap was sized for sonnet and would cut opus runs short, which reads as misses. So the cap is measured before it is set: one task, the cheapest-looking one (`FR-PAY-22`-style exact id), at a cap of `1.00`, and its `total_cost_usd` read.
+
+```bash
+cd "$W" && CAP=1.00 REPEAT=1 bench/agent/run.sh C opus --only 01 | tail -2   # run.sh gains --only <id> here: one task, same scorer
+python3 -c "import json; print(json.load(open('$(ls -d "$M"/runs/*-C-opus | tail -1)/summary.json'))['cost'])"
+```
+
+Write to `$M/task3.txt` before the full run: `opus cap = 4 × that cost, rounded up to $0.10, floor $0.30`, and the resulting ceiling `12 × cap`. Then:
+
+```bash
+cd "$W" && CAP=<the cap> REPEAT=1 bench/agent/run.sh C opus | tail -2
+python3 bench/history/track.py agent "$(ls -d "$M"/runs/*-C-opus | tail -1)/summary.json" --note "agent-surface, opus reading of C, no opus baseline"
+```
+
+Expected: one row `agent:C+opus`; `$M/task3.txt` gains a paragraph with hits, `asked`, `grepped`, the cost sum and how many tasks hit the cap (`failures.txt` and the result's `stop_reason`). No verdict is read from it: F1–F3 are sonnet's, this is what the shipped configuration does on the model that will use it, beside sonnet's C rows for the eye.
 
 - [ ] **Step 4: Apply the verdict to the fragment; commit**
 
@@ -665,9 +683,9 @@ If F2 failed: in `agent/hooks/claude.json` and `codex.json`, the PreToolUse comm
 cd "$W" && node --test agent/ 2>&1 | tail -1
 git -C "$W" add agent/ bench/agent/overlays bench/history/runs.jsonl
 git -C "$W" commit -F - <<'MSG'
-test(bench): the planned surface against today's, haiku and sonnet, twice
+test(bench): the planned surface against today's — sonnet twice, one opus reading
 
-Overlay C is the installer's output on a CLAUDE.md without the repograph sections. Eight rows recorded
+Overlay C is the installer's output on a CLAUDE.md without the repograph sections. Five rows recorded
 beside the baseline; the priming and interception verdicts are read by the rules written before the
 runs and applied to the hook's default.
 MSG
@@ -1014,4 +1032,4 @@ The five questions the plan carried were put to Max and answered; the tasks abov
 2. **Codex gets the brief, the skill and the risk line — no interceptor.** `agent/hooks/codex.json` carries `SessionStart`, `PostToolUse`, `SubagentStart` and no `PreToolUse` entry; the interceptor's F2 verdict is read on Claude and not carried to Codex.
 3. **`--escalate` spends only behind its flag.** Opt-in like `--rerank`; the skill may recommend it on a miss (E3 decides the wording); `ask` never escalates on its own.
 4. **The Rust half ships in the current version line.** Tasks 6–8 land as 0.5.x with the rest; no minor bump in this plan; 0.6.0 stays the languages' release.
-5. **The C family runs twice.** F1–F3 stand as written; the ceiling stays $50.40.
+5. **The C family runs twice — on sonnet; haiku leaves the parent seat; opus reads C once.** Max, 2026-09-07: haiku as a parent is not a workload he runs, so the harness parent is sonnet on every overlay (F1–F3 as written, two runs), haiku stays the scout's model, and the shipped configuration C is run once on opus at a cap measured on one task first (Task 3 Step 3b) — a reading beside sonnet's rows, not a verdict. Sonnet ceiling $28.80 plus 12 × the opus cap.
