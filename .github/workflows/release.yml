@@ -32,6 +32,16 @@ jobs:
         run: |
           .\target\${{ matrix.target }}\release\repograph.exe --version
           Compress-Archive -Path .\target\${{ matrix.target }}\release\repograph.exe -DestinationPath repograph-${{ matrix.target }}.zip
+      # A dispatch run has no release to put the archive on. It is kept as a run artifact instead,
+      # so the file a runner just built and smoked can be fetched with `gh run download` and tried
+      # on a real machine before a tag is spent; a tag run skips this and publishes as it did.
+      - if: github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@v4
+        with:
+          name: repograph-${{ matrix.target }}
+          path: repograph-${{ matrix.target }}.${{ matrix.ext }}
+          if-no-files-found: error
+          retention-days: 14
       - if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with: { files: "repograph-${{ matrix.target }}.${{ matrix.ext }}" }
