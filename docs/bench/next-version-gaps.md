@@ -278,6 +278,20 @@ whose questions use a much narrower vocabulary than its passages seats its quest
 readily, and nothing in the code says so. Measured, named and left standing —
 [the coverage admission results](2026-09-06-coverage-admission-results.md).
 
+**Status (2026-09-06, 0.5.0): closed.** The residue this gap was left with is charged.
+`attainable` now sums idf over **every** unique query term, one the index never saw at the idf
+BM25 gives df = 0 (`ln(2n + 2)`), so a term an index lacks lowers that list's coverage instead of
+leaving its denominator, and no index is rewarded for a narrow vocabulary. `search` is untouched
+— every ranked list in all six dumps is byte for byte the shipped binary's, checked before any
+admission number was read. The constant was re-derived under the new form on the same 400 held-out
+questions in the same arm, before either suite was opened, and returned 0.761 again: the literal
+does not move, but it is now a constant of the form that ships. All seven pre-registered clauses
+hold — the four recorded arms' counts identical, developer totals 38 and 38 with `where` 0/9, both
+held-out compares 2 gained and 1 lost at p = 1.0000, the replay reproducing the binary on 82, 60
+and 400 in both arms. Seventeen cases changed the answer they return without any case changing its
+verdict, which is the shape the rule allowed for —
+[the residue, the seat and the register](2026-09-06-residue-seat-register-results.md), rule R.
+
 ---
 
 ## G9 · Code is unreachable from prose — `where` 0/9
@@ -462,6 +476,23 @@ so, so no admission form could ever have moved `where` off 0/9 — only stage B,
 code list, which A4 priced at six held-out questions lost per arm and which was not run
 ([the coverage admission results](2026-09-06-coverage-admission-results.md)).
 
+**Status (2026-09-06, 0.5.0): stage B measured and rejected; still open, and now priced.** One
+seat for the code list — its top-ranked document and nothing more, admitted against the passage
+list at a constant of its own — was replayed on the code-enriched copy under a rule committed
+first. The constant, `c_code = 0.902`, is the crossover of 800 held-out questions (the fixture's
+400 document questions verbatim and 400 of the copy's 3,463 code entries) taken before either
+suite was opened; above it the code list holds the answer in its top five four times as often as
+the passage list, below it the passage list twelve times as often. The seat does what this gap
+says it would: **`where` 0/9 → 2/9 in both arms**, developer totals 40 against 38, and the code
+held-out set 54 → 122 and 40 → 115 at p = 0.0000. It also clears the clause A4 failed — the
+document held-out price is five lost and none gained per arm at **p = 0.0625**, not significant,
+where A4's six lost read p = 0.031. It fails on a clause A4 was never read against: the recorded
+suite's lexical paraphrase falls 15/30 → 14/30, because the code seed takes the third slot on one
+question and pushes off the fifth seed the anchor was reached by expansion from. `CODE_SEAT` was
+never written into `src/query.rs`; the tooling that measured it shipped, so the next attempt starts
+from a derived constant rather than a guess —
+[the residue, the seat and the register](2026-09-06-residue-seat-register-results.md), rule S.
+
 ## G14 · The enrichment prompt does not know the document's kind
 
 **Raised (2026-09-05)** by D1, the strongest paraphrase lever this campaign measured and one it did
@@ -528,6 +559,25 @@ held-out set favours any store holding the colloquial questions, so it ships not
 thing to try is one generator asked for both registers; the results document carries the clauses a
 pre-registered attempt should commit first.
 
+**Status (2026-09-06, 0.5.0): the lever this gap proposed is retired; the successor is measured and
+rejected.** L4 as framed — a prompt per node kind asking for "is this allowed" questions — is
+retired on the record: it failed its own diagnostic gate on both readings, 1 and 2 of 4 against a
+bar of 3, and the second diagnostic showed it aimed at shape where the loss is register.
+`src/enrich.rs` was never changed for it and no token was spent on it. The successor was: the
+documents' prompt asked one generator for six questions in the asker's voice and six in the
+entry's, run on the default enricher over a fresh copy of the fixture's store — 1,996 nodes,
+24,816 questions, ≈ $4.16 estimated. Under a rule committed first it fails four of six clauses.
+`rule` reads **2/9 in both arms** against the fixture's 5/9, paraphrase 13/30 against 15/30 in
+both, the dense arm breaks its paraphrase floor and `bench` exits 1, and nothing the lever exists
+for moved. The neutral held-out set built from a third generator's questions is a wash in both arms
+(p = 0.63 and 0.92) and the replay agrees with the binary, so the store behaves; it simply answers
+less well. The register-share table says why: asking one generator for both registers did not raise
+the `rule` share toward the fixture's 0.211 — it fell to **0.147**, below both stores. Splitting
+twelve questions into six and six halved the room the entry's own vocabulary had rather than adding
+the asker's voice. The prompt is reverted and the store kept. What remains untried is the union of
+two generators' stores, which read paraphrase 20/30 and `rule` 7/9 with no rule in front of it —
+[the residue, the seat and the register](2026-09-06-residue-seat-register-results.md), rule G.
+
 ---
 
 ## Suggested order
@@ -535,10 +585,10 @@ pre-registered attempt should commit first.
 | | gap | why here |
 |---|---|---|
 | 1 | ~~**G7** the questions list's share of the seeds~~ | closed 2026-09-05 — gated on the ratio of the two lists' best scores, held-out p = 0.77, lexical-only arm at raw parity; the window (0.802, 0.866] is recorded above, corrected from the 0.85–0.90 first published |
-| — | ~~**G8** the questions gate is a constant of one store~~ | closed for scale 2026-09-06 (0.5.0) — `coverage` ships at c = 0.761 under a rule written before it was implemented; the constant no longer moves with the two indices' mean lengths or vocabulary sizes. `attainable` still counts only the terms an index holds, so a narrow question vocabulary seats its list more readily — measured, named, not fixed |
+| — | ~~**G8** the questions gate is a constant of one store~~ | closed 2026-09-06 (0.5.0) — `coverage` shipped at c = 0.761 under a rule written before it was implemented, and the vocabulary residue that reading left is now charged: `attainable` sums idf over every query term, one the index never saw at df = 0, so a narrow question vocabulary no longer seats its list more readily. `search` untouched and every ranked list byte-identical, the constant re-derived under the new form and returning 0.761 again, all four recorded arms' counts identical, held-out p = 1.0000 in both arms |
 | — | ~~**G12** the gate compares raw BM25 scores across two indices~~ | closed 2026-09-06 (0.5.0) — the admission compares two coverages computed inside their own index. Lexical paraphrase 14/30 → 15/30, both developer totals up, held-out +1 and +3 at p = 1.0000 and p = 0.4531, replay and binary agreeing on all 1,084 queries |
-| 4 | **G14** the prompt does not know the document's kind | measured twice, not closed (2026-09-06, 0.5.0) — the prompt-shape diagnostic read 1 of 4 and 2 of 4 against a bar of 3; the retrieval reading that followed found the cause: the expected node keeps its seat and loses its rank inside the questions list, median 3 → 10 on `rule` while `long` goes 1.5 → 1, because haiku writes a node's questions in the asker's colloquial voice and sonnet in the document's precise one — the query's words are found 29% less often on `rule` and 32% more often on `long`. A prompt per kind is aimed wrongly twice; ask for register, or price the union of both generators, first. No tokens spent on either reading |
-| 2 | **G13** ten `where` anchors ranked and gated out | still open (2026-09-06, 0.5.0) — regenerated under the shipped form: the code list already ranks ten of thirteen `where` anchors in its top ten, so no admission was ever going to move `where` off 0/9. Stage B, one seat for the code list, is the only lever left, at A4's price of six held-out questions per arm |
+| 4 | **G14** the prompt does not know the document's kind | measured three times, not closed (2026-09-06, 0.5.0) — the prompt-shape diagnostic read 1 of 4 and 2 of 4 against a bar of 3; the retrieval reading that followed found the cause, register rather than shape; and the successor lever, one generator asked for both registers, was run on the default enricher under a rule committed first and failed four of six clauses — `rule` 5/9 → 2/9 in both arms, paraphrase 15/30 → 13/30, a broken dense floor, and the register share it rests on falling 0.211 → 0.147. L4 as framed is retired. The prompt is reverted; the only reading that ever moved these numbers upward is the union of two generators' stores, which has no rule in front of it. ≈ $4.16 spent once |
+| 2 | **G13** ten `where` anchors ranked and gated out | measured, not closed (2026-09-06, 0.5.0) — stage B was replayed on the code-enriched copy at a constant of the code list's own, `c_code = 0.902`, derived on 800 mixed held-out questions before either suite was opened. The seat moves `where` 0/9 → 2/9 in both arms and the code held-out set 54 → 122 and 40 → 115 at p = 0.0000, and it clears A4's clause — five document questions lost per arm at p = 0.0625 against A4's six at p = 0.031. It fails on the recorded suite instead: lexical paraphrase 15/30 → 14/30, through the fifth seed the code seed displaces. `CODE_SEAT` unwritten, the price now known |
 | — | ~~the lexical arm's 49 ms~~ | closed 2026-09-05 (0.5.0) — the perf results left this number here and nowhere else. The BM25 indexes are built once by a resident context and kept: socket lexical 55.0 → 6.8 ms, median of 33 against a base spread of 0.9 ms, the design note's 30 ms target met; Rule 1 sixteen byte-identical verdicts and Rule 2 142/142 in four pairings |
 | — | ~~**G9** code is unreachable from prose~~ | measured 2026-09-05 — A1 to A4 each rejected by the rule; the code questions ship into an index of their own for the `ask --rerank` pool, `where` stays 0/9 in the plain fusion, and G12 is what would move it |
 | — | ~~**G10** five seeds over three lists~~ | measured 2026-09-05 — A4 prices one seat for a fourth list at 6 held-out questions in each arm, none gained, p = 0.031; closed as measured, not as fixed |

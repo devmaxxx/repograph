@@ -82,5 +82,34 @@ class Expansion(unittest.TestCase):
         self.assertEqual(expanded, [])
 
 
+class CodeSeat(unittest.TestCase):
+    def rec(self):
+        return {"bm25_passages": scored(("p", 2.0)), "bm25_questions": scored(("q", 0.1)), "bm25_code": scored(("c1", 1.0), ("c2", 0.5)),
+                "attainable_passages": 4.0, "attainable_questions": 4.0, "attainable_code": 2.0}
+
+    def test_the_code_list_takes_its_own_constant_and_one_seat(self):
+        # coverage(code) = 0.5 against coverage(passages) = 0.5: level, so admitted at 1.0 and not at 1.1.
+        # The questions list, at 0.1 / 4.0 against 2.0 / 4.0, sits under every constant above 0.05
+        # and is absent from all four cases.
+        self.assertEqual(a.lexical_lists(self.rec(), "coverage", 1.1, True, True, code_c=1.0), [["p"], ["c1"]])
+        self.assertEqual(a.lexical_lists(self.rec(), "coverage", 1.1, True, True), [["p"]])
+        self.assertEqual(a.lexical_lists(self.rec(), "coverage", 1.0, True, True, code_c=1.1), [["p"]])
+
+    def test_without_the_seat_the_code_list_is_never_on_the_plain_path(self):
+        # The same constants that seated it in the first case above, with the seat off: the flag
+        # alone is what keeps the list out, not a constant it failed to clear.
+        self.assertEqual(a.lexical_lists(self.rec(), "coverage", 1.1, False, True, code_c=1.0), [["p"]])
+
+
+class Recorded(unittest.TestCase):
+    def test_recorded_hits_reads_the_first_five_seeds_against_any_anchor(self):
+        dump = {"queries": [
+            {"q": "a", "expect": "N-1", "ask": {"seeds": [["x", 1.0], ["N-1", 0.5]]}},
+            {"q": "b", "expect": ["N-2", "N-3"], "ask": {"seeds": [["N-3", 1.0]]}},
+            {"q": "c", "expect": "N-4", "ask": {"seeds": [["1", 1], ["2", 1], ["3", 1], ["4", 1], ["5", 1], ["N-4", 1]]}},
+        ]}
+        self.assertEqual(a.recorded_hits(dump), {("a", ("N-1",)): True, ("b", ("N-2", "N-3")): True, ("c", ("N-4",)): False})
+
+
 if __name__ == "__main__":
     unittest.main()

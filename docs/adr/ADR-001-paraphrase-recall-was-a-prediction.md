@@ -415,3 +415,63 @@ The rule these numbers were judged against was written and committed before the 
 implemented, with the earlier campaign's replayed scores already known — a decision taken on prior
 evidence rather than a blind prediction, which is weaker and is recorded as such. The rule, the
 clauses and every measurement: [the coverage admission results](../bench/2026-09-06-coverage-admission-results.md).
+
+## Amendment 9 — the denominator charges every term, and a seat the recorded suite refused (2026-09-06)
+
+Amendment 8 shipped the coverage admission and named, without fixing, the property it still had:
+`attainable` counted only the query terms an index actually holds, so a term the questions index
+never saw left its denominator rather than lowering its score, and a list's coverage rose with
+every query term its vocabulary lacked. This charges it. `attainable` now sums idf over **every**
+unique query term, one the index never saw at the idf BM25 gives `df = 0`, `ln(2n + 2)` — the
+largest idf that index can express. An index over no documents attains `0.0`; the `-0.0` a dump
+writes is still the sign of an index that was never built. The statistic stays a property of the
+query and of one index alone, which is what lets two lists' coverages compare in one unit, and
+`search` is untouched.
+
+That last claim is the one worth checking rather than believing, and it was checked before any
+admission number was read: every `bm25_*` and `dense_*` list in all six dumps — recorded,
+developer and held-out, both arms — is byte for byte the shipped binary's, and no `attainable_*`
+field fell. The denominator moves on two thirds of the developer suite's queries and a tenth of
+the recorded suite's, which is where the residue lived.
+
+The constant was re-derived under the new form, on the same 400 held-out questions in the same
+`--no-dense` arm, before either suite was opened, and returned **0.761** — the value the dropping
+denominator's crossover returned. The literal in `src/query.rs` does not move, but it is now a
+constant of the form that ships rather than one inherited from the form it replaces. It was not
+compared with the old value and kept; it was derived once and written down first.
+
+**The four recorded arms do not move.** Fixture dense `40/40 15/30 12/12` p90 221, fixture lexical
+`39/40 15/30 12/12` p90 215, and on a raw copy of the same store dense `40/40 9/30 12/12` p90 221
+and lexical `39/40 7/30 12/12` p90 226 — every count identical to the reading Amendment 8 and
+Amendment 7 left. The developer suite holds at 38 and 38 with `where` 0/9. Held-out recall@5 goes
+104 → 105 in the dense arm and 112 → 113 in the lexical one, two gained and one lost in each, exact
+McNemar p = 1.0000. `bench/admission.py check` reproduces the binary on all 1,084 queries in both
+arms at the derived constant. Seventeen cases changed the answer they return and not one changed
+its verdict, which is what a corrected denominator was expected to look like.
+
+**The seat, measured and refused.** Stage B of the 0.5.0 admission design — one seat for the
+code-questions list on the plain path, its top-ranked document and nothing more — was replayed on
+the code-enriched copy at a constant of its own. `c_code = 0.902` is the crossover of 800 held-out
+questions, the fixture's 400 document questions verbatim and 400 of the copy's 3,463 code entries,
+taken before either suite was opened; it is not `QUESTIONS_GATE` because a crossover is a procedure
+over a population and the seat decides on a different one. The seat does what A3 and A4 said it
+would: `where` 0/9 → **2/9 in both arms**, developer totals 40 against 38, and the code held-out
+set 54 → 122 and 40 → 115 at p = 0.0000. It also clears the clause A4 failed — the document
+held-out price is five lost and none gained per arm at **p = 0.0625**, against A4's six at
+p = 0.031, because the coverage form at the list's own constant seats it on different questions.
+
+It is refused on the recorded suite. The lexical arm's paraphrase falls **15/30 → 14/30**: on «что
+мешает стереть карточку клиента» the code seed takes the third slot and pushes the fifth seed off
+the end, and the anchor was reached by expansion from that seed. One seat is still one seat.
+`CODE_SEAT` was never written into `src/query.rs` and no override ships; the price is recorded so
+the next attempt argues with a number.
+
+**What did not survive.** The store-vocabulary denominator (design B), which would have dropped a
+term no index holds from both sums, was the fallback and was never tried, because design A cleared
+all seven clauses. It is recorded as second on its own merits: the code index's vocabulary is not
+in that union, so a term only the code index holds would be dropped from both denominators while
+still scoring in the code list's best — the same residue, moved onto the list stage B is about.
+
+The rule these numbers were judged against was committed before any of them existed, at `4977f40`,
+on a branch whose first commit is that rule. The clauses and every measurement:
+[the residue, the seat and the register](../bench/2026-09-06-residue-seat-register-results.md).

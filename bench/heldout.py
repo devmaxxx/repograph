@@ -41,9 +41,17 @@ SIZE = 400
 AT = 5
 
 
+def is_code(node_id):
+    """A code node's entry: `enrich --code` keys them by the graph's `sym:` and `file:` ids, and
+    a held-out set for the code list has to be drawn from those alone, as the documents' set is
+    drawn from the rest."""
+    return node_id.startswith(("sym:", "file:"))
+
+
 def cmd_build(args):
     entries = json.loads((Path(args.store) / "questions.json").read_text())["entries"]
-    nodes = sorted(k for k, v in entries.items() if v.get("questions"))
+    nodes = sorted(k for k, v in entries.items()
+                   if v.get("questions") and (args.only is None or (args.only == "code") == is_code(k)))
     if len(nodes) < args.size:
         raise SystemExit(f"store has {len(nodes)} enriched nodes, need {args.size}")
     rng = random.Random(args.seed)
@@ -54,7 +62,8 @@ def cmd_build(args):
         # own sentence: 0.955 on this corpus, against 0.28 once the text is actually held out.
         out.append({"kind": "synthetic", "q": rng.choice(entries[node]["questions"]), "expect": node})
     Path(args.out).write_text("".join(json.dumps(r, ensure_ascii=False) + "\n" for r in out))
-    print(f"{args.size} questions from {len(nodes)} enriched nodes, seed {args.seed} -> {args.out}")
+    only = f" {args.only}" if args.only else ""
+    print(f"{args.size} questions from {len(nodes)} enriched{only} nodes, seed {args.seed} -> {args.out}")
 
 
 def anchors(expect):
@@ -131,6 +140,8 @@ def main():
     b.add_argument("--out", required=True)
     b.add_argument("--size", type=int, default=SIZE)
     b.add_argument("--seed", type=int, default=SEED)
+    b.add_argument("--only", choices=["documents", "code"], default=None,
+                   help="draw from the documents' entries or the code's; every entry by default")
     b.set_defaults(func=cmd_build)
 
     c = sub.add_parser("compare", help="paired exact McNemar between two dumps of that set")

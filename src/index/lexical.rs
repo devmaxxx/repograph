@@ -99,19 +99,23 @@ impl LexicalIndex {
     /// than a list that was never in contention.
     pub fn is_empty(&self) -> bool { self.ids.is_empty() }
 
-    /// What the query could reach in this index: the score of a document of average length that
-    /// holds each of the query's terms exactly once, which BM25 makes the plain sum of their idf
-    /// — at tf = 1 and the mean length the term weight `(K1 + 1) / (1 + K1)` is one. A term this
-    /// index never saw adds nothing here, as it adds nothing to any document's score. A list's
-    /// best over this figure says how much of the query the best document answered, and unlike
-    /// the best score itself it compares across indices: each index normalises length against
-    /// its own mean and weights a term by its own vocabulary, so two indices' raw scores are in
-    /// two units and their ratio moves when either population does (gaps G8 and G12).
+    /// What the query asked for, priced in this index: the score a document of average length
+    /// would get for holding each of the query's terms exactly once — BM25 at tf = 1 and the
+    /// mean length, where the term weight `(K1 + 1) / (1 + K1)` is one, so the plain sum of
+    /// their idf. Every term of the query is in the sum, a term this index never saw at the idf
+    /// BM25 gives df = 0, `ln(2n + 2)`. Until 2026-09-06 an absent term left the sum instead,
+    /// and a list's coverage — its best over this figure — then rose with every query term its
+    /// index lacked: an index was rewarded for a narrow vocabulary as much as for a good match,
+    /// the residue of gap G8 that the coverage admission shipped with. Charging the term keeps
+    /// the statistic a property of the query and of one index alone, which is what lets two
+    /// lists' coverages compare in one unit (G12); `search` is untouched, so no ranking moves.
+    /// An index over no documents attains nothing.
     pub fn attainable(&self, query: &str) -> f32 {
+        if self.ids.is_empty() { return 0.0; }
         let n = self.ids.len() as f32;
         let mut seen = std::collections::HashSet::new();
         tokenize(query).into_iter().filter(|t| seen.insert(t.clone()))
-            .filter_map(|t| self.postings.get(&t).map(|list| Self::idf(n, list.len())))
+            .map(|t| Self::idf(n, self.postings.get(&t).map_or(0, Vec::len)))
             .sum()
     }
 
@@ -348,7 +352,7 @@ mod tests {
     }
 
     #[test]
-    fn attainable_is_the_sum_of_idf_over_the_query_terms_the_index_holds_each_counted_once() {
+    fn attainable_charges_every_query_term_once_and_an_absent_one_at_the_idf_of_df_zero() {
         let mut g = Graph::default();
         let mut e = Extraction::default();
         e.node(NodeKind::Requirement, "FR-PAY-22", "правило отмены", "штраф считается по политике отмены", "a.md", 1);
@@ -358,12 +362,14 @@ mod tests {
         let idx = LexicalIndex::build(&g);
         let n = 3.0_f32;
         let idf = |df: f32| ((n - df + 0.5) / (df + 0.5) + 1.0).ln();
-        // «штраф» sits in two documents, «политике» in one, «ъъъ» in none; a term the query
-        // repeats is one term, as a document of average length holds it once.
-        assert!((idx.attainable("штраф политике ъъъ") - (idf(2.0) + idf(1.0))).abs() < 1e-6);
+        // «штраф» sits in two documents, «политике» in one, «ъъъ» in none and is charged as a
+        // term no document holds — it lowers what the best document could cover instead of
+        // leaving the sum; a term the query repeats is one term, as a document of average length
+        // holds it once.
+        assert!((idx.attainable("штраф политике ъъъ") - (idf(2.0) + idf(1.0) + idf(0.0))).abs() < 1e-6);
         assert!((idx.attainable("штраф штраф") - idf(2.0)).abs() < 1e-6);
-        assert_eq!(idx.attainable("ъъъ"), 0.0);
-        assert_eq!(LexicalIndex::build(&Graph::default()).attainable("штраф"), 0.0);
+        assert!((idx.attainable("ъъъ") - idf(0.0)).abs() < 1e-6);
+        assert_eq!(LexicalIndex::build(&Graph::default()).attainable("штраф"), 0.0, "an index over nothing attains nothing");
     }
 
     #[test]

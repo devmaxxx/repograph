@@ -130,12 +130,10 @@ pub fn run(repo: &Path, queries: &Path, out: &Path, depth: usize, no_dense: bool
             bm25_questions: lex.questions.as_ref().map(|i| i.search(&q.q, depth)).unwrap_or_default(),
             bm25_code: lex.code.as_ref().map(|i| i.search(&q.q, depth)).unwrap_or_default(),
             attainable_passages: lex.passages.attainable(&q.q),
-            // -0.0, not 0.0: the sign an empty sum takes under `f32`'s `Sum`. `dump` always asks
-            // for the code list (`Lexical::build(&graph, &loo, true)`), so its absence here means
-            // the build found zero documents — `attainable` on that still-real, still-empty index
-            // gives the same -0.0. `questions`' index is never built at all on a store with none
-            // (see `bm25_questions` above), so -0.0 there stands for the sum an absent index
-            // would give, not one an actual build produced.
+            // -0.0, not 0.0: the sign an empty sum takes under `f32`'s `Sum`. `questions`' index
+            // is never built at all on a store with none (see `bm25_questions` above), so -0.0
+            // here stands for the sum an absent index would give, not one an actual build
+            // produced — an index that was built and holds no documents attains a plain 0.0.
             attainable_questions: lex.questions.as_ref().map(|i| i.attainable(&q.q)).unwrap_or(-0.0),
             attainable_code: lex.code.as_ref().map(|i| i.attainable(&q.q)).unwrap_or(-0.0),
             dense_passages,

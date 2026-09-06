@@ -16,6 +16,10 @@ Forms, each a statistic of one list alone, so two lists compare in one unit:
     peak      (best/fifth)(Q) / (best/fifth)(P)              how far each best stands above its own list; five seats
     z         z(Q) / z(P)                                    the best as a z-score over the list, 20 deep
 
+The code-questions list, when `--code-seat` replays it on the plain path, is admitted under the
+same form at `--code-c` — a constant of its own, since a crossover is a procedure over a
+population and the seat decides on a different one — and contributes its first document only.
+
 Order of operations, as `heldout.py`'s header says and not optionally: a form's constant is the
 crossover on the held-out dumps (`crossover`), the recorded and developer suites are read after
 it is fixed (`score`), and the first form in the pre-registered order that passes the rule is
@@ -124,7 +128,7 @@ def admitted(form, c, lst, passages, a_list, a_passages):
     return sratio(form, stat(form, lst, a_list), stat(form, passages, a_passages)) >= c
 
 
-def lexical_lists(rec, form, c, code_seat, has_questions):
+def lexical_lists(rec, form, c, code_seat, has_questions, code_c=None):
     """`query::lexical_lists` on the plain path: [questions?] [passages] [code top-1?]."""
     p, q, code = rec["bm25_passages"], rec["bm25_questions"], rec["bm25_code"]
     if not has_questions:
@@ -133,16 +137,17 @@ def lexical_lists(rec, form, c, code_seat, has_questions):
     if admitted(form, c, q, p, rec["attainable_questions"], rec["attainable_passages"]):
         lists.append(ids(q[:PLAIN_DEPTH]))
     lists.append(ids(p[:PLAIN_DEPTH]))
-    if code_seat and admitted(form, c, code, p, rec["attainable_code"], rec["attainable_passages"]):
+    if code_seat and admitted(form, c if code_c is None else code_c, code, p,
+                              rec["attainable_code"], rec["attainable_passages"]):
         lists.append(ids(code[:1]))
     return lists
 
 
-def all_lists(rec, dense, form, c, code_seat, has_questions):
+def all_lists(rec, dense, form, c, code_seat, has_questions, code_c=None):
     lists = []
     if dense:
         lists.append(ids(rec["dense_passages"][:PLAIN_DEPTH]))
-    lists.extend(lexical_lists(rec, form, c, code_seat, has_questions))
+    lists.extend(lexical_lists(rec, form, c, code_seat, has_questions, code_c))
     return [l for l in lists if l]
 
 
@@ -191,11 +196,11 @@ def found(rec, seeds, expanded, files):
     return reached
 
 
-def replay(dump, store, form, c, code_seat):
+def replay(dump, store, form, c, code_seat, code_c=None):
     nb, files, has_questions = store
     out = []
     for rec in dump["queries"]:
-        lists = all_lists(rec, dump["meta"]["dense"], form, c, code_seat, has_questions)
+        lists = all_lists(rec, dump["meta"]["dense"], form, c, code_seat, has_questions, code_c)
         seeds, expanded = answer(rec, lists, nb, files=files)
         out.append((rec, seeds, expanded))
     return out, files
@@ -206,7 +211,7 @@ def cmd_check(args):
     bad = 0
     for path in args.dumps:
         dump = load(path)
-        rows, _ = replay(dump, store, args.form, args.c, args.code_seat)
+        rows, _ = replay(dump, store, args.form, args.c, args.code_seat, args.code_c)
         diffs = [(r["q"], s, e) for r, s, e in rows
                  if s != ids(r["ask"]["seeds"]) or e != [i for i, _, _ in r["ask"]["expanded"]]]
         bad += len(diffs)
@@ -222,12 +227,14 @@ def cmd_crossover(args):
     dump = load(args.heldout)
     if dump["meta"]["dense"] and not args.allow_dense:
         raise SystemExit("the constant is derived in the --no-dense arm; pass --allow-dense to read the other for information")
+    listed, attainable = (("bm25_code", "attainable_code") if args.list == "code"
+                          else ("bm25_questions", "attainable_questions"))
     rows = []
     for rec in dump["queries"]:
-        p, q = rec["bm25_passages"][:PLAIN_DEPTH], rec["bm25_questions"][:PLAIN_DEPTH]
+        p, q = rec["bm25_passages"][:PLAIN_DEPTH], rec[listed][:PLAIN_DEPTH]
         if not q or q[0][1] <= 0:
             continue
-        s = sratio(args.form, stat(args.form, q, rec["attainable_questions"]), stat(args.form, p, rec["attainable_passages"]))
+        s = sratio(args.form, stat(args.form, q, rec[attainable]), stat(args.form, p, rec["attainable_passages"]))
         a = set(anchors(rec["expect"]))
         rows.append((s, bool(a & set(ids(q[:SEATS]))), bool(a & set(ids(p[:SEATS])))))
     finite = sorted({s for s, _, _ in rows if math.isfinite(s)})
@@ -242,15 +249,16 @@ def cmd_crossover(args):
     above = [(qh, ph) for s, qh, ph in rows if s >= best]
     below = [(qh, ph) for s, qh, ph in rows if s < best]
     pct = lambda xs, k: f"{100 * sum(x[k] for x in xs) / len(xs):.0f}%" if xs else "—"
-    print(f"form={args.form} c={best:.3f}  ({len(rows)} questions with a questions list, {len(finite)} distinct finite values)")
-    print(f"  above c: {len(above)} questions — questions list holds the answer in top five {pct(above, 0)}, passage list {pct(above, 1)}")
-    print(f"  below c: {len(below)} questions — questions list {pct(below, 0)}, passage list {pct(below, 1)}")
+    label = f"{args.list} list"
+    print(f"form={args.form} c={best:.3f}  ({len(rows)} questions with a {label}, {len(finite)} distinct finite values)")
+    print(f"  above c: {len(above)} questions — {label} holds the answer in top five {pct(above, 0)}, passage list {pct(above, 1)}")
+    print(f"  below c: {len(below)} questions — {label} {pct(below, 0)}, passage list {pct(below, 1)}")
     print(f"  questions on the side of the list that holds their answer: {right(best)}")
 
 
-def score_suite(path, store, form, c, code_seat):
+def score_suite(path, store, form, c, code_seat, code_c=None):
     dump = load(path)
-    rows, files = replay(dump, store, form, c, code_seat)
+    rows, files = replay(dump, store, form, c, code_seat, code_c)
     by_kind = {}
     for rec, seeds, expanded in rows:
         k = by_kind.setdefault(rec["kind"], [0, 0])
@@ -259,26 +267,47 @@ def score_suite(path, store, form, c, code_seat):
     return by_kind
 
 
+def recorded_hits(dump):
+    """Each question's recorded answer — the binary's own — as whether an anchor sat in the
+    first five seeds, keyed the way `heldout.py` keys a pairing."""
+    out = {}
+    for rec in dump["queries"]:
+        key = (rec["q"], tuple(anchors(rec["expect"])))
+        out[key] = bool(set(key[1]) & set(ids(rec["ask"]["seeds"][:SEATS])))
+    return out
+
+
 def cmd_score(args):
     store = store_of(args.store)
     for label, path in (("recorded", args.rec), ("developer", args.dev)):
         for p in path or []:
-            k = score_suite(p, store, args.form, args.c, args.code_seat)
+            k = score_suite(p, store, args.form, args.c, args.code_seat, args.code_c)
             counts = "  ".join(f"{kind} {h}/{n}" for kind, (h, n) in k.items())
             total = sum(h for h, _ in k.values())
             print(f"{label} {Path(p).name}: {counts}  total {total}")
-    for p in args.ho or []:
+    ho = args.ho or []
+    bases = args.ho_base or []
+    if bases and len(bases) != len(ho):
+        raise SystemExit(f"--ho-base takes one path per --ho path: {len(ho)} dumps against {len(bases)} baselines")
+    for i, p in enumerate(ho):
         dump = load(p)
-        rows, _ = replay(dump, store, args.form, args.c, args.code_seat)
-        before, after = {}, {}
+        rows, _ = replay(dump, store, args.form, args.c, args.code_seat, args.code_c)
+        after = {}
         for rec, seeds, _ in rows:
             key = (rec["q"], tuple(anchors(rec["expect"])))
-            a = set(key[1])
-            before[key] = bool(a & set(ids(rec["ask"]["seeds"][:SEATS])))
-            after[key] = bool(a & set(seeds[:SEATS]))
+            after[key] = bool(set(key[1]) & set(seeds[:SEATS]))
+        if bases:
+            base_name = Path(bases[i]).name
+            before = recorded_hits(load(bases[i]))
+            # A paired test over two different question sets is not a paired test.
+            if set(before) != set(after):
+                raise SystemExit(f"{Path(p).name} and {base_name} are not the same question set")
+        else:
+            base_name = Path(p).name
+            before = recorded_hits(dump)
         lost, gained, pv = mcnemar(before, after)
         n = len(before)
-        print(f"held-out {Path(p).name}: recorded {sum(before.values())}/{n} → replay {sum(after.values())}/{n}  "
+        print(f"held-out {Path(p).name} vs {base_name}: recorded {sum(before.values())}/{n} → replay {sum(after.values())}/{n}  "
               f"{gained} gained, {lost} lost, exact McNemar p = {pv:.4f}")
 
 
@@ -314,6 +343,8 @@ def main():
     common.add_argument("--form", choices=FORMS, default="ratio")
     common.add_argument("--c", type=float, default=0.85, help="the form's constant")
     common.add_argument("--code-seat", action="store_true", help="admit the code list, one seat, under the same form")
+    common.add_argument("--code-c", type=float, default=None,
+                        help="the code seat's own constant; the questions list's --c when absent")
     p = sub.add_parser("check", parents=[common], help="every dump's recorded answer re-derived under the rule")
     p.add_argument("dumps", nargs="+")
     p.set_defaults(fn=cmd_check)
@@ -321,11 +352,15 @@ def main():
     p.add_argument("--heldout", required=True)
     p.add_argument("--form", choices=FORMS, required=True)
     p.add_argument("--allow-dense", action="store_true")
+    p.add_argument("--list", choices=["questions", "code"], default="questions",
+                   help="the list whose statistic the crossover splits on")
     p.set_defaults(fn=cmd_crossover)
     p = sub.add_parser("score", parents=[common], help="hits per kind on suites, recall and McNemar on held-out")
     p.add_argument("--rec", nargs="*")
     p.add_argument("--dev", nargs="*")
     p.add_argument("--ho", nargs="*")
+    p.add_argument("--ho-base", nargs="*", help="one dump per --ho path whose recorded answers are the before; "
+                                               "each dump's own recorded answers when absent")
     p.set_defaults(fn=cmd_score)
     p = sub.add_parser("g13", help="the G13 table from a developer-suite dump")
     p.add_argument("--dump", required=True)

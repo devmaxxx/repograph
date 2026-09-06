@@ -652,22 +652,39 @@ index's average length until the gate admitted it over the passage that held the
 39/40 → 38/40 without embeddings); as a list of their own admitted last on the same 0.85 gate they
 took two document answers off that same arm's recorded suite, the arm with embeddings unchanged; and
 capped at a single seat they read `where` 0/9 → 2/9 on the developer suite and still lost six of 400
-held-out questions in each arm, gaining none (p = 0.031). A store without code questions is
-therefore the old index byte for byte; `coverage` still counts documents, so the floors grade the
-same store the same way, and the summary line reports `code_questions=` beside it. What the
-questions buy, and what a seat for them costs, is measured in
-[the developer-questions results](docs/bench/2026-09-05-dev-cases-results.md).
+held-out questions in each arm, gaining none (p = 0.031). That seat was measured once more under
+the coverage admission at a constant of the code list's own — 0.902, the crossover of 800 held-out
+questions, half the fixture's document set and half drawn from a code-enriched copy's 3,463 code
+entries — and refused again for a different reason: it reads `where` 0/9 → 2/9 in both arms and
+takes the code held-out set from 54/400 to 122/400 and 40/400 to 115/400 (p = 0.0000), and it now
+clears the held-out clause that stopped it before (five document questions lost per arm, none
+gained, p = 0.0625), but it costs one recorded paraphrase case in the lexical arm — the code seed
+takes a slot and pushes off the fifth seed the answer was reached from. A store without code
+questions is therefore the old index byte for byte; `coverage` still counts documents, so the
+floors grade the same store the same way, and the summary line reports `code_questions=` beside it.
+What the questions buy, and what a seat for them costs, is measured in
+[the developer-questions results](docs/bench/2026-09-05-dev-cases-results.md) and, under the
+coverage form, in
+[the residue, the seat and the register](docs/bench/2026-09-06-residue-seat-register-results.md).
 
 Two ways of spending the documents' generated questions were measured and rejected: as extra dense
 rows pooled with the passages they bury targets (a passage at rank 2 fell to 87 behind other nodes'
 questions), and mixed into a node's own BM25 text they cost a keyword hit. What ships for those
 questions is the third — a BM25 list of their own, which the plain `ask` fuses alongside the passage
 list — when that list has earned its turn. Each list is asked what fraction of the question its
-best document actually reached: `best / attainable`, where `attainable` is the idf the query could
-have collected in that index at all. Those fractions are dimensionless, so the two lists compare
-in one unit whatever their raw scores are worth, and the questions list joins the fusion when its
-coverage reaches 0.761 of the passage list's. That constant is the crossover of 400 held-out
-generated questions in the `--no-dense` arm. Until 0.5.0 the admission compared the two raw bests
+best document actually reached: `best / attainable`, where `attainable` is the idf of every term
+the query asked for, priced in that index — a term the index never saw charged at the idf BM25
+gives `df = 0`, so a word a list cannot answer lowers its coverage instead of leaving its
+denominator. Those fractions are dimensionless, so the two lists compare in one unit whatever
+their raw scores are worth, and the questions list joins the fusion when its coverage reaches
+0.761 of the passage list's. That constant is the crossover of 400 held-out generated questions in
+the `--no-dense` arm. It was re-derived on that same set when the denominator began charging every
+term and returned 0.761 again, so the number did not move, but it belongs to the form that ships —
+[the residue, the seat and the register](docs/bench/2026-09-06-residue-seat-register-results.md)
+and [ADR-001, Amendment 9](docs/adr/ADR-001-paraphrase-recall-was-a-prediction.md). Until that
+change an absent term left the sum, and a list's coverage rose with every query term its index
+lacked; charging it moved no count in any of the four recorded arms and no case's verdict in
+either suite. Until 0.5.0 the admission compared the two raw bests
 at a ratio of 0.85, which moved with enrichment coverage and questions per node and was a constant
 of one store rather than of BM25 — gaps G8 and G12, closed by
 [the coverage admission results](docs/bench/2026-09-06-coverage-admission-results.md) and recorded

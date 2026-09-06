@@ -247,6 +247,10 @@ def cmd_record(args):
         git(args.corpus_path, "rev-parse", "--short", "HEAD") if args.corpus_path else None,
         args.note, git(REPO, "rev-parse", "--short", "HEAD"), tool_dirty(),
     )
+    # `report`'s improved/REGRESSED and chronic readings are per arm, so a store copy recorded
+    # under the fixture's arm name would read as the fixture itself moving.
+    if args.tag:
+        row["arm"] += f"+{args.tag}"
     append(row)
     print(f"{row['arm']}  {state_of(row)}  {counts_of(row['metrics'])}  -> {RUNS.name}")
 
@@ -555,6 +559,7 @@ def main():
     r.add_argument("--corpus", default="beauty-crm")
     r.add_argument("--corpus-path", default=None, help="corpus checkout, to record its commit")
     r.add_argument("--note", default="")
+    r.add_argument("--tag", default=None, help="appended to the arm name, so a store copy's rows never pool with the fixture's")
     r.set_defaults(func=cmd_record)
 
     i = sub.add_parser("import", help="append one row per tool from a compare result JSON")
