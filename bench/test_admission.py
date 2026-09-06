@@ -82,5 +82,15 @@ class Expansion(unittest.TestCase):
         self.assertEqual(expanded, [])
 
 
+class Recorded(unittest.TestCase):
+    def test_recorded_hits_reads_the_first_five_seeds_against_any_anchor(self):
+        dump = {"queries": [
+            {"q": "a", "expect": "N-1", "ask": {"seeds": [["x", 1.0], ["N-1", 0.5]]}},
+            {"q": "b", "expect": ["N-2", "N-3"], "ask": {"seeds": [["N-3", 1.0]]}},
+            {"q": "c", "expect": "N-4", "ask": {"seeds": [["1", 1], ["2", 1], ["3", 1], ["4", 1], ["5", 1], ["N-4", 1]]}},
+        ]}
+        self.assertEqual(a.recorded_hits(dump), {("a", ("N-1",)): True, ("b", ("N-2", "N-3")): True, ("c", ("N-4",)): False})
+
+
 if __name__ == "__main__":
     unittest.main()

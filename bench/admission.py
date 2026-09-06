@@ -259,6 +259,16 @@ def score_suite(path, store, form, c, code_seat):
     return by_kind
 
 
+def recorded_hits(dump):
+    """Each question's recorded answer — the binary's own — as whether an anchor sat in the
+    first five seeds, keyed the way `heldout.py` keys a pairing."""
+    out = {}
+    for rec in dump["queries"]:
+        key = (rec["q"], tuple(anchors(rec["expect"])))
+        out[key] = bool(set(key[1]) & set(ids(rec["ask"]["seeds"][:SEATS])))
+    return out
+
+
 def cmd_score(args):
     store = store_of(args.store)
     for label, path in (("recorded", args.rec), ("developer", args.dev)):
@@ -267,18 +277,29 @@ def cmd_score(args):
             counts = "  ".join(f"{kind} {h}/{n}" for kind, (h, n) in k.items())
             total = sum(h for h, _ in k.values())
             print(f"{label} {Path(p).name}: {counts}  total {total}")
-    for p in args.ho or []:
+    ho = args.ho or []
+    bases = args.ho_base or []
+    if bases and len(bases) != len(ho):
+        raise SystemExit(f"--ho-base takes one path per --ho path: {len(ho)} dumps against {len(bases)} baselines")
+    for i, p in enumerate(ho):
         dump = load(p)
         rows, _ = replay(dump, store, args.form, args.c, args.code_seat)
-        before, after = {}, {}
+        after = {}
         for rec, seeds, _ in rows:
             key = (rec["q"], tuple(anchors(rec["expect"])))
-            a = set(key[1])
-            before[key] = bool(a & set(ids(rec["ask"]["seeds"][:SEATS])))
-            after[key] = bool(a & set(seeds[:SEATS]))
+            after[key] = bool(set(key[1]) & set(seeds[:SEATS]))
+        if bases:
+            base_name = Path(bases[i]).name
+            before = recorded_hits(load(bases[i]))
+            # A paired test over two different question sets is not a paired test.
+            if set(before) != set(after):
+                raise SystemExit(f"{Path(p).name} and {base_name} are not the same question set")
+        else:
+            base_name = Path(p).name
+            before = recorded_hits(dump)
         lost, gained, pv = mcnemar(before, after)
         n = len(before)
-        print(f"held-out {Path(p).name}: recorded {sum(before.values())}/{n} → replay {sum(after.values())}/{n}  "
+        print(f"held-out {Path(p).name} vs {base_name}: recorded {sum(before.values())}/{n} → replay {sum(after.values())}/{n}  "
               f"{gained} gained, {lost} lost, exact McNemar p = {pv:.4f}")
 
 
@@ -326,6 +347,8 @@ def main():
     p.add_argument("--rec", nargs="*")
     p.add_argument("--dev", nargs="*")
     p.add_argument("--ho", nargs="*")
+    p.add_argument("--ho-base", nargs="*", help="one dump per --ho path whose recorded answers are the before; "
+                                               "each dump's own recorded answers when absent")
     p.set_defaults(fn=cmd_score)
     p = sub.add_parser("g13", help="the G13 table from a developer-suite dump")
     p.add_argument("--dump", required=True)

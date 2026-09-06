@@ -40,10 +40,18 @@ const PINNED: usize = 0;
 ///
 /// The value is the crossover of the 400 held-out questions in the `--no-dense` arm: the split
 /// that puts the most of them on the side of the list actually holding their answer in its top
-/// five (`/Users/max/bench/gaps-2026-09-05/admission-verdict.txt`). It was derived before either
-/// suite was read and is not re-derived, rounded or tuned; if the form fails, the form fails.
-/// The rule the form was judged against, written before it was ever run, and the measurements
-/// that judged it: `docs/superpowers/specs/2026-09-06-coverage-admission-design.md`.
+/// five. It was re-derived on 2026-09-06, on the same 400 questions in the same arm, when
+/// `attainable` began charging every query term rather than dropping the ones its index lacked
+/// (`/Users/max/bench/residue-seat-register-2026-09-06/t2-crossover.txt`,
+/// `docs/bench/2026-09-06-residue-seat-register-results.md`). It returned 0.761 — the same value
+/// the dropping denominator's crossover returned, on the earlier evidence
+/// (`/Users/max/bench/gaps-2026-09-05/admission-verdict.txt`) — so the literal did not move,
+/// but it is a constant of the form that ships, derived under it. Neither derivation was
+/// rounded, tuned or compared with the other: each was taken before either suite was opened, and
+/// if the form fails, the form fails. The rules the two forms were judged against, written before
+/// either was run, and the measurements that judged them:
+/// `docs/superpowers/specs/2026-09-06-coverage-admission-design.md` and
+/// `docs/superpowers/specs/2026-09-06-residue-seat-register-design.md`.
 const QUESTIONS_GATE: f64 = 0.761;
 
 /// `REPOGRAPH_QUESTIONS_GATE` overrides the constant for a measurement and for nothing else:
@@ -601,6 +609,29 @@ mod tests {
     }
 
     #[test]
+    fn an_index_that_lacks_a_query_term_covers_less_of_the_query_not_more() {
+        // Two indexes over the same two nodes. The passages hold both words of «штраф отмены»;
+        // the stored question holds «штраф» alone. Under the shipped denominator the questions
+        // list covered as much of the query as the passages did — the term it lacked left its
+        // denominator, which is the residue of G8 — and it was seated level with a list that
+        // answered twice as much. Now the missing term is charged and it is refused.
+        let mut g = Graph::default();
+        let mut e = Extraction::default();
+        e.node(NodeKind::Requirement, "FR-A", "штраф отмены", "", "a.md", 1);
+        e.node(NodeKind::Requirement, "FR-B", "другое", "", "a.md", 5);
+        g.apply(e);
+        let mut qs = Questions::default();
+        qs.entries.insert("FR-A".into(), crate::enrich::Entry { hash: String::new(), questions: vec!["какой штраф".into()] });
+        let l = lex(&g, &qs);
+        let qi = l.questions.as_ref().unwrap();
+        let best = |x: &[(String, f32)]| x.first().map(|(_, s)| *s).unwrap_or(0.0);
+        let q = "штраф отмены";
+        let (bq, aq, bp, ap) = (best(&qi.search(q, 10)), qi.attainable(q), best(&l.passages.search(q, 10)), l.passages.attainable(q));
+        assert!(coverage(bq, aq) < coverage(bp, ap), "questions covered {}, passages {}", coverage(bq, aq), coverage(bp, ap));
+        assert!(!admits(bq, aq, bp, ap, QUESTIONS_GATE), "{} against {}", coverage(bq, aq), coverage(bp, ap));
+    }
+
+    #[test]
     fn a_passage_list_whose_best_is_zero_is_no_bar_at_all() {
         // Nothing scored in the passage index, so its coverage is zero however much the query
         // could have reached there, and the questions list takes the seat unopposed.
@@ -646,33 +677,43 @@ mod tests {
     }
 
     #[test]
-    fn what_the_raw_ratio_separated_by_magnitude_the_coverage_admission_does_not() {
-        // The two queries the ratio ranked furthest apart on this graph. «штраф считается» put
-        // the passage index at 2.64 against the questions index's 1.07, a raw ratio of 0.41 that
-        // the old gate refused; «штраф отмену» reversed it, 2.14 against 1.32. Under coverage
-        // both read 0.696 against 0.858 — the same pair of numbers — because each index is now
-        // scored against what this query could reach inside it, and on a graph where every term
-        // of both queries is present in both indices that fraction does not move with the raw
-        // magnitudes. The admission is 0.811 either way, above the constant, so the questions
-        // list is seated for both. The form's discrimination lives entirely in `attainable`, and
-        // a two-node graph cannot exercise it: what it does to real questions is measured on the
-        // fixture, in docs/bench/2026-09-06-coverage-admission-results.md, not asserted here.
+    fn a_term_the_questions_index_lacks_now_costs_it_the_seat_the_shipped_form_gave_it() {
+        // The two queries the raw ratio ranked furthest apart on this graph. Under the shipped
+        // denominator — which dropped a term the index did not hold instead of charging it —
+        // both read 0.696 against 0.858 and were admitted at 0.811, because each query has one
+        // term that one of the two indices lacks and dropping it flattered whichever index that
+        // was. Charged, the two queries separate, and in opposite directions.
+        //
+        // «штраф считается»: «считается» is in FR-PAY-22's body and in no stored question, so it
+        // is the questions index that pays. Its coverage falls to 0.256 against the passages'
+        // 0.858 and the admission to 0.299 — under the constant, refused, and the plain answer is
+        // the passage the query actually names.
+        //
+        // «штраф отмену»: the missing term is the passage index's, so the arithmetic runs the
+        // other way — the questions list keeps 0.696 while the passages fall to 0.316 and the
+        // admission rises to 2.200. Charging the term does not favour one list; it charges
+        // whichever index was being flattered.
         let g = graph();
         let mut qs = questions();
         qs.entries.get_mut("FR-PAY-20").unwrap().questions.push("какой штраф за отмену".into());
         let l = lex(&g, &qs);
         let qi = l.questions.as_ref().unwrap();
         let best = |x: &[(String, f32)]| x.first().map(|(_, s)| *s).unwrap_or(0.0);
-        for q in ["штраф считается", "штраф отмену"] {
+        let read = |q: &str| {
             let (bq, aq) = (best(&qi.search(q, 10)), qi.attainable(q));
             let (bp, ap) = (best(&l.passages.search(q, 10)), l.passages.attainable(q));
-            assert!((coverage(bq, aq) - 0.696).abs() < 5e-4, "{q}: questions covered {}", coverage(bq, aq));
-            assert!((coverage(bp, ap) - 0.858).abs() < 5e-4, "{q}: passages covered {}", coverage(bp, ap));
-            assert!(admits(bq, aq, bp, ap, QUESTIONS_GATE), "{q}");
-        }
+            (coverage(bq, aq), coverage(bp, ap), admits(bq, aq, bp, ap, QUESTIONS_GATE))
+        };
+        let (cq, cp, seated) = read("штраф считается");
+        assert!((cq - 0.256).abs() < 5e-4 && (cp - 0.858).abs() < 5e-4, "questions {cq}, passages {cp}");
+        assert!(!seated, "the questions list covered {cq} of what it was asked against the passages' {cp}");
+        let (cq, cp, seated) = read("штраф отмену");
+        assert!((cq - 0.696).abs() < 5e-4 && (cp - 0.316).abs() < 5e-4, "questions {cq}, passages {cp}");
+        assert!(seated, "the questions list covered {cq} against the passages' {cp}");
+
         let a = ask(&g, &ids(), &lex(&g, &qs), None, None, &["штраф".into(), "считается".into()], &opts());
         let order: Vec<&str> = a.seeds.iter().map(|h| h.id.as_str()).collect();
-        assert_eq!(order, ["FR-PAY-20", "FR-PAY-22"], "{order:?}");
+        assert_eq!(order[0], "FR-PAY-22", "{order:?}");
 
         // The gate is relative. «штраф отмену» is both words of the stored question and one of
         // the passage, 2.14 against 1.32, and the question list leads as before.
