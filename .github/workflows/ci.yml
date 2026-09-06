@@ -67,3 +67,9 @@ jobs:
       # without symlink rights takes the second path, and a user's box is that account.
       - shell: pwsh
         run: Get-ChildItem -Recurse $env:FASTEMBED_CACHE_DIR | Where-Object { $_.Attributes -match 'ReparsePoint' } | Select-Object FullName
+      # `changes` hands the repository path to `git -C`. The checkout is the corpus: built once
+      # lexically, then diffed against HEAD, which a fresh clone can always do.
+      - shell: pwsh
+        run: |
+          cargo run --release --quiet -- --no-dense --repo "$env:GITHUB_WORKSPACE" build
+          cargo run --release --quiet -- --no-dense --repo "$env:GITHUB_WORKSPACE" changes --base HEAD
