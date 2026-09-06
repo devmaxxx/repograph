@@ -40,16 +40,20 @@ fn mirror_name(json: &str) -> String { format!("{}.bin", json.trim_end_matches("
 fn rename_over(from: &Path, to: &Path) -> std::io::Result<()> { std::fs::rename(from, to) }
 
 /// A rename over a file some other program has open without delete sharing — an indexer, a sync
-/// client, a scanner — is refused with a sharing violation for as long as that handle lives, which
-/// is milliseconds. std retries nothing for that error, so this does, for about half a second in
-/// all, before the store is left as it was.
+/// client, a scanner — is refused for as long as that handle lives, which is milliseconds. A held
+/// *destination* is reported as access-denied rather than as a sharing violation (measured on a
+/// Windows runner, where the sharing-violation-only form of this let both tests fail with os error
+/// 5); std's own retry for access-denied is a second rename with POSIX semantics, which the
+/// holder's share mode refuses just as flatly, so waiting is the only thing left. Both errors are
+/// retried, for about half a second in all, before the store is left as it was.
 #[cfg(windows)]
 fn rename_over(from: &Path, to: &Path) -> std::io::Result<()> {
-    const SHARING_VIOLATION: i32 = 32;
+    const HELD_BY_ANOTHER_PROCESS: [i32; 2] = [5, 32];
     let mut wait = std::time::Duration::from_millis(1);
     loop {
         match std::fs::rename(from, to) {
-            Err(e) if e.raw_os_error() == Some(SHARING_VIOLATION) && wait < std::time::Duration::from_millis(512) => {
+            Err(e) if e.raw_os_error().is_some_and(|c| HELD_BY_ANOTHER_PROCESS.contains(&c))
+                && wait < std::time::Duration::from_millis(512) => {
                 std::thread::sleep(wait);
                 wait *= 2;
             }
@@ -367,15 +371,18 @@ mod tests {
         assert_eq!(store.read_bytes("graph.json").unwrap().as_deref(), Some(&b"new"[..]));
     }
 
+    /// The error a held destination gives, pinned: 5, not the 32 a sharing violation would be —
+    /// the rename is refused where it deletes the file it replaces, and that is reported as
+    /// access denied.
     #[cfg(windows)]
     #[test]
-    fn a_rename_over_a_file_held_past_the_budget_fails_with_the_sharing_error_and_keeps_the_old_bytes() {
+    fn a_rename_over_a_file_held_past_the_budget_fails_and_keeps_the_old_bytes() {
         let d = tempfile::tempdir().unwrap();
         let store = Store::new(d.path());
         store.write_atomic("graph.json", b"old").unwrap();
         let holder = hold_open_for(&d.path().join(".repograph/graph.json"), 1500);
         let err = store.write_atomic("graph.json", b"new").unwrap_err();
-        assert!(format!("{err:#}").contains("os error 32"), "{err:#}");
+        assert!(format!("{err:#}").contains("os error 5"), "{err:#}");
         holder.join().unwrap();
         assert_eq!(store.read_bytes("graph.json").unwrap().as_deref(), Some(&b"old"[..]));
     }
