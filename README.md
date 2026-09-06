@@ -201,11 +201,11 @@ build counts as another), a server started `--no-dense` asked a fused question, 
 that quietly costs a cold process, or quietly gets a lexical answer, looks like nothing at all. The
 other arm pairing is not a mismatch — a server holding the model answers `--no-dense` lexically,
 which is what was asked for. A client never deletes the socket file — a refused connect is also
-what a live server with a full backlog gives — so only `serve` removes one. On unix it removes
-the one it bound itself, told from a replacement's by the socket file's device and inode; Windows
-gives std no identity to read there, so a `serve` exiting leaves the file and the next one removes
-it before binding, which is what both platforms already do after a Ctrl-C. Either way the file at
-worst costs a client one refused connect.
+what a live server with a full backlog gives — so only `serve` removes one, and only the one it
+bound itself: told from a replacement's by the socket file's device and inode on unix, and by
+NTFS's file reference number on Windows. A server killed outright removes nothing, and the next
+one removes the file it left before binding; until then that file at worst costs a client one
+refused connect.
 
 The socket path is limited to 108 bytes on Linux and Windows and 104 on macOS; a repository deep
 enough to exceed it cannot start `serve`, and `ask` answers in its own process as it would with no
