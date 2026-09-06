@@ -5,7 +5,7 @@ use crate::bench::Expect;
 use crate::config::Config;
 use crate::enrich::Questions;
 use crate::ids::IdMatcher;
-use crate::index::{dense::DenseIndex, embed::Embedder, lexical::LexicalIndex};
+use crate::index::{dense::DenseIndex, embed::Embedder, lexical::Lexical};
 use crate::query::{self, Options};
 use crate::store::Store;
 use anyhow::{Context, Result};
@@ -35,6 +35,12 @@ struct Record {
     bm25_passages: Vec<(String, f32)>,
     bm25_questions: Vec<(String, f32)>,
     bm25_code: Vec<(String, f32)>,
+    /// What each query could reach in the index its list came from, the denominator of the
+    /// coverage admission (`LexicalIndex::attainable`). Recorded so an admission rule can be
+    /// replayed over these lists offline, one binary and no re-run per candidate rule.
+    attainable_passages: f32,
+    attainable_questions: f32,
+    attainable_code: f32,
     loo_hash: String,
     loo_rows: Vec<usize>,
     ask: Ask,
@@ -68,9 +74,10 @@ pub fn run(repo: &Path, queries: &Path, out: &Path, depth: usize, no_dense: bool
             if let Some(e) = loo.entries.get_mut(anchor) { e.questions.retain(|t| t != &q.q); }
         }
     }
-    let lexical = LexicalIndex::build(&graph);
-    let lexical_q = LexicalIndex::build_questions(&graph, &loo);
-    let lexical_c = LexicalIndex::build_code_questions(&graph, &loo);
+    // A dump is a diagnostic record of every retriever, not the fusion any one query took, so
+    // it always asks for the code list — unlike a resident `Context`, one build here serves
+    // every query in the suite.
+    let lex = Lexical::build(&graph, &loo, true);
     // `--no-dense` records the lexical-only arm: the dense lists stay empty and `ask` answers
     // without them, exactly as `ask --no-dense` would, so the held-out gate can be read in the
     // arm the floors also grade.
@@ -109,15 +116,28 @@ pub fn run(repo: &Path, queries: &Path, out: &Path, depth: usize, no_dense: bool
             (p.into_iter().map(|(id, _)| id).collect(), g.into_iter().map(|(id, _)| id).collect())
         };
         let dense_arm: Option<query::Dense> = if no_dense { None } else { Some(&dense_fn) };
-        let answer = query::ask(&graph, &ids, &loo, dense_arm, None, &words, &opts);
+        let answer = query::ask(&graph, &ids, &lex, dense_arm, None, &words, &opts);
         records.push(Record {
             q: q.q.clone(),
             expect: q.expect.clone(),
             kind: q.kind.clone(),
             exact: Exact { ids: exact_ids, whole_question },
-            bm25_passages: lexical.search(&q.q, depth),
-            bm25_questions: lexical_q.search(&q.q, depth),
-            bm25_code: lexical_c.search(&q.q, depth),
+            bm25_passages: lex.passages.search(&q.q, depth),
+            // A store with no questions never builds this index at all (`Lexical::build`'s
+            // `entries.is_empty()` guard) — `build_questions` on empty entries is a real,
+            // non-empty index of bare ids, so the guard is what keeps the list out of `ask`'s
+            // fusion, and this `[]` records that same absence rather than a list nothing reads.
+            bm25_questions: lex.questions.as_ref().map(|i| i.search(&q.q, depth)).unwrap_or_default(),
+            bm25_code: lex.code.as_ref().map(|i| i.search(&q.q, depth)).unwrap_or_default(),
+            attainable_passages: lex.passages.attainable(&q.q),
+            // -0.0, not 0.0: the sign an empty sum takes under `f32`'s `Sum`. `dump` always asks
+            // for the code list (`Lexical::build(&graph, &loo, true)`), so its absence here means
+            // the build found zero documents — `attainable` on that still-real, still-empty index
+            // gives the same -0.0. `questions`' index is never built at all on a store with none
+            // (see `bm25_questions` above), so -0.0 there stands for the sum an absent index
+            // would give, not one an actual build produced.
+            attainable_questions: lex.questions.as_ref().map(|i| i.attainable(&q.q)).unwrap_or(-0.0),
+            attainable_code: lex.code.as_ref().map(|i| i.attainable(&q.q)).unwrap_or(-0.0),
             dense_passages,
             dense_questions,
             loo_hash,
@@ -142,6 +162,30 @@ pub fn run(repo: &Path, queries: &Path, out: &Path, depth: usize, no_dense: bool
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // Pins the decision in the two comments above: a graph `enrich` never touched dumps an empty
+    // questions list and the -0.0 an absent index's sum matches, not the real ranked list and
+    // positive sum a direct `LexicalIndex::build_questions` call over empty entries would give.
+    #[test]
+    fn a_raw_store_dumps_no_questions_list_and_the_empty_sum_it_matches() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("docs")).unwrap();
+        std::fs::write(dir.path().join("docs/a.md"), "# A\n\n**FR-PAY-22 · MUST · cancellation window**\n\nbody\n").unwrap();
+        let repo = dir.path();
+        let cfg = Config::default();
+        crate::run_update(repo, &cfg, &crate::extractors(repo, &cfg).unwrap(), true).unwrap();
+        let queries_path = dir.path().join("queries.jsonl");
+        // The query is the id itself, not a word from the label: an index of bare ids (what
+        // `build_questions` over empty entries actually builds) ranks this above the passage
+        // that carries it, so this is the shape that would slip past a weaker query untouched.
+        std::fs::write(&queries_path, r#"{"q": "FR-PAY-22", "expect": "FR-PAY-22", "kind": "keyword"}"#).unwrap();
+        let out_path = dir.path().join("out.json");
+        run(repo, &queries_path, &out_path, 5, true).unwrap();
+        let text = std::fs::read_to_string(&out_path).unwrap();
+        let dump: serde_json::Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(dump["queries"][0]["bm25_questions"], serde_json::json!([]));
+        assert!(text.contains(r#""attainable_questions":-0.0"#), "{text}");
+    }
 
     #[test]
     fn a_query_line_deserializes_its_three_required_fields() {
@@ -183,16 +227,23 @@ mod tests {
             bm25_passages: vec![],
             bm25_questions: vec![],
             bm25_code: vec![],
+            attainable_passages: 1.5,
+            attainable_questions: 0.0,
+            attainable_code: 0.0,
             loo_hash: "abc".into(),
             loo_rows: vec![3],
             ask: Ask { seeds: vec![("FR-PAY-22".into(), 1.0)], expanded: vec![("N-151".into(), 0.5, "FR-PAY-22".into())] },
         };
         let v = serde_json::to_value(&record).unwrap();
-        for key in ["q", "expect", "kind", "exact", "qvec", "dense_passages", "dense_questions", "bm25_passages", "bm25_questions", "bm25_code", "loo_hash", "loo_rows", "ask"] {
+        for key in ["q", "expect", "kind", "exact", "qvec", "dense_passages", "dense_questions", "bm25_passages", "bm25_questions", "bm25_code", "attainable_passages", "attainable_questions", "attainable_code", "loo_hash", "loo_rows", "ask"] {
             assert!(v.get(key).is_some(), "missing field {key}");
         }
         assert_eq!(v["expect"], "FR-PAY-22");
         assert_eq!(v["exact"]["whole_question"], true);
         assert_eq!(v["ask"]["expanded"][0][2], "FR-PAY-22");
+        let text = serde_json::to_string(&record).unwrap();
+        assert!(text.contains(r#""attainable_passages":1.5"#), "{text}");
+        assert!(text.contains(r#""attainable_questions":0.0"#), "{text}");
+        assert!(text.contains(r#""attainable_code":0.0"#), "{text}");
     }
 }

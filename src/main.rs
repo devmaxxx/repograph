@@ -518,7 +518,7 @@ mod tests {
         let ids = ids::IdMatcher::new(&cfg.id_families, &cfg.milestone_families);
         let opts = query::Options { seeds: 5, bodies: false, dense: false, json: false, depth: rerank::DEPTH };
         let words = ["refund".to_string(), "window".to_string()];
-        let answer = query::ask(&graph, &ids, &enrich::Questions::default(), None, None, &words, &opts);
+        let answer = query::ask(&graph, &ids, &index::lexical::Lexical::build(&graph, &enrich::Questions::default(), false), None, None, &words, &opts);
         assert!(query::render(&answer, &graph, &opts).contains("FR-PAY-23"));
         // The store carries the edit too, so the next reader has nothing left to redo.
         assert!(store.load().unwrap().0.nodes.contains_key("FR-PAY-23"));

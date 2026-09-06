@@ -45,18 +45,11 @@ SUMMARY = re.compile(
 KIND = re.compile(r"(\S+) (\d+)/(\d+)")
 RERANK = re.compile(r"rerank(_local)?=true depth=(\d+)")
 SUITE = re.compile(r"suite=(\S+) gated=(true|false)")
+MODEL = re.compile(r"model=(\S+)")
 GRADED = ("keyword", "paraphrase", "code")
 
-# The floors live in one place -- `passes` in src/bench.rs -- and are read from there rather
-# than restated here, because a floor that moves in Rust and not in Python would make every
-# headroom figure in the report quietly wrong.
-ARMS = re.compile(
-    r"\(true,\s*true\)\s*=>\s*\((\d+),\s*(\d+)\).*?"
-    r"\(true,\s*false\)\s*=>\s*\((\d+),\s*(\d+)\).*?"
-    r"\(false,\s*true\)\s*=>\s*\((\d+),\s*(\d+)\).*?"
-    r"\(false,\s*false\)\s*=>\s*\((\d+),\s*(\d+)\)",
-    re.S,
-)
+# One row per line of `FLOORS` in src/bench.rs: (enriched, dense, Floors::<Model>, keyword, paraphrase).
+ROW = re.compile(r"\((true|false),\s*(true|false),\s*Floors::(Small|Large),\s*(\d+),\s*(\d+)\)")
 TAIL = re.compile(r"s\.kind\(\"code\"\)\.0 >= (\d+) && s\.p90_tokens <= (\d+)")
 
 
@@ -86,31 +79,21 @@ def passes_body(text):
 
 
 def floors(source=None):
-    """The four (keyword, paraphrase) pairs plus the code floor and token ceiling.
-
-    Every number is read from inside `passes`, with that function's own comments stripped
-    first. Sixteen lines of prose about the floors sit directly above it and discuss them in
-    the same notation the code uses, so a search over the file would sooner or later read a
-    sentence instead of the code -- and quietly, which is the one failure this must not have.
-
-    The one shape still able to fool it is a string literal inside `passes` spelling out the
-    tail. `passes` holds no strings, and if that changes the comment stripper would maul the
-    literal and the match would fail loudly rather than answer wrongly.
-    """
+    """Every (enriched, dense, model) arm's floors plus the code floor and token ceiling,
+    read from `FLOORS` and `passes` in src/bench.rs rather than restated here."""
     text = (source or REPO / "src" / "bench.rs").read_text()
     body = passes_body(text)
     body = re.sub(r"//[^\n]*|/\*.*?\*/", "", body, flags=re.S) if body else ""
-    arms, tail = ARMS.search(body), TAIL.search(body)
-    if not body or not arms or not tail:
-        raise SystemExit("cannot read the floors out of src/bench.rs -- `passes` changed shape")
-    n = [int(g) for g in arms.groups()]
+    tail = TAIL.search(body)
+    table = re.search(r"const FLOORS[^=]*=\s*\[(.*?)\];", text, re.S)
+    rows = ROW.findall(table.group(1)) if table else []
+    if not body or not tail or len(rows) < 6:
+        raise SystemExit("cannot read the floors out of src/bench.rs -- `FLOORS` or `passes` changed shape")
     code, p90 = int(tail.group(1)), int(tail.group(2))
-    return {
-        (True, True): {"keyword": n[0], "paraphrase": n[1], "code": code, "p90_tokens": p90},
-        (True, False): {"keyword": n[2], "paraphrase": n[3], "code": code, "p90_tokens": p90},
-        (False, True): {"keyword": n[4], "paraphrase": n[5], "code": code, "p90_tokens": p90},
-        (False, False): {"keyword": n[6], "paraphrase": n[7], "code": code, "p90_tokens": p90},
-    }
+    out = {}
+    for enriched, dense, model, keyword, paraphrase in rows:
+        out[(enriched == "true", dense == "true", model.lower())] = {"keyword": int(keyword), "paraphrase": int(paraphrase), "code": code, "p90_tokens": p90}
+    return out
 
 
 def git(repo, *args):
@@ -157,6 +140,7 @@ def parse_bench(text):
     dense, enriched = g.group(3) == "true", g.group(4) == "true"
     rr = RERANK.search(g.group(7) or "")
     suite = SUITE.search(g.group(7) or "")
+    model = MODEL.search(g.group(7) or "")
     metrics = {kind: [int(h), int(n)] for kind, h, n in KIND.findall(g.group(1))}
     metrics["p90_tokens"] = int(g.group(2))
     return {
@@ -170,6 +154,8 @@ def parse_bench(text):
         # one `bench` would run, and it was graded whenever it had the three graded kinds.
         "suite": suite.group(1) if suite else "built-in",
         "gated": (suite.group(2) == "true") if suite else all(k in metrics for k in GRADED),
+        # A transcript from before the model field is a small-model run, the only kind there was.
+        "model": model.group(1) if model else "small",
         "cases": cases,
         "tokens": tokens,
     }
@@ -177,8 +163,12 @@ def parse_bench(text):
 
 def arm_name(parsed):
     """`bench:dense+enriched` for the recorded suite; another suite names itself in brackets,
-    so its runs never share a history -- or a comparability window -- with the recorded one."""
+    so its runs never share a history -- or a comparability window -- with the recorded one.
+    A dense arm under a model other than the small default names itself too (`+large`, or the
+    model string for one with no floors), so its history never pools with the small model's."""
     parts = ["dense" if parsed["dense"] else "lexical", "enriched" if parsed["enriched"] else "raw"]
+    if parsed["dense"] and parsed["model"] != "small":
+        parts.append(parsed["model"])
     if parsed["rerank"]:
         parts.append(f"rerank-{parsed['rerank']}-{parsed['depth']}")
     suite = parsed.get("suite") or "built-in"
@@ -208,9 +198,14 @@ def tool_dirty(repo=None):
 
 def build_row(parsed, corpus, corpus_commit, note, tool_commit, dirty, floor_table=None):
     """One history row. Floors and headroom exist only for a graded run: a suite without floors
-    of its own is measured, and a `green` it never earned would read as a claim."""
-    gated = parsed["gated"]
-    floor = (floor_table or floors())[(parsed["enriched"], parsed["dense"])] if gated else None
+    of its own is measured, and a `green` it never earned would read as a claim. The model that
+    wrote a dense arm's rows decides which floors it reads; a model not in the table (this
+    transcript's `gated` already says so, but the lookup checks it again rather than trust it)
+    is measured and never graded."""
+    model_key = parsed["model"] if parsed["dense"] else "small"
+    found = (floor_table or floors()).get((parsed["enriched"], parsed["dense"], model_key))
+    gated = parsed["gated"] and found is not None
+    floor = found if gated else None
     room = headroom(parsed["metrics"], floor) if gated else None
     return {
         "when": datetime.now(timezone.utc).replace(microsecond=0).isoformat(),

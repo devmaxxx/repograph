@@ -33,6 +33,11 @@ where      apps/api/src/modules/staff/staff.controller.ts HIT  1/1  150 tok  к�
 long 1/1  cross 0/1  multi 1/1  where 1/1  p90 240 tok  dense=true  enriched=true (1996/1996 nodes)  suite=dev-cases gated=false
 """
 
+# $G/t5-large-enriched-1.txt, measured before `model=` existed on the summary line.
+LARGE_ENRICHED_NO_MODEL = """\
+keyword 40/40  paraphrase 22/30  code 12/12  p90 224 tok  dense=true  enriched=true (1996/1996 nodes)  suite=built-in gated=true
+"""
+
 DUPLICATE_ANCHOR_TRANSCRIPT = """\
 rule       ADR-031      HIT  1/1  180 tok  можно ли создать второй визит
 rule       ADR-031      miss 0/1  190 tok  повторный POST плодит бронь
@@ -46,16 +51,23 @@ PROSE = """\
 // was the shape before the ceiling was rounded.
 """
 
+FLOORS_TABLE = """\
+const FLOORS: [(bool, bool, Floors, usize, usize); 6] = [
+    (true, true, Floors::Small, 40, 14),
+    (true, false, Floors::Small, 40, 11),
+    (false, true, Floors::Small, 40, 9),
+    (false, false, Floors::Small, 39, 7),
+    (true, true, Floors::Large, 40, 22),
+    (false, true, Floors::Large, 40, 17),
+];
+"""
+
 PASSES = """\
-pub fn passes(s: &Summary, dense: bool, enriched: bool) -> bool {
-    // a comment mentioning (true, true) => (99, 99) inside prose
-    let (keyword, paraphrase) = match (enriched, dense) {
-        // and one inside the block: (true, true) => (98, 98) was the old pair
-        (true, true) => (40, 14),
-        (true, false) => (40, 11),
-        (false, true) => (40, 9),
-        (false, false) => (39, 7),
-    };
+pub fn passes(s: &Summary, dense: bool, enriched: bool, floors: Floors) -> bool {
+    // a comment mentioning (true, true, Floors::Small, 99, 99) inside prose
+    if dense && floors == Floors::None { return false; }
+    let key = if dense { floors } else { Floors::Small };
+    let Some(&(_, _, _, keyword, paraphrase)) = FLOORS.iter().find(|r| r.0 == enriched && r.1 == dense && r.2 == key) else { return false };
     s.kind("keyword").0 >= keyword && s.kind("paraphrase").0 >= paraphrase && s.kind("code").0 >= 12 && s.p90_tokens <= 230
 }
 """
@@ -102,7 +114,7 @@ class ParseBench(unittest.TestCase):
         self.assertEqual(p["tokens"], {"rule/ADR-031": 180, "rule/ADR-031#2": 190})
 
     def test_a_row_for_an_ungated_run_carries_no_floors_and_no_verdict(self):
-        table = {(True, True): {"keyword": 40, "paraphrase": 14, "code": 12, "p90_tokens": 230}}
+        table = {(True, True, "small"): {"keyword": 40, "paraphrase": 14, "code": 12, "p90_tokens": 230}}
         row = track.build_row(track.parse_bench(DEV_TRANSCRIPT), "beauty-crm", "502e8a6d", "", "abc", False, table)
         self.assertEqual((row["floors"], row["headroom"], row["green"]), (None, None, None))
         self.assertEqual((row["suite"], row["gated"]), ("dev-cases", False))
@@ -111,6 +123,38 @@ class ParseBench(unittest.TestCase):
         self.assertEqual(graded["headroom"]["keyword"], -3)
         self.assertFalse(graded["green"])
         self.assertEqual(track.state_of(graded), "RED")
+
+    def test_a_transcript_without_the_model_field_is_a_small_model_run(self):
+        # A transcript from before the model field existed is what every store was, back then.
+        p = track.parse_bench(LARGE_ENRICHED_NO_MODEL)
+        self.assertEqual(p["model"], "small")
+        self.assertEqual(track.arm_name(p), "bench:dense+enriched")
+
+    def test_a_large_model_run_is_graded_on_its_own_floors_and_named_apart(self):
+        line = LARGE_ENRICHED_NO_MODEL.replace(" (1996/1996 nodes)", " (1996/1996 nodes) model=large")
+        p = track.parse_bench(line)
+        self.assertEqual(p["model"], "large")
+        self.assertEqual(track.arm_name(p), "bench:dense+enriched+large")
+        table = {(True, True, "small"): {"keyword": 40, "paraphrase": 14, "code": 12, "p90_tokens": 230},
+                 (True, True, "large"): {"keyword": 40, "paraphrase": 22, "code": 12, "p90_tokens": 230}}
+        row = track.build_row(p, "beauty-crm", "502e8a6d", "", "abc", False, table)
+        self.assertTrue(row["gated"])
+        self.assertTrue(row["green"])
+        self.assertEqual(row["floors"]["paraphrase"], 22, "the large floor, not the small model's 14")
+
+    def test_build_row_refuses_to_grade_a_model_the_table_has_no_floors_for(self):
+        # This binary always prints gated=false for a model it holds no floors for, so a
+        # gated=true transcript naming one is not something this build emits -- only a
+        # different one. build_row re-derives gated from the table rather than trusting it.
+        unknown_model_line = ("keyword 40/40  paraphrase 15/30  code 12/12  p90 220 tok  dense=true  enriched=true "
+                              "(1996/1996 nodes)  suite=built-in gated=true model=BAAI/bge-m3\n")
+        p = track.parse_bench(unknown_model_line)
+        self.assertEqual(p["model"], "BAAI/bge-m3")
+        table = {(True, True, "small"): {"keyword": 40, "paraphrase": 14, "code": 12, "p90_tokens": 230}}
+        row = track.build_row(p, "beauty-crm", "502e8a6d", "", "abc", False, table)
+        self.assertFalse(row["gated"])
+        self.assertEqual((row["floors"], row["headroom"], row["green"]), (None, None, None))
+        self.assertEqual(track.state_of(row), "measured, no floors")
 
     def test_a_run_that_never_reached_the_summary_is_refused(self):
         # A crashed or interrupted run must not enter the history as a row of zeroes.
@@ -126,20 +170,22 @@ class ParseBench(unittest.TestCase):
         self.assertEqual(track.arm_name(p), "bench:dense+enriched+rerank-local-200")
 
     def test_arm_names_separate_the_four_grading_arms(self):
-        base = dict(rerank=None, depth=None)
+        base = dict(rerank=None, depth=None, model="small")
         names = {track.arm_name(dict(dense=d, enriched=e, **base))
                  for d in (True, False) for e in (True, False)}
         self.assertEqual(len(names), 4)
 
 
 class Floors(unittest.TestCase):
-    def test_reads_the_four_arms_from_the_rust_source(self):
+    def test_reads_the_six_arms_from_the_rust_source(self):
         with tempfile.NamedTemporaryFile("w", suffix=".rs", delete=False) as f:
-            f.write(PASSES)
+            f.write(FLOORS_TABLE + PASSES)
             path = Path(f.name)
         f = track.floors(path)
-        self.assertEqual(f[(True, True)], {"keyword": 40, "paraphrase": 14, "code": 12, "p90_tokens": 230})
-        self.assertEqual(f[(False, False)], {"keyword": 39, "paraphrase": 7, "code": 12, "p90_tokens": 230})
+        self.assertEqual(len(f), 6)
+        self.assertEqual(f[(True, True, "small")], {"keyword": 40, "paraphrase": 14, "code": 12, "p90_tokens": 230})
+        self.assertEqual(f[(False, False, "small")], {"keyword": 39, "paraphrase": 7, "code": 12, "p90_tokens": 230})
+        self.assertEqual(f[(True, True, "large")], {"keyword": 40, "paraphrase": 22, "code": 12, "p90_tokens": 230})
 
     def test_a_changed_shape_fails_loudly(self):
         # Silently falling back to remembered floors would make every headroom figure wrong
@@ -154,19 +200,19 @@ class Floors(unittest.TestCase):
         # The one way this parser could be wrong without saying so: reading a sentence about
         # the floors instead of the floors.
         with tempfile.NamedTemporaryFile("w", suffix=".rs", delete=False) as f:
-            f.write(PROSE + PASSES)
+            f.write(PROSE + FLOORS_TABLE + PASSES)
             path = Path(f.name)
-        arm = track.floors(path)[(True, True)]
+        arm = track.floors(path)[(True, True, "small")]
         self.assertEqual(arm["code"], 12)
         self.assertEqual(arm["p90_tokens"], 230)
 
     def test_a_block_comment_inside_passes_cannot_supply_the_floors(self):
-        body = PASSES.replace("    let (keyword",
-                              "    /* s.code.0 >= 11 && s.p90_tokens <= 200 */\n    let (keyword")
+        body = PASSES.replace("    let key = if dense",
+                              "    /* s.code.0 >= 11 && s.p90_tokens <= 200 */\n    let key = if dense")
         with tempfile.NamedTemporaryFile("w", suffix=".rs", delete=False) as f:
-            f.write(body)
+            f.write(FLOORS_TABLE + body)
             path = Path(f.name)
-        arm = track.floors(path)[(True, True)]
+        arm = track.floors(path)[(True, True, "small")]
         self.assertEqual((arm["code"], arm["p90_tokens"]), (12, 230))
 
     def test_a_sibling_function_cannot_supply_the_floors(self):
@@ -176,14 +222,16 @@ class Floors(unittest.TestCase):
                        "\n    fn other(s: &Summary) -> bool {\n"
                        "        s.code.0 >= 11 && s.p90_tokens <= 200\n    }\n}\n")
         with tempfile.NamedTemporaryFile("w", suffix=".rs", delete=False) as f:
-            f.write(inside_impl)
+            f.write(FLOORS_TABLE + inside_impl)
             path = Path(f.name)
-        arm = track.floors(path)[(True, True)]
+        arm = track.floors(path)[(True, True, "small")]
         self.assertEqual((arm["code"], arm["p90_tokens"]), (12, 230))
 
     def test_the_live_source_still_parses(self):
         f = track.floors()
-        self.assertEqual(set(f), {(True, True), (True, False), (False, True), (False, False)})
+        self.assertEqual(set(f), {(True, True, "small"), (True, False, "small"),
+                                   (False, True, "small"), (False, False, "small"),
+                                   (True, True, "large"), (False, True, "large")})
         for arm in f.values():
             self.assertGreater(arm["keyword"], 0)
             self.assertGreater(arm["p90_tokens"], 0)
