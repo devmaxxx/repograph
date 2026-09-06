@@ -504,6 +504,23 @@ writing a prompt. `ENRICH_COMMAND` stays haiku for the reason it always did, whi
 suite and not this diagnostic. Both counts, question by question, are in
 [the 0.5.0 gap results](2026-09-05-0.5.0-gaps-results.md), L4.
 
+**Status (2026-09-06): the retrieval side read, three hypotheses dead, a cause named.** The second
+reading this gap asked for was run against the shipped 0.5.0 binary, at no token cost
+([the second G14 diagnostic](2026-09-06-g14-second-diagnostic.md)). The coverage admission does not
+recover the loss — D1 under it reads `rule` 2/9 in both arms still, the same four nodes falling and
+the same one gained, and the questions list is admitted in every one of the nine cases. Query
+length is not it: `rule` is the shortest kind in the suite. Nor is a generator scattering
+permission questions everywhere: they are 9.5% of haiku's questions and 10.2% of sonnet's. What the
+dumps show is the expected node losing its **rank inside the questions list** — median 3 → 10 for
+`rule` while `long` goes 1.5 → 1 — because its own score falls as the field rises. The cause is
+register: haiku writes a node's questions in the asker's colloquial voice, sonnet in the document's
+own precise one, and the share of a query's words found in its node's questions moves −29% for
+`rule` and +32% for `long`. The `rule` cases are the only ones written in a developer's
+permission-asking voice, and the only ones that lose. So the lever this gap proposes is aimed
+wrongly twice: sonnet already writes the shape, and shape is not what retrieval lost. Try asking
+for register in the existing prompt, or pricing the union of both generators' questions, before
+designing a prompt per kind.
+
 ---
 
 ## Suggested order
@@ -513,7 +530,7 @@ suite and not this diagnostic. Both counts, question by question, are in
 | 1 | ~~**G7** the questions list's share of the seeds~~ | closed 2026-09-05 — gated on the ratio of the two lists' best scores, held-out p = 0.77, lexical-only arm at raw parity; the window (0.802, 0.866] is recorded above, corrected from the 0.85–0.90 first published |
 | — | ~~**G8** the questions gate is a constant of one store~~ | closed for scale 2026-09-06 (0.5.0) — `coverage` ships at c = 0.761 under a rule written before it was implemented; the constant no longer moves with the two indices' mean lengths or vocabulary sizes. `attainable` still counts only the terms an index holds, so a narrow question vocabulary seats its list more readily — measured, named, not fixed |
 | — | ~~**G12** the gate compares raw BM25 scores across two indices~~ | closed 2026-09-06 (0.5.0) — the admission compares two coverages computed inside their own index. Lexical paraphrase 14/30 → 15/30, both developer totals up, held-out +1 and +3 at p = 1.0000 and p = 0.4531, replay and binary agreeing on all 1,084 queries |
-| 4 | **G14** the prompt does not know the document's kind | measured, not closed (2026-09-05, 0.5.0) — the free diagnostic reads 1 of 4 lost nodes, and 2 of 4 on an independent second reading, against a bar of 3 of 4; two of the four move the wrong way, so the prompt's shape is not the difference the questions show. No tokens spent and no prompt written; the retrieval side of those four nodes is what a next attempt should read |
+| 4 | **G14** the prompt does not know the document's kind | measured twice, not closed (2026-09-06, 0.5.0) — the prompt-shape diagnostic read 1 of 4 and 2 of 4 against a bar of 3; the retrieval reading that followed found the cause: the expected node keeps its seat and loses its rank inside the questions list, median 3 → 10 on `rule` while `long` goes 1.5 → 1, because haiku writes a node's questions in the asker's colloquial voice and sonnet in the document's precise one — the query's words are found 29% less often on `rule` and 32% more often on `long`. A prompt per kind is aimed wrongly twice; ask for register, or price the union of both generators, first. No tokens spent on either reading |
 | 2 | **G13** ten `where` anchors ranked and gated out | still open (2026-09-06, 0.5.0) — regenerated under the shipped form: the code list already ranks ten of thirteen `where` anchors in its top ten, so no admission was ever going to move `where` off 0/9. Stage B, one seat for the code list, is the only lever left, at A4's price of six held-out questions per arm |
 | — | ~~the lexical arm's 49 ms~~ | closed 2026-09-05 (0.5.0) — the perf results left this number here and nowhere else. The BM25 indexes are built once by a resident context and kept: socket lexical 55.0 → 6.8 ms, median of 33 against a base spread of 0.9 ms, the design note's 30 ms target met; Rule 1 sixteen byte-identical verdicts and Rule 2 142/142 in four pairings |
 | — | ~~**G9** code is unreachable from prose~~ | measured 2026-09-05 — A1 to A4 each rejected by the rule; the code questions ship into an index of their own for the `ask --rerank` pool, `where` stays 0/9 in the plain fusion, and G12 is what would move it |
