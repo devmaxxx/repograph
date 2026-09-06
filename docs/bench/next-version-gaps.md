@@ -269,6 +269,15 @@ second population (the fixture's questions cut to five per node) was never built
 shows the constant is a property of the query rather than of this store. Every number is in
 [the 0.5.0 gap results](2026-09-05-0.5.0-gaps-results.md), L1.
 
+**Status (2026-09-06, 0.5.0): closed for scale, named for vocabulary.** The `coverage` form ships
+at c = 0.761 under a rule written and committed before it was implemented, replacing the clause
+that had required the four arms to reproduce exactly. The constant no longer moves with the two
+indices' mean lengths or vocabulary sizes, which is what this gap asked. It is not free of the
+store in every sense: `attainable` counts only the query terms an index actually holds, so a store
+whose questions use a much narrower vocabulary than its passages seats its questions list more
+readily, and nothing in the code says so. Measured, named and left standing —
+[the coverage admission results](2026-09-06-coverage-admission-results.md).
+
 ---
 
 ## G9 · Code is unreachable from prose — `where` 0/9
@@ -389,6 +398,13 @@ replays the plain fusion offline over `dump` records and reproduces the shipped 
 per list, so the next attempt costs a replay rather than a build. The comparison is still between two
 units in the shipped binary. See [the 0.5.0 gap results](2026-09-05-0.5.0-gaps-results.md), L1.
 
+**Status (2026-09-06, 0.5.0): closed.** The admission compares two coverages, each computed inside
+one index, rather than two raw BM25 scores from indices that were never in the same unit. The
+lexical arm reads paraphrase 15/30 against the ratio's 14/30, both developer totals rise, held-out
+gains one question with embeddings and three without at p = 1.0000 and p = 0.4531, and
+`bench/admission.py` reproduces the binary on all 1,084 queries —
+[the coverage admission results](2026-09-06-coverage-admission-results.md).
+
 ## G13 · Ten `where` anchors sit at code-list rank 1–9 and six are below the gate
 
 **Raised (2026-09-05)** by A3's dumps (`dump --queries`, `--no-dense` arm, 300 deep). The ratio is
@@ -437,6 +453,14 @@ the table above was read against), with a column per candidate form so the next 
 each admission would have done to these anchors: six of its 27 rows clear the shipped ratio's 0.85,
 14 clear `coverage`'s 0.761, 14 clear `peak`'s 0.894 and 26 clear `z`'s 0.548. It is in
 [the 0.5.0 gap results](2026-09-05-0.5.0-gaps-results.md), L1.
+
+**Status (2026-09-06, 0.5.0): still open, and the cause is sharper than this gap states.**
+Regenerated under the shipped `coverage` admission, the table shows the code list ranking ten of
+the thirteen `where` anchors in its own top ten, four of them at rank 1; the other three sit at 28,
+38 and 286. The list is not failing to find these files. It has no seat on the plain path to say
+so, so no admission form could ever have moved `where` off 0/9 — only stage B, one seat for the
+code list, which A4 priced at six held-out questions lost per arm and which was not run
+([the coverage admission results](2026-09-06-coverage-admission-results.md)).
 
 ## G14 · The enrichment prompt does not know the document's kind
 
@@ -487,10 +511,10 @@ suite and not this diagnostic. Both counts, question by question, are in
 | | gap | why here |
 |---|---|---|
 | 1 | ~~**G7** the questions list's share of the seeds~~ | closed 2026-09-05 — gated on the ratio of the two lists' best scores, held-out p = 0.77, lexical-only arm at raw parity; the window (0.802, 0.866] is recorded above, corrected from the 0.85–0.90 first published |
-| 2 | **G8** the questions gate is a constant of one store | measured, not closed (2026-09-05, 0.5.0) — three scale-free forms derived and scored, all three fail the exact-reproduction clause; `coverage` at c = 0.761 fails only by gaining a paraphrase, and a rule written as "every floor held" rather than "reproduced exactly" can ship it on the recorded numbers |
-| 3 | **G12** the gate compares raw BM25 scores across two indices | measured, not closed (2026-09-05, 0.5.0) — `coverage`, `peak` and `z` each built, each with its constant derived from the held-out set before either suite was opened, each failing clause (i); the comparison is still between two units, and the replay that scored them (`bench/admission.py`, plus `dump`'s `attainable_*` columns) makes the next attempt a replay rather than a build |
+| — | ~~**G8** the questions gate is a constant of one store~~ | closed for scale 2026-09-06 (0.5.0) — `coverage` ships at c = 0.761 under a rule written before it was implemented; the constant no longer moves with the two indices' mean lengths or vocabulary sizes. `attainable` still counts only the terms an index holds, so a narrow question vocabulary seats its list more readily — measured, named, not fixed |
+| — | ~~**G12** the gate compares raw BM25 scores across two indices~~ | closed 2026-09-06 (0.5.0) — the admission compares two coverages computed inside their own index. Lexical paraphrase 14/30 → 15/30, both developer totals up, held-out +1 and +3 at p = 1.0000 and p = 0.4531, replay and binary agreeing on all 1,084 queries |
 | 4 | **G14** the prompt does not know the document's kind | measured, not closed (2026-09-05, 0.5.0) — the free diagnostic reads 1 of 4 lost nodes, and 2 of 4 on an independent second reading, against a bar of 3 of 4; two of the four move the wrong way, so the prompt's shape is not the difference the questions show. No tokens spent and no prompt written; the retrieval side of those four nodes is what a next attempt should read |
-| 5 | **G13** ten `where` anchors ranked and gated out | regenerated, still open (2026-09-05, 0.5.0) — stage B needs a shipped admission and none shipped, so `where` stays 0/9 and A4's six held-out questions per arm are still the price to beat; the table now carries a column per candidate form |
+| 2 | **G13** ten `where` anchors ranked and gated out | still open (2026-09-06, 0.5.0) — regenerated under the shipped form: the code list already ranks ten of thirteen `where` anchors in its top ten, so no admission was ever going to move `where` off 0/9. Stage B, one seat for the code list, is the only lever left, at A4's price of six held-out questions per arm |
 | — | ~~the lexical arm's 49 ms~~ | closed 2026-09-05 (0.5.0) — the perf results left this number here and nowhere else. The BM25 indexes are built once by a resident context and kept: socket lexical 55.0 → 6.8 ms, median of 33 against a base spread of 0.9 ms, the design note's 30 ms target met; Rule 1 sixteen byte-identical verdicts and Rule 2 142/142 in four pairings |
 | — | ~~**G9** code is unreachable from prose~~ | measured 2026-09-05 — A1 to A4 each rejected by the rule; the code questions ship into an index of their own for the `ask --rerank` pool, `where` stays 0/9 in the plain fusion, and G12 is what would move it |
 | — | ~~**G10** five seeds over three lists~~ | measured 2026-09-05 — A4 prices one seat for a fourth list at 6 held-out questions in each arm, none gained, p = 0.031; closed as measured, not as fixed |
