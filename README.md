@@ -32,8 +32,7 @@ it had been measured, and hadn't been.
 
 ## Status
 
-0.4.0 is the released version; the rows below are what `main` carries, implemented rather than
-planned and unreleased since 0.4.0:
+0.5.0 is the version `main` carries; every row below is implemented rather than planned:
 
 | Command                    | State                                                                 |
 | -------------------------- | --------------------------------------------------------------------- |

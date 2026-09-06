@@ -30,8 +30,8 @@ fn config_stamp(repo: &Path) -> Option<crate::walk::Stamp> {
 }
 
 /// What a `stat` says about the executable at this process's own path, or None where it cannot be
-/// found. The version alone cannot tell two builds apart: this repository has been unreleased
-/// since 0.4.0, so every development build answers `0.4.0`, and the README suggests `--idle
+/// found. The version alone cannot tell two builds apart: the version moves only at a release,
+/// so every development build in between answers the same string, and the README suggests `--idle
 /// 86400` — rebuild, ask while yesterday's `serve` is up, and yesterday's code answers with
 /// nothing to show for it. Read once per process and held, never per request: `current_exe` names
 /// a path, and a rebuild replaces the file at it, so a server that re-read this would answer with
@@ -58,8 +58,8 @@ pub struct Hello { pub v: String, #[serde(default)] pub build: Option<crate::wal
 /// The server's half, and its answer. `no_dense` is the arm this process was started in — a
 /// server that opened no model can only answer lexically, and a client that asked a fused
 /// question has to be told rather than handed a lexical answer under a fused question's name.
-/// Both new fields default, so a reply in the older shape still parses. Under an unreleased 0.4.0
-/// the version it carries is this one, and what refuses it is the build it does not carry.
+/// Both new fields default, so a reply in the older shape still parses. Between releases the
+/// version it carries is this one, and what refuses it is the build it does not carry.
 #[derive(serde::Serialize, serde::Deserialize)]
 pub struct Reply {
     pub v: String,
