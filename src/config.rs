@@ -23,8 +23,8 @@ pub struct Config {
     /// model's rows; `ask`, `bench` and `dump` open the model the store records instead, so a
     /// store keeps answering with what wrote it whatever this says today. The large model is
     /// the default: it read paraphrase 22/30 against the small one's 15/30 on the fixture and
-    /// held-out 103 → 119 of 400 (p = 0.00086), for 0.8 s an `ask` against 0.55 s, 1.9 GB
-    /// resident against 1.7, a 2.1 GB download and an order more embedding time.
+    /// held-out 103 → 119 of 400 (p = 0.00086); the latency, memory and download that choice
+    /// costs are measured in docs/bench/2026-09-05-dev-cases-results.md.
     /// `intfloat/multilingual-e5-small` is the cheap way back, and the model the floors were
     /// set with.
     pub embed_model: String,

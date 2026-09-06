@@ -31,15 +31,14 @@ than recomputed. That transfer is only valid because both stores were built from
 `502e8a6d` graph, so it was checked rather than assumed: one binary, both repositories, both
 arms, and all 82 cases came back identical case by case, not merely equal in total.
 
-| arm | fixture | working clone |
-|---|---|---|
-| dense | keyword 40/40, paraphrase 15/30, code 12/12, p90 226 | identical |
-| lexical | keyword 37/40, paraphrase 15/30, code 12/12, p90 220 | identical |
+| arm | as measured 2026-09-04 | current | working clone |
+|---|---|---|---|
+| dense | keyword 40/40, paraphrase 15/30, code 12/12, p90 226 | keyword 40/40, paraphrase 15/30, code 12/12, p90 220 | identical |
+| lexical | keyword 37/40, paraphrase 15/30, code 12/12, p90 220 | keyword 39/40, paraphrase 14/30, code 12/12, p90 215 | identical |
 
-Those readings are of 2026-09-04, before the questions-list gate; the same fixture now reads
-keyword 40/40, paraphrase 15/30, p90 220 in the dense arm and keyword 39/40, paraphrase 14/30,
-p90 215 in the lexical one (`bench/history/runs.jsonl`). What the transfer check established is
-that the two stores answer case by case alike, which the gate does not touch.
+The 2026-09-04 column predates the questions-list gate; `current` is the same fixture read after
+it (`bench/history/runs.jsonl`). What the transfer check established is that the two stores answer
+case by case alike, which the gate does not touch.
 
 **For a repograph-only run, use `bench/history/run-repograph.sh` and stop reading here.** It
 builds the binary, runs both arms against the fixture, records them into the run history and
