@@ -657,8 +657,8 @@ mod tests {
         let elsewhere = dir.path().join("elsewhere");
         std::fs::create_dir_all(&elsewhere).unwrap();
         assert_eq!(git_sh(&[elsewhere.clone(), root.join("cmd")], None, &[]), Some(root.join("bin").join("sh.exe")), "beside git");
-        assert_eq!(git_sh(&[elsewhere.clone()], None, &[dir.path().to_path_buf()]), Some(root.join("bin").join("sh.exe")), "under a program directory");
-        assert_eq!(git_sh(&[elsewhere.clone()], Some(&root.join("bin").join("bash.exe")), &[]), Some(root.join("bin").join("sh.exe")), "from the bash Claude Code names");
+        assert_eq!(git_sh(std::slice::from_ref(&elsewhere), None, &[dir.path().to_path_buf()]), Some(root.join("bin").join("sh.exe")), "under a program directory");
+        assert_eq!(git_sh(std::slice::from_ref(&elsewhere), Some(&root.join("bin").join("bash.exe")), &[]), Some(root.join("bin").join("sh.exe")), "from the bash Claude Code names");
         assert_eq!(git_sh(&[elsewhere], None, &[]), None, "nothing to find");
     }
 }
