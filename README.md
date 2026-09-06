@@ -68,16 +68,18 @@ either be a literal secret or silently ignored.
 Then:
 
 ```bash
-pnpm add -D @devmaxxx/repograph    # npm: prebuilt binary for macOS arm64 and Linux x64
+pnpm add -D @devmaxxx/repograph    # npm: prebuilt binary for macOS arm64, Linux x64 and Windows x64
 cargo install --path .             # from source; Rust 1.98, pinned in rust-toolchain.toml
 ```
 
-The npm package is a launcher: the binary comes from `@devmaxxx/repograph-darwin-arm64` or
-`@devmaxxx/repograph-linux-x64`, pulled in as an optional dependency, so a lockfile written on
-one platform installs on the other. Both are under the same scope, so the one registry line above
-covers them. Tagged releases (`v*`) build both binaries as GitHub release assets and cut the npm
-packages from those same files (`.github/workflows/release.yml`, publishing with the repository's
-own `GITHUB_TOKEN`; `scripts/npm-pack.sh` does the same by hand).
+The npm package is a launcher: the binary comes from `@devmaxxx/repograph-darwin-arm64`,
+`@devmaxxx/repograph-linux-x64` or `@devmaxxx/repograph-win32-x64`, pulled in as an optional
+dependency, so a lockfile written on one platform installs on the others. All three are under the
+same scope, so the one registry line above covers them. Tagged releases (`v*`) build all three
+binaries as GitHub release assets (a tarball for the unix ones, a zip holding `repograph.exe` for
+Windows) and cut the npm packages from those same files (`.github/workflows/release.yml`,
+publishing with the repository's own `GITHUB_TOKEN`; `scripts/npm-pack.sh` does the same by
+hand).
 
 ## Use
 
@@ -181,7 +183,8 @@ cadence.
 
 Most of a fused `ask` is the process opening things it then throws away: the embedding model
 alone costs about 676 ms of it on the shipped default, 220 ms on the small model. `serve` opens
-them once and answers over a Unix socket:
+them once and answers over a Unix socket — on Windows too, where the same socket file has existed
+since Windows 10 1803 and is protected the way the repository directory is:
 
 ```bash
 repograph serve                  # .repograph/serve.sock, poll every 30 s, exit after 30 min idle
@@ -198,8 +201,15 @@ build counts as another), a server started `--no-dense` asked a fused question, 
 that quietly costs a cold process, or quietly gets a lexical answer, looks like nothing at all. The
 other arm pairing is not a mismatch — a server holding the model answers `--no-dense` lexically,
 which is what was asked for. A client never deletes the socket file — a refused connect is also
-what a live server with a full backlog gives — so only `serve` removes one, and only the one it
-bound itself. On a store neither `enrich` nor `embed` has moved under it, and a server of this
+what a live server with a full backlog gives — so only `serve` removes one. On unix it removes
+the one it bound itself, told from a replacement's by the socket file's device and inode; Windows
+gives std no identity to read there, so a `serve` exiting leaves the file and the next one removes
+it before binding, which is what both platforms already do after a Ctrl-C. Either way the file at
+worst costs a client one refused connect.
+
+The socket path is limited to 108 bytes on Linux and Windows and 104 on macOS; a repository deep
+enough to exceed it cannot start `serve`, and `ask` answers in its own process as it would with no
+server at all. On a store neither `enrich` nor `embed` has moved under it, and a server of this
 build serving the arm asked for, the answer is the same bytes either way; that is checked on all
 142 recorded and developer bench questions, in every pairing of the server's arm with the
 client's.
@@ -472,7 +482,9 @@ in full, not an empty config:
 Which model that program should run is a separate key, `enrich_model` and `rerank_model`, and it is
 substituted into the command's `{model}`. Changing model is then a word rather than a rewritten
 command line, and a command that names no `{model}` is run exactly as written, its model key unused.
-Nothing here assumes a vendor: the names are whatever the configured command understands.
+Nothing here assumes a vendor: the names are whatever the configured command understands. Both run
+under `sh -c`; on Windows that is Git for Windows' `sh`, which has to be on `PATH` — nothing else
+in repograph needs a shell.
 
 Which model to run is usually a property of the machine — what is installed, what the account may
 spend — rather than of the corpus, so it can be set once for every repository. Three layers, each
@@ -482,7 +494,7 @@ beating the one below it:
 | --- | --- |
 | the run | `REPOGRAPH_ENRICH_MODEL`, `REPOGRAPH_RERANK_MODEL` |
 | the repository | `repograph.toml` |
-| the machine | `$REPOGRAPH_CONFIG`, else `$XDG_CONFIG_HOME/repograph/config.toml`, else `~/.config/repograph/config.toml` |
+| the machine | `$REPOGRAPH_CONFIG`, else `$XDG_CONFIG_HOME/repograph/config.toml`, else `~/.config/repograph/config.toml` (`%USERPROFILE%\.config\repograph\config.toml` on Windows) |
 
 ```toml
 # ~/.config/repograph/config.toml — every repository on this machine, unless it says otherwise
@@ -524,7 +536,8 @@ disk) run through `ort` directly: the tokenizer and the session open concurrentl
 level 1,
 which halves model-open time against the library default. The files are a one-time Hugging Face
 download cached under `FASTEMBED_CACHE_DIR` if that is set, else `~/.cache/repograph/fastembed`
-(the layout is the hub client's, so a cache populated by an earlier release is reused as is). Every
+(`%USERPROFILE%\.cache\repograph\fastembed` on Windows; the layout is the hub client's, so a
+cache populated by an earlier release is reused as is). Every
 command that touches the dense stage — `build`, `update`, `enrich`, `embed`, `watch`, `ask`,
 `bench`, `dump`, `serve` — reuses the cache; there are no further network calls once it is
 populated. `--no-dense` skips the download and the embedding stage everywhere.
