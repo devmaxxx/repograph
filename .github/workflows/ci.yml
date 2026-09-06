@@ -36,6 +36,10 @@ jobs:
 
   windows:
     runs-on: windows-latest
+    env:
+      # The small model, kept between runs under the workspace: the dense arm is opened here and
+      # nowhere else in CI, on a runner with no GPU.
+      FASTEMBED_CACHE_DIR: ${{ github.workspace }}\.model-cache
     steps:
       # The repository is LF throughout and the tests compare bytes; a checkout the runner's
       # git had converted to CRLF would be a different corpus.
@@ -54,3 +58,12 @@ jobs:
           if (Get-Command sh -ErrorAction SilentlyContinue) { throw "sh is still on PATH: $((Get-Command sh).Source)" }
           if (-not (Get-Command git -ErrorAction SilentlyContinue)) { throw "git left PATH too; the pattern is wrong" }
           cargo test -- enrich:: rerank::
+      - uses: actions/cache@v4
+        with:
+          path: ${{ github.workspace }}\.model-cache
+          key: e5-small-onnx-1
+      - run: cargo test --test serve -- --ignored --nocapture a_fused_answer_is_resident_on_the_small_model
+      # Whether the hub client linked each blob into the snapshot or moved it there: an account
+      # without symlink rights takes the second path, and a user's box is that account.
+      - shell: pwsh
+        run: Get-ChildItem -Recurse $env:FASTEMBED_CACHE_DIR | Where-Object { $_.Attributes -match 'ReparsePoint' } | Select-Object FullName

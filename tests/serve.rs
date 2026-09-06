@@ -417,3 +417,42 @@ fn a_client_that_checks_only_the_version_cannot_take_a_refusal_for_an_answer() {
     server.kill().unwrap();
     let _ = server.wait();
 }
+
+/// The dense arm end to end: a store built with vectors, a fused answer in this process, and
+/// the same answer from a resident server — on the small model, in whatever cache the environment
+/// names. Ignored by default because it wants 470 MB on disk; the Windows CI job runs it with the
+/// cache restored between runs, and it is the one place the ONNX Runtime build the Windows
+/// binary links opens a session and embeds.
+#[test]
+#[ignore = "needs the small model in FASTEMBED_CACHE_DIR or ~/.cache/repograph/fastembed; the Windows CI job runs it"]
+fn a_fused_answer_is_resident_on_the_small_model() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(dir.path().join("docs")).unwrap();
+    std::fs::write(dir.path().join("docs/pay.md"), "**FR-PAY-1 · MUST · Штраф за отмену**\n\nШтраф списывается сам (INV-1).\n\n**INV-1 · MUST · Деньги не сгорают**\n\nОтмена не сжигает деньги.\n").unwrap();
+    std::fs::write(dir.path().join("docs/cal.md"), "**FR-CAL-1 · MUST · Перенос визита**\n\nПеренос не считается отменой.\n").unwrap();
+    std::fs::write(dir.path().join("repograph.toml"), "id_families = [\"FR-PAY\", \"FR-CAL\", \"INV\"]\nembed_model = \"intfloat/multilingual-e5-small\"\n").unwrap();
+    let out = repograph().arg("--repo").arg(dir.path()).arg("build").output().unwrap();
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(out.status.success(), "{err}");
+    assert!(!err.contains("dense: model unavailable"), "the model did not open: {err}");
+    assert!(std::fs::metadata(dir.path().join(".repograph/vectors.f32")).map(|m| m.len() > 0).unwrap_or(false), "no vectors were written");
+    let (want, err) = ask_in(FUSED, dir.path(), &["--no-serve"], &["штраф"]);
+    assert!(want.contains("FR-PAY-1"), "{want}");
+    assert!(!err.contains("dense: model unavailable"), "{err}");
+    let mut server = serve_in(FUSED, dir.path(), &["--every", "3600", "--idle", "120"]);
+    let start = Instant::now();
+    let (through, _) = loop {
+        let (out, err) = ask_in(FUSED, dir.path(), &[], &["штраф"]);
+        if err.contains("serve: answered by the resident process") { break (out, err); }
+        assert!(start.elapsed() < Duration::from_secs(120), "the fused server never answered over the socket: {err}");
+        std::thread::sleep(Duration::from_millis(250));
+    };
+    assert_eq!(through, want, "the resident fused answer is the process's fused answer");
+    // The number the whole exercise is for, on the record in the log: eleven resident asks, the
+    // median, against whatever the unix run of this test prints.
+    let mut times: Vec<u128> = (0..11).map(|_| { let t = Instant::now(); ask_in(FUSED, dir.path(), &[], &["штраф"]); t.elapsed().as_millis() }).collect();
+    times.sort();
+    eprintln!("resident fused ask, median of 11: {} ms", times[5]);
+    server.kill().unwrap();
+    let _ = server.wait();
+}
