@@ -517,9 +517,15 @@ register: haiku writes a node's questions in the asker's colloquial voice, sonne
 own precise one, and the share of a query's words found in its node's questions moves −29% for
 `rule` and +32% for `long`. The `rule` cases are the only ones written in a developer's
 permission-asking voice, and the only ones that lose. So the lever this gap proposes is aimed
-wrongly twice: sonnet already writes the shape, and shape is not what retrieval lost. Try asking
-for register in the existing prompt, or pricing the union of both generators' questions, before
-designing a prompt per kind.
+wrongly twice: sonnet already writes the shape, and shape is not what retrieval lost. The cheapest
+consequence of that cause was then priced, at no model tokens, by merging both generators'
+questions into one store: paraphrase **20/30** in both arms against haiku's 15 and sonnet's 17
+and 16, `rule` back to 5/9 dense and **7/9** lexical, developer totals 43 and 45 against 38, and
+held-out 104 → 141 and 112 → 153 at p = 0.0000. Every kind at or above the better single
+generator; `where` still 0/9, which needs a seat and not a prompt. That reading is exploratory —
+no rule preceded it, and the held-out set favours any store holding haiku's questions — so it
+ships nothing. It is what a pre-registered attempt should start from, and the results document
+carries the clauses such an attempt should commit first.
 
 ---
 
