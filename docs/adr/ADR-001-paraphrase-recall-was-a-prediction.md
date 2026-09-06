@@ -1,6 +1,6 @@
 # ADR-001 · Paraphrase recall was a prediction, not a measurement
 
-**Status:** Accepted, 2026-09-01; amended through 2026-09-05 (Amendment 7, see the last section)
+**Status:** Accepted, 2026-09-01; amended through 2026-09-06 (Amendment 8, see the last section)
 
 ## Context
 
@@ -372,3 +372,46 @@ recorded case hit that path. The guard is back, in `lexical_lists`, and the raw 
 The rerank path stays ungated, for the reason the review confirmed: with `PINNED = 0` the fused
 order there is a pool of `depth`, not five seats, so the questions list displaces nothing, and
 Amendment 2 measured it as what carries paraphrase targets into that pool.
+
+## Amendment 8 — the admission in one unit (2026-09-06)
+
+Amendment 6 gave the questions list a gate and Amendment 7 measured its window. Both were readings
+of the wrong quantity. The gate compared the best raw BM25 score of the questions index with the
+best of the passage index, and the two indices share the tokenizer, `K1`, `B`, the formula and the
+document count but nothing else: each normalises length against its own mean and weights terms by
+its own vocabulary. So `0.85` moved with enrichment coverage and with questions per node, and it
+was a constant of one store rather than of BM25 — gaps G12 and G8.
+
+The admission is now a comparison of two coverages. Each list is first asked what fraction of the
+query its best document actually reached, `best / attainable`, where `attainable` is the idf the
+query could have collected in that index at all; those two fractions are dimensionless, and the
+list is seated when their ratio reaches `c = 0.761`. That constant is the crossover of the 400
+held-out questions in the `--no-dense` arm, derived on 2026-09-05 before either suite was opened
+and not re-derived, rounded or tuned since.
+
+Measured on the fixture, against the ratio it replaces: the lexical arm reads paraphrase **15/30**
+where the ratio read 14/30, keyword 39/40 and code 12/12 unchanged, p90 215; the dense arm
+reproduces `40/40 15/30 12/12` with p90 221 against 220. The developer suite rises from 36 to 38
+in the dense arm and 37 to 38 in the lexical one, with `where` unmoved at 0/9 — the dense arm
+gains a `cross` and a `multi`, the lexical arm gains two `cross` and loses a `multi`. Held-out
+recall@5 goes 103 → 104 in the dense arm (3 gained, 2 lost, exact McNemar p = 1.0000) and
+109 → 112 in the lexical one (5 gained, 2 lost, p = 0.4531). `bench/admission.py` under the shipped
+form reproduces the binary on all 1,084 queries of the three case sets in both arms.
+
+**What did not survive.** Two other scale-free forms were built and scored on the same held-out
+crossover in 2026-09-05's L1 and are not shipped: `peak`, each list's best over its own fifth, at
+c = 0.894, which read paraphrase 14/30 in the dense arm and 38/40 keyword in the lexical one; and
+`z`, the best as a z-score over the list, at c = 0.548, which read keyword 37/40 in the lexical
+arm. Both lost ground the shipped form does not.
+
+**What this amendment does not claim.** `attainable` counts only the query terms an index actually
+holds, so a term the questions index never saw leaves its denominator rather than lowering its
+score. The form is scale-free with respect to the two indices' mean lengths and vocabulary sizes,
+which is what G8 asked for; it is not neutral with respect to which terms each index happens to
+contain, and a store whose questions use a much narrower vocabulary than its passages will seat
+its questions list more readily. That property is measured and named, not fixed.
+
+The rule these numbers were judged against was written and committed before the form was
+implemented, with the earlier campaign's replayed scores already known — a decision taken on prior
+evidence rather than a blind prediction, which is weaker and is recorded as such. The rule, the
+clauses and every measurement: [the coverage admission results](../bench/2026-09-06-coverage-admission-results.md).

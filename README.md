@@ -628,14 +628,19 @@ Two ways of spending the documents' generated questions were measured and reject
 rows pooled with the passages they bury targets (a passage at rank 2 fell to 87 behind other nodes'
 questions), and mixed into a node's own BM25 text they cost a keyword hit. What ships for those
 questions is the third — a BM25 list of their own, which the plain `ask` fuses alongside the passage
-list — when that list has earned its turn. It joins the fusion only if its best BM25 score is at
-least 0.85 of the passage list's best. On 400 held-out generated questions the passage list is the
-one holding the answer below that ratio (30% in its top five against 21%) while the questions list
-is above it (24% against 12%). The 0.85 is a constant of this store, not of BM25, and its window on
-the 82 recorded cases is (0.802, 0.866]: below it a keyword case loses its seat, at 0.87 the arm
-with embeddings drops a paraphrase under its floor. Why the ratio is a property of this store
-rather than of BM25 is measured in
-[ADR-001, Amendment 7](docs/adr/ADR-001-paraphrase-recall-was-a-prediction.md). Before the gate
+list — when that list has earned its turn. Each list is asked what fraction of the question its
+best document actually reached: `best / attainable`, where `attainable` is the idf the query could
+have collected in that index at all. Those fractions are dimensionless, so the two lists compare
+in one unit whatever their raw scores are worth, and the questions list joins the fusion when its
+coverage reaches 0.761 of the passage list's. That constant is the crossover of 400 held-out
+generated questions in the `--no-dense` arm. Until 0.5.0 the admission compared the two raw bests
+at a ratio of 0.85, which moved with enrichment coverage and questions per node and was a constant
+of one store rather than of BM25 — gaps G8 and G12, closed by
+[the coverage admission results](docs/bench/2026-09-06-coverage-admission-results.md) and recorded
+in [ADR-001, Amendment 8](docs/adr/ADR-001-paraphrase-recall-was-a-prediction.md). The change reads
+paraphrase 15/30 against the ratio's 14/30 in the lexical arm, reproduces the dense arm's four
+counts, raises both developer totals and gains one held-out question with embeddings and three
+without, neither significantly. Before any admission at all,
 an equal turn cost the `--no-dense` arm two exact keyword seeds, 39/40 raw
 against 37/40 enriched; with it that arm reads 39/40 either way, paraphrase 7/30 raw against 14/30
 enriched, and the held-out set moved by 5 gained and 7 lost, exact McNemar p = 0.77. The arm with
