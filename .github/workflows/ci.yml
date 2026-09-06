@@ -45,3 +45,12 @@ jobs:
         with: { components: clippy }
       - run: cargo clippy --all-targets -- -D warnings
       - run: cargo test
+      # A default Git for Windows install puts `git` on PATH and not `sh`; the runner image has
+      # both. This is a user's box: Git's shell directories are taken off PATH, and the tests that
+      # spawn the shell are run again.
+      - shell: pwsh
+        run: |
+          $env:PATH = ($env:PATH -split ';' | Where-Object { $_ -notmatch '\\Git\\(usr\\)?bin\\?$' }) -join ';'
+          if (Get-Command sh -ErrorAction SilentlyContinue) { throw "sh is still on PATH: $((Get-Command sh).Source)" }
+          if (-not (Get-Command git -ErrorAction SilentlyContinue)) { throw "git left PATH too; the pattern is wrong" }
+          cargo test -- enrich:: rerank::
