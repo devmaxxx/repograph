@@ -505,27 +505,28 @@ suite and not this diagnostic. Both counts, question by question, are in
 [the 0.5.0 gap results](2026-09-05-0.5.0-gaps-results.md), L4.
 
 **Status (2026-09-06): the retrieval side read, three hypotheses dead, a cause named.** The second
-reading this gap asked for was run against the shipped 0.5.0 binary, at no token cost
+reading this gap asked for was run against the shipped 0.5.0 binary at no model-token cost
 ([the second G14 diagnostic](2026-09-06-g14-second-diagnostic.md)). The coverage admission does not
-recover the loss — D1 under it reads `rule` 2/9 in both arms still, the same four nodes falling and
-the same one gained, and the questions list is admitted in every one of the nine cases. Query
-length is not it: `rule` is the shortest kind in the suite. Nor is a generator scattering
-permission questions everywhere: they are 9.5% of haiku's questions and 10.2% of sonnet's. What the
-dumps show is the expected node losing its **rank inside the questions list** — median 3 → 10 for
-`rule` while `long` goes 1.5 → 1 — because its own score falls as the field rises. The cause is
-register: haiku writes a node's questions in the asker's colloquial voice, sonnet in the document's
-own precise one, and the share of a query's words found in its node's questions moves −29% for
-`rule` and +32% for `long`. The `rule` cases are the only ones written in a developer's
-permission-asking voice, and the only ones that lose. So the lever this gap proposes is aimed
-wrongly twice: sonnet already writes the shape, and shape is not what retrieval lost. The cheapest
-consequence of that cause was then priced, at no model tokens, by merging both generators'
-questions into one store: paraphrase **20/30** in both arms against haiku's 15 and sonnet's 17
-and 16, `rule` back to 5/9 dense and **7/9** lexical, developer totals 43 and 45 against 38, and
-held-out 104 → 141 and 112 → 153 at p = 0.0000. Every kind at or above the better single
-generator; `where` still 0/9, which needs a seat and not a prompt. That reading is exploratory —
-no rule preceded it, and the held-out set favours any store holding haiku's questions — so it
-ships nothing. It is what a pre-registered attempt should start from, and the results document
-carries the clauses such an attempt should commit first.
+recover the loss — D1 under it reads `rule` 2/9 in both arms still, the same four nodes falling, and
+the questions list is admitted in every one of the nine cases. Query length is not it: `rule` is the
+shortest kind in the suite. Nor is a generator scattering permission questions everywhere: they are
+9.5% of one set's questions and 10.2% of the other's. What the dumps show is the expected node
+losing its **rank inside the questions list** — median 3 → 10 for `rule` while `long` goes 1.5 → 1 —
+because its own score falls as the field rises. The cause is **register**: one generator writes a
+node's questions in the asker's colloquial voice, the other in the document's own precise one, and
+the share of a query's words found in its node's questions moves −29% for `rule` and +32% for
+`long`. The `rule` cases are the only ones written in a developer's permission-asking voice, and the
+only ones that lose. None of this is a property of a particular model — it is a property of the
+register the prompt asks for, which is why `enrich_model` is configuration and the lever is a prompt
+instruction rather than a model choice. So the lever this gap proposes is aimed wrongly twice: the
+shape is already written, and shape is not what retrieval lost. Merging both registers into one
+store, at no model tokens, then read paraphrase **20/30** in both arms against 15 and 17/16, `rule`
+back to 5/9 dense and **7/9** lexical, developer totals 43 and 45 against 38, and held-out 104 → 141
+and 112 → 153 at p = 0.0000 — every kind at or above the better single register, `where` still 0/9
+because it needs a seat and not a prompt. That reading is exploratory: no rule preceded it and the
+held-out set favours any store holding the colloquial questions, so it ships nothing. The first
+thing to try is one generator asked for both registers; the results document carries the clauses a
+pre-registered attempt should commit first.
 
 ---
 

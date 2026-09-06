@@ -459,10 +459,43 @@ in full, not an empty config:
 | `registries`         | `["docs/constitution.yaml"]`                                                                |
 | `id_families`        | see below — 49 strict families                                                              |
 | `milestone_families` | `["BE", "FE", "PLAT", "SYNC", "OPS", "AI", "MOB"]`                                          |
-| `enrich_command`     | headless `claude -p --model haiku` with thinking off — see [Spending tokens on purpose](#spending-tokens-on-purpose) |
-| `rerank_command`     | the same with `--model sonnet`                                                              |
+| `enrich_command`     | headless `claude -p --model {model}` with thinking off — see [Spending tokens on purpose](#spending-tokens-on-purpose) |
+| `rerank_command`     | the same command, with `rerank_model` in its `{model}`                                      |
+| `enrich_model`       | `haiku` — whatever goes in `enrich_command`'s `{model}`                                      |
+| `rerank_model`       | `sonnet` — the same for `rerank_command`                                                    |
 | `reranker_dir`       | directory of the exported cross-encoder for `--rerank-local`; empty = `~/.cache/repograph/reranker` |
 | `embed_model`        | `intfloat/multilingual-e5-large`; the model the vectors are written with — see [Embeddings](#embeddings) |
+
+### Choosing a model, and where the choice lives
+
+`enrich_command` and `rerank_command` are the transport — any program that reads a prompt on stdin.
+Which model that program should run is a separate key, `enrich_model` and `rerank_model`, and it is
+substituted into the command's `{model}`. Changing model is then a word rather than a rewritten
+command line, and a command that names no `{model}` is run exactly as written, its model key unused.
+Nothing here assumes a vendor: the names are whatever the configured command understands.
+
+Which model to run is usually a property of the machine — what is installed, what the account may
+spend — rather than of the corpus, so it can be set once for every repository. Three layers, each
+beating the one below it:
+
+| Layer | Where |
+| --- | --- |
+| the run | `REPOGRAPH_ENRICH_MODEL`, `REPOGRAPH_RERANK_MODEL` |
+| the repository | `repograph.toml` |
+| the machine | `$REPOGRAPH_CONFIG`, else `$XDG_CONFIG_HOME/repograph/config.toml`, else `~/.config/repograph/config.toml` |
+
+```toml
+# ~/.config/repograph/config.toml — every repository on this machine, unless it says otherwise
+enrich_model = "haiku"
+rerank_model = "sonnet"
+```
+
+A key the repository names wins even when it names the built-in value: what the file says is what
+that repository asked for. The machine file may set **only** `enrich_command`, `rerank_command`,
+`enrich_model`, `rerank_model` and `reranker_dir`, and refuses any other key by name. That refusal
+is deliberate rather than an omission: the corpus-shaped keys describe one repository's documents,
+and a global `embed_model` in particular would rewrite every store's vectors under a model nobody
+chose for it.
 
 `id_families` and `milestone_families` default to the strict list `beauty-crm`'s census settled on —
 they are this project's development corpus, not a generic default. Every family is matched as
@@ -587,8 +620,9 @@ might ask to find that node in everyday words plus a line of synonyms — the ge
 embedded as rows of their own for the reranker's pool and indexed for BM25 as a list of their own
 in every answer. `enrich_command` is any
 shell command that reads the prompt on stdin and writes `id<TAB>question` lines; the default is
-headless Claude Code with thinking off (`MAX_THINKING_TOKENS=0 claude -p --model haiku …`), which
-answers the same and 4–5× faster than with it. Generation is cached by passage hash in
+headless Claude Code with thinking off (`MAX_THINKING_TOKENS=0 claude -p --model {model} …`),
+which answers the same and 4–5× faster than with it; `{model}` is filled from `enrich_model` —
+see [Choosing a model](#choosing-a-model-and-where-the-choice-lives). Generation is cached by passage hash in
 `.repograph/questions.json`, so a later `enrich` pays only for nodes whose text changed. Two
 kinds of drift are refused on the way in and cleaned out of an older cache on load: a line
 whose letters are mostly neither Cyrillic nor Latin (the generator answered 12 ADR nodes of the
