@@ -369,4 +369,42 @@ mod tests {
         // asserted — and the guard's dev+ino check has always lived with that.
         if cfg!(windows) { assert_ne!(sys::id(&path), Some(id), "bound again under the name, another file"); }
     }
+
+    /// What `run` does on the way out: the listener is still alive on its thread when the guard
+    /// removes the file. If the platform refused this, the cost would be a stale file for the
+    /// next `serve` to sweep — worth knowing rather than guessing.
+    #[test]
+    fn the_socket_file_is_removed_while_its_listener_is_still_bound() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("serve.sock");
+        let _listener = sys::bind(&path).unwrap();
+        std::fs::remove_file(&path).unwrap();
+        assert!(!sys::present(&path));
+    }
+
+    /// The whole reason for a socket file over a port: a name nobody listens on is refused, at
+    /// once, not accepted by a stranger and waited out.
+    #[test]
+    fn a_connect_to_a_socket_nobody_listens_on_is_refused_at_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("serve.sock");
+        drop(sys::bind(&path).unwrap());
+        let started = std::time::Instant::now();
+        let err = sys::connect(&path).expect_err("nobody listens");
+        assert!(started.elapsed() < std::time::Duration::from_secs(1), "refused after {:?}", started.elapsed());
+        assert_eq!(err.kind(), std::io::ErrorKind::ConnectionRefused, "{err}");
+    }
+
+    /// A user's name is in the socket's path, and on Windows the path crosses into `sun_path` as
+    /// UTF-8: two bytes a Cyrillic letter, and a conversion the runner's own ASCII path never makes.
+    #[test]
+    fn a_socket_binds_and_connects_under_a_directory_that_is_not_ascii() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path().join("Максим");
+        std::fs::create_dir(&home).unwrap();
+        let path = home.join("serve.sock");
+        let _listener = sys::bind(&path).unwrap();
+        assert!(sys::present(&path));
+        sys::connect(&path).unwrap();
+    }
 }
