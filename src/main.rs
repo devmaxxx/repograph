@@ -348,9 +348,25 @@ fn graph_for(repo: &std::path::Path, cfg: &config::Config, stale: bool) -> anyho
     }
 }
 
+/// The path as a user would write it. `canonicalize` on Windows answers in the `\\?\C:\…` form,
+/// which std puts back itself wherever a call needs it; carried around instead it is four bytes
+/// of the socket name's budget and a prefix in every message.
+#[cfg(windows)]
+fn plain(p: PathBuf) -> PathBuf {
+    let Some(s) = p.to_str() else { return p };
+    match s.strip_prefix(r"\\?\") {
+        Some(rest) if rest.starts_with(r"UNC\") => PathBuf::from(format!(r"\\{}", &rest[4..])),
+        Some(rest) => PathBuf::from(rest),
+        None => p,
+    }
+}
+
+#[cfg(unix)]
+fn plain(p: PathBuf) -> PathBuf { p }
+
 fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
-    let repo = cli.repo.canonicalize()?;
+    let repo = plain(cli.repo.canonicalize()?);
     // Loaded per command: `bench` reads its own from `REPOGRAPH_BENCH_REPO`, and `explain`/`verify`
     // must not fail on a broken `repograph.toml` they never read. `embed` does read it — the model
     // the vectors are written with lives there — so it fails on a broken one like the other writers.
@@ -732,5 +748,19 @@ more
         let (graph, _) = store::Store::new(repo).load().unwrap();
         let y = &graph.nodes["FR-PAY-20"];
         assert_eq!((y.file.as_str(), y.line, y.label.as_str()), ("docs/b.md", 5, "y in b"));
+    }
+
+    /// A user's path, and the four bytes the socket name gets back. std re-applies the prefix
+    /// inside the calls that need it, which the metadata assertion is here to show.
+    #[cfg(windows)]
+    #[test]
+    fn a_canonical_path_is_stated_without_its_verbatim_prefix() {
+        use std::path::PathBuf;
+        assert_eq!(super::plain(PathBuf::from(r"\\?\C:\a\b")), PathBuf::from(r"C:\a\b"));
+        assert_eq!(super::plain(PathBuf::from(r"\\?\UNC\srv\share\x")), PathBuf::from(r"\\srv\share\x"));
+        assert_eq!(super::plain(PathBuf::from(r"C:\a\b")), PathBuf::from(r"C:\a\b"));
+        let temp = super::plain(std::env::temp_dir().canonicalize().unwrap());
+        assert!(!temp.to_string_lossy().starts_with(r"\\?\"), "{}", temp.display());
+        assert!(std::fs::metadata(&temp).unwrap().is_dir(), "the stripped path still names the directory");
     }
 }
