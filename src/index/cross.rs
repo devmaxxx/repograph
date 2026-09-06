@@ -18,11 +18,10 @@ pub const PICK: usize = 5;
 
 pub struct CrossEncoder { session: Session, tokenizer: Tokenizer, wants_type_ids: bool }
 
-/// Where `optimum-cli export onnx` was told to write: `$HOME/.cache/repograph/reranker`, beside
+/// Where `optimum-cli export onnx` was told to write: `~/.cache/repograph/reranker`, beside
 /// the embedder's own cache, unless the config names another directory.
 pub fn default_dir() -> Result<PathBuf> {
-    let home = std::env::var_os("HOME").context("HOME is not set")?;
-    Ok(PathBuf::from(home).join(".cache").join("repograph").join("reranker"))
+    Ok(crate::index::cache_root()?.join("reranker"))
 }
 
 /// The pad token and its id as the model's own files declare them, the way the embedder reads
