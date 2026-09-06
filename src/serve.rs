@@ -53,15 +53,20 @@ mod sys {
     /// The socket file is a reparse point with nothing behind it, so the metadata that says it
     /// is there has to be its own, never a target's.
     pub fn present(path: &Path) -> bool { std::fs::symlink_metadata(path).is_ok() }
-    /// NTFS's file reference number, sequence included — a record reused for a new file carries
-    /// a new sequence, so a name unlinked and bound again is another identity, the way a fresh
-    /// inode is on unix. Creation time would not do: NTFS tunnels it, and a file recreated under
-    /// a name within fifteen seconds inherits the old one, which is a replacement server's timing.
-    pub fn id(path: &Path) -> Option<(u64, u64)> {
-        use std::os::windows::fs::MetadataExt;
-        let m = std::fs::symlink_metadata(path).ok()?;
-        Some((u64::from(m.volume_serial_number()?), m.file_index()?))
-    }
+    /// No identity here, and this is the whole of what Windows does without. On unix the socket
+    /// file's dev+ino let an exiting server remove the socket it bound and nothing else; with
+    /// `None` the guard removes nothing, so a `serve` that exits leaves the socket file behind
+    /// and the next one removes it before binding, which it already does. That is the state both
+    /// platforms are in after a Ctrl-C: the file left behind costs a client one refused connect,
+    /// and a refused connect is the property this socket was chosen for.
+    ///
+    /// NTFS's file reference number would say it — `file_index` with `volume_serial_number`,
+    /// the record's sequence number included, so a reused record is a new identity the way a
+    /// fresh inode is on unix — but both accessors are unstable (`windows_by_handle`) and
+    /// cannot be called from the pinned toolchain at all. Reaching them through `windows-sys` and
+    /// an unsafe `GetFileInformationByHandle`, or writing a nonce beside the socket, would buy
+    /// back that one removal and nothing else.
+    pub fn id(_path: &Path) -> Option<(u64, u64)> { None }
 }
 
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -323,23 +328,32 @@ impl Drop for Unlink {
 mod tests {
     use super::sys;
 
-    /// The two facts `try_ask` and `Unlink` read off the socket file, through the platform's own
-    /// metadata: on Windows the file is a reparse point, and `exists` would ask what it points at.
+    /// What `try_ask` reads before it connects and what `run` does to a socket file its
+    /// predecessor left behind, through the file's own metadata: on Windows the socket is a
+    /// reparse point, and `exists` would ask what it points at.
     #[test]
-    fn a_bound_socket_file_is_present_and_carries_an_identity_until_it_is_removed() {
+    fn a_socket_file_is_present_under_its_name_and_the_name_binds_again_once_it_is_removed() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("serve.sock");
-        assert!(!sys::present(&path) && sys::id(&path).is_none());
+        assert!(!sys::present(&path));
         let first = sys::bind(&path).unwrap();
         assert!(sys::present(&path));
-        let id = sys::id(&path).expect("a bound socket file has an identity");
         drop(first);
         std::fs::remove_file(&path).unwrap();
         assert!(!sys::present(&path), "the name goes with the file");
         let _second = sys::bind(&path).unwrap();
-        // NTFS bumps a reused record's sequence number, so the new file is a new identity by
-        // construction. A unix filesystem may hand the inode straight back, so there this is not
-        // asserted — and the guard's dev+ino check has always lived with that.
-        if cfg!(windows) { assert_ne!(sys::id(&path), Some(id), "bound again under the name, another file"); }
+        assert!(sys::present(&path));
+    }
+
+    /// The identity `Unlink` compares before it removes anything. Unix only, because `sys::id` is
+    /// `None` on Windows by construction — the comment there says what that costs.
+    #[cfg(unix)]
+    #[test]
+    fn a_bound_socket_file_carries_an_identity_and_a_free_name_does_not() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("serve.sock");
+        assert!(sys::id(&path).is_none());
+        let _listener = sys::bind(&path).unwrap();
+        assert!(sys::id(&path).is_some(), "a bound socket file has an identity");
     }
 }
