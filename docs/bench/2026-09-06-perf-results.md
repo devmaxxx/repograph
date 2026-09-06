@@ -261,6 +261,13 @@ Caching them is a change to `query::ask`, not to `serve`. It is a lever of its o
 its own pre-registered rule and its own evidence, and this plan's scope ends at P3, so nothing here
 implements it. What this document does is record the number to beat: **49 ms**.
 
+> **Answered (2026-09-06, 0.5.0).** That lever was built as L2 of the 0.5.0 gap plan, with the
+> pre-registered rule this paragraph asks for. The indexes are now built by the first answer and
+> held by `ask::Context`, and a socket lexical answer reads **6.8 ms** against this document's
+> 55.0, median of 33 against a base spread of 0.9. Every present-tense sentence below about
+> `query::ask` rebuilding per question describes the binary as it stood on this document's date,
+> not the released one. See [the 0.5.0 gap results](2026-09-05-0.5.0-gaps-results.md).
+
 ## Rule 1 and Rule 2 — what they prove, and what they do not
 
 Both rules were written before any number was measured, and neither was relaxed.

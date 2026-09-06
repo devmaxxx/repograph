@@ -101,7 +101,9 @@ pub enum Floors { Small, Large, None }
 /// model, and `src/index/dense.rs`'s own tests pin this same name by literal for the same reason.
 const LARGE_MODEL: &str = "intfloat/multilingual-e5-large";
 
-pub fn floors_for(model: Option<&str>) -> Floors {
+/// Private on purpose: `dense_grading` is the only way to reach the floors, so a caller cannot
+/// key them off the store's recorded rows while the embedder that answers is a resolved override.
+fn floors_for(model: Option<&str>) -> Floors {
     match model {
         None => Floors::Small,
         Some(m) if m == crate::index::embed::UNNAMED_MODEL => Floors::Small,

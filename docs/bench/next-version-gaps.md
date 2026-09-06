@@ -405,6 +405,12 @@ with the default still the small model, because the cost is real: an `ask` at 0.
 ([README](../../README.md#embeddings)). Nothing here reaches the `--no-dense` arm, which has no
 dense list to improve.
 
+**Update (2026-09-06, 0.5.0):** the default moved after this verdict was written. `DEFAULT_MODEL`
+is `intfloat/multilingual-e5-large` as of `35357c1`, and `UNNAMED_MODEL` keeps every store with no
+recorded model reading as the small one, so the costs listed above are now the costs of the default
+path rather than of an opt-in. `bench` has floors of its own for that model since 0.5.0 — 40/22
+enriched and 40/17 raw ([the 0.5.0 gap results](2026-09-05-0.5.0-gaps-results.md)).
+
 ## G12 · The gate compares raw BM25 scores across two indices
 
 **Raised (2026-09-05)** by A2. The questions gate — and the code gate A3 gave the code list — divides
@@ -543,7 +549,7 @@ suite and not this diagnostic. Both counts, question by question, are in
 | — | ~~the lexical arm's 49 ms~~ | closed 2026-09-05 (0.5.0) — the perf results left this number here and nowhere else. The BM25 indexes are built once by a resident context and kept: socket lexical 55.0 → 6.8 ms, median of 33 against a base spread of 0.9 ms, the design note's 30 ms target met; Rule 1 sixteen byte-identical verdicts and Rule 2 142/142 in four pairings |
 | — | ~~**G9** code is unreachable from prose~~ | measured 2026-09-05 — A1 to A4 each rejected by the rule; the code questions ship into an index of their own for the `ask --rerank` pool, `where` stays 0/9 in the plain fusion, and G12 is what would move it |
 | — | ~~**G10** five seeds over three lists~~ | measured 2026-09-05 — A4 prices one seat for a fourth list at 6 held-out questions in each arm, none gained, p = 0.031; closed as measured, not as fixed |
-| — | ~~**G11** the embedder for Russian paraphrase~~ | shipped 2026-09-05 as a store option — e5-large reads paraphrase 22/30 and held-out 103 → 119, at 0.8 s an `ask` and a 2.1 GB download; the default stays the small model |
+| — | ~~**G11** the embedder for Russian paraphrase~~ | shipped 2026-09-05 as a store option — e5-large reads paraphrase 22/30 and held-out 103 → 119, at 0.8 s an `ask` and a 2.1 GB download; the default followed at `35357c1`, and a store with no recorded model still reads as the small one |
 | — | ~~**G5** rank + MRR~~ | closed by Task 1 (2026-09-04) — every retrieval row carries `rank`, the summary carries `mrr`, and the run reads 0.635; the 2026-09-03 rows cannot be rescored |
 | 6 | **G1** unparsed files get a file node | the file half is closed by Task 2 (2026-09-04) against a `code_files` denominator; the symbol half is 57 Kotlin declarations and waits on 0.6.0's extractor |
 | — | ~~**G3** the three impact diagnostics~~ | closed by Tasks 3 and 4 (2026-09-04) — 123/123 files over 16 targets, mean recall 1.0 |
