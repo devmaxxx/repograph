@@ -243,3 +243,19 @@ fn multiple_links_stay_in_text_order_after_the_requirement_edges_are_sorted() {
     let links: Vec<&str> = ex.edges.iter().filter(|e| e.kind == EdgeKind::Links).map(|e| e.target.as_str()).collect();
     assert_eq!(links, ["file:docs/b.md", "file:docs/a.md", "file:docs/v.md"]);
 }
+
+/// A checkout with core.autocrlf=true — Git for Windows' installer default — is the same corpus:
+/// every id, label, body and line number, and so every passage hash a questions.json was written
+/// under. By construction today, since the extractors split with `lines()`; pinned so a slice of
+/// raw text in some future extractor cannot quietly make it false.
+#[test]
+fn a_crlf_document_extracts_the_same_nodes_and_edges_as_its_lf_twin() {
+    let lf = "**FR-PAY-1 · MUST · Штраф за отмену**\n\nШтраф списывается сам (INV-1).\n\n```\n**FR-X-9 · MUST · not a head**\n```\n\n**INV-1 · MUST · Деньги не сгорают**\n\nОтмена не сжигает деньги.\n\n- [ ] BE-M01-T1 · задача\n\n[а](a.md)\n";
+    let crlf = lf.replace('\n', "\r\n");
+    let (a, b) = (extract("docs/pay.md", lf), extract("docs/pay.md", &crlf));
+    let extracted: Vec<&str> = a.nodes.iter().map(|n| n.id.as_str()).collect();
+    assert_eq!(extracted, ["file:docs/pay.md", "FR-PAY-1", "INV-1"], "two extractions of nothing would agree too");
+    assert_eq!(a.nodes, b.nodes);
+    assert_eq!(a.edges, b.edges);
+    assert!(a.nodes.iter().all(|n| !n.body.contains('\r') && !n.label.contains('\r')));
+}
