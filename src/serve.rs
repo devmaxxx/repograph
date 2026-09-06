@@ -349,6 +349,7 @@ impl Drop for Unlink {
 #[cfg(test)]
 mod tests {
     use super::sys;
+    use std::io::{BufRead, BufReader};
 
     /// The two facts `try_ask` and `Unlink` read off the socket file, through the platform's own
     /// metadata: on Windows the file is a reparse point, and `exists` would ask what it points at.
@@ -382,17 +383,28 @@ mod tests {
         assert!(!sys::present(&path));
     }
 
-    /// The whole reason for a socket file over a port: a name nobody listens on is refused, at
-    /// once, not accepted by a stranger and waited out.
+    /// The whole reason for a socket file over a port: a name nobody listens on is settled at
+    /// once, not accepted by a stranger and waited out. Windows and Linux refuse the connect;
+    /// macOS sometimes completes it against the file a dropped listener left and hands back a
+    /// stream with nothing behind it, which reads as end of file — what `try_ask` does with a
+    /// reply it cannot parse is answer in its own process, so the outcome is the same either way.
     #[test]
-    fn a_connect_to_a_socket_nobody_listens_on_is_refused_at_once() {
+    fn a_connect_to_a_socket_nobody_listens_on_is_settled_at_once() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("serve.sock");
         drop(sys::bind(&path).unwrap());
         let started = std::time::Instant::now();
-        let err = sys::connect(&path).expect_err("nobody listens");
-        assert!(started.elapsed() < std::time::Duration::from_secs(1), "refused after {:?}", started.elapsed());
-        assert_eq!(err.kind(), std::io::ErrorKind::ConnectionRefused, "{err}");
+        match sys::connect(&path) {
+            Err(err) => assert_eq!(err.kind(), std::io::ErrorKind::ConnectionRefused, "{err}"),
+            Ok(stream) => {
+                if cfg!(windows) { panic!("a socket nobody listens on is refused on Windows, and this connect was taken"); }
+                stream.set_read_timeout(Some(std::time::Duration::from_secs(1))).unwrap();
+                let mut line = String::new();
+                let read = BufReader::new(stream).read_line(&mut line);
+                assert!(matches!(read, Ok(0) | Err(_)), "nothing is behind it: {read:?} {line:?}");
+            }
+        }
+        assert!(started.elapsed() < std::time::Duration::from_secs(2), "settled after {:?}", started.elapsed());
     }
 
     /// A user's name is in the socket's path, and on Windows the path crosses into `sun_path` as
