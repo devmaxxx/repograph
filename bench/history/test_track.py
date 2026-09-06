@@ -1,3 +1,4 @@
+import argparse
 import json
 import tempfile
 import unittest
@@ -174,6 +175,21 @@ class ParseBench(unittest.TestCase):
         names = {track.arm_name(dict(dense=d, enriched=e, **base))
                  for d in (True, False) for e in (True, False)}
         self.assertEqual(len(names), 4)
+
+    def test_a_tag_names_a_store_copy_s_rows_apart_from_the_fixture_s(self):
+        recorded = []
+        with tempfile.TemporaryDirectory() as d:
+            path = Path(d) / "bench.txt"
+            path.write_text(TRANSCRIPT)
+            original, track.append = track.append, recorded.append
+            try:
+                for tag in ("r1", None):
+                    track.cmd_record(argparse.Namespace(
+                        transcript=str(path), corpus="beauty-crm", corpus_path=None, note="", tag=tag))
+            finally:
+                track.append = original
+        self.assertEqual([r["arm"] for r in recorded],
+                         ["bench:dense+enriched+r1", "bench:dense+enriched"])
 
 
 class Floors(unittest.TestCase):
