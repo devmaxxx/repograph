@@ -130,30 +130,9 @@ what the diagnostic found is that the answer is both, in different files. Three 
 114 were a symbol name inside a string literal — never a reference, so Task 3 removed
 them from the truth rather than excluding them in prose, which takes the original ten
 targets to 111/111. The fourth was real: `AuthService`'s tenth file imported it through
-a barrel, and Task 4 made a re-exporting barrel an importer.
-
-**Measured.** Mean recall 0.949. Every narrow target is 1.0; the misses are all in the
-tiers an agent trusts most — `TenantContextInterceptor` 3/4, `OutboxPublisher` 6/7,
-`AuthService` 9/10.
-
-**Candidate cause, already documented.** The README names four constructs that produce
-no `Calls` edge: a chained expression, a destructured method, a callback parameter, a
-global. Four missing files out of 114 is small enough that a per-case read will name
-the construct exactly rather than leaving it to a guess.
-
-**Diagnostic.** For each of the three targets, diff the truth file list against the
-answer and open the missing file. One of three verdicts: a construct on the
-documented list (then the lever is that construct's extractor), a barrel path
-`impact` should have resolved (then it is a bug), or a reference in a string/template
-(then it is out of scope and the caveat should say so by name).
-
-**Why it is above its size.** `impact` is the command whose answer gets acted on
-destructively — someone deletes or renames on the strength of it. The README already
-says to confirm a "nothing uses this" with `rg -l`; a measured 0.949 is the number
-that decides whether that sentence is a caveat or a defect.
-
-**Gate.** 114/114 with the identified construct handled, or a named, measured
-exclusion in the README's blast-radius caveats. No silent 0.949.
+a barrel, and Task 4 made a re-exporting barrel an importer. The 0.949 this gap was raised
+on is in [the three-graph results](2026-09-03-three-graphs-results.md); what closed it is in
+[the 0.5.0 gap-closing results](2026-09-04-repograph-0.5.0-results.md).
 
 ---
 
@@ -164,25 +143,8 @@ exclusion in the README's blast-radius caveats. No silent 0.949.
 spanning small/large and mono/polyglot, `trace` unchanged at 8. The decision rule this
 gap asked for is written down in
 [`three-graphs.md`](three-graphs.md#when-a-blast-delta-counts), per suite, with a noise
-column — stated before the changes above were measured against it.
-
-**Measured.** One run per row, no repeats, on 10 + 8 + 2 cases. Retrieval has a real
-methodology behind it — 400 held-out questions, recall@5 with a ±5-point interval, a
-paired McNemar test. Blast has nothing equivalent, and `changes` rests on **two**
-cases, one of which carries most of the signal.
-
-**Why it matters now.** G1 and G3 both propose changes that will be judged on this
-suite. A suite that cannot distinguish a real gain from noise will approve whatever is
-tried first.
-
-**Lever.** Grow `blast.jsonl` where it is thinnest: `changes` from 2 to at least 8
-diffs spanning small/large and mono/polyglot, and `impact` with more narrow targets,
-which are the tier a mean over ten hubs hides. Then state a per-suite decision rule the
-way `bench` states its floors, so "did this help" has an answer before the change is
-written.
-
-**Gate.** A documented rule in `three-graphs.md` for when a blast delta counts, and a
-`changes` set large enough that one diff cannot carry the verdict.
+column — stated before the changes above were measured against it. Numbers:
+[the 0.5.0 gap-closing results](2026-09-04-repograph-0.5.0-results.md).
 
 ---
 
@@ -194,21 +156,8 @@ summary carries `mrr`, and this run measures **0.635** overall: keyword 0.816, c
 unmeetable: the 2026-09-03 rows cannot be rescored, because the harness stored counts
 and never the answer text, so the field starts here with no prior value. The paraphrase
 row also answers the question this gap was raised to serve — reordering cannot produce
-the 14 ids that are absent, and finding them would not by itself put them first.
-
-**Measured.** The protocol says it outright: an id ranked fifth of five counts the
-same as first. So 68/82 strict says nothing about whether the right answer is at the
-top of the answer or at the bottom of it.
-
-**Why it matters.** It is the difference between "the reranker is necessary" and "the
-answer only needs reordering" — G2's whole question. It also affects an agent
-directly: an agent reading an answer acts on the first plausible id.
-
-**Lever.** Record the rank of the expected id per row, and report MRR beside strict.
-The rows already exist; this is a scoring change in `report.py`, not new cases.
-
-**Gate.** Rank recorded on every retrieval row of the next result file, MRR in the
-summary, and the 2026-09-03 rows rescored so the two runs are comparable.
+the 14 ids that are absent, and finding them would not by itself put them first. Numbers:
+[the 0.5.0 gap-closing results](2026-09-04-repograph-0.5.0-results.md).
 
 ---
 
@@ -293,13 +242,12 @@ the order of operations in `bench/heldout.py`'s header, which now covers both ar
 
 **Raised (2026-09-05)** by the review of G7's fix. The gate compares the best BM25 score of the
 generated-questions list with the best of the passage list, and the two are only half
-comparable: the indices share the tokenizer, `K1`, `B`, the formula and the document count
-(7,408), but each normalises length against its own mean — 30.6 tokens a passage document, 51.8
-a question document — and weights terms by its own vocabulary, 10,762 terms against 21,839. So
-the ratio moves with enrichment coverage (1,996 of 7,408 nodes here) and with questions per node
-(~13), and 0.85 is where *this* store's two populations part — window (0.802, 0.866] on the 82,
-0.006 of room above. A store with short bodies, full enrichment or five questions per node lands
-somewhere else, and nothing in the code would say so.
+comparable — why is measured in
+[ADR-001, Amendment 7](../adr/ADR-001-paraphrase-recall-was-a-prediction.md): each index
+normalises length and weights terms against its own population, so the ratio moves with
+enrichment coverage and with questions per node, and 0.85 is where *this* store's two populations
+part — window (0.802, 0.866] on the 82, 0.006 of room above. A store with short bodies, full
+enrichment or five questions per node lands somewhere else, and nothing in the code would say so.
 
 **Gate.** A scale-free form — each list's best against its own *k*-th score, or a z-score within
 its own list — replaces the constant only if it reproduces the four arms exactly on this store
@@ -400,16 +348,13 @@ the small model's 15/30 — seven of the fifteen misses — with keyword 40/40, 
 the developer suite 37/60 and held-out 103 → 119 of 400 (+19 −3, p = 0.0009): the whole three-way
 rule, in the arm it applies to, and query latency still under a second. It ships as a property of
 the store — `embed_model` in `repograph.toml`, recorded in `vectors.json`, opened by every reader —
-with the default still the small model, because the cost is real: an `ask` at 0.8 s against 0.55 s,
-1.9 GB resident against 1.7, 2,680 s to embed 33,525 rows against ~103 s, and a 2.1 GB download
-([README](../../README.md#embeddings)). Nothing here reaches the `--no-dense` arm, which has no
-dense list to improve.
+and the default moved to it at `35357c1`; `UNNAMED_MODEL` keeps a store with no recorded model
+reading as the small one, so an older store never silently reinterprets under the new default. The
+cost of that default is measured in [Embeddings](../../README.md#embeddings). Nothing here reaches
+the `--no-dense` arm, which has no dense list to improve.
 
-**Update (2026-09-06, 0.5.0):** the default moved after this verdict was written. `DEFAULT_MODEL`
-is `intfloat/multilingual-e5-large` as of `35357c1`, and `UNNAMED_MODEL` keeps every store with no
-recorded model reading as the small one, so the costs listed above are now the costs of the default
-path rather than of an opt-in. `bench` has floors of its own for that model since 0.5.0 — 40/22
-enriched and 40/17 raw ([the 0.5.0 gap results](2026-09-05-0.5.0-gaps-results.md)).
+**Update (2026-09-06, 0.5.0):** `bench` has floors of its own for the default model since 0.5.0 —
+40/22 enriched and 40/17 raw ([the 0.5.0 gap results](2026-09-05-0.5.0-gaps-results.md)).
 
 ## G12 · The gate compares raw BM25 scores across two indices
 
@@ -568,6 +513,6 @@ suite and not this diagnostic. Both counts, question by question, are in
   list for the same reason and is no longer: `e5-base` and `bge-m3` were measured without generated
   questions in the index, and re-measuring the size with them — G11, 2026-09-05 — read paraphrase
   22/30 against 15/30 and held-out 103 → 119. It pays in latency, memory and a 2.1 GB download
-  rather than in tokens, which is why it ships as a store option and not as the default.
+  rather than in tokens, and it is the default since `35357c1`, with `embed_model` the way back.
 - **Query rewriting by a model.** Measured at paraphrase 6/14 with keyword falling to
   20/24, and rejected.

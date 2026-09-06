@@ -180,7 +180,8 @@ cadence.
 ### Asking a resident process
 
 Most of a fused `ask` is the process opening things it then throws away: the embedding model
-alone costs about 220 ms of it. `serve` opens them once and answers over a Unix socket:
+alone costs about 676 ms of it on the shipped default, 220 ms on the small model. `serve` opens
+them once and answers over a Unix socket:
 
 ```bash
 repograph serve                  # .repograph/serve.sock, poll every 30 s, exit after 30 min idle
@@ -290,7 +291,7 @@ Run the recorded benchmark:
 
 ```bash
 repograph bench                      # bench/cases.jsonl: 40 keyword + 30 paraphrase + 12 code
-repograph bench --cases other.jsonl  # a different case file, same 40/30/12 shape
+repograph bench --cases other.jsonl  # any shape: the 40/30/12 shape is graded, any other is measured ungated
 repograph dump --queries qs.jsonl --out lists.json   # every retriever's ranked list per question, 300 deep
 ```
 
@@ -339,9 +340,8 @@ up a moved store — not on a `questions.json` rewrite alone. The
 build costs about 120 ms on a 7,500-node graph. A later sitting bounds that build, the question
 index beside it, their scoring and the fusion at about 49 ms of a 54 ms lexical ask on the bench
 corpus at 8.3k nodes, and a later one still reads the same socket answer at 6.8 ms once the indexes
-are kept — different sittings on different graphs, not a before and after; those bounds and what
-they rest on are in [the perf results](docs/bench/2026-09-06-perf-results.md) and
-[the 0.5.0 gap results](docs/bench/2026-09-05-0.5.0-gaps-results.md).
+are kept — different sittings on different graphs, not a before and after, on the two documents
+cited above.
 
 ## What ends up in the graph
 
@@ -493,8 +493,8 @@ which halves model-open time against the library default. The files are a one-ti
 download cached under `FASTEMBED_CACHE_DIR` if that is set, else `~/.cache/repograph/fastembed`
 (the layout is the hub client's, so a cache populated by an earlier release is reused as is). Every
 command that touches the dense stage — `build`, `update`, `enrich`, `embed`, `watch`, `ask`,
-`bench` — reuses the cache; there are no further network calls once it is populated. `--no-dense`
-skips the download and the embedding stage everywhere.
+`bench`, `dump`, `serve` — reuses the cache; there are no further network calls once it is
+populated. `--no-dense` skips the download and the embedding stage everywhere.
 
 The model is a property of the store. `embed_model` in `repograph.toml` names what `build`,
 `update`, `enrich`, `embed` and `watch` write vectors with; `vectors.json` records it, and `ask`,
@@ -544,7 +544,7 @@ measured and never graded — the summary line says `model=<name>` and `gated=fa
 how they were read are in [the 0.5.0 gap results](docs/bench/2026-09-05-0.5.0-gaps-results.md).
 
 `ask` opens the model only when a fused query needs it, and that open is most of what a fused
-answer costs: ~0.8 s and ~1.9 GB on the default model, ~0.30 s and ~1.4 GB on the small one — the
+answer costs: ~0.8 s and ~1.9 GB on the default model, ~0.30 s and ~1.7 GB on the small one — the
 model, not the graph. The bench fixture is a small-model store, and its 0.30 s is 220 ms of open —
 a cache lookup, then the 16 MB tokenizer and the 448 MB ONNX session opening concurrently — against
 410 ms before the levers below. An exact-id lookup answers in ~50 ms and ~50 MB, and a `--no-dense`
@@ -595,8 +595,12 @@ whose letters are mostly neither Cyrillic nor Latin (the generator answered 12 A
 development corpus in Urdu — 144 lines nobody could search for), and several questions
 tab-joined into one line around the node's own id (40 lines, each of which the exact stage
 answered for free). A node left without questions is asked again by the next `enrich`. On the
-1,971 eligible nodes of the corpus it took 16 minutes at 8-way parallelism and roughly $2.5 of
-Haiku; a node's questions run about 13 lines.
+corpus as it stood on 2026-09-02, 1,971 eligible nodes took 16 minutes at 8-way parallelism and
+roughly $2.5 of Haiku
+([ADR-001, Second amendment](docs/adr/ADR-001-paraphrase-recall-was-a-prediction.md)); the corpus
+has since grown to 1,996 eligible nodes
+([the 0.5.0 gap results](docs/bench/2026-09-05-0.5.0-gaps-results.md)). A node's questions run
+about 13 lines.
 
 `enrich --code` extends the pass to code: symbols with a doc comment or a body of their own and
 files with a head comment — 3,475 nodes on the corpus, 290 batches — through a prompt of its own
@@ -627,11 +631,12 @@ questions is the third — a BM25 list of their own, which the plain `ask` fuses
 list — when that list has earned its turn. It joins the fusion only if its best BM25 score is at
 least 0.85 of the passage list's best. On 400 held-out generated questions the passage list is the
 one holding the answer below that ratio (30% in its top five against 21%) while the questions list
-is above it (24% against 12%). The 0.85 is a constant of this store, not of BM25 — the two indices
-share the tokenizer and the document count but normalise length against their own means and weight
-terms by their own vocabularies — and its window on the 82 recorded cases is (0.802, 0.866]: below
-it a keyword case loses its seat, at 0.87 the arm with embeddings drops a paraphrase under its
-floor. Before the gate an equal turn cost the `--no-dense` arm two exact keyword seeds, 39/40 raw
+is above it (24% against 12%). The 0.85 is a constant of this store, not of BM25, and its window on
+the 82 recorded cases is (0.802, 0.866]: below it a keyword case loses its seat, at 0.87 the arm
+with embeddings drops a paraphrase under its floor. Why the ratio is a property of this store
+rather than of BM25 is measured in
+[ADR-001, Amendment 7](docs/adr/ADR-001-paraphrase-recall-was-a-prediction.md). Before the gate
+an equal turn cost the `--no-dense` arm two exact keyword seeds, 39/40 raw
 against 37/40 enriched; with it that arm reads 39/40 either way, paraphrase 7/30 raw against 14/30
 enriched, and the held-out set moved by 5 gained and 7 lost, exact McNemar p = 0.77. The arm with
 embeddings was 40/40 throughout. (An older reading on the 14-case set — 6/14 paraphrase with the
@@ -691,8 +696,10 @@ per-question query rewrite by the model was measured too — 20/24 keyword, 6/14
 
 `repograph bench [--cases file]` runs the recorded 82 cases (40 keyword + 30 paraphrase + 12 code)
 against a built graph and fails the process if any floor is missed. The recorded `bench/cases.jsonl`
-is compiled into the binary, so a release build benches from any directory; `--cases` substitutes a
-different file of the same shape.
+is compiled into the binary, so a release build benches from any directory; `--cases` substitutes
+any other file — one of the recorded 40/30/12 shape is graded against the floors below, any other
+shape is measured and reported with `gated=false`, the way `bench --cases bench/dev-cases.jsonl` is
+used throughout [the runbook](docs/bench/runbook.md).
 
 The floors are not one set of numbers but two, because [`enrich`](#spending-tokens-on-purpose) is
 optional and paraphrase recall is what it buys. `bench` reads which state the store is in and says
@@ -794,17 +801,19 @@ has measured: 7/14 and 24/24 at 203 median tokens against graphify's 0/14 and 11
 tokens, built for 14.6 million tokens instead of zero.
 
 **`import-legacy`'s coverage note.** Folding in a graphify graph costs recall and cost at query time,
-not just disk: importing `beauty-crm`'s graphify graph measured keyword dropping 24/24 → 23/24 and
-dense p90 rising 218 → 233 tokens on the 41 cases then recorded, which breaches the p90 floor above. That is why `bench` above is
-always measured against a legacy-free store, and why `import-legacy` stays a separate, opt-in step
-rather than folding into `build`. Two graphify nodes that resolve to the same requirement collapse
-onto one node, and the edge between them is dropped rather than kept as a self-loop — 592 of the
-20,415 links on `beauty-crm`'s graph; the import prints the count.
+not just disk: importing `beauty-crm`'s graphify graph adds 8,577 concept nodes and 23,117 edges and
+moves the recorded 82 cases from `40/15/12` to `38/16/12` — two keyword hits traded for one
+paraphrase gained, below the binary's own floors
+([the three-graph results](docs/bench/2026-09-03-three-graphs-results.md)). That is why `bench`
+above is always measured against a legacy-free store, and why `import-legacy` stays a separate,
+opt-in step rather than folding into `build`. Two graphify nodes that resolve to the same
+requirement collapse onto one node, and the edge between them is dropped rather than kept as a
+self-loop; the import prints the count for whatever graph it is run against.
 
 ## Measured
 
-On its development corpus — a TypeScript monorepo with a Russian-language PRD, 825 indexed files
-out of 3,599 tracked:
+A snapshot from 2026-09-02 (commit `b589ca2`), when the development corpus was a TypeScript
+monorepo with a Russian-language PRD, 825 indexed files out of 3,599 tracked:
 
 |                                 |                                                                                                                              |
 | ------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
@@ -815,7 +824,12 @@ out of 3,599 tracked:
 | Lexical index build             | ~120 ms, paid once per context since 0.5.0 rather than once per question — a later sitting bounds that build, the question index beside it, their scoring and the fusion at ~49 ms on the bench corpus at 8.3k nodes ([the perf results](docs/bench/2026-09-06-perf-results.md)), and a later one still reads that socket answer at 6.8 ms with the indexes kept ([the 0.5.0 gap results](docs/bench/2026-09-05-0.5.0-gaps-results.md)); different sittings, not a before and after |
 | Tokens spent building the graph and its vectors | 0                                                                                                             |
 
-Retrieval on the recorded 82 cases against that graph, both arms run twice with identical results:
+The corpus has since grown; the bench fixture the numbers below are measured on is 908 files and
+about 8.3k nodes
+([the 0.5.0 gap results](docs/bench/2026-09-05-0.5.0-gaps-results.md),
+[the perf results](docs/bench/2026-09-06-perf-results.md)).
+
+Retrieval on the recorded 82 cases against that current corpus, both arms run twice with identical results:
 keyword 40/40, paraphrase 15/30, code 12/12 at 220 p90 tokens with embeddings; 39/40, 14/30, 12/12
 at 215 p90 with `--no-dense`, both arms green. Those are the numbers with `enrich`'s generated
 questions in the store — the one thing above that was paid for, roughly $2.5 of Haiku, once. The
@@ -826,9 +840,9 @@ zero tokens throughout reads 40/40, 9/30, 12/12 at 221 p90 and 39/40, 7/30, 12/1
 [Bench](#bench) floors each state on its own numbers.
 
 The prior art on the same corpus was an LLM-extracted graph that cost **14.6 million input tokens
-over 13 runs** and, measured on the 38 questions of the day, answered 0 of 14 paraphrase queries at
-~1,555 tokens per answer and 11 of 24 keyword queries at ~1,027. Cost is not the only reason to
-replace it, but it is the easiest one to state.
+over 13 runs** — see the table at the top of this document for how it and repograph compare on the
+38 questions of the day. Cost is not the only reason to replace it, but it is the easiest one to
+state.
 
 See [Bench](#bench) for the retrieval-quality floors these numbers are held to, and the ADR for the
 one figure that didn't hold up on first measurement.
