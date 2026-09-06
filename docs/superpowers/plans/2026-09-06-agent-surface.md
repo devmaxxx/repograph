@@ -19,7 +19,7 @@
 - **Numbers.** Everything measured during planning is labelled with the command that produced it (the *Measured during planning* ledger). Token sizes of command output are UTF-8 bytes / 4, the README's proxy, which counts Cyrillic at roughly double; the harness measures tokens the model was actually billed (`modelUsage` in the result message). A number this plan cannot measure now is written as "to be measured in Task N". ADR-001 applies: a floor is committed before its number is read.
 - The GitNexus user-level hooks (`~/.claude/settings.json`, `~/.codex/hooks.json`) and its MCP server stay until 0.6.0 covers C#/Kotlin/Python. `graphify-out/` and `.gitnexus/` in beauty-crm stay on disk and unused; nothing here proposes touching them.
 - No MCP server (Decision §6). No Windows transport work (its own plan). No new language extractors (0.6.0).
-- Versions: `main` is 0.5.0. Tasks 0–5 and 9 change no Rust and ship as 0.5.x docs/hooks/bench work; Tasks 6–8 add flags and subcommands and ship under the next minor. Nothing in this plan bumps `Cargo.toml`; the bump is its own PR as before (#7).
+- Versions: `main` is 0.5.0. Tasks 0–5 and 9 change no Rust and ship as 0.5.x docs/hooks/bench work; Tasks 6–8 add flags and subcommands and ship in the current version line as well — Max, 2026-09-07: «включить в текущую версию» — so the whole plan lands as 0.5.x, and nothing in it bumps `Cargo.toml`.
 - The commit hook rejects AI attribution trailers and session links, and rejects any single shell command that contains both a heredoc and the text `git commit` unless the heredoc's first line is a Conventional Commits subject: edits and commits go in separate commands; `git commit -F - <<'MSG'` works when the first heredoc line is the subject. It also reads any heredoc whose body mentions a commit step, so a plan chunk or a skill paragraph that names the commit command is written with the Write tool, never appended by heredoc. Subjects are Conventional Commits (`feat(agent): …`, `test(bench): …`, `docs: …`, `feat(cli): …`; the hook's type list is feat|fix|docs|style|refactor|perf|test|build|ci|chore|revert, so bench work commits as `test(bench)`).
 - Comments say why, never what; no ticket ids; tool directives stay. Agent-facing text (stanza, skill, hook, brief) is English: the hook and the skill already are, and one text serves both harnesses.
 - Any `gh` call runs `gh auth switch --user devmaxxx && gh …` in the same shell command.
@@ -565,7 +565,7 @@ Expected: the brief ≤ 700 B; the rule 321 B; the interception ≤ 500 B with t
 } }
 ```
 
-`agent/hooks/codex.json`: the same four events with `"matcher": "Bash"` on PreToolUse, `"apply_patch|Edit|Write"` on PostToolUse, and the command `node .codex/hooks/repograph-hook.mjs` (Codex sets no project-dir variable; the session's `cwd` is the repository). The installer rewrites the path for `--global` (`~/.claude/hooks/…`, `~/.codex/hooks/…`).
+`agent/hooks/codex.json`: three of the four events — no PreToolUse interceptor on Codex (Max, 2026-09-07: brief, skill and risk line only; the interceptor's verdict is read on Claude and not carried over blind) — `SessionStart`, `"apply_patch|Edit|Write"` on PostToolUse, `SubagentStart`, and the command `node .codex/hooks/repograph-hook.mjs` (Codex sets no project-dir variable; the session's `cwd` is the repository). The installer rewrites the path for `--global` (`~/.claude/hooks/…`, `~/.codex/hooks/…`).
 
 `agent/stanza.md`: the draft measured at 1,014 B, between `<!-- repograph:begin -->` / `<!-- repograph:end -->`, with `{{command}}` where the invocation name goes (`repograph` by default, `pnpm exec repograph` for beauty-crm). The `RULE` constant in the hook is its fourth-bullet paragraph rewritten as the three-line rule; the test compares them.
 
@@ -772,9 +772,9 @@ printf 'Reply with the single word pong and nothing else.\n' | sh -c 'f=$(mktemp
 
 Expected: `pong` on stdout alone. This is the command line the README documents for `rerank_command`/`enrich_command` (Decision §4); if `codex exec` needs `--json` or another flag to keep stdout clean, the line is corrected here and only here, and the README carries the corrected one.
 
-- [ ] **Step 4: Global hooks — only on Max's yes (Open questions)**
+- [ ] **Step 4: Global hooks (Max, 2026-09-07: global and per-repository)**
 
-If yes: `node "$W/agent/install.mjs" --claude --global` and `--codex --global`; the user-level entry fires in every repository with a `.repograph/` store and is silent elsewhere (the hook's `built()` guard), beside the GitNexus entries, which stay. If no: nothing; the project install is complete.
+`node "$W/agent/install.mjs" --claude --global` and `--codex --global`; the user-level entry fires in every repository with a `.repograph/` store and is silent elsewhere (the hook's `built()` guard), beside the GitNexus entries, which stay. The Codex global fragment is the same three-event `codex.json`. Verify: open a session in a repository without a store and confirm no hook output; in beauty-crm confirm one brief and no duplicate (project and global entries both fire — the script dedups on `session_id`, tested in Task 2).
 
 - [ ] **Step 5: See it once, and hand over**
 
@@ -1006,10 +1006,12 @@ Expected: a PR URL. Report DONE with it and the paths under `$M`.
 
 Every `$M/...` path is a file a step creates before another reads it. The twelve tasks' expectations were read from the fixture during planning except the two marked *pin*, which Task 1 Step 2 reads before the first run. The two test counts (`444`/`12`) are the 2026-09-06 plans' at `868f4c1` and are confirmed or replaced by Task 0 Step 1. The `modelUsage` field spellings come from the cost-tracking reference and are confirmed by Task 0 Step 3 before `score.py` depends on them. The `SubagentStart` output contract is the one documentation claim the fetches could not quote, and Task 2 Step 5 settles it in a session before the fragment ships. Every floor (F1–F3, E1–E4, the 25 % cap) is written into a `$M/taskN.txt` before its numbers are read. The hook code in Task 2 is written against the payload fields the notice hook already consumes and the output contract GitNexus's hook already uses in both harnesses; the Rust in Tasks 6–8 against `src/main.rs`, `src/impact.rs`, `src/changes.rs`, `src/query.rs`, `src/ask.rs`, `src/bench.rs`, `src/dump.rs` as read at `e0b2f5c`. No step says "similar to" another. Nothing writes the fixture; Task 9 Step 3 checks.
 
-## Open questions for Max
+## Decisions (Max, 2026-09-07)
 
-1. **Global install or per-repository only?** `install-agent --global` puts the hook beside the GitNexus entries in `~/.claude/settings.json` and `~/.codex/hooks.json`; it is silent in any directory without a `.repograph/` store. Per-repository is what beauty-crm gets regardless (Task 5). Task 5 Step 4 waits on this.
-2. **Does Codex get the interceptor, or only the brief, the skill and the risk line?** Codex's only search surface is Bash, and its hooks are trusted by hash per change; the same script serves both, so this is a matcher line in `agent/hooks/codex.json`, decided before Task 5.
-3. **May `--escalate` ever spend tokens without a flag?** Task 8 ships it opt-in like `--rerank`. Making it the skill's *recommendation* is E3's call; making it `ask`'s default would spend ~19k tokens on every question that looks weak, and the plan does not propose it — but if you want a default that spends, that is a different rule to write before Task 8 runs.
-4. **Which minor carries the Rust half?** The 2026-09-03 plan reserved 0.6.0 for C#/Kotlin/Python. Tasks 6–8 can ride 0.6.0 with them, or take a minor of their own first and move the languages to 0.7.0. The zero-Rust batch (Tasks 1–5, 9) needs no bump.
-5. **The C-family runs twice ($36 of the $50.40 ceiling), or once?** F1–F3 are written for two runs, as the bench floors were read twice; one run takes the ceiling to $32.40 and loses the fragility read. The actual cost of Task 1's four baseline runs is known before Task 3 starts and can decide it.
+The five questions the plan carried were put to Max and answered; the tasks above are edited to match.
+
+1. **Hook install: global and per-repository.** `install-agent --global` for both harnesses, beside the GitNexus entries; beauty-crm also gets the project install. Task 5 Step 4 is unconditional.
+2. **Codex gets the brief, the skill and the risk line — no interceptor.** `agent/hooks/codex.json` carries `SessionStart`, `PostToolUse`, `SubagentStart` and no `PreToolUse` entry; the interceptor's F2 verdict is read on Claude and not carried to Codex.
+3. **`--escalate` spends only behind its flag.** Opt-in like `--rerank`; the skill may recommend it on a miss (E3 decides the wording); `ask` never escalates on its own.
+4. **The Rust half ships in the current version line.** Tasks 6–8 land as 0.5.x with the rest; no minor bump in this plan; 0.6.0 stays the languages' release.
+5. **The C family runs twice.** F1–F3 stand as written; the ceiling stays $50.40.
