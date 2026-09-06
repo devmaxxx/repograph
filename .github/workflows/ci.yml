@@ -34,3 +34,14 @@ jobs:
       - if: steps.token.outputs.present != 'true'
         run: echo "::warning::BENCH_REPO_TOKEN is not set; the bench did not run"
 
+  windows:
+    runs-on: windows-latest
+    steps:
+      # The repository is LF throughout and the tests compare bytes; a checkout the runner's
+      # git had converted to CRLF would be a different corpus.
+      - run: git config --global core.autocrlf false
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.98.0
+        with: { components: clippy }
+      - run: cargo clippy --all-targets -- -D warnings
+      - run: cargo test
