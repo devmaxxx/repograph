@@ -28,43 +28,58 @@ const MAX_EXPANDED: usize = 1;
 /// first, so two seeds were pinned; shown text, the pins were the retrievers' guess taking two
 /// of the model's five slots, and unpinning them is what took paraphrase from 13/14 to 14/14.
 const PINNED: usize = 0;
-/// The generated-questions BM25 list joins the plain-path fusion only when its best score is at
-/// least this fraction of the passage list's best. Below it, on 400 held-out questions, the
-/// passage list is the one holding the answer (30% in its top five against 21%) and dropping
-/// the questions list costs nothing measurable; above it the questions list is the better
-/// retriever (24% against 12%). The held-out set never binds the value — exact McNemar against
-/// the ungated fusion is p = 0.34 to 0.79 at every value from 0.80 to 0.95 — so the window is
-/// set by the 82 recorded cases alone: at 0.80 the keyword case `FR-WH-53` (ratio 0.801) loses
-/// its seat and the lexical arm reddens, and at 0.87 a paraphrase case (ratio 0.867) loses its
-/// list and the arm with embeddings reads 13/30 under its floor of 14. Ten of the thirty
-/// paraphrase ratios sit in (0.85, 0.90), so the window's upper edge is the foot of the very
-/// population the gate admits. The window's centre, 0.83, was measured too: identical on the 82
-/// in all four arms, but the lexical held-out arm loses three more questions to it (109 → 106,
-/// none gained) — a list admitted at a ratio just under 0.85 came in without the answer and
-/// took seats. So the value stays at 0.85, with 0.05 of room below and 0.006 above; the nearest
-/// paraphrase ratio is 0.856, and any change to the store's questions moves every ratio.
+/// How much more of the query the generated-questions BM25 list must have covered, against the
+/// passage list, to join the plain-path fusion. Each list is first asked about itself — what
+/// fraction of what the query could reach in that index its best document actually reached,
+/// `best / attainable` — and the admission compares those two coverages. A coverage is
+/// dimensionless, so the two lists arrive in one unit whatever their raw scores are worth. The
+/// shipped ratio compared the raw bests instead, and the two indices normalise length against
+/// their own means (30.6 tokens a passage, 51.8 a question document) and weight terms by their
+/// own vocabularies (10.8k against 21.8k), so its value moved with enrichment coverage and
+/// questions per node and was a constant of one store rather than of BM25 — gaps G8 and G12.
 ///
-/// It is a constant of this store, not of BM25. The two indices share the tokenizer, the
-/// formula and the document count, but each normalises length against its own mean (30.6
-/// tokens a passage, 51.8 a question document) and weights terms by its own vocabulary (10.8k
-/// against 21.8k), so the ratio moves with enrichment coverage and questions per node. A
-/// scale-free form — each list's best against its own k-th — is gap G8, not tried.
-const QUESTIONS_GATE: f32 = 0.85;
+/// The value is the crossover of the 400 held-out questions in the `--no-dense` arm: the split
+/// that puts the most of them on the side of the list actually holding their answer in its top
+/// five (`/Users/max/bench/gaps-2026-09-05/admission-verdict.txt`). It was derived before either
+/// suite was read and is not re-derived, rounded or tuned; if the form fails, the form fails.
+/// The rule the form was judged against, written before it was ever run, and the measurements
+/// that judged it: `docs/superpowers/specs/2026-09-06-coverage-admission-design.md`.
+const QUESTIONS_GATE: f64 = 0.761;
 
 /// `REPOGRAPH_QUESTIONS_GATE` overrides the constant for a measurement and for nothing else:
 /// `0` reproduces the ungated fusion that ADR-001 Amendment 6's before-column was read against,
-/// which no commit's binary otherwise produces, and any other value re-reads the window above.
-fn questions_gate() -> f32 {
+/// which no commit's binary otherwise produces, and any other value re-reads the coverage
+/// crossover above — no longer the ratio of two raw bests that the name once meant.
+fn questions_gate() -> f64 {
     gate_from(std::env::var("REPOGRAPH_QUESTIONS_GATE").ok().as_deref())
 }
 
-fn gate_from(override_: Option<&str>) -> f32 {
+fn gate_from(override_: Option<&str>) -> f64 {
     override_.and_then(|v| v.trim().parse().ok()).unwrap_or(QUESTIONS_GATE)
+}
+
+/// What this list's best document answered of the query, over what the query could have reached
+/// in that index at all. An index holding none of the query's terms attains nothing and its list
+/// covers nothing, which keeps the zero out of the denominator.
+fn coverage(best: f32, attainable: f32) -> f64 {
+    if attainable > 0.0 { f64::from(best) / f64::from(attainable) } else { 0.0 }
+}
+
+/// Whether a list is seated beside the passages under the coverage admission. The arithmetic is
+/// `f64` over the `f32` scores because the constant was derived by `bench/admission.py` in double
+/// precision, and that replay is checked against this function query by query — in `f32` the two
+/// would be different functions at the boundary.
+fn admits(best: f32, attainable: f32, passages_best: f32, passages_attainable: f32, c: f64) -> bool {
+    if best <= 0.0 { return false; }
+    let theirs = coverage(passages_best, passages_attainable);
+    // A passage list that covered nothing of the query is no bar to clear, rather than a
+    // division by zero that would refuse every list standing behind it.
+    theirs <= 0.0 || coverage(best, attainable) / theirs >= c
 }
 
 /// The lexical lists for one question, in fusion order. A store `enrich` never touched has one:
 /// an index of id-only documents is shorter than the passages and ranks an id-bearing term above
-/// the passage that carries it, so on a raw store the questions list would clear any gate for the
+/// the passage that carries it, so on a raw store the questions list would be admitted for the
 /// wrong reason and cost a build per question to do it. On the reranked path both lists are
 /// admitted unconditionally: the fused order there is a candidate pool `depth` deep rather than
 /// five seats, so a list there costs the reranking model candidates and not seeds, and Amendment 2
@@ -78,8 +93,8 @@ fn lexical_lists(lex: &Lexical, query: &str, depth: usize, reranked: bool) -> Ve
     let generated = questions_index.search(query, depth);
     if reranked {
         let mut pool = vec![only_ids(passages), only_ids(generated)];
-        // Not on the plain path. Given a seat there instead — one, on the same gate — the code
-        // questions read `where` 0/9 → 2/9 on the developer suite but held-out 103 → 97 and
+        // Not on the plain path. Given a seat there instead — one, on the same admission — the
+        // code questions read `where` 0/9 → 2/9 on the developer suite but held-out 103 → 97 and
         // 109 → 103, 0 gained and 6 lost in each arm, p = 0.031 (2026-09-05): five seats are the
         // budget the floors were set on, and a seat given to code is a document question's answer
         // lost. Here the pool is `--depth` deep (200 by default) rather than five seats, so the
@@ -92,10 +107,11 @@ fn lexical_lists(lex: &Lexical, query: &str, depth: usize, reranked: bool) -> Ve
         return pool;
     }
     let best = |l: &[(String, f32)]| l.first().map(|(_, s)| *s).unwrap_or(0.0);
-    let floor = questions_gate() * best(&passages);
-    let admitted = |l: &[(String, f32)]| best(l) >= floor && best(l) > 0.0;
+    let (passages_best, passages_attainable) = (best(&passages), lex.passages.attainable(query));
     let mut lists = Vec::with_capacity(2);
-    if admitted(&generated) { lists.push(only_ids(generated)); }
+    if admits(best(&generated), questions_index.attainable(query), passages_best, passages_attainable, questions_gate()) {
+        lists.push(only_ids(generated));
+    }
     lists.push(only_ids(passages));
     lists
 }
@@ -156,10 +172,10 @@ pub fn ask(graph: &Graph, ids: &IdMatcher, lex: &Lexical, dense: Option<Dense>, 
         // outright ten — yet an equal turn in the round-robin hands it half of five seeds, and
         // the exact passage row goes past the cut. Thinning its turns for every question was
         // measured and rejected (gap G7): on held-out paraphrases it is the retriever doing the
-        // work. So it is admitted per question, on how strongly it matched against how strongly
-        // the passages did — `QUESTIONS_GATE`, and `lexical_lists` for what the two paths do
-        // with it. The raw arms are untouched by construction: a store without questions gets
-        // no questions list built at all.
+        // work. So it is admitted per question, on how much of the question its best document
+        // covered against how much the passages' best covered — `QUESTIONS_GATE`, and
+        // `lexical_lists` for what the two paths do with it. The raw arms are untouched by
+        // construction: a store without questions gets no questions list built at all.
 
         // The builds now happen once in the caller, not here — the overlap with the model open
         // lives there too, in `Context::answer`, where `Lexical::build` runs before this
@@ -496,12 +512,14 @@ mod tests {
     }
 
     #[test]
-    fn the_questions_list_leads_when_admitted_and_is_absent_when_not() {
+    fn the_questions_list_leads_when_admitted_and_is_absent_when_it_matched_nothing() {
         let g = graph();
         let mut qs = questions();
         qs.entries.get_mut("FR-PAY-20").unwrap().questions.push("какой штраф за отмену".into());
-        // Ratio 0.41 (see the seat test above): passages only.
-        let weak = lexical_lists(&lex(&g, &qs), "штраф считается", 10, false);
+        // «считается» is in FR-PAY-22's body and in no stored question, so the questions index
+        // scores nothing and is refused. This is the only refusal a two-node graph can produce:
+        // see the test below for why the raw ratio's other refusals do not survive the change.
+        let weak = lexical_lists(&lex(&g, &qs), "считается", 10, false);
         assert_eq!(weak.len(), 1);
         assert_eq!(weak[0][0], "FR-PAY-22");
         // Ratio above the gate: the questions list first, then the passages.
@@ -526,17 +544,19 @@ mod tests {
         let entry = |t: &str| crate::enrich::Entry { hash: String::new(), questions: vec![t.into()] };
         qs.entries.insert("sym:apps/a.ts::revoke".into(), entry("как выйти со всех устройств"));
         qs.entries.insert("sym:apps/a.ts::revokeOne".into(), entry("как выйти с одного устройства"));
-        // Every query word but one is a code question's, and the list would clear the gate the
-        // documents' list is held to: the plain fusion is the passages alone all the same. The
-        // premise is asserted rather than asserted-by-comment, so a scoring change that made the
-        // code list weak would fail here instead of leaving the plain-path check passing for the
-        // wrong reason.
+        // Every query word but one is a code question's, and the list would clear the admission
+        // the documents' list is held to: the plain fusion is the passages alone all the same.
+        // The premise is asserted rather than asserted-by-comment, so a scoring change that made
+        // the code list weak would fail here instead of leaving the plain-path check passing for
+        // the wrong reason.
         let query = "штраф выйти всех устройств";
         let best = |l: &[(String, f32)]| l.first().map(|(_, s)| *s).unwrap_or(0.0);
-        let code_best = best(&LexicalIndex::build_code_questions(&g, &qs).search(query, 10));
-        let passages_best = best(&LexicalIndex::build(&g).search(query, 10));
-        assert!(code_best >= QUESTIONS_GATE * passages_best,
-            "the code list must clear the gate for this test to say anything: {code_best} against {passages_best}");
+        let code_index = LexicalIndex::build_code_questions(&g, &qs);
+        let passages_index = LexicalIndex::build(&g);
+        let code_best = best(&code_index.search(query, 10));
+        let passages_best = best(&passages_index.search(query, 10));
+        assert!(admits(code_best, code_index.attainable(query), passages_best, passages_index.attainable(query), QUESTIONS_GATE),
+            "the code list must be admissible for this test to say anything: {code_best} against {passages_best}");
         let plain = lexical_lists(&lex(&g, &qs), query, 10, false);
         assert_eq!(plain.len(), 1, "{plain:?}");
         assert_eq!(plain[0][0], "FR-PAY-22");
@@ -554,6 +574,51 @@ mod tests {
         assert_eq!(gate_from(Some("0")), 0.0);
         assert_eq!(gate_from(Some(" 0.9 ")), 0.9);
         assert_eq!(gate_from(Some("high")), QUESTIONS_GATE, "an unparsable override is ignored, not treated as zero");
+        // The documented meaning of the override's one special value: at zero every list that
+        // matched anything is seated, which is the ungated fusion ADR-001 Amendment 6 measured.
+        assert!(admits(0.001, 9.0, 5.0, 1.0, gate_from(Some("0"))));
+        assert!(!admits(0.0, 9.0, 5.0, 1.0, gate_from(Some("0"))));
+    }
+
+    #[test]
+    fn an_empty_questions_list_is_never_seated_not_even_where_the_passages_are_no_bar() {
+        // An empty list is handed a best of zero by `lexical_lists`, and a passage list that
+        // covered nothing is otherwise no bar at all: the two ends meet here and the seat still
+        // goes nowhere, because a list with nothing to say cannot be the one holding the answer.
+        assert!(!admits(0.0, 0.0, 0.0, 0.0, QUESTIONS_GATE));
+        assert!(!admits(0.0, 4.0, 1.0, 2.0, QUESTIONS_GATE));
+    }
+
+    #[test]
+    fn a_zero_attainable_leaves_that_list_covering_nothing_on_either_side() {
+        // An index holding none of the query's terms attains nothing. As the admitted list that
+        // is a coverage of zero and it loses; as the passage list it is no bar rather than a
+        // division by zero. `-0.0` is the sign `f32`'s empty sum takes and reads the same way.
+        assert!(!admits(1.0, 0.0, 1.0, 2.0, QUESTIONS_GATE));
+        assert!(!admits(1.0, -0.0, 1.0, 2.0, QUESTIONS_GATE));
+        assert!(admits(0.1, 4.0, 9.9, 0.0, QUESTIONS_GATE));
+        assert!(admits(0.1, 4.0, 9.9, -0.0, QUESTIONS_GATE));
+    }
+
+    #[test]
+    fn a_passage_list_whose_best_is_zero_is_no_bar_at_all() {
+        // Nothing scored in the passage index, so its coverage is zero however much the query
+        // could have reached there, and the questions list takes the seat unopposed.
+        assert!(admits(0.01, 8.0, 0.0, 4.0, QUESTIONS_GATE));
+    }
+
+    #[test]
+    fn the_coverage_seats_what_the_ratio_of_raw_bests_refuses_and_refuses_what_it_seats() {
+        // The form's whole point, in two lines. A questions list at half the passages' raw best
+        // has covered twice as much of the question when the passage index could have offered
+        // four times more; a list level on raw score has covered a fifth as much when its own
+        // index could have offered five times more. The raw bests cannot tell these apart —
+        // they are scores from two indices that were never in the same unit (G12).
+        let ratio = |best: f32, passages_best: f32| best >= 0.85 * passages_best;
+        assert!(!ratio(1.0, 2.0), "the ratio refuses this list");
+        assert!(admits(1.0, 2.0, 2.0, 8.0, QUESTIONS_GATE), "its coverage, 0.50 against 0.25, seats it");
+        assert!(ratio(2.0, 2.0), "the ratio seats this one");
+        assert!(!admits(2.0, 10.0, 2.0, 2.0, QUESTIONS_GATE), "its coverage, 0.20 against 1.00, refuses it");
     }
 
     #[test]
@@ -581,16 +646,33 @@ mod tests {
     }
 
     #[test]
-    fn a_weakly_matched_question_list_does_not_take_a_seed_from_the_passages() {
-        // «штраф считается» is two words of FR-PAY-22's body and one word of the stored
-        // question, so the passage index scores 2.64 against the question index's 1.07 — a ratio
-        // of 0.41, well under the gate. Under an equal turn the question row led the answer.
+    fn what_the_raw_ratio_separated_by_magnitude_the_coverage_admission_does_not() {
+        // The two queries the ratio ranked furthest apart on this graph. «штраф считается» put
+        // the passage index at 2.64 against the questions index's 1.07, a raw ratio of 0.41 that
+        // the old gate refused; «штраф отмену» reversed it, 2.14 against 1.32. Under coverage
+        // both read 0.696 against 0.858 — the same pair of numbers — because each index is now
+        // scored against what this query could reach inside it, and on a graph where every term
+        // of both queries is present in both indices that fraction does not move with the raw
+        // magnitudes. The admission is 0.811 either way, above the constant, so the questions
+        // list is seated for both. The form's discrimination lives entirely in `attainable`, and
+        // a two-node graph cannot exercise it: what it does to real questions is measured on the
+        // fixture, in docs/bench/2026-09-06-coverage-admission-results.md, not asserted here.
         let g = graph();
         let mut qs = questions();
         qs.entries.get_mut("FR-PAY-20").unwrap().questions.push("какой штраф за отмену".into());
+        let l = lex(&g, &qs);
+        let qi = l.questions.as_ref().unwrap();
+        let best = |x: &[(String, f32)]| x.first().map(|(_, s)| *s).unwrap_or(0.0);
+        for q in ["штраф считается", "штраф отмену"] {
+            let (bq, aq) = (best(&qi.search(q, 10)), qi.attainable(q));
+            let (bp, ap) = (best(&l.passages.search(q, 10)), l.passages.attainable(q));
+            assert!((coverage(bq, aq) - 0.696).abs() < 5e-4, "{q}: questions covered {}", coverage(bq, aq));
+            assert!((coverage(bp, ap) - 0.858).abs() < 5e-4, "{q}: passages covered {}", coverage(bp, ap));
+            assert!(admits(bq, aq, bp, ap, QUESTIONS_GATE), "{q}");
+        }
         let a = ask(&g, &ids(), &lex(&g, &qs), None, None, &["штраф".into(), "считается".into()], &opts());
         let order: Vec<&str> = a.seeds.iter().map(|h| h.id.as_str()).collect();
-        assert_eq!(order, ["FR-PAY-22"], "the weak question list took a seat: {order:?}");
+        assert_eq!(order, ["FR-PAY-20", "FR-PAY-22"], "{order:?}");
 
         // The gate is relative. «штраф отмену» is both words of the stored question and one of
         // the passage, 2.14 against 1.32, and the question list leads as before.
@@ -836,4 +918,5 @@ mod tests {
         assert_eq!(a.expanded.len(), 1);
         assert_eq!(a.expanded[0].id, "FR-WEB-30");
     }
+
 }
