@@ -291,7 +291,7 @@ fn run_watch(repo: &std::path::Path, cfg: &config::Config, every: u64, batch: us
                 let mut embedded = 0;
                 // The model costs ~220 ms and 1.3 GB to open, so it waits for the first change; the
                 // vectors then stay in memory, since every later refresh syncs them again.
-                if let Some(e) = embedder.get_or_insert_with(|| ask::open_embedder(no_dense, &model, threads)).as_mut() {
+                if let Some(e) = embedder.get_or_insert_with(|| ask::open_embedder(no_dense, &model, threads, index::embed::Weights::Mapped)).as_mut() {
                     let idx = match dense {
                         Some(ref mut d) => d,
                         None => dense.insert(index::dense::DenseIndex::load(&w.store)?),
@@ -340,7 +340,7 @@ const SYNC_CHUNK: usize = 1024;
 
 fn embed_all(repo: &std::path::Path, no_dense: bool, cfg: &config::Config) -> anyhow::Result<()> {
     let model = index::embed::resolve(None, &cfg.embed_model);
-    let Some(mut emb) = ask::open_embedder(no_dense, &model, index::embed::threads(cfg.threads)) else { return Ok(()) };
+    let Some(mut emb) = ask::open_embedder(no_dense, &model, index::embed::threads(cfg.threads), index::embed::Weights::Mapped) else { return Ok(()) };
     let store = store::Store::new(repo);
     let (graph, _) = store.load()?;
     let questions = enrich::Questions::load(&store)?;

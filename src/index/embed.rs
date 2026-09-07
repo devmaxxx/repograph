@@ -152,19 +152,38 @@ fn threads_from(configured: usize, cores: usize) -> usize {
     (cores / 3).max(1)
 }
 
+/// Where the GEMMs read their weights from. `Packed` is the runtime's default: at session open
+/// MLAS makes its own copy of every GEMM weight in the layout its kernels want, which is 1.13 GB
+/// of anonymous memory for the 24 layers of the large model and is what memory pressure counts.
+/// `Mapped` keeps the weights where they already are — the memory-mapped `model.onnx_data`, whose
+/// pages are clean, reclaimable and shared between processes: the anonymous footprint of a full
+/// embed falls from 1.74 GB to 0.61 GB for 12% more wall
+/// (docs/bench/2026-09-07-unnoticeable-results.md). A writer takes that trade; a reader keeps
+/// `Packed`, because it runs a handful of GEMMs for one query and would pay the layout on every
+/// one of them.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Weights {
+    Packed,
+    Mapped,
+}
+
 /// Every ONNX session this binary opens, the embedder's and the reranker's alike. Left to
 /// itself ORT sizes its intra-op pool to the machine's performance cores and holds them for the
 /// whole run — 444% of a core for the 43 minutes a full re-embed took, measured in
 /// docs/bench/2026-09-07-resource-usage-results.md. Nothing else is set: spin control off and
 /// memory-pattern off each cost more wall time than they gave back.
-pub(crate) fn session_builder(threads: usize) -> Result<SessionBuilder> {
-    Session::builder().map_err(|e| anyhow!("{e}"))?
+pub(crate) fn session_builder(threads: usize, weights: Weights) -> Result<SessionBuilder> {
+    let builder = Session::builder().map_err(|e| anyhow!("{e}"))?
         .with_optimization_level(GraphOptimizationLevel::Level1).map_err(|e| anyhow!("{e}"))?
-        .with_intra_threads(threads).map_err(|e| anyhow!("{e}"))
+        .with_intra_threads(threads).map_err(|e| anyhow!("{e}"))?;
+    match weights {
+        Weights::Packed => Ok(builder),
+        Weights::Mapped => builder.with_prepacking(false).map_err(|e| anyhow!("{e}")),
+    }
 }
 
-fn load_session(model: &Path, threads: usize) -> Result<Session> {
-    let mut builder = session_builder(threads)?;
+fn load_session(model: &Path, threads: usize, weights: Weights) -> Result<Session> {
+    let mut builder = session_builder(threads, weights)?;
     builder.commit_from_file(model).map_err(|e| anyhow!("{e}"))
 }
 
@@ -174,11 +193,11 @@ fn normalise(v: &mut [f32]) {
 }
 
 impl Embedder {
-    pub fn open(model: &str, threads: usize) -> Result<Embedder> {
+    pub fn open(model: &str, threads: usize, weights: Weights) -> Result<Embedder> {
         let files = fetch(model)?;
         let session = std::thread::scope(|s| {
             let tokenizer = s.spawn(|| load_tokenizer(&files));
-            let session = load_session(&files.model, threads).context("open embedding model")?;
+            let session = load_session(&files.model, threads, weights).context("open embedding model")?;
             let tokenizer = tokenizer.join().map_err(|_| anyhow!("tokenizer thread panicked"))?.context("open tokenizer")?;
             Ok::<_, anyhow::Error>((session, tokenizer))
         });

@@ -74,7 +74,9 @@ impl CrossEncoder {
             pad_id,
             ..Default::default()
         }));
-        let session = crate::index::embed::session_builder(threads)?
+        // Packed like every reader's session: a reranker answers a person, and the layout it
+        // pays for once is read by 200 pairs of GEMMs in the query that opened it.
+        let session = crate::index::embed::session_builder(threads, crate::index::embed::Weights::Packed)?
             .commit_from_file(dir.join("model.onnx")).map_err(|e| anyhow!("{e}"))
             .with_context(|| format!("open reranker model in {}", dir.display()))?;
         let wants_type_ids = session.inputs().iter().any(|i| i.name() == "token_type_ids");

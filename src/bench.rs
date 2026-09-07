@@ -260,7 +260,7 @@ pub fn run(repo: &Path, cases: Option<&Path>, no_dense: bool, rerank: bool, rera
     let (floors, model_field) = dense_grading(no_dense, recorded.as_deref(), resolved.as_deref());
     let mut embedder = match &resolved {
         None => None,
-        Some(model) => match Embedder::open(model, threads) {
+        Some(model) => match Embedder::open(model, threads, crate::index::embed::Weights::Packed) {
             Ok(e) => Some(e),
             Err(err) => anyhow::bail!("dense: model unavailable ({err:#})"),
         },
