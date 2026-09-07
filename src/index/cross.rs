@@ -4,7 +4,7 @@
 //! set); this runs a local model at zero tokens. Opt-in, off every floor until it is measured
 //! against them, and loaded through the same `ort` + `tokenizers` path as the embedder.
 use anyhow::{anyhow, Context, Result};
-use ort::session::{builder::GraphOptimizationLevel, Session};
+use ort::session::Session;
 use ort::value::Tensor;
 use std::path::{Path, PathBuf};
 use tokenizers::{PaddingParams, PaddingStrategy, Tokenizer, TruncationParams};
@@ -60,7 +60,7 @@ fn one_logit_per_row(shape: &[i64], batch: usize) -> Result<()> {
 impl CrossEncoder {
     /// `dir` holds `model.onnx`, `tokenizer.json`, `config.json` and `tokenizer_config.json` as
     /// the exporter writes them.
-    pub fn open(dir: &Path) -> Result<CrossEncoder> {
+    pub fn open(dir: &Path, threads: usize) -> Result<CrossEncoder> {
         let mut tokenizer = Tokenizer::from_file(dir.join("tokenizer.json"))
             .map_err(|e| anyhow!("{e}")).with_context(|| format!("open reranker tokenizer in {}", dir.display()))?;
         tokenizer.with_truncation(Some(TruncationParams { max_length: MAX_TOKENS, ..Default::default() })).map_err(|e| anyhow!("{e}"))?;
@@ -74,8 +74,7 @@ impl CrossEncoder {
             pad_id,
             ..Default::default()
         }));
-        let session = Session::builder().map_err(|e| anyhow!("{e}"))?
-            .with_optimization_level(GraphOptimizationLevel::Level1).map_err(|e| anyhow!("{e}"))?
+        let session = crate::index::embed::session_builder(threads)?
             .commit_from_file(dir.join("model.onnx")).map_err(|e| anyhow!("{e}"))
             .with_context(|| format!("open reranker model in {}", dir.display()))?;
         let wants_type_ids = session.inputs().iter().any(|i| i.name() == "token_type_ids");
@@ -173,7 +172,7 @@ mod tests {
     #[ignore = "needs the exported model: set REPOGRAPH_RERANKER_DIR"]
     fn the_model_prefers_the_passage_that_answers_the_question() {
         let dir = std::env::var("REPOGRAPH_RERANKER_DIR").expect("REPOGRAPH_RERANKER_DIR");
-        let mut m = CrossEncoder::open(Path::new(&dir)).unwrap();
+        let mut m = CrossEncoder::open(Path::new(&dir), crate::index::embed::threads(0)).unwrap();
         let s = m.score("how is a client's phone number stored", &[
             "Phone numbers are normalised to E.164 before they are stored.".into(),
             "The calendar grid uses a five-minute lattice.".into(),

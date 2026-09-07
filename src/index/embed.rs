@@ -7,7 +7,7 @@
 //! the two concurrently caps model open at the slower of them, which halves a fused `ask`.
 
 use anyhow::{anyhow, Context, Result};
-use ort::session::{builder::GraphOptimizationLevel, Session};
+use ort::session::{builder::{GraphOptimizationLevel, SessionBuilder}, Session};
 use ort::value::Tensor;
 use std::path::{Path, PathBuf};
 use tokenizers::{PaddingParams, PaddingStrategy, Tokenizer, TruncationParams};
@@ -124,9 +124,34 @@ fn load_tokenizer(files: &Files) -> Result<Tokenizer> {
     Ok(tk)
 }
 
-fn load_session(model: &Path) -> Result<Session> {
-    let mut builder = Session::builder().map_err(|e| anyhow!("{e}"))?
-        .with_optimization_level(GraphOptimizationLevel::Level1).map_err(|e| anyhow!("{e}"))?;
+/// How many threads a model session and the tokenizer pool may take: what the configuration
+/// says, else the default rule over the cores this machine reports.
+pub fn threads(configured: usize) -> usize {
+    threads_from(configured, std::thread::available_parallelism().map_or(0, |n| n.get()))
+}
+
+/// A third of the logical cores rather than half of them: ORT sizes its own pool to the
+/// performance cores alone, which on a 6+6 machine is already half, so half would be today's
+/// pool under another name and give nothing back. A count the person configured is taken as
+/// written — a CI box that wants every core says so — and the floor is one thread.
+fn threads_from(configured: usize, cores: usize) -> usize {
+    if configured > 0 { return configured; }
+    (cores / 3).max(1)
+}
+
+/// Every ONNX session this binary opens, the embedder's and the reranker's alike. Left to
+/// itself ORT sizes its intra-op pool to the machine's performance cores and holds them for the
+/// whole run — 444% of a core for the 43 minutes a full re-embed took, measured in
+/// docs/bench/2026-09-07-resource-usage-results.md. Nothing else is set: spin control off and
+/// memory-pattern off each cost more wall time than they gave back.
+pub(crate) fn session_builder(threads: usize) -> Result<SessionBuilder> {
+    Session::builder().map_err(|e| anyhow!("{e}"))?
+        .with_optimization_level(GraphOptimizationLevel::Level1).map_err(|e| anyhow!("{e}"))?
+        .with_intra_threads(threads).map_err(|e| anyhow!("{e}"))
+}
+
+fn load_session(model: &Path, threads: usize) -> Result<Session> {
+    let mut builder = session_builder(threads)?;
     builder.commit_from_file(model).map_err(|e| anyhow!("{e}"))
 }
 
@@ -136,11 +161,11 @@ fn normalise(v: &mut [f32]) {
 }
 
 impl Embedder {
-    pub fn open(model: &str) -> Result<Embedder> {
+    pub fn open(model: &str, threads: usize) -> Result<Embedder> {
         let files = fetch(model)?;
         let session = std::thread::scope(|s| {
             let tokenizer = s.spawn(|| load_tokenizer(&files));
-            let session = load_session(&files.model).context("open embedding model")?;
+            let session = load_session(&files.model, threads).context("open embedding model")?;
             let tokenizer = tokenizer.join().map_err(|_| anyhow!("tokenizer thread panicked"))?.context("open tokenizer")?;
             Ok::<_, anyhow::Error>((session, tokenizer))
         });
@@ -302,6 +327,16 @@ mod tests {
     fn length_batches_with_batch_larger_than_the_collection_yields_one_sorted_batch() {
         let texts: Vec<String> = ["mm", "z", "a"].iter().map(|s| s.to_string()).collect();
         assert_eq!(length_batches(&texts, 100), vec![vec![1, 2, 0]]);
+    }
+
+    #[test]
+    fn the_thread_cap_is_the_configured_count_or_a_third_of_the_cores_and_never_zero() {
+        assert_eq!(threads_from(0, 12), 4);
+        assert_eq!(threads_from(0, 8), 2);
+        assert_eq!(threads_from(0, 2), 1);
+        assert_eq!(threads_from(0, 0), 1);
+        assert_eq!(threads_from(3, 12), 3);
+        assert_eq!(threads_from(9, 2), 9, "a configured count is never clipped: the person said so");
     }
 
     #[test]

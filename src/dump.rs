@@ -54,6 +54,9 @@ struct Dump { meta: Meta, queries: Vec<Record> }
 
 pub fn run(repo: &Path, queries: &Path, out: &Path, depth: usize, no_dense: bool) -> Result<()> {
     let cfg = Config::load(repo)?;
+    // `dump` does not come through `main`'s arms, so the pools it owns are capped here.
+    let threads = crate::index::embed::threads(cfg.threads);
+    crate::cap_pools(threads);
     let store = Store::new(repo);
     let (graph, _) = store.load()?;
     if graph.nodes.is_empty() { anyhow::bail!("graph is empty at {} — run build first", repo.display()); }
@@ -84,7 +87,7 @@ pub fn run(repo: &Path, queries: &Path, out: &Path, depth: usize, no_dense: bool
     let mut embedder = if no_dense {
         None
     } else {
-        match Embedder::open(&crate::index::embed::resolve(DenseIndex::recorded_model(&store)?.as_deref(), &cfg.embed_model)) {
+        match Embedder::open(&crate::index::embed::resolve(DenseIndex::recorded_model(&store)?.as_deref(), &cfg.embed_model), threads) {
             Ok(e) => Some(e),
             Err(err) => anyhow::bail!("dense: model unavailable ({err:#})"),
         }

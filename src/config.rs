@@ -35,6 +35,15 @@ pub struct Config {
     /// `intfloat/multilingual-e5-small` is the cheap way back, and the model the floors were
     /// set with.
     pub embed_model: String,
+    /// How many threads the model sessions and the tokenizer pool may use; `0` takes the
+    /// built-in rule, a third of the logical cores. It describes the machine rather than the
+    /// corpus — the same repository wants every core on a CI box and a quiet laptop's spare
+    /// ones — so the global file may set it, unlike `embed_model`, whose value is a property of
+    /// the vectors on disk. The cap is a straight trade with no free side: on this machine the
+    /// default gives back a third of the peak CPU for +39% wall on a fixed batch shape
+    /// (docs/bench/2026-09-07-resource-usage-results.md), so `threads = 6` is the one word back
+    /// to what ORT would have picked itself.
+    pub threads: usize,
 }
 
 // Headless Claude Code with thinking off: the same answers, 4-5× faster and cheaper. `{model}`
@@ -79,15 +88,17 @@ impl Default for Config {
             rerank_model: RERANK_MODEL.into(),
             reranker_dir: String::new(),
             embed_model: crate::index::embed::DEFAULT_MODEL.into(),
+            threads: 0,
         }
     }
 }
 
-/// The settings that describe the machine rather than the corpus: which command runs a model, and
-/// which model it runs. A global file may set these and nothing else. The corpus-shaped settings —
-/// the globs, the id families, and above all `embed_model` — are deliberately unreadable from
-/// there: one global line would otherwise rewrite every repository's vectors under a model nobody
-/// chose for that repository, which is the one mistake this store's design spends effort avoiding.
+/// The settings that describe the machine rather than the corpus: which command runs a model,
+/// which model it runs, and how many threads it may take. A global file may set these and nothing
+/// else. The corpus-shaped settings — the globs, the id families, and above all `embed_model` —
+/// are deliberately unreadable from there: one global line would otherwise rewrite every
+/// repository's vectors under a model nobody chose for that repository, which is the one mistake
+/// this store's design spends effort avoiding.
 #[derive(Debug, Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 struct Machine {
@@ -96,6 +107,7 @@ struct Machine {
     enrich_model: Option<String>,
     rerank_model: Option<String>,
     reranker_dir: Option<String>,
+    threads: Option<usize>,
 }
 
 /// `$REPOGRAPH_CONFIG`, else `$XDG_CONFIG_HOME/repograph/config.toml`, else
@@ -136,16 +148,10 @@ impl Config {
         };
         let machine = Self::machine()?;
 
-        let layer = |key: &str, from_machine: Option<String>, field: &mut String| {
-            if !named.contains_key(key) {
-                if let Some(v) = from_machine {
-                    *field = v;
-                }
-            }
-        };
-        layer("reranker_dir", machine.reranker_dir, &mut cfg.reranker_dir);
-        layer("enrich_model", machine.enrich_model, &mut cfg.enrich_model);
-        layer("rerank_model", machine.rerank_model, &mut cfg.rerank_model);
+        layer(&named, "reranker_dir", machine.reranker_dir, &mut cfg.reranker_dir);
+        layer(&named, "enrich_model", machine.enrich_model, &mut cfg.enrich_model);
+        layer(&named, "rerank_model", machine.rerank_model, &mut cfg.rerank_model);
+        layer(&named, "threads", machine.threads, &mut cfg.threads);
 
         // The command is resolved from its template rather than from `Default`, whose copy already
         // has the default model substituted: a project that sets only `enrich_model` must still get
@@ -166,6 +172,11 @@ impl Config {
         if let Ok(m) = std::env::var("REPOGRAPH_RERANK_MODEL") {
             if !m.is_empty() { cfg.rerank_model = m; }
         }
+        if let Ok(t) = std::env::var("REPOGRAPH_THREADS") {
+            if !t.is_empty() {
+                cfg.threads = t.parse().with_context(|| format!("REPOGRAPH_THREADS is {t:?}, which is not a thread count"))?;
+            }
+        }
         cfg.enrich_command = enrich_template.replace(MODEL_SLOT, &cfg.enrich_model);
         cfg.rerank_command = rerank_template.replace(MODEL_SLOT, &cfg.rerank_model);
         Ok(cfg)
@@ -181,6 +192,17 @@ impl Config {
         }
         let text = std::fs::read_to_string(&path).with_context(|| format!("read {}", path.display()))?;
         toml::from_str(&text).with_context(|| format!("parse {}", path.display()))
+    }
+}
+
+/// The machine's value where the project file left the key unnamed. A key the project wrote is
+/// left alone even when it wrote the built-in value: what the file says is what the repository
+/// asked for.
+fn layer<T>(named: &toml::Table, key: &str, from_machine: Option<T>, field: &mut T) {
+    if !named.contains_key(key) {
+        if let Some(v) = from_machine {
+            *field = v;
+        }
     }
 }
 
@@ -261,6 +283,7 @@ mod tests {
             std::env::set_var("REPOGRAPH_CONFIG", &path);
             std::env::remove_var("REPOGRAPH_ENRICH_MODEL");
             std::env::remove_var("REPOGRAPH_RERANK_MODEL");
+            std::env::remove_var("REPOGRAPH_THREADS");
         }
         let out = f();
         unsafe { std::env::remove_var("REPOGRAPH_CONFIG") };
@@ -333,6 +356,54 @@ mod tests {
             let cfg = Config::load(dir.path()).unwrap();
             assert_eq!(cfg.enrich_command, "my-runner --go");
             assert_eq!(cfg.enrich_model, "ignored-here");
+        });
+    }
+
+    #[test]
+    fn threads_defaults_to_zero_and_reads_from_the_project_file() {
+        with_machine(None, || {
+            let dir = tempfile::tempdir().unwrap();
+            assert_eq!(Config::load(dir.path()).unwrap().threads, 0);
+            std::fs::write(dir.path().join("repograph.toml"), "threads = 3\n").unwrap();
+            assert_eq!(Config::load(dir.path()).unwrap().threads, 3);
+        });
+    }
+
+    #[test]
+    fn the_machine_file_may_set_threads_and_the_project_still_wins() {
+        with_machine(Some("threads = 2\n"), || {
+            let dir = tempfile::tempdir().unwrap();
+            assert_eq!(Config::load(dir.path()).unwrap().threads, 2);
+            std::fs::write(dir.path().join("repograph.toml"), "threads = 5\n").unwrap();
+            assert_eq!(Config::load(dir.path()).unwrap().threads, 5);
+        });
+    }
+
+    #[test]
+    fn the_environment_beats_the_project_for_threads() {
+        with_machine(None, || {
+            let dir = tempfile::tempdir().unwrap();
+            std::fs::write(dir.path().join("repograph.toml"), "threads = 2\n").unwrap();
+            unsafe { std::env::set_var("REPOGRAPH_THREADS", "4") };
+            assert_eq!(Config::load(dir.path()).unwrap().threads, 4);
+            unsafe { std::env::set_var("REPOGRAPH_THREADS", "") };
+            assert_eq!(Config::load(dir.path()).unwrap().threads, 2);
+            unsafe { std::env::remove_var("REPOGRAPH_THREADS") };
+        });
+    }
+
+    #[test]
+    fn a_threads_value_that_is_not_a_number_is_an_error_naming_the_file() {
+        with_machine(None, || {
+            let dir = tempfile::tempdir().unwrap();
+            std::fs::write(dir.path().join("repograph.toml"), "threads = \"many\"\n").unwrap();
+            let err = Config::load(dir.path()).unwrap_err().to_string();
+            assert!(err.contains("repograph.toml"), "{err}");
+            std::fs::write(dir.path().join("repograph.toml"), "threads = 2\n").unwrap();
+            unsafe { std::env::set_var("REPOGRAPH_THREADS", "lots") };
+            let err = Config::load(dir.path()).unwrap_err().to_string();
+            unsafe { std::env::remove_var("REPOGRAPH_THREADS") };
+            assert!(err.contains("REPOGRAPH_THREADS"), "{err}");
         });
     }
 

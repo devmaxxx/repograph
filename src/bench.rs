@@ -226,6 +226,9 @@ pub fn run(repo: &Path, cases: Option<&Path>, no_dense: bool, rerank: bool, rera
     // `--repo` one — is what the `IdMatcher` is built from.
     let repo = std::env::var("REPOGRAPH_BENCH_REPO").map(std::path::PathBuf::from).unwrap_or(repo.to_path_buf());
     let cfg = Config::load(&repo)?;
+    // `bench` does not come through `main`'s arms, so the pools it owns are capped here.
+    let threads = crate::index::embed::threads(cfg.threads);
+    crate::cap_pools(threads);
     let store = Store::new(&repo);
     let (graph, _): (Graph, _) = store.load()?;
     if graph.nodes.is_empty() { anyhow::bail!("graph is empty at {} — run build first", repo.display()); }
@@ -257,7 +260,7 @@ pub fn run(repo: &Path, cases: Option<&Path>, no_dense: bool, rerank: bool, rera
     let (floors, model_field) = dense_grading(no_dense, recorded.as_deref(), resolved.as_deref());
     let mut embedder = match &resolved {
         None => None,
-        Some(model) => match Embedder::open(model) {
+        Some(model) => match Embedder::open(model, threads) {
             Ok(e) => Some(e),
             Err(err) => anyhow::bail!("dense: model unavailable ({err:#})"),
         },
@@ -307,7 +310,7 @@ pub fn run(repo: &Path, cases: Option<&Path>, no_dense: bool, rerank: bool, rera
     let rerank_fn = |q: &str, c: &[(String, String)]| crate::rerank::run(&cfg.rerank_command, q, c);
     let cross = std::cell::RefCell::new(if rerank_local {
         let dir = if cfg.reranker_dir.is_empty() { crate::index::cross::default_dir()? } else { std::path::PathBuf::from(&cfg.reranker_dir) };
-        Some(crate::index::cross::CrossEncoder::open(&dir).context("--rerank-local")?)
+        Some(crate::index::cross::CrossEncoder::open(&dir, threads).context("--rerank-local")?)
     } else { None });
     let local_fn = |q: &str, c: &[(String, String)]| -> Vec<String> {
         let mut m = cross.borrow_mut();

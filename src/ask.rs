@@ -33,16 +33,16 @@ pub(crate) type Opened = Result<Option<index::embed::Embedder>, String>;
 /// The embedder, or the line that says why there is none — returned rather than printed, so a
 /// process whose stderr is a socket reply can hand that line to the client that asked. An arm
 /// with no dense side is `Ok(None)`: nothing was wanted and nothing is missing.
-pub(crate) fn embedder_or_notice(no_dense: bool, model: &str) -> Opened {
+pub(crate) fn embedder_or_notice(no_dense: bool, model: &str, threads: usize) -> Opened {
     if no_dense { return Ok(None); }
-    index::embed::Embedder::open(model)
+    index::embed::Embedder::open(model, threads)
         .map(Some)
         .map_err(|err| format!("dense: model unavailable, continuing lexical-only ({err:#})"))
 }
 
 /// The same open for `watch` and `embed`, whose stderr is the reader's terminal.
-pub(crate) fn open_embedder(no_dense: bool, model: &str) -> Option<index::embed::Embedder> {
-    embedder_or_notice(no_dense, model).unwrap_or_else(|notice| { eprintln!("{notice}"); None })
+pub(crate) fn open_embedder(no_dense: bool, model: &str, threads: usize) -> Option<index::embed::Embedder> {
+    embedder_or_notice(no_dense, model, threads).unwrap_or_else(|notice| { eprintln!("{notice}"); None })
 }
 
 /// The model opens on a thread this spawns, while `Context::answer` builds its BM25 indexes on
@@ -51,10 +51,10 @@ pub(crate) fn open_embedder(no_dense: bool, model: &str) -> Option<index::embed:
 /// questions store are read before the vectors that name the model, so they are not part of it.
 /// A question that exact ids or symbols answer whole never opens the model, as before; with
 /// `--no-dense` or no vectors nothing starts.
-pub(crate) fn warm_model(dense: bool, whole: bool, model: &str) -> Option<std::thread::JoinHandle<Opened>> {
+pub(crate) fn warm_model(dense: bool, whole: bool, model: &str, threads: usize) -> Option<std::thread::JoinHandle<Opened>> {
     if !dense || whole { return None; }
     let model = model.to_string();
-    Some(std::thread::spawn(move || embedder_or_notice(false, &model)))
+    Some(std::thread::spawn(move || embedder_or_notice(false, &model, threads)))
 }
 
 /// The stored graph brought in line with the working tree, plus what that cost when the tree had
@@ -182,7 +182,7 @@ impl Context {
                     Some(handle) => handle.join().unwrap_or_else(|_| Err("dense: model thread panicked, continuing lexical-only".to_string())),
                     None => {
                         let model = index::embed::resolve(idx.model_of_rows().as_deref(), &cfg.embed_model);
-                        embedder_or_notice(no_dense, &model)
+                        embedder_or_notice(no_dense, &model, index::embed::threads(cfg.threads))
                     }
                 };
                 timing.stage("model opened");
@@ -232,7 +232,7 @@ impl Context {
         };
         if req.rerank_local && cross.borrow().is_none() {
             let dir = if cfg.reranker_dir.is_empty() { index::cross::default_dir()? } else { PathBuf::from(&cfg.reranker_dir) };
-            *cross.borrow_mut() = Some(index::cross::CrossEncoder::open(&dir).context("--rerank-local")?);
+            *cross.borrow_mut() = Some(index::cross::CrossEncoder::open(&dir, index::embed::threads(cfg.threads)).context("--rerank-local")?);
         }
         // Below the last `?`: an error returned between the spawn and the join drops the
         // handle and leaves a thread mid-open of a 448 MB session. Nothing below this point
@@ -257,7 +257,7 @@ impl Context {
             let mut handle = warm.borrow_mut();
             if handle.is_none() && embedder.borrow().is_none() {
                 let model = index::embed::resolve(idx.model_of_rows().as_deref(), &cfg.embed_model);
-                *handle = warm_model(true, whole, &model);
+                *handle = warm_model(true, whole, &model, index::embed::threads(cfg.threads));
             }
         }
         let local_fn = |q: &str, c: &[(String, String)]| -> Vec<String> {
@@ -336,8 +336,8 @@ mod tests {
 
     #[test]
     fn the_model_is_not_warmed_for_an_exact_answer_or_a_lexical_arm() {
-        assert!(warm_model(false, false, "any").is_none());
-        assert!(warm_model(true, true, "any").is_none());
+        assert!(warm_model(false, false, "any", 4).is_none());
+        assert!(warm_model(true, true, "any", 4).is_none());
     }
 
     // The `**ID · MUST · label**` form is what declares a requirement; an id in a heading

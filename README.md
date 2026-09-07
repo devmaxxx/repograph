@@ -465,6 +465,7 @@ in full, not an empty config:
 | `rerank_model`       | `sonnet` — the same for `rerank_command`                                                    |
 | `reranker_dir`       | directory of the exported cross-encoder for `--rerank-local`; empty = `~/.cache/repograph/reranker` |
 | `embed_model`        | `intfloat/multilingual-e5-large`; the model the vectors are written with — see [Embeddings](#embeddings) |
+| `threads`            | `0` = a third of the logical cores; how many threads the model sessions and the tokenizer pool may take — see [Resources](#resources) |
 
 ### Choosing a model, and where the choice lives
 
@@ -480,7 +481,7 @@ beating the one below it:
 
 | Layer | Where |
 | --- | --- |
-| the run | `REPOGRAPH_ENRICH_MODEL`, `REPOGRAPH_RERANK_MODEL` |
+| the run | `REPOGRAPH_ENRICH_MODEL`, `REPOGRAPH_RERANK_MODEL`, `REPOGRAPH_THREADS` |
 | the repository | `repograph.toml` |
 | the machine | `$REPOGRAPH_CONFIG`, else `$XDG_CONFIG_HOME/repograph/config.toml`, else `~/.config/repograph/config.toml` |
 
@@ -492,10 +493,10 @@ rerank_model = "sonnet"
 
 A key the repository names wins even when it names the built-in value: what the file says is what
 that repository asked for. The machine file may set **only** `enrich_command`, `rerank_command`,
-`enrich_model`, `rerank_model` and `reranker_dir`, and refuses any other key by name. That refusal
-is deliberate rather than an omission: the corpus-shaped keys describe one repository's documents,
-and a global `embed_model` in particular would rewrite every store's vectors under a model nobody
-chose for it.
+`enrich_model`, `rerank_model`, `reranker_dir` and `threads`, and refuses any other key by name.
+That refusal is deliberate rather than an omission: the corpus-shaped keys describe one
+repository's documents, and a global `embed_model` in particular would rewrite every store's
+vectors under a model nobody chose for it.
 
 `id_families` and `milestone_families` default to the strict list `beauty-crm`'s census settled on —
 they are this project's development corpus, not a generic default. Every family is matched as

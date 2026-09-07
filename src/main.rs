@@ -274,6 +274,7 @@ impl<'a> Watcher<'a> {
 fn run_watch(repo: &std::path::Path, cfg: &config::Config, every: u64, batch: usize, no_dense: bool) -> anyhow::Result<()> {
     let mut w = Watcher::open(repo, cfg)?;
     let model = index::embed::resolve(None, &cfg.embed_model);
+    let threads = index::embed::threads(cfg.threads);
     let mut embedder: Option<Option<index::embed::Embedder>> = None;
     let mut dense: Option<index::dense::DenseIndex> = None;
     let verbose = ask::timing_on();
@@ -289,7 +290,7 @@ fn run_watch(repo: &std::path::Path, cfg: &config::Config, every: u64, batch: us
                 let mut embedded = 0;
                 // The model costs ~220 ms and 1.3 GB to open, so it waits for the first change; the
                 // vectors then stay in memory, since every later refresh syncs them again.
-                if let Some(e) = embedder.get_or_insert_with(|| ask::open_embedder(no_dense, &model)).as_mut() {
+                if let Some(e) = embedder.get_or_insert_with(|| ask::open_embedder(no_dense, &model, threads)).as_mut() {
                     let idx = match dense {
                         Some(ref mut d) => d,
                         None => dense.insert(index::dense::DenseIndex::load(&w.store)?),
@@ -319,9 +320,19 @@ pub(crate) fn extractors(repo: &std::path::Path, cfg: &config::Config) -> anyhow
     })
 }
 
-fn embed_all(repo: &std::path::Path, no_dense: bool, configured: &str) -> anyhow::Result<()> {
-    let model = index::embed::resolve(None, configured);
-    let Some(mut emb) = ask::open_embedder(no_dense, &model) else { return Ok(()) };
+/// One number bounding every thread pool this process owns. The ONNX sessions take it through
+/// `session_builder`; rayon takes it here, since `tokenizers::encode_batch` fans a batch out over
+/// the global pool — twelve threads on this machine — behind the embedder's back. The error is
+/// the pool having been built already, which is what a test binary sharing one process, or
+/// `bench` reaching this after `main` did, look like: there is nothing to do about it and nothing
+/// worth saying.
+pub(crate) fn cap_pools(threads: usize) {
+    let _ = rayon::ThreadPoolBuilder::new().num_threads(threads).build_global();
+}
+
+fn embed_all(repo: &std::path::Path, no_dense: bool, cfg: &config::Config) -> anyhow::Result<()> {
+    let model = index::embed::resolve(None, &cfg.embed_model);
+    let Some(mut emb) = ask::open_embedder(no_dense, &model, index::embed::threads(cfg.threads)) else { return Ok(()) };
     let store = store::Store::new(repo);
     let (graph, _) = store.load()?;
     let questions = enrich::Questions::load(&store)?;
@@ -359,12 +370,14 @@ fn main() -> anyhow::Result<()> {
     match cli.cmd {
         Cmd::Build | Cmd::Update => {
             let cfg = load_cfg()?;
+            cap_pools(index::embed::threads(cfg.threads));
             let r = run_update(&repo, &cfg, &extractors(&repo, &cfg)?, wipe)?;
             println!("changed {} removed {} nodes {} edges {}", r.changed, r.removed, r.nodes, r.edges);
-            embed_all(&repo, cli.no_dense, &cfg.embed_model)
+            embed_all(&repo, cli.no_dense, &cfg)
         }
         Cmd::Enrich { batch, parallel, limit, code } => {
             let cfg = load_cfg()?;
+            cap_pools(index::embed::threads(cfg.threads));
             let store = store::Store::new(&repo);
             let (graph, _) = store.load()?;
             if graph.nodes.is_empty() { anyhow::bail!("graph is empty — run `repograph build`"); }
@@ -372,10 +385,11 @@ fn main() -> anyhow::Result<()> {
             let t = std::time::Instant::now();
             let r = enrich::run(&store, &graph, questions, &cfg.enrich_command, batch, parallel, enrich::Scope { limit, code })?;
             println!("enrich: {} nodes written, {} dropped, {} still without questions, {} batches ({} failed) in {:.0}s", r.generated, r.dropped, r.left, r.batches, r.failed, t.elapsed().as_secs_f32());
-            embed_all(&repo, cli.no_dense, &cfg.embed_model)
+            embed_all(&repo, cli.no_dense, &cfg)
         }
         Cmd::Embed => {
             let cfg = load_cfg()?;
+            cap_pools(index::embed::threads(cfg.threads));
             // The one command that reaches `embed_all` without having just written the graph
             // itself, so the check is here rather than in it: a sync against an empty graph
             // marks every row dead and saves an index of nothing, and run before the first
@@ -390,13 +404,14 @@ fn main() -> anyhow::Result<()> {
                 println!("dense: nothing embedded, --no-dense is set");
                 Ok(())
             } else {
-                embed_all(&repo, cli.no_dense, &cfg.embed_model)
+                embed_all(&repo, cli.no_dense, &cfg)
             }
         }
         Cmd::Ask { words, json, seeds, bodies, rerank, rerank_local, depth, stale, no_serve } => {
             // Before the socket, not after it: a broken `repograph.toml` is the one thing a
             // resident process would hide, and a TOML parse is nothing against a process start.
             let cfg = load_cfg()?;
+            cap_pools(index::embed::threads(cfg.threads));
             let req = ask::Request { words, json, seeds, bodies, rerank, rerank_local, depth, stale, no_dense: cli.no_dense };
             // `bench` and `dump` build their own contexts and never reach this; the environment
             // variable is for everything else that must be measured against a cold process.
@@ -422,8 +437,16 @@ fn main() -> anyhow::Result<()> {
             ctx.timing().stage("printed");
             std::process::exit(0)
         }
-        Cmd::Serve { every, batch, idle } => serve::run(&repo, &load_cfg()?, every, batch, idle, cli.no_dense),
-        Cmd::Watch { every, batch } => run_watch(&repo, &load_cfg()?, every, batch, cli.no_dense),
+        Cmd::Serve { every, batch, idle } => {
+            let cfg = load_cfg()?;
+            cap_pools(index::embed::threads(cfg.threads));
+            serve::run(&repo, &cfg, every, batch, idle, cli.no_dense)
+        }
+        Cmd::Watch { every, batch } => {
+            let cfg = load_cfg()?;
+            cap_pools(index::embed::threads(cfg.threads));
+            run_watch(&repo, &cfg, every, batch, cli.no_dense)
+        }
         Cmd::Explain { node } => {
             let (graph, _) = store::Store::new(&repo).load()?;
             match query::explain(&graph, &node) {
@@ -496,6 +519,12 @@ mod tests {
         std::fs::create_dir_all(dir.path().join("docs")).unwrap();
         std::fs::write(dir.path().join("docs/a.md"), body).unwrap();
         dir
+    }
+
+    #[test]
+    fn cap_pools_tolerates_a_pool_already_built() {
+        cap_pools(2);
+        cap_pools(2);
     }
 
     const ONE: &str = "# A\n\n**FR-PAY-22 · MUST · cancellation window**\n\nbody\n";
