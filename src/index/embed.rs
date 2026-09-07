@@ -7,17 +7,23 @@
 //! the two concurrently caps model open at the slower of them, which halves a fused `ask`.
 
 use anyhow::{anyhow, Context, Result};
-use ort::session::{builder::GraphOptimizationLevel, Session};
+use ort::session::{builder::{GraphOptimizationLevel, SessionBuilder}, Session};
 use ort::value::Tensor;
 use std::path::{Path, PathBuf};
 use tokenizers::{PaddingParams, PaddingStrategy, Tokenizer, TruncationParams};
 
-pub const DEFAULT_MODEL: &str = "intfloat/multilingual-e5-large";
+/// What a writer embeds with when the repository names no model. The small one: it reads
+/// paraphrase 15/30 where the large model reads 22/30 and is level on the other 52 recorded
+/// cases, and the large model's 4.5× download and 9× whole-store embed are paid by every first
+/// build before anyone knows whether they wanted the recall
+/// (docs/adr/ADR-002-two-defaults-multiplied.md).
+pub const DEFAULT_MODEL: &str = "intfloat/multilingual-e5-small";
 
 /// What a store that records no model at all was written with. Pinned to the name rather than to
-/// `DEFAULT_MODEL`: every store written before the field existed holds small-model rows, and that
-/// stays true however the default moves afterwards. Tying the two together would tell a reader
-/// that yesterday's 384-d store is today's default, and re-embed it whole to find out otherwise.
+/// `DEFAULT_MODEL` — which holds the same string today and has already held the other one: every
+/// store written before the field existed holds small-model rows, and that stays true however the
+/// default moves afterwards. Tying the two together would tell a reader that yesterday's 384-d
+/// store is today's default, and re-embed it whole to find out otherwise.
 pub const UNNAMED_MODEL: &str = "intfloat/multilingual-e5-small";
 
 /// The model a command opens: `REPOGRAPH_EMBED_MODEL` when set — a measurement's switch that
@@ -42,7 +48,20 @@ pub fn width_mismatch(dim: usize, model: &str, got: usize) -> String {
     format!("the store's vectors are {dim}-d and {model} gives {got}-d — run `repograph embed`")
 }
 const MAX_TOKENS: usize = 256;
+/// Texts per forward. Kept beside the token budget rather than replaced by it: sixty-four
+/// twenty-token questions are 1,280 padded tokens, so on the short rows — most of the store —
+/// the count is what closes a batch.
 const BATCH: usize = 64;
+/// Padded tokens per forward. A batch is padded to its longest member, so a count alone bounds
+/// nothing: the sixty-four longest passages of any corpus form one 64 × 256 forward whose
+/// attention scores are 268 MB a layer, and the arena the runtime grows for that shape is never
+/// given back. The same texts through 8 × 256 forwards ran in the same wall time for 1.7 GB less
+/// (docs/bench/2026-09-07-resource-usage-results.md), so the budget costs throughput nothing and
+/// bounds the peak on a machine and a corpus this code has never seen.
+const TOKEN_BUDGET: usize = 2048;
+/// Texts per tokenizer pass when only their lengths are wanted. Big enough that the pass is a
+/// handful of calls over a whole store, small enough that the padding it allocates is not.
+const LENGTH_CHUNK: usize = 1024;
 
 pub struct Embedder {
     session: Session,
@@ -123,9 +142,53 @@ fn load_tokenizer(files: &Files) -> Result<Tokenizer> {
     Ok(tk)
 }
 
-fn load_session(model: &Path) -> Result<Session> {
-    let mut builder = Session::builder().map_err(|e| anyhow!("{e}"))?
-        .with_optimization_level(GraphOptimizationLevel::Level1).map_err(|e| anyhow!("{e}"))?;
+/// How many threads a model session and the tokenizer pool may take: what the configuration
+/// says, else the default rule over the cores this machine reports.
+pub fn threads(configured: usize) -> usize {
+    threads_from(configured, std::thread::available_parallelism().map_or(0, |n| n.get()))
+}
+
+/// A third of the logical cores rather than half of them: ORT sizes its own pool to the
+/// performance cores alone, which on a 6+6 machine is already half, so half would be today's
+/// pool under another name and give nothing back. A count the person configured is taken as
+/// written — a CI box that wants every core says so — and the floor is one thread.
+fn threads_from(configured: usize, cores: usize) -> usize {
+    if configured > 0 { return configured; }
+    (cores / 3).max(1)
+}
+
+/// Where the GEMMs read their weights from. `Packed` is the runtime's default: at session open
+/// MLAS makes its own copy of every GEMM weight in the layout its kernels want, which is 1.13 GB
+/// of anonymous memory for the 24 layers of the large model and is what memory pressure counts.
+/// `Mapped` keeps the weights where they already are — the memory-mapped `model.onnx_data`, whose
+/// pages are clean, reclaimable and shared between processes: the anonymous footprint of a full
+/// embed falls from 1.74 GB to 0.61 GB for 12% more wall
+/// (docs/bench/2026-09-07-unnoticeable-results.md). A writer takes that trade; a reader keeps
+/// `Packed`, because it runs a handful of GEMMs for one query and would pay the layout on every
+/// one of them.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Weights {
+    Packed,
+    Mapped,
+}
+
+/// Every ONNX session this binary opens, the embedder's and the reranker's alike. Left to
+/// itself ORT sizes its intra-op pool to the machine's performance cores and holds them for the
+/// whole run — 444% of a core for the 43 minutes a full re-embed took, measured in
+/// docs/bench/2026-09-07-resource-usage-results.md. Nothing else is set: spin control off and
+/// memory-pattern off each cost more wall time than they gave back.
+pub(crate) fn session_builder(threads: usize, weights: Weights) -> Result<SessionBuilder> {
+    let builder = Session::builder().map_err(|e| anyhow!("{e}"))?
+        .with_optimization_level(GraphOptimizationLevel::Level1).map_err(|e| anyhow!("{e}"))?
+        .with_intra_threads(threads).map_err(|e| anyhow!("{e}"))?;
+    match weights {
+        Weights::Packed => Ok(builder),
+        Weights::Mapped => builder.with_prepacking(false).map_err(|e| anyhow!("{e}")),
+    }
+}
+
+fn load_session(model: &Path, threads: usize, weights: Weights) -> Result<Session> {
+    let mut builder = session_builder(threads, weights)?;
     builder.commit_from_file(model).map_err(|e| anyhow!("{e}"))
 }
 
@@ -135,11 +198,11 @@ fn normalise(v: &mut [f32]) {
 }
 
 impl Embedder {
-    pub fn open(model: &str) -> Result<Embedder> {
+    pub fn open(model: &str, threads: usize, weights: Weights) -> Result<Embedder> {
         let files = fetch(model)?;
         let session = std::thread::scope(|s| {
             let tokenizer = s.spawn(|| load_tokenizer(&files));
-            let session = load_session(&files.model).context("open embedding model")?;
+            let session = load_session(&files.model, threads, weights).context("open embedding model")?;
             let tokenizer = tokenizer.join().map_err(|_| anyhow!("tokenizer thread panicked"))?.context("open tokenizer")?;
             Ok::<_, anyhow::Error>((session, tokenizer))
         });
@@ -166,11 +229,15 @@ impl Embedder {
     }
 
     /// Texts arrive already e5-prefixed (`dense::rows`): passages as `passage: `, generated
-    /// questions as `query: `. A batch is padded to its longest member, so texts are batched
-    /// by length — a ten-token label no longer rides in a 256-token batch.
+    /// questions as `query: `. A batch is padded to its longest member, so what a forward costs
+    /// is its count times that longest — and both are bounded here, by `BATCH` and by
+    /// `TOKEN_BUDGET`. The lengths are the tokenizer's own, counted in a pass of its own: bytes
+    /// put a 300-token Cyrillic passage in the same batch as a 60-token Latin one and pad both
+    /// to the longer, which is the padding this budget exists to stop paying for.
     pub fn embed(&mut self, texts: &[String]) -> Result<Vec<Vec<f32>>> {
+        let lens = self.token_lengths(texts)?;
         let mut out: Vec<Vec<f32>> = vec![Vec::new(); texts.len()];
-        for chunk in length_batches(texts, BATCH) {
+        for chunk in token_batches(&lens, BATCH, TOKEN_BUDGET) {
             let batch: Vec<String> = chunk.iter().map(|&i| texts[i].clone()).collect();
             for (i, v) in chunk.into_iter().zip(self.forward(&batch)?) {
                 out[i] = v;
@@ -181,6 +248,19 @@ impl Embedder {
 
     pub fn query(&mut self, text: &str) -> Result<Vec<f32>> {
         Ok(self.forward(&[format!("query: {text}")])?.remove(0))
+    }
+
+    /// How many real tokens each text is, as the model will see it. The tokenizer pads a batch
+    /// to its longest member, so the count is the attention mask's, not the encoding's length.
+    fn token_lengths(&self, texts: &[String]) -> Result<Vec<usize>> {
+        let mut lens = Vec::with_capacity(texts.len());
+        for chunk in texts.chunks(LENGTH_CHUNK) {
+            let encodings = self.tokenizer
+                .encode_batch(chunk.iter().map(String::as_str).collect(), true)
+                .map_err(|e| anyhow!("{e}"))?;
+            lens.extend(encodings.iter().map(|e| e.get_attention_mask().iter().filter(|&&m| m == 1).count()));
+        }
+        Ok(lens)
     }
 
     fn forward(&mut self, texts: &[String]) -> Result<Vec<Vec<f32>>> {
@@ -214,12 +294,26 @@ impl Embedder {
     }
 }
 
-/// Indices of `texts` grouped `batch` at a time in ascending byte length, so every batch pads
-/// to a neighbour's length rather than to the corpus maximum.
-fn length_batches(texts: &[String], batch: usize) -> Vec<Vec<usize>> {
-    let mut order: Vec<usize> = (0..texts.len()).collect();
-    order.sort_by_key(|&i| texts[i].len());
-    order.chunks(batch).map(<[usize]>::to_vec).collect()
+/// Indices of the texts whose token counts are `lens`, grouped into forwards of at most
+/// `max_batch` texts and, once padded to the batch's longest member, at most `budget` tokens.
+/// Ascending by length, so a batch pads to a neighbour rather than to the corpus maximum. A text
+/// longer than the budget on its own is still a forward of one — refusing it would leave a
+/// passage unembedded — and `budget == 0` is the count-only rule this replaced.
+fn token_batches(lens: &[usize], max_batch: usize, budget: usize) -> Vec<Vec<usize>> {
+    let mut order: Vec<usize> = (0..lens.len()).collect();
+    order.sort_by_key(|&i| lens[i]);
+    let mut out: Vec<Vec<usize>> = Vec::new();
+    let mut batch: Vec<usize> = Vec::new();
+    for i in order {
+        // Ascending order makes `lens[i]` the batch's longest member the moment it joins.
+        let over_budget = budget > 0 && lens[i] * (batch.len() + 1) > budget;
+        if !batch.is_empty() && (batch.len() >= max_batch || over_budget) {
+            out.push(std::mem::take(&mut batch));
+        }
+        batch.push(i);
+    }
+    if !batch.is_empty() { out.push(batch); }
+    out
 }
 
 /// Mean pooling over the attention mask, then L2-normalised — the model card's recipe.
@@ -263,11 +357,27 @@ mod tests {
     }
 
     #[test]
-    fn length_batches_group_neighbours_and_cover_every_text_once() {
-        let texts: Vec<String> = ["aaaa", "b", "cc", "ddddd", "eee"].iter().map(|s| s.to_string()).collect();
-        let batches = length_batches(&texts, 2);
-        assert_eq!(batches, vec![vec![1, 2], vec![4, 0], vec![3]]);
-        assert!(length_batches(&[], 2).is_empty());
+    fn token_batches_close_on_the_padded_token_budget_and_cover_every_text_once() {
+        // 4 × 256 = 1,024 and 2 × 300 = 600 both exceed the budget; 3 × 20 = 60 does not.
+        let batches = token_batches(&[10, 300, 20, 256, 5], 64, 512);
+        assert_eq!(batches, vec![vec![4, 0, 2], vec![3], vec![1]]);
+        assert!(token_batches(&[], 64, 512).is_empty());
+    }
+
+    #[test]
+    fn token_batches_keep_a_text_longer_than_the_budget_as_a_batch_of_one() {
+        assert_eq!(token_batches(&[10, 1000, 20], 64, 512), vec![vec![0, 2], vec![1]]);
+    }
+
+    #[test]
+    fn token_batches_never_exceed_the_count_cap_however_small_the_texts() {
+        let batches = token_batches(&vec![1; 200], 64, 100_000);
+        assert_eq!(batches.iter().map(Vec::len).collect::<Vec<_>>(), vec![64, 64, 64, 8]);
+    }
+
+    #[test]
+    fn token_batches_with_no_budget_are_the_old_count_batches() {
+        assert_eq!(token_batches(&[4, 1, 2, 5, 3], 2, 0), vec![vec![1, 2], vec![4, 0], vec![3]]);
     }
 
     #[test]
@@ -291,16 +401,24 @@ mod tests {
     }
 
     #[test]
-    fn length_batches_keeps_original_order_among_equal_length_ties() {
-        let texts: Vec<String> = ["aa", "bb", "cc", "dd"].iter().map(|s| s.to_string()).collect();
+    fn token_batches_keep_original_order_among_equal_lengths() {
         // Every text is the same length: a stable sort must not reorder them.
-        assert_eq!(length_batches(&texts, 10), vec![vec![0, 1, 2, 3]]);
+        assert_eq!(token_batches(&[2, 2, 2, 2], 10, 512), vec![vec![0, 1, 2, 3]]);
     }
 
     #[test]
-    fn length_batches_with_batch_larger_than_the_collection_yields_one_sorted_batch() {
-        let texts: Vec<String> = ["mm", "z", "a"].iter().map(|s| s.to_string()).collect();
-        assert_eq!(length_batches(&texts, 100), vec![vec![1, 2, 0]]);
+    fn token_batches_with_cap_larger_than_the_collection_yield_one_sorted_batch() {
+        assert_eq!(token_batches(&[2, 1, 1], 100, 512), vec![vec![1, 2, 0]]);
+    }
+
+    #[test]
+    fn the_thread_cap_is_the_configured_count_or_a_third_of_the_cores_and_never_zero() {
+        assert_eq!(threads_from(0, 12), 4);
+        assert_eq!(threads_from(0, 8), 2);
+        assert_eq!(threads_from(0, 2), 1);
+        assert_eq!(threads_from(0, 0), 1);
+        assert_eq!(threads_from(3, 12), 3);
+        assert_eq!(threads_from(9, 2), 9, "a configured count is never clipped: the person said so");
     }
 
     #[test]

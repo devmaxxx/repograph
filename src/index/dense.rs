@@ -8,6 +8,9 @@ use serde::{Deserialize, Serialize};
 /// Node ids best first, each with the cosine of its best row.
 pub type Scored = Vec<(String, f32)>;
 
+/// How far a chunked sync has got, for the caller that checkpoints and says so.
+pub struct Progress { pub done: usize, pub total: usize }
+
 /// Holes tolerated per live row before `sync` compacts. Compaction costs the whole-file rewrite
 /// the append exists to avoid, so it is worth a quarter of the file being dead weight.
 const HOLE_SHARE: usize = 4;
@@ -174,6 +177,26 @@ impl DenseIndex {
 
     #[allow(clippy::type_complexity)]
     pub fn sync(&mut self, graph: &Graph, questions: &Questions, embed: &mut dyn FnMut(&[String]) -> Result<Vec<Vec<f32>>>) -> Result<usize> {
+        self.sync_chunked(graph, questions, embed, usize::MAX, &mut |_, _| Ok(()))
+    }
+
+    /// `sync`, embedding `chunk` rows at a time and calling `after_chunk` after each with the
+    /// index in a state worth saving: the rows already embedded are appended, and every row the
+    /// old index held is still alive and still at its offset. So a checkpoint an interrupted run
+    /// leaves behind is a consistent store — the next sync matches the saved rows by hash,
+    /// embeds only what is missing, and retires whatever the edit orphaned, at a cost of one
+    /// duplicate row per edited node until then. The holes, the reindex and the compaction wait
+    /// for the end for that reason: they are what makes the old rows unreachable, and a run that
+    /// stops halfway must not have done half of it.
+    #[allow(clippy::type_complexity)]
+    pub fn sync_chunked(
+        &mut self,
+        graph: &Graph,
+        questions: &Questions,
+        embed: &mut dyn FnMut(&[String]) -> Result<Vec<Vec<f32>>>,
+        chunk: usize,
+        after_chunk: &mut dyn FnMut(&mut DenseIndex, Progress) -> Result<()>,
+    ) -> Result<usize> {
         let mut alive = vec![false; self.ids.len()];
         let mut todo_ids = Vec::new();
         let mut todo_texts = Vec::new();
@@ -192,25 +215,30 @@ impl DenseIndex {
             }
         }
         let embedded = todo_ids.len();
-        if embedded > 0 {
-            let mut vecs = embed(&todo_texts)?;
+        let mut done = 0;
+        while done < embedded {
+            let end = done.saturating_add(chunk.max(1)).min(embedded);
+            let mut vecs = embed(&todo_texts[done..end])?;
             for v in vecs.iter_mut() { normalise(v); }
             let dim = vecs.first().map(|v| v.len()).unwrap_or(self.dim);
             // A model of another width invalidates every stored offset, so the old rows cannot
-            // be appended to — they go, and the file is rewritten from the new ones alone.
-            if self.dim > 0 && dim != self.dim {
+            // be appended to — they go, and the file is rewritten from the new ones alone. Only
+            // the first chunk can find that out: after it the index's width is this model's.
+            if done == 0 && self.dim > 0 && dim != self.dim {
                 self.ids.clear(); self.hashes.clear(); self.kinds.clear(); self.vectors.clear();
                 alive.clear();
                 self.persisted = 0;
             }
             self.dim = dim;
-            for ((id, (hash, v)), is_q) in todo_ids.into_iter().zip(todo_hashes.into_iter().zip(vecs)).zip(todo_kinds) {
-                self.ids.push(id);
-                self.hashes.push(hash);
-                self.kinds.push(is_q);
-                self.vectors.extend_from_slice(&v);
+            for i in done..end {
+                self.ids.push(todo_ids[i].clone());
+                self.hashes.push(todo_hashes[i].clone());
+                self.kinds.push(todo_kinds[i]);
+                self.vectors.extend_from_slice(&vecs[i - done]);
                 alive.push(true);
             }
+            done = end;
+            after_chunk(self, Progress { done, total: embedded })?;
         }
         self.free = alive.iter().enumerate().filter(|(_, a)| !**a).map(|(i, _)| i).collect();
         // A hole keeps its row's floats — that is what holds the offsets still — but not its
@@ -322,6 +350,56 @@ mod tests {
         let mut idx = DenseIndex::default();
         idx.sync(g, &Questions::default(), &mut fake).unwrap();
         idx
+    }
+
+    #[test]
+    fn sync_chunked_appends_every_row_and_reports_progress_after_each_chunk() {
+        let mut idx = DenseIndex::default();
+        let mut seen = Vec::new();
+        let n = idx.sync_chunked(&wide(0), &Questions::default(), &mut fake, 4,
+            &mut |_, p| { seen.push((p.done, p.total)); Ok(()) }).unwrap();
+        assert_eq!(n, 10);
+        assert_eq!(seen, vec![(4, 10), (8, 10), (10, 10)]);
+        let whole = synced(&wide(0));
+        assert_eq!((idx.ids, idx.hashes, idx.vectors), (whole.ids, whole.hashes, whole.vectors));
+    }
+
+    #[test]
+    fn a_checkpoint_saved_mid_sync_loads_and_the_next_sync_finishes_the_rest() {
+        let d = tempfile::tempdir().unwrap();
+        let store = Store::new(d.path());
+        let mut idx = DenseIndex::default();
+        // A run killed after its first checkpoint: the rows it embedded are on disk.
+        let err = idx.sync_chunked(&wide(0), &Questions::default(), &mut fake, 4, &mut |i, _| {
+            i.save(&store)?;
+            anyhow::bail!("interrupted")
+        }).unwrap_err().to_string();
+        assert!(err.contains("interrupted"), "{err}");
+        let mut back = DenseIndex::load(&store).unwrap();
+        assert_eq!(back.ids.len(), 4);
+        assert_eq!(back.sync(&wide(0), &Questions::default(), &mut fake).unwrap(), 6, "only what the checkpoint lacks");
+        let q = fake(&["passage: n7x\nтело".to_string()]).unwrap().remove(0);
+        assert_eq!(back.search_scored(&q, 10, None), synced(&wide(0)).search_scored(&q, 10, None));
+    }
+
+    #[test]
+    fn a_chunked_sync_over_an_edited_store_leaves_the_same_holes_as_a_plain_one() {
+        let mut idx = synced(&wide(0));
+        assert_eq!(idx.sync_chunked(&wide(1), &Questions::default(), &mut fake, 3, &mut |_, _| Ok(())).unwrap(), 1);
+        assert_eq!(idx.free, vec![0]);
+        assert_eq!(idx.live, (1..11).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn sync_is_sync_chunked_with_one_chunk() {
+        let mut plain = DenseIndex::default();
+        let n = plain.sync(&wide(0), &Questions::default(), &mut fake).unwrap();
+        let mut chunked = DenseIndex::default();
+        let mut seen = Vec::new();
+        let m = chunked.sync_chunked(&wide(0), &Questions::default(), &mut fake, usize::MAX,
+            &mut |_, p| { seen.push((p.done, p.total)); Ok(()) }).unwrap();
+        assert_eq!((m, seen), (n, vec![(n, n)]));
+        assert_eq!((chunked.ids, chunked.vectors), (plain.ids, plain.vectors));
     }
 
     #[test]

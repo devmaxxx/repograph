@@ -28,13 +28,31 @@ pub struct Config {
     /// Hub id of the model the vectors are written with. `build`, `update`, `enrich`, `embed`
     /// and `watch` embed with it and rewrite the index whole when the store holds another
     /// model's rows; `ask`, `bench` and `dump` open the model the store records instead, so a
-    /// store keeps answering with what wrote it whatever this says today. The large model is
-    /// the default: it read paraphrase 22/30 against the small one's 15/30 on the fixture and
-    /// held-out 103 → 119 of 400 (p = 0.00086); the latency, memory and download that choice
-    /// costs are measured in docs/bench/2026-09-05-dev-cases-results.md.
-    /// `intfloat/multilingual-e5-small` is the cheap way back, and the model the floors were
-    /// set with.
+    /// store keeps answering with what wrote it whatever this says today. The small model is the
+    /// default, priced for a first build nobody has tuned yet, and the model its floors were set
+    /// with; `intfloat/multilingual-e5-large` is the one line that buys paraphrase 22/30 against
+    /// 15/30 and held-out 103 → 119 of 400 (p = 0.00086), for a 2.1 GB download and nine times
+    /// the wall on a whole-store embed. docs/adr/ADR-002-two-defaults-multiplied.md weighs the
+    /// two; docs/bench/2026-09-05-dev-cases-results.md measures the recall.
     pub embed_model: String,
+    /// How many threads the model sessions and the tokenizer pool may use; `0` takes the
+    /// built-in rule, a third of the logical cores. It describes the machine rather than the
+    /// corpus — the same repository wants every core on a CI box and a quiet laptop's spare
+    /// ones — so the global file may set it, unlike `embed_model`, whose value is a property of
+    /// the vectors on disk. The cap is a straight trade with no free side: on this machine the
+    /// default gives back a third of the peak CPU for +39% wall on a fixed batch shape
+    /// (docs/bench/2026-09-07-resource-usage-results.md), so `threads = 6` is the one word back
+    /// to what ORT would have picked itself.
+    pub threads: usize,
+    /// Which scheduling band the writers run in: `"background"` (the default) or `"normal"`.
+    /// Like `threads` it describes the machine and not the corpus, so the global file may set it.
+    /// The background band costs wall time and buys back everything the person at the keyboard
+    /// can feel — on this machine their own compile went from 15.7% slower to 1.7% and a 1 ms
+    /// wake from 2.5 ms to 0.6 ms at p99, for 4.1× the rebuild's wall
+    /// (docs/bench/2026-09-07-unnoticeable-results.md). `normal` is the word back, for a build
+    /// server or anyone who would rather have the wall time. Readers ignore it: they answer a
+    /// person, and a person is waiting.
+    pub priority: crate::priority::Priority,
 }
 
 // Headless Claude Code with thinking off: the same answers, 4-5× faster and cheaper. `{model}`
@@ -79,15 +97,18 @@ impl Default for Config {
             rerank_model: RERANK_MODEL.into(),
             reranker_dir: String::new(),
             embed_model: crate::index::embed::DEFAULT_MODEL.into(),
+            threads: 0,
+            priority: crate::priority::Priority::default(),
         }
     }
 }
 
-/// The settings that describe the machine rather than the corpus: which command runs a model, and
-/// which model it runs. A global file may set these and nothing else. The corpus-shaped settings —
-/// the globs, the id families, and above all `embed_model` — are deliberately unreadable from
-/// there: one global line would otherwise rewrite every repository's vectors under a model nobody
-/// chose for that repository, which is the one mistake this store's design spends effort avoiding.
+/// The settings that describe the machine rather than the corpus: which command runs a model,
+/// which model it runs, how many threads it may take and which scheduling band it takes them in. A global file may set these and nothing
+/// else. The corpus-shaped settings — the globs, the id families, and above all `embed_model` —
+/// are deliberately unreadable from there: one global line would otherwise rewrite every
+/// repository's vectors under a model nobody chose for that repository, which is the one mistake
+/// this store's design spends effort avoiding.
 #[derive(Debug, Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 struct Machine {
@@ -96,6 +117,8 @@ struct Machine {
     enrich_model: Option<String>,
     rerank_model: Option<String>,
     reranker_dir: Option<String>,
+    threads: Option<usize>,
+    priority: Option<crate::priority::Priority>,
 }
 
 /// `$REPOGRAPH_CONFIG`, else `$XDG_CONFIG_HOME/repograph/config.toml`, else
@@ -136,16 +159,11 @@ impl Config {
         };
         let machine = Self::machine()?;
 
-        let layer = |key: &str, from_machine: Option<String>, field: &mut String| {
-            if !named.contains_key(key) {
-                if let Some(v) = from_machine {
-                    *field = v;
-                }
-            }
-        };
-        layer("reranker_dir", machine.reranker_dir, &mut cfg.reranker_dir);
-        layer("enrich_model", machine.enrich_model, &mut cfg.enrich_model);
-        layer("rerank_model", machine.rerank_model, &mut cfg.rerank_model);
+        layer(&named, "reranker_dir", machine.reranker_dir, &mut cfg.reranker_dir);
+        layer(&named, "enrich_model", machine.enrich_model, &mut cfg.enrich_model);
+        layer(&named, "rerank_model", machine.rerank_model, &mut cfg.rerank_model);
+        layer(&named, "threads", machine.threads, &mut cfg.threads);
+    layer(&named, "priority", machine.priority, &mut cfg.priority);
 
         // The command is resolved from its template rather than from `Default`, whose copy already
         // has the default model substituted: a project that sets only `enrich_model` must still get
@@ -166,6 +184,12 @@ impl Config {
         if let Ok(m) = std::env::var("REPOGRAPH_RERANK_MODEL") {
             if !m.is_empty() { cfg.rerank_model = m; }
         }
+        if let Ok(t) = std::env::var("REPOGRAPH_THREADS") {
+            if !t.is_empty() {
+                cfg.threads = t.parse().with_context(|| format!("REPOGRAPH_THREADS is {t:?}, which is not a thread count"))?;
+            }
+        }
+        cfg.priority = crate::priority::from_env(cfg.priority, std::env::var("REPOGRAPH_PRIORITY").ok().as_deref())?;
         cfg.enrich_command = enrich_template.replace(MODEL_SLOT, &cfg.enrich_model);
         cfg.rerank_command = rerank_template.replace(MODEL_SLOT, &cfg.rerank_model);
         Ok(cfg)
@@ -184,6 +208,17 @@ impl Config {
     }
 }
 
+/// The machine's value where the project file left the key unnamed. A key the project wrote is
+/// left alone even when it wrote the built-in value: what the file says is what the repository
+/// asked for.
+fn layer<T>(named: &toml::Table, key: &str, from_machine: Option<T>, field: &mut T) {
+    if !named.contains_key(key) {
+        if let Some(v) = from_machine {
+            *field = v;
+        }
+    }
+}
+
 /// A string the project file named, falling back when it holds something that is not a string.
 fn cfg_str(table: &toml::Table, key: &str, fallback: &str) -> String {
     table.get(key).and_then(|v| v.as_str()).unwrap_or(fallback).to_string()
@@ -195,57 +230,74 @@ mod tests {
 
     #[test]
     fn missing_file_yields_defaults() {
-        let dir = tempfile::tempdir().unwrap();
-        let cfg = Config::load(dir.path()).unwrap();
-        assert!(cfg.id_families.contains(&"FR-PAY".to_string()));
-        assert_eq!(cfg.doc_globs, vec!["**/*.md".to_string()]);
+        with_machine(None, || {
+            let dir = tempfile::tempdir().unwrap();
+            let cfg = Config::load(dir.path()).unwrap();
+            assert!(cfg.id_families.contains(&"FR-PAY".to_string()));
+            assert_eq!(cfg.doc_globs, vec!["**/*.md".to_string()]);
+        });
     }
 
     #[test]
     fn partial_file_overrides_only_named_keys() {
-        let dir = tempfile::tempdir().unwrap();
-        std::fs::write(dir.path().join("repograph.toml"), "skip = [\"docs/**/TRACKER.md\"]\n").unwrap();
-        let cfg = Config::load(dir.path()).unwrap();
-        assert_eq!(cfg.skip, vec!["docs/**/TRACKER.md".to_string()]);
-        assert!(cfg.id_families.contains(&"INV".to_string()));
+        with_machine(None, || {
+            let dir = tempfile::tempdir().unwrap();
+            std::fs::write(dir.path().join("repograph.toml"), "skip = [\"docs/**/TRACKER.md\"]\n").unwrap();
+            let cfg = Config::load(dir.path()).unwrap();
+            assert_eq!(cfg.skip, vec!["docs/**/TRACKER.md".to_string()]);
+            assert!(cfg.id_families.contains(&"INV".to_string()));
+        });
     }
 
     #[test]
     fn an_unknown_key_is_rejected() {
-        let dir = tempfile::tempdir().unwrap();
-        std::fs::write(dir.path().join("repograph.toml"), "bogus_key = 1\n").unwrap();
-        let err = Config::load(dir.path()).unwrap_err().to_string();
-        assert!(err.contains("repograph.toml"), "{err}");
+        with_machine(None, || {
+            let dir = tempfile::tempdir().unwrap();
+            std::fs::write(dir.path().join("repograph.toml"), "bogus_key = 1\n").unwrap();
+            let err = Config::load(dir.path()).unwrap_err().to_string();
+            assert!(err.contains("repograph.toml"), "{err}");
+        });
     }
 
     #[test]
     fn malformed_toml_errors_naming_the_file() {
-        let dir = tempfile::tempdir().unwrap();
-        std::fs::write(dir.path().join("repograph.toml"), "skip = [\n").unwrap();
-        let err = Config::load(dir.path()).unwrap_err().to_string();
-        assert!(err.contains("repograph.toml"), "{err}");
+        with_machine(None, || {
+            let dir = tempfile::tempdir().unwrap();
+            std::fs::write(dir.path().join("repograph.toml"), "skip = [\n").unwrap();
+            let err = Config::load(dir.path()).unwrap_err().to_string();
+            assert!(err.contains("repograph.toml"), "{err}");
+        });
     }
 
     #[test]
-    fn the_embed_model_defaults_to_the_large_e5_and_reads_from_the_file() {
-        let dir = tempfile::tempdir().unwrap();
-        assert_eq!(Config::load(dir.path()).unwrap().embed_model, "intfloat/multilingual-e5-large");
-        std::fs::write(dir.path().join("repograph.toml"), "embed_model = \"intfloat/multilingual-e5-small\"\n").unwrap();
-        assert_eq!(Config::load(dir.path()).unwrap().embed_model, "intfloat/multilingual-e5-small");
+    fn the_embed_model_defaults_to_the_small_e5_and_reads_from_the_file() {
+        with_machine(None, || {
+            let dir = tempfile::tempdir().unwrap();
+            assert_eq!(Config::load(dir.path()).unwrap().embed_model, "intfloat/multilingual-e5-small");
+            std::fs::write(dir.path().join("repograph.toml"), "embed_model = \"intfloat/multilingual-e5-large\"\n").unwrap();
+            assert_eq!(Config::load(dir.path()).unwrap().embed_model, "intfloat/multilingual-e5-large");
+        });
     }
 
     #[test]
     fn overriding_the_enrich_command_leaves_the_rerank_command_and_lists_at_their_defaults() {
-        let dir = tempfile::tempdir().unwrap();
-        std::fs::write(dir.path().join("repograph.toml"), "enrich_command = \"echo hi\"\n").unwrap();
-        let cfg = Config::load(dir.path()).unwrap();
-        assert_eq!(cfg.enrich_command, "echo hi");
-        assert_eq!(cfg.rerank_command, Config::default().rerank_command);
-        assert_eq!(cfg.doc_globs, Config::default().doc_globs);
+        with_machine(None, || {
+            let dir = tempfile::tempdir().unwrap();
+            std::fs::write(dir.path().join("repograph.toml"), "enrich_command = \"echo hi\"\n").unwrap();
+            let cfg = Config::load(dir.path()).unwrap();
+            assert_eq!(cfg.enrich_command, "echo hi");
+            assert_eq!(cfg.rerank_command, Config::default().rerank_command);
+            assert_eq!(cfg.doc_globs, Config::default().doc_globs);
+        });
     }
 
     /// The layering is read out of the environment, and cargo runs these on one process: without
     /// a lock two of them race on `REPOGRAPH_CONFIG` and the loser reads the other's file.
+    ///
+    /// Every test that calls `Config::load` takes it, including the ones that set no variable
+    /// themselves: a reader is as exposed as a writer here, and CI caught one that was not — it
+    /// read the machine file a concurrent test had pointed at, whose corpus key `load` refuses,
+    /// and panicked on an `unwrap` that had nothing to do with what it was testing.
     static ENV: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
     /// Runs `f` with a global config file holding `machine`, and nothing else set.
@@ -261,6 +313,8 @@ mod tests {
             std::env::set_var("REPOGRAPH_CONFIG", &path);
             std::env::remove_var("REPOGRAPH_ENRICH_MODEL");
             std::env::remove_var("REPOGRAPH_RERANK_MODEL");
+            std::env::remove_var("REPOGRAPH_THREADS");
+            std::env::remove_var("REPOGRAPH_PRIORITY");
         }
         let out = f();
         unsafe { std::env::remove_var("REPOGRAPH_CONFIG") };
@@ -333,6 +387,102 @@ mod tests {
             let cfg = Config::load(dir.path()).unwrap();
             assert_eq!(cfg.enrich_command, "my-runner --go");
             assert_eq!(cfg.enrich_model, "ignored-here");
+        });
+    }
+
+    #[test]
+    fn threads_defaults_to_zero_and_reads_from_the_project_file() {
+        with_machine(None, || {
+            let dir = tempfile::tempdir().unwrap();
+            assert_eq!(Config::load(dir.path()).unwrap().threads, 0);
+            std::fs::write(dir.path().join("repograph.toml"), "threads = 3\n").unwrap();
+            assert_eq!(Config::load(dir.path()).unwrap().threads, 3);
+        });
+    }
+
+    #[test]
+    fn the_machine_file_may_set_threads_and_the_project_still_wins() {
+        with_machine(Some("threads = 2\n"), || {
+            let dir = tempfile::tempdir().unwrap();
+            assert_eq!(Config::load(dir.path()).unwrap().threads, 2);
+            std::fs::write(dir.path().join("repograph.toml"), "threads = 5\n").unwrap();
+            assert_eq!(Config::load(dir.path()).unwrap().threads, 5);
+        });
+    }
+
+    #[test]
+    fn the_environment_beats_the_project_for_threads() {
+        with_machine(None, || {
+            let dir = tempfile::tempdir().unwrap();
+            std::fs::write(dir.path().join("repograph.toml"), "threads = 2\n").unwrap();
+            unsafe { std::env::set_var("REPOGRAPH_THREADS", "4") };
+            assert_eq!(Config::load(dir.path()).unwrap().threads, 4);
+            unsafe { std::env::set_var("REPOGRAPH_THREADS", "") };
+            assert_eq!(Config::load(dir.path()).unwrap().threads, 2);
+            unsafe { std::env::remove_var("REPOGRAPH_THREADS") };
+        });
+    }
+
+    #[test]
+    fn a_threads_value_that_is_not_a_number_is_an_error_naming_the_file() {
+        with_machine(None, || {
+            let dir = tempfile::tempdir().unwrap();
+            std::fs::write(dir.path().join("repograph.toml"), "threads = \"many\"\n").unwrap();
+            let err = Config::load(dir.path()).unwrap_err().to_string();
+            assert!(err.contains("repograph.toml"), "{err}");
+            std::fs::write(dir.path().join("repograph.toml"), "threads = 2\n").unwrap();
+            unsafe { std::env::set_var("REPOGRAPH_THREADS", "lots") };
+            let err = Config::load(dir.path()).unwrap_err().to_string();
+            unsafe { std::env::remove_var("REPOGRAPH_THREADS") };
+            assert!(err.contains("REPOGRAPH_THREADS"), "{err}");
+        });
+    }
+
+    #[test]
+    fn priority_defaults_to_background_and_reads_from_the_project_file() {
+        with_machine(None, || {
+            let dir = tempfile::tempdir().unwrap();
+            assert_eq!(Config::load(dir.path()).unwrap().priority, crate::priority::Priority::Background);
+            std::fs::write(dir.path().join("repograph.toml"), "priority = \"normal\"\n").unwrap();
+            assert_eq!(Config::load(dir.path()).unwrap().priority, crate::priority::Priority::Normal);
+        });
+    }
+
+    #[test]
+    fn the_machine_file_may_set_priority_and_the_project_still_wins() {
+        with_machine(Some("priority = \"normal\"\n"), || {
+            let dir = tempfile::tempdir().unwrap();
+            assert_eq!(Config::load(dir.path()).unwrap().priority, crate::priority::Priority::Normal);
+            std::fs::write(dir.path().join("repograph.toml"), "priority = \"background\"\n").unwrap();
+            assert_eq!(Config::load(dir.path()).unwrap().priority, crate::priority::Priority::Background);
+        });
+    }
+
+    #[test]
+    fn the_environment_beats_the_project_for_priority() {
+        with_machine(None, || {
+            let dir = tempfile::tempdir().unwrap();
+            std::fs::write(dir.path().join("repograph.toml"), "priority = \"background\"\n").unwrap();
+            unsafe { std::env::set_var("REPOGRAPH_PRIORITY", "normal") };
+            assert_eq!(Config::load(dir.path()).unwrap().priority, crate::priority::Priority::Normal);
+            unsafe { std::env::set_var("REPOGRAPH_PRIORITY", "") };
+            assert_eq!(Config::load(dir.path()).unwrap().priority, crate::priority::Priority::Background);
+            unsafe { std::env::remove_var("REPOGRAPH_PRIORITY") };
+        });
+    }
+
+    #[test]
+    fn a_priority_that_is_not_a_word_it_knows_is_an_error_naming_the_file() {
+        with_machine(None, || {
+            let dir = tempfile::tempdir().unwrap();
+            std::fs::write(dir.path().join("repograph.toml"), "priority = \"fast\"\n").unwrap();
+            let err = Config::load(dir.path()).unwrap_err().to_string();
+            assert!(err.contains("repograph.toml"), "{err}");
+            std::fs::write(dir.path().join("repograph.toml"), "priority = \"normal\"\n").unwrap();
+            unsafe { std::env::set_var("REPOGRAPH_PRIORITY", "quick") };
+            let err = Config::load(dir.path()).unwrap_err().to_string();
+            unsafe { std::env::remove_var("REPOGRAPH_PRIORITY") };
+            assert!(err.contains("REPOGRAPH_PRIORITY"), "{err}");
         });
     }
 

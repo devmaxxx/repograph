@@ -32,6 +32,15 @@ G18 was raised on 2026-09-07 by the Windows port's CI work rather than by any ru
 item here no number exposed and no number could: a `changes` defect the pinned fixture cannot
 trigger, because not one of that corpus's paths carries a byte outside ASCII.
 
+G19 onward are a second family, and the subject changes with them. They were raised by the two
+resource runs of 2026-09-07 — [what every command costs](2026-09-07-resource-usage-results.md) and
+[a rebuild measured against the person at the keyboard](2026-09-07-unnoticeable-results.md) — and
+they measure what the tool costs to run rather than what it answers: wall, CPU, memory, and the
+platforms none of that was measured on. No retrieval floor moved in either run and none of these
+gaps is about one. Like G7 they carry a raised line rather than a status one, because the runs that
+raised them are not the run the rest of this file is written against. They have an order of their
+own at the end, for the same reason.
+
 ---
 
 ## G1 · A third of a large blast radius is invisible — `changes` 27/38 symbols
@@ -387,8 +396,18 @@ reading as the small one, so an older store never silently reinterprets under th
 cost of that default is measured in [Embeddings](../../README.md#embeddings). Nothing here reaches
 the `--no-dense` arm, which has no dense list to improve.
 
-**Update (2026-09-06, 0.5.0):** `bench` has floors of its own for the default model since 0.5.0 —
+**Update (2026-09-06, 0.5.0):** `bench` has floors of its own for the large model since 0.5.0 —
 40/22 enriched and 40/17 raw ([the 0.5.0 gap results](2026-09-05-0.5.0-gaps-results.md)).
+
+**Update (2026-09-07): the option stands, the default does not.** Nothing measured here moved —
+e5-large still reads 22/30 against 15/30 and keeps its own floors — but the price of it *as a
+default* did, because `priority = "background"` became the writers' default in the same version.
+the whole-store embed the large model needs is 1,930 s foreground against the small model's 214 s
+([what every command costs](2026-09-07-resource-usage-results.md) §1.1), and the band multiplies
+both by 4.1–4.5× — a ratio, not a wall, which is G20's whole complaint. Hours against minutes
+either way you take the ratio, so the default went back to
+`intfloat/multilingual-e5-small` and e5-large stayed the one line that buys the recall:
+[ADR-002](../adr/ADR-002-two-defaults-multiplied.md).
 
 ## G12 · The gate compares raw BM25 scores across two indices
 
@@ -818,6 +837,305 @@ is found under the unescaped name, and an untracked quoted name from `ls-files` 
 Then the fixture, which must read what it reads today byte for byte, since none of its paths
 changes form. Not written.
 
+## G19 · The progress line's cadence is a count of rows — first line at 102.4 s against a 60 s bar
+
+**Raised (2026-09-07)** by the rebuild the first resource run bounded
+([what every command costs](2026-09-07-resource-usage-results.md), §4.1). Every other fixed number
+that run set was met; this is the one that was not.
+
+**Measured.** The whole-store rebuild prints thirty-three progress lines where there were none. The
+first lands at **102.4 s** and the thirty-two after it are **42.7 s to 96.7 s apart, mean 57.0**,
+against a bar of one line at least every 60 s. The mean clears the bar and neither tail does.
+
+**Cause.** `SYNC_CHUNK` (`src/main.rs:336`) is 1,024 **rows**, and a row is not a unit of work.
+Both tails follow from that. The first chunk carries the run's fixed startup — 2.24 GB of
+memory-mapped fp32 weights paged in as the first forwards touch them, which is also why chunks two
+and three are still decaying at 60.1 s and 46.4 s — and the last chunks are slow because the
+graph's iteration order puts the long passages last: 96.7 s for the thousand rows ending at 32,768.
+
+**Lever.** Budget a chunk by tokens, the way `token_batches` (`src/index/embed.rs:297`) already
+budgets a forward against `TOKEN_BUDGET`, so a checkpoint measures the same thing a batch does.
+Shrinking the count is not the lever and the recorded chunk times say so: 102.4 s less a settled
+chunk's 46.4 s leaves about 56 s of fixed startup before a single row could be checkpointed, so
+halving `SYNC_CHUNK` still prints the first line after 60 s. That subtraction is arithmetic on the
+recorded numbers, not a run.
+
+**Gate.** On the same whole-store rebuild, every interval under 60 s including the first, with the
+run's own readings unmoved — 1,930 s wall, 293% peak CPU, 2.15 GB.
+
+## G20 · A whole-store rebuild in the background band has no wall number
+
+**Raised (2026-09-07)** by
+[a rebuild measured against the person at the keyboard](2026-09-07-unnoticeable-results.md), §4.4 —
+the one row that document's plan asked for and could not take.
+
+**Measured.** Nothing, which is the gap. Three whole-store attempts and no end-to-end reading: the
+plan's own run, on the pre-change binary, was stopped deliberately at 7,168 of 33,525 rows after
+34.7 minutes; the shipped binary's run was then started twice and starved both times, the second
+managing **80.9 seconds of CPU in 15.5 minutes** without reaching its first checkpoint, under a
+load average that had peaked near 200 with an Android emulator (5.5 GB), Android Studio (4.0 GB),
+two JVMs, `lldb-rpc-server` (4.2 GB), Xcode and Chrome on the machine and 64 MB of free pages. A
+third was left running detached when the document was written and its line is not in it. The in-run
+probes did land, at t = 60–100 s of the first attempt, and they are the only whole-store probe
+readings there are: every thread at PRI 4, P6 2,714 ms (+5.0%) — on bar 1, not under it — P1 2,511
+(+0.7%), W p99 512–626 µs.
+
+**Cause, and it is the feature rather than a fault.** `sample` puts the starved process inside ONNX
+Runtime's thread pool doing forwards, not blocked on a lock or on I/O. It is not the store's size
+either, and a control says so: store-B, the 320-row copy V1 and V3 each finished in 11 minutes on a
+quiet machine, was started again in the band under the same afternoon's load and read **81.4 s of
+CPU in 8.1 minutes** — 17% of one core against V1's 231%. The background band on Apple Silicon is
+the efficiency cluster, which is where macOS puts its own background work too, so the band's
+throughput follows how busy those six cores are and not how busy the machine looks. Bar 6 says the
+person does not wait for the rebuild; the other half of the same trade is that the rebuild waits
+for the person.
+
+**What stands in place of the number.** 4.1× to 4.5× the foreground 1,930 s — 4.1× is R2's wall
+against R1's, 4.5× the first checkpoint's 2.2 rows/s against the foreground run's 10.0 — so roughly
+2.2 to 2.4 hours, which is [the plan](../plans/2026-09-07-unnoticeable.md)'s ≈ 8,700 s if the rate
+climbs the way the foreground run's did. It is a product of ratios and it is labelled as one
+wherever it appears.
+
+**Lever, and this gap has to pick one.** Record **CPU-seconds** rather than wall as the band's
+cost: they are load-independent, they are already what V1 gives against R1 on store-B (2,315 s
+against 576, a measured 4.02×), and they can be taken on this laptop today. Wall stays beside them
+as an annotation carrying the load average it was read under, and the one wall figure meant to
+travel is taken on a machine idle by construction — a run scheduled overnight against the pinned
+fixture, which needs no rig. The alternative, waiting for a working laptop to fall quiet, is what
+produced three unfinished runs.
+
+**Gate.** One whole-store rebuild in the band with its CPU-seconds recorded and read against the
+4.02× the band charges on store-B, and with bar 5 — the bytes a whole rebuild writes — taken from
+the run rather than computed from file sizes as §4.4 had to (≈ 180 MB against a 300 MB bar). One
+wall figure beside it, labelled with the load it was taken under.
+
+## G21 · One machine is measured; three platform rows are reasoned from an API contract
+
+**Raised (2026-09-07)** by [the unnoticeable results](2026-09-07-unnoticeable-results.md), §5.1,
+which labels every row of its hardware table measured or reasoned and leaves three of the four
+reasoned.
+
+**Measured.** macOS on Apple Silicon, and only there: R1 against V1 — PRI 4 on every thread, 100%
+of the process's CPU time in the background band, 1.71 GHz against 3.49, the person's compile back
+from +15.7% to +2.8%, the wake p99 from 2,469 µs to 564 µs. Windows is honest by construction:
+nothing is implemented and one line on stderr tells the user the setting had no effect. The other
+two rows are arguments.
+
+The merge with `main` sharpens the Windows half rather than the reasoning: `cfd4c40` ships a
+Windows binary, so the platform where the default setting does nothing and says so on every writer
+run is now one the project releases to, not one it declines to claim. `SetPriorityClass` with
+`PROCESS_MODE_BACKGROUND_BEGIN` is the call, and it also throttles that process's I/O, which is the
+half `nice` alone never gives Linux.
+
+**Cause.** The band is one system call, and the call means something different under each
+scheduler. The Intel row is the one that matters most, because the same macOS binary runs there:
+`setpriority(2)` promises the lowest scheduling priority, throttled disk I/O and throttled network
+I/O for sockets opened afterwards, and it names no core type, because on Intel there is one kind.
+Bars 1, 2 and 5 hold by preemption — anything the person runs at default priority takes the core
+the moment it is runnable — and **bar 3, the clock and the fan, cannot**: on an otherwise idle
+machine the GEMMs run on the same cores at the same turbo clock, so the fan curve is a foreground
+run's and the wall is near the foreground wall rather than four times it. Linux gets `nice` 19,
+`SCHED_IDLE` and `ioprio_set(IOPRIO_WHO_PROCESS, IOPRIO_CLASS_IDLE)`, in that order and before any
+pool is built because Linux inherits these per thread at `clone`; the branch compiles for
+`x86_64-unknown-linux-gnu` and `x86_64-pc-windows-msvc`, and the Linux arm was proved genuinely
+compiled by breaking it on purpose. Compiling is not measuring. No probe has ever run on a Linux
+box.
+
+**Lever.** The probe kit is portable C and already exists —
+`/Users/max/bench/resources-2026-09-07/unnoticeable/probe/`. `probe.c` (P6, P1 and the 1 ms wake
+loop) uses nothing macOS-specific but the QoS class on its wake thread; `rusage.c` does, and it is
+the piece to replace: `proc_pid_rusage(RUSAGE_INFO_V4)`'s per-band CPU counters and `ps -M`'s Mach
+priority have no Linux equivalent, so the Linux reading is `sched_getscheduler` and `getpriority`
+for the policy the process actually holds, and `/proc/<pid>/schedstat` for the time the scheduler
+gave it against the time it spent waiting to run.
+
+**Gate.** Bars 1 and 2 — the compile penalty and the wake p99 — measured on at least one Linux box
+against an idle baseline taken on that box, and the wall multiplier the band costs there recorded
+whatever it turns out to be. An Intel Mac would close the second reasoned row; nothing here needs
+both, and a row that stays reasoned goes on saying so.
+
+## G22 · Mapping the weights is free only where there is memory to spare — +6% to +26% under pressure
+
+**Raised (2026-09-07)** by [the unnoticeable results](2026-09-07-unnoticeable-results.md), §5.5,
+and predicted by nothing: the plan reasoned the mapped layout as a pure win — the pages are clean,
+reclaimable and shared — and never asked what a machine does when it takes that offer.
+
+**Measured** in a four-run A/B, the two binaries alternating on store-B in the foreground so the
+scheduler is not part of the answer, while the machine held an Android emulator, Android Studio,
+two JVMs, Xcode and Chrome with 64–115 MB of free pages. The anonymous footprint is constant and it
+is the win: **0.48 and 0.50 GB mapped against 1.64 GB packed**, 1.14 GB less of the memory that
+decides which process the system compresses, swaps or kills. The wall is the price: 206.5 s against
+164.5 (+26%) in the first round, 167.7 against 157.9 (+6%) in the second. The disk column says why:
+mapped reads 1,577.9 and 1,896.4 MB, the weight file coming back after the system took its pages,
+where packed reads it once and keeps its own copy. On a machine with headroom the same switch costs
+0.6% — V3's 662.2 s against V1's 658.0.
+
+**Cause.** Clean and reclaimable is what the win is made of and it is what the cost is made of.
+There is nothing to repair in the mechanism; what is missing is a policy.
+
+**Lever, three candidates and none measured.** Choose the layout when the session opens, from what
+`memory_pressure` says the machine has free; `madvise(MADV_WILLNEED)` on the mapping, so the pages
+are faulted in once rather than fetched again per forward; or leave the default and document the
+trade, which is what §5.5 does — a jetsam kill loses a whole rebuild and 26% of a rebuild's wall
+does not, and nobody is waiting for the writer. §6 of that document names the first two as policy
+in the writer rather than a builder entry.
+
+**Gate.** Under the same pressure, the wall within a stated percentage of packed — 26% is the
+number an argument has to beat — while the peak footprint stays under the 0.8 GB bar §4.2 set. Both
+readings on the same machine in the same session as their packed control, because the pressure is
+not reproducible from a transcript.
+
+## G23 · The reader suite's bars are tighter than the suite's own repeatability
+
+**Raised (2026-09-07)** by [the unnoticeable results](2026-09-07-unnoticeable-results.md), §4.6,
+where three reader rows failed a check on a change that touches no reader.
+
+**Measured.** The plan asked for every reader wall within 10% and every max RSS within 5% of the
+previous document's after rows. `ask-fused` read **0.58 s against 0.35**, `bench-dense` **1.65
+against 1.47**, `dump10` 0.90 against 0.70. The control says the change is not why: the same
+commands run alternately through the pre-change binary and the shipped one read 0.61–0.75 s and
+0.60–0.65 s for `ask-fused`, 1.67 s and 1.73–1.90 s for `bench-dense`, and **max RSS bounces
+between 1.36 and 1.56 GB on both binaries** — a wider spread than the 5% bar.
+
+**Cause, and neither half is in the code.** The fixture moved under the suite: its index grew from
+**33,526 to 33,554 rows** over this session's own `watch` and `update` measurements. And the suite
+is ordered, so its first command pays for whatever re-extraction the previous one left behind —
+which is why `changes` read 1.11 s in one suite run and 0.16 s in the next, the same artefact with
+the sign reversed.
+
+**Lever.** Three, all cheap: n runs and a median rather than one reading; a quiet-machine
+precondition stated the way every probe row states the idle baseline it is read against; and a
+pinned index — the reader rows taken against a copy no writer in the session touches, which is what
+the fixture is pinned for.
+
+**Gate.** Before a bar is used to judge a change, the same command through the same binary twice
+reads inside it. A bar its own control cannot pass is measuring the machine, and every other gap in
+this family is read through these bars.
+
+## G24 · `ask --rerank-local` is the heaviest reader by an order of magnitude — 31.9 s against 0.41
+
+**Raised (2026-09-07)**, and out of scope in both rounds:
+[what every command costs](2026-09-07-resource-usage-results.md) §3 disposes of it in one line and
+the second round never opened it.
+
+**Measured.** 44.2 s, 3.13 GB and 391.5% peak CPU before the thread cap; **31.9 s, 3.09 GB and
+292.2%** after — 28% faster on a third less CPU, and still seventy-seven times the fused `ask` it
+competes with, which is 0.41 s and 1.55 GB on the same store. On the e5-large store the same flag
+reads 42.1 s and 3.38 GB.
+
+**Cause.** A second model. The cross-encoder is its own 2.1 GB session, opened beside the
+embedder's, and it runs a forward per candidate over a pool 200 deep where a fused `ask` runs one
+query.
+
+**Diagnostic before the lever.** The peak footprint of a reader is measured nowhere in either
+document — only max RSS is — and how much of the 3.1 GB is anonymous decides whether this is a
+problem on a 16 GB laptop or mostly two models' mapped weights. `/usr/bin/time -l` already prints
+it; the reading costs one run.
+
+**Lever, and only one half of it belongs to this family.** A shallower pool is what moves the
+31.9 s, and it is a retrieval question: G2 records what `--rerank-local` scores at depth 200, so
+any cut re-runs that reading and the recorded floors before it counts as a saving. The
+resource-side lever is the session — the cross-encoder living in the resident `serve` process, so
+it opens once instead of once a question. That removes the open (0.27 s mapped, 0.75 s packed on
+H14's column) and not the forwards, so it is worth a second of the thirty-two and should not be
+sold as more.
+
+**Gate.** The flag's per-question wall and peak footprint recorded from a resident session, and any
+change of pool depth carrying G2's `--rerank-local` reading and the recorded floors beside it.
+
+## G25 · The memory floor is the fp32 weights, and no lighter weights have been measured
+
+**Raised (2026-09-07)** by [the unnoticeable results](2026-09-07-unnoticeable-results.md), §2.5 and
+§5.5: named in both rounds, deferred in both, downloaded in neither.
+
+**Measured.** A full embed under `e5-large` touches **1.63 GB of `model.onnx_data`**, and
+that number is the floor under every memory reading in these two documents: 2.15 GB of max RSS on
+the whole-store rebuild, 1.82 GB in the band, and the footprint §4.2 cut from 1.63 to 0.50 GB,
+which is the same pages seen from the other side — mapping changes what kind of memory they are and
+not how much of it there is.
+
+**Cause.** There is one lighter build on the hub in a form this code could open:
+`onnx/model_qint8_avx512_vnni.onnx`, 562 MB for the large model and 118 MB for the small. No fp16,
+no generic quantized build.
+
+**Diagnostic before the lever, because three things make this more than a download.** It is
+quantized for AVX-512 VNNI, so on arm64 its GEMMs would run through MLAS's NEON kernels at a speed
+nobody has measured; its vectors differ from the fp32 ones, so a store embedded with it is a
+different index and the floors are the whole question; and `written_by` records only the hub id, so
+a reader holding the fp32 weights would search int8 rows at the same width and never know it had
+the wrong ones.
+
+**Lever.** Download once, embed a copy of the pinned fixture, bench both arms — and if it is
+adopted, the store records the weight file and not only the model, the way `embed_model` and
+`UNNAMED_MODEL` already keep a reader off the wrong vectors (G11).
+
+**Gate.** The recorded floors of whichever model is quantized hold — paraphrase **≥ 22/30** for
+e5-large, **≥ 14/30** for the small one, keyword 40/40, code 12/12 and p90 ≤ 230 in both — the
+whole-store wall no worse than the fp32 run it replaces, and the store recording enough for a reader
+to refuse mismatched weights rather than answer with them. Until then the lever for a memory-poor
+machine is the default itself: `intfloat/multilingual-e5-small`, 0.45 GB of weights and 214 s for
+the whole store, with nothing below it.
+
+**Update (2026-09-07): the download is not the price on the model this now matters for.** The
+default went back to the small model ([ADR-002](../adr/ADR-002-two-defaults-multiplied.md)), and its
+`onnx/model_qint8_avx512_vnni.onnx` — 118 MB, not 562 — is already in the local hub cache under
+`models--intfloat--multilingual-e5-small/snapshots/*/onnx/`, fetched while this gap was being
+written. Measuring int8 on the default costs no download at all; the 562 MB is the large model's
+alone. The other three questions are untouched — arm64 kernels, vectors that differ from the fp32
+ones, and a weight file the store does not record — so this stays deferred rather than proposed.
+
+## G26 · `serve` holds its model for the life of the process, where `watch` no longer does
+
+**Raised (2026-09-07)** by [the unnoticeable results](2026-09-07-unnoticeable-results.md), §4.3,
+which changed `watch` and left `serve` alone on purpose.
+
+**Measured.** `watch` now opens its model for a refresh and drops it after: physical footprint
+**931.8 MB → 129.5 MB** between refreshes on the small model, resident 0.18 → 0.03 GB two minutes
+in, a 7.2×. `serve` idle after two fused asks reads **1.39 GB** resident on the small model (1.38
+after the change; 85 MB before its first fused ask) and holds it for as long as the process lives.
+On the large model there is no `serve` row at all: the nearest recorded number is the 1.8 GB the
+plan measured for `watch` before it dropped its model, and a one-query `ask` on that store reads
+1.74 GB.
+
+**Cause, and it is a decision rather than an oversight.** `serve` exists because a person is
+waiting: the model open costs about 0.5 s (the plan's number; H14 reads a session open at 0.27 s
+mapped and 0.75 s packed), which is longer than the fused `ask` that follows it at 0.41 s. `watch`
+has nobody waiting on a poll, which is why the same change is right there and wrong here as a
+default.
+
+**Lever.** Drop the model after an idle period and pay the open on the first ask afterwards. The
+bookkeeping exists — `--idle` already counts the time since the last question that actually arrived
+(`src/serve.rs`) — but it exits the process; this would keep the process and drop the weights.
+
+**Gate.** Idle resident under 0.1 GB, the way `watch` reads 129.5 MB, with the first-ask latency
+after an idle drop stated rather than hidden, and the warm numbers unmoved — a fused `ask` through
+the socket answering as it does today.
+
+## G27 · `serve` cannot bind under a deep path, and a killed one leaves its socket behind
+
+**Raised (2026-09-07)** as the side findings of
+[what every command costs](2026-09-07-resource-usage-results.md), §5. These two are defects rather
+than costs — neither appears in any table of either round — and they are written as a gap because
+this file is where the open items live.
+
+**Measured.** `<repo>/.repograph/serve.sock` over `SUN_LEN`, 104 bytes on macOS, cannot be bound,
+so a repository under a deep path cannot use `serve` at all — including every store copy these two
+rounds worked on, which lived under `/private/tmp/…`. The error names the cause, which is the good
+half of it. Separately, a `serve` killed with `SIGTERM` leaves `serve.sock` behind: the unlink is a
+`Drop` and there is no signal handler. That one is harmless — the next `serve` removes a dead
+socket before binding, and a client's connect to a dead one simply fails — but `--idle` is the only
+clean exit.
+
+**Lever.** For the path, §5 names both shapes: bind a shorter socket in `$TMPDIR` keyed by a hash
+of the canonical repository path, or state the limit in the README so the failure is expected. For
+the stale socket, a signal handler that unlinks, or nothing at all and a sentence saying why
+nothing is needed.
+
+**Gate.** `serve` binds and answers from a repository whose `.repograph` path is longer than 104
+bytes; a `SIGTERM`ed `serve` leaves no `serve.sock`, or the README says why one is left.
+
+---
+
 ## Suggested order
 
 | | gap | why here |
@@ -832,7 +1150,7 @@ changes form. Not written.
 | — | ~~the lexical arm's 49 ms~~ | closed 2026-09-05 (0.5.0) — the perf results left this number here and nowhere else. The BM25 indexes are built once by a resident context and kept: socket lexical 55.0 → 6.8 ms, median of 33 against a base spread of 0.9 ms, the design note's 30 ms target met; Rule 1 sixteen byte-identical verdicts and Rule 2 142/142 in four pairings |
 | — | ~~**G9** code is unreachable from prose~~ | measured 2026-09-05 — A1 to A4 each rejected by the rule; the code questions ship into an index of their own for the `ask --rerank` pool, `where` stays 0/9 in the plain fusion, and G12 is what would move it |
 | — | ~~**G10** five seeds over three lists~~ | measured 2026-09-05 — A4 prices one seat for a fourth list at 6 held-out questions in each arm, none gained, p = 0.031; closed as measured, not as fixed |
-| — | ~~**G11** the embedder for Russian paraphrase~~ | shipped 2026-09-05 as a store option — e5-large reads paraphrase 22/30 and held-out 103 → 119, at 0.8 s an `ask` and a 2.1 GB download; the default followed at `35357c1`, and a store with no recorded model still reads as the small one |
+| — | ~~**G11** the embedder for Russian paraphrase~~ | shipped 2026-09-05 as a store option — e5-large reads paraphrase 22/30 and held-out 103 → 119, at 0.8 s an `ask` and a 2.1 GB download; the default followed at `35357c1` and went back to the small model on 2026-09-07 ([ADR-002](../adr/ADR-002-two-defaults-multiplied.md)) with the option unchanged, and a store with no recorded model still reads as the small one |
 | — | ~~**G5** rank + MRR~~ | closed by Task 1 (2026-09-04) — every retrieval row carries `rank`, the summary carries `mrr`, and the run reads 0.635; the 2026-09-03 rows cannot be rescored |
 | 6 | **G18** a non-ASCII path drops its file from `changes` | raised 2026-09-07 by the Windows port's CI work, latent — `core.quotepath` is on by default, so `parse` reads no name from a quoted `+++` line and drops every hunk in that file, with Task 2's file-id fallback unreachable because no hunk exists. The pinned fixture has 0 such paths, so no recorded number moved on it. Above G1 because it is one argument on two `git` calls and it restores files that vanish today with nothing printed |
 | 7 | **G1** unparsed files get a file node | the file half is closed by Task 2 (2026-09-04) against a `code_files` denominator; the symbol half is 57 Kotlin declarations and waits on 0.6.0's extractor |
@@ -841,6 +1159,25 @@ changes form. Not written.
 | 8 | **G2** fourteen paraphrases a neighbour away | the lever this row named is measured and rejected (2026-09-04): `--rerank-local` reads 17/30 against a control of 15/30, at 17.9 s a question; the gap stays open with nothing cheaper left to try |
 | 9 | **G6** a case file per new corpus | the `impact` third is a written baseline (2026-09-04); `trace` and `changes` ship with the 0.6.0 languages, not after them |
 | 10 | **G17** the constant's derivation set is the plan's own | raised 2026-09-06 — `c_code = 0.902` was taken on an 800-question mixed set fixed at equal halves in the design note before any dump, by the same plan that proposed the seat it judges. The order of operations held and is not what is weak; what is unmeasured is whether the verdict moves with the mix. Last because no verdict is known to have turned on it, and first among method gaps if the seat is retried |
+
+## Suggested order — the cost family
+
+G19 to G27 have an order of their own, and the numbers below rank them **against each other only**.
+The table above orders how much of a real answer is missing; this one orders what the tool costs to
+run and how much of that cost is still unmeasured. A 1 here does not outrank a 1 there — they
+answer different questions, and no row below moves a retrieval floor.
+
+| | gap | why here |
+|---|---|---|
+| 1 | **G23** the reader bars are tighter than the suite's own repeatability | every other row in this family is read through those bars, and the control already fails them on a change that touches no reader: `ask-fused` 0.58 s against 0.35, max RSS 1.36–1.56 GB on both binaries. n runs and a median, and it is fixed |
+| 2 | **G20** the whole-store run in the band has no wall | the second round's headline is a product of ratios — 4.1–4.5× of 1,930 s — because three attempts starved on a working laptop. CPU-seconds are load-independent and can be taken today |
+| 3 | **G19** the progress cadence is a count of rows | a fixed bar the plan set and the shipped code misses at both tails, 102.4 s and 96.7 s against 60, with the batching rule that would fix it already written one file away |
+| 4 | **G22** mapped weights under memory pressure | a shipped default whose price is +6% to +26% of wall exactly on the machines that most need the 1.14 GB it saves, and all three candidate policies are unmeasured |
+| 5 | **G21** one platform measured, three reasoned | the largest unmeasured surface in the family, and the one that needs hardware this session did not have; the Intel row cannot hold bar 3 by argument, however carefully the argument is written |
+| 6 | **G27** `serve`'s socket path and its leftover | not a cost at all: a repository under a deep path cannot run `serve`. Small, and it breaks a command rather than slowing one |
+| 7 | **G26** `serve` holds its model while idle | 1.39 GB resident for as long as the process lives, where `watch` now holds 129.5 MB between refreshes; the shape of the fix is written and measured next door |
+| 8 | **G25** the fp32 weights are the floor | the only lever that could move the floor under every memory number in both rounds, and finding out costs a full re-embed and the quantized model's own floors — no download at all on the default, whose int8 build is already cached, and 562 MB on the large one |
+| 9 | **G24** `--rerank-local` is 31.9 s and 3.1 GB | the heaviest reader by far, and what would actually move it is a pool depth, which belongs to G2 and not to this family |
 
 ## What is explicitly not on this list
 
@@ -853,6 +1190,28 @@ changes form. Not written.
   list for the same reason and is no longer: `e5-base` and `bge-m3` were measured without generated
   questions in the index, and re-measuring the size with them — G11, 2026-09-05 — read paraphrase
   22/30 against 15/30 and held-out 103 → 119. It pays in latency, memory and a 2.1 GB download
-  rather than in tokens, and it is the default since `35357c1`, with `embed_model` the way back.
+  rather than in tokens; it was the default from `35357c1` and is a one-line option again since
+  2026-09-07 ([ADR-002](../adr/ADR-002-two-defaults-multiplied.md)), with `embed_model` the way to
+  it.
 - **Query rewriting by a model.** Measured at paraphrase 6/14 with keyword falling to
   20/24, and rejected.
+- **The embedding session's other memory switches.** Spin-wait off (+21% wall for −12% average
+  CPU), `memory_pattern` off (−0.9 GB for +11% wall in the first round, −0.11 GB of footprint for
+  +10% in the second), arena shrinkage on every run (+13% wall with the footprint unmoved at
+  1.74 GB, because the arena is given back after each forward and grown again before the next), and
+  a smaller `TOKEN_BUDGET` at 1,024 and 512 (−0.12 and −0.19 GB of footprint on 320 long rows,
+  where 512 only turns 8 × 256 forwards into 2 × 256, and on the short rows that are nine tenths of
+  a store it would run about 1,300 forwards where the shipped budget runs 776 — unmeasured). Each
+  measured on the harness against its own control and each rejected:
+  [what every command costs](2026-09-07-resource-usage-results.md) §2 and
+  [the unnoticeable results](2026-09-07-unnoticeable-results.md) §2.3.
+- **The scheduling levers that are not the background band.** The utility band (the person's
+  compile still +7.0%, so bar 1 fails), `threads = 6` under the band (−5% wall for +15%
+  CPU-seconds and two points of the compile, because the six efficiency cores share one clock),
+  `threads = 2` in the foreground (1.9× the wall and the compile still +9.1%), a 50% pacing duty
+  cycle (2.15× the wall for the same CPU-seconds, a linear trade with nothing free in it), and
+  per-thread `QOS_CLASS_BACKGROUND` (not inherited — ORT's workers are created inside
+  `commit_from_file` and rayon's inside `build_global`, so two thread factories would be needed to
+  reach what one `setpriority` call reaches). All in
+  [the unnoticeable results](2026-09-07-unnoticeable-results.md) §2.1–2.3. The int8 weights are
+  **not** on this list: they were deferred rather than refused, and they are G25.
