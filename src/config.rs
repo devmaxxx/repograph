@@ -230,57 +230,74 @@ mod tests {
 
     #[test]
     fn missing_file_yields_defaults() {
-        let dir = tempfile::tempdir().unwrap();
-        let cfg = Config::load(dir.path()).unwrap();
-        assert!(cfg.id_families.contains(&"FR-PAY".to_string()));
-        assert_eq!(cfg.doc_globs, vec!["**/*.md".to_string()]);
+        with_machine(None, || {
+            let dir = tempfile::tempdir().unwrap();
+            let cfg = Config::load(dir.path()).unwrap();
+            assert!(cfg.id_families.contains(&"FR-PAY".to_string()));
+            assert_eq!(cfg.doc_globs, vec!["**/*.md".to_string()]);
+        });
     }
 
     #[test]
     fn partial_file_overrides_only_named_keys() {
-        let dir = tempfile::tempdir().unwrap();
-        std::fs::write(dir.path().join("repograph.toml"), "skip = [\"docs/**/TRACKER.md\"]\n").unwrap();
-        let cfg = Config::load(dir.path()).unwrap();
-        assert_eq!(cfg.skip, vec!["docs/**/TRACKER.md".to_string()]);
-        assert!(cfg.id_families.contains(&"INV".to_string()));
+        with_machine(None, || {
+            let dir = tempfile::tempdir().unwrap();
+            std::fs::write(dir.path().join("repograph.toml"), "skip = [\"docs/**/TRACKER.md\"]\n").unwrap();
+            let cfg = Config::load(dir.path()).unwrap();
+            assert_eq!(cfg.skip, vec!["docs/**/TRACKER.md".to_string()]);
+            assert!(cfg.id_families.contains(&"INV".to_string()));
+        });
     }
 
     #[test]
     fn an_unknown_key_is_rejected() {
-        let dir = tempfile::tempdir().unwrap();
-        std::fs::write(dir.path().join("repograph.toml"), "bogus_key = 1\n").unwrap();
-        let err = Config::load(dir.path()).unwrap_err().to_string();
-        assert!(err.contains("repograph.toml"), "{err}");
+        with_machine(None, || {
+            let dir = tempfile::tempdir().unwrap();
+            std::fs::write(dir.path().join("repograph.toml"), "bogus_key = 1\n").unwrap();
+            let err = Config::load(dir.path()).unwrap_err().to_string();
+            assert!(err.contains("repograph.toml"), "{err}");
+        });
     }
 
     #[test]
     fn malformed_toml_errors_naming_the_file() {
-        let dir = tempfile::tempdir().unwrap();
-        std::fs::write(dir.path().join("repograph.toml"), "skip = [\n").unwrap();
-        let err = Config::load(dir.path()).unwrap_err().to_string();
-        assert!(err.contains("repograph.toml"), "{err}");
+        with_machine(None, || {
+            let dir = tempfile::tempdir().unwrap();
+            std::fs::write(dir.path().join("repograph.toml"), "skip = [\n").unwrap();
+            let err = Config::load(dir.path()).unwrap_err().to_string();
+            assert!(err.contains("repograph.toml"), "{err}");
+        });
     }
 
     #[test]
     fn the_embed_model_defaults_to_the_large_e5_and_reads_from_the_file() {
-        let dir = tempfile::tempdir().unwrap();
-        assert_eq!(Config::load(dir.path()).unwrap().embed_model, "intfloat/multilingual-e5-large");
-        std::fs::write(dir.path().join("repograph.toml"), "embed_model = \"intfloat/multilingual-e5-small\"\n").unwrap();
-        assert_eq!(Config::load(dir.path()).unwrap().embed_model, "intfloat/multilingual-e5-small");
+        with_machine(None, || {
+            let dir = tempfile::tempdir().unwrap();
+            assert_eq!(Config::load(dir.path()).unwrap().embed_model, "intfloat/multilingual-e5-large");
+            std::fs::write(dir.path().join("repograph.toml"), "embed_model = \"intfloat/multilingual-e5-small\"\n").unwrap();
+            assert_eq!(Config::load(dir.path()).unwrap().embed_model, "intfloat/multilingual-e5-small");
+        });
     }
 
     #[test]
     fn overriding_the_enrich_command_leaves_the_rerank_command_and_lists_at_their_defaults() {
-        let dir = tempfile::tempdir().unwrap();
-        std::fs::write(dir.path().join("repograph.toml"), "enrich_command = \"echo hi\"\n").unwrap();
-        let cfg = Config::load(dir.path()).unwrap();
-        assert_eq!(cfg.enrich_command, "echo hi");
-        assert_eq!(cfg.rerank_command, Config::default().rerank_command);
-        assert_eq!(cfg.doc_globs, Config::default().doc_globs);
+        with_machine(None, || {
+            let dir = tempfile::tempdir().unwrap();
+            std::fs::write(dir.path().join("repograph.toml"), "enrich_command = \"echo hi\"\n").unwrap();
+            let cfg = Config::load(dir.path()).unwrap();
+            assert_eq!(cfg.enrich_command, "echo hi");
+            assert_eq!(cfg.rerank_command, Config::default().rerank_command);
+            assert_eq!(cfg.doc_globs, Config::default().doc_globs);
+        });
     }
 
     /// The layering is read out of the environment, and cargo runs these on one process: without
     /// a lock two of them race on `REPOGRAPH_CONFIG` and the loser reads the other's file.
+    ///
+    /// Every test that calls `Config::load` takes it, including the ones that set no variable
+    /// themselves: a reader is as exposed as a writer here, and CI caught one that was not — it
+    /// read the machine file a concurrent test had pointed at, whose corpus key `load` refuses,
+    /// and panicked on an `unwrap` that had nothing to do with what it was testing.
     static ENV: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
     /// Runs `f` with a global config file holding `machine`, and nothing else set.
