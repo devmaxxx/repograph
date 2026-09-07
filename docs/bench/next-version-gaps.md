@@ -28,6 +28,10 @@ are what the instruments did not report — a case that lost two of its three an
 verdict, and an `enrich` run that wrote nothing and exited 0 — and the third is how the population
 a constant is derived on was chosen.
 
+G18 was raised on 2026-09-07 by the Windows port's CI work rather than by any run. It is the one
+item here no number exposed and no number could: a `changes` defect the pinned fixture cannot
+trigger, because not one of that corpus's paths carries a byte outside ASCII.
+
 ---
 
 ## G1 · A third of a large blast radius is invisible — `changes` 27/38 symbols
@@ -780,6 +784,40 @@ whose own second population G8 records as never built.
 
 ---
 
+## G18 · A path with one non-ASCII byte makes its whole file invisible to `changes`
+
+**Raised (2026-09-07)** by the Windows port's CI work, not by a run. `core.quotepath` is on by
+default, so `git diff` quotes any path outside ASCII: a Russian-named file's header comes back as
+`+++ "b/docs/\320\250\321\202\321\200\320\260\321\204.ts"`, with the quote *before* the `b/`.
+`parse` takes the new-side name as `p.strip_prefix("b/")` (`src/changes.rs:19`), which is `None` on
+that line, and the `let Some(f) = &file else { continue }` three lines down then drops every hunk
+in the file. Reproduced on a scratch repository here, both symptoms below.
+
+**Two symptoms, one cause.** A tracked file is dropped in silence, and Task 2's fallback cannot
+save it: `touched` reports `file:<name>` for a file the graph never indexed
+(`src/changes.rs:51`), but that needs a hunk, and no hunk was ever built. This is G1's silence
+returning through a door Task 2 did not close. An untracked file arrives the other way —
+`git ls-files --others` quotes too, so the escaped name reaches `hunks_from_git`
+(`src/changes.rs:154`) intact and is printed as `file:"docs/\320\235\320\276\320\262…"`: visible,
+matchable against nothing, and wrong on the screen.
+
+**What it cost, and why that is checked rather than assumed.** Nothing measurable. `git ls-files`
+on the pinned fixture `beauty-crm-502e8a6d` returns **0** paths with a byte outside ASCII, so no
+`changes` number in this file — G1's 27/38, Task 2's 498/498 — was ever computed over a path that
+could trigger it. That corpus is Russian in its content and ASCII in its paths. A corpus that is
+not, or a single branch that adds one such file, loses that file's symbols from a blast radius
+with no line saying so — which is the failure `changes` exists in order not to have.
+
+**Lever.** Ask git not to quote: `-c core.quotepath=false` on the two invocations `git()` makes
+(`src/changes.rs:144`), which puts UTF-8 on the wire and leaves every ASCII path byte-identical. A
+parser that unescapes the quoted form instead is the same behaviour at more code, and would still
+have to decide what a lone `\377` means.
+
+**Gate.** Two tests in `changes.rs`'s own module: a diff whose header is quoted, asserting the hunk
+is found under the unescaped name, and an untracked quoted name from `ls-files` reported as itself.
+Then the fixture, which must read what it reads today byte for byte, since none of its paths
+changes form. Not written.
+
 ## Suggested order
 
 | | gap | why here |
@@ -796,12 +834,13 @@ whose own second population G8 records as never built.
 | — | ~~**G10** five seeds over three lists~~ | measured 2026-09-05 — A4 prices one seat for a fourth list at 6 held-out questions in each arm, none gained, p = 0.031; closed as measured, not as fixed |
 | — | ~~**G11** the embedder for Russian paraphrase~~ | shipped 2026-09-05 as a store option — e5-large reads paraphrase 22/30 and held-out 103 → 119, at 0.8 s an `ask` and a 2.1 GB download; the default followed at `35357c1`, and a store with no recorded model still reads as the small one |
 | — | ~~**G5** rank + MRR~~ | closed by Task 1 (2026-09-04) — every retrieval row carries `rank`, the summary carries `mrr`, and the run reads 0.635; the 2026-09-03 rows cannot be rescored |
-| 6 | **G1** unparsed files get a file node | the file half is closed by Task 2 (2026-09-04) against a `code_files` denominator; the symbol half is 57 Kotlin declarations and waits on 0.6.0's extractor |
+| 6 | **G18** a non-ASCII path drops its file from `changes` | raised 2026-09-07 by the Windows port's CI work, latent — `core.quotepath` is on by default, so `parse` reads no name from a quoted `+++` line and drops every hunk in that file, with Task 2's file-id fallback unreachable because no hunk exists. The pinned fixture has 0 such paths, so no recorded number moved on it. Above G1 because it is one argument on two `git` calls and it restores files that vanish today with nothing printed |
+| 7 | **G1** unparsed files get a file node | the file half is closed by Task 2 (2026-09-04) against a `code_files` denominator; the symbol half is 57 Kotlin declarations and waits on 0.6.0's extractor |
 | — | ~~**G3** the three impact diagnostics~~ | closed by Tasks 3 and 4 (2026-09-04) — 123/123 files over 16 targets, mean recall 1.0 |
 | — | ~~**G4** grow the blast set~~ | closed by Task 5 (2026-09-04) — `blast.jsonl` is 32 cases and the per-suite decision rule is written down before the changes judged on it |
-| 7 | **G2** fourteen paraphrases a neighbour away | the lever this row named is measured and rejected (2026-09-04): `--rerank-local` reads 17/30 against a control of 15/30, at 17.9 s a question; the gap stays open with nothing cheaper left to try |
-| 8 | **G6** a case file per new corpus | the `impact` third is a written baseline (2026-09-04); `trace` and `changes` ship with the 0.6.0 languages, not after them |
-| 9 | **G17** the constant's derivation set is the plan's own | raised 2026-09-06 — `c_code = 0.902` was taken on an 800-question mixed set fixed at equal halves in the design note before any dump, by the same plan that proposed the seat it judges. The order of operations held and is not what is weak; what is unmeasured is whether the verdict moves with the mix. Last because no verdict is known to have turned on it, and first among method gaps if the seat is retried |
+| 8 | **G2** fourteen paraphrases a neighbour away | the lever this row named is measured and rejected (2026-09-04): `--rerank-local` reads 17/30 against a control of 15/30, at 17.9 s a question; the gap stays open with nothing cheaper left to try |
+| 9 | **G6** a case file per new corpus | the `impact` third is a written baseline (2026-09-04); `trace` and `changes` ship with the 0.6.0 languages, not after them |
+| 10 | **G17** the constant's derivation set is the plan's own | raised 2026-09-06 — `c_code = 0.902` was taken on an 800-question mixed set fixed at equal halves in the design note before any dump, by the same plan that proposed the seat it judges. The order of operations held and is not what is weak; what is unmeasured is whether the verdict moves with the mix. Last because no verdict is known to have turned on it, and first among method gaps if the seat is retried |
 
 ## What is explicitly not on this list
 
