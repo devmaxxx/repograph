@@ -276,8 +276,6 @@ fn run_watch(repo: &std::path::Path, cfg: &config::Config, every: u64, batch: us
     let mut w = Watcher::open(repo, cfg)?;
     let model = index::embed::resolve(None, &cfg.embed_model);
     let threads = index::embed::threads(cfg.threads);
-    let mut embedder: Option<Option<index::embed::Embedder>> = None;
-    let mut dense: Option<index::dense::DenseIndex> = None;
     let verbose = ask::timing_on();
     eprintln!("watch: {} every {every}s, batch {batch}; Ctrl-C to stop", repo.display());
     loop {
@@ -289,13 +287,12 @@ fn run_watch(repo: &std::path::Path, cfg: &config::Config, every: u64, batch: us
             }
             Polled::Refreshed(r) => {
                 let mut embedded = 0;
-                // The model costs ~220 ms and 1.3 GB to open, so it waits for the first change; the
-                // vectors then stay in memory, since every later refresh syncs them again.
-                if let Some(e) = embedder.get_or_insert_with(|| ask::open_embedder(no_dense, &model, threads, index::embed::Weights::Mapped)).as_mut() {
-                    let idx = match dense {
-                        Some(ref mut d) => d,
-                        None => dense.insert(index::dense::DenseIndex::load(&w.store)?),
-                    };
+                // Opened for this refresh and dropped with it. A watcher is idle between polls and
+                // nobody is waiting on one, so the half-second the model takes to open is not a
+                // cost anyone can see — while the 1.4 GB it holds is the whole of what `watch`
+                // takes from a person on a 16 GB laptop, and it used to hold it until exit.
+                if let Some(mut e) = ask::open_embedder(no_dense, &model, threads, index::embed::Weights::Mapped) {
+                    let mut idx = index::dense::DenseIndex::load(&w.store)?;
                     let questions = enrich::Questions::load(&w.store)?;
                     idx.written_by(&model, e.dim()?);
                     embedded = idx.sync(&w.graph, &questions, &mut |texts| e.embed(texts))?;
