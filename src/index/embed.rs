@@ -12,12 +12,18 @@ use ort::value::Tensor;
 use std::path::{Path, PathBuf};
 use tokenizers::{PaddingParams, PaddingStrategy, Tokenizer, TruncationParams};
 
-pub const DEFAULT_MODEL: &str = "intfloat/multilingual-e5-large";
+/// What a writer embeds with when the repository names no model. The small one: it reads
+/// paraphrase 15/30 where the large model reads 22/30 and is level on the other 52 recorded
+/// cases, and the large model's 4.5× download and 9× whole-store embed are paid by every first
+/// build before anyone knows whether they wanted the recall
+/// (docs/adr/ADR-002-two-defaults-multiplied.md).
+pub const DEFAULT_MODEL: &str = "intfloat/multilingual-e5-small";
 
 /// What a store that records no model at all was written with. Pinned to the name rather than to
-/// `DEFAULT_MODEL`: every store written before the field existed holds small-model rows, and that
-/// stays true however the default moves afterwards. Tying the two together would tell a reader
-/// that yesterday's 384-d store is today's default, and re-embed it whole to find out otherwise.
+/// `DEFAULT_MODEL` — which holds the same string today and has already held the other one: every
+/// store written before the field existed holds small-model rows, and that stays true however the
+/// default moves afterwards. Tying the two together would tell a reader that yesterday's 384-d
+/// store is today's default, and re-embed it whole to find out otherwise.
 pub const UNNAMED_MODEL: &str = "intfloat/multilingual-e5-small";
 
 /// The model a command opens: `REPOGRAPH_EMBED_MODEL` when set — a measurement's switch that

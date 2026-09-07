@@ -95,8 +95,8 @@ pub enum Floors { Small, Large, None }
 
 /// The model the large-model floors were measured on. Pinned to the name, not to
 /// `crate::index::embed::DEFAULT_MODEL`: that constant is the *configured* default, which has
-/// already been flipped once and may flip again, and a row written under whatever the default
-/// becomes next would otherwise silently inherit these floors while genuine e5-large rows
+/// already been flipped twice — to this model and back — and a row written under whatever the
+/// default becomes next would otherwise silently inherit these floors while genuine e5-large rows
 /// silently stopped being graded. `UNNAMED_MODEL` makes the same argument in prose for the small
 /// model, and `src/index/dense.rs`'s own tests pin this same name by literal for the same reason.
 const LARGE_MODEL: &str = "intfloat/multilingual-e5-large";
@@ -547,6 +547,10 @@ mod tests {
         // the configured default must not keep this green.
         assert_eq!(floors_for(Some("intfloat/multilingual-e5-large")), Floors::Large);
         assert_eq!(floors_for(Some("BAAI/bge-m3")), Floors::None);
+        // Whichever model the default names, a store a first build wrote has to be graded and not
+        // merely measured: a default moved to a model with no floors of its own would turn every
+        // fresh store's `bench` green-by-abstention, `gated=false` with nothing red to say so.
+        assert_ne!(floors_for(Some(crate::index::embed::DEFAULT_MODEL)), Floors::None);
     }
 
     #[test]

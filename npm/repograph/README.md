@@ -24,11 +24,10 @@ optional dependency (`@devmaxxx/repograph-darwin-arm64`, `@devmaxxx/repograph-li
 `@devmaxxx/repograph-win32-x64`). On any other platform the launcher explains how to build from
 source with `cargo install`.
 
-The dense retriever downloads a 2.1 GB embedding model into `~/.cache/repograph/fastembed`
-(`%USERPROFILE%\.cache\repograph\fastembed` on Windows) on its first fused query; `--no-dense` never touches it, and `embed_model =
-"intfloat/multilingual-e5-small"`
-in `repograph.toml` swaps it for a 470 MB one that reads paraphrase 15/30 against the default's
-22/30.
+The dense retriever downloads a 470 MB embedding model into `~/.cache/repograph/fastembed`
+(`%USERPROFILE%\.cache\repograph\fastembed` on Windows) on its first fused query; `--no-dense`
+never touches it, and `embed_model = "intfloat/multilingual-e5-large"` in `repograph.toml` swaps it
+for a 2.1 GB one that reads paraphrase 22/30 against the default's 15/30.
 
 Full documentation, the measured comparison against graphify and GitNexus, and the bench live in
 the repository: https://github.com/devmaxxx/repograph

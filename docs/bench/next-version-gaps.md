@@ -396,8 +396,18 @@ reading as the small one, so an older store never silently reinterprets under th
 cost of that default is measured in [Embeddings](../../README.md#embeddings). Nothing here reaches
 the `--no-dense` arm, which has no dense list to improve.
 
-**Update (2026-09-06, 0.5.0):** `bench` has floors of its own for the default model since 0.5.0 —
+**Update (2026-09-06, 0.5.0):** `bench` has floors of its own for the large model since 0.5.0 —
 40/22 enriched and 40/17 raw ([the 0.5.0 gap results](2026-09-05-0.5.0-gaps-results.md)).
+
+**Update (2026-09-07): the option stands, the default does not.** Nothing measured here moved —
+e5-large still reads 22/30 against 15/30 and keeps its own floors — but the price of it *as a
+default* did, because `priority = "background"` became the writers' default in the same version.
+the whole-store embed the large model needs is 1,930 s foreground against the small model's 214 s
+([what every command costs](2026-09-07-resource-usage-results.md) §1.1), and the band multiplies
+both by 4.1–4.5× — a ratio, not a wall, which is G20's whole complaint. Hours against minutes
+either way you take the ratio, so the default went back to
+`intfloat/multilingual-e5-small` and e5-large stayed the one line that buys the recall:
+[ADR-002](../adr/ADR-002-two-defaults-multiplied.md).
 
 ## G12 · The gate compares raw BM25 scores across two indices
 
@@ -1038,7 +1048,7 @@ change of pool depth carrying G2's `--rerank-local` reading and the recorded flo
 **Raised (2026-09-07)** by [the unnoticeable results](2026-09-07-unnoticeable-results.md), §2.5 and
 §5.5: named in both rounds, deferred in both, downloaded in neither.
 
-**Measured.** A full embed under the default model touches **1.63 GB of `model.onnx_data`**, and
+**Measured.** A full embed under `e5-large` touches **1.63 GB of `model.onnx_data`**, and
 that number is the floor under every memory reading in these two documents: 2.15 GB of max RSS on
 the whole-store rebuild, 1.82 GB in the band, and the footprint §4.2 cut from 1.63 to 0.50 GB,
 which is the same pages seen from the other side — mapping changes what kind of memory they are and
@@ -1059,12 +1069,20 @@ the wrong ones.
 adopted, the store records the weight file and not only the model, the way `embed_model` and
 `UNNAMED_MODEL` already keep a reader off the wrong vectors (G11).
 
-**Gate.** The large model's recorded floors hold — **paraphrase ≥ 22/30**, keyword 40/40, code
-12/12, p90 ≤ 230 — the whole-store wall no worse than the fp32 run it replaces, and the store
-recording enough for a reader to refuse mismatched weights rather than answer with them. Until then
-the lever for a memory-poor machine is the one already there:
-`embed_model = "intfloat/multilingual-e5-small"` — 0.45 GB of weights, 214 s for the whole store,
-and the model the floors were set with.
+**Gate.** The recorded floors of whichever model is quantized hold — paraphrase **≥ 22/30** for
+e5-large, **≥ 14/30** for the small one, keyword 40/40, code 12/12 and p90 ≤ 230 in both — the
+whole-store wall no worse than the fp32 run it replaces, and the store recording enough for a reader
+to refuse mismatched weights rather than answer with them. Until then the lever for a memory-poor
+machine is the default itself: `intfloat/multilingual-e5-small`, 0.45 GB of weights and 214 s for
+the whole store, with nothing below it.
+
+**Update (2026-09-07): the download is not the price on the model this now matters for.** The
+default went back to the small model ([ADR-002](../adr/ADR-002-two-defaults-multiplied.md)), and its
+`onnx/model_qint8_avx512_vnni.onnx` — 118 MB, not 562 — is already in the local hub cache under
+`models--intfloat--multilingual-e5-small/snapshots/*/onnx/`, fetched while this gap was being
+written. Measuring int8 on the default costs no download at all; the 562 MB is the large model's
+alone. The other three questions are untouched — arm64 kernels, vectors that differ from the fp32
+ones, and a weight file the store does not record — so this stays deferred rather than proposed.
 
 ## G26 · `serve` holds its model for the life of the process, where `watch` no longer does
 
@@ -1075,7 +1093,7 @@ which changed `watch` and left `serve` alone on purpose.
 **931.8 MB → 129.5 MB** between refreshes on the small model, resident 0.18 → 0.03 GB two minutes
 in, a 7.2×. `serve` idle after two fused asks reads **1.39 GB** resident on the small model (1.38
 after the change; 85 MB before its first fused ask) and holds it for as long as the process lives.
-On the default model there is no `serve` row at all: the nearest recorded number is the 1.8 GB the
+On the large model there is no `serve` row at all: the nearest recorded number is the 1.8 GB the
 plan measured for `watch` before it dropped its model, and a one-query `ask` on that store reads
 1.74 GB.
 
@@ -1132,7 +1150,7 @@ bytes; a `SIGTERM`ed `serve` leaves no `serve.sock`, or the README says why one 
 | — | ~~the lexical arm's 49 ms~~ | closed 2026-09-05 (0.5.0) — the perf results left this number here and nowhere else. The BM25 indexes are built once by a resident context and kept: socket lexical 55.0 → 6.8 ms, median of 33 against a base spread of 0.9 ms, the design note's 30 ms target met; Rule 1 sixteen byte-identical verdicts and Rule 2 142/142 in four pairings |
 | — | ~~**G9** code is unreachable from prose~~ | measured 2026-09-05 — A1 to A4 each rejected by the rule; the code questions ship into an index of their own for the `ask --rerank` pool, `where` stays 0/9 in the plain fusion, and G12 is what would move it |
 | — | ~~**G10** five seeds over three lists~~ | measured 2026-09-05 — A4 prices one seat for a fourth list at 6 held-out questions in each arm, none gained, p = 0.031; closed as measured, not as fixed |
-| — | ~~**G11** the embedder for Russian paraphrase~~ | shipped 2026-09-05 as a store option — e5-large reads paraphrase 22/30 and held-out 103 → 119, at 0.8 s an `ask` and a 2.1 GB download; the default followed at `35357c1`, and a store with no recorded model still reads as the small one |
+| — | ~~**G11** the embedder for Russian paraphrase~~ | shipped 2026-09-05 as a store option — e5-large reads paraphrase 22/30 and held-out 103 → 119, at 0.8 s an `ask` and a 2.1 GB download; the default followed at `35357c1` and went back to the small model on 2026-09-07 ([ADR-002](../adr/ADR-002-two-defaults-multiplied.md)) with the option unchanged, and a store with no recorded model still reads as the small one |
 | — | ~~**G5** rank + MRR~~ | closed by Task 1 (2026-09-04) — every retrieval row carries `rank`, the summary carries `mrr`, and the run reads 0.635; the 2026-09-03 rows cannot be rescored |
 | 6 | **G18** a non-ASCII path drops its file from `changes` | raised 2026-09-07 by the Windows port's CI work, latent — `core.quotepath` is on by default, so `parse` reads no name from a quoted `+++` line and drops every hunk in that file, with Task 2's file-id fallback unreachable because no hunk exists. The pinned fixture has 0 such paths, so no recorded number moved on it. Above G1 because it is one argument on two `git` calls and it restores files that vanish today with nothing printed |
 | 7 | **G1** unparsed files get a file node | the file half is closed by Task 2 (2026-09-04) against a `code_files` denominator; the symbol half is 57 Kotlin declarations and waits on 0.6.0's extractor |
@@ -1158,7 +1176,7 @@ answer different questions, and no row below moves a retrieval floor.
 | 5 | **G21** one platform measured, three reasoned | the largest unmeasured surface in the family, and the one that needs hardware this session did not have; the Intel row cannot hold bar 3 by argument, however carefully the argument is written |
 | 6 | **G27** `serve`'s socket path and its leftover | not a cost at all: a repository under a deep path cannot run `serve`. Small, and it breaks a command rather than slowing one |
 | 7 | **G26** `serve` holds its model while idle | 1.39 GB resident for as long as the process lives, where `watch` now holds 129.5 MB between refreshes; the shape of the fix is written and measured next door |
-| 8 | **G25** the fp32 weights are the floor | the only lever that could move the floor under every memory number in both rounds, and finding out costs a 562 MB download, a full re-embed and the large model's floors |
+| 8 | **G25** the fp32 weights are the floor | the only lever that could move the floor under every memory number in both rounds, and finding out costs a full re-embed and the quantized model's own floors — no download at all on the default, whose int8 build is already cached, and 562 MB on the large one |
 | 9 | **G24** `--rerank-local` is 31.9 s and 3.1 GB | the heaviest reader by far, and what would actually move it is a pool depth, which belongs to G2 and not to this family |
 
 ## What is explicitly not on this list
@@ -1172,7 +1190,9 @@ answer different questions, and no row below moves a retrieval floor.
   list for the same reason and is no longer: `e5-base` and `bge-m3` were measured without generated
   questions in the index, and re-measuring the size with them — G11, 2026-09-05 — read paraphrase
   22/30 against 15/30 and held-out 103 → 119. It pays in latency, memory and a 2.1 GB download
-  rather than in tokens, and it is the default since `35357c1`, with `embed_model` the way back.
+  rather than in tokens; it was the default from `35357c1` and is a one-line option again since
+  2026-09-07 ([ADR-002](../adr/ADR-002-two-defaults-multiplied.md)), with `embed_model` the way to
+  it.
 - **Query rewriting by a model.** Measured at paraphrase 6/14 with keyword falling to
   20/24, and rejected.
 - **The embedding session's other memory switches.** Spin-wait off (+21% wall for −12% average

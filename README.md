@@ -93,8 +93,9 @@ vectors and answers a fused question through a resident `serve`
 The binary is not signed. A zip fetched with a browser carries the mark of the web, Explorer's
 "Extract All" passes it to the exe, and double-clicking such a copy shows SmartScreen; running it
 from a terminal does not, and `Unblock-File .\repograph.exe` clears the mark for good. `gh run
-download`, `curl` and npm write no mark at all. Defender scans the model as it lands — 2.2 GB for
-`multilingual-e5-large` — and every `graph.json` and `vectors.f32` rewrite on close;
+download`, `curl` and npm write no mark at all. Defender scans the model as it lands — 470 MB for
+the default `multilingual-e5-small`, 2.2 GB where `embed_model` names the large one — and every
+`graph.json` and `vectors.f32` rewrite on close;
 `Add-MpPreference -ExclusionPath` on `%USERPROFILE%\.cache\repograph` and on the repository's
 `.repograph` is an optional speed-up, not a requirement. An unsigned Rust binary can also draw a
 heuristic false positive: restore it from Protection History and add an exclusion.
@@ -224,7 +225,7 @@ cadence.
 ### Asking a resident process
 
 Most of a fused `ask` is the process opening things it then throws away: the embedding model
-alone costs about 676 ms of it on the shipped default, 220 ms on the small model. `serve` opens
+alone costs about 220 ms of it on the shipped default, 676 ms on `e5-large`. `serve` opens
 them once and answers over a Unix socket — on Windows too, where the same socket file has existed
 since Windows 10 1803 and is protected the way the repository directory is:
 
@@ -518,7 +519,7 @@ in full, not an empty config:
 | `enrich_model`       | `haiku` — whatever goes in `enrich_command`'s `{model}`                                      |
 | `rerank_model`       | `sonnet` — the same for `rerank_command`                                                    |
 | `reranker_dir`       | directory of the exported cross-encoder for `--rerank-local`; empty = `~/.cache/repograph/reranker` |
-| `embed_model`        | `intfloat/multilingual-e5-large`; the model the vectors are written with — see [Embeddings](#embeddings) |
+| `embed_model`        | `intfloat/multilingual-e5-small`; the model the vectors are written with — see [Embeddings](#embeddings) |
 | `threads`            | `0` = a third of the logical cores; how many threads the model sessions and the tokenizer pool may take — see [Resources](#resources) |
 | `priority`           | `"background"` = the writers run in the scheduling band the machine keeps for work nobody is waiting on; `"normal"` gives that up for wall time — see [Resources](#resources) |
 
@@ -581,7 +582,7 @@ heading form; the modality is optional.
 
 ## Embeddings
 
-Dense retrieval embeds by default with `intfloat/multilingual-e5-large` (1024-d, ONNX, ≈2.1 GB on
+Dense retrieval embeds by default with `intfloat/multilingual-e5-small` (384-d, ONNX, ≈470 MB on
 disk) run through `ort` directly: the tokenizer and the session open concurrently at optimisation
 level 1,
 which halves model-open time against the library default. The files are a one-time Hugging Face
@@ -610,39 +611,44 @@ beside it — `bench` and `dump` read the store as it stands and need neither: a
 refreshes claims the index for the model the override named, and at the same width that re-embeds
 the very rows being measured (a different width the guard refuses, and the answer is lexical-only).
 It is the caveat trap 7 of the [runbook](docs/bench/runbook.md) carries. Measured on the fixture,
-the default reads paraphrase **22/30** against `intfloat/multilingual-e5-small`'s 15/30 with
-keyword 40/40 and code 12/12 unchanged, and held-out 103 → 119 of 400 (+19 −3, p = 0.0009). The
-small model is what that costs: an `ask` in 0.30 s against 0.8 s (the model opens in 220 ms against
-676), 1.7 GB resident against 1.9, a 470 MB download against 2.1 GB, and ~103 s to embed the
-corpus's 33,525 rows against 2,680 s. It is one line and one `repograph embed` away, and a store
-already on it keeps answering by it.
+`intfloat/multilingual-e5-large` reads paraphrase **22/30** against the default's 15/30 with
+keyword 40/40 and code 12/12 unchanged, and held-out 103 → 119 of 400 (+19 −3, p = 0.0009). What
+that recall costs is the rest of this section: an `ask` in 0.8 s against 0.30 s (the model opens in
+676 ms against 220), 1.9 GB resident against 1.7, a 2.1 GB download against 470 MB, and 1,930 s to
+embed the fixture's 33,525 rows against 214 s, which the background band a writer runs in
+multiplies by about four again: a first build is hours under the large model where the default's is
+minutes. That last step is a ratio and not a measured wall — no whole-store run in the band has
+finished on this machine, which is [G20](docs/bench/next-version-gaps.md). The large model is one
+line and one `repograph embed` away, and a store already on it keeps answering by it whatever this
+file says afterwards; [ADR-002](docs/adr/ADR-002-two-defaults-multiplied.md) weighs the two and
+says why the cheaper one is the default.
 
 The two open figures are not the same measurement twice. The small model's fell from 418 ms to
 220 when the cache lookup stopped asking the hub for a weights file it has never had and waiting
-out the 404; the default's 676 ms is untouched by that, because the large model's weights genuinely
-do live beside its graph and the lookup was always a cache hit. The saving is the small model's
-alone, and the default pays what it always paid.
+out the 404; the large model's 676 ms is untouched by that, because its weights genuinely do live
+beside its graph and the lookup was always a cache hit. The saving is the default's alone, and the
+large model pays what it always paid.
 
 Turning the dense stage off altogether is the step below that, and what it costs depends on which
 model it replaces. The lexical lists do not know what is configured, so `--no-dense` reads keyword
-39/40, paraphrase 14/30, code 12/12 on the fixture's enriched store either way. Against the small
-model's 40/40, 15/30, 12/12 that is two hits of eighty-two, for a 470 MB download and ~0.2 s an
-`ask` saved; against the default's 40/40, 22/30, 12/12 it is nine, for 2.1 GB and ~0.7 s. The dense
-stage earns its keep in proportion to the model behind it: on the small model it is worth one
+39/40, paraphrase 14/30, code 12/12 on the fixture's enriched store either way. Against the
+default's 40/40, 15/30, 12/12 that is two hits of eighty-two, for a 470 MB download and ~0.2 s an
+`ask` saved; against `e5-large`'s 40/40, 22/30, 12/12 it is nine, for 2.1 GB and ~0.7 s. The dense
+stage earns its keep in proportion to the model behind it: on the default it is worth one
 paraphrase and one keyword, which is why the model and the `--no-dense` switch are one decision
 rather than two.
 
 The floors in [Bench](#bench) are keyed by the model the store's rows were written with, since
-0.5.0. Only the two dense arms depend on the embedder at all, and the default has floors of its own
-there now, measured on a copy of the fixture re-embedded under it and read twice per arm:
+0.5.0. Only the two dense arms depend on the embedder at all, and `e5-large` has floors of its own
+there too, measured on a copy of the fixture re-embedded under it and read twice per arm:
 `keyword 40/40  paraphrase 22/30  code 12/12  p90 224` with `enrich`'s questions and
 `40/40  17/30  12/12  p90 227` without. A store whose rows were written by any other model is
 measured and never graded — the summary line says `model=<name>` and `gated=false`. The numbers and
 how they were read are in [the 0.5.0 gap results](docs/bench/2026-09-05-0.5.0-gaps-results.md).
 
 `ask` opens the model only when a fused query needs it, and that open is most of what a fused
-answer costs: ~0.8 s and ~1.9 GB on the default model, ~0.30 s and ~1.7 GB on the small one — the
-model, not the graph. The bench fixture is a small-model store, and its 0.30 s is 220 ms of open —
+answer costs: ~0.30 s and ~1.7 GB on the default model, ~0.8 s and ~1.9 GB on `e5-large` — the
+model, not the graph. The bench fixture is a default-model store, and its 0.30 s is 220 ms of open —
 a cache lookup, then the 16 MB tokenizer and the 448 MB ONNX session opening concurrently — against
 410 ms before the levers below. An exact-id lookup answers in ~50 ms and ~50 MB, and a `--no-dense`
 question in ~0.1 s, since neither opens the model or reads the vectors. What is left of the open is
@@ -658,8 +664,10 @@ set; `BGEM3` (1024-d, ≈2.1 GB) scores 5/14 at eleven times the embedding time 
 the passage cut from 256 to 512 tokens scores 5/14 at double the embedding time; a second vector
 per node for the label alone, max-scored against the passage vector, scores 6/14 at 1.85× the
 embedding time. What none of them had was size: re-measured with the questions in the index, which
-is the paragraph above, `e5-large` reads paraphrase 22/30 against 15/30 and is the default. The
-passage cut stays at 256 tokens and the node keeps one vector.
+is the paragraph above, `e5-large` reads paraphrase 22/30 against 15/30 — as the one line that
+buys it and not as the default, for the reasons in
+[ADR-002](docs/adr/ADR-002-two-defaults-multiplied.md). The passage cut stays at 256 tokens and the
+node keeps one vector.
 
 If the model can't be opened (no cache, no network), the two kinds of caller degrade differently, on
 purpose: `ask` and `update` fall back to lexical-only and print one line to stderr saying so, then
@@ -836,7 +844,7 @@ code. The printed counts stay exact either way.
 
 The dense floors are keyed by the store's embedder as well, because a floor measured on one model
 says nothing about another: rows written by the small model or under no name at all are graded
-against the small model's numbers, rows written by the default against the default's, and a dense
+against the small model's numbers, rows written by `e5-large` against `e5-large`'s, and a dense
 arm under any third model is measured and never graded — `model=<name>` and `gated=false` on the
 summary line, the way another case file is measured and not graded. The lexical arms have no
 embedder in them and keep one set of floors whatever the rows are.
@@ -844,12 +852,12 @@ embedder in them and keep one set of floors whatever the rows are.
 | | enriched store | store with no questions |
 | --- | --- | --- |
 | keyword | 40/40 with embeddings, 39/40 with `--no-dense` | 40/40 with embeddings, 39/40 with `--no-dense` |
-| paraphrase, small-model rows | ≥14/30 with embeddings, ≥11/30 with `--no-dense` | ≥9/30 with embeddings, ≥7/30 with `--no-dense` |
-| paraphrase, default-model rows | ≥22/30 with embeddings | ≥17/30 with embeddings |
+| paraphrase, small-model rows (the default) | ≥14/30 with embeddings, ≥11/30 with `--no-dense` | ≥9/30 with embeddings, ≥7/30 with `--no-dense` |
+| paraphrase, `e5-large` rows | ≥22/30 with embeddings | ≥17/30 with embeddings |
 | code | 12/12 | 12/12 |
 | p90 | ≤230 tokens in every arm | ≤230 tokens in every arm |
 
-The default model's two dense floors are the counts a copy of the fixture re-embedded under it read,
+`e5-large`'s two dense floors are the counts a copy of the fixture re-embedded under it read,
 twice per arm, in [the 0.5.0 gap results](docs/bench/2026-09-05-0.5.0-gaps-results.md); the `--no-dense` column is the small
 model's and applies to every store, since no embedder is in it.
 
@@ -972,13 +980,16 @@ one figure that didn't hold up on first measurement.
 Everything above is a reader, and a reader costs a fraction of a second and the model it opened.
 The one command that can take a machine over is a writer that has to embed the store whole —
 `build`, `update`, `enrich`, `embed` or `watch` on a store whose rows belong to another model.
-Measured on the bench fixture's 33,525 rows under the default model, before and after the work in
-[the resource-usage results](docs/bench/2026-09-07-resource-usage-results.md):
+Measured on the bench fixture's 33,525 rows under `intfloat/multilingual-e5-large`, before and
+after the work in [the resource-usage results](docs/bench/2026-09-07-resource-usage-results.md):
 
 | | wall | user | max RSS | peak CPU | threads |
 | --- | --- | --- | --- | --- | --- |
 | before | 2,582 s (43 min) | 13,342 s | 2.96 GB | 444% | 18, 6 running |
 | after | 1,930 s (32 min) | 7,641 s | 2.15 GB | 293% | 8, 4 running |
+
+That is the large model because it is the worst case the tool has and a repository opts into it:
+the same 33,525 rows under the default model are **214 s and 1.63 GB** in the same document.
 
 Those are the rebuild's own numbers. What the *person at the keyboard* feels while it runs is a
 different measurement, and it is the one `priority` answers — a six-thread compile and a 1 ms wake
@@ -1022,9 +1033,9 @@ devcontainer gets a third of what it was given rather than a third of the host. 
 with nobody at the keyboard wants the opposite of all of this — `priority = "normal"` and
 `threads` as high as it likes, one line each in `~/.config/repograph/config.toml`.
 
-On a machine with 8 GB the model is the lever and the scheduler is not: a rebuild under the default
-model touches about 1.6 GB of weights whatever band it runs in, and
-`embed_model = "intfloat/multilingual-e5-small"` is 0.45 GB and three minutes for the whole store.
+On a machine with 8 GB the model is the lever and the scheduler is not: a rebuild under
+`embed_model = "intfloat/multilingual-e5-large"` touches about 1.6 GB of weights whatever band it
+runs in, where the default model's are 0.45 GB and the whole store is 214 s.
 There is no low-memory flag, because which vectors are on disk is a property of the repository and
 not of the laptop that happens to be building them.
 
@@ -1045,11 +1056,12 @@ resumes from its last checkpoint instead of starting again:
 dense: 16384/33525 rows, 18.7 rows/s, ~15 min left
 ```
 
-The cheap ways out are unchanged and cost nothing: `embed_model = "intfloat/multilingual-e5-small"`
-writes the whole store in about three minutes and 1.6 GB, and `--no-dense` on the writer opens no
-model at all. `serve` and `watch` hold the model on purpose — 1.4 GB resident on the small model,
-about 1.8 GB on the default one — and are idle between refreshes; `ask --rerank-local` opens a
-second 2.1 GB session beside the embedder and is the one reader that reaches 3+ GB.
+The cheapest way out is the default and costs nothing to keep: `intfloat/multilingual-e5-small`
+writes the whole store in 214 s and 1.6 GB where `e5-large` takes 1,930 s and 2.15 GB, and
+`--no-dense` on the writer opens no model at all. `serve` and `watch` hold the model on purpose —
+1.4 GB resident on the default model, about 1.8 GB on `e5-large` — and are idle between refreshes;
+`ask --rerank-local` opens a second 2.1 GB session beside the embedder and is the one reader that
+reaches 3+ GB.
 
 ## Design
 

@@ -28,12 +28,12 @@ pub struct Config {
     /// Hub id of the model the vectors are written with. `build`, `update`, `enrich`, `embed`
     /// and `watch` embed with it and rewrite the index whole when the store holds another
     /// model's rows; `ask`, `bench` and `dump` open the model the store records instead, so a
-    /// store keeps answering with what wrote it whatever this says today. The large model is
-    /// the default: it read paraphrase 22/30 against the small one's 15/30 on the fixture and
-    /// held-out 103 → 119 of 400 (p = 0.00086); the latency, memory and download that choice
-    /// costs are measured in docs/bench/2026-09-05-dev-cases-results.md.
-    /// `intfloat/multilingual-e5-small` is the cheap way back, and the model the floors were
-    /// set with.
+    /// store keeps answering with what wrote it whatever this says today. The small model is the
+    /// default, priced for a first build nobody has tuned yet, and the model its floors were set
+    /// with; `intfloat/multilingual-e5-large` is the one line that buys paraphrase 22/30 against
+    /// 15/30 and held-out 103 → 119 of 400 (p = 0.00086), for a 2.1 GB download and nine times
+    /// the wall on a whole-store embed. docs/adr/ADR-002-two-defaults-multiplied.md weighs the
+    /// two; docs/bench/2026-09-05-dev-cases-results.md measures the recall.
     pub embed_model: String,
     /// How many threads the model sessions and the tokenizer pool may use; `0` takes the
     /// built-in rule, a third of the logical cores. It describes the machine rather than the
@@ -270,12 +270,12 @@ mod tests {
     }
 
     #[test]
-    fn the_embed_model_defaults_to_the_large_e5_and_reads_from_the_file() {
+    fn the_embed_model_defaults_to_the_small_e5_and_reads_from_the_file() {
         with_machine(None, || {
             let dir = tempfile::tempdir().unwrap();
-            assert_eq!(Config::load(dir.path()).unwrap().embed_model, "intfloat/multilingual-e5-large");
-            std::fs::write(dir.path().join("repograph.toml"), "embed_model = \"intfloat/multilingual-e5-small\"\n").unwrap();
             assert_eq!(Config::load(dir.path()).unwrap().embed_model, "intfloat/multilingual-e5-small");
+            std::fs::write(dir.path().join("repograph.toml"), "embed_model = \"intfloat/multilingual-e5-large\"\n").unwrap();
+            assert_eq!(Config::load(dir.path()).unwrap().embed_model, "intfloat/multilingual-e5-large");
         });
     }
 
