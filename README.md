@@ -929,11 +929,43 @@ loop, run beside a whole-store rebuild on this machine
 | `priority = "normal"` | +15.7% | 2.5 ms | performance cores, 3.49 GHz |
 | `priority = "background"` (the default) | +1.7% | 0.6 ms | efficiency cores, 1.70 GHz |
 
-The price is wall time: the same work takes 4.1× as long in the background band, and the default
-takes that trade because nobody is waiting for a rebuild. `priority = "normal"` in
+The price is wall time: the same work takes about four times as long in the background band
+(4.3× on the run above), and the default takes that trade because nobody is waiting for a rebuild.
+On a machine that is busy with your own work it takes longer still — a background-band rebuild runs
+when the machine is free, which is the point of it. `priority = "normal"` in
 `repograph.toml` or `~/.config/repograph/config.toml`, or `REPOGRAPH_PRIORITY=normal` for one run,
 is the word back — that is what a build server or a CI box wants. Readers ignore the setting
 entirely: `ask`, `bench` and `dump` answer a person, and a person is waiting.
+
+A writer also stops making its own copy of the model's weights: it reads them from the
+memory-mapped file instead, which takes the anonymous memory a rebuild holds from 1.63 GB to
+0.50 GB — the part the system counts when it decides what to compress, swap or kill. On a machine
+with memory to spare that costs nothing; on one that is already short it costs 6–26% of the wall,
+because pages the system is free to reclaim are pages it reclaims and the run reads them again.
+Readers are unchanged and keep their own copies: they answer one query and leave.
+
+That measurement is this machine's — Apple Silicon, six performance and six efficiency cores —
+where the background band *is* the efficiency cluster, which is why the clock halves. Elsewhere
+the same setting buys less, and this says so rather than letting you assume otherwise:
+
+| | what `priority = "background"` does there |
+| --- | --- |
+| macOS, Apple Silicon | the efficiency cluster at half the clock, and throttled disk I/O — the table above |
+| macOS, Intel | lowest scheduling priority and throttled disk I/O, so your own work takes the core whenever it wants it; but one kind of core, so the clock and the fan are a foreground run's |
+| Linux | `nice 19`, `SCHED_IDLE` and an idle I/O class: the rebuild runs when nothing else wants the CPU or the disk |
+| Windows and the rest | nothing, and it prints a line saying so rather than letting you believe it worked |
+
+`threads` follows the machine too: a third of the logical cores, which is one on a two- or
+four-core box, and on Linux `available_parallelism` honours a container's `--cpus` quota, so a
+devcontainer gets a third of what it was given rather than a third of the host. A build server
+with nobody at the keyboard wants the opposite of all of this — `priority = "normal"` and
+`threads` as high as it likes, one line each in `~/.config/repograph/config.toml`.
+
+On a machine with 8 GB the model is the lever and the scheduler is not: a rebuild under the default
+model touches about 1.6 GB of weights whatever band it runs in, and
+`embed_model = "intfloat/multilingual-e5-small"` is 0.45 GB and three minutes for the whole store.
+There is no low-memory flag, because which vectors are on disk is a property of the repository and
+not of the laptop that happens to be building them.
 
 Two things bound it. `threads` caps the ONNX session's intra-op pool and rayon's global pool,
 which is what `tokenizers` fans a batch out over; absent or `0` it is a third of the logical cores,
