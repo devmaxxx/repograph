@@ -8,7 +8,12 @@ const { spawnSync } = require("node:child_process");
 const PACKAGES = {
   "darwin-arm64": "@devmaxxx/repograph-darwin-arm64",
   "linux-x64": "@devmaxxx/repograph-linux-x64",
+  "win32-x64": "@devmaxxx/repograph-win32-x64",
 };
+
+// Cargo names the Windows binary with its extension, and `require.resolve` tries none of its own
+// for a file that is not a module.
+const BINARY = process.platform === "win32" ? "bin/repograph.exe" : "bin/repograph";
 
 const FALLBACK =
   "cargo install --git https://github.com/devmaxxx/repograph --locked";
@@ -22,7 +27,7 @@ function binaryPath() {
     };
   }
   try {
-    return { path: require.resolve(`${pkg}/bin/repograph`) };
+    return { path: require.resolve(`${pkg}/${BINARY}`) };
   } catch {
     return {
       error:

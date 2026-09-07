@@ -4,9 +4,92 @@
 use crate::{ask, config};
 use anyhow::{Context as _, Result};
 use std::io::{BufRead, BufReader, Write};
-use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
+
+/// The socket, one implementation per platform under one name. Both are AF_UNIX at
+/// `socket_path`: Windows has spoken it since 10 1803, only through winsock, which std does not
+/// wrap, so that side goes through socket2 while unix keeps std's own types. Everything below
+/// this module is written once, against `Listener` and `Stream`.
+#[cfg(unix)]
+mod sys {
+    use std::io;
+    use std::path::Path;
+    pub use std::os::unix::net::{UnixListener as Listener, UnixStream as Stream};
+    pub fn bind(path: &Path) -> io::Result<Listener> { Listener::bind(path) }
+    pub fn connect(path: &Path) -> io::Result<Stream> { Stream::connect(path) }
+    pub fn accept(listener: &Listener) -> io::Result<Stream> { listener.accept().map(|(s, _)| s) }
+    /// Whether the name is there at all — a file, not a listener.
+    pub fn present(path: &Path) -> bool { path.exists() }
+    /// The device and inode of a socket file, which is how a name is told from the thing that was
+    /// bound to it: the path can hold a replacement server's socket by the time this one exits.
+    pub fn id(path: &Path) -> Option<(u64, u64)> {
+        use std::os::unix::fs::MetadataExt;
+        let m = std::fs::metadata(path).ok()?;
+        Some((m.dev(), m.ino()))
+    }
+}
+
+#[cfg(windows)]
+mod sys {
+    use socket2::{Domain, SockAddr, Socket, Type};
+    use std::io;
+    use std::path::Path;
+    pub type Listener = Socket;
+    pub type Stream = Socket;
+    pub fn bind(path: &Path) -> io::Result<Listener> {
+        let s = Socket::new(Domain::UNIX, Type::STREAM, None)?;
+        s.bind(&SockAddr::unix(path)?)?;
+        // The backlog std's `UnixListener::bind` asks for on unix.
+        s.listen(128)?;
+        Ok(s)
+    }
+    pub fn connect(path: &Path) -> io::Result<Stream> {
+        let s = Socket::new(Domain::UNIX, Type::STREAM, None)?;
+        s.connect(&SockAddr::unix(path)?)?;
+        Ok(s)
+    }
+    pub fn accept(listener: &Listener) -> io::Result<Stream> { listener.accept().map(|(s, _)| s) }
+    /// The socket file is a reparse point with nothing behind it, so the metadata that says it
+    /// is there has to be its own, never a target's.
+    pub fn present(path: &Path) -> bool { std::fs::symlink_metadata(path).is_ok() }
+    /// NTFS's file reference number, sequence included — a record reused for a new file carries
+    /// a new sequence, so a name unlinked and bound again is another identity, the way a fresh
+    /// inode is on unix. Creation time would not do: NTFS tunnels it, and a file recreated under
+    /// a name within fifteen seconds inherits the old one, which is a replacement server's timing.
+    ///
+    /// `MetadataExt` carries both numbers and has carried them behind an unstable feature since
+    /// 2019 (rust-lang/rust#63010), so the handle is asked instead — the open std's own
+    /// `symlink_metadata` performs, for the same reason: no access rights, because this is a
+    /// metadata question; every share right, because a server is listening on the file while it
+    /// is asked; and the reparse point unfollowed, so the numbers are the socket file's own and
+    /// never a target's.
+    pub fn id(path: &Path) -> Option<(u64, u64)> {
+        use std::os::windows::fs::OpenOptionsExt;
+        use std::os::windows::io::AsRawHandle;
+        use windows_sys::Win32::Storage::FileSystem::{
+            GetFileInformationByHandle, BY_HANDLE_FILE_INFORMATION, FILE_FLAG_BACKUP_SEMANTICS,
+            FILE_FLAG_OPEN_REPARSE_POINT, FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE,
+        };
+        let file = std::fs::OpenOptions::new()
+            .access_mode(0)
+            .share_mode(FILE_SHARE_DELETE | FILE_SHARE_READ | FILE_SHARE_WRITE)
+            .custom_flags(FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT)
+            .open(path)
+            .ok()?;
+        let mut info: BY_HANDLE_FILE_INFORMATION = unsafe { std::mem::zeroed() };
+        // SAFETY: the handle outlives the call, and the struct is only read back where the call
+        // reports the kernel filled it in.
+        let ok = unsafe { GetFileInformationByHandle(file.as_raw_handle(), &mut info) };
+        if ok == 0 {
+            return None;
+        }
+        Some((
+            u64::from(info.dwVolumeSerialNumber),
+            u64::from(info.nFileIndexHigh) << 32 | u64::from(info.nFileIndexLow),
+        ))
+    }
+}
 
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
@@ -42,14 +125,6 @@ fn build_stamp() -> Option<crate::walk::Stamp> {
     crate::walk::stamp_of(&std::fs::metadata(std::env::current_exe().ok()?).ok()?)
 }
 
-/// The device and inode of a socket file, which is how a name is told from the thing that was
-/// bound to it: the path can hold a replacement server's socket by the time this one exits.
-fn socket_id(path: &Path) -> Option<(u64, u64)> {
-    use std::os::unix::fs::MetadataExt;
-    let m = std::fs::metadata(path).ok()?;
-    Some((m.dev(), m.ino()))
-}
-
 /// The client's half of the handshake. `req.no_dense` is the arm the question was asked in;
 /// the server's own arm comes back in the `Reply`, because only the server knows it.
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -81,8 +156,8 @@ pub struct Reply {
 /// and it has one either way.
 pub fn try_ask(repo: &Path, req: &ask::Request) -> Option<Reply> {
     let path = socket_path(repo);
-    if !path.exists() { return None; }
-    let mut stream = UnixStream::connect(&path).ok()?;
+    if !sys::present(&path) { return None; }
+    let mut stream = sys::connect(&path).ok()?;
     stream.set_read_timeout(Some(IO_TIMEOUT)).ok()?;
     stream.set_write_timeout(Some(IO_TIMEOUT)).ok()?;
     let build = build_stamp();
@@ -124,26 +199,24 @@ pub fn run(repo: &Path, cfg: &config::Config, every: u64, batch: usize, idle: u6
     // was at its path when it started, and nothing it stats later can still say so.
     let build = build_stamp();
     let path = socket_path(repo);
-    if path.exists() && UnixStream::connect(&path).is_ok() { anyhow::bail!("another serve answers at {}", path.display()); }
+    if sys::present(&path) && sys::connect(&path).is_ok() { anyhow::bail!("another serve answers at {}", path.display()); }
     let _ = std::fs::remove_file(&path);
-    let listener = UnixListener::bind(&path).with_context(|| format!("bind {}", path.display()))?;
+    let listener = sys::bind(&path).with_context(|| format!("bind {}", path.display()))?;
     // Stamped the instant it exists, and re-read on the way out: the probe above cannot tell a
     // dead socket from a live server whose backlog is momentarily full, so a replacement may
     // have unlinked this file and bound its own at the same name while this one ran. Removing
     // the name rather than the socket would then strand the replacement — the same cascade the
     // client's unlink was deleted to avoid, one process further along.
-    let _guard = Unlink(path.clone(), socket_id(&path));
+    let _guard = Unlink(path.clone(), sys::id(&path));
     // The accept blocks on a thread of its own and hands each connection over, one at a time —
     // the answer still happens here, on the one thread that holds the context. A rendezvous
     // channel is what keeps it to one: the next connection is accepted but not delivered until
     // this loop is free, and the one after that waits in the kernel's backlog.
-    let (tx, rx) = std::sync::mpsc::sync_channel::<UnixStream>(0);
-    std::thread::spawn(move || {
-        for stream in listener.incoming() {
-            match stream {
-                Ok(s) => if tx.send(s).is_err() { return; },
-                Err(_) => return,
-            }
+    let (tx, rx) = std::sync::mpsc::sync_channel::<sys::Stream>(0);
+    std::thread::spawn(move || loop {
+        match sys::accept(&listener) {
+            Ok(s) => if tx.send(s).is_err() { return; },
+            Err(_) => return,
         }
     });
     let mut watcher = crate::Watcher::open(repo, cfg)?;
@@ -208,7 +281,7 @@ fn adopt_if_moved(watcher: &mut crate::Watcher, ctx: &mut ask::Context, batch: u
 /// makes exactly that shape, and so does a client that gave up. On macOS a socket with no other
 /// end refuses the `setsockopt` below with EINVAL, which reached the server's stderr as an
 /// unattributable `serve: Invalid argument (os error 22)`; elsewhere it is an empty read.
-fn hello_line(stream: &UnixStream) -> Option<String> {
+fn hello_line(stream: &sys::Stream) -> Option<String> {
     stream.set_read_timeout(Some(IO_TIMEOUT)).ok()?;
     stream.set_write_timeout(Some(IO_TIMEOUT)).ok()?;
     let mut line = String::new();
@@ -221,7 +294,7 @@ fn hello_line(stream: &UnixStream) -> Option<String> {
 
 /// Whether a question was asked, which is what `--idle` counts — a peer that vanished before
 /// its hello asked nothing.
-fn answer(mut stream: UnixStream, watcher: &mut crate::Watcher, ctx: &mut ask::Context, build: Option<crate::walk::Stamp>) -> Result<bool> {
+fn answer(mut stream: sys::Stream, watcher: &mut crate::Watcher, ctx: &mut ask::Context, build: Option<crate::walk::Stamp>) -> Result<bool> {
     let Some(line) = hello_line(&stream) else { return Ok(false) };
     let hello: Hello = serde_json::from_str(&line).context("hello")?;
     // The refusals, all three under one reply: the build and the arm on it name which of them
@@ -269,6 +342,81 @@ fn refusal(ctx: &ask::Context, build: Option<crate::walk::Stamp>) -> Reply {
 struct Unlink(PathBuf, Option<(u64, u64)>);
 impl Drop for Unlink {
     fn drop(&mut self) {
-        if self.1.is_some() && socket_id(&self.0) == self.1 { let _ = std::fs::remove_file(&self.0); }
+        if self.1.is_some() && sys::id(&self.0) == self.1 { let _ = std::fs::remove_file(&self.0); }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::sys;
+    use std::io::{BufRead, BufReader};
+
+    /// The two facts `try_ask` and `Unlink` read off the socket file, through the platform's own
+    /// metadata: on Windows the file is a reparse point, and `exists` would ask what it points at.
+    #[test]
+    fn a_bound_socket_file_is_present_and_carries_an_identity_until_it_is_removed() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("serve.sock");
+        assert!(!sys::present(&path) && sys::id(&path).is_none());
+        let first = sys::bind(&path).unwrap();
+        assert!(sys::present(&path));
+        let id = sys::id(&path).expect("a bound socket file has an identity");
+        drop(first);
+        std::fs::remove_file(&path).unwrap();
+        assert!(!sys::present(&path), "the name goes with the file");
+        let _second = sys::bind(&path).unwrap();
+        // NTFS bumps a reused record's sequence number, so the new file is a new identity by
+        // construction. A unix filesystem may hand the inode straight back, so there this is not
+        // asserted — and the guard's dev+ino check has always lived with that.
+        if cfg!(windows) { assert_ne!(sys::id(&path), Some(id), "bound again under the name, another file"); }
+    }
+
+    /// What `run` does on the way out: the listener is still alive on its thread when the guard
+    /// removes the file. If the platform refused this, the cost would be a stale file for the
+    /// next `serve` to sweep — worth knowing rather than guessing.
+    #[test]
+    fn the_socket_file_is_removed_while_its_listener_is_still_bound() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("serve.sock");
+        let _listener = sys::bind(&path).unwrap();
+        std::fs::remove_file(&path).unwrap();
+        assert!(!sys::present(&path));
+    }
+
+    /// The whole reason for a socket file over a port: a name nobody listens on is settled at
+    /// once, not accepted by a stranger and waited out. Windows and Linux refuse the connect;
+    /// macOS sometimes completes it against the file a dropped listener left and hands back a
+    /// stream with nothing behind it, which reads as end of file — what `try_ask` does with a
+    /// reply it cannot parse is answer in its own process, so the outcome is the same either way.
+    #[test]
+    fn a_connect_to_a_socket_nobody_listens_on_is_settled_at_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("serve.sock");
+        drop(sys::bind(&path).unwrap());
+        let started = std::time::Instant::now();
+        match sys::connect(&path) {
+            Err(err) => assert_eq!(err.kind(), std::io::ErrorKind::ConnectionRefused, "{err}"),
+            Ok(stream) => {
+                if cfg!(windows) { panic!("a socket nobody listens on is refused on Windows, and this connect was taken"); }
+                stream.set_read_timeout(Some(std::time::Duration::from_secs(1))).unwrap();
+                let mut line = String::new();
+                let read = BufReader::new(stream).read_line(&mut line);
+                assert!(matches!(read, Ok(0) | Err(_)), "nothing is behind it: {read:?} {line:?}");
+            }
+        }
+        assert!(started.elapsed() < std::time::Duration::from_secs(2), "settled after {:?}", started.elapsed());
+    }
+
+    /// A user's name is in the socket's path, and on Windows the path crosses into `sun_path` as
+    /// UTF-8: two bytes a Cyrillic letter, and a conversion the runner's own ASCII path never makes.
+    #[test]
+    fn a_socket_binds_and_connects_under_a_directory_that_is_not_ascii() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path().join("Максим");
+        std::fs::create_dir(&home).unwrap();
+        let path = home.join("serve.sock");
+        let _listener = sys::bind(&path).unwrap();
+        assert!(sys::present(&path));
+        sys::connect(&path).unwrap();
     }
 }

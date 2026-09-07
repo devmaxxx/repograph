@@ -4,6 +4,7 @@
 /.fastembed_cache
 /dist
 /npm/*/bin/repograph
+/npm/*/bin/repograph.exe
 /npm/*/node_modules
 /bench/compare/__pycache__
 

@@ -36,6 +36,32 @@ fn mirror_header(stamp: (u128, u64)) -> [u8; MIRROR_HEADER] {
 
 fn mirror_name(json: &str) -> String { format!("{}.bin", json.trim_end_matches(".json")) }
 
+#[cfg(unix)]
+fn rename_over(from: &Path, to: &Path) -> std::io::Result<()> { std::fs::rename(from, to) }
+
+/// A rename over a file some other program has open without delete sharing — an indexer, a sync
+/// client, a scanner — is refused for as long as that handle lives, which is milliseconds. A held
+/// *destination* is reported as access-denied rather than as a sharing violation (measured on a
+/// Windows runner, where the sharing-violation-only form of this let both tests fail with os error
+/// 5); std's own retry for access-denied is a second rename with POSIX semantics, which the
+/// holder's share mode refuses just as flatly, so waiting is the only thing left. Both errors are
+/// retried, for about half a second in all, before the store is left as it was.
+#[cfg(windows)]
+fn rename_over(from: &Path, to: &Path) -> std::io::Result<()> {
+    const HELD_BY_ANOTHER_PROCESS: [i32; 2] = [5, 32];
+    let mut wait = std::time::Duration::from_millis(1);
+    loop {
+        match std::fs::rename(from, to) {
+            Err(e) if e.raw_os_error().is_some_and(|c| HELD_BY_ANOTHER_PROCESS.contains(&c))
+                && wait < std::time::Duration::from_millis(512) => {
+                std::thread::sleep(wait);
+                wait *= 2;
+            }
+            r => return r,
+        }
+    }
+}
+
 impl Store {
     pub fn new(repo: &Path) -> Store { Store { dir: repo.join(".repograph") } }
 
@@ -93,7 +119,7 @@ impl Store {
         std::fs::create_dir_all(&self.dir)?;
         let tmp = self.dir.join(format!("{name}.tmp"));
         std::fs::write(&tmp, bytes).with_context(|| format!("write {}", tmp.display()))?;
-        std::fs::rename(&tmp, self.dir.join(name)).with_context(|| format!("rename {name}"))?;
+        rename_over(&tmp, &self.dir.join(name)).with_context(|| format!("rename {name}"))?;
         Ok(())
     }
 
@@ -321,5 +347,43 @@ mod tests {
         let d = tempfile::tempdir().unwrap();
         let (g, m) = Store::new(d.path()).load().unwrap();
         assert!(g.nodes.is_empty() && m.files.is_empty());
+    }
+
+    /// A reader that took no delete share — an indexer, a sync client, an editor — holds the
+    /// destination for a moment; the rename waits it out rather than failing the save.
+    #[cfg(windows)]
+    fn hold_open_for(path: &std::path::Path, ms: u64) -> std::thread::JoinHandle<()> {
+        use std::os::windows::fs::OpenOptionsExt;
+        use windows_sys::Win32::Storage::FileSystem::FILE_SHARE_READ;
+        let f = std::fs::OpenOptions::new().read(true).share_mode(FILE_SHARE_READ).open(path).unwrap();
+        std::thread::spawn(move || { std::thread::sleep(std::time::Duration::from_millis(ms)); drop(f); })
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn a_rename_over_a_briefly_held_file_waits_and_lands() {
+        let d = tempfile::tempdir().unwrap();
+        let store = Store::new(d.path());
+        store.write_atomic("graph.json", b"old").unwrap();
+        let holder = hold_open_for(&d.path().join(".repograph/graph.json"), 100);
+        store.write_atomic("graph.json", b"new").unwrap();
+        holder.join().unwrap();
+        assert_eq!(store.read_bytes("graph.json").unwrap().as_deref(), Some(&b"new"[..]));
+    }
+
+    /// The error a held destination gives, pinned: 5, not the 32 a sharing violation would be —
+    /// the rename is refused where it deletes the file it replaces, and that is reported as
+    /// access denied.
+    #[cfg(windows)]
+    #[test]
+    fn a_rename_over_a_file_held_past_the_budget_fails_and_keeps_the_old_bytes() {
+        let d = tempfile::tempdir().unwrap();
+        let store = Store::new(d.path());
+        store.write_atomic("graph.json", b"old").unwrap();
+        let holder = hold_open_for(&d.path().join(".repograph/graph.json"), 1500);
+        let err = store.write_atomic("graph.json", b"new").unwrap_err();
+        assert!(format!("{err:#}").contains("os error 5"), "{err:#}");
+        holder.join().unwrap();
+        assert_eq!(store.read_bytes("graph.json").unwrap().as_deref(), Some(&b"old"[..]));
     }
 }
