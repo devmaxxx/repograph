@@ -330,6 +330,13 @@ pub(crate) fn cap_pools(threads: usize) {
     let _ = rayon::ThreadPoolBuilder::new().num_threads(threads).build_global();
 }
 
+/// Rows embedded between one checkpoint and the next. A whole store on the default model is
+/// about a minute a chunk here, which is both what an interrupted run loses and how often the
+/// reader is told where it is; the checkpoint itself is an append of the chunk's bytes plus the
+/// metadata rewrite, so paying it thirty-odd times over a rebuild is not measurable against the
+/// forwards.
+const SYNC_CHUNK: usize = 1024;
+
 fn embed_all(repo: &std::path::Path, no_dense: bool, cfg: &config::Config) -> anyhow::Result<()> {
     let model = index::embed::resolve(None, &cfg.embed_model);
     let Some(mut emb) = ask::open_embedder(no_dense, &model, index::embed::threads(cfg.threads)) else { return Ok(()) };
@@ -339,7 +346,12 @@ fn embed_all(repo: &std::path::Path, no_dense: bool, cfg: &config::Config) -> an
     let mut dense = index::dense::DenseIndex::load(&store)?;
     let t = std::time::Instant::now();
     dense.written_by(&model, emb.dim()?);
-    let n = dense.sync(&graph, &questions, &mut |texts| emb.embed(texts))?;
+    let n = dense.sync_chunked(&graph, &questions, &mut |texts| emb.embed(texts), SYNC_CHUNK, &mut |idx, p| {
+        idx.save(&store)?;
+        let rate = p.done as f32 / t.elapsed().as_secs_f32().max(f32::EPSILON);
+        eprintln!("dense: {}/{} rows, {rate:.1} rows/s, ~{:.0} min left", p.done, p.total, (p.total - p.done) as f32 / rate / 60.0);
+        Ok(())
+    })?;
     dense.save(&store)?;
     println!("dense: embedded {n} rows in {:.1}s", t.elapsed().as_secs_f32());
     Ok(())
