@@ -418,6 +418,101 @@ fn a_client_that_checks_only_the_version_cannot_take_a_refusal_for_an_answer() {
     let _ = server.wait();
 }
 
+/// Eight questions in flight at once against one server. The accept blocks on its own thread and
+/// hands connections over a rendezvous channel one at a time, so seven of the eight are waiting
+/// somewhere — in the channel, or in the kernel's backlog — while the first is answered. A
+/// platform that refused a concurrent connect would still answer all eight correctly, in eight
+/// cold processes, and the only thing that tells that apart is the line each client prints.
+#[test]
+fn several_asks_at_once_are_all_answered_by_the_one_resident_process() {
+    let dir = repo_with_docs();
+    let mut server = serve(dir.path(), &["--every", "3600", "--idle", "60"]);
+    let (want, _) = ask_until_resident(dir.path(), &["штраф"]);
+    let asks: Vec<_> = (0..8).map(|_| {
+        repograph().args(LEXICAL).arg("--repo").arg(dir.path()).args(["ask", "штраф"])
+            .stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().unwrap()
+    }).collect();
+    for (i, child) in asks.into_iter().enumerate() {
+        let out = child.wait_with_output().unwrap();
+        let err = String::from_utf8_lossy(&out.stderr).into_owned();
+        assert!(out.status.success(), "ask {i}: {err}");
+        assert_eq!(String::from_utf8(out.stdout).unwrap(), want, "ask {i} answered something else");
+        assert!(err.contains("serve: answered by the resident process"), "ask {i} answered itself: {err}");
+    }
+    server.kill().unwrap();
+    let _ = server.wait();
+}
+
+/// A second `serve` while the first is answering. Its probe is a connect and a close — the one
+/// shape a running server must survive — and what it decides is whether it binds over a live
+/// socket, which would strand the first behind a name nothing reaches and take that name with it
+/// on the way out. So the second has to refuse, and the first has to still be there afterwards.
+#[test]
+fn a_second_serve_on_the_same_repository_bails_and_leaves_the_first_answering() {
+    let dir = repo_with_docs();
+    let mut first = serve(dir.path(), &["--every", "3600", "--idle", "60"]);
+    let (want, _) = ask_until_resident(dir.path(), &["штраф"]);
+    // Idle seconds rather than minutes: this call is waited on, and a second server that wrongly
+    // bound would otherwise hold the test for as long as the first one's own `--idle`.
+    let second = repograph().args(LEXICAL).arg("--repo").arg(dir.path())
+        .args(["serve", "--every", "3600", "--idle", "2"]).output().unwrap();
+    let err = String::from_utf8_lossy(&second.stderr).into_owned();
+    assert!(!second.status.success(), "a second serve bound over a live one: {err}");
+    assert!(err.contains("another serve answers"), "{err}");
+    let (again, err) = ask(dir.path(), &[], &["штраф"]);
+    assert!(err.contains("serve: answered by the resident process"), "the probe cost the first server its socket: {err}");
+    assert_eq!(again, want);
+    first.kill().unwrap();
+    let _ = first.wait();
+}
+
+/// `--idle` through a whole process, which is the only thing that runs the guard: the socket file
+/// is removed on the way out by a `Drop` that first asks whether the file at the name is still
+/// the one this process bound. An identity that came back `None` would make that guard a silent
+/// no-op and leave a file behind for the next `serve` to sweep, which is exactly what nobody
+/// would notice.
+#[test]
+fn an_idle_server_exits_clean_and_takes_its_socket_with_it() {
+    let dir = repo_with_docs();
+    let mut server = serve(dir.path(), &["--every", "3600", "--idle", "1"]);
+    let start = Instant::now();
+    let status = loop {
+        if let Some(status) = server.try_wait().unwrap() { break status; }
+        assert!(start.elapsed() < Duration::from_secs(10), "a server idle for a second is still running");
+        std::thread::sleep(Duration::from_millis(50));
+    };
+    let mut err = String::new();
+    std::io::Read::read_to_string(&mut server.stderr.take().unwrap(), &mut err).unwrap();
+    assert!(status.success(), "{status}: {err}");
+    // Printed after the bind, so the file asserted gone below is one this process really made:
+    // a server that never bound would leave no socket either, and prove nothing by it.
+    assert!(err.contains("idle 1s; Ctrl-C stops"), "the server never bound: {err}");
+    assert!(err.contains("idle for 1s"), "it left for some other reason: {err}");
+    assert!(std::fs::symlink_metadata(dir.path().join(".repograph/serve.sock")).is_err(), "the socket file outlived its server: {err}");
+}
+
+/// The two ways to ask for a cold answer while a server is up. `--no-serve` is a flag on the
+/// command line; `REPOGRAPH_NO_SERVE` is what a benchmark or a wrapper sets, and nothing tested
+/// it anywhere. Both have to reach the same answer without the socket — set on the child rather
+/// than on this process, which the tests share and run in at once.
+#[test]
+fn no_serve_and_its_environment_variable_both_answer_here_under_a_live_server() {
+    let dir = repo_with_docs();
+    let mut server = serve(dir.path(), &["--every", "3600", "--idle", "60"]);
+    let (want, _) = ask_until_resident(dir.path(), &["штраф"]);
+    let (flagged, err) = ask(dir.path(), &["--no-serve"], &["штраф"]);
+    assert!(!err.contains("serve:"), "--no-serve went to the socket anyway: {err}");
+    assert_eq!(flagged, want);
+    let out = repograph().env("REPOGRAPH_NO_SERVE", "1").args(LEXICAL).arg("--repo").arg(dir.path())
+        .args(["ask", "штраф"]).output().unwrap();
+    let err = String::from_utf8_lossy(&out.stderr).into_owned();
+    assert!(out.status.success(), "{err}");
+    assert!(!err.contains("serve:"), "REPOGRAPH_NO_SERVE went to the socket anyway: {err}");
+    assert_eq!(String::from_utf8(out.stdout).unwrap(), want);
+    server.kill().unwrap();
+    let _ = server.wait();
+}
+
 /// The dense arm end to end: a store built with vectors, a fused answer in this process, and
 /// the same answer from a resident server — on the small model, in whatever cache the environment
 /// names. Ignored by default because it wants 470 MB on disk; the Windows CI job runs it with the
