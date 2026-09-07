@@ -1,6 +1,37 @@
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
+/// The crate is a binary with no library, so the test carries its own copy of the transport seam
+/// `src/serve.rs` keeps: std's Unix socket where std has one, socket2's AF_UNIX on Windows.
+#[cfg(unix)]
+mod transport {
+    use std::path::Path;
+    pub use std::os::unix::net::{UnixListener as Listener, UnixStream as Stream};
+    pub fn bind(path: &Path) -> Listener { Listener::bind(path).unwrap() }
+    pub fn connect(path: &Path) -> std::io::Result<Stream> { Stream::connect(path) }
+    pub fn accept(listener: &Listener) -> Stream { listener.accept().unwrap().0 }
+}
+
+#[cfg(windows)]
+mod transport {
+    use socket2::{Domain, SockAddr, Socket, Type};
+    use std::path::Path;
+    pub type Listener = Socket;
+    pub type Stream = Socket;
+    pub fn bind(path: &Path) -> Listener {
+        let s = Socket::new(Domain::UNIX, Type::STREAM, None).unwrap();
+        s.bind(&SockAddr::unix(path).unwrap()).unwrap();
+        s.listen(1).unwrap();
+        s
+    }
+    pub fn connect(path: &Path) -> std::io::Result<Stream> {
+        let s = Socket::new(Domain::UNIX, Type::STREAM, None)?;
+        s.connect(&SockAddr::unix(path)?)?;
+        Ok(s)
+    }
+    pub fn accept(listener: &Listener) -> Stream { listener.accept().unwrap().0 }
+}
+
 fn repograph() -> Command { Command::new(env!("CARGO_BIN_EXE_repograph")) }
 
 fn repo_with_docs() -> tempfile::TempDir {
@@ -31,6 +62,7 @@ fn ask(dir: &std::path::Path, extra: &[&str], words: &[&str]) -> (String, String
 
 /// The same question asked by a chosen binary rather than the one Cargo built, so a test can
 /// replace the file under a running server and still ask from the path it replaced.
+#[cfg(unix)]
 fn ask_from(bin: &std::path::Path, dir: &std::path::Path, words: &[&str]) -> (String, String) {
     let out = Command::new(bin).args(LEXICAL).arg("--repo").arg(dir).arg("ask").args(words).output().unwrap();
     assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
@@ -62,7 +94,7 @@ fn reply_to(dir: &std::path::Path, hello: &str) -> String {
     let sock = dir.join(".repograph/serve.sock");
     let start = Instant::now();
     loop {
-        if let Ok(mut s) = std::os::unix::net::UnixStream::connect(&sock) {
+        if let Ok(mut s) = transport::connect(&sock) {
             s.set_read_timeout(Some(Duration::from_secs(30))).unwrap();
             if writeln!(s, "{hello}").is_ok() {
                 let mut line = String::new();
@@ -98,7 +130,9 @@ fn ask_until_resident(dir: &std::path::Path, words: &[&str]) -> (String, String)
 fn wait_for_socket(dir: &std::path::Path) {
     let sock = dir.join(".repograph/serve.sock");
     let start = Instant::now();
-    while !sock.exists() {
+    // A socket file is a reparse point on Windows, and `exists` would follow it to nowhere; its
+    // own metadata is what says it is there, on every platform.
+    while std::fs::symlink_metadata(&sock).is_err() {
         assert!(start.elapsed() < Duration::from_secs(20), "serve never opened its socket");
         std::thread::sleep(Duration::from_millis(50));
     }
@@ -163,9 +197,14 @@ fn a_questions_file_rewritten_alongside_a_document_under_a_live_server_is_fused_
 fn a_socket_nobody_listens_on_is_answered_here_and_left_for_the_next_serve() {
     let dir = repo_with_docs();
     let sock = dir.path().join(".repograph/serve.sock");
-    std::os::unix::net::UnixListener::bind(&sock).unwrap();
+    transport::bind(&sock);
     // The listener is dropped at once: the file stays, nothing accepts.
+    let started = Instant::now();
     let (out, err) = ask(dir.path(), &[], &["штраф"]);
+    // A connect nobody accepts is refused at once on every platform this runs on. One that were
+    // accepted by nothing would sit out the client's whole read timeout, and a resident answer
+    // exists to be faster than a process, not thirty seconds slower than one.
+    assert!(started.elapsed() < Duration::from_secs(5), "the fallback took {:?}", started.elapsed());
     let want = ask(dir.path(), &["--no-serve"], &["штраф"]).0;
     assert_eq!(out, want);
     assert!(out.contains("FR-PAY-1"));
@@ -173,7 +212,7 @@ fn a_socket_nobody_listens_on_is_answered_here_and_left_for_the_next_serve() {
     // A client that cannot be answered falls back; it does not delete files. A refused connect
     // is also what a live server with a full backlog gives, and unlinking on that guess would
     // strand it. `serve` owns the file, and binds over a dead one.
-    assert!(sock.exists(), "the client leaves the socket file alone");
+    assert!(std::fs::symlink_metadata(&sock).is_ok(), "the client leaves the socket file alone");
     let mut server = serve(dir.path(), &["--every", "3600", "--idle", "60"]);
     let (through, _) = ask_until_resident(dir.path(), &["штраф"]);
     assert_eq!(through, want);
@@ -224,14 +263,14 @@ fn a_stale_socket_answer_is_no_older_than_the_store_on_disk() {
 fn a_reply_from_another_version_is_ignored() {
     let dir = repo_with_docs();
     let sock = dir.path().join(".repograph/serve.sock");
-    let listener = std::os::unix::net::UnixListener::bind(&sock).unwrap();
+    let listener = transport::bind(&sock);
     // Stamped as the asking binary is, so the version is the only field left to refuse it on —
     // the client reads the build and the arm first, and a reply that failed those would prove
     // nothing about the check this test is named for.
     let (mtime_ns, len) = stamp_of(std::path::Path::new(env!("CARGO_BIN_EXE_repograph")));
     let fake = std::thread::spawn(move || {
         use std::io::{BufRead, Write};
-        let (mut s, _) = listener.accept().unwrap();
+        let mut s = transport::accept(&listener);
         let mut line = String::new();
         std::io::BufReader::new(s.try_clone().unwrap()).read_line(&mut line).unwrap();
         writeln!(s, r#"{{"v":"0.0.0","build":{{"mtime_ns":{mtime_ns},"len":{len}}},"no_dense":true,"stdout":"WRONG\n","stderr":[]}}"#).unwrap();
@@ -284,10 +323,10 @@ fn a_lexical_question_is_still_answered_by_a_server_holding_the_dense_arm() {
 fn a_reply_from_another_build_of_this_version_is_ignored() {
     let dir = repo_with_docs();
     let sock = dir.path().join(".repograph/serve.sock");
-    let listener = std::os::unix::net::UnixListener::bind(&sock).unwrap();
+    let listener = transport::bind(&sock);
     let fake = std::thread::spawn(move || {
         use std::io::{BufRead, Write};
-        let (mut s, _) = listener.accept().unwrap();
+        let mut s = transport::accept(&listener);
         let mut line = String::new();
         std::io::BufReader::new(s.try_clone().unwrap()).read_line(&mut line).unwrap();
         // This version, and a stamp no executable on this machine carries.
@@ -299,10 +338,13 @@ fn a_reply_from_another_build_of_this_version_is_ignored() {
     fake.join().unwrap();
 }
 
+// Unix only: Windows will not replace a running image, and a rebuild there fails until the
+// server stops, so the pairing this test refuses cannot be made.
 /// `current_exe` names a path, and the file at a server's own path is the one a rebuild replaces.
 /// A server that stats it per request reports the stamp of the binary the client is asking from,
 /// the two agree, and yesterday's code answers today's question — the case the build stamp exists
 /// to refuse. Only a stamp taken once, at start, describes the build a process is running.
+#[cfg(unix)]
 #[test]
 fn a_binary_replaced_under_a_live_server_is_another_build_and_the_client_answers_here() {
     let dir = repo_with_docs();
@@ -372,6 +414,140 @@ fn a_client_that_checks_only_the_version_cannot_take_a_refusal_for_an_answer() {
     assert_eq!(reply["stdout"].as_str().unwrap(), "", "the answer it would have printed: {line}");
     assert_ne!(reply["v"].as_str().unwrap(), env!("CARGO_PKG_VERSION"),
         "the one check an older client makes sends it back to its own process: {line}");
+    server.kill().unwrap();
+    let _ = server.wait();
+}
+
+/// Eight questions in flight at once against one server. The accept blocks on its own thread and
+/// hands connections over a rendezvous channel one at a time, so seven of the eight are waiting
+/// somewhere — in the channel, or in the kernel's backlog — while the first is answered. A
+/// platform that refused a concurrent connect would still answer all eight correctly, in eight
+/// cold processes, and the only thing that tells that apart is the line each client prints.
+#[test]
+fn several_asks_at_once_are_all_answered_by_the_one_resident_process() {
+    let dir = repo_with_docs();
+    let mut server = serve(dir.path(), &["--every", "3600", "--idle", "60"]);
+    let (want, _) = ask_until_resident(dir.path(), &["штраф"]);
+    let asks: Vec<_> = (0..8).map(|_| {
+        repograph().args(LEXICAL).arg("--repo").arg(dir.path()).args(["ask", "штраф"])
+            .stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().unwrap()
+    }).collect();
+    for (i, child) in asks.into_iter().enumerate() {
+        let out = child.wait_with_output().unwrap();
+        let err = String::from_utf8_lossy(&out.stderr).into_owned();
+        assert!(out.status.success(), "ask {i}: {err}");
+        assert_eq!(String::from_utf8(out.stdout).unwrap(), want, "ask {i} answered something else");
+        assert!(err.contains("serve: answered by the resident process"), "ask {i} answered itself: {err}");
+    }
+    server.kill().unwrap();
+    let _ = server.wait();
+}
+
+/// A second `serve` while the first is answering. Its probe is a connect and a close — the one
+/// shape a running server must survive — and what it decides is whether it binds over a live
+/// socket, which would strand the first behind a name nothing reaches and take that name with it
+/// on the way out. So the second has to refuse, and the first has to still be there afterwards.
+#[test]
+fn a_second_serve_on_the_same_repository_bails_and_leaves_the_first_answering() {
+    let dir = repo_with_docs();
+    let mut first = serve(dir.path(), &["--every", "3600", "--idle", "60"]);
+    let (want, _) = ask_until_resident(dir.path(), &["штраф"]);
+    // Idle seconds rather than minutes: this call is waited on, and a second server that wrongly
+    // bound would otherwise hold the test for as long as the first one's own `--idle`.
+    let second = repograph().args(LEXICAL).arg("--repo").arg(dir.path())
+        .args(["serve", "--every", "3600", "--idle", "2"]).output().unwrap();
+    let err = String::from_utf8_lossy(&second.stderr).into_owned();
+    assert!(!second.status.success(), "a second serve bound over a live one: {err}");
+    assert!(err.contains("another serve answers"), "{err}");
+    let (again, err) = ask(dir.path(), &[], &["штраф"]);
+    assert!(err.contains("serve: answered by the resident process"), "the probe cost the first server its socket: {err}");
+    assert_eq!(again, want);
+    first.kill().unwrap();
+    let _ = first.wait();
+}
+
+/// `--idle` through a whole process, which is the only thing that runs the guard: the socket file
+/// is removed on the way out by a `Drop` that first asks whether the file at the name is still
+/// the one this process bound. An identity that came back `None` would make that guard a silent
+/// no-op and leave a file behind for the next `serve` to sweep, which is exactly what nobody
+/// would notice.
+#[test]
+fn an_idle_server_exits_clean_and_takes_its_socket_with_it() {
+    let dir = repo_with_docs();
+    let mut server = serve(dir.path(), &["--every", "3600", "--idle", "1"]);
+    let start = Instant::now();
+    let status = loop {
+        if let Some(status) = server.try_wait().unwrap() { break status; }
+        assert!(start.elapsed() < Duration::from_secs(10), "a server idle for a second is still running");
+        std::thread::sleep(Duration::from_millis(50));
+    };
+    let mut err = String::new();
+    std::io::Read::read_to_string(&mut server.stderr.take().unwrap(), &mut err).unwrap();
+    assert!(status.success(), "{status}: {err}");
+    // Printed after the bind, so the file asserted gone below is one this process really made:
+    // a server that never bound would leave no socket either, and prove nothing by it.
+    assert!(err.contains("idle 1s; Ctrl-C stops"), "the server never bound: {err}");
+    assert!(err.contains("idle for 1s"), "it left for some other reason: {err}");
+    assert!(std::fs::symlink_metadata(dir.path().join(".repograph/serve.sock")).is_err(), "the socket file outlived its server: {err}");
+}
+
+/// The two ways to ask for a cold answer while a server is up. `--no-serve` is a flag on the
+/// command line; `REPOGRAPH_NO_SERVE` is what a benchmark or a wrapper sets, and nothing tested
+/// it anywhere. Both have to reach the same answer without the socket — set on the child rather
+/// than on this process, which the tests share and run in at once.
+#[test]
+fn no_serve_and_its_environment_variable_both_answer_here_under_a_live_server() {
+    let dir = repo_with_docs();
+    let mut server = serve(dir.path(), &["--every", "3600", "--idle", "60"]);
+    let (want, _) = ask_until_resident(dir.path(), &["штраф"]);
+    let (flagged, err) = ask(dir.path(), &["--no-serve"], &["штраф"]);
+    assert!(!err.contains("serve:"), "--no-serve went to the socket anyway: {err}");
+    assert_eq!(flagged, want);
+    let out = repograph().env("REPOGRAPH_NO_SERVE", "1").args(LEXICAL).arg("--repo").arg(dir.path())
+        .args(["ask", "штраф"]).output().unwrap();
+    let err = String::from_utf8_lossy(&out.stderr).into_owned();
+    assert!(out.status.success(), "{err}");
+    assert!(!err.contains("serve:"), "REPOGRAPH_NO_SERVE went to the socket anyway: {err}");
+    assert_eq!(String::from_utf8(out.stdout).unwrap(), want);
+    server.kill().unwrap();
+    let _ = server.wait();
+}
+
+/// The dense arm end to end: a store built with vectors, a fused answer in this process, and
+/// the same answer from a resident server — on the small model, in whatever cache the environment
+/// names. Ignored by default because it wants 470 MB on disk; the Windows CI job runs it with the
+/// cache restored between runs, and it is the one place the ONNX Runtime build the Windows
+/// binary links opens a session and embeds.
+#[test]
+#[ignore = "needs the small model in FASTEMBED_CACHE_DIR or ~/.cache/repograph/fastembed; the Windows CI job runs it"]
+fn a_fused_answer_is_resident_on_the_small_model() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(dir.path().join("docs")).unwrap();
+    std::fs::write(dir.path().join("docs/pay.md"), "**FR-PAY-1 · MUST · Штраф за отмену**\n\nШтраф списывается сам (INV-1).\n\n**INV-1 · MUST · Деньги не сгорают**\n\nОтмена не сжигает деньги.\n").unwrap();
+    std::fs::write(dir.path().join("docs/cal.md"), "**FR-CAL-1 · MUST · Перенос визита**\n\nПеренос не считается отменой.\n").unwrap();
+    std::fs::write(dir.path().join("repograph.toml"), "id_families = [\"FR-PAY\", \"FR-CAL\", \"INV\"]\nembed_model = \"intfloat/multilingual-e5-small\"\n").unwrap();
+    let out = repograph().arg("--repo").arg(dir.path()).arg("build").output().unwrap();
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(out.status.success(), "{err}");
+    assert!(!err.contains("dense: model unavailable"), "the model did not open: {err}");
+    assert!(std::fs::metadata(dir.path().join(".repograph/vectors.f32")).map(|m| m.len() > 0).unwrap_or(false), "no vectors were written");
+    let (want, err) = ask_in(FUSED, dir.path(), &["--no-serve"], &["штраф"]);
+    assert!(want.contains("FR-PAY-1"), "{want}");
+    assert!(!err.contains("dense: model unavailable"), "{err}");
+    let mut server = serve_in(FUSED, dir.path(), &["--every", "3600", "--idle", "120"]);
+    let start = Instant::now();
+    let (through, _) = loop {
+        let (out, err) = ask_in(FUSED, dir.path(), &[], &["штраф"]);
+        if err.contains("serve: answered by the resident process") { break (out, err); }
+        assert!(start.elapsed() < Duration::from_secs(120), "the fused server never answered over the socket: {err}");
+        std::thread::sleep(Duration::from_millis(250));
+    };
+    assert_eq!(through, want, "the resident fused answer is the process's fused answer");
+    // The number the whole exercise is for, on the record in the log: eleven resident asks, the
+    // median, against whatever the unix run of this test prints.
+    let mut times: Vec<u128> = (0..11).map(|_| { let t = Instant::now(); ask_in(FUSED, dir.path(), &[], &["штраф"]); t.elapsed().as_millis() }).collect();
+    times.sort();
+    eprintln!("resident fused ask, median of 11: {} ms", times[5]);
     server.kill().unwrap();
     let _ = server.wait();
 }

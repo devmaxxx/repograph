@@ -86,8 +86,7 @@ fn cache_dir() -> Result<PathBuf> {
     if let Some(dir) = std::env::var_os("FASTEMBED_CACHE_DIR") {
         return Ok(PathBuf::from(dir));
     }
-    let home = std::env::var_os("HOME").context("neither FASTEMBED_CACHE_DIR nor HOME is set")?;
-    Ok(PathBuf::from(home).join(".cache").join("repograph").join("fastembed"))
+    Ok(crate::index::cache_root()?.join("fastembed"))
 }
 
 struct Files { model: PathBuf, tokenizer: PathBuf, pad_token: String, pad_id: u32 }

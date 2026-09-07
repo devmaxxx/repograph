@@ -698,3 +698,18 @@ fn a_chained_call_and_super_yield_nothing() {
     let ex = repo.extract("a.ts", "import { get } from './lib';\nexport class A extends B {\n  run() { super.run(); get().then(); }\n}\n");
     assert_eq!(calls(&ex), vec![("sym:a.ts::A.run", "sym:lib.ts::get")]);
 }
+
+/// The same corpus from a CRLF checkout: tree-sitter counts `\r\n` as one newline, so rows agree,
+/// and every body reaches a node through `lines()`. Pinned rather than argued, because one
+/// future slice of raw text by byte offset would break it silently on a Windows checkout only.
+#[test]
+fn a_crlf_source_extracts_the_same_nodes_and_edges_as_its_lf_twin() {
+    let lf = "import { get } from './lib';\n\n/** Считает штраф.\n * FR-PAY-1\n */\n@Injectable()\nexport class Penalty {\n  private rate = 1;\n\n  charge(sum: number) {\n    return get(sum) * this.rate;\n  }\n}\n\nexport function total(x: number) {\n  return x;\n}\n";
+    let crlf = lf.replace('\n', "\r\n");
+    let repo = Repo::new(&[("lib.ts", "export function get(n: number) { return n; }\n")]);
+    let (a, b) = (repo.extract("a.ts", lf), repo.extract("a.ts", &crlf));
+    assert_eq!(ids(&a), ["file:a.ts", "sym:a.ts::Penalty", "sym:a.ts::Penalty.rate", "sym:a.ts::Penalty.charge", "deco:Injectable", "sym:a.ts::total"], "two extractions of nothing would agree too");
+    assert_eq!(a.nodes, b.nodes);
+    assert_eq!(a.edges, b.edges);
+    assert!(a.nodes.iter().all(|n| !n.body.contains('\r') && !n.label.contains('\r')));
+}

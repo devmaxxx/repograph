@@ -68,16 +68,60 @@ either be a literal secret or silently ignored.
 Then:
 
 ```bash
-pnpm add -D @devmaxxx/repograph    # npm: prebuilt binary for macOS arm64 and Linux x64
+pnpm add -D @devmaxxx/repograph    # npm: prebuilt binary for macOS arm64, Linux x64 and Windows x64
 cargo install --path .             # from source; Rust 1.98, pinned in rust-toolchain.toml
 ```
 
-The npm package is a launcher: the binary comes from `@devmaxxx/repograph-darwin-arm64` or
-`@devmaxxx/repograph-linux-x64`, pulled in as an optional dependency, so a lockfile written on
-one platform installs on the other. Both are under the same scope, so the one registry line above
-covers them. Tagged releases (`v*`) build both binaries as GitHub release assets and cut the npm
-packages from those same files (`.github/workflows/release.yml`, publishing with the repository's
-own `GITHUB_TOKEN`; `scripts/npm-pack.sh` does the same by hand).
+The npm package is a launcher: the binary comes from `@devmaxxx/repograph-darwin-arm64`,
+`@devmaxxx/repograph-linux-x64` or `@devmaxxx/repograph-win32-x64`, pulled in as an optional
+dependency, so a lockfile written on one platform installs on the others. All three are under the
+same scope, so the one registry line above covers them. Tagged releases (`v*`) build all three
+binaries as GitHub release assets (a tarball for the unix ones, a zip holding `repograph.exe` for
+Windows) and cut the npm packages from those same files (`.github/workflows/release.yml`,
+publishing with the repository's own `GITHUB_TOKEN`; `scripts/npm-pack.sh` does the same by
+hand).
+
+### On Windows
+
+The floor is Windows 10 1903, Windows 11 or Server 2022. The ONNX Runtime the Windows binary links
+is pyke's DirectML build, which imports DirectML and DirectX 12 at load; those libraries are inbox
+from 1903 on, and an older system fails at load rather than at a query. No GPU is used: no execution
+provider is registered, so inference runs on the CPU — a GPU-less runner builds a store with
+vectors and answers a fused question through a resident `serve`
+([run](https://github.com/devmaxxx/repograph/actions/runs/34064881516)).
+
+The binary is not signed. A zip fetched with a browser carries the mark of the web, Explorer's
+"Extract All" passes it to the exe, and double-clicking such a copy shows SmartScreen; running it
+from a terminal does not, and `Unblock-File .\repograph.exe` clears the mark for good. `gh run
+download`, `curl` and npm write no mark at all. Defender scans the model as it lands — 2.2 GB for
+`multilingual-e5-large` — and every `graph.json` and `vectors.f32` rewrite on close;
+`Add-MpPreference -ExclusionPath` on `%USERPROFILE%\.cache\repograph` and on the repository's
+`.repograph` is an optional speed-up, not a requirement. An unsigned Rust binary can also draw a
+heuristic false positive: restore it from Protection History and add an exclusion.
+
+PowerShell has no `&` job operator, so a resident server is started with
+`Start-Process repograph -ArgumentList 'serve','--idle','86400' -WindowStyle Hidden`; `--idle` ends
+it, and so does `Stop-Process -Name repograph`. Neither runs the exit that removes the socket file,
+which is what the next `serve` sweeps before binding. Stop the server before replacing the binary:
+`npm i -g`, `cargo install` and `Expand-Archive -Force` all fail with a sharing error against a
+running image.
+
+Keep the repository out of a OneDrive, Dropbox or Google Drive tree. `.repograph` is per machine
+and worth nothing to another one, every store write is a rename the client sees as a new file to
+upload, and `serve.sock` is a reparse point of a tag no sync client knows — what a given client
+does with one is not verified here. A rename over a store file another program holds open is
+waited out for about half a second before it is reported, which is what a scanner or an
+indexer costs.
+
+Console output is UTF-8. Windows Terminal renders it, and so does Claude Code's Bash tool; but
+PowerShell decodes a *piped or captured* native command's output with `[Console]::OutputEncoding`,
+which on a Russian-locale system is code page 866 unless the system UTF-8 option or a profile line
+sets it otherwise — `repograph ask … | Out-File` and `$x = repograph ask …` are where a Cyrillic
+answer turns to mojibake, not the screen. Environment paths must be Windows-form even when they
+are set inside Git Bash: `FASTEMBED_CACHE_DIR`, `XDG_CONFIG_HOME` and `REPOGRAPH_CONFIG` reach a
+native exe as written, and MSYS converts arguments, not arbitrary values. For a tree deeper than
+260 characters, git itself needs `core.longpaths=true` to check it out; repograph follows it from
+there.
 
 ## Use
 
@@ -181,7 +225,8 @@ cadence.
 
 Most of a fused `ask` is the process opening things it then throws away: the embedding model
 alone costs about 676 ms of it on the shipped default, 220 ms on the small model. `serve` opens
-them once and answers over a Unix socket:
+them once and answers over a Unix socket — on Windows too, where the same socket file has existed
+since Windows 10 1803 and is protected the way the repository directory is:
 
 ```bash
 repograph serve                  # .repograph/serve.sock, poll every 30 s, exit after 30 min idle
@@ -199,7 +244,16 @@ that quietly costs a cold process, or quietly gets a lexical answer, looks like 
 other arm pairing is not a mismatch — a server holding the model answers `--no-dense` lexically,
 which is what was asked for. A client never deletes the socket file — a refused connect is also
 what a live server with a full backlog gives — so only `serve` removes one, and only the one it
-bound itself. On a store neither `enrich` nor `embed` has moved under it, and a server of this
+bound itself: told from a replacement's by the socket file's device and inode on unix, and by
+NTFS's file reference number on Windows. A server killed outright removes nothing, and the next
+one removes the file it left before binding; until then that file at worst costs a client one
+refused connect.
+
+The socket path is limited to 108 bytes on Linux and Windows and 104 on macOS; the bytes are UTF-8,
+so a Cyrillic user name costs two a letter, and
+`C:\Users\Максим\OneDrive - <company>\Documents\projects\beauty-crm\.repograph\serve.sock` is about
+100 of the 107 a path may use. A repository deep enough to exceed it cannot start `serve`, and `ask` answers in its own process as it would with no
+server at all. On a store neither `enrich` nor `embed` has moved under it, and a server of this
 build serving the arm asked for, the answer is the same bytes either way; that is checked on all
 142 recorded and developer bench questions, in every pairing of the server's arm with the
 client's.
@@ -474,7 +528,12 @@ in full, not an empty config:
 Which model that program should run is a separate key, `enrich_model` and `rerank_model`, and it is
 substituted into the command's `{model}`. Changing model is then a word rather than a rewritten
 command line, and a command that names no `{model}` is run exactly as written, its model key unused.
-Nothing here assumes a vendor: the names are whatever the configured command understands.
+Nothing here assumes a vendor: the names are whatever the configured command understands. Both run
+under `sh -c`; on Windows that is Git for Windows' `sh`, taken from `PATH` when it is there and
+otherwise found beside `git`, at the bash Claude Code names in `CLAUDE_CODE_GIT_BASH_PATH`, or under
+Program Files, with Git's `usr\bin` put on the command's own `PATH` — nothing else in repograph
+needs a shell. Without Git for Windows, `enrich` and `ask --rerank` refuse with a line that says
+so, and everything else runs.
 
 Which model to run is usually a property of the machine — what is installed, what the account may
 spend — rather than of the corpus, so it can be set once for every repository. Three layers, each
@@ -484,7 +543,7 @@ beating the one below it:
 | --- | --- |
 | the run | `REPOGRAPH_ENRICH_MODEL`, `REPOGRAPH_RERANK_MODEL`, `REPOGRAPH_THREADS`, `REPOGRAPH_PRIORITY` |
 | the repository | `repograph.toml` |
-| the machine | `$REPOGRAPH_CONFIG`, else `$XDG_CONFIG_HOME/repograph/config.toml`, else `~/.config/repograph/config.toml` |
+| the machine | `$REPOGRAPH_CONFIG`, else `$XDG_CONFIG_HOME/repograph/config.toml`, else `~/.config/repograph/config.toml` (`%USERPROFILE%\.config\repograph\config.toml` on Windows) |
 
 ```toml
 # ~/.config/repograph/config.toml — every repository on this machine, unless it says otherwise
@@ -527,7 +586,9 @@ disk) run through `ort` directly: the tokenizer and the session open concurrentl
 level 1,
 which halves model-open time against the library default. The files are a one-time Hugging Face
 download cached under `FASTEMBED_CACHE_DIR` if that is set, else `~/.cache/repograph/fastembed`
-(the layout is the hub client's, so a cache populated by an earlier release is reused as is). Every
+(`%USERPROFILE%\.cache\repograph\fastembed` on Windows; the layout is the hub client's, so a
+cache populated by an earlier release is reused as is — where the client links each file into its
+snapshot, or on a Windows account without symlink rights moves it there). Every
 command that touches the dense stage — `build`, `update`, `enrich`, `embed`, `watch`, `ask`,
 `bench`, `dump`, `serve` — reuses the cache; there are no further network calls once it is
 populated. `--no-dense` skips the download and the embedding stage everywhere.

@@ -21,6 +21,17 @@ G9, G10 and G11 were raised on 2026-09-05 by the first run of the developer-ques
 carry a **Verdict** line from the six levers measured against them the same day
 ([results](2026-09-05-dev-cases-results.md)); G12, G13 and G14 were raised by those measurements.
 
+G15, G16 and G17 were raised on 2026-09-06 by
+[the residue, the seat and the register](2026-09-06-residue-seat-register-results.md), and none of
+them is a retrieval gap. Two
+are what the instruments did not report — a case that lost two of its three anchors and kept its
+verdict, and an `enrich` run that wrote nothing and exited 0 — and the third is how the population
+a constant is derived on was chosen.
+
+G18 was raised on 2026-09-07 by the Windows port's CI work rather than by any run. It is the one
+item here no number exposed and no number could: a `changes` defect the pinned fixture cannot
+trigger, because not one of that corpus's paths carries a byte outside ASCII.
+
 G19 onward are a second family, and the subject changes with them. They were raised by the two
 resource runs of 2026-09-07 — [what every command costs](2026-09-07-resource-usage-results.md) and
 [a rebuild measured against the person at the keyboard](2026-09-07-unnoticeable-results.md) — and
@@ -502,6 +513,43 @@ never written into `src/query.rs`; the tooling that measured it shipped, so the 
 from a derived constant rather than a guess —
 [the residue, the seat and the register](2026-09-06-residue-seat-register-results.md), rule S.
 
+**Status (2026-09-06, 0.5.0): the blocker is the seed budget, not the admission form.** Stage B
+seats one document — the code list's top-ranked, and only when its coverage against the passage
+list's clears `c_code` — so ten `where` anchors inside the code list's own top ten buy at most one
+seat, not ten.
+Four of the thirteen `where` file anchors are at code-list rank 1 (`$M/t3-g13.md`, `$M` being that
+campaign's scratch); two of those four clear 0.902 —
+`packages/domain/src/schedule/subjectAvailability.ts` at 1.62 and
+`packages/db/src/schema/salon/catalog.ts` at 0.93 — and those two are exactly the anchors the seat
+found. `apps/api/src/shared/db/database.service.ts` and
+`apps/api/src/shared/context/tenant-context.interceptor.ts` clear it at 0.95 and are never seated,
+because they sit at code-list rank 6 and 8 and the one seat goes to rank 1. No constant reaches
+them and no admission form could: what stands between the code list and the seven `where` cases
+still at zero is the five-seed budget of G10, which the seat has to compete in and which cost one
+recorded paraphrase to enter (S2). The next attempt moves seats or expansion — seating by agreement
+between lists, or naming a seed's already-ranked document neighbours on the expanded line, both
+G10's untried shape — not the admission. **Gate.** `where` above 0/9 in both arms with the recorded
+suite's counts unchanged in both, which is the clause the seat failed; a wider seed budget is
+allowed to be the lever and pays ADR-001's price for more seeds on its own terms. Not tried in that
+shape.
+
+**Status (2026-09-06, 0.5.0): the charged denominator moved the table, not its decisions.**
+Regenerated on `bc-a1` under rule R's `attainable` and pasted whole in `$M/t3-g13.md`, the 27 rows
+keep their code-list ranks and their `ratio`, `peak` and `z` columns unchanged, while the
+`coverage` column falls on 19 of them, rises on 5 and holds on 3; the rows clearing the document
+constant 0.761 fall 14 → 8. That is correct by the form's own logic — a Russian prose query's terms
+are mostly absent from a code index, and the charged denominator charges that index for them
+instead of dropping them — and it is why `c_code` was derived under the charged form rather than
+inherited. At 0.902 the five rows above the cut are the same five as before, and two more print
+0.90 in both columns, which two decimals cannot separate from the constant. What is open is whether
+a code list should be scored against a denominator of its own: the document constant and the code
+constant now sit 0.141 apart on the same form, and nothing measures whether that distance is the
+two query populations differing or the two indices' vocabularies. **Gate.** A code list scored
+against the idf its own index could attain, its constant derived on the mixed set before either
+suite is opened (G17), reproduces the seat's `where` 0/9 → 2/9 and the code held-out 54 → 122 and
+40 → 115, and either leaves the S2 paraphrase case standing or names the case it costs instead. Not
+measured.
+
 ## G14 · The enrichment prompt does not know the document's kind
 
 **Raised (2026-09-05)** by D1, the strongest paraphrase lever this campaign measured and one it did
@@ -587,7 +635,197 @@ the asker's voice. The prompt is reverted and the store kept. What remains untri
 two generators' stores, which read paraphrase 20/30 and `rule` 7/9 with no rule in front of it —
 [the residue, the seat and the register](2026-09-06-residue-seat-register-results.md), rule G.
 
+**Lever (2026-09-06), named by the failure above.** Adding a register is not splitting a budget,
+and the prompt that was measured split one: twelve questions became six in the asker's voice and
+six in the entry's, and `bc-r1` carries 24,816 questions at a median of 13 a node against the
+fixture's 26,117 at 13 (`$M/t6-survey.txt`) — the same twelve-question budget a node, divided
+rather than enlarged. The `rule`
+register share read the cost, 0.211 → 0.147 (`$M/t6-register-share.txt`). The instruction the next
+attempt gives is six *more* questions, not six *instead of* six: the twelve the shipped prompt asks
+for, unchanged, plus a second block in the asker's voice — a larger store on the same generator,
+and a larger bill. **Gate.** Rule G's six clauses as written, plus one this attempt commits before
+it runs: the `rule` register share at or above the fixture's 0.211 in `$M/t6-register-share.txt`'s
+form, since a lever whose own mechanism moved the wrong way is answered before a suite is opened.
+Not measured — the store it would build does not exist. The union of two generators' stores stands
+where it stood: paraphrase 20/30 and `rule` 7/9, the only reading in this line that has moved
+anything upward, two stores rather than one prompt, and still no rule in front of it. Pre-registering
+it means naming its held-out set first, because the fixture's own favours any store that holds the
+colloquial questions.
+
+## G15 · An answer lost two of its three anchors and stayed HIT — `multi` 3/3 → 1/3
+
+**Raised (2026-09-06)** by rule R's own per-case reading, which that rule allowed for and did not
+judge. Under the shipped charged denominator seventeen cases changed the answer they return with no
+case changing its verdict (`$M/t3-case-token-moves-all.txt`). One of them got thinner: the
+developer case `FR-APP-40+FR-APP-47+FR-AI-09` (`multi`) reads `HIT 3/3` before and `HIT 1/3` after
+in both arms, and it is the only case in either suite in either arm whose completeness moved at all
+(`$M/base-bench-{rec,dev}-{dense,lexical}-full.txt` against the `t3-` eight). In the lexical arm
+all three anchors were seeds and `FR-APP-40` and `FR-AI-09` left them; in the dense arm `FR-APP-40` left the
+seeds and `FR-AI-09` left the expanded line, so the answer names one anchor of three in both
+(`ask` in `$M/base-dev-{dense,lexical}.json` against `$M/t2-dev-{dense,lexical}.json`).
+`FR-APP-47` is still seated and one anchor reached is a hit (`src/bench.rs:85`), so the case scores
+exactly what it scored before.
+
+**What the suite prints and what it grades.** The per-case line already carries completeness —
+`{reached}/{want}` at `src/bench.rs:336`, which is where the `3/3` and the `1/3` above were read.
+Nothing above that line reads it: the summary counts cases (`multi 10/12`), every floor is a count
+of cases, and `bench`'s exit code is those floors. Rule R's clause 6 required the four recorded
+arms' counts to be identical and they were; no clause any campaign has written so far has anything
+to say about an answer that keeps its verdict and loses two thirds of its content.
+
+**The same seventeen cases moved the other way too.** In the lexical arm `FR-PAY-110`, `FR-PAY-28`
+and `FR-SVC-50` each moved from seed 2 to seed 1, displacing an id the case does not expect
+(`FR-CAL-139`, `FR-CAL-55`, `FR-CRM-09`), and `FR-TOOL-35` moved from seed 4 to seed 1
+(`$M/base-{rec,dev}-lexical.json` against `$M/t2-{rec,dev}-lexical.json`). The instrument is blind
+to those gains for the reason it is blind to the loss: the anchor was reached before and is reached
+now, and a count of cases cannot say at what rank or how completely.
+
+**This is G10's shape, not a retrieval one.** Nothing here is a document that could not be found.
+`FR-APP-40` and `FR-AI-09` are ranked; five seeds and a one-hop expansion are what they no longer
+fit into, which is the constraint G10 named and priced. What this gap adds is that the suite cannot
+report it — so a lever that trades an answer's completeness for its coverage reads as free.
+
+**Lever.** Grade what the case line already prints: `bench`'s summary carries a reached-over-wanted
+anchor total per kind beside the case count, in both suites and both arms, and a campaign's rule
+can then require it not to move the way it requires the counts not to move. Whether that total
+becomes a floor is for the first reading that has a baseline to set one from, not for this gap — a
+floor set on one campaign's numbers is the mistake ADR-001 exists to record.
+
+**Gate.** The four arms re-run at `868f4c1` reproduce every case count and p90 exactly and record
+the per-kind anchor totals as the baseline, the change being measurement only and moving no floor;
+and the next campaign's rule names those totals among the counts that must hold. Not measured — the
+two readings above were taken case by case out of two `-full` files, not from anything `bench`
+reports.
+
+## G16 · `enrich` reported 167 batches, 0 failed, and no questions
+
+**Raised (2026-09-06)** by rule G's first attempt, which spent nothing and was caught by a person
+reading a log. The plan's `enrich_command` carried `--no-session-persistence`; the installed CLI
+(2.0.35) has no such option, printed an unknown-option error to stderr and exited without reading
+stdin. `enrich` reported `0 nodes written, 0 dropped, 1996 still without questions, 167 batches
+(0 failed) in 33s`, then `dense: embedded 0 rows in 0.0s`, and exited 0, leaving a 0-byte answer
+file and 5,285,406 tee'd prompt bytes that never reached a model (`$M/t6-enrich-attempt1.log`,
+`$M/task6.txt`, `$M/t6-cost.txt`).
+
+**Cause, and it is three places.** `run_command` does bail on a non-zero status
+(`src/enrich.rs:266`), but the configured command is a shell pipeline and `sh -c` returns the
+status of its last stage — here a `tee` — so the generator's failure never reaches that check. The
+empty answer then parses to no questions for any node in the batch, which is the *skipped by the
+model* path: the batch is retried once and then counted as done (`src/enrich.rs:310`). `failed`
+counts only `run_command` errors, which is why the report says 0 failed of 167. And `enrich` prints
+`left` and returns `embed_all` (`src/main.rs:374`), so a run that wrote nothing exits 0 like a run
+that wrote everything. The unit tests state the current behaviour rather than miss it:
+`nodes_a_model_answer_skipped_are_asked_once_more` asserts `(generated, left) == (0, 2)` on an
+answer that skips every node, and asserts nothing about `failed`.
+
+**What it cost and what it would have cost.** Nothing, three times over: the failure was total, it
+was at the start of a fresh copy, and the operator read the log before the next step. None of the
+three places depends on any of that. A generator that dies partway — a rate limit, a wrapper that
+exits, a flag rejected only for the batches carrying a longer prompt — writes a partially enriched
+store, reports it as a completed run with 0 failed, exits 0, and hands the campaign a store it will
+grade against the fixture as though the prompt were the only variable between them. Rule G's whole
+verdict rests on `bc-r1` being fully enriched; the one line of output that would have said
+otherwise is `left`, which is printed and acted on by nobody.
+
+**Lever.** A generator that exits non-zero or returns nothing is a failure, not non-coverage. Run
+the configured command under a shell that propagates a pipeline's failure; count a batch whose
+answer parses to nothing for every node as failed once its retry has also come back empty; and let
+`enrich` exit non-zero when it was asked to write nodes and `left` is above zero. The middle one is
+load-bearing — a pipeline's exit status is the operator's to get right, an empty answer is nobody's
+to mistake for one.
+
+**Gate.** Two stub commands in `src/enrich.rs`'s own test module: one that fails mid-pipeline
+(`sh -c 'false | cat'` exits 0 today), one that exits 0 with empty stdout, each counted as a failed
+batch and each making `enrich` exit non-zero; `nodes_a_model_answer_skipped_are_asked_once_more`
+keeps its retry assertion and gains a `failed` one. The fixture's four arms at `868f4c1` are
+unchanged, the change reaching no path `bench` reads. Not written.
+
+**The same run's price is an estimate checked against an estimate.** The register enrichment is
+recorded at ≈ $4.16 — tee'd bytes 2,647,761 prompt and 2,795,432 output, at bytes ÷ 4 and Haiku 4.5
+list rates (`$M/t6-bytes.txt`, `$M/t6-cost.txt`) — against the ≈ $2.50 the plan predicted, which is
+D1's per-corpus haiku figure carried forward and computed the same way. The two sit 1.66× apart on
+the same generator over the same 1,996 nodes, and nothing in the record says whether the volume
+moved (24,816 questions against the fixture's 26,117, `$M/t6-survey.txt`) or the bytes ÷ 4
+conversion is wrong, because no run in this line has recorded the generator's own reported token
+counts. G14's ≈ $13.62 for the stronger generator's reading is the same character-derived estimate
+of a run nobody metered: the multiple a reader takes from "roughly five times the token cost" is
+5.4× against $2.50 and 3.3× against $4.16, and no measurement separates them. **Lever.** `enrich`
+records what the generator reports — its usage line, where the command's output format offers one —
+so a price is a measurement rather than a division. **Gate.** The next enrichment writes a
+per-batch token record and its cost paragraph cites that instead of `wc -c`, with the bytes ÷ 4
+figure kept beside it for one run so the two methods are compared once. Not measured.
+
+## G17 · The constant is derived on a set the same plan invented
+
+**Raised (2026-09-06)** by rule S, whose order of operations held and which leaves this standing
+anyway. `c_code = 0.902` is the crossover of an 800-question mixed held-out set — `bc-a1`'s 400
+document questions, byte for byte the fixture's, and 400 of its 3,463 code entries — taken at
+15:23:29, ten seconds before `score` opened a suite, and written to a file first
+(`$M/t4-crossover-code.txt`, `$M/t4-constant-code.txt`). The mix is the one judgement in that
+procedure, and
+[the design note](../superpowers/specs/2026-09-06-residue-seat-register-design.md) fixes it at
+equal halves before any dump was taken, saying so and saying it does not know the true share: the
+developer suite is 24 file-anchored questions of 60 and the recorded suite 12 of 82.
+
+**What is weak, and it is not the order.** The document held-out set carries no such judgement —
+`bench/heldout.py` draws it from the store's own questions at a recorded seed. The mixed set is the
+first population in this line that a plan authored, at a share that plan chose, to derive the
+constant judging that plan's own lever. Pre-registration answers *when* the constant was fixed and
+says nothing about *what it was fixed on*. Under equal halves the split separates well — above the
+cut the code list holds the answer in its top five 40% of the time against the passage list's 10%,
+below it 2% against 25% (`$M/t4-crossover-code.txt`) — and at the suites' own file-anchored share,
+roughly a third, the two populations are weighted differently and the crossover moves by an amount
+nothing measured.
+
+**Lever.** Derive the constant at three mixes named before any dump is read — the suites' observed
+file-anchored share, equal halves, and the code set's share of the store's own eligible nodes
+(3,463 code against 1,996 document) — and report the clause outcomes at each. A verdict that is the
+same at all three is a property of the query; one that moves is a property of a number the plan
+chose, and the plan then says which mix it takes and why, in front of the suites rather than after
+them.
+
+**Gate.** The next code-seat attempt writes `c_code` at three pre-registered mixes to a file before
+`score` runs, and its verdict paragraph reads every clause at each. If S2 — recorded lexical
+paraphrase 15/30 → 14/30 — fails at all three, the mix is not why the seat did not ship and this
+gap closes on the record; if the verdict moves, the seat was decided by a constant's population.
+Not measured; the sensitivity was never read, on this constant or on `QUESTIONS_GATE`'s 0.761,
+whose own second population G8 records as never built.
+
 ---
+
+## G18 · A path with one non-ASCII byte makes its whole file invisible to `changes`
+
+**Raised (2026-09-07)** by the Windows port's CI work, not by a run. `core.quotepath` is on by
+default, so `git diff` quotes any path outside ASCII: a Russian-named file's header comes back as
+`+++ "b/docs/\320\250\321\202\321\200\320\260\321\204.ts"`, with the quote *before* the `b/`.
+`parse` takes the new-side name as `p.strip_prefix("b/")` (`src/changes.rs:19`), which is `None` on
+that line, and the `let Some(f) = &file else { continue }` three lines down then drops every hunk
+in the file. Reproduced on a scratch repository here, both symptoms below.
+
+**Two symptoms, one cause.** A tracked file is dropped in silence, and Task 2's fallback cannot
+save it: `touched` reports `file:<name>` for a file the graph never indexed
+(`src/changes.rs:51`), but that needs a hunk, and no hunk was ever built. This is G1's silence
+returning through a door Task 2 did not close. An untracked file arrives the other way —
+`git ls-files --others` quotes too, so the escaped name reaches `hunks_from_git`
+(`src/changes.rs:154`) intact and is printed as `file:"docs/\320\235\320\276\320\262…"`: visible,
+matchable against nothing, and wrong on the screen.
+
+**What it cost, and why that is checked rather than assumed.** Nothing measurable. `git ls-files`
+on the pinned fixture `beauty-crm-502e8a6d` returns **0** paths with a byte outside ASCII, so no
+`changes` number in this file — G1's 27/38, Task 2's 498/498 — was ever computed over a path that
+could trigger it. That corpus is Russian in its content and ASCII in its paths. A corpus that is
+not, or a single branch that adds one such file, loses that file's symbols from a blast radius
+with no line saying so — which is the failure `changes` exists in order not to have.
+
+**Lever.** Ask git not to quote: `-c core.quotepath=false` on the two invocations `git()` makes
+(`src/changes.rs:144`), which puts UTF-8 on the wire and leaves every ASCII path byte-identical. A
+parser that unescapes the quoted form instead is the same behaviour at more code, and would still
+have to decide what a lone `\377` means.
+
+**Gate.** Two tests in `changes.rs`'s own module: a diff whose header is quoted, asserting the hunk
+is found under the unescaped name, and an untracked quoted name from `ls-files` reported as itself.
+Then the fixture, which must read what it reads today byte for byte, since none of its paths
+changes form. Not written.
 
 ## G19 · The progress line's cadence is a count of rows — first line at 102.4 s against a 60 s bar
 
@@ -672,6 +910,12 @@ of the process's CPU time in the background band, 1.71 GHz against 3.49, the per
 from +15.7% to +2.8%, the wake p99 from 2,469 µs to 564 µs. Windows is honest by construction:
 nothing is implemented and one line on stderr tells the user the setting had no effect. The other
 two rows are arguments.
+
+The merge with `main` sharpens the Windows half rather than the reasoning: `cfd4c40` ships a
+Windows binary, so the platform where the default setting does nothing and says so on every writer
+run is now one the project releases to, not one it declines to claim. `SetPriorityClass` with
+`PROCESS_MODE_BACKGROUND_BEGIN` is the call, and it also throttles that process's I/O, which is the
+half `nice` alone never gives Linux.
 
 **Cause.** The band is one system call, and the call means something different under each
 scheduler. The Intel row is the one that matters most, because the same macOS binary runs there:
@@ -883,16 +1127,20 @@ bytes; a `SIGTERM`ed `serve` leaves no `serve.sock`, or the README says why one 
 | — | ~~**G12** the gate compares raw BM25 scores across two indices~~ | closed 2026-09-06 (0.5.0) — the admission compares two coverages computed inside their own index. Lexical paraphrase 14/30 → 15/30, both developer totals up, held-out +1 and +3 at p = 1.0000 and p = 0.4531, replay and binary agreeing on all 1,084 queries |
 | 4 | **G14** the prompt does not know the document's kind | measured three times, not closed (2026-09-06, 0.5.0) — the prompt-shape diagnostic read 1 of 4 and 2 of 4 against a bar of 3; the retrieval reading that followed found the cause, register rather than shape; and the successor lever, one generator asked for both registers, was run on the default enricher under a rule committed first and failed four of six clauses — `rule` 5/9 → 2/9 in both arms, paraphrase 15/30 → 13/30, a broken dense floor, and the register share it rests on falling 0.211 → 0.147. L4 as framed is retired. The prompt is reverted; the only reading that ever moved these numbers upward is the union of two generators' stores, which has no rule in front of it. ≈ $4.16 spent once |
 | 2 | **G13** ten `where` anchors ranked and gated out | measured, not closed (2026-09-06, 0.5.0) — stage B was replayed on the code-enriched copy at a constant of the code list's own, `c_code = 0.902`, derived on 800 mixed held-out questions before either suite was opened. The seat moves `where` 0/9 → 2/9 in both arms and the code held-out set 54 → 122 and 40 → 115 at p = 0.0000, and it clears A4's clause — five document questions lost per arm at p = 0.0625 against A4's six at p = 0.031. It fails on the recorded suite instead: lexical paraphrase 15/30 → 14/30, through the fifth seed the code seed displaces. `CODE_SEAT` unwritten, the price now known |
+| 3 | **G16** `enrich` reads a failed generator as an answer | raised 2026-09-06 — the first register run reported `0 nodes written … 1996 still without questions, 167 batches (0 failed)` and exited 0 after the CLI rejected an unknown flag and never read stdin. Three places let it: `sh -c` returns a pipeline's last stage, an empty answer is the *skipped by the model* path, and `left` is printed and acted on by nobody. It cost nothing because the failure was total and the operator read the log; a generator dying partway would have been graded as a completed run. Here before G14 because G14's next attempt spends money through this path. The same section carries the run's price, ≈ $4.16 by bytes ÷ 4 against ≈ $2.50 predicted the same way, with no metered token count anywhere in the line |
+| 5 | **G15** the grade cannot see an answer getting thinner | raised 2026-09-06 — one developer case reads `HIT 3/3` → `HIT 1/3` in both arms under a change every clause of rule R called identical, and it is the only case in either suite in either arm that moved its completeness. `src/bench.rs:336` prints the number; the summary, the floors and the exit code are counts of cases and read none of it. The same seventeen cases moved upward too — three anchors from seed 2 to seed 1 and one from seed 4 — and the instrument is blind to that as well. G10's constraint, measured through a gap in the instrument |
 | — | ~~the lexical arm's 49 ms~~ | closed 2026-09-05 (0.5.0) — the perf results left this number here and nowhere else. The BM25 indexes are built once by a resident context and kept: socket lexical 55.0 → 6.8 ms, median of 33 against a base spread of 0.9 ms, the design note's 30 ms target met; Rule 1 sixteen byte-identical verdicts and Rule 2 142/142 in four pairings |
 | — | ~~**G9** code is unreachable from prose~~ | measured 2026-09-05 — A1 to A4 each rejected by the rule; the code questions ship into an index of their own for the `ask --rerank` pool, `where` stays 0/9 in the plain fusion, and G12 is what would move it |
 | — | ~~**G10** five seeds over three lists~~ | measured 2026-09-05 — A4 prices one seat for a fourth list at 6 held-out questions in each arm, none gained, p = 0.031; closed as measured, not as fixed |
 | — | ~~**G11** the embedder for Russian paraphrase~~ | shipped 2026-09-05 as a store option — e5-large reads paraphrase 22/30 and held-out 103 → 119, at 0.8 s an `ask` and a 2.1 GB download; the default followed at `35357c1`, and a store with no recorded model still reads as the small one |
 | — | ~~**G5** rank + MRR~~ | closed by Task 1 (2026-09-04) — every retrieval row carries `rank`, the summary carries `mrr`, and the run reads 0.635; the 2026-09-03 rows cannot be rescored |
-| 6 | **G1** unparsed files get a file node | the file half is closed by Task 2 (2026-09-04) against a `code_files` denominator; the symbol half is 57 Kotlin declarations and waits on 0.6.0's extractor |
+| 6 | **G18** a non-ASCII path drops its file from `changes` | raised 2026-09-07 by the Windows port's CI work, latent — `core.quotepath` is on by default, so `parse` reads no name from a quoted `+++` line and drops every hunk in that file, with Task 2's file-id fallback unreachable because no hunk exists. The pinned fixture has 0 such paths, so no recorded number moved on it. Above G1 because it is one argument on two `git` calls and it restores files that vanish today with nothing printed |
+| 7 | **G1** unparsed files get a file node | the file half is closed by Task 2 (2026-09-04) against a `code_files` denominator; the symbol half is 57 Kotlin declarations and waits on 0.6.0's extractor |
 | — | ~~**G3** the three impact diagnostics~~ | closed by Tasks 3 and 4 (2026-09-04) — 123/123 files over 16 targets, mean recall 1.0 |
 | — | ~~**G4** grow the blast set~~ | closed by Task 5 (2026-09-04) — `blast.jsonl` is 32 cases and the per-suite decision rule is written down before the changes judged on it |
-| 7 | **G2** fourteen paraphrases a neighbour away | the lever this row named is measured and rejected (2026-09-04): `--rerank-local` reads 17/30 against a control of 15/30, at 17.9 s a question; the gap stays open with nothing cheaper left to try |
-| 8 | **G6** a case file per new corpus | the `impact` third is a written baseline (2026-09-04); `trace` and `changes` ship with the 0.6.0 languages, not after them |
+| 8 | **G2** fourteen paraphrases a neighbour away | the lever this row named is measured and rejected (2026-09-04): `--rerank-local` reads 17/30 against a control of 15/30, at 17.9 s a question; the gap stays open with nothing cheaper left to try |
+| 9 | **G6** a case file per new corpus | the `impact` third is a written baseline (2026-09-04); `trace` and `changes` ship with the 0.6.0 languages, not after them |
+| 10 | **G17** the constant's derivation set is the plan's own | raised 2026-09-06 — `c_code = 0.902` was taken on an 800-question mixed set fixed at equal halves in the design note before any dump, by the same plan that proposed the seat it judges. The order of operations held and is not what is weak; what is unmeasured is whether the verdict moves with the mix. Last because no verdict is known to have turned on it, and first among method gaps if the seat is retried |
 
 ## Suggested order — the cost family
 

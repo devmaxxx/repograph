@@ -23,7 +23,7 @@ pub struct Config {
     /// What goes in `rerank_command`'s `{model}`. `REPOGRAPH_RERANK_MODEL` overrides it.
     pub rerank_model: String,
     /// Directory holding `model.onnx` and `tokenizer.json` for `ask --rerank-local`; empty
-    /// means `$HOME/.cache/repograph/reranker`.
+    /// means `~/.cache/repograph/reranker`.
     pub reranker_dir: String,
     /// Hub id of the model the vectors are written with. `build`, `update`, `enrich`, `embed`
     /// and `watch` embed with it and rewrite the index whole when the store holds another
@@ -122,7 +122,7 @@ struct Machine {
 }
 
 /// `$REPOGRAPH_CONFIG`, else `$XDG_CONFIG_HOME/repograph/config.toml`, else
-/// `$HOME/.config/repograph/config.toml`. `None` when the environment names no home at all, which
+/// `~/.config/repograph/config.toml`. `None` when the environment names no home at all, which
 /// is a machine with no global settings rather than an error.
 fn machine_path() -> Option<std::path::PathBuf> {
     let named = |k: &str| std::env::var(k).ok().filter(|v| !v.is_empty());
@@ -131,7 +131,7 @@ fn machine_path() -> Option<std::path::PathBuf> {
     }
     let base = match named("XDG_CONFIG_HOME") {
         Some(x) => std::path::PathBuf::from(x),
-        None => Path::new(&named("HOME")?).join(".config"),
+        None => std::env::home_dir()?.join(".config"),
     };
     Some(base.join("repograph").join("config.toml"))
 }

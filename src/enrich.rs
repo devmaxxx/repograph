@@ -248,8 +248,48 @@ fn split_joined(line: &str) -> Vec<String> {
     }
 }
 
+/// The shell the configured command runs under: `sh`, on every platform. The commands in
+/// `repograph.toml` are written in its syntax — a `VAR=value` prefix, `""` for an empty argument —
+/// and a `cmd /C` or PowerShell rendering on Windows would make one key mean two things.
+#[cfg(unix)]
+fn shell() -> Result<std::process::Command> { Ok(std::process::Command::new("sh")) }
+
+/// The same `sh`, which on Windows is Git for Windows'. Its default install puts `git` on PATH and
+/// not `sh` — the Unix tools are an opt-in — so a `sh` PATH does not resolve is looked for beside
+/// `git`, at the bash Claude Code names for its own Bash tool, and where the installer puts it;
+/// found that way, Git's `usr\bin` goes on the child's PATH too, since that is where `awk` and the
+/// rest of what a command may call live.
+#[cfg(windows)]
+fn shell() -> Result<std::process::Command> {
+    use std::path::PathBuf;
+    let path_dirs: Vec<PathBuf> = std::env::var_os("PATH").map(|p| std::env::split_paths(&p).collect()).unwrap_or_default();
+    if path_dirs.iter().any(|d| d.join("sh.exe").is_file()) { return Ok(std::process::Command::new("sh")); }
+    let bash = std::env::var_os("CLAUDE_CODE_GIT_BASH_PATH").map(PathBuf::from);
+    let program_dirs: Vec<PathBuf> = [("ProgramFiles", ""), ("ProgramW6432", ""), ("LOCALAPPDATA", "Programs")].iter()
+        .filter_map(|(k, sub)| std::env::var_os(k).map(|v| PathBuf::from(v).join(sub))).collect();
+    let sh = git_sh(&path_dirs, bash.as_deref(), &program_dirs)
+        .context("`sh` is not on PATH and no Git for Windows was found beside `git` or under Program Files: enrich and rerank run their command under sh, which Git for Windows provides")?;
+    let mut cmd = std::process::Command::new(&sh);
+    let root = sh.parent().and_then(std::path::Path::parent).map(std::path::Path::to_path_buf).unwrap_or_default();
+    cmd.env("PATH", std::env::join_paths(std::iter::once(root.join("usr").join("bin")).chain(path_dirs))?);
+    Ok(cmd)
+}
+
+/// `<Git>\bin\sh.exe` for the first `<Git>` that has one: the parent or grandparent of a directory
+/// on `path_dirs` holding `git.exe` (`cmd\` and `mingw64\bin\` are both one install), the
+/// grandparent of `bash_hint`, then `<dir>\Git` for each of `program_dirs`.
+#[cfg(windows)]
+fn git_sh(path_dirs: &[std::path::PathBuf], bash_hint: Option<&std::path::Path>, program_dirs: &[std::path::PathBuf]) -> Option<std::path::PathBuf> {
+    let sh_in = |root: &std::path::Path| { let p = root.join("bin").join("sh.exe"); p.is_file().then_some(p) };
+    let beside_git = path_dirs.iter().filter(|d| d.join("git.exe").is_file())
+        .flat_map(|d| d.ancestors().skip(1).take(2).map(std::path::Path::to_path_buf).collect::<Vec<_>>());
+    let named = bash_hint.and_then(|b| b.parent()?.parent()).map(std::path::Path::to_path_buf);
+    let installed = program_dirs.iter().map(|d| d.join("Git"));
+    beside_git.chain(named).chain(installed).find_map(|root| sh_in(&root))
+}
+
 pub fn run_command(command: &str, input: &str) -> Result<String> {
-    let mut child = std::process::Command::new("sh").arg("-c").arg(command)
+    let mut child = shell()?.arg("-c").arg(command)
         .stdin(std::process::Stdio::piped()).stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::piped())
         .spawn().with_context(|| format!("spawn `{command}`"))?;
     // A command that answers without reading its whole prompt closes the pipe early — `claude -p`
@@ -599,5 +639,26 @@ mod tests {
         let r = run(&store, &graph(), Questions::default(), cmd, 0, 0, Scope::default()).unwrap();
         assert_eq!(r.generated, 2);
         assert!(Questions::load(&store).unwrap().get("FR-PAY-22").len() == 1);
+    }
+
+    /// The shell a default Git for Windows install leaves findable: `git` on PATH under `cmd\`,
+    /// `sh` two directories over. A synthetic tree and a synthetic PATH, so the test is about the
+    /// lookup and not about what this machine has installed.
+    #[cfg(windows)]
+    #[test]
+    fn a_shell_that_is_not_on_path_is_found_beside_git_and_then_under_program_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("Git");
+        for f in ["cmd\\git.exe", "bin\\sh.exe", "usr\\bin\\awk.exe"] {
+            let p = root.join(f);
+            std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+            std::fs::write(&p, b"").unwrap();
+        }
+        let elsewhere = dir.path().join("elsewhere");
+        std::fs::create_dir_all(&elsewhere).unwrap();
+        assert_eq!(git_sh(&[elsewhere.clone(), root.join("cmd")], None, &[]), Some(root.join("bin").join("sh.exe")), "beside git");
+        assert_eq!(git_sh(std::slice::from_ref(&elsewhere), None, &[dir.path().to_path_buf()]), Some(root.join("bin").join("sh.exe")), "under a program directory");
+        assert_eq!(git_sh(std::slice::from_ref(&elsewhere), Some(&root.join("bin").join("bash.exe")), &[]), Some(root.join("bin").join("sh.exe")), "from the bash Claude Code names");
+        assert_eq!(git_sh(&[elsewhere], None, &[]), None, "nothing to find");
     }
 }

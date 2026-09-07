@@ -30,7 +30,8 @@
   },
   "optionalDependencies": {
     "@devmaxxx/repograph-darwin-arm64": "0.5.0",
-    "@devmaxxx/repograph-linux-x64": "0.5.0"
+    "@devmaxxx/repograph-linux-x64": "0.5.0",
+    "@devmaxxx/repograph-win32-x64": "0.5.0"
   },
   "publishConfig": {
     "registry": "https://npm.pkg.github.com"
