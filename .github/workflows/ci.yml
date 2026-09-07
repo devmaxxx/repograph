@@ -1,14 +1,253 @@
 name: ci
 on: [push, pull_request]
 jobs:
+  # One job definition, three platforms. Everything a user does around the binary — install it,
+  # start it, ask it under a path that is not ASCII, let Claude Code's shell find `claude` — is
+  # the same question on all three, and asking it on one was how the Windows answers stayed
+  # unknown until a Windows job existed. What is genuinely per-platform is gated by `if` and
+  # named for what only that platform can be asked.
   test:
-    runs-on: ubuntu-latest
+    strategy:
+      # A red on one platform must not cancel the other two: which platforms a change breaks is
+      # the whole answer, and a cancelled job reports nothing.
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-latest, exe: target/debug/repograph, pack: linux-x64 }
+          - { os: macos-14, exe: target/debug/repograph, pack: darwin-arm64 }
+          - { os: windows-latest, exe: target/debug/repograph.exe, pack: win32-x64 }
+    runs-on: ${{ matrix.os }}
     steps:
+      # The repository is LF throughout and the tests compare bytes; a checkout the runner's
+      # git had converted to CRLF would be a different corpus. A no-op off Windows, written for
+      # every platform because the setting is global and the reason is not platform-specific.
+      - run: git config --global core.autocrlf false
       - uses: actions/checkout@v4
+      # The small model, kept between runs: the dense arm is opened here and nowhere else in CI,
+      # on runners with no GPU. Outside the workspace on purpose — `changes` below reads the
+      # checkout's untracked files, and 470 MB of model is not something a diff changed. Written
+      # here rather than in the job's `env`, which may not read the `runner` context at all.
+      - shell: pwsh
+        run: Add-Content -Path $env:GITHUB_ENV -Value "FASTEMBED_CACHE_DIR=$env:RUNNER_TEMP/model-cache"
       - uses: dtolnay/rust-toolchain@1.98.0
         with: { components: clippy }
       - run: cargo clippy --all-targets -- -D warnings
+      # Every integration test too: the socket, the day a user has with the binary under a
+      # Cyrillic path, and the transport seam each platform brings its own half of.
       - run: cargo test
+
+      # A default Git for Windows install puts `git` on PATH and not `sh` — the Unix tools are an
+      # opt-in — so `enrich` and `ask --rerank` look for one. Route 1: Git's shell directories
+      # come off PATH, `git` itself stays, and the shell is found beside it. Windows only: unix
+      # has `sh` on PATH by construction, and there is no install without it to imitate.
+      - if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $env:PATH = ($env:PATH -split ';' | Where-Object { $_ -notmatch '\\Git\\(usr\\)?bin\\?$' }) -join ';'
+          if (Get-Command sh -ErrorAction SilentlyContinue) { throw "sh is still on PATH: $((Get-Command sh).Source)" }
+          if (-not (Get-Command git -ErrorAction SilentlyContinue)) { throw "git left PATH too; the pattern is wrong" }
+          cargo test -- enrich:: rerank::
+          if ($LASTEXITCODE -ne 0) { throw "route 1, the shell beside git: $LASTEXITCODE" }
+
+      # Route 1 answers first on any box with Git on PATH, so the other two have never run on a
+      # runner. Here Git leaves PATH entirely — a portable Git, or Claude Code's own bash and
+      # nothing else — and each remaining route is taken alone, the last of them to nowhere.
+      - if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Continue'
+          $PSNativeCommandUseErrorActionPreference = $false
+          # The resolver's own two questions, asked the way it asks them — a file at
+          # `<dir>\sh.exe` or `<dir>\git.exe` — rather than through `Get-Command`, which also
+          # reads aliases and PATHEXT and would answer a slightly different question.
+          function OnPath($exe) { ($env:PATH -split ';' | Where-Object { $_ -and (Test-Path (Join-Path $_ $exe)) }) -join ', ' }
+          function Fail($m) { Write-Host "::error::$m"; exit 1 }
+          $env:PATH = ($env:PATH -split ';' | Where-Object { $_ -notmatch '\\Git\\' }) -join ';'
+          if (OnPath 'sh.exe') { Fail "sh is still on PATH: $(OnPath 'sh.exe')" }
+          if (OnPath 'git.exe') { Fail "git is still on PATH: $(OnPath 'git.exe')" }
+          $empty = Join-Path $env:RUNNER_TEMP 'no-git-here'
+          New-Item -ItemType Directory -Force -Path $empty | Out-Null
+
+          cargo test -- enrich:: rerank::
+          if ($LASTEXITCODE -ne 0) { Fail "route 3, the installer's own place under Program Files: $LASTEXITCODE" }
+
+          $env:ProgramFiles = $empty
+          $env:ProgramW6432 = $empty
+          $env:LOCALAPPDATA = $empty
+          $env:CLAUDE_CODE_GIT_BASH_PATH = 'C:\Program Files\Git\bin\bash.exe'
+          cargo test -- enrich:: rerank::
+          if ($LASTEXITCODE -ne 0) { Fail "route 2, the bash Claude Code names: $LASTEXITCODE" }
+
+          # Nowhere left to look. A green run here is a resolver that found a shell it should not
+          # have, so the exit code is inverted and the message it failed with is read. What each
+          # place holds is printed either way: a green here is a finding, and a finding needs the
+          # directory that answered, not the guess of one.
+          Remove-Item Env:CLAUDE_CODE_GIT_BASH_PATH
+          foreach ($k in 'ProgramFiles','ProgramW6432','LOCALAPPDATA') {
+            $v = [Environment]::GetEnvironmentVariable($k)
+            Write-Host "$k = $v ; Git there: $(Test-Path (Join-Path $v 'Git\bin\sh.exe')) $(Test-Path (Join-Path $v 'Programs\Git\bin\sh.exe'))"
+          }
+          Write-Host "CLAUDE_CODE_GIT_BASH_PATH = '$([Environment]::GetEnvironmentVariable('CLAUDE_CODE_GIT_BASH_PATH'))'"
+          Write-Host "sh.exe on PATH: '$(OnPath 'sh.exe')' ; git.exe on PATH: '$(OnPath 'git.exe')'"
+          $out = (cargo test -- enrich:: rerank:: 2>&1) | Out-String
+          $code = $LASTEXITCODE
+          Write-Host $out
+          if ($code -eq 0) { Fail "a shell was found with nowhere left to find one" }
+          if ($out -notmatch 'is not on PATH and no Git for Windows was found') { Fail "it failed for another reason" }
+          # The run above is meant to fail, and pwsh hands a step the last exit code it saw.
+          exit 0
+
+      - uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/model-cache
+          key: e5-small-onnx-${{ runner.os }}-1
+      # The one place ONNX Runtime opens a session and embeds, on each platform's own build of it.
+      - run: cargo test --test serve -- --ignored --nocapture a_fused_answer_is_resident_on_the_small_model
+      # Whether the hub client linked each blob into the snapshot or moved it there: an account
+      # without symlink rights takes the second path, and a user's box is that account.
+      - if: runner.os == 'Windows'
+        shell: pwsh
+        run: Get-ChildItem -Recurse $env:FASTEMBED_CACHE_DIR | Where-Object { $_.Attributes -match 'ReparsePoint' } | Select-Object FullName
+
+      # hf-hub's cache walk, tokenizers' file read and ORT's own path handling under a home
+      # directory that is not ASCII — `C:\Users\Максим\.cache\…` is the box this is written for,
+      # and the job's own cache path is ASCII. A copy and not a link: a junction or a symlink
+      # would resolve back to the ASCII path and prove nothing.
+      - shell: pwsh
+        env:
+          FASTEMBED_CACHE_DIR: ${{ runner.temp }}/Максим/.cache/fastembed
+        run: |
+          $ErrorActionPreference = 'Continue'
+          $PSNativeCommandUseErrorActionPreference = $false
+          New-Item -ItemType Directory -Force -Path $env:FASTEMBED_CACHE_DIR | Out-Null
+          Copy-Item -Recurse -Force -Path "${{ runner.temp }}/model-cache/*" -Destination $env:FASTEMBED_CACHE_DIR
+          cargo test --test serve -- --ignored --nocapture a_fused_answer_is_resident_on_the_small_model
+          if ($LASTEXITCODE -ne 0) { throw "the model did not open under a Cyrillic cache path: $LASTEXITCODE" }
+
+      # `changes` hands the repository path to `git -C` and reads the diff back onto the graph.
+      # The checkout is the corpus, built on the binary `cargo test` has already made — a release
+      # build here cost three and a half minutes to judge codegen nothing in this step is about.
+      # A line goes into a tracked file first, so there is a diff for the step to name.
+      - shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Continue'
+          $PSNativeCommandUseErrorActionPreference = $false
+          $exe = "${{ matrix.exe }}"
+          $built = (& $exe --no-dense --repo . build) | Out-String
+          if ($built -notmatch 'nodes [1-9]') { throw "the build over the checkout wrote no nodes: $built" }
+          Add-Content -Path README.md -Value 'A line this step added, and takes back.'
+          $changes = (& $exe --no-dense --repo . changes --base HEAD) | Out-String
+          if ($LASTEXITCODE -ne 0) { throw "changes exited $LASTEXITCODE" }
+          if ($changes -notmatch 'README\.md') { throw "the diff of the file just edited names nothing: $changes" }
+          git checkout -- README.md
+
+      # The `### On Windows` section of the README, verbatim, on a runner: a repository under a
+      # Cyrillic path with a space, a `repograph.toml` as Windows PowerShell 5.1 writes one
+      # (byte-order mark, CRLF), the background server started the way the README says to start
+      # one, and the socket a `Stop-Process` leaves for the next `serve` to sweep. The same day
+      # in Rust is `tests/users_day.rs`, which runs on all three; what only this can judge is the
+      # PowerShell the README prints, and PowerShell is the only shell that has that problem.
+      - if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Continue'
+          $PSNativeCommandUseErrorActionPreference = $false
+          [Console]::OutputEncoding = [Text.Encoding]::UTF8
+          function Fail($m) { Write-Host "::error::$m"; exit 1 }
+          $R = "$env:RUNNER_TEMP\Проект beauty crm"
+          New-Item -ItemType Directory -Force -Path "$R\docs" | Out-Null
+          Set-Content -Encoding utf8 "$R\docs\pay.md" "**FR-PAY-1 · MUST · Штраф за отмену**`n`nШтраф списывается сам.`n"
+          # Windows PowerShell 5.1, not pwsh: `Out-File -Encoding utf8` there writes a byte-order
+          # mark and CRLF, which is what an editor on this platform leaves in the file. Re-encoded
+          # from a plain copy so the command line carries no quoting of its own to get wrong.
+          Set-Content -Encoding utf8 "$R\toml.src" @('id_families = ["FR-PAY"]', 'embed_model = "intfloat/multilingual-e5-small"')
+          powershell.exe -NoProfile -Command "Get-Content '$R\toml.src' | Out-File -Encoding utf8 '$R\repograph.toml'"
+          Remove-Item "$R\toml.src"
+          $head = [System.IO.File]::ReadAllBytes("$R\repograph.toml")[0..2] -join ','
+          if ($head -ne '239,187,191') { Fail "PowerShell 5.1 stopped writing a byte-order mark; this step no longer tests one: $head" }
+          $exe = "$env:GITHUB_WORKSPACE\target\debug\repograph.exe"
+          $built = (& $exe --repo $R build) | Out-String
+          if ($built -notmatch 'nodes [1-9]') { Fail "the build under a Cyrillic path wrote no nodes: $built" }
+          # The README's own line, and its working directory rather than a `--repo` of its own:
+          # `Start-Process -ArgumentList` joins its elements with spaces and quotes none of them,
+          # so a repository path with a space in it would reach `clap` as three arguments.
+          $log = "$env:RUNNER_TEMP\serve.err"
+          $serve = Start-Process $exe -ArgumentList 'serve','--idle','86400' -WorkingDirectory $R -WindowStyle Hidden -RedirectStandardError $log -PassThru
+          $deadline = (Get-Date).AddSeconds(120)
+          do {
+            $answer = (& $exe --repo $R ask штраф 2>&1) | Out-String
+            if ($answer -match 'answered by the resident process') { break }
+            Start-Sleep -Milliseconds 500
+          } while ((Get-Date) -lt $deadline)
+          if ($answer -notmatch 'answered by the resident process') {
+            Write-Host "serve exited: $($serve.HasExited); its stderr:"
+            Get-Content $log -ErrorAction SilentlyContinue | ForEach-Object { Write-Host $_ }
+            Fail "the README's recipe left no server answering: $answer"
+          }
+          if ($answer -notmatch 'Штраф за отмену') { Fail "the resident process answered something else: $answer" }
+          Stop-Process -Id $serve.Id
+          $sock = "$R\.repograph\serve.sock"
+          if (-not (Get-Item -Force $sock -ErrorAction SilentlyContinue)) { Fail "a killed server left no socket for the next serve to sweep" }
+          & $exe --repo $R --no-dense serve --idle 1
+          if ($LASTEXITCODE -ne 0) { Fail "the next serve would not bind over the dead socket: $LASTEXITCODE" }
+          if (Get-Item -Force $sock -ErrorAction SilentlyContinue) { Fail "and the socket outlived its server" }
+          exit 0
+
+      # What a user installs, on the platform they install it on: the pack script, npm's own
+      # shim, `bin/repograph.js` resolving the per-platform package, the `files` whitelist, a
+      # Cyrillic argument through the shim, and the exit code coming back. Last in the job,
+      # because packing rewrites the version in `npm/*/package.json`.
+      - shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Continue'
+          $PSNativeCommandUseErrorActionPreference = $false
+          [Console]::OutputEncoding = [Text.Encoding]::UTF8
+          bash scripts/npm-pack.sh 0.0.0-ci ${{ matrix.pack }}=${{ matrix.exe }}
+          if ($LASTEXITCODE -ne 0) { throw "the pack script failed: $LASTEXITCODE" }
+          $platform = (Get-Item "dist/npm/devmaxxx-repograph-${{ matrix.pack }}-0.0.0-ci.tgz").FullName
+          $launcher = (Get-Item "dist/npm/devmaxxx-repograph-0.0.0-ci.tgz").FullName
+          $version = (Select-String -Path Cargo.toml -Pattern '^version = "(.*)"').Matches[0].Groups[1].Value
+
+          # A project directory with a space and a letter that is not ASCII, and a package.json
+          # written by hand: `npm init -y` would take the directory's name for the package's.
+          $proj = Join-Path $env:RUNNER_TEMP 'проект node'
+          New-Item -ItemType Directory -Force -Path $proj | Out-Null
+          Set-Content -Encoding utf8 (Join-Path $proj 'package.json') '{ "name": "consumer", "version": "1.0.0", "private": true }'
+          Push-Location $proj
+          # `--omit=optional` keeps npm off GitHub Packages, which answers 401 to an anonymous
+          # request for the two platform packages this runner is not. The one it is comes in by
+          # name, through the same `require.resolve` walk a published install ends at.
+          npm i --omit=optional --no-audit --no-fund $platform $launcher
+          if ($LASTEXITCODE -ne 0) { throw "the install failed: $LASTEXITCODE" }
+          $reported = ((npx repograph --version) | Out-String).Trim()
+          if ($reported -ne "repograph $version") { throw "the launcher ran something else: $reported" }
+
+          $R = Join-Path $proj 'корпус'
+          New-Item -ItemType Directory -Force -Path (Join-Path $R 'docs') | Out-Null
+          Set-Content -Encoding utf8 (Join-Path $R 'docs/pay.md') "**FR-PAY-1 · MUST · Штраф за отмену**`n`nШтраф списывается сам.`n"
+          Set-Content -Encoding utf8 (Join-Path $R 'repograph.toml') 'id_families = ["FR-PAY"]'
+          npx repograph --repo $R --no-dense build | Out-Null
+          if ($LASTEXITCODE -ne 0) { throw "a build through the launcher failed: $LASTEXITCODE" }
+          $answer = ((npx repograph --repo $R --no-dense ask штраф) | Out-String)
+          if ($answer -notmatch 'Штраф за отмену') { throw "the question or the answer did not survive the shim: $answer" }
+          npx repograph --repo $R explain nope
+          if ($LASTEXITCODE -ne 1) { throw "the launcher swallowed the exit code: $LASTEXITCODE" }
+          Pop-Location
+
+          # And the platform package left out, which is what `--no-optional` or a lockfile from
+          # another platform gives a user: a named package and an exit code, not a stack trace.
+          $alone = Join-Path $env:RUNNER_TEMP 'launcher-alone'
+          New-Item -ItemType Directory -Force -Path $alone | Out-Null
+          Set-Content -Encoding utf8 (Join-Path $alone 'package.json') '{ "name": "alone", "version": "1.0.0", "private": true }'
+          Push-Location $alone
+          npm i --omit=optional --no-audit --no-fund $launcher
+          if ($LASTEXITCODE -ne 0) { throw "installing the launcher alone failed: $LASTEXITCODE" }
+          $said = ((npx repograph --version 2>&1) | Out-String)
+          if ($LASTEXITCODE -ne 2) { throw "a launcher with no binary behind it should exit 2, not $LASTEXITCODE" }
+          if ($said -notmatch 'is not installed') { throw "and name the package that is missing: $said" }
+          Pop-Location
+          git checkout -- npm/
+
   bench:
     runs-on: ubuntu-latest
     steps:
@@ -33,43 +272,3 @@ jobs:
       # A green job that ran nothing would read as a passed bench.
       - if: steps.token.outputs.present != 'true'
         run: echo "::warning::BENCH_REPO_TOKEN is not set; the bench did not run"
-
-  windows:
-    runs-on: windows-latest
-    env:
-      # The small model, kept between runs under the workspace: the dense arm is opened here and
-      # nowhere else in CI, on a runner with no GPU.
-      FASTEMBED_CACHE_DIR: ${{ github.workspace }}\.model-cache
-    steps:
-      # The repository is LF throughout and the tests compare bytes; a checkout the runner's
-      # git had converted to CRLF would be a different corpus.
-      - run: git config --global core.autocrlf false
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@1.98.0
-        with: { components: clippy }
-      - run: cargo clippy --all-targets -- -D warnings
-      - run: cargo test
-      # A default Git for Windows install puts `git` on PATH and not `sh`; the runner image has
-      # both. This is a user's box: Git's shell directories are taken off PATH, and the tests that
-      # spawn the shell are run again.
-      - shell: pwsh
-        run: |
-          $env:PATH = ($env:PATH -split ';' | Where-Object { $_ -notmatch '\\Git\\(usr\\)?bin\\?$' }) -join ';'
-          if (Get-Command sh -ErrorAction SilentlyContinue) { throw "sh is still on PATH: $((Get-Command sh).Source)" }
-          if (-not (Get-Command git -ErrorAction SilentlyContinue)) { throw "git left PATH too; the pattern is wrong" }
-          cargo test -- enrich:: rerank::
-      - uses: actions/cache@v4
-        with:
-          path: ${{ github.workspace }}\.model-cache
-          key: e5-small-onnx-1
-      - run: cargo test --test serve -- --ignored --nocapture a_fused_answer_is_resident_on_the_small_model
-      # Whether the hub client linked each blob into the snapshot or moved it there: an account
-      # without symlink rights takes the second path, and a user's box is that account.
-      - shell: pwsh
-        run: Get-ChildItem -Recurse $env:FASTEMBED_CACHE_DIR | Where-Object { $_.Attributes -match 'ReparsePoint' } | Select-Object FullName
-      # `changes` hands the repository path to `git -C`. The checkout is the corpus: built once
-      # lexically, then diffed against HEAD, which a fresh clone can always do.
-      - shell: pwsh
-        run: |
-          cargo run --release --quiet -- --no-dense --repo "$env:GITHUB_WORKSPACE" build
-          cargo run --release --quiet -- --no-dense --repo "$env:GITHUB_WORKSPACE" changes --base HEAD
