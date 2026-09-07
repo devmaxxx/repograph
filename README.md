@@ -164,7 +164,7 @@ a poller instead:
 repograph watch                  # poll every 30 s, apply what changed, embed it
 repograph watch --every 15       # a tighter cadence
 repograph watch --batch 5        # save once five files are waiting, not on every one
-repograph watch --no-dense       # lexical only, leaves the 1.3 GB model unopened
+repograph watch --no-dense       # lexical only, leaves the 1.4 GB model unopened
 ```
 
 A refresh rewrites the whole graph, so `--batch` is there to spend that once on a burst of edits
@@ -903,6 +903,42 @@ state.
 
 See [Bench](#bench) for the retrieval-quality floors these numbers are held to, and the ADR for the
 one figure that didn't hold up on first measurement.
+
+### Resources
+
+Everything above is a reader, and a reader costs a fraction of a second and the model it opened.
+The one command that can take a machine over is a writer that has to embed the store whole —
+`build`, `update`, `enrich`, `embed` or `watch` on a store whose rows belong to another model.
+Measured on the bench fixture's 33,525 rows under the default model, before and after the work in
+[the resource-usage results](docs/bench/2026-09-07-resource-usage-results.md):
+
+| | wall | user | max RSS | peak CPU | threads |
+| --- | --- | --- | --- | --- | --- |
+| before | 2,582 s (43 min) | 13,342 s | 2.96 GB | 444% | 18, 6 running |
+| after | 1,930 s (32 min) | 7,641 s | 2.15 GB | 293% | 8, 4 running |
+
+Two things bound it. `threads` caps the ONNX session's intra-op pool and rayon's global pool,
+which is what `tokenizers` fans a batch out over; absent or `0` it is a third of the logical cores,
+because the runtime otherwise takes every performance core and holds it for the length of the run.
+And a batch closes on a padded-token budget rather than on a count of texts, so the largest shape
+the runtime ever allocates an arena for is bounded whatever the corpus's longest passages happen to
+be — a count of sixty-four bounds nothing, since sixty-four 256-token passages are 16,384 tokens
+and sixty-four labels are 1,280.
+
+Give the cores back with `threads = 6` in `repograph.toml` or `~/.config/repograph/config.toml`,
+or `REPOGRAPH_THREADS=6` for one run; it is a straight trade, cores against wall time, with no free
+side. A long embed now saves after every 1,024 rows and says where it is, so an interrupted rebuild
+resumes from its last checkpoint instead of starting again:
+
+```
+dense: 16384/33525 rows, 18.7 rows/s, ~15 min left
+```
+
+The cheap ways out are unchanged and cost nothing: `embed_model = "intfloat/multilingual-e5-small"`
+writes the whole store in about three minutes and 1.6 GB, and `--no-dense` on the writer opens no
+model at all. `serve` and `watch` hold the model on purpose — 1.4 GB resident on the small model,
+about 1.8 GB on the default one — and are idle between refreshes; `ask --rerank-local` opens a
+second 2.1 GB session beside the embedder and is the one reader that reaches 3+ GB.
 
 ## Design
 
