@@ -466,6 +466,7 @@ in full, not an empty config:
 | `reranker_dir`       | directory of the exported cross-encoder for `--rerank-local`; empty = `~/.cache/repograph/reranker` |
 | `embed_model`        | `intfloat/multilingual-e5-large`; the model the vectors are written with — see [Embeddings](#embeddings) |
 | `threads`            | `0` = a third of the logical cores; how many threads the model sessions and the tokenizer pool may take — see [Resources](#resources) |
+| `priority`           | `"background"` = the writers run in the scheduling band the machine keeps for work nobody is waiting on; `"normal"` gives that up for wall time — see [Resources](#resources) |
 
 ### Choosing a model, and where the choice lives
 
@@ -481,7 +482,7 @@ beating the one below it:
 
 | Layer | Where |
 | --- | --- |
-| the run | `REPOGRAPH_ENRICH_MODEL`, `REPOGRAPH_RERANK_MODEL`, `REPOGRAPH_THREADS` |
+| the run | `REPOGRAPH_ENRICH_MODEL`, `REPOGRAPH_RERANK_MODEL`, `REPOGRAPH_THREADS`, `REPOGRAPH_PRIORITY` |
 | the repository | `repograph.toml` |
 | the machine | `$REPOGRAPH_CONFIG`, else `$XDG_CONFIG_HOME/repograph/config.toml`, else `~/.config/repograph/config.toml` |
 
@@ -493,7 +494,8 @@ rerank_model = "sonnet"
 
 A key the repository names wins even when it names the built-in value: what the file says is what
 that repository asked for. The machine file may set **only** `enrich_command`, `rerank_command`,
-`enrich_model`, `rerank_model`, `reranker_dir` and `threads`, and refuses any other key by name.
+`enrich_model`, `rerank_model`, `reranker_dir`, `threads` and `priority`, and refuses any other key by
+name.
 That refusal is deliberate rather than an omission: the corpus-shaped keys describe one
 repository's documents, and a global `embed_model` in particular would rewrite every store's
 vectors under a model nobody chose for it.
@@ -916,6 +918,22 @@ Measured on the bench fixture's 33,525 rows under the default model, before and 
 | --- | --- | --- | --- | --- | --- |
 | before | 2,582 s (43 min) | 13,342 s | 2.96 GB | 444% | 18, 6 running |
 | after | 1,930 s (32 min) | 7,641 s | 2.15 GB | 293% | 8, 4 running |
+
+Those are the rebuild's own numbers. What the *person at the keyboard* feels while it runs is a
+different measurement, and it is the one `priority` answers — a six-thread compile and a 1 ms wake
+loop, run beside a whole-store rebuild on this machine
+([the unnoticeable results](docs/bench/2026-09-07-unnoticeable-results.md)):
+
+| with a rebuild running beside them | their compile | their 1 ms wake, p99 | where the rebuild ran |
+| --- | --- | --- | --- |
+| `priority = "normal"` | +15.7% | 2.5 ms | performance cores, 3.49 GHz |
+| `priority = "background"` (the default) | +1.7% | 0.6 ms | efficiency cores, 1.70 GHz |
+
+The price is wall time: the same work takes 4.1× as long in the background band, and the default
+takes that trade because nobody is waiting for a rebuild. `priority = "normal"` in
+`repograph.toml` or `~/.config/repograph/config.toml`, or `REPOGRAPH_PRIORITY=normal` for one run,
+is the word back — that is what a build server or a CI box wants. Readers ignore the setting
+entirely: `ask`, `bench` and `dump` answer a person, and a person is waiting.
 
 Two things bound it. `threads` caps the ONNX session's intra-op pool and rayon's global pool,
 which is what `tokenizers` fans a batch out over; absent or `0` it is a third of the logical cores,

@@ -44,6 +44,15 @@ pub struct Config {
     /// (docs/bench/2026-09-07-resource-usage-results.md), so `threads = 6` is the one word back
     /// to what ORT would have picked itself.
     pub threads: usize,
+    /// Which scheduling band the writers run in: `"background"` (the default) or `"normal"`.
+    /// Like `threads` it describes the machine and not the corpus, so the global file may set it.
+    /// The background band costs wall time and buys back everything the person at the keyboard
+    /// can feel — on this machine their own compile went from 15.7% slower to 1.7% and a 1 ms
+    /// wake from 2.5 ms to 0.6 ms at p99, for 4.1× the rebuild's wall
+    /// (docs/bench/2026-09-07-unnoticeable-results.md). `normal` is the word back, for a build
+    /// server or anyone who would rather have the wall time. Readers ignore it: they answer a
+    /// person, and a person is waiting.
+    pub priority: crate::priority::Priority,
 }
 
 // Headless Claude Code with thinking off: the same answers, 4-5× faster and cheaper. `{model}`
@@ -89,12 +98,13 @@ impl Default for Config {
             reranker_dir: String::new(),
             embed_model: crate::index::embed::DEFAULT_MODEL.into(),
             threads: 0,
+            priority: crate::priority::Priority::default(),
         }
     }
 }
 
 /// The settings that describe the machine rather than the corpus: which command runs a model,
-/// which model it runs, and how many threads it may take. A global file may set these and nothing
+/// which model it runs, how many threads it may take and which scheduling band it takes them in. A global file may set these and nothing
 /// else. The corpus-shaped settings — the globs, the id families, and above all `embed_model` —
 /// are deliberately unreadable from there: one global line would otherwise rewrite every
 /// repository's vectors under a model nobody chose for that repository, which is the one mistake
@@ -108,6 +118,7 @@ struct Machine {
     rerank_model: Option<String>,
     reranker_dir: Option<String>,
     threads: Option<usize>,
+    priority: Option<crate::priority::Priority>,
 }
 
 /// `$REPOGRAPH_CONFIG`, else `$XDG_CONFIG_HOME/repograph/config.toml`, else
@@ -152,6 +163,7 @@ impl Config {
         layer(&named, "enrich_model", machine.enrich_model, &mut cfg.enrich_model);
         layer(&named, "rerank_model", machine.rerank_model, &mut cfg.rerank_model);
         layer(&named, "threads", machine.threads, &mut cfg.threads);
+    layer(&named, "priority", machine.priority, &mut cfg.priority);
 
         // The command is resolved from its template rather than from `Default`, whose copy already
         // has the default model substituted: a project that sets only `enrich_model` must still get
@@ -177,6 +189,7 @@ impl Config {
                 cfg.threads = t.parse().with_context(|| format!("REPOGRAPH_THREADS is {t:?}, which is not a thread count"))?;
             }
         }
+        cfg.priority = crate::priority::from_env(cfg.priority, std::env::var("REPOGRAPH_PRIORITY").ok().as_deref())?;
         cfg.enrich_command = enrich_template.replace(MODEL_SLOT, &cfg.enrich_model);
         cfg.rerank_command = rerank_template.replace(MODEL_SLOT, &cfg.rerank_model);
         Ok(cfg)
@@ -284,6 +297,7 @@ mod tests {
             std::env::remove_var("REPOGRAPH_ENRICH_MODEL");
             std::env::remove_var("REPOGRAPH_RERANK_MODEL");
             std::env::remove_var("REPOGRAPH_THREADS");
+            std::env::remove_var("REPOGRAPH_PRIORITY");
         }
         let out = f();
         unsafe { std::env::remove_var("REPOGRAPH_CONFIG") };
@@ -404,6 +418,54 @@ mod tests {
             let err = Config::load(dir.path()).unwrap_err().to_string();
             unsafe { std::env::remove_var("REPOGRAPH_THREADS") };
             assert!(err.contains("REPOGRAPH_THREADS"), "{err}");
+        });
+    }
+
+    #[test]
+    fn priority_defaults_to_background_and_reads_from_the_project_file() {
+        with_machine(None, || {
+            let dir = tempfile::tempdir().unwrap();
+            assert_eq!(Config::load(dir.path()).unwrap().priority, crate::priority::Priority::Background);
+            std::fs::write(dir.path().join("repograph.toml"), "priority = \"normal\"\n").unwrap();
+            assert_eq!(Config::load(dir.path()).unwrap().priority, crate::priority::Priority::Normal);
+        });
+    }
+
+    #[test]
+    fn the_machine_file_may_set_priority_and_the_project_still_wins() {
+        with_machine(Some("priority = \"normal\"\n"), || {
+            let dir = tempfile::tempdir().unwrap();
+            assert_eq!(Config::load(dir.path()).unwrap().priority, crate::priority::Priority::Normal);
+            std::fs::write(dir.path().join("repograph.toml"), "priority = \"background\"\n").unwrap();
+            assert_eq!(Config::load(dir.path()).unwrap().priority, crate::priority::Priority::Background);
+        });
+    }
+
+    #[test]
+    fn the_environment_beats_the_project_for_priority() {
+        with_machine(None, || {
+            let dir = tempfile::tempdir().unwrap();
+            std::fs::write(dir.path().join("repograph.toml"), "priority = \"background\"\n").unwrap();
+            unsafe { std::env::set_var("REPOGRAPH_PRIORITY", "normal") };
+            assert_eq!(Config::load(dir.path()).unwrap().priority, crate::priority::Priority::Normal);
+            unsafe { std::env::set_var("REPOGRAPH_PRIORITY", "") };
+            assert_eq!(Config::load(dir.path()).unwrap().priority, crate::priority::Priority::Background);
+            unsafe { std::env::remove_var("REPOGRAPH_PRIORITY") };
+        });
+    }
+
+    #[test]
+    fn a_priority_that_is_not_a_word_it_knows_is_an_error_naming_the_file() {
+        with_machine(None, || {
+            let dir = tempfile::tempdir().unwrap();
+            std::fs::write(dir.path().join("repograph.toml"), "priority = \"fast\"\n").unwrap();
+            let err = Config::load(dir.path()).unwrap_err().to_string();
+            assert!(err.contains("repograph.toml"), "{err}");
+            std::fs::write(dir.path().join("repograph.toml"), "priority = \"normal\"\n").unwrap();
+            unsafe { std::env::set_var("REPOGRAPH_PRIORITY", "quick") };
+            let err = Config::load(dir.path()).unwrap_err().to_string();
+            unsafe { std::env::remove_var("REPOGRAPH_PRIORITY") };
+            assert!(err.contains("REPOGRAPH_PRIORITY"), "{err}");
         });
     }
 
