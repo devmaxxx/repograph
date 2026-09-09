@@ -87,8 +87,7 @@ mod tests {
     use super::*;
 
     fn refs(rel: &str, src: &str) -> Vec<(String, String, String)> {
-        let cfg = crate::config::Config::default();
-        let ids = IdMatcher::new(&cfg.id_families, &cfg.milestone_families);
+        let ids = crate::families::test_matcher();
         let mut ex = Extraction::default();
         scan(&ids, rel, src, &mut ex);
         ex.edges.iter().filter(|e| e.kind == EdgeKind::References)

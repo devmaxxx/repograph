@@ -2,12 +2,10 @@
 //! body, a task line or a link is pinned by the assertion and not by a shared fixture.
 
 use super::DocExtractor;
-use crate::ids::IdMatcher;
 use crate::model::{EdgeKind, Extraction, Extractor, Node, NodeKind};
 
 fn extract(rel: &str, text: &str) -> Extraction {
-    let cfg = crate::config::Config::default();
-    DocExtractor::new(IdMatcher::new(&cfg.id_families, &cfg.milestone_families)).extract(rel, text)
+    DocExtractor::new(crate::families::test_matcher()).extract(rel, text)
 }
 
 fn node<'a>(ex: &'a Extraction, id: &str) -> &'a Node {

@@ -3,7 +3,6 @@
 
 use super::CodeExtractor;
 use crate::code::imports::Resolver;
-use crate::ids::IdMatcher;
 use crate::model::{EdgeKind, Extraction, Extractor, NodeKind};
 
 struct Repo {
@@ -22,8 +21,7 @@ impl Repo {
     }
 
     fn extract(&self, rel: &str, src: &str) -> Extraction {
-        let cfg = crate::config::Config::default();
-        let ids = IdMatcher::new(&cfg.id_families, &cfg.milestone_families);
+        let ids = crate::families::test_matcher();
         CodeExtractor::new(Resolver::new(self.dir.path()).unwrap(), ids).extract(rel, src)
     }
 }

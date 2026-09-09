@@ -390,8 +390,7 @@ mod tests {
     }
 
     fn ids() -> IdMatcher {
-        let cfg = crate::config::Config::default();
-        IdMatcher::new(&cfg.id_families, &cfg.milestone_families)
+        crate::families::test_matcher()
     }
 
     fn opts() -> Options { Options { seeds: 5, bodies: false, dense: false, json: false, depth: crate::rerank::DEPTH } }

@@ -18,7 +18,6 @@ import statistics
 import subprocess
 import sys
 import time
-import tomllib
 from pathlib import Path
 
 import truth as T
@@ -28,21 +27,24 @@ NO_PATH = re.compile(r"no call path|No directed path|\"status\":\s*\"no_path\"|n
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 
 
-def load_id_families(repograph_toml: Path = REPO_ROOT / "repograph.toml") -> list[str]:
-    """The corpus's own closed list of requirement-id families, e.g. `FR-AI`, `INV`, `N`.
-
-    A pattern built from anything looser than this list also matches `UTF-8`, `SHA-256`,
-    `RFC-7807` — tokens that look like an id but never compete with one for a reader's eye.
-    Failing loudly here beats falling back to that looser pattern, which was the defect.
-    """
-    if not repograph_toml.exists():
-        raise RuntimeError(f"cannot build the id pattern: {repograph_toml} does not exist")
-    with repograph_toml.open("rb") as f:
-        config = tomllib.load(f)
-    families = config.get("id_families")
-    if not families:
-        raise RuntimeError(f"cannot build the id pattern: no `id_families` key in {repograph_toml}")
-    return families
+# The corpus's own closed list of requirement-id families, e.g. `FR-AI`, `INV`, `N`. A pattern
+# built from anything looser also matches `UTF-8`, `SHA-256`, `RFC-7807` — tokens that look like
+# an id but never compete with one for a reader's eye, which was the defect this list fixed.
+#
+# It was read from `repograph.toml`'s `id_families` key while there was one. repograph derives its
+# families from the definitions its documents carry and has no such key any more, so the list
+# lives here: this comparison is pinned to one corpus at one commit, and which families that
+# corpus had is data of the experiment rather than configuration of the tool. `repograph families`
+# over the corpus prints the list to refresh it from.
+ID_FAMILIES = [
+    "FR-DM", "FR-CAL", "FR-VIS", "FR-PAY", "FR-PH", "FR-SEC", "FR-APP", "FR-MKT",
+    "FR-AI", "FR-CRM", "FR-SHELL", "FR-TOOL", "FR-SVC", "FR-LIFE", "FR-WH", "FR-RPT",
+    "FR-MIG", "FR-WEB", "FR-OPS", "FR-STAFF",
+    "NFR-PH", "NFR-MKT", "NFR-MIG", "NFR-PAY", "NFR-DM", "NFR-RPT", "NFR-WEB", "NFR-SVC",
+    "NFR-STAFF", "NFR",
+    "AC-DM", "AC-VIS", "INV", "ADR", "OD", "OQ", "N", "R", "M", "W", "D", "G",
+    "PREP", "CAL", "OR", "MON", "SEAM", "SG", "IDEA",
+]
 
 
 def _id_token_pattern(families: list[str]) -> re.Pattern[str]:
@@ -55,7 +57,7 @@ def _id_token_pattern(families: list[str]) -> re.Pattern[str]:
 # What competes with an answer for the reader's eye: another id of a real family, or for a
 # file case another path. `FR-AI-138`, `INV-16`, `N-137` all match the first;
 # `docs/prd/x.md` and `apps/api/src/y.ts` the second.
-ID_TOKEN = _id_token_pattern(load_id_families())
+ID_TOKEN = _id_token_pattern(ID_FAMILIES)
 PATH_TOKEN = re.compile(r"[\w./-]+/[\w.-]+\.(?:tsx?|kt|md|json|ya?ml|sql)\b")
 
 

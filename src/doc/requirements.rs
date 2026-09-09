@@ -138,8 +138,7 @@ mod tests {
     use super::*;
 
     fn scan(rel: &str, text: &str) -> Extraction {
-        let cfg = crate::config::Config::default();
-        RequirementScanner::new(IdMatcher::new(&cfg.id_families, &cfg.milestone_families)).scan(rel, text)
+        RequirementScanner::new(crate::families::test_matcher()).scan(rel, text)
     }
 
     fn fixture(name: &str) -> String {

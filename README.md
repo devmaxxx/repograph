@@ -37,6 +37,7 @@ it had been measured, and hadn't been.
 | Command                    | State                                                                 |
 | -------------------------- | --------------------------------------------------------------------- |
 | `build`, `update`          | working; incremental; a no-op `update` is a fixed point               |
+| `families`                 | working; reads the built store and the documents, and says which families they define, where each was first defined, how many nodes it holds, and which id-like prefixes were left as text. Nothing to configure and nothing stored — see [Configure](#configure) |
 | `ask`, `explain`, `verify` | working: exact id/symbol → BM25 → dense, fused, one hop out           |
 | `impact`, `trace`, `changes` | working: callers by depth through barrels, shortest call chain, the diff mapped onto symbols — see [Blast radius](#blast-radius) |
 | `bench`                    | working; fails the process if a floor in [Bench](#bench) is missed — floors are keyed by enrichment (a store with `enrich`'s questions and one without) and by the dense embedder (small model, large model); a store under any other model is measured and not graded |
@@ -135,6 +136,13 @@ repograph --repo /path/to/project update    # re-extract only changed files
 
 `--repo` defaults to the current directory. State lives in `<repo>/.repograph/`; add it to
 `.gitignore`.
+
+After a first build, read which id families the documents defined and what was left as text:
+
+```bash
+repograph families                          # every family, its nodes, and the line that defines it
+repograph families --json                   # the same numbers for a script
+```
 
 Ask it something:
 
@@ -512,8 +520,6 @@ in full, not an empty config:
 | `code_globs`         | `["**/*.ts", "**/*.tsx"]`                                                                   |
 | `skip`               | `["**/node_modules/**", "**/dist/**", "**/TRACKER.md", "graphify-out/**", ".repograph/**"]` |
 | `registries`         | `["docs/constitution.yaml"]`                                                                |
-| `id_families`        | see below — 49 strict families                                                              |
-| `milestone_families` | `["BE", "FE", "PLAT", "SYNC", "OPS", "AI", "MOB"]`                                          |
 | `enrich_command`     | headless `claude -p --model {model}` with thinking off — see [Spending tokens on purpose](#spending-tokens-on-purpose) |
 | `rerank_command`     | the same command, with `rerank_model` in its `{model}`                                      |
 | `enrich_model`       | `haiku` — whatever goes in `enrich_command`'s `{model}`                                      |
@@ -623,25 +629,54 @@ vectors were written with and nothing at all about the model that wrote its ques
 copies have to be kept apart by hand — one directory per enriching model — or the comparison
 quietly measures a mixture.
 
-`id_families` and `milestone_families` default to the strict list `beauty-crm`'s census settled on —
-they are this project's development corpus, not a generic default. Every family is matched as
-`FAMILY-<1–4 digits>`, hyphen included; hyphenless labels such as `B1`, `C11` or `S3` collide with
-ordinary prose and are deliberately not families at all. A different repository should replace both
-lists with its own:
+### Id families
 
-```toml
-id_families = [
-  "FR-DM", "FR-CAL", "FR-VIS", "FR-PAY", "FR-PH", "FR-SEC", "FR-APP", "FR-MKT",
-  "FR-AI", "FR-CRM", "FR-SHELL", "FR-TOOL", "FR-SVC", "FR-LIFE", "FR-WH", "FR-RPT",
-  "FR-MIG", "FR-WEB", "FR-OPS", "FR-STAFF",
-  "NFR-PH", "NFR-MKT", "NFR-MIG", "NFR-PAY", "NFR-DM", "NFR-RPT", "NFR-WEB", "NFR-SVC", "NFR-STAFF", "NFR",
-  "AC-DM", "AC-VIS", "INV", "ADR", "OD", "OQ", "N", "R", "M", "W", "D", "G",
-  "PREP", "CAL", "OR", "MON", "SEAM", "SG", "IDEA",
-]
+There is no key for them. A family is the prefix of any id the corpus *defines*, and the documents
+are the only place that is written down: the requirement line `**FR-PAY-22 · MUST · <title>**` and
+its heading form `## FR-CAL-40 · <title>` (the modality is optional in both), a milestone document
+named `BE-M01-….md` or a `## BE-M01 · <title>` head, a row in one of the `registries`. `build` and
+`update` read those definitions off the documents they walk; `ask`, `explain`, `bench`, `dump` and
+`serve` read the families back off the graph those definitions became. Nothing is configured,
+nothing is stored beside the graph, and there is nothing to keep in step with anything.
+
+A default would have been the alternative, and a default is the answer for a repository about which
+nothing is known — 49 families read off `beauty-crm` were never that answer for anybody else's
+corpus. A list computed once and pinned beside the graph was the other, and it would have been a
+second place saying what the documents already say, out of step the first day somebody wrote a
+family down without recomputing it.
+
+Every family is matched as `FAMILY-<1–4 digits>`, hyphen included, or `FAMILY-M<2 digits>` for a
+milestone; hyphenless labels such as `B1`, `C11` or `S3` are not ids in any repository and cannot
+become families. A prefix that is only ever *mentioned* is plain text — `ISO-8601`, `RFC-7231`, a
+ticket number, a year — and so is one whose ids are cited but never defined anywhere; that is the
+price of the rule, together with there being no way to take a family away by hand. Writing a line
+that defines it is how a prefix crosses that line, and re-reading it is a `repograph update`.
+
+On this project's own development corpus the rule reads 54 id families and 5 milestone families
+where the list named 49 and 7. Nineteen of them the list never had — twelve `OP-<AREA>`
+open-question families, and `HT`, `I`, `P`, `T`, `C`, `W0B` — each defined by a heading like
+`### OP-AI-01 · Может ли салон…` that nobody had thought to configure; thirteen the list had are
+cited and never defined, `OQ`, `IDEA` and `PREP` among them, and are now text. The rebuild added
+159 nodes and dropped 2,238 edges that pointed at ids no document declares. Of the 82 recorded
+bench cases exactly one moved: a paraphrase the lexical arm now reaches, 16/30 against 15/30.
+
+```bash
+repograph families                          # families, milestones, and everything left as text
 ```
 
-A requirement line is recognised as `<ID> · MUST|SHOULD|LATER · <title>`, in either the bold or the
-heading form; the modality is optional.
+Run after a build, it prints every family with the number of nodes it holds and the `path:line`
+that first defined it, then every id-like prefix no line defines — how often it is written, in how
+many files, and one example line. Nothing is written to the repository.
+
+An `update` whose documents have gained or lost a family says so — `families: +REQ`, `families:
+-AC` — and re-reads every document rather than the edited one alone, because a family changes what
+every document extracts to. `ask`'s own refresh does not: it reads ids through the families the
+graph already holds, so that answering a question never costs a pass over the whole corpus, and a
+brand-new family reaches the read path through the `build` or `update` that derives it.
+
+A `repograph.toml` that still names `id_families` or `milestone_families` parses as it always did,
+gets one line on stderr — `id_families is no longer read — families are derived from the documents'
+definitions` — and is otherwise unaffected.
 
 ## Embeddings
 
@@ -925,6 +960,11 @@ against the small model's numbers, rows written by `e5-large` against `e5-large`
 arm under any third model is measured and never graded — `model=<name>` and `gated=false` on the
 summary line, the way another case file is measured and not graded. The lexical arms have no
 embedder in them and keep one set of floors whatever the rows are.
+
+The summary line also carries `families=<count>`: how many id families the store's graph is written
+in, the ones every id in the run was read through. It is a number to compare between two runs of
+the same corpus, not a floor — a rebuild that changes it has changed what every document extracted
+to, and the case-by-case lines are where that shows.
 
 | | enriched store | store with no questions |
 | --- | --- | --- |

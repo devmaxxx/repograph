@@ -4,7 +4,6 @@ import argparse
 import collections
 import json
 import subprocess
-import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -14,7 +13,8 @@ from run import (
     Gitnexus,
     gitnexus_failure_reason,
     gitnexus_looks_like_a_result,
-    load_id_families,
+    ID_FAMILIES,
+    ID_TOKEN,
     rank_of,
     score_blast,
     spells,
@@ -81,22 +81,14 @@ class RankOf(unittest.TestCase):
         self.assertEqual(rank_of(noise, "FR-AI-138"), 2)
 
 
-class LoadIdFamilies(unittest.TestCase):
-    def test_reads_the_real_repograph_toml(self):
-        families = load_id_families()
-        self.assertIn("FR-AI", families)
-        self.assertIn("INV", families)
-
-    def test_missing_file_raises_rather_than_falling_back(self):
-        with self.assertRaises(RuntimeError):
-            load_id_families(Path("/nonexistent/repograph.toml"))
-
-    def test_missing_key_raises_rather_than_falling_back(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            toml_path = Path(tmp) / "repograph.toml"
-            toml_path.write_text('milestone_families = ["BE"]\n', encoding="utf8")
-            with self.assertRaises(RuntimeError):
-                load_id_families(toml_path)
+class IdFamilies(unittest.TestCase):
+    def test_the_pattern_reads_a_family_id_and_leaves_a_standard_alone(self):
+        self.assertIn("FR-AI", ID_FAMILIES)
+        self.assertIn("INV", ID_FAMILIES)
+        self.assertEqual(
+            [m.group(0) for m in ID_TOKEN.finditer("FR-AI-138, INV-16, UTF-8, SHA-256")],
+            ["FR-AI-138", "INV-16"],
+        )
 
 
 class Summarise(unittest.TestCase):

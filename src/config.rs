@@ -8,8 +8,11 @@ pub struct Config {
     pub doc_globs: Vec<String>,
     pub code_globs: Vec<String>,
     pub skip: Vec<String>,
-    pub id_families: Vec<String>,
-    pub milestone_families: Vec<String>,
+    /// Accepted so that a `repograph.toml` written when these were settings still parses, and
+    /// read for nothing else: a repository's families are the prefixes its own documents define.
+    /// `Some` means the file named the key, which is worth one line on stderr and no more.
+    pub id_families: Option<Vec<String>>,
+    pub milestone_families: Option<Vec<String>>,
     pub registries: Vec<String>,
     /// Reads a prompt on stdin and writes `id<TAB>question` lines; `repograph enrich` runs it.
     /// `{model}` in it is replaced by `enrich_model`.
@@ -76,20 +79,8 @@ impl Default for Config {
             doc_globs: s(&["**/*.md"]),
             code_globs: s(&["**/*.ts", "**/*.tsx"]),
             skip: s(&["**/node_modules/**", "**/dist/**", "**/TRACKER.md", "graphify-out/**", ".repograph/**"]),
-            // The strict families measured in beauty-crm's census; ambiguous
-            // one-letter families (B1, C11, S3) collide with prose and are left out.
-            id_families: s(&[
-                "FR-DM", "FR-CAL", "FR-VIS", "FR-PAY", "FR-PH", "FR-SEC", "FR-APP", "FR-MKT",
-                "FR-AI", "FR-CRM", "FR-SHELL", "FR-TOOL", "FR-SVC", "FR-LIFE", "FR-WH", "FR-RPT",
-                "FR-MIG", "FR-WEB", "FR-OPS", "FR-STAFF",
-                // Bare "NFR" trails its ten "NFR-<SUB>" siblings, but alternation order can't
-                // cause a wrong match here: every branch requires digits right after its own
-                // literal suffix, so "NFR-PH-01" can only ever satisfy the "NFR-PH" arm.
-                "NFR-PH", "NFR-MKT", "NFR-MIG", "NFR-PAY", "NFR-DM", "NFR-RPT", "NFR-WEB", "NFR-SVC", "NFR-STAFF", "NFR",
-                "AC-DM", "AC-VIS", "INV", "ADR", "OD", "OQ", "N", "R", "M", "W", "D", "G",
-                "PREP", "CAL", "OR", "MON", "SEAM", "SG", "IDEA",
-            ]),
-            milestone_families: s(&["BE", "FE", "PLAT", "SYNC", "OPS", "AI", "MOB"]),
+            id_families: None,
+            milestone_families: None,
             registries: s(&["docs/constitution.yaml"]),
             enrich_command: ENRICH_COMMAND.replace(MODEL_SLOT, ENRICH_MODEL),
             rerank_command: RERANK_COMMAND.replace(MODEL_SLOT, RERANK_MODEL),
@@ -105,7 +96,7 @@ impl Default for Config {
 
 /// The settings that describe the machine rather than the corpus: which command runs a model,
 /// which model it runs, how many threads it may take and which scheduling band it takes them in. A global file may set these and nothing
-/// else. The corpus-shaped settings — the globs, the id families, and above all `embed_model` —
+/// else. The corpus-shaped settings — the globs, the registries, and above all `embed_model` —
 /// are deliberately unreadable from there: one global line would otherwise rewrite every
 /// repository's vectors under a model nobody chose for that repository, which is the one mistake
 /// this store's design spends effort avoiding.
@@ -158,6 +149,10 @@ impl Config {
             None => toml::Table::new(),
         };
         let machine = Self::machine()?;
+        // Said here rather than in the commands, because every command that reads the file has
+        // been answering with derived families since the key stopped being read, and a setting
+        // silently ignored is worse than one refused.
+        cfg.say_the_family_keys_are_no_longer_read(&mut std::io::stderr())?;
 
         layer(&named, "reranker_dir", machine.reranker_dir, &mut cfg.reranker_dir);
         layer(&named, "enrich_model", machine.enrich_model, &mut cfg.enrich_model);
@@ -193,6 +188,17 @@ impl Config {
         cfg.enrich_command = enrich_template.replace(MODEL_SLOT, &cfg.enrich_model);
         cfg.rerank_command = rerank_template.replace(MODEL_SLOT, &cfg.rerank_model);
         Ok(cfg)
+    }
+
+    /// One line per key a project file still names. Families are the prefixes the documents
+    /// define, so the two keys change nothing at all — which is exactly why it is said out loud.
+    fn say_the_family_keys_are_no_longer_read(&self, w: &mut impl std::io::Write) -> Result<()> {
+        for key in [("id_families", self.id_families.is_some()), ("milestone_families", self.milestone_families.is_some())] {
+            if key.1 {
+                writeln!(w, "repograph.toml: {} is no longer read — families are derived from the documents' definitions", key.0)?;
+            }
+        }
+        Ok(())
     }
 
     /// The global file, or an empty layer when there is none. A malformed or unknown-key global
@@ -233,8 +239,8 @@ mod tests {
         with_machine(None, || {
             let dir = tempfile::tempdir().unwrap();
             let cfg = Config::load(dir.path()).unwrap();
-            assert!(cfg.id_families.contains(&"FR-PAY".to_string()));
             assert_eq!(cfg.doc_globs, vec!["**/*.md".to_string()]);
+            assert_eq!(cfg.registries, vec!["docs/constitution.yaml".to_string()]);
         });
     }
 
@@ -245,7 +251,30 @@ mod tests {
             std::fs::write(dir.path().join("repograph.toml"), "skip = [\"docs/**/TRACKER.md\"]\n").unwrap();
             let cfg = Config::load(dir.path()).unwrap();
             assert_eq!(cfg.skip, vec!["docs/**/TRACKER.md".to_string()]);
-            assert!(cfg.id_families.contains(&"INV".to_string()));
+            assert_eq!(cfg.doc_globs, Config::default().doc_globs);
+        });
+    }
+
+    /// The two keys parse and change nothing. A file that still names one is a file written when
+    /// they were settings, and it gets a line rather than a refusal.
+    #[test]
+    fn a_family_key_is_accepted_read_for_nothing_and_said_out_loud() {
+        with_machine(None, || {
+            let dir = tempfile::tempdir().unwrap();
+            let said = |cfg: &Config| {
+                let mut out = Vec::new();
+                cfg.say_the_family_keys_are_no_longer_read(&mut out).unwrap();
+                String::from_utf8(out).unwrap()
+            };
+            assert_eq!(said(&Config::load(dir.path()).unwrap()), "");
+            std::fs::write(dir.path().join("repograph.toml"), "id_families = [\"REQ\"]\n").unwrap();
+            let cfg = Config::load(dir.path()).unwrap();
+            assert_eq!(said(&cfg), "repograph.toml: id_families is no longer read — families are derived from the documents' definitions\n");
+            // An empty list is a named key all the same: a repository that wrote one said
+            // something, and hears the same line back.
+            std::fs::write(dir.path().join("repograph.toml"), "milestone_families = []\n").unwrap();
+            let cfg = Config::load(dir.path()).unwrap();
+            assert!(said(&cfg).starts_with("repograph.toml: milestone_families is no longer read"), "{}", said(&cfg));
         });
     }
 

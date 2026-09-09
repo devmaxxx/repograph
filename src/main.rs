@@ -6,6 +6,7 @@ mod config;
 mod doc;
 mod dump;
 mod enrich;
+mod families;
 mod rerank;
 mod ids;
 mod impact;
@@ -102,6 +103,12 @@ enum Cmd {
         #[arg(long)] stale: bool,
     },
     Verify,
+    /// Which families the documents define and where, how many nodes each holds, and which
+    /// id-like prefixes were left as text because no line defines them. Reads the built store
+    /// and the documents; writes nothing.
+    Families {
+        #[arg(long)] json: bool,
+    },
     /// Writes reader questions for every requirement-like node through the configured
     /// command, then re-embeds. Costs model tokens once per passage; nothing per query.
     Enrich {
@@ -177,13 +184,35 @@ pub(crate) fn apply_diff(repo: &std::path::Path, store: &store::Store, graph: &m
     Ok(UpdateReport { changed: diff.changed.len(), removed: diff.removed.len(), nodes: graph.nodes.len(), edges: graph.edges.len() })
 }
 
-pub fn run_update(repo: &std::path::Path, cfg: &config::Config, ex: &Extractors, wipe: bool) -> anyhow::Result<UpdateReport> {
+/// The store brought in line with the tree. The extractors are built here rather than passed in
+/// because the families come between the walk and them: the matcher every extractor reads ids
+/// through is derived from the documents the walk just found.
+pub fn run_update(repo: &std::path::Path, cfg: &config::Config, wipe: bool) -> anyhow::Result<UpdateReport> {
     let store = store::Store::new(repo);
     if wipe { store.wipe()?; }
     let (mut graph, manifest) = store.load()?;
     let entries = walk::walk(repo, cfg, &manifest)?;
-    let diff = manifest.diff(&entries);
-    apply_diff(repo, &store, &mut graph, &entries, &diff, ex)
+    let derived = families::derive(repo, &entries)?;
+    let mut diff = manifest.diff(&entries);
+    // A wipe has just emptied the graph, so this one test covers both fresh builds: `build`, and
+    // an `update` on a store nobody has built yet.
+    match graph.nodes.is_empty() {
+        true => eprintln!("{}", derived.line()),
+        false => {
+            // A family that appeared or vanished changes what every document extracts to, not
+            // only the ones that were edited, so the incremental path cannot answer for it.
+            let moved = derived.against(&graph);
+            if !moved.is_empty() {
+                eprintln!("families: {}", moved.join(", "));
+                let named: std::collections::BTreeSet<&str> = diff.changed.iter().map(|e| e.rel.as_str()).collect();
+                let rest: Vec<walk::Entry> = entries.iter()
+                    .filter(|e| e.kind != walk::FileKind::Code && !named.contains(e.rel.as_str()))
+                    .cloned().collect();
+                diff.changed.extend(rest);
+            }
+        }
+    }
+    apply_diff(repo, &store, &mut graph, &entries, &diff, &extractors(repo, derived.matcher())?)
 }
 
 /// Writes the manifest back when the walk saw stamps the stored one does not have — a store from
@@ -229,7 +258,8 @@ impl<'a> Watcher<'a> {
         let store = store::Store::new(repo);
         let (graph, manifest) = store.load()?;
         let seen = store.stamp("manifest.json");
-        Ok(Watcher { repo, cfg, ex: extractors(repo, cfg)?, store, graph, manifest, seen, deferred: 0, reloaded: false })
+        let ex = extractors(repo, families::from_graph(&graph))?;
+        Ok(Watcher { repo, cfg, ex, store, graph, manifest, seen, deferred: 0, reloaded: false })
     }
 
     /// The store read back when another process has written it, without the walk a poll does —
@@ -264,6 +294,11 @@ impl<'a> Watcher<'a> {
             return Ok(if pending > 0 { Polled::Deferred { pending } } else { Polled::Quiet });
         }
         self.deferred = 0;
+        // A store nobody has built declares no families, and what this poll is about to do is a
+        // build in everything but name: read them off the documents the way `build` does.
+        if self.graph.nodes.is_empty() {
+            self.ex = extractors(self.repo, families::derive(self.repo, &entries)?.matcher())?;
+        }
         let r = apply_diff(self.repo, &self.store, &mut self.graph, &entries, &diff, &self.ex)?;
         self.manifest = walk::Manifest::from_entries(&entries);
         self.seen = self.store.stamp("manifest.json");
@@ -308,8 +343,7 @@ fn run_watch(repo: &std::path::Path, cfg: &config::Config, every: u64, batch: us
     }
 }
 
-pub(crate) fn extractors(repo: &std::path::Path, cfg: &config::Config) -> anyhow::Result<Extractors> {
-    let ids = ids::IdMatcher::new(&cfg.id_families, &cfg.milestone_families);
+pub(crate) fn extractors(repo: &std::path::Path, ids: ids::IdMatcher) -> anyhow::Result<Extractors> {
     let resolver = code::imports::Resolver::new(repo)?;
     Ok(Extractors {
         doc: Box::new(doc::DocExtractor::new(ids.clone())),
@@ -402,7 +436,7 @@ fn main() -> anyhow::Result<()> {
             // waiting on its answer, and `serve`'s catch-up sync runs on that same answer path.
             priority::apply(cfg.priority);
             cap_pools(index::embed::threads(cfg.threads));
-            let r = run_update(&repo, &cfg, &extractors(&repo, &cfg)?, wipe)?;
+            let r = run_update(&repo, &cfg, wipe)?;
             println!("changed {} removed {} nodes {} edges {}", r.changed, r.removed, r.nodes, r.edges);
             embed_all(&repo, cli.no_dense, &cfg)
         }
@@ -523,15 +557,17 @@ fn main() -> anyhow::Result<()> {
             if graph.nodes.is_empty() { anyhow::bail!("graph is empty — run `repograph build`"); }
             Ok(())
         }
+        Cmd::Families { json } => families::run(&repo, &load_cfg()?, json),
         Cmd::Bench { cases, rerank, rerank_local, depth } => {
             if bench::run(&repo, cases.as_deref(), cli.no_dense, rerank, rerank_local, depth)? { Ok(()) } else { anyhow::bail!("bench floors not met") }
         }
         Cmd::Dump { queries, out, depth } => dump::run(&repo, &queries, &out, depth, cli.no_dense),
         Cmd::ImportLegacy { graph_json } => {
-            let cfg = load_cfg()?;
             let store = store::Store::new(&repo);
             let (mut graph, manifest) = store.load()?;
-            let ids = ids::IdMatcher::new(&cfg.id_families, &cfg.milestone_families);
+            // The graph is read before the matcher is built, which is the order this needs: the
+            // families are the ones the store's own nodes are written in.
+            let ids = families::from_graph(&graph);
             let text = std::fs::read_to_string(&graph_json)?;
             let r = legacy::import(&mut graph, &ids, &text)?;
             store.save(&graph, &manifest)?;
@@ -565,7 +601,7 @@ mod tests {
     const TWO: &str = "# A\n\n**FR-PAY-22 · MUST · cancellation window**\n\nbody\n\n**FR-PAY-23 · MUST · refund window**\n\nbody\n";
 
     fn built(repo: &std::path::Path, cfg: &config::Config) {
-        run_update(repo, cfg, &extractors(repo, cfg).unwrap(), true).unwrap();
+        run_update(repo, cfg, true).unwrap();
     }
 
     #[test]
@@ -578,7 +614,7 @@ mod tests {
         let (graph, refreshed) = ask::graph_for_ask(repo, &cfg, &store, false, &ask::Timing::new()).unwrap();
         let r = refreshed.expect("the edit is a refresh");
         assert_eq!((r.changed, r.removed), (1, 0));
-        let ids = ids::IdMatcher::new(&cfg.id_families, &cfg.milestone_families);
+        let ids = families::from_graph(&graph);
         let opts = query::Options { seeds: 5, bodies: false, dense: false, json: false, depth: rerank::DEPTH };
         let words = ["refund".to_string(), "window".to_string()];
         let answer = query::ask(&graph, &ids, &index::lexical::Lexical::build(&graph, &enrich::Questions::default(), false), None, None, &words, &opts);
@@ -719,8 +755,7 @@ mod tests {
         std::fs::write(repo.join("bin.ts"), b"export const x = 1;\n\xff\xfe\x00").unwrap();
         std::fs::write(repo.join("nul.ts"), b"export const marker = 'a\x00b';\n").unwrap();
         let cfg = config::Config::default();
-        let ex = extractors(repo, &cfg).unwrap();
-        let r = run_update(repo, &cfg, &ex, true).unwrap();
+        let r = run_update(repo, &cfg, true).unwrap();
         assert_eq!(r.changed, 2);
         let (graph, _) = store::Store::new(repo).load().unwrap();
         assert!(graph.nodes.contains_key("sym:nul.ts::marker"));
@@ -734,8 +769,7 @@ mod tests {
         std::fs::create_dir_all(repo.join("docs/требования")).unwrap();
         std::fs::write(repo.join("docs/требования/оплата.md"), "# Оплата\n\n**FR-PAY-22 · MUST · Отмена**\n\nтело\n").unwrap();
         let cfg = config::Config::default();
-        let ex = extractors(repo, &cfg).unwrap();
-        run_update(repo, &cfg, &ex, true).unwrap();
+        run_update(repo, &cfg, true).unwrap();
         let (graph, manifest) = store::Store::new(repo).load().unwrap();
         assert!(manifest.files.contains_key("docs/требования/оплата.md"));
         let n = &graph.nodes["FR-PAY-22"];
@@ -753,10 +787,9 @@ mod tests {
         std::fs::write(repo.join("docs/a.md"), "# A\n\n**FR-PAY-22 · MUST · first**\n\nbody a\n").unwrap();
         std::fs::write(repo.join("docs/b.md"), "# B\n\nintro\n\nmore\n\n**FR-PAY-22 · MUST · second**\n\nbody b\n").unwrap();
         let cfg = config::Config::default();
-        let ex = extractors(repo, &cfg).unwrap();
-        run_update(repo, &cfg, &ex, true).unwrap();
+        run_update(repo, &cfg, true).unwrap();
         std::fs::remove_file(repo.join("docs/a.md")).unwrap();
-        run_update(repo, &cfg, &ex, false).unwrap();
+        run_update(repo, &cfg, false).unwrap();
         let (graph, _) = store::Store::new(repo).load().unwrap();
         let n = &graph.nodes["FR-PAY-22"];
         assert_eq!((n.file.as_str(), n.line, n.label.as_str()), ("docs/b.md", 7, "second"));
@@ -788,10 +821,9 @@ more
 **FR-PAY-20 · MUST · y in c**
 ").unwrap();
         let cfg = config::Config::default();
-        let ex = extractors(repo, &cfg).unwrap();
-        run_update(repo, &cfg, &ex, true).unwrap();
+        run_update(repo, &cfg, true).unwrap();
         std::fs::remove_file(repo.join("docs/a.md")).unwrap();
-        run_update(repo, &cfg, &ex, false).unwrap();
+        run_update(repo, &cfg, false).unwrap();
         let (graph, _) = store::Store::new(repo).load().unwrap();
         let y = &graph.nodes["FR-PAY-20"];
         assert_eq!((y.file.as_str(), y.line, y.label.as_str()), ("docs/b.md", 5, "y in b"));
