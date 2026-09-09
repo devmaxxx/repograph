@@ -1623,6 +1623,22 @@ fifth, priced in wall rather than dollars.
 **Gate.** A row per configuration in the README's `--rerank` table, or a recorded refusal with
 its number.
 
+**Refused, with numbers (2026-09-10)** in
+[the cross-vendor refusals](2026-09-10-cross-vendor-refusals.md). Four configurations, four reasons,
+none of them a shrug:
+
+| arm | why not | what would fill it |
+| --- | --- | --- |
+| Codex | the machine's ChatGPT refresh token was spent by the probe that established `agent/codex.md`; `codex login` is the repair and it is the account holder's to run | 30 questions of the account's quota |
+| Ollama | `ollama list` is empty — the daemon is installed and no model is pulled | a multi-gigabyte pull, declined rather than taken quietly |
+| `e5-large` + reranker | no e5-large store and no cached weights on this machine; a 2.1 GB download and an embed of 33.5k rows the README prices in hours | one copy embedded large, then the 30 paraphrase cases only — the pool ranks say the five gains at rank ≤ 25 are where a better embedder could matter and the seven past 100 are not |
+| code-enriched fifth list | ~$6 of haiku over 5,240 code nodes before a single reranked question | a spending decision, which belongs to whoever pays |
+
+What was established for nothing: both command shapes still match their CLIs on this machine —
+`codex exec`'s stdin behaviour, `-m`, `--skip-git-repo-check` and `-o` are all present in 0.147.0,
+and `ollama run MODEL [PROMPT]` with `--hidethinking` in 0.33.3. The shapes have not rotted, which
+is the whole of what a `--help` reading can say and is what the README already claims.
+
 ---
 
 ## G38 · `families` is a report of the derived set and says nothing about the rule's own edge
@@ -1746,7 +1762,7 @@ clones a repository they did not write.
 | ~~6~~ | ~~**G28** the reranked p90 straddles the ceiling~~ | **answered 2026-09-09** — the cause is pick order (identical pool, identical prompt, 21 of 30 cases moving ±25 tokens); the arm's own bar is written at p90 240, unread |
 | ~~7~~ | ~~**G29** the one paraphrase sonnet never picks~~ | **closed 2026-09-09** — `pool=-/200`: the id is outside the pool, so the lever is depth or fusion and never the snippet |
 | ~~8~~ | ~~**G31** the token cost is bytes ÷ 4 of one prompt~~ | **closed 2026-09-09** — metered: median 58,314 B, p90 60,843 B over thirty prompts; bytes and not tokens, because the transport returns no usage block |
-| 9 | **G37** no non-Claude number, no stacked levers | five runs on copies, all priced, none blocking anything; first among them the `e5-large` + reranker pair, because both halves are already measured alone |
+| 9 | **G37** no non-Claude number, no stacked levers | **refused with numbers 2026-09-10** — an account, an empty model shelf, a 2.1 GB download and ~$6 of haiku; the cheap half is the `e5-large` pair on the 30 paraphrase cases, and the pool ranks say which five cases it could move |
 | 10 | **G35** `derive` on every `update` | the no-op case is closed and measured, 1.00 s → 0.08 s cold; what is left is the `update` that does change a file, still expected to be milliseconds and still without a number |
 | 11 | **G40** the empty set is a never-matching regex | a type change and a branch, no measurement to take; here rather than last because it is the cheapest row in the file and it removes a sentinel a reader has to decode |
 | 12 | **G38** the report has no edge | a sort order and two columns; last because the report already shows both halves |

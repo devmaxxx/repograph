@@ -686,6 +686,10 @@ rerank_model = "sonnet"
 ```
 
 No non-Claude model has been read on these cases, so none of the rows above is a claim about one.
+An attempt on 2026-09-10 filled none of them and wrote down why — an account, an empty Ollama
+shelf, a 2.1 GB download, ~$6 of enrichment — in
+[the cross-vendor refusals](docs/bench/2026-09-10-cross-vendor-refusals.md), which also re-checks
+both shapes against the installed CLIs.
 Reading one is the same two commands the numbers here came from: `repograph bench --rerank` against
 an enriched store measures a `rerank_model`, and a plain `repograph bench` against a copy of the
 store that the other model enriched measures an `enrich_model`. A store records the model its
