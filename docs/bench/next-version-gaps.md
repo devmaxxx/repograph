@@ -810,7 +810,7 @@ whose own second population G8 records as never built.
 
 ---
 
-## G18 · A path with one non-ASCII byte makes its whole file invisible to `changes`
+## G18 · A path with one non-ASCII byte makes its whole file invisible to `changes` — closed 2026-09-09
 
 **Raised (2026-09-07)** by the Windows port's CI work, not by a run. `core.quotepath` is on by
 default, so `git diff` quotes any path outside ASCII: a Russian-named file's header comes back as
@@ -842,7 +842,30 @@ have to decide what a lone `\377` means.
 **Gate.** Two tests in `changes.rs`'s own module: a diff whose header is quoted, asserting the hunk
 is found under the unescaped name, and an untracked quoted name from `ls-files` reported as itself.
 Then the fixture, which must read what it reads today byte for byte, since none of its paths
-changes form. Not written.
+changes form. Both written.
+
+**Closed (2026-09-09).** The lever as written, and no more than it: `-c core.quotepath=false` on
+the invocations `git()` makes (`src/changes.rs:147`), which is one argument in the one place both
+callers pass through. The two tests run real git in a temporary repository rather than handing
+`parse` a quoted header, because after this argument no quoted header ever reaches `parse` and a
+parser-only test would grade nothing. A tracked `docs/Штраф.ts` with one of its two lines changed
+read `left: []` against the hunk expected of it — the whole file dropped, in silence, which is what
+this gap is named for — and reads `docs/Штраф.ts` at 2–2 now. An untracked `docs/Новый.ts` read
+`"docs/\320\235\320\276\320\262\321\213\320\271.ts"`, quotes and escapes intact, and reads
+`docs/Новый.ts` at 1 to `u32::MAX` now. The module's other fourteen tests and both integration
+suites are unmoved.
+
+The fixture read what it reads today, byte for byte. On the pinned `beauty-crm-502e8a6d` — 0 paths
+with a byte outside ASCII — `changes` and `changes --json` are byte-identical between the
+`origin/main` binary and this one, by `cmp` on both streams, with stderr empty on all four runs.
+The refresh each of those runs performs left the store where it found it: `graph.json`
+`f970eedd9e1cbd65bef3db4755b74ee252286ec5` and `manifest.json`
+`3a2ae36f9448bb856c751b577fbc1a3e238d26b4` before and after, and the worktree clean outside
+`graphify-out/` both times.
+
+Windows needs nothing of its own. The names under test are Cyrillic *file* names, where
+`users_day.rs` already runs a Cyrillic *directory* on all three runners, and a checkout that writes
+CRLF cannot move a `-U0` range, which counts lines and not bytes.
 
 ## G19 · The progress line's cadence is a count of rows — first line at 102.4 s against a 60 s bar
 
@@ -1173,7 +1196,7 @@ bytes; a `SIGTERM`ed `serve` leaves no `serve.sock`, or the README says why one 
 | — | ~~**G10** five seeds over three lists~~ | measured 2026-09-05 — A4 prices one seat for a fourth list at 6 held-out questions in each arm, none gained, p = 0.031; closed as measured, not as fixed |
 | — | ~~**G11** the embedder for Russian paraphrase~~ | shipped 2026-09-05 as a store option — e5-large reads paraphrase 22/30 and held-out 103 → 119, at 0.8 s an `ask` and a 2.1 GB download; the default followed at `35357c1` and went back to the small model on 2026-09-07 ([ADR-002](../adr/ADR-002-two-defaults-multiplied.md)) with the option unchanged, and a store with no recorded model still reads as the small one |
 | — | ~~**G5** rank + MRR~~ | closed by Task 1 (2026-09-04) — every retrieval row carries `rank`, the summary carries `mrr`, and the run reads 0.635; the 2026-09-03 rows cannot be rescored |
-| 6 | **G18** a non-ASCII path drops its file from `changes` | raised 2026-09-07 by the Windows port's CI work, latent — `core.quotepath` is on by default, so `parse` reads no name from a quoted `+++` line and drops every hunk in that file, with Task 2's file-id fallback unreachable because no hunk exists. The pinned fixture has 0 such paths, so no recorded number moved on it. Above G1 because it is one argument on two `git` calls and it restores files that vanish today with nothing printed |
+| — | ~~**G18** a non-ASCII path drops its file from `changes`~~ | closed 2026-09-09 — the one argument this row predicted, `-c core.quotepath=false` on both calls `git()` makes, so the `+++` header arrives unquoted and `ls-files` names a file the graph can match. Two tests against real git read red first: a tracked `docs/Штраф.ts` yielding no hunk at all, and an untracked `docs/Новый.ts` named `"docs/\320\235…"` with its escapes. The pinned fixture, 0 such paths, reads `changes` and `changes --json` byte-identical on both binaries, with `graph.json` and `manifest.json` unmoved across the refresh |
 | 7 | **G1** unparsed files get a file node | the file half is closed by Task 2 (2026-09-04) against a `code_files` denominator; the symbol half is 57 Kotlin declarations and waits on 0.6.0's extractor |
 | — | ~~**G3** the three impact diagnostics~~ | closed by Tasks 3 and 4 (2026-09-04) — 123/123 files over 16 targets, mean recall 1.0 |
 | — | ~~**G4** grow the blast set~~ | closed by Task 5 (2026-09-04) — `blast.jsonl` is 32 cases and the per-suite decision rule is written down before the changes judged on it |

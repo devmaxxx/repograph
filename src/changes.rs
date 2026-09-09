@@ -140,8 +140,13 @@ pub fn render_json(graph: &Graph, r: &Report) -> String {
     serde_json::json!({ "touched": touched, "affected": affected, "files": r.files, "risk": r.risk }).to_string() + "\n"
 }
 
+/// `core.quotepath` is on by default, so any path with a byte outside ASCII arrives octal-escaped
+/// and inside quotes — `"b/docs/\320\250…"`, the quote before the `b/`, which the header parser
+/// reads no name from and `ls-files` hands on as a name that matches no file in the graph. Both
+/// callers below need the bytes rather than their escapes; every ASCII path is unchanged by this.
 fn git(repo: &Path, args: &[&str]) -> anyhow::Result<String> {
-    let out = std::process::Command::new("git").arg("-C").arg(repo).args(args).output()?;
+    let out = std::process::Command::new("git").arg("-C").arg(repo)
+        .args(["-c", "core.quotepath=false"]).args(args).output()?;
     anyhow::ensure!(out.status.success(), "git {}: {}", args.join(" "), String::from_utf8_lossy(&out.stderr).trim());
     Ok(String::from_utf8_lossy(&out.stdout).into_owned())
 }
@@ -285,5 +290,45 @@ mod tests {
     fn an_empty_diff_renders_a_clean_report() {
         let g = graph();
         assert_eq!(render(&g, &report(&g, &[], 2)), "changed: 0 symbols\n");
+    }
+
+    /// A repository holding one commit of a Cyrillic-named file, with an identity of its own so a
+    /// runner without `user.name` and a developer with hooks and a signing key both get the same
+    /// two commands. Real git, because what is under test is what git puts on the wire.
+    fn repo_with_a_cyrillic_file() -> tempfile::TempDir {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = dir.path();
+        std::fs::create_dir(repo.join("docs")).unwrap();
+        std::fs::write(repo.join("docs/Штраф.ts"), "export const a = 1\nexport const b = 2\n").unwrap();
+        let git = |args: &[&str]| {
+            let out = std::process::Command::new("git").arg("-C").arg(repo)
+                .args(["-c", "user.name=repograph tests", "-c", "user.email=tests@example.invalid", "-c", "commit.gpgsign=false"])
+                .args(args).output().unwrap_or_else(|e| panic!("git {args:?}: {e}"));
+            assert!(out.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&out.stderr));
+        };
+        git(&["-c", "init.defaultBranch=main", "init", "-q"]);
+        git(&["add", "-A"]);
+        git(&["commit", "-q", "--no-verify", "-m", "the file as it stands"]);
+        dir
+    }
+
+    #[test]
+    fn a_tracked_file_whose_name_is_not_ascii_keeps_its_hunk_under_its_own_name() {
+        let dir = repo_with_a_cyrillic_file();
+        std::fs::write(dir.path().join("docs/Штраф.ts"), "export const a = 1\nexport const b = 3\n").unwrap();
+        assert_eq!(
+            hunks_from_git(dir.path(), "HEAD").unwrap(),
+            vec![Hunk { file: "docs/Штраф.ts".into(), start: 2, end: 2 }]
+        );
+    }
+
+    #[test]
+    fn an_untracked_file_whose_name_is_not_ascii_is_reported_as_itself() {
+        let dir = repo_with_a_cyrillic_file();
+        std::fs::write(dir.path().join("docs/Новый.ts"), "export const c = 3\n").unwrap();
+        assert_eq!(
+            hunks_from_git(dir.path(), "HEAD").unwrap(),
+            vec![Hunk { file: "docs/Новый.ts".into(), start: 1, end: u32::MAX }]
+        );
     }
 }
