@@ -145,7 +145,10 @@ fn git(repo: &Path, args: &[&str]) -> anyhow::Result<String> {
     // and puts the opening quote *before* the `b/` — a `+++` header `parse` reads no name from,
     // which drops the file's hunks in silence, and an `ls-files` name that matches no node. Off,
     // git writes UTF-8 and leaves every ASCII path byte-identical.
+    // A hook exports `GIT_DIR` and its neighbours into everything it runs, and they outrank
+    // `-C`. The repository named by `--repo` is the one that was asked for.
     let out = std::process::Command::new("git").arg("-C").arg(repo)
+        .env_remove("GIT_DIR").env_remove("GIT_WORK_TREE").env_remove("GIT_INDEX_FILE")
         .args(["-c", "core.quotepath=false"]).args(args).output()?;
     anyhow::ensure!(out.status.success(), "git {}: {}", args.join(" "), String::from_utf8_lossy(&out.stderr).trim());
     Ok(String::from_utf8_lossy(&out.stdout).into_owned())
@@ -155,7 +158,9 @@ fn git(repo: &Path, args: &[&str]) -> anyhow::Result<String> {
 /// file as one hunk over its whole length, so a new file's symbols count as changed too.
 pub fn hunks_from_git(repo: &Path, base: &str) -> anyhow::Result<Vec<Hunk>> {
     let mut hunks = parse(&git(repo, &["diff", "-U0", "--no-color", "--no-ext-diff", base, "--", "."])?);
-    for f in git(repo, &["ls-files", "--others", "--exclude-standard"])?.lines().filter(|l| !l.is_empty()) {
+    // NUL rather than lines: a file name may hold a newline, and now that nothing escapes it
+    // one name would otherwise be read as two files that do not exist.
+    for f in git(repo, &["ls-files", "-z", "--others", "--exclude-standard"])?.split('\0').filter(|f| !f.is_empty()) {
         hunks.push(Hunk { file: f.to_string(), start: 1, end: u32::MAX });
     }
     Ok(hunks)
@@ -293,14 +298,18 @@ mod tests {
     }
 
     fn git_in(repo: &Path, args: &[&str]) {
-        let out = std::process::Command::new("git").arg("-C").arg(repo).args(args).output().unwrap();
+        let out = std::process::Command::new("git").arg("-C").arg(repo)
+            .env_remove("GIT_DIR").env_remove("GIT_WORK_TREE").env_remove("GIT_INDEX_FILE")
+            .args(args).output().unwrap();
         assert!(out.status.success(), "git {}: {}", args.join(" "), String::from_utf8_lossy(&out.stderr));
     }
 
     /// A repository that quotes. `core.quotepath` is git's default, but a machine that turns it
     /// off globally would make the two tests below pass without the fix. Signing, hooks and the
     /// global exclude file are pinned for the mirror-image reason: no personal or CI git
-    /// configuration should be able to fail these tests for something that is not quoting.
+    /// configuration should be able to fail these tests for something that is not quoting. The
+    /// ambient `GIT_DIR` is dropped for a third reason: a run started from a hook would otherwise
+    /// initialise and commit against the repository the hook belongs to.
     fn quoting_repo() -> tempfile::TempDir {
         let dir = tempfile::tempdir().unwrap();
         git_in(dir.path(), &["init", "-q"]);

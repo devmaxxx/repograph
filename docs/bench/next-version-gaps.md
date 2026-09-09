@@ -784,7 +784,7 @@ whose own second population G8 records as never built.
 
 ---
 
-## G18 · A path with one non-ASCII byte makes its whole file invisible to `changes`
+## G18 · A path with one non-ASCII byte makes its whole file invisible to `changes` — closed 2026-09-09
 
 **Raised (2026-09-07)** by the Windows port's CI work, not by a run. `core.quotepath` is on by
 default, so `git diff` quotes any path outside ASCII: a Russian-named file's header comes back as
@@ -816,7 +816,49 @@ have to decide what a lone `\377` means.
 **Gate.** Two tests in `changes.rs`'s own module: a diff whose header is quoted, asserting the hunk
 is found under the unescaped name, and an untracked quoted name from `ls-files` reported as itself.
 Then the fixture, which must read what it reads today byte for byte, since none of its paths
-changes form. Not written.
+changes form. Both written.
+
+**Closed (2026-09-09).** The lever as written: `-c core.quotepath=false` on the invocations `git()`
+makes, one argument in the one place both callers pass through. The two tests build a scratch
+repository that pins the quoting *on*, so a machine that turns it off globally cannot make them
+pass against the unfixed binary, and pins signing, hooks and the global exclude file so that no
+personal configuration can fail them for something that is not quoting. A tracked `docs/Штраф.ts`
+read no hunk at all and reads its own name now; an untracked file read its escaped name and reads
+itself. The untracked test's name is chosen without a decomposable letter, so a filesystem that
+hands back the decomposed form cannot fail it for a difference that is not the one under test.
+
+**Three more, from a review of the fix.** The argument alone left two ways for the same silence to
+return, and one for a test to be run against the wrong repository:
+
+- With nothing escaping it any more, a file name may hold a newline, and the untracked listing was
+  still split on lines — one such name became two files that do not exist, reported as changed.
+  The listing is asked for NUL-separated now. Inert where it is not needed: on the pinned fixture
+  and on this repository the two listings are identical, and neither holds a tracked path with a
+  byte outside ASCII. It also takes the untracked half out of the argument's hands — with the
+  argument removed the tracked test reads no hunk again, and the untracked one now stays green,
+  because NUL separation does not need the quoting to be off to be unambiguous.
+- A hook exports `GIT_DIR`, `GIT_WORK_TREE` and `GIT_INDEX_FILE` into everything it runs and they
+  outrank `-C`, so `changes --repo X` started from one was reading the hook's repository rather
+  than the one it was given. Dropped in `git()` and in the test fixture alike; without it a test
+  run started from a hook initialises and commits against the surrounding repository.
+- The identity the fixture uses is now written twice, here and in `users_day.rs`, comment and all.
+  Left as it is: sharing it across a binary's unit tests and an integration target needs a
+  test-support module this crate does not have.
+
+**What the argument does not reach.** Two paths still lose their file in silence, for reasons this
+gap did not name and this fix does not close:
+
+- **A path whose bytes are not UTF-8.** With the quoting off they arrive raw, and `git()` decodes
+  its output lossily, so each such byte becomes a replacement character and the name matches no
+  node. The escaped form was equally unusable, so nothing regressed — what closed is the UTF-8
+  case. The lever is `OsString` on both sides, which is the "what does a lone `\377` mean"
+  question this gap declined once already.
+- **Composition.** The graph's names come from the walk and these come from git, which normalises
+  to the composed form on macOS by default, so a tree holding decomposed names gives a hunk name
+  byte-different from the node name for the same file. The tests dodge it by choosing their
+  letters; a real corpus cannot.
+
+The unit module also needs a `git` binary now, where every other test in it runs on strings alone.
 
 ## Suggested order
 
@@ -834,7 +876,7 @@ changes form. Not written.
 | — | ~~**G10** five seeds over three lists~~ | measured 2026-09-05 — A4 prices one seat for a fourth list at 6 held-out questions in each arm, none gained, p = 0.031; closed as measured, not as fixed |
 | — | ~~**G11** the embedder for Russian paraphrase~~ | shipped 2026-09-05 as a store option — e5-large reads paraphrase 22/30 and held-out 103 → 119, at 0.8 s an `ask` and a 2.1 GB download; the default followed at `35357c1`, and a store with no recorded model still reads as the small one |
 | — | ~~**G5** rank + MRR~~ | closed by Task 1 (2026-09-04) — every retrieval row carries `rank`, the summary carries `mrr`, and the run reads 0.635; the 2026-09-03 rows cannot be rescored |
-| 6 | **G18** a non-ASCII path drops its file from `changes` | raised 2026-09-07 by the Windows port's CI work, latent — `core.quotepath` is on by default, so `parse` reads no name from a quoted `+++` line and drops every hunk in that file, with Task 2's file-id fallback unreachable because no hunk exists. The pinned fixture has 0 such paths, so no recorded number moved on it. Above G1 because it is one argument on two `git` calls and it restores files that vanish today with nothing printed |
+| — | ~~**G18** a non-ASCII path drops its file from `changes`~~ | closed 2026-09-09 — `-c core.quotepath=false` on both invocations, two tests over a scratch repository that pins the quoting on, the untracked listing asked for NUL-separated, and the ambient `GIT_DIR` dropped. A non-UTF-8 path and a decomposed one still lose their file, recorded in the section above. Raised 2026-09-07 by the Windows port's CI work, latent — `core.quotepath` is on by default, so `parse` reads no name from a quoted `+++` line and drops every hunk in that file, with Task 2's file-id fallback unreachable because no hunk exists. The pinned fixture has 0 such paths, so no recorded number moved on it. Above G1 because it is one argument on two `git` calls and it restores files that vanish today with nothing printed |
 | 7 | **G1** unparsed files get a file node | the file half is closed by Task 2 (2026-09-04) against a `code_files` denominator; the symbol half is 57 Kotlin declarations and waits on 0.6.0's extractor |
 | — | ~~**G3** the three impact diagnostics~~ | closed by Tasks 3 and 4 (2026-09-04) — 123/123 files over 16 targets, mean recall 1.0 |
 | — | ~~**G4** grow the blast set~~ | closed by Task 5 (2026-09-04) — `blast.jsonl` is 32 cases and the per-suite decision rule is written down before the changes judged on it |
