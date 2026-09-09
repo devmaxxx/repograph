@@ -145,7 +145,10 @@ pub fn render_json(graph: &Graph, r: &Report) -> String {
 /// reads no name from and `ls-files` hands on as a name that matches no file in the graph. Both
 /// callers below need the bytes rather than their escapes; every ASCII path is unchanged by this.
 fn git(repo: &Path, args: &[&str]) -> anyhow::Result<String> {
+    // A hook exports `GIT_DIR` and friends into everything it runs, and they outrank `-C`. The
+    // repository under a `--repo` is the one that was asked for, so the ambient one is dropped.
     let out = std::process::Command::new("git").arg("-C").arg(repo)
+        .env_remove("GIT_DIR").env_remove("GIT_WORK_TREE").env_remove("GIT_INDEX_FILE")
         .args(["-c", "core.quotepath=false"]).args(args).output()?;
     anyhow::ensure!(out.status.success(), "git {}: {}", args.join(" "), String::from_utf8_lossy(&out.stderr).trim());
     Ok(String::from_utf8_lossy(&out.stdout).into_owned())
@@ -155,7 +158,9 @@ fn git(repo: &Path, args: &[&str]) -> anyhow::Result<String> {
 /// file as one hunk over its whole length, so a new file's symbols count as changed too.
 pub fn hunks_from_git(repo: &Path, base: &str) -> anyhow::Result<Vec<Hunk>> {
     let mut hunks = parse(&git(repo, &["diff", "-U0", "--no-color", "--no-ext-diff", base, "--", "."])?);
-    for f in git(repo, &["ls-files", "--others", "--exclude-standard"])?.lines().filter(|l| !l.is_empty()) {
+    // Split on NUL rather than on lines: a file name may hold a newline, and with the escaping
+    // turned off one name would otherwise be read as two files that do not exist.
+    for f in git(repo, &["ls-files", "-z", "--others", "--exclude-standard"])?.split('\0').filter(|f| !f.is_empty()) {
         hunks.push(Hunk { file: f.to_string(), start: 1, end: u32::MAX });
     }
     Ok(hunks)
@@ -302,11 +307,16 @@ mod tests {
         std::fs::write(repo.join("docs/Штраф.ts"), "export const a = 1\nexport const b = 2\n").unwrap();
         let git = |args: &[&str]| {
             let out = std::process::Command::new("git").arg("-C").arg(repo)
+                .env_remove("GIT_DIR").env_remove("GIT_WORK_TREE").env_remove("GIT_INDEX_FILE")
                 .args(["-c", "user.name=repograph tests", "-c", "user.email=tests@example.invalid", "-c", "commit.gpgsign=false"])
                 .args(args).output().unwrap_or_else(|e| panic!("git {args:?}: {e}"));
             assert!(out.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&out.stderr));
         };
         git(&["-c", "init.defaultBranch=main", "init", "-q"]);
+        // Written into the repository rather than passed on the command line: these tests are only
+        // a regression test where the quoting they defeat is on, and a machine may have turned it
+        // off for its own reasons.
+        git(&["config", "core.quotepath", "true"]);
         git(&["add", "-A"]);
         git(&["commit", "-q", "--no-verify", "-m", "the file as it stands"]);
         dir

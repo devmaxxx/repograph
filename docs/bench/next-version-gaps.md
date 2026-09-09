@@ -867,6 +867,35 @@ Windows needs nothing of its own. The names under test are Cyrillic *file* names
 `users_day.rs` already runs a Cyrillic *directory* on all three runners, and a checkout that writes
 CRLF cannot move a `-U0` range, which counts lines and not bytes.
 
+**Reviewed the same day, and three things the argument does not reach.** A `code-review high`
+over this commit found eight, of which three were taken here: the untracked listing is asked for
+NUL-separated (`ls-files -z`), because with the escaping off a name holding a newline would have
+been split into two files that do not exist; `git()` drops `GIT_DIR`, `GIT_WORK_TREE` and
+`GIT_INDEX_FILE`, since a hook exports them and they outrank `-C`, so a `changes --repo X` run from
+a hook was reading the hook's repository; and the test fixture now writes `core.quotepath = true`
+into the repository it creates, because a developer who turns the quoting off in their own global
+configuration was getting two tests that pass against the unfixed binary. With that pin, removing
+the argument reads `left: []` again — and the untracked half stays green, since `-z` protects it
+now and the argument no longer decides it. The five not taken:
+
+- **A path whose bytes are not UTF-8** arrives raw once the quoting is off, and `git()` decodes its
+  output lossily, so each such byte becomes a replacement character and the name matches no node —
+  the same silent drop, for a different reason. The escaped form was equally unusable, so nothing
+  regressed; what closed is the UTF-8 case, and the lever for the rest is `OsString` on both sides,
+  which is the "what does a lone `\377` mean" question this gap declined once already.
+- **Composition.** The graph's names come from the walk and these come from git, which normalises
+  to the composed form on macOS by default. A tree holding decomposed names gives a hunk name that
+  is byte-different from the node name for the same file, dropped in silence. The new tests create
+  their file composed and cannot see it.
+- **A repository under a subdirectory.** `git` prints names relative to the repository root, and
+  the graph holds them relative to the walk root, so `--repo` at a subdirectory of a checkout makes
+  every hunk name a file the graph does not have. `--relative` is the argument; latent before this
+  change and untouched by it, and the same family as the defect above it.
+- **The identity helper is written twice**, here and in `users_day.rs`, comment and all; a shared
+  test-support module would hold it once, and the environment-clearing above had to be written
+  twice for exactly that reason.
+- **The unit module now needs a `git` binary**, where every other test in it runs on strings alone.
+
 ## G19 · The progress line's cadence is a count of rows — first line at 102.4 s against a 60 s bar
 
 **Raised (2026-09-07)** by the rebuild the first resource run bounded
