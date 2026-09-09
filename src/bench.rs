@@ -227,7 +227,7 @@ pub fn run(repo: &Path, cases: Option<&Path>, no_dense: bool, rerank: bool, rera
     let repo = std::env::var("REPOGRAPH_BENCH_REPO").map(std::path::PathBuf::from).unwrap_or(repo.to_path_buf());
     let cfg = Config::load(&repo)?;
     // `bench` does not come through `main`'s arms, so the pools it owns are capped here.
-    let threads = crate::index::embed::threads(cfg.threads);
+    let threads = crate::index::embed::threads(cfg.resources);
     crate::cap_pools(threads);
     let store = Store::new(&repo);
     let (graph, _): (Graph, _) = store.load()?;

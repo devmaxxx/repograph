@@ -35,15 +35,15 @@ pub struct Config {
     /// the wall on a whole-store embed. docs/adr/ADR-002-two-defaults-multiplied.md weighs the
     /// two; docs/bench/2026-09-05-dev-cases-results.md measures the recall.
     pub embed_model: String,
-    /// How many threads the model sessions and the tokenizer pool may use; `0` takes the
-    /// built-in rule, a third of the logical cores. It describes the machine rather than the
-    /// corpus — the same repository wants every core on a CI box and a quiet laptop's spare
-    /// ones — so the global file may set it, unlike `embed_model`, whose value is a property of
-    /// the vectors on disk. The cap is a straight trade with no free side: on this machine the
-    /// default gives back a third of the peak CPU for +39% wall on a fixed batch shape
-    /// (docs/bench/2026-09-07-resource-usage-results.md), so `threads = 6` is the one word back
-    /// to what ORT would have picked itself.
-    pub threads: usize,
+    /// How much of the machine a run may take: `"low"`, `"balanced"` (the default) or `"full"`.
+    /// It describes the machine rather than the corpus — the same repository wants every core on
+    /// a CI box and a quiet laptop's spare ones — so the global file may set it, unlike
+    /// `embed_model`, whose value is a property of the vectors on disk. It is a straight trade
+    /// with no free side: on a whole-store embed of the bench fixture the three levels read
+    /// 168.8 s at 382% peak CPU, 265.7 s at 275% and 358.7 s at 140%
+    /// (docs/bench/2026-09-09-normal-band-only-results.md). `REPOGRAPH_RESOURCES` overrides it
+    /// for one run.
+    pub resources: crate::index::embed::Resources,
 }
 
 // Headless Claude Code with thinking off: the same answers, 4-5× faster and cheaper. `{model}`
@@ -88,13 +88,13 @@ impl Default for Config {
             rerank_model: RERANK_MODEL.into(),
             reranker_dir: String::new(),
             embed_model: crate::index::embed::DEFAULT_MODEL.into(),
-            threads: 0,
+            resources: crate::index::embed::Resources::default(),
         }
     }
 }
 
 /// The settings that describe the machine rather than the corpus: which command runs a model,
-/// which model it runs and how many threads it may take. A global file may set these and nothing
+/// which model it runs and how much of itself it offers. A global file may set these and nothing
 /// else. The corpus-shaped settings — the globs, the id families, and above all `embed_model` —
 /// are deliberately unreadable from there: one global line would otherwise rewrite every
 /// repository's vectors under a model nobody chose for that repository, which is the one mistake
@@ -107,7 +107,7 @@ struct Machine {
     enrich_model: Option<String>,
     rerank_model: Option<String>,
     reranker_dir: Option<String>,
-    threads: Option<usize>,
+    resources: Option<crate::index::embed::Resources>,
 }
 
 /// `$REPOGRAPH_CONFIG`, else `$XDG_CONFIG_HOME/repograph/config.toml`, else
@@ -151,7 +151,7 @@ impl Config {
         layer(&named, "reranker_dir", machine.reranker_dir, &mut cfg.reranker_dir);
         layer(&named, "enrich_model", machine.enrich_model, &mut cfg.enrich_model);
         layer(&named, "rerank_model", machine.rerank_model, &mut cfg.rerank_model);
-            layer(&named, "threads", machine.threads, &mut cfg.threads);
+        layer(&named, "resources", machine.resources, &mut cfg.resources);
 
         // The command is resolved from its template rather than from `Default`, whose copy already
         // has the default model substituted: a project that sets only `enrich_model` must still get
@@ -172,11 +172,7 @@ impl Config {
         if let Ok(m) = std::env::var("REPOGRAPH_RERANK_MODEL") {
             if !m.is_empty() { cfg.rerank_model = m; }
         }
-        if let Ok(t) = std::env::var("REPOGRAPH_THREADS") {
-            if !t.is_empty() {
-                cfg.threads = t.parse().with_context(|| format!("REPOGRAPH_THREADS is {t:?}, which is not a thread count"))?;
-            }
-        }
+        cfg.resources = crate::index::embed::resources_from_env(cfg.resources, std::env::var("REPOGRAPH_RESOURCES").ok().as_deref())?;
         cfg.enrich_command = enrich_template.replace(MODEL_SLOT, &cfg.enrich_model);
         cfg.rerank_command = rerank_template.replace(MODEL_SLOT, &cfg.rerank_model);
         Ok(cfg)
@@ -214,6 +210,7 @@ fn cfg_str(table: &toml::Table, key: &str, fallback: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::index::embed::Resources;
 
     #[test]
     fn missing_file_yields_defaults() {
@@ -300,7 +297,7 @@ mod tests {
             std::env::set_var("REPOGRAPH_CONFIG", &path);
             std::env::remove_var("REPOGRAPH_ENRICH_MODEL");
             std::env::remove_var("REPOGRAPH_RERANK_MODEL");
-            std::env::remove_var("REPOGRAPH_THREADS");
+            std::env::remove_var("REPOGRAPH_RESOURCES");
         }
         let out = f();
         unsafe { std::env::remove_var("REPOGRAPH_CONFIG") };
@@ -377,50 +374,71 @@ mod tests {
     }
 
     #[test]
-    fn threads_defaults_to_zero_and_reads_from_the_project_file() {
+    fn resources_defaults_to_balanced_and_reads_from_the_project_file() {
         with_machine(None, || {
             let dir = tempfile::tempdir().unwrap();
-            assert_eq!(Config::load(dir.path()).unwrap().threads, 0);
-            std::fs::write(dir.path().join("repograph.toml"), "threads = 3\n").unwrap();
-            assert_eq!(Config::load(dir.path()).unwrap().threads, 3);
+            assert_eq!(Config::load(dir.path()).unwrap().resources, Resources::Balanced);
+            std::fs::write(dir.path().join("repograph.toml"), "resources = \"full\"\n").unwrap();
+            assert_eq!(Config::load(dir.path()).unwrap().resources, Resources::Full);
         });
     }
 
     #[test]
-    fn the_machine_file_may_set_threads_and_the_project_still_wins() {
-        with_machine(Some("threads = 2\n"), || {
+    fn the_machine_file_may_set_resources_and_the_project_still_wins() {
+        with_machine(Some("resources = \"low\"\n"), || {
             let dir = tempfile::tempdir().unwrap();
-            assert_eq!(Config::load(dir.path()).unwrap().threads, 2);
-            std::fs::write(dir.path().join("repograph.toml"), "threads = 5\n").unwrap();
-            assert_eq!(Config::load(dir.path()).unwrap().threads, 5);
+            assert_eq!(Config::load(dir.path()).unwrap().resources, Resources::Low);
+            std::fs::write(dir.path().join("repograph.toml"), "resources = \"full\"\n").unwrap();
+            assert_eq!(Config::load(dir.path()).unwrap().resources, Resources::Full);
         });
     }
 
     #[test]
-    fn the_environment_beats_the_project_for_threads() {
+    fn the_environment_beats_the_project_for_resources() {
         with_machine(None, || {
             let dir = tempfile::tempdir().unwrap();
-            std::fs::write(dir.path().join("repograph.toml"), "threads = 2\n").unwrap();
-            unsafe { std::env::set_var("REPOGRAPH_THREADS", "4") };
-            assert_eq!(Config::load(dir.path()).unwrap().threads, 4);
-            unsafe { std::env::set_var("REPOGRAPH_THREADS", "") };
-            assert_eq!(Config::load(dir.path()).unwrap().threads, 2);
-            unsafe { std::env::remove_var("REPOGRAPH_THREADS") };
+            std::fs::write(dir.path().join("repograph.toml"), "resources = \"low\"\n").unwrap();
+            unsafe { std::env::set_var("REPOGRAPH_RESOURCES", "full") };
+            assert_eq!(Config::load(dir.path()).unwrap().resources, Resources::Full);
+            unsafe { std::env::set_var("REPOGRAPH_RESOURCES", "") };
+            assert_eq!(Config::load(dir.path()).unwrap().resources, Resources::Low);
+            unsafe { std::env::remove_var("REPOGRAPH_RESOURCES") };
         });
     }
 
     #[test]
-    fn a_threads_value_that_is_not_a_number_is_an_error_naming_the_file() {
+    fn a_resources_level_that_is_not_a_word_it_knows_is_an_error_naming_the_file() {
         with_machine(None, || {
             let dir = tempfile::tempdir().unwrap();
-            std::fs::write(dir.path().join("repograph.toml"), "threads = \"many\"\n").unwrap();
+            std::fs::write(dir.path().join("repograph.toml"), "resources = \"maximum\"\n").unwrap();
             let err = Config::load(dir.path()).unwrap_err().to_string();
             assert!(err.contains("repograph.toml"), "{err}");
-            std::fs::write(dir.path().join("repograph.toml"), "threads = 2\n").unwrap();
-            unsafe { std::env::set_var("REPOGRAPH_THREADS", "lots") };
+            std::fs::write(dir.path().join("repograph.toml"), "resources = \"low\"\n").unwrap();
+            unsafe { std::env::set_var("REPOGRAPH_RESOURCES", "maximum") };
             let err = Config::load(dir.path()).unwrap_err().to_string();
-            unsafe { std::env::remove_var("REPOGRAPH_THREADS") };
-            assert!(err.contains("REPOGRAPH_THREADS"), "{err}");
+            unsafe { std::env::remove_var("REPOGRAPH_RESOURCES") };
+            assert!(err.contains("REPOGRAPH_RESOURCES"), "{err}");
+        });
+    }
+
+    /// The key was a setting until 2026-09-09 and is not one now, and it is the one a reader is
+    /// most likely to still have: the README told people to write `threads = 6` for the cores
+    /// back. Refused by name rather than ignored, so nobody is left believing a count they wrote
+    /// is still being read.
+    #[test]
+    fn a_threads_key_left_in_a_file_is_refused_by_name() {
+        with_machine(None, || {
+            let dir = tempfile::tempdir().unwrap();
+            std::fs::write(dir.path().join("repograph.toml"), "threads = 6\n").unwrap();
+            let err = format!("{:#}", Config::load(dir.path()).unwrap_err());
+            assert!(err.contains("repograph.toml"), "{err}");
+            assert!(err.contains("threads"), "{err}");
+        });
+        with_machine(Some("threads = 2\n"), || {
+            let dir = tempfile::tempdir().unwrap();
+            let err = format!("{:#}", Config::load(dir.path()).unwrap_err());
+            assert!(err.contains("config.toml"), "{err}");
+            assert!(err.contains("threads"), "{err}");
         });
     }
 
