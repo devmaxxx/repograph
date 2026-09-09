@@ -689,6 +689,19 @@ fn main() -> anyhow::Result<()> {
                     0 => println!("{target:?}: already installed, nothing written"),
                     n => println!("{target:?}: wrote {n} files\n  {}", r.paths.join("\n  ")),
                 }
+                // Codex reads its hooks from `~/.codex/hooks.json`, which is the machine's and not
+                // this repository's. Printed for a person to paste; see `agent/codex.md`.
+                if target == install_agent::Target::Codex {
+                    let hook = repo.join(".codex/hooks/repograph-hook.mjs");
+                    let abs = hook.canonicalize().unwrap_or(hook);
+                    println!("\nTo run the hook on this machine, add to ~/.codex/hooks.json \
+                              (merging with what is already there):\n{}\n\
+                              The hook reads each session's own working directory and stays silent \
+                              where there is no index, so one copy serves every repository — move \
+                              it to ~/.codex/hooks/ and adjust the path if this checkout may go \
+                              away.",
+                             install_agent::codex_hooks_block(&abs.display().to_string()));
+                }
             }
             Ok(())
         }

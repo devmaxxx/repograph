@@ -24,10 +24,19 @@ impl Target {
         match self { Target::Claude => ".claude", Target::Codex => ".codex" }
     }
 
-    /// The file each harness reads for its always-on instructions.
+    /// The file each harness reads for its always-on instructions. Codex reads the repository's
+    /// **root** `AGENTS.md` and has no `.codex/AGENTS.md` in its spec, so its stanza is written at
+    /// the root whether or not one is already there; Claude Code reads either, and a repository
+    /// that already keeps a root `CLAUDE.md` should not grow a second file beside it.
     fn instructions(self) -> &'static str {
         match self { Target::Claude => "CLAUDE.md", Target::Codex => "AGENTS.md" }
     }
+
+    /// Whether the harness reads a settings file inside the repository. Claude Code does
+    /// (`.claude/settings.json`); Codex's hooks are `CODEX_HOME`-relative — `"hooks":
+    /// "./hooks.json"` — so an entry added from inside one repository would fire in every other
+    /// repository on the machine. `agent/codex.md` records how both were read off the CLI.
+    fn hooks_are_repository_scoped(self) -> bool { self == Target::Claude }
 }
 
 #[derive(Debug, Default)]
@@ -111,6 +120,24 @@ fn write_if_changed(path: &Path, text: &str, report: &mut Report) -> Result<()> 
     Ok(())
 }
 
+/// The block a reader pastes into `~/.codex/hooks.json` to wire the hook on a machine, printed
+/// rather than written: that file is machine-level, and a `--repo` command does not get to change
+/// how every other repository on the machine behaves. Three events, not four — the Bash
+/// interceptor's verdict is being read on Claude Code and is not carried over blind.
+pub fn codex_hooks_block(hook_abs: &str) -> String {
+    let entry = |matcher: &str, timeout: u64| serde_json::json!({
+        "matcher": matcher,
+        "hooks": [{ "type": "command", "command": format!("node '{hook_abs}'"), "timeout": timeout }]
+    });
+    serde_json::to_string_pretty(&serde_json::json!({
+        "hooks": {
+            "SessionStart": [entry("startup|resume|clear|compact", 10)],
+            "SubagentStart": [entry(".*", 5)],
+            "PostToolUse": [entry("apply_patch|Edit|Write", 10)],
+        }
+    })).unwrap_or_default()
+}
+
 /// Installs the surface for one harness under `root`. Returns what it actually wrote: a second run
 /// writes nothing, which is how a caller can tell an upgrade from a no-op.
 pub fn install(root: &Path, target: Target, command: &str) -> Result<Report> {
@@ -131,14 +158,17 @@ pub fn install(root: &Path, target: Target, command: &str) -> Result<Report> {
         Target::Claude => "$CLAUDE_PROJECT_DIR/.claude/hooks/repograph-hook.mjs".to_string(),
         Target::Codex => ".codex/hooks/repograph-hook.mjs".to_string(),
     };
-    let settings = base.join(match target { Target::Claude => "settings.json", Target::Codex => "hooks.json" });
-    let existing = std::fs::read_to_string(&settings).unwrap_or_default();
-    let merged = merged_settings(&existing, &hook_path)?;
-    write_if_changed(&settings, &merged, &mut report)?;
+    if target.hooks_are_repository_scoped() {
+        let settings = base.join("settings.json");
+        let existing = std::fs::read_to_string(&settings).unwrap_or_default();
+        let merged = merged_settings(&existing, &hook_path)?;
+        write_if_changed(&settings, &merged, &mut report)?;
+    }
 
-    // The root instructions file if the repository has one, else the harness's own.
+    // Codex's is the repository root or nowhere; Claude Code reads either, and a repository that
+    // already keeps a root `CLAUDE.md` should not grow a second file beside it.
     let root_instructions = root.join(target.instructions());
-    let instructions = match root_instructions.exists() {
+    let instructions = match target == Target::Codex || root_instructions.exists() {
         true => root_instructions,
         false => base.join(target.instructions()),
     };
@@ -219,18 +249,29 @@ mod tests {
         assert_eq!(text.matches(BEGIN).count(), 1, "one block, not two: {text}");
     }
 
+    /// Read off the CLI rather than assumed — `agent/codex.md` records how. Codex reads the
+    /// repository's root `AGENTS.md`, so a `.codex/AGENTS.md` is a file nothing would ever open;
+    /// and its hooks live at `CODEX_HOME`, so no repository-scoped hooks file is written at all.
     #[test]
-    fn codex_gets_the_same_texts_under_its_own_names() {
+    fn codex_gets_its_stanza_at_the_root_and_no_repository_hooks_file() {
         let dir = root();
         install(dir.path(), Target::Codex, "repograph").unwrap();
-        assert!(dir.path().join(".codex/hooks/repograph-hook.mjs").exists());
-        assert!(dir.path().join(".codex/hooks.json").exists());
-        let stanza = std::fs::read_to_string(dir.path().join(".codex/AGENTS.md")).unwrap();
+        assert!(dir.path().join(".codex/hooks/repograph-hook.mjs").exists(), "something to point at");
+        assert!(dir.path().join(".codex/skills/repo-query/SKILL.md").exists());
+        let stanza = std::fs::read_to_string(dir.path().join("AGENTS.md")).unwrap();
         assert!(stanza.contains("repograph ask <words>"), "{stanza}");
+        assert!(!dir.path().join(".codex/AGENTS.md").exists(), "nothing reads that path");
+        assert!(!dir.path().join(".codex/hooks.json").exists(), "hooks are CODEX_HOME-relative");
         assert!(!dir.path().join(".codex/agents").exists(), "the scout is a Claude Code definition");
-        let v: serde_json::Value = serde_json::from_str(
-            &std::fs::read_to_string(dir.path().join(".codex/hooks.json")).unwrap()).unwrap();
-        assert!(v["hooks"]["SessionStart"][0]["hooks"][0]["command"].as_str().unwrap().contains(".codex/hooks"));
+    }
+
+    #[test]
+    fn the_codex_block_names_three_events_and_not_the_interceptor() {
+        let v: serde_json::Value = serde_json::from_str(&codex_hooks_block("/abs/hook.mjs")).unwrap();
+        let events: Vec<&String> = v["hooks"].as_object().unwrap().keys().collect();
+        assert_eq!(events.len(), 3, "{events:?}");
+        assert!(v["hooks"]["PreToolUse"].is_null(), "the interceptor is not carried over blind");
+        assert!(v["hooks"]["SessionStart"][0]["hooks"][0]["command"].as_str().unwrap().contains("/abs/hook.mjs"));
     }
 
     #[test]
