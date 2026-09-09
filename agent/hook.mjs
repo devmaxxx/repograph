@@ -203,8 +203,13 @@ function brief(root) {
 function autostartServe(root) {
   if (process.env.REPOGRAPH_HOOK_SERVE === '0') return;
   try {
-    spawn(binary(root), ['--repo', root, 'serve', '--idle', String(SERVE_IDLE), '--idle-model', String(SERVE_IDLE_MODEL)],
-      { detached: true, stdio: 'ignore', windowsHide: true }).unref();
+    const child = spawn(binary(root), ['--repo', root, 'serve', '--idle', String(SERVE_IDLE), '--idle-model', String(SERVE_IDLE_MODEL)],
+      { detached: true, stdio: 'ignore', windowsHide: true });
+    // A spawn that fails reports it as an event, not as a throw, and an unheard `error` event ends
+    // this process — which would turn "no binary on PATH" into a hook that dies on stderr at every
+    // session start. The listener is what keeps the contract: exit 0, and say nothing.
+    child.on('error', (e) => debug('serve', e.message));
+    child.unref();
   } catch (e) { debug('serve', e.message); }
 }
 

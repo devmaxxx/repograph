@@ -255,17 +255,24 @@ fn check_anchors(cases_path: &str, cases: &[Case], graph: &Graph) -> Result<()> 
 /// the prompt that carried it. Empty on a case that never reranked — an exact id match answers
 /// before the pool is built, and a case that never reached the model has no rank to report.
 #[derive(Default)]
-struct Shown { pool: Vec<String>, prompt_bytes: usize }
+struct Shown { pool: Vec<String>, prompt_bytes: Option<usize> }
 
 impl Shown {
-    fn of(q: &str, c: &[(String, String)]) -> Shown {
-        // Built a second time rather than plumbed out of `rerank::run`: the prompt is the thing
-        // being metered, so measuring anything else — a sum of the parts, an estimate from the
-        // candidate count — would be measuring a model of the cost instead of the cost.
-        Shown { pool: c.iter().map(|(id, _)| id.clone()).collect(), prompt_bytes: crate::rerank::prompt(q, c).len() }
+    /// The command arm: a prompt is built and sent, so it is metered by building the same string a
+    /// second time rather than by estimating it from the candidate count — an estimate dressed as
+    /// a measurement is what this line exists to replace.
+    fn sent(q: &str, c: &[(String, String)]) -> Shown {
+        Shown { pool: ids(c), prompt_bytes: Some(crate::rerank::prompt(q, c).len()) }
     }
 
-    fn clear(&mut self) { self.pool.clear(); self.prompt_bytes = 0; }
+    /// The local arm: the same pool, scored pair by pair through ONNX. No prompt is sent, so none
+    /// is reported — a byte count for a request nobody made would be a fabricated column beside a
+    /// measured one.
+    fn scored(c: &[(String, String)]) -> Shown {
+        Shown { pool: ids(c), prompt_bytes: None }
+    }
+
+    fn clear(&mut self) { self.pool.clear(); self.prompt_bytes = None; }
 
     /// The diagnostic beneath a case line, or nothing where the model was never asked. The rank is
     /// of the first anchor found; a case whose anchor is outside the pool reads `-`, which is the
@@ -274,9 +281,12 @@ impl Shown {
         if self.pool.is_empty() { return None; }
         let rank = case.expect.anchors().iter().find_map(|a| pool_rank(&self.pool, a));
         let rank = rank.map_or("-".to_string(), |r| r.to_string());
-        Some(format!("{:<10} pool={rank}/{} prompt={} B", "", self.pool.len(), self.prompt_bytes))
+        let prompt = self.prompt_bytes.map_or(String::new(), |b| format!(" prompt={b} B"));
+        Some(format!("{:<10} pool={rank}/{}{prompt}", "", self.pool.len()))
     }
 }
+
+fn ids(c: &[(String, String)]) -> Vec<String> { c.iter().map(|(id, _)| id.clone()).collect() }
 
 /// Where the expected id sits in the pool the reranker was shown, one-based. A case the model
 /// found at rank 6 is one a sixth seat could seat for nothing; a case at 140 is the model's alone,
@@ -390,7 +400,7 @@ pub fn run(repo: &Path, cases: Option<&Path>, no_dense: bool, rerank: bool, rera
     // read where the request is made rather than reconstructed from the answer afterwards.
     let shown = std::cell::RefCell::new(Shown::default());
     let rerank_fn = |q: &str, c: &[(String, String)]| {
-        *shown.borrow_mut() = Shown::of(q, c);
+        *shown.borrow_mut() = Shown::sent(q, c);
         crate::rerank::run(&cfg.rerank_command, q, c)
     };
     let cross = std::cell::RefCell::new(if rerank_local {
@@ -398,7 +408,7 @@ pub fn run(repo: &Path, cases: Option<&Path>, no_dense: bool, rerank: bool, rera
         Some(crate::index::cross::CrossEncoder::open(&dir, threads).context("--rerank-local")?)
     } else { None });
     let local_fn = |q: &str, c: &[(String, String)]| -> Vec<String> {
-        *shown.borrow_mut() = Shown::of(q, c);
+        *shown.borrow_mut() = Shown::scored(c);
         let mut m = cross.borrow_mut();
         let Some(m) = m.as_mut() else { return Vec::new() };
         let texts: Vec<String> = c.iter().map(|(_, t)| t.clone()).collect();
@@ -428,7 +438,7 @@ pub fn run(repo: &Path, cases: Option<&Path>, no_dense: bool, rerank: bool, rera
         // there would be recorded as part of the question in every transcript from here on.
         if let Some(line) = shown.borrow().case_line(case) {
             println!("{line}");
-            prompts.push(shown.borrow().prompt_bytes);
+            prompts.extend(shown.borrow().prompt_bytes);
         }
     }
     tokens.sort_unstable();
@@ -480,9 +490,6 @@ mod tests {
     use super::*;
     use crate::query::Hit;
 
-    /// A case that keeps its verdict and loses two of its three anchors is what the summary was
-    /// blind to. The counts and the anchors are two different readings of the same run, and only
-    /// the second one moves here.
     /// The rank of the expected id inside the pool the reranker was shown, one-based, because a
     /// histogram of "rank 1" and a histogram of "rank 0" read differently to everyone but a
     /// programmer. A case whose anchor is outside the pool has no rank, and that is the finding.
@@ -502,11 +509,19 @@ mod tests {
 
         let candidates: Vec<(String, String)> = ["FR-CAL-1", "FR-MKT-35"].iter()
             .map(|id| ((*id).to_string(), "текст".to_string())).collect();
-        let shown = Shown::of("отмена", &candidates);
+        let shown = Shown::sent("отмена", &candidates);
         let line = shown.case_line(&case).unwrap();
         assert!(line.contains("pool=2/2"), "{line}");
-        assert!(line.contains(&format!("prompt={} B", shown.prompt_bytes)), "{line}");
-        assert!(shown.prompt_bytes > 0, "the prompt is metered, not estimated");
+        let bytes = shown.prompt_bytes.expect("the command arm sends a prompt");
+        assert!(line.contains(&format!("prompt={bytes} B")), "{line}");
+        assert!(bytes > 0, "the prompt is metered, not estimated");
+
+        // The local arm scores the same pool through ONNX and sends no prompt, so it reports none:
+        // a byte count for a request nobody made would be a fabricated column beside a measured one.
+        let local = Shown::scored(&candidates);
+        let line = local.case_line(&case).unwrap();
+        assert!(line.contains("pool=2/2"), "{line}");
+        assert!(!line.contains("prompt="), "{line}");
 
         let missing = Case { kind: "paraphrase".into(), q: "отмена".into(), expect: Expect::from("FR-SVC-50") };
         assert!(shown.case_line(&missing).unwrap().contains("pool=-/2"), "outside the pool is not rank zero");
@@ -524,6 +539,9 @@ mod tests {
         assert!(line.contains("bytes, not tokens"), "{line}");
     }
 
+    /// A case that keeps its verdict and loses two of its three anchors is what the summary was
+    /// blind to. The counts and the anchors are two different readings of the same run, and only
+    /// the second one moves here.
     #[test]
     fn the_summary_carries_anchors_reached_over_wanted() {
         let mut s = Summary::default();

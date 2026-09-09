@@ -69,10 +69,11 @@ impl Brief {
             self.covered,
             self.eligible,
             self.families,
-            match &self.model {
-                Some(m) => format!("\"{m}\""),
-                None => "null".to_string(),
-            }
+            // Through a JSON writer rather than quoted by hand: `embed_model` is never checked
+            // for shell safety the way the two command models are — it never reaches a shell — so
+            // a name carrying a quote would otherwise make this object unparseable, and the hook
+            // that reads it would go silent rather than fail.
+            serde_json::to_string(&self.model).unwrap_or_else(|_| "null".to_string())
         )
     }
 }

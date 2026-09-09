@@ -162,8 +162,6 @@ pub fn downstream(graph: &Graph, root: &str, depth: usize) -> Impact {
     Impact { root: root.to_string(), layers: walk(graph, root, depth, false), importers: Vec::new() }
 }
 
-/// The shortest chain of code edges from `from` to `to` (or one of its aliases or members),
-/// at most `depth` hops.
 /// `trace` as an object: the two ends the ids resolved to, the depth asked for, and the chain as
 /// `{id, at}` steps — `null` when there is none within that depth, which is an answer and not an
 /// error.
@@ -179,6 +177,8 @@ pub fn trace_json(graph: &Graph, from: &str, to: &str, depth: usize, path: Optio
     serde_json::to_string(&Out { from, to, depth, path: steps }).unwrap_or_else(|_| "{}".to_string())
 }
 
+/// The shortest chain of code edges from `from` to `to` (or one of its aliases or members),
+/// at most `depth` hops.
 pub fn trace(graph: &Graph, from: &str, to: &str, depth: usize) -> Option<Vec<String>> {
     let goal: BTreeSet<String> = seeds(graph, to).into_iter().collect();
     let by_source = index(graph, false);
