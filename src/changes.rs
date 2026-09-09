@@ -141,7 +141,12 @@ pub fn render_json(graph: &Graph, r: &Report) -> String {
 }
 
 fn git(repo: &Path, args: &[&str]) -> anyhow::Result<String> {
-    let out = std::process::Command::new("git").arg("-C").arg(repo).args(args).output()?;
+    // `core.quotepath` is on by default, and it C-escapes every path with a byte outside ASCII
+    // and puts the opening quote *before* the `b/` — a `+++` header `parse` reads no name from,
+    // which drops the file's hunks in silence, and an `ls-files` name that matches no node. Off,
+    // git writes UTF-8 and leaves every ASCII path byte-identical.
+    let out = std::process::Command::new("git").arg("-C").arg(repo)
+        .args(["-c", "core.quotepath=false"]).args(args).output()?;
     anyhow::ensure!(out.status.success(), "git {}: {}", args.join(" "), String::from_utf8_lossy(&out.stderr).trim());
     Ok(String::from_utf8_lossy(&out.stdout).into_owned())
 }
@@ -285,5 +290,46 @@ mod tests {
     fn an_empty_diff_renders_a_clean_report() {
         let g = graph();
         assert_eq!(render(&g, &report(&g, &[], 2)), "changed: 0 symbols\n");
+    }
+    /// A repository that quotes: `core.quotepath` is git's default, but a machine that turns it
+    /// off globally would make the two tests below pass without the fix, so it is asked for here.
+    fn quoting_repo() -> tempfile::TempDir {
+        let dir = tempfile::tempdir().unwrap();
+        let run = |args: &[&str]| {
+            let out = std::process::Command::new("git").arg("-C").arg(dir.path()).args(args).output().unwrap();
+            assert!(out.status.success(), "git {}: {}", args.join(" "), String::from_utf8_lossy(&out.stderr));
+        };
+        run(&["init", "-q"]);
+        run(&["config", "core.quotepath", "true"]);
+        run(&["config", "core.hooksPath", "nohooks"]);
+        run(&["config", "user.email", "t@example.invalid"]);
+        run(&["config", "user.name", "t"]);
+        std::fs::create_dir(dir.path().join("docs")).unwrap();
+        std::fs::write(dir.path().join("docs/a.ts"), "one\n").unwrap();
+        run(&["add", "-A"]);
+        run(&["commit", "-qm", "base"]);
+        dir
+    }
+
+    #[test]
+    fn a_tracked_non_ascii_path_keeps_its_hunks_under_the_unescaped_name() {
+        let dir = quoting_repo();
+        std::fs::write(dir.path().join("docs/Штраф.ts"), "one\ntwo\n").unwrap();
+        let out = std::process::Command::new("git").arg("-C").arg(dir.path()).args(["add", "-A"]).output().unwrap();
+        assert!(out.status.success());
+        assert_eq!(
+            hunks_from_git(dir.path(), "HEAD").unwrap(),
+            vec![Hunk { file: "docs/Штраф.ts".into(), start: 1, end: 2 }]
+        );
+    }
+
+    #[test]
+    fn an_untracked_non_ascii_path_is_reported_as_itself() {
+        let dir = quoting_repo();
+        std::fs::write(dir.path().join("docs/Новый.ts"), "one\n").unwrap();
+        assert_eq!(
+            hunks_from_git(dir.path(), "HEAD").unwrap(),
+            vec![Hunk { file: "docs/Новый.ts".into(), start: 1, end: u32::MAX }]
+        );
     }
 }
