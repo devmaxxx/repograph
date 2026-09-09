@@ -1,5 +1,10 @@
 # A rebuild nobody at the keyboard notices — the definition, the measurements, the plan
 
+> **Superseded 2026-09-09.** The band this plan designed and shipped was removed; `libc`,
+> `src/priority.rs`, the `priority` key and `REPOGRAPH_PRIORITY` are gone with it, and so is
+> `threads`, replaced by `resources`. The measurement method here still stands and is reused by
+> [the removal plan](2026-09-09-normal-band-only.md).
+
 > **For agentic workers:** REQUIRED SUB-SKILL: use superpowers:executing-plans (or superpowers:subagent-driven-development) to implement this task-by-task. Steps use checkbox (`- [ ]`) syntax. Every number in this file came from a run named beside it; a number you write comes from a run you name.
 
 **Goal:** a `build`, `update`, `enrich`, `embed` or `watch` that re-embeds a store is something the person using the machine cannot feel — not in their own compile, not in the pointer, not in the fan, not in swap. Wall time is reported and no longer a bar: the person is not waiting for it.

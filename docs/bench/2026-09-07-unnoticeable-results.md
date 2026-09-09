@@ -1,5 +1,11 @@
 # A rebuild measured against the person at the keyboard
 
+> **The band this document measured was removed on 2026-09-09** (see
+> [the plan](../plans/2026-09-09-normal-band-only.md)). Every number below is what it read on
+> 2026-09-07 and none of them has been re-taken; the lever they describe no longer exists, and
+> `priority` is not a setting. The reason for the removal is in the plan; the numbers here are why
+> it was worth trying. The mapped-weights half of this document is unaffected and shipped.
+
 The request was one sentence: reduce resource usage further, as much as possible, so that the
 person does not notice when repograph is working. "Does not notice" is not a number, so the first
 job was to make it one — and then to find the lever that moves it, which turned out to be a single

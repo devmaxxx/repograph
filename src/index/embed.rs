@@ -6,9 +6,10 @@
 //! at Level1 — Level3 costs up to 0.4 s more to open and buys nothing on a 256-token query. Opening
 //! the two concurrently caps model open at the slower of them, which halves a fused `ask`.
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use ort::session::{builder::{GraphOptimizationLevel, SessionBuilder}, Session};
 use ort::value::Tensor;
+use serde::Deserialize;
 use std::path::{Path, PathBuf};
 use tokenizers::{PaddingParams, PaddingStrategy, Tokenizer, TruncationParams};
 
@@ -142,19 +143,61 @@ fn load_tokenizer(files: &Files) -> Result<Tokenizer> {
     Ok(tk)
 }
 
-/// How many threads a model session and the tokenizer pool may take: what the configuration
-/// says, else the default rule over the cores this machine reports.
-pub fn threads(configured: usize) -> usize {
-    threads_from(configured, std::thread::available_parallelism().map_or(0, |n| n.get()))
+/// How much of the machine a run may take. A word rather than a count, because the number that
+/// matters is a fraction of whatever box this is and a count written for one box is wrong on the
+/// next; the three names are amounts of the machine, which is what the key is called.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Resources {
+    Low,
+    #[default]
+    Balanced,
+    Full,
 }
 
-/// A third of the logical cores rather than half of them: ORT sizes its own pool to the
-/// performance cores alone, which on a 6+6 machine is already half, so half would be today's
-/// pool under another name and give nothing back. A count the person configured is taken as
-/// written — a CI box that wants every core says so — and the floor is one thread.
-fn threads_from(configured: usize, cores: usize) -> usize {
-    if configured > 0 { return configured; }
-    (cores / 3).max(1)
+/// The configured level unless `REPOGRAPH_RESOURCES` names another, in the shape the other run
+/// variables use: unset or empty keeps what the files said.
+pub fn resources_from_env(configured: Resources, var: Option<&str>) -> Result<Resources> {
+    let Some(raw) = var else { return Ok(configured) };
+    let word = raw.trim();
+    if word.is_empty() {
+        return Ok(configured);
+    }
+    match word.to_ascii_lowercase().as_str() {
+        "low" => Ok(Resources::Low),
+        "balanced" => Ok(Resources::Balanced),
+        "full" => Ok(Resources::Full),
+        other => bail!("REPOGRAPH_RESOURCES is {other:?}, which is none of \"low\", \"balanced\" or \"full\""),
+    }
+}
+
+/// How many threads a model session and the tokenizer pool may take: the level's rule over the
+/// cores this machine reports.
+pub fn threads(level: Resources) -> usize {
+    threads_from(level, std::thread::available_parallelism().map_or(0, |n| n.get()))
+}
+
+/// Halves, sixths and thirds of the logical cores, with one thread as the floor. `balanced` is a
+/// third rather than half because ORT sizes its own intra-op pool to the performance cores alone,
+/// which on a 6+6 machine is already half — half here would be today's pool under another name
+/// and give nothing back. `low` is half of `balanced` again, for a laptop someone is working on.
+///
+/// `full` is a half and not "no cap at all", which is the other thing it could have meant and was
+/// measured against: leaving both pools to size themselves gives ORT its six performance cores
+/// and rayon all twelve, 18 threads with 6 running, and that loses to capping rayon at the same
+/// six — 178.1 s against 168.8 s on a whole-store embed of the fixture, for the same 814 user
+/// seconds either way (docs/bench/2026-09-09-normal-band-only-results.md). Twelve tokenizer
+/// threads contending for six cores cost more than they add, so `full` takes the shape that is
+/// both faster and cheaper in threads.
+///
+/// On four logical cores or fewer `balanced` and `low` meet at one thread and only `full` still
+/// names a different amount; on two, all three do.
+fn threads_from(level: Resources, cores: usize) -> usize {
+    match level {
+        Resources::Full => (cores / 2).max(1),
+        Resources::Balanced => (cores / 3).max(1),
+        Resources::Low => (cores / 6).max(1),
+    }
 }
 
 /// Where the GEMMs read their weights from. `Packed` is the runtime's default: at session open
@@ -412,13 +455,26 @@ mod tests {
     }
 
     #[test]
-    fn the_thread_cap_is_the_configured_count_or_a_third_of_the_cores_and_never_zero() {
-        assert_eq!(threads_from(0, 12), 4);
-        assert_eq!(threads_from(0, 8), 2);
-        assert_eq!(threads_from(0, 2), 1);
-        assert_eq!(threads_from(0, 0), 1);
-        assert_eq!(threads_from(3, 12), 3);
-        assert_eq!(threads_from(9, 2), 9, "a configured count is never clipped: the person said so");
+    fn each_level_takes_its_fraction_of_the_cores_and_never_reaches_zero() {
+        assert_eq!(threads_from(Resources::Full, 12), 6);
+        assert_eq!(threads_from(Resources::Balanced, 12), 4);
+        assert_eq!(threads_from(Resources::Low, 12), 2);
+        assert_eq!(threads_from(Resources::Balanced, 8), 2);
+        assert_eq!(threads_from(Resources::Low, 8), 1);
+        assert_eq!(threads_from(Resources::Full, 4), 2);
+        assert_eq!(threads_from(Resources::Balanced, 4), 1, "the two named-down levels meet on a small box");
+        assert_eq!(threads_from(Resources::Low, 4), 1);
+        assert_eq!(threads_from(Resources::Full, 0), 1, "a machine that reports no cores still gets one thread");
+        assert_eq!(threads_from(Resources::Balanced, 0), 1);
+    }
+
+    #[test]
+    fn an_unknown_level_in_the_environment_is_an_error_naming_the_variable() {
+        assert_eq!(resources_from_env(Resources::Balanced, None).unwrap(), Resources::Balanced);
+        assert_eq!(resources_from_env(Resources::Balanced, Some("")).unwrap(), Resources::Balanced);
+        assert_eq!(resources_from_env(Resources::Balanced, Some(" LOW ")).unwrap(), Resources::Low);
+        let err = resources_from_env(Resources::Balanced, Some("half")).unwrap_err().to_string();
+        assert!(err.contains("REPOGRAPH_RESOURCES"), "{err}");
     }
 
     #[test]

@@ -188,7 +188,7 @@ impl Context {
                     Some(handle) => handle.join().unwrap_or_else(|_| Err("dense: model thread panicked, continuing lexical-only".to_string())),
                     None => {
                         let model = index::embed::resolve(idx.model_of_rows().as_deref(), &cfg.embed_model);
-                        embedder_or_notice(no_dense, &model, index::embed::threads(cfg.threads), index::embed::Weights::Packed)
+                        embedder_or_notice(no_dense, &model, index::embed::threads(cfg.resources), index::embed::Weights::Packed)
                     }
                 };
                 timing.stage("model opened");
@@ -238,7 +238,7 @@ impl Context {
         };
         if req.rerank_local && cross.borrow().is_none() {
             let dir = if cfg.reranker_dir.is_empty() { index::cross::default_dir()? } else { PathBuf::from(&cfg.reranker_dir) };
-            *cross.borrow_mut() = Some(index::cross::CrossEncoder::open(&dir, index::embed::threads(cfg.threads)).context("--rerank-local")?);
+            *cross.borrow_mut() = Some(index::cross::CrossEncoder::open(&dir, index::embed::threads(cfg.resources)).context("--rerank-local")?);
         }
         // Below the last `?`: an error returned between the spawn and the join drops the
         // handle and leaves a thread mid-open of a 448 MB session. Nothing below this point
@@ -263,7 +263,7 @@ impl Context {
             let mut handle = warm.borrow_mut();
             if handle.is_none() && embedder.borrow().is_none() {
                 let model = index::embed::resolve(idx.model_of_rows().as_deref(), &cfg.embed_model);
-                *handle = warm_model(true, whole, &model, index::embed::threads(cfg.threads), index::embed::Weights::Packed);
+                *handle = warm_model(true, whole, &model, index::embed::threads(cfg.resources), index::embed::Weights::Packed);
             }
         }
         let local_fn = |q: &str, c: &[(String, String)]| -> Vec<String> {

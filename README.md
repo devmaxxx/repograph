@@ -526,8 +526,7 @@ in full, not an empty config:
 | `rerank_model`       | `sonnet` — the same for `rerank_command`                                                    |
 | `reranker_dir`       | directory of the exported cross-encoder for `--rerank-local`; empty = `~/.cache/repograph/reranker` |
 | `embed_model`        | `intfloat/multilingual-e5-small`; the model the vectors are written with — see [Embeddings](#embeddings) |
-| `threads`            | `0` = a third of the logical cores; how many threads the model sessions and the tokenizer pool may take — see [Resources](#resources) |
-| `priority`           | `"background"` = the writers run in the scheduling band the machine keeps for work nobody is waiting on; `"normal"` gives that up for wall time — see [Resources](#resources) |
+| `resources`          | `"balanced"` = a third of the logical cores; `"low"` a sixth, `"full"` a half — how much of the machine a run may take, see [Resources](#resources) |
 
 ### Choosing a model, and where the choice lives
 
@@ -548,7 +547,7 @@ beating the one below it:
 
 | Layer | Where |
 | --- | --- |
-| the run | `REPOGRAPH_ENRICH_MODEL`, `REPOGRAPH_RERANK_MODEL`, `REPOGRAPH_THREADS`, `REPOGRAPH_PRIORITY` |
+| the run | `REPOGRAPH_ENRICH_MODEL`, `REPOGRAPH_RERANK_MODEL`, `REPOGRAPH_RESOURCES` |
 | the repository | `repograph.toml` |
 | the machine | `$REPOGRAPH_CONFIG`, else `$XDG_CONFIG_HOME/repograph/config.toml`, else `~/.config/repograph/config.toml` (`%USERPROFILE%\.config\repograph\config.toml` on Windows) |
 
@@ -560,11 +559,24 @@ rerank_model = "sonnet"
 
 A key the repository names wins even when it names the built-in value: what the file says is what
 that repository asked for. The machine file may set **only** `enrich_command`, `rerank_command`,
-`enrich_model`, `rerank_model`, `reranker_dir`, `threads` and `priority`, and refuses any other key by
+`enrich_model`, `rerank_model`, `reranker_dir` and `resources`, and refuses any other key by
 name.
 That refusal is deliberate rather than an omission: the corpus-shaped keys describe one
 repository's documents, and a global `embed_model` in particular would rewrite every store's
 vectors under a model nobody chose for it.
+
+Two keys were removed on 2026-09-09 and neither is one now. `threads` is the one you are more
+likely to have, because this file used to tell you to write it: replace `threads = 6` with
+`resources = "full"` and `threads = 2` with `resources = "low"`. `priority` is the other: delete
+the line, there is no scheduling band any more and the writers run in the normal one on every
+platform. Either key left in a `repograph.toml` or a machine file is a hard error naming the file
+and the key on every command that loads config, not a setting quietly ignored — both structs are
+`deny_unknown_fields`, and a key that parsed and did nothing would leave you believing a number you
+wrote is still being read. The same structs are `default`, which is why *adding* `resources` breaks
+nothing: a file that does not name it behaves exactly as it did before. `REPOGRAPH_THREADS` and
+`REPOGRAPH_PRIORITY` are simply no longer read — files are refused by name, and an unknown
+environment variable has never been an error.
+
 
 Three of those keys name a model and one names a directory, and they are four different jobs
 rather than one preference. What each stage asks of a model, and what the answer was measured to
@@ -713,10 +725,9 @@ It is the caveat trap 7 of the [runbook](docs/bench/runbook.md) carries. Measure
 keyword 40/40 and code 12/12 unchanged, and held-out 103 → 119 of 400 (+19 −3, p = 0.0009). What
 that recall costs is the rest of this section: an `ask` in 0.8 s against 0.30 s (the model opens in
 676 ms against 220), 1.9 GB resident against 1.7, a 2.1 GB download against 470 MB, and 1,930 s to
-embed the fixture's 33,525 rows against 214 s, which the background band a writer runs in
-multiplies by about four again: a first build is hours under the large model where the default's is
-minutes. That last step is a ratio and not a measured wall — no whole-store run in the band has
-finished on this machine, which is [G20](docs/bench/next-version-gaps.md). The large model is one
+embed the fixture's 33,525 rows against 266 s at the default `resources = "balanced"`
+([2026-09-09](docs/bench/2026-09-09-normal-band-only-results.md)): a first build is half an hour
+under the large model where the default's is four minutes. The large model is one
 line and one `repograph embed` away, and a store already on it keeps answering by it whatever this
 file says afterwards; [ADR-002](docs/adr/ADR-002-two-defaults-multiplied.md) weighs the two and
 says why the cheaper one is the default.
@@ -1105,26 +1116,51 @@ after the work in [the resource-usage results](docs/bench/2026-09-07-resource-us
 | before | 2,582 s (43 min) | 13,342 s | 2.96 GB | 444% | 18, 6 running |
 | after | 1,930 s (32 min) | 7,641 s | 2.15 GB | 293% | 8, 4 running |
 
-That is the large model because it is the worst case the tool has and a repository opts into it:
-the same 33,525 rows under the default model are **214 s and 1.63 GB** in the same document.
+Both rows were taken at `786b994` on 2026-09-07 in the normal band, which is the only band there
+is now, so they stand as written. That is the large model because it is the worst case the tool has
+and a repository opts into it: the same 33,525 rows under the default model are
+**266 s and 1.45 GB**, re-measured on 2026-09-09
+([the levels results](docs/bench/2026-09-09-normal-band-only-results.md)) — the 214 s this file
+used to quote here was an *uncapped* row standing in for a four-thread default, and understated it
+by about a quarter.
 
-Those are the rebuild's own numbers. What the *person at the keyboard* feels while it runs is a
-different measurement, and it is the one `priority` answers — a six-thread compile and a 1 ms wake
-loop, run beside a whole-store rebuild on this machine
-([the unnoticeable results](docs/bench/2026-09-07-unnoticeable-results.md)):
+Those are the rebuild's own numbers, and they are the only ones there are: the writers run in the
+same scheduling band as everything else, on every platform, and there is no setting that names one.
+There was, until 2026-09-09 — `priority = "background"` put a rebuild in the band the machine keeps
+for work nobody is waiting on, and it bought a quiet keyboard genuinely well (a compile beside it
+slowed 1.7% instead of 15.7%). It was removed because the price was four times the wall, paid by
+everyone who ever rebuilt, to buy something only a person sitting at a loaded machine collects.
+[The unnoticeable results](docs/bench/2026-09-07-unnoticeable-results.md) are what it measured while
+it existed; none of those numbers is carried forward here, because they are the band's.
 
-| with a rebuild running beside them | their compile | their 1 ms wake, p99 | where the rebuild ran |
-| --- | --- | --- | --- |
-| `priority = "normal"` | +15.7% | 2.5 ms | performance cores, 3.49 GHz |
-| `priority = "background"` (the default) | +1.7% | 0.6 ms | efficiency cores, 1.70 GHz |
+What a rebuild costs the person beside it is now bounded by two things only, the token budget and
+one word:
 
-The price is wall time: the same work takes about four times as long in the background band
-(4.3× on the run above), and the default takes that trade because nobody is waiting for a rebuild.
-On a machine that is busy with your own work it takes longer still — a background-band rebuild runs
-when the machine is free, which is the point of it. `priority = "normal"` in
-`repograph.toml` or `~/.config/repograph/config.toml`, or `REPOGRAPH_PRIORITY=normal` for one run,
-is the word back — that is what a build server or a CI box wants. Readers ignore the setting
-entirely: `ask`, `bench` and `dump` answer a person, and a person is waiting.
+| `resources` | threads here | wall | peak CPU (mean) | threads / running |
+| --- | --- | --- | --- | --- |
+| `"full"` | 6 | 168.8 s | 382% (335%) | 12 / 6 |
+| `"balanced"` *(the default)* | 4 | 265.7 s | 275% (218%) | 8 / 4 |
+| `"low"` | 2 | 358.7 s | 140% (127%) | 4 / 2 |
+
+The fixture's 33,525 rows under the default model, on a twelve-core Apple Silicon machine
+([2026-09-09](docs/bench/2026-09-09-normal-band-only-results.md); `balanced` is the median of three
+runs, and the machine was carrying other work throughout, which is recorded there). The rule is
+fractions of the logical cores with one thread as the floor: `full` a half, `balanced` a third,
+`low` a sixth. On four cores or fewer `balanced` and `low` meet at one thread and only `full` still
+names a different amount.
+
+`resources` is the only resource lever there is. `threads = N` was the escape hatch until
+2026-09-09 and is gone with `priority`; **`full` is now both the most of the machine you can ask
+for and the fastest setting the tool has**, which was not true while a hand-written count existed.
+`full` resolves to half the logical cores rather than to no cap at all, and that is a measured
+choice rather than a literal one: leaving both pools to size themselves gives ORT its six
+performance cores and rayon all twelve — 18 threads, 6 running, 178.1 s — against 12 threads,
+6 running and 168.8 s when rayon is capped at the same six, for the same 814 user seconds either
+way. Twelve tokenizer threads queueing for six cores cost more than they add.
+
+Set it in `repograph.toml`, or once for the machine in `~/.config/repograph/config.toml`, or
+`REPOGRAPH_RESOURCES=full` for one run. Readers take the level too, but it is not what it is for:
+every reader but `ask --rerank-local` is under a second.
 
 A writer also stops making its own copy of the model's weights: it reads them from the
 memory-mapped file instead, which takes the anonymous memory a rebuild holds from 1.63 GB to
@@ -1133,48 +1169,37 @@ with memory to spare that costs nothing; on one that is already short it costs 6
 because pages the system is free to reclaim are pages it reclaims and the run reads them again.
 Readers are unchanged and keep their own copies: they answer one query and leave.
 
-That measurement is this machine's — Apple Silicon, six performance and six efficiency cores —
-where the background band *is* the efficiency cluster, which is why the clock halves. Elsewhere
-the same setting buys less, and this says so rather than letting you assume otherwise:
-
-| | what `priority = "background"` does there |
-| --- | --- |
-| macOS, Apple Silicon | the efficiency cluster at half the clock, and throttled disk I/O — the table above |
-| macOS, Intel | lowest scheduling priority and throttled disk I/O, so your own work takes the core whenever it wants it; but one kind of core, so the clock and the fan are a foreground run's |
-| Linux | `nice 19`, `SCHED_IDLE` and an idle I/O class: the rebuild runs when nothing else wants the CPU or the disk |
-| Windows and the rest | nothing, and it prints a line saying so rather than letting you believe it worked |
-
-`threads` follows the machine too: a third of the logical cores, which is one on a two- or
+The level follows the machine: `balanced`'s third of the logical cores is one thread on a two- or
 four-core box, and on Linux `available_parallelism` honours a container's `--cpus` quota, so a
-devcontainer gets a third of what it was given rather than a third of the host. A build server
-with nobody at the keyboard wants the opposite of all of this — `priority = "normal"` and
-`threads` as high as it likes, one line each in `~/.config/repograph/config.toml`.
+devcontainer gets a third of what it was given rather than a third of the host. A build server with
+nobody at the keyboard wants `resources = "full"`, one line in
+`~/.config/repograph/config.toml`; a laptop you are working on wants `"low"`.
 
-On a machine with 8 GB the model is the lever and the scheduler is not: a rebuild under
-`embed_model = "intfloat/multilingual-e5-large"` touches about 1.6 GB of weights whatever band it
-runs in, where the default model's are 0.45 GB and the whole store is 214 s.
+On a machine with 8 GB the model is the lever and the level is not: a rebuild under
+`embed_model = "intfloat/multilingual-e5-large"` touches about 1.6 GB of weights whatever the level
+says, where the default model's are 0.45 GB and the whole store is 266 s.
 There is no low-memory flag, because which vectors are on disk is a property of the repository and
 not of the laptop that happens to be building them.
 
-Two things bound it. `threads` caps the ONNX session's intra-op pool and rayon's global pool,
-which is what `tokenizers` fans a batch out over; absent or `0` it is a third of the logical cores,
-because the runtime otherwise takes every performance core and holds it for the length of the run.
-And a batch closes on a padded-token budget rather than on a count of texts, so the largest shape
-the runtime ever allocates an arena for is bounded whatever the corpus's longest passages happen to
-be — a count of sixty-four bounds nothing, since sixty-four 256-token passages are 16,384 tokens
-and sixty-four labels are 1,280.
+Two things bound it, and the first of them now has a name. `resources` caps the ONNX session's
+intra-op pool and rayon's global pool, which is what `tokenizers` fans a batch out over; left alone
+that is a third of the logical cores, because the runtime otherwise takes every performance core
+and holds it for the length of the run. And a batch closes on a padded-token budget rather than on
+a count of texts, so the largest shape the runtime ever allocates an arena for is bounded whatever
+the corpus's longest passages happen to be — a count of sixty-four bounds nothing, since sixty-four
+256-token passages are 16,384 tokens and sixty-four labels are 1,280.
 
-Give the cores back with `threads = 6` in `repograph.toml` or `~/.config/repograph/config.toml`,
-or `REPOGRAPH_THREADS=6` for one run; it is a straight trade, cores against wall time, with no free
-side. A long embed now saves after every 1,024 rows and says where it is, so an interrupted rebuild
-resumes from its last checkpoint instead of starting again:
+Moving the level is a straight trade, cores against wall time, with no free side: the three rows in
+the table above are 6, 4 and 2 threads for 169, 266 and 359 seconds. A long embed saves after every
+1,024 rows and says where it is, so an interrupted rebuild resumes from its last checkpoint instead
+of starting again:
 
 ```
 dense: 16384/33525 rows, 18.7 rows/s, ~15 min left
 ```
 
 The cheapest way out is the default and costs nothing to keep: `intfloat/multilingual-e5-small`
-writes the whole store in 214 s and 1.6 GB where `e5-large` takes 1,930 s and 2.15 GB, and
+writes the whole store in 266 s and 1.45 GB where `e5-large` takes 1,930 s and 2.15 GB, and
 `--no-dense` on the writer opens no model at all. `serve` and `watch` hold the model on purpose —
 1.4 GB resident on the default model, about 1.8 GB on `e5-large` — and are idle between refreshes;
 `ask --rerank-local` opens a second 2.1 GB session beside the embedder and is the one reader that

@@ -1,5 +1,16 @@
 # What every command costs, and how a rebuild was bounded
 
+> **Two notes added 2026-09-09.** §1.1's `embed-A-small-full` row (214.1 s, 1.63 GB) is a **before**
+> row — pre-cap, pre-budget, pre-chunked-sync — and was being quoted elsewhere as the default
+> model's current cost. It is not: it was measured uncapped at 18 threads, while the shipped default
+> has been four threads since the cap landed. The default model's current whole-store cost is in
+> [the 2026-09-09 results](2026-09-09-normal-band-only-results.md), which also re-measures the same
+> uncapped shape at 178.1 s. Everything else here was measured in the normal band, which is again
+> the only band there is: the background band shipped after this document and was removed on
+> 2026-09-09. §4.2's `threads = N` rows are historical in one further sense — the key itself was
+> removed with the band, replaced by `resources`, and its `threads = 6` row is the evidence that
+> chose what `full` resolves to.
+
 The report was two sentences: "when we build/rebuild graph it uses 90% resources of system and fan
 out of memory", then "investigate all commands which can use a lot of resources". This file is
 every command measured, which two of them were the cost, what the cause turned out to be, and what

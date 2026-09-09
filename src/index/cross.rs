@@ -173,7 +173,7 @@ mod tests {
     #[ignore = "needs the exported model: set REPOGRAPH_RERANKER_DIR"]
     fn the_model_prefers_the_passage_that_answers_the_question() {
         let dir = std::env::var("REPOGRAPH_RERANKER_DIR").expect("REPOGRAPH_RERANKER_DIR");
-        let mut m = CrossEncoder::open(Path::new(&dir), crate::index::embed::threads(0)).unwrap();
+        let mut m = CrossEncoder::open(Path::new(&dir), crate::index::embed::threads(crate::index::embed::Resources::default())).unwrap();
         let s = m.score("how is a client's phone number stored", &[
             "Phone numbers are normalised to E.164 before they are stored.".into(),
             "The calendar grid uses a five-minute lattice.".into(),

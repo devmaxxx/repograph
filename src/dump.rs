@@ -54,7 +54,7 @@ struct Dump { meta: Meta, queries: Vec<Record> }
 pub fn run(repo: &Path, queries: &Path, out: &Path, depth: usize, no_dense: bool) -> Result<()> {
     let cfg = Config::load(repo)?;
     // `dump` does not come through `main`'s arms, so the pools it owns are capped here.
-    let threads = crate::index::embed::threads(cfg.threads);
+    let threads = crate::index::embed::threads(cfg.resources);
     crate::cap_pools(threads);
     let store = Store::new(repo);
     let (graph, _) = store.load()?;
