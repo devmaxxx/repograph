@@ -27,24 +27,44 @@ NO_PATH = re.compile(r"no call path|No directed path|\"status\":\s*\"no_path\"|n
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 
 
-# The corpus's own closed list of requirement-id families, e.g. `FR-AI`, `INV`, `N`. A pattern
-# built from anything looser also matches `UTF-8`, `SHA-256`, `RFC-7807` — tokens that look like
-# an id but never compete with one for a reader's eye, which was the defect this list fixed.
-#
-# It was read from `repograph.toml`'s `id_families` key while there was one. repograph derives its
-# families from the definitions its documents carry and has no such key any more, so the list
-# lives here: this comparison is pinned to one corpus at one commit, and which families that
-# corpus had is data of the experiment rather than configuration of the tool. `repograph families`
-# over the corpus prints the list to refresh it from.
-ID_FAMILIES = [
-    "FR-DM", "FR-CAL", "FR-VIS", "FR-PAY", "FR-PH", "FR-SEC", "FR-APP", "FR-MKT",
-    "FR-AI", "FR-CRM", "FR-SHELL", "FR-TOOL", "FR-SVC", "FR-LIFE", "FR-WH", "FR-RPT",
-    "FR-MIG", "FR-WEB", "FR-OPS", "FR-STAFF",
-    "NFR-PH", "NFR-MKT", "NFR-MIG", "NFR-PAY", "NFR-DM", "NFR-RPT", "NFR-WEB", "NFR-SVC",
-    "NFR-STAFF", "NFR",
-    "AC-DM", "AC-VIS", "INV", "ADR", "OD", "OQ", "N", "R", "M", "W", "D", "G",
-    "PREP", "CAL", "OR", "MON", "SEAM", "SG", "IDEA",
-]
+# A cached answer, for a run with no repograph binary to hand. Written by `--save-id-families`,
+# which records the corpus and the commit it was taken from and the day it was taken.
+FAMILIES_CACHE = Path(__file__).resolve().parent / "id-families.json"
+
+
+def load_id_families(repo: Path, repograph: str = "repograph") -> list[str]:
+    """The corpus's own list of requirement-id families, e.g. `FR-AI`, `INV`, `N`.
+
+    A pattern built from anything looser also matches `UTF-8`, `SHA-256`, `RFC-7807` — tokens
+    that look like an id but never compete with one for a reader's eye, which was the defect a
+    closed list fixed. A list typed in here is the same defect one commit later: the corpus
+    grows a family, the scorer stops counting it as a competitor, and nothing says so. So the
+    list comes from the tool's own answer over the corpus under test, which moves when it does.
+
+    Failing loudly beats falling back to the looser pattern, which was the original defect.
+    """
+    argv = [repograph, "--repo", str(repo), "families", "--json"]
+    proc = subprocess.run(argv, capture_output=True, text=True)
+    if proc.returncode != 0:
+        raise RuntimeError(f"cannot build the id pattern: `{' '.join(argv)}` exited {proc.returncode}: {proc.stderr.strip()}")
+    try:
+        payload = json.loads(proc.stdout)
+    except ValueError as e:
+        raise RuntimeError(f"cannot build the id pattern: `{' '.join(argv)}` printed no JSON") from e
+    families = [row["family"] for row in payload.get("families", [])]
+    if not families:
+        raise RuntimeError(f"cannot build the id pattern: {repo} defines no families")
+    return families
+
+
+def read_id_families(path: Path) -> list[str]:
+    """A cached answer, read back. Same rule: no families in the file is an error, not a fallback."""
+    if not path.exists():
+        raise RuntimeError(f"cannot build the id pattern: {path} does not exist")
+    families = json.loads(path.read_text(encoding="utf8")).get("families") or []
+    if not families:
+        raise RuntimeError(f"cannot build the id pattern: no families in {path}")
+    return families
 
 
 def _id_token_pattern(families: list[str]) -> re.Pattern[str]:
@@ -56,9 +76,16 @@ def _id_token_pattern(families: list[str]) -> re.Pattern[str]:
 
 # What competes with an answer for the reader's eye: another id of a real family, or for a
 # file case another path. `FR-AI-138`, `INV-16`, `N-137` all match the first;
-# `docs/prd/x.md` and `apps/api/src/y.ts` the second.
-ID_TOKEN = _id_token_pattern(ID_FAMILIES)
+# `docs/prd/x.md` and `apps/api/src/y.ts` the second. The id half is built by `main` from the
+# corpus under test — an import alone has no corpus, so a caller that scores without naming one
+# is told so rather than scored against nothing.
+ID_TOKEN: re.Pattern[str] | None = None
 PATH_TOKEN = re.compile(r"[\w./-]+/[\w.-]+\.(?:tsx?|kt|md|json|ya?ml|sql)\b")
+
+
+def set_id_families(families: list[str]) -> None:
+    global ID_TOKEN
+    ID_TOKEN = _id_token_pattern(families)
 
 
 def rank_of(answer: str, want: str) -> int | None:
@@ -73,6 +100,8 @@ def rank_of(answer: str, want: str) -> int | None:
     at = answer.find(want)
     if at < 0:
         return None
+    if ID_TOKEN is None:
+        raise RuntimeError("the id pattern was never built — call set_id_families() first")
     pattern = PATH_TOKEN if "/" in want else ID_TOKEN
     seen: list[str] = []
     for m in pattern.finditer(answer[:at]):
@@ -373,6 +402,8 @@ def main() -> None:
     ap.add_argument("--strip-prefix", action="append", default=[])
     ap.add_argument("--timeout", type=int, default=180)
     ap.add_argument("--truth", default="", help="reuse a truth file instead of rebuilding it")
+    ap.add_argument("--id-families", default="", help=f"read the scorer's families from this cached artefact instead of asking repograph; {FAMILIES_CACHE.name} is the one shipped here")
+    ap.add_argument("--save-id-families", default="", help="write the families derived from the corpus to this file, for a later offline run")
     ap.add_argument("--out", required=True)
     args = ap.parse_args()
 
@@ -397,6 +428,13 @@ def main() -> None:
 
     head = subprocess.run(["git", "rev-parse", "--short", "HEAD"], cwd=repo,
                           capture_output=True, text=True).stdout.strip()
+
+    families = read_id_families(Path(args.id_families)) if args.id_families else load_id_families(repo, args.repograph)
+    set_id_families(families)
+    if args.save_id_families:
+        Path(args.save_id_families).write_text(json.dumps(
+            {"corpus": str(repo), "commit": head, "taken": time.strftime("%Y-%m-%d"), "families": families},
+            ensure_ascii=False, indent=1) + "\n", encoding="utf8")
     suites = args.suites.split(",")
     # Only the suites that ran. A blast-only run that still printed the retrieval case count
     # claimed 82 scored questions it never asked.

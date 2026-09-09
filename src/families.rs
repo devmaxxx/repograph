@@ -11,11 +11,11 @@
 //! away by hand. `repograph families` prints both halves so a prefix on the wrong side of that
 //! line is something a reader can see.
 
-use crate::ids::IdMatcher;
+use crate::ids::{bounded, IdMatcher};
 use crate::model::Graph;
 use crate::store::Store;
 use crate::walk::{Entry, FileKind};
-use anyhow::Result;
+use anyhow::{Context, Result};
 use regex::Regex;
 use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
@@ -30,13 +30,18 @@ pub enum Family<'a> {
     Milestone(&'a str),
 }
 
-/// The id slot of the definition grammar, with any family in place of a known one. Bounded the
-/// way `ids::bounded` is bounded, and one hyphen at most: `FR-PAY-22` is `FR-PAY`, `N-151` is `N`.
-const FAMILY: &str = r"[A-Z][A-Z0-9]{0,5}(?:-[A-Z][A-Z0-9]{0,5})?";
-/// The milestone slot, written as the extractor writes it in `kind_for` and `milestone_file`
-/// rather than as the id slot above: what those two accept is what becomes a milestone node, and
-/// a scan that admitted one letter more would derive a family no node is ever written in.
-const MILESTONE: &str = r"[A-Z]+";
+/// The id slot of the definition grammar, with any family in place of a known one: `FR-PAY-22`
+/// is `FR-PAY`, `N-151` is `N`, `SECURITY-12` is `SECURITY`, `FR-PAY-EU-1` is `FR-PAY-EU`. The
+/// slot is wide because a corpus's prefixes are its own and nothing else writes them down; the
+/// hyphen before the digits is what keeps `B1` and `C11` out. What holds it together is the fixed
+/// point: a family this reads out of a definition head goes into the matcher the extractor writes
+/// nodes with, and `classify` must read the same family back off those nodes or an update would
+/// find one set in the documents and another in the graph on every run, for ever.
+const FAMILY: &str = r"[A-Z][A-Z0-9]{0,11}(?:-[A-Z][A-Z0-9]{0,11}){0,3}";
+/// The milestone slot, shared with the extractor's own `milestone_file` and written as `kind_for`
+/// writes it: what those accept is what becomes a milestone node, and a scan that admitted one
+/// letter more would derive a family no node is ever written in.
+pub(crate) const MILESTONE: &str = r"[A-Z]+";
 
 fn shapes() -> &'static (Regex, Regex) {
     static RE: OnceLock<(Regex, Regex)> = OnceLock::new();
@@ -89,10 +94,29 @@ fn names(m: &BTreeMap<String, Site>) -> Vec<String> {
     m.keys().cloned().collect()
 }
 
+/// The two lists a matcher is built from, ids and milestones apart. Held separately from the
+/// matcher itself so a writer can tell whether the set it extracts under has moved without
+/// rebuilding six regexes to find out.
+pub type Families = (Vec<String>, Vec<String>);
+
+pub fn matcher(f: &Families) -> IdMatcher {
+    IdMatcher::new(&f.0, &f.1)
+}
+
+/// The families a caller has already counted off a graph, without walking its nodes again.
+pub fn keys(counted: &(BTreeMap<String, usize>, BTreeMap<String, usize>)) -> Families {
+    (counted.0.keys().cloned().collect(), counted.1.keys().cloned().collect())
+}
+
 impl Derived {
+    /// The families the documents define, as the matcher takes them.
+    pub fn families(&self) -> Families {
+        (names(&self.ids), names(&self.milestones))
+    }
+
     /// The matcher every extractor reads ids through on a build.
     pub fn matcher(&self) -> IdMatcher {
-        IdMatcher::new(&names(&self.ids), &names(&self.milestones))
+        matcher(&self.families())
     }
 
     /// What a build says it found. The whole list where it is short and its head with a count
@@ -151,33 +175,16 @@ pub fn of_graph(graph: &Graph) -> (BTreeMap<String, usize>, BTreeMap<String, usi
 /// `serve` answers in 66 ms — so a family a document has only just grown reaches the read path
 /// through the `build` or `update` that derives it.
 pub fn from_graph(graph: &Graph) -> IdMatcher {
-    let (ids, milestones) = of_graph(graph);
-    let keys = |m: BTreeMap<String, usize>| m.into_keys().collect::<Vec<_>>();
-    IdMatcher::new(&keys(ids), &keys(milestones))
+    matcher(&graph_families(graph))
 }
 
-/// Same shape as `IdMatcher`'s: a hit whose neighbour is alphanumeric or a hyphen belongs to a
-/// longer token. `FR-PAY-22` is one id and not `PAY-22`, and `2026-09-05` is a date.
-fn bounded(text: &str, start: usize, end: usize) -> bool {
-    let tail = |b: u8| b.is_ascii_alphanumeric() || b == b'-';
-    let left_ok = start == 0 || !tail(text.as_bytes()[start - 1]);
-    let right_ok = end == text.len() || !tail(text.as_bytes()[end]);
-    left_ok && right_ok
+/// The families a graph's own nodes are written in, as the matcher takes them.
+pub fn graph_families(graph: &Graph) -> Families {
+    keys(&of_graph(graph))
 }
-
-const EXAMPLE_CHARS: usize = 80;
 
 fn site(rel: &str, line_no: u32, line: &str) -> Site {
-    let text = line.trim();
-    let cut = text.char_indices().nth(EXAMPLE_CHARS).map(|(i, _)| i);
-    Site {
-        file: rel.to_string(),
-        line: line_no,
-        text: match cut {
-            Some(i) => format!("{}…", &text[..i]),
-            None => text.to_string(),
-        },
-    }
+    Site { file: rel.to_string(), line: line_no, text: crate::query::headline(line.trim()) }
 }
 
 #[derive(Default)]
@@ -187,15 +194,20 @@ struct Tally {
     first: Option<Site>,
 }
 
+/// Whether the mention tally is wanted. `build`, `update` and a resident poll read the
+/// definitions and nothing else; counting the prefixes nobody defines costs a matcher per
+/// distinct prefix and a pass over every source file, and only `repograph families` prints it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Mentions { Skip, Count }
+
 /// The definitions and the mentions in one pass over the documents. The definition shapes are
 /// the extractor's own, with a generic family in the id slot; the mention tally is every id-like
 /// token, so what is left once the definitions are taken out is what the report calls text.
 struct Scan {
     definition: Regex,
-    milestone_file: Regex,
-    adr_file: Regex,
     id: Regex,
     milestone: Regex,
+    tally: Mentions,
     /// One matcher per prefix, so a range (`FR-RPT-42…48`) and a slash list (`INV-11/12`) are
     /// counted the way the extractor would count them rather than as one mention each. Built
     /// lazily: a corpus names few prefixes and this runs per line.
@@ -206,8 +218,9 @@ struct Scan {
 }
 
 impl Scan {
-    fn new() -> Scan {
+    fn new(tally: Mentions) -> Scan {
         Scan {
+            tally,
             // `RequirementScanner`'s head, with a generic id in place of the matcher's: the bold
             // form, the list-item form and the heading form, each with the `·` that separates an
             // id from what it names. A line that merely opens with an id — `UTF-16 conversion` —
@@ -215,10 +228,6 @@ impl Scan {
             definition: Regex::new(&format!(
                 r"^(?:#{{1,6}}\s+|\*\*|\s*[-*]\s+\*\*)?(?:({FAMILY})-\d{{1,4}}|({MILESTONE})-M\d{{2}})\s*·"
             )).unwrap(),
-            milestone_file: Regex::new(&format!(r"(?:^|/)({MILESTONE})-M\d{{2}}[^/]*\.md$")).unwrap(),
-            // The one family the extractor names in its own source: an `ADR-###.md` is that node
-            // whatever any list says, so the file that carries one defines the family.
-            adr_file: Regex::new(r"(?:^|/)ADR-\d{3,4}[^/]*\.md$").unwrap(),
             id: Regex::new(&format!(r"({FAMILY})-\d{{1,4}}")).unwrap(),
             milestone: Regex::new(&format!(r"({MILESTONE})-M\d{{2}}")).unwrap(),
             matchers: HashMap::new(),
@@ -229,12 +238,14 @@ impl Scan {
     }
 
     fn doc(&mut self, rel: &str, text: &str) {
-        if let Some(c) = self.milestone_file.captures(rel) {
-            let family = c[1].to_string();
-            self.milestones.entry(family).or_insert_with(|| Site { file: rel.to_string(), line: 1, text: String::new() });
+        let named = || Site { file: rel.to_string(), line: 1, text: String::new() };
+        if let Some(c) = crate::doc::requirements::milestone_file().captures(rel) {
+            self.milestones.entry(c[2].to_string()).or_insert_with(named);
         }
-        if self.adr_file.is_match(rel) {
-            self.ids.entry("ADR".to_string()).or_insert_with(|| Site { file: rel.to_string(), line: 1, text: String::new() });
+        // The one family the extractor names in its own source: an `ADR-###.md` is that node
+        // whatever any list says, so the file that carries one defines the family.
+        if crate::doc::requirements::adr_file().is_match(rel) {
+            self.ids.entry("ADR".to_string()).or_insert_with(named);
         }
         // An editor's byte-order mark would otherwise hide the first definition from `^`.
         let mut fenced = false;
@@ -245,10 +256,26 @@ impl Scan {
             }
             // A head quoted inside a code fence is an example of the dialect and yields no node,
             // so it may not yield a family either — an update would otherwise find one family in
-            // the documents and another in the graph on every run, for ever.
+            // the documents and another in the graph on every run, for ever. The tally is behind
+            // the same guard: this repository's own README quotes the dialect in a fence, and
+            // listing those prefixes as mention-only points a reader at an example line under a
+            // footer telling them to write exactly that line to make it a family.
             if !fenced {
                 self.define(rel, i as u32 + 1, line);
+                self.mentions(rel, i as u32 + 1, line);
             }
+        }
+    }
+
+    /// A source file defines nothing — an id in a comment is a citation — so only the tally
+    /// reads one. A prefix cited only from code and defined nowhere is exactly the case the
+    /// mention half of the report exists to surface.
+    fn code(&mut self, rel: &str, text: &str) {
+        self.tally_lines(rel, text);
+    }
+
+    fn tally_lines(&mut self, rel: &str, text: &str) {
+        for (i, line) in text.trim_start_matches('\u{feff}').lines().enumerate() {
             self.mentions(rel, i as u32 + 1, line);
         }
     }
@@ -256,6 +283,9 @@ impl Scan {
     /// The ids a registry declares. Each becomes an invariant node whatever any family list
     /// says, so each defines its own family.
     fn registry(&mut self, rel: &str, text: &str) {
+        // A registry's prose cites ids too — a `basis:` row naming `N-039` — and the extractor
+        // resolves those into edges, so a prefix written only there belongs in the tally.
+        self.tally_lines(rel, text);
         for (i, id) in crate::doc::registry::declared_ids(text).iter().enumerate() {
             let at = || Site { file: rel.to_string(), line: i as u32 + 1, text: id.clone() };
             match classify(id) {
@@ -277,6 +307,7 @@ impl Scan {
     }
 
     fn mentions(&mut self, rel: &str, line_no: u32, line: &str) {
+        if self.tally == Mentions::Skip { return; }
         let mut prefixes: BTreeSet<String> = BTreeSet::new();
         let mut milestones: BTreeMap<String, usize> = BTreeMap::new();
         for c in self.milestone.captures_iter(line) {
@@ -330,29 +361,57 @@ impl Scan {
     }
 }
 
-/// The families the walked documents define. The walk has already decided which files are
-/// documents and which are registries, so the globs are not read again here.
-pub fn derive(repo: &Path, entries: &[Entry]) -> Result<Derived> {
-    let mut scan = Scan::new();
+fn scan_tree(repo: &Path, entries: &[Entry], tally: Mentions) -> Result<Derived> {
+    let mut scan = Scan::new(tally);
     for e in entries {
-        let read = || match std::fs::read_to_string(repo.join(&e.rel)) {
-            Ok(text) => Some(text),
-            Err(err) => { eprintln!("families: skipping {}: {err}", e.rel); None }
+        // Nothing in a source file defines a family, so with no tally to fill there is nothing
+        // to open one for.
+        if e.kind == FileKind::Code && tally == Mentions::Skip { continue; }
+        let bytes = match (std::fs::read(repo.join(&e.rel)), e.kind) {
+            (Ok(b), _) => b,
+            // A document and a registry are where a family is written down. Reading a failure as
+            // "this file defines nothing" hands the caller a family that has vanished, and an
+            // update answers that by re-extracting the tree without it and deleting every node
+            // in it — so the derivation fails instead, naming the file.
+            (Err(err), FileKind::Doc | FileKind::Registry) =>
+                return Err(err).with_context(|| format!("families: read {}", e.rel)),
+            (Err(err), FileKind::Code) => { eprintln!("families: skipping {}: {err}", e.rel); continue; }
+        };
+        // A file the extractor will refuse for the same reason declares no node either, so
+        // leaving this one out cannot cost a family.
+        let Ok(text) = String::from_utf8(bytes) else {
+            eprintln!("families: skipping {}: not UTF-8", e.rel);
+            continue;
         };
         match e.kind {
-            FileKind::Doc => if let Some(text) = read() { scan.doc(&e.rel, &text) },
-            FileKind::Registry => if let Some(text) = read() { scan.registry(&e.rel, &text) },
-            FileKind::Code => {}
+            FileKind::Doc => scan.doc(&e.rel, &text),
+            FileKind::Registry => scan.registry(&e.rel, &text),
+            FileKind::Code => scan.code(&e.rel, &text),
         }
     }
     Ok(scan.finish())
+}
+
+/// The families the walked documents define. The walk has already decided which files are
+/// documents and which are registries, so the globs are not read again here.
+pub fn derive(repo: &Path, entries: &[Entry]) -> Result<Derived> {
+    scan_tree(repo, entries, Mentions::Skip)
+}
+
+/// The same, plus the id-like prefixes no line defines — the whole of what `repograph families`
+/// reports, and the only caller that pays for the tally.
+pub fn survey(repo: &Path, entries: &[Entry]) -> Result<Derived> {
+    scan_tree(repo, entries, Mentions::Count)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Row {
     pub family: String,
     pub nodes: usize,
-    pub defined: Site,
+    /// `None` where the graph holds nodes of this family and no document defines one any more —
+    /// a definition edited away with no update since. The documents and the store being out of
+    /// step is the one state this command exists to expose, so it is a row, not an omission.
+    pub defined: Option<Site>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -362,10 +421,18 @@ pub struct Report {
     pub mention_only: Vec<Mention>,
 }
 
+/// A row per family the documents define or the graph holds, which are the same set only when
+/// the store is in step with the tree.
 fn rows(defined: BTreeMap<String, Site>, counts: &BTreeMap<String, usize>) -> Vec<Row> {
-    defined.into_iter()
-        .map(|(family, defined)| Row { nodes: counts.get(&family).copied().unwrap_or(0), family, defined })
-        .collect()
+    let mut out: Vec<Row> = counts.iter()
+        .filter(|(family, _)| !defined.contains_key(*family))
+        .map(|(family, nodes)| Row { family: family.clone(), nodes: *nodes, defined: None })
+        .collect();
+    out.extend(defined.into_iter().map(|(family, site)| Row {
+        nodes: counts.get(&family).copied().unwrap_or(0), family, defined: Some(site),
+    }));
+    out.sort_by(|a, b| a.family.cmp(&b.family));
+    out
 }
 
 pub fn report(derived: Derived, graph: &Graph) -> Report {
@@ -383,10 +450,17 @@ fn at(s: &Site) -> String {
     format!("{}:{}", s.file, s.line)
 }
 
+fn defined_at(s: &Option<Site>) -> String {
+    match s {
+        Some(s) => at(s),
+        None => "(nothing defines it any more — run `repograph update`)".to_string(),
+    }
+}
+
 fn section(head: &str, rows: &[Row]) -> String {
     let mut out = format!("{:<NAME$}{:>7}  {}\n", head, "nodes", "defined");
     for r in rows {
-        out.push_str(&format!("{:<NAME$}{:>7}  {}\n", format!("  {}", r.family), r.nodes, at(&r.defined)));
+        out.push_str(&format!("{:<NAME$}{:>7}  {}\n", format!("  {}", r.family), r.nodes, defined_at(&r.defined)));
     }
     if rows.is_empty() { out.push_str("  (none)\n"); }
     out
@@ -411,7 +485,7 @@ pub fn run(repo: &Path, cfg: &crate::config::Config, json: bool) -> Result<()> {
     let (graph, manifest) = Store::new(repo).load()?;
     if graph.nodes.is_empty() { anyhow::bail!("graph is empty — run `repograph build`"); }
     let entries = crate::walk::walk(repo, cfg, &manifest)?;
-    let r = report(derive(repo, &entries)?, &graph);
+    let r = report(survey(repo, &entries)?, &graph);
     match json {
         true => println!("{}", serde_json::to_string_pretty(&r)?),
         false => print!("{}", render(&r)),
@@ -444,7 +518,7 @@ mod tests {
     use crate::model::{Extraction, NodeKind};
 
     fn scan(docs: &[(&str, &str)]) -> Derived {
-        let mut s = Scan::new();
+        let mut s = Scan::new(Mentions::Count);
         for (rel, text) in docs { s.doc(rel, text); }
         s.finish()
     }
@@ -486,6 +560,28 @@ mod tests {
         // could ever find in the graph.
         let d = one("```\n**REQ-7 · MUST · пример диалекта**\n```\n**AC-1 · MUST · настоящее**\n");
         assert_eq!(families(&d), vec!["AC"]);
+        // Nor a mention: listing REQ as mention-only would point a reader at the fenced example
+        // under a footer telling them to write exactly that line to make it a family.
+        assert!(d.mention_only.is_empty(), "{:?}", d.mention_only);
+    }
+
+    #[test]
+    fn a_prefix_written_only_in_code_or_only_in_a_registry_is_still_counted() {
+        let mut s = Scan::new(Mentions::Count);
+        s.code("src/pay.ts", "// implements NEW-1 and cites TCK-42\n");
+        s.registry("docs/constitution.yaml", "invariants:\n  - id: INV-01\n    basis: \"решение 1, `N-039`\"\n");
+        let d = s.finish();
+        assert_eq!(families(&d), vec!["INV"]);
+        assert_eq!(d.mention_only.iter().map(|m| m.prefix.as_str()).collect::<Vec<_>>(), vec!["N", "NEW", "TCK"]);
+    }
+
+    #[test]
+    fn a_derivation_for_a_build_counts_no_mentions_at_all() {
+        let mut s = Scan::new(Mentions::Skip);
+        s.doc("docs/a.md", "**REQ-1 · MUST · x**\nсм. ISO-8601\n");
+        let d = s.finish();
+        assert_eq!(families(&d), vec!["REQ"]);
+        assert!(d.mention_only.is_empty());
     }
 
     #[test]
@@ -515,7 +611,7 @@ mod tests {
 
     #[test]
     fn a_registry_row_defines_its_prefix() {
-        let mut s = Scan::new();
+        let mut s = Scan::new(Mentions::Count);
         s.registry("docs/constitution.yaml", "invariants:\n  - id: INV-01\n    statement: \"**A.**\"\n  - id: INV-02\n");
         let d = s.finish();
         assert_eq!(families(&d), vec!["INV"]);
@@ -533,7 +629,7 @@ mod tests {
     fn an_example_line_is_cut_on_a_character_boundary() {
         let d = one(&format!("**REQ-1 · {}**\n", "ф".repeat(200)));
         let text = &d.ids["REQ"].text;
-        assert_eq!(text.chars().count(), EXAMPLE_CHARS + 1);
+        assert_eq!(text.chars().count(), crate::query::HEADLINE + 1);
         assert!(text.ends_with('…'));
     }
 
@@ -558,6 +654,14 @@ mod tests {
     }
 
     #[test]
+    fn a_family_the_graph_holds_and_no_document_defines_is_a_row_of_its_own() {
+        let r = report(one("**REQ-7 · MUST · x**\n"), &graph_with(&["REQ-7", "AC-3"]));
+        assert_eq!(r.families.iter().map(|f| (f.family.as_str(), f.nodes, f.defined.is_some())).collect::<Vec<_>>(),
+            vec![("AC", 1, false), ("REQ", 1, true)]);
+        assert!(render(&r).contains("nothing defines it any more"), "{}", render(&r));
+    }
+
+    #[test]
     fn what_a_build_derives_is_what_its_graph_declares() {
         let d = one("**REQ-7 · MUST · x**\n## AC-3 · y\n");
         assert!(d.against(&graph_with(&["REQ-7", "AC-3"])).is_empty(), "no family moved, so no document is re-read");
@@ -576,7 +680,35 @@ mod tests {
         assert_eq!(classify("FR-PAY-22"), Some(Family::Id("FR-PAY")));
         assert_eq!(classify("N-151"), Some(Family::Id("N")));
         assert_eq!(classify("file:docs/a.md"), None);
+        // A task written with a hyphen where the dialect writes a slash is neither shape.
         assert_eq!(classify("MOB-M01-T3"), None);
+        // The hyphen before the digits is what keeps a bare label out of the id slot.
+        assert_eq!(classify("B1"), None);
+        assert_eq!(classify("C11"), None);
+        assert_eq!(classify("SECURITY-12"), Some(Family::Id("SECURITY")));
+        assert_eq!(classify("FR-PAY-EU-1"), Some(Family::Id("FR-PAY-EU")));
+    }
+
+    /// The invariant the whole derivation rests on: what a definition head yields as a family is
+    /// what the extractor writes ids in, and `classify` reads that same family back off the node.
+    /// Broken, an update finds one set in the documents and another in the graph for ever.
+    #[test]
+    fn a_long_prefix_and_a_three_part_one_survive_the_round_trip() {
+        use crate::model::Extractor;
+        let text = "**SECURITY-12 · MUST · доступ**\n\nтело\n\n## FR-PAY-EU-1 · возврат в ЕС\n\nтело\n";
+        let d = one(text);
+        assert_eq!(families(&d), vec!["FR-PAY-EU", "SECURITY"]);
+
+        let ex = crate::doc::DocExtractor::new(d.matcher()).extract("docs/a.md", text);
+        let mut written: Vec<&str> = ex.nodes.iter().map(|n| n.id.as_str()).filter(|id| !id.contains(':')).collect();
+        written.sort_unstable();
+        assert_eq!(written, vec!["FR-PAY-EU-1", "SECURITY-12"]);
+        assert_eq!(classify("SECURITY-12"), Some(Family::Id("SECURITY")));
+        assert_eq!(classify("FR-PAY-EU-1"), Some(Family::Id("FR-PAY-EU")));
+
+        let mut g = Graph::default();
+        g.apply(ex);
+        assert!(d.against(&g).is_empty(), "{:?}", d.against(&g));
     }
 
     #[test]

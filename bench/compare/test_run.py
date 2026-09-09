@@ -4,24 +4,34 @@ import argparse
 import collections
 import json
 import subprocess
+import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
 
+import run
 import truth as T
 from run import (
+    FAMILIES_CACHE,
     Gitnexus,
     gitnexus_failure_reason,
     gitnexus_looks_like_a_result,
-    ID_FAMILIES,
-    ID_TOKEN,
+    load_id_families,
     rank_of,
+    read_id_families,
     score_blast,
+    set_id_families,
     spells,
     summarise,
 )
 
 BENCH = Path(__file__).resolve().parent.parent
+
+
+def setUpModule():
+    # `main` builds the pattern from the corpus under test; these fixtures are answers copied
+    # from that corpus, so they are scored against the families it had when they were copied.
+    set_id_families(read_id_families(FAMILIES_CACHE))
 
 # Each line carries one id but a different number of paths, so counting ids and counting
 # paths before "OR-2" disagree (1 vs. 3) — a `rank_of` that ignored `"/" in want` and
@@ -82,13 +92,40 @@ class RankOf(unittest.TestCase):
 
 
 class IdFamilies(unittest.TestCase):
-    def test_the_pattern_reads_a_family_id_and_leaves_a_standard_alone(self):
-        self.assertIn("FR-AI", ID_FAMILIES)
-        self.assertIn("INV", ID_FAMILIES)
+    def test_the_cached_artefact_carries_the_corpus_and_its_families(self):
+        cached = json.loads(FAMILIES_CACHE.read_text(encoding="utf8"))
+        self.assertTrue(cached["corpus"] and cached["commit"] and cached["taken"])
+        families = read_id_families(FAMILIES_CACHE)
+        self.assertIn("FR-AI", families)
+        self.assertIn("INV", families)
         self.assertEqual(
-            [m.group(0) for m in ID_TOKEN.finditer("FR-AI-138, INV-16, UTF-8, SHA-256")],
+            [m.group(0) for m in run.ID_TOKEN.finditer("FR-AI-138, INV-16, UTF-8, SHA-256")],
             ["FR-AI-138", "INV-16"],
         )
+
+    def test_it_asks_the_tool_and_reads_the_families_out_of_the_answer(self):
+        answer = json.dumps({"families": [{"family": "INV"}, {"family": "FR-AI"}], "milestones": [], "mention_only": []})
+        with mock.patch("subprocess.run", return_value=subprocess.CompletedProcess([], 0, answer, "")) as ran:
+            self.assertEqual(load_id_families(Path("/corpus"), "repograph"), ["INV", "FR-AI"])
+        self.assertEqual(ran.call_args[0][0], ["repograph", "--repo", "/corpus", "families", "--json"])
+
+    def test_a_tool_that_cannot_answer_raises_rather_than_falling_back(self):
+        with mock.patch("subprocess.run", return_value=subprocess.CompletedProcess([], 1, "", "graph is empty")):
+            with self.assertRaises(RuntimeError):
+                load_id_families(Path("/corpus"), "repograph")
+
+    def test_a_corpus_with_no_families_raises_rather_than_falling_back(self):
+        empty = json.dumps({"families": [], "milestones": [], "mention_only": []})
+        with mock.patch("subprocess.run", return_value=subprocess.CompletedProcess([], 0, empty, "")):
+            with self.assertRaises(RuntimeError):
+                load_id_families(Path("/corpus"), "repograph")
+
+    def test_a_missing_or_empty_cache_raises_rather_than_falling_back(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self.assertRaises(RuntimeError, read_id_families, Path(tmp) / "nope.json")
+            empty = Path(tmp) / "empty.json"
+            empty.write_text('{"corpus": "x", "families": []}', encoding="utf8")
+            self.assertRaises(RuntimeError, read_id_families, empty)
 
 
 class Summarise(unittest.TestCase):

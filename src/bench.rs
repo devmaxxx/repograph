@@ -231,9 +231,9 @@ pub fn run(repo: &Path, cases: Option<&Path>, no_dense: bool, rerank: bool, rera
     let store = Store::new(&repo);
     let (graph, _): (Graph, _) = store.load()?;
     if graph.nodes.is_empty() { anyhow::bail!("graph is empty at {} — run build first", repo.display()); }
-    let ids = crate::families::from_graph(&graph);
-    let (id_families, milestone_families) = crate::families::of_graph(&graph);
-    let family_count = id_families.len() + milestone_families.len();
+    let counted = crate::families::of_graph(&graph);
+    let family_count = counted.0.len() + counted.1.len();
+    let ids = crate::families::matcher(&crate::families::keys(&counted));
     let dense_idx = DenseIndex::load(&store)?;
     let recorded = DenseIndex::recorded_model(&store)?;
     let questions = Questions::load(&store)?;

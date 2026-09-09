@@ -83,7 +83,7 @@ pub(crate) fn graph_for_ask(repo: &Path, cfg: &config::Config, store: &store::St
         true => crate::families::derive(repo, &entries)?.matcher(),
         false => crate::families::from_graph(&graph),
     };
-    let r = crate::apply_diff(repo, store, &mut graph, &entries, &diff, &crate::extractors(repo, ids)?)?;
+    let r = crate::apply_diff(repo, store, &mut graph, &entries, &diff, &[], &crate::extractors(repo, ids)?)?;
     timing.stage("refreshed");
     Ok((graph, Some(r)))
 }

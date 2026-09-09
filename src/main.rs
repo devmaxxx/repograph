@@ -141,10 +141,13 @@ pub struct Extractors {
 
 pub struct UpdateReport { pub changed: usize, pub removed: usize, pub nodes: usize, pub edges: usize }
 
-/// Re-extracts what the diff names, drops what is gone, and writes the store back.
-pub(crate) fn apply_diff(repo: &std::path::Path, store: &store::Store, graph: &mut model::Graph, entries: &[walk::Entry], diff: &walk::Diff, ex: &Extractors) -> anyhow::Result<UpdateReport> {
-    let stale: std::collections::BTreeSet<&str> =
-        diff.removed.iter().map(String::as_str).chain(diff.changed.iter().map(|e| e.rel.as_str())).collect();
+/// Re-extracts what the diff names, drops what is gone, and writes the store back. `also` is the
+/// files that did not change and still have to be read again — the whole tree, when a family has
+/// appeared or vanished under it. They are passed apart from the diff so `changed N` keeps
+/// counting what a person edited.
+pub(crate) fn apply_diff(repo: &std::path::Path, store: &store::Store, graph: &mut model::Graph, entries: &[walk::Entry], diff: &walk::Diff, also: &[walk::Entry], ex: &Extractors) -> anyhow::Result<UpdateReport> {
+    let stale: std::collections::BTreeSet<&str> = diff.removed.iter().map(String::as_str)
+        .chain(diff.changed.iter().chain(also.iter()).map(|e| e.rel.as_str())).collect();
     // A node's `path:line` comes from its primary declaring file. When that file goes, every
     // surviving declarer is re-read too, so line, label and body come from the file that is cited.
     // Re-reading a file removes it first, which orphans the primaries it held in turn — hence the
@@ -162,8 +165,13 @@ pub(crate) fn apply_diff(repo: &std::path::Path, store: &store::Store, graph: &m
         co_declared.extend(frontier.iter());
     }
     for rel in stale.iter().chain(co_declared.iter()) { graph.remove_file(rel); }
+    // `Graph::apply` gives a shared id to whichever file declares it first, so the re-read runs
+    // in the walk's own order: out of it, an update hands the id — its path, line, title and
+    // body — to a different file than a build does.
+    let mut work: Vec<&walk::Entry> = diff.changed.iter().chain(also.iter()).collect();
+    work.sort_by(|a, b| a.rel.cmp(&b.rel));
     let reread = co_declared.iter().map(|rel| by_rel[rel]);
-    for e in diff.changed.iter().chain(reread) {
+    for e in work.into_iter().chain(reread) {
         let text = match std::fs::read(repo.join(&e.rel)) {
             // NUL is legal inside a TypeScript string literal; only invalid UTF-8 marks a binary.
             Ok(b) => match String::from_utf8(b) {
@@ -191,27 +199,43 @@ pub fn run_update(repo: &std::path::Path, cfg: &config::Config, wipe: bool) -> a
     if wipe { store.wipe()?; }
     let (mut graph, manifest) = store.load()?;
     let entries = walk::walk(repo, cfg, &manifest)?;
-    let derived = families::derive(repo, &entries)?;
-    let mut diff = manifest.diff(&entries);
+    let diff = manifest.diff(&entries);
     // A wipe has just emptied the graph, so this one test covers both fresh builds: `build`, and
     // an `update` on a store nobody has built yet.
-    match graph.nodes.is_empty() {
-        true => eprintln!("{}", derived.line()),
+    let bootstrap = graph.nodes.is_empty();
+    let mut also: Vec<walk::Entry> = Vec::new();
+    // A tree that has not moved cannot have moved its families either, and the graph already
+    // declares the set the build derived them into. Reading every document to confirm it is a
+    // whole build's worth of I/O on the no-op update a commit hook fires.
+    let ids = match !bootstrap && diff.changed.is_empty() && diff.removed.is_empty() {
+        true => families::from_graph(&graph),
         false => {
-            // A family that appeared or vanished changes what every document extracts to, not
-            // only the ones that were edited, so the incremental path cannot answer for it.
-            let moved = derived.against(&graph);
-            if !moved.is_empty() {
-                eprintln!("families: {}", moved.join(", "));
-                let named: std::collections::BTreeSet<&str> = diff.changed.iter().map(|e| e.rel.as_str()).collect();
-                let rest: Vec<walk::Entry> = entries.iter()
-                    .filter(|e| e.kind != walk::FileKind::Code && !named.contains(e.rel.as_str()))
-                    .cloned().collect();
-                diff.changed.extend(rest);
+            let derived = families::derive(repo, &entries)?;
+            match bootstrap {
+                true => eprintln!("{}", derived.line()),
+                false => {
+                    // A family that appeared or vanished changes what every file extracts to,
+                    // not only the ones that were edited, so the incremental path cannot answer
+                    // for it. Source files included: they read ids through the same matcher, and
+                    // leaving them out leaves an `implements NEW-1` comment with no edge to
+                    // build and a `-OQ` with its code edges dangling.
+                    let moved = derived.against(&graph);
+                    if !moved.is_empty() {
+                        eprintln!("families: {}", moved.join(", "));
+                        also = rest_of_tree(&entries, &diff);
+                    }
+                }
             }
+            derived.matcher()
         }
-    }
-    apply_diff(repo, &store, &mut graph, &entries, &diff, &extractors(repo, derived.matcher())?)
+    };
+    apply_diff(repo, &store, &mut graph, &entries, &diff, &also, &extractors(repo, ids)?)
+}
+
+/// Everything the walk found that the diff does not already name, in the walk's own order.
+fn rest_of_tree(entries: &[walk::Entry], diff: &walk::Diff) -> Vec<walk::Entry> {
+    let named: std::collections::BTreeSet<&str> = diff.changed.iter().map(|e| e.rel.as_str()).collect();
+    entries.iter().filter(|e| !named.contains(e.rel.as_str())).cloned().collect()
 }
 
 /// Writes the manifest back when the walk saw stamps the stored one does not have — a store from
@@ -231,6 +255,9 @@ pub(crate) struct Watcher<'a> {
     cfg: &'a config::Config,
     store: store::Store,
     ex: Extractors,
+    /// The families `ex` reads ids through, kept beside it so a poll can tell that the set has
+    /// not moved without rebuilding six regexes to find out.
+    ex_families: families::Families,
     graph: model::Graph,
     manifest: walk::Manifest,
     seen: Option<walk::Stamp>,
@@ -257,8 +284,18 @@ impl<'a> Watcher<'a> {
         let store = store::Store::new(repo);
         let (graph, manifest) = store.load()?;
         let seen = store.stamp("manifest.json");
-        let ex = extractors(repo, families::from_graph(&graph))?;
-        Ok(Watcher { repo, cfg, ex, store, graph, manifest, seen, deferred: 0, reloaded: false })
+        let ex_families = families::graph_families(&graph);
+        let ex = extractors(repo, families::matcher(&ex_families))?;
+        Ok(Watcher { repo, cfg, ex, ex_families, store, graph, manifest, seen, deferred: 0, reloaded: false })
+    }
+
+    /// The matcher every extractor reads ids through, rebuilt when the family set has moved
+    /// under it and left alone when it has not.
+    fn extract_under(&mut self, families: families::Families) -> anyhow::Result<()> {
+        if families == self.ex_families { return Ok(()); }
+        self.ex = extractors(self.repo, families::matcher(&families))?;
+        self.ex_families = families;
+        Ok(())
     }
 
     /// The store read back when another process has written it, without the walk a poll does —
@@ -293,12 +330,20 @@ impl<'a> Watcher<'a> {
             return Ok(if pending > 0 { Polled::Deferred { pending } } else { Polled::Quiet });
         }
         self.deferred = 0;
-        // A store nobody has built declares no families, and what this poll is about to do is a
-        // build in everything but name: read them off the documents the way `build` does.
-        if self.graph.nodes.is_empty() {
-            self.ex = extractors(self.repo, families::derive(self.repo, &entries)?.matcher())?;
+        // This poll is an `update` in everything but name — it re-extracts and it writes — so it
+        // reads the families off the documents the way one does, rather than off a graph that
+        // cannot yet hold a family the tree has only just grown. A quiet poll pays none of it.
+        let derived = families::derive(self.repo, &entries)?;
+        let mut also: Vec<walk::Entry> = Vec::new();
+        if !self.graph.nodes.is_empty() {
+            let moved = derived.against(&self.graph);
+            if !moved.is_empty() {
+                eprintln!("families: {}", moved.join(", "));
+                also = rest_of_tree(&entries, &diff);
+            }
         }
-        let r = apply_diff(self.repo, &self.store, &mut self.graph, &entries, &diff, &self.ex)?;
+        self.extract_under(derived.families())?;
+        let r = apply_diff(self.repo, &self.store, &mut self.graph, &entries, &diff, &also, &self.ex)?;
         self.manifest = walk::Manifest::from_entries(&entries);
         self.seen = self.store.stamp("manifest.json");
         Ok(Polled::Refreshed(r))

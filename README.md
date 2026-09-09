@@ -678,13 +678,21 @@ repograph families                          # families, milestones, and everythi
 
 Run after a build, it prints every family with the number of nodes it holds and the `path:line`
 that first defined it, then every id-like prefix no line defines — how often it is written, in how
-many files, and one example line. Nothing is written to the repository.
+many files, and one example line. A family the graph still holds and no document defines any more
+is listed too, in place of the `path:line`, since the documents and the store being out of step is
+the one thing the command exists to show. The prefixes are counted across source files and a
+registry's prose as well as the documents, and a head quoted inside a code fence counts as
+neither a family nor a mention. Nothing is written to the repository.
 
 An `update` whose documents have gained or lost a family says so — `families: +REQ`, `families:
--AC` — and re-reads every document rather than the edited one alone, because a family changes what
-every document extracts to. `ask`'s own refresh does not: it reads ids through the families the
-graph already holds, so that answering a question never costs a pass over the whole corpus, and a
-brand-new family reaches the read path through the `build` or `update` that derives it.
+-AC` — and re-reads the whole tree rather than the edited file alone, source files included,
+because a family changes what every file extracts to; a resident `serve` or `watch` does the same
+on the poll that applies the change. An update that finds nothing changed reads no documents at
+all: a tree that has not moved cannot have moved its families.
+
+`ask`'s own refresh reads ids through the families the graph already holds, so that answering a
+question never costs a pass over the whole corpus, and a brand-new family reaches the read path
+through the `build` or `update` that derives it.
 
 A `repograph.toml` that still names `id_families` or `milestone_families` parses as it always did,
 gets one line on stderr — `id_families is no longer read — families are derived from the documents'

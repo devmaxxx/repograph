@@ -141,7 +141,7 @@ impl Config {
         // Said here rather than in the commands, because every command that reads the file has
         // been answering with derived families since the key stopped being read, and a setting
         // silently ignored is worse than one refused.
-        cfg.say_the_family_keys_are_no_longer_read(&mut std::io::stderr())?;
+        cfg.say_the_family_keys_are_no_longer_read(&mut std::io::stderr());
 
         layer(&named, "reranker_dir", machine.reranker_dir, &mut cfg.reranker_dir);
         layer(&named, "enrich_model", machine.enrich_model, &mut cfg.enrich_model);
@@ -175,13 +175,15 @@ impl Config {
 
     /// One line per key a project file still names. Families are the prefixes the documents
     /// define, so the two keys change nothing at all — which is exactly why it is said out loud.
-    fn say_the_family_keys_are_no_longer_read(&self, w: &mut impl std::io::Write) -> Result<()> {
+    /// A write that fails is dropped: a notice about a key that changes nothing may not be the
+    /// reason a command fails, and `repograph ask … 2>&-` would otherwise fail before it reached
+    /// the store.
+    fn say_the_family_keys_are_no_longer_read(&self, w: &mut impl std::io::Write) {
         for key in [("id_families", self.id_families.is_some()), ("milestone_families", self.milestone_families.is_some())] {
             if key.1 {
-                writeln!(w, "repograph.toml: {} is no longer read — families are derived from the documents' definitions", key.0)?;
+                let _ = writeln!(w, "repograph.toml: {} is no longer read — families are derived from the documents' definitions", key.0);
             }
         }
-        Ok(())
     }
 
     /// The global file, or an empty layer when there is none. A malformed or unknown-key global
@@ -247,7 +249,7 @@ mod tests {
             let dir = tempfile::tempdir().unwrap();
             let said = |cfg: &Config| {
                 let mut out = Vec::new();
-                cfg.say_the_family_keys_are_no_longer_read(&mut out).unwrap();
+                cfg.say_the_family_keys_are_no_longer_read(&mut out);
                 String::from_utf8(out).unwrap()
             };
             assert_eq!(said(&Config::load(dir.path()).unwrap()), "");

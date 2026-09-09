@@ -244,9 +244,12 @@ pub fn ask(graph: &Graph, ids: &IdMatcher, lex: &Lexical, dense: Option<Dense>, 
     answer
 }
 
-fn headline(label: &str) -> String {
-    let mut s: String = label.chars().take(80).collect();
-    if label.chars().count() > 80 { s.push('…'); }
+/// How much of a line is shown where one is quoted: a seed's label, a family's defining line.
+pub(crate) const HEADLINE: usize = 80;
+
+pub(crate) fn headline(label: &str) -> String {
+    let mut s: String = label.chars().take(HEADLINE).collect();
+    if label.chars().count() > HEADLINE { s.push('…'); }
     s
 }
 
@@ -323,8 +326,16 @@ pub fn verify(graph: &Graph) -> String {
     out
 }
 
+/// The family an id is written in, the way `repograph families` and the read matcher both read
+/// it — two groupings over one store would have `verify` contradict the command that reports on
+/// the same thing. An id in no family at all is its own group: the second half of the partition
+/// is for citations of prefixes nothing declares, and a shape the dialect does not recognise is
+/// exactly that.
 fn family(id: &str) -> &str {
-    id.trim_end_matches(|c: char| c.is_ascii_digit() || c == '-' || c == '.')
+    match crate::families::classify(id) {
+        Some(crate::families::Family::Id(f) | crate::families::Family::Milestone(f)) => f,
+        None => id,
+    }
 }
 
 #[cfg(test)]
@@ -806,7 +817,8 @@ mod tests {
         let out = verify(&g);
         assert!(out.contains("undeclared ids: 2"));
         assert!(out.contains("gaps in declared families: 1  FR-PAY-999"));
-        assert!(out.contains("in families never declared: 1  MOB-M"));
+        // An id the dialect recognises no family for is its own group, printed whole.
+        assert!(out.contains("in families never declared: 1  MOB-M01-T3\n"), "{out}");
         assert!(out.contains("dangling edges: 2"));
     }
 

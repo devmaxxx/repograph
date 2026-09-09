@@ -12,11 +12,27 @@ fn repograph(repo: &std::path::Path, args: &[&str]) -> (bool, String, String) {
     (out.status.success(), String::from_utf8_lossy(&out.stdout).into_owned(), String::from_utf8_lossy(&out.stderr).into_owned())
 }
 
-/// The line of a rendered table that starts with this name, indented.
-fn row<'a>(text: &'a str, name: &str) -> &'a str {
-    text.lines().find(|l| l.strip_prefix("  ").is_some_and(|l| l.split_whitespace().next() == Some(name)))
-        .unwrap_or_else(|| panic!("no row for {name} in:\n{text}"))
+/// The rendered table under this heading: its rows, up to the next heading. Sections are read
+/// apart because a prefix crossing the line between them — a family the documents stopped
+/// defining, a mention that became one — is the whole of what the report is for, and a search
+/// over the rendered output as a whole cannot see the move.
+fn section<'a>(text: &'a str, head: &str) -> Vec<&'a str> {
+    text.lines()
+        .skip_while(|l| !l.starts_with(head))
+        .skip(1)
+        .take_while(|l| l.starts_with("  "))
+        .collect()
 }
+
+/// The row of one section that starts with this name, indented.
+fn row<'a>(text: &'a str, head: &str, name: &str) -> &'a str {
+    section(text, head).into_iter()
+        .find(|l| l.strip_prefix("  ").is_some_and(|l| l.split_whitespace().next() == Some(name)))
+        .unwrap_or_else(|| panic!("no {name} row under {head} in:\n{text}"))
+}
+
+fn families<'a>(text: &'a str, name: &str) -> &'a str { row(text, "families", name) }
+fn mention<'a>(text: &'a str, name: &str) -> &'a str { row(text, "mention-only prefixes", name) }
 
 const REQ: &str = "# Требования\n\n**REQ-7 · MUST · Отмена визита за сутки**\n\nОтмена возможна за сутки.\n\nсм. REQ-7, даты по ISO-8601\n";
 
@@ -39,9 +55,9 @@ fn a_repository_gets_its_families_from_the_documents_and_says_when_they_move() {
 
     let (ok, out, err) = repograph(repo, &["families"]);
     assert!(ok, "{out}{err}");
-    let req: Vec<&str> = row(&out, "REQ").split_whitespace().collect();
+    let req: Vec<&str> = families(&out, "REQ").split_whitespace().collect();
     assert_eq!((req[1], req[2]), ("1", "docs/req.md:3"), "the family, its nodes and the line that defines it: {out}");
-    assert!(row(&out, "ISO").contains("docs/req.md:7"), "and the prefix no line defines: {out}");
+    assert!(mention(&out, "ISO").contains("docs/req.md:7"), "and the prefix no line defines: {out}");
     assert!(out.contains("Not families"), "said in words, not left as a column to read: {out}");
 
     // A no-op update is a fixed point, families included: what the documents define is what the
@@ -65,8 +81,21 @@ fn a_repository_gets_its_families_from_the_documents_and_says_when_they_move() {
     let (ok, out, err) = repograph(repo, &["families"]);
     assert!(ok, "{out}{err}");
     assert!(err.contains("id_families is no longer read"), "{err}");
-    assert!(row(&out, "REQ").contains("docs/req.md:3") && row(&out, "NEW").contains("docs/new.md:1"), "{out}");
+    assert!(families(&out, "REQ").contains("docs/req.md:3") && families(&out, "NEW").contains("docs/new.md:1"), "{out}");
     assert!(!out.contains("FR-PAY"), "a key nobody reads names no family: {out}");
+
+    // The definition edited away with no update since. `ask` still answers NEW-1 — the nodes are
+    // in the store and the read matcher comes off them — so the report says the family is there
+    // and nothing defines it, rather than leaving out the one state it exists to expose.
+    std::fs::write(repo.join("docs/new.md"), "тело без определения\n").unwrap();
+    let (ok, out, err) = repograph(repo, &["families"]);
+    assert!(ok, "{out}{err}");
+    assert!(families(&out, "NEW").contains("nothing defines it any more"), "{out}");
+    let (ok, json, err) = repograph(repo, &["families", "--json"]);
+    assert!(ok, "{json}{err}");
+    let v: serde_json::Value = serde_json::from_str(&json).unwrap();
+    let new = v["families"].as_array().unwrap().iter().find(|f| f["family"] == "NEW").unwrap();
+    assert!(new["defined"].is_null() && new["nodes"] == 1, "{new}");
 }
 
 /// The four shapes a definition comes in, over the corpus the extractor cases quote: a bold head,
@@ -76,8 +105,9 @@ fn every_shape_the_extractor_defines_a_node_with_defines_a_family() {
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path();
     std::fs::create_dir_all(repo.join("docs")).unwrap();
+    let fixtures = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
     for name in FIXTURES {
-        std::fs::copy(std::path::Path::new("tests/fixtures").join(name), repo.join("docs").join(name)).unwrap();
+        std::fs::copy(fixtures.join(name), repo.join("docs").join(name)).unwrap();
     }
 
     let (ok, _, err) = repograph(repo, &["families"]);
@@ -86,13 +116,13 @@ fn every_shape_the_extractor_defines_a_node_with_defines_a_family() {
 
     let (ok, out, err) = repograph(repo, &["families"]);
     assert!(ok, "{out}{err}");
-    let nodes = |name: &str| row(&out, name).split_whitespace().nth(1).unwrap().parse::<usize>().unwrap();
-    assert!(nodes("FR-PAY") > 0 && row(&out, "FR-PAY").contains("docs/06-payments.md:"), "a bold head: {out}");
-    assert!(nodes("FR-CAL") > 0 && row(&out, "FR-CAL").contains("docs/03-calendar.md:"), "a heading: {out}");
-    assert!(nodes("INV") > 0 && row(&out, "INV").contains("docs/constitution.yaml:"), "a registry row: {out}");
-    assert!(nodes("BE") > 0 && row(&out, "BE").contains("docs/BE-M01-foundation.md:1"), "a milestone document: {out}");
+    let nodes = |name: &str| families(&out, name).split_whitespace().nth(1).unwrap().parse::<usize>().unwrap();
+    assert!(nodes("FR-PAY") > 0 && families(&out, "FR-PAY").contains("docs/06-payments.md:"), "a bold head: {out}");
+    assert!(nodes("FR-CAL") > 0 && families(&out, "FR-CAL").contains("docs/03-calendar.md:"), "a heading: {out}");
+    assert!(nodes("INV") > 0 && families(&out, "INV").contains("docs/constitution.yaml:"), "a registry row: {out}");
+    assert!(row(&out, "milestones", "BE").contains("docs/BE-M01-foundation.md:1"), "a milestone document: {out}");
     // Written in a requirement's body and defined nowhere — the line the rule draws.
-    assert!(row(&out, "OQ").contains("docs/"), "a prefix only written is text: {out}");
+    assert!(mention(&out, "OQ").contains("docs/"), "a prefix only written is text: {out}");
 
     let (ok, json, err) = repograph(repo, &["families", "--json"]);
     assert!(ok, "{json}{err}");

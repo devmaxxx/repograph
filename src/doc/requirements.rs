@@ -1,8 +1,23 @@
 use crate::ids::IdMatcher;
 use crate::model::{EdgeKind, Extraction, NodeKind};
 use regex::Regex;
+use std::sync::OnceLock;
 
 const BODY_CAP: usize = 40;
+
+/// The two file-name conventions that declare a node whatever families the documents define: a
+/// milestone plan is named for its milestone, an ADR for its number. Group 1 is the id the file
+/// declares, group 2 the family it is written in — the derivation reads the family off the same
+/// pattern the extractor reads the id off, so the two cannot drift apart.
+pub(crate) fn milestone_file() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| Regex::new(&format!(r"(?:^|/)(({})-M\d{{2}})[^/]*\.md$", crate::families::MILESTONE)).unwrap())
+}
+
+pub(crate) fn adr_file() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| Regex::new(r"(?:^|/)(ADR-\d{3,4})[^/]*\.md$").unwrap())
+}
 
 fn kind_for(id: &str) -> NodeKind {
     static MILESTONE: std::sync::OnceLock<Regex> = std::sync::OnceLock::new();
@@ -18,8 +33,6 @@ pub struct RequirementScanner {
     head: Regex,
     entity: Regex,
     task: Regex,
-    milestone_file: Regex,
-    adr_file: Regex,
 }
 
 impl RequirementScanner {
@@ -36,8 +49,6 @@ impl RequirementScanner {
             )).unwrap(),
             entity: Regex::new(r"`([A-Za-z][A-Za-z0-9_.]*)`").unwrap(),
             task: Regex::new(r"^\s*-\s+\[[ xX]\]\s+\*\*(T\d{2,3})\*\*\s*(.*)$").unwrap(),
-            milestone_file: Regex::new(r"(?:^|/)([A-Z]+-M\d{2})[^/]*\.md$").unwrap(),
-            adr_file: Regex::new(r"(?:^|/)(ADR-\d{3,4})[^/]*\.md$").unwrap(),
         }
     }
 
@@ -120,10 +131,10 @@ impl RequirementScanner {
 
     /// A milestone or ADR file owns its prose: `BE-M01-….md` is the node BE-M01.
     fn file_owner(&self, rel: &str, lines: &[&str], ex: &mut Extraction) -> Option<String> {
-        let (id, kind) = if let Some(c) = self.milestone_file.captures(rel) {
+        let (id, kind) = if let Some(c) = milestone_file().captures(rel) {
             (c[1].to_string(), NodeKind::Milestone)
         } else {
-            let c = self.adr_file.captures(rel)?;
+            let c = adr_file().captures(rel)?;
             (c[1].to_string(), NodeKind::Adr)
         };
         let title = lines.iter().find(|l| l.starts_with("# ")).map(|l| l[2..].trim()).unwrap_or(&id).to_string();
