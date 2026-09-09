@@ -291,23 +291,35 @@ mod tests {
         let g = graph();
         assert_eq!(render(&g, &report(&g, &[], 2)), "changed: 0 symbols\n");
     }
-    /// A repository that quotes: `core.quotepath` is git's default, but a machine that turns it
-    /// off globally would make the two tests below pass without the fix, so it is asked for here.
+
+    fn git_in(repo: &Path, args: &[&str]) {
+        let out = std::process::Command::new("git").arg("-C").arg(repo).args(args).output().unwrap();
+        assert!(out.status.success(), "git {}: {}", args.join(" "), String::from_utf8_lossy(&out.stderr));
+    }
+
+    /// A repository that quotes. `core.quotepath` is git's default, but a machine that turns it
+    /// off globally would make the two tests below pass without the fix. Signing, hooks and the
+    /// global exclude file are pinned for the mirror-image reason: no personal or CI git
+    /// configuration should be able to fail these tests for something that is not quoting.
     fn quoting_repo() -> tempfile::TempDir {
         let dir = tempfile::tempdir().unwrap();
-        let run = |args: &[&str]| {
-            let out = std::process::Command::new("git").arg("-C").arg(dir.path()).args(args).output().unwrap();
-            assert!(out.status.success(), "git {}: {}", args.join(" "), String::from_utf8_lossy(&out.stderr));
-        };
-        run(&["init", "-q"]);
-        run(&["config", "core.quotepath", "true"]);
-        run(&["config", "core.hooksPath", "nohooks"]);
-        run(&["config", "user.email", "t@example.invalid"]);
-        run(&["config", "user.name", "t"]);
+        git_in(dir.path(), &["init", "-q"]);
+        let absent = dir.path().join("absent");
+        let absent = absent.to_str().unwrap();
+        for (key, value) in [
+            ("core.quotepath", "true"),
+            ("commit.gpgsign", "false"),
+            ("core.hooksPath", absent),
+            ("core.excludesFile", absent),
+            ("user.email", "t@example.invalid"),
+            ("user.name", "t"),
+        ] {
+            git_in(dir.path(), &["config", key, value]);
+        }
         std::fs::create_dir(dir.path().join("docs")).unwrap();
         std::fs::write(dir.path().join("docs/a.ts"), "one\n").unwrap();
-        run(&["add", "-A"]);
-        run(&["commit", "-qm", "base"]);
+        git_in(dir.path(), &["add", "-A"]);
+        git_in(dir.path(), &["commit", "-qm", "base"]);
         dir
     }
 
@@ -315,21 +327,22 @@ mod tests {
     fn a_tracked_non_ascii_path_keeps_its_hunks_under_the_unescaped_name() {
         let dir = quoting_repo();
         std::fs::write(dir.path().join("docs/Штраф.ts"), "one\ntwo\n").unwrap();
-        let out = std::process::Command::new("git").arg("-C").arg(dir.path()).args(["add", "-A"]).output().unwrap();
-        assert!(out.status.success());
+        git_in(dir.path(), &["add", "-A"]);
         assert_eq!(
             hunks_from_git(dir.path(), "HEAD").unwrap(),
             vec![Hunk { file: "docs/Штраф.ts".into(), start: 1, end: 2 }]
         );
     }
 
+    // A name with no decomposable letter, so a filesystem that hands back NFD cannot fail this
+    // test for a normalization difference that has nothing to do with quoting.
     #[test]
     fn an_untracked_non_ascii_path_is_reported_as_itself() {
         let dir = quoting_repo();
-        std::fs::write(dir.path().join("docs/Новый.ts"), "one\n").unwrap();
+        std::fs::write(dir.path().join("docs/Новое.ts"), "one\n").unwrap();
         assert_eq!(
             hunks_from_git(dir.path(), "HEAD").unwrap(),
-            vec![Hunk { file: "docs/Новый.ts".into(), start: 1, end: u32::MAX }]
+            vec![Hunk { file: "docs/Новое.ts".into(), start: 1, end: u32::MAX }]
         );
     }
 }
