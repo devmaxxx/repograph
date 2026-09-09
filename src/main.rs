@@ -12,7 +12,6 @@ mod impact;
 mod index;
 mod legacy;
 mod model;
-mod priority;
 mod query;
 mod serve;
 mod store;
@@ -396,11 +395,6 @@ fn main() -> anyhow::Result<()> {
     match cli.cmd {
         Cmd::Build | Cmd::Update => {
             let cfg = load_cfg()?;
-            // Before `cap_pools`, and before any session: on Linux the band is inherited at
-            // thread creation rather than set on the task, so a pool built first would keep the
-            // one it was born in. Only the writers lower themselves — a reader has a person
-            // waiting on its answer, and `serve`'s catch-up sync runs on that same answer path.
-            priority::apply(cfg.priority);
             cap_pools(index::embed::threads(cfg.threads));
             let r = run_update(&repo, &cfg, &extractors(&repo, &cfg)?, wipe)?;
             println!("changed {} removed {} nodes {} edges {}", r.changed, r.removed, r.nodes, r.edges);
@@ -408,7 +402,6 @@ fn main() -> anyhow::Result<()> {
         }
         Cmd::Enrich { batch, parallel, limit, code } => {
             let cfg = load_cfg()?;
-            priority::apply(cfg.priority);
             cap_pools(index::embed::threads(cfg.threads));
             let store = store::Store::new(&repo);
             let (graph, _) = store.load()?;
@@ -421,7 +414,6 @@ fn main() -> anyhow::Result<()> {
         }
         Cmd::Embed => {
             let cfg = load_cfg()?;
-            priority::apply(cfg.priority);
             cap_pools(index::embed::threads(cfg.threads));
             // The one command that reaches `embed_all` without having just written the graph
             // itself, so the check is here rather than in it: a sync against an empty graph
@@ -477,7 +469,6 @@ fn main() -> anyhow::Result<()> {
         }
         Cmd::Watch { every, batch } => {
             let cfg = load_cfg()?;
-            priority::apply(cfg.priority);
             cap_pools(index::embed::threads(cfg.threads));
             run_watch(&repo, &cfg, every, batch, cli.no_dense)
         }
