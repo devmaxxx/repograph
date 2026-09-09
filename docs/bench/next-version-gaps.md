@@ -1311,12 +1311,23 @@ followed by `update` on the corpus is a fixed point today.
 blockquote or an HTML comment, an indented one, a heading with trailing `#`s, and a Windows path
 in the milestone-file shape — the branch's Windows job is the first reading of that last one.
 
-**Lever.** One property test over every markdown fixture and the corpus: `derive(docs)` equals
-the families `of_graph(extract(docs))` implies, and a no-op `update` leaves `families=` on the
-bench line unchanged. The grammar then has one owner, and a divergence is a red test rather than a
-re-extraction on every `update`.
+**Lever.** Two halves, in this order. First one grammar with one owner: the shapes — the
+definition line, its heading form, the milestone file, the registry row — live in
+`doc::requirements`, and both the scan and the extractor read them from there, so widening the id
+slot is one edit rather than two that have to agree. Then a property test over every markdown
+fixture and the corpus: after a build, `derive(repo, &walk(..))?.against(&graph).is_empty()`, and a
+no-op `update` re-extracts nothing.
 
-**Gate.** The property test in the suite, green on all three platforms.
+**Gate.** The property test in the suite, green on all three platforms, and the bench line's
+`families=<count>` retired in its favour. A count says two numbers matched on one corpus; the
+invariant says the two grammars did.
+
+**Widened 2026-09-09, and still two copies.** This branch's review found the derived id slot capped
+at two segments of six characters where the retired config key had taken any string; it is
+`[A-Z][A-Z0-9]{0,11}(?:-[A-Z][A-Z0-9]{0,11}){0,3}` now, under a round-trip test that a definition
+head, the node it extracts to, and the classification of that node's id all agree. The corpus
+derives the same 54 and 5, so no floor moved — and the fix had to be made in both grammars, which
+is this gap exactly.
 
 ---
 
@@ -1331,6 +1342,12 @@ no row for it.
 foreground and once in the band.
 
 **Gate.** A number in the resource results beside the walk's, under the walk's own.
+
+**Partly measured (2026-09-09).** This branch's review made a no-op `update` skip `derive`
+altogether, and gave the build and poll paths a scan that does not tally mentions nobody reads. A
+cold no-op went 1.00 s → 0.08 s and a warm one 0.10 s → 0.06 s. That is the shape of the cost, not
+the number the gap asks for: an `update` that does change a file still derives over the whole
+corpus, and the `REPOGRAPH_TIMING` line still has no `derive` stage.
 
 ---
 
@@ -1397,6 +1414,51 @@ family with one definition.
 
 ---
 
+## G39 · Extraction takes the family set as an input, so one new heading re-reads the whole tree
+
+**Raised (2026-09-09)** by this branch's review, which closed two bugs that both live here. The
+extractor is built from a matcher derived before it, so the family set decides what becomes a node
+— and when the set moves, `update` has to re-extract every document *and* every code file to make
+the graph agree with it. One heading in one file therefore costs a full corpus read, and
+`Derived::against` exists for no other purpose than to notice the move. The first cut of that
+re-read skipped code files and silently left reference edges unwritten; that is fixed, and the
+design that made the omission possible is not.
+
+**Lever.** Extract ids by a generic id grammar and record the prefix on the node. The family set
+then becomes a *view* over the graph — `of_graph` already computes it — rather than an input to
+extraction: no re-read on a move, no `against`, no fixed point between two grammars to keep, and a
+family that appears costs the one file that defined it.
+
+**The price, which is why this is a gap and not a patch.** Extraction currently drops what it
+cannot place: on the corpus, 2,238 reference edges pointed at ids no document declares and the
+derivation removed them. Under a generic grammar every prefix-shaped token becomes an edge,
+including the 96 mention-only ones, so that filter moves to read time and the store grows. Whether
+that trade is worth it is unmeasured, and it is the whole question.
+
+**Gate.** A build and a no-op `update` write the same graph as today; an `update` that adds one
+definition re-reads one file, measured on the corpus copy; the graph carries no edge to an
+undeclared id that a reader can see.
+
+---
+
+## G40 · An empty family set is a regex that cannot match, not an absence
+
+**Raised (2026-09-09).** `IdMatcher::new` on an empty list built `(?:)-M\d{2}`, which matched a
+bare `-M01`, so `milestone_families = []` made `verify` report an undeclared family. It is fixed
+at the source: an empty alternation compiles to `[^\s\S]`, which never matches. That is correct
+and it is a sentinel. The type still says "a matcher", every line of every file is still run
+through three regexes, and the reason nothing is found is a pattern that cannot match rather than a
+matcher that is not there — a distinction the next reader has to recognise from a character class.
+
+**Lever.** `Option<IdMatcher>`: `None` when the corpus defines no ids, and the callers skip the
+scan instead of performing it against a pattern designed to fail. "This corpus declares no ids"
+becomes a state a reader can test.
+
+**Gate.** The constructor returns `Option`, the empty-list test asserts `None` rather than a
+never-matching regex, and a fixture with no definitions reads the same graph it reads today.
+
+---
+
 ## Suggested order
 
 | | gap | why here |
@@ -1442,7 +1504,7 @@ answer different questions, and no row below moves a retrieval floor.
 
 ## Suggested order — the third family
 
-G28 to G38 are ordered against each other only, as the cost family is. None of them moves a
+G28 to G40 are ordered against each other only, as the cost family is. None of them moves a
 recorded floor; two of them (G32, G36) are the ones to take before anyone rebuilds a store or
 clones a repository they did not write.
 
@@ -1451,13 +1513,15 @@ clones a repository they did not write.
 | 1 | **G36** the project file runs any command | the only row in this file that is a defect in trust rather than in a number: a cloned repository's `repograph.toml` is untrusted input and today it names the shell command the reader runs. One refused key closes it, the way the machine file already refuses `embed_model` |
 | 2 | **G32** a rebuilt enriched store is graded raw | the first thing anyone will hit after this branch merges: 150 nodes without questions and a bench that quietly grades against the raw floors. A stderr line and one `enrich` close it; the fixture's own rebuild is the recorded pair that says so |
 | 3 | **G34** two copies of one grammar | the failure is silent — a re-extraction on every `update`, or a family no node is written in — and the property test that makes it a red test is one function over fixtures that already exist |
-| 4 | **G30** where the reranker's gains sit in the pool | the fourteen ranks decide whether G2 is really closed; every zero-token lever proposed since should be judged against them, and none can be until they are recorded |
-| 5 | **G28** the reranked p90 straddles the ceiling | the arm cannot be floored while its own bar is what turns it red; a diff of two runs names the cause |
-| 6 | **G29** the one paraphrase sonnet never picks | one `dump` says whether it is a snippet or a pool problem; small, and it is the whole distance to 30/30 |
-| 7 | **G31** the token cost is bytes ÷ 4 of one prompt | the README's cost column is a caption; the bench should measure what it sends |
-| 8 | **G37** no non-Claude number, no stacked levers | five runs on copies, all priced, none blocking anything; first among them the `e5-large` + reranker pair, because both halves are already measured alone |
-| 9 | **G35** `derive` on every `update` | expected to be milliseconds; a number is cheaper than the expectation |
-| 10 | **G38** the report has no edge | a sort order and two columns; last because the report already shows both halves |
+| 4 | **G39** the family set is an input to extraction | the design under G34: while the extractor needs the set, the two grammars must agree and a move costs a corpus read. It sits below G34 because the property test is what makes a divergence visible, and above everything else because it is the change that would make G34 unnecessary — and it is the one row here that could grow the store, so it is measured before it is taken |
+| 5 | **G30** where the reranker's gains sit in the pool | the fourteen ranks decide whether G2 is really closed; every zero-token lever proposed since should be judged against them, and none can be until they are recorded |
+| 6 | **G28** the reranked p90 straddles the ceiling | the arm cannot be floored while its own bar is what turns it red; a diff of two runs names the cause |
+| 7 | **G29** the one paraphrase sonnet never picks | one `dump` says whether it is a snippet or a pool problem; small, and it is the whole distance to 30/30 |
+| 8 | **G31** the token cost is bytes ÷ 4 of one prompt | the README's cost column is a caption; the bench should measure what it sends |
+| 9 | **G37** no non-Claude number, no stacked levers | five runs on copies, all priced, none blocking anything; first among them the `e5-large` + reranker pair, because both halves are already measured alone |
+| 10 | **G35** `derive` on every `update` | the no-op case is closed and measured, 1.00 s → 0.08 s cold; what is left is the `update` that does change a file, still expected to be milliseconds and still without a number |
+| 11 | **G40** the empty set is a never-matching regex | a type change and a branch, no measurement to take; here rather than last because it is the cheapest row in the file and it removes a sentinel a reader has to decode |
+| 12 | **G38** the report has no edge | a sort order and two columns; last because the report already shows both halves |
 | — | **G33** thirteen families are text now | closed as accepted the day it was raised, with the names recorded; reopens on a recorded case that needs a mention-only family |
 
 ## What is explicitly not on this list
