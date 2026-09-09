@@ -190,8 +190,7 @@ mod tests {
     }
 
     fn run(g: &mut Graph) -> Report {
-        let cfg = crate::config::Config::default();
-        let ids = IdMatcher::new(&cfg.id_families, &cfg.milestone_families);
+        let ids = crate::families::test_matcher();
         let json = std::fs::read_to_string(format!(
             "{}/tests/fixtures/graphify-graph.json",
             env!("CARGO_MANIFEST_DIR")
@@ -217,8 +216,7 @@ mod tests {
     }
 
     fn ids() -> IdMatcher {
-        let cfg = crate::config::Config::default();
-        IdMatcher::new(&cfg.id_families, &cfg.milestone_families)
+        crate::families::test_matcher()
     }
 
     #[test]

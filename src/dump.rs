@@ -4,7 +4,6 @@
 use crate::bench::Expect;
 use crate::config::Config;
 use crate::enrich::Questions;
-use crate::ids::IdMatcher;
 use crate::index::{dense::DenseIndex, embed::Embedder, lexical::Lexical};
 use crate::query::{self, Options};
 use crate::store::Store;
@@ -60,7 +59,7 @@ pub fn run(repo: &Path, queries: &Path, out: &Path, depth: usize, no_dense: bool
     let store = Store::new(repo);
     let (graph, _) = store.load()?;
     if graph.nodes.is_empty() { anyhow::bail!("graph is empty at {} — run build first", repo.display()); }
-    let ids = IdMatcher::new(&cfg.id_families, &cfg.milestone_families);
+    let ids = crate::families::from_graph(&graph);
     let dense_idx = DenseIndex::load(&store)?;
     if !no_dense && dense_idx.ids.is_empty() { anyhow::bail!("dense index is empty at {} — run `repograph update` first", repo.display()); }
     let questions = Questions::load(&store)?;
@@ -174,7 +173,7 @@ mod tests {
         std::fs::write(dir.path().join("docs/a.md"), "# A\n\n**FR-PAY-22 · MUST · cancellation window**\n\nbody\n").unwrap();
         let repo = dir.path();
         let cfg = Config::default();
-        crate::run_update(repo, &cfg, &crate::extractors(repo, &cfg).unwrap(), true).unwrap();
+        crate::run_update(repo, &cfg, true).unwrap();
         let queries_path = dir.path().join("queries.jsonl");
         // The query is the id itself, not a word from the label: an index of bare ids (what
         // `build_questions` over empty entries actually builds) ranks this above the passage

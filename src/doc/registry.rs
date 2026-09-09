@@ -16,6 +16,15 @@ struct Row {
     #[serde(default)] basis: Option<String>,
 }
 
+/// The ids the rows of a registry declare, in the order `extract` would build them into nodes.
+/// The family scan reads them from here so that one place knows the registry's shape: a row's own
+/// id is never weighed against a family list, so every row defines the family it is written in.
+pub fn declared_ids(text: &str) -> Vec<String> {
+    serde_yaml::from_str::<Registry>(text)
+        .map(|r| r.invariants.into_iter().map(|row| row.id).collect())
+        .unwrap_or_default()
+}
+
 pub struct RegistryExtractor { ids: IdMatcher }
 
 impl RegistryExtractor {
@@ -73,9 +82,8 @@ mod tests {
     use super::*;
 
     fn ex() -> Extraction {
-        let cfg = crate::config::Config::default();
         let text = std::fs::read_to_string(format!("{}/tests/fixtures/constitution.yaml", env!("CARGO_MANIFEST_DIR"))).unwrap();
-        RegistryExtractor::new(IdMatcher::new(&cfg.id_families, &cfg.milestone_families)).extract("docs/constitution.yaml", &text)
+        RegistryExtractor::new(crate::families::test_matcher()).extract("docs/constitution.yaml", &text)
     }
 
     #[test]
@@ -93,16 +101,14 @@ mod tests {
 
     #[test]
     fn non_registry_yaml_is_harmless() {
-        let cfg = crate::config::Config::default();
-        let r = RegistryExtractor::new(IdMatcher::new(&cfg.id_families, &cfg.milestone_families));
+        let r = RegistryExtractor::new(crate::families::test_matcher());
         let ex = r.extract("x.yaml", "foo: bar\n");
         assert_eq!(ex.nodes.len(), 1);
         assert!(ex.edges.is_empty());
     }
 
     fn extractor() -> RegistryExtractor {
-        let cfg = crate::config::Config::default();
-        RegistryExtractor::new(IdMatcher::new(&cfg.id_families, &cfg.milestone_families))
+        RegistryExtractor::new(crate::families::test_matcher())
     }
 
     #[test]

@@ -13,17 +13,30 @@ pub struct IdMatcher {
     slash: Regex,
 }
 
-fn bounded(text: &str, start: usize, end: usize) -> bool {
+/// A hit whose neighbour is alphanumeric or a hyphen belongs to a longer token: `FR-PAY-22` is
+/// one id and not `PAY-22`, and `2026-09-05` is a date.
+pub(crate) fn bounded(text: &str, start: usize, end: usize) -> bool {
     let tail = |b: u8| b.is_ascii_alphanumeric() || b == b'-';
     let left_ok = start == 0 || !tail(text.as_bytes()[start - 1]);
     let right_ok = end == text.len() || !tail(text.as_bytes()[end]);
     left_ok && right_ok
 }
 
+/// The families as one alternation. An empty list has to be written as a branch that cannot
+/// match: left as the empty alternation it matches the empty string, so `(?:)-M\d{2}` reads a
+/// bare `-M01` anywhere in prose as an id and `verify` reports it as undeclared. A repository
+/// with no milestone families is ordinary — auto mode reaches one on most corpora.
+fn alternation(families: &[String]) -> String {
+    match families.is_empty() {
+        true => r"[^\s\S]".to_string(),
+        false => families.iter().map(|f| regex::escape(f)).collect::<Vec<_>>().join("|"),
+    }
+}
+
 impl IdMatcher {
     pub fn new(families: &[String], milestone_families: &[String]) -> IdMatcher {
-        let fam = families.iter().map(|f| regex::escape(f)).collect::<Vec<_>>().join("|");
-        let ms = milestone_families.iter().map(|f| regex::escape(f)).collect::<Vec<_>>().join("|");
+        let fam = alternation(families);
+        let ms = alternation(milestone_families);
         let single = Regex::new(&format!(r"(?:{fam})-\d{{1,4}}|(?:{ms})-M\d{{2}}")).unwrap();
         // `FR-RPT-42…48`, `R-1601…R-1603`, `INV-11..13`, `N-1—N-3`
         let range = Regex::new(&format!(
@@ -88,8 +101,7 @@ mod tests {
     use super::*;
 
     fn m() -> IdMatcher {
-        let cfg = crate::config::Config::default();
-        IdMatcher::new(&cfg.id_families, &cfg.milestone_families)
+        crate::families::test_matcher()
     }
 
     fn ids(t: &str) -> Vec<String> {
@@ -173,5 +185,13 @@ mod tests {
     #[test]
     fn an_id_spanning_the_entire_text_satisfies_both_boundary_checks() {
         assert_eq!(ids("FR-PAY-22"), vec!["FR-PAY-22"]);
+    }
+
+    #[test]
+    fn empty_family_lists_match_nothing_rather_than_every_bare_suffix() {
+        let m = IdMatcher::new(&[], &[]);
+        assert!(m.find_all("see -M01 and -12").is_empty());
+        assert!(m.find_all("-11…13, -1/2").is_empty());
+        assert!(!m.is_id("-12"));
     }
 }

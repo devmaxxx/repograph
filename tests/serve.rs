@@ -239,6 +239,30 @@ fn an_edited_config_stops_the_server_rather_than_answering_under_the_old_one() {
     assert!(ask(dir.path(), &[], &["штраф"]).0.contains("FR-PAY-1"));
 }
 
+/// The resident process writes the store, so it may not extract under a staler family set than
+/// an `update` would. A family added to a document while it runs used to be read with the matcher
+/// it built at start-up: the file yielded no node, and its new hash went into the manifest, so no
+/// later update ever read it again.
+#[test]
+fn a_family_a_document_grows_while_the_server_runs_reaches_the_store_it_writes() {
+    let dir = repo_with_docs();
+    let mut server = serve(dir.path(), &["--every", "1", "--idle", "60"]);
+    wait_for_socket(dir.path());
+    ask_until_resident(dir.path(), &["штраф"]);
+    std::fs::write(dir.path().join("docs/new.md"), "**NEW-1 · MUST · Новое правило**\n\nтело правила.\n").unwrap();
+    let start = Instant::now();
+    loop {
+        // Read from the store on disk, which is the server's own writing: a poll that extracted
+        // the file under the old set would leave a `file:` node and nothing else.
+        let (out, _) = ask(dir.path(), &["--no-serve", "--stale"], &["NEW-1"]);
+        if out.lines().next().is_some_and(|l| l.starts_with("NEW-1")) { break; }
+        assert!(start.elapsed() < Duration::from_secs(20), "the server never wrote NEW-1: {out}");
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    server.kill().unwrap();
+    let _ = server.wait();
+}
+
 #[test]
 fn a_stale_socket_answer_is_no_older_than_the_store_on_disk() {
     let dir = repo_with_docs();

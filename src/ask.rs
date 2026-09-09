@@ -77,7 +77,13 @@ pub(crate) fn graph_for_ask(repo: &Path, cfg: &config::Config, store: &store::St
         }
         return Ok((graph, None));
     }
-    let r = crate::apply_diff(repo, store, &mut graph, &entries, &diff, &crate::extractors(repo, cfg)?)?;
+    // The families the graph already declares, so a refresh costs no pass over the documents. A
+    // store nobody has built declares none, and what follows is a build in everything but name.
+    let ids = match graph.nodes.is_empty() {
+        true => crate::families::derive(repo, &entries)?.matcher(),
+        false => crate::families::from_graph(&graph),
+    };
+    let r = crate::apply_diff(repo, store, &mut graph, &entries, &diff, &[], &crate::extractors(repo, ids)?)?;
     timing.stage("refreshed");
     Ok((graph, Some(r)))
 }
@@ -127,7 +133,7 @@ impl Context {
             Err(err) => { notices.push(format!("refresh: skipped ({err:#})")); (store.load()?.0, None) }
         };
         if let Some(r) = &refreshed { notices.push(format!("refresh: {} changed, {} removed", r.changed, r.removed)); }
-        let ids = ids::IdMatcher::new(&cfg.id_families, &cfg.milestone_families);
+        let ids = crate::families::from_graph(&graph);
         timing.stage("ids ready");
         let (questions, source) = enrich::Questions::load_traced(&store)?;
         if !stale && source == store::Source::Json { questions.write_mirror(&store)?; }
@@ -299,6 +305,9 @@ impl Context {
     /// report when it applied a change and `None` when it only read a store someone else wrote.
     pub(crate) fn adopt(&mut self, w: &crate::Watcher, refreshed: Option<crate::UpdateReport>) -> anyhow::Result<()> {
         self.graph = w.graph.clone();
+        // The families come off the graph, so a build in another process that grew one reaches
+        // this reader with the nodes it wrote rather than a poll later.
+        self.ids = crate::families::from_graph(&self.graph);
         // An adopted graph is a new population whether or not the questions moved with it, so
         // the indexes built over the old one cannot outlive this call.
         *self.lexical.borrow_mut() = None;
@@ -355,8 +364,7 @@ mod tests {
     fn a_context_answers_the_same_text_twice_and_for_an_exact_id() {
         let dir = repo_with_two_docs();
         let cfg = crate::config::Config::load(dir.path()).unwrap();
-        let ex = crate::extractors(dir.path(), &cfg).unwrap();
-        crate::run_update(dir.path(), &cfg, &ex, true).unwrap();
+        crate::run_update(dir.path(), &cfg, true).unwrap();
         let mut ctx = Context::open(dir.path(), &cfg, true, true).unwrap();
         let req = Request { words: vec!["штраф".into()], json: false, seeds: 5, bodies: false, rerank: false, rerank_local: false, depth: crate::rerank::DEPTH, stale: true, no_dense: true };
         let first = ctx.answer(&req).unwrap();
@@ -422,8 +430,7 @@ mod tests {
     fn a_stale_answer_leaves_the_resync_standing_for_the_answer_that_asked_for_a_refresh() {
         let dir = repo_with_two_docs();
         let cfg = crate::config::Config::load(dir.path()).unwrap();
-        let ex = crate::extractors(dir.path(), &cfg).unwrap();
-        crate::run_update(dir.path(), &cfg, &ex, true).unwrap();
+        crate::run_update(dir.path(), &cfg, true).unwrap();
         vectors_beside_the_graph(dir.path());
         an_unopenable_model();
         // A change on disk, so the open below refreshes and leaves rows for a fused answer.
@@ -440,8 +447,7 @@ mod tests {
     fn vectors_another_process_rewrote_are_dropped_rather_than_kept() {
         let dir = repo_with_two_docs();
         let cfg = crate::config::Config::load(dir.path()).unwrap();
-        let ex = crate::extractors(dir.path(), &cfg).unwrap();
-        crate::run_update(dir.path(), &cfg, &ex, true).unwrap();
+        crate::run_update(dir.path(), &cfg, true).unwrap();
         let (_, raw) = vectors_beside_the_graph(dir.path());
         an_unopenable_model();
         let mut ctx = Context::open(dir.path(), &cfg, true, false).unwrap();
@@ -464,8 +470,7 @@ mod tests {
     fn lexical_indexes_built_by_an_answer_are_dropped_once_the_context_adopts_a_watcher() {
         let dir = repo_with_two_docs();
         let cfg = crate::config::Config::load(dir.path()).unwrap();
-        let ex = crate::extractors(dir.path(), &cfg).unwrap();
-        crate::run_update(dir.path(), &cfg, &ex, true).unwrap();
+        crate::run_update(dir.path(), &cfg, true).unwrap();
         let mut ctx = Context::open(dir.path(), &cfg, true, true).unwrap();
         ctx.answer(&fused(true)).unwrap();
         assert!(ctx.lexical.borrow().is_some(), "the first fused answer built and kept the indexes");
@@ -483,8 +488,7 @@ mod tests {
         // `sh -c ""` exits 0 with empty output — a real command's failure mode, not a stub, and
         // no model or network needed to take the reranked branch.
         cfg.rerank_command = String::new();
-        let ex = crate::extractors(dir.path(), &cfg).unwrap();
-        crate::run_update(dir.path(), &cfg, &ex, true).unwrap();
+        crate::run_update(dir.path(), &cfg, true).unwrap();
         let mut ctx = Context::open(dir.path(), &cfg, true, true).unwrap();
         // A code question sharing no word with either document, so only the reranked path's
         // code list — never the plain fusion's, which does not seat one — can answer it.

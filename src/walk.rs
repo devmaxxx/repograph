@@ -28,7 +28,7 @@ pub struct Manifest {
 #[derive(Debug, Default)]
 pub struct Diff { pub changed: Vec<Entry>, pub removed: Vec<String> }
 
-fn set(globs: &[String]) -> Result<GlobSet> {
+pub(crate) fn globs(globs: &[String]) -> Result<GlobSet> {
     let mut b = GlobSetBuilder::new();
     for g in globs {
         b.add(Glob::new(g).with_context(|| format!("glob {g}"))?);
@@ -44,10 +44,10 @@ pub(crate) fn stamp_of(meta: &std::fs::Metadata) -> Option<Stamp> {
 /// `prev` is the manifest of the last walk; a file whose stamp still matches keeps its recorded
 /// hash instead of being read. Pass `&Manifest::default()` to hash everything.
 pub fn walk(repo: &Path, cfg: &Config, prev: &Manifest) -> Result<Vec<Entry>> {
-    let docs = set(&cfg.doc_globs)?;
-    let code = set(&cfg.code_globs)?;
-    let skip = set(&cfg.skip)?;
-    let registries = set(&cfg.registries)?;
+    let docs = globs(&cfg.doc_globs)?;
+    let code = globs(&cfg.code_globs)?;
+    let skip = globs(&cfg.skip)?;
+    let registries = globs(&cfg.registries)?;
     let mut out = Vec::new();
     for dent in ignore::WalkBuilder::new(repo).hidden(true).git_ignore(true).build() {
         let dent = match dent {

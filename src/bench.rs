@@ -1,6 +1,5 @@
 use crate::config::Config;
 use crate::enrich::{self, coverage, Questions};
-use crate::ids::IdMatcher;
 use crate::index::dense::DenseIndex;
 use crate::index::embed::Embedder;
 use crate::model::Graph;
@@ -223,7 +222,7 @@ fn check_anchors(cases_path: &str, cases: &[Case], graph: &Graph) -> Result<()> 
 
 pub fn run(repo: &Path, cases: Option<&Path>, no_dense: bool, rerank: bool, rerank_local: bool, depth: usize) -> Result<bool> {
     // Resolved before `Config::load` so the override repo's own `repograph.toml` — not the
-    // `--repo` one — is what the `IdMatcher` is built from.
+    // `--repo` one — is the file this run reads.
     let repo = std::env::var("REPOGRAPH_BENCH_REPO").map(std::path::PathBuf::from).unwrap_or(repo.to_path_buf());
     let cfg = Config::load(&repo)?;
     // `bench` does not come through `main`'s arms, so the pools it owns are capped here.
@@ -232,7 +231,9 @@ pub fn run(repo: &Path, cases: Option<&Path>, no_dense: bool, rerank: bool, rera
     let store = Store::new(&repo);
     let (graph, _): (Graph, _) = store.load()?;
     if graph.nodes.is_empty() { anyhow::bail!("graph is empty at {} — run build first", repo.display()); }
-    let ids = IdMatcher::new(&cfg.id_families, &cfg.milestone_families);
+    let counted = crate::families::of_graph(&graph);
+    let family_count = counted.0.len() + counted.1.len();
+    let ids = crate::families::matcher(&crate::families::keys(&counted));
     let dense_idx = DenseIndex::load(&store)?;
     let recorded = DenseIndex::recorded_model(&store)?;
     let questions = Questions::load(&store)?;
@@ -341,8 +342,8 @@ pub fn run(repo: &Path, cases: Option<&Path>, no_dense: bool, rerank: bool, rera
     tokens.sort_unstable();
     summary.p90_tokens = tokens.get(tokens.len() * 9 / 10).copied().unwrap_or(0);
     let counts = summary.by_kind.iter().map(|(k, (h, t))| format!("{k} {h}/{t}")).collect::<Vec<_>>().join("  ");
-    println!("\n{counts}  p90 {} tok  dense={dense_on}  enriched={enriched} ({covered}/{eligible} nodes) model={model_field}{code_note}{}  suite={suite} gated={gated}",
-        summary.p90_tokens, match (rerank_local, rerank.is_some()) {
+    println!("\n{counts}  p90 {} tok  dense={dense_on}  enriched={enriched} ({covered}/{eligible} nodes) model={model_field} families={}{code_note}{}  suite={suite} gated={gated}",
+        summary.p90_tokens, family_count, match (rerank_local, rerank.is_some()) {
             (true, _) => format!(" rerank_local=true depth={depth}"),
             (false, true) => format!(" rerank=true depth={depth}"),
             _ => String::new(),
