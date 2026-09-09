@@ -489,6 +489,12 @@ fn main() -> anyhow::Result<()> {
             let t = std::time::Instant::now();
             let r = enrich::run(&store, &graph, questions, &cfg.enrich_command, batch, parallel, enrich::Scope { limit, code })?;
             println!("enrich: {} nodes written, {} dropped, {} still without questions, {} batches ({} failed) in {:.0}s", r.generated, r.dropped, r.left, r.batches, r.failed, t.elapsed().as_secs_f32());
+            // A run that was asked to write and wrote nothing has to exit like one, or a campaign
+            // grades a store nobody enriched. `left > 0` is not the condition: a store legitimately
+            // keeps nodes the model declines, and every honest run would then be red.
+            if r.failed > 0 && r.generated == 0 {
+                anyhow::bail!("enrich: {} of {} batches produced nothing — the generator did not answer", r.failed, r.batches);
+            }
             embed_all(&repo, cli.no_dense, &cfg)
         }
         Cmd::Embed => {

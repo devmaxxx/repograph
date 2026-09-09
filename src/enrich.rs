@@ -23,6 +23,7 @@ pub struct Entry { pub hash: String, pub questions: Vec<String> }
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct Questions { pub entries: BTreeMap<String, Entry> }
 
+#[derive(Debug)]
 pub struct Report { pub generated: usize, pub dropped: usize, pub batches: usize, pub failed: usize, pub left: usize }
 
 /// What one `enrich` run covers: at most `limit` stale nodes of each kind, and code only on request.
@@ -288,8 +289,24 @@ fn git_sh(path_dirs: &[std::path::PathBuf], bash_hint: Option<&std::path::Path>,
     beside_git.chain(named).chain(installed).find_map(|root| sh_in(&root))
 }
 
+/// `sh -c 'a | b'` returns b's status, so a generator that dies into a `tee` looks like success —
+/// which is how one run reported 167 batches, 0 failed and nothing written. Shells that have
+/// `pipefail` are asked for it; those that do not fall back to the empty-answer check in `run`,
+/// which is the load-bearing half anyway: a pipeline's exit status is the operator's to get right,
+/// an empty answer is nobody's to mistake for one.
+fn pipefail_prefix() -> &'static str {
+    static P: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    let ok = *P.get_or_init(|| {
+        shell()
+            .and_then(|mut c| Ok(c.arg("-c").arg("set -o pipefail")
+                .stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).status()?))
+            .is_ok_and(|s| s.success())
+    });
+    if ok { "set -o pipefail; " } else { "" }
+}
+
 pub fn run_command(command: &str, input: &str) -> Result<String> {
-    let mut child = shell()?.arg("-c").arg(command)
+    let mut child = shell()?.arg("-c").arg(format!("{}{command}", pipefail_prefix()))
         .stdin(std::process::Stdio::piped()).stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::piped())
         .spawn().with_context(|| format!("spawn `{command}`"))?;
     // A command that answers without reading its whole prompt closes the pipe early — `claude -p`
@@ -352,6 +369,12 @@ pub fn run(store: &Store, graph: &Graph, questions: Questions, command: &str, ba
                         if !skipped.is_empty() && !retry {
                             eprintln!("enrich: {} of {} nodes skipped by the model, retrying them", skipped.len(), b.len());
                             queue.push(Batch { nodes: skipped, retry: true, code: is_code });
+                        } else if skipped.len() == b.len() {
+                            // Asked twice, answered for nobody: the generator is not declining these
+                            // nodes, it is not answering. Counting that as coverage is what let a
+                            // whole run report `0 failed` and exit green having written nothing.
+                            eprintln!("enrich: a batch of {} answered for nobody twice", b.len());
+                            shared.lock().unwrap().2 += 1;
                         }
                         eprintln!("enrich: batch done, {} of {} left", queue.len(), total);
                     }
@@ -543,7 +566,32 @@ mod tests {
         let silent = format!(r#"echo x >> "{}"; awk '/^### /{{ exit }}'"#, calls.display());
         let r = run(&store, &graph(), Questions::default(), &silent, 8, 1, Scope::default()).unwrap();
         assert_eq!((r.generated, r.left), (0, 2));
+        assert_eq!(r.failed, 1, "a batch that answered for nobody twice is failed, not done");
         assert_eq!(std::fs::read_to_string(&calls).unwrap().lines().count(), 4, "an answer that skips everything is retried once, not forever");
+    }
+
+    /// `sh -c` returns its pipeline's last stage, so a generator that dies into a `tee` exits 0
+    /// with nothing on stdout. That is what happened on 167 batches once, and it was read as
+    /// coverage: 0 nodes written, 0 failed, exit 0.
+    #[test]
+    fn a_pipeline_whose_generator_died_is_a_failed_batch() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::new(dir.path());
+        let r = run(&store, &graph(), Questions::default(), "false | cat", 8, 1, Scope::default()).unwrap();
+        assert_eq!(r.generated, 0);
+        assert!(r.failed > 0, "a pipeline that produced nothing is not coverage: {r:?}");
+        assert!(r.left > 0);
+    }
+
+    /// The load-bearing half, and the one that holds on a shell without `pipefail`: an answer that
+    /// names nobody is the generator not answering, whatever its exit status said.
+    #[test]
+    fn an_empty_answer_is_a_failed_batch_after_its_retry() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::new(dir.path());
+        let r = run(&store, &graph(), Questions::default(), "cat > /dev/null", 8, 1, Scope::default()).unwrap();
+        assert_eq!((r.generated, r.batches), (0, 1));
+        assert_eq!(r.failed, 1, "one batch, asked twice, answered nothing twice");
     }
 
     #[test]
