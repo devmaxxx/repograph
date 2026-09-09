@@ -204,6 +204,23 @@ cost.
 
 ## Timing an ask
 
+**A bar its own control cannot pass is measuring the machine.** Before a wall or a footprint is
+used to judge a change, run the same command through the same binary twice and see whether the two
+readings sit inside the bar you were about to apply. They often do not: the reader suite's own
+control read `ask-fused` at 0.61–0.75 s on one binary and 0.60–0.65 s on the other against a 10%
+bar, and max RSS bounced between 1.36 and 1.56 GB on **both** against a 5% one. Three cheap habits
+follow, and every timing row below assumes them:
+
+- **n runs and a median**, never one reading. `bench --repeat 3` does this for the suites and
+  prints the median beneath the runs; for a single command, run it three times and take the middle.
+- **A pinned index.** Reader rows are taken against a store no writer in the session has touched —
+  the fixture's index grew from 33,526 to 33,554 rows *during* one session's own `watch` and
+  `update` measurements, which is enough to move a row and nothing in the numbers says so.
+- **A stated machine.** Write down the load the reading was taken under, the way every probe row
+  states the idle baseline it is read against. A laptop that sleeps mid-run is the extreme case and
+  it happens: one whole-store embed read 6,332 s of wall against 184.7 s of its own sync time, and
+  only the process's own progress lines could tell the difference.
+
 **A performance change is judged on the dumps first.** It ships only if `dump` of both suites in
 both arms is byte-identical to the baseline and `bench` prints the same lines; a change that moves
 an answer is not a performance change, whatever the clock says. Take the baseline before the first
