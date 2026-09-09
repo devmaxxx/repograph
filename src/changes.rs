@@ -141,7 +141,19 @@ pub fn render_json(graph: &Graph, r: &Report) -> String {
 }
 
 fn git(repo: &Path, args: &[&str]) -> anyhow::Result<String> {
-    let out = std::process::Command::new("git").arg("-C").arg(repo).args(args).output()?;
+    // A hook exports its own repository into everything it runs, and those variables outrank
+    // `-C` — including the object store, which would otherwise take this repository's writes.
+    // The repository named by `--repo` is the one that was asked for.
+    let out = std::process::Command::new("git").arg("-C").arg(repo)
+        .env_remove("GIT_DIR").env_remove("GIT_WORK_TREE").env_remove("GIT_INDEX_FILE")
+        .env_remove("GIT_COMMON_DIR").env_remove("GIT_OBJECT_DIRECTORY")
+        .env_remove("GIT_ALTERNATE_OBJECT_DIRECTORIES")
+        // `core.quotepath` is on by default, and it C-escapes every path with a byte outside
+        // ASCII and puts the opening quote *before* the `b/` — a `+++` header `parse` reads no
+        // name from, which drops the file's hunks in silence, and an `ls-files` name that matches
+        // no node. Off, git writes UTF-8 and leaves every ASCII path byte-identical. It governs
+        // those bytes only: a name holding a newline, a quote or a backslash is quoted either way.
+        .args(["-c", "core.quotepath=false"]).args(args).output()?;
     anyhow::ensure!(out.status.success(), "git {}: {}", args.join(" "), String::from_utf8_lossy(&out.stderr).trim());
     Ok(String::from_utf8_lossy(&out.stdout).into_owned())
 }
@@ -150,7 +162,10 @@ fn git(repo: &Path, args: &[&str]) -> anyhow::Result<String> {
 /// file as one hunk over its whole length, so a new file's symbols count as changed too.
 pub fn hunks_from_git(repo: &Path, base: &str) -> anyhow::Result<Vec<Hunk>> {
     let mut hunks = parse(&git(repo, &["diff", "-U0", "--no-color", "--no-ext-diff", base, "--", "."])?);
-    for f in git(repo, &["ls-files", "--others", "--exclude-standard"])?.lines().filter(|l| !l.is_empty()) {
+    // NUL rather than lines: turning the quoting off reaches the bytes above ASCII and no
+    // further, so a name holding a newline still arrived quoted and matched nothing. Separated
+    // this way it arrives as itself, and the line it holds cannot be read as a second file.
+    for f in git(repo, &["ls-files", "-z", "--others", "--exclude-standard"])?.split('\0').filter(|f| !f.is_empty()) {
         hunks.push(Hunk { file: f.to_string(), start: 1, end: u32::MAX });
     }
     Ok(hunks)
@@ -285,5 +300,82 @@ mod tests {
     fn an_empty_diff_renders_a_clean_report() {
         let g = graph();
         assert_eq!(render(&g, &report(&g, &[], 2)), "changed: 0 symbols\n");
+    }
+
+    fn git_in(repo: &Path, args: &[&str]) {
+        let out = std::process::Command::new("git").arg("-C").arg(repo)
+            .env_remove("GIT_DIR").env_remove("GIT_WORK_TREE").env_remove("GIT_INDEX_FILE")
+            .env_remove("GIT_COMMON_DIR").env_remove("GIT_OBJECT_DIRECTORY")
+            .env_remove("GIT_ALTERNATE_OBJECT_DIRECTORIES")
+            .args(args).output().unwrap_or_else(|e| panic!("git {args:?}: {e}"));
+        assert!(out.status.success(), "git {}: {}", args.join(" "), String::from_utf8_lossy(&out.stderr));
+    }
+
+    /// A repository that quotes. `core.quotepath` is git's default, but a machine that turns it
+    /// off globally would make the two tests below pass without the fix. Signing, hooks and the
+    /// global exclude file are pinned for the mirror-image reason: no personal or CI git
+    /// configuration should be able to fail these tests for something that is not quoting. The
+    /// ambient `GIT_DIR` is dropped for a third reason: a run started from a hook would otherwise
+    /// initialise and commit against the repository the hook belongs to.
+    fn quoting_repo() -> tempfile::TempDir {
+        let dir = tempfile::tempdir().unwrap();
+        git_in(dir.path(), &["init", "-q"]);
+        let absent = dir.path().join("absent");
+        let absent = absent.to_str().unwrap();
+        for (key, value) in [
+            ("core.quotepath", "true"),
+            ("commit.gpgsign", "false"),
+            ("core.hooksPath", absent),
+            ("core.excludesFile", absent),
+            ("core.attributesFile", absent),
+            ("user.email", "t@example.invalid"),
+            ("user.name", "t"),
+        ] {
+            git_in(dir.path(), &["config", key, value]);
+        }
+        std::fs::create_dir(dir.path().join("docs")).unwrap();
+        std::fs::write(dir.path().join("docs/a.ts"), "one\n").unwrap();
+        git_in(dir.path(), &["add", "-A"]);
+        git_in(dir.path(), &["commit", "-qm", "base"]);
+        dir
+    }
+
+    #[test]
+    fn a_tracked_non_ascii_path_keeps_its_hunks_under_the_unescaped_name() {
+        let dir = quoting_repo();
+        std::fs::write(dir.path().join("docs/Штраф.ts"), "one\ntwo\n").unwrap();
+        git_in(dir.path(), &["add", "-A"]);
+        assert_eq!(
+            hunks_from_git(dir.path(), "HEAD").unwrap(),
+            vec![Hunk { file: "docs/Штраф.ts".into(), start: 1, end: 2 }]
+        );
+    }
+
+    /// The shape the gap was raised about: not a file being added under a quoted name, but one
+    /// already in the graph whose single line moves. Its header quotes the same way and its hunk
+    /// is the one a blast radius loses.
+    #[test]
+    fn a_committed_non_ascii_path_keeps_the_hunk_of_the_line_that_changed() {
+        let dir = quoting_repo();
+        std::fs::write(dir.path().join("docs/Штраф.ts"), "one\ntwo\n").unwrap();
+        git_in(dir.path(), &["add", "-A"]);
+        git_in(dir.path(), &["commit", "-qm", "the file as it stands"]);
+        std::fs::write(dir.path().join("docs/Штраф.ts"), "one\nthree\n").unwrap();
+        assert_eq!(
+            hunks_from_git(dir.path(), "HEAD").unwrap(),
+            vec![Hunk { file: "docs/Штраф.ts".into(), start: 2, end: 2 }]
+        );
+    }
+
+    // A name with no decomposable letter, so a filesystem that hands back NFD cannot fail this
+    // test for a normalization difference that has nothing to do with quoting.
+    #[test]
+    fn an_untracked_non_ascii_path_is_reported_as_itself() {
+        let dir = quoting_repo();
+        std::fs::write(dir.path().join("docs/Новое.ts"), "one\n").unwrap();
+        assert_eq!(
+            hunks_from_git(dir.path(), "HEAD").unwrap(),
+            vec![Hunk { file: "docs/Новое.ts".into(), start: 1, end: u32::MAX }]
+        );
     }
 }

@@ -64,6 +64,9 @@ fn short_root() -> tempfile::TempDir {
 /// hold one commit for `changes --base HEAD` to diff against.
 fn git(repo: &Path, args: &[&str]) {
     let out = Command::new("git").arg("-C").arg(repo)
+        .env_remove("GIT_DIR").env_remove("GIT_WORK_TREE").env_remove("GIT_INDEX_FILE")
+        .env_remove("GIT_COMMON_DIR").env_remove("GIT_OBJECT_DIRECTORY")
+        .env_remove("GIT_ALTERNATE_OBJECT_DIRECTORIES")
         .args(["-c", "user.name=repograph tests", "-c", "user.email=tests@example.invalid", "-c", "commit.gpgsign=false"])
         .args(args).output().unwrap_or_else(|e| panic!("git {args:?}: {e}"));
     assert!(out.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&out.stderr));
