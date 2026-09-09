@@ -41,6 +41,17 @@ gaps is about one. Like G7 they carry a raised line rather than a status one, be
 raised them are not the run the rest of this file is written against. They have an order of their
 own at the end, for the same reason.
 
+G28 onward are a third family, raised on 2026-09-09 by two pieces of work that share a branch
+([PR #21](https://github.com/devmaxxx/repograph/pull/21)): the first reading of `ask --rerank` on
+the 82 recorded cases, and the rewrite that took `id_families` out of the configuration and
+derives every family from the definitions the documents carry. The numbers live in
+`bench/history/runs.jsonl` (the rows of that day, tagged `derived-read` and `derived`) and in the
+README sections the branch rewrote, not in a results document of their own. Four are about the
+reranker, four about the derivation, one is a defect in what a repository's configuration is
+allowed to do to the machine that reads it, and none moves a floor: the read path under derivation
+reproduces every recorded count, and the reranker is measured and not floored. They have an order
+of their own at the end, after the cost family.
+
 ---
 
 ## G1 · A third of a large blast radius is invisible — `changes` 27/38 symbols
@@ -1136,6 +1147,235 @@ bytes; a `SIGTERM`ed `serve` leaves no `serve.sock`, or the README says why one 
 
 ---
 
+## G28 · `--rerank` sits on the p90 ceiling — 228 green, 231 red, on the same hits
+
+**Raised (2026-09-09)** by the first `bench --rerank` on the 82 cases: sonnet at depth 200, two
+runs, the same 29/30 and the same single miss both times, and p90 228 then 231 against the 230
+ceiling. The second run's exit code is red on tokens alone; nothing in retrieval moved.
+
+**Measured.** The hit set is identical run to run; what moved three tokens at p90 was not read —
+the same five picks in another order would expand a different neighbour, and a notice line is also
+rendered text. Either way the arm straddles the one bar the whole bench exists to hold, and a
+floor that sits on its own ceiling is not a floor, which is why `--rerank` stays measured and
+ungraded.
+
+**Diagnostic.** Diff the two runs' per-case token counts; the cases that moved and by how much say
+whether it is pick order, a notice, or a longer headline.
+
+**Lever.** A p90 bar of the reranked arm's own, set after the cause is known — a reranked answer
+carries the model's five picks, and its rendered size is a property of those picks rather than of
+the retrievers; or, if pick order is the cause, pin the rendered order to the fused one.
+
+**Gate.** Two identical-hit `bench --rerank` runs both clear a written p90 bar, and the three
+tokens have a named cause.
+
+---
+
+## G29 · One paraphrase the reranker never picks — `FR-MKT-35`
+
+**Raised (2026-09-09)** by the same two runs: «что видит посетитель каталога, если салон не хочет
+публиковать цену» is the single miss in both, at depth 200, under the model that reads every other
+paraphrase.
+
+**Measured.** Miss twice, chronic rather than fragile. Whether the target is in the 200-deep pool
+at all was not read.
+
+**Diagnostic.** `dump` the four lists for that question and record `FR-MKT-35`'s rank in each. In
+the pool: the 120-character snippet the model is shown does not carry the answer, and the lever is
+what the candidate shows. Outside it: no model at any depth can pick it, and the lever is G30's.
+
+**Lever.** Snippet policy if it is in the pool — the requirement's own line rather than the first
+120 characters, or the generated question that matched; depth or fusion if it is not.
+
+**Gate.** 30/30 on one run, or the rank recorded beside the reason it cannot be reached.
+
+---
+
+## G30 · Twelve of the reranker's fourteen gains sit where no zero-token arm has ever reached
+
+**Raised (2026-09-09).** Of the fourteen paraphrase cases the reranker added over the dense
+baseline, twelve were on the *missed by every recorded arm* list — the standing holes of the
+suite. The model reaches them from a 200-deep pool; where in that pool they sit is unread.
+
+**Measured.** 15/30 → 29/30 at ~4.3 s and ≈$0.03 a question. The fused list's rank for each of
+the fourteen is not in any row.
+
+**Diagnostic.** The pool rank of each gained case, as a histogram. A case at rank 6–20 is one a
+zero-token lever — a sixth seat, a second expanded line, a fusion change — could plausibly seat; a
+case at rank 100+ is the model's alone, and no fusion change should be judged by it.
+
+**Lever.** Whatever the histogram names; the point of the gap is that G2's «nothing cheaper left
+to try» was written before this list existed, and the list says which of its cases are cheap.
+
+**Gate.** Fourteen ranks recorded; any zero-token lever proposed against them cites the ranks it
+targets.
+
+---
+
+## G31 · The reranker's token cost is one prompt divided by four
+
+**Raised (2026-09-09).** The README's `--rerank` row carried ≈19k tokens a question from the
+41-case pool; the 82-case reading captured one prompt through a `rerank_command` that only wrote
+its stdin to a file — 57,506 bytes, ≈14.4k at bytes ÷ 4 — and no run has metered a token count.
+G16 said the same of `enrich`.
+
+**Measured.** One prompt, on a Cyrillic corpus where bytes ÷ 4 under-counts characters; a floor,
+not a number.
+
+**Lever.** `bench --rerank` measures every prompt it sends — bytes, and the model's own input
+count where the command can return it — and prints median and p90 on the summary line beside the
+answer's p90. Cost is then a measured column rather than an estimate in a caption.
+
+**Gate.** The README's rerank rows carry a token figure with its method named, and the caption
+«estimate» leaves the table.
+
+---
+
+## G32 · A rebuilt enriched store is graded raw — 150 new nodes and no questions for them
+
+**Raised (2026-09-09)** by the derivation rebuild on the fixture copy: 54 + 5 families where the
+list named 49 + 7, 159 nodes added, and `bench` reporting `enriched=false (1996/2146)` — coverage
+93% against the 99% mark, so both rebuilt arms were graded against the raw floors while clearing
+the enriched ones in every column.
+
+**Measured.** The added nodes are requirement-like and carry no generated questions, because
+`enrich` has never seen them. Nothing on stderr says so at the end of the rebuild; the reader
+learns it from the bench summary or not at all. About $0.20 of haiku closes it; the pinned fixture
+itself is still built under the 49 and would read the same way the day it is rebuilt.
+
+**Lever.** `build` and `update` print how many requirement-like nodes have no questions when the
+store carries any — the same line `enrich` prints as `still without questions` — so a rebuild ends
+by naming its own next step; the README's Embeddings section says that a rebuild under new
+families is followed by `enrich`. And the fixture decision, taken on purpose and recorded:
+rebuild, enrich the 150, read all four arms before and after.
+
+**Gate.** A rebuild that leaves nodes without questions says the number on stderr; the fixture's
+rebuild is a recorded before/after pair with coverage ≥ 99% after `enrich`.
+
+---
+
+## G33 · Thirteen families the list had are text now — `OQ` cited 1,771 times, defined nowhere
+
+**Raised (2026-09-09)** by the derivation rule: a family is the prefix of an id the corpus
+defines, so `AC-DM`, `AC-VIS`, `CAL`, `D`, `G`, `IDEA`, `M`, `MON`, `OD`, `OQ`, `OR`, `PREP`, `SG`
+— cited in the documents, defined in none — are no longer ids. `ask OQ-25` has no exact seat and
+falls to BM25, which still surfaces the requirement that cites it, second.
+
+**Measured.** No recorded case moved on it, in either suite, in either arm; 2,238 edges that
+pointed at those ids are gone, and `verify` reads `in families never declared: 0` — because it can
+no longer see a citation of a family it does not know. That last is the loss: the cite-only
+partition `verify` used to report is empty by construction.
+
+**Lever.** None by default — the trade was chosen with the numbers in front of it. Two shapes are
+held in reserve: an additive key naming families the corpus cites without defining, layered on top
+of the derived set rather than replacing it; or `families` counting, per mention-only prefix, the
+ids cited and reporting the largest as what `verify` used to say. The first is a key again, and
+should wait for a recorded case that needs it.
+
+**Gate.** A recorded case whose answer needs a mention-only family, or this row stays closed as
+accepted with the thirteen names in it.
+
+---
+
+## G34 · The derivation grammar and the extractor's grammar are two copies of one shape
+
+**Raised (2026-09-09)** during the rewrite: the scan that derives families and the extractor that
+makes nodes must accept exactly the same lines, or the fixed point breaks in one of two ways — a
+family derived that no node is ever written in (`+B2E` on every `update`, for ever) or a node in a
+family the scan does not derive (`-BACKEND`, for ever). The milestone slot had to be `[A-Z]+`
+rather than the id slot's shape for that reason, fenced blocks had to be excluded, and `build`
+followed by `update` on the corpus is a fixed point today.
+
+**Measured.** On the pinned corpus and the test fixtures, yes. Not measured: a definition inside a
+blockquote or an HTML comment, an indented one, a heading with trailing `#`s, and a Windows path
+in the milestone-file shape — the branch's Windows job is the first reading of that last one.
+
+**Lever.** One property test over every markdown fixture and the corpus: `derive(docs)` equals
+the families `of_graph(extract(docs))` implies, and a no-op `update` leaves `families=` on the
+bench line unchanged. The grammar then has one owner, and a divergence is a red test rather than a
+re-extraction on every `update`.
+
+**Gate.** The property test in the suite, green on all three platforms.
+
+---
+
+## G35 · `derive` runs on every `update` and its cost has no number
+
+**Raised (2026-09-09).** An incremental `update` re-reads every document to re-derive the family
+set before it decides whether anything must be re-extracted. On 908 files that is expected to be
+milliseconds inside a 1.9 s walk; expected is not measured, and the resource rounds' tables have
+no row for it.
+
+**Lever.** A `derive` stage on the `REPOGRAPH_TIMING` line, read once on the corpus in the
+foreground and once in the band.
+
+**Gate.** A number in the resource results beside the walk's, under the walk's own.
+
+---
+
+## G36 · A repository's `repograph.toml` runs any shell command on the machine that reads it
+
+**Raised (2026-09-09)** while writing down the vendor-neutral command contract. `enrich_command`
+and `rerank_command` are read from the project file, run under `sh -c`, and the project's key wins
+over the machine's — «what the file says is what that repository asked for». A cloned repository
+is untrusted input, and its `repograph.toml` can name `curl … | sh` as the reranker; the first
+`ask --rerank` or `enrich` on that clone runs it, with the prompt on stdin and nothing printed
+first. The same contract sends 200 candidates' titles and 120 characters each to whatever the
+command is — opt-in and documented, but the command deciding where that text goes is the
+repository's, not the reader's.
+
+**Measured.** Nothing — this is a defect in what the configuration is allowed to do, exposed by
+reading the layering rules, not by a run. No recorded corpus abuses it.
+
+**Lever.** Three shapes, cheapest first: the project file may set `enrich_model` and
+`rerank_model` and not the `*_command` keys, which come from the machine file or the built-in
+(the model is a property of the corpus in name only; the transport never was); or a command the
+project file names is printed and refused until the machine file, or a per-repository trust line
+under `~/.config/repograph`, allows it by hash; or the built-in is the only transport and the
+rest is a documented environment variable. The first removes the surface with one refused key,
+the way the machine file already refuses `embed_model`.
+
+**Gate.** A repository-supplied `rerank_command` does not run on a machine that has not chosen
+it, and the README's Configure section says which keys a cloned repository can and cannot set.
+
+---
+
+## G37 · No model outside Claude has a number, and two accuracy levers were never stacked
+
+**Raised (2026-09-09).** The README now shows Codex and Ollama as command shapes read from their
+`--help`, never run; the per-stage table's picks — haiku for `enrich`, sonnet for `--rerank` — are
+the only models ever measured in either seat. Separately, the two levers that move paraphrase —
+`e5-large` rows at 22/30 and the sonnet reranker at 29/30 over small rows — have never been read
+together, nor has the reranker over a store carrying `enrich --code` questions, the fifth list the
+pool is built to take.
+
+**Lever.** Four runs on copies of the fixture, each recorded under its own tag: `bench --rerank`
+through `ollama run <model>` and through `codex exec` on the enriched copy; `bench --rerank` on the
+`e5-large` copy; `bench --rerank` on the code-enriched copy. `enrich` through a local model is a
+fifth, priced in wall rather than dollars.
+
+**Gate.** A row per configuration in the README's `--rerank` table, or a recorded refusal with
+its number.
+
+---
+
+## G38 · `families` is a report of the derived set and says nothing about the rule's own edge
+
+**Raised (2026-09-09).** The command lists what was derived, where each family was first defined,
+and the mention-only prefixes left as text — and a prefix on the wrong side of the line is
+something a reader can see. What it cannot say is how close a prefix came: a family defined once,
+by a line that may have been a mistake, reads the same as one defined a hundred times, and a
+mention-only prefix cited 1,771 times reads the same as one cited once.
+
+**Lever.** Two columns: definitions per family, and for mention-only prefixes the ids cited; the
+report sorted by them. A single-definition family and a heavily-cited undefined prefix are the two
+shapes a person would want to look at, and the report should put them first.
+
+**Gate.** `families` on the corpus puts `OQ` at the top of the mention-only list and marks every
+family with one definition.
+
+---
+
 ## Suggested order
 
 | | gap | why here |
@@ -1178,6 +1418,26 @@ answer different questions, and no row below moves a retrieval floor.
 | 7 | **G26** `serve` holds its model while idle | 1.39 GB resident for as long as the process lives, where `watch` now holds 129.5 MB between refreshes; the shape of the fix is written and measured next door |
 | 8 | **G25** the fp32 weights are the floor | the only lever that could move the floor under every memory number in both rounds, and finding out costs a full re-embed and the quantized model's own floors — no download at all on the default, whose int8 build is already cached, and 562 MB on the large one |
 | 9 | **G24** `--rerank-local` is 31.9 s and 3.1 GB | the heaviest reader by far, and what would actually move it is a pool depth, which belongs to G2 and not to this family |
+
+## Suggested order — the third family
+
+G28 to G38 are ordered against each other only, as the cost family is. None of them moves a
+recorded floor; two of them (G32, G36) are the ones to take before anyone rebuilds a store or
+clones a repository they did not write.
+
+| | gap | why here |
+|---|---|---|
+| 1 | **G36** the project file runs any command | the only row in this file that is a defect in trust rather than in a number: a cloned repository's `repograph.toml` is untrusted input and today it names the shell command the reader runs. One refused key closes it, the way the machine file already refuses `embed_model` |
+| 2 | **G32** a rebuilt enriched store is graded raw | the first thing anyone will hit after this branch merges: 150 nodes without questions and a bench that quietly grades against the raw floors. A stderr line and one `enrich` close it; the fixture's own rebuild is the recorded pair that says so |
+| 3 | **G34** two copies of one grammar | the failure is silent — a re-extraction on every `update`, or a family no node is written in — and the property test that makes it a red test is one function over fixtures that already exist |
+| 4 | **G30** where the reranker's gains sit in the pool | the fourteen ranks decide whether G2 is really closed; every zero-token lever proposed since should be judged against them, and none can be until they are recorded |
+| 5 | **G28** the reranked p90 straddles the ceiling | the arm cannot be floored while its own bar is what turns it red; a diff of two runs names the cause |
+| 6 | **G29** the one paraphrase sonnet never picks | one `dump` says whether it is a snippet or a pool problem; small, and it is the whole distance to 30/30 |
+| 7 | **G31** the token cost is bytes ÷ 4 of one prompt | the README's cost column is a caption; the bench should measure what it sends |
+| 8 | **G37** no non-Claude number, no stacked levers | five runs on copies, all priced, none blocking anything; first among them the `e5-large` + reranker pair, because both halves are already measured alone |
+| 9 | **G35** `derive` on every `update` | expected to be milliseconds; a number is cheaper than the expectation |
+| 10 | **G38** the report has no edge | a sort order and two columns; last because the report already shows both halves |
+| — | **G33** thirteen families are text now | closed as accepted the day it was raised, with the names recorded; reopens on a recorded case that needs a mention-only family |
 
 ## What is explicitly not on this list
 
