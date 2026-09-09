@@ -830,17 +830,25 @@ hands back the decomposed form cannot fail it for a difference that is not the o
 **Three more, from a review of the fix.** The argument alone left two ways for the same silence to
 return, and one for a test to be run against the wrong repository:
 
-- With nothing escaping it any more, a file name may hold a newline, and the untracked listing was
-  still split on lines — one such name became two files that do not exist, reported as changed.
-  The listing is asked for NUL-separated now. Inert where it is not needed: on the pinned fixture
-  and on this repository the two listings are identical, and neither holds a tracked path with a
-  byte outside ASCII. It also takes the untracked half out of the argument's hands — with the
-  argument removed the tracked test reads no hunk again, and the untracked one now stays green,
-  because NUL separation does not need the quoting to be off to be unambiguous.
-- A hook exports `GIT_DIR`, `GIT_WORK_TREE` and `GIT_INDEX_FILE` into everything it runs and they
-  outrank `-C`, so `changes --repo X` started from one was reading the hook's repository rather
-  than the one it was given. Dropped in `git()` and in the test fixture alike; without it a test
-  run started from a hook initialises and commits against the surrounding repository.
+- The argument reaches the bytes above ASCII and no further. A name holding a newline, a quote or
+  a backslash is C-quoted either way, so the untracked listing still handed on `"docs/a\nb.ts"`,
+  quotes and escape intact, matching nothing — the same silent mismatch under a different class of
+  byte. The listing is asked for NUL-separated now, which removes the quoting rather than
+  disabling half of it. Inert where it is not needed: on the pinned fixture and on this repository
+  the two listings are identical, and neither holds a tracked path with a byte outside ASCII. It
+  also takes the untracked half out of the argument's hands — with the argument removed the
+  tracked test reads no hunk again, while the untracked one stays green.
+- **The tracked half still loses those names.** `git diff`'s header quotes a control character
+  whatever `core.quotepath` says, verified against real git: `+++ "b/a\nb.ts"`. `parse` reads no
+  name from it and drops every hunk in the file, in silence, which is this gap's own failure under
+  a class of byte it did not name. Closing it means a parser that unescapes the quoted form, or a
+  name list of its own from `--name-only -z` — the first is what the lever above declined, and
+  neither is one argument.
+- A hook exports its own repository into everything it runs and those variables outrank `-C`, so
+  `changes --repo X` started from one was reading the hook's repository rather than the one it was
+  given. The object store is in that set: cleared of the repository and the index but not of it,
+  a temporary repository writes its objects into the hook's. All six are dropped, in `git()` and
+  in both test helpers.
 - The identity the fixture uses is now written twice, here and in `users_day.rs`, comment and all.
   Left as it is: sharing it across a binary's unit tests and an integration target needs a
   test-support module this crate does not have.
