@@ -1,8 +1,8 @@
 # ADR-002 · Two defaults multiplied, and the embedder goes back to the small model
 
-**Status:** Accepted, 2026-09-07. Reverses the default set at `35357c1` (2026-09-05, "the large
-model is the default"). ADR-001 and its nine amendments stand; so does every measurement behind the
-default this reverses.
+**Status:** Accepted, 2026-09-07; amended 2026-09-09 (Amendment 1). Reverses the default set at
+`35357c1` (2026-09-05, "the large model is the default"). ADR-001 and its nine amendments stand; so
+does every measurement behind the default this reverses.
 
 ## Context
 
@@ -121,3 +121,30 @@ constraint for a real corpus in someone's hands, or the large model's price fall
   and the size question would be worth reopening from the other end. **Nothing here measured it.**
   G25 stays deferred with the three questions it already lists: arm64 kernels for an AVX-512 build,
   vectors that differ from the fp32 ones, and a weight file the store does not record.
+
+## Amendment 1 — the multiplier is gone, the decision is not (2026-09-09)
+
+The background band was removed on 2026-09-09
+([the plan](../plans/2026-09-09-normal-band-only.md)). "Two defaults multiplied" is therefore now
+one default with a price of its own, and this amendment says which figures survive that.
+
+**What survives, and it is still an asymmetry of the kind this decision rests on.** The large
+model's whole-store embed is **1,930 s** in the normal band — the only band there is — against the
+small model's **266 s** at the shipped default level, re-measured on 2026-09-09
+([the levels results](../bench/2026-09-09-normal-band-only-results.md)). The download is
+**2.1 GB against 470 MB**, untouched by any of this. Seven times the wall and four and a half times
+the bytes, paid by every first build before anyone knows whether they wanted the recall: the
+Decision stands unchanged and nothing here reverses it.
+
+**What dies with the band and must be read as historical.** The **4.1–4.5×** ratio; the **2.2 to
+2.4 hours** first build it produced; and the paragraph beginning "In the same unreleased version
+`priority = \"background\"` became the default for every writer". None of those describes any
+version of the tool that exists now. No whole-store run in the band was ever finished on this
+machine, so the hours figure was always a ratio rather than a measured wall — that was
+[G20](../bench/next-version-gaps.md), now closed moot.
+
+**How the price is weighed from here.** In foreground seconds only. If the large model's cost is
+ever re-weighed it is weighed against a number like 1,930 s against 266 s, with no scheduling
+multiplier on either side, and against whatever `resources` level the person doing the weighing
+would actually run — the key that replaced `threads` on the same day, whose three levels put the
+small model's whole store at 169, 266 and 359 seconds.

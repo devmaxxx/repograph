@@ -12,7 +12,6 @@ mod impact;
 mod index;
 mod legacy;
 mod model;
-mod priority;
 mod query;
 mod serve;
 mod store;
@@ -275,7 +274,7 @@ impl<'a> Watcher<'a> {
 fn run_watch(repo: &std::path::Path, cfg: &config::Config, every: u64, batch: usize, no_dense: bool) -> anyhow::Result<()> {
     let mut w = Watcher::open(repo, cfg)?;
     let model = index::embed::resolve(None, &cfg.embed_model);
-    let threads = index::embed::threads(cfg.threads);
+    let threads = index::embed::threads(cfg.resources);
     let verbose = ask::timing_on();
     eprintln!("watch: {} every {every}s, batch {batch}; Ctrl-C to stop", repo.display());
     loop {
@@ -337,7 +336,7 @@ const SYNC_CHUNK: usize = 1024;
 
 fn embed_all(repo: &std::path::Path, no_dense: bool, cfg: &config::Config) -> anyhow::Result<()> {
     let model = index::embed::resolve(None, &cfg.embed_model);
-    let Some(mut emb) = ask::open_embedder(no_dense, &model, index::embed::threads(cfg.threads), index::embed::Weights::Mapped) else { return Ok(()) };
+    let Some(mut emb) = ask::open_embedder(no_dense, &model, index::embed::threads(cfg.resources), index::embed::Weights::Mapped) else { return Ok(()) };
     let store = store::Store::new(repo);
     let (graph, _) = store.load()?;
     let questions = enrich::Questions::load(&store)?;
@@ -396,20 +395,14 @@ fn main() -> anyhow::Result<()> {
     match cli.cmd {
         Cmd::Build | Cmd::Update => {
             let cfg = load_cfg()?;
-            // Before `cap_pools`, and before any session: on Linux the band is inherited at
-            // thread creation rather than set on the task, so a pool built first would keep the
-            // one it was born in. Only the writers lower themselves — a reader has a person
-            // waiting on its answer, and `serve`'s catch-up sync runs on that same answer path.
-            priority::apply(cfg.priority);
-            cap_pools(index::embed::threads(cfg.threads));
+            cap_pools(index::embed::threads(cfg.resources));
             let r = run_update(&repo, &cfg, &extractors(&repo, &cfg)?, wipe)?;
             println!("changed {} removed {} nodes {} edges {}", r.changed, r.removed, r.nodes, r.edges);
             embed_all(&repo, cli.no_dense, &cfg)
         }
         Cmd::Enrich { batch, parallel, limit, code } => {
             let cfg = load_cfg()?;
-            priority::apply(cfg.priority);
-            cap_pools(index::embed::threads(cfg.threads));
+            cap_pools(index::embed::threads(cfg.resources));
             let store = store::Store::new(&repo);
             let (graph, _) = store.load()?;
             if graph.nodes.is_empty() { anyhow::bail!("graph is empty — run `repograph build`"); }
@@ -421,8 +414,7 @@ fn main() -> anyhow::Result<()> {
         }
         Cmd::Embed => {
             let cfg = load_cfg()?;
-            priority::apply(cfg.priority);
-            cap_pools(index::embed::threads(cfg.threads));
+            cap_pools(index::embed::threads(cfg.resources));
             // The one command that reaches `embed_all` without having just written the graph
             // itself, so the check is here rather than in it: a sync against an empty graph
             // marks every row dead and saves an index of nothing, and run before the first
@@ -444,7 +436,7 @@ fn main() -> anyhow::Result<()> {
             // Before the socket, not after it: a broken `repograph.toml` is the one thing a
             // resident process would hide, and a TOML parse is nothing against a process start.
             let cfg = load_cfg()?;
-            cap_pools(index::embed::threads(cfg.threads));
+            cap_pools(index::embed::threads(cfg.resources));
             let req = ask::Request { words, json, seeds, bodies, rerank, rerank_local, depth, stale, no_dense: cli.no_dense };
             // `bench` and `dump` build their own contexts and never reach this; the environment
             // variable is for everything else that must be measured against a cold process.
@@ -472,13 +464,12 @@ fn main() -> anyhow::Result<()> {
         }
         Cmd::Serve { every, batch, idle } => {
             let cfg = load_cfg()?;
-            cap_pools(index::embed::threads(cfg.threads));
+            cap_pools(index::embed::threads(cfg.resources));
             serve::run(&repo, &cfg, every, batch, idle, cli.no_dense)
         }
         Cmd::Watch { every, batch } => {
             let cfg = load_cfg()?;
-            priority::apply(cfg.priority);
-            cap_pools(index::embed::threads(cfg.threads));
+            cap_pools(index::embed::threads(cfg.resources));
             run_watch(&repo, &cfg, every, batch, cli.no_dense)
         }
         Cmd::Explain { node } => {
