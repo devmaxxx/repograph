@@ -11,23 +11,14 @@ registries = ["docs/constitution.yaml"]
 # `repograph families` prints what was derived and what was left as text.
 
 # The two stages that spend model tokens, both opt-in (`repograph enrich`,
-# `ask --rerank`). Each is a shell command that reads its prompt on stdin;
-# `enrich` expects `id<TAB>question` lines back, `rerank` the chosen ids one
-# per line. Both parsers ignore every line they do not recognise, so a command
-# that prints a transcript around its answer still works. Headless Claude Code
-# with thinking off answers the same 4-5x faster;
-# `{model}` is filled from the model key below, so choosing one is a word rather than a
-# rewritten command line; a command naming no `{model}` is run exactly as written.
-enrich_command = "MAX_THINKING_TOKENS=0 claude -p --model {model} --output-format text --tools \"\" --setting-sources \"\" --no-session-persistence"
-rerank_command = "MAX_THINKING_TOKENS=0 claude -p --model {model} --output-format text --tools \"\" --setting-sources \"\" --no-session-persistence"
-
-# Nothing here is Claude-only. OpenAI's Codex CLI reads its instructions from stdin when no
-# prompt argument is given, and needs `-o` because plain stdout is the run's transcript rather
-# than the answer (read from `codex exec --help`, never run here):
-# rerank_command = "codex exec --skip-git-repo-check -m {model} -o /dev/stdout"
-# A model on the machine, or any API behind a five-line script — both shapes, unmeasured:
-# rerank_command = "ollama run {model} --hidethinking"
-# rerank_command = "python3 tools/rerank-via-some-api.py --model {model}"
+# `ask --rerank`), each a shell command reading its prompt on stdin — and neither is a key this
+# file may set. A repository is something a reader clones, and `enrich_command` is a command that
+# would then run on their machine. They live in ~/.config/repograph/config.toml, whose defaults
+# are the headless Claude Code lines, and any vendor's CLI goes there in their place:
+#   enrich_command = "MAX_THINKING_TOKENS=0 claude -p --model {model} --output-format text --tools \"\" --setting-sources \"\" --no-session-persistence"
+#   rerank_command = "codex exec --skip-git-repo-check -m {model} -o /dev/stdout"
+#   rerank_command = "ollama run {model} --hidethinking"
+# What a repository may say is which model that command runs, below.
 
 # `enrich` wants cheap, multilingual and obedient to a line format: haiku's questions read
 # paraphrase 15/30 and the developer suite's `rule` 5/9 where a stronger model reads 17/30 and

