@@ -1348,6 +1348,20 @@ the retrievers; or, if pick order is the cause, pin the rendered order to the fu
 **Gate.** Two identical-hit `bench --rerank` runs both clear a written p90 bar, and the three
 tokens have a named cause.
 
+**Answered (2026-09-09)** by [2026-09-09-rerank-diagnostics.md](2026-09-09-rerank-diagnostics.md). Two reranked runs over the 30 paraphrase cases: the same 28
+hits, the same pool rank for all 30, the same prompt bytes for all 30 — and **21 of 30 cases moved
+their rendered token count, by −18 to +25**. Retrieval is deterministic and did not move; what
+moved is which five ids the model picked and in what order, so different neighbours and headlines
+were expanded. Not a notice, not a longer headline: pick order, and the per-case spread it produces
+at fixed input is an order of magnitude larger than the three tokens that turned a run red.
+
+**The bar, written before the next run reads it.** On the graded 82-case suite the free dense arm
+reads p90 221 and the reranked arm 228 and 231, against a 230 ceiling set for the free arm.
+`--rerank` grades against a p90 of **240 tokens** — the highest reranked reading plus nine, which
+absorbs the pick-order wobble and still fails an arm whose answers grow by ten tokens across the
+board. Pinning the rendered order to the fused order would remove the wobble rather than budget for
+it; that is a change to what the reader sees and is argued separately.
+
 ---
 
 ## G29 · One paraphrase the reranker never picks — `FR-MKT-35`
@@ -1367,6 +1381,12 @@ what the candidate shows. Outside it: no model at any depth can pick it, and the
 120 characters, or the generated question that matched; depth or fusion if it is not.
 
 **Gate.** 30/30 on one run, or the rank recorded beside the reason it cannot be reached.
+
+**Closed (2026-09-09)** by [2026-09-09-rerank-diagnostics.md](2026-09-09-rerank-diagnostics.md), on the second branch of its own diagnostic: `pool=-/200` in both
+runs — **the id is not in the 200-deep pool at all.** The model was never shown it, so the snippet
+policy cannot be the lever for this case and no reranker at any depth this pool is built to could
+have picked it. The lever is depth or fusion, which is G30's. Snippet policy may still be right for
+other cases; this one cannot be the evidence for it.
 
 ---
 
@@ -1389,6 +1409,17 @@ to try» was written before this list existed, and the list says which of its ca
 **Gate.** Fourteen ranks recorded; any zero-token lever proposed against them cites the ranks it
 targets.
 
+**Closed (2026-09-09)** by [2026-09-09-rerank-diagnostics.md](2026-09-09-rerank-diagnostics.md). On the 30 paraphrase cases: thirteen gains, zero losses, and
+their ranks are **6, 14, 18, 22, 23, 51, 109, 122, 135, 152, 155, 173, 196**. Every case both arms
+hit sits at rank 1–8, so the free arm's reach and the model's gains barely overlap.
+
+**Five of thirteen sit at rank ≤ 25** — a sixth seat, a second expanded line, a fusion change that
+lifts a rank-14 candidate could plausibly seat those, and a zero-token proposal now has to name
+which of the five it targets. **Eight sit at rank ≥ 51, seven past 100**; nothing that reorders a
+five-seat answer reaches rank 152, and a fusion change judged against those eight is a change
+judged against the model. G2's «nothing cheaper left to try» was half wrong, and the halves are now
+countable.
+
 ---
 
 ## G31 · The reranker's token cost is one prompt divided by four
@@ -1407,6 +1438,18 @@ answer's p90. Cost is then a measured column rather than an estimate in a captio
 
 **Gate.** The README's rerank rows carry a token figure with its method named, and the caption
 «estimate» leaves the table.
+
+**Closed (2026-09-09)** by [2026-09-09-rerank-diagnostics.md](2026-09-09-rerank-diagnostics.md). `bench` meters every prompt it sends and prints median and p90 on
+a line of its own beneath the summary. Thirty prompts: min 54,015 B, **median 58,314 B**, **p90
+60,843 B**, max 62,008 — identical byte-for-byte across the two runs, which is the check that the
+meter reads the request rather than the answer. The captured single prompt of 57,506 B was
+representative to within 1.4%: the estimate was unverified rather than wrong, and the figure that
+does not survive is the older ≈19k tokens from the 41-case pool.
+
+Bytes, with the method named: `rerank_command` runs `claude -p --output-format text`, which returns
+the picked ids and no usage block, so the model's own count cannot be read without changing what
+the command prints and how `rerank::parse` reads it. Bytes ÷ 4 — ≈14.6k tokens at the median — is a
+**floor** on a corpus that is mostly Cyrillic, where a character is two bytes.
 
 ---
 
@@ -1699,10 +1742,10 @@ clones a repository they did not write.
 | 2 | **G32** a rebuilt enriched store is graded raw | the first thing anyone will hit after this branch merges: 150 nodes without questions and a bench that quietly grades against the raw floors. A stderr line and one `enrich` close it; the fixture's own rebuild is the recorded pair that says so |
 | 3 | **G34** two copies of one grammar | the failure is silent — a re-extraction on every `update`, or a family no node is written in — and the property test that makes it a red test is one function over fixtures that already exist |
 | 4 | **G39** the family set is an input to extraction | the design under G34: while the extractor needs the set, the two grammars must agree and a move costs a corpus read. It sits below G34 because the property test is what makes a divergence visible, and above everything else because it is the change that would make G34 unnecessary — and it is the one row here that could grow the store, so it is measured before it is taken |
-| 5 | **G30** where the reranker's gains sit in the pool | the fourteen ranks decide whether G2 is really closed; every zero-token lever proposed since should be judged against them, and none can be until they are recorded |
-| 6 | **G28** the reranked p90 straddles the ceiling | the arm cannot be floored while its own bar is what turns it red; a diff of two runs names the cause |
-| 7 | **G29** the one paraphrase sonnet never picks | one `dump` says whether it is a snippet or a pool problem; small, and it is the whole distance to 30/30 |
-| 8 | **G31** the token cost is bytes ÷ 4 of one prompt | the README's cost column is a caption; the bench should measure what it sends |
+| ~~5~~ | ~~**G30** where the reranker's gains sit in the pool~~ | **closed 2026-09-09** — thirteen gains at ranks 6, 14, 18, 22, 23, 51, 109, 122, 135, 152, 155, 173, 196; five are within reach of a zero-token lever and eight are the model's alone |
+| ~~6~~ | ~~**G28** the reranked p90 straddles the ceiling~~ | **answered 2026-09-09** — the cause is pick order (identical pool, identical prompt, 21 of 30 cases moving ±25 tokens); the arm's own bar is written at p90 240, unread |
+| ~~7~~ | ~~**G29** the one paraphrase sonnet never picks~~ | **closed 2026-09-09** — `pool=-/200`: the id is outside the pool, so the lever is depth or fusion and never the snippet |
+| ~~8~~ | ~~**G31** the token cost is bytes ÷ 4 of one prompt~~ | **closed 2026-09-09** — metered: median 58,314 B, p90 60,843 B over thirty prompts; bytes and not tokens, because the transport returns no usage block |
 | 9 | **G37** no non-Claude number, no stacked levers | five runs on copies, all priced, none blocking anything; first among them the `e5-large` + reranker pair, because both halves are already measured alone |
 | 10 | **G35** `derive` on every `update` | the no-op case is closed and measured, 1.00 s → 0.08 s cold; what is left is the `update` that does change a file, still expected to be milliseconds and still without a number |
 | 11 | **G40** the empty set is a never-matching regex | a type change and a branch, no measurement to take; here rather than last because it is the cheapest row in the file and it removes a sentinel a reader has to decode |

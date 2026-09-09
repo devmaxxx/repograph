@@ -251,6 +251,52 @@ fn check_anchors(cases_path: &str, cases: &[Case], graph: &Graph) -> Result<()> 
     Ok(())
 }
 
+/// What one reranked question was shown: the pool in the order it was ranked in, and the size of
+/// the prompt that carried it. Empty on a case that never reranked — an exact id match answers
+/// before the pool is built, and a case that never reached the model has no rank to report.
+#[derive(Default)]
+struct Shown { pool: Vec<String>, prompt_bytes: usize }
+
+impl Shown {
+    fn of(q: &str, c: &[(String, String)]) -> Shown {
+        // Built a second time rather than plumbed out of `rerank::run`: the prompt is the thing
+        // being metered, so measuring anything else — a sum of the parts, an estimate from the
+        // candidate count — would be measuring a model of the cost instead of the cost.
+        Shown { pool: c.iter().map(|(id, _)| id.clone()).collect(), prompt_bytes: crate::rerank::prompt(q, c).len() }
+    }
+
+    fn clear(&mut self) { self.pool.clear(); self.prompt_bytes = 0; }
+
+    /// The diagnostic beneath a case line, or nothing where the model was never asked. The rank is
+    /// of the first anchor found; a case whose anchor is outside the pool reads `-`, which is the
+    /// answer to whether depth or fusion is the lever for it.
+    fn case_line(&self, case: &Case) -> Option<String> {
+        if self.pool.is_empty() { return None; }
+        let rank = case.expect.anchors().iter().find_map(|a| pool_rank(&self.pool, a));
+        let rank = rank.map_or("-".to_string(), |r| r.to_string());
+        Some(format!("{:<10} pool={rank}/{} prompt={} B", "", self.pool.len(), self.prompt_bytes))
+    }
+}
+
+/// Where the expected id sits in the pool the reranker was shown, one-based. A case the model
+/// found at rank 6 is one a sixth seat could seat for nothing; a case at 140 is the model's alone,
+/// and a fusion change judged against it is a change judged against the model.
+fn pool_rank(pool: &[String], want: &str) -> Option<usize> {
+    pool.iter().position(|id| id == want).map(|i| i + 1)
+}
+
+/// Median and p90 of the metered prompts, in bytes, on a line of its own. Bytes and not tokens
+/// because bytes are what this process can count: the token figure belongs to whichever model the
+/// command runs, and an estimate dressed as a measurement is what this line exists to replace.
+fn prompt_line(bytes: &[usize]) -> Option<String> {
+    if bytes.is_empty() { return None; }
+    let mut b = bytes.to_vec();
+    b.sort_unstable();
+    let median = b[b.len() / 2];
+    let p90 = b[b.len() * 9 / 10];
+    Some(format!("rerank prompt: median {median} B  p90 {p90} B  n={} (bytes, not tokens)", b.len()))
+}
+
 pub fn run(repo: &Path, cases: Option<&Path>, no_dense: bool, rerank: bool, rerank_local: bool, depth: usize) -> Result<(bool, Summary)> {
     // Resolved before `Config::load` so the override repo's own `repograph.toml` — not the
     // `--repo` one — is the file this run reads.
@@ -339,12 +385,20 @@ pub fn run(repo: &Path, cases: Option<&Path>, no_dense: bool, rerank: bool, rera
     check_anchors(&cases_path, &cases, &graph)?;
     let is_id = |a: &str| graph.nodes.contains_key(a);
     let opts = Options { seeds: 5, bodies: false, dense: dense_on, json: false, depth };
-    let rerank_fn = |q: &str, c: &[(String, String)]| crate::rerank::run(&cfg.rerank_command, q, c);
+    // What the reranked arm was actually shown, kept for the case line below: the pool it ranked
+    // and the size of the prompt that carried it. Both are properties of the request, so they are
+    // read where the request is made rather than reconstructed from the answer afterwards.
+    let shown = std::cell::RefCell::new(Shown::default());
+    let rerank_fn = |q: &str, c: &[(String, String)]| {
+        *shown.borrow_mut() = Shown::of(q, c);
+        crate::rerank::run(&cfg.rerank_command, q, c)
+    };
     let cross = std::cell::RefCell::new(if rerank_local {
         let dir = if cfg.reranker_dir.is_empty() { crate::index::cross::default_dir()? } else { std::path::PathBuf::from(&cfg.reranker_dir) };
         Some(crate::index::cross::CrossEncoder::open(&dir, threads).context("--rerank-local")?)
     } else { None });
     let local_fn = |q: &str, c: &[(String, String)]| -> Vec<String> {
+        *shown.borrow_mut() = Shown::of(q, c);
         let mut m = cross.borrow_mut();
         let Some(m) = m.as_mut() else { return Vec::new() };
         let texts: Vec<String> = c.iter().map(|(_, t)| t.clone()).collect();
@@ -357,8 +411,10 @@ pub fn run(repo: &Path, cases: Option<&Path>, no_dense: bool, rerank: bool, rera
     let rerank: Option<query::Rerank> = if rerank_local { Some(&local_fn) } else if rerank { Some(&rerank_fn) } else { None };
     let mut summary = Summary::default();
     let mut tokens = Vec::new();
+    let mut prompts = Vec::new();
     for case in &cases {
         let words: Vec<String> = case.q.split_whitespace().map(str::to_string).collect();
+        shown.borrow_mut().clear();
         let answer = query::ask(&graph, &ids, &lex, Some(&dense_fn), rerank, &words, &opts);
         let rendered = query::render(&answer, &graph, &opts);
         let tok = rendered.len() / 4;
@@ -367,6 +423,13 @@ pub fn run(repo: &Path, cases: Option<&Path>, no_dense: bool, rerank: bool, rera
         let ok = hit(case, &answer, &is_id);
         summary.record(&case.kind, ok, (reached, want));
         println!("{:<10} {:<12} {} {reached}/{want} {:>4} tok  {}", case.kind, case.expect.key(), if ok { "HIT " } else { "miss" }, tok, case.q);
+        // Indented, and on a line of its own, for the reason `anchor_line` gives: `track.py`'s
+        // case pattern reads the question as everything after the token count, so a column added
+        // there would be recorded as part of the question in every transcript from here on.
+        if let Some(line) = shown.borrow().case_line(case) {
+            println!("{line}");
+            prompts.push(shown.borrow().prompt_bytes);
+        }
     }
     tokens.sort_unstable();
     summary.p90_tokens = tokens.get(tokens.len() * 9 / 10).copied().unwrap_or(0);
@@ -382,6 +445,7 @@ pub fn run(repo: &Path, cases: Option<&Path>, no_dense: bool, rerank: bool, rera
     // campaign has recorded is read back through it. A column added there would have made this
     // measurement retire the history it exists to extend.
     println!("{}", anchor_line(&summary));
+    if let Some(line) = prompt_line(&prompts) { println!("{line}"); }
     Ok((!gated || passes(&summary, dense_on, enriched, floors), summary))
 }
 
@@ -419,6 +483,47 @@ mod tests {
     /// A case that keeps its verdict and loses two of its three anchors is what the summary was
     /// blind to. The counts and the anchors are two different readings of the same run, and only
     /// the second one moves here.
+    /// The rank of the expected id inside the pool the reranker was shown, one-based, because a
+    /// histogram of "rank 1" and a histogram of "rank 0" read differently to everyone but a
+    /// programmer. A case whose anchor is outside the pool has no rank, and that is the finding.
+    #[test]
+    fn the_pool_rank_of_the_expected_id_is_recorded() {
+        let pool = vec!["FR-CAL-1".to_string(), "FR-MKT-35".to_string(), "FR-PAY-22".to_string()];
+        assert_eq!(pool_rank(&pool, "FR-MKT-35"), Some(2));
+        assert_eq!(pool_rank(&pool, "FR-SVC-50"), None);
+    }
+
+    /// The diagnostic is printed for a case that reranked and for no other: a question answered by
+    /// an exact id match never builds a pool, and a `-` there would read as "outside the pool".
+    #[test]
+    fn the_case_line_appears_only_where_the_model_was_asked() {
+        let case = Case { kind: "paraphrase".into(), q: "отмена".into(), expect: Expect::from("FR-MKT-35") };
+        assert_eq!(Shown::default().case_line(&case), None, "no pool, no line");
+
+        let candidates: Vec<(String, String)> = ["FR-CAL-1", "FR-MKT-35"].iter()
+            .map(|id| ((*id).to_string(), "текст".to_string())).collect();
+        let shown = Shown::of("отмена", &candidates);
+        let line = shown.case_line(&case).unwrap();
+        assert!(line.contains("pool=2/2"), "{line}");
+        assert!(line.contains(&format!("prompt={} B", shown.prompt_bytes)), "{line}");
+        assert!(shown.prompt_bytes > 0, "the prompt is metered, not estimated");
+
+        let missing = Case { kind: "paraphrase".into(), q: "отмена".into(), expect: Expect::from("FR-SVC-50") };
+        assert!(shown.case_line(&missing).unwrap().contains("pool=-/2"), "outside the pool is not rank zero");
+    }
+
+    /// Median and p90 over the metered prompts, and nothing at all when no case reranked — the
+    /// line is a measurement of a run that spent a model, not a zero to be averaged into history.
+    #[test]
+    fn the_prompt_line_reports_bytes_and_says_they_are_bytes() {
+        assert_eq!(prompt_line(&[]), None);
+        let line = prompt_line(&[100, 200, 300, 400, 500, 600, 700, 800, 900, 1000]).unwrap();
+        assert!(line.contains("median 600 B"), "{line}");
+        assert!(line.contains("p90 1000 B"), "{line}");
+        assert!(line.contains("n=10"), "{line}");
+        assert!(line.contains("bytes, not tokens"), "{line}");
+    }
+
     #[test]
     fn the_summary_carries_anchors_reached_over_wanted() {
         let mut s = Summary::default();

@@ -636,7 +636,7 @@ be:
 | --- | --- | --- | --- | --- | --- |
 | `embed_model` | the dense index — `build`, `update`, `enrich`, `embed`, `watch` write with it, `ask` reads with what the store records | embeds every passage and every query. A sentence embedder named by its Hugging Face id, downloaded once and opened in-process through `ort`: not a command and not an LLM, so no Claude, GPT or local chat model can sit here, and an API embedder would need a transport this key does not have | putting a question and the sentence that answers it near each other, in Russian and English at once, over a 256-token passage | the default `intfloat/multilingual-e5-small` reads paraphrase 15/30 on the enriched fixture, ~0.30 s an `ask`, 470 MB on disk; `intfloat/multilingual-e5-large` reads 22/30 for ~0.8 s, 2.1 GB, and a first build measured in hours rather than minutes once the background band multiplies the embed | the small one, unless paraphrase recall is the job — [ADR-002](docs/adr/ADR-002-two-defaults-multiplied.md) weighs the two |
 | `enrich_command` + `enrich_model` | `repograph enrich` | writes twelve everyday questions and a line of synonyms for each requirement-like node, as `id<TAB>question` lines, Russian and English together | being cheap over thousands of nodes, holding a strict line format across a batch, and asking in a reader's words rather than the document's | haiku reads paraphrase 15/30 and 5/9 of the developer suite's `rule` answers; a stronger model reads 17/30 and 2/9 — the register the questions are written in beats the model that writes them ([the G14 diagnostic](docs/bench/2026-09-06-g14-second-diagnostic.md)). 1,971 eligible nodes cost ~$2.5 and 16 minutes at 8-way parallelism; the corpus is 1,996 nodes now | the cheapest model that keeps the format — `haiku` |
-| `rerank_command` + `rerank_model` | `ask --rerank` | picks up to five ids out of a 200-deep pool it is shown as `id<TAB>title — 120 characters` | reading a ~14–19k-token, mostly Cyrillic prompt of near-duplicate candidates, and answering with ids and nothing else | sonnet on the 82 recorded cases, two runs on 2026-09-09: paraphrase 29/30 both times, keyword 40/40, code 12/12, p90 228 and 231 tokens, ~4.3 s a question and ≈14.4k input tokens — ≈$0.03 at Sonnet 5's $2 per million. On the older 41-case pool haiku read 11/14 and opus 14/14 paraphrase but 23/24 keyword | `sonnet`: opus buys nothing and costs a keyword hit, haiku loses three paraphrases |
+| `rerank_command` + `rerank_model` | `ask --rerank` | picks up to five ids out of a 200-deep pool it is shown as `id<TAB>title — 120 characters` | reading a mostly Cyrillic prompt of near-duplicate candidates — **median 58,314 bytes, p90 60,843**, metered over thirty prompts — and answering with ids and nothing else | sonnet on the 82 recorded cases, two runs on 2026-09-09: paraphrase 29/30 both times, keyword 40/40, code 12/12, p90 228 and 231 tokens, ~4.3 s a question. The prompt is measured in **bytes**, because `claude -p --output-format text` returns the picked ids and no usage block; bytes ÷ 4 is ≈14.6k tokens and is a floor on this corpus, where a Cyrillic character is two bytes — so ≈$0.03 a question at Sonnet 5's $2 per million is a floor too. On the older 41-case pool haiku read 11/14 and opus 14/14 paraphrase but 23/24 keyword | `sonnet`: opus buys nothing and costs a keyword hit, haiku loses three paraphrases |
 | `reranker_dir` | `ask --rerank-local` | scores the same pool with a local cross-encoder instead of a model command, at zero tokens | the same pick, without a network or an account | measured and rejected as a floor candidate on 2026-09-04: 17.9 seconds a question against a bar of one, keyword 39/40 | not this, unless tokens are impossible |
 
 **The contract a command has to meet** is the same for both stages and names no vendor. `sh -c`
@@ -963,8 +963,11 @@ pins and 14/14 without them — the pins were the retrievers' guess taking two o
 slots. Haiku with the same prompt reads 11/14; opus 14/14 on paraphrase but 23/24 on keyword, in
 two runs of two. Measured on the 41 cases then recorded (`bench --rerank`, one full run each unless
 stated; input tokens are the answering model's own, median over the 38 questions) — all but the
-last row, which is the 82 cases recorded since, and whose token figure is an estimate rather than a
-count:
+last row, which is the 82 cases recorded since. That row's prompt is **metered in bytes** by `bench`
+itself, over the thirty paraphrase prompts of
+[the rerank diagnostics](docs/bench/2026-09-09-rerank-diagnostics.md): the transport this row was
+run through returns the picked ids and no usage block, so the byte figure is a count and the token
+figure derived from it is a floor:
 
 |                                                | paraphrase | keyword | code | p90 tokens | model tokens per question | latency per question |
 | ---------------------------------------------- | ---------- | ------- | ---- | ---------- | ------------------------- | -------------------- |
@@ -973,7 +976,7 @@ count:
 | `--rerank`, haiku, depth 100                   | 11/14      | 24/24   | 3/3  | 222        | ≈9,500                    | ~4 s                 |
 | `--rerank`, sonnet, depth 100                  | 13/14      | 24/24   | 3/3  | 222        | ≈10,900                   | ~4 s                 |
 | `--rerank`, sonnet, depth 200 (default), 3 runs| 14/14      | 24/24   | 3/3  | 221–226    | ≈19,200                   | ~4.3 s               |
-| `--rerank`, sonnet, depth 200, 82 cases, 2 runs (2026-09-09) | 29/30 | 40/40 | 12/12 | 228–231 | ≈14.4k (one prompt, estimate) | ~4.3 s |
+| `--rerank`, sonnet, depth 200, 82 cases, 2 runs (2026-09-09) | 29/30 | 40/40 | 12/12 | 228–231 | 58,314 B median, 60,843 B p90 — metered over 30 prompts; ≥14.6k tokens | ~4.3 s |
 
 The last row is the 82-case set the floors are read on, not the 41 the rows above it use, so its
 counts are the ones to compare against `ask`'s 15/30, 40/40, 12/12 on the same store. Against that
