@@ -434,5 +434,56 @@ class Analysis(unittest.TestCase):
         self.assertEqual(track.metric_moves(prev, now), [("keyword", "37/40", "40/40")])
 
 
+
+
+class AgentRows(unittest.TestCase):
+    """`run.sh`'s summary is the harness's only output; a row that lost the per-task verdicts would
+    make an agent configuration unreadable in the same way a bench row without cases is."""
+
+    SUMMARY = {
+        "config": "C", "model": "sonnet", "resolved_model": "claude-sonnet-5",
+        "tasks": 3, "hits": 2, "tokens": 300000, "cost": 0.42, "asked": 5, "grepped": 1,
+        "tokens_per_hit": 150000, "cost_per_hit": 0.21,
+        "per_task": {
+            "who-calls": {"kind": "who-calls", "hit": True},
+            "rename": {"kind": "safe-to-rename", "hit": False},
+            "cross": {"kind": "doc-to-code", "hit": True},
+        },
+    }
+
+    def test_a_summary_round_trips_into_a_row_the_report_can_read(self):
+        d = Path(tempfile.mkdtemp())
+        (d / "summary.json").write_text(json.dumps(self.SUMMARY))
+        before, track.RUNS = track.RUNS, d / "runs.jsonl"
+        was_dirty, track.tool_dirty = track.tool_dirty, lambda repo=None: False
+        try:
+            track.cmd_agent(argparse.Namespace(summary=str(d / "summary.json"), corpus="beauty-crm",
+                                               corpus_commit="502e8a6d", note="a test"))
+            row = json.loads((d / "runs.jsonl").read_text().strip())
+        finally:
+            track.RUNS, track.tool_dirty = before, was_dirty
+        self.assertEqual(row["arm"], "agent:C+sonnet")
+        self.assertEqual(row["suite"], "agent")
+        self.assertFalse(row["gated"], "an agent row is measured and never graded")
+        self.assertEqual(row["metrics"]["hits"], [2, 3])
+        self.assertEqual(row["cases"]["safe-to-rename/rename"], 0.0)
+        self.assertEqual(row["cases"]["who-calls/who-calls"], 1.0)
+        self.assertEqual(track.state_of(row), "measured, no floors")
+
+    def test_a_task_missed_in_two_runs_reads_as_chronic(self):
+        rows = []
+        for when in ("2026-09-09T10:00:00+00:00", "2026-09-09T11:00:00+00:00"):
+            rows.append({"when": when, "arm": "agent:C+sonnet", "suite": "agent", "gated": False,
+                         "corpus": "beauty-crm", "corpus_commit": "502e8a6d",
+                         "tool_commit": "abc1234", "tool_dirty": False,
+                         "metrics": {"hits": [2, 3]},
+                         "cases": {"who-calls/who-calls": 1.0, "safe-to-rename/rename": 0.0,
+                                   "doc-to-code/cross": 1.0}})
+        window = track.comparable_window(rows, 2)
+        chronic = track.weak(window, 0.66)
+        self.assertEqual(len(chronic), 1, chronic)
+        self.assertIn("safe-to-rename/rename", chronic[0])
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -296,6 +296,32 @@ def cmd_import(args):
     print(f"imported {len(d['tools'])} tools from {Path(args.result).name} -> {RUNS.name}")
 
 
+def cmd_agent(args):
+    """One row from a `bench/agent/run.sh` summary: one agent configuration read on the twelve tasks."""
+    d = json.loads(Path(args.summary).read_text())
+    cases = {f"{v['kind']}/{k}": 1.0 if v["hit"] else 0.0 for k, v in d["per_task"].items()}
+    append({
+        "when": datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
+        "tool": "repograph",
+        "source": "agent",
+        "suite": "agent",
+        "gated": False,
+        "arm": f"agent:{d['config']}+{d['model']}",
+        "tool_commit": git(REPO, "rev-parse", "--short", "HEAD"),
+        "tool_dirty": tool_dirty(),
+        "corpus": args.corpus,
+        "corpus_commit": args.corpus_commit,
+        "metrics": {"hits": [d["hits"], d["tasks"]], "tokens": d["tokens"], "cost": round(d["cost"], 4),
+                    "asked": d["asked"], "grepped": d["grepped"]},
+        "extra": {"resolved_model": d.get("resolved_model"), "tokens_per_hit": d.get("tokens_per_hit"),
+                  "cost_per_hit": d.get("cost_per_hit")},
+        "cases": cases,
+        "note": args.note or "",
+    })
+    print(f"agent:{d['config']}+{d['model']}  hits {d['hits']}/{d['tasks']}  "
+          f"tokens {d['tokens']}  cost {round(d['cost'], 4)}  -> {RUNS.name}")
+
+
 def append(row):
     with RUNS.open("a") as f:
         f.write(json.dumps(row, ensure_ascii=False, sort_keys=True) + "\n")
@@ -567,6 +593,13 @@ def main():
     i.add_argument("--corpus", default="beauty-crm")
     i.add_argument("--note", default="")
     i.set_defaults(func=cmd_import)
+
+    g = sub.add_parser("agent", help="append a `bench/agent/run.sh` summary.json")
+    g.add_argument("summary")
+    g.add_argument("--corpus", default="beauty-crm")
+    g.add_argument("--corpus-commit", default="502e8a6d")
+    g.add_argument("--note", default="")
+    g.set_defaults(func=cmd_agent)
 
     q = sub.add_parser("report", help="what improved, what regressed, what is chronically weak")
     q.add_argument("--arm", default=None)

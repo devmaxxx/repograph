@@ -1,0 +1,12 @@
+{"id":"req-exact","kind":"find-req","prompt":"Which PRD requirement says the cancellation policy is a rule with numbers, not text? Answer with path:line.","expect":["06-payments.md:385"],"setup":[]}
+{"id":"req-words-1","kind":"find-req","prompt":"В каком виде мы храним денежные суммы, чтобы не терять копейки, и где это решено? Ответь path:line.","expect":["ADR-004"],"setup":[]}
+{"id":"req-words-2","kind":"find-req","prompt":"Где требование о том, что клиент должен сразу понять, что с ним говорит робот? path:line.","expect":["FR-AI-21","07-ai-layer.md:308"],"setup":[]}
+{"id":"req-words-miss","kind":"find-req","prompt":"Где в документах объяснена разница между моментом на временной шкале и временем на стене? path:line.","expect":["ADR-005"],"setup":[]}
+{"id":"who-calls","kind":"who-calls","prompt":"Who calls `StaffService.create`? Give path:line for each caller.","expect":["staff.controller.ts:87"],"setup":[]}
+{"id":"hub-callers","kind":"who-calls","prompt":"How many direct callers does `DatabaseService` have, and what risk label does that give?","expect":["61","CRITICAL"],"setup":[]}
+{"id":"rename","kind":"safe-to-rename","prompt":"I want to rename `asGrosze`. List every call site with path:line.","expect":["runner.ts:184","runner.ts:187","runner.ts:205","runner.ts:255","money.spec.ts"],"setup":[]}
+{"id":"trace-1","kind":"trace-the-flow","prompt":"How does `AuthController` reach `DatabaseService`? Name the chain with path:line for each hop.","expect":["auth.service.ts:141","identity.repository.ts:96"],"setup":[]}
+{"id":"trace-2","kind":"trace-the-flow","prompt":"Does `AvailabilityController` call `AvailabilityService` directly? Which method, path:line?","expect":["availability.service.ts:103"],"setup":[]}
+{"id":"precommit","kind":"pre-commit-review","prompt":"Review my uncommitted change before I commit: which symbol did it touch and who is affected?","expect":["StaffService.create","staff.controller.ts:87"],"setup":["sed -i '' '35s/$/ \\/\\/ reviewed/' apps/api/src/modules/staff/staff.service.ts"]}
+{"id":"where-symbol","kind":"find-the-symbol","prompt":"Where is `TenantContextInterceptor` declared, and which requirement id does its comment cite for the wire form of a business id?","expect":["tenant-context.interceptor.ts:38","FR-DM-01"],"setup":[]}
+{"id":"cross","kind":"doc-to-code","prompt":"Which code implements FR-CAL-41, the permission matrix code × channel × parallel_policy? Give the file.","expect":["force.ts"],"setup":[]}
