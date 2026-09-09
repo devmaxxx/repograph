@@ -98,7 +98,7 @@ mod tests {
     }
 
     /// The brief is read at every session start and after every compaction, so its size is a
-    /// contract and not a preference. The README next door is 92 kB; nothing but a failing test
+    /// contract and not a preference. The README next door is 45 kB; nothing but a failing test
     /// keeps this from growing into it.
     #[test]
     fn the_brief_fits_in_its_own_budget() {
