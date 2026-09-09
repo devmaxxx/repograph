@@ -36,6 +36,12 @@ jobs:
       # Cyrillic path, and the transport seam each platform brings its own half of.
       - run: cargo test
 
+      # The agent hook is JavaScript and ships with the binary that installs it, so it is tested on
+      # the same three platforms: a hook that throws on Windows is a hook that fires on nobody.
+      - uses: actions/setup-node@v4
+        with: { node-version: '20' }
+      - run: node --test agent/hook.test.mjs
+
       # A default Git for Windows install puts `git` on PATH and not `sh` — the Unix tools are an
       # opt-in — so `enrich` and `ask --rerank` look for one. Route 1: Git's shell directories
       # come off PATH, `git` itself stays, and the shell is found beside it. Windows only: unix

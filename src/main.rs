@@ -10,6 +10,7 @@ mod families;
 mod rerank;
 mod ids;
 mod impact;
+mod install_agent;
 mod index;
 mod legacy;
 mod model;
@@ -108,6 +109,17 @@ enum Cmd {
     },
     Verify {
         #[arg(long)] json: bool,
+    },
+    /// Writes the agent-facing surface into this repository: one hook dispatched on four events, a
+    /// skill, a subagent definition and a ten-line stanza in the instructions file. Idempotent —
+    /// a second run rewrites the same bytes and says it changed nothing.
+    InstallAgent {
+        /// Claude Code's `.claude/`.
+        #[arg(long)] claude: bool,
+        /// Codex's `.codex/`.
+        #[arg(long)] codex: bool,
+        /// How this repository invokes the binary, for the stanza's command lines.
+        #[arg(long, default_value = "repograph")] command: String,
     },
     /// What a coding agent should be told about this repository at the start of a session: node
     /// counts, whether the questions are written, which embedder the vectors belong to, how many
@@ -663,6 +675,21 @@ fn main() -> anyhow::Result<()> {
                 false => print!("{}", query::verify(&graph)),
             }
             if graph.nodes.is_empty() { anyhow::bail!("graph is empty — run `repograph build`"); }
+            Ok(())
+        }
+        Cmd::InstallAgent { claude, codex, command } => {
+            let targets: Vec<install_agent::Target> = match (claude, codex) {
+                (false, false) => anyhow::bail!("name a harness: --claude, --codex, or both"),
+                (c, x) => [(c, install_agent::Target::Claude), (x, install_agent::Target::Codex)]
+                    .into_iter().filter(|(on, _)| *on).map(|(_, t)| t).collect(),
+            };
+            for target in targets {
+                let r = install_agent::install(&repo, target, &command)?;
+                match r.written {
+                    0 => println!("{target:?}: already installed, nothing written"),
+                    n => println!("{target:?}: wrote {n} files\n  {}", r.paths.join("\n  ")),
+                }
+            }
             Ok(())
         }
         Cmd::Prime { json } => {
