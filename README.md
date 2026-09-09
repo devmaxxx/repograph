@@ -560,6 +560,69 @@ That refusal is deliberate rather than an omission: the corpus-shaped keys descr
 repository's documents, and a global `embed_model` in particular would rewrite every store's
 vectors under a model nobody chose for it.
 
+Three of those keys name a model and one names a directory, and they are four different jobs
+rather than one preference. What each stage asks of a model, and what the answer was measured to
+be:
+
+| key | stage | what the model does there | what it has to be good at | measured | pick |
+| --- | --- | --- | --- | --- | --- |
+| `embed_model` | the dense index — `build`, `update`, `enrich`, `embed`, `watch` write with it, `ask` reads with what the store records | embeds every passage and every query. A sentence embedder named by its Hugging Face id, downloaded once and opened in-process through `ort`: not a command and not an LLM, so no Claude, GPT or local chat model can sit here, and an API embedder would need a transport this key does not have | putting a question and the sentence that answers it near each other, in Russian and English at once, over a 256-token passage | the default `intfloat/multilingual-e5-small` reads paraphrase 15/30 on the enriched fixture, ~0.30 s an `ask`, 470 MB on disk; `intfloat/multilingual-e5-large` reads 22/30 for ~0.8 s, 2.1 GB, and a first build measured in hours rather than minutes once the background band multiplies the embed | the small one, unless paraphrase recall is the job — [ADR-002](docs/adr/ADR-002-two-defaults-multiplied.md) weighs the two |
+| `enrich_command` + `enrich_model` | `repograph enrich` | writes twelve everyday questions and a line of synonyms for each requirement-like node, as `id<TAB>question` lines, Russian and English together | being cheap over thousands of nodes, holding a strict line format across a batch, and asking in a reader's words rather than the document's | haiku reads paraphrase 15/30 and 5/9 of the developer suite's `rule` answers; a stronger model reads 17/30 and 2/9 — the register the questions are written in beats the model that writes them ([the G14 diagnostic](docs/bench/2026-09-06-g14-second-diagnostic.md)). 1,971 eligible nodes cost ~$2.5 and 16 minutes at 8-way parallelism; the corpus is 1,996 nodes now | the cheapest model that keeps the format — `haiku` |
+| `rerank_command` + `rerank_model` | `ask --rerank` | picks up to five ids out of a 200-deep pool it is shown as `id<TAB>title — 120 characters` | reading a ~14–19k-token, mostly Cyrillic prompt of near-duplicate candidates, and answering with ids and nothing else | sonnet on the 82 recorded cases, two runs on 2026-09-09: paraphrase 29/30 both times, keyword 40/40, code 12/12, p90 228 and 231 tokens, ~4.3 s a question and ≈14.4k input tokens — ≈$0.03 at Sonnet 5's $2 per million. On the older 41-case pool haiku read 11/14 and opus 14/14 paraphrase but 23/24 keyword | `sonnet`: opus buys nothing and costs a keyword hit, haiku loses three paraphrases |
+| `reranker_dir` | `ask --rerank-local` | scores the same pool with a local cross-encoder instead of a model command, at zero tokens | the same pick, without a network or an account | measured and rejected as a floor candidate on 2026-09-04: 17.9 seconds a question against a bar of one, keyword 39/40 | not this, unless tokens are impossible |
+
+**The contract a command has to meet** is the same for both stages and names no vendor. `sh -c`
+runs it, the whole prompt arrives on stdin, and the answer is read from stdout; the exit status and
+the output judge the run, so a command that answers without reading its prompt to the end is fine —
+the broken pipe that write hits is ignored on purpose. `{model}` anywhere in the command is replaced
+by that stage's model key, and a command naming no `{model}` runs verbatim with the key unused.
+From `enrich`'s output only `id<TAB>question` lines for ids in the batch are kept: any other line is
+ignored, one line may carry several tab-separated questions around the node's own id, and a line
+whose letters are mostly neither Cyrillic nor Latin is dropped. From `--rerank`'s output only lines
+that are exactly one of the ids it showed are kept, in the model's order, without repeats and
+tolerating a trailing `.`; a failing command is answered with a notice and the fused order rather
+than a failed question. Both parsers ignore what they do not recognise, which is what makes a
+chattier command survivable rather than fatal. Why the default runs headless Claude Code with
+thinking off — the same answers, 4–5× faster — is in
+[Spending tokens on purpose](#spending-tokens-on-purpose).
+
+**Another vendor is a different command line, not a different repograph.** Only the first of these
+is what this repository runs; the second is verified against that CLI's `--help` on this machine and
+the rest are shapes:
+
+```toml
+# The shipped default: headless Claude Code, thinking off.
+rerank_command = "MAX_THINKING_TOKENS=0 claude -p --model {model} --output-format text --tools \"\" --setting-sources \"\" --no-session-persistence"
+rerank_model = "sonnet"
+
+# OpenAI's Codex CLI. Read from `codex exec --help` here and not run: with no prompt argument
+# the instructions are read from stdin, `-m, --model <MODEL>` names the model, and
+# `--skip-git-repo-check` allows a directory that is not a repository. Plain stdout is the run's
+# own transcript, so `-o, --output-last-message <FILE>` pointed at /dev/stdout is what guarantees
+# the answer reaches stdout at all; the parsers drop the transcript lines around it.
+# rerank_command = "codex exec --skip-git-repo-check -m {model} -o /dev/stdout"
+# rerank_model = "<a model that install has>"
+
+# A model on the machine, through Ollama — a shape. `ollama run --help` documents
+# `ollama run MODEL [PROMPT]` and the thinking switches; nothing was run here, this machine has
+# no daemon up and no model pulled, and whether a piped prompt needs the argument omitted is
+# for whoever has one to confirm.
+# rerank_command = "ollama run {model} --hidethinking"
+# rerank_model = "<a pulled model>"
+
+# Anything else — any API, any account: five lines that read stdin and print the answer, and the
+# model stays a word in a config file.
+# rerank_command = "python3 tools/rerank-via-some-api.py --model {model}"
+```
+
+No non-Claude model has been read on these cases, so none of the rows above is a claim about one.
+Reading one is the same two commands the numbers here came from: `repograph bench --rerank` against
+an enriched store measures a `rerank_model`, and a plain `repograph bench` against a copy of the
+store that the other model enriched measures an `enrich_model`. A store records the model its
+vectors were written with and nothing at all about the model that wrote its questions, so those
+copies have to be kept apart by hand — one directory per enriching model — or the comparison
+quietly measures a mixture.
+
 `id_families` and `milestone_families` default to the strict list `beauty-crm`'s census settled on —
 they are this project's development corpus, not a generic default. Every family is matched as
 `FAMILY-<1–4 digits>`, hyphen included; hyphenless labels such as `B1`, `C11` or `S3` collide with
@@ -787,7 +850,9 @@ dropped a keyword hit. Shown 120 characters of text, sonnet at depth 200 reads 1
 pins and 14/14 without them — the pins were the retrievers' guess taking two of the model's five
 slots. Haiku with the same prompt reads 11/14; opus 14/14 on paraphrase but 23/24 on keyword, in
 two runs of two. Measured on the 41 cases then recorded (`bench --rerank`, one full run each unless
-stated; input tokens are the answering model's own, median over the 38 questions):
+stated; input tokens are the answering model's own, median over the 38 questions) — all but the
+last row, which is the 82 cases recorded since, and whose token figure is an estimate rather than a
+count:
 
 |                                                | paraphrase | keyword | code | p90 tokens | model tokens per question | latency per question |
 | ---------------------------------------------- | ---------- | ------- | ---- | ---------- | ------------------------- | -------------------- |
@@ -796,18 +861,30 @@ stated; input tokens are the answering model's own, median over the 38 questions
 | `--rerank`, haiku, depth 100                   | 11/14      | 24/24   | 3/3  | 222        | ≈9,500                    | ~4 s                 |
 | `--rerank`, sonnet, depth 100                  | 13/14      | 24/24   | 3/3  | 222        | ≈10,900                   | ~4 s                 |
 | `--rerank`, sonnet, depth 200 (default), 3 runs| 14/14      | 24/24   | 3/3  | 221–226    | ≈19,200                   | ~4.3 s               |
+| `--rerank`, sonnet, depth 200, 82 cases, 2 runs (2026-09-09) | 29/30 | 40/40 | 12/12 | 228–231 | ≈14.4k (one prompt, estimate) | ~4.3 s |
 
-Those numbers were read before two later changes to what the flag builds, and neither was
-re-measured: a symbol's 120-character snippet is now its doc comment rather than its declaring
-line, and a store carrying `enrich --code` questions puts them into the pool as a fifth list. Both
-ship unread because `--rerank` is opt-in and on no floor.
+The last row is the 82-case set the floors are read on, not the 41 the rows above it use, so its
+counts are the ones to compare against `ask`'s 15/30, 40/40, 12/12 on the same store. Against that
+baseline the flag gains fourteen paraphrase cases and loses none, and both runs picked identically,
+down to the one chronic miss: `FR-MKT-35`, the case the reranker has never answered. The p90
+straddles the 230-token ceiling — 228 in the first run, 231 in the second, green and red on tokens
+alone with every count unmoved — one more reason the arm is measured and left unfloored, rather
+than an argument against it. The tokens per question are ≈14.4k, taken as bytes over four from one
+captured 57.5 KB prompt: an estimate on mostly Cyrillic text, and a floor on what it costs.
+
+Of the two later changes to what the flag builds, one is now read and the other still is not: a
+symbol's 120-character snippet is its doc comment rather than its declaring line, which is what the
+82-case row above measures; a store carrying `enrich --code` questions puts them into the pool as a
+fifth list, which that row does not exercise — the fixture store carries no code questions, so the
+fifth list was empty in both runs. The code-question pool ships unread because `--rerank` is opt-in
+and on no floor.
 
 **`--rerank-local`** is the same pool and the same pick, scored by a local cross-encoder
 (`BAAI/bge-reranker-v2-m3`, exported to ONNX once with `optimum-cli export onnx --model
 BAAI/bge-reranker-v2-m3 --task text-classification ~/.cache/repograph/reranker`, ~2.2 GB) at
 zero tokens — and **measured and rejected** as a floor candidate on 2026-09-04: 17.9 seconds a
 question against a bar of one, and keyword 39/40. Those two figures are on the 82-case set (30
-paraphrase, 40 keyword), not the 14/24 arms in the table above; ADR-001, Amendment 4 has the
+paraphrase, 40 keyword) — the set that table's last row uses, not the 14/24 arms above it; ADR-001, Amendment 4 has the
 rule that was fixed before the run and the case-by-case swing. It ships opt-in and on no floor,
 exactly as `--rerank` does, and the two flags are mutually exclusive: passing both is an error,
 not a silent preference for one of them.

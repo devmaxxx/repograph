@@ -22,20 +22,36 @@ milestone_families = ["BE", "FE", "PLAT", "SYNC", "OPS", "AI", "MOB"]
 # The two stages that spend model tokens, both opt-in (`repograph enrich`,
 # `ask --rerank`). Each is a shell command that reads its prompt on stdin;
 # `enrich` expects `id<TAB>question` lines back, `rerank` the chosen ids one
-# per line. Headless Claude Code with thinking off answers the same 4-5x faster;
+# per line. Both parsers ignore every line they do not recognise, so a command
+# that prints a transcript around its answer still works. Headless Claude Code
+# with thinking off answers the same 4-5x faster;
 # `{model}` is filled from the model key below, so choosing one is a word rather than a
 # rewritten command line; a command naming no `{model}` is run exactly as written.
 enrich_command = "MAX_THINKING_TOKENS=0 claude -p --model {model} --output-format text --tools \"\" --setting-sources \"\" --no-session-persistence"
 rerank_command = "MAX_THINKING_TOKENS=0 claude -p --model {model} --output-format text --tools \"\" --setting-sources \"\" --no-session-persistence"
 
-# The cheap model writes a node's questions as well as any; picking seeds from a 200-deep pool
-# it does not, so the reranker runs the stronger one. Set once for the machine instead in
+# Nothing here is Claude-only. OpenAI's Codex CLI reads its instructions from stdin when no
+# prompt argument is given, and needs `-o` because plain stdout is the run's transcript rather
+# than the answer (read from `codex exec --help`, never run here):
+# rerank_command = "codex exec --skip-git-repo-check -m {model} -o /dev/stdout"
+# A model on the machine, or any API behind a five-line script — both shapes, unmeasured:
+# rerank_command = "ollama run {model} --hidethinking"
+# rerank_command = "python3 tools/rerank-via-some-api.py --model {model}"
+
+# `enrich` wants cheap, multilingual and obedient to a line format: haiku's questions read
+# paraphrase 15/30 and the developer suite's `rule` 5/9 where a stronger model reads 17/30 and
+# 2/9 — the register beats the model, and 8-way over ~2k nodes costs ~$2.5. `--rerank` wants
+# reading comprehension over 200 near-duplicate candidates in ~14-19k mostly Cyrillic tokens:
+# sonnet reads paraphrase 29/30 of the 82 cases, haiku 11/14 of the older set, opus 14/14
+# paraphrase but 23/24 keyword. Set once for the machine instead in
 # ~/.config/repograph/config.toml, or for one run with REPOGRAPH_ENRICH_MODEL.
 enrich_model = "haiku"
 rerank_model = "sonnet"
 
 # `ask --rerank-local`: a local cross-encoder over the same 200-deep pool, zero tokens. Empty
-# means ~/.cache/repograph/reranker, where `optimum-cli export onnx` was pointed.
+# means ~/.cache/repograph/reranker, where `optimum-cli export onnx` was pointed. Measured and
+# rejected against a bar of one second: 17.9 s a question, and keyword 39/40 — for tokens being
+# impossible, not for tokens being expensive.
 reranker_dir = ""
 
 # A store records the model its vectors were written with and `ask` opens that one, so this key
