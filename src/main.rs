@@ -75,7 +75,10 @@ enum Cmd {
         /// carried to the next poll instead, at most three times in a row.
         #[arg(long, default_value_t = 1)] batch: usize,
     },
-    Explain { node: String },
+    Explain {
+        node: String,
+        #[arg(long)] json: bool,
+    },
     /// Who reaches a symbol (callers by depth, importing files, a risk line), or with `--down`
     /// what it reaches. A class is walked through its members; a caller that imported through a
     /// barrel is found all the same
@@ -92,6 +95,7 @@ enum Cmd {
         from: String,
         to: String,
         #[arg(long, default_value_t = 6)] depth: usize,
+        #[arg(long)] json: bool,
         #[arg(long)] stale: bool,
     },
     /// What the working tree's diff touches and who reaches it: hunks against `--base` (staged,
@@ -102,7 +106,9 @@ enum Cmd {
         #[arg(long)] json: bool,
         #[arg(long)] stale: bool,
     },
-    Verify,
+    Verify {
+        #[arg(long)] json: bool,
+    },
     /// What a coding agent should be told about this repository at the start of a session: node
     /// counts, whether the questions are written, which embedder the vectors belong to, how many
     /// families the documents define, and the five commands. Reads the store; never refreshes.
@@ -601,9 +607,13 @@ fn main() -> anyhow::Result<()> {
             cap_pools(index::embed::threads(cfg.resources));
             run_watch(&repo, &cfg, every, batch, cli.no_dense)
         }
-        Cmd::Explain { node } => {
+        Cmd::Explain { node, json } => {
             let (graph, _) = store::Store::new(&repo).load()?;
-            match query::explain(&graph, &node) {
+            let rendered = match json {
+                true => query::explain_json(&graph, &node).map(|j| format!("{j}\n")),
+                false => query::explain(&graph, &node),
+            };
+            match rendered {
                 Some(s) => { print!("{s}"); Ok(()) }
                 None => anyhow::bail!("no node matches {node}"),
             }
@@ -615,11 +625,20 @@ fn main() -> anyhow::Result<()> {
             print!("{}", if json { impact::render_json(&graph, &imp, direction) } else { impact::render(&graph, &imp, direction) });
             Ok(())
         }
-        Cmd::Trace { from, to, depth, stale } => {
+        Cmd::Trace { from, to, depth, json, stale } => {
             let graph = graph_for(&repo, &load_cfg()?, stale)?;
             let Some(a) = query::resolve(&graph, &from) else { anyhow::bail!("no node matches {from}") };
             let Some(b) = query::resolve(&graph, &to) else { anyhow::bail!("no node matches {to}") };
-            match impact::trace(&graph, &a.id, &b.id, depth) {
+            let found = impact::trace(&graph, &a.id, &b.id, depth);
+            // No path within the depth is an answer to the question that was asked, so the JSON
+            // form says so and exits 0 where the text form treats it as a failed lookup. A caller
+            // parsing JSON should not have to read an exit code to learn what the object already
+            // says, and a `null` path is easier to handle than a non-zero exit with no object.
+            if json {
+                println!("{}", impact::trace_json(&graph, &a.id, &b.id, depth, found.as_deref()));
+                return Ok(());
+            }
+            match found {
                 Some(path) => {
                     for (i, id) in path.iter().enumerate() {
                         let at = graph.nodes.get(id).map(|n| format!("{}:{}", n.file, n.line)).unwrap_or_default();
@@ -637,9 +656,12 @@ fn main() -> anyhow::Result<()> {
             print!("{}", if json { changes::render_json(&graph, &r) } else { changes::render(&graph, &r) });
             Ok(())
         }
-        Cmd::Verify => {
+        Cmd::Verify { json } => {
             let (graph, _) = store::Store::new(&repo).load()?;
-            print!("{}", query::verify(&graph));
+            match json {
+                true => println!("{}", query::verify_json(&graph)),
+                false => print!("{}", query::verify(&graph)),
+            }
             if graph.nodes.is_empty() { anyhow::bail!("graph is empty — run `repograph build`"); }
             Ok(())
         }

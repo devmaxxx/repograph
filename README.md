@@ -187,6 +187,29 @@ BE-M10/T07  docs/prd-2026-08-16/plans/milestones/backend/BE-M10-payments-provide
   BE-M10  docs/prd-2026-08-16/plans/milestones/backend/BE-M10-payments-provider-stripe-connect-implementation-deposits-car.md:1  BE-M10 Payments provider: Stripe Connect implementation, deposits, card-on-file …  ← BE-M10/T05
 ```
 
+### Answering a program instead of a person
+
+Every reader takes `--json`, and every one of them answers with an object rather than a bare array,
+so a field can be added without breaking a parser written against the version before it:
+
+| Command | Top-level keys |
+| --- | --- |
+| `ask --json` | `seeds`, `expanded` |
+| `impact --json` | `root`, `at`, `direction`, `risk`, `direct`, `total`, `files`, `importers`, `layers` |
+| `changes --json` | `risk`, `touched`, `affected`, `files` |
+| `families --json` | `families`, `milestones`, `mention_only` |
+| `explain --json` | `id`, `kind`, `label`, `file`, `line`, `community`, `edges` |
+| `verify --json` | `nodes`, `edges`, `nodes_by_kind`, `edges_by_kind`, `dangling`, `undeclared`, `gaps`, `cite_only` |
+| `trace --json` | `from`, `to`, `depth`, `path` |
+| `prime --json` | `nodes`, `edges`, `enriched`, `questions`, `families`, `model` |
+
+`explain --json` resolves each edge's direction for you — `dir` is `in` or `out` and `other` is the
+node at the far end — so a caller never works out which end of an edge it was standing on. One
+difference from the text forms is deliberate: a `trace` that finds no path within the depth is an
+answer to the question that was asked, so the JSON form prints `"path": null` and exits 0 where the
+text form exits non-zero. A caller parsing an object should not have to read an exit code to learn
+what the object already says.
+
 ### Keeping it fresh
 
 `ask` walks the tree before it answers. Anything edited since the last build is re-extracted in
