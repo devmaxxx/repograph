@@ -727,8 +727,12 @@ reports.
 
 **Implemented 2026-09-09; the baseline is the next run's.** `Summary` carries `anchors` beside
 `by_kind`, filled by one `record(kind, hit, (reached, want))` in the per-case loop — the same
-`(reached, want)` the case line has always printed and nothing has ever read — and every kind on the
-summary line now reads `multi 10/12 (28/34 anchors)`. `passes()` is untouched and no floor moved:
+`(reached, want)` the case line has always printed and nothing has ever read — and printed on an
+`anchors` line of its own beneath the summary. Of its own on purpose: `bench/history/track.py`
+parses the summary line with a regex of `<kind> <hits>/<cases>` pairs, and every transcript this
+campaign has recorded is read back through it, so a column added *inside* that line would have made
+this measurement retire the history it exists to extend. The summary line is byte-identical to the
+record. `passes()` is untouched and no floor moved:
 this ships as a column, which is what ADR-001 asks of a number nobody has a baseline for yet.
 `bench --repeat N` runs the suite N times and prints a median beneath the runs, every run still
 judged on its own floors — a suite that passes on average is one whose exit code depends on which

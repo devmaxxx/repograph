@@ -148,7 +148,16 @@ pub struct Extractors {
     pub registry: Box<dyn Extractor>,
 }
 
-pub struct UpdateReport { pub changed: usize, pub removed: usize, pub nodes: usize, pub edges: usize }
+pub struct UpdateReport {
+    pub changed: usize,
+    pub removed: usize,
+    pub nodes: usize,
+    pub edges: usize,
+    /// Eligible nodes left without questions, when the store has questions for some others.
+    /// Computed here because the graph is already in hand: a writer that re-loaded the store to
+    /// say this would pay a whole graph read on the no-op update a commit hook fires.
+    pub unenriched: Option<usize>,
+}
 
 /// Re-extracts what the diff names, drops what is gone, and writes the store back. `also` is the
 /// files that did not change and still have to be read again — the whole tree, when a family has
@@ -197,7 +206,14 @@ pub(crate) fn apply_diff(repo: &std::path::Path, store: &store::Store, graph: &m
         graph.apply(extractor.extract(&e.rel, &text));
     }
     store.save(graph, &walk::Manifest::from_entries(entries))?;
-    Ok(UpdateReport { changed: diff.changed.len(), removed: diff.removed.len(), nodes: graph.nodes.len(), edges: graph.edges.len() })
+    // Only when something was re-extracted: a tree that did not move cannot have grown a node
+    // without questions, and the no-op update a commit hook fires should not read the questions
+    // file to be told so.
+    let moved = !diff.changed.is_empty() || !diff.removed.is_empty() || !also.is_empty();
+    let unenriched = moved
+        .then(|| enrich::Questions::load(store).ok().and_then(|q| enrich::unenriched_note(graph, &q)))
+        .flatten();
+    Ok(UpdateReport { changed: diff.changed.len(), removed: diff.removed.len(), nodes: graph.nodes.len(), edges: graph.edges.len(), unenriched })
 }
 
 /// The store brought in line with the tree. The extractors are built here rather than passed in
@@ -495,13 +511,8 @@ fn main() -> anyhow::Result<()> {
             cap_pools(index::embed::threads(cfg.resources));
             let r = run_update(&repo, &cfg, wipe)?;
             println!("changed {} removed {} nodes {} edges {}", r.changed, r.removed, r.nodes, r.edges);
-            // A rebuild under a corpus that grew adds requirement-like nodes `enrich` has never
-            // seen, and until now the only place that showed was a bench summary.
-            let store = store::Store::new(&repo);
-            if let (Ok((graph, _)), Ok(questions)) = (store.load(), enrich::Questions::load(&store)) {
-                if let Some(n) = enrich::unenriched_note(&graph, &questions) {
-                    eprintln!("repograph: {n} requirement-like nodes have no questions — run `repograph enrich` to search them");
-                }
+            if let Some(n) = r.unenriched {
+                eprintln!("repograph: {n} requirement-like nodes have no questions — run `repograph enrich` to search them");
             }
             embed_all(&repo, cli.no_dense, &cfg)
         }
@@ -636,10 +647,8 @@ fn main() -> anyhow::Result<()> {
             }
             if summaries.len() > 1 {
                 let m = bench::median(&summaries);
-                let counts = m.by_kind.iter()
-                    .map(|(k, (h, t))| { let (r, w) = m.anchors(k); format!("{k} {h}/{t} ({r}/{w} anchors)") })
-                    .collect::<Vec<_>>().join("  ");
-                println!("\nmedian of {}  {counts}  p90 {} tok", summaries.len(), m.p90_tokens);
+                let counts = m.by_kind.iter().map(|(k, (h, t))| format!("{k} {h}/{t}")).collect::<Vec<_>>().join("  ");
+                println!("\nmedian of {}  {counts}  p90 {} tok\n{}", summaries.len(), m.p90_tokens, bench::anchor_line(&m));
             }
             // Every run has to meet the floors, not the median of them: a suite that passes on
             // average is one whose exit code depends on which run a reader looked at.

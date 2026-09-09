@@ -375,18 +375,25 @@ pub fn run(store: &Store, graph: &Graph, questions: Questions, command: &str, ba
                         if let Err(e) = g.0.save(store) { eprintln!("enrich: save: {e:#}"); }
                         drop(g);
                         let skipped: Vec<(&Node, String)> = b.iter().filter(|(n, _)| !parsed.contains_key(&n.id)).cloned().collect();
-                        let mut queue = queue.lock().unwrap();
-                        if !skipped.is_empty() && !retry {
-                            eprintln!("enrich: {} of {} nodes skipped by the model, retrying them", skipped.len(), b.len());
-                            queue.push(Batch { nodes: skipped, retry: true, code: is_code });
-                        } else if skipped.len() == b.len() {
-                            // Asked twice, answered for nobody: the generator is not declining these
-                            // nodes, it is not answering. Counting that as coverage is what let a
-                            // whole run report `0 failed` and exit green having written nothing.
+                        // Asked twice and answered for nobody: the generator is not declining these
+                        // nodes, it is not answering. Counting that as coverage is what let a whole
+                        // run report `0 failed` and exit green having written nothing. Decided
+                        // before the queue lock and acted on after it, so no path holds both locks
+                        // and the two can never be taken in opposite orders.
+                        let answered_for_nobody = skipped.len() == b.len() && (retry || skipped.is_empty());
+                        let left = {
+                            let mut queue = queue.lock().unwrap();
+                            if !skipped.is_empty() && !retry {
+                                eprintln!("enrich: {} of {} nodes skipped by the model, retrying them", skipped.len(), b.len());
+                                queue.push(Batch { nodes: skipped, retry: true, code: is_code });
+                            }
+                            queue.len()
+                        };
+                        if answered_for_nobody {
                             eprintln!("enrich: a batch of {} answered for nobody twice", b.len());
                             shared.lock().unwrap().2 += 1;
                         }
-                        eprintln!("enrich: batch done, {} of {} left", queue.len(), total);
+                        eprintln!("enrich: batch done, {left} of {total} left");
                     }
                     Err(e) => { eprintln!("enrich: {e:#}"); shared.lock().unwrap().2 += 1; }
                 }

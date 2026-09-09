@@ -103,16 +103,6 @@ struct Machine {
 }
 
 /// `$REPOGRAPH_CONFIG`, else `$XDG_CONFIG_HOME/repograph/config.toml`, else
-/// The model name is substituted into a shell command, so it is a token: a vendor's name, a tag, a
-/// path. Anything that could end the command or start another one is refused and the built-in name
-/// stands, because a wrong model answers badly and an injected one runs.
-fn model_token_is_safe(v: &str) -> bool {
-    !v.is_empty()
-        && v.len() <= 128
-        && v.starts_with(|c: char| c.is_ascii_alphanumeric())
-        && v.chars().all(|c| c.is_ascii_alphanumeric() || "._:/@+-".contains(c))
-}
-
 /// `~/.config/repograph/config.toml`. `None` when the environment names no home at all, which
 /// is a machine with no global settings rather than an error.
 fn machine_path() -> Option<std::path::PathBuf> {
@@ -125,6 +115,16 @@ fn machine_path() -> Option<std::path::PathBuf> {
         None => std::env::home_dir()?.join(".config"),
     };
     Some(base.join("repograph").join("config.toml"))
+}
+
+/// The model name is substituted into a shell command, so it is a token: a vendor's name, a tag, a
+/// path. Anything that could end the command or start another one is refused and the built-in name
+/// stands, because a wrong model answers badly and an injected one runs.
+fn model_token_is_safe(v: &str) -> bool {
+    !v.is_empty()
+        && v.len() <= 128
+        && v.starts_with(|c: char| c.is_ascii_alphanumeric())
+        && v.chars().all(|c| c.is_ascii_alphanumeric() || "._:/@+-".contains(c))
 }
 
 impl Config {

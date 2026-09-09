@@ -370,16 +370,25 @@ pub fn run(repo: &Path, cases: Option<&Path>, no_dense: bool, rerank: bool, rera
     }
     tokens.sort_unstable();
     summary.p90_tokens = tokens.get(tokens.len() * 9 / 10).copied().unwrap_or(0);
-    let counts = summary.by_kind.iter()
-        .map(|(k, (h, t))| { let (r, w) = summary.anchors(k); format!("{k} {h}/{t} ({r}/{w} anchors)") })
-        .collect::<Vec<_>>().join("  ");
+    let counts = summary.by_kind.iter().map(|(k, (h, t))| format!("{k} {h}/{t}")).collect::<Vec<_>>().join("  ");
     println!("\n{counts}  p90 {} tok  dense={dense_on}  enriched={enriched} ({covered}/{eligible} nodes) model={model_field} families={}{code_note}{}  suite={suite} gated={gated}",
         summary.p90_tokens, family_count, match (rerank_local, rerank.is_some()) {
             (true, _) => format!(" rerank_local=true depth={depth}"),
             (false, true) => format!(" rerank=true depth={depth}"),
             _ => String::new(),
         });
+    // A line of its own, and beneath the summary rather than inside it: `bench/history/track.py`
+    // parses that line with a regex of `<kind> <hits>/<cases>` pairs, and every transcript the
+    // campaign has recorded is read back through it. A column added there would have made this
+    // measurement retire the history it exists to extend.
+    println!("{}", anchor_line(&summary));
     Ok((!gated || passes(&summary, dense_on, enriched, floors), summary))
+}
+
+/// Anchors reached over anchors wanted, per kind, in the summary's own order.
+pub fn anchor_line(s: &Summary) -> String {
+    let kinds = s.by_kind.iter().map(|(k, _)| { let (r, w) = s.anchors(k); format!("{k} {r}/{w}") }).collect::<Vec<_>>().join("  ");
+    format!("anchors  {kinds}")
 }
 
 /// The median of `n` runs of the same suite, per kind and for the token p90. G23: the reader bars
@@ -404,6 +413,8 @@ pub fn median(runs: &[Summary]) -> Summary {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+    use crate::query::Hit;
 
     /// A case that keeps its verdict and loses two of its three anchors is what the summary was
     /// blind to. The counts and the anchors are two different readings of the same run, and only
@@ -419,8 +430,6 @@ mod tests {
         assert_eq!(s.anchors("keyword"), (0, 1));
         assert_eq!(s.anchors("nothing-of-the-sort"), (0, 0));
     }
-    use super::*;
-    use crate::query::Hit;
 
     fn h(id: &str, file: &str) -> Hit { Hit { id: id.into(), file: file.into(), line: 1, label: String::new(), score: 1.0, via: None } }
 
