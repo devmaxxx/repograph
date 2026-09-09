@@ -399,6 +399,13 @@ the `--no-dense` arm, which has no dense list to improve.
 **Update (2026-09-06, 0.5.0):** `bench` has floors of its own for the large model since 0.5.0 —
 40/22 enriched and 40/17 raw ([the 0.5.0 gap results](2026-09-05-0.5.0-gaps-results.md)).
 
+**Update (2026-09-09): the band half of this argument is gone.** The removal
+([the plan](../plans/2026-09-09-normal-band-only.md)) takes the 4.1–4.5× multiplier and G20's
+complaint with it. What the default now rests on is two foreground numbers and a download: 1,930 s
+against 266 s, and 2.1 GB against 470 MB
+([the 2026-09-09 results](2026-09-09-normal-band-only-results.md),
+[ADR-002 Amendment 1](../adr/ADR-002-two-defaults-multiplied.md)). The conclusion is unchanged.
+
 **Update (2026-09-07): the option stands, the default does not.** Nothing measured here moved —
 e5-large still reads 22/30 against 15/30 and keeps its own floors — but the price of it *as a
 default* did, because `priority = "background"` became the writers' default in the same version.
@@ -863,7 +870,15 @@ recorded numbers, not a run.
 **Gate.** On the same whole-store rebuild, every interval under 60 s including the first, with the
 run's own readings unmoved — 1,930 s wall, 293% peak CPU, 2.15 GB.
 
-## G20 · A whole-store rebuild in the background band has no wall number
+## G20 · A whole-store rebuild in the background band has no wall number — closed 2026-09-09, moot
+
+**Closed 2026-09-09 without a measurement, because there is nothing left to measure.** The band was
+removed ([the plan](../plans/2026-09-09-normal-band-only.md)): there is no run to take, no ratio to
+replace with CPU-seconds, and no setting that would produce one. The body below stays as the record
+of why the number could not be got while the band existed — three whole-store attempts that starved
+on a working laptop is itself part of the case for removing it. What replaced the band's numbers is
+[the 2026-09-09 results](2026-09-09-normal-band-only-results.md), which measures the default model's
+whole store at all three `resources` levels in the normal band.
 
 **Raised (2026-09-07)** by
 [a rebuild measured against the person at the keyboard](2026-09-07-unnoticeable-results.md), §4.4 —
@@ -909,7 +924,13 @@ produced three unfinished runs.
 the run rather than computed from file sizes as §4.4 had to (≈ 180 MB against a 300 MB bar). One
 wall figure beside it, labelled with the load it was taken under.
 
-## G21 · One machine is measured; three platform rows are reasoned from an API contract
+## G21 · One machine is measured; three platform rows are reasoned from an API contract — closed 2026-09-09, moot
+
+**Closed 2026-09-09 without a measurement.** The three reasoned rows described what the band did per
+platform, and the band is gone: nothing in the binary names a scheduling class on any platform, so
+there is no per-platform behaviour left to reason about or to test hardware for. The `resources`
+key that replaced it is arithmetic on `available_parallelism` and is the same on all three. The body
+below stays as the record of what was reasoned and how carefully it was labelled.
 
 **Raised (2026-09-07)** by [the unnoticeable results](2026-09-07-unnoticeable-results.md), §5.1,
 which labels every row of its hardware table measured or reasoned and leaves three of the four
@@ -1170,10 +1191,10 @@ answer different questions, and no row below moves a retrieval floor.
 | | gap | why here |
 |---|---|---|
 | 1 | **G23** the reader bars are tighter than the suite's own repeatability | every other row in this family is read through those bars, and the control already fails them on a change that touches no reader: `ask-fused` 0.58 s against 0.35, max RSS 1.36–1.56 GB on both binaries. n runs and a median, and it is fixed |
-| 2 | **G20** the whole-store run in the band has no wall | the second round's headline is a product of ratios — 4.1–4.5× of 1,930 s — because three attempts starved on a working laptop. CPU-seconds are load-independent and can be taken today |
+| 2 | ~~**G20** the whole-store run in the band has no wall~~ | ~~the second round's headline is a product of ratios — 4.1–4.5× of 1,930 s — because three attempts starved on a working laptop~~ — closed 2026-09-09 — the band was removed |
 | 3 | **G19** the progress cadence is a count of rows | a fixed bar the plan set and the shipped code misses at both tails, 102.4 s and 96.7 s against 60, with the batching rule that would fix it already written one file away |
 | 4 | **G22** mapped weights under memory pressure | a shipped default whose price is +6% to +26% of wall exactly on the machines that most need the 1.14 GB it saves, and all three candidate policies are unmeasured |
-| 5 | **G21** one platform measured, three reasoned | the largest unmeasured surface in the family, and the one that needs hardware this session did not have; the Intel row cannot hold bar 3 by argument, however carefully the argument is written |
+| 5 | ~~**G21** one platform measured, three reasoned~~ | ~~the largest unmeasured surface in the family, and the one that needs hardware this session did not have~~ — closed 2026-09-09 — the band was removed |
 | 6 | **G27** `serve`'s socket path and its leftover | not a cost at all: a repository under a deep path cannot run `serve`. Small, and it breaks a command rather than slowing one |
 | 7 | **G26** `serve` holds its model while idle | 1.39 GB resident for as long as the process lives, where `watch` now holds 129.5 MB between refreshes; the shape of the fix is written and measured next door |
 | 8 | **G25** the fp32 weights are the floor | the only lever that could move the floor under every memory number in both rounds, and finding out costs a full re-embed and the quantized model's own floors — no download at all on the default, whose int8 build is already cached, and 562 MB on the large one |
@@ -1213,5 +1234,10 @@ answer different questions, and no row below moves a retrieval floor.
   per-thread `QOS_CLASS_BACKGROUND` (not inherited — ORT's workers are created inside
   `commit_from_file` and rayon's inside `build_global`, so two thread factories would be needed to
   reach what one `setpriority` call reaches). All in
-  [the unnoticeable results](2026-09-07-unnoticeable-results.md) §2.1–2.3. The int8 weights are
+  [the unnoticeable results](2026-09-07-unnoticeable-results.md) §2.1–2.3. **As of 2026-09-09 the
+  band itself is not on this list either**: it shipped, it was measured, and it was removed
+  ([the plan](../plans/2026-09-09-normal-band-only.md)) — the whole scheduling family is closed
+  rather than deferred, and G20 and G21 closed moot with it. The `threads` rows above are historical
+  in one further sense: the key is gone too, replaced by `resources`, and `threads = 6` is the row
+  that chose what `full` resolves to. The int8 weights are
   **not** on this list: they were deferred rather than refused, and they are G25.
