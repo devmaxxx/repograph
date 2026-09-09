@@ -104,7 +104,24 @@ const IO_TIMEOUT: Duration = Duration::from_secs(30);
 /// cost every question half that timer: at 50 ms, measured, half a lexical answer.
 const WAKE: Duration = Duration::from_millis(250);
 
-pub fn socket_path(repo: &Path) -> PathBuf { repo.join(".repograph").join("serve.sock") }
+/// The socket a repository's server binds and its clients connect to: `.repograph/serve.sock`,
+/// which is where a person looks for it — unless that name will not fit in `sun_path`, 104 bytes
+/// on macOS including the NUL, in which case a name derived from the canonical repository path
+/// goes in the temporary directory. 100 rather than 104 is one margin for every platform, and
+/// four bytes is not worth two numbers. Server and client both come here, so the fallback is
+/// never half-taken. The hash names a file; it defends nothing, which is why it is four lines of
+/// FNV rather than a dependency.
+pub fn socket_path(repo: &Path) -> PathBuf {
+    let in_repo = repo.join(".repograph").join("serve.sock");
+    if in_repo.as_os_str().len() <= 100 { return in_repo; }
+    let canonical = std::fs::canonicalize(repo).unwrap_or_else(|_| repo.to_path_buf());
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    for b in canonical.as_os_str().as_encoded_bytes() {
+        h ^= u64::from(*b);
+        h = h.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    std::env::temp_dir().join(format!("repograph-{h:016x}.sock"))
+}
 
 /// What a `stat` says about `repograph.toml`, or None where there is none — the configuration a
 /// one-shot `ask` would read, watched so a resident process cannot answer under an older one.
@@ -208,6 +225,8 @@ pub fn run(repo: &Path, cfg: &config::Config, every: u64, batch: usize, idle: u6
     // the name rather than the socket would then strand the replacement — the same cascade the
     // client's unlink was deleted to avoid, one process further along.
     let _guard = Unlink(path.clone(), sys::id(&path));
+    // After the guard exists, so a signal arriving between the two still finds something to run.
+    catch_termination();
     // The accept blocks on a thread of its own and hands each connection over, one at a time —
     // the answer still happens here, on the one thread that holds the context. A rendezvous
     // channel is what keeps it to one: the next connection is accepted but not delivered until
@@ -254,9 +273,39 @@ pub fn run(repo: &Path, cfg: &config::Config, every: u64, batch: usize, idle: u6
             // A poll between requests answers nobody: its notices are the server's own.
             log(&mut ctx);
         }
+        if terminated() { eprintln!("serve: terminated, exiting"); return Ok(()); }
         if last_request.elapsed() >= Duration::from_secs(idle) { eprintln!("serve: idle for {idle}s, exiting"); return Ok(()); }
     }
 }
+
+/// A `SIGTERM`ed `serve` used to leave its socket file behind, because the unlink is a `Drop` and
+/// a default-handled signal runs none. The handler sets a flag rather than unlinking: the loop
+/// wakes every `WAKE` anyway, so a quarter second later it leaves through the same guard as every
+/// other exit — the one that checks the socket's identity first, so a replacement server that has
+/// already bound this name keeps its socket.
+static TERMINATED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+fn terminated() -> bool { TERMINATED.load(std::sync::atomic::Ordering::Relaxed) }
+
+#[cfg(unix)]
+extern "C" fn note_term(_sig: libc::c_int) {
+    // The one thing a handler may do here: a relaxed store to an atomic is async-signal-safe,
+    // where an unlink of a name another process may now own is merely fast.
+    TERMINATED.store(true, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// Asks for `SIGTERM` and `SIGINT` to reach `terminated()` instead of killing the process where
+/// its `Drop`s cannot run. On Windows there is no equivalent and the socket file is left for the
+/// next `serve` to remove, which the README says.
+#[cfg(unix)]
+fn catch_termination() {
+    for sig in [libc::SIGTERM, libc::SIGINT] {
+        unsafe { libc::signal(sig, note_term as *const () as libc::sighandler_t) };
+    }
+}
+
+#[cfg(not(unix))]
+fn catch_termination() {}
 
 /// Notices no client asked for, on the server's stderr.
 fn log(ctx: &mut ask::Context) {
@@ -348,8 +397,27 @@ impl Drop for Unlink {
 
 #[cfg(test)]
 mod tests {
-    use super::sys;
+    use super::{socket_path, sys};
     use std::io::{BufRead, BufReader};
+
+    /// `sun_path` is 104 bytes on macOS, including the NUL, so a repository under a deep enough
+    /// path cannot bind a socket inside itself at all — which was every store copy the resource
+    /// rounds worked on. The name moves; the way both sides compute it does not.
+    #[test]
+    fn a_deep_repository_gets_a_socket_that_fits() {
+        let deep = std::path::PathBuf::from("/private/tmp").join("a".repeat(120));
+        let p = socket_path(&deep);
+        assert!(p.as_os_str().len() <= 100, "{}", p.display());
+        assert!(p.file_name().unwrap().to_string_lossy().starts_with("repograph-"), "{}", p.display());
+        assert_eq!(socket_path(&deep), p, "a client that computes it again finds the same name");
+        assert_ne!(socket_path(&deep.join("x")), p, "another repository is another socket");
+    }
+
+    #[test]
+    fn a_shallow_repository_keeps_the_socket_it_has_always_had() {
+        let p = socket_path(std::path::Path::new("/tmp/r"));
+        assert!(p.ends_with(".repograph/serve.sock"), "{}", p.display());
+    }
 
     /// The two facts `try_ask` and `Unlink` read off the socket file, through the platform's own
     /// metadata: on Windows the file is a reparse point, and `exists` would ask what it points at.

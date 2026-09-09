@@ -244,6 +244,15 @@ repograph serve --no-dense       # lexical only; a fused `ask` is told so and an
 repograph ask --no-serve отмена  # answer here even while one is listening
 ```
 
+The socket lives at `.repograph/serve.sock` — unless that path would be longer than a Unix socket
+name may be (104 bytes on macOS, including the terminating NUL), in which case it goes in the
+temporary directory as `repograph-<hash of the repository path>.sock`. A repository under a deep
+enough path could not run `serve` at all before that fallback, and both the server and every client
+compute the name the same way, so nothing has to be told which one is in use — the startup line
+prints it. A `serve` that is killed with `SIGTERM` or `SIGINT` takes its socket file with it,
+because it leaves through the same exit as an idle timeout; on Windows there is no equivalent
+signal and the file is left for the next `serve`, which removes a dead socket before it binds.
+
 `ask` uses it without being told to, and answers in this process whenever it cannot: no socket, a
 socket nobody listens on, a server of another version, a server built from other code under the
 same version (the handshake carries the executable's own mtime and size, so a second copy of one

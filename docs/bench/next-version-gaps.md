@@ -1226,6 +1226,19 @@ nothing is needed.
 **Gate.** `serve` binds and answers from a repository whose `.repograph` path is longer than 104
 bytes; a `SIGTERM`ed `serve` leaves no `serve.sock`, or the README says why one is left.
 
+**Closed (2026-09-09), both halves.** `socket_path` returns `.repograph/serve.sock` while that name
+is at most 100 bytes and `$TMPDIR/repograph-<16 hex of the canonical repository path>.sock`
+otherwise — one function, so a client cannot take a fallback the server did not. 100 rather than 104
+is one margin on every platform. Proved on a 230-byte repository path: `build`, `serve`, and an
+`ask` answered `by the resident process`, where before the bind itself failed.
+
+The stale socket is a flag rather than an unlink in the handler. `SIGTERM` and `SIGINT` set an
+atomic; the loop already wakes every 250 ms, so it leaves through the existing `Unlink` guard —
+the one that compares the socket's device and inode first, so a replacement server that has already
+bound the name keeps its socket. An unlink inside the handler would have been the cascade the guard
+was written to avoid, one signal further along. `libc` becomes a direct unix-only dependency for
+`signal`; std has none. Windows is unchanged and the README says why.
+
 ---
 
 ## G28 · `--rerank` sits on the p90 ceiling — 228 green, 231 red, on the same hits
@@ -1584,7 +1597,7 @@ answer different questions, and no row below moves a retrieval floor.
 | 3 | **G19** the progress cadence is a count of rows | a fixed bar the plan set and the shipped code misses at both tails, 102.4 s and 96.7 s against 60, with the batching rule that would fix it already written one file away |
 | 4 | **G22** mapped weights under memory pressure | a shipped default whose price is +6% to +26% of wall exactly on the machines that most need the 1.14 GB it saves, and all three candidate policies are unmeasured |
 | 5 | ~~**G21** one platform measured, three reasoned~~ | ~~the largest unmeasured surface in the family, and the one that needs hardware this session did not have~~ — closed 2026-09-09 — the band was removed |
-| 6 | **G27** `serve`'s socket path and its leftover | not a cost at all: a repository under a deep path cannot run `serve`. Small, and it breaks a command rather than slowing one |
+| — | ~~**G27** `serve`'s socket path and its leftover~~ | closed 2026-09-09 — the socket falls back to `$TMPDIR/repograph-<hash>.sock` when `.repograph/serve.sock` will not fit in `sun_path`, proved on a 230-byte repository path that could not bind at all before; and a `SIGTERM` sets a flag the loop reads, so the exit is the identity-checked one every other exit takes |
 | 7 | **G26** `serve` holds its model while idle | 1.39 GB resident for as long as the process lives, where `watch` now holds 129.5 MB between refreshes; the shape of the fix is written and measured next door |
 | 8 | **G25** the fp32 weights are the floor | the only lever that could move the floor under every memory number in both rounds, and finding out costs a full re-embed and the quantized model's own floors — no download at all on the default, whose int8 build is already cached, and 562 MB on the large one |
 | 9 | **G24** `--rerank-local` is 31.9 s and 3.1 GB | the heaviest reader by far, and what would actually move it is a pool depth, which belongs to G2 and not to this family |
