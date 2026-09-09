@@ -477,6 +477,14 @@ fn main() -> anyhow::Result<()> {
             cap_pools(index::embed::threads(cfg.resources));
             let r = run_update(&repo, &cfg, wipe)?;
             println!("changed {} removed {} nodes {} edges {}", r.changed, r.removed, r.nodes, r.edges);
+            // A rebuild under a corpus that grew adds requirement-like nodes `enrich` has never
+            // seen, and until now the only place that showed was a bench summary.
+            let store = store::Store::new(&repo);
+            if let (Ok((graph, _)), Ok(questions)) = (store.load(), enrich::Questions::load(&store)) {
+                if let Some(n) = enrich::unenriched_note(&graph, &questions) {
+                    eprintln!("repograph: {n} requirement-like nodes have no questions — run `repograph enrich` to search them");
+                }
+            }
             embed_all(&repo, cli.no_dense, &cfg)
         }
         Cmd::Enrich { batch, parallel, limit, code } => {

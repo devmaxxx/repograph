@@ -77,6 +77,16 @@ pub fn coverage(graph: &Graph, questions: &Questions) -> (usize, usize) {
     (nodes.iter().filter(|n| !questions.get(&n.id).is_empty()).count(), nodes.len())
 }
 
+/// How many eligible nodes have no questions, when the store has questions for some others.
+/// `None` when there is nothing to say: a store nobody enriched is a state, and a store that was
+/// enriched and then grew is a next step nothing else prints — a rebuild under new families adds
+/// requirement-like nodes `enrich` has never seen, and the reader learns it from a bench summary
+/// or not at all.
+pub fn unenriched_note(graph: &Graph, questions: &Questions) -> Option<usize> {
+    let (covered, eligible) = coverage(graph, questions);
+    (covered > 0 && eligible > covered).then(|| eligible - covered)
+}
+
 /// Whether a `coverage` reading has earned the enriched floors. A high-water mark rather than
 /// equality because the two mistakes are not symmetric: a store at 99% still measures the
 /// enriched numbers, so grading it enriched risks about no false red, while grading it raw drops
@@ -568,6 +578,25 @@ mod tests {
         assert_eq!((r.generated, r.left), (0, 2));
         assert_eq!(r.failed, 1, "a batch that answered for nobody twice is failed, not done");
         assert_eq!(std::fs::read_to_string(&calls).unwrap().lines().count(), 4, "an answer that skips everything is retried once, not forever");
+    }
+
+    /// A store with no questions is a store nobody enriched, and saying so on every build would be
+    /// noise on a corpus that never runs `enrich`. A store that has some and is missing others is
+    /// a rebuild that moved the corpus, and that is the line worth printing.
+    #[test]
+    fn the_line_is_printed_only_when_the_store_has_questions_and_is_missing_some() {
+        let mut e = Extraction::default();
+        e.node(NodeKind::Requirement, "FR-X-1", "t", "body", "d.md", 1);
+        e.node(NodeKind::Requirement, "FR-X-2", "t2", "body2", "d.md", 5);
+        let mut g = Graph::default();
+        g.apply(e);
+        let mut q = Questions::default();
+        assert_eq!(unenriched_note(&g, &q), None, "a store nobody enriched says nothing");
+        let entry = |id: &str| Entry { hash: hash(&passage(&g.nodes[id])), questions: vec!["q".to_string()] };
+        q.entries.insert("FR-X-1".into(), entry("FR-X-1"));
+        assert_eq!(unenriched_note(&g, &q), Some(1));
+        q.entries.insert("FR-X-2".into(), entry("FR-X-2"));
+        assert_eq!(unenriched_note(&g, &q), None, "a complete store says nothing either");
     }
 
     /// `sh -c` returns its pipeline's last stage, so a generator that dies into a `tee` exits 0

@@ -724,6 +724,12 @@ command that touches the dense stage — `build`, `update`, `enrich`, `embed`, `
 `bench`, `dump`, `serve` — reuses the cache; there are no further network calls once it is
 populated. `--no-dense` skips the download and the embedding stage everywhere.
 
+A rebuild can add nodes the questions do not cover — a document that grew, or a corpus that started
+defining a family it only cited before — and `enrich` has never seen those. `build` and `update`
+print how many requirement-like nodes are without questions whenever the store has questions for
+some others, so a rebuild ends by naming its own next step: `repograph enrich`. A store nobody has
+enriched prints nothing, because there is nothing to say.
+
 The model is a property of the store. `embed_model` in `repograph.toml` names what `build`,
 `update`, `enrich`, `embed` and `watch` write vectors with; `vectors.json` records it, and `ask`,
 `bench` and `dump` open the recorded one, so a store keeps answering with the model that wrote it

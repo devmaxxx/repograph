@@ -1333,6 +1333,13 @@ rebuild, enrich the 150, read all four arms before and after.
 **Gate.** A rebuild that leaves nodes without questions says the number on stderr; the fixture's
 rebuild is a recorded before/after pair with coverage ≥ 99% after `enrich`.
 
+**Half closed (2026-09-09).** `build` and `update` print `N requirement-like nodes have no questions
+— run \`repograph enrich\`` whenever the store carries questions for some others; a store nobody
+enriched prints nothing, which is the state rather than a next step (`enrich::unenriched_note`, one
+test over the three cases). The README's Embeddings section says a rebuild under new families is
+followed by `enrich`. The fixture half — rebuild, enrich the 150, read all four arms before and
+after — is untouched and is what keeps this row open.
+
 ---
 
 ## G33 · Thirteen families the list had are text now — `OQ` cited 1,771 times, defined nowhere
