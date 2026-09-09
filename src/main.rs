@@ -65,6 +65,8 @@ enum Cmd {
         #[arg(long, default_value_t = 30)] every: u64,
         #[arg(long, default_value_t = 1)] batch: usize,
         #[arg(long, default_value_t = 1800)] idle: u64,
+        /// Seconds without a question after which the model is dropped and the process stays.
+        #[arg(long, default_value_t = 300)] idle_model: u64,
     },
     /// Keeps the store in step with the tree for readers that do not refresh themselves —
     /// editors, MCP servers. Polls, applies the same incremental update `ask` does, and embeds
@@ -609,10 +611,10 @@ fn main() -> anyhow::Result<()> {
             ctx.timing().stage("printed");
             std::process::exit(0)
         }
-        Cmd::Serve { every, batch, idle } => {
+        Cmd::Serve { every, batch, idle, idle_model } => {
             let cfg = load_cfg()?;
             cap_pools(index::embed::threads(cfg.resources));
-            serve::run(&repo, &cfg, every, batch, idle, cli.no_dense)
+            serve::run(&repo, &cfg, every, batch, idle, idle_model, cli.no_dense)
         }
         Cmd::Watch { every, batch } => {
             let cfg = load_cfg()?;

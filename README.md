@@ -263,9 +263,17 @@ since Windows 10 1803 and is protected the way the repository directory is:
 ```bash
 repograph serve                  # .repograph/serve.sock, poll every 30 s, exit after 30 min idle
 repograph serve --idle 86400     # a day rather than half an hour before it gives up
+repograph serve --idle-model 60  # forget the model after a minute unasked; the process stays
 repograph serve --no-dense       # lexical only; a fused `ask` is told so and answers in its own process
 repograph ask --no-serve отмена  # answer here even while one is listening
 ```
+
+Two idles, one clock. `--idle` ends the process; `--idle-model` (default 300 s) drops only the
+model weights and keeps everything that answers without them — the graph, the ids, the lexical
+indexes, the vectors — so a server left up overnight is cheap to leave up. On a 33.5k-row store the
+resident size goes 908.5 MB → 28.8 MB on the first drop and 277.6 MB on later ones (the allocator
+keeps some of what the reopen took), and the first fused `ask` after a drop pays the open: 0.771 s
+against 0.083 s warm.
 
 The socket lives at `.repograph/serve.sock` — unless that path would be longer than a Unix socket
 name may be (104 bytes on macOS, including the terminating NUL), in which case it goes in the

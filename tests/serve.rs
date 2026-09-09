@@ -510,7 +510,7 @@ fn an_idle_server_exits_clean_and_takes_its_socket_with_it() {
     assert!(status.success(), "{status}: {err}");
     // Printed after the bind, so the file asserted gone below is one this process really made:
     // a server that never bound would leave no socket either, and prove nothing by it.
-    assert!(err.contains("idle 1s; Ctrl-C stops"), "the server never bound: {err}");
+    assert!(err.contains("idle 1s, model idle 300s; Ctrl-C stops"), "the server never bound: {err}");
     assert!(err.contains("idle for 1s"), "it left for some other reason: {err}");
     assert!(std::fs::symlink_metadata(dir.path().join(".repograph/serve.sock")).is_err(), "the socket file outlived its server: {err}");
 }

@@ -42,6 +42,16 @@ function context(out) { return out?.hookSpecificOutput?.additionalContext ?? nul
 
 function argv(w) { return existsSync(w.argvLog) ? readFileSync(w.argvLog, 'utf8').trim().split('\n') : []; }
 
+/** The argv line matching `re`, waited for: a detached child writes after the hook has exited. */
+async function waitFor(w, re, ms = 3000) {
+  for (let waited = 0; waited < ms; waited += 50) {
+    const hit = argv(w).find((l) => re.test(l));
+    if (hit) return hit;
+    await new Promise((r) => setTimeout(r, 50));
+  }
+  return null;
+}
+
 test('a search pattern is read out of Bash, Grep and Glob, and nowhere else', () => {
   assert.equal(searchPattern('Bash', { command: 'rg -n "cancellation policy" apps/' }), 'cancellation policy',
     'a quoted phrase is one argument: splitting on whitespace would ask about its first word only');
@@ -76,10 +86,24 @@ test('SessionStart prints the brief, and nothing where there is no store', () =>
   const c = context(fire(w, { hook_event_name: 'SessionStart', source: 'startup' }));
   assert.ok(c.startsWith('repograph:'), c);
   assert.ok(Buffer.byteLength(c) <= 700, `${Buffer.byteLength(c)} B`);
-  assert.match(argv(w)[0], /--no-dense prime/);
+  assert.ok(argv(w).some((l) => /--no-dense prime/.test(l)), argv(w).join(' | '));
 
   const bare = world({ store: false });
   assert.equal(fire(bare, { hook_event_name: 'SessionStart', source: 'startup' }), null);
+});
+
+test('SessionStart starts a resident serve, and the switch turns it off', async () => {
+  const w = world({ answer: 'repograph: 3076 doc nodes, 5240 code nodes' });
+  fire(w, { hook_event_name: 'SessionStart', source: 'startup' });
+  // Detached and never waited on, so the fake's line lands after the hook has already exited.
+  const line = await waitFor(w, /serve --idle 1800 --idle-model 300/);
+  assert.ok(line, `no serve was started: ${argv(w).join(' | ')}`);
+  assert.ok(!line.includes('--no-dense'), `the resident answer is the fused one: ${line}`);
+
+  const off = world({ answer: 'repograph: 1 doc node' });
+  fire(off, { hook_event_name: 'SessionStart', source: 'startup' }, { REPOGRAPH_HOOK_SERVE: '0' });
+  await new Promise((r) => setTimeout(r, 300));
+  assert.equal(argv(off).filter((l) => l.includes('serve')).length, 0, argv(off).join(' | '));
 });
 
 test('SubagentStart carries the rule', () => {

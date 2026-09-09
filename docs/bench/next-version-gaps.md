@@ -1260,6 +1260,34 @@ bookkeeping exists — `--idle` already counts the time since the last question 
 after an idle drop stated rather than hidden, and the warm numbers unmoved — a fused `ask` through
 the socket answering as it does today.
 
+**Closed (2026-09-09)** by `serve --idle-model <secs>`, default 300 — a second threshold on the
+clock `--idle` already keeps, dropping the embedder and the local reranker where `--idle` ends the
+process. The graph, the id matcher, the lexical indexes and the vectors stay, so the answer that
+does not need a model is still resident; the slots emptied are the ones the answer path fills
+lazily, which is why nothing has to be told the model went.
+
+Measured on a 33,525-row copy (`/private/tmp/g19-copy`, small model), `--idle-model 60`:
+
+| | resident (RSS) |
+| --- | --- |
+| started, before any question | 74.7 MB |
+| after one fused `ask` | 908.5 MB |
+| 60 s later, model dropped | **28.8 MB** |
+| after the next fused `ask` | 1.31 GB |
+| dropped a second time | 277.6 MB |
+
+The gate asked for under 0.1 GB and the first drop reads 28.8 MB. **The second drop reads 277.6
+MB**, and that is the honest number: the weights go, but the allocator keeps roughly 250 MB of what
+the second open took, so a server cycling all day settles well above the first reading rather than
+returning to it. Still 4.7× under what it held, and the lever the gate was written for.
+
+Latency, same copy: **0.083 s** for a fused `ask` through a resident server, **0.771 s** for the
+first one after a drop — the open, paid where the gate said to state it — and the answer text
+identical across the drop. The warm number is what the hook's 5 s budget is measured against, which
+is why `agent/hook.mjs` now starts a `serve --idle 1800 --idle-model 300` on `SessionStart`: no
+probe first, because a second `serve` refuses to bind while one answers and leaves by itself, so
+the start is the check. `REPOGRAPH_HOOK_SERVE=0` turns it off.
+
 ## G27 · `serve` cannot bind under a deep path, and a killed one leaves its socket behind
 
 **Raised (2026-09-07)** as the side findings of
@@ -1655,7 +1683,7 @@ answer different questions, and no row below moves a retrieval floor.
 | 4 | **G22** mapped weights under memory pressure | a shipped default whose price is +6% to +26% of wall exactly on the machines that most need the 1.14 GB it saves, and all three candidate policies are unmeasured |
 | 5 | ~~**G21** one platform measured, three reasoned~~ | ~~the largest unmeasured surface in the family, and the one that needs hardware this session did not have~~ — closed 2026-09-09 — the band was removed |
 | — | ~~**G27** `serve`'s socket path and its leftover~~ | closed 2026-09-09 — the socket falls back to `$TMPDIR/repograph-<hash>.sock` when `.repograph/serve.sock` will not fit in `sun_path`, proved on a 230-byte repository path that could not bind at all before; and a `SIGTERM` sets a flag the loop reads, so the exit is the identity-checked one every other exit takes |
-| 7 | **G26** `serve` holds its model while idle | 1.39 GB resident for as long as the process lives, where `watch` now holds 129.5 MB between refreshes; the shape of the fix is written and measured next door |
+| ~~7~~ | ~~**G26** `serve` holds its model while idle~~ | **closed 2026-09-09** — `--idle-model`, default 300 s: 908.5 MB → 28.8 MB on the first drop, 277.6 MB on the second, 0.771 s for the ask that pays the open |
 | 8 | **G25** the fp32 weights are the floor | the only lever that could move the floor under every memory number in both rounds, and finding out costs a full re-embed and the quantized model's own floors — no download at all on the default, whose int8 build is already cached, and 562 MB on the large one |
 | 9 | **G24** `--rerank-local` is 31.9 s and 3.1 GB | the heaviest reader by far, and what would actually move it is a pool depth, which belongs to G2 and not to this family |
 

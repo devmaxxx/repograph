@@ -17,7 +17,7 @@
  * REPOGRAPH_HOOK_DEBUG. Every call is --no-dense; every call but `changes` is --stale.
  */
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { tmpdir } from 'node:os';
@@ -27,7 +27,10 @@ const MAX_INJECTIONS = 12;   // 12 × ~107 tokens: a third of the CLAUDE.md sect
 const SEEDS = 3;
 const LINE_CUT = 160;
 const REMINDER_EVERY = 40;
-const TIMEOUT_MS = 5000;     // an ask is 0.14 s cold and 7 ms through a resident serve
+const TIMEOUT_MS = 5000;
+/** What the autostarted `serve` is told: leave after half an hour unasked, forget the model after five minutes. */
+const SERVE_IDLE = 1800;
+const SERVE_IDLE_MODEL = 300;   // measured on the 33.5k-row copy: 0.08 s resident, 0.77 s after a drop
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 
@@ -190,8 +193,27 @@ function brief(root) {
   return text ? text.trimEnd() : null;
 }
 
+/**
+ * Starts a resident `serve` for this repository, detached, and never waits on it. No probe first:
+ * a second `serve` refuses to bind while one answers and exits by itself, so the start *is* the
+ * check. What it buys is the difference between a gate that fires and one that times out — a fused
+ * ask is ~0.4 s against a cold process and ~80 ms through the socket, inside a 5 s hook budget on a
+ * machine that is also running a build. `--idle-model` is what keeps that cheap between questions.
+ */
+function autostartServe(root) {
+  if (process.env.REPOGRAPH_HOOK_SERVE === '0') return;
+  try {
+    spawn(binary(root), ['--repo', root, 'serve', '--idle', String(SERVE_IDLE), '--idle-model', String(SERVE_IDLE_MODEL)],
+      { detached: true, stdio: 'ignore', windowsHide: true }).unref();
+  } catch (e) { debug('serve', e.message); }
+}
+
 const handlers = {
-  SessionStart: (p, root) => (built(root) ? brief(root) : null),
+  SessionStart: (p, root) => {
+    if (!built(root)) return null;
+    autostartServe(root);
+    return brief(root);
+  },
   SubagentStart: (p, root) => (built(root) ? rule() : null),
   PreToolUse: (p, root, key) => {
     if (p.tool_name === 'Agent') {
