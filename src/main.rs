@@ -13,6 +13,7 @@ mod impact;
 mod index;
 mod legacy;
 mod model;
+mod prime;
 mod query;
 mod serve;
 mod store;
@@ -102,6 +103,12 @@ enum Cmd {
         #[arg(long)] stale: bool,
     },
     Verify,
+    /// What a coding agent should be told about this repository at the start of a session: node
+    /// counts, whether the questions are written, which embedder the vectors belong to, how many
+    /// families the documents define, and the five commands. Reads the store; never refreshes.
+    Prime {
+        #[arg(long)] json: bool,
+    },
     /// Which families the documents define and where, how many nodes each holds, and which
     /// id-like prefixes were left as text because no line defines them. Reads the built store
     /// and the documents; writes nothing.
@@ -634,6 +641,20 @@ fn main() -> anyhow::Result<()> {
             let (graph, _) = store::Store::new(&repo).load()?;
             print!("{}", query::verify(&graph));
             if graph.nodes.is_empty() { anyhow::bail!("graph is empty — run `repograph build`"); }
+            Ok(())
+        }
+        Cmd::Prime { json } => {
+            let store = store::Store::new(&repo);
+            let (graph, _) = store.load()?;
+            if graph.nodes.is_empty() { anyhow::bail!("graph is empty — run `repograph build`"); }
+            let questions = enrich::Questions::load(&store)?;
+            let families = families::graph_families(&graph).0.len();
+            let model = index::dense::DenseIndex::recorded_model(&store)?;
+            let b = prime::brief(&graph, &questions, families, model.as_deref());
+            match json {
+                true => println!("{}", b.json()),
+                false => print!("{}", b.text()),
+            }
             Ok(())
         }
         Cmd::Families { json } => families::run(&repo, &load_cfg()?, json),
