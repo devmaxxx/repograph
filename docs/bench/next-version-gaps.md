@@ -725,6 +725,34 @@ and the next campaign's rule names those totals among the counts that must hold.
 two readings above were taken case by case out of two `-full` files, not from anything `bench`
 reports.
 
+**Implemented 2026-09-09; the baseline is the next run's.** `Summary` carries `anchors` beside
+`by_kind`, filled by one `record(kind, hit, (reached, want))` in the per-case loop — the same
+`(reached, want)` the case line has always printed and nothing has ever read — and every kind on the
+summary line now reads `multi 10/12 (28/34 anchors)`. `passes()` is untouched and no floor moved:
+this ships as a column, which is what ADR-001 asks of a number nobody has a baseline for yet.
+`bench --repeat N` runs the suite N times and prints a median beneath the runs, every run still
+judged on its own floors — a suite that passes on average is one whose exit code depends on which
+run a reader looked at. That half is G23's first lever; the pinned-index and quiet-machine halves
+are not written.
+
+**The baseline, read on the pinned fixture at `aea8416` (2026-09-09).** Every recorded count and
+p90 is identical to the record, which is what makes these four lines a measurement and not a change:
+
+| suite | arm | counts | anchors |
+| --- | --- | --- | --- |
+| recorded | lexical | keyword 39/40, paraphrase 15/30, code 12/12, p90 215 | 39/40, 15/30, 12/12 |
+| recorded | dense | keyword 40/40, paraphrase 15/30, code 12/12, p90 221 | 40/40, 15/30, 12/12 |
+| developer | lexical | long 11/15, cross 13/15, multi 9/12, where 0/9, rule 5/9, p90 239 | 11/15, **13/30**, **16/39**, 0/13, 5/9 |
+| developer | dense | long 10/15, cross 13/15, multi 10/12, where 0/9, rule 5/9, p90 239 | 10/15, **13/30**, **13/39**, 0/13, 5/9 |
+
+The recorded suite's cases are single-anchor, so its two columns are the same number twice and
+always will be. The developer suite is where the instrument was blind, and the first reading says
+how blind: `cross` reads 13 of 15 cases and **13 of 30 anchors**, `multi` 9 or 10 of 12 cases and
+**16 or 13 of 39 anchors**. A lever that trades an answer's completeness for its coverage has been
+free to move those numbers in either direction under every rule any campaign has written. Note the
+dense arm reaching *more* `multi` cases and *fewer* of their anchors than the lexical one — a trade
+no count in this file has ever been able to state.
+
 ## G16 · `enrich` reported 167 batches, 0 failed, and no questions
 
 **Raised (2026-09-06)** by rule G's first attempt, which spent nothing and was caught by a person
@@ -940,6 +968,31 @@ recorded numbers, not a run.
 
 **Gate.** On the same whole-store rebuild, every interval under 60 s including the first, with the
 run's own readings unmoved — 1,930 s wall, 293% peak CPU, 2.15 GB.
+
+**Measured 2026-09-09, and the premise is gone.** A whole-store embed on a copy of the pinned
+fixture (33,525 rows, 384-d, the small model) reads **184.7 s** of sync, 680.9 s of CPU and 1.74 GB
+of max RSS — not 1,930 s. The band is why: `76f1049` removed it and every writer runs in the normal
+one, so the 102.4 s first line and the 96.7 s tails this gap was raised on were properties of a
+scheduler setting that no longer exists. The control makes it plain: interpolating the recorded run
+back onto a fixed 1,024-row cadence, the old chunking **would have printed its first line at 9.4 s
+and its widest interval at 9.4 s** on today's binary. The bar was already met.
+
+**Closed 2026-09-09, and the change kept anyway, for a reason the numbers give.** `SYNC_CHUNK` is
+now a `ChunkBudget` — 600,000 characters, 1,024 rows, ramped in from a sixteenth so the first
+checkpoint does not wait for a full chunk on top of the run's start-up — and `embed_all` prints the
+model open before the first forward. Measured cadence: **36 checkpoints, first at 0.5 s, every
+interval between 0.5 s and 8.3 s.** What keeps this from being a change for nothing is the tail and
+the other model: the last chunks still run 8.3 s against a 5.1 s mean, because the graph's
+iteration order puts the long passages last, and `e5-large` is about nine times this wall
+([ADR-002](../adr/ADR-002-two-defaults-multiplied.md)), which puts those same tail chunks at
+roughly **75 s — over the bar** under a fixed row count and inside it under a character budget.
+That multiplication is arithmetic on two recorded numbers, not a run; the large-model cadence has
+not been measured.
+
+**One thing this run cannot be read for.** Its wall clock says 6,332 s real against 184.7 s of
+sync, because the laptop slept in the middle of it. The intervals above are process time,
+reconstructed from each checkpoint's own `rows` and `rows/s`, which a sleeping machine does not
+advance. G23's point, on the run that closed G19.
 
 ## G20 · A whole-store rebuild in the background band has no wall number — closed 2026-09-09, moot
 

@@ -121,7 +121,16 @@ enum Cmd {
     /// without its vectors is re-embedded from its graph and questions alone, which is how a
     /// store is measured under another `REPOGRAPH_EMBED_MODEL`.
     Embed,
-    Bench { #[arg(long)] cases: Option<PathBuf>, #[arg(long)] rerank: bool, #[arg(long, conflicts_with = "rerank")] rerank_local: bool, #[arg(long, default_value_t = rerank::DEPTH)] depth: usize },
+    Bench {
+        #[arg(long)] cases: Option<PathBuf>,
+        #[arg(long)] rerank: bool,
+        #[arg(long, conflicts_with = "rerank")] rerank_local: bool,
+        #[arg(long, default_value_t = rerank::DEPTH)] depth: usize,
+        /// Runs the suite this many times and prints the median beneath the runs. One run reads
+        /// exactly as it always has; a bar judged against a single reading is measuring the
+        /// machine as much as the change.
+        #[arg(long, default_value_t = 1)] repeat: usize,
+    },
     /// Writes every retriever's ranked list for each question in a JSONL file
     /// (`{"q","expect","kind"}` per line) so the mathematics can be done offline.
     Dump {
@@ -411,10 +420,15 @@ pub(crate) fn cap_pools(threads: usize) {
 /// reader is told where it is; the checkpoint itself is an append of the chunk's bytes plus the
 /// metadata rewrite, so paying it thirty-odd times over a rebuild is not measurable against the
 /// forwards.
-const SYNC_CHUNK: usize = 1024;
+/// A checkpoint every ~600k characters, ramped in so the first line does not wait for the run's
+/// fixed start-up as well: the whole-store rebuild used to print its first at 102.4 s against a
+/// 60 s bar, and its last chunks 96.7 s apart, because 1,024 rows is a count and not an amount of
+/// work.
+const SYNC_CHUNK: index::dense::ChunkBudget = index::dense::ChunkBudget { chars: 600_000, max_rows: 1024, ramp: 16 };
 
 fn embed_all(repo: &std::path::Path, no_dense: bool, cfg: &config::Config) -> anyhow::Result<()> {
     let model = index::embed::resolve(None, &cfg.embed_model);
+    let open = std::time::Instant::now();
     let Some(mut emb) = ask::open_embedder(no_dense, &model, index::embed::threads(cfg.resources), index::embed::Weights::Mapped) else { return Ok(()) };
     let store = store::Store::new(repo);
     let (graph, _) = store.load()?;
@@ -422,6 +436,10 @@ fn embed_all(repo: &std::path::Path, no_dense: bool, cfg: &config::Config) -> an
     let mut dense = index::dense::DenseIndex::load(&store)?;
     let t = std::time::Instant::now();
     dense.written_by(&model, emb.dim()?);
+    // The first chunk carries the run's fixed start-up as well as its own work — 2.24 GB of
+    // weights paged in as the first forwards touch them — so without this line the first thing a
+    // person sees is both, and the 60 s bar is missed before a row is embedded.
+    eprintln!("dense: model open in {:.1}s", open.elapsed().as_secs_f32());
     let n = dense.sync_chunked(&graph, &questions, &mut |texts| emb.embed(texts), SYNC_CHUNK, &mut |idx, p| {
         idx.save(&store)?;
         let rate = p.done as f32 / t.elapsed().as_secs_f32().max(f32::EPSILON);
@@ -608,8 +626,24 @@ fn main() -> anyhow::Result<()> {
             Ok(())
         }
         Cmd::Families { json } => families::run(&repo, &load_cfg()?, json),
-        Cmd::Bench { cases, rerank, rerank_local, depth } => {
-            if bench::run(&repo, cases.as_deref(), cli.no_dense, rerank, rerank_local, depth)? { Ok(()) } else { anyhow::bail!("bench floors not met") }
+        Cmd::Bench { cases, rerank, rerank_local, depth, repeat } => {
+            let mut summaries = Vec::new();
+            let mut met = true;
+            for _ in 0..repeat.max(1) {
+                let (ok, summary) = bench::run(&repo, cases.as_deref(), cli.no_dense, rerank, rerank_local, depth)?;
+                met &= ok;
+                summaries.push(summary);
+            }
+            if summaries.len() > 1 {
+                let m = bench::median(&summaries);
+                let counts = m.by_kind.iter()
+                    .map(|(k, (h, t))| { let (r, w) = m.anchors(k); format!("{k} {h}/{t} ({r}/{w} anchors)") })
+                    .collect::<Vec<_>>().join("  ");
+                println!("\nmedian of {}  {counts}  p90 {} tok", summaries.len(), m.p90_tokens);
+            }
+            // Every run has to meet the floors, not the median of them: a suite that passes on
+            // average is one whose exit code depends on which run a reader looked at.
+            if met { Ok(()) } else { anyhow::bail!("bench floors not met") }
         }
         Cmd::Dump { queries, out, depth } => dump::run(&repo, &queries, &out, depth, cli.no_dense),
         Cmd::ImportLegacy { graph_json } => {

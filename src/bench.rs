@@ -36,13 +36,20 @@ pub struct Case { pub kind: String, pub q: String, pub expect: Expect }
 /// Hits per kind, in the order the case file introduces the kinds, so the summary line reads
 /// in the order a person wrote the file.
 #[derive(Clone, Debug, Default, PartialEq)]
-pub struct Summary { pub by_kind: Vec<(String, (usize, usize))>, pub p90_tokens: usize }
+pub struct Summary {
+    pub by_kind: Vec<(String, (usize, usize))>,
+    /// Anchors reached over anchors wanted, per kind — printed beside the counts and graded by
+    /// nothing. A floor here is for the first reading that has a baseline to set one from; ADR-001
+    /// is why this ships as a column and not as a bar.
+    pub anchors: Vec<(String, (usize, usize))>,
+    pub p90_tokens: usize,
+}
 
 impl Summary {
     #[cfg(test)]
     pub fn recorded(keyword: (usize, usize), paraphrase: (usize, usize), code: (usize, usize), p90_tokens: usize) -> Summary {
         let by_kind = vec![("keyword".to_string(), keyword), ("paraphrase".to_string(), paraphrase), ("code".to_string(), code)];
-        Summary { by_kind, p90_tokens }
+        Summary { by_kind, anchors: Vec::new(), p90_tokens }
     }
 
     /// `(hits, cases)` for one kind; a kind the file never named reads `(0, 0)`.
@@ -60,6 +67,30 @@ impl Summary {
         if let Some(i) = self.by_kind.iter().position(|(k, _)| k == kind) { return &mut self.by_kind[i].1; }
         self.by_kind.push((kind.to_string(), (0, 0)));
         &mut self.by_kind.last_mut().unwrap().1
+    }
+
+    /// One case's verdict and its completeness. The two are counted apart on purpose: a case that
+    /// keeps its verdict and loses two of its three anchors moves nothing a count of cases can
+    /// see, and one did — `multi` read `HIT 3/3` before a change every clause of its rule called
+    /// identical and `HIT 1/3` after, in both arms.
+    fn record(&mut self, kind: &str, hit: bool, anchors: (usize, usize)) {
+        let slot = self.slot(kind);
+        slot.1 += 1;
+        if hit { slot.0 += 1; }
+        let a = self.anchor_slot(kind);
+        a.0 += anchors.0;
+        a.1 += anchors.1;
+    }
+
+    /// `(reached, wanted)` anchors for one kind, summed over its cases.
+    pub fn anchors(&self, kind: &str) -> (usize, usize) {
+        self.anchors.iter().find(|(k, _)| k == kind).map(|(_, c)| *c).unwrap_or((0, 0))
+    }
+
+    fn anchor_slot(&mut self, kind: &str) -> &mut (usize, usize) {
+        if let Some(i) = self.anchors.iter().position(|(k, _)| k == kind) { return &mut self.anchors[i].1; }
+        self.anchors.push((kind.to_string(), (0, 0)));
+        &mut self.anchors.last_mut().unwrap().1
     }
 }
 
@@ -220,7 +251,7 @@ fn check_anchors(cases_path: &str, cases: &[Case], graph: &Graph) -> Result<()> 
     Ok(())
 }
 
-pub fn run(repo: &Path, cases: Option<&Path>, no_dense: bool, rerank: bool, rerank_local: bool, depth: usize) -> Result<bool> {
+pub fn run(repo: &Path, cases: Option<&Path>, no_dense: bool, rerank: bool, rerank_local: bool, depth: usize) -> Result<(bool, Summary)> {
     // Resolved before `Config::load` so the override repo's own `repograph.toml` — not the
     // `--repo` one — is the file this run reads.
     let repo = std::env::var("REPOGRAPH_BENCH_REPO").map(std::path::PathBuf::from).unwrap_or(repo.to_path_buf());
@@ -334,25 +365,60 @@ pub fn run(repo: &Path, cases: Option<&Path>, no_dense: bool, rerank: bool, rera
         tokens.push(tok);
         let (reached, want) = found(case, &answer, &is_id);
         let ok = hit(case, &answer, &is_id);
-        let slot = summary.slot(&case.kind);
-        slot.1 += 1;
-        if ok { slot.0 += 1; }
+        summary.record(&case.kind, ok, (reached, want));
         println!("{:<10} {:<12} {} {reached}/{want} {:>4} tok  {}", case.kind, case.expect.key(), if ok { "HIT " } else { "miss" }, tok, case.q);
     }
     tokens.sort_unstable();
     summary.p90_tokens = tokens.get(tokens.len() * 9 / 10).copied().unwrap_or(0);
-    let counts = summary.by_kind.iter().map(|(k, (h, t))| format!("{k} {h}/{t}")).collect::<Vec<_>>().join("  ");
+    let counts = summary.by_kind.iter()
+        .map(|(k, (h, t))| { let (r, w) = summary.anchors(k); format!("{k} {h}/{t} ({r}/{w} anchors)") })
+        .collect::<Vec<_>>().join("  ");
     println!("\n{counts}  p90 {} tok  dense={dense_on}  enriched={enriched} ({covered}/{eligible} nodes) model={model_field} families={}{code_note}{}  suite={suite} gated={gated}",
         summary.p90_tokens, family_count, match (rerank_local, rerank.is_some()) {
             (true, _) => format!(" rerank_local=true depth={depth}"),
             (false, true) => format!(" rerank=true depth={depth}"),
             _ => String::new(),
         });
-    Ok(!gated || passes(&summary, dense_on, enriched, floors))
+    Ok((!gated || passes(&summary, dense_on, enriched, floors), summary))
+}
+
+/// The median of `n` runs of the same suite, per kind and for the token p90. G23: the reader bars
+/// this suite is judged against are tighter than its own repeatability — max RSS bounced 1.36 to
+/// 1.56 GB on *both* binaries of a control — so a reading worth comparing is a median of several,
+/// not a single run.
+pub fn median(runs: &[Summary]) -> Summary {
+    let mid = |mut v: Vec<usize>| -> usize { v.sort_unstable(); v.get(v.len() / 2).copied().unwrap_or(0) };
+    let mut out = Summary { p90_tokens: mid(runs.iter().map(|r| r.p90_tokens).collect()), ..Summary::default() };
+    for (kind, _) in runs.first().map(|r| r.by_kind.clone()).unwrap_or_default() {
+        *out.slot(&kind) = (
+            mid(runs.iter().map(|r| r.kind(&kind).0).collect()),
+            mid(runs.iter().map(|r| r.kind(&kind).1).collect()),
+        );
+        *out.anchor_slot(&kind) = (
+            mid(runs.iter().map(|r| r.anchors(&kind).0).collect()),
+            mid(runs.iter().map(|r| r.anchors(&kind).1).collect()),
+        );
+    }
+    out
 }
 
 #[cfg(test)]
 mod tests {
+
+    /// A case that keeps its verdict and loses two of its three anchors is what the summary was
+    /// blind to. The counts and the anchors are two different readings of the same run, and only
+    /// the second one moves here.
+    #[test]
+    fn the_summary_carries_anchors_reached_over_wanted() {
+        let mut s = Summary::default();
+        s.record("multi", true, (3, 3));
+        s.record("multi", true, (1, 3));
+        s.record("keyword", false, (0, 1));
+        assert_eq!(s.kind("multi"), (2, 2), "both cases are hits");
+        assert_eq!(s.anchors("multi"), (4, 6), "and four of six anchors were reached");
+        assert_eq!(s.anchors("keyword"), (0, 1));
+        assert_eq!(s.anchors("nothing-of-the-sort"), (0, 0));
+    }
     use super::*;
     use crate::query::Hit;
 
