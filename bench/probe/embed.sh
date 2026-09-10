@@ -131,8 +131,13 @@ done
   exit $?
 }
 : >"$L/$NAME.samples"
+# The row `top` printed for this pid, the way measure.sh takes it and for the reason stated there:
+# the loop's last pass straddles the exit, so `top`'s last line is the column header and not a
+# reading. Here it is what makes the empty-file refusal below reachable at all — a binary that dies
+# inside two seconds would otherwise leave one header line and be refused on its peak instead.
 while kill -0 "$PID" 2>/dev/null; do
-  top -l 2 -s 1 -pid "$PID" -stats pid,cpu,mem,th 2>/dev/null | tail -1 >>"$L/$NAME.samples"
+  top -l 2 -s 1 -pid "$PID" -stats pid,cpu,mem,th 2>/dev/null |
+    awk -v p="$PID" '$1 == p {l=$0} END{if (l != "") print l}' >>"$L/$NAME.samples"
 done
 wait "$WRAP"; RC=$?
 sleep 0.5

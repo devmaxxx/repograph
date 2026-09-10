@@ -13,6 +13,12 @@ H="$ROOT/bench/history"
 . "$HERE/embedder.sh" || exit 2
 embedder_declared || exit 2
 mkdir -p "$L"
+# A row that never reached the history is the one failure this script cannot shrug off: `bench`'s
+# own non-zero status is a reading and is recorded anyway, but a `track.py` that refused — a
+# transcript with no summary line, because the binary died before it printed one — leaves nothing
+# behind at all. Without this the script's status was whatever the last `record` happened to
+# return, so three lost arms behind one that landed read as a clean sweep.
+missed=0
 for suite in rec dev; do
   for arm in dense lexical; do
     nd=""; [ "$arm" = lexical ] && nd="--no-dense"
@@ -27,7 +33,9 @@ for suite in rec dev; do
     # Recorded whatever the status: `bench` exits non-zero when a floor fails, and a failed floor
     # is a reading the history exists to hold. G32's rebuilt arms are expected to fail one, and
     # its gate names them as recorded arms — an arm dropped for exiting non-zero is a lost row.
-    [ "$rc" = "0" ] || echo "arms: $suite/$arm exited $rc — recorded anyway, see $out" >&2
-    python3 "$H/track.py" record "$out" --corpus beauty-crm --corpus-path "$R" --tag "$T" --note "next-version-levers $T"
+    [ "$rc" = "0" ] || echo "arms: $suite/$arm exited $rc — recording it anyway, see $out" >&2
+    python3 "$H/track.py" record "$out" --corpus beauty-crm --corpus-path "$R" --tag "$T" --note "next-version-levers $T" ||
+      { echo "arms: $suite/$arm did NOT reach the history — track.py refused $out" >&2; missed=1; }
   done
 done
+exit "$missed"

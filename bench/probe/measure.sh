@@ -13,8 +13,15 @@ sleep 0.3
 PID=$(pgrep -P $WRAP | head -1)
 [ -z "$PID" ] && PID=$WRAP
 : >"$LOG/$NAME.samples"
+# The row `top` printed for this pid, not whatever its last line happened to be. The loop's final
+# pass always straddles the process's exit — `kill -0` succeeded a moment before — so `top`'s
+# second frame finds nothing to print and its last line is the column header (`PID %CPU MEM #TH`).
+# Appended, that header counts as a sample: every row's `samples=` reads one higher than the number
+# of CPU readings behind its peak, and a binary that died right after `pgrep` caught it leaves a
+# file of one header rather than the empty one `embed.sh` refuses on.
 while kill -0 "$PID" 2>/dev/null; do
-  top -l 2 -s 1 -pid "$PID" -stats pid,cpu,mem,th 2>/dev/null | tail -1 >>"$LOG/$NAME.samples"
+  top -l 2 -s 1 -pid "$PID" -stats pid,cpu,mem,th 2>/dev/null |
+    awk -v p="$PID" '$1 == p {l=$0} END{if (l != "") print l}' >>"$LOG/$NAME.samples"
 done
 wait $WRAP; RC=$?
 # A command that failed still leaves `time` a full report, so its row would otherwise enter the
