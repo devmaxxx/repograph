@@ -34,6 +34,23 @@ cause this replaces is the fixture's own index growing 33,526 → 33,554 rows mi
 2026-09-07 because `watch` and `update` ran against it. The fixture is never written now — it is
 locked, and the rule allows it readers only — and no row of the suite can write anywhere.
 
+**Correction, 2026-09-10 — the script, before any number.** The Gate above states the precondition
+as no `cargo`, `rustc`, `node` or another `repograph` running. `bench/probe/quiet.sh` as first
+committed (`a53e50c`) greps `cargo|rustc|repograph` and leaves `node` out deliberately, its comment
+reasoning that the agent harness which launched it is itself a `node` process. The gate is right
+and the script was wrong: a `node` burning a core is exactly the pollution this row excludes, and a
+harness that exempts its own noise measures its own convenience. So the script was fixed and the
+clause was left exactly as committed — `quiet.sh` now counts `node` like the others and exempts
+only the PIDs of its own ancestor chain (`$$` upwards through `PPID`), which the `load1` clause
+already refuses on its own when that harness is busy; a sibling `node`, another session's harness
+or a dev server all still refuse. `bench/probe/test_quiet.py` holds the two cases that matter — a
+`node` in the ancestor chain does not refuse, one outside it does — and `bench/probe/README.md`,
+which had documented the exemption as intended behaviour, is corrected. This correction was taken
+before the reading it governs: §1's **Reading.** is still empty and this row has never been
+measured. That is the honest half of the distinction this branch keeps — a clause or a harness
+corrected *after* its number is read is the thing the branch exists to prevent, and neither this
+section nor §9 has one of those.
+
 **Reading.**
 
 ## 2 · G15 — the anchor line in the history

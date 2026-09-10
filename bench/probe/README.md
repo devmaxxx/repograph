@@ -9,9 +9,14 @@ Two directories, both locked: `~/bench/beauty-crm-502e8a6d`, the pinned fixture,
 `~/bench/beauty-crm-test`, the one writable worktree, where every writer and every reader row runs.
 
 - `quiet.sh` — the precondition every row is read under: ≥ 85% idle, 1-minute load < 3.0, AC power,
-  no `cargo`/`rustc`/other `repograph` running — `node` is deliberately not in the pattern, because
-  the agent harness that launches these scripts is one. `readers.sh` and `embed.sh`, the two that
-  time anything, run it first and refuse; `reset.sh` and `arms.sh` measure no wall clock and do not.
+  no `cargo`/`rustc`/`node`/other `repograph` running. The one exemption is this script's own
+  ancestor chain (`$$` upwards through `PPID`): the harness that launched the probe is unavoidable
+  and the `load1` clause refuses it on its own when it is busy, while any other `node` — a sibling
+  harness, another session's, a dev server — is a core burnt under the row, so it refuses. Sourcing
+  the script defines `ancestor_pids` and `busy_lines` and runs nothing, which is how
+  `test_quiet.py` reads the walk and the filter on a machine that is not quiet. `readers.sh` and
+  `embed.sh`, the two that time anything, run it first and refuse; `reset.sh` and `arms.sh` measure
+  no wall clock and do not.
 - `reset.sh` — the writable worktree put back to the fixture's state: tree reverted and cleaned,
   store copied in, `repograph.toml` written, stamps settled by one `--no-dense update`. Refuses any
   directory that is not the locked worktree at `502e8a6d`. Before every arm, reader suites included.
@@ -32,4 +37,5 @@ this machine (`docs/bench/2026-09-10-next-version-levers-results.md` §1 is the 
 A whole-store embed is judged as a median of three against a control of three. macOS only:
 `/usr/bin/time -l`, `top -l`, `pmset` and `caffeinate` are Darwin's, and CI runs none of the shell
 here — `python3 -m unittest discover -s bench/probe` is what a change to this directory is gated on,
-and its `reset.sh` tests skip themselves off POSIX.
+and its `reset.sh` and `quiet.sh` tests skip themselves off POSIX, the latter also where there is
+no `node` to be either the harness or the noise.
