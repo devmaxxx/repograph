@@ -5,7 +5,43 @@
 # rate the line itself quotes. `caffeinate -di` keeps the machine and the display awake: the run
 # that closed G19 lost its intervals to a laptop that slept, and `judge.py cadence` refuses a
 # transcript with no `start` stamp.
+#
+# Exit 3 is the one refusal that leaves the store mid-write: the vectors were already removed and
+# the embed was cut off partway through writing them back. Every other refusal exits 2 and leaves
+# the store either untouched or whole.
 set -u
+
+# A wrapper and the two levels under it, deepest first: `caffeinate -di cmd` exec's `time` in
+# place today, and a future one that forks instead puts the binary a level deeper.
+process_tree() {
+  local c g
+  for c in $(pgrep -P "$1" 2>/dev/null); do
+    for g in $(pgrep -P "$c" 2>/dev/null); do printf '%s\n' "$g"; done
+    printf '%s\n' "$c"
+  done
+  printf '%s\n' "$1"
+}
+
+# SIGKILL behind SIGTERM, and neither of them optional: a refusal that only signalled the wrapper
+# would leave the binary embedding under a script that has stopped watching it, and one that
+# waited on a process which ignored the first signal would sit there for the whole 1,930 s embed —
+# which is the reading being refused, taken anyway, with nobody reading it.
+kill_tree() {
+  local p pids
+  pids=$(process_tree "$1")
+  for p in $pids; do kill "$p" 2>/dev/null; done
+  sleep 0.5
+  for p in $pids; do kill -9 "$p" 2>/dev/null; done
+}
+
+# The refusal that has to be read before the store is: this script removes `vectors.f32` before it
+# starts, so an embed killed partway through leaves neither the old vectors nor a whole set of new
+# ones — and the next thing anyone does with a store is trust it.
+refuse_partial_store() {
+  echo "refusing: $1" >&2
+  echo "  the embed was killed mid-run, so $2/.repograph/ holds a partial set of vectors and no whole one — reset.sh before anything reads this store" >&2
+  return 3
+}
 
 # The summary row, or a refusal instead of one. `judge.py compare` reads a `peak_cpu` of 0 as
 # "never sampled": it carries `None` and leaves that column unjudged, so §9's clause about peak CPU
@@ -64,7 +100,12 @@ for _ in 1 2 3 4 5 6 7 8 9 10; do
   kill -0 "$WRAP" 2>/dev/null || break
   sleep 0.5
 done
-[ -n "$PID" ] || { echo "refusing: no $BIN_NAME under $WRAP to sample — the peak CPU column would read 0, which compare leaves unjudged" >&2; wait "$WRAP"; exit 2; }
+[ -n "$PID" ] || {
+  kill_tree "$WRAP"
+  wait "$WRAP" 2>/dev/null
+  refuse_partial_store "no $BIN_NAME under $WRAP to sample — the peak CPU column would read 0, which compare leaves unjudged" "$F"
+  exit $?
+}
 : >"$L/$NAME.samples"
 while kill -0 "$PID" 2>/dev/null; do
   top -l 2 -s 1 -pid "$PID" -stats pid,cpu,mem,th 2>/dev/null | tail -1 >>"$L/$NAME.samples"

@@ -1,6 +1,7 @@
 import os
 import subprocess
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
@@ -59,6 +60,42 @@ class Row(unittest.TestCase):
         r = self.row(SAMPLES, rc="2")
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertIn("rc=2", r.stdout)
+
+
+@unittest.skipUnless(os.name == "posix", "bash, pgrep and POSIX signals: the macOS kit's own platform")
+class SamplerRefusal(unittest.TestCase):
+    """What the refusal does to the run it refuses. The tree here is two sleeps rather than an
+    embed — the assertion is that everything under the wrapper is gone and that the refusal did
+    not sit and wait for it, which is what the sleeps can say and a real embed could not say in
+    under half an hour."""
+
+    def alive(self, pid):
+        return subprocess.run(["kill", "-0", str(pid)], capture_output=True).returncode == 0
+
+    def test_the_wrapper_and_everything_under_it_are_killed_not_waited_out(self):
+        wrapper = subprocess.Popen(["bash", "-c", "sleep 60 & sleep 60"])
+        self.addCleanup(wrapper.wait)
+        self.addCleanup(wrapper.kill)
+        for _ in range(50):
+            under = subprocess.run(["pgrep", "-P", str(wrapper.pid)], capture_output=True, text=True).stdout.split()
+            if len(under) == 2:
+                break
+            time.sleep(0.1)
+        self.assertEqual(len(under), 2, "the tree to kill never came up")
+        started = time.monotonic()
+        r = sourced(f"kill_tree {wrapper.pid}")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertLess(time.monotonic() - started, 30.0)
+        wrapper.wait(timeout=10)
+        self.assertEqual([pid for pid in under if self.alive(pid)], [])
+
+    def test_the_refusal_says_the_store_it_left_behind_is_half_written(self):
+        r = sourced("refuse_partial_store 'no repograph to sample' /tmp/beauty-crm-test")
+        self.assertEqual(r.returncode, 3)
+        self.assertIn("no repograph to sample", r.stderr)
+        self.assertIn("/tmp/beauty-crm-test/.repograph/", r.stderr)
+        self.assertIn("partial", r.stderr)
+        self.assertIn("reset.sh", r.stderr)
 
 
 if __name__ == "__main__":
