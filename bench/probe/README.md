@@ -53,8 +53,12 @@ as the sampler under it: `measure.sh` samples with `top -l 2 -s 1`, so a command
 inside about two seconds is never sampled and reports `peak_cpu = 0`. That is every reader row,
 and it is not the whole-store embed of §9 (≈ 1,930 s, 293% recorded), which is the row the column
 was added for. A row whose *reference* read 0 prints `n/a` and is left unjudged on that column
-rather than passing on a zero that means "never sampled". Two verdicts keep the columns their own
-committed clauses name, and adding this one widened neither: `judge.py control` judges wall and max
+rather than passing on a zero that means "never sampled". The one row the column judges never
+carries that zero into the table at all: `embed.sh` counts the samples its peak was taken over,
+puts the count on the row as `samples=` beside `measure.sh`'s, and refuses to print a row where the
+sampler read nothing or read a peak of zero — refusing when no PID was ever found guards one door
+of two, and the other is every `top` failing or the process ending between two checks. Two verdicts
+keep the columns their own committed clauses name, and adding this one widened neither: `judge.py control` judges wall and max
 RSS only, which is §1's Gate as written, and a reader row read under §1's bars is judged by the
 wall and RSS columns — its peak CPU is printed beside them and is not part of that clause. macOS only:
 `/usr/bin/time -l`, `top -l`, `pmset` and `caffeinate` are Darwin's, and CI runs none of the shell

@@ -6,6 +6,27 @@
 # that closed G19 lost its intervals to a laptop that slept, and `judge.py cadence` refuses a
 # transcript with no `start` stamp.
 set -u
+
+# The summary row, or a refusal instead of one. `judge.py compare` reads a `peak_cpu` of 0 as
+# "never sampled": it carries `None` and leaves that column unjudged, so §9's clause about peak CPU
+# would be satisfied by a row with nothing behind it at all. The reader rows of `measure.sh` read 0
+# honestly — they are over before `top -l 2` reports twice — which is why this refusal belongs here,
+# in the script that measures the one row that column judges, and not in `judge.py`. The count of
+# samples the peak was taken over travels on the row under the name `measure.sh` gives it, so a
+# reader sees how many readings are behind the number and `judge.py` still parses one shape.
+summary_row() {
+  local name=$1 wall=$2 usr=$3 rss=$4 rc=$5 file=$6 n peak
+  n=$(awk 'END{print NR+0}' "$file")
+  peak=$(awk '{gsub("%","",$2); if ($2+0>m) m=$2+0} END{print m+0}' "$file")
+  [ "$n" != "0" ] || { echo "refusing: no samples in $file — the peak CPU column would read 0, which compare leaves unjudged" >&2; return 2; }
+  [ "$peak" != "0" ] || { echo "refusing: $n samples in $file and a peak of 0% — a whole-store embed that burns no CPU is a sampler that read the wrong process" >&2; return 2; }
+  printf '%s  wall=%ss user=%ss maxrss=%sGB peak_cpu=%s%% samples=%s rc=%s\n' "$name" "$wall" "$usr" "$rss" "$peak" "$n" "$rc"
+}
+
+# Sourcing this file defines the function above and runs nothing, so `test_embed.py` reads the
+# row's shape and both refusals without an embed under them.
+if [ "${BASH_SOURCE[0]}" != "$0" ]; then return 0; fi
+
 NAME=$1; B=$2; F=$3; L=$4
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # The one script here that deletes store files, so it refuses the pinned fixture by path: nothing
@@ -50,7 +71,6 @@ while kill -0 "$PID" 2>/dev/null; do
 done
 wait "$WRAP"; RC=$?
 sleep 0.5
-PEAK_CPU=$(awk '{gsub("%","",$2); if ($2+0>m) m=$2+0} END{print m+0}' "$L/$NAME.samples")
 # The embed's own stderr shares this file with `time`'s report — that is the point of the stamps —
 # and an unanchored `/real/` prints one number per matching line, which would split the summary
 # line `judge.py medians` parses. Each field is read off the report's whole shape, one stamp wider
@@ -65,7 +85,8 @@ USR=$(printf '%s\n' "$REPORT" | awk '{print $4}')
 # measured, much faster whole-store embed. The row carries its status, `judge.py medians` refuses
 # a row that measured a failure, and the script exits with it.
 [ "$RC" = "0" ] || echo "embed: $NAME exited $RC — this row measured a failure" >&2
-echo "$NAME  wall=${WALL}s user=${USR}s maxrss=${RSS}GB peak_cpu=${PEAK_CPU}% rc=${RC}" | tee -a "$L/summary.txt"
+ROW=$(summary_row "$NAME" "$WALL" "$USR" "$RSS" "$RC" "$L/$NAME.samples") || exit 2
+printf '%s\n' "$ROW" | tee -a "$L/summary.txt"
 # Not a pipeline: bash 3.2 here has no pipefail, and `| tee` hands back tee's status — the
 # cadence verdict would be swallowed and this script would exit 0 on an OUTSIDE reading, which is
 # the trap readers.sh names on its own quiet gate.
