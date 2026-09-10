@@ -7,6 +7,7 @@ whole of the growth — but general: `nodes` and `edges` are compared field by f
 counted, and the sizes are reported as a ratio.
 """
 
+import collections
 import json
 import os
 import sys
@@ -21,7 +22,10 @@ def diff(a_path, b_path):
         a = json.load(f)
     with open(b_path) as f:
         b = json.load(f)
-    ea, eb = {edge_key(e) for e in a["edges"]}, {edge_key(e) for e in b["edges"]}
+    # Counted, not a set: two identical edges are two edges to every reader, and a set would
+    # report `edges: same` over a list that grew a duplicate.
+    ea = collections.Counter(edge_key(e) for e in a["edges"])
+    eb = collections.Counter(edge_key(e) for e in b["edges"])
     changed = []
     for nid in sorted(set(a["nodes"]) & set(b["nodes"])):
         na, nb = a["nodes"][nid], b["nodes"][nid]
@@ -34,8 +38,8 @@ def diff(a_path, b_path):
         "nodes_only_b": sorted(set(b["nodes"]) - set(a["nodes"])),
         "nodes_changed": changed,
         "edges_same": ea == eb,
-        "edges_only_a": sorted(ea - eb),
-        "edges_only_b": sorted(eb - ea),
+        "edges_only_a": sorted((ea - eb).elements()),
+        "edges_only_b": sorted((eb - ea).elements()),
         "pending": len(b.get("pending", [])),
         "pending_a": len(a.get("pending", [])),
         "bytes_ratio": os.path.getsize(b_path) / os.path.getsize(a_path),

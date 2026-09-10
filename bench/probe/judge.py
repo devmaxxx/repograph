@@ -40,7 +40,18 @@ def medians(lines):
         m = RUN.match(line.strip())
         if not m:
             continue
-        runs.setdefault(m.group(1), []).append(fields(m.group(3)))
+        f = fields(m.group(3))
+        # `measure.sh` writes `wall=s` / `maxrss=GB` when its `time` transcript held no `real`
+        # line — the command died before it ran. Naming the row beats a bare KeyError, and beats
+        # dropping it: a row silently missing from one side is what `control` exists to catch.
+        missing = [k for k in ("wall", "maxrss", "peak_cpu") if k not in f]
+        if missing:
+            raise SystemExit(f"{m.group(0)!r}: no {', '.join(missing)} — the run did not complete")
+        # `rc` is measure.sh's exit status for the measured command. A failed command still gets a
+        # full `time` report, so its row looks like a fast one; it is refused rather than averaged.
+        if f.get("rc", 0.0) != 0.0:
+            raise SystemExit(f"{m.group(1)}: a run exited {int(f['rc'])} — that row measured a failure, not a reader")
+        runs.setdefault(m.group(1), []).append(f)
     out = {}
     for row, rs in runs.items():
         out[row] = {
@@ -76,6 +87,9 @@ def spread(a, b):
 def control(a, b, wall_bar=WALL_BAR, rss_bar=RSS_BAR):
     """The same binary twice: every row's spread against the bars it will later judge with."""
     out = []
+    for row in b:
+        if row not in a:
+            raise SystemExit(f"{row}: present in one control run and not the other — the suites differ")
     for row in a:
         if row not in b:
             raise SystemExit(f"{row}: present in one control run and not the other — the suites differ")
@@ -88,6 +102,9 @@ def control(a, b, wall_bar=WALL_BAR, rss_bar=RSS_BAR):
 def compare(ref, new, wall_bar=WALL_BAR, rss_bar=RSS_BAR):
     """A candidate against the reference, deltas signed so a reader sees which way it moved."""
     out = []
+    for row in new:
+        if row not in ref:
+            raise SystemExit(f"{row}: in the candidate and not in the reference")
     for row in ref:
         if row not in new:
             raise SystemExit(f"{row}: in the reference and not in the candidate")
@@ -131,6 +148,11 @@ def cadence_ok(c, bar=60.0, tail=1.3):
 
 
 def print_table(rows, head):
+    # `all([])` is True, so without this a pair of files that parsed to no rows at all — a
+    # mistyped path, a suite that died before its first row — prints an empty table and exits 0,
+    # which reads exactly like a bar that was cleared.
+    if not rows:
+        raise SystemExit("no rows to judge — the medians files parsed to nothing")
     print(f"| row | {head[0]} | {head[1]} | |")
     print("|---|---|---|---|")
     for row, w, r, ok in rows:

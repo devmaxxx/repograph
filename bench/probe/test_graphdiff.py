@@ -38,6 +38,14 @@ class Diff(unittest.TestCase):
             self.assertEqual(r["edges_only_a"], ["FR-1 -> FR-2 [References/body] docs/a.md"])
             self.assertEqual(r["edges_only_b"], ["FR-1 -> FR-3 [References/body] docs/a.md"])
 
+    def test_a_graph_that_grew_a_duplicate_edge_does_not_read_same(self):
+        with tempfile.TemporaryDirectory() as d:
+            a = self.write(d, "a.json", graph(["FR-1"], [("FR-1", "FR-2")]))
+            b = self.write(d, "b.json", graph(["FR-1"], [("FR-1", "FR-2"), ("FR-1", "FR-2")]))
+            r = graphdiff.diff(a, b)
+            self.assertFalse(r["edges_same"])
+            self.assertEqual(r["edges_only_b"], ["FR-1 -> FR-2 [References/body] docs/a.md"])
+
     def test_a_node_whose_label_changed_is_named_with_both_labels(self):
         with tempfile.TemporaryDirectory() as d:
             ga, gb = graph(["FR-1"], []), graph(["FR-1"], [])

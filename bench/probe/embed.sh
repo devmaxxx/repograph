@@ -9,8 +9,14 @@ set -u
 NAME=$1; B=$2; F=$3; L=$4
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # The one script here that deletes store files, so it refuses the pinned fixture by path: nothing
-# writes there, and a mistyped argument is how that rule would get broken.
-case "$(cd "$F" && pwd -P)" in "$HOME/bench/beauty-crm-502e8a6d") echo "refusing: $F is the pinned fixture" >&2; exit 2;; esac
+# writes there, and a mistyped argument is how that rule would get broken. Both sides go through
+# `pwd -P` the way reset.sh compares its two directories — comparing a resolved path against an
+# unresolved `$HOME/…` literal misses the moment anything above `bench/` is a symlink, and the
+# miss deletes the vectors of the one store that is never rebuilt.
+PINNED=${PINNED:-$HOME/bench/beauty-crm-502e8a6d}
+pinned=$(cd "$PINNED" 2>/dev/null && pwd -P) || pinned=$PINNED
+target=$(cd "$F" 2>/dev/null && pwd -P) || { echo "refusing: WORKTREE=$F is not a directory" >&2; exit 2; }
+[ "$target" != "$pinned" ] || { echo "refusing: $F is the pinned fixture" >&2; exit 2; }
 mkdir -p "$L"
 if ! "$HERE/quiet.sh" > "$L/$NAME.quiet" 2>&1; then cat "$L/$NAME.quiet"; echo "refusing to measure on a machine that is not quiet" >&2; exit 2; fi
 cat "$L/$NAME.quiet" | tee -a "$L/summary.txt"

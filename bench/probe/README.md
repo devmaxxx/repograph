@@ -9,7 +9,9 @@ Two directories, both locked: `~/bench/beauty-crm-502e8a6d`, the pinned fixture,
 `~/bench/beauty-crm-test`, the one writable worktree, where every writer and every reader row runs.
 
 - `quiet.sh` — the precondition every row is read under: ≥ 85% idle, 1-minute load < 3.0, AC power,
-  no `cargo`/`rustc`/`node`/other `repograph` running. Every other script runs it first and refuses.
+  no `cargo`/`rustc`/other `repograph` running — `node` is deliberately not in the pattern, because
+  the agent harness that launches these scripts is one. `readers.sh` and `embed.sh`, the two that
+  time anything, run it first and refuse; `reset.sh` and `arms.sh` measure no wall clock and do not.
 - `reset.sh` — the writable worktree put back to the fixture's state: tree reverted and cleaned,
   store copied in, `repograph.toml` written, stamps settled by one `--no-dense update`. Refuses any
   directory that is not the locked worktree at `502e8a6d`. Before every arm, reader suites included.

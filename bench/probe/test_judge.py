@@ -52,6 +52,31 @@ class Medians(unittest.TestCase):
             self.assertEqual(judge.read_medians(p)["impact"]["n"], 3)
 
 
+class RefusedRuns(unittest.TestCase):
+    """What `medians` must not average. Both shapes come off `measure.sh` looking like readings."""
+
+    def test_a_row_whose_command_exited_non_zero_is_refused_not_averaged(self):
+        line = "ask-fused-1  wall=0.02s user=0.01s sys=0.00s maxrss=0.01GB peak_cpu=0% peak_threads=1 samples=0 rc=2"
+        with self.assertRaises(SystemExit) as e:
+            judge.medians([line])
+        self.assertIn("exited 2", str(e.exception))
+
+    def test_a_row_with_no_wall_at_all_names_the_field(self):
+        line = "ask-fused-1  wall=s user=s sys=s maxrss=GB peak_cpu=0% peak_threads=1 samples=0 rc=0"
+        with self.assertRaises(SystemExit) as e:
+            judge.medians([line])
+        self.assertIn("wall", str(e.exception))
+        self.assertIn("maxrss", str(e.exception))
+
+    def test_a_clean_row_still_reads_with_rc_on_the_line(self):
+        line = "impact-1  wall=0.04s user=0.02s sys=0.01s maxrss=0.05GB peak_cpu=0% peak_threads=1 samples=0 rc=0"
+        self.assertEqual(judge.medians([line])["impact"]["n"], 1)
+
+    def test_a_table_of_no_rows_is_refused_because_all_of_nothing_is_true(self):
+        with self.assertRaises(SystemExit):
+            judge.print_table([], ("wall", "RSS"))
+
+
 class Control(unittest.TestCase):
     def test_the_same_binary_twice_inside_the_bars_passes(self):
         a = {"ask-fused": {"wall": 0.60, "maxrss": 1.50, "peak_cpu": 120.0, "n": 5}}
@@ -70,6 +95,14 @@ class Control(unittest.TestCase):
     def test_a_row_missing_from_one_side_is_reported_not_skipped(self):
         with self.assertRaises(SystemExit):
             judge.control({"a": {"wall": 1, "maxrss": 1, "peak_cpu": 1, "n": 1}}, {})
+
+    def test_a_row_only_the_second_run_has_is_reported_too(self):
+        with self.assertRaises(SystemExit):
+            judge.control({}, {"a": {"wall": 1, "maxrss": 1, "peak_cpu": 1, "n": 1}})
+
+    def test_a_candidate_row_the_reference_never_had_is_reported(self):
+        with self.assertRaises(SystemExit):
+            judge.compare({}, {"a": {"wall": 1, "maxrss": 1, "peak_cpu": 1, "n": 1}})
 
 
 class Cadence(unittest.TestCase):
