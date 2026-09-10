@@ -58,15 +58,36 @@ function debug(...args) {
   if (process.env.REPOGRAPH_HOOK_DEBUG) console.error('[repograph-hook]', ...args);
 }
 
-/** PATH first, the package's own bin second, and nothing else: a hook that installed things would not be a hook. */
+/**
+ * PATH first, the package's own bin second, and nothing else: a hook that installed things would
+ * not be a hook. npm writes three shims side by side under `node_modules/.bin` and only two of
+ * them are executable on Windows — the extensionless one is a shell script `CreateProcess` cannot
+ * run at all — so the Windows names are tried first there.
+ */
 function binary(root) {
+  if (process.env.REPOGRAPH_BIN) return process.env.REPOGRAPH_BIN;
   const local = join(root, 'node_modules', '.bin', 'repograph');
-  return process.env.REPOGRAPH_BIN || (existsSync(local) ? local : 'repograph');
+  const names = process.platform === 'win32' ? [`${local}.exe`, `${local}.cmd`, local] : [local];
+  return names.find((p) => existsSync(p)) || 'repograph';
+}
+
+/**
+ * How to hand one command to `spawn`. A `.cmd` or `.bat` is read by the command interpreter rather
+ * than by `CreateProcess`, and Node has refused to spawn one without a shell since CVE-2024-27980.
+ * The shell joins the file and its arguments into one command line without quoting them, so they
+ * are quoted here — and nothing that reaches this can close a quote: a Windows path may not contain
+ * one, and the words come from `queryWords`, which keeps letters, digits, `_` and `-` and nothing
+ * else. Everything that is not a batch file is spawned as it always was.
+ */
+function spawnable(bin, args) {
+  if (!/\.(cmd|bat)$/i.test(bin)) return { file: bin, args, opts: {} };
+  return { file: `"${bin}"`, args: args.map((a) => `"${a}"`), opts: { shell: true } };
 }
 
 function run(root, args) {
-  const r = spawnSync(binary(root), ['--repo', root, '--no-dense', ...args], {
-    encoding: 'utf8', timeout: TIMEOUT_MS, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true,
+  const { file, args: argv, opts } = spawnable(binary(root), ['--repo', root, '--no-dense', ...args]);
+  const r = spawnSync(file, argv, {
+    encoding: 'utf8', timeout: TIMEOUT_MS, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true, ...opts,
   });
   if (r.status !== 0) debug('exit', r.status, args.join(' '), (r.stderr || '').slice(0, 200));
   return r.status === 0 ? r.stdout : '';
@@ -215,8 +236,9 @@ function brief(root) {
 function autostartServe(root) {
   if (process.env.REPOGRAPH_HOOK_SERVE === '0') return;
   try {
-    const child = spawn(binary(root), ['--repo', root, 'serve', '--idle', String(SERVE_IDLE), '--idle-model', String(SERVE_IDLE_MODEL)],
-      { detached: true, stdio: 'ignore', windowsHide: true });
+    const { file, args, opts } = spawnable(binary(root),
+      ['--repo', root, 'serve', '--idle', String(SERVE_IDLE), '--idle-model', String(SERVE_IDLE_MODEL)]);
+    const child = spawn(file, args, { detached: true, stdio: 'ignore', windowsHide: true, ...opts });
     // A spawn that fails reports it as an event, not as a throw, and an unheard `error` event ends
     // this process — which would turn "no binary on PATH" into a hook that dies on stderr at every
     // session start. The listener is what keeps the contract: exit 0, and say nothing.

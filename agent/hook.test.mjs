@@ -1,10 +1,11 @@
-// The hook, exercised the way a harness runs it: a payload on stdin, a fake `repograph` on PATH
-// that records its argv, and a temporary root that has or lacks a store. Run: `node --test agent/`.
+// The hook, exercised the way a harness runs it: a payload on stdin, a fake `repograph` the hook
+// resolves the way it resolves the real one, and a temporary root that has or lacks a store.
+// Run: `node --test agent/hook.test.mjs`, on every platform the hook is installed on.
 import { test } from 'node:test';
 import assert from 'node:assert';
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, chmodSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join, dirname } from 'node:path';
+import { join, dirname, delimiter } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 
@@ -12,7 +13,17 @@ import { queryWords, searchPattern, rule, RULE_FALLBACK } from './hook.mjs';
 
 const HOOK = join(dirname(fileURLToPath(import.meta.url)), 'hook.mjs');
 
-/** A root with a fake `repograph` on its PATH; `answer` is what that fake prints on stdout. */
+const WIN = process.platform === 'win32';
+
+/**
+ * A root with a fake `repograph`; `answer` is what that fake prints on stdout.
+ *
+ * The fake is a Node script behind a launcher rather than a shell script, because Windows cannot
+ * execute an extensionless `#!/bin/sh` file at all — the five tests that need the binary to answer
+ * failed there for that reason alone. Node also keeps the answers' Cyrillic out of a batch file's
+ * code page, and writes the argv line itself, so the log reads the same on both platforms whatever
+ * quoting the launcher needed.
+ */
 function world({ store = true, answer = '', status = 0 } = {}) {
   const root = mkdtempSync(join(tmpdir(), 'repograph-hook-test-'));
   if (store) {
@@ -22,17 +33,39 @@ function world({ store = true, answer = '', status = 0 } = {}) {
   const bin = join(root, 'bin');
   mkdirSync(bin, { recursive: true });
   const argvLog = join(root, 'argv.txt');
-  writeFileSync(join(bin, 'repograph'),
-    `#!/bin/sh\nprintf '%s\\n' "$*" >> ${JSON.stringify(argvLog)}\ncat <<'EOF'\n${answer}\nEOF\nexit ${status}\n`);
-  chmodSync(join(bin, 'repograph'), 0o755);
-  return { root, bin, argvLog, state: join(tmpdir(), 'repograph-hook') };
+  const fake = join(bin, 'fake.mjs');
+  writeFileSync(fake, [
+    "import { appendFileSync, writeSync } from 'node:fs';",
+    `appendFileSync(${JSON.stringify(argvLog)}, process.argv.slice(2).join(' ') + '\\n', 'utf8');`,
+    `writeSync(1, ${JSON.stringify(answer + '\n')});`,
+    `process.exit(${status});`,
+  ].join('\n'), 'utf8');
+
+  // The launcher is what the hook actually spawns: a `.cmd` on Windows, which is why the hook has
+  // to know how to spawn one, and a shell script everywhere else, which is what `PATH` finds.
+  const launcher = join(bin, WIN ? 'repograph.cmd' : 'repograph');
+  writeFileSync(launcher, WIN
+    ? `@echo off\r\n"${process.execPath}" "${fake}" %*\r\n`
+    : `#!/bin/sh\nexec "${process.execPath}" "${fake}" "$@"\n`);
+  if (!WIN) chmodSync(launcher, 0o755);
+  return { root, bin, launcher, argvLog, state: join(tmpdir(), 'repograph-hook') };
 }
 
 function fire(w, payload, env = {}) {
   const r = spawnSync(process.execPath, [HOOK], {
     input: JSON.stringify({ cwd: w.root, session_id: 'sess', ...payload }),
     encoding: 'utf8',
-    env: { ...process.env, PATH: `${w.bin}:${process.env.PATH}`, TMPDIR: join(w.root, 'tmp'), ...env },
+    env: {
+      ...process.env,
+      PATH: `${w.bin}${delimiter}${process.env.PATH}`,
+      // Windows resolves a bare name through `PATHEXT` only inside a shell, so `PATH` alone would
+      // never find `repograph.cmd`; the variable the hook already honours names it instead.
+      ...(WIN ? { REPOGRAPH_BIN: w.launcher } : {}),
+      // `tmpdir()` reads TMPDIR on POSIX and TEMP/TMP on Windows. All three, or the per-session
+      // state the once-and-cadence gates keep would be shared between tests on one platform.
+      TMPDIR: join(w.root, 'tmp'), TEMP: join(w.root, 'tmp'), TMP: join(w.root, 'tmp'),
+      ...env,
+    },
   });
   assert.equal(r.status, 0, `the hook always exits 0; stderr: ${r.stderr}`);
   return r.stdout ? JSON.parse(r.stdout) : null;
