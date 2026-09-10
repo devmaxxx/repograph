@@ -15,6 +15,11 @@ from pathlib import Path
 WALL_BAR = 0.10
 RSS_BAR = 0.05
 CPU_BAR = 0.10
+# §1's Gate reads its control at n = 5 a row and `readers.sh` defaults to five, but nothing read
+# the `n` this file has always parsed: a comparison built from one run a row cleared the bars in
+# silence, which is what the docstring above says the file exists to prevent. A suite with a shape
+# of its own — §9's embed is three runs — says the smaller number out loud instead of inheriting it.
+MIN_N = 5
 
 # `NAME-i  wall=0.61s user=… maxrss=1.55GB peak_cpu=120% …` from measure.sh; the unit suffixes
 # are stripped so the numbers compare, and `NAME-i` is `NAME` with its run index.
@@ -84,8 +89,17 @@ def spread(a, b):
     return 0.0 if a == 0 else abs(b - a) / a
 
 
-def control(a, b, wall_bar=WALL_BAR, rss_bar=RSS_BAR):
+def enough_runs(rows, min_n, side):
+    for row, m in rows.items():
+        if m["n"] < min_n:
+            raise SystemExit(f"{row}: {side} carries n={m['n']}, under the floor of {min_n} — "
+                             "a median of that many runs is not a reading these bars can judge")
+
+
+def control(a, b, wall_bar=WALL_BAR, rss_bar=RSS_BAR, min_n=MIN_N):
     """The same binary twice: every row's spread against the bars it will later judge with."""
+    enough_runs(a, min_n, "the first run")
+    enough_runs(b, min_n, "the second run")
     out = []
     for row in b:
         if row not in a:
@@ -99,7 +113,7 @@ def control(a, b, wall_bar=WALL_BAR, rss_bar=RSS_BAR):
     return out
 
 
-def compare(ref, new, wall_bar=WALL_BAR, rss_bar=RSS_BAR, cpu_bar=CPU_BAR):
+def compare(ref, new, wall_bar=WALL_BAR, rss_bar=RSS_BAR, cpu_bar=CPU_BAR, min_n=MIN_N):
     """A candidate against the reference, deltas signed so a reader sees which way it moved.
 
     Peak CPU is judged here and not in `control` because G19's gate asks for it — a clause about
@@ -109,6 +123,8 @@ def compare(ref, new, wall_bar=WALL_BAR, rss_bar=RSS_BAR, cpu_bar=CPU_BAR):
     to be within 10% of. Those rows carry `None` and stay unjudged on that column rather than
     passing on a zero that means "never sampled".
     """
+    enough_runs(ref, min_n, "the reference")
+    enough_runs(new, min_n, "the candidate")
     out = []
     for row in new:
         if row not in ref:
@@ -177,8 +193,19 @@ def print_table(rows, head):
 
 def main(argv):
     if len(argv) < 3:
-        raise SystemExit("usage: judge.py medians SUMMARY | control A B | compare REF NEW | cadence STAMPED")
+        raise SystemExit("usage: judge.py medians SUMMARY | control A B [MIN_N] | "
+                         "compare REF NEW [MIN_N] | cadence STAMPED")
     cmd = argv[1]
+    if cmd in ("control", "compare"):
+        # Both read `argv[3]`, and the check above let `judge.py control a.txt` reach it: a
+        # traceback where the usage line belongs.
+        if len(argv) not in (4, 5):
+            raise SystemExit(f"usage: judge.py {cmd} A B [MIN_N]")
+        min_n = int(argv[4]) if len(argv) == 5 else MIN_N
+        a, b = read_medians(argv[2]), read_medians(argv[3])
+        if cmd == "control":
+            return 0 if print_table(control(a, b, min_n=min_n), ("wall spread", "RSS spread")) else 1
+        return 0 if print_table(compare(a, b, min_n=min_n), ("wall Δ", "RSS Δ", "peak CPU Δ")) else 1
     if cmd == "medians":
         rows = read_medians(argv[2])
         # Printing nothing and exiting 0 reads like a suite with no regressions rather than like a
@@ -188,10 +215,6 @@ def main(argv):
         for row, m in rows.items():
             print(f"{row} wall={m['wall']} maxrss={m['maxrss']} peak_cpu={m['peak_cpu']} n={m['n']}")
         return 0
-    if cmd == "control":
-        return 0 if print_table(control(read_medians(argv[2]), read_medians(argv[3])), ("wall spread", "RSS spread")) else 1
-    if cmd == "compare":
-        return 0 if print_table(compare(read_medians(argv[2]), read_medians(argv[3])), ("wall Δ", "RSS Δ", "peak CPU Δ")) else 1
     if cmd == "cadence":
         c = cadence(Path(argv[2]).read_text().splitlines())
         ok, why = cadence_ok(c)

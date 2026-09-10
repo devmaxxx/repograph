@@ -25,18 +25,51 @@ STAMP='perl -MTime::HiRes=time -ne '"'"'printf "%.2f %s", time, $_'"'"''
 perl -MTime::HiRes=time -e 'printf "%.2f start\n", time' > "$L/$NAME.err"
 caffeinate -di /usr/bin/time -l "$B" --repo "$F" embed >"$L/$NAME.out" 2> >(eval "$STAMP" >> "$L/$NAME.err") &
 WRAP=$!
-sleep 0.3
-PID=$(pgrep -f "^$B --repo $F embed" | head -1)
-[ -z "$PID" ] && PID=$WRAP
+# The sampled process is found under the wrapper by the binary's own name, not by a regex over
+# two paths: a path holding an ERE metacharacter makes `pgrep -f` match nothing, and the old
+# fallback then sampled the wrapper, which burns no CPU. Either miss reads `peak_cpu = 0`, and 0
+# is the one value `judge.py compare` takes for "never sampled" and leaves unjudged, so §9's gate
+# would go green with the column it names never read; a run that cannot be sampled refuses.
+# `caffeinate -di cmd` exec's `time` in place and forks one child that does nothing but hold the
+# power assertion — measured on 2026-09-10, the tree is `time` with `caffeinate` and the binary as
+# its two children — so the binary is that holder's sibling, and one level deeper should a future
+# caffeinate fork instead of exec.
+BIN_NAME=$(basename "$B")
+PID=""
+for _ in 1 2 3 4 5 6 7 8 9 10; do
+  PID=$(pgrep -P "$WRAP" -x "$BIN_NAME" 2>/dev/null | head -1)
+  [ -n "$PID" ] || PID=$(for c in $(pgrep -P "$WRAP" 2>/dev/null); do pgrep -P "$c" -x "$BIN_NAME" 2>/dev/null; done | head -1)
+  [ -n "$PID" ] && break
+  kill -0 "$WRAP" 2>/dev/null || break
+  sleep 0.5
+done
+[ -n "$PID" ] || { echo "refusing: no $BIN_NAME under $WRAP to sample — the peak CPU column would read 0, which compare leaves unjudged" >&2; wait "$WRAP"; exit 2; }
 : >"$L/$NAME.samples"
 while kill -0 "$PID" 2>/dev/null; do
   top -l 2 -s 1 -pid "$PID" -stats pid,cpu,mem,th 2>/dev/null | tail -1 >>"$L/$NAME.samples"
 done
-wait $WRAP
+wait "$WRAP"; RC=$?
 sleep 0.5
 PEAK_CPU=$(awk '{gsub("%","",$2); if ($2+0>m) m=$2+0} END{print m+0}' "$L/$NAME.samples")
-RSS=$(awk '/maximum resident set size/{printf "%.2f", $2/1073741824}' "$L/$NAME.err")
-WALL=$(awk '/real/{print $2}' "$L/$NAME.err")
-USR=$(awk '/real/{print $4}' "$L/$NAME.err")
-echo "$NAME  wall=${WALL}s user=${USR}s maxrss=${RSS}GB peak_cpu=${PEAK_CPU}%" | tee -a "$L/summary.txt"
-python3 "$HERE/judge.py" cadence "$L/$NAME.err" | tee -a "$L/summary.txt"
+# The embed's own stderr shares this file with `time`'s report — that is the point of the stamps —
+# and an unanchored `/real/` prints one number per matching line, which would split the summary
+# line `judge.py medians` parses. Each field is read off the report's whole shape, one stamp wider
+# than measure.sh's, and only the last such line is taken.
+ERR=$L/$NAME.err
+RSS=$(awk 'NF == 6 && $3 == "maximum" && $4 == "resident" && $5 == "set" && $6 == "size" {r=$2} END{if (r != "") printf "%.2f", r/1073741824}' "$ERR")
+REPORT=$(awk 'NF == 7 && $3 == "real" && $5 == "user" && $7 == "sys" {l=$0} END{print l}' "$ERR")
+WALL=$(printf '%s\n' "$REPORT" | awk '{print $2}')
+USR=$(printf '%s\n' "$REPORT" | awk '{print $4}')
+# `time` leaves a full report even when the command bailed, so a partial embed — weights gone
+# mid-run, the disk full at 60% — would otherwise enter the median of three as an honestly
+# measured, much faster whole-store embed. The row carries its status, `judge.py medians` refuses
+# a row that measured a failure, and the script exits with it.
+[ "$RC" = "0" ] || echo "embed: $NAME exited $RC — this row measured a failure" >&2
+echo "$NAME  wall=${WALL}s user=${USR}s maxrss=${RSS}GB peak_cpu=${PEAK_CPU}% rc=${RC}" | tee -a "$L/summary.txt"
+# Not a pipeline: bash 3.2 here has no pipefail, and `| tee` hands back tee's status — the
+# cadence verdict would be swallowed and this script would exit 0 on an OUTSIDE reading, which is
+# the trap readers.sh names on its own quiet gate.
+python3 "$HERE/judge.py" cadence "$L/$NAME.err" > "$L/$NAME.cadence" 2>&1; CAD=$?
+cat "$L/$NAME.cadence" | tee -a "$L/summary.txt"
+[ "$RC" = "0" ] || exit "$RC"
+exit "$CAD"

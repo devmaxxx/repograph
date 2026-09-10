@@ -96,15 +96,15 @@ class Control(unittest.TestCase):
 
     def test_a_row_missing_from_one_side_is_reported_not_skipped(self):
         with self.assertRaises(SystemExit):
-            judge.control({"a": {"wall": 1, "maxrss": 1, "peak_cpu": 1, "n": 1}}, {})
+            judge.control({"a": {"wall": 1, "maxrss": 1, "peak_cpu": 1, "n": 5}}, {})
 
     def test_a_row_only_the_second_run_has_is_reported_too(self):
         with self.assertRaises(SystemExit):
-            judge.control({}, {"a": {"wall": 1, "maxrss": 1, "peak_cpu": 1, "n": 1}})
+            judge.control({}, {"a": {"wall": 1, "maxrss": 1, "peak_cpu": 1, "n": 5}})
 
     def test_a_candidate_row_the_reference_never_had_is_reported(self):
         with self.assertRaises(SystemExit):
-            judge.compare({}, {"a": {"wall": 1, "maxrss": 1, "peak_cpu": 1, "n": 1}})
+            judge.compare({}, {"a": {"wall": 1, "maxrss": 1, "peak_cpu": 1, "n": 5}})
 
 
 class ComparePeakCpu(unittest.TestCase):
@@ -112,7 +112,7 @@ class ComparePeakCpu(unittest.TestCase):
     column exists for; the reader rows are the shape it cannot speak about."""
 
     def row(self, wall, rss, cpu):
-        return {"wall": wall, "maxrss": rss, "peak_cpu": cpu, "n": 3}
+        return {"wall": wall, "maxrss": rss, "peak_cpu": cpu, "n": 5}
 
     def test_a_candidate_inside_the_cpu_bar_passes(self):
         ref = {"embed": self.row(1930.0, 2.15, 293.0)}
@@ -158,6 +158,33 @@ class ComparePeakCpu(unittest.TestCase):
                                             {"impact": self.row(0.04, 0.05, 0.0)}),
                               ("wall spread", "RSS spread"))
         self.assertEqual(out.getvalue().splitlines()[0], "| row | wall spread | RSS spread | |")
+
+
+class RunCount(unittest.TestCase):
+    """The `n` every row has always carried, now read. §1 judges its control at five runs a row;
+    §9's embed is three, and a suite with its own shape says the number instead of inheriting it."""
+
+    def rows(self, n):
+        return {"ask-fused": {"wall": 0.60, "maxrss": 1.50, "peak_cpu": 120.0, "n": n}}
+
+    def test_a_control_over_one_run_a_row_is_refused_not_cleared(self):
+        with self.assertRaises(SystemExit) as e:
+            judge.control(self.rows(1), self.rows(1))
+        self.assertIn("n=1", str(e.exception))
+
+    def test_a_candidate_under_the_floor_is_refused_too(self):
+        with self.assertRaises(SystemExit):
+            judge.compare(self.rows(5), self.rows(3))
+
+    def test_a_suite_of_three_runs_is_judged_when_the_floor_is_said_out_loud(self):
+        (_, wall, _, _, ok), = judge.compare(self.rows(3), self.rows(3), min_n=3)
+        self.assertEqual((wall, ok), (0.0, True))
+
+    def test_the_two_file_subcommands_print_usage_instead_of_an_index_error(self):
+        for argv in (["judge.py", "control", "a.txt"], ["judge.py", "compare", "a.txt"]):
+            with self.assertRaises(SystemExit) as e:
+                judge.main(argv)
+            self.assertIn("usage", str(e.exception))
 
 
 class Cadence(unittest.TestCase):

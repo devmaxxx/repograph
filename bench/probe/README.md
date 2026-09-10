@@ -34,7 +34,10 @@ Two directories, both locked: `~/bench/beauty-crm-502e8a6d`, the pinned fixture,
 The bars: a reader row is judged as a median of n ≥ 5, within 10% wall and 5% max RSS of its
 reference, and only once `judge.py control` has shown the same binary twice inside those bars on
 this machine (`docs/bench/2026-09-10-next-version-levers-results.md` §1 is the first such control).
-A whole-store embed is judged as a median of three against a control of three.
+That `n` is read and not just printed: `control` and `compare` refuse a row built from fewer runs
+than the floor, which is five unless a last argument (`judge.py compare REF NEW 3`) says otherwise.
+A whole-store embed is judged as a median of three against a control of three, and §9 reads its
+three clauses off the summary lines by hand.
 
 **The peak CPU column, and what it cannot say.** `judge.py compare` judges three columns — wall
 against 10%, max RSS against 5%, peak CPU against 10% — because §9's gate asks for the run's peak

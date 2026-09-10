@@ -15,6 +15,12 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 M="$HERE/measure.sh"
 export REPOGRAPH_NO_SERVE=1
 mkdir -p "$L"
+# Absolute before the `cd` below, the way HERE is: a relative LOGDIR would be re-created by
+# `measure.sh` *inside* the worktree, and then every transcript, `dump10.json` and the `cn.ts`
+# backup are untracked files in the tree the `changes` rows read — the row would measure the log
+# directory it is writing, which is the defect the backup's own comment exists to prevent — while
+# `judge.py medians` at the end read the near-empty file left in the original directory.
+L=$(cd "$L" && pwd -P) || exit 2
 # Truncated, not appended: `measure.sh` appends, so a second suite into the same log directory
 # would pool its runs with the first one's and `medians` would take one median over both.
 : > "$L/summary.txt"
@@ -24,6 +30,9 @@ cat "$L/quiet.txt" | tee -a "$L/summary.txt"
 cd "$F" || exit 2
 Q="как отменить запись и кто платит штраф"
 CN=packages/ui/src/lib/cn.ts
+# A Ctrl-C between the touch and the restore would leave the tree dirty for whatever ran next;
+# `reset.sh` puts it back before the following arm, but not before the rest of this suite.
+trap 'if [ -f "$L/cn.ts.orig" ]; then cp -p "$L/cn.ts.orig" "$F/$CN" && rm -f "$L/cn.ts.orig"; fi' EXIT
 for i in $(seq 1 "$N"); do
   "$M" ask-fused-$i "$L" -- "$B" --repo "$F" ask --stale $Q
   "$M" ask-nodense-$i "$L" -- "$B" --repo "$F" --no-dense ask --stale $Q
@@ -34,10 +43,14 @@ for i in $(seq 1 "$N"); do
   # The backup lives in the log directory, not beside the file: `changes` reads every untracked
   # path `git ls-files --others --exclude-standard` names, and a `cn.ts.orig` in the worktree is
   # one — the row would measure two changed files, the second a whole copy of the first.
-  cp -p "$CN" "$L/cn.ts.orig"
+  cp -p "$CN" "$L/cn.ts.orig" || exit 2
   printf '\n// touched for the changes measurement\n' >> "$CN"
   "$M" changes-$i "$L" -- "$B" --repo "$F" changes --stale --depth 2
-  cp -p "$L/cn.ts.orig" "$CN" && rm -f "$L/cn.ts.orig"
+  # Refused, not carried into the next iteration: a restore that failed silently would leave the
+  # touch in the tree, and the next iteration's backup is then a copy of the *modified* file — the
+  # edit becomes permanent and grows a line per run, under every row after it.
+  cp -p "$L/cn.ts.orig" "$CN" || { echo "readers: $CN not restored from $L/cn.ts.orig — the tree is dirty" >&2; exit 2; }
+  rm -f "$L/cn.ts.orig"
   "$M" bench-nodense-$i "$L" -- "$B" --repo "$F" --no-dense bench
   "$M" bench-dense-$i "$L" -- "$B" --repo "$F" bench
   "$M" dump10-$i "$L" -- "$B" --repo "$F" dump --queries "$HERE/queries10.jsonl" --out "$L/dump10.json" --depth 300

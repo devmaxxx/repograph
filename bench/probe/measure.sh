@@ -23,10 +23,17 @@ wait $WRAP; RC=$?
 [ "$RC" = "0" ] || echo "measure: $NAME exited $RC — this row measured a failure" >&2
 PEAK_CPU=$(awk '{gsub("%","",$2); if ($2+0>m) m=$2+0} END{print m+0}' "$LOG/$NAME.samples")
 PEAK_TH=$(awk '{split($4,a,"/"); if (a[1]+0>m) m=a[1]+0} END{print m+0}' "$LOG/$NAME.samples")
-RSS=$(awk '/maximum resident set size/{printf "%.2f", $1/1073741824}' "$LOG/$NAME.time")
-WALL=$(awk '/real/{print $1}' "$LOG/$NAME.time")
-USR=$(awk '/real/{print $3}' "$LOG/$NAME.time")
-SYS=$(awk '/real/{print $5}' "$LOG/$NAME.time")
+# The measured command's stderr shares this file with `time`'s report, and an unanchored `/real/`
+# prints one number per matching line: a single stderr line holding the word turned WALL into two
+# lines and split the summary line `judge.py medians` parses into four. So each field is read off
+# the report's whole shape — every word of it, in place, and nothing else on the line — and only
+# the last such line is taken, which is one value however loud the command was.
+TIME=$LOG/$NAME.time
+RSS=$(awk 'NF == 5 && $2 == "maximum" && $3 == "resident" && $4 == "set" && $5 == "size" {r=$1} END{if (r != "") printf "%.2f", r/1073741824}' "$TIME")
+REPORT=$(awk 'NF == 6 && $2 == "real" && $4 == "user" && $6 == "sys" {l=$0} END{print l}' "$TIME")
+WALL=$(printf '%s\n' "$REPORT" | awk '{print $1}')
+USR=$(printf '%s\n' "$REPORT" | awk '{print $3}')
+SYS=$(printf '%s\n' "$REPORT" | awk '{print $5}')
 N=$(wc -l <"$LOG/$NAME.samples" | tr -d ' ')
 echo "$NAME  wall=${WALL}s user=${USR}s sys=${SYS}s maxrss=${RSS}GB peak_cpu=${PEAK_CPU}% peak_threads=${PEAK_TH} samples=${N} rc=${RC}" | tee -a "$LOG/summary.txt"
 exit "$RC"
