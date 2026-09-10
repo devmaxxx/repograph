@@ -9,14 +9,21 @@ Two directories, both locked: `~/bench/beauty-crm-502e8a6d`, the pinned fixture,
 `~/bench/beauty-crm-test`, the one writable worktree, where every writer and every reader row runs.
 
 - `quiet.sh` — the precondition every row is read under: ≥ 85% idle, 1-minute load < 3.0, AC power,
-  no `cargo`/`rustc`/`node`/other `repograph` running. The one exemption is this script's own
-  ancestor chain (`$$` upwards through `PPID`): the harness that launched the probe is unavoidable
-  and the `load1` clause refuses it on its own when it is busy, while any other `node` — a sibling
-  harness, another session's, a dev server — is a core burnt under the row, so it refuses. Sourcing
-  the script defines `ancestor_pids` and `busy_lines` and runs nothing, which is how
-  `test_quiet.py` reads the walk and the filter on a machine that is not quiet. `readers.sh` and
-  `embed.sh`, the two that time anything, run it first and refuse; `reset.sh` and `arms.sh` measure
-  no wall clock and do not.
+  no `cargo`/`rustc`/other `repograph` at all, and no other `node` at or above 5.0% CPU. The two
+  rules differ because the two kinds of noise do. This project's own tools are bursty, so presence
+  is the whole rule for them: a `cargo` at 0% is between two crates and a `repograph` at 0% is
+  about to embed. A `node` at 0% is a sibling harness or an MCP server asleep, and a process
+  consuming no CPU moves no wall clock — counting those refused this machine on 66 of them, which
+  measured the session and not the noise. The one exemption is this script's own ancestor chain
+  (`$$` upwards through `PPID`), at any CPU: the harness that launched the probe is unavoidable and
+  the `load1` clause refuses it on its own when it is busy. The printed line names what each rule
+  counted — `busy=0 (cargo/rustc/repograph: 0, node ≥5.0%: 0)` — and each refusal lists the
+  `pid pcpu comm` rows behind its count. What says whether the machine spoiled a row is not this
+  clause but G23's control, the same binary through the suite twice; the precondition is here to
+  catch the obvious cases cheaply. Sourcing the script defines `ancestor_pids`, `busy_lines` and
+  `busy_rows` and runs nothing, which is how `test_quiet.py` reads the walk and both rules on a
+  machine that is not quiet. `readers.sh` and `embed.sh`, the two that time anything, run it first
+  and refuse; `reset.sh` and `arms.sh` measure no wall clock and do not.
 - `reset.sh` — the writable worktree put back to the fixture's state: tree reverted and cleaned,
   store copied in, `repograph.toml` written, stamps settled by one `--no-dense update`. Refuses any
   directory that is not the locked worktree at `502e8a6d`. Before every arm, reader suites included.
@@ -52,5 +59,5 @@ RSS only, which is §1's Gate as written, and a reader row read under §1's bars
 wall and RSS columns — its peak CPU is printed beside them and is not part of that clause. macOS only:
 `/usr/bin/time -l`, `top -l`, `pmset` and `caffeinate` are Darwin's, and CI runs none of the shell
 here — `python3 -m unittest discover -s bench/probe` is what a change to this directory is gated on,
-and its `reset.sh` and `quiet.sh` tests skip themselves off POSIX, the latter also where there is
-no `node` to be either the harness or the noise.
+and its `reset.sh` and `quiet.sh` tests skip themselves off POSIX, the latter's one whole-script
+case that needs a real harness also where there is no `node` to be one.

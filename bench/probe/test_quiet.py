@@ -1,4 +1,5 @@
 import os
+import re
 import shutil
 import subprocess
 import unittest
@@ -7,6 +8,9 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 QUIET = HERE / "quiet.sh"
 
+HEAD = re.compile(r"^quiet: idle=\S+ load1=\S+ ac=\d+ busy=(\d+) "
+                  r"\(cargo/rustc/repograph: (\d+), node ≥5\.0%: (\d+)\)$")
+
 
 def sourced(snippet, stdin=""):
     """quiet.sh's functions without its body: sourcing the script defines and runs nothing."""
@@ -14,59 +18,91 @@ def sourced(snippet, stdin=""):
                           capture_output=True, text=True, check=True).stdout
 
 
-@unittest.skipUnless(os.name == "posix", "bash, ps and pgrep: the macOS kit's own platform")
-class Ancestors(unittest.TestCase):
-    """One half of the clause is real here and one half is simulated: the PIDs are real — this
-    test process really is an ancestor of the shell doing the filtering, and the `sleep` really is
-    not — while the name `node` on a fixture line stands in for what `pgrep` matched, so the
-    filter's decision is read without the machine's own dozens of node processes in the way.
-    `RealNode` below simulates neither half."""
+def decided(rows, kind):
+    """The pipeline `main` runs, minus the `ps` that feeds it: ancestors dropped, then one rule."""
+    return sourced(f"busy_lines | busy_rows {kind}", stdin=rows).strip()
+
+
+@unittest.skipUnless(os.name == "posix", "bash, ps and awk: the macOS kit's own platform")
+class Rules(unittest.TestCase):
+    """Half of each case is real and half is simulated: the PIDs are real — this test process
+    really is an ancestor of the shell doing the filtering, and the `sleep` really is not — while
+    the CPU percentage and the executable path on a row stand in for what `ps` printed, so both
+    rules are read without waiting for a machine that happens to be loud in the right way.
+    `WholeScript` below simulates neither half and asserts only what it can."""
+
+    def setUp(self):
+        other = subprocess.Popen(["sleep", "30"])
+        self.addCleanup(other.wait)
+        self.addCleanup(other.terminate)
+        self.other = other.pid
+
+    def test_an_idle_node_outside_the_chain_does_not_refuse(self):
+        self.assertEqual(decided(f"{self.other} 0.0 /usr/local/bin/node\n", "node"), "")
+
+    def test_a_node_burning_a_core_outside_the_chain_refuses(self):
+        row = f"{self.other} 12.0 /usr/local/bin/node"
+        self.assertEqual(decided(row + "\n", "node"), row)
+
+    def test_a_node_in_the_ancestor_chain_does_not_refuse_at_any_cpu(self):
+        self.assertEqual(decided(f"{os.getpid()} 99.9 /usr/local/bin/node\n", "node"), "")
+
+    def test_a_cargo_at_zero_percent_refuses(self):
+        row = f"{self.other} 0.0 /Users/max/.cargo/bin/cargo"
+        self.assertEqual(decided(row + "\n", "project"), row)
+
+    def test_a_repograph_at_zero_percent_refuses_under_any_name_it_is_built_as(self):
+        row = f"{self.other} 0.0 /Users/max/bench/bin/repograph-main"
+        self.assertEqual(decided(row + "\n", "project"), row)
+
+    def test_a_path_with_a_space_in_it_is_still_read_as_its_own_name(self):
+        row = f"{self.other} 12.0 /Applications/Some App/Contents/MacOS/node"
+        self.assertEqual(decided(row + "\n", "node"), row)
+
+    def test_the_two_rules_do_not_borrow_each_others_rows(self):
+        rows = f"{self.other} 0.0 /usr/local/bin/node\n{self.other} 0.0 /usr/bin/rustc\n"
+        self.assertEqual(decided(rows, "node"), "")
+        self.assertEqual(decided(rows, "project"), f"{self.other} 0.0 /usr/bin/rustc")
+
+    def test_one_ancestor_does_not_exempt_the_rest_of_the_list(self):
+        rows = f"{os.getpid()} 40.0 /usr/local/bin/node\n{self.other} 40.0 /usr/local/bin/node\n"
+        self.assertEqual(decided(rows, "node"), f"{self.other} 40.0 /usr/local/bin/node")
 
     def test_the_walk_reaches_the_process_that_launched_the_shell(self):
         self.assertIn(str(os.getpid()), sourced("ancestor_pids").split())
 
-    def test_a_node_in_the_ancestor_chain_does_not_refuse(self):
-        self.assertEqual(sourced("busy_lines", stdin=f"{os.getpid()} node\n"), "")
 
-    def test_a_node_outside_the_ancestor_chain_does(self):
-        other = subprocess.Popen(["sleep", "30"])
-        self.addCleanup(other.wait)
-        self.addCleanup(other.terminate)
-        kept = sourced("busy_lines", stdin=f"{other.pid} node\n").strip()
-        self.assertEqual(kept, f"{other.pid} node")
+@unittest.skipUnless(os.name == "posix", "bash, ps and pmset: the macOS kit's own platform")
+class WholeScript(unittest.TestCase):
+    """The script over this machine's own process table. The verdict is not asserted — a machine
+    that is loud for other reasons still fails the other three clauses — only that the line says
+    which rule counted what, and that no row the node clause named is below the bar."""
 
-    def test_one_ancestor_does_not_exempt_the_rest_of_the_list(self):
-        other = subprocess.Popen(["sleep", "30"])
-        self.addCleanup(other.wait)
-        self.addCleanup(other.terminate)
-        lines = sourced("busy_lines", stdin=f"{os.getpid()} node\n{other.pid} node\n").splitlines()
-        self.assertEqual(lines, [f"{other.pid} node"])
-
-
-@unittest.skipUnless(os.name == "posix", "bash, ps and pgrep: the macOS kit's own platform")
-@unittest.skipIf(shutil.which("node") is None, "no node on this machine to be the noise or the harness")
-class RealNode(unittest.TestCase):
-    """The whole script, with a real `node` process on each side of the rule. The verdict is not
-    asserted — a machine that is loud for other reasons still fails the other three clauses — only
-    which PIDs the busy clause named, which is what the correction is about."""
-
-    def test_a_sibling_node_is_named_by_the_busy_clause(self):
-        noise = subprocess.Popen(["node", "-e", "setTimeout(() => {}, 30000)"])
-        self.addCleanup(noise.wait)
-        self.addCleanup(noise.terminate)
+    def test_the_line_names_what_each_rule_counted(self):
         out = subprocess.run(["bash", str(QUIET)], capture_output=True, text=True).stdout
-        self.assertIn("cargo/rustc/node/repograph processes running", out)
-        self.assertIn(f"{noise.pid} node", out.splitlines())
+        head = HEAD.match(out.splitlines()[0])
+        self.assertIsNotNone(head, out)
+        busy, project, node = (int(g) for g in head.groups())
+        self.assertEqual(busy, project + node)
 
-    def test_the_node_that_launched_the_script_is_not(self):
+    def test_no_row_below_the_bar_is_named_by_the_node_clause(self):
+        out = subprocess.run(["bash", str(QUIET)], capture_output=True, text=True).stdout
+        named = out.split("node processes at 5.0% CPU or above\n")
+        for line in (named[1].splitlines() if len(named) > 1 else []):
+            pid, pcpu, comm = line.split(maxsplit=2)
+            self.assertGreaterEqual(float(pcpu), 5.0, line)
+            self.assertIn("node", comm)
+
+    @unittest.skipIf(shutil.which("node") is None, "no node on this machine to be the harness")
+    def test_the_node_that_launched_the_script_is_not_counted(self):
         launcher = ("console.log('NODEPID ' + process.pid);"
                     "try { require('child_process').execFileSync('bash', [process.argv[1]], {stdio: 'inherit'}); }"
                     "catch (e) { /* a machine that is not quiet exits 1 */ }")
         out = subprocess.run(["node", "-e", launcher, str(QUIET)], capture_output=True, text=True).stdout
         lines = out.splitlines()
         pid = lines[0].split()[1]
-        self.assertTrue(any(line.startswith("quiet: ") for line in lines), out)
-        self.assertNotIn(f"{pid} node", lines)
+        self.assertTrue(any(HEAD.match(line) for line in lines), out)
+        self.assertEqual([line for line in lines if line.split()[:1] == [pid]], [])
 
 
 if __name__ == "__main__":

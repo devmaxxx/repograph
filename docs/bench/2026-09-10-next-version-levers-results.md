@@ -51,6 +51,31 @@ measured. That is the honest half of the distinction this branch keeps — a cla
 corrected *after* its number is read is the thing the branch exists to prevent, and neither this
 section nor §9 has one of those.
 
+**Correction, 2026-09-10 — the third revision of the busy clause, and the last.** Recorded in full
+because three revisions of one precondition is the shape of a moving gate, even where no number has
+moved behind it. Stage one (`a53e50c`): `pgrep -l 'cargo|rustc|repograph'`, `node` deliberately out
+of the pattern because the harness that launched the script is itself a `node` process. Stage two
+(`8b642d8`): `node` counted like the other three, on presence, with only this script's own ancestor
+chain exempt. Stage three (this commit): `cargo`, `rustc` and any other `repograph` still refuse on
+presence at any CPU — they are this project's own work and they are bursty, and one at 0% now is
+compiling or embedding a second later — while any other `node` refuses only at or above 5.0% CPU,
+and both the printed line and the refusal rows now name which rule counted what. No reading has
+ever been taken under any of the three: §1's **Reading.** was empty at stage one, empty at stage
+two, and is empty now, and no number anywhere in this document was let through by any version of
+this clause. Presence-counting was not merely inconvenient, it was the wrong measurement: the count
+was named `busy_processes` and it counted processes, reading 66 on this machine while
+`ps -Ao pid,pcpu,comm | awk '$3 ~ /node/ && $2+0 >= 5.0'` returned zero rows — all 66 were other
+sessions and their MCP servers, asleep. A process consuming no CPU does not move a wall clock, so
+refusing on it excludes nothing from the reading and refuses every working machine; that is a
+process census standing where a quiet check should be, unsatisfiable for a reason that has nothing
+to do with the row. The Gate above is left exactly as committed, so its letter — no `node` running
+— now reads stricter than the script enforces; the divergence is recorded here rather than repaired
+by editing a committed clause. The idle, `load1` and AC clauses are untouched and remain the
+load-bearing three: ≥ 85% idle, 1-minute load < 3.0, AC power, the numbers as first written. This
+clause is now frozen. A further change to it once §1's **Reading.** holds a number would be exactly
+the failure this branch was built to prevent, and would have to be recorded as that and not as a
+fourth correction.
+
 **Reading.**
 
 ## 2 · G15 — the anchor line in the history
