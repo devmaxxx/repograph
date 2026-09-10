@@ -57,6 +57,31 @@ second under a `#2` suffix. Dev rows recorded before that suffix existed hold 59
 cases, so the next dev run reports `NOT COMPARABLE … the case set changed (59 -> 60)` once
 against them; that reading is honest, and the runs after it compare normally.
 
+## A third kind of run: the agent
+
+```
+bench/agent/run.sh <A|B|C|C-rem> <model> [repeat]
+python3 bench/history/track.py agent "$M/runs/<stamp>-<config>-<model>/summary.json" --note "…"
+```
+
+`bench` measures the tool. The agent harness measures what an agent *does with* it: twelve tasks —
+find a requirement, name a symbol's callers, trace a chain, review an uncommitted diff — put to a
+headless Claude Code session in a disposable worktree of the corpus, with one `.claude/` overlay as
+the whole difference between configurations. `bench/agent/overlays/README.md` says what each
+overlay is.
+
+The row is `agent:<config>+<model>`, `suite: "agent"`, `gated: false` — measured and never graded,
+like the dev suite, and in a comparability window of its own. Its metrics are `hits`, `tokens`,
+`cost`, `asked` (Bash calls naming `repograph`) and `grepped` (`rg`, `grep`, `Grep`, `Glob`); its
+cases are `<kind>/<task id>`, so a task missed in run after run reads as chronic exactly the way a
+bench case does. `tokens` sums input, output and both cache buckets over every model the run
+touched, because what this harness compares is what a transcript costs to *carry*.
+
+The figure to read is **tokens per hit**, never tokens: a configuration that says less and answers
+less has not won anything. A task that ends in `error_max_budget_usd` is recorded as a miss with
+`budget_hit`, because under one cap a configuration that cannot finish what another finishes is a
+finding about that configuration.
+
 ## Reading the report
 
 ```

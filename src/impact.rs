@@ -162,6 +162,21 @@ pub fn downstream(graph: &Graph, root: &str, depth: usize) -> Impact {
     Impact { root: root.to_string(), layers: walk(graph, root, depth, false), importers: Vec::new() }
 }
 
+/// `trace` as an object: the two ends the ids resolved to, the depth asked for, and the chain as
+/// `{id, at}` steps — `null` when there is none within that depth, which is an answer and not an
+/// error.
+pub fn trace_json(graph: &Graph, from: &str, to: &str, depth: usize, path: Option<&[String]>) -> String {
+    #[derive(serde::Serialize)]
+    struct Step<'a> { id: &'a str, at: String }
+    #[derive(serde::Serialize)]
+    struct Out<'a> { from: &'a str, to: &'a str, depth: usize, path: Option<Vec<Step<'a>>> }
+    let steps = path.map(|p| p.iter().map(|id| Step {
+        id,
+        at: graph.nodes.get(id).map(|n| format!("{}:{}", n.file, n.line)).unwrap_or_default(),
+    }).collect());
+    serde_json::to_string(&Out { from, to, depth, path: steps }).unwrap_or_else(|_| "{}".to_string())
+}
+
 /// The shortest chain of code edges from `from` to `to` (or one of its aliases or members),
 /// at most `depth` hops.
 pub fn trace(graph: &Graph, from: &str, to: &str, depth: usize) -> Option<Vec<String>> {

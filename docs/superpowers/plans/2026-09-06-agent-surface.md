@@ -10,6 +10,18 @@
 
 **Spec:** this document's *Decision* section. No separate spec was written; the decision and its consequences are argued here because they are the plan.
 
+## Rebased 2026-09-09
+
+This plan's Tasks 0–8 stand as written. Five things landed under it since it was written against `868f4c1`, and each one changes a line of it; the table is the whole of the rebase, and [`2026-09-09-agent-sync-and-results.md`](2026-09-09-agent-sync-and-results.md) carries the work this plan does not have — the Codex contract read rather than assumed, the resident-answer latency, the reranker diagnostics, and the README the stanza points at. The branch was cut at `0def05e`, which is `fix/critical-defects` stacked on `origin/main` at `1e185ed`.
+
+| Landed | Where this plan assumed otherwise | The delta |
+|---|---|---|
+| **PR #21 — families derived from definitions** (`9db1f0f`) | The stanza and brief describe `id_families` as a setting; `verify` reports "in families never declared" | The brief reports the **derived** family count and cites `repograph families`; no installed text tells an agent to configure families, and a `repograph.toml` notice for those two keys is expected output, not an error |
+| **PR #22 — `core.quotepath=false` on `changes`** (`1e185ed`) | The PostToolUse risk hook was drafted against a `changes` that silently dropped any file with a non-ASCII path | The risk hook is correct on a Cyrillic-named file now; the harness gains one case with such a path so it is proved rather than assumed |
+| **PR #20 — `threads` became `resources`** (`6b78837`, breaking) | Any installed config or doc naming `threads` | The installer never writes `threads`; the skill's performance paragraph names `resources` |
+| **PR #13 + #21 — `enrich_model` / `rerank_model` are config, sonnet reranks** | The scout task picks a model in prose | The scout reads the configured model; the stanza names no model at all |
+| **PR #17 + #23 — a Windows binary, and the config trust boundary** (`cfd4c40`) | Hooks and the installer are POSIX-shaped, and a project file could name a transport | `install-agent` writes the same JSON on Windows; the hook script is Node and already portable; and anything that configures a transport writes the **machine** file, because a project's `repograph.toml` may no longer name `enrich_command` or `rerank_command` |
+
 ## Global Constraints
 
 - The worktree is `/Users/max/Documents/projects/repograph/.worktrees/agent-surface`, branch `feat/agent-surface`, cut from `origin/main`. `main` carries `868f4c1` (#14) at the time of writing; Task 0 records the tip it actually found. This plan file lives on `docs/weak-spots-residue-seat-register` and is not part of the feature branch's diff.

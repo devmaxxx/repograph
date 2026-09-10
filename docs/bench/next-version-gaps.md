@@ -1260,6 +1260,34 @@ bookkeeping exists — `--idle` already counts the time since the last question 
 after an idle drop stated rather than hidden, and the warm numbers unmoved — a fused `ask` through
 the socket answering as it does today.
 
+**Closed (2026-09-09)** by `serve --idle-model <secs>`, default 300 — a second threshold on the
+clock `--idle` already keeps, dropping the embedder and the local reranker where `--idle` ends the
+process. The graph, the id matcher, the lexical indexes and the vectors stay, so the answer that
+does not need a model is still resident; the slots emptied are the ones the answer path fills
+lazily, which is why nothing has to be told the model went.
+
+Measured on a 33,525-row copy (`/private/tmp/g19-copy`, small model), `--idle-model 60`:
+
+| | resident (RSS) |
+| --- | --- |
+| started, before any question | 74.7 MB |
+| after one fused `ask` | 908.5 MB |
+| 60 s later, model dropped | **28.8 MB** |
+| after the next fused `ask` | 1.31 GB |
+| dropped a second time | 277.6 MB |
+
+The gate asked for under 0.1 GB and the first drop reads 28.8 MB. **The second drop reads 277.6
+MB**, and that is the honest number: the weights go, but the allocator keeps roughly 250 MB of what
+the second open took, so a server cycling all day settles well above the first reading rather than
+returning to it. Still 4.7× under what it held, and the lever the gate was written for.
+
+Latency, same copy: **0.083 s** for a fused `ask` through a resident server, **0.771 s** for the
+first one after a drop — the open, paid where the gate said to state it — and the answer text
+identical across the drop. The warm number is what the hook's 5 s budget is measured against, which
+is why `agent/hook.mjs` now starts a `serve --idle 1800 --idle-model 300` on `SessionStart`: no
+probe first, because a second `serve` refuses to bind while one answers and leaves by itself, so
+the start is the check. `REPOGRAPH_HOOK_SERVE=0` turns it off.
+
 ## G27 · `serve` cannot bind under a deep path, and a killed one leaves its socket behind
 
 **Raised (2026-09-07)** as the side findings of
@@ -1320,6 +1348,20 @@ the retrievers; or, if pick order is the cause, pin the rendered order to the fu
 **Gate.** Two identical-hit `bench --rerank` runs both clear a written p90 bar, and the three
 tokens have a named cause.
 
+**Answered (2026-09-09)** by [2026-09-09-rerank-diagnostics.md](2026-09-09-rerank-diagnostics.md). Two reranked runs over the 30 paraphrase cases: the same 28
+hits, the same pool rank for all 30, the same prompt bytes for all 30 — and **21 of 30 cases moved
+their rendered token count, by −18 to +25**. Retrieval is deterministic and did not move; what
+moved is which five ids the model picked and in what order, so different neighbours and headlines
+were expanded. Not a notice, not a longer headline: pick order, and the per-case spread it produces
+at fixed input is an order of magnitude larger than the three tokens that turned a run red.
+
+**The bar, written before the next run reads it.** On the graded 82-case suite the free dense arm
+reads p90 221 and the reranked arm 228 and 231, against a 230 ceiling set for the free arm.
+`--rerank` grades against a p90 of **240 tokens** — the highest reranked reading plus nine, which
+absorbs the pick-order wobble and still fails an arm whose answers grow by ten tokens across the
+board. Pinning the rendered order to the fused order would remove the wobble rather than budget for
+it; that is a change to what the reader sees and is argued separately.
+
 ---
 
 ## G29 · One paraphrase the reranker never picks — `FR-MKT-35`
@@ -1339,6 +1381,12 @@ what the candidate shows. Outside it: no model at any depth can pick it, and the
 120 characters, or the generated question that matched; depth or fusion if it is not.
 
 **Gate.** 30/30 on one run, or the rank recorded beside the reason it cannot be reached.
+
+**Closed (2026-09-09)** by [2026-09-09-rerank-diagnostics.md](2026-09-09-rerank-diagnostics.md), on the second branch of its own diagnostic: `pool=-/200` in both
+runs — **the id is not in the 200-deep pool at all.** The model was never shown it, so the snippet
+policy cannot be the lever for this case and no reranker at any depth this pool is built to could
+have picked it. The lever is depth or fusion, which is G30's. Snippet policy may still be right for
+other cases; this one cannot be the evidence for it.
 
 ---
 
@@ -1361,6 +1409,17 @@ to try» was written before this list existed, and the list says which of its ca
 **Gate.** Fourteen ranks recorded; any zero-token lever proposed against them cites the ranks it
 targets.
 
+**Closed (2026-09-09)** by [2026-09-09-rerank-diagnostics.md](2026-09-09-rerank-diagnostics.md). On the 30 paraphrase cases: thirteen gains, zero losses, and
+their ranks are **6, 14, 18, 22, 23, 51, 109, 122, 135, 152, 155, 173, 196**. Every case both arms
+hit sits at rank 1–8, so the free arm's reach and the model's gains barely overlap.
+
+**Five of thirteen sit at rank ≤ 25** — a sixth seat, a second expanded line, a fusion change that
+lifts a rank-14 candidate could plausibly seat those, and a zero-token proposal now has to name
+which of the five it targets. **Eight sit at rank ≥ 51, seven past 100**; nothing that reorders a
+five-seat answer reaches rank 152, and a fusion change judged against those eight is a change
+judged against the model. G2's «nothing cheaper left to try» was half wrong, and the halves are now
+countable.
+
 ---
 
 ## G31 · The reranker's token cost is one prompt divided by four
@@ -1379,6 +1438,18 @@ answer's p90. Cost is then a measured column rather than an estimate in a captio
 
 **Gate.** The README's rerank rows carry a token figure with its method named, and the caption
 «estimate» leaves the table.
+
+**Closed (2026-09-09)** by [2026-09-09-rerank-diagnostics.md](2026-09-09-rerank-diagnostics.md). `bench` meters every prompt it sends and prints median and p90 on
+a line of its own beneath the summary. Thirty prompts: min 54,015 B, **median 58,314 B**, **p90
+60,843 B**, max 62,008 — identical byte-for-byte across the two runs, which is the check that the
+meter reads the request rather than the answer. The captured single prompt of 57,506 B was
+representative to within 1.4%: the estimate was unverified rather than wrong, and the figure that
+does not survive is the older ≈19k tokens from the 41-case pool.
+
+Bytes, with the method named: `rerank_command` runs `claude -p --output-format text`, which returns
+the picked ids and no usage block, so the model's own count cannot be read without changing what
+the command prints and how `rerank::parse` reads it. Bytes ÷ 4 — ≈14.6k tokens at the median — is a
+**floor** on a corpus that is mostly Cyrillic, where a character is two bytes.
 
 ---
 
@@ -1552,6 +1623,22 @@ fifth, priced in wall rather than dollars.
 **Gate.** A row per configuration in the README's `--rerank` table, or a recorded refusal with
 its number.
 
+**Refused, with numbers (2026-09-10)** in
+[the cross-vendor refusals](2026-09-10-cross-vendor-refusals.md). Four configurations, four reasons,
+none of them a shrug:
+
+| arm | why not | what would fill it |
+| --- | --- | --- |
+| Codex | the machine's ChatGPT refresh token was spent by the probe that established `agent/codex.md`; `codex login` is the repair and it is the account holder's to run | 30 questions of the account's quota |
+| Ollama | `ollama list` is empty — the daemon is installed and no model is pulled | a multi-gigabyte pull, declined rather than taken quietly |
+| `e5-large` + reranker | no e5-large store and no cached weights on this machine; a 2.1 GB download and an embed of 33.5k rows the README prices in hours | one copy embedded large, then the 30 paraphrase cases only — the pool ranks say the five gains at rank ≤ 25 are where a better embedder could matter and the seven past 100 are not |
+| code-enriched fifth list | ~$6 of haiku over 5,240 code nodes before a single reranked question | a spending decision, which belongs to whoever pays |
+
+What was established for nothing: both command shapes still match their CLIs on this machine —
+`codex exec`'s stdin behaviour, `-m`, `--skip-git-repo-check` and `-o` are all present in 0.147.0,
+and `ollama run MODEL [PROMPT]` with `--hidethinking` in 0.33.3. The shapes have not rotted, which
+is the whole of what a `--help` reading can say and is what the README already claims.
+
 ---
 
 ## G38 · `families` is a report of the derived set and says nothing about the rule's own edge
@@ -1655,7 +1742,7 @@ answer different questions, and no row below moves a retrieval floor.
 | 4 | **G22** mapped weights under memory pressure | a shipped default whose price is +6% to +26% of wall exactly on the machines that most need the 1.14 GB it saves, and all three candidate policies are unmeasured |
 | 5 | ~~**G21** one platform measured, three reasoned~~ | ~~the largest unmeasured surface in the family, and the one that needs hardware this session did not have~~ — closed 2026-09-09 — the band was removed |
 | — | ~~**G27** `serve`'s socket path and its leftover~~ | closed 2026-09-09 — the socket falls back to `$TMPDIR/repograph-<hash>.sock` when `.repograph/serve.sock` will not fit in `sun_path`, proved on a 230-byte repository path that could not bind at all before; and a `SIGTERM` sets a flag the loop reads, so the exit is the identity-checked one every other exit takes |
-| 7 | **G26** `serve` holds its model while idle | 1.39 GB resident for as long as the process lives, where `watch` now holds 129.5 MB between refreshes; the shape of the fix is written and measured next door |
+| ~~7~~ | ~~**G26** `serve` holds its model while idle~~ | **closed 2026-09-09** — `--idle-model`, default 300 s: 908.5 MB → 28.8 MB on the first drop, 277.6 MB on the second, 0.771 s for the ask that pays the open |
 | 8 | **G25** the fp32 weights are the floor | the only lever that could move the floor under every memory number in both rounds, and finding out costs a full re-embed and the quantized model's own floors — no download at all on the default, whose int8 build is already cached, and 562 MB on the large one |
 | 9 | **G24** `--rerank-local` is 31.9 s and 3.1 GB | the heaviest reader by far, and what would actually move it is a pool depth, which belongs to G2 and not to this family |
 
@@ -1671,11 +1758,11 @@ clones a repository they did not write.
 | 2 | **G32** a rebuilt enriched store is graded raw | the first thing anyone will hit after this branch merges: 150 nodes without questions and a bench that quietly grades against the raw floors. A stderr line and one `enrich` close it; the fixture's own rebuild is the recorded pair that says so |
 | 3 | **G34** two copies of one grammar | the failure is silent — a re-extraction on every `update`, or a family no node is written in — and the property test that makes it a red test is one function over fixtures that already exist |
 | 4 | **G39** the family set is an input to extraction | the design under G34: while the extractor needs the set, the two grammars must agree and a move costs a corpus read. It sits below G34 because the property test is what makes a divergence visible, and above everything else because it is the change that would make G34 unnecessary — and it is the one row here that could grow the store, so it is measured before it is taken |
-| 5 | **G30** where the reranker's gains sit in the pool | the fourteen ranks decide whether G2 is really closed; every zero-token lever proposed since should be judged against them, and none can be until they are recorded |
-| 6 | **G28** the reranked p90 straddles the ceiling | the arm cannot be floored while its own bar is what turns it red; a diff of two runs names the cause |
-| 7 | **G29** the one paraphrase sonnet never picks | one `dump` says whether it is a snippet or a pool problem; small, and it is the whole distance to 30/30 |
-| 8 | **G31** the token cost is bytes ÷ 4 of one prompt | the README's cost column is a caption; the bench should measure what it sends |
-| 9 | **G37** no non-Claude number, no stacked levers | five runs on copies, all priced, none blocking anything; first among them the `e5-large` + reranker pair, because both halves are already measured alone |
+| ~~5~~ | ~~**G30** where the reranker's gains sit in the pool~~ | **closed 2026-09-09** — thirteen gains at ranks 6, 14, 18, 22, 23, 51, 109, 122, 135, 152, 155, 173, 196; five are within reach of a zero-token lever and eight are the model's alone |
+| ~~6~~ | ~~**G28** the reranked p90 straddles the ceiling~~ | **answered 2026-09-09** — the cause is pick order (identical pool, identical prompt, 21 of 30 cases moving ±25 tokens); the arm's own bar is written at p90 240, unread |
+| ~~7~~ | ~~**G29** the one paraphrase sonnet never picks~~ | **closed 2026-09-09** — `pool=-/200`: the id is outside the pool, so the lever is depth or fusion and never the snippet |
+| ~~8~~ | ~~**G31** the token cost is bytes ÷ 4 of one prompt~~ | **closed 2026-09-09** — metered: median 58,314 B, p90 60,843 B over thirty prompts; bytes and not tokens, because the transport returns no usage block |
+| 9 | **G37** no non-Claude number, no stacked levers | **refused with numbers 2026-09-10** — an account, an empty model shelf, a 2.1 GB download and ~$6 of haiku; the cheap half is the `e5-large` pair on the 30 paraphrase cases, and the pool ranks say which five cases it could move |
 | 10 | **G35** `derive` on every `update` | the no-op case is closed and measured, 1.00 s → 0.08 s cold; what is left is the `update` that does change a file, still expected to be milliseconds and still without a number |
 | 11 | **G40** the empty set is a never-matching regex | a type change and a branch, no measurement to take; here rather than last because it is the cheapest row in the file and it removes a sentinel a reader has to decode |
 | 12 | **G38** the report has no edge | a sort order and two columns; last because the report already shows both halves |

@@ -206,7 +206,7 @@ pub fn try_ask(repo: &Path, req: &ask::Request) -> Option<Reply> {
     Some(reply)
 }
 
-pub fn run(repo: &Path, cfg: &config::Config, every: u64, batch: usize, idle: u64, no_dense: bool) -> Result<()> {
+pub fn run(repo: &Path, cfg: &config::Config, every: u64, batch: usize, idle: u64, idle_model: u64, no_dense: bool) -> Result<()> {
     // Stamped first of all, because `cfg` was read before this call and the two opens below take
     // seconds on a large store: a file edited inside that window would be stamped as the baseline
     // and this process would then answer under the configuration from before the edit for as long
@@ -244,7 +244,7 @@ pub fn run(repo: &Path, cfg: &config::Config, every: u64, batch: usize, idle: u6
     // handed to whichever client happens to connect first.
     let mut ctx = ask::Context::open(repo, cfg, true, no_dense)?;
     log(&mut ctx);
-    eprintln!("serve: {} every {every}s, batch {batch}, idle {idle}s; Ctrl-C stops", path.display());
+    eprintln!("serve: {} every {every}s, batch {batch}, idle {idle}s, model idle {idle_model}s; Ctrl-C stops", path.display());
     let (mut last_poll, mut last_request) = (Instant::now(), Instant::now());
     loop {
         match rx.recv_timeout(WAKE) {
@@ -274,8 +274,20 @@ pub fn run(repo: &Path, cfg: &config::Config, every: u64, batch: usize, idle: u6
             log(&mut ctx);
         }
         if terminated() { eprintln!("serve: terminated, exiting"); return Ok(()); }
+        if drop_model_now(idle_model, last_request.elapsed(), ctx.model_open()) {
+            ctx.drop_model();
+            eprintln!("serve: no question for {idle_model}s, dropped the model — the next fused question pays the open");
+        }
         if last_request.elapsed() >= Duration::from_secs(idle) { eprintln!("serve: idle for {idle}s, exiting"); return Ok(()); }
     }
+}
+
+/// Whether the weights should go now. Two thresholds read one clock: `--idle` ends the process,
+/// `--idle-model` ends only the 1.3 GB behind the dense arm, because a server left up overnight is
+/// worth its resident lexical answer and is not worth that. Zero turns the drop off, and a context
+/// holding nothing is left alone so the line is printed once per drop rather than every wake.
+fn drop_model_now(idle_model: u64, since: Duration, holding: bool) -> bool {
+    idle_model > 0 && holding && since >= Duration::from_secs(idle_model)
 }
 
 /// A `SIGTERM`ed `serve` used to leave its socket file behind, because the unlink is a `Drop` and
@@ -397,8 +409,21 @@ impl Drop for Unlink {
 
 #[cfg(test)]
 mod tests {
-    use super::{socket_path, sys};
+    use super::{drop_model_now, socket_path, sys};
     use std::io::{BufRead, BufReader};
+    use std::time::Duration;
+
+    /// `--idle` exits, `--idle-model` forgets — two thresholds off the one clock, so a server
+    /// left up overnight keeps the 6.8 ms lexical answer and not the 1.3 GB behind the dense one.
+    #[test]
+    fn the_weights_go_on_their_own_idle_and_only_while_something_is_held() {
+        assert!(!drop_model_now(0, Duration::from_secs(9_999), true), "zero is off, at any age");
+        assert!(!drop_model_now(300, Duration::from_secs(299), true));
+        assert!(drop_model_now(300, Duration::from_secs(300), true), "the threshold is reached, not passed");
+        assert!(!drop_model_now(300, Duration::from_secs(301), false),
+                "nothing held: the line would otherwise print on every wake for the rest of the day");
+    }
+
 
     /// `sun_path` is 104 bytes on macOS, including the NUL, so a repository under a deep enough
     /// path cannot bind a socket inside itself at all — which was every store copy the resource

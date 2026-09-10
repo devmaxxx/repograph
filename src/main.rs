@@ -10,9 +10,11 @@ mod families;
 mod rerank;
 mod ids;
 mod impact;
+mod install_agent;
 mod index;
 mod legacy;
 mod model;
+mod prime;
 mod query;
 mod serve;
 mod store;
@@ -63,6 +65,8 @@ enum Cmd {
         #[arg(long, default_value_t = 30)] every: u64,
         #[arg(long, default_value_t = 1)] batch: usize,
         #[arg(long, default_value_t = 1800)] idle: u64,
+        /// Seconds without a question after which the model is dropped and the process stays.
+        #[arg(long, default_value_t = 300)] idle_model: u64,
     },
     /// Keeps the store in step with the tree for readers that do not refresh themselves —
     /// editors, MCP servers. Polls, applies the same incremental update `ask` does, and embeds
@@ -74,7 +78,10 @@ enum Cmd {
         /// carried to the next poll instead, at most three times in a row.
         #[arg(long, default_value_t = 1)] batch: usize,
     },
-    Explain { node: String },
+    Explain {
+        node: String,
+        #[arg(long)] json: bool,
+    },
     /// Who reaches a symbol (callers by depth, importing files, a risk line), or with `--down`
     /// what it reaches. A class is walked through its members; a caller that imported through a
     /// barrel is found all the same
@@ -91,6 +98,7 @@ enum Cmd {
         from: String,
         to: String,
         #[arg(long, default_value_t = 6)] depth: usize,
+        #[arg(long)] json: bool,
         #[arg(long)] stale: bool,
     },
     /// What the working tree's diff touches and who reaches it: hunks against `--base` (staged,
@@ -101,7 +109,26 @@ enum Cmd {
         #[arg(long)] json: bool,
         #[arg(long)] stale: bool,
     },
-    Verify,
+    Verify {
+        #[arg(long)] json: bool,
+    },
+    /// Writes the agent-facing surface into this repository: one hook dispatched on four events, a
+    /// skill, a subagent definition and a ten-line stanza in the instructions file. Idempotent —
+    /// a second run rewrites the same bytes and says it changed nothing.
+    InstallAgent {
+        /// Claude Code's `.claude/`.
+        #[arg(long)] claude: bool,
+        /// Codex's `.codex/`.
+        #[arg(long)] codex: bool,
+        /// How this repository invokes the binary, for the stanza's command lines.
+        #[arg(long, default_value = "repograph")] command: String,
+    },
+    /// What a coding agent should be told about this repository at the start of a session: node
+    /// counts, whether the questions are written, which embedder the vectors belong to, how many
+    /// families the documents define, and the five commands. Reads the store; never refreshes.
+    Prime {
+        #[arg(long)] json: bool,
+    },
     /// Which families the documents define and where, how many nodes each holds, and which
     /// id-like prefixes were left as text because no line defines them. Reads the built store
     /// and the documents; writes nothing.
@@ -584,19 +611,23 @@ fn main() -> anyhow::Result<()> {
             ctx.timing().stage("printed");
             std::process::exit(0)
         }
-        Cmd::Serve { every, batch, idle } => {
+        Cmd::Serve { every, batch, idle, idle_model } => {
             let cfg = load_cfg()?;
             cap_pools(index::embed::threads(cfg.resources));
-            serve::run(&repo, &cfg, every, batch, idle, cli.no_dense)
+            serve::run(&repo, &cfg, every, batch, idle, idle_model, cli.no_dense)
         }
         Cmd::Watch { every, batch } => {
             let cfg = load_cfg()?;
             cap_pools(index::embed::threads(cfg.resources));
             run_watch(&repo, &cfg, every, batch, cli.no_dense)
         }
-        Cmd::Explain { node } => {
+        Cmd::Explain { node, json } => {
             let (graph, _) = store::Store::new(&repo).load()?;
-            match query::explain(&graph, &node) {
+            let rendered = match json {
+                true => query::explain_json(&graph, &node).map(|j| format!("{j}\n")),
+                false => query::explain(&graph, &node),
+            };
+            match rendered {
                 Some(s) => { print!("{s}"); Ok(()) }
                 None => anyhow::bail!("no node matches {node}"),
             }
@@ -608,11 +639,20 @@ fn main() -> anyhow::Result<()> {
             print!("{}", if json { impact::render_json(&graph, &imp, direction) } else { impact::render(&graph, &imp, direction) });
             Ok(())
         }
-        Cmd::Trace { from, to, depth, stale } => {
+        Cmd::Trace { from, to, depth, json, stale } => {
             let graph = graph_for(&repo, &load_cfg()?, stale)?;
             let Some(a) = query::resolve(&graph, &from) else { anyhow::bail!("no node matches {from}") };
             let Some(b) = query::resolve(&graph, &to) else { anyhow::bail!("no node matches {to}") };
-            match impact::trace(&graph, &a.id, &b.id, depth) {
+            let found = impact::trace(&graph, &a.id, &b.id, depth);
+            // No path within the depth is an answer to the question that was asked, so the JSON
+            // form says so and exits 0 where the text form treats it as a failed lookup. A caller
+            // parsing JSON should not have to read an exit code to learn what the object already
+            // says, and a `null` path is easier to handle than a non-zero exit with no object.
+            if json {
+                println!("{}", impact::trace_json(&graph, &a.id, &b.id, depth, found.as_deref()));
+                return Ok(());
+            }
+            match found {
                 Some(path) => {
                     for (i, id) in path.iter().enumerate() {
                         let at = graph.nodes.get(id).map(|n| format!("{}:{}", n.file, n.line)).unwrap_or_default();
@@ -630,10 +670,57 @@ fn main() -> anyhow::Result<()> {
             print!("{}", if json { changes::render_json(&graph, &r) } else { changes::render(&graph, &r) });
             Ok(())
         }
-        Cmd::Verify => {
+        Cmd::Verify { json } => {
             let (graph, _) = store::Store::new(&repo).load()?;
-            print!("{}", query::verify(&graph));
+            match json {
+                true => println!("{}", query::verify_json(&graph)),
+                false => print!("{}", query::verify(&graph)),
+            }
             if graph.nodes.is_empty() { anyhow::bail!("graph is empty — run `repograph build`"); }
+            Ok(())
+        }
+        Cmd::InstallAgent { claude, codex, command } => {
+            let targets: Vec<install_agent::Target> = match (claude, codex) {
+                (false, false) => anyhow::bail!("name a harness: --claude, --codex, or both"),
+                (c, x) => [(c, install_agent::Target::Claude), (x, install_agent::Target::Codex)]
+                    .into_iter().filter(|(on, _)| *on).map(|(_, t)| t).collect(),
+            };
+            for target in targets {
+                let r = install_agent::install(&repo, target, &command)?;
+                match r.written {
+                    0 => println!("{target:?}: already installed, nothing written"),
+                    n => println!("{target:?}: wrote {n} files\n  {}", r.paths.join("\n  ")),
+                }
+                for note in &r.notes { println!("{target:?}: {note}"); }
+                // Codex reads its hooks from `~/.codex/hooks.json`, which is the machine's and not
+                // this repository's. Printed for a person to paste; see `agent/codex.md`.
+                if target == install_agent::Target::Codex {
+                    let hook = repo.join(".codex/hooks/repograph-hook.mjs");
+                    let abs = hook.canonicalize().unwrap_or(hook);
+                    println!("\nTo run the hook on this machine, add to ~/.codex/hooks.json \
+                              (merging with what is already there):\n{}\n\
+                              Codex trusts a hook by hash: the first session after this is added \
+                              asks once, and editing the script later asks again. The hook reads \
+                              each session's own working directory and stays silent where there is \
+                              no index, so one copy serves every repository — move it to \
+                              ~/.codex/hooks/ and adjust the path if this checkout may go away.",
+                             install_agent::codex_hooks_block(&abs.display().to_string()));
+                }
+            }
+            Ok(())
+        }
+        Cmd::Prime { json } => {
+            let store = store::Store::new(&repo);
+            let (graph, _) = store.load()?;
+            if graph.nodes.is_empty() { anyhow::bail!("graph is empty — run `repograph build`"); }
+            let questions = enrich::Questions::load(&store)?;
+            let families = families::graph_families(&graph).0.len();
+            let model = index::dense::DenseIndex::recorded_model(&store)?;
+            let b = prime::brief(&graph, &questions, families, model.as_deref());
+            match json {
+                true => println!("{}", b.json()),
+                false => print!("{}", b.text()),
+            }
             Ok(())
         }
         Cmd::Families { json } => families::run(&repo, &load_cfg()?, json),

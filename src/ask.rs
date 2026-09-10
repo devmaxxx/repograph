@@ -159,6 +159,30 @@ impl Context {
     /// question has to be refused before it is asked rather than answered lexically.
     pub fn no_dense(&self) -> bool { self.no_dense }
 
+    /// Whether this context is holding model weights right now — the embedder, the local
+    /// reranker, or a warm open still running. A slot that holds a *failed* open holds no
+    /// memory, so it does not count.
+    pub fn model_open(&self) -> bool {
+        self.embedder.borrow().as_ref().is_some_and(Option::is_some)
+            || self.cross.borrow().is_some()
+            || self.warm.borrow().is_some()
+    }
+
+    /// Forgets the model weights and keeps everything else: the graph, the id matcher, the
+    /// lexical indexes and the vectors stay resident, so a lexical answer is still milliseconds
+    /// and a fused one pays the ~220 ms open again. The slots are the same ones the answer path
+    /// fills lazily, so nothing has to be told the model went. Returns whether anything was held.
+    ///
+    /// A warm open still in flight is joined rather than abandoned: dropping the handle alone
+    /// would leave the thread to finish and hold the weights nobody can reach any more.
+    pub fn drop_model(&self) -> bool {
+        let held = self.model_open();
+        if let Some(handle) = self.warm.borrow_mut().take() { let _ = handle.join(); }
+        *self.embedder.borrow_mut() = None;
+        *self.cross.borrow_mut() = None;
+        held
+    }
+
     /// The text `ask` prints for this request — `render`'s output, byte for byte.
     pub fn answer(&mut self, req: &Request) -> anyhow::Result<String> {
         // A context opened without the dense arm has no vectors and no model to grow one from,
@@ -358,6 +382,23 @@ mod tests {
         std::fs::write(dir.path().join("docs/cal.md"), "# Календарь\n\n**FR-CAL-1 · MUST · Перенос визита**\n\nПеренос не считается отменой.\n").unwrap();
         std::fs::write(dir.path().join("repograph.toml"), "id_families = [\"FR-PAY\", \"FR-CAL\"]\n").unwrap();
         dir
+    }
+
+    /// What `serve --idle-model` calls between questions. A context that never opened a model
+    /// says it held nothing, and the slots it empties are the ones the answer path fills lazily —
+    /// so the next fused question opens a model exactly as the first one did.
+    #[test]
+    fn dropping_the_model_empties_the_slots_the_answer_path_fills() {
+        let dir = repo_with_two_docs();
+        let cfg = crate::config::Config::load(dir.path()).unwrap();
+        crate::run_update(dir.path(), &cfg, true).unwrap();
+        let mut ctx = Context::open(dir.path(), &cfg, true, true).unwrap();
+        assert!(!ctx.model_open());
+        assert!(!ctx.drop_model(), "nothing was held");
+        let req = Request { words: vec!["штраф".into()], json: false, seeds: 5, bodies: false, rerank: false, rerank_local: false, depth: crate::rerank::DEPTH, stale: true, no_dense: true };
+        let before = ctx.answer(&req).unwrap();
+        ctx.drop_model();
+        assert_eq!(ctx.answer(&req).unwrap(), before, "the answer a dropped model leaves behind is the same answer");
     }
 
     #[test]

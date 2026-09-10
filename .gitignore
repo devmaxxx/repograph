@@ -11,3 +11,8 @@
 # Python bytecode from the bench tooling
 __pycache__/
 *.pyc
+
+# Built by bench/agent/overlays/build.sh from the fixture and the installer, never edited.
+bench/agent/overlays/A/
+bench/agent/overlays/B/
+bench/agent/overlays/C/

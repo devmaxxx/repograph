@@ -298,6 +298,61 @@ pub fn explain(graph: &Graph, needle: &str) -> Option<String> {
     Some(out)
 }
 
+/// `explain` for a reader that would rather not parse prose: the node, then one entry per edge
+/// with the direction already resolved, so a caller never has to know which end of an edge the
+/// node was. A view struct rather than the graph's own types — a store layout is not an interface.
+pub fn explain_json(graph: &Graph, needle: &str) -> Option<String> {
+    #[derive(serde::Serialize)]
+    struct Edge<'a> { kind: String, dir: &'a str, other: &'a str, context: &'a str }
+    #[derive(serde::Serialize)]
+    struct Out<'a> {
+        id: &'a str, kind: String, label: &'a str, file: &'a str, line: u32,
+        community: Option<&'a str>, edges: Vec<Edge<'a>>,
+    }
+    let n = resolve(graph, needle)?;
+    let mut edges = graph.neighbours(&n.id);
+    edges.sort_by_key(|e| (e.kind == EdgeKind::Legacy, e.kind, e.source.clone(), e.target.clone()));
+    let out = Out {
+        id: &n.id,
+        kind: format!("{:?}", n.kind),
+        label: &n.label,
+        file: &n.file,
+        line: n.line,
+        community: n.community.as_deref(),
+        edges: edges.iter().map(|e| {
+            let (dir, other) = if e.source == n.id { ("out", e.target.as_str()) } else { ("in", e.source.as_str()) };
+            Edge { kind: format!("{:?}", e.kind), dir, other, context: &e.context }
+        }).collect(),
+    };
+    serde_json::to_string(&out).ok()
+}
+
+/// `verify`'s own numbers, the same partitions under names instead of indentation.
+pub fn verify_json(graph: &Graph) -> String {
+    let mut nodes: BTreeMap<String, usize> = BTreeMap::new();
+    for n in graph.nodes.values() { *nodes.entry(format!("{:?}", n.kind)).or_default() += 1; }
+    let mut edges: BTreeMap<String, usize> = BTreeMap::new();
+    for e in &graph.edges { *edges.entry(format!("{:?}", e.kind)).or_default() += 1; }
+    let dangling = graph.dangling();
+    let mut undeclared: Vec<&str> = dangling.iter().filter(|e| !e.target.contains(':')).map(|e| e.target.as_str()).collect();
+    undeclared.sort();
+    undeclared.dedup();
+    let declared: BTreeSet<&str> = graph.nodes.keys().filter(|id| !id.contains(':')).map(|id| family(id)).collect();
+    let (gaps, cite_only): (Vec<&str>, Vec<&str>) = undeclared.iter().partition(|id| declared.contains(family(id)));
+    #[derive(serde::Serialize)]
+    struct Out<'a> {
+        nodes: usize, edges: usize,
+        nodes_by_kind: BTreeMap<String, usize>, edges_by_kind: BTreeMap<String, usize>,
+        dangling: usize, undeclared: Vec<&'a str>, gaps: Vec<&'a str>, cite_only: Vec<&'a str>,
+    }
+    let out = Out {
+        nodes: graph.nodes.len(), edges: graph.edges.len(),
+        nodes_by_kind: nodes, edges_by_kind: edges,
+        dangling: dangling.len(), undeclared, gaps, cite_only,
+    };
+    serde_json::to_string(&out).unwrap_or_else(|_| "{}".to_string())
+}
+
 pub fn verify(graph: &Graph) -> String {
     let mut nodes: BTreeMap<String, usize> = BTreeMap::new();
     for n in graph.nodes.values() { *nodes.entry(format!("{:?}", n.kind)).or_default() += 1; }
