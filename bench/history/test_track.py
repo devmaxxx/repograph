@@ -140,6 +140,15 @@ class ParseBench(unittest.TestCase):
     def test_a_transcript_without_the_anchor_line_records_none(self):
         self.assertIsNone(track.parse_bench(OLD_TRANSCRIPT)["anchors"])
 
+    def test_the_cases_belong_to_the_run_the_row_records(self):
+        # Read over the whole file, the second run's copy of a case would land under the `#2`
+        # suffix that exists for two questions about one place inside one run: the row would carry
+        # two copies of every case, and the next single run of the arm would read `the case set
+        # changed` against a history that cannot be corrected afterwards.
+        p = track.parse_bench(REPEAT_TRANSCRIPT)
+        self.assertEqual(p["cases"], {"keyword/FR-AI-138": 1.0})
+        self.assertEqual(p["tokens"], {"keyword/FR-AI-138": 143})
+
     def test_the_anchors_belong_to_the_summary_the_row_records(self):
         # `--repeat` prints the median's anchors last, and the row records the last run's summary:
         # the last line in the transcript is the wrong line to pair with those counts.

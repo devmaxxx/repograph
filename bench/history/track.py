@@ -115,8 +115,24 @@ def parse_bench(text):
     readings treat as a miss. The summary's per-kind counts stay what `bench` printed: cases
     with at least one anchor reached, the developer's entry point.
     """
+    raw = text.splitlines()
+    lines = [l.strip() for l in raw]
+    tail = [(i, SUMMARY.match(l)) for i, l in enumerate(lines)]
+    tail = [(i, m) for i, m in tail if m]
+    if not tail:
+        raise SystemExit("no summary line in the transcript -- did the run reach the end?")
+    at, g = tail[-1]
+    # Only the run this row records, not the whole file: `--repeat` prints the suite once per run
+    # into one transcript, and a case key is the kind and the anchor, so read over every run the
+    # second run's copy of a case lands under the `#2` suffix that exists for two questions about
+    # one place *inside* one run. The row would carry N copies of every case, the next single run
+    # of the arm would read `the case set changed`, and `weak`/`flaky` would count keys no suite
+    # has -- against a history that is append-only and cannot be corrected afterwards. The counts
+    # and the anchors below are the last run's, so its cases are the last run's too: the lines
+    # between the summary before it and its own.
+    start = tail[-2][0] + 1 if len(tail) > 1 else 0
     cases, tokens = {}, {}
-    for line in text.splitlines():
+    for line in raw[start:at]:
         m = CASE.match(line.rstrip())
         if m:
             kind, expect, verdict, reached, want, tok, _q = m.groups()
@@ -135,12 +151,6 @@ def parse_bench(text):
             else:
                 cases[key] = 1.0 if verdict == "HIT" else 0.0
             tokens[key] = int(tok)
-    lines = [l.strip() for l in text.splitlines()]
-    tail = [(i, SUMMARY.match(l)) for i, l in enumerate(lines)]
-    tail = [(i, m) for i, m in tail if m]
-    if not tail:
-        raise SystemExit("no summary line in the transcript -- did the run reach the end?")
-    at, g = tail[-1]
     dense, enriched = g.group(3) == "true", g.group(4) == "true"
     rr = RERANK.search(g.group(7) or "")
     suite = SUITE.search(g.group(7) or "")
