@@ -3,21 +3,31 @@
 #
 # One directory holds every writer on this branch, so arms are sequential and each starts from
 # whatever the last one left unless something puts the fixture's state back. This does: tracked
-# edits reverted and untracked files removed (the store and repograph.toml excepted — both are
-# rewritten below), the pinned fixture's store copied in whole, repograph.toml written so that no
-# enrich or embed reaches for weights this machine does not have, and one --no-dense update to
+# edits reverted and untracked files removed (the store excepted — it is rewritten below), the
+# pinned fixture's store copied in whole, and one --no-dense update to
 # settle the stamps: the copied manifest carries the fixture's mtimes, which match nothing here,
 # so that first walk hashes every file, finds every hash unchanged, records this tree's stamps,
 # and every later walk is stat-only. `repograph-main` takes the no-op path on an unchanged tree
 # and derives nothing, which is why the settle reads `changed 0` and is not a re-read.
+#
+# Which embedder the arm runs under is declared in the environment and refused when absent, so no
+# writer here reaches for weights this machine does not hold; embedder.sh says why the declaration
+# is not a file in the tree. The worktree it leaves has nothing untracked in it at all, which is
+# what a `changes` row needs to map the one path it touched.
 #
 # Refuses with exit 2 and nothing touched unless WT is the locked, detached worktree at PIN and
 # is not FIX — so a mistyped path cannot silently become the target. Exit 1 when the settle walk
 # changed anything or its counts differ from the fixture's graph.json: the tree is not the one
 # the store was built from, and nothing measured on it would be comparable.
 #
-# usage: reset.sh     (FIX, WT, PIN and BIN from the environment; the defaults are this machine's)
+# usage: REPOGRAPH_EMBED_MODEL=intfloat/multilingual-e5-small reset.sh
+#        (FIX, WT, PIN and BIN from the environment too; the defaults are this machine's)
 set -u
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Before the directories are resolved, so a session set up without the declaration is refused
+# before anything is touched rather than after the store has been replaced.
+. "$HERE/embedder.sh" || exit 2
+embedder_declared || exit 2
 FIX=${FIX:-$HOME/bench/beauty-crm-502e8a6d}
 WT=${WT:-$HOME/bench/beauty-crm-test}
 PIN=${PIN:-502e8a6d}
@@ -38,16 +48,18 @@ printf '%s\n' "$block" | grep -q '^locked' || refuse "$wt is not locked — lock
 
 # `reset --hard` rather than `checkout -- .`: a staged edit survives the latter.
 git -C "$wt" reset -q --hard HEAD || exit 1
-git -C "$wt" clean -fdq -e .repograph -e repograph.toml || exit 1
-# Both of the paths `clean` was told to keep, not just one: `.repograph/` is ignored in this corpus
-# so `status` never names it and `clean -fd` would not have removed it either — but the exclusion
-# above is there for a corpus that does not ignore it, and there `status` prints `?? .repograph/`
-# and a filter naming only `repograph.toml` refuses every reset with "the tree did not come clean".
-# The two lines the script rewrites below are the two it excuses here.
-left=$(git -C "$wt" status --porcelain | grep -v -e '^?? repograph.toml$' -e '^?? \.repograph/$')
+git -C "$wt" clean -fdq -e .repograph || exit 1
+# The store is the one path `clean` is told to keep, and the one the filter below excuses: it is
+# rewritten from the fixture two lines down, so removing it here would only cost an rsync. In this
+# corpus it is ignored (`.gitignore`) and `status` never names it, but the pair is there for a
+# corpus that does not ignore it, where `status` prints `?? .repograph/` and an unfiltered check
+# would refuse every reset with "the tree did not come clean". Nothing else is spared, which is how
+# a `repograph.toml` an earlier reset left behind goes: what a reading declares is in the
+# environment now, so the tree keeps no file of ours for a `changes` row to map.
+left=$(git -C "$wt" status --porcelain | grep -v '^?? \.repograph/$')
 [ -z "$left" ] || { echo "reset: the tree did not come clean:" >&2; echo "$left" >&2; exit 1; }
 rsync -a --delete "$fix/.repograph/" "$wt/.repograph/" || exit 1
-printf 'embed_model = "intfloat/multilingual-e5-small"\n' > "$wt/repograph.toml"
+embedder_line
 echo "reset: $wt at $PIN, tree clean, store restored from $fix:"
 ls -l "$wt/.repograph" | awk 'NR > 1 {printf "  %10s  %s\n", $5, $9}'
 out=$("$BIN" --repo "$wt" --no-dense update) || exit 1

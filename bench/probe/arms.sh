@@ -7,13 +7,21 @@ B=$1; R=$2; L=$3; T=$4
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$HERE/../.." && pwd)"
 H="$ROOT/bench/history"
+# Declared for the fixture's arms as well as the worktree's, and refused when absent: the model
+# decides which floors `bench` grades against, and the small model the fixture's store was written
+# with is the one those floors were measured with. embedder.sh says why it is not a file in the tree.
+. "$HERE/embedder.sh" || exit 2
+embedder_declared || exit 2
 mkdir -p "$L"
 for suite in rec dev; do
   for arm in dense lexical; do
     nd=""; [ "$arm" = lexical ] && nd="--no-dense"
     cases=""; [ "$suite" = dev ] && cases="--cases $ROOT/bench/dev-cases.jsonl"
     out="$L/$T-$suite-$arm.txt"
-    REPOGRAPH_NO_SERVE=1 "$B" --repo "$R" $nd bench $cases > "$out" 2>&1
+    # Above the arm's own transcript, which `track.py` reads past: `bench` prints `model=small` for
+    # the floors it graded against, and this says the hub id those floors were keyed from.
+    embedder_line > "$out"
+    REPOGRAPH_NO_SERVE=1 "$B" --repo "$R" $nd bench $cases >> "$out" 2>&1
     rc=$?
     tail -3 "$out"
     # Recorded whatever the status: `bench` exits non-zero when a floor fails, and a failed floor

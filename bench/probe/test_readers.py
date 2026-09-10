@@ -7,6 +7,10 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 READERS = HERE / "readers.sh"
+# The real one, not a stub: which weights a row answered under is the suite's own declaration, and
+# a stub here would only pin this file's idea of it.
+EMBEDDER = HERE / "embedder.sh"
+SMALL = "intfloat/multilingual-e5-small"
 CN = "packages/ui/src/lib/cn.ts"
 ORIGINAL = "export const cn = (...a) => a.join(' ')\n"
 TOUCHED = "// touched for the changes measurement"
@@ -47,6 +51,7 @@ class Suite(unittest.TestCase):
         probe = self.tmp / "probe"
         probe.mkdir()
         shutil.copy(READERS, probe / "readers.sh")
+        shutil.copy(EMBEDDER, probe / "embedder.sh")
         for name, text in (("quiet.sh", QUIET), ("measure.sh", MEASURE)):
             (probe / name).write_text(text)
             (probe / name).chmod(0o755)
@@ -59,7 +64,8 @@ class Suite(unittest.TestCase):
 
     def run_suite(self, worktree="wt", **env):
         return subprocess.run(["bash", "probe/readers.sh", "./bin/repograph", worktree, "log", "1"],
-                              cwd=self.tmp, capture_output=True, text=True, env={**os.environ, **env})
+                              cwd=self.tmp, capture_output=True, text=True,
+                              env={**os.environ, "REPOGRAPH_EMBED_MODEL": SMALL, **env})
 
     def test_a_medians_step_that_refused_is_not_reported_as_a_suite_that_passed(self):
         self.judge.write_text(JUDGE_REFUSES)
@@ -88,6 +94,10 @@ class Suite(unittest.TestCase):
     def test_the_touch_the_changes_row_reads_is_gone_by_the_end_of_a_clean_run(self):
         self.run_suite()
         self.assertNotIn(TOUCHED, self.cn.read_text())
+
+    def test_the_file_the_medians_are_taken_from_names_the_embedder(self):
+        self.run_suite()
+        self.assertIn(f"embedder: REPOGRAPH_EMBED_MODEL={SMALL}", (self.tmp / "log" / "summary.txt").read_text())
 
 
 if __name__ == "__main__":

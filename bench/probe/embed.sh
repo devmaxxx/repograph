@@ -65,6 +65,11 @@ if [ "${BASH_SOURCE[0]}" != "$0" ]; then return 0; fi
 
 NAME=$1; B=$2; F=$3; L=$4
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# The one script here that writes vectors, so the model it writes them with is refused rather than
+# defaulted: an absent declaration would fill the store with whatever the built-in default is today
+# and the cadence would name no model at all. embedder.sh says why it is not a file in the tree.
+. "$HERE/embedder.sh" || exit 2
+embedder_declared || exit 2
 # The one script here that deletes store files, so it refuses the pinned fixture by path: nothing
 # writes there, and a mistyped argument is how that rule would get broken. Both sides go through
 # `pwd -P` the way reset.sh compares its two directories — comparing a resolved path against an
@@ -87,6 +92,9 @@ if [ -f "$L/summary.txt" ] && grep -q "^$NAME  " "$L/summary.txt"; then
 fi
 if ! "$HERE/quiet.sh" > "$L/$NAME.quiet" 2>&1; then cat "$L/$NAME.quiet"; echo "refusing to measure on a machine that is not quiet" >&2; exit 2; fi
 cat "$L/$NAME.quiet" | tee -a "$L/summary.txt"
+# One row a call, so this row's own line: §9's three runs pool into one summary and a reader of it
+# should not have to assume the three were embedded by the same model.
+embedder_line | tee -a "$L/summary.txt"
 rm -f "$F/.repograph/vectors.f32" "$F/.repograph/vectors.json"
 # `$| = 1`: the stamper's own stdout is a file, so perl block-buffers it, and nobody waits for the
 # stamper — it is a process substitution, and `wait` below waits on the wrapper. A 4 KB boundary

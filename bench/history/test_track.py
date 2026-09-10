@@ -107,6 +107,14 @@ class ParseBench(unittest.TestCase):
         self.assertEqual(p["cases"]["code/apps/api/src/main.ts"], 1.0)
         self.assertEqual(p["tokens"]["paraphrase/W-206"], 512)
 
+    def test_the_embedder_line_arms_sh_heads_a_transcript_with_reads_as_nothing(self):
+        # `bench/probe/arms.sh` writes the hub id the run's floors were keyed from above the arm's
+        # own output, so a recorded transcript says which weights answered it. A line that parsed as
+        # a case would put a score under a key no suite has, into a history that is append-only.
+        p = track.parse_bench("embedder: REPOGRAPH_EMBED_MODEL=intfloat/multilingual-e5-small\n" + TRANSCRIPT)
+        self.assertEqual(p["cases"], track.parse_bench(TRANSCRIPT)["cases"])
+        self.assertEqual(track.arm_name(p), track.arm_name(track.parse_bench(TRANSCRIPT)))
+
     def test_a_transcript_from_before_the_suite_field_still_reads(self):
         p = track.parse_bench(OLD_TRANSCRIPT)
         self.assertEqual(p["cases"]["keyword/FR-WH-53"], 0.0)

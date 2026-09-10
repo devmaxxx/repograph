@@ -13,6 +13,11 @@ set -u
 B=$1; F=$2; L=$3; N=${4:-5}
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 M="$HERE/measure.sh"
+# Which embedder every row here answers under, refused when absent rather than left to the binary's
+# built-in default; embedder.sh says why that declaration is not a file in the worktree, and the
+# `changes` rows below are the reason it matters most.
+. "$HERE/embedder.sh" || exit 2
+embedder_declared || exit 2
 export REPOGRAPH_NO_SERVE=1
 mkdir -p "$L"
 # Absolute before the `cd` below, the way HERE is: a relative LOGDIR would be re-created by
@@ -42,6 +47,10 @@ esac
 # Not a pipeline: bash 3.2 has no pipefail here and a `| tee` would hand back tee's exit code.
 if ! "$HERE/quiet.sh" > "$L/quiet.txt" 2>&1; then cat "$L/quiet.txt"; echo "refusing to measure on a machine that is not quiet" >&2; exit 2; fi
 cat "$L/quiet.txt" | tee -a "$L/summary.txt"
+# Beside the quiet line and above the rows, so the file the medians are taken from says which
+# weights answered them. `judge.py medians` reads only lines shaped like a run, as it already does
+# past the quiet line.
+embedder_line | tee -a "$L/summary.txt"
 cd "$F" || exit 2
 Q="как отменить запись и кто платит штраф"
 CN=packages/ui/src/lib/cn.ts
