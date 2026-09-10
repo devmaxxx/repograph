@@ -13,9 +13,11 @@ SMALL = "intfloat/multilingual-e5-small"
 LARGE = "intfloat/multilingual-e5-large"
 
 # The four scripts that run a writer or a reader against the writable worktree, each with arguments
-# that name nothing real. The declaration is a precondition of the whole kit, so every one of them
-# has to refuse over it before it looks at an argument, a directory or a store — which is also what
-# makes these cases cheap enough to be unit tests: none of the four gets far enough to need one.
+# that name nothing real — the arguments are bound under `set -u` before the source in three of the
+# four, so a call with none of them dies over `$1` rather than over the declaration. The declaration
+# is a precondition of the whole kit, so every one of them has to refuse over it before it resolves
+# a directory or opens a store — which is also what makes these cases cheap enough to be unit
+# tests: none of the four gets far enough to need one.
 SCRIPTS = {
     "reset.sh": [],
     "readers.sh": ["bin/repograph", "wt", "log", "1"],
@@ -26,14 +28,19 @@ SCRIPTS = {
 
 def sourced(snippet, model=None):
     """embedder.sh's calls without a script around them: sourcing it defines them and runs nothing."""
-    return run(["bash", "-c", f"source '{EMBEDDER}'; {snippet}"], os.getcwd(), model)
+    return run(["bash", "-c", f"source '{EMBEDDER}'; {snippet}"], None, model)
 
 
-def run(argv, cwd, model):
-    env = {k: v for k, v in os.environ.items() if k != "REPOGRAPH_EMBED_MODEL"}
-    if model is not None:
-        env["REPOGRAPH_EMBED_MODEL"] = model
-    return subprocess.run(argv, cwd=cwd, capture_output=True, text=True, env=env)
+def run(argv, cwd, model, **env):
+    """One environment for both callers here. `model` is the whole of the declaration — `None` means
+    it is absent, and this machine's own value never leaks in behind it — and whatever else a script
+    reads off the environment rides on `env`."""
+    e = {**os.environ, **env}
+    if model is None:
+        e.pop("REPOGRAPH_EMBED_MODEL", None)
+    else:
+        e["REPOGRAPH_EMBED_MODEL"] = model
+    return subprocess.run(argv, cwd=cwd, capture_output=True, text=True, env=e)
 
 
 @unittest.skipUnless(os.name == "posix", "bash: the macOS kit's own platform")
@@ -48,14 +55,8 @@ class Declaration(unittest.TestCase):
         # `reset.sh`'s three directories are named away from this machine's real ones on purpose: a
         # check that ran after them would reset the corpus worktree instead of refusing, and this
         # case would notice by the wording rather than by the damage.
-        env = {"FIX": str(self.tmp / "fix"), "WT": str(self.tmp / "wt"), "BIN": str(self.tmp / "bin")}
-        argv = ["bash", str(HERE / name), *SCRIPTS[name]]
-        e = {**os.environ, **env}
-        if model is None:
-            e.pop("REPOGRAPH_EMBED_MODEL", None)
-        else:
-            e["REPOGRAPH_EMBED_MODEL"] = model
-        return subprocess.run(argv, cwd=self.tmp, capture_output=True, text=True, env=e)
+        return run(["bash", str(HERE / name), *SCRIPTS[name]], self.tmp, model,
+                   FIX=str(self.tmp / "fix"), WT=str(self.tmp / "wt"), BIN=str(self.tmp / "bin"))
 
     def test_the_declared_model_reaches_the_binary_a_script_runs(self):
         # Declared as a plain shell variable and not in the environment, which is what makes the

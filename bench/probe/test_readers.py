@@ -5,6 +5,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
+import judge
+
 HERE = Path(__file__).resolve().parent
 READERS = HERE / "readers.sh"
 # The real one, not a stub: which weights a row answered under is the suite's own declaration, and
@@ -98,6 +100,15 @@ class Suite(unittest.TestCase):
     def test_the_file_the_medians_are_taken_from_names_the_embedder(self):
         self.run_suite()
         self.assertIn(f"embedder: REPOGRAPH_EMBED_MODEL={SMALL}", (self.tmp / "log" / "summary.txt").read_text())
+
+    def test_the_medians_that_become_the_reference_name_it_too_and_still_read_back(self):
+        # `medians.txt` is what is copied out as the reference, so it is the file that has to say
+        # which weights answered — and it is read back by `judge.py control` and `compare`, which
+        # would refuse a suite outright if the line entered one of their tables as a row.
+        self.run_suite()
+        medians = self.tmp / "log" / "medians.txt"
+        self.assertIn(f"embedder: REPOGRAPH_EMBED_MODEL={SMALL}", medians.read_text())
+        self.assertEqual(list(judge.read_medians(medians)), ["ask-fused"])
 
 
 if __name__ == "__main__":

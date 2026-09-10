@@ -83,6 +83,12 @@ done
 # suite holding a row that measured a failure would exit 0 with `medians.txt` truncated to empty —
 # a refusal that reads as a clean sweep. The refusal joins the medians in the file because the log
 # directory is what gets copied out of the run, and an empty file says nothing about why.
-python3 "$HERE/judge.py" medians "$L/summary.txt" > "$L/medians.txt" 2>&1; MED=$?
+#
+# The embedder heads the file rather than only `summary.txt`: `medians.txt` is what is copied out as
+# the reference every later reading on this branch is judged against, and a reference that does not
+# say which weights answered it can be compared against a suite read under others. `read_medians`
+# takes only lines shaped like a median, so the line travels without being read as a row.
+embedder_line > "$L/medians.txt"
+python3 "$HERE/judge.py" medians "$L/summary.txt" >> "$L/medians.txt" 2>&1; MED=$?
 cat "$L/medians.txt"
 exit "$MED"

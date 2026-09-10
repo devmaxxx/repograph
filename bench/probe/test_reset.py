@@ -55,10 +55,12 @@ class Reset(unittest.TestCase):
         self.bin.chmod(0o755)
 
     def run_reset(self, model=SMALL, **env):
-        e = {**os.environ, "FIX": str(self.fix), "WT": str(self.wt), "PIN": self.sha[:8], "BIN": str(self.bin),
-             "REPOGRAPH_EMBED_MODEL": SMALL, **env}
+        # `model` is the only channel for the declaration, and `None` means "not declared" — a
+        # second copy of it among the `**env` overrides would be shadowed by this one and a case
+        # that meant to run under another model would silently run under the small one.
+        e = {**os.environ, "FIX": str(self.fix), "WT": str(self.wt), "PIN": self.sha[:8], "BIN": str(self.bin), **env}
         if model is None:
-            del e["REPOGRAPH_EMBED_MODEL"]
+            e.pop("REPOGRAPH_EMBED_MODEL", None)
         else:
             e["REPOGRAPH_EMBED_MODEL"] = model
         return subprocess.run(["bash", str(RESET)], env=e, capture_output=True, text=True)

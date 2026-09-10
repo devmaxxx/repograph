@@ -38,12 +38,14 @@ Two directories, both locked: `~/bench/beauty-crm-502e8a6d`, the pinned fixture,
   touched. Unset is refused rather than defaulted, so a row can never be read under whatever the
   built-in default happens to be that month, and a value naming another model is refused rather than
   replaced. The declaration travels onto each row's transcript — a line in `summary.txt` beside the
-  quiet line for `readers.sh` and `embed.sh`, the head of each arm's own output for `arms.sh` — so a
-  reading says which embedder it was taken under, and `judge.py medians` reads past it as it already
-  reads past the quiet line.
+  quiet line for `readers.sh` and `embed.sh`, the head of each arm's own output for `arms.sh` — and
+  onto `readers.sh`'s `medians.txt`, which is the file copied out as the reference every later
+  reading is judged against, so a reference cannot be compared against a suite read under other
+  weights. `judge.py medians` and `read_medians` take only lines shaped like a run and a median, so
+  the line travels through both without being read as a row.
 - `reset.sh` — the writable worktree put back to the fixture's state: tree reverted and cleaned,
-  store copied in, stamps settled by one `--no-dense update`. Refuses any
-  directory that is not the locked worktree at `502e8a6d`. Before every arm, reader suites included.
+  store copied in, stamps settled by one `--no-dense update`. Refuses any directory that is not the
+  locked worktree at `502e8a6d`. Before every arm, reader suites included.
   What it leaves has nothing untracked in it — `git status --porcelain` is empty — which is what the
   `changes` rows need, and it removes a `repograph.toml` an earlier reset of this kit wrote.
 - `measure.sh NAME LOG -- cmd…` — one command: wall, user, sys, max RSS, sampled peak CPU and threads.
