@@ -186,6 +186,17 @@ class RunCount(unittest.TestCase):
                 judge.main(argv)
             self.assertIn("usage", str(e.exception))
 
+    def test_a_floor_that_is_not_a_number_prints_usage_instead_of_a_traceback(self):
+        with self.assertRaises(SystemExit) as e:
+            judge.main(["judge.py", "compare", "a.txt", "b.txt", "three"])
+        self.assertIn("usage", str(e.exception))
+
+    def test_a_floor_of_zero_is_refused_because_it_admits_the_reading_the_floor_exists_to_stop(self):
+        for floor in ("0", "-3"):
+            with self.assertRaises(SystemExit) as e:
+                judge.main(["judge.py", "control", "a.txt", "b.txt", floor])
+            self.assertIn("usage", str(e.exception))
+
 
 class Cadence(unittest.TestCase):
     def test_intervals_are_read_from_the_stamps_not_from_rows_per_second(self):

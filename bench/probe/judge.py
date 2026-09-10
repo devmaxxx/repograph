@@ -201,7 +201,13 @@ def main(argv):
         # traceback where the usage line belongs.
         if len(argv) not in (4, 5):
             raise SystemExit(f"usage: judge.py {cmd} A B [MIN_N]")
-        min_n = int(argv[4]) if len(argv) == 5 else MIN_N
+        # And `int` on a word raises a ValueError traceback in the same place, while a floor of 0
+        # or less is no floor at all: it admits the one-run-a-row comparison MIN_N exists to refuse.
+        min_n = MIN_N
+        if len(argv) == 5:
+            if not argv[4].isdigit() or int(argv[4]) < 1:
+                raise SystemExit(f"usage: judge.py {cmd} A B [MIN_N] — MIN_N is a count of runs a row, not {argv[4]!r}")
+            min_n = int(argv[4])
         a, b = read_medians(argv[2]), read_medians(argv[3])
         if cmd == "control":
             return 0 if print_table(control(a, b, min_n=min_n), ("wall spread", "RSS spread")) else 1
