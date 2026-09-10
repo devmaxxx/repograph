@@ -232,6 +232,7 @@ pub(crate) fn apply_diff(repo: &std::path::Path, store: &store::Store, graph: &m
         };
         graph.apply(extractor.extract(&e.rel, &text));
     }
+    graph.settle();
     store.save(graph, &walk::Manifest::from_entries(entries))?;
     // Only when something was re-extracted: a tree that did not move cannot have grown a node
     // without questions, and the no-op update a commit hook fires should not read the questions
@@ -243,9 +244,7 @@ pub(crate) fn apply_diff(repo: &std::path::Path, store: &store::Store, graph: &m
     Ok(UpdateReport { changed: diff.changed.len(), removed: diff.removed.len(), nodes: graph.nodes.len(), edges: graph.edges.len(), unenriched })
 }
 
-/// The store brought in line with the tree. The extractors are built here rather than passed in
-/// because the families come between the walk and them: the matcher every extractor reads ids
-/// through is derived from the documents the walk just found.
+/// The store brought in line with the tree.
 pub fn run_update(repo: &std::path::Path, cfg: &config::Config, wipe: bool) -> anyhow::Result<UpdateReport> {
     let store = store::Store::new(repo);
     if wipe { store.wipe()?; }
@@ -255,33 +254,26 @@ pub fn run_update(repo: &std::path::Path, cfg: &config::Config, wipe: bool) -> a
     // A wipe has just emptied the graph, so this one test covers both fresh builds: `build`, and
     // an `update` on a store nobody has built yet.
     let bootstrap = graph.nodes.is_empty();
+    let quiet = !bootstrap && diff.changed.is_empty() && diff.removed.is_empty();
     let mut also: Vec<walk::Entry> = Vec::new();
-    // A tree that has not moved cannot have moved its families either, and the graph already
-    // declares the set the build derived them into. Reading every document to confirm it is a
-    // whole build's worth of I/O on the no-op update a commit hook fires.
-    let ids = match !bootstrap && diff.changed.is_empty() && diff.removed.is_empty() {
-        true => families::from_graph(&graph),
-        false => {
-            let derived = families::derive(repo, &entries)?;
-            match bootstrap {
-                true => eprintln!("{}", derived.line()),
-                false => {
-                    // A family that appeared or vanished changes what every file extracts to,
-                    // not only the ones that were edited, so the incremental path cannot answer
-                    // for it. Source files included: they read ids through the same matcher, and
-                    // leaving them out leaves an `implements NEW-1` comment with no edge to
-                    // build and a `-OQ` with its code edges dangling.
-                    let moved = derived.against(&graph);
-                    if !moved.is_empty() {
-                        eprintln!("families: {}", moved.join(", "));
-                        also = rest_of_tree(&entries, &diff);
-                    }
+    // A tree that has not moved cannot have moved its families either. Reading every document to
+    // confirm it is a whole build's worth of I/O on the no-op update a commit hook fires.
+    if !quiet {
+        let derived = families::derive(repo, &entries)?;
+        match bootstrap {
+            true => eprintln!("{}", derived.line()),
+            false => {
+                // A family that appeared or vanished changes what every file extracts to, not
+                // only the ones that were edited, so the incremental path cannot answer for it.
+                let moved = derived.against(&graph);
+                if !moved.is_empty() {
+                    eprintln!("families: {}", moved.join(", "));
+                    also = rest_of_tree(&entries, &diff);
                 }
             }
-            derived.matcher()
         }
-    };
-    apply_diff(repo, &store, &mut graph, &entries, &diff, &also, &extractors(repo, ids)?)
+    }
+    apply_diff(repo, &store, &mut graph, &entries, &diff, &also, &extractors(repo)?)
 }
 
 /// Everything the walk found that the diff does not already name, in the walk's own order.
@@ -307,9 +299,6 @@ pub(crate) struct Watcher<'a> {
     cfg: &'a config::Config,
     store: store::Store,
     ex: Extractors,
-    /// The families `ex` reads ids through, kept beside it so a poll can tell that the set has
-    /// not moved without rebuilding six regexes to find out.
-    ex_families: families::Families,
     graph: model::Graph,
     manifest: walk::Manifest,
     seen: Option<walk::Stamp>,
@@ -336,18 +325,8 @@ impl<'a> Watcher<'a> {
         let store = store::Store::new(repo);
         let (graph, manifest) = store.load()?;
         let seen = store.stamp("manifest.json");
-        let ex_families = families::graph_families(&graph);
-        let ex = extractors(repo, families::matcher(&ex_families))?;
-        Ok(Watcher { repo, cfg, ex, ex_families, store, graph, manifest, seen, deferred: 0, reloaded: false })
-    }
-
-    /// The matcher every extractor reads ids through, rebuilt when the family set has moved
-    /// under it and left alone when it has not.
-    fn extract_under(&mut self, families: families::Families) -> anyhow::Result<()> {
-        if families == self.ex_families { return Ok(()); }
-        self.ex = extractors(self.repo, families::matcher(&families))?;
-        self.ex_families = families;
-        Ok(())
+        let ex = extractors(repo)?;
+        Ok(Watcher { repo, cfg, ex, store, graph, manifest, seen, deferred: 0, reloaded: false })
     }
 
     /// The store read back when another process has written it, without the walk a poll does —
@@ -394,7 +373,6 @@ impl<'a> Watcher<'a> {
                 also = rest_of_tree(&entries, &diff);
             }
         }
-        self.extract_under(derived.families())?;
         let r = apply_diff(self.repo, &self.store, &mut self.graph, &entries, &diff, &also, &self.ex)?;
         self.manifest = walk::Manifest::from_entries(&entries);
         self.seen = self.store.stamp("manifest.json");
@@ -439,12 +417,12 @@ fn run_watch(repo: &std::path::Path, cfg: &config::Config, every: u64, batch: us
     }
 }
 
-pub(crate) fn extractors(repo: &std::path::Path, ids: ids::IdMatcher) -> anyhow::Result<Extractors> {
+pub(crate) fn extractors(repo: &std::path::Path) -> anyhow::Result<Extractors> {
     let resolver = code::imports::Resolver::new(repo)?;
     Ok(Extractors {
-        doc: Box::new(doc::DocExtractor::new(ids.clone())),
-        code: Box::new(code::CodeExtractor::new(resolver, ids.clone())),
-        registry: Box::new(doc::registry::RegistryExtractor::new(ids)),
+        doc: Box::new(doc::DocExtractor::new()),
+        code: Box::new(code::CodeExtractor::new(resolver)),
+        registry: Box::new(doc::registry::RegistryExtractor),
     })
 }
 
@@ -714,7 +692,7 @@ fn main() -> anyhow::Result<()> {
             let (graph, _) = store.load()?;
             if graph.nodes.is_empty() { anyhow::bail!("graph is empty — run `repograph build`"); }
             let questions = enrich::Questions::load(&store)?;
-            let families = families::graph_families(&graph).0.len();
+            let families = families::of_graph(&graph).0.len();
             let model = index::dense::DenseIndex::recorded_model(&store)?;
             let b = prime::brief(&graph, &questions, families, model.as_deref());
             match json {
@@ -745,11 +723,8 @@ fn main() -> anyhow::Result<()> {
         Cmd::ImportLegacy { graph_json } => {
             let store = store::Store::new(&repo);
             let (mut graph, manifest) = store.load()?;
-            // The graph is read before the matcher is built, which is the order this needs: the
-            // families are the ones the store's own nodes are written in.
-            let ids = families::from_graph(&graph);
             let text = std::fs::read_to_string(&graph_json)?;
-            let r = legacy::import(&mut graph, &ids, &text)?;
+            let r = legacy::import(&mut graph, &text)?;
             store.save(&graph, &manifest)?;
             println!(
                 "legacy: {} edges, {} both endpoints resolved, {} one, {} concepts created, {} self-loops dropped",
@@ -794,10 +769,9 @@ mod tests {
         let (graph, refreshed) = ask::graph_for_ask(repo, &cfg, &store, false, &ask::Timing::new()).unwrap();
         let r = refreshed.expect("the edit is a refresh");
         assert_eq!((r.changed, r.removed), (1, 0));
-        let ids = families::from_graph(&graph);
         let opts = query::Options { seeds: 5, bodies: false, dense: false, json: false, depth: rerank::DEPTH };
         let words = ["refund".to_string(), "window".to_string()];
-        let answer = query::ask(&graph, &ids, &index::lexical::Lexical::build(&graph, &enrich::Questions::default(), false), None, None, &words, &opts);
+        let answer = query::ask(&graph, &index::lexical::Lexical::build(&graph, &enrich::Questions::default(), false), None, None, &words, &opts);
         assert!(query::render(&answer, &graph, &opts).contains("FR-PAY-23"));
         // The store carries the edit too, so the next reader has nothing left to redo.
         assert!(store.load().unwrap().0.nodes.contains_key("FR-PAY-23"));

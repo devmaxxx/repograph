@@ -11,14 +11,13 @@
 //! away by hand. `repograph families` prints both halves so a prefix on the wrong side of that
 //! line is something a reader can see.
 
-use crate::ids::{bounded, IdMatcher};
 use crate::model::Graph;
 use crate::store::Store;
 use crate::walk::{Entry, FileKind};
 use anyhow::{Context, Result};
 use regex::Regex;
 use serde::Serialize;
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 use std::sync::OnceLock;
 
@@ -37,7 +36,7 @@ pub enum Family<'a> {
 /// point: a family this reads out of a definition head goes into the matcher the extractor writes
 /// nodes with, and `classify` must read the same family back off those nodes or an update would
 /// find one set in the documents and another in the graph on every run, for ever.
-const FAMILY: &str = r"[A-Z][A-Z0-9]{0,11}(?:-[A-Z][A-Z0-9]{0,11}){0,3}";
+pub(crate) const FAMILY: &str = r"[A-Z][A-Z0-9]{0,11}(?:-[A-Z][A-Z0-9]{0,11}){0,3}";
 /// The milestone slot, shared with the extractor's own `milestone_file` and written as `kind_for`
 /// writes it: what those accept is what becomes a milestone node, and a scan that admitted one
 /// letter more would derive a family no node is ever written in.
@@ -94,31 +93,7 @@ fn names(m: &BTreeMap<String, Site>) -> Vec<String> {
     m.keys().cloned().collect()
 }
 
-/// The two lists a matcher is built from, ids and milestones apart. Held separately from the
-/// matcher itself so a writer can tell whether the set it extracts under has moved without
-/// rebuilding six regexes to find out.
-pub type Families = (Vec<String>, Vec<String>);
-
-pub fn matcher(f: &Families) -> IdMatcher {
-    IdMatcher::new(&f.0, &f.1)
-}
-
-/// The families a caller has already counted off a graph, without walking its nodes again.
-pub fn keys(counted: &(BTreeMap<String, usize>, BTreeMap<String, usize>)) -> Families {
-    (counted.0.keys().cloned().collect(), counted.1.keys().cloned().collect())
-}
-
 impl Derived {
-    /// The families the documents define, as the matcher takes them.
-    pub fn families(&self) -> Families {
-        (names(&self.ids), names(&self.milestones))
-    }
-
-    /// The matcher every extractor reads ids through on a build.
-    pub fn matcher(&self) -> IdMatcher {
-        matcher(&self.families())
-    }
-
     /// What a build says it found. The whole list where it is short and its head with a count
     /// where it is not: a build's stderr is read at a glance, and a large corpus names dozens.
     pub fn line(&self) -> String {
@@ -170,19 +145,6 @@ pub fn of_graph(graph: &Graph) -> (BTreeMap<String, usize>, BTreeMap<String, usi
     (ids, milestones)
 }
 
-/// The matcher a reader reads ids through: the families the graph itself declares, read back off
-/// the definitions they came from. Nothing a reader does may cost a pass over every document —
-/// `serve` answers in 66 ms — so a family a document has only just grown reaches the read path
-/// through the `build` or `update` that derives it.
-pub fn from_graph(graph: &Graph) -> IdMatcher {
-    matcher(&graph_families(graph))
-}
-
-/// The families a graph's own nodes are written in, as the matcher takes them.
-pub fn graph_families(graph: &Graph) -> Families {
-    keys(&of_graph(graph))
-}
-
 fn site(rel: &str, line_no: u32, line: &str) -> Site {
     Site { file: rel.to_string(), line: line_no, text: crate::query::headline(line.trim()) }
 }
@@ -205,13 +167,7 @@ enum Mentions { Skip, Count }
 /// token, so what is left once the definitions are taken out is what the report calls text.
 struct Scan {
     definition: Regex,
-    id: Regex,
-    milestone: Regex,
     tally: Mentions,
-    /// One matcher per prefix, so a range (`FR-RPT-42…48`) and a slash list (`INV-11/12`) are
-    /// counted the way the extractor would count them rather than as one mention each. Built
-    /// lazily: a corpus names few prefixes and this runs per line.
-    matchers: HashMap<String, IdMatcher>,
     ids: BTreeMap<String, Site>,
     milestones: BTreeMap<String, Site>,
     seen: BTreeMap<String, Tally>,
@@ -228,9 +184,6 @@ impl Scan {
             definition: Regex::new(&format!(
                 r"^(?:#{{1,6}}\s+|\*\*|\s*[-*]\s+\*\*)?(?:({FAMILY})-\d{{1,4}}|({MILESTONE})-M\d{{2}})\s*·"
             )).unwrap(),
-            id: Regex::new(&format!(r"({FAMILY})-\d{{1,4}}")).unwrap(),
-            milestone: Regex::new(&format!(r"({MILESTONE})-M\d{{2}}")).unwrap(),
-            matchers: HashMap::new(),
             ids: BTreeMap::new(),
             milestones: BTreeMap::new(),
             seen: BTreeMap::new(),
@@ -308,30 +261,16 @@ impl Scan {
 
     fn mentions(&mut self, rel: &str, line_no: u32, line: &str) {
         if self.tally == Mentions::Skip { return; }
-        let mut prefixes: BTreeSet<String> = BTreeSet::new();
-        let mut milestones: BTreeMap<String, usize> = BTreeMap::new();
-        for c in self.milestone.captures_iter(line) {
-            let whole = c.get(0).unwrap();
-            if bounded(line, whole.start(), whole.end()) {
-                *milestones.entry(c[1].to_string()).or_default() += 1;
+        // The extractor's own reading of the line — ranges and slash lists expanded, boundaries
+        // applied — so a mention is counted the way the graph would have cited it.
+        let mut per_prefix: BTreeMap<String, usize> = BTreeMap::new();
+        for hit in crate::ids::generic().find_all(line) {
+            if let Some(Family::Id(f) | Family::Milestone(f)) = classify(&hit.id) {
+                *per_prefix.entry(f.to_string()).or_default() += 1;
             }
         }
-        // A milestone id satisfies the id form too — `BE-M01` is `BE` and nothing more only
-        // because the digits must follow the hyphen — so the two scans cannot both claim a hit.
-        for c in self.id.captures_iter(line) {
-            let whole = c.get(0).unwrap();
-            if bounded(line, whole.start(), whole.end()) {
-                prefixes.insert(c[1].to_string());
-            }
-        }
-        for (prefix, n) in milestones {
+        for (prefix, n) in per_prefix {
             self.record(prefix, n, rel, line_no, line);
-        }
-        for prefix in prefixes {
-            let n = self.hits(&prefix, line);
-            if n > 0 {
-                self.record(prefix, n, rel, line_no, line);
-            }
         }
     }
 
@@ -340,15 +279,6 @@ impl Scan {
         t.mentions += n;
         t.files.insert(rel.to_string());
         t.first.get_or_insert_with(|| site(rel, line_no, line));
-    }
-
-    /// How many ids of this prefix the line holds, ranges and slash lists expanded. No milestone
-    /// family is given: the milestone form is counted above, and a matcher with no milestone
-    /// family matches none.
-    fn hits(&mut self, prefix: &str, line: &str) -> usize {
-        let matcher = self.matchers.entry(prefix.to_string())
-            .or_insert_with(|| IdMatcher::new(&[prefix.to_string()], &[]));
-        matcher.find_all(line).len()
     }
 
     fn finish(self) -> Derived {
@@ -493,25 +423,6 @@ pub fn run(repo: &Path, cfg: &crate::config::Config, json: bool) -> Result<()> {
     Ok(())
 }
 
-/// The families the fixtures under `tests/` are written in — one corpus's, kept here because its
-/// documents are what the extractor cases quote. Nothing outside a test reads a list of families.
-#[cfg(test)]
-pub(crate) fn test_matcher() -> IdMatcher {
-    let s = |v: &[&str]| v.iter().map(|x| x.to_string()).collect::<Vec<_>>();
-    IdMatcher::new(
-        &s(&[
-            "FR-DM", "FR-CAL", "FR-VIS", "FR-PAY", "FR-PH", "FR-SEC", "FR-APP", "FR-MKT",
-            "FR-AI", "FR-CRM", "FR-SHELL", "FR-TOOL", "FR-SVC", "FR-LIFE", "FR-WH", "FR-RPT",
-            "FR-MIG", "FR-WEB", "FR-OPS", "FR-STAFF",
-            "NFR-PH", "NFR-MKT", "NFR-MIG", "NFR-PAY", "NFR-DM", "NFR-RPT", "NFR-WEB", "NFR-SVC",
-            "NFR-STAFF", "NFR",
-            "AC-DM", "AC-VIS", "INV", "ADR", "OD", "OQ", "N", "R", "M", "W", "D", "G",
-            "PREP", "CAL", "OR", "MON", "SEAM", "SG", "IDEA",
-        ]),
-        &s(&["BE", "FE", "PLAT", "SYNC", "OPS", "AI", "MOB"]),
-    )
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -648,9 +559,6 @@ mod tests {
         let (ids, milestones) = of_graph(&g);
         assert_eq!(ids.into_iter().collect::<Vec<_>>(), vec![("AC".to_string(), 1), ("REQ".to_string(), 1)]);
         assert_eq!(milestones.into_iter().collect::<Vec<_>>(), vec![("BE".to_string(), 2)]);
-        // The symbol named after an id is not one, and neither is the entity.
-        assert_eq!(from_graph(&g).find_all("см. REQ-7, BE-M01 и FR-PAY-22").into_iter().map(|h| h.id).collect::<Vec<_>>(),
-            vec!["REQ-7", "BE-M01"]);
     }
 
     #[test]
@@ -699,7 +607,7 @@ mod tests {
         let d = one(text);
         assert_eq!(families(&d), vec!["FR-PAY-EU", "SECURITY"]);
 
-        let ex = crate::doc::DocExtractor::new(d.matcher()).extract("docs/a.md", text);
+        let ex = crate::doc::DocExtractor::new().extract("docs/a.md", text);
         let mut written: Vec<&str> = ex.nodes.iter().map(|n| n.id.as_str()).filter(|id| !id.contains(':')).collect();
         written.sort_unstable();
         assert_eq!(written, vec!["FR-PAY-EU-1", "SECURITY-12"]);

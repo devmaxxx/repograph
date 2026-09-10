@@ -5,7 +5,7 @@ use super::DocExtractor;
 use crate::model::{EdgeKind, Extraction, Extractor, Node, NodeKind};
 
 fn extract(rel: &str, text: &str) -> Extraction {
-    DocExtractor::new(crate::families::test_matcher()).extract(rel, text)
+    DocExtractor::new().extract(rel, text)
 }
 
 fn node<'a>(ex: &'a Extraction, id: &str) -> &'a Node {

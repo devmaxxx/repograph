@@ -4,14 +4,17 @@ pub mod links;
 pub mod registry;
 pub mod requirements;
 
-use crate::ids::IdMatcher;
 use crate::model::{Extraction, Extractor};
 
 pub struct DocExtractor { req: requirements::RequirementScanner }
 
+impl Default for DocExtractor {
+    fn default() -> Self { Self::new() }
+}
+
 impl DocExtractor {
-    pub fn new(ids: IdMatcher) -> DocExtractor {
-        DocExtractor { req: requirements::RequirementScanner::new(ids) }
+    pub fn new() -> DocExtractor {
+        DocExtractor { req: requirements::RequirementScanner::new() }
     }
 }
 

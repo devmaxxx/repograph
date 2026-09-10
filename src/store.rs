@@ -11,7 +11,10 @@ pub struct Store { dir: PathBuf }
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Source { Absent, Json, Mirror }
 
-const MIRROR_MAGIC: &[u8; 4] = b"RGM1";
+/// A `Graph` that gained a field is a new mirror shape, and a magic that says so is one fewer
+/// thing that depends on postcard failing at the right byte: `RGM1` mirrors hold the struct from
+/// before `pending`, and are passed over rather than decoded into it.
+const MIRROR_MAGIC: &[u8; 4] = b"RGM2";
 const MIRROR_HEADER: usize = 4 + 12 + 16 + 8;
 
 fn stamp(p: &Path) -> Option<(u128, u64)> {
@@ -234,6 +237,37 @@ mod tests {
         std::fs::write(&p, bytes).unwrap();
         let (_, _, source) = store.load_traced().unwrap();
         assert_eq!(source, Source::Json);
+    }
+
+    /// A store written by a release whose `Graph` had no `pending`: its JSON reads with none
+    /// held aside, and its mirror — a postcard image of the older struct under the older magic
+    /// — is passed over rather than decoded into the wrong shape.
+    #[test]
+    fn a_store_written_before_pending_existed_reads_whole() {
+        #[derive(serde::Serialize)]
+        struct OldGraph { nodes: std::collections::BTreeMap<String, crate::model::Node>, edges: std::collections::BTreeSet<crate::model::Edge> }
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::new(dir.path());
+        let mut g = Graph::default();
+        let mut e = crate::model::Extraction::default();
+        e.node(crate::model::NodeKind::Requirement, "FR-1", "x", "", "docs/a.md", 1);
+        e.edge("FR-1", "FR-2", crate::model::EdgeKind::References, "body", "docs/a.md");
+        g.apply(e);
+        let old = OldGraph { nodes: g.nodes.clone(), edges: g.edges.clone() };
+        std::fs::create_dir_all(dir.path().join(".repograph")).unwrap();
+        store.write_atomic("graph.json", &serde_json::to_vec(&old).unwrap()).unwrap();
+        store.write_atomic("manifest.json", b"{\"files\":{}}").unwrap();
+        // The older release's mirror: its magic, its stamp, its struct.
+        let now = stamp(&dir.path().join(".repograph/graph.json")).unwrap();
+        let mut bytes = mirror_header(now).to_vec();
+        bytes[..4].copy_from_slice(b"RGM1");
+        bytes.extend(postcard::to_stdvec(&old).unwrap());
+        store.write_atomic("graph.bin", &bytes).unwrap();
+
+        let (read, _, source) = store.load_traced().unwrap();
+        assert_eq!(source, Source::Json, "the old mirror is passed over, not misread");
+        assert_eq!((read.nodes, read.edges), (g.nodes, g.edges));
+        assert!(read.pending.is_empty());
     }
 
     #[test]

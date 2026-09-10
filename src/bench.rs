@@ -320,7 +320,6 @@ pub fn run(repo: &Path, cases: Option<&Path>, no_dense: bool, rerank: bool, rera
     if graph.nodes.is_empty() { anyhow::bail!("graph is empty at {} — run build first", repo.display()); }
     let counted = crate::families::of_graph(&graph);
     let family_count = counted.0.len() + counted.1.len();
-    let ids = crate::families::matcher(&crate::families::keys(&counted));
     let dense_idx = DenseIndex::load(&store)?;
     let recorded = DenseIndex::recorded_model(&store)?;
     let questions = Questions::load(&store)?;
@@ -425,7 +424,7 @@ pub fn run(repo: &Path, cases: Option<&Path>, no_dense: bool, rerank: bool, rera
     for case in &cases {
         let words: Vec<String> = case.q.split_whitespace().map(str::to_string).collect();
         shown.borrow_mut().clear();
-        let answer = query::ask(&graph, &ids, &lex, Some(&dense_fn), rerank, &words, &opts);
+        let answer = query::ask(&graph, &lex, Some(&dense_fn), rerank, &words, &opts);
         let rendered = query::render(&answer, &graph, &opts);
         let tok = rendered.len() / 4;
         tokens.push(tok);
