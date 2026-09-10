@@ -89,7 +89,10 @@ function binary(root) {
  * reach at all; neither is worth the shell it would take to avoid, and neither is silent about it.
  */
 function spawnable(bin, args) {
-  if (!/\.(cmd|bat)$/i.test(bin)) return { file: bin, args, opts: {} };
+  // Windows and a batch file, both: the extension alone would open the shell on a POSIX machine
+  // whose `REPOGRAPH_BIN` happens to end in `.cmd`, where a repository path may contain a quote
+  // and the sentence above stops being true.
+  if (process.platform !== 'win32' || !/\.(cmd|bat)$/i.test(bin)) return { file: bin, args, opts: {} };
   return { file: `"${bin}"`, args: args.map((a) => `"${a}"`), opts: { shell: true } };
 }
 

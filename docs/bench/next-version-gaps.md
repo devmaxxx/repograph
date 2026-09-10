@@ -1233,10 +1233,19 @@ written. Measuring int8 on the default costs no download at all; the 562 MB is t
 alone. The other three questions are untouched — arm64 kernels, vectors that differ from the fp32
 ones, and a weight file the store does not record — so this stays deferred rather than proposed.
 
-## G26 · `serve` holds its model for the life of the process, where `watch` no longer does
+## G26 · `serve` holds its model for the life of the process, where `watch` no longer does — closed 2026-09-10
 
 **Raised (2026-09-07)** by [the unnoticeable results](2026-09-07-unnoticeable-results.md), §4.3,
 which changed `watch` and left `serve` alone on purpose.
+
+**Closed 2026-09-10** by `serve --idle-model` (default 300 s): a second threshold on the one clock
+the process already keeps. `--idle` still ends the process; `--idle-model` ends only the weights,
+and the graph, the id matcher, the lexical indexes and the vectors stay resident — so a lexical
+answer is still milliseconds and the next fused question pays the ~220 ms open again. A warm open
+still in flight is joined rather than abandoned, or the thread would finish and hold weights nobody
+can reach. The `SessionStart` hook starts its `serve` with it. The honest second number is recorded
+beside the flattering first: 28.8 MB after the first drop, 277.6 MB after the second, the
+difference being what the allocator keeps rather than what the model holds.
 
 **Measured.** `watch` now opens its model for a refresh and drops it after: physical footprint
 **931.8 MB → 129.5 MB** between refreshes on the small model, resident 0.18 → 0.03 GB two minutes
@@ -1288,12 +1297,20 @@ is why `agent/hook.mjs` now starts a `serve --idle 1800 --idle-model 300` on `Se
 probe first, because a second `serve` refuses to bind while one answers and leaves by itself, so
 the start is the check. `REPOGRAPH_HOOK_SERVE=0` turns it off.
 
-## G27 · `serve` cannot bind under a deep path, and a killed one leaves its socket behind
+## G27 · `serve` cannot bind under a deep path, and a killed one leaves its socket behind — closed 2026-09-09
 
 **Raised (2026-09-07)** as the side findings of
 [what every command costs](2026-09-07-resource-usage-results.md), §5. These two are defects rather
 than costs — neither appears in any table of either round — and they are written as a gap because
 this file is where the open items live.
+
+**Closed 2026-09-09** in the critical-defects branch. `socket_path` keeps `<repo>/.repograph/
+serve.sock` while that name fits in 100 bytes — one margin for every platform, four short of
+macOS's 104 — and otherwise puts a name derived from the canonical repository path in the temporary
+directory; server and client both come here, so the fallback is never half-taken. The socket file
+is removed through a `Drop`, and `SIGTERM` and `SIGINT` now set a flag the loop reads instead of
+killing the process, so a terminated `serve` leaves through the same guard as an idle one rather
+than leaving its socket behind.
 
 **Measured.** `<repo>/.repograph/serve.sock` over `SUN_LEN`, 104 bytes on macOS, cannot be bound,
 so a repository under a deep path cannot use `serve` at all — including every store copy these two
