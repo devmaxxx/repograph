@@ -148,6 +148,17 @@ class ParseBench(unittest.TestCase):
     def test_a_transcript_without_the_anchor_line_records_none(self):
         self.assertIsNone(track.parse_bench(OLD_TRANSCRIPT)["anchors"])
 
+    def test_a_run_whose_own_anchor_line_is_gone_does_not_borrow_the_median_s(self):
+        # A stderr write landing on that line under `2>&1` is enough to lose it. Read on to the end
+        # of the file, the next `anchors` line is the median's -- 36/40 against counts of 37/40, a
+        # pair of numbers from two different runs, in a row nothing afterwards can correct. The
+        # row holding no anchors says what happened; the row holding the median's says something
+        # that never happened.
+        lost = REPEAT_TRANSCRIPT.replace("anchors  keyword 37/40  paraphrase 15/30  code 12/12\n", "")
+        p = track.parse_bench(lost)
+        self.assertEqual(p["metrics"]["keyword"], [37, 40])
+        self.assertIsNone(p["anchors"])
+
     def test_the_cases_belong_to_the_run_the_row_records(self):
         # Read over the whole file, the second run's copy of a case would land under the `#2`
         # suffix that exists for two questions about one place inside one run: the row would carry

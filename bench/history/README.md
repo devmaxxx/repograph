@@ -63,7 +63,8 @@ reached over anchors wanted per kind — and each row records it under `anchors`
 reading with a baseline to set one from is the 2026-09-09 table under G15 in
 `docs/bench/next-version-gaps.md`. Under `--repeat` the median prints an anchors line of its own
 below the last run's; a row records the one belonging to the summary it read, which is the last
-run's, so its counts and its anchors always come from the same run.
+run's, so its counts, its anchors and its per-case scores always come from that one run — a
+`--repeat` transcript is recorded as its last run, not as the union of them and not as the median.
 
 ## A third kind of run: the agent
 

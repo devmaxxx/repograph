@@ -157,10 +157,15 @@ def parse_bench(text):
     model = MODEL.search(g.group(7) or "")
     metrics = {kind: [int(h), int(n)] for kind, h, n in KIND.findall(g.group(1))}
     metrics["p90_tokens"] = int(g.group(2))
-    # The anchors line that follows the summary this row records, not the last one in the file:
-    # `--repeat` prints one under every run and one more under the median, and the median's counts
-    # are on a line no summary regex matches.
-    anchors = next((m for m in (ANCHORS.match(l) for l in lines[at + 1:]) if m), None)
+    # The anchors line that follows the summary this row records, not the next one anywhere in the
+    # file: `--repeat` prints one under every run and one more under the median, and the median's
+    # counts are on a line no summary regex matches. `bench` prints this line directly beneath the
+    # summary, so only the first non-blank line after it can be this run's -- reading on to the end
+    # of the file would pair the median's anchors with the last run's counts the moment this run's
+    # own line is missing or garbled (a stderr write landing on it under `2>&1`), and the row would
+    # say so nowhere. No anchors is a reading the row can hold; another run's are not.
+    nxt = next((l for l in lines[at + 1:] if l), "")
+    anchors = ANCHORS.match(nxt)
     anchor_totals = {kind: [int(r), int(w)] for kind, r, w in KIND.findall(anchors.group(1))} if anchors else None
     return {
         "dense": dense,
