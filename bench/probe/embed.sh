@@ -75,10 +75,26 @@ pinned=$(cd "$PINNED" 2>/dev/null && pwd -P) || pinned=$PINNED
 target=$(cd "$F" 2>/dev/null && pwd -P) || { echo "refusing: WORKTREE=$F is not a directory" >&2; exit 2; }
 [ "$target" != "$pinned" ] || { echo "refusing: $F is the pinned fixture" >&2; exit 2; }
 mkdir -p "$L"
+# Before the vectors go, so a refusal here leaves the store whole: three runs pool into one
+# `summary.txt` on purpose — §9's median is taken over them — but the file is keyed by nothing, so
+# a run repeated into the same log directory puts a second `control-1` beside the first and
+# `judge.py medians` groups both under `control` at n = 6. `readers.sh` truncates its summary for
+# this reason and this script cannot, having one row a call; refusing the repeat is the same guard
+# from the other end. Remove the row, or use another log directory, and the run goes again.
+if [ -f "$L/summary.txt" ] && grep -q "^$NAME  " "$L/summary.txt"; then
+  echo "refusing: $L/summary.txt already holds a row for $NAME — a second one would pool into its median at n+1" >&2
+  exit 2
+fi
 if ! "$HERE/quiet.sh" > "$L/$NAME.quiet" 2>&1; then cat "$L/$NAME.quiet"; echo "refusing to measure on a machine that is not quiet" >&2; exit 2; fi
 cat "$L/$NAME.quiet" | tee -a "$L/summary.txt"
 rm -f "$F/.repograph/vectors.f32" "$F/.repograph/vectors.json"
-STAMP='perl -MTime::HiRes=time -ne '"'"'printf "%.2f %s", time, $_'"'"''
+# `$| = 1`: the stamper's own stdout is a file, so perl block-buffers it, and nobody waits for the
+# stamper — it is a process substitution, and `wait` below waits on the wrapper. A 4 KB boundary
+# falling inside `time`'s report then leaves the last lines of the transcript unwritten when the
+# fields are read off it half a second later: `wall=s maxrss=GB`, and a 32-minute embed that
+# succeeded is refused for not having completed. The stamp is taken when the line arrives either
+# way, so autoflushing costs the reading nothing.
+STAMP='perl -MTime::HiRes=time -ne '"'"'BEGIN { $| = 1 } printf "%.2f %s", time, $_'"'"''
 perl -MTime::HiRes=time -e 'printf "%.2f start\n", time' > "$L/$NAME.err"
 caffeinate -di /usr/bin/time -l "$B" --repo "$F" embed >"$L/$NAME.out" 2> >(eval "$STAMP" >> "$L/$NAME.err") &
 WRAP=$!
@@ -123,8 +139,9 @@ WALL=$(printf '%s\n' "$REPORT" | awk '{print $2}')
 USR=$(printf '%s\n' "$REPORT" | awk '{print $4}')
 # `time` leaves a full report even when the command bailed, so a partial embed — weights gone
 # mid-run, the disk full at 60% — would otherwise enter the median of three as an honestly
-# measured, much faster whole-store embed. The row carries its status, `judge.py medians` refuses
-# a row that measured a failure, and the script exits with it.
+# measured, much faster whole-store embed. The row carries its status and `judge.py medians`
+# refuses a row that measured a failure; the script's own exit is 3, below, because the store the
+# run left behind is the same partial one every other failure here leaves.
 [ "$RC" = "0" ] || echo "embed: $NAME exited $RC — this row measured a failure" >&2
 ROW=$(summary_row "$NAME" "$WALL" "$USR" "$RSS" "$RC" "$L/$NAME.samples") || {
   # What the store holds follows the embed's status and not the sampler's, which is the difference
@@ -143,5 +160,15 @@ printf '%s\n' "$ROW" | tee -a "$L/summary.txt"
 # the trap readers.sh names on its own quiet gate.
 python3 "$HERE/judge.py" cadence "$L/$NAME.err" > "$L/$NAME.cadence" 2>&1; CAD=$?
 cat "$L/$NAME.cadence" | tee -a "$L/summary.txt"
-[ "$RC" = "0" ] || exit "$RC"
+# 3 and the warning here too, not the embed's own status: what the store holds follows the embed and
+# not the sampler, and a sampled failure — the disk full at 60%, the weights gone mid-run — leaves
+# exactly what the no-PID and the no-samples doors leave, the vectors removed and no whole set in
+# their place. Exiting `$RC` said 1 or 2, and the header above promises that every code but 3 leaves
+# the store untouched or whole; an operator reading 2 that way runs the reader suite on a store with
+# no vectors and every `ask` answers lexical-only without saying so. The row is still printed and
+# still carries `rc=`, which is what `judge.py medians` refuses it on.
+[ "$RC" = "0" ] || {
+  echo "  the vectors were removed before the embed started and it exited $RC, so $F/.repograph/ holds no whole set of them — reset.sh before anything reads this store" >&2
+  exit 3
+}
 exit "$CAD"

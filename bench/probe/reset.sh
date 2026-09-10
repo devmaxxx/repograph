@@ -39,7 +39,12 @@ printf '%s\n' "$block" | grep -q '^locked' || refuse "$wt is not locked — lock
 # `reset --hard` rather than `checkout -- .`: a staged edit survives the latter.
 git -C "$wt" reset -q --hard HEAD || exit 1
 git -C "$wt" clean -fdq -e .repograph -e repograph.toml || exit 1
-left=$(git -C "$wt" status --porcelain | grep -v '^?? repograph.toml$')
+# Both of the paths `clean` was told to keep, not just one: `.repograph/` is ignored in this corpus
+# so `status` never names it and `clean -fd` would not have removed it either — but the exclusion
+# above is there for a corpus that does not ignore it, and there `status` prints `?? .repograph/`
+# and a filter naming only `repograph.toml` refuses every reset with "the tree did not come clean".
+# The two lines the script rewrites below are the two it excuses here.
+left=$(git -C "$wt" status --porcelain | grep -v -e '^?? repograph.toml$' -e '^?? \.repograph/$')
 [ -z "$left" ] || { echo "reset: the tree did not come clean:" >&2; echo "$left" >&2; exit 1; }
 rsync -a --delete "$fix/.repograph/" "$wt/.repograph/" || exit 1
 printf 'embed_model = "intfloat/multilingual-e5-small"\n' > "$wt/repograph.toml"

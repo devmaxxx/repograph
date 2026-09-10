@@ -78,8 +78,9 @@ def stderr_tail(logdir, run, keep=2, width=160):
 
     A refusal that says a row failed and not what failed sends its reader looking through a log
     directory for the file this function already knows the name of. `time`'s report is dropped by
-    `REPORT_LINE`, so what is quoted is the command's own words; a stderr line that itself begins
-    with a number is quotable collateral and reads as one more line of the tail.
+    `REPORT_LINE`, so what is quoted is the command's own words — and a line of the command's that
+    happens to begin with a number goes with the report, which costs a line of the quote and never
+    puts one of `time`'s numbers in the refusal as something the command said.
     """
     if logdir is None:
         return ""

@@ -56,8 +56,13 @@ def main(argv):
     for nid, k, va, vb in r["nodes_changed"][:20]:
         print(f"  {nid}.{k}: {va!r} -> {vb!r}")
     print(f"edges: {'same' if r['edges_same'] else 'differ'} ({ea} vs {eb}; only in A {len(r['edges_only_a'])}, only in B {len(r['edges_only_b'])})")
-    for e in (r["edges_only_a"][:10] + r["edges_only_b"][:10]):
-        print(f"  {e}")
+    # Which side holds an edge is the whole of what a listing of the differences says — a rewritten
+    # extractor that dropped ten edges and one that invented ten print the same twenty lines
+    # otherwise — so each carries its side's sign rather than being concatenated into one block.
+    for e in r["edges_only_a"][:10]:
+        print(f"  -A {e}")
+    for e in r["edges_only_b"][:10]:
+        print(f"  +B {e}")
     print(f"pending: {r['pending']} (A held {r['pending_a']})")
     print(f"bytes: {os.path.getsize(argv[1])} {os.path.getsize(argv[2])} ratio {r['bytes_ratio']:.3f}")
     return 0 if r["nodes_same"] and r["edges_same"] else 1
