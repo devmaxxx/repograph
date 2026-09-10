@@ -1188,7 +1188,7 @@ cd /Users/max/Documents/projects/repograph && python3 -m unittest discover -s be
 
 `bench` already prints the line and `--repeat` (2026-09-09); what is open is that nothing reads it back, so the ledger's "the next campaign's rule names those totals among the counts that must hold" has nowhere to hold them.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 In `bench/history/test_track.py`, extend `TRANSCRIPT` and `DEV_TRANSCRIPT` with an anchors line after the summary line (the exact shape `bench` prints: `anchors  keyword 37/40  paraphrase 15/30  code 12/12`):
 
@@ -1232,7 +1232,7 @@ and in `DEV_TRANSCRIPT` after its summary line: `anchors  long 1/1  cross 0/2  m
 
 `FLOOR_TABLE` — use whatever name the file already gives the parsed floors fixture in `test_a_row_for_an_ungated_run_carries_no_floors_and_no_verdict` (read that test and pass its `floor_table=` argument the same way).
 
-- [ ] **Step 2: Run to see them fail**
+- [x] **Step 2: Run to see them fail**
 
 ```bash
 cd /Users/max/Documents/projects/repograph && python3 -m unittest discover -s bench/history 2>&1 | tail -3
@@ -1240,7 +1240,7 @@ cd /Users/max/Documents/projects/repograph && python3 -m unittest discover -s be
 
 Expected: `KeyError: 'anchors'` and an `AssertionError` on `metric_moves`.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 In `track.py`, after `SUMMARY`:
 
@@ -1279,7 +1279,7 @@ def metric_moves(prev, latest):
     return out
 ```
 
-- [ ] **Step 4: Run to see them pass**
+- [x] **Step 4: Run to see them pass**
 
 ```bash
 cd /Users/max/Documents/projects/repograph && python3 -m unittest discover -s bench/history 2>&1 | tail -1
@@ -1287,7 +1287,7 @@ cd /Users/max/Documents/projects/repograph && python3 -m unittest discover -s be
 
 Expected: `OK`.
 
-- [ ] **Step 5: Documentation**
+- [x] **Step 5: Documentation**
 
 In `bench/history/README.md`, at the end of the "A second suite" paragraph, add:
 
@@ -1312,7 +1312,7 @@ times, judges every run on the floors, and prints a median beneath them.
 
 (The `families=<count>` clause is retired by Task 8; this edit removes it from the sentence now because Task 8 removes it from the line — if Task 8 is not reached, Task 12 restores the clause.)
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 cd /Users/max/Documents/projects/repograph && git add bench/history/track.py bench/history/test_track.py bench/history/README.md README.md && git commit -m "feat(bench): the anchor line enters the run history"

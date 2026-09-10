@@ -57,6 +57,14 @@ second under a `#2` suffix. Dev rows recorded before that suffix existed hold 59
 cases, so the next dev run reports `NOT COMPARABLE … the case set changed (59 -> 60)` once
 against them; that reading is honest, and the runs after it compare normally.
 
+`bench` prints one more line beneath the summary — `anchors  cross 13/30  multi 16/39 …`, anchors
+reached over anchors wanted per kind — and each row records it under `anchors`; `report` prints an
+`anchors/<kind>` move beside the counts when it changes. It is a column and not a floor: the first
+reading with a baseline to set one from is the 2026-09-09 table under G15 in
+`docs/bench/next-version-gaps.md`. Under `--repeat` the median prints an anchors line of its own
+below the last run's; a row records the one belonging to the summary it read, which is the last
+run's, so its counts and its anchors always come from the same run.
+
 ## A third kind of run: the agent
 
 ```

@@ -625,9 +625,12 @@ The dense floors are keyed by the store's embedder too, since a floor measured o
 nothing about another: small-model rows (or rows under no name) against the small model's numbers,
 `e5-large` rows against `e5-large`'s, any third model measured and never graded. The lexical arms
 have no embedder in them and keep one set whatever the rows are. The summary line also carries
-`families=<count>` — a number to compare between two runs of the same corpus, not a floor — and
 `code_questions=<covered>/<eligible>` on a store that carries questions about code, which are
-searched for the `--rerank` pool rather than in the fusion the floors measure.
+searched for the `--rerank` pool rather than in the fusion the floors measure. Beneath it, on a line
+of its own, `anchors  <kind> <reached>/<wanted> …` says how much of each answer was reached, not only
+whether it was: a case that keeps its verdict and loses two of its three anchors moves that line and
+nothing else. `bench --repeat N` runs the suite N times, judges every run on the floors, and prints
+a median beneath them.
 
 | | enriched store | store with no questions |
 | --- | --- | --- |

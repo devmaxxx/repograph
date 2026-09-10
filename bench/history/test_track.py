@@ -14,6 +14,7 @@ code       apps/api/src/main.ts HIT  1/1   88 tok  где точка входа
 paraphrase W-206        HIT  1/1  512 tok  предупреждение о переносе
 
 keyword 37/40  paraphrase 15/30  code 12/12  p90 220 tok  dense=true  enriched=true (1996/1996 nodes)  suite=built-in gated=true
+anchors  keyword 37/40  paraphrase 15/30  code 12/12
 """
 
 # What `bench` printed before the dev suite: no reached/want pair, no suite field.
@@ -32,6 +33,24 @@ multi      FR-CAL-105+FR-CAL-106+FR-CAL-107 HIT  1/3  240 tok  лист ожид
 where      apps/api/src/modules/staff/staff.controller.ts HIT  1/1  150 tok  куда класть эндпоинт
 
 long 1/1  cross 0/1  multi 1/1  where 1/1  p90 240 tok  dense=true  enriched=true (1996/1996 nodes)  suite=dev-cases gated=false
+anchors  long 1/1  cross 0/2  multi 1/3  where 1/1
+"""
+
+# `bench --repeat 2`: an anchors line under each run and one more under the median, whose counts
+# are on a line no summary regex matches.
+REPEAT_TRANSCRIPT = """\
+keyword    FR-AI-138    HIT  1/1  143 tok  расход виден салону
+
+keyword 36/40  paraphrase 14/30  code 12/12  p90 221 tok  dense=true  enriched=true (1996/1996 nodes)  suite=built-in gated=true
+anchors  keyword 36/40  paraphrase 14/30  code 12/12
+
+keyword    FR-AI-138    HIT  1/1  143 tok  расход виден салону
+
+keyword 37/40  paraphrase 15/30  code 12/12  p90 220 tok  dense=true  enriched=true (1996/1996 nodes)  suite=built-in gated=true
+anchors  keyword 37/40  paraphrase 15/30  code 12/12
+
+median of 2  keyword 36/40  paraphrase 14/30  code 12/12  p90 220 tok
+anchors  keyword 36/40  paraphrase 14/30  code 12/12
 """
 
 # $G/t5-large-enriched-1.txt, measured before `model=` existed on the summary line.
@@ -113,6 +132,35 @@ class ParseBench(unittest.TestCase):
         p = track.parse_bench(DUPLICATE_ANCHOR_TRANSCRIPT)
         self.assertEqual(p["cases"], {"rule/ADR-031": 1.0, "rule/ADR-031#2": 0.0})
         self.assertEqual(p["tokens"], {"rule/ADR-031": 180, "rule/ADR-031#2": 190})
+
+    def test_the_anchor_line_is_read_per_kind(self):
+        p = track.parse_bench(DEV_TRANSCRIPT)
+        self.assertEqual(p["anchors"], {"long": [1, 1], "cross": [0, 2], "multi": [1, 3], "where": [1, 1]})
+
+    def test_a_transcript_without_the_anchor_line_records_none(self):
+        self.assertIsNone(track.parse_bench(OLD_TRANSCRIPT)["anchors"])
+
+    def test_the_anchors_belong_to_the_summary_the_row_records(self):
+        # `--repeat` prints the median's anchors last, and the row records the last run's summary:
+        # the last line in the transcript is the wrong line to pair with those counts.
+        p = track.parse_bench(REPEAT_TRANSCRIPT)
+        self.assertEqual(p["metrics"]["keyword"], [37, 40])
+        self.assertEqual(p["anchors"]["keyword"], [37, 40])
+
+    def test_the_row_carries_the_anchors(self):
+        table = {(True, True, "small"): {"keyword": 40, "paraphrase": 14, "code": 12, "p90_tokens": 230}}
+        row = track.build_row(track.parse_bench(DEV_TRANSCRIPT), "beauty-crm", "502e8a6d", "", "abc", False, table)
+        self.assertEqual(row["anchors"]["multi"], [1, 3])
+
+    def test_anchor_moves_are_reported_beside_metric_moves(self):
+        prev = {"metrics": {"multi": [9, 12]}, "anchors": {"multi": [16, 39]}}
+        latest = {"metrics": {"multi": [9, 12]}, "anchors": {"multi": [13, 39]}}
+        self.assertEqual(track.metric_moves(prev, latest), [("anchors/multi", "16/39", "13/39")])
+
+    def test_a_row_without_anchors_moves_nothing(self):
+        prev = {"metrics": {"multi": [9, 12]}}
+        latest = {"metrics": {"multi": [9, 12]}, "anchors": {"multi": [13, 39]}}
+        self.assertEqual(track.metric_moves(prev, latest), [])
 
     def test_a_row_for_an_ungated_run_carries_no_floors_and_no_verdict(self):
         table = {(True, True, "small"): {"keyword": 40, "paraphrase": 14, "code": 12, "p90_tokens": 230}}
