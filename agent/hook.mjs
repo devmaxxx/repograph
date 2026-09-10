@@ -124,7 +124,12 @@ export function searchPattern(tool, input) {
   return null;
 }
 
-function stateDir(sessionKey) { return join(tmpdir(), 'repograph-hook', sessionKey); }
+/**
+ * The per-session state directory. The key is built from ids the harness supplies, so it is
+ * reduced to word characters before it becomes a path segment: an id carrying a slash or a `..`
+ * would otherwise put this hook's empty marker files anywhere the process can write.
+ */
+function stateDir(sessionKey) { return join(tmpdir(), 'repograph-hook', sessionKey.replace(/\W+/g, '-')); }
 
 /** True the first time this session asks about this key; an unwritable tmp answers once and never dedups. */
 function once(sessionKey, kind, key) {

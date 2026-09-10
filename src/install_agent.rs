@@ -40,7 +40,7 @@ impl Target {
 }
 
 #[derive(Debug, Default)]
-pub struct Report { pub written: usize, pub paths: Vec<String> }
+pub struct Report { pub written: usize, pub paths: Vec<String>, pub notes: Vec<String> }
 
 /// The stanza between its markers, with `{{command}}` resolved to how this repository invokes the
 /// binary — `repograph` unless a caller says otherwise, `pnpm exec repograph` in a workspace that
@@ -90,7 +90,12 @@ fn hook_entries(hook_path: &str) -> Vec<(&'static str, &'static str, serde_json:
 /// The settings file with this tool's entries in it and everything else left alone. An entry whose
 /// command names our hook script is replaced rather than added, so a re-run after the hook changed
 /// is an upgrade and not a second copy firing twice per event.
-pub fn merged_settings(existing: &str, hook_path: &str) -> Result<String> {
+///
+/// Returns the file and the events an entry running the *retired* `repograph-notice` hook was
+/// dropped from. That script is the previous surface and this one replaces it, but it is a file
+/// the repository owns and a person put in that list: removing it without a word would be the one
+/// silent edit in an installer that otherwise touches nothing it did not write.
+pub fn merged_settings(existing: &str, hook_path: &str) -> Result<(String, Vec<String>)> {
     let mut root: serde_json::Value = match existing.trim().is_empty() {
         true => serde_json::json!({}),
         false => serde_json::from_str(existing).context("the settings file is not JSON")?,
@@ -98,16 +103,18 @@ pub fn merged_settings(existing: &str, hook_path: &str) -> Result<String> {
     if !root.is_object() { anyhow::bail!("the settings file is not a JSON object"); }
     let hooks = root.as_object_mut().unwrap().entry("hooks").or_insert_with(|| serde_json::json!({}));
     if !hooks.is_object() { anyhow::bail!("`hooks` in the settings file is not an object"); }
+    let mut retired = Vec::new();
     for (event, matcher, entry) in hook_entries(hook_path) {
         let mut ours = entry;
         ours.as_object_mut().unwrap().insert("matcher".into(), serde_json::json!(matcher));
         let list = hooks.as_object_mut().unwrap().entry(event).or_insert_with(|| serde_json::json!([]));
         let Some(arr) = list.as_array_mut() else { anyhow::bail!("`hooks.{event}` is not an array") };
+        if arr.iter().any(|e| e.to_string().contains("repograph-notice")) { retired.push(event.to_string()); }
         // Ours by the script it runs, never by position: a repository's own entries keep theirs.
         arr.retain(|e| !e.to_string().contains("repograph-hook") && !e.to_string().contains("repograph-notice"));
         arr.push(ours);
     }
-    Ok(serde_json::to_string_pretty(&root)? + "\n")
+    Ok((serde_json::to_string_pretty(&root)? + "\n", retired))
 }
 
 /// Writes `text` at `path` unless the same bytes are already there, and says which it did.
@@ -161,7 +168,12 @@ pub fn install(root: &Path, target: Target, command: &str) -> Result<Report> {
     if target.hooks_are_repository_scoped() {
         let settings = base.join("settings.json");
         let existing = std::fs::read_to_string(&settings).unwrap_or_default();
-        let merged = merged_settings(&existing, &hook_path)?;
+        let (merged, retired) = merged_settings(&existing, &hook_path)?;
+        if !retired.is_empty() {
+            report.notes.push(format!(
+                "removed the retired `repograph-notice` hook from {} — this hook replaces it; \
+                 the script itself is still on disk", retired.join(", ")));
+        }
         write_if_changed(&settings, &merged, &mut report)?;
     }
 
@@ -223,11 +235,15 @@ mod tests {
             {"matcher":"startup","hooks":[{"type":"command","command":"node /old/path/repograph-hook.mjs"}]},
             {"matcher":"startup","hooks":[{"type":"command","command":"node .claude/hooks/repograph-notice.mjs"}]}
         ]}}"#).unwrap();
-        install(dir.path(), Target::Claude, "repograph").unwrap();
+        let r = install(dir.path(), Target::Claude, "repograph").unwrap();
         let v: serde_json::Value = serde_json::from_str(
             &std::fs::read_to_string(dir.path().join(".claude/settings.json")).unwrap()).unwrap();
         let arr = v["hooks"]["SessionStart"].as_array().unwrap();
         assert_eq!(arr.len(), 1, "the old entry and the retired notice hook both went: {arr:?}");
+        // The retired hook is a file the repository owns and a person listed: it goes, and the
+        // install says so rather than leaving them to find out from a hook that stopped firing.
+        assert!(r.notes.iter().any(|n| n.contains("repograph-notice") && n.contains("SessionStart")),
+                "{:?}", r.notes);
         assert!(arr[0]["hooks"][0]["command"].as_str().unwrap().contains("CLAUDE_PROJECT_DIR"));
     }
 

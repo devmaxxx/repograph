@@ -71,7 +71,17 @@ def main():
     per, hits, tokens, cost, asked, grepped, resolved = {}, 0, 0, 0.0, 0, 0, None
     attempts = 0
     for t in tasks:
-        for f in sorted(run.glob(f"{t['id']}.r*.jsonl")):
+        found = sorted(run.glob(f"{t['id']}.r*.jsonl"))
+        # A task that left no transcript at all — the CLI died, the run was interrupted — is a miss
+        # and not a hole. Dropping it from the denominator would report 9/9 for a run that answered
+        # nine of twelve, which is the one direction a scorer must never round.
+        if not found:
+            per[t["id"]] = {"kind": t["kind"], "hit": False, "tokens": 0, "cost": 0.0, "turns": 0,
+                            "asked": 0, "grepped": 0, "reads": 0, "budget_hit": False,
+                            "no_transcript": True}
+            attempts += 1
+            continue
+        for f in found:
             r = read_run(f)
             # Every expected substring, or it is a miss: a caller that has to be told which half of
             # the answer to believe has not been answered.

@@ -15,6 +15,10 @@ mkdir -p "$HERE/A" "$HERE/B/hooks" "$HERE/B/skills"
 python3 - "$F/.claude/CLAUDE.md" "$HERE/A/CLAUDE.md" <<'PY'
 import sys
 t = open(sys.argv[1]).read(); i = t.find('## Скиллы')
+# `find` answers -1 for a heading that is not there, and `t[-1:]` is one character: overlay A
+# would then be an H1 and a full stop, and A is the arm nobody watches. Fail instead.
+if i < 0:
+    raise SystemExit(f"{sys.argv[1]}: no '## Скиллы' heading — the fixture's CLAUDE.md changed shape")
 open(sys.argv[2], 'w').write(t.splitlines()[0] + '\n\n' + t[i:])
 PY
 

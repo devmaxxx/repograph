@@ -178,12 +178,16 @@ a cold process.
 6. **`req-exact` is ambiguous.** It asks for the requirement governing one behaviour and expects
    `FR-CAL-93`; `FR-CAL-95` answers the same words defensibly. Its flips across the three B runs are
    partly the task's fault. All four C-family runs hit it, which does not clear it.
-7. **`rename` misses in all four C runs and never hit in B either.** Nothing in this document
+7. **`hub-callers` is scored on the bare substring `61`.** An answer that names the risk label and
+   quotes a line ending in 61 without ever counting the callers scores a hit. The review found it
+   and left it: tightening the expectation would redefine a metric four recorded runs were already
+   scored against, and a metric quietly redefined is worse than a loose one written down.
+8. **`rename` misses in all four C runs and never hit in B either.** Nothing in this document
    explains that task; it is the next thing to read, not a fact about the surface.
-8. **Budget caps.** Sonnet runs cap at `--max-budget-usd 0.30` and the opus run at 0.60. Two tasks
+9. **Budget caps.** Sonnet runs cap at `--max-budget-usd 0.30` and the opus run at 0.60. Two tasks
    capped in B sonnet #2 and one in the opus run; none in the four C-family runs.
-9. **The opus run's scoring step did not run.** `run.sh` was edited while that run was in flight,
+10. **The opus run's scoring step did not run.** `run.sh` was edited while that run was in flight,
    which moved bash's read offset past the tail of the script. The twelve transcripts are complete
    and were scored by hand with the same `score.py`; the row's note says so.
-10. **Twelve tasks, no significance claimed.** These are counts read across runs by the history —
+11. **Twelve tasks, no significance claimed.** These are counts read across runs by the history —
     now with a measured noise floor that says how little a single run means.

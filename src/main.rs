@@ -691,6 +691,7 @@ fn main() -> anyhow::Result<()> {
                     0 => println!("{target:?}: already installed, nothing written"),
                     n => println!("{target:?}: wrote {n} files\n  {}", r.paths.join("\n  ")),
                 }
+                for note in &r.notes { println!("{target:?}: {note}"); }
                 // Codex reads its hooks from `~/.codex/hooks.json`, which is the machine's and not
                 // this repository's. Printed for a person to paste; see `agent/codex.md`.
                 if target == install_agent::Target::Codex {

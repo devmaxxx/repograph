@@ -299,7 +299,14 @@ def cmd_import(args):
 def cmd_agent(args):
     """One row from a `bench/agent/run.sh` summary: one agent configuration read on the twelve tasks."""
     d = json.loads(Path(args.summary).read_text())
-    cases = {f"{v['kind']}/{k}": 1.0 if v["hit"] else 0.0 for k, v in d["per_task"].items()}
+    # A repeated task is one case read twice, not two cases. `score.py` keys the second attempt
+    # `<id>.r2`, and keeping that suffix here would give the history two unrelated case names — so
+    # the very flakiness a `--repeat` run exists to expose would be invisible to `weak()`. The
+    # attempts are averaged instead: 0.5 is a task that answered once in two.
+    attempts = {}
+    for k, v in d["per_task"].items():
+        attempts.setdefault(f"{v['kind']}/{k.split('.r')[0]}", []).append(1.0 if v["hit"] else 0.0)
+    cases = {k: sum(v) / len(v) for k, v in attempts.items()}
     append({
         "when": datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
         "tool": "repograph",

@@ -470,6 +470,28 @@ class AgentRows(unittest.TestCase):
         self.assertEqual(row["cases"]["who-calls/who-calls"], 1.0)
         self.assertEqual(track.state_of(row), "measured, no floors")
 
+    def test_a_repeated_task_is_one_case_read_twice(self):
+        """`--repeat 2` exists to expose a flaky task. Keyed `<id>` and `<id>.r2` the history would
+        see two cases that each answered once, and the flakiness would be invisible."""
+        summary = dict(self.SUMMARY)
+        summary["per_task"] = {
+            "who-calls": {"kind": "who-calls", "hit": True},
+            "who-calls.r2": {"kind": "who-calls", "hit": False},
+            "rename": {"kind": "safe-to-rename", "hit": False},
+        }
+        d = Path(tempfile.mkdtemp())
+        (d / "summary.json").write_text(json.dumps(summary))
+        before, track.RUNS = track.RUNS, d / "runs.jsonl"
+        was_dirty, track.tool_dirty = track.tool_dirty, lambda repo=None: False
+        try:
+            track.cmd_agent(argparse.Namespace(summary=str(d / "summary.json"), corpus="beauty-crm",
+                                               corpus_commit="502e8a6d", note=""))
+            row = json.loads((d / "runs.jsonl").read_text().strip())
+        finally:
+            track.RUNS, track.tool_dirty = before, was_dirty
+        self.assertEqual(sorted(row["cases"]), ["safe-to-rename/rename", "who-calls/who-calls"])
+        self.assertEqual(row["cases"]["who-calls/who-calls"], 0.5, "one of two attempts answered")
+
     def test_a_task_missed_in_two_runs_reads_as_chronic(self):
         rows = []
         for when in ("2026-09-09T10:00:00+00:00", "2026-09-09T11:00:00+00:00"):
