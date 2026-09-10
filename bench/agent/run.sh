@@ -13,7 +13,6 @@ OVERLAY="$HERE/overlays/$OVERLAY_NAME"; [ -d "$OVERLAY" ] || { echo "no overlay 
 # A has no binary on PATH; every other configuration has the one this branch built.
 case "$CONFIG" in A) BINPATH="" ;; *) BINPATH="$M/bin:" ;; esac
 STAMP=$(date -u +%Y%m%dT%H%M%SZ); OUT="$M/runs/$STAMP-$CONFIG-$MODEL"; mkdir -p "$OUT"
-rm -rf "$WT/.claude"; cp -R "$OVERLAY" "$WT/.claude"
 # One TSV line per task — id, prompt, setup — read back with tabs as the only separator; prompts
 # carry backticks and Cyrillic and no tabs.
 python3 -c '
@@ -22,10 +21,19 @@ for l in open(sys.argv[1]):
     if l.strip():
         t=json.loads(l); print(t["id"], t["prompt"], " && ".join(t.get("setup",[])) or ":", sep="\t")
 ' "$HERE/tasks.jsonl" > "$OUT/tasks.tsv"
+# The overlay is laid down *after* the reset, not before the loop: beauty-crm tracks its own
+# `.claude/` — 45 files, its CLAUDE.md byte-identical to overlay B's — so `git checkout -- .`
+# restores it and `git clean` removes whatever the overlay added. The 2026-09-09 runs put the
+# overlay down once at the top and reset before every task, which silently ran configuration B
+# twelve times whatever the argument said. The check below fails the run rather than measuring
+# the wrong thing again.
 for r in $(seq "$REPEAT"); do
   while IFS=$'\t' read -r id prompt setup; do
     git -C "$WT" checkout -- . >/dev/null 2>&1 || true
     git -C "$WT" clean -fdq -e .repograph
+    rm -rf "$WT/.claude"; cp -R "$OVERLAY" "$WT/.claude"
+    cmp -s "$WT/.claude/CLAUDE.md" "$OVERLAY/CLAUDE.md" \
+      || { echo "the overlay did not survive the reset: $WT/.claude is not $OVERLAY" >&2; exit 3; }
     (cd "$WT" && eval "$setup")
     (cd "$WT" && PATH="$BINPATH$PATH" claude -p "$prompt" --model "$MODEL" \
         --output-format stream-json --verbose --no-session-persistence \

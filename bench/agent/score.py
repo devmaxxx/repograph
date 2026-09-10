@@ -44,11 +44,17 @@ def read_run(path):
         if o.get("type") == "result":
             out["result"] = o.get("result") or ""
             out["turns"] = o.get("num_turns") or 0
-            out["cost"] = o.get("total_cost_usd") or 0.0
             out["budget_hit"] = o.get("subtype") == "error_max_budget_usd"
+            # `total_cost_usd` is not on every result record — one of the twelve B transcripts
+            # carries `modelUsage` and no total — and a run whose cost silently reads zero is the
+            # kind of hole this file exists to keep out of the history. Per-model `costUSD` is the
+            # same number summed, so it stands in rather than a zero.
+            out["cost"] = o.get("total_cost_usd") or 0.0
             for usage in (o.get("modelUsage") or {}).values():
                 for k in ("inputTokens", "outputTokens", "cacheReadInputTokens", "cacheCreationInputTokens"):
                     out["tokens"] += usage.get(k) or 0
+                if not o.get("total_cost_usd"):
+                    out["cost"] += usage.get("costUSD") or 0.0
     return out
 
 
