@@ -34,7 +34,19 @@ Two directories, both locked: `~/bench/beauty-crm-502e8a6d`, the pinned fixture,
 The bars: a reader row is judged as a median of n ≥ 5, within 10% wall and 5% max RSS of its
 reference, and only once `judge.py control` has shown the same binary twice inside those bars on
 this machine (`docs/bench/2026-09-10-next-version-levers-results.md` §1 is the first such control).
-A whole-store embed is judged as a median of three against a control of three. macOS only:
+A whole-store embed is judged as a median of three against a control of three.
+
+**The peak CPU column, and what it cannot say.** `judge.py compare` judges three columns — wall
+against 10%, max RSS against 5%, peak CPU against 10% — because §9's gate asks for the run's peak
+CPU unmoved and a clause no code reads is green whatever the run did. The column is only as good
+as the sampler under it: `measure.sh` samples with `top -l 2 -s 1`, so a command that finishes
+inside about two seconds is never sampled and reports `peak_cpu = 0`. That is every reader row,
+and it is not the whole-store embed of §9 (≈ 1,930 s, 293% recorded), which is the row the column
+was added for. A row whose *reference* read 0 prints `n/a` and is left unjudged on that column
+rather than passing on a zero that means "never sampled". Two verdicts keep the columns their own
+committed clauses name, and adding this one widened neither: `judge.py control` judges wall and max
+RSS only, which is §1's Gate as written, and a reader row read under §1's bars is judged by the
+wall and RSS columns — its peak CPU is printed beside them and is not part of that clause. macOS only:
 `/usr/bin/time -l`, `top -l`, `pmset` and `caffeinate` are Darwin's, and CI runs none of the shell
 here — `python3 -m unittest discover -s bench/probe` is what a change to this directory is gated on,
 and its `reset.sh` and `quiet.sh` tests skip themselves off POSIX, the latter also where there is

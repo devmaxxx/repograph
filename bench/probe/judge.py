@@ -99,8 +99,16 @@ def control(a, b, wall_bar=WALL_BAR, rss_bar=RSS_BAR):
     return out
 
 
-def compare(ref, new, wall_bar=WALL_BAR, rss_bar=RSS_BAR):
-    """A candidate against the reference, deltas signed so a reader sees which way it moved."""
+def compare(ref, new, wall_bar=WALL_BAR, rss_bar=RSS_BAR, cpu_bar=CPU_BAR):
+    """A candidate against the reference, deltas signed so a reader sees which way it moved.
+
+    Peak CPU is judged here and not in `control` because G19's gate asks for it — a clause about
+    peak CPU that no code reads is green whatever the run did. It is judgeable only where the
+    sampler caught something: `measure.sh` samples with `top -l 2 -s 1`, so a command that
+    finishes inside about two seconds reports `peak_cpu = 0`, and a reference of 0 is no reading
+    to be within 10% of. Those rows carry `None` and stay unjudged on that column rather than
+    passing on a zero that means "never sampled".
+    """
     out = []
     for row in new:
         if row not in ref:
@@ -110,7 +118,9 @@ def compare(ref, new, wall_bar=WALL_BAR, rss_bar=RSS_BAR):
             raise SystemExit(f"{row}: in the reference and not in the candidate")
         w = round((new[row]["wall"] - ref[row]["wall"]) / ref[row]["wall"], 4) if ref[row]["wall"] else 0.0
         r = round((new[row]["maxrss"] - ref[row]["maxrss"]) / ref[row]["maxrss"], 4) if ref[row]["maxrss"] else 0.0
-        out.append((row, w, r, abs(w) <= wall_bar and abs(r) <= rss_bar))
+        c = round((new[row]["peak_cpu"] - ref[row]["peak_cpu"]) / ref[row]["peak_cpu"], 4) if ref[row]["peak_cpu"] else None
+        ok = abs(w) <= wall_bar and abs(r) <= rss_bar and (c is None or abs(c) <= cpu_bar)
+        out.append((row, w, r, c, ok))
     return out
 
 
@@ -153,11 +163,16 @@ def print_table(rows, head):
     # which reads exactly like a bar that was cleared.
     if not rows:
         raise SystemExit("no rows to judge — the medians files parsed to nothing")
-    print(f"| row | {head[0]} | {head[1]} | |")
-    print("|---|---|---|---|")
-    for row, w, r, ok in rows:
-        print(f"| {row} | {w:+.1%} | {r:+.1%} | {'ok' if ok else 'OUTSIDE'} |")
-    return all(ok for _, _, _, ok in rows)
+    # `control` hands over two delta columns and `compare` three, so the width comes from the
+    # heads: the two clauses those verdicts answer to were committed before any run and neither
+    # gains or loses a column because the other one did.
+    print("| row | " + " | ".join(head) + " | |")
+    print("|" + "---|" * (len(head) + 2))
+    for row in rows:
+        name, deltas, ok = row[0], row[1:-1], row[-1]
+        cells = " | ".join("n/a" if d is None else f"{d:+.1%}" for d in deltas)
+        print(f"| {name} | {cells} | {'ok' if ok else 'OUTSIDE'} |")
+    return all(row[-1] for row in rows)
 
 
 def main(argv):
@@ -176,7 +191,7 @@ def main(argv):
     if cmd == "control":
         return 0 if print_table(control(read_medians(argv[2]), read_medians(argv[3])), ("wall spread", "RSS spread")) else 1
     if cmd == "compare":
-        return 0 if print_table(compare(read_medians(argv[2]), read_medians(argv[3])), ("wall Δ", "RSS Δ")) else 1
+        return 0 if print_table(compare(read_medians(argv[2]), read_medians(argv[3])), ("wall Δ", "RSS Δ", "peak CPU Δ")) else 1
     if cmd == "cadence":
         c = cadence(Path(argv[2]).read_text().splitlines())
         ok, why = cadence_ok(c)

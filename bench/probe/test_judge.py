@@ -1,3 +1,5 @@
+import contextlib
+import io
 import unittest
 
 import judge
@@ -103,6 +105,59 @@ class Control(unittest.TestCase):
     def test_a_candidate_row_the_reference_never_had_is_reported(self):
         with self.assertRaises(SystemExit):
             judge.compare({}, {"a": {"wall": 1, "maxrss": 1, "peak_cpu": 1, "n": 1}})
+
+
+class ComparePeakCpu(unittest.TestCase):
+    """The third judged column. G19's control triple — 1,930 s, 293%, 2.15 GB — is the shape the
+    column exists for; the reader rows are the shape it cannot speak about."""
+
+    def row(self, wall, rss, cpu):
+        return {"wall": wall, "maxrss": rss, "peak_cpu": cpu, "n": 3}
+
+    def test_a_candidate_inside_the_cpu_bar_passes(self):
+        ref = {"embed": self.row(1930.0, 2.15, 293.0)}
+        new = {"embed": self.row(1930.0, 2.15, 315.0)}
+        (_, _, _, cpu, ok), = judge.compare(ref, new)
+        self.assertAlmostEqual(cpu, 0.0751, places=4)
+        self.assertTrue(ok)
+
+    def test_a_candidate_outside_the_cpu_bar_fails_on_that_column_alone(self):
+        ref = {"embed": self.row(1930.0, 2.15, 293.0)}
+        new = {"embed": self.row(2026.5, 2.15, 360.0)}
+        (_, wall, rss, cpu, ok), = judge.compare(ref, new)
+        self.assertEqual((wall, rss), (0.05, 0.0))
+        self.assertAlmostEqual(cpu, 0.2287, places=4)
+        self.assertFalse(ok)
+
+    def test_a_row_the_sampler_never_caught_is_unjudged_rather_than_green(self):
+        ref = {"impact": self.row(0.04, 0.05, 0.0)}
+        (_, _, _, cpu, ok), = judge.compare(ref, {"impact": self.row(0.04, 0.05, 0.0)})
+        self.assertIsNone(cpu)
+        self.assertTrue(ok)
+        # A reference of 0 is no reading, not a reading of zero, so a candidate that did get
+        # sampled has nothing to be within 10% of either — the wall column is what moved.
+        (_, _, _, cpu, ok), = judge.compare(ref, {"impact": self.row(0.04, 0.05, 130.0)})
+        self.assertIsNone(cpu)
+        self.assertTrue(ok)
+
+    def test_the_table_prints_three_delta_columns_and_names_the_unjudged_one(self):
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            judge.print_table(judge.compare({"impact": self.row(0.04, 0.05, 0.0)},
+                                            {"impact": self.row(0.04, 0.05, 0.0)}),
+                              ("wall Δ", "RSS Δ", "peak CPU Δ"))
+        lines = out.getvalue().splitlines()
+        self.assertEqual(lines[0], "| row | wall Δ | RSS Δ | peak CPU Δ | |")
+        self.assertEqual(lines[1], "|---|---|---|---|---|")
+        self.assertEqual(lines[2], "| impact | +0.0% | +0.0% | n/a | ok |")
+
+    def test_the_control_table_keeps_the_two_columns_its_clause_names(self):
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            judge.print_table(judge.control({"impact": self.row(0.04, 0.05, 0.0)},
+                                            {"impact": self.row(0.04, 0.05, 0.0)}),
+                              ("wall spread", "RSS spread"))
+        self.assertEqual(out.getvalue().splitlines()[0], "| row | wall spread | RSS spread | |")
 
 
 class Cadence(unittest.TestCase):

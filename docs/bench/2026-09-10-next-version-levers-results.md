@@ -143,6 +143,28 @@ control's median (whichever is wider), median max RSS within 5% and median peak 
 the control's. Small model only; the large-model cadence is the 2.1 GB download this branch does
 not take. A candidate that misses a clause is recorded, and the bar is not moved.
 
+**Correction, 2026-09-10 — the code, before any number.** The Gate above judges the candidate's
+median peak CPU within 10% of the control's. `bench/probe/judge.py` as first committed (`a53e50c`)
+defines `CPU_BAR = 0.10` and never reads it: `compare` judged wall and max RSS only, so this
+gate's peak-CPU clause was green by construction whatever an embed did — and the recorded triple
+for this row is 1,930 s wall, 293% peak CPU, 2.15 GB, a number a bar that is never read cannot
+protect. `compare` now judges peak CPU as a third column, printed and verdicted like the other
+two, against the `CPU_BAR` that was already committed. No clause moved and no other verdict
+changed: `judge.py control` still judges the two columns §1's Gate names, and a reader row read
+under §1's bars is judged on its wall and RSS columns with its peak CPU printed beside them.
+This correction, like §1's, was taken before the reading it governs — no embed has been run on
+this branch and this section's **Reading.** is empty. A clause corrected after its number is read
+is the other half of that distinction and is what this branch exists to prevent; neither section
+has one.
+
+**Note beside the gate — what the CPU column can and cannot say.** `bench/probe/measure.sh` samples
+with `top -l 2 -s 1`, so any command that finishes in under about two seconds is never sampled and
+reports `peak_cpu = 0`. That makes the column meaningless for the reader rows of §1 — every one of
+them is under a second — and meaningful for the whole-store embed this gate judges, which runs
+about 1,930 s and is sampled throughout. A row whose *reference* read 0 prints `n/a` and stays
+unjudged on that column rather than passing on a zero that means "never sampled". This is a note on
+what the reading can carry, not a change to the gate: the numbers above are as committed.
+
 **Reading.**
 
 ## 10 · What did not close
