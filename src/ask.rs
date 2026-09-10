@@ -67,7 +67,9 @@ pub(crate) fn graph_for_ask(repo: &Path, cfg: &config::Config, store: &store::St
     let entries = walk::walk(repo, cfg, &manifest)?;
     let diff = manifest.diff(&entries);
     timing.stage("tree walked");
-    if diff.changed.is_empty() && diff.removed.is_empty() {
+    // A store an older grammar wrote holds less than the tree says it does, and no hash reports
+    // it, so an unchanged tree is not on its own a reason to answer from what is there.
+    if diff.changed.is_empty() && diff.removed.is_empty() && !manifest.stale_grammar() {
         crate::record_stamps(store, &manifest, &entries)?;
         // A store another release or a bare `graph.json` left without a mirror pays the JSON
         // parse once; a refresh below writes the mirror on its own.
@@ -77,7 +79,7 @@ pub(crate) fn graph_for_ask(repo: &Path, cfg: &config::Config, store: &store::St
         }
         return Ok((graph, None));
     }
-    let r = crate::apply_diff(repo, store, &mut graph, &entries, &diff, &crate::extractors(repo)?)?;
+    let r = crate::apply_diff(repo, store, &mut graph, &entries, &diff, &manifest, &crate::extractors(repo)?)?;
     timing.stage("refreshed");
     Ok((graph, Some(r)))
 }

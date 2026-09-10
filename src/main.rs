@@ -190,9 +190,23 @@ pub struct UpdateReport {
 /// is read: every citation a file holds was extracted when the file was read, whatever prefix it
 /// names, and which of them a reader may follow is decided on the graph by `settle` — so a family
 /// appearing or vanishing costs the file that declared it, and nothing more.
-pub(crate) fn apply_diff(repo: &std::path::Path, store: &store::Store, graph: &mut model::Graph, entries: &[walk::Entry], diff: &walk::Diff, ex: &Extractors) -> anyhow::Result<UpdateReport> {
+///
+/// The one exception is a store an older grammar wrote: a file that has not moved can still hold
+/// a citation the reader of the day never looked for, and no hash says so, so `manifest` is asked
+/// and the whole tree is read once. Once, because the manifest saved below carries this build's
+/// generation — after which an update is the incremental one again.
+pub(crate) fn apply_diff(repo: &std::path::Path, store: &store::Store, graph: &mut model::Graph, entries: &[walk::Entry], diff: &walk::Diff, manifest: &walk::Manifest, ex: &Extractors) -> anyhow::Result<UpdateReport> {
+    let named: std::collections::BTreeSet<&str> = diff.changed.iter().map(|e| e.rel.as_str()).collect();
+    let regrammar: Vec<&walk::Entry> = match manifest.stale_grammar() {
+        true => entries.iter().filter(|e| !named.contains(e.rel.as_str())).collect(),
+        false => Vec::new(),
+    };
+    if !regrammar.is_empty() {
+        eprintln!("grammar: this store was read by generation {} and this build reads by {} — re-reading all {} files once, so citations the older grammar never looked for are found; the next update reads only what changed",
+            manifest.grammar, walk::GRAMMAR, entries.len());
+    }
     let stale: std::collections::BTreeSet<&str> = diff.removed.iter().map(String::as_str)
-        .chain(diff.changed.iter().map(|e| e.rel.as_str())).collect();
+        .chain(diff.changed.iter().chain(regrammar.iter().copied()).map(|e| e.rel.as_str())).collect();
     // A node's `path:line` comes from its primary declaring file. When that file goes, every
     // surviving declarer is re-read too, so line, label and body come from the file that is cited.
     // Re-reading a file removes it first, which orphans the primaries it held in turn — hence the
@@ -213,7 +227,7 @@ pub(crate) fn apply_diff(repo: &std::path::Path, store: &store::Store, graph: &m
     // `Graph::apply` gives a shared id to whichever file declares it first, so the re-read runs
     // in the walk's own order: out of it, an update hands the id — its path, line, title and
     // body — to a different file than a build does.
-    let mut work: Vec<&walk::Entry> = diff.changed.iter().collect();
+    let mut work: Vec<&walk::Entry> = diff.changed.iter().chain(regrammar.iter().copied()).collect();
     work.sort_by(|a, b| a.rel.cmp(&b.rel));
     let reread = co_declared.iter().map(|rel| by_rel[rel]);
     for e in work.into_iter().chain(reread) {
@@ -237,7 +251,7 @@ pub(crate) fn apply_diff(repo: &std::path::Path, store: &store::Store, graph: &m
     // Only when something was re-extracted: a tree that did not move cannot have grown a node
     // without questions, and the no-op update a commit hook fires should not read the questions
     // file to be told so.
-    let moved = !diff.changed.is_empty() || !diff.removed.is_empty();
+    let moved = !diff.changed.is_empty() || !diff.removed.is_empty() || !regrammar.is_empty();
     let unenriched = moved
         .then(|| enrich::Questions::load(store).ok().and_then(|q| enrich::unenriched_note(graph, &q)))
         .flatten();
@@ -256,9 +270,9 @@ pub fn run_update(repo: &std::path::Path, cfg: &config::Config, wipe: bool) -> a
     let bootstrap = graph.nodes.is_empty();
     // A tree that has not moved cannot have moved its families either, and the pass over every
     // node it takes to say so is what the no-op update a commit hook fires would pay for nothing.
-    let quiet = !bootstrap && diff.changed.is_empty() && diff.removed.is_empty();
+    let quiet = !bootstrap && diff.changed.is_empty() && diff.removed.is_empty() && !manifest.stale_grammar();
     let before = (!quiet).then(|| families::of_graph(&graph));
-    let r = apply_diff(repo, &store, &mut graph, &entries, &diff, &extractors(repo)?)?;
+    let r = apply_diff(repo, &store, &mut graph, &entries, &diff, &manifest, &extractors(repo)?)?;
     // `settle` has already moved the citations a new family admits or a lost one withdraws; what
     // is left is to say so, since the next `ask` answers over edges that were not there before.
     match (bootstrap, before) {
@@ -276,8 +290,11 @@ pub fn run_update(repo: &std::path::Path, cfg: &config::Config, wipe: bool) -> a
 /// before the stat cache, or a file touched without being changed. Without this a tree that never
 /// changes would be hashed in full on every question.
 pub(crate) fn record_stamps(store: &store::Store, manifest: &walk::Manifest, entries: &[walk::Entry]) -> anyhow::Result<bool> {
-    let now = walk::Manifest::from_entries(entries);
+    let mut now = walk::Manifest::from_entries(entries);
     if now.stamps == manifest.stamps { return Ok(false); }
+    // Nothing was re-extracted here, so this save may not claim the graph beside it was read by
+    // this build's grammar: that claim is `apply_diff`'s to make, after the walk that earns it.
+    now.grammar = manifest.grammar;
     store.save_manifest(&now)?;
     Ok(true)
 }
@@ -340,7 +357,9 @@ impl<'a> Watcher<'a> {
         let entries = walk::walk(self.repo, self.cfg, &self.manifest)?;
         let diff = self.manifest.diff(&entries);
         let pending = diff.changed.len() + diff.removed.len();
-        if !refresh_now(pending, batch, self.deferred) {
+        // A store an older grammar wrote is behind the tree in a way no hash reports, so a quiet
+        // poll is not the same as nothing to do: the refresh below is what repairs it, once.
+        if !self.manifest.stale_grammar() && !refresh_now(pending, batch, self.deferred) {
             self.deferred = if pending > 0 { self.deferred + 1 } else { 0 };
             // Only a quiet tree may record stamps: the entries of a deferred poll carry the new
             // hashes, and storing those would retire the very changes still waiting to be read.
@@ -354,7 +373,7 @@ impl<'a> Watcher<'a> {
         // This poll is an `update` in everything but name — it re-extracts and it writes — so it
         // says which families moved the way one does. A quiet poll pays none of it.
         let before = families::of_graph(&self.graph);
-        let r = apply_diff(self.repo, &self.store, &mut self.graph, &entries, &diff, &self.ex)?;
+        let r = apply_diff(self.repo, &self.store, &mut self.graph, &entries, &diff, &self.manifest, &self.ex)?;
         let moved = families::moved(&before, &families::of_graph(&self.graph));
         if !moved.is_empty() { eprintln!("families: {}", moved.join(", ")); }
         self.manifest = walk::Manifest::from_entries(&entries);
@@ -782,12 +801,53 @@ mod tests {
         built(repo, &cfg);
         let store = store::Store::new(repo);
         let files = store.load().unwrap().1.files;
-        store.save_manifest(&walk::Manifest { files, stamps: Default::default() }).unwrap();
+        // The grammar is this build's: what is missing here is the stamps, and a store behind on
+        // both would be re-read for the other reason.
+        store.save_manifest(&walk::Manifest { files, stamps: Default::default(), grammar: walk::GRAMMAR }).unwrap();
         let graph_before = std::fs::read(repo.join(".repograph/graph.json")).unwrap();
         assert!(ask::graph_for_ask(repo, &cfg, &store, false, &ask::Timing::new()).unwrap().1.is_none());
         let manifest = store.load().unwrap().1;
         assert_eq!(manifest.stamps.len(), manifest.files.len());
         assert_eq!(std::fs::read(repo.join(".repograph/graph.json")).unwrap(), graph_before);
+    }
+
+    /// A store an earlier release wrote holds only what the grammar of the day could see, and no
+    /// hash says so — the tree has not moved, so nothing here would ever be read again. The stamp
+    /// on the manifest is what turns that into one walk, and the walk into the store this build
+    /// would have written from the same tree.
+    #[test]
+    fn a_store_an_older_grammar_wrote_is_re_read_once_and_then_left_alone() {
+        let dir = doc_repo(ONE);
+        let (repo, cfg) = (dir.path(), config::Config::default());
+        std::fs::write(repo.join("docs/b.md"), "# B\n\n**FR-PAY-24 · MUST · chargeback**\n\nbody\n").unwrap();
+        built(repo, &cfg);
+        let store = store::Store::new(repo);
+        // Read as text, not bytes: a failure here is a diff a person has to read.
+        let saved = |name: &str| std::fs::read_to_string(repo.join(".repograph").join(name)).unwrap();
+        let fresh = (saved("graph.json"), saved("manifest.json"));
+
+        // What such a release leaves: one file's nodes missing from the graph, beside a manifest
+        // whose hashes and stamps all match the tree.
+        let hole = |grammar: u32| {
+            let (mut graph, manifest) = store.load().unwrap();
+            graph.remove_file("docs/a.md");
+            store.save(&graph, &walk::Manifest { grammar, ..manifest }).unwrap();
+        };
+        hole(0);
+        assert!(!store.load().unwrap().0.nodes.contains_key("FR-PAY-22"));
+
+        let r = run_update(repo, &cfg, false).unwrap();
+        assert_eq!((r.changed, r.removed), (0, 0), "the re-read is the grammar's, not the diff's");
+        assert_eq!((saved("graph.json"), saved("manifest.json")), fresh,
+            "healed to the bytes a build of this version writes, manifest and stamp included");
+
+        // Once: with the stamp current the same hole is left exactly as it is, because a file whose
+        // hash has not moved is not read — which is the whole of what the walk above bought.
+        hole(walk::GRAMMAR);
+        let holed = saved("graph.json");
+        assert_ne!(holed, fresh.0);
+        run_update(repo, &cfg, false).unwrap();
+        assert_eq!(saved("graph.json"), holed);
     }
 
     #[test]

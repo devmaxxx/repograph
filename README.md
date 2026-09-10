@@ -176,9 +176,19 @@ they replace are left as holes, so nothing rewrites 50 MB to store a row of 1.5 
 quarter of the live rows are compacted away by the next refresh, which does rewrite both files.
 `REPOGRAPH_TIMING=1` prints the stages.
 
+An upgrade is the one refresh that reads everything. The manifest records which generation of the
+extractor's grammar the graph beside it was read by, and where a newer generation is reading, a hash
+settles nothing: a file nobody has touched may hold a citation the older grammar never looked for.
+So the first `update`, `watch` poll or refreshing `ask` after such an upgrade says on stderr that it
+is re-reading the whole tree and why, writes the new generation forward, and leaves every update
+after it incremental again. A release that does not change the grammar costs no walk at all.
+
 ```bash
 repograph ask --stale отмена записи         # answer from the store as it stands, no check
 ```
+
+`--stale` never pays for that walk and never repairs it: it answers from the store as it stands,
+which is the whole of what it promises.
 
 Readers that do not refresh themselves — an editor plugin, an MCP server — can be kept supplied by
 a poller instead:
