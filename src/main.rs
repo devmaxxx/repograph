@@ -699,10 +699,11 @@ fn main() -> anyhow::Result<()> {
                     let abs = hook.canonicalize().unwrap_or(hook);
                     println!("\nTo run the hook on this machine, add to ~/.codex/hooks.json \
                               (merging with what is already there):\n{}\n\
-                              The hook reads each session's own working directory and stays silent \
-                              where there is no index, so one copy serves every repository — move \
-                              it to ~/.codex/hooks/ and adjust the path if this checkout may go \
-                              away.",
+                              Codex trusts a hook by hash: the first session after this is added \
+                              asks once, and editing the script later asks again. The hook reads \
+                              each session's own working directory and stays silent where there is \
+                              no index, so one copy serves every repository — move it to \
+                              ~/.codex/hooks/ and adjust the path if this checkout may go away.",
                              install_agent::codex_hooks_block(&abs.display().to_string()));
                 }
             }
