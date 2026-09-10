@@ -9,7 +9,7 @@ import { join, dirname, delimiter } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 
-import { queryWords, searchPattern, rule, RULE_FALLBACK } from './hook.mjs';
+import { queryWords, searchPattern, binary, rule, RULE_FALLBACK } from './hook.mjs';
 
 const HOOK = join(dirname(fileURLToPath(import.meta.url)), 'hook.mjs');
 
@@ -106,6 +106,27 @@ test('a question is words, a path is not, and an identifier goes whole', () => {
   assert.deepEqual(queryWords('a.b*'), null);
   assert.equal(queryWords('cancellation refunds deposits invoices приложение расписание календарь').length, 6,
     'six words at most; the seventh never changed an answer and every one costs prompt');
+});
+
+test('the local shim the hook picks is one this platform can start', () => {
+  const w = world();
+  const bin = join(w.root, 'node_modules', '.bin');
+  mkdirSync(bin, { recursive: true });
+  const named = process.env.REPOGRAPH_BIN;
+  delete process.env.REPOGRAPH_BIN;                 // this is the resolution when nothing names it
+  try {
+    assert.equal(binary(w.root), 'repograph', 'nothing installed locally: PATH answers');
+
+    // The trio npm, pnpm and yarn write, in the order they appear: the shell script first.
+    writeFileSync(join(bin, 'repograph'), '#!/bin/sh\n');
+    assert.equal(binary(w.root), WIN ? 'repograph' : join(bin, 'repograph'),
+      'the extensionless shim is not a fallback on Windows: CreateProcess cannot read it, and PATH can');
+
+    writeFileSync(join(bin, 'repograph.cmd'), '@echo off\r\n');
+    assert.equal(binary(w.root), join(bin, WIN ? 'repograph.cmd' : 'repograph'));
+  } finally {
+    if (named !== undefined) process.env.REPOGRAPH_BIN = named;
+  }
 });
 
 test('the rule the hook hands a subagent is the file the installer ships', () => {

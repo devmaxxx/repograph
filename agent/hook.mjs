@@ -60,15 +60,17 @@ function debug(...args) {
 
 /**
  * PATH first, the package's own bin second, and nothing else: a hook that installed things would
- * not be a hook. npm writes three shims side by side under `node_modules/.bin` and only two of
- * them are executable on Windows — the extensionless one is a shell script `CreateProcess` cannot
- * run at all — so the Windows names are tried first there.
+ * not be a hook. npm, pnpm and yarn all write the same trio under `node_modules/.bin` — an
+ * extensionless shell script, a `.cmd` and a `.ps1` — and on Windows the `.cmd` is the one that
+ * starts. The extensionless shim is worse than nothing there: returning it spawns a file
+ * `CreateProcess` cannot read, where falling through finds whatever `repograph.exe` an installer
+ * put on PATH.
  */
 function binary(root) {
   if (process.env.REPOGRAPH_BIN) return process.env.REPOGRAPH_BIN;
   const local = join(root, 'node_modules', '.bin', 'repograph');
-  const names = process.platform === 'win32' ? [`${local}.exe`, `${local}.cmd`, local] : [local];
-  return names.find((p) => existsSync(p)) || 'repograph';
+  const shim = process.platform === 'win32' ? `${local}.cmd` : local;
+  return existsSync(shim) ? shim : 'repograph';
 }
 
 /**
@@ -300,4 +302,4 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
   main();
 }
 
-export { rule, RULE_FALLBACK, intercept, riskLine, handlers, MAX_INJECTIONS };
+export { rule, RULE_FALLBACK, binary, intercept, riskLine, handlers, MAX_INJECTIONS };
