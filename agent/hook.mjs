@@ -149,6 +149,13 @@ function isWatchedCall(tool, input) {
   return tool === 'Grep' || tool === 'Glob';
 }
 
+/**
+ * On by default because the harness said so, under a rule committed before the number was read:
+ * interception ships when its tokens per hit are lower than reminder-only's. Sonnet, twice over the
+ * twelve tasks — 137,991 and 129,243 tokens per hit with it, 194,011 and 169,036 without, the two
+ * ranges not overlapping — and 11/11 hits against 11/9. `REPOGRAPH_HOOK_INTERCEPT=0` turns it off.
+ * `docs/bench/2026-09-09-agent-surface-results.md` has all four runs and what they are worth.
+ */
 function intercept(payload, root, sessionKey) {
   if (process.env.REPOGRAPH_HOOK_INTERCEPT === '0') return null;
   const input = payload.tool_input || {};
