@@ -7,7 +7,6 @@ pub struct IdHit {
     pub start: usize,
 }
 
-#[derive(Clone)]
 pub struct IdMatcher {
     single: Regex,
     range: Regex,
@@ -16,7 +15,7 @@ pub struct IdMatcher {
 
 /// A hit whose neighbour is alphanumeric or a hyphen belongs to a longer token: `FR-PAY-22` is
 /// one id and not `PAY-22`, and `2026-09-05` is a date.
-pub(crate) fn bounded(text: &str, start: usize, end: usize) -> bool {
+fn bounded(text: &str, start: usize, end: usize) -> bool {
     let tail = |b: u8| b.is_ascii_alphanumeric() || b == b'-';
     let left_ok = start == 0 || !tail(text.as_bytes()[start - 1]);
     let right_ok = end == text.len() || !tail(text.as_bytes()[end]);

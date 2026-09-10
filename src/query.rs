@@ -376,9 +376,11 @@ pub fn verify(graph: &Graph) -> String {
     out.push_str(&format!("nodes: {}  {:?}\n", graph.nodes.len(), nodes));
     out.push_str(&format!("edges: {}  {:?}\n", graph.edges.len(), edges));
     out.push_str(&format!("dangling edges: {}\n", dangling.len()));
-    let held: BTreeSet<&str> = graph.pending.iter().map(|e| family(&e.target)).collect();
+    // Sampled like every other list here: a real corpus writes dozens of prefixes it never
+    // defines — 96 on the bench corpus — and a line that names all of them is not read at all.
+    let held: Vec<&str> = graph.pending.iter().map(|e| family(&e.target)).collect::<BTreeSet<_>>().into_iter().collect();
     out.push_str(&format!("held aside: {} edges to ids in {} prefixes no line defines  {}\n",
-        graph.pending.len(), held.len(), held.iter().cloned().collect::<Vec<_>>().join(" ")));
+        graph.pending.len(), held.len(), sample(&held)));
     out.push_str(&format!("undeclared ids: {}  {}\n", undeclared.len(), sample(&undeclared)));
     out.push_str(&format!("  gaps in declared families: {}  {}\n", gaps.len(), sample(&gaps)));
     out.push_str(&format!("  in families never declared: {}  {}\n", cite_only.len(),
