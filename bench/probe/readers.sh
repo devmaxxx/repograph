@@ -26,6 +26,16 @@ L=$(cd "$L" && pwd -P) || exit 2
 # against the worktree itself — `$F/$F/…` — so the restore misses and the appended line stays in
 # the file, under every row of whatever runs next.
 F=$(cd "$F" && pwd -P) || exit 2
+# And the binary, for the first reason again: `measure.sh` runs `$B` after this script has changed
+# directory into `$F`, so a relative BINARY resolves inside the worktree — every row exits 127 and
+# `judge.py medians` refuses the suite, or, worse, a corpus that happens to carry `bin/repograph`
+# gets measured instead of the candidate. A bare name is left alone: that one is a PATH lookup and
+# means the same thing from either directory, and a path whose directory does not exist is left to
+# fail where it is read rather than refused here.
+case "$B" in
+  /*) ;;
+  */*) d=$(cd "$(dirname "$B")" 2>/dev/null && pwd -P) && B="$d/$(basename "$B")" ;;
+esac
 # Truncated, not appended: `measure.sh` appends, so a second suite into the same log directory
 # would pool its runs with the first one's and `medians` would take one median over both.
 : > "$L/summary.txt"

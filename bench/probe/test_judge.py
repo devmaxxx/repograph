@@ -78,6 +78,12 @@ class RefusedRuns(unittest.TestCase):
         with self.assertRaises(SystemExit):
             judge.print_table([], ("wall", "RSS"))
 
+    def test_a_path_that_cannot_be_read_is_refused_by_name(self):
+        for argv in (["judge.py", "medians", "/nope/summary.txt"], ["judge.py", "cadence", "/nope/main.err"]):
+            with self.assertRaises(SystemExit) as e:
+                judge.main(argv)
+            self.assertIn("/nope/", str(e.exception))
+
 
 class Control(unittest.TestCase):
     def test_the_same_binary_twice_inside_the_bars_passes(self):
@@ -187,9 +193,12 @@ class RunCount(unittest.TestCase):
             self.assertIn("usage", str(e.exception))
 
     def test_a_floor_that_is_not_a_number_prints_usage_instead_of_a_traceback(self):
-        with self.assertRaises(SystemExit) as e:
-            judge.main(["judge.py", "compare", "a.txt", "b.txt", "three"])
-        self.assertIn("usage", str(e.exception))
+        # `²` is a digit `int` refuses, so the guard has to ask what `int` asks and not what
+        # `isdigit` answers, or the traceback arrives through the clause that replaced it.
+        for floor in ("three", "3.5", "²"):
+            with self.assertRaises(SystemExit) as e:
+                judge.main(["judge.py", "compare", "a.txt", "b.txt", floor])
+            self.assertIn("usage", str(e.exception))
 
     def test_a_floor_of_zero_is_refused_because_it_admits_the_reading_the_floor_exists_to_stop(self):
         for floor in ("0", "-3"):

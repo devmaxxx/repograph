@@ -126,7 +126,17 @@ USR=$(printf '%s\n' "$REPORT" | awk '{print $4}')
 # measured, much faster whole-store embed. The row carries its status, `judge.py medians` refuses
 # a row that measured a failure, and the script exits with it.
 [ "$RC" = "0" ] || echo "embed: $NAME exited $RC — this row measured a failure" >&2
-ROW=$(summary_row "$NAME" "$WALL" "$USR" "$RSS" "$RC" "$L/$NAME.samples") || exit 2
+ROW=$(summary_row "$NAME" "$WALL" "$USR" "$RSS" "$RC" "$L/$NAME.samples") || {
+  # What the store holds follows the embed's status and not the sampler's, which is the difference
+  # between the two refusal codes. A binary that dies inside two seconds comes through this door
+  # rather than the no-PID one — `pgrep` catches it once, and the sampler's first `kill -0` finds it
+  # already gone, so the samples file stays empty — and the vectors were removed before it started,
+  # so nothing whole is left in their place; refusing at 2 would tell an operator otherwise, and the
+  # next `ask` on that store answers lexical-only without saying so.
+  [ "$RC" = "0" ] && exit 2
+  echo "  the vectors were removed before the embed started and it exited $RC, so $F/.repograph/ holds no whole set of them — reset.sh before anything reads this store" >&2
+  exit 3
+}
 printf '%s\n' "$ROW" | tee -a "$L/summary.txt"
 # Not a pipeline: bash 3.2 here has no pipefail, and `| tee` hands back tee's status — the
 # cadence verdict would be swallowed and this script would exit 0 on an OUTSIDE reading, which is

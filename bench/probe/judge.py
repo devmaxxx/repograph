@@ -74,8 +74,19 @@ def medians(lines):
 MEDIAN_LINE = re.compile(r"^(\S+)\s+(wall=[0-9.]+ maxrss=[0-9.]+ peak_cpu=[0-9.]+ n=\d+)$")
 
 
+def read_lines(path):
+    """A file's lines, or the path in a refusal. A mistyped path is the same mistake `main`'s usage
+    lines exist for — and `print_table` already names it as one of the ways a comparison arrives
+    with no rows — so it reads as a refusal naming the file, not as a traceback out of `pathlib`.
+    """
+    try:
+        return Path(path).read_text().splitlines()
+    except OSError as e:
+        raise SystemExit(f"{path}: cannot be read ({e.strerror})")
+
+
 def read_medians(path):
-    lines = Path(path).read_text().splitlines()
+    lines = read_lines(path)
     out = {}
     for line in lines:
         m = MEDIAN_LINE.match(line.strip())
@@ -203,9 +214,11 @@ def main(argv):
             raise SystemExit(f"usage: judge.py {cmd} A B [MIN_N]")
         # And `int` on a word raises a ValueError traceback in the same place, while a floor of 0
         # or less is no floor at all: it admits the one-run-a-row comparison MIN_N exists to refuse.
+        # `isdecimal`, not `isdigit`: the latter is true of `²` and `int` still raises on it, which
+        # is the traceback this clause replaces, arriving through the clause itself.
         min_n = MIN_N
         if len(argv) == 5:
-            if not argv[4].isdigit() or int(argv[4]) < 1:
+            if not argv[4].isdecimal() or int(argv[4]) < 1:
                 raise SystemExit(f"usage: judge.py {cmd} A B [MIN_N] — MIN_N is a count of runs a row, not {argv[4]!r}")
             min_n = int(argv[4])
         a, b = read_medians(argv[2]), read_medians(argv[3])
@@ -222,7 +235,7 @@ def main(argv):
             print(f"{row} wall={m['wall']} maxrss={m['maxrss']} peak_cpu={m['peak_cpu']} n={m['n']}")
         return 0
     if cmd == "cadence":
-        c = cadence(Path(argv[2]).read_text().splitlines())
+        c = cadence(read_lines(argv[2]))
         ok, why = cadence_ok(c)
         print(f"first={c['first']} max={c['max']} median={c['median']} ratio={c['ratio']:.3f} n={len(c['intervals'])}")
         print(f"intervals={c['intervals']}")
