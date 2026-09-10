@@ -21,6 +21,11 @@ mkdir -p "$L"
 # directory it is writing, which is the defect the backup's own comment exists to prevent — while
 # `judge.py medians` at the end read the near-empty file left in the original directory.
 L=$(cd "$L" && pwd -P) || exit 2
+# The worktree too, and for a second reason: the EXIT trap below puts `cn.ts` back by `$F/$CN`, and
+# it fires after this script has changed directory into `$F`. A relative WORKTREE then resolves
+# against the worktree itself — `$F/$F/…` — so the restore misses and the appended line stays in
+# the file, under every row of whatever runs next.
+F=$(cd "$F" && pwd -P) || exit 2
 # Truncated, not appended: `measure.sh` appends, so a second suite into the same log directory
 # would pool its runs with the first one's and `medians` would take one median over both.
 : > "$L/summary.txt"
@@ -55,4 +60,10 @@ for i in $(seq 1 "$N"); do
   "$M" bench-dense-$i "$L" -- "$B" --repo "$F" bench
   "$M" dump10-$i "$L" -- "$B" --repo "$F" dump --queries "$HERE/queries10.jsonl" --out "$L/dump10.json" --depth 300
 done
-python3 "$HERE/judge.py" medians "$L/summary.txt" | tee "$L/medians.txt"
+# Not a pipeline, for the reason the quiet gate above gives: `| tee` hands back tee's status, so a
+# suite holding a row that measured a failure would exit 0 with `medians.txt` truncated to empty —
+# a refusal that reads as a clean sweep. The refusal joins the medians in the file because the log
+# directory is what gets copied out of the run, and an empty file says nothing about why.
+python3 "$HERE/judge.py" medians "$L/summary.txt" > "$L/medians.txt" 2>&1; MED=$?
+cat "$L/medians.txt"
+exit "$MED"
