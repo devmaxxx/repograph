@@ -20,7 +20,24 @@ wait $WRAP; RC=$?
 # A command that failed still leaves `time` a full report, so its row would otherwise enter the
 # median as an honestly-measured fast run — a mistyped flag reading as a reader that got 60×
 # quicker. The row carries its status and the script exits with it.
-[ "$RC" = "0" ] || echo "measure: $NAME exited $RC — this row measured a failure" >&2
+#
+# One non-zero exit is not that, though. `repograph bench` returns 1 for a missed floor and 1 for an
+# empty graph, a missing case file or a dense width mismatch, so the status alone cannot say whether
+# the reader did its work: a row that answered every case and then failed a floor spent its wall
+# clock reading, and a row that never found a store spent it failing. Only the wording separates
+# them, and it is read here rather than in `judge.py` because the transcript is what holds it. The
+# field says which of the two it was; the row is still refused unless `judge.py` also recognises the
+# row as one that runs `bench`. A wording that changes upstream is caught by `test_measure.py`.
+FLOORS=0
+if [ "$RC" != "0" ] && grep -q "bench floors not met" "$LOG/$NAME.time"; then FLOORS=1; fi
+if [ "$RC" = "0" ]; then :
+elif [ "$FLOORS" = "1" ]; then echo "measure: $NAME exited $RC on its floors — the timing stands, the floors did not" >&2
+else echo "measure: $NAME exited $RC — this row measured a failure" >&2
+fi
+# Absent on every row where nothing happened, so a clean line is the line it has always been and
+# the field's absence can never admit anything: an instrument too old to write it refuses the row.
+FLOORS_FIELD=""
+[ "$FLOORS" = "1" ] && FLOORS_FIELD=" floors_missed=1"
 PEAK_CPU=$(awk '{gsub("%","",$2); if ($2+0>m) m=$2+0} END{print m+0}' "$LOG/$NAME.samples")
 PEAK_TH=$(awk '{split($4,a,"/"); if (a[1]+0>m) m=a[1]+0} END{print m+0}' "$LOG/$NAME.samples")
 # The measured command's stderr shares this file with `time`'s report, and an unanchored `/real/`
@@ -35,5 +52,5 @@ WALL=$(printf '%s\n' "$REPORT" | awk '{print $1}')
 USR=$(printf '%s\n' "$REPORT" | awk '{print $3}')
 SYS=$(printf '%s\n' "$REPORT" | awk '{print $5}')
 N=$(wc -l <"$LOG/$NAME.samples" | tr -d ' ')
-echo "$NAME  wall=${WALL}s user=${USR}s sys=${SYS}s maxrss=${RSS}GB peak_cpu=${PEAK_CPU}% peak_threads=${PEAK_TH} samples=${N} rc=${RC}" | tee -a "$LOG/summary.txt"
+echo "$NAME  wall=${WALL}s user=${USR}s sys=${SYS}s maxrss=${RSS}GB peak_cpu=${PEAK_CPU}% peak_threads=${PEAK_TH} samples=${N} rc=${RC}${FLOORS_FIELD}" | tee -a "$LOG/summary.txt"
 exit "$RC"

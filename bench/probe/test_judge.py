@@ -1,6 +1,8 @@
 import contextlib
 import io
+import tempfile
 import unittest
+from pathlib import Path
 
 import judge
 
@@ -83,6 +85,104 @@ class RefusedRuns(unittest.TestCase):
             with self.assertRaises(SystemExit) as e:
                 judge.main(argv)
             self.assertIn("/nope/", str(e.exception))
+
+
+FLOOR_LINE = ("bench-dense-1  wall=6.10s user=5.00s sys=0.40s maxrss=1.62GB peak_cpu=340% "
+              "peak_threads=9 samples=6 rc=1 floors_missed=1")
+BROKEN_LINE = ("bench-dense-1  wall=0.02s user=0.01s sys=0.00s maxrss=0.01GB peak_cpu=0% "
+               "peak_threads=1 samples=0 rc=1")
+
+# What a row's `.time` file holds: the measured command's stderr, then `/usr/bin/time -l`'s report,
+# which is written last and is therefore the tail of the file.
+TIME_FILE = """\
+Error: graph is empty at /Users/max/bench/beauty-crm-test — run build first
+        0.02 real         0.01 user         0.00 sys
+             1212416  maximum resident set size
+                   0  average shared memory size
+"""
+
+
+class FloorVerdicts(unittest.TestCase):
+    """A missed floor is a reading; a store that was never there is not. Both exit 1 out of `bench`,
+    so what separates them on the summary line is `floors_missed`, and the row it may be believed on
+    is a `bench` row."""
+
+    def test_a_bench_row_that_missed_a_floor_is_a_reading_and_carries_the_field(self):
+        m = judge.medians([FLOOR_LINE])
+        self.assertEqual(m["bench-dense"]["n"], 1)
+        self.assertEqual(m["bench-dense"]["wall"], 6.10)
+        self.assertEqual(m["bench-dense"]["floors_missed"], 1)
+
+    def test_a_bench_row_whose_stderr_said_nothing_of_floors_is_refused(self):
+        with self.assertRaises(SystemExit) as e:
+            judge.medians([BROKEN_LINE])
+        self.assertIn("bench-dense", str(e.exception))
+        self.assertIn("exited 1", str(e.exception))
+
+    def test_a_row_that_is_not_a_bench_row_is_refused_whatever_its_stderr_said(self):
+        with self.assertRaises(SystemExit) as e:
+            judge.medians([FLOOR_LINE.replace("bench-dense-1", "ask-fused-1")])
+        self.assertIn("ask-fused", str(e.exception))
+
+    def test_a_clean_bench_row_keeps_the_shape_every_other_row_has(self):
+        line = FLOOR_LINE.replace(" rc=1 floors_missed=1", " rc=0")
+        self.assertNotIn("floors_missed", str(judge.medians([line])["bench-dense"]))
+
+    def test_the_refusal_quotes_the_tail_of_what_that_row_said(self):
+        with tempfile.TemporaryDirectory() as d:
+            Path(d, "summary.txt").write_text(BROKEN_LINE + "\n")
+            Path(d, "bench-dense-1.time").write_text(TIME_FILE)
+            with self.assertRaises(SystemExit) as e:
+                judge.read_medians(str(Path(d, "summary.txt")))
+            msg = str(e.exception)
+            self.assertIn("graph is empty at /Users/max/bench/beauty-crm-test", msg)
+            # `time`'s report is the tail of the file and never what the command said.
+            self.assertNotIn("maximum resident set size", msg)
+
+    def test_a_refusal_with_no_transcript_beside_it_still_names_the_row(self):
+        with tempfile.TemporaryDirectory() as d:
+            Path(d, "summary.txt").write_text(BROKEN_LINE + "\n")
+            with self.assertRaises(SystemExit) as e:
+                judge.read_medians(str(Path(d, "summary.txt")))
+            self.assertIn("bench-dense", str(e.exception))
+
+    def test_the_field_survives_the_round_trip_through_medians(self):
+        with tempfile.TemporaryDirectory() as d:
+            summary = Path(d, "summary.txt")
+            summary.write_text(FLOOR_LINE + "\n" + SUMMARY)
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                judge.main(["judge.py", "medians", str(summary)])
+            printed = out.getvalue()
+            self.assertIn("floors_missed: bench-dense", printed)
+            medians = Path(d, "medians.txt")
+            medians.write_text(printed)
+            back = judge.read_medians(str(medians))
+            self.assertEqual(back["bench-dense"]["floors_missed"], 1)
+            self.assertEqual(back["bench-dense"]["n"], 1)
+            # A row nothing happened to reads exactly as it always has, note line and all.
+            self.assertNotIn("floors_missed", [l for l in printed.splitlines() if l.startswith("ask-fused")][0])
+            self.assertNotIn("floors_missed", str(back["ask-fused"]))
+
+    def test_the_table_marks_the_row_and_says_it_under_the_verdict(self):
+        ref = {"bench-dense": {"wall": 6.0, "maxrss": 1.60, "peak_cpu": 340.0, "n": 5, "floors_missed": 1}}
+        new = {"bench-dense": {"wall": 6.1, "maxrss": 1.60, "peak_cpu": 340.0, "n": 5}}
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            ok = judge.print_table(judge.compare(ref, new), ("wall Δ", "RSS Δ", "peak CPU Δ"),
+                                   judge.floors_rows(ref, new))
+        lines = out.getvalue().splitlines()
+        self.assertTrue(ok)
+        self.assertEqual(lines[2], "| bench-dense | +1.7% | +0.0% | +0.0% | ok, floors_missed |")
+        self.assertTrue(lines[-1].startswith("floors_missed: bench-dense"))
+
+    def test_a_table_no_row_of_which_missed_a_floor_says_nothing_about_them(self):
+        rows = {"ask-fused": {"wall": 0.6, "maxrss": 1.5, "peak_cpu": 120.0, "n": 5}}
+        self.assertEqual(judge.floors_rows(rows, rows), set())
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            judge.print_table(judge.control(rows, rows), ("wall spread", "RSS spread"), judge.floors_rows(rows, rows))
+        self.assertNotIn("floors_missed", out.getvalue())
 
 
 class Control(unittest.TestCase):

@@ -46,6 +46,23 @@ than the floor, which is five unless a last argument (`judge.py compare REF NEW 
 A whole-store embed is judged as a median of three against a control of three, and §9 reads its
 three clauses off the summary lines by hand.
 
+**A missed floor is a reading; a broken store is not.** `judge.py medians` refuses a whole suite
+when any row exited non-zero, because a command that failed still gets a full `time` report and its
+row would enter the median as an honestly-measured fast run. One non-zero exit is not that: a
+`bench` row that answered every case and then missed a floor spent its wall clock reading, and its
+wall, max RSS and peak CPU are readings of that reader — while a `bench` row that found no store
+never did the work at all. `bench` exits 1 for both (`src/main.rs`, `anyhow::bail!("bench floors not
+met")`, the same status an empty graph or a missing case file bails with), so the wording on stderr
+is what separates them: `measure.sh` greps the row's own transcript and writes `floors_missed=1`
+beside `rc=`, and `judge.py` believes that field only on a row that runs `bench` — `bench`,
+`bench-dense`, `bench-nodense`. Every other non-zero exit is still refused, and the refusal now
+quotes the tail of what the row said, so a reader is told what failed and not only that something
+did. The field rides through `medians.txt` on the rows that carry it, and `control` and `compare`
+print it in the verdict cell and say it in a line under the table. `arms.sh` has ruled the same way
+on the same event since `deceb5c` — an arm that fails a floor is still a recorded arm — and the two
+now agree. If `bench`'s wording ever changes, `bench/probe/test_measure.py` goes red, and until the
+grep follows the rename a missed floor refuses the suite rather than passing unnoticed.
+
 **The peak CPU column, and what it cannot say.** `judge.py compare` judges three columns — wall
 against 10%, max RSS against 5%, peak CPU against 10% — because §9's gate asks for the run's peak
 CPU unmoved and a clause no code reads is green whatever the run did. The column is only as good

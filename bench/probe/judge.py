@@ -6,6 +6,22 @@ same binary read 0.61 s and 0.75 s, and max RSS bounced between 1.36 and 1.56 GB
 a control. So a row is a median of n runs, and a bar is usable only once the same binary run
 through the suite twice reads inside it. This file is what says so, and the tests beside it are
 what a reader checks instead of the shell that produced a table.
+
+`floors_missed` — the one non-zero exit this file reads as a reading. A `bench` row that misses a
+floor did all of its work and answered: its wall clock, max RSS and peak CPU are readings of that
+reader, and only the verdict on the answers failed. A row that never found a store did not do the
+work at all and its clock measured a failing setup, which is no reading of anything. `bench` exits
+1 for both, so the exit code cannot separate them and the wording on stderr has to: `measure.sh`
+greps its own transcript for `bench floors not met` and writes `floors_missed=1` on the summary
+line, and this file believes that field only on a row that runs `bench` — a name is a weaker claim
+than a transcript, so both have to agree. The name says the fact and not the consequence, because
+the consequence differs by reader: to `medians` it is "judge this row", to a person reading the
+table it is "this reader's `bench` verdict failed", and a field called `ok` or `refused` would have
+had to pick one. It is a flag and not a count: `bench` prints one verdict, never a tally. Absent on
+every clean row, so its absence admits nothing — an instrument too old to write it is refused.
+`bench/probe/arms.sh` has ruled the same way since `deceb5c` on the same event, for the same reason
+in the other direction: an arm that fails a floor is still a recorded arm. The two now agree that a
+missed floor is a reading and a broken store is not, and disagree about nothing.
 """
 
 import re
@@ -27,6 +43,15 @@ RUN = re.compile(r"^(\S+?)-(\d+)\s+(.*)$")
 FIELD = re.compile(r"(\w+)=([0-9.]+)")
 STAMP = re.compile(r"^(\d+\.\d+)\s+(.*)$")
 PROGRESS = re.compile(r"^dense: (\d+)/(\d+) rows")
+# The rows that run `repograph bench` — `bench-dense`, `bench-nodense` in `readers.sh`, `bench` on
+# its own elsewhere. No other command can miss a floor, so no other row's `floors_missed` is
+# believed however its stderr happened to read.
+BENCH_ROW = re.compile(r"^bench(-|$)")
+# `/usr/bin/time -l`'s report shares a row's `.time` file with the measured command's stderr and is
+# written last, so the file's tail is the report and not what the command said. Every report line
+# begins with its own number — `0.61 real …`, `1550000000  maximum resident set size` — which is
+# what tells the two apart in a file that has no other structure.
+REPORT_LINE = re.compile(r"^\s*\d+(\.\d+)?\s")
 
 
 def median(xs):
@@ -39,7 +64,34 @@ def fields(text):
     return {k: float(v) for k, v in FIELD.findall(text)}
 
 
-def medians(lines):
+def row_metrics(wall, maxrss, peak_cpu, n, floors_missed=0):
+    """One row's readings. `floors_missed` is on the row only where it happened, so every clean row
+    reads — and prints, and compares — exactly as it did before the field existed."""
+    m = {"wall": wall, "maxrss": maxrss, "peak_cpu": peak_cpu, "n": n}
+    if floors_missed:
+        m["floors_missed"] = 1
+    return m
+
+
+def stderr_tail(logdir, run, keep=2, width=160):
+    """The last thing the measured command wrote, off the row's own transcript beside the summary.
+
+    A refusal that says a row failed and not what failed sends its reader looking through a log
+    directory for the file this function already knows the name of. `time`'s report is dropped by
+    `REPORT_LINE`, so what is quoted is the command's own words; a stderr line that itself begins
+    with a number is quotable collateral and reads as one more line of the tail.
+    """
+    if logdir is None:
+        return ""
+    try:
+        text = Path(logdir, f"{run}.time").read_text()
+    except OSError:
+        return ""
+    said = [l.strip() for l in text.splitlines() if l.strip() and not REPORT_LINE.match(l)]
+    return "; it said: " + " / ".join(l[:width] for l in said[-keep:]) if said else ""
+
+
+def medians(lines, logdir=None):
     runs = {}
     for line in lines:
         m = RUN.match(line.strip())
@@ -54,24 +106,33 @@ def medians(lines):
             raise SystemExit(f"{m.group(0)!r}: no {', '.join(missing)} — the run did not complete")
         # `rc` is measure.sh's exit status for the measured command. A failed command still gets a
         # full `time` report, so its row looks like a fast one; it is refused rather than averaged.
-        if f.get("rc", 0.0) != 0.0:
-            raise SystemExit(f"{m.group(1)}: a run exited {int(f['rc'])} — that row measured a failure, not a reader")
-        runs.setdefault(m.group(1), []).append(f)
+        # The exception is the floor verdict the docstring above states, which is a reading — and it
+        # takes both the field and a row that runs `bench` to claim it.
+        floors = f.get("floors_missed", 0.0) != 0.0 and BENCH_ROW.match(m.group(1)) is not None
+        if f.get("rc", 0.0) != 0.0 and not floors:
+            raise SystemExit(f"{m.group(1)}: a run exited {int(f['rc'])} — that row measured a failure, "
+                             f"not a reader{stderr_tail(logdir, f'{m.group(1)}-{m.group(2)}')}")
+        runs.setdefault(m.group(1), []).append({**f, "floors_missed": 1.0 if floors else 0.0})
     out = {}
-    for row, rs in runs.items():
-        out[row] = {
-            "wall": median(r["wall"] for r in rs),
-            "maxrss": median(r["maxrss"] for r in rs),
-            "peak_cpu": median(r["peak_cpu"] for r in rs),
-            "n": len(rs),
-        }
+    for name, rs in runs.items():
+        out[name] = row_metrics(
+            median(r["wall"] for r in rs),
+            median(r["maxrss"] for r in rs),
+            median(r["peak_cpu"] for r in rs),
+            len(rs),
+            # Any run of the row: a median taken over runs one of which missed a floor is still a
+            # reading, and a reader told about it for one run in five knows what they are reading.
+            floors_missed=any(r["floors_missed"] for r in rs),
+        )
     return out
 
 
 # `row wall=0.61 maxrss=1.55 peak_cpu=120.0 n=5`: what `medians` prints, and what `control` and
 # `compare` read back. A run line carries `-<i>` after the row and a `user=` field; a medians
-# line carries neither, so the two shapes cannot be confused for each other.
-MEDIAN_LINE = re.compile(r"^(\S+)\s+(wall=[0-9.]+ maxrss=[0-9.]+ peak_cpu=[0-9.]+ n=\d+)$")
+# line carries neither, so the two shapes cannot be confused for each other. `floors_missed=1`
+# rides on the end of the rows that carry it and nowhere else, which is what makes the round trip
+# through a `medians.txt` lossless without changing the line every other row prints.
+MEDIAN_LINE = re.compile(r"^(\S+)\s+(wall=[0-9.]+ maxrss=[0-9.]+ peak_cpu=[0-9.]+ n=\d+(?: floors_missed=1)?)$")
 
 
 def read_lines(path):
@@ -92,8 +153,11 @@ def read_medians(path):
         m = MEDIAN_LINE.match(line.strip())
         if m:
             f = fields(m.group(2))
-            out[m.group(1)] = {"wall": f["wall"], "maxrss": f["maxrss"], "peak_cpu": f["peak_cpu"], "n": int(f["n"])}
-    return out or medians(lines)
+            out[m.group(1)] = row_metrics(f["wall"], f["maxrss"], f["peak_cpu"], int(f["n"]),
+                                          floors_missed=f.get("floors_missed", 0.0))
+    # A summary file's rows have their transcripts beside them, and a refusal that can quote one
+    # says more than the row's name — which is the whole of what a reader has to go on.
+    return out or medians(lines, Path(path).parent)
 
 
 def spread(a, b):
@@ -184,7 +248,18 @@ def cadence_ok(c, bar=60.0, tail=1.3):
     return True, "every interval under the bar and the tail flat"
 
 
-def print_table(rows, head):
+def floors_rows(*sides):
+    """The rows either side of a comparison read off a `bench` that missed a floor."""
+    return {name for side in sides for name, m in side.items() if m.get("floors_missed")}
+
+
+def floors_note(names):
+    return ("floors_missed: " + ", ".join(sorted(names)) + " — a `bench` row that answered every "
+            "case and then missed a floor. The wall clock, max RSS and peak CPU are readings of "
+            "that reader; the floor verdict is `bench`'s own and is not what this table judges.")
+
+
+def print_table(rows, head, floors=()):
     # `all([])` is True, so without this a pair of files that parsed to no rows at all — a
     # mistyped path, a suite that died before its first row — prints an empty table and exits 0,
     # which reads exactly like a bar that was cleared.
@@ -192,13 +267,22 @@ def print_table(rows, head):
         raise SystemExit("no rows to judge — the medians files parsed to nothing")
     # `control` hands over two delta columns and `compare` three, so the width comes from the
     # heads: the two clauses those verdicts answer to were committed before any run and neither
-    # gains or loses a column because the other one did.
+    # gains or loses a column because the other one did. The floor fact rides in the verdict cell
+    # for that reason — it is a word about the row's reading, not a fourth thing measured, and a
+    # column of its own would have widened a table two committed clauses read.
     print("| row | " + " | ".join(head) + " | |")
     print("|" + "---|" * (len(head) + 2))
     for row in rows:
         name, deltas, ok = row[0], row[1:-1], row[-1]
         cells = " | ".join("n/a" if d is None else f"{d:+.1%}" for d in deltas)
-        print(f"| {name} | {cells} | {'ok' if ok else 'OUTSIDE'} |")
+        verdict = ("ok" if ok else "OUTSIDE") + (", floors_missed" if name in floors else "")
+        print(f"| {name} | {cells} | {verdict} |")
+    said = [row[0] for row in rows if row[0] in floors]
+    if said:
+        # Blank line first: these tables are pasted into the results document, and a paragraph
+        # crowding the last row is a line that renders inside the table it is about.
+        print()
+        print(floors_note(said))
     return all(row[-1] for row in rows)
 
 
@@ -222,17 +306,24 @@ def main(argv):
                 raise SystemExit(f"usage: judge.py {cmd} A B [MIN_N] — MIN_N is a count of runs a row, not {argv[4]!r}")
             min_n = int(argv[4])
         a, b = read_medians(argv[2]), read_medians(argv[3])
+        floors = floors_rows(a, b)
         if cmd == "control":
-            return 0 if print_table(control(a, b, min_n=min_n), ("wall spread", "RSS spread")) else 1
-        return 0 if print_table(compare(a, b, min_n=min_n), ("wall Δ", "RSS Δ", "peak CPU Δ")) else 1
+            return 0 if print_table(control(a, b, min_n=min_n), ("wall spread", "RSS spread"), floors) else 1
+        return 0 if print_table(compare(a, b, min_n=min_n), ("wall Δ", "RSS Δ", "peak CPU Δ"), floors) else 1
     if cmd == "medians":
         rows = read_medians(argv[2])
         # Printing nothing and exiting 0 reads like a suite with no regressions rather than like a
         # file nothing in it parsed — the same trap `print_table` guards against.
         if not rows:
             raise SystemExit(f"{argv[2]}: no run or medians line parsed — nothing to take a median of")
-        for row, m in rows.items():
-            print(f"{row} wall={m['wall']} maxrss={m['maxrss']} peak_cpu={m['peak_cpu']} n={m['n']}")
+        for name, m in rows.items():
+            floors = " floors_missed=1" if m.get("floors_missed") else ""
+            print(f"{name} wall={m['wall']} maxrss={m['maxrss']} peak_cpu={m['peak_cpu']} n={m['n']}{floors}")
+        # `readers.sh` writes this file and copies it out of the run, so the sentence belongs beside
+        # the rows and not only in the table a later `control` prints from them.
+        said = floors_rows(rows)
+        if said:
+            print(floors_note(said))
         return 0
     if cmd == "cadence":
         c = cadence(read_lines(argv[2]))
