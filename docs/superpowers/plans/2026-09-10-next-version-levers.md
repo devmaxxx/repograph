@@ -1862,7 +1862,31 @@ cd /Users/max/Documents/projects/repograph && git add -A src && git commit -m "f
 - Consumes: `Graph::settle`, `ids::generic()` from Task 4.
 - Produces: `families::Families = (BTreeMap<String, usize>, BTreeMap<String, usize>)` (what `of_graph` returns); `families::line(&Families) -> String`; `families::moved(before: &Families, after: &Families) -> Vec<String>`; `families::survey(repo, entries) -> Result<Vec<Mention>>`; `families::report(graph: &Graph, cited: Vec<Mention>) -> Report` with `Row { family, nodes, defined: Site }`; `apply_diff(repo, store, graph, entries, diff, ex, timing)`.
 
-- [ ] **Step 1: The failing integration test**
+> **What this task also shipped, beyond the seven steps.** Task 4's review found, and measured
+> read-only on the pinned fixture, that a store an earlier release wrote stays half-old after an
+> upgrade: `apply_diff` re-reads only what the diff names, and a grammar change is in no hash — the
+> fixture's `verify` read `held aside: 0` where `families` on the same tree read 96 mention-only
+> prefixes and 11,694 mentions. So `walk::Manifest` gained a `grammar` stamp (`walk::GRAMMAR`,
+> generation 1; a manifest written before it reads `0`); `apply_diff` reads the whole tree once when
+> that stamp is not this build's, says on stderr that it is doing so and why, and the manifest it
+> saves carries the generation forward, so the next update is stat-only again. `record_stamps`
+> copies the stored generation rather than claiming this one — it re-extracts nothing. `--stale`
+> neither pays for the walk nor repairs it, so nothing about it reaches the fixture. The tests are
+> `tests/grammar.rs` (the line, the once, `--stale`) and one in `src/main.rs` (healed byte for byte
+> to what a build of this version writes, and a store whose stamp is current left alone).
+>
+> Two consequences for the tasks after this one, both in `$WT`, whose store `reset.sh` copies from
+> the fixture — written by `repograph-main`, which stamps no generation at all:
+>
+> - Task 6 Step 5's warm non-stale `ask` heals as well as writing the `RGM2` mirror: it re-reads the
+>   tree once (a build's worth of extraction), prints the `grammar:` line, and leaves `$WT`'s
+>   `graph.json` as the branch's own build rather than `main`'s. The rows are then read over the
+>   branch's graph with its `pending` set, which is the read cost clause (e) exists to weigh; the
+>   rewrite is still paid outside the rows.
+> - Task 3's first `update` through a branch binary after a reset carries that same whole-tree read.
+>   It is not a one-file update and does not belong in the median of five.
+
+- [x] **Step 1: The failing integration test**
 
 In `tests/families.rs`, change `REQ` so the requirement cites a prefix nothing defines *yet*:
 
@@ -1932,7 +1956,7 @@ and rewrite the middle of `a_repository_gets_its_families_from_the_documents_and
 
 The `ISO`-row and `Not families` assertions earlier in the test stand. `every_shape_the_extractor_defines_a_node_with_defines_a_family` stands as written — every assertion in it is about the graph or the mention tally.
 
-- [ ] **Step 2: Run to see it fail**
+- [x] **Step 2: Run to see it fail**
 
 ```bash
 cd /Users/max/Documents/projects/repograph && cargo test --test families 2>&1 | grep -E 'panicked|assertion' | head -3
@@ -1940,7 +1964,7 @@ cd /Users/max/Documents/projects/repograph && cargo test --test families 2>&1 | 
 
 Expected: the `explain REQ-7` after `docs/new.md` fails first if the re-read path is still there (it passes by accident — the re-read also releases the edge); the definitive red is `families: the store is 1 file behind the tree`, which nothing prints yet.
 
-- [ ] **Step 3: `src/families.rs`**
+- [x] **Step 3: `src/families.rs`**
 
 Delete `Derived`, `derive`, `Scan.definition`, `Scan.ids`, `Scan.milestones`, `Scan::define`, the definition half of `Scan::doc` (the `milestone_file`/`adr_file` inserts) and of `Scan::registry` (keep its `tally_lines`), `Scan::finish`'s definition filter, `names`, `rows(defined, counts)`, and `report(derived, graph)`. Add:
 
@@ -2051,7 +2075,7 @@ pub fn run(repo: &Path, cfg: &crate::config::Config, json: bool) -> Result<()> {
     }
 ```
 
-- [ ] **Step 4: `src/main.rs` and `src/ask.rs`**
+- [x] **Step 4: `src/main.rs` and `src/ask.rs`**
 
 `apply_diff` loses the `also` parameter and `rest_of_tree` is deleted; `stale` and `work` are built from `diff` alone, and `let moved = !diff.changed.is_empty() || !diff.removed.is_empty();`. `run_update`:
 
@@ -2075,7 +2099,7 @@ pub fn run(repo: &Path, cfg: &crate::config::Config, json: bool) -> Result<()> {
 
 `Watcher::poll` does the same around its `apply_diff` (without the bootstrap arm — a watcher opens a built store). `graph_for_ask`'s call becomes `crate::apply_diff(repo, store, &mut graph, &entries, &diff, &crate::extractors(repo)?, timing)?`. Delete the doc comments that described the re-read (`Re-extracts what the diff names … the whole tree, when a family has appeared or vanished under it` on `apply_diff`; `The store brought in line with the tree. The extractors are built here rather than passed in because the families come between the walk and them` on `run_update`) and write what is true now: the extractors read every id, and the graph decides after the apply which are visible.
 
-- [ ] **Step 5: Run everything**
+- [x] **Step 5: Run everything**
 
 ```bash
 cd /Users/max/Documents/projects/repograph && cargo test 2>&1 | grep -E 'test result|FAILED|panicked' && cargo clippy --all-targets -- -D warnings 2>&1 | tail -1
@@ -2083,7 +2107,7 @@ cd /Users/max/Documents/projects/repograph && cargo test 2>&1 | grep -E 'test re
 
 Expected: green and clean. The `families:` stderr line on a build must read exactly as before for the same corpus (`families: REQ · milestones: (none)` in the integration test).
 
-- [ ] **Step 6: README**
+- [x] **Step 6: README**
 
 In `README.md`'s "Id families" section replace the paragraph that begins `An \`update\` whose documents gained or lost a family says so` (lines 480–486) with:
 
@@ -2101,7 +2125,7 @@ says so on stderr rather than guessing which definitions still exist.
 
 and in the same section change `A prefix that is only ever *mentioned* — \`ISO-8601\`, a ticket number, a year — is plain text, and so is one whose ids are cited but never defined.` to `A prefix that is only ever *mentioned* — \`ISO-8601\`, a ticket number, a year — is held aside rather than linked, and so is one whose ids are cited but never defined.`
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 cd /Users/max/Documents/projects/repograph && git add -A src tests README.md && git commit -m "refactor(families): the family set is a view over the graph, and no writer re-reads the tree"
