@@ -757,6 +757,13 @@ free to move those numbers in either direction under every rule any campaign has
 dense arm reaching *more* `multi` cases and *fewer* of their anchors than the lexical one — a trade
 no count in this file has ever been able to state.
 
+**Half closed (2026-09-11).** The reading half shipped on `main` with the anchors line; the history
+half is on `feat/next-version-levers`: `bench/history/track.py` reads `anchors/<kind>` out of the
+summary into the run record and reports the moves beside the case counts, so a campaign's rule can
+name them. What is left is the gate's baseline — the four arms re-run to record the per-kind totals
+as the number a later rule holds — and that is a measurement, so it waits on the same quiet machine
+G23's control does.
+
 ## G16 · `enrich` reported 167 batches, 0 failed, and no questions
 
 **Raised (2026-09-06)** by rule G's first attempt, which spent nothing and was caught by a person
@@ -1160,6 +1167,25 @@ the fixture is pinned for.
 **Gate.** Before a bar is used to judge a change, the same command through the same binary twice
 reads inside it. A bar its own control cannot pass is measuring the machine, and every other gap in
 this family is read through these bars.
+
+**Instrument shipped, bars still unread (2026-09-11).** All three levers are in the tree as
+`bench/probe/` — the 2026-09-07 kit vendored so the bars it sets can be reviewed in a diff, with 88
+tests over it. *n* runs and a median: `judge.py` refuses a row built from fewer than five runs, and
+refuses one whose transcript says the measured command failed. The precondition is a script rather
+than a sentence: `quiet.sh` requires ≥ 85% idle, a 1-minute load under 3.0, AC power, no `cargo`,
+`rustc` or other `repograph` at any CPU, and no `node` at or above 5% CPU outside its own ancestor
+chain — presence alone is not noise, and an idle sibling harness is not what spoiled a row. The
+pinned index is the fixture's store copied into the one writable worktree by `reset.sh`, every row
+`--stale`, with `shasum` over the store before and after both suites to say that nothing wrote.
+
+What is **not** done is the gate itself. The control — the same binary through the suite twice at
+n = 5 — has never run, because this machine has not been quiet: on battery at a 1-minute load
+between 3.5 and 19 every time it was asked. So the reader bars are still the 2026-09-07 ones, and
+nothing on this branch has been judged against them. The row stays open until a quiet machine reads
+the control, and `docs/bench/2026-09-10-next-version-levers-results.md` §1 holds the clause it will
+be read under, committed before the reading. Two defects the kit's own review found are worth
+carrying: a suite that measured a failure exited 0 through a `| tee`, and `peak_cpu = 0` could reach
+a summary line with `rc=0`, which would have satisfied a CPU clause with nothing behind it.
 
 ## G24 · `ask --rerank-local` is the heaviest reader by an order of magnitude — 31.9 s against 0.41
 
@@ -1703,6 +1729,59 @@ never-matching regex, and a fixture with no definitions reads the same graph it 
 
 ---
 
+## G41 · `bench` says a floor was missed in English, and exits 1 like everything else
+
+**Raised (2026-09-11)** by the reader suite, which has to time `repograph bench` and cannot tell a
+verdict from a crash.
+
+**Measured.** A missed floor is `anyhow::bail!("bench floors not met")` at `src/main.rs:742` —
+exit **1**. So is an empty graph (`graph is empty at … — run build first`), a case file with no
+cases, a case count that is not 40 keyword / 30 paraphrase / 12 code, and a dense width mismatch.
+Nothing in the status distinguishes "the suite ran and answered every case, and one floor came in
+under its bar" from "the store is broken and nothing was measured", and the two mean opposite
+things to anything reading the run: the first is a reading, the second voids it.
+
+The summary line is already a parsed interface — G36 closed on the half of that which let a model
+name run as a shell command — and the exit status is the other half of the same interface. Today
+`bench/probe/measure.sh` greps the sentence out of the transcript and marks the row
+`floors_missed=1`, with a test that reads `src/main.rs` and fails if the wording is ever reworded,
+so the grep cannot rot in silence. That test is the tell: a harness that must read English to learn
+a verdict is reading a message that was never promised to it.
+
+**Lever.** A distinct exit code for the floor verdict, documented beside the summary line's shape —
+`2`, or whatever does not collide — with every other failure keeping `1`. The probe then drops its
+grep and the test that guards the wording.
+
+**Gate.** A missed floor exits with its own code and an error exits `1`, both pinned by a test that
+runs the binary; `bench/probe` reads the status instead of the sentence; and the README's bench
+section states the codes where it already states the line.
+
+---
+
+## G42 · No command under two seconds has a CPU reading, which is every reader row
+
+**Raised (2026-09-11)** while giving `judge.py` the peak-CPU column §9's own gate requires.
+
+**Measured.** `bench/probe/measure.sh` samples with `top -l 2 -s 1` — two samples a second apart,
+so about two seconds a sample. Every reader row is shorter than that: `impact` at 0.04 s,
+`ask-fused` at 0.35–0.58, `dump10` at 0.70–0.90, `bench-dense` at 1.47–1.90. They all report
+`peak_cpu = 0`, and `compare` carries a zero reference as "never sampled" and leaves the column
+unjudged. The only row long enough to be read is the whole-store embed, ~1,930 s, which is the one
+`REPOGRAPH_TIMING`-shaped number G19's gate names. So the peak-CPU column exists, is tested, and is
+readable for exactly one of eleven rows.
+
+**Lever.** Two, and the cheap one needs no sampler at all: `/usr/bin/time -l` already reports user
+and sys, so **average** CPU is `(user + sys) / wall` for free and on every row, which is what a bar
+on a reader should be set on anyway — a peak over two samples was never a peak. Keep the sampler for
+the long rows, where a peak means something, and say in the bars which of the two each row is judged
+on.
+
+**Gate.** Every reader row carries a CPU number a bar can be set on, derived rather than sampled;
+`compare` judges it; and the rows whose peak is unsampled say so in the table rather than reading as
+a zero.
+
+---
+
 ## Suggested order
 
 | | gap | why here |
@@ -1736,6 +1815,7 @@ answer different questions, and no row below moves a retrieval floor.
 
 | | gap | why here |
 |---|---|---|
+| 1= | **G42** no row under two seconds has a CPU reading | the other half of G23's instrument, raised by fixing it: the peak-CPU column §9's gate names is readable on one row of eleven, and the lever is arithmetic on numbers `/usr/bin/time` already reports. Beside G23 rather than below it because both are the instrument, and a bar nobody can read is not a looser bar than a bar that measures the machine — it is no bar |
 | 1 | **G23** the reader bars are tighter than the suite's own repeatability | every other row in this family is read through those bars, and the control already fails them on a change that touches no reader: `ask-fused` 0.58 s against 0.35, max RSS 1.36–1.56 GB on both binaries. n runs and a median, and it is fixed |
 | 2 | ~~**G20** the whole-store run in the band has no wall~~ | ~~the second round's headline is a product of ratios — 4.1–4.5× of 1,930 s — because three attempts starved on a working laptop~~ — closed 2026-09-09 — the band was removed |
 | 3 | **G19** the progress cadence is a count of rows | a fixed bar the plan set and the shipped code misses at both tails, 102.4 s and 96.7 s against 60, with the batching rule that would fix it already written one file away |
@@ -1756,6 +1836,7 @@ clones a repository they did not write.
 |---|---|---|
 | — | ~~**G36** the project file runs any command~~ | closed 2026-09-09 — and it took two refusals, not one: the `*_command` keys became machine-file-only, and the model name, which is interpolated into that command unquoted and was never checked, is now a token or it is not used. One refused key would have left the second door open |
 | 2 | **G32** a rebuilt enriched store is graded raw | the first thing anyone will hit after this branch merges: 150 nodes without questions and a bench that quietly grades against the raw floors. A stderr line and one `enrich` close it; the fixture's own rebuild is the recorded pair that says so |
+| 2= | **G41** a floor verdict and a broken store exit alike | raised 2026-09-11 by the reader suite: `bench` bails `floors not met` at exit 1, the code an empty graph and a bad case file also take, so a harness reads English to learn a verdict. Beside G32 because both are things the next person to run a store hits, and one exit code closes it |
 | 3 | **G34** two copies of one grammar | the failure is silent — a re-extraction on every `update`, or a family no node is written in — and the property test that makes it a red test is one function over fixtures that already exist |
 | 4 | **G39** the family set is an input to extraction | the design under G34: while the extractor needs the set, the two grammars must agree and a move costs a corpus read. It sits below G34 because the property test is what makes a divergence visible, and above everything else because it is the change that would make G34 unnecessary — and it is the one row here that could grow the store, so it is measured before it is taken |
 | ~~5~~ | ~~**G30** where the reranker's gains sit in the pool~~ | **closed 2026-09-09** — thirteen gains at ranks 6, 14, 18, 22, 23, 51, 109, 122, 135, 152, 155, 173, 196; five are within reach of a zero-token lever and eight are the model's alone |
