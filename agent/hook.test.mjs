@@ -48,7 +48,7 @@ function world({ store = true, answer = '', status = 0 } = {}) {
     ? `@echo off\r\n"${process.execPath}" "${fake}" %*\r\n`
     : `#!/bin/sh\nexec "${process.execPath}" "${fake}" "$@"\n`);
   if (!WIN) chmodSync(launcher, 0o755);
-  return { root, bin, launcher, argvLog, state: join(tmpdir(), 'repograph-hook') };
+  return { root, bin, launcher, argvLog };
 }
 
 function fire(w, payload, env = {}) {

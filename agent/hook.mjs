@@ -80,9 +80,19 @@ function binary(root) {
  * are quoted here — and nothing that reaches this can close a quote: a Windows path may not contain
  * one, and the words come from `queryWords`, which keeps letters, digits, `_` and `-` and nothing
  * else. Everything that is not a batch file is spawned as it always was.
+ *
+ * Two things the quoting does not buy, both only on that batch path. `cmd` expands `%NAME%` inside
+ * quotes and the command line has no escape for it — only a batch file's own `%%` — so a repository
+ * under a directory that pairs two `%` around an environment variable's name is asked about by the
+ * expanded path. And `spawnSync`'s timeout kills the interpreter rather than its child, so a wedged
+ * `repograph` outlives the five seconds this hook waits. Both need a local install on Windows to
+ * reach at all; neither is worth the shell it would take to avoid, and neither is silent about it.
  */
 function spawnable(bin, args) {
-  if (!/\.(cmd|bat)$/i.test(bin)) return { file: bin, args, opts: {} };
+  // Windows and a batch file, both: the extension alone would open the shell on a POSIX machine
+  // whose `REPOGRAPH_BIN` happens to end in `.cmd`, where a repository path may contain a quote
+  // and the sentence above stops being true.
+  if (process.platform !== 'win32' || !/\.(cmd|bat)$/i.test(bin)) return { file: bin, args, opts: {} };
   return { file: `"${bin}"`, args: args.map((a) => `"${a}"`), opts: { shell: true } };
 }
 

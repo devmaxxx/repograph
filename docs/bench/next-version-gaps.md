@@ -1233,7 +1233,7 @@ written. Measuring int8 on the default costs no download at all; the 562 MB is t
 alone. The other three questions are untouched — arm64 kernels, vectors that differ from the fp32
 ones, and a weight file the store does not record — so this stays deferred rather than proposed.
 
-## G26 · `serve` holds its model for the life of the process, where `watch` no longer does
+## G26 · `serve` holds its model for the life of the process, where `watch` no longer does — closed 2026-09-09
 
 **Raised (2026-09-07)** by [the unnoticeable results](2026-09-07-unnoticeable-results.md), §4.3,
 which changed `watch` and left `serve` alone on purpose.
@@ -1288,7 +1288,7 @@ is why `agent/hook.mjs` now starts a `serve --idle 1800 --idle-model 300` on `Se
 probe first, because a second `serve` refuses to bind while one answers and leaves by itself, so
 the start is the check. `REPOGRAPH_HOOK_SERVE=0` turns it off.
 
-## G27 · `serve` cannot bind under a deep path, and a killed one leaves its socket behind
+## G27 · `serve` cannot bind under a deep path, and a killed one leaves its socket behind — closed 2026-09-09
 
 **Raised (2026-09-07)** as the side findings of
 [what every command costs](2026-09-07-resource-usage-results.md), §5. These two are defects rather
