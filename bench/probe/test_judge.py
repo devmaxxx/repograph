@@ -1,0 +1,103 @@
+import unittest
+
+import judge
+
+SUMMARY = """\
+ask-fused-1  wall=0.61s user=0.40s sys=0.20s maxrss=1.55GB peak_cpu=120% peak_threads=8 samples=1
+ask-fused-2  wall=0.75s user=0.41s sys=0.21s maxrss=1.56GB peak_cpu=118% peak_threads=8 samples=1
+ask-fused-3  wall=0.60s user=0.40s sys=0.20s maxrss=1.36GB peak_cpu=121% peak_threads=8 samples=1
+impact-1  wall=0.04s user=0.02s sys=0.01s maxrss=0.05GB peak_cpu=0% peak_threads=1 samples=0
+impact-2  wall=0.05s user=0.02s sys=0.01s maxrss=0.05GB peak_cpu=0% peak_threads=1 samples=0
+impact-3  wall=0.04s user=0.02s sys=0.01s maxrss=0.05GB peak_cpu=0% peak_threads=1 samples=0
+"""
+
+STAMPED = """\
+100.00 start
+100.40 dense: model open in 0.4s
+100.90 dense: 128/33525 rows, 256.0 rows/s, ~2 min left
+103.90 dense: 512/33525 rows, 170.7 rows/s, ~3 min left
+109.90 dense: 1536/33525 rows, 170.7 rows/s, ~3 min left
+118.20 dense: 33525/33525 rows, 180.0 rows/s, ~0 min left
+118.30 dense: embedded 33525 rows in 18.3s
+118.31        18.31 real        60.00 user         2.00 sys
+118.31           1740000000  maximum resident set size
+"""
+
+
+class Medians(unittest.TestCase):
+    def test_runs_of_one_row_are_grouped_and_the_median_taken(self):
+        m = judge.medians(SUMMARY.splitlines())
+        self.assertEqual(m["ask-fused"], {"wall": 0.61, "maxrss": 1.55, "peak_cpu": 120.0, "n": 3})
+        self.assertEqual(m["impact"]["wall"], 0.04)
+
+    def test_an_even_count_takes_the_upper_middle_like_bench_does(self):
+        self.assertEqual(judge.median([1.0, 2.0, 3.0, 4.0]), 3.0)
+
+    def test_a_medians_file_reads_back_as_written(self):
+        import os
+        import tempfile
+        with tempfile.TemporaryDirectory() as d:
+            p = os.path.join(d, "m.txt")
+            with open(p, "w") as f:
+                f.write("ask-fused wall=0.61 maxrss=1.55 peak_cpu=120.0 n=5\n")
+            self.assertEqual(judge.read_medians(p)["ask-fused"], {"wall": 0.61, "maxrss": 1.55, "peak_cpu": 120.0, "n": 5})
+
+    def test_a_summary_file_of_runs_reads_as_medians_too(self):
+        import os
+        import tempfile
+        with tempfile.TemporaryDirectory() as d:
+            p = os.path.join(d, "s.txt")
+            with open(p, "w") as f:
+                f.write(SUMMARY)
+            self.assertEqual(judge.read_medians(p)["impact"]["n"], 3)
+
+
+class Control(unittest.TestCase):
+    def test_the_same_binary_twice_inside_the_bars_passes(self):
+        a = {"ask-fused": {"wall": 0.60, "maxrss": 1.50, "peak_cpu": 120.0, "n": 5}}
+        b = {"ask-fused": {"wall": 0.63, "maxrss": 1.55, "peak_cpu": 121.0, "n": 5}}
+        rows = judge.control(a, b)
+        self.assertEqual(rows, [("ask-fused", 0.05, 0.0333, True)])
+
+    def test_a_row_outside_either_bar_fails_and_names_which(self):
+        a = {"dump10": {"wall": 0.70, "maxrss": 1.36, "peak_cpu": 100.0, "n": 5}}
+        b = {"dump10": {"wall": 0.90, "maxrss": 1.36, "peak_cpu": 100.0, "n": 5}}
+        (row, wall, rss, ok), = judge.control(a, b)
+        self.assertFalse(ok)
+        self.assertAlmostEqual(wall, 0.2857, places=4)
+        self.assertEqual(rss, 0.0)
+
+    def test_a_row_missing_from_one_side_is_reported_not_skipped(self):
+        with self.assertRaises(SystemExit):
+            judge.control({"a": {"wall": 1, "maxrss": 1, "peak_cpu": 1, "n": 1}}, {})
+
+
+class Cadence(unittest.TestCase):
+    def test_intervals_are_read_from_the_stamps_not_from_rows_per_second(self):
+        c = judge.cadence(STAMPED.splitlines())
+        self.assertEqual(c["first"], 0.9)
+        self.assertEqual(c["intervals"], [0.9, 3.0, 6.0, 8.3])
+        self.assertEqual(c["max"], 8.3)
+        self.assertEqual(c["median"], 6.0)
+        self.assertAlmostEqual(c["ratio"], 8.3 / 6.0, places=3)
+
+    def test_the_first_interval_counts_from_process_start_not_from_model_open(self):
+        lines = ["50.00 start", "80.00 dense: model open in 30.0s", "85.00 dense: 128/9 rows, 1.0 rows/s, ~1 min left"]
+        self.assertEqual(judge.cadence(lines)["first"], 35.0)
+
+    def test_a_transcript_with_no_progress_line_is_refused(self):
+        with self.assertRaises(SystemExit):
+            judge.cadence(["1.00 start", "2.00 dense: embedded 0 rows in 1.0s"])
+
+
+class Verdict(unittest.TestCase):
+    def test_cadence_verdict_needs_every_interval_under_the_bar_and_a_flat_tail(self):
+        ok, why = judge.cadence_ok({"first": 0.9, "intervals": [0.9, 3.0, 6.0, 8.3], "max": 8.3, "median": 6.0, "ratio": 8.3 / 6.0}, bar=60.0, tail=1.3)
+        self.assertFalse(ok)
+        self.assertIn("1.383", why)
+        ok, _ = judge.cadence_ok({"first": 0.9, "intervals": [5.0, 6.0], "max": 6.0, "median": 6.0, "ratio": 1.0}, bar=60.0, tail=1.3)
+        self.assertTrue(ok)
+
+
+if __name__ == "__main__":
+    unittest.main()

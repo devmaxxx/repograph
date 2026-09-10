@@ -339,7 +339,7 @@ cd /Users/max/Documents/projects/repograph && git add bench/probe/arms.sh docs/b
 
 **The decision, stated:** the kit at `~/bench/resources-2026-09-07` is vendored into `bench/probe/`, because the bars it sets are what every cost-family reading is judged against, and a harness nobody can review in a diff is part of the gap it measures. What is vendored is the scripts and the ten queries; the store copies and 41 MB legacy graph stay out of tree, and the `import-legacy` row is dropped from the reader suite because it writes the store — the one row that could move the index under the suite, which is the cause G23 names. Two more things change because the suite reads the fixture's store where the rule puts writers (see "One writable directory"): every row is `--stale` — the four `ask` rows, `impact`, `trace`, `changes` — so no row can walk, and the suite writes nothing, which Step 8 proves with the store's checksums; and the kit's `ask-stale` row goes, since it is now the same command as `ask-fused`. The walk a non-stale reader pays is not in the suite any more; its number is Task 3's `tree walked` stage. `changes` keeps its one touched line in `packages/ui/src/lib/cn.ts`, copied aside with `cp -p` and moved back, so the tree is put back to the byte and to the nanosecond stamp (`cp -p` keeps it on this machine; a plain `cp` would leave a new mtime behind).
 
-- [ ] **Step 1: Write the failing tests for `judge.py`**
+- [x] **Step 1: Write the failing tests for `judge.py`**
 
 Write `bench/probe/test_judge.py`:
 
@@ -449,7 +449,7 @@ if __name__ == "__main__":
     unittest.main()
 ```
 
-- [ ] **Step 2: Run them to see them fail**
+- [x] **Step 2: Run them to see them fail**
 
 ```bash
 cd /Users/max/Documents/projects/repograph && python3 -m unittest discover -s bench/probe 2>&1 | tail -3
@@ -457,7 +457,7 @@ cd /Users/max/Documents/projects/repograph && python3 -m unittest discover -s be
 
 Expected: `ModuleNotFoundError: No module named 'judge'`.
 
-- [ ] **Step 3: Write `judge.py`**
+- [x] **Step 3: Write `judge.py`**
 
 Write `bench/probe/judge.py`:
 
@@ -629,7 +629,7 @@ if __name__ == "__main__":
     sys.exit(main(sys.argv))
 ```
 
-- [ ] **Step 4: Run the tests to see them pass**
+- [x] **Step 4: Run the tests to see them pass**
 
 ```bash
 cd /Users/max/Documents/projects/repograph && python3 -m unittest discover -s bench/probe 2>&1 | tail -3
@@ -637,7 +637,7 @@ cd /Users/max/Documents/projects/repograph && python3 -m unittest discover -s be
 
 Expected: `OK`.
 
-- [ ] **Step 5: Write the failing test for `graphdiff.py`, then the script**
+- [x] **Step 5: Write the failing test for `graphdiff.py`, then the script**
 
 Write `bench/probe/test_graphdiff.py`:
 
@@ -763,7 +763,7 @@ if __name__ == "__main__":
 
 Run the tests: expected `OK`.
 
-- [ ] **Step 6: Write the failing test for `reset.sh`, then the script**
+- [x] **Step 6: Write the failing test for `reset.sh`, then the script**
 
 Write `bench/probe/test_reset.py`. It pins the contract on a throwaway repository — what the script refuses, and what a reset leaves behind — with the settle walk a stub that prints what `update` prints: the script's own job ends where the binary's begins, and the counts it checks are read off that line. The whole class is skipped off POSIX, because the script is bash for a macOS kit and CI never discovers `bench/probe`; the skip keeps `discover` green anywhere.
 
@@ -957,7 +957,7 @@ chmod +x /Users/max/Documents/projects/repograph/bench/probe/reset.sh && cd /Use
 
 Expected: `OK`. The script and the seven tests were run on this machine on 2026-09-10 against a throwaway repository, and the guards were run against the real `$WT` with a mismatched pin and a missing binary: exit 2 both times, status count still `0`. `.repograph/` is in the corpus's `.gitignore`, so `clean` would spare it without the `-e`; `repograph.toml` is not, so its `-e` is load-bearing. `rsync` on this machine is openrsync, which takes `-a --delete`. Note that the settle rewrites `graph.json`, `graph.bin` (`RGM1`) and `manifest.json` — `apply_diff` saves on a no-op — so after a reset the store's bytes are `repograph-main`'s serialisation of the fixture's graph, not the fixture's own bytes; nothing in this plan compares `$WT`'s `graph.json` to the fixture's.
 
-- [ ] **Step 7: Vendor the scripts**
+- [x] **Step 7: Vendor the scripts**
 
 ```bash
 cp ~/bench/resources-2026-09-07/queries10.jsonl /Users/max/Documents/projects/repograph/bench/probe/queries10.jsonl
