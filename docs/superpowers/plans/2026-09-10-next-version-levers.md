@@ -283,7 +283,7 @@ first in the mention-only section and every family with exactly one definition c
 
 **Gate.** *Before* — the four arms on the pinned fixture `~/bench/beauty-crm-502e8a6d` read the
 baseline table of §2 exactly; *rebuilt* — in `~/bench/beauty-crm-test` after `reset.sh`, `build`
-prints the family line and `N requirement-like nodes have no questions — run \`repograph enrich\``
+prints the family line and ``N requirement-like nodes have no questions — run `repograph enrich` ``
 with N = eligible − covered from the bench line, and both recorded arms print `enriched=false`;
 *after* — one `enrich` (≈ $0.20 of haiku) brings coverage to ≥ 99%, both recorded arms print
 `enriched=true gated=true` and exit 0, the developer arms are recorded, and the enriched store is
@@ -2119,7 +2119,7 @@ ls -l $L/main/graph.json $L/branch/graph.json
 python3 bench/probe/graphdiff.py $L/main/graph.json $L/branch/graph.json | tee $L/graphdiff.txt
 ```
 
-Expected: both builds print the same `families: … · milestones: …` line (54 ids, 5 milestones on this corpus), the same `repograph: N requirement-like nodes have no questions — run \`repograph enrich\`…` with the same N (an emptied store has no questions; this is not G32's number), and the same `nodes N edges M`; `ls` shows two files of about 12 MB; `graphdiff.py` prints `nodes: same`, `edges: same`, `pending: <n>` and `bytes: ratio 1.0xx` with the ratio ≤ 1.100. The `pending` count is the store's growth and is recorded whatever it is; the ledger's 2,238 is the lower bound (that count was under the 49-list matcher; the generic one also cites the 96 mention-only prefixes).
+Expected: both builds print the same `families: … · milestones: …` line (54 ids, 5 milestones on this corpus), the same ``repograph: N requirement-like nodes have no questions — run `repograph enrich` …`` with the same N (an emptied store has no questions; this is not G32's number), and the same `nodes N edges M`; `ls` shows two files of about 12 MB; `graphdiff.py` prints `nodes: same`, `edges: same`, `pending: <n>` and `bytes: ratio 1.0xx` with the ratio ≤ 1.100. The `pending` count is the store's growth and is recorded whatever it is; the ledger's 2,238 is the lower bound (that count was under the 49-list matcher; the generic one also cites the 96 mention-only prefixes).
 
 - [ ] **Step 3: Clause (d) — the build's wall**
 
@@ -2599,7 +2599,7 @@ bench/probe/reset.sh && grep embed_model $WT/repograph.toml
 $B --repo $WT build 2>$L/build.err | tee $L/build.out; cat $L/build.err
 ```
 
-Expected: `embed_model = "intfloat/multilingual-e5-small"`; on stderr `families: … · milestones: …` (54 ids, 5 milestones), then `repograph: N requirement-like nodes have no questions — run \`repograph enrich\` to search them`, then the dense sync's `dense: model open in …` and its progress; on stdout `changed 9<…> removed 0 nodes <…> edges <…>` and `dense: embedded <…> rows in <…>s`. Record N.
+Expected: `embed_model = "intfloat/multilingual-e5-small"`; on stderr `families: … · milestones: …` (54 ids, 5 milestones), then ``repograph: N requirement-like nodes have no questions — run `repograph enrich` to search them``, then the dense sync's `dense: model open in …` and its progress; on stdout `changed 9<…> removed 0 nodes <…> edges <…>` and `dense: embedded <…> rows in <…>s`. Record N.
 
 ```bash
 bench/probe/arms.sh $B $WT $L g32-rebuilt 2>&1 | grep -E '^(keyword|long|anchors|bench)'

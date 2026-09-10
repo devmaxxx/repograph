@@ -1,3 +1,4 @@
+#!/bin/bash
 # arms.sh <binary> <repo> <logdir> <label>  — the four arms, transcripts kept, recorded with a tag
 B=$1; R=$2; L=$3; T=$4; H=/Users/max/Documents/projects/repograph/bench/history
 mkdir -p "$L"

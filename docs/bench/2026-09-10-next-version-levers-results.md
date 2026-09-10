@@ -103,7 +103,7 @@ first in the mention-only section and every family with exactly one definition c
 
 **Gate.** *Before* — the four arms on the pinned fixture `~/bench/beauty-crm-502e8a6d` read the
 baseline table of §2 exactly; *rebuilt* — in `~/bench/beauty-crm-test` after `reset.sh`, `build`
-prints the family line and `N requirement-like nodes have no questions — run \`repograph enrich\``
+prints the family line and ``N requirement-like nodes have no questions — run `repograph enrich` ``
 with N = eligible − covered from the bench line, and both recorded arms print `enriched=false`;
 *after* — one `enrich` (≈ $0.20 of haiku) brings coverage to ≥ 99%, both recorded arms print
 `enriched=true gated=true` and exit 0, the developer arms are recorded, and the enriched store is
