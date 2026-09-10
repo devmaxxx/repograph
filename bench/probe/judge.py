@@ -165,7 +165,12 @@ def main(argv):
         raise SystemExit("usage: judge.py medians SUMMARY | control A B | compare REF NEW | cadence STAMPED")
     cmd = argv[1]
     if cmd == "medians":
-        for row, m in read_medians(argv[2]).items():
+        rows = read_medians(argv[2])
+        # Printing nothing and exiting 0 reads like a suite with no regressions rather than like a
+        # file nothing in it parsed — the same trap `print_table` guards against.
+        if not rows:
+            raise SystemExit(f"{argv[2]}: no run or medians line parsed — nothing to take a median of")
+        for row, m in rows.items():
             print(f"{row} wall={m['wall']} maxrss={m['maxrss']} peak_cpu={m['peak_cpu']} n={m['n']}")
         return 0
     if cmd == "control":

@@ -16,12 +16,10 @@ for suite in rec dev; do
     REPOGRAPH_NO_SERVE=1 "$B" --repo "$R" $nd bench $cases > "$out" 2>&1
     rc=$?
     tail -3 "$out"
-    # `runs.jsonl` is append-only, so a transcript from an arm that exited non-zero is not offered
-    # to it: the history would carry a row nothing produced, under a real arm name.
-    if [ "$rc" != "0" ]; then
-      echo "arms: $suite/$arm exited $rc — not recorded, see $out" >&2
-      continue
-    fi
+    # Recorded whatever the status: `bench` exits non-zero when a floor fails, and a failed floor
+    # is a reading the history exists to hold. G32's rebuilt arms are expected to fail one, and
+    # its gate names them as recorded arms — an arm dropped for exiting non-zero is a lost row.
+    [ "$rc" = "0" ] || echo "arms: $suite/$arm exited $rc — recorded anyway, see $out" >&2
     python3 "$H/track.py" record "$out" --corpus beauty-crm --corpus-path "$R" --tag "$T" --note "next-version-levers $T"
   done
 done
