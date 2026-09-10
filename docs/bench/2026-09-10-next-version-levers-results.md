@@ -1,0 +1,131 @@
+# Next-version levers — what the branch measured
+
+Every gate in this document was written and committed before the run it judges (Task 0 of
+[the plan](../superpowers/plans/2026-09-10-next-version-levers.md)); readings are pasted under
+their gate and no clause is edited after a number is read. A clause a reading fails is recorded
+as failed. `main` is `d688e56`; the branch binary in each section is named by its commit.
+
+Machine: Mac15,7, 12 cores, 36 GB, macOS 26.6.2. Directories: the pinned fixture `~/bench/beauty-crm-502e8a6d`
+(locked, read-only — the four arms of every baseline read are taken there, and nothing is ever
+written there) and the one writable worktree `~/bench/beauty-crm-test` (locked — every writer runs
+there, and every reader row is read there straight after `bench/probe/reset.sh` has copied the
+fixture's store in). What each arm wrote, copied out before the next arm ran:
+`~/bench/levers-2026-09-10/log/<task>/<arm>/`. Transcripts: `~/bench/levers-2026-09-10/log/`.
+
+## 1 · G23 — the reader bars, read through their own control
+
+**Gate.** `bench/probe/quiet.sh` passes (idle ≥ 85%, 1-minute load < 3.0, AC power, no `cargo`,
+`rustc`, `node` or another `repograph` running); `bench/probe/readers.sh` at n = 5 per row, twice
+through the same binary (`repograph-main`), in `~/bench/beauty-crm-test` straight after one
+`bench/probe/reset.sh`, every row `--stale`, with `shasum` over the store's files identical before
+the first suite and after the second (nothing wrote under them); for every row
+|median wall A − median wall B| ≤ 10% of A and |median max RSS A − B| ≤ 5% of A. A row outside
+at n = 5 is re-run once at n = 9; a row still outside is recorded as *not judgeable at this shape
+on this machine* and stays in the table with that word — it is not widened and it is not dropped.
+The passing rows' medians become the reference every later reader reading on this branch is
+judged against, under the same 10% / 5%.
+
+**The index under the rows.** G23's lever asked for a pinned index — the reader rows taken against
+a copy no writer in the session touches. On this branch that index is the locked fixture's store,
+byte for byte: `reset.sh` copies it from `~/bench/beauty-crm-502e8a6d` into the one writable
+worktree moments before the suite, every row reads the store as it stands (`--stale` on every
+command that could walk; `bench` and `dump` never walk), and the checksums say nothing moved. The
+cause this replaces is the fixture's own index growing 33,526 → 33,554 rows mid-suite on
+2026-09-07 because `watch` and `update` ran against it. The fixture is never written now — it is
+locked, and the rule allows it readers only — and no row of the suite can write anywhere.
+
+**Reading.**
+
+## 2 · G15 — the anchor line in the history
+
+**Rule.** Every before/after on this branch carries the `anchors` line and is recorded through
+`track.py`, which reads it. The four arms on the pinned fixture `~/bench/beauty-crm-502e8a6d`
+reproduce the 2026-09-09 baseline exactly — counts, p90, anchors — after every task that touches a
+read path.
+
+**Reading.**
+
+## 3 · G35 — what `derive` costs on an update that changes a file
+
+**Gate.** Median of five `families derived` steps under `REPOGRAPH_TIMING=1` on a one-file
+`--no-dense update` in `~/bench/beauty-crm-test` after `reset.sh`, recorded beside `tree walked`
+from the same runs. The ledger expects it under the walk's own number; it is recorded whichever
+side it lands.
+
+**Reading.**
+
+## 4 · G39 — extraction by one grammar, the family set a view
+
+**Gate.** In `~/bench/beauty-crm-test`, each build from an empty store after `reset.sh`, each
+build's `graph.json` copied to `log/g39/<main|branch>/` before the next build runs: (a) `graph.json`
+written by `repograph-main build` and by the branch's `build` are the same visible graph —
+`bench/probe/graphdiff.py` over the two copies reports `nodes: same` and `edges: same`; (b) the
+branch's `graph.json` is at most 110% of `main`'s in bytes, and the number of edges held aside
+(`pending`) is recorded; (c) an `update` after adding `docs/oq.md` defining `OQ-1` prints
+`changed 1 removed 0`, prints `families: +OQ`, re-reads no other file, and its `--no-dense` wall is
+under 0.5 s as the median of five; (d) `--no-dense build` wall on the branch is within 10% of
+`main`'s, medians of three; (e) every reader row of §1 through the branch binary — read in the same
+directory as §1's reference after a reset and one warm `--no-dense ask` that writes the branch's own
+mirror (the fixture's is `RGM1`, the branch's `RGM2`, and a mirror can only be written where writing
+is allowed) — is within §1's bars of the reference. Read path: the four arms on the pinned fixture
+read the baseline table of §2 exactly. Failing (a), (b) or (e) stops the branch at this task.
+
+**Reading.**
+
+## 5 · G40 — a corpus that defines no ids
+
+**Gate.** A build over documents with no definition line yields file nodes only, an empty family
+line, its `ISO-8601` mention held aside and counted by `verify`, and `ask ISO-8601` answering from
+retrieval rather than an exact seed. The never-matching alternation is gone from `src/ids.rs`.
+
+**Reading.**
+
+## 6 · G34 — one owner, the property test, the corpus
+
+**Gate.** The property test is green on macOS, Linux and Windows CI; a build on the branch after
+this task, in `~/bench/beauty-crm-test` from an empty store, has the same node and edge counts as
+the build Task 6 copied to `log/g39/branch/graph.json`, and every node label that differs is a
+heading that lost a CommonMark closing `#` sequence, each listed. `families=` is
+gone from the bench summary line and `track.py` still reads every transcript in
+`bench/history/runs.jsonl`'s history.
+
+**Reading.**
+
+## 7 · G38 — the report's own edge
+
+**Gate.** `repograph families` in `~/bench/beauty-crm-test` as Task 8's build left it puts `OQ`
+first in the mention-only section and every family with exactly one definition carries
+`defined once`; `bench/compare` still reads the JSON.
+
+**Reading.**
+
+## 8 · G32 — the fixture copy, rebuilt and enriched
+
+**Gate.** *Before* — the four arms on the pinned fixture `~/bench/beauty-crm-502e8a6d` read the
+baseline table of §2 exactly; *rebuilt* — in `~/bench/beauty-crm-test` after `reset.sh`, `build`
+prints the family line and `N requirement-like nodes have no questions — run \`repograph enrich\``
+with N = eligible − covered from the bench line, and both recorded arms print `enriched=false`;
+*after* — one `enrich` (≈ $0.20 of haiku) brings coverage to ≥ 99%, both recorded arms print
+`enriched=true gated=true` and exit 0, the developer arms are recorded, and the enriched store is
+copied to `log/g32/after/store/` before anything else runs in the directory. Coverage still under
+99% after a second `enrich` is a failed gate, recorded with the count the model declined.
+
+**Reading.**
+
+## 9 · G19 — a chunk budgeted in tokens
+
+**Gate.** Control: `repograph-main embed` in `~/bench/beauty-crm-test` after `reset.sh`, the
+vectors removed before each run by `bench/probe/embed.sh`, three runs under it and `caffeinate -di`,
+wall / user / max RSS / peak CPU and the stamped cadence. Candidate: the branch binary, three runs
+in the same directory after a second reset and one warm `--no-dense ask` for the branch's own
+mirror, vectors removed before each.
+Pass when, on the candidate's median run, every interval is under 60 s including the first (from
+process start to the first `dense: N/M rows` line), the longest interval is at most 1.3 × the
+median interval, the median wall lies inside the control's [min, max] or within 10% of the
+control's median (whichever is wider), median max RSS within 5% and median peak CPU within 10% of
+the control's. Small model only; the large-model cadence is the 2.1 GB download this branch does
+not take. A candidate that misses a clause is recorded, and the bar is not moved.
+
+**Reading.**
+
+## 10 · What did not close
