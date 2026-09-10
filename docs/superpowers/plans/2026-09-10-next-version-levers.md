@@ -1489,7 +1489,7 @@ cd /Users/max/Documents/projects/repograph && git add src/main.rs src/ask.rs REA
 
 What this task changes and what it does not: the definition grammar (the head line, the milestone file, the ADR file, the registry row) already reads any prefix — it is the *reference* grammar that today reads only the prefixes a list-then-derivation admitted. After this task both read the same generic shape, an `Extraction` carries every citation it finds, and `Graph::settle` keeps citations of families no node declares in `pending`, where no reader, no count and no `dangling()` sees them. The `families:` lines on `build`/`update` and the whole-tree re-read stay as they are until Task 5.
 
-- [ ] **Step 1: The failing tests — grammar**
+- [x] **Step 1: The failing tests — grammar**
 
 Replace `src/ids.rs`'s `mod tests` helper and two of its tests:
 
@@ -1516,7 +1516,7 @@ Replace `src/ids.rs`'s `mod tests` helper and two of its tests:
 
 Delete `ambiguous_families_do_not_match` and `empty_family_lists_match_nothing_rather_than_every_bare_suffix`. Every other test in that module stays as written; they pass unchanged under the generic matcher (verify by reading each: `plain_ids_in_prose`, `word_boundaries_hold`, ranges, slash lists, milestones, offsets, `is_id_is_exact`, `nfr_and_fr_ops…`, descending range, wide range, digit width, repeated id, whole-text id).
 
-- [ ] **Step 2: The failing tests — the graph holds aside**
+- [x] **Step 2: The failing tests — the graph holds aside**
 
 In `src/model.rs`'s `mod tests`, add (the `ex` helper already writes `FR-PAY-22 → N-151` with no `N` node):
 
@@ -1580,7 +1580,7 @@ In `src/model.rs`'s `mod tests`, add (the `ex` helper already writes `FR-PAY-22 
 
 `apply_then_remove_file_restores_empty_graph` asserts `g.edges.len() == 2` before any settle — it stays true, since `apply` alone holds nothing aside; add `assert!(g.pending.is_empty())` to its final assertion.
 
-- [ ] **Step 3: The failing tests — a store from before, and what `verify` says**
+- [x] **Step 3: The failing tests — a store from before, and what `verify` says**
 
 In `src/store.rs`'s `mod tests`, add:
 
@@ -1643,7 +1643,7 @@ In `src/query.rs`'s `mod tests`, beside `verify_counts_undeclared_and_dangling`,
     }
 ```
 
-- [ ] **Step 4: Run to see them fail**
+- [x] **Step 4: Run to see them fail**
 
 ```bash
 cd /Users/max/Documents/projects/repograph && cargo test 2>&1 | grep -E '^error' | sort | uniq -c | head
@@ -1651,7 +1651,7 @@ cd /Users/max/Documents/projects/repograph && cargo test 2>&1 | grep -E '^error'
 
 Expected: `cannot find function \`generic\``, `no field \`pending\``, `no method named \`settle\``.
 
-- [ ] **Step 5: `src/ids.rs` — the one matcher**
+- [x] **Step 5: `src/ids.rs` — the one matcher**
 
 Replace `alternation`, `IdMatcher::new` and the `pub fn new` block with:
 
@@ -1682,7 +1682,7 @@ impl IdMatcher {
 
 `single_pattern`, `is_id`, `find_all` and `bounded` stay as they are. Delete the doc comment above the old `alternation` (the sentinel it explained is gone). In `src/families.rs`, make `const FAMILY` `pub(crate) const FAMILY`.
 
-- [ ] **Step 6: The extractors take no family set**
+- [x] **Step 6: The extractors take no family set**
 
 `src/doc/requirements.rs`: remove the `ids: IdMatcher` field; `pub fn new() -> RequirementScanner` reads `let id = crate::ids::generic().single_pattern();`; in `scan`, `self.ids.is_id(name)` → `crate::ids::generic().is_id(name)` and both `self.ids.find_all(..)` → `crate::ids::generic().find_all(..)`; add
 
@@ -1723,7 +1723,7 @@ pub(crate) fn extractors(repo: &std::path::Path) -> anyhow::Result<Extractors> {
 }
 ```
 
-- [ ] **Step 7: The graph**
+- [x] **Step 7: The graph**
 
 In `src/model.rs`, `Graph` becomes:
 
@@ -1766,7 +1766,7 @@ and in `remove_file`, after `self.edges.retain(|e| e.file != rel);`, add `self.p
 
 In `src/store.rs`, `const MIRROR_MAGIC: &[u8; 4] = b"RGM2";` with the comment: a `Graph` that gained a field is a new mirror shape, and a magic that says so is one fewer thing that depends on postcard failing at the right byte.
 
-- [ ] **Step 8: The readers**
+- [x] **Step 8: The readers**
 
 `src/query.rs`: `pub(crate) fn exact_seeds(graph: &Graph, words: &[String]) -> (Vec<String>, bool)` using `crate::ids::generic().is_id(w)`; `pub fn ask(graph: &Graph, lex: &Lexical, dense: Option<Dense>, rerank: Option<Rerank>, words: &[String], opts: &Options) -> Answer` calling `exact_seeds(graph, words)`; delete `use crate::ids::IdMatcher;` and the tests' `fn ids()` helper, and fix every `ask(`/`exact_seeds(` call in the module's tests. In `verify`, after the `dangling edges:` line:
 
@@ -1807,7 +1807,7 @@ and in `verify_json`, the same two values as `held_aside: usize` and `held_aside
 
 In `apply_diff`, insert `graph.settle();` immediately before `timing.stage("extracted");`. The test `an_ask_after_an_edit_answers_from_the_edited_file` drops its `ids` line and argument; `an_update_is_timed_through_the_same_stages_an_ask_is` (Task 3) builds `extractors(repo).unwrap()`.
 
-- [ ] **Step 9: `src/families.rs` — delete the list-shaped API, keep the scan**
+- [x] **Step 9: `src/families.rs` — delete the list-shaped API, keep the scan**
 
 Delete `matcher`, `keys`, `from_graph`, `graph_families`, `test_matcher`, `Derived::matcher`, `Derived::families`, the `Families` alias, `Scan.matchers`, `Scan::hits`, `Scan.id`, `Scan.milestone`, and `use crate::ids::{bounded, IdMatcher}` (keep `bounded` only if still used; it is not — `find_all` applies it). Rewrite `Scan::mentions`:
 
@@ -1830,7 +1830,7 @@ Delete `matcher`, `keys`, `from_graph`, `graph_families`, `test_matcher`, `Deriv
 
 Tests: `the_graph_reports_the_same_families_its_documents_defined` loses its `from_graph(&g).find_all(..)` assertion (the read matcher is gone; what the graph admits is `Graph::settle`'s test in `model.rs`); `a_long_prefix_and_a_three_part_one_survive_the_round_trip` builds `crate::doc::DocExtractor::new()`; the rest stand.
 
-- [ ] **Step 10: Run everything**
+- [x] **Step 10: Run everything**
 
 ```bash
 cd /Users/max/Documents/projects/repograph && cargo test 2>&1 | grep -E 'test result|FAILED|panicked' && cargo clippy --all-targets -- -D warnings 2>&1 | tail -1
@@ -1838,7 +1838,7 @@ cd /Users/max/Documents/projects/repograph && cargo test 2>&1 | grep -E 'test re
 
 Expected: every `test result: ok`; clippy clean. `tests/families.rs` still passes as written: the `families:` lines still come from `derive`, `ISO` is still absent from them, the `+NEW` update still re-reads. If `dead_code` names `declared_ids`, it still has its caller in `Scan::registry`; if it names `bounded`, delete the import.
 
-- [ ] **Step 11: Commit**
+- [x] **Step 11: Commit**
 
 ```bash
 cd /Users/max/Documents/projects/repograph && git add -A src && git commit -m "feat(ids): one generic grammar for every id, and a graph that holds undeclared citations aside"
