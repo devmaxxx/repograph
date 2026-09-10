@@ -25,6 +25,15 @@ on this machine* and stays in the table with that word — it is not widened and
 The passing rows' medians become the reference every later reader reading on this branch is
 judged against, under the same 10% / 5%.
 
+**Gate, the missed-floor case.** A `bench` row whose run missed a floor is read as a timing like
+every other row: the run answered every case, and its median wall and max RSS are judged under the
+same 10% / 5%. The floor verdict is `bench`'s own, is recorded beside the reading as
+`floors_missed`, and is not what this clause judges. A row that exited non-zero for any other
+reason voids the suite, which is re-run.
+
+Added on 2026-09-10, before §1 held any reading: it says how a case the committed clauses did not
+name is treated, and changes nothing about what they judge.
+
 **The index under the rows.** G23's lever asked for a pinned index — the reader rows taken against
 a copy no writer in the session touches. On this branch that index is the locked fixture's store,
 byte for byte: `reset.sh` copies it from `~/bench/beauty-crm-502e8a6d` into the one writable
