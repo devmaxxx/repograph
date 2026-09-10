@@ -146,7 +146,7 @@ so a field can be added without breaking a parser written against the version be
 | `changes --json` | `risk`, `touched`, `affected`, `files` |
 | `families --json` | `families`, `milestones`, `mention_only` |
 | `explain --json` | `id`, `kind`, `label`, `file`, `line`, `community`, `edges` |
-| `verify --json` | `nodes`, `edges`, `nodes_by_kind`, `edges_by_kind`, `dangling`, `undeclared`, `gaps`, `cite_only` |
+| `verify --json` | `nodes`, `edges`, `nodes_by_kind`, `edges_by_kind`, `dangling`, `undeclared`, `gaps`, `cite_only`, `held_aside`, `held_aside_prefixes` |
 | `trace --json` | `from`, `to`, `depth`, `path` |
 | `prime --json` | `nodes`, `edges`, `enriched`, `questions`, `families`, `model` |
 
@@ -284,9 +284,9 @@ repograph explain asGrosze
 `explain` resolves its argument as an exact id, then as a symbol name, then as a case-insensitive
 label match.
 
-Check the graph's health — counts by kind, dangling edges, and ids that are referenced but never
-declared, split into gaps inside a declared family (worth chasing) and families that are only ever
-cited, such as milestone task ids named from code:
+Check the graph's health — counts by kind, dangling edges, how many citations are held aside because
+no line defines their prefix, and ids that are referenced but never declared, split into gaps inside
+a declared family (worth chasing) and shapes the dialect does not read as ids at all:
 
 ```bash
 repograph verify
@@ -455,18 +455,21 @@ There is no key for them. A family is the prefix of any id the corpus *defines*,
 are the only place that is written down: the requirement line `**FR-PAY-22 · MUST · <title>**` and
 its heading form `## FR-CAL-40 · <title>` (the modality is optional in both), a milestone document
 named `BE-M01-….md` or a `## BE-M01 · <title>` head, a row in one of the `registries`. `build` and
-`update` read those definitions off the documents they walk; `ask`, `explain`, `bench`, `dump` and
-`serve` read the families back off the graph those definitions became. Nothing is configured,
-nothing is stored beside the graph, and there is nothing to keep in step with anything.
+`update` read those definitions off the documents they walk, and the graph they write is where the
+set is recorded. No reader builds a list of its own: every id is read by one grammar, and which
+prefixes are families is a question asked of the graph after every file is read rather than of each
+line while it is scanned. Nothing is configured, nothing is stored beside the graph, and there is
+nothing to keep in step with anything.
 
 Why derived rather than configured or pinned beside the graph is in
 [the measurements](docs/history.md#id-families-why-they-are-derived-and-not-configured).
 
-Every family is matched as `FAMILY-<1–4 digits>`, hyphen included, or `FAMILY-M<2 digits>` for a
-milestone; hyphenless labels such as `B1` or `S3` are not ids in any repository and cannot become
-families. A prefix that is only ever *mentioned* — `ISO-8601`, a ticket number, a year — is plain
-text, and so is one whose ids are cited but never defined. Writing a line that defines it is how a
-prefix crosses that line, and re-reading it is a `repograph update`.
+Every id is matched as `FAMILY-<1–4 digits>`, hyphen included, or `FAMILY-M<2 digits>` for a
+milestone, whatever the prefix; hyphenless labels such as `B1` or `S3` are not ids in any repository
+and cannot become families. A citation of a prefix no line defines — `ISO-8601`, a ticket number, a
+year — is found like any other and then held aside: no reader follows it, no count reports it, and
+`verify` says how many are waiting and under which prefixes. Writing a line that defines the prefix
+is how it crosses that line, and the next `repograph update` releases what was held into the graph.
 
 ```bash
 repograph families                          # families, milestones, and everything left as text
@@ -478,12 +481,12 @@ family the graph still holds and no document defines any more is listed too. Not
 the repository.
 
 An `update` whose documents gained or lost a family says so — `families: +REQ`, `families: -AC` —
-and re-reads the whole tree, source files included, because a family changes what every file
-extracts to; a resident `serve` or `watch` does the same on the poll that applies it. A
-`repograph.toml` still naming `id_families` parses, gets one line on stderr, and is otherwise
-unaffected. `ask`'s own refresh reads ids through the families the graph already holds, so answering
-a question never costs a pass over the whole corpus, and a brand-new family reaches the read path
-through the `build` or `update` that derives it.
+and re-reads the whole tree, source files included; a resident `serve` or `watch` does the same on
+the poll that applies it. A `repograph.toml` still naming `id_families` parses, gets one line on
+stderr, and is otherwise unaffected. `ask`'s own refresh never costs a pass over the whole corpus,
+and a family a document has only just grown still reaches the read path on that refresh: the
+citations were extracted when the file was read, so releasing them costs no second pass over
+anything.
 
 ## Embeddings
 
