@@ -72,6 +72,42 @@ fn le_bytes(v: &[f32]) -> Vec<u8> {
     raw
 }
 
+/// How much work one checkpoint covers. Characters rather than rows because a row is not a unit of
+/// work — 1,024 short questions and 1,024 long passages are the same count and a minute apart — and
+/// characters rather than tokens because the tokenizer lives behind the embedder and this plan is
+/// made before a single forward: the two are the same shape, and the bar this exists to meet is a
+/// progress line every 60 seconds, not a token count. `ramp` divides the budget for the first chunk
+/// and halves its way out of the division after each one, so the first line does not wait for the
+/// run's fixed start-up — 2.24 GB of weights paged in as the first forwards touch them — *and* a
+/// full chunk on top of it.
+#[derive(Clone, Copy, Debug)]
+pub struct ChunkBudget { pub chars: usize, pub max_rows: usize, pub ramp: usize }
+
+impl ChunkBudget {
+    /// A fixed number of rows and no ramp: what a test or a one-chunk sync asks for.
+    pub const fn rows(n: usize) -> Self { ChunkBudget { chars: usize::MAX, max_rows: n, ramp: 1 } }
+}
+
+/// Where each checkpoint falls, as end offsets into `texts`. A single row over budget on its own
+/// still gets a chunk; the alternative is a chunk that never ends.
+pub fn chunk_ends(texts: &[String], b: ChunkBudget) -> Vec<usize> {
+    let mut ends = Vec::new();
+    let mut divisor = b.ramp.max(1);
+    let (mut chars, mut rows) = (0usize, 0usize);
+    for (i, t) in texts.iter().enumerate() {
+        chars = chars.saturating_add(t.chars().count());
+        rows += 1;
+        if chars >= b.chars / divisor || rows >= (b.max_rows / divisor).max(1) {
+            ends.push(i + 1);
+            divisor = (divisor / 2).max(1);
+            chars = 0;
+            rows = 0;
+        }
+    }
+    if !texts.is_empty() && ends.last() != Some(&texts.len()) { ends.push(texts.len()); }
+    ends
+}
+
 impl DenseIndex {
     /// Whether an index is on disk, without reading it: an exact-id or `--no-dense` answer
     /// never needs the vectors, and loading 50 MB of them cost every such `ask` 40 ms.
@@ -177,10 +213,10 @@ impl DenseIndex {
 
     #[allow(clippy::type_complexity)]
     pub fn sync(&mut self, graph: &Graph, questions: &Questions, embed: &mut dyn FnMut(&[String]) -> Result<Vec<Vec<f32>>>) -> Result<usize> {
-        self.sync_chunked(graph, questions, embed, usize::MAX, &mut |_, _| Ok(()))
+        self.sync_chunked(graph, questions, embed, ChunkBudget::rows(usize::MAX), &mut |_, _| Ok(()))
     }
 
-    /// `sync`, embedding `chunk` rows at a time and calling `after_chunk` after each with the
+    /// `sync`, embedding a `budget`'s worth of rows at a time and calling `after_chunk` after each with the
     /// index in a state worth saving: the rows already embedded are appended, and every row the
     /// old index held is still alive and still at its offset. So a checkpoint an interrupted run
     /// leaves behind is a consistent store — the next sync matches the saved rows by hash,
@@ -194,7 +230,7 @@ impl DenseIndex {
         graph: &Graph,
         questions: &Questions,
         embed: &mut dyn FnMut(&[String]) -> Result<Vec<Vec<f32>>>,
-        chunk: usize,
+        budget: ChunkBudget,
         after_chunk: &mut dyn FnMut(&mut DenseIndex, Progress) -> Result<()>,
     ) -> Result<usize> {
         let mut alive = vec![false; self.ids.len()];
@@ -216,8 +252,8 @@ impl DenseIndex {
         }
         let embedded = todo_ids.len();
         let mut done = 0;
-        while done < embedded {
-            let end = done.saturating_add(chunk.max(1)).min(embedded);
+        let plan = chunk_ends(&todo_texts, budget);
+        for &end in &plan {
             let mut vecs = embed(&todo_texts[done..end])?;
             for v in vecs.iter_mut() { normalise(v); }
             let dim = vecs.first().map(|v| v.len()).unwrap_or(self.dim);
@@ -352,11 +388,31 @@ mod tests {
         idx
     }
 
+    /// A row is not a unit of work, and the whole-store rebuild's cadence is the proof: a fixed
+    /// 1,024 rows put the first progress line at 102.4 s against a 60 s bar and the last chunks
+    /// 96.7 s apart, because the graph's iteration order puts the long passages last. The budget
+    /// is characters, and the first chunks are fractions of it so the first line does not wait for
+    /// the run's fixed start-up as well as for a full chunk.
+    #[test]
+    fn a_chunk_is_bounded_by_characters_and_by_rows_and_the_first_one_is_small() {
+        let short: Vec<String> = (0..4096).map(|i| format!("row {i}")).collect();
+        let long: Vec<String> = (0..4096).map(|i| format!("{} {i}", "слово ".repeat(250))).collect();
+        let b = ChunkBudget { chars: 600_000, max_rows: 1024, ramp: 16 };
+        let s = chunk_ends(&short, b);
+        assert_eq!(s[0], 64, "the first chunk is the budget's sixteenth");
+        assert_eq!(s[1] - s[0], 128, "and it doubles until the budget");
+        assert!(s.windows(2).all(|w| w[1] - w[0] <= 1024), "no chunk is over the row cap");
+        assert_eq!(*s.last().unwrap(), short.len(), "every row is in a chunk");
+        let l = chunk_ends(&long, b);
+        assert!(l[1] - l[0] < 200, "a chunk of long passages ends on characters: {}", l[1] - l[0]);
+        assert_eq!(*l.last().unwrap(), long.len());
+    }
+
     #[test]
     fn sync_chunked_appends_every_row_and_reports_progress_after_each_chunk() {
         let mut idx = DenseIndex::default();
         let mut seen = Vec::new();
-        let n = idx.sync_chunked(&wide(0), &Questions::default(), &mut fake, 4,
+        let n = idx.sync_chunked(&wide(0), &Questions::default(), &mut fake, ChunkBudget::rows(4),
             &mut |_, p| { seen.push((p.done, p.total)); Ok(()) }).unwrap();
         assert_eq!(n, 10);
         assert_eq!(seen, vec![(4, 10), (8, 10), (10, 10)]);
@@ -370,7 +426,7 @@ mod tests {
         let store = Store::new(d.path());
         let mut idx = DenseIndex::default();
         // A run killed after its first checkpoint: the rows it embedded are on disk.
-        let err = idx.sync_chunked(&wide(0), &Questions::default(), &mut fake, 4, &mut |i, _| {
+        let err = idx.sync_chunked(&wide(0), &Questions::default(), &mut fake, ChunkBudget::rows(4), &mut |i, _| {
             i.save(&store)?;
             anyhow::bail!("interrupted")
         }).unwrap_err().to_string();
@@ -385,7 +441,7 @@ mod tests {
     #[test]
     fn a_chunked_sync_over_an_edited_store_leaves_the_same_holes_as_a_plain_one() {
         let mut idx = synced(&wide(0));
-        assert_eq!(idx.sync_chunked(&wide(1), &Questions::default(), &mut fake, 3, &mut |_, _| Ok(())).unwrap(), 1);
+        assert_eq!(idx.sync_chunked(&wide(1), &Questions::default(), &mut fake, ChunkBudget::rows(3), &mut |_, _| Ok(())).unwrap(), 1);
         assert_eq!(idx.free, vec![0]);
         assert_eq!(idx.live, (1..11).collect::<Vec<_>>());
     }
@@ -396,7 +452,7 @@ mod tests {
         let n = plain.sync(&wide(0), &Questions::default(), &mut fake).unwrap();
         let mut chunked = DenseIndex::default();
         let mut seen = Vec::new();
-        let m = chunked.sync_chunked(&wide(0), &Questions::default(), &mut fake, usize::MAX,
+        let m = chunked.sync_chunked(&wide(0), &Questions::default(), &mut fake, ChunkBudget::rows(usize::MAX),
             &mut |_, p| { seen.push((p.done, p.total)); Ok(()) }).unwrap();
         assert_eq!((m, seen), (n, vec![(n, n)]));
         assert_eq!((chunked.ids, chunked.vectors), (plain.ids, plain.vectors));

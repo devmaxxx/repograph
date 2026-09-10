@@ -23,6 +23,7 @@ pub struct Entry { pub hash: String, pub questions: Vec<String> }
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct Questions { pub entries: BTreeMap<String, Entry> }
 
+#[derive(Debug)]
 pub struct Report { pub generated: usize, pub dropped: usize, pub batches: usize, pub failed: usize, pub left: usize }
 
 /// What one `enrich` run covers: at most `limit` stale nodes of each kind, and code only on request.
@@ -74,6 +75,16 @@ pub fn code_coverage(graph: &Graph, questions: &Questions) -> (usize, usize) {
 pub fn coverage(graph: &Graph, questions: &Questions) -> (usize, usize) {
     let nodes: Vec<&Node> = graph.nodes.values().filter(|n| eligible(n)).collect();
     (nodes.iter().filter(|n| !questions.get(&n.id).is_empty()).count(), nodes.len())
+}
+
+/// How many eligible nodes have no questions, when the store has questions for some others.
+/// `None` when there is nothing to say: a store nobody enriched is a state, and a store that was
+/// enriched and then grew is a next step nothing else prints — a rebuild under new families adds
+/// requirement-like nodes `enrich` has never seen, and the reader learns it from a bench summary
+/// or not at all.
+pub fn unenriched_note(graph: &Graph, questions: &Questions) -> Option<usize> {
+    let (covered, eligible) = coverage(graph, questions);
+    (covered > 0 && eligible > covered).then(|| eligible - covered)
 }
 
 /// Whether a `coverage` reading has earned the enriched floors. A high-water mark rather than
@@ -288,8 +299,24 @@ fn git_sh(path_dirs: &[std::path::PathBuf], bash_hint: Option<&std::path::Path>,
     beside_git.chain(named).chain(installed).find_map(|root| sh_in(&root))
 }
 
+/// `sh -c 'a | b'` returns b's status, so a generator that dies into a `tee` looks like success —
+/// which is how one run reported 167 batches, 0 failed and nothing written. Shells that have
+/// `pipefail` are asked for it; those that do not fall back to the empty-answer check in `run`,
+/// which is the load-bearing half anyway: a pipeline's exit status is the operator's to get right,
+/// an empty answer is nobody's to mistake for one.
+fn pipefail_prefix() -> &'static str {
+    static P: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    let ok = *P.get_or_init(|| {
+        shell()
+            .and_then(|mut c| Ok(c.arg("-c").arg("set -o pipefail")
+                .stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).status()?))
+            .is_ok_and(|s| s.success())
+    });
+    if ok { "set -o pipefail; " } else { "" }
+}
+
 pub fn run_command(command: &str, input: &str) -> Result<String> {
-    let mut child = shell()?.arg("-c").arg(command)
+    let mut child = shell()?.arg("-c").arg(format!("{}{command}", pipefail_prefix()))
         .stdin(std::process::Stdio::piped()).stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::piped())
         .spawn().with_context(|| format!("spawn `{command}`"))?;
     // A command that answers without reading its whole prompt closes the pipe early — `claude -p`
@@ -348,12 +375,25 @@ pub fn run(store: &Store, graph: &Graph, questions: Questions, command: &str, ba
                         if let Err(e) = g.0.save(store) { eprintln!("enrich: save: {e:#}"); }
                         drop(g);
                         let skipped: Vec<(&Node, String)> = b.iter().filter(|(n, _)| !parsed.contains_key(&n.id)).cloned().collect();
-                        let mut queue = queue.lock().unwrap();
-                        if !skipped.is_empty() && !retry {
-                            eprintln!("enrich: {} of {} nodes skipped by the model, retrying them", skipped.len(), b.len());
-                            queue.push(Batch { nodes: skipped, retry: true, code: is_code });
+                        // Asked twice and answered for nobody: the generator is not declining these
+                        // nodes, it is not answering. Counting that as coverage is what let a whole
+                        // run report `0 failed` and exit green having written nothing. Decided
+                        // before the queue lock and acted on after it, so no path holds both locks
+                        // and the two can never be taken in opposite orders.
+                        let answered_for_nobody = skipped.len() == b.len() && (retry || skipped.is_empty());
+                        let left = {
+                            let mut queue = queue.lock().unwrap();
+                            if !skipped.is_empty() && !retry {
+                                eprintln!("enrich: {} of {} nodes skipped by the model, retrying them", skipped.len(), b.len());
+                                queue.push(Batch { nodes: skipped, retry: true, code: is_code });
+                            }
+                            queue.len()
+                        };
+                        if answered_for_nobody {
+                            eprintln!("enrich: a batch of {} answered for nobody twice", b.len());
+                            shared.lock().unwrap().2 += 1;
                         }
-                        eprintln!("enrich: batch done, {} of {} left", queue.len(), total);
+                        eprintln!("enrich: batch done, {left} of {total} left");
                     }
                     Err(e) => { eprintln!("enrich: {e:#}"); shared.lock().unwrap().2 += 1; }
                 }
@@ -543,7 +583,51 @@ mod tests {
         let silent = format!(r#"echo x >> "{}"; awk '/^### /{{ exit }}'"#, calls.display());
         let r = run(&store, &graph(), Questions::default(), &silent, 8, 1, Scope::default()).unwrap();
         assert_eq!((r.generated, r.left), (0, 2));
+        assert_eq!(r.failed, 1, "a batch that answered for nobody twice is failed, not done");
         assert_eq!(std::fs::read_to_string(&calls).unwrap().lines().count(), 4, "an answer that skips everything is retried once, not forever");
+    }
+
+    /// A store with no questions is a store nobody enriched, and saying so on every build would be
+    /// noise on a corpus that never runs `enrich`. A store that has some and is missing others is
+    /// a rebuild that moved the corpus, and that is the line worth printing.
+    #[test]
+    fn the_line_is_printed_only_when_the_store_has_questions_and_is_missing_some() {
+        let mut e = Extraction::default();
+        e.node(NodeKind::Requirement, "FR-X-1", "t", "body", "d.md", 1);
+        e.node(NodeKind::Requirement, "FR-X-2", "t2", "body2", "d.md", 5);
+        let mut g = Graph::default();
+        g.apply(e);
+        let mut q = Questions::default();
+        assert_eq!(unenriched_note(&g, &q), None, "a store nobody enriched says nothing");
+        let entry = |id: &str| Entry { hash: hash(&passage(&g.nodes[id])), questions: vec!["q".to_string()] };
+        q.entries.insert("FR-X-1".into(), entry("FR-X-1"));
+        assert_eq!(unenriched_note(&g, &q), Some(1));
+        q.entries.insert("FR-X-2".into(), entry("FR-X-2"));
+        assert_eq!(unenriched_note(&g, &q), None, "a complete store says nothing either");
+    }
+
+    /// `sh -c` returns its pipeline's last stage, so a generator that dies into a `tee` exits 0
+    /// with nothing on stdout. That is what happened on 167 batches once, and it was read as
+    /// coverage: 0 nodes written, 0 failed, exit 0.
+    #[test]
+    fn a_pipeline_whose_generator_died_is_a_failed_batch() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::new(dir.path());
+        let r = run(&store, &graph(), Questions::default(), "false | cat", 8, 1, Scope::default()).unwrap();
+        assert_eq!(r.generated, 0);
+        assert!(r.failed > 0, "a pipeline that produced nothing is not coverage: {r:?}");
+        assert!(r.left > 0);
+    }
+
+    /// The load-bearing half, and the one that holds on a shell without `pipefail`: an answer that
+    /// names nobody is the generator not answering, whatever its exit status said.
+    #[test]
+    fn an_empty_answer_is_a_failed_batch_after_its_retry() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::new(dir.path());
+        let r = run(&store, &graph(), Questions::default(), "cat > /dev/null", 8, 1, Scope::default()).unwrap();
+        assert_eq!((r.generated, r.batches), (0, 1));
+        assert_eq!(r.failed, 1, "one batch, asked twice, answered nothing twice");
     }
 
     #[test]

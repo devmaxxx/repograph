@@ -121,7 +121,16 @@ enum Cmd {
     /// without its vectors is re-embedded from its graph and questions alone, which is how a
     /// store is measured under another `REPOGRAPH_EMBED_MODEL`.
     Embed,
-    Bench { #[arg(long)] cases: Option<PathBuf>, #[arg(long)] rerank: bool, #[arg(long, conflicts_with = "rerank")] rerank_local: bool, #[arg(long, default_value_t = rerank::DEPTH)] depth: usize },
+    Bench {
+        #[arg(long)] cases: Option<PathBuf>,
+        #[arg(long)] rerank: bool,
+        #[arg(long, conflicts_with = "rerank")] rerank_local: bool,
+        #[arg(long, default_value_t = rerank::DEPTH)] depth: usize,
+        /// Runs the suite this many times and prints the median beneath the runs. One run reads
+        /// exactly as it always has; a bar judged against a single reading is measuring the
+        /// machine as much as the change.
+        #[arg(long, default_value_t = 1)] repeat: usize,
+    },
     /// Writes every retriever's ranked list for each question in a JSONL file
     /// (`{"q","expect","kind"}` per line) so the mathematics can be done offline.
     Dump {
@@ -139,7 +148,16 @@ pub struct Extractors {
     pub registry: Box<dyn Extractor>,
 }
 
-pub struct UpdateReport { pub changed: usize, pub removed: usize, pub nodes: usize, pub edges: usize }
+pub struct UpdateReport {
+    pub changed: usize,
+    pub removed: usize,
+    pub nodes: usize,
+    pub edges: usize,
+    /// Eligible nodes left without questions, when the store has questions for some others.
+    /// Computed here because the graph is already in hand: a writer that re-loaded the store to
+    /// say this would pay a whole graph read on the no-op update a commit hook fires.
+    pub unenriched: Option<usize>,
+}
 
 /// Re-extracts what the diff names, drops what is gone, and writes the store back. `also` is the
 /// files that did not change and still have to be read again — the whole tree, when a family has
@@ -188,7 +206,14 @@ pub(crate) fn apply_diff(repo: &std::path::Path, store: &store::Store, graph: &m
         graph.apply(extractor.extract(&e.rel, &text));
     }
     store.save(graph, &walk::Manifest::from_entries(entries))?;
-    Ok(UpdateReport { changed: diff.changed.len(), removed: diff.removed.len(), nodes: graph.nodes.len(), edges: graph.edges.len() })
+    // Only when something was re-extracted: a tree that did not move cannot have grown a node
+    // without questions, and the no-op update a commit hook fires should not read the questions
+    // file to be told so.
+    let moved = !diff.changed.is_empty() || !diff.removed.is_empty() || !also.is_empty();
+    let unenriched = moved
+        .then(|| enrich::Questions::load(store).ok().and_then(|q| enrich::unenriched_note(graph, &q)))
+        .flatten();
+    Ok(UpdateReport { changed: diff.changed.len(), removed: diff.removed.len(), nodes: graph.nodes.len(), edges: graph.edges.len(), unenriched })
 }
 
 /// The store brought in line with the tree. The extractors are built here rather than passed in
@@ -411,10 +436,15 @@ pub(crate) fn cap_pools(threads: usize) {
 /// reader is told where it is; the checkpoint itself is an append of the chunk's bytes plus the
 /// metadata rewrite, so paying it thirty-odd times over a rebuild is not measurable against the
 /// forwards.
-const SYNC_CHUNK: usize = 1024;
+/// A checkpoint every ~600k characters, ramped in so the first line does not wait for the run's
+/// fixed start-up as well: the whole-store rebuild used to print its first at 102.4 s against a
+/// 60 s bar, and its last chunks 96.7 s apart, because 1,024 rows is a count and not an amount of
+/// work.
+const SYNC_CHUNK: index::dense::ChunkBudget = index::dense::ChunkBudget { chars: 600_000, max_rows: 1024, ramp: 16 };
 
 fn embed_all(repo: &std::path::Path, no_dense: bool, cfg: &config::Config) -> anyhow::Result<()> {
     let model = index::embed::resolve(None, &cfg.embed_model);
+    let open = std::time::Instant::now();
     let Some(mut emb) = ask::open_embedder(no_dense, &model, index::embed::threads(cfg.resources), index::embed::Weights::Mapped) else { return Ok(()) };
     let store = store::Store::new(repo);
     let (graph, _) = store.load()?;
@@ -422,6 +452,10 @@ fn embed_all(repo: &std::path::Path, no_dense: bool, cfg: &config::Config) -> an
     let mut dense = index::dense::DenseIndex::load(&store)?;
     let t = std::time::Instant::now();
     dense.written_by(&model, emb.dim()?);
+    // The first chunk carries the run's fixed start-up as well as its own work — 2.24 GB of
+    // weights paged in as the first forwards touch them — so without this line the first thing a
+    // person sees is both, and the 60 s bar is missed before a row is embedded.
+    eprintln!("dense: model open in {:.1}s", open.elapsed().as_secs_f32());
     let n = dense.sync_chunked(&graph, &questions, &mut |texts| emb.embed(texts), SYNC_CHUNK, &mut |idx, p| {
         idx.save(&store)?;
         let rate = p.done as f32 / t.elapsed().as_secs_f32().max(f32::EPSILON);
@@ -477,6 +511,9 @@ fn main() -> anyhow::Result<()> {
             cap_pools(index::embed::threads(cfg.resources));
             let r = run_update(&repo, &cfg, wipe)?;
             println!("changed {} removed {} nodes {} edges {}", r.changed, r.removed, r.nodes, r.edges);
+            if let Some(n) = r.unenriched {
+                eprintln!("repograph: {n} requirement-like nodes have no questions — run `repograph enrich` to search them");
+            }
             embed_all(&repo, cli.no_dense, &cfg)
         }
         Cmd::Enrich { batch, parallel, limit, code } => {
@@ -489,6 +526,12 @@ fn main() -> anyhow::Result<()> {
             let t = std::time::Instant::now();
             let r = enrich::run(&store, &graph, questions, &cfg.enrich_command, batch, parallel, enrich::Scope { limit, code })?;
             println!("enrich: {} nodes written, {} dropped, {} still without questions, {} batches ({} failed) in {:.0}s", r.generated, r.dropped, r.left, r.batches, r.failed, t.elapsed().as_secs_f32());
+            // A run that was asked to write and wrote nothing has to exit like one, or a campaign
+            // grades a store nobody enriched. `left > 0` is not the condition: a store legitimately
+            // keeps nodes the model declines, and every honest run would then be red.
+            if r.failed > 0 && r.generated == 0 {
+                anyhow::bail!("enrich: {} of {} batches produced nothing — the generator did not answer", r.failed, r.batches);
+            }
             embed_all(&repo, cli.no_dense, &cfg)
         }
         Cmd::Embed => {
@@ -594,8 +637,22 @@ fn main() -> anyhow::Result<()> {
             Ok(())
         }
         Cmd::Families { json } => families::run(&repo, &load_cfg()?, json),
-        Cmd::Bench { cases, rerank, rerank_local, depth } => {
-            if bench::run(&repo, cases.as_deref(), cli.no_dense, rerank, rerank_local, depth)? { Ok(()) } else { anyhow::bail!("bench floors not met") }
+        Cmd::Bench { cases, rerank, rerank_local, depth, repeat } => {
+            let mut summaries = Vec::new();
+            let mut met = true;
+            for _ in 0..repeat.max(1) {
+                let (ok, summary) = bench::run(&repo, cases.as_deref(), cli.no_dense, rerank, rerank_local, depth)?;
+                met &= ok;
+                summaries.push(summary);
+            }
+            if summaries.len() > 1 {
+                let m = bench::median(&summaries);
+                let counts = m.by_kind.iter().map(|(k, (h, t))| format!("{k} {h}/{t}")).collect::<Vec<_>>().join("  ");
+                println!("\nmedian of {}  {counts}  p90 {} tok\n{}", summaries.len(), m.p90_tokens, bench::anchor_line(&m));
+            }
+            // Every run has to meet the floors, not the median of them: a suite that passes on
+            // average is one whose exit code depends on which run a reader looked at.
+            if met { Ok(()) } else { anyhow::bail!("bench floors not met") }
         }
         Cmd::Dump { queries, out, depth } => dump::run(&repo, &queries, &out, depth, cli.no_dense),
         Cmd::ImportLegacy { graph_json } => {
