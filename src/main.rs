@@ -186,13 +186,13 @@ pub struct UpdateReport {
     pub unenriched: Option<usize>,
 }
 
-/// Re-extracts what the diff names, drops what is gone, and writes the store back. `also` is the
-/// files that did not change and still have to be read again — the whole tree, when a family has
-/// appeared or vanished under it. They are passed apart from the diff so `changed N` keeps
-/// counting what a person edited.
-pub(crate) fn apply_diff(repo: &std::path::Path, store: &store::Store, graph: &mut model::Graph, entries: &[walk::Entry], diff: &walk::Diff, also: &[walk::Entry], ex: &Extractors) -> anyhow::Result<UpdateReport> {
+/// Re-extracts what the diff names, drops what is gone, and writes the store back. Nothing else
+/// is read: every citation a file holds was extracted when the file was read, whatever prefix it
+/// names, and which of them a reader may follow is decided on the graph by `settle` — so a family
+/// appearing or vanishing costs the file that declared it, and nothing more.
+pub(crate) fn apply_diff(repo: &std::path::Path, store: &store::Store, graph: &mut model::Graph, entries: &[walk::Entry], diff: &walk::Diff, ex: &Extractors) -> anyhow::Result<UpdateReport> {
     let stale: std::collections::BTreeSet<&str> = diff.removed.iter().map(String::as_str)
-        .chain(diff.changed.iter().chain(also.iter()).map(|e| e.rel.as_str())).collect();
+        .chain(diff.changed.iter().map(|e| e.rel.as_str())).collect();
     // A node's `path:line` comes from its primary declaring file. When that file goes, every
     // surviving declarer is re-read too, so line, label and body come from the file that is cited.
     // Re-reading a file removes it first, which orphans the primaries it held in turn — hence the
@@ -213,7 +213,7 @@ pub(crate) fn apply_diff(repo: &std::path::Path, store: &store::Store, graph: &m
     // `Graph::apply` gives a shared id to whichever file declares it first, so the re-read runs
     // in the walk's own order: out of it, an update hands the id — its path, line, title and
     // body — to a different file than a build does.
-    let mut work: Vec<&walk::Entry> = diff.changed.iter().chain(also.iter()).collect();
+    let mut work: Vec<&walk::Entry> = diff.changed.iter().collect();
     work.sort_by(|a, b| a.rel.cmp(&b.rel));
     let reread = co_declared.iter().map(|rel| by_rel[rel]);
     for e in work.into_iter().chain(reread) {
@@ -237,7 +237,7 @@ pub(crate) fn apply_diff(repo: &std::path::Path, store: &store::Store, graph: &m
     // Only when something was re-extracted: a tree that did not move cannot have grown a node
     // without questions, and the no-op update a commit hook fires should not read the questions
     // file to be told so.
-    let moved = !diff.changed.is_empty() || !diff.removed.is_empty() || !also.is_empty();
+    let moved = !diff.changed.is_empty() || !diff.removed.is_empty();
     let unenriched = moved
         .then(|| enrich::Questions::load(store).ok().and_then(|q| enrich::unenriched_note(graph, &q)))
         .flatten();
@@ -254,32 +254,22 @@ pub fn run_update(repo: &std::path::Path, cfg: &config::Config, wipe: bool) -> a
     // A wipe has just emptied the graph, so this one test covers both fresh builds: `build`, and
     // an `update` on a store nobody has built yet.
     let bootstrap = graph.nodes.is_empty();
+    // A tree that has not moved cannot have moved its families either, and the pass over every
+    // node it takes to say so is what the no-op update a commit hook fires would pay for nothing.
     let quiet = !bootstrap && diff.changed.is_empty() && diff.removed.is_empty();
-    let mut also: Vec<walk::Entry> = Vec::new();
-    // A tree that has not moved cannot have moved its families either. Reading every document to
-    // confirm it is a whole build's worth of I/O on the no-op update a commit hook fires.
-    if !quiet {
-        let derived = families::derive(repo, &entries)?;
-        match bootstrap {
-            true => eprintln!("{}", derived.line()),
-            false => {
-                // A family that appeared or vanished changes what every file extracts to, not
-                // only the ones that were edited, so the incremental path cannot answer for it.
-                let moved = derived.against(&graph);
-                if !moved.is_empty() {
-                    eprintln!("families: {}", moved.join(", "));
-                    also = rest_of_tree(&entries, &diff);
-                }
-            }
+    let before = (!quiet).then(|| families::of_graph(&graph));
+    let r = apply_diff(repo, &store, &mut graph, &entries, &diff, &extractors(repo)?)?;
+    // `settle` has already moved the citations a new family admits or a lost one withdraws; what
+    // is left is to say so, since the next `ask` answers over edges that were not there before.
+    match (bootstrap, before) {
+        (true, _) => eprintln!("{}", families::line(&families::of_graph(&graph))),
+        (false, Some(before)) => {
+            let moved = families::moved(&before, &families::of_graph(&graph));
+            if !moved.is_empty() { eprintln!("families: {}", moved.join(", ")); }
         }
+        (false, None) => {}
     }
-    apply_diff(repo, &store, &mut graph, &entries, &diff, &also, &extractors(repo)?)
-}
-
-/// Everything the walk found that the diff does not already name, in the walk's own order.
-fn rest_of_tree(entries: &[walk::Entry], diff: &walk::Diff) -> Vec<walk::Entry> {
-    let named: std::collections::BTreeSet<&str> = diff.changed.iter().map(|e| e.rel.as_str()).collect();
-    entries.iter().filter(|e| !named.contains(e.rel.as_str())).cloned().collect()
+    Ok(r)
 }
 
 /// Writes the manifest back when the walk saw stamps the stored one does not have — a store from
@@ -362,18 +352,11 @@ impl<'a> Watcher<'a> {
         }
         self.deferred = 0;
         // This poll is an `update` in everything but name — it re-extracts and it writes — so it
-        // reads the families off the documents the way one does, rather than off a graph that
-        // cannot yet hold a family the tree has only just grown. A quiet poll pays none of it.
-        let derived = families::derive(self.repo, &entries)?;
-        let mut also: Vec<walk::Entry> = Vec::new();
-        if !self.graph.nodes.is_empty() {
-            let moved = derived.against(&self.graph);
-            if !moved.is_empty() {
-                eprintln!("families: {}", moved.join(", "));
-                also = rest_of_tree(&entries, &diff);
-            }
-        }
-        let r = apply_diff(self.repo, &self.store, &mut self.graph, &entries, &diff, &also, &self.ex)?;
+        // says which families moved the way one does. A quiet poll pays none of it.
+        let before = families::of_graph(&self.graph);
+        let r = apply_diff(self.repo, &self.store, &mut self.graph, &entries, &diff, &self.ex)?;
+        let moved = families::moved(&before, &families::of_graph(&self.graph));
+        if !moved.is_empty() { eprintln!("families: {}", moved.join(", ")); }
         self.manifest = walk::Manifest::from_entries(&entries);
         self.seen = self.store.stamp("manifest.json");
         Ok(Polled::Refreshed(r))

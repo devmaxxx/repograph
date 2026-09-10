@@ -15,15 +15,6 @@ struct Row {
     #[serde(default)] basis: Option<String>,
 }
 
-/// The ids the rows of a registry declare, in the order `extract` would build them into nodes.
-/// The family scan reads them from here so that one place knows the registry's shape: a row's own
-/// id is never weighed against a family list, so every row defines the family it is written in.
-pub fn declared_ids(text: &str) -> Vec<String> {
-    serde_yaml::from_str::<Registry>(text)
-        .map(|r| r.invariants.into_iter().map(|row| row.id).collect())
-        .unwrap_or_default()
-}
-
 pub struct RegistryExtractor;
 
 fn bold_span() -> &'static Regex {

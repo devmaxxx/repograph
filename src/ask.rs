@@ -77,7 +77,7 @@ pub(crate) fn graph_for_ask(repo: &Path, cfg: &config::Config, store: &store::St
         }
         return Ok((graph, None));
     }
-    let r = crate::apply_diff(repo, store, &mut graph, &entries, &diff, &[], &crate::extractors(repo)?)?;
+    let r = crate::apply_diff(repo, store, &mut graph, &entries, &diff, &crate::extractors(repo)?)?;
     timing.stage("refreshed");
     Ok((graph, Some(r)))
 }

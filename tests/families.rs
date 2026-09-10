@@ -34,7 +34,7 @@ fn row<'a>(text: &'a str, head: &str, name: &str) -> &'a str {
 fn families<'a>(text: &'a str, name: &str) -> &'a str { row(text, "families", name) }
 fn mention<'a>(text: &'a str, name: &str) -> &'a str { row(text, "mention-only prefixes", name) }
 
-const REQ: &str = "# Требования\n\n**REQ-7 · MUST · Отмена визита за сутки**\n\nОтмена возможна за сутки.\n\nсм. REQ-7, даты по ISO-8601\n";
+const REQ: &str = "# Требования\n\n**REQ-7 · MUST · Отмена визита за сутки**\n\nОтмена возможна за сутки, задача NEW-5.\n\nсм. REQ-7, даты по ISO-8601\n";
 
 #[test]
 fn a_repository_gets_its_families_from_the_documents_and_says_when_they_move() {
@@ -60,18 +60,31 @@ fn a_repository_gets_its_families_from_the_documents_and_says_when_they_move() {
     assert!(mention(&out, "ISO").contains("docs/req.md:7"), "and the prefix no line defines: {out}");
     assert!(out.contains("Not families"), "said in words, not left as a column to read: {out}");
 
-    // A no-op update is a fixed point, families included: what the documents define is what the
-    // graph already declares, so nothing is re-read and nothing is said.
+    // A no-op update is a fixed point, families included: nothing is re-read and nothing is said.
     let (ok, out, err) = repograph(repo, &["update"]);
     assert!(ok, "{out}{err}");
     assert!(out.starts_with("changed 0 removed 0"), "{out}");
     assert!(!err.contains("families"), "{err}");
 
-    // A family the corpus grows: every document is re-read under it, not only the edited one.
+    // Before any line defines `NEW`, the citation is held aside: `verify` counts it and nothing
+    // a reader follows reaches it.
+    let (ok, out, err) = repograph(repo, &["verify"]);
+    assert!(ok, "{out}{err}");
+    assert!(out.contains("held aside: 2 edges to ids in 2 prefixes no line defines  ISO NEW"), "{out}");
+    let (ok, out, _) = repograph(repo, &["explain", "REQ-7"]);
+    assert!(ok && !out.contains("NEW-5"), "a held-aside citation is not an answer: {out}");
+
+    // A family the corpus grows: the one file that defines it is read, and the citations the
+    // graph was holding are released — `req.md` is not touched and not re-read.
     std::fs::write(repo.join("docs/new.md"), "**NEW-1 · MUST · Новое правило**\n\nтело\n").unwrap();
     let (ok, out, err) = repograph(repo, &["update"]);
     assert!(ok, "{out}{err}");
+    assert!(out.starts_with("changed 1 removed 0"), "{out}");
     assert!(err.contains("families: +NEW"), "{err}");
+    let (ok, out, _) = repograph(repo, &["explain", "REQ-7"]);
+    assert!(ok && out.contains("NEW-5"), "released without a re-read: {out}");
+    let (ok, out, _) = repograph(repo, &["verify"]);
+    assert!(ok && out.contains("held aside: 1 edges to ids in 1 prefixes no line defines  ISO"), "{out}");
     let (ok, out, err) = repograph(repo, &["ask", "NEW-1"]);
     assert!(ok, "{out}{err}");
     assert!(out.lines().next().unwrap().starts_with("NEW-1"), "{out}");
@@ -84,18 +97,24 @@ fn a_repository_gets_its_families_from_the_documents_and_says_when_they_move() {
     assert!(families(&out, "REQ").contains("docs/req.md:3") && families(&out, "NEW").contains("docs/new.md:1"), "{out}");
     assert!(!out.contains("FR-PAY"), "a key nobody reads names no family: {out}");
 
-    // The definition edited away with no update since. `ask` still answers NEW-1 — the nodes are
-    // in the store and the read matcher comes off them — so the report says the family is there
-    // and nothing defines it, rather than leaving out the one state it exists to expose.
+    // The definition edited away with no update since. The graph is the report's source, so the
+    // family is still there with its node; what the report can say is that the store is behind
+    // the tree, which is the one state it exists to expose.
     std::fs::write(repo.join("docs/new.md"), "тело без определения\n").unwrap();
     let (ok, out, err) = repograph(repo, &["families"]);
     assert!(ok, "{out}{err}");
-    assert!(families(&out, "NEW").contains("nothing defines it any more"), "{out}");
+    assert!(families(&out, "NEW").contains("docs/new.md:1"), "{out}");
+    assert!(err.contains("families: the store is 1 file behind the tree — run `repograph update`"), "{err}");
     let (ok, json, err) = repograph(repo, &["families", "--json"]);
     assert!(ok, "{json}{err}");
     let v: serde_json::Value = serde_json::from_str(&json).unwrap();
     let new = v["families"].as_array().unwrap().iter().find(|f| f["family"] == "NEW").unwrap();
-    assert!(new["defined"].is_null() && new["nodes"] == 1, "{new}");
+    assert!(new["defined"]["file"] == "docs/new.md" && new["nodes"] == 1, "{new}");
+    // And after the update the family is gone with its definition, and its citation is held again.
+    let (ok, out, err) = repograph(repo, &["update"]);
+    assert!(ok && err.contains("families: -NEW"), "{out}{err}");
+    let (ok, out, _) = repograph(repo, &["verify"]);
+    assert!(ok && out.contains("held aside: 2 edges"), "{out}");
 }
 
 /// The four shapes a definition comes in, over the corpus the extractor cases quote: a bold head,

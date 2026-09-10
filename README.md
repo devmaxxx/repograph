@@ -475,18 +475,18 @@ is how it crosses that line, and the next `repograph update` releases what was h
 repograph families                          # families, milestones, and everything left as text
 ```
 
-Run after a build, it prints every family with its node count and the `path:line` that first
-defined it, then every id-like prefix no line defines, with how often and where it is written. A
-family the graph still holds and no document defines any more is listed too. Nothing is written to
-the repository.
+Run after a build, it prints every family with its node count and the `path:line` its first node
+stands at, then every id-like prefix no line defines, with how often and where it is written. Both
+halves are read off the graph and the tree beside it, so a definition edited away since the last
+update still shows the line it was read from, and the command says on stderr how many files the
+store is behind. Nothing is written to the repository.
 
 An `update` whose documents gained or lost a family says so — `families: +REQ`, `families: -AC` —
-and re-reads the whole tree, source files included; a resident `serve` or `watch` does the same on
-the poll that applies it. A `repograph.toml` still naming `id_families` parses, gets one line on
-stderr, and is otherwise unaffected. `ask`'s own refresh never costs a pass over the whole corpus,
-and a family a document has only just grown still reaches the read path on that refresh: the
-citations were extracted when the file was read, so releasing them costs no second pass over
-anything.
+and re-reads nothing else: the one file that changed is read, and the citations the graph was
+holding for the new family are released where they lie. A resident `serve` or `watch` says the same
+on the poll that applies it, and `ask`'s own refresh never costs a pass over the whole corpus. A
+`repograph.toml` still naming `id_families` parses, gets one line on stderr, and is otherwise
+unaffected.
 
 ## Embeddings
 
