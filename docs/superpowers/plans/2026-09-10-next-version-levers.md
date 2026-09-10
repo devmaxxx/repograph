@@ -128,7 +128,7 @@ Two directories, both `git worktree lock`ed so `git worktree remove` refuses the
 
 **Arms are sequential and destructive.** With one directory there is no side by side: the branch's `build` overwrites `main`'s `graph.json`, and the next reset overwrites the enriched store. Two disciplines follow, and every task that touches the corpus is written with both as numbered steps:
 
-1. **`bench/probe/reset.sh` before every arm** (Task 1 writes it, with its test). It refuses anything that is not the locked, detached worktree at `502e8a6d`; reverts tracked edits and removes untracked files; copies the fixture's store in whole (`rsync -a --delete`); writes `repograph.toml` with `embed_model = "intfloat/multilingual-e5-small"`; and runs one `--no-dense update` through `repograph-main` to settle the stamps — the copied manifest carries the fixture's mtimes, which match nothing in `$WT`, so that first walk hashes every file, finds every hash unchanged, records this tree's stamps, and every later walk is stat-only; on an unchanged tree `repograph-main` takes the no-op path and derives nothing, so the settle reads `changed 0` and is not a re-read. Where an arm needs an empty store rather than the fixture's, the task says so after the reset: `rm -rf $WT/.repograph` for a build from nothing (a `build` wipes only the graph and the manifest and keeps the questions and the vectors, so "from nothing" has to be said); `embed.sh` removes the vectors itself. Where rows are read through a branch binary, one warm non-stale `--no-dense ask FR-PAY-22` follows the reset: it walks the settled tree (stat-only, nothing changed, no stamp written), passes over the `RGM1` mirror, writes the branch's own `RGM2` mirrors of the unchanged graph and questions, and pays that rewrite outside the rows.
+1. **`bench/probe/reset.sh` before every arm** (Task 1 writes it, with its test). It refuses anything that is not the locked, detached worktree at `502e8a6d`; reverts tracked edits and removes untracked files; copies the fixture's store in whole (`rsync -a --delete`); removes any `repograph.toml` an earlier reset left, so the corpus tree is clean and a `changes` row measures the one path it touched; and runs one `--no-dense update` through `repograph-main` to settle the stamps — the copied manifest carries the fixture's mtimes, which match nothing in `$WT`, so that first walk hashes every file, finds every hash unchanged, records this tree's stamps, and every later walk is stat-only; on an unchanged tree `repograph-main` takes the no-op path and derives nothing, so the settle reads `changed 0` and is not a re-read. Where an arm needs an empty store rather than the fixture's, the task says so after the reset: `rm -rf $WT/.repograph` for a build from nothing (a `build` wipes only the graph and the manifest and keeps the questions and the vectors, so "from nothing" has to be said); `embed.sh` removes the vectors itself. Where rows are read through a branch binary, one warm non-stale `--no-dense ask FR-PAY-22` follows the reset: it walks the settled tree (stat-only, nothing changed, no stamp written), passes over the `RGM1` mirror, writes the branch's own `RGM2` mirrors of the unchanged graph and questions, and pays that rewrite outside the rows.
 2. **Artefacts copied out before the next arm.** Whatever a comparison reads is copied to `~/bench/levers-2026-09-10/log/<task>/<arm>/` immediately after the arm that wrote it and before anything else runs in `$WT`, and the comparison reads the copies: `log/g39/main/graph.json` against `log/g39/branch/graph.json` (Task 6), `log/g39/branch/graph.json` against `log/g34/t8/graph.json` (Task 8), the enriched store to `log/g32/after/store/` (Task 10) — the store Max may pin next, which the next reset would otherwise destroy. This is the single most likely way an executor loses a reading, so it is a numbered step in each of those tasks, never a parenthesis.
 
 **So Tasks 1, 3, 6, 8, 9, 10 and 11 run one at a time, in the plan's order, never in parallel and never interleaved** — no dispatch of two of them to two agents. A task interrupted mid-arm resets before it resumes rather than trusting what is on disk, and re-runs the arm from its first step. Tasks 2, 4, 5 and 7 touch no corpus and are unaffected.
@@ -1143,9 +1143,11 @@ Two directories, both locked: `~/bench/beauty-crm-502e8a6d`, the pinned fixture,
 `~/bench/beauty-crm-test`, the one writable worktree, where every writer and every reader row runs.
 
 - `quiet.sh` — the precondition every row is read under: ≥ 85% idle, 1-minute load < 3.0, AC power,
-  no `cargo`/`rustc`/`node`/other `repograph` running. Every other script runs it first and refuses.
-- `reset.sh` — the writable worktree put back to the fixture's state: tree reverted and cleaned,
-  store copied in, `repograph.toml` written, stamps settled by one `--no-dense update`. Refuses any
+  no `cargo`/`rustc`/other `repograph` at any CPU, and no `node` at or above 5% CPU outside the
+  script's own ancestor chain. Every other script runs it first and refuses.
+- `reset.sh` — the writable worktree put back to the fixture's state: tree reverted and cleaned
+  (a `repograph.toml` an earlier reset left included, so the tree is clean for the `changes` rows),
+  store copied in, stamps settled by one `--no-dense update`. Refuses any
   directory that is not the locked worktree at `502e8a6d`. Before every arm, reader suites included.
 - `measure.sh NAME LOG -- cmd…` — one command: wall, user, sys, max RSS, sampled peak CPU and threads.
 - `readers.sh BIN WORKTREE LOG [N]` — the ten reader rows, N runs each, every row `--stale`, medians
@@ -2592,7 +2594,7 @@ cd /Users/max/Documents/projects/repograph && git add -A src tests docs/bench/20
 - Modify: `bench/history/runs.jsonl` (twelve rows through `track.py`)
 
 **Interfaces:**
-- Consumes: `bench/probe/arms.sh`, `reset.sh` (which writes `$WT`'s `repograph.toml` with `embed_model = "intfloat/multilingual-e5-small"`); `FIX` and `WT`; `claude` on `PATH` for the default `enrich_command` (there is no `~/.config/repograph/config.toml` on this machine, so the built-in `claude -p --model haiku …` runs; ≈ $0.20 for ~150 nodes).
+- Consumes: `bench/probe/arms.sh`, `reset.sh` (which leaves the corpus tree clean; the embedder is declared in the environment as `REPOGRAPH_EMBED_MODEL=intfloat/multilingual-e5-small`, and every script of the kit refuses without it); `FIX` and `WT`; `claude` on `PATH` for the default `enrich_command` (there is no `~/.config/repograph/config.toml` on this machine, so the built-in `claude -p --model haiku …` runs; ≈ $0.20 for ~150 nodes).
 - Produces: `~/bench/levers-2026-09-10/log/g32/after/store/` — the enriched, rebuilt store, copied out as an image before the next reset destroys it.
 
 The shipped half (`enrich::unenriched_note`, the README sentence) is on `main`. This is the fixture half: the recorded before/after pair the ledger asks for, the *before* on the fixture and the rebuild in the writable worktree, the pinned fixture untouched.
@@ -2612,16 +2614,17 @@ Expected: four summary lines and four anchor lines equal to the baseline table u
 
 - [ ] **Step 2: The rebuild**
 
-As numbered: (1) reset — the store is the fixture's, questions and vectors included, which a `build` keeps (it wipes the graph and the manifest only), so the rebuilt store's coverage is the fixture's questions over the rebuilt nodes; the `embed_model` line is the reset's; (2) the build; (3) the arms, in the writable worktree this time, since the rebuilt store is what they read.
+As numbered: (1) reset — the store is the fixture's, questions and vectors included, which a `build` keeps (it wipes the graph and the manifest only), so the rebuilt store's coverage is the fixture's questions over the rebuilt nodes; the embedder is the environment's, which `reset.sh` refuses to run without; (2) the build; (3) the arms, in the writable worktree this time, since the rebuilt store is what they read.
 
 ```bash
 cd /Users/max/Documents/projects/repograph && FIX=~/bench/beauty-crm-502e8a6d; WT=~/bench/beauty-crm-test; export FIX WT
 B=~/bench/levers-2026-09-10/bin/repograph-t10; L=~/bench/levers-2026-09-10/log/g32
-bench/probe/reset.sh && grep embed_model $WT/repograph.toml
+export REPOGRAPH_EMBED_MODEL=intfloat/multilingual-e5-small
+bench/probe/reset.sh && git -C $WT status --porcelain | wc -l
 $B --repo $WT build 2>$L/build.err | tee $L/build.out; cat $L/build.err
 ```
 
-Expected: `embed_model = "intfloat/multilingual-e5-small"`; on stderr `families: … · milestones: …` (54 ids, 5 milestones), then ``repograph: N requirement-like nodes have no questions — run `repograph enrich` to search them``, then the dense sync's `dense: model open in …` and its progress; on stdout `changed 9<…> removed 0 nodes <…> edges <…>` and `dense: embedded <…> rows in <…>s`. Record N.
+Expected: the reset's own lines, then `0` — a clean corpus tree, the embedder declared in the environment rather than in a file the `changes` rows would read; on stderr `families: … · milestones: …` (54 ids, 5 milestones), then ``repograph: N requirement-like nodes have no questions — run `repograph enrich` to search them``, then the dense sync's `dense: model open in …` and its progress; on stdout `changed 9<…> removed 0 nodes <…> edges <…>` and `dense: embedded <…> rows in <…>s`. Record N.
 
 ```bash
 bench/probe/arms.sh $B $WT $L g32-rebuilt 2>&1 | grep -E '^(keyword|long|anchors|bench)'
