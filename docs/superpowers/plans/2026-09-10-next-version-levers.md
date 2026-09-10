@@ -10,6 +10,24 @@
 
 **Spec:** `docs/bench/next-version-gaps.md` at `main` (`d688e56`) — sections `## G23` (line 1137), `## G32` (1456), `## G34` (1509), `## G35` (1542), `## G38` (1644), `## G39` (1661), `## G40` (1688), `## G15` (683), `## G19` (950). Each task quotes its gap's own **Gate** as the acceptance criterion; where this plan reads a gate differently from its letter (G40 after G39, G19's control), the task says so and the ledger entry written in Task 12 records it.
 
+> **⚠ The probe scripts in this document are the initial draft. `bench/probe/` in the tree is authoritative.**
+>
+> Every fenced script block below — Task 0's `arms.sh`, Task 1's `judge.py`, `readers.sh`, `embed.sh`, `measure.sh`, `quiet.sh`, `reset.sh`, `graphdiff.py`, `README.md` and the embed summary row it prints — is the draft as first written. The files in `bench/probe/` are authoritative from `a53e50c` onwards (`arms.sh`, which landed earlier, from `0bb5ed3`), and every commit named below corrected a defect that is still present in the blocks here. **No executor may re-extract a script from this document** — not with `awk`, not by hand, not "to check". Read `bench/probe/` and edit it in place. The agent that ran Task 0 did extract a block from this document with `awk` and install it byte-for-byte, which is why this note exists; nothing below is ticked or changed by it, and no step is retired.
+>
+> - `0bb5ed3` — `arms.sh` gets the shebang the draft block omits.
+> - `994eae3` — a row that measured a failure is refused rather than averaged: `rc=` on `measure.sh`'s summary line, `judge.py` refusing it, `readers.sh`, `embed.sh`, `arms.sh` and `graphdiff.py` following.
+> - `deceb5c` — an arm that fails a floor is still a recorded arm: `arms.sh` stops dropping it; `judge.py` refuses a medians file that parsed to nothing.
+> - `8b642d8` — `quiet.sh` counts `node` like the other three and exempts only its own ancestor chain.
+> - `8061a6f` — `judge.py compare` judges peak CPU, and leaves a row the sampler never caught unjudged instead of green.
+> - `765761f` — the review's findings on the probe: `measure.sh` reads each `time` field off the report's whole shape, `readers.sh` and `embed.sh` follow, `judge.py` refuses an unreadable path by name.
+> - `7bd637a` — `quiet.sh` counts busyness and not presence; the printed line names which rule counted what.
+> - `ad05b04` — `embed.sh` builds its row through `summary_row`, carries `samples=` (the draft's row below prints no such field) and refuses a row the sampler never read.
+> - `6ed52ab` — `readers.sh` stops swallowing the medians verdict through a `| tee`, and resolves `$F` before the `cd` so the `cn.ts` restore cannot miss.
+> - `12dcb9a` — a refused `embed.sh` kills the run instead of waiting it out, and says what it left half-written in the store.
+> - `79a0ef1` — `judge.py`'s `MIN_N` argument prints the usage line instead of a traceback, and a floor of zero is refused.
+> - `db523da` — `embed.sh` exits 3 where the store is left partial, `readers.sh` makes a slash-bearing binary path absolute, `judge.py` asks `isdecimal` where it meant `isdigit`.
+> - `fa1e2d6` — a `bench` row that missed a floor is a reading and carries `floors_missed=1`; every other non-zero exit is still refused, and the refusal quotes what the row said.
+
 ## Global Constraints
 
 - Rust 2021, toolchain 1.98.0 (`rust-toolchain.toml`). Every dependency is `=`-pinned in `Cargo.toml`; a new dependency needs a reason in this plan and an exact pin. This plan adds none.
@@ -328,6 +346,8 @@ cd /Users/max/Documents/projects/repograph && git add bench/probe/arms.sh docs/b
 ---
 
 ### Task 1: G23 — the reader bars vendored, and proved by their own control
+
+> **⚠ These scripts already exist and every fenced block in this task is out of date.** `bench/probe/` in the tree is authoritative from `a53e50c` onwards; the blocks below are the initial draft, and each of the commits listed in the note under **Spec** at the top of this document corrected a defect that is still in them — the ones this task's own files carry are `994eae3`, `deceb5c`, `8b642d8`, `8061a6f`, `765761f`, `7bd637a`, `ad05b04`, `6ed52ab`, `12dcb9a`, `79a0ef1`, `db523da` and `fa1e2d6`. **Do not re-extract a script from this document**, with `awk` or otherwise: installing a block byte-for-byte reinstalls every one of those defects, which is how the trap was found. Read the files, edit them in place, and leave the blocks below as the record of what was first written.
 
 **Files:**
 - Create: `bench/probe/README.md`, `bench/probe/measure.sh`, `bench/probe/quiet.sh`, `bench/probe/reset.sh`, `bench/probe/test_reset.py`, `bench/probe/readers.sh`, `bench/probe/embed.sh`, `bench/probe/judge.py`, `bench/probe/test_judge.py`, `bench/probe/graphdiff.py`, `bench/probe/test_graphdiff.py`, `bench/probe/queries10.jsonl`
