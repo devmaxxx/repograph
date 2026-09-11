@@ -184,6 +184,8 @@ pub struct UpdateReport {
     /// Computed here because the graph is already in hand: a writer that re-loaded the store to
     /// say this would pay a whole graph read on the no-op update a commit hook fires.
     pub unenriched: Option<usize>,
+    /// The stamp of the `graph.json` this update wrote, as written.
+    pub graph_at: Option<walk::Stamp>,
 }
 
 /// Re-extracts what the diff names, drops what is gone, and writes the store back. Nothing else
@@ -263,14 +265,14 @@ pub(crate) fn apply_diff(repo: &std::path::Path, store: &store::Store, graph: &m
     // can be newer than this build's: written back, that value would tell the build able to fill
     // the hole that there is nothing to do. `0` is stale against every generation there is.
     if unread { saved.grammar = 0; }
-    store.save(graph, &saved)?;
+    let graph_at = store.save(graph, &saved)?;
     // Only when something was re-extracted: a tree that did not move cannot have grown a node
     // without questions, and the no-op update a commit hook fires should not read the questions
     // file to be told so.
     let unenriched = moved
         .then(|| enrich::Questions::load(store).ok().and_then(|q| enrich::unenriched_note(graph, &q)))
         .flatten();
-    Ok(UpdateReport { changed: diff.changed.len(), removed: diff.removed.len(), nodes: graph.nodes.len(), edges: graph.edges.len(), unenriched })
+    Ok(UpdateReport { changed: diff.changed.len(), removed: diff.removed.len(), nodes: graph.nodes.len(), edges: graph.edges.len(), unenriched, graph_at })
 }
 
 /// The store brought in line with the tree.
@@ -322,6 +324,9 @@ pub(crate) struct Watcher<'a> {
     store: store::Store,
     ex: Extractors,
     graph: model::Graph,
+    /// The `graph.json` stamp `graph` was read at or written to, handed to the reader that takes
+    /// the graph over so it can hold the vectors' claim against it.
+    graph_at: Option<walk::Stamp>,
     manifest: walk::Manifest,
     seen: Option<walk::Stamp>,
     deferred: u32,
@@ -345,10 +350,11 @@ pub(crate) enum Polled { Quiet, Deferred { pending: usize }, Refreshed(UpdateRep
 impl<'a> Watcher<'a> {
     fn open(repo: &'a std::path::Path, cfg: &'a config::Config) -> anyhow::Result<Watcher<'a>> {
         let store = store::Store::new(repo);
+        let graph_at = store.stamp("graph.json");
         let (graph, manifest) = store.load()?;
         let seen = store.stamp("manifest.json");
         let ex = extractors(repo)?;
-        Ok(Watcher { repo, cfg, ex, store, graph, manifest, seen, deferred: 0, reloaded: false })
+        Ok(Watcher { repo, cfg, ex, store, graph, graph_at, manifest, seen, deferred: 0, reloaded: false })
     }
 
     /// The store read back when another process has written it, without the walk a poll does —
@@ -357,8 +363,10 @@ impl<'a> Watcher<'a> {
     fn reload_if_moved(&mut self) -> anyhow::Result<bool> {
         let on_disk = self.store.stamp("manifest.json");
         if on_disk == self.seen { return Ok(false); }
+        let graph_at = self.store.stamp("graph.json");
         let (graph, manifest) = self.store.load()?;
         self.graph = graph;
+        self.graph_at = graph_at;
         self.manifest = manifest;
         self.seen = on_disk;
         Ok(true)
@@ -393,6 +401,7 @@ impl<'a> Watcher<'a> {
         if !moved.is_empty() { eprintln!("families: {}", moved.join(", ")); }
         self.manifest = walk::Manifest::from_entries(&entries);
         self.seen = self.store.stamp("manifest.json");
+        self.graph_at = r.graph_at;
         Ok(Polled::Refreshed(r))
     }
 }
@@ -422,7 +431,10 @@ fn run_watch(repo: &std::path::Path, cfg: &config::Config, every: u64, batch: us
                     let questions = enrich::Questions::load(&w.store)?;
                     idx.written_by(&model, e.dim()?);
                     embedded = idx.sync(&w.graph, &questions, &mut |texts| e.embed(texts))?;
-                    if embedded > 0 { idx.save(&w.store)?; }
+                    idx.synced_against(w.graph_at);
+                    // Saved with nothing embedded as well: the refresh moved the graph, and the
+                    // claim is what tells the next reader it owes no rows.
+                    idx.save(&w.store)?;
                 }
                 println!("refresh: {} changed, {} removed, {} nodes, {} edges, {embedded} vectors in {:.1}s",
                     r.changed, r.removed, r.nodes, r.edges, t.elapsed().as_secs_f32());
@@ -469,6 +481,7 @@ fn embed_all(repo: &std::path::Path, no_dense: bool, cfg: &config::Config) -> an
     let open = std::time::Instant::now();
     let Some(mut emb) = ask::open_embedder(no_dense, &model, index::embed::threads(cfg.resources), index::embed::Weights::Mapped) else { return Ok(()) };
     let store = store::Store::new(repo);
+    let graph_at = store.stamp("graph.json");
     let (graph, _) = store.load()?;
     let questions = enrich::Questions::load(&store)?;
     let mut dense = index::dense::DenseIndex::load(&store)?;
@@ -484,6 +497,7 @@ fn embed_all(repo: &std::path::Path, no_dense: bool, cfg: &config::Config) -> an
         eprintln!("dense: {}/{} rows, {rate:.1} rows/s, ~{:.0} min left", p.done, p.total, (p.total - p.done) as f32 / rate / 60.0);
         Ok(())
     })?;
+    dense.synced_against(graph_at);
     dense.save(&store)?;
     println!("dense: embedded {n} rows in {:.1}s", t.elapsed().as_secs_f32());
     Ok(())

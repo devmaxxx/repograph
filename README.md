@@ -21,7 +21,7 @@ has since grown to the 82 cases [Bench](#bench) floors.
 
 ## Status
 
-0.5.1 is the version `main` carries, and every command below is implemented rather than planned:
+0.5.2 is the version `main` carries, and every command below is implemented rather than planned:
 `build` and `update` (incremental; a no-op `update` is a fixed point), `families`, `ask`, `explain`,
 `verify`, `impact`, `trace`, `changes`, `embed`, `watch`, `serve`, `prime`, `install-agent`,
 `import-legacy`, `dump` and `bench`. Three spend model tokens and all three are opt-in: `enrich`,
@@ -170,7 +170,9 @@ refresh: 3 changed, 1 removed
 
 A fused query opens the embedding model anyway, so the rows that changed are re-embedded and the
 vectors stay in step too. `--no-dense` and the exact-id path open nothing: the lexical graph is
-fresh, and the vectors catch up on the next fused query or `update`. Measured on the development
+fresh, and the vectors catch up on the next fused query or `update` — after an `update --no-dense`
+from a commit hook too, because `vectors.json` records the graph its rows were last synced against.
+Measured on the development
 corpus (825 files, 7.5k nodes): the no-change check costs ~10 ms, and a one-file edit costs ~20 ms
 lexical, ~40 ms with the re-embedding — the new rows are appended to `vectors.f32` and the rows
 they replace are left as holes, so nothing rewrites 50 MB to store a row of 1.5 kB. Holes past a

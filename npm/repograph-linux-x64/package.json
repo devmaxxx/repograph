@@ -1,6 +1,6 @@
 {
   "name": "@devmaxxx/repograph-linux-x64",
-  "version": "0.5.1",
+  "version": "0.5.2",
   "description": "repograph binary for Linux on x86-64 (glibc); installed through @devmaxxx/repograph",
   "license": "MIT",
   "repository": {
