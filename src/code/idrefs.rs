@@ -1,5 +1,4 @@
 use crate::code::symbols::{is_top_level, member_name, parse};
-use crate::ids::IdMatcher;
 use crate::model::{EdgeKind, Extraction};
 use tree_sitter::Node;
 
@@ -58,7 +57,7 @@ fn name_of(n: Node, src: &[u8]) -> Option<String> {
     n.child_by_field_name("name").and_then(|c| c.utf8_text(src).ok()).map(str::to_string)
 }
 
-pub fn scan(ids: &IdMatcher, rel: &str, source: &str, ex: &mut Extraction) {
+pub fn scan(rel: &str, source: &str, ex: &mut Extraction) {
     let src = source.as_bytes();
     let Some(tree) = parse(rel, src) else { return };
     let mut stack = vec![tree.root_node()];
@@ -73,7 +72,7 @@ pub fn scan(ids: &IdMatcher, rel: &str, source: &str, ex: &mut Extraction) {
             }
         };
         let Ok(t) = n.utf8_text(src) else { continue };
-        let hits = ids.find_all(t);
+        let hits = crate::ids::generic().find_all(t);
         if hits.is_empty() { continue; }
         let from = owner(n, rel, src);
         for h in hits {
@@ -87,9 +86,8 @@ mod tests {
     use super::*;
 
     fn refs(rel: &str, src: &str) -> Vec<(String, String, String)> {
-        let ids = crate::families::test_matcher();
         let mut ex = Extraction::default();
-        scan(&ids, rel, src, &mut ex);
+        scan(rel, src, &mut ex);
         ex.edges.iter().filter(|e| e.kind == EdgeKind::References)
             .map(|e| (e.source.clone(), e.target.clone(), e.context.clone())).collect()
     }

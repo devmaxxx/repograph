@@ -59,7 +59,6 @@ pub fn run(repo: &Path, queries: &Path, out: &Path, depth: usize, no_dense: bool
     let store = Store::new(repo);
     let (graph, _) = store.load()?;
     if graph.nodes.is_empty() { anyhow::bail!("graph is empty at {} — run build first", repo.display()); }
-    let ids = crate::families::from_graph(&graph);
     let dense_idx = DenseIndex::load(&store)?;
     if !no_dense && dense_idx.ids.is_empty() { anyhow::bail!("dense index is empty at {} — run `repograph update` first", repo.display()); }
     let questions = Questions::load(&store)?;
@@ -103,7 +102,7 @@ pub fn run(repo: &Path, queries: &Path, out: &Path, depth: usize, no_dense: bool
     let mut records = Vec::with_capacity(queries.len());
     for q in &queries {
         let words: Vec<String> = q.q.split_whitespace().map(str::to_string).collect();
-        let (exact_ids, whole_question) = query::exact_seeds(&graph, &ids, &words);
+        let (exact_ids, whole_question) = query::exact_seeds(&graph, &words);
         let qvec = match embedder.as_mut() { Some(e) => e.query(&q.q)?, None => Vec::new() };
         let loo_hash = blake3::hash(format!("query: {}", q.q).as_bytes()).to_hex().to_string();
         let loo_rows: Vec<usize> = dense_idx.hashes.iter().enumerate().filter(|(_, h)| **h == loo_hash).map(|(i, _)| i).collect();
@@ -118,7 +117,7 @@ pub fn run(repo: &Path, queries: &Path, out: &Path, depth: usize, no_dense: bool
             (p.into_iter().map(|(id, _)| id).collect(), g.into_iter().map(|(id, _)| id).collect())
         };
         let dense_arm: Option<query::Dense> = if no_dense { None } else { Some(&dense_fn) };
-        let answer = query::ask(&graph, &ids, &lex, dense_arm, None, &words, &opts);
+        let answer = query::ask(&graph, &lex, dense_arm, None, &words, &opts);
         records.push(Record {
             q: q.q.clone(),
             expect: q.expect.clone(),

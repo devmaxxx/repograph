@@ -3,7 +3,7 @@
 //! turns a `Request` into the text the command prints. A one-shot `ask` opens a context, answers
 //! once and leaves; a resident process opens one and answers many times, over the same code.
 
-use crate::{config, enrich, ids, index, model, query, rerank, store, walk};
+use crate::{config, enrich, index, model, query, rerank, store, walk};
 use anyhow::Context as _;
 use std::cell::{Cell, RefCell};
 use std::path::{Path, PathBuf};
@@ -67,7 +67,9 @@ pub(crate) fn graph_for_ask(repo: &Path, cfg: &config::Config, store: &store::St
     let entries = walk::walk(repo, cfg, &manifest)?;
     let diff = manifest.diff(&entries);
     timing.stage("tree walked");
-    if diff.changed.is_empty() && diff.removed.is_empty() {
+    // A store an older grammar wrote holds less than the tree says it does, and no hash reports
+    // it, so an unchanged tree is not on its own a reason to answer from what is there.
+    if diff.changed.is_empty() && diff.removed.is_empty() && !manifest.stale_grammar() {
         crate::record_stamps(store, &manifest, &entries)?;
         // A store another release or a bare `graph.json` left without a mirror pays the JSON
         // parse once; a refresh below writes the mirror on its own.
@@ -77,13 +79,7 @@ pub(crate) fn graph_for_ask(repo: &Path, cfg: &config::Config, store: &store::St
         }
         return Ok((graph, None));
     }
-    // The families the graph already declares, so a refresh costs no pass over the documents. A
-    // store nobody has built declares none, and what follows is a build in everything but name.
-    let ids = match graph.nodes.is_empty() {
-        true => crate::families::derive(repo, &entries)?.matcher(),
-        false => crate::families::from_graph(&graph),
-    };
-    let r = crate::apply_diff(repo, store, &mut graph, &entries, &diff, &[], &crate::extractors(repo, ids)?)?;
+    let r = crate::apply_diff(repo, store, &mut graph, &entries, &diff, &manifest, &crate::extractors(repo)?)?;
     timing.stage("refreshed");
     Ok((graph, Some(r)))
 }
@@ -94,13 +90,12 @@ pub(crate) fn graph_for_ask(repo: &Path, cfg: &config::Config, store: &store::St
 pub struct Request { pub words: Vec<String>, pub json: bool, pub seeds: usize, pub bodies: bool, pub rerank: bool, pub rerank_local: bool, pub depth: usize, pub stale: bool, pub no_dense: bool }
 
 /// An open store ready to answer. Everything that costs more than a question to build — the
-/// graph, the id matcher, the questions, the vectors, the embedding model, the cross-encoder —
-/// is held here and kept between answers.
+/// graph, the questions, the vectors, the embedding model, the cross-encoder — is held here and
+/// kept between answers.
 pub struct Context {
     cfg: config::Config,
     store: store::Store,
     graph: model::Graph,
-    ids: ids::IdMatcher,
     questions: enrich::Questions,
     /// What `questions.json` looked like when the questions in hand were read, so a refresh
     /// that did not touch them does not pay to parse them again.
@@ -133,14 +128,12 @@ impl Context {
             Err(err) => { notices.push(format!("refresh: skipped ({err:#})")); (store.load()?.0, None) }
         };
         if let Some(r) = &refreshed { notices.push(format!("refresh: {} changed, {} removed", r.changed, r.removed)); }
-        let ids = crate::families::from_graph(&graph);
-        timing.stage("ids ready");
         let (questions, source) = enrich::Questions::load_traced(&store)?;
         if !stale && source == store::Source::Json { questions.write_mirror(&store)?; }
         let questions_stamp = store.stamp(enrich::FILE);
         timing.stage("questions ready");
         Ok(Context {
-            cfg: cfg.clone(), store, graph, ids, questions, questions_stamp, no_dense,
+            cfg: cfg.clone(), store, graph, questions, questions_stamp, no_dense,
             lexical: RefCell::new(None),
             dense_idx: RefCell::new(None),
             warm: RefCell::new(None),
@@ -168,8 +161,8 @@ impl Context {
             || self.warm.borrow().is_some()
     }
 
-    /// Forgets the model weights and keeps everything else: the graph, the id matcher, the
-    /// lexical indexes and the vectors stay resident, so a lexical answer is still milliseconds
+    /// Forgets the model weights and keeps everything else: the graph, the lexical indexes and
+    /// the vectors stay resident, so a lexical answer is still milliseconds
     /// and a fused one pays the ~220 ms open again. The slots are the same ones the answer path
     /// fills lazily, so nothing has to be told the model went. Returns whether anything was held.
     ///
@@ -275,7 +268,7 @@ impl Context {
         // (`!whole_question`), so neither is worth paying for. `exact_seeds` is pure and
         // `query::ask` re-asks it itself, so asking it here too costs one graph scan and
         // decides nothing differently.
-        let (_, whole) = query::exact_seeds(graph, &self.ids, &req.words);
+        let (_, whole) = query::exact_seeds(graph, &req.words);
         if opts.dense && !whole {
             let mut slot = dense_idx.borrow_mut();
             let idx = slot.get_or_insert_with(|| {
@@ -318,7 +311,7 @@ impl Context {
             if code_seat { l.ensure_code(graph, questions); }
             l
         };
-        let answer = query::ask(graph, &self.ids, lex, Some(&dense_fn), rerank, &req.words, &opts);
+        let answer = query::ask(graph, lex, Some(&dense_fn), rerank, &req.words, &opts);
         timing.stage("answered");
         Ok(query::render(&answer, graph, &opts))
     }
@@ -329,9 +322,6 @@ impl Context {
     /// report when it applied a change and `None` when it only read a store someone else wrote.
     pub(crate) fn adopt(&mut self, w: &crate::Watcher, refreshed: Option<crate::UpdateReport>) -> anyhow::Result<()> {
         self.graph = w.graph.clone();
-        // The families come off the graph, so a build in another process that grew one reaches
-        // this reader with the nodes it wrote rather than a poll later.
-        self.ids = crate::families::from_graph(&self.graph);
         // An adopted graph is a new population whether or not the questions moved with it, so
         // the indexes built over the old one cannot outlive this call.
         *self.lexical.borrow_mut() = None;

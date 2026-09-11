@@ -1,4 +1,5 @@
 use regex::Regex;
+use std::sync::OnceLock;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IdHit {
@@ -6,7 +7,6 @@ pub struct IdHit {
     pub start: usize,
 }
 
-#[derive(Clone)]
 pub struct IdMatcher {
     single: Regex,
     range: Regex,
@@ -15,28 +15,25 @@ pub struct IdMatcher {
 
 /// A hit whose neighbour is alphanumeric or a hyphen belongs to a longer token: `FR-PAY-22` is
 /// one id and not `PAY-22`, and `2026-09-05` is a date.
-pub(crate) fn bounded(text: &str, start: usize, end: usize) -> bool {
+fn bounded(text: &str, start: usize, end: usize) -> bool {
     let tail = |b: u8| b.is_ascii_alphanumeric() || b == b'-';
     let left_ok = start == 0 || !tail(text.as_bytes()[start - 1]);
     let right_ok = end == text.len() || !tail(text.as_bytes()[end]);
     left_ok && right_ok
 }
 
-/// The families as one alternation. An empty list has to be written as a branch that cannot
-/// match: left as the empty alternation it matches the empty string, so `(?:)-M\d{2}` reads a
-/// bare `-M01` anywhere in prose as an id and `verify` reports it as undeclared. A repository
-/// with no milestone families is ordinary — auto mode reaches one on most corpora.
-fn alternation(families: &[String]) -> String {
-    match families.is_empty() {
-        true => r"[^\s\S]".to_string(),
-        false => families.iter().map(|f| regex::escape(f)).collect::<Vec<_>>().join("|"),
-    }
+static GENERIC: OnceLock<IdMatcher> = OnceLock::new();
+
+/// The one grammar every id is read by: any prefix the family slot admits, the digits after the
+/// hyphen. Which prefixes are families is no longer the matcher's question — the graph answers
+/// it after extraction, from the definitions it holds — so a citation of a prefix no line defines
+/// is found here like any other and held aside by `Graph::settle` rather than never found.
+pub fn generic() -> &'static IdMatcher {
+    GENERIC.get_or_init(|| IdMatcher::build(crate::families::FAMILY, crate::families::MILESTONE))
 }
 
 impl IdMatcher {
-    pub fn new(families: &[String], milestone_families: &[String]) -> IdMatcher {
-        let fam = alternation(families);
-        let ms = alternation(milestone_families);
+    fn build(fam: &str, ms: &str) -> IdMatcher {
         let single = Regex::new(&format!(r"(?:{fam})-\d{{1,4}}|(?:{ms})-M\d{{2}}")).unwrap();
         // `FR-RPT-42…48`, `R-1601…R-1603`, `INV-11..13`, `N-1—N-3`
         let range = Regex::new(&format!(
@@ -100,9 +97,7 @@ impl IdMatcher {
 mod tests {
     use super::*;
 
-    fn m() -> IdMatcher {
-        crate::families::test_matcher()
-    }
+    fn m() -> &'static IdMatcher { generic() }
 
     fn ids(t: &str) -> Vec<String> {
         m().find_all(t).into_iter().map(|h| h.id).collect()
@@ -114,8 +109,11 @@ mod tests {
     }
 
     #[test]
-    fn ambiguous_families_do_not_match() {
-        assert!(ids("вариант B1, C11 и S3; I-015 тоже").is_empty());
+    fn hyphenless_labels_are_not_ids_and_a_one_letter_family_is() {
+        // `B1`, `C11`, `S3` have no hyphen before the digits and are labels in any corpus; `I-015`
+        // has the shape `N-151` has on the bench corpus, and which prefixes are families is the
+        // graph's question now, not this matcher's.
+        assert_eq!(ids("вариант B1, C11 и S3; I-015 тоже"), vec!["I-015"]);
     }
 
     #[test]
@@ -188,10 +186,11 @@ mod tests {
     }
 
     #[test]
-    fn empty_family_lists_match_nothing_rather_than_every_bare_suffix() {
-        let m = IdMatcher::new(&[], &[]);
-        assert!(m.find_all("see -M01 and -12").is_empty());
-        assert!(m.find_all("-11…13, -1/2").is_empty());
-        assert!(!m.is_id("-12"));
+    fn a_bare_suffix_is_never_an_id() {
+        // The property the old empty-list sentinel existed to protect, now a property of the
+        // grammar: the family slot needs a letter.
+        assert!(ids("see -M01 and -12").is_empty());
+        assert!(ids("-11…13, -1/2").is_empty());
+        assert!(!m().is_id("-12"));
     }
 }

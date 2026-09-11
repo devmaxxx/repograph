@@ -17,12 +17,28 @@ pub struct Stamp { pub mtime_ns: u64, pub len: u64 }
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Entry { pub rel: String, pub kind: FileKind, pub hash: String, pub stamp: Option<Stamp> }
 
+/// The generation of the grammar a file is read by — the id shapes, the definition heads, the
+/// registry rows, the ids a source file cites, and which of those a settled graph admits. Bumped
+/// by hand when a change to any of them would make a re-read of a file that has not moved yield a
+/// different graph, and left alone by a release that does not touch them: this number is what
+/// forces one whole-tree re-read on the first writer after an upgrade (see `apply_diff`), and a
+/// bump nobody needed is that walk paid for nothing. `0` belongs to no generation: it is what a
+/// manifest written before the stamp existed reads as, and what a writer leaves behind when a file
+/// it had to read would not open — neither store was read whole, and `0` is stale against every
+/// generation there is or will be.
+pub const GRAMMAR: u32 = 1;
+
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub struct Manifest {
     pub files: BTreeMap<String, String>,
     /// A manifest written before the stat cache existed has none; every file is hashed once more
     /// and the stamps are there from the next save on.
     #[serde(default)] pub stamps: BTreeMap<String, Stamp>,
+    /// The grammar generation the graph saved beside this manifest was read whole by, or `0` for
+    /// none. It belongs here and not on the graph because it answers the same question the hashes
+    /// and stamps do — must this file be read again — and every writer holds the manifest at the
+    /// moment it asks.
+    #[serde(default)] pub grammar: u32,
 }
 
 #[derive(Debug, Default)]
@@ -93,7 +109,16 @@ impl Manifest {
         Manifest {
             files: entries.iter().map(|e| (e.rel.clone(), e.hash.clone())).collect(),
             stamps: entries.iter().filter_map(|e| Some((e.rel.clone(), e.stamp?))).collect(),
+            grammar: GRAMMAR,
         }
+    }
+
+    /// Whether the graph beside this manifest was read by a grammar other than this build's — a
+    /// store every hash calls current and that is still short of what a re-read would find, or
+    /// long by what a newer build put in it. Different, not older: either way it is not the store
+    /// this build would have written, and one walk is what makes it one.
+    pub fn stale_grammar(&self) -> bool {
+        self.grammar != GRAMMAR
     }
 
     pub fn diff(&self, now: &[Entry]) -> Diff {
@@ -171,11 +196,22 @@ mod tests {
         let old: Manifest = serde_json::from_str(&serde_json::to_string(&Manifest {
             files: Manifest::from_entries(&hashed).files,
             stamps: BTreeMap::new(),
+            grammar: GRAMMAR,
         }).unwrap()).unwrap();
         assert!(old.stamps.is_empty());
         let again = walk(d.path(), &Config::default(), &old).unwrap();
         assert_eq!(again, hashed);
         assert_eq!(Manifest::from_entries(&again).stamps.len(), hashed.len());
+    }
+
+    // A manifest from a release that stamped no grammar is behind whatever this build reads by,
+    // and it is the only thing that says so: every hash in it still matches the tree.
+    #[test]
+    fn a_manifest_without_a_grammar_stamp_reads_as_behind_this_one() {
+        let old: Manifest = serde_json::from_str("{\"files\":{}}").unwrap();
+        assert_eq!(old.grammar, 0);
+        assert!(old.stale_grammar());
+        assert!(!Manifest::from_entries(&[]).stale_grammar());
     }
 
     // The stamp is what decides whether a file is read at all: with the recorded mtime and length

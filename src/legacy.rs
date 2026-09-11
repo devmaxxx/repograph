@@ -1,4 +1,3 @@
-use crate::ids::IdMatcher;
 use crate::model::{EdgeKind, Extraction, Graph, NodeKind};
 use anyhow::{Context, Result};
 use serde::Deserialize;
@@ -72,11 +71,10 @@ impl Resolved {
 
 fn resolve(
     graph: &Graph,
-    ids: &IdMatcher,
     by_label: &HashMap<(String, String), String>,
     gn: &GNode,
 ) -> Resolved {
-    if let Some(hit) = ids.find_all(&gn.label).into_iter().find(|h| graph.nodes.contains_key(&h.id)) {
+    if let Some(hit) = crate::ids::generic().find_all(&gn.label).into_iter().find(|h| graph.nodes.contains_key(&h.id)) {
         return Resolved::Real(hit.id);
     }
     let key = (basename(&gn.source_file).to_string(), gn.label.to_lowercase());
@@ -86,7 +84,7 @@ fn resolve(
     Resolved::Concept(format!("legacy:{}", gn.id))
 }
 
-pub fn import(graph: &mut Graph, ids: &IdMatcher, json: &str) -> Result<Report> {
+pub fn import(graph: &mut Graph, json: &str) -> Result<Report> {
     let g: GGraph = serde_json::from_str(json).context("parse graphify graph.json")?;
 
     let semantic: HashMap<&str, &GNode> = g
@@ -114,7 +112,7 @@ pub fn import(graph: &mut Graph, ids: &IdMatcher, json: &str) -> Result<Report> 
 
         for (gid, gn) in [(e.source.as_str(), sn), (e.target.as_str(), tn)] {
             if let Entry::Vacant(slot) = resolved.entry(gid) {
-                let r = resolve(graph, ids, &by_label, gn);
+                let r = resolve(graph, &by_label, gn);
                 match &r {
                     Resolved::Real(id) => {
                         // Prior graph knowledge wins; a legacy import only fills gaps.
@@ -190,13 +188,12 @@ mod tests {
     }
 
     fn run(g: &mut Graph) -> Report {
-        let ids = crate::families::test_matcher();
         let json = std::fs::read_to_string(format!(
             "{}/tests/fixtures/graphify-graph.json",
             env!("CARGO_MANIFEST_DIR")
         ))
         .unwrap();
-        import(g, &ids, &json).unwrap()
+        import(g, &json).unwrap()
     }
 
     #[test]
@@ -215,14 +212,10 @@ mod tests {
         assert!(!g.edges.iter().any(|e| e.target.contains("ast_sym")));
     }
 
-    fn ids() -> IdMatcher {
-        crate::families::test_matcher()
-    }
-
     #[test]
     fn malformed_json_errors_naming_the_parse_step() {
         let mut g = Graph::default();
-        let err = import(&mut g, &ids(), "{ not json").unwrap_err();
+        let err = import(&mut g, "{ not json").unwrap_err();
         assert!(err.to_string().contains("parse graphify graph.json"), "{err}");
     }
 
@@ -230,7 +223,7 @@ mod tests {
     fn an_empty_graphify_graph_is_a_no_op() {
         let mut g = base();
         let (nodes, edges) = (g.nodes.len(), g.edges.len());
-        let r = import(&mut g, &ids(), r#"{"nodes": [], "links": []}"#).unwrap();
+        let r = import(&mut g, r#"{"nodes": [], "links": []}"#).unwrap();
         assert_eq!(r, Report::default());
         assert_eq!((g.nodes.len(), g.edges.len()), (nodes, edges));
     }
@@ -245,7 +238,7 @@ mod tests {
             ],
             "links": [{"source": "x1", "target": "x2", "relation": "cites"}]
         }"#;
-        let r = import(&mut g, &ids(), json).unwrap();
+        let r = import(&mut g, json).unwrap();
         assert_eq!(r, Report { edges_seen: 1, resolved_both: 0, resolved_one: 0, concepts_created: 2, self_loops: 0 });
         assert!(g.nodes.contains_key("legacy:x1") && g.nodes.contains_key("legacy:x2"));
         assert!(g.edges.iter().any(|e| e.source == "legacy:x1" && e.target == "legacy:x2"));
@@ -267,7 +260,7 @@ mod tests {
                 {"source": "a", "target": "c", "relation": "conceptually_related_to", "context": ""}
             ]
         }"#;
-        import(&mut g, &ids(), json).unwrap();
+        import(&mut g, json).unwrap();
         assert!(g.edges.iter().any(|e| e.source == "FR-PAY-22" && e.target == "N-151" && e.context == "references: see note"));
         assert!(g.edges.iter().any(|e| e.source == "FR-PAY-22" && e.target == "FR-TOOL-39" && e.context == "conceptually_related_to"));
     }

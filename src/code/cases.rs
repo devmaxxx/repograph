@@ -21,8 +21,7 @@ impl Repo {
     }
 
     fn extract(&self, rel: &str, src: &str) -> Extraction {
-        let ids = crate::families::test_matcher();
-        CodeExtractor::new(Resolver::new(self.dir.path()).unwrap(), ids).extract(rel, src)
+        CodeExtractor::new(Resolver::new(self.dir.path()).unwrap()).extract(rel, src)
     }
 }
 
@@ -417,9 +416,12 @@ fn ids_in_jsx_attributes_are_strings_of_the_component() {
 }
 
 #[test]
-fn ambiguous_families_are_not_references() {
+fn hyphenless_labels_are_not_references_and_a_one_letter_family_is() {
+    // A label with no hyphen before its digits is not an id in any corpus; `I-015` has the shape
+    // an id has, and whether `I` is a family is the graph's question, not this scan's.
     let ex = extract("a.ts", "// step B1, table C11, size S3, item I-015\n");
-    assert!(edges(&ex, EdgeKind::References).is_empty(), "{:?}", edges(&ex, EdgeKind::References));
+    let refs = edges(&ex, EdgeKind::References);
+    assert_eq!(refs, vec![("file:a.ts", "I-015", "comment")], "{refs:?}");
 }
 
 

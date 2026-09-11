@@ -1,4 +1,3 @@
-use crate::ids::IdMatcher;
 use crate::model::{EdgeKind, Extraction, Extractor, NodeKind};
 use regex::Regex;
 use serde::Deserialize;
@@ -16,20 +15,7 @@ struct Row {
     #[serde(default)] basis: Option<String>,
 }
 
-/// The ids the rows of a registry declare, in the order `extract` would build them into nodes.
-/// The family scan reads them from here so that one place knows the registry's shape: a row's own
-/// id is never weighed against a family list, so every row defines the family it is written in.
-pub fn declared_ids(text: &str) -> Vec<String> {
-    serde_yaml::from_str::<Registry>(text)
-        .map(|r| r.invariants.into_iter().map(|row| row.id).collect())
-        .unwrap_or_default()
-}
-
-pub struct RegistryExtractor { ids: IdMatcher }
-
-impl RegistryExtractor {
-    pub fn new(ids: IdMatcher) -> RegistryExtractor { RegistryExtractor { ids } }
-}
+pub struct RegistryExtractor;
 
 fn bold_span() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
@@ -68,7 +54,7 @@ impl Extractor for RegistryExtractor {
                 ex.edge(&row.id, &target, EdgeKind::Implements, "test_ref", rel);
             }
             if let Some(b) = &row.basis {
-                for hit in self.ids.find_all(b) {
+                for hit in crate::ids::generic().find_all(b) {
                     ex.edge(&row.id, &hit.id, EdgeKind::References, "basis", rel);
                 }
             }
@@ -83,7 +69,7 @@ mod tests {
 
     fn ex() -> Extraction {
         let text = std::fs::read_to_string(format!("{}/tests/fixtures/constitution.yaml", env!("CARGO_MANIFEST_DIR"))).unwrap();
-        RegistryExtractor::new(crate::families::test_matcher()).extract("docs/constitution.yaml", &text)
+        RegistryExtractor.extract("docs/constitution.yaml", &text)
     }
 
     #[test]
@@ -101,14 +87,10 @@ mod tests {
 
     #[test]
     fn non_registry_yaml_is_harmless() {
-        let r = RegistryExtractor::new(crate::families::test_matcher());
+        let r = RegistryExtractor;
         let ex = r.extract("x.yaml", "foo: bar\n");
         assert_eq!(ex.nodes.len(), 1);
         assert!(ex.edges.is_empty());
-    }
-
-    fn extractor() -> RegistryExtractor {
-        RegistryExtractor::new(crate::families::test_matcher())
     }
 
     #[test]
@@ -125,7 +107,7 @@ mod tests {
     #[test]
     fn rows_declare_nodes_with_sequential_line_numbers_and_declares_edges() {
         let yaml = "invariants:\n  - id: INV-A\n    statement: \"**A.**\"\n  - id: INV-B\n    statement: \"**B.**\"\n";
-        let ex = extractor().extract("docs/x.yaml", yaml);
+        let ex = RegistryExtractor.extract("docs/x.yaml", yaml);
         let a = ex.nodes.iter().find(|n| n.id == "INV-A").unwrap();
         let b = ex.nodes.iter().find(|n| n.id == "INV-B").unwrap();
         assert_eq!((a.line, b.line), (1, 2));
@@ -136,14 +118,14 @@ mod tests {
     #[test]
     fn a_row_without_a_test_ref_has_no_implements_edge() {
         let yaml = "invariants:\n  - id: INV-A\n    statement: \"**A.**\"\n";
-        let ex = extractor().extract("docs/x.yaml", yaml);
+        let ex = RegistryExtractor.extract("docs/x.yaml", yaml);
         assert!(!ex.edges.iter().any(|e| e.kind == EdgeKind::Implements));
     }
 
     #[test]
     fn a_row_missing_the_required_id_field_yields_only_the_file_node() {
         let yaml = "invariants:\n  - statement: \"**Untitled.**\"\n";
-        let ex = extractor().extract("docs/x.yaml", yaml);
+        let ex = RegistryExtractor.extract("docs/x.yaml", yaml);
         assert_eq!(ex.nodes.len(), 1);
         assert_eq!(ex.nodes[0].kind, NodeKind::File);
         assert!(ex.edges.is_empty());
@@ -154,7 +136,7 @@ mod tests {
     #[test]
     fn a_row_with_no_statement_field_is_kept_with_an_empty_label() {
         let yaml = "invariants:\n  - id: INV-A\n";
-        let ex = extractor().extract("docs/x.yaml", yaml);
+        let ex = RegistryExtractor.extract("docs/x.yaml", yaml);
         let n = ex.nodes.iter().find(|n| n.id == "INV-A").unwrap();
         assert_eq!(n.label, "");
     }
@@ -164,7 +146,7 @@ mod tests {
     #[test]
     fn a_single_malformed_row_drops_every_row_in_the_registry_not_just_itself() {
         let yaml = "invariants:\n  - id: INV-A\n    statement: \"**A.**\"\n  - statement: \"**no id.**\"\n  - id: INV-C\n    statement: \"**C.**\"\n";
-        let ex = extractor().extract("docs/x.yaml", yaml);
+        let ex = RegistryExtractor.extract("docs/x.yaml", yaml);
         assert_eq!(ex.nodes.len(), 1);
         assert_eq!(ex.nodes[0].kind, NodeKind::File);
     }
@@ -174,32 +156,34 @@ mod tests {
     #[test]
     fn duplicate_ids_in_the_registry_produce_a_node_and_declares_edge_per_row() {
         let yaml = "invariants:\n  - id: INV-DUP\n    statement: \"**First.**\"\n  - id: INV-DUP\n    statement: \"**Second.**\"\n";
-        let ex = extractor().extract("docs/x.yaml", yaml);
+        let ex = RegistryExtractor.extract("docs/x.yaml", yaml);
         assert_eq!(ex.nodes.iter().filter(|n| n.id == "INV-DUP").count(), 2);
         assert_eq!(ex.edges.iter().filter(|e| e.target == "INV-DUP" && e.kind == EdgeKind::Declares).count(), 2);
     }
 
-    // The row's own id is never checked against `id_families` — only ids found inside `basis`
-    // go through the `IdMatcher`, so an unconfigured family on the row itself passes straight through.
+    // A row's own id is a definition whatever prefix it is written in — the node is declared from
+    // the row, not looked up — and only the citations inside `basis` are read through the grammar.
     #[test]
-    fn a_row_with_an_unconfigured_id_family_is_still_extracted_as_an_invariant() {
-        let yaml = "invariants:\n  - id: FR-X-1\n    statement: \"**Not a configured family.**\"\n";
-        let ex = extractor().extract("docs/x.yaml", yaml);
+    fn a_row_declares_its_invariant_whatever_prefix_the_id_is_written_in() {
+        let yaml = "invariants:\n  - id: FR-X-1\n    statement: \"**A prefix no other line defines.**\"\n";
+        let ex = RegistryExtractor.extract("docs/x.yaml", yaml);
         let n = ex.nodes.iter().find(|n| n.id == "FR-X-1").unwrap();
         assert_eq!(n.kind, NodeKind::Invariant);
     }
 
+    // Whether `FR-X` is a family is the graph's question, asked after every file is read, so the
+    // citation is extracted here and sorted to its side of the line by `Graph::settle`.
     #[test]
-    fn a_basis_reference_to_an_unconfigured_family_produces_no_references_edge() {
+    fn a_basis_reference_to_a_prefix_nothing_defines_is_still_an_edge() {
         let yaml = "invariants:\n  - id: INV-A\n    statement: \"**A.**\"\n    basis: \"по FR-X-1\"\n";
-        let ex = extractor().extract("docs/x.yaml", yaml);
-        assert!(!ex.edges.iter().any(|e| e.source == "INV-A" && e.kind == EdgeKind::References));
+        let ex = RegistryExtractor.extract("docs/x.yaml", yaml);
+        assert!(ex.edges.iter().any(|e| e.source == "INV-A" && e.target == "FR-X-1" && e.kind == EdgeKind::References));
     }
 
     #[test]
-    fn a_basis_string_with_multiple_configured_ids_produces_an_edge_for_each() {
+    fn a_basis_string_with_several_ids_produces_an_edge_for_each() {
         let yaml = "invariants:\n  - id: INV-A\n    statement: \"**A.**\"\n    basis: \"по FR-WEB-1 и FR-WEB-2\"\n";
-        let ex = extractor().extract("docs/x.yaml", yaml);
+        let ex = RegistryExtractor.extract("docs/x.yaml", yaml);
         let refs: Vec<&str> = ex.edges.iter().filter(|e| e.source == "INV-A" && e.kind == EdgeKind::References).map(|e| e.target.as_str()).collect();
         assert_eq!(refs, ["FR-WEB-1", "FR-WEB-2"]);
     }

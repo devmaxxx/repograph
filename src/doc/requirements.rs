@@ -1,4 +1,3 @@
-use crate::ids::IdMatcher;
 use crate::model::{EdgeKind, Extraction, NodeKind};
 use regex::Regex;
 use std::sync::OnceLock;
@@ -29,17 +28,19 @@ fn kind_for(id: &str) -> NodeKind {
 }
 
 pub struct RequirementScanner {
-    ids: IdMatcher,
     head: Regex,
     entity: Regex,
     task: Regex,
 }
 
+impl Default for RequirementScanner {
+    fn default() -> Self { Self::new() }
+}
+
 impl RequirementScanner {
-    pub fn new(ids: IdMatcher) -> RequirementScanner {
-        let id = ids.single_pattern();
+    pub fn new() -> RequirementScanner {
+        let id = crate::ids::generic().single_pattern();
         RequirementScanner {
-            ids,
             // The title stops where a bold head's `**` closes (136 heads on the bench corpus
             // carry references after it — that tail opens the body, so no word is lost to
             // retrieval) and before a modality hung off a dash (71 heads write
@@ -87,13 +88,13 @@ impl RequirementScanner {
             // inside it, so the whole head line is scanned, not the title alone.
             for cap in self.entity.captures_iter(lines[*start]) {
                 let name = &cap[1];
-                if self.ids.is_id(name) { continue; }
+                if crate::ids::generic().is_id(name) { continue; }
                 let eid = format!("entity:{name}");
                 ex.node(NodeKind::Entity, &eid, name, "", rel, *start as u32 + 1);
                 ex.edge(id, &eid, EdgeKind::References, "title", rel);
             }
             let scope = lines[*start..end].join("\n");
-            for hit in self.ids.find_all(&scope) {
+            for hit in crate::ids::generic().find_all(&scope) {
                 if hit.id != *id {
                     ex.edge(id, &hit.id, EdgeKind::References, "body", rel);
                 }
@@ -110,14 +111,14 @@ impl RequirementScanner {
                     let tid = format!("{ms}/{}", &c[1]);
                     ex.node(NodeKind::Task, &tid, c[2].trim(), "", rel, i as u32 + 1);
                     ex.edge(ms, &tid, EdgeKind::Declares, "", rel);
-                    for hit in self.ids.find_all(&c[2]) {
+                    for hit in crate::ids::generic().find_all(&c[2]) {
                         ex.edge(&tid, &hit.id, EdgeKind::Implements, "task", rel);
                     }
                     continue;
                 }
             }
             let source = owner.as_deref().unwrap_or(&file_id);
-            for hit in self.ids.find_all(line) {
+            for hit in crate::ids::generic().find_all(line) {
                 if Some(hit.id.as_str()) != owner.as_deref() {
                     ex.edge(source, &hit.id, EdgeKind::References, "prose", rel);
                 }
@@ -149,7 +150,7 @@ mod tests {
     use super::*;
 
     fn scan(rel: &str, text: &str) -> Extraction {
-        RequirementScanner::new(crate::families::test_matcher()).scan(rel, text)
+        RequirementScanner::new().scan(rel, text)
     }
 
     fn fixture(name: &str) -> String {
@@ -230,6 +231,14 @@ mod tests {
         let ex = scan("docs/06.md", &fixture("06-payments.md"));
         let n = ex.nodes.iter().find(|n| n.id == "FR-PAY-31").unwrap();
         assert_eq!((n.label.as_str(), n.body.as_str()), ("Без штрафа возврат в течение суток.", ""));
+    }
+
+    #[test]
+    fn a_citation_of_a_prefix_nothing_defines_is_extracted_like_any_other() {
+        // Whether `ISO` is a family is decided on the graph, after every file is read; the
+        // extractor's job is to miss nothing.
+        let ex = scan("docs/x.md", "**FR-PAY-22 · MUST · a**\n\nдаты по ISO-8601\n");
+        assert!(has(&ex, "FR-PAY-22", "ISO-8601", EdgeKind::References));
     }
 
     #[test]

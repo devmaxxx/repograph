@@ -42,6 +42,9 @@ SUMMARY = re.compile(
     r"^((?:\S+ \d+/\d+\s+)+)p90 (\d+) tok\s+dense=(true|false)\s+enriched=(true|false) "
     r"\((\d+)/(\d+) nodes\)(.*)$"
 )
+# `anchors  <kind> <reached>/<want> …` beneath the summary, on a line of its own so that the
+# summary's own regex -- and every transcript recorded through it -- did not have to change.
+ANCHORS = re.compile(r"^anchors\s+((?:\S+ \d+/\d+\s*)+)$")
 KIND = re.compile(r"(\S+) (\d+)/(\d+)")
 RERANK = re.compile(r"rerank(_local)?=true depth=(\d+)")
 SUITE = re.compile(r"suite=(\S+) gated=(true|false)")
@@ -112,8 +115,24 @@ def parse_bench(text):
     readings treat as a miss. The summary's per-kind counts stay what `bench` printed: cases
     with at least one anchor reached, the developer's entry point.
     """
+    raw = text.splitlines()
+    lines = [l.strip() for l in raw]
+    tail = [(i, SUMMARY.match(l)) for i, l in enumerate(lines)]
+    tail = [(i, m) for i, m in tail if m]
+    if not tail:
+        raise SystemExit("no summary line in the transcript -- did the run reach the end?")
+    at, g = tail[-1]
+    # Only the run this row records, not the whole file: `--repeat` prints the suite once per run
+    # into one transcript, and a case key is the kind and the anchor, so read over every run the
+    # second run's copy of a case lands under the `#2` suffix that exists for two questions about
+    # one place *inside* one run. The row would carry N copies of every case, the next single run
+    # of the arm would read `the case set changed`, and `weak`/`flaky` would count keys no suite
+    # has -- against a history that is append-only and cannot be corrected afterwards. The counts
+    # and the anchors below are the last run's, so its cases are the last run's too: the lines
+    # between the summary before it and its own.
+    start = tail[-2][0] + 1 if len(tail) > 1 else 0
     cases, tokens = {}, {}
-    for line in text.splitlines():
+    for line in raw[start:at]:
         m = CASE.match(line.rstrip())
         if m:
             kind, expect, verdict, reached, want, tok, _q = m.groups()
@@ -132,17 +151,22 @@ def parse_bench(text):
             else:
                 cases[key] = 1.0 if verdict == "HIT" else 0.0
             tokens[key] = int(tok)
-    tail = [SUMMARY.match(l.strip()) for l in text.splitlines()]
-    tail = [m for m in tail if m]
-    if not tail:
-        raise SystemExit("no summary line in the transcript -- did the run reach the end?")
-    g = tail[-1]
     dense, enriched = g.group(3) == "true", g.group(4) == "true"
     rr = RERANK.search(g.group(7) or "")
     suite = SUITE.search(g.group(7) or "")
     model = MODEL.search(g.group(7) or "")
     metrics = {kind: [int(h), int(n)] for kind, h, n in KIND.findall(g.group(1))}
     metrics["p90_tokens"] = int(g.group(2))
+    # The anchors line that follows the summary this row records, not the next one anywhere in the
+    # file: `--repeat` prints one under every run and one more under the median, and the median's
+    # counts are on a line no summary regex matches. `bench` prints this line directly beneath the
+    # summary, so only the first non-blank line after it can be this run's -- reading on to the end
+    # of the file would pair the median's anchors with the last run's counts the moment this run's
+    # own line is missing or garbled (a stderr write landing on it under `2>&1`), and the row would
+    # say so nowhere. No anchors is a reading the row can hold; another run's are not.
+    nxt = next((l for l in lines[at + 1:] if l), "")
+    anchors = ANCHORS.match(nxt)
+    anchor_totals = {kind: [int(r), int(w)] for kind, r, w in KIND.findall(anchors.group(1))} if anchors else None
     return {
         "dense": dense,
         "enriched": enriched,
@@ -150,6 +174,7 @@ def parse_bench(text):
         "rerank": ("local" if rr.group(1) else "command") if rr else None,
         "depth": int(rr.group(2)) if rr else None,
         "metrics": metrics,
+        "anchors": anchor_totals,
         # A transcript from before the suite field is the recorded suite, which was the only
         # one `bench` would run, and it was graded whenever it had the three graded kinds.
         "suite": suite.group(1) if suite else "built-in",
@@ -220,6 +245,7 @@ def build_row(parsed, corpus, corpus_commit, note, tool_commit, dirty, floor_tab
         "corpus_commit": corpus_commit,
         "coverage": parsed["coverage"],
         "metrics": parsed["metrics"],
+        "anchors": parsed.get("anchors"),
         "floors": floor,
         "headroom": room,
         "green": all(v >= 0 for v in room.values()) if gated else None,
@@ -505,6 +531,13 @@ def metric_moves(prev, latest):
             continue
         fmt = (lambda x: f"{x[0]}/{x[1]}") if isinstance(v, list) else str
         out.append((k, fmt(old), fmt(v)))
+    # An answer that keeps its verdict and loses two of its three anchors moves no count above;
+    # the anchor totals are the one place that move is visible, so they are reported beside it.
+    for k, v in (latest.get("anchors") or {}).items():
+        old = (prev.get("anchors") or {}).get(k)
+        if old is None or old == v:
+            continue
+        out.append((f"anchors/{k}", f"{old[0]}/{old[1]}", f"{v[0]}/{v[1]}"))
     return out
 
 

@@ -76,6 +76,12 @@ impl Extraction {
 pub struct Graph {
     pub nodes: BTreeMap<String, Node>,
     pub edges: BTreeSet<Edge>,
+    /// Citations of ids in a family no definition declares — `ISO-8601`, a ticket number, a
+    /// prefix the corpus cites and never defines. Kept apart so that no reader follows them and
+    /// no count reports them, and kept at all so that the day a line defines the family they
+    /// are released by `settle` without a document being re-read. A store written before this
+    /// field existed reads as holding none.
+    #[serde(default)] pub pending: BTreeSet<Edge>,
 }
 
 impl Graph {
@@ -91,8 +97,26 @@ impl Graph {
         self.edges.extend(ex.edges);
     }
 
+    /// Every edge sorted to the side of the line its target's family is on: cited-and-declared
+    /// in `edges`, cited-and-not in `pending`. Run once after a batch of `apply`s, because only
+    /// then is it known which families the batch declared — a file citing `OQ-25` may be read
+    /// before the file that defines `OQ-1`.
+    pub fn settle(&mut self) {
+        let (ids, milestones) = crate::families::of_graph(self);
+        let admitted = |target: &str| match crate::families::classify(target) {
+            Some(crate::families::Family::Id(f)) => ids.contains_key(f),
+            Some(crate::families::Family::Milestone(f)) => milestones.contains_key(f),
+            None => true,
+        };
+        let all: Vec<Edge> = std::mem::take(&mut self.edges).into_iter().chain(std::mem::take(&mut self.pending)).collect();
+        for e in all {
+            if admitted(&e.target) { self.edges.insert(e); } else { self.pending.insert(e); }
+        }
+    }
+
     pub fn remove_file(&mut self, rel: &str) {
         self.edges.retain(|e| e.file != rel);
+        self.pending.retain(|e| e.file != rel);
         let mut gone = Vec::new();
         for (id, n) in self.nodes.iter_mut() {
             n.files.remove(rel);
@@ -133,6 +157,13 @@ mod tests {
         e
     }
 
+    fn settled(files: &[&str]) -> Graph {
+        let mut g = Graph::default();
+        for f in files { g.apply(ex(f)); }
+        g.settle();
+        g
+    }
+
     #[test]
     fn apply_then_remove_file_restores_empty_graph() {
         let mut g = Graph::default();
@@ -140,7 +171,56 @@ mod tests {
         assert_eq!(g.nodes.len(), 2);
         assert_eq!(g.edges.len(), 2);
         g.remove_file("docs/06.md");
-        assert!(g.nodes.is_empty() && g.edges.is_empty());
+        assert!(g.nodes.is_empty() && g.edges.is_empty() && g.pending.is_empty());
+    }
+
+    #[test]
+    fn a_citation_of_a_family_no_node_declares_is_held_aside() {
+        let g = settled(&["docs/06.md"]);
+        // `N-151` is cited and no `N-…` node exists: the edge is kept, and kept out of sight.
+        assert_eq!(g.edges.len(), 1, "{:?}", g.edges);
+        assert_eq!(g.pending.iter().map(|e| e.target.as_str()).collect::<Vec<_>>(), vec!["N-151"]);
+        assert!(g.dangling().is_empty(), "held-aside edges are not dangling: nothing a reader follows points nowhere");
+    }
+
+    #[test]
+    fn a_family_that_appears_releases_what_was_held_without_a_re_read() {
+        let mut g = settled(&["docs/06.md"]);
+        let mut e = Extraction::default();
+        e.node(NodeKind::Requirement, "N-001", "first N", "", "docs/n.md", 1);
+        g.apply(e);
+        g.settle();
+        assert!(g.pending.is_empty());
+        assert!(g.edges.iter().any(|e| e.target == "N-151"), "released into the visible graph");
+        // Still dangling — `N-151` itself is not defined — which is now a gap in a declared family.
+        assert_eq!(g.dangling().len(), 1);
+    }
+
+    #[test]
+    fn a_family_that_vanishes_takes_its_citations_back_out_of_sight() {
+        let mut g = settled(&["docs/06.md"]);
+        let mut e = Extraction::default();
+        e.node(NodeKind::Requirement, "N-001", "first N", "", "docs/n.md", 1);
+        g.apply(e);
+        g.settle();
+        g.remove_file("docs/n.md");
+        g.settle();
+        assert_eq!(g.pending.len(), 1);
+        assert!(!g.edges.iter().any(|e| e.target == "N-151"));
+    }
+
+    #[test]
+    fn removing_a_file_drops_the_edges_it_held_aside_too() {
+        let mut g = settled(&["docs/06.md", "docs/07.md"]);
+        assert_eq!(g.pending.len(), 2);
+        g.remove_file("docs/06.md");
+        assert_eq!(g.pending.iter().map(|e| e.file.as_str()).collect::<Vec<_>>(), vec!["docs/07.md"]);
+    }
+
+    #[test]
+    fn a_target_that_is_not_an_id_is_never_held_aside() {
+        let g = settled(&["docs/06.md"]);
+        assert!(g.edges.iter().any(|e| e.target == "entity:CancellationPolicy"));
     }
 
     #[test]

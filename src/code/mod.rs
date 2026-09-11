@@ -3,17 +3,15 @@ pub mod idrefs;
 pub mod imports;
 pub mod symbols;
 
-use crate::ids::IdMatcher;
 use crate::model::{Extraction, Extractor};
 
 pub struct CodeExtractor {
     symbols: symbols::SymbolScanner,
-    ids: IdMatcher,
 }
 
 impl CodeExtractor {
-    pub fn new(resolver: imports::Resolver, ids: IdMatcher) -> CodeExtractor {
-        CodeExtractor { symbols: symbols::SymbolScanner::new(resolver), ids }
+    pub fn new(resolver: imports::Resolver) -> CodeExtractor {
+        CodeExtractor { symbols: symbols::SymbolScanner::new(resolver) }
     }
 }
 
@@ -28,7 +26,7 @@ impl Extractor for CodeExtractor {
             .map(str::to_string)
             .collect();
         calls::scan(self.symbols.resolver(), rel, text, &locals, &mut ex);
-        idrefs::scan(&self.ids, rel, text, &mut ex);
+        idrefs::scan(rel, text, &mut ex);
         // Overloads, a getter/setter pair and repeated decorators name one symbol each.
         let mut seen = std::collections::HashSet::new();
         ex.nodes.retain(|n| seen.insert(n.id.clone()));
