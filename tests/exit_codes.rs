@@ -23,8 +23,9 @@ fn out(out: &Output) -> String { String::from_utf8_lossy(&out.stdout).into_owned
 
 /// The path an `anyhow` error takes: `main` prints "Error: …" and exits 1. A verdict is not that,
 /// so the assertion on a verdict's stderr is that it is *not* this — which stays true however the
-/// sentence itself is reworded.
-fn is_anyhow_error(text: &str) -> bool { text.starts_with("Error:") }
+/// sentence itself is reworded. Any line of it, not the first: a command that logged a line before
+/// it failed would have hidden the prefix behind the log and read as a verdict.
+fn is_anyhow_error(text: &str) -> bool { text.lines().any(|l| l.starts_with("Error:")) }
 
 /// Two top-level functions, one calling the other: a call path exists one way round and not the
 /// other, which is the pair `trace` needs to answer and to fail to answer. A method reaching
@@ -69,6 +70,9 @@ fn a_trace_with_no_path_is_a_verdict_and_an_unknown_symbol_is_a_failure() {
     let none = run(dir.path(), &["trace", "write", "refund"]);
     assert_eq!(code(&none), Some(3), "a question that was answered: {}", err(&none));
     assert!(!is_anyhow_error(&err(&none)), "a verdict, not a failure: {}", err(&none));
+    // The verdict is spoken as well as exited: a silent 3 leaves a person at a prompt with no
+    // answer. The words are a message no script reads, so what is pinned is that there are some.
+    assert!(!err(&none).trim().is_empty(), "the verdict says something: {:?}", err(&none));
 
     // Either end of the pair: the symbol that is not there is the one thing the command could not
     // resolve, and which side it stands on does not change what it could not do.
@@ -101,6 +105,9 @@ fn a_bench_that_missed_its_floors_is_a_verdict_and_an_empty_store_is_a_failure()
     // both missed answer with the same status as one.
     let twice = run(dir.path(), &["bench", "--cases", cases, "--repeat", "2"]);
     assert_eq!(code(&twice), Some(3), "both runs answered and both missed: {}", err(&twice));
+    // And both of them ran: a `--repeat` that measured once and exited 3 on the first miss would
+    // pin the same status off half the work.
+    assert!(out(&twice).contains("median of 2"), "two runs were taken and summarised: {}", out(&twice));
 
     let unbuilt = tempfile::tempdir().unwrap();
     let empty = run(unbuilt.path(), &["bench", "--cases", cases]);
@@ -123,6 +130,9 @@ fn a_case_file_of_another_shape_is_reported_and_not_graded() {
     let ungated = run(dir.path(), &["bench", "--cases", path.to_str().unwrap()]);
     assert_eq!(code(&ungated), Some(0), "measured, not graded: {}", err(&ungated));
     assert!(out(&ungated).contains("gated=false"), "and it says so: {}", out(&ungated));
+    // Reported means measured: the five cases ran and every one of them missed, which is what an
+    // ungated 0 has to be distinguishable from a suite that never got as far as running.
+    assert!(out(&ungated).contains("keyword 0/5"), "all five were measured: {}", out(&ungated));
 }
 
 /// The status a verdict may not take. `clap` answers a mistyped flag with 2 before the command
@@ -137,18 +147,31 @@ fn a_usage_error_exits_two_and_is_therefore_not_a_verdict() {
     assert_eq!(out(&usage), "", "nothing was measured: {}", out(&usage));
 }
 
+/// Cargo runs this file's tests on one process, so a test that writes the environment writes it
+/// for every other one. The idiom is `src/config.rs`'s — a lock taken before the mutation, and a
+/// Safety note saying why the mutation is sound — so the crate has one of them and not two.
+static ENV: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 /// What a shell that has been running the bench kit exports, and what a test may not inherit from
 /// it. `REPOGRAPH_BENCH_REPO` sends `bench` to another repository: the case below would read an
 /// empty directory, fail on the missing graph and exit 1 — a verdict test failing as though the
 /// verdict had gone, for a reason nothing in the run names.
 #[test]
 fn the_bench_kits_variables_do_not_reach_the_child() {
+    let _g = ENV.lock().unwrap_or_else(|e| e.into_inner());
     let dir = built();
     let elsewhere = tempfile::tempdir().unwrap();
-    std::env::set_var("REPOGRAPH_BENCH_REPO", elsewhere.path());
-    std::env::set_var("REPOGRAPH_EMBED_MODEL", "intfloat/multilingual-e5-large");
+    // Safety: the lock above makes this the only thread touching the environment, and no reader
+    // races it — every spawn in this crate goes through `common::run`, which removes both
+    // variables from the child whatever the parent holds.
+    unsafe {
+        std::env::set_var("REPOGRAPH_BENCH_REPO", elsewhere.path());
+        std::env::set_var("REPOGRAPH_EMBED_MODEL", "intfloat/multilingual-e5-large");
+    }
     let missed = run(dir.path(), &["bench", "--cases", cases().to_str().unwrap()]);
-    std::env::remove_var("REPOGRAPH_BENCH_REPO");
-    std::env::remove_var("REPOGRAPH_EMBED_MODEL");
+    unsafe {
+        std::env::remove_var("REPOGRAPH_BENCH_REPO");
+        std::env::remove_var("REPOGRAPH_EMBED_MODEL");
+    }
     assert_eq!(code(&missed), Some(3), "the child read the repository it was given: {}", err(&missed));
 }

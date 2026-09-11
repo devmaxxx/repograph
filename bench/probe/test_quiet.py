@@ -2,6 +2,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import unittest
 from pathlib import Path
 
@@ -72,7 +73,11 @@ class Rules(unittest.TestCase):
         self.assertIn(str(os.getpid()), sourced("ancestor_pids").split())
 
 
-@unittest.skipUnless(os.name == "posix", "bash, ps and pmset: the macOS kit's own platform")
+# The four readings `main` takes off the machine — `vm_stat`, `sysctl vm.swapusage`, `pmset -g
+# batt` and `top -l 1` — are Darwin's, and the kit measures on Darwin. The classes that source a
+# function and feed it rows need none of them and run wherever bash does; the one that runs the
+# script whole needs all four, so on another platform it is skipped rather than red.
+@unittest.skipUnless(sys.platform == "darwin", "vm_stat, sysctl vm.swapusage, pmset and `top -l`")
 class WholeScript(unittest.TestCase):
     """The script over this machine's own process table. The verdict is not asserted — a machine
     that is loud for other reasons still fails the other three clauses — only that the line says

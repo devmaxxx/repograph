@@ -145,12 +145,11 @@ fn a_corpus_that_defines_no_ids_reads_as_one() {
 
     // An id-shaped word that is no node is a search term, not an exact seed — and on a corpus
     // whose only node is the file itself there is nothing for the term to seat, so the answer is
-    // empty rather than an answer about `ISO-8601`. Both halves are the contract: the command
-    // succeeds, and no line of what it printed names the word as something it found.
+    // empty rather than an answer about `ISO-8601`. The contract is both halves of that: the
+    // command succeeds, and it prints nothing.
     let (ok, out, err) = repograph(repo, &["ask", "ISO-8601"]);
     assert!(ok, "{out}{err}");
     assert_eq!(out.trim(), "", "nothing to seat on a corpus of file nodes: {out}");
-    assert!(!out.lines().any(|l| l.contains("ISO-8601")), "{out}");
 }
 
 /// One id defined in two documents: the family has one node and two definitions, and the report

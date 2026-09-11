@@ -159,8 +159,9 @@ def medians(lines, logdir=None):
         # is called. Reading it as clean would drop the claim; reading it as a verdict would invent
         # a status the run never had.
         if rc == 0.0 and claimed:
-            raise SystemExit(f"{m.group(1)}: a run carries floors_missed=1 beside rc=0 — the field "
-                             "contradicts the status, and a row that met its floors exits 0")
+            raise SystemExit(f"{m.group(1)}-{m.group(2)}: a run carries floors_missed=1 beside rc=0 — "
+                             "the field contradicts the status, and a row that met its floors exits 0"
+                             f"{stderr_tail(logdir, f'{m.group(1)}-{m.group(2)}')}")
         if rc != 0.0 and not answered:
             raise SystemExit(f"{m.group(1)}: a run exited {int(f['rc'])} — that row measured a failure, "
                              f"not a reader{stderr_tail(logdir, f'{m.group(1)}-{m.group(2)}')}")
@@ -202,8 +203,29 @@ def medians(lines, logdir=None):
 # were written before either — a reference that predates the column is read without it rather than
 # refused, and a comparison against one prints `n/a` in that column.
 MEDIAN_LINE = re.compile(
-    r"^(\S+)\s+(wall=[0-9.]+ maxrss=[0-9.]+ peak_cpu=[0-9.]+%?(?: avg_cpu=[0-9.]+%)? n=\d+"
+    r"^(\S+)\s+(wall=[0-9.]+ maxrss=[0-9.]+ peak_cpu=[0-9.]+%?(?: avg_cpu=[0-9.]+%?)? n=\d+"
     r"(?: floors_missed=1)?(?: verdict=1)?)$")
+# The average's suffix is what says which unit it was written in, so it is read off the line and
+# not thrown away with the rest of the punctuation the way `FIELD` reads every other number.
+AVG_CPU = re.compile(r"avg_cpu=([0-9.]+)(%?)")
+# Every reading this file parses — a median or a run — carries a `wall=`, and none of the prose
+# that travels in the same files does: `readers.sh` heads `medians.txt` with the embedder line,
+# `quiet.sh` heads a summary with its own, and `medians` prints the floor and verdict notes under
+# the rows. So the field is what separates a sentence from a row whose spelling drifted.
+ROW_FIELD = re.compile(r"\bwall=")
+
+
+def read_avg_cpu(text):
+    """The average CPU off a medians line, in cores, or `None` where the line predates the column.
+
+    `NN%` is percent of one core — the unit `medians` prints, shared with the sampled peak — and
+    divides back into cores; a bare number is already cores, which is how `row_metrics` holds it
+    and how a reference written by hand off this file's own values spells it.
+    """
+    m = AVG_CPU.search(text)
+    if not m:
+        return None
+    return float(m.group(1)) / 100 if m.group(2) else float(m.group(1))
 
 
 def read_lines(path):
@@ -220,15 +242,30 @@ def read_lines(path):
 def read_medians(path):
     lines = read_lines(path)
     out = {}
+    drifted = None
     for line in lines:
-        m = MEDIAN_LINE.match(line.strip())
+        line = line.strip()
+        if not line:
+            continue
+        m = MEDIAN_LINE.match(line)
         if m:
             f = fields(m.group(2))
-            avg = f["avg_cpu"] / 100 if "avg_cpu" in f else None
-            out[m.group(1)] = row_metrics(f["wall"], f["maxrss"], f["peak_cpu"], avg, int(f["n"]),
+            out[m.group(1)] = row_metrics(f["wall"], f["maxrss"], f["peak_cpu"],
+                                          read_avg_cpu(m.group(2)), int(f["n"]),
                                           floors_missed=f.get("floors_missed", 0.0),
                                           verdict=f.get("verdict", 0.0))
+        # A row whose spelling drifted — a field reworded, a unit dropped, a column added — reads
+        # as prose and is skipped, and a three-row file arrives as two rows with nothing said. Both
+        # sides of a control drift together, so the comparison that follows is green over a suite
+        # quietly short of the rows it was written to judge. Refused instead, by the one line.
+        elif drifted is None and ROW_FIELD.search(line) and not RUN.match(line):
+            drifted = line
     if out:
+        if drifted:
+            raise SystemExit(f"{path}: {drifted!r} carries a reading and reads as neither a median "
+                             "(`row wall=… maxrss=… peak_cpu=…% avg_cpu=…% n=…`) nor a run "
+                             "(`row-1  wall=…s user=…s sys=…s maxrss=…GB … rc=0`) — a file judged "
+                             "without it would be judged over fewer rows than it holds")
         return out
     # A summary file's rows have their transcripts beside them, and a refusal that can quote one
     # says more than the row's name — which is the whole of what a reader has to go on.
@@ -269,6 +306,11 @@ def enough_runs(rows, min_n, side):
                              "a median of that many runs is not a reading these bars can judge")
 
 
+# What `control` hands `print_table` and what a test unpacks. `avg` is the reported spread and is
+# not behind `ok`, which is the whole of what this table's two clauses judge.
+Control = namedtuple("Control", "row wall rss avg ok")
+
+
 def control(a, b, wall_bar=WALL_BAR, rss_bar=RSS_BAR, min_n=MIN_N):
     """The same binary twice: every row's spread against the bars it will later judge with.
 
@@ -287,11 +329,14 @@ def control(a, b, wall_bar=WALL_BAR, rss_bar=RSS_BAR, min_n=MIN_N):
             raise SystemExit(f"{row}: present in one control run and not the other — the suites differ")
         w = round(spread(a[row]["wall"], b[row]["wall"]), 4)
         r = round(spread(a[row]["maxrss"], b[row]["maxrss"]), 4)
-        # `None` where either run predates the column, and where the first run's average is a zero
-        # a wall clock rounded away: a spread taken against one of those is a percentage of nothing.
+        # `None` where either run predates the column, and where either average is a zero a wall
+        # clock rounded away: a spread between one of those and a reading is no reading of the
+        # column's repeatability whichever side it fell on, and a control is the one comparison
+        # whose two sides are interchangeable — `control A B` and `control B A` are the same run
+        # read in the other order and must say the same thing about it.
         avg, other = a[row]["avg_cpu"], b[row]["avg_cpu"]
-        c = round(spread(avg, other), 4) if avg and other is not None else None
-        out.append((row, w, r, c, w <= wall_bar and r <= rss_bar))
+        c = round(spread(avg, other), 4) if avg and other else None
+        out.append(Control(row, w, r, c, w <= wall_bar and r <= rss_bar))
     return out
 
 

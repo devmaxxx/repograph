@@ -77,6 +77,41 @@ class Medians(unittest.TestCase):
             medians.write_text(out.getvalue())
             self.assertEqual(judge.read_medians(str(medians))["ask-fused"]["avg_cpu"], 0.98)
 
+    def test_the_average_reads_the_same_cores_written_as_a_percent_or_as_a_bare_number(self):
+        # `medians` prints percent of one core so both CPU columns share a unit, but a reference
+        # kept by hand carries the cores `row_metrics` holds. Two spellings of one reading.
+        with tempfile.TemporaryDirectory() as d:
+            pct, bare = Path(d, "pct.txt"), Path(d, "bare.txt")
+            pct.write_text("ask-fused wall=0.61 maxrss=1.55 peak_cpu=120.0% avg_cpu=98% n=5\n")
+            bare.write_text("ask-fused wall=0.61 maxrss=1.55 peak_cpu=120.0% avg_cpu=0.98 n=5\n")
+            self.assertEqual(judge.read_medians(str(pct))["ask-fused"]["avg_cpu"], 0.98)
+            self.assertEqual(judge.read_medians(str(bare))["ask-fused"]["avg_cpu"], 0.98)
+
+    def test_a_row_whose_spelling_drifted_is_refused_and_not_dropped_from_the_file(self):
+        # Skipping it read three rows as two and judged the shorter suite green — and both sides of
+        # a control drift together, so nothing downstream notices the row is gone.
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d, "medians.txt")
+            p.write_text("embedder: REPOGRAPH_EMBED_MODEL=small\n"
+                         "ask-fused wall=0.61 maxrss=1.55 peak_cpu=120.0% avg_cpu=98% n=5\n"
+                         "impact wall=0.04 maxrss=0.05 peak_cpu=0.0% cpu=75% n=5\n"
+                         "dump10 wall=0.70 maxrss=1.36 peak_cpu=100.0% avg_cpu=90% n=5\n")
+            with self.assertRaises(SystemExit) as e:
+                judge.read_medians(str(p))
+            self.assertIn(str(p), str(e.exception))
+            self.assertIn("impact wall=0.04", str(e.exception))
+
+    def test_the_prose_a_medians_file_travels_with_is_not_read_as_a_drifted_row(self):
+        # `readers.sh` heads the file with the embedder line and `medians` prints its notes under
+        # the rows; none of them is a reading, and the file is the one copied out of every run.
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d, "medians.txt")
+            p.write_text("embedder: REPOGRAPH_EMBED_MODEL=intfloat/multilingual-e5-large\n"
+                         "quiet: idle=96% load1=1.2 avail=12.0GB\n"
+                         "trace wall=0.42 maxrss=0.31 peak_cpu=0.0% avg_cpu=83% n=5 verdict=1\n"
+                         + judge.verdict_note(["trace"]) + "\n")
+            self.assertEqual(judge.read_medians(str(p))["trace"]["n"], 5)
+
     def test_a_summary_file_of_runs_reads_as_medians_too(self):
         import os
         import tempfile
@@ -233,6 +268,20 @@ class FloorVerdicts(unittest.TestCase):
             self.assertIn("floors_missed", str(e.exception))
             self.assertIn("rc=0", str(e.exception))
 
+    def test_the_contradiction_names_the_run_and_quotes_what_it_said(self):
+        # The sibling refusal a line above sends its reader to the row's own transcript; this one
+        # left them with a row name and five runs to guess between.
+        with tempfile.TemporaryDirectory() as d:
+            line = FLOOR_LINE.replace("bench-dense-1", "bench-dense-4").replace(" rc=3 ", " rc=0 ")
+            Path(d, "summary.txt").write_text(line + "\n")
+            Path(d, "bench-dense-4.time").write_text(TIME_FILE)
+            with self.assertRaises(SystemExit) as e:
+                judge.read_medians(str(Path(d, "summary.txt")))
+            msg = str(e.exception)
+            self.assertIn("bench-dense-4", msg)
+            self.assertIn("graph is empty at /Users/max/bench/beauty-crm-test", msg)
+            self.assertNotIn("maximum resident set size", msg)
+
     def test_a_verdict_on_a_row_with_no_floors_is_kept_and_named(self):
         # The row is a reading — it traversed for its wall clock and then said no — but it is a
         # reading of an answer, and a bar set on it is set on the answer. So it is kept with a
@@ -339,8 +388,9 @@ class Control(unittest.TestCase):
     def test_the_same_binary_twice_inside_the_bars_passes(self):
         a = {"ask-fused": {"wall": 0.60, "maxrss": 1.50, "peak_cpu": 120.0, "avg_cpu": 0.98, "n": 5}}
         b = {"ask-fused": {"wall": 0.63, "maxrss": 1.55, "peak_cpu": 121.0, "avg_cpu": 0.99, "n": 5}}
-        rows = judge.control(a, b)
-        self.assertEqual(rows, [("ask-fused", 0.05, 0.0333, 0.0102, True)])
+        (r,) = judge.control(a, b)
+        self.assertEqual((r.row, r.wall, r.rss, r.avg), ("ask-fused", 0.05, 0.0333, 0.0102))
+        self.assertTrue(r.ok)
 
     def test_the_average_cpu_spread_is_reported_and_does_not_decide_the_control(self):
         # What a control is for: the same binary twice says how repeatable each column is. The
@@ -348,24 +398,33 @@ class Control(unittest.TestCase):
         # spread is printed for a reader and no verdict is taken on it until one has been read.
         a = {"impact": {"wall": 0.04, "maxrss": 0.05, "peak_cpu": 0.0, "avg_cpu": 0.75, "n": 5}}
         b = {"impact": {"wall": 0.04, "maxrss": 0.05, "peak_cpu": 0.0, "avg_cpu": 1.00, "n": 5}}
-        (row, wall, rss, avg, ok), = judge.control(a, b)
-        self.assertEqual((row, wall, rss), ("impact", 0.0, 0.0))
-        self.assertAlmostEqual(avg, 0.3333, places=4)
-        self.assertTrue(ok)
+        (r,) = judge.control(a, b)
+        self.assertEqual((r.row, r.wall, r.rss), ("impact", 0.0, 0.0))
+        self.assertAlmostEqual(r.avg, 0.3333, places=4)
+        self.assertTrue(r.ok)
 
     def test_a_control_one_side_of_which_predates_the_column_reports_no_spread(self):
         a = {"impact": {"wall": 0.04, "maxrss": 0.05, "peak_cpu": 0.0, "avg_cpu": None, "n": 5}}
         b = {"impact": {"wall": 0.04, "maxrss": 0.05, "peak_cpu": 0.0, "avg_cpu": 0.75, "n": 5}}
-        self.assertIsNone(judge.control(a, b)[0][3])
-        self.assertIsNone(judge.control(b, a)[0][3])
+        self.assertIsNone(judge.control(a, b)[0].avg)
+        self.assertIsNone(judge.control(b, a)[0].avg)
+
+    def test_a_control_reads_the_same_whichever_run_is_given_first(self):
+        # The two sides of a control are the same binary and are interchangeable; an average of
+        # zero is a wall clock that rounded away on one run, and reading it as a spread from one
+        # side and as `n/a` from the other made the order of the arguments the reading.
+        a = {"impact": {"wall": 0.04, "maxrss": 0.05, "peak_cpu": 0.0, "avg_cpu": 0.75, "n": 5}}
+        b = {"impact": {"wall": 0.04, "maxrss": 0.05, "peak_cpu": 0.0, "avg_cpu": 0.0, "n": 5}}
+        self.assertIsNone(judge.control(a, b)[0].avg)
+        self.assertIsNone(judge.control(b, a)[0].avg)
 
     def test_a_row_outside_either_bar_fails_and_names_which(self):
         a = {"dump10": {"wall": 0.70, "maxrss": 1.36, "peak_cpu": 100.0, "avg_cpu": 0.9, "n": 5}}
         b = {"dump10": {"wall": 0.90, "maxrss": 1.36, "peak_cpu": 100.0, "avg_cpu": 0.9, "n": 5}}
-        (row, wall, rss, _, ok), = judge.control(a, b)
-        self.assertFalse(ok)
-        self.assertAlmostEqual(wall, 0.2857, places=4)
-        self.assertEqual(rss, 0.0)
+        (r,) = judge.control(a, b)
+        self.assertFalse(r.ok)
+        self.assertAlmostEqual(r.wall, 0.2857, places=4)
+        self.assertEqual(r.rss, 0.0)
 
     def test_a_row_missing_from_one_side_is_reported_not_skipped(self):
         with self.assertRaises(SystemExit):

@@ -32,7 +32,17 @@ mod transport {
     pub fn accept(listener: &Listener) -> Stream { listener.accept().unwrap().0 }
 }
 
-fn repograph() -> Command { Command::new(env!("CARGO_BIN_EXE_repograph")) }
+/// Every child this file spawns, less the two variables the bench kit exports. `common::run`
+/// subtracts the same pair and says why; these tests do not go through it, because half of them
+/// spawn a copy of the binary from a path of their own — which is the case they exist for — and a
+/// shell left over from a measurement would answer them under other weights all the same.
+fn child(path: &std::path::Path) -> Command {
+    let mut c = Command::new(path);
+    c.env_remove("REPOGRAPH_BENCH_REPO").env_remove("REPOGRAPH_EMBED_MODEL");
+    c
+}
+
+fn repograph() -> Command { child(std::path::Path::new(env!("CARGO_BIN_EXE_repograph"))) }
 
 fn repo_with_docs() -> tempfile::TempDir {
     let dir = tempfile::tempdir().unwrap();
@@ -64,7 +74,7 @@ fn ask(dir: &std::path::Path, extra: &[&str], words: &[&str]) -> (String, String
 /// replace the file under a running server and still ask from the path it replaced.
 #[cfg(unix)]
 fn ask_from(bin: &std::path::Path, dir: &std::path::Path, words: &[&str]) -> (String, String) {
-    let out = Command::new(bin).args(LEXICAL).arg("--repo").arg(dir).arg("ask").args(words).output().unwrap();
+    let out = child(bin).args(LEXICAL).arg("--repo").arg(dir).arg("ask").args(words).output().unwrap();
     assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
     (String::from_utf8(out.stdout).unwrap(), String::from_utf8(out.stderr).unwrap())
 }
@@ -377,7 +387,7 @@ fn a_binary_replaced_under_a_live_server_is_another_build_and_the_client_answers
     std::fs::copy(env!("CARGO_BIN_EXE_repograph"), &path).unwrap();
     let started_as = stamp_of(&path);
     let want = ask(dir.path(), &["--no-serve"], &["штраф"]).0;
-    let mut server = Command::new(&path).args(LEXICAL).arg("--repo").arg(dir.path())
+    let mut server = child(&path).args(LEXICAL).arg("--repo").arg(dir.path())
         .args(["serve", "--every", "3600", "--idle", "60"])
         .stdout(Stdio::null()).stderr(Stdio::piped()).spawn().unwrap();
     // The one build on both ends answers over the socket, which is what makes the run below a

@@ -36,6 +36,19 @@ jobs:
       # Cyrillic path, and the transport seam each platform brings its own half of.
       - run: cargo test
 
+      # The bench kit's own tests, which no job ran: the judge that decides whether a reading is a
+      # reading, the comparison harness, and the run history. They are Python beside the shell they
+      # judge, and a laptop was the only thing that had ever run them. One platform is enough —
+      # what they test is arithmetic and parsing, not a transport seam — and it is this one because
+      # the kit measures on Darwin and nothing here should need Darwin to be read. Each suite that
+      # does shells out under a skip of its own: `/usr/bin/time -l` and `quiet.sh`'s reading of the
+      # machine are Darwin's, and the cases that need them say so and are skipped rather than red.
+      - if: runner.os == 'Linux'
+        run: |
+          python3 -m unittest discover -s bench/probe
+          python3 -m unittest discover -s bench/compare
+          python3 -m unittest discover -s bench/history
+
       # The agent hook is JavaScript and ships with the binary that installs it, so it is tested on
       # the same three platforms: a hook that throws on Windows is a hook that fires on nobody.
       - uses: actions/setup-node@v4

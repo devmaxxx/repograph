@@ -1,4 +1,5 @@
-//! The one place these tests spawn the binary.
+//! How the tests that include this module spawn the binary. Not every suite does — `serve.rs` and
+//! `users_day.rs` spawn their own, because what they measure is a binary at a path of their own.
 //!
 //! The child's environment is the parent's less the two variables the bench kit exports, because
 //! each of them redirects what a command reads. `REPOGRAPH_BENCH_REPO` moves `bench` off the
@@ -7,6 +8,10 @@
 //! model a store records, so a shell left over from a measurement answers these tests under other
 //! weights. Both are invisible in the failure they cause, which is why they are stripped here
 //! rather than documented somewhere a reader would have to find.
+
+// Compiled into a test crate per file that declares `mod common`, each of which uses the part of
+// it that it needs; anything the others use is dead code from where that one stands.
+#![allow(dead_code)]
 
 use std::path::Path;
 use std::process::{Command, Output};
