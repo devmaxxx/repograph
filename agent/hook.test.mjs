@@ -145,12 +145,17 @@ test('a stage a pipe feeds reads stdin, not the repository, and is not asked abo
     'rg --files | rg tenancy',
     'git log --oneline |& grep cancellation',
     "ls -a packages | grep -i 'lintstaged\\|lint-staged'",
+    'git log --oneline |\n  grep cancellation',
+    'git log --oneline \\\n  | grep cancellation',
+    'rg --files \\\n  | rg tenancy',
   ]) assert.equal(searchPattern('Bash', { command }), null, command);
   assert.equal(searchPattern('Bash', { command: 'rg -n "refund|cancellation" apps/ | head -5' }), 'refund|cancellation',
     'a `|` inside quotes is the pattern, and its stage reads the repository');
   assert.equal(searchPattern('Bash', { command: 'grep -R refund\\|cancellation apps' }), 'refund\\|cancellation',
     'an escaped `|` is not a pipe either');
   assert.equal(searchPattern('Bash', { command: 'cd apps && rg -n withTenant src' }), 'withTenant');
+  assert.equal(searchPattern('Bash', { command: 'rg -n \\\n  cancellation packages' }), 'cancellation',
+    'a line continuation reads as a space, so its backslash is not the pattern');
   assert.equal(searchPattern('Bash', { command: 'git diff --quiet || grep -R withTenant packages' }), 'withTenant',
     '`||` runs a second command, it does not feed one');
 
@@ -352,6 +357,17 @@ test('an edit is scored on its own file\'s callers, not on the rest of the diff'
     'the level is the file\'s own, not the CRITICAL the whole diff scored');
 });
 
+test('a caller that imports through a barrel is still a caller of the edited file', () => {
+  const via = 'sym:src/index.ts::DatabaseService.withTenant';
+  const affected = Array.from({ length: 6 }, (_, i) => ({ id: `sym:src/c${i}.ts::caller`, at: `src/c${i}.ts:1`, depth: 1, via }));
+  const touched = [{ id: 'sym:src/db.ts::DatabaseService', at: 'src/db.ts:3-40', indexed: true }];
+  const w = world({ answer: JSON.stringify({ touched, affected, files: [], risk: 'HIGH' }) });
+  assert.match(context(fire(w, edit(w, 'src', 'db.ts'))), /risk MEDIUM — 6 direct callers of DatabaseService\.withTenant in 6 files/,
+    'the barrel alias names the member, not the file it was declared in');
+  const clash = world({ answer: JSON.stringify({ touched: [...touched, { id: 'sym:src/other.ts::DatabaseService', at: 'src/other.ts:1-9', indexed: true }], affected, files: [], risk: 'HIGH' }) });
+  assert.equal(fire(clash, edit(clash, 'src', 'db.ts')), null, 'a name two files in the diff share is not attributed by name');
+});
+
 test('the level is the binary\'s: MEDIUM at 5 callers or 3 files, HIGH at 15 or 10, CRITICAL at 30 or 25', () => {
   for (const [callers, files, level] of [
     [4, 2, null], [5, 1, 'MEDIUM'], [4, 3, 'MEDIUM'],
@@ -393,7 +409,9 @@ test('every hint names the command install-agent was given, and no command can b
   const given = context(fire(w, { hook_event_name: 'SubagentStart', agent_id: 'a1' }, env, hook));
   assert.match(given, /`pnpm exec repograph ask <words>`/, 'no rule.txt beside it: the built-in copy answers');
   assert.ok(!given.includes('`repograph '), given);
-  assert.match(context(fire(w, search, env, hook)), /`pnpm exec repograph ask` for more\)$/);
+  const injected = context(fire(w, search, env, hook));
+  assert.match(injected, /^pnpm exec repograph ask cancellation policy →/, 'the header is a command an agent re-runs');
+  assert.match(injected, /`pnpm exec repograph ask` for more\)$/);
   let reminder = null;
   for (let i = 0; i < 40; i += 1) {
     const payload = { hook_event_name: 'PreToolUse', agent_id: 'r', tool_name: 'Bash', tool_input: { command: `rg "thing${i}"` } };

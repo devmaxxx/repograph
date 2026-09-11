@@ -157,9 +157,14 @@ export function queryWords(pattern) {
  */
 function stages(command) {
   const out = [{ piped: false, text: '' }];
-  for (const [part] of command.matchAll(/(?:"[^"]*"|'[^']*'|\\.|[^"'\\|;&\n])+|\|&|\|\||&&|[|;&\n]/g)) {
+  for (const [part] of command.matchAll(/(?:"[^"]*"|'[^']*'|\\[\s\S]|[^"'\\|;&\n])+|\|&|\|\||&&|[|;&\n]/g)) {
+    const last = out[out.length - 1];
+    // A newline after an operator continues the line: `git log |\n  grep x` is still fed by the pipe.
+    if (part === '\n' && !last.text.trim()) continue;
     if (/^(?:\|&|\|\||&&|[|;&\n])$/.test(part)) out.push({ piped: part === '|' || part === '|&', text: '' });
-    else out[out.length - 1].text += part;
+    // A backslash-newline continues the line and reads as a space; kept, its backslash is taken for
+    // the pattern of an `rg` whose arguments start on the next line.
+    else last.text += part.replace(/\\\r?\n/g, ' ');
   }
   return out;
 }
@@ -256,7 +261,7 @@ function intercept(payload, root, sessionKey) {
     .split('\n').filter((l) => l && !l.startsWith('  ')).map((l) => l.slice(0, LINE_CUT));
   if (!lines.length) return null;
   bump(sessionKey, 'injections');
-  return [`repograph ask ${words.join(' ')} →`, ...lines, `(read only these path:line; \`${COMMAND} ask\` for more)`].join('\n');
+  return [`${COMMAND} ask ${words.join(' ')} →`, ...lines, `(read only these path:line; \`${COMMAND} ask\` for more)`].join('\n');
 }
 
 function reminder(payload, sessionKey) {
@@ -276,9 +281,16 @@ function riskLine(payload, root, sessionKey) {
   // `changes` covers the whole working diff: keep only what the edited file contributes, or an edit to
   // a leaf file is told about the callers of symbols some other file in the diff touched.
   const rel = relative(root, file).split('\\').join('/');
-  const mine = (r.touched || []).filter((t) => t.indexed !== false && String(t.at || '').startsWith(`${rel}:`));
-  const direct = (r.affected || []).filter((d) => d.depth === 1 && String(d.via || '').startsWith(`sym:${rel}::`));
-  if (!mine.length || !direct.length) return null;
+  const name = (id) => String(id || '').split('::').pop();
+  const touched = (r.touched || []).filter((t) => t.indexed !== false);
+  const mine = touched.filter((t) => String(t.at || '').startsWith(`${rel}:`));
+  // A caller that imports through a barrel is reached by the barrel's alias, `sym:<index.ts>::<Name>`,
+  // so a symbol is matched by name as well — unless another file in the diff touched the same name.
+  const theirs = new Set(touched.filter((t) => !mine.includes(t)).map((t) => name(t.id)));
+  const names = mine.map((t) => name(t.id)).filter((n) => !theirs.has(n));
+  const direct = (r.affected || []).filter((d) => d.depth === 1 && (String(d.via || '').startsWith(`sym:${rel}::`)
+    || names.some((n) => name(d.via) === n || name(d.via).startsWith(`${n}.`))));
+  if (!direct.length) return null;
   const files = new Set(direct.map((d) => String(d.at || '').split(':')[0])).size;
   // `r.risk` scores the whole diff; the level is this file's own direct callers, on the thresholds
   // `impact::risk` prints beside its counts.
@@ -286,8 +298,8 @@ function riskLine(payload, root, sessionKey) {
   const risk = n >= 30 || files >= 25 ? 'CRITICAL' : n >= 15 || files >= 10 ? 'HIGH' : n >= 5 || files >= 3 ? 'MEDIUM' : null;
   if (!risk) return null;
   if (!once(sessionKey, 'risk', `${file}:${risk}`)) return null;
-  const touched = [...new Set(mine.map((t) => String(t.id || '').split('::').pop()).filter(Boolean))].slice(0, 3).join(', ');
-  return `repograph changes: risk ${risk} — ${n} direct callers of ${touched} in ${files} files; \`${COMMAND} changes --depth 1\` lists them.`;
+  const called = [...new Set(direct.map((d) => name(d.via)))].slice(0, 3).join(', ');
+  return `repograph changes: risk ${risk} — ${n} direct callers of ${called} in ${files} files; \`${COMMAND} changes --depth 1\` lists them.`;
 }
 
 function brief(root) {
