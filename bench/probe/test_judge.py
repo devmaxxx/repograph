@@ -576,6 +576,21 @@ class CompareCpuColumns(unittest.TestCase):
         self.assertEqual(r.avg, float("inf"))
         self.assertTrue(r.ok)
 
+    def test_a_wall_clock_that_rounded_away_puts_the_row_outside_rather_than_green(self):
+        # One rule for every column: a reference of 0.00 s is a reading, and a candidate that
+        # spent a second and a half moved off it by an unbounded amount. Reading that as "unchanged"
+        # would clear the largest regression the column can show.
+        ref = {"impact": self.row(0.00, 0.05, 0.0)}
+        (r,) = judge.compare(ref, {"impact": self.row(1.50, 0.05, 0.0)})
+        self.assertEqual(r.wall, float("inf"))
+        self.assertFalse(r.ok)
+
+    def test_two_wall_clocks_that_both_rounded_away_have_not_moved(self):
+        ref = {"impact": self.row(0.00, 0.05, 0.0)}
+        (r,) = judge.compare(ref, {"impact": self.row(0.00, 0.05, 0.0)})
+        self.assertEqual(r.wall, 0.0)
+        self.assertTrue(r.ok)
+
     def test_two_measured_zero_averages_have_not_moved(self):
         ref = {"impact": self.row(0.04, 0.05, 0.0, avg=0.0)}
         (r,) = judge.compare(ref, {"impact": self.row(0.04, 0.05, 0.0, avg=0.0)})

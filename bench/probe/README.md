@@ -69,8 +69,11 @@ three clauses off the summary lines by hand. A control's spread is the gap betwe
 over the **mean** of the two, on every column it prints: the two sides are the same binary and are
 interchangeable, and a spread taken against whichever run was named first put an 11% pair on both
 sides of the 10% bar depending on the order of the arguments. A candidate's delta is a different
-reading and is unchanged — there the reference is not interchangeable with the candidate, and the
-move is stated as a fraction of it. The derived average CPU is reported on every row and
+reading — there the reference is not interchangeable with the candidate, and the move is stated as
+a fraction of it, under one rule on every column: a side that has no reading at all prints `n/a`
+and is judged on nothing, while a reference of 0.00 is a reading, so a candidate that reads zero
+too has not moved and a candidate that moved off zero moved `+inf%` and is outside any bar set on
+that column. The derived average CPU is reported on every row and
 judged on none: it is printed by `compare`, its spread is printed by `control`, and no bar is set
 on it until a control has said what that spread is.
 

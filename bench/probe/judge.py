@@ -315,35 +315,31 @@ def spread(a, b):
     return 0.0 if not mean else abs(b - a) / mean
 
 
-def delta(ref, new, unjudged=0.0):
+def delta(ref, new):
     """The candidate's move off the reference, signed, as a fraction of the reference.
 
-    `unjudged` is what the column reads where there is no reference to be a fraction of — a peak
-    `top` never sampled, a wall clock that rounded away. `None` there is what `print_table` prints
-    as `n/a` and what `compare` skips its verdict on; the wall and RSS columns pass 0.0 instead,
-    because a zero there is a row that measured nothing at all and the `n/a` would be read as a
-    column that was merely not sampled.
-    """
-    if not ref or new is None:
-        return unjudged
-    return round((new - ref) / ref, 4)
-
-
-def avg_delta(ref, new):
-    """The average CPU column's move, where a zero reference is a reading and not an absence.
-
-    `None` on either side is the one absence this column has — a summary written before it
-    existed, or a row every run of which rounded its wall clock away — and reads `n/a`. A
-    reference of 0.00 cores was measured: the candidate reading zero too has not moved, and a
-    candidate that kept a core busy moved off zero by an unbounded amount, which `print_table`
-    renders `+inf%`. Falling back to 0.0 there would print "unchanged" for the largest move the
-    column can show.
+    One rule for every column. `None` on either side is the absence a column can have — a summary
+    written before it existed, a peak `top` never sampled — and reads `n/a`: `print_table` prints
+    it and `compare` takes no verdict on that column. A reference of 0.00 is a reading and not an
+    absence: a candidate reading zero too has not moved, and a candidate that moved off zero moved
+    by an unbounded amount, which `print_table` renders `+inf%` and every bar refuses. Folding
+    that into 0.0 would print "unchanged" for the largest move a column can show.
     """
     if ref is None or new is None:
         return None
     if not ref:
         return 0.0 if not new else float("inf")
     return round((new - ref) / ref, 4)
+
+
+def sampled(peak):
+    """A sampled peak CPU, or `None` where `top` never caught the command.
+
+    `measure.sh` samples with `top -l 2 -s 1`, so a row that finishes inside about two seconds
+    reports 0. That zero is the sampler saying nothing, not the row saying it burned no CPU —
+    the one column whose 0 must not reach `delta` as a reference to take a fraction of.
+    """
+    return peak or None
 
 
 def enough_runs(rows, min_n, side):
@@ -401,8 +397,9 @@ def compare(ref, new, wall_bar=WALL_BAR, rss_bar=RSS_BAR, cpu_bar=CPU_BAR, min_n
     peak CPU that no code reads is green whatever the run did. It is judgeable only where the
     sampler caught something: `measure.sh` samples with `top -l 2 -s 1`, so a command that
     finishes inside about two seconds reports `peak_cpu = 0`, and a reference of 0 is no reading
-    to be within 10% of. Those rows carry `None` and stay unjudged on that column rather than
-    passing on a zero that means "never sampled".
+    to be within 10% of. `sampled` turns that zero into the absence it is before `delta` sees it,
+    so those rows stay unjudged on that column rather than being read as a move off a measured
+    zero — which is what `delta` reads every other column's zero reference as.
 
     Average CPU is the column those rows do have — derived, not sampled, so a reader that finishes
     in half a second still says how many cores it kept busy — and it is printed and not judged. No
@@ -421,9 +418,10 @@ def compare(ref, new, wall_bar=WALL_BAR, rss_bar=RSS_BAR, cpu_bar=CPU_BAR, min_n
             raise SystemExit(f"{row}: in the reference and not in the candidate")
         w = delta(ref[row]["wall"], new[row]["wall"])
         r = delta(ref[row]["maxrss"], new[row]["maxrss"])
-        c = delta(ref[row]["peak_cpu"], new[row]["peak_cpu"], None)
-        a = avg_delta(ref[row]["avg_cpu"], new[row]["avg_cpu"])
-        ok = abs(w) <= wall_bar and abs(r) <= rss_bar and (c is None or abs(c) <= cpu_bar)
+        c = delta(sampled(ref[row]["peak_cpu"]), new[row]["peak_cpu"])
+        a = delta(ref[row]["avg_cpu"], new[row]["avg_cpu"])
+        ok = ((w is None or abs(w) <= wall_bar) and (r is None or abs(r) <= rss_bar)
+              and (c is None or abs(c) <= cpu_bar))
         out.append(Row(row, w, r, c, a, ok))
     return out
 
