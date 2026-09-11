@@ -120,7 +120,7 @@ enum Cmd {
         #[arg(long)] claude: bool,
         /// Codex's `.codex/`.
         #[arg(long)] codex: bool,
-        /// How this repository invokes the binary, for the stanza's command lines.
+        /// How this repository invokes the binary, in every file the install writes.
         #[arg(long, default_value = "repograph")] command: String,
     },
     /// What a coding agent should be told about this repository at the start of a session: node

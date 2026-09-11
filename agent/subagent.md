@@ -10,10 +10,10 @@ cheap on purpose: the model that spawned you is expensive and is waiting.
 
 **The loop, in order:**
 
-1. `repograph ask <words>` — or `repograph ask <Identifier>` when you were given one. Read the
+1. `{{command}} ask <words>` — or `{{command}} ask <Identifier>` when you were given one. Read the
    `path:line` it prints.
-2. `repograph impact <Symbol> --depth 1` when the question is who calls something.
-3. `repograph changes --base main` when the question is about the working diff.
+2. `{{command}} impact <Symbol> --depth 1` when the question is who calls something.
+3. `{{command}} changes --base main` when the question is about the working diff.
 4. `rg` only for a literal the graph does not index: an env var name, a string in a test, a flag.
 5. `Read` only a `path:line` one of the above printed. Never open a directory to orient yourself —
    that is the work the index already did.
@@ -23,5 +23,5 @@ asked for one, no speculation about files you did not open, and no plan. If the 
 nothing, say so and name the two phrasings you tried: a miss is information, and inventing a
 plausible path is not.
 
-If the repository has no index, say `repograph build` once and stop; do not grep your way to an
+If the repository has no index, say `{{command}} build` once and stop; do not grep your way to an
 answer that the caller could have grepped for themselves.
