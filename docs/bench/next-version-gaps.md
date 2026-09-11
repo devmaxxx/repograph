@@ -5,7 +5,7 @@ measured on repograph 0.4.0, not a wish. Each carries the number that exposed it
 diagnostic that would confirm the cause, the lever, and the gate that would tell us
 it worked. They are ordered by how much of a real answer is missing, not by effort.
 
-Two of them are the language work already scheduled for 0.6.0; what this file adds is
+Two of them are the language work already scheduled for the next minor; what this file adds is
 that the bench says they are not a nice-to-have.
 
 Each heading now carries a status line from the 2026-09-04 run
@@ -66,7 +66,7 @@ sixteen Kotlin ones — the very files this gap is about. 498/498 is therefore e
 tool stopped dropping the files it is asked about, not a measurement that it names every
 changed file.
 
-The symbol half is **baseline written; the extractor is 0.6.0's** — 57 of the 61 symbols
+The symbol half is **baseline written; the extractor is the next minor's** — 57 of the 61 symbols
 still unnamed are Kotlin declarations, and the remaining 4 are one truth-side
 mis-attribution, not a repograph miss. Numbers and the bucketing:
 [`2026-09-04-repograph-0.5.0-results.md`](2026-09-04-repograph-0.5.0-results.md). The
@@ -90,7 +90,7 @@ printed, and bucket the eleven missing symbols by extension. If they are all
 non-TypeScript, this is G1 and nothing else; if some are `.ts`, a second cause is
 hiding behind the first and it belongs in G3.
 
-**Lever.** The 0.6.0 language work — Kotlin, C#, Python — plus a decision this run
+**Lever.** The next minor's language work — Kotlin, C#, Python — plus a decision this run
 makes urgent: **a file the extractor cannot parse still deserves a file node**, so
 `touched` reports it rather than dropping it. That is cheap, it is language-independent,
 and it converts a silent omission into an honest "this file changed, I cannot tell you
@@ -194,7 +194,7 @@ the 14 ids that are absent, and finding them would not by itself put them first.
 
 ## G6 · One corpus, one language, one id census
 
-**Status (2026-09-04):** **baseline written; the extractor is 0.6.0's, and so are two
+**Status (2026-09-04):** **baseline written; the extractor is the next minor's, and so are two
 thirds of this gate.** `bench/corpora/beauty-crm-mobile/blast.jsonl` holds eight Kotlin
 `impact` targets and
 [`../../bench/results/2026-09-04-beauty-crm-mobile.json`](../../bench/results/2026-09-04-beauty-crm-mobile.json)
@@ -210,7 +210,7 @@ Russian. `repograph.toml` says of its own `id_families` list: "This is beauty-cr
 census, not a generic default; a different repository should list its own families."
 Nothing in the suite measures the tool on a repository it was not tuned against.
 
-**Why it matters for the next version.** 0.6.0 targets C#, Kotlin and Python for
+**Why it matters for the next version.** The next minor targets C#, Kotlin and Python for
 `bonliva-crm-nx`, `beauty-crm/mobile` and `bonliva-erp`. Shipping language support
 with no cases from those corpora repeats exactly the mistake ADR-001 exists to record:
 a number that was a prediction travelling as though it had been measured.
@@ -220,7 +220,7 @@ the same way: expectations recomputed from the repository at run time, so the se
 stale only when a name disappears. The retrieval half will need each corpus's own id
 families; the blast half needs nothing but symbols and should port directly.
 
-**Gate.** No language ships in 0.6.0 without at least one `impact`, one `trace` and
+**Gate.** No language ships without at least one `impact`, one `trace` and
 one `changes` case in its own corpus, and a result file beside this one.
 
 ---
@@ -1563,6 +1563,14 @@ head, the node it extracts to, and the classification of that node's id all agre
 derives the same 54 and 5, so no floor moved — and the fix had to be made in both grammars, which
 is this gap exactly.
 
+**Status 2026-09-11 — one grammar in code, the reading still unread.** #27 landed the first half:
+there is one grammar with one owner (`src/ids.rs`), the derivation scan is gone, and with it the
+fixed point between two copies — a family is read off the graph's own nodes, so there is no second
+reading to disagree with the first. What the gap's gate asks for beyond that is a measurement:
+`families=` on the bench summary line retired in favour of the invariant, read on a corpus build.
+That is §4 of [the 2026-09-10 levers doc](2026-09-10-next-version-levers-results.md), and its
+Reading is empty — the residual here is a corpus build nobody has run, not a change to make.
+
 ---
 
 ## G35 · `derive` runs on every `update` and its cost has no number
@@ -1582,6 +1590,13 @@ altogether, and gave the build and poll paths a scan that does not tally mention
 cold no-op went 1.00 s → 0.08 s and a warm one 0.10 s → 0.06 s. That is the shape of the cost, not
 the number the gap asks for: an `update` that does change a file still derives over the whole
 corpus, and the `REPOGRAPH_TIMING` line still has no `derive` stage.
+
+**Moot 2026-09-11.** There is no derivation stage left to time. Since #27 no writer derives a
+family set at all — the extractor reads one generic id grammar and `families::of_graph` is a view
+over the graph, so a build and an `update` re-read nothing to decide what a family is (`grep` for
+`families::derive` in `src/main.rs` and `src/ask.rs`: nothing calls it, because it no longer
+exists). §3's gate asks for a number on a stage that was removed rather than measured, and the
+1.00 s → 0.08 s above is the last reading it will have.
 
 ---
 
@@ -1667,7 +1682,7 @@ is the whole of what a `--help` reading can say and is what the README already c
 
 ---
 
-## G38 · `families` is a report of the derived set and says nothing about the rule's own edge
+## G38 · `families` is a report of the derived set and says nothing about the rule's own edge — closed 2026-09-11
 
 **Raised (2026-09-09).** The command lists what was derived, where each family was first defined,
 and the mention-only prefixes left as text — and a prefix on the wrong side of the line is
@@ -1681,6 +1696,17 @@ shapes a person would want to look at, and the report should put them first.
 
 **Gate.** `families` on the corpus puts `OQ` at the top of the mention-only list and marks every
 family with one definition.
+
+**Closed 2026-09-11.** The lever as written: a family row carries `definitions` — declaring-file ×
+id pairs off the graph's own `Declares` edges, so a node two files declare counts twice — and the
+rows sort by it ascending, a single-definition family reading `defined once` in the table. A
+mention carries `ids`, the distinct ids written under the prefix, and the mention half sorts by
+that before mentions. Both are additive in `families --json`. Pinned by two cases in
+`src/families.rs` and by the column indexes in `tests/families.rs`.
+
+What is *not* closed: the gate's first clause. `OQ` at the top of the corpus's mention-only list is
+a reading of the pinned fixture, and no fixture bench was run on this branch — the sort that would
+put it there is tested, the corpus that would show it is unread.
 
 ---
 
@@ -1709,9 +1735,20 @@ that trade is worth it is unmeasured, and it is the whole question.
 definition re-reads one file, measured on the corpus copy; the graph carries no edge to an
 undeclared id that a reader can see.
 
+**Status 2026-09-11 — the design landed, the price is unread.** #27 landed the lever in code: ids
+are extracted by the generic grammar in `src/ids.rs`, an edge to an id no line declares is held on
+`Graph::pending` until `settle` releases it, and the family set is a view (`families::of_graph`)
+rather than an input — so a new definition costs the one file that defines it and `Derived::against`
+is gone. The third clause of the gate is tested (`tests/families.rs`: a held-aside citation is not
+an answer, and it is released without a re-read when its family appears). What is unread is the
+price the gap says is the whole question: the store's growth and the one-file `update`, measured on
+the corpus copy. That is §6 of
+[the 2026-09-10 levers doc](2026-09-10-next-version-levers-results.md), Task 6, and its Reading is
+empty.
+
 ---
 
-## G40 · An empty family set is a regex that cannot match, not an absence
+## G40 · An empty family set is a regex that cannot match, not an absence — closed 2026-09-11
 
 **Raised (2026-09-09).** `IdMatcher::new` on an empty list built `(?:)-M\d{2}`, which matched a
 bare `-M01`, so `milestone_families = []` made `verify` report an undeclared family. It is fixed
@@ -1727,9 +1764,22 @@ becomes a state a reader can test.
 **Gate.** The constructor returns `Option`, the empty-list test asserts `None` rather than a
 never-matching regex, and a fixture with no definitions reads the same graph it reads today.
 
+**Closed 2026-09-11,** by the third clause and not the first two. There is no `IdMatcher::new` left
+to return an `Option`: since #27 the extractor reads one generic id grammar and the family set is a
+view over the graph, so "this corpus declares no ids" is a state the store carries rather than a
+matcher standing in for an absence. The sentinel went with the constructor. What the gate still
+asks for is the test, and `a_corpus_that_defines_no_ids_reads_as_one` in `tests/families.rs` is it:
+one file node and no edges, `families: (none) · milestones: (none)` on the build line, `(none)`
+under the report's heading, both id-shaped mentions held aside where `verify` counts them, and
+`ask ISO-8601` answering from retrieval rather than from an exact seat.
+
+What is *not* closed: nothing — but note the shape of the closure. The `Option` the ledger named
+has nothing to wrap, so the row is closed by the design that removed its subject, not by the type
+change it asked for.
+
 ---
 
-## G41 · A verdict that is an answer exits like a crash — `bench` and `trace`
+## G41 · A verdict that is an answer exits like a crash — `bench` and `trace` — closed 2026-09-11
 
 **Raised (2026-09-11)** by the reader suite, which has to time `repograph bench` and cannot tell a
 verdict from a crash.
@@ -1768,9 +1818,24 @@ without the harness having to know which answer it got.
 `1`, all pinned by tests that run the binary; `bench/probe` reads the status instead of the sentence;
 and the README states the codes for both commands where it already states the summary line.
 
+**Closed 2026-09-11.** The lever as written, at `2`. `main` returns an `ExitCode` and delegates to
+`run`; the two sites that answer a question with "no" carry a `Verdict`, which prints its sentence
+and exits 2, and every other error keeps the `{e:?}` report and the status 1 that
+`Termination for Result` printed before, so no transcript moved. `tests/exit_codes.rs` runs the
+binary for all four cases — a no-path `trace` 2 against an unknown symbol 1, a `bench` over a
+recorded-shape case file that misses every floor 2 against an unbuilt store 1 — and
+`tests/json_surface.rs` pins the text form's 2 beside the JSON form's `null` at 0. `measure.sh`
+reads `rc=2` and its grep is gone; `judge.py` requires that status beside the field before a row
+claims a verdict, and `test_measure.py` pins that a binary exiting 1 with the old wording is
+refused. The README states the codes for `bench` and for `trace`.
+
+What is *not* closed: the wording is now unguarded by design — nothing reads
+`bench floors not met` any more, so it is a message and may be reworded freely. The kit is the
+cost: a binary older than 0.6.0 cannot produce a readable `bench` row for it.
+
 ---
 
-## G42 · No command under two seconds has a CPU reading, which is every reader row
+## G42 · No command under two seconds has a CPU reading, which is every reader row — closed 2026-09-11
 
 **Raised (2026-09-11)** while giving `judge.py` the peak-CPU column §9's own gate requires.
 
@@ -1792,6 +1857,18 @@ on.
 `compare` judges it; and the rows whose peak is unsampled say so in the table rather than reading as
 a zero.
 
+**Closed 2026-09-11,** by the cheap half the gap itself named. `judge.py` derives `avg_cpu` as
+`(user + sys) / wall` per run from the fields `measure.sh` has always written, medians it like the
+rest, carries it through `medians.txt`, and `compare` judges it as a fourth column against the same
+10% bar. `peak_cpu` keeps its `None`-when-unsampled behaviour, so the embed row is still judged on
+the peak and every reader row is judged on the average; `bench/probe/README.md` says which row is
+read on which. A summary too old to carry `user` and `sys` is refused rather than read without the
+column, which is why `embed.sh` now writes `sys=` beside the `user=` it always wrote.
+
+What is *not* closed: no bar has been *set* on the new column. It is judged against `CPU_BAR`, the
+10% the peak column uses, and no control run has shown that a reader row's average repeats inside
+that on this machine — which is G23's reading and G23 is still open.
+
 ---
 
 ## Suggested order
@@ -1811,11 +1888,11 @@ a zero.
 | — | ~~**G11** the embedder for Russian paraphrase~~ | shipped 2026-09-05 as a store option — e5-large reads paraphrase 22/30 and held-out 103 → 119, at 0.8 s an `ask` and a 2.1 GB download; the default followed at `35357c1` and went back to the small model on 2026-09-07 ([ADR-002](../adr/ADR-002-two-defaults-multiplied.md)) with the option unchanged, and a store with no recorded model still reads as the small one |
 | — | ~~**G5** rank + MRR~~ | closed by Task 1 (2026-09-04) — every retrieval row carries `rank`, the summary carries `mrr`, and the run reads 0.635; the 2026-09-03 rows cannot be rescored |
 | — | ~~**G18** a non-ASCII path drops its file from `changes`~~ | closed 2026-09-09 — `-c core.quotepath=false` on both invocations, two tests over a scratch repository that pins the quoting on, the untracked listing asked for NUL-separated, and the ambient `GIT_DIR` dropped. A non-UTF-8 path and a decomposed one still lose their file, recorded in the section above. Raised 2026-09-07 by the Windows port's CI work, latent — `core.quotepath` is on by default, so `parse` reads no name from a quoted `+++` line and drops every hunk in that file, with Task 2's file-id fallback unreachable because no hunk exists. The pinned fixture has 0 such paths, so no recorded number moved on it. Above G1 because it is one argument on two `git` calls and it restores files that vanish today with nothing printed |
-| 7 | **G1** unparsed files get a file node | the file half is closed by Task 2 (2026-09-04) against a `code_files` denominator; the symbol half is 57 Kotlin declarations and waits on 0.6.0's extractor |
+| 7 | **G1** unparsed files get a file node | the file half is closed by Task 2 (2026-09-04) against a `code_files` denominator; the symbol half is 57 Kotlin declarations and waits on the next minor's extractor |
 | — | ~~**G3** the three impact diagnostics~~ | closed by Tasks 3 and 4 (2026-09-04) — 123/123 files over 16 targets, mean recall 1.0 |
 | — | ~~**G4** grow the blast set~~ | closed by Task 5 (2026-09-04) — `blast.jsonl` is 32 cases and the per-suite decision rule is written down before the changes judged on it |
 | 8 | **G2** fourteen paraphrases a neighbour away | the lever this row named is measured and rejected (2026-09-04): `--rerank-local` reads 17/30 against a control of 15/30, at 17.9 s a question; the gap stays open with nothing cheaper left to try |
-| 9 | **G6** a case file per new corpus | the `impact` third is a written baseline (2026-09-04); `trace` and `changes` ship with the 0.6.0 languages, not after them |
+| 9 | **G6** a case file per new corpus | the `impact` third is a written baseline (2026-09-04); `trace` and `changes` ship with the next minor's languages, not after them |
 | 10 | **G17** the constant's derivation set is the plan's own | raised 2026-09-06 — `c_code = 0.902` was taken on an 800-question mixed set fixed at equal halves in the design note before any dump, by the same plan that proposed the seat it judges. The order of operations held and is not what is weak; what is unmeasured is whether the verdict moves with the mix. Last because no verdict is known to have turned on it, and first among method gaps if the seat is retried |
 
 ## Suggested order — the cost family
@@ -1827,7 +1904,7 @@ answer different questions, and no row below moves a retrieval floor.
 
 | | gap | why here |
 |---|---|---|
-| 1= | **G42** no row under two seconds has a CPU reading | the other half of G23's instrument, raised by fixing it: the peak-CPU column §9's gate names is readable on one row of eleven, and the lever is arithmetic on numbers `/usr/bin/time` already reports. Beside G23 rather than below it because both are the instrument, and a bar nobody can read is not a looser bar than a bar that measures the machine — it is no bar |
+| — | ~~**G42** no row under two seconds has a CPU reading~~ | **closed 2026-09-11** — `avg_cpu` is `(user + sys) / wall` off the report `measure.sh` already writes, medianed like the rest and judged by `compare` as a fourth column; the embed keeps the sampled peak, every reader row is read on the average, and a summary without `user`/`sys` is refused rather than read without the column. No bar has been set on it — that is G23's reading, still open |
 | 1 | **G23** the reader bars are tighter than the suite's own repeatability | every other row in this family is read through those bars, and the control already fails them on a change that touches no reader: `ask-fused` 0.58 s against 0.35, max RSS 1.36–1.56 GB on both binaries. n runs and a median, and it is fixed |
 | 2 | ~~**G20** the whole-store run in the band has no wall~~ | ~~the second round's headline is a product of ratios — 4.1–4.5× of 1,930 s — because three attempts starved on a working laptop~~ — closed 2026-09-09 — the band was removed |
 | 3 | **G19** the progress cadence is a count of rows | a fixed bar the plan set and the shipped code misses at both tails, 102.4 s and 96.7 s against 60, with the batching rule that would fix it already written one file away |
@@ -1840,7 +1917,7 @@ answer different questions, and no row below moves a retrieval floor.
 
 ## Suggested order — the third family
 
-G28 to G40 are ordered against each other only, as the cost family is. None of them moves a
+G28 to G42 are ordered against each other only, as the cost family is. None of them moves a
 recorded floor; two of them (G32, G36) are the ones to take before anyone rebuilds a store or
 clones a repository they did not write.
 
@@ -1848,17 +1925,17 @@ clones a repository they did not write.
 |---|---|---|
 | — | ~~**G36** the project file runs any command~~ | closed 2026-09-09 — and it took two refusals, not one: the `*_command` keys became machine-file-only, and the model name, which is interpolated into that command unquoted and was never checked, is now a token or it is not used. One refused key would have left the second door open |
 | 2 | **G32** a rebuilt enriched store is graded raw | the first thing anyone will hit after this branch merges: 150 nodes without questions and a bench that quietly grades against the raw floors. A stderr line and one `enrich` close it; the fixture's own rebuild is the recorded pair that says so |
-| 2= | **G41** a verdict that is an answer exits like a crash | raised 2026-09-11 by the reader suite: `bench` bails `floors not met` at exit 1, the code an empty graph and a bad case file also take, so a harness reads English to learn a verdict — and `trace` does the same for "no path within the depth", which cost a published reader bar that was timing an error path. Beside G32 because both are things the next person to run a store hits, and one exit code closes it |
-| 3 | **G34** two copies of one grammar | the failure is silent — a re-extraction on every `update`, or a family no node is written in — and the property test that makes it a red test is one function over fixtures that already exist |
-| 4 | **G39** the family set is an input to extraction | the design under G34: while the extractor needs the set, the two grammars must agree and a move costs a corpus read. It sits below G34 because the property test is what makes a divergence visible, and above everything else because it is the change that would make G34 unnecessary — and it is the one row here that could grow the store, so it is measured before it is taken |
+| — | ~~**G41** a verdict that is an answer exits like a crash~~ | **closed 2026-09-11** — `2` for a verdict, `1` for everything else, in both commands; four cases run the binary, `bench/probe` reads the status and dropped its grep, and the README states the codes. The kit now needs a 0.6.0 binary: an older one's missed floors are refused as the failures they are indistinguishable from |
+| 3 | **G34** two copies of one grammar | **one grammar in code since #27**; what is left here is a measurement, not a change — the bench line's `families=` retired in favour of the invariant, read on a corpus build (§4 of the 2026-09-10 levers doc, Reading empty) |
+| 4 | **G39** the family set is an input to extraction | **landed in code by #27** — the generic grammar, `Graph::pending`/`settle`, families as a view — and what stands open is the price the gap calls the whole question: the store's growth and the one-file `update`, on the corpus copy (§6, Task 6, Reading empty). It stays above the rest of this family because an unread price is what would reopen the design |
 | ~~5~~ | ~~**G30** where the reranker's gains sit in the pool~~ | **closed 2026-09-09** — thirteen gains at ranks 6, 14, 18, 22, 23, 51, 109, 122, 135, 152, 155, 173, 196; five are within reach of a zero-token lever and eight are the model's alone |
 | ~~6~~ | ~~**G28** the reranked p90 straddles the ceiling~~ | **answered 2026-09-09** — the cause is pick order (identical pool, identical prompt, 21 of 30 cases moving ±25 tokens); the arm's own bar is written at p90 240, unread |
 | ~~7~~ | ~~**G29** the one paraphrase sonnet never picks~~ | **closed 2026-09-09** — `pool=-/200`: the id is outside the pool, so the lever is depth or fusion and never the snippet |
 | ~~8~~ | ~~**G31** the token cost is bytes ÷ 4 of one prompt~~ | **closed 2026-09-09** — metered: median 58,314 B, p90 60,843 B over thirty prompts; bytes and not tokens, because the transport returns no usage block |
 | 9 | **G37** no non-Claude number, no stacked levers | **refused with numbers 2026-09-10** — an account, an empty model shelf, a 2.1 GB download and ~$6 of haiku; the cheap half is the `e5-large` pair on the 30 paraphrase cases, and the pool ranks say which five cases it could move |
-| 10 | **G35** `derive` on every `update` | the no-op case is closed and measured, 1.00 s → 0.08 s cold; what is left is the `update` that does change a file, still expected to be milliseconds and still without a number |
-| 11 | **G40** the empty set is a never-matching regex | a type change and a branch, no measurement to take; here rather than last because it is the cheapest row in the file and it removes a sentinel a reader has to decode |
-| 12 | **G38** the report has no edge | a sort order and two columns; last because the report already shows both halves |
+| — | ~~**G35** `derive` on every `update`~~ | **moot 2026-09-11** — no writer derives since #27, so §3's gate has no stage to time; the 1.00 s → 0.08 s cold no-op is the last reading it will have |
+| — | ~~**G40** the empty set is a never-matching regex~~ | **closed 2026-09-11** — the constructor the row asked to wrap no longer exists, so the state is the graph's and a test is what closes it: no definitions, one file node, `(none)` on both halves, both mentions held aside |
+| — | ~~**G38** the report has no edge~~ | **closed 2026-09-11** — `definitions` per family with `defined once` on the single ones, `ids` per mention-only prefix, and both sorts. The gate's first clause is unread: the sort that would put `OQ` first is tested, the corpus that would show it is not |
 | — | **G33** thirteen families are text now | closed as accepted the day it was raised, with the names recorded; reopens on a recorded case that needs a mention-only family |
 
 ## What is explicitly not on this list
