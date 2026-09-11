@@ -124,12 +124,12 @@ impl Context {
         let timing = Timing::new();
         let store = store::Store::new(repo);
         let mut notices = Vec::new();
-        // Stamped before the read, never after; a refresh rewrites the file, and then the stamp is
-        // of what this process has just written.
+        // Stamped before the read, never after; a refresh rewrites the file and reports the stamp
+        // of its own bytes, since a `stat` after it may already see another writer's graph.
         let read_at = store.stamp("graph.json");
         let (graph, refreshed, graph_at) = match graph_for_ask(repo, cfg, &store, stale, &timing) {
             Ok((graph, None)) => (graph, None, read_at),
-            Ok((graph, Some(r))) => (graph, Some(r), store.stamp("graph.json")),
+            Ok((graph, Some(r))) => { let at = r.graph_at; (graph, Some(r), at) }
             // A store that cannot be written (read-only checkout, a walk that failed) still
             // holds an answer: say once that it may be behind, then give the stored one.
             Err(err) => { notices.push(format!("refresh: skipped ({err:#})")); (store.load()?.0, None, None) }

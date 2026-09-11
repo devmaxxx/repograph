@@ -184,6 +184,8 @@ pub struct UpdateReport {
     /// Computed here because the graph is already in hand: a writer that re-loaded the store to
     /// say this would pay a whole graph read on the no-op update a commit hook fires.
     pub unenriched: Option<usize>,
+    /// The stamp of the `graph.json` this update wrote, as written.
+    pub graph_at: Option<walk::Stamp>,
 }
 
 /// Re-extracts what the diff names, drops what is gone, and writes the store back. Nothing else
@@ -263,14 +265,14 @@ pub(crate) fn apply_diff(repo: &std::path::Path, store: &store::Store, graph: &m
     // can be newer than this build's: written back, that value would tell the build able to fill
     // the hole that there is nothing to do. `0` is stale against every generation there is.
     if unread { saved.grammar = 0; }
-    store.save(graph, &saved)?;
+    let graph_at = store.save(graph, &saved)?;
     // Only when something was re-extracted: a tree that did not move cannot have grown a node
     // without questions, and the no-op update a commit hook fires should not read the questions
     // file to be told so.
     let unenriched = moved
         .then(|| enrich::Questions::load(store).ok().and_then(|q| enrich::unenriched_note(graph, &q)))
         .flatten();
-    Ok(UpdateReport { changed: diff.changed.len(), removed: diff.removed.len(), nodes: graph.nodes.len(), edges: graph.edges.len(), unenriched })
+    Ok(UpdateReport { changed: diff.changed.len(), removed: diff.removed.len(), nodes: graph.nodes.len(), edges: graph.edges.len(), unenriched, graph_at })
 }
 
 /// The store brought in line with the tree.
@@ -399,7 +401,7 @@ impl<'a> Watcher<'a> {
         if !moved.is_empty() { eprintln!("families: {}", moved.join(", ")); }
         self.manifest = walk::Manifest::from_entries(&entries);
         self.seen = self.store.stamp("manifest.json");
-        self.graph_at = self.store.stamp("graph.json");
+        self.graph_at = r.graph_at;
         Ok(Polled::Refreshed(r))
     }
 }
