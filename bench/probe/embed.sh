@@ -90,7 +90,7 @@ if [ -f "$L/summary.txt" ] && grep -q "^$NAME  " "$L/summary.txt"; then
   echo "refusing: $L/summary.txt already holds a row for $NAME — a second one would pool into its median at n+1" >&2
   exit 2
 fi
-if ! "$HERE/quiet.sh" > "$L/$NAME.quiet" 2>&1; then cat "$L/$NAME.quiet"; echo "refusing to measure on a machine that is not quiet" >&2; exit 2; fi
+if ! "$HERE/quiet.sh" --wait 600 > "$L/$NAME.quiet" 2>&1; then cat "$L/$NAME.quiet"; echo "refusing to measure on a machine that is not quiet" >&2; exit 2; fi
 cat "$L/$NAME.quiet" | tee -a "$L/summary.txt"
 # One row a call, so this row's own line: §9's three runs pool into one summary and a reader of it
 # should not have to assume the three were embedded by the same model.

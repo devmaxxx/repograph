@@ -45,7 +45,7 @@ esac
 # would pool its runs with the first one's and `medians` would take one median over both.
 : > "$L/summary.txt"
 # Not a pipeline: bash 3.2 has no pipefail here and a `| tee` would hand back tee's exit code.
-if ! "$HERE/quiet.sh" > "$L/quiet.txt" 2>&1; then cat "$L/quiet.txt"; echo "refusing to measure on a machine that is not quiet" >&2; exit 2; fi
+if ! "$HERE/quiet.sh" --wait 600 > "$L/quiet.txt" 2>&1; then cat "$L/quiet.txt"; echo "refusing to measure on a machine that is not quiet" >&2; exit 2; fi
 cat "$L/quiet.txt" | tee -a "$L/summary.txt"
 # Beside the quiet line and above the rows, so the file the medians are taken from says which
 # weights answered them. `judge.py medians` reads only lines shaped like a run, as it already does

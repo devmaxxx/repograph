@@ -107,3 +107,34 @@ class WholeScript(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+@unittest.skipUnless(os.name == "posix", "bash: the macOS kit's own platform")
+class Wait(unittest.TestCase):
+    """`--wait` exists because the kit's own reset is what makes the machine loud: `main` is
+    stubbed here so the loop's decision is read without waiting on a real machine to settle."""
+
+    def loop(self, script, budget):
+        return subprocess.run(["bash", "-c", f"source '{QUIET}'; {script}; wait_quiet {budget}"],
+                              capture_output=True, text=True)
+
+    def test_a_machine_that_settles_is_waited_out_and_the_settling_is_reported(self):
+        # `main` fails once and then succeeds, which is the reset-then-quiet shape.
+        r = self.loop("n=0; main() { n=$((n+1)); [ $n -gt 1 ]; }; step=0", 60)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("quiet: reached after", r.stdout)
+
+    def test_a_machine_that_stays_busy_still_refuses_when_the_budget_runs_out(self):
+        r = self.loop("main() { return 1; }", 0)
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("still not quiet after 0s — refusing", r.stdout)
+
+    def test_a_machine_already_quiet_says_nothing_about_settling(self):
+        r = self.loop("main() { return 0; }", 600)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertNotIn("reached after", r.stdout)
+
+    def test_an_unknown_argument_is_the_usage_line_not_a_reading(self):
+        r = subprocess.run(["bash", str(QUIET), "--forever"], capture_output=True, text=True)
+        self.assertEqual(r.returncode, 2)
+        self.assertIn("usage: quiet.sh", r.stderr)

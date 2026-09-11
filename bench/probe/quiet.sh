@@ -77,4 +77,24 @@ main() {
   [ "$ok" = "1" ]
 }
 
-if [ "${BASH_SOURCE[0]}" = "$0" ]; then main; fi
+# `--wait <seconds>`: keep re-reading until the machine is quiet, then succeed. A caller needs it
+# because the kit's own setup is loud — `reset.sh` copies 78 MB of store and walks the tree, and the
+# idle figure is a one-second sample taken right after, so a suite that checked once would refuse a
+# machine that its own reset had just made busy. A bounded wait says "settle, then read"; a machine
+# that is genuinely busy still refuses when the budget runs out, which is what the precondition is for.
+wait_quiet() {
+  local budget=${1:-600} waited=0 step=20
+  until main; do
+    [ "$waited" -ge "$budget" ] && { echo "  still not quiet after ${waited}s — refusing"; return 1; }
+    sleep "$step"; waited=$((waited + step))
+  done
+  [ "$waited" = "0" ] || echo "quiet: reached after ${waited}s of settling"
+}
+
+if [ "${BASH_SOURCE[0]}" = "$0" ]; then
+  case ${1-} in
+    --wait) wait_quiet "${2-600}" ;;
+    "") main ;;
+    *) echo "usage: quiet.sh [--wait <seconds>]" >&2; exit 2 ;;
+  esac
+fi
