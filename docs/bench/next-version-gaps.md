@@ -1729,7 +1729,7 @@ never-matching regex, and a fixture with no definitions reads the same graph it 
 
 ---
 
-## G41 · `bench` says a floor was missed in English, and exits 1 like everything else
+## G41 · A verdict that is an answer exits like a crash — `bench` and `trace`
 
 **Raised (2026-09-11)** by the reader suite, which has to time `repograph bench` and cannot tell a
 verdict from a crash.
@@ -1748,13 +1748,25 @@ name run as a shell command — and the exit status is the other half of the sam
 so the grep cannot rot in silence. That test is the tell: a harness that must read English to learn
 a verdict is reading a message that was never promised to it.
 
-**Lever.** A distinct exit code for the floor verdict, documented beside the summary line's shape —
-`2`, or whatever does not collide — with every other failure keeping `1`. The probe then drops its
-grep and the test that guards the wording.
+**And `trace` is the second instance, found the same day and more expensively.** `trace <from> <to>`
+exits **1** when it determines there is no call path within the depth — a determination its own
+`--help` calls one of its two answers: "The shortest chain of calls from one symbol to another, **or
+that there is none** within the depth". The reader suite's `trace` row asked for a path from `main`
+to `cn`, there is none, and so that row measured a **0.02 s early exit** and made `judge.py` refuse
+every suite it appeared in. The 2026-09-07 kit had published that 0.02 s as the `trace` reader bar.
 
-**Gate.** A missed floor exits with its own code and an error exits `1`, both pinned by a test that
-runs the binary; `bench/probe` reads the status instead of the sentence; and the README's bench
-section states the codes where it already states the line.
+**Audited, so the lever is bounded.** Only these two. `impact` on a symbol with one dependent,
+`changes` on an unchanged tree, and `ask` on a word nothing matches all exit **0** and say so on
+stdout.
+
+**Lever.** A distinct exit code for a verdict, documented beside the summary line's shape — `2`, or
+whatever does not collide — with every other failure keeping `1`, for both commands. The probe then
+drops its grep and the test that guards `bench`'s wording, and a `trace` row can measure a traversal
+without the harness having to know which answer it got.
+
+**Gate.** A missed floor and a no-path `trace` each exit with the verdict code while an error exits
+`1`, all pinned by tests that run the binary; `bench/probe` reads the status instead of the sentence;
+and the README states the codes for both commands where it already states the summary line.
 
 ---
 
@@ -1836,7 +1848,7 @@ clones a repository they did not write.
 |---|---|---|
 | — | ~~**G36** the project file runs any command~~ | closed 2026-09-09 — and it took two refusals, not one: the `*_command` keys became machine-file-only, and the model name, which is interpolated into that command unquoted and was never checked, is now a token or it is not used. One refused key would have left the second door open |
 | 2 | **G32** a rebuilt enriched store is graded raw | the first thing anyone will hit after this branch merges: 150 nodes without questions and a bench that quietly grades against the raw floors. A stderr line and one `enrich` close it; the fixture's own rebuild is the recorded pair that says so |
-| 2= | **G41** a floor verdict and a broken store exit alike | raised 2026-09-11 by the reader suite: `bench` bails `floors not met` at exit 1, the code an empty graph and a bad case file also take, so a harness reads English to learn a verdict. Beside G32 because both are things the next person to run a store hits, and one exit code closes it |
+| 2= | **G41** a verdict that is an answer exits like a crash | raised 2026-09-11 by the reader suite: `bench` bails `floors not met` at exit 1, the code an empty graph and a bad case file also take, so a harness reads English to learn a verdict — and `trace` does the same for "no path within the depth", which cost a published reader bar that was timing an error path. Beside G32 because both are things the next person to run a store hits, and one exit code closes it |
 | 3 | **G34** two copies of one grammar | the failure is silent — a re-extraction on every `update`, or a family no node is written in — and the property test that makes it a red test is one function over fixtures that already exist |
 | 4 | **G39** the family set is an input to extraction | the design under G34: while the extractor needs the set, the two grammars must agree and a move costs a corpus read. It sits below G34 because the property test is what makes a divergence visible, and above everything else because it is the change that would make G34 unnecessary — and it is the one row here that could grow the store, so it is measured before it is taken |
 | ~~5~~ | ~~**G30** where the reranker's gains sit in the pool~~ | **closed 2026-09-09** — thirteen gains at ranks 6, 14, 18, 22, 23, 51, 109, 122, 135, 152, 155, 173, 196; five are within reach of a zero-token lever and eight are the model's alone |

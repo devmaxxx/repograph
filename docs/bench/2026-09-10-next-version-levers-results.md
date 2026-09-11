@@ -85,6 +85,39 @@ clause is now frozen. A further change to it once §1's **Reading.** holds a num
 the failure this branch was built to prevent, and would have to be recorded as that and not as a
 fourth correction.
 
+**Correction 4, 2026-09-11 — the suite itself, and again before any reading.** Two changes to what
+§1 measures, both forced by the first two attempts at this control, and both recorded here because
+§1's **Reading.** was empty when they were made and is empty as this paragraph is written.
+
+*The precondition waits out its own setup.* Attempt one refused: `quiet.sh` passed at 85.90% idle,
+`reset.sh` then copied 78 MB of store and walked the tree, and `readers.sh` re-read idle at 83.76%
+one second later and refused. Every arm on this branch is reset-then-measure, so the kit would have
+refused every one of them for noise it made itself. `quiet.sh --wait <seconds>` now re-reads until
+the machine is quiet and reports how long it settled for; `readers.sh` and `embed.sh` take a 600 s
+budget. A machine that is genuinely busy still refuses when the budget runs out. No clause of the
+Gate moved: the numbers a row is judged quiet against are the same three, read at a moment the
+kit's own rsync no longer spoils.
+
+*The `trace` row was timing an error.* It asked for a call path from `main` to `cn`. There is none
+within six hops, and `trace` exits **1** when it determines that — one of its two documented
+answers — so the row measured a **0.02 s early exit**, and `judge.py` refused every suite it was in
+for having measured a failure. The 2026-09-07 kit published that 0.02 s as the `trace` reader bar,
+which is to say the bar this branch was sent to check was itself measuring an error path. The row
+now traces a five-hop chain that finds something: `applyAppointmentCreate` → `evaluateAvailability`
+→ `loadAvailabilitySnapshot` → `toWallClock` → `faceToWallClock` → `pad`. **The `trace` row's
+reference median is therefore not comparable to 2026-09-07's**, and §1's reference table says so
+where it prints that row; every other row is unchanged. The general defect is recorded as G41, whose
+audit says only `bench` and `trace` do this — `impact`, `changes` and `ask` all exit 0 on a
+legitimate nothing.
+
+*And a clause the Gate never had.* Attempt two was killed at minute eight, mid-suite, because the
+machine ran out of memory: 12 GB held by one container helper, 5 GB by an editor, ~8 GB across other
+sessions' `node` processes, against `ask --rerank-local`'s measured 3.03 GB. `quiet.sh` now reads
+reclaimable memory (free + inactive + speculative) against a 6 GB bar — twice the heaviest row — and
+names the four processes holding the most when it refuses. This is an **addition**, not a change: no
+committed clause said anything about memory, a suite that dies mid-read is not a reading, and the
+kit should refuse before spending eight minutes rather than after.
+
 **Reading.**
 
 ## 2 · G15 — the anchor line in the history
