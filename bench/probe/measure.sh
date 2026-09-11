@@ -28,17 +28,27 @@ wait $WRAP; RC=$?
 # median as an honestly-measured fast run — a mistyped flag reading as a reader that got 60×
 # quicker. The row carries its status and the script exits with it.
 #
-# One non-zero exit is not that, though. `repograph bench` returns 1 for a missed floor and 1 for an
-# empty graph, a missing case file or a dense width mismatch, so the status alone cannot say whether
-# the reader did its work: a row that answered every case and then failed a floor spent its wall
-# clock reading, and a row that never found a store spent it failing. Only the wording separates
-# them, and it is read here rather than in `judge.py` because the transcript is what holds it. The
-# field says which of the two it was; the row is still refused unless `judge.py` also recognises the
-# row as one that runs `bench`. A wording that changes upstream is caught by `test_measure.py`.
+# One non-zero exit is not that, though. `repograph` exits 3 for a question it was asked and
+# answered — a suite that ran every case and missed a floor, a `trace` that found no path within
+# the depth — and 1 for an empty graph, a missing case file or a dense width mismatch: a row that
+# answered spent its wall clock reading, and a row that never found a store spent it failing. The
+# status is what separates them: the status is the interface, and the wording is a message no
+# script reads. 3 and not 2, which is a status two layers above the command write: `clap` for a
+# usage error, the npm launcher for a missing platform binary. A binary too old
+# to exit 3 says nothing this reads, so its missed floors arrive as the failures they are
+# indistinguishable from.
+#
+# Which rows may claim `floors_missed` is the same expression `judge.py`'s `BENCH_ROW` matches on,
+# kept here in the same words: only a row running `bench` has floors, so a `trace` row's verdict is
+# recorded as the reading it is without a field saying it missed something it never had.
+BENCH_ROW='^bench(-|$)'
+VERDICT=0
+[ "$RC" = "3" ] && VERDICT=1
 FLOORS=0
-if [ "$RC" != "0" ] && grep -q "bench floors not met" "$LOG/$NAME.time"; then FLOORS=1; fi
+[ "$VERDICT" = "1" ] && [[ "$NAME" =~ $BENCH_ROW ]] && FLOORS=1
 if [ "$RC" = "0" ]; then :
 elif [ "$FLOORS" = "1" ]; then echo "measure: $NAME exited $RC on its floors — the timing stands, the floors did not" >&2
+elif [ "$VERDICT" = "1" ]; then echo "measure: $NAME exited $RC — answered with a verdict — the timing stands" >&2
 else echo "measure: $NAME exited $RC — this row measured a failure" >&2
 fi
 # Absent on every row where nothing happened, so a clean line is the line it has always been and

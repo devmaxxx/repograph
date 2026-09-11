@@ -118,6 +118,21 @@ names the four processes holding the most when it refuses. This is an **addition
 committed clause said anything about memory, a suite that dies mid-read is not a reading, and the
 kit should refuse before spending eight minutes rather than after.
 
+**Correction 5, 2026-09-11 — which run the spread is a fraction of, and again before any reading.**
+The Gate above states its two clauses against the first run: |wall A − wall B| ≤ 10% **of A**, and
+max RSS likewise. The two sides of a control are the same binary run twice and are interchangeable
+— which run is called A is the order the two commands happened to be typed in — so a spread taken
+against A made that order part of the reading: a pair 11% apart read 11% one way and 9.9% the
+other, on both sides of the 10% bar. `judge.py control` now takes every column against the **mean**
+of the two readings, so `control A B` and `control B A` are one reading down to the verdict. The
+Gate is left exactly as committed and the divergence is recorded here: its letter reads a fraction
+of A where the script reads a fraction of the mean, which differ by at most half the spread itself
+and are the same clause wherever a control passes comfortably. A candidate against a reference is
+untouched — there the two sides are *not* interchangeable, and `judge.py compare` still states the
+move as a fraction of the reference, which is what §1's reference table is for. Taken before the
+reading it governs: §1's **Reading.** is empty as this paragraph is written, and no number in this
+document was produced by either formula.
+
 **Reading.**
 
 ## 2 · G15 — the anchor line in the history
@@ -162,7 +177,40 @@ read the baseline table of §2 exactly. Failing (a), (b) or (e) stops the branch
 line, its `ISO-8601` mention held aside and counted by `verify`, and `ask ISO-8601` answering from
 retrieval rather than an exact seed. The never-matching alternation is gone from `src/ids.rs`.
 
-**Reading.**
+**Reading (2026-09-11).** A tests-only gate, so this is a local run of the binary this branch
+builds over one document — `docs/notes.md`, holding `даты по ISO-8601, см. RFC-7231 и -M01` and no
+definition line — and the same four assertions ride in
+`tests/families.rs::a_corpus_that_defines_no_ids_reads_as_one`.
+
+```
+$ repograph --no-dense build
+families: (none) · milestones: (none)          # stderr
+changed 1 removed 0 nodes 1 edges 0
+
+$ repograph --no-dense verify
+nodes: 1  {"File": 1}
+edges: 0  {}
+dangling edges: 0
+held aside: 2 edges to ids in 2 prefixes no line defines  ISO RFC
+
+$ repograph --no-dense families
+families                              nodes  defs  defined
+  (none)
+milestones                            nodes  defs  defined
+  (none)
+mention-only prefixes               written   ids  files  e.g.
+  ISO                                     1     1      1  docs/notes.md:3  даты по ISO-8601, см. RFC-7231 и -M01
+  RFC                                     1     1      1  docs/notes.md:3  даты по ISO-8601, см. RFC-7231 и -M01
+
+$ repograph --no-dense ask ISO-8601
+                                               # nothing: no node, so no exact seat and no passage
+```
+
+File nodes only, no edge a reader follows, both id-shaped mentions held aside and counted, and the
+bare `-M01` yielding no third prefix. The last clause of the gate — the never-matching alternation
+gone from `src/ids.rs` — was already true when this branch opened: #27 removed the constructor with
+it, so the `Option<IdMatcher>` the ledger asked for has nothing to wrap and the state is the
+graph's. **Clause by clause: all four green, the fifth green before the branch.**
 
 ## 6 · G34 — one owner, the property test, the corpus
 
@@ -181,7 +229,29 @@ gone from the bench summary line and `track.py` still reads every transcript in
 first in the mention-only section and every family with exactly one definition carries
 `defined once`; `bench/compare` still reads the JSON.
 
-**Reading.**
+**Reading (2026-09-11), on the second and third clauses only.** No fixture bench was run on this
+branch, so `~/bench/beauty-crm-test` was never built and the corpus clause — `OQ` first in the
+mention-only section — **is unread**. What is read is the sort that would put it there, on a
+two-document repository built by this branch's binary:
+
+```
+families                              nodes  defs  defined
+  OD                                      1     1  docs/b.md:1  defined once
+  REQ                                     2     2  docs/a.md:1
+milestones                            nodes  defs  defined
+  (none)
+mention-only prefixes               written   ids  files  e.g.
+  OQ                                      3     3      1  docs/a.md:3  тело, см. OQ-1, OQ-2, OQ-3
+  ISO                                     2     1      1  docs/a.md:7  тело, даты по ISO-8601 и ещё раз ISO-8601
+```
+
+`OD`, defined by one line, sorts above `REQ` and carries the mark; `OQ`, written under three ids,
+sorts above `ISO`, written twice under one — which is the corpus clause's shape at the scale a test
+can hold. `src/families.rs`'s two inline cases pin both sorts (`a_family_defined_once_sorts_first_
+and_is_marked`, `mention_only_prefixes_sort_by_distinct_ids_then_by_mentions`), and
+`python3 -m unittest discover -s bench/compare` is OK — `bench/compare/run.py:54` reads `family` and
+nothing else, so `definitions` and `ids` are additive. **Clause by clause: the corpus clause unread,
+the `defined once` clause green, the JSON clause green.**
 
 ## 8 · G32 — the fixture copy, rebuilt and enriched
 
@@ -232,6 +302,54 @@ about 1,930 s and is sampled throughout. A row whose *reference* read 0 prints `
 unjudged on that column rather than passing on a zero that means "never sampled". This is a note on
 what the reading can carry, not a change to the gate: the numbers above are as committed.
 
+**Correction, 2026-09-11 — the CPU column, before any number.** The note above says the peak-CPU
+column is meaningless for every reader row and meaningful for this row alone. That is still true of
+the *sampled* column, and it is why `judge.py compare` now prints a fourth: `avg_cpu`,
+`(user + sys) / wall`, derived per run from the `time` report `measure.sh` has always written and
+medianed like the rest. It exists for a row that lasted 40 ms, so the reader rows of §1 have a CPU
+number a bar could be set on — printed, and judged by nobody until one is. `/usr/bin/time` reports
+to 10 ms, so a 0.04 s row moves a fifth to a third on one tick, and the spread a bar would have to
+come from is what `judge.py control` now prints beside the two spreads it judges. The sampled peak
+is unchanged and is what this section's clause reads, against the `CPU_BAR` it has always named. No
+committed clause is edited: §9's peak-CPU clause is the same sentence judged on the same column, and
+§1's Gate names wall and max RSS only, which `judge.py control` still judges alone. A summary too
+old to carry `user` and `sys` is read without the column rather than refused — the pair is what the
+average is derived from and nothing else reads it — and `bench/probe/embed.sh` now writes `sys=`
+beside its `user=` so the one row §9 judges carries the column too. Like §1's corrections and §9's first, this was taken before the reading it governs: no
+embed has been run on this branch, §1's and §9's **Reading.** are both empty as this paragraph is
+written, and no bar has been set on the new column — that is G23's reading, and G23 is open.
+
 **Reading.**
 
 ## 10 · What did not close
+
+Written 2026-09-11, at the end of the branch that closed G38, G40, G41 and G42. Everything below is
+a gate this document names and no run answered, or a ledger row this branch never opened. None of
+it is recorded as a refusal: an unread gate is unread.
+
+- **§1, G23 — the control has never run.** Four corrections to the precondition and the suite, all
+  before any reading, and still no number: this machine has refused `quiet.sh` every time it was
+  asked. Everything downstream of §1 inherits that — the reference medians every later reader
+  reading would be judged against do not exist, so §4(e), §9's whole comparison and any bar on the
+  new `avg_cpu` column have nothing to be judged against.
+- **§2, G15 — the baseline was not re-read.** No task on this branch touched a read path, so the
+  four arms on the pinned fixture were not run and the anchor line was not recorded through
+  `track.py`. Nothing to compare, and nothing claimed.
+- **§3, G35 — moot, not measured.** No writer derives a family set since #27, so there is no
+  `derive` stage to put on the `REPOGRAPH_TIMING` line and the gate's median of five has no subject.
+  Recorded in the ledger as moot.
+- **§6 / §4, G39 — Task 6 was not run.** The design landed in #27; the price the gap calls the whole
+  question — the store's growth under a generic grammar, the one-file `update`'s wall, the
+  `graphdiff` against `main`'s build — needs the corpus copy and a build, and neither happened here.
+- **§6, G34 — the corpus half.** One grammar with one owner is in code and the property test is in
+  the suite; what is unread is the corpus build behind the `families=` clause and the CI run on
+  three platforms that the clause names.
+- **§8, G32 — the rebuild and its ≈ $0.20.** The fixture copy was never rebuilt, never enriched,
+  and the before/after arms were never read. It stays the first thing anyone hits after a rebuild.
+- **§9, G19 — the token budget and the large-model cadence.** No embed was run on this branch, so
+  the cadence clauses are unread; the large model's cadence is the 2.1 GB download the branch
+  already said it would not take.
+- **Rows this branch never opened:** G13 (the code seat, priced and unwritten), G14 (the register
+  prompt, retired as framed), G17 (the constant's derivation set), G22 (mapped weights under
+  pressure), G25 (the fp32 floor), G28 (the reranked p90 on the ceiling), G37 (no non-Claude
+  number, and the stacked levers). Each is left exactly as the ledger has it.

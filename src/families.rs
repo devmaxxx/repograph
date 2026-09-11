@@ -78,20 +78,34 @@ pub struct Site {
 pub struct Mention {
     pub prefix: String,
     pub mentions: usize,
+    /// Distinct ids written under the prefix. A prefix cited a thousand times as one id and one
+    /// cited a thousand times as a hundred ids are different things to look at.
+    pub ids: usize,
     pub files: usize,
     pub example: Option<Site>,
 }
 
-/// Every family the graph's own nodes are written in, ids and milestones apart, with how many
-/// nodes each holds. What `of_graph` returns, and the whole of what a writer compares before and
+/// How much of a family the graph holds. `definitions` is declaring-file × id pairs — a node two
+/// documents declare counts twice — read off each node's own declaring-file set, because that set
+/// is what a definition writes and an edge scan is not: a milestone's tasks are declared by the
+/// milestone node, not by the file, so nothing under a milestone family is the target of a
+/// file-sourced `Declares` edge at all.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Count {
+    pub nodes: usize,
+    pub definitions: usize,
+}
+
+/// Every family the graph's own nodes are written in, ids and milestones apart, with how much of
+/// each it holds. What `of_graph` returns, and the whole of what a writer compares before and
 /// after an apply to say which families moved.
-pub type Families = (BTreeMap<String, usize>, BTreeMap<String, usize>);
+pub type Families = (BTreeMap<String, Count>, BTreeMap<String, Count>);
 
 /// What a build says it found. The whole list where it is short and its head with a count where
 /// it is not: a build's stderr is read at a glance, and a large corpus names dozens.
 pub fn line(f: &Families) -> String {
     const SHOWN: usize = 20;
-    let listed = |m: &BTreeMap<String, usize>| {
+    let listed = |m: &BTreeMap<String, Count>| {
         let v: Vec<&str> = m.keys().map(String::as_str).collect();
         match (v.len(), v.len() > SHOWN) {
             (0, _) => "(none)".to_string(),
@@ -117,16 +131,21 @@ pub fn moved(before: &Families, after: &Families) -> Vec<String> {
     out
 }
 
-/// Every family the graph's own nodes are written in, with how many each holds. Code nodes are
-/// excluded: a symbol named after an id is not one, and a file is not an id at all.
+/// Every family the graph's own nodes are written in, with how much of each it holds. Code nodes
+/// are excluded: a symbol named after an id is not one, and a file is not an id at all. One pass:
+/// the report's `definitions` column is this walk's other half, so no row goes back over the
+/// nodes or over the edges to find it.
 pub fn of_graph(graph: &Graph) -> Families {
     let (mut ids, mut milestones) = (BTreeMap::new(), BTreeMap::new());
     for n in graph.nodes.values().filter(|n| !n.is_code()) {
-        match classify(&n.id) {
-            Some(Family::Id(f)) => *ids.entry(f.to_string()).or_default() += 1,
-            Some(Family::Milestone(f)) => *milestones.entry(f.to_string()).or_default() += 1,
-            None => {}
-        }
+        let entry = match classify(&n.id) {
+            Some(Family::Id(f)) => ids.entry(f.to_string()),
+            Some(Family::Milestone(f)) => milestones.entry(f.to_string()),
+            None => continue,
+        };
+        let c: &mut Count = entry.or_default();
+        c.nodes += 1;
+        c.definitions += n.files.len();
     }
     (ids, milestones)
 }
@@ -138,6 +157,7 @@ fn site(rel: &str, line_no: u32, line: &str) -> Site {
 #[derive(Default)]
 struct Tally {
     mentions: usize,
+    ids: BTreeSet<String>,
     files: BTreeSet<String>,
     first: Option<Site>,
 }
@@ -183,31 +203,32 @@ impl Scan {
     fn mentions(&mut self, rel: &str, line_no: u32, line: &str) {
         // The extractor's own reading of the line — ranges and slash lists expanded, boundaries
         // applied — so a mention is counted the way the graph would have cited it.
-        let mut per_prefix: BTreeMap<String, usize> = BTreeMap::new();
         for hit in crate::ids::generic().find_all(line) {
             if let Some(Family::Id(f) | Family::Milestone(f)) = classify(&hit.id) {
-                *per_prefix.entry(f.to_string()).or_default() += 1;
+                // Bound first: `f` borrows `hit.id`, and the id can only move once that ends.
+                let prefix = f.to_string();
+                self.record(prefix, hit.id, rel, line_no, line);
             }
-        }
-        for (prefix, n) in per_prefix {
-            self.record(prefix, n, rel, line_no, line);
         }
     }
 
-    fn record(&mut self, prefix: String, n: usize, rel: &str, line_no: u32, line: &str) {
+    fn record(&mut self, prefix: String, id: String, rel: &str, line_no: u32, line: &str) {
         let t = self.seen.entry(prefix).or_default();
-        t.mentions += n;
+        t.mentions += 1;
+        t.ids.insert(id);
         t.files.insert(rel.to_string());
         t.first.get_or_insert_with(|| site(rel, line_no, line));
     }
 
-    /// Every prefix the tree writes, most-written first — which of them are families is asked of
-    /// the graph in `report`, not here.
+    /// Every prefix the tree writes, the widest first — which of them are families is asked of
+    /// the graph in `report`, not here. Distinct ids order the list ahead of raw mentions: a
+    /// prefix written under twenty ids is a vocabulary nothing defines, where one written twenty
+    /// times under a single id is one citation repeated.
     fn finish(self) -> Vec<Mention> {
         let mut cited: Vec<Mention> = self.seen.into_iter()
-            .map(|(prefix, t)| Mention { prefix, mentions: t.mentions, files: t.files.len(), example: t.first })
+            .map(|(prefix, t)| Mention { prefix, mentions: t.mentions, ids: t.ids.len(), files: t.files.len(), example: t.first })
             .collect();
-        cited.sort_by(|a, b| b.mentions.cmp(&a.mentions).then(a.prefix.cmp(&b.prefix)));
+        cited.sort_by(|a, b| b.ids.cmp(&a.ids).then(b.mentions.cmp(&a.mentions)).then(a.prefix.cmp(&b.prefix)));
         cited
     }
 }
@@ -245,6 +266,10 @@ pub fn survey(repo: &Path, entries: &[Entry]) -> Result<Vec<Mention>> {
 pub struct Row {
     pub family: String,
     pub nodes: usize,
+    /// Declaring-file × id pairs, summed over the family's nodes: a node defined in two files
+    /// counts twice, a family with one is one line that may have been a mistake, and the report
+    /// puts it first for that reason.
+    pub definitions: usize,
     pub defined: Site,
 }
 
@@ -274,12 +299,12 @@ fn site_of(graph: &Graph, family: &str, milestone: bool) -> Site {
     Site { file: n.file.clone(), line: n.line, text: crate::query::headline(&n.label) }
 }
 
-fn rows(graph: &Graph, counts: &BTreeMap<String, usize>, milestone: bool) -> Vec<Row> {
-    counts.iter()
-        .map(|(family, nodes)| Row {
-            family: family.clone(), nodes: *nodes, defined: site_of(graph, family, milestone),
-        })
-        .collect()
+fn rows(graph: &Graph, counts: &BTreeMap<String, Count>, milestone: bool) -> Vec<Row> {
+    let mut out: Vec<Row> = counts.iter().map(|(family, c)| {
+        Row { family: family.clone(), nodes: c.nodes, definitions: c.definitions, defined: site_of(graph, family, milestone) }
+    }).collect();
+    out.sort_by(|a, b| a.definitions.cmp(&b.definitions).then(a.nodes.cmp(&b.nodes)).then(a.family.cmp(&b.family)));
+    out
 }
 
 pub fn report(graph: &Graph, cited: Vec<Mention>) -> Report {
@@ -297,9 +322,10 @@ fn at(s: &Site) -> String {
 }
 
 fn section(head: &str, rows: &[Row]) -> String {
-    let mut out = format!("{:<NAME$}{:>7}  {}\n", head, "nodes", "defined");
+    let mut out = format!("{:<NAME$}{:>7}{:>6}  {}\n", head, "nodes", "defs", "defined");
     for r in rows {
-        out.push_str(&format!("{:<NAME$}{:>7}  {}\n", format!("  {}", r.family), r.nodes, at(&r.defined)));
+        let once = if r.definitions == 1 { "  defined once" } else { "" };
+        out.push_str(&format!("{:<NAME$}{:>7}{:>6}  {}{once}\n", format!("  {}", r.family), r.nodes, r.definitions, at(&r.defined)));
     }
     if rows.is_empty() { out.push_str("  (none)\n"); }
     out
@@ -308,10 +334,10 @@ fn section(head: &str, rows: &[Row]) -> String {
 pub fn render(r: &Report) -> String {
     let mut out = section("families", &r.families);
     out.push_str(&section("milestones", &r.milestones));
-    out.push_str(&format!("{:<NAME$}{:>7}{:>7}  e.g.\n", "mention-only prefixes", "written", "files"));
+    out.push_str(&format!("{:<NAME$}{:>7}{:>6}{:>7}  e.g.\n", "mention-only prefixes", "written", "ids", "files"));
     for m in &r.mention_only {
         let example = m.example.as_ref().map(|e| format!("  {}  {}", at(e), e.text)).unwrap_or_default();
-        out.push_str(&format!("{:<NAME$}{:>7}{:>7}{example}\n", format!("  {}", m.prefix), m.mentions, m.files));
+        out.push_str(&format!("{:<NAME$}{:>7}{:>6}{:>7}{example}\n", format!("  {}", m.prefix), m.mentions, m.ids, m.files));
     }
     if r.mention_only.is_empty() { out.push_str("  (none)\n"); }
     out.push_str("\n# Not families: no line defines one of these. A prefix a document only writes —\n");
@@ -429,10 +455,68 @@ mod tests {
         assert!(text.ends_with('…'));
     }
 
-    fn graph_with(ids: &[&str]) -> Graph {
+    fn declared(files: &[(&str, &[&str])]) -> Graph {
+        let mut g = Graph::default();
+        for (file, ids) in files {
+            let mut e = Extraction::default();
+            e.node(NodeKind::File, &format!("file:{file}"), file, "", file, 1);
+            for id in *ids {
+                e.node(NodeKind::Requirement, id, "label", "тело", file, 1);
+                e.edge(&format!("file:{file}"), id, crate::model::EdgeKind::Declares, "", file);
+            }
+            g.apply(e);
+        }
+        g
+    }
+
+    #[test]
+    fn a_family_defined_once_sorts_first_and_is_marked() {
+        let g = declared(&[("docs/a.md", &["REQ-1", "REQ-2", "REQ-3"]), ("docs/b.md", &["OD-1"]), ("docs/c.md", &["REQ-1"])]);
+        let r = report(&g, Vec::new());
+        assert_eq!(r.families.iter().map(|f| (f.family.as_str(), f.nodes, f.definitions)).collect::<Vec<_>>(),
+            vec![("OD", 1, 1), ("REQ", 3, 4)], "REQ-1 is declared by two files, so four definitions over three nodes");
+        let text = render(&r);
+        let od = text.lines().find(|l| l.trim_start().starts_with("OD")).unwrap();
+        assert!(od.ends_with("defined once"), "{od}");
+        assert!(!text.lines().find(|l| l.trim_start().starts_with("REQ")).unwrap().contains("defined once"));
+    }
+
+    /// A milestone document declares its milestone node, and the milestone node declares the
+    /// tasks under it — so nothing under a milestone family is declared by a file. Counted off
+    /// the `Declares` edges a file is the source of, such a family read one definition however
+    /// many tasks it carried, and a one-document milestone printed `defined once` above its own
+    /// tasks. Every node's declaring files are what stand behind it.
+    #[test]
+    fn a_milestone_that_declares_its_own_tasks_counts_every_one_of_them() {
         let mut g = Graph::default();
         let mut e = Extraction::default();
-        for id in ids { e.node(NodeKind::Requirement, id, "label", "тело", "docs/a.md", 1); }
+        e.node(NodeKind::File, "file:docs/m.md", "docs/m.md", "", "docs/m.md", 1);
+        e.node(NodeKind::Milestone, "BE-M01", "foundation", "", "docs/m.md", 1);
+        e.edge("file:docs/m.md", "BE-M01", crate::model::EdgeKind::Declares, "", "docs/m.md");
+        for (tid, line) in [("BE-M01/T01", 5), ("BE-M01/T03", 6)] {
+            e.node(NodeKind::Task, tid, "задача", "", "docs/m.md", line);
+            e.edge("BE-M01", tid, crate::model::EdgeKind::Declares, "", "docs/m.md");
+        }
+        g.apply(e);
+        let r = report(&g, Vec::new());
+        assert_eq!(r.milestones.iter().map(|m| (m.family.as_str(), m.nodes, m.definitions)).collect::<Vec<_>>(),
+            vec![("BE", 3, 3)], "three nodes, each written down once");
+        let text = render(&r);
+        assert!(!text.contains("defined once"), "a document that defines three things is not one line: {text}");
+    }
+
+    #[test]
+    fn mention_only_prefixes_sort_by_distinct_ids_then_by_mentions() {
+        let d = one("см. OQ-1, OQ-2, OQ-3 и OQ-1 ещё раз\nсм. ISO-8601, ISO-8601, ISO-8601, ISO-8601, ISO-8601\nRFC-7231\n");
+        assert_eq!(d.iter().map(|m| (m.prefix.as_str(), m.ids, m.mentions)).collect::<Vec<_>>(),
+            vec![("OQ", 3, 4), ("ISO", 1, 5), ("RFC", 1, 1)]);
+    }
+
+    /// `declared` with one document, plus the symbol named after an id that every row has to
+    /// leave out.
+    fn graph_with(ids: &[&str]) -> Graph {
+        let mut g = declared(&[("docs/a.md", ids)]);
+        let mut e = Extraction::default();
         e.node(NodeKind::Symbol, "src/a.ts#REQ-9", "REQ-9", "", "src/a.ts", 1);
         g.apply(e);
         g
@@ -442,8 +526,9 @@ mod tests {
     fn the_graph_reports_the_same_families_its_documents_defined() {
         let g = graph_with(&["REQ-7", "AC-3", "BE-M01", "BE-M01/T05", "entity:Foo"]);
         let (ids, milestones) = of_graph(&g);
-        assert_eq!(ids.into_iter().collect::<Vec<_>>(), vec![("AC".to_string(), 1), ("REQ".to_string(), 1)]);
-        assert_eq!(milestones.into_iter().collect::<Vec<_>>(), vec![("BE".to_string(), 2)]);
+        let seen = |m: BTreeMap<String, Count>| m.into_iter().map(|(f, c)| (f, c.nodes, c.definitions)).collect::<Vec<_>>();
+        assert_eq!(seen(ids), vec![("AC".to_string(), 1, 1), ("REQ".to_string(), 1, 1)]);
+        assert_eq!(seen(milestones), vec![("BE".to_string(), 2, 2)]);
     }
 
     #[test]

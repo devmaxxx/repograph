@@ -32,17 +32,18 @@ class Row(unittest.TestCase):
 
     def row(self, samples, rc="0"):
         self.f.write_text(samples)
-        return sourced(f"summary_row control-1 1930.05 5600.11 2.15 {rc} '{self.f}'")
+        return sourced(f"summary_row control-1 1930.05 5600.11 120.00 2.15 {rc} '{self.f}'")
 
     def test_the_row_carries_the_count_of_samples_its_peak_came_from(self):
         r = self.row(SAMPLES)
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertEqual(r.stdout.strip(),
-                         "control-1  wall=1930.05s user=5600.11s maxrss=2.15GB peak_cpu=121.4% samples=3 rc=0")
+                         "control-1  wall=1930.05s user=5600.11s sys=120.00s maxrss=2.15GB peak_cpu=121.4% samples=3 rc=0")
 
     def test_the_row_reads_back_through_judge_the_way_a_reader_row_does(self):
         m = judge.medians([self.row(SAMPLES).stdout])
-        self.assertEqual(m["control"], {"wall": 1930.05, "maxrss": 2.15, "peak_cpu": 121.4, "n": 1})
+        self.assertEqual(m["control"], {"wall": 1930.05, "maxrss": 2.15, "peak_cpu": 121.4,
+                                        "avg_cpu": 2.96, "n": 1})
 
     def test_an_embed_the_sampler_never_read_refuses_instead_of_printing_a_row(self):
         r = self.row("")
@@ -90,8 +91,11 @@ class SamplerRefusal(unittest.TestCase):
         self.assertEqual([pid for pid in under if self.alive(pid)], [])
 
     def test_the_refusal_says_the_store_it_left_behind_is_half_written(self):
+        # 4 and not 3: 3 is the binary's verdict status everything else in this kit reads as a
+        # reading, and an operator — or a harness — reading this script's 3 the same way would take
+        # a half-written store for an answered question.
         r = sourced("refuse_partial_store 'no repograph to sample' /tmp/beauty-crm-test")
-        self.assertEqual(r.returncode, 3)
+        self.assertEqual(r.returncode, 4)
         self.assertIn("no repograph to sample", r.stderr)
         self.assertIn("/tmp/beauty-crm-test/.repograph/", r.stderr)
         self.assertIn("partial", r.stderr)
