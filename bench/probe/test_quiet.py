@@ -8,7 +8,7 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 QUIET = HERE / "quiet.sh"
 
-HEAD = re.compile(r"^quiet: idle=\S+ load1=\S+ ac=\d+ avail=\S+GB busy=(\d+) "
+HEAD = re.compile(r"^quiet: idle=\S+ load1=\S+ ac=\d+ avail=\S+GB swap=\S+GB busy=(\d+) "
                   r"\(cargo/rustc/repograph: (\d+), node ≥5\.0%: (\d+)\)$")
 
 
