@@ -18,6 +18,8 @@
 # walk and both rules without waiting for a machine that happens to be quiet.
 set -u
 
+MEM_MIN=${MEM_MIN:-6.0}
+
 # The bar a `node` outside the chain has to clear to count, frozen with the rest of this clause.
 NODE_CPU_MIN=5.0
 
@@ -59,6 +61,11 @@ count_rows() {
 }
 
 main() {
+  # Reclaimable pages, not just free ones: macOS keeps inactive pages as a cache and hands them
+  # back under pressure, so free alone reads a healthy machine as empty. The bar is twice the
+  # heaviest row the suite runs (`ask --rerank-local`, 3.03 GB measured) — a suite killed at minute
+  # eight for memory is not a reading, and the kit should say so before it spends the eight minutes.
+  AVAIL=$(vm_stat | awk -F'[:.]' '/Pages (free|inactive|speculative)/ {p += $2} END {printf "%.1f", p * 16384 / 1073741824}')
   IDLE=$(top -l 2 -s 1 | grep 'CPU usage' | tail -1 | sed 's/.*, \([0-9.]*\)% idle.*/\1/')
   LOAD1=$(sysctl -n vm.loadavg | awk '{print $2}')
   AC=$(pmset -g batt | head -1 | grep -c "AC Power")
@@ -67,11 +74,14 @@ main() {
   NODE_LINES=$(printf '%s\n' "$ROWS" | busy_rows node)
   PROJECT=$(count_rows "$PROJECT_LINES")
   NODE=$(count_rows "$NODE_LINES")
-  echo "quiet: idle=${IDLE}% load1=${LOAD1} ac=${AC} busy=$((PROJECT + NODE)) (cargo/rustc/repograph: ${PROJECT}, node ≥${NODE_CPU_MIN}%: ${NODE})"
+  echo "quiet: idle=${IDLE}% load1=${LOAD1} ac=${AC} avail=${AVAIL}GB busy=$((PROJECT + NODE)) (cargo/rustc/repograph: ${PROJECT}, node ≥${NODE_CPU_MIN}%: ${NODE})"
   ok=1
   awk -v i="$IDLE" 'BEGIN{exit !(i+0 >= 85)}' || { echo "  not quiet: idle ${IDLE}% < 85%"; ok=0; }
   awk -v l="$LOAD1" 'BEGIN{exit !(l+0 < 3.0)}' || { echo "  not quiet: load1 ${LOAD1} >= 3.0"; ok=0; }
   [ "$AC" = "1" ] || { echo "  not quiet: on battery"; ok=0; }
+  awk -v a="$AVAIL" -v m="$MEM_MIN" 'BEGIN{exit !(a+0 >= m+0)}' \
+    || { echo "  not quiet: ${AVAIL}GB reclaimable, under the ${MEM_MIN}GB bar — the heaviest row needs 3.0GB"; \
+         echo "     holding it:"; ps -Ao rss,comm -r | sort -rn | awk 'NR<=4 {printf "     %6.1fGB  %s\n", $1/1048576, $2}'; ok=0; }
   [ "$PROJECT" = "0" ] || { echo "  not quiet: $PROJECT cargo/rustc/repograph processes running"; printf '%s\n' "$PROJECT_LINES"; ok=0; }
   [ "$NODE" = "0" ] || { echo "  not quiet: $NODE node processes at ${NODE_CPU_MIN}% CPU or above"; printf '%s\n' "$NODE_LINES"; ok=0; }
   [ "$ok" = "1" ]
