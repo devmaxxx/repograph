@@ -681,8 +681,11 @@ mod tests {
         // missed, which is why `run` never grades one.
         assert!(!passes(&Summary::default().with("long", (15, 15)), true, true, Floors::Small));
 
-        // A model with no floors of its own is measured and never graded.
+        // A model with no floors of its own is measured and never graded in its dense arm; its
+        // lexical arm has no embedder in it and reads the small model's floors.
         assert!(!passes(&at_floor_dense, true, true, Floors::None));
+        assert!(passes(&at_floor_nodense, false, true, Floors::None), "lexical arms do not read the model");
+        assert!(!passes(&at_floor_nodense.clone().with("keyword", (38, 40)), false, true, Floors::None));
     }
 
     #[test]
