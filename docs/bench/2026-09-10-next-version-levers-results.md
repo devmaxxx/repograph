@@ -289,15 +289,18 @@ what the reading can carry, not a change to the gate: the numbers above are as c
 
 **Correction, 2026-09-11 — the CPU column, before any number.** The note above says the peak-CPU
 column is meaningless for every reader row and meaningful for this row alone. That is still true of
-the *sampled* column, and it is why `judge.py compare` now prints and judges a fourth: `avg_cpu`,
+the *sampled* column, and it is why `judge.py compare` now prints a fourth: `avg_cpu`,
 `(user + sys) / wall`, derived per run from the `time` report `measure.sh` has always written and
 medianed like the rest. It exists for a row that lasted 40 ms, so the reader rows of §1 have a CPU
-number a bar can be set on; the sampled peak is unchanged and is what this section's clause reads,
-against the `CPU_BAR` it has always named. No committed clause is edited: §9's peak-CPU clause is
-the same sentence judged on the same column, and §1's Gate names wall and max RSS only, which
-`judge.py control` still judges alone. A summary too old to carry `user` and `sys` is refused rather
-than read without the column, which is why `bench/probe/embed.sh` now writes `sys=` beside its
-`user=`. Like §1's corrections and §9's first, this was taken before the reading it governs: no
+number a bar could be set on — printed, and judged by nobody until one is. `/usr/bin/time` reports
+to 10 ms, so a 0.04 s row moves a fifth to a third on one tick, and the spread a bar would have to
+come from is what `judge.py control` now prints beside the two spreads it judges. The sampled peak
+is unchanged and is what this section's clause reads, against the `CPU_BAR` it has always named. No
+committed clause is edited: §9's peak-CPU clause is the same sentence judged on the same column, and
+§1's Gate names wall and max RSS only, which `judge.py control` still judges alone. A summary too
+old to carry `user` and `sys` is read without the column rather than refused — the pair is what the
+average is derived from and nothing else reads it — and `bench/probe/embed.sh` now writes `sys=`
+beside its `user=` so the one row §9 judges carries the column too. Like §1's corrections and §9's first, this was taken before the reading it governs: no
 embed has been run on this branch, §1's and §9's **Reading.** are both empty as this paragraph is
 written, and no bar has been set on the new column — that is G23's reading, and G23 is open.
 

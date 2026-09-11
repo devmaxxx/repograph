@@ -6,9 +6,11 @@
 # that closed G19 lost its intervals to a laptop that slept, and `judge.py cadence` refuses a
 # transcript with no `start` stamp.
 #
-# Exit 3 is the one refusal that leaves the store mid-write: the vectors were already removed and
+# Exit 4 is the one refusal that leaves the store mid-write: the vectors were already removed and
 # the embed was cut off partway through writing them back. Every other refusal exits 2 and leaves
-# the store either untouched or whole.
+# the store either untouched or whole. 4 and not 3 because 3 is the binary's own verdict status —
+# `judge.py` and `measure.sh` read a 3 as a row that answered and was worth timing, and a store
+# left half written is the opposite of a reading.
 set -u
 
 # A wrapper and the two levels under it, deepest first: `caffeinate -di cmd` exec's `time` in
@@ -40,7 +42,7 @@ kill_tree() {
 refuse_partial_store() {
   echo "refusing: $1" >&2
   echo "  the embed was killed mid-run, so $2/.repograph/ holds a partial set of vectors and no whole one — reset.sh before anything reads this store" >&2
-  return 3
+  return 4
 }
 
 # The summary row, or a refusal instead of one. `judge.py compare` reads a `peak_cpu` of 0 as
@@ -57,7 +59,8 @@ summary_row() {
   [ "$n" != "0" ] || { echo "refusing: no samples in $file — the peak CPU column would read 0, which compare leaves unjudged" >&2; return 2; }
   [ "$peak" != "0" ] || { echo "refusing: $n samples in $file and a peak of 0% — a whole-store embed that burns no CPU is a sampler that read the wrong process" >&2; return 2; }
   # `sys` rides beside `user` because `judge.py` derives its average-CPU column from the pair; a
-  # row without it is refused there rather than dropped from the column.
+  # row without it keeps every other reading and carries no average at all, and this is the one row
+  # of the kit that column was added for.
   printf '%s  wall=%ss user=%ss sys=%ss maxrss=%sGB peak_cpu=%s%% samples=%s rc=%s\n' "$name" "$wall" "$usr" "$sys" "$rss" "$peak" "$n" "$rc"
 }
 
@@ -156,7 +159,7 @@ SYS=$(printf '%s\n' "$REPORT" | awk '{print $6}')
 # `time` leaves a full report even when the command bailed, so a partial embed — weights gone
 # mid-run, the disk full at 60% — would otherwise enter the median of three as an honestly
 # measured, much faster whole-store embed. The row carries its status and `judge.py medians`
-# refuses a row that measured a failure; the script's own exit is 3, below, because the store the
+# refuses a row that measured a failure; the script's own exit is 4, below, because the store the
 # run left behind is the same partial one every other failure here leaves.
 [ "$RC" = "0" ] || echo "embed: $NAME exited $RC — this row measured a failure" >&2
 ROW=$(summary_row "$NAME" "$WALL" "$USR" "$SYS" "$RSS" "$RC" "$L/$NAME.samples") || {
@@ -168,7 +171,7 @@ ROW=$(summary_row "$NAME" "$WALL" "$USR" "$SYS" "$RSS" "$RC" "$L/$NAME.samples")
   # next `ask` on that store answers lexical-only without saying so.
   [ "$RC" = "0" ] && exit 2
   echo "  the vectors were removed before the embed started and it exited $RC, so $F/.repograph/ holds no whole set of them — reset.sh before anything reads this store" >&2
-  exit 3
+  exit 4
 }
 printf '%s\n' "$ROW" | tee -a "$L/summary.txt"
 # Not a pipeline: bash 3.2 here has no pipefail, and `| tee` hands back tee's status — the
@@ -176,15 +179,15 @@ printf '%s\n' "$ROW" | tee -a "$L/summary.txt"
 # the trap readers.sh names on its own quiet gate.
 python3 "$HERE/judge.py" cadence "$L/$NAME.err" > "$L/$NAME.cadence" 2>&1; CAD=$?
 cat "$L/$NAME.cadence" | tee -a "$L/summary.txt"
-# 3 and the warning here too, not the embed's own status: what the store holds follows the embed and
+# 4 and the warning here too, not the embed's own status: what the store holds follows the embed and
 # not the sampler, and a sampled failure — the disk full at 60%, the weights gone mid-run — leaves
 # exactly what the no-PID and the no-samples doors leave, the vectors removed and no whole set in
-# their place. Exiting `$RC` said 1 or 2, and the header above promises that every code but 3 leaves
+# their place. Exiting `$RC` said 1 or 2, and the header above promises that every code but 4 leaves
 # the store untouched or whole; an operator reading 2 that way runs the reader suite on a store with
 # no vectors and every `ask` answers lexical-only without saying so. The row is still printed and
 # still carries `rc=`, which is what `judge.py medians` refuses it on.
 [ "$RC" = "0" ] || {
   echo "  the vectors were removed before the embed started and it exited $RC, so $F/.repograph/ holds no whole set of them — reset.sh before anything reads this store" >&2
-  exit 3
+  exit 4
 }
 exit "$CAD"

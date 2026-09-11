@@ -32,9 +32,9 @@ wait $WRAP; RC=$?
 # answered — a suite that ran every case and missed a floor, a `trace` that found no path within
 # the depth — and 1 for an empty graph, a missing case file or a dense width mismatch: a row that
 # answered spent its wall clock reading, and a row that never found a store spent it failing. The
-# status is what separates them — it is the interface, and the sentence on stderr is only a message
-# to a person, free to be reworded. 3 and not 2, which is a status two layers above the command
-# write: `clap` for a usage error, the npm launcher for a missing platform binary. A binary too old
+# status is what separates them: the status is the interface, and the wording is a message no
+# script reads. 3 and not 2, which is a status two layers above the command write: `clap` for a
+# usage error, the npm launcher for a missing platform binary. A binary too old
 # to exit 3 says nothing this reads, so its missed floors arrive as the failures they are
 # indistinguishable from.
 #

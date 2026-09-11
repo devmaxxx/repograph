@@ -1,4 +1,5 @@
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -19,6 +20,21 @@ def time_l_reads():
         return False
 
 
+class WhichRowsHaveFloors(unittest.TestCase):
+    """The instrument and the judge name the same rows, in two copies of one expression.
+
+    `measure.sh` decides which rows may carry `floors_missed` and `judge.py` decides which rows may
+    be believed when they do; the two disagreeing is a row written by one and refused by the other,
+    on a suite nobody reads until it has been run. Read off the shell rather than restated here, so
+    the assertion cannot pass by agreeing with a third copy.
+    """
+
+    def test_the_shell_and_the_judge_match_the_same_rows(self):
+        literal = re.search(r"^BENCH_ROW='(.*)'$", MEASURE.read_text(), re.M)
+        self.assertIsNotNone(literal, "measure.sh no longer assigns BENCH_ROW as a quoted literal")
+        self.assertEqual(literal.group(1), judge.BENCH_ROW.pattern)
+
+
 @unittest.skipUnless(os.name == "posix" and time_l_reads(), "`/usr/bin/time -l`: the macOS kit's own platform")
 class FloorRow(unittest.TestCase):
     """Which non-zero exit `measure.sh` records as a reading, and which it leaves as a failure.
@@ -26,8 +42,8 @@ class FloorRow(unittest.TestCase):
     `repograph` exits 3 for a question it answered — a suite that ran every case and missed a
     floor, a `trace` that found no path — and 1 when it could not answer at all. The row is built
     over a stub that exits with either status, which is the whole of what the instrument reads,
-    without a store or a binary under it. The sentence on stderr is a message to a person and is
-    not read here: a row that says the old words and exits 1 is refused, so a binary older than
+    without a store or a binary under it. The status is the interface and the wording is a message
+    no script reads: a row that says the old words and exits 1 is refused, so a binary older than
     this release cannot buy the field with its wording.
 
     `floors_missed` is scoped to the rows that can miss a floor. A `trace` row's verdict is a

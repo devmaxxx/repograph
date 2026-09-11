@@ -6,12 +6,9 @@
 //! Every object is an object, never a bare array: a field can then be added without breaking a
 //! parser that was written against the version before it.
 
-use std::process::Command;
+mod common;
 
-fn run(repo: &std::path::Path, args: &[&str]) -> std::process::Output {
-    Command::new(env!("CARGO_BIN_EXE_repograph"))
-        .arg("--no-dense").arg("--repo").arg(repo).args(args).output().unwrap()
-}
+use common::run;
 
 fn repograph(repo: &std::path::Path, args: &[&str]) -> (bool, String) {
     let out = run(repo, args);
@@ -36,8 +33,9 @@ fn built() -> tempfile::TempDir {
     std::fs::create_dir_all(dir.path().join("docs")).unwrap();
     std::fs::write(dir.path().join("docs/req.md"), DOC).unwrap();
     std::fs::write(dir.path().join("billing.ts"), CODE).unwrap();
-    let (ok, _) = repograph(dir.path(), &["build"]);
-    assert!(ok, "the fixture repository built");
+    let built = run(dir.path(), &["build"]);
+    assert!(built.status.success(), "the fixture repository built: {}",
+            String::from_utf8_lossy(&built.stderr));
     dir
 }
 
@@ -81,9 +79,10 @@ fn explain_verify_and_trace_answer_in_json_like_the_rest() {
     assert!(path.iter().all(|s| s["id"].is_string() && s["at"].is_string()), "{out}");
 }
 
-/// No path within the depth is an answer to the question that was asked. The text form exits 3 —
-/// a verdict, not a failure to reach one; the JSON form says `null` and exits 0, because a caller
-/// parsing an object should not have to read an exit code to learn what the object already says.
+/// No path within the depth is an answer to the question that was asked, and the JSON form says
+/// so in the object: `null` for the path, and exit 0, because a caller parsing an object should
+/// not have to read an exit code to learn what the object already says. The text form's 3 is the
+/// same answer in the other channel and is pinned in `exit_codes.rs`, which owns the statuses.
 #[test]
 fn a_trace_that_finds_nothing_is_a_null_path_and_not_a_failure() {
     let dir = built();
@@ -92,11 +91,6 @@ fn a_trace_that_finds_nothing_is_a_null_path_and_not_a_failure() {
     let v = parsed(&out);
     assert!(v["path"].is_null(), "{out}");
     assert_eq!(v["from"], "sym:billing.ts::write");
-
-    // 3, not just non-zero: the text form answers the question and says no, which a shell script
-    // reads apart from the 1 an unknown symbol exits with.
-    let out = run(dir.path(), &["trace", "write", "refund"]);
-    assert_eq!(out.status.code(), Some(3), "{}", String::from_utf8_lossy(&out.stderr));
 }
 
 /// A node the store does not have is an error in both forms: an empty object would be a claim

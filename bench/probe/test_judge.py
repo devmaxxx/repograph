@@ -57,9 +57,25 @@ class Medians(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             p = os.path.join(d, "m.txt")
             with open(p, "w") as f:
-                f.write("ask-fused wall=0.61 maxrss=1.55 peak_cpu=120.0 avg_cpu=0.98 n=5\n")
+                f.write("ask-fused wall=0.61 maxrss=1.55 peak_cpu=120.0% avg_cpu=98% n=5\n")
             self.assertEqual(judge.read_medians(p)["ask-fused"],
                              {"wall": 0.61, "maxrss": 1.55, "peak_cpu": 120.0, "avg_cpu": 0.98, "n": 5})
+
+    def test_the_two_cpu_columns_are_printed_in_the_same_unit(self):
+        # Cores on the row, percent of one core in the file: 0.98 cores is 98%, beside a sampled
+        # peak already written as a percentage, and the line reads back as the cores it came from.
+        out = io.StringIO()
+        with tempfile.TemporaryDirectory() as d:
+            summary = Path(d, "summary.txt")
+            summary.write_text(SUMMARY)
+            with contextlib.redirect_stdout(out):
+                judge.main(["judge.py", "medians", str(summary)])
+        line = [l for l in out.getvalue().splitlines() if l.startswith("ask-fused")][0]
+        self.assertIn("peak_cpu=120.0% avg_cpu=98% ", line)
+        with tempfile.TemporaryDirectory() as d:
+            medians = Path(d, "medians.txt")
+            medians.write_text(out.getvalue())
+            self.assertEqual(judge.read_medians(str(medians))["ask-fused"]["avg_cpu"], 0.98)
 
     def test_a_summary_file_of_runs_reads_as_medians_too(self):
         import os
@@ -69,6 +85,34 @@ class Medians(unittest.TestCase):
             with open(p, "w") as f:
                 f.write(SUMMARY)
             self.assertEqual(judge.read_medians(p)["impact"]["n"], 3)
+
+    def test_a_reference_written_before_the_average_existed_is_read_without_that_column(self):
+        # The references on disk were taken by an instrument that wrote no `avg_cpu`, and a
+        # comparison against one is the whole point of keeping them: the row reads, and the
+        # column it cannot speak about prints `n/a` instead of failing the file.
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d, "medians.txt")
+            p.write_text("ask-fused wall=0.61 maxrss=1.55 peak_cpu=120.0 n=5\n")
+            ref = judge.read_medians(str(p))
+            self.assertIsNone(ref["ask-fused"]["avg_cpu"])
+            new = {"ask-fused": {"wall": 0.61, "maxrss": 1.55, "peak_cpu": 120.0, "avg_cpu": 0.98, "n": 5}}
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                ok = judge.print_table(judge.compare(ref, new), ("wall Δ", "RSS Δ", "peak CPU Δ", "avg CPU Δ"))
+            self.assertTrue(ok)
+            self.assertEqual(out.getvalue().splitlines()[2], "| ask-fused | +0.0% | +0.0% | +0.0% | n/a | ok |")
+
+    def test_a_file_no_line_of_which_is_a_row_is_refused_by_name_and_by_shape(self):
+        # Falling through to the run parser and returning nothing put an empty comparison in front
+        # of `print_table`, which names no file; the refusal has to say which file and what a line
+        # of it should look like.
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d, "medians.txt")
+            p.write_text("quiet: idle=96%\nrepograph: embedder intfloat/multilingual-e5-small\n")
+            with self.assertRaises(SystemExit) as e:
+                judge.read_medians(str(p))
+            self.assertIn(str(p), str(e.exception))
+            self.assertIn("wall=", str(e.exception))
 
 
 class RefusedRuns(unittest.TestCase):
@@ -80,14 +124,13 @@ class RefusedRuns(unittest.TestCase):
             judge.medians([line])
         self.assertIn("exited 2", str(e.exception))
 
-    def test_a_summary_too_old_to_carry_the_cpu_fields_is_refused_not_read_without_them(self):
-        # The column would otherwise be silently absent from one side of a comparison, which is
-        # what `control` exists to catch and cannot see once the field is optional.
-        line = "impact-1  wall=0.04s maxrss=0.05GB peak_cpu=0% peak_threads=1 samples=0 rc=0"
-        with self.assertRaises(SystemExit) as e:
-            judge.medians([line])
-        self.assertIn("user", str(e.exception))
-        self.assertIn("sys", str(e.exception))
+    def test_a_row_that_predates_the_cpu_fields_reads_with_no_average_rather_than_as_a_failure(self):
+        # `user` and `sys` are what the average is derived from and nothing else reads them, so a
+        # row without them is a row missing a column — not a run that did not complete.
+        line = "control-1  wall=1930.05s user=5600.11s maxrss=2.15GB peak_cpu=293% samples=6 rc=0"
+        m = judge.medians([line])
+        self.assertEqual(m["control"]["wall"], 1930.05)
+        self.assertIsNone(m["control"]["avg_cpu"])
 
     def test_a_row_with_no_wall_at_all_names_the_field(self):
         line = "ask-fused-1  wall=s user=s sys=s maxrss=GB peak_cpu=0% peak_threads=1 samples=0 rc=0"
@@ -180,6 +223,56 @@ class FloorVerdicts(unittest.TestCase):
             judge.medians([FLOOR_LINE.replace(" rc=3 ", " rc=1 ")])
         self.assertIn("exited 1", str(e.exception))
 
+    def test_a_row_that_succeeded_and_claims_a_missed_floor_is_refused_for_saying_both(self):
+        # The two halves contradict each other, so neither can be believed: `bench` that exits 0
+        # met its floors. Every row name, because the disagreement is the fact, not the command.
+        for name in ("bench-dense-1", "ask-fused-1"):
+            line = FLOOR_LINE.replace("bench-dense-1", name).replace(" rc=3 ", " rc=0 ")
+            with self.assertRaises(SystemExit) as e:
+                judge.medians([line])
+            self.assertIn("floors_missed", str(e.exception))
+            self.assertIn("rc=0", str(e.exception))
+
+    def test_a_verdict_on_a_row_with_no_floors_is_kept_and_named(self):
+        # The row is a reading — it traversed for its wall clock and then said no — but it is a
+        # reading of an answer, and a bar set on it is set on the answer. So it is kept with a
+        # flag of its own and the table says which rows carry it.
+        m = judge.medians([TRACE_LINE])
+        self.assertEqual(m["trace"]["verdict"], 1)
+        self.assertNotIn("floors_missed", str(m["trace"]))
+
+    def test_the_verdict_flag_rides_through_medians_and_the_table_says_it(self):
+        with tempfile.TemporaryDirectory() as d:
+            summary = Path(d, "summary.txt")
+            summary.write_text(TRACE_LINE + "\n" + SUMMARY)
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                judge.main(["judge.py", "medians", str(summary)])
+            printed = out.getvalue()
+            self.assertIn("trace: answered with a verdict", printed)
+            medians = Path(d, "medians.txt")
+            medians.write_text(printed)
+            back = judge.read_medians(str(medians))
+            self.assertEqual(back["trace"]["verdict"], 1)
+            self.assertNotIn("verdict", str(back["ask-fused"]))
+
+    def test_both_tables_name_the_rows_that_answered_with_a_verdict(self):
+        rows = {"trace": {"wall": 0.42, "maxrss": 0.31, "peak_cpu": 0.0, "avg_cpu": 0.83, "n": 5, "verdict": 1}}
+        clean = {"trace": {"wall": 0.42, "maxrss": 0.31, "peak_cpu": 0.0, "avg_cpu": 0.83, "n": 5}}
+        self.assertEqual(judge.verdict_rows(clean, rows), {"trace"})
+        for judged, head in ((judge.compare(rows, clean), ("wall Δ", "RSS Δ", "peak CPU Δ", "avg CPU Δ")),
+                             (judge.control(rows, clean), ("wall spread", "RSS spread", "avg CPU spread"))):
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                judge.print_table(judged, head, verdicts=judge.verdict_rows(rows, clean))
+            self.assertIn("trace: answered with a verdict", out.getvalue())
+        # And a table no row of which answered says nothing about verdicts.
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            judge.print_table(judge.compare(clean, clean), ("wall Δ", "RSS Δ", "peak CPU Δ", "avg CPU Δ"),
+                              verdicts=judge.verdict_rows(clean, clean))
+        self.assertNotIn("verdict", out.getvalue())
+
     def test_a_clean_bench_row_keeps_the_shape_every_other_row_has(self):
         line = FLOOR_LINE.replace(" rc=3 floors_missed=1", " rc=0")
         self.assertNotIn("floors_missed", str(judge.medians([line])["bench-dense"]))
@@ -237,7 +330,8 @@ class FloorVerdicts(unittest.TestCase):
         self.assertEqual(judge.floors_rows(rows, rows), set())
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
-            judge.print_table(judge.control(rows, rows), ("wall spread", "RSS spread"), judge.floors_rows(rows, rows))
+            judge.print_table(judge.control(rows, rows), ("wall spread", "RSS spread", "avg CPU spread"),
+                              judge.floors_rows(rows, rows))
         self.assertNotIn("floors_missed", out.getvalue())
 
 
@@ -246,12 +340,29 @@ class Control(unittest.TestCase):
         a = {"ask-fused": {"wall": 0.60, "maxrss": 1.50, "peak_cpu": 120.0, "avg_cpu": 0.98, "n": 5}}
         b = {"ask-fused": {"wall": 0.63, "maxrss": 1.55, "peak_cpu": 121.0, "avg_cpu": 0.99, "n": 5}}
         rows = judge.control(a, b)
-        self.assertEqual(rows, [("ask-fused", 0.05, 0.0333, True)])
+        self.assertEqual(rows, [("ask-fused", 0.05, 0.0333, 0.0102, True)])
+
+    def test_the_average_cpu_spread_is_reported_and_does_not_decide_the_control(self):
+        # What a control is for: the same binary twice says how repeatable each column is. The
+        # average moves with `/usr/bin/time`'s 10 ms resolution on a row that lasts 40 ms, so the
+        # spread is printed for a reader and no verdict is taken on it until one has been read.
+        a = {"impact": {"wall": 0.04, "maxrss": 0.05, "peak_cpu": 0.0, "avg_cpu": 0.75, "n": 5}}
+        b = {"impact": {"wall": 0.04, "maxrss": 0.05, "peak_cpu": 0.0, "avg_cpu": 1.00, "n": 5}}
+        (row, wall, rss, avg, ok), = judge.control(a, b)
+        self.assertEqual((row, wall, rss), ("impact", 0.0, 0.0))
+        self.assertAlmostEqual(avg, 0.3333, places=4)
+        self.assertTrue(ok)
+
+    def test_a_control_one_side_of_which_predates_the_column_reports_no_spread(self):
+        a = {"impact": {"wall": 0.04, "maxrss": 0.05, "peak_cpu": 0.0, "avg_cpu": None, "n": 5}}
+        b = {"impact": {"wall": 0.04, "maxrss": 0.05, "peak_cpu": 0.0, "avg_cpu": 0.75, "n": 5}}
+        self.assertIsNone(judge.control(a, b)[0][3])
+        self.assertIsNone(judge.control(b, a)[0][3])
 
     def test_a_row_outside_either_bar_fails_and_names_which(self):
         a = {"dump10": {"wall": 0.70, "maxrss": 1.36, "peak_cpu": 100.0, "avg_cpu": 0.9, "n": 5}}
         b = {"dump10": {"wall": 0.90, "maxrss": 1.36, "peak_cpu": 100.0, "avg_cpu": 0.9, "n": 5}}
-        (row, wall, rss, ok), = judge.control(a, b)
+        (row, wall, rss, _, ok), = judge.control(a, b)
         self.assertFalse(ok)
         self.assertAlmostEqual(wall, 0.2857, places=4)
         self.assertEqual(rss, 0.0)
@@ -269,9 +380,12 @@ class Control(unittest.TestCase):
             judge.compare({}, {"a": {"wall": 1, "maxrss": 1, "peak_cpu": 1, "avg_cpu": 1, "n": 5}})
 
 
-class ComparePeakCpu(unittest.TestCase):
-    """The third judged column. G19's control triple — 1,930 s, 293%, 2.15 GB — is the shape the
-    column exists for; the reader rows are the shape it cannot speak about."""
+class CompareCpuColumns(unittest.TestCase):
+    """The two CPU columns and what each of them is worth. The sampled peak is judged: G19's
+    control triple — 1,930 s, 293%, 2.15 GB — is the shape it exists for, and the reader rows are
+    the shape it cannot speak about. The derived average is printed beside it and judged by
+    nobody: `/usr/bin/time` reports to 10 ms, so one tick moves a 0.04 s row by a fifth, and no
+    control has yet read what that column's own spread is."""
 
     def row(self, wall, rss, cpu, avg=1.0):
         return {"wall": wall, "maxrss": rss, "peak_cpu": cpu, "avg_cpu": avg, "n": 5}
@@ -279,30 +393,30 @@ class ComparePeakCpu(unittest.TestCase):
     def test_a_candidate_inside_the_cpu_bar_passes(self):
         ref = {"embed": self.row(1930.0, 2.15, 293.0)}
         new = {"embed": self.row(1930.0, 2.15, 315.0)}
-        (_, _, _, cpu, _, ok), = judge.compare(ref, new)
-        self.assertAlmostEqual(cpu, 0.0751, places=4)
-        self.assertTrue(ok)
+        (r,) = judge.compare(ref, new)
+        self.assertAlmostEqual(r.peak, 0.0751, places=4)
+        self.assertTrue(r.ok)
 
     def test_a_candidate_outside_the_cpu_bar_fails_on_that_column_alone(self):
         ref = {"embed": self.row(1930.0, 2.15, 293.0)}
         new = {"embed": self.row(2026.5, 2.15, 360.0)}
-        (_, wall, rss, cpu, _, ok), = judge.compare(ref, new)
-        self.assertEqual((wall, rss), (0.05, 0.0))
-        self.assertAlmostEqual(cpu, 0.2287, places=4)
-        self.assertFalse(ok)
+        (r,) = judge.compare(ref, new)
+        self.assertEqual((r.wall, r.rss), (0.05, 0.0))
+        self.assertAlmostEqual(r.peak, 0.2287, places=4)
+        self.assertFalse(r.ok)
 
     def test_a_row_the_sampler_never_caught_is_unjudged_rather_than_green(self):
         ref = {"impact": self.row(0.04, 0.05, 0.0)}
-        (_, _, _, cpu, avg, ok), = judge.compare(ref, {"impact": self.row(0.04, 0.05, 0.0)})
-        self.assertIsNone(cpu)
-        # And the derived column speaks where the sampled one cannot: this is the row it exists for.
-        self.assertEqual(avg, 0.0)
-        self.assertTrue(ok)
+        (r,) = judge.compare(ref, {"impact": self.row(0.04, 0.05, 0.0)})
+        self.assertIsNone(r.peak)
+        # And the derived column still reads where the sampled one cannot; it is reported, not judged.
+        self.assertEqual(r.avg, 0.0)
+        self.assertTrue(r.ok)
         # A reference of 0 is no reading, not a reading of zero, so a candidate that did get
         # sampled has nothing to be within 10% of either — the wall column is what moved.
-        (_, _, _, cpu, _, ok), = judge.compare(ref, {"impact": self.row(0.04, 0.05, 130.0)})
-        self.assertIsNone(cpu)
-        self.assertTrue(ok)
+        (r,) = judge.compare(ref, {"impact": self.row(0.04, 0.05, 130.0)})
+        self.assertIsNone(r.peak)
+        self.assertTrue(r.ok)
 
     def test_the_table_prints_four_delta_columns_and_names_the_unjudged_one(self):
         out = io.StringIO()
@@ -315,28 +429,31 @@ class ComparePeakCpu(unittest.TestCase):
         self.assertEqual(lines[1], "|---|---|---|---|---|---|")
         self.assertEqual(lines[2], "| impact | +0.0% | +0.0% | n/a | +0.0% | ok |")
 
-    def test_an_average_outside_the_bar_fails_the_row_on_that_column_alone(self):
+    def test_an_average_far_outside_the_others_is_reported_and_the_row_still_passes(self):
+        # 43% on the derived average with wall, RSS and peak all inside: no bar has been set on
+        # this column, so the number is printed and the verdict is taken on the other three.
         ref = {"ask-fused": self.row(0.61, 1.55, 0.0, avg=0.98)}
         new = {"ask-fused": self.row(0.61, 1.55, 0.0, avg=1.40)}
-        (_, wall, rss, cpu, avg, ok), = judge.compare(ref, new)
-        self.assertEqual((wall, rss), (0.0, 0.0))
-        self.assertIsNone(cpu)
-        self.assertAlmostEqual(avg, 0.4286, places=4)
-        self.assertFalse(ok)
+        (r,) = judge.compare(ref, new)
+        self.assertEqual((r.wall, r.rss), (0.0, 0.0))
+        self.assertIsNone(r.peak)
+        self.assertAlmostEqual(r.avg, 0.4286, places=4)
+        self.assertTrue(r.ok)
 
-    def test_a_row_whose_reference_average_is_zero_is_unjudged_rather_than_green(self):
+    def test_a_row_whose_reference_average_is_zero_prints_nothing_for_that_column(self):
         ref = {"impact": self.row(0.04, 0.05, 0.0, avg=0.0)}
-        (_, _, _, _, avg, ok), = judge.compare(ref, {"impact": self.row(0.04, 0.05, 0.0, avg=1.2)})
-        self.assertIsNone(avg)
-        self.assertTrue(ok)
+        (r,) = judge.compare(ref, {"impact": self.row(0.04, 0.05, 0.0, avg=1.2)})
+        self.assertIsNone(r.avg)
+        self.assertTrue(r.ok)
 
-    def test_the_control_table_keeps_the_two_columns_its_clause_names(self):
+    def test_the_control_table_reports_the_average_beside_the_two_its_clause_judges(self):
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
             judge.print_table(judge.control({"impact": self.row(0.04, 0.05, 0.0)},
                                             {"impact": self.row(0.04, 0.05, 0.0)}),
-                              ("wall spread", "RSS spread"))
-        self.assertEqual(out.getvalue().splitlines()[0], "| row | wall spread | RSS spread | |")
+                              ("wall spread", "RSS spread", "avg CPU spread"))
+        self.assertEqual(out.getvalue().splitlines()[0],
+                         "| row | wall spread | RSS spread | avg CPU spread | |")
 
 
 class RunCount(unittest.TestCase):
@@ -356,8 +473,8 @@ class RunCount(unittest.TestCase):
             judge.compare(self.rows(5), self.rows(3))
 
     def test_a_suite_of_three_runs_is_judged_when_the_floor_is_said_out_loud(self):
-        (_, wall, _, _, _, ok), = judge.compare(self.rows(3), self.rows(3), min_n=3)
-        self.assertEqual((wall, ok), (0.0, True))
+        (r,) = judge.compare(self.rows(3), self.rows(3), min_n=3)
+        self.assertEqual((r.wall, r.ok), (0.0, True))
 
     def test_the_two_file_subcommands_print_usage_instead_of_an_index_error(self):
         for argv in (["judge.py", "control", "a.txt"], ["judge.py", "compare", "a.txt"]):

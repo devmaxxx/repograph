@@ -238,6 +238,17 @@ jobs:
           if ($answer -notmatch 'Штраф за отмену') { throw "the question or the answer did not survive the shim: $answer" }
           npx repograph --repo $R explain nope
           if ($LASTEXITCODE -ne 1) { throw "the launcher swallowed the exit code: $LASTEXITCODE" }
+
+          # The third status, through the same shim: a question that was answered "no" exits 3,
+          # which is neither the 1 above nor the 2 the launcher writes with no platform binary
+          # behind it. A harness reads those three apart, and this is the only job that reads them
+          # through npm's shim. Two top-level functions, one calling the other, so a call path
+          # exists one way round and not the other.
+          Set-Content -Encoding utf8 (Join-Path $R 'billing.ts') "export function refund(id: string) {`n  return write(id);`n}`n`nexport function write(id: string) {`n  return id;`n}`n"
+          npx repograph --repo $R --no-dense build | Out-Null
+          if ($LASTEXITCODE -ne 0) { throw "the rebuild through the launcher failed: $LASTEXITCODE" }
+          npx repograph --repo $R --no-dense trace write refund
+          if ($LASTEXITCODE -ne 3) { throw "a verdict through the shim should exit 3, not $LASTEXITCODE" }
           Pop-Location
 
           # And the platform package left out, which is what `--no-optional` or a lockfile from
