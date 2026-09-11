@@ -1672,7 +1672,7 @@ none of them a shrug:
 | --- | --- | --- |
 | Codex | the machine's ChatGPT refresh token was spent by the probe that established `agent/codex.md`; `codex login` is the repair and it is the account holder's to run | 30 questions of the account's quota |
 | Ollama | `ollama list` is empty — the daemon is installed and no model is pulled | a multi-gigabyte pull, declined rather than taken quietly |
-| `e5-large` + reranker | no e5-large store and no cached weights on this machine; a 2.1 GB download and an embed of 33.5k rows the README prices in hours | one copy embedded large, then the 30 paraphrase cases only — the pool ranks say the five gains at rank ≤ 25 are where a better embedder could matter and the seven past 100 are not |
+| ~~`e5-large` + reranker~~ (dropped 2026-09-11: the large model is no longer compared) | no e5-large store and no cached weights on this machine; a 2.1 GB download and an embed of 33.5k rows the README prices in hours | one copy embedded large, then the 30 paraphrase cases only — the pool ranks say the five gains at rank ≤ 25 are where a better embedder could matter and the seven past 100 are not |
 | code-enriched fifth list | ~$6 of haiku over 5,240 code nodes before a single reranked question | a spending decision, which belongs to whoever pays |
 
 What was established for nothing: both command shapes still match their CLIs on this machine —
@@ -1926,7 +1926,7 @@ answer different questions, and no row below moves a retrieval floor.
 | 5 | ~~**G21** one platform measured, three reasoned~~ | ~~the largest unmeasured surface in the family, and the one that needs hardware this session did not have~~ — closed 2026-09-09 — the band was removed |
 | — | ~~**G27** `serve`'s socket path and its leftover~~ | closed 2026-09-09 — the socket falls back to `$TMPDIR/repograph-<hash>.sock` when `.repograph/serve.sock` will not fit in `sun_path`, proved on a 230-byte repository path that could not bind at all before; and a `SIGTERM` sets a flag the loop reads, so the exit is the identity-checked one every other exit takes |
 | ~~7~~ | ~~**G26** `serve` holds its model while idle~~ | **closed 2026-09-09** — `--idle-model`, default 300 s: 908.5 MB → 28.8 MB on the first drop, 277.6 MB on the second, 0.771 s for the ask that pays the open |
-| 8 | **G25** the fp32 weights are the floor | the only lever that could move the floor under every memory number in both rounds, and finding out costs a full re-embed and the quantized model's own floors — no download at all on the default, whose int8 build is already cached, and 562 MB on the large one |
+| 8 | **G25** the fp32 weights are the floor | the only lever that could move the floor under every memory number in both rounds, and finding out costs a full re-embed and the quantized model's own floors — no download at all on the default, whose int8 build is already cached, and the large model is no longer compared (2026-09-11) |
 | 9 | **G24** `--rerank-local` is 31.9 s and 3.1 GB | the heaviest reader by far, and what would actually move it is a pool depth, which belongs to G2 and not to this family |
 
 ## Suggested order — the third family
@@ -1946,7 +1946,7 @@ clones a repository they did not write.
 | ~~6~~ | ~~**G28** the reranked p90 straddles the ceiling~~ | **answered 2026-09-09** — the cause is pick order (identical pool, identical prompt, 21 of 30 cases moving ±25 tokens); the arm's own bar is written at p90 240, unread |
 | ~~7~~ | ~~**G29** the one paraphrase sonnet never picks~~ | **closed 2026-09-09** — `pool=-/200`: the id is outside the pool, so the lever is depth or fusion and never the snippet |
 | ~~8~~ | ~~**G31** the token cost is bytes ÷ 4 of one prompt~~ | **closed 2026-09-09** — metered: median 58,314 B, p90 60,843 B over thirty prompts; bytes and not tokens, because the transport returns no usage block |
-| 9 | **G37** no non-Claude number, no stacked levers | **refused with numbers 2026-09-10** — an account, an empty model shelf, a 2.1 GB download and ~$6 of haiku; the cheap half is the `e5-large` pair on the 30 paraphrase cases, and the pool ranks say which five cases it could move |
+| 9 | **G37** no non-Claude number, no stacked levers | **refused with numbers 2026-09-10** — an account, an empty model shelf, a 2.1 GB download and ~$6 of haiku; the `e5-large` half was dropped on 2026-09-11, when the large model left every comparison and test; what stands is the non-Claude half |
 | — | ~~**G35** `derive` on every `update`~~ | **moot 2026-09-11** — no writer derives since #27, so §3's gate has no stage to time; the 1.00 s → 0.08 s cold no-op is the last reading it will have |
 | — | ~~**G40** the empty set is a never-matching regex~~ | **closed 2026-09-11** — the constructor the row asked to wrap no longer exists, so the state is the graph's and a test is what closes it: no definitions, one file node, `(none)` on both halves, both mentions held aside |
 | — | ~~**G38** the report has no edge~~ | **closed 2026-09-11** — `definitions` per family with `defined once` on the single ones, `ids` per mention-only prefix, and both sorts. The gate's first clause is unread: the sort that would put `OQ` first is tested, the corpus that would show it is not |

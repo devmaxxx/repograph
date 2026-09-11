@@ -52,7 +52,7 @@ MODEL = re.compile(r"model=(\S+)")
 GRADED = ("keyword", "paraphrase", "code")
 
 # One row per line of `FLOORS` in src/bench.rs: (enriched, dense, Floors::<Model>, keyword, paraphrase).
-ROW = re.compile(r"\((true|false),\s*(true|false),\s*Floors::(Small|Large),\s*(\d+),\s*(\d+)\)")
+ROW = re.compile(r"\((true|false),\s*(true|false),\s*Floors::(Small),\s*(\d+),\s*(\d+)\)")
 TAIL = re.compile(r"s\.kind\(\"code\"\)\.0 >= (\d+) && s\.p90_tokens <= (\d+)")
 
 
@@ -90,7 +90,7 @@ def floors(source=None):
     tail = TAIL.search(body)
     table = re.search(r"const FLOORS[^=]*=\s*\[(.*?)\];", text, re.S)
     rows = ROW.findall(table.group(1)) if table else []
-    if not body or not tail or len(rows) < 6:
+    if not body or not tail or len(rows) < 4:
         raise SystemExit("cannot read the floors out of src/bench.rs -- `FLOORS` or `passes` changed shape")
     code, p90 = int(tail.group(1)), int(tail.group(2))
     out = {}
@@ -189,8 +189,8 @@ def parse_bench(text):
 def arm_name(parsed):
     """`bench:dense+enriched` for the recorded suite; another suite names itself in brackets,
     so its runs never share a history -- or a comparability window -- with the recorded one.
-    A dense arm under a model other than the small default names itself too (`+large`, or the
-    model string for one with no floors), so its history never pools with the small model's."""
+    A dense arm under a model other than the small default names itself too (by its model string,
+    since only the small model has floors), so its history never pools with the small model's."""
     parts = ["dense" if parsed["dense"] else "lexical", "enriched" if parsed["enriched"] else "raw"]
     if parsed["dense"] and parsed["model"] != "small":
         parts.append(parsed["model"])

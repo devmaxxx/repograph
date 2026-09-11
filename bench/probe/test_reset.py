@@ -104,9 +104,9 @@ class Reset(unittest.TestCase):
 
     def test_a_reset_under_another_model_is_refused_and_nothing_is_touched(self):
         self.dirty()
-        r = self.run_reset(model="intfloat/multilingual-e5-large")
+        r = self.run_reset(model="BAAI/bge-m3")
         self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
-        self.assertIn("intfloat/multilingual-e5-large", r.stderr)
+        self.assertIn("BAAI/bge-m3", r.stderr)
         self.assertEqual((self.wt / "docs/a.md").read_text(), "# edited\n")
         self.assertFalse(self.calls.exists())
 

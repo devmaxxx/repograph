@@ -476,11 +476,11 @@ mod tests {
         let mut idx = synced(&graph("x"));
         idx.written_by(crate::index::embed::UNNAMED_MODEL, 3);
         assert_eq!(idx.ids.len(), 2, "an unnamed store is the small model's and is kept");
-        idx.written_by("intfloat/multilingual-e5-large", 3);
+        idx.written_by("BAAI/bge-m3", 3);
         assert!(idx.ids.is_empty() && idx.vectors.is_empty() && idx.dim == 0, "another model's rows cannot be appended to");
-        assert_eq!(idx.model, "intfloat/multilingual-e5-large");
+        assert_eq!(idx.model, "BAAI/bge-m3");
         assert_eq!(idx.sync(&graph("x"), &Questions::default(), &mut fake).unwrap(), 2);
-        idx.written_by("intfloat/multilingual-e5-large", 3);
+        idx.written_by("BAAI/bge-m3", 3);
         assert_eq!(idx.ids.len(), 2, "the same model keeps its rows");
     }
 
@@ -506,11 +506,11 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let store = Store::new(dir.path());
         let mut idx = synced(&graph("x"));
-        idx.written_by("intfloat/multilingual-e5-large", 3);
+        idx.written_by("BAAI/bge-m3", 3);
         idx.sync(&graph("x"), &Questions::default(), &mut fake).unwrap();
         idx.save(&store).unwrap();
-        assert_eq!(DenseIndex::recorded_model(&store).unwrap().as_deref(), Some("intfloat/multilingual-e5-large"));
-        assert_eq!(DenseIndex::load(&store).unwrap().model, "intfloat/multilingual-e5-large");
+        assert_eq!(DenseIndex::recorded_model(&store).unwrap().as_deref(), Some("BAAI/bge-m3"));
+        assert_eq!(DenseIndex::load(&store).unwrap().model, "BAAI/bge-m3");
     }
 
     #[test]
@@ -518,7 +518,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let store = Store::new(dir.path());
         let mut idx = synced(&graph("x"));
-        idx.written_by("intfloat/multilingual-e5-large", 3);
+        idx.written_by("BAAI/bge-m3", 3);
         idx.sync(&graph("x"), &Questions::default(), &mut fake).unwrap();
         idx.save(&store).unwrap();
         // A crash between the two writes leaves metadata naming more rows than the file holds.
@@ -528,11 +528,11 @@ mod tests {
         store.write_atomic("vectors.f32", &[0u8; 4]).unwrap();
         let torn = DenseIndex::load(&store).unwrap();
         assert!(torn.ids.is_empty(), "a torn pair of files is no index at all");
-        assert_eq!(torn.model_of_rows().as_deref(), Some("intfloat/multilingual-e5-large"));
+        assert_eq!(torn.model_of_rows().as_deref(), Some("BAAI/bge-m3"));
     }
 
     #[test]
-    fn an_unnamed_store_stays_the_small_model_s_though_the_default_is_the_large_one() {
+    fn an_unnamed_store_stays_the_small_model_s_whatever_the_default_names() {
         // The two constants were the same string until the default moved. Were the unnamed rule
         // to follow the default again, every store written before the field existed would be
         // claimed for a model that never wrote it, and re-embedded whole to discover otherwise.
@@ -553,10 +553,10 @@ mod tests {
         assert_eq!(DenseIndex::recorded_model(&store).unwrap().as_deref(), Some(crate::index::embed::UNNAMED_MODEL),
             "an unnamed store holds the small model's rows, so a reader opens the small model");
         let mut idx = synced(&graph("x"));
-        idx.written_by("intfloat/multilingual-e5-large", 3);
+        idx.written_by("BAAI/bge-m3", 3);
         idx.sync(&graph("x"), &Questions::default(), &mut fake).unwrap();
         idx.save(&store).unwrap();
-        assert_eq!(DenseIndex::recorded_model(&store).unwrap().as_deref(), Some("intfloat/multilingual-e5-large"));
+        assert_eq!(DenseIndex::recorded_model(&store).unwrap().as_deref(), Some("BAAI/bge-m3"));
     }
 
     #[test]

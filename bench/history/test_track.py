@@ -53,9 +53,9 @@ median of 2  keyword 36/40  paraphrase 14/30  code 12/12  p90 220 tok
 anchors  keyword 36/40  paraphrase 14/30  code 12/12
 """
 
-# $G/t5-large-enriched-1.txt, measured before `model=` existed on the summary line.
-LARGE_ENRICHED_NO_MODEL = """\
-keyword 40/40  paraphrase 22/30  code 12/12  p90 224 tok  dense=true  enriched=true (1996/1996 nodes)  suite=built-in gated=true
+# A summary line from before `model=` existed on it.
+ENRICHED_NO_MODEL = """\
+keyword 40/40  paraphrase 15/30  code 12/12  p90 221 tok  dense=true  enriched=true (1996/1996 nodes)  suite=built-in gated=true
 """
 
 DUPLICATE_ANCHOR_TRANSCRIPT = """\
@@ -72,13 +72,11 @@ PROSE = """\
 """
 
 FLOORS_TABLE = """\
-const FLOORS: [(bool, bool, Floors, usize, usize); 6] = [
+const FLOORS: [(bool, bool, Floors, usize, usize); 4] = [
     (true, true, Floors::Small, 40, 14),
     (true, false, Floors::Small, 40, 11),
     (false, true, Floors::Small, 40, 9),
     (false, false, Floors::Small, 39, 7),
-    (true, true, Floors::Large, 40, 22),
-    (false, true, Floors::Large, 40, 17),
 ];
 """
 
@@ -203,21 +201,9 @@ class ParseBench(unittest.TestCase):
 
     def test_a_transcript_without_the_model_field_is_a_small_model_run(self):
         # A transcript from before the model field existed is what every store was, back then.
-        p = track.parse_bench(LARGE_ENRICHED_NO_MODEL)
+        p = track.parse_bench(ENRICHED_NO_MODEL)
         self.assertEqual(p["model"], "small")
         self.assertEqual(track.arm_name(p), "bench:dense+enriched")
-
-    def test_a_large_model_run_is_graded_on_its_own_floors_and_named_apart(self):
-        line = LARGE_ENRICHED_NO_MODEL.replace(" (1996/1996 nodes)", " (1996/1996 nodes) model=large")
-        p = track.parse_bench(line)
-        self.assertEqual(p["model"], "large")
-        self.assertEqual(track.arm_name(p), "bench:dense+enriched+large")
-        table = {(True, True, "small"): {"keyword": 40, "paraphrase": 14, "code": 12, "p90_tokens": 230},
-                 (True, True, "large"): {"keyword": 40, "paraphrase": 22, "code": 12, "p90_tokens": 230}}
-        row = track.build_row(p, "beauty-crm", "502e8a6d", "", "abc", False, table)
-        self.assertTrue(row["gated"])
-        self.assertTrue(row["green"])
-        self.assertEqual(row["floors"]["paraphrase"], 22, "the large floor, not the small model's 14")
 
     def test_build_row_refuses_to_grade_a_model_the_table_has_no_floors_for(self):
         # This binary always prints gated=false for a model it holds no floors for, so a
@@ -269,15 +255,14 @@ class ParseBench(unittest.TestCase):
 
 
 class Floors(unittest.TestCase):
-    def test_reads_the_six_arms_from_the_rust_source(self):
+    def test_reads_the_four_arms_from_the_rust_source(self):
         with tempfile.NamedTemporaryFile("w", suffix=".rs", delete=False) as f:
             f.write(FLOORS_TABLE + PASSES)
             path = Path(f.name)
         f = track.floors(path)
-        self.assertEqual(len(f), 6)
+        self.assertEqual(len(f), 4)
         self.assertEqual(f[(True, True, "small")], {"keyword": 40, "paraphrase": 14, "code": 12, "p90_tokens": 230})
         self.assertEqual(f[(False, False, "small")], {"keyword": 39, "paraphrase": 7, "code": 12, "p90_tokens": 230})
-        self.assertEqual(f[(True, True, "large")], {"keyword": 40, "paraphrase": 22, "code": 12, "p90_tokens": 230})
 
     def test_a_changed_shape_fails_loudly(self):
         # Silently falling back to remembered floors would make every headroom figure wrong
@@ -322,8 +307,7 @@ class Floors(unittest.TestCase):
     def test_the_live_source_still_parses(self):
         f = track.floors()
         self.assertEqual(set(f), {(True, True, "small"), (True, False, "small"),
-                                   (False, True, "small"), (False, False, "small"),
-                                   (True, True, "large"), (False, True, "large")})
+                                   (False, True, "small"), (False, False, "small")})
         for arm in f.values():
             self.assertGreater(arm["keyword"], 0)
             self.assertGreater(arm["p90_tokens"], 0)
