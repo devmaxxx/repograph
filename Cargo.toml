@@ -1,6 +1,6 @@
 [package]
 name = "repograph"
-version = "0.5.1"
+version = "0.5.2"
 edition = "2021"
 rust-version = "1.98"
 description = "A project knowledge graph built and queried at zero API tokens"
