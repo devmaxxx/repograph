@@ -8,9 +8,13 @@
 
 use std::process::Command;
 
+fn run(repo: &std::path::Path, args: &[&str]) -> std::process::Output {
+    Command::new(env!("CARGO_BIN_EXE_repograph"))
+        .arg("--no-dense").arg("--repo").arg(repo).args(args).output().unwrap()
+}
+
 fn repograph(repo: &std::path::Path, args: &[&str]) -> (bool, String) {
-    let out = Command::new(env!("CARGO_BIN_EXE_repograph"))
-        .arg("--no-dense").arg("--repo").arg(repo).args(args).output().unwrap();
+    let out = run(repo, args);
     (out.status.success(), String::from_utf8_lossy(&out.stdout).into_owned())
 }
 
@@ -77,8 +81,8 @@ fn explain_verify_and_trace_answer_in_json_like_the_rest() {
     assert!(path.iter().all(|s| s["id"].is_string() && s["at"].is_string()), "{out}");
 }
 
-/// No path within the depth is an answer to the question that was asked. The text form treats it
-/// as a failed lookup and exits non-zero; the JSON form says `null` and exits 0, because a caller
+/// No path within the depth is an answer to the question that was asked. The text form exits 2 —
+/// a verdict, not a failure to reach one; the JSON form says `null` and exits 0, because a caller
 /// parsing an object should not have to read an exit code to learn what the object already says.
 #[test]
 fn a_trace_that_finds_nothing_is_a_null_path_and_not_a_failure() {
@@ -89,8 +93,10 @@ fn a_trace_that_finds_nothing_is_a_null_path_and_not_a_failure() {
     assert!(v["path"].is_null(), "{out}");
     assert_eq!(v["from"], "sym:billing.ts::write");
 
-    let (ok, _) = repograph(dir.path(), &["trace", "write", "refund"]);
-    assert!(!ok, "the text form still exits non-zero, which is what a shell script reads");
+    // 2, not just non-zero: the text form answers the question and says no, which a shell script
+    // reads apart from the 1 an unknown symbol exits with.
+    let out = run(dir.path(), &["trace", "write", "refund"]);
+    assert_eq!(out.status.code(), Some(2), "{}", String::from_utf8_lossy(&out.stderr));
 }
 
 /// A node the store does not have is an error in both forms: an empty object would be a claim

@@ -519,7 +519,32 @@ fn plain(p: PathBuf) -> PathBuf {
 #[cfg(unix)]
 fn plain(p: PathBuf) -> PathBuf { p }
 
-fn main() -> anyhow::Result<()> {
+/// A determination the command was asked to make and made: no call path within the depth, a
+/// bench suite that answered every case and missed a floor. Carried to `main` as an error because
+/// it ends the command, and printed there as the sentence it is, on exit status 2 — where 1 stays
+/// a failure to make a determination at all: no such symbol, no store to read.
+#[derive(Debug)]
+struct Verdict(String);
+
+impl std::fmt::Display for Verdict {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result { f.write_str(&self.0) }
+}
+
+impl std::error::Error for Verdict {}
+
+fn main() -> std::process::ExitCode {
+    match run() {
+        Ok(()) => std::process::ExitCode::SUCCESS,
+        // `{e:?}` is what `Termination for Result` printed before this function existed: an
+        // anyhow report with its context chain, which several transcripts are read for.
+        Err(e) => match e.downcast_ref::<Verdict>() {
+            Some(v) => { eprintln!("{v}"); std::process::ExitCode::from(2) }
+            None => { eprintln!("Error: {e:?}"); std::process::ExitCode::FAILURE }
+        },
+    }
+}
+
+fn run() -> anyhow::Result<()> {
     let cli = Cli::parse();
     let repo = plain(cli.repo.canonicalize()?);
     // Loaded per command: `bench` reads its own from `REPOGRAPH_BENCH_REPO`, and `explain`/`verify`
@@ -640,9 +665,9 @@ fn main() -> anyhow::Result<()> {
             let Some(b) = query::resolve(&graph, &to) else { anyhow::bail!("no node matches {to}") };
             let found = impact::trace(&graph, &a.id, &b.id, depth);
             // No path within the depth is an answer to the question that was asked, so the JSON
-            // form says so and exits 0 where the text form treats it as a failed lookup. A caller
-            // parsing JSON should not have to read an exit code to learn what the object already
-            // says, and a `null` path is easier to handle than a non-zero exit with no object.
+            // form says so and exits 0 where the text form exits 2. A caller parsing JSON should
+            // not have to read an exit code to learn what the object already says, and a `null`
+            // path is easier to handle than a non-zero exit with no object.
             if json {
                 println!("{}", impact::trace_json(&graph, &a.id, &b.id, depth, found.as_deref()));
                 return Ok(());
@@ -655,7 +680,7 @@ fn main() -> anyhow::Result<()> {
                     }
                     Ok(())
                 }
-                None => anyhow::bail!("no call path from {} to {} within {depth} hops", a.id, b.id),
+                None => Err(Verdict(format!("no call path from {} to {} within {depth} hops", a.id, b.id)).into()),
             }
         }
         Cmd::Changes { base, depth, json, stale } => {
@@ -734,7 +759,7 @@ fn main() -> anyhow::Result<()> {
             }
             // Every run has to meet the floors, not the median of them: a suite that passes on
             // average is one whose exit code depends on which run a reader looked at.
-            if met { Ok(()) } else { anyhow::bail!("bench floors not met") }
+            if met { Ok(()) } else { Err(Verdict("bench floors not met".to_string()).into()) }
         }
         Cmd::Dump { queries, out, depth } => dump::run(&repo, &queries, &out, depth, cli.no_dense),
         Cmd::ImportLegacy { graph_json } => {
