@@ -1,6 +1,6 @@
 {
   "name": "@devmaxxx/repograph",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "description": "Knowledge graph of a repository's requirement docs and TypeScript code, built and refreshed at zero model tokens, asked by id, keyword or paraphrase",
   "license": "MIT",
   "repository": {
@@ -29,9 +29,9 @@
     "node": ">=18"
   },
   "optionalDependencies": {
-    "@devmaxxx/repograph-darwin-arm64": "0.5.0",
-    "@devmaxxx/repograph-linux-x64": "0.5.0",
-    "@devmaxxx/repograph-win32-x64": "0.5.0"
+    "@devmaxxx/repograph-darwin-arm64": "0.5.1",
+    "@devmaxxx/repograph-linux-x64": "0.5.1",
+    "@devmaxxx/repograph-win32-x64": "0.5.1"
   },
   "publishConfig": {
     "registry": "https://npm.pkg.github.com"

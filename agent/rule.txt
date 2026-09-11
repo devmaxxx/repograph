@@ -1,4 +1,4 @@
-This repository has a repograph index. Ask it before grepping for a concept: `repograph ask <words>`
-answers by meaning, `repograph impact <Symbol>` names who calls a symbol, `repograph changes` maps
+This repository has a repograph index. Ask it before grepping for a concept: `{{command}} ask <words>`
+answers by meaning, `{{command}} impact <Symbol>` names who calls a symbol, `{{command}} changes` maps
 your diff onto the callers it reaches. Read only the `path:line` those answers print.
 Grep is still the right tool for a literal — an env var name, a string in a test, a config key.

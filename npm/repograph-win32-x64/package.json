@@ -1,6 +1,6 @@
 {
   "name": "@devmaxxx/repograph-win32-x64",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "description": "repograph binary for Windows on x86-64 (MSVC); installed through @devmaxxx/repograph",
   "license": "MIT",
   "repository": {

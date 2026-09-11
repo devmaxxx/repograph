@@ -42,10 +42,21 @@ impl Target {
 #[derive(Debug, Default)]
 pub struct Report { pub written: usize, pub paths: Vec<String>, pub notes: Vec<String> }
 
-/// The stanza between its markers, with `{{command}}` resolved to how this repository invokes the
-/// binary — `repograph` unless a caller says otherwise, `pnpm exec repograph` in a workspace that
-/// installs it as a dependency.
-fn stanza(command: &str) -> String { STANZA.replace("{{command}}", command) }
+/// A text with `{{command}}` resolved to how this repository invokes the binary — `repograph`
+/// unless a caller says otherwise, `pnpm exec repograph` in a workspace that installs it as a
+/// dependency. Every text that names a command carries it: a line naming the bare binary where
+/// PATH has none tells an agent to run something that is not there.
+fn with_command(template: &str, command: &str) -> String { template.replace("{{command}}", command) }
+
+/// The hook's one declaration of the command its hints name. Replaced whole rather than through
+/// `{{command}}`, because this text lands in JavaScript: a JSON string is a JavaScript string
+/// literal, so no quote, backslash or `${` in a command can end the literal or open an expression.
+/// The template declares the default, which is what lets the hook's own tests run it as it ships.
+const HOOK_COMMAND: &str = "const COMMAND = \"repograph\";";
+
+fn hook(command: &str) -> String {
+    HOOK.replacen(HOOK_COMMAND, &format!("const COMMAND = {};", serde_json::Value::from(command)), 1)
+}
 
 const BEGIN: &str = "<!-- repograph:begin -->";
 const END: &str = "<!-- repograph:end -->";
@@ -55,7 +66,7 @@ const END: &str = "<!-- repograph:end -->";
 /// is never touched — an installer that rewrote CLAUDE.md would be a worse citizen than no
 /// installer at all.
 pub fn merged_instructions(existing: &str, command: &str) -> String {
-    let block = stanza(command);
+    let block = with_command(STANZA, command);
     match (existing.find(BEGIN), existing.find(END)) {
         (Some(a), Some(b)) if b > a => {
             let mut out = String::with_capacity(existing.len() + block.len());
@@ -151,11 +162,11 @@ pub fn install(root: &Path, target: Target, command: &str) -> Result<Report> {
     let mut report = Report::default();
     let base: PathBuf = root.join(target.dir());
     let hook_file = base.join("hooks").join("repograph-hook.mjs");
-    write_if_changed(&hook_file, HOOK, &mut report)?;
-    write_if_changed(&base.join("hooks").join("rule.txt"), RULE, &mut report)?;
-    write_if_changed(&base.join("skills").join("repo-query").join("SKILL.md"), SKILL, &mut report)?;
+    write_if_changed(&hook_file, &hook(command), &mut report)?;
+    write_if_changed(&base.join("hooks").join("rule.txt"), &with_command(RULE, command), &mut report)?;
+    write_if_changed(&base.join("skills").join("repo-query").join("SKILL.md"), &with_command(SKILL, command), &mut report)?;
     if target == Target::Claude {
-        write_if_changed(&base.join("agents").join("repo-scout.md"), SCOUT, &mut report)?;
+        write_if_changed(&base.join("agents").join("repo-scout.md"), &with_command(SCOUT, command), &mut report)?;
     }
 
     // A path the harness can resolve from wherever it runs the hook. Claude Code exports the
@@ -298,5 +309,70 @@ mod tests {
         let err = install(dir.path(), Target::Claude, "repograph").unwrap_err().to_string();
         assert!(err.contains("not JSON"), "{err}");
         assert_eq!(std::fs::read_to_string(dir.path().join(".claude/settings.json")).unwrap(), "not json");
+    }
+
+    /// `--command` is how this repository runs the binary, and a pnpm workspace has no bare
+    /// `repograph` on PATH: a file that still says the bare name tells an agent to run nothing.
+    /// So every text either harness installs carries it, and not only the stanza.
+    #[test]
+    fn the_command_reaches_every_file_either_harness_installs() {
+        for (target, texts) in [
+            (Target::Claude, &[".claude/hooks/rule.txt", ".claude/skills/repo-query/SKILL.md",
+                               ".claude/agents/repo-scout.md", ".claude/CLAUDE.md"][..]),
+            (Target::Codex, &[".codex/hooks/rule.txt", ".codex/skills/repo-query/SKILL.md", "AGENTS.md"][..]),
+        ] {
+            let dir = root();
+            install(dir.path(), target, "pnpm exec repograph").unwrap();
+            for rel in texts {
+                let text = std::fs::read_to_string(dir.path().join(rel)).unwrap();
+                assert!(text.contains("`pnpm exec repograph "), "{rel} names the command: {text}");
+                assert!(!text.contains("`repograph ") && !text.contains("{{command}}"), "{rel} still names the bare binary: {text}");
+            }
+            let script = std::fs::read_to_string(dir.path().join(target.dir()).join("hooks/repograph-hook.mjs")).unwrap();
+            assert!(script.contains("\nconst COMMAND = \"pnpm exec repograph\";\n"), "{target:?}: the hook's hints read one declaration");
+        }
+    }
+
+    /// A command is whatever a person typed, and the hook is JavaScript: it goes in as one JSON
+    /// string, which JavaScript reads as a string literal, so nothing in it can run.
+    #[test]
+    fn the_hook_takes_the_command_as_one_json_string_and_the_default_as_it_ships() {
+        assert_eq!(HOOK.matches(HOOK_COMMAND).count(), 1, "the declaration the installer replaces is in the hook once");
+        assert_eq!(hook("repograph"), HOOK, "the default installs the template byte for byte");
+        let script = hook(r#"pnpm exec "re'po\graph" `x` ${y}"#);
+        assert!(script.contains(r#"const COMMAND = "pnpm exec \"re'po\\graph\" `x` ${y}";"#), "the command is one string literal");
+        assert_eq!(script.matches("const COMMAND = ").count(), 1);
+    }
+
+    /// An upgrade is a re-run, and a re-run under the same command writes nothing — for a command
+    /// other than the default, and for both harnesses.
+    #[test]
+    fn a_second_install_under_a_named_command_writes_nothing_for_either_harness() {
+        for target in [Target::Claude, Target::Codex] {
+            let dir = root();
+            std::fs::write(dir.path().join(target.instructions()), "# House rules\n").unwrap();
+            assert!(install(dir.path(), target, "pnpm exec repograph").unwrap().written > 0);
+            let again = install(dir.path(), target, "pnpm exec repograph").unwrap();
+            assert_eq!(again.written, 0, "{target:?}: {again:?}");
+        }
+    }
+
+    /// Measured with prettier 3.9.6, under no config and under a consumer's: the one change it made
+    /// to the 0.5.0 stanza was a blank line after the begin marker, because a comment is a block of
+    /// its own. A stanza carrying that line is left alone by the formatter and by a re-run of this.
+    #[test]
+    fn the_stanza_is_what_prettier_writes_and_a_rerun_keeps_it() {
+        let block = with_command(STANZA, "repograph");
+        assert!(block.starts_with("<!-- repograph:begin -->\n\n## repograph\n"), "{block}");
+
+        let fresh = merged_instructions("# House rules\n", "repograph");
+        assert_eq!(fresh, format!("# House rules\n\n{block}"));
+        assert_eq!(merged_instructions(&fresh, "repograph"), fresh, "a re-run is a fixed point");
+
+        // A block 0.5.0 wrote gains the line; the text after the end marker stays the repository's.
+        let old = "# House rules\n\n<!-- repograph:begin -->\n## repograph\nold\n<!-- repograph:end -->\n\n## After\n";
+        let upgraded = merged_instructions(old, "repograph");
+        assert_eq!(upgraded, format!("# House rules\n\n{}\n\n## After\n", block.trim_end()));
+        assert_eq!(merged_instructions(&upgraded, "repograph"), upgraded);
     }
 }

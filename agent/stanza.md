@@ -1,4 +1,5 @@
 <!-- repograph:begin -->
+
 ## repograph
 
 This repository carries a `repograph` index of its documents and its TypeScript. It answers by
