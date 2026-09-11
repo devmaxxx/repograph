@@ -22,8 +22,10 @@ pub struct Entry { pub rel: String, pub kind: FileKind, pub hash: String, pub st
 /// by hand when a change to any of them would make a re-read of a file that has not moved yield a
 /// different graph, and left alone by a release that does not touch them: this number is what
 /// forces one whole-tree re-read on the first writer after an upgrade (see `apply_diff`), and a
-/// bump nobody needed is that walk paid for nothing. `0` is what a manifest written before the
-/// stamp existed reads as, which is behind every generation there has been.
+/// bump nobody needed is that walk paid for nothing. `0` belongs to no generation: it is what a
+/// manifest written before the stamp existed reads as, and what a writer leaves behind when a file
+/// it had to read would not open — neither store was read whole, and `0` is stale against every
+/// generation there is or will be.
 pub const GRAMMAR: u32 = 1;
 
 #[derive(Debug, Default, Serialize, Deserialize)]
@@ -32,9 +34,10 @@ pub struct Manifest {
     /// A manifest written before the stat cache existed has none; every file is hashed once more
     /// and the stamps are there from the next save on.
     #[serde(default)] pub stamps: BTreeMap<String, Stamp>,
-    /// The grammar generation the graph saved beside this manifest was extracted by. It belongs
-    /// here and not on the graph because it answers the same question the hashes and stamps do —
-    /// must this file be read again — and every writer holds the manifest at the moment it asks.
+    /// The grammar generation the graph saved beside this manifest was read whole by, or `0` for
+    /// none. It belongs here and not on the graph because it answers the same question the hashes
+    /// and stamps do — must this file be read again — and every writer holds the manifest at the
+    /// moment it asks.
     #[serde(default)] pub grammar: u32,
 }
 

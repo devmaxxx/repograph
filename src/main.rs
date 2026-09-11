@@ -257,8 +257,10 @@ pub(crate) fn apply_diff(repo: &std::path::Path, store: &store::Store, graph: &m
     let mut saved = walk::Manifest::from_entries(entries);
     // A file removed from the graph above and then not read is a hole, and the stamp is what would
     // make it permanent: the hash of a file nobody reads again never moves, so nothing would ever
-    // name it. Held back, the next writer reads the tree once more and fills it.
-    if unread { saved.grammar = manifest.grammar; }
+    // name it. `0` and not the generation the store claimed, which on a machine holding two
+    // versions can be a newer one than this: written back, that value would tell the build able to
+    // fill the hole that there is nothing to do. `0` is stale against every generation there is.
+    if unread { saved.grammar = 0; }
     store.save(graph, &saved)?;
     // Only when something was re-extracted: a tree that did not move cannot have grown a node
     // without questions, and the no-op update a commit hook fires should not read the questions
@@ -875,7 +877,10 @@ mod tests {
         built(repo, &cfg);
         let store = store::Store::new(repo);
         let (graph, manifest) = store.load().unwrap();
-        store.save(&graph, &walk::Manifest { grammar: 0, ..manifest }).unwrap();
+        // A generation past this build's, so that the value held back below is visibly not the
+        // one the store claimed: writing that back would hand the newer build a store it reads as
+        // current and will not fill.
+        store.save(&graph, &walk::Manifest { grammar: walk::GRAMMAR + 1, ..manifest }).unwrap();
         // Shut after the build, so the stamp still matches and the walk hands back the hash it
         // recorded instead of reading the file and leaving it out.
         let a = repo.join("docs/a.md");
@@ -885,7 +890,7 @@ mod tests {
         run_update(repo, &cfg, false).unwrap();
         let (graph, manifest) = store.load().unwrap();
         assert!(!graph.nodes.contains_key("FR-PAY-22"), "unread, so its nodes are not in the graph");
-        assert_eq!(manifest.grammar, 0, "and the store does not claim the tree was read whole");
+        assert_eq!(manifest.grammar, 0, "and the store claims no generation read it whole");
 
         std::fs::set_permissions(&a, std::fs::Permissions::from_mode(0o644)).unwrap();
         run_update(repo, &cfg, false).unwrap();
