@@ -1,7 +1,12 @@
 //! Two exit codes where there was one. A command that was asked a question and answered it —
-//! `trace` finding no call path, `bench` measuring every case and missing a floor — exits 2, and
+//! `trace` finding no call path, `bench` measuring every case and missing a floor — exits 3, and
 //! 1 is left to mean the command could not answer at all: no such symbol, no store to read. The
 //! wording on stderr stays, as a message to a person; a script reads the status.
+//!
+//! 3 and not 2 because 2 is spoken by two layers that never reached the command: `clap` writes it
+//! for a usage error, and the npm launcher writes it when no platform binary is installed. The
+//! usage case is pinned below beside the verdicts, since a status a harness reads as "answered"
+//! has to be one no other layer can produce.
 
 use std::path::Path;
 use std::process::{Command, Output};
@@ -39,7 +44,7 @@ fn a_trace_with_no_path_is_a_verdict_and_an_unknown_symbol_is_a_failure() {
     assert_eq!(code(&found), Some(0), "{}", err(&found));
 
     let none = run(dir.path(), &["trace", "write", "refund"]);
-    assert_eq!(code(&none), Some(2), "a question that was answered: {}", err(&none));
+    assert_eq!(code(&none), Some(3), "a question that was answered: {}", err(&none));
     assert!(err(&none).contains("no call path"), "and the sentence is still printed: {}", err(&none));
 
     let unknown = run(dir.path(), &["trace", "nosuchsymbol", "write"]);
@@ -53,7 +58,7 @@ fn a_bench_that_missed_its_floors_is_a_verdict_and_an_empty_store_is_a_failure()
     let cases = cases.to_str().unwrap();
 
     let missed = run(dir.path(), &["bench", "--cases", cases]);
-    assert_eq!(code(&missed), Some(2), "every case ran and the floors were not met: {}", err(&missed));
+    assert_eq!(code(&missed), Some(3), "every case ran and the floors were not met: {}", err(&missed));
     assert!(err(&missed).contains("bench floors not met"), "{}", err(&missed));
     let out = String::from_utf8_lossy(&missed.stdout);
     assert!(out.contains("gated=true"), "the suite was graded: {out}");
@@ -62,4 +67,15 @@ fn a_bench_that_missed_its_floors_is_a_verdict_and_an_empty_store_is_a_failure()
     let empty = run(unbuilt.path(), &["bench", "--cases", cases]);
     assert_eq!(code(&empty), Some(1), "nothing was measured: {}", err(&empty));
     assert!(err(&empty).contains("graph is empty"), "{}", err(&empty));
+}
+
+/// The status a verdict may not take. `clap` answers a mistyped flag with 2 before the command
+/// runs at all, so a harness reading 2 as "the suite answered and missed a floor" would read a
+/// typo as a reading. Nothing was measured here and nothing was determined.
+#[test]
+fn a_usage_error_exits_two_and_is_therefore_not_a_verdict() {
+    let dir = built();
+    let usage = run(dir.path(), &["bench", "--nosuchflag"]);
+    assert_eq!(code(&usage), Some(2), "clap's own status: {}", err(&usage));
+    assert!(!err(&usage).contains("floors"), "no suite ran: {}", err(&usage));
 }

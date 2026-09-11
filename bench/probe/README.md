@@ -72,14 +72,22 @@ when any row exited non-zero, because a command that failed still gets a full `t
 row would enter the median as an honestly-measured fast run. One non-zero exit is not that: a
 `bench` row that answered every case and then missed a floor spent its wall clock reading, and its
 wall, max RSS and peak CPU are readings of that reader — while a `bench` row that found no store
-never did the work at all. **As of 0.6.0 the status says which:** `bench` exits 2 for a suite that
-answered every case and missed a floor, and 1 where there was nothing to measure. `measure.sh`
-reads that status and writes `floors_missed=1` beside `rc=2`, and `judge.py` believes the field
-only where the status is still 2 on the line and the row is one that runs `bench` — `bench`,
-`bench-dense`, `bench-nodense`. The sentence on stderr is a message to a person now and nothing
-reads it, so it is free to be reworded. **The kit therefore needs a binary that exits 2 for a
-verdict:** an older one exits 1 with the old words, and its missed floors are refused as the
-failures they are then indistinguishable from. Every other non-zero exit is still refused, and the
+never did the work at all. **As of 0.6.0 the status says which:** `repograph` exits 3 for a
+question it answered — a suite that ran every case and missed a floor — and 1 where there was
+nothing to measure. 3 and not 2, because 2 is written above the command: `clap` answers a mistyped
+flag with it and the npm launcher answers a missing platform binary with it, so a 2 never reached
+a reader and is refused on every row.
+
+**The status admits the row; the field is narrower.** `trace` answers "no path within the depth"
+with the same 3 after spending its wall clock traversing, so `judge.py` reads a verdict row of any
+command as a reading. Only a `bench` row has a floor to miss, so `measure.sh` writes
+`floors_missed=1` on those alone — `bench`, `bench-dense`, `bench-nodense`, matched by the same
+expression `judge.py` matches — and a verdict on any other row is recorded with the status and no
+field. `judge.py` requires both halves to agree: a `bench` row that exited 3 without the field is
+refused, and so is any other row that carries it. The sentence on stderr is a message to a person
+now and nothing reads it, so it is free to be reworded. **The kit therefore needs a binary that
+exits 3 for a verdict:** an older one exits 1 with the old words, and its missed floors are refused
+as the failures they are then indistinguishable from. Every other non-zero exit is still refused, and the
 refusal quotes the tail of what the row said, so a reader is told what failed and not only that
 something did. The field rides through `medians.txt` on the rows that carry it, and `control` and
 `compare` print it in the verdict cell and say it in a line under the table. `arms.sh` has ruled

@@ -1698,8 +1698,14 @@ shapes a person would want to look at, and the report should put them first.
 family with one definition.
 
 **Closed 2026-09-11.** The lever as written: a family row carries `definitions` — declaring-file ×
-id pairs off the graph's own `Declares` edges, so a node two files declare counts twice — and the
-rows sort by it ascending, a single-definition family reading `defined once` in the table. A
+id pairs, summed over each node's own declaring-file set, so a node two files declare counts twice
+— and the rows sort by it ascending, a single-definition family reading `defined once` in the
+table. The count is read off the nodes and not off the `Declares` edges a file is the source of:
+a milestone document declares its milestone node and the *milestone node* declares the tasks under
+it, so an edge scan scoped to `file:` sources found one definition for a family of three and
+printed `defined once` above a document's own tasks. The node's declaring-file set is what a
+definition writes, it is already the population `of_graph` walks, and the column is now that walk's
+other half — so no row goes back over the edges for it. A
 mention carries `ids`, the distinct ids written under the prefix, and the mention half sorts by
 that before mentions. Both are additive in `families --json`. Pinned by two cases in
 `src/families.rs` and by the column indexes in `tests/families.rs`.
@@ -1818,16 +1824,24 @@ without the harness having to know which answer it got.
 `1`, all pinned by tests that run the binary; `bench/probe` reads the status instead of the sentence;
 and the README states the codes for both commands where it already states the summary line.
 
-**Closed 2026-09-11.** The lever as written, at `2`. `main` returns an `ExitCode` and delegates to
-`run`; the two sites that answer a question with "no" carry a `Verdict`, which prints its sentence
-and exits 2, and every other error keeps the `{e:?}` report and the status 1 that
-`Termination for Result` printed before, so no transcript moved. `tests/exit_codes.rs` runs the
-binary for all four cases — a no-path `trace` 2 against an unknown symbol 1, a `bench` over a
-recorded-shape case file that misses every floor 2 against an unbuilt store 1 — and
-`tests/json_surface.rs` pins the text form's 2 beside the JSON form's `null` at 0. `measure.sh`
-reads `rc=2` and its grep is gone; `judge.py` requires that status beside the field before a row
-claims a verdict, and `test_measure.py` pins that a binary exiting 1 with the old wording is
-refused. The README states the codes for `bench` and for `trace`.
+**Closed 2026-09-11.** The lever as written — "`2`, or whatever does not collide" — at **`3`**,
+because `2` collides twice. `clap` exits 2 on a usage error, so `repograph bench --nosuchflag`
+would be indistinguishable from a suite that ran and missed a floor; and
+`npm/repograph/bin/repograph.js` exits 2 when no platform binary is installed, which CI pins. A
+verdict has to be a status no layer above the command writes.
+
+`main` returns an `ExitCode` and delegates to `run`; the two sites that answer a question with "no"
+carry a `Verdict`, which prints its sentence and exits 3, and every other error keeps the `{e:?}`
+report and the status 1 that `Termination for Result` printed before, so no transcript moved.
+`tests/exit_codes.rs` runs the binary for five cases — a no-path `trace` 3 against an unknown
+symbol 1, a `bench` over a recorded-shape case file that misses every floor 3 against an unbuilt
+store 1, and `bench --nosuchflag` at 2, pinning the collision the code avoids — and
+`tests/json_surface.rs` pins the text form's 3 beside the JSON form's `null` at 0. `measure.sh`
+reads `rc=3` and its grep is gone; `judge.py` reads a 3 as an answered row for any command, since
+`trace` spends its wall clock traversing before it says no, and requires the `floors_missed` field
+exactly on the rows that can miss a floor — present on a `bench` row and absent on every other, or
+the row is refused. `test_measure.py` pins that a binary exiting 1 with the old wording is refused,
+and that a 2 is refused too. The README states the codes for `bench` and for `trace`.
 
 What is *not* closed: the wording is now unguarded by design — nothing reads
 `bench floors not met` any more, so it is a message and may be reworded freely. The kit is the
@@ -1925,7 +1939,7 @@ clones a repository they did not write.
 |---|---|---|
 | — | ~~**G36** the project file runs any command~~ | closed 2026-09-09 — and it took two refusals, not one: the `*_command` keys became machine-file-only, and the model name, which is interpolated into that command unquoted and was never checked, is now a token or it is not used. One refused key would have left the second door open |
 | 2 | **G32** a rebuilt enriched store is graded raw | the first thing anyone will hit after this branch merges: 150 nodes without questions and a bench that quietly grades against the raw floors. A stderr line and one `enrich` close it; the fixture's own rebuild is the recorded pair that says so |
-| — | ~~**G41** a verdict that is an answer exits like a crash~~ | **closed 2026-09-11** — `2` for a verdict, `1` for everything else, in both commands; four cases run the binary, `bench/probe` reads the status and dropped its grep, and the README states the codes. The kit now needs a 0.6.0 binary: an older one's missed floors are refused as the failures they are indistinguishable from |
+| — | ~~**G41** a verdict that is an answer exits like a crash~~ | **closed 2026-09-11** — `3` for a verdict, `1` for everything else, in both commands; `2` was refused because `clap` and the npm launcher both already write it. Five cases run the binary, `bench/probe` reads the status and dropped its grep, and the README states the codes. The kit now needs a 0.6.0 binary: an older one's missed floors are refused as the failures they are indistinguishable from |
 | 3 | **G34** two copies of one grammar | **one grammar in code since #27**; what is left here is a measurement, not a change — the bench line's `families=` retired in favour of the invariant, read on a corpus build (§4 of the 2026-09-10 levers doc, Reading empty) |
 | 4 | **G39** the family set is an input to extraction | **landed in code by #27** — the generic grammar, `Graph::pending`/`settle`, families as a view — and what stands open is the price the gap calls the whole question: the store's growth and the one-file `update`, on the corpus copy (§6, Task 6, Reading empty). It stays above the rest of this family because an unread price is what would reopen the design |
 | ~~5~~ | ~~**G30** where the reranker's gains sit in the pool~~ | **closed 2026-09-09** — thirteen gains at ranks 6, 14, 18, 22, 23, 51, 109, 122, 135, 152, 155, 173, 196; five are within reach of a zero-token lever and eight are the model's alone |

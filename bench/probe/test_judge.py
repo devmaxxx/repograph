@@ -112,7 +112,10 @@ class RefusedRuns(unittest.TestCase):
 
 
 FLOOR_LINE = ("bench-dense-1  wall=6.10s user=5.00s sys=0.40s maxrss=1.62GB peak_cpu=340% "
-              "peak_threads=9 samples=6 rc=2 floors_missed=1")
+              "peak_threads=9 samples=6 rc=3 floors_missed=1")
+# A `trace` that found no path within the depth: the same verdict status, on a row with no floors.
+TRACE_LINE = ("trace-1  wall=0.42s user=0.30s sys=0.05s maxrss=0.31GB peak_cpu=0% "
+              "peak_threads=1 samples=0 rc=3")
 BROKEN_LINE = ("bench-dense-1  wall=0.02s user=0.01s sys=0.00s maxrss=0.01GB peak_cpu=0% "
                "peak_threads=1 samples=0 rc=1")
 
@@ -127,9 +130,32 @@ Error: graph is empty at /Users/max/bench/beauty-crm-test — run build first
 
 
 class FloorVerdicts(unittest.TestCase):
-    """A missed floor is a reading; a store that was never there is not. `bench` exits 2 for the
-    first and 1 for the second, so what a row's claim to the field takes is that status, the field
-    itself, and a row that runs `bench`."""
+    """An answered question is a reading; a store that was never there is not. `repograph` exits 3
+    for the first and 1 for the second, so a verdict status is what admits the row — for any
+    command, because `trace` answers "no path" the same way and spends the same wall clock doing
+    it. What the `floors_missed` field additionally takes is a row that runs `bench`: no other
+    command has a floor to miss, and 2 is not a verdict at all (`clap` writes it for a usage error
+    and the npm launcher for a missing binary)."""
+
+    def test_a_trace_row_that_answered_with_a_verdict_is_a_reading(self):
+        m = judge.medians([TRACE_LINE])
+        self.assertEqual(m["trace"]["wall"], 0.42)
+        self.assertNotIn("floors_missed", str(m["trace"]))
+
+    def test_a_bench_row_that_verdicted_without_the_field_is_refused(self):
+        # `bench`'s verdict is a missed floor and the instrument writes the fact beside it. A
+        # status with no field is an instrument that did not write it — a name is a weaker claim
+        # than a status, and here neither half stands on its own.
+        with self.assertRaises(SystemExit) as e:
+            judge.medians([FLOOR_LINE.replace(" rc=3 floors_missed=1", " rc=3")])
+        self.assertIn("bench-dense", str(e.exception))
+
+    def test_a_usage_error_is_refused_on_every_row(self):
+        # 2 is `clap`'s: the command never ran, so the row measured argv parsing.
+        for line in (FLOOR_LINE.replace(" rc=3 ", " rc=2 "), TRACE_LINE.replace(" rc=3", " rc=2")):
+            with self.assertRaises(SystemExit) as e:
+                judge.medians([line])
+            self.assertIn("exited 2", str(e.exception))
 
     def test_a_bench_row_that_missed_a_floor_is_a_reading_and_carries_the_field(self):
         m = judge.medians([FLOOR_LINE])
@@ -151,11 +177,11 @@ class FloorVerdicts(unittest.TestCase):
     def test_a_bench_row_that_claims_the_field_on_the_old_status_is_refused(self):
         # A binary that exited 1 said nothing this reads, whatever `measure.sh` was told to write.
         with self.assertRaises(SystemExit) as e:
-            judge.medians([FLOOR_LINE.replace(" rc=2 ", " rc=1 ")])
+            judge.medians([FLOOR_LINE.replace(" rc=3 ", " rc=1 ")])
         self.assertIn("exited 1", str(e.exception))
 
     def test_a_clean_bench_row_keeps_the_shape_every_other_row_has(self):
-        line = FLOOR_LINE.replace(" rc=2 floors_missed=1", " rc=0")
+        line = FLOOR_LINE.replace(" rc=3 floors_missed=1", " rc=0")
         self.assertNotIn("floors_missed", str(judge.medians([line])["bench-dense"]))
 
     def test_the_refusal_quotes_the_tail_of_what_that_row_said(self):

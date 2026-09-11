@@ -521,8 +521,14 @@ fn plain(p: PathBuf) -> PathBuf { p }
 
 /// A determination the command was asked to make and made: no call path within the depth, a
 /// bench suite that answered every case and missed a floor. Carried to `main` as an error because
-/// it ends the command, and printed there as the sentence it is, on exit status 2 — where 1 stays
+/// it ends the command, and printed there as the sentence it is, on exit status 3 — where 1 stays
 /// a failure to make a determination at all: no such symbol, no store to read.
+///
+/// 3 and not 2, which is the code the ledger's lever named first: 2 is already taken twice on the
+/// way to this binary. `clap` exits 2 on a usage error, so `repograph bench --nosuchflag` — a
+/// command that never ran — is indistinguishable from a suite that ran and missed a floor; and
+/// `npm/repograph/bin/repograph.js` exits 2 when no platform binary is installed, which CI pins.
+/// A verdict has to be a status no other layer writes, or a harness reading it learns nothing.
 #[derive(Debug)]
 struct Verdict(String);
 
@@ -538,7 +544,7 @@ fn main() -> std::process::ExitCode {
         // `{e:?}` is what `Termination for Result` printed before this function existed: an
         // anyhow report with its context chain, which several transcripts are read for.
         Err(e) => match e.downcast_ref::<Verdict>() {
-            Some(v) => { eprintln!("{v}"); std::process::ExitCode::from(2) }
+            Some(v) => { eprintln!("{v}"); std::process::ExitCode::from(3) }
             None => { eprintln!("Error: {e:?}"); std::process::ExitCode::FAILURE }
         },
     }
@@ -665,7 +671,7 @@ fn run() -> anyhow::Result<()> {
             let Some(b) = query::resolve(&graph, &to) else { anyhow::bail!("no node matches {to}") };
             let found = impact::trace(&graph, &a.id, &b.id, depth);
             // No path within the depth is an answer to the question that was asked, so the JSON
-            // form says so and exits 0 where the text form exits 2. A caller parsing JSON should
+            // form says so and exits 0 where the text form exits 3. A caller parsing JSON should
             // not have to read an exit code to learn what the object already says, and a `null`
             // path is easier to handle than a non-zero exit with no object.
             if json {

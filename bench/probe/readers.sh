@@ -63,10 +63,12 @@ for i in $(seq 1 "$N"); do
   "$M" ask-rerank-local-$i "$L" -- "$B" --repo "$F" ask --stale --rerank-local $Q
   "$M" ask-exact-id-$i "$L" -- "$B" --repo "$F" ask --stale FR-PAY-22
   "$M" impact-$i "$L" -- "$B" --repo "$F" impact --stale cn --depth 3
-  # A pair with a path: `main`→`cn` has none within six hops, and `trace` exits 1 when it says so,
-  # so that row measured a 0.02 s early exit and `judge.py` refused the suite it was in. This chain
-  # is five hops — applyAppointmentCreate → evaluateAvailability → loadAvailabilitySnapshot →
-  # toWallClock → faceToWallClock → pad — so the row times a traversal that finds something.
+  # A pair with a path: `main`→`cn` has none within six hops, and that row measured a 0.02 s early
+  # exit. Since 0.6.0 `trace` says so with the verdict status 3, which `judge.py` reads as an
+  # answered row rather than refusing the suite — so the row would now be kept, and what it kept
+  # would be a bar set on an answer found in 0.02 s. This chain is five hops —
+  # applyAppointmentCreate → evaluateAvailability → loadAvailabilitySnapshot → toWallClock →
+  # faceToWallClock → pad — so the row times a traversal that finds something.
   "$M" trace-$i "$L" -- "$B" --repo "$F" trace --stale applyAppointmentCreate pad --depth 6
   # The backup lives in the log directory, not beside the file: `changes` reads every untracked
   # path `git ls-files --others --exclude-standard` names, and a `cn.ts.orig` in the worktree is

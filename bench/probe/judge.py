@@ -10,11 +10,18 @@ what a reader checks instead of the shell that produced a table.
 `floors_missed` — the one non-zero exit this file reads as a reading. A `bench` row that misses a
 floor did all of its work and answered: its wall clock, max RSS and peak CPU are readings of that
 reader, and only the verdict on the answers failed. A row that never found a store did not do the
-work at all and its clock measured a failing setup, which is no reading of anything. `bench` exits
-2 for the first and 1 for the second, so the status is what separates them and the sentence on
-stderr is only a message to a person: `measure.sh` writes `floors_missed=1` on a row that exited 2,
-and this file believes that field only where the status is still 2 on the line and the row is one
-that runs `bench` — a name is a weaker claim than a status, so both have to agree. The name says
+work at all and its clock measured a failing setup, which is no reading of anything. `repograph`
+exits 3 for the first and 1 for the second, so the status is what separates them and the sentence
+on stderr is only a message to a person. The status is 3 and not 2 because 2 is written above the
+command — `clap` for a usage error, the npm launcher for a missing platform binary — so a 2 is
+always a row that measured something other than a reader, and is refused whatever its name.
+
+A verdict is not `bench`'s alone: `trace` answers "no path within the depth" with the same status
+after spending its wall clock traversing, so a row of any command that exits 3 is an answered row
+and is read. The field is narrower than the status. `measure.sh` writes `floors_missed=1` only on a
+row that runs `bench`, and this file believes it only there and only beside a 3 — a name is a
+weaker claim than a status, so both have to agree — while a `bench` row that exited 3 without the
+field is refused, and so is any other row that claims it. The name says
 the fact and not the consequence, because the consequence differs by reader: to `medians` it is "judge this row", to a person reading the
 table it is "this reader's `bench` verdict failed", and a field called `ok` or `refused` would have
 had to pick one. It is a flag and not a count: `bench` prints one verdict, never a tally. Absent on
@@ -54,8 +61,13 @@ STAMP = re.compile(r"^(\d+\.\d+)\s+(.*)$")
 PROGRESS = re.compile(r"^dense: (\d+)/(\d+) rows")
 # The rows that run `repograph bench` — `bench-dense`, `bench-nodense` in `readers.sh`, `bench` on
 # its own elsewhere. No other command can miss a floor, so no other row's `floors_missed` is
-# believed however its stderr happened to read.
+# believed however its stderr happened to read. `measure.sh` scopes the field it writes by the same
+# expression, quoted there in these words, so the instrument and the judge name the same rows.
 BENCH_ROW = re.compile(r"^bench(-|$)")
+# The status a command exits with when it answered the question it was asked and the answer was
+# "no". 1 is every failure to answer; 2 belongs to `clap` and to the npm launcher and never
+# reaches this file as a reading.
+VERDICT_RC = 3.0
 # `/usr/bin/time -l`'s report shares a row's `.time` file with the measured command's stderr and is
 # written last, so the file's tail is the report and not what the command said. Every report line
 # begins with its own number — `0.61 real …`, `1550000000  maximum resident set size` — which is
@@ -122,11 +134,15 @@ def medians(lines, logdir=None):
             raise SystemExit(f"{m.group(0)!r}: no {', '.join(missing)} — the run did not complete")
         # `rc` is measure.sh's exit status for the measured command. A failed command still gets a
         # full `time` report, so its row looks like a fast one; it is refused rather than averaged.
-        # The exception is the floor verdict the docstring above states, which is a reading — and it
-        # takes the status 2, the field, and a row that runs `bench` to claim it.
-        floors = (f.get("rc", 0.0) == 2.0 and f.get("floors_missed", 0.0) != 0.0
-                  and BENCH_ROW.match(m.group(1)) is not None)
-        if f.get("rc", 0.0) != 0.0 and not floors:
+        # The exception is the verdict the docstring above states, which is a reading: the status
+        # admits the row whatever it ran, and the field rides on it for the rows that have floors —
+        # required on those and refused on every other, so neither half stands without the other.
+        rc = f.get("rc", 0.0)
+        claimed = f.get("floors_missed", 0.0) != 0.0
+        is_bench = BENCH_ROW.match(m.group(1)) is not None
+        answered = rc == VERDICT_RC and claimed == is_bench
+        floors = answered and claimed
+        if rc != 0.0 and not answered:
             raise SystemExit(f"{m.group(1)}: a run exited {int(f['rc'])} — that row measured a failure, "
                              f"not a reader{stderr_tail(logdir, f'{m.group(1)}-{m.group(2)}')}")
         runs.setdefault(m.group(1), []).append({**f, "floors_missed": 1.0 if floors else 0.0,

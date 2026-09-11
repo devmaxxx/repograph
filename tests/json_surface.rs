@@ -81,7 +81,7 @@ fn explain_verify_and_trace_answer_in_json_like_the_rest() {
     assert!(path.iter().all(|s| s["id"].is_string() && s["at"].is_string()), "{out}");
 }
 
-/// No path within the depth is an answer to the question that was asked. The text form exits 2 —
+/// No path within the depth is an answer to the question that was asked. The text form exits 3 —
 /// a verdict, not a failure to reach one; the JSON form says `null` and exits 0, because a caller
 /// parsing an object should not have to read an exit code to learn what the object already says.
 #[test]
@@ -93,10 +93,10 @@ fn a_trace_that_finds_nothing_is_a_null_path_and_not_a_failure() {
     assert!(v["path"].is_null(), "{out}");
     assert_eq!(v["from"], "sym:billing.ts::write");
 
-    // 2, not just non-zero: the text form answers the question and says no, which a shell script
+    // 3, not just non-zero: the text form answers the question and says no, which a shell script
     // reads apart from the 1 an unknown symbol exits with.
     let out = run(dir.path(), &["trace", "write", "refund"]);
-    assert_eq!(out.status.code(), Some(2), "{}", String::from_utf8_lossy(&out.stderr));
+    assert_eq!(out.status.code(), Some(3), "{}", String::from_utf8_lossy(&out.stderr));
 }
 
 /// A node the store does not have is an error in both forms: an empty object would be a claim

@@ -154,7 +154,7 @@ so a field can be added without breaking a parser written against the version be
 node at the far end — so a caller never works out which end of an edge it was standing on. One
 difference from the text forms is deliberate: a `trace` that finds no path within the depth is an
 answer to the question that was asked, so the JSON form prints `"path": null` and exits 0 where the
-text form exits **2**. The two are the same answer in two shapes: a caller parsing an object should
+text form exits **3**. The two are the same answer in two shapes: a caller parsing an object should
 not have to read an exit code to learn what the object already says, and a shell script reading the
 text form should not have to tell that answer from the `1` an unknown symbol exits with.
 
@@ -489,7 +489,8 @@ repograph families                          # families, milestones, and everythi
 Run after a build, it prints every family with its node count, how many definitions stand behind it
 and the `path:line` its first node stands at, then every id-like prefix no line defines, with how
 often, under how many distinct ids, and where it is written. Two of those columns exist to put the
-report's own edge first: `defs` counts declaring-file × id pairs, the rows sort by it ascending, and
+report's own edge first: `defs` counts declaring-file × id pairs — summed over the family's nodes,
+so a node two documents declare counts twice — the rows sort by it ascending, and
 a family with exactly one — one line, which may have been a mistake — reads `defined once`; `ids`
 counts the distinct ids written under an undefined prefix, and the mention half sorts by it, because
 twenty ids nobody defines is a vocabulary where twenty mentions of one id is a citation repeated.
@@ -653,11 +654,13 @@ nothing else. `bench --repeat N` runs the suite N times, judges every run on the
 a median beneath them.
 
 The exit status says which of three things happened, so a harness never has to read the sentence on
-stderr: **0** — the suite answered and every floor was met; **2** — the suite answered and a floor
+stderr: **0** — the suite answered and every floor was met; **3** — the suite answered and a floor
 was missed, which is a verdict on the answers and a reading of the reader; **1** — nothing was
 measured, which is an empty graph, a case file that does not parse, a built-in case set of the wrong
-shape, or a dense width mismatch. A `--repeat` run takes the worst of its runs: every run has to
-meet the floors, not the median of them.
+shape, or a dense width mismatch. The verdict is **3** and not 2 because 2 is written above the
+command and says nothing about a suite: `clap` exits 2 on a usage error, and `npm`'s launcher exits
+2 when no platform binary is installed. A `--repeat` run takes the worst of its runs: every run has
+to meet the floors, not the median of them.
 
 | | enriched store | store with no questions |
 | --- | --- | --- |

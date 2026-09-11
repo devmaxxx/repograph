@@ -28,16 +28,27 @@ wait $WRAP; RC=$?
 # median as an honestly-measured fast run — a mistyped flag reading as a reader that got 60×
 # quicker. The row carries its status and the script exits with it.
 #
-# One non-zero exit is not that, though. `repograph bench` exits 2 for a suite that answered every
-# case and missed a floor, and 1 for an empty graph, a missing case file or a dense width mismatch:
-# a row that missed a floor spent its wall clock reading, and a row that never found a store spent
-# it failing. The status is what separates them — it is the interface, and the sentence on stderr
-# is only a message to a person, free to be reworded. A binary too old to exit 2 says nothing this
-# reads, so its missed floors arrive as the failures they are indistinguishable from.
+# One non-zero exit is not that, though. `repograph` exits 3 for a question it was asked and
+# answered — a suite that ran every case and missed a floor, a `trace` that found no path within
+# the depth — and 1 for an empty graph, a missing case file or a dense width mismatch: a row that
+# answered spent its wall clock reading, and a row that never found a store spent it failing. The
+# status is what separates them — it is the interface, and the sentence on stderr is only a message
+# to a person, free to be reworded. 3 and not 2, which is a status two layers above the command
+# write: `clap` for a usage error, the npm launcher for a missing platform binary. A binary too old
+# to exit 3 says nothing this reads, so its missed floors arrive as the failures they are
+# indistinguishable from.
+#
+# Which rows may claim `floors_missed` is the same expression `judge.py`'s `BENCH_ROW` matches on,
+# kept here in the same words: only a row running `bench` has floors, so a `trace` row's verdict is
+# recorded as the reading it is without a field saying it missed something it never had.
+BENCH_ROW='^bench(-|$)'
+VERDICT=0
+[ "$RC" = "3" ] && VERDICT=1
 FLOORS=0
-[ "$RC" = "2" ] && FLOORS=1
+[ "$VERDICT" = "1" ] && [[ "$NAME" =~ $BENCH_ROW ]] && FLOORS=1
 if [ "$RC" = "0" ]; then :
 elif [ "$FLOORS" = "1" ]; then echo "measure: $NAME exited $RC on its floors — the timing stands, the floors did not" >&2
+elif [ "$VERDICT" = "1" ]; then echo "measure: $NAME exited $RC — answered with a verdict — the timing stands" >&2
 else echo "measure: $NAME exited $RC — this row measured a failure" >&2
 fi
 # Absent on every row where nothing happened, so a clean line is the line it has always been and
