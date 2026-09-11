@@ -230,6 +230,7 @@ pub(crate) fn apply_diff(repo: &std::path::Path, store: &store::Store, graph: &m
     let mut work: Vec<&walk::Entry> = diff.changed.iter().chain(regrammar.iter().copied()).collect();
     work.sort_by(|a, b| a.rel.cmp(&b.rel));
     let reread = co_declared.iter().map(|rel| by_rel[rel]);
+    let mut unread = false;
     for e in work.into_iter().chain(reread) {
         let text = match std::fs::read(repo.join(&e.rel)) {
             // NUL is legal inside a TypeScript string literal; only invalid UTF-8 marks a binary.
@@ -237,7 +238,9 @@ pub(crate) fn apply_diff(repo: &std::path::Path, store: &store::Store, graph: &m
                 Ok(s) => s,
                 Err(_) => { eprintln!("skipping {}: not UTF-8", e.rel); continue; }
             },
-            Err(err) => { eprintln!("read {}: {err}", e.rel); continue; }
+            // Not the arm above: a binary yields nothing however often it is read, where a file
+            // that would not open is one this pass has no reading of at all.
+            Err(err) => { eprintln!("read {}: {err}", e.rel); unread = true; continue; }
         };
         let extractor = match e.kind {
             walk::FileKind::Doc => &ex.doc,
@@ -246,12 +249,20 @@ pub(crate) fn apply_diff(repo: &std::path::Path, store: &store::Store, graph: &m
         };
         graph.apply(extractor.extract(&e.rel, &text));
     }
-    graph.settle();
-    store.save(graph, &walk::Manifest::from_entries(entries))?;
+    // Whether anything was re-extracted or dropped. Nothing else can move a family, so on a
+    // no-op update — the one a commit hook fires — the settle below would read every node and
+    // rebuild the whole edge set to arrive at what is already there.
+    let moved = !diff.changed.is_empty() || !diff.removed.is_empty() || !regrammar.is_empty();
+    if moved { graph.settle(); }
+    let mut saved = walk::Manifest::from_entries(entries);
+    // A file removed from the graph above and then not read is a hole, and the stamp is what would
+    // make it permanent: the hash of a file nobody reads again never moves, so nothing would ever
+    // name it. Held back, the next writer reads the tree once more and fills it.
+    if unread { saved.grammar = manifest.grammar; }
+    store.save(graph, &saved)?;
     // Only when something was re-extracted: a tree that did not move cannot have grown a node
     // without questions, and the no-op update a commit hook fires should not read the questions
     // file to be told so.
-    let moved = !diff.changed.is_empty() || !diff.removed.is_empty() || !regrammar.is_empty();
     let unenriched = moved
         .then(|| enrich::Questions::load(store).ok().and_then(|q| enrich::unenriched_note(graph, &q)))
         .flatten();
@@ -848,6 +859,39 @@ mod tests {
         assert_ne!(holed, fresh.0);
         run_update(repo, &cfg, false).unwrap();
         assert_eq!(saved("graph.json"), holed);
+    }
+
+    /// A file the walk cached and the re-read could not open is a hole in the graph, and the
+    /// stamp is what would make it permanent — nothing looks twice at a file whose hash never
+    /// moves. Unix only: Windows' read-only flag does not stop a read, so there is no portable
+    /// way to shut a file against this process.
+    #[cfg(unix)]
+    #[test]
+    fn a_file_the_grammar_walk_could_not_read_holds_the_stamp_back() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = doc_repo(ONE);
+        let (repo, cfg) = (dir.path(), config::Config::default());
+        std::fs::write(repo.join("docs/b.md"), "# B\n\n**FR-PAY-24 · MUST · chargeback**\n\nbody\n").unwrap();
+        built(repo, &cfg);
+        let store = store::Store::new(repo);
+        let (graph, manifest) = store.load().unwrap();
+        store.save(&graph, &walk::Manifest { grammar: 0, ..manifest }).unwrap();
+        // Shut after the build, so the stamp still matches and the walk hands back the hash it
+        // recorded instead of reading the file and leaving it out.
+        let a = repo.join("docs/a.md");
+        std::fs::set_permissions(&a, std::fs::Permissions::from_mode(0o000)).unwrap();
+        if std::fs::read(&a).is_ok() { return; } // root, or a filesystem without modes
+
+        run_update(repo, &cfg, false).unwrap();
+        let (graph, manifest) = store.load().unwrap();
+        assert!(!graph.nodes.contains_key("FR-PAY-22"), "unread, so its nodes are not in the graph");
+        assert_eq!(manifest.grammar, 0, "and the store does not claim the tree was read whole");
+
+        std::fs::set_permissions(&a, std::fs::Permissions::from_mode(0o644)).unwrap();
+        run_update(repo, &cfg, false).unwrap();
+        let (graph, manifest) = store.load().unwrap();
+        assert!(graph.nodes.contains_key("FR-PAY-22"), "the next writer reads it again, unedited");
+        assert_eq!(manifest.grammar, walk::GRAMMAR);
     }
 
     #[test]
