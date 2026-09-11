@@ -151,7 +151,8 @@ struct Scan {
 
 impl Scan {
     fn doc(&mut self, rel: &str, text: &str) {
-        // An editor's byte-order mark would otherwise hide the first line from `^`.
+        // An editor's byte-order mark rides on the first line: left there it hides an opening
+        // fence from the check below, and rides into the example line the report prints.
         let mut fenced = false;
         for (i, line) in text.trim_start_matches('\u{feff}').lines().enumerate() {
             if line.trim_start().starts_with("```") {
