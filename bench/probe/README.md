@@ -65,7 +65,12 @@ this machine (`docs/bench/2026-09-10-next-version-levers-results.md` §1 is the 
 That `n` is read and not just printed: `control` and `compare` refuse a row built from fewer runs
 than the floor, which is five unless a last argument (`judge.py compare REF NEW 3`) says otherwise.
 A whole-store embed is judged as a median of three against a control of three, and §9 reads its
-three clauses off the summary lines by hand. The derived average CPU is reported on every row and
+three clauses off the summary lines by hand. A control's spread is the gap between its two runs
+over the **mean** of the two, on every column it prints: the two sides are the same binary and are
+interchangeable, and a spread taken against whichever run was named first put an 11% pair on both
+sides of the 10% bar depending on the order of the arguments. A candidate's delta is a different
+reading and is unchanged — there the reference is not interchangeable with the candidate, and the
+move is stated as a fraction of it. The derived average CPU is reported on every row and
 judged on none: it is printed by `compare`, its spread is printed by `control`, and no bar is set
 on it until a control has said what that spread is.
 
@@ -114,8 +119,17 @@ did; it is only as good as the sampler under it, so a command that finishes insi
 seconds is never sampled and reports `peak_cpu = 0`. That is every reader row, and it is not the
 whole-store embed of §9 (≈ 1,930 s, 293% recorded), which is the row the column was added for. A
 row whose *reference* read 0 prints `n/a` and is left unjudged on that column rather than passing
-on a zero that means "never sampled"; an average is printed as `n/a` on the same terms, where a
-wall clock rounded to zero left nothing to divide by or where the reference predates the column.
+on a zero that means "never sampled"; an average is printed as `n/a` where a side has no reading at
+all — a wall clock that rounded to zero left nothing to divide, or a file written before the column
+existed. A row that ran and kept a core busy for under one tick of `/usr/bin/time`'s 10 ms reads
+`0.00` and is a reading like any other: two such rows spread by nothing, and `n/a` there would say
+the column was never read. In a `medians.txt` the average is written as `NN%` and in no other unit —
+a bare number is a row whose spelling drifted and is refused by name, because a field readable as
+either cores or percent is one a reader has to guess at and the guess is a hundredfold wide. Both
+files are judged whole on one check: a line carrying a `wall=` that reads as neither a median nor a
+run is refused naming the file and the line — a `medians.txt` row reworded, a `summary.txt` row
+that lost its `-N` index — rather than skipped into a median taken over fewer runs than the file
+holds. Prose carries no `wall=` and passes through both.
 The average carries no bar because `/usr/bin/time` reports user and sys to 10 ms: on a 0.04 s row
 one tick of either moves the column by a fifth to a third, which a 10% bar would fail on a machine
 that did nothing wrong. `judge.py control` prints the average's own spread beside the wall and RSS

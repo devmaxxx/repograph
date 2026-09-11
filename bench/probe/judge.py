@@ -95,15 +95,22 @@ def fields(text):
 
 
 def avg_cpu(wall, user, sys_):
-    """Cores busy over the whole run. Zero where the wall clock rounded to zero — nothing was
-    measured, and `compare` reads that row's column against nothing rather than against a zero."""
-    return round((user + sys_) / wall, 2) if wall else 0.0
+    """Cores busy over the whole run, or `None` where the wall clock rounded to zero — there is
+    nothing to divide by, and nothing was measured to divide.
+
+    A measured zero is a zero and is returned as one: `/usr/bin/time` reports user and sys to
+    10 ms, so a 40 ms row that kept a core busy for under one tick reports 0.00 of each, and that
+    row was read. The two cases are told apart here rather than downstream, because a reader of
+    the column cannot tell an absent reading from a quiet one once they share a value.
+    """
+    return round((user + sys_) / wall, 2) if wall else None
 
 
 def row_metrics(wall, maxrss, peak_cpu, avg, n, floors_missed=0, verdict=0):
     """One row's readings. `floors_missed` and `verdict` are on the row only where they happened,
     so every clean row reads — and prints, and compares — exactly as it did before either field
-    existed. `avg` is `None` on a row whose summary predates the column."""
+    existed. `avg` is `None` on a row that has no reading of the column — a summary that predates
+    it, or a wall clock that rounded away with nothing to divide."""
     m = {"wall": wall, "maxrss": maxrss, "peak_cpu": peak_cpu, "avg_cpu": avg, "n": n}
     if floors_missed:
         m["floors_missed"] = 1
@@ -131,11 +138,16 @@ def stderr_tail(logdir, run, keep=2, width=160):
     return "; it said: " + " / ".join(l[:width] for l in said[-keep:]) if said else ""
 
 
-def medians(lines, logdir=None):
+def medians(lines, logdir=None, path=None):
     runs = {}
     for line in lines:
         m = RUN.match(line.strip())
         if not m:
+            # A run line whose spelling drifted — an index dropped, a field reworded — reads as
+            # prose and is skipped, and the median that follows is taken over fewer runs than the
+            # file holds, under an `n` that says otherwise. `read_medians` refuses the same shape
+            # on the same check, so a file is judged whole on either path through it.
+            refuse_drift(line.strip(), path)
             continue
         f = fields(m.group(3))
         # `measure.sh` writes `wall=s` / `maxrss=GB` when its `time` transcript held no `real`
@@ -201,13 +213,15 @@ def medians(lines, logdir=None):
 # peak in; `read_medians` divides the average back into the cores it was derived as. The suffix is
 # optional on the peak and the whole `avg_cpu=` field is optional, because the references on disk
 # were written before either — a reference that predates the column is read without it rather than
-# refused, and a comparison against one prints `n/a` in that column.
+# refused, and a comparison against one prints `n/a` in that column. The average's own suffix is
+# not optional: a field that may be written in either of two units is one a reader has to guess
+# at, and a guess wrong by a hundredfold is what that column would be read as.
 MEDIAN_LINE = re.compile(
-    r"^(\S+)\s+(wall=[0-9.]+ maxrss=[0-9.]+ peak_cpu=[0-9.]+%?(?: avg_cpu=[0-9.]+%?)? n=\d+"
+    r"^(\S+)\s+(wall=[0-9.]+ maxrss=[0-9.]+ peak_cpu=[0-9.]+%? (?:avg_cpu=[0-9.]+% )?n=\d+"
     r"(?: floors_missed=1)?(?: verdict=1)?)$")
-# The average's suffix is what says which unit it was written in, so it is read off the line and
-# not thrown away with the rest of the punctuation the way `FIELD` reads every other number.
-AVG_CPU = re.compile(r"avg_cpu=([0-9.]+)(%?)")
+# The average carries its unit or it is not an average: `%` is the one spelling `medians` writes,
+# and a bare number is a row whose spelling drifted rather than a second unit to be guessed at.
+AVG_CPU = re.compile(r"avg_cpu=([0-9.]+)%")
 # Every reading this file parses — a median or a run — carries a `wall=`, and none of the prose
 # that travels in the same files does: `readers.sh` heads `medians.txt` with the embedder line,
 # `quiet.sh` heads a summary with its own, and `medians` prints the floor and verdict notes under
@@ -215,17 +229,34 @@ AVG_CPU = re.compile(r"avg_cpu=([0-9.]+)(%?)")
 ROW_FIELD = re.compile(r"\bwall=")
 
 
+def refuse_drift(line, path=None):
+    """Refuse a line that carries a reading and reads as neither shape; say nothing about any other.
+
+    The one check both readers share. A drifted line skipped is a row the file holds and the
+    judgement does not — and both sides of a control drift together, so the comparison that
+    follows is green over a suite quietly short of its rows. The prose these files travel with —
+    `readers.sh`'s embedder line, `quiet.sh`'s, the floor and verdict notes — carries no `wall=`
+    and passes through.
+    """
+    if not ROW_FIELD.search(line) or RUN.match(line) or MEDIAN_LINE.match(line):
+        return
+    where = f"{path}: " if path else ""
+    raise SystemExit(f"{where}{line!r} carries a reading and reads as neither a median "
+                     "(`row wall=… maxrss=… peak_cpu=…% avg_cpu=…% n=…`) nor a run "
+                     "(`row-1  wall=…s user=…s sys=…s maxrss=…GB … rc=0`) — a file judged "
+                     "without it would be judged over fewer rows than it holds")
+
+
 def read_avg_cpu(text):
     """The average CPU off a medians line, in cores, or `None` where the line predates the column.
 
     `NN%` is percent of one core — the unit `medians` prints, shared with the sampled peak — and
-    divides back into cores; a bare number is already cores, which is how `row_metrics` holds it
-    and how a reference written by hand off this file's own values spells it.
+    divides back into cores. It is the only spelling that reads: a bare number would be a second
+    unit on one field, a hundredfold out if it were read as the first, and `MEDIAN_LINE` refuses
+    the line instead of choosing between them.
     """
     m = AVG_CPU.search(text)
-    if not m:
-        return None
-    return float(m.group(1)) / 100 if m.group(2) else float(m.group(1))
+    return float(m.group(1)) / 100 if m else None
 
 
 def read_lines(path):
@@ -242,34 +273,21 @@ def read_lines(path):
 def read_medians(path):
     lines = read_lines(path)
     out = {}
-    drifted = None
     for line in lines:
-        line = line.strip()
-        if not line:
-            continue
-        m = MEDIAN_LINE.match(line)
+        m = MEDIAN_LINE.match(line.strip())
         if m:
             f = fields(m.group(2))
             out[m.group(1)] = row_metrics(f["wall"], f["maxrss"], f["peak_cpu"],
                                           read_avg_cpu(m.group(2)), int(f["n"]),
                                           floors_missed=f.get("floors_missed", 0.0),
                                           verdict=f.get("verdict", 0.0))
-        # A row whose spelling drifted — a field reworded, a unit dropped, a column added — reads
-        # as prose and is skipped, and a three-row file arrives as two rows with nothing said. Both
-        # sides of a control drift together, so the comparison that follows is green over a suite
-        # quietly short of the rows it was written to judge. Refused instead, by the one line.
-        elif drifted is None and ROW_FIELD.search(line) and not RUN.match(line):
-            drifted = line
     if out:
-        if drifted:
-            raise SystemExit(f"{path}: {drifted!r} carries a reading and reads as neither a median "
-                             "(`row wall=… maxrss=… peak_cpu=…% avg_cpu=…% n=…`) nor a run "
-                             "(`row-1  wall=…s user=…s sys=…s maxrss=…GB … rc=0`) — a file judged "
-                             "without it would be judged over fewer rows than it holds")
+        for line in lines:
+            refuse_drift(line.strip(), path)
         return out
     # A summary file's rows have their transcripts beside them, and a refusal that can quote one
     # says more than the row's name — which is the whole of what a reader has to go on.
-    rows = medians(lines, Path(path).parent)
+    rows = medians(lines, Path(path).parent, path)
     # And a file that is neither — a medians file one field of which was reworded, a log directory's
     # `summary.txt` truncated before its first row — must not reach a caller as an empty comparison:
     # `print_table` refuses that without naming a file, and `control` finds no row missing from
@@ -282,7 +300,16 @@ def read_medians(path):
 
 
 def spread(a, b):
-    return 0.0 if not a or b is None else abs(b - a) / a
+    """The gap between two readings of one thing, as a fraction of the mean of the two.
+
+    Symmetric, because the two sides of a control are the same binary run twice and are
+    interchangeable: taken against whichever was named first, an 11% pair read 11% one way and
+    9.9% the other, which put the order of the arguments across a 10% bar. Against the mean, a
+    zero on one side is a reading of that side — 0 beside a 0.5 is 200% — and not a division by
+    zero, and two zeros are no spread at all.
+    """
+    mean = (a + b) / 2
+    return 0.0 if not mean else abs(b - a) / mean
 
 
 def delta(ref, new, unjudged=0.0):
@@ -314,6 +341,10 @@ Control = namedtuple("Control", "row wall rss avg ok")
 def control(a, b, wall_bar=WALL_BAR, rss_bar=RSS_BAR, min_n=MIN_N):
     """The same binary twice: every row's spread against the bars it will later judge with.
 
+    Every column is a spread against the mean of the two readings, so the two sides are as
+    interchangeable in the table as they are on the machine: `control A B` and `control B A` are
+    one reading of one pair of runs, down to the verdict.
+
     Wall and max RSS are the two §1's Gate names and the two the verdict is taken on. The average
     CPU spread is reported beside them and decides nothing — it is the reading a bar on that column
     would have to be set from, and this is the run that takes it.
@@ -329,13 +360,11 @@ def control(a, b, wall_bar=WALL_BAR, rss_bar=RSS_BAR, min_n=MIN_N):
             raise SystemExit(f"{row}: present in one control run and not the other — the suites differ")
         w = round(spread(a[row]["wall"], b[row]["wall"]), 4)
         r = round(spread(a[row]["maxrss"], b[row]["maxrss"]), 4)
-        # `None` where either run predates the column, and where either average is a zero a wall
-        # clock rounded away: a spread between one of those and a reading is no reading of the
-        # column's repeatability whichever side it fell on, and a control is the one comparison
-        # whose two sides are interchangeable — `control A B` and `control B A` are the same run
-        # read in the other order and must say the same thing about it.
+        # `None` only where a side has no reading at all — a summary that predates the column, or
+        # a wall clock that rounded away with nothing to divide. A measured 0.00 is a reading, and
+        # its spread against the other run is what this column exists to report.
         avg, other = a[row]["avg_cpu"], b[row]["avg_cpu"]
-        c = round(spread(avg, other), 4) if avg and other else None
+        c = round(spread(avg, other), 4) if avg is not None and other is not None else None
         out.append(Control(row, w, r, c, w <= wall_bar and r <= rss_bar))
     return out
 

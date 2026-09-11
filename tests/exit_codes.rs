@@ -21,6 +21,20 @@ fn err(out: &Output) -> String { String::from_utf8_lossy(&out.stderr).into_owned
 
 fn out(out: &Output) -> String { String::from_utf8_lossy(&out.stdout).into_owned() }
 
+/// Cargo runs this file's tests on one process, so a test that writes the environment writes it
+/// for every other one. The idiom is `src/config.rs`'s — a lock taken before the mutation — and
+/// the crate has one of them and not two.
+static ENV: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// Taken at the top of every test in this crate, not only by the one that writes. A reader of the
+/// environment is as exposed to a concurrent write as a writer is: a test that spawns while
+/// another holds `REPOGRAPH_BENCH_REPO` set reads a repository it was never given, and would fail
+/// for a reason nothing in its own body names. Poisoned means a test panicked holding the lock,
+/// which says nothing about the environment — so the guard is taken anyway.
+fn env_lock() -> std::sync::MutexGuard<'static, ()> {
+    ENV.lock().unwrap_or_else(|e| e.into_inner())
+}
+
 /// The path an `anyhow` error takes: `main` prints "Error: …" and exits 1. A verdict is not that,
 /// so the assertion on a verdict's stderr is that it is *not* this — which stays true however the
 /// sentence itself is reworded. Any line of it, not the first: a command that logged a line before
@@ -62,6 +76,7 @@ fn built() -> tempfile::TempDir {
 
 #[test]
 fn a_trace_with_no_path_is_a_verdict_and_an_unknown_symbol_is_a_failure() {
+    let _g = env_lock();
     let dir = built();
 
     let found = run(dir.path(), &["trace", "refund", "write"]);
@@ -84,6 +99,7 @@ fn a_trace_with_no_path_is_a_verdict_and_an_unknown_symbol_is_a_failure() {
 
 #[test]
 fn a_bench_that_missed_its_floors_is_a_verdict_and_an_empty_store_is_a_failure() {
+    let _g = env_lock();
     let dir = built();
     let cases = cases();
     let lines = std::fs::read_to_string(&cases).unwrap().lines().filter(|l| !l.trim().is_empty()).count();
@@ -121,6 +137,7 @@ fn a_bench_that_missed_its_floors_is_a_verdict_and_an_empty_store_is_a_failure()
 /// `gated=false` for the reader who has to know why.
 #[test]
 fn a_case_file_of_another_shape_is_reported_and_not_graded() {
+    let _g = env_lock();
     let dir = built();
     let five: String = std::fs::read_to_string(cases()).unwrap().lines().take(5)
         .map(|l| format!("{l}\n")).collect();
@@ -141,16 +158,12 @@ fn a_case_file_of_another_shape_is_reported_and_not_graded() {
 /// built for this case because the command never reaches one.
 #[test]
 fn a_usage_error_exits_two_and_is_therefore_not_a_verdict() {
+    let _g = env_lock();
     let dir = tempfile::tempdir().unwrap();
     let usage = run(dir.path(), &["bench", "--nosuchflag"]);
     assert_eq!(code(&usage), Some(2), "clap's own status: {}", err(&usage));
     assert_eq!(out(&usage), "", "nothing was measured: {}", out(&usage));
 }
-
-/// Cargo runs this file's tests on one process, so a test that writes the environment writes it
-/// for every other one. The idiom is `src/config.rs`'s — a lock taken before the mutation, and a
-/// Safety note saying why the mutation is sound — so the crate has one of them and not two.
-static ENV: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 /// What a shell that has been running the bench kit exports, and what a test may not inherit from
 /// it. `REPOGRAPH_BENCH_REPO` sends `bench` to another repository: the case below would read an
@@ -158,12 +171,13 @@ static ENV: std::sync::Mutex<()> = std::sync::Mutex::new(());
 /// verdict had gone, for a reason nothing in the run names.
 #[test]
 fn the_bench_kits_variables_do_not_reach_the_child() {
-    let _g = ENV.lock().unwrap_or_else(|e| e.into_inner());
+    let _g = env_lock();
     let dir = built();
     let elsewhere = tempfile::tempdir().unwrap();
-    // Safety: the lock above makes this the only thread touching the environment, and no reader
-    // races it — every spawn in this crate goes through `common::run`, which removes both
-    // variables from the child whatever the parent holds.
+    // Safety: the lock above makes this the only thread touching the environment — every test in
+    // this crate takes it, so nothing reads or writes the variables while they are set. What
+    // `common::run` does is make the strip observable: it removes both from the child whatever
+    // the parent holds, which is the behaviour the assertion below reads.
     unsafe {
         std::env::set_var("REPOGRAPH_BENCH_REPO", elsewhere.path());
         std::env::set_var("REPOGRAPH_EMBED_MODEL", "intfloat/multilingual-e5-large");

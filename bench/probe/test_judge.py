@@ -43,9 +43,18 @@ class Medians(unittest.TestCase):
         # Three runs read 0.98, 0.83 and 1.0; the median is the middle one, taken like the rest.
         self.assertEqual(judge.medians(SUMMARY.splitlines())["ask-fused"]["avg_cpu"], 0.98)
 
-    def test_a_row_whose_wall_clock_rounded_away_reads_zero_rather_than_dividing_by_it(self):
-        self.assertEqual(judge.avg_cpu(0.0, 0.0, 0.0), 0.0)
+    def test_a_row_whose_wall_clock_rounded_away_has_no_average_rather_than_a_zero(self):
+        # Nothing was measured, so there is no number of cores to report; a row that ran and kept
+        # no core busy is the case below, and the two must not arrive at a reader as one value.
+        self.assertIsNone(judge.avg_cpu(0.0, 0.0, 0.0))
         line = "impact-1  wall=0.00s user=0.00s sys=0.00s maxrss=0.05GB peak_cpu=0% peak_threads=1 samples=0 rc=0"
+        self.assertIsNone(judge.medians([line])["impact"]["avg_cpu"])
+
+    def test_a_row_whose_cpu_fields_both_read_zero_measured_a_zero(self):
+        # `/usr/bin/time` reports user and sys to 10 ms, so a 40 ms row that kept a core busy for
+        # under one tick reports 0.00 of each. That is a reading of the column, not its absence.
+        self.assertEqual(judge.avg_cpu(0.04, 0.0, 0.0), 0.0)
+        line = "impact-1  wall=0.04s user=0.00s sys=0.00s maxrss=0.05GB peak_cpu=0% peak_threads=1 samples=0 rc=0"
         self.assertEqual(judge.medians([line])["impact"]["avg_cpu"], 0.0)
 
     def test_an_even_count_takes_the_upper_middle_like_bench_does(self):
@@ -77,15 +86,18 @@ class Medians(unittest.TestCase):
             medians.write_text(out.getvalue())
             self.assertEqual(judge.read_medians(str(medians))["ask-fused"]["avg_cpu"], 0.98)
 
-    def test_the_average_reads_the_same_cores_written_as_a_percent_or_as_a_bare_number(self):
-        # `medians` prints percent of one core so both CPU columns share a unit, but a reference
-        # kept by hand carries the cores `row_metrics` holds. Two spellings of one reading.
+    def test_the_average_is_read_in_the_one_unit_it_is_written_in(self):
+        # Percent of one core is what `medians` prints and the only spelling that reads. A bare
+        # number is not a second unit to be guessed at: read as percent it is a hundredfold out,
+        # read as cores it makes the file's own column ambiguous — so it is a drifted row.
         with tempfile.TemporaryDirectory() as d:
             pct, bare = Path(d, "pct.txt"), Path(d, "bare.txt")
             pct.write_text("ask-fused wall=0.61 maxrss=1.55 peak_cpu=120.0% avg_cpu=98% n=5\n")
-            bare.write_text("ask-fused wall=0.61 maxrss=1.55 peak_cpu=120.0% avg_cpu=0.98 n=5\n")
+            bare.write_text("ask-fused wall=0.61 maxrss=1.55 peak_cpu=120.0% avg_cpu=98 n=5\n")
             self.assertEqual(judge.read_medians(str(pct))["ask-fused"]["avg_cpu"], 0.98)
-            self.assertEqual(judge.read_medians(str(bare))["ask-fused"]["avg_cpu"], 0.98)
+            with self.assertRaises(SystemExit) as e:
+                judge.read_medians(str(bare))
+            self.assertIn("avg_cpu=98 n=5", str(e.exception))
 
     def test_a_row_whose_spelling_drifted_is_refused_and_not_dropped_from_the_file(self):
         # Skipping it read three rows as two and judged the shorter suite green — and both sides of
@@ -111,6 +123,25 @@ class Medians(unittest.TestCase):
                          "trace wall=0.42 maxrss=0.31 peak_cpu=0.0% avg_cpu=83% n=5 verdict=1\n"
                          + judge.verdict_note(["trace"]) + "\n")
             self.assertEqual(judge.read_medians(str(p))["trace"]["n"], 5)
+
+    def test_a_summary_row_that_lost_its_run_index_is_refused_and_not_shortened(self):
+        # The drift a summary file has: `measure.sh` writes `NAME-i`, and a row that arrives
+        # without its index is skipped by the run parser — the median is then taken over one run
+        # fewer than the file holds, under an `n` that says otherwise.
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d, "summary.txt")
+            p.write_text(SUMMARY + "impact  wall=0.05s user=0.02s sys=0.01s maxrss=0.05GB "
+                         "peak_cpu=0% peak_threads=1 samples=0 rc=0\n")
+            with self.assertRaises(SystemExit) as e:
+                judge.read_medians(str(p))
+            self.assertIn(str(p), str(e.exception))
+            self.assertIn("impact  wall=0.05s", str(e.exception))
+
+    def test_the_prose_a_summary_travels_with_is_not_read_as_a_drifted_row(self):
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d, "summary.txt")
+            p.write_text("quiet: idle=96% load1=1.2 avail=12.0GB\n" + SUMMARY)
+            self.assertEqual(judge.read_medians(str(p))["impact"]["n"], 3)
 
     def test_a_summary_file_of_runs_reads_as_medians_too(self):
         import os
@@ -389,7 +420,9 @@ class Control(unittest.TestCase):
         a = {"ask-fused": {"wall": 0.60, "maxrss": 1.50, "peak_cpu": 120.0, "avg_cpu": 0.98, "n": 5}}
         b = {"ask-fused": {"wall": 0.63, "maxrss": 1.55, "peak_cpu": 121.0, "avg_cpu": 0.99, "n": 5}}
         (r,) = judge.control(a, b)
-        self.assertEqual((r.row, r.wall, r.rss, r.avg), ("ask-fused", 0.05, 0.0333, 0.0102))
+        # Each spread is the gap over the mean of the two readings: 0.03 s over 0.615 s, 0.05 GB
+        # over 1.525 GB, 0.01 cores over 0.985.
+        self.assertEqual((r.row, r.wall, r.rss, r.avg), ("ask-fused", 0.0488, 0.0328, 0.0102))
         self.assertTrue(r.ok)
 
     def test_the_average_cpu_spread_is_reported_and_does_not_decide_the_control(self):
@@ -400,7 +433,7 @@ class Control(unittest.TestCase):
         b = {"impact": {"wall": 0.04, "maxrss": 0.05, "peak_cpu": 0.0, "avg_cpu": 1.00, "n": 5}}
         (r,) = judge.control(a, b)
         self.assertEqual((r.row, r.wall, r.rss), ("impact", 0.0, 0.0))
-        self.assertAlmostEqual(r.avg, 0.3333, places=4)
+        self.assertAlmostEqual(r.avg, 0.2857, places=4)
         self.assertTrue(r.ok)
 
     def test_a_control_one_side_of_which_predates_the_column_reports_no_spread(self):
@@ -410,20 +443,39 @@ class Control(unittest.TestCase):
         self.assertIsNone(judge.control(b, a)[0].avg)
 
     def test_a_control_reads_the_same_whichever_run_is_given_first(self):
-        # The two sides of a control are the same binary and are interchangeable; an average of
-        # zero is a wall clock that rounded away on one run, and reading it as a spread from one
-        # side and as `n/a` from the other made the order of the arguments the reading.
-        a = {"impact": {"wall": 0.04, "maxrss": 0.05, "peak_cpu": 0.0, "avg_cpu": 0.75, "n": 5}}
-        b = {"impact": {"wall": 0.04, "maxrss": 0.05, "peak_cpu": 0.0, "avg_cpu": 0.0, "n": 5}}
-        self.assertIsNone(judge.control(a, b)[0].avg)
-        self.assertIsNone(judge.control(b, a)[0].avg)
+        # The two sides of a control are the same binary and are interchangeable, so the whole row
+        # — both judged spreads, the reported one and the verdict — must not depend on which run
+        # was named first. Taken against the first side, an 11% pair read 11% one way and 9.9% the
+        # other, across the 10% bar.
+        a = {"impact": {"wall": 1.00, "maxrss": 0.05, "peak_cpu": 0.0, "avg_cpu": 0.75, "n": 5}}
+        b = {"impact": {"wall": 1.11, "maxrss": 0.05, "peak_cpu": 0.0, "avg_cpu": 1.00, "n": 5}}
+        self.assertEqual(judge.control(a, b), judge.control(b, a))
+
+    def test_a_wall_pair_across_the_bar_is_outside_from_either_side(self):
+        # 0.11 s over a mean of 1.055 s is 10.4%, over the 10% bar, and says so both ways round.
+        a = {"impact": {"wall": 1.00, "maxrss": 0.05, "peak_cpu": 0.0, "avg_cpu": 0.75, "n": 5}}
+        b = {"impact": {"wall": 1.11, "maxrss": 0.05, "peak_cpu": 0.0, "avg_cpu": 0.75, "n": 5}}
+        for first, second in ((a, b), (b, a)):
+            (r,) = judge.control(first, second)
+            self.assertEqual(r.wall, 0.1043)
+            self.assertFalse(r.ok)
+
+    def test_a_side_that_measured_no_cpu_at_all_is_a_reading_and_not_an_absent_column(self):
+        # Both runs kept a core busy for under one tick of `/usr/bin/time`'s 10 ms, on a row that
+        # ran and was measured. Two readings of zero are a spread of zero; `n/a` there would say
+        # the column was never read.
+        lines = [f"impact-{i}  wall=0.04s user=0.00s sys=0.00s maxrss=0.05GB peak_cpu=0% "
+                 "peak_threads=1 samples=0 rc=0" for i in range(1, 6)]
+        rows = judge.medians(lines)
+        (r,) = judge.control(rows, judge.medians(lines))
+        self.assertEqual(r.avg, 0.0)
 
     def test_a_row_outside_either_bar_fails_and_names_which(self):
         a = {"dump10": {"wall": 0.70, "maxrss": 1.36, "peak_cpu": 100.0, "avg_cpu": 0.9, "n": 5}}
         b = {"dump10": {"wall": 0.90, "maxrss": 1.36, "peak_cpu": 100.0, "avg_cpu": 0.9, "n": 5}}
         (r,) = judge.control(a, b)
         self.assertFalse(r.ok)
-        self.assertAlmostEqual(r.wall, 0.2857, places=4)
+        self.assertAlmostEqual(r.wall, 0.25, places=4)
         self.assertEqual(r.rss, 0.0)
 
     def test_a_row_missing_from_one_side_is_reported_not_skipped(self):

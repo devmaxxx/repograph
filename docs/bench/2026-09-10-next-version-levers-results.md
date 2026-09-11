@@ -118,6 +118,21 @@ names the four processes holding the most when it refuses. This is an **addition
 committed clause said anything about memory, a suite that dies mid-read is not a reading, and the
 kit should refuse before spending eight minutes rather than after.
 
+**Correction 5, 2026-09-11 — which run the spread is a fraction of, and again before any reading.**
+The Gate above states its two clauses against the first run: |wall A − wall B| ≤ 10% **of A**, and
+max RSS likewise. The two sides of a control are the same binary run twice and are interchangeable
+— which run is called A is the order the two commands happened to be typed in — so a spread taken
+against A made that order part of the reading: a pair 11% apart read 11% one way and 9.9% the
+other, on both sides of the 10% bar. `judge.py control` now takes every column against the **mean**
+of the two readings, so `control A B` and `control B A` are one reading down to the verdict. The
+Gate is left exactly as committed and the divergence is recorded here: its letter reads a fraction
+of A where the script reads a fraction of the mean, which differ by at most half the spread itself
+and are the same clause wherever a control passes comfortably. A candidate against a reference is
+untouched — there the two sides are *not* interchangeable, and `judge.py compare` still states the
+move as a fraction of the reference, which is what §1's reference table is for. Taken before the
+reading it governs: §1's **Reading.** is empty as this paragraph is written, and no number in this
+document was produced by either formula.
+
 **Reading.**
 
 ## 2 · G15 — the anchor line in the history
