@@ -70,10 +70,12 @@ over the **mean** of the two, on every column it prints: the two sides are the s
 interchangeable, and a spread taken against whichever run was named first put an 11% pair on both
 sides of the 10% bar depending on the order of the arguments. A candidate's delta is a different
 reading — there the reference is not interchangeable with the candidate, and the move is stated as
-a fraction of it, under one rule on every column: a side that has no reading at all prints `n/a`
-and is judged on nothing, while a reference of 0.00 is a reading, so a candidate that reads zero
+a fraction of it, under one rule on every column: a side that has no reading at all — a peak
+`top` never sampled, an average with no run to read it off — prints `n/a` and is judged on
+nothing, while a 0.00 wall clock, max RSS or average is a reading, so a candidate that reads zero
 too has not moved and a candidate that moved off zero moved `+inf%` and is outside any bar set on
-that column. The derived average CPU is reported on every row and
+that column. Peak CPU's 0 is never a reading, on either side, because it is the sampler saying it
+never caught the row. The derived average CPU is reported on every row and
 judged on none: it is printed by `compare`, its spread is printed by `control`, and no bar is set
 on it until a control has said what that spread is.
 
@@ -121,8 +123,9 @@ peak CPU against 10%, and the average beside them with no bar on it. Peak CPU is
 did; it is only as good as the sampler under it, so a command that finishes inside about two
 seconds is never sampled and reports `peak_cpu = 0`. That is every reader row, and it is not the
 whole-store embed of §9 (≈ 1,930 s, 293% recorded), which is the row the column was added for. A
-row whose *reference* read 0 prints `n/a` and is left unjudged on that column rather than passing
-on a zero that means "never sampled"; an average is printed as `n/a` only where one of the two
+row whose peak read 0 on either side prints `n/a` and is left unjudged on that column rather than
+passing on a zero that means "never sampled", or reading an unsampled candidate against a sampled
+reference as a fall to nothing; an average is printed as `n/a` only where one of the two
 sides has no reading at all — a file written before the column existed, or a row every run of which
 rounded its wall clock to zero and left nothing to divide. One such run among five costs the column
 that run and not the row: the median is taken over the runs that read, beside the `n` that counts

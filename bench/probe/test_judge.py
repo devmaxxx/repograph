@@ -545,6 +545,17 @@ class CompareCpuColumns(unittest.TestCase):
         self.assertIsNone(r.peak)
         self.assertTrue(r.ok)
 
+    def test_a_candidate_the_sampler_never_caught_is_unjudged_rather_than_a_move_to_zero(self):
+        # The sampler is the same sampler on both sides: a candidate reading 0 is `top` saying
+        # nothing about that run, so there is nothing to place against the reference's 293%.
+        # Reading it as -100% would report the loudest possible improvement for a run nobody
+        # measured, and the row is still judged on the wall clock and max RSS it does have.
+        ref = {"embed": self.row(1930.0, 2.15, 293.0)}
+        (r,) = judge.compare(ref, {"embed": self.row(1930.0, 2.15, 0.0)})
+        self.assertIsNone(r.peak)
+        self.assertEqual((r.wall, r.rss), (0.0, 0.0))
+        self.assertTrue(r.ok)
+
     def test_the_table_prints_four_delta_columns_and_names_the_unjudged_one(self):
         out = io.StringIO()
         with contextlib.redirect_stdout(out):

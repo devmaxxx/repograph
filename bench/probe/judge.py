@@ -337,7 +337,8 @@ def sampled(peak):
 
     `measure.sh` samples with `top -l 2 -s 1`, so a row that finishes inside about two seconds
     reports 0. That zero is the sampler saying nothing, not the row saying it burned no CPU —
-    the one column whose 0 must not reach `delta` as a reference to take a fraction of.
+    the one column whose 0 must not reach `delta` at all, on either side: not as a reference to
+    take a fraction of, and not as a candidate to read as a fall to nothing.
     """
     return peak or None
 
@@ -396,10 +397,11 @@ def compare(ref, new, wall_bar=WALL_BAR, rss_bar=RSS_BAR, cpu_bar=CPU_BAR, min_n
     Peak CPU is judged here and not in `control` because G19's gate asks for it — a clause about
     peak CPU that no code reads is green whatever the run did. It is judgeable only where the
     sampler caught something: `measure.sh` samples with `top -l 2 -s 1`, so a command that
-    finishes inside about two seconds reports `peak_cpu = 0`, and a reference of 0 is no reading
-    to be within 10% of. `sampled` turns that zero into the absence it is before `delta` sees it,
-    so those rows stay unjudged on that column rather than being read as a move off a measured
-    zero — which is what `delta` reads every other column's zero reference as.
+    finishes inside about two seconds reports `peak_cpu = 0`, which is no reading on either side —
+    not a reference to be within 10% of, and not a candidate that dropped to nothing. `sampled`
+    turns that zero into the absence it is on both sides before `delta` sees it, so those rows stay
+    unjudged on that column rather than being read as a move off, or onto, a measured zero — which
+    is what `delta` reads every other column's zero as.
 
     Average CPU is the column those rows do have — derived, not sampled, so a reader that finishes
     in half a second still says how many cores it kept busy — and it is printed and not judged. No
@@ -418,7 +420,7 @@ def compare(ref, new, wall_bar=WALL_BAR, rss_bar=RSS_BAR, cpu_bar=CPU_BAR, min_n
             raise SystemExit(f"{row}: in the reference and not in the candidate")
         w = delta(ref[row]["wall"], new[row]["wall"])
         r = delta(ref[row]["maxrss"], new[row]["maxrss"])
-        c = delta(sampled(ref[row]["peak_cpu"]), new[row]["peak_cpu"])
+        c = delta(sampled(ref[row]["peak_cpu"]), sampled(new[row]["peak_cpu"]))
         a = delta(ref[row]["avg_cpu"], new[row]["avg_cpu"])
         ok = ((w is None or abs(w) <= wall_bar) and (r is None or abs(r) <= rss_bar)
               and (c is None or abs(c) <= cpu_bar))
