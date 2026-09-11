@@ -109,7 +109,10 @@ pub struct Context {
     warm: RefCell<Option<std::thread::JoinHandle<Opened>>>,
     embedder: RefCell<Option<Option<index::embed::Embedder>>>,
     cross: RefCell<Option<index::cross::CrossEncoder>>,
-    resync: Cell<bool>,
+    /// The `graph.json` stamp `graph` was read at or written to — what the vectors' own claim is
+    /// held against before a fused answer. `None` for a store the refresh could not write, whose
+    /// vectors are answered from as they stand.
+    graph_at: Option<walk::Stamp>,
     notices: RefCell<Vec<String>>,
     timing: Timing,
 }
@@ -121,11 +124,15 @@ impl Context {
         let timing = Timing::new();
         let store = store::Store::new(repo);
         let mut notices = Vec::new();
-        let (graph, refreshed) = match graph_for_ask(repo, cfg, &store, stale, &timing) {
-            Ok(pair) => pair,
+        // Stamped before the read, never after; a refresh rewrites the file, and then the stamp is
+        // of what this process has just written.
+        let read_at = store.stamp("graph.json");
+        let (graph, refreshed, graph_at) = match graph_for_ask(repo, cfg, &store, stale, &timing) {
+            Ok((graph, None)) => (graph, None, read_at),
+            Ok((graph, Some(r))) => (graph, Some(r), store.stamp("graph.json")),
             // A store that cannot be written (read-only checkout, a walk that failed) still
             // holds an answer: say once that it may be behind, then give the stored one.
-            Err(err) => { notices.push(format!("refresh: skipped ({err:#})")); (store.load()?.0, None) }
+            Err(err) => { notices.push(format!("refresh: skipped ({err:#})")); (store.load()?.0, None, None) }
         };
         if let Some(r) = &refreshed { notices.push(format!("refresh: {} changed, {} removed", r.changed, r.removed)); }
         let (questions, source) = enrich::Questions::load_traced(&store)?;
@@ -139,9 +146,7 @@ impl Context {
             warm: RefCell::new(None),
             embedder: RefCell::new(None),
             cross: RefCell::new(None),
-            // The refresh above moved passages the vectors were built from, so the first fused
-            // answer re-embeds the changed rows; an exact-id answer leaves them to the next one.
-            resync: Cell::new(refreshed.is_some()),
+            graph_at,
             notices: RefCell::new(notices),
             timing,
         })
@@ -182,7 +187,7 @@ impl Context {
         // so it narrows a fused request and never the other way; `serve` refuses that pairing.
         let no_dense = self.no_dense || req.no_dense;
         let opts = query::Options { seeds: req.seeds, bodies: req.bodies, dense: !no_dense && index::dense::DenseIndex::present(&self.store), json: req.json, depth: req.depth };
-        let Context { cfg, store, graph, questions, lexical, dense_idx, warm, embedder, cross, resync, notices, timing, .. } = &*self;
+        let Context { cfg, store, graph, questions, lexical, dense_idx, warm, embedder, cross, graph_at, notices, timing, .. } = &*self;
         // Opening the ONNX model costs ~220 ms and 1.3 GB, the vectors 50 MB; an exact id or
         // symbol match never asks for either, so on that path both still open lazily, on the
         // first fused query that never comes. A fused question starts both below, once the
@@ -223,8 +228,10 @@ impl Context {
             }
             // `--stale` asks for the store as it is and pays for no walk; embedding rows and
             // saving them is the most expensive thing this code does, and a one-shot `--stale`
-            // never reaches it — the flag stays set for the next answer that did ask.
-            if !req.stale && resync.replace(false) {
+            // never reaches it. What is owed is the vectors' own claim against the graph in hand,
+            // not something this process remembers: a refresh here, an `update --no-dense`, and an
+            // `ask` an exact id answered after refreshing all leave the same store behind.
+            if !req.stale && graph_at.is_some_and(|at| idx.behind(at)) {
                 if let Some(emb) = e.as_mut() {
                     // A reader appends to the store's own rows and never re-embeds them into
                     // another model's index: it claims the index for the model it opened, at
@@ -232,10 +239,12 @@ impl Context {
                     let width = qvec.as_ref().map_or(idx.dim, |v| v.len());
                     idx.written_by(emb.name(), width);
                     match idx.sync(graph, questions, &mut |texts| emb.embed(texts)) {
-                        Ok(0) => {}
                         Ok(n) => {
+                            idx.synced_against(*graph_at);
+                            // Saved with nothing embedded as well: the claim is what spares the
+                            // next answer this pass.
                             if let Err(err) = idx.save(store) { notices.borrow_mut().push(format!("refresh: vectors not saved ({err:#})")); }
-                            notices.borrow_mut().push(format!("refresh: {n} vectors embedded"));
+                            if n > 0 { notices.borrow_mut().push(format!("refresh: {n} vectors embedded")); }
                         }
                         Err(err) => notices.borrow_mut().push(format!("refresh: vectors unchanged ({err:#})")),
                     }
@@ -322,6 +331,7 @@ impl Context {
     /// report when it applied a change and `None` when it only read a store someone else wrote.
     pub(crate) fn adopt(&mut self, w: &crate::Watcher, refreshed: Option<crate::UpdateReport>) -> anyhow::Result<()> {
         self.graph = w.graph.clone();
+        self.graph_at = w.graph_at;
         // An adopted graph is a new population whether or not the questions moved with it, so
         // the indexes built over the old one cannot outlive this call.
         *self.lexical.borrow_mut() = None;
@@ -335,14 +345,12 @@ impl Context {
         // the rows again here, which would write a store nobody asked this process to write.
         let moved = { let idx = self.dense_idx.borrow(); idx.as_ref().is_some_and(|i| i.read_at() != self.store.stamp("vectors.f32")) };
         if moved { *self.dense_idx.borrow_mut() = None; }
-        // A refresh this process applied leaves the store's vectors behind its graph by exactly
-        // the rows that moved, so the next fused answer re-embeds them — the catch-up a one-shot
-        // `ask` does after a refresh of its own. Someone else's store, read back whole, is the
-        // other case and needs none of that: a one-shot loading it now would embed nothing
-        // either, and the line above has already taken their vectors along with their graph.
+        // Whether the adopted graph is owed rows is the vectors' claim against `graph_at`, asked
+        // by the next fused answer. A refresh the watcher applied and a store another writer moved
+        // without embedding — lefthook's `update --no-dense` — owe them alike; a writer that did
+        // embed claimed its own graph, and owes none.
         if let Some(r) = refreshed {
             self.notices.borrow_mut().push(format!("refresh: {} changed, {} removed", r.changed, r.removed));
-            self.resync.set(true);
         }
         Ok(())
     }
@@ -437,8 +445,9 @@ mod tests {
         });
     }
 
-    /// A store with vectors, so `answer` takes the dense arm at all. The rows are invented:
-    /// nothing here searches them, because the model will not open.
+    /// A store with vectors, so `answer` takes the dense arm at all, claimed for the graph beside
+    /// them as the sync that wrote them would have. The rows are invented: nothing here searches
+    /// them, because the model will not open.
     ///
     /// The rows name their model rather than leaving it blank, and they name the same constant
     /// `an_unopenable_model` lays its cache out under. A blank one resolves through
@@ -448,7 +457,8 @@ mod tests {
     fn vectors_beside_the_graph(repo: &Path) -> (PathBuf, PathBuf) {
         let (json, raw) = (repo.join(".repograph/vectors.json"), repo.join(".repograph/vectors.f32"));
         let model = index::embed::DEFAULT_MODEL;
-        std::fs::write(&json, format!(r#"{{"ids":["FR-PAY-1"],"hashes":["h"],"kinds":[false],"dim":4,"model":"{model}"}}"#)).unwrap();
+        let graph = serde_json::to_string(&store::Store::new(repo).stamp("graph.json")).unwrap();
+        std::fs::write(&json, format!(r#"{{"ids":["FR-PAY-1"],"hashes":["h"],"kinds":[false],"dim":4,"model":"{model}","graph":{graph}}}"#)).unwrap();
         std::fs::write(&raw, [0u8; 16]).unwrap();
         (json, raw)
     }
@@ -457,21 +467,78 @@ mod tests {
         Request { words: vec!["штраф".into()], json: false, seeds: 5, bodies: false, rerank: false, rerank_local: false, depth: crate::rerank::DEPTH, stale, no_dense: false }
     }
 
+    /// What the next fused answer decides its catch-up on: the vectors on disk against the graph
+    /// the context holds.
+    fn owed(ctx: &Context) -> bool {
+        let idx = index::dense::DenseIndex::load(&ctx.store).unwrap();
+        ctx.graph_at.is_some_and(|at| idx.behind(at))
+    }
+
+    const NEW_DOC: &str = "**FR-PAY-2 · MUST · Возврат аванса**\n\nАванс возвращается при отмене салоном.\n";
+
     #[test]
-    fn a_stale_answer_leaves_the_resync_standing_for_the_answer_that_asked_for_a_refresh() {
+    fn vectors_claimed_for_the_graph_in_hand_owe_no_rows() {
         let dir = repo_with_two_docs();
         let cfg = crate::config::Config::load(dir.path()).unwrap();
         crate::run_update(dir.path(), &cfg, true).unwrap();
         vectors_beside_the_graph(dir.path());
-        an_unopenable_model();
-        // A change on disk, so the open below refreshes and leaves rows for a fused answer.
-        std::fs::write(dir.path().join("docs/new.md"), "**FR-PAY-2 · MUST · Возврат аванса**\n\nАванс возвращается при отмене салоном.\n").unwrap();
-        let mut ctx = Context::open(dir.path(), &cfg, false, false).unwrap();
-        assert!(ctx.resync.get(), "the refresh left rows the next fused answer has to embed");
-        ctx.answer(&fused(true)).unwrap();
-        assert!(ctx.resync.get(), "a --stale answer embeds nothing and leaves the flag where it was");
-        ctx.answer(&fused(false)).unwrap();
-        assert!(!ctx.resync.get(), "the next answer that did ask for a refresh takes it");
+        let ctx = Context::open(dir.path(), &cfg, false, false).unwrap();
+        assert!(!owed(&ctx), "an unchanged store pays for no pass on every question");
+    }
+
+    #[test]
+    fn a_refresh_at_open_owes_the_rows_it_moved() {
+        let dir = repo_with_two_docs();
+        let cfg = crate::config::Config::load(dir.path()).unwrap();
+        crate::run_update(dir.path(), &cfg, true).unwrap();
+        vectors_beside_the_graph(dir.path());
+        std::fs::write(dir.path().join("docs/new.md"), NEW_DOC).unwrap();
+        let ctx = Context::open(dir.path(), &cfg, false, false).unwrap();
+        assert!(owed(&ctx), "FR-PAY-2 has no row");
+    }
+
+    // What lefthook's `update --no-dense` leaves behind: the graph and the manifest moved with the
+    // tree, the vectors did not. Nothing is left for the next `ask` to refresh, and the row the
+    // update never embedded is owed all the same.
+    #[test]
+    fn a_row_an_update_without_the_model_left_unembedded_is_owed_by_the_next_fused_answer() {
+        let dir = repo_with_two_docs();
+        let cfg = crate::config::Config::load(dir.path()).unwrap();
+        crate::run_update(dir.path(), &cfg, true).unwrap();
+        vectors_beside_the_graph(dir.path());
+        std::fs::write(dir.path().join("docs/new.md"), NEW_DOC).unwrap();
+        crate::run_update(dir.path(), &cfg, false).unwrap();
+        let ctx = Context::open(dir.path(), &cfg, false, false).unwrap();
+        assert!(owed(&ctx), "FR-PAY-2 has no row");
+    }
+
+    #[test]
+    fn a_resident_context_owes_the_rows_of_a_store_an_update_without_the_model_moved() {
+        let dir = repo_with_two_docs();
+        let cfg = crate::config::Config::load(dir.path()).unwrap();
+        crate::run_update(dir.path(), &cfg, true).unwrap();
+        vectors_beside_the_graph(dir.path());
+        let mut ctx = Context::open(dir.path(), &cfg, true, false).unwrap();
+        let mut w = crate::Watcher::open(dir.path(), &cfg).unwrap();
+        std::fs::write(dir.path().join("docs/new.md"), NEW_DOC).unwrap();
+        crate::run_update(dir.path(), &cfg, false).unwrap();
+        assert!(matches!(w.poll(1).unwrap(), crate::Polled::Quiet) && w.reloaded, "the poll read the other writer's store back");
+        ctx.adopt(&w, None).unwrap();
+        assert!(owed(&ctx), "FR-PAY-2 has no row");
+    }
+
+    #[test]
+    fn a_resident_context_owes_the_rows_its_own_watcher_refreshed() {
+        let dir = repo_with_two_docs();
+        let cfg = crate::config::Config::load(dir.path()).unwrap();
+        crate::run_update(dir.path(), &cfg, true).unwrap();
+        vectors_beside_the_graph(dir.path());
+        let mut ctx = Context::open(dir.path(), &cfg, true, false).unwrap();
+        let mut w = crate::Watcher::open(dir.path(), &cfg).unwrap();
+        std::fs::write(dir.path().join("docs/new.md"), NEW_DOC).unwrap();
+        let crate::Polled::Refreshed(r) = w.poll(1).unwrap() else { panic!("new.md is a refresh") };
+        ctx.adopt(&w, Some(r)).unwrap();
+        assert!(owed(&ctx), "FR-PAY-2 has no row");
     }
 
     #[test]

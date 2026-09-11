@@ -28,6 +28,12 @@ pub struct DenseIndex {
     /// Hub id of the model every row was embedded with. Empty in a store written before the
     /// field existed — which only the small model ever wrote.
     #[serde(default)] pub model: String,
+    /// The `graph.json` stamp of the graph the rows were last brought in line with, claimed by a
+    /// sync that finished and never by a checkpoint. A writer that moves the graph and embeds
+    /// nothing — `update --no-dense`, a model that would not open, an `ask` an exact id answered
+    /// — leaves it behind, which is how the next reader holding a model learns it owes rows. A
+    /// store written before the field claims no graph and is caught up once.
+    #[serde(default)] graph: Option<Stamp>,
     /// The dead rows, ascending. Left out of the file when there are none, so a store this
     /// binary wrote and never punched a hole in still reads in one that predates the field.
     #[serde(default, skip_serializing_if = "Vec::is_empty")] free: Vec<usize>,
@@ -133,6 +139,15 @@ impl DenseIndex {
     /// what is in hand is no longer what an `ask` starting now would load.
     pub fn read_at(&self) -> Option<Stamp> { self.stamp }
 
+    /// Whether rows are owed to the graph stamped `graph`: the last finished sync was against
+    /// another one, or claimed none.
+    pub fn behind(&self, graph: Stamp) -> bool { self.graph != Some(graph) }
+
+    /// Claims the graph the sync that just returned brought the rows in line with. `sync` drops
+    /// the claim as it starts, so a caller that makes none leaves the index owing rows: the next
+    /// reader pays a pass, and no row goes missing.
+    pub fn synced_against(&mut self, graph: Option<Stamp>) { self.graph = graph; }
+
     /// `recorded_model`'s answer for an index already in hand, so a reader that has loaded the
     /// vectors does not parse a 3 MB `vectors.json` again to learn the same thing.
     pub fn model_of_rows(&self) -> Option<String> {
@@ -233,6 +248,10 @@ impl DenseIndex {
         budget: ChunkBudget,
         after_chunk: &mut dyn FnMut(&mut DenseIndex, Progress) -> Result<()>,
     ) -> Result<usize> {
+        // A checkpoint `after_chunk` saves on the way is a store still owed rows — after a model
+        // change it holds a part of the very graph it last claimed — so if the run stops there it
+        // must read as in line with no graph.
+        self.graph = None;
         let mut alive = vec![false; self.ids.len()];
         let mut todo_ids = Vec::new();
         let mut todo_texts = Vec::new();
@@ -436,6 +455,39 @@ mod tests {
         assert_eq!(back.sync(&wide(0), &Questions::default(), &mut fake).unwrap(), 6, "only what the checkpoint lacks");
         let q = fake(&["passage: n7x\nтело".to_string()]).unwrap().remove(0);
         assert_eq!(back.search_scored(&q, 10, None), synced(&wide(0)).search_scored(&q, 10, None));
+    }
+
+    #[test]
+    fn an_index_owes_rows_to_every_graph_but_the_one_its_last_sync_claimed() {
+        let d = tempfile::tempdir().unwrap();
+        let store = Store::new(d.path());
+        let (at, moved) = (Stamp { mtime_ns: 1, len: 10 }, Stamp { mtime_ns: 2, len: 10 });
+        let mut idx = synced(&graph("x"));
+        assert!(idx.behind(at), "a sync nobody claimed a graph for is in line with none");
+        idx.synced_against(Some(at));
+        idx.save(&store).unwrap();
+        let back = DenseIndex::load(&store).unwrap();
+        assert!(!back.behind(at), "the claim is read back with the rows");
+        assert!(back.behind(moved));
+    }
+
+    #[test]
+    fn a_checkpoint_owes_rows_even_to_the_graph_its_index_last_claimed() {
+        let d = tempfile::tempdir().unwrap();
+        let store = Store::new(d.path());
+        let at = Stamp { mtime_ns: 1, len: 10 };
+        let mut idx = synced(&wide(0));
+        idx.synced_against(Some(at));
+        // Another model: every row goes, and the graph `at` names is embedded again from nothing.
+        idx.written_by("another/model", 3);
+        let err = idx.sync_chunked(&wide(0), &Questions::default(), &mut fake, ChunkBudget::rows(4), &mut |i, _| {
+            i.save(&store)?;
+            anyhow::bail!("interrupted")
+        }).unwrap_err().to_string();
+        assert!(err.contains("interrupted"), "{err}");
+        let back = DenseIndex::load(&store).unwrap();
+        assert_eq!(back.ids.len(), 4);
+        assert!(back.behind(at), "four rows of ten are not the graph it claimed");
     }
 
     #[test]
