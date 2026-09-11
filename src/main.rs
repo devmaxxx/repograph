@@ -255,11 +255,13 @@ pub(crate) fn apply_diff(repo: &std::path::Path, store: &store::Store, graph: &m
     let moved = !diff.changed.is_empty() || !diff.removed.is_empty() || !regrammar.is_empty();
     if moved { graph.settle(); }
     let mut saved = walk::Manifest::from_entries(entries);
-    // A file removed from the graph above and then not read is a hole, and the stamp is what would
-    // make it permanent: the hash of a file nobody reads again never moves, so nothing would ever
-    // name it. `0` and not the generation the store claimed, which on a machine holding two
-    // versions can be a newer one than this: written back, that value would tell the build able to
-    // fill the hole that there is nothing to do. `0` is stale against every generation there is.
+    // A file removed from the graph above and then not read is a hole, and the stamp is the only
+    // thing that can recover it — on this path as much as on the grammar walk. The manifest below
+    // records what the *walk* read, so a file the walk hashed and the extract then failed to open
+    // is written down as current: the next diff finds it equal and the stamp cache never reopens
+    // it. `0` and not the generation the store claimed, which on a machine holding two versions
+    // can be newer than this build's: written back, that value would tell the build able to fill
+    // the hole that there is nothing to do. `0` is stale against every generation there is.
     if unread { saved.grammar = 0; }
     store.save(graph, &saved)?;
     // Only when something was re-extracted: a tree that did not move cannot have grown a node
@@ -896,6 +898,41 @@ mod tests {
         run_update(repo, &cfg, false).unwrap();
         let (graph, manifest) = store.load().unwrap();
         assert!(graph.nodes.contains_key("FR-PAY-22"), "the next writer reads it again, unedited");
+        assert_eq!(manifest.grammar, walk::GRAMMAR);
+    }
+
+    /// And the holdback is not the grammar walk's alone. A file the walk did not read — its stamp
+    /// had not moved — is still re-read here when a co-declarer changes, and the manifest has by
+    /// then recorded the changed file's new hash, so no later diff names anything: without the
+    /// stamp held back this hole is the permanent one. Unix only, for the reason above.
+    #[cfg(unix)]
+    #[test]
+    fn an_unread_co_declarer_holds_the_stamp_back_on_a_store_that_was_current() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let (repo, cfg) = (dir.path(), config::Config::default());
+        std::fs::create_dir_all(repo.join("docs")).unwrap();
+        std::fs::write(repo.join("docs/a.md"), "# A\n\n**FR-PAY-22 · MUST · x in a**\n\nbody\n").unwrap();
+        std::fs::write(repo.join("docs/b.md"), "# B\n\n**FR-PAY-22 · MUST · x in b**\n\n**FR-PAY-30 · MUST · only in b**\n\nbody\n").unwrap();
+        built(repo, &cfg);
+        let store = store::Store::new(repo);
+        assert_eq!(store.load().unwrap().1.grammar, walk::GRAMMAR, "nothing here is grammar-stale");
+
+        let b = repo.join("docs/b.md");
+        std::fs::set_permissions(&b, std::fs::Permissions::from_mode(0o000)).unwrap();
+        if std::fs::read(&b).is_ok() { return; } // root, or a filesystem without modes
+        // `a.md` declares the shared id first and is its primary, so editing it re-reads `b.md`.
+        std::fs::write(repo.join("docs/a.md"), "# A\n\n**FR-PAY-22 · MUST · x in a, edited**\n\nbody\n").unwrap();
+
+        run_update(repo, &cfg, false).unwrap();
+        let (graph, manifest) = store.load().unwrap();
+        assert!(!graph.nodes.contains_key("FR-PAY-30"), "b.md was dropped and could not be read back");
+        assert_eq!(manifest.grammar, 0, "so the store stops claiming any generation read it whole");
+
+        std::fs::set_permissions(&b, std::fs::Permissions::from_mode(0o644)).unwrap();
+        run_update(repo, &cfg, false).unwrap();
+        let (graph, manifest) = store.load().unwrap();
+        assert!(graph.nodes.contains_key("FR-PAY-30"), "and the held-back stamp is what recovers it");
         assert_eq!(manifest.grammar, walk::GRAMMAR);
     }
 
