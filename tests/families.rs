@@ -56,7 +56,8 @@ fn a_repository_gets_its_families_from_the_documents_and_says_when_they_move() {
     let (ok, out, err) = repograph(repo, &["families"]);
     assert!(ok, "{out}{err}");
     let req: Vec<&str> = families(&out, "REQ").split_whitespace().collect();
-    assert_eq!((req[1], req[2]), ("1", "docs/req.md:3"), "the family, its nodes and the line that defines it: {out}");
+    assert_eq!((req[1], req[2], req[3]), ("1", "1", "docs/req.md:3"), "the family, its nodes, its definitions and the line that defines it: {out}");
+    assert!(families(&out, "REQ").ends_with("defined once"), "one line defines it, and the row says so: {out}");
     assert!(mention(&out, "ISO").contains("docs/req.md:7"), "and the prefix no line defines: {out}");
     assert!(out.contains("Not families"), "said in words, not left as a column to read: {out}");
 
@@ -115,6 +116,38 @@ fn a_repository_gets_its_families_from_the_documents_and_says_when_they_move() {
     assert!(ok && err.contains("families: -NEW"), "{out}{err}");
     let (ok, out, _) = repograph(repo, &["verify"]);
     assert!(ok && out.contains("held aside: 2 edges"), "{out}");
+}
+
+/// A repository whose documents define nothing: file nodes, an empty family line, and every
+/// id-shaped mention held aside where no reader follows it. The state the old never-matching
+/// alternation stood in for, now a state the store carries — there is no constructor left to
+/// hand a `None` to.
+#[test]
+fn a_corpus_that_defines_no_ids_reads_as_one() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path();
+    std::fs::create_dir_all(repo.join("docs")).unwrap();
+    std::fs::write(repo.join("docs/notes.md"), "# Заметки\n\nдаты по ISO-8601, см. RFC-7231 и -M01\n").unwrap();
+
+    let (ok, out, err) = repograph(repo, &["build"]);
+    assert!(ok, "{out}{err}");
+    assert!(err.contains("families: (none) · milestones: (none)"), "{err}");
+    assert!(out.starts_with("changed 1 removed 0 nodes 1 edges 0"), "one file node and nothing a reader follows: {out}");
+
+    let (ok, out, err) = repograph(repo, &["verify"]);
+    assert!(ok, "{out}{err}");
+    assert!(out.contains("held aside: 2 edges to ids in 2 prefixes no line defines  ISO RFC"), "{out}");
+    assert!(out.contains("dangling edges: 0\n"), "{out}");
+
+    let (ok, out, err) = repograph(repo, &["families"]);
+    assert!(ok, "{out}{err}");
+    assert!(out.contains("families                              nodes  defs  defined\n  (none)"), "{out}");
+    assert!(mention(&out, "ISO").contains("docs/notes.md:3"), "{out}");
+
+    // An id-shaped word that is no node is a search term, not an exact seed.
+    let (ok, out, err) = repograph(repo, &["ask", "ISO-8601"]);
+    assert!(ok, "{out}{err}");
+    assert!(!out.lines().next().unwrap_or("").starts_with("ISO-8601"), "{out}");
 }
 
 /// The four shapes a definition comes in, over the corpus the extractor cases quote: a bold head,
