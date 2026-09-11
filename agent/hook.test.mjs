@@ -3,13 +3,13 @@
 // Run: `node --test agent/hook.test.mjs`, on every platform the hook is installed on.
 import { test } from 'node:test';
 import assert from 'node:assert';
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, chmodSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, chmodSync, copyFileSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname, delimiter } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 
-import { queryWords, searchPattern, binary, rule, RULE_FALLBACK } from './hook.mjs';
+import { queryWords, searchPattern, binary, rule, RULE_FALLBACK, COMMAND } from './hook.mjs';
 
 const HOOK = join(dirname(fileURLToPath(import.meta.url)), 'hook.mjs');
 
@@ -51,8 +51,8 @@ function world({ store = true, answer = '', status = 0 } = {}) {
   return { root, bin, launcher, argvLog };
 }
 
-function fire(w, payload, env = {}) {
-  const r = spawnSync(process.execPath, [HOOK], {
+function fire(w, payload, env = {}, hook = HOOK) {
+  const r = spawnSync(process.execPath, [hook], {
     input: JSON.stringify({ cwd: w.root, session_id: 'sess', ...payload }),
     encoding: 'utf8',
     env: {
@@ -85,6 +85,43 @@ async function waitFor(w, re, ms = 3000) {
   return null;
 }
 
+/**
+ * The hook as `install-agent --command` writes it, alone in a directory with no `rule.txt`: its one
+ * declaration replaced by the command JSON-encoded, which is what `src/install_agent.rs` does. A
+ * function replacement, because a replacement string would read a `$'` in the command as a pattern.
+ */
+function installed(w, command) {
+  const declaration = 'const COMMAND = "repograph";';
+  const source = readFileSync(HOOK, 'utf8');
+  assert.equal(source.split(declaration).length, 2, 'the declaration the installer replaces is in the hook once');
+  const dir = join(w.root, 'installed');
+  mkdirSync(dir, { recursive: true });
+  const file = join(dir, 'repograph-hook.mjs');
+  writeFileSync(file, source.replace(declaration, () => `const COMMAND = ${JSON.stringify(command)};`));
+  return file;
+}
+
+/**
+ * What `changes --depth 1 --json` prints for a diff: each part touches `symbol` in `file` and has
+ * `callers` direct callers spread over `files` files.
+ */
+function diff(parts, risk) {
+  const touched = [];
+  const affected = [];
+  for (const { file, symbol, callers, files = callers } of parts) {
+    touched.push({ id: `sym:${file}::${symbol}`, at: `${file}:3-40`, indexed: true });
+    for (let i = 0; i < callers; i += 1) {
+      affected.push({ id: `sym:src/${symbol}/c${i % files}.ts::caller${i}`, at: `src/${symbol}/c${i % files}.ts:${i + 1}`,
+        depth: 1, kind: 'Calls', via: `sym:${file}::${symbol}` });
+    }
+  }
+  return JSON.stringify({ touched, affected, files: [], risk });
+}
+
+function edit(w, ...segments) {
+  return { hook_event_name: 'PostToolUse', tool_name: 'Edit', tool_input: { file_path: join(w.root, ...segments) } };
+}
+
 test('a search pattern is read out of Bash, Grep and Glob, and nowhere else', () => {
   assert.equal(searchPattern('Bash', { command: 'rg -n "cancellation policy" apps/' }), 'cancellation policy',
     'a quoted phrase is one argument: splitting on whitespace would ask about its first word only');
@@ -94,6 +131,33 @@ test('a search pattern is read out of Bash, Grep and Glob, and nowhere else', ()
   assert.equal(searchPattern('Glob', { pattern: '**/tenant-*.ts' }), 'tenant');
   assert.equal(searchPattern('Glob', { pattern: '**/*.ts' }), null);
   assert.equal(searchPattern('Read', { file_path: 'a.ts' }), null, 'reading a named file is not a search');
+});
+
+test('`-e` and `--regexp` carry the pattern, not a value to skip', () => {
+  assert.equal(searchPattern('Bash', { command: 'rg -n -e "cancellation policy" packages' }), 'cancellation policy',
+    'skipped as a flag value, the graph was asked about the path after it');
+  assert.equal(searchPattern('Bash', { command: 'grep -R --regexp withTenant .' }), 'withTenant');
+});
+
+test('a stage a pipe feeds reads stdin, not the repository, and is not asked about', () => {
+  for (const command of [
+    'gh auth status 2>&1 | grep -E "Logged in|Active account"',
+    'rg --files | rg tenancy',
+    'git log --oneline |& grep cancellation',
+    "ls -a packages | grep -i 'lintstaged\\|lint-staged'",
+  ]) assert.equal(searchPattern('Bash', { command }), null, command);
+  assert.equal(searchPattern('Bash', { command: 'rg -n "refund|cancellation" apps/ | head -5' }), 'refund|cancellation',
+    'a `|` inside quotes is the pattern, and its stage reads the repository');
+  assert.equal(searchPattern('Bash', { command: 'grep -R refund\\|cancellation apps' }), 'refund\\|cancellation',
+    'an escaped `|` is not a pipe either');
+  assert.equal(searchPattern('Bash', { command: 'cd apps && rg -n withTenant src' }), 'withTenant');
+  assert.equal(searchPattern('Bash', { command: 'git diff --quiet || grep -R withTenant packages' }), 'withTenant',
+    '`||` runs a second command, it does not feed one');
+
+  const w = world({ answer: 'sym:a.ts::accountRow  a.ts:1  accountRow' });
+  const payload = { hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: { command: 'gh auth status 2>&1 | grep -E "Logged in|Active account"' } };
+  assert.equal(fire(w, payload), null);
+  assert.deepEqual(argv(w), [], 'the graph was not asked');
 });
 
 test('a question is words, a path is not, and an identifier goes whole', () => {
@@ -106,6 +170,19 @@ test('a question is words, a path is not, and an identifier goes whole', () => {
   assert.deepEqual(queryWords('a.b*'), null);
   assert.equal(queryWords('cancellation refunds deposits invoices приложение расписание календарь').length, 6,
     'six words at most; the seventh never changed an answer and every one costs prompt');
+});
+
+test('a milestone or task id goes whole, and neither an escape nor a leading dash reaches ask', () => {
+  assert.deepEqual(queryWords('BE-M17'), ['BE-M17'], 'no four-letter word to fall back on: without the id nothing is asked');
+  assert.deepEqual(queryWords('BE-M01-T03'), ['BE-M01-T03']);
+  assert.deepEqual(queryWords('\\bwithTenant\\b'), ['withTenant'], 'dropping only the backslash asks about bwithTenant');
+  assert.deepEqual(queryWords('\\bFR-CAL-40\\b'), ['FR-CAL-40']);
+  assert.deepEqual(queryWords('--rerank misses'), ['rerank', 'misses']);
+
+  const w = world({ answer: 'FR-PAY-22  docs/a.md:1  отмена' });
+  fire(w, { hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: { command: 'rg -n -- "--rerank misses" docs' } });
+  assert.match(argv(w)[0], /ask --stale --seeds 3 rerank misses$/);
+  assert.ok(!argv(w)[0].includes('--rerank'), `ask would read it as its paid flag: ${argv(w)[0]}`);
 });
 
 test('the local shim the hook picks is one this platform can start', () => {
@@ -132,7 +209,8 @@ test('the local shim the hook picks is one this platform can start', () => {
 test('the rule the hook hands a subagent is the file the installer ships', () => {
   const shipped = readFileSync(join(dirname(HOOK), 'rule.txt'), 'utf8');
   assert.equal(rule(), shipped);
-  assert.equal(RULE_FALLBACK.trim(), shipped.trim(), 'the built-in copy and the file cannot drift');
+  assert.equal(RULE_FALLBACK.trim(), shipped.split('{{command}}').join(COMMAND).trim(),
+    'the built-in copy and the file cannot drift');
 });
 
 test('SessionStart prints the brief, and nothing where there is no store', () => {
@@ -144,6 +222,34 @@ test('SessionStart prints the brief, and nothing where there is no store', () =>
 
   const bare = world({ store: false });
   assert.equal(fire(bare, { hook_event_name: 'SessionStart', source: 'startup' }), null);
+});
+
+test('a session started in a subdirectory finds the index above it, and a nested checkout does not borrow it', () => {
+  const w = world({ answer: 'repograph: 3076 doc nodes, 5240 code nodes' });
+  const env = { REPOGRAPH_HOOK_SERVE: '0' };
+  const sub = join(w.root, 'packages', 'db');
+  mkdirSync(sub, { recursive: true });
+  const c = context(fire(w, { hook_event_name: 'SessionStart', source: 'startup', cwd: sub }, env));
+  assert.ok(c?.startsWith('repograph:'), `a cd into a subdirectory lost the index: ${c}`);
+  assert.ok(argv(w).some((l) => l.startsWith(`--repo ${w.root} --no-dense prime`)), argv(w).join(' | '));
+
+  const nested = join(w.root, 'worktree');
+  mkdirSync(join(nested, 'src'), { recursive: true });
+  writeFileSync(join(nested, '.git'), 'gitdir: ../.git/worktrees/worktree\n');
+  assert.equal(fire(w, { hook_event_name: 'SessionStart', source: 'startup', cwd: join(nested, 'src') }, env), null,
+    'a checkout of its own ends the walk: its parent\'s index is not its index');
+});
+
+test('a hook run through a symlinked path still answers', () => {
+  const w = world({ answer: 'repograph: 3076 doc nodes, 5240 code nodes' });
+  const real = join(w.root, 'real');
+  mkdirSync(real);
+  copyFileSync(HOOK, join(real, 'hook.mjs'));
+  const link = join(w.root, 'link');
+  // A junction on Windows, which needs no symlink privilege; the type is ignored everywhere else.
+  symlinkSync(real, link, 'junction');
+  const c = context(fire(w, { hook_event_name: 'SessionStart', source: 'startup' }, { REPOGRAPH_HOOK_SERVE: '0' }, join(link, 'hook.mjs')));
+  assert.ok(c?.startsWith('repograph:'), `argv[1] keeps the link and import.meta.url resolves it: ${c}`);
 });
 
 test('SessionStart starts a resident serve, and the switch turns it off', async () => {
@@ -219,25 +325,42 @@ test('with the interceptor off, the reminder still keeps its cadence, per agent'
 });
 
 test('an edit to a hub injects one risk line, once, and only above LOW', () => {
-  const changes = JSON.stringify({
-    risk: 'CRITICAL',
-    touched: [{ id: 'sym:a.ts::DatabaseService.withTenant' }],
-    affected: Array.from({ length: 61 }, () => ({ depth: 1 })),
-    files: Array.from({ length: 48 }, (_, i) => `f${i}.ts`),
-  });
+  const changes = diff([{ file: 'src/db.ts', symbol: 'DatabaseService.withTenant', callers: 18 }], 'HIGH');
   const w = world({ answer: changes });
-  const payload = { hook_event_name: 'PostToolUse', tool_name: 'Edit', tool_input: { file_path: 'x.ts' } };
+  const payload = edit(w, 'src', 'db.ts');
   const c = context(fire(w, payload));
-  assert.match(c, /risk CRITICAL — 61 direct callers of DatabaseService\.withTenant in 48 files/);
+  assert.match(c, /risk HIGH — 18 direct callers of DatabaseService\.withTenant in 18 files/);
   assert.match(argv(w)[0], /changes --depth 1 --json/);
   assert.equal(fire(w, payload), null, 'once per file and risk');
 
   const low = world({ answer: JSON.stringify({ risk: 'LOW', touched: [], affected: [], files: [] }) });
-  assert.equal(fire(low, payload), null);
+  assert.equal(fire(low, edit(low, 'src', 'db.ts')), null);
 
   const doc = world({ answer: changes });
-  assert.equal(fire(doc, { ...payload, tool_input: { file_path: 'x.md' } }), null);
+  assert.equal(fire(doc, edit(doc, 'x.md')), null);
   assert.deepEqual(argv(doc), [], 'a document edit does not even ask');
+});
+
+test('an edit is scored on its own file\'s callers, not on the rest of the diff', () => {
+  const w = world({ answer: diff([
+    { file: 'src/db.ts', symbol: 'DatabaseService.withTenant', callers: 40 },
+    { file: 'src/claims.ts', symbol: 'staleClaims', callers: 1 },
+    { file: 'src/slots.ts', symbol: 'freeSlots', callers: 6, files: 2 },
+  ], 'CRITICAL') });
+  assert.equal(fire(w, edit(w, 'src', 'claims.ts')), null, 'one caller is silence, whatever else the diff holds');
+  assert.match(context(fire(w, edit(w, 'src', 'slots.ts'))), /risk MEDIUM — 6 direct callers of freeSlots in 2 files/,
+    'the level is the file\'s own, not the CRITICAL the whole diff scored');
+});
+
+test('the level is the binary\'s: MEDIUM at 5 callers or 3 files, HIGH at 15 or 10, CRITICAL at 30 or 25', () => {
+  for (const [callers, files, level] of [
+    [4, 2, null], [5, 1, 'MEDIUM'], [4, 3, 'MEDIUM'],
+    [15, 1, 'HIGH'], [10, 10, 'HIGH'], [30, 1, 'CRITICAL'], [25, 25, 'CRITICAL'],
+  ]) {
+    const w = world({ answer: diff([{ file: 'src/hub.ts', symbol: 'hub', callers, files }], 'CRITICAL') });
+    const c = context(fire(w, edit(w, 'src', 'hub.ts')));
+    assert.equal(c?.match(/risk (\w+)/)?.[1] ?? null, level, `${callers} callers in ${files} files: ${c}`);
+  }
 });
 
 test('the Agent prompt is extended only when the fallback is asked for', () => {
@@ -246,7 +369,7 @@ test('the Agent prompt is extended only when the fallback is asked for', () => {
   assert.equal(fire(w, payload), null, 'off by default: SubagentStart is the primary and this would double it');
   const out = fire(w, payload, { REPOGRAPH_HOOK_AGENT_INPUT: '1' });
   assert.ok(out.hookSpecificOutput.updatedInput.prompt.startsWith('find the tenant guard'), JSON.stringify(out));
-  assert.ok(out.hookSpecificOutput.updatedInput.prompt.includes('repograph ask'), JSON.stringify(out));
+  assert.ok(out.hookSpecificOutput.updatedInput.prompt.endsWith(rule()), JSON.stringify(out));
   assert.equal(out.hookSpecificOutput.permissionDecision, undefined, 'no decision: the call proceeds as it would have');
 });
 
@@ -255,6 +378,36 @@ test('a repository with no store gets one build notice and then silence', () => 
   const payload = { hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: { command: 'rg "cancellation policy"' } };
   assert.match(context(fire(w, payload)), /repograph build/);
   assert.equal(fire(w, { ...payload, tool_input: { command: 'rg "another question here"' } }), null, 'once a session');
+});
+
+test('every hint names the command install-agent was given, and no command can break the script', () => {
+  const env = { REPOGRAPH_HOOK_SERVE: '0' };
+  const command = 'pnpm exec repograph';
+  const search = { hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: { command: 'rg "cancellation policy"' } };
+
+  const bare = world({ store: false });
+  assert.match(context(fire(bare, search, env, installed(bare, command))), /`pnpm exec repograph build`/);
+
+  const w = world({ answer: 'FR-PAY-22  docs/a.md:1  отмена' });
+  const hook = installed(w, command);
+  const given = context(fire(w, { hook_event_name: 'SubagentStart', agent_id: 'a1' }, env, hook));
+  assert.match(given, /`pnpm exec repograph ask <words>`/, 'no rule.txt beside it: the built-in copy answers');
+  assert.ok(!given.includes('`repograph '), given);
+  assert.match(context(fire(w, search, env, hook)), /`pnpm exec repograph ask` for more\)$/);
+  let reminder = null;
+  for (let i = 0; i < 40; i += 1) {
+    const payload = { hook_event_name: 'PreToolUse', agent_id: 'r', tool_name: 'Bash', tool_input: { command: `rg "thing${i}"` } };
+    reminder = context(fire(w, payload, { ...env, REPOGRAPH_HOOK_INTERCEPT: '0' }, hook)) ?? reminder;
+  }
+  assert.match(reminder, /`pnpm exec repograph ask <words>`/);
+
+  const hub = world({ answer: diff([{ file: 'src/db.ts', symbol: 'withTenant', callers: 18 }], 'HIGH') });
+  assert.match(context(fire(hub, edit(hub, 'src', 'db.ts'), env, installed(hub, command))), /`pnpm exec repograph changes --depth 1`/);
+
+  const hostile = 'pnpm exec "re\'po\\graph" `x` ${y} $\'';
+  const odd = world();
+  const said = context(fire(odd, { hook_event_name: 'SubagentStart', agent_id: 'a1' }, env, installed(odd, hostile)));
+  assert.ok(said.includes(`\`${hostile} ask <words>\``), `a JSON string is a JavaScript string literal: ${said}`);
 });
 
 test('malformed input is silence with exit zero', () => {
