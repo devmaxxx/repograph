@@ -33,11 +33,8 @@ pub struct Config {
     /// and `watch` embed with it and rewrite the index whole when the store holds another
     /// model's rows; `ask`, `bench` and `dump` open the model the store records instead, so a
     /// store keeps answering with what wrote it whatever this says today. The small model is the
-    /// default, priced for a first build nobody has tuned yet, and the model its floors were set
-    /// with; `intfloat/multilingual-e5-large` is the one line that buys paraphrase 22/30 against
-    /// 15/30 and held-out 103 → 119 of 400 (p = 0.00086), for a 2.1 GB download and nine times
-    /// the wall on a whole-store embed. docs/adr/ADR-002-two-defaults-multiplied.md weighs the
-    /// two; docs/bench/2026-09-05-dev-cases-results.md measures the recall.
+    /// default, priced for a first build nobody has tuned yet, and the only model `bench` holds
+    /// floors for; a store under any other model is measured and not graded.
     pub embed_model: String,
     /// How much of the machine a run may take: `"low"`, `"balanced"` (the default) or `"full"`.
     /// It describes the machine rather than the corpus — the same repository wants every core on
@@ -313,8 +310,8 @@ mod tests {
         with_machine(None, || {
             let dir = tempfile::tempdir().unwrap();
             assert_eq!(Config::load(dir.path()).unwrap().embed_model, "intfloat/multilingual-e5-small");
-            std::fs::write(dir.path().join("repograph.toml"), "embed_model = \"intfloat/multilingual-e5-large\"\n").unwrap();
-            assert_eq!(Config::load(dir.path()).unwrap().embed_model, "intfloat/multilingual-e5-large");
+            std::fs::write(dir.path().join("repograph.toml"), "embed_model = \"BAAI/bge-m3\"\n").unwrap();
+            assert_eq!(Config::load(dir.path()).unwrap().embed_model, "BAAI/bge-m3");
         });
     }
 

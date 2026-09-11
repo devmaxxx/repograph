@@ -103,7 +103,7 @@ mod tests {
     /// keeps this from growing into it.
     #[test]
     fn the_brief_fits_in_its_own_budget() {
-        let b = brief(&graph(), &Questions::default(), 54, Some("intfloat/multilingual-e5-large"));
+        let b = brief(&graph(), &Questions::default(), 54, Some("BAAI/bge-m3"));
         let t = b.text();
         assert!(t.len() <= BUDGET, "the brief is {} bytes:\n{t}", t.len());
         assert!(t.lines().count() <= 12, "{t}");

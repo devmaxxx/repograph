@@ -121,15 +121,7 @@ pub fn hit(case: &Case, answer: &Answer, is_id: &dyn Fn(&str) -> bool) -> bool {
 /// read one set whatever the store's rows were written by; a dense arm under a model with no
 /// floors of its own is measured and not graded, the way another case file is.
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub enum Floors { Small, Large, None }
-
-/// The model the large-model floors were measured on. Pinned to the name, not to
-/// `crate::index::embed::DEFAULT_MODEL`: that constant is the *configured* default, which has
-/// already been flipped twice — to this model and back — and a row written under whatever the
-/// default becomes next would otherwise silently inherit these floors while genuine e5-large rows
-/// silently stopped being graded. `UNNAMED_MODEL` makes the same argument in prose for the small
-/// model, and `src/index/dense.rs`'s own tests pin this same name by literal for the same reason.
-const LARGE_MODEL: &str = "intfloat/multilingual-e5-large";
+pub enum Floors { Small, None }
 
 /// Private on purpose: `dense_grading` is the only way to reach the floors, so a caller cannot
 /// key them off the store's recorded rows while the embedder that answers is a resolved override.
@@ -137,7 +129,6 @@ fn floors_for(model: Option<&str>) -> Floors {
     match model {
         None => Floors::Small,
         Some(m) if m == crate::index::embed::UNNAMED_MODEL => Floors::Small,
-        Some(m) if m == LARGE_MODEL => Floors::Large,
         Some(_) => Floors::None,
     }
 }
@@ -151,31 +142,25 @@ fn dense_grading(no_dense: bool, recorded: Option<&str>, resolved: Option<&str>)
     let floors = floors_for(model);
     let field = match floors {
         Floors::Small => "small".to_string(),
-        Floors::Large => "large".to_string(),
         Floors::None => model.unwrap_or_default().to_string(),
     };
     (floors, field)
 }
 
 /// `(enriched, dense, floors) → (keyword, paraphrase)`. Every number is one the recorded cases
-/// measured, never a target: the small model's four on the fixture (the paragraphs below), the
-/// large model's two dense arms on its copy of the same store, each read twice and agreeing both
-/// times (`docs/bench/2026-09-05-0.5.0-gaps-results.md`). The lexical rows carry
+/// measured, never a target: the small model's four on the fixture (the paragraphs below). The lexical rows carry
 /// `Floors::Small` and are read for every model: no embedder is in them.
 /// `bench/history/track.py` reads this table out of the source; keep the rows one per line.
-const FLOORS: [(bool, bool, Floors, usize, usize); 6] = [
+const FLOORS: [(bool, bool, Floors, usize, usize); 4] = [
     (true, true, Floors::Small, 40, 14),
     (true, false, Floors::Small, 39, 11),
     (false, true, Floors::Small, 40, 9),
     (false, false, Floors::Small, 39, 7),
-    (true, true, Floors::Large, 40, 22),
-    (false, true, Floors::Large, 40, 17),
 ];
 
 pub fn passes(s: &Summary, dense: bool, enriched: bool, floors: Floors) -> bool {
     // Every floor is the number the recorded cases measure; only the token ceiling is rounded,
-    // up to the next ten, and the small model's four p90s (220 to 226) and the large model's two
-    // (224, 227) all fit under that one. A count equal to its total is an exact floor: `run`
+    // up to the next ten, and the small model's four p90s (220 to 226) all fit under that one. A count equal to its total is an exact floor: `run`
     // grades against these only when the case file has the recorded 40/30/12 shape.
     //
     // `enrich` spends model tokens and is optional, so the store it has never touched is graded
@@ -194,8 +179,8 @@ pub fn passes(s: &Summary, dense: bool, enriched: bool, floors: Floors) -> bool 
     // on one day sitting flush on the noisiest split, while 14 has a point of slack and weeks of
     // runs under it. If the raw floors flap, they are the first thing to relax.
     //
-    // A dense arm has no floors of its own once the store's embedder is neither the small model
-    // nor the large one — those numbers were never measured, so grading them would be inventing a
+    // A dense arm has no floors of its own once the store's embedder is not the small model —
+    // those numbers were never measured, so grading them would be inventing a
     // bar. `run` still prints what it found; it just cannot say pass or fail.
     if dense && floors == Floors::None { return false; }
     let key = if dense { floors } else { Floors::Small };
@@ -696,21 +681,8 @@ mod tests {
         // missed, which is why `run` never grades one.
         assert!(!passes(&Summary::default().with("long", (15, 15)), true, true, Floors::Small));
 
-        // The large model's dense arms are graded on their own measured numbers (the 0.5.0 gap
-        // results, L3); its lexical arms are the small model's, because no embedder is in them.
-        let large_enriched = Summary::recorded((40, 40), (22, 30), (12, 12), 230);
-        assert!(passes(&large_enriched, true, true, Floors::Large));
-        assert!(!passes(&large_enriched.clone().with("paraphrase", (21, 30)), true, true, Floors::Large));
-        assert!(passes(&large_enriched, true, true, Floors::Small), "the small floors are the lower bar and the large store clears them, which is what made them the wrong bar");
-        assert!(passes(&at_floor_nodense, false, true, Floors::Large), "lexical arms do not read the model");
-        assert!(!passes(&at_floor_nodense.clone().with("keyword", (38, 40)), false, true, Floors::Large));
         // A model with no floors of its own is measured and never graded.
-        assert!(!passes(&large_enriched, true, true, Floors::None));
-        // The large model's raw store (no questions paid for) measures its own floor too
-        // (`docs/bench/2026-09-05-0.5.0-gaps-results.md`).
-        let large_raw = Summary::recorded((40, 40), (17, 30), (12, 12), 230);
-        assert!(passes(&large_raw, true, false, Floors::Large));
-        assert!(!passes(&large_raw.clone().with("paraphrase", (16, 30)), true, false, Floors::Large));
+        assert!(!passes(&at_floor_dense, true, true, Floors::None));
     }
 
     #[test]
@@ -741,9 +713,6 @@ mod tests {
         use crate::index::embed::UNNAMED_MODEL;
         assert_eq!(floors_for(None), Floors::Small, "a store with no vectors is graded lexically, on floors the model never enters");
         assert_eq!(floors_for(Some(UNNAMED_MODEL)), Floors::Small);
-        // Pinned to the literal the floors were measured on, not to `DEFAULT_MODEL`: a flip of
-        // the configured default must not keep this green.
-        assert_eq!(floors_for(Some("intfloat/multilingual-e5-large")), Floors::Large);
         assert_eq!(floors_for(Some("BAAI/bge-m3")), Floors::None);
         // Whichever model the default names, a store a first build wrote has to be graded and not
         // merely measured: a default moved to a model with no floors of its own would turn every
