@@ -79,4 +79,4 @@
 {"kind":"code","q":"loadAvailabilitySnapshot","expect":"apps/api/src/modules/availability/availability-snapshot.service.ts"}
 {"kind":"code","q":"splitByNamespace","expect":"apps/api/scripts/emit-openapi.ts"}
 {"kind":"code","q":"badgeVariants","expect":"packages/ui/src/components/ui/badge.tsx"}
-{"kind":"code","q":"staleClaims","expect":"tools/tasks/src/cli.ts"}
+{"kind":"code","q":"staleClaims","expect":"packages/task-sync/src/cli.ts"}
