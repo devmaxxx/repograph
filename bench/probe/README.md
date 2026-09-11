@@ -119,12 +119,15 @@ did; it is only as good as the sampler under it, so a command that finishes insi
 seconds is never sampled and reports `peak_cpu = 0`. That is every reader row, and it is not the
 whole-store embed of §9 (≈ 1,930 s, 293% recorded), which is the row the column was added for. A
 row whose *reference* read 0 prints `n/a` and is left unjudged on that column rather than passing
-on a zero that means "never sampled"; an average is printed as `n/a` where a side has no reading at
-all — a wall clock that rounded to zero left nothing to divide, or a file written before the column
-existed. A row that ran and kept a core busy for under one tick of `/usr/bin/time`'s 10 ms reads
-`0.00` and is a reading like any other: two such rows spread by nothing, and `n/a` there would say
-the column was never read. In a `medians.txt` the average is written as `NN%` and in no other unit —
-a bare number is a row whose spelling drifted and is refused by name, because a field readable as
+on a zero that means "never sampled"; an average is printed as `n/a` only where one of the two
+sides has no reading at all — a file written before the column existed, or a row every run of which
+rounded its wall clock to zero and left nothing to divide. One such run among five costs the column
+that run and not the row: the median is taken over the runs that read, beside the `n` that counts
+them all. A row that ran and kept a core busy for under one tick of `/usr/bin/time`'s 10 ms reads
+`0.00` and is a reading like any other: two such rows spread by nothing, a measured `0.00`
+reference against a candidate that did keep a core busy reads `+inf%`, and `n/a` in either place
+would say the column was never read. In a `medians.txt` the average is written as `NN%` and in no
+other unit — a bare number is a row whose spelling drifted and is refused by name, because a field readable as
 either cores or percent is one a reader has to guess at and the guess is a hundredfold wide. Both
 files are judged whole on one check: a line carrying a `wall=` that reads as neither a median nor a
 run is refused naming the file and the line — a `medians.txt` row reworded, a `summary.txt` row

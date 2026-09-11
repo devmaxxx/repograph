@@ -44,20 +44,21 @@ jobs:
       # the kit measures on Darwin and nothing here should need Darwin to be read. Each suite that
       # does shells out under a skip of its own: `/usr/bin/time -l` and `quiet.sh`'s reading of the
       # machine are Darwin's, and the cases that need them say so and are skipped rather than red.
-      # One step per suite, because a step stops at its first failure: run as one script, a red in
-      # the probe suite is the whole of what the job reports and the other three never run.
+      # One step per suite so each suite's red is reported under its own name, and `!cancelled()`
+      # on the ones that follow so they run anyway: a bare `if:` implies `success()`, and under it
+      # a red in the probe suite would skip the other three and the split alone would buy nothing.
       - if: runner.os == 'Linux'
         run: python3 -m unittest discover -s bench/probe
-      - if: runner.os == 'Linux'
+      - if: runner.os == 'Linux' && !cancelled()
         run: python3 -m unittest discover -s bench/compare
-      - if: runner.os == 'Linux'
+      - if: runner.os == 'Linux' && !cancelled()
         run: python3 -m unittest discover -s bench/history
       # And the kit's root, which is neither of the three and had never run anywhere: `admission.py`
       # and `heldout.py`'s own tests. Discovery from `bench` finds these two files and does not
       # descend into the three directories above — they are not packages — so nothing is run twice.
       # Both suites are arithmetic over literals and read no store, so the pinned fixture is not
       # needed here and no case is skipped.
-      - if: runner.os == 'Linux'
+      - if: runner.os == 'Linux' && !cancelled()
         run: python3 -m unittest discover -s bench
 
       # The agent hook is JavaScript and ships with the binary that installs it, so it is tested on

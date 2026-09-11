@@ -185,14 +185,17 @@ def medians(lines, logdir=None, path=None):
                                                 "avg_cpu": avg})
     out = {}
     for name, rs in runs.items():
-        # All of the runs or none of them: a median over the subset that carried `user` and `sys`
-        # would be a column read on fewer runs than the `n` printed beside it.
+        # The median over the runs that carried a reading, and `None` only where no run did — a
+        # summary written before `user` and `sys` existed. A run whose wall clock rounded to 0.00
+        # left nothing to divide, and dropping the whole column over one such run would print
+        # `n/a` for a row four readings of which are on the page. `n` counts every run, because
+        # wall, RSS and peak were read on all of them.
         avgs = [r["avg_cpu"] for r in rs if r["avg_cpu"] is not None]
         out[name] = row_metrics(
             median(r["wall"] for r in rs),
             median(r["maxrss"] for r in rs),
             median(r["peak_cpu"] for r in rs),
-            median(avgs) if len(avgs) == len(rs) else None,
+            median(avgs) if avgs else None,
             len(rs),
             # Any run of the row: a median taken over runs one of which missed a floor is still a
             # reading, and a reader told about it for one run in five knows what they are reading.
@@ -316,13 +319,30 @@ def delta(ref, new, unjudged=0.0):
     """The candidate's move off the reference, signed, as a fraction of the reference.
 
     `unjudged` is what the column reads where there is no reference to be a fraction of — a peak
-    `top` never sampled, a wall clock that rounded away, an average a summary predates. `None`
-    there is what `print_table` prints as `n/a` and what `compare` skips its verdict on; the wall
-    and RSS columns pass 0.0 instead, because a zero there is a row that measured nothing at all
-    and the `n/a` would be read as a column that was merely not sampled.
+    `top` never sampled, a wall clock that rounded away. `None` there is what `print_table` prints
+    as `n/a` and what `compare` skips its verdict on; the wall and RSS columns pass 0.0 instead,
+    because a zero there is a row that measured nothing at all and the `n/a` would be read as a
+    column that was merely not sampled.
     """
     if not ref or new is None:
         return unjudged
+    return round((new - ref) / ref, 4)
+
+
+def avg_delta(ref, new):
+    """The average CPU column's move, where a zero reference is a reading and not an absence.
+
+    `None` on either side is the one absence this column has — a summary written before it
+    existed, or a row every run of which rounded its wall clock away — and reads `n/a`. A
+    reference of 0.00 cores was measured: the candidate reading zero too has not moved, and a
+    candidate that kept a core busy moved off zero by an unbounded amount, which `print_table`
+    renders `+inf%`. Falling back to 0.0 there would print "unchanged" for the largest move the
+    column can show.
+    """
+    if ref is None or new is None:
+        return None
+    if not ref:
+        return 0.0 if not new else float("inf")
     return round((new - ref) / ref, 4)
 
 
@@ -402,7 +422,7 @@ def compare(ref, new, wall_bar=WALL_BAR, rss_bar=RSS_BAR, cpu_bar=CPU_BAR, min_n
         w = delta(ref[row]["wall"], new[row]["wall"])
         r = delta(ref[row]["maxrss"], new[row]["maxrss"])
         c = delta(ref[row]["peak_cpu"], new[row]["peak_cpu"], None)
-        a = delta(ref[row]["avg_cpu"], new[row]["avg_cpu"], None)
+        a = avg_delta(ref[row]["avg_cpu"], new[row]["avg_cpu"])
         ok = abs(w) <= wall_bar and abs(r) <= rss_bar and (c is None or abs(c) <= cpu_bar)
         out.append(Row(row, w, r, c, a, ok))
     return out

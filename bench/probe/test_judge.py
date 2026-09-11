@@ -57,6 +57,22 @@ class Medians(unittest.TestCase):
         line = "impact-1  wall=0.04s user=0.00s sys=0.00s maxrss=0.05GB peak_cpu=0% peak_threads=1 samples=0 rc=0"
         self.assertEqual(judge.medians([line])["impact"]["avg_cpu"], 0.0)
 
+    def test_one_run_whose_wall_rounded_away_costs_the_column_that_run_and_not_the_row(self):
+        # Four of five runs have a reading; the median is taken over those four and the row keeps
+        # the column. Dropping it would report `n/a` for a row four readings of which exist.
+        lines = ["impact-1  wall=0.00s user=0.00s sys=0.00s maxrss=0.05GB peak_cpu=0% peak_threads=1 samples=0 rc=0"]
+        lines += [f"impact-{i}  wall=0.04s user=0.02s sys=0.01s maxrss=0.05GB peak_cpu=0% "
+                  "peak_threads=1 samples=0 rc=0" for i in range(2, 6)]
+        m = judge.medians(lines)
+        self.assertEqual(m["impact"]["avg_cpu"], 0.75)
+        # And `n` still counts every run, because wall and RSS were read on all five.
+        self.assertEqual(m["impact"]["n"], 5)
+
+    def test_a_row_no_run_of_which_has_a_reading_has_no_average(self):
+        lines = [f"impact-{i}  wall=0.04s maxrss=0.05GB peak_cpu=0% peak_threads=1 samples=0 rc=0"
+                 for i in range(1, 4)]
+        self.assertIsNone(judge.medians(lines)["impact"]["avg_cpu"])
+
     def test_an_even_count_takes_the_upper_middle_like_bench_does(self):
         self.assertEqual(judge.median([1.0, 2.0, 3.0, 4.0]), 3.0)
 
@@ -551,11 +567,34 @@ class CompareCpuColumns(unittest.TestCase):
         self.assertAlmostEqual(r.avg, 0.4286, places=4)
         self.assertTrue(r.ok)
 
-    def test_a_row_whose_reference_average_is_zero_prints_nothing_for_that_column(self):
+    def test_a_move_off_a_measured_zero_average_reads_as_an_infinite_one(self):
+        # A reference of 0.00 cores is a reading, not an absent column: the candidate keeping a
+        # core and a quarter busy is an unbounded move off it, and `n/a` would say the column was
+        # never read. No bar is set on this column, so the row still passes.
         ref = {"impact": self.row(0.04, 0.05, 0.0, avg=0.0)}
+        (r,) = judge.compare(ref, {"impact": self.row(0.04, 0.05, 0.0, avg=12.5)})
+        self.assertEqual(r.avg, float("inf"))
+        self.assertTrue(r.ok)
+
+    def test_two_measured_zero_averages_have_not_moved(self):
+        ref = {"impact": self.row(0.04, 0.05, 0.0, avg=0.0)}
+        (r,) = judge.compare(ref, {"impact": self.row(0.04, 0.05, 0.0, avg=0.0)})
+        self.assertEqual(r.avg, 0.0)
+        self.assertTrue(r.ok)
+
+    def test_an_average_a_side_never_read_stays_unjudged_and_prints_as_absent(self):
+        ref = {"impact": self.row(0.04, 0.05, 0.0, avg=None)}
         (r,) = judge.compare(ref, {"impact": self.row(0.04, 0.05, 0.0, avg=1.2)})
         self.assertIsNone(r.avg)
-        self.assertTrue(r.ok)
+
+    def test_the_table_prints_an_infinite_average_move_instead_of_raising(self):
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            judge.print_table(judge.compare({"impact": self.row(0.04, 0.05, 0.0, avg=0.0)},
+                                            {"impact": self.row(0.04, 0.05, 0.0, avg=12.5)}),
+                              ("wall \u0394", "RSS \u0394", "peak CPU \u0394", "avg CPU \u0394"))
+        self.assertEqual(out.getvalue().splitlines()[2],
+                         "| impact | +0.0% | +0.0% | n/a | +inf% | ok |")
 
     def test_the_control_table_reports_the_average_beside_the_two_its_clause_judges(self):
         out = io.StringIO()
