@@ -33,7 +33,7 @@ fi
 """
 
 JUDGE_OK = """import sys
-print("ask-fused wall=0.1 maxrss=0.1 peak_cpu=0.0 n=1")
+print("ask-fused wall=0.1 maxrss=0.1 peak_cpu=0.0 avg_cpu=0.6 n=1")
 """
 
 JUDGE_REFUSES = """import sys

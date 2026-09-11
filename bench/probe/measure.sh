@@ -28,15 +28,14 @@ wait $WRAP; RC=$?
 # median as an honestly-measured fast run — a mistyped flag reading as a reader that got 60×
 # quicker. The row carries its status and the script exits with it.
 #
-# One non-zero exit is not that, though. `repograph bench` returns 1 for a missed floor and 1 for an
-# empty graph, a missing case file or a dense width mismatch, so the status alone cannot say whether
-# the reader did its work: a row that answered every case and then failed a floor spent its wall
-# clock reading, and a row that never found a store spent it failing. Only the wording separates
-# them, and it is read here rather than in `judge.py` because the transcript is what holds it. The
-# field says which of the two it was; the row is still refused unless `judge.py` also recognises the
-# row as one that runs `bench`. A wording that changes upstream is caught by `test_measure.py`.
+# One non-zero exit is not that, though. `repograph bench` exits 2 for a suite that answered every
+# case and missed a floor, and 1 for an empty graph, a missing case file or a dense width mismatch:
+# a row that missed a floor spent its wall clock reading, and a row that never found a store spent
+# it failing. The status is what separates them — it is the interface, and the sentence on stderr
+# is only a message to a person, free to be reworded. A binary too old to exit 2 says nothing this
+# reads, so its missed floors arrive as the failures they are indistinguishable from.
 FLOORS=0
-if [ "$RC" != "0" ] && grep -q "bench floors not met" "$LOG/$NAME.time"; then FLOORS=1; fi
+[ "$RC" = "2" ] && FLOORS=1
 if [ "$RC" = "0" ]; then :
 elif [ "$FLOORS" = "1" ]; then echo "measure: $NAME exited $RC on its floors — the timing stands, the floors did not" >&2
 else echo "measure: $NAME exited $RC — this row measured a failure" >&2

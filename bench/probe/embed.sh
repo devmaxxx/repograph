@@ -51,12 +51,14 @@ refuse_partial_store() {
 # samples the peak was taken over travels on the row under the name `measure.sh` gives it, so a
 # reader sees how many readings are behind the number and `judge.py` still parses one shape.
 summary_row() {
-  local name=$1 wall=$2 usr=$3 rss=$4 rc=$5 file=$6 n peak
+  local name=$1 wall=$2 usr=$3 sys=$4 rss=$5 rc=$6 file=$7 n peak
   n=$(awk 'END{print NR+0}' "$file")
   peak=$(awk '{gsub("%","",$2); if ($2+0>m) m=$2+0} END{print m+0}' "$file")
   [ "$n" != "0" ] || { echo "refusing: no samples in $file — the peak CPU column would read 0, which compare leaves unjudged" >&2; return 2; }
   [ "$peak" != "0" ] || { echo "refusing: $n samples in $file and a peak of 0% — a whole-store embed that burns no CPU is a sampler that read the wrong process" >&2; return 2; }
-  printf '%s  wall=%ss user=%ss maxrss=%sGB peak_cpu=%s%% samples=%s rc=%s\n' "$name" "$wall" "$usr" "$rss" "$peak" "$n" "$rc"
+  # `sys` rides beside `user` because `judge.py` derives its average-CPU column from the pair; a
+  # row without it is refused there rather than dropped from the column.
+  printf '%s  wall=%ss user=%ss sys=%ss maxrss=%sGB peak_cpu=%s%% samples=%s rc=%s\n' "$name" "$wall" "$usr" "$sys" "$rss" "$peak" "$n" "$rc"
 }
 
 # Sourcing this file defines the function above and runs nothing, so `test_embed.py` reads the
@@ -150,13 +152,14 @@ RSS=$(awk 'NF == 6 && $3 == "maximum" && $4 == "resident" && $5 == "set" && $6 =
 REPORT=$(awk 'NF == 7 && $3 == "real" && $5 == "user" && $7 == "sys" {l=$0} END{print l}' "$ERR")
 WALL=$(printf '%s\n' "$REPORT" | awk '{print $2}')
 USR=$(printf '%s\n' "$REPORT" | awk '{print $4}')
+SYS=$(printf '%s\n' "$REPORT" | awk '{print $6}')
 # `time` leaves a full report even when the command bailed, so a partial embed — weights gone
 # mid-run, the disk full at 60% — would otherwise enter the median of three as an honestly
 # measured, much faster whole-store embed. The row carries its status and `judge.py medians`
 # refuses a row that measured a failure; the script's own exit is 3, below, because the store the
 # run left behind is the same partial one every other failure here leaves.
 [ "$RC" = "0" ] || echo "embed: $NAME exited $RC — this row measured a failure" >&2
-ROW=$(summary_row "$NAME" "$WALL" "$USR" "$RSS" "$RC" "$L/$NAME.samples") || {
+ROW=$(summary_row "$NAME" "$WALL" "$USR" "$SYS" "$RSS" "$RC" "$L/$NAME.samples") || {
   # What the store holds follows the embed's status and not the sampler's, which is the difference
   # between the two refusal codes. A binary that dies inside two seconds comes through this door
   # rather than the no-PID one — `pgrep` catches it once, and the sampler's first `kill -0` finds it

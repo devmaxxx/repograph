@@ -11,17 +11,26 @@ what a reader checks instead of the shell that produced a table.
 floor did all of its work and answered: its wall clock, max RSS and peak CPU are readings of that
 reader, and only the verdict on the answers failed. A row that never found a store did not do the
 work at all and its clock measured a failing setup, which is no reading of anything. `bench` exits
-1 for both, so the exit code cannot separate them and the wording on stderr has to: `measure.sh`
-greps its own transcript for `bench floors not met` and writes `floors_missed=1` on the summary
-line, and this file believes that field only on a row that runs `bench` — a name is a weaker claim
-than a transcript, so both have to agree. The name says the fact and not the consequence, because
-the consequence differs by reader: to `medians` it is "judge this row", to a person reading the
+2 for the first and 1 for the second, so the status is what separates them and the sentence on
+stderr is only a message to a person: `measure.sh` writes `floors_missed=1` on a row that exited 2,
+and this file believes that field only where the status is still 2 on the line and the row is one
+that runs `bench` — a name is a weaker claim than a status, so both have to agree. The name says
+the fact and not the consequence, because the consequence differs by reader: to `medians` it is "judge this row", to a person reading the
 table it is "this reader's `bench` verdict failed", and a field called `ok` or `refused` would have
 had to pick one. It is a flag and not a count: `bench` prints one verdict, never a tally. Absent on
 every clean row, so its absence admits nothing — an instrument too old to write it is refused.
 `bench/probe/arms.sh` has ruled the same way since `deceb5c` on the same event, for the same reason
 in the other direction: an arm that fails a floor is still a recorded arm. The two now agree that a
 missed floor is a reading and a broken store is not, and disagree about nothing.
+
+`avg_cpu` — cores busy over the whole run, `(user + sys) / wall` off the fields `measure.sh` has
+always written. It is the column every reader row can be judged on: `peak_cpu` is sampled by `top`
+once a second, so a command that finishes inside about two seconds reports 0 and stays unjudged,
+while the average is derived from the same `time` report the wall clock comes from and exists for
+every row that ran at all. A summary too old to carry `user` and `sys` is refused rather than
+having the column quietly dropped from it. A row whose wall clock rounded to zero reads 0 and, like
+an unsampled `peak_cpu`, is compared against nothing rather than against a number that means
+"never measured".
 """
 
 import re
@@ -64,10 +73,16 @@ def fields(text):
     return {k: float(v) for k, v in FIELD.findall(text)}
 
 
-def row_metrics(wall, maxrss, peak_cpu, n, floors_missed=0):
+def avg_cpu(wall, user, sys_):
+    """Cores busy over the whole run. Zero where the wall clock rounded to zero — nothing was
+    measured, and `compare` judges that row against nothing rather than against a zero."""
+    return round((user + sys_) / wall, 2) if wall else 0.0
+
+
+def row_metrics(wall, maxrss, peak_cpu, avg, n, floors_missed=0):
     """One row's readings. `floors_missed` is on the row only where it happened, so every clean row
     reads — and prints, and compares — exactly as it did before the field existed."""
-    m = {"wall": wall, "maxrss": maxrss, "peak_cpu": peak_cpu, "n": n}
+    m = {"wall": wall, "maxrss": maxrss, "peak_cpu": peak_cpu, "avg_cpu": avg, "n": n}
     if floors_missed:
         m["floors_missed"] = 1
     return m
@@ -102,24 +117,27 @@ def medians(lines, logdir=None):
         # `measure.sh` writes `wall=s` / `maxrss=GB` when its `time` transcript held no `real`
         # line — the command died before it ran. Naming the row beats a bare KeyError, and beats
         # dropping it: a row silently missing from one side is what `control` exists to catch.
-        missing = [k for k in ("wall", "maxrss", "peak_cpu") if k not in f]
+        missing = [k for k in ("wall", "maxrss", "peak_cpu", "user", "sys") if k not in f]
         if missing:
             raise SystemExit(f"{m.group(0)!r}: no {', '.join(missing)} — the run did not complete")
         # `rc` is measure.sh's exit status for the measured command. A failed command still gets a
         # full `time` report, so its row looks like a fast one; it is refused rather than averaged.
         # The exception is the floor verdict the docstring above states, which is a reading — and it
-        # takes both the field and a row that runs `bench` to claim it.
-        floors = f.get("floors_missed", 0.0) != 0.0 and BENCH_ROW.match(m.group(1)) is not None
+        # takes the status 2, the field, and a row that runs `bench` to claim it.
+        floors = (f.get("rc", 0.0) == 2.0 and f.get("floors_missed", 0.0) != 0.0
+                  and BENCH_ROW.match(m.group(1)) is not None)
         if f.get("rc", 0.0) != 0.0 and not floors:
             raise SystemExit(f"{m.group(1)}: a run exited {int(f['rc'])} — that row measured a failure, "
                              f"not a reader{stderr_tail(logdir, f'{m.group(1)}-{m.group(2)}')}")
-        runs.setdefault(m.group(1), []).append({**f, "floors_missed": 1.0 if floors else 0.0})
+        runs.setdefault(m.group(1), []).append({**f, "floors_missed": 1.0 if floors else 0.0,
+                                                "avg_cpu": avg_cpu(f["wall"], f["user"], f["sys"])})
     out = {}
     for name, rs in runs.items():
         out[name] = row_metrics(
             median(r["wall"] for r in rs),
             median(r["maxrss"] for r in rs),
             median(r["peak_cpu"] for r in rs),
+            median(r["avg_cpu"] for r in rs),
             len(rs),
             # Any run of the row: a median taken over runs one of which missed a floor is still a
             # reading, and a reader told about it for one run in five knows what they are reading.
@@ -128,12 +146,12 @@ def medians(lines, logdir=None):
     return out
 
 
-# `row wall=0.61 maxrss=1.55 peak_cpu=120.0 n=5`: what `medians` prints, and what `control` and
+# `row wall=0.61 maxrss=1.55 peak_cpu=120.0 avg_cpu=0.98 n=5`: what `medians` prints, and what `control` and
 # `compare` read back. A run line carries `-<i>` after the row and a `user=` field; a medians
 # line carries neither, so the two shapes cannot be confused for each other. `floors_missed=1`
 # rides on the end of the rows that carry it and nowhere else, which is what makes the round trip
 # through a `medians.txt` lossless without changing the line every other row prints.
-MEDIAN_LINE = re.compile(r"^(\S+)\s+(wall=[0-9.]+ maxrss=[0-9.]+ peak_cpu=[0-9.]+ n=\d+(?: floors_missed=1)?)$")
+MEDIAN_LINE = re.compile(r"^(\S+)\s+(wall=[0-9.]+ maxrss=[0-9.]+ peak_cpu=[0-9.]+ avg_cpu=[0-9.]+ n=\d+(?: floors_missed=1)?)$")
 
 
 def read_lines(path):
@@ -154,7 +172,7 @@ def read_medians(path):
         m = MEDIAN_LINE.match(line.strip())
         if m:
             f = fields(m.group(2))
-            out[m.group(1)] = row_metrics(f["wall"], f["maxrss"], f["peak_cpu"], int(f["n"]),
+            out[m.group(1)] = row_metrics(f["wall"], f["maxrss"], f["peak_cpu"], f["avg_cpu"], int(f["n"]),
                                           floors_missed=f.get("floors_missed", 0.0))
     # A summary file's rows have their transcripts beside them, and a refusal that can quote one
     # says more than the row's name — which is the whole of what a reader has to go on.
@@ -198,6 +216,10 @@ def compare(ref, new, wall_bar=WALL_BAR, rss_bar=RSS_BAR, cpu_bar=CPU_BAR, min_n
     finishes inside about two seconds reports `peak_cpu = 0`, and a reference of 0 is no reading
     to be within 10% of. Those rows carry `None` and stay unjudged on that column rather than
     passing on a zero that means "never sampled".
+
+    Average CPU is the column those rows do have: derived, not sampled, so a reader that finishes
+    in half a second still says how many cores it kept busy. It is judged against the same bar, and
+    a reference of 0 — a wall clock that rounded away — is unjudged for the same reason.
     """
     enough_runs(ref, min_n, "the reference")
     enough_runs(new, min_n, "the candidate")
@@ -211,8 +233,10 @@ def compare(ref, new, wall_bar=WALL_BAR, rss_bar=RSS_BAR, cpu_bar=CPU_BAR, min_n
         w = round((new[row]["wall"] - ref[row]["wall"]) / ref[row]["wall"], 4) if ref[row]["wall"] else 0.0
         r = round((new[row]["maxrss"] - ref[row]["maxrss"]) / ref[row]["maxrss"], 4) if ref[row]["maxrss"] else 0.0
         c = round((new[row]["peak_cpu"] - ref[row]["peak_cpu"]) / ref[row]["peak_cpu"], 4) if ref[row]["peak_cpu"] else None
-        ok = abs(w) <= wall_bar and abs(r) <= rss_bar and (c is None or abs(c) <= cpu_bar)
-        out.append((row, w, r, c, ok))
+        a = round((new[row]["avg_cpu"] - ref[row]["avg_cpu"]) / ref[row]["avg_cpu"], 4) if ref[row]["avg_cpu"] else None
+        ok = (abs(w) <= wall_bar and abs(r) <= rss_bar and (c is None or abs(c) <= cpu_bar)
+              and (a is None or abs(a) <= cpu_bar))
+        out.append((row, w, r, c, a, ok))
     return out
 
 
@@ -266,7 +290,7 @@ def print_table(rows, head, floors=()):
     # which reads exactly like a bar that was cleared.
     if not rows:
         raise SystemExit("no rows to judge — the medians files parsed to nothing")
-    # `control` hands over two delta columns and `compare` three, so the width comes from the
+    # `control` hands over two delta columns and `compare` four, so the width comes from the
     # heads: the two clauses those verdicts answer to were committed before any run and neither
     # gains or loses a column because the other one did. The floor fact rides in the verdict cell
     # for that reason — it is a word about the row's reading, not a fourth thing measured, and a
@@ -310,7 +334,7 @@ def main(argv):
         floors = floors_rows(a, b)
         if cmd == "control":
             return 0 if print_table(control(a, b, min_n=min_n), ("wall spread", "RSS spread"), floors) else 1
-        return 0 if print_table(compare(a, b, min_n=min_n), ("wall Δ", "RSS Δ", "peak CPU Δ"), floors) else 1
+        return 0 if print_table(compare(a, b, min_n=min_n), ("wall Δ", "RSS Δ", "peak CPU Δ", "avg CPU Δ"), floors) else 1
     if cmd == "medians":
         rows = read_medians(argv[2])
         # Printing nothing and exiting 0 reads like a suite with no regressions rather than like a
@@ -319,7 +343,8 @@ def main(argv):
             raise SystemExit(f"{argv[2]}: no run or medians line parsed — nothing to take a median of")
         for name, m in rows.items():
             floors = " floors_missed=1" if m.get("floors_missed") else ""
-            print(f"{name} wall={m['wall']} maxrss={m['maxrss']} peak_cpu={m['peak_cpu']} n={m['n']}{floors}")
+            print(f"{name} wall={m['wall']} maxrss={m['maxrss']} peak_cpu={m['peak_cpu']} "
+                  f"avg_cpu={m['avg_cpu']} n={m['n']}{floors}")
         # `readers.sh` writes this file and copies it out of the run, so the sentence belongs beside
         # the rows and not only in the table a later `control` prints from them.
         said = floors_rows(rows)

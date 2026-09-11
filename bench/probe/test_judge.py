@@ -31,8 +31,22 @@ STAMPED = """\
 class Medians(unittest.TestCase):
     def test_runs_of_one_row_are_grouped_and_the_median_taken(self):
         m = judge.medians(SUMMARY.splitlines())
-        self.assertEqual(m["ask-fused"], {"wall": 0.61, "maxrss": 1.55, "peak_cpu": 120.0, "n": 3})
+        self.assertEqual(m["ask-fused"], {"wall": 0.61, "maxrss": 1.55, "peak_cpu": 120.0,
+                                          "avg_cpu": 0.98, "n": 3})
         self.assertEqual(m["impact"]["wall"], 0.04)
+
+    def test_average_cpu_is_derived_from_the_time_report_and_not_from_the_sampler(self):
+        # 0.40 user + 0.20 sys over 0.61 s of wall clock is 0.98 cores busy, on a row whose
+        # sampled peak says 120% — the two are different readings and the derived one is the
+        # column every reader row has.
+        self.assertEqual(judge.avg_cpu(0.61, 0.40, 0.20), 0.98)
+        # Three runs read 0.98, 0.83 and 1.0; the median is the middle one, taken like the rest.
+        self.assertEqual(judge.medians(SUMMARY.splitlines())["ask-fused"]["avg_cpu"], 0.98)
+
+    def test_a_row_whose_wall_clock_rounded_away_reads_zero_rather_than_dividing_by_it(self):
+        self.assertEqual(judge.avg_cpu(0.0, 0.0, 0.0), 0.0)
+        line = "impact-1  wall=0.00s user=0.00s sys=0.00s maxrss=0.05GB peak_cpu=0% peak_threads=1 samples=0 rc=0"
+        self.assertEqual(judge.medians([line])["impact"]["avg_cpu"], 0.0)
 
     def test_an_even_count_takes_the_upper_middle_like_bench_does(self):
         self.assertEqual(judge.median([1.0, 2.0, 3.0, 4.0]), 3.0)
@@ -43,8 +57,9 @@ class Medians(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             p = os.path.join(d, "m.txt")
             with open(p, "w") as f:
-                f.write("ask-fused wall=0.61 maxrss=1.55 peak_cpu=120.0 n=5\n")
-            self.assertEqual(judge.read_medians(p)["ask-fused"], {"wall": 0.61, "maxrss": 1.55, "peak_cpu": 120.0, "n": 5})
+                f.write("ask-fused wall=0.61 maxrss=1.55 peak_cpu=120.0 avg_cpu=0.98 n=5\n")
+            self.assertEqual(judge.read_medians(p)["ask-fused"],
+                             {"wall": 0.61, "maxrss": 1.55, "peak_cpu": 120.0, "avg_cpu": 0.98, "n": 5})
 
     def test_a_summary_file_of_runs_reads_as_medians_too(self):
         import os
@@ -64,6 +79,15 @@ class RefusedRuns(unittest.TestCase):
         with self.assertRaises(SystemExit) as e:
             judge.medians([line])
         self.assertIn("exited 2", str(e.exception))
+
+    def test_a_summary_too_old_to_carry_the_cpu_fields_is_refused_not_read_without_them(self):
+        # The column would otherwise be silently absent from one side of a comparison, which is
+        # what `control` exists to catch and cannot see once the field is optional.
+        line = "impact-1  wall=0.04s maxrss=0.05GB peak_cpu=0% peak_threads=1 samples=0 rc=0"
+        with self.assertRaises(SystemExit) as e:
+            judge.medians([line])
+        self.assertIn("user", str(e.exception))
+        self.assertIn("sys", str(e.exception))
 
     def test_a_row_with_no_wall_at_all_names_the_field(self):
         line = "ask-fused-1  wall=s user=s sys=s maxrss=GB peak_cpu=0% peak_threads=1 samples=0 rc=0"
@@ -88,7 +112,7 @@ class RefusedRuns(unittest.TestCase):
 
 
 FLOOR_LINE = ("bench-dense-1  wall=6.10s user=5.00s sys=0.40s maxrss=1.62GB peak_cpu=340% "
-              "peak_threads=9 samples=6 rc=1 floors_missed=1")
+              "peak_threads=9 samples=6 rc=2 floors_missed=1")
 BROKEN_LINE = ("bench-dense-1  wall=0.02s user=0.01s sys=0.00s maxrss=0.01GB peak_cpu=0% "
                "peak_threads=1 samples=0 rc=1")
 
@@ -103,9 +127,9 @@ Error: graph is empty at /Users/max/bench/beauty-crm-test — run build first
 
 
 class FloorVerdicts(unittest.TestCase):
-    """A missed floor is a reading; a store that was never there is not. Both exit 1 out of `bench`,
-    so what separates them on the summary line is `floors_missed`, and the row it may be believed on
-    is a `bench` row."""
+    """A missed floor is a reading; a store that was never there is not. `bench` exits 2 for the
+    first and 1 for the second, so what a row's claim to the field takes is that status, the field
+    itself, and a row that runs `bench`."""
 
     def test_a_bench_row_that_missed_a_floor_is_a_reading_and_carries_the_field(self):
         m = judge.medians([FLOOR_LINE])
@@ -124,8 +148,14 @@ class FloorVerdicts(unittest.TestCase):
             judge.medians([FLOOR_LINE.replace("bench-dense-1", "ask-fused-1")])
         self.assertIn("ask-fused", str(e.exception))
 
+    def test_a_bench_row_that_claims_the_field_on_the_old_status_is_refused(self):
+        # A binary that exited 1 said nothing this reads, whatever `measure.sh` was told to write.
+        with self.assertRaises(SystemExit) as e:
+            judge.medians([FLOOR_LINE.replace(" rc=2 ", " rc=1 ")])
+        self.assertIn("exited 1", str(e.exception))
+
     def test_a_clean_bench_row_keeps_the_shape_every_other_row_has(self):
-        line = FLOOR_LINE.replace(" rc=1 floors_missed=1", " rc=0")
+        line = FLOOR_LINE.replace(" rc=2 floors_missed=1", " rc=0")
         self.assertNotIn("floors_missed", str(judge.medians([line])["bench-dense"]))
 
     def test_the_refusal_quotes_the_tail_of_what_that_row_said(self):
@@ -165,19 +195,19 @@ class FloorVerdicts(unittest.TestCase):
             self.assertNotIn("floors_missed", str(back["ask-fused"]))
 
     def test_the_table_marks_the_row_and_says_it_under_the_verdict(self):
-        ref = {"bench-dense": {"wall": 6.0, "maxrss": 1.60, "peak_cpu": 340.0, "n": 5, "floors_missed": 1}}
-        new = {"bench-dense": {"wall": 6.1, "maxrss": 1.60, "peak_cpu": 340.0, "n": 5}}
+        ref = {"bench-dense": {"wall": 6.0, "maxrss": 1.60, "peak_cpu": 340.0, "avg_cpu": 3.4, "n": 5, "floors_missed": 1}}
+        new = {"bench-dense": {"wall": 6.1, "maxrss": 1.60, "peak_cpu": 340.0, "avg_cpu": 3.4, "n": 5}}
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
-            ok = judge.print_table(judge.compare(ref, new), ("wall Δ", "RSS Δ", "peak CPU Δ"),
+            ok = judge.print_table(judge.compare(ref, new), ("wall Δ", "RSS Δ", "peak CPU Δ", "avg CPU Δ"),
                                    judge.floors_rows(ref, new))
         lines = out.getvalue().splitlines()
         self.assertTrue(ok)
-        self.assertEqual(lines[2], "| bench-dense | +1.7% | +0.0% | +0.0% | ok, floors_missed |")
+        self.assertEqual(lines[2], "| bench-dense | +1.7% | +0.0% | +0.0% | +0.0% | ok, floors_missed |")
         self.assertTrue(lines[-1].startswith("floors_missed: bench-dense"))
 
     def test_a_table_no_row_of_which_missed_a_floor_says_nothing_about_them(self):
-        rows = {"ask-fused": {"wall": 0.6, "maxrss": 1.5, "peak_cpu": 120.0, "n": 5}}
+        rows = {"ask-fused": {"wall": 0.6, "maxrss": 1.5, "peak_cpu": 120.0, "avg_cpu": 0.98, "n": 5}}
         self.assertEqual(judge.floors_rows(rows, rows), set())
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
@@ -187,14 +217,14 @@ class FloorVerdicts(unittest.TestCase):
 
 class Control(unittest.TestCase):
     def test_the_same_binary_twice_inside_the_bars_passes(self):
-        a = {"ask-fused": {"wall": 0.60, "maxrss": 1.50, "peak_cpu": 120.0, "n": 5}}
-        b = {"ask-fused": {"wall": 0.63, "maxrss": 1.55, "peak_cpu": 121.0, "n": 5}}
+        a = {"ask-fused": {"wall": 0.60, "maxrss": 1.50, "peak_cpu": 120.0, "avg_cpu": 0.98, "n": 5}}
+        b = {"ask-fused": {"wall": 0.63, "maxrss": 1.55, "peak_cpu": 121.0, "avg_cpu": 0.99, "n": 5}}
         rows = judge.control(a, b)
         self.assertEqual(rows, [("ask-fused", 0.05, 0.0333, True)])
 
     def test_a_row_outside_either_bar_fails_and_names_which(self):
-        a = {"dump10": {"wall": 0.70, "maxrss": 1.36, "peak_cpu": 100.0, "n": 5}}
-        b = {"dump10": {"wall": 0.90, "maxrss": 1.36, "peak_cpu": 100.0, "n": 5}}
+        a = {"dump10": {"wall": 0.70, "maxrss": 1.36, "peak_cpu": 100.0, "avg_cpu": 0.9, "n": 5}}
+        b = {"dump10": {"wall": 0.90, "maxrss": 1.36, "peak_cpu": 100.0, "avg_cpu": 0.9, "n": 5}}
         (row, wall, rss, ok), = judge.control(a, b)
         self.assertFalse(ok)
         self.assertAlmostEqual(wall, 0.2857, places=4)
@@ -202,60 +232,77 @@ class Control(unittest.TestCase):
 
     def test_a_row_missing_from_one_side_is_reported_not_skipped(self):
         with self.assertRaises(SystemExit):
-            judge.control({"a": {"wall": 1, "maxrss": 1, "peak_cpu": 1, "n": 5}}, {})
+            judge.control({"a": {"wall": 1, "maxrss": 1, "peak_cpu": 1, "avg_cpu": 1, "n": 5}}, {})
 
     def test_a_row_only_the_second_run_has_is_reported_too(self):
         with self.assertRaises(SystemExit):
-            judge.control({}, {"a": {"wall": 1, "maxrss": 1, "peak_cpu": 1, "n": 5}})
+            judge.control({}, {"a": {"wall": 1, "maxrss": 1, "peak_cpu": 1, "avg_cpu": 1, "n": 5}})
 
     def test_a_candidate_row_the_reference_never_had_is_reported(self):
         with self.assertRaises(SystemExit):
-            judge.compare({}, {"a": {"wall": 1, "maxrss": 1, "peak_cpu": 1, "n": 5}})
+            judge.compare({}, {"a": {"wall": 1, "maxrss": 1, "peak_cpu": 1, "avg_cpu": 1, "n": 5}})
 
 
 class ComparePeakCpu(unittest.TestCase):
     """The third judged column. G19's control triple — 1,930 s, 293%, 2.15 GB — is the shape the
     column exists for; the reader rows are the shape it cannot speak about."""
 
-    def row(self, wall, rss, cpu):
-        return {"wall": wall, "maxrss": rss, "peak_cpu": cpu, "n": 5}
+    def row(self, wall, rss, cpu, avg=1.0):
+        return {"wall": wall, "maxrss": rss, "peak_cpu": cpu, "avg_cpu": avg, "n": 5}
 
     def test_a_candidate_inside_the_cpu_bar_passes(self):
         ref = {"embed": self.row(1930.0, 2.15, 293.0)}
         new = {"embed": self.row(1930.0, 2.15, 315.0)}
-        (_, _, _, cpu, ok), = judge.compare(ref, new)
+        (_, _, _, cpu, _, ok), = judge.compare(ref, new)
         self.assertAlmostEqual(cpu, 0.0751, places=4)
         self.assertTrue(ok)
 
     def test_a_candidate_outside_the_cpu_bar_fails_on_that_column_alone(self):
         ref = {"embed": self.row(1930.0, 2.15, 293.0)}
         new = {"embed": self.row(2026.5, 2.15, 360.0)}
-        (_, wall, rss, cpu, ok), = judge.compare(ref, new)
+        (_, wall, rss, cpu, _, ok), = judge.compare(ref, new)
         self.assertEqual((wall, rss), (0.05, 0.0))
         self.assertAlmostEqual(cpu, 0.2287, places=4)
         self.assertFalse(ok)
 
     def test_a_row_the_sampler_never_caught_is_unjudged_rather_than_green(self):
         ref = {"impact": self.row(0.04, 0.05, 0.0)}
-        (_, _, _, cpu, ok), = judge.compare(ref, {"impact": self.row(0.04, 0.05, 0.0)})
+        (_, _, _, cpu, avg, ok), = judge.compare(ref, {"impact": self.row(0.04, 0.05, 0.0)})
         self.assertIsNone(cpu)
+        # And the derived column speaks where the sampled one cannot: this is the row it exists for.
+        self.assertEqual(avg, 0.0)
         self.assertTrue(ok)
         # A reference of 0 is no reading, not a reading of zero, so a candidate that did get
         # sampled has nothing to be within 10% of either — the wall column is what moved.
-        (_, _, _, cpu, ok), = judge.compare(ref, {"impact": self.row(0.04, 0.05, 130.0)})
+        (_, _, _, cpu, _, ok), = judge.compare(ref, {"impact": self.row(0.04, 0.05, 130.0)})
         self.assertIsNone(cpu)
         self.assertTrue(ok)
 
-    def test_the_table_prints_three_delta_columns_and_names_the_unjudged_one(self):
+    def test_the_table_prints_four_delta_columns_and_names_the_unjudged_one(self):
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
             judge.print_table(judge.compare({"impact": self.row(0.04, 0.05, 0.0)},
                                             {"impact": self.row(0.04, 0.05, 0.0)}),
-                              ("wall Δ", "RSS Δ", "peak CPU Δ"))
+                              ("wall Δ", "RSS Δ", "peak CPU Δ", "avg CPU Δ"))
         lines = out.getvalue().splitlines()
-        self.assertEqual(lines[0], "| row | wall Δ | RSS Δ | peak CPU Δ | |")
-        self.assertEqual(lines[1], "|---|---|---|---|---|")
-        self.assertEqual(lines[2], "| impact | +0.0% | +0.0% | n/a | ok |")
+        self.assertEqual(lines[0], "| row | wall Δ | RSS Δ | peak CPU Δ | avg CPU Δ | |")
+        self.assertEqual(lines[1], "|---|---|---|---|---|---|")
+        self.assertEqual(lines[2], "| impact | +0.0% | +0.0% | n/a | +0.0% | ok |")
+
+    def test_an_average_outside_the_bar_fails_the_row_on_that_column_alone(self):
+        ref = {"ask-fused": self.row(0.61, 1.55, 0.0, avg=0.98)}
+        new = {"ask-fused": self.row(0.61, 1.55, 0.0, avg=1.40)}
+        (_, wall, rss, cpu, avg, ok), = judge.compare(ref, new)
+        self.assertEqual((wall, rss), (0.0, 0.0))
+        self.assertIsNone(cpu)
+        self.assertAlmostEqual(avg, 0.4286, places=4)
+        self.assertFalse(ok)
+
+    def test_a_row_whose_reference_average_is_zero_is_unjudged_rather_than_green(self):
+        ref = {"impact": self.row(0.04, 0.05, 0.0, avg=0.0)}
+        (_, _, _, _, avg, ok), = judge.compare(ref, {"impact": self.row(0.04, 0.05, 0.0, avg=1.2)})
+        self.assertIsNone(avg)
+        self.assertTrue(ok)
 
     def test_the_control_table_keeps_the_two_columns_its_clause_names(self):
         out = io.StringIO()
@@ -271,7 +318,7 @@ class RunCount(unittest.TestCase):
     §9's embed is three, and a suite with its own shape says the number instead of inheriting it."""
 
     def rows(self, n):
-        return {"ask-fused": {"wall": 0.60, "maxrss": 1.50, "peak_cpu": 120.0, "n": n}}
+        return {"ask-fused": {"wall": 0.60, "maxrss": 1.50, "peak_cpu": 120.0, "avg_cpu": 0.98, "n": n}}
 
     def test_a_control_over_one_run_a_row_is_refused_not_cleared(self):
         with self.assertRaises(SystemExit) as e:
@@ -283,7 +330,7 @@ class RunCount(unittest.TestCase):
             judge.compare(self.rows(5), self.rows(3))
 
     def test_a_suite_of_three_runs_is_judged_when_the_floor_is_said_out_loud(self):
-        (_, wall, _, _, ok), = judge.compare(self.rows(3), self.rows(3), min_n=3)
+        (_, wall, _, _, _, ok), = judge.compare(self.rows(3), self.rows(3), min_n=3)
         self.assertEqual((wall, ok), (0.0, True))
 
     def test_the_two_file_subcommands_print_usage_instead_of_an_index_error(self):

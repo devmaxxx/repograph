@@ -72,32 +72,43 @@ when any row exited non-zero, because a command that failed still gets a full `t
 row would enter the median as an honestly-measured fast run. One non-zero exit is not that: a
 `bench` row that answered every case and then missed a floor spent its wall clock reading, and its
 wall, max RSS and peak CPU are readings of that reader — while a `bench` row that found no store
-never did the work at all. `bench` exits 1 for both (`src/main.rs`, `anyhow::bail!("bench floors not
-met")`, the same status an empty graph or a missing case file bails with), so the wording on stderr
-is what separates them: `measure.sh` greps the row's own transcript and writes `floors_missed=1`
-beside `rc=`, and `judge.py` believes that field only on a row that runs `bench` — `bench`,
-`bench-dense`, `bench-nodense`. Every other non-zero exit is still refused, and the refusal now
-quotes the tail of what the row said, so a reader is told what failed and not only that something
-did. The field rides through `medians.txt` on the rows that carry it, and `control` and `compare`
-print it in the verdict cell and say it in a line under the table. `arms.sh` has ruled the same way
-on the same event since `deceb5c` — an arm that fails a floor is still a recorded arm — and the two
-now agree. If `bench`'s wording ever changes, `bench/probe/test_measure.py` goes red, and until the
-grep follows the rename a missed floor refuses the suite rather than passing unnoticed.
+never did the work at all. **As of 0.6.0 the status says which:** `bench` exits 2 for a suite that
+answered every case and missed a floor, and 1 where there was nothing to measure. `measure.sh`
+reads that status and writes `floors_missed=1` beside `rc=2`, and `judge.py` believes the field
+only where the status is still 2 on the line and the row is one that runs `bench` — `bench`,
+`bench-dense`, `bench-nodense`. The sentence on stderr is a message to a person now and nothing
+reads it, so it is free to be reworded. **The kit therefore needs a binary that exits 2 for a
+verdict:** an older one exits 1 with the old words, and its missed floors are refused as the
+failures they are then indistinguishable from. Every other non-zero exit is still refused, and the
+refusal quotes the tail of what the row said, so a reader is told what failed and not only that
+something did. The field rides through `medians.txt` on the rows that carry it, and `control` and
+`compare` print it in the verdict cell and say it in a line under the table. `arms.sh` has ruled
+the same way on the same event since `deceb5c` — an arm that fails a floor is still a recorded arm
+— and the two now agree.
 
-**The peak CPU column, and what it cannot say.** `judge.py compare` judges three columns — wall
-against 10%, max RSS against 5%, peak CPU against 10% — because §9's gate asks for the run's peak
+**Which column a row is judged on.** Every reader row is judged on the derived average, `avg_cpu`;
+only the whole-store embed is judged on the sampled peak. The two are different readings of the
+same run and neither replaces the other: `avg_cpu` is `(user + sys) / wall` off the `time` report
+`measure.sh` already writes, so it exists for a row that lasted 40 ms, while `peak_cpu` is what
+`top` caught at its loudest and exists only for a row that lasted long enough to be sampled. A
+summary too old to carry `user` and `sys` is refused rather than read without the column.
+
+**The peak CPU column, and what it cannot say.** `judge.py compare` judges four columns — wall
+against 10%, max RSS against 5%, peak CPU and average CPU against 10% each — because §9's gate asks for the run's peak
 CPU unmoved and a clause no code reads is green whatever the run did. The column is only as good
 as the sampler under it: `measure.sh` samples with `top -l 2 -s 1`, so a command that finishes
 inside about two seconds is never sampled and reports `peak_cpu = 0`. That is every reader row,
 and it is not the whole-store embed of §9 (≈ 1,930 s, 293% recorded), which is the row the column
 was added for. A row whose *reference* read 0 prints `n/a` and is left unjudged on that column
-rather than passing on a zero that means "never sampled". The one row the column judges never
+rather than passing on a zero that means "never sampled" — which is why the average column was
+added: it is the one the reader rows can be judged on. (An average is unjudged on the same terms,
+where a wall clock rounded to zero left nothing to divide by.) The one row the column judges never
 carries that zero into the table at all: `embed.sh` counts the samples its peak was taken over,
 puts the count on the row as `samples=` beside `measure.sh`'s, and refuses to print a row where the
 sampler read nothing or read a peak of zero — refusing when no PID was ever found guards one door
 of two, and the other is every `top` failing or the process ending between two checks. Two verdicts
-keep the columns their own committed clauses name, and adding this one widened neither: `judge.py control` judges wall and max
-RSS only, which is §1's Gate as written, and a reader row read under §1's bars is judged by the
+keep the columns their own committed clauses name, and adding these did not widen the control:
+`judge.py control` judges wall and max RSS only, which is §1's Gate as written, and a reader row read under §1's bars is judged by the
 wall and RSS columns — its peak CPU is printed beside them and is not part of that clause. macOS only:
 `/usr/bin/time -l`, `top -l`, `pmset` and `caffeinate` are Darwin's, and CI runs none of the shell
 here — `python3 -m unittest discover -s bench/probe` is what a change to this directory is gated on,

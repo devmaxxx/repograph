@@ -32,17 +32,18 @@ class Row(unittest.TestCase):
 
     def row(self, samples, rc="0"):
         self.f.write_text(samples)
-        return sourced(f"summary_row control-1 1930.05 5600.11 2.15 {rc} '{self.f}'")
+        return sourced(f"summary_row control-1 1930.05 5600.11 120.00 2.15 {rc} '{self.f}'")
 
     def test_the_row_carries_the_count_of_samples_its_peak_came_from(self):
         r = self.row(SAMPLES)
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertEqual(r.stdout.strip(),
-                         "control-1  wall=1930.05s user=5600.11s maxrss=2.15GB peak_cpu=121.4% samples=3 rc=0")
+                         "control-1  wall=1930.05s user=5600.11s sys=120.00s maxrss=2.15GB peak_cpu=121.4% samples=3 rc=0")
 
     def test_the_row_reads_back_through_judge_the_way_a_reader_row_does(self):
         m = judge.medians([self.row(SAMPLES).stdout])
-        self.assertEqual(m["control"], {"wall": 1930.05, "maxrss": 2.15, "peak_cpu": 121.4, "n": 1})
+        self.assertEqual(m["control"], {"wall": 1930.05, "maxrss": 2.15, "peak_cpu": 121.4,
+                                        "avg_cpu": 2.96, "n": 1})
 
     def test_an_embed_the_sampler_never_read_refuses_instead_of_printing_a_row(self):
         r = self.row("")
