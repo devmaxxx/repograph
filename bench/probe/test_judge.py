@@ -134,7 +134,7 @@ class Medians(unittest.TestCase):
         # the rows; none of them is a reading, and the file is the one copied out of every run.
         with tempfile.TemporaryDirectory() as d:
             p = Path(d, "medians.txt")
-            p.write_text("embedder: REPOGRAPH_EMBED_MODEL=intfloat/multilingual-e5-large\n"
+            p.write_text("embedder: REPOGRAPH_EMBED_MODEL=BAAI/bge-m3\n"
                          "quiet: idle=96% load1=1.2 avail=12.0GB\n"
                          "trace wall=0.42 maxrss=0.31 peak_cpu=0.0% avg_cpu=83% n=5 verdict=1\n"
                          + judge.verdict_note(["trace"]) + "\n")

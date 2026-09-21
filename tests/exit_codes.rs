@@ -180,7 +180,7 @@ fn the_bench_kits_variables_do_not_reach_the_child() {
     // the parent holds, which is the behaviour the assertion below reads.
     unsafe {
         std::env::set_var("REPOGRAPH_BENCH_REPO", elsewhere.path());
-        std::env::set_var("REPOGRAPH_EMBED_MODEL", "intfloat/multilingual-e5-large");
+        std::env::set_var("REPOGRAPH_EMBED_MODEL", "BAAI/bge-m3");
     }
     let missed = run(dir.path(), &["bench", "--cases", cases().to_str().unwrap()]);
     unsafe {

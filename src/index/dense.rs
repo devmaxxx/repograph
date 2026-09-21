@@ -28,6 +28,12 @@ pub struct DenseIndex {
     /// Hub id of the model every row was embedded with. Empty in a store written before the
     /// field existed — which only the small model ever wrote.
     #[serde(default)] pub model: String,
+    /// The `graph.json` stamp of the graph the rows were last brought in line with, claimed by a
+    /// sync that finished and never by a checkpoint. A writer that moves the graph and embeds
+    /// nothing — `update --no-dense`, a model that would not open, an `ask` an exact id answered
+    /// — leaves it behind, which is how the next reader holding a model learns it owes rows. A
+    /// store written before the field claims no graph and is caught up once.
+    #[serde(default)] graph: Option<Stamp>,
     /// The dead rows, ascending. Left out of the file when there are none, so a store this
     /// binary wrote and never punched a hole in still reads in one that predates the field.
     #[serde(default, skip_serializing_if = "Vec::is_empty")] free: Vec<usize>,
@@ -133,6 +139,15 @@ impl DenseIndex {
     /// what is in hand is no longer what an `ask` starting now would load.
     pub fn read_at(&self) -> Option<Stamp> { self.stamp }
 
+    /// Whether rows are owed to the graph stamped `graph`: the last finished sync was against
+    /// another one, or claimed none.
+    pub fn behind(&self, graph: Stamp) -> bool { self.graph != Some(graph) }
+
+    /// Claims the graph the sync that just returned brought the rows in line with. `sync` drops
+    /// the claim as it starts, so a caller that makes none leaves the index owing rows: the next
+    /// reader pays a pass, and no row goes missing.
+    pub fn synced_against(&mut self, graph: Option<Stamp>) { self.graph = graph; }
+
     /// `recorded_model`'s answer for an index already in hand, so a reader that has loaded the
     /// vectors does not parse a 3 MB `vectors.json` again to learn the same thing.
     pub fn model_of_rows(&self) -> Option<String> {
@@ -233,6 +248,10 @@ impl DenseIndex {
         budget: ChunkBudget,
         after_chunk: &mut dyn FnMut(&mut DenseIndex, Progress) -> Result<()>,
     ) -> Result<usize> {
+        // A checkpoint `after_chunk` saves on the way is a store still owed rows — after a model
+        // change it holds a part of the very graph it last claimed — so if the run stops there it
+        // must read as in line with no graph.
+        self.graph = None;
         let mut alive = vec![false; self.ids.len()];
         let mut todo_ids = Vec::new();
         let mut todo_texts = Vec::new();
@@ -439,6 +458,39 @@ mod tests {
     }
 
     #[test]
+    fn an_index_owes_rows_to_every_graph_but_the_one_its_last_sync_claimed() {
+        let d = tempfile::tempdir().unwrap();
+        let store = Store::new(d.path());
+        let (at, moved) = (Stamp { mtime_ns: 1, len: 10 }, Stamp { mtime_ns: 2, len: 10 });
+        let mut idx = synced(&graph("x"));
+        assert!(idx.behind(at), "a sync nobody claimed a graph for is in line with none");
+        idx.synced_against(Some(at));
+        idx.save(&store).unwrap();
+        let back = DenseIndex::load(&store).unwrap();
+        assert!(!back.behind(at), "the claim is read back with the rows");
+        assert!(back.behind(moved));
+    }
+
+    #[test]
+    fn a_checkpoint_owes_rows_even_to_the_graph_its_index_last_claimed() {
+        let d = tempfile::tempdir().unwrap();
+        let store = Store::new(d.path());
+        let at = Stamp { mtime_ns: 1, len: 10 };
+        let mut idx = synced(&wide(0));
+        idx.synced_against(Some(at));
+        // Another model: every row goes, and the graph `at` names is embedded again from nothing.
+        idx.written_by("another/model", 3);
+        let err = idx.sync_chunked(&wide(0), &Questions::default(), &mut fake, ChunkBudget::rows(4), &mut |i, _| {
+            i.save(&store)?;
+            anyhow::bail!("interrupted")
+        }).unwrap_err().to_string();
+        assert!(err.contains("interrupted"), "{err}");
+        let back = DenseIndex::load(&store).unwrap();
+        assert_eq!(back.ids.len(), 4);
+        assert!(back.behind(at), "four rows of ten are not the graph it claimed");
+    }
+
+    #[test]
     fn a_chunked_sync_over_an_edited_store_leaves_the_same_holes_as_a_plain_one() {
         let mut idx = synced(&wide(0));
         assert_eq!(idx.sync_chunked(&wide(1), &Questions::default(), &mut fake, ChunkBudget::rows(3), &mut |_, _| Ok(())).unwrap(), 1);
@@ -476,11 +528,11 @@ mod tests {
         let mut idx = synced(&graph("x"));
         idx.written_by(crate::index::embed::UNNAMED_MODEL, 3);
         assert_eq!(idx.ids.len(), 2, "an unnamed store is the small model's and is kept");
-        idx.written_by("intfloat/multilingual-e5-large", 3);
+        idx.written_by("BAAI/bge-m3", 3);
         assert!(idx.ids.is_empty() && idx.vectors.is_empty() && idx.dim == 0, "another model's rows cannot be appended to");
-        assert_eq!(idx.model, "intfloat/multilingual-e5-large");
+        assert_eq!(idx.model, "BAAI/bge-m3");
         assert_eq!(idx.sync(&graph("x"), &Questions::default(), &mut fake).unwrap(), 2);
-        idx.written_by("intfloat/multilingual-e5-large", 3);
+        idx.written_by("BAAI/bge-m3", 3);
         assert_eq!(idx.ids.len(), 2, "the same model keeps its rows");
     }
 
@@ -506,11 +558,11 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let store = Store::new(dir.path());
         let mut idx = synced(&graph("x"));
-        idx.written_by("intfloat/multilingual-e5-large", 3);
+        idx.written_by("BAAI/bge-m3", 3);
         idx.sync(&graph("x"), &Questions::default(), &mut fake).unwrap();
         idx.save(&store).unwrap();
-        assert_eq!(DenseIndex::recorded_model(&store).unwrap().as_deref(), Some("intfloat/multilingual-e5-large"));
-        assert_eq!(DenseIndex::load(&store).unwrap().model, "intfloat/multilingual-e5-large");
+        assert_eq!(DenseIndex::recorded_model(&store).unwrap().as_deref(), Some("BAAI/bge-m3"));
+        assert_eq!(DenseIndex::load(&store).unwrap().model, "BAAI/bge-m3");
     }
 
     #[test]
@@ -518,7 +570,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let store = Store::new(dir.path());
         let mut idx = synced(&graph("x"));
-        idx.written_by("intfloat/multilingual-e5-large", 3);
+        idx.written_by("BAAI/bge-m3", 3);
         idx.sync(&graph("x"), &Questions::default(), &mut fake).unwrap();
         idx.save(&store).unwrap();
         // A crash between the two writes leaves metadata naming more rows than the file holds.
@@ -528,11 +580,11 @@ mod tests {
         store.write_atomic("vectors.f32", &[0u8; 4]).unwrap();
         let torn = DenseIndex::load(&store).unwrap();
         assert!(torn.ids.is_empty(), "a torn pair of files is no index at all");
-        assert_eq!(torn.model_of_rows().as_deref(), Some("intfloat/multilingual-e5-large"));
+        assert_eq!(torn.model_of_rows().as_deref(), Some("BAAI/bge-m3"));
     }
 
     #[test]
-    fn an_unnamed_store_stays_the_small_model_s_though_the_default_is_the_large_one() {
+    fn an_unnamed_store_stays_the_small_model_s_whatever_the_default_names() {
         // The two constants were the same string until the default moved. Were the unnamed rule
         // to follow the default again, every store written before the field existed would be
         // claimed for a model that never wrote it, and re-embedded whole to discover otherwise.
@@ -553,10 +605,10 @@ mod tests {
         assert_eq!(DenseIndex::recorded_model(&store).unwrap().as_deref(), Some(crate::index::embed::UNNAMED_MODEL),
             "an unnamed store holds the small model's rows, so a reader opens the small model");
         let mut idx = synced(&graph("x"));
-        idx.written_by("intfloat/multilingual-e5-large", 3);
+        idx.written_by("BAAI/bge-m3", 3);
         idx.sync(&graph("x"), &Questions::default(), &mut fake).unwrap();
         idx.save(&store).unwrap();
-        assert_eq!(DenseIndex::recorded_model(&store).unwrap().as_deref(), Some("intfloat/multilingual-e5-large"));
+        assert_eq!(DenseIndex::recorded_model(&store).unwrap().as_deref(), Some("BAAI/bge-m3"));
     }
 
     #[test]

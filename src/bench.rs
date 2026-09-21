@@ -121,15 +121,7 @@ pub fn hit(case: &Case, answer: &Answer, is_id: &dyn Fn(&str) -> bool) -> bool {
 /// read one set whatever the store's rows were written by; a dense arm under a model with no
 /// floors of its own is measured and not graded, the way another case file is.
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub enum Floors { Small, Large, None }
-
-/// The model the large-model floors were measured on. Pinned to the name, not to
-/// `crate::index::embed::DEFAULT_MODEL`: that constant is the *configured* default, which has
-/// already been flipped twice — to this model and back — and a row written under whatever the
-/// default becomes next would otherwise silently inherit these floors while genuine e5-large rows
-/// silently stopped being graded. `UNNAMED_MODEL` makes the same argument in prose for the small
-/// model, and `src/index/dense.rs`'s own tests pin this same name by literal for the same reason.
-const LARGE_MODEL: &str = "intfloat/multilingual-e5-large";
+pub enum Floors { Small, None }
 
 /// Private on purpose: `dense_grading` is the only way to reach the floors, so a caller cannot
 /// key them off the store's recorded rows while the embedder that answers is a resolved override.
@@ -137,7 +129,6 @@ fn floors_for(model: Option<&str>) -> Floors {
     match model {
         None => Floors::Small,
         Some(m) if m == crate::index::embed::UNNAMED_MODEL => Floors::Small,
-        Some(m) if m == LARGE_MODEL => Floors::Large,
         Some(_) => Floors::None,
     }
 }
@@ -151,31 +142,25 @@ fn dense_grading(no_dense: bool, recorded: Option<&str>, resolved: Option<&str>)
     let floors = floors_for(model);
     let field = match floors {
         Floors::Small => "small".to_string(),
-        Floors::Large => "large".to_string(),
         Floors::None => model.unwrap_or_default().to_string(),
     };
     (floors, field)
 }
 
 /// `(enriched, dense, floors) → (keyword, paraphrase)`. Every number is one the recorded cases
-/// measured, never a target: the small model's four on the fixture (the paragraphs below), the
-/// large model's two dense arms on its copy of the same store, each read twice and agreeing both
-/// times (`docs/bench/2026-09-05-0.5.0-gaps-results.md`). The lexical rows carry
+/// measured, never a target: the small model's four on the fixture (the paragraphs below). The lexical rows carry
 /// `Floors::Small` and are read for every model: no embedder is in them.
 /// `bench/history/track.py` reads this table out of the source; keep the rows one per line.
-const FLOORS: [(bool, bool, Floors, usize, usize); 6] = [
+const FLOORS: [(bool, bool, Floors, usize, usize); 4] = [
     (true, true, Floors::Small, 40, 14),
     (true, false, Floors::Small, 39, 11),
     (false, true, Floors::Small, 40, 9),
     (false, false, Floors::Small, 39, 7),
-    (true, true, Floors::Large, 40, 22),
-    (false, true, Floors::Large, 40, 17),
 ];
 
 pub fn passes(s: &Summary, dense: bool, enriched: bool, floors: Floors) -> bool {
     // Every floor is the number the recorded cases measure; only the token ceiling is rounded,
-    // up to the next ten, and the small model's four p90s (220 to 226) and the large model's two
-    // (224, 227) all fit under that one. A count equal to its total is an exact floor: `run`
+    // up to the next ten, and the small model's four p90s (220 to 226) all fit under that one. A count equal to its total is an exact floor: `run`
     // grades against these only when the case file has the recorded 40/30/12 shape.
     //
     // `enrich` spends model tokens and is optional, so the store it has never touched is graded
@@ -194,8 +179,8 @@ pub fn passes(s: &Summary, dense: bool, enriched: bool, floors: Floors) -> bool 
     // on one day sitting flush on the noisiest split, while 14 has a point of slack and weeks of
     // runs under it. If the raw floors flap, they are the first thing to relax.
     //
-    // A dense arm has no floors of its own once the store's embedder is neither the small model
-    // nor the large one — those numbers were never measured, so grading them would be inventing a
+    // A dense arm has no floors of its own once the store's embedder is not the small model —
+    // those numbers were never measured, so grading them would be inventing a
     // bar. `run` still prints what it found; it just cannot say pass or fail.
     if dense && floors == Floors::None { return false; }
     let key = if dense { floors } else { Floors::Small };
@@ -238,17 +223,21 @@ fn is_recorded_shape(cases: &[Case]) -> bool {
 
 /// Every anchor must be a node id or a file some node declares. A mistyped anchor would
 /// otherwise score as a miss for as long as nobody read the transcript, and a weak spot that is
-/// really a typo is the one kind this suite must not report.
+/// really a typo is the one kind this suite must not report. Every such anchor is named in the one
+/// error: a corpus that moves a directory strands several cases at once, and stopping at the first
+/// costs a run per anchor to find the rest.
 fn check_anchors(cases_path: &str, cases: &[Case], graph: &Graph) -> Result<()> {
     let files: HashSet<&str> = graph.nodes.values().map(|n| n.file.as_str()).collect();
-    for c in cases {
-        for a in c.expect.anchors() {
-            if !graph.nodes.contains_key(a) && !files.contains(a.as_str()) {
-                anyhow::bail!("{cases_path}: {:?} expects {a:?}, which is neither a node id nor a file any node declares", c.q);
-            }
-        }
+    let stale: Vec<String> = cases.iter()
+        .flat_map(|c| c.expect.anchors().iter().map(move |a| (c, a)))
+        .filter(|(_, a)| !graph.nodes.contains_key(*a) && !files.contains(a.as_str()))
+        .map(|(c, a)| format!("{:?} expects {a:?}", c.q))
+        .collect();
+    match stale.as_slice() {
+        [] => Ok(()),
+        [one] => anyhow::bail!("{cases_path}: {one}, which is neither a node id nor a file any node declares"),
+        all => anyhow::bail!("{cases_path}: {} anchors are neither a node id nor a file any node declares:\n  {}", all.len(), all.join("\n  ")),
     }
-    Ok(())
 }
 
 /// What one reranked question was shown: the pool in the order it was ranked in, and the size of
@@ -696,21 +685,11 @@ mod tests {
         // missed, which is why `run` never grades one.
         assert!(!passes(&Summary::default().with("long", (15, 15)), true, true, Floors::Small));
 
-        // The large model's dense arms are graded on their own measured numbers (the 0.5.0 gap
-        // results, L3); its lexical arms are the small model's, because no embedder is in them.
-        let large_enriched = Summary::recorded((40, 40), (22, 30), (12, 12), 230);
-        assert!(passes(&large_enriched, true, true, Floors::Large));
-        assert!(!passes(&large_enriched.clone().with("paraphrase", (21, 30)), true, true, Floors::Large));
-        assert!(passes(&large_enriched, true, true, Floors::Small), "the small floors are the lower bar and the large store clears them, which is what made them the wrong bar");
-        assert!(passes(&at_floor_nodense, false, true, Floors::Large), "lexical arms do not read the model");
-        assert!(!passes(&at_floor_nodense.clone().with("keyword", (38, 40)), false, true, Floors::Large));
-        // A model with no floors of its own is measured and never graded.
-        assert!(!passes(&large_enriched, true, true, Floors::None));
-        // The large model's raw store (no questions paid for) measures its own floor too
-        // (`docs/bench/2026-09-05-0.5.0-gaps-results.md`).
-        let large_raw = Summary::recorded((40, 40), (17, 30), (12, 12), 230);
-        assert!(passes(&large_raw, true, false, Floors::Large));
-        assert!(!passes(&large_raw.clone().with("paraphrase", (16, 30)), true, false, Floors::Large));
+        // A model with no floors of its own is measured and never graded in its dense arm; its
+        // lexical arm has no embedder in it and reads the small model's floors.
+        assert!(!passes(&at_floor_dense, true, true, Floors::None));
+        assert!(passes(&at_floor_nodense, false, true, Floors::None), "lexical arms do not read the model");
+        assert!(!passes(&at_floor_nodense.clone().with("keyword", (38, 40)), false, true, Floors::None));
     }
 
     #[test]
@@ -741,9 +720,6 @@ mod tests {
         use crate::index::embed::UNNAMED_MODEL;
         assert_eq!(floors_for(None), Floors::Small, "a store with no vectors is graded lexically, on floors the model never enters");
         assert_eq!(floors_for(Some(UNNAMED_MODEL)), Floors::Small);
-        // Pinned to the literal the floors were measured on, not to `DEFAULT_MODEL`: a flip of
-        // the configured default must not keep this green.
-        assert_eq!(floors_for(Some("intfloat/multilingual-e5-large")), Floors::Large);
         assert_eq!(floors_for(Some("BAAI/bge-m3")), Floors::None);
         // Whichever model the default names, a store a first build wrote has to be graded and not
         // merely measured: a default moved to a model with no floors of its own would turn every
@@ -779,6 +755,18 @@ mod tests {
         let cases = parse_cases(BUILT_IN_CASES).unwrap();
         assert!(is_recorded_shape(&cases));
         assert!(cases.iter().all(|c| c.expect.anchors().len() == 1), "every recorded case expects one place");
+    }
+
+    /// The recorded cases against a corpus on disk: every anchor is still a node or a declared file
+    /// there. `bench` reads the store the same way and checks this before its first question, so a
+    /// corpus that moved a file is found here without the model and the 82 questions behind it.
+    #[test]
+    #[ignore = "needs a built corpus: set REPOGRAPH_BENCH_REPO to the beauty-crm checkout to check"]
+    fn every_built_in_anchor_is_in_the_corpus() {
+        let repo = std::env::var("REPOGRAPH_BENCH_REPO").expect("REPOGRAPH_BENCH_REPO");
+        let (graph, _): (Graph, _) = Store::new(Path::new(&repo)).load().unwrap();
+        assert!(!graph.nodes.is_empty(), "no graph at {repo}: run `repograph build` there first");
+        check_anchors("built-in bench/cases.jsonl", &parse_cases(BUILT_IN_CASES).unwrap(), &graph).unwrap();
     }
 
     #[test]
@@ -822,6 +810,23 @@ mod tests {
         // A file some node lists as a secondary location is not the file a hit reports.
         let also_listed = [case("where", "docs/y.md".into())];
         assert!(check_anchors("f", &also_listed, &graph).is_err());
+    }
+
+    /// A corpus that moves a directory strands every case under it at once. Naming the first and
+    /// stopping costs a run per anchor to learn the rest, each behind a full store load.
+    #[test]
+    fn every_stale_anchor_is_named_in_one_error() {
+        use crate::model::{Node, NodeKind};
+        let mut graph = Graph::default();
+        graph.nodes.insert("FR-X-1".into(), Node {
+            id: "FR-X-1".into(), kind: NodeKind::Requirement, label: String::new(), body: String::new(), file: "docs/x.md".into(), line: 1, end: 0,
+            files: Default::default(), community: None,
+        });
+        let cases = [case("code", "tools/tasks/cli.ts".into()), case("keyword", "FR-X-1".into()), case("cross", many(&["FR-X-1", "FR-X-9"]))];
+        let err = check_anchors("f", &cases, &graph).unwrap_err().to_string();
+        assert!(err.contains("\"tools/tasks/cli.ts\""), "the first stale anchor: {err}");
+        assert!(err.contains("\"FR-X-9\""), "and the one after it: {err}");
+        assert!(!err.contains("\"FR-X-1\""), "an anchor the graph holds is not named: {err}");
     }
 
     #[test]

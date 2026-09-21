@@ -10,7 +10,7 @@ import judge
 HERE = Path(__file__).resolve().parent
 EMBEDDER = HERE / "embedder.sh"
 SMALL = "intfloat/multilingual-e5-small"
-LARGE = "intfloat/multilingual-e5-large"
+OTHER = "BAAI/bge-m3"
 
 # The four scripts that run a writer or a reader against the writable worktree, each with arguments
 # that name nothing real — the arguments are bound under `set -u` before the source in three of the
@@ -74,9 +74,9 @@ class Declaration(unittest.TestCase):
         self.assertIn(SMALL, r.stderr)
 
     def test_another_model_refuses_and_names_both(self):
-        r = sourced("embedder_declared", LARGE)
+        r = sourced("embedder_declared", OTHER)
         self.assertEqual(r.returncode, 2, r.stdout)
-        self.assertIn(LARGE, r.stderr)
+        self.assertIn(OTHER, r.stderr)
         self.assertIn(SMALL, r.stderr)
 
     def test_every_script_that_runs_a_reader_or_a_writer_refuses_without_it(self):
@@ -89,9 +89,9 @@ class Declaration(unittest.TestCase):
     def test_every_script_refuses_a_declaration_naming_another_model(self):
         for name in SCRIPTS:
             with self.subTest(script=name):
-                r = self.script(name, LARGE)
+                r = self.script(name, OTHER)
                 self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
-                self.assertIn(LARGE, r.stderr)
+                self.assertIn(OTHER, r.stderr)
 
     def test_the_line_a_transcript_carries_is_not_read_back_as_a_row(self):
         # It sits in `summary.txt` beside the rows `judge.py medians` takes its medians over, the

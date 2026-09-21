@@ -10,10 +10,10 @@ for a literal, the graph is right for a concept, and the two questions look diff
 
 ## The loop
 
-1. **Anchor.** If you know an identifier — a symbol, a document id — ask that: `repograph ask
-   withTenant`, `repograph ask FR-PAY-22`. The exact match answers in about 60 ms and 30 tokens.
-2. **Words.** Otherwise ask in the words a person would use: `repograph ask отмена записи`,
-   `repograph ask cancellation policy`. Four words beat one; seven do not beat four.
+1. **Anchor.** If you know an identifier — a symbol, a document id — ask that: `{{command}} ask
+   withTenant`, `{{command}} ask FR-PAY-22`. The exact match answers in about 60 ms and 30 tokens.
+2. **Words.** Otherwise ask in the words a person would use: `{{command}} ask отмена записи`,
+   `{{command}} ask cancellation policy`. Four words beat one; seven do not beat four.
 3. **Widen once.** A thin answer takes `--seeds 8` or a second phrasing, not a different tool.
 4. **Read only what it printed.** Every line carries `path:line`. Open those; do not re-derive them
    by reading directories.
@@ -40,7 +40,7 @@ instead of a person*.
 
 `ask`, `impact`, `trace` and `changes` bring the index in line with the working tree before they
 answer — an edited file is re-extracted in milliseconds. Pass `--stale` when you want the answer
-now and can live one edit behind. Nothing here needs a build step in your loop; `repograph build` is
+now and can live one edit behind. Nothing here needs a build step in your loop; `{{command}} build` is
 for a repository that has no index at all.
 
 ## Verify before you believe

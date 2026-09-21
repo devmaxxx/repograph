@@ -13,10 +13,8 @@ use serde::Deserialize;
 use std::path::{Path, PathBuf};
 use tokenizers::{PaddingParams, PaddingStrategy, Tokenizer, TruncationParams};
 
-/// What a writer embeds with when the repository names no model. The small one: it reads
-/// paraphrase 15/30 where the large model reads 22/30 and is level on the other 52 recorded
-/// cases, and the large model's 4.5× download and 9× whole-store embed are paid by every first
-/// build before anyone knows whether they wanted the recall
+/// What a writer embeds with when the repository names no model: the small one, priced for a
+/// first build nobody has tuned yet, and the only model `bench` holds floors for
 /// (docs/adr/ADR-002-two-defaults-multiplied.md).
 pub const DEFAULT_MODEL: &str = "intfloat/multilingual-e5-small";
 

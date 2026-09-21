@@ -21,7 +21,7 @@ has since grown to the 82 cases [Bench](#bench) floors.
 
 ## Status
 
-0.5.0 is the version `main` carries, and every command below is implemented rather than planned:
+0.5.3 is the version `main` carries, and every command below is implemented rather than planned:
 `build` and `update` (incremental; a no-op `update` is a fixed point), `families`, `ask`, `explain`,
 `verify`, `impact`, `trace`, `changes`, `embed`, `watch`, `serve`, `prime`, `install-agent`,
 `import-legacy`, `dump` and `bench`. Three spend model tokens and all three are opt-in: `enrich`,
@@ -170,7 +170,9 @@ refresh: 3 changed, 1 removed
 
 A fused query opens the embedding model anyway, so the rows that changed are re-embedded and the
 vectors stay in step too. `--no-dense` and the exact-id path open nothing: the lexical graph is
-fresh, and the vectors catch up on the next fused query or `update`. Measured on the development
+fresh, and the vectors catch up on the next fused query or `update` — after an `update --no-dense`
+from a commit hook too, because `vectors.json` records the graph its rows were last synced against.
+Measured on the development
 corpus (825 files, 7.5k nodes): the no-change check costs ~10 ms, and a one-file edit costs ~20 ms
 lexical, ~40 ms with the re-embedding — the new rows are appended to `vectors.f32` and the rows
 they replace are left as holes, so nothing rewrites 50 MB to store a row of 1.5 kB. Holes past a
@@ -214,7 +216,7 @@ cadence.
 ### Asking a resident process
 
 Most of a fused `ask` is the process opening things it then throws away: the embedding model
-alone costs about 220 ms of it on the shipped default, 676 ms on `e5-large`. `serve` opens
+alone costs about 220 ms of it on the shipped default. `serve` opens
 them once and answers over a Unix socket — on Windows too, where the same socket file has existed
 since Windows 10 1803 and is protected the way the repository directory is:
 
@@ -231,7 +233,14 @@ model weights and keeps everything that answers without them — the graph, the 
 indexes, the vectors — so a server left up overnight is cheap to leave up. On a 33.5k-row store the
 resident size goes 908.5 MB → 28.8 MB on the first drop and 277.6 MB on later ones (the allocator
 keeps some of what the reopen took), and the first fused `ask` after a drop pays the open: 0.771 s
-against 0.083 s warm.
+against 0.083 s warm. The local reranker is held the same way: `serve` opens the cross-encoder the
+first time an `ask --rerank-local` asks for it, keeps it between questions and drops it on the same
+`--idle-model`.
+
+`ask --rerank` and `ask --rerank-local` are both answered by the resident process, and a client
+waits five minutes rather than thirty seconds for either — a local rerank of a 200-deep pool runs
+70-80 s cold on CPU, and a client that gave up at thirty seconds would score the same pool itself
+behind its own cold open, paying the whole cost a second time.
 
 The socket lives at `.repograph/serve.sock` — unless that path would be longer than a Unix socket
 name may be (104 bytes on macOS, including the terminating NUL), in which case it goes in the
@@ -350,6 +359,7 @@ in full, not an empty config:
 | `rerank_command`     | **machine file only** — the same command, with `rerank_model` in its `{model}`               |
 | `enrich_model`       | `haiku` — whatever goes in `enrich_command`'s `{model}`                                      |
 | `rerank_model`       | `sonnet` — the same for `rerank_command`                                                    |
+| `enrich_languages`   | `[]` — the languages `enrich` writes questions in, named as the model reads them (`["Russian", "English"]`); empty = detected from the documents, English where they name none; any language name is accepted, see [Spending tokens on purpose](#spending-tokens-on-purpose) |
 | `reranker_dir`       | directory of the exported cross-encoder for `--rerank-local`; empty = `~/.cache/repograph/reranker` |
 | `embed_model`        | `intfloat/multilingual-e5-small`; the model the vectors are written with — see [Embeddings](#embeddings) |
 | `resources`          | `"balanced"` = a third of the logical cores; `"low"` a sixth, `"full"` a half — how much of the machine a run may take, see [Resources](#resources) |
@@ -370,7 +380,7 @@ beating the one below it:
 
 | Layer | Where |
 | --- | --- |
-| the run | `REPOGRAPH_ENRICH_MODEL`, `REPOGRAPH_RERANK_MODEL`, `REPOGRAPH_RESOURCES` |
+| the run | `REPOGRAPH_ENRICH_MODEL`, `REPOGRAPH_RERANK_MODEL`, `REPOGRAPH_ENRICH_LANGUAGES`, `REPOGRAPH_RESOURCES` |
 | the repository | `repograph.toml` |
 | the machine | `$REPOGRAPH_CONFIG`, else `$XDG_CONFIG_HOME/repograph/config.toml`, else `~/.config/repograph/config.toml` (`%USERPROFILE%\.config\repograph\config.toml` on Windows) |
 
@@ -537,17 +547,11 @@ measured under a second model — query that copy with `ask --stale`, or with `b
 which read the store as it stands; a refreshing `ask` would claim the index for the overriding
 model. It is trap 7 of the [runbook](docs/bench/runbook.md).
 
-What `e5-large` buys and costs — paraphrase 22/30 against 15/30, an `ask` in 0.8 s against 0.30, a
-2.1 GB download, half an hour to embed the fixture where the default takes four minutes — is
-[weighed in the measurements](docs/history.md#the-embedder-weighed-and-the-two-open-figures) and
-decided in [ADR-002](docs/adr/ADR-002-two-defaults-multiplied.md).
-
-`--no-dense` turns the dense stage off everywhere; what that costs depends on which model it
-replaces — two hits of eighty-two against the default, nine against `e5-large`
-([the arithmetic](docs/history.md#what-turning-the-dense-stage-off-costs)).
+`--no-dense` turns the dense stage off everywhere; on the default model that costs two hits of
+eighty-two ([the arithmetic](docs/history.md#what-turning-the-dense-stage-off-costs)).
 
 `ask` opens the model only when a fused query needs it, and that open is most of what a fused
-answer costs: ~0.30 s and ~1.7 GB on the default, ~0.8 s and ~1.9 GB on `e5-large` — the model, not
+answer costs: ~0.30 s and ~1.7 GB on the default — the model, not
 the graph. An exact-id lookup answers in ~50 ms and ~50 MB, a `--no-dense` question in ~0.1 s, since
 neither opens the model or reads the vectors. What is left is paid once per process, which is what
 [`serve`](#asking-a-resident-process) is for. `REPOGRAPH_TIMING=1` prints the stages.
@@ -579,6 +583,23 @@ run. Two kinds of drift are refused on the way in and cleaned out of an older ca
 letters are mostly neither Cyrillic nor Latin, and several questions tab-joined around the node's
 own id. On the corpus of 2026-09-02, 1,971 eligible nodes took 16 minutes at 8-way parallelism and
 roughly $2.5 of haiku; the corpus is 1,996 eligible nodes now.
+
+Every entry gets its twelve questions and its synonyms in every language the documents use — set
+in `enrich_languages`, or detected from the documents themselves when that key is empty, counting
+letters by script and naming any script that carries a twentieth of them. Before that the questions
+followed each entry's own language, which left a bilingual corpus's English half reachable only
+from an English question: on beauty-crm, 168 of 2,147 entries came out English while the readers
+ask in Russian, and its two ADR paraphrase cases were not in the 200-deep pool at all, so no
+reranker could reach them either. Measured on a copy of the pinned
+beauty-crm store: with the ADRs' questions in English both cases are outside the pool and
+paraphrase reads 13/30; with a full set in Russian and English they sit at ranks 1 and 3 of the
+questions' BM25 list and paraphrase reads 16/30, keyword 40/40 and code 11/11 unmoved. The second
+language is paid for — 1,984 entries took 1,885 s, `questions.json` went from 3.0 MB to 4.8 MB and
+the dense index from 33,533 rows to 62,874 — and a store enriched before the list existed
+regenerates every entry whose own language is not the whole list, so a corpus in one language
+regenerates nothing. `repograph install-agent` writes the detected list into
+`repograph.toml` once, so the choice is a line a repository can see and edit; no writing command
+does, because a binary released before the key existed refuses to parse a file that carries it.
 
 `enrich --code` extends the pass to symbols with a doc comment or a body of their own and files
 with a head comment — 3,475 nodes on the corpus — through a prompt that asks four Russian and four
@@ -619,7 +640,9 @@ which is what says whether a zero-token lever could reach it.
 (`BAAI/bge-reranker-v2-m3`, exported once with `optimum-cli export onnx --model
 BAAI/bge-reranker-v2-m3 --task text-classification ~/.cache/repograph/reranker`, ~2.2 GB) at
 zero tokens — and **measured and rejected** as a floor candidate on 2026-09-04: 17.9 seconds a
-question against a bar of one, and keyword 39/40 on the same 82 cases.
+question against a bar of one, and keyword 39/40 on the same 82 cases. Like `--rerank`, it is
+answered by a resident [`serve`](#asking-a-resident-process) where there is one, which holds the
+cross-encoder between questions instead of opening it again for each.
 
 Both flags ship opt-in and on no floor: a model's pick can vary by one hit between identical runs,
 so `--rerank` is measured and never graded ([why](docs/history.md#why---rerank-is-measured-and-never-floored)).
@@ -643,8 +666,8 @@ against the raw ones. The bar is a high-water mark rather than every node becaus
 points lower, and `bench` would say so through its exit code alone.
 
 The dense floors are keyed by the store's embedder too, since a floor measured on one model says
-nothing about another: small-model rows (or rows under no name) against the small model's numbers,
-`e5-large` rows against `e5-large`'s, any third model measured and never graded. The lexical arms
+nothing about another: small-model rows (or rows under no name) are graded against the small model's
+numbers, and rows under any other model are measured and never graded. The lexical arms
 have no embedder in them and keep one set whatever the rows are. The summary line also carries
 `code_questions=<covered>/<eligible>` on a store that carries questions about code, which are
 searched for the `--rerank` pool rather than in the fusion the floors measure. Beneath it, on a line
@@ -666,13 +689,10 @@ to meet the floors, not the median of them.
 | --- | --- | --- |
 | keyword | 40/40 with embeddings, 39/40 with `--no-dense` | 40/40 with embeddings, 39/40 with `--no-dense` |
 | paraphrase, small-model rows (the default) | ≥14/30 with embeddings, ≥11/30 with `--no-dense` | ≥9/30 with embeddings, ≥7/30 with `--no-dense` |
-| paraphrase, `e5-large` rows | ≥22/30 with embeddings | ≥17/30 with embeddings |
 | code | 12/12 | 12/12 |
 | p90 | ≤230 tokens in every arm | ≤230 tokens in every arm |
 
-`e5-large`'s two dense floors are the counts a copy of the fixture re-embedded under it read,
-twice per arm, in [the 0.5.0 gap results](docs/bench/2026-09-05-0.5.0-gaps-results.md); the `--no-dense` column is the small
-model's and applies to every store, since no embedder is in it.
+The `--no-dense` column applies to every store, since no embedder is in it.
 
 Where each of those floors came from, why keyword is 39 and not 40 in the lexical arms, how the p90
 is counted, and the 400-question held-out set a retrieval change has to clear before the 82 cases
