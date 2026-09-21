@@ -326,6 +326,21 @@ mod tests {
         );
     }
 
+    // `.yarn/` and `.pnp.cjs` are Yarn Berry's committed, generated wiring — not gitignored, since
+    // zero-installs need them in the tree — so only `skip` keeps them out now that dotted
+    // directories are walked.
+    #[test]
+    fn yarn_berrys_generated_files_are_not_walked() {
+        let d = tempfile::tempdir().unwrap();
+        init(d.path());
+        std::fs::create_dir_all(d.path().join(".yarn/releases")).unwrap();
+        std::fs::write(d.path().join(".yarn/releases/yarn-4.5.0.cjs"), "#!/usr/bin/env node\n").unwrap();
+        std::fs::write(d.path().join(".pnp.cjs"), "module.exports = {};\n").unwrap();
+        std::fs::write(d.path().join("src.ts"), "export const a = 1;\n").unwrap();
+        let entries = walk(d.path(), &Config::default(), &Manifest::default()).unwrap();
+        assert_eq!(entries.iter().map(|e| e.rel.as_str()).collect::<Vec<_>>(), vec!["src.ts"]);
+    }
+
     #[test]
     fn a_gitignored_file_is_not_walked() {
         let d = tempfile::tempdir().unwrap();

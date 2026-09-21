@@ -84,8 +84,21 @@ impl Default for Config {
             // wrappers a repository wires itself together with.
             code_globs: s(&["**/*.ts", "**/*.tsx", "**/*.js", "**/*.jsx", "**/*.mjs", "**/*.cjs"]),
             // A bundle is one line of machine output under a source extension: every symbol in
-            // it is a minifier's letter, and the file drowns a lexical index by itself.
-            skip: s(&["**/node_modules/**", "**/dist/**", "**/*.min.js", "**/TRACKER.md", "graphify-out/**", ".repograph/**"]),
+            // it is a minifier's letter, and the file drowns a lexical index by itself. Now that
+            // dotted directories are walked, `.yarn/` and `.pnp.cjs` are the same problem under a
+            // different name: Yarn Berry commits its bundled releases, plugins and PnP map for
+            // zero-installs, and none of that is gitignored — it is meant to be read by Node, not
+            // by a reader asking what this repository's authors wrote by hand.
+            skip: s(&[
+                "**/node_modules/**",
+                "**/dist/**",
+                "**/*.min.js",
+                "**/.yarn/**",
+                "**/.pnp.*",
+                "**/TRACKER.md",
+                "graphify-out/**",
+                ".repograph/**",
+            ]),
             id_families: None,
             milestone_families: None,
             registries: s(&["docs/constitution.yaml"]),

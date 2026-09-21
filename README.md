@@ -353,7 +353,7 @@ in full, not an empty config:
 | -------------------- | ------------------------------------------------------------------------------------------- |
 | `doc_globs`          | `["**/*.md"]`                                                                               |
 | `code_globs`         | `["**/*.ts", "**/*.tsx", "**/*.js", "**/*.jsx", "**/*.mjs", "**/*.cjs"]`                    |
-| `skip`               | `["**/node_modules/**", "**/dist/**", "**/*.min.js", "**/TRACKER.md", "graphify-out/**", ".repograph/**"]` |
+| `skip`               | `["**/node_modules/**", "**/dist/**", "**/*.min.js", "**/.yarn/**", "**/.pnp.*", "**/TRACKER.md", "graphify-out/**", ".repograph/**"]` |
 | `registries`         | `["docs/constitution.yaml"]`                                                                |
 | `enrich_command`     | **machine file only** — headless `claude -p --model {model}` with thinking off, see [Spending tokens on purpose](#spending-tokens-on-purpose) |
 | `rerank_command`     | **machine file only** — the same command, with `rerank_model` in its `{model}`               |
