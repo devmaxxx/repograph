@@ -125,10 +125,19 @@ impl Questions {
         self.entries.get(id).map(|e| e.questions.as_slice()).unwrap_or(&[])
     }
 
-    /// Nodes whose cached questions are missing or were written for a different passage.
-    fn stale<'a>(&self, graph: &'a Graph, wanted: fn(&Node) -> bool) -> Vec<(&'a Node, String)> {
+    /// Nodes whose cached questions are missing, were written for a different passage, or were
+    /// written in other languages than `languages` asks for. The languages enter the hash only
+    /// where they change what the entry would get: a list that names the entry's own language and
+    /// nothing else asks for what the store already holds, so a corpus written in one language
+    /// regenerates nothing the day the list first exists, and a bilingual one regenerates exactly
+    /// the entries whose questions are missing a language.
+    fn stale<'a>(&self, graph: &'a Graph, wanted: fn(&Node) -> bool, languages: &[String]) -> Vec<(&'a Node, String)> {
         graph.nodes.values().filter(|n| wanted(n)).filter_map(|n| {
-            let h = hash(&passage(n));
+            let own = languages_of([n.label.as_str(), n.body.as_str()].into_iter());
+            let h = match languages.is_empty() || own.first().map(std::slice::from_ref) == Some(languages) {
+                true => hash(&passage(n)),
+                false => hash(&format!("{}\n\0{}", passage(n), languages.join(","))),
+            };
             match self.entries.get(&n.id) {
                 Some(e) if e.hash == h => None,
                 _ => Some((n, h)),
@@ -147,7 +156,12 @@ impl Questions {
 
 /// Worded and measured on the development corpus (a Russian PRD); the example substitutions
 /// and the four reader roles are its, and a rewording is a re-measure.
-pub fn prompt(nodes: &[&Node]) -> String {
+///
+/// `languages` names the languages the whole set is written in, as the generator reads them; an
+/// empty list leaves the prompt the bytes it was measured as, where each entry's questions follow
+/// that entry's own language. `prompt_code` keeps a fixed Russian-and-English pair of its own
+/// until that pair is measured against a named list.
+pub fn prompt(nodes: &[&Node], languages: &[String]) -> String {
     let mut p = String::from(
         "Below are entries from a product's documentation: an id, a title line and the start of the text.\n\
          For each entry write 12 short questions (3-10 words) that a person who has never read this \
@@ -158,14 +172,74 @@ pub fn prompt(nodes: &[&Node]) -> String {
          questions each from the point of view of a customer, a front-desk employee, the business \
          owner and a developer, every one about a different detail of the entry. Then add one line \
          `id<TAB>synonyms: ...` with 5-10 everyday synonyms or paraphrases of the entry's key terms, \
-         comma-separated. Every entry gets its lines, including one that has only a title. Write \
-         every question and synonym in the language the entry itself is written in (a Russian entry \
-         gets Russian questions), never translated. Output exactly one question per line, in the form \
+         comma-separated. Every entry gets its lines, including one that has only a title. ");
+    p.push_str(&language_rule(languages));
+    p.push_str(
+        " Output exactly one question per line, in the form \
          `id<TAB>text`, with no numbering and no commentary.\n\n");
     for n in nodes {
         p.push_str(&format!("### {}\n{}\n\n", n.id, passage(n)));
     }
     p
+}
+
+/// The one sentence that says which language the set is written in. Without a list it is the
+/// sentence the corpus was measured under — the entry's own language — which is what leaves an
+/// English entry in a Russian corpus reachable only from an English question. With one, every
+/// named language gets the whole set rather than a translation of another's: a question is
+/// searchable in the language it is written in, and a translated one carries the first
+/// language's choice of words into the second.
+fn language_rule(languages: &[String]) -> String {
+    if languages.is_empty() {
+        return "Write every question and synonym in the language the entry itself is written in \
+                (a Russian entry gets Russian questions), never translated.".into();
+    }
+    format!("Write the full set — all 12 questions and the synonyms line — in each of these \
+             languages: {}. Write each language's set fresh from the entry rather than \
+             translating another's, whether or not the entry itself is written in that language, \
+             and give every entry its lines in every one of them.", languages.join(", "))
+}
+
+/// The languages a corpus is written in, most-used first, named as the generator reads them.
+/// Alphabetic characters are counted by script, and a script carrying at least 5% of the letters
+/// names a language. The floor is what makes this the fix: a lone English entry among Russian
+/// ones gets the majority's questions, its own language being the one nobody here asks in, while
+/// a corpus whose second half really is English gets a full set in both. A script is not a
+/// language — Cyrillic is read as Russian and Han as Chinese, which is a guess a Ukrainian or a
+/// Japanese corpus corrects by naming `enrich_languages` in `repograph.toml`. Scripts outside the
+/// table name nothing, and a text with no letters at all names nothing; `enrich` reads an empty
+/// answer as English.
+pub fn languages_of<'a>(texts: impl Iterator<Item = &'a str>) -> Vec<String> {
+    let mut counts: BTreeMap<&'static str, usize> = BTreeMap::new();
+    let mut letters = 0usize;
+    for text in texts {
+        for c in text.chars().filter(|c| c.is_alphabetic()) {
+            letters += 1;
+            if let Some(name) = language_of_script(c) { *counts.entry(name).or_default() += 1; }
+        }
+    }
+    let mut named: Vec<(&str, usize)> = counts.into_iter().filter(|(_, n)| n * 100 >= letters * 5).collect();
+    // Ties are broken by name so that two runs over the same corpus write the same key.
+    named.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(b.0)));
+    named.into_iter().map(|(name, _)| name.to_string()).collect()
+}
+
+/// The language a letter's script is read as. The ranges are the blocks a documentation corpus
+/// is written in; a letter in none of them is counted as a letter and named as nothing.
+fn language_of_script(c: char) -> Option<&'static str> {
+    Some(match c {
+        'A'..='Z' | 'a'..='z' | '\u{00C0}'..='\u{024F}' => "English",
+        '\u{0400}'..='\u{052F}' => "Russian",
+        '\u{3400}'..='\u{4DBF}' | '\u{4E00}'..='\u{9FFF}' => "Chinese",
+        '\u{3040}'..='\u{30FF}' => "Japanese",
+        '\u{1100}'..='\u{11FF}' | '\u{AC00}'..='\u{D7AF}' => "Korean",
+        '\u{0600}'..='\u{06FF}' | '\u{0750}'..='\u{077F}' => "Arabic",
+        '\u{0590}'..='\u{05FF}' => "Hebrew",
+        '\u{0370}'..='\u{03FF}' | '\u{1F00}'..='\u{1FFF}' => "Greek",
+        '\u{0900}'..='\u{097F}' => "Hindi",
+        '\u{0E00}'..='\u{0E7F}' => "Thai",
+        _ => return None,
+    })
 }
 
 /// Worded for code and measured on the development corpus's TypeScript. Its two languages are
@@ -338,13 +412,16 @@ pub fn run_command(command: &str, input: &str) -> Result<String> {
 
 /// Generates questions for every stale node through `command` (prompt on stdin, lines on
 /// stdout), `parallel` batches at a time, saving after each batch so an interrupted run keeps
-/// what it paid for.
-pub fn run(store: &Store, graph: &Graph, questions: Questions, command: &str, batch: usize, parallel: usize, scope: Scope) -> Result<Report> {
+/// what it paid for. `languages` is passed to `prompt`; an empty list is each entry's own.
+// Eight: the store, the graph, what is already known, and five things one run was asked for. A
+// struct around the five would name each of them twice for one line on the one call site.
+#[allow(clippy::too_many_arguments)]
+pub fn run(store: &Store, graph: &Graph, questions: Questions, command: &str, batch: usize, parallel: usize, scope: Scope, languages: &[String]) -> Result<Report> {
     let Scope { limit, code } = scope;
     let mut questions = questions;
     let dropped = questions.prune(graph);
-    let mut stale = questions.stale(graph, eligible);
-    let mut stale_code = if code { questions.stale(graph, eligible_code) } else { Vec::new() };
+    let mut stale = questions.stale(graph, eligible, languages);
+    let mut stale_code = if code { questions.stale(graph, eligible_code, &[]) } else { Vec::new() };
     if let Some(l) = limit { stale.truncate(l); stale_code.truncate(l); }
     // A batch the model answers in prose instead of `id<TAB>text` leaves its nodes without
     // questions and its exit status green; measured once on 172 batches, 7 came back that way
@@ -361,7 +438,7 @@ pub fn run(store: &Store, graph: &Graph, questions: Questions, command: &str, ba
             s.spawn(move || loop {
                 let Some(Batch { nodes: b, retry, code: is_code }) = queue.lock().unwrap().pop() else { break };
                 let nodes: Vec<&Node> = b.iter().map(|(n, _)| *n).collect();
-                let p = if is_code { prompt_code(&nodes) } else { prompt(&nodes) };
+                let p = if is_code { prompt_code(&nodes) } else { prompt(&nodes, languages) };
                 match run_command(command, &p) {
                     Ok(out) => {
                         let parsed = if is_code { parse_keyed(&out, &code_keys(&nodes)) } else { parse(&out, &nodes) };
@@ -405,7 +482,7 @@ pub fn run(store: &Store, graph: &Graph, questions: Questions, command: &str, ba
         Err(_) => unreachable!("every worker has joined"),
     };
     questions.save(store)?;
-    let left = questions.stale(graph, eligible).len() + if code { questions.stale(graph, eligible_code).len() } else { 0 };
+    let left = questions.stale(graph, eligible, languages).len() + if code { questions.stale(graph, eligible_code, &[]).len() } else { 0 };
     Ok(Report { generated, dropped, batches: total, failed, left })
 }
 
@@ -499,14 +576,14 @@ mod tests {
         let mut g = Graph::default();
         g.apply(e);
         let cmd = r#"awk '/^### /{printf "%s\tq for %s\n", $2, $2}'"#;
-        let r = run(&store, &g, Questions::default(), cmd, 8, 1, Scope::default()).unwrap();
+        let r = run(&store, &g, Questions::default(), cmd, 8, 1, Scope::default(), &[]).unwrap();
         assert_eq!((r.generated, r.batches), (1, 1), "without --code the file is not asked about");
         assert!(Questions::load(&store).unwrap().get("file:a.ts").is_empty());
-        let r = run(&store, &g, Questions::load(&store).unwrap(), cmd, 8, 1, Scope { limit: None, code: true }).unwrap();
+        let r = run(&store, &g, Questions::load(&store).unwrap(), cmd, 8, 1, Scope { limit: None, code: true }, &[]).unwrap();
         assert_eq!((r.generated, r.batches, r.left), (1, 1, 0));
         assert_eq!(Questions::load(&store).unwrap().get("file:a.ts"), ["q for c1"]);
         // A later run without the flag neither regenerates nor prunes the code questions.
-        let r = run(&store, &g, Questions::load(&store).unwrap(), cmd, 8, 1, Scope::default()).unwrap();
+        let r = run(&store, &g, Questions::load(&store).unwrap(), cmd, 8, 1, Scope::default(), &[]).unwrap();
         assert_eq!((r.generated, r.dropped), (0, 0));
         assert_eq!(Questions::load(&store).unwrap().get("file:a.ts"), ["q for c1"]);
         assert_eq!(code_coverage(&g, &Questions::load(&store).unwrap()), (1, 1));
@@ -544,21 +621,21 @@ mod tests {
         let store = Store::new(dir.path());
         let g = graph();
         let cmd = r#"awk '/^### /{printf "%s\tq for %s\n", $2, $2}'"#;
-        let r = run(&store, &g, Questions::default(), cmd, 1, 2, Scope::default()).unwrap();
+        let r = run(&store, &g, Questions::default(), cmd, 1, 2, Scope::default(), &[]).unwrap();
         assert_eq!((r.generated, r.dropped, r.batches, r.failed), (2, 0, 2, 0));
         let q = Questions::load(&store).unwrap();
         assert_eq!(q.get("FR-PAY-22"), ["q for FR-PAY-22"]);
         assert!(q.get("BE-M01-T1").is_empty(), "tasks are not enriched");
         assert!(q.get("entity:Money").is_empty(), "a bare entity name is not enriched");
         // Nothing changed: nothing is generated again.
-        let r = run(&store, &g, q, cmd, 8, 1, Scope::default()).unwrap();
+        let r = run(&store, &g, q, cmd, 8, 1, Scope::default(), &[]).unwrap();
         assert_eq!((r.generated, r.batches), (0, 0));
         // A body edit regenerates that node; a removed node is pruned.
         let mut g2 = Graph::default();
         let mut e = Extraction::default();
         e.node(NodeKind::Requirement, "FR-PAY-22", "отмена", "другое тело", "a.md", 1);
         g2.apply(e);
-        let r = run(&store, &g2, Questions::load(&store).unwrap(), cmd, 8, 1, Scope::default()).unwrap();
+        let r = run(&store, &g2, Questions::load(&store).unwrap(), cmd, 8, 1, Scope::default(), &[]).unwrap();
         assert_eq!((r.generated, r.dropped), (1, 1));
     }
 
@@ -573,7 +650,7 @@ mod tests {
         let cmd = format!(
             r#"echo x >> "{c}"; n=$(wc -l < "{c}" | tr -d " "); awk -v n="$n" '/^### /{{ if (n > 1 || $2 == "FR-PAY-22") printf "%s\tq%s for %s\n", $2, n, $2 }}'"#,
             c = calls.display());
-        let r = run(&store, &graph(), Questions::default(), &cmd, 8, 1, Scope::default()).unwrap();
+        let r = run(&store, &graph(), Questions::default(), &cmd, 8, 1, Scope::default(), &[]).unwrap();
         assert_eq!((r.generated, r.batches, r.failed, r.left), (2, 1, 0, 0));
         let q = Questions::load(&store).unwrap();
         assert_eq!(q.get("FR-PAY-22"), ["q1 for FR-PAY-22"]);
@@ -581,7 +658,7 @@ mod tests {
         assert_eq!(std::fs::read_to_string(&calls).unwrap().lines().count(), 2);
 
         let silent = format!(r#"echo x >> "{}"; awk '/^### /{{ exit }}'"#, calls.display());
-        let r = run(&store, &graph(), Questions::default(), &silent, 8, 1, Scope::default()).unwrap();
+        let r = run(&store, &graph(), Questions::default(), &silent, 8, 1, Scope::default(), &[]).unwrap();
         assert_eq!((r.generated, r.left), (0, 2));
         assert_eq!(r.failed, 1, "a batch that answered for nobody twice is failed, not done");
         assert_eq!(std::fs::read_to_string(&calls).unwrap().lines().count(), 4, "an answer that skips everything is retried once, not forever");
@@ -613,7 +690,7 @@ mod tests {
     fn a_pipeline_whose_generator_died_is_a_failed_batch() {
         let dir = tempfile::tempdir().unwrap();
         let store = Store::new(dir.path());
-        let r = run(&store, &graph(), Questions::default(), "false | cat", 8, 1, Scope::default()).unwrap();
+        let r = run(&store, &graph(), Questions::default(), "false | cat", 8, 1, Scope::default(), &[]).unwrap();
         assert_eq!(r.generated, 0);
         assert!(r.failed > 0, "a pipeline that produced nothing is not coverage: {r:?}");
         assert!(r.left > 0);
@@ -625,7 +702,7 @@ mod tests {
     fn an_empty_answer_is_a_failed_batch_after_its_retry() {
         let dir = tempfile::tempdir().unwrap();
         let store = Store::new(dir.path());
-        let r = run(&store, &graph(), Questions::default(), "cat > /dev/null", 8, 1, Scope::default()).unwrap();
+        let r = run(&store, &graph(), Questions::default(), "cat > /dev/null", 8, 1, Scope::default(), &[]).unwrap();
         assert_eq!((r.generated, r.batches), (0, 1));
         assert_eq!(r.failed, 1, "one batch, asked twice, answered nothing twice");
     }
@@ -643,7 +720,7 @@ mod tests {
     fn a_failing_command_is_counted_not_fatal() {
         let dir = tempfile::tempdir().unwrap();
         let store = Store::new(dir.path());
-        let r = run(&store, &graph(), Questions::default(), "exit 3", 8, 1, Scope::default()).unwrap();
+        let r = run(&store, &graph(), Questions::default(), "exit 3", 8, 1, Scope::default(), &[]).unwrap();
         assert_eq!((r.generated, r.failed), (0, 1));
     }
 
@@ -687,10 +764,10 @@ mod tests {
         let g = graph();
         assert_eq!(coverage(&g, &Questions::default()), (0, 2));
         let cmd = r#"awk '/^### /{printf "%s\tq for %s\n", $2, $2}'"#;
-        run(&store, &g, Questions::default(), cmd, 1, 1, Scope { limit: Some(1), code: false }).unwrap();
+        run(&store, &g, Questions::default(), cmd, 1, 1, Scope { limit: Some(1), code: false }, &[]).unwrap();
         assert_eq!(coverage(&g, &Questions::load(&store).unwrap()), (1, 2), "a run stopped early covers part of the graph");
         assert!(!enriched(1, 2), "half a two-node graph is nowhere near the mark");
-        run(&store, &g, Questions::load(&store).unwrap(), cmd, 1, 1, Scope::default()).unwrap();
+        run(&store, &g, Questions::load(&store).unwrap(), cmd, 1, 1, Scope::default(), &[]).unwrap();
         assert_eq!(coverage(&g, &Questions::load(&store).unwrap()), (2, 2));
         assert!(enriched(2, 2));
     }
@@ -711,7 +788,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let store = Store::new(dir.path());
         let cmd = r#"awk '/^### /{printf "%s\tq for %s\n", $2, $2}'"#;
-        let r = run(&store, &graph(), Questions::default(), cmd, 1, 1, Scope { limit: Some(1), code: false }).unwrap();
+        let r = run(&store, &graph(), Questions::default(), cmd, 1, 1, Scope { limit: Some(1), code: false }, &[]).unwrap();
         assert_eq!((r.generated, r.batches), (1, 1));
     }
 
@@ -720,7 +797,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let store = Store::new(dir.path());
         let cmd = r#"awk '/^### /{printf "%s\tq for %s\n", $2, $2}'"#;
-        let r = run(&store, &graph(), Questions::default(), cmd, 0, 0, Scope::default()).unwrap();
+        let r = run(&store, &graph(), Questions::default(), cmd, 0, 0, Scope::default(), &[]).unwrap();
         assert_eq!(r.generated, 2);
         assert!(Questions::load(&store).unwrap().get("FR-PAY-22").len() == 1);
     }
@@ -744,5 +821,73 @@ mod tests {
         assert_eq!(git_sh(std::slice::from_ref(&elsewhere), None, &[dir.path().to_path_buf()]), Some(root.join("bin").join("sh.exe")), "under a program directory");
         assert_eq!(git_sh(std::slice::from_ref(&elsewhere), Some(&root.join("bin").join("bash.exe")), &[]), Some(root.join("bin").join("sh.exe")), "from the bash Claude Code names");
         assert_eq!(git_sh(&[elsewhere], None, &[]), None, "nothing to find");
+    }
+
+    /// The share a script has to carry before it names a language of its own. A lone English
+    /// entry among Russian ones is below it and gets the majority's questions — the whole point —
+    /// while a corpus that really is written in two gets a set in each.
+    #[test]
+    fn a_script_names_a_language_once_it_carries_a_twentieth_of_the_letters() {
+        let ru = "привет".repeat(15);
+        assert_eq!(languages_of([ru.as_str(), "abcdefghij"].into_iter()), ["Russian", "English"],
+                   "a tenth of the letters is a language of its own, and the majority comes first");
+        let mostly_ru = "привет".repeat(49);
+        assert_eq!(languages_of([mostly_ru.as_str(), &"ab".repeat(3)].into_iter()), ["Russian"],
+                   "a fiftieth is a stray identifier, not a language the corpus is written in");
+        assert_eq!(languages_of(["the client did not show up"].into_iter()), ["English"]);
+        assert_eq!(languages_of(["42 — 3.14, (7)!"].into_iter()), Vec::<String>::new(),
+                   "nothing to read, so nothing named: the caller's default applies");
+        assert_eq!(languages_of(std::iter::empty()), Vec::<String>::new());
+    }
+
+    /// An empty list has to leave the prompt the bytes the corpus was measured under, and a named
+    /// one has to ask for a whole set per language rather than one set translated — which is what
+    /// the sentence it replaces was there to forbid.
+    #[test]
+    fn a_named_language_replaces_the_sentence_about_the_entrys_own() {
+        let own = prompt(&[], &[]);
+        assert!(own.contains("only a title. Write every question and synonym in the language the entry itself \
+                              is written in (a Russian entry gets Russian questions), never translated. Output \
+                              exactly one question per line"), "{own}");
+        let both = prompt(&[], &["Russian".to_string(), "English".to_string()]);
+        assert!(both.contains("only a title. Write the full set"), "{both}");
+        assert!(both.contains("in each of these languages: Russian, English."), "{both}");
+        assert!(both.contains("of them. Output exactly one question per line"), "{both}");
+        assert!(!both.contains("never translated"), "the list asks for both sets, not one of them translated: {both}");
+        assert!(!both.contains("the language the entry itself is written in"), "{both}");
+    }
+
+    /// What the prompt above now asks for: one synonyms line per language, under the one id. An
+    /// entry that kept only the first would be searchable in one language's words and not the
+    /// other's, which is the miss this whole key exists to close.
+    #[test]
+    fn two_synonym_lines_for_one_entry_both_survive() {
+        let g = graph();
+        let n = g.nodes.get("FR-PAY-22").unwrap();
+        let out = "FR-PAY-22\tsynonyms: отмена, штраф, политика\n\
+                   FR-PAY-22\tsynonyms: cancellation, fee, policy\n";
+        let parsed = parse(out, &[n]);
+        assert_eq!(parsed["FR-PAY-22"], ["synonyms: отмена, штраф, политика", "synonyms: cancellation, fee, policy"]);
+    }
+
+    /// The list is part of what an entry's questions were written for, but only where it asks for
+    /// something the entry lacks: naming the one language a corpus is already written in must not
+    /// send a paid-for store round again.
+    #[test]
+    fn a_named_language_regenerates_only_the_entries_it_changes() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::new(dir.path());
+        let g = graph();
+        let cmd = r#"awk '/^### /{printf "%s\tq for %s\n", $2, $2}'"#;
+        let r = run(&store, &g, Questions::default(), cmd, 8, 1, Scope::default(), &[]).unwrap();
+        assert_eq!(r.generated, 2);
+        let ru = ["Russian".to_string()];
+        let r = run(&store, &g, Questions::load(&store).unwrap(), cmd, 8, 1, Scope::default(), &ru).unwrap();
+        assert_eq!(r.generated, 0, "Russian entries under a Russian list already hold what it asks for");
+        let both = ["Russian".to_string(), "English".to_string()];
+        let r = run(&store, &g, Questions::load(&store).unwrap(), cmd, 8, 1, Scope::default(), &both).unwrap();
+        assert_eq!((r.generated, r.left), (2, 0), "a second language is a set every entry lacks");
+        let r = run(&store, &g, Questions::load(&store).unwrap(), cmd, 8, 1, Scope::default(), &both).unwrap();
+        assert_eq!(r.generated, 0);
     }
 }

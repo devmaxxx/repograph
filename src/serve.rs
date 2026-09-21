@@ -93,10 +93,25 @@ mod sys {
 
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
-/// A reranked answer takes about four seconds and the first fused one also opens a 1.3 GB
-/// model, so the client waits far longer than an answer costs before it gives up and answers
-/// the question in this process instead.
+/// What a client waits for an answer that is not reranked: a fused one is about 220 ms, and the
+/// first of them also opens a 1.3 GB model, so thirty seconds is far longer than an answer costs
+/// and still short enough that a wedged server hands the question straight back.
 const IO_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// What a client waits for a reranked one instead. `--rerank` is about four seconds of model
+/// round-trip; `--rerank-local` is 70-80 s cold on CPU for a 200-candidate pool, most of it the
+/// 448 MB cross-encoder session the first such question opens. Under `IO_TIMEOUT` the client gave
+/// up on a question the resident process went on to finish and throw away, then scored the same
+/// pool itself behind its own cold open — the whole cost a second time, and no `serve:` line to
+/// say so. Waiting is strictly cheaper than falling back for anything short of a server that will
+/// never answer at all.
+const RERANK_TIMEOUT: Duration = Duration::from_secs(300);
+
+/// How long this request's reply is worth waiting for. Only the read moves: the hello is one
+/// line, so the write stays on `IO_TIMEOUT` whatever the question costs to answer.
+fn reply_timeout(req: &ask::Request) -> Duration {
+    if req.rerank || req.rerank_local { RERANK_TIMEOUT } else { IO_TIMEOUT }
+}
 
 /// How often the loop wakes to look at its `--every` and `--idle` deadlines while no question
 /// is waiting. No client waits on it — the accept has a thread of its own — so it only has to
@@ -175,7 +190,7 @@ pub fn try_ask(repo: &Path, req: &ask::Request) -> Option<Reply> {
     let path = socket_path(repo);
     if !sys::present(&path) { return None; }
     let mut stream = sys::connect(&path).ok()?;
-    stream.set_read_timeout(Some(IO_TIMEOUT)).ok()?;
+    stream.set_read_timeout(Some(reply_timeout(req))).ok()?;
     stream.set_write_timeout(Some(IO_TIMEOUT)).ok()?;
     let build = build_stamp();
     let hello = serde_json::to_string(&Hello { v: VERSION.into(), build, req: req.clone() }).ok()?;
@@ -409,9 +424,22 @@ impl Drop for Unlink {
 
 #[cfg(test)]
 mod tests {
-    use super::{drop_model_now, socket_path, sys};
+    use super::{drop_model_now, reply_timeout, socket_path, sys, IO_TIMEOUT, RERANK_TIMEOUT};
+    use crate::ask::Request;
     use std::io::{BufRead, BufReader};
     use std::time::Duration;
+
+    /// The bug behind a `--rerank-local` question that never printed a `serve:` line: the client
+    /// timed out at thirty seconds on an answer that takes seventy, threw away the resident one
+    /// and paid a second cold open to answer it again. `tests/serve.rs` cannot reach this — there
+    /// is no reranker model on the runner — so the choice is pinned here.
+    #[test]
+    fn a_reranked_question_is_waited_out_and_a_plain_one_is_not() {
+        let plain = Request { words: vec!["чаевые".into()], json: false, seeds: 5, bodies: false, rerank: false, rerank_local: false, depth: crate::rerank::DEPTH, stale: false, no_dense: false };
+        assert_eq!(reply_timeout(&plain), IO_TIMEOUT);
+        assert_eq!(reply_timeout(&Request { rerank_local: true, ..plain.clone() }), RERANK_TIMEOUT);
+        assert_eq!(reply_timeout(&Request { rerank: true, ..plain.clone() }), RERANK_TIMEOUT);
+    }
 
     /// `--idle` exits, `--idle-model` forgets — two thresholds off the one clock, so a server
     /// left up overnight keeps the 6.8 ms lexical answer and not the 1.3 GB behind the dense one.

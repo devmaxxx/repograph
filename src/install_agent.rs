@@ -200,6 +200,39 @@ pub fn install(root: &Path, target: Target, command: &str) -> Result<Report> {
     Ok(report)
 }
 
+/// Writes `enrich_languages` into the repository's `repograph.toml` from the documents this root
+/// holds, and returns the list it wrote — or `None` where the key was already named, the file
+/// could not be parsed, or the documents named no language at all. Nothing is written in any of
+/// those cases, so a second run is a no-op like the rest of the install.
+///
+/// Here rather than in `build` because `Config` refuses a key it does not know: the moment the
+/// line exists, every binary older than it fails to read that repository at all. `install-agent`
+/// is the one command a person runs on purpose when they upgrade, which makes it the one place
+/// the file may grow a key.
+pub fn set_languages(root: &Path, cfg: &crate::config::Config) -> Result<Option<Vec<String>>> {
+    let path = root.join("repograph.toml");
+    let existing = std::fs::read_to_string(&path).unwrap_or_default();
+    // A file this binary cannot parse is a file whose owner is mid-edit or on another version;
+    // appending a line to it would bury the error under a second one.
+    let Ok(named) = toml::from_str::<toml::Table>(&existing) else { return Ok(None) };
+    if named.contains_key("enrich_languages") { return Ok(None); }
+    let entries = crate::walk::walk(root, cfg, &crate::walk::Manifest::default())?;
+    let texts: Vec<String> = entries.iter()
+        .filter(|e| e.kind == crate::walk::FileKind::Doc)
+        .filter_map(|e| std::fs::read_to_string(root.join(&e.rel)).ok())
+        .collect();
+    let languages = crate::enrich::languages_of(texts.iter().map(String::as_str));
+    if languages.is_empty() { return Ok(None); }
+    let value = toml::Value::Array(languages.iter().map(|l| toml::Value::String(l.clone())).collect());
+    let mut text = existing;
+    if !text.is_empty() && !text.ends_with('\n') { text.push('\n'); }
+    text.push_str(&format!(
+        "# Languages `enrich` writes questions in, set by `install-agent` from the documents it found.\n\
+         enrich_languages = {value}\n"));
+    std::fs::write(&path, text).with_context(|| format!("write {}", path.display()))?;
+    Ok(Some(languages))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -374,5 +407,44 @@ mod tests {
         let upgraded = merged_instructions(old, "repograph");
         assert_eq!(upgraded, format!("# House rules\n\n{}\n\n## After\n", block.trim_end()));
         assert_eq!(merged_instructions(&upgraded, "repograph"), upgraded);
+    }
+
+    /// The languages a corpus is written in decide what `enrich` writes its questions in, and the
+    /// key that says so is written here rather than by a writer: a binary one version older
+    /// refuses a `repograph.toml` carrying a key it does not know.
+    #[test]
+    fn the_languages_of_the_documents_are_written_once_and_never_again() {
+        let dir = root();
+        std::fs::write(dir.path().join("ru.md"),
+            "# Отмена записи\n\nКлиент не пришёл на приём, и администратор отменил визит по политике салона.\n").unwrap();
+        std::fs::write(dir.path().join("en.md"), "# Cancellation\n\nThe client did not show up.\n").unwrap();
+        let cfg = crate::config::Config::default();
+        assert_eq!(set_languages(dir.path(), &cfg).unwrap(), Some(vec!["Russian".to_string(), "English".to_string()]));
+        let written = std::fs::read_to_string(dir.path().join("repograph.toml")).unwrap();
+        assert!(written.ends_with("enrich_languages = [\"Russian\", \"English\"]\n"), "{written}");
+        assert_eq!(set_languages(dir.path(), &cfg).unwrap(), None, "the key is there: a second run says nothing");
+        assert_eq!(std::fs::read_to_string(dir.path().join("repograph.toml")).unwrap(), written);
+    }
+
+    /// A repository that chose its own languages keeps them, whatever this run reads off the disk.
+    #[test]
+    fn a_repograph_toml_that_already_names_the_key_is_untouched() {
+        let dir = root();
+        std::fs::write(dir.path().join("ru.md"), "# Отмена\n\nКлиент не пришёл.\n").unwrap();
+        let before = "enrich_languages = [\"English\"]\nskip = []\n";
+        std::fs::write(dir.path().join("repograph.toml"), before).unwrap();
+        assert_eq!(set_languages(dir.path(), &crate::config::Config::default()).unwrap(), None);
+        assert_eq!(std::fs::read_to_string(dir.path().join("repograph.toml")).unwrap(), before);
+    }
+
+    /// The file is the one thing this reads before it appends to it; a file it cannot read is left
+    /// for its owner rather than given a line on the end.
+    #[test]
+    fn a_repograph_toml_that_does_not_parse_is_left_alone() {
+        let dir = root();
+        std::fs::write(dir.path().join("ru.md"), "# Отмена\n\nКлиент не пришёл.\n").unwrap();
+        std::fs::write(dir.path().join("repograph.toml"), "skip = [\n").unwrap();
+        assert_eq!(set_languages(dir.path(), &crate::config::Config::default()).unwrap(), None);
+        assert_eq!(std::fs::read_to_string(dir.path().join("repograph.toml")).unwrap(), "skip = [\n");
     }
 }
