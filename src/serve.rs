@@ -107,11 +107,17 @@ const IO_TIMEOUT: Duration = Duration::from_secs(30);
 /// never answer at all.
 const RERANK_TIMEOUT: Duration = Duration::from_secs(300);
 
-/// How long this request's reply is worth waiting for. Only the read moves: the hello is one
-/// line, so the write stays on `IO_TIMEOUT` whatever the question costs to answer.
+/// How long this request's reply is worth waiting for once the server has said it is working on
+/// it. Only the read moves: the hello is one line, so the write stays on `IO_TIMEOUT` whatever
+/// the question costs to answer.
 fn reply_timeout(req: &ask::Request) -> Duration {
     if req.rerank || req.rerank_local { RERANK_TIMEOUT } else { IO_TIMEOUT }
 }
+
+/// Whether this request's answer is one the server acknowledges before it starts. The long wait
+/// is right for a server that is reranking and wrong for one that will never answer, and the two
+/// are indistinguishable from the client until the server says something.
+fn acknowledged(req: &ask::Request) -> bool { reply_timeout(req) > IO_TIMEOUT }
 
 /// How often the loop wakes to look at its `--every` and `--idle` deadlines while no question
 /// is waiting. No client waits on it — the accept has a thread of its own — so it only has to
@@ -157,6 +163,14 @@ fn build_stamp() -> Option<crate::walk::Stamp> {
     crate::walk::stamp_of(&std::fs::metadata(std::env::current_exe().ok()?).ok()?)
 }
 
+/// What a server sends before a reranked answer, as soon as it has read a request it means to
+/// answer: the line that separates a server which is working from one that never will. A client
+/// waits `IO_TIMEOUT` for it and `RERANK_TIMEOUT` only after it. Its shape shares no required
+/// field with `Reply`, so neither can be read as the other, and a server that does not send one
+/// — an older build, or any request that is not reranked — answers on the first line as before.
+#[derive(serde::Serialize, serde::Deserialize)]
+pub struct Ack { pub ack: String }
+
 /// The client's half of the handshake. `req.no_dense` is the arm the question was asked in;
 /// the server's own arm comes back in the `Reply`, because only the server knows it.
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -187,16 +201,30 @@ pub struct Reply {
 /// itself, and removes a dead one before it binds. All a client owes the question is an answer,
 /// and it has one either way.
 pub fn try_ask(repo: &Path, req: &ask::Request) -> Option<Reply> {
+    try_ask_within(repo, req, IO_TIMEOUT)
+}
+
+/// `try_ask` with the wait for the server's first line named, which is the only thing a test can
+/// shorten without the server's cooperation.
+fn try_ask_within(repo: &Path, req: &ask::Request, first_line: Duration) -> Option<Reply> {
     let path = socket_path(repo);
     if !sys::present(&path) { return None; }
     let mut stream = sys::connect(&path).ok()?;
-    stream.set_read_timeout(Some(reply_timeout(req))).ok()?;
+    // Whatever the question costs the server, its first line is owed straight away.
+    stream.set_read_timeout(Some(first_line)).ok()?;
     stream.set_write_timeout(Some(IO_TIMEOUT)).ok()?;
     let build = build_stamp();
     let hello = serde_json::to_string(&Hello { v: VERSION.into(), build, req: req.clone() }).ok()?;
     writeln!(stream, "{hello}").ok()?;
+    let mut reader = BufReader::new(stream.try_clone().ok()?);
     let mut line = String::new();
-    BufReader::new(stream).read_line(&mut line).ok()?;
+    reader.read_line(&mut line).ok()?;
+    // The acknowledgement buys the long wait; without one the reply had better be on this line.
+    if acknowledged(req) && serde_json::from_str::<Ack>(&line).is_ok() {
+        stream.set_read_timeout(Some(reply_timeout(req))).ok()?;
+        line.clear();
+        reader.read_line(&mut line).ok()?;
+    }
     let reply: Reply = serde_json::from_str(&line).ok()?;
     // Said out loud, all three: a question that quietly costs a cold process, or quietly gets a
     // lexical answer, looks like nothing at all. The build and the arm come first because a
@@ -381,6 +409,12 @@ fn answer(mut stream: sys::Stream, watcher: &mut crate::Watcher, ctx: &mut ask::
         writeln!(stream, "{}", serde_json::to_string(&refusal(ctx, build))?)?;
         return Ok(true);
     }
+    // Before any of the work: what the client is waiting on is the proof that someone is doing
+    // it. A server wedged behind this line hands the question back in `IO_TIMEOUT`, as every
+    // other request already does.
+    if acknowledged(&hello.req) {
+        writeln!(stream, "{}", serde_json::to_string(&Ack { ack: VERSION.into() })?)?;
+    }
     // Anything still waiting predates this request — a poll's refresh, an answer that ended in
     // an error. A client is told what its own answer did and nothing else.
     log(ctx);
@@ -424,7 +458,7 @@ impl Drop for Unlink {
 
 #[cfg(test)]
 mod tests {
-    use super::{drop_model_now, reply_timeout, socket_path, sys, IO_TIMEOUT, RERANK_TIMEOUT};
+    use super::{acknowledged, drop_model_now, reply_timeout, socket_path, sys, try_ask_within, Ack, Reply, IO_TIMEOUT, RERANK_TIMEOUT};
     use crate::ask::Request;
     use std::io::{BufRead, BufReader};
     use std::time::Duration;
@@ -490,6 +524,42 @@ mod tests {
         // construction. A unix filesystem may hand the inode straight back, so there this is not
         // asserted — and the guard's dev+ino check has always lived with that.
         if cfg!(windows) { assert_ne!(sys::id(&path), Some(id), "bound again under the name, another file"); }
+    }
+
+    /// The long wait is for a server that is reranking, and a server that accepted the connection
+    /// and will never answer looks exactly like one until it says otherwise. `serve` is an
+    /// accelerator: a client may not do worse with one than without, and five silent minutes is
+    /// as much worse as this protocol can get.
+    #[test]
+    fn a_server_that_never_answers_hands_a_reranked_question_back_on_the_first_line() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join(".repograph")).unwrap();
+        let listener = sys::bind(&socket_path(dir.path())).unwrap();
+        // Accepts, reads nothing, replies nothing -- a wedged worker, a process under a debugger,
+        // a reranker child that hung.
+        let held = std::thread::spawn(move || {
+            let accepted = sys::accept(&listener);
+            std::thread::sleep(Duration::from_secs(2));
+            drop(accepted);
+        });
+        let req = Request { words: vec!["чаевые".into()], json: false, seeds: 5, bodies: false, rerank: true, rerank_local: false, depth: crate::rerank::DEPTH, stale: false, no_dense: false };
+        assert!(acknowledged(&req), "this is the request that buys the long wait");
+        let started = std::time::Instant::now();
+        assert!(try_ask_within(dir.path(), &req, Duration::from_millis(300)).is_none(), "nothing came back to parse");
+        assert!(started.elapsed() < Duration::from_secs(2), "fell back after {:?}", started.elapsed());
+        let _ = held.join();
+    }
+
+    /// The two lines a client reads share no required field, so neither can be taken for the
+    /// other: a reply on the first line is an older server's answer and is read as one.
+    #[test]
+    fn an_acknowledgement_and_a_reply_are_never_read_as_each_other() {
+        let ack = serde_json::to_string(&Ack { ack: "0.5.3".into() }).unwrap();
+        let reply = serde_json::to_string(&Reply {
+            v: "0.5.3".into(), build: None, no_dense: false, stdout: String::new(), stderr: vec![],
+        }).unwrap();
+        assert!(serde_json::from_str::<Reply>(&ack).is_err(), "{ack}");
+        assert!(serde_json::from_str::<Ack>(&reply).is_err(), "{reply}");
     }
 
     /// What `run` does on the way out: the listener is still alive on its thread when the guard

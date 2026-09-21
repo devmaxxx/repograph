@@ -241,7 +241,11 @@ first time an `ask --rerank-local` asks for it, keeps it between questions and d
 `ask --rerank` and `ask --rerank-local` are both answered by the resident process, and a client
 waits five minutes rather than thirty seconds for either — a local rerank of a 200-deep pool runs
 70-80 s cold on CPU, and a client that gave up at thirty seconds would score the same pool itself
-behind its own cold open, paying the whole cost a second time.
+behind its own cold open, paying the whole cost a second time. The five minutes are bought: the
+server acknowledges such a request on a line of its own as soon as it has read it, and the client
+waits thirty seconds for that line. A server that accepted the connection and will never
+answer — a wedged worker, a process stopped under a debugger — hands the question back as
+promptly as it does for every other request.
 
 The socket lives at `.repograph/serve.sock` — unless that path would be longer than a Unix socket
 name may be (104 bytes on macOS, including the terminating NUL), in which case it goes in the
