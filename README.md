@@ -623,9 +623,13 @@ might ask to find that node in everyday words, plus a line of synonyms. Those qu
 as rows of their own for the reranker's pool and indexed for BM25 as a list of their own in every
 answer. Generation is cached by passage hash in `.repograph/questions.json`, so a later `enrich`
 pays only for nodes whose text changed, and a node left without questions is asked again by the next
-run. Two kinds of drift are refused on the way in and cleaned out of an older cache: a line whose
-letters are mostly neither Cyrillic nor Latin, and several questions tab-joined around the node's
-own id. On the corpus of 2026-09-02, 1,971 eligible nodes took 16 minutes at 8-way parallelism and
+run. Two kinds of drift are refused on the way in: a line whose letters are mostly in a script this
+run did not ask for, and several questions tab-joined around the node's own id. The scripts a run
+accepts are Latin and Cyrillic — identifiers and product names are Latin whatever the documents
+are written in — plus the script of every language named below, so a Chinese corpus keeps its
+Chinese and a Russian one still drops a generator that wandered into Urdu. Loading an older cache
+splits the tab-joined lines and drops mojibake, but judges no script: the run that wrote an entry
+named its own languages, and a later load knows nothing about that run. On the corpus of 2026-09-02, 1,971 eligible nodes took 16 minutes at 8-way parallelism and
 roughly $2.5 of haiku; the corpus is 1,996 eligible nodes now.
 
 Every entry gets its twelve questions and its synonyms in every language the documents use — set

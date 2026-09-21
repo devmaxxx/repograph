@@ -245,6 +245,10 @@ fn language_of_script(c: char) -> Option<&'static str> {
     })
 }
 
+/// The languages `prompt_code` writes into its own prose. A code answer is graded against this
+/// pair rather than the run's list, because that is what it was asked for.
+const CODE_LANGUAGES: [&str; 2] = ["Russian", "English"];
+
 /// Worded for code and measured on the development corpus's TypeScript. Its two languages are
 /// the corpus's — a Russian PRD over English identifiers — and a rewording is a re-measure.
 pub fn prompt_code(nodes: &[&Node]) -> String {
@@ -279,20 +283,23 @@ pub fn code_keys<'a>(nodes: &[&'a Node]) -> Vec<(String, &'a Node)> {
 /// Lines of `id<TAB>question` for ids in the batch; anything else is ignored. A line may carry
 /// several questions tab-joined, an id before each — the bench corpus had 40 such lines, each
 /// stored whole with its own id inside, which the exact stage then answered for free.
-pub fn parse(output: &str, batch: &[&Node]) -> BTreeMap<String, Vec<String>> {
+pub fn parse(output: &str, batch: &[&Node], languages: &[String]) -> BTreeMap<String, Vec<String>> {
     let keys: Vec<(String, &Node)> = batch.iter().map(|n| (n.id.clone(), *n)).collect();
-    parse_keyed(output, &keys)
+    parse_keyed(output, &keys, languages)
 }
 
-/// `parse` over any set of keys, several of which may open the same entry.
-pub fn parse_keyed(output: &str, keys: &[(String, &Node)]) -> BTreeMap<String, Vec<String>> {
+/// `parse` over any set of keys, several of which may open the same entry. `languages` is the
+/// list the prompt asked for: it is the answer's own scripts, and the only thing that tells a
+/// question in a language this corpus does not read from one it does.
+pub fn parse_keyed(output: &str, keys: &[(String, &Node)], languages: &[String]) -> BTreeMap<String, Vec<String>> {
+    let allowed = allowed_scripts(languages);
     let mut out: BTreeMap<String, Vec<String>> = BTreeMap::new();
     for line in output.lines() {
         let mut current: Option<&str> = None;
         for part in line.split('\t').map(str::trim).filter(|p| !p.is_empty()) {
             if let Some((_, n)) = keys.iter().find(|(k, _)| k == part) {
                 current = Some(&n.id);
-            } else if let Some(id) = current.filter(|_| readable(part)) {
+            } else if let Some(id) = current.filter(|_| readable(part, Some(&allowed))) {
                 out.entry(id.to_string()).or_default().extend(split_joined(part));
             }
         }
@@ -300,25 +307,59 @@ pub fn parse_keyed(output: &str, keys: &[(String, &Node)]) -> BTreeMap<String, V
     out
 }
 
-/// A question is searchable only in a script the readers write: the generator drifted into
-/// Urdu on 12 ADR nodes of the bench corpus, 144 lines that ranked for nobody and sat in both
-/// question indexes. Letters outside Cyrillic and Latin may not be the majority.
-fn readable(q: &str) -> bool {
+/// Every language `language_of_script` can name. A requested language outside this list is one
+/// whose script this table cannot know — Ukrainian is Cyrillic and Swahili is Latin, and neither
+/// is a name any letter here produces — so it is read as naming no script at all.
+const SCRIPT_LANGUAGES: [&str; 10] =
+    ["English", "Russian", "Chinese", "Japanese", "Korean", "Arabic", "Hebrew", "Greek", "Hindi", "Thai"];
+
+/// The scripts an answer to this run may be written in: the two a technical corpus always
+/// carries, widened by the languages the run asked for.
+///
+/// Latin and Cyrillic are the floor rather than the whole rule because identifiers, product
+/// names and the English half of a bilingual corpus are Latin whatever language the documents
+/// are in, and dropping them is how this filter used to read a whole English batch as answered
+/// for nobody. What the run's own list adds is the script it paid for: a Chinese corpus asks for
+/// Chinese and gets Han back, where before every line of it was thrown away. What stays out is
+/// drift — the generator wandered into Urdu on 12 ADR nodes of the bench corpus, 144 lines that
+/// ranked for nobody and sat in both question indexes, under a run that asked for neither. A
+/// name this table cannot place (`enrich_languages` takes any) widens nothing and narrows
+/// nothing: Ukrainian and Swahili are already inside the floor.
+fn allowed_scripts(languages: &[String]) -> Vec<&'static str> {
+    let named = languages.iter()
+        .filter_map(|l| SCRIPT_LANGUAGES.iter().copied().find(|s| s.eq_ignore_ascii_case(l)))
+        .filter(|s| !matches!(*s, "English" | "Russian"));
+    ["English", "Russian"].into_iter().chain(named).collect()
+}
+
+/// Text a store can hold: no replacement character, no control character. Both are what a
+/// mis-decoded answer leaves behind, and neither is anything a reader searches for.
+fn well_formed(q: &str) -> bool {
+    !q.chars().any(|c| c == '\u{FFFD}' || (c.is_control() && c != '\t'))
+}
+
+/// A question is searchable only in a script the readers write. Letters outside the run's
+/// scripts may not be the majority; `None` — a load, which has no run around it — judges
+/// nothing but mojibake.
+fn readable(q: &str, allowed: Option<&[&str]>) -> bool {
+    if !well_formed(q) { return false; }
+    let Some(allowed) = allowed else { return true };
     let (mut letters, mut known) = (0usize, 0usize);
     for c in q.chars().filter(|c| c.is_alphabetic()) {
         letters += 1;
-        if c.is_ascii_alphabetic() || matches!(c, '\u{00C0}'..='\u{024F}' | '\u{0400}'..='\u{04FF}') { known += 1; }
+        if language_of_script(c).is_some_and(|l| allowed.contains(&l)) { known += 1; }
     }
     known * 2 >= letters
 }
 
 /// Stored questions written before `parse` learned the two rules above: tab-joined lines are
-/// split and the entry's own id dropped, unreadable lines go, and an entry left without
-/// questions is forgotten so the next `enrich` asks for it again.
+/// split and the entry's own id dropped, mojibake goes, and an entry left without questions is
+/// forgotten so the next `enrich` asks for it again. Script is not judged here: the run that
+/// wrote an entry named its own languages, and this load knows nothing about that run.
 fn clean(entries: &mut BTreeMap<String, Entry>) {
     entries.retain(|id, e| {
         e.questions = e.questions.iter()
-            .flat_map(|q| q.split('\t').map(str::trim).filter(|p| !p.is_empty() && p != id && readable(p)).map(String::from).collect::<Vec<_>>())
+            .flat_map(|q| q.split('\t').map(str::trim).filter(|p| !p.is_empty() && p != id && readable(p, None)).map(String::from).collect::<Vec<_>>())
             .collect();
         !e.questions.is_empty()
     });
@@ -444,7 +485,13 @@ pub fn run(store: &Store, graph: &Graph, questions: Questions, command: &str, ba
                 let p = if is_code { prompt_code(&nodes) } else { prompt(&nodes, languages) };
                 match run_command(command, &p) {
                     Ok(out) => {
-                        let parsed = if is_code { parse_keyed(&out, &code_keys(&nodes)) } else { parse(&out, &nodes) };
+                        // The code prompt fixes its own pair of languages and does not read the
+                        // run's list, so neither does the parser that holds its answer.
+                        let parsed = if is_code {
+                            parse_keyed(&out, &code_keys(&nodes), &CODE_LANGUAGES.map(String::from))
+                        } else {
+                            parse(&out, &nodes, languages)
+                        };
                         let mut g = shared.lock().unwrap();
                         for (n, h) in &b {
                             if let Some(qs) = parsed.get(&n.id) {
@@ -506,12 +553,15 @@ mod tests {
         g
     }
 
+    /// The languages of the development corpus, which is what every parse test below reads.
+    fn ru_en() -> Vec<String> { vec!["Russian".into(), "English".into()] }
+
     #[test]
     fn parse_keeps_only_tab_lines_for_ids_in_the_batch() {
         let g = graph();
         let batch: Vec<&Node> = vec![&g.nodes["FR-PAY-22"]];
         let out = "FR-PAY-22\tкак отменить запись\nFR-PAY-26\tчужой\nnoise\nFR-PAY-22\t  \nFR-PAY-22\tштраф за неявку\n";
-        let p = parse(out, &batch);
+        let p = parse(out, &batch, &ru_en());
         assert_eq!(p["FR-PAY-22"], vec!["как отменить запись", "штраф за неявку"]);
         assert!(!p.contains_key("FR-PAY-26"));
     }
@@ -521,7 +571,7 @@ mod tests {
         let g = graph();
         let batch: Vec<&Node> = vec![&g.nodes["FR-PAY-22"], &g.nodes["FR-PAY-26"]];
         let out = "FR-PAY-22\tкак отменить запись\tFR-PAY-22\tштраф за неявку\tкто платит\tFR-PAY-26\tсколько спишут\n";
-        let p = parse(out, &batch);
+        let p = parse(out, &batch, &ru_en());
         assert_eq!(p["FR-PAY-22"], vec!["как отменить запись", "штраф за неявку", "кто платит"]);
         assert_eq!(p["FR-PAY-26"], vec!["сколько спишут"]);
         assert!(p.values().flatten().all(|q| !q.contains("FR-PAY")));
@@ -532,7 +582,7 @@ mod tests {
         let g = graph();
         let batch: Vec<&Node> = vec![&g.nodes["FR-PAY-22"]];
         let out = "FR-PAY-22\tکیا میں بکنگ منسوخ کر سکتا ہوں؟\nFR-PAY-22\tчто делает asGrosze при отмене?\nFR-PAY-22\tCancellationPolicy — 24h?\n";
-        let p = parse(out, &batch);
+        let p = parse(out, &batch, &ru_en());
         assert_eq!(p["FR-PAY-22"], vec!["что делает asGrosze при отмене?", "CancellationPolicy — 24h?"]);
     }
 
@@ -542,11 +592,16 @@ mod tests {
         let store = Store::new(dir.path());
         let mut qs = Questions::default();
         qs.entries.insert("FR-PAY-22".into(), Entry { hash: "h".into(), questions: vec!["как отменить\tFR-PAY-22\tштраф".into()] });
-        qs.entries.insert("ADR-003".into(), Entry { hash: "h".into(), questions: vec!["کیا میں بکنگ منسوخ کر سکتا ہوں؟".into()] });
+        // A load has no run around it, so the only thing it can still call unreadable is text no
+        // decoder produced on purpose.
+        qs.entries.insert("ADR-003".into(), Entry { hash: "h".into(), questions: vec!["как \u{FFFD}\u{FFFD} отменить".into()] });
+        // Greek is somebody's corpus, and a load cannot know it was not this store's.
+        qs.entries.insert("ADR-004".into(), Entry { hash: "h".into(), questions: vec!["πώς να ακυρώσω την κράτηση;".into()] });
         qs.save(&store).unwrap();
         let loaded = Questions::load(&store).unwrap();
         assert_eq!(loaded.get("FR-PAY-22"), ["как отменить", "штраф"]);
         assert!(!loaded.entries.contains_key("ADR-003"));
+        assert_eq!(loaded.get("ADR-004"), ["πώς να ακυρώσω την κράτηση;"]);
     }
 
     #[test]
@@ -599,7 +654,7 @@ mod tests {
         e.node_span(NodeKind::Symbol, "sym:apps/b.ts::index", "index", "Barrel.\nexport * from './x'", "apps/b.ts", (1, 2));
         let nodes: Vec<&Node> = e.nodes.iter().collect();
         let out = "c1\tкак выйти отовсюду\nsym:apps/b.ts::index\twhere is the barrel\nrevoke\tlabel only\nc3\tno such entry\n";
-        let p = parse_keyed(out, &code_keys(&nodes));
+        let p = parse_keyed(out, &code_keys(&nodes), &CODE_LANGUAGES.map(String::from));
         assert_eq!(p["sym:apps/a.ts::revoke"], vec!["как выйти отовсюду"]);
         assert_eq!(p["sym:apps/b.ts::index"], vec!["where is the barrel"]);
         assert_eq!(p.len(), 2);
@@ -738,10 +793,41 @@ mod tests {
 
     #[test]
     fn readable_is_exactly_half_known_letters_at_the_boundary() {
+        let ru_en = allowed_scripts(&ru_en());
         // 2 Latin + 2 Urdu letters: known*2 (4) >= letters (4), so the `>=` boundary passes.
-        assert!(readable("ab کی"));
+        assert!(readable("ab کی", Some(&ru_en)));
         // 1 Latin + 2 Urdu: known*2 (2) < letters (3), just under the boundary.
-        assert!(!readable("a کی"));
+        assert!(!readable("a کی", Some(&ru_en)));
+        // The same two letters under a run that asked for Arabic are the answer, not the drift.
+        assert!(readable("کی", Some(&allowed_scripts(&["Arabic".to_string()]))));
+    }
+
+    /// 0.5.3 names eight languages beyond Latin and Cyrillic and asks the generator for them by
+    /// name. A parser that then drops every line it wrote reads the whole batch as answered for
+    /// nobody, retries it once and counts it failed -- for the price of two generations.
+    #[test]
+    fn a_batch_answered_in_the_language_the_run_asked_for_is_kept_whole() {
+        let g = graph();
+        let batch: Vec<&Node> = vec![&g.nodes["FR-PAY-22"]];
+        let zh = "FR-PAY-22\t如何取消预约\nFR-PAY-22\t取消要付多少钱\n";
+        let p = parse(zh, &batch, &["Chinese".to_string()]);
+        assert_eq!(p["FR-PAY-22"], vec!["如何取消预约", "取消要付多少钱"]);
+        let ar = "FR-PAY-22\tكيف ألغي الحجز\n";
+        let p = parse(ar, &batch, &["Arabic".to_string()]);
+        assert_eq!(p["FR-PAY-22"], vec!["كيف ألغي الحجز"]);
+    }
+
+    /// `enrich_languages` takes any name at all, and no table here can place Ukrainian's script
+    /// or Swahili's. A rule that cannot name a script must not police it.
+    #[test]
+    fn a_language_no_script_names_lifts_the_script_rule_rather_than_narrowing_it() {
+        assert_eq!(allowed_scripts(&ru_en()), ["English", "Russian"]);
+        assert_eq!(allowed_scripts(&["English".into(), "Ukrainian".into()]), ["English", "Russian"]);
+        assert_eq!(allowed_scripts(&["Greek".into()]), ["English", "Russian", "Greek"]);
+        assert_eq!(allowed_scripts(&[]), ["English", "Russian"]);
+        // Mojibake is dropped whatever the run asked for.
+        assert!(!readable("как \u{FFFD} отменить", None));
+        assert!(readable("як скасувати запис", Some(&allowed_scripts(&["Ukrainian".into()]))));
     }
 
     #[test]
@@ -869,7 +955,7 @@ mod tests {
         let n = g.nodes.get("FR-PAY-22").unwrap();
         let out = "FR-PAY-22\tsynonyms: отмена, штраф, политика\n\
                    FR-PAY-22\tsynonyms: cancellation, fee, policy\n";
-        let parsed = parse(out, &[n]);
+        let parsed = parse(out, &[n], &ru_en());
         assert_eq!(parsed["FR-PAY-22"], ["synonyms: отмена, штраф, политика", "synonyms: cancellation, fee, policy"]);
     }
 
