@@ -223,17 +223,21 @@ fn is_recorded_shape(cases: &[Case]) -> bool {
 
 /// Every anchor must be a node id or a file some node declares. A mistyped anchor would
 /// otherwise score as a miss for as long as nobody read the transcript, and a weak spot that is
-/// really a typo is the one kind this suite must not report.
+/// really a typo is the one kind this suite must not report. Every such anchor is named in the one
+/// error: a corpus that moves a directory strands several cases at once, and stopping at the first
+/// costs a run per anchor to find the rest.
 fn check_anchors(cases_path: &str, cases: &[Case], graph: &Graph) -> Result<()> {
     let files: HashSet<&str> = graph.nodes.values().map(|n| n.file.as_str()).collect();
-    for c in cases {
-        for a in c.expect.anchors() {
-            if !graph.nodes.contains_key(a) && !files.contains(a.as_str()) {
-                anyhow::bail!("{cases_path}: {:?} expects {a:?}, which is neither a node id nor a file any node declares", c.q);
-            }
-        }
+    let stale: Vec<String> = cases.iter()
+        .flat_map(|c| c.expect.anchors().iter().map(move |a| (c, a)))
+        .filter(|(_, a)| !graph.nodes.contains_key(*a) && !files.contains(a.as_str()))
+        .map(|(c, a)| format!("{:?} expects {a:?}", c.q))
+        .collect();
+    match stale.as_slice() {
+        [] => Ok(()),
+        [one] => anyhow::bail!("{cases_path}: {one}, which is neither a node id nor a file any node declares"),
+        all => anyhow::bail!("{cases_path}: {} anchors are neither a node id nor a file any node declares:\n  {}", all.len(), all.join("\n  ")),
     }
-    Ok(())
 }
 
 /// What one reranked question was shown: the pool in the order it was ranked in, and the size of
@@ -753,6 +757,18 @@ mod tests {
         assert!(cases.iter().all(|c| c.expect.anchors().len() == 1), "every recorded case expects one place");
     }
 
+    /// The recorded cases against a corpus on disk: every anchor is still a node or a declared file
+    /// there. `bench` reads the store the same way and checks this before its first question, so a
+    /// corpus that moved a file is found here without the model and the 82 questions behind it.
+    #[test]
+    #[ignore = "needs a built corpus: set REPOGRAPH_BENCH_REPO to the beauty-crm checkout to check"]
+    fn every_built_in_anchor_is_in_the_corpus() {
+        let repo = std::env::var("REPOGRAPH_BENCH_REPO").expect("REPOGRAPH_BENCH_REPO");
+        let (graph, _): (Graph, _) = Store::new(Path::new(&repo)).load().unwrap();
+        assert!(!graph.nodes.is_empty(), "no graph at {repo}: run `repograph build` there first");
+        check_anchors("built-in bench/cases.jsonl", &parse_cases(BUILT_IN_CASES).unwrap(), &graph).unwrap();
+    }
+
     #[test]
     fn keyword_hit_counts_a_seed_or_an_expanded_entry() {
         let a = Answer { seeds: vec![h("FR-PAY-22", "d.md")], expanded: vec![h("FR-PAY-20", "e.md")] };
@@ -794,6 +810,23 @@ mod tests {
         // A file some node lists as a secondary location is not the file a hit reports.
         let also_listed = [case("where", "docs/y.md".into())];
         assert!(check_anchors("f", &also_listed, &graph).is_err());
+    }
+
+    /// A corpus that moves a directory strands every case under it at once. Naming the first and
+    /// stopping costs a run per anchor to learn the rest, each behind a full store load.
+    #[test]
+    fn every_stale_anchor_is_named_in_one_error() {
+        use crate::model::{Node, NodeKind};
+        let mut graph = Graph::default();
+        graph.nodes.insert("FR-X-1".into(), Node {
+            id: "FR-X-1".into(), kind: NodeKind::Requirement, label: String::new(), body: String::new(), file: "docs/x.md".into(), line: 1, end: 0,
+            files: Default::default(), community: None,
+        });
+        let cases = [case("code", "tools/tasks/cli.ts".into()), case("keyword", "FR-X-1".into()), case("cross", many(&["FR-X-1", "FR-X-9"]))];
+        let err = check_anchors("f", &cases, &graph).unwrap_err().to_string();
+        assert!(err.contains("\"tools/tasks/cli.ts\""), "the first stale anchor: {err}");
+        assert!(err.contains("\"FR-X-9\""), "and the one after it: {err}");
+        assert!(!err.contains("\"FR-X-1\""), "an anchor the graph holds is not named: {err}");
     }
 
     #[test]

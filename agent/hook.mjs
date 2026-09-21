@@ -170,6 +170,20 @@ function stages(command) {
 }
 
 /**
+ * The flags whose value is the next word, one list per tool, read off `rg --help` and
+ * `grep --help`: a shared list is wrong for both, because the same letter means different things
+ * under each — `-r` is a replacement under `rg` and recursion under `grep`, `-E` an encoding and
+ * extended syntax, `-T` a type to exclude and a leading tab. A flag missing here hands its value to
+ * the hook as the pattern, and `--exclude-dir node_modules` spent an injection on `node_modules`.
+ * A value attached with `=` is one token that starts with `-` and needs no entry; `--color` under
+ * `grep` only takes its value that way, so it is absent from that list on purpose.
+ */
+const VALUE_FLAGS = {
+  rg: /^-(A|B|C|E|M|T|d|f|g|j|m|r|t|-after-context|-before-context|-context|-color|-colors|-context-separator|-dfa-size-limit|-encoding|-engine|-field-context-separator|-field-match-separator|-file|-generate|-glob|-hostname-bin|-hyperlink-format|-iglob|-ignore-file|-max-columns|-max-count|-max-depth|-max-filesize|-path-separator|-pre|-pre-glob|-regex-size-limit|-replace|-sort|-sortr|-threads|-type|-type-add|-type-clear|-type-not)$/,
+  grep: /^-(A|B|C|D|d|f|m|-after-context|-before-context|-context|-devices|-directories|-file|-max-count|-exclude|-exclude-dir|-exclude-from|-include|-include-dir|-label|-binary-files|-group-separator)$/,
+};
+
+/**
  * What a tool call searches for. Bash is the surface that matters: a pass over 38 recorded sessions
  * found Grep 0, Glob 0 and Bash 2,727 calls, 933 of them running `rg` or `grep` — the harness tells
  * the model to search through Bash, so a hook that only watched Grep watched nothing.
@@ -186,7 +200,6 @@ export function searchPattern(tool, input) {
   if (tool !== 'Bash') return null;
   const command = String(input.command || '');
   if (!/\b(rg|grep)\b/.test(command)) return null;
-  const takesValue = /^-(f|g|m|A|B|C|t|T|-glob|-type|-max-count)$/;
   for (const stage of stages(command)) {
     // A stage a pipe feeds searches what the stage before it printed, not the repository:
     // `gh auth status 2>&1 | grep -E "Logged in|Active account"` came back with three graph lines
@@ -198,6 +211,7 @@ export function searchPattern(tool, input) {
     const tokens = stage.text.match(/"[^"]*"|'[^']*'|\S+/g) || [];
     const at = tokens.findIndex((t) => /^(rg|grep)$/.test(t) || /\/(rg|grep)$/.test(t));
     if (at < 0) continue;
+    const takesValue = VALUE_FLAGS[tokens[at].replace(/.*\//, '')];
     for (let i = at + 1; i < tokens.length; i += 1) {
       const t = tokens[i];
       // `-e` and `--regexp` carry the pattern itself; skipping their value would ask about the path after it.
