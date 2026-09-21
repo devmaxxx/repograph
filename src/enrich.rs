@@ -21,7 +21,18 @@ const PASSAGE_CHARS: usize = 1500;
 pub struct Entry { pub hash: String, pub questions: Vec<String> }
 
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
-pub struct Questions { pub entries: BTreeMap<String, Entry> }
+pub struct Questions {
+    pub entries: BTreeMap<String, Entry>,
+    /// The languages the entries below were written in, as the run that wrote them named them.
+    /// Detection reads a share of letters against a 5% floor, so a corpus with a second script
+    /// near that floor names one list on Monday and another on Tuesday for the sake of one
+    /// document — and the list is folded into every entry's staleness hash, so the whole store
+    /// regenerates. Pinned here, the list is taken once and re-used until the configuration names
+    /// one or `--detect-languages` asks for a fresh reading. Empty in a store written before this
+    /// field existed, which reads as "never pinned" and is detected as before.
+    #[serde(default)]
+    pub languages: Vec<String>,
+}
 
 #[derive(Debug)]
 pub struct Report { pub generated: usize, pub dropped: usize, pub batches: usize, pub failed: usize, pub left: usize }
@@ -203,7 +214,25 @@ fn language_rule(languages: &[String]) -> String {
              and give every entry its lines in every one of them.", languages.join(", "))
 }
 
-/// The languages a corpus is written in, most-used first, named as the generator reads them.
+/// The list a run writes in when the configuration names none: the one the store was enriched
+/// under, or, when there is none or `--detect-languages` asks, a fresh reading of the documents.
+/// The second half is the pre-0.5.3 behaviour and the string is what `enrich` prints, because a
+/// list read one way and a list read the other are the same words on the line.
+pub fn languages_for(questions: &Questions, graph: &Graph, redetect: bool) -> (Vec<String>, &'static str) {
+    if !redetect && !questions.languages.is_empty() {
+        return (questions.languages.clone(), "pinned by the run that wrote the store; --detect-languages re-reads the documents");
+    }
+    let docs = graph.nodes.values().filter(|n| eligible(n));
+    match languages_of(docs.flat_map(|n| [n.label.as_str(), n.body.as_str()])) {
+        // A corpus whose script names nothing still gets a named language: English is the one a
+        // generator writes best and a reader of an unnamed corpus most likely asks in, and any
+        // other is one line in `repograph.toml`.
+        d if d.is_empty() => (vec!["English".to_string()], "the default: the documents named no language"),
+        d => (d, "detected from the documents"),
+    }
+}
+
+/// The languages a corpus is written in, most-used first, named as the generator reads them./// The languages a corpus is written in, most-used first, named as the generator reads them.
 /// Alphabetic characters are counted by script, and a script carrying at least 5% of the letters
 /// names a language. The floor is what makes this the fix: a lone English entry among Russian
 /// ones gets the majority's questions, its own language being the one nobody here asks in, while
@@ -472,6 +501,9 @@ pub fn run_command(command: &str, input: &str) -> Result<String> {
 pub fn run(store: &Store, graph: &Graph, questions: Questions, command: &str, batch: usize, parallel: usize, scope: Scope, languages: &[String]) -> Result<Report> {
     let Scope { limit, code } = scope;
     let mut questions = questions;
+    // Written with the entries this run produces: what the store holds was written in these
+    // languages, and the next run reads the list back rather than detecting it again.
+    if !languages.is_empty() { questions.languages = languages.to_vec(); }
     let dropped = questions.prune(graph);
     let mut stale = questions.stale(graph, eligible, languages);
     let mut stale_code = if code { questions.stale(graph, eligible_code, &[]) } else { Vec::new() };
@@ -716,6 +748,52 @@ mod tests {
         g2.apply(e);
         let r = run(&store, &g2, Questions::load(&store).unwrap(), cmd, 8, 1, Scope::default(), &[]).unwrap();
         assert_eq!((r.generated, r.dropped), (1, 1));
+    }
+
+    /// Detection reads a share against a 5% floor, and the list it names is folded into every
+    /// entry's staleness hash. One document either side of that floor would otherwise regenerate
+    /// a whole store -- 180 batches of haiku on the bench corpus -- for a corpus whose remaining
+    /// documents did not change a character.
+    #[test]
+    fn a_second_language_crossing_the_detection_floor_does_not_restale_the_store() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::new(dir.path());
+        let cmd = r#"awk '/^### /{printf "%s\tq for %s\n", $2, $2}'"#;
+        let ru = |n: usize| "щ".repeat(n);
+        let with_english = |english: usize| {
+            let mut e = Extraction::default();
+            e.node(NodeKind::Requirement, "FR-PAY-22", "отмена", &ru(500), "a.md", 1);
+            e.node(NodeKind::Requirement, "FR-PAY-26", "штраф", &ru(500), "a.md", 2);
+            if english > 0 { e.node(NodeKind::Requirement, "FR-PAY-30", "refund", &"z".repeat(english), "b.md", 1); }
+            let mut g = Graph::default();
+            g.apply(e);
+            g
+        };
+
+        // 53 Latin letters of 1,053: just over the floor, and both languages are named.
+        let over = with_english(53);
+        let (languages, from) = languages_for(&Questions::default(), &over, false);
+        assert_eq!(languages, ["Russian", "English"], "{from}");
+        let r = run(&store, &over, Questions::default(), cmd, 8, 1, Scope::default(), &languages).unwrap();
+        assert_eq!(r.generated, 3);
+
+        // The English entry goes: the letters left name one language, and the list the store was
+        // written under is read back rather than taken again.
+        let under = with_english(0);
+        let q = Questions::load(&store).unwrap();
+        assert_eq!(q.languages, ["Russian", "English"], "the run pinned what it wrote in");
+        let (pinned, from) = languages_for(&q, &under, false);
+        assert_eq!(pinned, ["Russian", "English"], "{from}");
+        assert!(from.contains("pinned"), "{from}");
+        let r = run(&store, &under, q, cmd, 8, 1, Scope::default(), &pinned).unwrap();
+        assert_eq!((r.generated, r.dropped), (0, 1), "the entry that left is pruned and nothing is rewritten");
+
+        // And the bug this pins down: asked to read the documents again, the list is one shorter,
+        // and every remaining entry is stale under it.
+        let (redetected, _) = languages_for(&Questions::load(&store).unwrap(), &under, true);
+        assert_eq!(redetected, ["Russian"]);
+        let r = run(&store, &under, Questions::load(&store).unwrap(), cmd, 8, 1, Scope::default(), &redetected).unwrap();
+        assert_eq!(r.generated, 2, "which is what --detect-languages costs, on purpose");
     }
 
     // The generator answers for one id of two on the first call and for every id on the second,

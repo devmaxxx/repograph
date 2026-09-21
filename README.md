@@ -641,7 +641,12 @@ roughly $2.5 of haiku; the corpus is 1,996 eligible nodes now.
 
 Every entry gets its twelve questions and its synonyms in every language the documents use — set
 in `enrich_languages`, or detected from the documents themselves when that key is empty, counting
-letters by script and naming any script that carries a twentieth of them. Before that the questions
+letters by script and naming any script that carries a twentieth of them. A detected list is
+pinned in `questions.json` by the run that used it and read back by the next one: the list is part
+of every entry's staleness hash, so a corpus with a second script sitting near that twentieth
+would otherwise regenerate whole — 180 batches of haiku on the bench corpus — the day one document
+moved it over the line. `enrich --detect-languages` reads the documents again and pays for what
+changes; naming `enrich_languages` outranks both. Before that the questions
 followed each entry's own language, which left a bilingual corpus's English half reachable only
 from an English question: on beauty-crm, 168 of 2,147 entries came out English while the readers
 ask in Russian, and its two ADR paraphrase cases were not in the 200-deep pool at all, so no
