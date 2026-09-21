@@ -140,7 +140,10 @@ impl Resolver {
     /// `.ts`/`.tsx` source, never a `dist/` build artifact or `node_modules` — otherwise
     /// `resolve` would point an edge at a file with no corresponding graph node.
     fn is_indexed(&self, rel: &str) -> bool {
-        let ext_ok = matches!(Path::new(rel).extension().and_then(|e| e.to_str()), Some("ts") | Some("tsx"));
+        let ext_ok = matches!(
+            Path::new(rel).extension().and_then(|e| e.to_str()),
+            Some("ts") | Some("tsx") | Some("js") | Some("jsx") | Some("mjs") | Some("cjs")
+        );
         ext_ok
             && !Path::new(rel)
                 .components()
@@ -152,12 +155,22 @@ impl Resolver {
         let stem = rel.trim_end_matches(".js").trim_end_matches(".jsx").trim_end_matches(".mjs");
         let stem = stem.replace("/dist/", "/src/");
         let stem = stem.strip_suffix(".d.ts").unwrap_or(&stem).to_string();
+        // TypeScript first, and not for taste: `./money.js` written in a `.ts` file names
+        // `money.ts`, and a repository that has both wants the source. The JavaScript spellings
+        // answer the imports a `.mjs` hook or a config file writes, which resolved to nothing
+        // while the corpus held no such file.
         let candidates = [
             stem.clone(),
             format!("{stem}.ts"),
             format!("{stem}.tsx"),
             format!("{stem}/index.ts"),
             format!("{stem}/index.tsx"),
+            format!("{stem}.js"),
+            format!("{stem}.jsx"),
+            format!("{stem}.mjs"),
+            format!("{stem}.cjs"),
+            format!("{stem}/index.js"),
+            format!("{stem}/index.mjs"),
         ];
         candidates.into_iter().find(|c| self.is_indexed(c))
     }
@@ -340,5 +353,33 @@ mod tests {
         let d = repo();
         let r = Resolver::new(d.path()).unwrap();
         assert_eq!(r.resolve("packages/contracts/src/index.ts", "./money.mjs").as_deref(), Some("packages/contracts/src/money.ts"));
+    }
+
+    // A hook importing a hook: neither side has a TypeScript spelling to fall back on, and before
+    // JavaScript entered the corpus this edge resolved to nothing.
+    #[test]
+    fn a_javascript_file_resolves_to_the_javascript_file() {
+        let d = repo();
+        let w = |p: &str, c: &str| {
+            let full = d.path().join(p);
+            std::fs::create_dir_all(full.parent().unwrap()).unwrap();
+            std::fs::write(full, c).unwrap();
+        };
+        w("tools/verify/verify.mjs", "import { jobs } from './jobs.mjs';\n");
+        w("tools/verify/jobs.mjs", "export const jobs = [];\n");
+        w("tools/lint/index.js", "export const lint = 1;\n");
+        let r = Resolver::new(d.path()).unwrap();
+        assert_eq!(r.resolve("tools/verify/verify.mjs", "./jobs.mjs").as_deref(), Some("tools/verify/jobs.mjs"));
+        assert_eq!(r.resolve("tools/verify/verify.mjs", "../lint").as_deref(), Some("tools/lint/index.js"));
+    }
+
+    // The TypeScript spelling of `./money.js` still wins where both exist: that is what the import
+    // means in a `.ts` file, and the source is what the reader asked about.
+    #[test]
+    fn typescript_wins_over_a_javascript_file_of_the_same_stem() {
+        let d = repo();
+        std::fs::write(d.path().join("packages/contracts/src/money.js"), "export const asGrosze = 1;\n").unwrap();
+        let r = Resolver::new(d.path()).unwrap();
+        assert_eq!(r.resolve("packages/contracts/src/index.ts", "./money.js").as_deref(), Some("packages/contracts/src/money.ts"));
     }
 }

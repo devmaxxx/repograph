@@ -78,8 +78,27 @@ impl Default for Config {
         let s = |v: &[&str]| v.iter().map(|x| x.to_string()).collect::<Vec<_>>();
         Config {
             doc_globs: s(&["**/*.md"]),
-            code_globs: s(&["**/*.ts", "**/*.tsx"]),
-            skip: s(&["**/node_modules/**", "**/dist/**", "**/TRACKER.md", "graphify-out/**", ".repograph/**"]),
+            // JavaScript is read by the TypeScript grammar, which is a superset of it, so the
+            // extensions cost a glob each and no second parser. They earn their place in the
+            // corpus by holding what no `.ts` file does: the hooks, the lint config and the CI
+            // wrappers a repository wires itself together with.
+            code_globs: s(&["**/*.ts", "**/*.tsx", "**/*.js", "**/*.jsx", "**/*.mjs", "**/*.cjs"]),
+            // A bundle is one line of machine output under a source extension: every symbol in
+            // it is a minifier's letter, and the file drowns a lexical index by itself. Now that
+            // dotted directories are walked, `.yarn/` and `.pnp.cjs` are the same problem under a
+            // different name: Yarn Berry commits its bundled releases, plugins and PnP map for
+            // zero-installs, and none of that is gitignored — it is meant to be read by Node, not
+            // by a reader asking what this repository's authors wrote by hand.
+            skip: s(&[
+                "**/node_modules/**",
+                "**/dist/**",
+                "**/*.min.js",
+                "**/.yarn/**",
+                "**/.pnp.*",
+                "**/TRACKER.md",
+                "graphify-out/**",
+                ".repograph/**",
+            ]),
             id_families: None,
             milestone_families: None,
             registries: s(&["docs/constitution.yaml"]),

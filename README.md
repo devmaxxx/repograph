@@ -2,7 +2,7 @@
 
 A project knowledge graph that costs **zero API tokens** to build, keep fresh, and query.
 
-`repograph` reads a repository's markdown and TypeScript, extracts the structure the authors already
+`repograph` reads a repository's markdown, TypeScript and JavaScript, extracts the structure the authors already
 wrote by hand — requirement ids, cross-references, invariants, milestones, exports, imports,
 decorators, and the ids quoted inside code comments — and answers questions about it in a few lines
 of text.
@@ -352,8 +352,8 @@ in full, not an empty config:
 | Key                  | Default                                                                                     |
 | -------------------- | ------------------------------------------------------------------------------------------- |
 | `doc_globs`          | `["**/*.md"]`                                                                               |
-| `code_globs`         | `["**/*.ts", "**/*.tsx"]`                                                                   |
-| `skip`               | `["**/node_modules/**", "**/dist/**", "**/TRACKER.md", "graphify-out/**", ".repograph/**"]` |
+| `code_globs`         | `["**/*.ts", "**/*.tsx", "**/*.js", "**/*.jsx", "**/*.mjs", "**/*.cjs"]`                    |
+| `skip`               | `["**/node_modules/**", "**/dist/**", "**/*.min.js", "**/.yarn/**", "**/.pnp.*", "**/TRACKER.md", "graphify-out/**", ".repograph/**"]` |
 | `registries`         | `["docs/constitution.yaml"]`                                                                |
 | `enrich_command`     | **machine file only** — headless `claude -p --model {model}` with thinking off, see [Spending tokens on purpose](#spending-tokens-on-purpose) |
 | `rerank_command`     | **machine file only** — the same command, with `rerank_model` in its `{model}`               |
