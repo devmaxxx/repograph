@@ -105,11 +105,14 @@ impl Store {
         self.write_atomic(&mirror_name(json), &bytes)
     }
 
-    pub fn save(&self, g: &Graph, m: &Manifest) -> Result<()> {
+    /// Returns the stamp of the `graph.json` this call wrote, for a writer that claims vectors
+    /// against it: a `stat` after the save could already be describing another writer's graph.
+    pub fn save(&self, g: &Graph, m: &Manifest) -> Result<Option<crate::walk::Stamp>> {
         std::fs::create_dir_all(&self.dir)?;
-        self.write_atomic("graph.json", &serde_json::to_vec(g)?)?;
+        let written = self.write_atomic_stamped("graph.json", &serde_json::to_vec(g)?)?;
         self.write_mirror("graph.json", g)?;
-        self.save_manifest(m)
+        self.save_manifest(m)?;
+        Ok(written)
     }
 
     /// The manifest alone: a walk that found no change can still have learned the stat stamps
@@ -119,11 +122,19 @@ impl Store {
     }
 
     pub fn write_atomic(&self, name: &str, bytes: &[u8]) -> Result<()> {
+        self.write_atomic_stamped(name, bytes).map(|_| ())
+    }
+
+    /// `write_atomic`, with the stamp of these bytes taken from the temporary file before the
+    /// rename, which keeps its mtime and length: a writer renaming over the file a moment later
+    /// cannot lend its stamp to them.
+    fn write_atomic_stamped(&self, name: &str, bytes: &[u8]) -> Result<Option<crate::walk::Stamp>> {
         std::fs::create_dir_all(&self.dir)?;
         let tmp = self.dir.join(format!("{name}.tmp"));
         std::fs::write(&tmp, bytes).with_context(|| format!("write {}", tmp.display()))?;
+        let stamp = std::fs::metadata(&tmp).ok().as_ref().and_then(crate::walk::stamp_of);
         rename_over(&tmp, &self.dir.join(name)).with_context(|| format!("rename {name}"))?;
-        Ok(())
+        Ok(stamp)
     }
 
     /// Extends a store file whose first `keep` bytes the caller still stands behind, dropping
