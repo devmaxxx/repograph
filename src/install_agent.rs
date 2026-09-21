@@ -217,11 +217,10 @@ pub fn set_languages(root: &Path, cfg: &crate::config::Config) -> Result<Option<
     let Ok(named) = toml::from_str::<toml::Table>(&existing) else { return Ok(None) };
     if named.contains_key("enrich_languages") { return Ok(None); }
     let entries = crate::walk::walk(root, cfg, &crate::walk::Manifest::default())?;
-    let texts: Vec<String> = entries.iter()
+    let texts = entries.iter()
         .filter(|e| e.kind == crate::walk::FileKind::Doc)
-        .filter_map(|e| std::fs::read_to_string(root.join(&e.rel)).ok())
-        .collect();
-    let languages = crate::enrich::languages_of(texts.iter().map(String::as_str));
+        .filter_map(|e| std::fs::read_to_string(root.join(&e.rel)).ok());
+    let languages = crate::enrich::languages_of(texts);
     if languages.is_empty() { return Ok(None); }
     let value = toml::Value::Array(languages.iter().map(|l| toml::Value::String(l.clone())).collect());
     let mut text = existing;

@@ -593,8 +593,7 @@ fn run() -> anyhow::Result<()> {
             // Said before the run because it is the one thing about a 20-minute pass that cannot
             // be read back off the result: questions in the wrong language look like questions.
             let (languages, where_from) = match cfg.enrich_languages.is_empty() {
-                false if std::env::var("REPOGRAPH_ENRICH_LANGUAGES").is_ok_and(|v| !v.trim().is_empty()) =>
-                    (cfg.enrich_languages.clone(), "REPOGRAPH_ENRICH_LANGUAGES"),
+                false if cfg.enrich_languages_from_env => (cfg.enrich_languages.clone(), "REPOGRAPH_ENRICH_LANGUAGES"),
                 false => (cfg.enrich_languages.clone(), "repograph.toml"),
                 true => {
                     let docs = graph.nodes.values().filter(|n| enrich::eligible(n));

@@ -132,11 +132,14 @@ impl Questions {
     /// regenerates nothing the day the list first exists, and a bilingual one regenerates exactly
     /// the entries whose questions are missing a language.
     fn stale<'a>(&self, graph: &'a Graph, wanted: fn(&Node) -> bool, languages: &[String]) -> Vec<(&'a Node, String)> {
+        // Sorted: detection orders by share, and two languages trading places is not a new list.
+        let mut sorted = languages.to_vec();
+        sorted.sort();
         graph.nodes.values().filter(|n| wanted(n)).filter_map(|n| {
             let own = languages_of([n.label.as_str(), n.body.as_str()].into_iter());
             let h = match languages.is_empty() || own.first().map(std::slice::from_ref) == Some(languages) {
                 true => hash(&passage(n)),
-                false => hash(&format!("{}\n\0{}", passage(n), languages.join(","))),
+                false => hash(&format!("{}\n\0{}", passage(n), sorted.join(","))),
             };
             match self.entries.get(&n.id) {
                 Some(e) if e.hash == h => None,
@@ -209,11 +212,11 @@ fn language_rule(languages: &[String]) -> String {
 /// Japanese corpus corrects by naming `enrich_languages` in `repograph.toml`. Scripts outside the
 /// table name nothing, and a text with no letters at all names nothing; `enrich` reads an empty
 /// answer as English.
-pub fn languages_of<'a>(texts: impl Iterator<Item = &'a str>) -> Vec<String> {
+pub fn languages_of(texts: impl Iterator<Item = impl AsRef<str>>) -> Vec<String> {
     let mut counts: BTreeMap<&'static str, usize> = BTreeMap::new();
     let mut letters = 0usize;
     for text in texts {
-        for c in text.chars().filter(|c| c.is_alphabetic()) {
+        for c in text.as_ref().chars().filter(|c| c.is_alphabetic()) {
             letters += 1;
             if let Some(name) = language_of_script(c) { *counts.entry(name).or_default() += 1; }
         }
@@ -837,7 +840,7 @@ mod tests {
         assert_eq!(languages_of(["the client did not show up"].into_iter()), ["English"]);
         assert_eq!(languages_of(["42 — 3.14, (7)!"].into_iter()), Vec::<String>::new(),
                    "nothing to read, so nothing named: the caller's default applies");
-        assert_eq!(languages_of(std::iter::empty()), Vec::<String>::new());
+        assert_eq!(languages_of(std::iter::empty::<&str>()), Vec::<String>::new());
     }
 
     /// An empty list has to leave the prompt the bytes the corpus was measured under, and a named
@@ -889,5 +892,8 @@ mod tests {
         assert_eq!((r.generated, r.left), (2, 0), "a second language is a set every entry lacks");
         let r = run(&store, &g, Questions::load(&store).unwrap(), cmd, 8, 1, Scope::default(), &both).unwrap();
         assert_eq!(r.generated, 0);
+        let swapped = ["English".to_string(), "Russian".to_string()];
+        let r = run(&store, &g, Questions::load(&store).unwrap(), cmd, 8, 1, Scope::default(), &swapped).unwrap();
+        assert_eq!(r.generated, 0, "detection orders by share; two languages trading places is the same list");
     }
 }

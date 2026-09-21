@@ -35,6 +35,9 @@ pub struct Config {
     /// `repograph.toml` that carries it at all, so growing the line is something a person asks
     /// for rather than something a `build` does behind them.
     pub enrich_languages: Vec<String>,
+    /// Whether that list came from `REPOGRAPH_ENRICH_LANGUAGES`, so `enrich` can say where it read it.
+    #[serde(skip)]
+    pub enrich_languages_from_env: bool,
     /// Directory holding `model.onnx` and `tokenizer.json` for `ask --rerank-local`; empty
     /// means `~/.cache/repograph/reranker`.
     pub reranker_dir: String,
@@ -85,6 +88,7 @@ impl Default for Config {
             enrich_model: ENRICH_MODEL.into(),
             rerank_model: RERANK_MODEL.into(),
             enrich_languages: Vec::new(),
+            enrich_languages_from_env: false,
             reranker_dir: String::new(),
             embed_model: crate::index::embed::DEFAULT_MODEL.into(),
             resources: crate::index::embed::Resources::default(),
@@ -132,6 +136,26 @@ fn language_name_is_safe(v: &str) -> bool {
     v.len() <= 32
         && v.starts_with(|c: char| c.is_ascii_alphabetic())
         && v.chars().all(|c| c.is_ascii_alphabetic() || c == ' ' || c == '-')
+}
+
+/// The names worth keeping out of a list. A piece that is empty once trimmed is a trailing comma
+/// rather than something the reader asked for, so it goes without a line; anything else that is
+/// not a name is named back.
+fn language_names(raw: Vec<String>) -> Vec<String> {
+    raw.into_iter().map(|l| l.trim().to_string()).filter(|l| {
+        if l.is_empty() { return false; }
+        if !language_name_is_safe(l) {
+            let _ = writeln!(std::io::stderr(), "repograph: enrich_languages {l:?} is not a language name — dropped");
+            return false;
+        }
+        true
+    }).collect()
+}
+
+/// What `REPOGRAPH_ENRICH_LANGUAGES` names, comma-separated; empty when it is unset or names
+/// nothing usable.
+fn languages_from_env() -> Vec<String> {
+    std::env::var("REPOGRAPH_ENRICH_LANGUAGES").map(|l| language_names(l.split(',').map(str::to_string).collect())).unwrap_or_default()
 }
 
 /// The model name is substituted into a shell command, so it is a token: a vendor's name, a tag, a
@@ -202,23 +226,12 @@ impl Config {
         if let Ok(m) = std::env::var("REPOGRAPH_RERANK_MODEL") {
             if !m.is_empty() { cfg.rerank_model = m; }
         }
-        if let Ok(l) = std::env::var("REPOGRAPH_ENRICH_LANGUAGES") {
-            if !l.trim().is_empty() { cfg.enrich_languages = l.split(',').map(str::to_string).collect(); }
-        }
-        // Checked wherever it came from, the project file and the environment alike. A piece that
-        // is empty once trimmed is a trailing comma rather than something the reader asked for, so
-        // it goes without a line; anything else that is not a name is named back.
-        cfg.enrich_languages = std::mem::take(&mut cfg.enrich_languages).into_iter()
-            .map(|l| l.trim().to_string())
-            .filter(|l| {
-                if l.is_empty() { return false; }
-                if !language_name_is_safe(l) {
-                    let _ = writeln!(std::io::stderr(), "repograph: enrich_languages {l:?} is not a language name — dropped");
-                    return false;
-                }
-                true
-            })
-            .collect();
+        // Checked wherever it came from, the project file and the environment alike. The
+        // environment wins only with a name left in it: one that is all typos falls back to what
+        // the file asked for rather than to nothing.
+        cfg.enrich_languages = language_names(std::mem::take(&mut cfg.enrich_languages));
+        let named = languages_from_env();
+        if !named.is_empty() { cfg.enrich_languages = named; cfg.enrich_languages_from_env = true; }
         // The name is about to be substituted into a shell command, so it is checked wherever it
         // came from: the project file is untrusted, and the machine file and the environment are
         // where a typo becomes a command.
@@ -646,6 +659,10 @@ mod tests {
             unsafe { std::env::set_var("REPOGRAPH_ENRICH_LANGUAGES", "English,; rm -rf /,Русский") };
             assert_eq!(Config::load(dir.path()).unwrap().enrich_languages, ["English"],
                        "a shell line and a name written in its own script are both dropped");
+            unsafe { std::env::set_var("REPOGRAPH_ENRICH_LANGUAGES", "Русский") };
+            let cfg = Config::load(dir.path()).unwrap();
+            assert_eq!((cfg.enrich_languages.as_slice(), cfg.enrich_languages_from_env), (["Russian".to_string()].as_slice(), false),
+                       "an environment that names nothing usable leaves the file's list standing");
             unsafe { std::env::remove_var("REPOGRAPH_ENRICH_LANGUAGES") };
             assert_eq!(Config::load(dir.path()).unwrap().enrich_languages, ["Russian"], "the file again once it is gone");
         });
