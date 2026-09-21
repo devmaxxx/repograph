@@ -191,6 +191,12 @@ pub fn passes(s: &Summary, dense: bool, enriched: bool, floors: Floors) -> bool 
 // The recorded cases travel inside the binary so a release build benches from any directory.
 const BUILT_IN_CASES: &str = include_str!("../bench/cases.jsonl");
 
+/// The corpus the recorded cases and the floors were written against, as `<corpus> <commit>`.
+/// The cases name paths, and a path is a fact about one checkout: when the corpus renames a
+/// directory the case file has not drifted from the truth, it has drifted from *that* pin, and a
+/// reader comparing a run against the floors needs to know which tree the floors were counted on.
+const BUILT_IN_PIN: &str = include_str!("../bench/cases.pin");
+
 /// The shape the floors were measured on. A file of this shape is graded; any other file is
 /// measured and reported, and its exit code claims nothing.
 const RECORDED_SHAPE: [(&str, usize); 3] = [("keyword", 40), ("paraphrase", 30), ("code", 12)];
@@ -226,17 +232,18 @@ fn is_recorded_shape(cases: &[Case]) -> bool {
 /// really a typo is the one kind this suite must not report. Every such anchor is named in the one
 /// error: a corpus that moves a directory strands several cases at once, and stopping at the first
 /// costs a run per anchor to find the rest.
-fn check_anchors(cases_path: &str, cases: &[Case], graph: &Graph) -> Result<()> {
+fn check_anchors(cases_path: &str, pin: Option<&str>, cases: &[Case], graph: &Graph) -> Result<()> {
     let files: HashSet<&str> = graph.nodes.values().map(|n| n.file.as_str()).collect();
     let stale: Vec<String> = cases.iter()
         .flat_map(|c| c.expect.anchors().iter().map(move |a| (c, a)))
         .filter(|(_, a)| !graph.nodes.contains_key(*a) && !files.contains(a.as_str()))
         .map(|(c, a)| format!("{:?} expects {a:?}", c.q))
         .collect();
+    let against = pin.map(|p| format!("\nThe cases are recorded against {p}; `bench/missing-anchors.py <checkout>` lists the path anchors a tree is missing.")).unwrap_or_default();
     match stale.as_slice() {
         [] => Ok(()),
-        [one] => anyhow::bail!("{cases_path}: {one}, which is neither a node id nor a file any node declares"),
-        all => anyhow::bail!("{cases_path}: {} anchors are neither a node id nor a file any node declares:\n  {}", all.len(), all.join("\n  ")),
+        [one] => anyhow::bail!("{cases_path}: {one}, which is neither a node id nor a file any node declares{against}"),
+        all => anyhow::bail!("{cases_path}: {} anchors are neither a node id nor a file any node declares:\n  {}{against}", all.len(), all.join("\n  ")),
     }
 }
 
@@ -380,7 +387,11 @@ pub fn run(repo: &Path, cases: Option<&Path>, no_dense: bool, rerank: bool, rera
     // file's shape earned grading, the store's embedder just never measured any. `gated` says so
     // through the exit code rather than a bail, so the run still prints what it found.
     let gated = shape_ok && !(dense_on && floors == Floors::None);
-    check_anchors(&cases_path, &cases, &graph)?;
+    // Named before the cases run, not after: a reader comparing the counts below against the
+    // README floors is comparing them against this tree.
+    let pin = built_in.then(|| BUILT_IN_PIN.trim()).filter(|p| !p.is_empty());
+    if let Some(p) = pin { println!("suite: {cases_path}, recorded against {p}"); }
+    check_anchors(&cases_path, pin, &cases, &graph)?;
     let is_id = |a: &str| graph.nodes.contains_key(a);
     let opts = Options { seeds: 5, bodies: false, dense: dense_on, json: false, depth };
     // What the reranked arm was actually shown, kept for the case line below: the pool it ranked
@@ -766,7 +777,7 @@ mod tests {
         let repo = std::env::var("REPOGRAPH_BENCH_REPO").expect("REPOGRAPH_BENCH_REPO");
         let (graph, _): (Graph, _) = Store::new(Path::new(&repo)).load().unwrap();
         assert!(!graph.nodes.is_empty(), "no graph at {repo}: run `repograph build` there first");
-        check_anchors("built-in bench/cases.jsonl", &parse_cases(BUILT_IN_CASES).unwrap(), &graph).unwrap();
+        check_anchors("built-in bench/cases.jsonl", Some(BUILT_IN_PIN.trim()), &parse_cases(BUILT_IN_CASES).unwrap(), &graph).unwrap();
     }
 
     #[test]
@@ -801,15 +812,15 @@ mod tests {
         graph.nodes.insert("FR-X-1".into(), node("FR-X-1", "docs/x.md"));
         graph.nodes.insert("sym:a".into(), node("sym:a", "packages/a.ts"));
         let good = [case("cross", many(&["FR-X-1", "packages/a.ts"])), case("long", "FR-X-1".into())];
-        assert!(check_anchors("f", &good, &graph).is_ok());
+        assert!(check_anchors("f", None, &good, &graph).is_ok());
         let bad_id = [case("long", "FR-X-2".into())];
-        let err = check_anchors("f", &bad_id, &graph).unwrap_err().to_string();
+        let err = check_anchors("f", None, &bad_id, &graph).unwrap_err().to_string();
         assert!(err.contains("FR-X-2"), "{err}");
         let bad_path = [case("where", "packages/b.ts".into())];
-        assert!(check_anchors("f", &bad_path, &graph).is_err());
+        assert!(check_anchors("f", None, &bad_path, &graph).is_err());
         // A file some node lists as a secondary location is not the file a hit reports.
         let also_listed = [case("where", "docs/y.md".into())];
-        assert!(check_anchors("f", &also_listed, &graph).is_err());
+        assert!(check_anchors("f", None, &also_listed, &graph).is_err());
     }
 
     /// A corpus that moves a directory strands every case under it at once. Naming the first and
@@ -823,10 +834,37 @@ mod tests {
             files: Default::default(), community: None,
         });
         let cases = [case("code", "tools/tasks/cli.ts".into()), case("keyword", "FR-X-1".into()), case("cross", many(&["FR-X-1", "FR-X-9"]))];
-        let err = check_anchors("f", &cases, &graph).unwrap_err().to_string();
+        let err = check_anchors("f", None, &cases, &graph).unwrap_err().to_string();
         assert!(err.contains("\"tools/tasks/cli.ts\""), "the first stale anchor: {err}");
         assert!(err.contains("\"FR-X-9\""), "and the one after it: {err}");
         assert!(!err.contains("\"FR-X-1\""), "an anchor the graph holds is not named: {err}");
+    }
+
+    /// The stale-anchor refusal is the first thing a reader meets when they bench a corpus that
+    /// has moved on from the pin. Without the pin in it, the obvious repair is to edit the case
+    /// to the new path -- which is how the built-in suite stopped running on the tree its floors
+    /// were counted on.
+    #[test]
+    fn a_stale_anchor_names_the_pin_the_cases_were_recorded_against() {
+        use crate::model::{Node, NodeKind};
+        let mut graph = Graph::default();
+        graph.nodes.insert("FR-X-1".into(), Node {
+            id: "FR-X-1".into(), kind: NodeKind::Requirement, label: String::new(), body: String::new(), file: "docs/x.md".into(), line: 1, end: 0,
+            files: Default::default(), community: None,
+        });
+        let cases = [case("code", "packages/task-sync/src/cli.ts".into())];
+        let err = check_anchors("f", Some("beauty-crm 502e8a6d"), &cases, &graph).unwrap_err().to_string();
+        assert!(err.contains("beauty-crm 502e8a6d"), "{err}");
+        assert!(err.contains("missing-anchors.py"), "and how to list the rest: {err}");
+    }
+
+    /// `<corpus> <commit>`, one line: the error message quotes it whole, and the script beside it
+    /// is what checks the cases against a checkout of that commit.
+    #[test]
+    fn the_pin_names_a_corpus_and_a_commit() {
+        let pin: Vec<&str> = BUILT_IN_PIN.split_whitespace().collect();
+        assert_eq!(pin.len(), 2, "{BUILT_IN_PIN:?}");
+        assert!(pin[1].len() >= 7 && pin[1].chars().all(|c| c.is_ascii_hexdigit()), "{BUILT_IN_PIN:?}");
     }
 
     #[test]
