@@ -590,8 +590,26 @@ fn run() -> anyhow::Result<()> {
             let (graph, _) = store.load()?;
             if graph.nodes.is_empty() { anyhow::bail!("graph is empty — run `repograph build`"); }
             let questions = enrich::Questions::load(&store)?;
+            // Said before the run because it is the one thing about a 20-minute pass that cannot
+            // be read back off the result: questions in the wrong language look like questions.
+            let (languages, where_from) = match cfg.enrich_languages.is_empty() {
+                false if cfg.enrich_languages_from_env => (cfg.enrich_languages.clone(), "REPOGRAPH_ENRICH_LANGUAGES"),
+                false => (cfg.enrich_languages.clone(), "repograph.toml"),
+                true => {
+                    let docs = graph.nodes.values().filter(|n| enrich::eligible(n));
+                    let detected = enrich::languages_of(docs.flat_map(|n| [n.label.as_str(), n.body.as_str()]));
+                    // A corpus whose script names nothing still gets a named language: English is
+                    // the one a generator writes best and a reader of an unnamed corpus most
+                    // likely asks in, and any other is one line in `repograph.toml`.
+                    match detected.is_empty() {
+                        true => (vec!["English".to_string()], "the default: the documents named no language"),
+                        false => (detected, "detected from the documents"),
+                    }
+                }
+            };
+            eprintln!("enrich: questions in {} ({where_from})", languages.join(", "));
             let t = std::time::Instant::now();
-            let r = enrich::run(&store, &graph, questions, &cfg.enrich_command, batch, parallel, enrich::Scope { limit, code })?;
+            let r = enrich::run(&store, &graph, questions, &cfg.enrich_command, batch, parallel, enrich::Scope { limit, code }, &languages)?;
             println!("enrich: {} nodes written, {} dropped, {} still without questions, {} batches ({} failed) in {:.0}s", r.generated, r.dropped, r.left, r.batches, r.failed, t.elapsed().as_secs_f32());
             // A run that was asked to write and wrote nothing has to exit like one, or a campaign
             // grades a store nobody enriched. `left > 0` is not the condition: a store legitimately
@@ -725,6 +743,14 @@ fn run() -> anyhow::Result<()> {
                 (c, x) => [(c, install_agent::Target::Claude), (x, install_agent::Target::Codex)]
                     .into_iter().filter(|(on, _)| *on).map(|(_, t)| t).collect(),
             };
+            // The languages key is read out of `repograph.toml` and written back to it, so a file
+            // this binary cannot read costs the line and not the install.
+            match config::Config::load(&repo) {
+                Ok(cfg) => if let Some(l) = install_agent::set_languages(&repo, &cfg)? {
+                    println!("repograph.toml: enrich_languages = {l:?} (detected from the documents; edit the line to change)");
+                },
+                Err(err) => eprintln!("install-agent: repograph.toml was not read ({err:#}); enrich_languages left unset"),
+            }
             for target in targets {
                 let r = install_agent::install(&repo, target, &command)?;
                 match r.written {

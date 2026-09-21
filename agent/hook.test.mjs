@@ -139,6 +139,33 @@ test('`-e` and `--regexp` carry the pattern, not a value to skip', () => {
   assert.equal(searchPattern('Bash', { command: 'grep -R --regexp withTenant .' }), 'withTenant');
 });
 
+test('a flag whose value is the next word is skipped, per tool, so the value is never the pattern', () => {
+  // The issue's table (#34): each of these asked the graph about the flag's value, or about nothing.
+  for (const [command, pattern] of [
+    ['grep -rn --exclude-dir node_modules withTenant .', 'withTenant'],
+    ['grep -rn --exclude-dir=node_modules withTenant .', 'withTenant'],
+    ['grep -rn --include *.ts withTenant .', 'withTenant'],
+    ['grep -rn -d recurse withTenant .', 'withTenant'],
+    ['rg -M 200 withTenant packages', 'withTenant'],
+    ['rg -j 4 withTenant packages', 'withTenant'],
+    ['rg --max-depth 3 withTenant packages', 'withTenant'],
+    ['rg --iglob *.ts withTenant packages', 'withTenant'],
+    ['rg --context 3 withTenant packages', 'withTenant'],
+    ['rg --color never withTenant packages', 'withTenant'],
+    ['rg -E utf-8 withTenant packages', 'withTenant'],
+    ['rg -r replacement withTenant packages', 'withTenant'],
+  ]) assert.equal(searchPattern('Bash', { command }), pattern, command);
+  // The same letter means different things to the two tools: `-r` and `-E` take no value under
+  // grep, `-t` and `-d` mean different things under each. A list shared between them skips the
+  // pattern itself.
+  assert.equal(searchPattern('Bash', { command: 'grep -r withTenant packages' }), 'withTenant');
+  assert.equal(searchPattern('Bash', { command: 'grep -E withTenant packages' }), 'withTenant');
+  assert.equal(searchPattern('Bash', { command: 'rg -t ts withTenant packages' }), 'withTenant');
+  assert.equal(searchPattern('Bash', { command: 'grep -T withTenant packages' }), 'withTenant');
+  assert.equal(searchPattern('Bash', { command: '/usr/bin/grep -A 2 withTenant packages' }), 'withTenant',
+    'the tool is named by its last path segment');
+});
+
 test('a stage a pipe feeds reads stdin, not the repository, and is not asked about', () => {
   for (const command of [
     'gh auth status 2>&1 | grep -E "Logged in|Active account"',
