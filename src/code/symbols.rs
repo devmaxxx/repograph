@@ -7,7 +7,7 @@ pub struct SymbolScanner {
 }
 
 pub fn language_for(rel: &str) -> Language {
-    if rel.ends_with(".tsx") {
+    if rel.ends_with(".tsx") || rel.ends_with(".jsx") {
         Language::new(tree_sitter_typescript::LANGUAGE_TSX)
     } else {
         Language::new(tree_sitter_typescript::LANGUAGE_TYPESCRIPT)

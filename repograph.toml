@@ -2,8 +2,8 @@
 # default (see src/config.rs), so it also serves as the worked example the
 # README's Configure section walks through.
 doc_globs = ["**/*.md"]
-code_globs = ["**/*.ts", "**/*.tsx"]
-skip = ["**/node_modules/**", "**/dist/**", "**/TRACKER.md", "graphify-out/**", ".repograph/**"]
+code_globs = ["**/*.ts", "**/*.tsx", "**/*.js", "**/*.jsx", "**/*.mjs", "**/*.cjs"]
+skip = ["**/node_modules/**", "**/dist/**", "**/*.min.js", "**/TRACKER.md", "graphify-out/**", ".repograph/**"]
 registries = ["docs/constitution.yaml"]
 
 # There is no key for id families: they are the prefixes the documents define —

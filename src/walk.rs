@@ -26,7 +26,7 @@ pub struct Entry { pub rel: String, pub kind: FileKind, pub hash: String, pub st
 /// manifest written before the stamp existed reads as, and what a writer leaves behind when a file
 /// it had to read would not open — neither store was read whole, and `0` is stale against every
 /// generation there is or will be.
-pub const GRAMMAR: u32 = 1;
+pub const GRAMMAR: u32 = 2;
 
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub struct Manifest {
@@ -65,7 +65,17 @@ pub fn walk(repo: &Path, cfg: &Config, prev: &Manifest) -> Result<Vec<Entry>> {
     let skip = globs(&cfg.skip)?;
     let registries = globs(&cfg.registries)?;
     let mut out = Vec::new();
-    for dent in ignore::WalkBuilder::new(repo).hidden(true).git_ignore(true).build() {
+    // A repository keeps its agent rules, its hooks and its CI in dotted directories, so the
+    // walk reads them and `skip` decides, as it does for every other path. `.git` is the one
+    // directory that has to go: `ignore` gives it no special treatment once `hidden` is off
+    // (0.4.33), and its thousands of objects would be walked like source. `.gitignore` keeps
+    // working either way — the hidden filter and the git-ignore matcher are independent.
+    let walker = ignore::WalkBuilder::new(repo)
+        .hidden(false)
+        .filter_entry(|e| e.file_name() != ".git")
+        .git_ignore(true)
+        .build();
+    for dent in walker {
         let dent = match dent {
             Ok(d) => d,
             Err(e) => { eprintln!("walk: {e}"); continue; }
@@ -141,6 +151,10 @@ mod tests {
     fn repo() -> tempfile::TempDir {
         let d = tempfile::tempdir().unwrap();
         std::fs::create_dir_all(d.path().join(".git")).unwrap();
+        std::fs::write(d.path().join(".git/config"), "[core]\n").unwrap();
+        std::fs::create_dir_all(d.path().join(".claude/hooks")).unwrap();
+        std::fs::write(d.path().join(".claude/CLAUDE.md"), "# rules\n").unwrap();
+        std::fs::write(d.path().join(".claude/hooks/h.mjs"), "export const h = 1;\n").unwrap();
         std::fs::create_dir_all(d.path().join("docs")).unwrap();
         std::fs::create_dir_all(d.path().join("node_modules/x")).unwrap();
         std::fs::write(d.path().join("docs/a.md"), "# a\n").unwrap();
@@ -159,11 +173,13 @@ mod tests {
         let entries = walk(d.path(), &Config::default(), &Manifest::default()).unwrap();
         let rels: Vec<_> = entries.iter().map(|e| (e.rel.as_str(), e.kind)).collect();
         assert_eq!(rels, vec![
+            (".claude/CLAUDE.md", FileKind::Doc),
+            (".claude/hooks/h.mjs", FileKind::Code),
             ("b.ts", FileKind::Code),
             ("docs/a.md", FileKind::Doc),
             ("docs/constitution.yaml", FileKind::Registry),
         ]);
-        assert_eq!(entries[0].hash, blake3::hash(b"export const b = 1;\n").to_hex().to_string());
+        assert_eq!(entries[2].hash, blake3::hash(b"export const b = 1;\n").to_hex().to_string());
     }
 
     #[test]
@@ -282,6 +298,32 @@ mod tests {
         std::fs::write(d.path().join("good.md"), "y\n").unwrap();
         let entries = walk(d.path(), &Config::default(), &Manifest::default()).unwrap();
         assert_eq!(entries.iter().map(|e| e.rel.as_str()).collect::<Vec<_>>(), vec!["good.md"]);
+    }
+
+    // `.git` is the one dotted directory that stays out by name: nothing in `ignore` prunes it
+    // once the hidden filter is off, and a repository's objects are not its source.
+    #[test]
+    fn the_git_directory_is_not_walked() {
+        let d = repo();
+        std::fs::create_dir_all(d.path().join(".git/objects")).unwrap();
+        std::fs::write(d.path().join(".git/objects/a.ts"), "export const a = 1;\n").unwrap();
+        let entries = walk(d.path(), &Config::default(), &Manifest::default()).unwrap();
+        assert!(entries.iter().all(|e| !e.rel.starts_with(".git/")));
+    }
+
+    #[test]
+    fn javascript_is_code_and_a_bundle_is_not() {
+        let d = tempfile::tempdir().unwrap();
+        init(d.path());
+        std::fs::write(d.path().join("eslint.config.js"), "export default [];\n").unwrap();
+        std::fs::write(d.path().join("hook.cjs"), "module.exports = 1;\n").unwrap();
+        std::fs::write(d.path().join("app.jsx"), "export const A = 1;\n").unwrap();
+        std::fs::write(d.path().join("vendor.min.js"), "!function(){}();\n").unwrap();
+        let entries = walk(d.path(), &Config::default(), &Manifest::default()).unwrap();
+        assert_eq!(
+            entries.iter().map(|e| e.rel.as_str()).collect::<Vec<_>>(),
+            vec!["app.jsx", "eslint.config.js", "hook.cjs"]
+        );
     }
 
     #[test]
