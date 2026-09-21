@@ -62,8 +62,15 @@ pub struct Config {
 // Headless Claude Code with thinking off: the same answers, 4-5× faster and cheaper. `{model}`
 // is where the configured model goes, so choosing one is a word in a config file rather than a
 // rewritten command line; a command that names no `{model}` simply ignores the setting.
-const ENRICH_COMMAND: &str = "MAX_THINKING_TOKENS=0 claude -p --model {model} --output-format text --tools \"\" --setting-sources \"\" --no-session-persistence";
-const RERANK_COMMAND: &str = "MAX_THINKING_TOKENS=0 claude -p --model {model} --output-format text --tools \"\" --setting-sources \"\" --no-session-persistence";
+//
+// The system prompt is replaced, not appended. `--tools ""` takes the tools away and leaves the
+// agent system prompt, which describes a memory directory and a scratchpad; asked for a very long
+// answer, the cheap model did with it what that prompt trains an agent to do with a long artefact
+// — wrote the answer to a file and reported it — and with no tools it wrote the call as text. One
+// batch in ten of a two-language run came back that way: 10,155 output tokens, zero tab lines,
+// paid for and retried. The paths in those pretend calls were the agent prompt's, not ours.
+const ENRICH_COMMAND: &str = "MAX_THINKING_TOKENS=0 claude -p --model {model} --output-format text --tools \"\" --system-prompt \"You write plain text. You have no tools, no files and no memory: the only thing you can do is print your answer.\" --setting-sources \"\" --no-session-persistence";
+const RERANK_COMMAND: &str = "MAX_THINKING_TOKENS=0 claude -p --model {model} --output-format text --tools \"\" --system-prompt \"You write plain text. You have no tools, no files and no memory: the only thing you can do is print your answer.\" --setting-sources \"\" --no-session-persistence";
 // The cheap model writes a node's questions as well as any (paraphrase 15/30 against a stronger
 // model's 17/30, and 5/9 of the developer suite's `rule` answers against its 2/9 — the register
 // its questions are written in matters more than the model, and
@@ -730,6 +737,16 @@ mod tests {
         let out = f();
         unsafe { std::env::remove_var("REPOGRAPH_CONFIG") };
         out
+    }
+
+    /// `--tools ""` leaves the agent system prompt in place, and that prompt is what turned one
+    /// batch in ten of a long two-language run into a pretend tool call the parser could not read.
+    #[test]
+    fn the_built_in_commands_replace_the_agent_system_prompt() {
+        let cfg = Config::default();
+        for c in [&cfg.enrich_command, &cfg.rerank_command] {
+            assert!(c.contains("--system-prompt \"You write plain text."), "{c}");
+        }
     }
 
     #[test]

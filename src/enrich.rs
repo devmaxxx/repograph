@@ -365,6 +365,15 @@ fn clean(entries: &mut BTreeMap<String, Entry>) {
     });
 }
 
+/// A reply that wrote its tabs as the two characters `\` and `t` instead of tabbing. The
+/// generator does this when it believes it is writing a file rather than printing an answer, and
+/// the questions in it are whole and paid for: parsing them is the difference between a batch
+/// salvaged and a batch bought twice. Only for a reply that holds no real tab at all — a reply
+/// that tabs properly and merely mentions the escape somewhere is not this case.
+fn unescaped_tabs(out: &str) -> Option<String> {
+    (!out.contains('\t') && out.contains("\\t")).then(|| out.replace("\\t", "\t"))
+}
+
 /// The model sometimes packs a whole entry's questions into one comma-separated line without
 /// question marks; three or more comma parts of three words each are that case, a synonym list
 /// or a single question with a comma in it is not.
@@ -487,11 +496,15 @@ pub fn run(store: &Store, graph: &Graph, questions: Questions, command: &str, ba
                     Ok(out) => {
                         // The code prompt fixes its own pair of languages and does not read the
                         // run's list, so neither does the parser that holds its answer.
-                        let parsed = if is_code {
-                            parse_keyed(&out, &code_keys(&nodes), &CODE_LANGUAGES.map(String::from))
+                        let read = |text: &str| if is_code {
+                            parse_keyed(text, &code_keys(&nodes), &CODE_LANGUAGES.map(String::from))
                         } else {
-                            parse(&out, &nodes, languages)
+                            parse(text, &nodes, languages)
                         };
+                        let mut parsed = read(&out);
+                        if parsed.is_empty() {
+                            if let Some(text) = unescaped_tabs(&out) { parsed = read(&text); }
+                        }
                         let mut g = shared.lock().unwrap();
                         for (n, h) in &b {
                             if let Some(qs) = parsed.get(&n.id) {
@@ -511,7 +524,15 @@ pub fn run(store: &Store, graph: &Graph, questions: Questions, command: &str, ba
                         let left = {
                             let mut queue = queue.lock().unwrap();
                             if !skipped.is_empty() && !retry {
-                                eprintln!("enrich: {} of {} nodes skipped by the model, retrying them", skipped.len(), b.len());
+                                // Which of the two it was decides what to do about it, and the
+                                // wrong word sent the first reading of this after the model's
+                                // refusals: a reply with text in it and no id line anywhere is the
+                                // generator answering something other than what was asked, not the
+                                // generator declining these nodes.
+                                match parsed.is_empty() {
+                                    true => eprintln!("enrich: a batch of {} came back unparseable — {} chars, no id line — retrying it", b.len(), out.chars().count()),
+                                    false => eprintln!("enrich: {} of {} nodes skipped by the model, retrying them", skipped.len(), b.len()),
+                                }
                                 queue.push(Batch { nodes: skipped, retry: true, code: is_code });
                             }
                             queue.len()
@@ -789,6 +810,21 @@ mod tests {
             vec!["как отменить бронь", "кто платит штраф", "когда деньги спишут"]
         );
         assert_eq!(split_joined("а если это оплата, ну как быть?"), vec!["а если это оплата, ну как быть?"]);
+    }
+
+    /// 16 of 167 batches of one two-language run came back like this: the whole answer written
+    /// as if into a file, tabs as two characters. Every question was there and paid for.
+    #[test]
+    fn a_reply_that_wrote_its_tabs_as_escapes_is_read_once_rather_than_bought_twice() {
+        let g = graph();
+        let batch: Vec<&Node> = vec![&g.nodes["FR-PAY-22"]];
+        let out = "I'll write the output to a file for your review.\n                   FR-PAY-22\\tкак отменить запись\nFR-PAY-22\\tштраф за неявку\n                   Output saved to scratchpad.\n";
+        assert!(parse(out, &batch, &ru_en()).is_empty(), "the reply as it stands holds no id line");
+        let salvaged = unescaped_tabs(out).expect("no real tab, and escapes present");
+        assert_eq!(parse(&salvaged, &batch, &ru_en())["FR-PAY-22"], vec!["как отменить запись", "штраф за неявку"]);
+        // A reply that tabs properly is left alone, whatever it says about escapes elsewhere.
+        assert_eq!(unescaped_tabs("FR-PAY-22\tкак отменить\nwrite \\t for a tab\n"), None);
+        assert_eq!(unescaped_tabs("no tabs and no escapes here"), None);
     }
 
     #[test]

@@ -437,7 +437,7 @@ because a command a cloned repository names is a command it runs on your machine
 ```toml
 # ~/.config/repograph/config.toml
 # The shipped default: headless Claude Code, thinking off.
-rerank_command = "MAX_THINKING_TOKENS=0 claude -p --model {model} --output-format text --tools \"\" --setting-sources \"\" --no-session-persistence"
+rerank_command = "MAX_THINKING_TOKENS=0 claude -p --model {model} --output-format text --tools \"\" --system-prompt \"You write plain text. You have no tools, no files and no memory: the only thing you can do is print your answer.\" --setting-sources \"\" --no-session-persistence"
 rerank_model = "sonnet"
 
 # OpenAI's Codex CLI. Read from `codex exec --help` here and not run: with no prompt argument
@@ -629,7 +629,10 @@ accepts are Latin and Cyrillic — identifiers and product names are Latin whate
 are written in — plus the script of every language named below, so a Chinese corpus keeps its
 Chinese and a Russian one still drops a generator that wandered into Urdu. Loading an older cache
 splits the tab-joined lines and drops mojibake, but judges no script: the run that wrote an entry
-named its own languages, and a later load knows nothing about that run. On the corpus of 2026-09-02, 1,971 eligible nodes took 16 minutes at 8-way parallelism and
+named its own languages, and a later load knows nothing about that run. A reply with no id line
+anywhere is logged as unparseable rather than as nodes the model skipped, and one that wrote its
+tabs as the two characters `\t` — what the generator does when it believes it is writing a file —
+is unescaped and read once before the batch is retried at full price. On the corpus of 2026-09-02, 1,971 eligible nodes took 16 minutes at 8-way parallelism and
 roughly $2.5 of haiku; the corpus is 1,996 eligible nodes now.
 
 Every entry gets its twelve questions and its synonyms in every language the documents use — set
