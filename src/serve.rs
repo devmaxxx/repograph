@@ -221,7 +221,11 @@ fn try_ask_within(repo: &Path, req: &ask::Request, first_line: Duration) -> Opti
     reader.read_line(&mut line).ok()?;
     // The acknowledgement buys the long wait; without one the reply had better be on this line.
     if acknowledged(req) && serde_json::from_str::<Ack>(&line).is_ok() {
-        stream.set_read_timeout(Some(reply_timeout(req))).ok()?;
+        // Best-effort: on macOS, a peer that has already written the reply and closed makes this
+        // setsockopt fail with EINVAL (the same quirk `hello_line` documents), even though the
+        // reply is already sitting in this socket's receive buffer waiting to be read. Losing the
+        // ability to extend the wait is not a reason to throw away an answer that already arrived.
+        let _ = stream.set_read_timeout(Some(reply_timeout(req)));
         line.clear();
         reader.read_line(&mut line).ok()?;
     }
@@ -458,9 +462,9 @@ impl Drop for Unlink {
 
 #[cfg(test)]
 mod tests {
-    use super::{acknowledged, drop_model_now, reply_timeout, socket_path, sys, try_ask_within, Ack, Reply, IO_TIMEOUT, RERANK_TIMEOUT};
+    use super::{acknowledged, build_stamp, drop_model_now, reply_timeout, socket_path, sys, try_ask, try_ask_within, Ack, Reply, IO_TIMEOUT, RERANK_TIMEOUT, VERSION};
     use crate::ask::Request;
-    use std::io::{BufRead, BufReader};
+    use std::io::{BufRead, BufReader, Write};
     use std::time::Duration;
 
     /// The bug behind a `--rerank-local` question that never printed a `serve:` line: the client
@@ -548,6 +552,58 @@ mod tests {
         assert!(try_ask_within(dir.path(), &req, Duration::from_millis(300)).is_none(), "nothing came back to parse");
         assert!(started.elapsed() < Duration::from_secs(2), "fell back after {:?}", started.elapsed());
         let _ = held.join();
+    }
+
+    /// The extension only matters if a reply that was not yet on the wire when the ack was read
+    /// is still picked up afterwards: the ack buys the wait, and this is what the wait is for.
+    #[test]
+    fn a_reply_that_arrives_after_the_ack_still_extends_the_wait_to_find_it() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join(".repograph")).unwrap();
+        let listener = sys::bind(&socket_path(dir.path())).unwrap();
+        let build = build_stamp();
+        let held = std::thread::spawn(move || {
+            let mut s = sys::accept(&listener).unwrap();
+            let mut line = String::new();
+            BufReader::new(s.try_clone().unwrap()).read_line(&mut line).unwrap();
+            writeln!(s, "{}", serde_json::to_string(&Ack { ack: VERSION.into() }).unwrap()).unwrap();
+            // Later than the shortened first-line wait below, so the read that finds it only
+            // succeeds if the ack actually moved the deadline out to `reply_timeout`.
+            std::thread::sleep(Duration::from_millis(700));
+            let reply = Reply { v: VERSION.into(), build, no_dense: false, stdout: "hi".into(), stderr: vec![] };
+            writeln!(s, "{}", serde_json::to_string(&reply).unwrap()).unwrap();
+        });
+        let req = Request { words: vec!["чаевые".into()], json: false, seeds: 5, bodies: false, rerank: true, rerank_local: false, depth: crate::rerank::DEPTH, stale: false, no_dense: false };
+        let got = try_ask_within(dir.path(), &req, Duration::from_millis(300));
+        held.join().unwrap();
+        assert_eq!(got.map(|r| r.stdout), Some("hi".into()), "the late reply should still have been read after the ack extended the timeout");
+    }
+
+    /// On macOS, `setsockopt` for a read timeout fails with EINVAL once the peer has already
+    /// written everything and closed — the same quirk `hello_line` documents, met here from the
+    /// other side of the same socket. A server that answers fast enough to write its reply and
+    /// return (dropping the connection) before the client gets to extend its own timeout must
+    /// not cost the client an answer that already fully arrived.
+    #[test]
+    fn a_reply_already_behind_a_closed_peer_is_read_even_when_extending_the_timeout_fails() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join(".repograph")).unwrap();
+        let listener = sys::bind(&socket_path(dir.path())).unwrap();
+        let build = build_stamp();
+        let held = std::thread::spawn(move || {
+            let mut s = sys::accept(&listener).unwrap();
+            let mut line = String::new();
+            BufReader::new(s.try_clone().unwrap()).read_line(&mut line).unwrap();
+            writeln!(s, "{}", serde_json::to_string(&Ack { ack: VERSION.into() }).unwrap()).unwrap();
+            // No delay: the reply and the drop of `s` below race the client's own extension of
+            // its read timeout, and on macOS this side wins often enough to pin the bug on.
+            let reply = Reply { v: VERSION.into(), build, no_dense: false, stdout: "hi2".into(), stderr: vec![] };
+            writeln!(s, "{}", serde_json::to_string(&reply).unwrap()).unwrap();
+        });
+        let req = Request { words: vec!["чаевые".into()], json: false, seeds: 5, bodies: false, rerank: true, rerank_local: false, depth: crate::rerank::DEPTH, stale: false, no_dense: false };
+        let got = try_ask(dir.path(), &req);
+        held.join().unwrap();
+        assert_eq!(got.map(|r| r.stdout), Some("hi2".into()), "a reply that already fully arrived must not be thrown away over a timeout that could not be extended");
     }
 
     /// The two lines a client reads share no required field, so neither can be taken for the
