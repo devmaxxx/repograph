@@ -105,3 +105,46 @@ form; `repograph model <hub id>` opens the model first, writes `embed_model` int
 only once it opens, and re-embeds. Changing the model drops every row the previous one wrote — a
 change of dimension rewrites the index whole rather than extending it — so the switch costs the
 embed column above, once.
+
+## The widened paraphrase arm
+
+The readings above were taken on 30 paraphrase cases, and four models tied on them at 21/30. That
+tie was the arm's, not the models': the best stack this project has — an embedder plus a sonnet
+rerank — already read 29 of those 30, so one hit was the whole remaining headroom.
+
+So the arm was widened to 60. The 30 new cases were authored against the same pinned fixture and
+admitted only by a mechanical gate: at most 0.34 of a question's content stems may also occur in
+the target node's label and body, the anchor must resolve, and no second node may answer it. The
+threshold is stricter than 6 of the 30 cases already recorded, so the new half is the harder half
+by construction. Six cells ran on the widened suite, each re-embedded under its own model, rerank
+on sonnet at depth 200:
+
+| model | paraphrase, no rerank | paraphrase, + rerank |
+| --- | --- | --- |
+| `intfloat/multilingual-e5-small` | 24/60 | 48/60 |
+| `onnx-community/embeddinggemma-300m-ONNX` | 35/60 | 50/60 |
+| `Snowflake/snowflake-arctic-embed-l-v2.0` | **39/60** | **52/60** |
+
+Two things read off that table. The embedders separate — 24, 35, 39 — where the 30-case arm called
+three of them a tie, and `snowflake-arctic-embed-l-v2.0` is the widest of the three. And the rerank
+compresses the spread back to 48, 50, 52: it recovers most of what a weaker embedder loses, which
+is why an arm of 30 could not tell the two levers apart. Keyword falls 40/40 to 39/40 in every
+rerank cell, the same case each time, and three paraphrase cases are missed by all six.
+
+This is what moved the recommendation from `embeddinggemma-300m` to `snowflake-arctic-embed-l-v2.0`
+— on recall, and with the Gemma terms no longer standing in the way of it. The cost columns above
+are unchanged by any of this: arctic is still 2.7× embeddinggemma's embed and writes 137 MB of
+vectors against its 103 MB, and the default is still the default.
+
+The same caveats apply, and one more. One run per cell, so four hits are still noise; the widened
+suite is not the graded one — `RECORDED_SHAPE` in `src/bench.rs` still names 40/30/12, so a
+112-case file is measured and not graded — and the cases live in the bench kit rather than in
+`bench/cases.jsonl`. The six cells are recorded in `bench/history/runs.jsonl` as `paraphrase60:*`.
+
+## What the catalogue offers
+
+`repograph model` lists two of the nine: the default and `snowflake-arctic-embed-l-v2.0`. The other
+seven stay in this document, which is the record of what was measured rather than a menu. Removing
+a model from the catalogue does not remove support for it: `embed_model` and `REPOGRAPH_EMBED_MODEL`
+still take any hub id, and the per-model profiles — pooling, prefixes, decoder inputs — are all
+still in `src/index/embed.rs`.

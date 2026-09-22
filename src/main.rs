@@ -573,6 +573,19 @@ fn model_json(repo: &std::path::Path, cfg: &config::Config) -> anyhow::Result<St
     }).to_string() + "\n")
 }
 
+/// The spelling of a hub id to write down: the catalogue's where it holds a row, else the store's
+/// own where the store already stands on this model. `written_by` compares model names byte for
+/// byte, so `BAAI/BGE-M3` and `BAAI/bge-m3` are two models to every later `update` and the
+/// difference costs a whole re-embed nobody asked for — a case the catalogue cannot canonicalise
+/// for a model it does not list.
+fn spelling<'a>(id: &'a str, recorded: Option<&'a str>) -> &'a str {
+    let id = index::embed::measured(id).map_or(id, |m| m.model);
+    match recorded {
+        Some(m) if m.eq_ignore_ascii_case(id) => m,
+        _ => id,
+    }
+}
+
 /// The switch: the model is opened before anything at all is written.
 ///
 /// That order is the whole contract. A typo, an id whose repository has no ONNX export, a machine
@@ -587,10 +600,7 @@ fn switch_model(repo: &std::path::Path, cfg: &config::Config, id: &str, no_embed
     }
     let store = store::Store::new(repo);
     let recorded = index::dense::DenseIndex::recorded_model(&store)?;
-    // The catalogue's own spelling, where the id is one of its rows: `written_by` compares names
-    // byte for byte, so `BAAI/BGE-M3` and `BAAI/bge-m3` are two models to every later `update`,
-    // and the difference costs a whole re-embed nobody asked for.
-    let id = index::embed::measured(id).map_or(id, |m| m.model);
+    let id = spelling(id, recorded.as_deref());
     let (was, now) = (recorded.as_deref().and_then(index::embed::measured), index::embed::measured(id));
     eprintln!("model: {} → {id}", recorded.as_deref().unwrap_or(&cfg.embed_model));
     match now {
@@ -603,8 +613,9 @@ fn switch_model(repo: &std::path::Path, cfg: &config::Config, id: &str, no_embed
             }
         }
         None => {
-            eprintln!("model: nothing here was measured against that id, so its size, its");
-            eprintln!("       embed cost and its recall are all unknown");
+            eprintln!("model: this catalogue holds no row for that id, so its size, its embed cost");
+            eprintln!("       and its recall are unknown here — docs/bench/2026-09-22-embedders-results.md");
+            eprintln!("       reads further models the catalogue does not list");
             if index::embed::reads_as_e5(id) {
                 eprintln!("model: and nothing here recognises the id, so it is read with e5's pooling and");
                 eprintln!("       prefixes — a wrong guess there costs recall rather than failing");
@@ -1348,4 +1359,16 @@ more
         assert!(!temp.to_string_lossy().starts_with(r"\\?\"), "{}", temp.display());
         assert!(std::fs::metadata(&temp).unwrap().is_dir(), "the stripped path still names the directory");
     }
+    /// The id that gets written down is the one the store's rows already carry, because a switch
+    /// that reports the rows kept and then drops them for a difference of case is the expensive
+    /// half of a re-embed nobody asked for.
+    #[test]
+    fn the_id_written_down_is_the_one_the_rows_already_carry() {
+        let arctic = index::embed::RECOMMENDED;
+        assert_eq!(spelling("snowflake/SNOWFLAKE-ARCTIC-EMBED-L-V2.0", None), arctic, "the catalogue's row canonicalises its own id");
+        assert_eq!(spelling("baai/BGE-M3", Some("BAAI/bge-m3")), "BAAI/bge-m3", "a model the catalogue does not list keeps the store's spelling");
+        assert_eq!(spelling("BAAI/bge-m3", None), "BAAI/bge-m3", "nothing to match, so the id stands as typed");
+        assert_eq!(spelling("BAAI/bge-m3", Some(arctic)), "BAAI/bge-m3", "another model's rows do not lend their spelling");
+    }
+
 }

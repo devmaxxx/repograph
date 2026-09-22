@@ -569,41 +569,35 @@ Embedding times, and what a rebuild reuses rather than pays for twice, are in
 
 Nine models were embedded over the same corpus and read on the same 82 cases — one run each, the
 whole store re-embedded per model. Keyword and code read 40/40 and 12/12 for every model but the
-smallest, which drops one keyword case, so paraphrase is the column the embedder moves:
+smallest, which drops one keyword case, so paraphrase is the column the embedder moves. Two of the
+nine are offered here; [the readings](docs/bench/2026-09-22-embedders-results.md) hold the rest.
 
 | hub id | dim | paraphrase | embed | vectors | licence |
 | --- | --- | --- | --- | --- | --- |
 | `intfloat/multilingual-e5-small` (default) | 384 | 15/30 | 1.0× | 51 MB | MIT |
-| `onnx-community/embeddinggemma-300m-ONNX` | 768 | **21/30** | 5.1× | 103 MB | Gemma |
 | `Snowflake/snowflake-arctic-embed-l-v2.0` | 1024 | **21/30** | 13.5× | 137 MB | Apache-2.0 |
-| `BAAI/bge-m3` | 1024 | **21/30** | 14.3× | 137 MB | MIT |
-| `onnx-community/Qwen3-Embedding-0.6B-ONNX` | 1024 | **21/30** | 28.8× | 137 MB | Apache-2.0 |
-| `intfloat/multilingual-e5-base` | 768 | 17/30 | 4.2× | 103 MB | MIT |
-| `Teradata/granite-embedding-278m-multilingual` | 768 | 16/30 | 3.8× | 103 MB | Apache-2.0 |
-| `Teradata/granite-embedding-107m-multilingual` | 384 | 14/30 | 0.7× | 51 MB | Apache-2.0 |
-| `Snowflake/snowflake-arctic-embed-m-v2.0` | 768 | 14/30 | 4.6× | 103 MB | Apache-2.0 |
 
-`onnx-community/embeddinggemma-300m-ONNX` is the upgrade: the recall of the two 568M models for a
-third of their embed and the least memory of the whole field, the default included — and its Gemma
-terms, which are not an OSI licence, are the one reason to refuse it, in which case `BAAI/bge-m3`
-reads the same 21/30 under MIT at 2.8× the cost. One run each, so anything within four hits of the
-default is noise and the tie at the top is not a ranking; the conditions, the flips, the memory and
+`Snowflake/snowflake-arctic-embed-l-v2.0` is the upgrade, under Apache-2.0. Four models read 21/30
+and that arm could not separate them — a widened arm of 60 paraphrase cases could, and this one
+took 39/60 against 35/60 for the next candidate. It is not the default because its cost lands on a
+first build, before anyone knows whether they need the recall: 13.5× the embed and 137 MB of
+vectors where the default writes 51 MB. The conditions, the other seven candidates, the flips and
 the caveats are in [the readings](docs/bench/2026-09-22-embedders-results.md).
 
 `repograph model` prints that table with the store's own model marked, and
 `repograph model <hub id>` changes it:
 
 ```console
-$ repograph model onnx-community/embeddinggemma-300m-ONNX
-model: intfloat/multilingual-e5-small → onnx-community/embeddinggemma-300m-ONNX
-model: 1.2G of files in the hub cache, fetched once
-model: 5.1× the default's embed — 733 s for the bench fixture's 33,525 rows
-model: 103 MB of vectors for that corpus, against the other model's 51 MB on it
-model: 384-d → 768-d, so every row is re-embedded and the whole index rewritten, not extended
-model: opened in 1.7s, 768-d vectors
-model: embed_model = "onnx-community/embeddinggemma-300m-ONNX" in /repo/repograph.toml
-dense: 33525/33525 rows, 47.3 rows/s, ~0 min left
-dense: embedded 33525 rows in 708.9s
+$ repograph model Snowflake/snowflake-arctic-embed-l-v2.0
+model: intfloat/multilingual-e5-small → Snowflake/snowflake-arctic-embed-l-v2.0
+model: 2.1G of files in the hub cache, fetched once
+model: 13.5× the default's embed — 1944 s for the bench fixture's 33,525 rows
+model: 137 MB of vectors for that corpus, against the other model's 51 MB on it
+model: 384-d → 1024-d, so every row is re-embedded and the whole index rewritten, not extended
+model: opened in 5.2s, 1024-d vectors
+model: embed_model = "Snowflake/snowflake-arctic-embed-l-v2.0" in /repo/repograph.toml
+dense: 33525/33525 rows, 14.5 rows/s, ~0 min left
+dense: embedded 33525 rows in 2317.4s
 ```
 
 The model is opened before anything is written, so an id with no ONNX export fails with the hub's

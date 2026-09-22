@@ -190,26 +190,22 @@ pub struct Measured {
     pub licence: &'static str,
 }
 
-/// The control first, then the models that tie at the top of the paraphrase arm by what they cost
-/// to embed, then the rest by recall. Four of them read 21/30 against the control's 15/30 and the
-/// suite was run once per model, so the order inside that tie is cost and not rank: nothing here
-/// separates them on recall.
+/// The control and the model this project recommends over it. Seven further candidates were
+/// measured the same way and are not listed here: the readings document holds them, and a
+/// catalogue is a thing to choose from rather than the record of what was tried.
 pub const MEASURED: &[Measured] = &[
     Measured { model: DEFAULT_MODEL, dim: 384, paraphrase: 15, embed_s: 144, vectors_mb: 51, cache: "578M", licence: "MIT" },
-    Measured { model: RECOMMENDED, dim: 768, paraphrase: 21, embed_s: 733, vectors_mb: 103, cache: "1.2G", licence: "Gemma" },
-    Measured { model: "Snowflake/snowflake-arctic-embed-l-v2.0", dim: 1024, paraphrase: 21, embed_s: 1944, vectors_mb: 137, cache: "2.1G", licence: "Apache-2.0" },
-    Measured { model: "BAAI/bge-m3", dim: 1024, paraphrase: 21, embed_s: 2059, vectors_mb: 137, cache: "2.1G", licence: "MIT" },
-    Measured { model: "onnx-community/Qwen3-Embedding-0.6B-ONNX", dim: 1024, paraphrase: 21, embed_s: 4153, vectors_mb: 137, cache: "2.2G", licence: "Apache-2.0" },
-    Measured { model: "intfloat/multilingual-e5-base", dim: 768, paraphrase: 17, embed_s: 608, vectors_mb: 103, cache: "1.0G", licence: "MIT" },
-    Measured { model: "Teradata/granite-embedding-278m-multilingual", dim: 768, paraphrase: 16, embed_s: 548, vectors_mb: 103, cache: "1.0G", licence: "Apache-2.0" },
-    Measured { model: "Teradata/granite-embedding-107m-multilingual", dim: 384, paraphrase: 14, embed_s: 97, vectors_mb: 51, cache: "424M", licence: "Apache-2.0" },
-    Measured { model: "Snowflake/snowflake-arctic-embed-m-v2.0", dim: 768, paraphrase: 14, embed_s: 663, vectors_mb: 103, cache: "1.2G", licence: "Apache-2.0" },
+    Measured { model: RECOMMENDED, dim: 1024, paraphrase: 21, embed_s: 1944, vectors_mb: 137, cache: "2.1G", licence: "Apache-2.0" },
 ];
 
 /// The model the readings point at for a project that wants more recall than the default's. Not
-/// the default itself: a first build pays for the model before anyone knows whether they need it,
-/// and this one's licence is a decision somebody has to make rather than inherit.
-pub const RECOMMENDED: &str = "onnx-community/embeddinggemma-300m-ONNX";
+/// the default itself: a first build would pay 13.5× the embed for recall nobody has asked for
+/// yet, and a 1024-d index is 137 MB against 51 MB of the same rows.
+///
+/// Four models read 21/30 on the recorded paraphrase arm and nothing there separated them. A
+/// widened arm of 60 cases did: 39/60 here against 35/60 for embeddinggemma-300m, whose licence is
+/// Gemma's rather than an OSI one in any case (docs/bench/2026-09-22-embedders-results.md).
+pub const RECOMMENDED: &str = "Snowflake/snowflake-arctic-embed-l-v2.0";
 
 impl Measured {
     /// This model's whole-store embed against the default's — the number someone deciding whether
@@ -243,13 +239,14 @@ pub fn catalogue(on: Option<&str>) -> String {
     }
     s.push_str(&format!("\npara is the paraphrase arm of the 82-case suite; embed is the whole store\n\
         against the default's {} s on the bench fixture. One run each, so anything\n\
-        within four hits of the control is noise and the tie at the top is not a\n\
-        ranking (docs/bench/2026-09-22-embedders-results.md).\n\n\
-        {RECOMMENDED} is what the readings point at: the\n\
-        recall of the two 568M models for a third of their embed, and the least memory\n\
-        of any of them. Its licence is Gemma's rather than an OSI one, which is the one\n\
-        reason to refuse it; the MIT row at the same recall is BAAI/bge-m3, at the cost\n\
-        the table gives.\n", control().embed_s));
+        within four hits of the control is noise. The seven candidates this table does\n\
+        not list are in docs/bench/2026-09-22-embedders-results.md.\n\n\
+        {RECOMMENDED} is what the readings point at,\n\
+        under Apache-2.0. Four models tied at 21/30 and that arm could not separate\n\
+        them; a widened arm of 60 paraphrase cases did, and this one took 39/60. It is\n\
+        not the default because its cost lands on a first build, before anyone knows\n\
+        whether they need the recall: 13.5× the embed, and 137 MB of vectors for the\n\
+        rows the default writes 51 MB for.\n", control().embed_s));
     s
 }
 
@@ -635,13 +632,13 @@ mod tests {
     /// in the one place it has to be read: where a person is choosing what to download.
     #[test]
     fn the_catalogue_fits_an_eighty_column_terminal_and_marks_the_row_it_was_given() {
-        let text = catalogue(Some("BAAI/BGE-M3"));
+        let text = catalogue(Some("snowflake/SNOWFLAKE-ARCTIC-EMBED-L-V2.0"));
         for line in text.lines() {
             assert!(line.chars().count() <= 80, "{} columns: {line}", line.chars().count());
         }
         let marked: Vec<&str> = text.lines().filter(|l| l.starts_with('→')).collect();
         assert_eq!(marked.len(), 1, "one row marked, whatever case the store recorded: {marked:?}");
-        assert!(marked[0].contains("BAAI/bge-m3"), "{}", marked[0]);
+        assert!(marked[0].contains("Snowflake/snowflake-arctic-embed-l-v2.0"), "{}", marked[0]);
         assert!(catalogue(None).lines().all(|l| !l.starts_with('→')));
         assert!(catalogue(Some("someone/unmeasured")).contains(DEFAULT_MODEL));
     }
@@ -681,8 +678,8 @@ mod tests {
     #[test]
     fn the_embed_cost_is_quoted_against_the_default() {
         assert_eq!(measured(DEFAULT_MODEL).unwrap().times_the_default(), 1.0);
-        let gemma = measured(RECOMMENDED).unwrap();
-        assert!((gemma.times_the_default() - 5.09).abs() < 0.01, "{}", gemma.times_the_default());
+        let best = measured(RECOMMENDED).unwrap();
+        assert!((best.times_the_default() - 13.5).abs() < 0.01, "{}", best.times_the_default());
     }
 
     #[test]
