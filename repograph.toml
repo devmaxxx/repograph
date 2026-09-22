@@ -39,7 +39,8 @@ reranker_dir = ""
 # A store records the model its vectors were written with and `ask` opens that one, so this key
 # decides only what new rows are written with, not what an existing store answers by. The small
 # model is the default because a first build pays for the model before anyone knows whether they
-# need its recall; swap in "intfloat/multilingual-e5-large" for paraphrase 22/30 against 15/30, a
-# 2.1 GB download and nine times the wall on a whole-store embed
-# (docs/adr/ADR-002-two-defaults-multiplied.md).
+# need its recall (docs/adr/ADR-002-two-defaults-multiplied.md). `repograph model` prints the nine
+# that were measured against it and rewrites this line; the readings point at
+# "onnx-community/embeddinggemma-300m-ONNX" — paraphrase 21/30 against 15/30 at five times the
+# embed, and a licence that is not an OSI one (docs/bench/2026-09-22-embedders-results.md).
 embed_model = "intfloat/multilingual-e5-small"

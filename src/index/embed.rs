@@ -159,6 +159,100 @@ fn profile(model: &str) -> Profile {
     }
 }
 
+/// Whether a model falls through to e5's recipe — its pooling, its `query: `/`passage: ` tags —
+/// because nothing in `profile` recognised the id. True for the e5 models themselves, and for
+/// every id this binary has never heard of: the guess costs recall rather than a crash, and a
+/// reader about to spend a download on one is owed the sentence.
+pub fn reads_as_e5(model: &str) -> bool { profile(model) == E5 }
+
+/// Cases in the paraphrase arm of the 82-case suite. The arm an embedder moves: keyword and code
+/// read 40/40 and 12/12 for every model measured but the smallest.
+pub const PARAPHRASE_CASES: u32 = 30;
+
+/// A model this project has measured end to end — one run each, on the pinned beauty-crm fixture's
+/// 33,525 rows, enriched store, no rerank, fp32 ONNX on CPU
+/// (docs/bench/2026-09-22-embedders-results.md). One list, so that `repograph model`, the README's
+/// table and the prose quote the same figures; every id in it resolves to a profile `profile`
+/// recognises, which a test holds.
+pub struct Measured {
+    pub model: &'static str,
+    /// The width of the vectors, and so what a switch rewrites the whole index for.
+    pub dim: u32,
+    /// Hits of `PARAPHRASE_CASES`.
+    pub paraphrase: u32,
+    /// Seconds to embed the fixture's rows. Quoted as a ratio against the control's, which is
+    /// the part of it that survives a different machine.
+    pub embed_s: u32,
+    /// What those rows take in `vectors.f32`.
+    pub vectors_mb: u32,
+    /// What the model's files take in the hub cache once fetched — the download a switch starts.
+    pub cache: &'static str,
+    pub licence: &'static str,
+}
+
+/// The control first, then the models that tie at the top of the paraphrase arm by what they cost
+/// to embed, then the rest by recall. Four of them read 21/30 against the control's 15/30 and the
+/// suite was run once per model, so the order inside that tie is cost and not rank: nothing here
+/// separates them on recall.
+pub const MEASURED: &[Measured] = &[
+    Measured { model: DEFAULT_MODEL, dim: 384, paraphrase: 15, embed_s: 144, vectors_mb: 51, cache: "578M", licence: "MIT" },
+    Measured { model: RECOMMENDED, dim: 768, paraphrase: 21, embed_s: 733, vectors_mb: 103, cache: "1.2G", licence: "Gemma" },
+    Measured { model: "Snowflake/snowflake-arctic-embed-l-v2.0", dim: 1024, paraphrase: 21, embed_s: 1944, vectors_mb: 137, cache: "2.1G", licence: "Apache-2.0" },
+    Measured { model: "BAAI/bge-m3", dim: 1024, paraphrase: 21, embed_s: 2059, vectors_mb: 137, cache: "2.1G", licence: "MIT" },
+    Measured { model: "onnx-community/Qwen3-Embedding-0.6B-ONNX", dim: 1024, paraphrase: 21, embed_s: 4153, vectors_mb: 137, cache: "2.2G", licence: "Apache-2.0" },
+    Measured { model: "intfloat/multilingual-e5-base", dim: 768, paraphrase: 17, embed_s: 608, vectors_mb: 103, cache: "1.0G", licence: "MIT" },
+    Measured { model: "Teradata/granite-embedding-278m-multilingual", dim: 768, paraphrase: 16, embed_s: 548, vectors_mb: 103, cache: "1.0G", licence: "Apache-2.0" },
+    Measured { model: "Teradata/granite-embedding-107m-multilingual", dim: 384, paraphrase: 14, embed_s: 97, vectors_mb: 51, cache: "424M", licence: "Apache-2.0" },
+    Measured { model: "Snowflake/snowflake-arctic-embed-m-v2.0", dim: 768, paraphrase: 14, embed_s: 663, vectors_mb: 103, cache: "1.2G", licence: "Apache-2.0" },
+];
+
+/// The model the readings point at for a project that wants more recall than the default's. Not
+/// the default itself: a first build pays for the model before anyone knows whether they need it,
+/// and this one's licence is a decision somebody has to make rather than inherit.
+pub const RECOMMENDED: &str = "onnx-community/embeddinggemma-300m-ONNX";
+
+impl Measured {
+    /// This model's whole-store embed against the default's — the number someone deciding whether
+    /// to switch is actually weighing, and the one that carries to another machine.
+    pub fn times_the_default(&self) -> f32 { self.embed_s as f32 / control().embed_s as f32 }
+}
+
+/// The catalogue's row for a hub id, or `None` for a model nobody here has measured. Not knowing
+/// one is allowed: `embed_model` takes any id the hub serves, and this list says only which of
+/// them have numbers behind them.
+pub fn measured(model: &str) -> Option<&'static Measured> {
+    MEASURED.iter().find(|m| m.model.eq_ignore_ascii_case(model))
+}
+
+/// The row every other row is quoted against. The default is in the list — a test holds it there —
+/// so the fallback is unreachable and is written only because an index is not a proof.
+fn control() -> &'static Measured { measured(DEFAULT_MODEL).unwrap_or(&MEASURED[0]) }
+
+/// The catalogue as a terminal prints it, 78 columns at the widest so that an 80-column window
+/// folds nothing: a column is dropped rather than wrapped, and the memory, the cold-ask and the
+/// flip counts stay in the results document. `on` is the model a store is standing on, marked.
+pub fn catalogue(on: Option<&str>) -> String {
+    let row = |mark: &str, id: &str, dim: &str, para: &str, embed: &str, licence: &str| {
+        format!("{mark} {id:<44}  {dim:>4}  {para:>5}  {embed:>5}  {licence}\n")
+    };
+    let mut s = row(" ", "hub id", "dim", "para", "embed", "licence");
+    for m in MEASURED {
+        let mark = if on.is_some_and(|o| o.eq_ignore_ascii_case(m.model)) { "→" } else { " " };
+        let cost = format!("{:.1}×", m.times_the_default());
+        s.push_str(&row(mark, m.model, &m.dim.to_string(), &format!("{}/{PARAPHRASE_CASES}", m.paraphrase), &cost, m.licence));
+    }
+    s.push_str(&format!("\npara is the paraphrase arm of the 82-case suite; embed is the whole store\n\
+        against the default's {} s on the bench fixture. One run each, so anything\n\
+        within four hits of the control is noise and the tie at the top is not a\n\
+        ranking (docs/bench/2026-09-22-embedders-results.md).\n\n\
+        {RECOMMENDED} is what the readings point at: the\n\
+        recall of the two 568M models for a third of their embed, and the least memory\n\
+        of any of them. Its licence is Gemma's rather than an OSI one, which is the one\n\
+        reason to refuse it; the MIT row at the same recall is BAAI/bge-m3, at the cost\n\
+        the table gives.\n", control().embed_s));
+    s
+}
+
 /// A stored row's text as this model's card wants it worded.
 fn reword<'a>(text: &'a str, p: &Profile) -> std::borrow::Cow<'a, str> {
     use std::borrow::Cow;
@@ -371,7 +465,7 @@ impl Embedder {
         let lens = self.token_lengths(&texts)?;
         let mut out: Vec<Vec<f32>> = vec![Vec::new(); texts.len()];
         for chunk in token_batches(&lens, BATCH, TOKEN_BUDGET) {
-            let batch: Vec<String> = chunk.iter().map(|&i| texts[i].to_string()).collect();
+            let batch: Vec<&str> = chunk.iter().map(|&i| texts[i].as_ref()).collect();
             for (i, v) in chunk.into_iter().zip(self.forward(&batch)?) {
                 out[i] = v;
             }
@@ -380,7 +474,8 @@ impl Embedder {
     }
 
     pub fn query(&mut self, text: &str) -> Result<Vec<f32>> {
-        Ok(self.forward(&[format!("{}{text}", self.profile.query)])?.remove(0))
+        let text = format!("{}{text}", self.profile.query);
+        Ok(self.forward(&[&text])?.remove(0))
     }
 
     /// How many real tokens each text is, as the model will see it. The tokenizer pads a batch
@@ -396,9 +491,9 @@ impl Embedder {
         Ok(lens)
     }
 
-    fn forward(&mut self, texts: &[String]) -> Result<Vec<Vec<f32>>> {
+    fn forward(&mut self, texts: &[&str]) -> Result<Vec<Vec<f32>>> {
         let encodings = self.tokenizer
-            .encode_batch(texts.iter().map(String::as_str).collect(), true)
+            .encode_batch(texts.to_vec(), true)
             .map_err(|e| anyhow!("{e}"))?;
         let batch = encodings.len();
         let len = encodings.first().map_or(0, |e| e.len());
@@ -430,6 +525,10 @@ impl Embedder {
         if let Some(pooled) = outputs.get("sentence_embedding") {
             let (shape, data) = pooled.try_extract_tensor::<f32>()?;
             let dim = *shape.get(1).context("sentence_embedding is not [batch, dim]")? as usize;
+            // `chunks(0)` panics, and a graph whose second dimension is zero or negative is the
+            // one case that reaches it: an export this binary guessed wrong about, which is owed
+            // the hub's own id in a message rather than a backtrace.
+            anyhow::ensure!(dim > 0, "sentence_embedding is {dim}-d, so the model returned no vector");
             return Ok(data.chunks(dim).map(|row| { let mut v = row.to_vec(); normalise(&mut v); v }).collect());
         }
         let hidden = outputs.get("last_hidden_state")
@@ -515,6 +614,75 @@ mod tests {
         assert_eq!(reword("query: где список", &gemma), "task: search result | query: где список");
         assert_eq!(reword("passage: a", &gemma), "title: none | text: a");
         assert_eq!(reword("passage: a", &E5), "passage: a");
+    }
+
+    /// A catalogue entry is an invitation to download two gigabytes, so it may not name a model
+    /// whose recipe this binary does not have: a fall-through to e5's pooling and prefixes is a
+    /// silent loss of recall, which is precisely what the table claims to have measured. The e5
+    /// models are the exception, being what that profile is.
+    #[test]
+    fn every_measured_model_resolves_to_a_profile_and_the_default_is_among_them() {
+        for m in MEASURED {
+            let is_e5 = m.model.to_ascii_lowercase().contains("multilingual-e5");
+            assert!(!reads_as_e5(m.model) || is_e5, "{} falls through to the e5 profile", m.model);
+        }
+        assert!(measured(DEFAULT_MODEL).is_some(), "the control is the row every other is quoted against");
+        assert!(measured(RECOMMENDED).is_some(), "the recommendation is one of the measured rows");
+        assert_eq!(control().embed_s, 144);
+    }
+
+    /// The table is printed into whatever terminal ran the command, and a folded row is unreadable
+    /// in the one place it has to be read: where a person is choosing what to download.
+    #[test]
+    fn the_catalogue_fits_an_eighty_column_terminal_and_marks_the_row_it_was_given() {
+        let text = catalogue(Some("BAAI/BGE-M3"));
+        for line in text.lines() {
+            assert!(line.chars().count() <= 80, "{} columns: {line}", line.chars().count());
+        }
+        let marked: Vec<&str> = text.lines().filter(|l| l.starts_with('→')).collect();
+        assert_eq!(marked.len(), 1, "one row marked, whatever case the store recorded: {marked:?}");
+        assert!(marked[0].contains("BAAI/bge-m3"), "{}", marked[0]);
+        assert!(catalogue(None).lines().all(|l| !l.starts_with('→')));
+        assert!(catalogue(Some("someone/unmeasured")).contains(DEFAULT_MODEL));
+    }
+
+    /// One table, three copies: this list, the README's and the readings'. A figure corrected in
+    /// the code and left standing in a document contradicts the binary the reader is holding, and
+    /// nothing else here would catch it — the documents are checked against the list instead of
+    /// trusted to follow it.
+    #[test]
+    fn the_documents_quote_the_figures_this_list_holds() {
+        const README: &str = include_str!("../../README.md");
+        const READINGS: &str = include_str!("../../docs/bench/2026-09-22-embedders-results.md");
+        let row = |doc: &'static str, model: &str| {
+            // The paraphrase column is what picks the measurement table out of the documents'
+            // other tables, which name these ids too.
+            doc.lines()
+                .find(|l| l.starts_with("| `") && l.contains(model) && l.contains(&format!("/{PARAPHRASE_CASES}")))
+                .unwrap_or_else(|| panic!("no table row for {model}"))
+        };
+        for m in MEASURED {
+            let readme = row(README, m.model);
+            let readings = row(READINGS, m.model);
+            for (doc, line) in [("README", readme), ("readings", readings)] {
+                for want in [format!("| {} |", m.dim), format!("{}/{PARAPHRASE_CASES}", m.paraphrase), m.licence.to_string()] {
+                    assert!(line.contains(&want), "{doc} row for {} does not say {want}: {line}", m.model);
+                }
+            }
+            assert!(readme.contains(&format!("{:.1}×", m.times_the_default())), "README row for {}: {readme}", m.model);
+            assert!(readme.contains(&format!("{} MB", m.vectors_mb)), "README row for {}: {readme}", m.model);
+            for want in [format!("| {} |", m.embed_s), format!("| {} |", m.vectors_mb), format!("| {} |", m.cache)] {
+                assert!(readings.contains(&want), "readings row for {} does not say {want}: {readings}", m.model);
+            }
+        }
+    }
+
+    /// The cost a switch quotes is a ratio, so the control's own row has to read as 1.
+    #[test]
+    fn the_embed_cost_is_quoted_against_the_default() {
+        assert_eq!(measured(DEFAULT_MODEL).unwrap().times_the_default(), 1.0);
+        let gemma = measured(RECOMMENDED).unwrap();
+        assert!((gemma.times_the_default() - 5.09).abs() < 0.01, "{}", gemma.times_the_default());
     }
 
     #[test]

@@ -148,6 +148,18 @@ enum Cmd {
     /// without its vectors is re-embedded from its graph and questions alone, which is how a
     /// store is measured under another `REPOGRAPH_EMBED_MODEL`.
     Embed,
+    /// Which embedder this store's vectors belong to, and what else has been measured. With a hub
+    /// id, the switch: the model is downloaded and opened, `embed_model` is written into
+    /// `repograph.toml`, and the index is rewritten under it — one command, and a working state
+    /// at the end of it.
+    Model {
+        /// The model to switch to. Without one nothing is written and the table is printed.
+        hub_id: Option<String>,
+        /// Writes the key and stops, for someone who would rather re-embed at a time they choose.
+        #[arg(long, requires = "hub_id")] no_embed: bool,
+        /// The report as an object. A switch is not a reader, so it has no JSON form.
+        #[arg(long, conflicts_with = "hub_id")] json: bool,
+    },
     Bench {
         #[arg(long)] cases: Option<PathBuf>,
         #[arg(long)] rerank: bool,
@@ -480,17 +492,29 @@ fn embed_all(repo: &std::path::Path, no_dense: bool, cfg: &config::Config) -> an
     let model = index::embed::resolve(None, &cfg.embed_model);
     let open = std::time::Instant::now();
     let Some(mut emb) = ask::open_embedder(no_dense, &model, index::embed::threads(cfg.resources), index::embed::Weights::Mapped) else { return Ok(()) };
+    // The probe belongs to opening: a session with its weights loaded still has to run one forward
+    // before it can say how wide a vector is, and the line is printed after it so it reports the
+    // wait it exists to explain rather than the part of it that came first.
+    let dim = emb.dim()?;
+    // The first chunk carries the run's fixed start-up as well as its own work — 2.24 GB of
+    // weights paged in as the first forwards touch them — so without this line the first thing a
+    // person sees is both, and the 60 s bar is missed before a row is embedded.
+    eprintln!("dense: model open in {:.1}s, {dim}-d vectors", open.elapsed().as_secs_f32());
+    embed_opened(repo, &model, &mut emb)
+}
+
+/// The same rows under a model the caller already has open. `model` switches into this rather
+/// than through `embed_all`, because the model it just downloaded and probed is the model the
+/// rows are owed to, and opening a second session of it would cost the reader a second wait for
+/// nothing.
+fn embed_opened(repo: &std::path::Path, model: &str, emb: &mut index::embed::Embedder) -> anyhow::Result<()> {
     let store = store::Store::new(repo);
     let graph_at = store.stamp("graph.json");
     let (graph, _) = store.load()?;
     let questions = enrich::Questions::load(&store)?;
     let mut dense = index::dense::DenseIndex::load(&store)?;
     let t = std::time::Instant::now();
-    dense.written_by(&model, emb.dim()?);
-    // The first chunk carries the run's fixed start-up as well as its own work — 2.24 GB of
-    // weights paged in as the first forwards touch them — so without this line the first thing a
-    // person sees is both, and the 60 s bar is missed before a row is embedded.
-    eprintln!("dense: model open in {:.1}s", open.elapsed().as_secs_f32());
+    dense.written_by(model, emb.dim()?);
     let n = dense.sync_chunked(&graph, &questions, &mut |texts| emb.embed(texts), SYNC_CHUNK, &mut |idx, p| {
         idx.save(&store)?;
         let rate = p.done as f32 / t.elapsed().as_secs_f32().max(f32::EPSILON);
@@ -501,6 +525,127 @@ fn embed_all(repo: &std::path::Path, no_dense: bool, cfg: &config::Config) -> an
     dense.save(&store)?;
     println!("dense: embedded {n} rows in {:.1}s", t.elapsed().as_secs_f32());
     Ok(())
+}
+
+/// What the store is on, what the file asks for, and what else has been measured. The store's own
+/// name is read from `vectors.json` rather than taken from the configuration: a store answers with
+/// the model that wrote it, so the two disagreeing is the thing a reader most needs told, and it is
+/// exactly what a configuration-shaped report would hide.
+fn model_report(repo: &std::path::Path, cfg: &config::Config) -> anyhow::Result<String> {
+    let store = store::Store::new(repo);
+    let recorded = index::dense::DenseIndex::recorded_model(&store)?;
+    let mut out = String::new();
+    let mut say = |key: &str, value: String| out.push_str(&format!("{key:<12}{value}\n"));
+    match &recorded {
+        Some(m) => say("store", m.clone()),
+        None => say("store", "no vectors yet — `repograph build` writes them".to_string()),
+    }
+    let from = match config::names_embed_model(repo) { true => config::PROJECT_FILE, false => "the built-in default" };
+    say("configured", format!("{} ({from})", cfg.embed_model));
+    if let Some(o) = std::env::var("REPOGRAPH_EMBED_MODEL").ok().filter(|v| !v.trim().is_empty()) {
+        say("this run", format!("{o} (REPOGRAPH_EMBED_MODEL)"));
+    }
+    if recorded.as_deref().is_some_and(|m| m != cfg.embed_model) {
+        out.push_str("\nThe two disagree. The store keeps answering with the model that wrote it; the\n\
+            configured one takes effect at the next `build`, `update`, `enrich`, `embed` or\n\
+            `watch`, which drops every row the other model wrote and rewrites the index whole.\n");
+    }
+    out.push('\n');
+    out.push_str(&index::embed::catalogue(recorded.as_deref().or(Some(&cfg.embed_model))));
+    out.push_str("\n`repograph model <hub id>` downloads one, writes the key and re-embeds.\n");
+    Ok(out)
+}
+
+/// The same three facts for a program, and whether they agree. The catalogue is left out: those
+/// figures are a document's, and a caller that wants them is better served by the document than by
+/// a copy of it that ages inside a parser.
+fn model_json(repo: &std::path::Path, cfg: &config::Config) -> anyhow::Result<String> {
+    let store = store::Store::new(repo);
+    let recorded = index::dense::DenseIndex::recorded_model(&store)?;
+    let agrees = recorded.as_deref().is_none_or(|m| m == cfg.embed_model);
+    Ok(serde_json::json!({
+        "store": recorded,
+        "configured": cfg.embed_model,
+        "configured_from": match config::names_embed_model(repo) { true => config::PROJECT_FILE, false => "default" },
+        "this_run": std::env::var("REPOGRAPH_EMBED_MODEL").ok().filter(|v| !v.trim().is_empty()),
+        "agrees": agrees,
+        "recommended": index::embed::RECOMMENDED,
+    }).to_string() + "\n")
+}
+
+/// The switch: the model is opened before anything at all is written.
+///
+/// That order is the whole contract. A typo, an id whose repository has no ONNX export, a machine
+/// with no network — each has to leave the project exactly as it was, and the only thing that can
+/// say a model is really there is opening it and asking it for a vector. So the fetch, the session
+/// and one probe come first and the hub's own error is what a reader sees; only then is
+/// `repograph.toml` touched, and only then are the rows rewritten. There is no rollback for a
+/// configuration file, so nothing is written that might have to be taken back.
+fn switch_model(repo: &std::path::Path, cfg: &config::Config, id: &str, no_embed: bool, no_dense: bool) -> anyhow::Result<()> {
+    if no_dense {
+        anyhow::bail!("--no-dense and `model {id}` ask for opposite things: the switch opens the model before it writes anything");
+    }
+    let store = store::Store::new(repo);
+    let recorded = index::dense::DenseIndex::recorded_model(&store)?;
+    // The catalogue's own spelling, where the id is one of its rows: `written_by` compares names
+    // byte for byte, so `BAAI/BGE-M3` and `BAAI/bge-m3` are two models to every later `update`,
+    // and the difference costs a whole re-embed nobody asked for.
+    let id = index::embed::measured(id).map_or(id, |m| m.model);
+    let (was, now) = (recorded.as_deref().and_then(index::embed::measured), index::embed::measured(id));
+    eprintln!("model: {} → {id}", recorded.as_deref().unwrap_or(&cfg.embed_model));
+    match now {
+        Some(m) => {
+            eprintln!("model: {} of files in the hub cache, fetched once", m.cache);
+            eprintln!("model: {:.1}× the default's embed — {} s for the bench fixture's 33,525 rows", m.times_the_default(), m.embed_s);
+            match was.map(|w| w.vectors_mb) {
+                Some(mb) if mb != m.vectors_mb => eprintln!("model: {} MB of vectors for that corpus, against the other model's {mb} MB on it", m.vectors_mb),
+                _ => eprintln!("model: {} MB of vectors for that corpus", m.vectors_mb),
+            }
+        }
+        None => {
+            eprintln!("model: nothing here was measured against that id, so its size, its");
+            eprintln!("       embed cost and its recall are all unknown");
+            if index::embed::reads_as_e5(id) {
+                eprintln!("model: and nothing here recognises the id, so it is read with e5's pooling and");
+                eprintln!("       prefixes — a wrong guess there costs recall rather than failing");
+            }
+        }
+    }
+    // Any change of model rewrites the index rather than extending it — rows another model wrote
+    // are dropped on the name as much as on the width — and a change of width is the case where
+    // that is most expensive and least visible. Said only where there are such rows: an empty
+    // store and a switch back to the model that wrote it both lose nothing, and a warning about
+    // work that will not happen is a reason to stop and check.
+    match recorded.as_deref() {
+        None => eprintln!("model: the store holds no vectors yet, so this is the model that writes its first"),
+        Some(m) if m.eq_ignore_ascii_case(id) => eprintln!("model: the store's rows were written by this model already, so they are kept"),
+        Some(_) => match (was.map(|m| m.dim), now.map(|m| m.dim)) {
+            (Some(a), Some(b)) if a != b => eprintln!("model: {a}-d → {b}-d, so every row is re-embedded and the whole index rewritten, not extended"),
+            _ => eprintln!("model: every row the other model wrote is dropped and the index rewritten, not extended"),
+        },
+    }
+    let threads = index::embed::threads(cfg.resources);
+    let open = std::time::Instant::now();
+    let mut emb = index::embed::Embedder::open(id, threads, index::embed::Weights::Mapped)?;
+    // A session that opens still has to run: the pooling, the prefixes and the empty cache inputs
+    // a decoder export wants are this binary's guesses about the model, and one forward is what
+    // turns them into a fact before the configuration is changed on the strength of them.
+    let dim = emb.dim()?;
+    eprintln!("model: opened in {:.1}s, {dim}-d vectors", open.elapsed().as_secs_f32());
+    let path = config::set_embed_model(repo, id)?;
+    println!("model: embed_model = \"{id}\" in {}", path.display());
+    if no_embed {
+        eprintln!("model: --no-embed, so the store still holds the old rows — `repograph embed` rewrites them");
+        return Ok(());
+    }
+    // The same check `embed` makes, and for the same reason: a sync against an empty graph marks
+    // every row dead and writes an index of nothing. The key is already set, which is the part
+    // that had to survive, so this is a next step rather than a failure.
+    if store.load()?.0.nodes.is_empty() {
+        eprintln!("model: the graph is empty, so there is nothing to re-embed — run `repograph build`");
+        return Ok(());
+    }
+    embed_opened(repo, id, &mut emb)
 }
 
 /// The graph an answer is read from: refreshed against the tree unless `--stale`, and, when
@@ -619,6 +764,15 @@ fn run() -> anyhow::Result<()> {
                 Ok(())
             } else {
                 embed_all(&repo, cli.no_dense, &cfg)
+            }
+        }
+        Cmd::Model { hub_id, no_embed, json } => {
+            let cfg = load_cfg()?;
+            cap_pools(index::embed::threads(cfg.resources));
+            match hub_id {
+                None if json => { print!("{}", model_json(&repo, &cfg)?); Ok(()) }
+                None => { print!("{}", model_report(&repo, &cfg)?); Ok(()) }
+                Some(id) => switch_model(&repo, &cfg, &id, no_embed, cli.no_dense),
             }
         }
         Cmd::Ask { words, json, seeds, bodies, rerank, rerank_local, depth, stale, no_serve } => {
@@ -819,6 +973,30 @@ mod tests {
 
     fn built(repo: &std::path::Path, cfg: &config::Config) {
         run_update(repo, cfg, true).unwrap();
+    }
+
+    /// The report exists to say the one thing a configuration-shaped answer would hide: a store
+    /// keeps answering with the model that wrote it, whatever the file says today. So where the
+    /// store's name comes from, and what is printed when the two differ, are the report.
+    #[test]
+    fn the_report_reads_the_store_and_says_when_the_file_asks_for_another_model() {
+        let dir = doc_repo(ONE);
+        let repo = dir.path();
+        let quiet = model_report(repo, &config::Config::default()).unwrap();
+        assert!(quiet.contains("no vectors yet"), "{quiet}");
+        assert!(quiet.contains("the built-in default"), "{quiet}");
+        assert!(!quiet.contains("The two disagree"), "{quiet}");
+
+        config::set_embed_model(repo, "BAAI/bge-m3").unwrap();
+        let store = store::Store::new(repo);
+        let mut dense = index::dense::DenseIndex::load(&store).unwrap();
+        dense.written_by(index::embed::DEFAULT_MODEL, 384);
+        dense.save(&store).unwrap();
+        let cfg = config::Config { embed_model: "BAAI/bge-m3".to_string(), ..config::Config::default() };
+        let split = model_report(repo, &cfg).unwrap();
+        assert!(split.contains(index::embed::DEFAULT_MODEL), "the store's own model: {split}");
+        assert!(split.contains(&format!("BAAI/bge-m3 ({})", config::PROJECT_FILE)), "{split}");
+        assert!(split.contains("The two disagree"), "{split}");
     }
 
     #[test]

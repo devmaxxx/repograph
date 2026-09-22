@@ -40,7 +40,7 @@ fn mirror_header(stamp: (u128, u64)) -> [u8; MIRROR_HEADER] {
 fn mirror_name(json: &str) -> String { format!("{}.bin", json.trim_end_matches(".json")) }
 
 #[cfg(unix)]
-fn rename_over(from: &Path, to: &Path) -> std::io::Result<()> { std::fs::rename(from, to) }
+pub(crate) fn rename_over(from: &Path, to: &Path) -> std::io::Result<()> { std::fs::rename(from, to) }
 
 /// A rename over a file some other program has open without delete sharing — an indexer, a sync
 /// client, a scanner — is refused for as long as that handle lives, which is milliseconds. A held
@@ -50,7 +50,7 @@ fn rename_over(from: &Path, to: &Path) -> std::io::Result<()> { std::fs::rename(
 /// holder's share mode refuses just as flatly, so waiting is the only thing left. Both errors are
 /// retried, for about half a second in all, before the store is left as it was.
 #[cfg(windows)]
-fn rename_over(from: &Path, to: &Path) -> std::io::Result<()> {
+pub(crate) fn rename_over(from: &Path, to: &Path) -> std::io::Result<()> {
     const HELD_BY_ANOTHER_PROCESS: [i32; 2] = [5, 32];
     let mut wait = std::time::Duration::from_millis(1);
     loop {

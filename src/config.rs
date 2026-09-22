@@ -130,7 +130,7 @@ impl Config {
     /// key the project names wins even when it names the built-in value: what the file says is
     /// what the repository asked for.
     pub fn load(repo: &Path) -> Result<Config> {
-        let path = repo.join("repograph.toml");
+        let path = repo.join(PROJECT_FILE);
         let text = match path.exists() {
             true => Some(std::fs::read_to_string(&path).with_context(|| format!("read {}", path.display()))?),
             false => None,
@@ -225,6 +225,203 @@ impl Config {
     }
 }
 
+/// The one file outside `.repograph/` this tool writes, and the only key it writes into it.
+pub const PROJECT_FILE: &str = "repograph.toml";
+
+/// Whether the project's file names `embed_model` itself, as opposed to the built-in default
+/// standing in for it. A report that said "configured" of a value nobody wrote would send a
+/// reader looking for a line that is not there. A file that is missing or does not parse names
+/// nothing: `Config::load` is where a broken file is reported, and this is a question about text.
+pub fn names_embed_model(repo: &Path) -> bool {
+    let Ok(text) = std::fs::read_to_string(repo.join(PROJECT_FILE)) else { return false };
+    toml::from_str::<toml::Table>(&text).is_ok_and(|t| t.contains_key("embed_model"))
+}
+
+/// Writes `embed_model` into the repository's `repograph.toml` and leaves every other byte of it
+/// as it was.
+///
+/// A configuration file is the reader's own text — their comments, their order, the keys they
+/// chose to write down — and a model switch has no business rewriting it. Serialising `Config`
+/// back would drop the comments, reorder the keys and turn every default into an explicit setting
+/// somebody then has to maintain, so instead the one value is replaced where it stands, the key is
+/// appended where the file never named it, and a file that does not parse is refused rather than
+/// overwritten. The bytes are checked before they are written: the result must parse to exactly
+/// what the file parsed to before, with this one key set, or nothing is written at all.
+///
+/// Returns the path written, for the line that says so.
+pub fn set_embed_model(repo: &Path, model: &str) -> Result<std::path::PathBuf> {
+    let path = repo.join(PROJECT_FILE);
+    let before = match path.exists() {
+        true => Some(std::fs::read_to_string(&path).with_context(|| format!("read {}", path.display()))?),
+        false => None,
+    };
+    let after = with_embed_model(before.as_deref(), model)?;
+    // The pid is in the name because two `repograph model` runs in the same repository would
+    // otherwise write the same temporary file, and the second write can land between the first
+    // write and its rename — a file that is half one run's text and half the other's.
+    let tmp = path.with_extension(format!("toml.{}.tmp", std::process::id()));
+    std::fs::write(&tmp, after.as_bytes()).with_context(|| format!("write {}", tmp.display()))?;
+    if let Err(e) = crate::store::rename_over(&tmp, &path) {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(e).with_context(|| format!("rename {}", path.display()));
+    }
+    Ok(path)
+}
+
+/// The file's text with `embed_model` set to `model`; `None` for a file that is not there yet.
+fn with_embed_model(before: Option<&str>, model: &str) -> Result<String> {
+    // The value is about to be written as a basic TOML string. Anything that could close that
+    // string writes a file the next `Config::load` refuses, which is a repository left broken by
+    // a command whose whole promise is that it leaves a working state.
+    if model.is_empty() || model.len() > 128 || model.contains(['"', '\\', '\'', '#']) || model.chars().any(char::is_control) {
+        anyhow::bail!("{model:?} is not a hub id — {PROJECT_FILE} was left as it is");
+    }
+    let text = before.unwrap_or_default();
+    let parsed: toml::Table = toml::from_str(text)
+        .map_err(|e| anyhow::anyhow!("{PROJECT_FILE} does not parse, so it was left as it is: {e}"))?;
+    let after = match value_span(text) {
+        Some(span) => format!("{}\"{model}\"{}", &text[..span.start], &text[span.end..]),
+        None => appended(text, model),
+    };
+    let mut want = parsed;
+    want.insert("embed_model".to_string(), toml::Value::String(model.to_string()));
+    let got: toml::Table = toml::from_str(&after)
+        .map_err(|e| anyhow::anyhow!("setting embed_model in {PROJECT_FILE} would not parse back ({e}) — set it by hand"))?;
+    if got != want {
+        anyhow::bail!("embed_model cannot be set in {PROJECT_FILE} without changing something else in it — set it by hand");
+    }
+    Ok(after)
+}
+
+/// The bytes of `embed_model`'s value: what a switch replaces, and all it replaces, so an inline
+/// comment, the spacing around it and every other line survive untouched. `None` where the file
+/// never names the key above its first table header — a name under a header belongs to that table
+/// and is a different key, which is also why the scan stops there.
+///
+/// It is a scan and not a parse, because a parse gives back values and this needs a position. The
+/// check in `with_embed_model` is what makes that safe: a line that looked like the key inside a
+/// multi-line string would change some other value, and the result is compared against the file's
+/// own parse before anything is written.
+fn value_span(text: &str) -> Option<std::ops::Range<usize>> {
+    for at in statements(text) {
+        let line = line_at(text, at);
+        let trimmed = line.trim_start();
+        let start = at + (line.len() - trimmed.len());
+        if trimmed.starts_with('#') { continue; }
+        if trimmed.starts_with('[') { return None; }
+        let Some(rest) = ["embed_model", "\"embed_model\"", "'embed_model'"].iter().find_map(|k| trimmed.strip_prefix(k)) else { continue };
+        let Some(after_eq) = rest.trim_start().strip_prefix('=') else { continue };
+        // Measured from the whole text rather than the line: a value may be a multi-line string,
+        // and a span that stopped at the newline would cut one in half.
+        let value_at = start + (trimmed.len() - after_eq.len());
+        let from = &text[value_at..];
+        let lead = from.len() - from.trim_start_matches([' ', '\t']).len();
+        return Some(value_at + lead..value_at + lead + value_len(&from[lead..]));
+    }
+    None
+}
+
+/// Where each of the file's top-level statements begins, with the body of a multi-line value
+/// stepped over rather than read, and a byte-order mark stepped over before the first of them.
+///
+/// A line inside a `"""` value can read as a table header or as the key itself, and a scan that
+/// took it for either would stop early or splice the new value into somebody's prose. The mark is
+/// part of the file's first line to `split_inclusive`, so without this the key at the top of a
+/// file saved by a Windows editor is never the key.
+fn statements(text: &str) -> Vec<usize> {
+    let mut out = Vec::new();
+    let mut at = match text.starts_with('\u{feff}') {
+        true => '\u{feff}'.len_utf8(),
+        false => 0,
+    };
+    while at < text.len() {
+        out.push(at);
+        let line = line_at(text, at);
+        let mut end = at + line.len();
+        if let Some(value_at) = assignment(line) {
+            let from = &text[at + value_at..];
+            let lead = from.len() - from.trim_start_matches([' ', '\t']).len();
+            let value_end = at + value_at + lead + value_len(&from[lead..]);
+            if value_end > end {
+                let tail = &text[value_end..];
+                end = value_end + tail.find('\n').map_or(tail.len(), |i| i + 1);
+            }
+        }
+        at = end;
+    }
+    out
+}
+
+/// The line that starts at `at`, its newline included.
+fn line_at(text: &str, at: usize) -> &str {
+    let rest = &text[at..];
+    rest.split_inclusive('\n').next().unwrap_or(rest)
+}
+
+/// Where the value of a `key = value` line begins, as an offset into the line. Which key it is
+/// does not matter here: this only has to find a value that might run past the line.
+fn assignment(line: &str) -> Option<usize> {
+    let trimmed = line.trim_start();
+    if trimmed.starts_with('#') || trimmed.starts_with('[') { return None; }
+    let eq = trimmed.find('=')?;
+    Some((line.len() - trimmed.len()) + eq + 1)
+}
+
+/// How far a value written after `=` reaches: to the end of its quoting where it has any, else to
+/// the comment or the newline that ends the line.
+fn value_len(from: &str) -> usize {
+    for fence in ["\"\"\"", "'''"] {
+        if let Some(rest) = from.strip_prefix(fence) {
+            return rest.find(fence).map_or(from.len(), |i| fence.len() + i + fence.len());
+        }
+    }
+    if let Some(rest) = from.strip_prefix('\'') {
+        return rest.find('\'').map_or(from.len(), |i| i + 2);
+    }
+    if from.starts_with('"') {
+        let mut escaped = false;
+        for (i, c) in from.char_indices().skip(1) {
+            match (escaped, c) {
+                (true, _) => escaped = false,
+                (false, '\\') => escaped = true,
+                (false, '"') => return i + 1,
+                _ => {}
+            }
+        }
+        return from.len();
+    }
+    let line = from.split('\n').next().unwrap_or(from);
+    line.split('#').next().unwrap_or(line).trim_end().len()
+}
+
+/// The file with the key it never held, written where a top-level key belongs: above the first
+/// table header, since a key after one is that table's. The comment is a line for whoever opens
+/// the file next and finds a setting they did not type.
+fn appended(text: &str, model: &str) -> String {
+    const NOTE: &str = "# The model the store's vectors are written with; `repograph model` rewrites it.";
+    // A file written on Windows is CRLF all through, and a block joined with bare newlines leaves
+    // it mixed — which git shows as a change to lines nobody touched.
+    let nl = match text.contains("\r\n") {
+        true => "\r\n",
+        false => "\n",
+    };
+    let block = format!("{NOTE}{nl}embed_model = \"{model}\"{nl}");
+    let header = statements(text).into_iter().find(|&at| line_at(text, at).trim_start().starts_with('['));
+    match header {
+        Some(at) => format!("{}{block}{nl}{}", &text[..at], &text[at..]),
+        None if text.trim().is_empty() => format!("{text}{block}"),
+        None => {
+            let blank = text.ends_with("\n\n") || text.ends_with("\r\n\r\n");
+            let sep = match (text.ends_with('\n'), blank) {
+                (_, true) => String::new(),
+                (true, false) => nl.to_string(),
+                (false, false) => format!("{nl}{nl}"),
+            };
+            format!("{text}{sep}{block}")
+        }
+    }
+}
+
 /// The machine's value where the project file left the key unnamed. A key the project wrote is
 /// left alone even when it wrote the built-in value: what the file says is what the repository
 /// asked for.
@@ -313,6 +510,115 @@ mod tests {
             std::fs::write(dir.path().join("repograph.toml"), "embed_model = \"BAAI/bge-m3\"\n").unwrap();
             assert_eq!(Config::load(dir.path()).unwrap().embed_model, "BAAI/bge-m3");
         });
+    }
+
+    /// A configuration file is text somebody wrote, and a switch that lost their comments, their
+    /// order or their spacing would be a worse trade than the recall it bought. Every shape a real
+    /// file has is checked here, because there is no rollback for a clobbered one.
+    #[test]
+    fn setting_the_model_replaces_the_value_and_nothing_else() {
+        let same = |before: &str, after: &str| assert_eq!(with_embed_model(Some(before), "BAAI/bge-m3").unwrap(), after);
+        same(
+            "# why this repository indexes what it does\nskip = [\"dist/**\"]\nembed_model = \"intfloat/multilingual-e5-small\"\nrerank_model = \"sonnet\"\n",
+            "# why this repository indexes what it does\nskip = [\"dist/**\"]\nembed_model = \"BAAI/bge-m3\"\nrerank_model = \"sonnet\"\n",
+        );
+        // The inline comment is the reason the value is replaced and not the line.
+        same("embed_model = \"a/b\"  # chosen 2026-09-22\n", "embed_model = \"BAAI/bge-m3\"  # chosen 2026-09-22\n");
+        same("  \"embed_model\"   =    'a/b'\n", "  \"embed_model\"   =    \"BAAI/bge-m3\"\n");
+        same("'embed_model' = \"a/b\"", "'embed_model' = \"BAAI/bge-m3\"");
+        // A key whose name merely starts with it is a different key.
+        assert!(with_embed_model(Some("embed_model_old = \"a/b\"\n"), "x/y").unwrap().contains("embed_model_old = \"a/b\""));
+    }
+
+    #[test]
+    fn a_file_that_never_named_the_key_gains_it_with_a_line_saying_what_it_is() {
+        let written = with_embed_model(Some("skip = [\"dist/**\"]\n"), "BAAI/bge-m3").unwrap();
+        assert!(written.starts_with("skip = [\"dist/**\"]\n"), "{written}");
+        assert!(written.contains("embed_model = \"BAAI/bge-m3\"\n"), "{written}");
+        assert!(written.contains("# The model"), "{written}");
+        // A file that is not there yet holds the key and nothing else.
+        let fresh = with_embed_model(None, "BAAI/bge-m3").unwrap();
+        assert_eq!(fresh.lines().filter(|l| !l.starts_with('#')).collect::<Vec<_>>(), vec!["embed_model = \"BAAI/bge-m3\""]);
+    }
+
+    /// `embed_model` is a top-level key, so a file that opens a table before the end of it has no
+    /// end to append to: a line after `[section]` would be `section.embed_model`, which nothing
+    /// reads. The one place it can go is above the first header.
+    #[test]
+    fn a_file_that_opens_a_table_gets_the_key_above_the_header() {
+        let written = with_embed_model(Some("[profile]\nx = 1\n"), "BAAI/bge-m3").unwrap();
+        assert!(written.starts_with("# "), "{written}");
+        assert!(written.trim_end().ends_with("[profile]\nx = 1"), "{written}");
+        assert_eq!(toml::from_str::<toml::Table>(&written).unwrap()["embed_model"].as_str(), Some("BAAI/bge-m3"));
+        // And a key under a header is that table's, not this one: it is left alone and the
+        // top-level key is written above.
+        let nested = with_embed_model(Some("[profile]\nembed_model = \"theirs\"\n"), "BAAI/bge-m3").unwrap();
+        assert!(nested.contains("embed_model = \"theirs\""), "{nested}");
+        let parsed: toml::Table = toml::from_str(&nested).unwrap();
+        assert_eq!(parsed["embed_model"].as_str(), Some("BAAI/bge-m3"));
+        assert_eq!(parsed["profile"]["embed_model"].as_str(), Some("theirs"));
+    }
+
+    #[test]
+    fn a_file_that_does_not_parse_is_refused_rather_than_overwritten() {
+        let err = with_embed_model(Some("skip = [\n"), "BAAI/bge-m3").unwrap_err().to_string();
+        assert!(err.contains(PROJECT_FILE), "{err}");
+        // And a value that could close its own string never reaches the file.
+        assert!(with_embed_model(Some(""), "a/b\"\nenrich_command = \"rm -rf /").is_err());
+        assert!(with_embed_model(Some(""), "").is_err());
+    }
+
+    /// The value is replaced where it stands, so a file naming the key twice — which TOML itself
+    /// refuses — must not be "repaired" into one this tool can write and `load` cannot read.
+    #[test]
+    fn a_file_naming_the_key_twice_is_refused_by_the_parse_it_already_fails() {
+        assert!(with_embed_model(Some("embed_model = \"a/b\"\nembed_model = \"c/d\"\n"), "x/y").is_err());
+    }
+
+    /// The three shapes a line-at-a-time scan reads wrongly: a byte-order mark before the first
+    /// key, a header or a key written inside a multi-line string, and a file whose lines end CRLF.
+    #[test]
+    fn the_scan_reads_a_file_as_toml_sees_it() {
+        let bom = with_embed_model(Some("\u{feff}embed_model = \"a/b\"\n"), "BAAI/bge-m3").unwrap();
+        assert_eq!(bom, "\u{feff}embed_model = \"BAAI/bge-m3\"\n");
+
+        // Here `[dist]` is prose inside a value, not the header that ends the top-level keys.
+        let prose = "enrich_prompt = \"\"\"\n[dist] embed_model = \"not a key\"\n\"\"\"\nembed_model = \"a/b\"\n";
+        let written = with_embed_model(Some(prose), "BAAI/bge-m3").unwrap();
+        assert!(written.contains("[dist] embed_model = \"not a key\""), "{written}");
+        assert_eq!(toml::from_str::<toml::Table>(&written).unwrap()["embed_model"].as_str(), Some("BAAI/bge-m3"));
+
+        let crlf = with_embed_model(Some("skip = [\"dist/**\"]\r\n"), "BAAI/bge-m3").unwrap();
+        assert!(!crlf.replace("\r\n", "").contains('\n'), "{crlf:?}");
+        assert_eq!(toml::from_str::<toml::Table>(&crlf).unwrap()["embed_model"].as_str(), Some("BAAI/bge-m3"));
+    }
+
+    /// The whole write, through the file system: the bytes land through a rename, so a reader
+    /// sees the file as it was or as it now is, and `Config::load` reads back what was asked for.
+    #[test]
+    fn the_written_file_is_the_one_the_next_load_reads() {
+        with_machine(None, || {
+            let dir = tempfile::tempdir().unwrap();
+            let path = set_embed_model(dir.path(), "BAAI/bge-m3").unwrap();
+            assert_eq!(path, dir.path().join(PROJECT_FILE));
+            assert!(names_embed_model(dir.path()));
+            assert_eq!(Config::load(dir.path()).unwrap().embed_model, "BAAI/bge-m3");
+            set_embed_model(dir.path(), "intfloat/multilingual-e5-base").unwrap();
+            let text = std::fs::read_to_string(&path).unwrap();
+            assert_eq!(text.matches("embed_model =").count(), 1, "replaced once, not appended twice: {text}");
+            assert_eq!(Config::load(dir.path()).unwrap().embed_model, "intfloat/multilingual-e5-base");
+            assert!(!dir.path().join("repograph.toml.tmp").exists());
+        });
+    }
+
+    #[test]
+    fn a_file_that_names_nothing_is_not_a_file_that_configured_a_model() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(!names_embed_model(dir.path()), "no file at all");
+        std::fs::write(dir.path().join(PROJECT_FILE), "skip = []\n").unwrap();
+        assert!(!names_embed_model(dir.path()), "a file that leaves the key to the default");
+        std::fs::write(dir.path().join(PROJECT_FILE), "skip = [\n").unwrap();
+        assert!(!names_embed_model(dir.path()), "a file nobody can read names nothing");
     }
 
     #[test]
