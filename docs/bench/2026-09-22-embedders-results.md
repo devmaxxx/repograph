@@ -46,7 +46,9 @@ this corpus: keyword questions are answered by the lexical half of the index and
 the graph, and a better embedder has nothing left to win there. p90 tokens moves 216–228 across the
 whole field, which is the context budget doing its job rather than a difference between models.
 
-**embeddinggemma-300m is the recommendation.** It reads the same 21/30 as the two 568M models at
+**embeddinggemma-300m is the recommendation on this arm** — and it is not the one the project
+ships; the widened arm below moved that to arctic-embed-l-v2.0, and the paragraph stands as the
+reading of these 30 cases. It reads the same 21/30 as the two 568M models at
 733 s of embed against their 1944 s and 2059 s, and it has the lowest peak RSS of anything measured
 here — 1.3 GB, under the 1.8 GB of the 384-dimension control it would replace. Its index is 103 MB
 of vectors rather than the 137 MB the 1024-dimension models write, and its cold ask is 0.64 s
@@ -55,7 +57,8 @@ against 0.84 s and 0.91 s.
 **Its licence is the one reason to refuse it.** embeddinggemma is published under the Gemma Terms of
 Use, which is not an OSI-approved licence: it carries use restrictions and passes them on to
 anything redistributing the weights. That is a decision for whoever ships, not a benchmark result,
-and it is why the default is not being changed to it.
+and it is why the default is not being changed to it — and, once the widened arm below separated
+the tie, why nothing was lost in preferring an Apache-2.0 model at the same cost per hit.
 
 **The OSI alternative at the same recall is bge-m3**, MIT, 21/30, at 2059 s — 2.8× embeddinggemma's
 embed and 14× the control's — with 137 MB of vectors and 0.91 s cold ask. A project that cannot take
@@ -100,8 +103,9 @@ are where the next improvement is, and no model in this field is it.
 
 ## Changing the seat
 
-`repograph model` prints what wrote the store, what is configured, and the table above in short
-form; `repograph model <hub id>` opens the model first, writes `embed_model` into `repograph.toml`
+`repograph model` prints what wrote the store, what is configured, and the catalogue: the control
+and the recommendation, two of the nine rows above. `repograph model <hub id>` takes any hub id,
+listed or not — it opens the model first, writes `embed_model` into `repograph.toml`
 only once it opens, and re-embeds. Changing the model drops every row the previous one wrote — a
 change of dimension rewrites the index whole rather than extending it — so the switch costs the
 embed column above, once.

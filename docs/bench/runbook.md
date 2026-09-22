@@ -307,6 +307,35 @@ Then write the prose beside it, as
 tables, what each shape means, what was decided, and the caveats. A result file
 nobody read is a run nobody made.
 
+## Measuring paraphrase: use the widened arm, not the recorded one
+
+The suite in `bench/cases.jsonl` carries 30 paraphrase cases, and the best stack this
+project has already reads 29 of them. One hit is the whole remaining headroom, so that
+arm can no longer tell an improvement from a run-to-run wobble, and the four-way tie
+between embedders it reported in
+[the embedder readings](2026-09-22-embedders-results.md) was its ceiling rather than
+theirs.
+
+A widened arm of 60 lives in the bench kit at `~/bench/paraphrase-arm-2026-09-22`:
+`cases-wide-112.jsonl` is the 82 recorded cases plus 30 new paraphrase ones, `gate.py`
+is what admitted them, and `out/` holds the six cells. Run it with `--cases`, against
+the writable store and never the pinned fixture:
+
+```bash
+repograph --repo ~/bench/beauty-crm-test bench --cases ~/bench/paraphrase-arm-2026-09-22/cases-wide-112.jsonl
+```
+
+Two things to know before quoting a number off it. `RECORDED_SHAPE` in `src/bench.rs`
+names 40/30/12, so a 112-case file is measured and **not graded** — the summary line
+says `gated=false` and no floor is applied. And a new case is admitted by the gate, not
+by judgement: at most 0.34 of the question's content stems may also occur in the target
+node's label and body, the anchor must resolve, and no second node may answer it. A
+question that reuses the document's vocabulary is a keyword case in a longer sentence,
+and an arm of those reads high for a retriever that does nothing but match tokens.
+
+Write the cells into `bench/history/runs.jsonl` like any other run, with the arm named
+so the suite is obvious (`paraphrase60:<model>[+rerank]`).
+
 ## Post-run cleanup, if the run was not in a worktree
 
 - [ ] `rm -rf .claude/skills/gitnexus`
