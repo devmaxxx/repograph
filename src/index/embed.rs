@@ -66,6 +66,11 @@ pub struct Embedder {
     session: Session,
     tokenizer: Tokenizer,
     wants_type_ids: bool,
+    wants_position_ids: bool,
+    /// A decoder exported with its generation cache still in the signature. An embedding is one
+    /// pass over the whole text, so each of these is fed empty: name, heads, head width.
+    cache_inputs: Vec<(String, usize, usize)>,
+    profile: Profile,
     name: String,
     dim: Option<usize>,
 }
@@ -94,11 +99,80 @@ fn cache_dir() -> Result<PathBuf> {
     Ok(crate::index::cache_root()?.join("fastembed"))
 }
 
+/// How a model turns a padded batch's hidden states into one vector per text.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Pooling {
+    Mean,
+    /// The first position, which the BERT-family retrievers train as the sentence vector.
+    Cls,
+    /// The last attended position: a causal model has seen the whole text only there.
+    LastToken,
+}
+
+/// What a model's card asks of its caller and its graph does not say: which file holds the
+/// graph, how to pool, and what to put in front of a question and a passage. The store keeps
+/// the e5 tags on every row whatever wrote it — `dense` tells a question row from a passage by
+/// them, and row hashes are taken over them — so the words a model actually reads are swapped
+/// in here, at the last step before the tokenizer.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Profile {
+    onnx: &'static str,
+    /// Files the graph resolves by relative name beyond `<onnx>_data`.
+    beside: &'static [&'static str],
+    pooling: Pooling,
+    query: &'static str,
+    passage: &'static str,
+}
+
+const E5: Profile = Profile { onnx: "onnx/model.onnx", beside: &[], pooling: Pooling::Mean, query: QUERY_TAG, passage: PASSAGE_TAG };
+const QUERY_TAG: &str = "query: ";
+const PASSAGE_TAG: &str = "passage: ";
+
+/// An unknown model reads as e5: that is what every store written so far was embedded with, and
+/// a wrong guess about pooling or prefixes costs recall rather than a crash, which `bench` exists
+/// to show. A guess about `beside` is the one that does crash: the id is matched by substring, so
+/// a look-alike repo without the named file fails to open rather than falling back.
+fn profile(model: &str) -> Profile {
+    let m = model.to_ascii_lowercase();
+    let cls = Profile { pooling: Pooling::Cls, query: "", passage: "", ..E5 };
+    if m.contains("snowflake-arctic-embed") {
+        Profile { query: QUERY_TAG, ..cls }
+    } else if m.contains("bge-m3") {
+        Profile { beside: &["onnx/Constant_7_attr__value"], ..cls }
+    } else if m.contains("granite-embedding") {
+        // IBM publishes no ONNX graph; Teradata's export names its fp32 file differently.
+        Profile { onnx: if m.starts_with("teradata/") { "onnx/model-fp32.onnx" } else { E5.onnx }, ..cls }
+    } else if m.contains("embeddinggemma") {
+        Profile { query: "task: search result | query: ", passage: "title: none | text: ", ..E5 }
+    } else if m.contains("qwen3-embedding") {
+        Profile {
+            // Its graph file is 307 MB of embedding-free graph, past the size under which a
+            // data file is looked for, and the 2 GB of weights still sit beside it.
+            beside: &["onnx/model.onnx_data"],
+            pooling: Pooling::LastToken,
+            query: "Instruct: Given a web search query, retrieve relevant passages that answer the query\nQuery:",
+            passage: "",
+            ..E5
+        }
+    } else {
+        E5
+    }
+}
+
+/// A stored row's text as this model's card wants it worded.
+fn reword<'a>(text: &'a str, p: &Profile) -> std::borrow::Cow<'a, str> {
+    use std::borrow::Cow;
+    let swap = |tag: &str, with: &str| (tag != with).then(|| text.strip_prefix(tag).map(|rest| format!("{with}{rest}"))).flatten();
+    swap(QUERY_TAG, p.query).or_else(|| swap(PASSAGE_TAG, p.passage)).map_or(Cow::Borrowed(text), Cow::Owned)
+}
+
 struct Files { model: PathBuf, tokenizer: PathBuf, pad_token: String, pad_id: u32 }
 
 /// A graph-only `model.onnx` keeps its weights in `model.onnx_data` beside it and is a few MB;
 /// the small model's 448 MB file holds them itself. Asking the hub for a data file a model never
 /// had is a network round trip on every fused query — 240 ms measured, and a failure offline.
+/// Only a margin, and Qwen3 is the counterexample: 307 MB of graph with 2 GB of weights beside
+/// it, well over the threshold. A model that size names its data file in `beside` instead.
 const EXTERNAL_DATA_STUB: u64 = 64 << 20;
 
 fn keeps_weights_beside(model_len: u64) -> bool { model_len < EXTERNAL_DATA_STUB }
@@ -113,18 +187,22 @@ fn fetch_from(cache: &Path, endpoint: Option<&str>, model: &str) -> Result<Files
     let name = model.to_string();
     let repo = api.model(name.clone());
     let get = |f: &str| repo.get(f).with_context(|| format!("fetch {name}/{f}"));
-    let model = get("onnx/model.onnx")?;
+    let profile = profile(&name);
+    let model = get(profile.onnx)?;
     // The larger models keep their weights beside the graph; the session resolves the file by
     // its relative name, so it has to be fetched into the same snapshot. External data is legal
     // at any graph size and the model is the reader's to choose, so 64 MB is a margin rather
     // than a proof: a file that small cannot be holding 448 MB of weights itself, and the small
     // model's does, so it clears the margin by a factor of seven and never pays the lookup.
     let len = std::fs::metadata(&model).map(|m| m.len()).unwrap_or(0);
-    if keeps_weights_beside(len) { let _ = repo.get("onnx/model.onnx_data"); }
+    if keeps_weights_beside(len) { let _ = repo.get(&format!("{}_data", profile.onnx)); }
+    for f in profile.beside { get(f)?; }
     let tokenizer = get("tokenizer.json")?;
     let config: serde_json::Value = serde_json::from_slice(&std::fs::read(get("config.json")?)?)?;
     let tok_config: serde_json::Value = serde_json::from_slice(&std::fs::read(get("tokenizer_config.json")?)?)?;
-    let pad_token = tok_config["pad_token"].as_str().context("tokenizer_config.json: pad_token")?.to_string();
+    // Some tokenizers write the pad token as an added-token object rather than a bare string.
+    let pad = &tok_config["pad_token"];
+    let pad_token = pad.as_str().or_else(|| pad["content"].as_str()).context("tokenizer_config.json: pad_token")?.to_string();
     let pad_id = config["pad_token_id"].as_u64().unwrap_or(0) as u32;
     Ok(Files { model, tokenizer, pad_token, pad_id })
 }
@@ -132,10 +210,13 @@ fn fetch_from(cache: &Path, endpoint: Option<&str>, model: &str) -> Result<Files
 fn load_tokenizer(files: &Files) -> Result<Tokenizer> {
     let mut tk = Tokenizer::from_file(&files.tokenizer).map_err(|e| anyhow!("{e}"))?;
     tk.with_truncation(Some(TruncationParams { max_length: MAX_TOKENS, ..Default::default() })).map_err(|e| anyhow!("{e}"))?;
+    // Qwen3's config.json carries no pad_token_id at all, and its pad token is a real entry in
+    // the vocabulary — ask there first so the two never name different tokens.
+    let pad_id = tk.token_to_id(&files.pad_token).unwrap_or(files.pad_id);
     tk.with_padding(Some(PaddingParams {
         strategy: PaddingStrategy::BatchLongest,
+        pad_id,
         pad_token: files.pad_token.clone(),
-        pad_id: files.pad_id,
         ..Default::default()
     }));
     Ok(tk)
@@ -248,8 +329,18 @@ impl Embedder {
             Ok::<_, anyhow::Error>((session, tokenizer))
         });
         let (session, tokenizer) = session?;
-        let wants_type_ids = session.inputs().iter().any(|i| i.name() == "token_type_ids");
-        Ok(Embedder { session, tokenizer, wants_type_ids, name: model.to_string(), dim: None })
+        let wants = |input: &str| session.inputs().iter().any(|i| i.name() == input);
+        let cache_inputs = session.inputs().iter()
+            .filter(|i| i.name().starts_with("past_key_values"))
+            .map(|i| match i.dtype() {
+                ort::value::ValueType::Tensor { ty: ort::value::TensorElementType::Float32, shape, .. }
+                    if shape.len() == 4 && shape[1] > 0 && shape[3] > 0 =>
+                    Ok((i.name().to_string(), shape[1] as usize, shape[3] as usize)),
+                other => Err(anyhow!("{model}: cache input {} is {other:?}, not an fp32 [batch, heads, past, width]", i.name())),
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let (wants_type_ids, wants_position_ids) = (wants("token_type_ids"), wants("position_ids"));
+        Ok(Embedder { session, tokenizer, wants_type_ids, wants_position_ids, cache_inputs, profile: profile(model), name: model.to_string(), dim: None })
     }
 
     /// The hub id the vectors this embedder writes belong to; recorded in the store by `written_by`.
@@ -276,10 +367,11 @@ impl Embedder {
     /// put a 300-token Cyrillic passage in the same batch as a 60-token Latin one and pad both
     /// to the longer, which is the padding this budget exists to stop paying for.
     pub fn embed(&mut self, texts: &[String]) -> Result<Vec<Vec<f32>>> {
-        let lens = self.token_lengths(texts)?;
+        let texts: Vec<std::borrow::Cow<str>> = texts.iter().map(|t| reword(t, &self.profile)).collect();
+        let lens = self.token_lengths(&texts)?;
         let mut out: Vec<Vec<f32>> = vec![Vec::new(); texts.len()];
         for chunk in token_batches(&lens, BATCH, TOKEN_BUDGET) {
-            let batch: Vec<String> = chunk.iter().map(|&i| texts[i].clone()).collect();
+            let batch: Vec<String> = chunk.iter().map(|&i| texts[i].to_string()).collect();
             for (i, v) in chunk.into_iter().zip(self.forward(&batch)?) {
                 out[i] = v;
             }
@@ -288,16 +380,16 @@ impl Embedder {
     }
 
     pub fn query(&mut self, text: &str) -> Result<Vec<f32>> {
-        Ok(self.forward(&[format!("query: {text}")])?.remove(0))
+        Ok(self.forward(&[format!("{}{text}", self.profile.query)])?.remove(0))
     }
 
     /// How many real tokens each text is, as the model will see it. The tokenizer pads a batch
     /// to its longest member, so the count is the attention mask's, not the encoding's length.
-    fn token_lengths(&self, texts: &[String]) -> Result<Vec<usize>> {
+    fn token_lengths(&self, texts: &[impl AsRef<str>]) -> Result<Vec<usize>> {
         let mut lens = Vec::with_capacity(texts.len());
         for chunk in texts.chunks(LENGTH_CHUNK) {
             let encodings = self.tokenizer
-                .encode_batch(chunk.iter().map(String::as_str).collect(), true)
+                .encode_batch(chunk.iter().map(|t| t.as_ref()).collect(), true)
                 .map_err(|e| anyhow!("{e}"))?;
             lens.extend(encodings.iter().map(|e| e.get_attention_mask().iter().filter(|&&m| m == 1).count()));
         }
@@ -325,13 +417,27 @@ impl Embedder {
         if self.wants_type_ids {
             inputs.push(("token_type_ids".into(), Tensor::from_array(([batch, len], types))?.into()));
         }
+        if self.wants_position_ids {
+            let positions: Vec<i64> = (0..batch).flat_map(|_| 0..len as i64).collect();
+            inputs.push(("position_ids".into(), Tensor::from_array(([batch, len], positions))?.into()));
+        }
+        for (name, heads, width) in &self.cache_inputs {
+            inputs.push((name.clone().into(), Tensor::from_array(([batch, *heads, 0, *width], Vec::<f32>::new()))?.into()));
+        }
         let outputs = self.session.run(inputs)?;
+        // A graph that pools for itself also carries whatever comes after the pooling — a dense
+        // head, in one case — which no pooling of the hidden states done here would reproduce.
+        if let Some(pooled) = outputs.get("sentence_embedding") {
+            let (shape, data) = pooled.try_extract_tensor::<f32>()?;
+            let dim = *shape.get(1).context("sentence_embedding is not [batch, dim]")? as usize;
+            return Ok(data.chunks(dim).map(|row| { let mut v = row.to_vec(); normalise(&mut v); v }).collect());
+        }
         let hidden = outputs.get("last_hidden_state")
             .or_else(|| (outputs.len() == 1).then(|| &outputs[0]))
             .context("model has no last_hidden_state output")?;
         let (shape, data) = hidden.try_extract_tensor::<f32>()?;
         let dim = *shape.get(2).context("last_hidden_state is not [batch, tokens, dim]")? as usize;
-        Ok(pool(data, &mask, len, dim))
+        Ok(pool(data, &mask, len, dim, self.profile.pooling))
     }
 }
 
@@ -357,18 +463,31 @@ fn token_batches(lens: &[usize], max_batch: usize, budget: usize) -> Vec<Vec<usi
     out
 }
 
-/// Mean pooling over the attention mask, then L2-normalised — the model card's recipe.
-fn pool(hidden: &[f32], mask: &[i64], len: usize, dim: usize) -> Vec<Vec<f32>> {
+/// One L2-normalised vector per text. Padding is on the right, so the first position is always
+/// a real token and the last real one is wherever the attention mask ends. A row with no real
+/// token at all is the zero vector under every pooling: reading a padded position instead would
+/// hand back a unit vector of whatever the graph computed for padding, which matches queries.
+fn pool(hidden: &[f32], mask: &[i64], len: usize, dim: usize, how: Pooling) -> Vec<Vec<f32>> {
     let batch = mask.len().checked_div(len).unwrap_or(0);
     (0..batch).map(|b| {
-        let mut v = vec![0f32; dim];
-        let mut n = 0f32;
-        for t in 0..len {
-            if mask[b * len + t] == 0 { continue; }
-            n += 1.0;
-            for (x, y) in v.iter_mut().zip(&hidden[(b * len + t) * dim..][..dim]) { *x += y; }
-        }
-        for x in &mut v { *x /= n.max(1.0); }
+        let row = &mask[b * len..][..len];
+        let at = |t: usize| &hidden[(b * len + t) * dim..][..dim];
+        let last = row.iter().rposition(|&m| m != 0);
+        let mut v = match (how, last) {
+            (_, None) => vec![0f32; dim],
+            (Pooling::Cls, _) => at(0).to_vec(),
+            (Pooling::LastToken, Some(t)) => at(t).to_vec(),
+            (Pooling::Mean, _) => {
+                let mut v = vec![0f32; dim];
+                let mut n = 0f32;
+                for t in (0..len).filter(|&t| row[t] != 0) {
+                    n += 1.0;
+                    for (x, y) in v.iter_mut().zip(at(t)) { *x += y; }
+                }
+                for x in &mut v { *x /= n.max(1.0); }
+                v
+            }
+        };
         normalise(&mut v);
         v
     }).collect()
@@ -377,6 +496,33 @@ fn pool(hidden: &[f32], mask: &[i64], len: usize, dim: usize) -> Vec<Vec<f32>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cls_takes_the_first_position_and_last_token_the_last_attended_one() {
+        // One text of three positions, the third padded.
+        let hidden = [1.0, 0.0,  0.0, 2.0,  9.0, 9.0];
+        let mask = [1, 1, 0];
+        assert_eq!(pool(&hidden, &mask, 3, 2, Pooling::Cls), vec![vec![1.0, 0.0]]);
+        assert_eq!(pool(&hidden, &mask, 3, 2, Pooling::LastToken), vec![vec![0.0, 1.0]]);
+    }
+
+    #[test]
+    fn a_row_keeps_its_e5_tag_in_the_store_and_loses_it_on_the_way_to_another_model() {
+        let arctic = profile("Snowflake/snowflake-arctic-embed-m-v2.0");
+        assert_eq!(reword("passage: FR-PAY-03\nтело", &arctic), "FR-PAY-03\nтело");
+        assert_eq!(reword("query: где список", &arctic), "query: где список");
+        let gemma = profile("onnx-community/embeddinggemma-300m-ONNX");
+        assert_eq!(reword("query: где список", &gemma), "task: search result | query: где список");
+        assert_eq!(reword("passage: a", &gemma), "title: none | text: a");
+        assert_eq!(reword("passage: a", &E5), "passage: a");
+    }
+
+    #[test]
+    fn an_unknown_model_is_read_as_e5() {
+        assert_eq!(profile("someone/some-model"), E5);
+        assert_eq!(profile("intfloat/multilingual-e5-base"), E5);
+        assert_eq!(profile("Teradata/granite-embedding-107m-multilingual").onnx, "onnx/model-fp32.onnx");
+    }
 
     #[test]
     fn the_override_outranks_the_store_which_outranks_the_config() {
@@ -391,7 +537,7 @@ mod tests {
         // Two texts of two tokens each, dim 2; the second text has one padded position.
         let hidden = [1.0, 0.0, 0.0, 1.0, /* text 2 */ 3.0, 4.0, 100.0, 100.0];
         let mask = [1, 1, 1, 0];
-        let v = pool(&hidden, &mask, 2, 2);
+        let v = pool(&hidden, &mask, 2, 2, Pooling::Mean);
         let r = 0.5f32.sqrt();
         assert!((v[0][0] - r).abs() < 1e-6 && (v[0][1] - r).abs() < 1e-6);
         assert!((v[1][0] - 0.6).abs() < 1e-6 && (v[1][1] - 0.8).abs() < 1e-6);
@@ -423,8 +569,9 @@ mod tests {
 
     #[test]
     fn an_all_masked_row_is_a_zero_vector_not_a_nan() {
-        let v = pool(&[1.0, 1.0], &[0], 1, 2);
-        assert_eq!(v, vec![vec![0.0, 0.0]]);
+        for how in [Pooling::Mean, Pooling::Cls, Pooling::LastToken] {
+            assert_eq!(pool(&[1.0, 1.0], &[0], 1, 2, how), vec![vec![0.0, 0.0]], "{how:?}");
+        }
     }
 
     #[test]
@@ -477,7 +624,7 @@ mod tests {
 
     #[test]
     fn pool_with_zero_length_rows_yields_no_vectors_not_a_panic() {
-        assert!(pool(&[], &[], 0, 2).is_empty());
+        assert!(pool(&[], &[], 0, 2, Pooling::Mean).is_empty());
     }
 }
 
