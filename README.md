@@ -149,6 +149,7 @@ so a field can be added without breaking a parser written against the version be
 | `verify --json` | `nodes`, `edges`, `nodes_by_kind`, `edges_by_kind`, `dangling`, `undeclared`, `gaps`, `cite_only`, `held_aside`, `held_aside_prefixes` |
 | `trace --json` | `from`, `to`, `depth`, `path` |
 | `prime --json` | `nodes`, `edges`, `enriched`, `questions`, `families`, `model` |
+| `model --json` | `store`, `configured`, `configured_from`, `this_run`, `agrees`, `recommended` |
 
 `explain --json` resolves each edge's direction for you — `dir` is `in` or `out` and `other` is the
 node at the far end — so a caller never works out which end of an edge it was standing on. One
@@ -361,7 +362,7 @@ in full, not an empty config:
 | `rerank_model`       | `sonnet` — the same for `rerank_command`                                                    |
 | `enrich_languages`   | `[]` — the languages `enrich` writes questions in, named as the model reads them (`["Russian", "English"]`); empty = detected from the documents, English where they name none; any language name is accepted, see [Spending tokens on purpose](#spending-tokens-on-purpose) |
 | `reranker_dir`       | directory of the exported cross-encoder for `--rerank-local`; empty = `~/.cache/repograph/reranker` |
-| `embed_model`        | `intfloat/multilingual-e5-small`; the model the vectors are written with — see [Embeddings](#embeddings) |
+| `embed_model`        | `intfloat/multilingual-e5-small`; the model the vectors are written with — nine were measured and `repograph model` switches it, see [Embeddings](#embeddings) |
 | `resources`          | `"balanced"` = a third of the logical cores; `"low"` a sixth, `"full"` a half — how much of the machine a run may take, see [Resources](#resources) |
 
 ### Choosing a model, and where the choice lives
@@ -540,8 +541,9 @@ The model is a property of the store. `embed_model` names what `build`, `update`
 and `watch` write vectors with; `vectors.json` records it, and `ask`, `bench` and `dump` open the
 recorded one — so a store keeps answering with the model that wrote it whatever the configuration
 says today, and a new default never silently reinterprets an index nobody re-embedded. A store
-written before the field existed is the small model's. Switching is one line and one `repograph
-embed`: rows another model wrote are dropped and the file rewritten, on width as well as on name.
+written before the field existed is the small model's. `repograph model <hub id>` switches it —
+[below](#choosing-the-model) — and rows another model wrote are dropped and the file rewritten, on
+width as well as on name.
 `REPOGRAPH_EMBED_MODEL=<hub id>` outranks both for one command, which is how a copy of a store is
 measured under a second model — query that copy with `ask --stale`, or with `bench` and `dump`,
 which read the store as it stands; a refreshing `ask` would claim the index for the overriding
@@ -556,10 +558,12 @@ the graph. An exact-id lookup answers in ~50 ms and ~50 MB, a `--no-dense` quest
 neither opens the model or reads the vectors. What is left is paid once per process, which is what
 [`serve`](#asking-a-resident-process) is for. `REPOGRAPH_TIMING=1` prints the stages.
 
-Five other embedding-side levers were measured and none moved recall — a larger base model, BGE-M3,
-a quantized MiniLM, a 512-token passage cut, a second vector per node
+Five other embedding-side levers were measured on the fourteen-case set, before the generated
+questions were in the index, and none moved recall — a larger base model, BGE-M3, a quantized
+MiniLM, a 512-token passage cut, a second vector per node
 ([the readings](docs/history.md#five-embedding-side-levers-all-rejected)). The passage cut stays at
-256 tokens and a node keeps one vector.
+256 tokens and a node keeps one vector; the two models in that list were read again with the
+questions in the index, in the table below.
 
 If the model cannot be opened (no cache, no network) the two kinds of caller degrade differently on
 purpose: `ask` and `update` fall back to lexical-only, say so on stderr and exit 0, while `bench` in
@@ -568,6 +572,46 @@ the weaker no-dense floor would report green without having measured what it cla
 
 Embedding times, and what a rebuild reuses rather than pays for twice, are in
 [the measurements](docs/history.md#the-first-embedding-pass-and-what-a-rebuild-reuses).
+
+### Choosing the model
+
+Nine models were embedded over the same corpus and read on the same 82 cases — one run each, the
+whole store re-embedded per model. Keyword and code read 40/40 and 12/12 for every model but the
+smallest, which drops one keyword case, so paraphrase is the column the embedder moves. Two of the
+nine are offered here; [the readings](docs/bench/2026-09-22-embedders-results.md) hold the rest.
+
+| hub id | dim | paraphrase | embed | vectors | licence |
+| --- | --- | --- | --- | --- | --- |
+| `intfloat/multilingual-e5-small` (default) | 384 | 15/30 | 1.0× | 51 MB | MIT |
+| `Snowflake/snowflake-arctic-embed-l-v2.0` | 1024 | **21/30** | 13.5× | 137 MB | Apache-2.0 |
+
+`Snowflake/snowflake-arctic-embed-l-v2.0` is the upgrade, under Apache-2.0. Four models read 21/30
+and that arm could not separate them — a widened arm of 60 paraphrase cases could, and this one
+took 39/60 against 35/60 for the next candidate. It is not the default because its cost lands on a
+first build, before anyone knows whether they need the recall: 13.5× the embed and 137 MB of
+vectors where the default writes 51 MB. The conditions, the other seven candidates, the flips and
+the caveats are in [the readings](docs/bench/2026-09-22-embedders-results.md).
+
+`repograph model` prints that table with the store's own model marked, and
+`repograph model <hub id>` changes it:
+
+```console
+$ repograph model Snowflake/snowflake-arctic-embed-l-v2.0
+model: intfloat/multilingual-e5-small → Snowflake/snowflake-arctic-embed-l-v2.0
+model: 2.1G of files in the hub cache, fetched once
+model: 13.5× the default's embed — 1944 s for the bench fixture's 33,525 rows
+model: 137 MB of vectors for that corpus, against the other model's 51 MB on it
+model: 384-d → 1024-d, so every row is re-embedded and the whole index rewritten, not extended
+model: opened in 5.2s, 1024-d vectors
+model: embed_model = "Snowflake/snowflake-arctic-embed-l-v2.0" in /repo/repograph.toml
+dense: 33525/33525 rows, 14.5 rows/s, ~0 min left
+dense: embedded 33525 rows in 2317.4s
+```
+
+The model is opened before anything is written, so an id with no ONNX export fails with the hub's
+own error and leaves the repository exactly as it was. `repograph.toml` is then rewritten in place —
+only that one value, comments and everything else kept — and the store re-embedded, which
+`--no-embed` stops if you would rather pay for it later.
 
 ## Spending tokens on purpose
 
