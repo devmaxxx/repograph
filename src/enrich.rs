@@ -232,7 +232,7 @@ pub fn languages_for(questions: &Questions, graph: &Graph, redetect: bool) -> (V
     }
 }
 
-/// The languages a corpus is written in, most-used first, named as the generator reads them./// The languages a corpus is written in, most-used first, named as the generator reads them.
+/// The languages a corpus is written in, most-used first, named as the generator reads them.
 /// Alphabetic characters are counted by script, and a script carrying at least 5% of the letters
 /// names a language. The floor is what makes this the fix: a lone English entry among Russian
 /// ones gets the majority's questions, its own language being the one nobody here asks in, while
@@ -398,9 +398,22 @@ fn clean(entries: &mut BTreeMap<String, Entry>) {
 /// generator does this when it believes it is writing a file rather than printing an answer, and
 /// the questions in it are whole and paid for: parsing them is the difference between a batch
 /// salvaged and a batch bought twice. Only for a reply that holds no real tab at all — a reply
-/// that tabs properly and merely mentions the escape somewhere is not this case.
-fn unescaped_tabs(out: &str) -> Option<String> {
-    (!out.contains('\t') && out.contains("\\t")).then(|| out.replace("\\t", "\t"))
+/// that tabs properly and merely mentions the escape somewhere is not this case. And only the
+/// escape right after one of the batch's own keys is unescaped: a question that is genuinely
+/// about a tab character keeps the two characters it was written with, rather than being cut in
+/// two at every `\t` the reply happens to contain.
+fn unescaped_tabs(out: &str, keys: &[String]) -> Option<String> {
+    if out.contains('\t') { return None; }
+    let mut fixed = out.to_string();
+    let mut found = false;
+    for k in keys {
+        let escaped = format!("{k}\\t");
+        if fixed.contains(&escaped) {
+            fixed = fixed.replace(&escaped, &format!("{k}\t"));
+            found = true;
+        }
+    }
+    found.then_some(fixed)
 }
 
 /// The model sometimes packs a whole entry's questions into one comma-separated line without
@@ -535,7 +548,12 @@ pub fn run(store: &Store, graph: &Graph, questions: Questions, command: &str, ba
                         };
                         let mut parsed = read(&out);
                         if parsed.is_empty() {
-                            if let Some(text) = unescaped_tabs(&out) { parsed = read(&text); }
+                            let keys: Vec<String> = if is_code {
+                                code_keys(&nodes).into_iter().map(|(k, _)| k).collect()
+                            } else {
+                                nodes.iter().map(|n| n.id.clone()).collect()
+                            };
+                            if let Some(text) = unescaped_tabs(&out, &keys) { parsed = read(&text); }
                         }
                         let mut g = shared.lock().unwrap();
                         for (n, h) in &b {
@@ -896,13 +914,30 @@ mod tests {
     fn a_reply_that_wrote_its_tabs_as_escapes_is_read_once_rather_than_bought_twice() {
         let g = graph();
         let batch: Vec<&Node> = vec![&g.nodes["FR-PAY-22"]];
+        let keys = ["FR-PAY-22".to_string()];
         let out = "I'll write the output to a file for your review.\n                   FR-PAY-22\\tкак отменить запись\nFR-PAY-22\\tштраф за неявку\n                   Output saved to scratchpad.\n";
         assert!(parse(out, &batch, &ru_en()).is_empty(), "the reply as it stands holds no id line");
-        let salvaged = unescaped_tabs(out).expect("no real tab, and escapes present");
+        let salvaged = unescaped_tabs(out, &keys).expect("no real tab, and escapes present");
         assert_eq!(parse(&salvaged, &batch, &ru_en())["FR-PAY-22"], vec!["как отменить запись", "штраф за неявку"]);
         // A reply that tabs properly is left alone, whatever it says about escapes elsewhere.
-        assert_eq!(unescaped_tabs("FR-PAY-22\tкак отменить\nwrite \\t for a tab\n"), None);
-        assert_eq!(unescaped_tabs("no tabs and no escapes here"), None);
+        assert_eq!(unescaped_tabs("FR-PAY-22\tкак отменить\nwrite \\t for a tab\n", &keys), None);
+        assert_eq!(unescaped_tabs("no tabs and no escapes here", &keys), None);
+    }
+
+    /// The escape the generator writes for its own field separator is indistinguishable, byte
+    /// for byte, from a `\t` a question is legitimately about — a batch on this very codebase
+    /// could ask something like the question below. Unescaping every `\t` in the reply would cut
+    /// that one in two at the word "use"; only the escape right after a batch key may become a
+    /// real tab.
+    #[test]
+    fn a_literal_tab_mention_inside_a_question_survives_salvage_whole() {
+        let g = graph();
+        let batch: Vec<&Node> = vec![&g.nodes["FR-PAY-22"]];
+        let keys = ["FR-PAY-22".to_string()];
+        let out = "I'll write the output to a file.\nFR-PAY-22\\tHow do you use \\t in shell scripts?\nFR-PAY-22\\tsecond question\n";
+        let salvaged = unescaped_tabs(out, &keys).expect("no real tab, and an escape after the key");
+        let parsed = parse(&salvaged, &batch, &ru_en());
+        assert_eq!(parsed["FR-PAY-22"], vec!["How do you use \\t in shell scripts?", "second question"]);
     }
 
     #[test]
