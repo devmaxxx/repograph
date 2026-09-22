@@ -114,10 +114,11 @@ fn reply_timeout(req: &ask::Request) -> Duration {
     if req.rerank || req.rerank_local { RERANK_TIMEOUT } else { IO_TIMEOUT }
 }
 
-/// Whether this request's answer is one the server acknowledges before it starts. The long wait
-/// is right for a server that is reranking and wrong for one that will never answer, and the two
-/// are indistinguishable from the client until the server says something.
-fn acknowledged(req: &ask::Request) -> bool { reply_timeout(req) > IO_TIMEOUT }
+/// The line the accept thread writes the instant it takes a connection. It is the only proof a
+/// client has that someone is holding its question: the answering loop is single-threaded, so it
+/// may be a whole rerank away from reading the hello, and a client that heard nothing would hand
+/// its question back after `IO_TIMEOUT` while the server works exactly as intended.
+fn ack_line() -> String { serde_json::to_string(&Ack { ack: VERSION.into() }).unwrap() }
 
 /// How often the loop wakes to look at its `--every` and `--idle` deadlines while no question
 /// is waiting. No client waits on it — the accept has a thread of its own — so it only has to
@@ -219,8 +220,9 @@ fn try_ask_within(repo: &Path, req: &ask::Request, first_line: Duration) -> Opti
     let mut reader = BufReader::new(stream.try_clone().ok()?);
     let mut line = String::new();
     reader.read_line(&mut line).ok()?;
-    // The acknowledgement buys the long wait; without one the reply had better be on this line.
-    if acknowledged(req) && serde_json::from_str::<Ack>(&line).is_ok() {
+    // Every connection is acknowledged on accept, so the first line says nothing about this
+    // request in particular: read the ack when it is there, and the reply is the line after it.
+    if serde_json::from_str::<Ack>(&line).is_ok() {
         // Best-effort: on macOS, a peer that has already written the reply and closed makes this
         // setsockopt fail with EINVAL (the same quirk `hello_line` documents), even though the
         // reply is already sitting in this socket's receive buffer waiting to be read. Losing the
@@ -281,7 +283,16 @@ pub fn run(repo: &Path, cfg: &config::Config, every: u64, batch: usize, idle: u6
     let (tx, rx) = std::sync::mpsc::sync_channel::<sys::Stream>(0);
     std::thread::spawn(move || loop {
         match sys::accept(&listener) {
-            Ok(s) => if tx.send(s).is_err() { return; },
+            // Acknowledged here rather than where the question is answered, because the whole
+            // point of the line is to go out while the answering loop is still busy with
+            // somebody else's rerank. A probe that connected and closed makes the write fail,
+            // which is not this thread's business: the loop below is what decides that a
+            // connection carrying no hello asked nothing.
+            Ok(mut s) => {
+                let _ = s.set_write_timeout(Some(IO_TIMEOUT));
+                let _ = writeln!(s, "{}", ack_line());
+                if tx.send(s).is_err() { return; }
+            }
             Err(_) => return,
         }
     });
@@ -413,12 +424,6 @@ fn answer(mut stream: sys::Stream, watcher: &mut crate::Watcher, ctx: &mut ask::
         writeln!(stream, "{}", serde_json::to_string(&refusal(ctx, build))?)?;
         return Ok(true);
     }
-    // Before any of the work: what the client is waiting on is the proof that someone is doing
-    // it. A server wedged behind this line hands the question back in `IO_TIMEOUT`, as every
-    // other request already does.
-    if acknowledged(&hello.req) {
-        writeln!(stream, "{}", serde_json::to_string(&Ack { ack: VERSION.into() })?)?;
-    }
     // Anything still waiting predates this request — a poll's refresh, an answer that ended in
     // an error. A client is told what its own answer did and nothing else.
     log(ctx);
@@ -462,7 +467,7 @@ impl Drop for Unlink {
 
 #[cfg(test)]
 mod tests {
-    use super::{acknowledged, build_stamp, drop_model_now, reply_timeout, socket_path, sys, try_ask, try_ask_within, Ack, Reply, IO_TIMEOUT, RERANK_TIMEOUT, VERSION};
+    use super::{ack_line, build_stamp, drop_model_now, reply_timeout, socket_path, sys, try_ask, try_ask_within, Ack, Reply, IO_TIMEOUT, RERANK_TIMEOUT, VERSION};
     use crate::ask::Request;
     use std::io::{BufRead, BufReader, Write};
     use std::time::Duration;
@@ -547,11 +552,35 @@ mod tests {
             drop(accepted);
         });
         let req = Request { words: vec!["чаевые".into()], json: false, seeds: 5, bodies: false, rerank: true, rerank_local: false, depth: crate::rerank::DEPTH, stale: false, no_dense: false };
-        assert!(acknowledged(&req), "this is the request that buys the long wait");
         let started = std::time::Instant::now();
         assert!(try_ask_within(dir.path(), &req, Duration::from_millis(300)).is_none(), "nothing came back to parse");
         assert!(started.elapsed() < Duration::from_secs(2), "fell back after {:?}", started.elapsed());
         let _ = held.join();
+    }
+
+    /// The queue is the case the acknowledgement exists for: a server busy with somebody else's
+    /// rerank has not read this hello yet, and the only thing keeping this client from falling
+    /// back at `IO_TIMEOUT` is a line written by the thread that accepted the connection.
+    #[test]
+    fn a_connection_acknowledged_before_its_hello_is_read_keeps_the_long_wait() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join(".repograph")).unwrap();
+        let listener = sys::bind(&socket_path(dir.path())).unwrap();
+        let build = build_stamp();
+        let held = std::thread::spawn(move || {
+            let mut s = sys::accept(&listener).unwrap();
+            writeln!(s, "{}", ack_line()).unwrap();
+            // Busy elsewhere for longer than the shortened first-line wait below.
+            std::thread::sleep(Duration::from_millis(700));
+            let mut line = String::new();
+            BufReader::new(s.try_clone().unwrap()).read_line(&mut line).unwrap();
+            let reply = Reply { v: VERSION.into(), build, no_dense: false, stdout: "queued".into(), stderr: vec![] };
+            writeln!(s, "{}", serde_json::to_string(&reply).unwrap()).unwrap();
+        });
+        let req = Request { words: vec!["чаевые".into()], json: false, seeds: 5, bodies: false, rerank: true, rerank_local: false, depth: crate::rerank::DEPTH, stale: false, no_dense: false };
+        let got = try_ask_within(dir.path(), &req, Duration::from_millis(300));
+        held.join().unwrap();
+        assert_eq!(got.map(|r| r.stdout), Some("queued".into()), "an acknowledged client waits out the queue it is in");
     }
 
     /// The extension only matters if a reply that was not yet on the wire when the ack was read
@@ -566,7 +595,7 @@ mod tests {
             let mut s = sys::accept(&listener).unwrap();
             let mut line = String::new();
             BufReader::new(s.try_clone().unwrap()).read_line(&mut line).unwrap();
-            writeln!(s, "{}", serde_json::to_string(&Ack { ack: VERSION.into() }).unwrap()).unwrap();
+            writeln!(s, "{}", ack_line()).unwrap();
             // Later than the shortened first-line wait below, so the read that finds it only
             // succeeds if the ack actually moved the deadline out to `reply_timeout`.
             std::thread::sleep(Duration::from_millis(700));
@@ -594,7 +623,7 @@ mod tests {
             let mut s = sys::accept(&listener).unwrap();
             let mut line = String::new();
             BufReader::new(s.try_clone().unwrap()).read_line(&mut line).unwrap();
-            writeln!(s, "{}", serde_json::to_string(&Ack { ack: VERSION.into() }).unwrap()).unwrap();
+            writeln!(s, "{}", ack_line()).unwrap();
             // No delay: the reply and the drop of `s` below race the client's own extension of
             // its read timeout, and on macOS this side wins often enough to pin the bug on.
             let reply = Reply { v: VERSION.into(), build, no_dense: false, stdout: "hi2".into(), stderr: vec![] };
