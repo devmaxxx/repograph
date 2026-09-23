@@ -243,6 +243,10 @@ TS_DECL = re.compile(
     rf"^[ \t]*(?:@[\w.]+(?:\([^()\n]*\))?[ \t]*)*"
     rf"(?:(?:{TS_MODIFIER})[ \t]+)*"
     rf"(?P<kw>class|function|interface|enum|namespace|module|const|let|var|type)\b"
+    # `module.exports = {…}`, the CommonJS files now in this same reader write on their first
+    # line, is a property access, not the ambient `module Foo {}` this keyword also spells.
+    # Only a dot glues the two, so refusing one right after the keyword tells them apart.
+    rf"(?!\.)"
     # The generator star belongs to `function` alone. Letting any keyword step over it read
     # `export type * from './snapshot.js'` as a declaration named `from`, three times in
     # packages/domain — a re-export names nothing, and a star after any other keyword is not
@@ -361,34 +365,20 @@ def typescript_declarations(blanked: str) -> list[tuple[int, str]]:
     return _scoped_declarations(blanked, decl=TS_DECL, member=TS_MEMBER, type_keywords=TS_TYPE_KEYWORDS)
 
 
+# The extensions TypeScript's readers also cover: same declaration grammar, same DI pattern.
+JS_FAMILY = (".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs")
+
 # Keyed by extension. A language joins the truth by adding its readers here; a file of an
 # extension no table names contributes nothing, which is what a language not yet read is.
 DECLARATIONS: dict[str, Callable[[str], list[tuple[int, str]]]] = {
-    ".ts": typescript_declarations,
-    ".tsx": typescript_declarations,
-    ".js": typescript_declarations,
-    ".jsx": typescript_declarations,
-    ".mjs": typescript_declarations,
-    ".cjs": typescript_declarations,
+    **{ext: typescript_declarations for ext in JS_FAMILY},
     ".kt": kotlin_declarations,
 }
 BLANKERS: dict[str, Callable[[str], str]] = {
-    ".ts": blank_typescript,
-    ".tsx": blank_typescript,
-    ".js": blank_typescript,
-    ".jsx": blank_typescript,
-    ".mjs": blank_typescript,
-    ".cjs": blank_typescript,
+    **{ext: blank_typescript for ext in JS_FAMILY},
     ".kt": blank_kotlin,
 }
-DI_READERS: dict[str, DiReader] = {
-    ".ts": TYPESCRIPT_DI,
-    ".tsx": TYPESCRIPT_DI,
-    ".js": TYPESCRIPT_DI,
-    ".jsx": TYPESCRIPT_DI,
-    ".mjs": TYPESCRIPT_DI,
-    ".cjs": TYPESCRIPT_DI,
-}
+DI_READERS: dict[str, DiReader] = {ext: TYPESCRIPT_DI for ext in JS_FAMILY}
 # `(caller, callee)` name pairs for a chain no field-and-call pattern can say: a migration altering
 # a table another created, a resolver answering a query. A callee is `Owner` or `Owner.member`, the
 # shape `shortest_path` hops on. A file whose extension has one is read by it and by no DiReader.

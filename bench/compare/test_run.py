@@ -314,6 +314,10 @@ class SpellsSymbol(unittest.TestCase):
     def test_a_backticked_kotlin_test_name_is_matched_whole(self):
         self.assertTrue(spells("fun `a rule holds`()", "a rule holds"))
 
+
+class ByExtension(unittest.TestCase):
+    """A `changes` row's four counts, split by the extension the truth attributes them to."""
+
     def test_a_changes_row_is_scored_per_extension(self):
         want = {
             "code_files": ["a/B.kt", "a/C.kt", "web/d.ts"],
@@ -323,6 +327,11 @@ class SpellsSymbol(unittest.TestCase):
         got = run.by_extension(answer, want)
         self.assertEqual(got[".kt"], {"want_files": 2, "found_files": 1, "want_symbols": 2, "found_symbols": 1})
         self.assertEqual(got[".ts"], {"want_files": 1, "found_files": 1, "want_symbols": 1, "found_symbols": 1})
+
+    def test_a_caller_s_already_found_files_are_reused_rather_than_rescanned(self):
+        want = {"code_files": ["a/B.kt"], "symbols": {}}
+        got = run.by_extension("nothing relevant here", want, found={"a/B.kt"})
+        self.assertEqual(got[".kt"]["found_files"], 1)
 
 
 if __name__ == "__main__":

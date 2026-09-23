@@ -236,6 +236,18 @@ class TypescriptDeclarations(unittest.TestCase):
         src = "export enum Verdict {\n  Ok = 'ok',\n  Fail = 'fail',\n}\n"
         self.assertEqual([name for _, name in declarations("a.ts", src)[1]], ["Verdict"])
 
+    def test_module_exports_is_a_property_access_not_an_ambient_module(self):
+        # `module.exports = {…}` is how a `.cjs` config file opens, now that the JavaScript
+        # family shares this reader; the bare `module` keyword also opens a TypeScript ambient
+        # module, and without the dot check every property in the object literal read as one
+        # of its members.
+        src = "module.exports = {\n  parser: 'x',\n  rules: { semi: 'error' },\n};\n"
+        self.assertEqual(declarations("a.cjs", src)[1], [])
+
+    def test_a_dotted_ambient_module_still_declares_its_head(self):
+        src = "export module Foo.Bar {\n  export const x = 1;\n}\n"
+        self.assertEqual([name for _, name in declarations("a.ts", src)[1]], ["Foo", "x"])
+
 
 class RegexLiteralSpans(unittest.TestCase):
     """Defect 2: an unbalanced bracket inside a regex literal ran the span to the file's end."""
