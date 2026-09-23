@@ -227,7 +227,9 @@ fn try_ask_within(repo: &Path, req: &ask::Request, first_line: Duration) -> Opti
         // setsockopt fail with EINVAL (the same quirk `hello_line` documents), even though the
         // reply is already sitting in this socket's receive buffer waiting to be read. Losing the
         // ability to extend the wait is not a reason to throw away an answer that already arrived.
-        let _ = stream.set_read_timeout(Some(reply_timeout(req)));
+        // Set on the reader's own handle: on Windows `try_clone` duplicates the socket, and a
+        // timeout set on the original after the clone never reaches the copy that reads.
+        let _ = reader.get_ref().set_read_timeout(Some(reply_timeout(req)));
         line.clear();
         reader.read_line(&mut line).ok()?;
     }
