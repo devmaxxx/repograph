@@ -180,7 +180,10 @@ impl Lexical {
     /// the plain path.
     pub fn build(graph: &Graph, questions: &Questions, code_seat: bool) -> Lexical {
         let passages = LexicalIndex::build(graph);
-        if questions.entries.is_empty() { return Lexical { passages, questions: None, code: None, code_seat }; }
+        // `build_questions` reads a node's asker set as well as its own (`Questions::get`), so a
+        // store with an asker set but no own set yet — a run whose own pass failed while its
+        // asker pass didn't — still has something to index.
+        if questions.entries.is_empty() && questions.asker.is_empty() { return Lexical { passages, questions: None, code: None, code_seat }; }
         let code = if code_seat { Self::code_index(graph, questions) } else { None };
         Lexical { passages, questions: Some(LexicalIndex::build_questions(graph, questions)), code, code_seat }
     }
