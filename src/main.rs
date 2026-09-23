@@ -217,6 +217,10 @@ pub struct UpdateReport {
 /// generation — after which an update is the incremental one again.
 pub(crate) fn apply_diff(repo: &std::path::Path, store: &store::Store, graph: &mut model::Graph, entries: &[walk::Entry], diff: &walk::Diff, manifest: &walk::Manifest, ex: &Extractors) -> anyhow::Result<UpdateReport> {
     let named: std::collections::BTreeSet<&str> = diff.changed.iter().map(|e| e.rel.as_str()).collect();
+    let code_changed = diff.changed.iter().filter(|e| e.kind == walk::FileKind::Code).map(|e| e.rel.as_str());
+    if let Some(note) = code::lang::files_only_note(code_changed) {
+        eprintln!("{note}");
+    }
     let regrammar: Vec<&walk::Entry> = match manifest.stale_grammar() {
         true => entries.iter().filter(|e| !named.contains(e.rel.as_str())).collect(),
         false => Vec::new(),

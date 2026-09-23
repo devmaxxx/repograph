@@ -1,23 +1,13 @@
 use crate::code::imports::Resolver;
 use crate::model::{EdgeKind, Extraction, NodeKind};
-use tree_sitter::{Language, Node, Parser};
+use tree_sitter::Node;
 
 pub struct SymbolScanner {
     resolver: Resolver,
 }
 
-pub fn language_for(rel: &str) -> Language {
-    if rel.ends_with(".tsx") || rel.ends_with(".jsx") {
-        Language::new(tree_sitter_typescript::LANGUAGE_TSX)
-    } else {
-        Language::new(tree_sitter_typescript::LANGUAGE_TYPESCRIPT)
-    }
-}
-
 pub fn parse(rel: &str, src: &[u8]) -> Option<tree_sitter::Tree> {
-    let mut parser = Parser::new();
-    parser.set_language(&language_for(rel)).ok()?;
-    parser.parse(src, None)
+    crate::code::lang::Lang::of(rel)?.parse(src)
 }
 
 fn text<'a>(n: Node, src: &'a [u8]) -> &'a str {
@@ -174,7 +164,7 @@ impl SymbolScanner {
         let mut ex = Extraction::default();
         let file_id = format!("file:{rel}");
         let src = source.as_bytes();
-        let Some(tree) = parse(rel, src) else { ex.node(NodeKind::File, &file_id, rel, "", rel, 1); return ex };
+        let Some(tree) = parse(rel, src) else { crate::code::lang::file_node(rel, &mut ex); return ex };
         let root = tree.root_node();
         ex.node(NodeKind::File, &file_id, rel, &file_head(root, src), rel, 1);
         let mut cur = root.walk();
