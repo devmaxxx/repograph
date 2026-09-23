@@ -18,12 +18,18 @@ pub enum Lang { TypeScript, Tsx, Kotlin, Java, CSharp, Razor, Rust, Python, Dart
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Family { TypeScript, Jvm, DotNet, Rust, Python, Dart, Swift, GraphQl, Sql, Bicep, Hcl, Shell }
 
+/// The extension a grammar or the files-only note keys off, lowercase-sensitive like the
+/// filesystem: `Path::extension` alone, shared so the two readings of it cannot drift apart.
+fn ext(rel: &str) -> Option<&str> {
+    std::path::Path::new(rel).extension().and_then(|e| e.to_str())
+}
+
 impl Lang {
     /// `None`: no grammar and no embedding reads this extension (L1). Such a file is indexed as a
     /// file and never parsed: every grammar returns a tree for any input, and a tree of the wrong
     /// language looks right.
     pub fn of(rel: &str) -> Option<Lang> {
-        match std::path::Path::new(rel).extension().and_then(|e| e.to_str()) {
+        match ext(rel) {
             Some("ts" | "mts" | "cts" | "js" | "mjs" | "cjs") => Some(Lang::TypeScript),
             // JSX needs the TSX grammar; the TypeScript one reads `<div/>` as a type assertion.
             Some("tsx" | "jsx") => Some(Lang::Tsx),
@@ -71,9 +77,8 @@ pub fn file_node(rel: &str, ex: &mut Extraction) {
 pub fn files_only_note<'a>(rels: impl Iterator<Item = &'a str>) -> Option<String> {
     let mut by_ext = std::collections::BTreeMap::<String, usize>::new();
     for rel in rels.filter(|r| Lang::of(r).is_none()) {
-        let ext = std::path::Path::new(rel).extension().and_then(|e| e.to_str())
-            .map(|e| format!(".{e}")).unwrap_or_else(|| "(no extension)".to_string());
-        *by_ext.entry(ext).or_default() += 1;
+        let label = ext(rel).map(|e| format!(".{e}")).unwrap_or_else(|| "(no extension)".to_string());
+        *by_ext.entry(label).or_default() += 1;
     }
     if by_ext.is_empty() {
         return None;
