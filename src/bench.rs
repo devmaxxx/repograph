@@ -227,6 +227,16 @@ fn is_recorded_shape(cases: &[Case]) -> bool {
     got == want
 }
 
+/// The checkout's commit when it is a different tree from the pin's, which the floors were never
+/// counted on: a corpus that grew 203 documents past the pin read paraphrase 12 against its 15,
+/// and grading that as a failure would make every consumer's bench red for the corpus's own
+/// growth. A tree whose commit cannot be read is graded as it always was.
+fn off_pin(pin: &str, head: Option<&str>) -> Option<String> {
+    let commit = pin.split_whitespace().nth(1)?;
+    let head = head?.trim();
+    (!head.is_empty() && !head.starts_with(commit)).then(|| head.chars().take(commit.len()).collect())
+}
+
 fn files_of(graph: &Graph) -> HashSet<&str> {
     graph.nodes.values().map(|n| n.file.as_str()).collect()
 }
@@ -412,11 +422,18 @@ pub fn run(repo: &Path, cases: Option<&Path>, no_dense: bool, rerank: bool, rera
     // A dense arm under a model with no floors of its own is still worth running — the case
     // file's shape earned grading, the store's embedder just never measured any. `gated` says so
     // through the exit code rather than a bail, so the run still prints what it found.
-    let gated = shape_ok && !(dense_on && floors == Floors::None);
+    let mut gated = shape_ok && !(dense_on && floors == Floors::None);
     // Named before the cases run, not after: a reader comparing the counts below against the
     // README floors is comparing them against this tree.
     let pin = built_in.then(|| BUILT_IN_PIN.trim()).filter(|p| !p.is_empty());
-    if let Some(p) = pin { println!("suite: {cases_path}, recorded against {p}"); }
+    if let Some(p) = pin {
+        println!("suite: {cases_path}, recorded against {p}");
+        let head = crate::changes::git(&repo, &["rev-parse", "HEAD"]).ok();
+        if let Some(head) = off_pin(p, head.as_deref()) {
+            println!("suite: checkout {head} is not the pin, so this run is measured and not graded");
+            gated = false;
+        }
+    }
     let files = files_of(&graph);
     for moved in relocate_moved(&mut cases, &graph, &files) { println!("suite: {moved}"); }
     check_anchors(&cases_path, pin, &cases, &graph, &files)?;
@@ -911,6 +928,16 @@ mod tests {
         let err = check_anchors("f", Some("beauty-crm 502e8a6d"), &cases, &graph, &files_of(&graph)).unwrap_err().to_string();
         assert!(err.contains("beauty-crm 502e8a6d"), "{err}");
         assert!(err.contains("missing-anchors.py"), "and how to list the rest: {err}");
+    }
+
+    #[test]
+    fn only_a_checkout_readably_off_the_pin_is_ungated() {
+        let pin = "beauty-crm 502e8a6d";
+        assert_eq!(off_pin(pin, Some("502e8a6d1234abcd\n")), None, "the pin itself is graded");
+        assert_eq!(off_pin(pin, Some("a3bf96ff9999\n")), Some("a3bf96ff".into()));
+        assert_eq!(off_pin(pin, None), None, "a tree whose commit cannot be read is graded");
+        assert_eq!(off_pin(pin, Some("")), None);
+        assert_eq!(off_pin("beauty-crm", Some("a3bf96ff")), None, "a pin without a commit ungates nothing");
     }
 
     /// `<corpus> <commit>`, one line: the error message quotes it whole, and the script beside it
