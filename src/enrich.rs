@@ -552,9 +552,6 @@ pub fn run(store: &Store, graph: &Graph, questions: Questions, command: &str, ba
     if let Some(dir) = &keep { std::fs::create_dir_all(dir).with_context(|| format!("create {}", dir.display()))?; }
     let keep = keep.as_deref();
     let mut questions = questions;
-    // Written with the entries this run produces: what the store holds was written in these
-    // languages, and the next run reads the list back rather than detecting it again.
-    if !languages.is_empty() { questions.languages = languages.to_vec(); }
     let dropped = questions.prune(graph);
     let mut stale = questions.stale(graph, eligible, languages);
     let mut stale_code = if code { questions.stale(graph, eligible_code, &[]) } else { Vec::new() };
@@ -594,12 +591,18 @@ pub fn run(store: &Store, graph: &Graph, questions: Questions, command: &str, ba
                             if let Some(text) = unescaped_tabs(&out, &keys) { parsed = read(&text); }
                         }
                         let mut g = shared.lock().unwrap();
+                        let before = g.1;
                         for (n, h) in &b {
                             if let Some(qs) = parsed.get(&n.id) {
                                 g.0.entries.insert(n.id.clone(), Entry { hash: h.clone(), questions: qs.clone() });
                                 g.1 += 1;
                             }
                         }
+                        // Stamped with the first entry actually written in these languages, not
+                        // before the run: a run whose every batch failed wrote nothing in them,
+                        // and a stamp would make the store read as enriched under a list it
+                        // holds no questions in.
+                        if !is_code && g.1 > before && !languages.is_empty() { g.0.languages = languages.to_vec(); }
                         if let Err(e) = g.0.save(store) { eprintln!("enrich: save: {e:#}"); }
                         drop(g);
                         let skipped: Vec<(&Node, String)> = b.iter().filter(|(n, _)| !parsed.contains_key(&n.id)).cloned().collect();
@@ -776,6 +779,24 @@ mod tests {
         assert_eq!((r.generated, r.dropped), (0, 0));
         assert_eq!(Questions::load(&store).unwrap().get("file:a.ts"), ["q for c1"]);
         assert_eq!(code_coverage(&g, &Questions::load(&store).unwrap()), (1, 1));
+    }
+
+    #[test]
+    fn a_run_that_wrote_nothing_leaves_the_stored_languages_as_they_were() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::new(dir.path());
+        let mut e = Extraction::default();
+        e.node(NodeKind::Requirement, "FR-X-1", "t", "body", "d.md", 1);
+        let mut g = Graph::default();
+        g.apply(e);
+        let en = vec!["English".to_string()];
+        let r = run(&store, &g, Questions::default(), "true", 8, 1, Scope::default(), &en).unwrap();
+        assert_eq!(r.generated, 0);
+        assert!(Questions::load(&store).unwrap().languages.is_empty());
+        let cmd = r#"awk '/^### /{printf "%s\tq for %s\n", $2, $2}'"#;
+        let r = run(&store, &g, Questions::load(&store).unwrap(), cmd, 8, 1, Scope::default(), &en).unwrap();
+        assert_eq!(r.generated, 1);
+        assert_eq!(Questions::load(&store).unwrap().languages, en);
     }
 
     #[test]
