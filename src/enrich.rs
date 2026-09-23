@@ -505,6 +505,15 @@ pub fn run_command(command: &str, input: &str) -> Result<String> {
     Ok(String::from_utf8_lossy(&out.stdout).into_owned())
 }
 
+/// Nodes per document call. A call answers every node once per language, and the generator's
+/// failures grow with the length of the answer: at 12 nodes in two languages — 312 lines — one
+/// batch in ten came back unparseable or short, where one language at 12 lost one in 180. So
+/// `--batch` is the size of the answer in one language's worth of nodes, and more languages
+/// share it rather than multiply it.
+fn per_call(batch: usize, languages: &[String]) -> usize {
+    (batch / languages.len().max(1)).max(1)
+}
+
 /// Generates questions for every stale node through `command` (prompt on stdin, lines on
 /// stdout), `parallel` batches at a time, saving after each batch so an interrupted run keeps
 /// what it paid for. `languages` is passed to `prompt`; an empty list is each entry's own.
@@ -525,7 +534,7 @@ pub fn run(store: &Store, graph: &Graph, questions: Questions, command: &str, ba
     // questions and its exit status green; measured once on 172 batches, 7 came back that way
     // and 195 nodes silently stayed unsearchable. The nodes an answer skipped go round once more.
     // Documents and code never share a batch: each kind has its own prompt.
-    let batches: Vec<Batch> = stale.chunks(batch.max(1)).map(|c| Batch { nodes: c.to_vec(), retry: false, code: false })
+    let batches: Vec<Batch> = stale.chunks(per_call(batch, languages)).map(|c| Batch { nodes: c.to_vec(), retry: false, code: false })
         .chain(stale_code.chunks(batch.max(1)).map(|c| Batch { nodes: c.to_vec(), retry: false, code: true })).collect();
     let total = batches.len();
     let queue = Arc::new(Mutex::new(batches));
@@ -626,6 +635,14 @@ mod tests {
 
     /// The languages of the development corpus, which is what every parse test below reads.
     fn ru_en() -> Vec<String> { vec!["Russian".into(), "English".into()] }
+
+    #[test]
+    fn more_languages_share_one_batch_rather_than_multiply_it() {
+        assert_eq!(per_call(12, &[]), 12, "each entry's own language is one language");
+        assert_eq!(per_call(12, &["English".into()]), 12);
+        assert_eq!(per_call(12, &ru_en()), 6);
+        assert_eq!(per_call(2, &["Russian".into(), "English".into(), "Greek".into()]), 1, "never a call for nobody");
+    }
 
     #[test]
     fn parse_keeps_only_tab_lines_for_ids_in_the_batch() {

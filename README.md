@@ -443,7 +443,7 @@ because a command a cloned repository names is a command it runs on your machine
 ```toml
 # ~/.config/repograph/config.toml
 # The shipped default: headless Claude Code, thinking off.
-rerank_command = "MAX_THINKING_TOKENS=0 claude -p --model {model} --output-format text --tools \"\" --system-prompt \"You write plain text. You have no tools, no files and no memory: the only thing you can do is print your answer.\" --setting-sources \"\" --no-session-persistence"
+rerank_command = "MAX_THINKING_TOKENS=0 claude -p --model {model} --output-format text --tools \"\" --system-prompt \"You write plain text. You have no tools, no files and no memory: the only thing you can do is print your answer. Do all of the task at once: never ask a question, never ask to confirm, never comment — print only the answer.\" --setting-sources \"\" --no-session-persistence"
 rerank_model = "sonnet"
 
 # OpenAI's Codex CLI. Read from `codex exec --help` here and not run: with no prompt argument
