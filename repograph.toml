@@ -15,7 +15,7 @@ registries = ["docs/constitution.yaml"]
 # file may set. A repository is something a reader clones, and `enrich_command` is a command that
 # would then run on their machine. They live in ~/.config/repograph/config.toml, whose defaults
 # are the headless Claude Code lines, and any vendor's CLI goes there in their place:
-#   enrich_command = "MAX_THINKING_TOKENS=0 claude -p --model {model} --output-format text --tools \"\" --setting-sources \"\" --no-session-persistence"
+#   enrich_command = "MAX_THINKING_TOKENS=0 claude -p --model {model} --output-format text --tools \"\" --system-prompt \"You write plain text. You have no tools, no files and no memory: the only thing you can do is print your answer.\" --setting-sources \"\" --no-session-persistence"
 #   rerank_command = "codex exec --skip-git-repo-check -m {model} -o /dev/stdout"
 #   rerank_command = "ollama run {model} --hidethinking"
 # What a repository may say is which model that command runs, below.

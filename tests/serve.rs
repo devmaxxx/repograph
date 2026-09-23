@@ -99,6 +99,8 @@ fn hello_with_no_build() -> String {
 
 /// The server's own reply, read straight off the socket with no `ask` in between. Asked until one
 /// comes rather than slept on: a socket file says a `serve` bound, only a reply says it listens.
+/// The acknowledgement the accept thread writes is skipped here — it is not a reply, and every
+/// connection carries one.
 fn reply_to(dir: &std::path::Path, hello: &str) -> String {
     use std::io::{BufRead, Write};
     let sock = dir.join(".repograph/serve.sock");
@@ -107,8 +109,12 @@ fn reply_to(dir: &std::path::Path, hello: &str) -> String {
         if let Ok(mut s) = transport::connect(&sock) {
             s.set_read_timeout(Some(Duration::from_secs(30))).unwrap();
             if writeln!(s, "{hello}").is_ok() {
+                let mut reader = std::io::BufReader::new(&s);
                 let mut line = String::new();
-                if std::io::BufReader::new(&s).read_line(&mut line).unwrap_or(0) > 0 { return line; }
+                while reader.read_line(&mut line).unwrap_or(0) > 0 {
+                    if !line.contains("\"ack\"") { return line; }
+                    line.clear();
+                }
             }
         }
         assert!(start.elapsed() < Duration::from_secs(20), "serve never replied on its socket");

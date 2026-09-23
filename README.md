@@ -241,7 +241,13 @@ first time an `ask --rerank-local` asks for it, keeps it between questions and d
 `ask --rerank` and `ask --rerank-local` are both answered by the resident process, and a client
 waits five minutes rather than thirty seconds for either — a local rerank of a 200-deep pool runs
 70-80 s cold on CPU, and a client that gave up at thirty seconds would score the same pool itself
-behind its own cold open, paying the whole cost a second time.
+behind its own cold open, paying the whole cost a second time. The five minutes are bought: the
+thread that accepts a connection writes an acknowledgement on a line of its own straight away,
+before the question is even read, and the client waits thirty seconds for that line. Accepting is
+what the server can promise while it is still answering somebody else, so a question queued behind
+a 70-80 s rerank keeps its five minutes. A server that accepted the connection and will never
+answer — a wedged worker, a process stopped under a debugger — hands the question back as
+promptly as it does for every other request.
 
 The socket lives at `.repograph/serve.sock` — unless that path would be longer than a Unix socket
 name may be (104 bytes on macOS, including the terminating NUL), in which case it goes in the
@@ -437,7 +443,7 @@ because a command a cloned repository names is a command it runs on your machine
 ```toml
 # ~/.config/repograph/config.toml
 # The shipped default: headless Claude Code, thinking off.
-rerank_command = "MAX_THINKING_TOKENS=0 claude -p --model {model} --output-format text --tools \"\" --setting-sources \"\" --no-session-persistence"
+rerank_command = "MAX_THINKING_TOKENS=0 claude -p --model {model} --output-format text --tools \"\" --system-prompt \"You write plain text. You have no tools, no files and no memory: the only thing you can do is print your answer. Do all of the task at once: never ask a question, never ask to confirm, never comment — print only the answer.\" --setting-sources \"\" --no-session-persistence"
 rerank_model = "sonnet"
 
 # OpenAI's Codex CLI. Read from `codex exec --help` here and not run: with no prompt argument
@@ -623,14 +629,26 @@ might ask to find that node in everyday words, plus a line of synonyms. Those qu
 as rows of their own for the reranker's pool and indexed for BM25 as a list of their own in every
 answer. Generation is cached by passage hash in `.repograph/questions.json`, so a later `enrich`
 pays only for nodes whose text changed, and a node left without questions is asked again by the next
-run. Two kinds of drift are refused on the way in and cleaned out of an older cache: a line whose
-letters are mostly neither Cyrillic nor Latin, and several questions tab-joined around the node's
-own id. On the corpus of 2026-09-02, 1,971 eligible nodes took 16 minutes at 8-way parallelism and
+run. Two kinds of drift are refused on the way in: a line whose letters are mostly in a script this
+run did not ask for, and several questions tab-joined around the node's own id. The scripts a run
+accepts are Latin and Cyrillic — identifiers and product names are Latin whatever the documents
+are written in — plus the script of every language named below, so a Chinese corpus keeps its
+Chinese and a Russian one still drops a generator that wandered into Urdu. Loading an older cache
+splits the tab-joined lines and drops mojibake, but judges no script: the run that wrote an entry
+named its own languages, and a later load knows nothing about that run. A reply with no id line
+anywhere is logged as unparseable rather than as nodes the model skipped, and one that wrote its
+tabs as the two characters `\t` — what the generator does when it believes it is writing a file —
+is unescaped and read once before the batch is retried at full price. On the corpus of 2026-09-02, 1,971 eligible nodes took 16 minutes at 8-way parallelism and
 roughly $2.5 of haiku; the corpus is 1,996 eligible nodes now.
 
 Every entry gets its twelve questions and its synonyms in every language the documents use — set
 in `enrich_languages`, or detected from the documents themselves when that key is empty, counting
-letters by script and naming any script that carries a twentieth of them. Before that the questions
+letters by script and naming any script that carries a twentieth of them. A detected list is
+pinned in `questions.json` by the run that used it and read back by the next one: the list is part
+of every entry's staleness hash, so a corpus with a second script sitting near that twentieth
+would otherwise regenerate whole — 180 batches of haiku on the bench corpus — the day one document
+moved it over the line. `enrich --detect-languages` reads the documents again and pays for what
+changes; naming `enrich_languages` outranks both. Before that the questions
 followed each entry's own language, which left a bilingual corpus's English half reachable only
 from an English question: on beauty-crm, 168 of 2,147 entries came out English while the readers
 ask in Russian, and its two ADR paraphrase cases were not in the 200-deep pool at all, so no
@@ -700,6 +718,14 @@ is compiled into the binary, so a release build benches from any directory; `--c
 any other file — one of the recorded 40/30/12 shape is graded against the floors below, any other
 shape is measured and reported with `gated=false`, the way `bench --cases bench/dev-cases.jsonl` is
 used throughout [the runbook](docs/bench/runbook.md).
+
+Twelve of the cases expect a path, and a path is a fact about one checkout, so the recorded suite
+names the corpus it was written against: `bench/cases.pin` holds `beauty-crm 502e8a6d`, and a run
+prints it above the cases (`suite: built-in bench/cases.jsonl, recorded against beauty-crm
+502e8a6d`). The floors below are counts on that tree. An anchor the graph does not hold stops the
+run and the refusal quotes the pin, because editing the case to a newer path is what silently
+moves the suite off the tree its floors were counted on; `bench/missing-anchors.py <checkout>`
+lists every path anchor a tree is missing, without a build and without CI.
 
 The floors are two sets, not one, because [`enrich`](#spending-tokens-on-purpose) is optional and
 paraphrase recall is what it buys. `bench` reads which state the store is in and says so on its

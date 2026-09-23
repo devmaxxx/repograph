@@ -107,11 +107,18 @@ const IO_TIMEOUT: Duration = Duration::from_secs(30);
 /// never answer at all.
 const RERANK_TIMEOUT: Duration = Duration::from_secs(300);
 
-/// How long this request's reply is worth waiting for. Only the read moves: the hello is one
-/// line, so the write stays on `IO_TIMEOUT` whatever the question costs to answer.
+/// How long this request's reply is worth waiting for once the server has said it is working on
+/// it. Only the read moves: the hello is one line, so the write stays on `IO_TIMEOUT` whatever
+/// the question costs to answer.
 fn reply_timeout(req: &ask::Request) -> Duration {
     if req.rerank || req.rerank_local { RERANK_TIMEOUT } else { IO_TIMEOUT }
 }
+
+/// The line the accept thread writes the instant it takes a connection. It is the only proof a
+/// client has that someone is holding its question: the answering loop is single-threaded, so it
+/// may be a whole rerank away from reading the hello, and a client that heard nothing would hand
+/// its question back after `IO_TIMEOUT` while the server works exactly as intended.
+fn ack_line() -> String { serde_json::to_string(&Ack { ack: VERSION.into() }).unwrap() }
 
 /// How often the loop wakes to look at its `--every` and `--idle` deadlines while no question
 /// is waiting. No client waits on it — the accept has a thread of its own — so it only has to
@@ -157,6 +164,14 @@ fn build_stamp() -> Option<crate::walk::Stamp> {
     crate::walk::stamp_of(&std::fs::metadata(std::env::current_exe().ok()?).ok()?)
 }
 
+/// What a server sends before a reranked answer, as soon as it has read a request it means to
+/// answer: the line that separates a server which is working from one that never will. A client
+/// waits `IO_TIMEOUT` for it and `RERANK_TIMEOUT` only after it. Its shape shares no required
+/// field with `Reply`, so neither can be read as the other, and a server that does not send one
+/// — an older build, or any request that is not reranked — answers on the first line as before.
+#[derive(serde::Serialize, serde::Deserialize)]
+pub struct Ack { pub ack: String }
+
 /// The client's half of the handshake. `req.no_dense` is the arm the question was asked in;
 /// the server's own arm comes back in the `Reply`, because only the server knows it.
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -187,16 +202,37 @@ pub struct Reply {
 /// itself, and removes a dead one before it binds. All a client owes the question is an answer,
 /// and it has one either way.
 pub fn try_ask(repo: &Path, req: &ask::Request) -> Option<Reply> {
+    try_ask_within(repo, req, IO_TIMEOUT)
+}
+
+/// `try_ask` with the wait for the server's first line named, which is the only thing a test can
+/// shorten without the server's cooperation.
+fn try_ask_within(repo: &Path, req: &ask::Request, first_line: Duration) -> Option<Reply> {
     let path = socket_path(repo);
     if !sys::present(&path) { return None; }
     let mut stream = sys::connect(&path).ok()?;
-    stream.set_read_timeout(Some(reply_timeout(req))).ok()?;
+    // Whatever the question costs the server, its first line is owed straight away.
+    stream.set_read_timeout(Some(first_line)).ok()?;
     stream.set_write_timeout(Some(IO_TIMEOUT)).ok()?;
     let build = build_stamp();
     let hello = serde_json::to_string(&Hello { v: VERSION.into(), build, req: req.clone() }).ok()?;
     writeln!(stream, "{hello}").ok()?;
+    let mut reader = BufReader::new(stream.try_clone().ok()?);
     let mut line = String::new();
-    BufReader::new(stream).read_line(&mut line).ok()?;
+    reader.read_line(&mut line).ok()?;
+    // Every connection is acknowledged on accept, so the first line says nothing about this
+    // request in particular: read the ack when it is there, and the reply is the line after it.
+    if serde_json::from_str::<Ack>(&line).is_ok() {
+        // Best-effort: on macOS, a peer that has already written the reply and closed makes this
+        // setsockopt fail with EINVAL (the same quirk `hello_line` documents), even though the
+        // reply is already sitting in this socket's receive buffer waiting to be read. Losing the
+        // ability to extend the wait is not a reason to throw away an answer that already arrived.
+        // Set on the reader's own handle: on Windows `try_clone` duplicates the socket, and a
+        // timeout set on the original after the clone never reaches the copy that reads.
+        let _ = reader.get_ref().set_read_timeout(Some(reply_timeout(req)));
+        line.clear();
+        reader.read_line(&mut line).ok()?;
+    }
     let reply: Reply = serde_json::from_str(&line).ok()?;
     // Said out loud, all three: a question that quietly costs a cold process, or quietly gets a
     // lexical answer, looks like nothing at all. The build and the arm come first because a
@@ -249,7 +285,16 @@ pub fn run(repo: &Path, cfg: &config::Config, every: u64, batch: usize, idle: u6
     let (tx, rx) = std::sync::mpsc::sync_channel::<sys::Stream>(0);
     std::thread::spawn(move || loop {
         match sys::accept(&listener) {
-            Ok(s) => if tx.send(s).is_err() { return; },
+            // Acknowledged here rather than where the question is answered, because the whole
+            // point of the line is to go out while the answering loop is still busy with
+            // somebody else's rerank. A probe that connected and closed makes the write fail,
+            // which is not this thread's business: the loop below is what decides that a
+            // connection carrying no hello asked nothing.
+            Ok(mut s) => {
+                let _ = s.set_write_timeout(Some(IO_TIMEOUT));
+                let _ = writeln!(s, "{}", ack_line());
+                if tx.send(s).is_err() { return; }
+            }
             Err(_) => return,
         }
     });
@@ -424,9 +469,9 @@ impl Drop for Unlink {
 
 #[cfg(test)]
 mod tests {
-    use super::{drop_model_now, reply_timeout, socket_path, sys, IO_TIMEOUT, RERANK_TIMEOUT};
+    use super::{ack_line, build_stamp, drop_model_now, reply_timeout, socket_path, sys, try_ask, try_ask_within, Ack, Reply, IO_TIMEOUT, RERANK_TIMEOUT, VERSION};
     use crate::ask::Request;
-    use std::io::{BufRead, BufReader};
+    use std::io::{BufRead, BufReader, Write};
     use std::time::Duration;
 
     /// The bug behind a `--rerank-local` question that never printed a `serve:` line: the client
@@ -490,6 +535,118 @@ mod tests {
         // construction. A unix filesystem may hand the inode straight back, so there this is not
         // asserted — and the guard's dev+ino check has always lived with that.
         if cfg!(windows) { assert_ne!(sys::id(&path), Some(id), "bound again under the name, another file"); }
+    }
+
+    /// The long wait is for a server that is reranking, and a server that accepted the connection
+    /// and will never answer looks exactly like one until it says otherwise. `serve` is an
+    /// accelerator: a client may not do worse with one than without, and five silent minutes is
+    /// as much worse as this protocol can get.
+    #[test]
+    fn a_server_that_never_answers_hands_a_reranked_question_back_on_the_first_line() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join(".repograph")).unwrap();
+        let listener = sys::bind(&socket_path(dir.path())).unwrap();
+        // Accepts, reads nothing, replies nothing -- a wedged worker, a process under a debugger,
+        // a reranker child that hung.
+        let held = std::thread::spawn(move || {
+            let accepted = sys::accept(&listener);
+            std::thread::sleep(Duration::from_secs(2));
+            drop(accepted);
+        });
+        let req = Request { words: vec!["чаевые".into()], json: false, seeds: 5, bodies: false, rerank: true, rerank_local: false, depth: crate::rerank::DEPTH, stale: false, no_dense: false };
+        let started = std::time::Instant::now();
+        assert!(try_ask_within(dir.path(), &req, Duration::from_millis(300)).is_none(), "nothing came back to parse");
+        assert!(started.elapsed() < Duration::from_secs(2), "fell back after {:?}", started.elapsed());
+        let _ = held.join();
+    }
+
+    /// The queue is the case the acknowledgement exists for: a server busy with somebody else's
+    /// rerank has not read this hello yet, and the only thing keeping this client from falling
+    /// back at `IO_TIMEOUT` is a line written by the thread that accepted the connection.
+    #[test]
+    fn a_connection_acknowledged_before_its_hello_is_read_keeps_the_long_wait() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join(".repograph")).unwrap();
+        let listener = sys::bind(&socket_path(dir.path())).unwrap();
+        let build = build_stamp();
+        let held = std::thread::spawn(move || {
+            let mut s = sys::accept(&listener).unwrap();
+            writeln!(s, "{}", ack_line()).unwrap();
+            // Busy elsewhere for longer than the shortened first-line wait below.
+            std::thread::sleep(Duration::from_millis(700));
+            let mut line = String::new();
+            BufReader::new(s.try_clone().unwrap()).read_line(&mut line).unwrap();
+            let reply = Reply { v: VERSION.into(), build, no_dense: false, stdout: "queued".into(), stderr: vec![] };
+            writeln!(s, "{}", serde_json::to_string(&reply).unwrap()).unwrap();
+        });
+        let req = Request { words: vec!["чаевые".into()], json: false, seeds: 5, bodies: false, rerank: true, rerank_local: false, depth: crate::rerank::DEPTH, stale: false, no_dense: false };
+        let got = try_ask_within(dir.path(), &req, Duration::from_millis(300));
+        held.join().unwrap();
+        assert_eq!(got.map(|r| r.stdout), Some("queued".into()), "an acknowledged client waits out the queue it is in");
+    }
+
+    /// The extension only matters if a reply that was not yet on the wire when the ack was read
+    /// is still picked up afterwards: the ack buys the wait, and this is what the wait is for.
+    #[test]
+    fn a_reply_that_arrives_after_the_ack_still_extends_the_wait_to_find_it() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join(".repograph")).unwrap();
+        let listener = sys::bind(&socket_path(dir.path())).unwrap();
+        let build = build_stamp();
+        let held = std::thread::spawn(move || {
+            let mut s = sys::accept(&listener).unwrap();
+            let mut line = String::new();
+            BufReader::new(s.try_clone().unwrap()).read_line(&mut line).unwrap();
+            writeln!(s, "{}", ack_line()).unwrap();
+            // Later than the shortened first-line wait below, so the read that finds it only
+            // succeeds if the ack actually moved the deadline out to `reply_timeout`.
+            std::thread::sleep(Duration::from_millis(700));
+            let reply = Reply { v: VERSION.into(), build, no_dense: false, stdout: "hi".into(), stderr: vec![] };
+            writeln!(s, "{}", serde_json::to_string(&reply).unwrap()).unwrap();
+        });
+        let req = Request { words: vec!["чаевые".into()], json: false, seeds: 5, bodies: false, rerank: true, rerank_local: false, depth: crate::rerank::DEPTH, stale: false, no_dense: false };
+        let got = try_ask_within(dir.path(), &req, Duration::from_millis(300));
+        held.join().unwrap();
+        assert_eq!(got.map(|r| r.stdout), Some("hi".into()), "the late reply should still have been read after the ack extended the timeout");
+    }
+
+    /// On macOS, `setsockopt` for a read timeout fails with EINVAL once the peer has already
+    /// written everything and closed — the same quirk `hello_line` documents, met here from the
+    /// other side of the same socket. A server that answers fast enough to write its reply and
+    /// return (dropping the connection) before the client gets to extend its own timeout must
+    /// not cost the client an answer that already fully arrived.
+    #[test]
+    fn a_reply_already_behind_a_closed_peer_is_read_even_when_extending_the_timeout_fails() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join(".repograph")).unwrap();
+        let listener = sys::bind(&socket_path(dir.path())).unwrap();
+        let build = build_stamp();
+        let held = std::thread::spawn(move || {
+            let mut s = sys::accept(&listener).unwrap();
+            let mut line = String::new();
+            BufReader::new(s.try_clone().unwrap()).read_line(&mut line).unwrap();
+            writeln!(s, "{}", ack_line()).unwrap();
+            // No delay: the reply and the drop of `s` below race the client's own extension of
+            // its read timeout, and on macOS this side wins often enough to pin the bug on.
+            let reply = Reply { v: VERSION.into(), build, no_dense: false, stdout: "hi2".into(), stderr: vec![] };
+            writeln!(s, "{}", serde_json::to_string(&reply).unwrap()).unwrap();
+        });
+        let req = Request { words: vec!["чаевые".into()], json: false, seeds: 5, bodies: false, rerank: true, rerank_local: false, depth: crate::rerank::DEPTH, stale: false, no_dense: false };
+        let got = try_ask(dir.path(), &req);
+        held.join().unwrap();
+        assert_eq!(got.map(|r| r.stdout), Some("hi2".into()), "a reply that already fully arrived must not be thrown away over a timeout that could not be extended");
+    }
+
+    /// The two lines a client reads share no required field, so neither can be taken for the
+    /// other: a reply on the first line is an older server's answer and is read as one.
+    #[test]
+    fn an_acknowledgement_and_a_reply_are_never_read_as_each_other() {
+        let ack = serde_json::to_string(&Ack { ack: "0.5.3".into() }).unwrap();
+        let reply = serde_json::to_string(&Reply {
+            v: "0.5.3".into(), build: None, no_dense: false, stdout: String::new(), stderr: vec![],
+        }).unwrap();
+        assert!(serde_json::from_str::<Reply>(&ack).is_err(), "{ack}");
+        assert!(serde_json::from_str::<Ack>(&reply).is_err(), "{reply}");
     }
 
     /// What `run` does on the way out: the listener is still alive on its thread when the guard

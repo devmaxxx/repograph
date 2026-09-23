@@ -143,6 +143,9 @@ enum Cmd {
         #[arg(long)] limit: Option<usize>,
         /// Also asks about code: symbols with a doc comment or a body, files with a head comment.
         #[arg(long)] code: bool,
+        /// Reads the corpus's languages again instead of re-using the list the store was
+        /// enriched under. A list that changes restales every entry, so it is taken once.
+        #[arg(long)] detect_languages: bool,
     },
     /// Embeds every row the dense index lacks, without re-reading the tree: a store copied
     /// without its vectors is re-embedded from its graph and questions alone, which is how a
@@ -739,7 +742,7 @@ fn run() -> anyhow::Result<()> {
             }
             embed_all(&repo, cli.no_dense, &cfg)
         }
-        Cmd::Enrich { batch, parallel, limit, code } => {
+        Cmd::Enrich { batch, parallel, limit, code, detect_languages } => {
             let cfg = load_cfg()?;
             cap_pools(index::embed::threads(cfg.resources));
             let store = store::Store::new(&repo);
@@ -751,17 +754,7 @@ fn run() -> anyhow::Result<()> {
             let (languages, where_from) = match cfg.enrich_languages.is_empty() {
                 false if cfg.enrich_languages_from_env => (cfg.enrich_languages.clone(), "REPOGRAPH_ENRICH_LANGUAGES"),
                 false => (cfg.enrich_languages.clone(), "repograph.toml"),
-                true => {
-                    let docs = graph.nodes.values().filter(|n| enrich::eligible(n));
-                    let detected = enrich::languages_of(docs.flat_map(|n| [n.label.as_str(), n.body.as_str()]));
-                    // A corpus whose script names nothing still gets a named language: English is
-                    // the one a generator writes best and a reader of an unnamed corpus most
-                    // likely asks in, and any other is one line in `repograph.toml`.
-                    match detected.is_empty() {
-                        true => (vec!["English".to_string()], "the default: the documents named no language"),
-                        false => (detected, "detected from the documents"),
-                    }
-                }
+                true => enrich::languages_for(&questions, &graph, detect_languages),
             };
             eprintln!("enrich: questions in {} ({where_from})", languages.join(", "));
             let t = std::time::Instant::now();
