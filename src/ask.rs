@@ -258,6 +258,10 @@ impl Context {
         // Collected like the local reranker's failure beside it, so `--rerank` and
         // `--rerank-local` tell a client the same thing when their model will not answer.
         let rerank_fn = |q: &str, c: &[(String, String)]| {
+            if let Some(why) = cfg.refusal("rerank_command") {
+                notices.borrow_mut().push(format!("rerank: {why}; answering from the fused order"));
+                return Vec::new();
+            }
             let (picked, notice) = rerank::run_or_notice(&cfg.rerank_command, q, c);
             if let Some(n) = notice { notices.borrow_mut().push(n); }
             picked

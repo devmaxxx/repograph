@@ -344,6 +344,7 @@ pub fn run(repo: &Path, cases: Option<&Path>, no_dense: bool, rerank: bool, rera
     // `--repo` one — is the file this run reads.
     let repo = std::env::var("REPOGRAPH_BENCH_REPO").map(std::path::PathBuf::from).unwrap_or(repo.to_path_buf());
     let cfg = Config::load(&repo)?;
+    if rerank { if let Some(why) = cfg.refusal("rerank_command") { anyhow::bail!(why); } }
     // `bench` does not come through `main`'s arms, so the pools it owns are capped here.
     let threads = crate::index::embed::threads(cfg.resources);
     crate::cap_pools(threads);

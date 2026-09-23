@@ -38,6 +38,11 @@ pub struct Config {
     /// Whether that list came from `REPOGRAPH_ENRICH_LANGUAGES`, so `enrich` can say where it read it.
     #[serde(skip)]
     pub enrich_languages_from_env: bool,
+    /// Command keys the project file named that the machine file did not override. The command
+    /// that would run in their place is the default paid model, which is not what a file naming
+    /// its own transport asked for, so the commands that spend refuse rather than fall through.
+    #[serde(skip)]
+    pub refused_commands: Vec<&'static str>,
     /// Directory holding `model.onnx` and `tokenizer.json` for `ask --rerank-local`; empty
     /// means `~/.cache/repograph/reranker`.
     pub reranker_dir: String,
@@ -115,6 +120,7 @@ impl Default for Config {
             rerank_model: RERANK_MODEL.into(),
             enrich_languages: Vec::new(),
             enrich_languages_from_env: false,
+            refused_commands: Vec::new(),
             reranker_dir: String::new(),
             embed_model: crate::index::embed::DEFAULT_MODEL.into(),
             resources: crate::index::embed::Resources::default(),
@@ -243,6 +249,9 @@ impl Config {
         let template = |from_machine: Option<String>, builtin: &str| -> String {
             from_machine.unwrap_or_else(|| builtin.to_string())
         };
+        for (key, from_machine) in [("enrich_command", &machine.enrich_command), ("rerank_command", &machine.rerank_command)] {
+            if named.contains_key(key) && from_machine.is_none() { cfg.refused_commands.push(key); }
+        }
         let enrich_template = template(machine.enrich_command, ENRICH_COMMAND);
         let rerank_template = template(machine.rerank_command, RERANK_COMMAND);
 
@@ -274,6 +283,15 @@ impl Config {
         cfg.enrich_command = enrich_template.replace(MODEL_SLOT, &cfg.enrich_model);
         cfg.rerank_command = rerank_template.replace(MODEL_SLOT, &cfg.rerank_model);
         Ok(cfg)
+    }
+
+    /// Why a command that spends through `key` must not run, when the project file named `key`
+    /// and the machine file left the default in its place.
+    pub fn refusal(&self, key: &'static str) -> Option<String> {
+        self.refused_commands.contains(&key).then(|| format!(
+            "repograph.toml names {key}, which is not read from a repository, and the default in its place is a paid model — \
+             set {key} in {} or remove it from repograph.toml",
+            machine_path().map_or_else(|| "~/.config/repograph/config.toml".to_string(), |p| p.display().to_string())))
     }
 
     /// One line per key a project file still names. Families are the prefixes the documents
@@ -833,6 +851,32 @@ mod tests {
             assert!(!cfg.enrich_command.contains("evil"), "{}", cfg.enrich_command);
             assert!(!cfg.rerank_command.contains("evil"), "{}", cfg.rerank_command);
             assert!(cfg.enrich_command.starts_with("MAX_THINKING_TOKENS=0 claude -p --model haiku"));
+        });
+    }
+
+    /// The default that runs in place of a refused command is a paid model, so falling through
+    /// to it spends money the file's author meant to route elsewhere; a machine-file command is
+    /// the reader's own choice and is not refused.
+    #[test]
+    fn a_command_the_project_names_is_refused_unless_the_machine_file_names_its_own() {
+        let project = "enrich_command = \"true\"\nrerank_command = \"true\"\n";
+        with_machine(None, || {
+            let dir = tempfile::tempdir().unwrap();
+            std::fs::write(dir.path().join("repograph.toml"), project).unwrap();
+            let cfg = Config::load(dir.path()).unwrap();
+            assert!(cfg.refusal("enrich_command").is_some_and(|m| m.contains("paid model")));
+            assert!(cfg.refusal("rerank_command").is_some());
+        });
+        with_machine(Some("enrich_command = \"my-runner\"\n"), || {
+            let dir = tempfile::tempdir().unwrap();
+            std::fs::write(dir.path().join("repograph.toml"), project).unwrap();
+            let cfg = Config::load(dir.path()).unwrap();
+            assert_eq!(cfg.refusal("enrich_command"), None);
+            assert!(cfg.refusal("rerank_command").is_some());
+        });
+        with_machine(None, || {
+            let dir = tempfile::tempdir().unwrap();
+            assert_eq!(Config::load(dir.path()).unwrap().refusal("enrich_command"), None);
         });
     }
 

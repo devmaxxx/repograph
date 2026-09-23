@@ -401,8 +401,10 @@ A key the repository names wins even when it names the built-in value — with t
 they run the other way. **`enrich_command` and `rerank_command` are read from the machine file and
 never from a repository.** A repository you cloned is untrusted input, and those two keys are a
 shell command that would run on your machine the first time you ran `enrich` or `ask --rerank` in
-it; a `repograph.toml` that names one gets a line on stderr saying where the key belongs, and the
-machine's command — or the built-in — is used. A repository may still say which *model* it wants,
+it; a `repograph.toml` that names one gets a line on stderr saying where the key belongs. If the
+machine file names its own command, that one runs. If not, `enrich` and `bench --rerank` stop
+instead of falling through to the built-in paid model, and `ask --rerank` answers from the fused
+order: a repository naming its own transport did not ask for the default one. A repository may still say which *model* it wants,
 and because that name lands in a shell string, anything outside letters, digits and `._:/@+-` is
 refused the same way. What a clone chooses is the model; what runs it is yours.
 
