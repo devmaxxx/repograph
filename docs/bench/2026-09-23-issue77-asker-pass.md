@@ -89,3 +89,74 @@ Every `enrich`, `embed` and `bench` transcript, the wrapper, its cost log and th
 `track.py record` with a `--tag` naming its arm, so no store copy's rows pool with the fixture's
 routine runs. Per-case flips are listed against P0, H0 and, for HEAD, the 11/30 roll in the
 #77 kit's `bench-after.txt`.
+
+## Not measured
+
+**2026-09-23.** The pass is implemented (`6e125f9`) and was never read. None of the five clauses
+has a reading, so there is no verdict. The code stays on this branch, unmerged.
+
+**Why it stopped.** Before any paid run, one real asker batch went through the wrapper. It covered
+six nodes (ADR-025 to ADR-030) in English and Russian and cost `total_cost_usd` $0.046. It
+produced 5,196 output tokens in 52 s, and all six nodes were answered.
+
+Output tokens drive the cost: six questions × two languages per node, at about 70 tokens a line.
+Projected over whole stores:
+
+| arm | nodes | calls | cost | time at `--parallel 8` |
+|---|---|---|---|---|
+| HEAD | 2,154 | 359 | ≈ $16.5 | about 40 min |
+| pin | 1,996 | 333 | ≈ $15.3 | about 40 min |
+| **total** | | | **≈ $32** | |
+
+The approved budget was $4–8 per store. Max stopped at $0.
+
+Spend so far: the two probe calls (about $0.06). Earlier in setup there was one accidental real run
+on a scratch copy, about $1–1.8: a project-level `enrich_command` is ignored, so the "no-op"
+generator was the default one. No bench worktree was touched.
+
+**The prompt.** The existing prompt is unchanged. Ten captured prompts from this branch matched
+those of a binary built from `e1686ae`, whose `enrich.rs` is `main`'s, byte for byte.
+
+The sample batch shows the register the pass asks for: "Can I use…", "How do I know which…", "Where
+do we keep…". It still borrowed entry terms (discriminator, SQLCipher, outbox) and misread the
+domain of two ADRs. That is one batch, and no evidence either way on the rule.
+
+**Baselines, free, read with `6e125f9`.** Recorded in `runs.jsonl` under the tags `asker77-P0` and
+`asker77-H0`.
+
+| arm | reading | keyword | paraphrase | code | p90 |
+|---|---|---|---|---|---|
+| P0 | dense | 40/40 | 15/30 | 12/12 | 221 |
+| P0 | lexical | 39/40 | 15/30 | 12/12 | 215 |
+| H0 | dense | 40/40 | 12/30 | 12/12 | 231 |
+| H0 | lexical | 39/40 | 12/30 | 12/12 | 221 |
+
+The developer suite was read for P0 only:
+
+| arm | reading | long | cross | multi | where | rule | total |
+|---|---|---|---|---|---|---|---|
+| P0 | dense | 10/15 | 12/15 | 10/12 | 0/9 | 5/9 | 37/60 |
+| P0 | lexical | 11/15 | 12/15 | 9/12 | 0/9 | 5/9 | 37/60 |
+
+H0 reads `enriched=false (2147/2154)`. Its dense p90 is already 231, above clause 1's bar of 230,
+before any question is added.
+
+**What a future run needs.**
+
+1. **An approved budget of about $32** for both arms. HEAD alone (about $16.5) reads only clauses
+   1–2, so it cannot ship the pass under this rule.
+2. **The kit, which is ready.** `asker-pass/` holds:
+   - the binary `repograph-6e125f9`;
+   - `wrapper.sh` with `machine.toml`, for `REPOGRAPH_CONFIG`;
+   - `bench-arm.sh <arm> [dev]`;
+   - the P0 and H0 transcripts.
+3. **Per arm:**
+   - Check out the arm's commit in `~/bench/beauty-crm-test` with `LEFTHOOK=0`.
+   - `rsync -a --delete` the arm's store into `.repograph`.
+   - Run `REPOGRAPH_CONFIG=…/machine.toml …/repograph-6e125f9 --repo ~/bench/beauty-crm-test enrich
+     --keep-raw …/raw-<arm>`. It embeds the new rows itself.
+   - Run `bench-arm.sh H1`, or `bench-arm.sh P1 dev`.
+   - Record each transcript with `track.py record --tag asker77-<arm>`.
+   - Afterwards, restore `502e8a6d` with `store-before`.
+4. **A cheaper pass is a different pass.** Three questions per language would halve the output. It
+   needs a rule of its own, written before it is read.
