@@ -747,6 +747,7 @@ fn run() -> anyhow::Result<()> {
         }
         Cmd::Enrich { batch, parallel, limit, code, detect_languages, keep_raw } => {
             let cfg = load_cfg()?;
+            if let Some(why) = cfg.refusal("enrich_command") { anyhow::bail!(why); }
             cap_pools(index::embed::threads(cfg.resources));
             let store = store::Store::new(&repo);
             let (graph, _) = store.load()?;
