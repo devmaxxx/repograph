@@ -74,8 +74,13 @@ pub struct Config {
 // — wrote the answer to a file and reported it — and with no tools it wrote the call as text. One
 // batch in ten of a two-language run came back that way: 10,155 output tokens, zero tab lines,
 // paid for and retried. The paths in those pretend calls were the agent prompt's, not ours.
-const ENRICH_COMMAND: &str = "MAX_THINKING_TOKENS=0 claude -p --model {model} --output-format text --tools \"\" --system-prompt \"You write plain text. You have no tools, no files and no memory: the only thing you can do is print your answer. Do all of the task at once: never ask a question, never ask to confirm, never comment — print only the answer.\" --setting-sources \"\" --no-session-persistence";
-const RERANK_COMMAND: &str = "MAX_THINKING_TOKENS=0 claude -p --model {model} --output-format text --tools \"\" --system-prompt \"You write plain text. You have no tools, no files and no memory: the only thing you can do is print your answer. Do all of the task at once: never ask a question, never ask to confirm, never comment — print only the answer.\" --setting-sources \"\" --no-session-persistence";
+//
+// `--tools ""` does not reach the claude.ai connectors either: they load as MCP servers, and the
+// cheap model, handed a Claude Docs tool, tried to write the answer as a doc and printed a refusal
+// instead — 4 of 333 batches on one corpus, 15 of 359 on another. `--strict-mcp-config` with no
+// `--mcp-config` leaves it none.
+const ENRICH_COMMAND: &str = "MAX_THINKING_TOKENS=0 claude -p --model {model} --output-format text --tools \"\" --system-prompt \"You write plain text. You have no tools, no files and no memory: the only thing you can do is print your answer. Do all of the task at once: never ask a question, never ask to confirm, never comment — print only the answer.\" --setting-sources \"\" --strict-mcp-config --no-session-persistence";
+const RERANK_COMMAND: &str = "MAX_THINKING_TOKENS=0 claude -p --model {model} --output-format text --tools \"\" --system-prompt \"You write plain text. You have no tools, no files and no memory: the only thing you can do is print your answer. Do all of the task at once: never ask a question, never ask to confirm, never comment — print only the answer.\" --setting-sources \"\" --strict-mcp-config --no-session-persistence";
 // The cheap model writes a node's questions as well as any (paraphrase 15/30 against a stronger
 // model's 17/30, and 5/9 of the developer suite's `rule` answers against its 2/9 — the register
 // its questions are written in matters more than the model, and
@@ -878,6 +883,11 @@ mod tests {
             let dir = tempfile::tempdir().unwrap();
             assert_eq!(Config::load(dir.path()).unwrap().refusal("enrich_command"), None);
         });
+    }
+
+    #[test]
+    fn the_built_in_commands_load_no_mcp_server() {
+        for c in [ENRICH_COMMAND, RERANK_COMMAND] { assert!(c.contains("--strict-mcp-config"), "{c}"); }
     }
 
     #[test]
