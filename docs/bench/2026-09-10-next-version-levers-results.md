@@ -327,6 +327,58 @@ copied to `log/g32/after/store/` before anything else runs in the directory. Cov
 
 **Reading.**
 
+**Read 2026-09-23 on `v0.5.0` (`b21fb0f`), 0.6.0 plan Task 4.** `v0.5.0` has no
+`enrich_languages`, so this is one language's enrichment and the one-language cost; no
+`repograph.toml` was written. Transcripts: `~/bench/0.6.0-2026-09-11/log/master-t4/`.
+
+*Before* — the four arms on the pinned fixture:
+
+```
+keyword 40/40  paraphrase 15/30  code 12/12  p90 221 tok  dense=true   enriched=true (1996/1996 nodes)  gated=true   green
+keyword 39/40  paraphrase 15/30  code 12/12  p90 215 tok  dense=false  enriched=true (1996/1996 nodes)  gated=true   green
+long 10/15  cross 13/15  multi 10/12  where 0/9  rule 5/9  p90 239 tok  dense=true   enriched=true  measured, no floors
+long 11/15  cross 13/15  multi 9/12   where 0/9  rule 5/9  p90 239 tok  dense=false  enriched=true  measured, no floors
+```
+
+The baseline table of §2 exactly, counts, p90 and anchors.
+
+*Rebuilt* — `build` in `~/bench/beauty-crm-test` after `reset.sh` (0 files dirty):
+
+```
+changed 908 removed 0 nodes 8475 edges 30363
+repograph: 150 requirement-like nodes have no questions — run `repograph enrich` to search them
+keyword 40/40  paraphrase 15/30  code 12/12  p90 226 tok  dense=true   enriched=false (1996/2146 nodes)  green
+keyword 39/40  paraphrase 16/30  code 12/12  p90 218 tok  dense=false  enriched=false (1996/2146 nodes)  green
+long 10/15  cross 12/15  multi 10/12  where 0/9  rule 5/9  p90 240 tok  dense=true   enriched=false
+long 11/15  cross 13/15  multi 9/12   where 0/9  rule 5/9  p90 240 tok  dense=false  enriched=false
+```
+
+N = 150 = 2146 − 1996, and both recorded arms print `enriched=false`.
+
+*Enrich* — one run:
+
+```
+enrich: 150 nodes written, 0 dropped, 0 still without questions, 13 batches (0 failed) in 220s
+dense: embedded 2143 rows in 6.6s
+```
+
+Vector rows 33,533 → 35,835. `v0.5.0`'s `enrich` prints no cost line, so the cost is not read
+here; the maintainer's authorisation was ≈ $0.20 of haiku.
+
+*After*:
+
+```
+keyword 40/40  paraphrase 15/30  code 12/12  p90 227 tok  dense=true   enriched=true (2146/2146 nodes)  gated=true  green
+keyword 39/40  paraphrase 16/30  code 12/12  p90 218 tok  dense=false  enriched=true (2146/2146 nodes)  gated=true  green
+long 10/15  cross 12/15  multi 10/12  where 0/9  rule 5/9  p90 241 tok  dense=true   enriched=true  measured, no floors
+long 11/15  cross 13/15  multi 9/12   where 0/9  rule 5/9  p90 240 tok  dense=false  enriched=true  measured, no floors
+```
+
+Coverage 2146/2146 (100% ≥ 99%), both recorded arms `enriched=true gated=true` and exit 0, the
+developer arms recorded. The enriched store (85 MB) was copied to
+`~/bench/0.6.0-2026-09-11/log/master-t4/after/store/` before anything else ran in the directory.
+**Clause by clause: before, rebuilt and after all green.**
+
 ## 9 · G19 — a chunk budgeted in tokens
 
 **Gate.** Control: `repograph-main embed` in `~/bench/beauty-crm-test` after `reset.sh`, the
