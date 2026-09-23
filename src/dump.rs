@@ -72,9 +72,7 @@ pub fn run(repo: &Path, queries: &Path, out: &Path, depth: usize, no_dense: bool
     let mut loo = questions.clone();
     for q in queries.iter().filter(|q| q.kind == "synthetic") {
         for anchor in q.expect.anchors() {
-            for set in [&mut loo.entries, &mut loo.asker] {
-                if let Some(e) = set.get_mut(anchor) { e.questions.retain(|t| t != &q.q); }
-            }
+            if let Some(e) = loo.entries.get_mut(anchor) { e.questions.retain(|t| t != &q.q); }
         }
     }
     // A dump is a diagnostic record of every retriever, not the fusion any one query took, so
