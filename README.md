@@ -638,7 +638,10 @@ splits the tab-joined lines and drops mojibake, but judges no script: the run th
 named its own languages, and a later load knows nothing about that run. A reply with no id line
 anywhere is logged as unparseable rather than as nodes the model skipped, and one that wrote its
 tabs as the two characters `\t` — what the generator does when it believes it is writing a file —
-is unescaped and read once before the batch is retried at full price. On the corpus of 2026-09-02, 1,971 eligible nodes took 16 minutes at 8-way parallelism and
+is unescaped and read once before the batch is retried at full price. A batch that still comes back short
+explains itself only in the reply `enrich` has already read: `enrich --keep-raw <dir>` (or
+`REPOGRAPH_ENRICH_KEEP=<dir>`) leaves its prompt and reply as `<first id>.in` and `.out`, its retry
+as `<first id>.retry.in` and `.out`, and writes nothing for a clean batch. On the corpus of 2026-09-02, 1,971 eligible nodes took 16 minutes at 8-way parallelism and
 roughly $2.5 of haiku; the corpus is 1,996 eligible nodes now.
 
 Every entry gets its twelve questions and its synonyms in every language the documents use — set
