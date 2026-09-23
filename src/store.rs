@@ -11,10 +11,11 @@ pub struct Store { dir: PathBuf }
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Source { Absent, Json, Mirror }
 
-/// A `Graph` that gained a field is a new mirror shape, and a magic that says so is one fewer
-/// thing that depends on postcard failing at the right byte: `RGM1` mirrors hold the struct from
-/// before `pending`, and are passed over rather than decoded into it.
-const MIRROR_MAGIC: &[u8; 4] = b"RGM2";
+/// A `Graph` or `Questions` that gained a field is a new mirror shape, and a magic that says so
+/// is one fewer thing that depends on postcard failing at the right byte: `RGM1` mirrors hold the
+/// graph from before `pending`, `RGM2` the questions from before the asker's set, and both are
+/// passed over rather than decoded into the new shape.
+const MIRROR_MAGIC: &[u8; 4] = b"RGM3";
 const MIRROR_HEADER: usize = 4 + 12 + 16 + 8;
 
 fn stamp(p: &Path) -> Option<(u128, u64)> {

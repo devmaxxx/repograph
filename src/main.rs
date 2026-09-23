@@ -763,12 +763,13 @@ fn run() -> anyhow::Result<()> {
             eprintln!("enrich: questions in {} ({where_from})", languages.join(", "));
             let keep = keep_raw.or_else(|| std::env::var_os("REPOGRAPH_ENRICH_KEEP").map(Into::into));
             let t = std::time::Instant::now();
-            let r = enrich::run(&store, &graph, questions, &cfg.enrich_command, batch, parallel, enrich::Scope { limit, code, keep }, &languages)?;
-            println!("enrich: {} nodes written, {} dropped, {} still without questions, {} batches ({} failed) in {:.0}s", r.generated, r.dropped, r.left, r.batches, r.failed, t.elapsed().as_secs_f32());
+            let r = enrich::run(&store, &graph, questions, &cfg.enrich_command, batch, parallel, enrich::Scope { limit, code, keep, asker: true }, &languages)?;
+            println!("enrich: {} nodes written, {} given the asker's set, {} dropped, {} still without questions, {} without the asker's set, {} batches ({} failed) in {:.0}s",
+                     r.generated, r.asker, r.dropped, r.left, r.asker_left, r.batches, r.failed, t.elapsed().as_secs_f32());
             // A run that was asked to write and wrote nothing has to exit like one, or a campaign
             // grades a store nobody enriched. `left > 0` is not the condition: a store legitimately
             // keeps nodes the model declines, and every honest run would then be red.
-            if r.failed > 0 && r.generated == 0 {
+            if r.failed > 0 && r.generated == 0 && r.asker == 0 {
                 anyhow::bail!("enrich: {} of {} batches produced nothing — the generator did not answer", r.failed, r.batches);
             }
             embed_all(&repo, cli.no_dense, &cfg)

@@ -33,19 +33,41 @@ pub struct Questions {
     /// field existed, which reads as "never pinned" and is detected as before.
     #[serde(default)]
     pub languages: Vec<String>,
+    /// A second set per document, written by `prompt_asker` in the voice of someone who never
+    /// read the documentation, and read back after the node's own questions as one list. It is
+    /// kept apart, under a hash of its own, so that either set can be stale while the other is
+    /// not: a store written before this set existed pays for it alone rather than for both,
+    /// and a question list that is current is never rolled again to buy it — a second roll of
+    /// the same prompt is a lottery on register, not a fix for it.
+    #[serde(default)]
+    pub asker: BTreeMap<String, Entry>,
 }
 
 #[derive(Debug)]
-pub struct Report { pub generated: usize, pub dropped: usize, pub batches: usize, pub failed: usize, pub left: usize }
+pub struct Report {
+    pub generated: usize,
+    /// Nodes given an asker's set by this run.
+    pub asker: usize,
+    pub dropped: usize,
+    pub batches: usize,
+    pub failed: usize,
+    pub left: usize,
+    /// Documents still without a current asker's set.
+    pub asker_left: usize,
+}
 
 /// What one `enrich` run covers: at most `limit` stale nodes of each kind, and code only on request.
 /// `keep` is where a batch that came back short leaves its prompt and the generator's reply.
+/// `asker` adds the asker's set to every document; the CLI always asks for it.
 #[derive(Clone, Debug, Default)]
-pub struct Scope { pub limit: Option<usize>, pub code: bool, pub keep: Option<PathBuf> }
+pub struct Scope { pub limit: Option<usize>, pub code: bool, pub keep: Option<PathBuf>, pub asker: bool }
 
-/// One prompt's worth of nodes with their passage hashes; `retry` after the model skipped them
-/// once, `code` for the code prompt.
-struct Batch<'a> { nodes: Vec<(&'a Node, String)>, retry: bool, code: bool }
+/// Which prompt a batch goes to, and so which set its answer is stored as.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Pass { Questions, Asker, Code }
+
+/// One prompt's worth of nodes with their passage hashes; `retry` after the model skipped them once.
+struct Batch<'a> { nodes: Vec<(&'a Node, String)>, retry: bool, pass: Pass }
 
 fn passage(n: &Node) -> String {
     let body: String = n.body.chars().take(PASSAGE_CHARS).collect();
@@ -131,7 +153,7 @@ impl Questions {
         let mut q = q.unwrap_or_default();
         // A mirror is written from entries the guard already passed; only the JSON, which may
         // predate the guard, still needs it.
-        if source == Source::Json { clean(&mut q.entries); }
+        if source == Source::Json { clean(&mut q); }
         Ok((q, source))
     }
 
@@ -142,31 +164,42 @@ impl Questions {
         // The mirror holds what a load of this JSON would return, guard included, so the two
         // paths can never disagree about an entry.
         let mut mirrored = self.clone();
-        clean(&mut mirrored.entries);
+        clean(&mut mirrored);
         mirrored.write_mirror(store)
     }
 
-    pub fn get(&self, id: &str) -> &[String] {
-        self.entries.get(id).map(|e| e.questions.as_slice()).unwrap_or(&[])
+    /// Every question a node carries: its own set, then its asker's set.
+    pub fn get(&self, id: &str) -> Vec<&str> {
+        [&self.entries, &self.asker].into_iter()
+            .filter_map(|set| set.get(id))
+            .flat_map(|e| e.questions.iter().map(String::as_str))
+            .collect()
     }
 
-    /// Nodes whose cached questions are missing, were written for a different passage, or were
-    /// written in other languages than `languages` asks for. The languages enter the hash only
-    /// where they change what the entry would get: a list that names the entry's own language and
-    /// nothing else asks for what the store already holds, so a corpus written in one language
-    /// regenerates nothing the day the list first exists, and a bilingual one regenerates exactly
-    /// the entries whose questions are missing a language.
-    fn stale<'a>(&self, graph: &'a Graph, wanted: fn(&Node) -> bool, languages: &[String]) -> Vec<(&'a Node, String)> {
+    /// Nodes whose cached set for `pass` is missing, was written for a different passage, or was
+    /// written in other languages than `languages` asks for. For the node's own questions the
+    /// languages enter the hash only where they change what the entry would get: a list that
+    /// names the entry's own language and nothing else asks for what the store already holds, so
+    /// a corpus written in one language regenerates nothing the day the list first exists, and a
+    /// bilingual one regenerates exactly the entries whose questions are missing a language. The
+    /// asker's set has no store from before the list to spare, so its hash always carries it.
+    fn stale<'a>(&self, graph: &'a Graph, pass: Pass, languages: &[String]) -> Vec<(&'a Node, String)> {
         // Sorted: detection orders by share, and two languages trading places is not a new list.
         let mut sorted = languages.to_vec();
         sorted.sort();
+        let (set, wanted): (_, fn(&Node) -> bool) = match pass {
+            Pass::Questions => (&self.entries, eligible),
+            Pass::Asker => (&self.asker, eligible),
+            Pass::Code => (&self.entries, eligible_code),
+        };
         graph.nodes.values().filter(|n| wanted(n)).filter_map(|n| {
-            let own = languages_of([n.label.as_str(), n.body.as_str()].into_iter());
-            let h = match languages.is_empty() || own.first().map(std::slice::from_ref) == Some(languages) {
+            let own = || languages_of([n.label.as_str(), n.body.as_str()].into_iter());
+            let spared = pass != Pass::Asker && (languages.is_empty() || own().first().map(std::slice::from_ref) == Some(languages));
+            let h = match spared {
                 true => hash(&passage(n)),
                 false => hash(&format!("{}\n\0{}", passage(n), sorted.join(","))),
             };
-            match self.entries.get(&n.id) {
+            match set.get(&n.id) {
                 Some(e) if e.hash == h => None,
                 _ => Some((n, h)),
             }
@@ -178,6 +211,7 @@ impl Questions {
         let before = self.entries.len();
         // Code questions stay whether or not this run asked for them.
         self.entries.retain(|id, _| graph.nodes.get(id).is_some_and(|n| eligible(n) || eligible_code(n)));
+        self.asker.retain(|id, _| graph.nodes.get(id).is_some_and(eligible));
         before - self.entries.len()
     }
 }
@@ -201,7 +235,7 @@ pub fn prompt(nodes: &[&Node], languages: &[String]) -> String {
          owner and a developer, every one about a different detail of the entry. Then add one line \
          `id<TAB>synonyms: ...` with 5-10 everyday synonyms or paraphrases of the entry's key terms, \
          comma-separated. Every entry gets its lines, including one that has only a title. ");
-    p.push_str(&language_rule(languages));
+    p.push_str(&language_rule(languages, &OWN_SET));
     p.push_str(
         " Output exactly one question per line, in the form \
          `id<TAB>text`, with no numbering and no commentary.\n\n");
@@ -211,21 +245,57 @@ pub fn prompt(nodes: &[&Node], languages: &[String]) -> String {
     p
 }
 
+/// The second set, added to what `prompt` writes rather than carved out of it: splitting the
+/// twelve between two voices cost paraphrase two points on the development corpus, because it
+/// took words away from the set that had them. `prompt` asks for everyday words and still gets
+/// terse questions in the document's vocabulary, most of all when a stronger generator or a
+/// second language writes them; asked for the asker's own voice — the situation, the first
+/// person, the loose phrasing — a generator writes the questions a person types, and those are
+/// the ones that match one. The example comes from outside the product so that it carries a
+/// register and no topic.
+pub fn prompt_asker(nodes: &[&Node], languages: &[String]) -> String {
+    let mut p = String::from(
+        "Below are entries from a product's documentation: an id, a title line and the start of the text.\n\
+         For each entry write 6 questions (5-15 words) that someone who has never read this \
+         documentation would ask when this entry holds their answer, in the asker's own voice: \
+         the way they would type it into a search box or put it to a colleague in a chat, starting \
+         from their own situation or goal rather than from the entry. Write as that person talks: \
+         first person is welcome (I, we, my, our), and so are plain, loose, even clumsy words; \
+         never use the entry's own terms, headings or ids (not «порядок обмена товара» but \
+         «купил не тот размер — его можно поменять?»). Mix who is asking — a customer, \
+         a front-desk employee, the business owner, a developer new to the project — and make \
+         every question about a different detail of the entry. Every entry gets its lines, \
+         including one that has only a title. ");
+    p.push_str(&language_rule(languages, &ASKER_SET));
+    p.push_str(
+        " Output exactly one question per line, in the form \
+         `id<TAB>text`, with no numbering and no commentary.\n\n");
+    for n in nodes {
+        p.push_str(&format!("### {}\n{}\n\n", n.id, passage(n)));
+    }
+    p
+}
+
+/// A prompt's set, named the two ways `language_rule` has to say it.
+struct Set { whole: &'static str, items: &'static str }
+const OWN_SET: Set = Set { whole: "all 12 questions and the synonyms line", items: "question and synonym" };
+const ASKER_SET: Set = Set { whole: "all 6 questions", items: "question" };
+
 /// The one sentence that says which language the set is written in. Without a list it is the
 /// sentence the corpus was measured under — the entry's own language — which is what leaves an
 /// English entry in a Russian corpus reachable only from an English question. With one, every
 /// named language gets the whole set rather than a translation of another's: a question is
 /// searchable in the language it is written in, and a translated one carries the first
 /// language's choice of words into the second.
-fn language_rule(languages: &[String]) -> String {
+fn language_rule(languages: &[String], set: &Set) -> String {
     if languages.is_empty() {
-        return "Write every question and synonym in the language the entry itself is written in \
-                (a Russian entry gets Russian questions), never translated.".into();
+        return format!("Write every {} in the language the entry itself is written in \
+                        (a Russian entry gets Russian questions), never translated.", set.items);
     }
-    format!("Write the full set — all 12 questions and the synonyms line — in each of these \
+    format!("Write the full set — {} — in each of these \
              languages: {}. Write each language's set fresh from the entry rather than \
              translating another's, whether or not the entry itself is written in that language, \
-             and give every entry its lines in every one of them.", languages.join(", "))
+             and give every entry its lines in every one of them.", set.whole, languages.join(", "))
 }
 
 /// The list a run writes in when the configuration names none: the one the store was enriched
@@ -399,13 +469,15 @@ fn readable(q: &str, allowed: Option<&[&str]>) -> bool {
 /// split and the entry's own id dropped, mojibake goes, and an entry left without questions is
 /// forgotten so the next `enrich` asks for it again. Script is not judged here: the run that
 /// wrote an entry named its own languages, and this load knows nothing about that run.
-fn clean(entries: &mut BTreeMap<String, Entry>) {
-    entries.retain(|id, e| {
-        e.questions = e.questions.iter()
-            .flat_map(|q| q.split('\t').map(str::trim).filter(|p| !p.is_empty() && p != id && readable(p, None)).map(String::from).collect::<Vec<_>>())
-            .collect();
-        !e.questions.is_empty()
-    });
+fn clean(questions: &mut Questions) {
+    for set in [&mut questions.entries, &mut questions.asker] {
+        set.retain(|id, e| {
+            e.questions = e.questions.iter()
+                .flat_map(|q| q.split('\t').map(str::trim).filter(|p| !p.is_empty() && p != id && readable(p, None)).map(String::from).collect::<Vec<_>>())
+                .collect();
+            !e.questions.is_empty()
+        });
+    }
 }
 
 /// A reply that wrote its tabs as the two characters `\` and `t` instead of tabbing. The
@@ -521,10 +593,13 @@ pub fn run_command(command: &str, input: &str) -> Result<String> {
 
 /// Finding out why a batch came back short once took a wrapper around the generator that saved
 /// every call; by the time `run` counts the skip, the reply that explains it is gone. A retry
-/// starts with the same id as the batch it came from, so it gets its own name.
-fn keep_raw(dir: &Path, first_id: &str, retry: bool, prompt: &str, reply: &str) {
-    let name: String = first_id.chars().map(|c| if c.is_ascii_alphanumeric() || "-_.".contains(c) { c } else { '_' }).collect();
-    let stem = dir.join(if retry { format!("{name}.retry") } else { name });
+/// starts with the same id as the batch it came from, and so does the asker's batch over the
+/// same nodes, so each gets its own name.
+fn keep_raw(dir: &Path, first_id: &str, pass: Pass, retry: bool, prompt: &str, reply: &str) {
+    let mut name: String = first_id.chars().map(|c| if c.is_ascii_alphanumeric() || "-_.".contains(c) { c } else { '_' }).collect();
+    if pass == Pass::Asker { name.push_str(".asker"); }
+    if retry { name.push_str(".retry"); }
+    let stem = dir.join(name);
     for (ext, text) in [("in", prompt), ("out", reply)] {
         // Not `with_extension`: it would replace the `.retry` a stem may already carry.
         let path = PathBuf::from(format!("{}.{ext}", stem.display()));
@@ -543,12 +618,13 @@ fn per_call(batch: usize, languages: &[String]) -> usize {
 
 /// Generates questions for every stale node through `command` (prompt on stdin, lines on
 /// stdout), `parallel` batches at a time, saving after each batch so an interrupted run keeps
-/// what it paid for. `languages` is passed to `prompt`; an empty list is each entry's own.
+/// what it paid for. `languages` is passed to `prompt` and `prompt_asker`; an empty list is each
+/// entry's own.
 // Eight: the store, the graph, what is already known, and five things one run was asked for. A
 // struct around the five would name each of them twice for one line on the one call site.
 #[allow(clippy::too_many_arguments)]
 pub fn run(store: &Store, graph: &Graph, questions: Questions, command: &str, batch: usize, parallel: usize, scope: Scope, languages: &[String]) -> Result<Report> {
-    let Scope { limit, code, keep } = scope;
+    let Scope { limit, code, keep, asker } = scope;
     if let Some(dir) = &keep { std::fs::create_dir_all(dir).with_context(|| format!("create {}", dir.display()))?; }
     let keep = keep.as_deref();
     let mut questions = questions;
@@ -556,25 +632,33 @@ pub fn run(store: &Store, graph: &Graph, questions: Questions, command: &str, ba
     // languages, and the next run reads the list back rather than detecting it again.
     if !languages.is_empty() { questions.languages = languages.to_vec(); }
     let dropped = questions.prune(graph);
-    let mut stale = questions.stale(graph, eligible, languages);
-    let mut stale_code = if code { questions.stale(graph, eligible_code, &[]) } else { Vec::new() };
-    if let Some(l) = limit { stale.truncate(l); stale_code.truncate(l); }
+    let mut stale = questions.stale(graph, Pass::Questions, languages);
+    let mut stale_asker = if asker { questions.stale(graph, Pass::Asker, languages) } else { Vec::new() };
+    let mut stale_code = if code { questions.stale(graph, Pass::Code, &[]) } else { Vec::new() };
+    if let Some(l) = limit { stale.truncate(l); stale_asker.truncate(l); stale_code.truncate(l); }
     // A batch the model answers in prose instead of `id<TAB>text` leaves its nodes without
     // questions and its exit status green; measured once on 172 batches, 7 came back that way
     // and 195 nodes silently stayed unsearchable. The nodes an answer skipped go round once more.
-    // Documents and code never share a batch: each kind has its own prompt.
-    let batches: Vec<Batch> = stale.chunks(per_call(batch, languages)).map(|c| Batch { nodes: c.to_vec(), retry: false, code: false })
-        .chain(stale_code.chunks(batch.max(1)).map(|c| Batch { nodes: c.to_vec(), retry: false, code: true })).collect();
+    // No two passes share a batch: each has its own prompt.
+    let docs = per_call(batch, languages);
+    let batches: Vec<Batch> = [(stale, docs, Pass::Questions), (stale_asker, docs, Pass::Asker), (stale_code, batch.max(1), Pass::Code)].into_iter()
+        .flat_map(|(nodes, size, pass)| nodes.chunks(size).map(|c| Batch { nodes: c.to_vec(), retry: false, pass }).collect::<Vec<_>>())
+        .collect();
     let total = batches.len();
     let queue = Arc::new(Mutex::new(batches));
-    let shared = Arc::new(Mutex::new((questions, 0usize, 0usize)));
+    let shared = Arc::new(Mutex::new(Tally { questions, generated: 0, asker: 0, failed: 0 }));
     std::thread::scope(|s| {
         for _ in 0..parallel.max(1) {
             let (queue, shared) = (Arc::clone(&queue), Arc::clone(&shared));
             s.spawn(move || loop {
-                let Some(Batch { nodes: b, retry, code: is_code }) = queue.lock().unwrap().pop() else { break };
+                let Some(Batch { nodes: b, retry, pass }) = queue.lock().unwrap().pop() else { break };
                 let nodes: Vec<&Node> = b.iter().map(|(n, _)| *n).collect();
-                let p = if is_code { prompt_code(&nodes) } else { prompt(&nodes, languages) };
+                let p = match pass {
+                    Pass::Questions => prompt(&nodes, languages),
+                    Pass::Asker => prompt_asker(&nodes, languages),
+                    Pass::Code => prompt_code(&nodes),
+                };
+                let is_code = pass == Pass::Code;
                 match run_command(command, &p) {
                     Ok(out) => {
                         // The code prompt fixes its own pair of languages and does not read the
@@ -596,14 +680,17 @@ pub fn run(store: &Store, graph: &Graph, questions: Questions, command: &str, ba
                         let mut g = shared.lock().unwrap();
                         for (n, h) in &b {
                             if let Some(qs) = parsed.get(&n.id) {
-                                g.0.entries.insert(n.id.clone(), Entry { hash: h.clone(), questions: qs.clone() });
-                                g.1 += 1;
+                                let entry = Entry { hash: h.clone(), questions: qs.clone() };
+                                match pass {
+                                    Pass::Asker => { g.questions.asker.insert(n.id.clone(), entry); g.asker += 1; }
+                                    _ => { g.questions.entries.insert(n.id.clone(), entry); g.generated += 1; }
+                                }
                             }
                         }
-                        if let Err(e) = g.0.save(store) { eprintln!("enrich: save: {e:#}"); }
+                        if let Err(e) = g.questions.save(store) { eprintln!("enrich: save: {e:#}"); }
                         drop(g);
                         let skipped: Vec<(&Node, String)> = b.iter().filter(|(n, _)| !parsed.contains_key(&n.id)).cloned().collect();
-                        if let (Some(dir), false) = (keep, skipped.is_empty()) { keep_raw(dir, &nodes[0].id, retry, &p, &out); }
+                        if let (Some(dir), false) = (keep, skipped.is_empty()) { keep_raw(dir, &nodes[0].id, pass, retry, &p, &out); }
                         // Asked twice and answered for nobody: the generator is not declining these
                         // nodes, it is not answering. Counting that as coverage is what let a whole
                         // run report `0 failed` and exit green having written nothing. Decided
@@ -622,29 +709,33 @@ pub fn run(store: &Store, graph: &Graph, questions: Questions, command: &str, ba
                                     true => eprintln!("enrich: a batch of {} came back unparseable — {} chars, no id line — retrying it", b.len(), out.chars().count()),
                                     false => eprintln!("enrich: {} of {} nodes skipped by the model, retrying them", skipped.len(), b.len()),
                                 }
-                                queue.push(Batch { nodes: skipped, retry: true, code: is_code });
+                                queue.push(Batch { nodes: skipped, retry: true, pass });
                             }
                             queue.len()
                         };
                         if answered_for_nobody {
                             eprintln!("enrich: a batch of {} answered for nobody twice", b.len());
-                            shared.lock().unwrap().2 += 1;
+                            shared.lock().unwrap().failed += 1;
                         }
                         eprintln!("enrich: batch done, {left} of {total} left");
                     }
-                    Err(e) => { eprintln!("enrich: {e:#}"); shared.lock().unwrap().2 += 1; }
+                    Err(e) => { eprintln!("enrich: {e:#}"); shared.lock().unwrap().failed += 1; }
                 }
             });
         }
     });
-    let (questions, generated, failed) = match Arc::try_unwrap(shared) {
+    let Tally { questions, generated, asker: asked, failed } = match Arc::try_unwrap(shared) {
         Ok(m) => m.into_inner().unwrap(),
         Err(_) => unreachable!("every worker has joined"),
     };
     questions.save(store)?;
-    let left = questions.stale(graph, eligible, languages).len() + if code { questions.stale(graph, eligible_code, &[]).len() } else { 0 };
-    Ok(Report { generated, dropped, batches: total, failed, left })
+    let left = questions.stale(graph, Pass::Questions, languages).len() + if code { questions.stale(graph, Pass::Code, &[]).len() } else { 0 };
+    let asker_left = if asker { questions.stale(graph, Pass::Asker, languages).len() } else { 0 };
+    Ok(Report { generated, asker: asked, dropped, batches: total, failed, left, asker_left })
 }
+
+/// What the workers of one `run` share: the store as it is being written, and the counts.
+struct Tally { questions: Questions, generated: usize, asker: usize, failed: usize }
 
 #[cfg(test)]
 mod tests {
@@ -1212,5 +1303,121 @@ mod tests {
         let swapped = ["English".to_string(), "Russian".to_string()];
         let r = run(&store, &g, Questions::load(&store).unwrap(), cmd, 8, 1, Scope::default(), &swapped).unwrap();
         assert_eq!(r.generated, 0, "detection orders by share; two languages trading places is the same list");
+    }
+
+    /// Tells the two prompts apart the way a generator would see them, and answers each with a
+    /// line that names which prompt it answered.
+    const BOTH: &str = r#"awk '/own voice/{a=1} /^### /{printf "%s\t%s for %s\n", $2, (a ? "asker" : "own"), $2}'"#;
+
+    fn with_asker() -> Scope { Scope { asker: true, ..Scope::default() } }
+
+    #[test]
+    fn the_asker_set_is_stored_beside_the_own_set_and_read_after_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::new(dir.path());
+        let g = graph();
+        let r = run(&store, &g, Questions::default(), BOTH, 8, 1, with_asker(), &[]).unwrap();
+        assert_eq!((r.generated, r.asker, r.batches, r.failed, r.left, r.asker_left), (2, 2, 2, 0, 0, 0), "one batch per prompt");
+        let (q, source) = Questions::load_traced(&store).unwrap();
+        assert_eq!(source, Source::Mirror);
+        assert_eq!(q.get("FR-PAY-22"), ["own for FR-PAY-22", "asker for FR-PAY-22"]);
+        std::fs::remove_file(dir.path().join(".repograph/questions.bin")).unwrap();
+        let (q, source) = Questions::load_traced(&store).unwrap();
+        assert_eq!(source, Source::Json);
+        assert_eq!(q.get("FR-PAY-26"), ["own for FR-PAY-26", "asker for FR-PAY-26"]);
+        assert!(q.get("BE-M01-T1").is_empty(), "the asker's set covers what the own set covers");
+        let r = run(&store, &g, q, BOTH, 8, 1, with_asker(), &[]).unwrap();
+        assert_eq!((r.generated, r.asker, r.batches), (0, 0, 0));
+    }
+
+    /// Every store in use was written before the asker's set existed, and its own questions are
+    /// current: the upgrade must buy the new set and never roll the old one again.
+    #[test]
+    fn a_store_from_before_the_asker_set_pays_for_that_set_alone() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::new(dir.path());
+        let g = graph();
+        let r = run(&store, &g, Questions::default(), BOTH, 8, 1, Scope::default(), &ru_en()).unwrap();
+        assert_eq!((r.generated, r.asker, r.asker_left), (2, 0, 0), "not asked for, not counted as missing");
+        assert!(Questions::load(&store).unwrap().asker.is_empty());
+        let r = run(&store, &g, Questions::load(&store).unwrap(), BOTH, 8, 1, with_asker(), &ru_en()).unwrap();
+        assert_eq!((r.generated, r.asker, r.batches), (0, 2, 1));
+        assert_eq!(Questions::load(&store).unwrap().get("FR-PAY-22"), ["own for FR-PAY-22", "asker for FR-PAY-22"]);
+    }
+
+    #[test]
+    fn a_passage_edit_restales_both_sets_and_a_removed_node_leaves_both() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::new(dir.path());
+        run(&store, &graph(), Questions::default(), BOTH, 8, 1, with_asker(), &[]).unwrap();
+        let mut g2 = Graph::default();
+        let mut e = Extraction::default();
+        e.node(NodeKind::Requirement, "FR-PAY-22", "отмена", "другое тело", "a.md", 1);
+        g2.apply(e);
+        let r = run(&store, &g2, Questions::load(&store).unwrap(), BOTH, 8, 1, with_asker(), &[]).unwrap();
+        assert_eq!((r.generated, r.asker, r.dropped), (1, 1, 1));
+        let q = Questions::load(&store).unwrap();
+        assert!(!q.asker.contains_key("FR-PAY-26"), "{:?}", q.asker.keys().collect::<Vec<_>>());
+    }
+
+    /// The own set is spared a list that names only the entry's own language, because stores
+    /// written before lists existed held exactly that. The asker's set has no such store behind
+    /// it, so its hash carries the list plainly — and still sorted, since detection orders by share.
+    #[test]
+    fn the_asker_set_follows_the_language_list_the_own_set_is_spared() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::new(dir.path());
+        let g = graph();
+        run(&store, &g, Questions::default(), BOTH, 8, 1, with_asker(), &[]).unwrap();
+        let ru = ["Russian".to_string()];
+        let r = run(&store, &g, Questions::load(&store).unwrap(), BOTH, 8, 1, with_asker(), &ru).unwrap();
+        assert_eq!((r.generated, r.asker), (0, 2));
+        let r = run(&store, &g, Questions::load(&store).unwrap(), BOTH, 8, 1, with_asker(), &ru_en()).unwrap();
+        assert_eq!((r.generated, r.asker), (2, 2), "a second language is a set every entry lacks, in either voice");
+        let swapped = ["English".to_string(), "Russian".to_string()];
+        let r = run(&store, &g, Questions::load(&store).unwrap(), BOTH, 8, 1, with_asker(), &swapped).unwrap();
+        assert_eq!((r.generated, r.asker, r.batches), (0, 0, 0));
+    }
+
+    /// The asker's batch over the same nodes starts with the same id as the own batch, so a short
+    /// one must not overwrite the other's prompt and reply.
+    #[test]
+    fn a_short_asker_batch_is_retried_and_kept_under_its_own_name() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::new(dir.path());
+        let keep = dir.path().join("raw");
+        let cmd = r#"awk '/own voice/{a=1} /^### /{ if (!a || $2 == "FR-PAY-22") printf "%s\tq for %s\n", $2, $2 }'"#;
+        let r = run(&store, &graph(), Questions::default(), cmd, 8, 1, Scope { keep: Some(keep.clone()), asker: true, ..Scope::default() }, &[]).unwrap();
+        assert_eq!((r.generated, r.asker, r.failed, r.left, r.asker_left), (2, 1, 1, 0, 1));
+        let mut kept: Vec<String> = std::fs::read_dir(&keep).unwrap().map(|e| e.unwrap().file_name().into_string().unwrap()).collect();
+        kept.sort();
+        assert_eq!(kept, ["FR-PAY-22.asker.in", "FR-PAY-22.asker.out", "FR-PAY-26.asker.retry.in", "FR-PAY-26.asker.retry.out"]);
+        assert!(std::fs::read_to_string(keep.join("FR-PAY-22.asker.in")).unwrap().contains("own voice"));
+    }
+
+    #[test]
+    fn the_asker_prompt_asks_for_six_in_every_named_language() {
+        let g = graph();
+        let n = g.nodes.get("FR-PAY-22").unwrap();
+        let both = prompt_asker(&[n], &ru_en());
+        assert!(both.contains("write 6 questions"), "{both}");
+        assert!(both.contains("only a title. Write the full set — all 6 questions — in each of these languages: Russian, English."), "{both}");
+        assert!(both.contains("### FR-PAY-22\n"), "{both}");
+        assert!(!both.contains("synonyms"), "the synonyms line is the own set's: {both}");
+        let own = prompt_asker(&[n], &[]);
+        assert!(own.contains("Write every question in the language the entry itself is written in (a Russian entry gets Russian questions), never translated."), "{own}");
+    }
+
+    /// The document prompt is what every floor was measured under; sharing its language sentence
+    /// with the asker's prompt must not move a byte of it.
+    #[test]
+    fn the_document_prompt_keeps_the_language_sentences_it_was_measured_under() {
+        assert!(prompt(&[], &ru_en()).contains(
+            "only a title. Write the full set — all 12 questions and the synonyms line — in each of these \
+             languages: Russian, English. Write each language's set fresh from the entry rather than \
+             translating another's, whether or not the entry itself is written in that language, \
+             and give every entry its lines in every one of them. Output exactly one question per line, \
+             in the form `id<TAB>text`, with no numbering and no commentary.\n\n"));
+        assert!(!prompt(&[], &[]).contains("own voice"));
     }
 }
