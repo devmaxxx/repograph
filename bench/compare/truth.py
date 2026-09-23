@@ -11,18 +11,38 @@ import json
 import re
 import subprocess
 from collections import defaultdict
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Callable
 
-CODE_GLOBS = ("-g", "*.ts", "-g", "*.tsx", "-g", "*.kt")
 # The stores of the three tools sit inside the corpus; a hit there is a hit on a
-# tool's own index, not on the repository.
-EXCLUDE = ("-g", "!.repograph/**", "-g", "!graphify-out/**", "-g", "!.gitnexus/**")
+# tool's own index, not on the repository. The rest is the tree 0.5.3's store reads: dot-paths
+# but `.git`, less the default `skip`'s bundles.
+EXCLUDE = ("--hidden", "-g", "!.git", "-g", "!.repograph/**", "-g", "!graphify-out/**", "-g", "!.gitnexus/**",
+           "-g", "!*.min.js", "-g", "!.yarn/**", "-g", "!.pnp.*")
 
 CLASS = re.compile(r"^export (?:abstract )?class (\w+)", re.M)
 FIELD = re.compile(r"(?:private|public|protected|readonly)\s+(?:readonly\s+)?(\w+)\s*:\s*(\w+)")
 # `this.db.run(` and `this.db\n  .run(` are the same call; tree-sitter sees no
 # newline and neither may we, or the truth undercounts what the tools find.
 CALL = re.compile(r"this\.(\w+)\s*\.\s*(\w+)\s*\(", re.S)
+
+
+@dataclass(frozen=True)
+class DiReader:
+    """One language's reading of calls through injected fields, for the `trace` truth.
+
+    `cls` puts a class name in group 1 at the class's start, and `di_call_graph` cuts the file
+    at each such match. Inside a class, `field` puts a field in group 1 and its declared type in
+    group 2, and `call` puts the receiver field in group 1 and the method in group 2.
+    """
+
+    cls: re.Pattern[str]
+    field: re.Pattern[str]
+    call: re.Pattern[str]
+
+
+TYPESCRIPT_DI = DiReader(CLASS, FIELD, CALL)
 
 
 def rg(repo: Path, args: list[str]) -> list[str]:
@@ -191,7 +211,8 @@ def blank_kotlin(src: str) -> str:
 
 def blanked_source(rel: str, src: str) -> str:
     """`src` with its comments and text blanked, in the dialect `rel`'s extension implies."""
-    return blank_kotlin(src) if rel.endswith(".kt") else blank_typescript(src)
+    # TypeScript's scanner stays the fallback: it is what every extension but `.kt` was read with.
+    return BLANKERS.get(Path(rel).suffix, blank_typescript)(src)
 
 
 # Up to three levels of nesting, because `fun <reified E : Enum<E>> enum(…)` in
@@ -340,16 +361,57 @@ def typescript_declarations(blanked: str) -> list[tuple[int, str]]:
     return _scoped_declarations(blanked, decl=TS_DECL, member=TS_MEMBER, type_keywords=TS_TYPE_KEYWORDS)
 
 
+# Keyed by extension. A language joins the truth by adding its readers here; a file of an
+# extension no table names contributes nothing, which is what a language not yet read is.
+DECLARATIONS: dict[str, Callable[[str], list[tuple[int, str]]]] = {
+    ".ts": typescript_declarations,
+    ".tsx": typescript_declarations,
+    ".js": typescript_declarations,
+    ".jsx": typescript_declarations,
+    ".mjs": typescript_declarations,
+    ".cjs": typescript_declarations,
+    ".kt": kotlin_declarations,
+}
+BLANKERS: dict[str, Callable[[str], str]] = {
+    ".ts": blank_typescript,
+    ".tsx": blank_typescript,
+    ".js": blank_typescript,
+    ".jsx": blank_typescript,
+    ".mjs": blank_typescript,
+    ".cjs": blank_typescript,
+    ".kt": blank_kotlin,
+}
+DI_READERS: dict[str, DiReader] = {
+    ".ts": TYPESCRIPT_DI,
+    ".tsx": TYPESCRIPT_DI,
+    ".js": TYPESCRIPT_DI,
+    ".jsx": TYPESCRIPT_DI,
+    ".mjs": TYPESCRIPT_DI,
+    ".cjs": TYPESCRIPT_DI,
+}
+# `(caller, callee)` name pairs for a chain no field-and-call pattern can say: a migration altering
+# a table another created, a resolver answering a query. A callee is `Owner` or `Owner.member`, the
+# shape `shortest_path` hops on. A file whose extension has one is read by it and by no DiReader.
+CALL_READERS: dict[str, Callable[[str], list[tuple[str, str]]]] = {}
+
+
+def code_globs() -> tuple[str, ...]:
+    """ripgrep's `-g` arguments for every extension a reader is registered for, in registration order."""
+    exts = list(dict.fromkeys([*DECLARATIONS, *DI_READERS, *CALL_READERS]))
+    return tuple(arg for ext in exts for arg in ("-g", f"*{ext}"))
+
+
 def declarations(rel: str, src: str) -> tuple[list[str], list[tuple[int, str]]]:
     """The blanked lines of one file and the (line, name) of every declaration in it."""
     blanked = blanked_source(rel, src)
-    reader = kotlin_declarations if rel.endswith(".kt") else typescript_declarations
+    # TypeScript's reader stays the fallback, as it was for every extension but `.kt`.
+    reader = DECLARATIONS.get(Path(rel).suffix, typescript_declarations)
     return blanked.split("\n"), reader(blanked)
 
 
 def code_files_naming(repo: Path, token: str) -> list[str]:
     word = re.compile(rf"\b{re.escape(token)}\b")
-    hits = rg(repo, ["-l", "--word-regexp", "--fixed-strings", token, *CODE_GLOBS])
+    hits = rg(repo, ["-l", "--word-regexp", "--fixed-strings", token, *code_globs()])
     return sorted(
         f for f in hits
         if word.search(blanked_source(f, (repo / f).read_text(encoding="utf8", errors="replace")))
@@ -357,9 +419,9 @@ def code_files_naming(repo: Path, token: str) -> list[str]:
 
 
 def declaration_of(repo: Path, name: str) -> str | None:
-    for line in rg(repo, ["-l", f"^export (?:abstract )?class {name}\\b", *CODE_GLOBS]):
+    for line in rg(repo, ["-l", f"^export (?:abstract )?class {name}\\b", *code_globs()]):
         return line
-    for line in rg(repo, ["-l", f"^export .*\\b{name}\\b", *CODE_GLOBS]):
+    for line in rg(repo, ["-l", f"^export .*\\b{name}\\b", *code_globs()]):
         return line
     return None
 
@@ -367,21 +429,32 @@ def declaration_of(repo: Path, name: str) -> str | None:
 def di_call_graph(repo: Path, roots: list[str]) -> dict:
     """Class → the `Type.method` calls its members make through injected fields.
 
-    Covers the one pattern that carries a NestJS API: a constructor parameter
-    property or a typed field, called as `this.field.method()`.
+    Each file is read by the call reader its extension is registered with, else by its
+    `DiReader`, and a file of an extension with neither is skipped: another language's source read
+    with TypeScript's patterns matches nothing today and could match anything tomorrow.
     """
-    files = rg(repo, ["--files", *CODE_GLOBS, *roots])
+    files = rg(repo, ["--files", *code_globs(), *roots])
     edges: dict[str, set[str]] = defaultdict(set)
     declared: dict[str, str] = {}
     for rel in files:
+        ext = Path(rel).suffix
+        if ext in CALL_READERS:
+            src = (repo / rel).read_text(encoding="utf8", errors="replace")
+            for caller, callee in CALL_READERS[ext](src):
+                declared.setdefault(caller, rel)
+                edges[caller].add(callee)
+            continue
+        reader = DI_READERS.get(ext)
+        if reader is None:
+            continue
         src = (repo / rel).read_text(encoding="utf8", errors="replace")
-        marks = [(m.start(), m.group(1)) for m in CLASS.finditer(src)] + [(len(src), None)]
+        marks = [(m.start(), m.group(1)) for m in reader.cls.finditer(src)] + [(len(src), None)]
         for i in range(len(marks) - 1):
             start, name = marks[i]
             body = src[start : marks[i + 1][0]]
             declared[name] = rel
-            fields = {m.group(1): m.group(2) for m in FIELD.finditer(body)}
-            for m in CALL.finditer(body):
+            fields = {m.group(1): m.group(2) for m in reader.field.finditer(body)}
+            for m in reader.call.finditer(body):
                 target = fields.get(m.group(1))
                 if target:
                     edges[name].add(f"{target}.{m.group(2)}")
@@ -458,7 +531,7 @@ def changed_symbols(repo: Path, base: str) -> dict:
     symbols: dict[str, list[str]] = {}
     code_files: list[str] = []
     for rel, spans in hunks.items():
-        if not rel.endswith((".ts", ".tsx", ".kt")):
+        if Path(rel).suffix not in DECLARATIONS:
             continue
         path = repo / rel
         if not path.exists():
@@ -488,6 +561,10 @@ def build(repo: Path, cases: list[dict], blast: list[dict]) -> dict:
             name = case["target"]
             decl = case.get("file") or declaration_of(repo, name)
             refs = [f for f in code_files_naming(repo, name) if f != decl]
+            # A case about one language's declaration counts that language's files: a column name a
+            # TypeScript field also spells would otherwise credit files the language under test never reaches.
+            if case.get("exts"):
+                refs = [f for f in refs if Path(f).suffix in case["exts"]]
             truth["impact"][name] = {"declared_in": decl, "refs": refs}
         elif case["kind"] == "trace":
             key = f"{case['from']}->{case['to']}"

@@ -6,6 +6,7 @@ import unittest
 from pathlib import Path
 
 from truth import blank_kotlin, blank_typescript, changed_symbols, declaration_end, declarations
+import truth as T
 
 
 def changes_of(base_files: dict[str, str], edits: dict[str, str | None]) -> dict:
@@ -444,6 +445,118 @@ class FileDenominator(unittest.TestCase):
         self.assertEqual(got["code_files"], ["a.ts", "b.kt"])
         self.assertEqual(got["symbols"], {"a.ts": ["x"]})
         self.assertEqual(got["files"], ["a.ts", "b.kt", "c.md"])
+
+
+class Registries(unittest.TestCase):
+    """A language joins the truth by its extension, through three tables and nothing else."""
+
+    def test_each_reader_is_found_by_the_extension_it_reads(self):
+        self.assertIs(T.DECLARATIONS[".ts"], T.typescript_declarations)
+        self.assertIs(T.DECLARATIONS[".tsx"], T.typescript_declarations)
+        self.assertIs(T.DECLARATIONS[".kt"], T.kotlin_declarations)
+        self.assertIs(T.BLANKERS[".kt"], T.blank_kotlin)
+        self.assertEqual(list(T.DI_READERS), [".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs"])
+        self.assertEqual(T.CALL_READERS, {})
+        self.assertEqual(
+            T.code_globs(),
+            ("-g", "*.ts", "-g", "*.tsx", "-g", "*.js", "-g", "*.jsx", "-g", "*.mjs", "-g", "*.cjs", "-g", "*.kt"),
+        )
+
+    def test_a_registered_reader_is_the_one_declarations_uses(self):
+        seen = []
+
+        def reader(blanked):
+            seen.append(blanked)
+            return [(1, "Fake")]
+
+        T.DECLARATIONS[".fk"] = reader
+        T.BLANKERS[".fk"] = str.upper
+        try:
+            lines, found = T.declarations("a.fk", "abc\n")
+        finally:
+            del T.DECLARATIONS[".fk"], T.BLANKERS[".fk"]
+        self.assertEqual((lines, found, seen), (["ABC", ""], [(1, "Fake")], ["ABC\n"]))
+
+    def test_a_file_no_reader_reads_is_in_the_diff_and_in_neither_axis(self):
+        got = changes_of(
+            {"a.ts": "export function f() {\n  return 1;\n}\n", "b.cs": "class B {}\n"},
+            {"a.ts": "export function f() {\n  return 2;\n}\n", "b.cs": "class B { int x; }\n"},
+        )
+        self.assertEqual(got["files"], ["a.ts", "b.cs"])
+        self.assertEqual(got["code_files"], ["a.ts"])
+        self.assertEqual(got["symbols"], {"a.ts": ["f"]})
+
+
+class TypeScriptTruthStandsAlone(unittest.TestCase):
+    """The TypeScript trace truth is the same with other languages' files beside it."""
+
+    TS = {
+        "apps/auth.ts": "export class AuthController {\n  constructor(private auth: AuthService) {}\n  go() { this.auth.login(); }\n}\n",
+        "apps/service.ts": "export class AuthService {\n  login() { return 1; }\n}\n",
+    }
+    OTHER = {
+        "apps/Sync.kt": "package p\n\nclass SyncEngine(private val wipe: RemoteWipeHandler) {\n    fun run() { wipe.execute() }\n}\n",
+        "apps/Order.cs": "namespace Shop;\npublic class Order { private readonly IPay _pay; public void Go() { this._pay.Charge(); } }\n",
+    }
+
+    @staticmethod
+    def graph(files):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            for rel, body in files.items():
+                (root / rel).parent.mkdir(parents=True, exist_ok=True)
+                (root / rel).write_text(body, encoding="utf8")
+            return T.di_call_graph(root, ["apps"])
+
+    def test_other_languages_beside_it_change_nothing(self):
+        alone = self.graph(self.TS)
+        self.assertEqual(alone["edges"], {"AuthController": ["AuthService.login"]})
+        self.assertEqual(self.graph({**self.TS, **self.OTHER}), alone)
+
+
+class CallReaders(unittest.TestCase):
+    """A chain no field-and-call pattern can say joins the trace truth as name pairs, by extension."""
+
+    def setUp(self):
+        self.addCleanup(T.CALL_READERS.pop, ".fk", None)
+        self.addCleanup(T.DI_READERS.pop, ".fk", None)
+
+    def test_a_call_reader_s_pairs_are_the_edges_the_trace_truth_walks(self):
+        T.CALL_READERS[".fk"] = lambda src: [tuple(line.split(" -> ")) for line in src.splitlines() if " -> " in line]
+        graph = TypeScriptTruthStandsAlone.graph({"apps/a.fk": "Report -> Query.run\nQuery -> Table.read\n"})
+        self.assertEqual(graph["edges"], {"Report": ["Query.run"], "Query": ["Table.read"]})
+        self.assertEqual(T.shortest_path(graph, "Report", "Table"), ["Report", "Query.run", "Table.read"])
+
+    def test_a_file_a_call_reader_reads_is_not_also_read_by_a_di_reader(self):
+        T.CALL_READERS[".fk"] = lambda src: [("Only", "Pair.go")]
+        T.DI_READERS[".fk"] = T.TYPESCRIPT_DI
+        graph = TypeScriptTruthStandsAlone.graph({"apps/a.fk": TypeScriptTruthStandsAlone.TS["apps/auth.ts"]})
+        self.assertEqual(graph["edges"], {"Only": ["Pair.go"]})
+
+
+class CaseExtensions(unittest.TestCase):
+    """A case's `exts` counts only its own language's files among those naming the target."""
+
+    FILES = {
+        "apps/pay.ts": "export class Pay {}\n",
+        "apps/use.ts": "import { Pay } from './pay';\nexport const p = new Pay();\n",
+        "apps/view.tsx": "import { Pay } from './pay';\nexport function View() { return new Pay(); }\n",
+    }
+
+    def refs(self, extra):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            for rel, body in self.FILES.items():
+                (root / rel).parent.mkdir(parents=True, exist_ok=True)
+                (root / rel).write_text(body, encoding="utf8")
+            case = {"kind": "impact", "target": "Pay", "file": "apps/pay.ts", **extra}
+            return T.build(root, [], [case])["impact"]["Pay"]["refs"]
+
+    def test_without_exts_every_code_file_naming_the_target_counts(self):
+        self.assertEqual(self.refs({}), ["apps/use.ts", "apps/view.tsx"])
+
+    def test_exts_keeps_only_the_files_of_those_extensions(self):
+        self.assertEqual(self.refs({"exts": [".tsx"]}), ["apps/view.tsx"])
 
 
 if __name__ == "__main__":

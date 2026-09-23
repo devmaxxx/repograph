@@ -48,7 +48,7 @@ eight, for the same reason: two diffs are too thin to read a delta from.
 ## How the answer is judged
 
 `bench/compare/truth.py` reads the expectations out of the repository with ripgrep
-and a small TypeScript reader. No graph tool is consulted, so a tool that disagrees
+and a small reader per language, chosen by the file's extension through four tables in `truth.py` — `DECLARATIONS` (`.ts`, `.tsx`, the JavaScript family and `.kt`), `BLANKERS`, `DI_READERS` for the `trace` chain (TypeScript constructor properties), and `CALL_READERS` for chains read as name pairs. A language joins the truth by adding its readers there, and a blast case about one language's declaration names it in `exts`, which limits the files its `impact` refs count. No graph tool is consulted, so a tool that disagrees
 with the truth file is wrong about the repository, not about a rival's model.
 
 | suite | truth | hit |
@@ -57,7 +57,7 @@ with the truth file is wrong about the repository, not about a rival's model.
 | retrieval, soft | every file that spells that id | one of those files appears in the answer |
 | impact | every file naming the symbol in code — comments and string literals blanked — minus the file declaring it | share of those files the answer names |
 | trace | the chain through injected fields, found by breadth-first search | every intermediate name appears, and the tool does not say "no path" |
-| changes | the enclosing declaration of every hunk in the diff; a file whose hunks the TypeScript declaration reader attributes to no declaration is absent from the denominator as well as the numerator, on the file axis as much as the symbol one | share of those symbols the answer names |
+| changes | the enclosing declaration of every hunk in the diff, read by the reader `DECLARATIONS` names for the file's extension; a file of an extension no reader reads is in neither axis, and a file whose hunks sit in no declaration counts on the file axis only; `run.py` splits the four counts per extension into `by_ext` | share of those symbols the answer names |
 
 The soft criterion exists because graphify and gitnexus answer with files and
 symbols rather than requirement ids; without it the comparison would be unfair to
