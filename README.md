@@ -96,7 +96,7 @@ Ask it something:
 ```bash
 repograph ask cancellation policy
 repograph ask FR-PAY-22                     # an exact id short-circuits straight to the node
-repograph ask asGrosze                      # so does an exact symbol name
+repograph ask asGrosze                      # so does an exact symbol name (a plain lowercase word does so only alone)
 repograph ask --bodies отмена записи        # print full requirement bodies, not just headlines
 repograph ask --json отмена записи          # machine-readable
 repograph ask --seeds 8 отмена записи       # widen the search beyond the default of 5; costs more tokens
@@ -725,10 +725,19 @@ used throughout [the runbook](docs/bench/runbook.md).
 Twelve of the cases expect a path, and a path is a fact about one checkout, so the recorded suite
 names the corpus it was written against: `bench/cases.pin` holds `beauty-crm 502e8a6d`, and a run
 prints it above the cases (`suite: built-in bench/cases.jsonl, recorded against beauty-crm
-502e8a6d`). The floors below are counts on that tree. An anchor the graph does not hold stops the
+502e8a6d`). The floors below are counts on that tree, and they grade that tree only: a checkout
+at any other commit is measured, printed and not graded (`suite: checkout a3bf96ff is not the pin,
+so this run is measured and not graded`, `gated=false`, exit 0), because beauty-crm `a3bf96ff`
+reads paraphrase 12/30 against the pin's 15 after 203 documents changed, and that is the corpus
+growing, not repograph failing. A tree whose commit git cannot read is graded as before. An anchor the graph does not hold stops the
 run and the refusal quotes the pin, because editing the case to a newer path is what silently
 moves the suite off the tree its floors were counted on; `bench/missing-anchors.py <checkout>`
-lists every path anchor a tree is missing, without a build and without CI.
+lists every path anchor a tree is missing, without a build and without CI. The one exception is a
+`code` case whose symbol moved: its question is the symbol's name, so when exactly one file defines
+that name now, the anchor follows it and the run says so (`suite: "staleClaims" moved:
+tools/tasks/src/cli.ts -> packages/task-sync/src/cli.ts`). An id anchor is graded on the node it
+names, never on another node declared in the same document: `ADR-024` counts when the ADR's own
+node is reached, not when `entity:StaffMember.role_id`, which the ADR defines, is.
 
 The floors are two sets, not one, because [`enrich`](#spending-tokens-on-purpose) is optional and
 paraphrase recall is what it buys. `bench` reads which state the store is in and says so on its
@@ -736,7 +745,10 @@ summary line (`dense=true  enriched=true (1996/1996 nodes) model=small`): a stor
 on at least 99% of its requirement-like nodes is graded against the enriched floors, anything else
 against the raw ones. The bar is a high-water mark rather than every node because equality over
 ~2,000 nodes is a cliff — one node the model skipped would regrade a paid-for store five paraphrase
-points lower, and `bench` would say so through its exit code alone.
+points lower, and `bench` would say so through its exit code alone. Questions written for another
+language list than the `enrich_languages` the configuration names count for nothing: `enrich` would
+rewrite them, and a store whose ADRs carry English questions only is not enriched for a reader who
+asks in Russian, so `bench` says so above the cases and grades it `enriched=false`.
 
 The dense floors are keyed by the store's embedder too, since a floor measured on one model says
 nothing about another: small-model rows (or rows under no name) are graded against the small model's

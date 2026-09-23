@@ -140,7 +140,7 @@ pub fn render_json(graph: &Graph, r: &Report) -> String {
     serde_json::json!({ "touched": touched, "affected": affected, "files": r.files, "risk": r.risk }).to_string() + "\n"
 }
 
-fn git(repo: &Path, args: &[&str]) -> anyhow::Result<String> {
+pub(crate) fn git(repo: &Path, args: &[&str]) -> anyhow::Result<String> {
     // A hook exports its own repository into everything it runs, and those variables outrank
     // `-C` — including the object store, which would otherwise take this repository's writes.
     // The repository named by `--repo` is the one that was asked for.

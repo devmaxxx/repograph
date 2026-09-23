@@ -130,12 +130,19 @@ fn hit(graph: &Graph, id: &str, score: f32, via: Option<&str>) -> Option<Hit> {
 
 /// Exact hits per word, and whether they answer the whole question: every word matched, and
 /// each carries an uppercase letter — `money` and `utf8` are topics as much as names, `asGrosze` only a name.
+/// In a question of several words a plain lowercase word is read as a word: exact seeds take
+/// their slots before fusion runs, so five helpers called `holds` and `name` would otherwise be
+/// the whole answer to a sentence that merely uses both.
 pub(crate) fn exact_seeds(graph: &Graph, words: &[String]) -> (Vec<String>, bool) {
     let mut out = Vec::new();
     let mut whole = true;
     for w in words {
         if crate::ids::generic().is_id(w) && graph.nodes.contains_key(w) {
             out.push(w.clone());
+            continue;
+        }
+        if words.len() > 1 && !w.chars().any(|c| c.is_uppercase() || c == '_') {
+            whole = false;
             continue;
         }
         let tail = format!("::{w}");
@@ -914,6 +921,20 @@ mod tests {
         let a = ask(&g, &lex(&g, &Questions::default()), None, None, &["FR-PAY-999".to_string()], &opts());
         assert!(a.seeds.is_empty());
         assert!(a.expanded.is_empty());
+    }
+
+    /// A plain lowercase word in a sentence is a word before it is a name: on beauty-crm,
+    /// "role_id holds a role name" matched three test helpers called `holds` and two called
+    /// `name`, which took all five seeds before fusion ran and left the ADR the sentence
+    /// paraphrases no slot at all.
+    #[test]
+    fn a_lowercase_word_in_a_sentence_takes_no_seed_as_a_symbol_name() {
+        let g = graph();
+        let words: Vec<String> = ["политика", "отмены", "штраф", "money"].iter().map(|s| s.to_string()).collect();
+        let a = ask(&g, &lex(&g, &Questions::default()), None, None, &words, &opts());
+        assert_eq!(a.seeds[0].id, "FR-PAY-22", "the sentence's topic ranks by fusion");
+        let alone = ask(&g, &lex(&g, &Questions::default()), None, None, &["money".to_string()], &opts());
+        assert_eq!(alone.seeds[0].id, "sym:packages/domain/test/money.spec.ts::money", "asked alone, the word is still a name");
     }
 
     #[test]
