@@ -360,7 +360,11 @@ pub fn run(repo: &Path, cases: Option<&Path>, no_dense: bool, rerank: bool, rera
     let lex = crate::index::lexical::Lexical::build(&graph, &questions, true);
     // The threshold decides the floors; the counts printed on the summary line stay exact.
     let (covered, eligible) = coverage(&graph, &questions);
-    let enriched = enrich::enriched(covered, eligible);
+    let other_languages = enrich::written_for_other_languages(&questions, &cfg.enrich_languages);
+    let enriched = enrich::enriched(covered, eligible) && !other_languages;
+    if other_languages {
+        println!("suite: the questions were not written for enrich_languages = {:?}, so the store is graded as not enriched; `repograph enrich` rewrites them", cfg.enrich_languages);
+    }
     // Code questions are a configuration of their own and the summary line says so; the floors
     // read `enriched`, which counts documents alone.
     let (code_covered, code_eligible) = enrich::code_coverage(&graph, &questions);

@@ -100,6 +100,18 @@ pub fn unenriched_note(graph: &Graph, questions: &Questions) -> Option<usize> {
     (covered > 0 && eligible > covered).then(|| eligible - covered)
 }
 
+/// Whether the store's questions were written under another language list than the one the
+/// configuration names, so that `enrich` would rewrite nearly all of them. `coverage` counts them
+/// anyway, and on beauty-crm that graded a store of English-only ADR questions as enriched for
+/// Russian askers. A configuration that names no list says nothing either way.
+pub fn written_for_other_languages(questions: &Questions, configured: &[String]) -> bool {
+    if configured.is_empty() || questions.entries.is_empty() { return false; }
+    let (mut want, mut have) = (configured.to_vec(), questions.languages.clone());
+    want.sort();
+    have.sort();
+    want != have
+}
+
 /// Whether a `coverage` reading has earned the enriched floors. A high-water mark rather than
 /// equality because the two mistakes are not symmetric: a store at 99% still measures the
 /// enriched numbers, so grading it enriched risks about no false red, while grading it raw drops
@@ -653,6 +665,19 @@ mod tests {
 
     /// The languages of the development corpus, which is what every parse test below reads.
     fn ru_en() -> Vec<String> { vec!["Russian".into(), "English".into()] }
+
+    #[test]
+    fn a_store_is_written_for_other_languages_only_when_the_configuration_names_a_different_list() {
+        let mut q = Questions::default();
+        q.entries.insert("FR-X".into(), Entry { hash: String::new(), questions: vec!["q".into()] });
+        assert!(written_for_other_languages(&q, &ru_en()), "a store that pinned no list, under a configured one");
+        q.languages = vec!["English".into(), "Russian".into()];
+        assert!(!written_for_other_languages(&q, &ru_en()), "the same list in another order");
+        q.languages = vec!["English".into()];
+        assert!(written_for_other_languages(&q, &ru_en()));
+        assert!(!written_for_other_languages(&q, &[]), "no configured list says nothing");
+        assert!(!written_for_other_languages(&Questions::default(), &ru_en()), "nor does an empty store");
+    }
 
     #[test]
     fn more_languages_share_one_batch_rather_than_multiply_it() {

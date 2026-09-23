@@ -745,7 +745,10 @@ summary line (`dense=true  enriched=true (1996/1996 nodes) model=small`): a stor
 on at least 99% of its requirement-like nodes is graded against the enriched floors, anything else
 against the raw ones. The bar is a high-water mark rather than every node because equality over
 ~2,000 nodes is a cliff — one node the model skipped would regrade a paid-for store five paraphrase
-points lower, and `bench` would say so through its exit code alone.
+points lower, and `bench` would say so through its exit code alone. Questions written for another
+language list than the `enrich_languages` the configuration names count for nothing: `enrich` would
+rewrite them, and a store whose ADRs carry English questions only is not enriched for a reader who
+asks in Russian, so `bench` says so above the cases and grades it `enriched=false`.
 
 The dense floors are keyed by the store's embedder too, since a floor measured on one model says
 nothing about another: small-model rows (or rows under no name) are graded against the small model's
