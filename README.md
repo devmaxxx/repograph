@@ -725,7 +725,10 @@ used throughout [the runbook](docs/bench/runbook.md).
 Twelve of the cases expect a path, and a path is a fact about one checkout, so the recorded suite
 names the corpus it was written against: `bench/cases.pin` holds `beauty-crm 502e8a6d`, and a run
 prints it above the cases (`suite: built-in bench/cases.jsonl, recorded against beauty-crm
-502e8a6d`). The floors below are counts on that tree. An anchor the graph does not hold stops the
+502e8a6d`). The floors below are counts on that tree, and they grade that tree only: on a later
+checkout the run is a measurement, and a verdict of `bench floors not met` there compares it with
+numbers the newer tree was never counted on (beauty-crm `a3bf96ff` reads paraphrase 12/30 against
+the pin's 15, after 203 documents changed). An anchor the graph does not hold stops the
 run and the refusal quotes the pin, because editing the case to a newer path is what silently
 moves the suite off the tree its floors were counted on; `bench/missing-anchors.py <checkout>`
 lists every path anchor a tree is missing, without a build and without CI. The one exception is a
