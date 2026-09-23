@@ -2,12 +2,12 @@ use crate::config::Config;
 use crate::enrich::{self, coverage, Questions};
 use crate::index::dense::DenseIndex;
 use crate::index::embed::Embedder;
-use crate::model::Graph;
+use crate::model::{Graph, NodeKind};
 use crate::query::{self, Answer, Options};
 use crate::store::Store;
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
+use std::collections::{BTreeSet, HashSet};
 use std::path::Path;
 
 /// What a case expects the answer to reach: one node id or file path, or several when the
@@ -227,13 +227,39 @@ fn is_recorded_shape(cases: &[Case]) -> bool {
     got == want
 }
 
+fn files_of(graph: &Graph) -> HashSet<&str> {
+    graph.nodes.values().map(|n| n.file.as_str()).collect()
+}
+
+/// A `code` case asks where one symbol is defined, and the case's `q` is that symbol, so a
+/// corpus that moves the file has not changed the question, only where its answer lives. Such an
+/// anchor is re-pointed at the one file that defines the name now, and each move is returned for
+/// the transcript; a name defined in several files, or in none, is left for `check_anchors` to
+/// refuse.
+fn relocate_moved(cases: &mut [Case], graph: &Graph, files: &HashSet<&str>) -> Vec<String> {
+    let mut moves = Vec::new();
+    for case in cases.iter_mut().filter(|c| c.kind == "code") {
+        let Expect::One(anchor) = &mut case.expect else { continue };
+        if graph.nodes.contains_key(anchor.as_str()) || files.contains(anchor.as_str()) { continue; }
+        let tail = format!("::{}", case.q);
+        let mut defined: BTreeSet<&str> = graph.nodes.values()
+            .filter(|n| n.kind == NodeKind::Symbol && (n.label == case.q || n.id.ends_with(&tail)))
+            .map(|n| n.file.as_str()).collect();
+        if defined.len() == 1 {
+            let file = defined.pop_first().expect("checked len == 1 above");
+            moves.push(format!("{:?} moved: {anchor} -> {file}", case.q));
+            *anchor = file.to_string();
+        }
+    }
+    moves
+}
+
 /// Every anchor must be a node id or a file some node declares. A mistyped anchor would
 /// otherwise score as a miss for as long as nobody read the transcript, and a weak spot that is
 /// really a typo is the one kind this suite must not report. Every such anchor is named in the one
 /// error: a corpus that moves a directory strands several cases at once, and stopping at the first
 /// costs a run per anchor to find the rest.
-fn check_anchors(cases_path: &str, pin: Option<&str>, cases: &[Case], graph: &Graph) -> Result<()> {
-    let files: HashSet<&str> = graph.nodes.values().map(|n| n.file.as_str()).collect();
+fn check_anchors(cases_path: &str, pin: Option<&str>, cases: &[Case], graph: &Graph, files: &HashSet<&str>) -> Result<()> {
     let stale: Vec<String> = cases.iter()
         .flat_map(|c| c.expect.anchors().iter().map(move |a| (c, a)))
         .filter(|(_, a)| !graph.nodes.contains_key(*a) && !files.contains(a.as_str()))
@@ -373,7 +399,7 @@ pub fn run(repo: &Path, cases: Option<&Path>, no_dense: bool, rerank: bool, rera
         }
         None => ("built-in bench/cases.jsonl".to_string(), "built-in".to_string(), BUILT_IN_CASES.to_string()),
     };
-    let cases: Vec<Case> = parse_cases(&text)?;
+    let mut cases: Vec<Case> = parse_cases(&text)?;
     if cases.is_empty() { anyhow::bail!("{cases_path} holds no cases"); }
     // The recorded case set is a constant, not an input: a truncated or edited copy of it would
     // otherwise still pass, since every floor is relative to whatever total showed up. Another
@@ -391,7 +417,9 @@ pub fn run(repo: &Path, cases: Option<&Path>, no_dense: bool, rerank: bool, rera
     // README floors is comparing them against this tree.
     let pin = built_in.then(|| BUILT_IN_PIN.trim()).filter(|p| !p.is_empty());
     if let Some(p) = pin { println!("suite: {cases_path}, recorded against {p}"); }
-    check_anchors(&cases_path, pin, &cases, &graph)?;
+    let files = files_of(&graph);
+    for moved in relocate_moved(&mut cases, &graph, &files) { println!("suite: {moved}"); }
+    check_anchors(&cases_path, pin, &cases, &graph, &files)?;
     let is_id = |a: &str| graph.nodes.contains_key(a);
     let opts = Options { seeds: 5, bodies: false, dense: dense_on, json: false, depth };
     // What the reranked arm was actually shown, kept for the case line below: the pool it ranked
@@ -777,7 +805,7 @@ mod tests {
         let repo = std::env::var("REPOGRAPH_BENCH_REPO").expect("REPOGRAPH_BENCH_REPO");
         let (graph, _): (Graph, _) = Store::new(Path::new(&repo)).load().unwrap();
         assert!(!graph.nodes.is_empty(), "no graph at {repo}: run `repograph build` there first");
-        check_anchors("built-in bench/cases.jsonl", Some(BUILT_IN_PIN.trim()), &parse_cases(BUILT_IN_CASES).unwrap(), &graph).unwrap();
+        check_anchors("built-in bench/cases.jsonl", Some(BUILT_IN_PIN.trim()), &parse_cases(BUILT_IN_CASES).unwrap(), &graph, &files_of(&graph)).unwrap();
     }
 
     #[test]
@@ -812,15 +840,15 @@ mod tests {
         graph.nodes.insert("FR-X-1".into(), node("FR-X-1", "docs/x.md"));
         graph.nodes.insert("sym:a".into(), node("sym:a", "packages/a.ts"));
         let good = [case("cross", many(&["FR-X-1", "packages/a.ts"])), case("long", "FR-X-1".into())];
-        assert!(check_anchors("f", None, &good, &graph).is_ok());
+        assert!(check_anchors("f", None, &good, &graph, &files_of(&graph)).is_ok());
         let bad_id = [case("long", "FR-X-2".into())];
-        let err = check_anchors("f", None, &bad_id, &graph).unwrap_err().to_string();
+        let err = check_anchors("f", None, &bad_id, &graph, &files_of(&graph)).unwrap_err().to_string();
         assert!(err.contains("FR-X-2"), "{err}");
         let bad_path = [case("where", "packages/b.ts".into())];
-        assert!(check_anchors("f", None, &bad_path, &graph).is_err());
+        assert!(check_anchors("f", None, &bad_path, &graph, &files_of(&graph)).is_err());
         // A file some node lists as a secondary location is not the file a hit reports.
         let also_listed = [case("where", "docs/y.md".into())];
-        assert!(check_anchors("f", None, &also_listed, &graph).is_err());
+        assert!(check_anchors("f", None, &also_listed, &graph, &files_of(&graph)).is_err());
     }
 
     /// A corpus that moves a directory strands every case under it at once. Naming the first and
@@ -834,10 +862,37 @@ mod tests {
             files: Default::default(), community: None,
         });
         let cases = [case("code", "tools/tasks/cli.ts".into()), case("keyword", "FR-X-1".into()), case("cross", many(&["FR-X-1", "FR-X-9"]))];
-        let err = check_anchors("f", None, &cases, &graph).unwrap_err().to_string();
+        let err = check_anchors("f", None, &cases, &graph, &files_of(&graph)).unwrap_err().to_string();
         assert!(err.contains("\"tools/tasks/cli.ts\""), "the first stale anchor: {err}");
         assert!(err.contains("\"FR-X-9\""), "and the one after it: {err}");
         assert!(!err.contains("\"FR-X-1\""), "an anchor the graph holds is not named: {err}");
+    }
+
+    /// The pinned corpus moved `staleClaims` from `tools/tasks/src/cli.ts` to
+    /// `packages/task-sync/src/cli.ts`; the question did not change, so neither does the case. A
+    /// name defined twice is ambiguous and a name defined nowhere is gone: both stay refused.
+    #[test]
+    fn a_code_anchor_follows_its_symbol_to_the_one_file_that_defines_it_now() {
+        use crate::model::Node;
+        let sym = |id: &str, label: &str, file: &str| Node {
+            id: id.into(), kind: NodeKind::Symbol, label: label.into(), body: String::new(), file: file.into(), line: 1, end: 0,
+            files: Default::default(), community: None,
+        };
+        let mut graph = Graph::default();
+        for (id, label, file) in [
+            ("sym:packages/task-sync/src/cli.ts::staleClaims", "staleClaims", "packages/task-sync/src/cli.ts"),
+            ("sym:a/x.ts::twice", "twice", "a/x.ts"),
+            ("sym:b/x.ts::twice", "twice", "b/x.ts"),
+        ] { graph.nodes.insert(id.into(), sym(id, label, file)); }
+        let code = |q: &str, file: &str| Case { kind: "code".into(), q: q.into(), expect: file.into() };
+        let mut cases = vec![code("staleClaims", "tools/tasks/src/cli.ts"), code("twice", "c/x.ts"), code("gone", "d/x.ts")];
+        let files = files_of(&graph);
+        let moves = relocate_moved(&mut cases, &graph, &files);
+        assert_eq!(moves, ["\"staleClaims\" moved: tools/tasks/src/cli.ts -> packages/task-sync/src/cli.ts"]);
+        assert_eq!(cases[0].expect.key(), "packages/task-sync/src/cli.ts");
+        assert_eq!((cases[1].expect.key(), cases[2].expect.key()), ("c/x.ts".into(), "d/x.ts".into()));
+        assert!(check_anchors("f", None, &cases[..1], &graph, &files).is_ok());
+        assert!(check_anchors("f", None, &cases[1..], &graph, &files).is_err());
     }
 
     /// The stale-anchor refusal is the first thing a reader meets when they bench a corpus that
@@ -853,7 +908,7 @@ mod tests {
             files: Default::default(), community: None,
         });
         let cases = [case("code", "packages/task-sync/src/cli.ts".into())];
-        let err = check_anchors("f", Some("beauty-crm 502e8a6d"), &cases, &graph).unwrap_err().to_string();
+        let err = check_anchors("f", Some("beauty-crm 502e8a6d"), &cases, &graph, &files_of(&graph)).unwrap_err().to_string();
         assert!(err.contains("beauty-crm 502e8a6d"), "{err}");
         assert!(err.contains("missing-anchors.py"), "and how to list the rest: {err}");
     }
