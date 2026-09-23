@@ -11,6 +11,7 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::io::Write;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 pub(crate) const FILE: &str = "questions.json";
@@ -38,8 +39,9 @@ pub struct Questions {
 pub struct Report { pub generated: usize, pub dropped: usize, pub batches: usize, pub failed: usize, pub left: usize }
 
 /// What one `enrich` run covers: at most `limit` stale nodes of each kind, and code only on request.
-#[derive(Clone, Copy, Debug, Default)]
-pub struct Scope { pub limit: Option<usize>, pub code: bool }
+/// `keep` is where a batch that came back short leaves its prompt and the generator's reply.
+#[derive(Clone, Debug, Default)]
+pub struct Scope { pub limit: Option<usize>, pub code: bool, pub keep: Option<PathBuf> }
 
 /// One prompt's worth of nodes with their passage hashes; `retry` after the model skipped them
 /// once, `code` for the code prompt.
@@ -505,6 +507,19 @@ pub fn run_command(command: &str, input: &str) -> Result<String> {
     Ok(String::from_utf8_lossy(&out.stdout).into_owned())
 }
 
+/// Finding out why a batch came back short once took a wrapper around the generator that saved
+/// every call; by the time `run` counts the skip, the reply that explains it is gone. A retry
+/// starts with the same id as the batch it came from, so it gets its own name.
+fn keep_raw(dir: &Path, first_id: &str, retry: bool, prompt: &str, reply: &str) {
+    let name: String = first_id.chars().map(|c| if c.is_ascii_alphanumeric() || "-_.".contains(c) { c } else { '_' }).collect();
+    let stem = dir.join(if retry { format!("{name}.retry") } else { name });
+    for (ext, text) in [("in", prompt), ("out", reply)] {
+        // Not `with_extension`: it would replace the `.retry` a stem may already carry.
+        let path = PathBuf::from(format!("{}.{ext}", stem.display()));
+        if let Err(e) = std::fs::write(&path, text) { eprintln!("enrich: keep {}: {e}", path.display()); }
+    }
+}
+
 /// Nodes per document call. A call answers every node once per language, and the generator's
 /// failures grow with the length of the answer: at 12 nodes in two languages — 312 lines — one
 /// batch in ten came back unparseable or short, where one language at 12 lost one in 180. So
@@ -521,7 +536,9 @@ fn per_call(batch: usize, languages: &[String]) -> usize {
 // struct around the five would name each of them twice for one line on the one call site.
 #[allow(clippy::too_many_arguments)]
 pub fn run(store: &Store, graph: &Graph, questions: Questions, command: &str, batch: usize, parallel: usize, scope: Scope, languages: &[String]) -> Result<Report> {
-    let Scope { limit, code } = scope;
+    let Scope { limit, code, keep } = scope;
+    if let Some(dir) = &keep { std::fs::create_dir_all(dir).with_context(|| format!("create {}", dir.display()))?; }
+    let keep = keep.as_deref();
     let mut questions = questions;
     // Written with the entries this run produces: what the store holds was written in these
     // languages, and the next run reads the list back rather than detecting it again.
@@ -574,6 +591,7 @@ pub fn run(store: &Store, graph: &Graph, questions: Questions, command: &str, ba
                         if let Err(e) = g.0.save(store) { eprintln!("enrich: save: {e:#}"); }
                         drop(g);
                         let skipped: Vec<(&Node, String)> = b.iter().filter(|(n, _)| !parsed.contains_key(&n.id)).cloned().collect();
+                        if let (Some(dir), false) = (keep, skipped.is_empty()) { keep_raw(dir, &nodes[0].id, retry, &p, &out); }
                         // Asked twice and answered for nobody: the generator is not declining these
                         // nodes, it is not answering. Counting that as coverage is what let a whole
                         // run report `0 failed` and exit green having written nothing. Decided
@@ -725,7 +743,7 @@ mod tests {
         let r = run(&store, &g, Questions::default(), cmd, 8, 1, Scope::default(), &[]).unwrap();
         assert_eq!((r.generated, r.batches), (1, 1), "without --code the file is not asked about");
         assert!(Questions::load(&store).unwrap().get("file:a.ts").is_empty());
-        let r = run(&store, &g, Questions::load(&store).unwrap(), cmd, 8, 1, Scope { limit: None, code: true }, &[]).unwrap();
+        let r = run(&store, &g, Questions::load(&store).unwrap(), cmd, 8, 1, Scope { code: true, ..Scope::default() }, &[]).unwrap();
         assert_eq!((r.generated, r.batches, r.left), (1, 1, 0));
         assert_eq!(Questions::load(&store).unwrap().get("file:a.ts"), ["q for c1"]);
         // A later run without the flag neither regenerates nor prunes the code questions.
@@ -854,6 +872,28 @@ mod tests {
         assert_eq!((r.generated, r.left), (0, 2));
         assert_eq!(r.failed, 1, "a batch that answered for nobody twice is failed, not done");
         assert_eq!(std::fs::read_to_string(&calls).unwrap().lines().count(), 4, "an answer that skips everything is retried once, not forever");
+    }
+
+    /// The generator answers one node of two in prose the first time and nothing the second: the
+    /// prompt and the reply of both calls are left in the directory, and a clean batch leaves none.
+    #[test]
+    fn a_batch_that_came_back_short_leaves_its_prompt_and_reply_behind() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::new(dir.path());
+        let keep = dir.path().join("raw");
+        let prose = r#"awk '/^### FR-PAY-22/{printf "FR-PAY-22\tq\n"} END{print "I saved the rest to answers.txt"}'"#;
+        let scope = Scope { keep: Some(keep.clone()), ..Scope::default() };
+        run(&store, &graph(), Questions::default(), prose, 8, 1, scope.clone(), &[]).unwrap();
+        let read = |name: &str| std::fs::read_to_string(keep.join(name)).unwrap();
+        assert!(read("FR-PAY-22.out").contains("I saved the rest to answers.txt"), "the reply as the model wrote it");
+        assert!(read("FR-PAY-22.in").contains("### FR-PAY-26"), "the prompt it was answering");
+        assert!(read("FR-PAY-26.retry.out").contains("I saved the rest"), "the retry keeps its own reply");
+
+        let clean = tempfile::tempdir().unwrap();
+        let keep = clean.path().join("raw");
+        let answers = r#"awk '/^### /{printf "%s\tq for %s\n", $2, $2}'"#;
+        run(&Store::new(clean.path()), &graph(), Questions::default(), answers, 8, 1, Scope { keep: Some(keep.clone()), ..Scope::default() }, &[]).unwrap();
+        assert_eq!(std::fs::read_dir(&keep).unwrap().count(), 0, "nothing is written for a clean batch");
     }
 
     /// A store with no questions is a store nobody enriched, and saying so on every build would be
@@ -1019,7 +1059,7 @@ mod tests {
         let g = graph();
         assert_eq!(coverage(&g, &Questions::default()), (0, 2));
         let cmd = r#"awk '/^### /{printf "%s\tq for %s\n", $2, $2}'"#;
-        run(&store, &g, Questions::default(), cmd, 1, 1, Scope { limit: Some(1), code: false }, &[]).unwrap();
+        run(&store, &g, Questions::default(), cmd, 1, 1, Scope { limit: Some(1), ..Scope::default() }, &[]).unwrap();
         assert_eq!(coverage(&g, &Questions::load(&store).unwrap()), (1, 2), "a run stopped early covers part of the graph");
         assert!(!enriched(1, 2), "half a two-node graph is nowhere near the mark");
         run(&store, &g, Questions::load(&store).unwrap(), cmd, 1, 1, Scope::default(), &[]).unwrap();
@@ -1043,7 +1083,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let store = Store::new(dir.path());
         let cmd = r#"awk '/^### /{printf "%s\tq for %s\n", $2, $2}'"#;
-        let r = run(&store, &graph(), Questions::default(), cmd, 1, 1, Scope { limit: Some(1), code: false }, &[]).unwrap();
+        let r = run(&store, &graph(), Questions::default(), cmd, 1, 1, Scope { limit: Some(1), ..Scope::default() }, &[]).unwrap();
         assert_eq!((r.generated, r.batches), (1, 1));
     }
 
