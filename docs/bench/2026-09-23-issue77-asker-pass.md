@@ -90,73 +90,167 @@ Every `enrich`, `embed` and `bench` transcript, the wrapper, its cost log and th
 routine runs. Per-case flips are listed against P0, H0 and, for HEAD, the 11/30 roll in the
 #77 kit's `bench-after.txt`.
 
-## Not measured
+## Results
 
-**2026-09-23.** The pass is implemented (`6e125f9`) and was never read. None of the five clauses
-has a reading, so there is no verdict. The code stays on this branch, unmerged.
+**2026-09-23.** Every arm was read by one binary, `repograph-2f051a8`, built from this branch after
+it was rebased onto `main` at `01ffbf8`. The pass is `71f8353`; `2f051a8` makes the lexical index
+read a store whose only questions are the asker's. Before any paid run, P0 and H0 were read by the
+first build, `6e125f9`, and the re-reads matched them case for case. The runs are in `runs.jsonl`
+under the tags `asker77-P0`, `asker77-P1`, `asker77-H0` and `asker77-H1`.
 
-**Why it stopped.** Before any paid run, one real asker batch went through the wrapper. It covered
-six nodes (ADR-025 to ADR-030) in English and Russian and cost `total_cost_usd` $0.046. It
-produced 5,196 output tokens in 52 s, and all six nodes were answered.
+### Readings
 
-Output tokens drive the cost: six questions × two languages per node, at about 70 tokens a line.
-Projected over whole stores:
+| arm | reading | keyword | paraphrase | code | p90 | graded |
+|---|---|---|---|---|---|---|
+| P0 | dense | 40/40 | 15/30 | 12/12 | 221 | enriched (1996/1996) |
+| P1 | dense | 40/40 | **20/30** | 12/12 | 223 | enriched (1996/1996) |
+| P0 | lexical | 39/40 | 15/30 | 12/12 | 215 | enriched |
+| P1 | lexical | **38/40** | 19/30 | 12/12 | 213 | enriched; `bench` exits red on the keyword floor |
+| H0 | dense | 40/40 | 12/30 | 12/12 | 231 | not enriched (2147/2154, other languages) |
+| H1 | dense | 40/40 | **11/30** | 12/12 | **234** | enriched (2154/2154) |
+| H0 | lexical | 39/40 | 12/30 | 12/12 | 221 | not enriched |
+| H1 | lexical | 40/40 | **11/30** | 12/12 | 223 | enriched |
 
-| arm | nodes | calls | cost | time at `--parallel 8` |
-|---|---|---|---|---|
-| HEAD | 2,154 | 359 | ≈ $16.5 | about 40 min |
-| pin | 1,996 | 333 | ≈ $15.3 | about 40 min |
-| **total** | | | **≈ $32** | |
+On the developer suite:
 
-The approved budget was $4–8 per store. Max stopped at $0.
+| arm | reading | long | cross | multi | where | rule | total | p90 |
+|---|---|---|---|---|---|---|---|---|
+| P0 | dense | 10/15 | 12/15 | 10/12 | 0/9 | 5/9 | 37/60 | 244 |
+| P1 | dense | 11/15 | 11/15 | 10/12 | 0/9 | 6/9 | 38/60 | 252 |
+| P0 | lexical | 11/15 | 12/15 | 9/12 | 0/9 | 5/9 | 37/60 | 239 |
+| P1 | lexical | 12/15 | 12/15 | 12/12 | 0/9 | 7/9 | 43/60 | 235 |
 
-Spend so far: the two probe calls (about $0.06). Earlier in setup there was one accidental real run
-on a scratch copy, about $1–1.8: a project-level `enrich_command` is ignored, so the "no-op"
-generator was the default one. No bench worktree was touched.
+H1 grades as enriched only because of how the run was made, not because its own questions changed.
+`enrich` writes the language list into the store at the end of a run even when every main batch
+failed, which this run's wrapper made them do. After that, `bench` no longer sees the store as
+"written for other languages". The own set of each store is identical, entry for entry, to the
+store it started from.
 
-**The prompt.** The existing prompt is unchanged. Ten captured prompts from this branch matched
-those of a binary built from `e1686ae`, whose `enrich.rs` is `main`'s, byte for byte.
+### The verdict: refused
 
-The sample batch shows the register the pass asks for: "Can I use…", "How do I know which…", "Where
-do we keep…". It still borrowed entry terms (discriminator, SQLCipher, outbox) and misread the
-domain of two ADRs. That is one batch, and no evidence either way on the rule.
+| clause | reading | holds |
+|---|---|---|
+| 1. #77 closed on HEAD, dense | H1 dense paraphrase 11 < 14; p90 234 > 230 | **no** |
+| 2. HEAD lexical loses nothing | H1 lexical paraphrase 11 < H0's 12 | **no** |
+| 3. Fixture dense loses nothing | P1 dense 40/20/12, p90 223 | yes |
+| 4. Fixture lexical loses nothing | P1 lexical keyword 38 < 39 | **no** |
+| 5. Register did not cost `rule` | dense rule 6 ≥ 5, total 38 ≥ 37; lexical rule 7 ≥ 5, total 43 ≥ 37 | yes |
 
-**Baselines, free, read with `6e125f9`.** Recorded in `runs.jsonl` under the tags `asker77-P0` and
-`asker77-H0`.
+Three clauses fail, so the pass is refused. `c1d98fb` reverts `71f8353` and `2f051a8` on this
+branch. This file and the `runs.jsonl` rows stay.
 
-| arm | reading | keyword | paraphrase | code | p90 |
+### Per-case flips
+
+On the pin, P0 → P1:
+
+- **Dense**, won 5, lost 0: paraphrase FR-VIS-01, FR-AI-21, FR-STAFF-45, FR-CRM-11 and N-109.
+- **Lexical**, won 4, lost 1:
+  - won paraphrase FR-PAY-03, FR-AI-21, FR-STAFF-45 and N-109;
+  - **lost keyword FR-WH-53** («отчёты склада»).
+- **Developer suite, dense**, won 3, lost 2:
+  - won long FR-OPS-05, multi FR-OPS-60+61 and rule ADR-003;
+  - lost cross FR-CAL-50 + `core.ts` and multi FR-SHELL-70+71+FR-APP-42.
+- **Developer suite, lexical**, won 6, lost 0: multi FR-CAL-110..112, rule ADR-031, multi
+  FR-MKT-21..24, long FR-OPS-05, multi FR-OPS-60+61, and rule ADR-003.
+
+On HEAD:
+
+- **H0 → H1 dense**, won 1, lost 2: won FR-STAFF-45; lost FR-WEB-34 and FR-DM-66.
+- **H0 → H1 lexical**, won 2, lost 2:
+  - won keyword FR-PH-43 and paraphrase FR-STAFF-45;
+  - lost FR-WEB-34 and FR-DM-66.
+- **The 11/30 re-enrich roll → H1 dense**, won 1, lost 1: won FR-STAFF-45; lost FR-TOOL-22.
+
+**Why FR-WH-53 fell.** In P0 lexical it ranked fourth for the two-word query «отчёты склада». In P1,
+W-175 («[Отчёты] Пятьдесят два отчёта…») moved to first and FR-DM-56 entered the top five, which
+pushed FR-WH-53 out. The asker's set more than doubles the question text the lexical index
+reads: on the pin, 91% more questions and 122% more characters. That is enough to reorder a
+two-word keyword query that was already near the edge. The case was marginal before the pass. It
+is still lost.
+
+**Why FR-WEB-34 fell on HEAD.** FR-WEB-34's asker set came back in English and *Polish*. HEAD's
+list is English and Russian. It is one of 19 nodes on HEAD (48 of 25,753 questions) where haiku
+wrote Polish instead. Meanwhile FR-DM-50's Russian gift-card questions («Можно ли передать
+оставшуюся сумму на сертификате кому-то другому?») took its place in the top five. FR-DM-66 went
+the same way: a neighbour with close questions (N-147, on a calendar falling out of sync) moved
+ahead of it.
+
+### What HEAD's gap is not
+
+The cases the pin hits and HEAD misses stay missed in every HEAD reading, with the asker's set or
+without it. ADR-004, ADR-005 and FR-SVC-39 are hit in all four pin readings and missed in all four
+HEAD readings. Their documents are byte-identical between `502e8a6d` and `a3bf96ff`. Each node has
+Russian asker's-voice questions on HEAD, and on the probe (`ask --stale --no-serve`, on a scratch
+copy of the H1 store) none of the three reaches the top five.
+
+The register the pass adds works on the pin: dense 15 → 20. It does not reach these cases. What
+separates HEAD from the pin is either the roll of the own set (the 2026-09-12 questions HEAD
+carries, not the fixture's) or HEAD's 158 extra nodes competing for the same seats.
+This run does not say which.
+
+### Cost and time
+
+| arm | calls | output tokens | cost | enrich | embed |
 |---|---|---|---|---|---|
-| P0 | dense | 40/40 | 15/30 | 12/12 | 221 |
-| P0 | lexical | 39/40 | 15/30 | 12/12 | 215 |
-| H0 | dense | 40/40 | 12/30 | 12/12 | 231 |
-| H0 | lexical | 39/40 | 12/30 | 12/12 | 221 |
+| P1 | 337 (333 + 4 retries) | 1.10 M | $12.69 | 1,618 s | 23,853 rows in 68 s |
+| H1 | 374 (359 + 15 retries) | 1.20 M | $13.71 | 1,992 s | 25,752 rows in 74 s |
+| **total** | | | **$26.40** | | |
 
-The developer suite was read for P0 only:
+The estimate was ≈ $32. Also spent: the two probe calls ($0.06), and before them the accidental
+run on a scratch copy (about $1–1.8). That run is why `main` now refuses a project-level
+`enrich_command` (#79).
 
-| arm | reading | long | cross | multi | where | rule | total |
-|---|---|---|---|---|---|---|---|
-| P0 | dense | 10/15 | 12/15 | 10/12 | 0/9 | 5/9 | 37/60 |
-| P0 | lexical | 11/15 | 12/15 | 9/12 | 0/9 | 5/9 | 37/60 |
+- **P1:** every node got the asker's set. Its four short batches all recovered on the retry.
+- **H1:** 2,148 of 2,154 nodes got the set. The six-node batch starting at W-106 answered for
+  nobody twice.
+- **Main batches:** they failed by design in both arms (333 and 359). No entry of either own set
+  changed.
 
-H0 reads `enriched=false (2147/2154)`. Its dense p90 is already 231, above clause 1's bar of 230,
-before any question is added.
+**Transport noise.** claude.ai connectors reach `claude -p` even with `--setting-sources ""`, and
+haiku sometimes tries to write its answer into a Claude Docs document. It then replies "I don't
+have permission to create a Claude Doc" and follows with the questions in a format the parser only
+partly reads.
 
-**What a future run needs.**
+Short asker batches were 4 of 333 on the pin and 15 of 359 on HEAD, most of them this failure. The
+main prompt goes through the same command, so it is exposed in the same way. It is not a finding
+about the pass, but any paid enrich on this machine carries it while the connectors are attached.
 
-1. **An approved budget of about $32** for both arms. HEAD alone (about $16.5) reads only clauses
-   1–2, so it cannot ship the pass under this rule.
-2. **The kit, which is ready.** `asker-pass/` holds:
-   - the binary `repograph-6e125f9`;
-   - `wrapper.sh` with `machine.toml`, for `REPOGRAPH_CONFIG`;
-   - `bench-arm.sh <arm> [dev]`;
-   - the P0 and H0 transcripts.
-3. **Per arm:**
-   - Check out the arm's commit in `~/bench/beauty-crm-test` with `LEFTHOOK=0`.
-   - `rsync -a --delete` the arm's store into `.repograph`.
-   - Run `REPOGRAPH_CONFIG=…/machine.toml …/repograph-6e125f9 --repo ~/bench/beauty-crm-test enrich
-     --keep-raw …/raw-<arm>`. It embeds the new rows itself.
-   - Run `bench-arm.sh H1`, or `bench-arm.sh P1 dev`.
-   - Record each transcript with `track.py record --tag asker77-<arm>`.
-   - Afterwards, restore `502e8a6d` with `store-before`.
-4. **A cheaper pass is a different pass.** Three questions per language would halve the output. It
-   needs a rule of its own, written before it is read.
+### What this teaches
+
+1. **The asker's voice is real signal, and not #77's cure.** On the fixture it lifts paraphrase by
+   5 dense and 4 lexical, and the developer suite's `rule` by 1 and 2. That is G14's union reading
+   (20/30) reproduced by the additive pass. On HEAD it moves nothing: 12 → 11, with one win and
+   two losses. HEAD's paraphrase loss is not a missing register.
+2. **Added text is not free for keyword queries.** Doubling the question text was enough to
+   reorder one marginal two-word query and break the lexical keyword floor. If the asker set comes
+   back, it needs a seat of its own, for example a separate list or a lower weight. It should not
+   be appended to the questions every keyword query reads.
+3. **The paid stores are kept, so the next retrieval-side idea reads for free.** `store-P1` and
+   `store-H1` in the kit hold both sets. A separate asker's list, a weight, or a gate re-derived
+   for the union can all be read against them without another enrich. Each needs its own rule,
+   written before it is read.
+4. **HEAD's gap needs its own diagnosis.** Take the three cases above. Give HEAD the fixture's own
+   set for those nodes, or read HEAD with its 158 extra nodes left out. Either one separates
+   "roll" from "competition" at no model cost.
+
+### The kit
+
+`/Users/max/bench/issue77-2026-09-23/asker-pass/` holds:
+
+- **Binaries:** `repograph-6e125f9` and `repograph-2f051a8`.
+- **Transport:** `wrapper.sh` and `machine.toml`.
+- **Scripts:**
+  - `bench-arm.sh <arm> [dev]`;
+  - `run-arm.sh <read0> <read1> [dev]`, which reads the baseline, enriches, copies the store and
+    reads the arm;
+  - `flips.py`.
+- **Logs:**
+  - cost logs `costs-{probe,P1,H1}.jsonl`;
+  - enrich transcripts `enrich-{P1,H1}.*`;
+  - kept replies `raw-{P1,H1}/`.
+- **Stores:** `store-P1/` and `store-H1/`.
+- **Bench transcripts:** `bench-*.txt` and `dev-*.txt`, with the first reads by `6e125f9` in
+  `read-6e125f9/`.
+
+The test worktree was restored to `502e8a6d` with `store-before`: `git status` is clean, and
+`diff -rq` against `store-before` shows no difference.
