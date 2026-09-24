@@ -38,7 +38,7 @@ const SHORTER_ROOTS: &[&str] = &["/tmp"];
 #[cfg(not(unix))]
 const SHORTER_ROOTS: &[&str] = &[];
 
-fn repograph() -> Command { Command::new(env!("CARGO_BIN_EXE_repograph")) }
+fn repograph() -> Command { let mut c = Command::new(env!("CARGO_BIN_EXE_repograph")); c.env_remove("REPOGRAPH_CODE_GLOBS"); c }
 
 /// A temp directory whose repository's socket path still fits `sun_path`. macOS hands out
 /// `/private/var/folders/…/T/` — around 57 bytes before anything of ours — and the name above

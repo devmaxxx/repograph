@@ -383,6 +383,10 @@ in full, not an empty config:
 | `embed_model`        | `intfloat/multilingual-e5-small`; the model the vectors are written with — nine were measured and `repograph model` switches it, see [Embeddings](#embeddings) |
 | `resources`          | `"balanced"` = a third of the logical cores; `"low"` a sixth, `"full"` a half — how much of the machine a run may take, see [Resources](#resources) |
 
+`REPOGRAPH_CODE_GLOBS`, whitespace-separated, replaces `code_globs` for one run. It is a measurement's
+switch, as `REPOGRAPH_EMBED_MODEL` is, so a reading can name other globs without writing a
+`repograph.toml` into the tree it measures.
+
 ### Choosing a model, and where the choice lives
 
 `enrich_command` and `rerank_command` are the transport — any program that reads a prompt on stdin —
