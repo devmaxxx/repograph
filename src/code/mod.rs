@@ -1,6 +1,7 @@
 pub mod calls;
 pub mod idrefs;
 pub mod imports;
+pub mod index;
 pub mod lang;
 pub mod symbols;
 

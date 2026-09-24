@@ -497,7 +497,7 @@ mod tests {
             std::fs::write(p, "export {};\n").unwrap();
         }
         let text = std::fs::read_to_string(format!("{}/tests/fixtures/{fixture}", env!("CARGO_MANIFEST_DIR"))).unwrap();
-        SymbolScanner::new(Resolver::new(d.path()).unwrap()).scan(rel, &text)
+        SymbolScanner::new(Resolver::new(d.path(), &crate::config::Config::default()).unwrap()).scan(rel, &text)
     }
 
     fn has(ex: &Extraction, s: &str, t: &str, k: EdgeKind, ctx: &str) -> bool {
@@ -569,7 +569,7 @@ mod tests {
 
     fn inline(rel: &str, src: &str) -> Extraction {
         let d = tempfile::tempdir().unwrap();
-        SymbolScanner::new(Resolver::new(d.path()).unwrap()).scan(rel, src)
+        SymbolScanner::new(Resolver::new(d.path(), &crate::config::Config::default()).unwrap()).scan(rel, src)
     }
 
     #[test]
@@ -621,7 +621,7 @@ mod tests {
     fn import_equals_require_edge_carries_the_bound_name() {
         let d = tempfile::tempdir().unwrap();
         std::fs::write(d.path().join("thing.ts"), "export {};\n").unwrap();
-        let ex = SymbolScanner::new(Resolver::new(d.path()).unwrap()).scan("m.ts", "import thing = require('./thing');\n");
+        let ex = SymbolScanner::new(Resolver::new(d.path(), &crate::config::Config::default()).unwrap()).scan("m.ts", "import thing = require('./thing');\n");
         assert!(has(&ex, "file:m.ts", "file:thing.ts", EdgeKind::Imports, "thing"));
     }
 }

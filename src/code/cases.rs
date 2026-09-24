@@ -21,7 +21,7 @@ impl Repo {
     }
 
     fn extract(&self, rel: &str, src: &str) -> Extraction {
-        CodeExtractor::new(Resolver::new(self.dir.path()).unwrap()).extract(rel, src)
+        CodeExtractor::new(Resolver::new(self.dir.path(), &crate::config::Config::default()).unwrap()).extract(rel, src)
     }
 }
 
@@ -429,7 +429,7 @@ fn hyphenless_labels_are_not_references_and_a_one_letter_family_is() {
 
 fn resolver(files: &[(&str, &str)]) -> (Repo, Resolver) {
     let repo = Repo::new(files);
-    let r = Resolver::new(repo.dir.path()).unwrap();
+    let r = Resolver::new(repo.dir.path(), &crate::config::Config::default()).unwrap();
     (repo, r)
 }
 

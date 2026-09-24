@@ -51,3 +51,17 @@ fn the_environment_names_the_globs_for_one_run_over_the_repository_s_own() {
     assert!(own.iter().any(|i| i == "file:web/a.ts") && !own.iter().any(|i| i == "file:mobile/Pet.kt"), "{own:?}");
     assert!(widened.iter().any(|i| i == "file:mobile/Pet.kt"), "{widened:?}");
 }
+
+#[test]
+fn a_store_that_holds_no_name_indexed_file_carries_no_header_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path();
+    write(repo, "repograph.toml", "code_globs = [\"**/*.ts\", \"**/*.cs\"]\n");
+    write(repo, "web/a.ts", "export function boot() {}\n");
+    write(repo, "svc/Program.cs", "public class Program {}\n");
+    assert!(common::run(repo, &["build"]).status.success());
+    write(repo, "web/a.ts", "export function boot() { return 1; }\n");
+    std::fs::remove_file(repo.join("svc/Program.cs")).unwrap();
+    assert!(common::run(repo, &["update"]).status.success());
+    assert!(!repo.join(".repograph").join("headers.json").exists());
+}

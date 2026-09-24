@@ -172,10 +172,17 @@ impl Store {
         Ok(Some(std::fs::read(&p)?))
     }
 
+    /// A record that has emptied leaves no file behind, so a store never holds one it would not write.
+    pub fn remove(&self, name: &str) -> Result<()> {
+        let p = self.dir.join(name);
+        if p.exists() { std::fs::remove_file(&p).with_context(|| format!("remove {}", p.display()))?; }
+        Ok(())
+    }
+
     /// Drops what `build` recomputes and nothing else: the dense vectors are reused by
     /// content hash, and the questions cost model tokens that a rebuild must not spend twice.
     pub fn wipe(&self) -> Result<()> {
-        for name in ["graph.json", "manifest.json", "graph.json.tmp", "manifest.json.tmp"] {
+        for name in ["graph.json", "manifest.json", "headers.json", "graph.json.tmp", "manifest.json.tmp", "headers.json.tmp"] {
             let p = self.dir.join(name);
             if p.exists() { std::fs::remove_file(&p).with_context(|| format!("remove {}", p.display()))?; }
         }
