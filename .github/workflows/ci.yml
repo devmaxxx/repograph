@@ -49,6 +49,9 @@ jobs:
       # a red in any earlier step would skip the rest and the split alone would buy nothing.
       - if: runner.os == 'Linux' && !cancelled()
         run: python3 -m unittest discover -s bench/probe
+      # The comparison's truth is read with `rg`, which a laptop has and this image does not.
+      - if: runner.os == 'Linux' && !cancelled()
+        run: sudo apt-get update -q && sudo apt-get install -y --no-install-recommends ripgrep
       - if: runner.os == 'Linux' && !cancelled()
         run: python3 -m unittest discover -s bench/compare
       - if: runner.os == 'Linux' && !cancelled()

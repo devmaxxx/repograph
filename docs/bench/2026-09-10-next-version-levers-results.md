@@ -144,6 +144,11 @@ read path.
 
 **Reading.**
 
+**The four arms on `v0.5.0` (`b21fb0f`), 2026-09-23 (0.6.0 plan, Task 3 Step 1).** pending: the machine was not quiet (quiet.sh refused sittings 1–2 on 2026-09-23); read in a quiet sitting.
+
+The same four arms on the same binary and fixture were read as G32's *before* in §8 on the same
+day; they are recorded there, under G32's gate, and are not a reading of this clause.
+
 ## 3 · G35 — what `derive` costs on an update that changes a file
 
 **Gate.** Median of five `families derived` steps under `REPOGRAPH_TIMING=1` on a one-file
@@ -170,6 +175,50 @@ is allowed) — is within §1's bars of the reference. Read path: the four arms 
 read the baseline table of §2 exactly. Failing (a), (b) or (e) stops the branch at this task.
 
 **Reading.**
+
+**Read 2026-09-23 on `v0.5.0` (`b21fb0f`), 0.6.0 plan Task 3.** The levers branch merged as #27
+and #28 and is `v0.5.0`, so `v0.5.0` stands in for the branch binary; `main` is the
+`~/bench/levers-2026-09-10/bin/repograph-main` binary. Transcripts:
+`~/bench/0.6.0-2026-09-11/log/master-t3/g39/`.
+
+(a) and (b) — each a `--no-dense build` from an empty store in `~/bench/beauty-crm-test` after
+`reset.sh`, `graph.json` copied out before the next build:
+
+```
+main:   changed 908 removed 0 nodes 8475 edges 30363
+v0.5.0: changed 908 removed 0 nodes 8475 edges 30363
+
+$ graphdiff.py main/graph.json v050/graph.json
+nodes: same (8475 vs 8475; only in A 0, only in B 0, changed 0)
+edges: same (30363 vs 30363; only in A 0, only in B 0)
+pending: 6666 (A held 0)
+bytes: 12747663 13829030 ratio 1.085
+```
+
+(a) green; (b) green — 1.085 ≤ 1.100, 6,666 edges held aside.
+
+(c) — `docs/oq.md` defining `OQ-1` added and removed five times on `v0.5.0`'s store:
+
+```
+every add:     changed 1 removed 0 nodes 8477 edges 31236   families: +OQ
+every removal: changed 0 removed 1 nodes 8475 edges 30363   families: -OQ
+oq-add wall=0.1 maxrss=0.07 n=5   (walls 0.09 0.09 0.10 0.10 0.10 s)
+
+verify before:  dangling edges: 1219   held aside: 6666 edges in 97 prefixes   gaps: 180
+verify after 1: dangling edges: 2027   held aside: 5794 edges in 96 prefixes   gaps: 206
+```
+
+The count half is green: every add re-reads one file and adds the family, every removal takes it
+back, and the store returns to the build's counts. Defining `OQ` moves its 872 mentions from held
+aside to dangling (6666 − 5794), because only `OQ-1` exists. The wall half is not read as a gate:
+the machine was at load ~40, and the median of 0.10 s is recorded, not judged. pending: the machine was not quiet (quiet.sh refused sittings 1–2 on 2026-09-23); read in a quiet sitting.
+
+(d) the build wall: pending: the machine was not quiet (quiet.sh refused sittings 1–2 on 2026-09-23); read in a quiet sitting.
+
+(e) the reader rows through `v0.5.0`: pending: the machine was not quiet (quiet.sh refused sittings 1–2 on 2026-09-23); read in a quiet sitting.
+
+**Clause by clause: (a) green, (b) green, (c) green on counts with its wall pending, (d) and (e)
+pending.**
 
 ## 5 · G40 — a corpus that defines no ids
 
@@ -223,6 +272,18 @@ gone from the bench summary line and `track.py` still reads every transcript in
 
 **Reading.**
 
+**The corpus half, read 2026-09-23 (0.6.0 plan, Task 3 Step 3).** G34's task and G39's both landed
+inside #27's squash, and no binary of the commit between them exists, so the pair read here is
+G39's (a): `repograph-main` against `v0.5.0` (`b21fb0f`), each from an empty store in
+`~/bench/beauty-crm-test`.
+
+- node and edge counts: 8475 and 30363 on both — the same;
+- labels that differ: none (`changed 0`), so there is no heading to list.
+
+The corpus half is green. The property test on CI and the `track.py` half are not read in this
+sitting. Observed, not read as a verdict: `v0.5.0`'s bench summary line still prints `families=`
+(`families=40` on the fixture, `families=59` on the rebuild — §8's transcripts).
+
 ## 7 · G38 — the report's own edge
 
 **Gate.** `repograph families` in `~/bench/beauty-crm-test` as Task 8's build left it puts `OQ`
@@ -265,6 +326,58 @@ copied to `log/g32/after/store/` before anything else runs in the directory. Cov
 99% after a second `enrich` is a failed gate, recorded with the count the model declined.
 
 **Reading.**
+
+**Read 2026-09-23 on `v0.5.0` (`b21fb0f`), 0.6.0 plan Task 4.** `v0.5.0` has no
+`enrich_languages`, so this is one language's enrichment and the one-language cost; no
+`repograph.toml` was written. Transcripts: `~/bench/0.6.0-2026-09-11/log/master-t4/`.
+
+*Before* — the four arms on the pinned fixture:
+
+```
+keyword 40/40  paraphrase 15/30  code 12/12  p90 221 tok  dense=true   enriched=true (1996/1996 nodes)  gated=true   green
+keyword 39/40  paraphrase 15/30  code 12/12  p90 215 tok  dense=false  enriched=true (1996/1996 nodes)  gated=true   green
+long 10/15  cross 13/15  multi 10/12  where 0/9  rule 5/9  p90 239 tok  dense=true   enriched=true  measured, no floors
+long 11/15  cross 13/15  multi 9/12   where 0/9  rule 5/9  p90 239 tok  dense=false  enriched=true  measured, no floors
+```
+
+The baseline table of §2 exactly, counts, p90 and anchors.
+
+*Rebuilt* — `build` in `~/bench/beauty-crm-test` after `reset.sh` (0 files dirty):
+
+```
+changed 908 removed 0 nodes 8475 edges 30363
+repograph: 150 requirement-like nodes have no questions — run `repograph enrich` to search them
+keyword 40/40  paraphrase 15/30  code 12/12  p90 226 tok  dense=true   enriched=false (1996/2146 nodes)  green
+keyword 39/40  paraphrase 16/30  code 12/12  p90 218 tok  dense=false  enriched=false (1996/2146 nodes)  green
+long 10/15  cross 12/15  multi 10/12  where 0/9  rule 5/9  p90 240 tok  dense=true   enriched=false
+long 11/15  cross 13/15  multi 9/12   where 0/9  rule 5/9  p90 240 tok  dense=false  enriched=false
+```
+
+N = 150 = 2146 − 1996, and both recorded arms print `enriched=false`.
+
+*Enrich* — one run:
+
+```
+enrich: 150 nodes written, 0 dropped, 0 still without questions, 13 batches (0 failed) in 220s
+dense: embedded 2143 rows in 6.6s
+```
+
+Vector rows 33,533 → 35,835. `v0.5.0`'s `enrich` prints no cost line, so the cost is not read
+here; the maintainer's authorisation was ≈ $0.20 of haiku.
+
+*After*:
+
+```
+keyword 40/40  paraphrase 15/30  code 12/12  p90 227 tok  dense=true   enriched=true (2146/2146 nodes)  gated=true  green
+keyword 39/40  paraphrase 16/30  code 12/12  p90 218 tok  dense=false  enriched=true (2146/2146 nodes)  gated=true  green
+long 10/15  cross 12/15  multi 10/12  where 0/9  rule 5/9  p90 241 tok  dense=true   enriched=true  measured, no floors
+long 11/15  cross 13/15  multi 9/12   where 0/9  rule 5/9  p90 240 tok  dense=false  enriched=true  measured, no floors
+```
+
+Coverage 2146/2146 (100% ≥ 99%), both recorded arms `enriched=true gated=true` and exit 0, the
+developer arms recorded. The enriched store (85 MB) was copied to
+`~/bench/0.6.0-2026-09-11/log/master-t4/after/store/` before anything else ran in the directory.
+**Clause by clause: before, rebuilt and after all green.**
 
 ## 9 · G19 — a chunk budgeted in tokens
 

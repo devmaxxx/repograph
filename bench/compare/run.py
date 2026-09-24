@@ -274,6 +274,33 @@ def score_retrieval(tool: Tool, cases: list[dict], truth: dict) -> list[dict]:
     return rows
 
 
+def by_extension(answer: str, want: dict, found: set[str] | None = None) -> dict:
+    """The four `changes` counts, split by the extension of the file the truth attributes them to.
+
+    A window carries several languages at once, and the totals cannot say which language a miss
+    belongs to. A name the truth finds in files of two extensions counts in both slots, so the
+    slots need not sum to the totals.
+
+    `found` is the caller's own `named(answer, want["code_files"])`, already computed for the
+    row's total; passed in, it saves re-scanning `answer` for the same file list a second time.
+    """
+    zero = lambda: {"want_files": 0, "found_files": 0, "want_symbols": 0, "found_symbols": 0}
+    out: dict = {}
+    found = set(found) if found is not None else set(named(answer, want["code_files"]))
+    for rel in want["code_files"]:
+        slot = out.setdefault(Path(rel).suffix, zero())
+        slot["want_files"] += 1
+        slot["found_files"] += rel in found
+    names: dict[str, set[str]] = {}
+    for rel, syms in want["symbols"].items():
+        names.setdefault(Path(rel).suffix, set()).update(syms)
+    for ext, syms in names.items():
+        slot = out.setdefault(ext, zero())
+        slot["want_symbols"] = len(syms)
+        slot["found_symbols"] = sum(1 for s in syms if spells(answer, s))
+    return out
+
+
 def score_blast(tool: Tool, cases: list[dict], truth: dict) -> list[dict]:
     rows = []
     for case in cases:
@@ -314,10 +341,12 @@ def score_blast(tool: Tool, cases: list[dict], truth: dict) -> list[dict]:
             want = truth["changes"][case["base"]]
             symbols = sorted({s for names in want["symbols"].values() for s in names})
             files = want["code_files"]
+            found_files = named(answer, files)
             rows.append({
                 "suite": "blast", "kind": "changes", "base": case["base"],
-                "want_files": len(files), "found_files": len(named(answer, files)),
+                "want_files": len(files), "found_files": len(found_files),
                 "want_symbols": len(symbols), "found_symbols": sum(1 for s in symbols if spells(answer, s)),
+                "by_ext": by_extension(answer, want, found=found_files),
                 "ms": round(ms), "chars": len(answer.strip()),
             })
     return rows
