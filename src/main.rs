@@ -370,6 +370,10 @@ pub(crate) struct Watcher<'a> {
     /// that only reads reports `Quiet`, and a reader holding the graph from before it would
     /// then answer from a store older than the one a one-shot `ask` loads off disk.
     reloaded: bool,
+    /// Whether `ex` was built before a store another process wrote was read back. That store can
+    /// list files the resolver's walk never saw, and the poll that reads it is often quiet, so the
+    /// debt outlives the poll and is paid by the next refresh.
+    resolver_stale: bool,
 }
 
 /// A poll that changes nothing still writes a 10 MB graph, so a batch of one file per save is
@@ -390,7 +394,7 @@ impl<'a> Watcher<'a> {
         let (graph, manifest) = store.load()?;
         let seen = store.stamp("manifest.json");
         let ex = extractors(repo, cfg)?;
-        Ok(Watcher { repo, cfg, ex, store, graph, graph_at, manifest, seen, deferred: 0, reloaded: false })
+        Ok(Watcher { repo, cfg, ex, store, graph, graph_at, manifest, seen, deferred: 0, reloaded: false, resolver_stale: false })
     }
 
     /// The store read back when another process has written it, without the walk a poll does —
@@ -405,6 +409,7 @@ impl<'a> Watcher<'a> {
         self.graph_at = graph_at;
         self.manifest = manifest;
         self.seen = on_disk;
+        self.resolver_stale = true;
         Ok(true)
     }
 
@@ -430,11 +435,12 @@ impl<'a> Watcher<'a> {
         }
         self.deferred = 0;
         // The resolver learns a family's files in its walk, so one built at `open` cannot resolve to
-        // a file added since. A poll that moves a path, or reads a store another process wrote,
+        // a file added since. A refresh that moves a path, or follows a store another process wrote,
         // walks again; a body-only edit, the common poll, pays nothing.
         let moved_path = !diff.removed.is_empty() || diff.changed.iter().any(|e| !self.manifest.files.contains_key(&e.rel));
-        if moved_path || self.reloaded {
+        if moved_path || self.resolver_stale {
             self.ex = extractors(self.repo, self.cfg)?;
+            self.resolver_stale = false;
         }
         // This poll is an `update` in everything but name — it re-extracts and it writes — so it
         // says which families moved the way one does. A quiet poll pays none of it.
@@ -1324,6 +1330,29 @@ mod tests {
         std::fs::create_dir_all(repo.join("packages/lib/src")).unwrap();
         std::fs::write(repo.join("packages/lib/package.json"), r#"{"name":"@shop/lib","exports":"./src/index.ts"}"#).unwrap();
         std::fs::write(repo.join("packages/lib/src/index.ts"), "export const lib = 1;\n").unwrap();
+        std::fs::write(repo.join("app.ts"), "import { lib } from '@shop/lib';\nexport const a = lib;\n\n").unwrap();
+        assert!(matches!(w.poll(1).unwrap(), Polled::Refreshed(_)));
+        assert!(
+            w.graph.edges.iter().any(|e| e.kind == model::EdgeKind::Imports && e.source == "file:app.ts" && e.target == "file:packages/lib/src/index.ts"),
+            "{:?}", w.graph.edges
+        );
+    }
+
+    // Another writer's `update` records the new package, so the watcher's own diff never sees it
+    // added: the poll that reads that store back is quiet, and the edit after it is body-only.
+    #[test]
+    fn a_package_another_writer_added_is_resolved_on_the_first_refresh_after_the_reload() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = dir.path();
+        std::fs::write(repo.join("app.ts"), "import { lib } from '@shop/lib';\nexport const a = lib;\n").unwrap();
+        let cfg = config::Config::default();
+        built(repo, &cfg);
+        let mut w = Watcher::open(repo, &cfg).unwrap();
+        std::fs::create_dir_all(repo.join("packages/lib/src")).unwrap();
+        std::fs::write(repo.join("packages/lib/package.json"), r#"{"name":"@shop/lib","exports":"./src/index.ts"}"#).unwrap();
+        std::fs::write(repo.join("packages/lib/src/index.ts"), "export const lib = 1;\n").unwrap();
+        run_update(repo, &cfg, false).unwrap();
+        assert!(matches!(w.poll(1).unwrap(), Polled::Quiet) && w.reloaded);
         std::fs::write(repo.join("app.ts"), "import { lib } from '@shop/lib';\nexport const a = lib;\n\n").unwrap();
         assert!(matches!(w.poll(1).unwrap(), Polled::Refreshed(_)));
         assert!(
