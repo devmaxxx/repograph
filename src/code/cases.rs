@@ -713,3 +713,58 @@ fn a_crlf_source_extracts_the_same_nodes_and_edges_as_its_lf_twin() {
     assert_eq!(a.edges, b.edges);
     assert!(a.nodes.iter().all(|n| !n.body.contains('\r') && !n.label.contains('\r')));
 }
+
+// ---- the grammar table (L1) ----
+// `lang.rs` holds no test module of its own: `tests/parse_census.rs` compiles that file by path,
+// where these cases would need the crate's model.
+
+#[test]
+fn a_globbed_file_no_grammar_reads_is_a_file_and_nothing_else() {
+    let ex = extract("svc/Program.cs", "namespace App;\npublic class Program { static void Main() { Run(); } }\n// FR-PAY-22\n");
+    assert_eq!(ids(&ex), vec!["file:svc/Program.cs"]);
+    assert!(ex.nodes.iter().all(|n| n.kind == NodeKind::File));
+    assert!(ex.edges.is_empty(), "{:?}", ex.edges);
+}
+
+#[test]
+fn javascript_keeps_the_typescript_grammar() {
+    let ex = extract("web/a.js", "export function refund(id) { return id; }\n");
+    assert!(ids(&ex).contains(&"sym:web/a.js::refund"), "{:?}", ids(&ex));
+}
+
+#[test]
+fn the_typescript_family_is_read_by_its_two_grammars_and_an_unknown_extension_by_none() {
+    use crate::code::lang::{Family, Lang};
+    for rel in ["a.ts", "a.mts", "a.cts", "a.js", "a.mjs", "a.cjs", "types/a.d.ts"] {
+        assert_eq!(Lang::of(rel), Some(Lang::TypeScript), "{rel}");
+    }
+    for rel in ["ui/App.tsx", "ui/App.jsx"] {
+        assert_eq!(Lang::of(rel), Some(Lang::Tsx), "{rel}");
+    }
+    for rel in ["Makefile", "docs/a.md", "ci.yaml", "main.go", "ts"] {
+        assert_eq!(Lang::of(rel), None, "{rel}");
+    }
+    assert_eq!((Lang::TypeScript.family(), Lang::Tsx.family()), (Family::TypeScript, Family::TypeScript));
+    assert!(Lang::Tsx.parse(b"export const V = () => <div/>;\n").is_some_and(|t| !t.root_node().has_error()));
+}
+
+#[test]
+fn the_file_node_every_language_writes_is_the_one_an_unread_file_always_got() {
+    let mut ex = Extraction::default();
+    crate::code::lang::file_node("svc/Program.cs", &mut ex);
+    assert_eq!(ex.nodes.len(), 1);
+    let n = &ex.nodes[0];
+    assert_eq!((n.id.as_str(), n.label.as_str(), n.body.as_str(), n.file.as_str(), n.line),
+        ("file:svc/Program.cs", "svc/Program.cs", "", "svc/Program.cs", 1));
+    assert_eq!(n.kind, NodeKind::File);
+    assert!(ex.edges.is_empty());
+}
+
+#[test]
+fn the_note_names_each_extension_once_with_its_count() {
+    use crate::code::lang::files_only_note;
+    let rels = ["a/B.cs", "a/C.cs", "b/x.ts", "Makefile"];
+    assert_eq!(files_only_note(rels.into_iter()).as_deref(),
+        Some("code: no grammar reads 2 .cs, 1 (no extension) — indexed as files only"));
+    assert_eq!(files_only_note(["b/x.ts", "c/y.tsx", "d/z.mjs"].into_iter()), None);
+}
