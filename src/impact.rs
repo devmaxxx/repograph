@@ -4,16 +4,14 @@
 use crate::model::{Edge, EdgeKind, Graph};
 use std::collections::{BTreeMap, BTreeSet};
 
-/// The edge kinds along which a change to the target reaches the source.
-const CODE: [EdgeKind; 2] = [EdgeKind::Calls, EdgeKind::Extends];
-
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct Dependent { pub id: String, pub depth: usize, pub kind: EdgeKind, pub via: String }
 
 #[derive(Debug, Default)]
 pub struct Impact { pub root: String, pub layers: Vec<Vec<Dependent>>, pub importers: Vec<String> }
 
-fn name_of(id: &str) -> &str { id.rsplit("::").next().unwrap_or(id) }
+/// A file path never holds `::`, but a name can (a Shell `log::info`), so the file ends at the first.
+fn name_of(id: &str) -> &str { id.split_once("::").map_or(id, |(_, name)| name) }
 
 /// `S.create` is exported as `S`; a barrel names the class, not the member.
 fn bare(name: &str) -> &str { name.split('.').next().unwrap_or(name) }
@@ -45,7 +43,7 @@ pub fn aliases(graph: &Graph, id: &str) -> Vec<String> {
 /// The node a possibly-dangling `sym:<barrel>::<Name>` stands for, following re-exports forward.
 pub fn canonical(graph: &Graph, id: &str) -> Option<String> {
     if graph.nodes.contains_key(id) { return Some(id.to_string()) }
-    let (file, name) = id.strip_prefix("sym:")?.rsplit_once("::")?;
+    let (file, name) = id.strip_prefix("sym:")?.split_once("::")?;
     let mut files = vec![file.to_string()];
     let mut seen: BTreeSet<String> = BTreeSet::new();
     let mut i = 0;
@@ -62,16 +60,45 @@ pub fn canonical(graph: &Graph, id: &str) -> Option<String> {
     None
 }
 
-/// The symbols a class declares: its methods and fields.
+/// Every symbol a type declares, at any depth: a nested type's members are the outer type's too, so
+/// a change to `Outer` reaches a caller of `Outer.Inner.go` (spec L4). Breadth-first, so a type's
+/// own members come first, in the order a one-level walk listed them.
 fn members(graph: &Graph, id: &str) -> Vec<String> {
-    graph.edges.iter().filter(|e| e.kind == EdgeKind::Declares && e.source == id && e.target.starts_with("sym:")).map(|e| e.target.clone()).collect()
+    let mut out: Vec<String> = Vec::new();
+    let mut seen: BTreeSet<String> = BTreeSet::from([id.to_string()]);
+    let mut at = 0;
+    let mut owner = id.to_string();
+    loop {
+        for e in graph.edges.iter().filter(|e| e.kind == EdgeKind::Declares && e.source == owner && e.target.starts_with("sym:")) {
+            if seen.insert(e.target.clone()) {
+                out.push(e.target.clone());
+            }
+        }
+        let Some(next) = out.get(at) else { break };
+        owner = next.clone();
+        at += 1;
+    }
+    out
 }
 
-/// `sym:f::C` for `sym:f::C.m`; none for a class or a file.
+/// `sym:f::C` for `sym:f::C.m`, and `sym:f::O.I` for `sym:f::O.I.m`; none for a class or a file.
+/// A `/` inside a name joins one language's own address (`app/clients`), so only `.` splits.
 fn container(id: &str) -> Option<String> {
-    let (file, name) = id.strip_prefix("sym:")?.rsplit_once("::")?;
-    let (class, _) = name.split_once('.')?;
+    let (file, name) = id.strip_prefix("sym:")?.split_once("::")?;
+    let (class, _) = name.rsplit_once('.')?;
     Some(format!("sym:{file}::{class}"))
+}
+
+/// Whether a change to an edge's target reaches its source along it. A `References` edge counts
+/// only when it points at a symbol: until 0.6.0 every one pointed at a requirement id, an entity or
+/// a file, which `ask` expands and no blast walk follows, and the new languages write them between
+/// declarations — a migration altering a table, a field naming a type (spec L11).
+pub(crate) fn walks(e: &Edge) -> bool {
+    match e.kind {
+        EdgeKind::Calls | EdgeKind::Extends => true,
+        EdgeKind::References => e.target.starts_with("sym:"),
+        _ => false,
+    }
 }
 
 /// The root, its members (a class is changed through them) and every alias of each.
@@ -100,7 +127,7 @@ fn step<'a>(graph: &Graph, by_key: &BTreeMap<&str, Vec<&'a Edge>>, at: &str, up:
 
 fn index(graph: &Graph, up: bool) -> BTreeMap<&str, Vec<&Edge>> {
     let mut by_key: BTreeMap<&str, Vec<&Edge>> = BTreeMap::new();
-    for e in graph.edges.iter().filter(|e| CODE.contains(&e.kind)) {
+    for e in graph.edges.iter().filter(|e| walks(e)) {
         by_key.entry(if up { e.target.as_str() } else { e.source.as_str() }).or_default().push(e);
     }
     by_key
@@ -141,7 +168,7 @@ fn importers(graph: &Graph, root: &str) -> Vec<String> {
     let mut files: BTreeSet<String> = BTreeSet::from([format!("file:{}", n.file)]);
     let mut out: BTreeSet<String> = BTreeSet::new();
     for a in aliases(graph, root) {
-        if let Some((f, _)) = a.trim_start_matches("sym:").rsplit_once("::") {
+        if let Some((f, _)) = a.trim_start_matches("sym:").split_once("::") {
             files.insert(format!("file:{f}"));
             // A re-export cycle can walk back to the declaring file itself; it names the
             // symbol by declaring it, not by importing it.
@@ -414,5 +441,168 @@ mod tests {
         assert_eq!(v["direction"], "upstream");
         assert_eq!(v["layers"][0].as_array().unwrap().len(), 3);
         assert_eq!(v["risk"], "MEDIUM");
+    }
+}
+
+#[cfg(test)]
+mod container_cases {
+    use super::{bare, container};
+
+    #[test]
+    fn a_member_is_changed_through_its_class() {
+        assert_eq!(container("sym:a.ts::S.create").as_deref(), Some("sym:a.ts::S"));
+    }
+
+    #[test]
+    fn a_nested_member_is_changed_through_the_nearest_class() {
+        assert_eq!(container("sym:a.cs::Outer.Inner.Deep").as_deref(), Some("sym:a.cs::Outer.Inner"));
+    }
+
+    #[test]
+    fn a_class_and_a_file_have_no_container() {
+        assert_eq!(container("sym:a.ts::S"), None);
+        assert_eq!(container("file:a.ts"), None);
+    }
+
+    #[test]
+    fn a_slash_joined_address_is_one_name_and_a_dot_after_it_is_its_member() {
+        assert_eq!(container("sym:db/0002_rls.sql::app/clients.status").as_deref(), Some("sym:db/0002_rls.sql::app/clients"));
+        assert_eq!(bare("app/clients.status"), "app/clients");
+        assert_eq!(container("sym:infra/staging/main.tf::aws_instance/web"), None);
+        assert_eq!(bare("aws_instance/web"), "aws_instance/web");
+        // A dot in the file's path is not a member: the name starts after the first `::`.
+        assert_eq!(container("sym:db/v1.2/x.sql::app/clients.status").as_deref(), Some("sym:db/v1.2/x.sql::app/clients"));
+    }
+
+    /// A package-style Shell function is one name holding `::`. Split at the last one, its file
+    /// reads `lib.sh::log`, its name `info`, and an importer spelling `log::info` is lost.
+    #[test]
+    fn a_name_holding_a_double_colon_keeps_its_file_and_its_importers() {
+        use crate::model::{EdgeKind, Extraction, Graph, NodeKind};
+        assert_eq!(container("sym:lib.sh::log::info"), None);
+        let mut g = Graph::default();
+        let mut e = Extraction::default();
+        e.node(NodeKind::Symbol, "sym:lib.sh::log::info", "log::info", "", "lib.sh", 1);
+        e.edge("file:all.sh", "file:lib.sh", EdgeKind::ReExports, "*", "all.sh");
+        e.edge("file:run.sh", "file:all.sh", EdgeKind::Imports, "log::info", "run.sh");
+        g.apply(e);
+        assert_eq!(super::aliases(&g, "sym:lib.sh::log::info"), ["sym:all.sh::log::info"]);
+        assert_eq!(super::upstream(&g, "sym:lib.sh::log::info", 3).importers, ["all.sh", "run.sh"]);
+    }
+}
+
+#[cfg(test)]
+mod walk_cases {
+    use super::{downstream, trace, upstream, walks};
+    use crate::model::{Edge, EdgeKind, Extraction, Graph, NodeKind};
+
+    fn edge(target: &str, kind: EdgeKind) -> Edge {
+        Edge { source: "sym:db/0002.sql::app/clients.status".into(), target: target.into(), kind, context: String::new(), file: "db/0002.sql".into() }
+    }
+
+    #[test]
+    fn a_call_an_extension_and_a_reference_to_a_symbol_are_walked() {
+        assert!(walks(&edge("sym:a.ts::S", EdgeKind::Calls)));
+        assert!(walks(&edge("sym:a.ts::S", EdgeKind::Extends)));
+        assert!(walks(&edge("sym:db/0001.sql::app/clients", EdgeKind::References)));
+    }
+
+    #[test]
+    fn a_reference_to_a_document_id_an_entity_or_a_file_is_not_walked_and_nor_is_an_import() {
+        for target in ["FR-PAY-22", "entity:CancellationPolicy", "file:docs/x.md"] {
+            assert!(!walks(&edge(target, EdgeKind::References)), "{target}");
+        }
+        for kind in [EdgeKind::Imports, EdgeKind::ReExports, EdgeKind::Declares, EdgeKind::DecoratedBy] {
+            assert!(!walks(&edge("sym:a.ts::S", kind)), "{kind:?}");
+        }
+    }
+
+    /// A migration's column names the table another migration created; a TypeScript function cites
+    /// a requirement. The first is a dependency a blast walk must see, the second is `ask`'s alone.
+    fn graph() -> Graph {
+        let mut g = Graph::default();
+        let mut e = Extraction::default();
+        e.node(NodeKind::Symbol, "sym:db/0001.sql::app/clients", "app/clients", "", "db/0001.sql", 1);
+        e.node(NodeKind::Symbol, "sym:db/0002.sql::app/clients.status", "app/clients.status", "", "db/0002.sql", 1);
+        e.edge("sym:db/0002.sql::app/clients.status", "sym:db/0001.sql::app/clients", EdgeKind::References, "", "db/0002.sql");
+        e.node(NodeKind::Requirement, "FR-PAY-22", "FR-PAY-22", "", "docs/06.md", 1);
+        e.node(NodeKind::Symbol, "sym:svc/pay.ts::pay", "pay", "", "svc/pay.ts", 1);
+        e.edge("sym:svc/pay.ts::pay", "FR-PAY-22", EdgeKind::References, "comment", "svc/pay.ts");
+        g.apply(e);
+        g
+    }
+
+    #[test]
+    fn impact_and_trace_follow_a_reference_between_symbols() {
+        let g = graph();
+        let up = upstream(&g, "sym:db/0001.sql::app/clients", 3);
+        let d1: Vec<(&str, EdgeKind)> = up.layers[0].iter().map(|d| (d.id.as_str(), d.kind)).collect();
+        assert_eq!(d1, vec![("sym:db/0002.sql::app/clients.status", EdgeKind::References)]);
+        assert_eq!(up.layers.len(), 1);
+        assert_eq!(
+            trace(&g, "sym:db/0002.sql::app/clients.status", "sym:db/0001.sql::app/clients", 3),
+            Some(vec!["sym:db/0002.sql::app/clients.status".to_string(), "sym:db/0001.sql::app/clients".to_string()])
+        );
+    }
+
+    #[test]
+    fn a_reference_to_a_requirement_is_walked_by_neither() {
+        let g = graph();
+        assert!(upstream(&g, "FR-PAY-22", 3).layers.is_empty());
+        assert!(trace(&g, "sym:svc/pay.ts::pay", "FR-PAY-22", 3).is_none());
+    }
+
+    /// `changes` is the third reader of `walks`, through `impact::upstream`, and the SQL blast
+    /// suite's headline row: a table's hunk names the migration whose column depends on it.
+    #[test]
+    fn changes_to_a_table_name_the_migration_whose_column_references_it() {
+        use crate::changes::{report, Hunk};
+        let mut g = Graph::default();
+        let mut e = Extraction::default();
+        e.node_span(NodeKind::Symbol, "sym:db/0001.sql::app/clients", "app/clients", "", "db/0001.sql", (1, 1));
+        e.node_span(NodeKind::Symbol, "sym:db/0002.sql::app/clients.status", "app/clients.status", "", "db/0002.sql", (1, 1));
+        e.edge("sym:db/0002.sql::app/clients.status", "sym:db/0001.sql::app/clients", EdgeKind::References, "", "db/0002.sql");
+        g.apply(e);
+        let r = report(&g, &[Hunk { file: "db/0001.sql".into(), start: 1, end: 1 }], 3);
+        let affected: Vec<(&str, EdgeKind)> = r.affected.iter().map(|d| (d.id.as_str(), d.kind)).collect();
+        assert_eq!(affected, [("sym:db/0002.sql::app/clients.status", EdgeKind::References)]);
+        assert!(r.files.contains("db/0002.sql") && !r.files.contains("db/0001.sql"), "{:?}", r.files);
+    }
+
+    /// The commonest SQL shape: a table whose column references the table itself. Its own column
+    /// must not inflate "will break" or the risk, and a swapped index would walk the edge backwards.
+    #[test]
+    fn a_self_referencing_table_is_not_its_own_dependent_and_a_reference_is_walked_one_way() {
+        let mut g = Graph::default();
+        let mut e = Extraction::default();
+        e.node(NodeKind::Symbol, "sym:db/1.sql::app/staff", "app/staff", "", "db/1.sql", 1);
+        e.node(NodeKind::Symbol, "sym:db/1.sql::app/staff.manager_id", "app/staff.manager_id", "", "db/1.sql", 2);
+        e.edge("sym:db/1.sql::app/staff", "sym:db/1.sql::app/staff.manager_id", EdgeKind::Declares, "", "db/1.sql");
+        e.edge("sym:db/1.sql::app/staff.manager_id", "sym:db/1.sql::app/staff", EdgeKind::References, "", "db/1.sql");
+        e.node(NodeKind::Symbol, "sym:db/2.sql::app/shifts.staff_id", "app/shifts.staff_id", "", "db/2.sql", 1);
+        e.edge("sym:db/2.sql::app/shifts.staff_id", "sym:db/1.sql::app/staff", EdgeKind::References, "", "db/2.sql");
+        g.apply(e);
+        let up: Vec<String> = upstream(&g, "sym:db/1.sql::app/staff", 5).layers.into_iter().flatten().map(|d| d.id).collect();
+        assert_eq!(up, ["sym:db/2.sql::app/shifts.staff_id"]);
+        let down: Vec<String> = downstream(&g, "sym:db/2.sql::app/shifts.staff_id", 5).layers.into_iter().flatten().map(|d| d.id).collect();
+        assert_eq!(down, ["sym:db/1.sql::app/staff"]);
+        assert!(trace(&g, "sym:db/1.sql::app/staff", "sym:db/2.sql::app/shifts.staff_id", 5).is_none());
+    }
+
+    #[test]
+    fn a_change_to_an_outer_type_reaches_callers_of_its_nested_type_s_members() {
+        let mut g = Graph::default();
+        let mut e = Extraction::default();
+        for (id, line) in [("sym:a.cs::Outer", 1), ("sym:a.cs::Outer.Inner", 2), ("sym:a.cs::Outer.Inner.Go", 3)] {
+            e.node(NodeKind::Symbol, id, id.rsplit("::").next().unwrap(), "", "a.cs", line);
+        }
+        e.edge("sym:a.cs::Outer", "sym:a.cs::Outer.Inner", EdgeKind::Declares, "", "a.cs");
+        e.edge("sym:a.cs::Outer.Inner", "sym:a.cs::Outer.Inner.Go", EdgeKind::Declares, "", "a.cs");
+        e.node(NodeKind::Symbol, "sym:b.cs::Caller.Run", "Caller.Run", "", "b.cs", 1);
+        e.edge("sym:b.cs::Caller.Run", "sym:a.cs::Outer.Inner.Go", EdgeKind::Calls, "", "b.cs");
+        g.apply(e);
+        let up = upstream(&g, "sym:a.cs::Outer", 3);
+        let d1: Vec<&str> = up.layers.first().map(|l| l.iter().map(|d| d.id.as_str()).collect()).unwrap_or_default();
+        assert_eq!(d1, ["sym:b.cs::Caller.Run"]);
     }
 }
