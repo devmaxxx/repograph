@@ -2,6 +2,7 @@
 
 pub mod declarations;
 pub mod index;
+pub mod refs;
 pub mod resolve;
 
 #[cfg(test)]
@@ -27,15 +28,22 @@ pub struct Host<'a> {
     pub injected: &'a [(String, String)],
 }
 
-/// Parses `source` once and runs the declarations walk over it. A file the grammar cannot parse
-/// contributes only its file node — the extractor degrades to that rather than failing the file.
-pub fn extract(_resolver: &Resolver, rel: &str, source: &str) -> Extraction {
+/// Parses `source` once and runs both passes over it. A file the grammar cannot parse contributes
+/// only its file node — the extractor degrades to that rather than failing the file.
+pub fn extract(resolver: &Resolver, rel: &str, source: &str) -> Extraction {
     let mut ex = Extraction::default();
     file_node(rel, &mut ex);
-    let src = source.as_bytes();
-    let Some(tree) = Lang::CSharp.parse(src) else { return ex };
-    declarations::scan(tree.root_node(), rel, src, &Host::default(), &mut ex);
+    read(resolver, rel, source, &Host::default(), &mut ex);
     ex
+}
+
+/// Both passes over one parse, under `host`. Razor calls this on its blanked copy.
+pub(crate) fn read(resolver: &Resolver, rel: &str, source: &str, host: &Host, ex: &mut Extraction) -> declarations::Declared {
+    let src = source.as_bytes();
+    let Some(tree) = Lang::CSharp.parse(src) else { return declarations::Declared::default() };
+    let own = declarations::scan(tree.root_node(), rel, src, host, ex);
+    refs::scan(tree.root_node(), rel, src, host, &own, resolver, ex);
+    own
 }
 
 pub(crate) fn text<'a>(n: Node, src: &'a [u8]) -> &'a str {

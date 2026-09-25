@@ -333,3 +333,68 @@ fn bom_and_crlf_keep_rows_and_the_header() {
     let ex = one("Shop/B.cs", "\u{FEFF}namespace Shop;\r\n\r\npublic class B\r\n{\r\n    public void Run() {}\r\n}\r\n");
     assert_eq!(ex.nodes.iter().find(|n| n.id == "sym:Shop/B.cs::B.Run").map(|n| n.line), Some(5));
 }
+
+const GATEWAY: &str = "namespace Shop.Payments;\npublic interface IPaymentGateway\n{\n    void Charge(int amount);\n    void Refund(int amount);\n    System.Threading.Tasks.Task ChargeAsync<T>(T amount);\n}\n";
+
+#[test]
+fn a_type_the_file_names_is_an_import_of_its_declaring_file() {
+    let repo = Repo::new(&[
+        ("Payments/IPaymentGateway.cs", GATEWAY),
+        ("Orders/Receipt.cs", "namespace Shop.Orders;\npublic class Receipt {}\n"),
+        ("Orders/Order.cs", "namespace Shop.Orders;\npublic record Order(int Id);\n"),
+        ("Orders/Use.cs", "using Shop.Payments;\nnamespace Shop.Orders;\nclass Use\n{\n    private IPaymentGateway _gateway;\n    System.Collections.Generic.List<Order> Pending() => null;\n    object Cast(object o) => (Receipt)o;\n}\n"),
+    ]);
+    let ex = repo.extract("Orders/Use.cs");
+    let imports = edges(&ex, EdgeKind::Imports);
+    for (to, name) in [("file:Payments/IPaymentGateway.cs", "IPaymentGateway"), ("file:Orders/Order.cs", "Order"), ("file:Orders/Receipt.cs", "Receipt")] {
+        assert!(imports.contains(&("file:Orders/Use.cs", to, name)), "{to} [{name}] missing from {imports:?}");
+    }
+    assert_eq!(imports.len(), 3, "a System type is not in the repository and imports nothing: {imports:?}");
+}
+
+#[test]
+fn a_base_class_and_an_interface_in_other_files_are_extended() {
+    let repo = Repo::new(&[
+        ("Bedrock/ServiceBase.cs", "namespace Shop.Bedrock;\npublic abstract class ServiceBase {}\n"),
+        ("Orders/IOrderService.cs", "namespace Shop.Orders;\npublic interface IOrderService {}\n"),
+        ("Orders/OrderService.cs", "using Shop.Bedrock;\nnamespace Shop.Orders;\npublic class OrderService : ServiceBase, IOrderService {}\n"),
+    ]);
+    let ex = repo.extract("Orders/OrderService.cs");
+    let extends = edges(&ex, EdgeKind::Extends);
+    assert!(extends.contains(&("sym:Orders/OrderService.cs::OrderService", "sym:Bedrock/ServiceBase.cs::ServiceBase", "")), "{extends:?}");
+    assert!(extends.contains(&("sym:Orders/OrderService.cs::OrderService", "sym:Orders/IOrderService.cs::IOrderService", "")), "{extends:?}");
+}
+
+#[test]
+fn the_parts_of_a_partial_type_import_each_other() {
+    let repo = Repo::new(&[
+        ("Shop/OrderService.Bedrock.cs", "namespace Shop;\npublic partial class OrderService {}\n"),
+        ("Shop/OrderService.Billing.cs", "namespace Shop;\npartial class OrderService {}\n"),
+    ]);
+    let ex = repo.extract("Shop/OrderService.Billing.cs");
+    let imports = edges(&ex, EdgeKind::Imports);
+    assert!(imports.contains(&("file:Shop/OrderService.Billing.cs", "file:Shop/OrderService.Bedrock.cs", "OrderService")), "{imports:?}");
+}
+
+#[test]
+fn an_attribute_points_at_its_declaring_class_and_never_at_a_shared_node() {
+    let repo = Repo::new(&[
+        ("Bedrock/TrackedAttribute.cs", "namespace Shop.Bedrock;\npublic sealed class TrackedAttribute : System.Attribute {}\n"),
+        ("Bedrock/Retry.cs", "namespace Shop.Bedrock;\npublic sealed class Retry : System.Attribute {}\n"),
+        ("Orders/OrderService.cs", "using Shop.Bedrock;\nnamespace Shop.Orders;\n[Tracked, Serializable]\npublic class OrderService\n{\n    [Retry(3)]\n    public void Place() {}\n}\n"),
+    ]);
+    let ex = repo.extract("Orders/OrderService.cs");
+    assert_eq!(edges(&ex, EdgeKind::DecoratedBy), vec![
+        ("sym:Orders/OrderService.cs::OrderService", "sym:Bedrock/TrackedAttribute.cs::TrackedAttribute", ""),
+        ("sym:Orders/OrderService.cs::OrderService.Place", "sym:Bedrock/Retry.cs::Retry", ""),
+    ]);
+    assert!(!ids(&ex).iter().any(|i| i.starts_with("deco:") || i.starts_with("anno:")), "{:?}", ids(&ex));
+}
+
+#[test]
+fn an_id_cited_in_a_comment_or_a_string_is_a_reference_from_where_it_sits() {
+    let ex = one("Shop/Jcs.cs", "namespace Shop;\n// FR-VIS-47: canonical form before signing\npublic class Jcs\n{\n    public string Name() => \"ADR-022\";\n}\n");
+    let refs = edges(&ex, EdgeKind::References);
+    assert!(refs.contains(&("file:Shop/Jcs.cs", "FR-VIS-47", "comment")), "{refs:?}");
+    assert!(refs.contains(&("sym:Shop/Jcs.cs::Jcs.Name", "ADR-022", "string")), "{refs:?}");
+}
