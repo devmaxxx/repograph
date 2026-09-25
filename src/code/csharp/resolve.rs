@@ -26,10 +26,14 @@ impl<'a> Scope<'a> {
         Scope { rel, dotnet, own, usings }
     }
 
+    // Read by a Razor view's resolution, which the Razor task adds.
+    #[allow(dead_code)]
     pub(crate) fn usings(&self) -> &[Using] {
         &self.usings
     }
 
+    // Read by a Razor view's resolution, which the Razor task adds.
+    #[allow(dead_code)]
     pub(crate) fn dotnet(&self) -> &'a DotNet {
         self.dotnet
     }
