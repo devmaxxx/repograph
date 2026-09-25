@@ -1,5 +1,10 @@
 //! Razor: a component's directives and markup tags, and its `@code` blocks read through the C# walk.
 
+pub mod blank;
+
+#[cfg(test)]
+mod cases;
+
 use crate::code::imports::Resolver;
 use crate::code::lang::file_node;
 use crate::model::Extraction;

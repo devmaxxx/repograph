@@ -6,7 +6,7 @@ pub mod refs;
 pub mod resolve;
 
 #[cfg(test)]
-mod cases;
+pub(crate) mod cases;
 
 use crate::code::imports::Resolver;
 use crate::code::lang::{file_node, Lang};
