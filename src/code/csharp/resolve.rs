@@ -18,6 +18,14 @@ pub struct Scope<'a> {
     dotnet: &'a DotNet,
     own: &'a Declared,
     usings: Vec<Using>,
+    /// The host's `@using` namespaces alone: all Razor reads to find a component for a tag.
+    razor_usings: Vec<Using>,
+}
+
+/// What `walk_bases` met on the way up.
+pub struct Bases {
+    /// Base names, as written, that resolve to no repo type.
+    pub unresolved: Vec<String>,
 }
 
 impl<'a> Scope<'a> {
@@ -26,7 +34,8 @@ impl<'a> Scope<'a> {
         usings.extend(own.global_usings.iter().cloned());
         usings.extend(host.usings.iter().cloned());
         usings.extend(dotnet.global_usings(rel));
-        Scope { rel, dotnet, own, usings }
+        let razor_usings = host.usings.iter().filter(|u| matches!(u, Using::Namespace(_))).cloned().collect();
+        Scope { rel, dotnet, own, usings, razor_usings }
     }
 
     pub(crate) fn own(&self) -> &'a Declared {
@@ -49,11 +58,11 @@ impl<'a> Scope<'a> {
         self.types_under(name, namespace, class, &self.usings)
     }
 
-    /// A markup tag's type: Razor discovers components through the namespaces around the file and
-    /// its `@using` namespaces, never through an alias.
+    /// A markup tag's type. Razor's `ComponentDirectiveVisitor` finds a component by its full name,
+    /// in the file's namespace or one around it, or in a namespace a Razor `@using` names — never
+    /// through an alias, a `using static` or a C# `global using`.
     pub fn component_types(&self, name: &str, namespace: &str) -> Vec<Part> {
-        let usings: Vec<Using> = self.usings.iter().filter(|u| !matches!(u, Using::Alias(..))).cloned().collect();
-        self.types_under(name, namespace, None, &usings)
+        self.types_under(name, namespace, None, &self.razor_usings)
     }
 
     /// `name` as the file declaring `p` reads it around `p` — `p`'s namespace, the types enclosing
@@ -65,7 +74,7 @@ impl<'a> Scope<'a> {
         if p.rel == self.rel {
             return self.types(name, namespace, class);
         }
-        let mut usings = self.dotnet.usings(&p.rel).to_vec();
+        let mut usings = self.dotnet.file_usings(&p.rel);
         usings.extend(self.dotnet.global_usings(&p.rel));
         self.types_under(name, namespace, class, &usings)
     }
@@ -142,6 +151,44 @@ impl<'a> Scope<'a> {
     /// extension of another type.
     pub fn declares_instance_member(&self, member: &str) -> bool {
         self.dotnet.declares_instance_member(member)
+    }
+
+    /// `parts`' base chain, however many files it crosses, one level at a time: `level` gets every
+    /// repo part the level's bases resolve to and stops the walk by returning true. Each base name
+    /// is read where its part is declared — that part's namespace, enclosing types and usings —
+    /// never in the caller's scope, where a same-named type the caller happens to see would replace
+    /// the real base. A type already walked is not walked again, so a cycle ends.
+    pub fn walk_bases(&self, parts: &[Part], mut level: impl FnMut(&[Part]) -> bool) -> Bases {
+        let mut seen: std::collections::BTreeSet<String> = parts.iter().map(|p| p.full.clone()).collect();
+        let mut frontier = parts.to_vec();
+        let mut unresolved = Vec::new();
+        for _ in 0..32 {
+            if frontier.is_empty() {
+                break;
+            }
+            let mut next = Vec::new();
+            let mut all = Vec::new();
+            for p in &frontier {
+                for b in self.bases(p) {
+                    let bp = self.types_around(&b, p);
+                    if bp.is_empty() {
+                        unresolved.push(b);
+                        continue;
+                    }
+                    // Dedupe by type, not by part: a partial base's list may sit on any of its
+                    // parts, so a type seen for the first time keeps every part it has.
+                    let fresh: std::collections::BTreeSet<String> = bp.iter().map(|q| q.full.clone()).filter(|f| !seen.contains(f)).collect();
+                    next.extend(bp.iter().filter(|q| fresh.contains(&q.full)).cloned());
+                    seen.extend(fresh);
+                    all.extend(bp);
+                }
+            }
+            if level(&all) {
+                break;
+            }
+            frontier = next;
+        }
+        Bases { unresolved }
     }
 
     /// The base-list names one part writes, unresolved; read them with `types_around` the same part.

@@ -42,6 +42,8 @@ pub struct Directives {
     /// Upper-case markup tags outside the blocks and comments: (name, line, the upper-case tag
     /// open around it). A tag nested in a component can be that component's parameter, not a render.
     pub tags: Vec<(String, u32, Option<String>)>,
+    /// `@inherits`, as written: the component's base class, where its inherited parameters live.
+    pub inherits: Option<String>,
     /// The blocks cannot be read, so nothing the file writes past its node would be proven.
     pub unread: bool,
 }
@@ -146,7 +148,10 @@ pub fn directives(src: &str) -> Directives {
             if let Some((t, name)) = rest.rsplit_once([' ', '\t']) {
                 d.injects.push((t.trim().to_string(), name.trim().trim_start_matches('@').to_string(), line));
             }
-        } else if let Some(t) = arg("@inherits").or_else(|| arg("@implements")) {
+        } else if let Some(t) = arg("@inherits") {
+            d.inherits = Some(t.to_string());
+            d.types.push((t.to_string(), line, true));
+        } else if let Some(t) = arg("@implements") {
             d.types.push((t.to_string(), line, true));
         } else if let Some(t) = arg("@model") {
             d.types.push((t.to_string(), line, false));
@@ -160,8 +165,9 @@ pub fn directives(src: &str) -> Directives {
     for m in tag.captures_iter(src) {
         let whole = m.get(0).expect("group 0 always matches");
         let at = whole.start();
-        // A markup tag never follows a name: `List<Badge>` and `OfType<Badge>()` are C# generics.
-        let generic = at > 0 && (b[at - 1].is_ascii_alphanumeric() || b[at - 1] == b'_' || b[at - 1] == b'.');
+        // A markup tag never follows a name: `List<Badge>` and `OfType<Badge>()` are C# generics. A
+        // closing tag may follow text (`<Ext>Save</Ext>`), so only an opening one is tested.
+        let generic = m[1].is_empty() && at > 0 && (b[at - 1].is_ascii_alphanumeric() || b[at - 1] == b'_' || b[at - 1] == b'.');
         if generic || inside(at) || lines.iter().any(|l| l.contains(&at)) {
             continue;
         }
@@ -285,7 +291,7 @@ pub fn extract(resolver: &Resolver, rel: &str, source: &str) -> Extraction {
         ex.edge(&id, &member, EdgeKind::Declares, "", rel);
     }
     let host = Host { component: Some(&name), namespace: &namespace, usings: &usings, injected: &injected };
-    let own = match text {
+    let mut own = match text {
         Some(text) => csharp::read(resolver, rel, &text, &host, &mut ex),
         // Without a block the component still has injected members to resolve through.
         None => Declared {
@@ -299,6 +305,13 @@ pub fn extract(resolver: &Resolver, rel: &str, source: &str) -> Extraction {
             ..Declared::default()
         },
     };
+    // The wrapper class is blanked from `@inherits`, so its base list is written back here for the
+    // base walk.
+    if let Some(base) = &d.inherits {
+        for t in own.types.iter_mut().filter(|t| t.local == name) {
+            t.bases.push(base.clone());
+        }
+    }
     let scope = Scope::new(rel, dotnet, &own, &host);
     for (t, _, _) in &d.injects {
         imports(&scope, rel, t, &namespace, Some(&name), &mut ex);
@@ -319,11 +332,20 @@ pub fn extract(resolver: &Resolver, rel: &str, source: &str) -> Extraction {
         parts
     };
     for (tag, _, parent) in &d.tags {
-        // Inside a component, a tag naming one of its members is a parameter (`<Card><Header>`); inside
-        // one the repo does not declare, the parameters are unknown and any child could be one.
+        // Inside a component, a tag naming one of its members, or a member of a base it inherits, is a
+        // parameter (`<Card><Header>`). Inside one whose parameters the repo cannot list — not declared
+        // here, or on a base from a library — any child could be one.
         if let Some(parent) = parent {
             let owner = rendered(parent);
             if owner.is_empty() || owner.iter().any(|p| scope.members(p).is_some_and(|m| m.contains_key(tag))) {
+                continue;
+            }
+            let mut inherited = false;
+            let walked = scope.walk_bases(&owner, |level| {
+                inherited = level.iter().any(|p| scope.members(p).is_some_and(|m| m.contains_key(tag)));
+                inherited
+            });
+            if inherited || walked.unresolved.iter().any(|b| !parameter_free(b)) {
                 continue;
             }
         }
@@ -337,6 +359,14 @@ pub fn extract(resolver: &Resolver, rel: &str, source: &str) -> Extraction {
         ex.edge(&file, &format!("file:{}", p.rel), EdgeKind::Imports, first_segment(&p.local), rel);
     }
     ex
+}
+
+/// A framework base that declares no parameter a child tag could name, or an interface a code-behind
+/// lists beside its base, which declares none either.
+fn parameter_free(base: &str) -> bool {
+    let head = base.split('<').next().unwrap_or(base).trim();
+    let last = head.rsplit('.').next().unwrap_or(head);
+    matches!(last, "ComponentBase" | "LayoutComponentBase" | "OwningComponentBase" | "IDisposable" | "IAsyncDisposable")
 }
 
 /// A view or an imports file: the `Imports` its directives' types prove, read under its imports

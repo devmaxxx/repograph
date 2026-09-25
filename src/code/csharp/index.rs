@@ -88,6 +88,19 @@ fn folders(base: &str, dir: &str) -> String {
     below.split('/').filter(|s| !s.is_empty()).map(identifier).collect::<Vec<_>>().join(".")
 }
 
+/// A `.razor` component as the index keeps it.
+#[derive(Debug)]
+struct Component {
+    /// The `@namespace` the file names, if any.
+    namespace: Option<String>,
+    /// Its `@code` and `@inject` members.
+    members: Members,
+    /// Its `@inherits`, as written.
+    bases: Vec<String>,
+    /// Its own `@using`s.
+    usings: Vec<Using>,
+}
+
 #[derive(Debug, Default)]
 pub struct DotNet {
     /// `Namespace.Outer.Inner` → every part with its members and base list.
@@ -110,8 +123,8 @@ pub struct DotNet {
     razor_imports: BTreeMap<String, (Vec<Using>, Option<String>)>,
     /// `_ViewImports.cshtml` directory → its usings and its `@namespace`: the views' `_Imports.razor`.
     view_imports: BTreeMap<String, (Vec<Using>, Option<String>)>,
-    /// Component rel → the `@namespace` the file names, if any, and its `@code` and `@inject` members.
-    components: BTreeMap<String, (Option<String>, Members)>,
+    /// Component rel → what the index keeps of it.
+    components: BTreeMap<String, Component>,
     /// Built on first use, like `global_by_project`: component full name → its parts.
     components_by_full: OnceLock<BTreeMap<String, Vec<Part>>>,
 }
@@ -156,18 +169,38 @@ impl DotNet {
     pub fn members(&self, full: &str, rel: &str, local: &str) -> Option<&Members> {
         match self.entry(full, rel, local) {
             Some(e) => Some(&e.members),
-            None => self.components.get(rel).filter(|_| self.component_parts(full).iter().any(|p| p.rel == rel && p.local == local)).map(|(_, m)| m),
+            None => self.component(full, rel, local).map(|c| &c.members),
         }
     }
 
-    /// The base-list names one part writes, unresolved.
+    /// The component `rel` when it is the part `local` of `full`.
+    fn component(&self, full: &str, rel: &str, local: &str) -> Option<&Component> {
+        self.components.get(rel).filter(|_| self.component_parts(full).iter().any(|p| p.rel == rel && p.local == local))
+    }
+
+    /// The base-list names one part writes, unresolved: a component's `@inherits` among them.
     pub fn bases(&self, full: &str, rel: &str, local: &str) -> &[String] {
-        self.entry(full, rel, local).map_or(&[], |e| &e.bases)
+        match self.entry(full, rel, local) {
+            Some(e) => &e.bases,
+            None => self.component(full, rel, local).map_or(&[], |c| c.bases.as_slice()),
+        }
     }
 
     /// The file usings `rel` writes, its `global using`s excluded.
     pub fn usings(&self, rel: &str) -> &[Using] {
         self.usings.get(rel).map_or(&[], Vec::as_slice)
+    }
+
+    /// The usings a file's declarations read: a component's are its imports files' and its own `@using`s.
+    pub fn file_usings(&self, rel: &str) -> Vec<Using> {
+        match self.components.get(rel) {
+            Some(c) => {
+                let mut usings = self.razor_usings(rel);
+                usings.extend(c.usings.iter().cloned());
+                usings
+            }
+            None => self.usings(rel).to_vec(),
+        }
     }
 
     /// Whether any type in the repository declares `member` as a field, property or method of its
@@ -221,7 +254,8 @@ impl DotNet {
             map.insert(parent(rel).to_string(), (d.usings.clone(), d.namespace.clone()));
         } else if crate::code::razor::component_name(rel).is_some() {
             self.instance_members.extend(members.keys().cloned());
-            self.components.insert(rel.to_string(), (d.namespace.clone(), members));
+            let component = Component { namespace: d.namespace.clone(), members, bases: d.inherits.iter().cloned().collect(), usings: d.usings.clone() };
+            self.components.insert(rel.to_string(), component);
         }
     }
 
@@ -278,7 +312,7 @@ impl DotNet {
     pub fn component_parts(&self, full: &str) -> Vec<Part> {
         let by = self.components_by_full.get_or_init(|| {
             let mut m: BTreeMap<String, Vec<Part>> = BTreeMap::new();
-            for (rel, (own, _)) in &self.components {
+            for (rel, Component { namespace: own, .. }) in &self.components {
                 let Some(stem) = crate::code::razor::component_name(rel) else { continue };
                 let full = join(&self.razor_namespace(rel, own.as_deref()), &stem);
                 m.entry(full.clone()).or_default().push(Part { rel: rel.clone(), local: stem, full });

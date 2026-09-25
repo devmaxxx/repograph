@@ -567,3 +567,58 @@ fn a_code_behind_calls_a_member_its_component_declares_in_code() {
     let ex = Repo::new(&files).extract("Web/Pages/Checkout.razor.cs");
     assert!(edges(&ex, EdgeKind::Calls).contains(&("sym:Web/Pages/Checkout.razor.cs::Checkout.Confirm", "sym:Web/Pages/Checkout.razor::Checkout.Pay", "")), "{:?}", ex.edges);
 }
+
+#[test]
+fn a_tag_never_resolves_through_a_csharp_global_using() {
+    let globals = ("Web/Globals.cs", "global using Shop.Badges;\n");
+    let badge = ("Badges/Badge.razor", "@namespace Shop.Badges\n<span/>\n");
+    let service = ("Badges/IBadgeService.cs", "namespace Shop.Badges;\npublic interface IBadgeService {}\n");
+    let page = ("Web/Pages/P11.razor", "@inject IBadgeService Badges\n<Badge />\n");
+    let mut files = WEB.to_vec();
+    files.extend_from_slice(&[globals, badge, service, page]);
+    let ex = Repo::new(&files).extract("Web/Pages/P11.razor");
+    assert!(edges(&ex, EdgeKind::Calls).is_empty(), "{:?}", ex.edges);
+    assert!(edges(&ex, EdgeKind::Imports).contains(&("file:Web/Pages/P11.razor", "file:Badges/IBadgeService.cs", "IBadgeService")), "an @inject type still reads the global using: {:?}", ex.edges);
+}
+
+const CARD_BASE: (&str, &str) = ("Web/Shared/CardBase.cs", "namespace Shop.Web.Shared;\npublic abstract class CardBase : ComponentBase\n{\n    [Parameter] public RenderFragment Header { get; set; }\n}\n");
+const HEADER: (&str, &str) = ("Web/Shared/Header.razor", "<h1/>\n");
+
+#[test]
+fn a_parameter_a_component_inherits_is_still_its_parameter() {
+    let card = ("Web/Shared/Card.razor", "@inherits CardBase\n<div>@Header</div>\n");
+    let page = ("Web/Pages/P12.razor", "<Card>\n  <Header>x</Header>\n  <OrderLine />\n</Card>\n");
+    assert_eq!(calls_of(&[CARD_BASE, HEADER, card, page], "Web/Pages/P12.razor"), vec!["sym:Web/Shared/Card.razor::Card", "sym:Web/Shared/OrderLine.razor::OrderLine"]);
+}
+
+#[test]
+fn a_parameter_a_code_behind_base_declares_is_still_its_parameter() {
+    let panel = ("Web/Shared/Panel.razor", "<div>@Header</div>\n");
+    let behind = ("Web/Shared/Panel.razor.cs", "namespace Shop.Web.Shared;\npublic partial class Panel : CardBase {}\n");
+    let tile = ("Web/Shared/Tile.razor", "<div/>\n");
+    let tile_behind = ("Web/Shared/Tile.razor.cs", "namespace Shop.Web.Shared;\npublic partial class Tile : ComponentBase, IDisposable\n{\n    public void Dispose() {}\n}\n");
+    let page = ("Web/Pages/P13.razor", "<Panel><Header>x</Header><OrderLine /></Panel>\n<Tile><OrderLine /></Tile>\n");
+    assert_eq!(
+        calls_of(&[CARD_BASE, HEADER, panel, behind, tile, tile_behind, page], "Web/Pages/P13.razor"),
+        vec![
+            "sym:Web/Shared/OrderLine.razor::OrderLine",
+            "sym:Web/Shared/Panel.razor.cs::Panel",
+            "sym:Web/Shared/Panel.razor::Panel",
+            "sym:Web/Shared/Tile.razor.cs::Tile",
+            "sym:Web/Shared/Tile.razor::Tile",
+        ],
+    );
+}
+
+#[test]
+fn a_component_on_a_library_base_has_parameters_no_one_can_read() {
+    let ext = ("Web/Shared/Ext.razor", "@inherits MudComponentBase\n<div/>\n");
+    let page = ("Web/Pages/P14.razor", "<Ext><OrderLine /></Ext>\n");
+    assert_eq!(calls_of(&[ext, page], "Web/Pages/P14.razor"), vec!["sym:Web/Shared/Ext.razor::Ext"]);
+}
+
+#[test]
+fn a_close_tag_after_text_still_closes_its_tag() {
+    let d = super::directives("<Ext>Save</Ext>\n<OrderLine />\n");
+    assert_eq!(d.tags, vec![("Ext".to_string(), 1, None), ("OrderLine".to_string(), 2, None)]);
+}

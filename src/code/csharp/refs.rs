@@ -453,11 +453,7 @@ impl Reader<'_> {
         self.based(&parts, method)
     }
 
-    /// `method` walked up `parts`' base chain, however many files it crosses: every part's own base
-    /// list, whichever file wrote it, so a subclass and its base need not share a file with each
-    /// other or with the caller. Each base name is read where its part is declared — that part's
-    /// namespace, enclosing types and file usings — never in the caller's scope, where a same-named
-    /// type the caller happens to see would replace the real base.
+    /// `method` walked up `parts`' base chain (`Scope::walk_bases`).
     ///
     /// A base name that resolves to no repo type at all — a framework base such as `object` or
     /// `List<T>` — blocks the extension rule outright: a type this file cannot read could easily
@@ -465,36 +461,18 @@ impl Reader<'_> {
     /// entirely in repo types, none of which declare `method`, is a proven miss, and only then does
     /// `Unknown` let the extension rule stand in.
     fn based(&self, parts: &[Part], method: &str) -> Typed {
-        let mut seen: BTreeSet<String> = parts.iter().map(|p| p.full.clone()).collect();
-        let mut frontier = parts.to_vec();
-        let mut external = false;
-        for _ in 0..32 {
-            if frontier.is_empty() {
-                break;
-            }
-            let mut next = Vec::new();
-            let mut found = Vec::new();
-            for p in &frontier {
-                for b in self.scope.bases(p) {
-                    let bp = self.scope.types_around(&b, p);
-                    if bp.is_empty() {
-                        external = true;
-                        continue;
-                    }
-                    found.extend(self.scope.member_ids(&bp, method));
-                    // Dedupe by type, not by part: a partial base's list may sit on any of its
-                    // parts, so a type seen for the first time keeps every part it has.
-                    let fresh: BTreeSet<String> = bp.iter().map(|q| q.full.clone()).filter(|f| !seen.contains(f)).collect();
-                    next.extend(bp.into_iter().filter(|q| fresh.contains(&q.full)));
-                    seen.extend(fresh);
-                }
-            }
-            if !found.is_empty() {
-                return Typed::Found(found);
-            }
-            frontier = next;
+        let mut found = Vec::new();
+        let walked = self.scope.walk_bases(parts, |level| {
+            found = self.scope.member_ids(level, method);
+            !found.is_empty()
+        });
+        if !found.is_empty() {
+            Typed::Found(found)
+        } else if !walked.unresolved.is_empty() {
+            Typed::Found(Vec::new())
+        } else {
+            Typed::Unknown
         }
-        if external { Typed::Found(Vec::new()) } else { Typed::Unknown }
     }
 
     /// A known local, parameter or field whose declared type this file did not read. The extension
