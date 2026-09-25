@@ -704,3 +704,15 @@ fn a_razor_comment_after_a_directive_is_not_part_of_its_argument() {
     assert_eq!(d.types.iter().map(|(t, _, _)| t.as_str()).collect::<Vec<_>>(), vec!["ComponentBase", "Shop.Models.Order"]);
     assert_eq!(header_under("@inherits ComponentBase @* <T> *@\n<div/>\n", None), vec!["sym:Web/Shared/Header.razor::Header", "sym:Web/Shared/Wrap.razor::Wrap"]);
 }
+
+#[test]
+fn two_words_after_inherits_name_no_base_rather_than_the_two_joined() {
+    assert_eq!(super::base_name("Outer<int> . InnerBase"), "Outer.InnerBase");
+    assert_eq!(super::base_name("Base Page"), "");
+    assert_eq!(super::directives("@inherits Base Page\n").inherits, None);
+    let wrap = "@inherits Base Page\n<div/>\n";
+    let mut files = WEB.to_vec();
+    files.extend_from_slice(&[("Web/Shared/BasePage.cs", "namespace Shop.Web.Shared;\npublic class BasePage {}\n"), ("Web/Shared/Wrap.razor", wrap)]);
+    let ex = Repo::new(&files).extract("Web/Shared/Wrap.razor");
+    assert!(edges(&ex, EdgeKind::Extends).is_empty(), "{:?}", edges(&ex, EdgeKind::Extends));
+}

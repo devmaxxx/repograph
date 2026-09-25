@@ -152,7 +152,7 @@ pub fn directives(src: &str) -> Directives {
                 d.injects.push((t.trim().to_string(), name.trim().trim_start_matches('@').to_string(), line));
             }
         } else if let Some(t) = arg("@inherits") {
-            d.inherits = Some(base_name(t));
+            d.inherits = Some(base_name(t)).filter(|b| !b.is_empty());
             d.inherits_generic = last_segment_generic(t);
             d.types.push((t.to_string(), line, true));
         } else if let Some(t) = arg("@implements") {
@@ -327,8 +327,9 @@ pub fn extract(resolver: &Resolver, rel: &str, source: &str) -> Extraction {
         imports(&scope, rel, t, &namespace, None, &mut ex);
         // A base's name is every segment with its type arguments dropped: the first word of
         // `Outer<int>.InnerBase` is `Outer`, which is not the base.
-        if *base {
-            for p in &scope.types(&base_name(t), &namespace, None) {
+        let name = base_name(t);
+        if *base && !name.is_empty() {
+            for p in &scope.types(&name, &namespace, None) {
                 ex.edge(&id, &format!("sym:{}::{}", p.rel, p.local), EdgeKind::Extends, "", rel);
             }
         }
@@ -388,7 +389,8 @@ fn framework_parameters(base: &str, generic: bool) -> Option<&'static [&'static 
 }
 
 /// A written type as a C# base list keeps it: dots, without `global::` or any segment's type
-/// arguments, so `Outer<int>.InnerBase` is `Outer.InnerBase`.
+/// arguments, so `Outer<int>.InnerBase` is `Outer.InnerBase`. Two words left side by side
+/// (`A B`) name no type, and joining them would name one the text never wrote, so that is empty.
 fn base_name(written: &str) -> String {
     let t = written.trim();
     let t = t.strip_prefix("global::").unwrap_or(t);
@@ -398,11 +400,15 @@ fn base_name(written: &str) -> String {
         match c {
             '<' => depth += 1,
             '>' => depth = depth.saturating_sub(1),
-            c if depth == 0 && !c.is_whitespace() => out.push(c),
+            c if depth == 0 => out.push(c),
             _ => {}
         }
     }
-    out
+    let joined: Vec<&str> = out.split('.').map(str::trim).collect();
+    if joined.iter().any(|s| s.contains(char::is_whitespace)) {
+        return String::new();
+    }
+    joined.join(".")
 }
 
 /// Whether the type's own name, not an outer type it is nested in, carries type arguments.
