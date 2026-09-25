@@ -33,6 +33,9 @@ impl Lang {
             Some("ts" | "mts" | "cts" | "js" | "mjs" | "cjs") => Some(Lang::TypeScript),
             // JSX needs the TSX grammar; the TypeScript one reads `<div/>` as a type assertion.
             Some("tsx" | "jsx") => Some(Lang::Tsx),
+            Some("cs") => Some(Lang::CSharp),
+            // A view (`.cshtml`) is Razor too: same directives, same `@functions`, one reader.
+            Some("razor" | "cshtml") => Some(Lang::Razor),
             _ => None,
         }
     }
@@ -42,6 +45,8 @@ impl Lang {
         match self {
             Lang::TypeScript => Some(Language::new(tree_sitter_typescript::LANGUAGE_TYPESCRIPT)),
             Lang::Tsx => Some(Language::new(tree_sitter_typescript::LANGUAGE_TSX)),
+            Lang::CSharp => Some(tree_sitter::Language::new(tree_sitter_c_sharp::LANGUAGE)),
+            Lang::Razor => None,
             // A language whose family plan has not landed has no crate in this build, and `of`
             // never returns it. Once every plan has landed the arm is unreachable, and harmless.
             #[allow(unreachable_patterns)]
@@ -58,6 +63,7 @@ impl Lang {
     pub fn family(self) -> Family {
         match self {
             Lang::TypeScript | Lang::Tsx => Family::TypeScript,
+            Lang::CSharp | Lang::Razor => Family::DotNet,
             // Reached only by a variant `of` cannot return yet; see `grammar`.
             #[allow(unreachable_patterns)]
             other => unreachable!("{other:?} has no family arm: its plan has not landed"),

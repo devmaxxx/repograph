@@ -782,8 +782,8 @@ fn the_file_node_every_language_writes_is_the_one_an_unread_file_always_got() {
 #[test]
 fn the_note_names_each_extension_once_with_its_count() {
     use crate::code::lang::files_only_note;
-    let rels = ["a/B.cs", "a/C.cs", "b/x.ts", "Makefile"];
+    let rels = ["a/B.log", "a/C.log", "b/x.ts", "Makefile"];
     assert_eq!(files_only_note(rels.into_iter()).as_deref(),
-        Some("code: no grammar reads 2 .cs, 1 (no extension) — indexed as files only"));
+        Some("code: no grammar reads 2 .log, 1 (no extension) — indexed as files only"));
     assert_eq!(files_only_note(["b/x.ts", "c/y.tsx", "d/z.mjs"].into_iter()), None);
 }
