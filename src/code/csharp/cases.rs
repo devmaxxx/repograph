@@ -821,6 +821,74 @@ fn an_extension_still_fires_when_the_full_repo_base_chain_lacks_the_method() {
     );
 }
 
+const USE_GO: &str = "class M { void Go(Order o) { o.Save(); } }\n";
+
+#[test]
+fn a_base_name_resolves_where_its_subclass_is_declared_not_where_the_caller_sits() {
+    let repo = Repo::new(&[
+        ("Orders/Entity.cs", ENTITY),
+        ("Orders/Order.cs", ORDER_ENTITY),
+        ("Ext/E.cs", SAVE_EXT),
+        ("Use/Entity.cs", "namespace Shop.Use;\npublic class Entity { public void Save() {} }\n"),
+        ("Use/M.cs", &format!("using Shop.Orders;\nusing Shop.Ext;\nnamespace Shop.Use;\n{USE_GO}")),
+    ]);
+    let ex = repo.extract("Use/M.cs");
+    assert_eq!(
+        edges(&ex, EdgeKind::Calls),
+        vec![("sym:Use/M.cs::M.Go", "sym:Orders/Entity.cs::Entity.Save", "")],
+        "Order's Entity is Shop.Orders.Entity; the caller's own Shop.Use.Entity is not its base",
+    );
+}
+
+#[test]
+fn a_caller_s_same_named_type_without_the_method_does_not_let_an_extension_replace_the_real_base() {
+    let repo = Repo::new(&[
+        ("Orders/Entity.cs", ENTITY),
+        ("Orders/Order.cs", ORDER_ENTITY),
+        ("Ext/E.cs", SAVE_EXT),
+        ("Use2/Entity.cs", "namespace Shop.Use2;\npublic class Entity {}\n"),
+        ("Use2/M.cs", &format!("using Shop.Orders;\nusing Shop.Ext;\nnamespace Shop.Use2;\n{USE_GO}")),
+    ]);
+    let ex = repo.extract("Use2/M.cs");
+    assert_eq!(
+        edges(&ex, EdgeKind::Calls),
+        vec![("sym:Use2/M.cs::M.Go", "sym:Orders/Entity.cs::Entity.Save", "")],
+        "the caller's Shop.Use2.Entity lacks Save, but Order's real base declares it",
+    );
+}
+
+#[test]
+fn a_caller_s_nested_type_never_stands_in_for_a_receiver_s_base() {
+    let repo = Repo::new(&[
+        ("Orders/Entity.cs", ENTITY),
+        ("Orders/Order.cs", ORDER_ENTITY),
+        ("Ext/E.cs", SAVE_EXT),
+        ("Use/M.cs", "using Shop.Orders;\nusing Shop.Ext;\nnamespace Shop.Use;\nclass M { class Entity {} void Go(Order o) { o.Save(); } }\n"),
+    ]);
+    let ex = repo.extract("Use/M.cs");
+    assert_eq!(
+        edges(&ex, EdgeKind::Calls),
+        vec![("sym:Use/M.cs::M.Go", "sym:Orders/Entity.cs::Entity.Save", "")],
+        "M.Entity is visible to the caller, not to Order's base list",
+    );
+}
+
+#[test]
+fn a_base_name_resolves_through_a_using_only_its_subclass_s_file_has() {
+    let repo = Repo::new(&[
+        ("Bedrock/Entity.cs", "namespace Shop.Bedrock;\npublic class Entity { public void Save() {} }\n"),
+        ("Orders/Order.cs", "using Shop.Bedrock;\nnamespace Shop.Orders;\npublic class Order : Entity {}\n"),
+        ("Ext/E.cs", SAVE_EXT),
+        ("Use/M.cs", &format!("using Shop.Orders;\nusing Shop.Ext;\nnamespace Shop.Use;\n{USE_GO}")),
+    ]);
+    let ex = repo.extract("Use/M.cs");
+    assert_eq!(
+        edges(&ex, EdgeKind::Calls),
+        vec![("sym:Use/M.cs::M.Go", "sym:Bedrock/Entity.cs::Entity.Save", "")],
+        "Order.cs imports Shop.Bedrock, so its Entity is Shop.Bedrock.Entity though the caller never imports it",
+    );
+}
+
 #[test]
 fn a_string_literal_inside_an_interpolation_hole_is_referenced_once() {
     // `CodeExtractor::extract` sorts and dedups edges afterwards, which would hide a duplicate

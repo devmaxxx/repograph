@@ -20,6 +20,15 @@ pub struct Part {
 
 type Members = BTreeMap<String, Option<String>>;
 
+/// One part as the index keeps it: what it declares, and its base list as written, read later in
+/// the part's own scope rather than any caller's.
+#[derive(Debug)]
+struct Entry {
+    part: Part,
+    members: Members,
+    bases: Vec<String>,
+}
+
 thread_local! {
     /// `Resolver::new` asks `header_for` and then `collect` about the same file back to back; a parse
     /// of the corpus's 1,176 C# files costs about 0.4 s, and one parse serves both calls.
@@ -60,17 +69,16 @@ pub(crate) fn identifier(s: &str) -> String {
 
 #[derive(Debug, Default)]
 pub struct DotNet {
-    /// `Namespace.Outer.Inner` → every part with its members.
-    types: BTreeMap<String, Vec<(Part, Members)>>,
+    /// `Namespace.Outer.Inner` → every part with its members and base list.
+    types: BTreeMap<String, Vec<Entry>>,
     /// Extension method name → (declaring namespace, declaring type's full name).
     extensions: BTreeMap<String, BTreeSet<(String, String)>>,
     /// Names of every field, property or method some type declares as its own — an extension of
     /// another type excluded. Cheap enough to ask "could a real repo type be the receiver here"
     /// without resolving one, for a value whose own declared type this file did not read.
     instance_members: BTreeSet<String>,
-    /// `Namespace.Outer.Inner` → the base-list names written for it, anywhere in the repo — every
-    /// partial declaration's own file included, not only the file asking. `Scope::bases` reads it.
-    bases: BTreeMap<String, BTreeSet<String>>,
+    /// `.cs` rel → its own file usings, so a base list another file wrote reads in that file's scope.
+    usings: BTreeMap<String, Vec<Using>>,
     /// `.cs` rel → its `global using`s.
     global: BTreeMap<String, Vec<Using>>,
     /// Directory holding a `.csproj` (`""` at the root) → the project's root namespace.
@@ -83,12 +91,14 @@ impl DotNet {
     pub(crate) fn add_cs(&mut self, rel: &str, d: &Declared) {
         for t in &d.types {
             let part = Part { rel: rel.to_string(), local: t.local.clone(), full: t.full() };
-            self.types.entry(t.full()).or_default().push((part, t.members.clone()));
+            self.types.entry(t.full()).or_default().push(Entry { part, members: t.members.clone(), bases: t.bases.clone() });
             for m in &t.extensions {
                 self.extensions.entry(m.clone()).or_default().insert((t.namespace.clone(), t.full()));
             }
             self.instance_members.extend(t.members.keys().filter(|m| !t.extensions.contains(*m)).cloned());
-            self.bases.entry(t.full()).or_default().extend(t.bases.iter().cloned());
+        }
+        if !d.usings.is_empty() {
+            self.usings.insert(rel.to_string(), d.usings.clone());
         }
         if !d.global_usings.is_empty() {
             self.global.insert(rel.to_string(), d.global_usings.clone());
@@ -106,22 +116,31 @@ impl DotNet {
     /// Every part of `full` outside `except`: the file being extracted reads its own parts from its
     /// tree, which is the one the extractor holds.
     pub fn parts(&self, full: &str, except: &str) -> Vec<&Part> {
-        self.types.get(full).into_iter().flatten().filter(|(p, _)| p.rel != except).map(|(p, _)| p).collect()
+        self.types.get(full).into_iter().flatten().map(|e| &e.part).filter(|p| p.rel != except).collect()
+    }
+
+    fn entry(&self, full: &str, rel: &str, local: &str) -> Option<&Entry> {
+        self.types.get(full)?.iter().find(|e| e.part.rel == rel && e.part.local == local)
     }
 
     pub fn members(&self, full: &str, rel: &str, local: &str) -> Option<&Members> {
-        self.types.get(full)?.iter().find(|(p, _)| p.rel == rel && p.local == local).map(|(_, m)| m)
+        self.entry(full, rel, local).map(|e| &e.members)
+    }
+
+    /// The base-list names one part writes, unresolved.
+    pub fn bases(&self, full: &str, rel: &str, local: &str) -> &[String] {
+        self.entry(full, rel, local).map_or(&[], |e| &e.bases)
+    }
+
+    /// The file usings `rel` writes, its `global using`s excluded.
+    pub fn usings(&self, rel: &str) -> &[Using] {
+        self.usings.get(rel).map_or(&[], Vec::as_slice)
     }
 
     /// Whether any type in the repository declares `member` as a field, property or method of its
     /// own — an extension of another type does not count.
     pub fn declares_instance_member(&self, member: &str) -> bool {
         self.instance_members.contains(member)
-    }
-
-    /// Every base-list name written for `full`, anywhere in the repo.
-    pub fn bases(&self, full: &str) -> Vec<String> {
-        self.bases.get(full).map(|s| s.iter().cloned().collect()).unwrap_or_default()
     }
 
     pub fn extensions(&self, method: &str) -> Vec<(String, String)> {

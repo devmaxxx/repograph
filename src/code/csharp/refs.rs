@@ -450,22 +450,21 @@ impl Reader<'_> {
         if !found.is_empty() {
             return Typed::Found(found);
         }
-        self.based(&parts, method, ns, class)
+        self.based(&parts, method)
     }
 
-    /// `method` walked up `parts`' base chain, however many files it crosses: `Scope::bases` holds
-    /// every base-list name written for a type anywhere in the repo, not only in the file at hand,
-    /// so a subclass and its base need not share a file with each other or with the caller. Each
-    /// base name is resolved in the caller's own scope — a stand-in for the declaring file's own
-    /// usings, which this pass never has, but sound whenever caller and base sit under the same
-    /// imported namespace, as a subclass and its own base almost always do.
+    /// `method` walked up `parts`' base chain, however many files it crosses: every part's own base
+    /// list, whichever file wrote it, so a subclass and its base need not share a file with each
+    /// other or with the caller. Each base name is read where its part is declared — that part's
+    /// namespace, enclosing types and file usings — never in the caller's scope, where a same-named
+    /// type the caller happens to see would replace the real base.
     ///
     /// A base name that resolves to no repo type at all — a framework base such as `object` or
     /// `List<T>` — blocks the extension rule outright: a type this file cannot read could easily
     /// declare `method` itself, so nothing here is proof either way. Only a chain that bottoms out
     /// entirely in repo types, none of which declare `method`, is a proven miss, and only then does
     /// `Unknown` let the extension rule stand in.
-    fn based(&self, parts: &[Part], method: &str, ns: &str, class: Option<&str>) -> Typed {
+    fn based(&self, parts: &[Part], method: &str) -> Typed {
         let mut seen: BTreeSet<String> = parts.iter().map(|p| p.full.clone()).collect();
         let mut frontier = parts.to_vec();
         let mut external = false;
@@ -476,8 +475,8 @@ impl Reader<'_> {
             let mut next = Vec::new();
             let mut found = Vec::new();
             for p in &frontier {
-                for b in self.scope.bases(&p.full) {
-                    let bp = self.scope.types(&b, ns, class);
+                for b in self.scope.bases(p) {
+                    let bp = self.scope.types_around(&b, p);
                     if bp.is_empty() {
                         external = true;
                         continue;

@@ -57,6 +57,24 @@ impl<'a> Scope<'a> {
     }
 
     pub fn types(&self, name: &str, namespace: &str, class: Option<&str>) -> Vec<Part> {
+        self.types_under(name, namespace, class, &self.usings)
+    }
+
+    /// `name` as the file declaring `p` reads it around `p` — `p`'s namespace, the types enclosing
+    /// it, and that file's own usings — which is where the compiler reads `p`'s base list. The
+    /// caller's scope would let a type only the caller sees stand in for the real base.
+    pub fn types_around(&self, name: &str, p: &Part) -> Vec<Part> {
+        let namespace = p.full.strip_suffix(p.local.as_str()).map_or("", |n| n.trim_end_matches('.'));
+        let class = p.local.rsplit_once('.').map(|(outer, _)| outer);
+        if p.rel == self.rel {
+            return self.types(name, namespace, class);
+        }
+        let mut usings = self.dotnet.usings(&p.rel).to_vec();
+        usings.extend(self.dotnet.global_usings(&p.rel));
+        self.types_under(name, namespace, class, &usings)
+    }
+
+    fn types_under(&self, name: &str, namespace: &str, class: Option<&str>, usings: &[Using]) -> Vec<Part> {
         if let Some(c) = class {
             let mut chain: Vec<&str> = c.split('.').collect();
             while !chain.is_empty() {
@@ -78,14 +96,14 @@ impl<'a> Scope<'a> {
             }
         }
         let (first, rest) = name.split_once('.').map_or((name, None), |(f, r)| (f, Some(r)));
-        for u in &self.usings {
+        for u in usings {
             if let Using::Alias(alias, target) = u {
                 if alias == first {
                     return self.full(&rest.map_or_else(|| target.clone(), |r| join(target, r)));
                 }
             }
         }
-        let mut hits: Vec<Part> = self.usings.iter()
+        let mut hits: Vec<Part> = usings.iter()
             .filter_map(|u| match u {
                 Using::Namespace(n) | Using::Static(n) => Some(self.full(&join(n, name))),
                 Using::Alias(..) => None,
@@ -130,11 +148,12 @@ impl<'a> Scope<'a> {
         self.dotnet.declares_instance_member(member)
     }
 
-    /// The base-list names written for `full`, anywhere in the repo — every partial declaration's
-    /// own file included, not only the caller's. Whole-repo counterpart to `base_member`, which
-    /// reads only the file at hand.
-    pub fn bases(&self, full: &str) -> Vec<String> {
-        self.dotnet.bases(full)
+    /// The base-list names one part writes, unresolved; read them with `types_around` the same part.
+    pub fn bases(&self, p: &Part) -> Vec<String> {
+        if p.rel == self.rel {
+            return self.own.types.iter().filter(|t| t.local == p.local && t.full() == p.full).flat_map(|t| t.bases.iter().cloned()).collect();
+        }
+        self.dotnet.bases(&p.full, &p.rel, &p.local).to_vec()
     }
 
     /// The enclosing type and each type around it, innermost first.
