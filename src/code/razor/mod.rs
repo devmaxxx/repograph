@@ -44,6 +44,8 @@ pub struct Directives {
     pub tags: Vec<(String, u32, Option<String>)>,
     /// `@inherits`, as written: the component's base class, where its inherited parameters live.
     pub inherits: Option<String>,
+    /// `@inherits` was written with type arguments, which `inherits` drops.
+    pub inherits_generic: bool,
     /// The blocks cannot be read, so nothing the file writes past its node would be proven.
     pub unread: bool,
 }
@@ -150,6 +152,7 @@ pub fn directives(src: &str) -> Directives {
             }
         } else if let Some(t) = arg("@inherits") {
             d.inherits = Some(base_name(t));
+            d.inherits_generic = t.contains('<');
             d.types.push((t.to_string(), line, true));
         } else if let Some(t) = arg("@implements") {
             d.types.push((t.to_string(), line, true));
@@ -310,6 +313,9 @@ pub fn extract(resolver: &Resolver, rel: &str, source: &str) -> Extraction {
     if let Some(base) = &d.inherits {
         for t in own.types.iter_mut().filter(|t| t.local == name) {
             t.bases.push(base.clone());
+            if d.inherits_generic {
+                t.generic_bases.insert(base.clone());
+            }
         }
     }
     let scope = Scope::new(rel, dotnet, &own, &host);
@@ -345,7 +351,7 @@ pub fn extract(resolver: &Resolver, rel: &str, source: &str) -> Extraction {
                 inherited = level.iter().any(|p| scope.members(p).is_some_and(|m| m.contains_key(tag)));
                 inherited
             });
-            if inherited || walked.unresolved.iter().any(|b| framework_parameters(b).is_none_or(|ps| ps.contains(&tag.as_str()))) {
+            if inherited || walked.unresolved.iter().any(|(b, generic)| framework_parameters(b, *generic).is_none_or(|ps| ps.contains(&tag.as_str()))) {
                 continue;
             }
         }
@@ -362,14 +368,20 @@ pub fn extract(resolver: &Resolver, rel: &str, source: &str) -> Extraction {
 }
 
 /// The parameters a framework base declares, `None` for a base the repo cannot list. The interfaces
-/// a code-behind lists beside its base declare none.
-fn framework_parameters(base: &str) -> Option<&'static [&'static str]> {
+/// a code-behind lists beside its base declare none. A framework name under another namespace, or
+/// with type arguments the framework's type does not take, is a library's type of the same name,
+/// whose parameters no one can read.
+fn framework_parameters(base: &str, generic: bool) -> Option<&'static [&'static str]> {
     let head = base_name(base);
-    match head.rsplit('.').next().unwrap_or(&head) {
-        "ComponentBase" | "OwningComponentBase" | "IDisposable" | "IAsyncDisposable" => Some(&[]),
-        "LayoutComponentBase" => Some(&["Body"]),
-        _ => None,
-    }
+    let (qualifier, name) = head.rsplit_once('.').map_or((None, head.as_str()), |(q, n)| (Some(q), n));
+    let (namespace, parameters): (_, &'static [&'static str]) = match name {
+        "ComponentBase" | "OwningComponentBase" => ("Microsoft.AspNetCore.Components", &[]),
+        "LayoutComponentBase" => ("Microsoft.AspNetCore.Components", &["Body"]),
+        "IDisposable" | "IAsyncDisposable" => ("System", &[]),
+        _ => return None,
+    };
+    let arity = !generic || name == "OwningComponentBase";
+    (qualifier.is_none_or(|q| q == namespace) && arity).then_some(parameters)
 }
 
 /// A written type as a C# base list keeps it: dots, without generic arguments or `global::`.

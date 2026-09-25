@@ -24,8 +24,9 @@ pub struct Scope<'a> {
 
 /// What `walk_bases` met on the way up.
 pub struct Bases {
-    /// Base names, as written, that resolve to no repo type.
-    pub unresolved: Vec<String>,
+    /// Base names, as written, that resolve to no repo type, each with whether it was written
+    /// with type arguments.
+    pub unresolved: Vec<(String, bool)>,
 }
 
 impl<'a> Scope<'a> {
@@ -172,7 +173,8 @@ impl<'a> Scope<'a> {
                 for b in self.bases(p) {
                     let bp = self.types_around(&b, p);
                     if bp.is_empty() {
-                        unresolved.push(b);
+                        let generic = self.generic_base(p, &b);
+                        unresolved.push((b, generic));
                         continue;
                     }
                     // Dedupe by type, not by part: a partial base's list may sit on any of its
@@ -197,6 +199,14 @@ impl<'a> Scope<'a> {
             return self.own.types.iter().filter(|t| t.local == p.local && t.full() == p.full).flat_map(|t| t.bases.iter().cloned()).collect();
         }
         self.dotnet.bases(&p.full, &p.rel, &p.local).to_vec()
+    }
+
+    /// Whether one part writes `base` with type arguments.
+    fn generic_base(&self, p: &Part, base: &str) -> bool {
+        if p.rel == self.rel {
+            return self.own.types.iter().any(|t| t.local == p.local && t.full() == p.full && t.generic_bases.contains(base));
+        }
+        self.dotnet.generic_base(&p.full, &p.rel, &p.local, base)
     }
 
     /// The enclosing type and each type around it, innermost first.

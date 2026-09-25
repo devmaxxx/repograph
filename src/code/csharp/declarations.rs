@@ -4,7 +4,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use tree_sitter::Node;
 
-use super::{dotted, head, modifiers, named, span, text, Host};
+use super::{dotted, generic, head, modifiers, named, span, text, Host};
 use crate::code::index::Header;
 use crate::model::{EdgeKind, Extraction, NodeKind};
 
@@ -40,6 +40,9 @@ pub struct TypeDecl {
     pub members: BTreeMap<String, Option<String>>,
     /// Base-list names as written, resolved by the references pass.
     pub bases: Vec<String>,
+    /// The `bases` written with type arguments. C# resolves a base by its name alone, but Razor
+    /// needs the arity to tell the framework's `ComponentBase` from a library's `ComponentBase<T>`.
+    pub generic_bases: BTreeSet<String>,
     /// Methods whose first parameter carries `this`.
     pub extensions: BTreeSet<String>,
 }
@@ -218,6 +221,9 @@ impl Walk<'_> {
                     for b in named(c) {
                         let b = if b.kind() == "primary_constructor_base_type" { b.child_by_field_name("type") } else { Some(b) };
                         if let Some(b) = b.filter(|b| b.kind() != "argument_list") {
+                            if generic(b) {
+                                t.generic_bases.insert(dotted(b, self.src));
+                            }
                             t.bases.push(dotted(b, self.src));
                         }
                     }

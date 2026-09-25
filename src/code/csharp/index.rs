@@ -27,6 +27,7 @@ struct Entry {
     part: Part,
     members: Members,
     bases: Vec<String>,
+    generic_bases: BTreeSet<String>,
 }
 
 thread_local! {
@@ -97,6 +98,8 @@ struct Component {
     members: Members,
     /// Its `@inherits`, as written.
     bases: Vec<String>,
+    /// Its `@inherits` when written with type arguments.
+    generic_bases: BTreeSet<String>,
     /// Its own `@using`s.
     usings: Vec<Using>,
 }
@@ -133,7 +136,7 @@ impl DotNet {
     pub(crate) fn add_cs(&mut self, rel: &str, d: &Declared) {
         for t in &d.types {
             let part = Part { rel: rel.to_string(), local: t.local.clone(), full: t.full() };
-            self.types.entry(t.full()).or_default().push(Entry { part, members: t.members.clone(), bases: t.bases.clone() });
+            self.types.entry(t.full()).or_default().push(Entry { part, members: t.members.clone(), bases: t.bases.clone(), generic_bases: t.generic_bases.clone() });
             for m in &t.extensions {
                 self.extensions.entry(m.clone()).or_default().insert((t.namespace.clone(), t.full()));
             }
@@ -183,6 +186,14 @@ impl DotNet {
         match self.entry(full, rel, local) {
             Some(e) => &e.bases,
             None => self.component(full, rel, local).map_or(&[], |c| c.bases.as_slice()),
+        }
+    }
+
+    /// Whether one part writes `base` with type arguments.
+    pub fn generic_base(&self, full: &str, rel: &str, local: &str, base: &str) -> bool {
+        match self.entry(full, rel, local) {
+            Some(e) => e.generic_bases.contains(base),
+            None => self.component(full, rel, local).is_some_and(|c| c.generic_bases.contains(base)),
         }
     }
 
@@ -254,7 +265,8 @@ impl DotNet {
             map.insert(parent(rel).to_string(), (d.usings.clone(), d.namespace.clone()));
         } else if crate::code::razor::component_name(rel).is_some() {
             self.instance_members.extend(members.keys().cloned());
-            let component = Component { namespace: d.namespace.clone(), members, bases: d.inherits.iter().cloned().collect(), usings: d.usings.clone() };
+            let generic_bases = d.inherits.iter().filter(|_| d.inherits_generic).cloned().collect();
+            let component = Component { namespace: d.namespace.clone(), members, bases: d.inherits.iter().cloned().collect(), generic_bases, usings: d.usings.clone() };
             self.components.insert(rel.to_string(), component);
         }
     }

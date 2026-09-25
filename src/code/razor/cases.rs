@@ -644,3 +644,38 @@ fn an_inherits_with_type_arguments_and_global_resolves_to_its_generic_base() {
         vec!["sym:Web/Shared/Gen.razor::Gen", "sym:Web/Shared/OrderLine.razor::OrderLine"]
     );
 }
+
+/// `Wrap` holding `<Header>`, with `Wrap` written as `wrap` and, when given, a code-behind `behind`.
+fn header_under(wrap: &'static str, behind: Option<&'static str>) -> Vec<String> {
+    let mut files = vec![HEADER, ("Web/Shared/Wrap.razor", wrap), ("Web/Pages/P18.razor", "<Wrap>\n  <Header>x</Header>\n</Wrap>\n")];
+    files.extend(behind.map(|b| ("Web/Shared/Wrap.razor.cs", b)));
+    calls_of(&files, "Web/Pages/P18.razor")
+}
+
+#[test]
+fn a_framework_name_under_another_namespace_or_with_type_arguments_is_a_library_base() {
+    let inherits = [
+        "@inherits Lib.Ui.ComponentBase\n<div/>\n",
+        "@inherits Lib.Ui.LayoutComponentBase\n<div/>\n",
+        "@inherits ComponentBase<Lib.Model>\n<div/>\n",
+    ];
+    let behinds = [
+        "namespace Shop.Web.Shared;\npublic partial class Wrap : Lib.Ui.ComponentBase {}\n",
+        "namespace Shop.Web.Shared;\npublic partial class Wrap : ComponentBase<Lib.Model> {}\n",
+    ];
+    let mut wrong: Vec<&str> = inherits.into_iter().filter(|w| header_under(w, None) != vec!["sym:Web/Shared/Wrap.razor::Wrap"]).collect();
+    wrong.extend(behinds.into_iter().filter(|b| header_under("<div/>\n", Some(b)) != vec!["sym:Web/Shared/Wrap.razor.cs::Wrap", "sym:Web/Shared/Wrap.razor::Wrap"]));
+    assert!(wrong.is_empty(), "a Header call under: {wrong:#?}");
+}
+
+#[test]
+fn the_framework_s_own_bases_declare_no_header() {
+    for wrap in ["@inherits Microsoft.AspNetCore.Components.ComponentBase\n<div/>\n", "@inherits OwningComponentBase<IFoo>\n<div/>\n"] {
+        assert_eq!(header_under(wrap, None), vec!["sym:Web/Shared/Header.razor::Header", "sym:Web/Shared/Wrap.razor::Wrap"], "{wrap}");
+    }
+    let behind = "namespace Shop.Web.Shared;\npublic partial class Wrap : ComponentBase, IDisposable\n{\n    public void Dispose() {}\n}\n";
+    assert_eq!(
+        header_under("<div/>\n", Some(behind)),
+        vec!["sym:Web/Shared/Header.razor::Header", "sym:Web/Shared/Wrap.razor.cs::Wrap", "sym:Web/Shared/Wrap.razor::Wrap"]
+    );
+}

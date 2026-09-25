@@ -81,6 +81,14 @@ pub(crate) fn dotted(t: Node, src: &[u8]) -> String {
     }
 }
 
+/// Whether a type ends in type arguments, which `dotted` drops: `A.B<T>` and `global::B<T>`.
+pub(crate) fn generic(t: Node) -> bool {
+    match t.kind() {
+        "qualified_name" | "alias_qualified_name" => t.child_by_field_name("name").is_some_and(generic),
+        kind => kind == "generic_name",
+    }
+}
+
 /// Every class-like name a type expression uses: `Task<List<Order>>` gives `Task`, `List`, `Order`;
 /// `Shop.Payments.IGateway?` gives `Shop.Payments.IGateway`. Predefined types (`int`) name nothing.
 pub(crate) fn type_names(t: Node, src: &[u8], out: &mut Vec<String>) {
