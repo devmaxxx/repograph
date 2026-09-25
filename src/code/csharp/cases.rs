@@ -423,6 +423,106 @@ fn an_assembly_attribute_points_at_its_declaring_class() {
     ]);
 }
 
+const ORDERING: &[(&str, &str)] = &[
+    ("Payments/IPaymentGateway.cs", GATEWAY),
+    ("Orders/Receipt.cs", "namespace Shop.Orders;\npublic class Receipt\n{\n    public static Receipt Create() => new Receipt();\n    public void Print() {}\n}\n"),
+    ("Checks/Guard.cs", "namespace Shop.Checks;\npublic static class Guard { public static void NotNull(object o) {} }\n"),
+    ("Checks/CoinsExtensions.cs", "namespace Shop.Checks;\npublic static class CoinsExtensions { public static int ToCoins(this int value) => value; }\n"),
+    ("Orders/OrderService.cs", r#"using Shop.Payments;
+using Shop.Checks;
+using static Shop.Checks.Guard;
+namespace Shop.Orders;
+public class OrderService(IPaymentGateway gateway)
+{
+    private readonly IPaymentGateway _gateway = gateway;
+    public IPaymentGateway Backup { get; set; }
+    public async void Place(int id, IPaymentGateway other)
+    {
+        _gateway.Charge(id);
+        this._gateway.Charge(id);
+        _gateway?.Refund(id);
+        await _gateway.ChargeAsync<int>(id);
+        gateway.Refund(id);
+        Backup.Charge(id);
+        other.Refund(id);
+        var receipt = new Receipt();
+        receipt.Print();
+        Receipt.Create();
+        Helper();
+        NotNull(id);
+        id.ToCoins();
+        Place(id, other);
+    }
+    private void Helper() {}
+}
+"#),
+];
+
+#[test]
+fn calls_resolve_through_fields_properties_parameters_locals_and_types() {
+    let repo = Repo::new(ORDERING);
+    let ex = repo.extract("Orders/OrderService.cs");
+    let calls = edges(&ex, EdgeKind::Calls);
+    let from = "sym:Orders/OrderService.cs::OrderService.Place";
+    for to in [
+        "sym:Payments/IPaymentGateway.cs::IPaymentGateway.Charge",
+        "sym:Payments/IPaymentGateway.cs::IPaymentGateway.Refund",
+        "sym:Payments/IPaymentGateway.cs::IPaymentGateway.ChargeAsync",
+        "sym:Orders/Receipt.cs::Receipt",
+        "sym:Orders/Receipt.cs::Receipt.Print",
+        "sym:Orders/Receipt.cs::Receipt.Create",
+        "sym:Orders/OrderService.cs::OrderService.Helper",
+        "sym:Checks/Guard.cs::Guard.NotNull",
+        "sym:Checks/CoinsExtensions.cs::CoinsExtensions.ToCoins",
+    ] {
+        assert!(calls.contains(&(from, to, "")), "{from} -> {to} missing from {calls:?}");
+    }
+    assert!(!calls.iter().any(|(s, t, _)| s == t), "a recursive call is not an edge: {calls:?}");
+}
+
+#[test]
+fn an_extension_call_resolves_only_when_one_imported_type_declares_it() {
+    let repo = Repo::new(&[
+        ("A/Coins.cs", "namespace Shop.A;\npublic static class Coins { public static int Round(this int v) => v; }\n"),
+        ("B/Numbers.cs", "namespace Shop.B;\npublic static class Numbers { public static int Round(this int v) => v; }\n"),
+        ("C/Hidden.cs", "namespace Shop.C;\npublic static class Hidden { public static int Round(this int v) => v; }\n"),
+        ("Use/One.cs", "using Shop.A;\nnamespace Shop.Use;\nclass One { int M(int x) => x.Round(); }\n"),
+        ("Use/Two.cs", "using Shop.A;\nusing Shop.B;\nnamespace Shop.Use;\nclass Two { int M(int x) => x.Round(); }\n"),
+    ]);
+    assert_eq!(edges(&repo.extract("Use/One.cs"), EdgeKind::Calls), vec![("sym:Use/One.cs::One.M", "sym:A/Coins.cs::Coins.Round", "")]);
+    assert!(edges(&repo.extract("Use/Two.cs"), EdgeKind::Calls).is_empty(), "two imported candidates: the file cannot prove which");
+}
+
+#[test]
+fn an_unqualified_call_reaches_a_member_declared_in_another_part() {
+    let repo = Repo::new(&[
+        ("Shop/OrderService.Bedrock.cs", "namespace Shop;\npublic partial class OrderService { public void Place() {} }\n"),
+        ("Shop/OrderService.Billing.cs", "namespace Shop;\npartial class OrderService { void Bill() { Place(); base.ToString(); } }\n"),
+    ]);
+    assert_eq!(
+        edges(&repo.extract("Shop/OrderService.Billing.cs"), EdgeKind::Calls),
+        vec![("sym:Shop/OrderService.Billing.cs::OrderService.Bill", "sym:Shop/OrderService.Bedrock.cs::OrderService.Place", "")],
+    );
+}
+
+#[test]
+fn a_call_the_repository_cannot_prove_yields_no_edge() {
+    let ex = one("Shop/A.cs", "namespace Shop;\nclass A { void M(object logger, System.Action cb) { System.Console.WriteLine(1); cb(); logger.ToString(); } }\n");
+    assert!(edges(&ex, EdgeKind::Calls).is_empty(), "{:?}", ex.edges);
+}
+
+#[test]
+fn a_base_call_reaches_the_member_of_the_base_class() {
+    let repo = Repo::new(&[
+        ("Bedrock/ServiceBase.cs", "namespace Shop.Bedrock;\npublic abstract class ServiceBase { protected void Tracked() {} }\n"),
+        ("Orders/OrderService.cs", "using Shop.Bedrock;\nnamespace Shop.Orders;\npublic class OrderService : ServiceBase { void Place() { base.Tracked(); } }\n"),
+    ]);
+    assert_eq!(
+        edges(&repo.extract("Orders/OrderService.cs"), EdgeKind::Calls),
+        vec![("sym:Orders/OrderService.cs::OrderService.Place", "sym:Bedrock/ServiceBase.cs::ServiceBase.Tracked", "")],
+    );
+}
+
 #[test]
 fn a_string_literal_inside_an_interpolation_hole_is_referenced_once() {
     // `CodeExtractor::extract` sorts and dedups edges afterwards, which would hide a duplicate

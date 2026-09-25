@@ -120,6 +120,24 @@ impl Reader<'_> {
                     locals.insert(text(left, self.src).to_string(), t);
                 }
             }
+            "invocation_expression" => {
+                if let Some(f) = n.child_by_field_name("function") {
+                    for to in self.call_targets(f, at, locals) {
+                        self.call(at, &to, ex);
+                    }
+                }
+            }
+            // `new T()` calls the type, as TypeScript's `new` does.
+            "object_creation_expression" => {
+                if let Some(t) = head(n.child_by_field_name("type"), self.src) {
+                    // A type parameter named like a repo type is not the type it names.
+                    if !at.type_params.contains(&t) {
+                        for p in self.scope.types(&t, &at.namespace, at.class.as_deref()) {
+                            self.call(at, &format!("sym:{}::{}", p.rel, p.local), ex);
+                        }
+                    }
+                }
+            }
             _ => {}
         }
         self.type_uses(n, at, ex);
@@ -289,5 +307,81 @@ impl Reader<'_> {
                 ex.edge(&at.owner, &hit.id, EdgeKind::References, "string", self.rel);
             }
         }
+    }
+
+    fn call(&self, at: &At, to: &str, ex: &mut Extraction) {
+        // A recursive call is not a dependency.
+        if at.owner != to {
+            ex.edge(&at.owner, to, EdgeKind::Calls, "", self.rel);
+        }
+    }
+
+    fn call_targets(&self, f: Node, at: &At, locals: &Locals) -> Vec<String> {
+        let (ns, class) = (at.namespace.as_str(), at.class.as_deref());
+        match f.kind() {
+            "identifier" | "generic_name" => {
+                let name = dotted(f, self.src);
+                let own = self.scope.enclosing_member(&name, ns, class);
+                if own.is_empty() { self.scope.static_member(&name) } else { own }
+            }
+            "member_access_expression" => {
+                let (Some(e), Some(m)) = (f.child_by_field_name("expression"), f.child_by_field_name("name")) else { return Vec::new() };
+                self.through(e, &dotted(m, self.src), at, locals)
+            }
+            "conditional_access_expression" => {
+                let Some(e) = f.child_by_field_name("condition") else { return Vec::new() };
+                let binding = named(f).into_iter().find(|c| c.kind() == "member_binding_expression");
+                let Some(m) = binding.and_then(|b| b.child_by_field_name("name")) else { return Vec::new() };
+                self.through(e, &dotted(m, self.src), at, locals)
+            }
+            _ => Vec::new(),
+        }
+    }
+
+    /// `method` called on the receiver `e`; an unresolved receiver falls to the extension rule.
+    fn through(&self, e: Node, method: &str, at: &At, locals: &Locals) -> Vec<String> {
+        let (ns, class) = (at.namespace.as_str(), at.class.as_deref());
+        let found = match e.kind() {
+            "this" => self.scope.enclosing_member(method, ns, class),
+            "base" => self.scope.base_member(method, ns, class),
+            "member_access_expression" if e.child_by_field_name("expression").is_some_and(|x| x.kind() == "this") => {
+                let field = e.child_by_field_name("name").map(|x| dotted(x, self.src)).unwrap_or_default();
+                self.typed(&field, method, at, locals, false)
+            }
+            "identifier" => self.typed(text(e, self.src), method, at, locals, true),
+            "member_access_expression" | "qualified_name" | "generic_name" | "alias_qualified_name" => {
+                receiver_path(e, self.src).map(|t| self.scope.member_of(&t, method, ns, class)).unwrap_or_default()
+            }
+            _ => Vec::new(),
+        };
+        if found.is_empty() { self.scope.extension(method, ns) } else { found }
+    }
+
+    /// `method` on what `name` stands for: a local or parameter, then a member of the enclosing
+    /// types, then — for a bare name, not `this.name` — a type, which makes the call static.
+    fn typed(&self, name: &str, method: &str, at: &At, locals: &Locals, bare: bool) -> Vec<String> {
+        let (ns, class) = (at.namespace.as_str(), at.class.as_deref());
+        if let Some(t) = locals.get(name) {
+            return self.scope.member_of(t, method, ns, class);
+        }
+        if let Some(t) = self.scope.enclosing_member_type(name, ns, class) {
+            return self.scope.member_of(&t, method, ns, class);
+        }
+        // `name` naming a type parameter is not a static target: a same-named repo type must not
+        // stand in for it, the same masking `use_type` applies to a type parameter written as a type.
+        if bare && !at.type_params.contains(name) {
+            return self.scope.member_of(name, method, ns, class);
+        }
+        Vec::new()
+    }
+}
+
+/// `Shop.Checks.Guard` from a member-access chain whose every link is a plain name.
+fn receiver_path(e: Node, src: &[u8]) -> Option<String> {
+    match e.kind() {
+        "identifier" => Some(text(e, src).to_string()),
+        "member_access_expression" => Some(join(&receiver_path(e.child_by_field_name("expression")?, src)?, &dotted(e.child_by_field_name("name")?, src))),
+        "qualified_name" | "generic_name" | "alias_qualified_name" => Some(dotted(e, src)),
+        _ => None,
     }
 }
