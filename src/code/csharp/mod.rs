@@ -1,6 +1,8 @@
 //! C#: one parse per file, a declarations pass and a references pass over the same tree.
 
 pub mod declarations;
+pub mod index;
+pub mod resolve;
 
 #[cfg(test)]
 mod cases;

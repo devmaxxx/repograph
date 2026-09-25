@@ -18,6 +18,8 @@ pub struct Resolver {
     packages: BTreeMap<String, (String, BTreeMap<String, String>)>,
     /// Qualified name -> declaring files, one index per name-indexed family the globs reach.
     indexes: BTreeMap<Family, QualifiedIndex>,
+    /// .NET: C# types with their members, extension methods, projects and their `global using`s.
+    dotnet: crate::code::csharp::index::DotNet,
 }
 
 #[derive(Deserialize, Default)]
@@ -186,7 +188,7 @@ impl Resolver {
         }
         // Nearest tsconfig to the importing file wins: sort deepest directory first.
         paths.sort_by_key(|a| std::cmp::Reverse(a.0.len()));
-        let mut resolver = Resolver { repo: repo.to_path_buf(), paths, packages, indexes: BTreeMap::new() };
+        let mut resolver = Resolver { repo: repo.to_path_buf(), paths, packages, indexes: BTreeMap::new(), dotnet: Default::default() };
         // Manifests before sources: a path family's roots decide how its sources' paths read.
         for (_, rel, path) in manifests.iter().filter(|(f, _, _)| reached.contains(f)) {
             if let Ok(text) = std::fs::read_to_string(path) {
@@ -209,18 +211,27 @@ impl Resolver {
         self.indexes.get(&family)
     }
 
+    pub fn dotnet(&self) -> &crate::code::csharp::index::DotNet {
+        &self.dotnet
+    }
+
     /// What one globbed source contributes before any file is extracted. A name-indexed family's
     /// header goes into its index; a path family's plan adds its arm below, for state of its own.
     fn collect(&mut self, lang: Lang, rel: &str, source: &str) {
         if let Some(header) = crate::code::index::header_for(lang, rel, source) {
             index_header(&mut self.indexes, lang.family(), rel, &header);
         }
+        if matches!(lang, Lang::CSharp) {
+            self.dotnet.add_cs(rel, &crate::code::csharp::index::facts(rel, source));
+        }
     }
 
     /// What a build manifest contributes; called only when the globs reach the manifest's family.
     /// Each path family's plan adds its arm; until one lands, no family reads a manifest.
     fn collect_manifest(&mut self, rel: &str, text: &str) {
-        let _ = (rel, text);
+        if rel.ends_with(".csproj") {
+            self.dotnet.add_project(rel, text);
+        }
     }
 
     /// A resolved candidate is only useful if it is a node the walker actually indexes:
@@ -509,9 +520,10 @@ mod tests {
     fn a_typescript_repository_builds_no_index_and_a_file_no_grammar_reads_joins_none() {
         let d = tempfile::tempdir().unwrap();
         std::fs::write(d.path().join("a.ts"), "export class A {}\n").unwrap();
-        std::fs::write(d.path().join("Program.cs"), "class P {}\n").unwrap();
+        // A log is no family's language, so no 0.6.0 grammar can turn this fixture into a real one.
+        std::fs::write(d.path().join("boot.log"), "boot ok\n").unwrap();
         let mut cfg = crate::config::Config::default();
-        cfg.code_globs.push("**/*.cs".into());
+        cfg.code_globs.push("**/*.log".into());
         let r = Resolver::new(d.path(), &cfg).unwrap();
         assert!(r.index(Family::TypeScript).is_none());
         assert!(r.index(Family::DotNet).is_none());

@@ -217,3 +217,119 @@ fn a_delegate_parameter_is_not_a_member() {
     assert!(ids.contains(&"sym:Shop/H.cs::PlacedHandler"));
     assert!(!ids.iter().any(|i| i.starts_with("sym:Shop/H.cs::PlacedHandler.")), "{ids:?}");
 }
+
+use super::declarations::{self, Declared};
+use super::index::DotNet;
+use super::resolve::Scope;
+use super::Host;
+
+fn own(rel: &str, src: &str) -> Declared {
+    let tree = crate::code::lang::Lang::CSharp.parse(src.as_bytes()).unwrap();
+    declarations::scan(tree.root_node(), rel, src.as_bytes(), &Host::default(), &mut Extraction::default())
+}
+
+/// The ids `name` resolves to from `rel`, at `namespace` inside `class`.
+fn resolves(repo: &Repo, rel: &str, name: &str, namespace: &str, class: Option<&str>) -> Vec<String> {
+    let resolver = repo.resolver();
+    let src = std::fs::read_to_string(repo.dir.path().join(rel)).unwrap();
+    let own = own(rel, &src);
+    let scope = Scope::new(rel, resolver.dotnet(), &own, &Host::default());
+    scope.types(name, namespace, class).into_iter().map(|p| format!("sym:{}::{}", p.rel, p.local)).collect()
+}
+
+#[test]
+fn a_type_in_an_enclosing_namespace_resolves_without_a_using() {
+    let repo = Repo::new(&[
+        ("Shop/Bedrock/Receipt.cs", "namespace Shop;\npublic class Receipt {}\n"),
+        ("Shop/Orders/Use.cs", "namespace Shop.Orders;\nclass Use {}\n"),
+    ]);
+    assert_eq!(resolves(&repo, "Shop/Orders/Use.cs", "Receipt", "Shop.Orders", Some("Use")), vec!["sym:Shop/Bedrock/Receipt.cs::Receipt"]);
+    assert_eq!(resolves(&repo, "Shop/Orders/Use.cs", "Shop.Receipt", "Shop.Orders", Some("Use")), vec!["sym:Shop/Bedrock/Receipt.cs::Receipt"]);
+    assert!(resolves(&repo, "Shop/Orders/Use.cs", "Missing", "Shop.Orders", Some("Use")).is_empty());
+}
+
+#[test]
+fn the_nearest_declaration_wins() {
+    let repo = Repo::new(&[
+        ("Shop/Receipt.cs", "namespace Shop;\npublic class Receipt {}\n"),
+        ("Shop/Orders/Receipt.cs", "namespace Shop.Orders;\npublic class Receipt {}\n"),
+        ("Shop/Orders/Use.cs", "namespace Shop.Orders;\nclass Use { class Receipt {} }\n"),
+    ]);
+    assert_eq!(resolves(&repo, "Shop/Orders/Use.cs", "Receipt", "Shop.Orders", Some("Use")), vec!["sym:Shop/Orders/Use.cs::Use.Receipt"], "a nested type shadows the namespace's");
+    assert_eq!(resolves(&repo, "Shop/Orders/Use.cs", "Receipt", "Shop.Orders", None), vec!["sym:Shop/Orders/Receipt.cs::Receipt"], "the inner namespace shadows the outer");
+}
+
+#[test]
+fn usings_aliases_and_static_usings_resolve() {
+    let repo = Repo::new(&[
+        ("Payments/IPaymentGateway.cs", "namespace Shop.Payments;\npublic interface IPaymentGateway {}\n"),
+        ("Checks/Guard.cs", "namespace Shop.Checks;\npublic static class Guard { public class Rule {} }\n"),
+        ("Orders/Use.cs", "using Shop.Payments;\nusing static Shop.Checks.Guard;\nusing Gw = Shop.Payments.IPaymentGateway;\nnamespace Shop.Orders;\nclass Use {}\n"),
+    ]);
+    let at = |name: &str| resolves(&repo, "Orders/Use.cs", name, "Shop.Orders", Some("Use"));
+    assert_eq!(at("IPaymentGateway"), vec!["sym:Payments/IPaymentGateway.cs::IPaymentGateway"]);
+    assert_eq!(at("Gw"), vec!["sym:Payments/IPaymentGateway.cs::IPaymentGateway"]);
+    assert_eq!(at("Rule"), vec!["sym:Checks/Guard.cs::Guard.Rule"]);
+}
+
+#[test]
+fn a_global_using_reaches_every_file_of_its_project_and_no_other() {
+    let repo = Repo::new(&[
+        ("Remote/Remote.csproj", "<Project Sdk=\"Microsoft.NET.Sdk\"></Project>\n"),
+        ("Remote/Everywhere.cs", "global using Shop.Payments;\n"),
+        ("Remote/Orders/Use.cs", "namespace Remote.Orders;\nclass Use {}\n"),
+        ("Web/Web.csproj", "<Project Sdk=\"Microsoft.NET.Sdk\"></Project>\n"),
+        ("Web/Page.cs", "namespace Web;\nclass Page {}\n"),
+        ("Lib/IPaymentGateway.cs", "namespace Shop.Payments;\npublic interface IPaymentGateway {}\n"),
+    ]);
+    assert_eq!(resolves(&repo, "Remote/Orders/Use.cs", "IPaymentGateway", "Remote.Orders", Some("Use")), vec!["sym:Lib/IPaymentGateway.cs::IPaymentGateway"]);
+    assert!(resolves(&repo, "Web/Page.cs", "IPaymentGateway", "Web", Some("Page")).is_empty(), "code names namespaces, and the other project never imported this one");
+}
+
+#[test]
+fn a_partial_type_resolves_to_every_part() {
+    let repo = Repo::new(&[
+        ("Shop/OrderService.Bedrock.cs", "namespace Shop;\npublic partial class OrderService {}\n"),
+        ("Shop/OrderService.Billing.cs", "namespace Shop;\npartial class OrderService {}\n"),
+        ("Shop/Use.cs", "namespace Shop;\nclass Use {}\n"),
+    ]);
+    // Parts come back sorted by path.
+    assert_eq!(resolves(&repo, "Shop/Use.cs", "OrderService", "Shop", Some("Use")), vec![
+        "sym:Shop/OrderService.Bedrock.cs::OrderService",
+        "sym:Shop/OrderService.Billing.cs::OrderService",
+    ]);
+}
+
+#[test]
+fn the_header_holds_each_declaring_namespace_and_the_top_level_names() {
+    use crate::code::index::header_for;
+    use crate::code::lang::Lang;
+    let src = "global using static Shop.Checks.Guard;\nusing Shop.Payments;\nnamespace Shop.Bedrock\n{\n    namespace Inner\n    {\n        class Repo { class Nested {} }\n    }\n    interface IRepo {}\n}\nclass Global {}\n";
+    let h = header_for(Lang::CSharp, "Shop/Repo.cs", src).unwrap();
+    assert_eq!(h.scope, vec!["Shop.Bedrock.Inner".to_string(), "Shop.Bedrock".to_string()]);
+    assert_eq!(h.directives.iter().map(String::as_str).collect::<Vec<_>>(), vec!["global using static Shop.Checks.Guard", "using Shop.Payments"]);
+    assert_eq!(h.top.iter().map(String::as_str).collect::<Vec<_>>(), vec!["Global", "IRepo", "Repo"]);
+}
+
+#[test]
+fn a_project_root_namespace_comes_from_the_project_or_its_file_name() {
+    let mut d = DotNet::default();
+    d.add_project("web/Shop.Web.csproj", "<Project><PropertyGroup><RootNamespace>Shop.Storefront</RootNamespace></PropertyGroup></Project>");
+    d.add_project("api/Shop-Remote.csproj", "<Project Sdk=\"Microsoft.NET.Sdk\"></Project>");
+    assert_eq!(d.root_namespace("web/Pages/Checkout.razor"), Some(("web", "Shop.Storefront")));
+    assert_eq!(d.root_namespace("api/Orders/Use.cs"), Some(("api", "Shop_Remote")), "the project file's name, with what an identifier cannot hold replaced");
+    assert_eq!(d.root_namespace("tools/x.cs"), None);
+}
+
+// Visual Studio saves C# with a BOM, and a Windows checkout ends its lines in CRLF.
+#[test]
+fn bom_and_crlf_keep_rows_and_the_header() {
+    use crate::code::index::header_for;
+    use crate::code::lang::Lang;
+    let h = header_for(Lang::CSharp, "Shop/A.cs", "\u{FEFF}using Shop.Payments;\r\nnamespace Shop.Orders;\r\npublic class A { }\r\n").unwrap();
+    assert_eq!(h.directives.iter().map(String::as_str).collect::<Vec<_>>(), vec!["using Shop.Payments"]);
+    assert_eq!(h.scope, vec!["Shop.Orders".to_string()]);
+    assert_eq!(h.top.iter().map(String::as_str).collect::<Vec<_>>(), vec!["A"]);
+    let ex = one("Shop/B.cs", "\u{FEFF}namespace Shop;\r\n\r\npublic class B\r\n{\r\n    public void Run() {}\r\n}\r\n");
+    assert_eq!(ex.nodes.iter().find(|n| n.id == "sym:Shop/B.cs::B.Run").map(|n| n.line), Some(5));
+}
