@@ -108,7 +108,49 @@ fn a_crlf_file_keeps_every_row_and_the_wrapper() {
     let View::Read(t) = view(src) else { panic!("unread") };
     assert!(clean(&t), "{t:?}");
     assert_eq!(t.len(), src.len());
-    assert_eq!(t.matches('\n').count(), src.matches('\n').count());
+    let newlines = |s: &str| s.match_indices('\n').map(|(i, _)| i).collect::<Vec<_>>();
+    assert_eq!(newlines(&t), newlines(src));
+}
+
+#[test]
+fn a_verbatim_string_with_a_doubled_quote_is_not_read_as_a_raw_string() {
+    // `@"""a}"` is a verbatim string holding `"a}` (the doubled quote is the escape); the
+    // triple-quote raw-string branch must not fire on a verbatim opener.
+    let src = "@code {\n  string a = @\"\"\"a}\";\n  int y;\n}\n";
+    let text = read(src);
+    assert!(text.contains("int y"), "{text:?}");
+    assert!(clean(&text), "{text:?}");
+}
+
+#[test]
+fn a_blank_crlf_line_before_the_first_line_s_block_does_not_stop_the_search() {
+    let src = "@code{\r\n\r\n    int x;\r\n}\r\n";
+    let text = read(src);
+    assert!(text.contains("C{"), "{text:?}");
+    assert!(clean(&text), "{text:?}");
+}
+
+#[test]
+fn a_razor_comment_inside_a_block_does_not_close_it_early() {
+    let src = "@code {\n  @* } *@\n  int y;\n}\n";
+    let text = read(src);
+    assert!(text.contains("int y"), "{text:?}");
+    assert!(clean(&text), "{text:?}");
+}
+
+#[test]
+fn a_commented_out_code_block_is_not_a_directive() {
+    let src = "@*\n@code { void Ghost() {} }\n*@\n";
+    assert_eq!(view(src), View::None);
+}
+
+#[test]
+fn a_commented_out_code_block_beside_a_real_one_writes_no_ghost_member() {
+    let src = "@*\n@code { void Ghost() {} }\n*@\n@code {\n  void Real() { }\n}\n";
+    let text = read(src);
+    assert!(clean(&text), "{text:?}");
+    assert!(!text.contains("Ghost"), "{text:?}");
+    assert!(text.contains("Real"), "{text:?}");
 }
 
 /// Not a test: reads every `.razor` and `.cshtml` under `REPOGRAPH_CENSUS_ROOTS` (`:`-separated)

@@ -33,6 +33,12 @@ fn find(s: &[u8], needle: &[u8], from: usize) -> Option<usize> {
     s.get(from..)?.windows(needle.len()).position(|w| w == needle).map(|p| from + p)
 }
 
+/// The byte after `@* ... *@`, Razor's own comment syntax; it does not nest and is not C#, so a
+/// `{` or `}` inside one — or an `@code`/`@functions` a commented-out block opens with — is not read.
+fn razor_comment_end(s: &[u8], i: usize) -> Option<usize> {
+    find(s, b"*@", i + 2).map(|p| p + 2)
+}
+
 /// Visual Studio writes it at the start of a `.razor` by default. It is not whitespace to the
 /// scanner, so a first-line `@code` or directive would not start its line.
 pub(crate) const BOM: char = '\u{FEFF}';
@@ -50,6 +56,13 @@ pub fn blocks(src: &str) -> Result<Vec<(usize, usize, usize)>, &'static str> {
         let mut at = line;
         while at < b.len() && (b[at] == b' ' || b[at] == b'\t') {
             at += 1;
+        }
+        // A directive commented out by `@* ... *@` is not live; skip the whole comment so a
+        // `@code` it holds on its own line is never mistaken for a real one.
+        if b[at..].starts_with(b"@*") {
+            let end = razor_comment_end(b, at).unwrap_or(b.len());
+            line = line_after(b, end);
+            continue;
         }
         let word = ["@code", "@functions"].into_iter()
             .find(|w| b[at..].starts_with(w.as_bytes()) && !b.get(at + w.len()).copied().is_some_and(is_ident));
@@ -78,6 +91,10 @@ fn close_of(s: &[u8], open: usize) -> Option<usize> {
     let mut i = open;
     while i < s.len() {
         match s[i] {
+            b'@' if s.get(i + 1) == Some(&b'*') => {
+                i = razor_comment_end(s, i)?;
+                continue;
+            }
             b'/' if s.get(i + 1) == Some(&b'/') => {
                 i = line_after(s, i);
                 continue;
@@ -126,7 +143,9 @@ fn string_end(s: &[u8], i: usize) -> Option<usize> {
         return None;
     }
     let quotes = s[j..].iter().take_while(|&&c| c == b'"').count();
-    if quotes >= 3 {
+    // A verbatim string escapes a quote by doubling it, so three in a row can be the start of a
+    // verbatim literal (`@"""a}"` holds `"a}`), not a raw string's fence.
+    if !verbatim && quotes >= 3 {
         let fence = &s[j..j + quotes];
         return find(s, fence, j + quotes).map(|k| k + quotes);
     }
@@ -175,6 +194,25 @@ fn transitions(src: &str, range: Range<usize>, out: &mut String) {
     }
 }
 
+/// `@* ... *@` inside a block is Razor's own comment, not C#; its bytes are blanked like a
+/// transition's, newlines kept, so it does not sit in the copy as text the grammar cannot read.
+fn comments(src: &str, range: Range<usize>, out: &mut String) {
+    let b = src.as_bytes();
+    let mut i = range.start;
+    while i < range.end {
+        if b[i] == b'@' && b.get(i + 1) == Some(&b'*') {
+            if let Some(end) = razor_comment_end(b, i) {
+                let end = end.min(range.end);
+                let blanked: String = b[i..end].iter().map(|&c| if c == b'\n' { '\n' } else { ' ' }).collect();
+                overwrite(out, i, &blanked);
+                i = end;
+                continue;
+            }
+        }
+        i += 1;
+    }
+}
+
 /// The start of the nearest line above `at`'s line holding `need` bytes.
 fn earlier_line(src: &str, at: usize, need: usize) -> Option<usize> {
     let b = src.as_bytes();
@@ -202,11 +240,14 @@ fn indentation(src: &str, from: usize, to: usize) -> Option<usize> {
     let mut line = eol + 1;
     while line < b.len() {
         let end = b[line..].iter().position(|&c| c == b'\n').map_or(b.len(), |p| line + p);
-        let blank = b[line..end].iter().take_while(|&&c| c == b' ' || c == b'\t').count();
+        // A CRLF blank line's content is `\r`, not empty; drop it so a blank line reads the same
+        // as it would in an LF file, rather than looking like a line that opens with code.
+        let content_end = if end > line && b[end - 1] == b'\r' { end - 1 } else { end };
+        let blank = b[line..content_end].iter().take_while(|&&c| c == b' ' || c == b'\t').count();
         if blank >= 2 {
             return Some(line);
         }
-        if end > line + blank {
+        if content_end > line + blank {
             return None;
         }
         line = end + 1;
@@ -230,6 +271,7 @@ pub fn view(src: &str) -> View {
     let mut out = keep_ranges(src, &keep);
     for r in &keep {
         transitions(src, r.clone(), &mut out);
+        comments(src, r.clone(), &mut out);
     }
     overwrite(&mut out, open, "{");
     overwrite(&mut out, close, "}");
