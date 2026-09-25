@@ -398,3 +398,45 @@ fn an_id_cited_in_a_comment_or_a_string_is_a_reference_from_where_it_sits() {
     assert!(refs.contains(&("file:Shop/Jcs.cs", "FR-VIS-47", "comment")), "{refs:?}");
     assert!(refs.contains(&("sym:Shop/Jcs.cs::Jcs.Name", "ADR-022", "string")), "{refs:?}");
 }
+
+#[test]
+fn a_type_parameter_is_never_resolved_against_a_same_named_declaration() {
+    let repo = Repo::new(&[
+        ("Bedrock/TEntity.cs", "namespace Shop;\npublic class TEntity {}\n"),
+        ("Bedrock/U.cs", "namespace Shop;\npublic class U {}\n"),
+        ("Shop/Repo.cs", "namespace Shop;\npublic class Repo<TEntity>\n{\n    public TEntity Get() => default;\n    public U Map<U>(U x) => x;\n}\n"),
+    ]);
+    let ex = repo.extract("Shop/Repo.cs");
+    let imports = edges(&ex, EdgeKind::Imports);
+    assert!(imports.is_empty(), "a type parameter is not a use of the same-named declaration: {imports:?}");
+}
+
+#[test]
+fn an_assembly_attribute_points_at_its_declaring_class() {
+    let repo = Repo::new(&[
+        ("Bedrock/TrackedAttribute.cs", "public sealed class TrackedAttribute : System.Attribute {}\n"),
+        ("Shop/AssemblyInfo.cs", "[assembly: Tracked]\n"),
+    ]);
+    let ex = repo.extract("Shop/AssemblyInfo.cs");
+    assert_eq!(edges(&ex, EdgeKind::DecoratedBy), vec![
+        ("file:Shop/AssemblyInfo.cs", "sym:Bedrock/TrackedAttribute.cs::TrackedAttribute", ""),
+    ]);
+}
+
+#[test]
+fn a_string_literal_inside_an_interpolation_hole_is_referenced_once() {
+    // `CodeExtractor::extract` sorts and dedups edges afterwards, which would hide a duplicate
+    // push here; scanning directly is the only way this case pins the write itself.
+    use super::refs;
+    let rel = "Shop/Jcs.cs";
+    let src = "namespace Shop;\npublic class Jcs\n{\n    public string Name() => $\"{Foo(\"ADR-022\")}\";\n}\n";
+    let tree = crate::code::lang::Lang::CSharp.parse(src.as_bytes()).unwrap();
+    let mut ex = Extraction::default();
+    let own = declarations::scan(tree.root_node(), rel, src.as_bytes(), &Host::default(), &mut ex);
+    let resolver = Repo::new(&[(rel, src)]).resolver();
+    refs::scan(tree.root_node(), rel, src.as_bytes(), &Host::default(), &own, &resolver, &mut ex);
+    let refs = edges(&ex, EdgeKind::References);
+    assert_eq!(refs.iter().filter(|(_, id, _)| *id == "ADR-022").count(), 1, "{refs:?}");
+}
+
+
