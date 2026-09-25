@@ -417,15 +417,15 @@ impl Reader<'_> {
         if bare {
             if let Some(t) = locals.get(name) {
                 return match t {
-                    Some(t) => Typed::Found(self.scope.member_of(t, method, ns, class)),
-                    None => Typed::Unknown,
+                    Some(t) => self.on_type(t, method, ns, class),
+                    None => self.unread(method),
                 };
             }
         }
         if self.scope.is_enclosing_member(name, ns, class) {
             return match self.scope.enclosing_member_type(name, ns, class) {
-                Some(t) => Typed::Found(self.scope.member_of(&t, method, ns, class)),
-                None => Typed::Unknown,
+                Some(t) => self.on_type(&t, method, ns, class),
+                None => self.unread(method),
             };
         }
         // `name` naming a type parameter is not a static target: a same-named repo type must not
@@ -435,15 +435,48 @@ impl Reader<'_> {
         }
         Typed::None
     }
+
+    /// `method` on the repo type `t`: found there directly, or — the same reach `base_member` has
+    /// for `base.M()` — on its direct base as this file's own declaration of `t` writes it. `t`
+    /// naming no repo type at all, or a repo type that declares `method` nowhere this file can
+    /// read, is `Unknown` rather than a proven miss: this file has no proof either way, so the
+    /// extension rule may still stand in — that is what closes the gap `member_of` alone left,
+    /// where a value of a real but unimplemented-here type silently blocked every extension.
+    fn on_type(&self, t: &str, method: &str, ns: &str, class: Option<&str>) -> Typed {
+        let parts = self.scope.types(t, ns, class);
+        if parts.is_empty() {
+            return Typed::Unknown;
+        }
+        let found = self.scope.member_ids(&parts, method);
+        if !found.is_empty() {
+            return Typed::Found(found);
+        }
+        let based: Vec<String> = parts.iter()
+            .flat_map(|p| self.scope.own().parts(&p.full))
+            .flat_map(|td| td.bases.iter())
+            .flat_map(|b| self.scope.member_of(b, method, ns, class))
+            .collect();
+        if based.is_empty() { Typed::Unknown } else { Typed::Found(based) }
+    }
+
+    /// A known local, parameter or field whose declared type this file did not read. The extension
+    /// rule may stand in for it only when no repo type declares `method` as a genuine instance
+    /// member of its own — when one does, the unread value could be exactly that type, and an
+    /// extension would be a guess this file cannot back up either way, so it writes nothing instead.
+    fn unread(&self, method: &str) -> Typed {
+        if self.scope.declares_instance_member(method) { Typed::Found(Vec::new()) } else { Typed::Unknown }
+    }
 }
 
 /// What `typed` found `name` to stand for.
 enum Typed {
-    /// Ids found on a resolved type — possibly empty, because the type is known and simply does
-    /// not declare `method`: a miss, not a guess, so the extension rule does not stand in for it.
+    /// A real hit: `method` on a value's resolved repo type or its direct base, or — for a bare
+    /// name read as a type, not a value — whatever `member_of` finds there, empty included, since a
+    /// type name never triggers the extension rule regardless of what it resolves to.
     Found(Vec<String>),
-    /// A known local, parameter or field whose type this file cannot read; the extension rule may
-    /// stand in for it.
+    /// A local, parameter or field this file cannot prove either way: its declared type is unread,
+    /// or its declared type names no repo type, or a repo type it does name declares no such
+    /// member this file can read. The extension rule may stand in for any of these.
     Unknown,
     /// Neither a local, a parameter, a field or property, nor — for a bare name — a type: not a
     /// value, so never a member lookup and never an extension.

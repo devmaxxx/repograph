@@ -64,6 +64,10 @@ pub struct DotNet {
     types: BTreeMap<String, Vec<(Part, Members)>>,
     /// Extension method name → (declaring namespace, declaring type's full name).
     extensions: BTreeMap<String, BTreeSet<(String, String)>>,
+    /// Names of every field, property or method some type declares as its own — an extension of
+    /// another type excluded. Cheap enough to ask "could a real repo type be the receiver here"
+    /// without resolving one, for a value whose own declared type this file did not read.
+    instance_members: BTreeSet<String>,
     /// `.cs` rel → its `global using`s.
     global: BTreeMap<String, Vec<Using>>,
     /// Directory holding a `.csproj` (`""` at the root) → the project's root namespace.
@@ -80,6 +84,7 @@ impl DotNet {
             for m in &t.extensions {
                 self.extensions.entry(m.clone()).or_default().insert((t.namespace.clone(), t.full()));
             }
+            self.instance_members.extend(t.members.keys().filter(|m| !t.extensions.contains(*m)).cloned());
         }
         if !d.global_usings.is_empty() {
             self.global.insert(rel.to_string(), d.global_usings.clone());
@@ -102,6 +107,12 @@ impl DotNet {
 
     pub fn members(&self, full: &str, rel: &str, local: &str) -> Option<&Members> {
         self.types.get(full)?.iter().find(|(p, _)| p.rel == rel && p.local == local).map(|(_, m)| m)
+    }
+
+    /// Whether any type in the repository declares `member` as a field, property or method of its
+    /// own — an extension of another type does not count.
+    pub fn declares_instance_member(&self, member: &str) -> bool {
+        self.instance_members.contains(member)
     }
 
     pub fn extensions(&self, method: &str) -> Vec<(String, String)> {

@@ -124,6 +124,12 @@ impl<'a> Scope<'a> {
         self.member_ids(&self.types(type_name, namespace, class), member)
     }
 
+    /// Whether any repo type declares `member` as its own field, property or method — never as an
+    /// extension of another type.
+    pub fn declares_instance_member(&self, member: &str) -> bool {
+        self.dotnet.declares_instance_member(member)
+    }
+
     /// The enclosing type and each type around it, innermost first.
     fn enclosing(&self, namespace: &str, class: Option<&str>) -> Vec<Vec<Part>> {
         let Some(c) = class else { return Vec::new() };

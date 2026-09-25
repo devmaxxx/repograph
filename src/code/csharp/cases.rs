@@ -651,6 +651,88 @@ fn a_type_parameter_masks_a_same_named_repo_type_in_a_call() {
     assert!(edges(&ex, EdgeKind::Calls).is_empty(), "{:?}", ex.edges);
 }
 
+const DI_EXT: &str = "namespace Shop.Di;\npublic static class DiExtensions { public static IServiceCollection AddShop(this IServiceCollection s) => s; }\n";
+
+#[test]
+fn a_receiver_whose_type_is_not_a_repo_type_still_resolves_through_an_extension() {
+    let repo = Repo::new(&[
+        ("Di/Ext.cs", DI_EXT),
+        ("Use/M.cs", "using Shop.Di;\nnamespace Shop.Use;\nclass M { void Go(IServiceCollection services) { services.AddShop(); } }\n"),
+    ]);
+    let ex = repo.extract("Use/M.cs");
+    assert_eq!(edges(&ex, EdgeKind::Calls), vec![("sym:Use/M.cs::M.Go", "sym:Di/Ext.cs::DiExtensions.AddShop", "")]);
+}
+
+const ORDER: &str = "namespace Shop.Orders;\npublic class Order { public void Ship() {} }\n";
+const ORDER_EXT: &str = "namespace Shop.Orders;\npublic static class OrderExt { public static void Pack(this Order o) {} public static void Ship(this Order o) {} }\n";
+
+#[test]
+fn a_parameter_without_the_method_falls_through_to_its_extension() {
+    let repo = Repo::new(&[
+        ("Orders/Order.cs", ORDER),
+        ("Orders/OrderExt.cs", ORDER_EXT),
+        ("Orders/Use.cs", "namespace Shop.Orders;\nclass Use { void Go(Order o) { o.Pack(); o.Ship(); } }\n"),
+    ]);
+    let ex = repo.extract("Orders/Use.cs");
+    assert_eq!(edges(&ex, EdgeKind::Calls), vec![
+        ("sym:Orders/Use.cs::Use.Go", "sym:Orders/Order.cs::Order.Ship", ""),
+        ("sym:Orders/Use.cs::Use.Go", "sym:Orders/OrderExt.cs::OrderExt.Pack", ""),
+    ], "an instance method wins, and a method the type lacks falls through to its extension");
+}
+
+#[test]
+fn a_field_without_the_method_falls_through_to_its_extension() {
+    let repo = Repo::new(&[
+        ("Orders/Order.cs", ORDER),
+        ("Orders/OrderExt.cs", ORDER_EXT),
+        ("Orders/Use.cs", "namespace Shop.Orders;\nclass Use { Order f; void Go() { f.Pack(); } }\n"),
+    ]);
+    let ex = repo.extract("Orders/Use.cs");
+    assert_eq!(edges(&ex, EdgeKind::Calls), vec![("sym:Orders/Use.cs::Use.Go", "sym:Orders/OrderExt.cs::OrderExt.Pack", "")]);
+}
+
+#[test]
+fn a_var_local_without_the_method_falls_through_to_its_extension() {
+    let repo = Repo::new(&[
+        ("Orders/Order.cs", ORDER),
+        ("Orders/OrderExt.cs", ORDER_EXT),
+        ("Orders/Use.cs", "namespace Shop.Orders;\nclass Use { void Go() { var x = new Order(); x.Pack(); } }\n"),
+    ]);
+    let ex = repo.extract("Orders/Use.cs");
+    assert_eq!(edges(&ex, EdgeKind::Calls), vec![
+        ("sym:Orders/Use.cs::Use.Go", "sym:Orders/Order.cs::Order", ""),
+        ("sym:Orders/Use.cs::Use.Go", "sym:Orders/OrderExt.cs::OrderExt.Pack", ""),
+    ]);
+}
+
+const ORDER_MAKE: &str = "namespace Shop.Orders;\npublic class Order { public static Order Make() => new Order(); public void Ship() {} }\n";
+const SHIP_EXT: &str = "namespace Shop.Ext;\npublic static class E { public static void Ship(this object o) {} public static int Round(this int v) => v; }\n";
+
+#[test]
+fn an_unread_var_never_guesses_through_an_extension_when_a_repo_type_owns_the_name() {
+    let repo = Repo::new(&[
+        ("Orders/Order.cs", ORDER_MAKE),
+        ("Ext/E.cs", SHIP_EXT),
+        ("Use/M.cs", "using Shop.Orders;\nusing Shop.Ext;\nnamespace Shop.Use;\nclass M { void Go() { var y = Order.Make(); y.Ship(); } }\n"),
+    ]);
+    let ex = repo.extract("Use/M.cs");
+    assert_eq!(
+        edges(&ex, EdgeKind::Calls),
+        vec![("sym:Use/M.cs::M.Go", "sym:Orders/Order.cs::Order.Make", "")],
+        "y is an Order, which declares Ship, so E.Ship would be a guess",
+    );
+}
+
+#[test]
+fn an_unread_var_still_resolves_through_an_extension_when_no_repo_type_owns_the_name() {
+    let repo = Repo::new(&[
+        ("Ext/E.cs", SHIP_EXT),
+        ("Use/M.cs", "using Shop.Ext;\nnamespace Shop.Use;\nclass M { void Go() { var z = Fetch(); z.Round(); } }\n"),
+    ]);
+    let ex = repo.extract("Use/M.cs");
+    assert_eq!(edges(&ex, EdgeKind::Calls), vec![("sym:Use/M.cs::M.Go", "sym:Ext/E.cs::E.Round", "")]);
+}
+
 #[test]
 fn a_string_literal_inside_an_interpolation_hole_is_referenced_once() {
     // `CodeExtractor::extract` sorts and dedups edges afterwards, which would hide a duplicate
