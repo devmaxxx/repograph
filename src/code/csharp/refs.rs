@@ -36,8 +36,10 @@ fn declared_type_params(n: Node, src: &[u8]) -> BTreeSet<String> {
         .collect()
 }
 
-/// Locals and parameters of the member being read, to their declared type heads.
-type Locals = BTreeMap<String, String>;
+/// Locals and parameters of the member being read, to their declared type head — `None` for a
+/// known local whose type this file cannot read (`var` from a call, an implicit lambda parameter,
+/// `out var`, a pattern designation), which the extension rule may still stand in for.
+type Locals = BTreeMap<String, Option<String>>;
 
 const TYPES: [&str; 6] = ["class_declaration", "struct_declaration", "interface_declaration", "record_declaration", "enum_declaration", "delegate_declaration"];
 const MEMBERS: [&str; 10] = [
@@ -105,21 +107,30 @@ impl Reader<'_> {
             // inside a hole is not read twice.
             "interpolated_string_expression" => self.literal_content_ids(n, at, ex),
             "parameter" => {
-                if let (Some(name), Some(t)) = (n.child_by_field_name("name"), head(n.child_by_field_name("type"), self.src)) {
-                    locals.insert(text(name, self.src).to_string(), t);
+                if let Some(name) = n.child_by_field_name("name") {
+                    locals.insert(text(name, self.src).to_string(), head(n.child_by_field_name("type"), self.src));
                 }
             }
             "variable_declaration" => self.declare_locals(n, locals),
-            "declaration_pattern" | "recursive_pattern" => {
-                if let (Some(name), Some(t)) = (n.child_by_field_name("name"), head(n.child_by_field_name("type"), self.src)) {
-                    locals.insert(text(name, self.src).to_string(), t);
+            "declaration_pattern" | "recursive_pattern" | "declaration_expression" => {
+                if let Some(name) = n.child_by_field_name("name") {
+                    locals.insert(text(name, self.src).to_string(), head(n.child_by_field_name("type"), self.src));
                 }
             }
             "foreach_statement" => {
-                if let (Some(left), Some(t)) = (n.child_by_field_name("left").filter(|l| l.kind() == "identifier"), head(n.child_by_field_name("type"), self.src)) {
-                    locals.insert(text(left, self.src).to_string(), t);
+                if let Some(left) = n.child_by_field_name("left").filter(|l| l.kind() == "identifier") {
+                    locals.insert(text(left, self.src).to_string(), head(n.child_by_field_name("type"), self.src));
                 }
             }
+            // A lambda's own parameters are in scope for its body only; cloning locals keeps a
+            // same-named field or outer local from leaking in, and keeps the parameter itself from
+            // leaking out.
+            "lambda_expression" => return self.scoped_body(n, n.child_by_field_name("parameters"), n.child_by_field_name("body"), at, locals, ex),
+            "anonymous_method_expression" => {
+                let body = named(n).into_iter().find(|c| c.kind() == "block");
+                return self.scoped_body(n, n.child_by_field_name("parameters"), body, at, locals, ex);
+            }
+            "local_function_statement" => return self.scoped_body(n, n.child_by_field_name("parameters"), n.child_by_field_name("body"), at, locals, ex),
             "invocation_expression" => {
                 if let Some(f) = n.child_by_field_name("function") {
                     for to in self.call_targets(f, at, locals) {
@@ -184,9 +195,31 @@ impl Reader<'_> {
                 "object_creation_expression" | "cast_expression" => head(e.child_by_field_name("type"), self.src),
                 _ => None,
             });
-            if let Some(t) = declared.clone().or(inferred) {
-                locals.insert(text(name, self.src).to_string(), t);
+            locals.insert(text(name, self.src).to_string(), declared.clone().or(inferred));
+        }
+    }
+
+    /// A lambda's, anonymous method's or local function's own parameters, scoped to its body: locals
+    /// are cloned before the parameters are read, so a parameter never leaks into the surrounding
+    /// member's shared map, and never shadows a same-named field or outer local outside its own body.
+    fn scoped_body(&self, n: Node, params: Option<Node>, body: Option<Node>, at: &At, locals: &mut Locals, ex: &mut Extraction) {
+        let mut inner = locals.clone();
+        match params {
+            Some(p) if p.kind() == "implicit_parameter" => {
+                inner.insert(text(p, self.src).to_string(), None);
             }
+            Some(p) => self.walk(p, at, &mut inner, ex),
+            None => {}
+        }
+        if let Some(b) = body {
+            self.walk(b, at, &mut inner, ex);
+        }
+        self.type_uses(n, at, ex);
+        for c in named(n) {
+            if Some(c) == params || Some(c) == body {
+                continue;
+            }
+            self.walk(c, at, locals, ex);
         }
     }
 
@@ -321,6 +354,12 @@ impl Reader<'_> {
         match f.kind() {
             "identifier" | "generic_name" => {
                 let name = dotted(f, self.src);
+                // A local or parameter named like a method shadows it: `Foo()` through a delegate
+                // parameter `Foo` is a call through the parameter, not to the method, and this file
+                // does not read a delegate's target, so it writes nothing rather than guess.
+                if locals.contains_key(&name) {
+                    return Vec::new();
+                }
                 let own = self.scope.enclosing_member(&name, ns, class);
                 if own.is_empty() { self.scope.static_member(&name) } else { own }
             }
@@ -338,42 +377,77 @@ impl Reader<'_> {
         }
     }
 
-    /// `method` called on the receiver `e`; an unresolved receiver falls to the extension rule.
+    /// `method` called on the receiver `e`. The extension rule stands in only for a value whose
+    /// type this file cannot read — never for `this`/`base` themselves, a predefined type, a type
+    /// or namespace name, a qualified/generic/alias receiver, or an invocation or other expression
+    /// receiver: none of those is a value of unknown type, so a miss there is a miss, not a guess.
     fn through(&self, e: Node, method: &str, at: &At, locals: &Locals) -> Vec<String> {
         let (ns, class) = (at.namespace.as_str(), at.class.as_deref());
-        let found = match e.kind() {
+        match e.kind() {
             "this" => self.scope.enclosing_member(method, ns, class),
             "base" => self.scope.base_member(method, ns, class),
             "member_access_expression" if e.child_by_field_name("expression").is_some_and(|x| x.kind() == "this") => {
                 let field = e.child_by_field_name("name").map(|x| dotted(x, self.src)).unwrap_or_default();
-                self.typed(&field, method, at, locals, false)
+                self.typed_or_extension(&field, method, at, locals, false, ns)
             }
-            "identifier" => self.typed(text(e, self.src), method, at, locals, true),
+            "identifier" => self.typed_or_extension(text(e, self.src), method, at, locals, true, ns),
             "member_access_expression" | "qualified_name" | "generic_name" | "alias_qualified_name" => {
                 receiver_path(e, self.src).map(|t| self.scope.member_of(&t, method, ns, class)).unwrap_or_default()
             }
+            // A predefined type, an invocation or any other expression receiver: this file does not
+            // read the type such an expression produces, so no member lookup applies, and — because
+            // it names no local, parameter or field — the extension rule does not either.
             _ => Vec::new(),
-        };
-        if found.is_empty() { self.scope.extension(method, ns) } else { found }
+        }
     }
 
-    /// `method` on what `name` stands for: a local or parameter, then a member of the enclosing
-    /// types, then — for a bare name, not `this.name` — a type, which makes the call static.
-    fn typed(&self, name: &str, method: &str, at: &At, locals: &Locals, bare: bool) -> Vec<String> {
-        let (ns, class) = (at.namespace.as_str(), at.class.as_deref());
-        if let Some(t) = locals.get(name) {
-            return self.scope.member_of(t, method, ns, class);
+    fn typed_or_extension(&self, name: &str, method: &str, at: &At, locals: &Locals, bare: bool, ns: &str) -> Vec<String> {
+        match self.typed(name, method, at, locals, bare) {
+            Typed::Found(ids) => ids,
+            Typed::Unknown => self.scope.extension(method, ns),
+            Typed::None => Vec::new(),
         }
-        if let Some(t) = self.scope.enclosing_member_type(name, ns, class) {
-            return self.scope.member_of(&t, method, ns, class);
+    }
+
+    /// `method` on what `name` stands for: a local or parameter (bare names only — `this.name`
+    /// skips straight to members, never consulting a same-named local), then a member of the
+    /// enclosing types, then — for a bare name, not `this.name` — a type, which makes the call static.
+    fn typed(&self, name: &str, method: &str, at: &At, locals: &Locals, bare: bool) -> Typed {
+        let (ns, class) = (at.namespace.as_str(), at.class.as_deref());
+        if bare {
+            if let Some(t) = locals.get(name) {
+                return match t {
+                    Some(t) => Typed::Found(self.scope.member_of(t, method, ns, class)),
+                    None => Typed::Unknown,
+                };
+            }
+        }
+        if self.scope.is_enclosing_member(name, ns, class) {
+            return match self.scope.enclosing_member_type(name, ns, class) {
+                Some(t) => Typed::Found(self.scope.member_of(&t, method, ns, class)),
+                None => Typed::Unknown,
+            };
         }
         // `name` naming a type parameter is not a static target: a same-named repo type must not
         // stand in for it, the same masking `use_type` applies to a type parameter written as a type.
         if bare && !at.type_params.contains(name) {
-            return self.scope.member_of(name, method, ns, class);
+            return Typed::Found(self.scope.member_of(name, method, ns, class));
         }
-        Vec::new()
+        Typed::None
     }
+}
+
+/// What `typed` found `name` to stand for.
+enum Typed {
+    /// Ids found on a resolved type — possibly empty, because the type is known and simply does
+    /// not declare `method`: a miss, not a guess, so the extension rule does not stand in for it.
+    Found(Vec<String>),
+    /// A known local, parameter or field whose type this file cannot read; the extension rule may
+    /// stand in for it.
+    Unknown,
+    /// Neither a local, a parameter, a field or property, nor — for a bare name — a type: not a
+    /// value, so never a member lookup and never an extension.
+    None,
 }
 
 /// `Shop.Checks.Guard` from a member-access chain whose every link is a plain name.

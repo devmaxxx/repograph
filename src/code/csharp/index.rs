@@ -122,8 +122,9 @@ impl DotNet {
         }
     }
 
-    // Read by a Razor component's namespace, which the Razor task adds.
-    #[allow(dead_code)]
+    // Read by Razor's namespace derivation; `expect` flags this once it is in the non-test build —
+    // a case test already exercises it, so the same `expect` on the test-cfg build would never fire.
+    #[cfg_attr(not(test), expect(dead_code))]
     pub fn root_namespace(&self, rel: &str) -> Option<(&str, &str)> {
         let dir = self.project_of(rel)?;
         Some((dir, self.projects[dir].as_str()))

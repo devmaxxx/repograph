@@ -3,6 +3,9 @@
 //! `using static` from the file, its host and its project's `global using`s. The first step that
 //! finds a declaration wins; inside a step every declaring file is kept, so a partial type
 //! resolves to all its parts, as `expect`/`actual` does in Kotlin.
+//!
+//! `base_member` walks the one base a file writes for a type, not the chain above it; a call only
+//! a grand-base declares is a missing edge here, not a wrong one.
 
 use std::collections::BTreeMap;
 
@@ -26,14 +29,14 @@ impl<'a> Scope<'a> {
         Scope { rel, dotnet, own, usings }
     }
 
-    // Read by a Razor view's resolution, which the Razor task adds.
-    #[allow(dead_code)]
+    // Read by Razor resolution; `expect` flags this once it is.
+    #[expect(dead_code)]
     pub(crate) fn usings(&self) -> &[Using] {
         &self.usings
     }
 
-    // Read by a Razor view's resolution, which the Razor task adds.
-    #[allow(dead_code)]
+    // Read by Razor resolution; `expect` flags this once it is.
+    #[expect(dead_code)]
     pub(crate) fn dotnet(&self) -> &'a DotNet {
         self.dotnet
     }
@@ -108,6 +111,12 @@ impl<'a> Scope<'a> {
             .filter(|p| self.members(p).is_some_and(|m| m.contains_key(member)))
             .map(|p| format!("sym:{}::{}.{member}", p.rel, p.local))
             .collect()
+    }
+
+    /// Whether an enclosing type declares `member` at all, its type read or not — a value receiver
+    /// the extension rule may stand in for, as opposed to a name that names no field or property.
+    pub fn is_enclosing_member(&self, member: &str, namespace: &str, class: Option<&str>) -> bool {
+        self.enclosing(namespace, class).iter().flatten().any(|p| self.members(p).is_some_and(|m| m.contains_key(member)))
     }
 
     /// `member` through a type name: `Receipt.Create()`, or a receiver declared as `type_name`.

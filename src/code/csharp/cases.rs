@@ -523,6 +523,134 @@ fn a_base_call_reaches_the_member_of_the_base_class() {
     );
 }
 
+const CALL_EXTENSIONS: &str = "namespace Shop.Ext;\npublic static class Extensions\n{\n    public static int Clamp(this int v) => v;\n    public static string Format(this string s) => s;\n    public static void Ship(this object o) {}\n    public static int Round(this int v) => v;\n}\n";
+
+#[test]
+fn an_unknown_bare_name_never_falls_to_an_extension() {
+    let repo = Repo::new(&[
+        ("Ext/Extensions.cs", CALL_EXTENSIONS),
+        ("Use/M.cs", "using Shop.Ext;\nnamespace Shop.Use;\nclass M { void Go() { Math.Clamp(1); } }\n"),
+    ]);
+    let ex = repo.extract("Use/M.cs");
+    assert!(edges(&ex, EdgeKind::Calls).is_empty(), "Math is neither a local nor a member: {:?}", ex.edges);
+}
+
+#[test]
+fn a_predefined_type_receiver_never_falls_to_an_extension() {
+    let repo = Repo::new(&[
+        ("Ext/Extensions.cs", CALL_EXTENSIONS),
+        ("Use/M.cs", "using Shop.Ext;\nnamespace Shop.Use;\nclass M { void Go() { string.Format(\"\"); } }\n"),
+    ]);
+    let ex = repo.extract("Use/M.cs");
+    assert!(edges(&ex, EdgeKind::Calls).is_empty(), "a predefined type is a type name, not a value: {:?}", ex.edges);
+}
+
+#[test]
+fn a_chain_receiver_never_falls_to_an_extension() {
+    let repo = Repo::new(&[
+        ("Ext/Extensions.cs", CALL_EXTENSIONS),
+        ("Orders/Order.cs", "namespace Shop.Orders;\npublic class Order { public static Order Make() => new Order(); public void Ship() {} }\n"),
+        ("Use/M.cs", "using Shop.Ext;\nnamespace Shop.Use;\nclass M { void Go() { Shop.Orders.Order.Make().Ship(); } }\n"),
+    ]);
+    let ex = repo.extract("Use/M.cs");
+    let calls = edges(&ex, EdgeKind::Calls);
+    assert!(!calls.iter().any(|(_, t, _)| t.ends_with("Ship")), "a call result's type is not read, so it proves neither Order.Ship nor Ext.Ship: {calls:?}");
+}
+
+#[test]
+fn a_local_of_unknown_type_still_resolves_through_an_extension() {
+    let repo = Repo::new(&[
+        ("Ext/Extensions.cs", CALL_EXTENSIONS),
+        ("Use/M.cs", "using Shop.Ext;\nnamespace Shop.Use;\nclass M { void Go() { int n = 1; n.Round(); } }\n"),
+    ]);
+    let ex = repo.extract("Use/M.cs");
+    assert_eq!(edges(&ex, EdgeKind::Calls), vec![("sym:Use/M.cs::M.Go", "sym:Ext/Extensions.cs::Extensions.Round", "")]);
+}
+
+#[test]
+fn this_x_never_consults_a_same_named_local() {
+    let repo = Repo::new(&[
+        ("Orders/Order.cs", "namespace Shop.Orders;\npublic class Order { }\n"),
+        ("Orders/Dto.cs", "namespace Shop.Orders;\npublic class Dto { public void Apply() {} }\n"),
+        ("Orders/A.cs", "namespace Shop.Orders;\nclass A { Order order; void M(Dto order) { this.order.Apply(); } }\n"),
+    ]);
+    let ex = repo.extract("Orders/A.cs");
+    assert!(edges(&ex, EdgeKind::Calls).is_empty(), "this.order reads the field's type (Order, no Apply), never the parameter's (Dto): {:?}", ex.edges);
+}
+
+#[test]
+fn a_lambda_parameter_does_not_shadow_a_same_named_field() {
+    let repo = Repo::new(&[
+        ("Orders/Dto.cs", "namespace Shop.Orders;\npublic class Dto { public void Apply() {} }\n"),
+        ("Orders/A.cs", "namespace Shop.Orders;\nclass A { Dto x; void M(System.Collections.Generic.List<int> xs) { xs.ForEach(x => x.Apply()); } }\n"),
+    ]);
+    let ex = repo.extract("Orders/A.cs");
+    assert!(edges(&ex, EdgeKind::Calls).is_empty(), "the lambda's own x is an int, never the field: {:?}", ex.edges);
+}
+
+#[test]
+fn a_var_local_from_a_call_does_not_shadow_a_same_named_field() {
+    let repo = Repo::new(&[
+        ("Orders/Dto.cs", "namespace Shop.Orders;\npublic class Dto { public void Apply() {} }\n"),
+        ("Orders/A.cs", "namespace Shop.Orders;\nclass A { Dto d; void M() { var d = GetDto(); d.Apply(); } }\n"),
+    ]);
+    let ex = repo.extract("Orders/A.cs");
+    assert!(edges(&ex, EdgeKind::Calls).is_empty(), "the local d shadows the field d, and its own type is unread: {:?}", ex.edges);
+}
+
+#[test]
+fn a_lambda_parameter_does_not_leak_past_its_body() {
+    let repo = Repo::new(&[
+        ("Orders/Order.cs", "namespace Shop.Orders;\npublic class Order { public void Ship() {} }\n"),
+        ("Orders/Dto.cs", "namespace Shop.Orders;\npublic class Dto { public void Apply() {} }\n"),
+        ("Orders/A.cs", "namespace Shop.Orders;\nclass A { Order o; void M() { System.Action<Dto> f = (Dto o) => o.Apply(); o.Ship(); } }\n"),
+    ]);
+    let ex = repo.extract("Orders/A.cs");
+    assert_eq!(edges(&ex, EdgeKind::Calls), vec![
+        ("sym:Orders/A.cs::A.M", "sym:Orders/Dto.cs::Dto.Apply", ""),
+        ("sym:Orders/A.cs::A.M", "sym:Orders/Order.cs::Order.Ship", ""),
+    ]);
+}
+
+#[test]
+fn an_unqualified_call_through_a_local_named_like_a_method_is_not_the_method() {
+    let repo = Repo::new(&[
+        ("Orders/A.cs", "namespace Shop.Orders;\nclass A { void Foo() {} void M(System.Action Foo) { Foo(); } }\n"),
+    ]);
+    let ex = repo.extract("Orders/A.cs");
+    assert!(edges(&ex, EdgeKind::Calls).is_empty(), "the parameter Foo shadows the method Foo: {:?}", ex.edges);
+}
+
+#[test]
+fn this_prefixed_field_access_resolves_the_same_as_the_bare_field() {
+    let repo = Repo::new(&[
+        ("Payments/IPaymentGateway.cs", GATEWAY),
+        ("Orders/OrderService.cs", "using Shop.Payments;\nnamespace Shop.Orders;\nclass OrderService(IPaymentGateway gateway) { private readonly IPaymentGateway _gateway = gateway; void Place(int id) { this._gateway.Charge(id); } }\n"),
+    ]);
+    let ex = repo.extract("Orders/OrderService.cs");
+    assert_eq!(edges(&ex, EdgeKind::Calls), vec![("sym:Orders/OrderService.cs::OrderService.Place", "sym:Payments/IPaymentGateway.cs::IPaymentGateway.Charge", "")]);
+}
+
+#[test]
+fn a_conditional_access_call_resolves_like_a_plain_member_access() {
+    let repo = Repo::new(&[
+        ("Payments/IPaymentGateway.cs", GATEWAY),
+        ("Orders/OrderService.cs", "using Shop.Payments;\nnamespace Shop.Orders;\nclass OrderService(IPaymentGateway gateway) { private readonly IPaymentGateway _gateway = gateway; void Place(int id) { _gateway?.Refund(id); } }\n"),
+    ]);
+    let ex = repo.extract("Orders/OrderService.cs");
+    assert_eq!(edges(&ex, EdgeKind::Calls), vec![("sym:Orders/OrderService.cs::OrderService.Place", "sym:Payments/IPaymentGateway.cs::IPaymentGateway.Refund", "")]);
+}
+
+#[test]
+fn a_type_parameter_masks_a_same_named_repo_type_in_a_call() {
+    let repo = Repo::new(&[
+        ("Bedrock/Order.cs", "namespace Shop;\npublic class Order { public static void Make() {} }\n"),
+        ("Shop/Repo.cs", "namespace Shop;\npublic class Repo<Order> { void M() { new Order(); Order.Make(); } }\n"),
+    ]);
+    let ex = repo.extract("Shop/Repo.cs");
+    assert!(edges(&ex, EdgeKind::Calls).is_empty(), "{:?}", ex.edges);
+}
+
 #[test]
 fn a_string_literal_inside_an_interpolation_hole_is_referenced_once() {
     // `CodeExtractor::extract` sorts and dedups edges afterwards, which would hide a duplicate
@@ -538,5 +666,3 @@ fn a_string_literal_inside_an_interpolation_hole_is_referenced_once() {
     let refs = edges(&ex, EdgeKind::References);
     assert_eq!(refs.iter().filter(|(_, id, _)| *id == "ADR-022").count(), 1, "{refs:?}");
 }
-
-
