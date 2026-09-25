@@ -11,22 +11,19 @@ pub mod blank;
 #[cfg(test)]
 mod cases;
 
+use std::collections::BTreeMap;
 use std::sync::OnceLock;
 
-use crate::code::csharp::declarations::{join, Declared, TypeDecl, Using};
+use crate::code::csharp::declarations::{self, join, Declared, TypeDecl, Using};
 use crate::code::csharp::index::Part;
 use crate::code::csharp::refs::first_segment;
 use crate::code::csharp::resolve::Scope;
 use crate::code::csharp::{self, Host};
 use crate::code::imports::Resolver;
 use crate::code::index::Header;
-use crate::code::lang::file_node;
+use crate::code::lang::{file_node, Lang};
 use crate::model::{EdgeKind, Extraction, NodeKind};
 use blank::View;
-
-/// Where the Razor compiler puts a view's class when no `@namespace` names one; the repository
-/// declares nothing there, so only the global namespace and the view's own usings reach it.
-const VIEW_NAMESPACE: &str = "AspNetCoreGeneratedDocument";
 
 /// Razor's directives in components and views: each is one line of C#, never markup.
 const DIRECTIVES: [&str; 15] = [
@@ -42,8 +39,9 @@ pub struct Directives {
     pub injects: Vec<(String, String, u32)>,
     /// `@inherits` and `@implements` (bases), and a view's `@model`: (type as written, line, is a base).
     pub types: Vec<(String, u32, bool)>,
-    /// Upper-case markup tags outside the blocks and comments: (name, line).
-    pub tags: Vec<(String, u32)>,
+    /// Upper-case markup tags outside the blocks and comments: (name, line, the upper-case tag
+    /// open around it). A tag nested in a component can be that component's parameter, not a render.
+    pub tags: Vec<(String, u32, Option<String>)>,
     /// The blocks cannot be read, so nothing the file writes past its node would be proven.
     pub unread: bool,
 }
@@ -54,8 +52,9 @@ pub fn component_name(rel: &str) -> Option<String> {
     file.strip_suffix(".razor").filter(|stem| *stem != "_Imports").map(str::to_string)
 }
 
-fn is_imports(rel: &str) -> bool {
-    rel.rsplit('/').next() == Some("_Imports.razor")
+/// `_Imports.razor` for components, `_ViewImports.cshtml` for views.
+pub(crate) fn is_imports(rel: &str) -> bool {
+    matches!(rel.rsplit('/').next(), Some("_Imports.razor" | "_ViewImports.cshtml"))
 }
 
 fn is_name(s: &str) -> bool {
@@ -134,19 +133,15 @@ pub fn directives(src: &str) -> Directives {
         }
         let arg = |word: &str| l.strip_prefix(word).filter(|r| r.starts_with([' ', '\t'])).map(str::trim);
         let word = l.strip_prefix('@').map(|r| r.split(|c: char| !c.is_alphanumeric()).next().unwrap_or(""));
-        if word.is_some_and(|w| DIRECTIVES.contains(&w)) {
+        // A using statement (`@using (Html.BeginForm()) { … }`) is no directive, and its body is markup.
+        let statement = word == Some("using") && arg("@using").and_then(using).is_none();
+        if word.is_some_and(|w| DIRECTIVES.contains(&w)) && !statement {
             lines.push(at..start);
         }
         if let Some(ns) = arg("@namespace") {
             d.namespace = Some(ns.to_string());
         } else if let Some(u) = arg("@using") {
-            match using(u) {
-                Some(u) => d.usings.push(u),
-                // A using statement's body is markup.
-                None => {
-                    lines.pop();
-                }
-            }
+            d.usings.extend(using(u));
         } else if let Some(rest) = arg("@inject") {
             if let Some((t, name)) = rest.rsplit_once([' ', '\t']) {
                 d.injects.push((t.trim().to_string(), name.trim().trim_start_matches('@').to_string(), line));
@@ -158,19 +153,52 @@ pub fn directives(src: &str) -> Directives {
         }
     }
     static TAG: OnceLock<regex::Regex> = OnceLock::new();
-    let tag = TAG.get_or_init(|| regex::Regex::new(r"<([A-Z][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*)[\s/>]").unwrap());
+    let tag = TAG.get_or_init(|| regex::Regex::new(r"<(/?)([A-Z][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*)[\s/>]").unwrap());
+    let b = src.as_bytes();
+    // The upper-case tags open around the current one, innermost last.
+    let mut open: Vec<String> = Vec::new();
     for m in tag.captures_iter(src) {
-        let at = m.get(0).map_or(0, |g| g.start());
-        if !inside(at) && !lines.iter().any(|l| l.contains(&at)) {
-            d.tags.push((m[1].to_string(), src[..at].matches('\n').count() as u32 + 1));
+        let whole = m.get(0).expect("group 0 always matches");
+        let at = whole.start();
+        // A markup tag never follows a name: `List<Badge>` and `OfType<Badge>()` are C# generics.
+        let generic = at > 0 && (b[at - 1].is_ascii_alphanumeric() || b[at - 1] == b'_' || b[at - 1] == b'.');
+        if generic || inside(at) || lines.iter().any(|l| l.contains(&at)) {
+            continue;
+        }
+        let name = m[2].to_string();
+        if !m[1].is_empty() {
+            if let Some(i) = open.iter().rposition(|o| *o == name) {
+                open.truncate(i);
+            }
+            continue;
+        }
+        d.tags.push((name.clone(), src[..at].matches('\n').count() as u32 + 1, open.last().cloned()));
+        if !self_closing(b, whole.end() - 1) {
+            open.push(name);
         }
     }
     d
 }
 
+/// Whether the tag whose name ends before `from` closes itself: its `>`, past quoted attribute
+/// values, follows a `/`.
+fn self_closing(b: &[u8], from: usize) -> bool {
+    let mut quote = None;
+    for i in from..b.len() {
+        match (quote, b[i]) {
+            (Some(q), c) if c == q => quote = None,
+            (Some(_), _) => {}
+            (None, b'"' | b'\'') => quote = Some(b[i]),
+            (None, b'>') => return i > 0 && b[i - 1] == b'/',
+            _ => {}
+        }
+    }
+    false
+}
+
 /// A component's header: its name, and its own `@namespace` when it writes one. The computed
 /// namespace needs the project, which `header_for` cannot see; `DotNet::component_parts` has it.
-/// An `_Imports.razor` declares nothing, but its usings and namespace decide what every component
+/// An imports file declares nothing, but its usings and namespace decide what every component
 /// below it resolves, so its header's directives are those lines: `widen` re-reads the family when
 /// they move.
 pub fn header(rel: &str, source: &str) -> Header {
@@ -205,41 +233,62 @@ fn imports(scope: &Scope, rel: &str, written: &str, namespace: &str, class: Opti
     first
 }
 
+/// `@inject T Name` as (name, type head).
+fn injected(d: &Directives) -> Vec<(String, String)> {
+    d.injects.iter().filter_map(|(t, n, _)| Some((n.clone(), type_words(t).into_iter().next()?))).collect()
+}
+
+/// A component's members as the index keeps them: its `@code`/`@functions` members and its
+/// `@inject`s, each with its declared type head. Another file needs them to tell a parameter tag
+/// from a rendered one, and to resolve a code-behind's call into a block.
+pub fn members(rel: &str, source: &str, d: &Directives) -> BTreeMap<String, Option<String>> {
+    let Some(name) = component_name(rel) else { return BTreeMap::new() };
+    let injected = injected(d);
+    let mut members: BTreeMap<String, Option<String>> = injected.iter().map(|(n, t)| (n.clone(), Some(t.clone()))).collect();
+    if let View::Read(text) = blank::view(source) {
+        if let Some(tree) = Lang::CSharp.parse(text.as_bytes()) {
+            let host = Host { component: Some(&name), injected: &injected, ..Host::default() };
+            let own = declarations::scan(tree.root_node(), rel, text.as_bytes(), &host, &mut Extraction::default());
+            members.extend(own.types.into_iter().filter(|t| t.local == name).flat_map(|t| t.members));
+        }
+    }
+    members
+}
+
 pub fn extract(resolver: &Resolver, rel: &str, source: &str) -> Extraction {
     let mut ex = Extraction::default();
     file_node(rel, &mut ex);
-    let d = directives(source);
-    if d.unread {
-        return ex;
-    }
-    let dotnet = resolver.dotnet();
-    let Some(name) = component_name(rel) else {
-        view(resolver, rel, &d, &mut ex);
-        return ex;
+    let text = match blank::view(source) {
+        View::Unread(_) => return ex,
+        View::Read(text) => Some(text),
+        View::None => None,
     };
+    let d = directives(source);
+    let dotnet = resolver.dotnet();
     let mut usings = dotnet.razor_usings(rel);
     usings.extend(d.usings.iter().cloned());
     let namespace = dotnet.razor_namespace(rel, d.namespace.as_deref());
+    let Some(name) = component_name(rel) else {
+        view(resolver, rel, &d, &namespace, &usings, &mut ex);
+        return ex;
+    };
     let file = format!("file:{rel}");
     let id = format!("sym:{rel}::{name}");
     let last = source.lines().count().max(1) as u32;
     let signature = source.lines().map(str::trim).find(|l| !l.is_empty()).unwrap_or("");
     ex.node_span(NodeKind::Symbol, &id, &name, signature, rel, (1, last));
     ex.edge(&file, &id, EdgeKind::Declares, "export", rel);
-    let injected: Vec<(String, String)> = d.injects.iter()
-        .filter_map(|(t, n, _)| Some((n.clone(), type_words(t).into_iter().next()?)))
-        .collect();
+    let injected = injected(&d);
     for (t, n, line) in &d.injects {
         let member = format!("{id}.{n}");
         ex.node_span(NodeKind::Symbol, &member, &format!("{name}.{n}"), &format!("@inject {t} {n}"), rel, (*line, *line));
         ex.edge(&id, &member, EdgeKind::Declares, "", rel);
     }
     let host = Host { component: Some(&name), namespace: &namespace, usings: &usings, injected: &injected };
-    let own = match blank::view(source) {
-        View::Read(text) => csharp::read(resolver, rel, &text, &host, &mut ex),
-        // Without a block the component still has injected members to resolve through. `Unread`
-        // returned above, with `d.unread`.
-        View::None | View::Unread(_) => Declared {
+    let own = match text {
+        Some(text) => csharp::read(resolver, rel, &text, &host, &mut ex),
+        // Without a block the component still has injected members to resolve through.
+        None => Declared {
             types: vec![TypeDecl {
                 namespace: namespace.clone(),
                 local: name.clone(),
@@ -262,14 +311,23 @@ pub fn extract(resolver: &Resolver, rel: &str, source: &str) -> Extraction {
             }
         }
     }
-    for (tag, _) in &d.tags {
-        let parts = scope.types(tag, &namespace, Some(&name));
-        // Razor renders a component and reads any other upper-case tag as an element; a component
-        // written only in C# is a missing edge here, not a class guessed to be one.
-        if !parts.iter().any(|p| component_name(&p.rel).is_some()) {
-            continue;
+    // Razor renders a component and reads any other upper-case tag as an element, so only the parts
+    // of a component count; a component written only in C# is a missing edge, not a guess.
+    let rendered = |tag: &str| -> Vec<Part> {
+        let mut parts = scope.component_types(tag, &namespace);
+        parts.retain(|p| !dotnet.component_parts(&p.full).is_empty());
+        parts
+    };
+    for (tag, _, parent) in &d.tags {
+        // Inside a component, a tag naming one of its members is a parameter (`<Card><Header>`); inside
+        // one the repo does not declare, the parameters are unknown and any child could be one.
+        if let Some(parent) = parent {
+            let owner = rendered(parent);
+            if owner.is_empty() || owner.iter().any(|p| scope.members(p).is_some_and(|m| m.contains_key(tag))) {
+                continue;
+            }
         }
-        for p in parts.iter().filter(|p| p.rel != rel) {
+        for p in rendered(tag).into_iter().filter(|p| p.rel != rel) {
             ex.edge(&id, &format!("sym:{}::{}", p.rel, p.local), EdgeKind::Calls, "", rel);
             ex.edge(&file, &format!("file:{}", p.rel), EdgeKind::Imports, first_segment(&p.local), rel);
         }
@@ -281,15 +339,13 @@ pub fn extract(resolver: &Resolver, rel: &str, source: &str) -> Extraction {
     ex
 }
 
-/// A view or an imports file: the `Imports` its own directives' types prove. `_Imports.razor` is
-/// for components, and a view's class sits in the namespace its own `@namespace` names or in
-/// `VIEW_NAMESPACE`, never the project's.
-fn view(resolver: &Resolver, rel: &str, d: &Directives, ex: &mut Extraction) {
-    let namespace = d.namespace.clone().unwrap_or_else(|| VIEW_NAMESPACE.to_string());
+/// A view or an imports file: the `Imports` its directives' types prove, read under its imports
+/// files' usings and the namespace the Razor compiler gives its class.
+fn view(resolver: &Resolver, rel: &str, d: &Directives, namespace: &str, usings: &[Using], ex: &mut Extraction) {
     let own = Declared::default();
-    let host = Host { namespace: &namespace, usings: &d.usings, ..Host::default() };
+    let host = Host { namespace, usings, ..Host::default() };
     let scope = Scope::new(rel, resolver.dotnet(), &own, &host);
     for written in d.injects.iter().map(|(t, _, _)| t).chain(d.types.iter().map(|(t, _, _)| t)) {
-        imports(&scope, rel, written, &namespace, None, ex);
+        imports(&scope, rel, written, namespace, None, ex);
     }
 }

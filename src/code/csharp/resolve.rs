@@ -49,6 +49,13 @@ impl<'a> Scope<'a> {
         self.types_under(name, namespace, class, &self.usings)
     }
 
+    /// A markup tag's type: Razor discovers components through the namespaces around the file and
+    /// its `@using` namespaces, never through an alias.
+    pub fn component_types(&self, name: &str, namespace: &str) -> Vec<Part> {
+        let usings: Vec<Using> = self.usings.iter().filter(|u| !matches!(u, Using::Alias(..))).cloned().collect();
+        self.types_under(name, namespace, None, &usings)
+    }
+
     /// `name` as the file declaring `p` reads it around `p` — `p`'s namespace, the types enclosing
     /// it, and that file's own usings — which is where the compiler reads `p`'s base list. The
     /// caller's scope would let a type only the caller sees stand in for the real base.

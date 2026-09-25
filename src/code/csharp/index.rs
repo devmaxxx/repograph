@@ -74,6 +74,14 @@ fn sanitised(namespace: &str) -> String {
     namespace.split('.').filter(|s| !s.is_empty()).map(identifier).collect::<Vec<_>>().join(".")
 }
 
+/// Where the Razor compiler puts a view's class when no `@namespace` names one
+/// (`MvcViewDocumentClassifierPass`); the repository declares nothing there.
+const VIEW_NAMESPACE: &str = "AspNetCoreGeneratedDocument";
+
+fn is_view(rel: &str) -> bool {
+    rel.ends_with(".cshtml")
+}
+
 /// The folders of `dir` below `base` as namespace segments: `Pages/Admin` gives `Pages.Admin`.
 fn folders(base: &str, dir: &str) -> String {
     let below = if base.is_empty() { dir } else { dir.strip_prefix(base).unwrap_or(dir).trim_start_matches('/') };
@@ -100,8 +108,10 @@ pub struct DotNet {
     global_by_project: OnceLock<BTreeMap<Option<String>, Vec<Using>>>,
     /// `_Imports.razor` directory → its usings and its `@namespace`.
     razor_imports: BTreeMap<String, (Vec<Using>, Option<String>)>,
-    /// Component rel → the `@namespace` the file names, if any.
-    components: BTreeMap<String, Option<String>>,
+    /// `_ViewImports.cshtml` directory → its usings and its `@namespace`: the views' `_Imports.razor`.
+    view_imports: BTreeMap<String, (Vec<Using>, Option<String>)>,
+    /// Component rel → the `@namespace` the file names, if any, and its `@code` and `@inject` members.
+    components: BTreeMap<String, (Option<String>, Members)>,
     /// Built on first use, like `global_by_project`: component full name → its parts.
     components_by_full: OnceLock<BTreeMap<String, Vec<Part>>>,
 }
@@ -144,7 +154,10 @@ impl DotNet {
     }
 
     pub fn members(&self, full: &str, rel: &str, local: &str) -> Option<&Members> {
-        self.entry(full, rel, local).map(|e| &e.members)
+        match self.entry(full, rel, local) {
+            Some(e) => Some(&e.members),
+            None => self.components.get(rel).filter(|_| self.component_parts(full).iter().any(|p| p.rel == rel && p.local == local)).map(|(_, m)| m),
+        }
     }
 
     /// The base-list names one part writes, unresolved.
@@ -198,16 +211,27 @@ impl DotNet {
         by.get(&self.project_of(rel).map(str::to_string)).cloned().unwrap_or_default()
     }
 
-    pub(crate) fn add_razor(&mut self, rel: &str, d: &crate::code::razor::Directives) {
-        if rel.rsplit('/').next() == Some("_Imports.razor") {
-            self.razor_imports.insert(parent(rel).to_string(), (d.usings.clone(), d.namespace.clone()));
-        } else if crate::code::razor::component_name(rel).is_some() && !d.unread {
-            self.components.insert(rel.to_string(), d.namespace.clone());
+    /// `members` are what `razor::members` reads from the component's blocks and injects.
+    pub(crate) fn add_razor(&mut self, rel: &str, d: &crate::code::razor::Directives, members: Members) {
+        if d.unread {
+            return;
+        }
+        if crate::code::razor::is_imports(rel) {
+            let map = if is_view(rel) { &mut self.view_imports } else { &mut self.razor_imports };
+            map.insert(parent(rel).to_string(), (d.usings.clone(), d.namespace.clone()));
+        } else if crate::code::razor::component_name(rel).is_some() {
+            self.instance_members.extend(members.keys().cloned());
+            self.components.insert(rel.to_string(), (d.namespace.clone(), members));
         }
     }
 
+    /// The imports files a Razor file reads: `_ViewImports.cshtml` for a view, `_Imports.razor` for a component.
+    fn imports_of(&self, rel: &str) -> &BTreeMap<String, (Vec<Using>, Option<String>)> {
+        if is_view(rel) { &self.view_imports } else { &self.razor_imports }
+    }
+
     /// `rel`'s folder and each above it, nearest first, up to its project's: the Razor compiler looks
-    /// for `_Imports.razor` from the project root down, never above it.
+    /// for imports files from the project root down, never above it.
     fn razor_dirs<'r>(&self, rel: &'r str) -> Vec<&'r str> {
         let top = self.project_of(rel).unwrap_or("");
         let mut dirs = Vec::new();
@@ -221,23 +245,28 @@ impl DotNet {
         }
     }
 
-    /// The usings of every `_Imports.razor` over a component, outermost first.
+    /// The usings of every imports file over a Razor file, outermost first.
     pub fn razor_usings(&self, rel: &str) -> Vec<Using> {
-        self.razor_dirs(rel).into_iter().rev().filter_map(|d| self.razor_imports.get(d)).flat_map(|(u, _)| u.iter().cloned()).collect()
+        let imports = self.imports_of(rel);
+        self.razor_dirs(rel).into_iter().rev().filter_map(|d| imports.get(d)).flat_map(|(u, _)| u.iter().cloned()).collect()
     }
 
-    /// The namespace the Razor compiler gives a component: its own `@namespace`; else the nearest
-    /// `_Imports.razor` `@namespace` plus the folders below it; else the project's root namespace
-    /// plus the folders below the project.
+    /// The namespace the Razor compiler gives a file's class: its own `@namespace`; else the nearest
+    /// imports file's `@namespace` plus the folders below it; else, for a component, the project's
+    /// root namespace plus the folders below the project, and for a view `VIEW_NAMESPACE`.
     pub fn razor_namespace(&self, rel: &str, own: Option<&str>) -> String {
         if let Some(ns) = own {
             return sanitised(ns);
         }
         let here = parent(rel);
+        let imports = self.imports_of(rel);
         for dir in self.razor_dirs(rel) {
-            if let Some((_, Some(ns))) = self.razor_imports.get(dir) {
+            if let Some((_, Some(ns))) = imports.get(dir) {
                 return sanitised(&join(ns, &folders(dir, here)));
             }
+        }
+        if is_view(rel) {
+            return VIEW_NAMESPACE.to_string();
         }
         match self.root_namespace(rel) {
             Some((project, root)) => sanitised(&join(root, &folders(project, here))),
@@ -249,7 +278,7 @@ impl DotNet {
     pub fn component_parts(&self, full: &str) -> Vec<Part> {
         let by = self.components_by_full.get_or_init(|| {
             let mut m: BTreeMap<String, Vec<Part>> = BTreeMap::new();
-            for (rel, own) in &self.components {
+            for (rel, (own, _)) in &self.components {
                 let Some(stem) = crate::code::razor::component_name(rel) else { continue };
                 let full = join(&self.razor_namespace(rel, own.as_deref()), &stem);
                 m.entry(full.clone()).or_default().push(Part { rel: rel.clone(), local: stem, full });

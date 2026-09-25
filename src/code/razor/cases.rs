@@ -322,7 +322,7 @@ fn directives_are_read_outside_the_blocks_and_tags_are_upper_case() {
     assert_eq!(d.usings, vec![Using::Static("Shop.Checks.Guard".into()), Using::Alias("Pay".into(), "Shop.Payments.IPaymentGateway".into())]);
     assert_eq!(d.injects, vec![("IStringLocalizer<Checkout>".to_string(), "L".to_string(), 4)]);
     assert_eq!(d.types, vec![("IDisposable".to_string(), 5, true)]);
-    assert_eq!(d.tags, vec![("OrderLine".to_string(), 6)], "a tag inside a block is not read");
+    assert_eq!(d.tags, vec![("OrderLine".to_string(), 6, None)], "a tag inside a block is not read");
 }
 
 #[test]
@@ -458,7 +458,7 @@ fn an_imports_file_above_the_project_does_not_reach_its_components() {
 #[test]
 fn a_commented_tag_or_directive_is_not_read_and_a_using_statement_is_not_a_directive() {
     let d = super::directives("@* <OrderLine />\n@inject IPaymentGateway Payments *@\n<!-- <Badge /> -->\n@using (Html.BeginForm())\n{\n}\n<Card />\n");
-    assert_eq!(d.tags, vec![("Card".to_string(), 7)]);
+    assert_eq!(d.tags, vec![("Card".to_string(), 7, None)]);
     assert!(d.injects.is_empty() && d.usings.is_empty(), "{d:?}");
 }
 
@@ -483,4 +483,87 @@ fn a_component_whose_blocks_cannot_be_read_writes_its_file_alone_and_is_rendered
     assert!(broken.edges.is_empty(), "{:?}", broken.edges);
     let host = repo.extract("Web/Pages/Host.razor");
     assert!(edges(&host, EdgeKind::Calls).is_empty(), "no symbol to render: {:?}", host.edges);
+}
+
+fn calls_of(files: &[(&'static str, &'static str)], rel: &str) -> Vec<String> {
+    let mut all = WEB.to_vec();
+    all.extend_from_slice(files);
+    let ex = Repo::new(&all).extract(rel);
+    edges(&ex, EdgeKind::Calls).into_iter().map(|(_, to, _)| to.to_string()).collect()
+}
+
+#[test]
+fn a_child_content_parameter_tag_is_the_parent_s_parameter_not_a_component() {
+    let card = ("Web/Shared/Card.razor", "<div>@Header</div>\n@code {\n    [Parameter] public RenderFragment Header { get; set; }\n}\n");
+    let panel = ("Web/Shared/Panel.razor", "<div>@Header</div>\n");
+    let behind = ("Web/Shared/Panel.razor.cs", "namespace Shop.Web.Shared;\npublic partial class Panel\n{\n    [Parameter] public RenderFragment Header { get; set; }\n}\n");
+    let header = ("Web/Shared/Header.razor", "<h1/>\n");
+    let page = ("Web/Pages/P1.razor", "<Card>\n  <Header>hi</Header>\n  <OrderLine />\n</Card>\n<Panel><Header>x</Header></Panel>\n");
+    assert_eq!(
+        calls_of(&[card, panel, behind, header, page], "Web/Pages/P1.razor"),
+        vec!["sym:Web/Shared/Card.razor::Card", "sym:Web/Shared/OrderLine.razor::OrderLine", "sym:Web/Shared/Panel.razor.cs::Panel", "sym:Web/Shared/Panel.razor::Panel"],
+    );
+}
+
+#[test]
+fn a_tag_inside_a_component_the_repo_does_not_declare_is_not_read() {
+    let page = ("Web/Pages/P5.razor", "<MudCard>\n  <OrderLine />\n</MudCard>\n<OrderLine/>\n");
+    assert_eq!(calls_of(&[page], "Web/Pages/P5.razor"), vec!["sym:Web/Shared/OrderLine.razor::OrderLine"]);
+    let only = ("Web/Pages/P6.razor", "<MudCard>\n  <OrderLine />\n</MudCard>\n");
+    assert!(calls_of(&[only], "Web/Pages/P6.razor").is_empty());
+}
+
+#[test]
+fn a_generic_argument_in_markup_code_is_not_a_tag() {
+    let src = "@(new List<Badge>())\n@{ var l = new List<Badge>(); }\n@if (x.OfType<Badge>().Any()) {}\n";
+    assert!(super::directives(src).tags.is_empty(), "{:?}", super::directives(src).tags);
+    let badge = ("Web/Shared/Badge.razor", "<span/>\n");
+    let page = ("Web/Pages/P2.razor", src);
+    assert!(calls_of(&[badge, page], "Web/Pages/P2.razor").is_empty());
+}
+
+#[test]
+fn a_plain_class_sharing_a_component_s_name_is_not_rendered() {
+    let model = ("Models/Notice.cs", "namespace Shop.Models;\npublic class Notice {}\n");
+    let notice = ("Web/Shared/Notice.razor", "<p/>\n");
+    let page = ("Web/Pages/P3.razor", "@using Shop.Models\n<Notice />\n");
+    assert_eq!(calls_of(&[model, notice, page], "Web/Pages/P3.razor"), vec!["sym:Web/Shared/Notice.razor::Notice"]);
+}
+
+#[test]
+fn a_view_reads_its_view_imports_namespace_and_usings() {
+    let mut files = WEB.to_vec();
+    files.extend_from_slice(&[
+        ("Web/_ViewImports.cshtml", "@using Shop.Payments\n"),
+        ("Web/Pages/_ViewImports.cshtml", "@namespace Shop.Web.Pages\n"),
+        ("Web/Pages/IndexModel.cs", "namespace Shop.Web.Pages;\npublic class IndexModel {}\n"),
+        ("Admin/IndexModel.cs", "namespace Shop.Admin;\npublic class IndexModel {}\n"),
+        ("Web/Pages/Index.cshtml", "@using Shop.Admin\n@model IndexModel\n@inject IPaymentGateway Payments\n"),
+    ]);
+    let repo = Repo::new(&files);
+    assert_eq!(repo.resolver().dotnet().razor_namespace("Web/Pages/Index.cshtml", None), "Shop.Web.Pages");
+    let ex = repo.extract("Web/Pages/Index.cshtml");
+    let imports = edges(&ex, EdgeKind::Imports);
+    assert_eq!(imports, vec![
+        ("file:Web/Pages/Index.cshtml", "file:Payments/IPaymentGateway.cs", "IPaymentGateway"),
+        ("file:Web/Pages/Index.cshtml", "file:Web/Pages/IndexModel.cs", "IndexModel"),
+    ], "the enclosing namespace's IndexModel beats the using's");
+}
+
+#[test]
+fn an_aliased_using_resolves_an_inject_but_never_a_tag() {
+    let page = ("Web/Pages/P7.razor", "@using Line = Shop.Web.Shared.OrderLine\n@using Pay = Shop.Payments.IPaymentGateway\n@inject Pay Payments\n<Line />\n");
+    let mut files = WEB.to_vec();
+    files.push(page);
+    let ex = Repo::new(&files).extract("Web/Pages/P7.razor");
+    assert!(edges(&ex, EdgeKind::Calls).is_empty(), "{:?}", ex.edges);
+    assert!(edges(&ex, EdgeKind::Imports).contains(&("file:Web/Pages/P7.razor", "file:Payments/IPaymentGateway.cs", "IPaymentGateway")));
+}
+
+#[test]
+fn a_code_behind_calls_a_member_its_component_declares_in_code() {
+    let mut files: Vec<(&str, &str)> = WEB.iter().filter(|(p, _)| *p != "Web/Pages/Checkout.razor.cs").copied().collect();
+    files.push(("Web/Pages/Checkout.razor.cs", "namespace Shop.Web.Pages;\npublic partial class Checkout\n{\n    void Confirm() { Pay(); }\n}\n"));
+    let ex = Repo::new(&files).extract("Web/Pages/Checkout.razor.cs");
+    assert!(edges(&ex, EdgeKind::Calls).contains(&("sym:Web/Pages/Checkout.razor.cs::Checkout.Confirm", "sym:Web/Pages/Checkout.razor::Checkout.Pay", "")), "{:?}", ex.edges);
 }

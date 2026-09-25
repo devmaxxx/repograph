@@ -223,7 +223,10 @@ impl Resolver {
         }
         match lang {
             Lang::CSharp => self.dotnet.add_cs(rel, &crate::code::csharp::index::facts(rel, source)),
-            Lang::Razor => self.dotnet.add_razor(rel, &crate::code::razor::directives(source)),
+            Lang::Razor => {
+                let d = crate::code::razor::directives(source);
+                self.dotnet.add_razor(rel, &d, crate::code::razor::members(rel, source, &d));
+            }
             _ => {}
         }
     }
