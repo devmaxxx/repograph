@@ -39,6 +39,22 @@ fn razor_comment_end(s: &[u8], i: usize) -> Option<usize> {
     find(s, b"*@", i + 2).map(|p| p + 2)
 }
 
+/// The nearest `@*` in `s[from..to]` that actually opens a Razor comment: `@@*` (Razor's own
+/// escape for a literal `@`) and `a@*b` (an identifier byte right before the `@`, as in
+/// email-style text) are text, not a transition into one, so a match preceded by either is
+/// skipped in favor of the next.
+fn razor_comment_open(s: &[u8], from: usize, to: usize) -> Option<usize> {
+    let mut at = from;
+    loop {
+        let p = find(&s[..to], b"@*", at)?;
+        if p > 0 && (s[p - 1] == b'@' || is_ident(s[p - 1])) {
+            at = p + 1;
+            continue;
+        }
+        return Some(p);
+    }
+}
+
 /// Visual Studio writes it at the start of a `.razor` by default. It is not whitespace to the
 /// scanner, so a first-line `@code` or directive would not start its line.
 pub(crate) const BOM: char = '\u{FEFF}';
@@ -77,9 +93,11 @@ fn scan(src: &str) -> Result<Scanned, &'static str> {
             // it closes, and resume scanning right there rather than at the next line, so a
             // directive right after it on the same line (`@* x *@ @code {`) is still found.
             let eol = b[line..].iter().position(|&c| c == b'\n').map_or(b.len(), |p| line + p);
-            if let Some(p) = find(&b[..eol], b"@*", line) {
-                let Some(end) = razor_comment_end(b, p) else { break };
-                line = end;
+            if let Some(p) = razor_comment_open(b, line, eol) {
+                // Silently giving up here would read the rest of the file — including a real
+                // block past this point — as `None`; surfacing the failure lets the census see
+                // the file instead of losing it.
+                line = razor_comment_end(b, p).ok_or("a razor comment that does not close")?;
                 continue;
             }
             line = line_after(b, line);
@@ -95,7 +113,9 @@ fn scan(src: &str) -> Result<Scanned, &'static str> {
         }
         let close = close_of(b, open, &mut razor_comments).ok_or("a block that does not close")?;
         out.push((at, open, close));
-        line = line_after(b, close);
+        // Not `line_after(b, close)`: a comment can open right after the block's own `}` on the
+        // same line, and jumping straight to the next line would step over it unseen.
+        line = close + 1;
     }
     Ok((out, razor_comments))
 }
@@ -129,6 +149,15 @@ fn close_of(s: &[u8], open: usize, razor_comments: &mut Vec<(usize, usize)>) -> 
                     i = end;
                     continue;
                 }
+                // A confirmed opener (a quote, after any `$`/`@` prefix) whose body still failed
+                // cannot have been a valid non-verbatim string past its own line; treating the
+                // rest of the line as unparseable, rather than re-scanning its bytes as top-level
+                // code, keeps a stray quote in there from being mistaken for a fresh string and
+                // text inside that from being mistaken for a comment.
+                if string_opener(s, i) == Some(false) {
+                    i = line_after(s, i);
+                    continue;
+                }
             }
             b'\'' => {
                 if let Some(len) = char_literal_len(s, i) {
@@ -150,9 +179,35 @@ fn close_of(s: &[u8], open: usize, razor_comments: &mut Vec<(usize, usize)>) -> 
     None
 }
 
+/// Whether `s[i..]` opens a string at all (a `$`/`@` prefix run then a quote) and, if it does,
+/// whether that opener is verbatim: a plain or `$`-only quote can never legally hold a bare
+/// newline, so a failed attempt at one of those is known-malformed the moment its line ends,
+/// while `@`/`$@` can, so a failed attempt at one of those still needs the byte-by-byte fallback.
+fn string_opener(s: &[u8], i: usize) -> Option<bool> {
+    let mut j = i;
+    let mut verbatim = false;
+    while j < s.len() && (s[j] == b'$' || s[j] == b'@') {
+        verbatim |= s[j] == b'@';
+        j += 1;
+    }
+    (s.get(j) == Some(&b'"')).then_some(verbatim)
+}
+
+fn string_end(s: &[u8], i: usize, razor_comments: &mut Vec<(usize, usize)>) -> Option<usize> {
+    // An interpolation hole can cross a `@* ... *@` before the attempt as a whole turns out not
+    // to be a string; abandoning it must not leave that span recorded, since the byte at `i` is
+    // then read as ordinary text rather than as the string that would have held it.
+    let before = razor_comments.len();
+    let end = string_end_at(s, i, razor_comments);
+    if end.is_none() {
+        razor_comments.truncate(before);
+    }
+    end
+}
+
 /// The byte after the string literal starting at `i`, or None when none starts there. A regular or
 /// interpolated literal that meets a newline is markup text, not a literal.
-fn string_end(s: &[u8], i: usize, razor_comments: &mut Vec<(usize, usize)>) -> Option<usize> {
+fn string_end_at(s: &[u8], i: usize, razor_comments: &mut Vec<(usize, usize)>) -> Option<usize> {
     let mut j = i;
     let (mut interpolated, mut verbatim) = (false, false);
     while j < s.len() && (s[j] == b'$' || s[j] == b'@') {

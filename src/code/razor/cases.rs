@@ -206,6 +206,59 @@ fn a_directive_right_after_a_same_line_comment_is_still_read() {
     assert!(clean(&text), "{text:?}");
 }
 
+#[test]
+fn an_escaped_at_star_is_not_a_comment_opener() {
+    // `@@` is Razor's own escape for a literal `@`; the `*` after it never opens a comment.
+    let src = "<p>@@* not a comment</p>\n@code {\n  int y;\n}\n";
+    let text = read(src);
+    assert!(text.contains("int y"), "{text:?}");
+    assert!(clean(&text), "{text:?}");
+}
+
+#[test]
+fn an_at_star_after_an_identifier_byte_is_not_a_comment_opener() {
+    // `a@*b` is email-style text, not a transition into a comment: the byte before `@` is part
+    // of an identifier, not markup or whitespace.
+    let src = "<p>a@*b</p>\n@code {\n  int y;\n}\n";
+    let text = read(src);
+    assert!(text.contains("int y"), "{text:?}");
+    assert!(clean(&text), "{text:?}");
+}
+
+#[test]
+fn an_at_star_after_a_slash_that_never_closes_is_unread_not_silently_none() {
+    // `packages/@*/x` opens what the scanner reads as a comment (nothing rules it out); with no
+    // `*@` anywhere in the file it must surface as `Unread`, not vanish as `None`.
+    let src = "<p>packages/@*/x</p>\n@code {\n  int y;\n}\n";
+    assert!(matches!(view(src), View::Unread(_)), "{:?}", view(src));
+}
+
+#[test]
+fn an_at_star_in_css_that_never_closes_is_unread_not_silently_none() {
+    let src = "<style>\n  @* { margin: 0 }\n</style>\n@code {\n  int y;\n}\n";
+    assert!(matches!(view(src), View::Unread(_)), "{:?}", view(src));
+}
+
+#[test]
+fn a_failed_string_attempt_rolls_back_any_comment_spans_it_recorded() {
+    // The hole's own close_of call crosses a real `@* x *@` and finds a `}` to return before the
+    // outer interpolated string as a whole gives up (no closing quote follows): without a
+    // rollback, the span that call recorded stays in `razor_comments` from an attempt that never
+    // produced a string at all.
+    let src = "@code {\n  @<p>$\"{ \"@*\"</p>;\n  int y;\n  string t = \"*@ }\";\n}\n";
+    let text = read(src);
+    assert!(text.contains("int y"), "{text:?}");
+}
+
+#[test]
+fn a_comment_right_after_a_block_s_close_on_the_same_line_hides_its_ghost() {
+    let src = "@code {\n  int x;\n} @* \n@code { void Ghost() {} }\n*@\n";
+    let text = read(src);
+    assert!(clean(&text), "{text:?}");
+    assert!(text.contains("int x"), "{text:?}");
+    assert!(!text.contains("Ghost"), "{text:?}");
+}
+
 /// Not a test: reads every `.razor` and `.cshtml` under `REPOGRAPH_CENSUS_ROOTS` (`:`-separated)
 /// through `view` and counts what the C# grammar makes of each copy — the spec's Razor parse clause.
 #[test]
