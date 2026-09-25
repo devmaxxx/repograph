@@ -467,11 +467,11 @@ class Registries(unittest.TestCase):
         self.assertIs(T.DECLARATIONS[".tsx"], T.typescript_declarations)
         self.assertIs(T.DECLARATIONS[".kt"], T.kotlin_declarations)
         self.assertIs(T.BLANKERS[".kt"], T.blank_kotlin)
-        self.assertEqual(list(T.DI_READERS), [".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs"])
+        self.assertEqual(list(T.DI_READERS), [*T.JS_FAMILY, ".cs", ".razor"])
         self.assertEqual(T.CALL_READERS, {})
         self.assertEqual(
             T.code_globs(),
-            ("-g", "*.ts", "-g", "*.tsx", "-g", "*.js", "-g", "*.jsx", "-g", "*.mjs", "-g", "*.cjs", "-g", "*.kt"),
+            ("-g", "*.ts", "-g", "*.tsx", "-g", "*.js", "-g", "*.jsx", "-g", "*.mjs", "-g", "*.cjs", "-g", "*.kt", "-g", "*.cs", "-g", "*.razor", "-g", "*.cshtml"),
         )
 
     def test_a_registered_reader_is_the_one_declarations_uses(self):
@@ -491,10 +491,10 @@ class Registries(unittest.TestCase):
 
     def test_a_file_no_reader_reads_is_in_the_diff_and_in_neither_axis(self):
         got = changes_of(
-            {"a.ts": "export function f() {\n  return 1;\n}\n", "b.cs": "class B {}\n"},
-            {"a.ts": "export function f() {\n  return 2;\n}\n", "b.cs": "class B { int x; }\n"},
+            {"a.ts": "export function f() {\n  return 1;\n}\n", "b.zig": "class B {}\n"},
+            {"a.ts": "export function f() {\n  return 2;\n}\n", "b.zig": "class B { int x; }\n"},
         )
-        self.assertEqual(got["files"], ["a.ts", "b.cs"])
+        self.assertEqual(got["files"], ["a.ts", "b.zig"])
         self.assertEqual(got["code_files"], ["a.ts"])
         self.assertEqual(got["symbols"], {"a.ts": ["f"]})
 
@@ -508,7 +508,7 @@ class TypeScriptTruthStandsAlone(unittest.TestCase):
     }
     OTHER = {
         "apps/Sync.kt": "package p\n\nclass SyncEngine(private val wipe: RemoteWipeHandler) {\n    fun run() { wipe.execute() }\n}\n",
-        "apps/Order.cs": "namespace Shop;\npublic class Order { private readonly IPay _pay; public void Go() { this._pay.Charge(); } }\n",
+        "apps/Order.zig": "namespace Shop;\npublic class Order { private readonly IPay _pay; public void Go() { this._pay.Charge(); } }\n",
     }
 
     @staticmethod
@@ -569,6 +569,136 @@ class CaseExtensions(unittest.TestCase):
 
     def test_exts_keeps_only_the_files_of_those_extensions(self):
         self.assertEqual(self.refs({"exts": [".tsx"]}), ["apps/view.tsx"])
+
+
+CHECKOUT_RAZOR = (
+    '@page "/checkout"\n@inherits PageBase\n@inject Shop.Payments.IPaymentGateway Payments\n\n'
+    '<h3>Checkout</h3>\n<OrderLine Caption="one" />\n\n@code {\n    private int total;\n'
+    "    void Pay()\n    {\n        Payments.Charge(total);\n        Confirm();\n    }\n}\n"
+)
+CHECKOUT_BEHIND = (
+    "namespace Shop.Web.Pages;\npublic partial class Checkout\n{\n"
+    "    [Inject] private IOrderStore Keeper { get; set; }\n    void Confirm() { Keeper.Save(); }\n}\n"
+)
+ORDERING = """namespace Shop.Orders;
+public class Checkout(IPaymentGateway gateway)
+{
+    public void Pay() => gateway.Charge(1);
+}
+public class OrderService
+{
+    private readonly Shop.Payments.IPaymentGateway _gateway;
+    private ILogger<OrderService> Log { get; }
+    public OrderService(IOrderStore store) { store.Save(); }
+    public void Place(int id)
+    {
+        this._gateway.Charge(id);
+        _gateway?.Refund(id);
+        Log.Info(id);
+    }
+}
+public record struct Point(int X, int Y);
+"""
+ORDERS = """namespace Shop.Orders;
+
+// Place is documented here, not declared
+[Serializable]
+public partial class OrderService(IPaymentGateway gateway, int retries) : ServiceBase
+{
+    private readonly IOrderStore _store;
+    public int Count { get; private set; }
+    public event EventHandler Placed;
+
+    public OrderService() : this(null, 0) { }
+
+    public Order Place(int id)
+    {
+        var receipt = new Receipt();
+        _store.Save(id);
+        return null;
+    }
+
+    public class Line { void Touch() { } }
+}
+
+public record Order(int Id, string Name);
+public enum Status { Open, Closed }
+public delegate void PlacedHandler(int x);
+interface IOrderStore
+{
+    void Save(int id);
+}
+"""
+
+
+def di_of(files: dict[str, str]) -> dict:
+    """`di_call_graph` over a throwaway tree, so ripgrep's file listing is part of what is tested."""
+    with tempfile.TemporaryDirectory() as tmp:
+        repo = Path(tmp)
+        for rel, body in files.items():
+            (repo / rel).parent.mkdir(parents=True, exist_ok=True)
+            (repo / rel).write_text(body, encoding="utf8")
+        return T.di_call_graph(repo, ["apps", "libs-dotnet"])
+
+
+class DotnetReaders(unittest.TestCase):
+    """C# and Razor, read the way the store is asked to read them."""
+
+    def test_csharp_blanking_empties_every_string_form_and_keeps_the_line_count(self):
+        src = 'var a = "Order"; // IPaymentGateway\nvar b = @"x\n""Order""";\nvar c = $"{total} Order";\nvar d = """\nOrder\n""";\nchar e = \'O\'; /* Order\n*/ int f;\n'
+        out = T.blank_csharp(src)
+        self.assertNotIn("Order", out)
+        self.assertNotIn("IPaymentGateway", out)
+        self.assertIn("int f;", out)
+        self.assertEqual(len(out.split("\n")), len(src.split("\n")))
+
+    def test_types_members_and_primary_constructor_parameters_are_declarations_and_locals_are_not(self):
+        self.assertEqual(T.csharp_declarations(T.blank_csharp(ORDERS)), [
+            (5, "OrderService"), (5, "gateway"), (5, "retries"), (7, "_store"), (8, "Count"), (9, "Placed"),
+            (11, "OrderService"), (13, "Place"), (20, "Line"), (23, "Order"), (23, "Id"), (23, "Name"),
+            (24, "Status"), (25, "PlacedHandler"), (26, "IOrderStore"), (28, "Save"),
+        ])
+
+    def test_a_razor_file_keeps_its_rows_its_type_directives_its_tags_and_its_code_block(self):
+        out = T.blank_razor(CHECKOUT_RAZOR)
+        lines = out.split("\n")
+        self.assertEqual(len(lines), len(CHECKOUT_RAZOR.split("\n")))
+        self.assertEqual(lines[1:3], ["@inherits PageBase", "@inject Shop.Payments.IPaymentGateway Payments"])
+        self.assertEqual(lines[4:8], ["", "OrderLine", "", "class __RazorBlock {"])
+        self.assertEqual(T.razor_declarations(out), [(3, "Payments"), (9, "total"), (10, "Pay")])
+
+    def test_a_view_declares_nothing_and_keeps_its_model_line(self):
+        view = "@page\n@model Shop.Web.Pages.IndexModel\n@using Shop.Payments\n@inject IPaymentGateway Payments\n<h1>Index</h1>\n"
+        self.assertEqual(T.blank_razor(view), "\n@model Shop.Web.Pages.IndexModel\n\n@inject IPaymentGateway Payments\n\n")
+        self.assertEqual(T.declarations("Pages/Index.cshtml", view)[1], [])
+
+    def test_fields_properties_and_constructor_parameters_carry_calls(self):
+        graph = di_of({"libs-dotnet/Orders/Ordering.cs": ORDERING})
+        self.assertEqual(graph["edges"], {
+            "Checkout": ["IPaymentGateway.Charge"],
+            "OrderService": ["ILogger.Info", "IOrderStore.Save", "IPaymentGateway.Charge", "IPaymentGateway.Refund"],
+        })
+        self.assertEqual(sorted(graph["declared"]), ["Checkout", "OrderService", "Point"])
+
+    def test_a_component_is_one_class_named_by_its_file_and_its_code_behind_joins_it(self):
+        graph = di_of({"apps/web/Pages/Checkout.razor": CHECKOUT_RAZOR, "apps/web/Pages/Checkout.razor.cs": CHECKOUT_BEHIND})
+        self.assertEqual(graph["edges"], {"Checkout": ["IOrderStore.Save", "IPaymentGateway.Charge"]})
+
+    def test_each_dotnet_reader_is_registered_by_its_extension(self):
+        self.assertIs(T.DECLARATIONS[".cs"], T.csharp_declarations)
+        self.assertIs(T.DECLARATIONS[".razor"], T.razor_declarations)
+        self.assertIs(T.DECLARATIONS[".cshtml"], T.view_declarations)
+        self.assertIs(T.BLANKERS[".cs"], T.blank_csharp)
+        self.assertIs(T.BLANKERS[".razor"], T.blank_razor)
+        self.assertIs(T.BLANKERS[".cshtml"], T.blank_razor)
+        self.assertIs(T.DI_READERS[".cs"], T.CSHARP_DI)
+        self.assertIsInstance(T.DI_READERS[".razor"], T.ComponentDiReader)
+        self.assertNotIn(".cshtml", T.DI_READERS)
+
+    def test_a_bom_does_not_hide_the_first_line(self):
+        src = "﻿public class A\n{\n    public void Run() {}\n}\n"
+        self.assertEqual(T.csharp_declarations(T.blank_csharp(src)), [(1, "A"), (3, "Run")])
+        self.assertEqual(T.blank_razor("﻿@inject Shop.IPay Pay\n<h3/>\n").split("\n")[0], "@inject Shop.IPay Pay")
 
 
 if __name__ == "__main__":
