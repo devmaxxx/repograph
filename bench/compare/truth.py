@@ -392,6 +392,8 @@ CS_MEMBER = re.compile(
     + r"(?!(?:operator|this)\b)(?P<name>\w+)[ \t]*(?:<[^>\n]*>)?[ \t]*(?:\(|\{|=>|=|;|,|$)"
 )
 CS_PARAM_NAME = re.compile(r"(\w+)[ \t]*(?:=[^,]*)?$")
+# A `#region`/`#endregion` banner names whatever the author likes; it is never code.
+CS_REGION = re.compile(r"#(?:region|endregion)\b")
 
 
 def _parameter_names(text: str) -> list[str]:
@@ -431,12 +433,16 @@ def csharp_declarations(blanked: str) -> list[tuple[int, str]]:
     holds: list[bool] = []
     parens = 0
     pending = None
+    header_open = False
     params: tuple[int, list[str]] | None = None
     for index, line in enumerate(blanked.split("\n")):
         if params is not None:
             params[1].append(line)
         inside_type = bool(holds) and holds[-1]
-        if parens == 0 and (not holds or inside_type):
+        # A header a brace has not yet closed — a base list wrapped onto its own line, a
+        # multi-line initialiser after `=`/`=>` — holds no namespace, type, delegate or member of
+        # its own; its continuation lines are read only for the brace or `;` that ends it.
+        if not header_open and parens == 0 and (not holds or inside_type):
             if m := CS_NAMESPACE.match(line):
                 pending = m.group("semi") is None
             elif m := CS_TYPE.match(line):
@@ -463,6 +469,9 @@ def csharp_declarations(blanked: str) -> list[tuple[int, str]]:
         if params is not None and parens == 0:
             found.extend((params[0], name) for name in _parameter_names("\n".join(params[1])))
             params = None
+        if pending is not None and parens == 0 and line.rstrip().endswith(";"):
+            pending = None
+        header_open = pending is not None
     return found
 
 
@@ -524,6 +533,13 @@ def _string_end(src: str, i: int) -> int | None:
                         return None
                     j = k
                     continue
+                elif src[j] == "'":
+                    # A char literal's own `'"'` is not the hole's closing quote.
+                    k = _char_literal_end(src, j)
+                    if k is None:
+                        return None
+                    j = k
+                    continue
                 j += 1
         j += 1
     return None
@@ -547,6 +563,10 @@ def blank_csharp(src: str) -> str:
             out.append("\n" * src.count("\n", i, end))
             i = end
             continue
+        if c == "#" and src[src.rfind("\n", 0, i) + 1 : i].strip(" \t") == "" and CS_REGION.match(src, i):
+            end = src.find("\n", i)
+            i = size if end < 0 else end
+            continue
         if c in '$@"':
             end = _string_end(src, i)
             if end is not None:
@@ -567,14 +587,24 @@ def blank_csharp(src: str) -> str:
 RAZOR_WRAPPER = "__RazorBlock"
 RAZOR_OPEN = re.compile(r"^[ \t]*@(?:code|functions)\b[ \t]*(\{)?")
 # The directives whose type names are references; every other directive is blanked with the markup.
-RAZOR_KEPT = re.compile(r"^[ \t]*@(?:inject|model|inherits|implements)[ \t]")
+RAZOR_KEPT = re.compile(r"^[ \t]*@(?:inject|model|inherits|implements|layout|attribute)[ \t]")
+# `@typeparam T` names nothing kept; a `where T : X` constraint names the real reference, so only
+# the constraint types are kept, never the parameter's own name.
+RAZOR_TYPEPARAM = re.compile(r"^[ \t]*@typeparam[ \t]+\w+[ \t]+where[ \t]+\w+[ \t]*:[ \t]*(?P<constraints>.+?)[ \t]*$")
 RAZOR_INJECT = re.compile(r"^[ \t]*@inject[ \t]+(?P<type>\S.*?)[ \t]+@?(?P<name>\w+)[ \t]*$")
 RAZOR_TAG = re.compile(r"<([A-Z][\w.]*)")
 # `@if (…) {` inside a block is a Razor transition before a C# statement; without the `@` it is C#.
 RAZOR_TRANSITION = re.compile(r"(?<![\w@])@(?=(?:if|foreach|for|while|switch|do|try|lock|using)\b)")
+# `@* … *@` and `<!-- … -->` hide whatever they wrap, tags included, from every later read.
+RAZOR_COMMENT = re.compile(r"@\*.*?\*@|<!--.*?-->", re.S)
+# A markup expression (`@Formatter.Money(...)`), an `@{ }` block outside `@code`, and a tag's own
+# generic argument (`TItem="Order"`) each need an expression reader repograph does not have yet;
+# they blank with the rest of the markup until one exists.
 
 
 def _razor_markup(line: str) -> str:
+    if m := RAZOR_TYPEPARAM.match(line):
+        return m.group("constraints")
     return line if RAZOR_KEPT.match(line) else " ".join(RAZOR_TAG.findall(line))
 
 
@@ -585,7 +615,8 @@ def blank_razor(src: str) -> str:
     naming a type stays whole; every other line is reduced to the component tags it renders. The
     page's own text and HTML go, so a word in its copy is never a reference.
     """
-    lines = src.removeprefix("﻿").split("\n")
+    src = RAZOR_COMMENT.sub(lambda m: "\n" * m.group().count("\n"), src.removeprefix("﻿"))
+    lines = src.split("\n")
     out: list[str] = []
     i = 0
     while i < len(lines):
@@ -652,7 +683,9 @@ RAZOR_FIELD = re.compile(
     r"(?<![\w.])(?=(?:\w+\.)*[A-Z]\w*(?:<[^;{}()\n]*>)?\??[ \t]+@?(_?[A-Za-z]\w*)[ \t]*(?:[;=,){]|\r?$))(?:\w+\.)*([A-Z]\w*)",
     re.M,
 )
-CS_CALL = re.compile(r"(?:\bthis[ \t]*\.[ \t]*)?\b(\w+)[ \t]*\??\.[ \t]*(\w+)[ \t]*(?:<[^<>()\n]*>)?[ \t]*\(")
+# A fluent chain wraps the `.` onto its own line as often as TypeScript's does, so the gap
+# around it spans newlines too, not only spaces.
+CS_CALL = re.compile(r"(?:\bthis[ \t]*\.[ \t]*)?\b(\w+)\s*\??\.\s*(\w+)[ \t]*(?:<[^<>()\n]*>)?[ \t]*\(")
 NO_CLASS = re.compile(r"(?!)")
 
 
@@ -730,6 +763,10 @@ def di_call_graph(repo: Path, roots: list[str]) -> dict:
     `DiReader`, and a file of an extension with neither is skipped: another language's source read
     with TypeScript's patterns matches nothing today and could match anything tomorrow.
     """
+    if not roots:
+        # ripgrep reads the whole tree when handed no path at all; a tree with none of the
+        # roots the caller offered must scan nothing, not everything.
+        return {"edges": {}, "declared": {}}
     files = rg(repo, ["--files", *code_globs(), *roots])
     edges: dict[str, set[str]] = defaultdict(set)
     declared: dict[str, str] = {}
@@ -755,7 +792,12 @@ def di_call_graph(repo: Path, roots: list[str]) -> dict:
             start, name = marks[i]
             body = src[start : marks[i + 1][0]]
             declared[name] = rel
-            fields = {m.group(1): m.group(2) for m in reader.field.finditer(body)}
+            # A nested generic (`IDictionary<string, List<int>>`) gives a spurious second match
+            # starting at its inner argument; the first match, left to right, is always the
+            # outermost type, so it must win, not the last one written.
+            fields: dict[str, str] = {}
+            for m in reader.field.finditer(body):
+                fields.setdefault(m.group(1), m.group(2))
             for m in reader.call.finditer(body):
                 target = fields.get(m.group(1))
                 if target:

@@ -700,6 +700,80 @@ class DotnetReaders(unittest.TestCase):
         self.assertEqual(T.csharp_declarations(T.blank_csharp(src)), [(1, "A"), (3, "Run")])
         self.assertEqual(T.blank_razor("﻿@inject Shop.IPay Pay\n<h3/>\n").split("\n")[0], "@inject Shop.IPay Pay")
 
+    def test_a_wrapped_base_list_in_a_block_namespace_does_not_read_as_a_member(self):
+        # I1: `IFoo`, continuing `Base,` onto its own line, must not be read as a member of A,
+        # and A's own members (`x`, `M`) must survive the header that wraps around them.
+        src = (
+            "namespace N\n{\n    public class A : Base,\n        IFoo\n    {\n"
+            "        int x;\n        void M() { }\n    }\n}\n"
+        )
+        self.assertEqual(T.csharp_declarations(T.blank_csharp(src)), [(3, "A"), (6, "x"), (7, "M")])
+
+    def test_a_wrapped_initialiser_continuation_declares_nothing(self):
+        # I2: the RHS of a field or expression-bodied member that wraps declares nothing of its
+        # own — `Foo` and `Build` are expressions here, not members.
+        src = (
+            "public class A\n{\n    private static readonly Foo Default =\n        new Foo();\n"
+            "    public Foo Inst =>\n        Build(1);\n}\n"
+        )
+        self.assertEqual(T.csharp_declarations(T.blank_csharp(src)), [(1, "A"), (3, "Default"), (5, "Inst")])
+
+    def test_cs_call_spans_a_newline_before_the_dot(self):
+        # I4: a fluent chain wraps its `.` the way TypeScript's does; the gap must span it too.
+        self.assertEqual(T.CS_CALL.findall("_gateway\n    .Charge(id)"), [("_gateway", "Charge")])
+
+    def test_layout_attribute_and_typeparam_constraint_are_kept_but_the_rest_of_markup_is_not(self):
+        # I3: `@layout`/`@attribute` join the kept directives whole; a `@typeparam ... where`
+        # keeps only its constraint type, never the parameter's own name; a markup expression, an
+        # `@{ }` block and a tag's own generic argument stay blanked, as they always have.
+        view = (
+            "@layout MainLayout\n@attribute [Authorize]\n@typeparam TItem where TItem : IEntity\n"
+            '@typeparam TOther\n@Formatter.Money(total)\n@{ var h = new PriceHelper(); }\n'
+            '<Grid TItem="Order" />\n'
+        )
+        lines = T.blank_razor(view).split("\n")
+        self.assertEqual(lines[:7], [
+            "@layout MainLayout", "@attribute [Authorize]", "IEntity", "", "", "", "Grid",
+        ])
+
+    def test_a_razor_comment_s_component_tag_is_not_a_reference(self):
+        # M7: a commented-out tag, Razor or HTML style, must not count as a reference.
+        src = "@* <Badge /> *@\n<!-- <Banner /> -->\n<Real />\n"
+        self.assertEqual(T.blank_razor(src).split("\n"), ["", "", "Real", ""])
+
+    def test_a_double_quote_char_literal_inside_an_interpolation_hole_does_not_leak(self):
+        # M5: `'"'` inside a hole must not be read as the hole's own closing quote.
+        src = "var a = $\"{(c == '\"' ? 1 : 2)} Order\";\n"
+        self.assertNotIn("Order", T.blank_csharp(src))
+
+    def test_a_region_directive_s_text_is_blanked(self):
+        # M6: `#region`/`#endregion` banners name whatever the author likes, never code.
+        src = "#region Order stuff\nint x;\n#endregion Order\n"
+        out = T.blank_csharp(src)
+        self.assertNotIn("Order", out)
+        self.assertIn("int x;", out)
+        self.assertEqual(len(out.split("\n")), len(src.split("\n")))
+
+    def test_a_nested_generic_field_keeps_its_outermost_type(self):
+        # M9: the second match, starting at the generic's own argument, must not overwrite the
+        # first, which is always the outermost — and correct — type.
+        src = (
+            "namespace Shop.Orders;\npublic class Cache\n{\n"
+            "    private readonly IDictionary<string, List<int>> _map;\n"
+            "    public void Warm() { _map.TryGetValue(1); }\n}\n"
+        )
+        graph = di_of({"apps/Cache.cs": src})
+        self.assertEqual(graph["edges"], {"Cache": ["IDictionary.TryGetValue"]})
+
+    def test_empty_roots_scans_nothing(self):
+        # M13: no root the caller offered exists — the tree must be read as empty, not as ripgrep's
+        # default of everything.
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            (repo / "src").mkdir()
+            (repo / "src" / "A.ts").write_text("export class A { b: B; go() { this.b.go(); } }\n", encoding="utf8")
+            self.assertEqual(T.di_call_graph(repo, []), {"edges": {}, "declared": {}})
+
 
 if __name__ == "__main__":
     unittest.main()
