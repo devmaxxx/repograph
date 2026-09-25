@@ -50,7 +50,7 @@ const MEMBERS: [&str; 10] = [
 /// Members with no name a caller writes: what they use belongs to their type.
 const NAMELESS: [&str; 4] = ["destructor_declaration", "operator_declaration", "conversion_operator_declaration", "indexer_declaration"];
 
-fn first_segment(local: &str) -> &str {
+pub(crate) fn first_segment(local: &str) -> &str {
     local.split('.').next().unwrap_or(local)
 }
 

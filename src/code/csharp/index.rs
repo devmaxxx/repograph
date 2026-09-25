@@ -5,7 +5,7 @@ use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::OnceLock;
 
-use super::declarations::{self, Declared, Using};
+use super::declarations::{self, join, Declared, Using};
 use super::Host;
 use crate::code::lang::Lang;
 use crate::model::Extraction;
@@ -61,10 +61,23 @@ fn parent(rel: &str) -> &str {
     rel.rsplit_once('/').map_or("", |(d, _)| d)
 }
 
-/// MSBuild's default root namespace keeps the project file's name, with every character an
-/// identifier cannot hold replaced by `_`; the Razor compiler does the same to folder names.
-pub(crate) fn identifier(s: &str) -> String {
-    s.chars().map(|c| if c.is_alphanumeric() || c == '_' || c == '.' { c } else { '_' }).collect()
+/// One namespace segment as the Razor compiler writes it (`CSharpIdentifier.AppendSanitized`):
+/// every character an identifier cannot hold becomes `_`, and a leading digit gets a `_` before it.
+fn identifier(s: &str) -> String {
+    let lead = if s.starts_with(char::is_numeric) { "_" } else { "" };
+    lead.chars().chain(s.chars().map(|c| if c.is_alphanumeric() || c == '_' { c } else { '_' })).collect()
+}
+
+/// Razor sanitises every segment of the namespace it builds — the `@namespace` and the project's
+/// root namespace included, which the SDK only rids of spaces.
+fn sanitised(namespace: &str) -> String {
+    namespace.split('.').filter(|s| !s.is_empty()).map(identifier).collect::<Vec<_>>().join(".")
+}
+
+/// The folders of `dir` below `base` as namespace segments: `Pages/Admin` gives `Pages.Admin`.
+fn folders(base: &str, dir: &str) -> String {
+    let below = if base.is_empty() { dir } else { dir.strip_prefix(base).unwrap_or(dir).trim_start_matches('/') };
+    below.split('/').filter(|s| !s.is_empty()).map(identifier).collect::<Vec<_>>().join(".")
 }
 
 #[derive(Debug, Default)]
@@ -85,6 +98,12 @@ pub struct DotNet {
     projects: BTreeMap<String, String>,
     /// Built on first use. `Resolver::new` adds every file before any extraction asks, so it is never stale.
     global_by_project: OnceLock<BTreeMap<Option<String>, Vec<Using>>>,
+    /// `_Imports.razor` directory → its usings and its `@namespace`.
+    razor_imports: BTreeMap<String, (Vec<Using>, Option<String>)>,
+    /// Component rel → the `@namespace` the file names, if any.
+    components: BTreeMap<String, Option<String>>,
+    /// Built on first use, like `global_by_project`: component full name → its parts.
+    components_by_full: OnceLock<BTreeMap<String, Vec<Part>>>,
 }
 
 impl DotNet {
@@ -109,7 +128,8 @@ impl DotNet {
         static ROOT: OnceLock<regex::Regex> = OnceLock::new();
         let re = ROOT.get_or_init(|| regex::Regex::new(r"<RootNamespace>\s*([^<\s]+)\s*</RootNamespace>").unwrap());
         let stem = rel.rsplit('/').next().unwrap_or(rel).trim_end_matches(".csproj");
-        let root = re.captures(text).map_or_else(|| identifier(stem), |c| c[1].to_string());
+        // The SDK's default is `$(MSBuildProjectName.Replace(" ", "_"))`: spaces only.
+        let root = re.captures(text).map_or_else(|| stem.replace(' ', "_"), |c| c[1].to_string());
         self.projects.insert(parent(rel).to_string(), root);
     }
 
@@ -161,9 +181,6 @@ impl DotNet {
         }
     }
 
-    // Read by Razor's namespace derivation; `expect` flags this once it is in the non-test build —
-    // a case test already exercises it, so the same `expect` on the test-cfg build would never fire.
-    #[cfg_attr(not(test), expect(dead_code))]
     pub fn root_namespace(&self, rel: &str) -> Option<(&str, &str)> {
         let dir = self.project_of(rel)?;
         Some((dir, self.projects[dir].as_str()))
@@ -179,5 +196,66 @@ impl DotNet {
             m
         });
         by.get(&self.project_of(rel).map(str::to_string)).cloned().unwrap_or_default()
+    }
+
+    pub(crate) fn add_razor(&mut self, rel: &str, d: &crate::code::razor::Directives) {
+        if rel.rsplit('/').next() == Some("_Imports.razor") {
+            self.razor_imports.insert(parent(rel).to_string(), (d.usings.clone(), d.namespace.clone()));
+        } else if crate::code::razor::component_name(rel).is_some() && !d.unread {
+            self.components.insert(rel.to_string(), d.namespace.clone());
+        }
+    }
+
+    /// `rel`'s folder and each above it, nearest first, up to its project's: the Razor compiler looks
+    /// for `_Imports.razor` from the project root down, never above it.
+    fn razor_dirs<'r>(&self, rel: &'r str) -> Vec<&'r str> {
+        let top = self.project_of(rel).unwrap_or("");
+        let mut dirs = Vec::new();
+        let mut dir = parent(rel);
+        loop {
+            dirs.push(dir);
+            if dir == top || dir.is_empty() {
+                return dirs;
+            }
+            dir = parent(dir);
+        }
+    }
+
+    /// The usings of every `_Imports.razor` over a component, outermost first.
+    pub fn razor_usings(&self, rel: &str) -> Vec<Using> {
+        self.razor_dirs(rel).into_iter().rev().filter_map(|d| self.razor_imports.get(d)).flat_map(|(u, _)| u.iter().cloned()).collect()
+    }
+
+    /// The namespace the Razor compiler gives a component: its own `@namespace`; else the nearest
+    /// `_Imports.razor` `@namespace` plus the folders below it; else the project's root namespace
+    /// plus the folders below the project.
+    pub fn razor_namespace(&self, rel: &str, own: Option<&str>) -> String {
+        if let Some(ns) = own {
+            return sanitised(ns);
+        }
+        let here = parent(rel);
+        for dir in self.razor_dirs(rel) {
+            if let Some((_, Some(ns))) = self.razor_imports.get(dir) {
+                return sanitised(&join(ns, &folders(dir, here)));
+            }
+        }
+        match self.root_namespace(rel) {
+            Some((project, root)) => sanitised(&join(root, &folders(project, here))),
+            None => folders("", here),
+        }
+    }
+
+    /// Every component whose computed full name is `full`.
+    pub fn component_parts(&self, full: &str) -> Vec<Part> {
+        let by = self.components_by_full.get_or_init(|| {
+            let mut m: BTreeMap<String, Vec<Part>> = BTreeMap::new();
+            for (rel, own) in &self.components {
+                let Some(stem) = crate::code::razor::component_name(rel) else { continue };
+                let full = join(&self.razor_namespace(rel, own.as_deref()), &stem);
+                m.entry(full.clone()).or_default().push(Part { rel: rel.clone(), local: stem, full });
+            }
+            m
+        });
+        by.get(full).cloned().unwrap_or_default()
     }
 }

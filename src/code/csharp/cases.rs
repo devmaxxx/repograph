@@ -317,8 +317,10 @@ fn a_project_root_namespace_comes_from_the_project_or_its_file_name() {
     d.add_project("web/Shop.Web.csproj", "<Project><PropertyGroup><RootNamespace>Shop.Storefront</RootNamespace></PropertyGroup></Project>");
     d.add_project("api/Shop-Remote.csproj", "<Project Sdk=\"Microsoft.NET.Sdk\"></Project>");
     assert_eq!(d.root_namespace("web/Pages/Checkout.razor"), Some(("web", "Shop.Storefront")));
-    assert_eq!(d.root_namespace("api/Orders/Use.cs"), Some(("api", "Shop_Remote")), "the project file's name, with what an identifier cannot hold replaced");
-    assert_eq!(d.root_namespace("tools/x.cs"), None);
+    d.add_project("tools/My Shop.csproj", "<Project Sdk=\"Microsoft.NET.Sdk\"></Project>");
+    assert_eq!(d.root_namespace("api/Orders/Use.cs"), Some(("api", "Shop-Remote")), "the SDK replaces only spaces; Razor sanitises the rest");
+    assert_eq!(d.root_namespace("tools/x.cs"), Some(("tools", "My_Shop")));
+    assert_eq!(d.root_namespace("other/x.cs"), None);
 }
 
 // Visual Studio saves C# with a BOM, and a Windows checkout ends its lines in CRLF.

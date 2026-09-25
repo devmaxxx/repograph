@@ -300,3 +300,187 @@ fn razor_block_census() {
     }
     println!("razor-census: files {files} with-blocks {with} blocks {count} unread {unread} unclean {unclean}");
 }
+
+use crate::code::csharp::cases::{edges, ids, Repo};
+use crate::model::EdgeKind;
+
+const WEB: &[(&str, &str)] = &[
+    ("Web/Shop.Web.csproj", "<Project Sdk=\"Microsoft.NET.Sdk.Web\"><PropertyGroup><RootNamespace>Shop.Web</RootNamespace></PropertyGroup></Project>\n"),
+    ("Web/_Imports.razor", "@using Shop.Payments\n@using Shop.Web.Shared\n"),
+    ("Payments/IPaymentGateway.cs", "namespace Shop.Payments;\npublic interface IPaymentGateway { void Charge(int amount); }\n"),
+    ("Web/Shared/OrderLine.razor", "<li>@Caption</li>\n@code {\n    [Parameter] public string Caption { get; set; }\n}\n"),
+    ("Web/Shared/PageBase.cs", "namespace Shop.Web.Shared;\npublic abstract class PageBase {}\n"),
+    ("Web/Pages/Checkout.razor", "@page \"/checkout\"\n@inherits PageBase\n@inject IPaymentGateway Payments\n\n<h3>Checkout</h3>\n<OrderLine Caption=\"one\" />\n\n@code {\n    private int total;\n    void Pay()\n    {\n        Payments.Charge(total);\n        Confirm();\n    }\n}\n"),
+    ("Web/Pages/Checkout.razor.cs", "namespace Shop.Web.Pages;\npublic partial class Checkout\n{\n    void Confirm() {}\n}\n"),
+];
+
+#[test]
+fn directives_are_read_outside_the_blocks_and_tags_are_upper_case() {
+    let d = super::directives("@namespace Shop.Web\n@using static Shop.Checks.Guard\n@using Pay = Shop.Payments.IPaymentGateway\n@inject IStringLocalizer<Checkout> L\n@implements IDisposable\n<div><OrderLine />\n@code {\n    RenderFragment f = @<Badge />;\n}\n");
+    use crate::code::csharp::declarations::Using;
+    assert_eq!(d.namespace.as_deref(), Some("Shop.Web"));
+    assert_eq!(d.usings, vec![Using::Static("Shop.Checks.Guard".into()), Using::Alias("Pay".into(), "Shop.Payments.IPaymentGateway".into())]);
+    assert_eq!(d.injects, vec![("IStringLocalizer<Checkout>".to_string(), "L".to_string(), 4)]);
+    assert_eq!(d.types, vec![("IDisposable".to_string(), 5, true)]);
+    assert_eq!(d.tags, vec![("OrderLine".to_string(), 6)], "a tag inside a block is not read");
+}
+
+#[test]
+fn a_bom_before_a_first_line_directive_is_not_part_of_it() {
+    let d = super::directives("\u{FEFF}@namespace Shop.Web\n@using Shop.Payments\n<h3/>\n");
+    assert_eq!(d.namespace.as_deref(), Some("Shop.Web"));
+    assert_eq!(d.usings.len(), 1);
+    let d = super::directives("\u{FEFF}@inject IPaymentGateway Payments\n");
+    assert_eq!(d.injects, vec![("IPaymentGateway".to_string(), "Payments".to_string(), 1)]);
+}
+
+#[test]
+fn a_component_is_a_symbol_in_the_namespace_the_razor_compiler_gives_it() {
+    let repo = Repo::new(WEB);
+    assert_eq!(repo.resolver().dotnet().razor_namespace("Web/Pages/Checkout.razor", None), "Shop.Web.Pages");
+    let ex = repo.extract("Web/Pages/Checkout.razor");
+    let f = "sym:Web/Pages/Checkout.razor::";
+    for id in ["Checkout", "Checkout.Payments", "Checkout.total", "Checkout.Pay"] {
+        let id = format!("{f}{id}");
+        assert!(ids(&ex).contains(&id.as_str()), "{id} missing from {:?}", ids(&ex));
+    }
+    assert!(edges(&ex, EdgeKind::Declares).contains(&("file:Web/Pages/Checkout.razor", "sym:Web/Pages/Checkout.razor::Checkout", "export")));
+    let at = |id: &str| {
+        let n = ex.nodes.iter().find(|n| n.id == format!("{f}{id}")).unwrap();
+        (n.line, n.end)
+    };
+    assert_eq!(at("Checkout.Pay"), (10, 14), "a member's rows in the blanked copy are its rows in the file");
+    assert_eq!(at("Checkout"), (1, 15));
+}
+
+#[test]
+fn an_inject_a_tag_an_inherits_and_a_code_behind_member_resolve() {
+    let repo = Repo::new(WEB);
+    let ex = repo.extract("Web/Pages/Checkout.razor");
+    let calls = edges(&ex, EdgeKind::Calls);
+    for (from, to) in [
+        ("sym:Web/Pages/Checkout.razor::Checkout.Pay", "sym:Payments/IPaymentGateway.cs::IPaymentGateway.Charge"),
+        ("sym:Web/Pages/Checkout.razor::Checkout.Pay", "sym:Web/Pages/Checkout.razor.cs::Checkout.Confirm"),
+        ("sym:Web/Pages/Checkout.razor::Checkout", "sym:Web/Shared/OrderLine.razor::OrderLine"),
+    ] {
+        assert!(calls.contains(&(from, to, "")), "{from} -> {to} missing from {calls:?}");
+    }
+    assert!(edges(&ex, EdgeKind::Extends).contains(&("sym:Web/Pages/Checkout.razor::Checkout", "sym:Web/Shared/PageBase.cs::PageBase", "")));
+    let imports = edges(&ex, EdgeKind::Imports);
+    for (to, name) in [("file:Payments/IPaymentGateway.cs", "IPaymentGateway"), ("file:Web/Shared/OrderLine.razor", "OrderLine"), ("file:Web/Pages/Checkout.razor.cs", "Checkout")] {
+        assert!(imports.contains(&("file:Web/Pages/Checkout.razor", to, name)), "{to} [{name}] missing from {imports:?}");
+    }
+}
+
+#[test]
+fn a_code_behind_part_imports_its_component() {
+    let repo = Repo::new(WEB);
+    let ex = repo.extract("Web/Pages/Checkout.razor.cs");
+    let imports = edges(&ex, EdgeKind::Imports);
+    assert!(imports.contains(&("file:Web/Pages/Checkout.razor.cs", "file:Web/Pages/Checkout.razor", "Checkout")), "{imports:?}");
+}
+
+#[test]
+fn a_component_with_no_block_still_resolves_its_inject_and_its_tags() {
+    let mut files = WEB.to_vec();
+    files.push(("Web/Shared/Badge.razor", "@inject IPaymentGateway Payments\n<OrderLine Caption=\"x\" />\n"));
+    let repo = Repo::new(&files);
+    let ex = repo.extract("Web/Shared/Badge.razor");
+    assert!(ids(&ex).contains(&"sym:Web/Shared/Badge.razor::Badge.Payments"), "{:?}", ids(&ex));
+    assert!(edges(&ex, EdgeKind::Calls).contains(&("sym:Web/Shared/Badge.razor::Badge", "sym:Web/Shared/OrderLine.razor::OrderLine", "")));
+}
+
+#[test]
+fn a_view_and_an_imports_file_declare_no_component() {
+    let mut files = WEB.to_vec();
+    files.push(("Web/Pages/IndexModel.cs", "namespace Shop.Web.Pages;\npublic class IndexModel {}\n"));
+    files.push(("Web/Pages/Index.cshtml", "@page\n@model Shop.Web.Pages.IndexModel\n@using Shop.Payments\n@inject IPaymentGateway Payments\n<h1>Index</h1>\n"));
+    let repo = Repo::new(&files);
+    let view = repo.extract("Web/Pages/Index.cshtml");
+    assert_eq!(ids(&view), vec!["file:Web/Pages/Index.cshtml"]);
+    let imports = edges(&view, EdgeKind::Imports);
+    assert!(imports.contains(&("file:Web/Pages/Index.cshtml", "file:Web/Pages/IndexModel.cs", "IndexModel")), "{imports:?}");
+    assert!(imports.contains(&("file:Web/Pages/Index.cshtml", "file:Payments/IPaymentGateway.cs", "IPaymentGateway")), "{imports:?}");
+    assert_eq!(ids(&repo.extract("Web/_Imports.razor")), vec!["file:Web/_Imports.razor"]);
+}
+
+#[test]
+fn a_component_header_is_its_name_and_its_own_namespace() {
+    use crate::code::index::header_for;
+    let h = header_for(Lang::Razor, "Web/Pages/Checkout.razor", "@namespace Shop.Checkout\n<h3/>\n").unwrap();
+    assert_eq!(h.scope, vec!["Shop.Checkout".to_string()]);
+    assert_eq!(h.top.iter().map(String::as_str).collect::<Vec<_>>(), vec!["Checkout"]);
+    let imports = header_for(Lang::Razor, "Web/_Imports.razor", "@using Shop\n@namespace Shop.Web\n").unwrap();
+    assert!(imports.top.is_empty());
+    assert!(imports.scope.is_empty());
+    assert_eq!(imports.directives.iter().map(String::as_str).collect::<Vec<_>>(), vec!["@namespace Shop.Web", "@using Shop"], "an imports file's directives move its header");
+}
+
+#[test]
+fn a_view_resolves_only_what_its_own_directives_bring() {
+    let mut files = WEB.to_vec();
+    files.push(("Web/Pages/IndexModel.cs", "namespace Shop.Web.Pages;\npublic class IndexModel {}\n"));
+    files.push(("Web/Pages/Plain.cshtml", "@model IndexModel\n@inject IPaymentGateway Payments\n<h1>Plain</h1>\n"));
+    let repo = Repo::new(&files);
+    let ex = repo.extract("Web/Pages/Plain.cshtml");
+    let imports = edges(&ex, EdgeKind::Imports);
+    assert!(imports.is_empty(), "a view's class is not in the project's namespace, and _Imports.razor is for components: {imports:?}");
+}
+
+#[test]
+fn a_component_namespace_is_sanitised_as_the_razor_compiler_does() {
+    let repo = Repo::new(&[
+        ("App/My-App.csproj", "<Project Sdk=\"Microsoft.NET.Sdk.Web\"></Project>\n"),
+        ("App/2024/Admin Pages/Report.razor", "<h3/>\n"),
+        ("Site/Shop.Site.csproj", "<Project Sdk=\"Microsoft.NET.Sdk.Web\"></Project>\n"),
+        ("Site/Area/_Imports.razor", "@namespace Shop.Named\n"),
+        ("Site/Area/Deep/Page.razor", "<h3/>\n"),
+    ]);
+    let r = repo.resolver();
+    assert_eq!(r.dotnet().razor_namespace("App/2024/Admin Pages/Report.razor", None), "My_App._2024.Admin_Pages");
+    assert_eq!(r.dotnet().razor_namespace("Site/Area/Deep/Page.razor", None), "Shop.Named.Deep", "an imports file's @namespace plus the folders below it");
+}
+
+#[test]
+fn an_imports_file_above_the_project_does_not_reach_its_components() {
+    let repo = Repo::new(&[
+        ("_Imports.razor", "@using Shop.Payments\n@namespace Outer\n"),
+        ("Web/Shop.Web.csproj", "<Project Sdk=\"Microsoft.NET.Sdk.Web\"><PropertyGroup><RootNamespace>Shop.Web</RootNamespace></PropertyGroup></Project>\n"),
+        ("Payments/IPaymentGateway.cs", "namespace Shop.Payments;\npublic interface IPaymentGateway { void Charge(int amount); }\n"),
+        ("Web/Pages/Pay.razor", "@inject IPaymentGateway Payments\n"),
+    ]);
+    assert_eq!(repo.resolver().dotnet().razor_namespace("Web/Pages/Pay.razor", None), "Shop.Web.Pages");
+    let ex = repo.extract("Web/Pages/Pay.razor");
+    let imports = edges(&ex, EdgeKind::Imports);
+    assert!(imports.is_empty(), "{imports:?}");
+}
+
+#[test]
+fn a_commented_tag_or_directive_is_not_read_and_a_using_statement_is_not_a_directive() {
+    let d = super::directives("@* <OrderLine />\n@inject IPaymentGateway Payments *@\n<!-- <Badge /> -->\n@using (Html.BeginForm())\n{\n}\n<Card />\n");
+    assert_eq!(d.tags, vec![("Card".to_string(), 7)]);
+    assert!(d.injects.is_empty() && d.usings.is_empty(), "{d:?}");
+}
+
+#[test]
+fn a_tag_naming_a_class_that_is_not_a_component_renders_nothing() {
+    let mut files = WEB.to_vec();
+    files.push(("Web/Pages/Odd.razor", "<PageBase />\n<OrderLine />\n"));
+    let repo = Repo::new(&files);
+    let ex = repo.extract("Web/Pages/Odd.razor");
+    let calls = edges(&ex, EdgeKind::Calls);
+    assert_eq!(calls, vec![("sym:Web/Pages/Odd.razor::Odd", "sym:Web/Shared/OrderLine.razor::OrderLine", "")], "Razor renders a component, and a plain class is an HTML element to it");
+}
+
+#[test]
+fn a_component_whose_blocks_cannot_be_read_writes_its_file_alone_and_is_rendered_by_no_tag() {
+    let mut files = WEB.to_vec();
+    files.push(("Web/Shared/Broken.razor", "@inject IPaymentGateway Payments\n<OrderLine />\n@code {\n    void Pay() {\n"));
+    files.push(("Web/Pages/Host.razor", "<Broken />\n"));
+    let repo = Repo::new(&files);
+    let broken = repo.extract("Web/Shared/Broken.razor");
+    assert_eq!(ids(&broken), vec!["file:Web/Shared/Broken.razor"]);
+    assert!(broken.edges.is_empty(), "{:?}", broken.edges);
+    let host = repo.extract("Web/Pages/Host.razor");
+    assert!(edges(&host, EdgeKind::Calls).is_empty(), "no symbol to render: {:?}", host.edges);
+}

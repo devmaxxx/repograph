@@ -63,6 +63,7 @@ pub fn header_for(lang: Lang, rel: &str, source: &str) -> Option<Header> {
         Family::TypeScript | Family::Rust | Family::Python | Family::Dart | Family::Swift | Family::Bicep | Family::Hcl | Family::Shell => None,
         Family::DotNet => match lang {
             Lang::CSharp => Some(crate::code::csharp::index::facts(rel, source).header()),
+            Lang::Razor => Some(crate::code::razor::header(rel, source)),
             _ => None,
         },
         // The name-indexed families. Each family plan replaces its own name here with its arm.

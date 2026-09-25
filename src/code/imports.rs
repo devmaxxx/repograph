@@ -221,8 +221,10 @@ impl Resolver {
         if let Some(header) = crate::code::index::header_for(lang, rel, source) {
             index_header(&mut self.indexes, lang.family(), rel, &header);
         }
-        if matches!(lang, Lang::CSharp) {
-            self.dotnet.add_cs(rel, &crate::code::csharp::index::facts(rel, source));
+        match lang {
+            Lang::CSharp => self.dotnet.add_cs(rel, &crate::code::csharp::index::facts(rel, source)),
+            Lang::Razor => self.dotnet.add_razor(rel, &crate::code::razor::directives(source)),
+            _ => {}
         }
     }
 

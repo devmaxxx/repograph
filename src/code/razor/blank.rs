@@ -7,8 +7,6 @@ use std::ops::Range;
 
 use crate::code::blank::{keep_ranges, overwrite};
 
-#[cfg_attr(not(test), expect(dead_code))]
-// Read by the Razor extractor; `expect` flags this once it is.
 #[derive(Debug, PartialEq, Eq)]
 pub enum View {
     /// The file holds no block.
@@ -62,8 +60,6 @@ pub(crate) const BOM: char = '\u{FEFF}';
 /// (byte of `@`, byte of the opening `{`, byte of the closing `}`) per block, in file order. A
 /// directive opens a block only at the start of a line, as Razor requires; the first line starts
 /// after a leading BOM, and every offset stays one into `src`.
-#[cfg_attr(not(test), expect(dead_code))]
-// Read by the Razor extractor; `expect` flags this once it is.
 pub fn blocks(src: &str) -> Result<Vec<(usize, usize, usize)>, &'static str> {
     scan(src).map(|(found, _)| found)
 }
@@ -312,8 +308,6 @@ fn indentation(src: &str, from: usize, to: usize) -> Option<usize> {
 /// so the wrapper goes into the directive only when it is long enough (`@functions {`); otherwise
 /// `class` goes on the nearest line above with room and `C` over the `@`; otherwise, for a block on
 /// the first line, into the block's own indentation.
-#[cfg_attr(not(test), expect(dead_code))]
-// Read by the Razor extractor; `expect` flags this once it is.
 pub fn view(src: &str) -> View {
     let (found, razor_comments) = match scan(src) {
         Ok(fc) => fc,

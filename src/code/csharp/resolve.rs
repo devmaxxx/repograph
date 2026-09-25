@@ -29,18 +29,6 @@ impl<'a> Scope<'a> {
         Scope { rel, dotnet, own, usings }
     }
 
-    // Read by Razor resolution; `expect` flags this once it is.
-    #[expect(dead_code)]
-    pub(crate) fn usings(&self) -> &[Using] {
-        &self.usings
-    }
-
-    // Read by Razor resolution; `expect` flags this once it is.
-    #[expect(dead_code)]
-    pub(crate) fn dotnet(&self) -> &'a DotNet {
-        self.dotnet
-    }
-
     pub(crate) fn own(&self) -> &'a Declared {
         self.own
     }
@@ -51,6 +39,7 @@ impl<'a> Scope<'a> {
             .map(|t| Part { rel: self.rel.to_string(), local: t.local.clone(), full: full.to_string() })
             .collect();
         out.extend(self.dotnet.parts(full, self.rel).into_iter().cloned());
+        out.extend(self.dotnet.component_parts(full).into_iter().filter(|p| p.rel != self.rel));
         out.sort();
         out.dedup();
         out

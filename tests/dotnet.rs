@@ -72,3 +72,41 @@ fn a_partial_type_is_one_type_across_its_files() {
     let importers = ok(repo, &["impact", "OrderService"]);
     assert!(importers.contains("Shop/OrderService.Bedrock.cs") && importers.contains("Shop/Checkout.cs"), "{importers}");
 }
+
+#[test]
+fn a_component_is_rendered_by_the_tag_that_names_it_and_a_new_one_reaches_its_users() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path();
+    write(repo, "repograph.toml", TOML);
+    write(repo, "Web/Shop.Web.csproj", "<Project Sdk=\"Microsoft.NET.Sdk.Web\"><PropertyGroup><RootNamespace>Shop.Web</RootNamespace></PropertyGroup></Project>\n");
+    write(repo, "Web/_Imports.razor", "@using Shop.Payments\n@using Shop.Web.Shared\n");
+    write(repo, "Payments/IPaymentGateway.cs", "namespace Shop.Payments;\npublic interface IPaymentGateway { void Charge(int amount); }\n");
+    write(repo, "Web/Shared/OrderLine.razor", "<li>line</li>\n");
+    write(repo, "Web/Pages/Checkout.razor", "@inject IPaymentGateway Payments\n<OrderLine />\n<Badge />\n@code {\n    void Pay() { Payments.Charge(1); }\n}\n");
+    ok(repo, &["build"]);
+    let impact = ok(repo, &["impact", "OrderLine"]);
+    assert!(impact.contains("Web/Pages/Checkout.razor"), "{impact}");
+    let trace = ok(repo, &["trace", "Checkout.Pay", "IPaymentGateway.Charge"]);
+    assert!(trace.contains("IPaymentGateway.Charge"), "{trace}");
+    write(repo, "Web/Shared/Badge.razor", "<span>badge</span>\n");
+    ok(repo, &["update"]);
+    let badge = ok(repo, &["impact", "Badge"]);
+    assert!(badge.contains("Web/Pages/Checkout.razor"), "a component that appears reaches the unchanged file whose tag names it: {badge}");
+}
+
+#[test]
+fn an_imports_file_that_gains_a_using_reaches_the_components_below_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path();
+    write(repo, "repograph.toml", TOML);
+    write(repo, "Web/_Imports.razor", "@using Shop.Payments\n");
+    write(repo, "Badges/Badge.razor", "@namespace Shop.Badges\n<span>badge</span>\n");
+    write(repo, "Web/Pages/Checkout.razor", "<Badge />\n");
+    ok(repo, &["build"]);
+    let before = ok(repo, &["impact", "Badge"]);
+    assert!(!before.contains("Web/Pages/Checkout.razor"), "no using reaches Shop.Badges yet: {before}");
+    write(repo, "Web/_Imports.razor", "@using Shop.Payments\n@using Shop.Badges\n");
+    ok(repo, &["update"]);
+    let after = ok(repo, &["impact", "Badge"]);
+    assert!(after.contains("Web/Pages/Checkout.razor"), "the unchanged component re-reads under its imports file's new using: {after}");
+}
