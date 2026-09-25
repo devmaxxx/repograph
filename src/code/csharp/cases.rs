@@ -890,6 +890,24 @@ fn a_base_name_resolves_through_a_using_only_its_subclass_s_file_has() {
 }
 
 #[test]
+fn a_partial_base_s_list_on_a_later_part_is_still_walked() {
+    let repo = Repo::new(&[
+        ("Orders/Root.cs", "namespace Shop.Orders;\npublic class Root { public void Save() {} }\n"),
+        ("Orders/Mid.A.cs", "namespace Shop.Orders;\npublic partial class Mid {}\n"),
+        ("Orders/Mid.B.cs", "namespace Shop.Orders;\npublic partial class Mid : Root {}\n"),
+        ("Orders/Order.cs", "namespace Shop.Orders;\npublic class Order : Mid {}\n"),
+        ("Ext/E.cs", SAVE_EXT),
+        ("Use/M.cs", &format!("using Shop.Orders;\nusing Shop.Ext;\nnamespace Shop.Use;\n{USE_GO}")),
+    ]);
+    let ex = repo.extract("Use/M.cs");
+    assert_eq!(
+        edges(&ex, EdgeKind::Calls),
+        vec![("sym:Use/M.cs::M.Go", "sym:Orders/Root.cs::Root.Save", "")],
+        "Mid's base list sits on its second part, and Root declares Save",
+    );
+}
+
+#[test]
 fn a_string_literal_inside_an_interpolation_hole_is_referenced_once() {
     // `CodeExtractor::extract` sorts and dedups edges afterwards, which would hide a duplicate
     // push here; scanning directly is the only way this case pins the write itself.

@@ -482,7 +482,11 @@ impl Reader<'_> {
                         continue;
                     }
                     found.extend(self.scope.member_ids(&bp, method));
-                    next.extend(bp.into_iter().filter(|q| seen.insert(q.full.clone())));
+                    // Dedupe by type, not by part: a partial base's list may sit on any of its
+                    // parts, so a type seen for the first time keeps every part it has.
+                    let fresh: BTreeSet<String> = bp.iter().map(|q| q.full.clone()).filter(|f| !seen.contains(f)).collect();
+                    next.extend(bp.into_iter().filter(|q| fresh.contains(&q.full)));
+                    seen.extend(fresh);
                 }
             }
             if !found.is_empty() {
