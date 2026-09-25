@@ -731,10 +731,9 @@ fn a_crlf_source_extracts_the_same_nodes_and_edges_as_its_lf_twin() {
 
 #[test]
 fn a_globbed_file_no_grammar_reads_is_a_file_and_nothing_else() {
-    // Kotlin's `Lang::of` arm has not landed, so this stays a "no grammar reads it" fixture
-    // even once every other .NET-family extension gets a real extractor.
-    let ex = extract("svc/Program.kt", "package app\nclass Program { fun main() { run() } }\n");
-    assert_eq!(ids(&ex), vec!["file:svc/Program.kt"]);
+    // A log is no family's language, so no 0.6.0 grammar can turn this fixture into a real one.
+    let ex = extract("svc/boot.log", "boot ok\nRun() called\n");
+    assert_eq!(ids(&ex), vec!["file:svc/boot.log"]);
     assert!(ex.nodes.iter().all(|n| n.kind == NodeKind::File));
     assert!(ex.edges.is_empty(), "{:?}", ex.edges);
 }
