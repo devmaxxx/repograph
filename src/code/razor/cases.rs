@@ -647,7 +647,7 @@ fn an_inherits_with_type_arguments_and_global_resolves_to_its_generic_base() {
 
 /// `Wrap` holding `<Header>`, with `Wrap` written as `wrap` and, when given, a code-behind `behind`.
 fn header_under(wrap: &'static str, behind: Option<&'static str>) -> Vec<String> {
-    let mut files = vec![HEADER, ("Web/Shared/Wrap.razor", wrap), ("Web/Pages/P18.razor", "<Wrap>\n  <Header>x</Header>\n</Wrap>\n")];
+    let mut files = vec![HEADER, OUTER, ("Web/Shared/Wrap.razor", wrap), ("Web/Pages/P18.razor", "<Wrap>\n  <Header>x</Header>\n</Wrap>\n")];
     files.extend(behind.map(|b| ("Web/Shared/Wrap.razor.cs", b)));
     calls_of(&files, "Web/Pages/P18.razor")
 }
@@ -678,4 +678,29 @@ fn the_framework_s_own_bases_declare_no_header() {
         header_under("<div/>\n", Some(behind)),
         vec!["sym:Web/Shared/Header.razor::Header", "sym:Web/Shared/Wrap.razor.cs::Wrap", "sym:Web/Shared/Wrap.razor::Wrap"]
     );
+}
+
+const OUTER: (&str, &str) = (
+    "Web/Shared/Outer.cs",
+    "namespace Shop.Web.Shared;\npublic class Outer<T>\n{\n    public abstract class InnerBase : ComponentBase\n    {\n        [Parameter] public RenderFragment Header { get; set; }\n    }\n}\n",
+);
+
+#[test]
+fn a_base_nested_in_a_generic_type_is_the_nested_type_not_its_outer_one() {
+    let wrap = "@inherits Outer<int>.InnerBase\n<div>@Header</div>\n";
+    assert_eq!(header_under(wrap, None).len(), 1, "Header is InnerBase's parameter: {:?}", header_under(wrap, None));
+    let mut files = WEB.to_vec();
+    files.extend_from_slice(&[OUTER, HEADER, ("Web/Shared/Wrap.razor", wrap)]);
+    let ex = Repo::new(&files).extract("Web/Shared/Wrap.razor");
+    assert_eq!(edges(&ex, EdgeKind::Extends), vec![("sym:Web/Shared/Wrap.razor::Wrap", "sym:Web/Shared/Outer.cs::Outer.InnerBase", "")]);
+}
+
+#[test]
+fn a_razor_comment_after_a_directive_is_not_part_of_its_argument() {
+    let d = super::directives("@inherits ComponentBase @* <T> *@\n@inject IPaymentGateway Payments @* the gateway *@\n@model Shop.Models.Order @* x *@\n");
+    assert_eq!(d.inherits.as_deref(), Some("ComponentBase"));
+    assert!(!d.inherits_generic);
+    assert_eq!(d.injects, vec![("IPaymentGateway".to_string(), "Payments".to_string(), 2)]);
+    assert_eq!(d.types.iter().map(|(t, _, _)| t.as_str()).collect::<Vec<_>>(), vec!["ComponentBase", "Shop.Models.Order"]);
+    assert_eq!(header_under("@inherits ComponentBase @* <T> *@\n<div/>\n", None), vec!["sym:Web/Shared/Header.razor::Header", "sym:Web/Shared/Wrap.razor::Wrap"]);
 }

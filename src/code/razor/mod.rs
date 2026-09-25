@@ -135,6 +135,7 @@ pub fn directives(src: &str) -> Directives {
         if inside(at + raw.len() - raw.trim_start().len()) {
             continue;
         }
+        let l = &without_comments(l);
         let arg = |word: &str| l.strip_prefix(word).filter(|r| r.starts_with([' ', '\t'])).map(str::trim);
         let word = l.strip_prefix('@').map(|r| r.split(|c: char| !c.is_alphanumeric()).next().unwrap_or(""));
         // A using statement (`@using (Html.BeginForm()) { … }`) is no directive, and its body is markup.
@@ -152,7 +153,7 @@ pub fn directives(src: &str) -> Directives {
             }
         } else if let Some(t) = arg("@inherits") {
             d.inherits = Some(base_name(t));
-            d.inherits_generic = t.contains('<');
+            d.inherits_generic = last_segment_generic(t);
             d.types.push((t.to_string(), line, true));
         } else if let Some(t) = arg("@implements") {
             d.types.push((t.to_string(), line, true));
@@ -323,9 +324,11 @@ pub fn extract(resolver: &Resolver, rel: &str, source: &str) -> Extraction {
         imports(&scope, rel, t, &namespace, Some(&name), &mut ex);
     }
     for (t, _, base) in &d.types {
-        let parts = imports(&scope, rel, t, &namespace, None, &mut ex);
+        imports(&scope, rel, t, &namespace, None, &mut ex);
+        // A base's name is every segment with its type arguments dropped: the first word of
+        // `Outer<int>.InnerBase` is `Outer`, which is not the base.
         if *base {
-            for p in &parts {
+            for p in &scope.types(&base_name(t), &namespace, None) {
                 ex.edge(&id, &format!("sym:{}::{}", p.rel, p.local), EdgeKind::Extends, "", rel);
             }
         }
@@ -384,11 +387,56 @@ fn framework_parameters(base: &str, generic: bool) -> Option<&'static [&'static 
     (qualifier.is_none_or(|q| q == namespace) && arity).then_some(parameters)
 }
 
-/// A written type as a C# base list keeps it: dots, without generic arguments or `global::`.
+/// A written type as a C# base list keeps it: dots, without `global::` or any segment's type
+/// arguments, so `Outer<int>.InnerBase` is `Outer.InnerBase`.
 fn base_name(written: &str) -> String {
     let t = written.trim();
     let t = t.strip_prefix("global::").unwrap_or(t);
-    t.split('<').next().unwrap_or(t).trim().to_string()
+    let mut depth = 0usize;
+    let mut out = String::new();
+    for c in t.chars() {
+        match c {
+            '<' => depth += 1,
+            '>' => depth = depth.saturating_sub(1),
+            c if depth == 0 && !c.is_whitespace() => out.push(c),
+            _ => {}
+        }
+    }
+    out
+}
+
+/// Whether the type's own name, not an outer type it is nested in, carries type arguments.
+fn last_segment_generic(written: &str) -> bool {
+    let mut depth = 0usize;
+    let mut generic = false;
+    for c in written.chars() {
+        match c {
+            '<' => {
+                generic |= depth == 0;
+                depth += 1;
+            }
+            '>' => depth = depth.saturating_sub(1),
+            '.' if depth == 0 => generic = false,
+            _ => {}
+        }
+    }
+    generic
+}
+
+/// A directive line without its `@* … *@` comments; one left open runs to the end of the line,
+/// since the comment, not the argument, owns what follows.
+fn without_comments(line: &str) -> String {
+    let mut out = String::new();
+    let mut rest = line;
+    while let Some(at) = rest.find("@*") {
+        out.push_str(&rest[..at]);
+        match rest[at + 2..].find("*@") {
+            Some(end) => rest = &rest[at + 2 + end + 2..],
+            None => rest = "",
+        }
+    }
+    out.push_str(rest);
+    out.trim().to_string()
 }
 
 /// A view or an imports file: the `Imports` its directives' types prove, read under its imports
