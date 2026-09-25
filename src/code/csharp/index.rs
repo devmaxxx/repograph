@@ -68,6 +68,9 @@ pub struct DotNet {
     /// another type excluded. Cheap enough to ask "could a real repo type be the receiver here"
     /// without resolving one, for a value whose own declared type this file did not read.
     instance_members: BTreeSet<String>,
+    /// `Namespace.Outer.Inner` → the base-list names written for it, anywhere in the repo — every
+    /// partial declaration's own file included, not only the file asking. `Scope::bases` reads it.
+    bases: BTreeMap<String, BTreeSet<String>>,
     /// `.cs` rel → its `global using`s.
     global: BTreeMap<String, Vec<Using>>,
     /// Directory holding a `.csproj` (`""` at the root) → the project's root namespace.
@@ -85,6 +88,7 @@ impl DotNet {
                 self.extensions.entry(m.clone()).or_default().insert((t.namespace.clone(), t.full()));
             }
             self.instance_members.extend(t.members.keys().filter(|m| !t.extensions.contains(*m)).cloned());
+            self.bases.entry(t.full()).or_default().extend(t.bases.iter().cloned());
         }
         if !d.global_usings.is_empty() {
             self.global.insert(rel.to_string(), d.global_usings.clone());
@@ -113,6 +117,11 @@ impl DotNet {
     /// own — an extension of another type does not count.
     pub fn declares_instance_member(&self, member: &str) -> bool {
         self.instance_members.contains(member)
+    }
+
+    /// Every base-list name written for `full`, anywhere in the repo.
+    pub fn bases(&self, full: &str) -> Vec<String> {
+        self.bases.get(full).map(|s| s.iter().cloned().collect()).unwrap_or_default()
     }
 
     pub fn extensions(&self, method: &str) -> Vec<(String, String)> {

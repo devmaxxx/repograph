@@ -733,6 +733,94 @@ fn an_unread_var_still_resolves_through_an_extension_when_no_repo_type_owns_the_
     assert_eq!(edges(&ex, EdgeKind::Calls), vec![("sym:Use/M.cs::M.Go", "sym:Ext/E.cs::E.Round", "")]);
 }
 
+const ENTITY: &str = "namespace Shop.Orders;\npublic class Entity { public void Save() {} }\n";
+const ORDER_ENTITY: &str = "namespace Shop.Orders;\npublic class Order : Entity {}\n";
+const SAVE_EXT: &str = "namespace Shop.Ext;\npublic static class E { public static void Save(this object o) {} }\n";
+
+#[test]
+fn a_parameter_s_inherited_member_resolves_through_a_base_declared_in_another_file() {
+    let repo = Repo::new(&[
+        ("Orders/Entity.cs", ENTITY),
+        ("Orders/Order.cs", ORDER_ENTITY),
+        ("Ext/E.cs", SAVE_EXT),
+        ("Use/M.cs", "using Shop.Orders;\nusing Shop.Ext;\nnamespace Shop.Use;\nclass M { void Go(Order o) { o.Save(); } }\n"),
+    ]);
+    let ex = repo.extract("Use/M.cs");
+    assert_eq!(
+        edges(&ex, EdgeKind::Calls),
+        vec![("sym:Use/M.cs::M.Go", "sym:Orders/Entity.cs::Entity.Save", "")],
+        "Order's base Entity is declared in a different file than the one that inherits it",
+    );
+}
+
+const ORDER_WITH_ENTITY_SAME_FILE: &str = "namespace Shop.Orders;\npublic class Entity { public void Save() {} }\npublic class Order : Entity {}\n";
+
+#[test]
+fn a_parameter_s_inherited_member_resolves_through_a_base_declared_in_a_file_that_is_not_the_caller_s() {
+    let repo = Repo::new(&[
+        ("Orders/Order.cs", ORDER_WITH_ENTITY_SAME_FILE),
+        ("Ext/E.cs", SAVE_EXT),
+        ("Use/M.cs", "using Shop.Orders;\nusing Shop.Ext;\nnamespace Shop.Use;\nclass M { void Go(Order o) { o.Save(); } }\n"),
+    ]);
+    let ex = repo.extract("Use/M.cs");
+    assert_eq!(
+        edges(&ex, EdgeKind::Calls),
+        vec![("sym:Use/M.cs::M.Go", "sym:Orders/Order.cs::Entity.Save", "")],
+        "Entity and Order share a file, but it is neither the caller's own",
+    );
+}
+
+const ROOT_ENTITY_ORDER: &str = "namespace Shop.Orders;\npublic class Root { public void Save() {} }\npublic class Entity : Root {}\npublic class Order : Entity {}\n";
+
+#[test]
+fn a_parameter_s_inherited_member_resolves_two_links_up_the_base_chain() {
+    let repo = Repo::new(&[
+        ("Orders/Order.cs", ROOT_ENTITY_ORDER),
+        ("Ext/E.cs", SAVE_EXT),
+        ("Use/M.cs", "using Shop.Orders;\nusing Shop.Ext;\nnamespace Shop.Use;\nclass M { void Go(Order o) { o.Save(); } }\n"),
+    ]);
+    let ex = repo.extract("Use/M.cs");
+    assert_eq!(
+        edges(&ex, EdgeKind::Calls),
+        vec![("sym:Use/M.cs::M.Go", "sym:Orders/Order.cs::Root.Save", "")],
+        "Save is declared on Order's grand-base, two links up the chain",
+    );
+}
+
+const ADD_EXT: &str = "namespace Shop.Ext;\npublic static class E { public static void Add(this object o, int v) {} }\n";
+
+#[test]
+fn a_base_that_is_not_a_repo_type_blocks_the_extension_it_cannot_rule_out() {
+    let repo = Repo::new(&[
+        ("Ext/E.cs", ADD_EXT),
+        ("Use/M.cs", "using Shop.Ext;\nnamespace Shop.Use;\nclass Bag : List<int> {}\nclass M { void Go(Bag b) { b.Add(1); } }\n"),
+    ]);
+    let ex = repo.extract("Use/M.cs");
+    assert_eq!(
+        edges(&ex, EdgeKind::Calls),
+        Vec::<(&str, &str, &str)>::new(),
+        "List<int> is not a repo type, so it might declare Add on its own",
+    );
+}
+
+const NO_PACK_CHAIN: &str = "namespace Shop.Orders;\npublic class Base {}\npublic class Order : Base {}\n";
+const PACK_EXT: &str = "namespace Shop.Orders;\npublic static class PackExt { public static void Pack(this Order o) {} }\n";
+
+#[test]
+fn an_extension_still_fires_when_the_full_repo_base_chain_lacks_the_method() {
+    let repo = Repo::new(&[
+        ("Orders/Order.cs", NO_PACK_CHAIN),
+        ("Orders/PackExt.cs", PACK_EXT),
+        ("Use/M.cs", "using Shop.Orders;\nnamespace Shop.Use;\nclass M { void Go(Order o) { o.Pack(); } }\n"),
+    ]);
+    let ex = repo.extract("Use/M.cs");
+    assert_eq!(
+        edges(&ex, EdgeKind::Calls),
+        vec![("sym:Use/M.cs::M.Go", "sym:Orders/PackExt.cs::PackExt.Pack", "")],
+        "Order and its base Base are both repo types, and neither declares Pack",
+    );
+}
+
 #[test]
 fn a_string_literal_inside_an_interpolation_hole_is_referenced_once() {
     // `CodeExtractor::extract` sorts and dedups edges afterwards, which would hide a duplicate

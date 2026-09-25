@@ -436,12 +436,11 @@ impl Reader<'_> {
         Typed::None
     }
 
-    /// `method` on the repo type `t`: found there directly, or — the same reach `base_member` has
-    /// for `base.M()` — on its direct base as this file's own declaration of `t` writes it. `t`
-    /// naming no repo type at all, or a repo type that declares `method` nowhere this file can
-    /// read, is `Unknown` rather than a proven miss: this file has no proof either way, so the
-    /// extension rule may still stand in — that is what closes the gap `member_of` alone left,
-    /// where a value of a real but unimplemented-here type silently blocked every extension.
+    /// `method` on the repo type `t`: found there directly, or on its base chain, walked as far as
+    /// the repo can prove (see `based`). `t` naming no repo type at all is `Unknown` rather than a
+    /// proven miss: this file has no proof either way, so the extension rule may still stand in —
+    /// that is what closes the gap `member_of` alone left, where a value of a real but
+    /// unimplemented-here type silently blocked every extension.
     fn on_type(&self, t: &str, method: &str, ns: &str, class: Option<&str>) -> Typed {
         let parts = self.scope.types(t, ns, class);
         if parts.is_empty() {
@@ -451,12 +450,48 @@ impl Reader<'_> {
         if !found.is_empty() {
             return Typed::Found(found);
         }
-        let based: Vec<String> = parts.iter()
-            .flat_map(|p| self.scope.own().parts(&p.full))
-            .flat_map(|td| td.bases.iter())
-            .flat_map(|b| self.scope.member_of(b, method, ns, class))
-            .collect();
-        if based.is_empty() { Typed::Unknown } else { Typed::Found(based) }
+        self.based(&parts, method, ns, class)
+    }
+
+    /// `method` walked up `parts`' base chain, however many files it crosses: `Scope::bases` holds
+    /// every base-list name written for a type anywhere in the repo, not only in the file at hand,
+    /// so a subclass and its base need not share a file with each other or with the caller. Each
+    /// base name is resolved in the caller's own scope — a stand-in for the declaring file's own
+    /// usings, which this pass never has, but sound whenever caller and base sit under the same
+    /// imported namespace, as a subclass and its own base almost always do.
+    ///
+    /// A base name that resolves to no repo type at all — a framework base such as `object` or
+    /// `List<T>` — blocks the extension rule outright: a type this file cannot read could easily
+    /// declare `method` itself, so nothing here is proof either way. Only a chain that bottoms out
+    /// entirely in repo types, none of which declare `method`, is a proven miss, and only then does
+    /// `Unknown` let the extension rule stand in.
+    fn based(&self, parts: &[Part], method: &str, ns: &str, class: Option<&str>) -> Typed {
+        let mut seen: BTreeSet<String> = parts.iter().map(|p| p.full.clone()).collect();
+        let mut frontier = parts.to_vec();
+        let mut external = false;
+        for _ in 0..32 {
+            if frontier.is_empty() {
+                break;
+            }
+            let mut next = Vec::new();
+            let mut found = Vec::new();
+            for p in &frontier {
+                for b in self.scope.bases(&p.full) {
+                    let bp = self.scope.types(&b, ns, class);
+                    if bp.is_empty() {
+                        external = true;
+                        continue;
+                    }
+                    found.extend(self.scope.member_ids(&bp, method));
+                    next.extend(bp.into_iter().filter(|q| seen.insert(q.full.clone())));
+                }
+            }
+            if !found.is_empty() {
+                return Typed::Found(found);
+            }
+            frontier = next;
+        }
+        if external { Typed::Found(Vec::new()) } else { Typed::Unknown }
     }
 
     /// A known local, parameter or field whose declared type this file did not read. The extension
@@ -470,13 +505,16 @@ impl Reader<'_> {
 
 /// What `typed` found `name` to stand for.
 enum Typed {
-    /// A real hit: `method` on a value's resolved repo type or its direct base, or — for a bare
-    /// name read as a type, not a value — whatever `member_of` finds there, empty included, since a
-    /// type name never triggers the extension rule regardless of what it resolves to.
+    /// A resolved outcome the extension rule must not override: real hits, `method` on a value's
+    /// resolved repo type or somewhere up its base chain; a value whose base chain runs into a
+    /// non-repo type, empty, since that type might declare `method` itself and no extension can be
+    /// proven over it either; or, for a bare name read as a type rather than a value, whatever
+    /// `member_of` finds there, empty included, since a type name never triggers the extension rule
+    /// regardless of what it resolves to.
     Found(Vec<String>),
     /// A local, parameter or field this file cannot prove either way: its declared type is unread,
-    /// or its declared type names no repo type, or a repo type it does name declares no such
-    /// member this file can read. The extension rule may stand in for any of these.
+    /// or its declared type names no repo type, or its declared type and its whole base chain are
+    /// repo types and none of them declares `method`. The extension rule may stand in for any of these.
     Unknown,
     /// Neither a local, a parameter, a field or property, nor — for a bare name — a type: not a
     /// value, so never a member lookup and never an extension.

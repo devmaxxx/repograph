@@ -130,6 +130,13 @@ impl<'a> Scope<'a> {
         self.dotnet.declares_instance_member(member)
     }
 
+    /// The base-list names written for `full`, anywhere in the repo — every partial declaration's
+    /// own file included, not only the caller's. Whole-repo counterpart to `base_member`, which
+    /// reads only the file at hand.
+    pub fn bases(&self, full: &str) -> Vec<String> {
+        self.dotnet.bases(full)
+    }
+
     /// The enclosing type and each type around it, innermost first.
     fn enclosing(&self, namespace: &str, class: Option<&str>) -> Vec<Vec<Part>> {
         let Some(c) = class else { return Vec::new() };
