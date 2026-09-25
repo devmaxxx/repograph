@@ -731,8 +731,10 @@ fn a_crlf_source_extracts_the_same_nodes_and_edges_as_its_lf_twin() {
 
 #[test]
 fn a_globbed_file_no_grammar_reads_is_a_file_and_nothing_else() {
-    let ex = extract("svc/Program.cs", "namespace App;\npublic class Program { static void Main() { Run(); } }\n// FR-PAY-22\n");
-    assert_eq!(ids(&ex), vec!["file:svc/Program.cs"]);
+    // Kotlin's `Lang::of` arm has not landed, so this stays a "no grammar reads it" fixture
+    // even once every other .NET-family extension gets a real extractor.
+    let ex = extract("svc/Program.kt", "package app\nclass Program { fun main() { run() } }\n");
+    assert_eq!(ids(&ex), vec!["file:svc/Program.kt"]);
     assert!(ex.nodes.iter().all(|n| n.kind == NodeKind::File));
     assert!(ex.edges.is_empty(), "{:?}", ex.edges);
 }
