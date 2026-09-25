@@ -49,24 +49,39 @@ pub(crate) const BOM: char = '\u{FEFF}';
 #[cfg_attr(not(test), expect(dead_code))]
 // Read by the Razor extractor; `expect` flags this once it is.
 pub fn blocks(src: &str) -> Result<Vec<(usize, usize, usize)>, &'static str> {
+    scan(src).map(|(found, _)| found)
+}
+
+/// A block's (byte of `@`, byte of `{`, byte of `}`), and a Razor comment's (byte of `@`, byte
+/// after `*@`).
+type Scanned = (Vec<(usize, usize, usize)>, Vec<(usize, usize)>);
+
+/// `blocks`, plus every `@* ... *@` span crossed while balancing a block's braces (`close_of`
+/// already steps over strings and comments to find them, so a naive text search does not have to).
+fn scan(src: &str) -> Result<Scanned, &'static str> {
     let b = src.as_bytes();
     let mut out = Vec::new();
+    let mut razor_comments = Vec::new();
     let mut line = if src.starts_with(BOM) { BOM.len_utf8() } else { 0 };
     while line < b.len() {
         let mut at = line;
         while at < b.len() && (b[at] == b' ' || b[at] == b'\t') {
             at += 1;
         }
-        // A directive commented out by `@* ... *@` is not live; skip the whole comment so a
-        // `@code` it holds on its own line is never mistaken for a real one.
-        if b[at..].starts_with(b"@*") {
-            let end = razor_comment_end(b, at).unwrap_or(b.len());
-            line = line_after(b, end);
-            continue;
-        }
         let word = ["@code", "@functions"].into_iter()
             .find(|w| b[at..].starts_with(w.as_bytes()) && !b.get(at + w.len()).copied().is_some_and(is_ident));
         let Some(word) = word else {
+            // No directive on this line. A Razor comment may still open here — anywhere on the
+            // line, not only at its start, since markup can precede it — and it may hold a
+            // `@code`/`@functions` of its own on a later line; skip the whole comment, wherever
+            // it closes, and resume scanning right there rather than at the next line, so a
+            // directive right after it on the same line (`@* x *@ @code {`) is still found.
+            let eol = b[line..].iter().position(|&c| c == b'\n').map_or(b.len(), |p| line + p);
+            if let Some(p) = find(&b[..eol], b"@*", line) {
+                let Some(end) = razor_comment_end(b, p) else { break };
+                line = end;
+                continue;
+            }
             line = line_after(b, line);
             continue;
         };
@@ -78,21 +93,27 @@ pub fn blocks(src: &str) -> Result<Vec<(usize, usize, usize)>, &'static str> {
             line = line_after(b, line);
             continue;
         }
-        let close = close_of(b, open).ok_or("a block that does not close")?;
+        let close = close_of(b, open, &mut razor_comments).ok_or("a block that does not close")?;
         out.push((at, open, close));
         line = line_after(b, close);
     }
-    Ok(out)
+    Ok((out, razor_comments))
 }
 
 /// The `}` balancing the `{` at `open`, stepping over comments, strings and character literals.
-fn close_of(s: &[u8], open: usize) -> Option<usize> {
+/// A `@* ... *@` crossed at the top level — never inside one of those, which are jumped over
+/// whole — is Razor's own comment, not C#; its span is recorded in `razor_comments` so `view` can
+/// blank exactly that text, rather than a second, string-blind search finding one inside a string
+/// or a real C# comment and pairing it with an unrelated `*@` far away.
+fn close_of(s: &[u8], open: usize, razor_comments: &mut Vec<(usize, usize)>) -> Option<usize> {
     let mut depth = 0usize;
     let mut i = open;
     while i < s.len() {
         match s[i] {
             b'@' if s.get(i + 1) == Some(&b'*') => {
-                i = razor_comment_end(s, i)?;
+                let end = razor_comment_end(s, i)?;
+                razor_comments.push((i, end));
+                i = end;
                 continue;
             }
             b'/' if s.get(i + 1) == Some(&b'/') => {
@@ -104,7 +125,7 @@ fn close_of(s: &[u8], open: usize) -> Option<usize> {
                 continue;
             }
             b'$' | b'@' | b'"' => {
-                if let Some(end) = string_end(s, i) {
+                if let Some(end) = string_end(s, i, razor_comments) {
                     i = end;
                     continue;
                 }
@@ -131,7 +152,7 @@ fn close_of(s: &[u8], open: usize) -> Option<usize> {
 
 /// The byte after the string literal starting at `i`, or None when none starts there. A regular or
 /// interpolated literal that meets a newline is markup text, not a literal.
-fn string_end(s: &[u8], i: usize) -> Option<usize> {
+fn string_end(s: &[u8], i: usize, razor_comments: &mut Vec<(usize, usize)>) -> Option<usize> {
     let mut j = i;
     let (mut interpolated, mut verbatim) = (false, false);
     while j < s.len() && (s[j] == b'$' || s[j] == b'@') {
@@ -157,7 +178,7 @@ fn string_end(s: &[u8], i: usize) -> Option<usize> {
             b'"' => return Some(j + 1),
             b'\n' if !verbatim => return None,
             b'{' if interpolated && s.get(j + 1) == Some(&b'{') => j += 2,
-            b'{' if interpolated => j = close_of(s, j)? + 1,
+            b'{' if interpolated => j = close_of(s, j, razor_comments)? + 1,
             _ => j += 1,
         }
     }
@@ -191,25 +212,6 @@ fn transitions(src: &str, range: Range<usize>, out: &mut String) {
         if TRANSITIONS.iter().any(|k| rest.starts_with(k.as_bytes()) && !rest.get(k.len()).copied().is_some_and(is_ident)) {
             overwrite(out, i, " ");
         }
-    }
-}
-
-/// `@* ... *@` inside a block is Razor's own comment, not C#; its bytes are blanked like a
-/// transition's, newlines kept, so it does not sit in the copy as text the grammar cannot read.
-fn comments(src: &str, range: Range<usize>, out: &mut String) {
-    let b = src.as_bytes();
-    let mut i = range.start;
-    while i < range.end {
-        if b[i] == b'@' && b.get(i + 1) == Some(&b'*') {
-            if let Some(end) = razor_comment_end(b, i) {
-                let end = end.min(range.end);
-                let blanked: String = b[i..end].iter().map(|&c| if c == b'\n' { '\n' } else { ' ' }).collect();
-                overwrite(out, i, &blanked);
-                i = end;
-                continue;
-            }
-        }
-        i += 1;
     }
 }
 
@@ -262,8 +264,8 @@ fn indentation(src: &str, from: usize, to: usize) -> Option<usize> {
 #[cfg_attr(not(test), expect(dead_code))]
 // Read by the Razor extractor; `expect` flags this once it is.
 pub fn view(src: &str) -> View {
-    let found = match blocks(src) {
-        Ok(b) => b,
+    let (found, razor_comments) = match scan(src) {
+        Ok(fc) => fc,
         Err(why) => return View::Unread(why),
     };
     let (Some(&(at, open, _)), Some(&(_, _, close))) = (found.first(), found.last()) else { return View::None };
@@ -271,7 +273,13 @@ pub fn view(src: &str) -> View {
     let mut out = keep_ranges(src, &keep);
     for r in &keep {
         transitions(src, r.clone(), &mut out);
-        comments(src, r.clone(), &mut out);
+    }
+    // Every span close_of found is inside some block's own o+1..c, so it is already kept verbatim;
+    // blank it here, in file order, the same way a transition is: spaces, with its newlines kept.
+    let b = src.as_bytes();
+    for (start, end) in razor_comments {
+        let blanked: String = b[start..end].iter().map(|&c| if c == b'\n' { '\n' } else { ' ' }).collect();
+        overwrite(&mut out, start, &blanked);
     }
     overwrite(&mut out, open, "{");
     overwrite(&mut out, close, "}");

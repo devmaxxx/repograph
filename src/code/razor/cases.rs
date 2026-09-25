@@ -153,6 +153,59 @@ fn a_commented_out_code_block_beside_a_real_one_writes_no_ghost_member() {
     assert!(text.contains("Real"), "{text:?}");
 }
 
+#[test]
+fn an_at_star_in_a_string_is_not_a_razor_comment_opener() {
+    // Both `"@*"` and `"*@"` are complete regular strings; a naive byte search pairing an `@*`
+    // found inside one with a `*@` found inside the other would blank everything between them.
+    let src = "@code {\n  string a = \"@*\";\n  int y;\n  string b = \"*@\";\n}\n";
+    let text = read(src);
+    assert!(text.contains("int y"), "{text:?}");
+    assert!(clean(&text), "{text:?}");
+}
+
+#[test]
+fn an_at_star_inside_a_line_comment_is_not_a_razor_comment_opener() {
+    // The `@*` is C# comment text, not a Razor comment; a global search for the closing `*@`
+    // must not run off into the markup after the block and blank real code on the way.
+    let src = "@code {\n  // @*\n  int y;\n}\n@* x *@\n";
+    let text = read(src);
+    assert!(text.contains("int y"), "{text:?}");
+    assert!(clean(&text), "{text:?}");
+}
+
+#[test]
+fn an_at_star_inside_a_block_comment_is_not_a_razor_comment_opener() {
+    let src = "@code {\n  /* @* */ int y; /* *@ */\n}\n";
+    let text = read(src);
+    assert!(text.contains("int y"), "{text:?}");
+    assert!(clean(&text), "{text:?}");
+}
+
+#[test]
+fn a_quoted_at_star_does_not_pair_with_a_comment_after_the_block() {
+    // The bug this pins: an `@*` found inside the string paired with the `*@` in the markup
+    // comment below, blanking from inside the string to the block's own close and leaving an
+    // unterminated string literal in the copy.
+    let src = "@code {\n  string a = \"@*\";\n  int y;\n}\n<p>@* note *@</p>\n";
+    let text = read(src);
+    assert!(text.contains("int y"), "{text:?}");
+    assert!(clean(&text), "{text:?}");
+}
+
+#[test]
+fn a_comment_opening_mid_line_in_markup_still_hides_the_block_it_holds() {
+    let src = "<p>@* note\n@code {\n  void Ghost() {}\n}\n*@</p>\n";
+    assert_eq!(view(src), View::None);
+}
+
+#[test]
+fn a_directive_right_after_a_same_line_comment_is_still_read() {
+    let src = "@* x *@ @code {\n  void M() { }\n}\n";
+    let text = read(src);
+    assert!(text.contains("void M"), "{text:?}");
+    assert!(clean(&text), "{text:?}");
+}
+
 /// Not a test: reads every `.razor` and `.cshtml` under `REPOGRAPH_CENSUS_ROOTS` (`:`-separated)
 /// through `view` and counts what the C# grammar makes of each copy — the spec's Razor parse clause.
 #[test]
