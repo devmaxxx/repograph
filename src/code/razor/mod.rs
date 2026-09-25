@@ -149,7 +149,7 @@ pub fn directives(src: &str) -> Directives {
                 d.injects.push((t.trim().to_string(), name.trim().trim_start_matches('@').to_string(), line));
             }
         } else if let Some(t) = arg("@inherits") {
-            d.inherits = Some(t.to_string());
+            d.inherits = Some(base_name(t));
             d.types.push((t.to_string(), line, true));
         } else if let Some(t) = arg("@implements") {
             d.types.push((t.to_string(), line, true));
@@ -305,8 +305,8 @@ pub fn extract(resolver: &Resolver, rel: &str, source: &str) -> Extraction {
             ..Declared::default()
         },
     };
-    // The wrapper class is blanked from `@inherits`, so its base list is written back here for the
-    // base walk.
+    // The wrapper class is blanked from `@inherits`; its base is written back so the tag loop can
+    // walk the chain for inherited parameters.
     if let Some(base) = &d.inherits {
         for t in own.types.iter_mut().filter(|t| t.local == name) {
             t.bases.push(base.clone());
@@ -345,7 +345,7 @@ pub fn extract(resolver: &Resolver, rel: &str, source: &str) -> Extraction {
                 inherited = level.iter().any(|p| scope.members(p).is_some_and(|m| m.contains_key(tag)));
                 inherited
             });
-            if inherited || walked.unresolved.iter().any(|b| !parameter_free(b)) {
+            if inherited || walked.unresolved.iter().any(|b| framework_parameters(b).is_none_or(|ps| ps.contains(&tag.as_str()))) {
                 continue;
             }
         }
@@ -361,12 +361,22 @@ pub fn extract(resolver: &Resolver, rel: &str, source: &str) -> Extraction {
     ex
 }
 
-/// A framework base that declares no parameter a child tag could name, or an interface a code-behind
-/// lists beside its base, which declares none either.
-fn parameter_free(base: &str) -> bool {
-    let head = base.split('<').next().unwrap_or(base).trim();
-    let last = head.rsplit('.').next().unwrap_or(head);
-    matches!(last, "ComponentBase" | "LayoutComponentBase" | "OwningComponentBase" | "IDisposable" | "IAsyncDisposable")
+/// The parameters a framework base declares, `None` for a base the repo cannot list. The interfaces
+/// a code-behind lists beside its base declare none.
+fn framework_parameters(base: &str) -> Option<&'static [&'static str]> {
+    let head = base_name(base);
+    match head.rsplit('.').next().unwrap_or(&head) {
+        "ComponentBase" | "OwningComponentBase" | "IDisposable" | "IAsyncDisposable" => Some(&[]),
+        "LayoutComponentBase" => Some(&["Body"]),
+        _ => None,
+    }
+}
+
+/// A written type as a C# base list keeps it: dots, without generic arguments or `global::`.
+fn base_name(written: &str) -> String {
+    let t = written.trim();
+    let t = t.strip_prefix("global::").unwrap_or(t);
+    t.split('<').next().unwrap_or(t).trim().to_string()
 }
 
 /// A view or an imports file: the `Imports` its directives' types prove, read under its imports

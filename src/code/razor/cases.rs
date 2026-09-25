@@ -622,3 +622,25 @@ fn a_close_tag_after_text_still_closes_its_tag() {
     let d = super::directives("<Ext>Save</Ext>\n<OrderLine />\n");
     assert_eq!(d.tags, vec![("Ext".to_string(), 1, None), ("OrderLine".to_string(), 2, None)]);
 }
+
+#[test]
+fn a_layout_s_body_is_its_parameter_and_any_other_child_renders() {
+    let layout = ("Web/Shared/MainLayout.razor", "@inherits LayoutComponentBase\n<main>@Body</main>\n");
+    let body = ("Web/Shared/Body.razor", "<div/>\n");
+    let page = ("Web/Pages/P15.razor", "<MainLayout>\n  <Body>x</Body>\n  <OrderLine />\n</MainLayout>\n");
+    assert_eq!(
+        calls_of(&[layout, body, page], "Web/Pages/P15.razor"),
+        vec!["sym:Web/Shared/MainLayout.razor::MainLayout", "sym:Web/Shared/OrderLine.razor::OrderLine"]
+    );
+}
+
+#[test]
+fn an_inherits_with_type_arguments_and_global_resolves_to_its_generic_base() {
+    let base = ("Web/Shared/GenBase.cs", "namespace Shop.Web.Shared;\npublic abstract class GenBase<T> : ComponentBase\n{\n    [Parameter] public RenderFragment Header { get; set; }\n}\n");
+    let gen = ("Web/Shared/Gen.razor", "@inherits global::Shop.Web.Shared.GenBase<int>\n<div>@Header</div>\n");
+    let page = ("Web/Pages/P16.razor", "<Gen>\n  <Header>x</Header>\n  <OrderLine />\n</Gen>\n");
+    assert_eq!(
+        calls_of(&[base, HEADER, gen, page], "Web/Pages/P16.razor"),
+        vec!["sym:Web/Shared/Gen.razor::Gen", "sym:Web/Shared/OrderLine.razor::OrderLine"]
+    );
+}
