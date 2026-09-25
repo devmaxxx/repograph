@@ -149,12 +149,10 @@ fn close_of(s: &[u8], open: usize, razor_comments: &mut Vec<(usize, usize)>) -> 
                     i = end;
                     continue;
                 }
-                // A confirmed opener (a quote, after any `$`/`@` prefix) whose body still failed
-                // cannot have been a valid non-verbatim string past its own line; treating the
-                // rest of the line as unparseable, rather than re-scanning its bytes as top-level
-                // code, keeps a stray quote in there from being mistaken for a fresh string and
-                // text inside that from being mistaken for a comment.
-                if string_opener(s, i) == Some(false) {
+                // A failed `$"` cannot have been a string past its own line; re-scanning its bytes
+                // would let a quote inside a hole open a fresh string and hide a comment in it. A
+                // bare `"` in markup is text — an inch mark — so it keeps the byte-by-byte retry.
+                if interpolated_opener(s, i) {
                     i = line_after(s, i);
                     continue;
                 }
@@ -179,18 +177,16 @@ fn close_of(s: &[u8], open: usize, razor_comments: &mut Vec<(usize, usize)>) -> 
     None
 }
 
-/// Whether `s[i..]` opens a string at all (a `$`/`@` prefix run then a quote) and, if it does,
-/// whether that opener is verbatim: a plain or `$`-only quote can never legally hold a bare
-/// newline, so a failed attempt at one of those is known-malformed the moment its line ends,
-/// while `@`/`$@` can, so a failed attempt at one of those still needs the byte-by-byte fallback.
-fn string_opener(s: &[u8], i: usize) -> Option<bool> {
+/// Whether `s[i..]` opens a non-verbatim interpolated string: a `$` run, no `@`, then a quote.
+fn interpolated_opener(s: &[u8], i: usize) -> bool {
     let mut j = i;
-    let mut verbatim = false;
+    let (mut interpolated, mut verbatim) = (false, false);
     while j < s.len() && (s[j] == b'$' || s[j] == b'@') {
+        interpolated |= s[j] == b'$';
         verbatim |= s[j] == b'@';
         j += 1;
     }
-    (s.get(j) == Some(&b'"')).then_some(verbatim)
+    interpolated && !verbatim && s.get(j) == Some(&b'"')
 }
 
 fn string_end(s: &[u8], i: usize, razor_comments: &mut Vec<(usize, usize)>) -> Option<usize> {

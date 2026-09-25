@@ -251,6 +251,15 @@ fn a_failed_string_attempt_rolls_back_any_comment_spans_it_recorded() {
 }
 
 #[test]
+fn a_bare_inch_mark_in_markup_does_not_swallow_the_rest_of_its_line() {
+    let nested = "@code {\n  void M() { if (x) { <p>12\" pizza</p> } }\n  int y;\n}\n";
+    assert!(read(nested).contains("int y"), "{:?}", view(nested));
+    let opener = "@code {\n  void M() { <p>5\" wide</p> if (x) {\n  int y;\n  } }\n  int z;\n}\n";
+    let text = read(opener);
+    assert!(text.contains("int y") && text.contains("int z"), "{text:?}");
+}
+
+#[test]
 fn a_comment_right_after_a_block_s_close_on_the_same_line_hides_its_ghost() {
     let src = "@code {\n  int x;\n} @* \n@code { void Ghost() {} }\n*@\n";
     let text = read(src);
