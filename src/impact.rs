@@ -87,7 +87,7 @@ impl<'a> Index<'a> {
     }
 
     /// Every `sym:<barrel>::<Name>` a caller could have reached this symbol by.
-    fn aliases(&self, id: &str) -> Vec<String> {
+    pub(crate) fn aliases(&self, id: &str) -> Vec<String> {
         let Some(n) = self.graph.nodes.get(id) else { return Vec::new() };
         let name = name_of(id);
         let mut files = vec![n.file.clone()];
