@@ -45,26 +45,39 @@ fn trailing_comma_re() -> &'static regex::Regex {
     RE.get_or_init(|| regex::Regex::new(r",(\s*[}\]])").unwrap())
 }
 
-fn block_comment_re() -> &'static regex::Regex {
-    static RE: OnceLock<regex::Regex> = OnceLock::new();
-    RE.get_or_init(|| regex::Regex::new(r"(?s)/\*.*?\*/").unwrap())
-}
-
+/// Comments out, strings kept whole. A pattern over the raw text read the `/*` of `"@/*"` as a
+/// comment and ran to the `*/` of `"src/**/*"`, which left no JSON to parse and every alias of
+/// the panel unresolved; only a scan that knows it is inside a string can tell the two apart.
 fn strip_jsonc(text: &str) -> String {
-    let no_blocks = block_comment_re().replace_all(text, "");
-    let no_comments: String = no_blocks
-        .lines()
-        .map(|l| {
-            // A `//` inside a string literal would be cut too; tsconfig paths never contain one,
-            // but `"https://…"` values do, so an odd quote count before `//` means "inside a string".
-            match l.find("//") {
-                Some(i) if !l[..i].contains('"') || l[..i].matches('"').count() % 2 == 0 => &l[..i],
-                _ => l,
+    let mut out = String::with_capacity(text.len());
+    let mut chars = text.chars().peekable();
+    let (mut in_string, mut escaped) = (false, false);
+    while let Some(c) = chars.next() {
+        if in_string {
+            out.push(c);
+            match c {
+                _ if escaped => escaped = false,
+                '\\' => escaped = true,
+                '"' => in_string = false,
+                _ => {}
             }
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
-    trailing_comma_re().replace_all(&no_comments, "$1").into_owned()
+            continue;
+        }
+        match (c, chars.peek()) {
+            ('"', _) => { in_string = true; out.push(c); }
+            ('/', Some('/')) => { while chars.peek().is_some_and(|&n| n != '\n') { chars.next(); } }
+            ('/', Some('*')) => {
+                chars.next();
+                let mut prev = ' ';
+                for n in chars.by_ref() {
+                    if prev == '*' && n == '/' { break }
+                    prev = n;
+                }
+            }
+            _ => out.push(c),
+        }
+    }
+    trailing_comma_re().replace_all(&out, "$1").into_owned()
 }
 
 fn export_target(v: &serde_json::Value) -> Option<String> {
@@ -307,6 +320,21 @@ mod tests {
         w("src/thing.ts", "export const x = 1;\n");
         let r = Resolver::new(d.path()).unwrap();
         assert_eq!(r.resolve("apps/y.ts", "@x/thing").as_deref(), Some("src/thing.ts"));
+    }
+
+    #[test]
+    fn a_comment_opener_inside_a_string_is_not_a_comment() {
+        let d = tempfile::tempdir().unwrap();
+        let w = |p: &str, c: &str| {
+            let full = d.path().join(p);
+            std::fs::create_dir_all(full.parent().unwrap()).unwrap();
+            std::fs::write(full, c).unwrap();
+        };
+        // The shape of apps/panel/tsconfig.json: `/*` in the alias, `*/` in the include glob.
+        w("tsconfig.json", "{\n  \"compilerOptions\": {\n    \"paths\": { \"@/*\": [\"./src/*\"] }, // aliases\n    \"x\": \"https://a.b/\\\"q\\\"\"\n  },\n  \"include\": [\"src/**/*\"]\n}\n");
+        w("src/clients/table.ts", "export const x = 1;\n");
+        let r = Resolver::new(d.path()).unwrap();
+        assert_eq!(r.resolve("src/clients/list.tsx", "@/clients/table").as_deref(), Some("src/clients/table.ts"));
     }
 
     #[test]
