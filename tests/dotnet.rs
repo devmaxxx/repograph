@@ -69,7 +69,10 @@ fn a_partial_type_is_one_type_across_its_files() {
     assert!(impact.contains("Shop/OrderService.Billing.cs") && impact.contains("Shop/Checkout.cs"), "{impact}");
     let trace = ok(repo, &["trace", "Checkout.Pay", "OrderService.Place"]);
     assert!(trace.contains("OrderService.Bill"), "{trace}");
-    let importers = ok(repo, &["impact", "OrderService"]);
+    // Each part declares the type in its own file, so the bare name is two nodes and names neither.
+    let (named, _, err) = repograph(repo, &["impact", "OrderService"]);
+    assert!(!named && err.contains("sym:Shop/OrderService.Billing.cs::OrderService"), "{err}");
+    let importers = ok(repo, &["impact", "sym:Shop/OrderService.Bedrock.cs::OrderService"]);
     assert!(importers.contains("Shop/OrderService.Bedrock.cs") && importers.contains("Shop/Checkout.cs"), "{importers}");
 }
 

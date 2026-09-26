@@ -878,23 +878,21 @@ fn run() -> anyhow::Result<()> {
             let rendered = match json {
                 true => query::explain_json(&graph, &node).map(|j| format!("{j}\n")),
                 false => query::explain(&graph, &node),
-            };
-            match rendered {
-                Some(s) => { print!("{s}"); Ok(()) }
-                None => anyhow::bail!("no node matches {node}"),
-            }
+            }?;
+            print!("{rendered}");
+            Ok(())
         }
         Cmd::Impact { symbol, depth, down, json, stale } => {
             let graph = graph_for(&repo, &load_cfg()?, stale)?;
-            let Some(root) = query::resolve(&graph, &symbol) else { anyhow::bail!("no node matches {symbol}") };
+            let root = query::resolve_one(&graph, &symbol)?;
             let (imp, direction) = if down { (impact::downstream(&graph, &root.id, depth), "downstream") } else { (impact::upstream(&graph, &root.id, depth), "upstream") };
             print!("{}", if json { impact::render_json(&graph, &imp, direction) } else { impact::render(&graph, &imp, direction) });
             Ok(())
         }
         Cmd::Trace { from, to, depth, json, stale } => {
             let graph = graph_for(&repo, &load_cfg()?, stale)?;
-            let Some(a) = query::resolve(&graph, &from) else { anyhow::bail!("no node matches {from}") };
-            let Some(b) = query::resolve(&graph, &to) else { anyhow::bail!("no node matches {to}") };
+            let a = query::resolve_one(&graph, &from)?;
+            let b = query::resolve_one(&graph, &to)?;
             let found = impact::trace(&graph, &a.id, &b.id, depth);
             // No path within the depth is an answer to the question that was asked, so the JSON
             // form says so and exits 0 where the text form exits 3. A caller parsing JSON should

@@ -278,8 +278,17 @@ pub fn render(answer: &Answer, graph: &Graph, opts: &Options) -> String {
     out
 }
 
-pub(crate) fn resolve<'a>(graph: &'a Graph, needle: &str) -> Option<&'a crate::model::Node> {
-    if let Some(n) = graph.nodes.get(needle) { return Some(n); }
+/// What a name typed on the command line stands for. A bare name several symbols share is not
+/// narrowed to one of them: in a mixed-language repository a C# `Foo` and a TypeScript `Foo` both
+/// end in `::Foo`, and whichever sorted first would answer for the other without a word.
+pub(crate) enum Resolved<'a> {
+    None,
+    One(&'a crate::model::Node),
+    Several(Vec<&'a crate::model::Node>),
+}
+
+pub(crate) fn resolve<'a>(graph: &'a Graph, needle: &str) -> Resolved<'a> {
+    if let Some(n) = graph.nodes.get(needle) { return Resolved::One(n); }
     let tail = format!("::{needle}");
     let mut c: Vec<&crate::model::Node> = graph.nodes.values().filter(|n| n.id.ends_with(&tail)).collect();
     if c.is_empty() {
@@ -287,11 +296,30 @@ pub(crate) fn resolve<'a>(graph: &'a Graph, needle: &str) -> Option<&'a crate::m
         c = graph.nodes.values().filter(|n| n.label.to_lowercase() == lower).collect();
     }
     c.sort_by(|a, b| a.id.cmp(&b.id));
-    c.into_iter().next()
+    match c.len() {
+        0 => Resolved::None,
+        1 => Resolved::One(c[0]),
+        _ => Resolved::Several(c),
+    }
 }
 
-pub fn explain(graph: &Graph, needle: &str) -> Option<String> {
-    let n = resolve(graph, needle)?;
+/// `resolve` for a command that needs exactly one node. Both misses are the same failure — the
+/// name did not pick out a node — so both take the error path and exit 1; an ambiguous name lists
+/// every candidate so the next call can pass the id.
+pub(crate) fn resolve_one<'a>(graph: &'a Graph, needle: &str) -> anyhow::Result<&'a crate::model::Node> {
+    match resolve(graph, needle) {
+        Resolved::One(n) => Ok(n),
+        Resolved::None => anyhow::bail!("no node matches {needle}"),
+        Resolved::Several(c) => {
+            let mut msg = format!("{needle} matches {} nodes; name one by its id:", c.len());
+            for n in c { msg.push_str(&format!("\n  {}  {}:{}", n.id, n.file, n.line)); }
+            anyhow::bail!(msg)
+        }
+    }
+}
+
+pub fn explain(graph: &Graph, needle: &str) -> anyhow::Result<String> {
+    let n = resolve_one(graph, needle)?;
     let mut out = format!("{}  {}:{}  {:?}  {}\n", n.id, n.file, n.line, n.kind, headline(&n.label));
     if let Some(c) = &n.community { out.push_str(&format!("  community: {c}\n")); }
     let mut edges = graph.neighbours(&n.id);
@@ -301,13 +329,13 @@ pub fn explain(graph: &Graph, needle: &str) -> Option<String> {
         let ctx = if e.context.is_empty() { String::new() } else { format!("  [{}]", e.context) };
         out.push_str(&format!("  {:?} {arrow} {other}{ctx}\n", e.kind));
     }
-    Some(out)
+    Ok(out)
 }
 
 /// `explain` for a reader that would rather not parse prose: the node, then one entry per edge
 /// with the direction already resolved, so a caller never has to know which end of an edge the
 /// node was. A view struct rather than the graph's own types — a store layout is not an interface.
-pub fn explain_json(graph: &Graph, needle: &str) -> Option<String> {
+pub fn explain_json(graph: &Graph, needle: &str) -> anyhow::Result<String> {
     #[derive(serde::Serialize)]
     struct Edge<'a> { kind: String, dir: &'a str, other: &'a str, context: &'a str }
     #[derive(serde::Serialize)]
@@ -315,7 +343,7 @@ pub fn explain_json(graph: &Graph, needle: &str) -> Option<String> {
         id: &'a str, kind: String, label: &'a str, file: &'a str, line: u32,
         community: Option<&'a str>, edges: Vec<Edge<'a>>,
     }
-    let n = resolve(graph, needle)?;
+    let n = resolve_one(graph, needle)?;
     let mut edges = graph.neighbours(&n.id);
     edges.sort_by_key(|e| (e.kind == EdgeKind::Legacy, e.kind, e.source.clone(), e.target.clone()));
     let out = Out {
@@ -330,7 +358,7 @@ pub fn explain_json(graph: &Graph, needle: &str) -> Option<String> {
             Edge { kind: format!("{:?}", e.kind), dir, other, context: &e.context }
         }).collect(),
     };
-    serde_json::to_string(&out).ok()
+    Ok(serde_json::to_string(&out)?)
 }
 
 /// `verify`'s own numbers, the same partitions under names instead of indentation.
@@ -863,13 +891,62 @@ mod tests {
         assert!(a.seeds.is_empty());
     }
 
+    fn namesakes_graph() -> Graph {
+        let mut g = Graph::default();
+        let mut e = Extraction::default();
+        e.node(NodeKind::Symbol, "sym:Shop/Foo.cs::Foo", "Foo", "", "Shop/Foo.cs", 3);
+        e.node(NodeKind::Symbol, "sym:web/foo.ts::Foo", "Foo", "", "web/foo.ts", 7);
+        e.node(NodeKind::Symbol, "sym:web/foo.ts::Bar", "Bar", "", "web/foo.ts", 9);
+        g.apply(e);
+        g
+    }
+
+    #[test]
+    fn a_name_nothing_ends_in_resolves_to_none() {
+        let g = namesakes_graph();
+        assert!(matches!(resolve(&g, "Baz"), Resolved::None));
+        assert_eq!(resolve_one(&g, "Baz").unwrap_err().to_string(), "no node matches Baz");
+    }
+
+    #[test]
+    fn a_name_one_symbol_ends_in_resolves_to_it_as_does_its_id() {
+        let g = namesakes_graph();
+        for needle in ["Bar", "sym:web/foo.ts::Bar", "bar"] {
+            let Resolved::One(n) = resolve(&g, needle) else { panic!("{needle} resolved to one node") };
+            assert_eq!(n.id, "sym:web/foo.ts::Bar");
+        }
+        assert_eq!(resolve_one(&g, "sym:Shop/Foo.cs::Foo").unwrap().id, "sym:Shop/Foo.cs::Foo");
+    }
+
+    #[test]
+    fn a_name_several_symbols_end_in_lists_every_one_and_picks_none() {
+        let g = namesakes_graph();
+        let Resolved::Several(c) = resolve(&g, "Foo") else { panic!("Foo is ambiguous") };
+        let ids: Vec<&str> = c.iter().map(|n| n.id.as_str()).collect();
+        assert_eq!(ids, ["sym:Shop/Foo.cs::Foo", "sym:web/foo.ts::Foo"]);
+        let msg = resolve_one(&g, "Foo").unwrap_err().to_string();
+        assert!(msg.contains("sym:Shop/Foo.cs::Foo  Shop/Foo.cs:3"), "{msg}");
+        assert!(msg.contains("sym:web/foo.ts::Foo  web/foo.ts:7"), "{msg}");
+        assert!(explain(&g, "Foo").is_err() && explain_json(&g, "Foo").is_err());
+    }
+
+    #[test]
+    fn a_case_insensitive_label_shared_by_two_nodes_is_ambiguous() {
+        let mut g = Graph::default();
+        let mut e = Extraction::default();
+        e.node(NodeKind::Entity, "entity:Ledger", "Ledger", "", "docs/a.md", 1);
+        e.node(NodeKind::Entity, "entity:ledger-v2", "ledger", "", "docs/b.md", 1);
+        g.apply(e);
+        assert!(matches!(resolve(&g, "Ledger"), Resolved::Several(ref c) if c.len() == 2));
+    }
+
     #[test]
     fn explain_groups_edges_by_kind() {
         let g = graph();
         let out = explain(&g, "CancellationPolicy").unwrap();
         assert!(out.starts_with("entity:CancellationPolicy  docs/06.md:385"));
         assert!(out.contains("References ← FR-PAY-22  [title]"));
-        assert!(explain(&g, "nope").is_none());
+        assert!(explain(&g, "nope").is_err());
     }
 
     #[test]
@@ -995,9 +1072,9 @@ mod tests {
     }
 
     #[test]
-    fn explain_of_an_unknown_node_is_none() {
+    fn explain_of_an_unknown_node_is_an_error() {
         let g = graph();
-        assert!(explain(&g, "not-a-real-id-or-label").is_none());
+        assert!(explain(&g, "not-a-real-id-or-label").is_err());
     }
 
     #[test]
