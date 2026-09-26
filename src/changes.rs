@@ -3,7 +3,7 @@
 //! refreshed against the working tree first — `main` does that before calling in.
 use crate::impact::{self, Dependent};
 use crate::model::{Graph, NodeKind};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -77,21 +77,23 @@ pub fn report(graph: &Graph, hunks: &[Hunk], depth: usize) -> Report {
     let touched = touched(graph, hunks);
     let roots = roots(graph, &touched);
     let root_files: BTreeSet<String> = roots.iter().filter_map(|r| graph.nodes.get(r).map(|n| n.file.clone())).collect();
-    let mut affected: Vec<Dependent> = Vec::new();
+    let mut affected: BTreeMap<String, Dependent> = BTreeMap::new();
     let mut files: BTreeSet<String> = BTreeSet::new();
+    let index = impact::Index::new(graph, true);
     for id in &roots {
-        let imp = impact::upstream(graph, id, depth);
+        let imp = index.upstream(id, depth);
         files.extend(imp.importers.iter().cloned());
         // A dependent that is itself being changed is not affected, it is the change.
         for d in imp.layers.into_iter().flatten().filter(|d| !roots.contains(&d.id)) {
             // One row per dependent, at the shallowest depth any touched symbol reaches it.
-            match affected.iter_mut().find(|a| a.id == d.id) {
+            match affected.get_mut(&d.id) {
                 Some(a) if d.depth < a.depth => *a = d,
                 Some(_) => {}
-                None => affected.push(d),
+                None => { affected.insert(d.id.clone(), d); }
             }
         }
     }
+    let mut affected: Vec<Dependent> = affected.into_values().collect();
     affected.sort_by(|a, b| (a.depth, &a.id).cmp(&(b.depth, &b.id)));
     files.extend(affected.iter().map(|d| file_of(graph, &d.id)));
     files.retain(|f| !root_files.contains(f));
@@ -276,6 +278,27 @@ mod tests {
         let r = report(&g, &[Hunk { file: "r.ts".into(), start: 8, end: 9 }], 1);
         assert_eq!(r.touched, vec!["sym:r.ts::repo"]);
         assert_eq!(r.affected.iter().map(|d| d.id.as_str()).collect::<Vec<_>>(), vec!["sym:a.ts::A.run", "sym:b.ts::go"]);
+    }
+
+    #[test]
+    fn a_diff_of_thousands_of_symbols_is_walked_in_seconds_not_minutes() {
+        // Every root once regrouped and rescanned the whole edge set; 3,000 roots over 30,000
+        // edges took tens of seconds that way, and take milliseconds over one index.
+        let mut g = Graph::default();
+        let mut e = Extraction::default();
+        e.node(NodeKind::File, "file:big.ts", "big.ts", "", "big.ts", 1);
+        for i in 0..3000u32 {
+            let id = format!("sym:big.ts::f{i}");
+            e.node_span(NodeKind::Symbol, &id, "f", "", "big.ts", (i * 10 + 2, i * 10 + 9));
+            e.edge("file:big.ts", &id, EdgeKind::Declares, "export", "big.ts");
+            e.edge(&format!("sym:c{i}.ts::use"), &id, EdgeKind::Calls, "", &format!("c{i}.ts"));
+            for j in 0..8 { e.edge(&format!("FR-X-{i}"), &format!("FR-Y-{j}"), EdgeKind::References, "body", "d.md"); }
+        }
+        g.apply(e);
+        let started = std::time::Instant::now();
+        let r = report(&g, &[Hunk { file: "big.ts".into(), start: 1, end: u32::MAX }], 2);
+        assert_eq!(r.affected.len(), 3000);
+        assert!(started.elapsed() < std::time::Duration::from_secs(3), "{:?}", started.elapsed());
     }
 
     #[test]
