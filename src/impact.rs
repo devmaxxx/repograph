@@ -155,17 +155,19 @@ impl<'a> Index<'a> {
         let mut frontier = start;
         let mut layers = Vec::new();
         for d in 1..=depth {
-            let mut next: Vec<Dependent> = Vec::new();
+            let mut next: BTreeMap<String, Dependent> = BTreeMap::new();
             for at in &frontier {
                 for e in self.step(at) {
                     let other = if up { e.source.clone() } else { canonical(graph, &e.target).unwrap_or_else(|| e.target.clone()) };
-                    if seen.insert(other.clone()) {
-                        next.push(Dependent { id: other, depth: d, kind: e.kind, via: at.clone(), passed: e.passes() });
-                    }
+                    if seen.contains(&other) { continue }
+                    // A call beats an argument edge whichever owner in the layer came first.
+                    if next.get(&other).is_some_and(|x| !x.passed || e.passes()) { continue }
+                    next.insert(other.clone(), Dependent { id: other, depth: d, kind: e.kind, via: at.clone(), passed: e.passes() });
                 }
             }
             if next.is_empty() { break }
-            next.sort_by(|a, b| a.id.cmp(&b.id));
+            seen.extend(next.keys().cloned());
+            let next: Vec<Dependent> = next.into_values().collect();
             frontier = next.iter().map(|x| x.id.clone()).collect();
             // A dependent that is an object literal is called through its methods, at any depth.
             if up {
@@ -509,6 +511,24 @@ pub(crate) mod tests {
         assert!(down.contains("  sym:t.ts::run  t.ts:2  Calls ← sym:a.ts::A\n"), "{down}");
         assert_eq!(trace(&g, "sym:a.ts::A", "sym:t.ts::TOKEN", 2), Some(vec![("sym:a.ts::A".into(), false), ("sym:t.ts::TOKEN".into(), true)]));
         assert_eq!(upstream(&g, "sym:t.ts::TOKEN", 1).layers[0].len(), 1);
+    }
+
+    #[test]
+    fn a_call_from_one_owner_beats_a_passed_edge_from_another_at_the_same_depth() {
+        // R calls A and Z; A only passes `repo.save`, Z calls `repo.find`, and both fold to `repo`.
+        let mut g = object_literal();
+        let mut e = Extraction::default();
+        e.node(NodeKind::Symbol, "sym:x.ts::R", "R", "", "x.ts", 1);
+        e.node(NodeKind::Symbol, "sym:x.ts::A", "A", "", "x.ts", 2);
+        e.node(NodeKind::Symbol, "sym:x.ts::Z", "Z", "", "x.ts", 3);
+        e.edge("sym:x.ts::R", "sym:x.ts::A", EdgeKind::Calls, "", "x.ts");
+        e.edge("sym:x.ts::R", "sym:x.ts::Z", EdgeKind::Calls, "", "x.ts");
+        e.edge("sym:x.ts::A", "sym:r.ts::repo.save", EdgeKind::Calls, "arg", "x.ts");
+        e.edge("sym:x.ts::Z", "sym:r.ts::repo.find", EdgeKind::Calls, "", "x.ts");
+        g.apply(e);
+        let imp = downstream(&g, "sym:x.ts::R", 2);
+        let d2: Vec<(&str, &str, bool)> = imp.layers[1].iter().map(|d| (d.id.as_str(), d.via.as_str(), d.passed)).collect();
+        assert_eq!(d2, vec![("sym:r.ts::repo", "sym:x.ts::Z", false)]);
     }
 
     #[test]
