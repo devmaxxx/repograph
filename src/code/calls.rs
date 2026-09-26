@@ -202,6 +202,10 @@ pub(crate) fn scan(resolver: &Resolver, rel: &str, source: &str, locals: &BTreeS
         let callee = match n.kind() {
             "call_expression" => n.child_by_field_name("function"),
             "new_expression" => n.child_by_field_name("constructor"),
+            // Rendering a component calls it. A lowercase tag is an intrinsic element, as React
+            // reads it, even when a binding of that name is in scope.
+            "jsx_opening_element" | "jsx_self_closing_element" => n.child_by_field_name("name")
+                .filter(|c| c.kind() != "identifier" || text(*c, src).starts_with(|ch: char| ch.is_ascii_uppercase())),
             _ => None,
         };
         let Some(callee) = callee else { continue };
