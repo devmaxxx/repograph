@@ -9,7 +9,7 @@ use tree_sitter::Node;
 
 use crate::code::imports::Resolver;
 use crate::code::index::{Header, QualifiedIndex};
-use crate::code::jvm::{self, child, named, text, Scope};
+use crate::code::jvm::{self, child, named, text, Facts, Scope};
 use crate::code::lang::{Family, Lang};
 use crate::model::Extraction;
 
@@ -35,13 +35,20 @@ pub fn extract(resolver: &Resolver, rel: &str, source: &str) -> Extraction {
 /// The package line and every top-level name, for the JVM index and for the headers `widen` stores.
 /// `top` comes from the declarations walk itself, so the index never names a symbol the graph lacks.
 pub fn header(source: &str) -> Header {
+    facts(source).header
+}
+
+/// The header and every nested type and member path, from one parse.
+pub(crate) fn facts(source: &str) -> Facts {
     let src = source.as_bytes();
-    let Some(tree) = Lang::Kotlin.parse(src) else { return Header::default() };
+    let Some(tree) = Lang::Kotlin.parse(src) else { return Facts::default() };
     let root = tree.root_node();
     let package = package_of(root, src);
     let mut scratch = Extraction::default();
-    let top = declarations::scan(root, "", src, &mut scratch).top;
-    Header { scope: if package.is_empty() { Vec::new() } else { vec![package] }, top, ..Default::default() }
+    let d = declarations::scan(root, "", src, &mut scratch);
+    let members = d.members.iter().map(|id| jvm::path_of(id).to_string()).collect();
+    let header = Header { scope: if package.is_empty() { Vec::new() } else { vec![package] }, top: d.top, ..Default::default() };
+    Facts { header, types: d.types, members }
 }
 
 /// The dotted name on the `package` line; `""` for a file in the default package.
@@ -71,7 +78,7 @@ pub(crate) fn scope(root: Node, src: &[u8]) -> Scope {
             .and_then(|a| child(a, "type_identifier"))
             .map(|t| text(t, src).to_string())
             .unwrap_or_else(|| qualified.rsplit('.').next().unwrap_or(&qualified).to_string());
-        s.singles.insert(local, qualified);
+        s.singles.entry(local).or_default().insert(qualified);
     }
     s
 }

@@ -219,3 +219,39 @@ fn a_name_two_star_imports_both_supply_resolves_to_nothing() {
     let ex = repo.extract("shop/orders/Both.java");
     assert!(edges(&ex, EdgeKind::Extends).is_empty(), "{:?}", ex.edges);
 }
+
+#[test]
+fn a_supertype_outside_the_repository_never_walks_into_a_type_star_or_a_package() {
+    let repo = Repo::new(&[
+        ("shop/billing/Invoice.java", INVOICE),
+        ("shop/orders/Use.java", "package shop.orders;\n\nimport shop.billing.Invoice.*;\n\nclass Use extends Exception {}\n"),
+        ("p.java", "public class p {}\n"),
+        ("p/X.java", "package p;\n\nclass X extends Exception {}\n"),
+    ]);
+    for rel in ["shop/orders/Use.java", "p/X.java"] {
+        let ex = repo.extract(rel);
+        assert!(edges(&ex, EdgeKind::Extends).is_empty(), "{rel}: {:?}", ex.edges);
+    }
+}
+
+#[test]
+fn an_inherited_member_type_is_not_guessed_at_the_subclass_path() {
+    let repo = Repo::new(&[
+        ("shop/Base.java", "package shop;\n\npublic class Base { public static class Inner {} }\n"),
+        ("shop/Sub.java", "package shop;\n\npublic class Sub extends Base {}\n"),
+        ("shop/Use.java", "package shop;\n\nclass Use extends Sub.Inner {}\n"),
+    ]);
+    let ex = repo.extract("shop/Use.java");
+    assert!(edges(&ex, EdgeKind::Extends).is_empty(), "{:?}", ex.edges);
+}
+
+#[test]
+fn two_static_imports_of_one_name_each_name_their_file() {
+    let repo = Repo::new(&[
+        ("a/A.java", "package a;\n\npublic class A { public static int of(int n) { return n; } }\n"),
+        ("b/B.java", "package b;\n\npublic class B { public static int of(int n) { return n; } }\n"),
+        ("c/Use.java", "package c;\n\nimport static a.A.of;\nimport static b.B.of;\n\nclass Use {}\n"),
+    ]);
+    let imports = edges(&repo.extract("c/Use.java"), EdgeKind::Imports).into_iter().map(|(_, to, _)| to.to_string()).collect::<Vec<_>>();
+    assert_eq!(imports, ["file:a/A.java", "file:b/B.java"]);
+}

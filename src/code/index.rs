@@ -27,11 +27,36 @@ pub struct Header {
 #[derive(Debug, Default)]
 pub struct QualifiedIndex {
     by_name: BTreeMap<String, BTreeSet<String>>,
+    /// Per file, the type paths and member paths it declares below the top level, for a family
+    /// whose names nest. The qualified names stop at the top level, so without these a name like
+    /// `a.b.Outer.Inner` could only be guessed to live in `Outer`'s file.
+    nested: BTreeMap<String, Nested>,
+}
+
+#[derive(Debug, Default)]
+struct Nested {
+    types: BTreeSet<String>,
+    members: BTreeSet<String>,
 }
 
 impl QualifiedIndex {
     pub fn insert(&mut self, qualified: &str, rel: &str) {
         self.by_name.entry(qualified.to_string()).or_default().insert(rel.to_string());
+    }
+
+    /// Records every type path (`Outer`, `Outer.Inner`) and member path (`Outer.run`) `rel` declares.
+    pub fn insert_nested(&mut self, rel: &str, types: BTreeSet<String>, members: BTreeSet<String>) {
+        self.nested.insert(rel.to_string(), Nested { types, members });
+    }
+
+    /// Whether `rel` declares a type at `path`.
+    pub fn is_type(&self, rel: &str, path: &str) -> bool {
+        self.nested.get(rel).is_some_and(|n| n.types.contains(path))
+    }
+
+    /// Whether `rel` declares a type or a member at `path`.
+    pub fn declares(&self, rel: &str, path: &str) -> bool {
+        self.nested.get(rel).is_some_and(|n| n.types.contains(path) || n.members.contains(path))
     }
 
     /// Every file declaring `qualified`, sorted.

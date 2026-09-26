@@ -205,8 +205,6 @@ impl Resolver {
     }
 
     /// The index of a name-indexed family the globs reach; `None` for every other family.
-    // Read by the name-indexed families' resolution, which their plans add.
-    #[allow(dead_code)]
     pub fn index(&self, family: Family) -> Option<&QualifiedIndex> {
         self.indexes.get(&family)
     }
@@ -226,6 +224,13 @@ impl Resolver {
             let d = crate::code::razor::directives(source);
             index_header(&mut self.indexes, lang.family(), rel, &crate::code::razor::header_of(rel, &d));
             self.dotnet.add_razor(rel, &d, crate::code::razor::members(rel, source, &d));
+            return;
+        }
+        if lang.family() == Family::Jvm {
+            // One parse gives the header and the nested paths the lookup confirms a tail against.
+            let facts = crate::code::jvm::facts(lang, source);
+            index_header(&mut self.indexes, Family::Jvm, rel, &facts.header);
+            self.indexes.entry(Family::Jvm).or_default().insert_nested(rel, facts.types, facts.members);
             return;
         }
         if let Some(header) = crate::code::index::header_for(lang, rel, source) {

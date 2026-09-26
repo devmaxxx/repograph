@@ -5,7 +5,8 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use tree_sitter::Node;
 
-use crate::code::index::QualifiedIndex;
+use crate::code::index::{Header, QualifiedIndex};
+use crate::code::lang::Lang;
 use crate::model::{EdgeKind, Extraction};
 
 pub(crate) fn text<'a>(n: Node, src: &'a [u8]) -> &'a str {
@@ -76,17 +77,37 @@ pub(crate) fn in_file(types: &BTreeSet<String>, at: &str, written: &str) -> Opti
     }
 }
 
+/// What the index reads from one JVM file, all from a single parse.
+#[derive(Debug, Default)]
+pub(crate) struct Facts {
+    pub header: Header,
+    /// Every type path the file declares, top-level ones included.
+    pub types: BTreeSet<String>,
+    /// Every member path below a type (`Outer.run`).
+    pub members: BTreeSet<String>,
+}
+
+pub(crate) fn facts(lang: Lang, source: &str) -> Facts {
+    match lang {
+        Lang::Kotlin => crate::code::kotlin::facts(source),
+        Lang::Java => crate::code::java::facts(source),
+        _ => Facts::default(),
+    }
+}
+
 /// The names a JVM file sees without qualifying them, read from its own header.
 #[derive(Debug, Default, Clone)]
 pub(crate) struct Scope {
     /// `""` for the default package.
     pub package: String,
-    /// `import a.b.C`, and Kotlin's `import a.b.C as D`: the name the file uses -> `a.b.C`.
-    pub singles: BTreeMap<String, String>,
+    /// `import a.b.C`, and Kotlin's `import a.b.C as D`: the name the file uses -> every `a.b.C`
+    /// bound to it. Kotlin lets two imports share a name (overloaded functions), so it is a set,
+    /// and a lookup that meets more than one treats the name as ambiguous.
+    pub singles: BTreeMap<String, BTreeSet<String>>,
     /// `import a.b.*`: `a.b`.
     pub stars: Vec<String>,
-    /// `import static a.b.C.m`: `m` -> `a.b.C`.
-    pub statics: BTreeMap<String, String>,
+    /// `import static a.b.C.m`: `m` -> every `a.b.C`; `import static a.A.of` and `b.B.of` are both legal.
+    pub statics: BTreeMap<String, BTreeSet<String>>,
     /// `import static a.b.C.*`: `a.b.C`.
     pub static_stars: Vec<String>,
 }
@@ -113,57 +134,89 @@ pub(crate) fn qualify(package: &str, name: &str) -> String {
     if package.is_empty() { name.to_string() } else { format!("{package}.{name}") }
 }
 
-/// Every declaration of a qualified name. The index holds `package.Top` only, so the longest prefix
-/// it knows names the files and the rest is the nested path inside them: `a.b.Outer.Inner` is
-/// `Outer.Inner` in each file declaring `a.b.Outer`.
+fn last(qualified: &str) -> &str {
+    qualified.rsplit('.').next().unwrap_or(qualified)
+}
+
+/// The files that declare `head`'s last segment as a type at the top level. A Kotlin top-level
+/// `val network` sits in the index under `app.network` too, and cannot own `app.network.X`.
+fn type_files<'i>(index: &'i QualifiedIndex, head: &str) -> Vec<&'i str> {
+    index.files(head).into_iter().filter(|rel| index.is_type(rel, last(head))).collect()
+}
+
+/// Every file an import of `qualified` names. A top-level name of any kind matches whole, since
+/// Kotlin imports a top-level function by name; otherwise the longest prefix some file declares
+/// as a type names the files, and only those that declare the rest as a nested type or member count.
 pub(crate) fn declared(index: &QualifiedIndex, qualified: &str) -> Vec<Target> {
+    let exact = index.files(qualified);
+    if !exact.is_empty() {
+        let path = last(qualified).to_string();
+        return exact.into_iter().map(|rel| Target { rel: rel.to_string(), path: path.clone() }).collect();
+    }
     let mut head = qualified;
-    let mut tail: Vec<&str> = Vec::new();
-    loop {
-        let files = index.files(head);
+    while let Some((h, _)) = head.rsplit_once('.') {
+        head = h;
+        let files = type_files(index, head);
         if !files.is_empty() {
-            let top = head.rsplit('.').next().unwrap_or(head);
-            let path = std::iter::once(top).chain(tail.iter().rev().copied()).collect::<Vec<_>>().join(".");
-            return files.into_iter().map(|rel| Target { rel: rel.to_string(), path: path.clone() }).collect();
+            let path = format!("{}{}", last(head), &qualified[head.len()..]);
+            return files.into_iter().filter(|rel| index.declares(rel, &path)).map(|rel| Target { rel: rel.to_string(), path: path.clone() }).collect();
         }
-        match head.rsplit_once('.') {
-            Some((h, t)) => {
-                tail.push(t);
-                head = h;
-            }
-            None => return Vec::new(),
+    }
+    Vec::new()
+}
+
+/// `qualified` read as a type: the longest prefix, no shorter than `floor`, that some file declares
+/// as a type names the files, and each must declare the whole nested path as a type as well —
+/// `Sub.Inner` inherited from `Base`, or a class inside a companion, is a path the graph lacks.
+/// `None` when nothing down to the floor is a type, so the next lookup step may look.
+fn as_type(index: &QualifiedIndex, qualified: &str, floor: &str) -> Option<Vec<Target>> {
+    let mut head = qualified;
+    loop {
+        let files = type_files(index, head);
+        if !files.is_empty() {
+            let path = format!("{}{}", last(head), &qualified[head.len()..]);
+            return Some(files.into_iter().filter(|rel| index.is_type(rel, &path)).map(|rel| Target { rel: rel.to_string(), path: path.clone() }).collect());
         }
+        if head.len() <= floor.len() {
+            return None;
+        }
+        head = head.rsplit_once('.')?.0;
     }
 }
 
 /// A type name as a file writes it — `C`, `C.Inner`, `a.b.C` — in the order both compilers look:
 /// an explicit import, the file's own package, the on-demand imports, then the name read as fully
-/// qualified. Every file declaring one qualified name is kept (`expect`/`actual`), but two on-demand
-/// imports that each supply the name are the compiler's ambiguity error and resolve to nothing,
-/// so a caller list never holds a guess.
+/// qualified. The first step that binds the name decides, even when what it binds is not in the
+/// graph. The own-package and on-demand steps never strip past the name the file wrote: a JDK
+/// `Exception` must not land in whatever `shop.Color.*` or a package-named value happens to be.
+/// Every file declaring one qualified name is kept (`expect`/`actual`); two imports that bind the
+/// name differently are the compiler's ambiguity error and resolve to nothing.
 pub(crate) fn resolve(index: &QualifiedIndex, scope: &Scope, written: &str) -> Vec<Target> {
     let (first, rest) = match written.split_once('.') {
         Some((f, r)) => (f, Some(r)),
         None => (written, None),
     };
     let join = |q: &str| rest.map_or_else(|| q.to_string(), |r| format!("{q}.{r}"));
-    if let Some(q) = scope.singles.get(first) {
-        return declared(index, &join(q));
+    if let Some(bound) = scope.singles.get(first) {
+        let mut each = bound.iter();
+        return match (each.next(), each.next()) {
+            (Some(q), None) => as_type(index, &join(q), "").unwrap_or_default(),
+            _ => Vec::new(),
+        };
     }
-    let own = declared(index, &join(&qualify(&scope.package, first)));
-    if !own.is_empty() {
-        return own;
+    let own = qualify(&scope.package, first);
+    if let Some(found) = as_type(index, &join(&own), &own) {
+        return found;
     }
     let mut starred: BTreeMap<String, Vec<Target>> = BTreeMap::new();
     for star in &scope.stars {
-        let qualified = join(&qualify(star, first));
-        let found = declared(index, &qualified);
-        if !found.is_empty() {
-            starred.insert(qualified, found);
+        let base = qualify(star, first);
+        if let Some(found) = as_type(index, &join(&base), &base) {
+            starred.insert(base, found);
         }
     }
     match starred.len() {
-        0 if rest.is_some() => declared(index, written),
+        0 if rest.is_some() => as_type(index, written, "").unwrap_or_default(),
         1 => starred.into_values().next().unwrap_or_default(),
         _ => Vec::new(),
     }
@@ -183,7 +236,7 @@ pub(crate) fn type_ids(types: &BTreeSet<String>, index: &QualifiedIndex, scope: 
 /// brings in is known only at a use, and the use carries the edge.
 pub(crate) fn link(types: &BTreeSet<String>, supers: &[(String, String)], index: &QualifiedIndex, scope: &Scope, rel: &str, ex: &mut Extraction) {
     let file_id = format!("file:{rel}");
-    for qualified in scope.singles.values().chain(scope.statics.values()) {
+    for qualified in scope.singles.values().chain(scope.statics.values()).flatten() {
         for t in declared(index, qualified) {
             if t.rel != rel {
                 ex.edge(&file_id, &format!("file:{}", t.rel), EdgeKind::Imports, t.top(), rel);

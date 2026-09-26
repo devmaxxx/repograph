@@ -212,3 +212,62 @@ fn an_expect_class_resolves_to_every_file_that_declares_it() {
         assert!(extends.contains(&("sym:sync/Local.kt::Local", format!("sym:{file}::ReplicaFiles").as_str(), "")), "{extends:?}");
     }
 }
+
+#[test]
+fn a_supertype_outside_the_repository_never_walks_into_a_star_or_a_package() {
+    let repo = Repo::new(&[
+        ("shop/Color.kt", "package shop\n\nenum class Color { RED }\n"),
+        ("app/Err.kt", "package app\n\nimport shop.Color.*\n\nclass Err : Exception()\n"),
+        ("app/Di.kt", "package app\n\nval network = 1\n"),
+        ("app/network/Fail.kt", "package app.network\n\nclass Fail : Exception()\n"),
+    ]);
+    for rel in ["app/Err.kt", "app/network/Fail.kt"] {
+        let ex = repo.extract(rel);
+        assert!(edges(&ex, EdgeKind::Extends).is_empty(), "{rel}: {:?}", ex.edges);
+    }
+}
+
+#[test]
+fn an_import_under_a_top_level_value_named_like_its_package_names_no_file() {
+    let repo = Repo::new(&[
+        ("app/Di.kt", "package app\n\nval network = 1\n"),
+        ("app/network/Use.kt", "package app.network\n\nimport app.network.databinding.MainBinding\n\nclass Use : MainBinding()\n"),
+    ]);
+    let ex = repo.extract("app/network/Use.kt");
+    assert!(edges(&ex, EdgeKind::Imports).is_empty(), "{:?}", ex.edges);
+    assert!(edges(&ex, EdgeKind::Extends).is_empty(), "{:?}", ex.edges);
+}
+
+#[test]
+fn a_class_imported_through_its_companion_is_not_guessed_at_the_companion_path() {
+    let repo = Repo::new(&[
+        ("shop/Outer.kt", "package shop\n\nclass Outer {\n    companion object {\n        open class Builder\n    }\n}\n"),
+        ("app/B.kt", "package app\n\nimport shop.Outer.Companion.Builder\n\nclass B : Builder()\n"),
+    ]);
+    let ex = repo.extract("app/B.kt");
+    assert!(!ex.edges.iter().any(|e| e.target.contains("Companion")), "{:?}", ex.edges);
+}
+
+#[test]
+fn a_member_and_a_top_level_function_import_each_name_their_file() {
+    let repo = Repo::new(&[
+        ("shop/Keys.kt", "package shop\n\nobject Keys {\n    const val TOKEN = \"t\"\n}\n"),
+        ("shop/Format.kt", "package shop\n\nfun format(s: String) = s\n"),
+        ("app/Use.kt", "package app\n\nimport shop.Keys.TOKEN\nimport shop.format\n\nclass Use\n"),
+    ]);
+    let ex = repo.extract("app/Use.kt");
+    let imports = edges(&ex, EdgeKind::Imports);
+    assert!(imports.contains(&("file:app/Use.kt", "file:shop/Keys.kt", "Keys")), "{imports:?}");
+    assert!(imports.contains(&("file:app/Use.kt", "file:shop/Format.kt", "format")), "{imports:?}");
+}
+
+#[test]
+fn two_imports_binding_one_name_resolve_it_to_nothing() {
+    let repo = Repo::new(&[
+        ("a/Base.kt", "package a\n\nopen class Base\n"),
+        ("b/Base.kt", "package b\n\nopen class Base\n"),
+        ("app/X.kt", "package app\n\nimport a.Base\nimport b.Base\n\nclass X : Base()\n"),
+    ]);
+    let ex = repo.extract("app/X.kt");
+    assert!(edges(&ex, EdgeKind::Extends).is_empty(), "{:?}", ex.edges);
+}
