@@ -150,7 +150,8 @@ pub(crate) fn exact_seeds(graph: &Graph, words: &[String]) -> (Vec<String>, bool
         let mut syms: Vec<&String> = graph.nodes.values()
             .filter(|n| n.kind == NodeKind::Symbol && (n.label == *w || n.id.ends_with(&tail)))
             .map(|n| &n.id).collect();
-        syms.sort();
+        // Production before a test, as in `resolve_code`: `routes` is the route table, not a spec's.
+        syms.sort_by_key(|id| (is_test(id), *id));
         whole &= !syms.is_empty() && w.chars().any(char::is_uppercase);
         out.extend(syms.into_iter().cloned());
     }
@@ -651,6 +652,19 @@ mod tests {
         );
         assert_eq!(passed_over("routes", pick, &rest[..1]).unwrap(), "routes: took sym:apps/panel/src/routes.ts::routes; also matches sym:apps/api/test/a.spec.ts::routes");
         assert_eq!(passed_over("routes", pick, &[]), None);
+    }
+
+    #[test]
+    fn a_one_word_question_lists_production_symbols_before_test_symbols() {
+        let mut g = Graph::default();
+        let mut e = Extraction::default();
+        for f in ["apps/api/test/a.spec.ts", "apps/panel/src/routes.ts", "apps/panel/test/b.test.tsx"] {
+            e.node(NodeKind::Symbol, &format!("sym:{f}::routes"), "routes", "", f, 1);
+        }
+        g.apply(e);
+        let a = ask(&g, &lex(&g, &Questions::default()), None, None, &["routes".to_string()], &opts());
+        let seeds: Vec<&str> = a.seeds.iter().map(|h| h.id.as_str()).collect();
+        assert_eq!(seeds, ["sym:apps/panel/src/routes.ts::routes", "sym:apps/api/test/a.spec.ts::routes", "sym:apps/panel/test/b.test.tsx::routes"]);
     }
 
     #[test]
