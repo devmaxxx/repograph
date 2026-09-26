@@ -1,7 +1,10 @@
 //! Call edges: the symbol a call site sits in, to the symbol the file can prove it reaches.
 //! Proof is an import, a top-level declaration of this file, or the declared type of the class
 //! field the call goes through; a name the file only assumes (a global, a parameter, `console`)
-//! yields no edge, so a caller list never contains a guess.
+//! yields no edge, so a caller list never contains a guess. The target is always proven; what a
+//! function handed to another call does with it is not — `rows.map(fn)` calls it,
+//! `register('T', Cls)` may only keep it — and both count, because `impact` asks what breaks
+//! when the target changes, and either caller does.
 use crate::code::idrefs::owner;
 use crate::code::imports::Resolver;
 use crate::code::symbols::{is_top_level, parse};
