@@ -170,12 +170,12 @@ def clear(f: Facts, name: str) -> bool:
     return f.single(name) and name not in f.members and name not in f.segments
 
 
-def store_id(repo: Path, f: Facts, name: str) -> str:
+def store_id(repo: Path, f: Facts, name: str, decl: str) -> str:
     """The id repograph's store gives the one declaration of `name`: `sym:<file>::<local>`, where a
     component's local is its file's stem and a C# type's is its name under every type that encloses
     it, `Outer.Inner`. A bare name is ambiguous to repograph once another language declares it too,
-    so repograph is asked by this id; the other tools keep the bare name."""
-    (decl,) = f.owners(name)
+    so repograph is asked by this id; the other tools keep the bare name. `decl` is `name`'s one
+    declaring file, already known to every caller (`f.owners(name)`'s single member)."""
     if name in f.components:
         return f"sym:{decl}::{name}"
     lines, found = T.declarations(decl, read(repo, decl))
@@ -210,7 +210,7 @@ def csharp_impact(repo: Path, f: Facts, quota: dict[str, int] = QUOTA) -> list[d
                 continue
             client += 1
         filled[t] += 1
-        cases.append({"kind": "impact", "target": name, "id": store_id(repo, f, name), "file": decl, "tier": t, "lang": ".cs", "exts": list(DOTNET)})
+        cases.append({"kind": "impact", "target": name, "id": store_id(repo, f, name, decl), "file": decl, "tier": t, "lang": ".cs", "exts": list(DOTNET)})
     return cases
 
 
@@ -227,7 +227,7 @@ def razor_impact(repo: Path, f: Facts, razor: list[str], count: int = RAZOR_IMPA
             continue
         t = tier(len(dotnet_refs(repo, name, decl)))
         if t is not None:
-            cases.append({"kind": "impact", "target": name, "id": store_id(repo, f, name), "file": decl, "tier": t, "lang": ".razor", "exts": list(DOTNET)})
+            cases.append({"kind": "impact", "target": name, "id": store_id(repo, f, name, decl), "file": decl, "tier": t, "lang": ".razor", "exts": list(DOTNET)})
     return cases
 
 
@@ -258,7 +258,8 @@ def traces(repo: Path, graph: dict, f: Facts, quota: dict[str, int] = TRACE) -> 
                 continue
             via = [edge.split(".")[0] for edge in path[1:-1]]
             if all(f.single(n) for n in [dst, *via]):
-                cases.append({"kind": "trace", "from": src, "to": dst, "from_id": store_id(repo, f, src), "to_id": store_id(repo, f, dst),
+                cases.append({"kind": "trace", "from": src, "to": dst,
+                              "from_id": store_id(repo, f, src, next(iter(owners))), "to_id": store_id(repo, f, dst, next(iter(f.owners(dst)))),
                               "expect": "path", "via": via, "lang": ext})
                 filled[ext] += 1
                 break

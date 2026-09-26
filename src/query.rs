@@ -311,8 +311,13 @@ pub(crate) fn resolve_one<'a>(graph: &'a Graph, needle: &str) -> anyhow::Result<
         Resolved::One(n) => Ok(n),
         Resolved::None => anyhow::bail!("no node matches {needle}"),
         Resolved::Several(c) => {
+            // A common short name in a large repository can match far more than a terminal
+            // scrollback (or a script's captured stderr) should carry, so the listing itself is
+            // capped; the count up front already says how many there are.
+            const MAX_LISTED: usize = 20;
             let mut msg = format!("{needle} matches {} nodes; name one by its id:", c.len());
-            for n in c { msg.push_str(&format!("\n  {}  {}:{}", n.id, n.file, n.line)); }
+            for n in c.iter().take(MAX_LISTED) { msg.push_str(&format!("\n  {}  {}:{}", n.id, n.file, n.line)); }
+            if c.len() > MAX_LISTED { msg.push_str(&format!("\n  … and {} more", c.len() - MAX_LISTED)); }
             anyhow::bail!(msg)
         }
     }

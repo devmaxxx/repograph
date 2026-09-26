@@ -98,11 +98,12 @@ class Selection(unittest.TestCase):
                 "apps/web/Pages/Cart.razor": "<span>cart</span>\n@code {\n    public class Line { }\n}\n",
             })
             f = S.facts(repo, S.tracked(repo, S.DOTNET))
-            self.assertEqual(S.store_id(repo, f, "Outer"), "sym:libs-dotnet/Shop/Outer.cs::Outer")
-            self.assertEqual(S.store_id(repo, f, "Middle"), "sym:libs-dotnet/Shop/Outer.cs::Outer.Middle")
-            self.assertEqual(S.store_id(repo, f, "Inner"), "sym:libs-dotnet/Shop/Outer.cs::Outer.Middle.Inner")
-            self.assertEqual(S.store_id(repo, f, "Cart"), "sym:apps/web/Pages/Cart.razor::Cart")
-            self.assertEqual(S.store_id(repo, f, "Line"), "sym:apps/web/Pages/Cart.razor::Cart.Line")
+            decl = lambda name: next(iter(f.owners(name)))
+            self.assertEqual(S.store_id(repo, f, "Outer", decl("Outer")), "sym:libs-dotnet/Shop/Outer.cs::Outer")
+            self.assertEqual(S.store_id(repo, f, "Middle", decl("Middle")), "sym:libs-dotnet/Shop/Outer.cs::Outer.Middle")
+            self.assertEqual(S.store_id(repo, f, "Inner", decl("Inner")), "sym:libs-dotnet/Shop/Outer.cs::Outer.Middle.Inner")
+            self.assertEqual(S.store_id(repo, f, "Cart", decl("Cart")), "sym:apps/web/Pages/Cart.razor::Cart")
+            self.assertEqual(S.store_id(repo, f, "Line", decl("Line")), "sym:apps/web/Pages/Cart.razor::Cart.Line")
 
     def test_a_changes_base_is_the_smallest_n_that_carries_enough_files(self):
         self.assertEqual(S.changes_base(self.repo, ".cs", 2), (self.rev("HEAD~2"), 3))
