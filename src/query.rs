@@ -243,10 +243,23 @@ pub fn ask(graph: &Graph, lex: &Lexical, dense: Option<Dense>, rerank: Option<Re
     candidates.sort_by(|a, b| {
         a.0.is_none().cmp(&b.0.is_none()).then(a.0.cmp(&b.0)).then(b.1.partial_cmp(&a.1).unwrap()).then(a.2.cmp(b.2))
     });
-    answer.expanded = candidates.iter().take(MAX_EXPANDED).filter_map(|(rank, fallback, id, via)| {
+    let line = |(rank, fallback, id, via): &(Option<usize>, f32, &str, &str)| {
         let score = rank.map_or(*fallback, |r| 1.0 / (r as f32 + 1.0));
         hit(graph, id, score, Some(via))
-    }).collect();
+    };
+    answer.expanded = candidates.iter().take(MAX_EXPANDED).filter_map(line).collect();
+    // "Where is FR-X built" is the first question an anchor is asked with, and a requirement's
+    // document neighbours always outrank the code citing it: FR-CAL-40 on beauty-crm has 28
+    // symbols and never showed one. So one symbol gets a line of its own when no line is code
+    // yet — production code before a test, then the order above.
+    let code = |id: &str| id.starts_with("sym:");
+    let shown = answer.seeds.iter().chain(&answer.expanded).any(|h| code(&h.id));
+    let test = |id: &str| id.contains("/test/") || id.contains(".spec.") || id.contains(".test.");
+    if !shown {
+        if let Some(c) = candidates.iter().filter(|c| code(c.2)).min_by_key(|c| test(c.2)) {
+            answer.expanded.extend(line(c));
+        }
+    }
     answer
 }
 
@@ -565,6 +578,22 @@ mod tests {
         let g = file_hub_only_graph();
         let a = ask(&g, &lex(&g, &Questions::default()), None, None, &["FR-X".to_string()], &opts());
         assert!(a.expanded.is_empty());
+    }
+
+    #[test]
+    fn a_requirement_cited_by_code_shows_one_production_symbol_beside_its_document_neighbour() {
+        let mut g = graph();
+        let mut e = Extraction::default();
+        e.node(NodeKind::Symbol, "sym:api/test/policies.spec.ts::service", "service", "", "api/test/policies.spec.ts", 3);
+        e.node(NodeKind::Symbol, "sym:api/policies.service.ts::PoliciesService", "PoliciesService", "", "api/policies.service.ts", 9);
+        e.edge("sym:api/test/policies.spec.ts::service", "FR-PAY-22", EdgeKind::References, "comment", "api/test/policies.spec.ts");
+        e.edge("sym:api/policies.service.ts::PoliciesService", "FR-PAY-22", EdgeKind::References, "comment", "api/policies.service.ts");
+        g.apply(e);
+        let a = ask(&g, &lex(&g, &Questions::default()), None, None, &["FR-PAY-22".to_string()], &opts());
+        let ex: Vec<&str> = a.expanded.iter().map(|h| h.id.as_str()).collect();
+        assert_eq!(ex.len(), 2, "the document neighbour stays and code is added: {ex:?}");
+        assert!(!ex[0].starts_with("sym:"));
+        assert_eq!(ex[1], "sym:api/policies.service.ts::PoliciesService");
     }
 
     #[test]
