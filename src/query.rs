@@ -132,12 +132,13 @@ fn hit(graph: &Graph, id: &str, score: f32, via: Option<&str>) -> Option<Hit> {
 /// each carries an uppercase letter — `money` and `utf8` are topics as much as names, `asGrosze` only a name.
 /// In a question of several words a plain lowercase word is read as a word: exact seeds take
 /// their slots before fusion runs, so five helpers called `holds` and `name` would otherwise be
-/// the whole answer to a sentence that merely uses both.
+/// the whole answer to a sentence that merely uses both. A word that is a node's id is that node,
+/// whatever its shape: a task id (`BE-M17/T06`) is no id the generic matcher accepts.
 pub(crate) fn exact_seeds(graph: &Graph, words: &[String]) -> (Vec<String>, bool) {
     let mut out = Vec::new();
     let mut whole = true;
     for w in words {
-        if crate::ids::generic().is_id(w) && graph.nodes.contains_key(w) {
+        if graph.nodes.contains_key(w) {
             out.push(w.clone());
             continue;
         }
@@ -1010,6 +1011,19 @@ mod tests {
         let words: Vec<String> = ["FR-PAY-22", "FR-PAY-20"].iter().map(|s| s.to_string()).collect();
         let a = ask(&g, &lex(&g, &Questions::default()), None, None, &words, &opts());
         assert_eq!(a.seeds.iter().map(|h| h.id.as_str()).collect::<Vec<_>>(), ["FR-PAY-22", "FR-PAY-20"]);
+    }
+
+    #[test]
+    fn a_task_id_present_in_the_graph_is_the_first_seed() {
+        // `BE-M17/T06` is no id the generic matcher accepts, and text search put the milestone
+        // whose body repeats its parts first.
+        let mut g = graph();
+        let mut e = Extraction::default();
+        e.node(NodeKind::Task, "BE-M17/T06", "Public booking path", "", "docs/m17.md", 58);
+        e.node(NodeKind::Milestone, "BE-M07", "Reviews", "BE M17 T06 BE M17 T06 BE M17 T06", "docs/m07.md", 1);
+        g.apply(e);
+        let a = ask(&g, &lex(&g, &Questions::default()), None, None, &["BE-M17/T06".to_string()], &opts());
+        assert_eq!(a.seeds.iter().map(|h| h.id.as_str()).collect::<Vec<_>>(), ["BE-M17/T06"]);
     }
 
     #[test]
