@@ -20,6 +20,25 @@ pub struct Header {
     /// family wrote any reads back with none.
     #[serde(default)]
     pub directives: BTreeSet<String>,
+    /// What a family whose names nest declares below the top level. Resolution confirms a nested
+    /// name against it, so it sits in the header for `widen` to see it move; empty for every other
+    /// family, and for a header recorded before it existed.
+    #[serde(default, skip_serializing_if = "Nested::is_empty")]
+    pub nested: Nested,
+}
+
+/// Every type path (`Outer`, `Outer.Inner`, top-level ones included) and every member path
+/// (`Outer.run`) one file declares.
+#[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Nested {
+    pub types: BTreeSet<String>,
+    pub members: BTreeSet<String>,
+}
+
+impl Nested {
+    fn is_empty(&self) -> bool {
+        self.types.is_empty() && self.members.is_empty()
+    }
 }
 
 /// Qualified name -> every declaring file. A name several files declare — an `expect` and its
@@ -33,20 +52,13 @@ pub struct QualifiedIndex {
     nested: BTreeMap<String, Nested>,
 }
 
-#[derive(Debug, Default)]
-struct Nested {
-    types: BTreeSet<String>,
-    members: BTreeSet<String>,
-}
-
 impl QualifiedIndex {
     pub fn insert(&mut self, qualified: &str, rel: &str) {
         self.by_name.entry(qualified.to_string()).or_default().insert(rel.to_string());
     }
 
-    /// Records every type path (`Outer`, `Outer.Inner`) and member path (`Outer.run`) `rel` declares.
-    pub fn insert_nested(&mut self, rel: &str, types: BTreeSet<String>, members: BTreeSet<String>) {
-        self.nested.insert(rel.to_string(), Nested { types, members });
+    pub fn insert_nested(&mut self, rel: &str, nested: Nested) {
+        self.nested.insert(rel.to_string(), nested);
     }
 
     /// Whether `rel` declares a type at `path`.
@@ -139,14 +151,22 @@ impl Headers {
 /// resolve a name to another file. A body-only edit leaves the header as it was and widens nothing.
 pub fn widen(repo: &Path, stale: &[String], removed: &[String], known: &mut Headers, all_rels: &[String]) -> Vec<String> {
     let family_of = |rel: &str| Lang::of(rel).map(Lang::family).filter(|f| *f != Family::TypeScript);
-    // TypeScript resolves through tsconfig and package.json and has no header, so its sources are
-    // not opened here: a TypeScript-only update pays nothing for this rule.
-    let header_of = |rel: &str| {
-        let lang = Lang::of(rel).filter(|l| l.family() != Family::TypeScript)?;
-        let source = std::fs::read_to_string(repo.join(rel)).ok()?;
-        header_for(lang, rel, &source)
-    };
-    widen_by(stale, removed, known, all_rels, &family_of, &header_of)
+    widen_by(stale, removed, known, all_rels, &family_of, &|rel| read_header(repo, rel))
+}
+
+/// TypeScript resolves through tsconfig and package.json and has no header, so its sources are
+/// not opened here: a TypeScript-only update pays nothing for L3.
+fn read_header(repo: &Path, rel: &str) -> Option<Header> {
+    let lang = Lang::of(rel).filter(|l| l.family() != Family::TypeScript)?;
+    let source = std::fs::read_to_string(repo.join(rel)).ok()?;
+    header_for(lang, rel, &source)
+}
+
+/// Whether any of `changed` now reads to a header other than the one recorded — the case where
+/// `widen` re-reads a family, and where a resolver built before the edit would resolve those
+/// re-reads against declarations the file no longer holds, or without ones it gained.
+pub fn headers_move(repo: &Path, known: &Headers, changed: &[String]) -> bool {
+    changed.iter().any(|rel| read_header(repo, rel).as_ref() != known.0.get(rel))
 }
 
 fn widen_by(
@@ -303,6 +323,13 @@ mod tests {
     fn typescript_has_no_header() {
         assert_eq!(header_for(Lang::TypeScript, "a.ts", "export class A {}\n"), None);
         assert_eq!(header_for(Lang::Tsx, "a.tsx", "export const A = () => <p/>;\n"), None);
+    }
+
+    #[test]
+    fn a_header_recorded_before_nested_paths_existed_reads_back_and_one_without_them_writes_none() {
+        let old: Header = serde_json::from_str(r#"{"scope":["a"],"top":["B"]}"#).unwrap();
+        assert_eq!(old, h(&["a"], &["B"]));
+        assert_eq!(serde_json::to_string(&old).unwrap(), r#"{"scope":["a"],"top":["B"],"directives":[]}"#);
     }
 
     #[test]

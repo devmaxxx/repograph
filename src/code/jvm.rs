@@ -5,8 +5,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use tree_sitter::Node;
 
-use crate::code::index::{Header, QualifiedIndex};
-use crate::code::lang::Lang;
+use crate::code::index::QualifiedIndex;
 use crate::model::{EdgeKind, Extraction};
 
 pub(crate) fn text<'a>(n: Node, src: &'a [u8]) -> &'a str {
@@ -74,24 +73,6 @@ pub(crate) fn in_file(types: &BTreeSet<String>, at: &str, written: &str) -> Opti
             return None;
         }
         scope = outer(scope);
-    }
-}
-
-/// What the index reads from one JVM file, all from a single parse.
-#[derive(Debug, Default)]
-pub(crate) struct Facts {
-    pub header: Header,
-    /// Every type path the file declares, top-level ones included.
-    pub types: BTreeSet<String>,
-    /// Every member path below a type (`Outer.run`).
-    pub members: BTreeSet<String>,
-}
-
-pub(crate) fn facts(lang: Lang, source: &str) -> Facts {
-    match lang {
-        Lang::Kotlin => crate::code::kotlin::facts(source),
-        Lang::Java => crate::code::java::facts(source),
-        _ => Facts::default(),
     }
 }
 
