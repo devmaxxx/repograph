@@ -85,9 +85,10 @@ pub fn report(graph: &Graph, hunks: &[Hunk], depth: usize) -> Report {
         files.extend(imp.importers.iter().cloned());
         // A dependent that is itself being changed is not affected, it is the change.
         for d in imp.layers.into_iter().flatten().filter(|d| !roots.contains(&d.id)) {
-            // One row per dependent, at the shallowest depth any touched symbol reaches it.
+            // One row per dependent, at the shallowest depth any touched symbol reaches it, and
+            // by a call rather than an argument edge at that depth.
             match affected.get_mut(&d.id) {
-                Some(a) if d.depth < a.depth => *a = d,
+                Some(a) if d.depth < a.depth || (d.depth == a.depth && a.passed && !d.passed) => *a = d,
                 Some(_) => {}
                 None => { affected.insert(d.id.clone(), d); }
             }
@@ -270,6 +271,19 @@ mod tests {
         assert_eq!(r.affected.iter().map(|d| d.id.as_str()).collect::<Vec<_>>(), vec!["sym:c.ts::C.create"]);
         assert_eq!(r.files, BTreeSet::from(["c.ts".to_string()]));
         assert_eq!(r.risk, "LOW");
+    }
+
+    #[test]
+    fn a_dependent_that_calls_one_changed_symbol_and_passes_another_is_listed_by_the_call() {
+        let mut g = graph();
+        let mut e = Extraction::default();
+        e.node(NodeKind::Symbol, "sym:d.ts::D", "D", "", "d.ts", 1);
+        e.edge("sym:d.ts::D", "sym:s.ts::S.create", EdgeKind::Calls, "arg", "d.ts");
+        e.edge("sym:d.ts::D", "sym:s.ts::S.list", EdgeKind::Calls, "", "d.ts");
+        g.apply(e);
+        let r = report(&g, &[Hunk { file: "s.ts".into(), start: 8, end: 9 }], 1);
+        let d = r.affected.iter().find(|d| d.id == "sym:d.ts::D").unwrap();
+        assert_eq!((d.via.as_str(), d.passed), ("sym:s.ts::S.list", false));
     }
 
     #[test]
