@@ -271,6 +271,14 @@ mod tests {
     }
 
     #[test]
+    fn a_hunk_inside_an_object_literal_method_reaches_the_callers_of_that_method() {
+        let g = crate::impact::tests::object_literal();
+        let r = report(&g, &[Hunk { file: "r.ts".into(), start: 8, end: 9 }], 1);
+        assert_eq!(r.touched, vec!["sym:r.ts::repo"]);
+        assert_eq!(r.affected.iter().map(|d| d.id.as_str()).collect::<Vec<_>>(), vec!["sym:a.ts::A.run", "sym:b.ts::go"]);
+    }
+
+    #[test]
     fn a_file_level_change_walks_every_symbol_of_the_file_and_lists_none_of_them_as_affected() {
         let g = graph();
         let r = report(&g, &[Hunk { file: "s.ts".into(), start: 1, end: 1 }], 2);
