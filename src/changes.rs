@@ -83,8 +83,9 @@ pub fn report(graph: &Graph, hunks: &[Hunk], depth: usize) -> Report {
     for id in &roots {
         let imp = index.upstream(id, depth);
         files.extend(imp.importers.iter().cloned());
-        // A dependent that is itself being changed is not affected, it is the change.
-        for d in imp.layers.into_iter().flatten().filter(|d| !roots.contains(&d.id)) {
+        // A dependent that is itself being changed is not affected, it is the change — a file
+        // whose top-level code both changed and calls a changed symbol included.
+        for d in imp.layers.into_iter().flatten().filter(|d| !roots.contains(&d.id) && !touched.contains(&d.id)) {
             // One row per dependent, at the shallowest depth any touched symbol reaches it, and
             // by a call rather than an argument edge at that depth.
             match affected.get_mut(&d.id) {
@@ -322,6 +323,17 @@ mod tests {
         assert_eq!(r.touched, vec!["file:s.ts"]);
         assert_eq!(r.affected.iter().map(|d| d.id.as_str()).collect::<Vec<_>>(), vec!["sym:c.ts::C.create"]);
         assert_eq!(r.files, BTreeSet::from(["c.ts".to_string()]));
+    }
+
+    #[test]
+    fn a_changed_file_whose_top_level_calls_a_changed_symbol_is_not_also_affected() {
+        let mut g = graph();
+        let mut e = Extraction::default();
+        e.edge("file:s.ts", "sym:s.ts::helper", EdgeKind::Calls, "", "s.ts");
+        g.apply(e);
+        let r = report(&g, &[Hunk { file: "s.ts".into(), start: 1, end: 1 }], 2);
+        assert_eq!(r.touched, vec!["file:s.ts"]);
+        assert!(r.affected.iter().all(|d| !r.touched.contains(&d.id)), "{:?}", r.affected);
     }
 
     #[test]
