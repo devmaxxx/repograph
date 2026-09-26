@@ -1,3 +1,4 @@
+pub mod blank;
 pub mod calls;
 pub mod idrefs;
 pub mod imports;
