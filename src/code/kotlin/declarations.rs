@@ -22,6 +22,72 @@ pub struct Declared {
     pub fields: BTreeMap<String, BTreeMap<String, String>>,
     /// (declaring type's id, supertype as written).
     pub supers: Vec<(String, String)>,
+    /// Per type path, how it reaches names it does not declare.
+    pub shapes: BTreeMap<String, jvm::Shape>,
+    /// Per function id, each declaration's parameters as a lambda passed to it reads them; two
+    /// entries are overloads.
+    pub lambdas: BTreeMap<String, Vec<Vec<Param>>>,
+}
+
+/// A parameter as a lambda argument meets it.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Param {
+    Value,
+    /// A function type with no receiver: the lambda sees the names around it.
+    Plain,
+    /// `T.() -> R`: the lambda's `this` is a `T`, as written. Empty when `T` is a type parameter.
+    Receiver(String),
+}
+
+/// A type's or a function's own type parameters.
+pub(super) fn type_params(n: Node, src: &[u8]) -> BTreeSet<String> {
+    child(n, "type_parameters")
+        .map(named)
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|p| child(p, "type_identifier"))
+        .map(|t| text(t, src).to_string())
+        .collect()
+}
+
+fn has_modifier(n: Node, word: &str, src: &[u8]) -> bool {
+    child(n, "modifiers").is_some_and(|m| named(m).into_iter().any(|c| c.kind() == "class_modifier" && text(c, src) == word))
+}
+
+/// The receiver an extension function or a `T.() -> R` type is written with. `Some("")` when it
+/// is written but no plain type: a function type, or one of `masked`.
+pub(super) fn receiver(n: Node, src: &[u8], masked: &BTreeSet<String>) -> Option<String> {
+    let r = n.child_by_field_name("receiver")?;
+    let t = written_type(r, src).unwrap_or_default();
+    let first = t.split('.').next().unwrap_or_default();
+    Some(if masked.contains(first) { String::new() } else { t })
+}
+
+fn params(f: Node, src: &[u8], masked: &BTreeSet<String>) -> Vec<Param> {
+    child(f, "function_value_parameters")
+        .map(named)
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|p| p.kind() == "parameter")
+        .map(|p| match child(p, "function_type") {
+            Some(ft) => receiver(ft, src, masked).map_or(Param::Plain, Param::Receiver),
+            None => Param::Value,
+        })
+        .collect()
+}
+
+impl Declared {
+    /// Type parameters in scope at the type `path`: its own and every enclosing type's. An outer
+    /// one reaches only an `inner` type, but masking more only costs an edge.
+    pub(super) fn masked(&self, path: &str) -> BTreeSet<String> {
+        let mut out = BTreeSet::new();
+        let mut p = path;
+        while !p.is_empty() {
+            out.extend(self.shapes.get(p).map(|s| s.type_params.iter().cloned()).into_iter().flatten());
+            p = jvm::outer(p);
+        }
+        out
+    }
 }
 
 /// Kotlin is public by default, and `internal` crosses files inside a module, so only these two
@@ -134,10 +200,23 @@ fn declare(n: Node, rel: &str, src: &[u8], parent: &str, owner: Option<&str>, ex
     if let Some(t) = child(n, "variable_declaration").and_then(|v| written_type(v, src)) {
         d.fields.entry(owner.unwrap_or_default().to_string()).or_default().insert(name.clone(), t);
     }
+    if n.kind() == "function_declaration" {
+        let mut masked = type_params(n, src);
+        masked.extend(owner.map(|o| d.masked(o)).unwrap_or_default());
+        d.lambdas.entry(id.clone()).or_default().push(params(n, src, &masked));
+    }
     if !is_type(n) {
         return;
     }
     d.types.insert(path.clone());
+    let enumerated = child(n, "enum_class_body").is_some() || has_modifier(n, "enum", src);
+    let shape = jvm::Shape {
+        inner: has_modifier(n, "inner", src),
+        object: n.kind() != "class_declaration",
+        implicit: enumerated,
+        type_params: type_params(n, src),
+    };
+    d.shapes.insert(path.clone(), shape);
     for spec in named(n).into_iter().filter(|c| c.kind() == "delegation_specifier") {
         let target = child(spec, "constructor_invocation").unwrap_or(spec);
         if let Some(t) = written_type(target, src) {

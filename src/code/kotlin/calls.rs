@@ -1,16 +1,31 @@
 //! Kotlin's calls and cited ids, one walk over the tree the declarations pass read.
 //!
-//! A call edge is written only where the file proves its target, as C#'s refs pass does: a name
-//! bound by something whose type this file does not read — `it`, an untyped lambda parameter, a
-//! destructured or `for` variable, a `when` subject, a member of an anonymous object — hides the
-//! property, type or function it shadows, and a call through it writes nothing.
+//! A call edge is written only where the file proves its target; a missing edge is acceptable, a
+//! wrong one is not. So:
+//! - A name bound by something whose type this file does not read — `it`, an untyped lambda
+//!   parameter, a destructured or `for` variable, a `when` subject, a member of an anonymous
+//!   object — hides the property, type or function it shadows, and a call through it writes nothing.
+//! - Kotlin resolves a bare name level by level — locals, implicit receivers innermost first, the
+//!   enclosing types' members, then the top level — and moves outward when no candidate at a level
+//!   takes the arguments. Without overload resolution, a name two levels bind is no edge, and so is
+//!   a name a level may bind through a supertype or a receiver the file cannot read.
+//! - A lambda passed to anything but a closed list of stdlib functions whose lambda has no
+//!   receiver may run with a receiver this file never sees, so it refuses lowercase bare names and
+//!   `this.` calls. A capitalised callee is still resolved there: receiver scopes do not declare
+//!   capitalised members, and refusing constructors and Composables would drop nearly every Compose
+//!   call. That is the residual this walk accepts.
+//!
+//! Edges it leaves out: calls on a value whose type is inferred from anything but a constructor
+//! call, receivers typed by another file's properties, a lambda passed to another file's function
+//! taking `T.() -> R` (read as an unknown receiver), a companion's members from a nested type, and
+//! any bare call from a type whose supertype chain leaves the file without declaring the name.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use tree_sitter::Node;
 
-use super::declarations::{holder, is_type, members_of, one_line_object, written_type, Declared};
-use crate::code::jvm::{self, child, named, outer, path_of, qualify, split_id, text, type_ids, Own};
+use super::declarations::{holder, is_type, members_of, one_line_object, receiver, type_params, written_type, Declared, Param};
+use crate::code::jvm::{self, child, named, outer, path_of, qualify, split_id, text, type_ids, Bound, Own};
 use crate::model::{EdgeKind, Extraction};
 
 pub(super) struct Ctx<'a> {
@@ -20,18 +35,54 @@ pub(super) struct Ctx<'a> {
 }
 
 /// A local's type as ids of the declarations it resolves to, or `None` when the file does not
-/// read it; either way the name hides whatever it shadows.
-type Locals = BTreeMap<String, Option<Vec<String>>>;
+/// read it; either way the name hides whatever it shadows. The depth is how many implicit
+/// receivers were in scope when it was bound: one pushed after it may hold the name instead.
+type Locals = BTreeMap<String, (usize, Option<Vec<String>>)>;
+
+/// An implicit receiver a function or lambda brings into scope.
+#[derive(Clone)]
+enum Receiver {
+    /// A lambda whose receiver this file does not see.
+    Unknown,
+    /// The receiver's types; empty when it is written but unread, so it may hold any name.
+    Types(Vec<String>),
+}
 
 /// Where the walk is: the type path around it, the declared function calls come from, the locals
-/// the statements seen so far bind, and whether `this` has left the declared type — inside an
-/// object literal or a local class it names that anonymous type.
+/// and receivers in scope, the type parameters a written type may name, and whether `this` has
+/// left the declared type — inside an object literal or a local class it names that anonymous type.
 #[derive(Clone, Default)]
 struct At {
     class: String,
     function: Option<String>,
     locals: Locals,
+    receivers: Vec<Receiver>,
+    type_params: BTreeSet<String>,
     opaque: bool,
+}
+
+impl At {
+    fn bind(&mut self, name: &str, ty: Option<Vec<String>>) {
+        self.locals.insert(name.to_string(), (self.receivers.len(), ty));
+    }
+}
+
+/// Stdlib and Compose functions whose lambda has no receiver, so it sees the names around it.
+/// `runCatching` is here only called bare: `x.runCatching {}` takes `x` as its receiver.
+const PLAIN: [&str; 25] = [
+    "let", "also", "any", "all", "none", "takeIf", "takeUnless", "flatMap", "zip", "fold", "reduce", "groupBy", "sumOf", "first", "firstOrNull",
+    "last", "lastOrNull", "count", "repeat", "lazy", "remember", "withLock", "synchronized", "use", "onEach",
+];
+const PLAIN_PREFIXES: [&str; 6] = ["map", "filter", "forEach", "associate", "sortedBy", "assertFails"];
+/// Called bare, these run their lambda on the `this` already in scope, or on none.
+const PLAIN_BARE: [&str; 3] = ["runCatching", "run", "apply"];
+
+fn plain(name: &str) -> bool {
+    PLAIN.contains(&name) || PLAIN_PREFIXES.iter().any(|p| name.starts_with(p))
+}
+
+fn capitalised(name: &str) -> bool {
+    name.starts_with(|c: char| c.is_ascii_uppercase())
 }
 
 /// A declaration the declarations pass reached: top level, or in the body of a declared type. A
@@ -54,19 +105,36 @@ fn walk(n: Node, mut at: At, cx: &Ctx, ex: &mut Extraction) {
                 at.class = if at.class.is_empty() { name.to_string() } else { format!("{}.{name}", at.class) };
                 at.function = None;
                 at.locals.clear();
+                at.receivers.clear();
+                at.type_params = cx.d.masked(&at.class);
                 at.opaque = false;
             }
         }
         "class_declaration" | "object_declaration" | "object_literal" => {
             at.opaque = true;
+            at.type_params.extend(type_params(n, cx.src));
+            let written: Vec<Vec<String>> = named(n)
+                .into_iter()
+                .filter(|c| c.kind() == "delegation_specifier")
+                .map(|spec| written_type(child(spec, "constructor_invocation").unwrap_or(spec), cx.src).map(|t| resolved(&t, &at, cx)).unwrap_or_default())
+                .collect();
+            if !written.is_empty() {
+                // One unread supertype may hold any name, so the anonymous type then holds them all.
+                let ids = if written.iter().any(Vec::is_empty) { Vec::new() } else { written.concat() };
+                at.receivers.push(Receiver::Types(ids));
+            }
+            // Every type inherits these from `Any`, which the graph never declares.
+            for name in ["toString", "equals", "hashCode"] {
+                at.bind(name, None);
+            }
             for m in child(n, "class_body").map(members_of).unwrap_or_default() {
                 if let Some(name) = declared_name(m, cx.src) {
-                    at.locals.insert(name, None);
+                    at.bind(&name, None);
                 }
             }
             for p in child(n, "primary_constructor").map(named).unwrap_or_default() {
                 if let Some(name) = child(p, "simple_identifier") {
-                    at.locals.insert(text(name, cx.src).to_string(), None);
+                    at.bind(text(name, cx.src), None);
                 }
             }
         }
@@ -76,20 +144,24 @@ fn walk(n: Node, mut at: At, cx: &Ctx, ex: &mut Extraction) {
                 let path = if at.class.is_empty() { name.to_string() } else { format!("{}.{name}", at.class) };
                 at.function = Some(format!("sym:{}::{path}", cx.own.rel));
                 at.locals.clear();
-                parameters(n, &mut at, cx);
+                at.receivers.clear();
+                function(n, &mut at, cx);
             }
         }
-        "function_declaration" | "anonymous_function" => parameters(n, &mut at, cx),
-        "lambda_literal" if !n.parent().is_some_and(|p| one_line_object(p).is_some()) => match child(n, "lambda_parameters") {
-            Some(ps) => {
-                for p in named(ps) {
-                    bind(p, &mut at, cx);
+        "function_declaration" | "anonymous_function" => function(n, &mut at, cx),
+        "lambda_literal" if !n.parent().is_some_and(|p| one_line_object(p).is_some()) => {
+            if let Some(r) = lambda_receiver(n, &at, cx) {
+                at.receivers.push(r);
+            }
+            match child(n, "lambda_parameters") {
+                Some(ps) => {
+                    for p in named(ps) {
+                        bind(p, &mut at, cx);
+                    }
                 }
+                None => at.bind("it", None),
             }
-            None => {
-                at.locals.insert("it".to_string(), None);
-            }
-        },
+        }
         "for_statement" => {
             for v in named(n).into_iter().filter(|c| matches!(c.kind(), "variable_declaration" | "multi_variable_declaration")) {
                 bind(v, &mut at, cx);
@@ -103,12 +175,12 @@ fn walk(n: Node, mut at: At, cx: &Ctx, ex: &mut Extraction) {
         "catch_block" => {
             if let Some(name) = child(n, "simple_identifier") {
                 let ty = written_type(n, cx.src).map(|t| resolved(&t, &at, cx));
-                at.locals.insert(text(name, cx.src).to_string(), ty);
+                at.bind(text(name, cx.src), ty);
             }
         }
         "call_expression" => {
             if let (Some(from), Some(callee)) = (at.function.clone(), n.named_child(0)) {
-                for to in targets(callee, &at, cx) {
+                for to in jvm::same_platform(cx.own.rel, targets(callee, &at, cx)) {
                     // A recursive call says nothing about what the function depends on.
                     if to != from {
                         ex.edge(&from, &to, EdgeKind::Calls, "", cx.own.rel);
@@ -148,17 +220,28 @@ fn declared_name(m: Node, src: &[u8]) -> Option<String> {
     Some(text(name, src).to_string())
 }
 
-/// A type as written, resolved where the walk is.
+/// A type as written, resolved where the walk is. A type parameter is no repository type, whatever
+/// it shares a name with, so it resolves to nothing.
 fn resolved(written: &str, at: &At, cx: &Ctx) -> Vec<String> {
+    if at.type_params.contains(written.split('.').next().unwrap_or_default()) {
+        return Vec::new();
+    }
     type_ids(cx.own.types, cx.own.index, cx.own.scope, cx.own.rel, &at.class, written)
 }
 
-fn parameters(f: Node, at: &mut At, cx: &Ctx) {
+/// A function's type parameters, its extension receiver, then its parameters, which are bound
+/// inside the receiver and so hide its members.
+fn function(f: Node, at: &mut At, cx: &Ctx) {
+    at.type_params.extend(type_params(f, cx.src));
+    if let Some(written) = receiver(f, cx.src, &at.type_params) {
+        let ids = if written.is_empty() { Vec::new() } else { resolved(&written, at, cx) };
+        at.receivers.push(Receiver::Types(ids));
+    }
     for p in child(f, "function_value_parameters").map(named).unwrap_or_default() {
         if let Some(name) = child(p, "simple_identifier") {
             // A function-typed parameter reads as no type, so `onDone()` through it is a call through a value.
             let ty = written_type(p, cx.src).map(|t| resolved(&t, at, cx));
-            at.locals.insert(text(name, cx.src).to_string(), ty);
+            at.bind(text(name, cx.src), ty);
         }
     }
 }
@@ -169,7 +252,7 @@ fn bind(v: Node, at: &mut At, cx: &Ctx) {
         "variable_declaration" => {
             if let Some(name) = child(v, "simple_identifier") {
                 let ty = written_type(v, cx.src).map(|t| resolved(&t, at, cx));
-                at.locals.insert(text(name, cx.src).to_string(), ty);
+                at.bind(text(name, cx.src), ty);
             }
         }
         "multi_variable_declaration" => {
@@ -195,11 +278,11 @@ fn remember(n: Node, at: &mut At, cx: &Ctx) {
                 Some(t) => Some(resolved(&t, at, cx)),
                 None => constructed(n, at, cx),
             };
-            at.locals.insert(name, ty);
+            at.bind(&name, ty);
         }
         "function_declaration" | "class_declaration" | "object_declaration" => {
             if let Some(name) = declared_name(n, cx.src) {
-                at.locals.insert(name, None);
+                at.bind(&name, None);
             }
         }
         _ => {}
@@ -210,37 +293,157 @@ fn remember(n: Node, at: &mut At, cx: &Ctx) {
 fn constructed(n: Node, at: &At, cx: &Ctx) -> Option<Vec<String>> {
     let callee = child(n, "call_expression")?.named_child(0).filter(|c| c.kind() == "simple_identifier")?;
     let ids = targets(callee, at, cx);
-    (!ids.is_empty() && ids.iter().all(|id| is_type_id(id, cx))).then_some(ids)
+    (!ids.is_empty() && ids.iter().all(|id| cx.own.is_type(id))).then_some(ids)
 }
 
-fn is_type_id(id: &str, cx: &Ctx) -> bool {
-    split_id(id).is_some_and(|(rel, path)| if rel == cx.own.rel { cx.own.types.contains(path) } else { cx.own.index.is_type(rel, path) })
+/// The receiver a lambda runs with, `None` when it has none. It is read where it is written:
+/// `x.apply {}`, `x.run {}` and `with(x) {}` take `x`'s type, and this file's function taking
+/// `T.() -> R` takes `T`. A lambda passed anywhere else may have a receiver the file never sees.
+fn lambda_receiver(lambda: Node, at: &At, cx: &Ctx) -> Option<Receiver> {
+    let parent = lambda.parent()?;
+    let trailing = match parent.kind() {
+        "annotated_lambda" => true,
+        "value_argument" => false,
+        // Not passed to a call: a value, whose receiver would be written in its type.
+        _ => return None,
+    };
+    let suffix = if trailing { parent.parent() } else { parent.parent().and_then(|args| args.parent()) }.filter(|s| s.kind() == "call_suffix")?;
+    let call = suffix.parent().filter(|c| c.kind() == "call_expression")?;
+    let callee = call.named_child(0)?;
+    let of = |x: Node| match receiver_types(x, at, cx) {
+        Some(ids) if !ids.is_empty() => Receiver::Types(ids),
+        _ => Receiver::Unknown,
+    };
+    match callee.kind() {
+        "simple_identifier" => {
+            let name = text(callee, cx.src);
+            if name == "with" {
+                let first = child(suffix, "value_arguments").and_then(|a| child(a, "value_argument")).and_then(|a| a.named_child(0));
+                return Some(first.map_or(Receiver::Unknown, of));
+            }
+            if plain(name) || PLAIN_BARE.contains(&name) {
+                return None;
+            }
+        }
+        "navigation_expression" => {
+            let parts = named(callee);
+            let method = parts.last().and_then(|s| child(*s, "simple_identifier")).map(|m| text(m, cx.src)).unwrap_or_default();
+            if matches!(method, "apply" | "run") {
+                return Some(parts.first().map_or(Receiver::Unknown, |x| of(*x)));
+            }
+            if plain(method) {
+                return None;
+            }
+        }
+        _ => return Some(Receiver::Unknown),
+    }
+    declared_receiver(&targets(callee, at, cx), trailing, cx)
+}
+
+/// What this file's function called with a lambda gives it as a receiver: every declaration of the
+/// callee must agree, and a lambda not in last place could be any function-typed parameter.
+fn declared_receiver(ids: &[String], trailing: bool, cx: &Ctx) -> Option<Receiver> {
+    let mut seen: BTreeSet<&Param> = BTreeSet::new();
+    for id in ids {
+        let Some(signatures) = cx.d.lambdas.get(id).filter(|_| split_id(id).is_some_and(|(rel, _)| rel == cx.own.rel)) else {
+            return Some(Receiver::Unknown);
+        };
+        for ps in signatures {
+            if trailing {
+                seen.insert(ps.last().unwrap_or(&Param::Value));
+            } else {
+                seen.extend(ps.iter().filter(|p| **p != Param::Value));
+            }
+        }
+    }
+    let mut each = seen.into_iter();
+    match (each.next(), each.next()) {
+        (Some(Param::Plain), None) => None,
+        (Some(Param::Receiver(t)), None) if !t.is_empty() => {
+            let (rel, path) = split_id(&ids[0])?;
+            let ids = type_ids(cx.own.types, cx.own.index, cx.own.scope, rel, outer(path), t);
+            Some(if ids.is_empty() { Receiver::Unknown } else { Receiver::Types(ids) })
+        }
+        _ => Some(Receiver::Unknown),
+    }
+}
+
+/// Whether a receiver may hold `name`. A lambda's unseen receiver is taken to hold no capitalised
+/// name: that is the residual the module doc names.
+fn holds(r: &Receiver, name: &str, cx: &Ctx) -> Bound {
+    match r {
+        Receiver::Unknown if capitalised(name) => Bound::Absent,
+        Receiver::Unknown => Bound::Refused,
+        Receiver::Types(ids) => cx.own.on_receiver(ids, name),
+    }
+}
+
+/// What a bare name binds.
+enum Named {
+    Local(Option<Vec<String>>),
+    Ids(Vec<String>),
+    /// Something binds it, but not provably one declaration.
+    Refused,
+    Nothing,
+}
+
+/// A bare name read level by level: locals, the implicit receivers innermost first, the enclosing
+/// types, then the top level. The first level that binds it wins only when no level after it
+/// binds it too.
+fn lookup(name: &str, at: &At, cx: &Ctx) -> Named {
+    if let Some((depth, ty)) = at.locals.get(name) {
+        if at.receivers[*depth..].iter().any(|r| holds(r, name, cx) != Bound::Absent) {
+            return Named::Refused;
+        }
+        return Named::Local(ty.clone());
+    }
+    let receivers = at.receivers.iter().rev().map(|r| holds(r, name, cx));
+    let class = std::iter::once_with(|| cx.own.member(&at.class, name));
+    let top = std::iter::once_with(|| match top_level(name, cx) {
+        Some(ids) if ids.is_empty() => Bound::Absent,
+        Some(ids) => Bound::Found(ids),
+        None => Bound::Refused,
+    });
+    let mut levels = receivers.chain(class).chain(top).filter(|b| *b != Bound::Absent);
+    match levels.next() {
+        None => Named::Nothing,
+        Some(Bound::Found(ids)) if levels.next().is_none() => Named::Ids(ids),
+        Some(_) => Named::Refused,
+    }
 }
 
 /// The ids a callee reaches: `f()` and `Type()`; `x.m()` and `this.x.m()` through a parameter, a
 /// local or a property with a declared type; `Obj.m()` and `Type.m()` on an object or a companion.
 fn targets(callee: Node, at: &At, cx: &Ctx) -> Vec<String> {
     match callee.kind() {
-        "simple_identifier" => {
-            let name = text(callee, cx.src);
-            if at.locals.contains_key(name) {
-                return Vec::new();
-            }
-            if let Some(ids) = cx.own.member(&at.class, name) {
-                return ids;
-            }
-            top_level(name, cx)
-        }
+        "simple_identifier" => match lookup(text(callee, cx.src), at, cx) {
+            Named::Ids(ids) => ids,
+            _ => Vec::new(),
+        },
         "navigation_expression" => {
             let parts = named(callee);
             let (Some(receiver), Some(suffix)) = (parts.first().copied(), parts.last().copied()) else { return Vec::new() };
             let Some(method) = child(suffix, "simple_identifier").map(|m| text(m, cx.src)) else { return Vec::new() };
             if is_this(receiver, cx) {
-                return if at.opaque { Vec::new() } else { cx.own.member(&at.class, method).unwrap_or_default() };
+                return match this(method, at, cx) {
+                    Bound::Found(ids) => ids,
+                    _ => Vec::new(),
+                };
             }
             receiver_types(receiver, at, cx).map(|ids| cx.own.on_types(&ids, method)).unwrap_or_default()
         }
         _ => Vec::new(),
+    }
+}
+
+/// `this.name`: the innermost receiver's member, or the enclosing type's own or inherited one,
+/// never an outer type's.
+fn this(name: &str, at: &At, cx: &Ctx) -> Bound {
+    match at.receivers.last() {
+        Some(Receiver::Unknown) => Bound::Refused,
+        Some(Receiver::Types(ids)) => cx.own.on_receiver(ids, name),
+        None if at.opaque || at.class.is_empty() => Bound::Refused,
+        None => cx.own.level(&at.class, name),
     }
 }
 
@@ -249,81 +452,83 @@ fn is_this(n: Node, cx: &Ctx) -> bool {
     n.kind() == "this_expression" && text(n, cx.src) == "this"
 }
 
-/// A name no enclosing type holds, read as Kotlin does past the members: this file's own top level
-/// or an explicit import, the file's package, then the star imports. A name both this file and an
-/// import bind, or two stars bind, is an overload the file cannot settle, and writes nothing.
-fn top_level(name: &str, cx: &Ctx) -> Vec<String> {
+/// A name no enclosing scope holds, read as Kotlin does past the members: this file's own top level
+/// or an explicit import, the file's package, then the star imports. `None` when two of those bind
+/// it, or two stars do: an overload the file cannot settle.
+fn top_level(name: &str, cx: &Ctx) -> Option<Vec<String>> {
     let (own, scope, index) = (&cx.own, cx.own.scope, cx.own.index);
     let imported = scope.singles.get(name);
+    let at = |base: &str| -> Vec<String> { index.files(&qualify(base, name)).into_iter().map(|rel| format!("sym:{rel}::{name}")).collect() };
     if cx.d.top.contains(name) {
-        return if imported.is_some() { Vec::new() } else { vec![format!("sym:{}::{name}", own.rel)] };
+        return imported.is_none().then(|| vec![format!("sym:{}::{name}", own.rel)]);
     }
+    let package = at(&scope.package);
     if let Some(bound) = imported {
         let mut each = bound.iter();
         return match (each.next(), each.next()) {
-            (Some(q), None) => jvm::declared(index, q).iter().map(jvm::Target::id).collect(),
-            _ => Vec::new(),
+            (Some(q), None) if package.is_empty() => Some(jvm::declared(index, q).iter().map(jvm::Target::id).collect()),
+            _ => None,
         };
     }
-    let at = |base: &str| -> Vec<String> { index.files(&qualify(base, name)).into_iter().map(|rel| format!("sym:{rel}::{name}")).collect() };
-    let package = at(&scope.package);
     if !package.is_empty() {
-        return package;
+        return Some(package);
     }
     let mut starred: Vec<Vec<String>> = scope.stars.iter().map(|s| at(s)).filter(|ids| !ids.is_empty()).collect();
-    if starred.len() == 1 { starred.remove(0) } else { Vec::new() }
+    match starred.len() {
+        0 => Some(Vec::new()),
+        1 => Some(starred.remove(0)),
+        _ => None,
+    }
 }
 
-/// The types a receiver stands for: a local, then a property of the enclosing types, then a
-/// top-level property or type of this file, then a capitalised name read as a type. A value of
-/// unknown type, or a lowercase name none of those binds, claims no call.
+/// The types a receiver stands for: whatever the name binds — a local, a receiver's or an
+/// enclosing type's property, a top-level property or type — then a capitalised name read as a
+/// type. A value of unknown type, or a lowercase name nothing binds, claims no call.
 fn receiver_types(receiver: Node, at: &At, cx: &Ctx) -> Option<Vec<String>> {
     match receiver.kind() {
         "simple_identifier" => {
             let name = text(receiver, cx.src);
-            if let Some(local) = at.locals.get(name) {
-                return local.clone();
+            match lookup(name, at, cx) {
+                Named::Local(ty) => ty,
+                Named::Ids(ids) => typed_member(&ids, cx),
+                Named::Refused => None,
+                Named::Nothing => capitalised(name).then(|| resolved(name, at, cx)),
             }
-            if let Some(ids) = cx.own.member(&at.class, name) {
-                return typed_member(&ids, cx);
-            }
-            if cx.own.types.contains(name) {
-                return Some(vec![format!("sym:{}::{name}", cx.own.rel)]);
-            }
-            if cx.d.top.contains(name) {
-                let t = cx.d.fields.get("").and_then(|f| f.get(name))?;
-                return Some(type_ids(cx.own.types, cx.own.index, cx.own.scope, cx.own.rel, "", t));
-            }
-            name.starts_with(|c: char| c.is_ascii_uppercase()).then(|| resolved(name, at, cx))
         }
         // `this.x` is the property `x`, whatever local shadows it.
         "navigation_expression" => {
             let parts = named(receiver);
-            let [this, suffix] = parts.as_slice() else { return None };
-            if !is_this(*this, cx) || at.opaque {
+            let [this_, suffix] = parts.as_slice() else { return None };
+            if !is_this(*this_, cx) {
                 return None;
             }
             let prop = child(*suffix, "simple_identifier").map(|s| text(s, cx.src))?;
-            typed_member(&cx.own.member(&at.class, prop)?, cx)
+            match this(prop, at, cx) {
+                Bound::Found(ids) => typed_member(&ids, cx),
+                _ => None,
+            }
         }
         _ => None,
     }
 }
 
-/// What a member found by `Own::member` stands for as a receiver: a nested type is itself, a
-/// property of this file its declared type read where it is declared. A member of another file
-/// has no type the index holds.
+/// What a declaration a name binds stands for as a receiver: a type is itself, a property of this
+/// file its declared type read where it is declared, with the type parameters there masked. A
+/// property of another file has no type the index holds.
 fn typed_member(ids: &[String], cx: &Ctx) -> Option<Vec<String>> {
+    if !ids.is_empty() && ids.iter().all(|id| cx.own.is_type(id)) {
+        return Some(ids.to_vec());
+    }
     let [id] = ids else { return None };
     let (rel, path) = split_id(id)?;
     if rel != cx.own.rel {
         return None;
     }
-    if cx.own.types.contains(path) {
-        return Some(vec![id.clone()]);
-    }
     let declared_in = outer(path);
     let name = path_of(id).rsplit('.').next()?;
     let t = cx.d.fields.get(declared_in)?.get(name)?;
+    if cx.d.masked(declared_in).contains(t.split('.').next().unwrap_or_default()) {
+        return None;
+    }
     Some(type_ids(cx.own.types, cx.own.index, cx.own.scope, cx.own.rel, declared_in, t))
 }

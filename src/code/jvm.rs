@@ -245,91 +245,199 @@ pub(crate) fn split_id(id: &str) -> Option<(&str, &str)> {
     id.strip_prefix("sym:")?.split_once("::")
 }
 
+/// How a type reaches names it does not declare itself.
+#[derive(Debug, Default, Clone)]
+pub(crate) struct Shape {
+    /// Holds its outer instance: Kotlin's `inner`, Java's non-static member class. Any other
+    /// nested type reaches no outer instance member.
+    pub inner: bool,
+    /// A Kotlin `object`: a nested type reaches its members without an instance.
+    pub object: bool,
+    /// A supertype the file never writes, such as an enum's `Enum`, which may hold any name.
+    pub implicit: bool,
+    /// The type's own type parameters, which a same-named repository type must never stand in for.
+    pub type_params: BTreeSet<String>,
+}
+
+/// What a name looked up among a type's members binds to.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum Bound {
+    Found(Vec<String>),
+    /// Something the file cannot read may hold the name, or two declarations do: the call is no edge.
+    Refused,
+    /// Provably nothing here holds it, so the next scope out may.
+    Absent,
+}
+
+/// Every class inherits these from `Any` / `Object`, which the graph never declares.
+const IMPLICIT_MEMBERS: [&str; 3] = ["toString", "equals", "hashCode"];
+
 /// One JVM file as the passes after declarations read it: what it declares, and what it sees.
 pub(crate) struct Own<'a> {
     pub rel: &'a str,
     pub types: &'a BTreeSet<String>,
     pub members: &'a BTreeSet<String>,
     pub supers: &'a [(String, String)],
+    pub shapes: &'a BTreeMap<String, Shape>,
     pub index: &'a QualifiedIndex,
     pub scope: &'a Scope,
 }
 
 impl Own<'_> {
-    /// What an unqualified `name` inside the type at `at` binds to among members: at each type
-    /// from the innermost outward, its own member, then one its supertypes declare. `None` when no
-    /// enclosing type holds it, so a top-level or imported name may; an empty list when one does
-    /// but not provably one declaration — two supertypes each declaring it.
-    pub(crate) fn member(&self, at: &str, name: &str) -> Option<Vec<String>> {
-        let mut scope = at;
-        while !scope.is_empty() {
-            let id = format!("sym:{}::{scope}.{name}", self.rel);
-            if self.members.contains(&id) {
-                return Some(vec![id]);
-            }
-            let up = self.inherited(scope, name, &mut BTreeSet::new());
-            if !up.is_empty() {
-                return Some(one_path(up));
-            }
-            scope = outer(scope);
-        }
-        None
+    fn shape(&self, path: &str) -> Shape {
+        self.shapes.get(path).cloned().unwrap_or_default()
     }
 
-    /// `name` on the types `ids`: each must declare it itself, or through supertypes this file
-    /// declares. A type in another file is read through the index, which holds no supertypes, so
-    /// an inherited member there is a missing edge rather than a guess.
-    pub(crate) fn on_types(&self, ids: &[String], name: &str) -> Vec<String> {
-        let mut out = Vec::new();
+    /// An unqualified `name` inside the type at `at`, walked outward as the compilers walk it: a
+    /// type's own and inherited members, then the enclosing type's, but past a type that is not
+    /// `inner` only into an `object`. A level hidden by that boundary that declares the name is
+    /// refused rather than skipped, since a companion's members share the class's path and may be
+    /// the ones meant.
+    pub(crate) fn member(&self, at: &str, name: &str) -> Bound {
+        let mut path = at;
+        let mut instance = true;
+        while !path.is_empty() {
+            let reachable = instance || self.shape(path).object;
+            match self.level(path, name) {
+                // A nested type needs no instance to be named.
+                Bound::Found(ids) if reachable || ids.iter().all(|id| self.is_type(id)) => return Bound::Found(ids),
+                Bound::Found(_) => return Bound::Refused,
+                Bound::Refused if reachable => return Bound::Refused,
+                _ => {}
+            }
+            instance &= self.shape(path).inner;
+            path = outer(path);
+        }
+        Bound::Absent
+    }
+
+    pub(crate) fn is_type(&self, id: &str) -> bool {
+        split_id(id).is_some_and(|(rel, path)| if rel == self.rel { self.types.contains(path) } else { self.index.is_type(rel, path) })
+    }
+
+    /// `name` among the members of this file's type at `path`, its own and those of every
+    /// supertype. A supertype the repository does not declare, or one in another file that does
+    /// not declare `name` itself — the index holds no supertypes to walk on — may hold the name,
+    /// so the lookup refuses rather than let a top-level or imported namesake stand in.
+    pub(crate) fn level(&self, path: &str, name: &str) -> Bound {
+        let id = format!("sym:{}::{path}.{name}", self.rel);
+        if self.members.contains(&id) {
+            return Bound::Found(vec![id]);
+        }
+        if IMPLICIT_MEMBERS.contains(&name) {
+            return Bound::Refused;
+        }
+        self.inherited(path, name, &mut BTreeSet::new())
+    }
+
+    /// `name` on the types `ids`, as an implicit receiver reads it: an unread type refuses.
+    pub(crate) fn on_receiver(&self, ids: &[String], name: &str) -> Bound {
+        if ids.is_empty() {
+            return Bound::Refused;
+        }
+        let mut found = Vec::new();
         for id in ids {
-            let Some((rel, path)) = split_id(id) else { continue };
-            if rel != self.rel {
-                if self.index.declares(rel, &format!("{path}.{name}")) {
-                    out.push(format!("{id}.{name}"));
-                }
-            } else if self.members.contains(&format!("{id}.{name}")) {
-                out.push(format!("{id}.{name}"));
+            let Some((rel, path)) = split_id(id) else { return Bound::Refused };
+            let here = if rel == self.rel {
+                self.level(path, name)
+            } else if self.index.declares(rel, &format!("{path}.{name}")) {
+                Bound::Found(vec![format!("{id}.{name}")])
             } else {
-                out.extend(one_path(self.inherited(path, name, &mut BTreeSet::new())));
+                Bound::Refused
+            };
+            match here {
+                Bound::Found(ids) => found.extend(ids),
+                Bound::Refused => return Bound::Refused,
+                Bound::Absent => {}
             }
         }
-        out
+        settle(found, false)
     }
 
-    /// A member `name` the supertypes of this file's type at `path` declare, nearest first.
-    fn inherited(&self, path: &str, name: &str, seen: &mut BTreeSet<String>) -> Vec<String> {
+    /// `name` called on a value of the types `ids`: only a member some type provably declares.
+    pub(crate) fn on_types(&self, ids: &[String], name: &str) -> Vec<String> {
+        ids.iter()
+            .flat_map(|id| match self.on_receiver(std::slice::from_ref(id), name) {
+                Bound::Found(ids) => ids,
+                _ => Vec::new(),
+            })
+            .collect()
+    }
+
+    fn inherited(&self, path: &str, name: &str, seen: &mut BTreeSet<String>) -> Bound {
         if !seen.insert(path.to_string()) {
-            return Vec::new();
+            return Bound::Absent;
         }
         let from = format!("sym:{}::{path}", self.rel);
-        let mut out = Vec::new();
+        let mut found = Vec::new();
+        let mut unread = self.shape(path).implicit;
         for (_, written) in self.supers.iter().filter(|(f, _)| *f == from) {
             // A type's header sees the types around it, not its own nested ones.
-            for t in type_ids(self.types, self.index, self.scope, self.rel, outer(path), written) {
+            let targets = type_ids(self.types, self.index, self.scope, self.rel, outer(path), written);
+            unread |= targets.is_empty();
+            for t in targets {
                 let Some((rel, tpath)) = split_id(&t) else { continue };
                 let member = format!("{t}.{name}");
-                if rel == self.rel {
-                    if self.members.contains(&member) {
-                        out.push(member);
+                if rel != self.rel {
+                    if self.index.declares(rel, &format!("{tpath}.{name}")) {
+                        found.push(member);
                     } else {
-                        out.extend(self.inherited(tpath, name, seen));
+                        unread = true;
                     }
-                } else if self.index.declares(rel, &format!("{tpath}.{name}")) {
-                    out.push(member);
+                } else if self.members.contains(&member) {
+                    found.push(member);
+                } else {
+                    match self.inherited(tpath, name, seen) {
+                        Bound::Found(ids) => found.extend(ids),
+                        Bound::Refused => unread = true,
+                        Bound::Absent => {}
+                    }
                 }
             }
         }
-        out
+        settle(found, unread)
     }
 }
 
-/// Every id in `ids` when they share one path — an `expect` and its `actual`s — and none when two
+/// Found ids when they share one path — an `expect` and its `actual`s — and a refusal when two
 /// paths declare the name, which only an overload resolution this file does not run could settle.
-fn one_path(mut ids: Vec<String>) -> Vec<String> {
+fn settle(mut ids: Vec<String>, unread: bool) -> Bound {
     ids.sort();
     ids.dedup();
     let paths: BTreeSet<&str> = ids.iter().filter_map(|id| split_id(id).map(|(_, p)| p)).collect();
-    if paths.len() > 1 { Vec::new() } else { ids }
+    match paths.len() {
+        0 if unread => Bound::Refused,
+        0 => Bound::Absent,
+        1 => Bound::Found(ids),
+        _ => Bound::Refused,
+    }
+}
+
+/// The source set a file sits in: `androidMain` for `shared/src/androidMain/kotlin/…`.
+fn source_set(rel: &str) -> Option<&str> {
+    let mut parts = rel.split('/');
+    parts.by_ref().find(|p| *p == "src")?;
+    parts.next()
+}
+
+/// The ids of one declaration a caller in `rel` links against. An `actual` in a platform's main
+/// source set is linked only from common code, which runs on every platform, or from a source set
+/// of that same platform (`androidHostTest` for `androidMain`); an Android module never links the
+/// iOS actual. A declaration outside any platform set, the `expect` among them, is always kept.
+pub(crate) fn same_platform(rel: &str, ids: Vec<String>) -> Vec<String> {
+    if ids.len() < 2 {
+        return ids;
+    }
+    let caller = source_set(rel);
+    let keep = |id: &String| {
+        let platform = split_id(id).and_then(|(r, _)| source_set(r)).and_then(|s| s.strip_suffix("Main")).filter(|p| !p.is_empty() && *p != "common");
+        match (platform, caller) {
+            (None, _) => true,
+            (Some(p), Some(c)) => c.starts_with("common") || c.starts_with(p),
+            (Some(_), None) => false,
+        }
+    };
+    ids.into_iter().filter(keep).collect()
 }
 
 #[cfg(test)]

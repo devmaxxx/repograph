@@ -465,11 +465,11 @@ fn a_lambda_parameter_ends_with_its_lambda() {
 }
 
 #[test]
-fn an_inherited_member_hides_a_top_level_function_of_its_name() {
-    let src = "package app\n\nfun helper(n: Int) = n\n\nopen class Base {\n    fun helper(n: Int) = n\n}\n\nclass Sub : Base() {\n    fun go() { helper(1) }\n}\n";
+fn an_inherited_member_is_called_and_a_top_level_namesake_leaves_the_call_to_overloads() {
+    let src = "package app\n\nfun helper(n: Int) = n\n\nopen class Base {\n    fun helper(n: Int) = n\n    fun only() {}\n}\n\nclass Sub : Base() {\n    fun go() { helper(1) }\n    fun inherits() { only() }\n}\n";
     let ex = one("app/I.kt", src);
-    let got = calls_from(&ex, "sym:app/I.kt::Sub.go");
-    assert_eq!(got, vec!["sym:app/I.kt::Base.helper"], "{:?}", ex.edges);
+    assert!(calls_from(&ex, "sym:app/I.kt::Sub.go").is_empty(), "{:?}", ex.edges);
+    assert_eq!(calls_from(&ex, "sym:app/I.kt::Sub.inherits"), vec!["sym:app/I.kt::Base.only"], "{:?}", ex.edges);
 }
 
 #[test]
@@ -480,4 +480,129 @@ fn a_name_both_the_file_and_an_import_declare_is_no_edge() {
     ]);
     let ex = repo.extract("app/U.kt");
     assert!(calls_from(&ex, "sym:app/U.kt::go").is_empty(), "{:?}", ex.edges);
+}
+
+#[test]
+fn a_supertype_outside_the_repository_may_hold_the_name_so_a_bare_call_is_no_edge() {
+    let src = "package app\n\nfun finish() {}\n\nfun helper() {}\n\nclass Screen : androidx.appcompat.app.AppCompatActivity() {\n    fun go() { finish() }\n}\n\nclass Plain {\n    fun go() { finish() }\n}\n\nfun toString(n: Int) = \"\"\n\nclass Any2 {\n    fun go() { toString(1) }\n    fun literal() {\n        val r = object : Runnable {\n            override fun run() { helper() }\n        }\n    }\n}\n";
+    let ex = one("app/A.kt", src);
+    assert!(calls_from(&ex, "sym:app/A.kt::Screen.go").is_empty(), "{:?}", ex.edges);
+    assert_eq!(calls_from(&ex, "sym:app/A.kt::Plain.go"), vec!["sym:app/A.kt::finish"], "{:?}", ex.edges);
+    assert!(calls_from(&ex, "sym:app/A.kt::Any2.go").is_empty(), "every class holds Any's members: {:?}", ex.edges);
+    assert!(calls_from(&ex, "sym:app/A.kt::Any2.literal").is_empty(), "{:?}", ex.edges);
+}
+
+#[test]
+fn a_supertype_in_another_file_whose_chain_the_index_cannot_walk_is_no_proof() {
+    let repo = Repo::new(&[
+        ("app/A.kt", "package app\n\nopen class Base {\n    fun helper() {}\n}\n"),
+        ("app/B.kt", "package app\n\nopen class Mid : Base()\n"),
+        ("app/C.kt", "package app\n\nfun helper() {}\n\nfun other() {}\n\nclass Sub : Mid() {\n    fun go() { helper() }\n}\n\nclass Direct : Base() {\n    fun go() { other() }\n}\n"),
+    ]);
+    let ex = repo.extract("app/C.kt");
+    assert!(calls_from(&ex, "sym:app/C.kt::Sub.go").is_empty(), "{:?}", ex.edges);
+    assert!(calls_from(&ex, "sym:app/C.kt::Direct.go").is_empty(), "Base is read, but not what Base extends: {:?}", ex.edges);
+}
+
+#[test]
+fn an_extension_function_calls_through_its_receiver_first() {
+    let src = "package app\n\nfun helper(n: Int) = n\n\nfun top() {}\n\nclass Disk\n\nclass Store(val files: Disk) {\n    fun helper(n: Int) = n\n    fun save() {}\n    fun m() {}\n}\n\nfun Store.ext() {\n    helper(1)\n    this.save()\n}\n\nclass A {\n    fun m() {}\n    fun Store.inner() {\n        this.m()\n        m()\n    }\n}\n\nfun StringBuilder.outside() { top() }\n";
+    let ex = one("app/B.kt", src);
+    assert_eq!(calls_from(&ex, "sym:app/B.kt::ext"), vec!["sym:app/B.kt::Store.save"], "{:?}", ex.edges);
+    assert_eq!(calls_from(&ex, "sym:app/B.kt::A.inner"), vec!["sym:app/B.kt::Store.m"], "{:?}", ex.edges);
+    assert!(calls_from(&ex, "sym:app/B.kt::outside").is_empty(), "an unread receiver may hold the name: {:?}", ex.edges);
+}
+
+const RECEIVERS: &str = "package app
+
+class Store {
+    fun save() {}
+    fun keep() {}
+}
+
+fun helper() {}
+
+fun build(block: Store.() -> Unit) {}
+
+class Host {
+    fun keep() {}
+    fun clash(s: Store) { s.apply { keep() } }
+    fun written(s: Store) {
+        s.apply { save() }
+        with(s) { save() }
+        build { save() }
+    }
+    fun plain(xs: List<Int>) { xs.forEach { helper() } }
+    fun unknownBare() { external { helper() } }
+    fun unknownThis() { external { this.save() } }
+    fun unknownCapital() { external { Store() } }
+}
+";
+
+#[test]
+fn a_lambda_s_receiver_is_read_where_it_is_written_and_otherwise_hides_lowercase_names() {
+    let ex = one("app/R.kt", RECEIVERS);
+    let written = calls_from(&ex, "sym:app/R.kt::Host.written");
+    assert!(written.contains(&"sym:app/R.kt::Store.save"), "{written:?}");
+    assert_eq!(written, vec!["sym:app/R.kt::Store.save", "sym:app/R.kt::build"], "{written:?}");
+    assert!(calls_from(&ex, "sym:app/R.kt::Host.clash").is_empty(), "the receiver and Host both bind keep: {:?}", ex.edges);
+    assert_eq!(calls_from(&ex, "sym:app/R.kt::Host.plain"), vec!["sym:app/R.kt::helper"], "{:?}", ex.edges);
+    assert!(calls_from(&ex, "sym:app/R.kt::Host.unknownBare").is_empty(), "{:?}", ex.edges);
+    assert!(calls_from(&ex, "sym:app/R.kt::Host.unknownThis").is_empty(), "{:?}", ex.edges);
+    assert_eq!(calls_from(&ex, "sym:app/R.kt::Host.unknownCapital"), vec!["sym:app/R.kt::Store"], "{:?}", ex.edges);
+}
+
+#[test]
+fn two_levels_binding_one_name_leave_the_call_to_overload_resolution() {
+    let one_file = one("app/O.kt", "package app\n\nfun helper(n: Int) = n\n\nclass Sub {\n    fun helper(s: String) = s\n    fun go() { helper(1) }\n}\n");
+    assert!(calls_from(&one_file, "sym:app/O.kt::Sub.go").is_empty(), "{:?}", one_file.edges);
+    let repo = Repo::new(&[
+        ("lib/H.kt", "package lib\n\nfun helper(s: String) = s\n"),
+        ("app/P.kt", "package app\n\nfun helper(n: Int) = n\n"),
+        ("app/U.kt", "package app\n\nimport lib.helper\n\nfun go() { helper(1) }\n"),
+    ]);
+    let ex = repo.extract("app/U.kt");
+    assert!(calls_from(&ex, "sym:app/U.kt::go").is_empty(), "{:?}", ex.edges);
+}
+
+#[test]
+fn a_platform_caller_reaches_the_expect_and_its_own_platform_s_actual_only() {
+    let repo = Repo::new(&[
+        ("shared/src/commonMain/kotlin/p/Platform.kt", "package p\n\nexpect fun platformName(): String\n"),
+        ("shared/src/androidMain/kotlin/p/Platform.android.kt", "package p\n\nactual fun platformName() = \"a\"\n"),
+        ("shared/src/iosMain/kotlin/p/Platform.ios.kt", "package p\n\nactual fun platformName() = \"i\"\n"),
+        ("shared/src/androidHostTest/kotlin/p/T.kt", "package p\n\nfun t() { platformName() }\n"),
+        ("shared/src/commonMain/kotlin/p/Use.kt", "package p\n\nfun u() { platformName() }\n"),
+    ]);
+    let mut t = calls_from(&repo.extract("shared/src/androidHostTest/kotlin/p/T.kt"), "sym:shared/src/androidHostTest/kotlin/p/T.kt::t").into_iter().map(String::from).collect::<Vec<_>>();
+    t.sort();
+    assert_eq!(t, vec!["sym:shared/src/androidMain/kotlin/p/Platform.android.kt::platformName", "sym:shared/src/commonMain/kotlin/p/Platform.kt::platformName"]);
+    let u = repo.extract("shared/src/commonMain/kotlin/p/Use.kt");
+    assert_eq!(calls_from(&u, "sym:shared/src/commonMain/kotlin/p/Use.kt::u").len(), 3, "{:?}", u.edges);
+}
+
+#[test]
+fn a_nested_class_reaches_no_outer_instance_and_an_inner_one_or_an_object_does() {
+    let src = "package app\n\nclass Disk {\n    fun delete() {}\n}\n\nclass Outer(val files: Disk) {\n    fun only() {}\n    class Nested {\n        fun g() {\n            only()\n            files.delete()\n        }\n    }\n    inner class In {\n        fun h() { only() }\n    }\n}\n\nobject Holder {\n    fun k() {}\n    class N {\n        fun g() { k() }\n    }\n}\n";
+    let ex = one("app/N.kt", src);
+    assert!(calls_from(&ex, "sym:app/N.kt::Outer.Nested.g").is_empty(), "{:?}", ex.edges);
+    assert_eq!(calls_from(&ex, "sym:app/N.kt::Outer.In.h"), vec!["sym:app/N.kt::Outer.only"], "{:?}", ex.edges);
+    assert_eq!(calls_from(&ex, "sym:app/N.kt::Holder.N.g"), vec!["sym:app/N.kt::Holder.k"], "{:?}", ex.edges);
+}
+
+#[test]
+fn a_type_parameter_is_not_the_repository_type_it_is_named_like() {
+    let src = "package app\n\nclass State {\n    fun reduce() {}\n}\n\nabstract class Store<State>(val s: State) {\n    fun f() { s.reduce() }\n    fun <State> g(x: State) { x.reduce() }\n}\n\nfun <State> top(x: State) { x.reduce() }\n";
+    let ex = one("app/P.kt", src);
+    let wrong: Vec<_> = edges(&ex, EdgeKind::Calls).into_iter().filter(|(_, t, _)| t.ends_with("State.reduce")).collect();
+    assert!(wrong.is_empty(), "{wrong:?}");
+}
+
+#[test]
+fn a_receiver_pushed_after_a_local_may_hold_its_name_and_an_enum_holds_enum_s_members() {
+    let src = "package app\n\nclass Disk {\n    fun delete() {}\n}\n\nclass Other {\n    fun delete() {}\n}\n\nclass Store(val files: Other)\n\nfun valueOf(s: String) = s\n\nclass Host {\n    fun go(s: Store) {\n        val files = Disk()\n        s.apply { files.delete() }\n    }\n}\n\nenum class Kind {\n    A;\n    fun go() { valueOf(\"A\") }\n}\n";
+    let ex = one("app/D.kt", src);
+    let go = calls_from(&ex, "sym:app/D.kt::Host.go");
+    assert!(!go.contains(&"sym:app/D.kt::Disk.delete"), "{go:?}");
+    assert!(calls_from(&ex, "sym:app/D.kt::Kind.go").is_empty(), "{:?}", ex.edges);
 }

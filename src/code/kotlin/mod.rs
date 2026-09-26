@@ -30,7 +30,7 @@ pub fn extract(resolver: &Resolver, rel: &str, source: &str) -> Extraction {
     let scope = scope(root, src);
     let declared = declarations::scan(root, rel, src, &mut ex);
     jvm::link(&declared.types, &declared.supers, index, &scope, rel, &mut ex);
-    let own = jvm::Own { rel, types: &declared.types, members: &declared.members, supers: &declared.supers, index, scope: &scope };
+    let own = jvm::Own { rel, types: &declared.types, members: &declared.members, supers: &declared.supers, shapes: &declared.shapes, index, scope: &scope };
     calls::scan(root, &calls::Ctx { own, src, d: &declared }, &mut ex);
     ex
 }
