@@ -128,6 +128,10 @@ risk: MEDIUM — 3 direct, 3 total, 3 files
 ```
 
 `--down` walks the other way; `trace <from> <to>` is the shortest chain between two symbols.
+An identifier handed to a call — `rows.map(feedWire)`, `register(SESSION_COOKIE)` — is a `Calls`
+edge with context `arg`: the caller breaks when it changes, so `impact` counts it as a caller, but
+nothing proves it is called, so `--down` and `explain` print it as `Passes` and `trace` marks the
+step `passes`. An owner that both passes and calls a target has one edge, the call.
 What the graph cannot prove it does not list: a call through a chained expression, a
 destructured method, a callback parameter or a global has no edge, so confirm a "nothing uses
 this" with `rg -l` before deleting. A target the graph knows only by name — a member of an

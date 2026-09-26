@@ -27,7 +27,8 @@ pub struct Entry { pub rel: String, pub kind: FileKind, pub hash: String, pub st
 /// leaves behind when a file it had to read would not open — neither store was read whole, and
 /// `0` is stale against every generation there is or will be.
 /// 3: a call on a helper's return value (#91), a JSX element (#93) and a function passed as an
-/// argument (#98) are calls, and a tsconfig alias whose glob holds `/*` resolves (#97).
+/// argument (#98) are calls, the last with context `arg` (#104), and a tsconfig alias whose glob
+/// holds `/*` resolves (#97).
 pub const GRAMMAR: u32 = 3;
 
 #[derive(Debug, Default, Serialize, Deserialize)]

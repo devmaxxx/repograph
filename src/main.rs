@@ -916,9 +916,9 @@ fn run() -> anyhow::Result<()> {
             }
             match found {
                 Some(path) => {
-                    for (i, id) in path.iter().enumerate() {
+                    for (i, (id, passed)) in path.iter().enumerate() {
                         let at = graph.nodes.get(id).map(|n| format!("{}:{}", n.file, n.line)).unwrap_or_default();
-                        println!("{}{id}  {at}", if i == 0 { "" } else { "  → " });
+                        println!("{}{id}  {at}{}", if i == 0 { "" } else { "  → " }, if *passed { "  passes" } else { "" });
                     }
                     Ok(())
                 }
