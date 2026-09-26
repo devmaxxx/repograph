@@ -640,12 +640,13 @@ def _strip_markup_comments(line: str, closer: str | None) -> tuple[str, str | No
     return "".join(kept), closer
 
 
-def blank_razor(src: str) -> str:
+def blank_razor(src: str, markup: Callable[[str], str] = _razor_markup) -> str:
     """A Razor file line for line, as the names it holds.
 
     Each `@code`/`@functions` body becomes blanked C# inside one class `RAZOR_WRAPPER`; a directive
     naming a type stays whole; every other line is reduced to the component tags it renders. The
-    page's own text and HTML go, so a word in its copy is never a reference.
+    page's own text and HTML go, so a word in its copy is never a reference. `markup` rewrites each
+    markup line once its comments are gone; a reader that needs the tags themselves keeps the line.
     """
     lines = src.removeprefix("﻿").split("\n")
     out: list[str] = []
@@ -655,7 +656,7 @@ def blank_razor(src: str) -> str:
         lines[i], closer = _strip_markup_comments(lines[i], closer)
         m = None if closer else RAZOR_OPEN.match(lines[i])
         if not m:
-            out.append(_razor_markup(lines[i]))
+            out.append(markup(lines[i]))
             i += 1
             continue
         opener = i if m.group(1) else i + 1

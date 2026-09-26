@@ -31,6 +31,10 @@ CLIENT = "packages/crm-api-client-dotnet/"
 CLIENT_MAX = 2
 # The fewest files of each extension a `changes` case's diff must carry.
 CHANGES = {".cs": 8, ".razor": 3}
+# No brace nests inside an enum body, so its constants are everything up to the first `}`.
+ENUM_BODY = re.compile(r"\benum[ \t]+\w+[^{};]*\{([^{}]*)\}")
+ENUM_ATTRIBUTE = re.compile(r"\[[^\]]*\]")
+ENUM_CONSTANT = re.compile(r"^\s*([A-Za-z_]\w*)\s*(?:=|$)")
 NAMESPACE = re.compile(r"^[ \t]*@?(?:global[ \t]+)?(?:namespace|using)[ \t]+(?:static[ \t]+)?(?:\w+[ \t]*=[ \t]*)?([\w.]+)", re.M)
 
 
@@ -55,8 +59,10 @@ def git(repo: Path, *args: str) -> str:
 
 
 def tracked(repo: Path, suffixes: tuple[str, ...]) -> list[str]:
-    # A pathspec's `*` crosses `/`, so `apps/*.cs` is every C# file under `apps`.
-    return sorted(git(repo, "ls-files", "--", *[f"{r}/*{s}" for r in ROOTS for s in suffixes]).split())
+    """Every tracked file of `suffixes`, not only those under `ROOTS`: the truth counts references
+    across the whole tree, so a declaration anywhere in it can make a name ambiguous."""
+    # A pathspec's `*` crosses `/`, so `*.cs` is every C# file at any depth.
+    return sorted(git(repo, "ls-files", "--", *[f"*{s}" for s in suffixes]).split())
 
 
 def read(repo: Path, rel: str) -> str:
@@ -69,6 +75,14 @@ class Facts:
     members: set[str] = field(default_factory=set)
     segments: set[str] = field(default_factory=set)
     components: dict[str, list[str]] = field(default_factory=lambda: defaultdict(list))
+    # One key per declaration: `(file, line)`, or `(file, "partial")` for all the partial parts a
+    # file holds, since those are one type. A component's code-behind is keyed by its `.razor` file.
+    decls: dict[str, set[tuple[str, int | str]]] = field(default_factory=lambda: defaultdict(set))
+
+    def single(self, name: str) -> bool:
+        """Declared exactly once: nested namesakes or `Foo` beside `Foo<T>` in one file are two types
+        the word-based truth cannot tell apart."""
+        return len(self.owners(name)) == 1 and len(self.decls.get(name, ())) == 1
 
     def owners(self, name: str) -> set[str]:
         """The files declaring `name`, a component and its code-behind counted as one."""
@@ -81,23 +95,39 @@ def facts(repo: Path, files: list[str]) -> Facts:
     for rel in files:
         src = read(repo, rel)
         if rel.endswith(".razor") and not rel.endswith("_Imports.razor"):
-            f.components[Path(rel).name[: -len(".razor")]].append(rel)
+            name = Path(rel).name[: -len(".razor")]
+            f.components[name].append(rel)
+            f.decls[name].add((rel, "partial"))
         lines, found = T.declarations(rel, src)
         for line, name in found:
             m = T.CS_TYPE.match(lines[line - 1]) or T.CS_DELEGATE.match(lines[line - 1])
             if m and m.group("name") == name:
                 f.types[name].add(rel)
+                f.decls[name].add(declaration_key(rel, line, m))
             else:
                 f.members.add(name)
+        blanked = "\n".join(lines)
+        # The truth's C# reader yields no enum constants, yet `Kind.Open` spells `Open` as a word.
+        for body in ENUM_BODY.finditer(blanked):
+            for part in ENUM_ATTRIBUTE.sub("", body.group(1)).split(","):
+                if c := ENUM_CONSTANT.match(part):
+                    f.members.add(c.group(1))
         for m in NAMESPACE.finditer(T.blanked_source(rel, src) if rel.endswith(".cs") else src):
             f.segments.update(m.group(1).split("."))
     return f
 
 
+def declaration_key(rel: str, line: int, m: re.Match) -> tuple[str, int | str]:
+    if "kw" in m.groupdict() and re.search(r"\bpartial\b", m.string[: m.start("kw")]):
+        # A component's code-behind is another part of the component the `.razor` file declares.
+        return (rel[: -len(".cs")] if rel.endswith(".razor.cs") else rel, "partial")
+    return (rel, line)
+
+
 def clear(f: Facts, name: str) -> bool:
-    """A name whose every spelling is the declaration: one declaring file, never a member, never a
+    """A name whose every spelling is the declaration: declared once, never a member, never a
     namespace segment. Anything else makes the word-based truth count files that name something else."""
-    return len(f.owners(name)) == 1 and name not in f.members and name not in f.segments
+    return f.single(name) and name not in f.members and name not in f.segments
 
 
 def dotnet_refs(repo: Path, name: str, decl: str) -> list[str]:
@@ -134,8 +164,9 @@ def razor_impact(repo: Path, f: Facts, razor: list[str], count: int = RAZOR_IMPA
             break
         (decl,) = f.owners(name)
         tag = re.compile(rf"<{re.escape(name)}[\s/>]")
-        # Rendered by tag in at least two other components: the reference Razor adds to C#'s.
-        if sum(1 for r in razor if r != decl and tag.search(read(repo, r))) < 2:
+        # Rendered by tag in at least two other components: the reference Razor adds to C#'s. The
+        # markup keeps its tags but loses its comments, and code blocks lose their strings.
+        if sum(1 for r in razor if r != decl and tag.search(T.blank_razor(read(repo, r), markup=str))) < 2:
             continue
         t = tier(len(dotnet_refs(repo, name, decl)))
         if t is not None:
@@ -150,9 +181,9 @@ def traces(graph: dict, f: Facts, quota: dict[str, int] = TRACE) -> list[dict]:
     cases: list[dict] = []
     filled = dict.fromkeys(quota, 0)
     for src in sorted(edges, key=order):
-        owners = f.owners(src)
-        if len(owners) != 1:
+        if not f.single(src):
             continue
+        owners = f.owners(src)
         ext = ".razor" if next(iter(owners)).endswith(".razor") else ".cs"
         if filled[ext] >= quota[ext]:
             continue
@@ -169,7 +200,7 @@ def traces(graph: dict, f: Facts, quota: dict[str, int] = TRACE) -> list[dict]:
             if not path:
                 continue
             via = [edge.split(".")[0] for edge in path[1:-1]]
-            if all(len(f.owners(n)) == 1 for n in [dst, *via]):
+            if all(f.single(n) for n in [dst, *via]):
                 cases.append({"kind": "trace", "from": src, "to": dst, "expect": "path", "via": via, "lang": ext})
                 filled[ext] += 1
                 break
@@ -210,13 +241,19 @@ def select(repo: Path) -> tuple[list[dict], dict]:
     return cases, dict(sorted(counts.items()))
 
 
+def private(out: Path) -> bool:
+    """Whether `out` lies outside this repository, where the case files may name private code."""
+    root = Path(__file__).resolve().parents[2]
+    return out != root and root not in out.parents
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--repo", required=True)
     ap.add_argument("--out", required=True, help="a private directory; never under this repository")
     args = ap.parse_args()
     repo, out = Path(args.repo).resolve(), Path(args.out).resolve()
-    if Path(__file__).resolve().parents[2] in out.parents:
+    if not private(out):
         sys.exit("select_dotnet: --out is inside this repository, and the cases name private code")
     cases, counts = select(repo)
     truth = T.build(repo, [], cases)
