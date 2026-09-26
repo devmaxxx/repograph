@@ -40,7 +40,34 @@ pub(super) fn written_type(n: Node, src: &[u8]) -> Option<String> {
     (!parts.is_empty()).then(|| parts.join("."))
 }
 
+/// `object Keys { val TOKEN = 1 }` on one top-level line: the grammar reads an empty object
+/// literal, an infix call named `Keys` and a lambda holding the members. Returns the name and the
+/// node the members sit in.
+fn one_line_object(n: Node) -> Option<(Node, Node)> {
+    if n.kind() != "infix_expression" {
+        return None;
+    }
+    let parts = named(n);
+    let [literal, name, lambda] = parts.as_slice() else { return None };
+    let shaped = literal.kind() == "object_literal" && literal.named_child_count() == 0 && name.kind() == "simple_identifier" && lambda.kind() == "lambda_literal";
+    shaped.then(|| (*name, child(*lambda, "statements").unwrap_or(*lambda)))
+}
+
+/// A class, an object, or an object the grammar split as `one_line_object` reads it.
+fn is_type(n: Node) -> bool {
+    matches!(n.kind(), "class_declaration" | "object_declaration") || one_line_object(n).is_some()
+}
+
+/// The declarations a type's body holds. A nested one-line object's member comes back wrapped in
+/// an `ERROR`, and is still the member the file wrote.
+fn members_of(body: Node) -> Vec<Node> {
+    named(body).into_iter().flat_map(|m| if m.kind() == "ERROR" { named(m) } else { vec![m] }).collect()
+}
+
 fn name_node(n: Node) -> Option<Node> {
+    if let Some((name, _)) = one_line_object(n) {
+        return Some(name);
+    }
     match n.kind() {
         "class_declaration" | "object_declaration" | "type_alias" => child(n, "type_identifier"),
         // An extension's receiver sits before the name and is not part of it.
@@ -65,7 +92,7 @@ fn declare(n: Node, rel: &str, src: &[u8], parent: &str, owner: Option<&str>, ex
         // A caller writes `Outer.make()`, never `Outer.Companion.make()`, so a companion's members
         // take the class's own path and the id a call resolves to is the id declared.
         if let (Some(body), Some(_)) = (child(n, "class_body"), owner) {
-            for m in named(body) {
+            for m in members_of(body) {
                 declare(m, rel, src, parent, owner, ex, d);
             }
         }
@@ -88,7 +115,7 @@ fn declare(n: Node, rel: &str, src: &[u8], parent: &str, owner: Option<&str>, ex
             }
         }
     }
-    if !matches!(n.kind(), "class_declaration" | "object_declaration") {
+    if !is_type(n) {
         return;
     }
     d.types.insert(path.clone());
@@ -112,8 +139,9 @@ fn declare(n: Node, rel: &str, src: &[u8], parent: &str, owner: Option<&str>, ex
             }
         }
     }
-    if let Some(body) = child(n, "class_body").or_else(|| child(n, "enum_class_body")) {
-        for m in named(body) {
+    let body = one_line_object(n).map(|(_, members)| members).or_else(|| child(n, "class_body")).or_else(|| child(n, "enum_class_body"));
+    if let Some(body) = body {
+        for m in members_of(body) {
             declare(m, rel, src, &id, Some(&path), ex, d);
         }
     }

@@ -271,3 +271,12 @@ fn two_imports_binding_one_name_resolve_it_to_nothing() {
     let ex = repo.extract("app/X.kt");
     assert!(edges(&ex, EdgeKind::Extends).is_empty(), "{:?}", ex.edges);
 }
+
+#[test]
+fn a_one_line_object_declares_itself_and_its_members() {
+    let src = "package app\n\nobject Keys { fun token() = 1 }\n\nobject Names { val TOKEN = 1 }\n\nclass Outer {\n    object Inner { fun size() = 2 }\n}\n";
+    let ex = one("app/K.kt", src);
+    for id in ["sym:app/K.kt::Keys", "sym:app/K.kt::Keys.token", "sym:app/K.kt::Names", "sym:app/K.kt::Names.TOKEN", "sym:app/K.kt::Outer.Inner", "sym:app/K.kt::Outer.Inner.size"] {
+        assert!(ids(&ex).contains(&id), "{id} missing from {:?}", ids(&ex));
+    }
+}
