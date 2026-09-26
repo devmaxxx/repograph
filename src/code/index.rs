@@ -70,8 +70,7 @@ pub fn header_for(lang: Lang, rel: &str, source: &str) -> Option<Header> {
         },
         Family::Jvm => match lang {
             Lang::Kotlin => Some(crate::code::kotlin::header(source)),
-            // Task 3 turns this into `crate::code::java::header(source)`.
-            Lang::Java => Some(Header::default()),
+            Lang::Java => Some(crate::code::java::header(source)),
             // Reached only by a variant `of` cannot return yet for this family; see `Lang::family`.
             #[allow(unreachable_patterns)]
             _ => unreachable!("{lang:?} has no JVM header arm: its plan has not landed"),
