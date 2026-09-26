@@ -279,7 +279,13 @@ pub fn render(answer: &Answer, graph: &Graph, opts: &Options) -> String {
 }
 
 pub(crate) fn resolve<'a>(graph: &'a Graph, needle: &str) -> Option<&'a crate::model::Node> {
-    if let Some(n) = graph.nodes.get(needle) { return Some(n); }
+    candidates(graph, needle).into_iter().next()
+}
+
+/// Every node a name could mean, best first: the exact id, else ids ending in `::name`, else
+/// labels equal to it ignoring case.
+fn candidates<'a>(graph: &'a Graph, needle: &str) -> Vec<&'a crate::model::Node> {
+    if let Some(n) = graph.nodes.get(needle) { return vec![n]; }
     let tail = format!("::{needle}");
     let mut c: Vec<&crate::model::Node> = graph.nodes.values().filter(|n| n.id.ends_with(&tail)).collect();
     if c.is_empty() {
@@ -287,7 +293,18 @@ pub(crate) fn resolve<'a>(graph: &'a Graph, needle: &str) -> Option<&'a crate::m
         c = graph.nodes.values().filter(|n| n.label.to_lowercase() == lower).collect();
     }
     c.sort_by(|a, b| a.id.cmp(&b.id));
-    c.into_iter().next()
+    c
+}
+
+/// `resolve` for the questions only code can answer — `impact` and `trace`. A PRD entity and the
+/// table or class it became share a label, and by id the entity sorts first; it has no callers,
+/// so taking it answered LOW for a name that code calls. The other candidates come back with the
+/// pick, so a caller can say which name it did not take.
+pub(crate) fn resolve_code<'a>(graph: &'a Graph, needle: &str) -> Option<(&'a crate::model::Node, Vec<&'a crate::model::Node>)> {
+    let mut c = candidates(graph, needle);
+    c.sort_by_key(|n| !matches!(n.kind, NodeKind::Symbol | NodeKind::File));
+    let mut it = c.into_iter();
+    Some((it.next()?, it.collect()))
 }
 
 pub fn explain(graph: &Graph, needle: &str) -> Option<String> {
@@ -548,6 +565,19 @@ mod tests {
         let g = file_hub_only_graph();
         let a = ask(&g, &lex(&g, &Questions::default()), None, None, &["FR-X".to_string()], &opts());
         assert!(a.expanded.is_empty());
+    }
+
+    #[test]
+    fn a_label_shared_by_an_entity_and_code_resolves_to_the_code_for_impact() {
+        let mut g = Graph::default();
+        let mut e = Extraction::default();
+        e.node(NodeKind::Entity, "entity:CancellationPolicy", "CancellationPolicy", "", "docs/06.md", 385);
+        e.node(NodeKind::Symbol, "sym:db/scheduling.ts::cancellationPolicy", "cancellationPolicy", "", "db/scheduling.ts", 186);
+        g.apply(e);
+        assert_eq!(resolve(&g, "CancellationPolicy").unwrap().id, "entity:CancellationPolicy", "explain keeps the document");
+        let (pick, rest) = resolve_code(&g, "CancellationPolicy").unwrap();
+        assert_eq!(pick.id, "sym:db/scheduling.ts::cancellationPolicy");
+        assert_eq!(rest.iter().map(|n| n.id.as_str()).collect::<Vec<_>>(), ["entity:CancellationPolicy"]);
     }
 
     #[test]

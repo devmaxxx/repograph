@@ -665,6 +665,17 @@ fn switch_model(repo: &std::path::Path, cfg: &config::Config, id: &str, no_embed
     embed_opened(repo, id, &mut emb)
 }
 
+/// The node `impact` or `trace` walks from. The names it passed over go to stderr, so a LOW
+/// that came from the wrong node is visible without changing what stdout parses to.
+fn code_node<'a>(graph: &'a model::Graph, name: &str) -> anyhow::Result<&'a model::Node> {
+    let Some((pick, rest)) = query::resolve_code(graph, name) else { anyhow::bail!("no node matches {name}") };
+    if !rest.is_empty() {
+        let ids: Vec<&str> = rest.iter().map(|n| n.id.as_str()).collect();
+        eprintln!("{name}: took {}; also matches {}", pick.id, ids.join(", "));
+    }
+    Ok(pick)
+}
+
 /// The graph an answer is read from: refreshed against the tree unless `--stale`, and, when
 /// the store cannot be written, the stored one with a warning — the same contract as `ask`.
 fn graph_for(repo: &std::path::Path, cfg: &config::Config, stale: bool) -> anyhow::Result<model::Graph> {
@@ -855,15 +866,15 @@ fn run() -> anyhow::Result<()> {
         }
         Cmd::Impact { symbol, depth, down, json, stale } => {
             let graph = graph_for(&repo, &load_cfg()?, stale)?;
-            let Some(root) = query::resolve(&graph, &symbol) else { anyhow::bail!("no node matches {symbol}") };
+            let root = code_node(&graph, &symbol)?;
             let (imp, direction) = if down { (impact::downstream(&graph, &root.id, depth), "downstream") } else { (impact::upstream(&graph, &root.id, depth), "upstream") };
             print!("{}", if json { impact::render_json(&graph, &imp, direction) } else { impact::render(&graph, &imp, direction) });
             Ok(())
         }
         Cmd::Trace { from, to, depth, json, stale } => {
             let graph = graph_for(&repo, &load_cfg()?, stale)?;
-            let Some(a) = query::resolve(&graph, &from) else { anyhow::bail!("no node matches {from}") };
-            let Some(b) = query::resolve(&graph, &to) else { anyhow::bail!("no node matches {to}") };
+            let a = code_node(&graph, &from)?;
+            let b = code_node(&graph, &to)?;
             let found = impact::trace(&graph, &a.id, &b.id, depth);
             // No path within the depth is an answer to the question that was asked, so the JSON
             // form says so and exits 0 where the text form exits 3. A caller parsing JSON should
