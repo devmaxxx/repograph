@@ -1,0 +1,130 @@
+//! Kotlin's declarations: symbols, `Declares`, visibility, and supertypes as written.
+
+use std::collections::{BTreeMap, BTreeSet};
+
+use tree_sitter::Node;
+
+use super::COMMENTS;
+use crate::code::jvm::{self, child, named, span, text};
+use crate::model::{EdgeKind, Extraction, NodeKind};
+
+/// What one Kotlin file declares, kept for the passes that resolve names after this one.
+#[derive(Debug, Default)]
+pub struct Declared {
+    /// Top-level names, private ones included: the index and `widen` both read exactly these.
+    pub top: BTreeSet<String>,
+    /// Every type path declared here (`Outer`, `Outer.Inner`), so a name resolves in-file first.
+    pub types: BTreeSet<String>,
+    /// Every member id declared here, constructor properties included.
+    pub members: BTreeSet<String>,
+    /// Per type path, each property's declared type as written (`Store`, `a.b.Store`).
+    pub fields: BTreeMap<String, BTreeMap<String, String>>,
+    /// (declaring type's id, supertype as written).
+    pub supers: Vec<(String, String)>,
+}
+
+/// Kotlin is public by default, and `internal` crosses files inside a module, so only these two
+/// keep a name to its file.
+fn hidden(n: Node, src: &[u8]) -> bool {
+    child(n, "modifiers").is_some_and(|m| {
+        named(m).into_iter().any(|c| c.kind() == "visibility_modifier" && matches!(text(c, src), "private" | "protected"))
+    })
+}
+
+/// The type a property, parameter or supertype is written with. `Store?` is `Store`, `a.b.Store<T>`
+/// is `a.b.Store`; a function type names no receiver a call could go through, so it is none.
+pub(super) fn written_type(n: Node, src: &[u8]) -> Option<String> {
+    let t = named(n).into_iter().find(|c| matches!(c.kind(), "user_type" | "nullable_type"))?;
+    let user = if t.kind() == "nullable_type" { child(t, "user_type")? } else { t };
+    let parts: Vec<&str> = named(user).into_iter().filter(|c| c.kind() == "type_identifier").map(|c| text(c, src)).collect();
+    (!parts.is_empty()).then(|| parts.join("."))
+}
+
+fn name_node(n: Node) -> Option<Node> {
+    match n.kind() {
+        "class_declaration" | "object_declaration" | "type_alias" => child(n, "type_identifier"),
+        // An extension's receiver sits before the name and is not part of it.
+        "function_declaration" => child(n, "simple_identifier"),
+        "property_declaration" => child(n, "variable_declaration").and_then(|v| child(v, "simple_identifier")),
+        _ => None,
+    }
+}
+
+/// Writes every symbol `root` declares into `ex`, and returns what the passes after it resolve against.
+pub fn scan(root: Node, rel: &str, src: &[u8], ex: &mut Extraction) -> Declared {
+    let file_id = format!("file:{rel}");
+    let mut d = Declared::default();
+    for n in named(root) {
+        declare(n, rel, src, &file_id, None, ex, &mut d);
+    }
+    d
+}
+
+fn declare(n: Node, rel: &str, src: &[u8], parent: &str, owner: Option<&str>, ex: &mut Extraction, d: &mut Declared) {
+    if n.kind() == "companion_object" {
+        // A caller writes `Outer.make()`, never `Outer.Companion.make()`, so a companion's members
+        // take the class's own path and the id a call resolves to is the id declared.
+        if let (Some(body), Some(_)) = (child(n, "class_body"), owner) {
+            for m in named(body) {
+                declare(m, rel, src, parent, owner, ex, d);
+            }
+        }
+        return;
+    }
+    let Some(name_at) = name_node(n) else { return };
+    let name = text(name_at, src).to_string();
+    let path = owner.map_or_else(|| name.clone(), |o| format!("{o}.{name}"));
+    let id = format!("sym:{rel}::{path}");
+    ex.node_span(NodeKind::Symbol, &id, &path, &jvm::body(n, name_at, src, COMMENTS), rel, span(n));
+    ex.edge(parent, &id, EdgeKind::Declares, if hidden(n, src) { "" } else { "export" }, rel);
+    match owner {
+        None => {
+            d.top.insert(name.clone());
+        }
+        Some(o) => {
+            d.members.insert(id.clone());
+            if let Some(t) = child(n, "variable_declaration").and_then(|v| written_type(v, src)) {
+                d.fields.entry(o.to_string()).or_default().insert(name.clone(), t);
+            }
+        }
+    }
+    if !matches!(n.kind(), "class_declaration" | "object_declaration") {
+        return;
+    }
+    d.types.insert(path.clone());
+    for spec in named(n).into_iter().filter(|c| c.kind() == "delegation_specifier") {
+        let target = child(spec, "constructor_invocation").unwrap_or(spec);
+        if let Some(t) = written_type(target, src) {
+            d.supers.push((id.clone(), t));
+        }
+    }
+    if let Some(ctor) = child(n, "primary_constructor") {
+        // Only `val` and `var` parameters are properties; a plain parameter lives in the constructor.
+        for p in named(ctor).into_iter().filter(|p| p.kind() == "class_parameter" && child(*p, "binding_pattern_kind").is_some()) {
+            let Some(pname_at) = child(p, "simple_identifier") else { continue };
+            let pname = text(pname_at, src).to_string();
+            let pid = format!("{id}.{pname}");
+            ex.node_span(NodeKind::Symbol, &pid, &format!("{path}.{pname}"), &jvm::body(p, pname_at, src, COMMENTS), rel, span(p));
+            ex.edge(&id, &pid, EdgeKind::Declares, if hidden(p, src) { "" } else { "export" }, rel);
+            d.members.insert(pid);
+            if let Some(t) = written_type(p, src) {
+                d.fields.entry(path.clone()).or_default().insert(pname, t);
+            }
+        }
+    }
+    if let Some(body) = child(n, "class_body").or_else(|| child(n, "enum_class_body")) {
+        for m in named(body) {
+            declare(m, rel, src, &id, Some(&path), ex, d);
+        }
+    }
+}
+
+/// Supertypes this file declares itself. Task 4 hands the rest to the JVM index.
+pub fn link(d: &Declared, rel: &str, ex: &mut Extraction) {
+    for (from, written) in &d.supers {
+        // A class's header sees the types around it, not its own nested ones.
+        if let Some(path) = jvm::in_file(&d.types, jvm::outer(jvm::path_of(from)), written) {
+            ex.edge(from, &format!("sym:{rel}::{path}"), EdgeKind::Extends, "", rel);
+        }
+    }
+}
