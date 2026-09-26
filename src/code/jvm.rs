@@ -232,6 +232,106 @@ pub(crate) fn link(types: &BTreeSet<String>, supers: &[(String, String)], index:
     }
 }
 
+/// Requirement and ADR ids a comment or a string cites, from the declaration holding it, with the
+/// contexts TypeScript's pass writes, so `ask` reads a citation the same in every language.
+pub(crate) fn cite(n: Node, owner: &str, context: &str, rel: &str, src: &[u8], ex: &mut Extraction) {
+    for hit in crate::ids::generic().find_all(text(n, src)) {
+        ex.edge(owner, &hit.id, EdgeKind::References, context, rel);
+    }
+}
+
+/// `sym:<rel>::<path>` split into its file and its path.
+pub(crate) fn split_id(id: &str) -> Option<(&str, &str)> {
+    id.strip_prefix("sym:")?.split_once("::")
+}
+
+/// One JVM file as the passes after declarations read it: what it declares, and what it sees.
+pub(crate) struct Own<'a> {
+    pub rel: &'a str,
+    pub types: &'a BTreeSet<String>,
+    pub members: &'a BTreeSet<String>,
+    pub supers: &'a [(String, String)],
+    pub index: &'a QualifiedIndex,
+    pub scope: &'a Scope,
+}
+
+impl Own<'_> {
+    /// What an unqualified `name` inside the type at `at` binds to among members: at each type
+    /// from the innermost outward, its own member, then one its supertypes declare. `None` when no
+    /// enclosing type holds it, so a top-level or imported name may; an empty list when one does
+    /// but not provably one declaration — two supertypes each declaring it.
+    pub(crate) fn member(&self, at: &str, name: &str) -> Option<Vec<String>> {
+        let mut scope = at;
+        while !scope.is_empty() {
+            let id = format!("sym:{}::{scope}.{name}", self.rel);
+            if self.members.contains(&id) {
+                return Some(vec![id]);
+            }
+            let up = self.inherited(scope, name, &mut BTreeSet::new());
+            if !up.is_empty() {
+                return Some(one_path(up));
+            }
+            scope = outer(scope);
+        }
+        None
+    }
+
+    /// `name` on the types `ids`: each must declare it itself, or through supertypes this file
+    /// declares. A type in another file is read through the index, which holds no supertypes, so
+    /// an inherited member there is a missing edge rather than a guess.
+    pub(crate) fn on_types(&self, ids: &[String], name: &str) -> Vec<String> {
+        let mut out = Vec::new();
+        for id in ids {
+            let Some((rel, path)) = split_id(id) else { continue };
+            if rel != self.rel {
+                if self.index.declares(rel, &format!("{path}.{name}")) {
+                    out.push(format!("{id}.{name}"));
+                }
+            } else if self.members.contains(&format!("{id}.{name}")) {
+                out.push(format!("{id}.{name}"));
+            } else {
+                out.extend(one_path(self.inherited(path, name, &mut BTreeSet::new())));
+            }
+        }
+        out
+    }
+
+    /// A member `name` the supertypes of this file's type at `path` declare, nearest first.
+    fn inherited(&self, path: &str, name: &str, seen: &mut BTreeSet<String>) -> Vec<String> {
+        if !seen.insert(path.to_string()) {
+            return Vec::new();
+        }
+        let from = format!("sym:{}::{path}", self.rel);
+        let mut out = Vec::new();
+        for (_, written) in self.supers.iter().filter(|(f, _)| *f == from) {
+            // A type's header sees the types around it, not its own nested ones.
+            for t in type_ids(self.types, self.index, self.scope, self.rel, outer(path), written) {
+                let Some((rel, tpath)) = split_id(&t) else { continue };
+                let member = format!("{t}.{name}");
+                if rel == self.rel {
+                    if self.members.contains(&member) {
+                        out.push(member);
+                    } else {
+                        out.extend(self.inherited(tpath, name, seen));
+                    }
+                } else if self.index.declares(rel, &format!("{tpath}.{name}")) {
+                    out.push(member);
+                }
+            }
+        }
+        out
+    }
+}
+
+/// Every id in `ids` when they share one path — an `expect` and its `actual`s — and none when two
+/// paths declare the name, which only an overload resolution this file does not run could settle.
+fn one_path(mut ids: Vec<String>) -> Vec<String> {
+    ids.sort();
+    ids.dedup();
+    let paths: BTreeSet<&str> = ids.iter().filter_map(|id| split_id(id).map(|(_, p)| p)).collect();
+    if paths.len() > 1 { Vec::new() } else { ids }
+}
+
 #[cfg(test)]
 pub(crate) mod fixture {
     use crate::code::imports::Resolver;
@@ -304,6 +404,16 @@ mod cross {
         let ex = repo.extract("shop/Job.java");
         assert!(edges(&ex, EdgeKind::Imports).contains(&("file:shop/Job.java", "file:app/sync/Wipe.kt", "Wipe")), "{:?}", ex.edges);
         assert!(edges(&ex, EdgeKind::Extends).contains(&("sym:shop/Job.java::Job", "sym:app/sync/Wipe.kt::Wipe", "")), "{:?}", ex.edges);
+    }
+
+    #[test]
+    fn a_kotlin_call_reaches_a_java_method_through_a_typed_property() {
+        let repo = Repo::new(&[
+            ("shop/orders/OrderService.java", "package shop.orders;\n\npublic class OrderService {\n    public void place(int n) {}\n}\n"),
+            ("app/Checkout.kt", "package app\n\nimport shop.orders.OrderService\n\nclass Checkout(private val orders: OrderService) {\n    fun pay() { orders.place(1) }\n}\n"),
+        ]);
+        let ex = repo.extract("app/Checkout.kt");
+        assert!(edges(&ex, EdgeKind::Calls).contains(&("sym:app/Checkout.kt::Checkout.pay", "sym:shop/orders/OrderService.java::OrderService.place", "")), "{:?}", ex.edges);
     }
 
     /// Pins the contract's empty-scope rule: a file with no package line is indexed by bare name.

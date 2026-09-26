@@ -17,7 +17,8 @@ pub struct Declared {
     pub types: BTreeSet<String>,
     /// Every member id declared here, constructor properties included.
     pub members: BTreeSet<String>,
-    /// Per type path, each property's declared type as written (`Store`, `a.b.Store`).
+    /// Per type path, each property's declared type as written (`Store`, `a.b.Store`); `""` holds
+    /// the top-level properties.
     pub fields: BTreeMap<String, BTreeMap<String, String>>,
     /// (declaring type's id, supertype as written).
     pub supers: Vec<(String, String)>,
@@ -43,7 +44,7 @@ pub(super) fn written_type(n: Node, src: &[u8]) -> Option<String> {
 /// `object Keys { val TOKEN = 1 }` on one top-level line: the grammar reads an empty object
 /// literal, an infix call named `Keys` and a lambda holding the members. Returns the name and the
 /// node the members sit in.
-fn one_line_object(n: Node) -> Option<(Node, Node)> {
+pub(super) fn one_line_object(n: Node) -> Option<(Node, Node)> {
     if n.kind() != "infix_expression" {
         return None;
     }
@@ -54,14 +55,32 @@ fn one_line_object(n: Node) -> Option<(Node, Node)> {
 }
 
 /// A class, an object, or an object the grammar split as `one_line_object` reads it.
-fn is_type(n: Node) -> bool {
+pub(super) fn is_type(n: Node) -> bool {
     matches!(n.kind(), "class_declaration" | "object_declaration") || one_line_object(n).is_some()
 }
 
 /// The declarations a type's body holds. A nested one-line object's member comes back wrapped in
 /// an `ERROR`, and is still the member the file wrote.
-fn members_of(body: Node) -> Vec<Node> {
+pub(super) fn members_of(body: Node) -> Vec<Node> {
     named(body).into_iter().flat_map(|m| if m.kind() == "ERROR" { named(m) } else { vec![m] }).collect()
+}
+
+/// The node declaring `n` as a member: a type's declaration, a companion, or the file. `None` for
+/// a statement inside a function, a lambda or an initializer.
+pub(super) fn holder(n: Node) -> Option<Node> {
+    let mut p = n.parent()?;
+    if p.kind() == "ERROR" && p.parent().is_some_and(|b| matches!(b.kind(), "class_body" | "enum_class_body")) {
+        p = p.parent()?;
+    }
+    match p.kind() {
+        "source_file" => Some(p),
+        "class_body" | "enum_class_body" => p.parent(),
+        "statements" | "lambda_literal" => {
+            let lambda = if p.kind() == "statements" { p.parent()? } else { p };
+            lambda.parent().filter(|o| one_line_object(*o).is_some())
+        }
+        _ => None,
+    }
 }
 
 fn name_node(n: Node) -> Option<Node> {
@@ -108,12 +127,12 @@ fn declare(n: Node, rel: &str, src: &[u8], parent: &str, owner: Option<&str>, ex
         None => {
             d.top.insert(name.clone());
         }
-        Some(o) => {
+        Some(_) => {
             d.members.insert(id.clone());
-            if let Some(t) = child(n, "variable_declaration").and_then(|v| written_type(v, src)) {
-                d.fields.entry(o.to_string()).or_default().insert(name.clone(), t);
-            }
         }
+    }
+    if let Some(t) = child(n, "variable_declaration").and_then(|v| written_type(v, src)) {
+        d.fields.entry(owner.unwrap_or_default().to_string()).or_default().insert(name.clone(), t);
     }
     if !is_type(n) {
         return;

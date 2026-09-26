@@ -272,11 +272,212 @@ fn two_imports_binding_one_name_resolve_it_to_nothing() {
     assert!(edges(&ex, EdgeKind::Extends).is_empty(), "{:?}", ex.edges);
 }
 
+const WIPE: &str = "package app
+
+class ReplicaFiles {
+    fun delete() {}
+}
+
+object Registry {
+    fun reset() {}
+}
+
+fun helper(n: Int) = n
+
+class RemoteWipeHandler(private val files: ReplicaFiles) {
+    fun execute() {
+        files.delete()
+        this.files.delete()
+        Registry.reset()
+        helper(1)
+        execute()
+    }
+
+    fun locals(given: ReplicaFiles) {
+        val typed: ReplicaFiles = given
+        val built = ReplicaFiles()
+        given.delete()
+        typed.delete()
+        built.delete()
+        fun inner() { helper(2) }
+    }
+
+    companion object {
+        fun make(): RemoteWipeHandler = TODO()
+    }
+}
+
+class Caller {
+    fun go() { RemoteWipeHandler.make() }
+}
+";
+
+fn calls_from<'a>(ex: &'a crate::model::Extraction, from: &str) -> Vec<&'a str> {
+    edges(ex, EdgeKind::Calls).into_iter().filter(|(s, _, _)| *s == from).map(|(_, t, _)| t).collect()
+}
+
+#[test]
+fn calls_through_a_typed_property_an_object_and_a_top_level_function_are_edges() {
+    let ex = one("app/Wipe.kt", WIPE);
+    let got = calls_from(&ex, "sym:app/Wipe.kt::RemoteWipeHandler.execute");
+    for to in ["sym:app/Wipe.kt::ReplicaFiles.delete", "sym:app/Wipe.kt::Registry.reset", "sym:app/Wipe.kt::helper"] {
+        assert!(got.contains(&to), "{to} missing from {got:?}");
+    }
+    assert!(!got.contains(&"sym:app/Wipe.kt::RemoteWipeHandler.execute"), "a recursive call is dropped: {got:?}");
+    assert!(calls_from(&ex, "sym:app/Wipe.kt::Caller.go").contains(&"sym:app/Wipe.kt::RemoteWipeHandler.make"), "{:?}", ex.edges);
+}
+
+#[test]
+fn a_parameter_a_typed_local_and_a_constructed_local_carry_their_type() {
+    let ex = one("app/Wipe.kt", WIPE);
+    let got = calls_from(&ex, "sym:app/Wipe.kt::RemoteWipeHandler.locals");
+    assert!(got.contains(&"sym:app/Wipe.kt::ReplicaFiles.delete"), "{got:?}");
+    assert!(got.contains(&"sym:app/Wipe.kt::ReplicaFiles"), "constructing a class is a call to it: {got:?}");
+    // A local `fun` is not a symbol, so its call belongs to the function it sits in.
+    assert!(got.contains(&"sym:app/Wipe.kt::helper"), "{got:?}");
+    assert!(!edges(&ex, EdgeKind::Calls).iter().any(|(s, _, _)| s.ends_with("inner")), "{:?}", ex.edges);
+}
+
+#[test]
+fn calls_resolve_through_an_import_a_star_and_every_actual() {
+    let repo = Repo::new(&[
+        ("network/Tokens.kt", "package pl.crm.network\n\nclass SessionTokens {\n    fun read(): String = \"\"\n}\n\nfun tokenOf(): SessionTokens = SessionTokens()\n"),
+        ("common/Files.kt", "package pl.crm.storage\n\nexpect class ReplicaFiles {\n    fun delete()\n}\n"),
+        ("jvm/Files.jvm.kt", "package pl.crm.storage\n\nactual class ReplicaFiles {\n    actual fun delete() {}\n}\n"),
+        ("sync/Use.kt", "package pl.crm.sync\n\nimport pl.crm.network.SessionTokens\nimport pl.crm.network.tokenOf\nimport pl.crm.storage.*\n\nclass Use(private val t: SessionTokens, private val files: ReplicaFiles) {\n    fun go() {\n        t.read()\n        tokenOf()\n        files.delete()\n    }\n}\n"),
+    ]);
+    let ex = repo.extract("sync/Use.kt");
+    let got = calls_from(&ex, "sym:sync/Use.kt::Use.go");
+    for to in [
+        "sym:network/Tokens.kt::SessionTokens.read",
+        "sym:network/Tokens.kt::tokenOf",
+        "sym:common/Files.kt::ReplicaFiles.delete",
+        "sym:jvm/Files.jvm.kt::ReplicaFiles.delete",
+    ] {
+        assert!(got.contains(&to), "{to} missing from {got:?}");
+    }
+}
+
+#[test]
+fn a_requirement_cited_in_a_comment_or_a_string_is_a_reference_from_its_declaration() {
+    let src = "// ADR-001 governs this file\npackage app\n\nobject Jcs {\n    // FR-VIS-47: canonical form before signing\n    fun canon() {\n        val name = \"ADR-022\"\n    }\n}\n";
+    let ex = one("app/Jcs.kt", src);
+    let refs = edges(&ex, EdgeKind::References);
+    assert!(refs.iter().any(|(s, t, c)| *s == "file:app/Jcs.kt" && t.contains("ADR-001") && *c == "comment"), "{refs:?}");
+    assert!(refs.iter().any(|(s, t, c)| *s == "sym:app/Jcs.kt::Jcs" && t.contains("FR-VIS-47") && *c == "comment"), "{refs:?}");
+    assert!(refs.iter().any(|(s, t, c)| *s == "sym:app/Jcs.kt::Jcs.canon" && t.contains("ADR-022") && *c == "string"), "{refs:?}");
+}
+
+#[test]
+fn an_id_in_a_string_template_is_cited_once_and_its_hole_is_code() {
+    let src = "package app\n\nfun helper() = \"\"\n\nfun canon() {\n    val s = \"ADR-031 ${helper()} and ${\"ADR-032\"}\"\n}\n";
+    let ex = one("app/T.kt", src);
+    let refs = edges(&ex, EdgeKind::References);
+    for id in ["ADR-031", "ADR-032"] {
+        assert_eq!(refs.iter().filter(|(_, t, _)| t.contains(id)).count(), 1, "{id}: {refs:?}");
+    }
+    assert!(calls_from(&ex, "sym:app/T.kt::canon").contains(&"sym:app/T.kt::helper"), "{:?}", ex.edges);
+}
+
 #[test]
 fn a_one_line_object_declares_itself_and_its_members() {
-    let src = "package app\n\nobject Keys { fun token() = 1 }\n\nobject Names { val TOKEN = 1 }\n\nclass Outer {\n    object Inner { fun size() = 2 }\n}\n";
+    let src = "package app\n\nobject Keys { fun token() = 1 }\n\nobject Names { val TOKEN = 1 }\n\nclass Outer {\n    object Inner { fun size() = 2 }\n    fun go() {\n        Keys.token()\n        Inner.size()\n    }\n}\n";
     let ex = one("app/K.kt", src);
     for id in ["sym:app/K.kt::Keys", "sym:app/K.kt::Keys.token", "sym:app/K.kt::Names", "sym:app/K.kt::Names.TOKEN", "sym:app/K.kt::Outer.Inner", "sym:app/K.kt::Outer.Inner.size"] {
         assert!(ids(&ex).contains(&id), "{id} missing from {:?}", ids(&ex));
     }
+    let got = calls_from(&ex, "sym:app/K.kt::Outer.go");
+    assert!(got.contains(&"sym:app/K.kt::Keys.token"), "{got:?}");
+    assert!(got.contains(&"sym:app/K.kt::Outer.Inner.size"), "{got:?}");
+}
+
+/// Every name below is bound by something the file reads no type for, and each hides a property,
+/// a type or a function that would resolve: a call through it is a guess, so it writes nothing.
+const SHADOWS: &str = "package app
+
+class ReplicaFiles {
+    fun delete() {}
+}
+
+object Registry {
+    fun reset() {}
+}
+
+fun helper(n: Int) = n
+
+class Handler(private val files: ReplicaFiles, private val it: ReplicaFiles) {
+    fun lambdaParameter(all: List<Any>) { all.forEach { files -> files.delete() } }
+    fun implicitIt(all: List<Any>) { all.forEach { it.delete() } }
+    fun destructured(pair: Any) {
+        val (files, other) = pair
+        files.delete()
+    }
+    fun forVariable(all: List<Any>) { for (files in all) { files.delete() } }
+    fun whenSubject() {
+        when (val files = pick()) {
+            else -> files.delete()
+        }
+    }
+    fun localOverType(other: Any) {
+        val Registry = other
+        Registry.reset()
+    }
+    fun parameterOverType(Registry: Any) { Registry.reset() }
+    fun localOverFunction() {
+        val helper = { n: Int -> n }
+        helper(1)
+    }
+    fun parameterOverFunction(helper: (Int) -> Int) { helper(1) }
+    fun caught() {
+        try {} catch (files: Exception) { files.delete() }
+    }
+    fun anonymous() {
+        val o = object {
+            val files = Any()
+            fun helper(n: Int) = n
+            fun run() {
+                helper(1)
+                files.delete()
+                this.files.delete()
+            }
+        }
+    }
+    fun unknownMember() { files.missing() }
+    fun pick(): Any = files
+}
+";
+
+#[test]
+fn a_name_a_lambda_a_loop_a_when_or_a_destructuring_binds_hides_what_it_shadows() {
+    let ex = one("app/S.kt", SHADOWS);
+    let calls = edges(&ex, EdgeKind::Calls);
+    let wrong: Vec<_> = calls.iter().filter(|(_, t, _)| !t.ends_with("Handler.pick")).collect();
+    assert!(wrong.is_empty(), "{wrong:?}");
+    assert!(!calls.iter().any(|(_, t, _)| t.ends_with(".missing")), "an undeclared member is no edge: {calls:?}");
+}
+
+#[test]
+fn a_lambda_parameter_ends_with_its_lambda() {
+    let src = "package app\n\nclass ReplicaFiles {\n    fun delete() {}\n}\n\nclass Handler(private val files: ReplicaFiles) {\n    fun go(all: List<Any>) {\n        all.forEach { files -> files.delete() }\n        files.delete()\n    }\n}\n";
+    let ex = one("app/L.kt", src);
+    let got = calls_from(&ex, "sym:app/L.kt::Handler.go");
+    assert_eq!(got.iter().filter(|t| **t == "sym:app/L.kt::ReplicaFiles.delete").count(), 1, "{got:?}");
+}
+
+#[test]
+fn an_inherited_member_hides_a_top_level_function_of_its_name() {
+    let src = "package app\n\nfun helper(n: Int) = n\n\nopen class Base {\n    fun helper(n: Int) = n\n}\n\nclass Sub : Base() {\n    fun go() { helper(1) }\n}\n";
+    let ex = one("app/I.kt", src);
+    let got = calls_from(&ex, "sym:app/I.kt::Sub.go");
+    assert_eq!(got, vec!["sym:app/I.kt::Base.helper"], "{:?}", ex.edges);
+}
+
+#[test]
+fn a_name_both_the_file_and_an_import_declare_is_no_edge() {
+    let repo = Repo::new(&[
+        ("lib/H.kt", "package lib\n\nfun helper(s: String) = s\n"),
+        ("app/U.kt", "package app\n\nimport lib.helper\n\nfun helper(n: Int) = n\n\nfun go() { helper(1) }\n"),
+    ]);
+    let ex = repo.extract("app/U.kt");
+    assert!(calls_from(&ex, "sym:app/U.kt::go").is_empty(), "{:?}", ex.edges);
 }
