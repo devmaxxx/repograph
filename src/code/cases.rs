@@ -665,6 +665,23 @@ fn a_call_through_a_typed_field_targets_the_field_type_member() {
 }
 
 #[test]
+fn a_call_on_a_helpers_return_value_targets_the_returned_class_member() {
+    let repo = Repo::new(&[("s.ts", "export class PoliciesService { cancellationPolicy() {} }\n")]);
+    let annotated = repo.extract(
+        "a.spec.ts",
+        "import { PoliciesService } from './s';\nconst service = (): PoliciesService => make();\nit('x', async () => { await service().cancellationPolicy(); });\n",
+    );
+    assert!(calls(&annotated).contains(&("file:a.spec.ts", "sym:s.ts::PoliciesService.cancellationPolicy")));
+    let built = repo.extract(
+        "b.spec.ts",
+        "import { PoliciesService } from './s';\nfunction service() { return x; }\nconst other = () => new PoliciesService();\nit('x', () => other().cancellationPolicy());\nit('y', () => service().cancellationPolicy());\n",
+    );
+    let got = calls(&built);
+    assert!(got.contains(&("file:b.spec.ts", "sym:s.ts::PoliciesService.cancellationPolicy")));
+    assert_eq!(got.iter().filter(|c| c.1.ends_with("cancellationPolicy")).count(), 1, "an unannotated block body proves nothing");
+}
+
+#[test]
 fn a_generic_field_type_uses_its_head_name() {
     let repo = Repo::new(&[("r.ts", "export class Repository<T> { find() {} }\n")]);
     let ex = repo.extract("c.ts", "import { Repository } from './r';\nexport class C {\n  constructor(private readonly users: Repository<User>) {}\n  run() { this.users.find(); }\n}\n");
