@@ -106,9 +106,25 @@ fn index(graph: &Graph, up: bool) -> BTreeMap<&str, Vec<&Edge>> {
     by_key
 }
 
+/// Targets `S.m` that no node declares, for `S` and each of its aliases: the methods of an
+/// object literal (`export const repo = { find() {…} }`) are called as `repo.find` but never
+/// declared, so no `Declares` edge joins them to `repo` and only their prefix does.
+fn undeclared(graph: &Graph, by_target: &BTreeMap<&str, Vec<&Edge>>, ids: &[String]) -> Vec<String> {
+    let mut out = Vec::new();
+    for id in ids {
+        let prefix = format!("{id}.");
+        let range = by_target.range::<str, _>((std::ops::Bound::Included(prefix.as_str()), std::ops::Bound::Unbounded));
+        for (target, _) in range.take_while(|(t, _)| t.starts_with(&prefix)) {
+            if !graph.nodes.contains_key(*target) { out.push(target.to_string()); }
+        }
+    }
+    out
+}
+
 fn walk(graph: &Graph, root: &str, depth: usize, up: bool) -> Vec<Vec<Dependent>> {
     let by_key = index(graph, up);
-    let start = seeds(graph, root);
+    let mut start = seeds(graph, root);
+    if up { start.extend(undeclared(graph, &by_key, &start)); }
     let mut seen: BTreeSet<String> = start.iter().cloned().collect();
     let mut frontier = start;
     let mut layers = Vec::new();
@@ -270,7 +286,7 @@ pub fn render_json(graph: &Graph, imp: &Impact, direction: &str) -> String {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::model::{Extraction, NodeKind};
 
@@ -329,6 +345,34 @@ mod tests {
         assert_eq!(d2, vec![("sym:j.ts::J", EdgeKind::Extends)]);
         assert_eq!(imp.layers.len(), 2);
         assert_eq!(imp.importers, vec!["c.ts", "index.ts", "m.ts", "w.ts"]);
+    }
+
+    /// `export const repo = { find() {…}, save() {…} }`: the methods are not symbols, so every
+    /// call targets a `repo.*` id no node declares — directly, or through the barrel.
+    pub(crate) fn object_literal() -> Graph {
+        let mut g = Graph::default();
+        let mut e = Extraction::default();
+        e.node(NodeKind::File, "file:r.ts", "r.ts", "", "r.ts", 1);
+        e.node_span(NodeKind::Symbol, "sym:r.ts::repo", "repo", "", "r.ts", (3, 20));
+        e.edge("file:r.ts", "sym:r.ts::repo", EdgeKind::Declares, "export", "r.ts");
+        e.node(NodeKind::File, "file:index.ts", "index.ts", "", "index.ts", 1);
+        e.edge("file:index.ts", "file:r.ts", EdgeKind::ReExports, "*", "index.ts");
+        e.node(NodeKind::Symbol, "sym:a.ts::A.run", "A.run", "", "a.ts", 4);
+        e.edge("sym:a.ts::A.run", "sym:r.ts::repo.find", EdgeKind::Calls, "", "a.ts");
+        e.node(NodeKind::Symbol, "sym:b.ts::go", "go", "", "b.ts", 2);
+        e.edge("sym:b.ts::go", "sym:index.ts::repo.save", EdgeKind::Calls, "", "b.ts");
+        e.node(NodeKind::Symbol, "sym:r.ts::repository", "repository", "", "r.ts", 30);
+        e.node(NodeKind::Symbol, "sym:b.ts::other", "other", "", "b.ts", 9);
+        e.edge("sym:b.ts::other", "sym:r.ts::repository.find", EdgeKind::Calls, "", "b.ts");
+        g.apply(e);
+        g
+    }
+
+    #[test]
+    fn upstream_of_an_object_literal_counts_the_callers_of_its_undeclared_methods() {
+        let imp = upstream(&object_literal(), "sym:r.ts::repo", 2);
+        let d1: Vec<(&str, &str)> = imp.layers[0].iter().map(|d| (d.id.as_str(), d.via.as_str())).collect();
+        assert_eq!(d1, vec![("sym:a.ts::A.run", "sym:r.ts::repo.find"), ("sym:b.ts::go", "sym:index.ts::repo.save")]);
     }
 
     #[test]
