@@ -332,13 +332,17 @@ pub(crate) fn passed_over(name: &str, pick: &crate::model::Node, rest: &[&crate:
     Some(format!("{name}: took {}; also matches {}{more}", pick.id, ids.join(", ")))
 }
 
-/// A node's edges, and the ones that reach it through a barrel: a caller that imported the
-/// symbol from an `index.ts` points at the barrel's `sym:<barrel>::Name`, not at the node, and
-/// `impact` counts it as a caller all the same.
+/// A node's edges, and the ones that reach it through a barrel or through a method no node
+/// declares: a caller that imported the symbol from an `index.ts` points at the barrel's
+/// `sym:<barrel>::Name`, a caller of an object literal's method at `Name.method`, not at the
+/// node, and `impact` counts both as callers all the same.
 fn edges_of<'a>(graph: &'a Graph, id: &str) -> Vec<&'a crate::model::Edge> {
     let mut edges = graph.neighbours(id);
-    let aliases: BTreeSet<String> = crate::impact::Index::new(graph, true).aliases(id).into_iter().collect();
-    if !aliases.is_empty() { edges.extend(graph.edges.iter().filter(|e| aliases.contains(&e.target))); }
+    let ix = crate::impact::Index::names(graph);
+    let aliases = ix.aliases(id);
+    let undeclared = ix.undeclared(&[aliases.as_slice(), &[id.to_string()]].concat());
+    let reach: BTreeSet<String> = aliases.into_iter().chain(undeclared).collect();
+    if !reach.is_empty() { edges.extend(graph.edges.iter().filter(|e| reach.contains(&e.target))); }
     edges.sort_by_key(|e| (e.kind == EdgeKind::Legacy, e.kind, e.source.clone(), e.target.clone()));
     edges
 }
@@ -1119,6 +1123,17 @@ mod tests {
         let v: serde_json::Value = serde_json::from_str(&explain_json(&g, "sym:s.ts::f").unwrap()).unwrap();
         assert_eq!(v["edges"][0]["other"], "sym:c.ts::g");
         assert_eq!(v["edges"][0]["dir"], "in");
+    }
+
+    #[test]
+    fn explain_lists_the_same_direct_callers_as_impact_for_an_object_literal() {
+        let g = crate::impact::tests::object_literal();
+        let v: serde_json::Value = serde_json::from_str(&explain_json(&g, "sym:r.ts::repo").unwrap()).unwrap();
+        let callers: Vec<&str> = v["edges"].as_array().unwrap().iter()
+            .filter(|e| e["dir"] == "in" && e["kind"] == "Calls").map(|e| e["other"].as_str().unwrap()).collect();
+        let imp = crate::impact::upstream(&g, "sym:r.ts::repo", 1);
+        assert_eq!(callers, imp.layers[0].iter().map(|d| d.id.as_str()).collect::<Vec<_>>());
+        assert!(explain(&g, "sym:r.ts::repo").unwrap().contains("  Calls ← sym:b.ts::go\n"));
     }
 
     #[test]

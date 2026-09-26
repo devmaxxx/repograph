@@ -67,14 +67,20 @@ pub struct Index<'a> {
 }
 
 impl<'a> Index<'a> {
-    pub fn new(graph: &'a Graph, up: bool) -> Index<'a> {
+    pub fn new(graph: &'a Graph, up: bool) -> Index<'a> { Self::build(graph, up, true) }
+
+    /// Only what `aliases` and `undeclared` read, for a caller that looks a name up once and
+    /// never walks: `explain` builds one per call.
+    pub(crate) fn names(graph: &'a Graph) -> Index<'a> { Self::build(graph, true, false) }
+
+    fn build(graph: &'a Graph, up: bool, walks: bool) -> Index<'a> {
         let mut ix = Index { graph, up, code: BTreeMap::new(), members: BTreeMap::new(), re_exports: BTreeMap::new(), imports: BTreeMap::new() };
         for e in &graph.edges {
             match e.kind {
                 k if CODE.contains(&k) => ix.code.entry(if up { e.target.as_str() } else { e.source.as_str() }).or_default().push(e),
-                EdgeKind::Declares if e.target.starts_with("sym:") => ix.members.entry(e.source.as_str()).or_default().push(e.target.as_str()),
+                EdgeKind::Declares if walks && e.target.starts_with("sym:") => ix.members.entry(e.source.as_str()).or_default().push(e.target.as_str()),
                 EdgeKind::ReExports => ix.re_exports.entry(e.target.as_str()).or_default().push(e),
-                EdgeKind::Imports => ix.imports.entry(e.target.as_str()).or_default().push(e),
+                EdgeKind::Imports if walks => ix.imports.entry(e.target.as_str()).or_default().push(e),
                 _ => {}
             }
         }
@@ -135,7 +141,7 @@ impl<'a> Index<'a> {
     /// Targets `S.m` that no node declares, for `S` and each of its aliases: the methods of an
     /// object literal (`export const repo = { find() {…} }`) are called as `repo.find` but never
     /// declared, so no `Declares` edge joins them to `repo` and only their prefix does.
-    fn undeclared(&self, ids: &[String]) -> Vec<String> {
+    pub(crate) fn undeclared(&self, ids: &[String]) -> Vec<String> {
         let mut out = Vec::new();
         for id in ids {
             let prefix = format!("{id}.");
