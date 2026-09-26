@@ -665,6 +665,26 @@ fn a_call_through_a_typed_field_targets_the_field_type_member() {
 }
 
 #[test]
+fn rendering_a_component_in_jsx_is_a_call_of_it() {
+    let repo = Repo::new(&[
+        ("m.tsx", "export function CommissionMatrix() { return null; }\n"),
+        ("ui.tsx", "export function Card() { return null; }\nexport function Body() { return null; }\n"),
+    ]);
+    let ex = repo.extract(
+        "screen.tsx",
+        "import { CommissionMatrix } from './m';\nimport * as ui from './ui';\nconst div = () => 1;\n\
+         export function Screen() {\n  return <div><ui.Card><CommissionMatrix rows={[]} /></ui.Card><ui.Body/></div>;\n}\n",
+    );
+    let mut got = calls(&ex);
+    got.sort();
+    assert_eq!(got, vec![
+        ("sym:screen.tsx::Screen", "sym:m.tsx::CommissionMatrix"),
+        ("sym:screen.tsx::Screen", "sym:ui.tsx::Body"),
+        ("sym:screen.tsx::Screen", "sym:ui.tsx::Card"),
+    ]);
+}
+
+#[test]
 fn a_call_on_a_helpers_return_value_targets_the_returned_class_member() {
     let repo = Repo::new(&[("s.ts", "export class PoliciesService { cancellationPolicy() {} }\n")]);
     let annotated = repo.extract(
