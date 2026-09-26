@@ -665,6 +665,22 @@ fn a_call_through_a_typed_field_targets_the_field_type_member() {
 }
 
 #[test]
+fn a_function_passed_as_an_argument_is_called_by_the_caller() {
+    let repo = Repo::new(&[("w.ts", "export function feedWire() {}\n")]);
+    let ex = repo.extract(
+        "center.service.ts",
+        "import { feedWire } from './w';\nfunction isIndexed() { return true; }\n\
+         export function list(rows: unknown[], limit: number) { return rows.filter(isIndexed).map(feedWire).slice(0, limit); }\n",
+    );
+    let mut got = calls(&ex);
+    got.sort();
+    assert_eq!(got, vec![
+        ("sym:center.service.ts::list", "sym:center.service.ts::isIndexed"),
+        ("sym:center.service.ts::list", "sym:w.ts::feedWire"),
+    ], "a parameter passed along proves nothing and gives no edge");
+}
+
+#[test]
 fn rendering_a_component_in_jsx_is_a_call_of_it() {
     let repo = Repo::new(&[
         ("m.tsx", "export function CommissionMatrix() { return null; }\n"),

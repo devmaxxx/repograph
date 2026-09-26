@@ -210,9 +210,15 @@ pub(crate) fn scan(resolver: &Resolver, rel: &str, source: &str, locals: &BTreeS
         };
         let Some(callee) = callee else { continue };
         let class = class_of(n, src);
-        let Some(target) = scope.target(callee, class.as_deref(), rel, src) else { continue };
+        // A function handed to another — `rows.map(feedWire)`, `.filter(isIndexedType)` — is
+        // called on the caller's behalf, and a change to it breaks the caller all the same.
+        let mut ac = n.walk();
+        let passed: Vec<Node> = n.child_by_field_name("arguments")
+            .map(|a| a.named_children(&mut ac).filter(|x| x.kind() == "identifier").collect())
+            .unwrap_or_default();
         let from = owner(n, rel, src);
-        if from == target { continue }
-        ex.edge(&from, &target, EdgeKind::Calls, "", rel);
+        for target in std::iter::once(callee).chain(passed).filter_map(|x| scope.target(x, class.as_deref(), rel, src)) {
+            if from != target { ex.edge(&from, &target, EdgeKind::Calls, "", rel); }
+        }
     }
 }
