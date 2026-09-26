@@ -134,8 +134,9 @@ nothing proves it is called, so `--down` and `explain` print it as `Passes` and 
 step `passes`. An owner that both passes and calls a target has one edge, the call.
 What the graph cannot prove it does not list: a call through a chained expression, a
 destructured method, a callback parameter or a global has no edge, so confirm a "nothing uses
-this" with `rg -l` before deleting. A target the graph knows only by name — a member of an
-imported value it never saw declared — prints `?` in place of its `path:line`.
+this" with `rg -l` before deleting. A member no node declares — `loginSchema.parse`, a method
+of an object literal — is shown as the symbol it belongs to; a target the graph knows only by
+name, with no symbol of its own to fall back to, prints `?` in place of its `path:line`.
 
 `changes` maps `git diff -U0` (staged and unstaged, plus untracked files whole) onto symbol
 spans and unions the callers of every touched symbol into one list and one risk line. Run it

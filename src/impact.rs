@@ -23,6 +23,8 @@ fn bare(name: &str) -> &str { name.split('.').next().unwrap_or(name) }
 fn exports(e: &Edge, bare: &str) -> bool { e.context == "*" || e.context.split(',').any(|c| c == bare) }
 
 /// The node a possibly-dangling `sym:<barrel>::<Name>` stands for, following re-exports forward.
+/// A member no node declares — a method of an object literal, `parse` on a zod schema — stands
+/// for its container, which has a `path:line` where the member has none.
 pub fn canonical(graph: &Graph, id: &str) -> Option<String> {
     if graph.nodes.contains_key(id) { return Some(id.to_string()) }
     let (file, name) = id.strip_prefix("sym:")?.split_once("::")?;
@@ -39,7 +41,7 @@ pub fn canonical(graph: &Graph, id: &str) -> Option<String> {
         }
         i += 1;
     }
-    None
+    container(id).and_then(|c| canonical(graph, &c))
 }
 
 /// `sym:f::C` for `sym:f::C.m`, and `sym:f::O.I` for `sym:f::O.I.m`; none for a class or a file.
@@ -468,6 +470,21 @@ pub(crate) mod tests {
         let all: Vec<&str> = deep.layers.iter().flatten().map(|d| d.id.as_str()).collect();
         let set: BTreeSet<&str> = all.iter().copied().collect();
         assert_eq!(all.len(), set.len());
+    }
+
+    #[test]
+    fn an_undeclared_member_target_folds_into_its_container() {
+        let mut g = object_literal();
+        let mut e = Extraction::default();
+        e.edge("sym:r.ts::repo", "sym:r.ts::repo.find", EdgeKind::Calls, "", "r.ts");
+        g.apply(e);
+        assert_eq!(canonical(&g, "sym:index.ts::repo.save").as_deref(), Some("sym:r.ts::repo"));
+        assert_eq!(canonical(&g, "sym:x.ts::nobody.m"), None);
+        let imp = downstream(&g, "sym:b.ts::go", 1);
+        let d1: Vec<&str> = imp.layers[0].iter().map(|d| d.id.as_str()).collect();
+        assert_eq!(d1, vec!["sym:r.ts::repo"]);
+        // A literal's method calling a sibling is the literal reaching itself: no row at all.
+        assert!(downstream(&g, "sym:r.ts::repo", 1).layers.is_empty());
     }
 
     #[test]
