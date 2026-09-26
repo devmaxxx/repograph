@@ -114,6 +114,9 @@ repograph changes                           # what the uncommitted diff touches,
 repograph changes --base main --depth 1     # the whole branch; depth 1 is the direct callers alone
 ```
 
+`impact` and `trace` resolve a name the way `explain` does, except that when a document node and
+code share it they take the code, and name on stderr the candidates they passed over.
+
 Answers are lines of the form:
 
 ```
@@ -309,7 +312,8 @@ repograph explain asGrosze
 ```
 
 `explain` resolves its argument as an exact id, then as a symbol name, then as a case-insensitive
-label match.
+label match. Like every other reader it brings the store in line with the tree first; `--stale`
+answers from the store as it stands.
 
 Check the graph's health — counts by kind, dangling edges, how many citations are held aside because
 no line defines their prefix, and ids that are referenced but never declared, split into gaps inside

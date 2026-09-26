@@ -81,6 +81,8 @@ enum Cmd {
     Explain {
         node: String,
         #[arg(long)] json: bool,
+        /// Answers from the store as it stands, without bringing it in line with the tree first
+        #[arg(long)] stale: bool,
     },
     /// Who reaches a symbol (callers by depth, importing files, a risk line), or with `--down`
     /// what it reaches. A class is walked through its members; a caller that imported through a
@@ -853,8 +855,8 @@ fn run() -> anyhow::Result<()> {
             cap_pools(index::embed::threads(cfg.resources));
             run_watch(&repo, &cfg, every, batch, cli.no_dense)
         }
-        Cmd::Explain { node, json } => {
-            let (graph, _) = store::Store::new(&repo).load()?;
+        Cmd::Explain { node, json, stale } => {
+            let graph = graph_for(&repo, &load_cfg()?, stale)?;
             let rendered = match json {
                 true => query::explain_json(&graph, &node).map(|j| format!("{j}\n")),
                 false => query::explain(&graph, &node),
