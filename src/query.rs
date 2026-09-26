@@ -254,14 +254,15 @@ pub fn ask(graph: &Graph, lex: &Lexical, dense: Option<Dense>, rerank: Option<Re
     // yet — production code before a test, then the order above.
     let code = |id: &str| id.starts_with("sym:");
     let shown = answer.seeds.iter().chain(&answer.expanded).any(|h| code(&h.id));
-    let test = |id: &str| id.contains("/test/") || id.contains(".spec.") || id.contains(".test.");
     if !shown {
-        if let Some(c) = candidates.iter().filter(|c| code(c.2)).min_by_key(|c| test(c.2)) {
+        if let Some(c) = candidates.iter().filter(|c| code(c.2)).min_by_key(|c| is_test(c.2)) {
             answer.expanded.extend(line(c));
         }
     }
     answer
 }
+
+fn is_test(id: &str) -> bool { id.contains("/test/") || id.contains(".spec.") || id.contains(".test.") }
 
 /// How much of a line is shown where one is quoted: a seed's label, a family's defining line.
 pub(crate) const HEADLINE: usize = 80;
@@ -312,12 +313,22 @@ fn candidates<'a>(graph: &'a Graph, needle: &str) -> Vec<&'a crate::model::Node>
 /// `resolve` for the questions only code can answer — `impact` and `trace`. A PRD entity and the
 /// table or class it became share a label, and by id the entity sorts first; it has no callers,
 /// so taking it answered LOW for a name that code calls. The other candidates come back with the
-/// pick, so a caller can say which name it did not take.
+/// pick, so a caller can say which name it did not take. Production code comes before a test for
+/// the same reason `ask` puts it first: `routes` is the panel's route table, not a spec's fixture.
 pub(crate) fn resolve_code<'a>(graph: &'a Graph, needle: &str) -> Option<(&'a crate::model::Node, Vec<&'a crate::model::Node>)> {
     let mut c = candidates(graph, needle);
-    c.sort_by_key(|n| !n.is_code());
+    c.sort_by_key(|n| (!n.is_code(), is_test(&n.id)));
     let mut it = c.into_iter();
     Some((it.next()?, it.collect()))
+}
+
+/// The stderr line naming what `resolve_code` passed over: three of them and a count, since a
+/// name like `routes` matches thirty ids and a line listing all of them is not read.
+pub(crate) fn passed_over(name: &str, pick: &crate::model::Node, rest: &[&crate::model::Node]) -> Option<String> {
+    if rest.is_empty() { return None }
+    let ids: Vec<&str> = rest.iter().take(3).map(|n| n.id.as_str()).collect();
+    let more = if rest.len() > 3 { format!(" and {} more", rest.len() - 3) } else { String::new() };
+    Some(format!("{name}: took {}; also matches {}{more}", pick.id, ids.join(", ")))
 }
 
 /// A node's edges, and the ones that reach it through a barrel: a caller that imported the
@@ -615,6 +626,25 @@ mod tests {
         let (pick, rest) = resolve_code(&g, "CancellationPolicy").unwrap();
         assert_eq!(pick.id, "sym:db/scheduling.ts::cancellationPolicy");
         assert_eq!(rest.iter().map(|n| n.id.as_str()).collect::<Vec<_>>(), ["entity:CancellationPolicy"]);
+    }
+
+    #[test]
+    fn a_name_shared_by_a_test_and_production_code_resolves_to_the_production_symbol() {
+        let mut g = Graph::default();
+        let mut e = Extraction::default();
+        for f in ["apps/api/test/a.spec.ts", "apps/panel/src/routes.ts", "apps/panel/test/b.test.tsx", "apps/x/c.spec.ts", "apps/y/d.test.ts"] {
+            e.node(NodeKind::Symbol, &format!("sym:{f}::routes"), "routes", "", f, 1);
+        }
+        g.apply(e);
+        let (pick, rest) = resolve_code(&g, "routes").unwrap();
+        assert_eq!(pick.id, "sym:apps/panel/src/routes.ts::routes");
+        assert_eq!(
+            passed_over("routes", pick, &rest).unwrap(),
+            "routes: took sym:apps/panel/src/routes.ts::routes; also matches sym:apps/api/test/a.spec.ts::routes, \
+             sym:apps/panel/test/b.test.tsx::routes, sym:apps/x/c.spec.ts::routes and 1 more"
+        );
+        assert_eq!(passed_over("routes", pick, &rest[..1]).unwrap(), "routes: took sym:apps/panel/src/routes.ts::routes; also matches sym:apps/api/test/a.spec.ts::routes");
+        assert_eq!(passed_over("routes", pick, &[]), None);
     }
 
     #[test]

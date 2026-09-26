@@ -702,10 +702,7 @@ fn switch_model(repo: &std::path::Path, cfg: &config::Config, id: &str, no_embed
 /// that came from the wrong node is visible without changing what stdout parses to.
 fn code_node<'a>(graph: &'a model::Graph, name: &str) -> anyhow::Result<&'a model::Node> {
     let Some((pick, rest)) = query::resolve_code(graph, name) else { anyhow::bail!("no node matches {name}") };
-    if !rest.is_empty() {
-        let ids: Vec<&str> = rest.iter().map(|n| n.id.as_str()).collect();
-        eprintln!("{name}: took {}; also matches {}", pick.id, ids.join(", "));
-    }
+    if let Some(note) = query::passed_over(name, pick, &rest) { eprintln!("{note}"); }
     Ok(pick)
 }
 
