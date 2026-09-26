@@ -139,7 +139,7 @@ pub fn render_json(graph: &Graph, r: &Report) -> String {
     let touched: Vec<serde_json::Value> = r.touched.iter()
         .map(|id| serde_json::json!({ "id": id, "at": span_of(graph, id), "indexed": graph.nodes.contains_key(id) })).collect();
     let affected: Vec<serde_json::Value> = r.affected.iter().map(|d| serde_json::json!({
-        "id": d.id, "at": graph.nodes.get(&d.id).map(|n| format!("{}:{}", n.file, n.line)), "depth": d.depth, "kind": format!("{:?}", d.kind), "via": d.via,
+        "id": d.id, "at": graph.nodes.get(&d.id).map(|n| format!("{}:{}", n.file, n.line)), "depth": d.depth, "kind": format!("{:?}", d.kind), "passes": d.passed, "via": d.via,
     })).collect();
     serde_json::json!({ "touched": touched, "affected": affected, "files": r.files, "risk": r.risk }).to_string() + "\n"
 }
@@ -285,6 +285,18 @@ mod tests {
         let r = report(&g, &[Hunk { file: "s.ts".into(), start: 8, end: 9 }], 1);
         let d = r.affected.iter().find(|d| d.id == "sym:d.ts::D").unwrap();
         assert_eq!((d.via.as_str(), d.passed), ("sym:s.ts::S.list", false));
+    }
+
+    #[test]
+    fn json_marks_a_dependent_that_only_passes_the_changed_symbol() {
+        let mut g = graph();
+        let mut e = Extraction::default();
+        e.node(NodeKind::Symbol, "sym:d.ts::D", "D", "", "d.ts", 1);
+        e.edge("sym:d.ts::D", "sym:s.ts::S.create", EdgeKind::Calls, "arg", "d.ts");
+        g.apply(e);
+        let v: serde_json::Value = serde_json::from_str(&render_json(&g, &report(&g, &[Hunk { file: "s.ts".into(), start: 6, end: 7 }], 1))).unwrap();
+        let rows: Vec<(&str, &serde_json::Value)> = v["affected"].as_array().unwrap().iter().map(|d| (d["id"].as_str().unwrap(), &d["passes"])).collect();
+        assert_eq!(rows, vec![("sym:c.ts::C.create", &serde_json::json!(false)), ("sym:d.ts::D", &serde_json::json!(true))]);
     }
 
     #[test]

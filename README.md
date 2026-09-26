@@ -157,7 +157,10 @@ so a field can be added without breaking a parser written against the version be
 | `model --json` | `store`, `configured`, `configured_from`, `this_run`, `agrees`, `recommended` |
 
 `explain --json` resolves each edge's direction for you — `dir` is `in` or `out` and `other` is the
-node at the far end — so a caller never works out which end of an edge it was standing on. One
+node at the far end — so a caller never works out which end of an edge it was standing on. Each
+row of `impact` and `changes`, and each step of a `trace` path, carries `passes`: `true` when the
+edge is an identifier handed to a call rather than called, which the text forms print as `Passes`.
+`kind` stays the graph's own edge kind, `Calls`, so a reader filtering on it keeps those rows. One
 difference from the text forms is deliberate: a `trace` that finds no path within the depth is an
 answer to the question that was asked, so the JSON form prints `"path": null` and exits 0 where the
 text form exits **3**. The two are the same answer in two shapes: a caller parsing an object should

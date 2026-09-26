@@ -10,9 +10,8 @@ const CODE: [EdgeKind; 2] = [EdgeKind::Calls, EdgeKind::Extends];
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct Dependent { pub id: String, pub depth: usize, pub kind: EdgeKind, pub via: String, pub passed: bool }
 
-impl Dependent {
-    fn label(&self) -> String { if self.passed { "Passes".to_string() } else { format!("{:?}", self.kind) } }
-}
+/// How an edge reads to a person: an argument edge is `Passes`, since nothing proves it is called.
+pub(crate) fn label(kind: EdgeKind, passed: bool) -> String { if passed { "Passes".to_string() } else { format!("{kind:?}") } }
 
 #[derive(Debug, Default)]
 pub struct Impact { pub root: String, pub layers: Vec<Vec<Dependent>>, pub importers: Vec<String> }
@@ -228,12 +227,13 @@ pub fn downstream(graph: &Graph, root: &str, depth: usize) -> Impact {
 /// error.
 pub fn trace_json(graph: &Graph, from: &str, to: &str, depth: usize, path: Option<&[(String, bool)]>) -> String {
     #[derive(serde::Serialize)]
-    struct Step<'a> { id: &'a str, at: String }
+    struct Step<'a> { id: &'a str, at: String, passes: bool }
     #[derive(serde::Serialize)]
     struct Out<'a> { from: &'a str, to: &'a str, depth: usize, path: Option<Vec<Step<'a>>> }
-    let steps = path.map(|p| p.iter().map(|(id, _)| Step {
+    let steps = path.map(|p| p.iter().map(|(id, passes)| Step {
         id,
         at: graph.nodes.get(id).map(|n| format!("{}:{}", n.file, n.line)).unwrap_or_default(),
+        passes: *passes,
     }).collect());
     serde_json::to_string(&Out { from, to, depth, path: steps }).unwrap_or_else(|_| "{}".to_string())
 }
@@ -304,7 +304,7 @@ pub fn render(graph: &Graph, imp: &Impact, direction: &str) -> String {
         out.push_str(&format!("d={}  {name} ({})\n", i + 1, layer.len()));
         for d in layer {
             let arrow = if up { "→" } else { "←" };
-            out.push_str(&format!("  {}  {}  {} {arrow} {}\n", d.id, line_of(graph, &d.id), d.label(), d.via));
+            out.push_str(&format!("  {}  {}  {} {arrow} {}\n", d.id, line_of(graph, &d.id), label(d.kind, d.passed), d.via));
         }
     }
     if up {
@@ -322,7 +322,7 @@ pub fn render_json(graph: &Graph, imp: &Impact, direction: &str) -> String {
     let total: usize = imp.layers.iter().map(Vec::len).sum();
     let files = files(graph, imp);
     let layers: Vec<Vec<serde_json::Value>> = imp.layers.iter().map(|l| l.iter().map(|d| serde_json::json!({
-        "id": d.id, "at": line_of(graph, &d.id), "depth": d.depth, "kind": format!("{:?}", d.kind), "via": d.via,
+        "id": d.id, "at": line_of(graph, &d.id), "depth": d.depth, "kind": format!("{:?}", d.kind), "passes": d.passed, "via": d.via,
     })).collect()).collect();
     serde_json::json!({
         "root": imp.root, "at": line_of(graph, &imp.root), "direction": direction, "layers": layers,
@@ -535,6 +535,24 @@ pub(crate) mod tests {
         let imp = downstream(&g, "sym:x.ts::R", 2);
         let d2: Vec<(&str, &str, bool)> = imp.layers[1].iter().map(|d| (d.id.as_str(), d.via.as_str(), d.passed)).collect();
         assert_eq!(d2, vec![("sym:r.ts::repo", "sym:x.ts::Z", false)]);
+    }
+
+    #[test]
+    fn json_marks_an_argument_edge_as_passes_in_impact_and_trace() {
+        let mut g = Graph::default();
+        let mut e = Extraction::default();
+        e.node(NodeKind::Symbol, "sym:a.ts::A", "A", "", "a.ts", 1);
+        e.node(NodeKind::Symbol, "sym:t.ts::TOKEN", "TOKEN", "", "t.ts", 1);
+        e.node(NodeKind::Symbol, "sym:t.ts::run", "run", "", "t.ts", 2);
+        e.edge("sym:a.ts::A", "sym:t.ts::TOKEN", EdgeKind::Calls, "arg", "a.ts");
+        e.edge("sym:a.ts::A", "sym:t.ts::run", EdgeKind::Calls, "", "a.ts");
+        g.apply(e);
+        let v: serde_json::Value = serde_json::from_str(&render_json(&g, &downstream(&g, "sym:a.ts::A", 1), "downstream")).unwrap();
+        let rows: Vec<(&str, &serde_json::Value)> = v["layers"][0].as_array().unwrap().iter().map(|d| (d["id"].as_str().unwrap(), &d["passes"])).collect();
+        assert_eq!(rows, vec![("sym:t.ts::TOKEN", &serde_json::json!(true)), ("sym:t.ts::run", &serde_json::json!(false))]);
+        let path = trace(&g, "sym:a.ts::A", "sym:t.ts::TOKEN", 2);
+        let v: serde_json::Value = serde_json::from_str(&trace_json(&g, "sym:a.ts::A", "sym:t.ts::TOKEN", 2, path.as_deref())).unwrap();
+        assert_eq!((&v["path"][0]["passes"], &v["path"][1]["passes"]), (&serde_json::json!(false), &serde_json::json!(true)));
     }
 
     #[test]
