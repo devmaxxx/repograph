@@ -1089,3 +1089,37 @@ fn typeof_default_and_a_cast_are_type_uses() {
     }
 }
 
+
+#[test]
+fn each_declarator_of_a_field_owns_its_own_initializer() {
+    let repo = Repo::new(&[
+        ("Shop/Log.cs", "namespace Shop;\npublic static class Log\n{\n    public static int For(int n) => n;\n}\n"),
+        ("Shop/C.cs", "namespace Shop;\npublic class C\n{\n    private readonly int _a = 1, _b = Log.For(2);\n}\n"),
+    ]);
+    let ex = repo.extract("Shop/C.cs");
+    let calls = edges(&ex, EdgeKind::Calls);
+    assert!(calls.contains(&("sym:Shop/C.cs::C._b", "sym:Shop/Log.cs::Log.For", "")), "{calls:?}");
+    assert!(!calls.iter().any(|(s, _, _)| *s == "sym:Shop/C.cs::C._a"), "{calls:?}");
+}
+
+#[test]
+fn a_file_scoped_namespace_under_a_preprocessor_branch_scopes_the_calls_after_it() {
+    let repo = Repo::new(&[
+        ("Shop/Log.cs", "namespace Shop;\npublic static class Log\n{\n    public static void Write() { }\n}\n"),
+        ("Shop/A.cs", "#if NET8\nnamespace Shop;\n#endif\npublic class A\n{\n    void Run() { Log.Write(); }\n}\n"),
+    ]);
+    let ex = repo.extract("Shop/A.cs");
+    let calls = edges(&ex, EdgeKind::Calls);
+    assert!(calls.contains(&("sym:Shop/A.cs::A.Run", "sym:Shop/Log.cs::Log.Write", "")), "{calls:?}");
+}
+
+#[test]
+fn a_tuple_type_names_each_of_its_element_types() {
+    let repo = Repo::new(&[
+        ("Shop/Order.cs", "namespace Shop;\npublic class Order { }\n"),
+        ("Shop/Repo.cs", "namespace Shop;\npublic class Repo\n{\n    public (bool ok, Order order) TryGet(int id) => default;\n}\n"),
+    ]);
+    let ex = repo.extract("Shop/Repo.cs");
+    let imports = edges(&ex, EdgeKind::Imports);
+    assert!(imports.iter().any(|(s, t, _)| *s == "file:Shop/Repo.cs" && *t == "file:Shop/Order.cs"), "{imports:?}");
+}

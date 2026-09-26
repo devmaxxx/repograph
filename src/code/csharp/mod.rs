@@ -50,6 +50,17 @@ pub(crate) fn text<'a>(n: Node, src: &'a [u8]) -> &'a str {
     n.utf8_text(src).unwrap_or("")
 }
 
+/// The Razor wrapper is the blanked copy's only top-level type, and it stands for the component
+/// rather than for what it's written as. Returns the name both passes use, and whether this is
+/// that wrapper — which gets no `Symbol` node of its own (`declarations::scan`, `refs::scan`
+/// write it once, from `razor::extract`).
+pub(crate) fn wrapper_name(top_level: bool, host: &Host, written: String) -> (bool, String) {
+    match (top_level, host.component) {
+        (true, Some(c)) => (true, c.to_string()),
+        _ => (false, written),
+    }
+}
+
 pub(crate) fn named<'t>(n: Node<'t>) -> Vec<Node<'t>> {
     let mut c = n.walk();
     n.named_children(&mut c).collect()
@@ -112,6 +123,13 @@ pub(crate) fn type_names(t: Node, src: &[u8], out: &mut Vec<String>) {
         "nullable_type" | "array_type" | "pointer_type" | "ref_type" | "scoped_type" => {
             if let Some(inner) = t.child_by_field_name("type") {
                 type_names(inner, src, out);
+            }
+        }
+        "tuple_type" => {
+            for el in named(t).into_iter().filter(|c| c.kind() == "tuple_element") {
+                if let Some(inner) = el.child_by_field_name("type") {
+                    type_names(inner, src, out);
+                }
             }
         }
         _ => {}

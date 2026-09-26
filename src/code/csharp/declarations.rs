@@ -4,7 +4,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use tree_sitter::Node;
 
-use super::{dotted, generic, head, modifiers, named, span, text, Host};
+use super::{dotted, generic, head, modifiers, named, span, text, wrapper_name, Host};
 use crate::code::index::Header;
 use crate::model::{EdgeKind, Extraction, NodeKind};
 
@@ -206,12 +206,7 @@ impl Walk<'_> {
     /// `owner` is the containing type's local name and whether it is an interface.
     fn declare_type(&mut self, n: Node, parent: &str, namespace: &str, owner: Option<(&str, bool)>, ex: &mut Extraction) {
         let Some(written) = name_of(n, self.src) else { return };
-        // The Razor wrapper is the blanked copy's only top-level type, and it is the component.
-        let wrapper = owner.is_none() && self.host.component.is_some();
-        let name = match (wrapper, self.host.component) {
-            (true, Some(c)) => c.to_string(),
-            _ => written,
-        };
+        let (wrapper, name) = wrapper_name(owner.is_none(), self.host, written);
         let local = owner.map_or_else(|| name.clone(), |(o, _)| format!("{o}.{name}"));
         let id = format!("sym:{}::{local}", self.rel);
         let mods = modifiers(n, self.src);
@@ -319,7 +314,7 @@ impl Walk<'_> {
 /// `n`'s named children with every `#if`/`#elif`/`#else` branch opened in place. Which branch a
 /// build compiles is the build's choice, not the file's, and the truth counts every line, so both
 /// branches declare; a name both declare is one id, kept once by the dispatch's dedup.
-fn unbranched<'t>(n: Node<'t>) -> Vec<Node<'t>> {
+pub(crate) fn unbranched<'t>(n: Node<'t>) -> Vec<Node<'t>> {
     named(n)
         .into_iter()
         .flat_map(|c| match c.kind() {

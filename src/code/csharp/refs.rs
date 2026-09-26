@@ -6,10 +6,10 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use tree_sitter::Node;
 
-use super::declarations::{join, Declared};
+use super::declarations::{join, unbranched, Declared};
 use super::index::Part;
 use super::resolve::Scope;
-use super::{dotted, head, named, text, type_names, Host};
+use super::{dotted, head, named, text, type_names, wrapper_name, Host};
 use crate::code::imports::Resolver;
 use crate::model::{EdgeKind, Extraction};
 
@@ -73,7 +73,9 @@ impl Reader<'_> {
         match n.kind() {
             "compilation_unit" => {
                 let mut at = at.clone();
-                for c in named(n) {
+                // `unbranched`, not `named`: a file-scoped namespace can sit inside a `#if`, and
+                // it has to update `at.namespace` for the siblings that follow it either way.
+                for c in unbranched(n) {
                     // A file-scoped namespace covers its following siblings.
                     if c.kind() == "file_scoped_namespace_declaration" {
                         if let Some(name) = c.child_by_field_name("name") {
@@ -420,10 +422,7 @@ impl Reader<'_> {
 
     fn type_decl(&self, n: Node, at: &At, ex: &mut Extraction) {
         let written = n.child_by_field_name("name").map(|x| text(x, self.src).to_string()).unwrap_or_default();
-        let name = match (at.class.is_none(), self.host.component) {
-            (true, Some(c)) => c.to_string(),
-            _ => written,
-        };
+        let (_, name) = wrapper_name(at.class.is_none(), self.host, written);
         let local = at.class.as_ref().map_or_else(|| name.clone(), |c| format!("{c}.{name}"));
         let id = format!("sym:{}::{local}", self.rel);
         // A nested type reads the enclosing type's own parameters as well as its own, as C# does.
@@ -474,15 +473,20 @@ impl Reader<'_> {
 
     fn member(&self, n: Node, at: &At, ex: &mut Extraction) {
         let class = at.class.as_deref().unwrap_or_default();
-        let name = match n.kind() {
+        let owner_of = |name: Option<Node>| name.map_or_else(|| at.owner.clone(), |m| format!("sym:{}::{class}.{}", self.rel, text(m, self.src)));
+        let declarators: Vec<Node> = match n.kind() {
             "field_declaration" | "event_field_declaration" => named(n).into_iter()
                 .find(|c| c.kind() == "variable_declaration")
-                .and_then(|v| named(v).into_iter().find(|d| d.kind() == "variable_declarator"))
-                .and_then(|d| d.child_by_field_name("name")),
+                .map(|v| named(v).into_iter().filter(|d| d.kind() == "variable_declarator").collect())
+                .unwrap_or_default(),
+            _ => Vec::new(),
+        };
+        let name = match n.kind() {
             k if NAMELESS.contains(&k) => None,
+            "field_declaration" | "event_field_declaration" => declarators.first().and_then(|d| d.child_by_field_name("name")),
             _ => n.child_by_field_name("name"),
         };
-        let owner = name.map_or_else(|| at.owner.clone(), |m| format!("sym:{}::{class}.{}", self.rel, text(m, self.src)));
+        let owner = owner_of(name);
         // A generic method's own `<U>` is in scope for its return type, parameters and body.
         let mut type_params = at.type_params.clone();
         type_params.extend(declared_type_params(n, self.src));
@@ -490,10 +494,18 @@ impl Reader<'_> {
         let mut locals = Locals::new();
         self.type_uses(n, &inner, ex);
         for c in named(n) {
-            if c.kind() == "attribute_list" {
-                self.attributes(c, &inner, &owner, ex);
-            } else {
-                self.walk(c, &inner, &mut locals, ex);
+            match c.kind() {
+                "attribute_list" => self.attributes(c, &inner, &owner, ex),
+                // `int a = F(), b = G();`: each declarator's initializer is its own symbol's
+                // body, not the first declarator's — a call in `G()` belongs to `b`, not `a`.
+                "variable_declaration" if declarators.len() > 1 => {
+                    self.type_uses(c, &inner, ex);
+                    for d in &declarators {
+                        let scoped = At { owner: owner_of(d.child_by_field_name("name")), ..inner.clone() };
+                        self.walk(*d, &scoped, &mut Locals::new(), ex);
+                    }
+                }
+                _ => self.walk(c, &inner, &mut locals, ex),
             }
         }
     }
