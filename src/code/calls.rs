@@ -23,6 +23,9 @@ struct Scope {
     /// class name -> field name -> declared type name, from typed fields and constructor
     /// parameter properties — the NestJS injection shape `this.service.create()` goes through
     fields: BTreeMap<String, BTreeMap<String, String>>,
+    /// top-level function -> the class it returns, from `(): T` or a body that is `new T(…)` —
+    /// the test-helper shape `service().method()` goes through
+    returns: BTreeMap<String, String>,
 }
 
 /// `T` of `: T` or `: T<…>`; other annotations (unions, literals, arrays) name no class.
@@ -55,9 +58,9 @@ impl Scope {
             match stmt.kind() {
                 "import_statement" => s.import(stmt, rel, src, resolver),
                 "export_statement" => {
-                    if let Some(decl) = stmt.child_by_field_name("declaration") { s.class(decl, src); }
+                    if let Some(decl) = stmt.child_by_field_name("declaration") { s.class(decl, src); s.returns(decl, src); }
                 }
-                _ => s.class(stmt, src),
+                _ => { s.class(stmt, src); s.returns(stmt, src); }
             }
         }
         s
@@ -122,6 +125,29 @@ impl Scope {
         }
     }
 
+    fn returns(&mut self, decl: Node, src: &[u8]) {
+        let mut record = |name: Node, f: Node| {
+            let annotated = f.child_by_field_name("return_type").and_then(|t| type_name(t, src));
+            let built = || {
+                let body = f.child_by_field_name("body").filter(|b| b.kind() == "new_expression")?;
+                body.child_by_field_name("constructor").filter(|c| c.kind() == "identifier").map(|c| text(c, src).to_string())
+            };
+            if let Some(t) = annotated.or_else(built) { self.returns.insert(text(name, src).to_string(), t); }
+        };
+        match decl.kind() {
+            "function_declaration" => if let Some(n) = decl.child_by_field_name("name") { record(n, decl) },
+            "lexical_declaration" | "variable_declaration" => {
+                let mut dc = decl.walk();
+                for d in decl.named_children(&mut dc).filter(|d| d.kind() == "variable_declarator") {
+                    let name = d.child_by_field_name("name").filter(|n| n.kind() == "identifier");
+                    let value = d.child_by_field_name("value").filter(|v| matches!(v.kind(), "arrow_function" | "function_expression"));
+                    if let (Some(n), Some(v)) = (name, value) { record(n, v); }
+                }
+            }
+            _ => {}
+        }
+    }
+
     fn target(&self, callee: Node, class: Option<&str>, rel: &str, src: &[u8]) -> Option<String> {
         match callee.kind() {
             "identifier" => {
@@ -138,6 +164,12 @@ impl Scope {
                         if let Some(f) = self.namespaces.get(n) { return Some(format!("sym:{f}::{prop}")); }
                         let (f, orig) = self.names.get(n)?;
                         Some(format!("sym:{f}::{orig}.{prop}"))
+                    }
+                    "call_expression" => {
+                        let f = obj.child_by_field_name("function").filter(|f| f.kind() == "identifier")?;
+                        let ty = self.returns.get(text(f, src))?;
+                        let (file, t) = self.names.get(ty)?;
+                        Some(format!("sym:{file}::{t}.{prop}"))
                     }
                     "member_expression" => {
                         let inner = obj.child_by_field_name("object")?;
