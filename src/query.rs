@@ -349,8 +349,9 @@ pub fn explain(graph: &Graph, needle: &str) -> Option<String> {
     if let Some(c) = &n.community { out.push_str(&format!("  community: {c}\n")); }
     for e in edges_of(graph, &n.id) {
         let (arrow, other) = if e.source == n.id { ("→", &e.target) } else { ("←", &e.source) };
-        let ctx = if e.context.is_empty() { String::new() } else { format!("  [{}]", e.context) };
-        out.push_str(&format!("  {:?} {arrow} {other}{ctx}\n", e.kind));
+        let ctx = if e.context.is_empty() || e.passes() { String::new() } else { format!("  [{}]", e.context) };
+        let kind = if e.passes() { "Passes".to_string() } else { format!("{:?}", e.kind) };
+        out.push_str(&format!("  {kind} {arrow} {other}{ctx}\n"));
     }
     Some(out)
 }
@@ -1118,6 +1119,16 @@ mod tests {
         let v: serde_json::Value = serde_json::from_str(&explain_json(&g, "sym:s.ts::f").unwrap()).unwrap();
         assert_eq!(v["edges"][0]["other"], "sym:c.ts::g");
         assert_eq!(v["edges"][0]["dir"], "in");
+    }
+
+    #[test]
+    fn explain_labels_an_argument_edge_as_passes() {
+        let mut g = Graph::default();
+        let mut e = Extraction::default();
+        e.node(NodeKind::Symbol, "sym:a.ts::A", "A", "", "a.ts", 1);
+        e.edge("sym:a.ts::A", "sym:t.ts::TOKEN", EdgeKind::Calls, "arg", "a.ts");
+        g.apply(e);
+        assert!(explain(&g, "sym:a.ts::A").unwrap().ends_with("  Passes → sym:t.ts::TOKEN\n"));
     }
 
     #[test]

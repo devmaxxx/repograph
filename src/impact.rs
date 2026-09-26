@@ -8,7 +8,11 @@ use std::collections::{BTreeMap, BTreeSet};
 const CODE: [EdgeKind; 2] = [EdgeKind::Calls, EdgeKind::Extends];
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
-pub struct Dependent { pub id: String, pub depth: usize, pub kind: EdgeKind, pub via: String }
+pub struct Dependent { pub id: String, pub depth: usize, pub kind: EdgeKind, pub via: String, pub passed: bool }
+
+impl Dependent {
+    fn label(&self) -> String { if self.passed { "Passes".to_string() } else { format!("{:?}", self.kind) } }
+}
 
 #[derive(Debug, Default)]
 pub struct Impact { pub root: String, pub layers: Vec<Vec<Dependent>>, pub importers: Vec<String> }
@@ -121,6 +125,8 @@ impl<'a> Index<'a> {
         } else {
             for m in self.members(at) { out.extend(self.code.get(m).into_iter().flatten().copied()); }
         }
+        // A call before an argument edge, so a node reached both ways is reached by the call.
+        out.sort_by_key(|e| e.passes());
         out
     }
 
@@ -152,7 +158,7 @@ impl<'a> Index<'a> {
                 for e in self.step(at) {
                     let other = if up { e.source.clone() } else { canonical(graph, &e.target).unwrap_or_else(|| e.target.clone()) };
                     if seen.insert(other.clone()) {
-                        next.push(Dependent { id: other, depth: d, kind: e.kind, via: at.clone() });
+                        next.push(Dependent { id: other, depth: d, kind: e.kind, via: at.clone(), passed: e.passes() });
                     }
                 }
             }
@@ -205,12 +211,12 @@ pub fn downstream(graph: &Graph, root: &str, depth: usize) -> Impact {
 /// `trace` as an object: the two ends the ids resolved to, the depth asked for, and the chain as
 /// `{id, at}` steps — `null` when there is none within that depth, which is an answer and not an
 /// error.
-pub fn trace_json(graph: &Graph, from: &str, to: &str, depth: usize, path: Option<&[String]>) -> String {
+pub fn trace_json(graph: &Graph, from: &str, to: &str, depth: usize, path: Option<&[(String, bool)]>) -> String {
     #[derive(serde::Serialize)]
     struct Step<'a> { id: &'a str, at: String }
     #[derive(serde::Serialize)]
     struct Out<'a> { from: &'a str, to: &'a str, depth: usize, path: Option<Vec<Step<'a>>> }
-    let steps = path.map(|p| p.iter().map(|id| Step {
+    let steps = path.map(|p| p.iter().map(|(id, _)| Step {
         id,
         at: graph.nodes.get(id).map(|n| format!("{}:{}", n.file, n.line)).unwrap_or_default(),
     }).collect());
@@ -218,11 +224,11 @@ pub fn trace_json(graph: &Graph, from: &str, to: &str, depth: usize, path: Optio
 }
 
 /// The shortest chain of code edges from `from` to `to` (or one of its aliases or members),
-/// at most `depth` hops.
-pub fn trace(graph: &Graph, from: &str, to: &str, depth: usize) -> Option<Vec<String>> {
+/// at most `depth` hops, each step with whether it was reached by being passed rather than called.
+pub fn trace(graph: &Graph, from: &str, to: &str, depth: usize) -> Option<Vec<(String, bool)>> {
     let by_source = Index::new(graph, false);
     let goal: BTreeSet<String> = by_source.seeds(to).into_iter().collect();
-    let mut parent: BTreeMap<String, String> = BTreeMap::new();
+    let mut parent: BTreeMap<String, (String, bool)> = BTreeMap::new();
     // The walk starts at `from` alone: `step` already reaches through its members, and the
     // printed path then names the class, not the member that happened to make the call.
     let mut frontier: Vec<String> = vec![from.to_string()];
@@ -233,12 +239,12 @@ pub fn trace(graph: &Graph, from: &str, to: &str, depth: usize) -> Option<Vec<St
             for e in by_source.step(at) {
                 let other = canonical(graph, &e.target).unwrap_or_else(|| e.target.clone());
                 if !seen.insert(other.clone()) { continue }
-                parent.insert(other.clone(), at.clone());
+                parent.insert(other.clone(), (at.clone(), e.passes()));
                 if goal.contains(&other) {
                     let mut path = vec![other];
-                    while let Some(p) = parent.get(path.last().unwrap()) { path.push(p.clone()); }
+                    while let Some((p, _)) = parent.get(path.last().unwrap()) { path.push(p.clone()); }
                     path.reverse();
-                    return Some(path);
+                    return Some(path.into_iter().map(|id| { let passed = parent.get(&id).is_some_and(|p| p.1); (id, passed) }).collect());
                 }
                 next.push(other);
             }
@@ -283,7 +289,7 @@ pub fn render(graph: &Graph, imp: &Impact, direction: &str) -> String {
         out.push_str(&format!("d={}  {name} ({})\n", i + 1, layer.len()));
         for d in layer {
             let arrow = if up { "→" } else { "←" };
-            out.push_str(&format!("  {}  {}  {:?} {arrow} {}\n", d.id, line_of(graph, &d.id), d.kind, d.via));
+            out.push_str(&format!("  {}  {}  {} {arrow} {}\n", d.id, line_of(graph, &d.id), d.label(), d.via));
         }
     }
     if up {
@@ -447,9 +453,26 @@ pub(crate) mod tests {
     #[test]
     fn trace_finds_the_shortest_call_path_and_reports_none_when_there_is_no_path() {
         // J → W by Extends, W → S.create through its member W.run and the barrel alias.
-        assert_eq!(trace(&graph(), "sym:j.ts::J", "sym:s.ts::S", 6), Some(vec!["sym:j.ts::J".into(), "sym:w.ts::W".into(), "sym:s.ts::S.create".into()]));
+        assert_eq!(trace(&graph(), "sym:j.ts::J", "sym:s.ts::S", 6), Some(vec![("sym:j.ts::J".into(), false), ("sym:w.ts::W".into(), false), ("sym:s.ts::S.create".into(), false)]));
         assert_eq!(trace(&graph(), "sym:s.ts::S", "sym:j.ts::J", 6), None);
         assert_eq!(trace(&graph(), "sym:j.ts::J", "sym:s.ts::S", 1), None);
+    }
+
+    #[test]
+    fn a_value_passed_as_an_argument_reads_as_passed_not_called_and_still_counts_upstream() {
+        let mut g = Graph::default();
+        let mut e = Extraction::default();
+        e.node(NodeKind::Symbol, "sym:a.ts::A", "A", "", "a.ts", 1);
+        e.node(NodeKind::Symbol, "sym:t.ts::TOKEN", "TOKEN", "", "t.ts", 1);
+        e.node(NodeKind::Symbol, "sym:t.ts::run", "run", "", "t.ts", 2);
+        e.edge("sym:a.ts::A", "sym:t.ts::TOKEN", EdgeKind::Calls, "arg", "a.ts");
+        e.edge("sym:a.ts::A", "sym:t.ts::run", EdgeKind::Calls, "", "a.ts");
+        g.apply(e);
+        let down = render(&g, &downstream(&g, "sym:a.ts::A", 1), "downstream");
+        assert!(down.contains("  sym:t.ts::TOKEN  t.ts:1  Passes ← sym:a.ts::A\n"), "{down}");
+        assert!(down.contains("  sym:t.ts::run  t.ts:2  Calls ← sym:a.ts::A\n"), "{down}");
+        assert_eq!(trace(&g, "sym:a.ts::A", "sym:t.ts::TOKEN", 2), Some(vec![("sym:a.ts::A".into(), false), ("sym:t.ts::TOKEN".into(), true)]));
+        assert_eq!(upstream(&g, "sym:t.ts::TOKEN", 1).layers[0].len(), 1);
     }
 
     #[test]

@@ -192,12 +192,15 @@ impl Scope {
 
 /// Every call and `new` in the file, as an edge from its owner to what the scope proves it
 /// reaches. `locals` are the names this file declares at top level (the scanner already knows
-/// them); a self-call is dropped, a repeated call collapses in the extractor's dedup.
+/// them); a self-call is dropped, and a repeated call collapses into one edge.
 pub(crate) fn scan(resolver: &Resolver, rel: &str, source: &str, locals: &BTreeSet<String>, ex: &mut Extraction) {
     let src = source.as_bytes();
     let Some(tree) = parse(rel, src) else { return };
     let root = tree.root_node();
     let scope = Scope::collect(root, rel, src, resolver, locals);
+    // (owner, target) -> whether any site calls it rather than only passing it: one edge per
+    // pair keeps `impact`'s counts, and a real call is the stronger claim, so it wins.
+    let mut found: BTreeMap<(String, String), bool> = BTreeMap::new();
     let mut stack = vec![root];
     while let Some(n) = stack.pop() {
         let mut c = n.walk();
@@ -214,14 +217,19 @@ pub(crate) fn scan(resolver: &Resolver, rel: &str, source: &str, locals: &BTreeS
         let Some(callee) = callee else { continue };
         let class = class_of(n, src);
         // A function handed to another — `rows.map(feedWire)`, `.filter(isIndexedType)` — is
-        // called on the caller's behalf, and a change to it breaks the caller all the same.
+        // called on the caller's behalf, and a change to it breaks the caller all the same; the
+        // edge says `arg`, because a constant or a DI token handed over the same way is not.
         let mut ac = n.walk();
         let passed: Vec<Node> = n.child_by_field_name("arguments")
             .map(|a| a.named_children(&mut ac).filter(|x| x.kind() == "identifier").collect())
             .unwrap_or_default();
         let from = owner(n, rel, src);
-        for target in std::iter::once(callee).chain(passed).filter_map(|x| scope.target(x, class.as_deref(), rel, src)) {
-            if from != target { ex.edge(&from, &target, EdgeKind::Calls, "", rel); }
+        for (i, x) in std::iter::once(callee).chain(passed).enumerate() {
+            let Some(target) = scope.target(x, class.as_deref(), rel, src) else { continue };
+            if from != target { *found.entry((from.clone(), target)).or_default() |= i == 0; }
         }
+    }
+    for ((from, target), called) in found {
+        ex.edge(&from, &target, EdgeKind::Calls, if called { "" } else { "arg" }, rel);
     }
 }

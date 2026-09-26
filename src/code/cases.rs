@@ -681,6 +681,23 @@ fn a_function_passed_as_an_argument_is_called_by_the_caller() {
 }
 
 #[test]
+fn a_value_passed_as_an_argument_is_an_arg_edge_unless_the_owner_also_calls_it() {
+    let repo = Repo::new(&[("t.ts", "export const TOKEN = 'T';\nexport function run() {}\n")]);
+    let ex = repo.extract(
+        "m.ts",
+        "import { TOKEN, run } from './t';\n\
+         export function a() { register(TOKEN); }\n\
+         export function b() { go(run); run(); }\n",
+    );
+    let mut got = edges(&ex, EdgeKind::Calls);
+    got.sort();
+    assert_eq!(got, vec![
+        ("sym:m.ts::a", "sym:t.ts::TOKEN", "arg"),
+        ("sym:m.ts::b", "sym:t.ts::run", ""),
+    ], "one edge per pair, and a real call wins over the same target passed");
+}
+
+#[test]
 fn rendering_a_component_in_jsx_is_a_call_of_it() {
     let repo = Repo::new(&[
         ("m.tsx", "export function CommissionMatrix() { return null; }\n"),
