@@ -210,7 +210,7 @@ impl<'a> Scope<'a> {
     }
 
     /// The enclosing type and each type around it, innermost first.
-    fn enclosing(&self, namespace: &str, class: Option<&str>) -> Vec<Vec<Part>> {
+    pub fn enclosing(&self, namespace: &str, class: Option<&str>) -> Vec<Vec<Part>> {
         let Some(c) = class else { return Vec::new() };
         let mut chain: Vec<&str> = c.split('.').collect();
         let mut out = Vec::new();
@@ -229,6 +229,18 @@ impl<'a> Scope<'a> {
     /// The declared type of a field, property, event, primary-constructor parameter or `@inject` of the enclosing types.
     pub fn enclosing_member_type(&self, member: &str, namespace: &str, class: Option<&str>) -> Option<String> {
         self.enclosing(namespace, class).iter().flatten().find_map(|p| self.members(p)?.get(member)?.clone())
+    }
+
+    /// Whether a `using static` in scope could bring in a member named `name`: one whose target
+    /// declares it, or one whose target the repository does not declare and so cannot rule out.
+    pub fn static_import_could_name(&self, name: &str) -> bool {
+        self.usings.iter().any(|u| match u {
+            Using::Static(t) => {
+                let parts = self.full(t);
+                parts.is_empty() || !self.member_ids(&parts, name).is_empty()
+            }
+            _ => false,
+        })
     }
 
     /// `M()` imported by `using static T;`.

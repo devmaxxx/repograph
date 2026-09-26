@@ -133,9 +133,23 @@ impl Reader<'_> {
             "local_function_statement" => return self.scoped_body(n, n.child_by_field_name("parameters"), n.child_by_field_name("body"), at, locals, ex),
             "invocation_expression" => {
                 if let Some(f) = n.child_by_field_name("function") {
+                    self.type_args(f, at, ex);
                     for to in self.call_targets(f, at, locals) {
                         self.call(at, &to, ex);
                     }
+                }
+            }
+            "member_access_expression" => {
+                for f in ["expression", "name"] {
+                    if let Some(g) = n.child_by_field_name(f) {
+                        self.type_args(g, at, ex);
+                    }
+                }
+                self.static_access(n, at, locals, ex);
+            }
+            "member_binding_expression" => {
+                if let Some(g) = n.child_by_field_name("name") {
+                    self.type_args(g, at, ex);
                 }
             }
             // `new T()` calls the type, as TypeScript's `new` does.
@@ -171,6 +185,75 @@ impl Reader<'_> {
                 self.use_type(&name, at, ex);
             }
         }
+    }
+
+    /// `AddScoped<IGateway, Gateway>()` and `Get<Order>()`: the grammar reads what sits between
+    /// the angle brackets of a generic name as type arguments, so each is a type use wherever the
+    /// generic name stands. A generic name in a type position is read by `type_uses` instead.
+    fn type_args(&self, g: Node, at: &At, ex: &mut Extraction) {
+        if g.kind() != "generic_name" {
+            return;
+        }
+        for list in named(g).into_iter().filter(|c| c.kind() == "type_argument_list") {
+            let mut names = Vec::new();
+            for a in named(list) {
+                type_names(a, self.src, &mut names);
+            }
+            for name in names {
+                self.use_type(&name, at, ex);
+            }
+        }
+    }
+
+    /// `Status.Open` and `Shop.Orders.Status.Open`: a chain of plain names used as a value names
+    /// the longest prefix that resolves to a type. Only the outermost access of a chain is read,
+    /// so an inner prefix is never taken for the chain's type.
+    fn static_access(&self, n: Node, at: &At, locals: &Locals, ex: &mut Extraction) {
+        let inner = n.parent().is_some_and(|p| p.kind() == "member_access_expression" && p.child_by_field_name("expression") == Some(n));
+        if inner {
+            return;
+        }
+        let Some(segments) = plain_chain(n, self.src) else { return };
+        if !self.first_names_a_type(&segments[0], at, locals) {
+            return;
+        }
+        let (ns, class) = (at.namespace.as_str(), at.class.as_deref());
+        for k in (1..segments.len()).rev() {
+            let prefix = segments[..k].join(".");
+            if !self.scope.types(&prefix, ns, class).is_empty() {
+                self.use_type(&prefix, at, ex);
+                return;
+            }
+        }
+    }
+
+    /// Whether the compiler's simple-name lookup of `first` can only reach a type or a namespace:
+    /// a local, a parameter or a type parameter comes first, and so does any member the enclosing
+    /// types declare or inherit. A member whose declared type is spelled `first` still leaves the
+    /// access naming the type, which is C#'s "Color Color" rule. A base the repository does not
+    /// declare, a Razor component's implicit `ComponentBase`, and a `using static` of a type the
+    /// repository cannot read could each hold a member of that name, so each is no proof.
+    fn first_names_a_type(&self, first: &str, at: &At, locals: &Locals) -> bool {
+        if locals.contains_key(first) || at.type_params.contains(first) || self.host.component.is_some() {
+            return false;
+        }
+        let color_color = |m: &BTreeMap<String, Option<String>>| m.get(first).is_none_or(|t| t.as_deref() == Some(first));
+        for level in self.scope.enclosing(&at.namespace, at.class.as_deref()) {
+            if !level.iter().all(|p| self.scope.members(p).is_none_or(color_color)) {
+                return false;
+            }
+            let mut shadowed = false;
+            let walked = self.scope.walk_bases(&level, |bases| {
+                shadowed = bases.iter().any(|p| {
+                    !self.scope.members(p).is_none_or(color_color) || !self.scope.full(&join(&p.full, first)).is_empty()
+                });
+                shadowed
+            });
+            if shadowed || !walked.unresolved.is_empty() {
+                return false;
+            }
+        }
+        !self.scope.static_import_could_name(first)
     }
 
     fn use_type(&self, name: &str, at: &At, ex: &mut Extraction) -> Vec<Part> {
@@ -500,6 +583,21 @@ enum Typed {
     /// Neither a local, a parameter, a field or property, nor — for a bare name — a type: not a
     /// value, so never a member lookup and never an extension.
     None,
+}
+
+/// `["Shop", "Orders", "Status", "Open"]` from an access chain of plain identifiers, or none when
+/// any link is something else — `this`, a call, a generic name, a predefined type.
+fn plain_chain(e: Node, src: &[u8]) -> Option<Vec<String>> {
+    match e.kind() {
+        "identifier" => Some(vec![text(e, src).to_string()]),
+        "member_access_expression" => {
+            let name = e.child_by_field_name("name").filter(|x| x.kind() == "identifier")?;
+            let mut out = plain_chain(e.child_by_field_name("expression")?, src)?;
+            out.push(text(name, src).to_string());
+            Some(out)
+        }
+        _ => None,
+    }
 }
 
 /// `Shop.Checks.Guard` from a member-access chain whose every link is a plain name.

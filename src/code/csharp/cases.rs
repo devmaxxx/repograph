@@ -924,3 +924,97 @@ fn a_string_literal_inside_an_interpolation_hole_is_referenced_once() {
     let refs = edges(&ex, EdgeKind::References);
     assert_eq!(refs.iter().filter(|(_, id, _)| *id == "ADR-022").count(), 1, "{refs:?}");
 }
+
+const STATUS: (&str, &str) = ("Orders/Status.cs", "namespace Shop.Orders;\npublic enum Status { Open, Closed }\n");
+const LIMITS: (&str, &str) = ("Orders/Limits.cs", "namespace Shop.Orders;\npublic static class Limits\n{\n    public static class Tier { public const int Max = 3; }\n}\n");
+const GAUGE: (&str, &str) = ("Orders/Gauge.cs", "namespace Shop.Orders;\npublic class Gauge { public int Open; }\n");
+
+fn imports_from(files: &[(&str, &str)], rel: &str) -> Vec<(String, String)> {
+    let ex = Repo::new(files).extract(rel);
+    edges(&ex, EdgeKind::Imports).into_iter().map(|(_, to, name)| (to.to_string(), name.to_string())).collect()
+}
+
+fn imports_status(files: &[(&str, &str)], rel: &str) -> bool {
+    imports_from(files, rel).iter().any(|(to, _)| to == "file:Orders/Status.cs")
+}
+
+#[test]
+fn a_static_member_access_imports_the_type_it_names() {
+    let use_ = ("Use/Report.cs", "using Shop.Orders;\nnamespace Shop.Use;\nclass Report\n{\n    object Pick() => Status.Open;\n    int Max() => Shop.Orders.Limits.Tier.Max;\n}\n");
+    let imports = imports_from(&[STATUS, LIMITS, use_], "Use/Report.cs");
+    for (to, name) in [("file:Orders/Status.cs", "Status"), ("file:Orders/Limits.cs", "Limits")] {
+        assert!(imports.contains(&(to.to_string(), name.to_string())), "{to} [{name}] missing from {imports:?}");
+    }
+}
+
+#[test]
+fn a_member_named_and_typed_like_its_type_still_names_the_type() {
+    let props = ("Use/Report.Props.cs", "using Shop.Orders;\nnamespace Shop.Use;\npublic partial class Report\n{\n    public Status Status { get; set; }\n}\n");
+    let use_ = ("Use/Report.cs", "using Shop.Orders;\nnamespace Shop.Use;\npublic partial class Report\n{\n    bool Closed() => Status == Status.Closed;\n}\n");
+    assert!(imports_status(&[STATUS, props, use_], "Use/Report.cs"), "C#'s Color Color rule binds Status.Closed to the type");
+}
+
+#[test]
+fn a_member_named_like_a_type_but_typed_otherwise_shadows_it() {
+    let props = ("Use/Report.Props.cs", "using Shop.Orders;\nnamespace Shop.Use;\npublic partial class Report\n{\n    public Gauge Status { get; set; }\n}\n");
+    let use_ = ("Use/Report.cs", "using Shop.Orders;\nnamespace Shop.Use;\npublic partial class Report\n{\n    int Level() => Status.Open;\n}\n");
+    assert!(!imports_status(&[STATUS, GAUGE, props, use_], "Use/Report.cs"), "Status.Open reads the property");
+}
+
+#[test]
+fn a_local_parameter_lambda_parameter_or_type_parameter_shadows_a_static_access() {
+    for body in [
+        "int M() { var Status = new Gauge(); return Status.Open; }",
+        "int M(Gauge Status) => Status.Open;",
+        "System.Func<Gauge, int> M() => Status => Status.Open;",
+        "object M<Status>() => Status.Open;",
+    ] {
+        let src = format!("using Shop.Orders;\nnamespace Shop.Use;\nclass Report\n{{\n    {body}\n}}\n");
+        let use_ = ("Use/Report.cs", src.as_str());
+        assert!(!imports_status(&[STATUS, GAUGE, use_], "Use/Report.cs"), "{body}");
+    }
+}
+
+#[test]
+fn an_inherited_member_or_a_base_the_repository_cannot_read_blocks_a_static_access() {
+    let base = ("Use/ReportBase.cs", "using Shop.Orders;\nnamespace Shop.Use;\npublic class ReportBase { protected Gauge Status; }\n");
+    let inherits = ("Use/Report.cs", "using Shop.Orders;\nnamespace Shop.Use;\nclass Report : ReportBase\n{\n    int M() => Status.Open;\n}\n");
+    assert!(!imports_status(&[STATUS, GAUGE, base, inherits], "Use/Report.cs"), "the inherited field shadows the type");
+    let external = ("Use/Report.cs", "using Shop.Orders;\nnamespace Shop.Use;\nclass Report : Microsoft.AspNetCore.Mvc.ControllerBase\n{\n    object M() => Status.Open;\n}\n");
+    assert!(!imports_status(&[STATUS, external], "Use/Report.cs"), "a framework base could declare Status");
+    let static_ = ("Use/Report.cs", "using Shop.Orders;\nusing static System.Math;\nnamespace Shop.Use;\nclass Report\n{\n    object M() => Status.Open;\n}\n");
+    assert!(!imports_status(&[STATUS, static_], "Use/Report.cs"), "an unread using static could bring a Status member");
+}
+
+#[test]
+fn a_component_s_implicit_base_blocks_a_static_access() {
+    let page = ("Web/Pages/Report.razor", "@using Shop.Orders\n<p/>\n@code {\n    object Pick() => Status.Open;\n}\n");
+    assert!(!imports_status(&[STATUS, page], "Web/Pages/Report.razor"), "ComponentBase is not the repository's to read");
+}
+
+#[test]
+fn a_generic_argument_in_an_expression_is_a_type_use() {
+    let gateway = ("Payments/Gateway.cs", "namespace Shop.Payments;\npublic interface IGateway {}\npublic class Gateway : IGateway {}\n");
+    let receipt = ("Orders/Receipt.cs", "namespace Shop.Orders;\npublic class Receipt {}\n");
+    let use_ = ("Use/Startup.cs", "using Shop.Orders;\nusing Shop.Payments;\nnamespace Shop.Use;\nclass Startup\n{\n    void Wire(Registry services)\n    {\n        services.AddScoped<IGateway, Gateway>();\n        var all = Pick<int, Receipt>();\n        services?.Map<Status>();\n    }\n}\n");
+    let imports = imports_from(&[gateway, receipt, STATUS, use_], "Use/Startup.cs");
+    for (to, name) in [("file:Payments/Gateway.cs", "IGateway"), ("file:Payments/Gateway.cs", "Gateway"), ("file:Orders/Receipt.cs", "Receipt"), ("file:Orders/Status.cs", "Status")] {
+        assert!(imports.contains(&(to.to_string(), name.to_string())), "{to} [{name}] missing from {imports:?}");
+    }
+}
+
+#[test]
+fn a_type_parameter_as_a_generic_argument_is_no_type_use() {
+    let use_ = ("Use/Store.cs", "namespace Shop.Orders;\nclass Store<Status>\n{\n    object Get() => Pick<Status>();\n    object Pick<U>() => null;\n}\n");
+    assert!(!imports_status(&[STATUS, use_], "Use/Store.cs"));
+}
+
+#[test]
+fn typeof_default_and_a_cast_are_type_uses() {
+    let use_ = ("Use/Report.cs", "using Shop.Orders;\nnamespace Shop.Use;\nclass Report\n{\n    object A() => typeof(Status);\n    object B() => default(Gauge);\n    object C(object o) => (Receipt)o;\n}\n");
+    let receipt = ("Orders/Receipt.cs", "namespace Shop.Orders;\npublic class Receipt {}\n");
+    let imports = imports_from(&[STATUS, GAUGE, receipt, use_], "Use/Report.cs");
+    for to in ["file:Orders/Status.cs", "file:Orders/Gauge.cs", "file:Orders/Receipt.cs"] {
+        assert!(imports.iter().any(|(t, _)| t == to), "{to} missing from {imports:?}");
+    }
+}

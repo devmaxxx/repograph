@@ -67,20 +67,23 @@ fn is_name(s: &str) -> bool {
 
 /// `@using (Html.BeginForm())` in a view is a statement, not a directive, so a target that is not a
 /// dotted name is none.
+/// `global::` anchors a name at the global namespace, which is where the index already keys every
+/// full name, so `@using global::Shop.Payments` is `@using Shop.Payments`.
 fn using(text: &str) -> Option<Using> {
     let text = text.trim().trim_end_matches(';').trim();
+    let target = |t: &str| t.trim().trim_start_matches("global::").to_string();
     let using = match text.strip_prefix("static ") {
-        Some(t) => Using::Static(t.trim().to_string()),
+        Some(t) => Using::Static(target(t)),
         None => match text.split_once('=') {
-            Some((alias, target)) => Using::Alias(alias.trim().to_string(), target.trim().to_string()),
-            None => Using::Namespace(text.to_string()),
+            Some((alias, t)) => Using::Alias(alias.trim().to_string(), target(t)),
+            None => Using::Namespace(target(text)),
         },
     };
     let names = match &using {
         Using::Namespace(n) | Using::Static(n) => vec![n.as_str()],
         Using::Alias(a, t) => vec![a.as_str(), t.as_str()],
     };
-    names.iter().all(|n| is_name(n.trim_start_matches("global::"))).then_some(using)
+    names.iter().all(|n| is_name(n)).then_some(using)
 }
 
 /// The type names a directive writes: `IStringLocalizer<Shop.Checkout>` gives both.

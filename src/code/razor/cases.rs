@@ -716,3 +716,15 @@ fn two_words_after_inherits_name_no_base_rather_than_the_two_joined() {
     let ex = Repo::new(&files).extract("Web/Shared/Wrap.razor");
     assert!(edges(&ex, EdgeKind::Extends).is_empty(), "{:?}", edges(&ex, EdgeKind::Extends));
 }
+
+#[test]
+fn a_using_anchored_at_global_reads_as_the_plain_using() {
+    let invoice = ("Billing/Invoice.cs", "namespace Shop.Billing;\npublic class Invoice {}\n");
+    let badge = ("Badges/Badge.razor", "@namespace Shop.Badges\n<span/>\n");
+    let page = ("Web/Pages/P20.razor", "@using global::Shop.Billing\n@using global::Shop.Badges\n<Badge />\n@code {\n    [Parameter] public Invoice Current { get; set; }\n}\n");
+    let mut files = WEB.to_vec();
+    files.extend_from_slice(&[invoice, badge, page]);
+    let ex = Repo::new(&files).extract("Web/Pages/P20.razor");
+    assert!(edges(&ex, EdgeKind::Imports).contains(&("file:Web/Pages/P20.razor", "file:Billing/Invoice.cs", "Invoice")), "{:?}", ex.edges);
+    assert!(edges(&ex, EdgeKind::Calls).iter().any(|(_, to, _)| *to == "sym:Badges/Badge.razor::Badge"), "{:?}", ex.edges);
+}
