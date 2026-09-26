@@ -1,0 +1,1091 @@
+//! C# extraction on inline sources, so the grammar's shape is pinned by the assertion.
+
+use crate::code::imports::Resolver;
+use crate::code::CodeExtractor;
+use crate::config::Config;
+use crate::model::{EdgeKind, Extraction, Extractor};
+
+/// The defaults do not glob .NET until L7, and `Resolver::new` collects only globbed families.
+pub(crate) fn dotnet_config() -> Config {
+    Config { code_globs: vec!["**/*.cs".into(), "**/*.razor".into(), "**/*.cshtml".into()], ..Config::default() }
+}
+
+pub(crate) struct Repo {
+    pub(crate) dir: tempfile::TempDir,
+}
+
+impl Repo {
+    pub(crate) fn new(files: &[(&str, &str)]) -> Repo {
+        let dir = tempfile::tempdir().unwrap();
+        for (p, c) in files {
+            let full = dir.path().join(p);
+            std::fs::create_dir_all(full.parent().unwrap()).unwrap();
+            std::fs::write(full, c).unwrap();
+        }
+        Repo { dir }
+    }
+
+    pub(crate) fn resolver(&self) -> Resolver {
+        Resolver::new(self.dir.path(), &dotnet_config()).unwrap()
+    }
+
+    /// Extracts `rel` as it is on disk, so the resolver and the extractor read the same bytes.
+    pub(crate) fn extract(&self, rel: &str) -> Extraction {
+        let src = std::fs::read_to_string(self.dir.path().join(rel)).unwrap();
+        CodeExtractor::new(self.resolver()).extract(rel, &src)
+    }
+}
+
+pub(crate) fn one(rel: &str, src: &str) -> Extraction {
+    Repo::new(&[(rel, src)]).extract(rel)
+}
+
+pub(crate) fn ids(ex: &Extraction) -> Vec<&str> {
+    ex.nodes.iter().map(|n| n.id.as_str()).collect()
+}
+
+pub(crate) fn edges(ex: &Extraction, kind: EdgeKind) -> Vec<(&str, &str, &str)> {
+    ex.edges.iter().filter(|e| e.kind == kind).map(|e| (e.source.as_str(), e.target.as_str(), e.context.as_str())).collect()
+}
+
+#[test]
+fn a_cs_file_is_csharp_and_a_razor_view_is_razor() {
+    use crate::code::lang::{Family, Lang};
+    assert_eq!(Lang::of("Shop/OrderService.cs"), Some(Lang::CSharp));
+    assert_eq!(Lang::of("Pages/Checkout.razor.cs"), Some(Lang::CSharp));
+    assert_eq!(Lang::of("Pages/Checkout.razor"), Some(Lang::Razor));
+    assert_eq!(Lang::of("Pages/Index.cshtml"), Some(Lang::Razor));
+    assert_eq!(Lang::CSharp.family(), Family::DotNet);
+    assert_eq!(Lang::Razor.family(), Family::DotNet);
+    assert!(Lang::Razor.grammar().is_none());
+    let ex = one("Shop/A.cs", "namespace Shop;\nclass A {}\n");
+    assert!(ids(&ex).contains(&"file:Shop/A.cs"), "{:?}", ids(&ex));
+}
+
+const ORDERS: &str = r#"namespace Shop.Orders;
+
+/// Places orders.
+[Tracked]
+public partial class OrderService(IPaymentGateway gateway) : ServiceBase, IOrderService
+{
+    private readonly IPaymentGateway _gateway;
+    internal int Count { get; set; }
+    public event EventHandler Changed;
+    protected internal event EventHandler<int> Changing { add { } remove { } }
+    const int Max = 3, Min = 1;
+
+    public OrderService(IPaymentGateway g, int n) : this(g) { }
+    static OrderService() { }
+
+    [HttpGet("x")]
+    public Task<Order> Place(int id)
+    {
+        return null;
+    }
+
+    public Task<Order> Place(string code) => null;
+    ~OrderService() { }
+    public static OrderService operator +(OrderService a, OrderService b) => a;
+    public int this[int i] => i;
+
+    public class Line
+    {
+        void Touch() { }
+    }
+}
+
+public record Order(int Id, string Name);
+public record struct Point(int X, int Y);
+readonly struct Coins { }
+interface IOrderService { void Place(int id); int Total { get; } }
+public enum Status { Open, Closed }
+public delegate void PlacedHandler(int x);
+public static class CoinsExtensions
+{
+    public static int ToCoins(this int value) => value;
+}
+"#;
+
+#[test]
+fn types_members_primary_parameters_and_nested_types_are_declared() {
+    let ex = one("Shop/Orders.cs", ORDERS);
+    for id in [
+        "OrderService", "OrderService.gateway", "OrderService._gateway", "OrderService.Count",
+        "OrderService.Changed", "OrderService.Changing", "OrderService.Max", "OrderService.Min",
+        "OrderService.OrderService", "OrderService.Place", "OrderService.Line", "OrderService.Line.Touch",
+        "Order", "Order.Id", "Order.Name", "Point", "Point.X", "Coins", "IOrderService",
+        "IOrderService.Place", "IOrderService.Total", "Status", "PlacedHandler", "CoinsExtensions",
+        "CoinsExtensions.ToCoins",
+    ] {
+        let id = format!("sym:Shop/Orders.cs::{id}");
+        assert!(ids(&ex).contains(&id.as_str()), "{id} missing from {:?}", ids(&ex));
+    }
+    assert_eq!(ex.nodes.iter().filter(|n| n.id == "sym:Shop/Orders.cs::OrderService.Place").count(), 1, "overloads are one symbol");
+    let odd = ["operator", "this", "~", "Status.", "Shop.Orders"];
+    assert!(!ids(&ex).iter().any(|i| odd.iter().any(|o| i.contains(o))), "{:?}", ids(&ex));
+}
+
+#[test]
+fn visibility_follows_the_csharp_defaults() {
+    let src = "namespace Shop;\nclass Implicit { void Hidden() {} public void Shown() {} protected internal void Both() {} private protected void Narrow() {} }\npublic class Open { int field; internal int Inner; }\nfile class Local { }\ninterface IApi { void Call(); }\n";
+    let ex = one("Shop/V.cs", src);
+    let declares = edges(&ex, EdgeKind::Declares);
+    let ctx = |id: &str| {
+        let want = format!("sym:Shop/V.cs::{id}");
+        declares.iter().find(|(_, t, _)| *t == want).map(|(_, _, c)| c.to_string()).unwrap_or_else(|| panic!("{id} not declared"))
+    };
+    assert_eq!(ctx("Implicit"), "export", "a top-level type with no modifier is internal, and internal crosses files");
+    assert_eq!(ctx("Implicit.Hidden"), "", "a member with no modifier is private");
+    assert_eq!(ctx("Implicit.Shown"), "export");
+    assert_eq!(ctx("Implicit.Both"), "export");
+    assert_eq!(ctx("Implicit.Narrow"), "");
+    assert_eq!(ctx("Open.field"), "");
+    assert_eq!(ctx("Open.Inner"), "export");
+    assert_eq!(ctx("Local"), "", "a file-local type never leaves its file");
+    assert_eq!(ctx("IApi.Call"), "export", "an interface member is public without a modifier");
+}
+
+#[test]
+fn a_member_is_declared_by_its_type_and_spans_its_attribute_lines() {
+    let ex = one("Shop/Orders.cs", ORDERS);
+    let f = "sym:Shop/Orders.cs::";
+    let declares = edges(&ex, EdgeKind::Declares);
+    assert!(declares.contains(&("file:Shop/Orders.cs", "sym:Shop/Orders.cs::OrderService", "export")));
+    assert!(declares.iter().any(|(s, t, _)| *s == format!("{f}OrderService") && *t == format!("{f}OrderService.Line")));
+    assert!(declares.iter().any(|(s, t, _)| *s == format!("{f}OrderService.Line") && *t == format!("{f}OrderService.Line.Touch")));
+    let at = |id: &str| {
+        let n = ex.nodes.iter().find(|n| n.id == format!("{f}{id}")).unwrap();
+        (n.line, n.end)
+    };
+    assert_eq!(at("OrderService"), (4, 31));
+    assert_eq!(at("OrderService.Place"), (16, 20), "the first overload keeps the id, its attribute line included");
+    let body = &ex.nodes.iter().find(|n| n.id == format!("{f}OrderService")).unwrap().body;
+    assert_eq!(body, "Places orders.\npublic partial class OrderService(IPaymentGateway gateway) : ServiceBase, IOrderService");
+}
+
+#[test]
+fn each_file_declaring_part_of_a_partial_type_keeps_its_own_id() {
+    let repo = Repo::new(&[
+        ("Shop/OrderService.Bedrock.cs", "namespace Shop;\npublic partial class OrderService { public void Place() {} }\n"),
+        ("Shop/OrderService.Billing.cs", "namespace Shop;\npartial class OrderService { void Bill() {} }\n"),
+    ]);
+    assert!(ids(&repo.extract("Shop/OrderService.Bedrock.cs")).contains(&"sym:Shop/OrderService.Bedrock.cs::OrderService.Place"));
+    assert!(ids(&repo.extract("Shop/OrderService.Billing.cs")).contains(&"sym:Shop/OrderService.Billing.cs::OrderService.Bill"));
+}
+
+#[test]
+fn usings_of_every_form_are_read_and_a_global_one_is_kept_apart() {
+    let src = "global using Shop.Basics;\nusing System;\nusing static Shop.Checks.Guard;\nusing Pay = global::Shop.Payments.IPaymentGateway;\nnamespace Shop.Orders { using Shop.Billing; class A {} }\n";
+    let tree = crate::code::lang::Lang::CSharp.parse(src.as_bytes()).unwrap();
+    let mut ex = Extraction::default();
+    let d = super::declarations::scan(tree.root_node(), "Shop/A.cs", src.as_bytes(), &super::Host::default(), &mut ex);
+    use super::declarations::Using;
+    assert_eq!(d.global_usings, vec![Using::Namespace("Shop.Basics".into())]);
+    assert_eq!(d.usings, vec![
+        Using::Namespace("System".into()),
+        Using::Static("Shop.Checks.Guard".into()),
+        Using::Alias("Pay".into(), "Shop.Payments.IPaymentGateway".into()),
+        Using::Namespace("Shop.Billing".into()),
+    ]);
+    assert_eq!(d.types[0].full(), "Shop.Orders.A");
+}
+
+#[test]
+fn a_generated_file_is_read_like_any_other() {
+    // L9: a tracked generated client is code the rest of the repository calls, so no marker skips it.
+    let src = "// <auto-generated>\n//     Generated by a client generator.\n// </auto-generated>\n#nullable enable\nnamespace Shop.Remote.Stubs;\n\n[System.CodeDom.Compiler.GeneratedCode(\"generator\", \"1.0\")]\npublic partial class OrdersClient\n{\n    public System.Threading.Tasks.Task<Order> GetAsync(int id) => throw null!;\n}\n";
+    let repo = Repo::new(&[("Remote/OrdersClient.g.cs", src)]);
+    let ex = repo.extract("Remote/OrdersClient.g.cs");
+    for id in ["sym:Remote/OrdersClient.g.cs::OrdersClient", "sym:Remote/OrdersClient.g.cs::OrdersClient.GetAsync"] {
+        assert!(ids(&ex).contains(&id), "{id} missing from {:?}", ids(&ex));
+    }
+}
+
+#[test]
+fn declarations_under_a_preprocessor_branch_are_declared() {
+    let ex = one("Shop/A.cs", "namespace Shop;\n#if NET8_0\npublic class B {}\n#endif\npublic class A\n{\n#if DEBUG\n    public void Trace() {}\n#else\n    public void Quiet() {}\n#endif\n    public void Run() {}\n}\n");
+    let ids = ids(&ex);
+    for id in ["sym:Shop/A.cs::B", "sym:Shop/A.cs::A.Trace", "sym:Shop/A.cs::A.Quiet", "sym:Shop/A.cs::A.Run"] {
+        assert!(ids.contains(&id), "{id} missing: {ids:?}");
+    }
+}
+
+#[test]
+fn a_delegate_parameter_is_not_a_member() {
+    let ex = one("Shop/H.cs", "namespace Shop;\npublic delegate void PlacedHandler(int x);\n");
+    let ids = ids(&ex);
+    assert!(ids.contains(&"sym:Shop/H.cs::PlacedHandler"));
+    assert!(!ids.iter().any(|i| i.starts_with("sym:Shop/H.cs::PlacedHandler.")), "{ids:?}");
+}
+
+use super::declarations::{self, Declared};
+use super::index::DotNet;
+use super::resolve::Scope;
+use super::Host;
+
+fn own(rel: &str, src: &str) -> Declared {
+    let tree = crate::code::lang::Lang::CSharp.parse(src.as_bytes()).unwrap();
+    declarations::scan(tree.root_node(), rel, src.as_bytes(), &Host::default(), &mut Extraction::default())
+}
+
+/// The ids `name` resolves to from `rel`, at `namespace` inside `class`.
+fn resolves(repo: &Repo, rel: &str, name: &str, namespace: &str, class: Option<&str>) -> Vec<String> {
+    let resolver = repo.resolver();
+    let src = std::fs::read_to_string(repo.dir.path().join(rel)).unwrap();
+    let own = own(rel, &src);
+    let scope = Scope::new(rel, resolver.dotnet(), &own, &Host::default());
+    scope.types(name, namespace, class).into_iter().map(|p| format!("sym:{}::{}", p.rel, p.local)).collect()
+}
+
+#[test]
+fn a_type_in_an_enclosing_namespace_resolves_without_a_using() {
+    let repo = Repo::new(&[
+        ("Shop/Bedrock/Receipt.cs", "namespace Shop;\npublic class Receipt {}\n"),
+        ("Shop/Orders/Use.cs", "namespace Shop.Orders;\nclass Use {}\n"),
+    ]);
+    assert_eq!(resolves(&repo, "Shop/Orders/Use.cs", "Receipt", "Shop.Orders", Some("Use")), vec!["sym:Shop/Bedrock/Receipt.cs::Receipt"]);
+    assert_eq!(resolves(&repo, "Shop/Orders/Use.cs", "Shop.Receipt", "Shop.Orders", Some("Use")), vec!["sym:Shop/Bedrock/Receipt.cs::Receipt"]);
+    assert!(resolves(&repo, "Shop/Orders/Use.cs", "Missing", "Shop.Orders", Some("Use")).is_empty());
+}
+
+#[test]
+fn the_nearest_declaration_wins() {
+    let repo = Repo::new(&[
+        ("Shop/Receipt.cs", "namespace Shop;\npublic class Receipt {}\n"),
+        ("Shop/Orders/Receipt.cs", "namespace Shop.Orders;\npublic class Receipt {}\n"),
+        ("Shop/Orders/Use.cs", "namespace Shop.Orders;\nclass Use { class Receipt {} }\n"),
+    ]);
+    assert_eq!(resolves(&repo, "Shop/Orders/Use.cs", "Receipt", "Shop.Orders", Some("Use")), vec!["sym:Shop/Orders/Use.cs::Use.Receipt"], "a nested type shadows the namespace's");
+    assert_eq!(resolves(&repo, "Shop/Orders/Use.cs", "Receipt", "Shop.Orders", None), vec!["sym:Shop/Orders/Receipt.cs::Receipt"], "the inner namespace shadows the outer");
+}
+
+#[test]
+fn usings_aliases_and_static_usings_resolve() {
+    let repo = Repo::new(&[
+        ("Payments/IPaymentGateway.cs", "namespace Shop.Payments;\npublic interface IPaymentGateway {}\n"),
+        ("Checks/Guard.cs", "namespace Shop.Checks;\npublic static class Guard { public class Rule {} }\n"),
+        ("Orders/Use.cs", "using Shop.Payments;\nusing static Shop.Checks.Guard;\nusing Gw = Shop.Payments.IPaymentGateway;\nnamespace Shop.Orders;\nclass Use {}\n"),
+    ]);
+    let at = |name: &str| resolves(&repo, "Orders/Use.cs", name, "Shop.Orders", Some("Use"));
+    assert_eq!(at("IPaymentGateway"), vec!["sym:Payments/IPaymentGateway.cs::IPaymentGateway"]);
+    assert_eq!(at("Gw"), vec!["sym:Payments/IPaymentGateway.cs::IPaymentGateway"]);
+    assert_eq!(at("Rule"), vec!["sym:Checks/Guard.cs::Guard.Rule"]);
+}
+
+#[test]
+fn a_global_using_reaches_every_file_of_its_project_and_no_other() {
+    let repo = Repo::new(&[
+        ("Remote/Remote.csproj", "<Project Sdk=\"Microsoft.NET.Sdk\"></Project>\n"),
+        ("Remote/Everywhere.cs", "global using Shop.Payments;\n"),
+        ("Remote/Orders/Use.cs", "namespace Remote.Orders;\nclass Use {}\n"),
+        ("Web/Web.csproj", "<Project Sdk=\"Microsoft.NET.Sdk\"></Project>\n"),
+        ("Web/Page.cs", "namespace Web;\nclass Page {}\n"),
+        ("Lib/IPaymentGateway.cs", "namespace Shop.Payments;\npublic interface IPaymentGateway {}\n"),
+    ]);
+    assert_eq!(resolves(&repo, "Remote/Orders/Use.cs", "IPaymentGateway", "Remote.Orders", Some("Use")), vec!["sym:Lib/IPaymentGateway.cs::IPaymentGateway"]);
+    assert!(resolves(&repo, "Web/Page.cs", "IPaymentGateway", "Web", Some("Page")).is_empty(), "code names namespaces, and the other project never imported this one");
+}
+
+#[test]
+fn a_partial_type_resolves_to_every_part() {
+    let repo = Repo::new(&[
+        ("Shop/OrderService.Bedrock.cs", "namespace Shop;\npublic partial class OrderService {}\n"),
+        ("Shop/OrderService.Billing.cs", "namespace Shop;\npartial class OrderService {}\n"),
+        ("Shop/Use.cs", "namespace Shop;\nclass Use {}\n"),
+    ]);
+    // Parts come back sorted by path.
+    assert_eq!(resolves(&repo, "Shop/Use.cs", "OrderService", "Shop", Some("Use")), vec![
+        "sym:Shop/OrderService.Bedrock.cs::OrderService",
+        "sym:Shop/OrderService.Billing.cs::OrderService",
+    ]);
+}
+
+#[test]
+fn the_header_holds_each_declaring_namespace_and_the_top_level_names() {
+    use crate::code::index::header_for;
+    use crate::code::lang::Lang;
+    let src = "global using static Shop.Checks.Guard;\nusing Shop.Payments;\nnamespace Shop.Bedrock\n{\n    namespace Inner\n    {\n        class Repo { class Nested {} }\n    }\n    interface IRepo {}\n}\nclass Global {}\n";
+    let h = header_for(Lang::CSharp, "Shop/Repo.cs", src).unwrap();
+    assert_eq!(h.scope, vec!["Shop.Bedrock.Inner".to_string(), "Shop.Bedrock".to_string()]);
+    assert_eq!(h.directives.iter().map(String::as_str).collect::<Vec<_>>(), vec!["global using static Shop.Checks.Guard", "using Shop.Payments"]);
+    assert_eq!(h.top.iter().map(String::as_str).collect::<Vec<_>>(), vec!["Global", "IRepo", "Repo"]);
+}
+
+#[test]
+fn a_project_root_namespace_comes_from_the_project_or_its_file_name() {
+    let mut d = DotNet::default();
+    d.add_project("web/Shop.Web.csproj", "<Project><PropertyGroup><RootNamespace>Shop.Storefront</RootNamespace></PropertyGroup></Project>");
+    d.add_project("api/Shop-Remote.csproj", "<Project Sdk=\"Microsoft.NET.Sdk\"></Project>");
+    assert_eq!(d.root_namespace("web/Pages/Checkout.razor"), Some(("web", "Shop.Storefront")));
+    d.add_project("tools/My Shop.csproj", "<Project Sdk=\"Microsoft.NET.Sdk\"></Project>");
+    assert_eq!(d.root_namespace("api/Orders/Use.cs"), Some(("api", "Shop-Remote")), "the SDK replaces only spaces; Razor sanitises the rest");
+    assert_eq!(d.root_namespace("tools/x.cs"), Some(("tools", "My_Shop")));
+    assert_eq!(d.root_namespace("other/x.cs"), None);
+}
+
+// Visual Studio saves C# with a BOM, and a Windows checkout ends its lines in CRLF.
+#[test]
+fn bom_and_crlf_keep_rows_and_the_header() {
+    use crate::code::index::header_for;
+    use crate::code::lang::Lang;
+    let h = header_for(Lang::CSharp, "Shop/A.cs", "\u{FEFF}using Shop.Payments;\r\nnamespace Shop.Orders;\r\npublic class A { }\r\n").unwrap();
+    assert_eq!(h.directives.iter().map(String::as_str).collect::<Vec<_>>(), vec!["using Shop.Payments"]);
+    assert_eq!(h.scope, vec!["Shop.Orders".to_string()]);
+    assert_eq!(h.top.iter().map(String::as_str).collect::<Vec<_>>(), vec!["A"]);
+    let ex = one("Shop/B.cs", "\u{FEFF}namespace Shop;\r\n\r\npublic class B\r\n{\r\n    public void Run() {}\r\n}\r\n");
+    assert_eq!(ex.nodes.iter().find(|n| n.id == "sym:Shop/B.cs::B.Run").map(|n| n.line), Some(5));
+}
+
+const GATEWAY: &str = "namespace Shop.Payments;\npublic interface IPaymentGateway\n{\n    void Charge(int amount);\n    void Refund(int amount);\n    System.Threading.Tasks.Task ChargeAsync<T>(T amount);\n}\n";
+
+#[test]
+fn a_type_the_file_names_is_an_import_of_its_declaring_file() {
+    let repo = Repo::new(&[
+        ("Payments/IPaymentGateway.cs", GATEWAY),
+        ("Orders/Receipt.cs", "namespace Shop.Orders;\npublic class Receipt {}\n"),
+        ("Orders/Order.cs", "namespace Shop.Orders;\npublic record Order(int Id);\n"),
+        ("Orders/Use.cs", "using Shop.Payments;\nnamespace Shop.Orders;\nclass Use\n{\n    private IPaymentGateway _gateway;\n    System.Collections.Generic.List<Order> Pending() => null;\n    object Cast(object o) => (Receipt)o;\n}\n"),
+    ]);
+    let ex = repo.extract("Orders/Use.cs");
+    let imports = edges(&ex, EdgeKind::Imports);
+    for (to, name) in [("file:Payments/IPaymentGateway.cs", "IPaymentGateway"), ("file:Orders/Order.cs", "Order"), ("file:Orders/Receipt.cs", "Receipt")] {
+        assert!(imports.contains(&("file:Orders/Use.cs", to, name)), "{to} [{name}] missing from {imports:?}");
+    }
+    assert_eq!(imports.len(), 3, "a System type is not in the repository and imports nothing: {imports:?}");
+}
+
+#[test]
+fn a_base_class_and_an_interface_in_other_files_are_extended() {
+    let repo = Repo::new(&[
+        ("Bedrock/ServiceBase.cs", "namespace Shop.Bedrock;\npublic abstract class ServiceBase {}\n"),
+        ("Orders/IOrderService.cs", "namespace Shop.Orders;\npublic interface IOrderService {}\n"),
+        ("Orders/OrderService.cs", "using Shop.Bedrock;\nnamespace Shop.Orders;\npublic class OrderService : ServiceBase, IOrderService {}\n"),
+    ]);
+    let ex = repo.extract("Orders/OrderService.cs");
+    let extends = edges(&ex, EdgeKind::Extends);
+    assert!(extends.contains(&("sym:Orders/OrderService.cs::OrderService", "sym:Bedrock/ServiceBase.cs::ServiceBase", "")), "{extends:?}");
+    assert!(extends.contains(&("sym:Orders/OrderService.cs::OrderService", "sym:Orders/IOrderService.cs::IOrderService", "")), "{extends:?}");
+}
+
+#[test]
+fn the_parts_of_a_partial_type_import_each_other() {
+    let repo = Repo::new(&[
+        ("Shop/OrderService.Bedrock.cs", "namespace Shop;\npublic partial class OrderService {}\n"),
+        ("Shop/OrderService.Billing.cs", "namespace Shop;\npartial class OrderService {}\n"),
+    ]);
+    let ex = repo.extract("Shop/OrderService.Billing.cs");
+    let imports = edges(&ex, EdgeKind::Imports);
+    assert!(imports.contains(&("file:Shop/OrderService.Billing.cs", "file:Shop/OrderService.Bedrock.cs", "OrderService")), "{imports:?}");
+}
+
+#[test]
+fn an_attribute_points_at_its_declaring_class_and_never_at_a_shared_node() {
+    let repo = Repo::new(&[
+        ("Bedrock/TrackedAttribute.cs", "namespace Shop.Bedrock;\npublic sealed class TrackedAttribute : System.Attribute {}\n"),
+        ("Bedrock/Retry.cs", "namespace Shop.Bedrock;\npublic sealed class Retry : System.Attribute {}\n"),
+        ("Orders/OrderService.cs", "using Shop.Bedrock;\nnamespace Shop.Orders;\n[Tracked, Serializable]\npublic class OrderService\n{\n    [Retry(3)]\n    public void Place() {}\n}\n"),
+    ]);
+    let ex = repo.extract("Orders/OrderService.cs");
+    assert_eq!(edges(&ex, EdgeKind::DecoratedBy), vec![
+        ("sym:Orders/OrderService.cs::OrderService", "sym:Bedrock/TrackedAttribute.cs::TrackedAttribute", ""),
+        ("sym:Orders/OrderService.cs::OrderService.Place", "sym:Bedrock/Retry.cs::Retry", ""),
+    ]);
+    assert!(!ids(&ex).iter().any(|i| i.starts_with("deco:") || i.starts_with("anno:")), "{:?}", ids(&ex));
+}
+
+#[test]
+fn an_id_cited_in_a_comment_or_a_string_is_a_reference_from_where_it_sits() {
+    let ex = one("Shop/Jcs.cs", "namespace Shop;\n// FR-VIS-47: canonical form before signing\npublic class Jcs\n{\n    public string Name() => \"ADR-022\";\n}\n");
+    let refs = edges(&ex, EdgeKind::References);
+    assert!(refs.contains(&("file:Shop/Jcs.cs", "FR-VIS-47", "comment")), "{refs:?}");
+    assert!(refs.contains(&("sym:Shop/Jcs.cs::Jcs.Name", "ADR-022", "string")), "{refs:?}");
+}
+
+#[test]
+fn a_type_parameter_is_never_resolved_against_a_same_named_declaration() {
+    let repo = Repo::new(&[
+        ("Bedrock/TEntity.cs", "namespace Shop;\npublic class TEntity {}\n"),
+        ("Bedrock/U.cs", "namespace Shop;\npublic class U {}\n"),
+        ("Shop/Repo.cs", "namespace Shop;\npublic class Repo<TEntity>\n{\n    public TEntity Get() => default;\n    public U Map<U>(U x) => x;\n}\n"),
+    ]);
+    let ex = repo.extract("Shop/Repo.cs");
+    let imports = edges(&ex, EdgeKind::Imports);
+    assert!(imports.is_empty(), "a type parameter is not a use of the same-named declaration: {imports:?}");
+}
+
+#[test]
+fn an_assembly_attribute_points_at_its_declaring_class() {
+    let repo = Repo::new(&[
+        ("Bedrock/TrackedAttribute.cs", "public sealed class TrackedAttribute : System.Attribute {}\n"),
+        ("Shop/AssemblyInfo.cs", "[assembly: Tracked]\n"),
+    ]);
+    let ex = repo.extract("Shop/AssemblyInfo.cs");
+    assert_eq!(edges(&ex, EdgeKind::DecoratedBy), vec![
+        ("file:Shop/AssemblyInfo.cs", "sym:Bedrock/TrackedAttribute.cs::TrackedAttribute", ""),
+    ]);
+}
+
+const ORDERING: &[(&str, &str)] = &[
+    ("Payments/IPaymentGateway.cs", GATEWAY),
+    ("Orders/Receipt.cs", "namespace Shop.Orders;\npublic class Receipt\n{\n    public static Receipt Create() => new Receipt();\n    public void Print() {}\n}\n"),
+    ("Checks/Guard.cs", "namespace Shop.Checks;\npublic static class Guard { public static void NotNull(object o) {} }\n"),
+    ("Checks/CoinsExtensions.cs", "namespace Shop.Checks;\npublic static class CoinsExtensions { public static int ToCoins(this int value) => value; }\n"),
+    ("Orders/OrderService.cs", r#"using Shop.Payments;
+using Shop.Checks;
+using static Shop.Checks.Guard;
+namespace Shop.Orders;
+public class OrderService(IPaymentGateway gateway)
+{
+    private readonly IPaymentGateway _gateway = gateway;
+    public IPaymentGateway Backup { get; set; }
+    public async void Place(int id, IPaymentGateway other)
+    {
+        _gateway.Charge(id);
+        this._gateway.Charge(id);
+        _gateway?.Refund(id);
+        await _gateway.ChargeAsync<int>(id);
+        gateway.Refund(id);
+        Backup.Charge(id);
+        other.Refund(id);
+        var receipt = new Receipt();
+        receipt.Print();
+        Receipt.Create();
+        Helper();
+        NotNull(id);
+        id.ToCoins();
+        Place(id, other);
+    }
+    private void Helper() {}
+}
+"#),
+];
+
+#[test]
+fn calls_resolve_through_fields_properties_parameters_locals_and_types() {
+    let repo = Repo::new(ORDERING);
+    let ex = repo.extract("Orders/OrderService.cs");
+    let calls = edges(&ex, EdgeKind::Calls);
+    let from = "sym:Orders/OrderService.cs::OrderService.Place";
+    for to in [
+        "sym:Payments/IPaymentGateway.cs::IPaymentGateway.Charge",
+        "sym:Payments/IPaymentGateway.cs::IPaymentGateway.Refund",
+        "sym:Payments/IPaymentGateway.cs::IPaymentGateway.ChargeAsync",
+        "sym:Orders/Receipt.cs::Receipt",
+        "sym:Orders/Receipt.cs::Receipt.Print",
+        "sym:Orders/Receipt.cs::Receipt.Create",
+        "sym:Orders/OrderService.cs::OrderService.Helper",
+        "sym:Checks/Guard.cs::Guard.NotNull",
+        "sym:Checks/CoinsExtensions.cs::CoinsExtensions.ToCoins",
+    ] {
+        assert!(calls.contains(&(from, to, "")), "{from} -> {to} missing from {calls:?}");
+    }
+    assert!(!calls.iter().any(|(s, t, _)| s == t), "a recursive call is not an edge: {calls:?}");
+}
+
+#[test]
+fn an_extension_call_resolves_only_when_one_imported_type_declares_it() {
+    let repo = Repo::new(&[
+        ("A/Coins.cs", "namespace Shop.A;\npublic static class Coins { public static int Round(this int v) => v; }\n"),
+        ("B/Numbers.cs", "namespace Shop.B;\npublic static class Numbers { public static int Round(this int v) => v; }\n"),
+        ("C/Hidden.cs", "namespace Shop.C;\npublic static class Hidden { public static int Round(this int v) => v; }\n"),
+        ("Use/One.cs", "using Shop.A;\nnamespace Shop.Use;\nclass One { int M(int x) => x.Round(); }\n"),
+        ("Use/Two.cs", "using Shop.A;\nusing Shop.B;\nnamespace Shop.Use;\nclass Two { int M(int x) => x.Round(); }\n"),
+    ]);
+    assert_eq!(edges(&repo.extract("Use/One.cs"), EdgeKind::Calls), vec![("sym:Use/One.cs::One.M", "sym:A/Coins.cs::Coins.Round", "")]);
+    assert!(edges(&repo.extract("Use/Two.cs"), EdgeKind::Calls).is_empty(), "two imported candidates: the file cannot prove which");
+}
+
+#[test]
+fn an_unqualified_call_reaches_a_member_declared_in_another_part() {
+    let repo = Repo::new(&[
+        ("Shop/OrderService.Bedrock.cs", "namespace Shop;\npublic partial class OrderService { public void Place() {} }\n"),
+        ("Shop/OrderService.Billing.cs", "namespace Shop;\npartial class OrderService { void Bill() { Place(); base.ToString(); } }\n"),
+    ]);
+    assert_eq!(
+        edges(&repo.extract("Shop/OrderService.Billing.cs"), EdgeKind::Calls),
+        vec![("sym:Shop/OrderService.Billing.cs::OrderService.Bill", "sym:Shop/OrderService.Bedrock.cs::OrderService.Place", "")],
+    );
+}
+
+#[test]
+fn a_call_the_repository_cannot_prove_yields_no_edge() {
+    let ex = one("Shop/A.cs", "namespace Shop;\nclass A { void M(object logger, System.Action cb) { System.Console.WriteLine(1); cb(); logger.ToString(); } }\n");
+    assert!(edges(&ex, EdgeKind::Calls).is_empty(), "{:?}", ex.edges);
+}
+
+#[test]
+fn a_base_call_reaches_the_member_of_the_base_class() {
+    let repo = Repo::new(&[
+        ("Bedrock/ServiceBase.cs", "namespace Shop.Bedrock;\npublic abstract class ServiceBase { protected void Tracked() {} }\n"),
+        ("Orders/OrderService.cs", "using Shop.Bedrock;\nnamespace Shop.Orders;\npublic class OrderService : ServiceBase { void Place() { base.Tracked(); } }\n"),
+    ]);
+    assert_eq!(
+        edges(&repo.extract("Orders/OrderService.cs"), EdgeKind::Calls),
+        vec![("sym:Orders/OrderService.cs::OrderService.Place", "sym:Bedrock/ServiceBase.cs::ServiceBase.Tracked", "")],
+    );
+}
+
+const CALL_EXTENSIONS: &str = "namespace Shop.Ext;\npublic static class Extensions\n{\n    public static int Clamp(this int v) => v;\n    public static string Format(this string s) => s;\n    public static void Ship(this object o) {}\n    public static int Round(this int v) => v;\n}\n";
+
+#[test]
+fn an_unknown_bare_name_never_falls_to_an_extension() {
+    let repo = Repo::new(&[
+        ("Ext/Extensions.cs", CALL_EXTENSIONS),
+        ("Use/M.cs", "using Shop.Ext;\nnamespace Shop.Use;\nclass M { void Go() { Math.Clamp(1); } }\n"),
+    ]);
+    let ex = repo.extract("Use/M.cs");
+    assert!(edges(&ex, EdgeKind::Calls).is_empty(), "Math is neither a local nor a member: {:?}", ex.edges);
+}
+
+#[test]
+fn a_predefined_type_receiver_never_falls_to_an_extension() {
+    let repo = Repo::new(&[
+        ("Ext/Extensions.cs", CALL_EXTENSIONS),
+        ("Use/M.cs", "using Shop.Ext;\nnamespace Shop.Use;\nclass M { void Go() { string.Format(\"\"); } }\n"),
+    ]);
+    let ex = repo.extract("Use/M.cs");
+    assert!(edges(&ex, EdgeKind::Calls).is_empty(), "a predefined type is a type name, not a value: {:?}", ex.edges);
+}
+
+#[test]
+fn a_chain_receiver_never_falls_to_an_extension() {
+    let repo = Repo::new(&[
+        ("Ext/Extensions.cs", CALL_EXTENSIONS),
+        ("Orders/Order.cs", "namespace Shop.Orders;\npublic class Order { public static Order Make() => new Order(); public void Ship() {} }\n"),
+        ("Use/M.cs", "using Shop.Ext;\nnamespace Shop.Use;\nclass M { void Go() { Shop.Orders.Order.Make().Ship(); } }\n"),
+    ]);
+    let ex = repo.extract("Use/M.cs");
+    let calls = edges(&ex, EdgeKind::Calls);
+    assert!(!calls.iter().any(|(_, t, _)| t.ends_with("Ship")), "a call result's type is not read, so it proves neither Order.Ship nor Ext.Ship: {calls:?}");
+}
+
+#[test]
+fn a_local_of_unknown_type_still_resolves_through_an_extension() {
+    let repo = Repo::new(&[
+        ("Ext/Extensions.cs", CALL_EXTENSIONS),
+        ("Use/M.cs", "using Shop.Ext;\nnamespace Shop.Use;\nclass M { void Go() { int n = 1; n.Round(); } }\n"),
+    ]);
+    let ex = repo.extract("Use/M.cs");
+    assert_eq!(edges(&ex, EdgeKind::Calls), vec![("sym:Use/M.cs::M.Go", "sym:Ext/Extensions.cs::Extensions.Round", "")]);
+}
+
+#[test]
+fn this_x_never_consults_a_same_named_local() {
+    let repo = Repo::new(&[
+        ("Orders/Order.cs", "namespace Shop.Orders;\npublic class Order { }\n"),
+        ("Orders/Dto.cs", "namespace Shop.Orders;\npublic class Dto { public void Apply() {} }\n"),
+        ("Orders/A.cs", "namespace Shop.Orders;\nclass A { Order order; void M(Dto order) { this.order.Apply(); } }\n"),
+    ]);
+    let ex = repo.extract("Orders/A.cs");
+    assert!(edges(&ex, EdgeKind::Calls).is_empty(), "this.order reads the field's type (Order, no Apply), never the parameter's (Dto): {:?}", ex.edges);
+}
+
+#[test]
+fn a_lambda_parameter_does_not_shadow_a_same_named_field() {
+    let repo = Repo::new(&[
+        ("Orders/Dto.cs", "namespace Shop.Orders;\npublic class Dto { public void Apply() {} }\n"),
+        ("Orders/A.cs", "namespace Shop.Orders;\nclass A { Dto x; void M(System.Collections.Generic.List<int> xs) { xs.ForEach(x => x.Apply()); } }\n"),
+    ]);
+    let ex = repo.extract("Orders/A.cs");
+    assert!(edges(&ex, EdgeKind::Calls).is_empty(), "the lambda's own x is an int, never the field: {:?}", ex.edges);
+}
+
+#[test]
+fn a_var_local_from_a_call_does_not_shadow_a_same_named_field() {
+    let repo = Repo::new(&[
+        ("Orders/Dto.cs", "namespace Shop.Orders;\npublic class Dto { public void Apply() {} }\n"),
+        ("Orders/A.cs", "namespace Shop.Orders;\nclass A { Dto d; void M() { var d = GetDto(); d.Apply(); } }\n"),
+    ]);
+    let ex = repo.extract("Orders/A.cs");
+    assert!(edges(&ex, EdgeKind::Calls).is_empty(), "the local d shadows the field d, and its own type is unread: {:?}", ex.edges);
+}
+
+#[test]
+fn a_lambda_parameter_does_not_leak_past_its_body() {
+    let repo = Repo::new(&[
+        ("Orders/Order.cs", "namespace Shop.Orders;\npublic class Order { public void Ship() {} }\n"),
+        ("Orders/Dto.cs", "namespace Shop.Orders;\npublic class Dto { public void Apply() {} }\n"),
+        ("Orders/A.cs", "namespace Shop.Orders;\nclass A { Order o; void M() { System.Action<Dto> f = (Dto o) => o.Apply(); o.Ship(); } }\n"),
+    ]);
+    let ex = repo.extract("Orders/A.cs");
+    assert_eq!(edges(&ex, EdgeKind::Calls), vec![
+        ("sym:Orders/A.cs::A.M", "sym:Orders/Dto.cs::Dto.Apply", ""),
+        ("sym:Orders/A.cs::A.M", "sym:Orders/Order.cs::Order.Ship", ""),
+    ]);
+}
+
+#[test]
+fn an_unqualified_call_through_a_local_named_like_a_method_is_not_the_method() {
+    let repo = Repo::new(&[
+        ("Orders/A.cs", "namespace Shop.Orders;\nclass A { void Foo() {} void M(System.Action Foo) { Foo(); } }\n"),
+    ]);
+    let ex = repo.extract("Orders/A.cs");
+    assert!(edges(&ex, EdgeKind::Calls).is_empty(), "the parameter Foo shadows the method Foo: {:?}", ex.edges);
+}
+
+#[test]
+fn this_prefixed_field_access_resolves_the_same_as_the_bare_field() {
+    let repo = Repo::new(&[
+        ("Payments/IPaymentGateway.cs", GATEWAY),
+        ("Orders/OrderService.cs", "using Shop.Payments;\nnamespace Shop.Orders;\nclass OrderService(IPaymentGateway gateway) { private readonly IPaymentGateway _gateway = gateway; void Place(int id) { this._gateway.Charge(id); } }\n"),
+    ]);
+    let ex = repo.extract("Orders/OrderService.cs");
+    assert_eq!(edges(&ex, EdgeKind::Calls), vec![("sym:Orders/OrderService.cs::OrderService.Place", "sym:Payments/IPaymentGateway.cs::IPaymentGateway.Charge", "")]);
+}
+
+#[test]
+fn a_conditional_access_call_resolves_like_a_plain_member_access() {
+    let repo = Repo::new(&[
+        ("Payments/IPaymentGateway.cs", GATEWAY),
+        ("Orders/OrderService.cs", "using Shop.Payments;\nnamespace Shop.Orders;\nclass OrderService(IPaymentGateway gateway) { private readonly IPaymentGateway _gateway = gateway; void Place(int id) { _gateway?.Refund(id); } }\n"),
+    ]);
+    let ex = repo.extract("Orders/OrderService.cs");
+    assert_eq!(edges(&ex, EdgeKind::Calls), vec![("sym:Orders/OrderService.cs::OrderService.Place", "sym:Payments/IPaymentGateway.cs::IPaymentGateway.Refund", "")]);
+}
+
+#[test]
+fn a_type_parameter_masks_a_same_named_repo_type_in_a_call() {
+    let repo = Repo::new(&[
+        ("Bedrock/Order.cs", "namespace Shop;\npublic class Order { public static void Make() {} }\n"),
+        ("Shop/Repo.cs", "namespace Shop;\npublic class Repo<Order> { void M() { new Order(); Order.Make(); } }\n"),
+    ]);
+    let ex = repo.extract("Shop/Repo.cs");
+    assert!(edges(&ex, EdgeKind::Calls).is_empty(), "{:?}", ex.edges);
+}
+
+const DI_EXT: &str = "namespace Shop.Di;\npublic static class DiExtensions { public static IServiceCollection AddShop(this IServiceCollection s) => s; }\n";
+
+#[test]
+fn a_receiver_whose_type_is_not_a_repo_type_still_resolves_through_an_extension() {
+    let repo = Repo::new(&[
+        ("Di/Ext.cs", DI_EXT),
+        ("Use/M.cs", "using Shop.Di;\nnamespace Shop.Use;\nclass M { void Go(IServiceCollection services) { services.AddShop(); } }\n"),
+    ]);
+    let ex = repo.extract("Use/M.cs");
+    assert_eq!(edges(&ex, EdgeKind::Calls), vec![("sym:Use/M.cs::M.Go", "sym:Di/Ext.cs::DiExtensions.AddShop", "")]);
+}
+
+const ORDER: &str = "namespace Shop.Orders;\npublic class Order { public void Ship() {} }\n";
+const ORDER_EXT: &str = "namespace Shop.Orders;\npublic static class OrderExt { public static void Pack(this Order o) {} public static void Ship(this Order o) {} }\n";
+
+#[test]
+fn a_parameter_without_the_method_falls_through_to_its_extension() {
+    let repo = Repo::new(&[
+        ("Orders/Order.cs", ORDER),
+        ("Orders/OrderExt.cs", ORDER_EXT),
+        ("Orders/Use.cs", "namespace Shop.Orders;\nclass Use { void Go(Order o) { o.Pack(); o.Ship(); } }\n"),
+    ]);
+    let ex = repo.extract("Orders/Use.cs");
+    assert_eq!(edges(&ex, EdgeKind::Calls), vec![
+        ("sym:Orders/Use.cs::Use.Go", "sym:Orders/Order.cs::Order.Ship", ""),
+        ("sym:Orders/Use.cs::Use.Go", "sym:Orders/OrderExt.cs::OrderExt.Pack", ""),
+    ], "an instance method wins, and a method the type lacks falls through to its extension");
+}
+
+#[test]
+fn a_field_without_the_method_falls_through_to_its_extension() {
+    let repo = Repo::new(&[
+        ("Orders/Order.cs", ORDER),
+        ("Orders/OrderExt.cs", ORDER_EXT),
+        ("Orders/Use.cs", "namespace Shop.Orders;\nclass Use { Order f; void Go() { f.Pack(); } }\n"),
+    ]);
+    let ex = repo.extract("Orders/Use.cs");
+    assert_eq!(edges(&ex, EdgeKind::Calls), vec![("sym:Orders/Use.cs::Use.Go", "sym:Orders/OrderExt.cs::OrderExt.Pack", "")]);
+}
+
+#[test]
+fn a_var_local_without_the_method_falls_through_to_its_extension() {
+    let repo = Repo::new(&[
+        ("Orders/Order.cs", ORDER),
+        ("Orders/OrderExt.cs", ORDER_EXT),
+        ("Orders/Use.cs", "namespace Shop.Orders;\nclass Use { void Go() { var x = new Order(); x.Pack(); } }\n"),
+    ]);
+    let ex = repo.extract("Orders/Use.cs");
+    assert_eq!(edges(&ex, EdgeKind::Calls), vec![
+        ("sym:Orders/Use.cs::Use.Go", "sym:Orders/Order.cs::Order", ""),
+        ("sym:Orders/Use.cs::Use.Go", "sym:Orders/OrderExt.cs::OrderExt.Pack", ""),
+    ]);
+}
+
+const ORDER_MAKE: &str = "namespace Shop.Orders;\npublic class Order { public static Order Make() => new Order(); public void Ship() {} }\n";
+const SHIP_EXT: &str = "namespace Shop.Ext;\npublic static class E { public static void Ship(this object o) {} public static int Round(this int v) => v; }\n";
+
+#[test]
+fn an_unread_var_never_guesses_through_an_extension_when_a_repo_type_owns_the_name() {
+    let repo = Repo::new(&[
+        ("Orders/Order.cs", ORDER_MAKE),
+        ("Ext/E.cs", SHIP_EXT),
+        ("Use/M.cs", "using Shop.Orders;\nusing Shop.Ext;\nnamespace Shop.Use;\nclass M { void Go() { var y = Order.Make(); y.Ship(); } }\n"),
+    ]);
+    let ex = repo.extract("Use/M.cs");
+    assert_eq!(
+        edges(&ex, EdgeKind::Calls),
+        vec![("sym:Use/M.cs::M.Go", "sym:Orders/Order.cs::Order.Make", "")],
+        "y is an Order, which declares Ship, so E.Ship would be a guess",
+    );
+}
+
+#[test]
+fn an_unread_var_still_resolves_through_an_extension_when_no_repo_type_owns_the_name() {
+    let repo = Repo::new(&[
+        ("Ext/E.cs", SHIP_EXT),
+        ("Use/M.cs", "using Shop.Ext;\nnamespace Shop.Use;\nclass M { void Go() { var z = Fetch(); z.Round(); } }\n"),
+    ]);
+    let ex = repo.extract("Use/M.cs");
+    assert_eq!(edges(&ex, EdgeKind::Calls), vec![("sym:Use/M.cs::M.Go", "sym:Ext/E.cs::E.Round", "")]);
+}
+
+const ENTITY: &str = "namespace Shop.Orders;\npublic class Entity { public void Save() {} }\n";
+const ORDER_ENTITY: &str = "namespace Shop.Orders;\npublic class Order : Entity {}\n";
+const SAVE_EXT: &str = "namespace Shop.Ext;\npublic static class E { public static void Save(this object o) {} }\n";
+
+#[test]
+fn a_parameter_s_inherited_member_resolves_through_a_base_declared_in_another_file() {
+    let repo = Repo::new(&[
+        ("Orders/Entity.cs", ENTITY),
+        ("Orders/Order.cs", ORDER_ENTITY),
+        ("Ext/E.cs", SAVE_EXT),
+        ("Use/M.cs", "using Shop.Orders;\nusing Shop.Ext;\nnamespace Shop.Use;\nclass M { void Go(Order o) { o.Save(); } }\n"),
+    ]);
+    let ex = repo.extract("Use/M.cs");
+    assert_eq!(
+        edges(&ex, EdgeKind::Calls),
+        vec![("sym:Use/M.cs::M.Go", "sym:Orders/Entity.cs::Entity.Save", "")],
+        "Order's base Entity is declared in a different file than the one that inherits it",
+    );
+}
+
+const ORDER_WITH_ENTITY_SAME_FILE: &str = "namespace Shop.Orders;\npublic class Entity { public void Save() {} }\npublic class Order : Entity {}\n";
+
+#[test]
+fn a_parameter_s_inherited_member_resolves_through_a_base_declared_in_a_file_that_is_not_the_caller_s() {
+    let repo = Repo::new(&[
+        ("Orders/Order.cs", ORDER_WITH_ENTITY_SAME_FILE),
+        ("Ext/E.cs", SAVE_EXT),
+        ("Use/M.cs", "using Shop.Orders;\nusing Shop.Ext;\nnamespace Shop.Use;\nclass M { void Go(Order o) { o.Save(); } }\n"),
+    ]);
+    let ex = repo.extract("Use/M.cs");
+    assert_eq!(
+        edges(&ex, EdgeKind::Calls),
+        vec![("sym:Use/M.cs::M.Go", "sym:Orders/Order.cs::Entity.Save", "")],
+        "Entity and Order share a file, but it is neither the caller's own",
+    );
+}
+
+const ROOT_ENTITY_ORDER: &str = "namespace Shop.Orders;\npublic class Root { public void Save() {} }\npublic class Entity : Root {}\npublic class Order : Entity {}\n";
+
+#[test]
+fn a_parameter_s_inherited_member_resolves_two_links_up_the_base_chain() {
+    let repo = Repo::new(&[
+        ("Orders/Order.cs", ROOT_ENTITY_ORDER),
+        ("Ext/E.cs", SAVE_EXT),
+        ("Use/M.cs", "using Shop.Orders;\nusing Shop.Ext;\nnamespace Shop.Use;\nclass M { void Go(Order o) { o.Save(); } }\n"),
+    ]);
+    let ex = repo.extract("Use/M.cs");
+    assert_eq!(
+        edges(&ex, EdgeKind::Calls),
+        vec![("sym:Use/M.cs::M.Go", "sym:Orders/Order.cs::Root.Save", "")],
+        "Save is declared on Order's grand-base, two links up the chain",
+    );
+}
+
+const ADD_EXT: &str = "namespace Shop.Ext;\npublic static class E { public static void Add(this object o, int v) {} }\n";
+
+#[test]
+fn a_base_that_is_not_a_repo_type_blocks_the_extension_it_cannot_rule_out() {
+    let repo = Repo::new(&[
+        ("Ext/E.cs", ADD_EXT),
+        ("Use/M.cs", "using Shop.Ext;\nnamespace Shop.Use;\nclass Bag : List<int> {}\nclass M { void Go(Bag b) { b.Add(1); } }\n"),
+    ]);
+    let ex = repo.extract("Use/M.cs");
+    assert_eq!(
+        edges(&ex, EdgeKind::Calls),
+        Vec::<(&str, &str, &str)>::new(),
+        "List<int> is not a repo type, so it might declare Add on its own",
+    );
+}
+
+const NO_PACK_CHAIN: &str = "namespace Shop.Orders;\npublic class Base {}\npublic class Order : Base {}\n";
+const PACK_EXT: &str = "namespace Shop.Orders;\npublic static class PackExt { public static void Pack(this Order o) {} }\n";
+
+#[test]
+fn an_extension_still_fires_when_the_full_repo_base_chain_lacks_the_method() {
+    let repo = Repo::new(&[
+        ("Orders/Order.cs", NO_PACK_CHAIN),
+        ("Orders/PackExt.cs", PACK_EXT),
+        ("Use/M.cs", "using Shop.Orders;\nnamespace Shop.Use;\nclass M { void Go(Order o) { o.Pack(); } }\n"),
+    ]);
+    let ex = repo.extract("Use/M.cs");
+    assert_eq!(
+        edges(&ex, EdgeKind::Calls),
+        vec![("sym:Use/M.cs::M.Go", "sym:Orders/PackExt.cs::PackExt.Pack", "")],
+        "Order and its base Base are both repo types, and neither declares Pack",
+    );
+}
+
+const USE_GO: &str = "class M { void Go(Order o) { o.Save(); } }\n";
+
+#[test]
+fn a_base_name_resolves_where_its_subclass_is_declared_not_where_the_caller_sits() {
+    let repo = Repo::new(&[
+        ("Orders/Entity.cs", ENTITY),
+        ("Orders/Order.cs", ORDER_ENTITY),
+        ("Ext/E.cs", SAVE_EXT),
+        ("Use/Entity.cs", "namespace Shop.Use;\npublic class Entity { public void Save() {} }\n"),
+        ("Use/M.cs", &format!("using Shop.Orders;\nusing Shop.Ext;\nnamespace Shop.Use;\n{USE_GO}")),
+    ]);
+    let ex = repo.extract("Use/M.cs");
+    assert_eq!(
+        edges(&ex, EdgeKind::Calls),
+        vec![("sym:Use/M.cs::M.Go", "sym:Orders/Entity.cs::Entity.Save", "")],
+        "Order's Entity is Shop.Orders.Entity; the caller's own Shop.Use.Entity is not its base",
+    );
+}
+
+#[test]
+fn a_caller_s_same_named_type_without_the_method_does_not_let_an_extension_replace_the_real_base() {
+    let repo = Repo::new(&[
+        ("Orders/Entity.cs", ENTITY),
+        ("Orders/Order.cs", ORDER_ENTITY),
+        ("Ext/E.cs", SAVE_EXT),
+        ("Use2/Entity.cs", "namespace Shop.Use2;\npublic class Entity {}\n"),
+        ("Use2/M.cs", &format!("using Shop.Orders;\nusing Shop.Ext;\nnamespace Shop.Use2;\n{USE_GO}")),
+    ]);
+    let ex = repo.extract("Use2/M.cs");
+    assert_eq!(
+        edges(&ex, EdgeKind::Calls),
+        vec![("sym:Use2/M.cs::M.Go", "sym:Orders/Entity.cs::Entity.Save", "")],
+        "the caller's Shop.Use2.Entity lacks Save, but Order's real base declares it",
+    );
+}
+
+#[test]
+fn a_caller_s_nested_type_never_stands_in_for_a_receiver_s_base() {
+    let repo = Repo::new(&[
+        ("Orders/Entity.cs", ENTITY),
+        ("Orders/Order.cs", ORDER_ENTITY),
+        ("Ext/E.cs", SAVE_EXT),
+        ("Use/M.cs", "using Shop.Orders;\nusing Shop.Ext;\nnamespace Shop.Use;\nclass M { class Entity {} void Go(Order o) { o.Save(); } }\n"),
+    ]);
+    let ex = repo.extract("Use/M.cs");
+    assert_eq!(
+        edges(&ex, EdgeKind::Calls),
+        vec![("sym:Use/M.cs::M.Go", "sym:Orders/Entity.cs::Entity.Save", "")],
+        "M.Entity is visible to the caller, not to Order's base list",
+    );
+}
+
+#[test]
+fn a_base_name_resolves_through_a_using_only_its_subclass_s_file_has() {
+    let repo = Repo::new(&[
+        ("Bedrock/Entity.cs", "namespace Shop.Bedrock;\npublic class Entity { public void Save() {} }\n"),
+        ("Orders/Order.cs", "using Shop.Bedrock;\nnamespace Shop.Orders;\npublic class Order : Entity {}\n"),
+        ("Ext/E.cs", SAVE_EXT),
+        ("Use/M.cs", &format!("using Shop.Orders;\nusing Shop.Ext;\nnamespace Shop.Use;\n{USE_GO}")),
+    ]);
+    let ex = repo.extract("Use/M.cs");
+    assert_eq!(
+        edges(&ex, EdgeKind::Calls),
+        vec![("sym:Use/M.cs::M.Go", "sym:Bedrock/Entity.cs::Entity.Save", "")],
+        "Order.cs imports Shop.Bedrock, so its Entity is Shop.Bedrock.Entity though the caller never imports it",
+    );
+}
+
+#[test]
+fn a_partial_base_s_list_on_a_later_part_is_still_walked() {
+    let repo = Repo::new(&[
+        ("Orders/Root.cs", "namespace Shop.Orders;\npublic class Root { public void Save() {} }\n"),
+        ("Orders/Mid.A.cs", "namespace Shop.Orders;\npublic partial class Mid {}\n"),
+        ("Orders/Mid.B.cs", "namespace Shop.Orders;\npublic partial class Mid : Root {}\n"),
+        ("Orders/Order.cs", "namespace Shop.Orders;\npublic class Order : Mid {}\n"),
+        ("Ext/E.cs", SAVE_EXT),
+        ("Use/M.cs", &format!("using Shop.Orders;\nusing Shop.Ext;\nnamespace Shop.Use;\n{USE_GO}")),
+    ]);
+    let ex = repo.extract("Use/M.cs");
+    assert_eq!(
+        edges(&ex, EdgeKind::Calls),
+        vec![("sym:Use/M.cs::M.Go", "sym:Orders/Root.cs::Root.Save", "")],
+        "Mid's base list sits on its second part, and Root declares Save",
+    );
+}
+
+#[test]
+fn a_string_literal_inside_an_interpolation_hole_is_referenced_once() {
+    // `CodeExtractor::extract` sorts and dedups edges afterwards, which would hide a duplicate
+    // push here; scanning directly is the only way this case pins the write itself.
+    use super::refs;
+    let rel = "Shop/Jcs.cs";
+    let src = "namespace Shop;\npublic class Jcs\n{\n    public string Name() => $\"{Foo(\"ADR-022\")}\";\n}\n";
+    let tree = crate::code::lang::Lang::CSharp.parse(src.as_bytes()).unwrap();
+    let mut ex = Extraction::default();
+    let own = declarations::scan(tree.root_node(), rel, src.as_bytes(), &Host::default(), &mut ex);
+    let resolver = Repo::new(&[(rel, src)]).resolver();
+    refs::scan(tree.root_node(), rel, src.as_bytes(), &Host::default(), &own, &resolver, &mut ex);
+    let refs = edges(&ex, EdgeKind::References);
+    assert_eq!(refs.iter().filter(|(_, id, _)| *id == "ADR-022").count(), 1, "{refs:?}");
+}
+
+const STATUS: (&str, &str) = ("Orders/Status.cs", "namespace Shop.Orders;\npublic enum Status { Open, Closed }\n");
+const LIMITS: (&str, &str) = ("Orders/Limits.cs", "namespace Shop.Orders;\npublic static class Limits\n{\n    public static class Tier { public const int Max = 3; }\n}\n");
+const GAUGE: (&str, &str) = ("Orders/Gauge.cs", "namespace Shop.Orders;\npublic class Gauge { public int Open; }\n");
+
+fn imports_from(files: &[(&str, &str)], rel: &str) -> Vec<(String, String)> {
+    let ex = Repo::new(files).extract(rel);
+    edges(&ex, EdgeKind::Imports).into_iter().map(|(_, to, name)| (to.to_string(), name.to_string())).collect()
+}
+
+fn imports_status(files: &[(&str, &str)], rel: &str) -> bool {
+    imports_from(files, rel).iter().any(|(to, _)| to == "file:Orders/Status.cs")
+}
+
+#[test]
+fn a_static_member_access_imports_the_type_it_names() {
+    let use_ = ("Use/Report.cs", "namespace Shop.Orders.Use;\nclass Report\n{\n    object Pick() => Status.Open;\n    int Max() => Shop.Orders.Limits.Tier.Max;\n}\n");
+    let imports = imports_from(&[STATUS, LIMITS, use_], "Use/Report.cs");
+    for (to, name) in [("file:Orders/Status.cs", "Status"), ("file:Orders/Limits.cs", "Limits")] {
+        assert!(imports.contains(&(to.to_string(), name.to_string())), "{to} [{name}] missing from {imports:?}");
+    }
+}
+
+#[test]
+fn a_member_named_and_typed_like_its_type_still_names_the_type() {
+    let props = ("Use/Report.Props.cs", "namespace Shop.Orders.Use;\npublic partial class Report\n{\n    public Status Status { get; set; }\n}\n");
+    let use_ = ("Use/Report.cs", "namespace Shop.Orders.Use;\npublic partial class Report\n{\n    bool Closed() => Status == Status.Closed;\n}\n");
+    assert!(imports_status(&[STATUS, props, use_], "Use/Report.cs"), "C#'s Color Color rule binds Status.Closed to the type");
+}
+
+#[test]
+fn a_member_typed_as_a_nullable_or_an_array_of_its_namesake_shadows_it() {
+    for ty in ["Status?", "Status[]", "System.Collections.Generic.List<Status>"] {
+        let src = format!("namespace Shop.Orders.Use;\npublic partial class Report\n{{\n    public {ty} Status {{ get; set; }}\n}}\n");
+        let props = ("Use/Report.Props.cs", src.as_str());
+        let use_ = ("Use/Report.cs", "namespace Shop.Orders.Use;\npublic partial class Report\n{\n    object M() => Status.Length;\n}\n");
+        assert!(!imports_status(&[STATUS, props, use_], "Use/Report.cs"), "{ty}: Status.Length reads the property");
+    }
+}
+
+#[test]
+fn a_member_whose_type_resolves_elsewhere_shadows_the_type_this_part_names() {
+    let other = ("Other/Status.cs", "namespace Shop.Other;\npublic class Status { public int Closed; }\n");
+    let props = ("Use/Report.Props.cs", "namespace Shop.Orders.Use;\npublic partial class Report\n{\n    public Shop.Other.Status Status { get; set; }\n}\n");
+    let use_ = ("Use/Report.cs", "namespace Shop.Orders.Use;\npublic partial class Report\n{\n    int M() => Status.Closed;\n}\n");
+    assert!(!imports_status(&[STATUS, other, props, use_], "Use/Report.cs"), "the property is Shop.Other.Status, so Status.Closed reads it");
+}
+
+#[test]
+fn a_component_s_code_behind_part_blocks_a_static_access() {
+    let csproj = ("Web/Shop.Web.csproj", "<Project Sdk=\"Microsoft.NET.Sdk.Web\"><PropertyGroup><RootNamespace>Shop.Web</RootNamespace></PropertyGroup></Project>\n");
+    let status = ("Web/Status.cs", "namespace Shop.Web;\npublic enum Status { Open }\n");
+    let page = ("Web/Pages/Report.razor", "<p/>\n");
+    let behind = ("Web/Pages/Report.razor.cs", "namespace Shop.Web.Pages;\npublic partial class Report\n{\n    object Pick() => Status.Open;\n}\n");
+    let names = |files: &[(&str, &str)]| imports_from(files, "Web/Pages/Report.razor.cs").iter().any(|(to, _)| to == "file:Web/Status.cs");
+    assert!(names(&[status, csproj, behind]), "without the component, Status.Open names the type");
+    assert!(!names(&[status, csproj, page, behind]), "the component's ComponentBase is not the repository's to read");
+}
+
+const STRIPE: (&str, &str) = ("Settings/Stripe.cs", "namespace Shop.Settings;\npublic class Stripe\n{\n    public string ApiKey { get; set; }\n    public class Options {}\n}\n");
+
+fn imports_stripe(body: &str) -> bool {
+    let src = format!("using Shop.Settings;\nnamespace Shop.Use;\nclass Startup\n{{\n    {body}\n}}\n");
+    imports_from(&[STRIPE, ("Use/Startup.cs", src.as_str())], "Use/Startup.cs").iter().any(|(to, _)| to == "file:Settings/Stripe.cs")
+}
+
+#[test]
+fn a_qualified_access_through_a_using_imported_type_could_be_an_external_namespace() {
+    for body in [
+        "void M(string k) { Stripe.StripeConfiguration.ApiKey = k; }",
+        "string M() => nameof(Stripe.Charge);",
+        "object M() => Pick<Stripe.Options>();",
+        "bool M(object o) => o is Stripe.Customer;",
+        "bool M(object o) => o is not Stripe.Customer;",
+        "bool M(object o) => o is Stripe.Customer or Stripe.Invoice;",
+        "int M(object o) { switch (o) { case Stripe.Customer: return 1; } return 0; }",
+        "int M(object o) => o switch { Stripe.Customer => 1, _ => 0 };",
+        "object M() => Stripe.ApiKey;",
+    ] {
+        assert!(!imports_stripe(body), "{body}");
+    }
+    assert!(imports_stripe("string M() => Stripe.Key();"), "a namespace followed by a type is never invoked");
+}
+
+#[test]
+fn a_member_named_like_a_type_but_typed_otherwise_shadows_it() {
+    let props = ("Use/Report.Props.cs", "namespace Shop.Orders.Use;\npublic partial class Report\n{\n    public Gauge Status { get; set; }\n}\n");
+    let use_ = ("Use/Report.cs", "namespace Shop.Orders.Use;\npublic partial class Report\n{\n    int Level() => Status.Open;\n}\n");
+    assert!(!imports_status(&[STATUS, GAUGE, props, use_], "Use/Report.cs"), "Status.Open reads the property");
+}
+
+#[test]
+fn a_local_parameter_lambda_parameter_or_type_parameter_shadows_a_static_access() {
+    for body in [
+        "int M() { var Status = new Gauge(); return Status.Open; }",
+        "int M(Gauge Status) => Status.Open;",
+        "System.Func<Gauge, int> M() => Status => Status.Open;",
+        "object M<Status>() => Status.Open;",
+        "int M((Gauge, int) t) { var (Status, n) = t; return Status.Open; }",
+        "int M((Gauge, int)[] xs) { foreach (var (Status, n) in xs) return Status.Open; return 0; }",
+        "int M() { try { return 0; } catch (Gauge Status) { return Status.Open; } }",
+        "object M(Gauge[] xs) => from Status in xs select Status.Open;",
+        "object M(Gauge[] xs) => from g in xs let Status = g select Status.Open;",
+        "object M(Gauge[] xs) => from g in xs join Status in xs on g equals Status select Status.Open;",
+        "object M(Gauge[] xs) => from g in xs join h in xs on g equals h into Status select Status.Open;",
+        "object M(Gauge[] xs) => from g in xs group g by g into Status select Status.Key;",
+        "bool M(object o) => o is var (Status, n) && Status.Open > 0;",
+    ] {
+        let src = format!("namespace Shop.Orders.Use;\nclass Report\n{{\n    {body}\n}}\n");
+        let use_ = ("Use/Report.cs", src.as_str());
+        assert!(!imports_status(&[STATUS, GAUGE, use_], "Use/Report.cs"), "{body}");
+    }
+}
+
+#[test]
+fn an_inherited_member_or_a_base_the_repository_cannot_read_blocks_a_static_access() {
+    let base = ("Use/ReportBase.cs", "namespace Shop.Orders.Use;\npublic class ReportBase { protected Gauge Status; }\n");
+    let inherits = ("Use/Report.cs", "namespace Shop.Orders.Use;\nclass Report : ReportBase\n{\n    int M() => Status.Open;\n}\n");
+    assert!(!imports_status(&[STATUS, GAUGE, base, inherits], "Use/Report.cs"), "the inherited field shadows the type");
+    let external = ("Use/Report.cs", "namespace Shop.Orders.Use;\nclass Report : Microsoft.AspNetCore.Mvc.ControllerBase\n{\n    object M() => Status.Open;\n}\n");
+    assert!(!imports_status(&[STATUS, external], "Use/Report.cs"), "a framework base could declare Status");
+    let static_ = ("Use/Report.cs", "using Shop.Orders;\nusing static System.Math;\nnamespace Shop.Use;\nclass Report\n{\n    object M() => Status.Open;\n}\n");
+    assert!(!imports_status(&[STATUS, static_], "Use/Report.cs"), "an unread using static could bring a Status member");
+}
+
+#[test]
+fn a_component_s_implicit_base_blocks_a_static_access() {
+    let page = ("Web/Pages/Report.razor", "@using Shop.Orders\n<p/>\n@code {\n    object Pick() => Status.Open;\n}\n");
+    assert!(!imports_status(&[STATUS, page], "Web/Pages/Report.razor"), "ComponentBase is not the repository's to read");
+}
+
+#[test]
+fn a_generic_argument_in_an_expression_is_a_type_use() {
+    let gateway = ("Payments/Gateway.cs", "namespace Shop.Payments;\npublic interface IGateway {}\npublic class Gateway : IGateway {}\n");
+    let receipt = ("Orders/Receipt.cs", "namespace Shop.Orders;\npublic class Receipt {}\n");
+    let use_ = ("Use/Startup.cs", "using Shop.Orders;\nusing Shop.Payments;\nnamespace Shop.Use;\nclass Startup\n{\n    void Wire(Registry services)\n    {\n        services.AddScoped<IGateway, Gateway>();\n        var all = Pick<int, Receipt>();\n        services?.Map<Status>();\n    }\n}\n");
+    let imports = imports_from(&[gateway, receipt, STATUS, use_], "Use/Startup.cs");
+    for (to, name) in [("file:Payments/Gateway.cs", "IGateway"), ("file:Payments/Gateway.cs", "Gateway"), ("file:Orders/Receipt.cs", "Receipt"), ("file:Orders/Status.cs", "Status")] {
+        assert!(imports.contains(&(to.to_string(), name.to_string())), "{to} [{name}] missing from {imports:?}");
+    }
+}
+
+#[test]
+fn a_type_parameter_as_a_generic_argument_is_no_type_use() {
+    for body in [
+        "class Store<Status>\n{\n    object Get() => Pick<Status>();\n    object Pick<U>() => null;\n}",
+        "class Store\n{\n    object Get<Status>() => Pick<Status>();\n    object Pick<U>() => null;\n}",
+        "class Store\n{\n    void Get() { object L<Status>() => Pick<Status>(); }\n    object Pick<U>() => null;\n}",
+    ] {
+        let src = format!("namespace Shop.Orders;\n{body}\n");
+        let use_ = ("Use/Store.cs", src.as_str());
+        assert!(!imports_status(&[STATUS, use_], "Use/Store.cs"), "{body}");
+    }
+}
+
+#[test]
+fn typeof_default_and_a_cast_are_type_uses() {
+    let use_ = ("Use/Report.cs", "using Shop.Orders;\nnamespace Shop.Use;\nclass Report\n{\n    object A() => typeof(Status);\n    object B() => default(Gauge);\n    object C(object o) => (Receipt)o;\n}\n");
+    let receipt = ("Orders/Receipt.cs", "namespace Shop.Orders;\npublic class Receipt {}\n");
+    let imports = imports_from(&[STATUS, GAUGE, receipt, use_], "Use/Report.cs");
+    for to in ["file:Orders/Status.cs", "file:Orders/Gauge.cs", "file:Orders/Receipt.cs"] {
+        assert!(imports.iter().any(|(t, _)| t == to), "{to} missing from {imports:?}");
+    }
+}
+

@@ -368,17 +368,391 @@ def typescript_declarations(blanked: str) -> list[tuple[int, str]]:
 # The extensions TypeScript's readers also cover: same declaration grammar, same DI pattern.
 JS_FAMILY = (".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs")
 
+# C# and Razor. Each reader takes text `blank_csharp` or `blank_razor` has already emptied of
+# comments, strings and character literals, so a name in prose is never a declaration.
+CS_MODIFIER = (
+    "public|private|protected|internal|static|readonly|sealed|abstract|virtual|override|"
+    "partial|async|extern|unsafe|volatile|new|const|required|file|event|implicit|explicit|fixed"
+)
+CS_HEAD = rf"^[ \t]*(?:\[[^\]\n]*\][ \t]*)*(?:(?:{CS_MODIFIER})[ \t]+)*"
+CS_TYPE = re.compile(
+    CS_HEAD
+    + r"(?P<kw>class|struct|interface|enum|record(?:[ \t]+(?:class|struct))?)[ \t]+(?P<name>\w+)"
+    + r"[ \t]*(?:<[^>\n]*>)?[ \t]*(?P<params>\()?"
+)
+CS_NAMESPACE = re.compile(r"^[ \t]*namespace[ \t]+[\w.]+[ \t]*(?P<semi>;)?")
+CS_DELEGATE = re.compile(CS_HEAD + r"delegate[ \t]+.+?[ \t](?P<name>\w+)[ \t]*(?:<[^>\n]*>)?[ \t]*\(")
+CS_TYPE_REF = r"(?:[\w.]+(?:<[^;{}()\n]*>)?(?:\?|\[[, ]*\])*|\([^()\n]*\))"
+# The keyword look-ahead keeps a statement from reading as a member when a type body holds an
+# expression-bodied line, and `operator`/`this` from reading as names.
+CS_MEMBER = re.compile(
+    CS_HEAD
+    + r"(?!(?:class|struct|interface|enum|record|delegate|namespace|return|throw|using|var|await|yield)\b)"
+    + rf"(?:{CS_TYPE_REF}[ \t]+)?"
+    + r"(?!(?:operator|this)\b)(?P<name>\w+)[ \t]*(?:<[^>\n]*>)?[ \t]*(?:\(|\{|=>|=|;|,|$)"
+)
+CS_PARAM_NAME = re.compile(r"(\w+)[ \t]*(?:=[^,]*)?$")
+# A `#region`/`#endregion` banner names whatever the author likes; it is never code.
+CS_REGION = re.compile(r"#(?:region|endregion)\b")
+
+
+def _parameter_names(text: str) -> list[str]:
+    """The names in a primary constructor's parameter list; `text` starts just after its `(`."""
+    depth, current, parts = 0, "", []
+    for ch in text:
+        if ch in "(<[":
+            depth += 1
+        if ch in ")>]":
+            depth -= 1
+        if depth < 0:
+            break
+        if ch == "," and depth == 0:
+            parts.append(current)
+            current = ""
+        else:
+            current += ch
+    parts.append(current)
+    names = []
+    for part in parts:
+        part = re.sub(r"\[[^\]]*\]", "", part).strip()
+        m = CS_PARAM_NAME.search(part)
+        # One word is a type with no name, as in an empty `()`, never a parameter.
+        if m and " " in part.split("=")[0].strip():
+            names.append(m.group(1))
+    return names
+
+
+def csharp_declarations(blanked: str) -> list[tuple[int, str]]:
+    """(line, name) for every C# type, member and primary-constructor parameter.
+
+    A type's body holds declarations and a method's does not, so a local is never one. A primary
+    constructor's parameters are declared on the type's line: the store declares them as members,
+    because a record makes them properties and a class's members read them as fields.
+    """
+    found: list[tuple[int, str]] = []
+    holds: list[bool] = []
+    parens = 0
+    pending = None
+    header_open = False
+    params: tuple[int, list[str]] | None = None
+    for index, line in enumerate(blanked.split("\n")):
+        if params is not None:
+            params[1].append(line)
+        inside_type = bool(holds) and holds[-1]
+        # A header a brace has not yet closed — a base list wrapped onto its own line, a
+        # multi-line initialiser after `=`/`=>` — holds no namespace, type, delegate or member of
+        # its own; its continuation lines are read only for the brace or `;` that ends it.
+        if not header_open and parens == 0 and (not holds or inside_type):
+            if m := CS_NAMESPACE.match(line):
+                pending = m.group("semi") is None
+            elif m := CS_TYPE.match(line):
+                found.append((index + 1, m.group("name")))
+                pending = m.group("kw") != "enum"
+                if m.group("params"):
+                    params = (index + 1, [line[m.end():]])
+            elif m := CS_DELEGATE.match(line):
+                found.append((index + 1, m.group("name")))
+                pending = False
+            elif inside_type and (m := CS_MEMBER.match(line)):
+                found.append((index + 1, m.group("name")))
+                pending = False
+        for ch in line:
+            if ch == "{":
+                holds.append(bool(pending))
+                pending = None
+            elif ch == "}" and holds:
+                holds.pop()
+            elif ch == "(":
+                parens += 1
+            elif ch == ")" and parens:
+                parens -= 1
+        if params is not None and parens == 0:
+            found.extend((params[0], name) for name in _parameter_names("\n".join(params[1])))
+            params = None
+        if pending is not None and parens == 0 and line.rstrip().endswith(";"):
+            pending = None
+        # An accessor's own `{ }` has already spent `pending`, so an initialiser wrapped after it
+        # (`{ get; } =`) must reopen the header itself.
+        if pending is None and parens == 0 and line.rstrip().endswith(("=", "=>")):
+            pending = False
+        header_open = pending is not None
+    return found
+
+
+def _char_literal_end(src: str, i: int) -> int | None:
+    if i + 1 >= len(src):
+        return None
+    if src[i + 1] == "\\":
+        end = src.find("'", i + 3, i + 12)
+        return None if end < 0 else end + 1
+    return i + 3 if src[i + 2 : i + 3] == "'" else None
+
+
+def _string_end(src: str, i: int) -> int | None:
+    """The end of the C# string starting at `i` — regular, `@` verbatim, `$` interpolated, raw — or None.
+
+    An interpolation hole may hold a string of its own. A newline inside a regular string is an
+    error in C#, read here as no string at all, so one stray quote cannot blank the rest of a file.
+    """
+    j = i
+    interpolated = verbatim = False
+    while j < len(src) and src[j] in "$@":
+        interpolated |= src[j] == "$"
+        verbatim |= src[j] == "@"
+        j += 1
+    if src[j : j + 1] != '"':
+        return None
+    quotes = len(src[j:]) - len(src[j:].lstrip('"'))
+    if quotes >= 3:
+        end = src.find('"' * quotes, j + quotes)
+        return None if end < 0 else end + quotes
+    j += 1
+    while j < len(src):
+        c = src[j]
+        if c == "\\" and not verbatim:
+            j += 2
+            continue
+        if c == '"' and verbatim and src[j + 1 : j + 2] == '"':
+            j += 2
+            continue
+        if c == '"':
+            return j + 1
+        if c == "\n" and not verbatim:
+            return None
+        if c == "{" and interpolated:
+            if src[j + 1 : j + 2] == "{":
+                j += 2
+                continue
+            depth = 0
+            while j < len(src):
+                if src[j] == "{":
+                    depth += 1
+                elif src[j] == "}":
+                    depth -= 1
+                    if depth == 0:
+                        break
+                elif src[j] == '"':
+                    k = _string_end(src, j)
+                    if k is None:
+                        return None
+                    j = k
+                    continue
+                elif src[j] == "'":
+                    # A char literal's own `'"'` is not the hole's closing quote.
+                    k = _char_literal_end(src, j)
+                    if k is None:
+                        return None
+                    j = k
+                    continue
+                j += 1
+        j += 1
+    return None
+
+
+def blank_csharp(src: str) -> str:
+    """`src` with comments, strings and character literals emptied, every line kept in place."""
+    # `read_text` keeps a BOM, and `^[ \t]*` does not step over it: line 1 would go uncounted.
+    src = src.removeprefix("﻿")
+    out: list[str] = []
+    i, size = 0, len(src)
+    while i < size:
+        pair, c = src[i : i + 2], src[i]
+        if pair == "//":
+            end = src.find("\n", i)
+            i = size if end < 0 else end
+            continue
+        if pair == "/*":
+            end = src.find("*/", i + 2)
+            end = size if end < 0 else end + 2
+            out.append("\n" * src.count("\n", i, end))
+            i = end
+            continue
+        if c == "#" and src[src.rfind("\n", 0, i) + 1 : i].strip(" \t") == "" and CS_REGION.match(src, i):
+            end = src.find("\n", i)
+            i = size if end < 0 else end
+            continue
+        if c in '$@"':
+            end = _string_end(src, i)
+            if end is not None:
+                out.append('""' + "\n" * src.count("\n", i, end))
+                i = end
+                continue
+        if c == "'":
+            end = _char_literal_end(src, i)
+            if end is not None:
+                out.append("''")
+                i = end
+                continue
+        out.append(c)
+        i += 1
+    return "".join(out)
+
+
+RAZOR_WRAPPER = "__RazorBlock"
+RAZOR_OPEN = re.compile(r"^[ \t]*@(?:code|functions)\b[ \t]*(\{)?")
+# The directives whose type names are references; every other directive is blanked with the markup.
+RAZOR_KEPT = re.compile(r"^[ \t]*@(?:inject|model|inherits|implements|layout|attribute)[ \t]")
+# `@typeparam T` names nothing kept; a `where T : X` constraint names the real reference, so only
+# the constraint types are kept, never the parameter's own name.
+RAZOR_TYPEPARAM = re.compile(r"^[ \t]*@typeparam[ \t]+\w+[ \t]+where[ \t]+\w+[ \t]*:[ \t]*(?P<constraints>.+?)[ \t]*$")
+RAZOR_INJECT = re.compile(r"^[ \t]*@inject[ \t]+(?P<type>\S.*?)[ \t]+@?(?P<name>\w+)[ \t]*$")
+RAZOR_TAG = re.compile(r"<([A-Z][\w.]*)")
+# `@if (…) {` inside a block is a Razor transition before a C# statement; without the `@` it is C#.
+RAZOR_TRANSITION = re.compile(r"(?<![\w@])@(?=(?:if|foreach|for|while|switch|do|try|lock|using)\b)")
+RAZOR_COMMENT_CLOSE = {"@*": "*@", "<!--": "-->"}
+# A markup expression (`@Formatter.Money(...)`), an `@{ }` block outside `@code`, and a tag's own
+# generic argument (`TItem="Order"`) each need an expression reader repograph does not have yet;
+# they blank with the rest of the markup until one exists.
+
+
+def _razor_markup(line: str) -> str:
+    if m := RAZOR_TYPEPARAM.match(line):
+        return m.group("constraints")
+    # A kept directive's argument is C#: a string in it (`Roles = "Admin"`) names nothing.
+    return blank_csharp(line) if RAZOR_KEPT.match(line) else " ".join(RAZOR_TAG.findall(line))
+
+
+def _strip_markup_comments(line: str, closer: str | None) -> tuple[str, str | None]:
+    """`line` without its `@* *@` and `<!-- -->` spans, and the closer still awaited at its end.
+
+    Only markup goes through here: inside `@code` a `<!--` may sit in a C# string, where it opens
+    nothing. `@@` is an escaped `@`, so `@@*` opens nothing either.
+    """
+    kept, i = [], 0
+    while i < len(line):
+        if closer is not None:
+            end = line.find(closer, i)
+            if end < 0:
+                return "".join(kept), closer
+            i, closer = end + len(closer), None
+            continue
+        if line.startswith("@@", i):
+            kept.append("@@")
+            i += 2
+            continue
+        opener = next((o for o in RAZOR_COMMENT_CLOSE if line.startswith(o, i)), None)
+        if opener is not None:
+            closer = RAZOR_COMMENT_CLOSE[opener]
+            i += len(opener)
+            continue
+        kept.append(line[i])
+        i += 1
+    return "".join(kept), closer
+
+
+def blank_razor(src: str, markup: Callable[[str], str] = _razor_markup) -> str:
+    """A Razor file line for line, as the names it holds.
+
+    Each `@code`/`@functions` body becomes blanked C# inside one class `RAZOR_WRAPPER`; a directive
+    naming a type stays whole; every other line is reduced to the component tags it renders. The
+    page's own text and HTML go, so a word in its copy is never a reference. `markup` rewrites each
+    markup line once its comments are gone; a reader that needs the tags themselves keeps the line.
+    """
+    lines = src.removeprefix("﻿").split("\n")
+    out: list[str] = []
+    closer = None
+    i = 0
+    while i < len(lines):
+        lines[i], closer = _strip_markup_comments(lines[i], closer)
+        m = None if closer else RAZOR_OPEN.match(lines[i])
+        if not m:
+            out.append(markup(lines[i]))
+            i += 1
+            continue
+        opener = i if m.group(1) else i + 1
+        if opener >= len(lines) or "{" not in lines[opener]:
+            out.append("")
+            i += 1
+            continue
+        tail = "\n".join(lines[opener:])
+        body = RAZOR_TRANSITION.sub(" ", blank_csharp(tail[tail.index("{"):]))
+        depth, close = 0, None
+        for k, ch in enumerate(body):
+            if ch == "{":
+                depth += 1
+            elif ch == "}":
+                depth -= 1
+                if depth == 0:
+                    close = k
+                    break
+        if close is None:
+            # An unclosed block leaves nothing a reader can trust below it.
+            out.extend("" for _ in lines[i:])
+            break
+        block = body[: close + 1].split("\n")
+        if opener > i:
+            out.append("")
+        out.append(f"class {RAZOR_WRAPPER} " + block[0])
+        out.extend(block[1:])
+        i = opener + len(block)
+    return "\n".join(out)
+
+
+def razor_declarations(blanked: str) -> list[tuple[int, str]]:
+    """(line, name) for a component's `@inject` members and the members of its blocks.
+
+    The component itself is not here: its name is the file's, which this text does not hold, and
+    the declarations reading counts one per component file.
+    """
+    found = [(n + 1, m.group("name")) for n, line in enumerate(blanked.split("\n")) if (m := RAZOR_INJECT.match(line))]
+    found += [d for d in csharp_declarations(blanked) if d[1] != RAZOR_WRAPPER]
+    return sorted(found)
+
+
+def view_declarations(blanked: str) -> list[tuple[int, str]]:
+    """A `.cshtml` view declares nothing the store holds: its class is named after its path."""
+    return []
+
+
+CS_CLASS = re.compile(CS_HEAD + r"(?:class|struct|record(?:[ \t]+(?:class|struct))?)[ \t]+(\w+)", re.M)
+# `DiReader` asks for the name in group 1 and the type in group 2; C# writes the type first, so the
+# look-ahead reads the name before the type is consumed. A field, a property, a constructor
+# parameter and a primary-constructor parameter each end in one of `;={,)`. A qualified or generic
+# type is named by its last segment, the name a call graph owner carries.
+CS_FIELD = re.compile(
+    r"(?<![\w.])(?=(?:\w+\.)*[A-Z]\w*(?:<[^;{}()\n]*>)?\??[ \t]+(_?[A-Za-z]\w*)[ \t]*[;=,){])(?:\w+\.)*([A-Z]\w*)"
+)
+# Razor adds `@inject T Name`, which ends at the end of its line.
+RAZOR_FIELD = re.compile(
+    r"(?<![\w.])(?=(?:\w+\.)*[A-Z]\w*(?:<[^;{}()\n]*>)?\??[ \t]+@?(_?[A-Za-z]\w*)[ \t]*(?:[;=,){]|\r?$))(?:\w+\.)*([A-Z]\w*)",
+    re.M,
+)
+# A fluent chain wraps the `.` onto its own line as often as TypeScript's does, so the gap
+# around it spans newlines too, not only spaces.
+CS_CALL = re.compile(r"(?:\bthis[ \t]*\.[ \t]*)?\b(\w+)\s*\??\.\s*(\w+)[ \t]*(?:<[^<>()\n]*>)?[ \t]*\(")
+NO_CLASS = re.compile(r"(?!)")
+
+
+@dataclass(frozen=True)
+class ComponentDiReader(DiReader):
+    """A file that is one class named by the file: a Razor component. `cls` is never read."""
+
+
+CSHARP_DI = DiReader(CS_CLASS, CS_FIELD, CS_CALL)
+RAZOR_DI = ComponentDiReader(NO_CLASS, RAZOR_FIELD, CS_CALL)
+
+
 # Keyed by extension. A language joins the truth by adding its readers here; a file of an
 # extension no table names contributes nothing, which is what a language not yet read is.
 DECLARATIONS: dict[str, Callable[[str], list[tuple[int, str]]]] = {
     **{ext: typescript_declarations for ext in JS_FAMILY},
     ".kt": kotlin_declarations,
+    ".cs": csharp_declarations,
+    ".razor": razor_declarations,
+    ".cshtml": view_declarations,
 }
 BLANKERS: dict[str, Callable[[str], str]] = {
     **{ext: blank_typescript for ext in JS_FAMILY},
     ".kt": blank_kotlin,
+    ".cs": blank_csharp,
+    ".razor": blank_razor,
+    ".cshtml": blank_razor,
 }
-DI_READERS: dict[str, DiReader] = {ext: TYPESCRIPT_DI for ext in JS_FAMILY}
+DI_READERS: dict[str, DiReader] = {
+    **{ext: TYPESCRIPT_DI for ext in JS_FAMILY},
+    ".cs": CSHARP_DI,
+    ".razor": RAZOR_DI,
+}
 # `(caller, callee)` name pairs for a chain no field-and-call pattern can say: a migration altering
 # a table another created, a resolver answering a query. A callee is `Owner` or `Owner.member`, the
 # shape `shortest_path` hops on. A file whose extension has one is read by it and by no DiReader.
@@ -423,6 +797,10 @@ def di_call_graph(repo: Path, roots: list[str]) -> dict:
     `DiReader`, and a file of an extension with neither is skipped: another language's source read
     with TypeScript's patterns matches nothing today and could match anything tomorrow.
     """
+    if not roots:
+        # ripgrep reads the whole tree when handed no path at all; a tree with none of the
+        # roots the caller offered must scan nothing, not everything.
+        return {"edges": {}, "declared": {}}
     files = rg(repo, ["--files", *code_globs(), *roots])
     edges: dict[str, set[str]] = defaultdict(set)
     declared: dict[str, str] = {}
@@ -438,12 +816,22 @@ def di_call_graph(repo: Path, roots: list[str]) -> dict:
         if reader is None:
             continue
         src = (repo / rel).read_text(encoding="utf8", errors="replace")
-        marks = [(m.start(), m.group(1)) for m in reader.cls.finditer(src)] + [(len(src), None)]
+        if isinstance(reader, ComponentDiReader):
+            # The Razor compiler names a component's class after its file; `Checkout.razor` is `Checkout`.
+            marks = [(0, Path(rel).name.split(".")[0])]
+        else:
+            marks = [(m.start(), m.group(1)) for m in reader.cls.finditer(src)]
+        marks.append((len(src), None))
         for i in range(len(marks) - 1):
             start, name = marks[i]
             body = src[start : marks[i + 1][0]]
             declared[name] = rel
-            fields = {m.group(1): m.group(2) for m in reader.field.finditer(body)}
+            # A nested generic (`IDictionary<string, List<int>>`) gives a spurious second match
+            # starting at its inner argument; the first match, left to right, is always the
+            # outermost type, so it must win, not the last one written.
+            fields: dict[str, str] = {}
+            for m in reader.field.finditer(body):
+                fields.setdefault(m.group(1), m.group(2))
             for m in reader.call.finditer(body):
                 target = fields.get(m.group(1))
                 if target:
@@ -545,7 +933,10 @@ def build(repo: Path, cases: list[dict], blast: list[dict]) -> dict:
         # A code case names the file itself; a requirement case names an id that
         # some file spells.
         truth["retrieval"][want] = [want] if (repo / want).is_file() else files_naming(repo, want)
-    graph = di_call_graph(repo, ["apps", "packages"])
+    # .NET libraries live beside `apps` and `packages` in a monorepo. A root the tree lacks is dropped
+    # rather than handed to ripgrep, whose complaint would say nothing about the truth.
+    roots = [r for r in ("apps", "packages", "libs-dotnet") if (repo / r).is_dir()]
+    graph = di_call_graph(repo, roots)
     for case in blast:
         if case["kind"] == "impact":
             name = case["target"]

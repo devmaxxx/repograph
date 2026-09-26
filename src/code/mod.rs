@@ -1,9 +1,11 @@
 pub mod blank;
 pub mod calls;
+pub mod csharp;
 pub mod idrefs;
 pub mod imports;
 pub mod index;
 pub mod lang;
+pub mod razor;
 pub mod symbols;
 
 use crate::model::{Extraction, Extractor};
@@ -22,6 +24,8 @@ impl Extractor for CodeExtractor {
     fn extract(&self, rel: &str, text: &str) -> Extraction {
         let ex = match lang::Lang::of(rel) {
             Some(lang::Lang::TypeScript | lang::Lang::Tsx) => self.typescript(rel, text),
+            Some(lang::Lang::CSharp) => csharp::extract(self.symbols.resolver(), rel, text),
+            Some(lang::Lang::Razor) => razor::extract(self.symbols.resolver(), rel, text),
             None => {
                 let mut ex = Extraction::default();
                 lang::file_node(rel, &mut ex);

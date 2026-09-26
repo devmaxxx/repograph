@@ -58,13 +58,16 @@ impl QualifiedIndex {
 
 /// Header for an indexed family's file; None for every other language. Family plans add arms.
 pub fn header_for(lang: Lang, rel: &str, source: &str) -> Option<Header> {
-    // Read by the family arms; none has landed yet.
-    let _ = (rel, source);
     match lang.family() {
         // Path-resolved families (L3): the importer names a file, and no header is needed.
         Family::TypeScript | Family::Rust | Family::Python | Family::Dart | Family::Swift | Family::Bicep | Family::Hcl | Family::Shell => None,
+        Family::DotNet => match lang {
+            Lang::CSharp => Some(crate::code::csharp::index::facts(rel, source).header()),
+            Lang::Razor => Some(crate::code::razor::header(rel, source)),
+            _ => None,
+        },
         // The name-indexed families. Each family plan replaces its own name here with its arm.
-        Family::Jvm | Family::DotNet | Family::Sql | Family::GraphQl => None,
+        Family::Jvm | Family::Sql | Family::GraphQl => None,
     }
 }
 

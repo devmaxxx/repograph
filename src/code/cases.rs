@@ -731,8 +731,9 @@ fn a_crlf_source_extracts_the_same_nodes_and_edges_as_its_lf_twin() {
 
 #[test]
 fn a_globbed_file_no_grammar_reads_is_a_file_and_nothing_else() {
-    let ex = extract("svc/Program.cs", "namespace App;\npublic class Program { static void Main() { Run(); } }\n// FR-PAY-22\n");
-    assert_eq!(ids(&ex), vec!["file:svc/Program.cs"]);
+    // A log is no family's language, so no 0.6.0 grammar can turn this fixture into a real one.
+    let ex = extract("svc/boot.log", "boot ok\nRun() called\n");
+    assert_eq!(ids(&ex), vec!["file:svc/boot.log"]);
     assert!(ex.nodes.iter().all(|n| n.kind == NodeKind::File));
     assert!(ex.edges.is_empty(), "{:?}", ex.edges);
 }
@@ -782,8 +783,8 @@ fn the_file_node_every_language_writes_is_the_one_an_unread_file_always_got() {
 #[test]
 fn the_note_names_each_extension_once_with_its_count() {
     use crate::code::lang::files_only_note;
-    let rels = ["a/B.cs", "a/C.cs", "b/x.ts", "Makefile"];
+    let rels = ["a/B.log", "a/C.log", "b/x.ts", "Makefile"];
     assert_eq!(files_only_note(rels.into_iter()).as_deref(),
-        Some("code: no grammar reads 2 .cs, 1 (no extension) — indexed as files only"));
+        Some("code: no grammar reads 2 .log, 1 (no extension) — indexed as files only"));
     assert_eq!(files_only_note(["b/x.ts", "c/y.tsx", "d/z.mjs"].into_iter()), None);
 }
