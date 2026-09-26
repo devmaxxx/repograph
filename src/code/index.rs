@@ -64,7 +64,9 @@ pub fn header_for(lang: Lang, rel: &str, source: &str) -> Option<Header> {
         Family::DotNet => match lang {
             Lang::CSharp => Some(crate::code::csharp::index::facts(rel, source).header()),
             Lang::Razor => Some(crate::code::razor::header(rel, source)),
-            _ => None,
+            // Reached only by a variant `of` cannot return yet for this family; see `Lang::family`.
+            #[allow(unreachable_patterns)]
+            _ => unreachable!("{lang:?} has no DotNet header arm: its plan has not landed"),
         },
         // The name-indexed families. Each family plan replaces its own name here with its arm.
         Family::Jvm | Family::Sql | Family::GraphQl => None,

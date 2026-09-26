@@ -45,7 +45,7 @@ impl Lang {
         match self {
             Lang::TypeScript => Some(Language::new(tree_sitter_typescript::LANGUAGE_TYPESCRIPT)),
             Lang::Tsx => Some(Language::new(tree_sitter_typescript::LANGUAGE_TSX)),
-            Lang::CSharp => Some(tree_sitter::Language::new(tree_sitter_c_sharp::LANGUAGE)),
+            Lang::CSharp => Some(Language::new(tree_sitter_c_sharp::LANGUAGE)),
             Lang::Razor => None,
             // A language whose family plan has not landed has no crate in this build, and `of`
             // never returns it. Once every plan has landed the arm is unreachable, and harmless.
