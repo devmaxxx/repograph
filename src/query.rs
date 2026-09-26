@@ -264,7 +264,10 @@ pub fn ask(graph: &Graph, lex: &Lexical, dense: Option<Dense>, rerank: Option<Re
     answer
 }
 
-fn is_test(id: &str) -> bool { id.contains("/test/") || id.contains(".spec.") || id.contains(".test.") }
+/// Code no production path runs: unit tests, end-to-end helpers and stories alike.
+fn is_test(id: &str) -> bool {
+    ["/test/", "/e2e/", ".spec.", ".test.", ".stories."].iter().any(|m| id.contains(m))
+}
 
 /// How much of a line is shown where one is quoted: a seed's label, a family's defining line.
 pub(crate) const HEADLINE: usize = 80;
@@ -652,6 +655,21 @@ mod tests {
         );
         assert_eq!(passed_over("routes", pick, &rest[..1]).unwrap(), "routes: took sym:apps/panel/src/routes.ts::routes; also matches sym:apps/api/test/a.spec.ts::routes");
         assert_eq!(passed_over("routes", pick, &[]), None);
+    }
+
+    #[test]
+    fn an_e2e_helper_or_a_story_does_not_count_as_production() {
+        let mut g = Graph::default();
+        let mut e = Extraction::default();
+        for f in ["apps/panel/e2e/calendar.ts", "apps/panel/src/calendar.ts", "packages/ui/src/d.stories.tsx", "tools/runner.mjs"] {
+            e.node(NodeKind::Symbol, &format!("sym:{f}::DAY"), "DAY", "", f, 1);
+        }
+        g.apply(e);
+        assert_eq!(resolve_code(&g, "DAY").unwrap().0.id, "sym:apps/panel/src/calendar.ts::DAY");
+        g.nodes.remove("sym:apps/panel/src/calendar.ts::DAY");
+        assert_eq!(resolve_code(&g, "DAY").unwrap().0.id, "sym:tools/runner.mjs::DAY");
+        let a = ask(&g, &lex(&g, &Questions::default()), None, None, &["DAY".to_string()], &opts());
+        assert_eq!(a.seeds[0].id, "sym:tools/runner.mjs::DAY");
     }
 
     #[test]

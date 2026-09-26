@@ -115,8 +115,9 @@ repograph changes --base main --depth 1     # the whole branch; depth 1 is the d
 ```
 
 `impact` and `trace` resolve a name the way `explain` does, except that when a document node and
-code share it they take the code, production code before a test, and name on stderr three of the
-candidates they passed over and how many more there are.
+code share it they take the code, production code before a test (a `test/` or `e2e/` path, a
+`*.test.*`, `*.spec.*` or `*.stories.*` file), and name on stderr three of the candidates they
+passed over and how many more there are.
 
 Answers are lines of the form:
 
