@@ -2,7 +2,7 @@
 
 use std::collections::BTreeSet;
 
-use crate::code::jvm::fixture::{edges, ids, one};
+use crate::code::jvm::fixture::{edges, ids, one, Repo};
 use crate::model::EdgeKind;
 
 const ORDERS: &str = "package shop.orders;
@@ -156,4 +156,66 @@ fn a_member_three_types_deep_keeps_every_segment() {
     let declares = edges(&ex, EdgeKind::Declares);
     assert!(declares.contains(&("sym:shop/Deep.java::A.B", "sym:shop/Deep.java::A.B.C", "")), "{declares:?}");
     assert!(declares.contains(&("sym:shop/Deep.java::A.B.C", "sym:shop/Deep.java::A.B.C.m", "")), "{declares:?}");
+}
+
+const INVOICE: &str = "package shop.billing;\n\npublic class Invoice {\n    public void send() {}\n    public static class Line {}\n}\n";
+const MONEY: &str = "package shop.util;\n\npublic final class Money {\n    public static int round(int n) { return n; }\n}\n";
+
+#[test]
+fn a_single_a_nested_and_a_static_import_each_name_their_file() {
+    let repo = Repo::new(&[
+        ("shop/billing/Invoice.java", INVOICE),
+        ("shop/util/Money.java", MONEY),
+        ("shop/orders/Use.java", "package shop.orders;\n\nimport shop.billing.Invoice;\nimport shop.billing.Invoice.Line;\nimport static shop.util.Money.round;\n\npublic class Use extends Invoice {\n    static class Row extends Line {}\n}\n"),
+    ]);
+    let ex = repo.extract("shop/orders/Use.java");
+    let imports = edges(&ex, EdgeKind::Imports);
+    assert!(imports.contains(&("file:shop/orders/Use.java", "file:shop/billing/Invoice.java", "Invoice")), "{imports:?}");
+    assert!(imports.contains(&("file:shop/orders/Use.java", "file:shop/util/Money.java", "Money")), "{imports:?}");
+    let extends = edges(&ex, EdgeKind::Extends);
+    assert!(extends.contains(&("sym:shop/orders/Use.java::Use", "sym:shop/billing/Invoice.java::Invoice", "")), "{extends:?}");
+    assert!(extends.contains(&("sym:shop/orders/Use.java::Use.Row", "sym:shop/billing/Invoice.java::Invoice.Line", "")), "{extends:?}");
+}
+
+#[test]
+fn a_supertype_resolves_through_its_package_a_star_and_its_full_name() {
+    let repo = Repo::new(&[
+        ("shop/billing/Invoice.java", INVOICE),
+        ("shop/billing/Draft.java", "package shop.billing;\n\nclass Draft extends Invoice {}\n"),
+        ("shop/orders/Star.java", "package shop.orders;\n\nimport shop.billing.*;\n\nclass Star extends Invoice {}\n"),
+        ("shop/orders/Full.java", "package shop.orders;\n\nclass Full extends shop.billing.Invoice {}\n"),
+    ]);
+    for (rel, class) in [("shop/billing/Draft.java", "Draft"), ("shop/orders/Star.java", "Star"), ("shop/orders/Full.java", "Full")] {
+        let ex = repo.extract(rel);
+        let from = format!("sym:{rel}::{class}");
+        assert!(edges(&ex, EdgeKind::Extends).contains(&(from.as_str(), "sym:shop/billing/Invoice.java::Invoice", "")), "{rel}: {:?}", ex.edges);
+    }
+    assert!(edges(&repo.extract("shop/orders/Star.java"), EdgeKind::Imports).is_empty());
+}
+
+#[test]
+fn a_generic_and_a_sealed_supertype_resolve_to_their_raw_type() {
+    let repo = Repo::new(&[
+        ("shop/Repo.java", "package shop;\n\npublic interface Repo<T> { T get(); }\n"),
+        ("shop/Shape.java", "package shop;\n\npublic sealed interface Shape permits Circle {}\n"),
+        ("shop/Circle.java", "package shop;\n\npublic record Circle(int r) implements Shape, Repo<Circle> { public Circle get() { return this; } }\n"),
+    ]);
+    let circle = repo.extract("shop/Circle.java");
+    let ext = edges(&circle, EdgeKind::Extends);
+    for to in ["sym:shop/Shape.java::Shape", "sym:shop/Repo.java::Repo"] {
+        assert!(ext.contains(&("sym:shop/Circle.java::Circle", to, "")), "{to}: {ext:?}");
+    }
+    // `permits` names a subtype, not a supertype.
+    assert!(edges(&repo.extract("shop/Shape.java"), EdgeKind::Extends).is_empty());
+}
+
+#[test]
+fn a_name_two_star_imports_both_supply_resolves_to_nothing() {
+    let repo = Repo::new(&[
+        ("shop/billing/Invoice.java", INVOICE),
+        ("shop/legacy/Invoice.java", "package shop.legacy;\n\npublic class Invoice {}\n"),
+        ("shop/orders/Both.java", "package shop.orders;\n\nimport shop.billing.*;\nimport shop.legacy.*;\n\nclass Both extends Invoice {}\n"),
+    ]);
+    let ex = repo.extract("shop/orders/Both.java");
+    assert!(edges(&ex, EdgeKind::Extends).is_empty(), "{:?}", ex.edges);
 }

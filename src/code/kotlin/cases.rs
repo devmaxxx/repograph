@@ -2,7 +2,7 @@
 
 use std::collections::BTreeSet;
 
-use crate::code::jvm::fixture::{edges, ids, one};
+use crate::code::jvm::fixture::{edges, ids, one, Repo};
 use crate::model::EdgeKind;
 
 const TOKENS: &str = "package app
@@ -157,4 +157,58 @@ fn a_file_annotation_does_not_hide_the_package() {
     let src = "@file:JvmName(\"Tokens\")\npackage app\n\nclass A\n";
     assert_eq!(super::header(src).scope, vec!["app".to_string()]);
     assert!(ids(&one("app/A.kt", src)).contains(&"sym:app/A.kt::A"));
+}
+
+const NETWORK: &str = "package pl.crm.network\n\nopen class SessionTokens {\n    fun read(): String = \"\"\n}\n";
+
+#[test]
+fn an_import_names_the_declaring_file_and_its_supertype_resolves() {
+    let repo = Repo::new(&[
+        ("network/Tokens.kt", NETWORK),
+        ("sync/Use.kt", "package pl.crm.sync\n\nimport pl.crm.network.SessionTokens\n\nclass Use : SessionTokens()\n"),
+    ]);
+    let ex = repo.extract("sync/Use.kt");
+    assert!(edges(&ex, EdgeKind::Imports).contains(&("file:sync/Use.kt", "file:network/Tokens.kt", "SessionTokens")), "{:?}", ex.edges);
+    assert!(edges(&ex, EdgeKind::Extends).contains(&("sym:sync/Use.kt::Use", "sym:network/Tokens.kt::SessionTokens", "")), "{:?}", ex.edges);
+}
+
+#[test]
+fn the_same_package_needs_no_import_and_a_star_resolves_at_its_use_without_an_imports_edge() {
+    let repo = Repo::new(&[
+        ("network/Tokens.kt", NETWORK),
+        ("network/Same.kt", "package pl.crm.network\n\nclass Same : SessionTokens()\n"),
+        ("sync/Star.kt", "package pl.crm.sync\n\nimport pl.crm.network.*\n\nclass Star : SessionTokens()\n"),
+    ]);
+    let same = repo.extract("network/Same.kt");
+    assert!(edges(&same, EdgeKind::Extends).contains(&("sym:network/Same.kt::Same", "sym:network/Tokens.kt::SessionTokens", "")), "{:?}", same.edges);
+    let star = repo.extract("sync/Star.kt");
+    assert!(edges(&star, EdgeKind::Extends).contains(&("sym:sync/Star.kt::Star", "sym:network/Tokens.kt::SessionTokens", "")), "{:?}", star.edges);
+    assert!(edges(&star, EdgeKind::Imports).is_empty(), "{:?}", star.edges);
+}
+
+#[test]
+fn an_alias_import_resolves_by_the_alias_and_names_the_declared_type() {
+    let repo = Repo::new(&[
+        ("network/Tokens.kt", NETWORK),
+        ("sync/Alias.kt", "package pl.crm.sync\n\nimport pl.crm.network.SessionTokens as Tokens\n\nclass Alias : Tokens()\n"),
+    ]);
+    let ex = repo.extract("sync/Alias.kt");
+    assert!(edges(&ex, EdgeKind::Imports).contains(&("file:sync/Alias.kt", "file:network/Tokens.kt", "SessionTokens")), "{:?}", ex.edges);
+    assert!(edges(&ex, EdgeKind::Extends).contains(&("sym:sync/Alias.kt::Alias", "sym:network/Tokens.kt::SessionTokens", "")), "{:?}", ex.edges);
+}
+
+#[test]
+fn an_expect_class_resolves_to_every_file_that_declares_it() {
+    let repo = Repo::new(&[
+        ("common/Files.kt", "package app.storage\n\nexpect open class ReplicaFiles\n"),
+        ("jvm/Files.jvm.kt", "package app.storage\n\nactual open class ReplicaFiles\n"),
+        ("sync/Local.kt", "package app.sync\n\nimport app.storage.ReplicaFiles\n\nclass Local : ReplicaFiles()\n"),
+    ]);
+    let ex = repo.extract("sync/Local.kt");
+    let imports = edges(&ex, EdgeKind::Imports);
+    let extends = edges(&ex, EdgeKind::Extends);
+    for file in ["common/Files.kt", "jvm/Files.jvm.kt"] {
+        assert!(imports.contains(&("file:sync/Local.kt", format!("file:{file}").as_str(), "ReplicaFiles")), "{imports:?}");
+        assert!(extends.contains(&("sym:sync/Local.kt::Local", format!("sym:{file}::ReplicaFiles").as_str(), "")), "{extends:?}");
+    }
 }

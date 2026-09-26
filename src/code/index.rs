@@ -35,8 +35,6 @@ impl QualifiedIndex {
     }
 
     /// Every file declaring `qualified`, sorted.
-    // Read by the name-indexed families' resolution, which their plans add.
-    #[allow(dead_code)]
     pub fn files(&self, qualified: &str) -> Vec<&str> {
         self.by_name.get(qualified).map(|f| f.iter().map(String::as_str).collect()).unwrap_or_default()
     }

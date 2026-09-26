@@ -8,22 +8,27 @@ mod cases;
 use tree_sitter::Node;
 
 use crate::code::imports::Resolver;
-use crate::code::index::Header;
-use crate::code::jvm::{child, named, text};
-use crate::code::lang::Lang;
+use crate::code::index::{Header, QualifiedIndex};
+use crate::code::jvm::{self, child, named, text, Scope};
+use crate::code::lang::{Family, Lang};
 use crate::model::Extraction;
 
 /// The comment kinds a Kotlin doc block is read from.
 pub(crate) const COMMENTS: &[&str] = &["line_comment", "multiline_comment"];
 
 /// One parse per file; every pass shares the tree.
-pub fn extract(_resolver: &Resolver, rel: &str, source: &str) -> Extraction {
+pub fn extract(resolver: &Resolver, rel: &str, source: &str) -> Extraction {
     let mut ex = Extraction::default();
     crate::code::lang::file_node(rel, &mut ex);
     let src = source.as_bytes();
     let Some(tree) = Lang::Kotlin.parse(src) else { return ex };
-    let declared = declarations::scan(tree.root_node(), rel, src, &mut ex);
-    declarations::link(&declared, rel, &mut ex);
+    let root = tree.root_node();
+    // A repository whose globs reach no JVM file has no index; every lookup then finds nothing.
+    let empty = QualifiedIndex::default();
+    let index = resolver.index(Family::Jvm).unwrap_or(&empty);
+    let scope = scope(root, src);
+    let declared = declarations::scan(root, rel, src, &mut ex);
+    jvm::link(&declared.types, &declared.supers, index, &scope, rel, &mut ex);
     ex
 }
 
@@ -47,4 +52,26 @@ pub(crate) fn package_of(root: Node, src: &[u8]) -> String {
 /// `a.b.C` from an `identifier` node, whatever whitespace or comment the file put between segments.
 pub(crate) fn dotted(n: Node, src: &[u8]) -> String {
     named(n).into_iter().filter(|c| c.kind() == "simple_identifier").map(|c| text(c, src)).collect::<Vec<_>>().join(".")
+}
+
+/// The package and the imports, read from the tree. Kotlin has no static import: `import a.b.C.m`
+/// names a member, and `resolve` finds it through `C`'s file as a nested path.
+pub(crate) fn scope(root: Node, src: &[u8]) -> Scope {
+    let mut s = Scope { package: package_of(root, src), ..Scope::default() };
+    let lists = named(root).into_iter().filter(|n| n.kind() == "import_list").flat_map(named);
+    let headers = named(root).into_iter().filter(|n| n.kind() == "import_header").chain(lists.filter(|n| n.kind() == "import_header"));
+    for h in headers.collect::<Vec<_>>() {
+        let Some(id) = child(h, "identifier") else { continue };
+        let qualified = dotted(id, src);
+        if child(h, "wildcard_import").is_some() {
+            s.stars.push(qualified);
+            continue;
+        }
+        let local = child(h, "import_alias")
+            .and_then(|a| child(a, "type_identifier"))
+            .map(|t| text(t, src).to_string())
+            .unwrap_or_else(|| qualified.rsplit('.').next().unwrap_or(&qualified).to_string());
+        s.singles.insert(local, qualified);
+    }
+    s
 }

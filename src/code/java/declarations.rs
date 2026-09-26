@@ -136,12 +136,3 @@ fn declare_member(m: Node, rel: &str, src: &[u8], parent: &str, path: &str, memb
         }
     }
 }
-
-/// Supertypes this file declares itself. Task 4 hands the rest to the JVM index.
-pub fn link(d: &Declared, rel: &str, ex: &mut Extraction) {
-    for (from, written) in &d.supers {
-        if let Some(path) = jvm::in_file(&d.types, jvm::outer(jvm::path_of(from)), written) {
-            ex.edge(from, &format!("sym:{rel}::{path}"), EdgeKind::Extends, "", rel);
-        }
-    }
-}
