@@ -471,6 +471,10 @@ def csharp_declarations(blanked: str) -> list[tuple[int, str]]:
             params = None
         if pending is not None and parens == 0 and line.rstrip().endswith(";"):
             pending = None
+        # An accessor's own `{ }` has already spent `pending`, so an initialiser wrapped after it
+        # (`{ get; } =`) must reopen the header itself.
+        if pending is None and parens == 0 and line.rstrip().endswith(("=", "=>")):
+            pending = False
         header_open = pending is not None
     return found
 
@@ -595,8 +599,7 @@ RAZOR_INJECT = re.compile(r"^[ \t]*@inject[ \t]+(?P<type>\S.*?)[ \t]+@?(?P<name>
 RAZOR_TAG = re.compile(r"<([A-Z][\w.]*)")
 # `@if (…) {` inside a block is a Razor transition before a C# statement; without the `@` it is C#.
 RAZOR_TRANSITION = re.compile(r"(?<![\w@])@(?=(?:if|foreach|for|while|switch|do|try|lock|using)\b)")
-# `@* … *@` and `<!-- … -->` hide whatever they wrap, tags included, from every later read.
-RAZOR_COMMENT = re.compile(r"@\*.*?\*@|<!--.*?-->", re.S)
+RAZOR_COMMENT_CLOSE = {"@*": "*@", "<!--": "-->"}
 # A markup expression (`@Formatter.Money(...)`), an `@{ }` block outside `@code`, and a tag's own
 # generic argument (`TItem="Order"`) each need an expression reader repograph does not have yet;
 # they blank with the rest of the markup until one exists.
@@ -605,7 +608,36 @@ RAZOR_COMMENT = re.compile(r"@\*.*?\*@|<!--.*?-->", re.S)
 def _razor_markup(line: str) -> str:
     if m := RAZOR_TYPEPARAM.match(line):
         return m.group("constraints")
-    return line if RAZOR_KEPT.match(line) else " ".join(RAZOR_TAG.findall(line))
+    # A kept directive's argument is C#: a string in it (`Roles = "Admin"`) names nothing.
+    return blank_csharp(line) if RAZOR_KEPT.match(line) else " ".join(RAZOR_TAG.findall(line))
+
+
+def _strip_markup_comments(line: str, closer: str | None) -> tuple[str, str | None]:
+    """`line` without its `@* *@` and `<!-- -->` spans, and the closer still awaited at its end.
+
+    Only markup goes through here: inside `@code` a `<!--` may sit in a C# string, where it opens
+    nothing. `@@` is an escaped `@`, so `@@*` opens nothing either.
+    """
+    kept, i = [], 0
+    while i < len(line):
+        if closer is not None:
+            end = line.find(closer, i)
+            if end < 0:
+                return "".join(kept), closer
+            i, closer = end + len(closer), None
+            continue
+        if line.startswith("@@", i):
+            kept.append("@@")
+            i += 2
+            continue
+        opener = next((o for o in RAZOR_COMMENT_CLOSE if line.startswith(o, i)), None)
+        if opener is not None:
+            closer = RAZOR_COMMENT_CLOSE[opener]
+            i += len(opener)
+            continue
+        kept.append(line[i])
+        i += 1
+    return "".join(kept), closer
 
 
 def blank_razor(src: str) -> str:
@@ -615,12 +647,13 @@ def blank_razor(src: str) -> str:
     naming a type stays whole; every other line is reduced to the component tags it renders. The
     page's own text and HTML go, so a word in its copy is never a reference.
     """
-    src = RAZOR_COMMENT.sub(lambda m: "\n" * m.group().count("\n"), src.removeprefix("﻿"))
-    lines = src.split("\n")
+    lines = src.removeprefix("﻿").split("\n")
     out: list[str] = []
+    closer = None
     i = 0
     while i < len(lines):
-        m = RAZOR_OPEN.match(lines[i])
+        lines[i], closer = _strip_markup_comments(lines[i], closer)
+        m = None if closer else RAZOR_OPEN.match(lines[i])
         if not m:
             out.append(_razor_markup(lines[i]))
             i += 1

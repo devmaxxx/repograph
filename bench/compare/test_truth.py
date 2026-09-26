@@ -774,6 +774,39 @@ class DotnetReaders(unittest.TestCase):
             (repo / "src" / "A.ts").write_text("export class A { b: B; go() { this.b.go(); } }\n", encoding="utf8")
             self.assertEqual(T.di_call_graph(repo, []), {"edges": {}, "declared": {}})
 
+    def test_a_comment_opener_inside_a_code_block_string_hides_nothing(self):
+        # A `<!--` in a C# string is text; read as an opener, it would pair with a later markup
+        # comment and erase the block and the tag between them.
+        src = '@code {\n    string s = "<!--";\n    void Pay() { A.B(); }\n    int total;\n}\n<!-- note -->\n<Footer />\n'
+        blanked = T.blank_razor(src)
+        self.assertEqual(T.razor_declarations(blanked), [(2, "s"), (3, "Pay"), (4, "total")])
+        self.assertEqual(blanked.split("\n")[6], "Footer")
+
+    def test_an_escaped_at_before_a_star_opens_no_comment(self):
+        # `@@` is a literal `@`, so `@@*` is text followed by `*`, never a Razor comment.
+        src = "<p>me@@*x</p>\n@code {\n    int total;\n}\n<p>*@</p>\n<Footer />\n"
+        blanked = T.blank_razor(src)
+        self.assertEqual(T.razor_declarations(blanked), [(3, "total")])
+        self.assertEqual(blanked.split("\n")[5], "Footer")
+
+    def test_a_markup_comment_spanning_lines_still_hides_its_tags_and_its_code_block(self):
+        src = "@*\n<Badge />\n@code {\n    int hidden;\n}\n*@\n<Footer />\n"
+        blanked = T.blank_razor(src)
+        self.assertEqual(T.razor_declarations(blanked), [])
+        self.assertEqual(blanked.split("\n"), ["", "", "", "", "", "", "Footer", ""])
+
+    def test_a_wrapped_initialiser_after_an_accessor_declares_nothing(self):
+        src = (
+            "public class A\n{\n    public Foo P { get; } =\n        Build(1);\n"
+            "    public Foo Q { get; } =\n        new();\n    int z;\n}\n"
+        )
+        self.assertEqual(T.csharp_declarations(T.blank_csharp(src)), [(1, "A"), (3, "P"), (5, "Q"), (7, "z")])
+
+    def test_a_kept_attribute_line_s_string_words_are_blanked(self):
+        line = T.blank_razor('@attribute [Authorize(Roles = "Admin")]\n').split("\n")[0]
+        self.assertNotIn("Admin", line)
+        self.assertIn("Authorize", line)
+
 
 if __name__ == "__main__":
     unittest.main()
