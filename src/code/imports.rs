@@ -217,17 +217,22 @@ impl Resolver {
 
     /// What one globbed source contributes before any file is extracted. A name-indexed family's
     /// header goes into its index; a path family's plan adds its arm below, for state of its own.
+    ///
+    /// Razor's own directives feed both its header and `add_razor`; reading them once and passing
+    /// the result to both avoids scanning the same file twice back to back, the way `facts`'s own
+    /// cache already avoids it for C#.
     fn collect(&mut self, lang: Lang, rel: &str, source: &str) {
+        if lang == Lang::Razor {
+            let d = crate::code::razor::directives(source);
+            index_header(&mut self.indexes, lang.family(), rel, &crate::code::razor::header_of(rel, &d));
+            self.dotnet.add_razor(rel, &d, crate::code::razor::members(rel, source, &d));
+            return;
+        }
         if let Some(header) = crate::code::index::header_for(lang, rel, source) {
             index_header(&mut self.indexes, lang.family(), rel, &header);
         }
-        match lang {
-            Lang::CSharp => self.dotnet.add_cs(rel, &crate::code::csharp::index::facts(rel, source)),
-            Lang::Razor => {
-                let d = crate::code::razor::directives(source);
-                self.dotnet.add_razor(rel, &d, crate::code::razor::members(rel, source, &d));
-            }
-            _ => {}
+        if lang == Lang::CSharp {
+            self.dotnet.add_cs(rel, &crate::code::csharp::index::facts(rel, source));
         }
     }
 

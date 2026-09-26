@@ -215,35 +215,34 @@ fn self_closing(b: &[u8], from: usize) -> bool {
 /// below it resolves, so its header's directives are those lines: `widen` re-reads the family when
 /// they move.
 pub fn header(rel: &str, source: &str) -> Header {
+    header_of(rel, &directives(source))
+}
+
+/// `header`, from directives already read: the collector reads them again right after for
+/// `add_razor`, and a second scan of the same file would cost what the first one did.
+pub fn header_of(rel: &str, d: &Directives) -> Header {
     let mut h = Header::default();
-    let d = directives(source);
     if d.unread {
         return h;
     }
     if let Some(name) = component_name(rel) {
-        h.scope.extend(d.namespace);
+        h.scope.extend(d.namespace.clone());
         h.top.insert(name);
     } else if is_imports(rel) {
         h.directives.extend(d.usings.iter().map(|u| format!("@{}", u.spelled())));
-        h.directives.extend(d.namespace.map(|n| format!("@namespace {n}")));
+        h.directives.extend(d.namespace.clone().map(|n| format!("@namespace {n}")));
     }
     h
 }
 
-/// `Imports` for every name a directive's type writes; the parts of its first name, for `Extends`.
-fn imports(scope: &Scope, rel: &str, written: &str, namespace: &str, class: Option<&str>, ex: &mut Extraction) -> Vec<Part> {
+/// `Imports` for every name a directive's type writes.
+fn imports(scope: &Scope, rel: &str, written: &str, namespace: &str, class: Option<&str>, ex: &mut Extraction) {
     let file = format!("file:{rel}");
-    let mut first = Vec::new();
-    for (i, word) in type_words(written).into_iter().enumerate() {
-        let parts = scope.types(&word, namespace, class);
-        for p in parts.iter().filter(|p| p.rel != rel) {
+    for word in type_words(written) {
+        for p in scope.types(&word, namespace, class).iter().filter(|p| p.rel != rel) {
             ex.edge(&file, &format!("file:{}", p.rel), EdgeKind::Imports, first_segment(&p.local), rel);
         }
-        if i == 0 {
-            first = parts;
-        }
     }
-    first
 }
 
 /// `@inject T Name` as (name, type head).
