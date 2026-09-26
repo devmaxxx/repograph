@@ -229,8 +229,17 @@ pub(crate) fn apply_diff(repo: &std::path::Path, store: &store::Store, graph: &m
         eprintln!("grammar: this store was read by generation {} and this build reads by {} — re-reading all {} files once, so citations the older grammar never looked for are found; the next update reads only what changed",
             manifest.grammar, walk::GRAMMAR, entries.len());
     }
+    // L3: when a name-indexed family's file appears, disappears or changes its header, every other
+    // file of that family is read again, since what an unchanged file resolves to may have moved.
+    let code_rels: Vec<String> = entries.iter().filter(|e| e.kind == walk::FileKind::Code).map(|e| e.rel.clone()).collect();
+    let rereading: Vec<String> = diff.changed.iter().chain(regrammar.iter().copied())
+        .filter(|e| e.kind == walk::FileKind::Code).map(|e| e.rel.clone()).collect();
+    let mut headers = code::index::Headers::load(store)?;
+    let recorded = headers.clone();
+    let widened_rels = code::index::widen(repo, &rereading, &diff.removed, &mut headers, &code_rels);
+    let widened: Vec<&walk::Entry> = entries.iter().filter(|e| widened_rels.binary_search(&e.rel).is_ok()).collect();
     let stale: std::collections::BTreeSet<&str> = diff.removed.iter().map(String::as_str)
-        .chain(diff.changed.iter().chain(regrammar.iter().copied()).map(|e| e.rel.as_str())).collect();
+        .chain(diff.changed.iter().chain(regrammar.iter().copied()).chain(widened.iter().copied()).map(|e| e.rel.as_str())).collect();
     // A node's `path:line` comes from its primary declaring file. When that file goes, every
     // surviving declarer is re-read too, so line, label and body come from the file that is cited.
     // Re-reading a file removes it first, which orphans the primaries it held in turn — hence the
@@ -251,7 +260,7 @@ pub(crate) fn apply_diff(repo: &std::path::Path, store: &store::Store, graph: &m
     // `Graph::apply` gives a shared id to whichever file declares it first, so the re-read runs
     // in the walk's own order: out of it, an update hands the id — its path, line, title and
     // body — to a different file than a build does.
-    let mut work: Vec<&walk::Entry> = diff.changed.iter().chain(regrammar.iter().copied()).collect();
+    let mut work: Vec<&walk::Entry> = diff.changed.iter().chain(regrammar.iter().copied()).chain(widened.iter().copied()).collect();
     work.sort_by(|a, b| a.rel.cmp(&b.rel));
     let reread = co_declared.iter().map(|rel| by_rel[rel]);
     let mut unread = false;
@@ -288,6 +297,11 @@ pub(crate) fn apply_diff(repo: &std::path::Path, store: &store::Store, graph: &m
     // the hole that there is nothing to do. `0` is stale against every generation there is.
     if unread { saved.grammar = 0; }
     let graph_at = store.save(graph, &saved)?;
+    // After the graph and never before: a crash between the two leaves the older headers, which
+    // widen the next update once more rather than hide a move from it.
+    if headers != recorded {
+        headers.save(store)?;
+    }
     // Only when something was re-extracted: a tree that did not move cannot have grown a node
     // without questions, and the no-op update a commit hook fires should not read the questions
     // file to be told so.
@@ -311,7 +325,7 @@ pub fn run_update(repo: &std::path::Path, cfg: &config::Config, wipe: bool) -> a
     // node it takes to say so is what the no-op update a commit hook fires would pay for nothing.
     let quiet = !bootstrap && diff.changed.is_empty() && diff.removed.is_empty() && !manifest.stale_grammar();
     let before = (!quiet).then(|| families::of_graph(&graph));
-    let r = apply_diff(repo, &store, &mut graph, &entries, &diff, &manifest, &extractors(repo)?)?;
+    let r = apply_diff(repo, &store, &mut graph, &entries, &diff, &manifest, &extractors(repo, cfg)?)?;
     // `settle` has already moved the citations a new family admits or a lost one withdraws; what
     // is left is to say so, since the next `ask` answers over edges that were not there before.
     match (bootstrap, before) {
@@ -356,6 +370,10 @@ pub(crate) struct Watcher<'a> {
     /// that only reads reports `Quiet`, and a reader holding the graph from before it would
     /// then answer from a store older than the one a one-shot `ask` loads off disk.
     reloaded: bool,
+    /// Whether `ex` was built before a store another process wrote was read back. That store can
+    /// list files the resolver's walk never saw, and the poll that reads it is often quiet, so the
+    /// debt outlives the poll and is paid by the next refresh.
+    resolver_stale: bool,
 }
 
 /// A poll that changes nothing still writes a 10 MB graph, so a batch of one file per save is
@@ -375,8 +393,8 @@ impl<'a> Watcher<'a> {
         let graph_at = store.stamp("graph.json");
         let (graph, manifest) = store.load()?;
         let seen = store.stamp("manifest.json");
-        let ex = extractors(repo)?;
-        Ok(Watcher { repo, cfg, ex, store, graph, graph_at, manifest, seen, deferred: 0, reloaded: false })
+        let ex = extractors(repo, cfg)?;
+        Ok(Watcher { repo, cfg, ex, store, graph, graph_at, manifest, seen, deferred: 0, reloaded: false, resolver_stale: false })
     }
 
     /// The store read back when another process has written it, without the walk a poll does —
@@ -391,6 +409,7 @@ impl<'a> Watcher<'a> {
         self.graph_at = graph_at;
         self.manifest = manifest;
         self.seen = on_disk;
+        self.resolver_stale = true;
         Ok(true)
     }
 
@@ -415,6 +434,14 @@ impl<'a> Watcher<'a> {
             return Ok(if pending > 0 { Polled::Deferred { pending } } else { Polled::Quiet });
         }
         self.deferred = 0;
+        // The resolver learns a family's files in its walk, so one built at `open` cannot resolve to
+        // a file added since. A refresh that moves a path, or follows a store another process wrote,
+        // walks again; a body-only edit, the common poll, pays nothing.
+        let moved_path = !diff.removed.is_empty() || diff.changed.iter().any(|e| !self.manifest.files.contains_key(&e.rel));
+        if moved_path || self.resolver_stale {
+            self.ex = extractors(self.repo, self.cfg)?;
+            self.resolver_stale = false;
+        }
         // This poll is an `update` in everything but name — it re-extracts and it writes — so it
         // says which families moved the way one does. A quiet poll pays none of it.
         let before = families::of_graph(&self.graph);
@@ -468,8 +495,8 @@ fn run_watch(repo: &std::path::Path, cfg: &config::Config, every: u64, batch: us
     }
 }
 
-pub(crate) fn extractors(repo: &std::path::Path) -> anyhow::Result<Extractors> {
-    let resolver = code::imports::Resolver::new(repo)?;
+pub(crate) fn extractors(repo: &std::path::Path, cfg: &config::Config) -> anyhow::Result<Extractors> {
+    let resolver = code::imports::Resolver::new(repo, cfg)?;
     Ok(Extractors {
         doc: Box::new(doc::DocExtractor::new()),
         code: Box::new(code::CodeExtractor::new(resolver)),
@@ -1289,6 +1316,49 @@ mod tests {
         let (stored, _) = store::Store::new(repo).load().unwrap();
         assert!(stored.nodes.contains_key("FR-PAY-25"));
         assert!(stored.nodes.contains_key("FR-PAY-23"), "the other writer's node survived the poll");
+    }
+
+    // `app.ts` is touched too, so the only thing under test is what the resolver knows.
+    #[test]
+    fn a_package_added_while_watching_is_resolved_on_the_poll_that_reads_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = dir.path();
+        std::fs::write(repo.join("app.ts"), "import { lib } from '@shop/lib';\nexport const a = lib;\n").unwrap();
+        let cfg = config::Config::default();
+        built(repo, &cfg);
+        let mut w = Watcher::open(repo, &cfg).unwrap();
+        std::fs::create_dir_all(repo.join("packages/lib/src")).unwrap();
+        std::fs::write(repo.join("packages/lib/package.json"), r#"{"name":"@shop/lib","exports":"./src/index.ts"}"#).unwrap();
+        std::fs::write(repo.join("packages/lib/src/index.ts"), "export const lib = 1;\n").unwrap();
+        std::fs::write(repo.join("app.ts"), "import { lib } from '@shop/lib';\nexport const a = lib;\n\n").unwrap();
+        assert!(matches!(w.poll(1).unwrap(), Polled::Refreshed(_)));
+        assert!(
+            w.graph.edges.iter().any(|e| e.kind == model::EdgeKind::Imports && e.source == "file:app.ts" && e.target == "file:packages/lib/src/index.ts"),
+            "{:?}", w.graph.edges
+        );
+    }
+
+    // Another writer's `update` records the new package, so the watcher's own diff never sees it
+    // added: the poll that reads that store back is quiet, and the edit after it is body-only.
+    #[test]
+    fn a_package_another_writer_added_is_resolved_on_the_first_refresh_after_the_reload() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = dir.path();
+        std::fs::write(repo.join("app.ts"), "import { lib } from '@shop/lib';\nexport const a = lib;\n").unwrap();
+        let cfg = config::Config::default();
+        built(repo, &cfg);
+        let mut w = Watcher::open(repo, &cfg).unwrap();
+        std::fs::create_dir_all(repo.join("packages/lib/src")).unwrap();
+        std::fs::write(repo.join("packages/lib/package.json"), r#"{"name":"@shop/lib","exports":"./src/index.ts"}"#).unwrap();
+        std::fs::write(repo.join("packages/lib/src/index.ts"), "export const lib = 1;\n").unwrap();
+        run_update(repo, &cfg, false).unwrap();
+        assert!(matches!(w.poll(1).unwrap(), Polled::Quiet) && w.reloaded);
+        std::fs::write(repo.join("app.ts"), "import { lib } from '@shop/lib';\nexport const a = lib;\n\n").unwrap();
+        assert!(matches!(w.poll(1).unwrap(), Polled::Refreshed(_)));
+        assert!(
+            w.graph.edges.iter().any(|e| e.kind == model::EdgeKind::Imports && e.source == "file:app.ts" && e.target == "file:packages/lib/src/index.ts"),
+            "{:?}", w.graph.edges
+        );
     }
 
     // A `.ts` that is not UTF-8 is a binary that landed under a code glob; it is reported and

@@ -21,7 +21,7 @@ impl Repo {
     }
 
     fn extract(&self, rel: &str, src: &str) -> Extraction {
-        CodeExtractor::new(Resolver::new(self.dir.path()).unwrap()).extract(rel, src)
+        CodeExtractor::new(Resolver::new(self.dir.path(), &crate::config::Config::default()).unwrap()).extract(rel, src)
     }
 }
 
@@ -429,7 +429,7 @@ fn hyphenless_labels_are_not_references_and_a_one_letter_family_is() {
 
 fn resolver(files: &[(&str, &str)]) -> (Repo, Resolver) {
     let repo = Repo::new(files);
-    let r = Resolver::new(repo.dir.path()).unwrap();
+    let r = Resolver::new(repo.dir.path(), &crate::config::Config::default()).unwrap();
     (repo, r)
 }
 
@@ -540,15 +540,26 @@ fn a_malformed_package_json_or_tsconfig_does_not_abort_the_walk() {
     assert_eq!(r.resolve("apps/a.ts", "@x/ok").as_deref(), Some("packages/ok/src/index.ts"));
 }
 
-/// A development aid, not a test: prints the tree-sitter S-expression of `REPOGRAPH_DUMP`
-/// so a new case can be written against the grammar's real shape.
+/// A development aid, not a test: prints the tree-sitter S-expression of `REPOGRAPH_DUMP`, so a
+/// case can be written against a grammar's real shape. `REPOGRAPH_DUMP` is a path to a file, whose
+/// extension picks the grammar; or inline source, named by `REPOGRAPH_DUMP_AS` (`dump.ts` unless
+/// set, `dump.tsx` under `REPOGRAPH_DUMP_TSX`).
 /// `REPOGRAPH_DUMP='export * as ns from "./lib";' cargo test dump_tree -- --ignored --nocapture`
+/// `REPOGRAPH_DUMP=path/to/Order.cs cargo test dump_tree -- --ignored --nocapture`
 #[test]
 #[ignore]
 fn dump_tree() {
-    let src = std::env::var("REPOGRAPH_DUMP").expect("set REPOGRAPH_DUMP to the source to parse");
-    let rel = if std::env::var_os("REPOGRAPH_DUMP_TSX").is_some() { "dump.tsx" } else { "dump.ts" };
-    let tree = crate::code::symbols::parse(rel, src.as_bytes()).unwrap();
+    let arg = std::env::var("REPOGRAPH_DUMP").expect("set REPOGRAPH_DUMP to a file, or to the source to parse");
+    let (rel, src) = match std::fs::read(&arg) {
+        Ok(bytes) => (arg, bytes),
+        Err(_) => {
+            let named = std::env::var("REPOGRAPH_DUMP_AS").ok();
+            let rel = named.unwrap_or_else(|| if std::env::var_os("REPOGRAPH_DUMP_TSX").is_some() { "dump.tsx".into() } else { "dump.ts".into() });
+            (rel, arg.into_bytes())
+        }
+    };
+    let lang = crate::code::lang::Lang::of(&rel).unwrap_or_else(|| panic!("no grammar reads {rel}"));
+    let tree = lang.parse(&src).unwrap_or_else(|| panic!("{lang:?} is read by blanking, not by a grammar of its own"));
     println!("{}", tree.root_node().to_sexp());
 }
 
@@ -730,6 +741,14 @@ fn a_globbed_file_no_grammar_reads_is_a_file_and_nothing_else() {
 fn javascript_keeps_the_typescript_grammar() {
     let ex = extract("web/a.js", "export function refund(id) { return id; }\n");
     assert!(ids(&ex).contains(&"sym:web/a.js::refund"), "{:?}", ids(&ex));
+}
+
+#[test]
+fn each_typescript_grammar_reaches_the_typescript_extractor_through_the_table() {
+    for (rel, src) in [("a.ts", "export function f() {}\n"), ("b.tsx", "export const V = () => <p/>;\n"), ("c.mjs", "export function g() {}\n")] {
+        let ex = extract(rel, src);
+        assert!(ids(&ex).iter().any(|i| i.starts_with(&format!("sym:{rel}::"))), "{rel}: {:?}", ids(&ex));
+    }
 }
 
 #[test]

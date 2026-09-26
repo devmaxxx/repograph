@@ -1,8 +1,11 @@
 use anyhow::{Context, Result};
 use serde::Deserialize;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
+
+use crate::code::index::{Header, QualifiedIndex};
+use crate::code::lang::{Family, Lang};
 
 /// (directory the tsconfig lives in, directory its targets are relative to — `baseUrl` —
 /// and pattern -> targets), sorted nearest-first.
@@ -13,6 +16,8 @@ pub struct Resolver {
     paths: PathsTier,
     /// package name -> (package dir, exports subpath -> target)
     packages: BTreeMap<String, (String, BTreeMap<String, String>)>,
+    /// Qualified name -> declaring files, one index per name-indexed family the globs reach.
+    indexes: BTreeMap<Family, QualifiedIndex>,
 }
 
 #[derive(Deserialize, Default)]
@@ -77,13 +82,61 @@ fn export_target(v: &serde_json::Value) -> Option<String> {
     }
 }
 
+/// Every top-level name of a header under each scope it names. The header does not pair a name
+/// with its scope, so a file holding two namespaces lists each name under both: the index names
+/// every candidate file, a superset. `directives` stay out: they name what a file reads from, not
+/// what it declares.
+fn index_header(indexes: &mut BTreeMap<Family, QualifiedIndex>, family: Family, rel: &str, header: &Header) {
+    let index = indexes.entry(family).or_default();
+    for name in &header.top {
+        if header.scope.is_empty() {
+            index.insert(name, rel);
+        }
+        for scope in &header.scope {
+            index.insert(&format!("{scope}.{name}"), rel);
+        }
+    }
+}
+
+/// The family a build manifest speaks for, by its file name.
+fn manifest_family(name: &str) -> Option<Family> {
+    match name {
+        "Cargo.toml" => Some(Family::Rust),
+        "pubspec.yaml" => Some(Family::Dart),
+        "pyproject.toml" | "setup.cfg" | "setup.py" => Some(Family::Python),
+        n if n.ends_with(".csproj") => Some(Family::DotNet),
+        _ => None,
+    }
+}
+
 impl Resolver {
-    pub fn new(repo: &Path) -> Result<Resolver> {
+    pub fn new(repo: &Path, cfg: &crate::config::Config) -> Result<Resolver> {
+        let code = crate::walk::globs(&cfg.code_globs)?;
+        let skip = crate::walk::globs(&cfg.skip)?;
         let mut paths: PathsTier = Vec::new();
         let mut packages = BTreeMap::new();
+        let mut sources: Vec<(Lang, String, PathBuf)> = Vec::new();
+        let mut manifests: Vec<(Family, String, PathBuf)> = Vec::new();
+        let mut reached: BTreeSet<Family> = BTreeSet::new();
         for dent in ignore::WalkBuilder::new(repo).hidden(true).git_ignore(true).build().flatten() {
             let p = dent.path();
             let Some(name) = p.file_name().and_then(|n| n.to_str()) else { continue };
+            let rel = p.strip_prefix(repo).unwrap_or(p).to_string_lossy().replace('\\', "/");
+            if dent.file_type().is_some_and(|t| t.is_file()) && !skip.is_match(&rel) {
+                if code.is_match(&rel) {
+                    if let Some(lang) = Lang::of(&rel) {
+                        reached.insert(lang.family());
+                        // TypeScript's state is the tsconfig and package.json read below; its sources
+                        // are the extractor's alone, so a TypeScript repository opens nothing more here.
+                        if lang.family() != Family::TypeScript {
+                            sources.push((lang, rel.clone(), p.to_path_buf()));
+                        }
+                    }
+                }
+                if let Some(family) = manifest_family(name) {
+                    manifests.push((family, rel.clone(), p.to_path_buf()));
+                }
+            }
             let rel_dir = p
                 .parent()
                 .unwrap()
@@ -133,7 +186,41 @@ impl Resolver {
         }
         // Nearest tsconfig to the importing file wins: sort deepest directory first.
         paths.sort_by_key(|a| std::cmp::Reverse(a.0.len()));
-        Ok(Resolver { repo: repo.to_path_buf(), paths, packages })
+        let mut resolver = Resolver { repo: repo.to_path_buf(), paths, packages, indexes: BTreeMap::new() };
+        // Manifests before sources: a path family's roots decide how its sources' paths read.
+        for (_, rel, path) in manifests.iter().filter(|(f, _, _)| reached.contains(f)) {
+            if let Ok(text) = std::fs::read_to_string(path) {
+                resolver.collect_manifest(rel, &text);
+            }
+        }
+        for (lang, rel, path) in &sources {
+            // Not UTF-8 is a binary, which the extractor skips as well.
+            if let Ok(text) = std::fs::read_to_string(path) {
+                resolver.collect(*lang, rel, &text);
+            }
+        }
+        Ok(resolver)
+    }
+
+    /// The index of a name-indexed family the globs reach; `None` for every other family.
+    // Read by the name-indexed families' resolution, which their plans add.
+    #[allow(dead_code)]
+    pub fn index(&self, family: Family) -> Option<&QualifiedIndex> {
+        self.indexes.get(&family)
+    }
+
+    /// What one globbed source contributes before any file is extracted. A name-indexed family's
+    /// header goes into its index; a path family's plan adds its arm below, for state of its own.
+    fn collect(&mut self, lang: Lang, rel: &str, source: &str) {
+        if let Some(header) = crate::code::index::header_for(lang, rel, source) {
+            index_header(&mut self.indexes, lang.family(), rel, &header);
+        }
+    }
+
+    /// What a build manifest contributes; called only when the globs reach the manifest's family.
+    /// Each path family's plan adds its arm; until one lands, no family reads a manifest.
+    fn collect_manifest(&mut self, rel: &str, text: &str) {
+        let _ = (rel, text);
     }
 
     /// A resolved candidate is only useful if it is a node the walker actually indexes:
@@ -151,7 +238,7 @@ impl Resolver {
             && self.repo.join(rel).is_file()
     }
 
-    fn exists(&self, rel: &str) -> Option<String> {
+    pub(crate) fn exists(&self, rel: &str) -> Option<String> {
         let stem = rel.trim_end_matches(".js").trim_end_matches(".jsx").trim_end_matches(".mjs");
         let stem = stem.replace("/dist/", "/src/");
         let stem = stem.strip_suffix(".d.ts").unwrap_or(&stem).to_string();
@@ -257,7 +344,7 @@ mod tests {
     #[test]
     fn relative_with_js_suffix_and_index() {
         let d = repo();
-        let r = Resolver::new(d.path()).unwrap();
+        let r = Resolver::new(d.path(), &crate::config::Config::default()).unwrap();
         assert_eq!(
             r.resolve("apps/api/src/modules/staff/staff.controller.ts", "../../shared/audit/index.js").as_deref(),
             Some("apps/api/src/shared/audit/index.ts")
@@ -272,7 +359,7 @@ mod tests {
     #[test]
     fn tsconfig_paths_root_and_nearest() {
         let d = repo();
-        let r = Resolver::new(d.path()).unwrap();
+        let r = Resolver::new(d.path(), &crate::config::Config::default()).unwrap();
         assert_eq!(r.resolve("apps/api/src/x.ts", "@beauty-crm/contracts").as_deref(), Some("packages/contracts/src/index.ts"));
         assert_eq!(r.resolve("apps/api/src/x.ts", "@beauty-crm/contracts/money").as_deref(), Some("packages/contracts/src/money.ts"));
         assert_eq!(r.resolve("packages/ui/src/app.tsx", "@/button").as_deref(), Some("packages/ui/src/button/index.tsx"));
@@ -282,7 +369,7 @@ mod tests {
     fn package_exports_map_dist_to_src() {
         let d = repo();
         std::fs::remove_file(d.path().join("tsconfig.json")).unwrap();
-        let r = Resolver::new(d.path()).unwrap();
+        let r = Resolver::new(d.path(), &crate::config::Config::default()).unwrap();
         assert_eq!(r.resolve("apps/api/src/x.ts", "@beauty-crm/contracts/business").as_deref(), Some("packages/contracts/src/business.ts"));
         assert_eq!(r.resolve("apps/api/src/x.ts", "@beauty-crm/contracts").as_deref(), Some("packages/contracts/src/index.ts"));
     }
@@ -290,7 +377,7 @@ mod tests {
     #[test]
     fn external_packages_are_none() {
         let d = repo();
-        let r = Resolver::new(d.path()).unwrap();
+        let r = Resolver::new(d.path(), &crate::config::Config::default()).unwrap();
         assert_eq!(r.resolve("apps/api/src/x.ts", "@nestjs/common"), None);
         assert_eq!(r.resolve("apps/api/src/x.ts", "node:fs"), None);
     }
@@ -305,7 +392,7 @@ mod tests {
         };
         w("tsconfig.json", "{\n  /* a block comment\n     spanning lines */\n  \"compilerOptions\": { \"paths\": { \"@x/*\": [\"./src/*\"] } }\n}\n");
         w("src/thing.ts", "export const x = 1;\n");
-        let r = Resolver::new(d.path()).unwrap();
+        let r = Resolver::new(d.path(), &crate::config::Config::default()).unwrap();
         assert_eq!(r.resolve("apps/y.ts", "@x/thing").as_deref(), Some("src/thing.ts"));
     }
 
@@ -319,14 +406,14 @@ mod tests {
         };
         w("tsconfig.json", r#"{ "compilerOptions": { "paths": { "@x/*": ["./src/*"], }, }, }"#);
         w("src/thing.ts", "export const x = 1;\n");
-        let r = Resolver::new(d.path()).unwrap();
+        let r = Resolver::new(d.path(), &crate::config::Config::default()).unwrap();
         assert_eq!(r.resolve("apps/y.ts", "@x/thing").as_deref(), Some("src/thing.ts"));
     }
 
     #[test]
     fn a_path_alias_scoped_to_its_own_tsconfig_does_not_resolve_outside_it() {
         let d = repo();
-        let r = Resolver::new(d.path()).unwrap();
+        let r = Resolver::new(d.path(), &crate::config::Config::default()).unwrap();
         // "@/*" is only declared under packages/ui/tsconfig.json; a file outside that
         // directory must not see it, even though "packages/ui/src/button/index.tsx" exists.
         assert_eq!(r.resolve("apps/api/src/x.ts", "@/button"), None);
@@ -344,14 +431,14 @@ mod tests {
         w("packages/pkg/package.json", r#"{ "name": "@x/pkg", "exports": { "./*": "./dist/*.js" } }"#);
         // "/dist/" is redirected to "/src/" by `exists`, so the built .js target maps to this file.
         w("packages/pkg/src/sub/thing.ts", "export const x = 1;\n");
-        let r = Resolver::new(d.path()).unwrap();
+        let r = Resolver::new(d.path(), &crate::config::Config::default()).unwrap();
         assert_eq!(r.resolve("apps/y.ts", "@x/pkg/sub/thing").as_deref(), Some("packages/pkg/src/sub/thing.ts"));
     }
 
     #[test]
     fn mjs_extension_relative_imports_resolve_like_js() {
         let d = repo();
-        let r = Resolver::new(d.path()).unwrap();
+        let r = Resolver::new(d.path(), &crate::config::Config::default()).unwrap();
         assert_eq!(r.resolve("packages/contracts/src/index.ts", "./money.mjs").as_deref(), Some("packages/contracts/src/money.ts"));
     }
 
@@ -368,7 +455,7 @@ mod tests {
         w("tools/verify/verify.mjs", "import { jobs } from './jobs.mjs';\n");
         w("tools/verify/jobs.mjs", "export const jobs = [];\n");
         w("tools/lint/index.js", "export const lint = 1;\n");
-        let r = Resolver::new(d.path()).unwrap();
+        let r = Resolver::new(d.path(), &crate::config::Config::default()).unwrap();
         assert_eq!(r.resolve("tools/verify/verify.mjs", "./jobs.mjs").as_deref(), Some("tools/verify/jobs.mjs"));
         assert_eq!(r.resolve("tools/verify/verify.mjs", "../lint").as_deref(), Some("tools/lint/index.js"));
     }
@@ -379,7 +466,54 @@ mod tests {
     fn typescript_wins_over_a_javascript_file_of_the_same_stem() {
         let d = repo();
         std::fs::write(d.path().join("packages/contracts/src/money.js"), "export const asGrosze = 1;\n").unwrap();
-        let r = Resolver::new(d.path()).unwrap();
+        let r = Resolver::new(d.path(), &crate::config::Config::default()).unwrap();
         assert_eq!(r.resolve("packages/contracts/src/index.ts", "./money.js").as_deref(), Some("packages/contracts/src/money.ts"));
+    }
+
+    #[test]
+    fn a_header_puts_each_top_level_name_under_every_scope_it_names() {
+        use crate::code::index::Header;
+        let mut indexes = BTreeMap::new();
+        let two = Header { scope: vec!["Shop.Orders".into(), "Shop.Legacy".into()], top: ["Order".to_string()].into(), ..Default::default() };
+        let one = Header { scope: vec!["Shop.Orders".into()], top: ["Order".to_string()].into(), ..Default::default() };
+        index_header(&mut indexes, Family::DotNet, "src/Order.cs", &two);
+        index_header(&mut indexes, Family::DotNet, "src/Order.Partial.cs", &one);
+        let idx = &indexes[&Family::DotNet];
+        assert_eq!(idx.files("Shop.Orders.Order"), ["src/Order.Partial.cs", "src/Order.cs"]);
+        assert_eq!(idx.files("Shop.Legacy.Order"), ["src/Order.cs"]);
+        assert!(!indexes.contains_key(&Family::Jvm));
+    }
+
+    #[test]
+    fn a_family_with_no_scope_indexes_its_bare_names() {
+        use crate::code::index::Header;
+        let mut indexes = BTreeMap::new();
+        let header = Header { scope: Vec::new(), top: ["fragment/Card".to_string()].into(), ..Default::default() };
+        index_header(&mut indexes, Family::GraphQl, "q/cards.gql", &header);
+        assert_eq!(indexes[&Family::GraphQl].files("fragment/Card"), ["q/cards.gql"]);
+    }
+
+    #[test]
+    fn a_directive_never_enters_the_index() {
+        use crate::code::index::Header;
+        let mut indexes = BTreeMap::new();
+        let header = Header { scope: vec!["Shop.Orders".into()], top: ["Order".to_string()].into(), directives: ["Shop.Legacy".to_string()].into() };
+        index_header(&mut indexes, Family::DotNet, "src/Order.cs", &header);
+        let idx = &indexes[&Family::DotNet];
+        assert_eq!(idx.files("Shop.Orders.Order"), ["src/Order.cs"]);
+        assert!(idx.files("Shop.Legacy").is_empty() && idx.files("Shop.Legacy.Order").is_empty());
+        assert!(idx.under("Shop.Legacy").is_empty());
+    }
+
+    #[test]
+    fn a_typescript_repository_builds_no_index_and_a_file_no_grammar_reads_joins_none() {
+        let d = tempfile::tempdir().unwrap();
+        std::fs::write(d.path().join("a.ts"), "export class A {}\n").unwrap();
+        std::fs::write(d.path().join("Program.cs"), "class P {}\n").unwrap();
+        let mut cfg = crate::config::Config::default();
+        cfg.code_globs.push("**/*.cs".into());
+        let r = Resolver::new(d.path(), &cfg).unwrap();
+        assert!(r.index(Family::TypeScript).is_none());
+        assert!(r.index(Family::DotNet).is_none());
     }
 }

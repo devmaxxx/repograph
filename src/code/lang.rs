@@ -55,8 +55,6 @@ impl Lang {
         parser.parse(src, None)
     }
 
-    // Only the cases read this until the resolvers do.
-    #[allow(dead_code)]
     pub fn family(self) -> Family {
         match self {
             Lang::TypeScript | Lang::Tsx => Family::TypeScript,

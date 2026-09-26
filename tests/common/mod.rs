@@ -7,7 +7,8 @@
 //! graph and exits 1 where the suite is pinning a 3 — and `REPOGRAPH_EMBED_MODEL` outranks the
 //! model a store records, so a shell left over from a measurement answers these tests under other
 //! weights. Both are invisible in the failure they cause, which is why they are stripped here
-//! rather than documented somewhere a reader would have to find.
+//! rather than documented somewhere a reader would have to find. `REPOGRAPH_CODE_GLOBS` replaces
+//! the globs a test's own `repograph.toml` names.
 
 // Compiled into a test crate per file that declares `mod common`, each of which uses the part of
 // it that it needs; anything the others use is dead code from where that one stands.
@@ -20,6 +21,7 @@ pub fn run(repo: &Path, args: &[&str]) -> Output {
     Command::new(env!("CARGO_BIN_EXE_repograph"))
         .env_remove("REPOGRAPH_BENCH_REPO")
         .env_remove("REPOGRAPH_EMBED_MODEL")
+        .env_remove("REPOGRAPH_CODE_GLOBS")
         .arg("--no-dense")
         .arg("--repo")
         .arg(repo)

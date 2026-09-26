@@ -350,6 +350,18 @@ a call through a chained expression or a callback has no edge and a "nothing use
 `rg -l` beside it; and `impact`'s risk label is four fixed thresholds printed with the counts they
 came from, so it can be argued with.
 
+## Languages
+
+Which grammar reads a file is decided by its extension alone. A file the globs reach that no
+grammar reads is indexed as a file node and nothing more, and `build`, and any refresh that re-reads
+such a file, names those extensions once on stderr — `code: no grammar reads 2 .cs — indexed as files
+only` — so a glob that reaches past the
+grammars says so instead of producing a graph silently thinner than the tree.
+
+| language | extensions | reads | not read |
+|---|---|---|---|
+| TypeScript, JavaScript | `.ts` `.tsx` `.mts` `.cts` `.js` `.jsx` `.mjs` `.cjs` | exports and declarations with class members; imports through relative paths, `tsconfig.json` paths and `package.json` exports; calls; requirement ids cited in comments and strings; decorators | `.mts` and `.cts` are read when globbed by name; the default `skip` keeps bundles out (`**/*.min.js`, `**/.yarn/**`, `**/.pnp.*`) |
+
 ## Configure
 
 `repograph.toml` at the repository root — this file also doubles as the worked example, set to its
@@ -370,6 +382,10 @@ in full, not an empty config:
 | `reranker_dir`       | directory of the exported cross-encoder for `--rerank-local`; empty = `~/.cache/repograph/reranker` |
 | `embed_model`        | `intfloat/multilingual-e5-small`; the model the vectors are written with — nine were measured and `repograph model` switches it, see [Embeddings](#embeddings) |
 | `resources`          | `"balanced"` = a third of the logical cores; `"low"` a sixth, `"full"` a half — how much of the machine a run may take, see [Resources](#resources) |
+
+`REPOGRAPH_CODE_GLOBS`, whitespace-separated, replaces `code_globs` for one run. It is a measurement's
+switch, as `REPOGRAPH_EMBED_MODEL` is, so a reading can name other globs without writing a
+`repograph.toml` into the tree it measures.
 
 ### Choosing a model, and where the choice lives
 
