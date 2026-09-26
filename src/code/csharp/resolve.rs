@@ -80,13 +80,25 @@ impl<'a> Scope<'a> {
         self.types_under(name, namespace, class, &usings)
     }
 
+    /// `name` as `types` reads it, and whether only an alias or a `using` found it. The compiler
+    /// looks for a namespace of that name in each enclosing namespace before it reads a using, and
+    /// a referenced package's namespaces are not the repository's to see, so a hit through a using
+    /// is certain only where no namespace could stand in its place.
+    pub fn types_imported(&self, name: &str, namespace: &str, class: Option<&str>) -> (Vec<Part>, bool) {
+        self.lookup(name, namespace, class, &self.usings)
+    }
+
     fn types_under(&self, name: &str, namespace: &str, class: Option<&str>, usings: &[Using]) -> Vec<Part> {
+        self.lookup(name, namespace, class, usings).0
+    }
+
+    fn lookup(&self, name: &str, namespace: &str, class: Option<&str>, usings: &[Using]) -> (Vec<Part>, bool) {
         if let Some(c) = class {
             let mut chain: Vec<&str> = c.split('.').collect();
             while !chain.is_empty() {
                 let hits = self.full(&join(namespace, &format!("{}.{name}", chain.join("."))));
                 if !hits.is_empty() {
-                    return hits;
+                    return (hits, false);
                 }
                 chain.pop();
             }
@@ -95,7 +107,7 @@ impl<'a> Scope<'a> {
         loop {
             let hits = self.full(&join(&ns.join("."), name));
             if !hits.is_empty() {
-                return hits;
+                return (hits, false);
             }
             if ns.pop().is_none() {
                 break;
@@ -105,7 +117,7 @@ impl<'a> Scope<'a> {
         for u in usings {
             if let Using::Alias(alias, target) = u {
                 if alias == first {
-                    return self.full(&rest.map_or_else(|| target.clone(), |r| join(target, r)));
+                    return (self.full(&rest.map_or_else(|| target.clone(), |r| join(target, r))), true);
                 }
             }
         }
@@ -118,7 +130,7 @@ impl<'a> Scope<'a> {
             .collect();
         hits.sort();
         hits.dedup();
-        hits
+        (hits, true)
     }
 
     /// The members one part declares, each with its declared type head.
@@ -127,6 +139,20 @@ impl<'a> Scope<'a> {
             return self.own.types.iter().find(|t| t.local == p.local && t.full() == p.full).map(|t| &t.members);
         }
         self.dotnet.members(&p.full, &p.rel, &p.local)
+    }
+
+    /// Whether `p` declares `member` with a type that is one name and nothing more.
+    pub fn plain_typed(&self, p: &Part, member: &str) -> bool {
+        if p.rel == self.rel {
+            return self.own.types.iter().any(|t| t.local == p.local && t.full() == p.full && t.plain.contains(member));
+        }
+        self.dotnet.plain(&p.full, &p.rel, &p.local, member)
+    }
+
+    /// Whether a Razor component is a part of `full`: its class derives from `ComponentBase` or an
+    /// `@inherits` base, whose members the repository cannot read to the end.
+    pub fn is_component(&self, full: &str) -> bool {
+        !self.dotnet.component_parts(full).is_empty()
     }
 
     /// `sym:` ids of `member` on each part that declares it.

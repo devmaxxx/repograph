@@ -112,15 +112,35 @@ impl Reader<'_> {
                 }
             }
             "variable_declaration" => self.declare_locals(n, locals),
-            "declaration_pattern" | "recursive_pattern" | "declaration_expression" => {
+            "declaration_pattern" | "recursive_pattern" | "declaration_expression" | "var_pattern" | "catch_declaration" => {
                 if let Some(name) = n.child_by_field_name("name") {
                     locals.insert(text(name, self.src).to_string(), head(n.child_by_field_name("type"), self.src));
                 }
+                for d in named(n) {
+                    self.designated(d, locals);
+                }
             }
             "foreach_statement" => {
-                if let Some(left) = n.child_by_field_name("left").filter(|l| l.kind() == "identifier") {
-                    locals.insert(text(left, self.src).to_string(), head(n.child_by_field_name("type"), self.src));
+                match n.child_by_field_name("left") {
+                    Some(left) if left.kind() == "identifier" => {
+                        locals.insert(text(left, self.src).to_string(), head(n.child_by_field_name("type"), self.src));
+                    }
+                    Some(left) => self.designated(left, locals),
+                    None => {}
                 }
+            }
+            // A catch variable and a query's range variables are in scope for their own clause or
+            // query only, as a lambda's parameters are for its body.
+            "catch_clause" | "query_expression" => {
+                let mut inner = locals.clone();
+                if n.kind() == "query_expression" {
+                    self.range_variables(n, &mut inner);
+                }
+                self.type_uses(n, at, ex);
+                for c in named(n) {
+                    self.walk(c, at, &mut inner, ex);
+                }
+                return;
             }
             // A lambda's own parameters are in scope for its body only; cloning locals keeps a
             // same-named field or outer local from leaking in, and keeps the parameter itself from
@@ -130,8 +150,29 @@ impl Reader<'_> {
                 let body = named(n).into_iter().find(|c| c.kind() == "block");
                 return self.scoped_body(n, n.child_by_field_name("parameters"), body, at, locals, ex);
             }
-            "local_function_statement" => return self.scoped_body(n, n.child_by_field_name("parameters"), n.child_by_field_name("body"), at, locals, ex),
+            "local_function_statement" => {
+                let mut type_params = at.type_params.clone();
+                type_params.extend(declared_type_params(n, self.src));
+                let at = At { type_params, ..at.clone() };
+                return self.scoped_body(n, n.child_by_field_name("parameters"), n.child_by_field_name("body"), &at, locals, ex);
+            }
             "invocation_expression" => {
+                // The grammar reads `o is var (a, b)` as a call of `o is var` with `a` and `b` as
+                // arguments; those are the pattern's designations, so they are locals.
+                let var_pattern = n
+                    .child_by_field_name("function")
+                    .filter(|f| f.kind() == "is_expression")
+                    .and_then(|f| f.child_by_field_name("right"))
+                    .is_some_and(|r| r.kind() == "implicit_type");
+                if var_pattern {
+                    let mut names = Vec::new();
+                    if let Some(args) = n.child_by_field_name("arguments") {
+                        argument_names(args, &mut names);
+                    }
+                    for name in names {
+                        locals.insert(text(name, self.src).to_string(), None);
+                    }
+                }
                 if let Some(f) = n.child_by_field_name("function") {
                     self.type_args(f, at, ex);
                     for to in self.call_targets(f, at, locals) {
@@ -200,6 +241,10 @@ impl Reader<'_> {
                 type_names(a, self.src, &mut names);
             }
             for name in names {
+                // A dotted argument found only through a using could be a package's namespace path.
+                if name.contains('.') && self.scope.types_imported(&name, &at.namespace, at.class.as_deref()).1 {
+                    continue;
+                }
                 self.use_type(&name, at, ex);
             }
         }
@@ -220,10 +265,16 @@ impl Reader<'_> {
         let (ns, class) = (at.namespace.as_str(), at.class.as_deref());
         for k in (1..segments.len()).rev() {
             let prefix = segments[..k].join(".");
-            if !self.scope.types(&prefix, ns, class).is_empty() {
-                self.use_type(&prefix, at, ex);
-                return;
+            let (parts, imported) = self.scope.types_imported(&prefix, ns, class);
+            if parts.is_empty() {
+                continue;
             }
+            // Found only through a using, `A.B.M` could read `A` as a package's namespace, which
+            // the compiler finds first; `A.M` could too, but only inside `nameof`.
+            if !(imported && (segments.len() > 2 || in_nameof(n, self.src))) {
+                self.use_type(&prefix, at, ex);
+            }
+            return;
         }
     }
 
@@ -237,16 +288,24 @@ impl Reader<'_> {
         if locals.contains_key(first) || at.type_params.contains(first) || self.host.component.is_some() {
             return false;
         }
-        let color_color = |m: &BTreeMap<String, Option<String>>| m.get(first).is_none_or(|t| t.as_deref() == Some(first));
-        for level in self.scope.enclosing(&at.namespace, at.class.as_deref()) {
-            if !level.iter().all(|p| self.scope.members(p).is_none_or(color_color)) {
+        let (ns, class) = (at.namespace.as_str(), at.class.as_deref());
+        let named: BTreeSet<String> = self.scope.types(first, ns, class).into_iter().map(|p| p.full).collect();
+        // A member `first` leaves the access naming the type only when its declared type is that
+        // very type: one name, read where the member is declared, resolving to the same type.
+        let passes = |p: &Part| match self.scope.members(p).and_then(|m| m.get(first)) {
+            None => true,
+            Some(t) => {
+                let resolved: BTreeSet<String> = t.as_deref().map(|t| self.scope.types_around(t, p)).unwrap_or_default().into_iter().map(|q| q.full).collect();
+                self.scope.plain_typed(p, first) && !named.is_empty() && resolved == named
+            }
+        };
+        for level in self.scope.enclosing(ns, class) {
+            if level.first().is_some_and(|p| self.scope.is_component(&p.full)) || !level.iter().all(passes) {
                 return false;
             }
             let mut shadowed = false;
             let walked = self.scope.walk_bases(&level, |bases| {
-                shadowed = bases.iter().any(|p| {
-                    !self.scope.members(p).is_none_or(color_color) || !self.scope.full(&join(&p.full, first)).is_empty()
-                });
+                shadowed = bases.iter().any(|p| !passes(p) || !self.scope.full(&join(&p.full, first)).is_empty());
                 shadowed
             });
             if shadowed || !walked.unresolved.is_empty() {
@@ -272,13 +331,65 @@ impl Reader<'_> {
     fn declare_locals(&self, v: Node, locals: &mut Locals) {
         let declared = head(v.child_by_field_name("type"), self.src);
         for d in named(v).into_iter().filter(|d| d.kind() == "variable_declarator") {
-            let Some(name) = d.child_by_field_name("name") else { continue };
+            let Some(name) = d.child_by_field_name("name") else {
+                for t in named(d) {
+                    self.designated(t, locals);
+                }
+                continue;
+            };
             // `var x = new T()` and `var x = (T)y` say the type on the right.
             let inferred = named(d).into_iter().find_map(|e| match e.kind() {
                 "object_creation_expression" | "cast_expression" => head(e.child_by_field_name("type"), self.src),
                 _ => None,
             });
             locals.insert(text(name, self.src).to_string(), declared.clone().or(inferred));
+        }
+    }
+
+    /// The names a deconstruction declares — `var (a, (b, _))`, `foreach (var (a, b) in …)`,
+    /// `is var (a, b)` — whose types this file does not read.
+    fn designated(&self, d: Node, locals: &mut Locals) {
+        if !matches!(d.kind(), "tuple_pattern" | "parenthesized_variable_designation") {
+            return;
+        }
+        let mut cur = d.walk();
+        for name in d.children_by_field_name("name", &mut cur) {
+            locals.insert(text(name, self.src).to_string(), None);
+        }
+        for inner in named(d) {
+            self.designated(inner, locals);
+        }
+    }
+
+    /// `from x in`, `join x in`, `let x =`, and `into x`, whether after a `join` or continuing the
+    /// query. The grammar names only `from`'s variable, so the others are read by the keyword they
+    /// sit beside.
+    fn range_variables(&self, q: Node, locals: &mut Locals) {
+        let mut clauses = vec![q];
+        for c in named(q) {
+            if c.kind() == "join_clause" {
+                clauses.extend(named(c).into_iter().filter(|j| j.kind() == "join_into_clause"));
+            }
+            clauses.push(c);
+        }
+        for c in clauses {
+            let mut cur = c.walk();
+            let children: Vec<Node> = c.children(&mut cur).collect();
+            for (i, x) in children.iter().enumerate() {
+                if x.kind() != "identifier" {
+                    continue;
+                }
+                let before = i.checked_sub(1).map(|j| children[j].kind());
+                let after = children.get(i + 1).map(|y| y.kind());
+                let declares = match c.kind() {
+                    "from_clause" | "join_clause" => after == Some("in"),
+                    "let_clause" => before == Some("let"),
+                    _ => before == Some("into"),
+                };
+                if declares {
+                    locals.insert(text(*x, self.src).to_string(), None);
+                }
+            }
         }
     }
 
@@ -583,6 +694,25 @@ enum Typed {
     /// Neither a local, a parameter, a field or property, nor — for a bare name — a type: not a
     /// value, so never a member lookup and never an extension.
     None,
+}
+
+/// The identifiers a misparsed `var (a, (b, c))` designation holds, at any depth of nesting.
+fn argument_names<'t>(n: Node<'t>, out: &mut Vec<Node<'t>>) {
+    for c in named(n) {
+        match c.kind() {
+            "identifier" => out.push(c),
+            "argument" | "tuple_expression" | "parenthesized_expression" => argument_names(c, out),
+            _ => {}
+        }
+    }
+}
+
+/// Whether `n` is the whole argument of `nameof(…)`.
+fn in_nameof(n: Node, src: &[u8]) -> bool {
+    let call = n.parent().filter(|a| a.kind() == "argument").and_then(|a| a.parent()).filter(|l| l.kind() == "argument_list").and_then(|l| l.parent());
+    call.filter(|c| c.kind() == "invocation_expression")
+        .and_then(|c| c.child_by_field_name("function"))
+        .is_some_and(|f| f.kind() == "identifier" && text(f, src) == "nameof")
 }
 
 /// `["Shop", "Orders", "Status", "Open"]` from an access chain of plain identifiers, or none when

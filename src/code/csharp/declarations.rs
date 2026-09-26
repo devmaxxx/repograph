@@ -38,6 +38,9 @@ pub struct TypeDecl {
     pub partial: bool,
     /// Member name → the head name of its declared type; `None` for methods and constructors.
     pub members: BTreeMap<String, Option<String>>,
+    /// Members whose declared type is one name and nothing more — no `?`, `[]` or type arguments —
+    /// the only shape C#'s "Color Color" rule reads as the type itself.
+    pub plain: BTreeSet<String>,
     /// Base-list names as written, resolved by the references pass.
     pub bases: Vec<String>,
     /// The `bases` written with type arguments. C# resolves a base by its name alone, but Razor
@@ -97,6 +100,15 @@ pub fn join(a: &str, b: &str) -> String {
 
 fn is_type(kind: &str) -> bool {
     matches!(kind, "class_declaration" | "struct_declaration" | "interface_declaration" | "record_declaration" | "enum_declaration" | "delegate_declaration")
+}
+
+/// `Status` or `Shop.Orders.Status`: a name, dotted or not, with no type arguments anywhere.
+fn plain_type(t: Option<Node>) -> bool {
+    t.is_some_and(|t| match t.kind() {
+        "identifier" => true,
+        "qualified_name" => ["qualifier", "name"].iter().all(|f| plain_type(t.child_by_field_name(f))),
+        _ => false,
+    })
 }
 
 fn name_of(n: Node, src: &[u8]) -> Option<String> {
@@ -235,6 +247,9 @@ impl Walk<'_> {
                     for p in named(c).into_iter().filter(|p| p.kind() == "parameter") {
                         let Some(pname) = name_of(p, self.src) else { continue };
                         self.write_member(p, &id, &local, &pname, ctx, ex);
+                        if plain_type(p.child_by_field_name("type")) {
+                            t.plain.insert(pname.clone());
+                        }
                         t.members.insert(pname, head(p.child_by_field_name("type"), self.src));
                     }
                 }
@@ -270,14 +285,21 @@ impl Walk<'_> {
             "property_declaration" | "event_declaration" => {
                 let Some(name) = name_of(m, self.src) else { return };
                 self.write_member(m, id, local, &name, ctx, ex);
+                if plain_type(m.child_by_field_name("type")) {
+                    t.plain.insert(name.clone());
+                }
                 t.members.insert(name, head(m.child_by_field_name("type"), self.src));
             }
             "field_declaration" | "event_field_declaration" => {
                 let Some(var) = named(m).into_iter().find(|c| c.kind() == "variable_declaration") else { return };
                 let ty = head(var.child_by_field_name("type"), self.src);
+                let plain = plain_type(var.child_by_field_name("type"));
                 for d in named(var).into_iter().filter(|c| c.kind() == "variable_declarator") {
                     if let Some(name) = name_of(d, self.src) {
                         self.write_member(m, id, local, &name, ctx, ex);
+                        if plain {
+                            t.plain.insert(name.clone());
+                        }
                         t.members.insert(name, ty.clone());
                     }
                 }

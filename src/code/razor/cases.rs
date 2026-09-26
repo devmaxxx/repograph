@@ -303,6 +303,7 @@ fn razor_block_census() {
 
 use crate::code::csharp::cases::{edges, ids, Repo};
 use crate::model::EdgeKind;
+use crate::code::csharp::declarations::Using;
 
 const WEB: &[(&str, &str)] = &[
     ("Web/Shop.Web.csproj", "<Project Sdk=\"Microsoft.NET.Sdk.Web\"><PropertyGroup><RootNamespace>Shop.Web</RootNamespace></PropertyGroup></Project>\n"),
@@ -721,10 +722,12 @@ fn two_words_after_inherits_name_no_base_rather_than_the_two_joined() {
 fn a_using_anchored_at_global_reads_as_the_plain_using() {
     let invoice = ("Billing/Invoice.cs", "namespace Shop.Billing;\npublic class Invoice {}\n");
     let badge = ("Badges/Badge.razor", "@namespace Shop.Badges\n<span/>\n");
-    let page = ("Web/Pages/P20.razor", "@using global::Shop.Billing\n@using global::Shop.Badges\n<Badge />\n@code {\n    [Parameter] public Invoice Current { get; set; }\n}\n");
+    let page = ("Web/Pages/P20.razor", "@using global::Shop.Billing\n@using global::Shop.Badges\n@using Bill = global::Shop.Billing.Invoice\n<Badge />\n@code {\n    [Parameter] public Invoice Current { get; set; }\n    [Parameter] public Bill Previous { get; set; }\n}\n");
     let mut files = WEB.to_vec();
     files.extend_from_slice(&[invoice, badge, page]);
     let ex = Repo::new(&files).extract("Web/Pages/P20.razor");
     assert!(edges(&ex, EdgeKind::Imports).contains(&("file:Web/Pages/P20.razor", "file:Billing/Invoice.cs", "Invoice")), "{:?}", ex.edges);
     assert!(edges(&ex, EdgeKind::Calls).iter().any(|(_, to, _)| *to == "sym:Badges/Badge.razor::Badge"), "{:?}", ex.edges);
+    let d = super::directives("@using Bill = global::Shop.Billing.Invoice\n");
+    assert!(matches!(d.usings.as_slice(), [Using::Alias(a, t)] if a == "Bill" && t == "Shop.Billing.Invoice"), "{:?}", d.usings);
 }

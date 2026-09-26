@@ -955,6 +955,51 @@ fn a_member_named_and_typed_like_its_type_still_names_the_type() {
 }
 
 #[test]
+fn a_member_typed_as_a_nullable_or_an_array_of_its_namesake_shadows_it() {
+    for ty in ["Status?", "Status[]", "System.Collections.Generic.List<Status>"] {
+        let src = format!("using Shop.Orders;\nnamespace Shop.Use;\npublic partial class Report\n{{\n    public {ty} Status {{ get; set; }}\n}}\n");
+        let props = ("Use/Report.Props.cs", src.as_str());
+        let use_ = ("Use/Report.cs", "using Shop.Orders;\nnamespace Shop.Use;\npublic partial class Report\n{\n    object M() => Status.Length;\n}\n");
+        assert!(!imports_status(&[STATUS, props, use_], "Use/Report.cs"), "{ty}: Status.Length reads the property");
+    }
+}
+
+#[test]
+fn a_member_whose_type_resolves_elsewhere_shadows_the_type_this_part_names() {
+    let other = ("Other/Status.cs", "namespace Shop.Other;\npublic class Status { public int Closed; }\n");
+    let props = ("Use/Report.Props.cs", "using Shop.Other;\nnamespace Shop.Use;\npublic partial class Report\n{\n    public Status Status { get; set; }\n}\n");
+    let use_ = ("Use/Report.cs", "using Shop.Orders;\nnamespace Shop.Use;\npublic partial class Report\n{\n    int M() => Status.Closed;\n}\n");
+    assert!(!imports_status(&[STATUS, other, props, use_], "Use/Report.cs"), "the property is Shop.Other.Status, so Status.Closed reads it");
+}
+
+#[test]
+fn a_component_s_code_behind_part_blocks_a_static_access() {
+    let csproj = ("Web/Shop.Web.csproj", "<Project Sdk=\"Microsoft.NET.Sdk.Web\"><PropertyGroup><RootNamespace>Shop.Web</RootNamespace></PropertyGroup></Project>\n");
+    let page = ("Web/Pages/Report.razor", "@using Shop.Orders\n<p/>\n");
+    let behind = ("Web/Pages/Report.razor.cs", "using Shop.Orders;\nnamespace Shop.Web.Pages;\npublic partial class Report\n{\n    object Pick() => Status.Open;\n}\n");
+    assert!(!imports_status(&[STATUS, csproj, page, behind], "Web/Pages/Report.razor.cs"), "the component's ComponentBase is not the repository's to read");
+}
+
+const STRIPE: (&str, &str) = ("Settings/Stripe.cs", "namespace Shop.Settings;\npublic class Stripe\n{\n    public string ApiKey { get; set; }\n    public class Options {}\n}\n");
+
+fn imports_stripe(body: &str) -> bool {
+    let src = format!("using Shop.Settings;\nnamespace Shop.Use;\nclass Startup\n{{\n    {body}\n}}\n");
+    imports_from(&[STRIPE, ("Use/Startup.cs", src.as_str())], "Use/Startup.cs").iter().any(|(to, _)| to == "file:Settings/Stripe.cs")
+}
+
+#[test]
+fn a_qualified_access_through_a_using_imported_type_could_be_an_external_namespace() {
+    for body in [
+        "void M(string k) { Stripe.StripeConfiguration.ApiKey = k; }",
+        "string M() => nameof(Stripe.Charge);",
+        "object M() => Pick<Stripe.Options>();",
+    ] {
+        assert!(!imports_stripe(body), "{body}");
+    }
+    assert!(imports_stripe("string M() => Stripe.Key();"), "a two-name access outside nameof cannot name a namespace");
+}
+
+#[test]
 fn a_member_named_like_a_type_but_typed_otherwise_shadows_it() {
     let props = ("Use/Report.Props.cs", "using Shop.Orders;\nnamespace Shop.Use;\npublic partial class Report\n{\n    public Gauge Status { get; set; }\n}\n");
     let use_ = ("Use/Report.cs", "using Shop.Orders;\nnamespace Shop.Use;\npublic partial class Report\n{\n    int Level() => Status.Open;\n}\n");
@@ -968,6 +1013,15 @@ fn a_local_parameter_lambda_parameter_or_type_parameter_shadows_a_static_access(
         "int M(Gauge Status) => Status.Open;",
         "System.Func<Gauge, int> M() => Status => Status.Open;",
         "object M<Status>() => Status.Open;",
+        "int M((Gauge, int) t) { var (Status, n) = t; return Status.Open; }",
+        "int M((Gauge, int)[] xs) { foreach (var (Status, n) in xs) return Status.Open; return 0; }",
+        "int M() { try { return 0; } catch (Gauge Status) { return Status.Open; } }",
+        "object M(Gauge[] xs) => from Status in xs select Status.Open;",
+        "object M(Gauge[] xs) => from g in xs let Status = g select Status.Open;",
+        "object M(Gauge[] xs) => from g in xs join Status in xs on g equals Status select Status.Open;",
+        "object M(Gauge[] xs) => from g in xs join h in xs on g equals h into Status select Status.Open;",
+        "object M(Gauge[] xs) => from g in xs group g by g into Status select Status.Key;",
+        "bool M(object o) => o is var (Status, n) && Status.Open > 0;",
     ] {
         let src = format!("using Shop.Orders;\nnamespace Shop.Use;\nclass Report\n{{\n    {body}\n}}\n");
         let use_ = ("Use/Report.cs", src.as_str());
@@ -1005,8 +1059,15 @@ fn a_generic_argument_in_an_expression_is_a_type_use() {
 
 #[test]
 fn a_type_parameter_as_a_generic_argument_is_no_type_use() {
-    let use_ = ("Use/Store.cs", "namespace Shop.Orders;\nclass Store<Status>\n{\n    object Get() => Pick<Status>();\n    object Pick<U>() => null;\n}\n");
-    assert!(!imports_status(&[STATUS, use_], "Use/Store.cs"));
+    for body in [
+        "class Store<Status>\n{\n    object Get() => Pick<Status>();\n    object Pick<U>() => null;\n}",
+        "class Store\n{\n    object Get<Status>() => Pick<Status>();\n    object Pick<U>() => null;\n}",
+        "class Store\n{\n    void Get() { object L<Status>() => Pick<Status>(); }\n    object Pick<U>() => null;\n}",
+    ] {
+        let src = format!("namespace Shop.Orders;\n{body}\n");
+        let use_ = ("Use/Store.cs", src.as_str());
+        assert!(!imports_status(&[STATUS, use_], "Use/Store.cs"), "{body}");
+    }
 }
 
 #[test]
@@ -1018,3 +1079,4 @@ fn typeof_default_and_a_cast_are_type_uses() {
         assert!(imports.iter().any(|(t, _)| t == to), "{to} missing from {imports:?}");
     }
 }
+

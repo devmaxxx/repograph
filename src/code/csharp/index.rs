@@ -26,6 +26,7 @@ type Members = BTreeMap<String, Option<String>>;
 struct Entry {
     part: Part,
     members: Members,
+    plain: BTreeSet<String>,
     bases: Vec<String>,
     generic_bases: BTreeSet<String>,
 }
@@ -136,7 +137,7 @@ impl DotNet {
     pub(crate) fn add_cs(&mut self, rel: &str, d: &Declared) {
         for t in &d.types {
             let part = Part { rel: rel.to_string(), local: t.local.clone(), full: t.full() };
-            self.types.entry(t.full()).or_default().push(Entry { part, members: t.members.clone(), bases: t.bases.clone(), generic_bases: t.generic_bases.clone() });
+            self.types.entry(t.full()).or_default().push(Entry { part, members: t.members.clone(), plain: t.plain.clone(), bases: t.bases.clone(), generic_bases: t.generic_bases.clone() });
             for m in &t.extensions {
                 self.extensions.entry(m.clone()).or_default().insert((t.namespace.clone(), t.full()));
             }
@@ -174,6 +175,12 @@ impl DotNet {
             Some(e) => Some(&e.members),
             None => self.component(full, rel, local).map(|c| &c.members),
         }
+    }
+
+    /// Whether one `.cs` part declares `member` with a plain type (`TypeDecl::plain`). A
+    /// component's members are never read as plain: its `@inject` types are text, not a tree.
+    pub fn plain(&self, full: &str, rel: &str, local: &str, member: &str) -> bool {
+        self.entry(full, rel, local).is_some_and(|e| e.plain.contains(member))
     }
 
     /// The component `rel` when it is the part `local` of `full`.
