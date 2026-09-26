@@ -113,6 +113,9 @@ def rank_of(answer: str, want: str) -> int | None:
 
 class Tool:
     name = ""
+    # Whether the tool is asked by a case's store id (`id`, `from_id`, `to_id`) when it carries one.
+    # Only repograph writes those ids; every other tool is asked by the bare name.
+    qualified = False
 
     def __init__(self, repo: Path, opts: argparse.Namespace):
         self.repo = repo
@@ -146,6 +149,8 @@ class Tool:
 
 class Repograph(Tool):
     name = "repograph"
+    # A bare name two languages share is ambiguous to repograph, which lists both and answers neither.
+    qualified = True
 
     def bin(self) -> list[str]:
         return [self.opts.repograph, "--repo", str(self.repo)]
@@ -301,12 +306,16 @@ def by_extension(answer: str, want: dict, found: set[str] | None = None) -> dict
     return out
 
 
+def asked(tool: Tool, case: dict, key: str, id_key: str) -> str:
+    return case.get(id_key, case[key]) if tool.qualified else case[key]
+
+
 def score_blast(tool: Tool, cases: list[dict], truth: dict) -> list[dict]:
     rows = []
     for case in cases:
         kind = case["kind"]
         if kind == "impact":
-            got = tool.impact(case["target"])
+            got = tool.impact(asked(tool, case, "target", "id"))
             if got is None:
                 continue
             answer, ms = got
@@ -319,7 +328,7 @@ def score_blast(tool: Tool, cases: list[dict], truth: dict) -> list[dict]:
                 "ms": round(ms), "chars": len(answer.strip()),
             })
         elif kind == "trace":
-            got = tool.trace(case["from"], case["to"])
+            got = tool.trace(asked(tool, case, "from", "from_id"), asked(tool, case, "to", "to_id"))
             if got is None:
                 continue
             answer, ms = got

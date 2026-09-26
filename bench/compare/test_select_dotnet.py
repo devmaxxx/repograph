@@ -70,24 +70,39 @@ class Selection(unittest.TestCase):
         # by TypeScript too: it is kept, and its case's `exts` leaves that file out of the truth.
         cases = S.csharp_impact(self.repo, self.facts, {"narrow": 9, "wide": 9, "hub": 9})
         self.assertCountEqual(cases, [
-            {"kind": "impact", "target": "Ledger", "file": "libs-dotnet/Shop/Payments/Ledger.cs", "tier": "narrow", "lang": ".cs", "exts": list(S.DOTNET)},
-            {"kind": "impact", "target": "CardGateway", "file": "libs-dotnet/Shop/Payments/CardGateway.cs", "tier": "narrow", "lang": ".cs", "exts": list(S.DOTNET)},
-            {"kind": "impact", "target": "Receipt", "file": "libs-dotnet/Shop/Payments/Receipt.cs", "tier": "narrow", "lang": ".cs", "exts": list(S.DOTNET)},
-            {"kind": "impact", "target": "Kind", "file": "libs-dotnet/Shop/Reports/Kind.cs", "tier": "narrow", "lang": ".cs", "exts": list(S.DOTNET)},
+            {"kind": "impact", "target": "Ledger", "id": "sym:libs-dotnet/Shop/Payments/Ledger.cs::Ledger", "file": "libs-dotnet/Shop/Payments/Ledger.cs", "tier": "narrow", "lang": ".cs", "exts": list(S.DOTNET)},
+            {"kind": "impact", "target": "CardGateway", "id": "sym:libs-dotnet/Shop/Payments/CardGateway.cs::CardGateway", "file": "libs-dotnet/Shop/Payments/CardGateway.cs", "tier": "narrow", "lang": ".cs", "exts": list(S.DOTNET)},
+            {"kind": "impact", "target": "Receipt", "id": "sym:libs-dotnet/Shop/Payments/Receipt.cs::Receipt", "file": "libs-dotnet/Shop/Payments/Receipt.cs", "tier": "narrow", "lang": ".cs", "exts": list(S.DOTNET)},
+            {"kind": "impact", "target": "Kind", "id": "sym:libs-dotnet/Shop/Reports/Kind.cs::Kind", "file": "libs-dotnet/Shop/Reports/Kind.cs", "tier": "narrow", "lang": ".cs", "exts": list(S.DOTNET)},
         ])
 
     def test_razor_impact_takes_components_rendered_by_two_others(self):
         razor = [r for r in S.tracked(self.repo, S.DOTNET) if r.endswith(".razor")]
         self.assertEqual(S.razor_impact(self.repo, self.facts, razor, 9), [
-            {"kind": "impact", "target": "Badge", "file": "apps/web/Pages/Badge.razor", "tier": "narrow", "lang": ".razor", "exts": list(S.DOTNET)},
+            {"kind": "impact", "target": "Badge", "id": "sym:apps/web/Pages/Badge.razor::Badge", "file": "apps/web/Pages/Badge.razor", "tier": "narrow", "lang": ".razor", "exts": list(S.DOTNET)},
         ])
 
     def test_a_trace_is_two_to_four_calls_through_injected_members(self):
         graph = T.di_call_graph(self.repo, ["apps", "libs-dotnet"])
-        self.assertCountEqual(S.traces(graph, self.facts, {".cs": 9, ".razor": 9}), [
-            {"kind": "trace", "from": "OrderService", "to": "Ledger", "expect": "path", "via": ["CardGateway"], "lang": ".cs"},
-            {"kind": "trace", "from": "Checkout", "to": "Ledger", "expect": "path", "via": ["CardGateway"], "lang": ".razor"},
+        self.assertCountEqual(S.traces(self.repo, graph, self.facts, {".cs": 9, ".razor": 9}), [
+            {"kind": "trace", "from": "OrderService", "to": "Ledger",
+             "from_id": "sym:libs-dotnet/Shop/Orders/OrderService.cs::OrderService", "to_id": "sym:libs-dotnet/Shop/Payments/Ledger.cs::Ledger", "expect": "path", "via": ["CardGateway"], "lang": ".cs"},
+            {"kind": "trace", "from": "Checkout", "to": "Ledger",
+             "from_id": "sym:apps/web/Pages/Checkout.razor::Checkout", "to_id": "sym:libs-dotnet/Shop/Payments/Ledger.cs::Ledger", "expect": "path", "via": ["CardGateway"], "lang": ".razor"},
         ])
+
+    def test_a_nested_type_is_asked_for_under_every_type_that_encloses_it(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = committed(tmp, {
+                "libs-dotnet/Shop/Outer.cs": "namespace Shop;\npublic class Outer\n{\n    public class Middle\n    {\n        public record Inner(int X);\n    }\n}\n",
+                "apps/web/Pages/Cart.razor": "<span>cart</span>\n@code {\n    public class Line { }\n}\n",
+            })
+            f = S.facts(repo, S.tracked(repo, S.DOTNET))
+            self.assertEqual(S.store_id(repo, f, "Outer"), "sym:libs-dotnet/Shop/Outer.cs::Outer")
+            self.assertEqual(S.store_id(repo, f, "Middle"), "sym:libs-dotnet/Shop/Outer.cs::Outer.Middle")
+            self.assertEqual(S.store_id(repo, f, "Inner"), "sym:libs-dotnet/Shop/Outer.cs::Outer.Middle.Inner")
+            self.assertEqual(S.store_id(repo, f, "Cart"), "sym:apps/web/Pages/Cart.razor::Cart")
+            self.assertEqual(S.store_id(repo, f, "Line"), "sym:apps/web/Pages/Cart.razor::Cart.Line")
 
     def test_a_changes_base_is_the_smallest_n_that_carries_enough_files(self):
         self.assertEqual(S.changes_base(self.repo, ".cs", 2), (self.rev("HEAD~2"), 3))

@@ -170,6 +170,23 @@ def clear(f: Facts, name: str) -> bool:
     return f.single(name) and name not in f.members and name not in f.segments
 
 
+def store_id(repo: Path, f: Facts, name: str) -> str:
+    """The id repograph's store gives the one declaration of `name`: `sym:<file>::<local>`, where a
+    component's local is its file's stem and a C# type's is its name under every type that encloses
+    it, `Outer.Inner`. A bare name is ambiguous to repograph once another language declares it too,
+    so repograph is asked by this id; the other tools keep the bare name."""
+    (decl,) = f.owners(name)
+    if name in f.components:
+        return f"sym:{decl}::{name}"
+    lines, found = T.declarations(decl, read(repo, decl))
+    bodies = type_bodies(lines, found)
+    line = next(n for n, d in found if d == name and (m := T.CS_TYPE.match(lines[n - 1]) or T.CS_DELEGATE.match(lines[n - 1])) and m.group("name") == name)
+    enclosing = [b[0] for b in sorted(bodies, key=lambda b: b[1]) if b[1] < line <= b[2]]
+    if decl.endswith(".razor"):
+        enclosing.insert(0, Path(decl).name[: -len(".razor")])
+    return f"sym:{decl}::{'.'.join([*enclosing, name])}"
+
+
 def dotnet_refs(repo: Path, name: str, decl: str) -> list[str]:
     """The .NET files naming `name` besides its declaration. L10 forbids an edge from another
     language, so a TypeScript file spelling the same name is no reference; each case carries `exts`
@@ -193,7 +210,7 @@ def csharp_impact(repo: Path, f: Facts, quota: dict[str, int] = QUOTA) -> list[d
                 continue
             client += 1
         filled[t] += 1
-        cases.append({"kind": "impact", "target": name, "file": decl, "tier": t, "lang": ".cs", "exts": list(DOTNET)})
+        cases.append({"kind": "impact", "target": name, "id": store_id(repo, f, name), "file": decl, "tier": t, "lang": ".cs", "exts": list(DOTNET)})
     return cases
 
 
@@ -210,11 +227,11 @@ def razor_impact(repo: Path, f: Facts, razor: list[str], count: int = RAZOR_IMPA
             continue
         t = tier(len(dotnet_refs(repo, name, decl)))
         if t is not None:
-            cases.append({"kind": "impact", "target": name, "file": decl, "tier": t, "lang": ".razor", "exts": list(DOTNET)})
+            cases.append({"kind": "impact", "target": name, "id": store_id(repo, f, name), "file": decl, "tier": t, "lang": ".razor", "exts": list(DOTNET)})
     return cases
 
 
-def traces(graph: dict, f: Facts, quota: dict[str, int] = TRACE) -> list[dict]:
+def traces(repo: Path, graph: dict, f: Facts, quota: dict[str, int] = TRACE) -> list[dict]:
     """Paths of two to four calls through injected members, one per starting class, between names
     that each have one declaring file."""
     edges = graph["edges"]
@@ -241,7 +258,8 @@ def traces(graph: dict, f: Facts, quota: dict[str, int] = TRACE) -> list[dict]:
                 continue
             via = [edge.split(".")[0] for edge in path[1:-1]]
             if all(f.single(n) for n in [dst, *via]):
-                cases.append({"kind": "trace", "from": src, "to": dst, "expect": "path", "via": via, "lang": ext})
+                cases.append({"kind": "trace", "from": src, "to": dst, "from_id": store_id(repo, f, src), "to_id": store_id(repo, f, dst),
+                              "expect": "path", "via": via, "lang": ext})
                 filled[ext] += 1
                 break
         if all(filled[k] >= quota[k] for k in quota):
@@ -268,7 +286,7 @@ def select(repo: Path) -> tuple[list[dict], dict]:
     f = facts(repo, code)
     graph = T.di_call_graph(repo, [r for r in ROOTS if (repo / r).is_dir()])
     razor = [r for r in code if r.endswith(".razor")]
-    cases = csharp_impact(repo, f) + razor_impact(repo, f, razor) + traces(graph, f)
+    cases = csharp_impact(repo, f) + razor_impact(repo, f, razor) + traces(repo, graph, f)
     counts: dict[str, int] = defaultdict(int)
     for c in cases:
         counts[f"{c['kind']} {c['lang']}" + (f" {c['tier']}" if c["kind"] == "impact" else "")] += 1
