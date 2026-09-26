@@ -940,7 +940,7 @@ fn imports_status(files: &[(&str, &str)], rel: &str) -> bool {
 
 #[test]
 fn a_static_member_access_imports_the_type_it_names() {
-    let use_ = ("Use/Report.cs", "using Shop.Orders;\nnamespace Shop.Use;\nclass Report\n{\n    object Pick() => Status.Open;\n    int Max() => Shop.Orders.Limits.Tier.Max;\n}\n");
+    let use_ = ("Use/Report.cs", "namespace Shop.Orders.Use;\nclass Report\n{\n    object Pick() => Status.Open;\n    int Max() => Shop.Orders.Limits.Tier.Max;\n}\n");
     let imports = imports_from(&[STATUS, LIMITS, use_], "Use/Report.cs");
     for (to, name) in [("file:Orders/Status.cs", "Status"), ("file:Orders/Limits.cs", "Limits")] {
         assert!(imports.contains(&(to.to_string(), name.to_string())), "{to} [{name}] missing from {imports:?}");
@@ -949,17 +949,17 @@ fn a_static_member_access_imports_the_type_it_names() {
 
 #[test]
 fn a_member_named_and_typed_like_its_type_still_names_the_type() {
-    let props = ("Use/Report.Props.cs", "using Shop.Orders;\nnamespace Shop.Use;\npublic partial class Report\n{\n    public Status Status { get; set; }\n}\n");
-    let use_ = ("Use/Report.cs", "using Shop.Orders;\nnamespace Shop.Use;\npublic partial class Report\n{\n    bool Closed() => Status == Status.Closed;\n}\n");
+    let props = ("Use/Report.Props.cs", "namespace Shop.Orders.Use;\npublic partial class Report\n{\n    public Status Status { get; set; }\n}\n");
+    let use_ = ("Use/Report.cs", "namespace Shop.Orders.Use;\npublic partial class Report\n{\n    bool Closed() => Status == Status.Closed;\n}\n");
     assert!(imports_status(&[STATUS, props, use_], "Use/Report.cs"), "C#'s Color Color rule binds Status.Closed to the type");
 }
 
 #[test]
 fn a_member_typed_as_a_nullable_or_an_array_of_its_namesake_shadows_it() {
     for ty in ["Status?", "Status[]", "System.Collections.Generic.List<Status>"] {
-        let src = format!("using Shop.Orders;\nnamespace Shop.Use;\npublic partial class Report\n{{\n    public {ty} Status {{ get; set; }}\n}}\n");
+        let src = format!("namespace Shop.Orders.Use;\npublic partial class Report\n{{\n    public {ty} Status {{ get; set; }}\n}}\n");
         let props = ("Use/Report.Props.cs", src.as_str());
-        let use_ = ("Use/Report.cs", "using Shop.Orders;\nnamespace Shop.Use;\npublic partial class Report\n{\n    object M() => Status.Length;\n}\n");
+        let use_ = ("Use/Report.cs", "namespace Shop.Orders.Use;\npublic partial class Report\n{\n    object M() => Status.Length;\n}\n");
         assert!(!imports_status(&[STATUS, props, use_], "Use/Report.cs"), "{ty}: Status.Length reads the property");
     }
 }
@@ -967,17 +967,20 @@ fn a_member_typed_as_a_nullable_or_an_array_of_its_namesake_shadows_it() {
 #[test]
 fn a_member_whose_type_resolves_elsewhere_shadows_the_type_this_part_names() {
     let other = ("Other/Status.cs", "namespace Shop.Other;\npublic class Status { public int Closed; }\n");
-    let props = ("Use/Report.Props.cs", "using Shop.Other;\nnamespace Shop.Use;\npublic partial class Report\n{\n    public Status Status { get; set; }\n}\n");
-    let use_ = ("Use/Report.cs", "using Shop.Orders;\nnamespace Shop.Use;\npublic partial class Report\n{\n    int M() => Status.Closed;\n}\n");
+    let props = ("Use/Report.Props.cs", "namespace Shop.Orders.Use;\npublic partial class Report\n{\n    public Shop.Other.Status Status { get; set; }\n}\n");
+    let use_ = ("Use/Report.cs", "namespace Shop.Orders.Use;\npublic partial class Report\n{\n    int M() => Status.Closed;\n}\n");
     assert!(!imports_status(&[STATUS, other, props, use_], "Use/Report.cs"), "the property is Shop.Other.Status, so Status.Closed reads it");
 }
 
 #[test]
 fn a_component_s_code_behind_part_blocks_a_static_access() {
     let csproj = ("Web/Shop.Web.csproj", "<Project Sdk=\"Microsoft.NET.Sdk.Web\"><PropertyGroup><RootNamespace>Shop.Web</RootNamespace></PropertyGroup></Project>\n");
-    let page = ("Web/Pages/Report.razor", "@using Shop.Orders\n<p/>\n");
-    let behind = ("Web/Pages/Report.razor.cs", "using Shop.Orders;\nnamespace Shop.Web.Pages;\npublic partial class Report\n{\n    object Pick() => Status.Open;\n}\n");
-    assert!(!imports_status(&[STATUS, csproj, page, behind], "Web/Pages/Report.razor.cs"), "the component's ComponentBase is not the repository's to read");
+    let status = ("Web/Status.cs", "namespace Shop.Web;\npublic enum Status { Open }\n");
+    let page = ("Web/Pages/Report.razor", "<p/>\n");
+    let behind = ("Web/Pages/Report.razor.cs", "namespace Shop.Web.Pages;\npublic partial class Report\n{\n    object Pick() => Status.Open;\n}\n");
+    let names = |files: &[(&str, &str)]| imports_from(files, "Web/Pages/Report.razor.cs").iter().any(|(to, _)| to == "file:Web/Status.cs");
+    assert!(names(&[status, csproj, behind]), "without the component, Status.Open names the type");
+    assert!(!names(&[status, csproj, page, behind]), "the component's ComponentBase is not the repository's to read");
 }
 
 const STRIPE: (&str, &str) = ("Settings/Stripe.cs", "namespace Shop.Settings;\npublic class Stripe\n{\n    public string ApiKey { get; set; }\n    public class Options {}\n}\n");
@@ -993,16 +996,22 @@ fn a_qualified_access_through_a_using_imported_type_could_be_an_external_namespa
         "void M(string k) { Stripe.StripeConfiguration.ApiKey = k; }",
         "string M() => nameof(Stripe.Charge);",
         "object M() => Pick<Stripe.Options>();",
+        "bool M(object o) => o is Stripe.Customer;",
+        "bool M(object o) => o is not Stripe.Customer;",
+        "bool M(object o) => o is Stripe.Customer or Stripe.Invoice;",
+        "int M(object o) { switch (o) { case Stripe.Customer: return 1; } return 0; }",
+        "int M(object o) => o switch { Stripe.Customer => 1, _ => 0 };",
+        "object M() => Stripe.ApiKey;",
     ] {
         assert!(!imports_stripe(body), "{body}");
     }
-    assert!(imports_stripe("string M() => Stripe.Key();"), "a two-name access outside nameof cannot name a namespace");
+    assert!(imports_stripe("string M() => Stripe.Key();"), "a namespace followed by a type is never invoked");
 }
 
 #[test]
 fn a_member_named_like_a_type_but_typed_otherwise_shadows_it() {
-    let props = ("Use/Report.Props.cs", "using Shop.Orders;\nnamespace Shop.Use;\npublic partial class Report\n{\n    public Gauge Status { get; set; }\n}\n");
-    let use_ = ("Use/Report.cs", "using Shop.Orders;\nnamespace Shop.Use;\npublic partial class Report\n{\n    int Level() => Status.Open;\n}\n");
+    let props = ("Use/Report.Props.cs", "namespace Shop.Orders.Use;\npublic partial class Report\n{\n    public Gauge Status { get; set; }\n}\n");
+    let use_ = ("Use/Report.cs", "namespace Shop.Orders.Use;\npublic partial class Report\n{\n    int Level() => Status.Open;\n}\n");
     assert!(!imports_status(&[STATUS, GAUGE, props, use_], "Use/Report.cs"), "Status.Open reads the property");
 }
 
@@ -1023,7 +1032,7 @@ fn a_local_parameter_lambda_parameter_or_type_parameter_shadows_a_static_access(
         "object M(Gauge[] xs) => from g in xs group g by g into Status select Status.Key;",
         "bool M(object o) => o is var (Status, n) && Status.Open > 0;",
     ] {
-        let src = format!("using Shop.Orders;\nnamespace Shop.Use;\nclass Report\n{{\n    {body}\n}}\n");
+        let src = format!("namespace Shop.Orders.Use;\nclass Report\n{{\n    {body}\n}}\n");
         let use_ = ("Use/Report.cs", src.as_str());
         assert!(!imports_status(&[STATUS, GAUGE, use_], "Use/Report.cs"), "{body}");
     }
@@ -1031,10 +1040,10 @@ fn a_local_parameter_lambda_parameter_or_type_parameter_shadows_a_static_access(
 
 #[test]
 fn an_inherited_member_or_a_base_the_repository_cannot_read_blocks_a_static_access() {
-    let base = ("Use/ReportBase.cs", "using Shop.Orders;\nnamespace Shop.Use;\npublic class ReportBase { protected Gauge Status; }\n");
-    let inherits = ("Use/Report.cs", "using Shop.Orders;\nnamespace Shop.Use;\nclass Report : ReportBase\n{\n    int M() => Status.Open;\n}\n");
+    let base = ("Use/ReportBase.cs", "namespace Shop.Orders.Use;\npublic class ReportBase { protected Gauge Status; }\n");
+    let inherits = ("Use/Report.cs", "namespace Shop.Orders.Use;\nclass Report : ReportBase\n{\n    int M() => Status.Open;\n}\n");
     assert!(!imports_status(&[STATUS, GAUGE, base, inherits], "Use/Report.cs"), "the inherited field shadows the type");
-    let external = ("Use/Report.cs", "using Shop.Orders;\nnamespace Shop.Use;\nclass Report : Microsoft.AspNetCore.Mvc.ControllerBase\n{\n    object M() => Status.Open;\n}\n");
+    let external = ("Use/Report.cs", "namespace Shop.Orders.Use;\nclass Report : Microsoft.AspNetCore.Mvc.ControllerBase\n{\n    object M() => Status.Open;\n}\n");
     assert!(!imports_status(&[STATUS, external], "Use/Report.cs"), "a framework base could declare Status");
     let static_ = ("Use/Report.cs", "using Shop.Orders;\nusing static System.Math;\nnamespace Shop.Use;\nclass Report\n{\n    object M() => Status.Open;\n}\n");
     assert!(!imports_status(&[STATUS, static_], "Use/Report.cs"), "an unread using static could bring a Status member");

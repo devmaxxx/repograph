@@ -269,9 +269,10 @@ impl Reader<'_> {
             if parts.is_empty() {
                 continue;
             }
-            // Found only through a using, `A.B.M` could read `A` as a package's namespace, which
-            // the compiler finds first; `A.M` could too, but only inside `nameof`.
-            if !(imported && (segments.len() > 2 || in_nameof(n, self.src))) {
+            // Found only through a using, `A` could be a package's namespace, which the compiler
+            // finds first. `A.M(…)` is the one shape that rules it out: a namespace followed by a
+            // type is never invoked, while a pattern, a value or `nameof` takes `Ns.Type` as well.
+            if !imported || (segments.len() == 2 && invoked(n)) {
                 self.use_type(&prefix, at, ex);
             }
             return;
@@ -707,12 +708,9 @@ fn argument_names<'t>(n: Node<'t>, out: &mut Vec<Node<'t>>) {
     }
 }
 
-/// Whether `n` is the whole argument of `nameof(…)`.
-fn in_nameof(n: Node, src: &[u8]) -> bool {
-    let call = n.parent().filter(|a| a.kind() == "argument").and_then(|a| a.parent()).filter(|l| l.kind() == "argument_list").and_then(|l| l.parent());
-    call.filter(|c| c.kind() == "invocation_expression")
-        .and_then(|c| c.child_by_field_name("function"))
-        .is_some_and(|f| f.kind() == "identifier" && text(f, src) == "nameof")
+/// Whether `n` is the function an invocation calls.
+fn invoked(n: Node) -> bool {
+    n.parent().is_some_and(|p| p.kind() == "invocation_expression" && p.child_by_field_name("function") == Some(n))
 }
 
 /// `["Shop", "Orders", "Status", "Open"]` from an access chain of plain identifiers, or none when
