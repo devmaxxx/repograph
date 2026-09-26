@@ -320,13 +320,22 @@ pub(crate) fn resolve_code<'a>(graph: &'a Graph, needle: &str) -> Option<(&'a cr
     Some((it.next()?, it.collect()))
 }
 
+/// A node's edges, and the ones that reach it through a barrel: a caller that imported the
+/// symbol from an `index.ts` points at the barrel's `sym:<barrel>::Name`, not at the node, and
+/// `impact` counts it as a caller all the same.
+fn edges_of<'a>(graph: &'a Graph, id: &str) -> Vec<&'a crate::model::Edge> {
+    let mut edges = graph.neighbours(id);
+    let aliases: BTreeSet<String> = crate::impact::Index::new(graph, true).aliases(id).into_iter().collect();
+    if !aliases.is_empty() { edges.extend(graph.edges.iter().filter(|e| aliases.contains(&e.target))); }
+    edges.sort_by_key(|e| (e.kind == EdgeKind::Legacy, e.kind, e.source.clone(), e.target.clone()));
+    edges
+}
+
 pub fn explain(graph: &Graph, needle: &str) -> Option<String> {
     let n = resolve(graph, needle)?;
     let mut out = format!("{}  {}:{}  {:?}  {}\n", n.id, n.file, n.line, n.kind, headline(&n.label));
     if let Some(c) = &n.community { out.push_str(&format!("  community: {c}\n")); }
-    let mut edges = graph.neighbours(&n.id);
-    edges.sort_by_key(|e| (e.kind == EdgeKind::Legacy, e.kind, e.source.clone(), e.target.clone()));
-    for e in edges {
+    for e in edges_of(graph, &n.id) {
         let (arrow, other) = if e.source == n.id { ("→", &e.target) } else { ("←", &e.source) };
         let ctx = if e.context.is_empty() { String::new() } else { format!("  [{}]", e.context) };
         out.push_str(&format!("  {:?} {arrow} {other}{ctx}\n", e.kind));
@@ -346,8 +355,7 @@ pub fn explain_json(graph: &Graph, needle: &str) -> Option<String> {
         community: Option<&'a str>, edges: Vec<Edge<'a>>,
     }
     let n = resolve(graph, needle)?;
-    let mut edges = graph.neighbours(&n.id);
-    edges.sort_by_key(|e| (e.kind == EdgeKind::Legacy, e.kind, e.source.clone(), e.target.clone()));
+    let edges = edges_of(graph, &n.id);
     let out = Out {
         id: &n.id,
         kind: format!("{:?}", n.kind),
@@ -1051,6 +1059,21 @@ mod tests {
         for key in ["id", "file", "line", "label", "score", "via"] {
             assert!(seed.get(key).is_some(), "missing {key}");
         }
+    }
+
+    #[test]
+    fn explain_lists_a_caller_that_reached_the_symbol_through_a_barrel() {
+        let mut g = Graph::default();
+        let mut e = Extraction::default();
+        e.node(NodeKind::Symbol, "sym:s.ts::f", "f", "", "s.ts", 2);
+        e.edge("file:index.ts", "file:s.ts", EdgeKind::ReExports, "*", "index.ts");
+        e.node(NodeKind::Symbol, "sym:c.ts::g", "g", "", "c.ts", 5);
+        e.edge("sym:c.ts::g", "sym:index.ts::f", EdgeKind::Calls, "", "c.ts");
+        g.apply(e);
+        assert!(explain(&g, "sym:s.ts::f").unwrap().contains("  Calls ← sym:c.ts::g\n"));
+        let v: serde_json::Value = serde_json::from_str(&explain_json(&g, "sym:s.ts::f").unwrap()).unwrap();
+        assert_eq!(v["edges"][0]["other"], "sym:c.ts::g");
+        assert_eq!(v["edges"][0]["dir"], "in");
     }
 
     #[test]
