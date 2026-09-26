@@ -788,3 +788,45 @@ fn the_note_names_each_extension_once_with_its_count() {
         Some("code: no grammar reads 2 .log, 1 (no extension) — indexed as files only"));
     assert_eq!(files_only_note(["b/x.ts", "c/y.tsx", "d/z.mjs"].into_iter()), None);
 }
+
+#[test]
+fn kotlin_and_java_are_one_family_and_a_gradle_script_is_not_read() {
+    use crate::code::lang::{Family, Lang};
+    assert_eq!(Lang::of("mobile/shared/src/commonMain/kotlin/a/Tokens.kt"), Some(Lang::Kotlin));
+    assert_eq!(Lang::of("android/app/src/main/java/a/Checkout.java"), Some(Lang::Java));
+    // Every .kts the census found is a Gradle script, and spec "### Kotlin" does not read them.
+    assert_eq!(Lang::of("mobile/build.gradle.kts"), None);
+    assert_eq!(Lang::of("tools/release.main.kts"), None);
+    assert_eq!(Lang::Kotlin.family(), Family::Jvm);
+    assert_eq!(Lang::Java.family(), Family::Jvm);
+}
+
+#[test]
+fn both_jvm_grammars_parse_a_clean_file_without_an_error_node() {
+    use crate::code::lang::Lang;
+    for (lang, src) in [
+        (Lang::Kotlin, "package a\n\nclass A(private val b: B) {\n    fun f() = b.g()\n}\n"),
+        (Lang::Java, "package a;\n\npublic class A {\n    private B b;\n    int f() { return b.g(); }\n}\n"),
+    ] {
+        assert!(lang.grammar().is_some(), "{lang:?} has a grammar");
+        let tree = lang.parse(src.as_bytes()).expect("a tree");
+        assert!(!tree.root_node().has_error(), "{lang:?}: {}", tree.root_node().to_sexp());
+    }
+}
+
+#[test]
+fn a_gradle_script_under_a_glob_is_a_file_and_nothing_else() {
+    let ex = extract("mobile/build.gradle.kts", "plugins {\n    kotlin(\"multiplatform\")\n}\nfun helper() = 1\n");
+    assert_eq!(ids(&ex), vec!["file:mobile/build.gradle.kts"]);
+    assert!(ex.edges.is_empty(), "{:?}", ex.edges);
+}
+
+// `ext` is case-sensitive by L1's design: an uppercase extension is a file, and the note says so.
+#[test]
+fn an_uppercase_extension_is_a_file_named_by_the_note() {
+    use crate::code::lang::{files_only_note, Lang};
+    assert_eq!(Lang::of("a/Legacy.JAVA"), None);
+    let ex = extract("a/Legacy.JAVA", "package a;\n\npublic class Legacy {}\n");
+    assert_eq!(ids(&ex), vec!["file:a/Legacy.JAVA"]);
+    assert!(files_only_note(["a/Legacy.JAVA"].into_iter()).is_some_and(|n| n.contains(".JAVA")));
+}
