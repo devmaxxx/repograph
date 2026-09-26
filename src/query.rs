@@ -315,7 +315,7 @@ fn candidates<'a>(graph: &'a Graph, needle: &str) -> Vec<&'a crate::model::Node>
 /// pick, so a caller can say which name it did not take.
 pub(crate) fn resolve_code<'a>(graph: &'a Graph, needle: &str) -> Option<(&'a crate::model::Node, Vec<&'a crate::model::Node>)> {
     let mut c = candidates(graph, needle);
-    c.sort_by_key(|n| !matches!(n.kind, NodeKind::Symbol | NodeKind::File));
+    c.sort_by_key(|n| !n.is_code());
     let mut it = c.into_iter();
     Some((it.next()?, it.collect()))
 }

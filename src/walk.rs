@@ -20,12 +20,12 @@ pub struct Entry { pub rel: String, pub kind: FileKind, pub hash: String, pub st
 /// The generation of the grammar a file is read by — the id shapes, the definition heads, the
 /// registry rows, the ids a source file cites, the calls it makes, and which of those a settled
 /// graph admits. Bumped by hand when a change to any of them would make a re-read of a file that
-/// has not moved yield a different graph, and left alone by a release that does not touch them: this number is what
-/// forces one whole-tree re-read on the first writer after an upgrade (see `apply_diff`), and a
-/// bump nobody needed is that walk paid for nothing. `0` belongs to no generation: it is what a
-/// manifest written before the stamp existed reads as, and what a writer leaves behind when a file
-/// it had to read would not open — neither store was read whole, and `0` is stale against every
-/// generation there is or will be.
+/// has not moved yield a different graph, and left alone by a release that does not touch them:
+/// this number is what forces one whole-tree re-read on the first writer after an upgrade (see
+/// `apply_diff`), and a bump nobody needed is that walk paid for nothing. `0` belongs to no
+/// generation: it is what a manifest written before the stamp existed reads as, and what a writer
+/// leaves behind when a file it had to read would not open — neither store was read whole, and
+/// `0` is stale against every generation there is or will be.
 /// 3: a call on a helper's return value (#91) and a JSX element (#93) are calls.
 pub const GRAMMAR: u32 = 3;
 
