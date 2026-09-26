@@ -35,6 +35,7 @@ CHANGES = {".cs": 8, ".razor": 3}
 ENUM_BODY = re.compile(r"\benum[ \t]+\w+[^{};]*\{([^{}]*)\}")
 ENUM_ATTRIBUTE = re.compile(r"\[[^\]]*\]")
 ENUM_CONSTANT = re.compile(r"^\s*([A-Za-z_]\w*)\s*(?:=|$)")
+CTOR = re.compile(T.CS_HEAD + r"(?P<name>\w+)[ \t]*\(")
 NAMESPACE = re.compile(r"^[ \t]*@?(?:global[ \t]+)?(?:namespace|using)[ \t]+(?:static[ \t]+)?(?:\w+[ \t]*=[ \t]*)?([\w.]+)", re.M)
 
 
@@ -99,12 +100,13 @@ def facts(repo: Path, files: list[str]) -> Facts:
             f.components[name].append(rel)
             f.decls[name].add((rel, "partial"))
         lines, found = T.declarations(rel, src)
+        bodies = type_bodies(lines, found)
         for line, name in found:
             m = T.CS_TYPE.match(lines[line - 1]) or T.CS_DELEGATE.match(lines[line - 1])
             if m and m.group("name") == name:
                 f.types[name].add(rel)
                 f.decls[name].add(declaration_key(rel, line, m))
-            else:
+            elif not constructor(lines, bodies, line, name):
                 f.members.add(name)
         blanked = "\n".join(lines)
         # The truth's C# reader yields no enum constants, yet `Kind.Open` spells `Open` as a word.
@@ -115,6 +117,44 @@ def facts(repo: Path, files: list[str]) -> Facts:
         for m in NAMESPACE.finditer(T.blanked_source(rel, src) if rel.endswith(".cs") else src):
             f.segments.update(m.group(1).split("."))
     return f
+
+
+def type_bodies(lines: list[str], found: list[tuple[int, str]]) -> list[tuple[str, int, int]]:
+    """`(name, declaring line, closing line)` for every type in a file that has a `{ }` body."""
+    bodies = []
+    for line, name in found:
+        m = T.CS_TYPE.match(lines[line - 1])
+        if m and m.group("name") == name and (end := body_end(lines, line)):
+            bodies.append((name, line, end))
+    return bodies
+
+
+def body_end(lines: list[str], line: int) -> int | None:
+    """The line whose `}` closes the body opened after `line`, or None when a `;` ends the
+    declaration first, as a positional record's does. The lines are blanked, so every brace is code."""
+    depth = 0
+    for n in range(line - 1, len(lines)):
+        for ch in lines[n]:
+            if ch == ";" and depth == 0:
+                return None
+            if ch == "{":
+                depth += 1
+            elif ch == "}" and depth:
+                depth -= 1
+                if depth == 0:
+                    return n + 1
+    return None
+
+
+def constructor(lines: list[str], bodies: list[tuple[str, int, int]], line: int, name: str) -> bool:
+    """A constructor spells its type's name, so it is that type's declaration, not a member that
+    would make the name ambiguous. Only modifiers may precede the name, and the innermost type
+    body holding the line must be that type's: `Order Order { get; }` is a property."""
+    m = CTOR.match(lines[line - 1])
+    if not m or m.group("name") != name:
+        return False
+    holding = [b for b in bodies if b[1] < line <= b[2]]
+    return bool(holding) and max(holding, key=lambda b: b[1])[0] == name
 
 
 def declaration_key(rel: str, line: int, m: re.Match) -> tuple[str, int | str]:

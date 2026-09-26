@@ -388,6 +388,10 @@ CS_TYPE_REF = r"(?:[\w.]+(?:<[^;{}()\n]*>)?(?:\?|\[[, ]*\])*|\([^()\n]*\))"
 CS_MEMBER = re.compile(
     CS_HEAD
     + r"(?!(?:class|struct|interface|enum|record|delegate|namespace|return|throw|using|var|await|yield)\b)"
+    # `operator` itself must never be read as the type of what follows — a conversion
+    # operator's target type (`operator Money(...)`) would otherwise be captured as if it
+    # were the declared member's own name.
+    + r"(?!operator\b)"
     + rf"(?:{CS_TYPE_REF}[ \t]+)?"
     + r"(?!(?:operator|this)\b)(?P<name>\w+)[ \t]*(?:<[^>\n]*>)?[ \t]*(?:\(|\{|=>|=|;|,|$)"
 )

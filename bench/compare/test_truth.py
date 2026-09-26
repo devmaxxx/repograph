@@ -718,6 +718,13 @@ class DotnetReaders(unittest.TestCase):
         )
         self.assertEqual(T.csharp_declarations(T.blank_csharp(src)), [(1, "A"), (3, "Default"), (5, "Inst")])
 
+    def test_a_conversion_operator_declares_neither_its_type_nor_its_target(self):
+        src = (
+            "public struct Money\n{\n    public static implicit operator Money(int a) => new();\n"
+            "    public static explicit operator int(Money m) => 0;\n}\n"
+        )
+        self.assertEqual(T.csharp_declarations(T.blank_csharp(src)), [(1, "Money")])
+
     def test_cs_call_spans_a_newline_before_the_dot(self):
         # I4: a fluent chain wraps its `.` the way TypeScript's does; the gap must span it too.
         self.assertEqual(T.CS_CALL.findall("_gateway\n    .Charge(id)"), [("_gateway", "Charge")])

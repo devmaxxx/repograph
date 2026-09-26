@@ -182,6 +182,22 @@ class Rules(unittest.TestCase):
         self.assertEqual(self.targets(cs), [])
         self.assertEqual([(c["target"], c["file"]) for c in razor], [("Badge", "apps/web/Shared/Badge.razor")])
 
+    def test_a_type_s_own_constructor_does_not_make_its_name_a_member(self):
+        cs, _ = self.selected({
+            "apps/Lib/Invoice.cs": "namespace Lib;\npublic class Invoice\n{\n    public Invoice(int total)\n    {\n    }\n}\n",
+            **uses("Invoice", "apps/Use/InvoiceA.cs", "apps/Use/InvoiceB.cs"),
+        })
+        self.assertEqual(self.targets(cs), ["Invoice"])
+
+    def test_a_property_named_after_a_type_in_its_file_is_still_a_member(self):
+        # Only a constructor spells the type's name as the declaration itself; a property `Order`
+        # is a second thing the word-based truth would count files for.
+        cs, _ = self.selected({
+            "apps/Lib/Cart.cs": "namespace Lib;\nclass Order\n{\n}\nclass Cart\n{\n    Order Order { get; }\n}\n",
+            **uses("Order", "apps/Use/OrderA.cs", "apps/Use/OrderB.cs"),
+        })
+        self.assertNotIn("Order", self.targets(cs))
+
     def test_the_output_may_not_be_this_repository(self):
         root = Path(S.__file__).resolve().parents[2]
         self.assertFalse(S.private(root))
