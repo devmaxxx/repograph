@@ -358,7 +358,7 @@ pub fn explain(graph: &Graph, needle: &str) -> Option<String> {
     for e in edges_of(graph, &n.id) {
         let (arrow, other) = if e.source == n.id { ("→", &e.target) } else { ("←", &e.source) };
         let ctx = if e.context.is_empty() || e.passes() { String::new() } else { format!("  [{}]", e.context) };
-        let kind = if e.passes() { "Passes".to_string() } else { format!("{:?}", e.kind) };
+        let kind = crate::impact::label(e.kind, e.passes());
         out.push_str(&format!("  {kind} {arrow} {other}{ctx}\n"));
     }
     Some(out)
