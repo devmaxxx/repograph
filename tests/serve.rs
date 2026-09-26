@@ -177,6 +177,26 @@ fn the_socket_answers_the_bytes_the_process_answers_and_sees_an_edit() {
     let _ = server.wait();
 }
 
+#[test]
+fn a_server_catches_up_with_the_tree_at_start_rather_than_at_its_first_poll() {
+    let dir = repo_with_docs();
+    std::fs::write(dir.path().join("docs/new.md"), "**FR-PAY-2 · MUST · Возврат аванса**\n\nАванс возвращается при отмене салоном.\n").unwrap();
+    let mut server = serve(dir.path(), &["--every", "3600", "--idle", "60"]);
+    wait_for_socket(dir.path());
+    // `--stale` skips the refresh before the answer, so only the start-up catch-up can have
+    // brought the new document in.
+    let start = Instant::now();
+    let (after, err) = loop {
+        let (out, err) = ask(dir.path(), &["--stale"], &["возврат", "аванса"]);
+        if err.contains("serve: answered by the resident process") { break (out, err); }
+        assert!(start.elapsed() < Duration::from_secs(20), "serve never answered over the socket: {err}");
+        std::thread::sleep(Duration::from_millis(50));
+    };
+    assert!(after.contains("FR-PAY-2"), "the server refreshed on start: {after}\n{err}");
+    server.kill().unwrap();
+    let _ = server.wait();
+}
+
 // The indexes a resident process now keeps are built from the questions it read, and `enrich`
 // rewrites `questions.json` under a live server. Verified against the pre-change binary first:
 // the per-request refresh walks the configured doc globs, not `.repograph/`, so a
