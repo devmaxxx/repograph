@@ -75,6 +75,7 @@ fn roots(graph: &Graph, touched: &[String]) -> BTreeSet<String> {
 
 pub fn report(graph: &Graph, hunks: &[Hunk], depth: usize) -> Report {
     let touched = touched(graph, hunks);
+    let touched_set: BTreeSet<&str> = touched.iter().map(String::as_str).collect();
     let roots = roots(graph, &touched);
     let root_files: BTreeSet<String> = roots.iter().filter_map(|r| graph.nodes.get(r).map(|n| n.file.clone())).collect();
     let mut affected: BTreeMap<String, Dependent> = BTreeMap::new();
@@ -85,11 +86,11 @@ pub fn report(graph: &Graph, hunks: &[Hunk], depth: usize) -> Report {
         files.extend(imp.importers.iter().cloned());
         // A dependent that is itself being changed is not affected, it is the change — a file
         // whose top-level code both changed and calls a changed symbol included.
-        for d in imp.layers.into_iter().flatten().filter(|d| !roots.contains(&d.id) && !touched.contains(&d.id)) {
+        for d in imp.layers.into_iter().flatten().filter(|d| !roots.contains(&d.id) && !touched_set.contains(d.id.as_str())) {
             // One row per dependent, at the shallowest depth any touched symbol reaches it, and
             // by a call rather than an argument edge at that depth.
             match affected.get_mut(&d.id) {
-                Some(a) if d.depth < a.depth || (d.depth == a.depth && a.passed && !d.passed) => *a = d,
+                Some(a) if impact::beats(&d, a) => *a = d,
                 Some(_) => {}
                 None => { affected.insert(d.id.clone(), d); }
             }

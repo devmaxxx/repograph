@@ -13,6 +13,14 @@ pub struct Dependent { pub id: String, pub depth: usize, pub kind: EdgeKind, pub
 /// How an edge reads to a person: an argument edge is `Passes`, since nothing proves it is called.
 pub(crate) fn label(kind: EdgeKind, passed: bool) -> String { if passed { "Passes".to_string() } else { format!("{kind:?}") } }
 
+/// True when `candidate` is the row to keep for a dependent over `existing`: a shallower depth
+/// always wins; at the same depth, a call beats an argument-only edge. Shared by the walk's own
+/// per-layer merge, where both are always at the same depth, and `changes::report`'s merge across
+/// every root's walk, where they can differ.
+pub(crate) fn beats(candidate: &Dependent, existing: &Dependent) -> bool {
+    candidate.depth < existing.depth || (candidate.depth == existing.depth && existing.passed && !candidate.passed)
+}
+
 #[derive(Debug, Default)]
 pub struct Impact { pub root: String, pub layers: Vec<Vec<Dependent>>, pub importers: Vec<String> }
 
@@ -165,9 +173,10 @@ impl<'a> Index<'a> {
                 for e in self.step(at) {
                     let other = if up { e.source.clone() } else { canonical(graph, &e.target).unwrap_or_else(|| e.target.clone()) };
                     if seen.contains(&other) { continue }
+                    let candidate = Dependent { id: other.clone(), depth: d, kind: e.kind, via: at.clone(), passed: e.passes() };
                     // A call beats an argument edge whichever owner in the layer came first.
-                    if next.get(&other).is_some_and(|x| !x.passed || e.passes()) { continue }
-                    next.insert(other.clone(), Dependent { id: other, depth: d, kind: e.kind, via: at.clone(), passed: e.passes() });
+                    if next.get(&other).is_some_and(|x| !beats(&candidate, x)) { continue }
+                    next.insert(other, candidate);
                 }
             }
             if next.is_empty() { break }
@@ -175,7 +184,7 @@ impl<'a> Index<'a> {
             let next: Vec<Dependent> = next.into_values().collect();
             frontier = next.iter().map(|x| x.id.clone()).collect();
             // A dependent that is an object literal is called through its methods, at any depth.
-            if up {
+            if up && d < depth {
                 let named: Vec<String> = frontier.iter().flat_map(|f| self.aliases(f)).chain(frontier.iter().cloned()).collect();
                 frontier.extend(self.undeclared(&named));
             }

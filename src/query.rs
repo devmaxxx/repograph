@@ -264,9 +264,11 @@ pub fn ask(graph: &Graph, lex: &Lexical, dense: Option<Dense>, rerank: Option<Re
     answer
 }
 
-/// Code no production path runs: unit tests, end-to-end helpers and stories alike.
+/// Code no production path runs: unit tests, end-to-end helpers and stories alike. `:test/` and
+/// `:e2e/` catch the directory at the very root of the id's path (`sym:e2e/helpers.ts::wait`),
+/// where there is no leading `/` for `/test/` and `/e2e/` to match.
 fn is_test(id: &str) -> bool {
-    ["/test/", "/e2e/", ".spec.", ".test.", ".stories."].iter().any(|m| id.contains(m))
+    ["/test/", "/e2e/", ":test/", ":e2e/", ".spec.", ".test.", ".stories."].iter().any(|m| id.contains(m))
 }
 
 /// How much of a line is shown where one is quoted: a seed's label, a family's defining line.
