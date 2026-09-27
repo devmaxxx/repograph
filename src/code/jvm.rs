@@ -322,7 +322,7 @@ pub(crate) struct Shape {
 }
 
 /// What a name looked up among a type's members binds to.
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Bound {
     Found(Vec<String>),
     /// Something the file cannot read may hold the name, or two declarations do: the call is no edge.

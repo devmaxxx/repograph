@@ -49,6 +49,7 @@
 //! Edges it leaves out: calls through `super`, through a chain of calls, through another file's
 //! fields, and from an enum constant's arguments and body.
 
+use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
 
 use tree_sitter::Node;
@@ -65,7 +66,12 @@ pub(super) struct Ctx<'a> {
     pub fields: Own<'a>,
     pub src: &'a [u8],
     pub d: &'a Declared,
+    /// `member_type` per (enclosing type, name): a type name is looked up at every signature,
+    /// receiver and creation, and each lookup walks the supertypes through the headers.
+    pub member_types: &'a RefCell<MemberTypes>,
 }
+
+pub(super) type MemberTypes = BTreeMap<(String, String), Bound>;
 
 /// A local's type as ids of the declarations it resolves to, or `None` when the file does not
 /// read it; either way the name hides the field it shadows.
@@ -194,7 +200,7 @@ fn walk(n: Node, mut at: At, cx: &Ctx, ex: &mut Extraction) {
             if let Some(from) = at.method.clone() {
                 let args = n.child_by_field_name("arguments").map(|a| named(a).into_iter().filter(|x| !x.kind().ends_with("comment")).count());
                 let call = args.map(|args| Call { args, spread: false });
-                let called = Ctx { methods: Own { call, at: &at.class, ..cx.methods }, fields: cx.fields, src: cx.src, d: cx.d };
+                let called = Ctx { methods: Own { call, at: &at.class, ..cx.methods }, ..*cx };
                 for to in targets(n, &at, &called) {
                     if to != from {
                         ex.edge(&from, &to, EdgeKind::Calls, "", cx.methods.rel);
@@ -315,14 +321,21 @@ fn resolved(written: &str, at: &At, cx: &Ctx) -> Option<Vec<String>> {
             _ => {}
         }
     }
-    type_named(&cx.methods, &at.class, written)
+    type_named(&cx.methods, &at.class, written, cx.member_types)
 }
 
 /// A written type inside the type at `at`: a member type, declared or inherited, before what the
 /// imports and the package bind.
-fn type_named(own: &Own, at: &str, written: &str) -> Option<Vec<String>> {
+fn type_named(own: &Own, at: &str, written: &str, cache: &RefCell<MemberTypes>) -> Option<Vec<String>> {
     let (first, rest) = written.split_once('.').map_or((written, None), |(f, r)| (f, Some(r)));
-    let ids = match own.member_type(at, first) {
+    let key = (at.to_string(), first.to_string());
+    let cached = cache.borrow().get(&key).cloned();
+    let bound = cached.unwrap_or_else(|| {
+        let bound = own.member_type(at, first);
+        cache.borrow_mut().insert(key, bound.clone());
+        bound
+    });
+    let ids = match bound {
         Bound::Found(ids) => return nested(ids, rest, own),
         Bound::Refused => return None,
         Bound::Absent => type_ids(own.types, own.index, own.scope, own.rel, at, written),
@@ -603,7 +616,7 @@ fn typed_field(b: Bound, cx: &Ctx) -> Option<Vec<String>> {
     if jvm::masked(&cx.d.shapes, declared_in).contains(t.split('.').next().unwrap_or_default()) {
         return None;
     }
-    type_named(&cx.fields, declared_in, t)
+    type_named(&cx.fields, declared_in, t, cx.member_types)
 }
 
 fn dotted(n: Node, src: &[u8]) -> Option<String> {
