@@ -607,3 +607,37 @@ fn an_own_varargs_method_never_beats_a_supertype_s_fixed_arity_one_taking_the_ar
     assert!(calls_from(&ex, "sym:shop/Down.java::Down.go").is_empty(), "{:?}", ex.edges);
     assert_eq!(calls_from(&ex, "sym:shop/Down.java::Down.two"), vec!["sym:shop/Down.java::Down.m"]);
 }
+
+#[test]
+fn an_annotation_type_in_the_repository_decorates_and_a_platform_one_writes_nothing() {
+    let repo = Repo::new(&[
+        ("shop/meta/Audited.java", "package shop.meta;\n\npublic @interface Audited {\n    String value();\n}\n"),
+        ("shop/Cart.java", "package shop;\n\nimport shop.meta.Audited;\n\n@Audited(\"cart\")\n@Deprecated\npublic class Cart {\n    @Audited(\"total\") int total;\n\n    @Override\n    @shop.meta.Audited(\"s\")\n    public String toString() { return \"\"; }\n}\n"),
+    ]);
+    let ex = repo.extract("shop/Cart.java");
+    let deco = edges(&ex, EdgeKind::DecoratedBy);
+    for from in ["sym:shop/Cart.java::Cart", "sym:shop/Cart.java::Cart.total", "sym:shop/Cart.java::Cart.toString"] {
+        assert!(deco.contains(&(from, "sym:shop/meta/Audited.java::Audited", "")), "{from}: {deco:?}");
+    }
+    assert_eq!(deco.len(), 3, "`@Deprecated` and `@Override` resolve nowhere and write nothing: {deco:?}");
+    assert!(!ids(&ex).iter().any(|i| i.starts_with("anno:") || i.starts_with("deco:")), "{:?}", ids(&ex));
+}
+
+// A type variable named like the annotation type shadows it; the compiler rejects the use, and the
+// graph must not pretend it reached the type.
+#[test]
+fn an_annotation_named_like_a_type_variable_in_scope_decorates_nothing() {
+    let repo = Repo::new(&[
+        ("shop/Audited.java", "package shop;\n\npublic @interface Audited {}\n"),
+        ("shop/Box.java", "package shop;\n\nclass Box<Audited> {\n    @Audited int size;\n}\n\nclass Other {\n    @Audited <Audited> void lift() {}\n    @Audited void drop() {}\n}\n"),
+    ]);
+    let ex = repo.extract("shop/Box.java");
+    assert_eq!(edges(&ex, EdgeKind::DecoratedBy), vec![("sym:shop/Box.java::Other.drop", "sym:shop/Audited.java::Audited", "")], "{:?}", ex.edges);
+}
+
+#[test]
+fn a_nested_annotation_type_decorates_a_member_and_a_constructor() {
+    let src = "package shop;\n\npublic class Cart {\n    @interface Tracked {}\n\n    @Tracked\n    public Cart() {}\n}\n";
+    let ex = one("shop/Cart.java", src);
+    assert_eq!(edges(&ex, EdgeKind::DecoratedBy), vec![("sym:shop/Cart.java::Cart.Cart", "sym:shop/Cart.java::Cart.Tracked", "")], "{:?}", ex.edges);
+}

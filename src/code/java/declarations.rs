@@ -48,6 +48,8 @@ pub struct Declared {
     pub statics: BTreeSet<String>,
     /// Method ids some declaration of which is not `static`.
     instance: BTreeSet<String>,
+    /// (annotated id, annotation name as written), resolved or dropped by `jvm::decorate`.
+    pub annotations: Vec<(String, String)>,
 }
 
 /// The argument counts a method's `formal_parameters` take. A receiver parameter is no argument.
@@ -90,6 +92,26 @@ fn exported(n: Node, members_public: bool) -> &'static str {
     if says(n, "public") || (members_public && !says(n, "private")) { "export" } else { "" }
 }
 
+/// `@Name`, `@Name(…)` and `@a.b.Name(…)` on a declaration, as written. A name a type variable in
+/// scope shadows is the compiler's error, not the annotation type, so it is left out.
+fn annotate(n: Node, id: &str, masked: &BTreeSet<String>, src: &[u8], d: &mut Declared) {
+    let Some(mods) = child(n, "modifiers") else { return };
+    for a in named(mods).into_iter().filter(|c| matches!(c.kind(), "marker_annotation" | "annotation")) {
+        let Some(name) = a.child_by_field_name("name") else { continue };
+        let name: String = text(name, src).split_whitespace().collect();
+        if !masked.contains(name.split('.').next().unwrap_or_default()) {
+            d.annotations.push((id.to_string(), name));
+        }
+    }
+}
+
+/// The type parameters an annotation on `n`, declared inside the type at `owner`, sees.
+fn around(n: Node, owner: Option<&str>, src: &[u8], d: &Declared) -> BTreeSet<String> {
+    let mut masked = owner.map(|o| jvm::masked(&d.shapes, o)).unwrap_or_default();
+    masked.extend(type_params(n, src));
+    masked
+}
+
 /// A type as written with its generic arguments dropped; none for a primitive or an array, which
 /// no method call on a declared type is made through.
 pub(super) fn written_type(t: Node, src: &[u8]) -> Option<String> {
@@ -122,6 +144,7 @@ fn declare_type(n: Node, rel: &str, src: &[u8], parent: &str, owner: Option<&str
     let id = format!("sym:{rel}::{path}");
     ex.node_span(NodeKind::Symbol, &id, &path, &jvm::body(n, name_at, src, COMMENTS), rel, span(n));
     ex.edge(parent, &id, EdgeKind::Declares, exported(n, members_public), rel);
+    annotate(n, &id, &around(n, owner, src, d), src, d);
     if owner.is_none() {
         d.top.insert(name);
     } else {
@@ -190,6 +213,7 @@ fn declare_member(m: Node, rel: &str, src: &[u8], parent: &str, path: &str, memb
         let id = format!("sym:{rel}::{path}.{name}");
         ex.node_span(NodeKind::Symbol, &id, &format!("{path}.{name}"), &jvm::body(m, name_at, src, COMMENTS), rel, span(m));
         ex.edge(parent, &id, EdgeKind::Declares, exported(m, members_public), rel);
+        annotate(m, &id, &around(m, Some(path), src, d), src, d);
         d.members.insert(id.clone());
         let (all, reached) = if is_field { (&mut d.values, &mut d.open_values) } else { (&mut d.methods, &mut d.open_methods) };
         all.insert(id.clone());

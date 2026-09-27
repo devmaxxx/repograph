@@ -744,3 +744,64 @@ fn a_private_overload_beside_a_public_one_takes_no_call_from_outside_its_class()
     assert!(calls_from(&cross, "sym:cross/Users.kt::X.go").is_empty(), "{:?}", cross.edges);
     assert!(calls_from(&cross, "sym:cross/Users.kt::Outer.B.go").is_empty(), "{:?}", cross.edges);
 }
+
+#[test]
+fn an_annotation_declared_in_the_repository_decorates_and_one_declared_outside_writes_nothing() {
+    let repo = Repo::new(&[
+        ("app/Api.kt", "package app\n\n@Target(AnnotationTarget.CLASS)\nannotation class Api\n"),
+        ("app/Service.kt", "package app\n\n@Api\n@Inject\nclass Service(@Api private val store: Store) {\n    @Api\n    fun run() {}\n}\n"),
+    ]);
+    let ex = repo.extract("app/Service.kt");
+    let deco = edges(&ex, EdgeKind::DecoratedBy);
+    for from in ["sym:app/Service.kt::Service", "sym:app/Service.kt::Service.store", "sym:app/Service.kt::Service.run"] {
+        assert!(deco.contains(&(from, "sym:app/Api.kt::Api", "")), "{from}: {deco:?}");
+    }
+    assert_eq!(deco.len(), 3, "`@Inject` resolves nowhere and writes nothing: {deco:?}");
+    assert!(!ids(&ex).iter().any(|i| i.starts_with("anno:") || i.starts_with("deco:")), "{:?}", ids(&ex));
+}
+
+// `-sg` reads `@file:` as a `file_annotation` on the source file: it annotates no declaration, even
+// when the annotation class is the repository's own.
+#[test]
+fn a_file_annotation_decorates_nothing() {
+    let repo = Repo::new(&[
+        ("app/Api.kt", "package app\n\nannotation class Api\n"),
+        ("app/A.kt", "@file:Api\npackage app\n\nclass A\n"),
+    ]);
+    let ex = repo.extract("app/A.kt");
+    assert!(ids(&ex).contains(&"sym:app/A.kt::A"), "{:?}", ids(&ex));
+    assert!(edges(&ex, EdgeKind::DecoratedBy).is_empty(), "{:?}", ex.edges);
+}
+
+// A type parameter named like the annotation class shadows it; the compiler rejects the use, and
+// the graph must not pretend it reached the class.
+#[test]
+fn an_annotation_named_like_a_type_parameter_in_scope_decorates_nothing() {
+    let repo = Repo::new(&[
+        ("app/Api.kt", "package app\n\nannotation class Api\n"),
+        ("app/Box.kt", "package app\n\nclass Box<Api> {\n    @Api\n    fun run() {}\n    @Api\n    fun <T> take() {}\n}\n\nclass Other {\n    @Api\n    fun <Api> lift() {}\n    @Api\n    fun drop() {}\n}\n"),
+    ]);
+    let ex = repo.extract("app/Box.kt");
+    assert_eq!(edges(&ex, EdgeKind::DecoratedBy), vec![("sym:app/Box.kt::Other.drop", "sym:app/Api.kt::Api", "")], "{:?}", ex.edges);
+}
+
+#[test]
+fn an_annotation_two_star_imports_both_bind_decorates_nothing() {
+    let repo = Repo::new(&[
+        ("a/Api.kt", "package a\n\nannotation class Api\n"),
+        ("b/Api.kt", "package b\n\nannotation class Api\n"),
+        ("app/Use.kt", "package app\n\nimport a.*\nimport b.*\n\n@Api\nclass Use\n\n@a.Api\nclass Pinned\n"),
+    ]);
+    let ex = repo.extract("app/Use.kt");
+    assert_eq!(edges(&ex, EdgeKind::DecoratedBy), vec![("sym:app/Use.kt::Pinned", "sym:a/Api.kt::Api", "")], "{:?}", ex.edges);
+}
+
+#[test]
+fn a_use_site_targeted_annotation_decorates_the_property() {
+    let repo = Repo::new(&[
+        ("app/Api.kt", "package app\n\nannotation class Api(val name: String)\n"),
+        ("app/Holder.kt", "package app\n\nclass Holder {\n    @get:Api(\"n\")\n    val name: String = \"\"\n}\n"),
+    ]);
+    let ex = repo.extract("app/Holder.kt");
+    assert_eq!(edges(&ex, EdgeKind::DecoratedBy), vec![("sym:app/Holder.kt::Holder.name", "sym:app/Api.kt::Api", "")], "{:?}", ex.edges);
+}

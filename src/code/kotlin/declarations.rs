@@ -37,6 +37,8 @@ pub struct Declared {
     pub private_members: BTreeSet<String>,
     /// Member ids some declaration of which is not `private`.
     pub open_members: BTreeSet<String>,
+    /// (annotated id, annotation name as written), resolved or dropped by `jvm::decorate`.
+    pub annotations: Vec<(String, String)>,
 }
 
 /// The argument counts a function takes: a parameter with a default may be left out, and a
@@ -133,6 +135,19 @@ fn hidden(n: Node, src: &[u8]) -> bool {
     child(n, "modifiers").is_some_and(|m| {
         named(m).into_iter().any(|c| c.kind() == "visibility_modifier" && matches!(text(c, src), "private" | "protected"))
     })
+}
+
+/// `@Name`, `@Name(…)` and `@get:Name` on a declaration, as written. A name a type parameter in
+/// scope shadows is the compiler's error, not the class, so it is left out.
+fn annotate(n: Node, id: &str, masked: &BTreeSet<String>, src: &[u8], d: &mut Declared) {
+    let Some(mods) = child(n, "modifiers") else { return };
+    for a in named(mods).into_iter().filter(|c| c.kind() == "annotation") {
+        let target = child(a, "constructor_invocation").unwrap_or(a);
+        let Some(name) = written_type(target, src) else { continue };
+        if !masked.contains(name.split('.').next().unwrap_or_default()) {
+            d.annotations.push((id.to_string(), name));
+        }
+    }
 }
 
 /// The type a property, parameter or supertype is written with. `Store?` is `Store`, `a.b.Store<T>`
@@ -241,6 +256,9 @@ fn declare(n: Node, rel: &str, src: &[u8], parent: &str, owner: Option<&str>, ex
     let id = format!("sym:{rel}::{path}");
     ex.node_span(NodeKind::Symbol, &id, &path, &jvm::body(n, name_at, src, COMMENTS), rel, span(n));
     ex.edge(parent, &id, EdgeKind::Declares, if hidden(n, src) { "" } else { "export" }, rel);
+    let mut around = owner.map(|o| d.masked(o)).unwrap_or_default();
+    around.extend(type_params(n, src));
+    annotate(n, &id, &around, src, d);
     match owner {
         None => {
             d.top.insert(name.clone());
@@ -292,6 +310,7 @@ fn declare(n: Node, rel: &str, src: &[u8], parent: &str, owner: Option<&str>, ex
             let pid = format!("{id}.{pname}");
             ex.node_span(NodeKind::Symbol, &pid, &format!("{path}.{pname}"), &jvm::body(p, pname_at, src, COMMENTS), rel, span(p));
             ex.edge(&id, &pid, EdgeKind::Declares, if hidden(p, src) { "" } else { "export" }, rel);
+            annotate(p, &pid, &d.masked(&path), src, d);
             d.members.insert(pid.clone());
             let visibility = if says(p, "private", src) { &mut d.private_members } else { &mut d.open_members };
             visibility.insert(pid);

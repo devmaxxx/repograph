@@ -232,6 +232,19 @@ pub(crate) fn link(types: &BTreeSet<String>, supers: &[(String, String)], index:
     }
 }
 
+/// `DecoratedBy` from each annotated declaration to the annotation's own declaration when the name
+/// resolves in the repository, exactly as a type use would, and nothing otherwise: a node every
+/// annotated file shared would pull all of them into each update's co-declared closure, and an
+/// annotation declared outside the repository names nothing `impact` can walk to.
+pub(crate) fn decorate(types: &BTreeSet<String>, annotations: &[(String, String)], index: &QualifiedIndex, scope: &Scope, rel: &str, ex: &mut Extraction) {
+    for (from, written) in annotations {
+        // An annotation stands outside a type's body, so it sees the types around it, not its own.
+        for target in type_ids(types, index, scope, rel, outer(path_of(from)), written) {
+            ex.edge(from, &target, EdgeKind::DecoratedBy, "", rel);
+        }
+    }
+}
+
 /// Requirement and ADR ids a comment or a string cites, from the declaration holding it, with the
 /// contexts TypeScript's pass writes, so `ask` reads a citation the same in every language.
 pub(crate) fn cite(n: Node, owner: &str, context: &str, rel: &str, src: &[u8], ex: &mut Extraction) {
@@ -624,6 +637,16 @@ mod cross {
     use crate::model::EdgeKind;
 
     const INVOICE: &str = "package shop.billing;\n\npublic class Invoice {\n    public void send() {}\n}\n";
+
+    #[test]
+    fn a_kotlin_class_is_decorated_by_a_java_annotation_type_it_imports() {
+        let repo = Repo::new(&[
+            ("shop/meta/Audited.java", "package shop.meta;\n\npublic @interface Audited {}\n"),
+            ("app/Job.kt", "package app\n\nimport shop.meta.Audited\n\n@Audited\nclass Job\n"),
+        ]);
+        let ex = repo.extract("app/Job.kt");
+        assert!(edges(&ex, EdgeKind::DecoratedBy).contains(&("sym:app/Job.kt::Job", "sym:shop/meta/Audited.java::Audited", "")), "{:?}", ex.edges);
+    }
 
     #[test]
     fn a_kotlin_class_extends_a_java_class_it_imports() {

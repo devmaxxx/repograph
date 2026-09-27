@@ -40,6 +40,12 @@ fn edges(repo: &Path) -> Edges {
 /// Builds `before`, rewrites it to `after`, runs `update`, and returns that graph's edges with the
 /// edges of a fresh build of `after`.
 fn updated_and_built(before: &[(&str, &str)], after: &[(&str, &str)]) -> (Edges, Edges) {
+    removed_updated_and_built(before, after, &[])
+}
+
+/// `updated_and_built`, with the files at `removed` deleted before the update and absent from the
+/// fresh build.
+fn removed_updated_and_built(before: &[(&str, &str)], after: &[(&str, &str)], removed: &[&str]) -> (Edges, Edges) {
     let old = tempfile::tempdir().unwrap();
     for (rel, text) in before {
         write(old.path(), rel, text);
@@ -48,9 +54,12 @@ fn updated_and_built(before: &[(&str, &str)], after: &[(&str, &str)]) -> (Edges,
     for (rel, text) in after {
         write(old.path(), rel, text);
     }
+    for rel in removed {
+        std::fs::remove_file(old.path().join(rel)).unwrap();
+    }
     ok(old.path(), &["update"]);
     let fresh = tempfile::tempdir().unwrap();
-    for (rel, text) in before.iter().chain(after) {
+    for (rel, text) in before.iter().chain(after).filter(|(rel, _)| !removed.contains(rel)) {
         write(fresh.path(), rel, text);
     }
     ok(fresh.path(), &["build"]);
@@ -138,5 +147,39 @@ fn a_kotlin_overload_made_public_beside_a_public_one_reaches_the_subclass_in_ano
     assert_eq!(updated, built);
     let (updated, built) = updated_and_built(&[(rel, &after), sub], &[(rel, &before)]);
     assert!(!built.contains(&call), "{built:?}");
+    assert_eq!(updated, built);
+}
+
+const ANNOTATION: (&str, &str) = ("app/Api.kt", "package app\n\nannotation class Api\n");
+const ANNOTATED: (&str, &str) = ("app/Service.kt", "package app\n\n@Api\nclass Service {\n    @Api\n    fun run() {}\n}\n");
+const JAVA_ANNOTATED: (&str, &str) = ("app/Job.java", "package app;\n\n@Api\nclass Job {\n    @Api int size;\n}\n");
+
+fn decorated(edges: &Edges) -> Vec<(String, String)> {
+    edges.iter().filter(|(_, _, kind, _)| kind == "DecoratedBy").map(|(from, to, _, _)| (from.clone(), to.clone())).collect()
+}
+
+#[test]
+fn an_annotation_class_added_decorates_the_unchanged_files_that_use_it() {
+    let (updated, built) = updated_and_built(&[ANNOTATED, JAVA_ANNOTATED], &[ANNOTATION]);
+    assert_eq!(decorated(&built).len(), 4, "{built:?}");
+    assert_eq!(updated, built);
+}
+
+#[test]
+fn an_annotation_class_removed_leaves_no_edge_to_it_after_update() {
+    let (updated, built) = removed_updated_and_built(&[ANNOTATION, ANNOTATED, JAVA_ANNOTATED], &[], &[ANNOTATION.0]);
+    assert!(decorated(&updated).is_empty(), "{updated:?}");
+    assert_eq!(updated, built);
+}
+
+#[test]
+fn an_annotation_class_renamed_or_moved_is_followed_by_update() {
+    let renamed = ("app/Api.kt", "package app\n\nannotation class Endpoint\n");
+    let (updated, built) = updated_and_built(&[ANNOTATION, ANNOTATED, JAVA_ANNOTATED], &[renamed]);
+    assert!(decorated(&updated).is_empty(), "{updated:?}");
+    assert_eq!(updated, built);
+    let moved = ("app/meta/Api.kt", "package app\n\nannotation class Api\n");
+    let (updated, built) = removed_updated_and_built(&[ANNOTATION, ANNOTATED, JAVA_ANNOTATED], &[moved], &[ANNOTATION.0]);
+    assert!(decorated(&updated).iter().all(|(_, to)| to == "sym:app/meta/Api.kt::Api") && decorated(&updated).len() == 4, "{updated:?}");
     assert_eq!(updated, built);
 }
