@@ -36,6 +36,14 @@ struct Cli {
     cmd: Cmd,
 }
 
+/// A walk's depth: 0 walks nothing, and its `LOW` would read as "nothing depends on this".
+fn hops(s: &str) -> Result<usize, String> {
+    match s.parse::<usize>() {
+        Ok(0) => Err("a walk of 0 hops reaches nothing; the least is 1".into()),
+        r => r.map_err(|e| e.to_string()),
+    }
+}
+
 #[derive(Subcommand)]
 enum Cmd {
     Build,
@@ -89,7 +97,7 @@ enum Cmd {
     /// barrel is found all the same
     Impact {
         symbol: String,
-        #[arg(long, default_value_t = 3)] depth: usize,
+        #[arg(long, default_value_t = 3, value_parser = hops)] depth: usize,
         #[arg(long)] down: bool,
         #[arg(long)] json: bool,
         /// Answers from the store as it stands, without bringing it in line with the tree first
@@ -107,7 +115,7 @@ enum Cmd {
     /// unstaged and untracked alike) mapped onto symbol spans, then the callers of each
     Changes {
         #[arg(long, default_value = "HEAD")] base: String,
-        #[arg(long, default_value_t = 2)] depth: usize,
+        #[arg(long, default_value_t = 2, value_parser = hops)] depth: usize,
         #[arg(long)] json: bool,
         #[arg(long)] stale: bool,
     },

@@ -104,7 +104,8 @@ AST-only indexer misses entirely. Each construct is pinned by one inline case in
 ## Blast radius
 
 `impact <symbol>` walks `Calls` and `Extends` edges towards the symbol: `d=1` are the direct
-callers ("will break"), `d=2` their callers, and so on to `--depth` (3). A class is walked
+callers ("will break"), `d=2` their callers, and so on to `--depth` (3; 0 is refused as a usage
+error, exit 2, since it walks nothing). A class is walked
 through its members, an object literal through the `repo.find` calls whose method no node
 declares, and a caller that imported through a barrel is found because the barrel's
 `ReExports` edges are followed back to the declaration. The barrel itself is listed among the
