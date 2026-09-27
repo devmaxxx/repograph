@@ -19,8 +19,8 @@
 //!   level's declaration, as an unread supertype's same-arity overload is not seen.
 //! - A written type name binds a member type first: at each enclosing type, from the innermost, its
 //!   own, then one its supertypes pass down, before imports and the package. A private member type
-//!   is not passed down, nor a package-private one outside its package, and one inherited along two
-//!   paths binds nothing. A superclass the repository does not declare is not read, so a member
+//!   is not passed down, nor a package-private one outside its package, and either still hides a
+//!   namesake further up that path; one inherited along two paths binds nothing. A superclass the repository does not declare is not read, so a member
 //!   type of the name it holds is not seen and the import or package type keeps the edge: the
 //!   residual, taken over refusing every type named under an external superclass.
 //! - A local, parameter, lambda, catch, `for`, resource or pattern variable hides the field it

@@ -697,11 +697,14 @@ impl Own<'_> {
         }
     }
 
-    /// A member type the subtype does not inherit is read as absent, so the walk goes on above it.
+    /// A member type the subtype does not inherit still hides every one of its name above it, so
+    /// that path passes none down and the lookup falls through to imports and the package.
     fn type_hop(&self, t: &str, name: &str, along: Option<&str>, seen: &mut BTreeSet<String>, found: &mut Vec<String>) {
         let member = format!("{t}.{name}");
-        if self.is_type(&member) && self.inherits(&member, along) != Inherits::None {
-            found.push(member);
+        if self.is_type(&member) {
+            if self.inherits(&member, along) != Inherits::None {
+                found.push(member);
+            }
         } else if let Some((rel, path)) = split_id(t) {
             self.types_above(rel, path, name, along, seen, found);
         }

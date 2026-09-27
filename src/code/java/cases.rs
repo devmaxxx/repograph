@@ -1022,3 +1022,25 @@ fn an_enum_constant_s_arguments_and_body_are_left_out() {
     let ex = repo.extract("shop/orders/E.java");
     assert!(edges(&ex, EdgeKind::Calls).is_empty(), "{:?}", ex.edges);
 }
+
+#[test]
+fn a_member_type_a_subtype_does_not_inherit_hides_its_supertype_s_namesake() {
+    let grand = ("p/G.java", "package p;\n\npublic class G {\n    public static class T {}\n}\n");
+    let repo = Repo::new(&[
+        PKG_T,
+        grand,
+        ("p/HP.java", "package p;\n\npublic class HP extends G {\n    private static class T {}\n}\n"),
+        ("p/AP.java", "package p;\n\nclass AP extends HP {\n    void made() { new T(); }\n}\n"),
+        ("q/HQ.java", "package q;\n\npublic class HQ extends p.G {\n    static class T {}\n}\n"),
+        ("p/AQ.java", "package p;\n\nimport q.HQ;\n\nclass AQ extends HQ {\n    void made() { new T(); }\n}\n"),
+        ("p/HO.java", "package p;\n\npublic class HO extends G {\n    public static class T {}\n}\n"),
+        ("p/AO.java", "package p;\n\nclass AO extends HO {\n    void made() { new T(); }\n}\n"),
+    ]);
+    let pkg = vec!["sym:p/T.java::T"];
+    let ap = repo.extract("p/AP.java");
+    assert_eq!(calls_from(&ap, "sym:p/AP.java::AP.made"), pkg, "a private T in HP hides G.T: {:?}", ap.edges);
+    let aq = repo.extract("p/AQ.java");
+    assert_eq!(calls_from(&aq, "sym:p/AQ.java::AQ.made"), pkg, "a package-private T in another package hides G.T: {:?}", aq.edges);
+    let ao = repo.extract("p/AO.java");
+    assert_eq!(calls_from(&ao, "sym:p/AO.java::AO.made"), vec!["sym:p/HO.java::HO.T"], "a public T in HO is the one inherited: {:?}", ao.edges);
+}
