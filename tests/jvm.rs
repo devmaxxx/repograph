@@ -1,5 +1,9 @@
 //! The binary over a JVM repository: `update` after a nested type or a member appears, disappears
-//! or changes visibility writes the graph a fresh `build` of the same tree writes.
+//! or changes visibility writes the graph a fresh `build` of the same tree writes; and, separately,
+//! what `update` re-reads when a declaration appears or disappears (L3), and a call path that
+//! crosses Kotlin and Java twice.
+
+mod common;
 
 use std::collections::BTreeSet;
 use std::path::Path;
@@ -21,10 +25,16 @@ fn ok(repo: &Path, args: &[&str]) {
     assert!(out.status.success(), "{args:?} failed: {}", String::from_utf8_lossy(&out.stderr));
 }
 
-fn write(repo: &Path, rel: &str, text: &str) {
+fn write(repo: &Path, rel: &str, contents: impl AsRef<[u8]>) {
     let p = repo.join(rel);
     std::fs::create_dir_all(p.parent().unwrap()).unwrap();
-    std::fs::write(p, text).unwrap();
+    std::fs::write(p, contents.as_ref()).unwrap();
+}
+
+/// `run`, decoded: whether the binary exited 0, and its stdout and stderr as text.
+fn repograph(repo: &Path, args: &[&str]) -> (bool, String, String) {
+    let out = common::run(repo, args);
+    (out.status.success(), String::from_utf8_lossy(&out.stdout).into_owned(), String::from_utf8_lossy(&out.stderr).into_owned())
 }
 
 /// (source, target, kind, context).
@@ -182,4 +192,79 @@ fn an_annotation_class_renamed_or_moved_is_followed_by_update() {
     let (updated, built) = removed_updated_and_built(&[ANNOTATION, ANNOTATED, JAVA_ANNOTATED], &[moved], &[ANNOTATION.0]);
     assert!(decorated(&updated).iter().all(|(_, to)| to == "sym:app/meta/Api.kt::Api") && decorated(&updated).len() == 4, "{updated:?}");
     assert_eq!(updated, built);
+}
+
+/// A JVM file that is not UTF-8. The walk hashes it, and `apply_diff` prints `skipping <rel>: not
+/// UTF-8` every time it tries to read it, so that line on an update's stderr is the one outside sign
+/// that `widen` put the whole family back into the stale set.
+const PROBE: &str = "a/Probe.kt";
+const PROBE_BYTES: &[u8] = b"package a\n\n// \xff\n";
+
+fn jvm_repo() -> tempfile::TempDir {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path();
+    write(repo, "repograph.toml", b"code_globs = [\"**/*.kt\", \"**/*.java\"]\n");
+    write(repo, "a/A.kt", b"package a\n\nimport shop.Fresh\n\nclass A(private val x: Fresh) {\n    fun f() { x.go() }\n}\n");
+    write(repo, "a/B.kt", b"package a\n\nclass B {\n    fun g() = 1\n}\n");
+    write(repo, PROBE, PROBE_BYTES);
+    dir
+}
+
+#[test]
+fn a_declaration_added_in_java_reaches_the_unchanged_kotlin_file_that_uses_it() {
+    let dir = jvm_repo();
+    let repo = dir.path();
+    let (ok, _, err) = repograph(repo, &["build"]);
+    // A binary under a JVM glob must not stop the index walk, or the probe could not exist.
+    assert!(ok, "{err}");
+    write(repo, "shop/Fresh.java", b"package shop;\n\npublic class Fresh {\n    public void go() {}\n}\n");
+    let (ok, out, err) = repograph(repo, &["update"]);
+    assert!(ok, "{err}");
+    assert!(out.starts_with("changed 1 removed 0"), "only the new file is in the diff: {out}");
+    assert!(err.contains(&format!("skipping {PROBE}: not UTF-8")), "an added declaration re-reads the family: {err}");
+    let (ok, out, err) = repograph(repo, &["impact", "Fresh"]);
+    assert!(ok, "{err}");
+    assert!(out.contains("a/A.kt"), "A.kt was re-read, so it now calls Fresh.go and imports Fresh: {out}");
+}
+
+#[test]
+fn a_file_removed_from_the_family_widens_too() {
+    let dir = jvm_repo();
+    let repo = dir.path();
+    let (ok, _, err) = repograph(repo, &["build"]);
+    assert!(ok, "{err}");
+    std::fs::remove_file(repo.join("a/B.kt")).unwrap();
+    let (ok, out, err) = repograph(repo, &["update"]);
+    assert!(ok, "{err}");
+    assert!(out.starts_with("changed 0 removed 1"), "{out}");
+    assert!(err.contains(&format!("skipping {PROBE}: not UTF-8")), "a removed file re-reads the family: {err}");
+}
+
+#[test]
+fn a_body_only_edit_re_reads_that_file_alone() {
+    let dir = jvm_repo();
+    let repo = dir.path();
+    let (ok, _, err) = repograph(repo, &["build"]);
+    assert!(ok, "{err}");
+    write(repo, "a/B.kt", b"package a\n\nclass B {\n    fun g() = 2\n}\n");
+    let (ok, out, err) = repograph(repo, &["update"]);
+    assert!(ok, "{err}");
+    assert!(out.starts_with("changed 1 removed 0"), "{out}");
+    assert!(!err.contains(PROBE), "a body-only edit does not widen: {err}");
+}
+
+#[test]
+fn a_call_path_crosses_from_kotlin_to_java_and_back() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path();
+    write(repo, "repograph.toml", b"code_globs = [\"**/*.kt\", \"**/*.java\"]\n");
+    write(repo, "app/Start.kt", b"package app\n\nimport shop.Middle\n\nclass Start(private val mid: Middle) {\n    fun run() { mid.pass() }\n}\n");
+    write(repo, "shop/Middle.java", b"package shop;\n\nimport app.End;\n\npublic class Middle {\n    private final End end = new End();\n    public void pass() { end.finish(); }\n}\n");
+    write(repo, "app/End.kt", b"package app\n\nclass End {\n    fun finish() {}\n}\n");
+    let (ok, _, err) = repograph(repo, &["build"]);
+    assert!(ok, "{err}");
+    let (ok, out, err) = repograph(repo, &["trace", "Start", "End"]);
+    assert!(ok, "{out}{err}");
+    assert!(out.contains("shop/Middle.java"), "the path runs through the Java class: {out}");
+    assert!(out.contains("app/End.kt"), "{out}");
 }
