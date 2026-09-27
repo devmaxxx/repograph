@@ -13,6 +13,8 @@ use crate::model::{EdgeKind, Extraction, NodeKind};
 pub struct Declared {
     /// Top-level names, private ones included: the index and `widen` both read exactly these.
     pub top: BTreeSet<String>,
+    /// Top-level names only `private` declarations here bind.
+    pub private: BTreeSet<String>,
     /// Every type path declared here (`Outer`, `Outer.Inner`), so a name resolves in-file first.
     pub types: BTreeSet<String>,
     /// Every member id declared here, constructor properties included.
@@ -166,9 +168,20 @@ fn name_node(n: Node) -> Option<Node> {
 pub fn scan(root: Node, rel: &str, src: &[u8], ex: &mut Extraction) -> Declared {
     let file_id = format!("file:{rel}");
     let mut d = Declared::default();
+    let mut public = BTreeSet::new();
     for n in named(root) {
         declare(n, rel, src, &file_id, None, ex, &mut d);
+        if let Some(name) = name_node(n) {
+            let name = text(name, src).to_string();
+            if hidden(n, src) {
+                d.private.insert(name);
+            } else {
+                public.insert(name);
+            }
+        }
     }
+    // An overload with no modifier makes the name reachable from the package.
+    d.private.retain(|name| !public.contains(name));
     d
 }
 
@@ -211,6 +224,7 @@ fn declare(n: Node, rel: &str, src: &[u8], parent: &str, owner: Option<&str>, ex
     d.types.insert(path.clone());
     let enumerated = child(n, "enum_class_body").is_some() || has_modifier(n, "enum", src);
     let shape = jvm::Shape {
+        data: has_modifier(n, "data", src),
         inner: has_modifier(n, "inner", src),
         object: n.kind() != "class_declaration",
         implicit: enumerated,

@@ -253,6 +253,8 @@ pub(crate) struct Shape {
     pub inner: bool,
     /// A Kotlin `object`: a nested type reaches its members without an instance.
     pub object: bool,
+    /// A Kotlin `data class`, whose generated `copy` and `componentN` the file never writes.
+    pub data: bool,
     /// A supertype the file never writes, such as an enum's `Enum`, which may hold any name.
     pub implicit: bool,
     /// The type's own type parameters, which a same-named repository type must never stand in for.
@@ -271,6 +273,11 @@ pub(crate) enum Bound {
 
 /// Every class inherits these from `Any` / `Object`, which the graph never declares.
 const IMPLICIT_MEMBERS: [&str; 3] = ["toString", "equals", "hashCode"];
+
+/// A data class's generated members: `copy` and `component1`, `component2`, ….
+fn generated(name: &str) -> bool {
+    name == "copy" || name.strip_prefix("component").is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
+}
 
 /// One JVM file as the passes after declarations read it: what it declares, and what it sees.
 pub(crate) struct Own<'a> {
@@ -324,7 +331,7 @@ impl Own<'_> {
         if self.members.contains(&id) {
             return Bound::Found(vec![id]);
         }
-        if IMPLICIT_MEMBERS.contains(&name) {
+        if IMPLICIT_MEMBERS.contains(&name) || (self.shape(path).data && generated(name)) {
             return Bound::Refused;
         }
         self.inherited(path, name, &mut BTreeSet::new())
@@ -418,6 +425,18 @@ fn source_set(rel: &str) -> Option<&str> {
     let mut parts = rel.split('/');
     parts.by_ref().find(|p| *p == "src")?;
     parts.next()
+}
+
+/// A platform's own main source set: `androidMain`, not `commonMain` or `androidHostTest`.
+fn platform_main(rel: &str) -> bool {
+    source_set(rel).and_then(|s| s.strip_suffix("Main")).is_some_and(|p| !p.is_empty() && p != "common")
+}
+
+/// Whether several files declaring one qualified name are an `expect` and its `actual`s: one file
+/// outside every platform's main set, the rest inside one. Any other set is overloads or
+/// namesakes, which only overload resolution could tell apart.
+pub(crate) fn expect_family(files: &[&str]) -> bool {
+    files.len() < 2 || files.iter().filter(|f| !platform_main(f)).count() == 1
 }
 
 /// The ids of one declaration a caller in `rel` links against. An `actual` in a platform's main

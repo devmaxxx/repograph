@@ -87,10 +87,10 @@ fn export_target(v: &serde_json::Value) -> Option<String> {
 /// Every top-level name of a header under each scope it names. The header does not pair a name
 /// with its scope, so a file holding two namespaces lists each name under both: the index names
 /// every candidate file, a superset. `directives` stay out: they name what a file reads from, not
-/// what it declares.
+/// what it declares, and so do file-private names, which no other file can reach.
 fn index_header(indexes: &mut BTreeMap<Family, QualifiedIndex>, family: Family, rel: &str, header: &Header) {
     let index = indexes.entry(family).or_default();
-    for name in &header.top {
+    for name in header.top.difference(&header.private) {
         if header.scope.is_empty() {
             index.insert(name, rel);
         }

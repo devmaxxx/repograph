@@ -25,6 +25,11 @@ pub struct Header {
     /// family, and for a header recorded before it existed.
     #[serde(default, skip_serializing_if = "Nested::is_empty")]
     pub nested: Nested,
+    /// Top-level names every declaration of which in this file is file-private, as Kotlin's
+    /// `private` is: the index leaves them out, so no other file resolves to them. Empty for
+    /// every family without file-private top-level names.
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub private: BTreeSet<String>,
 }
 
 /// Every type path (`Outer`, `Outer.Inner`, top-level ones included) and every member path

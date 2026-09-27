@@ -599,10 +599,46 @@ fn a_type_parameter_is_not_the_repository_type_it_is_named_like() {
 }
 
 #[test]
-fn a_receiver_pushed_after_a_local_may_hold_its_name_and_an_enum_holds_enum_s_members() {
+fn a_local_wins_over_a_later_receiver_s_member_and_an_enum_holds_enum_s_members() {
     let src = "package app\n\nclass Disk {\n    fun delete() {}\n}\n\nclass Other {\n    fun delete() {}\n}\n\nclass Store(val files: Other)\n\nfun valueOf(s: String) = s\n\nclass Host {\n    fun go(s: Store) {\n        val files = Disk()\n        s.apply { files.delete() }\n    }\n}\n\nenum class Kind {\n    A;\n    fun go() { valueOf(\"A\") }\n}\n";
     let ex = one("app/D.kt", src);
     let go = calls_from(&ex, "sym:app/D.kt::Host.go");
-    assert!(!go.contains(&"sym:app/D.kt::Disk.delete"), "{go:?}");
+    assert_eq!(go, vec!["sym:app/D.kt::Disk", "sym:app/D.kt::Disk.delete"], "locals come before implicit receivers: {go:?}");
     assert!(calls_from(&ex, "sym:app/D.kt::Kind.go").is_empty(), "{:?}", ex.edges);
+}
+
+#[test]
+fn a_data_class_s_generated_members_hide_top_level_namesakes() {
+    let src = "package app\nfun copy(): Int = 1\nfun component1(): Int = 2\ndata class P(val a: Int) { fun go() { copy(); component1() } }\n";
+    let ex = one("app/P.kt", src);
+    assert!(calls_from(&ex, "sym:app/P.kt::P.go").is_empty(), "{:?}", ex.edges);
+}
+
+#[test]
+fn a_package_name_several_files_declare_is_no_edge_unless_it_is_an_expect_actual_family() {
+    let repo = Repo::new(&[
+        ("app/A.kt", "package app\nfun helper(n: Int) = n\n"),
+        ("app/B.kt", "package app\nfun helper(s: String) = s\nfun own(s: String) = s\n"),
+        ("app/C.kt", "package app\nfun own(n: Int) = n\nfun go() { helper(1); own(\"x\") }\n"),
+        ("lib/X.kt", "package lib\nfun both(n: Int) = n\n"),
+        ("lib/Y.kt", "package lib\nfun both(s: String) = s\n"),
+        ("use/U.kt", "package use\nimport lib.*\nfun go() { both(1) }\n"),
+    ]);
+    let ex = repo.extract("app/C.kt");
+    assert!(calls_from(&ex, "sym:app/C.kt::go").is_empty(), "{:?}", ex.edges);
+    let ex = repo.extract("use/U.kt");
+    assert!(calls_from(&ex, "sym:use/U.kt::go").is_empty(), "{:?}", ex.edges);
+}
+
+#[test]
+fn a_private_top_level_function_is_its_own_file_s_alone() {
+    let repo = Repo::new(&[
+        ("app/T1.kt", "package app\nprivate fun flip() = 1\nfun t1() { flip() }\n"),
+        ("app/T2.kt", "package app\nprivate fun flip() = 2\nfun t2() { flip() }\n"),
+        ("app/T3.kt", "package app\nfun t3() { flip() }\n"),
+    ]);
+    assert_eq!(calls_from(&repo.extract("app/T1.kt"), "sym:app/T1.kt::t1"), vec!["sym:app/T1.kt::flip"]);
+    assert_eq!(calls_from(&repo.extract("app/T2.kt"), "sym:app/T2.kt::t2"), vec!["sym:app/T2.kt::flip"]);
+    let t3 = repo.extract("app/T3.kt");
+    assert!(calls_from(&t3, "sym:app/T3.kt::t3").is_empty(), "another file's private function is out of reach: {:?}", t3.edges);
 }

@@ -46,7 +46,7 @@ pub fn header(source: &str) -> Header {
     let mut scratch = Extraction::default();
     let d = declarations::scan(root, "", src, &mut scratch);
     let nested = Nested { types: d.types, members: d.members.iter().map(|id| jvm::path_of(id).to_string()).collect() };
-    Header { scope: if package.is_empty() { Vec::new() } else { vec![package] }, top: d.top, nested, ..Default::default() }
+    Header { scope: if package.is_empty() { Vec::new() } else { vec![package] }, top: d.top, nested, private: d.private, ..Default::default() }
 }
 
 /// The dotted name on the `package` line; `""` for a file in the default package.

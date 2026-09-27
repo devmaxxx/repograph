@@ -35,9 +35,8 @@ pub(super) struct Ctx<'a> {
 }
 
 /// A local's type as ids of the declarations it resolves to, or `None` when the file does not
-/// read it; either way the name hides whatever it shadows. The depth is how many implicit
-/// receivers were in scope when it was bound: one pushed after it may hold the name instead.
-type Locals = BTreeMap<String, (usize, Option<Vec<String>>)>;
+/// read it; either way the name hides whatever it shadows, an implicit receiver's member included.
+type Locals = BTreeMap<String, Option<Vec<String>>>;
 
 /// An implicit receiver a function or lambda brings into scope.
 #[derive(Clone)]
@@ -63,7 +62,7 @@ struct At {
 
 impl At {
     fn bind(&mut self, name: &str, ty: Option<Vec<String>>) {
-        self.locals.insert(name.to_string(), (self.receivers.len(), ty));
+        self.locals.insert(name.to_string(), ty);
     }
 }
 
@@ -387,14 +386,11 @@ enum Named {
     Nothing,
 }
 
-/// A bare name read level by level: locals, the implicit receivers innermost first, the enclosing
+/// A bare name read level by level: locals in every enclosing scope, the implicit receivers innermost first, the enclosing
 /// types, then the top level. The first level that binds it wins only when no level after it
 /// binds it too.
 fn lookup(name: &str, at: &At, cx: &Ctx) -> Named {
-    if let Some((depth, ty)) = at.locals.get(name) {
-        if at.receivers[*depth..].iter().any(|r| holds(r, name, cx) != Bound::Absent) {
-            return Named::Refused;
-        }
+    if let Some(ty) = at.locals.get(name) {
         return Named::Local(ty.clone());
     }
     let receivers = at.receivers.iter().rev().map(|r| holds(r, name, cx));
@@ -458,11 +454,18 @@ fn is_this(n: Node, cx: &Ctx) -> bool {
 fn top_level(name: &str, cx: &Ctx) -> Option<Vec<String>> {
     let (own, scope, index) = (&cx.own, cx.own.scope, cx.own.index);
     let imported = scope.singles.get(name);
-    let at = |base: &str| -> Vec<String> { index.files(&qualify(base, name)).into_iter().map(|rel| format!("sym:{rel}::{name}")).collect() };
+    let files = |base: &str| index.files(&qualify(base, name));
+    // A set of files is kept only as an expect/actual family: anything else is overloads.
+    let at = |base: &str| -> Option<Vec<String>> {
+        let files = files(base);
+        jvm::expect_family(&files).then(|| files.into_iter().map(|rel| format!("sym:{rel}::{name}")).collect())
+    };
     if cx.d.top.contains(name) {
-        return imported.is_none().then(|| vec![format!("sym:{}::{name}", own.rel)]);
+        // The rest of the package sits at the same level as this file: a namesake there is an overload.
+        let elsewhere = files(&scope.package).into_iter().any(|rel| rel != own.rel);
+        return (imported.is_none() && !elsewhere).then(|| vec![format!("sym:{}::{name}", own.rel)]);
     }
-    let package = at(&scope.package);
+    let package = at(&scope.package)?;
     if let Some(bound) = imported {
         let mut each = bound.iter();
         return match (each.next(), each.next()) {
@@ -473,7 +476,13 @@ fn top_level(name: &str, cx: &Ctx) -> Option<Vec<String>> {
     if !package.is_empty() {
         return Some(package);
     }
-    let mut starred: Vec<Vec<String>> = scope.stars.iter().map(|s| at(s)).filter(|ids| !ids.is_empty()).collect();
+    let mut starred = Vec::new();
+    for star in &scope.stars {
+        let ids = at(star)?;
+        if !ids.is_empty() {
+            starred.push(ids);
+        }
+    }
     match starred.len() {
         0 => Some(Vec::new()),
         1 => Some(starred.remove(0)),
