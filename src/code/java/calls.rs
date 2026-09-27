@@ -27,7 +27,7 @@
 //!   nothing.
 //! - A type named in a field's, a parameter's or a record component's type or a return type,
 //!   generic arguments and array elements included, writes the file-to-file `Imports` an import of
-//!   it writes, masked as any written type is.
+//!   it writes, masked as any written type is, and none where the grammar failed around it.
 //!
 //! Edges it leaves out: calls through `super`, through a chain of calls, through another file's
 //! fields, and from field initializers and initializer blocks.
@@ -228,6 +228,8 @@ fn signature(n: Node, at: &At, cx: &Ctx, ex: &mut Extraction) {
         "spread_parameter" => named(n).into_iter().find(|c| c.kind() != "modifiers" && c.kind() != "variable_declarator"),
         _ => None,
     };
+    // An `ERROR` may hide the type parameter that masks a name.
+    let t = t.filter(|_| !jvm::broken(n));
     let mut written = Vec::new();
     if let Some(t) = t {
         names(t, cx.src, &mut written);

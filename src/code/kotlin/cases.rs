@@ -1059,3 +1059,14 @@ fn an_interface_binds_only_when_no_superclass_level_declares_the_name_and_none_i
     assert!(calls_from(&ex, "sym:app/Users.kt::Far.go").is_empty(), "Lost's superclass may declare size: {:?}", ex.edges);
     assert!(calls_from(&ex, "sym:app/Users.kt::Late.go").is_empty(), "with no primary constructor, which supertype is the class is not written: {:?}", ex.edges);
 }
+
+#[test]
+fn a_signature_or_a_value_the_grammar_failed_around_writes_nothing() {
+    let repo = Repo::new(&[
+        ("b/Key.kt", "package b\n\nclass Key\n\nobject Gap\n"),
+        ("b/One.kt", "package b\n\nclass G<Key> { inner class I { fun f(k: Key) = Gap } }\n"),
+    ]);
+    let ex = repo.extract("b/One.kt");
+    assert!(imports_to(&ex, "file:b/Key.kt").is_empty(), "the ERROR hides the type parameter: {:?}", ex.edges);
+    assert!(edges(&ex, EdgeKind::References).is_empty(), "{:?}", ex.edges);
+}

@@ -17,7 +17,9 @@
 //!   receiver may run with a receiver this file never sees, so it refuses lowercase bare names and
 //!   `this.` calls. A capitalised callee is still resolved there: receiver scopes do not declare
 //!   capitalised members, and refusing constructors and Composables would drop nearly every Compose
-//!   call. That is the residual this walk accepts.
+//!   call. That is the residual this walk accepts, and it covers a capitalised name read as a
+//!   value too: under an unknown receiver it binds as it would outside the lambda, though a
+//!   constant of the receiver's companion would win.
 //!
 //! - A property's initializer, delegate and accessors are walked as a function body is, from the
 //!   property. A name read as a value — an object passed as an argument, a property read bare —
@@ -26,6 +28,8 @@
 //! - A type named in a signature — a parameter's, a property's or a variable's type, a return type,
 //!   an extension receiver, and their generic arguments — writes the file-to-file `Imports` an
 //!   import of it writes, resolved as a supertype is, with type parameters and local classes masked.
+//! - Neither of those, nor a property's walk, is read where the grammar failed: an `ERROR` may
+//!   hide the declaration that masks a name.
 //!
 //! Edges it leaves out: calls on a value whose type is inferred from anything but a constructor
 //! call, receivers typed by another file's properties, a lambda passed to another file's function
@@ -213,7 +217,7 @@ fn walk(n: Node, mut at: At, cx: &Ctx, ex: &mut Extraction) {
                 }
             }
         }
-        "simple_identifier" if is_value(n) => {
+        "simple_identifier" if is_value(n) && !jvm::broken(n) => {
             if let Some(from) = at.function.clone() {
                 for to in jvm::same_platform(cx.own.rel, referenced(text(n, cx.src), &at, cx)) {
                     if to != from {
@@ -246,7 +250,8 @@ fn signature(n: Node, at: &At, cx: &Ctx, ex: &mut Extraction) {
     if !matches!(
         n.kind(),
         "parameter" | "class_parameter" | "parameter_with_optional_type" | "variable_declaration" | "function_declaration" | "anonymous_function" | "property_declaration"
-    ) {
+    ) || jvm::broken(n)
+    {
         return;
     }
     let mut written = Vec::new();
@@ -334,6 +339,10 @@ fn function(f: Node, at: &mut At, cx: &Ctx) {
 
 /// The walk enters a declared property the way it enters a declared function, the property as the caller.
 fn enter_property(p: Node, at: &mut At, cx: &Ctx) {
+    if jvm::broken(p) {
+        at.function = None;
+        return;
+    }
     let Some(s) = child(p, "variable_declaration").and_then(|v| child(v, "simple_identifier")) else { return };
     let name = text(s, cx.src);
     let path = if at.class.is_empty() { name.to_string() } else { format!("{}.{name}", at.class) };

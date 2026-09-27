@@ -17,6 +17,12 @@ pub(crate) fn named<'t>(n: Node<'t>) -> Vec<Node<'t>> {
     n.named_children(&mut c).collect()
 }
 
+/// Whether `n` sits in a region the grammar could not read, or holds one: a name there may be
+/// one the file declares in a shape the walk never sees, such as a type parameter.
+pub(crate) fn broken(n: Node) -> bool {
+    n.has_error() || std::iter::successors(n.parent(), |p| p.parent()).any(|p| p.is_error())
+}
+
 pub(crate) fn child<'t>(n: Node<'t>, kind: &str) -> Option<Node<'t>> {
     named(n).into_iter().find(|c| c.kind() == kind)
 }
