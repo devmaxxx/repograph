@@ -29,7 +29,10 @@ pub struct Entry { pub rel: String, pub kind: FileKind, pub hash: String, pub st
 /// 3: a call on a helper's return value (#91), a JSX element (#93) and a function passed as an
 /// argument (#98) are calls, the last with context `arg` (#104), and a tsconfig alias whose glob
 /// holds `/*` resolves (#97).
-pub const GRAMMAR: u32 = 3;
+/// 4: `main` with the 0.5.5 fixes above forward-ported. 0.5.5 stamps its stores 3 and reads by
+/// 0.5.5's grammar, not 0.6.0's, so a 3 here would leave a store 0.5.5 wrote unread; one above
+/// both makes a 0.5.4 store (2) and a 0.5.5 store (3) re-read once on the first writer.
+pub const GRAMMAR: u32 = 4;
 
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub struct Manifest {
