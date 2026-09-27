@@ -56,6 +56,11 @@
 //!
 //! Edges it leaves out: calls through `super`, through a chain of calls, through another file's
 //! fields, and from an enum constant's arguments and body.
+//!
+//! One wrong edge it can write: another file's supertypes resolve through that file's imports and
+//! package, never its member types, so a nested class there extending an inherited member type
+//! named like a top-level type of the package is read as extending the top-level one, and the walk
+//! through it binds that type's members.
 
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
