@@ -5,7 +5,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use tree_sitter::Node;
 
 use super::COMMENTS;
-use crate::code::index::Arity;
+use crate::code::index::{Arity, Reach};
 use crate::code::jvm::{self, child, named, span, text};
 use crate::model::{EdgeKind, Extraction, NodeKind};
 
@@ -48,6 +48,8 @@ pub struct Declared {
     pub statics: BTreeSet<String>,
     /// Method ids some declaration of which is not `static`.
     instance: BTreeSet<String>,
+    /// Per member id some declaration of which a subtype may not inherit, which ones.
+    pub reach: BTreeMap<String, Reach>,
     /// (annotated id, annotation name as written), resolved or dropped by `jvm::decorate`.
     pub annotations: Vec<(String, String)>,
 }
@@ -133,6 +135,7 @@ pub fn scan(root: Node, rel: &str, src: &[u8], ex: &mut Extraction) -> Declared 
     }
     // An overload set collapses to one id, so it is static only when every declaration is.
     d.statics.retain(|id| !d.instance.contains(id));
+    d.reach.retain(|_, r| r.package || r.never);
     d
 }
 
@@ -226,6 +229,14 @@ fn declare_member(m: Node, rel: &str, src: &[u8], parent: &str, path: &str, memb
             if says(m, "static") { d.statics.insert(id.clone()) } else { d.instance.insert(id.clone()) };
         }
         if open {
+            let r = d.reach.entry(id.clone()).or_default();
+            if members_public && !is_field && says(m, "static") {
+                r.never = true;
+            } else if !members_public && !says(m, "public") && !says(m, "protected") {
+                r.package = true;
+            } else {
+                r.always = true;
+            }
             reached.insert(id);
         }
         if let (true, Some(t)) = (is_field, &ty) {

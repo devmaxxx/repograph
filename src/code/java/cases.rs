@@ -729,3 +729,41 @@ fn an_interface_binds_only_when_no_superclass_level_declares_the_name_and_none_i
     assert!(calls_from(&ex, "sym:u/Users.java::Far.go").is_empty(), "Lost's superclass may declare isEmpty: {:?}", ex.edges);
     assert!(calls_from(&ex, "sym:u/Users.java::Specific.go").is_empty(), "Holder inherits Map's size and Sized overrides it: {:?}", ex.edges);
 }
+
+const NAMESAKE: (&str, &str) = ("a/u/U.java", "package a.u;\n\npublic class U {\n    public static void help() {}\n}\n");
+
+#[test]
+fn an_interface_s_static_method_is_not_inherited_by_its_implementors_or_subinterfaces() {
+    let repo = Repo::new(&[
+        NAMESAKE,
+        ("a/I.java", "package a;\n\npublic interface I {\n    static void help() {}\n}\n"),
+        ("a/J.java", "package a;\n\npublic interface J extends I {}\n"),
+        (
+            "a/D.java",
+            "package a;\n\nimport static a.u.U.help;\n\nclass D implements J {\n    void go() { help(); }\n}\n\nclass C implements I {\n    void go() { help(); }\n}\n\ninterface K {\n    static void help() {}\n}\n\nclass E implements K {\n    void go() { help(); }\n}\n",
+        ),
+    ]);
+    let ex = repo.extract("a/D.java");
+    for from in ["D", "C", "E"] {
+        assert_eq!(calls_from(&ex, &format!("sym:a/D.java::{from}.go")), vec!["sym:a/u/U.java::U.help"], "{from}: {:?}", ex.edges);
+    }
+}
+
+#[test]
+fn a_package_private_method_is_not_inherited_by_a_subclass_in_another_package() {
+    let repo = Repo::new(&[
+        ("a/Base.java", "package a;\n\npublic class Base {\n    void help() {}\n    protected void kept() {}\n}\n"),
+        ("a/Mid.java", "package a;\n\npublic class Mid extends Base {}\n"),
+        ("a/Near.java", "package a;\n\nclass Near extends Mid {\n    void go() { help(); }\n}\n"),
+        (
+            "b/Outer.java",
+            "package b;\n\nclass Outer {\n    void help() {}\n    void kept() {}\n    class Deep extends a.Mid {\n        void go() { help(); }\n        void keep() { kept(); }\n    }\n    class Direct extends a.Base {\n        void go() { help(); }\n    }\n}\n",
+        ),
+    ]);
+    let near = repo.extract("a/Near.java");
+    assert_eq!(calls_from(&near, "sym:a/Near.java::Near.go"), vec!["sym:a/Base.java::Base.help"], "one package: {:?}", near.edges);
+    let ex = repo.extract("b/Outer.java");
+    assert_eq!(calls_from(&ex, "sym:b/Outer.java::Outer.Deep.go"), vec!["sym:b/Outer.java::Outer.help"], "{:?}", ex.edges);
+    assert_eq!(calls_from(&ex, "sym:b/Outer.java::Outer.Direct.go"), vec!["sym:b/Outer.java::Outer.help"], "{:?}", ex.edges);
+    assert_eq!(calls_from(&ex, "sym:b/Outer.java::Outer.Deep.keep"), vec!["sym:a/Base.java::Base.kept"], "a protected method crosses packages: {:?}", ex.edges);
+}

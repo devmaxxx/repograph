@@ -5,7 +5,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use tree_sitter::Node;
 
-use crate::code::index::{self, Admission, Arity, Call, QualifiedIndex, Supers};
+use crate::code::index::{self, Admission, Arity, Call, QualifiedIndex, Reach, Supers};
 use crate::model::{EdgeKind, Extraction};
 
 pub(crate) fn text<'a>(n: Node, src: &'a [u8]) -> &'a str {
@@ -363,6 +363,18 @@ fn generated(name: &str) -> bool {
 /// The empty set, for a family that records no such members.
 pub(crate) static NONE: BTreeSet<String> = BTreeSet::new();
 
+/// The empty map, for a family whose subtypes inherit every member they can see.
+pub(crate) static ALWAYS: BTreeMap<String, Reach> = BTreeMap::new();
+
+/// Which declarations of a member one subtype inherits.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Inherits {
+    All,
+    None,
+    /// Some but not all, which only an overload resolution this file does not run could settle.
+    Some,
+}
+
 /// A supertype as one level of the walk up from a subtype.
 enum Hop {
     /// It declares the name, taking the arguments.
@@ -452,6 +464,8 @@ pub(crate) struct Own<'a> {
     pub arities: &'a BTreeMap<String, Vec<Arity>>,
     /// Kotlin's `private` members, which only their own type and the types inside it reach.
     pub private: &'a BTreeSet<String>,
+    /// Java's members some declaration of which a subtype may not inherit.
+    pub reach: &'a BTreeMap<String, Reach>,
     /// The type path the call is made from.
     pub at: &'a str,
     pub supers: &'a [(String, String)],
@@ -608,8 +622,36 @@ impl Own<'_> {
             .collect()
     }
 
+    /// Whether a type with no symbol, whose direct supertypes are `ids`, inherits every
+    /// declaration of `name` those declare.
+    pub(crate) fn inherits_all(&self, ids: &[String], name: &str) -> bool {
+        ids.iter().all(|id| self.inherits(&format!("{id}.{name}"), Some(&self.scope.package)) == Inherits::All)
+    }
+
+    /// Which declarations of the member `id` a subtype inherits, when every type between them is
+    /// in `package`, or `None` when they are not all in one: a package-private member is passed
+    /// down only inside its package.
+    fn inherits(&self, id: &str, package: Option<&str>) -> Inherits {
+        let Some((rel, path)) = split_id(id) else { return Inherits::All };
+        let reach = if rel == self.rel { self.reach.get(id).copied() } else { self.index.reach(rel, path) };
+        let Some(r) = reach else { return Inherits::All };
+        let near = package == Some(self.package_of(rel));
+        match (r.always || (r.package && near), !r.never && (!r.package || near)) {
+            (_, true) => Inherits::All,
+            (false, _) => Inherits::None,
+            _ => Inherits::Some,
+        }
+    }
+
+    fn package_of(&self, rel: &str) -> &str {
+        if rel == self.rel {
+            return &self.scope.package;
+        }
+        self.index.supers(rel).map_or("", |s| s.package.as_str())
+    }
+
     fn inherited(&self, path: &str, name: &str, seen: &mut BTreeSet<String>) -> Bound {
-        self.above(self.rel, path, name, seen).bound()
+        self.above(self.rel, path, name, Some(&self.scope.package), seen).bound()
     }
 
     /// `name` among the supertypes of the type at `path` in `rel`, this file or another whose
@@ -618,8 +660,10 @@ impl Own<'_> {
     /// are never read, and when one may hold it unread, the call is refused. A supertype in
     /// another file that declares the name without provably taking the arguments counts as
     /// unread: its overloads are all the index knows of it.
-    fn above(&self, rel: &str, path: &str, name: &str, seen: &mut BTreeSet<String>) -> Walked {
-        if !seen.insert(format!("sym:{rel}::{path}")) {
+    fn above(&self, rel: &str, path: &str, name: &str, along: Option<&str>, seen: &mut BTreeSet<String>) -> Walked {
+        let along = along.filter(|p| *p == self.package_of(rel));
+        // Reached through types of other packages, a type may pass down less than it holds.
+        if !seen.insert(format!("sym:{rel}::{path} {}", along.is_some())) {
             return Walked::default();
         }
         let Some(chain) = self.supertypes(rel, path) else { return Walked::refused() };
@@ -627,7 +671,7 @@ impl Own<'_> {
         if let Some(class) = chain.class {
             w.class_unread = class.is_empty();
             for t in class {
-                match self.hop(&t, name, seen) {
+                match self.hop(&t, name, along, seen) {
                     Hop::Declares(id) => w.class.push(id),
                     Hop::Unread | Hop::Refused => w.class_unread = true,
                     Hop::Above(up) => {
@@ -648,7 +692,7 @@ impl Own<'_> {
         for targets in chain.interfaces {
             w.unread |= targets.is_empty();
             for t in targets {
-                match self.hop(&t, name, seen) {
+                match self.hop(&t, name, along, seen) {
                     Hop::Declares(id) => w.found.push(id),
                     Hop::Unread => w.unread = true,
                     Hop::Refused => return Walked::refused(),
@@ -662,18 +706,25 @@ impl Own<'_> {
         w
     }
 
-    /// The supertype `t` as a level of the walk up from a subtype.
-    fn hop(&self, t: &str, name: &str, seen: &mut BTreeSet<String>) -> Hop {
+    /// The supertype `t` as a level of the walk up from subtypes all in `along`. A declaration
+    /// they do not inherit is read as absent, so the walk goes on above it.
+    fn hop(&self, t: &str, name: &str, along: Option<&str>, seen: &mut BTreeSet<String>) -> Hop {
         let Some((trel, tpath)) = split_id(t) else { return Hop::Above(Walked::default()) };
         let member = format!("{t}.{name}");
         let elsewhere = trel != self.rel;
         let declared = if elsewhere { self.elsewhere(trel, &format!("{tpath}.{name}")) } else { self.inheritable.contains(&member) };
+        let declared = declared
+            && match self.inherits(&member, along) {
+                Inherits::All => true,
+                Inherits::None => false,
+                Inherits::Some => return Hop::Refused,
+            };
         let admission = if declared { self.admission(&member, !elsewhere && self.inside(tpath)) } else { Admission::No };
         match admission {
             Admission::Unsure => Hop::Refused,
             Admission::Yes => Hop::Declares(member),
             Admission::No if elsewhere && declared => Hop::Unread,
-            Admission::No => Hop::Above(self.above(trel, tpath, name, seen)),
+            Admission::No => Hop::Above(self.above(trel, tpath, name, along, seen)),
         }
     }
 

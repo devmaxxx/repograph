@@ -50,11 +50,15 @@ pub struct Nested {
     /// for a file that declares no type.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub supers: Option<Supers>,
+    /// Java member paths some declaration of which a subtype may not inherit; one absent here
+    /// every subtype inherits.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub reach: BTreeMap<String, Reach>,
 }
 
 impl Nested {
     fn is_empty(&self) -> bool {
-        self.types.is_empty() && self.members.is_empty() && self.values.is_empty() && self.arities.is_empty() && self.supers.is_none()
+        self.types.is_empty() && self.members.is_empty() && self.values.is_empty() && self.arities.is_empty() && self.supers.is_none() && self.reach.is_empty()
     }
 }
 
@@ -80,6 +84,21 @@ pub struct Supers {
     pub singles: BTreeMap<String, BTreeSet<String>>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub stars: Vec<String>,
+}
+
+/// Which subtypes inherit a member, across the declarations that share its id. Java inherits
+/// neither an interface's `static` method nor, outside its package, a package-private member.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Reach {
+    /// Some declaration every subtype inherits.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub always: bool,
+    /// Some package-private declaration, which only a subtype in its package inherits.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub package: bool,
+    /// Some declaration no subtype inherits.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub never: bool,
 }
 
 /// How many arguments one method declaration takes: `min` without its defaults, `max` with every
@@ -191,6 +210,11 @@ impl QualifiedIndex {
     /// The types `rel` declares, by path.
     pub fn types(&self, rel: &str) -> Option<&BTreeSet<String>> {
         self.nested.get(rel).map(|n| &n.types)
+    }
+
+    /// Which subtypes inherit the member `rel` declares at `path`; `None` when every one does.
+    pub fn reach(&self, rel: &str, path: &str) -> Option<Reach> {
+        self.nested.get(rel).and_then(|n| n.reach.get(path)).copied()
     }
 
     /// How `rel`'s types reach their supertypes, when its family records it.

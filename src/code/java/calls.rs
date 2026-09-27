@@ -8,10 +8,13 @@
 //!   before a supertype's, as an override binds. A bare call binds in the innermost enclosing type
 //!   that has one, then in a static import. An `Object` method, or a level where no declaration
 //!   takes the arguments and a supertype the repository does not declare may, is no edge; a
-//!   supertype in another file is read through the supertypes its header records. An unread supertype
-//!   beside one that declares a method taking the arguments does not stop it. A static nested type
-//!   reaches outer static methods, never an instance one, so an instance namesake refuses rather
-//!   than falls through to an import.
+//!   supertype in another file is read through the supertypes its header records. A superclass's
+//!   method beats an interface's, so the class chain is read first, and one it may hold unread
+//!   refuses; an unread interface beside one that declares a method taking the arguments does not
+//!   stop it. An interface's `static` method, and outside its package a package-private one, is
+//!   not inherited, so the lookup reads past it; one overloaded with an inherited declaration
+//!   refuses. A static nested type reaches outer static methods, never an instance one, so an
+//!   instance namesake refuses rather than falls through to an import.
 //! - The residual: overloads of one arity told apart only by their argument types bind the first
 //!   level's declaration, as an unread supertype's same-arity overload is not seen.
 //! - A local, parameter, lambda, catch, `for`, resource or pattern variable hides the field it
@@ -311,6 +314,8 @@ fn field_in(local: &Local, name: &str, cx: &Ctx) -> Bound {
     match &local.supers {
         None => Bound::Refused,
         Some(ids) if ids.is_empty() => Bound::Absent,
+        // A supertype's declaration it may not inherit leaves a namesake further out unsettled.
+        Some(ids) if !cx.fields.inherits_all(ids, name) => Bound::Refused,
         Some(ids) => cx.fields.on_receiver(ids, name),
     }
 }
@@ -326,6 +331,7 @@ fn method_in(local: &Local, name: &str, cx: &Ctx) -> Bound {
         Some(ids) if ids.is_empty() => {
             if jvm::from_object(name) { Bound::Refused } else { Bound::Absent }
         }
+        Some(ids) if !cx.methods.inherits_all(ids, name) => Bound::Refused,
         Some(ids) => cx.methods.on_receiver(ids, name),
     }
 }

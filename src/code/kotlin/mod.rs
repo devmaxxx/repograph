@@ -39,6 +39,7 @@ pub fn extract(resolver: &Resolver, rel: &str, source: &str) -> Extraction {
         statics: &jvm::NONE,
         arities: &declared.arities,
         private: &declared.private_members,
+        reach: &jvm::ALWAYS,
         at: "",
         supers: &declared.supers,
         shapes: &declared.shapes,

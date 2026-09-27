@@ -39,6 +39,7 @@ pub fn extract(resolver: &Resolver, rel: &str, source: &str) -> Extraction {
         statics: &declared.statics,
         arities: &declared.arities,
         private: &jvm::NONE,
+        reach: &declared.reach,
         at: "",
         supers: &declared.supers,
         shapes: &declared.shapes,
@@ -69,7 +70,8 @@ pub fn header(source: &str) -> Header {
     let values = d.open_values.difference(&d.open_methods).map(path).collect();
     let arities = d.arities.iter().filter(|(id, _)| d.open_methods.contains(*id)).map(|(id, a)| (path(id), a.clone())).collect();
     let supers = jvm::recorded(&d.types, &d.supers, &d.shapes, &scope(root, src));
-    let nested = Nested { members: d.members.iter().filter(|id| reached(id)).map(path).collect(), values, arities, types: d.types, supers };
+    let reach = d.reach.iter().map(|(id, r)| (path(id), *r)).collect();
+    let nested = Nested { members: d.members.iter().filter(|id| reached(id)).map(path).collect(), values, arities, types: d.types, supers, reach };
     Header { scope: if package.is_empty() { Vec::new() } else { vec![package] }, top: d.top, nested, ..Default::default() }
 }
 

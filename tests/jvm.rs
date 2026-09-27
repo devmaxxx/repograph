@@ -346,3 +346,22 @@ fn a_superclass_gaining_or_losing_the_member_an_interface_also_declares_is_follo
     let edge = call("sym:app/Bag.kt::Bag.go", "sym:app/AbstractSized.kt::AbstractSized.isEmpty");
     flipped(("app/AbstractSized.kt", plain), ("app/AbstractSized.kt", declaring), &[sized, bag], &edge);
 }
+
+#[test]
+fn an_interface_method_made_static_or_not_is_followed_by_update() {
+    let namesake = ("a/u/U.java", "package a.u;\n\npublic class U {\n    public static void help() {}\n}\n");
+    let d = ("a/D.java", "package a;\n\nimport static a.u.U.help;\n\nclass D implements J {\n    void go() { help(); }\n}\n");
+    let j = ("a/J.java", "package a;\n\npublic interface J extends I {}\n");
+    let fixed = "package a;\n\npublic interface I {\n    static void help() {}\n}\n";
+    let inherited = "package a;\n\npublic interface I {\n    default void help() {}\n}\n";
+    flipped(("a/I.java", fixed), ("a/I.java", inherited), &[namesake, d, j], &call("sym:a/D.java::D.go", "sym:a/I.java::I.help"));
+}
+
+#[test]
+fn a_method_made_package_private_or_protected_is_followed_by_update() {
+    let mid = ("a/Mid.java", "package a;\n\npublic class Mid extends Base {}\n");
+    let outer = ("b/Outer.java", "package b;\n\nclass Outer {\n    void help() {}\n    class Deep extends a.Mid {\n        void go() { help(); }\n    }\n}\n");
+    let package = "package a;\n\npublic class Base {\n    void help() {}\n}\n";
+    let protected = "package a;\n\npublic class Base {\n    protected void help() {}\n}\n";
+    flipped(("a/Base.java", package), ("a/Base.java", protected), &[mid, outer], &call("sym:b/Outer.java::Outer.Deep.go", "sym:a/Base.java::Base.help"));
+}
