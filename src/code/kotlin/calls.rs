@@ -43,7 +43,7 @@ use tree_sitter::Node;
 
 use super::declarations::{holder, is_type, members_of, one_line_object, receiver, type_params, written_type, Declared, Param};
 use crate::code::index::Call;
-use crate::code::jvm::{self, child, named, outer, path_of, qualify, split_id, text, type_ids, Bound, Own};
+use crate::code::jvm::{self, child, named, outer, qualify, split_id, text, type_ids, Bound, Own};
 use crate::model::{EdgeKind, Extraction};
 
 pub(super) struct Ctx<'a> {
@@ -721,7 +721,7 @@ fn typed_member(ids: &[String], cx: &Ctx) -> Option<Vec<String>> {
         return None;
     }
     let declared_in = outer(path);
-    let name = path_of(id).rsplit('.').next()?;
+    let name = path.rsplit('.').next()?;
     let t = cx.d.fields.get(declared_in)?.get(name)?;
     if cx.d.masked(declared_in).contains(t.split('.').next().unwrap_or_default()) {
         return None;

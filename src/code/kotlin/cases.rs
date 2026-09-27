@@ -689,6 +689,25 @@ fn a_kotlin_default_vararg_or_trailing_lambda_counts_toward_the_arguments_a_func
 }
 
 #[test]
+fn an_annotation_argument_that_spells_a_modifier_word_is_not_the_modifier() {
+    let repo = Repo::new(&[
+        ("app/A.kt", "package app\n\nclass A {\n    @Deprecated(\"do not call, private now\")\n    fun helper() {}\n}\n"),
+        ("app/User.kt", "package app\n\nclass User {\n    fun go(a: A) { a.helper() }\n}\n"),
+    ]);
+    let user = repo.extract("app/User.kt");
+    assert_eq!(calls_from(&user, "sym:app/User.kt::User.go"), vec!["sym:app/A.kt::A.helper"], "{:?}", user.edges);
+}
+
+#[test]
+fn a_parameter_annotation_that_spells_vararg_does_not_make_the_parameter_one() {
+    let src = "package app\n\nclass K {\n    fun m(@Deprecated(\"legacy vararg support removed\") a: Int) {}\n    fun none() { m() }\n    fun one() { m(1) }\n    fun two() { m(1, 2) }\n}\n";
+    let ex = one("app/K.kt", src);
+    assert!(calls_from(&ex, "sym:app/K.kt::K.none").is_empty(), "{:?}", ex.edges);
+    assert_eq!(calls_from(&ex, "sym:app/K.kt::K.one"), vec!["sym:app/K.kt::K.m"]);
+    assert!(calls_from(&ex, "sym:app/K.kt::K.two").is_empty(), "{:?}", ex.edges);
+}
+
+#[test]
 fn an_override_or_actual_taking_its_defaults_from_its_base_is_never_passed_over_for_the_base() {
     let repo = Repo::new(&[
         ("app/Repo.kt", "package app\n\ninterface Repo {\n    fun find(id: Int, cache: Boolean = true)\n}\n\nclass RepoImpl : Repo {\n    override fun find(id: Int, cache: Boolean) {}\n    fun x() { find(1) }\n    fun y() { find(1, false) }\n}\n\nclass U {\n    fun z(r: RepoImpl) { r.find(1) }\n}\n"),

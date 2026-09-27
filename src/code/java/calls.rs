@@ -56,7 +56,7 @@ use tree_sitter::Node;
 
 use super::declarations::{supertypes, type_params, written_type, Declared, TYPES};
 use crate::code::index::Call;
-use crate::code::jvm::{self, child, named, outer, path_of, split_id, text, type_ids, Bound, Own};
+use crate::code::jvm::{self, child, named, outer, split_id, text, type_ids, Bound, Own};
 use crate::model::{EdgeKind, Extraction};
 
 pub(super) struct Ctx<'a> {
@@ -611,7 +611,7 @@ fn typed_field(b: Bound, cx: &Ctx) -> Option<Vec<String>> {
         return None;
     }
     let declared_in = outer(path);
-    let name = path_of(id).rsplit('.').next()?;
+    let name = path.rsplit('.').next()?;
     let t = cx.d.fields.get(declared_in)?.get(name)?;
     if jvm::masked(&cx.d.shapes, declared_in).contains(t.split('.').next().unwrap_or_default()) {
         return None;

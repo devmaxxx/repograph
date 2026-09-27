@@ -85,9 +85,9 @@ pub(crate) fn dotted(n: Node, src: &[u8]) -> String {
 /// names a member, and `resolve` finds it through `C`'s file as a nested path.
 pub(crate) fn scope(root: Node, src: &[u8]) -> Scope {
     let mut s = Scope { package: package_of(root, src), ..Scope::default() };
-    let lists = named(root).into_iter().filter(|n| n.kind() == "import_list").flat_map(named);
-    let headers = named(root).into_iter().filter(|n| n.kind() == "import_header").chain(lists.filter(|n| n.kind() == "import_header"));
-    for h in headers.collect::<Vec<_>>() {
+    // The grammar nests every import inside one `import_list`; none sits directly under the file.
+    let headers = named(root).into_iter().find(|n| n.kind() == "import_list").map(named).unwrap_or_default();
+    for h in headers {
         let Some(id) = child(h, "identifier") else { continue };
         let qualified = dotted(id, src);
         if child(h, "wildcard_import").is_some() {

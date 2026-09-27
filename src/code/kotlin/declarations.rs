@@ -51,7 +51,9 @@ fn arity(f: Node, src: &[u8]) -> Arity {
     let mut last_required = false;
     for c in child(f, "function_value_parameters").map(named).unwrap_or_default() {
         match c.kind() {
-            "parameter_modifiers" => vararg = text(c, src).split_whitespace().any(|w| w == "vararg"),
+            "parameter_modifiers" => {
+                vararg = named(c).into_iter().any(|m| m.kind() == "parameter_modifier" && text(m, src) == "vararg");
+            }
             "parameter" => {
                 a.max += 1;
                 a.varargs |= vararg;
@@ -93,7 +95,8 @@ pub(super) fn type_params(n: Node, src: &[u8]) -> BTreeSet<String> {
 
 /// Whether any modifier of `n` is `word`, whichever kind the grammar gives it.
 fn says(n: Node, word: &str, src: &[u8]) -> bool {
-    child(n, "modifiers").is_some_and(|m| named(m).into_iter().any(|c| text(c, src).split_whitespace().any(|w| w == word)))
+    child(n, "modifiers")
+        .is_some_and(|m| named(m).into_iter().any(|c| c.kind() != "annotation" && text(c, src).split_whitespace().any(|w| w == word)))
 }
 
 fn has_modifier(n: Node, word: &str, src: &[u8]) -> bool {

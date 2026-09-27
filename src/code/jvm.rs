@@ -755,11 +755,15 @@ impl Own<'_> {
             for t in class {
                 match self.hop(&t, name, along, seen) {
                     Hop::Declares(id) => w.class.push(id),
-                    Hop::Unread | Hop::Refused => w.class_unread = true,
+                    Hop::Unread => w.class_unread = true,
+                    // A sibling candidate — an `expect`/`actual` pair, or two files of one name —
+                    // may still bind cleanly, but the call is no edge whatever it holds.
+                    Hop::Refused => return Walked::refused(),
+                    Hop::Above(up) if up.refused => return Walked::refused(),
                     Hop::Above(up) => {
                         w.class.extend(up.class);
                         w.found.extend(up.found);
-                        w.class_unread |= up.class_unread || up.refused;
+                        w.class_unread |= up.class_unread;
                         w.unread |= up.unread;
                     }
                 }
@@ -983,6 +987,21 @@ mod cross {
         ]);
         let ex = repo.extract("shop/Login.java");
         assert!(edges(&ex, EdgeKind::Calls).contains(&("sym:shop/Login.java::Login.go", "sym:app/network/Tokens.kt::SessionTokens.read", "")), "{:?}", ex.edges);
+    }
+
+    /// Two files share the qualified name `shared.Base`, as an `expect`/`actual` pair does. One
+    /// candidate's `run` is a class level a subtype outside its package may not fully inherit
+    /// (`Inherits::Some`, refused); the other's is a clean public match. The call is no edge
+    /// whatever the other candidate holds — it must not settle for the clean one alone.
+    #[test]
+    fn a_refused_class_candidate_beside_a_declaring_one_is_no_edge() {
+        let repo = Repo::new(&[
+            ("shared/Base1.java", "package shared;\n\npublic class Base {\n    public void run(int a) {}\n    void run(String s) {}\n}\n"),
+            ("shared/Base2.java", "package shared;\n\npublic class Base {\n    public void run(int n) {}\n}\n"),
+            ("app/Leaf.java", "package app;\n\nimport shared.Base;\n\npublic class Leaf extends Base {\n    public void go() { run(5); }\n}\n"),
+        ]);
+        let ex = repo.extract("app/Leaf.java");
+        assert!(edges(&ex, EdgeKind::Calls).is_empty(), "{:?}", ex.edges);
     }
 
     /// Pins the contract's empty-scope rule: a file with no package line is indexed by bare name.
