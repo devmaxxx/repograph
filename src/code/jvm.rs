@@ -651,6 +651,62 @@ impl Own<'_> {
         ids.iter().all(|id| self.inherits(&format!("{id}.{name}"), Some(&self.scope.package)) == Inherits::All)
     }
 
+    /// A simple type name written inside the type at `at`, walked outward as Java walks it: at each
+    /// enclosing type its own member types, then those its supertypes pass down, before the next
+    /// type out. `Absent` when no level holds the name, so imports and the package decide. A
+    /// supertype the repository does not declare is not read, so a member type of the name it may
+    /// hold does not stop the lookup: that is the residual.
+    pub(crate) fn member_type(&self, at: &str, name: &str) -> Bound {
+        let mut path = at;
+        while !path.is_empty() {
+            let own = format!("{path}.{name}");
+            if self.types.contains(&own) {
+                return Bound::Found(vec![format!("sym:{}::{own}", self.rel)]);
+            }
+            let mut found = Vec::new();
+            self.types_above(self.rel, path, name, Some(&self.scope.package), &mut BTreeSet::new(), &mut found);
+            match settle(found, false) {
+                Bound::Absent => {}
+                bound => return bound,
+            }
+            path = outer(path);
+        }
+        Bound::Absent
+    }
+
+    /// `name` among the member types the supertypes `ids` pass down to a type of this file.
+    pub(crate) fn inherited_type(&self, ids: &[String], name: &str) -> Bound {
+        let mut found = Vec::new();
+        let mut seen = BTreeSet::new();
+        for t in ids {
+            self.type_hop(t, name, Some(&self.scope.package), &mut seen, &mut found);
+        }
+        settle(found, false)
+    }
+
+    /// Member types, unlike methods, have no class-over-interface order: one inherited along two
+    /// paths is the compiler's ambiguity, so every supertype is read.
+    fn types_above(&self, rel: &str, path: &str, name: &str, along: Option<&str>, seen: &mut BTreeSet<String>, found: &mut Vec<String>) {
+        let along = along.filter(|p| *p == self.package_of(rel));
+        if !seen.insert(format!("sym:{rel}::{path} {}", along.is_some())) {
+            return;
+        }
+        let Some(chain) = self.supertypes(rel, path) else { return };
+        for t in chain.class.into_iter().chain(chain.interfaces).flatten() {
+            self.type_hop(&t, name, along, seen, found);
+        }
+    }
+
+    /// A member type the subtype does not inherit is read as absent, so the walk goes on above it.
+    fn type_hop(&self, t: &str, name: &str, along: Option<&str>, seen: &mut BTreeSet<String>, found: &mut Vec<String>) {
+        let member = format!("{t}.{name}");
+        if self.is_type(&member) && self.inherits(&member, along) != Inherits::None {
+            found.push(member);
+        } else if let Some((rel, path)) = split_id(t) {
+            self.types_above(rel, path, name, along, seen, found);
+        }
+    }
+
     /// Which declarations of the member `id` a subtype inherits, when every type between them is
     /// in `package`, or `None` when they are not all in one: a package-private member is passed
     /// down only inside its package.

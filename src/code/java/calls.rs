@@ -17,10 +17,17 @@
 //!   instance namesake refuses rather than falls through to an import.
 //! - The residual: overloads of one arity told apart only by their argument types bind the first
 //!   level's declaration, as an unread supertype's same-arity overload is not seen.
+//! - A written type name binds a member type first: at each enclosing type, from the innermost, its
+//!   own, then one its supertypes pass down, before imports and the package. A private member type
+//!   is not passed down, nor a package-private one outside its package, and one inherited along two
+//!   paths binds nothing. A superclass the repository does not declare is not read, so a member
+//!   type of the name it holds is not seen and the import or package type keeps the edge: the
+//!   residual, taken over refusing every type named under an external superclass.
 //! - A local, parameter, lambda, catch, `for`, resource or pattern variable hides the field it
 //!   shadows; one whose type the file does not read makes a call through it no edge.
 //! - An anonymous or local class hides what it declares and whatever its unread supertype may, and
-//!   a local class's name hides the repository type it is named like, as a type parameter does.
+//!   a local class's name hides the repository type it is named like, as a type parameter does:
+//!   from its declaration on in a block, and in the whole body for a member class of such a type.
 //! - `Type.member()` is a static call only when no local, field, inherited field or static import
 //!   may hold the first name; a field typed as the type it is named like reads the same either way.
 //! - A single static import shadows an on-demand one; two of a name, or two on-demand imports, bind
@@ -30,13 +37,17 @@
 //!   it writes, masked as any written type is, and none where the grammar failed around it.
 //! - `new T(…)` calls the type it creates, read as any written type is, as a Kotlin constructor
 //!   call and a C# `new` do; the type, not its constructor, since which overload runs is the
-//!   same-arity residual again. An anonymous class's creation calls its supertype the same way.
+//!   same-arity residual again. An anonymous class's creation calls its supertype the same way,
+//!   an interface included, where a Kotlin object expression writes nothing.
 //!   `outer.new Inner()` binds only when the receiver's own type declares `Inner`, since an
 //!   inherited one may come from a supertype the file never reads. `new T[n]` constructs no `T`,
 //!   so it writes a signature's `Imports`, not a call.
 //!
+//! - A field's initializer is walked as a body is, from the field; an initializer block, static or
+//!   not, from its class, since the block is no symbol.
+//!
 //! Edges it leaves out: calls through `super`, through a chain of calls, through another file's
-//! fields, and from field initializers and initializer blocks.
+//! fields, and from an enum constant's arguments and body.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -66,6 +77,8 @@ type Locals = BTreeMap<String, Option<Vec<String>>>;
 struct Local {
     methods: BTreeSet<String>,
     fields: BTreeSet<String>,
+    /// Its member types, which hide their names from the whole body, not only after them.
+    types: BTreeSet<String>,
     /// `None` when a supertype is unread, so it may declare any name.
     supers: Option<Vec<String>>,
 }
@@ -140,6 +153,15 @@ fn walk(n: Node, mut at: At, cx: &Ctx, ex: &mut Extraction) {
                 patterns(body, &mut at, cx.src);
             }
         }
+        "variable_declarator" if n.parent().is_some_and(|p| matches!(p.kind(), "field_declaration" | "constant_declaration") && is_declared(p)) => {
+            at.method = n.child_by_field_name("name").map(|name| format!("sym:{}::{}.{}", cx.methods.rel, at.class, text(name, cx.src)));
+            at.locals.clear();
+        }
+        // An initializer block is no symbol; what it calls, its class calls.
+        "static_initializer" | "block" if is_declared(n) => {
+            at.method = Some(format!("sym:{}::{}", cx.methods.rel, at.class));
+            at.locals.clear();
+        }
         "lambda_expression" => {
             let params = n.child_by_field_name("parameters");
             let untyped = match params {
@@ -183,7 +205,7 @@ fn walk(n: Node, mut at: At, cx: &Ctx, ex: &mut Extraction) {
         // The type is read in the scope around the creation, before an anonymous body is entered.
         "object_creation_expression" => {
             if let Some(from) = &at.method {
-                for to in created(n, &at, cx) {
+                for to in created(n, &at, cx).into_iter().filter(|to| to != from) {
                     ex.edge(from, &to, EdgeKind::Calls, "", cx.methods.rel);
                 }
             }
@@ -285,9 +307,35 @@ fn resolved(written: &str, at: &At, cx: &Ctx) -> Option<Vec<String>> {
     if at.masked.contains(written.split('.').next().unwrap_or_default()) {
         return None;
     }
-    let own = &cx.methods;
-    let ids: Vec<String> = type_ids(own.types, own.index, own.scope, own.rel, &at.class, written).into_iter().filter(|id| own.is_type(id)).collect();
+    let (first, rest) = written.split_once('.').map_or((written, None), |(f, r)| (f, Some(r)));
+    for local in at.scopes.iter().rev() {
+        match local.supers.as_deref().map(|ids| cx.methods.inherited_type(ids, first)) {
+            Some(Bound::Found(ids)) => return nested(ids, rest, &cx.methods),
+            Some(Bound::Refused) => return None,
+            _ => {}
+        }
+    }
+    type_named(&cx.methods, &at.class, written)
+}
+
+/// A written type inside the type at `at`: a member type, declared or inherited, before what the
+/// imports and the package bind.
+fn type_named(own: &Own, at: &str, written: &str) -> Option<Vec<String>> {
+    let (first, rest) = written.split_once('.').map_or((written, None), |(f, r)| (f, Some(r)));
+    let ids = match own.member_type(at, first) {
+        Bound::Found(ids) => return nested(ids, rest, own),
+        Bound::Refused => return None,
+        Bound::Absent => type_ids(own.types, own.index, own.scope, own.rel, at, written),
+    };
+    let ids: Vec<String> = ids.into_iter().filter(|id| own.is_type(id)).collect();
     (!ids.is_empty()).then_some(ids)
+}
+
+/// `Inner.Deeper` under the member types `ids`, which hide every other type of their name, so
+/// one that does not hold it binds nothing.
+fn nested(ids: Vec<String>, rest: Option<&str>, own: &Own) -> Option<Vec<String>> {
+    let Some(rest) = rest else { return Some(ids) };
+    ids.iter().map(|id| Some(format!("{id}.{rest}")).filter(|c| own.is_type(c))).collect()
 }
 
 /// Every written supertype resolved, or `None` when one is unread.
@@ -296,7 +344,7 @@ fn resolved_all(written: &[String], at: &At, cx: &Ctx) -> Option<Vec<String>> {
 }
 
 fn members_of(body: Option<Node>, supers: Option<Vec<String>>, cx: &Ctx) -> Local {
-    let mut local = Local { methods: BTreeSet::new(), fields: BTreeSet::new(), supers };
+    let mut local = Local { methods: BTreeSet::new(), fields: BTreeSet::new(), types: BTreeSet::new(), supers };
     for m in body.map(named).unwrap_or_default() {
         match m.kind() {
             "method_declaration" => local.methods.extend(m.child_by_field_name("name").map(|x| text(x, cx.src).to_string())),
@@ -305,6 +353,7 @@ fn members_of(body: Option<Node>, supers: Option<Vec<String>>, cx: &Ctx) -> Loca
                 let declarators: Vec<Node> = m.children_by_field_name("declarator", &mut c).collect();
                 local.fields.extend(declarators.into_iter().filter_map(|v| v.child_by_field_name("name")).map(|x| text(x, cx.src).to_string()));
             }
+            k if TYPES.contains(&k) => local.types.extend(m.child_by_field_name("name").map(|x| text(x, cx.src).to_string())),
             _ => {}
         }
     }
@@ -319,6 +368,7 @@ fn enter(local: Local, at: &mut At, cx: &Ctx) {
             *ty = None;
         }
     }
+    at.masked.extend(local.types.iter().cloned());
     at.scopes.push(local);
 }
 
@@ -553,9 +603,7 @@ fn typed_field(b: Bound, cx: &Ctx) -> Option<Vec<String>> {
     if jvm::masked(&cx.d.shapes, declared_in).contains(t.split('.').next().unwrap_or_default()) {
         return None;
     }
-    let own = &cx.fields;
-    let ids: Vec<String> = type_ids(own.types, own.index, own.scope, own.rel, declared_in, t).into_iter().filter(|id| own.is_type(id)).collect();
-    (!ids.is_empty()).then_some(ids)
+    type_named(&cx.fields, declared_in, t)
 }
 
 fn dotted(n: Node, src: &[u8]) -> Option<String> {

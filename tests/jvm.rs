@@ -391,3 +391,22 @@ fn a_created_type_added_removed_or_moved_is_followed_to_the_unchanged_file_that_
     assert!(created(&built, "sym:shop/keys/Keys.java::Key"), "{built:?}");
     assert_eq!(updated, built);
 }
+
+#[test]
+fn a_member_type_a_superclass_gains_loses_or_hides_is_followed_to_the_unchanged_subclass() {
+    let pkg = ("p/T.java", "package p;\n\npublic class T {}\n");
+    let bare = ("p/B.java", "package p;\n\npublic class B {}\n");
+    let nested = ("p/B.java", "package p;\n\npublic class B {\n    public static class T {}\n}\n");
+    let hidden = ("p/B.java", "package p;\n\npublic class B {\n    private static class T {}\n}\n");
+    let user = ("p/A.java", "package p;\n\nclass A extends B {\n    Object go() { return new T(); }\n}\n");
+    let created = |edges: &Edges, to: &str| edges.contains(&("sym:p/A.java::A.go".to_string(), to.to_string(), "Calls".to_string(), String::new()));
+    let (updated, built) = updated_and_built(&[pkg, bare, user], &[nested]);
+    assert!(created(&built, "sym:p/B.java::B.T") && !created(&built, "sym:p/T.java::T"), "{built:?}");
+    assert_eq!(updated, built);
+    let (updated, built) = updated_and_built(&[pkg, nested, user], &[bare]);
+    assert!(created(&built, "sym:p/T.java::T"), "{built:?}");
+    assert_eq!(updated, built);
+    let (updated, built) = updated_and_built(&[pkg, nested, user], &[hidden]);
+    assert!(created(&built, "sym:p/T.java::T") && !created(&built, "sym:p/B.java::B.T"), "{built:?}");
+    assert_eq!(updated, built);
+}

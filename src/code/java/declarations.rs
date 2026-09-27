@@ -152,6 +152,15 @@ fn declare_type(n: Node, rel: &str, src: &[u8], parent: &str, owner: Option<&str
         d.top.insert(name);
     } else {
         d.members.insert(id.clone());
+        // A member type is inherited as a member is, so a subtype reads it by its simple name.
+        let r = d.reach.entry(id.clone()).or_default();
+        if says(n, "private") {
+            r.never = true;
+        } else if !members_public && !says(n, "public") && !says(n, "protected") {
+            r.package = true;
+        } else {
+            r.always = true;
+        }
     }
     d.types.insert(path.clone());
     for w in supertypes(n, src) {

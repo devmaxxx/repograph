@@ -811,21 +811,21 @@ const BOX: (&str, &str) = ("shop/util/Box.java", "package shop.util;\n\npublic c
 #[test]
 fn an_object_creation_calls_the_type_it_creates_wherever_the_file_resolves_it() {
     let uses = [
-        ("shop/orders/Same.java", "package shop.orders;\n\nclass Same {\n    void go() { Recv.<Target>m(new Target()); }\n}\n", "sym:shop/orders/Target.java::Target"),
-        ("shop/orders/Args.java", "package shop.orders;\n\nclass Args {\n    Args() { Object o = new Target(1); }\n    void go() {}\n}\n", "sym:shop/orders/Target.java::Target"),
-        ("shop/Imported.java", "package shop;\n\nimport shop.billing.Invoice;\n\nclass Imported {\n    void go() { new Invoice(); }\n}\n", "sym:shop/billing/Invoice.java::Invoice"),
-        ("shop/Starred.java", "package shop;\n\nimport shop.billing.*;\n\nclass Starred {\n    void go() { new Invoice(); }\n}\n", "sym:shop/billing/Invoice.java::Invoice"),
-        ("shop/Qualified.java", "package shop;\n\nclass Qualified {\n    void go() { new shop.billing.Invoice(); }\n}\n", "sym:shop/billing/Invoice.java::Invoice"),
-        ("shop/orders/Member.java", "package shop.orders;\n\nclass Member {\n    void go() { new Target.Part(); }\n}\n", "sym:shop/orders/Target.java::Target.Part"),
-        ("shop/Diamond.java", "package shop;\n\nimport shop.util.Box;\n\nclass Diamond {\n    void go() { Box<String> a = new Box<>(); Object b = new Box<String>(); }\n}\n", "sym:shop/util/Box.java::Box"),
+        ("shop/orders/Same.java", "package shop.orders;\n\nclass Same {\n    void go() { Recv.<Target>m(new Target()); }\n}\n", "sym:shop/orders/Same.java::Same.go", "sym:shop/orders/Target.java::Target"),
+        ("shop/orders/Args.java", "package shop.orders;\n\nclass Args {\n    Args() { Object o = new Target(1); }\n    void go() {}\n}\n", "sym:shop/orders/Args.java::Args.Args", "sym:shop/orders/Target.java::Target"),
+        ("shop/Imported.java", "package shop;\n\nimport shop.billing.Invoice;\n\nclass Imported {\n    void go() { new Invoice(); }\n}\n", "sym:shop/Imported.java::Imported.go", "sym:shop/billing/Invoice.java::Invoice"),
+        ("shop/Starred.java", "package shop;\n\nimport shop.billing.*;\n\nclass Starred {\n    void go() { new Invoice(); }\n}\n", "sym:shop/Starred.java::Starred.go", "sym:shop/billing/Invoice.java::Invoice"),
+        ("shop/Qualified.java", "package shop;\n\nclass Qualified {\n    void go() { new shop.billing.Invoice(); }\n}\n", "sym:shop/Qualified.java::Qualified.go", "sym:shop/billing/Invoice.java::Invoice"),
+        ("shop/orders/Member.java", "package shop.orders;\n\nclass Member {\n    void go() { new Target.Part(); }\n}\n", "sym:shop/orders/Member.java::Member.go", "sym:shop/orders/Target.java::Target.Part"),
+        ("shop/Diamond.java", "package shop;\n\nimport shop.util.Box;\n\nclass Diamond {\n    void go() { Box<String> a = new Box<>(); Object b = new Box<String>(); }\n}\n", "sym:shop/Diamond.java::Diamond.go", "sym:shop/util/Box.java::Box"),
     ];
     let mut files = vec![TARGET, RECV, INVOICE_BARE, BOX];
-    files.extend(uses.iter().map(|(rel, src, _)| (*rel, *src)));
+    files.extend(uses.iter().map(|(rel, src, _, _)| (*rel, *src)));
     let repo = Repo::new(&files);
-    for (rel, _, to) in uses {
+    for (rel, _, from, to) in uses {
         let ex = repo.extract(rel);
-        let from = edges(&ex, EdgeKind::Calls).into_iter().filter(|(_, t, _)| *t == to).count();
-        assert_eq!(from, 1, "{rel}: {:?}", ex.edges);
+        let found: Vec<(&str, &str)> = edges(&ex, EdgeKind::Calls).into_iter().filter(|(_, t, _)| *t == to).map(|(s, t, _)| (s, t)).collect();
+        assert_eq!(found, vec![(from, to)], "{rel}: {:?}", ex.edges);
     }
     let own = one("shop/Own.java", "package shop;\n\nclass Own {\n    static class Nested {}\n    void go() { new Nested(); }\n}\n");
     assert_eq!(calls_from(&own, "sym:shop/Own.java::Own.go"), vec!["sym:shop/Own.java::Own.Nested"], "{:?}", own.edges);
@@ -839,13 +839,28 @@ fn an_object_creation_the_file_cannot_resolve_or_a_local_name_hides_calls_nothin
         ("y/Dup.java", "package y;\n\npublic class Dup {}\n"),
         ("shop/orders/Platform.java", "package shop.orders;\n\nclass Platform {\n    void go() { new String(); new java.util.ArrayList<String>(); new StringBuilder(); }\n}\n"),
         ("shop/orders/Stars.java", "package shop.orders;\n\nimport x.*;\nimport y.*;\n\nclass Stars {\n    void go() { new Dup(); }\n}\n"),
-        ("shop/orders/Masked.java", "package shop.orders;\n\nclass Masked<Target> {\n    <Target> void go() { Object o = new Target(); }\n}\n"),
+        ("shop/orders/ClassParam.java", "package shop.orders;\n\nclass ClassParam<Target> {\n    void go() { Object o = new Target(); }\n}\n"),
+        ("shop/orders/MethodParam.java", "package shop.orders;\n\nclass MethodParam {\n    <Target> void go() { Object o = new Target(); }\n}\n"),
         ("shop/orders/Local.java", "package shop.orders;\n\nclass Local {\n    void go() {\n        class Target {}\n        new Target();\n    }\n}\n"),
+        ("shop/orders/Anon.java", "package shop.orders;\n\nclass Anon {\n    void go() { new Object() { void f() { new Target(); } class Target {} }; }\n}\n"),
+        ("shop/orders/InLocal.java", "package shop.orders;\n\nclass InLocal {\n    void go() {\n        class L { void f() { new Target(); } class Target {} }\n    }\n}\n"),
     ]);
-    for rel in ["shop/orders/Platform.java", "shop/orders/Stars.java", "shop/orders/Masked.java", "shop/orders/Local.java"] {
+    for rel in ["shop/orders/Platform.java", "shop/orders/Stars.java", "shop/orders/ClassParam.java", "shop/orders/MethodParam.java", "shop/orders/Local.java"] {
         let ex = repo.extract(rel);
         assert!(edges(&ex, EdgeKind::Calls).is_empty(), "{rel}: {:?}", ex.edges);
     }
+    // A member class masks for the whole body it is declared in, the methods before it included.
+    for (rel, from) in [("shop/orders/Anon.java", "sym:shop/orders/Anon.java::Anon.go"), ("shop/orders/InLocal.java", "sym:shop/orders/InLocal.java::InLocal.go")] {
+        let ex = repo.extract(rel);
+        assert!(!calls_from(&ex, from).contains(&"sym:shop/orders/Target.java::Target"), "{rel}: {:?}", ex.edges);
+    }
+}
+
+#[test]
+fn a_local_class_masks_its_name_only_after_its_declaration() {
+    let repo = Repo::new(&[TARGET, ("shop/orders/Before.java", "package shop.orders;\n\nclass Before {\n    void go() {\n        new Target();\n        class Target {}\n    }\n}\n")]);
+    let ex = repo.extract("shop/orders/Before.java");
+    assert_eq!(calls_from(&ex, "sym:shop/orders/Before.java::Before.go"), vec!["sym:shop/orders/Target.java::Target"], "{:?}", ex.edges);
 }
 
 #[test]
@@ -894,4 +909,116 @@ fn an_array_creation_is_a_type_use_not_a_call() {
     let same = repo.extract("shop/orders/Same.java");
     assert!(edges(&same, EdgeKind::Calls).is_empty(), "{:?}", same.edges);
     assert_eq!(imports_to(&same, "file:shop/orders/Target.java"), vec!["Target"], "{:?}", same.edges);
+}
+
+const PKG_T: (&str, &str) = ("p/T.java", "package p;\n\npublic class T {\n    public static void m() {}\n    public static class Part {}\n}\n");
+const BASE_T: (&str, &str) = ("p/B.java", "package p;\n\npublic class B {\n    public static class T {\n        public static void m() {}\n    }\n}\n");
+const IFACE_T: (&str, &str) = ("p/I.java", "package p;\n\npublic interface I {\n    class T {}\n}\n");
+
+#[test]
+fn a_member_type_inherited_from_a_read_superclass_shadows_the_package_type_of_its_name() {
+    let repo = Repo::new(&[
+        PKG_T,
+        BASE_T,
+        IFACE_T,
+        (
+            "p/A.java",
+            "package p;\n\nclass A extends B {\n    T field;\n    void made() { new T(); }\n    void called() { T.m(); }\n    static class Inner {\n        void made() { new T(); }\n    }\n}\n",
+        ),
+        ("p/C.java", "package p;\n\nclass C extends A {\n    void made() { new T(); }\n}\n"),
+        ("p/D.java", "package p;\n\nclass D implements I {\n    void made() { new T(); }\n}\n"),
+        ("p/Own.java", "package p;\n\nclass Own extends B {\n    static class T {}\n    void made() { new T(); }\n}\n"),
+        ("p/Anon.java", "package p;\n\nclass Anon {\n    void made() { new B() { void f() { new T(); } }; }\n}\n"),
+    ]);
+    let a = repo.extract("p/A.java");
+    assert_eq!(calls_from(&a, "sym:p/A.java::A.made"), vec!["sym:p/B.java::B.T"], "{:?}", a.edges);
+    assert_eq!(calls_from(&a, "sym:p/A.java::A.called"), vec!["sym:p/B.java::B.T.m"], "{:?}", a.edges);
+    assert_eq!(calls_from(&a, "sym:p/A.java::A.Inner.made"), vec!["sym:p/B.java::B.T"], "an enclosing type's inherited member: {:?}", a.edges);
+    assert_eq!(imports_to(&a, "file:p/B.java"), vec!["B"], "{:?}", a.edges);
+    assert!(imports_to(&a, "file:p/T.java").is_empty(), "{:?}", a.edges);
+    let c = repo.extract("p/C.java");
+    assert_eq!(calls_from(&c, "sym:p/C.java::C.made"), vec!["sym:p/B.java::B.T"], "inherited through A: {:?}", c.edges);
+    let d = repo.extract("p/D.java");
+    assert_eq!(calls_from(&d, "sym:p/D.java::D.made"), vec!["sym:p/I.java::I.T"], "an interface's member type: {:?}", d.edges);
+    let own = repo.extract("p/Own.java");
+    assert_eq!(calls_from(&own, "sym:p/Own.java::Own.made"), vec!["sym:p/Own.java::Own.T"], "its own beats an inherited one: {:?}", own.edges);
+    let anon = repo.extract("p/Anon.java");
+    assert_eq!(calls_from(&anon, "sym:p/Anon.java::Anon.made"), vec!["sym:p/B.java::B", "sym:p/B.java::B.T"], "an anonymous body inherits it too: {:?}", anon.edges);
+}
+
+#[test]
+fn a_member_type_a_subtype_does_not_inherit_or_inherits_twice_never_binds() {
+    let repo = Repo::new(&[
+        PKG_T,
+        BASE_T,
+        IFACE_T,
+        ("p/J.java", "package p;\n\npublic interface J {\n    class T {}\n}\n"),
+        ("p/PB.java", "package p;\n\npublic class PB {\n    private static class T {}\n}\n"),
+        ("p/PA.java", "package p;\n\nclass PA extends PB {\n    void made() { new T(); }\n}\n"),
+        ("q/QB.java", "package q;\n\npublic class QB {\n    static class T {}\n}\n"),
+        ("p/QA.java", "package p;\n\nimport q.QB;\n\nclass QA extends QB {\n    void made() { new T(); }\n}\n"),
+        ("p/Two.java", "package p;\n\nclass Two implements I, J {\n    void made() { new T(); }\n}\n"),
+        ("p/Both.java", "package p;\n\nclass Both extends B implements I {\n    void made() { new T(); }\n}\n"),
+        ("p/Part.java", "package p;\n\nclass Part extends B {\n    void made() { new T.Part(); }\n}\n"),
+        ("p/Ext.java", "package p;\n\nclass Ext extends java.util.ArrayList<String> {\n    void made() { new T(); }\n}\n"),
+    ]);
+    let pkg = vec!["sym:p/T.java::T"];
+    let pa = repo.extract("p/PA.java");
+    assert_eq!(calls_from(&pa, "sym:p/PA.java::PA.made"), pkg, "a private member type is not inherited: {:?}", pa.edges);
+    let qa = repo.extract("p/QA.java");
+    assert_eq!(calls_from(&qa, "sym:p/QA.java::QA.made"), pkg, "nor a package-private one outside its package: {:?}", qa.edges);
+    for (rel, from) in [("p/Two.java", "sym:p/Two.java::Two.made"), ("p/Both.java", "sym:p/Both.java::Both.made")] {
+        let ex = repo.extract(rel);
+        assert!(calls_from(&ex, from).is_empty(), "two inherited T are ambiguous: {:?}", ex.edges);
+    }
+    let part = repo.extract("p/Part.java");
+    assert!(calls_from(&part, "sym:p/Part.java::Part.made").is_empty(), "B.T holds no Part, and B.T hides the package's T: {:?}", part.edges);
+    let ext = repo.extract("p/Ext.java");
+    assert_eq!(calls_from(&ext, "sym:p/Ext.java::Ext.made"), pkg, "an unread superclass is the residual: {:?}", ext.edges);
+}
+
+#[test]
+fn a_field_initializer_calls_from_the_field_and_an_initializer_block_from_its_class() {
+    let repo = Repo::new(&[
+        TARGET,
+        (
+            "shop/orders/Init.java",
+            "package shop.orders;\n\nclass Init {\n    static final Target FIRST = new Target(), SECOND = new Target(1);\n    int x = compute();\n    static { boot(); }\n    { Target t = new Target(); warm(); }\n    int compute() { return 1; }\n    static void boot() {}\n    void warm() {}\n    static class Deep {\n        Object d = new Target.Part();\n    }\n}\n",
+        ),
+    ]);
+    let ex = repo.extract("shop/orders/Init.java");
+    let from = |f: &str| calls_from(&ex, &format!("sym:shop/orders/Init.java::{f}")).into_iter().map(str::to_string).collect::<Vec<_>>();
+    assert_eq!(from("Init.FIRST"), vec!["sym:shop/orders/Target.java::Target"], "{:?}", ex.edges);
+    assert_eq!(from("Init.SECOND"), vec!["sym:shop/orders/Target.java::Target"], "{:?}", ex.edges);
+    assert_eq!(from("Init.x"), vec!["sym:shop/orders/Init.java::Init.compute"], "{:?}", ex.edges);
+    assert_eq!(
+        from("Init"),
+        vec!["sym:shop/orders/Init.java::Init.boot", "sym:shop/orders/Init.java::Init.warm", "sym:shop/orders/Target.java::Target"],
+        "{:?}",
+        ex.edges
+    );
+    assert_eq!(from("Init.Deep.d"), vec!["sym:shop/orders/Target.java::Target.Part"], "{:?}", ex.edges);
+}
+
+#[test]
+fn a_field_initializer_or_an_initializer_block_refuses_what_a_body_refuses() {
+    let repo = Repo::new(&[
+        TARGET,
+        ("shop/orders/Masked.java", "package shop.orders;\n\nclass Masked<Target> {\n    Object o = new Target();\n}\n"),
+        ("shop/orders/Local.java", "package shop.orders;\n\nclass Local {\n    { class Target {} new Target(); }\n}\n"),
+        ("shop/orders/Anon.java", "package shop.orders;\n\nclass Anon {\n    void helper() {}\n    Runnable r = new Runnable() { public void run() { helper(); } };\n}\n"),
+        ("shop/orders/Obj.java", "package shop.orders;\n\nclass Obj {\n    int h = hashCode();\n    static { new java.util.ArrayList<String>(); }\n}\n"),
+        ("shop/orders/Shadow.java", "package shop.orders;\n\nclass Shadow {\n    Helper t;\n    { Object t = null; t.go(); }\n}\n\nclass Helper {\n    void go() {}\n}\n"),
+    ]);
+    for rel in ["shop/orders/Masked.java", "shop/orders/Local.java", "shop/orders/Anon.java", "shop/orders/Obj.java", "shop/orders/Shadow.java"] {
+        let ex = repo.extract(rel);
+        assert!(edges(&ex, EdgeKind::Calls).is_empty(), "{rel}: {:?}", ex.edges);
+    }
+}
+
+#[test]
+fn an_enum_constant_s_arguments_and_body_are_left_out() {
+    let repo = Repo::new(&[TARGET, ("shop/orders/E.java", "package shop.orders;\n\nenum E {\n    A(new Target()) { void f() { new Target(); } };\n    E(Object o) {}\n    void f() {}\n}\n")]);
+    let ex = repo.extract("shop/orders/E.java");
+    assert!(edges(&ex, EdgeKind::Calls).is_empty(), "{:?}", ex.edges);
 }
