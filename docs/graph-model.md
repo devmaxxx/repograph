@@ -135,6 +135,8 @@ risk: MEDIUM — 3 direct, 3 total, 3 files
 ```
 
 `--down` walks the other way; `trace <from> <to>` is the shortest chain between two symbols.
+Every `--depth` — `impact`, `trace`, `changes`, and the pool depth of `ask`, `bench` and `dump` —
+refuses 0 the same way, exit 2.
 An identifier handed to a call — `rows.map(feedWire)`, `register(SESSION_COOKIE)` — is a `Calls`
 edge with context `arg`: the caller breaks when it changes, so `impact` counts it as a caller, but
 nothing proves it is called, so `--down` and `explain` print it as `Passes` and `trace` marks the
