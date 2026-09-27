@@ -282,6 +282,9 @@ pub(crate) fn recorded(types: &BTreeSet<String>, supers: &[(String, String)], sh
     }
     out.implicit = shapes.iter().filter(|(_, s)| s.implicit).map(|(p, _)| p.clone()).collect();
     out.classes = shapes.iter().filter_map(|(p, s)| s.superclass.clone().map(|c| (p.clone(), c))).collect();
+    out.enums = shapes.iter().filter(|(_, s)| s.enumerated).map(|(p, _)| p.clone()).collect();
+    out.data = shapes.iter().filter(|(_, s)| s.data).map(|(p, _)| p.clone()).collect();
+    out.components = shapes.iter().filter(|(_, s)| !s.components.is_empty()).map(|(p, s)| (p.clone(), s.components.clone())).collect();
     if !out.written.is_empty() {
         out.singles = scope.singles.clone();
         out.stars = scope.stars.clone();
@@ -308,8 +311,7 @@ pub(crate) struct Shape {
     pub implicit: bool,
     /// An enum, whose implicit superclass `Enum` is a class level for the names it declares.
     pub enumerated: bool,
-    /// A Java record's components, each with an accessor method the file need not write. Nothing
-    /// extends an enum or a record, so only their own file reads these and no header records them.
+    /// A Java record's components, each with an accessor method the file need not write.
     pub components: BTreeSet<String>,
     /// The type's own type parameters, which a same-named repository type must never stand in for.
     pub type_params: BTreeSet<String>,
@@ -534,15 +536,29 @@ impl Own<'_> {
 
     /// Java binds a supertype's method that takes the arguments without varargs before an own
     /// one that takes them only through varargs.
-    fn beaten_by_fixed(&self, id: &str, path: &str, name: &str) -> bool {
+    fn beaten_by_fixed(&self, rel: &str, id: &str, path: &str, name: &str) -> bool {
         self.kind == Kind::Method
             && self.call.is_some()
             && !index::fixed(self.arities_of(id), self.call)
-            && matches!(self.inherited(path, name, &mut BTreeSet::new()), Bound::Found(ids) if ids.iter().any(|i| index::fixed(self.arities_of(i), self.call)))
+            && matches!(self.inherited(rel, path, name), Bound::Found(ids) if ids.iter().any(|i| index::fixed(self.arities_of(i), self.call)))
     }
 
     fn shape(&self, path: &str) -> Shape {
         self.shapes.get(path).cloned().unwrap_or_default()
+    }
+
+    /// The shape of the type at `path` in `rel`, as far as another file's header records it.
+    fn shape_in(&self, rel: &str, path: &str) -> Shape {
+        if rel == self.rel {
+            return self.shape(path);
+        }
+        let Some(s) = self.index.supers(rel) else { return Shape::default() };
+        Shape {
+            enumerated: s.enums.contains(path),
+            data: s.data.contains(path),
+            components: s.components.get(path).cloned().unwrap_or_default(),
+            ..Shape::default()
+        }
     }
 
     /// Whether another file declares `path` as a member of the kind this lookup reads.
@@ -590,17 +606,26 @@ impl Own<'_> {
     /// namesake stand in. Overloads of one arity told apart only by their argument types are the
     /// residual: the first level's is written.
     pub(crate) fn level(&self, path: &str, name: &str) -> Bound {
-        let id = format!("sym:{}::{path}.{name}", self.rel);
-        if self.members.contains(&id) && self.visible(&id, path) {
-            match self.admission(&id, self.inside(path)) {
-                Admission::Yes if self.beaten_by_fixed(&id, path, name) => return Bound::Refused,
+        self.level_in(self.rel, path, name)
+    }
+
+    /// `level` for the type at `path` in `rel`, this file or another. Another file's own
+    /// declaration that does not provably take the arguments refuses, as it does a level of the
+    /// walk: its arities are all the index knows of it.
+    fn level_in(&self, rel: &str, path: &str, name: &str) -> Bound {
+        let id = format!("sym:{rel}::{path}.{name}");
+        let here = rel == self.rel;
+        let own = if here { self.members.contains(&id) && self.visible(&id, path) } else { self.elsewhere(rel, &format!("{path}.{name}")) };
+        if own {
+            match self.admission(&id, here && self.inside(path)) {
+                Admission::Yes if self.beaten_by_fixed(rel, &id, path, name) => return Bound::Refused,
                 Admission::Yes => return Bound::Found(vec![id]),
-                Admission::Unsure => return Bound::Refused,
-                Admission::No => {}
+                Admission::No if here => {}
+                Admission::Unsure | Admission::No => return Bound::Refused,
             }
         }
         let object = self.kind == Kind::Method && OBJECT_MEMBERS.contains(&name);
-        let shape = self.shape(path);
+        let shape = self.shape_in(rel, path);
         let from_enum = shape.enumerated && if self.kind == Kind::All { KOTLIN_ENUM_MEMBERS.contains(&name) } else { JAVA_ENUM_MEMBERS.contains(&name) };
         // A record's accessor, when the file does not write it, is no symbol to bind, and it still
         // beats an interface default of its name.
@@ -608,10 +633,11 @@ impl Own<'_> {
         if IMPLICIT_MEMBERS.contains(&name) || object || from_enum || accessor || (shape.data && generated(name)) {
             return Bound::Refused;
         }
-        self.inherited(path, name, &mut BTreeSet::new())
+        self.inherited(rel, path, name)
     }
 
-    /// `name` on the types `ids`, as an implicit receiver reads it: an unread type refuses.
+    /// `name` on the types `ids`, as a receiver reads it: each type's own members and those its
+    /// supertypes pass down, wherever the type is declared; an unread type refuses.
     pub(crate) fn on_receiver(&self, ids: &[String], name: &str) -> Bound {
         if ids.is_empty() {
             return Bound::Refused;
@@ -619,14 +645,7 @@ impl Own<'_> {
         let mut found = Vec::new();
         for id in ids {
             let Some((rel, path)) = split_id(id) else { return Bound::Refused };
-            let here = if rel == self.rel {
-                self.level(path, name)
-            } else if self.elsewhere(rel, &format!("{path}.{name}")) && self.admission(&format!("{id}.{name}"), false) == Admission::Yes {
-                Bound::Found(vec![format!("{id}.{name}")])
-            } else {
-                Bound::Refused
-            };
-            match here {
+            match self.level_in(rel, path, name) {
                 Bound::Found(ids) => found.extend(ids),
                 Bound::Refused => return Bound::Refused,
                 Bound::Absent => {}
@@ -732,8 +751,10 @@ impl Own<'_> {
         self.index.supers(rel).map_or("", |s| s.package.as_str())
     }
 
-    fn inherited(&self, path: &str, name: &str, seen: &mut BTreeSet<String>) -> Bound {
-        self.above(self.rel, path, name, Some(&self.scope.package), seen).bound()
+    /// `name` among what the supertypes of the type at `path` in `rel` pass down to a caller in
+    /// this file's package.
+    fn inherited(&self, rel: &str, path: &str, name: &str) -> Bound {
+        self.above(rel, path, name, Some(&self.scope.package), &mut BTreeSet::new()).bound()
     }
 
     /// `name` among the supertypes of the type at `path` in `rel`, this file or another whose
@@ -1002,6 +1023,20 @@ mod cross {
         ]);
         let ex = repo.extract("app/Leaf.java");
         assert!(edges(&ex, EdgeKind::Calls).is_empty(), "{:?}", ex.edges);
+    }
+
+    #[test]
+    fn a_kotlin_receiver_typed_by_a_java_subclass_binds_the_java_base_s_method() {
+        let repo = Repo::new(&[
+            ("shop/Base.java", "package shop;\n\npublic class Base {\n    public void run(int x) {}\n    void help() {}\n}\n"),
+            ("shop/Sub.java", "package shop;\n\npublic class Sub extends Base {}\n"),
+            ("app/U.kt", "package app\n\nimport shop.Sub\n\nclass U(private val s: Sub) {\n    fun go() { s.run(1) }\n    fun none() { s.run() }\n    fun help() { s.help() }\n}\n"),
+        ]);
+        let ex = repo.extract("app/U.kt");
+        let calls = edges(&ex, EdgeKind::Calls);
+        assert!(calls.contains(&("sym:app/U.kt::U.go", "sym:shop/Base.java::Base.run", "")), "{:?}", ex.edges);
+        assert!(!calls.iter().any(|(s, _, _)| *s == "sym:app/U.kt::U.none"), "no declaration takes no argument: {:?}", ex.edges);
+        assert!(!calls.iter().any(|(s, _, _)| *s == "sym:app/U.kt::U.help"), "a package-private method stays in its package: {:?}", ex.edges);
     }
 
     /// Pins the contract's empty-scope rule: a file with no package line is indexed by bare name.

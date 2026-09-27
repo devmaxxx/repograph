@@ -1044,3 +1044,107 @@ fn a_member_type_a_subtype_does_not_inherit_hides_its_supertype_s_namesake() {
     let ao = repo.extract("p/AO.java");
     assert_eq!(calls_from(&ao, "sym:p/AO.java::AO.made"), vec!["sym:p/HO.java::HO.T"], "a public T in HO is the one inherited: {:?}", ao.edges);
 }
+
+const RUN_BASE: (&str, &str) = ("p/A.java", "package p;\n\npublic class A {\n    public void run(int x) {}\n    public static void util() {}\n}\n");
+
+#[test]
+fn a_receiver_typed_by_another_file_s_subtype_binds_the_member_its_supertype_declares() {
+    let repo = Repo::new(&[
+        RUN_BASE,
+        ("p/B.java", "package p;\n\npublic class B extends A {}\n"),
+        ("p/C.java", "package p;\n\npublic class C extends B {}\n"),
+        ("p/Sub.java", "package p;\n\npublic class Sub extends Local {}\n"),
+        (
+            "p/U.java",
+            "package p;\n\nclass Local {\n    void ping(int x) {}\n}\n\nclass U {\n    void go(B b) { b.run(1); }\n    void far(C c) { c.run(2); }\n    void stat() { B.util(); }\n    void back(Sub s) { s.ping(3); }\n    void none(B b) { b.run(); }\n}\n",
+        ),
+    ]);
+    let ex = repo.extract("p/U.java");
+    assert_eq!(calls_from(&ex, "sym:p/U.java::U.go"), vec!["sym:p/A.java::A.run"], "{:?}", ex.edges);
+    assert_eq!(calls_from(&ex, "sym:p/U.java::U.far"), vec!["sym:p/A.java::A.run"], "two levels up: {:?}", ex.edges);
+    assert_eq!(calls_from(&ex, "sym:p/U.java::U.stat"), vec!["sym:p/A.java::A.util"], "a class passes its statics down: {:?}", ex.edges);
+    assert_eq!(calls_from(&ex, "sym:p/U.java::U.back"), vec!["sym:p/U.java::Local.ping"], "the walk comes back into this file: {:?}", ex.edges);
+    assert!(calls_from(&ex, "sym:p/U.java::U.none").is_empty(), "no declaration takes no argument: {:?}", ex.edges);
+}
+
+#[test]
+fn a_receiver_typed_by_another_file_s_subtype_refuses_what_a_supertype_walk_refuses() {
+    let repo = Repo::new(&[
+        MAP,
+        ABSTRACT_MAP,
+        ("u/HashMap.java", "package u;\n\npublic class HashMap extends AbstractMap implements Map {}\n"),
+        ("u/Screen.java", "package u;\n\npublic class Screen extends android.app.Activity implements Map {}\n"),
+        ("u/Lost.java", "package u;\n\npublic class Lost extends android.app.Activity {}\n"),
+        ("u/Far.java", "package u;\n\npublic class Far extends Lost implements Map {}\n"),
+        ("u/Pinger.java", "package u;\n\npublic interface Pinger {\n    void ping();\n}\n"),
+        ("u/Other.java", "package u;\n\npublic interface Other {\n    void ping();\n}\n"),
+        ("u/Two.java", "package u;\n\npublic class Two implements Pinger, Other {}\n"),
+        ("u/Priv.java", "package u;\n\npublic class Priv {\n    private void hide(int x) {}\n}\n"),
+        ("u/PSub.java", "package u;\n\npublic class PSub extends Priv {}\n"),
+        ("u/Up.java", "package u;\n\npublic class Up {\n    public void v(String s) {}\n}\n"),
+        ("u/Down.java", "package u;\n\npublic class Down extends Up {\n    public void v(String... xs) {}\n}\n"),
+        (
+            "u/U.java",
+            "package u;\n\nclass U {\n    void cls(HashMap h) { h.isEmpty(); }\n    void def(HashMap h) { h.size(); }\n    void screen(Screen s) { s.isEmpty(); }\n    void far(Far f) { f.isEmpty(); }\n    void two(Two t) { t.ping(); }\n    void hide(PSub p) { p.hide(1); }\n    void fixed(Down d) { d.v(\"x\"); }\n    void object(HashMap h) { h.hashCode(); h.getClass(); }\n}\n",
+        ),
+    ]);
+    let ex = repo.extract("u/U.java");
+    assert_eq!(calls_from(&ex, "sym:u/U.java::U.cls"), vec!["sym:u/AbstractMap.java::AbstractMap.isEmpty"], "the class level drops the interface: {:?}", ex.edges);
+    assert_eq!(calls_from(&ex, "sym:u/U.java::U.def"), vec!["sym:u/AbstractMap.java::AbstractMap.size"], "over the interface's default: {:?}", ex.edges);
+    assert!(calls_from(&ex, "sym:u/U.java::U.screen").is_empty(), "the activity may declare isEmpty: {:?}", ex.edges);
+    assert!(calls_from(&ex, "sym:u/U.java::U.far").is_empty(), "Lost's superclass may declare isEmpty: {:?}", ex.edges);
+    assert!(calls_from(&ex, "sym:u/U.java::U.two").is_empty(), "two interfaces declare ping: {:?}", ex.edges);
+    assert!(calls_from(&ex, "sym:u/U.java::U.hide").is_empty(), "a private method is not inherited: {:?}", ex.edges);
+    assert!(calls_from(&ex, "sym:u/U.java::U.fixed").is_empty(), "phase 1 binds Up.v over the own varargs one: {:?}", ex.edges);
+    assert!(calls_from(&ex, "sym:u/U.java::U.object").is_empty(), "{:?}", ex.edges);
+}
+
+#[test]
+fn a_receiver_typed_by_another_file_s_subtype_passes_down_only_what_the_subtype_inherits() {
+    let repo = Repo::new(&[
+        ("a/Base.java", "package a;\n\npublic class Base {\n    void help() {}\n    public void open() {}\n}\n"),
+        ("a/Mid.java", "package a;\n\npublic class Mid extends Base {}\n"),
+        ("a/I.java", "package a;\n\npublic interface I {\n    static void stat() {}\n    default void dflt() {}\n}\n"),
+        ("a/Impl.java", "package a;\n\npublic class Impl implements I {}\n"),
+        ("a/Near.java", "package a;\n\nclass Near {\n    void go(Mid m) { m.help(); }\n    void stat(Impl i) { i.stat(); }\n    void own() { I.stat(); }\n    void dflt(Impl i) { i.dflt(); }\n}\n"),
+        ("b/Sub.java", "package b;\n\npublic class Sub extends a.Base {}\n"),
+        ("b/Far.java", "package b;\n\nclass Far {\n    void go(Sub s) { s.help(); }\n    void mid(a.Mid m) { m.help(); }\n    void open(Sub s) { s.open(); }\n}\n"),
+    ]);
+    let near = repo.extract("a/Near.java");
+    assert_eq!(calls_from(&near, "sym:a/Near.java::Near.go"), vec!["sym:a/Base.java::Base.help"], "one package: {:?}", near.edges);
+    assert!(calls_from(&near, "sym:a/Near.java::Near.stat").is_empty(), "an interface's static is not inherited: {:?}", near.edges);
+    assert_eq!(calls_from(&near, "sym:a/Near.java::Near.own"), vec!["sym:a/I.java::I.stat"], "{:?}", near.edges);
+    assert_eq!(calls_from(&near, "sym:a/Near.java::Near.dflt"), vec!["sym:a/I.java::I.dflt"], "{:?}", near.edges);
+    let far = repo.extract("b/Far.java");
+    assert!(calls_from(&far, "sym:b/Far.java::Far.go").is_empty(), "Sub is outside Base's package: {:?}", far.edges);
+    assert!(calls_from(&far, "sym:b/Far.java::Far.mid").is_empty(), "the caller is outside Base's package: {:?}", far.edges);
+    assert_eq!(calls_from(&far, "sym:b/Far.java::Far.open"), vec!["sym:a/Base.java::Base.open"], "{:?}", far.edges);
+}
+
+#[test]
+fn a_receiver_typed_by_another_file_s_enum_or_record_reads_what_they_never_write() {
+    let repo = Repo::new(&[
+        ("a/Desc.java", "package a;\n\npublic interface Desc {\n    default int ordinal() { return -1; }\n    default int rank() { return 1; }\n    default int x() { return -1; }\n}\n"),
+        ("a/E.java", "package a;\n\npublic enum E implements Desc {\n    X\n}\n"),
+        ("a/R.java", "package a;\n\npublic record R(int x) implements Desc {}\n"),
+        ("a/S.java", "package a;\n\npublic record S(int y) implements Desc {}\n"),
+        ("a/U.java", "package a;\n\nclass U {\n    void ord(E e) { e.ordinal(); }\n    void rank(E e) { e.rank(); }\n    void acc(R r) { r.x(); }\n    void dflt(S s) { s.x(); }\n}\n"),
+    ]);
+    let ex = repo.extract("a/U.java");
+    assert!(calls_from(&ex, "sym:a/U.java::U.ord").is_empty(), "Enum.ordinal wins: {:?}", ex.edges);
+    assert_eq!(calls_from(&ex, "sym:a/U.java::U.rank"), vec!["sym:a/Desc.java::Desc.rank"], "Enum declares no rank: {:?}", ex.edges);
+    assert!(calls_from(&ex, "sym:a/U.java::U.acc").is_empty(), "R's accessor wins: {:?}", ex.edges);
+    assert_eq!(calls_from(&ex, "sym:a/U.java::U.dflt"), vec!["sym:a/Desc.java::Desc.x"], "S has no component x: {:?}", ex.edges);
+}
+
+#[test]
+fn a_receiver_whose_supertype_is_a_refused_candidate_beside_a_declaring_one_is_no_edge() {
+    let repo = Repo::new(&[
+        ("shared/Base1.java", "package shared;\n\npublic class Base {\n    public void run(int a) {}\n    void run(String s) {}\n}\n"),
+        ("shared/Base2.java", "package shared;\n\npublic class Base {\n    public void run(int n) {}\n}\n"),
+        ("app/Leaf.java", "package app;\n\nimport shared.Base;\n\npublic class Leaf extends Base {}\n"),
+        ("app/U.java", "package app;\n\nclass U {\n    void go(Leaf l) { l.run(5); }\n}\n"),
+    ]);
+    let ex = repo.extract("app/U.java");
+    assert!(calls_from(&ex, "sym:app/U.java::U.go").is_empty(), "{:?}", ex.edges);
+}

@@ -14,7 +14,9 @@
 //!   stop it. An interface's `static` method, and outside its package a package-private one, is
 //!   not inherited, so the lookup reads past it; one overloaded with an inherited declaration
 //!   refuses. A static nested type reaches outer static methods, never an instance one, so an
-//!   instance namesake refuses rather than falls through to an import.
+//!   instance namesake refuses rather than falls through to an import. A receiver typed in another
+//!   file is read the same way from its header, its own declaration then its supertypes; an own
+//!   declaration there that does not take the arguments refuses, as that level of a walk does.
 //! - The residual: overloads of one arity told apart only by their argument types bind the first
 //!   level's declaration, as an unread supertype's same-arity overload is not seen.
 //! - A written type name binds a member type first: at each enclosing type, from the innermost, its

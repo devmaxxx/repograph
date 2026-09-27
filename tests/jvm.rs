@@ -410,3 +410,27 @@ fn a_member_type_a_superclass_gains_loses_or_hides_is_followed_to_the_unchanged_
     assert!(created(&built, "sym:p/T.java::T") && !created(&built, "sym:p/B.java::B.T"), "{built:?}");
     assert_eq!(updated, built);
 }
+
+#[test]
+fn a_member_added_to_or_removed_from_a_receiver_s_supertype_in_another_file_is_followed_by_update() {
+    let b = ("p/B.java", "package p;\n\npublic class B extends A {}\n");
+    let u = ("p/U.java", "package p;\n\nclass U {\n    void go(B b) { b.run(1); }\n}\n");
+    let plain = "package p;\n\npublic class A {}\n";
+    let declaring = "package p;\n\npublic class A {\n    public void run(int x) {}\n}\n";
+    flipped(("p/A.java", plain), ("p/A.java", declaring), &[b, u], &call("sym:p/U.java::U.go", "sym:p/A.java::A.run"));
+    let b = ("app/B.kt", "package app\n\nopen class B : A()\n");
+    let u = ("app/U.kt", "package app\n\nclass U {\n    fun go(b: B) { b.run(1) }\n}\n");
+    let plain = "package app\n\nopen class A\n";
+    let declaring = "package app\n\nopen class A {\n    fun run(x: Int) {}\n}\n";
+    flipped(("app/A.kt", plain), ("app/A.kt", declaring), &[b, u], &call("sym:app/U.kt::U.go", "sym:app/A.kt::A.run"));
+}
+
+#[test]
+fn a_receiver_type_made_a_data_class_or_given_another_record_component_is_followed_by_update() {
+    let desc = ("app/Desc.kt", "package app\n\ninterface Desc {\n    fun copy(): Any = this\n}\n");
+    let u = ("app/U.kt", "package app\n\nclass U {\n    fun go(d: D) { d.copy() }\n}\n");
+    flipped(("app/D.kt", "package app\n\ndata class D(val a: Int) : Desc\n"), ("app/D.kt", "package app\n\nclass D(val a: Int) : Desc\n"), &[desc, u], &call("sym:app/U.kt::U.go", "sym:app/Desc.kt::Desc.copy"));
+    let h = ("r/H.java", "package r;\n\npublic interface H {\n    default int x() { return -1; }\n}\n");
+    let u = ("r/U.java", "package r;\n\nclass U {\n    int go(R r) { return r.x(); }\n}\n");
+    flipped(("r/R.java", "package r;\n\npublic record R(int x) implements H {}\n"), ("r/R.java", "package r;\n\npublic record R(int y) implements H {}\n"), &[h, u], &call("sym:r/U.java::U.go", "sym:r/H.java::H.x"));
+}

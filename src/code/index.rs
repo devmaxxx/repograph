@@ -78,6 +78,15 @@ pub struct Supers {
     /// Per type path, the supertype it extends as a class, when the file writes which one that is.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub classes: BTreeMap<String, String>,
+    /// Enums, whose implicit `Enum` superclass declares names an interface's never beat.
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub enums: BTreeSet<String>,
+    /// Kotlin data classes, whose `copy` and `componentN` the file never writes.
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub data: BTreeSet<String>,
+    /// Per Java record path, its components, each with an accessor the file need not write.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub components: BTreeMap<String, BTreeSet<String>>,
     /// The file's explicit imports, local name to every qualified name bound to it. Recorded only
     /// when some type writes a supertype, since only resolving one reads them.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]

@@ -1101,3 +1101,84 @@ fn an_enum_class_s_implicit_superclass_beats_an_interface_for_the_names_enum_dec
     assert!(calls_from(&ex, "sym:app/E.kt::E.v").is_empty(), "the implicit values() wins: {:?}", ex.edges);
     assert_eq!(calls_from(&ex, "sym:app/E.kt::E.r"), vec!["sym:app/Desc.kt::Desc.rank"], "Enum declares no rank: {:?}", ex.edges);
 }
+
+#[test]
+fn a_receiver_typed_by_another_file_s_subtype_binds_the_member_its_supertype_declares() {
+    let repo = Repo::new(&[
+        ("app/A.kt", "package app\n\nopen class A {\n    fun run(x: Int) {}\n}\n"),
+        ("app/B.kt", "package app\n\nopen class B : A()\n"),
+        ("app/C.kt", "package app\n\nclass C : B()\n"),
+        ("app/Sub.kt", "package app\n\nclass Sub : Local()\n"),
+        (
+            "app/U.kt",
+            "package app\n\nopen class Local {\n    fun ping(x: Int) {}\n}\n\nclass U(private val kept: B) {\n    fun go(b: B) { b.run(1) }\n    fun far(c: C) { c.run(2) }\n    fun prop() { kept.run(3) }\n    fun back(s: Sub) { s.ping(4) }\n    fun none(b: B) { b.run() }\n}\n\nfun B.ext() { run(5) }\n",
+        ),
+    ]);
+    let ex = repo.extract("app/U.kt");
+    assert_eq!(calls_from(&ex, "sym:app/U.kt::U.go"), vec!["sym:app/A.kt::A.run"], "{:?}", ex.edges);
+    assert_eq!(calls_from(&ex, "sym:app/U.kt::U.far"), vec!["sym:app/A.kt::A.run"], "two levels up: {:?}", ex.edges);
+    assert_eq!(calls_from(&ex, "sym:app/U.kt::U.prop"), vec!["sym:app/A.kt::A.run"], "{:?}", ex.edges);
+    assert_eq!(calls_from(&ex, "sym:app/U.kt::U.back"), vec!["sym:app/U.kt::Local.ping"], "the walk comes back into this file: {:?}", ex.edges);
+    assert_eq!(calls_from(&ex, "sym:app/U.kt::ext"), vec!["sym:app/A.kt::A.run"], "an extension's receiver: {:?}", ex.edges);
+    assert!(calls_from(&ex, "sym:app/U.kt::U.none").is_empty(), "no declaration takes no argument: {:?}", ex.edges);
+}
+
+#[test]
+fn a_receiver_typed_by_another_file_s_subtype_refuses_what_a_supertype_walk_refuses() {
+    let repo = Repo::new(&[
+        SIZED,
+        ("app/AbstractSized.kt", "package app\n\nabstract class AbstractSized : Sized {\n    override fun isEmpty() = true\n}\n"),
+        ("app/Bag.kt", "package app\n\nclass Bag : AbstractSized(), Sized\n"),
+        ("app/Screen.kt", "package app\n\nabstract class Screen : android.app.Activity(), Sized\n"),
+        ("app/Lost.kt", "package app\n\nopen class Lost : Exception()\n"),
+        ("app/Far.kt", "package app\n\nabstract class Far : Lost(), Sized\n"),
+        ("app/Two.kt", "package app\n\ninterface P {\n    fun ping()\n}\n\ninterface Q {\n    fun ping()\n}\n\nabstract class Two : P, Q\n"),
+        ("app/Priv.kt", "package app\n\nopen class Priv {\n    private fun hide(x: Int) {}\n}\n\nclass PSub : Priv()\n"),
+        (
+            "app/U.kt",
+            "package app\n\nclass U {\n    fun cls(b: Bag) { b.isEmpty() }\n    fun dflt(b: Bag) { b.size() }\n    fun screen(s: Screen) { s.isEmpty() }\n    fun far(f: Far) { f.isEmpty() }\n    fun two(t: Two) { t.ping() }\n    fun hide(p: PSub) { p.hide(1) }\n    fun any(b: Bag) { b.hashCode() }\n}\n",
+        ),
+    ]);
+    let ex = repo.extract("app/U.kt");
+    assert_eq!(calls_from(&ex, "sym:app/U.kt::U.cls"), vec!["sym:app/AbstractSized.kt::AbstractSized.isEmpty"], "the class level drops the interface: {:?}", ex.edges);
+    assert_eq!(calls_from(&ex, "sym:app/U.kt::U.dflt"), vec!["sym:app/Sized.kt::Sized.size"], "no class level declares size: {:?}", ex.edges);
+    assert!(calls_from(&ex, "sym:app/U.kt::U.screen").is_empty(), "the activity may declare isEmpty: {:?}", ex.edges);
+    assert!(calls_from(&ex, "sym:app/U.kt::U.far").is_empty(), "Lost's superclass may declare isEmpty: {:?}", ex.edges);
+    assert!(calls_from(&ex, "sym:app/U.kt::U.two").is_empty(), "two interfaces declare ping: {:?}", ex.edges);
+    assert!(calls_from(&ex, "sym:app/U.kt::U.hide").is_empty(), "a private member is not inherited: {:?}", ex.edges);
+    assert!(calls_from(&ex, "sym:app/U.kt::U.any").is_empty(), "{:?}", ex.edges);
+}
+
+#[test]
+fn a_receiver_typed_by_another_file_s_enum_or_data_class_reads_what_they_never_write() {
+    let repo = Repo::new(&[
+        ("app/Desc.kt", "package app\n\ninterface Desc {\n    fun rank(): Int = 1\n    fun values(): List<Int> = listOf()\n    fun copy(): Any = this\n    fun component1(): Int = 0\n}\n"),
+        ("app/E.kt", "package app\n\nenum class E : Desc {\n    X\n}\n"),
+        ("app/D.kt", "package app\n\ndata class D(val a: Int) : Desc\n\nclass N : Desc\n"),
+        ("app/U.kt", "package app\n\nclass U {\n    fun values() { E.values() }\n    fun rank(e: E) { e.rank() }\n    fun copy(d: D) { d.copy() }\n    fun first(d: D) { d.component1() }\n    fun plain(n: N) { n.copy() }\n}\n"),
+    ]);
+    let ex = repo.extract("app/U.kt");
+    assert!(calls_from(&ex, "sym:app/U.kt::U.values").is_empty(), "the implicit values() wins: {:?}", ex.edges);
+    assert_eq!(calls_from(&ex, "sym:app/U.kt::U.rank"), vec!["sym:app/Desc.kt::Desc.rank"], "Enum declares no rank: {:?}", ex.edges);
+    assert!(calls_from(&ex, "sym:app/U.kt::U.copy").is_empty(), "a data class's copy is generated: {:?}", ex.edges);
+    assert!(calls_from(&ex, "sym:app/U.kt::U.first").is_empty(), "{:?}", ex.edges);
+    assert_eq!(calls_from(&ex, "sym:app/U.kt::U.plain"), vec!["sym:app/Desc.kt::Desc.copy"], "N is no data class: {:?}", ex.edges);
+}
+
+#[test]
+fn a_receiver_typed_by_a_subtype_of_an_expect_class_binds_the_expect_and_the_caller_s_platform_actual() {
+    let repo = Repo::new(&[
+        ("shared/src/commonMain/kotlin/p/A.kt", "package p\n\nexpect open class A() {\n    fun run(x: Int)\n}\n"),
+        ("shared/src/androidMain/kotlin/p/A.android.kt", "package p\n\nactual open class A actual constructor() {\n    actual fun run(x: Int) {}\n}\n"),
+        ("shared/src/iosMain/kotlin/p/A.ios.kt", "package p\n\nactual open class A actual constructor() {\n    actual fun run(x: Int) {}\n}\n"),
+        ("shared/src/commonMain/kotlin/p/B.kt", "package p\n\nopen class B : A()\n"),
+        ("shared/src/androidMain/kotlin/p/U.kt", "package p\n\nclass U {\n    fun go(b: B) { b.run(1) }\n}\n"),
+        ("shared/src/commonMain/kotlin/p/V.kt", "package p\n\nclass V {\n    fun go(b: B) { b.run(1) }\n}\n"),
+    ]);
+    let u = repo.extract("shared/src/androidMain/kotlin/p/U.kt");
+    let mut got = calls_from(&u, "sym:shared/src/androidMain/kotlin/p/U.kt::U.go");
+    got.sort();
+    assert_eq!(got, vec!["sym:shared/src/androidMain/kotlin/p/A.android.kt::A.run", "sym:shared/src/commonMain/kotlin/p/A.kt::A.run"], "{:?}", u.edges);
+    let v = repo.extract("shared/src/commonMain/kotlin/p/V.kt");
+    assert_eq!(calls_from(&v, "sym:shared/src/commonMain/kotlin/p/V.kt::V.go").len(), 3, "{:?}", v.edges);
+}

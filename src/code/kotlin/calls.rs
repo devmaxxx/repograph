@@ -11,7 +11,8 @@
 //!   defaults and `vararg`, admits the call's arguments, the type's own before a supertype's. A name two
 //!   levels bind is no edge, and so is one a level where no function takes the arguments may bind
 //!   through a supertype or a receiver the file cannot read. A superclass's member beats an
-//!   interface's, so the class chain is walked first. The residual: overloads of one arity
+//!   interface's, so the class chain is walked first. A receiver, written or implicit, typed in
+//!   another file is walked the same way from its header. The residual: overloads of one arity
 //!   told apart only by their argument types bind the first level's function.
 //! - A lambda passed to anything but a closed list of stdlib functions whose lambda has no
 //!   receiver may run with a receiver this file never sees, so it refuses lowercase bare names and
