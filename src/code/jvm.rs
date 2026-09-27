@@ -273,6 +273,39 @@ pub(crate) enum Bound {
 
 /// Every class inherits these from `Any` / `Object`, which the graph never declares.
 const IMPLICIT_MEMBERS: [&str; 3] = ["toString", "equals", "hashCode"];
+/// And a Java class these from `Object` as well.
+const OBJECT_MEMBERS: [&str; 6] = ["getClass", "clone", "finalize", "notify", "notifyAll", "wait"];
+
+/// Whether every Java class holds a method of this name without declaring it.
+pub(crate) fn from_object(name: &str) -> bool {
+    IMPLICIT_MEMBERS.contains(&name) || OBJECT_MEMBERS.contains(&name)
+}
+
+/// Which of a type's members a lookup reads. Kotlin reads them as one namespace, since a call may
+/// go through a property of function type; Java keeps methods and fields apart, so a field never
+/// stands in for the method of its name.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Kind {
+    All,
+    /// Java methods: a name a type and its supertype both declare is an overload or an override,
+    /// which only the arguments' types could tell apart.
+    Method,
+    /// Java fields. Another file's member of the name counts though it may be a method: a lookup
+    /// that meets one reads no type for it and so claims nothing.
+    Field,
+}
+
+/// Type parameters in scope at the type `path`: its own and every enclosing type's. An outer one
+/// reaches only an inner type, but masking more only costs an edge.
+pub(crate) fn masked(shapes: &BTreeMap<String, Shape>, path: &str) -> BTreeSet<String> {
+    let mut out = BTreeSet::new();
+    let mut p = path;
+    while !p.is_empty() {
+        out.extend(shapes.get(p).map(|s| s.type_params.iter().cloned()).into_iter().flatten());
+        p = outer(p);
+    }
+    out
+}
 
 /// A data class's generated members: `copy` and `component1`, `component2`, ….
 fn generated(name: &str) -> bool {
@@ -288,11 +321,21 @@ pub(crate) struct Own<'a> {
     pub shapes: &'a BTreeMap<String, Shape>,
     pub index: &'a QualifiedIndex,
     pub scope: &'a Scope,
+    pub kind: Kind,
 }
 
 impl Own<'_> {
     fn shape(&self, path: &str) -> Shape {
         self.shapes.get(path).cloned().unwrap_or_default()
+    }
+
+    /// Whether another file declares `path` as a member of the kind this lookup reads.
+    fn elsewhere(&self, rel: &str, path: &str) -> bool {
+        match self.kind {
+            Kind::All => self.index.declares(rel, path),
+            Kind::Method => self.index.declares_method(rel, path),
+            Kind::Field => self.index.declares_member(rel, path),
+        }
     }
 
     /// An unqualified `name` inside the type at `at`, walked outward as the compilers walk it: a
@@ -329,9 +372,13 @@ impl Own<'_> {
     pub(crate) fn level(&self, path: &str, name: &str) -> Bound {
         let id = format!("sym:{}::{path}.{name}", self.rel);
         if self.members.contains(&id) {
+            if self.kind == Kind::Method && matches!(self.inherited(path, name, &mut BTreeSet::new()), Bound::Found(_)) {
+                return Bound::Refused;
+            }
             return Bound::Found(vec![id]);
         }
-        if IMPLICIT_MEMBERS.contains(&name) || (self.shape(path).data && generated(name)) {
+        let object = self.kind == Kind::Method && OBJECT_MEMBERS.contains(&name);
+        if IMPLICIT_MEMBERS.contains(&name) || object || (self.shape(path).data && generated(name)) {
             return Bound::Refused;
         }
         self.inherited(path, name, &mut BTreeSet::new())
@@ -347,7 +394,7 @@ impl Own<'_> {
             let Some((rel, path)) = split_id(id) else { return Bound::Refused };
             let here = if rel == self.rel {
                 self.level(path, name)
-            } else if self.index.declares(rel, &format!("{path}.{name}")) {
+            } else if self.elsewhere(rel, &format!("{path}.{name}")) {
                 Bound::Found(vec![format!("{id}.{name}")])
             } else {
                 Bound::Refused
@@ -386,7 +433,7 @@ impl Own<'_> {
                 let Some((rel, tpath)) = split_id(&t) else { continue };
                 let member = format!("{t}.{name}");
                 if rel != self.rel {
-                    if self.index.declares(rel, &format!("{tpath}.{name}")) {
+                    if self.elsewhere(rel, &format!("{tpath}.{name}")) {
                         found.push(member);
                     } else {
                         unread = true;
@@ -541,6 +588,16 @@ mod cross {
         ]);
         let ex = repo.extract("app/Checkout.kt");
         assert!(edges(&ex, EdgeKind::Calls).contains(&("sym:app/Checkout.kt::Checkout.pay", "sym:shop/orders/OrderService.java::OrderService.place", "")), "{:?}", ex.edges);
+    }
+
+    #[test]
+    fn a_java_call_reaches_a_kotlin_method_through_a_typed_field() {
+        let repo = Repo::new(&[
+            ("app/network/Tokens.kt", "package app.network\n\nclass SessionTokens {\n    fun read(): String = \"\"\n}\n"),
+            ("shop/Login.java", "package shop;\n\nimport app.network.SessionTokens;\n\npublic class Login {\n    private final SessionTokens tokens = null;\n    public void go() { tokens.read(); }\n}\n"),
+        ]);
+        let ex = repo.extract("shop/Login.java");
+        assert!(edges(&ex, EdgeKind::Calls).contains(&("sym:shop/Login.java::Login.go", "sym:app/network/Tokens.kt::SessionTokens.read", "")), "{:?}", ex.edges);
     }
 
     /// Pins the contract's empty-scope rule: a file with no package line is indexed by bare name.

@@ -255,3 +255,300 @@ fn two_static_imports_of_one_name_each_name_their_file() {
     let imports = edges(&repo.extract("c/Use.java"), EdgeKind::Imports).into_iter().map(|(_, to, _)| to.to_string()).collect::<Vec<_>>();
     assert_eq!(imports, ["file:a/A.java", "file:b/B.java"]);
 }
+
+const CHECKOUT: &str = "package shop.orders;
+
+import shop.billing.Invoice;
+import shop.util.Money;
+import static shop.util.Money.round;
+
+public class Checkout {
+    private final Invoice invoice;
+
+    public Checkout(Invoice invoice) {
+        this.invoice = invoice;
+    }
+
+    public void pay(Invoice given, int n) {
+        Invoice local = given;
+        var built = new Invoice();
+        invoice.send();
+        this.invoice.send();
+        given.send();
+        local.send();
+        built.send();
+        Money.round(n);
+        round(n);
+        total();
+        Checkout.Lines.count();
+        new Task() { public void run() { fromAnonymous(); } };
+        pay(given, n);
+    }
+
+    int total() { return 0; }
+
+    void fromAnonymous() {}
+
+    static class Lines {
+        static int count() { return 0; }
+    }
+}
+
+interface Task {
+    void run();
+}
+";
+
+fn calls_from<'a>(ex: &'a crate::model::Extraction, from: &str) -> Vec<&'a str> {
+    let mut to: Vec<&str> = edges(ex, EdgeKind::Calls).into_iter().filter(|(s, _, _)| *s == from).map(|(_, t, _)| t).collect();
+    to.sort();
+    to.dedup();
+    to
+}
+
+#[test]
+fn calls_through_fields_this_parameters_locals_statics_and_nested_types_are_edges() {
+    let repo = Repo::new(&[
+        ("shop/billing/Invoice.java", INVOICE),
+        ("shop/util/Money.java", MONEY),
+        ("shop/orders/Checkout.java", CHECKOUT),
+    ]);
+    let ex = repo.extract("shop/orders/Checkout.java");
+    let from = "sym:shop/orders/Checkout.java::Checkout.pay";
+    let got = calls_from(&ex, from);
+    for to in [
+        "sym:shop/billing/Invoice.java::Invoice.send",
+        "sym:shop/util/Money.java::Money.round",
+        "sym:shop/orders/Checkout.java::Checkout.total",
+        "sym:shop/orders/Checkout.java::Checkout.Lines.count",
+        // An anonymous class's method is not a symbol, so its call belongs to the method around it.
+        "sym:shop/orders/Checkout.java::Checkout.fromAnonymous",
+    ] {
+        assert!(got.contains(&to), "{to} missing from {got:?}");
+    }
+    assert!(!got.contains(&from), "a recursive call is dropped: {got:?}");
+    assert!(!edges(&ex, EdgeKind::Calls).iter().any(|(s, _, _)| s.ends_with(".run")), "{:?}", ex.edges);
+}
+
+#[test]
+fn an_on_demand_static_import_resolves_only_when_it_is_the_only_one() {
+    let repo = Repo::new(&[
+        ("shop/util/Money.java", MONEY),
+        ("shop/util/Tax.java", "package shop.util;\n\npublic final class Tax {\n    public static int round(int n) { return n; }\n}\n"),
+        ("shop/One.java", "package shop;\n\nimport static shop.util.Money.*;\n\nclass One {\n    int go() { return round(1); }\n}\n"),
+        ("shop/Two.java", "package shop;\n\nimport static shop.util.Money.*;\nimport static shop.util.Tax.*;\n\nclass Two {\n    int go() { return round(1); }\n}\n"),
+    ]);
+    let one = repo.extract("shop/One.java");
+    assert!(calls_from(&one, "sym:shop/One.java::One.go").contains(&"sym:shop/util/Money.java::Money.round"), "{:?}", one.edges);
+    let two = repo.extract("shop/Two.java");
+    assert!(calls_from(&two, "sym:shop/Two.java::Two.go").is_empty(), "{:?}", two.edges);
+}
+
+#[test]
+fn a_requirement_cited_in_a_java_comment_or_string_is_a_reference_from_its_declaration() {
+    let src = "/* ADR-001 governs this file */\npackage shop;\n\npublic class Cart {\n    // FR-PAY-22: totals are rounded once\n    int total() {\n        String note = \"ADR-022\";\n        return 0;\n    }\n}\n";
+    let ex = one("shop/Cart.java", src);
+    let refs = edges(&ex, EdgeKind::References);
+    assert!(refs.iter().any(|(s, t, c)| *s == "file:shop/Cart.java" && t.contains("ADR-001") && *c == "comment"), "{refs:?}");
+    assert!(refs.iter().any(|(s, t, c)| *s == "sym:shop/Cart.java::Cart" && t.contains("FR-PAY-22") && *c == "comment"), "{refs:?}");
+    assert!(refs.iter().any(|(s, t, c)| *s == "sym:shop/Cart.java::Cart.total" && t.contains("ADR-022") && *c == "string"), "{refs:?}");
+}
+
+const NAV: (&str, &str) = (
+    "shop/util/Nav.java",
+    "package shop.util;\n\npublic final class Nav {\n    public static void finish() {}\n    public static void helper() {}\n    public static void send() {}\n    public static void values() {}\n    public static void x() {}\n}\n",
+);
+
+#[test]
+fn a_bare_call_from_a_type_whose_supertype_is_unread_is_no_edge() {
+    let repo = Repo::new(&[
+        NAV,
+        ("shop/Base.java", "package shop;\n\npublic class Base {\n    public void helper() {}\n}\n"),
+        ("shop/Mid.java", "package shop;\n\npublic class Mid extends Base {}\n"),
+        ("shop/Screen.java", "package shop;\n\nimport static shop.util.Nav.finish;\n\npublic class Screen extends android.app.Activity {\n    void go() { finish(); }\n}\n"),
+        ("shop/Sub.java", "package shop;\n\nimport static shop.util.Nav.helper;\n\nclass Sub extends Mid {\n    void go() { helper(); }\n}\n"),
+        ("shop/Direct.java", "package shop;\n\nimport static shop.util.Nav.helper;\n\nclass Direct extends Base {\n    void go() { helper(); }\n}\n"),
+    ]);
+    let screen = repo.extract("shop/Screen.java");
+    assert!(calls_from(&screen, "sym:shop/Screen.java::Screen.go").is_empty(), "the activity may declare finish: {:?}", screen.edges);
+    let sub = repo.extract("shop/Sub.java");
+    assert!(calls_from(&sub, "sym:shop/Sub.java::Sub.go").is_empty(), "Mid's own supertypes are unread here: {:?}", sub.edges);
+    let direct = repo.extract("shop/Direct.java");
+    assert_eq!(calls_from(&direct, "sym:shop/Direct.java::Direct.go"), vec!["sym:shop/Base.java::Base.helper"]);
+}
+
+#[test]
+fn a_name_a_type_and_its_supertype_both_declare_is_no_edge() {
+    let repo = Repo::new(&[
+        ("shop/Base.java", "package shop;\n\npublic class Base {\n    public void m(String s) {}\n}\n"),
+        ("shop/Split.java", "package shop;\n\nclass Split extends Base {\n    void m(int n) {}\n    void go() { m(\"x\"); }\n}\n"),
+        ("shop/Two.java", "package shop;\n\nclass Up {\n    void m(String s) {}\n}\n\nclass Down extends Up {\n    void m(int n) {}\n    void go() { m(\"x\"); }\n    void on(Down d) { d.m(\"x\"); }\n}\n"),
+    ]);
+    let split = repo.extract("shop/Split.java");
+    assert!(calls_from(&split, "sym:shop/Split.java::Split.go").is_empty(), "{:?}", split.edges);
+    let two = repo.extract("shop/Two.java");
+    assert!(calls_from(&two, "sym:shop/Two.java::Down.go").is_empty(), "{:?}", two.edges);
+    assert!(calls_from(&two, "sym:shop/Two.java::Down.on").is_empty(), "{:?}", two.edges);
+}
+
+#[test]
+fn a_local_parameter_lambda_catch_for_resource_or_pattern_variable_hides_the_field_it_shadows() {
+    let src = "package shop;
+
+import java.util.List;
+
+class Mail {
+    void send() {}
+    static void round() {}
+}
+
+class Other {
+    void send() {}
+    static void round() {}
+}
+
+class Post {
+    Mail mail;
+    List<Other> others;
+
+    void param(Other mail) { mail.send(); }
+    void lambda() { others.forEach(mail -> mail.send()); }
+    void caught() { try { } catch (RuntimeException mail) { mail.send(); } }
+    void loop() { for (Other mail = null; ; ) { mail.send(); } }
+    void each() { for (var mail : others) { mail.send(); } }
+    void pattern(Object o) { if (o instanceof Other mail) { mail.send(); } }
+    void resource() throws Exception { try (AutoCloseable mail = null) { mail.send(); } }
+    void local() { Other mail = null; mail.send(); }
+    void cases(int k) { switch (k) { case 1: Other mail; break; default: mail = new Other(); mail.send(); } }
+    void typeNamed() { Other Mail = null; Mail.round(); }
+    void field() { mail.send(); }
+}
+";
+    let ex = one("shop/Post.java", src);
+    let wrong: Vec<_> = edges(&ex, EdgeKind::Calls).into_iter().filter(|(s, t, _)| t.ends_with("::Mail.send") && !s.ends_with(".field")).collect();
+    assert!(wrong.is_empty(), "{wrong:?}");
+    for m in ["param", "loop", "local", "cases"] {
+        assert_eq!(calls_from(&ex, &format!("sym:shop/Post.java::Post.{m}")), vec!["sym:shop/Post.java::Other.send"], "{m}");
+    }
+    assert_eq!(calls_from(&ex, "sym:shop/Post.java::Post.typeNamed"), vec!["sym:shop/Post.java::Other.round"]);
+    assert_eq!(calls_from(&ex, "sym:shop/Post.java::Post.field"), vec!["sym:shop/Post.java::Mail.send"]);
+}
+
+#[test]
+fn an_anonymous_or_local_class_hides_what_it_or_its_unread_supertype_may_declare() {
+    let src = "package shop;
+
+class Mail {
+    void send() {}
+}
+
+interface Task {
+    void run();
+}
+
+class Job {
+    void helper() {}
+    void unread() { new Runnable() { public void run() { helper(); } }; }
+    void own() { new Task() { public void run() { helper(); } void helper() {} }; }
+    void local() {
+        class Step { void helper() {} void run() { helper(); } }
+        new Step().run();
+    }
+    void named() {
+        class Mail { void other() {} }
+        Mail m = new Mail();
+        m.send();
+    }
+}
+";
+    let ex = one("shop/Job.java", src);
+    for m in ["unread", "own", "local", "named"] {
+        assert!(calls_from(&ex, &format!("sym:shop/Job.java::Job.{m}")).is_empty(), "{m}: {:?}", ex.edges);
+    }
+}
+
+#[test]
+fn a_type_s_static_member_is_called_only_when_no_value_or_static_import_may_hold_the_name() {
+    let repo = Repo::new(&[
+        ("shop/util/Money.java", MONEY),
+        ("shop/Plain.java", "package shop;\n\nimport shop.util.Money;\n\nclass Plain {\n    void go() { Money.round(1); }\n}\n"),
+        ("shop/Field.java", "package shop;\n\nimport shop.util.Money;\n\nclass Field {\n    java.util.logging.Logger Money;\n    void go() { Money.round(1); }\n}\n"),
+        ("shop/Star.java", "package shop;\n\nimport shop.util.Money;\nimport static org.junit.Assert.*;\n\nclass Star {\n    void go() { Money.round(1); }\n}\n"),
+        ("shop/Thrown.java", "package shop;\n\nimport shop.util.Money;\n\nclass Thrown extends Exception {\n    void go() { Money.round(1); }\n}\n"),
+    ]);
+    let plain = repo.extract("shop/Plain.java");
+    assert_eq!(calls_from(&plain, "sym:shop/Plain.java::Plain.go"), vec!["sym:shop/util/Money.java::Money.round"]);
+    for (rel, from) in [("shop/Field.java", "Field.go"), ("shop/Star.java", "Star.go"), ("shop/Thrown.java", "Thrown.go")] {
+        let ex = repo.extract(rel);
+        assert!(calls_from(&ex, &format!("sym:{rel}::{from}")).is_empty(), "{rel}: {:?}", ex.edges);
+    }
+}
+
+#[test]
+fn two_static_imports_of_one_name_bind_no_call() {
+    let repo = Repo::new(&[
+        ("a/A.java", "package a;\n\npublic class A { public static int of(int n) { return n; } }\n"),
+        ("b/B.java", "package b;\n\npublic class B { public static int of(int n) { return n; } }\n"),
+        ("c/Use.java", "package c;\n\nimport static a.A.of;\nimport static b.B.of;\n\nclass Use {\n    int go() { return of(1); }\n}\n"),
+    ]);
+    let ex = repo.extract("c/Use.java");
+    assert!(calls_from(&ex, "sym:c/Use.java::Use.go").is_empty(), "{:?}", ex.edges);
+}
+
+#[test]
+fn a_static_nested_class_reaches_no_outer_instance_method_and_an_inner_one_does() {
+    let repo = Repo::new(&[
+        NAV,
+        ("shop/Outer.java", "package shop;\n\nimport static shop.util.Nav.helper;\n\nclass Outer {\n    void helper() {}\n    static class Nested {\n        void g() { helper(); }\n    }\n    class Inner {\n        void h() { helper(); }\n    }\n    interface Api {\n        default void i() { helper(); }\n    }\n}\n"),
+    ]);
+    let ex = repo.extract("shop/Outer.java");
+    assert!(calls_from(&ex, "sym:shop/Outer.java::Outer.Nested.g").is_empty(), "{:?}", ex.edges);
+    assert!(calls_from(&ex, "sym:shop/Outer.java::Outer.Api.i").is_empty(), "{:?}", ex.edges);
+    assert_eq!(calls_from(&ex, "sym:shop/Outer.java::Outer.Inner.h"), vec!["sym:shop/Outer.java::Outer.helper"]);
+}
+
+#[test]
+fn a_type_parameter_is_not_the_repository_type_it_is_named_like() {
+    let src = "package shop;\n\nclass State {\n    void reduce() {}\n}\n\nclass Store<State> {\n    State s;\n    void f() { s.reduce(); }\n}\n\nclass Box {\n    <State> void g(State x) { x.reduce(); }\n}\n";
+    let ex = one("shop/Store.java", src);
+    let wrong: Vec<_> = edges(&ex, EdgeKind::Calls).into_iter().filter(|(_, t, _)| t.ends_with("State.reduce")).collect();
+    assert!(wrong.is_empty(), "{wrong:?}");
+}
+
+#[test]
+fn a_field_never_stands_in_for_a_method_of_its_name() {
+    let repo = Repo::new(&[
+        NAV,
+        ("shop/Base.java", "package shop;\n\npublic class Base {\n    public Object send;\n}\n"),
+        ("shop/Holder.java", "package shop;\n\nimport static shop.util.Nav.send;\n\nclass Holder {\n    Object send;\n    void go() { send(); }\n}\n"),
+        ("shop/Sub.java", "package shop;\n\nimport static shop.util.Nav.send;\n\nclass Sub extends Base {\n    void go() { send(); }\n}\n"),
+    ]);
+    let holder = repo.extract("shop/Holder.java");
+    assert_eq!(calls_from(&holder, "sym:shop/Holder.java::Holder.go"), vec!["sym:shop/util/Nav.java::Nav.send"]);
+    let sub = repo.extract("shop/Sub.java");
+    assert!(!calls_from(&sub, "sym:shop/Sub.java::Sub.go").contains(&"sym:shop/Base.java::Base.send"), "{:?}", sub.edges);
+}
+
+#[test]
+fn a_private_method_of_another_file_s_supertype_is_not_inherited() {
+    let repo = Repo::new(&[
+        NAV,
+        ("shop/Base.java", "package shop;\n\npublic class Base {\n    private void helper() {}\n}\n"),
+        ("shop/Sub.java", "package shop;\n\nimport static shop.util.Nav.helper;\n\nclass Sub extends Base {\n    void go() { helper(); }\n}\n"),
+    ]);
+    let sub = repo.extract("shop/Sub.java");
+    assert!(!calls_from(&sub, "sym:shop/Sub.java::Sub.go").contains(&"sym:shop/Base.java::Base.helper"), "{:?}", sub.edges);
+}
+
+#[test]
+fn object_record_and_enum_members_the_file_never_writes_hide_outer_and_imported_namesakes() {
+    let repo = Repo::new(&[
+        NAV,
+        ("shop/Kinds.java", "package shop;\n\nimport static shop.util.Nav.values;\nimport static shop.util.Nav.x;\n\nclass Outer {\n    public Outer clone() { return this; }\n    class In {\n        void g() { clone(); }\n    }\n}\n\nenum Kind {\n    A;\n    void go() { values(); }\n}\n\nrecord P(int x, Mail mail) {\n    void go() { x(); }\n    void post() { mail.send(); }\n}\n\nclass Mail {\n    void send() {}\n}\n"),
+    ]);
+    let ex = repo.extract("shop/Kinds.java");
+    for from in ["Outer.In.g", "Kind.go", "P.go"] {
+        assert!(calls_from(&ex, &format!("sym:shop/Kinds.java::{from}")).is_empty(), "{from}: {:?}", ex.edges);
+    }
+    assert_eq!(calls_from(&ex, "sym:shop/Kinds.java::P.post"), vec!["sym:shop/Kinds.java::Mail.send"], "a record component is a typed field");
+}

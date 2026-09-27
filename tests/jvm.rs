@@ -1,5 +1,5 @@
-//! The binary over a JVM repository: `update` after a nested type appears or disappears writes the
-//! graph a fresh `build` of the same tree writes.
+//! The binary over a JVM repository: `update` after a nested type or a member appears, disappears
+//! or changes visibility writes the graph a fresh `build` of the same tree writes.
 
 use std::collections::BTreeSet;
 use std::path::Path;
@@ -84,5 +84,17 @@ fn a_kotlin_member_added_reaches_the_file_that_imports_it() {
     let use_kt = ("app/Use.kt", "package app\n\nimport shop.Keys.TOKEN\n\nclass Use\n");
     let (updated, built) = updated_and_built(&[(rel, &before), use_kt], &[(rel, &after)]);
     assert!(built.iter().any(|(from, to, kind, _)| from == "file:app/Use.kt" && to == "file:shop/Keys.kt" && kind == "Imports"), "{built:?}");
+    assert_eq!(updated, built);
+}
+
+#[test]
+fn a_java_method_made_public_reaches_the_subclass_in_another_file_that_calls_it() {
+    let base = |vis: &str| ("shop/Base.java", format!("package shop;\n\npublic class Base {{\n    {vis} void helper() {{}}\n}}\n"));
+    let (rel, before) = base("private");
+    let (_, after) = base("public");
+    let sub = ("shop/Sub.java", "package shop;\n\nclass Sub extends Base {\n    void go() { helper(); }\n}\n");
+    let (updated, built) = updated_and_built(&[(rel, &before), sub], &[(rel, &after)]);
+    let call = ("sym:shop/Sub.java::Sub.go".to_string(), "sym:shop/Base.java::Base.helper".to_string(), "Calls".to_string(), String::new());
+    assert!(built.contains(&call), "{built:?}");
     assert_eq!(updated, built);
 }

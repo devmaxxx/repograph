@@ -79,16 +79,9 @@ fn params(f: Node, src: &[u8], masked: &BTreeSet<String>) -> Vec<Param> {
 }
 
 impl Declared {
-    /// Type parameters in scope at the type `path`: its own and every enclosing type's. An outer
-    /// one reaches only an `inner` type, but masking more only costs an edge.
+    /// Type parameters in scope at the type `path`.
     pub(super) fn masked(&self, path: &str) -> BTreeSet<String> {
-        let mut out = BTreeSet::new();
-        let mut p = path;
-        while !p.is_empty() {
-            out.extend(self.shapes.get(p).map(|s| s.type_params.iter().cloned()).into_iter().flatten());
-            p = jvm::outer(p);
-        }
-        out
+        jvm::masked(&self.shapes, path)
     }
 }
 

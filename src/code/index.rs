@@ -33,16 +33,20 @@ pub struct Header {
 }
 
 /// Every type path (`Outer`, `Outer.Inner`, top-level ones included) and every member path
-/// (`Outer.run`) one file declares.
+/// (`Outer.run`) one file declares where another file can reach it.
 #[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Nested {
     pub types: BTreeSet<String>,
     pub members: BTreeSet<String>,
+    /// Member paths only a field declares, which no Java call binds. Empty for a family that reads
+    /// its members as one namespace.
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub values: BTreeSet<String>,
 }
 
 impl Nested {
     fn is_empty(&self) -> bool {
-        self.types.is_empty() && self.members.is_empty()
+        self.types.is_empty() && self.members.is_empty() && self.values.is_empty()
     }
 }
 
@@ -74,6 +78,16 @@ impl QualifiedIndex {
     /// Whether `rel` declares a type or a member at `path`.
     pub fn declares(&self, rel: &str, path: &str) -> bool {
         self.nested.get(rel).is_some_and(|n| n.types.contains(path) || n.members.contains(path))
+    }
+
+    /// Whether `rel` declares a member at `path` that is no type.
+    pub fn declares_member(&self, rel: &str, path: &str) -> bool {
+        self.nested.get(rel).is_some_and(|n| n.members.contains(path) && !n.types.contains(path))
+    }
+
+    /// Whether `rel` declares a member at `path` a call can bind: no type, and no field alone.
+    pub fn declares_method(&self, rel: &str, path: &str) -> bool {
+        self.declares_member(rel, path) && self.nested.get(rel).is_some_and(|n| !n.values.contains(path))
     }
 
     /// Every file declaring `qualified`, sorted.

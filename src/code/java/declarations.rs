@@ -25,14 +25,44 @@ pub struct Declared {
     pub types: BTreeSet<String>,
     /// Every member id declared here.
     pub members: BTreeSet<String>,
-    /// Per type path, each field's declared type as written (`Invoice`, `shop.billing.Invoice`).
+    /// Per type path, each field's declared type as written (`Invoice`, `shop.billing.Invoice`),
+    /// a record's components included.
     pub fields: BTreeMap<String, BTreeMap<String, String>>,
     /// (declaring type's id, supertype as written).
     pub supers: Vec<(String, String)>,
+    /// Every method, constructor and annotation element id.
+    pub methods: BTreeSet<String>,
+    /// Every field id, and a record component's though it is no symbol: calls look fields up apart
+    /// from methods.
+    pub values: BTreeSet<String>,
+    /// The method ids and the value ids some declaration not marked `private` reaches: a private
+    /// member is not inherited, and no other file can call it.
+    pub open_methods: BTreeSet<String>,
+    pub open_values: BTreeSet<String>,
+    /// Per type path, how it reaches names it does not declare.
+    pub shapes: BTreeMap<String, jvm::Shape>,
+}
+
+/// A type's or a method's own type parameters.
+pub(super) fn type_params(n: Node, src: &[u8]) -> BTreeSet<String> {
+    n.child_by_field_name("type_parameters")
+        .map(named)
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|p| child(p, "type_identifier"))
+        .map(|t| text(t, src).to_string())
+        .collect()
+}
+
+/// The supertypes a type declaration writes, as written: `extends` on a class, `implements` on a
+/// class, enum or record, `extends` on an interface.
+pub(super) fn supertypes(n: Node, src: &[u8]) -> Vec<String> {
+    let heads = [n.child_by_field_name("superclass"), n.child_by_field_name("interfaces"), child(n, "extends_interfaces")];
+    heads.into_iter().flatten().flat_map(|head| named(child(head, "type_list").unwrap_or(head))).filter_map(|t| written_type(t, src)).collect()
 }
 
 /// Whether `modifiers` holds the keyword; the grammar gives keywords as unnamed children.
-fn says(n: Node, word: &str) -> bool {
+pub(super) fn says(n: Node, word: &str) -> bool {
     child(n, "modifiers").is_some_and(|m| {
         let mut c = m.walk();
         let found = m.children(&mut c).any(|k| k.kind() == word);
@@ -82,13 +112,26 @@ fn declare_type(n: Node, rel: &str, src: &[u8], parent: &str, owner: Option<&str
         d.members.insert(id.clone());
     }
     d.types.insert(path.clone());
-    // `extends` on a class, `implements` on a class, enum or record, `extends` on an interface.
-    let heads = [n.child_by_field_name("superclass"), n.child_by_field_name("interfaces"), child(n, "extends_interfaces")];
-    for head in heads.into_iter().flatten() {
-        let list = child(head, "type_list").unwrap_or(head);
-        for t in named(list) {
-            if let Some(w) = written_type(t, src) {
-                d.supers.push((id.clone(), w));
+    for w in supertypes(n, src) {
+        d.supers.push((id.clone(), w));
+    }
+    let shape = jvm::Shape {
+        // A member class not marked `static` holds its outer instance; a nested interface, enum or
+        // record, and any type inside an interface, is static without the word.
+        inner: owner.is_some() && n.kind() == "class_declaration" && !members_public && !says(n, "static"),
+        // An enum's `values`, a record's accessors and an annotation's `annotationType` are
+        // members the file never writes.
+        implicit: matches!(n.kind(), "enum_declaration" | "record_declaration" | "annotation_type_declaration"),
+        type_params: type_params(n, src),
+        ..Default::default()
+    };
+    d.shapes.insert(path.clone(), shape);
+    if n.kind() == "record_declaration" {
+        for p in n.child_by_field_name("parameters").map(named).unwrap_or_default() {
+            let Some(pname) = p.child_by_field_name("name").map(|x| text(x, src)) else { continue };
+            d.values.insert(format!("{id}.{pname}"));
+            if let Some(t) = p.child_by_field_name("type").and_then(|t| written_type(t, src)) {
+                d.fields.entry(path.clone()).or_default().insert(pname.to_string(), t);
             }
         }
     }
@@ -124,13 +167,19 @@ fn declare_member(m: Node, rel: &str, src: &[u8], parent: &str, path: &str, memb
         _ => return,
     };
     let is_field = matches!(m.kind(), "field_declaration" | "constant_declaration");
+    let open = !says(m, "private");
     let ty = m.child_by_field_name("type").and_then(|t| written_type(t, src));
     for name_at in names {
         let name = text(name_at, src);
         let id = format!("sym:{rel}::{path}.{name}");
         ex.node_span(NodeKind::Symbol, &id, &format!("{path}.{name}"), &jvm::body(m, name_at, src, COMMENTS), rel, span(m));
         ex.edge(parent, &id, EdgeKind::Declares, exported(m, members_public), rel);
-        d.members.insert(id);
+        d.members.insert(id.clone());
+        let (all, reached) = if is_field { (&mut d.values, &mut d.open_values) } else { (&mut d.methods, &mut d.open_methods) };
+        all.insert(id.clone());
+        if open {
+            reached.insert(id);
+        }
         if let (true, Some(t)) = (is_field, &ty) {
             d.fields.entry(path.to_string()).or_default().insert(name.to_string(), t.clone());
         }

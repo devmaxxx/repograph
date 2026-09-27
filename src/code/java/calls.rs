@@ -1,0 +1,485 @@
+//! Java's calls and cited ids, one walk over the tree the declarations pass read.
+//!
+//! A call edge is written only where the file proves its target; a missing edge is acceptable, a
+//! wrong one is not. So:
+//! - Methods and fields are apart: a field never stands in for a method of its name, and a
+//!   receiver is read through fields and locals only.
+//! - A bare call binds in the innermost enclosing type that has a method of the name, then in a
+//!   static import. A level whose supertype the file cannot read, an `Object` method, or a name the
+//!   type and a supertype both declare — an overload or an override only the arguments could tell
+//!   apart — is no edge. A static nested type reaches no outer instance method, so a namesake there
+//!   refuses rather than falls through to an import.
+//! - A local, parameter, lambda, catch, `for`, resource or pattern variable hides the field it
+//!   shadows; one whose type the file does not read makes a call through it no edge.
+//! - An anonymous or local class hides what it declares and whatever its unread supertype may, and
+//!   a local class's name hides the repository type it is named like, as a type parameter does.
+//! - `Type.member()` is a static call only when no local, field, inherited field or static import
+//!   may hold the first name; a field typed as the type it is named like reads the same either way.
+//! - A single static import shadows an on-demand one; two of a name, or two on-demand imports, bind
+//!   nothing.
+//!
+//! Edges it leaves out: calls through `super`, through a chain of calls, through another file's
+//! fields, from a static nested type to an outer static method, from field initializers and
+//! initializer blocks, and from a type whose own method overrides or overloads a supertype's.
+
+use std::collections::{BTreeMap, BTreeSet};
+
+use tree_sitter::Node;
+
+use super::declarations::{supertypes, type_params, written_type, Declared, TYPES};
+use crate::code::jvm::{self, child, named, outer, path_of, split_id, text, type_ids, Bound, Own};
+use crate::model::{EdgeKind, Extraction};
+
+pub(super) struct Ctx<'a> {
+    /// The file's methods, looked up as a bare or a qualified call reads them.
+    pub methods: Own<'a>,
+    /// The file's fields and record components, looked up as a receiver reads them.
+    pub fields: Own<'a>,
+    pub src: &'a [u8],
+    pub d: &'a Declared,
+}
+
+/// A local's type as ids of the declarations it resolves to, or `None` when the file does not
+/// read it; either way the name hides the field it shadows.
+type Locals = BTreeMap<String, Option<Vec<String>>>;
+
+/// An anonymous class, a local class or an enum constant's body: a type with no symbol, whose
+/// members and supertypes the walk still reads.
+#[derive(Clone)]
+struct Local {
+    methods: BTreeSet<String>,
+    fields: BTreeSet<String>,
+    /// `None` when a supertype is unread, so it may declare any name.
+    supers: Option<Vec<String>>,
+}
+
+/// Where the walk is: the declared type around it, the declared method calls come from, the
+/// locals and symbol-less types in scope, and the names a written type must not resolve.
+#[derive(Clone, Default)]
+struct At {
+    class: String,
+    method: Option<String>,
+    locals: Locals,
+    scopes: Vec<Local>,
+    masked: BTreeSet<String>,
+}
+
+/// A declaration the declarations pass reached, so its id is a symbol.
+fn is_declared(n: Node) -> bool {
+    let Some(p) = n.parent() else { return false };
+    match p.kind() {
+        "program" => true,
+        "class_body" | "interface_body" | "annotation_type_body" => p.parent().is_some_and(|t| TYPES.contains(&t.kind()) && is_declared(t)),
+        "enum_body_declarations" => p.parent().and_then(|b| b.parent()).is_some_and(|t| t.kind() == "enum_declaration" && is_declared(t)),
+        _ => false,
+    }
+}
+
+pub(super) fn scan(root: Node, cx: &Ctx, ex: &mut Extraction) {
+    walk(root, At::default(), cx, ex);
+}
+
+fn walk(n: Node, mut at: At, cx: &Ctx, ex: &mut Extraction) {
+    match n.kind() {
+        k if TYPES.contains(&k) && is_declared(n) => {
+            if let Some(name) = n.child_by_field_name("name") {
+                let name = text(name, cx.src);
+                at.class = if at.class.is_empty() { name.to_string() } else { format!("{}.{name}", at.class) };
+                at.method = None;
+                at.locals.clear();
+                at.scopes.clear();
+                at.masked = jvm::masked(&cx.d.shapes, &at.class);
+            }
+        }
+        k if TYPES.contains(&k) => {
+            if let Some(name) = n.child_by_field_name("name") {
+                at.masked.insert(text(name, cx.src).to_string());
+            }
+            at.masked.extend(type_params(n, cx.src));
+            // An enum's, a record's or an annotation's supertype is one the file never writes.
+            let implicit = matches!(k, "enum_declaration" | "record_declaration" | "annotation_type_declaration");
+            let written = supertypes(n, cx.src);
+            let supers = if implicit { None } else { resolved_all(&written, &at, cx) };
+            let mut local = members_of(n.child_by_field_name("body"), supers, cx);
+            if k == "record_declaration" {
+                let components = n.child_by_field_name("parameters").map(named).unwrap_or_default();
+                local.fields.extend(components.into_iter().filter_map(|p| p.child_by_field_name("name")).map(|x| text(x, cx.src).to_string()));
+            }
+            enter(local, &mut at, cx);
+        }
+        "method_declaration" | "constructor_declaration" | "compact_constructor_declaration" => {
+            // A compact constructor is no symbol; its calls stay unattributed.
+            if is_declared(n) && n.kind() != "compact_constructor_declaration" {
+                at.method = n.child_by_field_name("name").map(|name| format!("sym:{}::{}.{}", cx.methods.rel, at.class, text(name, cx.src)));
+                at.locals.clear();
+            }
+            at.masked.extend(type_params(n, cx.src));
+            for p in n.child_by_field_name("parameters").map(named).unwrap_or_default() {
+                parameter(p, &mut at, cx);
+            }
+            // A pattern variable's scope follows flow, which this walk does not track; hiding its
+            // name for the whole method only costs edges.
+            if let Some(body) = n.child_by_field_name("body") {
+                patterns(body, &mut at, cx.src);
+            }
+        }
+        "lambda_expression" => {
+            let params = n.child_by_field_name("parameters");
+            let untyped = match params {
+                Some(p) if p.kind() == "identifier" => vec![p],
+                Some(p) if p.kind() == "formal_parameters" => {
+                    named(p).into_iter().for_each(|p| parameter(p, &mut at, cx));
+                    Vec::new()
+                }
+                Some(p) => named(p),
+                None => Vec::new(),
+            };
+            for p in untyped {
+                at.locals.insert(text(p, cx.src).to_string(), None);
+            }
+        }
+        "catch_clause" => {
+            if let Some(p) = child(n, "catch_formal_parameter") {
+                // `catch (A | B e)` has no one type a call could go through.
+                let types = child(p, "catch_type").map(named).unwrap_or_default();
+                let ty = match types.as_slice() {
+                    [one] => written_type(*one, cx.src).and_then(|t| resolved(&t, &at, cx)),
+                    _ => None,
+                };
+                if let Some(name) = p.child_by_field_name("name") {
+                    at.locals.insert(text(name, cx.src).to_string(), ty);
+                }
+            }
+        }
+        "method_invocation" => {
+            if let Some(from) = at.method.clone() {
+                for to in targets(n, &at, cx) {
+                    if to != from {
+                        ex.edge(&from, &to, EdgeKind::Calls, "", cx.methods.rel);
+                    }
+                }
+            }
+        }
+        "line_comment" | "block_comment" => jvm::cite(n, &owner(&at, cx.methods.rel), "comment", cx.methods.rel, cx.src, ex),
+        "string_literal" => jvm::cite(n, &owner(&at, cx.methods.rel), "string", cx.methods.rel, cx.src, ex),
+        _ => {}
+    }
+    let body = n.child_by_field_name("body").map(|b| b.id());
+    for c in named(n) {
+        let mut inside = at.clone();
+        if Some(c.id()) == body {
+            match n.kind() {
+                // The loop variable's scope is the body, not the iterated expression.
+                "enhanced_for_statement" => {
+                    let ty = n.child_by_field_name("type").and_then(|t| written_type(t, cx.src)).and_then(|t| resolved(&t, &at, cx));
+                    if let Some(name) = n.child_by_field_name("name") {
+                        inside.locals.insert(text(name, cx.src).to_string(), ty);
+                    }
+                }
+                // Resources reach the body; the catch and finally clauses do not see them.
+                "try_with_resources_statement" => {
+                    for r in n.child_by_field_name("resources").map(named).unwrap_or_default() {
+                        declare(r, &mut inside, cx);
+                    }
+                }
+                _ => {}
+            }
+        }
+        if c.kind() == "class_body" && n.kind() == "object_creation_expression" {
+            let written = n.child_by_field_name("type").and_then(|t| written_type(t, cx.src));
+            let supers = written.and_then(|w| resolved_all(&[w], &at, cx));
+            enter(members_of(Some(c), supers, cx), &mut inside, cx);
+        }
+        if c.kind() == "class_body" && n.kind() == "enum_constant" {
+            let id = format!("sym:{}::{}", cx.methods.rel, at.class);
+            enter(members_of(Some(c), Some(vec![id]), cx), &mut inside, cx);
+        }
+        walk(c, inside, cx, ex);
+        declare(c, &mut at, cx);
+        if c.kind() == "switch_block_statement_group" {
+            // A local declared under one label is in scope under the labels after it.
+            for s in named(c) {
+                declare(s, &mut at, cx);
+            }
+        }
+    }
+}
+
+fn owner(at: &At, rel: &str) -> String {
+    match (&at.method, at.class.is_empty()) {
+        (Some(m), _) => m.clone(),
+        (None, false) => format!("sym:{rel}::{}", at.class),
+        (None, true) => format!("file:{rel}"),
+    }
+}
+
+/// A written type's ids in this file's view, or `None` when a type parameter or a local class is
+/// named or nothing in the repository is.
+fn resolved(written: &str, at: &At, cx: &Ctx) -> Option<Vec<String>> {
+    if at.masked.contains(written.split('.').next().unwrap_or_default()) {
+        return None;
+    }
+    let own = &cx.methods;
+    let ids: Vec<String> = type_ids(own.types, own.index, own.scope, own.rel, &at.class, written).into_iter().filter(|id| own.is_type(id)).collect();
+    (!ids.is_empty()).then_some(ids)
+}
+
+/// Every written supertype resolved, or `None` when one is unread.
+fn resolved_all(written: &[String], at: &At, cx: &Ctx) -> Option<Vec<String>> {
+    written.iter().map(|w| resolved(w, at, cx)).collect::<Option<Vec<_>>>().map(|ids| ids.concat())
+}
+
+fn members_of(body: Option<Node>, supers: Option<Vec<String>>, cx: &Ctx) -> Local {
+    let mut local = Local { methods: BTreeSet::new(), fields: BTreeSet::new(), supers };
+    for m in body.map(named).unwrap_or_default() {
+        match m.kind() {
+            "method_declaration" => local.methods.extend(m.child_by_field_name("name").map(|x| text(x, cx.src).to_string())),
+            "field_declaration" => {
+                let mut c = m.walk();
+                let declarators: Vec<Node> = m.children_by_field_name("declarator", &mut c).collect();
+                local.fields.extend(declarators.into_iter().filter_map(|v| v.child_by_field_name("name")).map(|x| text(x, cx.src).to_string()));
+            }
+            _ => {}
+        }
+    }
+    local
+}
+
+/// Steps into a type with no symbol. A captured local its fields, or an unread supertype's, may
+/// shadow no longer tells its type.
+fn enter(local: Local, at: &mut At, cx: &Ctx) {
+    for (name, ty) in at.locals.iter_mut() {
+        if field_in(&local, name, cx) != Bound::Absent {
+            *ty = None;
+        }
+    }
+    at.scopes.push(local);
+}
+
+/// A field `name` in a symbol-less type: its own, or one of its supertypes'.
+fn field_in(local: &Local, name: &str, cx: &Ctx) -> Bound {
+    if local.fields.contains(name) {
+        return Bound::Refused;
+    }
+    match &local.supers {
+        None => Bound::Refused,
+        Some(ids) if ids.is_empty() => Bound::Absent,
+        Some(ids) => cx.fields.on_receiver(ids, name),
+    }
+}
+
+/// A method `name` called bare or on `this` in a symbol-less type. Its own is no symbol, so it
+/// refuses as well as an unread supertype does.
+fn method_in(local: &Local, name: &str, cx: &Ctx) -> Bound {
+    if local.methods.contains(name) {
+        return Bound::Refused;
+    }
+    match &local.supers {
+        None => Bound::Refused,
+        Some(ids) if ids.is_empty() => {
+            if jvm::from_object(name) { Bound::Refused } else { Bound::Absent }
+        }
+        Some(ids) => cx.methods.on_receiver(ids, name),
+    }
+}
+
+fn parameter(p: Node, at: &mut At, cx: &Ctx) {
+    let name = p.child_by_field_name("name").or_else(|| child(p, "variable_declarator").and_then(|v| v.child_by_field_name("name")));
+    let Some(name) = name else { return };
+    // A varargs parameter is an array, which no call on a declared type goes through.
+    let ty = match p.kind() {
+        "formal_parameter" if p.child_by_field_name("dimensions").is_none() => {
+            p.child_by_field_name("type").and_then(|t| written_type(t, cx.src)).and_then(|t| resolved(&t, at, cx))
+        }
+        _ => None,
+    };
+    at.locals.insert(text(name, cx.src).to_string(), ty);
+}
+
+/// Every pattern variable under `n`, bound with no type.
+fn patterns(n: Node, at: &mut At, src: &[u8]) {
+    let name = match n.kind() {
+        "instanceof_expression" => n.child_by_field_name("name"),
+        "type_pattern" | "record_pattern_component" => named(n).into_iter().rfind(|c| c.kind() == "identifier"),
+        _ => None,
+    };
+    if let Some(name) = name {
+        at.locals.insert(text(name, src).to_string(), None);
+    }
+    for c in named(n) {
+        patterns(c, at, src);
+    }
+}
+
+/// Binds the names a local variable declaration or a resource introduces to the siblings after it.
+fn declare(n: Node, at: &mut At, cx: &Ctx) {
+    match n.kind() {
+        "local_variable_declaration" => {
+            let written = n.child_by_field_name("type").and_then(|t| written_type(t, cx.src));
+            let mut c = n.walk();
+            let declarators: Vec<Node> = n.children_by_field_name("declarator", &mut c).collect();
+            for v in declarators {
+                let Some(name) = v.child_by_field_name("name") else { continue };
+                let ty = if v.child_by_field_name("dimensions").is_some() { None } else { local_type(written.as_deref(), v.child_by_field_name("value"), at, cx) };
+                at.locals.insert(text(name, cx.src).to_string(), ty);
+            }
+        }
+        "resource" => {
+            if let Some(name) = n.child_by_field_name("name") {
+                let written = n.child_by_field_name("type").and_then(|t| written_type(t, cx.src));
+                let ty = local_type(written.as_deref(), n.child_by_field_name("value"), at, cx);
+                at.locals.insert(text(name, cx.src).to_string(), ty);
+            }
+        }
+        "class_declaration" | "interface_declaration" | "enum_declaration" | "record_declaration" if !is_declared(n) => {
+            if let Some(name) = n.child_by_field_name("name") {
+                at.masked.insert(text(name, cx.src).to_string());
+            }
+        }
+        _ => {}
+    }
+}
+
+/// A local's type: as written, or for `var` the type a `new` initializer constructs.
+fn local_type(written: Option<&str>, value: Option<Node>, at: &At, cx: &Ctx) -> Option<Vec<String>> {
+    match written {
+        Some("var") | None => {
+            let created = value.filter(|x| x.kind() == "object_creation_expression" && child(*x, "class_body").is_none())?;
+            created.child_by_field_name("type").and_then(|t| written_type(t, cx.src)).and_then(|t| resolved(&t, at, cx))
+        }
+        Some(t) => resolved(t, at, cx),
+    }
+}
+
+fn targets(call: Node, at: &At, cx: &Ctx) -> Vec<String> {
+    let Some(name) = call.child_by_field_name("name").map(|m| text(m, cx.src)) else { return Vec::new() };
+    let Some(object) = call.child_by_field_name("object") else { return bare(name, at, cx) };
+    if object.kind() == "this" {
+        let bound = match at.scopes.last() {
+            Some(local) => method_in(local, name, cx),
+            None => cx.methods.level(&at.class, name),
+        };
+        return found(bound);
+    }
+    match receiver(object, at, cx) {
+        Some(ids) => cx.methods.on_types(&ids, name),
+        None => Vec::new(),
+    }
+}
+
+fn found(b: Bound) -> Vec<String> {
+    match b {
+        Bound::Found(ids) => ids,
+        _ => Vec::new(),
+    }
+}
+
+fn bare(name: &str, at: &At, cx: &Ctx) -> Vec<String> {
+    for local in at.scopes.iter().rev() {
+        match method_in(local, name, cx) {
+            Bound::Absent => {}
+            b => return found(b),
+        }
+    }
+    match cx.methods.member(&at.class, name) {
+        Bound::Absent => {}
+        b => return found(b),
+    }
+    let scope = cx.methods.scope;
+    // A single static import shadows every on-demand one.
+    let imported: Vec<&String> = match scope.statics.get(name) {
+        Some(types) => types.iter().collect(),
+        None => scope.static_stars.iter().collect(),
+    };
+    let [only] = imported.as_slice() else { return Vec::new() };
+    let ids: Vec<String> = jvm::declared(cx.methods.index, only).iter().map(|t| t.id()).filter(|id| cx.methods.is_type(id)).collect();
+    cx.methods.on_types(&ids, name)
+}
+
+/// The types a call's receiver has, when the file reads them.
+fn receiver(object: Node, at: &At, cx: &Ctx) -> Option<Vec<String>> {
+    match object.kind() {
+        "identifier" => {
+            let name = text(object, cx.src);
+            match value(name, at, cx) {
+                Some(ty) => ty,
+                None => resolved(name, at, cx),
+            }
+        }
+        "field_access" => {
+            let base = object.child_by_field_name("object")?;
+            let field = text(object.child_by_field_name("field")?, cx.src);
+            if base.kind() == "this" {
+                if !at.scopes.is_empty() {
+                    return None;
+                }
+                return typed_field(cx.fields.level(&at.class, field), cx);
+            }
+            let chain = dotted(object, cx.src)?;
+            let first = chain.split('.').next().unwrap_or_default();
+            if value(first, at, cx).is_some() {
+                return None;
+            }
+            resolved(&chain, at, cx)
+        }
+        "object_creation_expression" if child(object, "class_body").is_none() => {
+            resolved(&written_type(object.child_by_field_name("type")?, cx.src)?, at, cx)
+        }
+        _ => None,
+    }
+}
+
+/// `name` read as a value: `Some` with its types, or `Some(None)` when something that is not a
+/// type may hold it, and `None` only when the name can be nothing but a type.
+fn value(name: &str, at: &At, cx: &Ctx) -> Option<Option<Vec<String>>> {
+    if let Some(ty) = at.locals.get(name) {
+        return Some(ty.clone());
+    }
+    for local in at.scopes.iter().rev() {
+        if field_in(local, name, cx) != Bound::Absent {
+            return Some(None);
+        }
+    }
+    match cx.fields.member(&at.class, name) {
+        Bound::Absent => {}
+        b => return Some(typed_field(b, cx)),
+    }
+    static_import_could_name(name, cx).then_some(None)
+}
+
+/// A static import that names `name`, or an on-demand one whose type is unread or declares it.
+fn static_import_could_name(name: &str, cx: &Ctx) -> bool {
+    let scope = cx.fields.scope;
+    scope.statics.contains_key(name)
+        || scope.static_stars.iter().any(|star| {
+            let targets = jvm::declared(cx.fields.index, star);
+            targets.is_empty() || targets.iter().any(|t| cx.fields.index.declares(&t.rel, &format!("{}.{name}", t.path)))
+        })
+}
+
+/// A field this file declares, read through its declared type.
+fn typed_field(b: Bound, cx: &Ctx) -> Option<Vec<String>> {
+    let Bound::Found(ids) = b else { return None };
+    let [id] = ids.as_slice() else { return None };
+    let (rel, path) = split_id(id)?;
+    if rel != cx.fields.rel {
+        return None;
+    }
+    let declared_in = outer(path);
+    let name = path_of(id).rsplit('.').next()?;
+    let t = cx.d.fields.get(declared_in)?.get(name)?;
+    if jvm::masked(&cx.d.shapes, declared_in).contains(t.split('.').next().unwrap_or_default()) {
+        return None;
+    }
+    let own = &cx.fields;
+    let ids: Vec<String> = type_ids(own.types, own.index, own.scope, own.rel, declared_in, t).into_iter().filter(|id| own.is_type(id)).collect();
+    (!ids.is_empty()).then_some(ids)
+}
+
+fn dotted(n: Node, src: &[u8]) -> Option<String> {
+    match n.kind() {
+        "identifier" => Some(text(n, src).to_string()),
+        "field_access" => Some(format!("{}.{}", dotted(n.child_by_field_name("object")?, src)?, text(n.child_by_field_name("field")?, src))),
+        _ => None,
+    }
+}
