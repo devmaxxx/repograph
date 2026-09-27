@@ -314,7 +314,7 @@ mod tests {
         k.save(&store).unwrap();
         assert!(!path.exists(), "a store with no name-indexed file carries no header file");
         known(&[("a.jv", h(&["p"], &["A"]))]).save(&store).unwrap();
-        store.wipe().unwrap();
-        assert!(!path.exists(), "`build` wipes the headers with the graph they were read beside");
+        store.drop_leftovers().unwrap();
+        assert!(!path.exists(), "`build` starts without the headers the graph it replaces was read beside");
     }
 }

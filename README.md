@@ -22,7 +22,8 @@ has since grown to the 82 cases [Bench](#bench) floors.
 ## Status
 
 0.5.4 is the version `main` carries, and every command below is implemented rather than planned:
-`build` and `update` (incremental; a no-op `update` is a fixed point), `families`, `ask`, `explain`,
+`build` (a full re-read that replaces the stored graph only when it saves, so one interrupted
+leaves the previous store answering) and `update` (incremental; a no-op `update` is a fixed point), `families`, `ask`, `explain`,
 `verify`, `impact`, `trace`, `changes`, `embed`, `watch`, `serve`, `prime`, `install-agent`,
 `import-legacy`, `dump` and `bench`. Three spend model tokens and all three are opt-in: `enrich`,
 `ask --rerank`, and `ask --rerank-local` (zero tokens, a local cross-encoder, measured and rejected
