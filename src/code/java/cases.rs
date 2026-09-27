@@ -690,3 +690,42 @@ fn a_signature_type_a_type_parameter_a_local_class_or_two_stars_bind_writes_noth
         assert!(edges(&ex, EdgeKind::Imports).is_empty(), "{rel}: {:?}", ex.edges);
     }
 }
+
+const MAP: (&str, &str) = ("u/Map.java", "package u;\n\npublic interface Map {\n    boolean isEmpty();\n    default int size() { return 0; }\n}\n");
+const ABSTRACT_MAP: (&str, &str) = (
+    "u/AbstractMap.java",
+    "package u;\n\npublic abstract class AbstractMap implements Map {\n    public boolean isEmpty() { return true; }\n    public int size() { return 1; }\n}\n",
+);
+
+#[test]
+fn a_superclass_method_beats_the_interface_a_class_also_implements() {
+    let repo = Repo::new(&[
+        MAP,
+        ABSTRACT_MAP,
+        ("u/HashMap.java", "package u;\n\npublic class HashMap extends AbstractMap implements Map {\n    void go() { isEmpty(); }\n    void count() { size(); }\n}\n\nclass Near extends AbstractMap implements Map {\n    void go() { isEmpty(); }\n}\n"),
+    ]);
+    let ex = repo.extract("u/HashMap.java");
+    assert_eq!(calls_from(&ex, "sym:u/HashMap.java::HashMap.go"), vec!["sym:u/AbstractMap.java::AbstractMap.isEmpty"], "over the interface's abstract method: {:?}", ex.edges);
+    assert_eq!(calls_from(&ex, "sym:u/HashMap.java::HashMap.count"), vec!["sym:u/AbstractMap.java::AbstractMap.size"], "over the interface's default: {:?}", ex.edges);
+    assert_eq!(calls_from(&ex, "sym:u/HashMap.java::Near.go"), vec!["sym:u/AbstractMap.java::AbstractMap.isEmpty"], "{:?}", ex.edges);
+}
+
+#[test]
+fn an_interface_binds_only_when_no_superclass_level_declares_the_name_and_none_is_unread() {
+    let repo = Repo::new(&[
+        MAP,
+        ("u/Base.java", "package u;\n\npublic class Base {}\n"),
+        ("u/Lost.java", "package u;\n\npublic class Lost extends android.app.Activity {}\n"),
+        ("u/Sized.java", "package u;\n\npublic interface Sized extends Map {\n    default int size() { return 2; }\n}\n"),
+        ("u/Holder.java", "package u;\n\npublic class Holder implements Map {\n    public boolean isEmpty() { return true; }\n}\n"),
+        (
+            "u/Users.java",
+            "package u;\n\nclass Plain extends Base implements Map {\n    void go() { size(); }\n}\n\nclass Screen extends android.app.Activity implements Map {\n    void go() { isEmpty(); }\n}\n\nclass Far extends Lost implements Map {\n    void go() { isEmpty(); }\n}\n\nclass Specific extends Holder implements Sized {\n    void go() { size(); }\n}\n",
+        ),
+    ]);
+    let ex = repo.extract("u/Users.java");
+    assert_eq!(calls_from(&ex, "sym:u/Users.java::Plain.go"), vec!["sym:u/Map.java::Map.size"], "Base declares no size: {:?}", ex.edges);
+    assert!(calls_from(&ex, "sym:u/Users.java::Screen.go").is_empty(), "the activity may declare isEmpty: {:?}", ex.edges);
+    assert!(calls_from(&ex, "sym:u/Users.java::Far.go").is_empty(), "Lost's superclass may declare isEmpty: {:?}", ex.edges);
+    assert!(calls_from(&ex, "sym:u/Users.java::Specific.go").is_empty(), "Holder inherits Map's size and Sized overrides it: {:?}", ex.edges);
+}

@@ -1026,3 +1026,36 @@ val t: Int
     assert!(refs_from(&ex, "sym:app/C.kt::C.c").is_empty(), "{:?}", ex.edges);
     assert_eq!(calls_from(&ex, "sym:app/C.kt::t"), vec!["sym:app/C.kt::top"], "{:?}", ex.edges);
 }
+
+const SIZED: (&str, &str) = ("app/Sized.kt", "package app\n\ninterface Sized {\n    fun isEmpty(): Boolean\n    fun size(): Int = 0\n}\n");
+
+#[test]
+fn a_superclass_member_beats_the_interface_a_class_also_implements() {
+    let repo = Repo::new(&[
+        SIZED,
+        ("app/AbstractSized.kt", "package app\n\nabstract class AbstractSized : Sized {\n    override fun isEmpty() = true\n    override fun size() = 1\n}\n\nclass Near : AbstractSized(), Sized {\n    fun go() { isEmpty() }\n}\n"),
+        ("app/Bag.kt", "package app\n\nclass Bag : AbstractSized(), Sized {\n    fun go() { isEmpty() }\n    fun count() { size() }\n}\n"),
+    ]);
+    let ex = repo.extract("app/Bag.kt");
+    assert_eq!(calls_from(&ex, "sym:app/Bag.kt::Bag.go"), vec!["sym:app/AbstractSized.kt::AbstractSized.isEmpty"], "over the interface's abstract member: {:?}", ex.edges);
+    assert_eq!(calls_from(&ex, "sym:app/Bag.kt::Bag.count"), vec!["sym:app/AbstractSized.kt::AbstractSized.size"], "over the interface's default: {:?}", ex.edges);
+    let near = repo.extract("app/AbstractSized.kt");
+    assert_eq!(calls_from(&near, "sym:app/AbstractSized.kt::Near.go"), vec!["sym:app/AbstractSized.kt::AbstractSized.isEmpty"], "{:?}", near.edges);
+}
+
+#[test]
+fn an_interface_binds_only_when_no_superclass_level_declares_the_name_and_none_is_unread() {
+    let repo = Repo::new(&[
+        SIZED,
+        ("app/Base.kt", "package app\n\nopen class Base\n\nopen class Lost : Exception()\n\nopen class Full : Sized {\n    override fun isEmpty() = true\n}\n"),
+        (
+            "app/Users.kt",
+            "package app\n\nclass Plain : Base(), Sized {\n    override fun isEmpty() = false\n    fun go() { size() }\n}\n\nclass Screen : android.app.Activity(), Sized {\n    fun go() { size() }\n}\n\nclass Far : Lost(), Sized {\n    fun go() { size() }\n}\n\nclass Late : Full, Sized {\n    constructor() : super()\n    fun go() { isEmpty() }\n}\n",
+        ),
+    ]);
+    let ex = repo.extract("app/Users.kt");
+    assert_eq!(calls_from(&ex, "sym:app/Users.kt::Plain.go"), vec!["sym:app/Sized.kt::Sized.size"], "Base declares no size: {:?}", ex.edges);
+    assert!(calls_from(&ex, "sym:app/Users.kt::Screen.go").is_empty(), "the activity may declare size: {:?}", ex.edges);
+    assert!(calls_from(&ex, "sym:app/Users.kt::Far.go").is_empty(), "Lost's superclass may declare size: {:?}", ex.edges);
+    assert!(calls_from(&ex, "sym:app/Users.kt::Late.go").is_empty(), "with no primary constructor, which supertype is the class is not written: {:?}", ex.edges);
+}

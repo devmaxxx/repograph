@@ -294,11 +294,15 @@ fn declare(n: Node, rel: &str, src: &[u8], parent: &str, owner: Option<&str>, ex
         object: n.kind() != "class_declaration",
         implicit: enumerated,
         type_params: type_params(n, src),
+        superclass: None,
     };
     d.shapes.insert(path.clone(), shape);
     for spec in named(n).into_iter().filter(|c| c.kind() == "delegation_specifier") {
-        let target = child(spec, "constructor_invocation").unwrap_or(spec);
-        if let Some(t) = written_type(target, src) {
+        let invoked = child(spec, "constructor_invocation");
+        if let Some(t) = written_type(invoked.unwrap_or(spec), src) {
+            if invoked.is_some() {
+                d.shapes.entry(path.clone()).or_default().superclass = Some(t.clone());
+            }
             d.supers.push((id.clone(), t));
         }
     }

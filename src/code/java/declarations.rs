@@ -162,6 +162,7 @@ fn declare_type(n: Node, rel: &str, src: &[u8], parent: &str, owner: Option<&str
         // members the file never writes.
         implicit: matches!(n.kind(), "enum_declaration" | "record_declaration" | "annotation_type_declaration"),
         type_params: type_params(n, src),
+        superclass: n.child_by_field_name("superclass").and_then(|h| named(h).into_iter().find_map(|t| written_type(t, src))),
         ..Default::default()
     };
     d.shapes.insert(path.clone(), shape);

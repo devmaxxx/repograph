@@ -315,3 +315,34 @@ fn a_supertype_s_own_supertype_changed_in_its_file_is_followed_by_update() {
     assert!(built.contains(&call), "{built:?}");
     assert_eq!(updated, built);
 }
+
+fn call(from: &str, to: &str) -> (String, String, String, String) {
+    (from.to_string(), to.to_string(), "Calls".to_string(), String::new())
+}
+
+/// Builds each state, updates it to the other, and checks both ways that `update` writes the
+/// graph a fresh build does, with `edge` only in the second state.
+fn flipped<'a>(first: (&'a str, &'a str), second: (&'a str, &'a str), rest: &[(&'a str, &'a str)], edge: &(String, String, String, String)) {
+    let (updated, built) = updated_and_built(&[&[first][..], rest].concat(), &[second]);
+    assert!(built.contains(edge), "{built:?}");
+    assert_eq!(updated, built);
+    let (updated, built) = updated_and_built(&[&[second][..], rest].concat(), &[first]);
+    assert!(!built.contains(edge), "{built:?}");
+    assert_eq!(updated, built);
+}
+
+#[test]
+fn a_superclass_gaining_or_losing_the_member_an_interface_also_declares_is_followed_by_update() {
+    let map = ("u/Map.java", "package u;\n\npublic interface Map {\n    boolean isEmpty();\n}\n");
+    let hash = ("u/HashMap.java", "package u;\n\npublic class HashMap extends AbstractMap implements Map {\n    void go() { isEmpty(); }\n}\n");
+    let plain = "package u;\n\npublic abstract class AbstractMap implements Map {}\n";
+    let declaring = "package u;\n\npublic abstract class AbstractMap implements Map {\n    public boolean isEmpty() { return true; }\n}\n";
+    let edge = call("sym:u/HashMap.java::HashMap.go", "sym:u/AbstractMap.java::AbstractMap.isEmpty");
+    flipped(("u/AbstractMap.java", plain), ("u/AbstractMap.java", declaring), &[map, hash], &edge);
+    let sized = ("app/Sized.kt", "package app\n\ninterface Sized {\n    fun isEmpty(): Boolean\n}\n");
+    let bag = ("app/Bag.kt", "package app\n\nclass Bag : AbstractSized(), Sized {\n    fun go() { isEmpty() }\n}\n");
+    let plain = "package app\n\nabstract class AbstractSized : Sized\n";
+    let declaring = "package app\n\nabstract class AbstractSized : Sized {\n    override fun isEmpty() = true\n}\n";
+    let edge = call("sym:app/Bag.kt::Bag.go", "sym:app/AbstractSized.kt::AbstractSized.isEmpty");
+    flipped(("app/AbstractSized.kt", plain), ("app/AbstractSized.kt", declaring), &[sized, bag], &edge);
+}

@@ -275,6 +275,7 @@ pub(crate) fn recorded(types: &BTreeSet<String>, supers: &[(String, String)], sh
         out.written.entry(path_of(from).to_string()).or_default().push(written.clone());
     }
     out.implicit = shapes.iter().filter(|(_, s)| s.implicit).map(|(p, _)| p.clone()).collect();
+    out.classes = shapes.iter().filter_map(|(p, s)| s.superclass.clone().map(|c| (p.clone(), c))).collect();
     if !out.written.is_empty() {
         out.singles = scope.singles.clone();
         out.stars = scope.stars.clone();
@@ -301,6 +302,12 @@ pub(crate) struct Shape {
     pub implicit: bool,
     /// The type's own type parameters, which a same-named repository type must never stand in for.
     pub type_params: BTreeSet<String>,
+    /// The supertype written as the class it extends: Java's `extends` on a class, Kotlin's
+    /// supertype written with a constructor call. A member a class level declares beats an
+    /// interface's, abstract or default, so that chain is walked first. `None` reads every
+    /// supertype as one level, which is also how a Kotlin class whose secondary constructors call
+    /// `super(…)` is read, since it writes its class supertype without a call.
+    pub superclass: Option<String>,
 }
 
 /// What a name looked up among a type's members binds to.
@@ -355,6 +362,80 @@ fn generated(name: &str) -> bool {
 
 /// The empty set, for a family that records no such members.
 pub(crate) static NONE: BTreeSet<String> = BTreeSet::new();
+
+/// A supertype as one level of the walk up from a subtype.
+enum Hop {
+    /// It declares the name, taking the arguments.
+    Declares(String),
+    /// Another file declares the name there without provably taking the arguments.
+    Unread,
+    /// The call is no edge whatever the other levels hold.
+    Refused,
+    /// It does not declare the name: what its own supertypes hold.
+    Above(Walked),
+}
+
+/// What the supertypes of one type hold of a name, class levels apart from interface ones.
+#[derive(Default)]
+struct Walked {
+    /// Declarations a class level binds, which beat every interface's.
+    class: Vec<String>,
+    /// A class level may hold the name unread, so no interface's declaration is proof.
+    class_unread: bool,
+    /// Declarations interface levels bind.
+    found: Vec<String>,
+    /// An interface level may hold the name unread.
+    unread: bool,
+    /// The call is no edge whatever the other levels hold.
+    refused: bool,
+}
+
+impl Walked {
+    fn refused() -> Walked {
+        Walked { refused: true, ..Walked::default() }
+    }
+
+    /// Anything a level above may hold unread.
+    fn doubtful(&self) -> bool {
+        self.refused || self.class_unread || self.unread
+    }
+
+    fn bound(self) -> Bound {
+        if self.refused {
+            return Bound::Refused;
+        }
+        if !self.class.is_empty() {
+            return settle(self.class, false);
+        }
+        if self.class_unread {
+            return Bound::Refused;
+        }
+        settle(self.found, self.unread)
+    }
+}
+
+/// A type's written supertypes, each as the ids it resolves to, empty when it resolves to none.
+struct Chain {
+    /// The class it extends, when the file tells which one that is.
+    class: Option<Vec<String>>,
+    interfaces: Vec<Vec<String>>,
+    /// A supertype it never writes, such as an enum's.
+    implicit: bool,
+}
+
+impl Chain {
+    fn of<'w>(written: impl Iterator<Item = &'w String>, superclass: Option<&String>, implicit: bool, resolve: impl Fn(&str) -> Vec<String>) -> Chain {
+        let mut chain = Chain { class: None, interfaces: Vec::new(), implicit };
+        for w in written {
+            if chain.class.is_none() && superclass == Some(w) {
+                chain.class = Some(resolve(w));
+            } else {
+                chain.interfaces.push(resolve(w));
+            }
+        }
+        chain
+    }
+}
 
 /// One JVM file as the passes after declarations read it: what it declares, and what it sees.
 #[derive(Clone, Copy)]
@@ -528,60 +609,89 @@ impl Own<'_> {
     }
 
     fn inherited(&self, path: &str, name: &str, seen: &mut BTreeSet<String>) -> Bound {
-        self.above(self.rel, path, name, seen)
+        self.above(self.rel, path, name, seen).bound()
     }
 
     /// `name` among the supertypes of the type at `path` in `rel`, this file or another whose
-    /// header records its supertypes. A supertype in another file that declares the name without
-    /// provably taking the arguments refuses: its overloads are all the index knows of it.
-    fn above(&self, rel: &str, path: &str, name: &str, seen: &mut BTreeSet<String>) -> Bound {
+    /// header records its supertypes. The class chain is walked first, as both compilers bind a
+    /// class's member over an interface's: when a class level declares the name, the interfaces
+    /// are never read, and when one may hold it unread, the call is refused. A supertype in
+    /// another file that declares the name without provably taking the arguments counts as
+    /// unread: its overloads are all the index knows of it.
+    fn above(&self, rel: &str, path: &str, name: &str, seen: &mut BTreeSet<String>) -> Walked {
         if !seen.insert(format!("sym:{rel}::{path}")) {
-            return Bound::Absent;
+            return Walked::default();
         }
-        let Some((supers, implicit)) = self.supertypes(rel, path) else { return Bound::Refused };
-        let mut found = Vec::new();
-        let mut unread = implicit;
-        for targets in supers {
-            unread |= targets.is_empty();
-            for t in targets {
-                let Some((trel, tpath)) = split_id(&t) else { continue };
-                let member = format!("{t}.{name}");
-                let elsewhere = trel != self.rel;
-                let declared = if elsewhere { self.elsewhere(trel, &format!("{tpath}.{name}")) } else { self.inheritable.contains(&member) };
-                let admission = if declared { self.admission(&member, !elsewhere && self.inside(tpath)) } else { Admission::No };
-                if admission == Admission::Unsure {
-                    return Bound::Refused;
+        let Some(chain) = self.supertypes(rel, path) else { return Walked::refused() };
+        let mut w = Walked { unread: chain.implicit, ..Walked::default() };
+        if let Some(class) = chain.class {
+            w.class_unread = class.is_empty();
+            for t in class {
+                match self.hop(&t, name, seen) {
+                    Hop::Declares(id) => w.class.push(id),
+                    Hop::Unread | Hop::Refused => w.class_unread = true,
+                    Hop::Above(up) => {
+                        w.class.extend(up.class);
+                        w.found.extend(up.found);
+                        w.class_unread |= up.class_unread || up.refused;
+                        w.unread |= up.unread;
+                    }
                 }
-                if admission == Admission::Yes {
-                    found.push(member);
-                } else if elsewhere && declared {
-                    unread = true;
-                } else {
-                    match self.above(trel, tpath, name, seen) {
-                        Bound::Found(ids) => found.extend(ids),
-                        Bound::Refused => unread = true,
-                        Bound::Absent => {}
+            }
+            if !w.class.is_empty() {
+                return Walked { class: w.class, ..Walked::default() };
+            }
+            if w.class_unread {
+                return Walked { class_unread: true, ..Walked::default() };
+            }
+        }
+        for targets in chain.interfaces {
+            w.unread |= targets.is_empty();
+            for t in targets {
+                match self.hop(&t, name, seen) {
+                    Hop::Declares(id) => w.found.push(id),
+                    Hop::Unread => w.unread = true,
+                    Hop::Refused => return Walked::refused(),
+                    Hop::Above(up) => {
+                        w.unread |= up.doubtful();
+                        w.found.extend(up.class.into_iter().chain(up.found));
                     }
                 }
             }
         }
-        settle(found, unread)
+        w
     }
 
-    /// Each written supertype of the type at `path` in `rel` as the ids it resolves to there, empty
-    /// when it resolves to none, and whether the type also has one it never writes. `None` when
-    /// the index records nothing of `rel`'s supertypes.
-    fn supertypes(&self, rel: &str, path: &str) -> Option<(Vec<Vec<String>>, bool)> {
+    /// The supertype `t` as a level of the walk up from a subtype.
+    fn hop(&self, t: &str, name: &str, seen: &mut BTreeSet<String>) -> Hop {
+        let Some((trel, tpath)) = split_id(t) else { return Hop::Above(Walked::default()) };
+        let member = format!("{t}.{name}");
+        let elsewhere = trel != self.rel;
+        let declared = if elsewhere { self.elsewhere(trel, &format!("{tpath}.{name}")) } else { self.inheritable.contains(&member) };
+        let admission = if declared { self.admission(&member, !elsewhere && self.inside(tpath)) } else { Admission::No };
+        match admission {
+            Admission::Unsure => Hop::Refused,
+            Admission::Yes => Hop::Declares(member),
+            Admission::No if elsewhere && declared => Hop::Unread,
+            Admission::No => Hop::Above(self.above(trel, tpath, name, seen)),
+        }
+    }
+
+    /// The written supertypes of the type at `path` in `rel`, resolved there. `None` when the
+    /// index records nothing of `rel`'s supertypes.
+    fn supertypes(&self, rel: &str, path: &str) -> Option<Chain> {
         // A type's header sees the types around it, not its own nested ones.
         if rel == self.rel {
             let from = format!("sym:{rel}::{path}");
-            let written = self.supers.iter().filter(|(f, _)| *f == from);
-            return Some((written.map(|(_, w)| type_ids(self.types, self.index, self.scope, rel, outer(path), w)).collect(), self.shape(path).implicit));
+            let written = self.supers.iter().filter(|(f, _)| *f == from).map(|(_, w)| w);
+            let shape = self.shape(path);
+            return Some(Chain::of(written, shape.superclass.as_ref(), shape.implicit, |w| type_ids(self.types, self.index, self.scope, rel, outer(path), w)));
         }
         let (recorded, types) = (self.index.supers(rel)?, self.index.types(rel)?);
         let scope = Scope { package: recorded.package.clone(), singles: recorded.singles.clone(), stars: recorded.stars.clone(), ..Scope::default() };
-        let written = recorded.written.get(path).map(Vec::as_slice).unwrap_or_default();
-        Some((written.iter().map(|w| type_ids(types, self.index, &scope, rel, outer(path), w)).collect(), recorded.implicit.contains(path)))
+        let written = recorded.written.get(path).into_iter().flatten();
+        let (class, implicit) = (recorded.classes.get(path), recorded.implicit.contains(path));
+        Some(Chain::of(written, class, implicit, |w| type_ids(types, self.index, &scope, rel, outer(path), w)))
     }
 }
 
