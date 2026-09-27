@@ -304,7 +304,7 @@ pub fn render(answer: &Answer, graph: &Graph, opts: &Options) -> String {
 }
 
 /// What wraps a word in a sentence and is never part of an id: `FR-CAL-40,`, `(INV-07)`, `«…»`.
-const WRAPPING: &[char] = &[',', '.', ':', ';', '?', '!', '(', ')', '[', ']', '"', '\'', '«', '»'];
+const WRAPPING: &[char] = &[',', '.', ':', ';', '?', '!', '(', ')', '[', ']', '"', '\'', '«', '»', '\u{201c}', '\u{201d}', '\u{2018}', '\u{2019}'];
 
 /// A query word as it is matched against a name: the punctuation around it dropped.
 fn token(word: &str) -> &str { word.trim_matches(WRAPPING) }
