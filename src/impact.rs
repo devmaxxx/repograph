@@ -35,6 +35,11 @@ fn exports(e: &Edge, bare: &str) -> bool { e.context == "*" || e.context.split('
 /// A member no node declares — a method of an object literal, `parse` on a zod schema — stands
 /// for its container, which has a `path:line` where the member has none.
 pub fn canonical(graph: &Graph, id: &str) -> Option<String> {
+    exact(graph, id).or_else(|| container(id).and_then(|c| canonical(graph, &c)))
+}
+
+/// `canonical` without the member fold: the node itself or the declaration behind a barrel.
+fn exact(graph: &Graph, id: &str) -> Option<String> {
     if graph.nodes.contains_key(id) { return Some(id.to_string()) }
     let (file, name) = id.strip_prefix("sym:")?.rsplit_once("::")?;
     let mut files = vec![file.to_string()];
@@ -50,7 +55,17 @@ pub fn canonical(graph: &Graph, id: &str) -> Option<String> {
         }
         i += 1;
     }
-    container(id).and_then(|c| canonical(graph, &c))
+    None
+}
+
+/// Where a downward step lands, and whether the walk may go on from there. A target folded into
+/// its container is shown as it, but the container's own calls are its other methods' calls,
+/// which this one does not make — walking on would report paths that only a sibling has.
+fn landing(graph: &Graph, target: &str) -> (String, bool) {
+    match exact(graph, target) {
+        Some(id) => (id, true),
+        None => (canonical(graph, target).unwrap_or_else(|| target.to_string()), false),
+    }
 }
 
 /// `sym:f::C` for `sym:f::C.m`; none for a class or a file.
@@ -153,10 +168,12 @@ impl<'a> Index<'a> {
         let mut layers = Vec::new();
         for d in 1..=depth {
             let mut next: BTreeMap<String, Dependent> = BTreeMap::new();
+            let mut open: BTreeSet<String> = BTreeSet::new();
             for at in &frontier {
                 for e in self.step(at) {
-                    let other = if up { e.source.clone() } else { canonical(graph, &e.target).unwrap_or_else(|| e.target.clone()) };
+                    let (other, goes_on) = if up { (e.source.clone(), true) } else { landing(graph, &e.target) };
                     if seen.contains(&other) { continue }
+                    if goes_on { open.insert(other.clone()); }
                     let candidate = Dependent { id: other.clone(), depth: d, kind: e.kind, via: at.clone(), passed: e.passes() };
                     // A call beats an argument edge whichever owner in the layer came first.
                     if next.get(&other).is_some_and(|x| !beats(&candidate, x)) { continue }
@@ -166,7 +183,7 @@ impl<'a> Index<'a> {
             if next.is_empty() { break }
             seen.extend(next.keys().cloned());
             let next: Vec<Dependent> = next.into_values().collect();
-            frontier = next.iter().map(|x| x.id.clone()).collect();
+            frontier = next.iter().map(|x| x.id.clone()).filter(|id| open.contains(id)).collect();
             layers.push(next);
         }
         layers
@@ -242,7 +259,7 @@ pub fn trace(graph: &Graph, from: &str, to: &str, depth: usize) -> Option<Vec<(S
         let mut next = Vec::new();
         for at in &frontier {
             for e in by_source.step(at) {
-                let other = canonical(graph, &e.target).unwrap_or_else(|| e.target.clone());
+                let (other, goes_on) = landing(graph, &e.target);
                 if !seen.insert(other.clone()) { continue }
                 parent.insert(other.clone(), (at.clone(), e.passes()));
                 if goal.contains(&other) {
@@ -251,7 +268,7 @@ pub fn trace(graph: &Graph, from: &str, to: &str, depth: usize) -> Option<Vec<(S
                     path.reverse();
                     return Some(path.into_iter().map(|id| { let passed = parent.get(&id).is_some_and(|p| p.1); (id, passed) }).collect());
                 }
-                next.push(other);
+                if goes_on { next.push(other); }
             }
         }
         if next.is_empty() { break }
@@ -454,6 +471,22 @@ pub(crate) mod tests {
         assert_eq!(d1, vec!["sym:r.ts::repo"]);
         // A literal's method calling a sibling is the literal reaching itself: no row at all.
         assert!(downstream(&g, "sym:r.ts::repo", 1).layers.is_empty());
+    }
+
+    #[test]
+    fn a_walk_down_stops_at_a_container_it_reached_through_one_undeclared_method() {
+        // `go` calls `repo.save`; the literal as a whole calls `lock`, through some other method.
+        let mut g = object_literal();
+        let mut e = Extraction::default();
+        e.node(NodeKind::Symbol, "sym:l.ts::lock", "lock", "", "l.ts", 1);
+        e.edge("sym:r.ts::repo", "sym:l.ts::lock", EdgeKind::Calls, "", "r.ts");
+        g.apply(e);
+        let imp = downstream(&g, "sym:b.ts::go", 3);
+        let ids: Vec<&str> = imp.layers.iter().flatten().map(|d| d.id.as_str()).collect();
+        assert_eq!(ids, vec!["sym:r.ts::repo"]);
+        assert_eq!(trace(&g, "sym:b.ts::go", "sym:l.ts::lock", 6), None);
+        assert!(trace(&g, "sym:b.ts::go", "sym:r.ts::repo", 6).is_some());
+        assert!(trace(&g, "sym:r.ts::repo", "sym:l.ts::lock", 6).is_some());
     }
 
     #[test]
