@@ -317,8 +317,9 @@ repograph explain FR-PAY-22
 repograph explain asGrosze
 ```
 
-`explain` resolves its argument as an exact id, then as a symbol name, then as a case-insensitive
-label match. Like every other reader it brings the store in line with the tree first; `--stale`
+`explain` resolves its argument as an id — as typed, then without the punctuation around it, then
+ignoring case, as `ask` reads an id in a question — then as a symbol name, then as a
+case-insensitive label match. Like every other reader it brings the store in line with the tree first; `--stale`
 answers from the store as it stands.
 
 Check the graph's health — counts by kind, dangling edges, how many citations are held aside because

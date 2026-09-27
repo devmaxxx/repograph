@@ -136,21 +136,23 @@ fn hit(graph: &Graph, id: &str, score: f32, via: Option<&str>) -> Option<Hit> {
 /// whatever its shape: a task id (`BE-M17/T06`) is no id the generic matcher accepts.
 pub(crate) fn exact_seeds(graph: &Graph, words: &[String]) -> (Vec<String>, bool) {
     // A quoted question reaches argv as one word, and no id equals a whole sentence.
-    let words: Vec<String> = words.iter().flat_map(|w| w.split_whitespace()).map(str::to_string).collect();
+    let words: Vec<&str> = words.iter().flat_map(|w| w.split_whitespace()).collect();
     let mut out = Vec::new();
     let mut whole = true;
-    for w in &words {
-        if graph.nodes.contains_key(w) {
-            out.push(w.clone());
+    for &raw in &words {
+        if let Some(n) = by_id(graph, raw) {
+            out.push(n.id.clone());
             continue;
         }
+        let w = token(raw);
+        if w.is_empty() { continue }
         if words.len() > 1 && !w.chars().any(|c| c.is_uppercase() || c == '_') {
             whole = false;
             continue;
         }
         let tail = format!("::{w}");
         let mut syms: Vec<&String> = graph.nodes.values()
-            .filter(|n| n.kind == NodeKind::Symbol && (n.label == *w || n.id.ends_with(&tail)))
+            .filter(|n| n.kind == NodeKind::Symbol && (n.label == w || n.id.ends_with(&tail)))
             .map(|n| &n.id).collect();
         // Production before a test, as in `resolve_code`: `routes` is the route table, not a spec's.
         syms.sort_by_key(|id| (is_test(id), *id));
@@ -301,14 +303,32 @@ pub fn render(answer: &Answer, graph: &Graph, opts: &Options) -> String {
     out
 }
 
+/// What wraps a word in a sentence and is never part of an id: `FR-CAL-40,`, `(INV-07)`, `«…»`.
+const WRAPPING: &[char] = &[',', '.', ':', ';', '?', '!', '(', ')', '[', ']', '"', '\'', '«', '»'];
+
+/// A query word as it is matched against a name: the punctuation around it dropped.
+fn token(word: &str) -> &str { word.trim_matches(WRAPPING) }
+
+/// The node a query word names by its id: the word as typed, then without the punctuation around
+/// it, then ignoring case — `fr-cal-40` is typed as often as `FR-CAL-40`. Every lookup of a word
+/// against an id goes through here, so `ask`, `explain`, `impact` and `trace` read a name alike.
+fn by_id<'a>(graph: &'a Graph, word: &str) -> Option<&'a crate::model::Node> {
+    let w = token(word);
+    if w.is_empty() { return None }
+    let folded = |id: &str| id.chars().flat_map(char::to_lowercase).eq(w.chars().flat_map(char::to_lowercase));
+    graph.nodes.get(word).or_else(|| graph.nodes.get(w))
+        .or_else(|| graph.nodes.values().filter(|n| folded(&n.id)).min_by(|a, b| a.id.cmp(&b.id)))
+}
+
 pub(crate) fn resolve<'a>(graph: &'a Graph, needle: &str) -> Option<&'a crate::model::Node> {
     candidates(graph, needle).into_iter().next()
 }
 
-/// Every node a name could mean, best first: the exact id, else ids ending in `::name`, else
+/// Every node a name could mean, best first: the id (`by_id`), else ids ending in `::name`, else
 /// labels equal to it ignoring case.
 fn candidates<'a>(graph: &'a Graph, needle: &str) -> Vec<&'a crate::model::Node> {
-    if let Some(n) = graph.nodes.get(needle) { return vec![n]; }
+    if let Some(n) = by_id(graph, needle) { return vec![n]; }
+    let needle = token(needle);
     let tail = format!("::{needle}");
     let mut c: Vec<&crate::model::Node> = graph.nodes.values().filter(|n| n.id.ends_with(&tail)).collect();
     if c.is_empty() {
@@ -1111,6 +1131,36 @@ mod tests {
         assert_eq!(run(&["asGrosze FR-PAY-22"]), run(&["asGrosze", "FR-PAY-22"]));
         assert_eq!(run(&["FR-PAY-22 money"]), run(&["FR-PAY-22", "money"]));
         assert_eq!(run(&["FR-PAY-22 money"])[0], "FR-PAY-22");
+    }
+
+    /// How an id arrives in a question: after a comma, in brackets, before a colon, at the end
+    /// of a sentence, typed in lower case. Each is the id, and an exact seed ranks first.
+    #[test]
+    fn an_id_wrapped_in_punctuation_or_typed_in_lower_case_is_the_first_seed() {
+        let mut g = graph();
+        let mut e = Extraction::default();
+        e.node(NodeKind::Requirement, "FR-CAL-40", "Overlap is allowed", "", "docs/04.md", 40);
+        e.node(NodeKind::Invariant, "INV-07", "No double booking", "", "docs/constitution.yaml", 7);
+        e.node(NodeKind::Task, "BE-M17/T06", "Public booking path", "", "docs/m17.md", 58);
+        g.apply(e);
+        // The exact seeds, not the fused answer: on a graph this small BM25 alone would put the id
+        // first, and on beauty-crm's it did not.
+        let first = |q: &str| exact_seeds(&g, &[q.to_string()]).0;
+        for (q, want) in [
+            ("FR-CAL-40, INV-07?", &["FR-CAL-40", "INV-07"][..]),
+            ("(FR-CAL-40)", &["FR-CAL-40"]),
+            ("FR-CAL-40: overlap", &["FR-CAL-40"]),
+            ("INV-07.", &["INV-07"]),
+            ("BE-M17/T06, что осталось?", &["BE-M17/T06"]),
+            ("fr-cal-40", &["FR-CAL-40"]),
+            ("«inv-07»", &["INV-07"]),
+            ("[asGrosze]", &["sym:packages/contracts/src/money.ts::asGrosze"]),
+        ] {
+            let got = first(q);
+            assert_eq!(&got[..want.len().min(got.len())], want, "{q}: {got:?}");
+        }
+        assert_eq!(resolve(&g, "fr-cal-40,").unwrap().id, "FR-CAL-40", "explain reads a name the way ask does");
+        assert_eq!(resolve_code(&g, "(asGrosze)").unwrap().0.id, "sym:packages/contracts/src/money.ts::asGrosze");
     }
 
     #[test]

@@ -9,7 +9,9 @@ semantics of the three walking commands.
 1. **Exact.** A word that is a known id, or the name of an indexed symbol, wins outright and scores
    above everything else. When every word is an id or a name with an uppercase letter (`asGrosze`,
    `ZERO`), the exact hits are the whole answer; a lowercase word that happens to be a symbol too
-   (`money` is a test helper) leads, and the fused retrievers fill the remaining seeds.
+   (`money` is a test helper) leads, and the fused retrievers fill the remaining seeds. A word is
+   matched without the punctuation around it (`FR-CAL-40,`, `(INV-07)`, `«BE-M17/T06»`) and an id
+   ignoring case (`fr-cal-40`); `explain`, `impact` and `trace` read their argument the same way.
 2. **Lexical.** BM25 over `id + label + body` for every node, with Snowball stemming — Russian for
    Cyrillic tokens, English otherwise, so `штрафа` and `штрафы` are the same term. Ids survive
    tokenization whole, so `FR-PAY-22` never becomes three tokens.
