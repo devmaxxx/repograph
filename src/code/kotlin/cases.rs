@@ -642,3 +642,32 @@ fn a_private_top_level_function_is_its_own_file_s_alone() {
     let t3 = repo.extract("app/T3.kt");
     assert!(calls_from(&t3, "sym:app/T3.kt::t3").is_empty(), "another file's private function is out of reach: {:?}", t3.edges);
 }
+
+#[test]
+fn a_kotlin_call_binds_the_supertype_s_overload_when_the_own_one_cannot_take_the_arguments() {
+    let repo = Repo::new(&[
+        ("app/Two.kt", "package app\n\nopen class Up {\n    fun m(s: String, t: String) {}\n}\n\nclass Down : Up() {\n    fun m(n: Int) {}\n    fun go() { m(\"x\", \"y\") }\n    fun on(d: Down) { d.m(\"x\", \"y\") }\n}\n"),
+        ("app/Base.kt", "package app\n\nopen class Base {\n    fun show(s: String, t: String) {}\n}\n"),
+        ("app/Sub.kt", "package app\n\nclass Sub : Base() {\n    fun show(n: Int) {}\n    fun go() { show(\"x\", \"y\") }\n}\n"),
+        ("app/Jv.java", "package app;\n\npublic class Jv {\n    public void put(String s, String t) {}\n}\n"),
+        ("app/Kj.kt", "package app\n\nclass Kj : Jv() {\n    fun put(n: Int) {}\n    fun go() { put(\"x\", \"y\") }\n}\n"),
+    ]);
+    let two = repo.extract("app/Two.kt");
+    assert_eq!(calls_from(&two, "sym:app/Two.kt::Down.go"), vec!["sym:app/Two.kt::Up.m"]);
+    assert_eq!(calls_from(&two, "sym:app/Two.kt::Down.on"), vec!["sym:app/Two.kt::Up.m"]);
+    let sub = repo.extract("app/Sub.kt");
+    assert_eq!(calls_from(&sub, "sym:app/Sub.kt::Sub.go"), vec!["sym:app/Base.kt::Base.show"]);
+    let kj = repo.extract("app/Kj.kt");
+    assert_eq!(calls_from(&kj, "sym:app/Kj.kt::Kj.go"), vec!["sym:app/Jv.java::Jv.put"]);
+}
+
+#[test]
+fn a_kotlin_default_vararg_or_trailing_lambda_counts_toward_the_arguments_a_function_takes() {
+    let src = "package app\n\nclass K : android.app.Dialog() {\n    fun m(a: Int, b: Int = 0) {}\n    fun v(vararg xs: Int) {}\n    fun t(f: () -> Unit) {}\n    fun one() { m(1) }\n    fun two() { m(1, 2) }\n    fun none() { m() }\n    fun many() { v(1, 2, 3) }\n    fun lambda() { t { } }\n}\n";
+    let ex = one("app/K.kt", src);
+    assert_eq!(calls_from(&ex, "sym:app/K.kt::K.one"), vec!["sym:app/K.kt::K.m"]);
+    assert_eq!(calls_from(&ex, "sym:app/K.kt::K.two"), vec!["sym:app/K.kt::K.m"]);
+    assert!(calls_from(&ex, "sym:app/K.kt::K.none").is_empty(), "the dialog may declare m(): {:?}", ex.edges);
+    assert_eq!(calls_from(&ex, "sym:app/K.kt::K.many"), vec!["sym:app/K.kt::K.v"]);
+    assert_eq!(calls_from(&ex, "sym:app/K.kt::K.lambda"), vec!["sym:app/K.kt::K.t"]);
+}

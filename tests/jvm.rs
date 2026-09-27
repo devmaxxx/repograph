@@ -98,3 +98,15 @@ fn a_java_method_made_public_reaches_the_subclass_in_another_file_that_calls_it(
     assert!(built.contains(&call), "{built:?}");
     assert_eq!(updated, built);
 }
+
+#[test]
+fn a_java_method_that_comes_to_take_a_call_s_arguments_is_bound_from_the_subclass_in_another_file() {
+    let base = |params: &str| ("shop/Base.java", format!("package shop;\n\npublic class Base {{\n    public void helper({params}) {{}}\n}}\n"));
+    let (rel, before) = base("int n");
+    let (_, after) = base("");
+    let sub = ("shop/Sub.java", "package shop;\n\nclass Sub extends Base {\n    void go() { helper(); }\n}\n");
+    let (updated, built) = updated_and_built(&[(rel, &before), sub], &[(rel, &after)]);
+    let call = ("sym:shop/Sub.java::Sub.go".to_string(), "sym:shop/Base.java::Base.helper".to_string(), "Calls".to_string(), String::new());
+    assert!(built.contains(&call), "{built:?}");
+    assert_eq!(updated, built);
+}

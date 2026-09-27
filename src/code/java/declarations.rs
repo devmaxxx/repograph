@@ -5,6 +5,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use tree_sitter::Node;
 
 use super::COMMENTS;
+use crate::code::index::Arity;
 use crate::code::jvm::{self, child, named, span, text};
 use crate::model::{EdgeKind, Extraction, NodeKind};
 
@@ -41,6 +42,19 @@ pub struct Declared {
     pub open_values: BTreeSet<String>,
     /// Per type path, how it reaches names it does not declare.
     pub shapes: BTreeMap<String, jvm::Shape>,
+    /// Per method id, the argument counts its declarations take.
+    pub arities: BTreeMap<String, Vec<Arity>>,
+    /// Method ids every declaration of which is `static`.
+    pub statics: BTreeSet<String>,
+    /// Method ids some declaration of which is not `static`.
+    instance: BTreeSet<String>,
+}
+
+/// The argument counts a method's `formal_parameters` take. A receiver parameter is no argument.
+pub(super) fn arity(params: Option<Node>) -> Arity {
+    let params: Vec<Node> = params.map(named).unwrap_or_default().into_iter().filter(|p| matches!(p.kind(), "formal_parameter" | "spread_parameter")).collect();
+    let varargs = params.last().is_some_and(|p| p.kind() == "spread_parameter");
+    Arity { min: params.len() - usize::from(varargs), max: params.len(), varargs }
 }
 
 /// A type's or a method's own type parameters.
@@ -95,6 +109,8 @@ pub fn scan(root: Node, rel: &str, src: &[u8], ex: &mut Extraction) -> Declared 
     for n in named(root).into_iter().filter(|n| TYPES.contains(&n.kind())) {
         declare_type(n, rel, src, &file_id, None, false, ex, &mut d);
     }
+    // An overload set collapses to one id, so it is static only when every declaration is.
+    d.statics.retain(|id| !d.instance.contains(id));
     d
 }
 
@@ -177,6 +193,13 @@ fn declare_member(m: Node, rel: &str, src: &[u8], parent: &str, path: &str, memb
         d.members.insert(id.clone());
         let (all, reached) = if is_field { (&mut d.values, &mut d.open_values) } else { (&mut d.methods, &mut d.open_methods) };
         all.insert(id.clone());
+        if !is_field {
+            let arities = d.arities.entry(id.clone()).or_default();
+            arities.push(arity(m.child_by_field_name("parameters")));
+            arities.sort();
+            arities.dedup();
+            if says(m, "static") { d.statics.insert(id.clone()) } else { d.instance.insert(id.clone()) };
+        }
         if open {
             reached.insert(id);
         }

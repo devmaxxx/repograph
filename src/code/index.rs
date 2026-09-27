@@ -42,11 +42,40 @@ pub struct Nested {
     /// its members as one namespace.
     #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
     pub values: BTreeSet<String>,
+    /// Per method path, the argument counts each of its declarations takes: overloads share a
+    /// path, and a call binds only a declaration that admits its count.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub arities: BTreeMap<String, Vec<Arity>>,
 }
 
 impl Nested {
     fn is_empty(&self) -> bool {
-        self.types.is_empty() && self.members.is_empty() && self.values.is_empty()
+        self.types.is_empty() && self.members.is_empty() && self.values.is_empty() && self.arities.is_empty()
+    }
+}
+
+/// How many arguments one method declaration takes: `min` without its defaults, `max` with every
+/// parameter, and any number past `min` when its last parameter is varargs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+pub struct Arity {
+    pub min: usize,
+    pub max: usize,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub varargs: bool,
+}
+
+impl Arity {
+    pub fn admits(&self, args: usize) -> bool {
+        args >= self.min && (self.varargs || args <= self.max)
+    }
+}
+
+/// Whether a declaration among `arities` takes `args` arguments. A member with none recorded — a
+/// type, a property — and a call whose count is unknown admit anything.
+pub fn admits(arities: Option<&Vec<Arity>>, args: Option<usize>) -> bool {
+    match (arities, args) {
+        (Some(all), Some(n)) => all.iter().any(|a| a.admits(n)),
+        _ => true,
     }
 }
 
@@ -88,6 +117,11 @@ impl QualifiedIndex {
     /// Whether `rel` declares a member at `path` a call can bind: no type, and no field alone.
     pub fn declares_method(&self, rel: &str, path: &str) -> bool {
         self.declares_member(rel, path) && self.nested.get(rel).is_some_and(|n| !n.values.contains(path))
+    }
+
+    /// Whether a declaration of the method `rel` declares at `path` takes `args` arguments.
+    pub fn admits(&self, rel: &str, path: &str, args: Option<usize>) -> bool {
+        admits(self.nested.get(rel).and_then(|n| n.arities.get(path)), args)
     }
 
     /// Every file declaring `qualified`, sorted.

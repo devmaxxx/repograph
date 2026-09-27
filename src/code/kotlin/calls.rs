@@ -7,8 +7,11 @@
 //!   object — hides the property, type or function it shadows, and a call through it writes nothing.
 //! - Kotlin resolves a bare name level by level — locals, implicit receivers innermost first, the
 //!   enclosing types' members, then the top level — and moves outward when no candidate at a level
-//!   takes the arguments. Without overload resolution, a name two levels bind is no edge, and so is
-//!   a name a level may bind through a supertype or a receiver the file cannot read.
+//!   takes the arguments. A member binds only a function whose parameter count, read with its
+//!   defaults and `vararg`, admits the call's arguments, the type's own before a supertype's. A name two
+//!   levels bind is no edge, and so is one a level where no function takes the arguments may bind
+//!   through a supertype or a receiver the file cannot read. The residual: overloads of one arity
+//!   told apart only by their argument types bind the first level's function.
 //! - A lambda passed to anything but a closed list of stdlib functions whose lambda has no
 //!   receiver may run with a receiver this file never sees, so it refuses lowercase bare names and
 //!   `this.` calls. A capitalised callee is still resolved there: receiver scopes do not declare
@@ -179,7 +182,8 @@ fn walk(n: Node, mut at: At, cx: &Ctx, ex: &mut Extraction) {
         }
         "call_expression" => {
             if let (Some(from), Some(callee)) = (at.function.clone(), n.named_child(0)) {
-                for to in jvm::same_platform(cx.own.rel, targets(callee, &at, cx)) {
+                let called = Ctx { own: Own { args: arguments(n), ..cx.own }, src: cx.src, d: cx.d };
+                for to in jvm::same_platform(cx.own.rel, targets(callee, &at, &called)) {
                     // A recursive call says nothing about what the function depends on.
                     if to != from {
                         ex.edge(&from, &to, EdgeKind::Calls, "", cx.own.rel);
@@ -198,6 +202,13 @@ fn walk(n: Node, mut at: At, cx: &Ctx, ex: &mut Extraction) {
         }
         walk(c, at.clone(), cx, ex);
     }
+}
+
+/// How many arguments a call passes: the parenthesised ones and a trailing lambda.
+fn arguments(call: Node) -> Option<usize> {
+    let suffix = child(call, "call_suffix")?;
+    let listed = child(suffix, "value_arguments").map_or(0, |a| named(a).into_iter().filter(|v| v.kind() == "value_argument").count());
+    Some(listed + usize::from(child(suffix, "annotated_lambda").is_some()))
 }
 
 fn owner(at: &At, rel: &str) -> String {

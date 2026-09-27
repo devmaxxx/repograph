@@ -4,11 +4,15 @@
 //! wrong one is not. So:
 //! - Methods and fields are apart: a field never stands in for a method of its name, and a
 //!   receiver is read through fields and locals only.
-//! - A bare call binds in the innermost enclosing type that has a method of the name, then in a
-//!   static import. A level whose supertype the file cannot read, an `Object` method, or a name the
-//!   type and a supertype both declare — an overload or an override only the arguments could tell
-//!   apart — is no edge. A static nested type reaches no outer instance method, so a namesake there
-//!   refuses rather than falls through to an import.
+//! - A call binds only a declaration whose parameter count admits its arguments, the type's own
+//!   before a supertype's, as an override binds. A bare call binds in the innermost enclosing type
+//!   that has one, then in a static import. An `Object` method, or a level where no declaration
+//!   takes the arguments and a supertype the file cannot read may, is no edge; an unread supertype
+//!   beside one that declares a method taking the arguments does not stop it. A static nested type
+//!   reaches outer static methods, never an instance one, so an instance namesake refuses rather
+//!   than falls through to an import.
+//! - The residual: overloads of one arity told apart only by their argument types bind the first
+//!   level's declaration, as an unread supertype's same-arity overload is not seen.
 //! - A local, parameter, lambda, catch, `for`, resource or pattern variable hides the field it
 //!   shadows; one whose type the file does not read makes a call through it no edge.
 //! - An anonymous or local class hides what it declares and whatever its unread supertype may, and
@@ -19,8 +23,7 @@
 //!   nothing.
 //!
 //! Edges it leaves out: calls through `super`, through a chain of calls, through another file's
-//! fields, from a static nested type to an outer static method, from field initializers and
-//! initializer blocks, and from a type whose own method overrides or overloads a supertype's.
+//! fields, and from field initializers and initializer blocks.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -153,7 +156,9 @@ fn walk(n: Node, mut at: At, cx: &Ctx, ex: &mut Extraction) {
         }
         "method_invocation" => {
             if let Some(from) = at.method.clone() {
-                for to in targets(n, &at, cx) {
+                let args = n.child_by_field_name("arguments").map(|a| named(a).into_iter().filter(|x| !x.kind().ends_with("comment")).count());
+                let called = Ctx { methods: Own { args, ..cx.methods }, fields: cx.fields, src: cx.src, d: cx.d };
+                for to in targets(n, &at, &called) {
                     if to != from {
                         ex.edge(&from, &to, EdgeKind::Calls, "", cx.methods.rel);
                     }

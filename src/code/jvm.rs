@@ -5,7 +5,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use tree_sitter::Node;
 
-use crate::code::index::QualifiedIndex;
+use crate::code::index::{Arity, QualifiedIndex};
 use crate::model::{EdgeKind, Extraction};
 
 pub(crate) fn text<'a>(n: Node, src: &'a [u8]) -> &'a str {
@@ -287,8 +287,7 @@ pub(crate) fn from_object(name: &str) -> bool {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Kind {
     All,
-    /// Java methods: a name a type and its supertype both declare is an overload or an override,
-    /// which only the arguments' types could tell apart.
+    /// Java methods, which every class also inherits from `Object`.
     Method,
     /// Java fields. Another file's member of the name counts though it may be a method: a lookup
     /// that meets one reads no type for it and so claims nothing.
@@ -312,19 +311,41 @@ fn generated(name: &str) -> bool {
     name == "copy" || name.strip_prefix("component").is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
 }
 
+/// The empty set, for a family that records no such members.
+pub(crate) static NONE: BTreeSet<String> = BTreeSet::new();
+
 /// One JVM file as the passes after declarations read it: what it declares, and what it sees.
+#[derive(Clone, Copy)]
 pub(crate) struct Own<'a> {
     pub rel: &'a str,
     pub types: &'a BTreeSet<String>,
     pub members: &'a BTreeSet<String>,
+    /// The members a subtype inherits: all of them but Java's `private` ones.
+    pub inheritable: &'a BTreeSet<String>,
+    /// Methods every declaration of which is `static`, which a static nested type reaches
+    /// without an outer instance.
+    pub statics: &'a BTreeSet<String>,
+    /// Per member id, the argument counts its declarations take.
+    pub arities: &'a BTreeMap<String, Vec<Arity>>,
     pub supers: &'a [(String, String)],
     pub shapes: &'a BTreeMap<String, Shape>,
     pub index: &'a QualifiedIndex,
     pub scope: &'a Scope,
     pub kind: Kind,
+    /// The argument count of the call being resolved; `None` admits any declaration.
+    pub args: Option<usize>,
 }
 
 impl Own<'_> {
+    /// Whether a declaration of the member `id` takes this call's arguments. One that does not is
+    /// read as absent, so the lookup goes on to the supertypes or the next scope out.
+    fn admits(&self, id: &str) -> bool {
+        match split_id(id) {
+            Some((rel, path)) if rel != self.rel => self.index.admits(rel, path, self.args),
+            _ => crate::code::index::admits(self.arities.get(id), self.args),
+        }
+    }
+
     fn shape(&self, path: &str) -> Shape {
         self.shapes.get(path).cloned().unwrap_or_default()
     }
@@ -342,7 +363,8 @@ impl Own<'_> {
     /// type's own and inherited members, then the enclosing type's, but past a type that is not
     /// `inner` only into an `object`. A level hidden by that boundary that declares the name is
     /// refused rather than skipped, since a companion's members share the class's path and may be
-    /// the ones meant.
+    /// the ones meant — unless the name there is a nested type or a static method, which need no
+    /// instance.
     pub(crate) fn member(&self, at: &str, name: &str) -> Bound {
         let mut path = at;
         let mut instance = true;
@@ -350,7 +372,7 @@ impl Own<'_> {
             let reachable = instance || self.shape(path).object;
             match self.level(path, name) {
                 // A nested type needs no instance to be named.
-                Bound::Found(ids) if reachable || ids.iter().all(|id| self.is_type(id)) => return Bound::Found(ids),
+                Bound::Found(ids) if reachable || ids.iter().all(|id| self.is_type(id) || self.statics.contains(id)) => return Bound::Found(ids),
                 Bound::Found(_) => return Bound::Refused,
                 Bound::Refused if reachable => return Bound::Refused,
                 _ => {}
@@ -365,16 +387,15 @@ impl Own<'_> {
         split_id(id).is_some_and(|(rel, path)| if rel == self.rel { self.types.contains(path) } else { self.index.is_type(rel, path) })
     }
 
-    /// `name` among the members of this file's type at `path`, its own and those of every
-    /// supertype. A supertype the repository does not declare, or one in another file that does
-    /// not declare `name` itself — the index holds no supertypes to walk on — may hold the name,
-    /// so the lookup refuses rather than let a top-level or imported namesake stand in.
+    /// `name` among the members of this file's type at `path`: its own declaration first when it
+    /// takes the call's arguments, as C# binds, then those of every supertype. A supertype the
+    /// repository does not declare, or one in another file that declares no `name` taking the
+    /// arguments — the index holds no supertypes to walk on — may hold the name, so the lookup
+    /// refuses rather than let a top-level or imported namesake stand in. Overloads of one arity
+    /// told apart only by their argument types are the residual: the first level's is written.
     pub(crate) fn level(&self, path: &str, name: &str) -> Bound {
         let id = format!("sym:{}::{path}.{name}", self.rel);
-        if self.members.contains(&id) {
-            if self.kind == Kind::Method && matches!(self.inherited(path, name, &mut BTreeSet::new()), Bound::Found(_)) {
-                return Bound::Refused;
-            }
+        if self.members.contains(&id) && self.admits(&id) {
             return Bound::Found(vec![id]);
         }
         let object = self.kind == Kind::Method && OBJECT_MEMBERS.contains(&name);
@@ -394,7 +415,7 @@ impl Own<'_> {
             let Some((rel, path)) = split_id(id) else { return Bound::Refused };
             let here = if rel == self.rel {
                 self.level(path, name)
-            } else if self.elsewhere(rel, &format!("{path}.{name}")) {
+            } else if self.elsewhere(rel, &format!("{path}.{name}")) && self.admits(&format!("{id}.{name}")) {
                 Bound::Found(vec![format!("{id}.{name}")])
             } else {
                 Bound::Refused
@@ -433,12 +454,12 @@ impl Own<'_> {
                 let Some((rel, tpath)) = split_id(&t) else { continue };
                 let member = format!("{t}.{name}");
                 if rel != self.rel {
-                    if self.elsewhere(rel, &format!("{tpath}.{name}")) {
+                    if self.elsewhere(rel, &format!("{tpath}.{name}")) && self.admits(&member) {
                         found.push(member);
                     } else {
                         unread = true;
                     }
-                } else if self.members.contains(&member) {
+                } else if self.inheritable.contains(&member) && self.admits(&member) {
                     found.push(member);
                 } else {
                     match self.inherited(tpath, name, seen) {

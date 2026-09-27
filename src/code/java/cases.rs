@@ -378,17 +378,64 @@ fn a_bare_call_from_a_type_whose_supertype_is_unread_is_no_edge() {
 }
 
 #[test]
-fn a_name_a_type_and_its_supertype_both_declare_is_no_edge() {
+fn an_own_method_taking_the_arguments_wins_and_one_that_does_not_leaves_the_supertype_s() {
     let repo = Repo::new(&[
-        ("shop/Base.java", "package shop;\n\npublic class Base {\n    public void m(String s) {}\n}\n"),
-        ("shop/Split.java", "package shop;\n\nclass Split extends Base {\n    void m(int n) {}\n    void go() { m(\"x\"); }\n}\n"),
-        ("shop/Two.java", "package shop;\n\nclass Up {\n    void m(String s) {}\n}\n\nclass Down extends Up {\n    void m(int n) {}\n    void go() { m(\"x\"); }\n    void on(Down d) { d.m(\"x\"); }\n}\n"),
+        ("shop/Base.java", "package shop;\n\npublic abstract class Base {\n    public abstract int size();\n    public void m(String s) {}\n}\n"),
+        ("shop/Coll.java", "package shop;\n\nclass Coll extends Base {\n    public int size() { return 0; }\n    void m(int a, int b) {}\n    boolean isEmpty() { return size() == 0; }\n    void go() { m(\"x\"); }\n}\n"),
+        ("shop/Two.java", "package shop;\n\ninterface Svc {\n    void run();\n}\n\nclass Impl implements Svc {\n    public void run() {}\n    void go() { run(); }\n}\n\nclass Up {\n    void m(String s) {}\n}\n\nclass Down extends Up {\n    void m(int a, int b) {}\n    void go() { m(\"x\"); }\n    void on(Down d) { d.m(\"x\"); }\n}\n"),
     ]);
-    let split = repo.extract("shop/Split.java");
-    assert!(calls_from(&split, "sym:shop/Split.java::Split.go").is_empty(), "{:?}", split.edges);
+    let coll = repo.extract("shop/Coll.java");
+    assert_eq!(calls_from(&coll, "sym:shop/Coll.java::Coll.isEmpty"), vec!["sym:shop/Coll.java::Coll.size"], "an override binds the own method");
+    assert_eq!(calls_from(&coll, "sym:shop/Coll.java::Coll.go"), vec!["sym:shop/Base.java::Base.m"]);
     let two = repo.extract("shop/Two.java");
-    assert!(calls_from(&two, "sym:shop/Two.java::Down.go").is_empty(), "{:?}", two.edges);
-    assert!(calls_from(&two, "sym:shop/Two.java::Down.on").is_empty(), "{:?}", two.edges);
+    assert_eq!(calls_from(&two, "sym:shop/Two.java::Impl.go"), vec!["sym:shop/Two.java::Impl.run"]);
+    assert_eq!(calls_from(&two, "sym:shop/Two.java::Down.go"), vec!["sym:shop/Two.java::Up.m"]);
+    assert_eq!(calls_from(&two, "sym:shop/Two.java::Down.on"), vec!["sym:shop/Two.java::Up.m"]);
+}
+
+#[test]
+fn an_own_method_that_cannot_take_the_arguments_leaves_the_call_to_an_unread_supertype() {
+    let repo = Repo::new(&[
+        ("shop/Screen.java", "package shop;\n\npublic class Screen extends android.app.Dialog {\n    void show(String msg) {}\n    void go() { show(); }\n    void say() { show(\"x\"); }\n}\n\nclass User {\n    Screen screen;\n    void go() { screen.show(); }\n}\n"),
+        ("shop/Mixed.java", "package shop;\n\nclass Up {\n    void show(String m) {}\n}\n\nclass Mixed extends Up implements android.view.Shower {\n    void go() { show(); }\n}\n"),
+    ]);
+    let screen = repo.extract("shop/Screen.java");
+    assert!(calls_from(&screen, "sym:shop/Screen.java::Screen.go").is_empty(), "{:?}", screen.edges);
+    assert!(calls_from(&screen, "sym:shop/Screen.java::User.go").is_empty(), "{:?}", screen.edges);
+    assert_eq!(calls_from(&screen, "sym:shop/Screen.java::Screen.say"), vec!["sym:shop/Screen.java::Screen.show"]);
+    let mixed = repo.extract("shop/Mixed.java");
+    assert!(calls_from(&mixed, "sym:shop/Mixed.java::Mixed.go").is_empty(), "{:?}", mixed.edges);
+}
+
+#[test]
+fn a_receiver_in_another_file_binds_only_a_method_taking_the_arguments() {
+    let repo = Repo::new(&[
+        ("shop/Up.java", "package shop;\n\npublic class Up {\n    public void m(String s) {}\n}\n"),
+        ("shop/Down.java", "package shop;\n\npublic class Down extends Up {\n    public void m() {}\n    public void v(String... xs) {}\n}\n"),
+        ("shop/User.java", "package shop;\n\nclass User {\n    void on(Down d) { d.m(\"x\"); }\n    void off(Down d) { d.m(); }\n    void many(Down d) { d.v(\"a\", \"b\", \"c\"); }\n}\n"),
+    ]);
+    let user = repo.extract("shop/User.java");
+    assert!(calls_from(&user, "sym:shop/User.java::User.on").is_empty(), "{:?}", user.edges);
+    assert_eq!(calls_from(&user, "sym:shop/User.java::User.off"), vec!["sym:shop/Down.java::Down.m"]);
+    assert_eq!(calls_from(&user, "sym:shop/User.java::User.many"), vec!["sym:shop/Down.java::Down.v"]);
+}
+
+#[test]
+fn a_private_method_of_a_supertype_in_the_same_file_is_not_inherited() {
+    let repo = Repo::new(&[
+        NAV,
+        ("shop/B.java", "package shop;\n\nimport static shop.util.Nav.helper;\n\nclass A {\n    private void helper() {}\n}\n\nclass B extends A {\n    void go() { helper(); }\n}\n"),
+    ]);
+    let ex = repo.extract("shop/B.java");
+    assert_eq!(calls_from(&ex, "sym:shop/B.java::B.go"), vec!["sym:shop/util/Nav.java::Nav.helper"]);
+}
+
+#[test]
+fn a_static_nested_class_calls_an_outer_static_method_but_not_one_an_instance_overload_shares() {
+    let src = "package shop;\n\nclass Outer {\n    static int max2(int a) { return a; }\n    static void mixed() {}\n    void mixed(int n) {}\n    static class Builder {\n        void b() { max2(1); }\n        void c() { mixed(); }\n    }\n}\n";
+    let ex = one("shop/Outer.java", src);
+    assert_eq!(calls_from(&ex, "sym:shop/Outer.java::Outer.Builder.b"), vec!["sym:shop/Outer.java::Outer.max2"]);
+    assert!(calls_from(&ex, "sym:shop/Outer.java::Outer.Builder.c").is_empty(), "{:?}", ex.edges);
 }
 
 #[test]

@@ -30,8 +30,21 @@ pub fn extract(resolver: &Resolver, rel: &str, source: &str) -> Extraction {
     let scope = scope(root, src);
     let declared = declarations::scan(root, rel, src, &mut ex);
     jvm::link(&declared.types, &declared.supers, index, &scope, rel, &mut ex);
-    let methods = jvm::Own { rel, types: &declared.types, members: &declared.methods, supers: &declared.supers, shapes: &declared.shapes, index, scope: &scope, kind: jvm::Kind::Method };
-    let fields = jvm::Own { members: &declared.values, kind: jvm::Kind::Field, ..methods };
+    let methods = jvm::Own {
+        rel,
+        types: &declared.types,
+        members: &declared.methods,
+        inheritable: &declared.open_methods,
+        statics: &declared.statics,
+        arities: &declared.arities,
+        supers: &declared.supers,
+        shapes: &declared.shapes,
+        index,
+        scope: &scope,
+        kind: jvm::Kind::Method,
+        args: None,
+    };
+    let fields = jvm::Own { members: &declared.values, inheritable: &declared.open_values, statics: &jvm::NONE, kind: jvm::Kind::Field, ..methods };
     calls::scan(root, &calls::Ctx { methods, fields, src, d: &declared }, &mut ex);
     ex
 }
@@ -51,7 +64,8 @@ pub fn header(source: &str) -> Header {
     // other file reaches it, not even a subclass.
     let reached = |id: &String| d.types.contains(jvm::path_of(id)) || d.open_methods.contains(id) || d.open_values.contains(id);
     let values = d.open_values.difference(&d.open_methods).map(path).collect();
-    let nested = Nested { members: d.members.iter().filter(|id| reached(id)).map(path).collect(), values, types: d.types };
+    let arities = d.arities.iter().filter(|(id, _)| d.open_methods.contains(*id)).map(|(id, a)| (path(id), a.clone())).collect();
+    let nested = Nested { members: d.members.iter().filter(|id| reached(id)).map(path).collect(), values, arities, types: d.types };
     Header { scope: if package.is_empty() { Vec::new() } else { vec![package] }, top: d.top, nested, ..Default::default() }
 }
 

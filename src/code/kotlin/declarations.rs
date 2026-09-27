@@ -5,6 +5,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use tree_sitter::Node;
 
 use super::COMMENTS;
+use crate::code::index::Arity;
 use crate::code::jvm::{self, child, named, span, text};
 use crate::model::{EdgeKind, Extraction, NodeKind};
 
@@ -29,6 +30,36 @@ pub struct Declared {
     /// Per function id, each declaration's parameters as a lambda passed to it reads them; two
     /// entries are overloads.
     pub lambdas: BTreeMap<String, Vec<Vec<Param>>>,
+    /// Per member function id, the argument counts its declarations take.
+    pub arities: BTreeMap<String, Vec<Arity>>,
+}
+
+/// The argument counts a function takes: a parameter with a default may be left out, and a
+/// `vararg` one takes any number. The grammar writes a default as the expression after its
+/// parameter and `vararg` as a modifier before it.
+fn arity(f: Node, src: &[u8]) -> Arity {
+    let mut a = Arity { min: 0, max: 0, varargs: false };
+    let mut vararg = false;
+    let mut last_required = false;
+    for c in child(f, "function_value_parameters").map(named).unwrap_or_default() {
+        match c.kind() {
+            "parameter_modifiers" => vararg = text(c, src).split_whitespace().any(|w| w == "vararg"),
+            "parameter" => {
+                a.max += 1;
+                a.varargs |= vararg;
+                last_required = !vararg;
+                a.min += usize::from(!vararg);
+                vararg = false;
+            }
+            "line_comment" | "multiline_comment" => {}
+            _ if last_required => {
+                a.min -= 1;
+                last_required = false;
+            }
+            _ => {}
+        }
+    }
+    a
 }
 
 /// A parameter as a lambda argument meets it.
@@ -210,6 +241,12 @@ fn declare(n: Node, rel: &str, src: &[u8], parent: &str, owner: Option<&str>, ex
         let mut masked = type_params(n, src);
         masked.extend(owner.map(|o| d.masked(o)).unwrap_or_default());
         d.lambdas.entry(id.clone()).or_default().push(params(n, src, &masked));
+        if owner.is_some() {
+            let arities = d.arities.entry(id.clone()).or_default();
+            arities.push(arity(n, src));
+            arities.sort();
+            arities.dedup();
+        }
     }
     if !is_type(n) {
         return;
