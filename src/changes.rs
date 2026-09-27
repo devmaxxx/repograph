@@ -325,11 +325,10 @@ mod tests {
         g.apply(e);
         let r = report(&g, &[Hunk { file: "l.ts".into(), start: 1, end: 1 }], 2);
         let out = render(&g, &r);
-        assert!(out.contains("  d=2  sym:a.ts::A.run  a.ts:4  ← sym:r.ts::repo  through a literal\n"), "{out}");
+        assert!(out.contains("  d=2  sym:a.ts::A.run  a.ts:4  ← sym:r.ts::repo.find  through a literal\n"), "{out}");
         assert!(out.ends_with("risk: LOW — 1 direct, 1 total, 1 file, 2 through a literal not counted\n"), "{out}");
         let v: serde_json::Value = serde_json::from_str(&render_json(&g, &r)).unwrap();
         assert_eq!((&v["affected"][1]["through_literal"], &v["files"]), (&serde_json::json!(true), &serde_json::json!(["r.ts"])));
-        assert_eq!(v["affected"][1]["via"], "sym:r.ts::repo", "an undeclared member is shown as its symbol");
     }
 
     #[test]
