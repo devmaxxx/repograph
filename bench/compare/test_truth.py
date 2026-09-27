@@ -467,11 +467,11 @@ class Registries(unittest.TestCase):
         self.assertIs(T.DECLARATIONS[".tsx"], T.typescript_declarations)
         self.assertIs(T.DECLARATIONS[".kt"], T.kotlin_declarations)
         self.assertIs(T.BLANKERS[".kt"], T.blank_kotlin)
-        self.assertEqual(list(T.DI_READERS), [*T.JS_FAMILY, ".cs", ".razor"])
+        self.assertEqual(list(T.DI_READERS), [*T.JS_FAMILY, ".cs", ".razor", ".kt", ".java"])
         self.assertEqual(T.CALL_READERS, {})
         self.assertEqual(
             T.code_globs(),
-            ("-g", "*.ts", "-g", "*.tsx", "-g", "*.js", "-g", "*.jsx", "-g", "*.mjs", "-g", "*.cjs", "-g", "*.kt", "-g", "*.cs", "-g", "*.razor", "-g", "*.cshtml"),
+            ("-g", "*.ts", "-g", "*.tsx", "-g", "*.js", "-g", "*.jsx", "-g", "*.mjs", "-g", "*.cjs", "-g", "*.kt", "-g", "*.cs", "-g", "*.razor", "-g", "*.cshtml", "-g", "*.java"),
         )
 
     def test_a_registered_reader_is_the_one_declarations_uses(self):
@@ -507,7 +507,7 @@ class TypeScriptTruthStandsAlone(unittest.TestCase):
         "apps/service.ts": "export class AuthService {\n  login() { return 1; }\n}\n",
     }
     OTHER = {
-        "apps/Sync.kt": "package p\n\nclass SyncEngine(private val wipe: RemoteWipeHandler) {\n    fun run() { wipe.execute() }\n}\n",
+        "apps/Sync.zig": "package p\n\nclass SyncEngine(private val wipe: RemoteWipeHandler) {\n    fun run() { wipe.execute() }\n}\n",
         "apps/Order.zig": "namespace Shop;\npublic class Order { private readonly IPay _pay; public void Go() { this._pay.Charge(); } }\n",
     }
 
@@ -813,6 +813,141 @@ class DotnetReaders(unittest.TestCase):
         line = T.blank_razor('@attribute [Authorize(Roles = "Admin")]\n').split("\n")[0]
         self.assertNotIn("Admin", line)
         self.assertIn("Authorize", line)
+
+
+JAVA_SAMPLE = """/* header /* not nested */
+package shop.orders;
+
+@Service
+public class OrderService extends Base implements Api {
+    private final Invoice invoice;
+    public static int COUNT = 0;
+    java.util.Map<String, java.util.List<Invoice>> byId = null;
+    Invoice[] many;
+
+    public OrderService(Invoice invoice) {
+        this.invoice = invoice;
+        String local = "class Fake {";
+    }
+
+    @Override
+    public void place(int n) {
+        Runnable r = new Runnable() {
+            public void run() { invoice.send(); }
+        };
+        return;
+    }
+
+    static class Nested {
+        void deep() {}
+    }
+}
+
+interface Api {
+    void place(int n);
+    int LIMIT = 3;
+}
+
+enum Status {
+    OPEN, CLOSED;
+    void flip() {}
+}
+
+record Point(int x, int y) {
+    int sum() { return x + y; }
+}
+
+public @interface Audited {
+    String value() default "x";
+}
+"""
+
+
+class JavaDeclarations(unittest.TestCase):
+    """The population the Java extractor declares, read independently of it."""
+
+    def test_types_fields_methods_and_constructors_count_and_statements_do_not(self):
+        got = T.java_declarations(T.blank_java(JAVA_SAMPLE))
+        self.assertEqual(got, [
+            (5, "OrderService"), (6, "invoice"), (7, "COUNT"), (8, "byId"), (9, "many"),
+            (11, "OrderService"), (17, "place"), (24, "Nested"), (25, "deep"),
+            (29, "Api"), (30, "place"), (31, "LIMIT"),
+            (34, "Status"), (36, "flip"),
+            (39, "Point"), (40, "sum"),
+            (43, "Audited"), (44, "value"),
+        ])
+
+    def test_a_java_block_comment_does_not_nest_and_a_kotlin_one_does(self):
+        self.assertEqual(T.blank_java("/* a /* b */ int x; */"), " int x; */")
+        self.assertEqual(T.blank_kotlin("/* a /* b */ val x = 1 */"), "")
+
+    def test_a_changed_java_method_is_a_changed_symbol(self):
+        base = {"shop/Cart.java": "package shop;\n\npublic class Cart {\n    int total() {\n        return 0;\n    }\n}\n"}
+        edit = {"shop/Cart.java": "package shop;\n\npublic class Cart {\n    int total() {\n        return 1;\n    }\n}\n"}
+        got = changes_of(base, edit)
+        self.assertEqual(got["code_files"], ["shop/Cart.java"])
+        self.assertEqual(got["symbols"], {"shop/Cart.java": ["Cart", "total"]})
+
+
+class KotlinConstructorProperties(unittest.TestCase):
+    """Read for the declarations clause only; `changed_symbols` does not count them."""
+
+    def test_only_val_and_var_parameters_are_properties(self):
+        src = (
+            'class A(private val x: Int, y: String, @Json(name = "z") val z: List<Pair<Int, Int>>, val f: () -> Unit)\n'
+            "data class Row(override val id: Int, var `odd name`: String)\n"
+            "class B @Inject constructor(private val s: Store) {\n    fun g() = X::class\n}\n"
+            "class C\n"
+        )
+        self.assertEqual(T.kotlin_constructor_properties(T.blank_kotlin(src)),
+                         [(1, "x"), (1, "z"), (1, "f"), (2, "id"), (2, "odd name"), (3, "s")])
+
+    def test_the_changes_reader_still_leaves_them_out(self):
+        _, found = T.declarations("a/Row.kt", "class Row(val id: Int) {\n    fun read() = id\n}\n")
+        self.assertEqual([name for _, name in found], ["Row", "read"])
+
+
+class JvmCallGraph(unittest.TestCase):
+    """Injected calls in Kotlin and Java, beside a TypeScript graph that must not move."""
+
+    def repo(self, root: Path) -> None:
+        (root / "apps").mkdir()
+        (root / "mobile").mkdir()
+        (root / "android").mkdir()
+        (root / "apps/a.ts").write_text(
+            "export class AuthController {\n  constructor(private auth: AuthService) {}\n  go() { this.auth.login(); }\n}\n")
+        (root / "mobile/S.kt").write_text(
+            "package p\n\npublic class SyncEngine(\n    private val wipe: RemoteWipeHandler,\n) {\n"
+            "    fun run() { wipe.execute() }\n}\n\n"
+            "class RemoteWipeHandler(private val files: ReplicaFiles) {\n    fun execute() { this.files.delete() }\n}\n")
+        (root / "android/Checkout.java").write_text(
+            "package shop;\n\npublic class Checkout {\n    private final Invoice invoice;\n"
+            "    private Gateway gateway = null;\n    public void pay() { invoice.send(); this.gateway.charge(); }\n}\n")
+
+    def test_kotlin_and_java_injected_calls_are_read_and_typescript_is_untouched(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            self.repo(root)
+            only_ts = T.di_call_graph(root, ["apps"])
+            every = T.di_call_graph(root, ["apps", "mobile", "android"])
+            self.assertEqual(only_ts["edges"]["AuthController"], every["edges"]["AuthController"])
+            self.assertEqual(every["edges"]["SyncEngine"], ["RemoteWipeHandler.execute"])
+            self.assertEqual(every["edges"]["RemoteWipeHandler"], ["ReplicaFiles.delete"])
+            self.assertEqual(every["edges"]["Checkout"], ["Gateway.charge", "Invoice.send"])
+            self.assertEqual(T.shortest_path(every, "SyncEngine", "ReplicaFiles"),
+                             ["SyncEngine", "RemoteWipeHandler.execute", "ReplicaFiles.delete"])
+
+    def test_build_reads_mobile_by_default_and_another_corpus_names_its_roots(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            self.repo(root)
+            kotlin = {"kind": "trace", "from": "SyncEngine", "to": "ReplicaFiles", "expect": "path", "via": ["RemoteWipeHandler"]}
+            java = {"kind": "trace", "from": "Checkout", "to": "Invoice", "expect": "path", "via": []}
+            self.assertEqual(T.build(root, [], [kotlin])["trace"]["SyncEngine->ReplicaFiles"],
+                             ["SyncEngine", "RemoteWipeHandler.execute", "ReplicaFiles.delete"])
+            self.assertIsNone(T.build(root, [], [java])["trace"]["Checkout->Invoice"])
+            self.assertEqual(T.build(root, [], [java], roots=["android"])["trace"]["Checkout->Invoice"],
+                             ["Checkout", "Invoice.send"])
 
 
 if __name__ == "__main__":

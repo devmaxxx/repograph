@@ -90,7 +90,7 @@ def _regex_end(src: str, start: int) -> int | None:
     return None
 
 
-def _blank_source(src: str, *, kotlin: bool) -> str:
+def _blank_source(src: str, *, kotlin: bool, nested_comments: bool | None = None) -> str:
     r"""Comments and text blanked out of `src`, line for line, in one left-to-right pass.
 
     Prose is not a reference and neither is a string. This corpus writes long docblocks that
@@ -123,8 +123,12 @@ def _blank_source(src: str, *, kotlin: bool) -> str:
     otherwise open a character literal. And only TypeScript has a regex literal, which is the
     one place a bracket is a character rather than a nesting.
 
+    Java takes Kotlin's dialect with one change, that a block comment does not nest: a text block
+    is a raw string, a backtick never appears in Java code, and Java has no regex literal.
+
     What this still loses is a `${…}` interpolation, blanked with the string around it.
     """
+    nests = kotlin if nested_comments is None else nested_comments
     out: list[str] = []
     line = ""  # the code emitted since the last newline, for the operand-position test
     i, size = 0, len(src)
@@ -143,7 +147,7 @@ def _blank_source(src: str, *, kotlin: bool) -> str:
         elif pair == "/*":
             depth, end = 1, i + 2
             while end < size and depth:
-                if kotlin and src[end : end + 2] == "/*":
+                if nests and src[end : end + 2] == "/*":
                     depth += 1
                     end += 2
                 elif src[end : end + 2] == "*/":
@@ -207,6 +211,10 @@ def blank_typescript(src: str) -> str:
 
 def blank_kotlin(src: str) -> str:
     return _blank_source(src, kotlin=True)
+
+
+def blank_java(src: str) -> str:
+    return _blank_source(src, kotlin=True, nested_comments=False)
 
 
 def blanked_source(rel: str, src: str) -> str:
@@ -363,6 +371,85 @@ def typescript_declarations(blanked: str) -> list[tuple[int, str]]:
     would then be two measurements added together.
     """
     return _scoped_declarations(blanked, decl=TS_DECL, member=TS_MEMBER, type_keywords=TS_TYPE_KEYWORDS)
+
+
+JAVA_MODIFIER = (
+    "public|private|protected|abstract|static|final|sealed|non-sealed|strictfp|default|"
+    "synchronized|native|transient|volatile"
+)
+JAVA_ANNOTATION = r"@[\w.]+(?:\([^()\n]*\))?[ \t]*"
+JAVA_DECL = re.compile(
+    rf"^[ \t]*(?:{JAVA_ANNOTATION})*"
+    rf"(?:(?:{JAVA_MODIFIER})[ \t]+)*"
+    rf"(?P<kw>class|interface|enum|record|@interface)\b"
+    rf"[ \t]+(?P<name>\w+)"
+)
+# A member is a type then a name, or — a constructor — a capitalised name straight before its
+# parameters. An enum constant looks like the second form, so an ALL-CAPS name is refused there;
+# `return x;` and `new X();` look like the first, so their keywords are refused as a type.
+JAVA_MEMBER = re.compile(
+    rf"^[ \t]*(?:{JAVA_ANNOTATION})*"
+    rf"(?:(?:{JAVA_MODIFIER})[ \t]+)*"
+    rf"(?:{GENERIC}[ \t]+)?"
+    rf"(?:"
+    rf"(?!(?:return|new|throw|else|case|yield|assert|break|continue)\b)[\w.$]+(?:[ \t]*{GENERIC})?(?:[ \t]*\[\])*[ \t]+"
+    rf"|(?=(?![A-Z0-9_]+\b)[A-Z]\w*[ \t]*\()"
+    rf")"
+    rf"(?P<name>\w+)[ \t]*[(=;,]"
+)
+JAVA_TYPE_KEYWORDS = {"class", "interface", "enum", "record", "@interface"}
+
+
+def java_declarations(blanked: str) -> list[tuple[int, str]]:
+    """(line, name) for every Java type, field, method and constructor in already-blanked source.
+
+    The population the extractor declares, read without it: a constructor counts under its type's
+    name, an enum constant and a record component do not, and an anonymous class's method, being
+    inside a statement block, is never at a declaring scope. One name per line, so the second field
+    of `int a, b;` is not counted; the extractor declares both, and the declarations clause's ±5%
+    absorbs it.
+    """
+    return _scoped_declarations(blanked, decl=JAVA_DECL, member=JAVA_MEMBER, type_keywords=JAVA_TYPE_KEYWORDS)
+
+
+KOTLIN_PRIMARY = re.compile(
+    rf"\bclass[ \t]+(?:{KOTLIN_NAME})[ \t]*(?:{GENERIC})?[ \t]*"
+    rf"(?:(?:@[\w.]+(?:\([^()\n]*\))?|public|private|internal|protected)[ \t]+)*(?:constructor[ \t]*)?\("
+)
+KOTLIN_PARAM_PROPERTY = re.compile(
+    rf"^\s*(?:@[\w.:]+(?:\([^()]*\))?\s*)*(?:(?:{KOTLIN_MODIFIER})\s+)*(?:val|var)\s+(?P<name>{KOTLIN_NAME})"
+)
+
+
+def kotlin_constructor_properties(blanked: str) -> list[tuple[int, str]]:
+    """(line, name) of every `val` or `var` in a Kotlin primary constructor, in already-blanked source.
+
+    `kotlin_declarations` leaves these out on purpose: the hunk that touches a header touches the
+    type. The extractor declares them as members, so the declarations clause adds this count to that
+    one and compares one population; `changed_symbols` does not read it. Only `(`, `[` and `{` nest,
+    because a function type's `->` carries a `>` with no `<`; a comma inside `Map<K, V>` splits a
+    parameter in two, and neither half starts with `val`.
+    """
+    found: list[tuple[int, str]] = []
+    for m in KOTLIN_PRIMARY.finditer(blanked):
+        depth, i, start = 1, m.end(), m.end()
+        parts: list[tuple[int, int]] = []
+        while i < len(blanked) and depth:
+            char = blanked[i]
+            if char in "([{":
+                depth += 1
+            elif char in ")]}":
+                depth -= 1
+            if depth == 0 or (char == "," and depth == 1):
+                parts.append((start, i))
+                start = i + 1
+            i += 1
+        for lo, hi in parts:
+            prop = KOTLIN_PARAM_PROPERTY.match(blanked[lo:hi])
+            if prop:
+                at = lo + prop.start("name")
+                found.append((blanked.count("\n", 0, at) + 1, prop.group("name").strip("`")))
+    return found
 
 
 # The extensions TypeScript's readers also cover: same declaration grammar, same DI pattern.
@@ -735,6 +822,20 @@ class ComponentDiReader(DiReader):
 CSHARP_DI = DiReader(CS_CLASS, CS_FIELD, CS_CALL)
 RAZOR_DI = ComponentDiReader(NO_CLASS, RAZOR_FIELD, CS_CALL)
 
+KT_CLASS = re.compile(r"^(?:(?:public|internal|expect|actual|abstract|open|data|sealed)\s+)*class (\w+)", re.M)
+KT_FIELD = re.compile(r"\b(?:val|var)\s+(\w+)\s*:\s*(\w+)")
+# `files.delete()` and `this.files.delete()` are one call in both JVM languages.
+JVM_CALL = re.compile(r"(?:\bthis\s*\.\s*)?\b(\w+)\s*\.\s*(\w+)\s*\(", re.S)
+JAVA_CLASS = re.compile(
+    r"^[ \t]*(?:(?:public|protected|private|abstract|static|final|sealed|non-sealed|strictfp)\s+)*(?:class|record|enum)\s+(\w+)",
+    re.M,
+)
+# Java writes the type before the name; the lookahead captures the name first so group 1 is the
+# name and group 2 the type, the order `di_call_graph` reads for every language.
+JAVA_FIELD = re.compile(r"\b(?=[A-Z][\w.]*(?:<[^;=(){}]*>)?(?:\[\])*\s+(\w+)\s*[;=])([A-Z][\w.]*)")
+KOTLIN_DI = DiReader(KT_CLASS, KT_FIELD, JVM_CALL)
+JAVA_DI = DiReader(JAVA_CLASS, JAVA_FIELD, JVM_CALL)
+
 
 # Keyed by extension. A language joins the truth by adding its readers here; a file of an
 # extension no table names contributes nothing, which is what a language not yet read is.
@@ -744,6 +845,7 @@ DECLARATIONS: dict[str, Callable[[str], list[tuple[int, str]]]] = {
     ".cs": csharp_declarations,
     ".razor": razor_declarations,
     ".cshtml": view_declarations,
+    ".java": java_declarations,
 }
 BLANKERS: dict[str, Callable[[str], str]] = {
     **{ext: blank_typescript for ext in JS_FAMILY},
@@ -751,11 +853,14 @@ BLANKERS: dict[str, Callable[[str], str]] = {
     ".cs": blank_csharp,
     ".razor": blank_razor,
     ".cshtml": blank_razor,
+    ".java": blank_java,
 }
 DI_READERS: dict[str, DiReader] = {
     **{ext: TYPESCRIPT_DI for ext in JS_FAMILY},
     ".cs": CSHARP_DI,
     ".razor": RAZOR_DI,
+    ".kt": KOTLIN_DI,
+    ".java": JAVA_DI,
 }
 # `(caller, callee)` name pairs for a chain no field-and-call pattern can say: a migration altering
 # a table another created, a resolver answering a query. A callee is `Owner` or `Owner.member`, the
@@ -930,17 +1035,25 @@ def changed_symbols(repo: Path, base: str) -> dict:
     return {"files": sorted(hunks), "code_files": sorted(code_files), "symbols": symbols}
 
 
-def build(repo: Path, cases: list[dict], blast: list[dict]) -> dict:
+# .NET libraries and the Kotlin app live beside `apps` and `packages` in this monorepo.
+DI_ROOTS = ("apps", "packages", "libs-dotnet", "mobile")
+
+
+def build(repo: Path, cases: list[dict], blast: list[dict], roots: list[str] | None = None) -> dict:
+    """The ground truth for every case, read from `repo` by pattern rather than by any tool.
+
+    `roots` names where the injected-call reader looks; the default is this repository's corpus
+    layout, and a corpus kept elsewhere passes its own.
+    """
     truth: dict = {"retrieval": {}, "impact": {}, "trace": {}, "changes": {}}
     for case in cases:
         want = case["expect"]
         # A code case names the file itself; a requirement case names an id that
         # some file spells.
         truth["retrieval"][want] = [want] if (repo / want).is_file() else files_naming(repo, want)
-    # .NET libraries live beside `apps` and `packages` in a monorepo. A root the tree lacks is dropped
-    # rather than handed to ripgrep, whose complaint would say nothing about the truth.
-    roots = [r for r in ("apps", "packages", "libs-dotnet") if (repo / r).is_dir()]
-    graph = di_call_graph(repo, roots)
+    # A root the tree lacks is dropped rather than handed to ripgrep, whose complaint would say
+    # nothing about the truth.
+    graph = di_call_graph(repo, [r for r in (DI_ROOTS if roots is None else roots) if (repo / r).is_dir()])
     for case in blast:
         if case["kind"] == "impact":
             name = case["target"]
