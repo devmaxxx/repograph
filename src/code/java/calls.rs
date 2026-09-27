@@ -28,6 +28,12 @@
 //! - A type named in a field's, a parameter's or a record component's type or a return type,
 //!   generic arguments and array elements included, writes the file-to-file `Imports` an import of
 //!   it writes, masked as any written type is, and none where the grammar failed around it.
+//! - `new T(…)` calls the type it creates, read as any written type is, as a Kotlin constructor
+//!   call and a C# `new` do; the type, not its constructor, since which overload runs is the
+//!   same-arity residual again. An anonymous class's creation calls its supertype the same way.
+//!   `outer.new Inner()` binds only when the receiver's own type declares `Inner`, since an
+//!   inherited one may come from a supertype the file never reads. `new T[n]` constructs no `T`,
+//!   so it writes a signature's `Imports`, not a call.
 //!
 //! Edges it leaves out: calls through `super`, through a chain of calls, through another file's
 //! fields, and from field initializers and initializer blocks.
@@ -174,6 +180,14 @@ fn walk(n: Node, mut at: At, cx: &Ctx, ex: &mut Extraction) {
                 }
             }
         }
+        // The type is read in the scope around the creation, before an anonymous body is entered.
+        "object_creation_expression" => {
+            if let Some(from) = &at.method {
+                for to in created(n, &at, cx) {
+                    ex.edge(from, &to, EdgeKind::Calls, "", cx.methods.rel);
+                }
+            }
+        }
         "line_comment" | "block_comment" => jvm::cite(n, &owner(&at, cx.methods.rel), "comment", cx.methods.rel, cx.src, ex),
         "string_literal" => jvm::cite(n, &owner(&at, cx.methods.rel), "string", cx.methods.rel, cx.src, ex),
         _ => {}
@@ -224,7 +238,7 @@ fn walk(n: Node, mut at: At, cx: &Ctx, ex: &mut Extraction) {
 /// arguments and array elements included, writes the edge an import of it would.
 fn signature(n: Node, at: &At, cx: &Ctx, ex: &mut Extraction) {
     let t = match n.kind() {
-        "field_declaration" | "constant_declaration" | "method_declaration" | "formal_parameter" => n.child_by_field_name("type"),
+        "field_declaration" | "constant_declaration" | "method_declaration" | "formal_parameter" | "array_creation_expression" => n.child_by_field_name("type"),
         "spread_parameter" => named(n).into_iter().find(|c| c.kind() != "modifiers" && c.kind() != "variable_declarator"),
         _ => None,
     };
@@ -420,6 +434,19 @@ fn targets(call: Node, at: &At, cx: &Ctx) -> Vec<String> {
         Some(ids) => cx.methods.on_types(&ids, name),
         None => Vec::new(),
     }
+}
+
+/// The type `new T(…)` creates, read as any written type is. `outer.new Inner()` names a member
+/// type of the receiver's type, which only a receiver whose own type declares `Inner` proves: an
+/// inherited one may come from a supertype the lookup does not walk.
+fn created(n: Node, at: &At, cx: &Ctx) -> Vec<String> {
+    let Some(written) = n.child_by_field_name("type").and_then(|t| written_type(t, cx.src)) else { return Vec::new() };
+    let mut before_new = n.walk();
+    let qualifier = n.children(&mut before_new).take_while(|c| c.kind() != "new").find(|c| c.is_named() && !c.kind().ends_with("comment"));
+    let Some(qualifier) = qualifier else { return resolved(&written, at, cx).unwrap_or_default() };
+    let Some(outers) = receiver(qualifier, at, cx) else { return Vec::new() };
+    let inner: Option<Vec<String>> = outers.iter().map(|id| Some(format!("{id}.{written}")).filter(|c| cx.methods.is_type(c))).collect();
+    inner.unwrap_or_default()
 }
 
 fn found(b: Bound) -> Vec<String> {

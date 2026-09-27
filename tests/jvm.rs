@@ -373,3 +373,21 @@ fn a_record_component_added_or_removed_is_followed_by_update() {
     let none = "package r;\n\npublic record R(int y) implements H {\n    int f() { return x(); }\n}\n";
     flipped(("r/R.java", accessor), ("r/R.java", none), &[h], &call("sym:r/R.java::R.f", "sym:r/H.java::H.x"));
 }
+
+#[test]
+fn a_created_type_added_removed_or_moved_is_followed_to_the_unchanged_file_that_creates_it() {
+    let key = ("shop/Key.java", "package shop;\n\npublic class Key {}\n");
+    let moved = ("shop/keys/Keys.java", "package shop;\n\npublic class Key {}\n");
+    let other = ("shop/Other.java", "package shop;\n\nclass Other {}\n");
+    let user = ("shop/Use.java", "package shop;\n\nclass Use {\n    Object go() { return new Key(); }\n}\n");
+    let created = |edges: &Edges, to: &str| edges.contains(&("sym:shop/Use.java::Use.go".to_string(), to.to_string(), "Calls".to_string(), String::new()));
+    let (updated, built) = updated_and_built(&[other, user], &[key]);
+    assert!(created(&built, "sym:shop/Key.java::Key"), "{built:?}");
+    assert_eq!(updated, built);
+    let (updated, built) = removed_updated_and_built(&[key, other, user], &[], &[key.0]);
+    assert!(!built.iter().any(|(s, _, k, _)| s == "sym:shop/Use.java::Use.go" && k == "Calls"), "{built:?}");
+    assert_eq!(updated, built);
+    let (updated, built) = removed_updated_and_built(&[key, other, user], &[moved], &[key.0]);
+    assert!(created(&built, "sym:shop/keys/Keys.java::Key"), "{built:?}");
+    assert_eq!(updated, built);
+}
