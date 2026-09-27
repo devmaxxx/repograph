@@ -76,7 +76,7 @@ pub struct Index<'a> {
 impl<'a> Index<'a> {
     pub fn new(graph: &'a Graph, up: bool) -> Index<'a> { Self::build(graph, up, true) }
 
-    /// Only what `aliases` and `undeclared` read, for a caller that looks a name up once and
+    /// Only what `aliases` reads, for a caller that looks a name up once and
     /// never walks: `explain` builds one per call.
     pub(crate) fn names(graph: &'a Graph) -> Index<'a> { Self::build(graph, true, false) }
 
@@ -145,25 +145,9 @@ impl<'a> Index<'a> {
         out
     }
 
-    /// Targets `S.m` that no node declares, for `S` and each of its aliases: the methods of an
-    /// object literal (`export const repo = { find() {…} }`) are called as `repo.find` but never
-    /// declared, so no `Declares` edge joins them to `repo` and only their prefix does.
-    pub(crate) fn undeclared(&self, ids: &[String]) -> Vec<String> {
-        let mut out = Vec::new();
-        for id in ids {
-            let prefix = format!("{id}.");
-            let range = self.code.range::<str, _>((std::ops::Bound::Included(prefix.as_str()), std::ops::Bound::Unbounded));
-            for (target, _) in range.take_while(|(t, _)| t.starts_with(&prefix)) {
-                if !self.graph.nodes.contains_key(*target) { out.push(target.to_string()); }
-            }
-        }
-        out
-    }
-
     fn walk(&self, root: &str, depth: usize) -> Vec<Vec<Dependent>> {
         let (graph, up) = (self.graph, self.up);
-        let mut start = self.seeds(root);
-        if up { start.extend(self.undeclared(&start)); }
+        let start = self.seeds(root);
         let mut seen: BTreeSet<String> = start.iter().cloned().collect();
         let mut frontier = start;
         let mut layers = Vec::new();
@@ -183,11 +167,6 @@ impl<'a> Index<'a> {
             seen.extend(next.keys().cloned());
             let next: Vec<Dependent> = next.into_values().collect();
             frontier = next.iter().map(|x| x.id.clone()).collect();
-            // A dependent that is an object literal is called through its methods, at any depth.
-            if up && d < depth {
-                let named: Vec<String> = frontier.iter().flat_map(|f| self.aliases(f)).chain(frontier.iter().cloned()).collect();
-                frontier.extend(self.undeclared(&named));
-            }
             layers.push(next);
         }
         layers
@@ -423,27 +402,6 @@ pub(crate) mod tests {
         e.edge("sym:b.ts::other", "sym:r.ts::repository.find", EdgeKind::Calls, "", "b.ts");
         g.apply(e);
         g
-    }
-
-    #[test]
-    fn upstream_of_an_object_literal_counts_the_callers_of_its_undeclared_methods() {
-        let imp = upstream(&object_literal(), "sym:r.ts::repo", 2);
-        let d1: Vec<(&str, &str)> = imp.layers[0].iter().map(|d| (d.id.as_str(), d.via.as_str())).collect();
-        assert_eq!(d1, vec![("sym:a.ts::A.run", "sym:r.ts::repo.find"), ("sym:b.ts::go", "sym:index.ts::repo.save")]);
-    }
-
-    #[test]
-    fn a_path_through_an_object_literal_is_followed_past_the_first_layer() {
-        // A method of `repo` calls `lock`: the literal is the caller at d=1, and the callers of
-        // its undeclared methods, direct or through the barrel, are the callers at d=2.
-        let mut g = object_literal();
-        let mut e = Extraction::default();
-        e.node(NodeKind::Symbol, "sym:l.ts::lock", "lock", "", "l.ts", 1);
-        e.edge("sym:r.ts::repo", "sym:l.ts::lock", EdgeKind::Calls, "", "r.ts");
-        g.apply(e);
-        let imp = upstream(&g, "sym:l.ts::lock", 2);
-        let d2: Vec<(&str, &str)> = imp.layers[1].iter().map(|d| (d.id.as_str(), d.via.as_str())).collect();
-        assert_eq!(d2, vec![("sym:a.ts::A.run", "sym:r.ts::repo.find"), ("sym:b.ts::go", "sym:index.ts::repo.save")]);
     }
 
     #[test]

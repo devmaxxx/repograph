@@ -108,8 +108,8 @@ AST-only indexer misses entirely. Each construct is pinned by one inline case in
 `impact <symbol>` walks `Calls` and `Extends` edges towards the symbol: `d=1` are the direct
 callers ("will break"), `d=2` their callers, and so on to `--depth` (3; 0 is refused as a usage
 error, exit 2, since it walks nothing). A class is walked
-through its members, an object literal through the `repo.find` calls whose method no node
-declares, and a caller that imported through a barrel is found because the barrel's
+through its members; an object literal is not yet walked through its methods, which no node
+declares (0.6.0, #106). A caller that imported through a barrel is found because the barrel's
 `ReExports` edges are followed back to the declaration. The barrel itself is listed among the
 importers: it names the symbol, and a rename reaches it first. `importers` are the files whose
 `import` names the symbol, whether or not a call site resolved. The risk line is four fixed thresholds

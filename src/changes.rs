@@ -301,14 +301,6 @@ mod tests {
     }
 
     #[test]
-    fn a_hunk_inside_an_object_literal_method_reaches_the_callers_of_that_method() {
-        let g = crate::impact::tests::object_literal();
-        let r = report(&g, &[Hunk { file: "r.ts".into(), start: 8, end: 9 }], 1);
-        assert_eq!(r.touched, vec!["sym:r.ts::repo"]);
-        assert_eq!(r.affected.iter().map(|d| d.id.as_str()).collect::<Vec<_>>(), vec!["sym:a.ts::A.run", "sym:b.ts::go"]);
-    }
-
-    #[test]
     fn a_diff_of_thousands_of_symbols_is_walked_in_seconds_not_minutes() {
         // Every root once regrouped and rescanned the whole edge set; 3,000 roots over 30,000
         // edges took tens of seconds that way, and take milliseconds over one index.
