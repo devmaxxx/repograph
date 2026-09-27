@@ -168,7 +168,10 @@ impl<'a> Index<'a> {
     fn walk(&self, root: &str, depth: usize, literals: bool) -> (Vec<Vec<Dependent>>, bool) {
         let (graph, up) = (self.graph, self.up);
         let mut start = self.seeds(root);
-        if up { start.extend(self.undeclared(&start)); }
+        // A member no node declares is named in `via` as the symbol it belongs to, as
+        // `canonical` names it in a row; a barrel alias stays the alias the caller wrote.
+        let mut undeclared: BTreeSet<String> = BTreeSet::new();
+        if up { undeclared.extend(self.undeclared(&start)); start.extend(undeclared.iter().cloned()); }
         let mut seen: BTreeSet<String> = start.iter().cloned().collect();
         let mut frontier = start;
         let mut layers = Vec::new();
@@ -176,10 +179,11 @@ impl<'a> Index<'a> {
         for d in 1..=depth {
             let mut next: BTreeMap<String, Dependent> = BTreeMap::new();
             for at in &frontier {
+                let via = if undeclared.contains(at) { container(at).unwrap_or_else(|| at.clone()) } else { at.clone() };
                 for e in self.step(at) {
                     let other = if up { e.source.clone() } else { canonical(graph, &e.target).unwrap_or_else(|| e.target.clone()) };
                     if seen.contains(&other) { continue }
-                    let candidate = Dependent { id: other.clone(), depth: d, kind: e.kind, via: at.clone(), passed: e.passes(), through_literal: false };
+                    let candidate = Dependent { id: other.clone(), depth: d, kind: e.kind, via: via.clone(), passed: e.passes(), through_literal: false };
                     // A call beats an argument edge whichever owner in the layer came first.
                     if next.get(&other).is_some_and(|x| !beats(&candidate, x)) { continue }
                     next.insert(other, candidate);
@@ -194,6 +198,7 @@ impl<'a> Index<'a> {
                 let named: Vec<String> = frontier.iter().flat_map(|f| self.aliases(f)).chain(frontier.iter().cloned()).collect();
                 let members = self.undeclared(&named);
                 through |= !members.is_empty();
+                undeclared.extend(members.iter().cloned());
                 frontier.extend(members);
             }
             layers.push(next);
@@ -460,7 +465,7 @@ pub(crate) mod tests {
     fn upstream_of_an_object_literal_counts_the_callers_of_its_undeclared_methods() {
         let imp = upstream(&object_literal(), "sym:r.ts::repo", 2);
         let d1: Vec<(&str, &str)> = imp.layers[0].iter().map(|d| (d.id.as_str(), d.via.as_str())).collect();
-        assert_eq!(d1, vec![("sym:a.ts::A.run", "sym:r.ts::repo.find"), ("sym:b.ts::go", "sym:index.ts::repo.save")]);
+        assert_eq!(d1, vec![("sym:a.ts::A.run", "sym:r.ts::repo"), ("sym:b.ts::go", "sym:index.ts::repo")]);
     }
 
     #[test]
@@ -474,7 +479,7 @@ pub(crate) mod tests {
         g.apply(e);
         let imp = upstream(&g, "sym:l.ts::lock", 2);
         let d2: Vec<(&str, &str)> = imp.layers[1].iter().map(|d| (d.id.as_str(), d.via.as_str())).collect();
-        assert_eq!(d2, vec![("sym:a.ts::A.run", "sym:r.ts::repo.find"), ("sym:b.ts::go", "sym:index.ts::repo.save")]);
+        assert_eq!(d2, vec![("sym:a.ts::A.run", "sym:r.ts::repo"), ("sym:b.ts::go", "sym:index.ts::repo")]);
     }
 
     /// `lock` is called by one method of `repo`, and nobody knows which: the callers of every
@@ -497,7 +502,7 @@ pub(crate) mod tests {
             ("sym:c.ts::top", 3, true),
         ]);
         let out = render(&g, &imp, "upstream");
-        assert!(out.contains("  sym:a.ts::A.run  a.ts:4  Calls → sym:r.ts::repo.find  through a literal\n"), "{out}");
+        assert!(out.contains("  sym:a.ts::A.run  a.ts:4  Calls → sym:r.ts::repo  through a literal\n"), "{out}");
         assert!(out.ends_with("risk: LOW — 2 direct, 2 total, 2 files, 2 through a literal not counted\n"), "{out}");
         let v: serde_json::Value = serde_json::from_str(&render_json(&g, &imp, "upstream")).unwrap();
         assert_eq!((&v["total"], &v["layers"][1][0]["through_literal"]), (&serde_json::json!(2), &serde_json::json!(true)));

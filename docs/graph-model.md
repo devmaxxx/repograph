@@ -143,7 +143,7 @@ that both passes and calls a target has one edge, the call.
 What the graph cannot prove it does not list: a call through a chained expression, a
 destructured method, a callback parameter or a global has no edge, so confirm a "nothing uses
 this" with `rg -l` before deleting. A member no node declares — `loginSchema.parse`, a method
-of an object literal — is shown as the symbol it belongs to; a target the graph knows only by
+of an object literal — is shown as the symbol it belongs to, as a row and as a `via`; a target the graph knows only by
 name, with no symbol of its own to fall back to, prints `?` in place of its `path:line`.
 
 `changes` maps `git diff -U0` (staged and unstaged, plus untracked files whole) onto symbol
