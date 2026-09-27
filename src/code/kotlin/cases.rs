@@ -805,3 +805,116 @@ fn a_use_site_targeted_annotation_decorates_the_property() {
     let ex = repo.extract("app/Holder.kt");
     assert_eq!(edges(&ex, EdgeKind::DecoratedBy), vec![("sym:app/Holder.kt::Holder.name", "sym:app/Api.kt::Api", "")], "{:?}", ex.edges);
 }
+
+// ---- property initializers and bare references ----
+
+fn refs_from<'a>(ex: &'a crate::model::Extraction, from: &str) -> Vec<&'a str> {
+    edges(ex, EdgeKind::References).into_iter().filter(|(s, t, _)| *s == from && t.starts_with("sym:")).map(|(_, t, _)| t).collect()
+}
+
+const CORE: &str = "package app
+
+object Gap
+object Par
+
+private fun order(rules: List<Any>): List<Any> = rules
+
+fun top() = 1
+
+class Store {
+    fun save() = 1
+}
+
+class Core(x: Store, val y: Store) {
+    val rules: List<Any> = order(listOf(Gap, Par))
+    val lazyOne by lazy { Gap }
+    val fromParam = x.save()
+    val computed: Int get() = top()
+    companion object {
+        val shared = Par
+    }
+}
+
+val topLevel = top()
+";
+
+#[test]
+fn a_property_initializer_calls_and_references_from_the_property() {
+    let ex = one("app/Core.kt", CORE);
+    assert_eq!(calls_from(&ex, "sym:app/Core.kt::Core.rules"), vec!["sym:app/Core.kt::order"], "{:?}", ex.edges);
+    assert_eq!(refs_from(&ex, "sym:app/Core.kt::Core.rules"), vec!["sym:app/Core.kt::Gap", "sym:app/Core.kt::Par"], "{:?}", ex.edges);
+    assert_eq!(refs_from(&ex, "sym:app/Core.kt::Core.lazyOne"), vec!["sym:app/Core.kt::Gap"], "a delegate is walked: {:?}", ex.edges);
+    assert_eq!(calls_from(&ex, "sym:app/Core.kt::Core.fromParam"), vec!["sym:app/Core.kt::Store.save"], "a constructor parameter is typed in an initializer: {:?}", ex.edges);
+    assert_eq!(calls_from(&ex, "sym:app/Core.kt::Core.computed"), vec!["sym:app/Core.kt::top"], "a getter is walked: {:?}", ex.edges);
+    assert_eq!(refs_from(&ex, "sym:app/Core.kt::Core.shared"), vec!["sym:app/Core.kt::Par"], "a companion property is the class's: {:?}", ex.edges);
+    assert_eq!(calls_from(&ex, "sym:app/Core.kt::topLevel"), vec!["sym:app/Core.kt::top"], "{:?}", ex.edges);
+}
+
+#[test]
+fn a_bare_reference_in_another_file_s_package_reaches_the_object() {
+    let repo = Repo::new(&[
+        ("app/Rules.kt", "package app\n\ninternal object Gap\n"),
+        ("app/Core.kt", "package app\n\nobject Core {\n    val rules: List<Any> = listOf(Gap)\n    fun pick(): Any = Gap\n}\n"),
+    ]);
+    let ex = repo.extract("app/Core.kt");
+    assert_eq!(refs_from(&ex, "sym:app/Core.kt::Core.rules"), vec!["sym:app/Rules.kt::Gap"], "{:?}", ex.edges);
+    assert_eq!(refs_from(&ex, "sym:app/Core.kt::Core.pick"), vec!["sym:app/Rules.kt::Gap"], "a function body references the same way: {:?}", ex.edges);
+}
+
+#[test]
+fn a_bare_reference_a_local_a_parameter_or_an_accessor_binds_writes_nothing() {
+    let src = "package app
+
+object Gap
+val value = 1
+val v = 2
+fun h(v: Any) = v
+
+class Shadow(Gap: Int) {
+    val a = Gap
+    var b: Int = 0
+        set(value) { field = value }
+    fun f() {
+        val Gap = 1
+        h(Gap)
+    }
+    fun g(Gap: Int) = h(Gap)
+    fun named() = h(v = Gap)
+}
+";
+    let ex = one("app/S.kt", src);
+    for from in ["sym:app/S.kt::Shadow.a", "sym:app/S.kt::Shadow.b", "sym:app/S.kt::Shadow.f", "sym:app/S.kt::Shadow.g"] {
+        assert!(refs_from(&ex, from).is_empty(), "{from}: {:?}", ex.edges);
+    }
+    assert_eq!(refs_from(&ex, "sym:app/S.kt::Shadow.named"), vec!["sym:app/S.kt::Gap"], "a named argument's name is no reference: {:?}", ex.edges);
+}
+
+#[test]
+fn a_bare_reference_two_levels_bind_or_an_unread_supertype_may_hold_writes_nothing() {
+    let src = "package app
+
+object Gap
+fun helper() = 1
+
+class Two {
+    val Gap = 1
+    val a: Any = app.Gap
+    fun f(): Any = Gap
+}
+
+class Screen : androidx.appcompat.app.AppCompatActivity() {
+    val a: Any = Gap
+    val b = helper()
+}
+
+class Fn {
+    val a: Any = helper
+}
+";
+    let ex = one("app/T.kt", src);
+    assert!(refs_from(&ex, "sym:app/T.kt::Two.f").iter().all(|t| *t != "sym:app/T.kt::Gap"), "{:?}", ex.edges);
+    assert!(refs_from(&ex, "sym:app/T.kt::Two.f").is_empty(), "a member and the top level both bind Gap: {:?}", ex.edges);
+    assert!(refs_from(&ex, "sym:app/T.kt::Screen.a").is_empty(), "{:?}", ex.edges);
+    assert!(calls_from(&ex, "sym:app/T.kt::Screen.b").is_empty(), "the activity may declare helper(): {:?}", ex.edges);
+    assert!(refs_from(&ex, "sym:app/T.kt::Fn.a").is_empty(), "a bare name never references a function: {:?}", ex.edges);
+}

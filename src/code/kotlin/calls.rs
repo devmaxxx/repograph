@@ -18,6 +18,11 @@
 //!   capitalised members, and refusing constructors and Composables would drop nearly every Compose
 //!   call. That is the residual this walk accepts.
 //!
+//! - A property's initializer, delegate and accessors are walked as a function body is, from the
+//!   property. A name read as a value — an object passed as an argument, a property read bare —
+//!   writes `References` from the declaration around it to what the same lookup binds, never to a
+//!   function, since Kotlin reads a value among properties, objects and types only.
+//!
 //! Edges it leaves out: calls on a value whose type is inferred from anything but a constructor
 //! call, receivers typed by another file's properties, a lambda passed to another file's function
 //! taking `T.() -> R` (read as an unknown receiver), a companion's members from a nested type, and
@@ -152,6 +157,23 @@ fn walk(n: Node, mut at: At, cx: &Ctx, ex: &mut Extraction) {
             }
         }
         "function_declaration" | "anonymous_function" => function(n, &mut at, cx),
+        "property_declaration" if is_declared(n) => {
+            if let Some(s) = child(n, "variable_declaration").and_then(|v| child(v, "simple_identifier")) {
+                let name = text(s, cx.src);
+                let path = if at.class.is_empty() { name.to_string() } else { format!("{}.{name}", at.class) };
+                at.function = Some(format!("sym:{}::{path}", cx.own.rel));
+                at.locals.clear();
+                at.receivers.clear();
+                property(n, &mut at, cx);
+            }
+        }
+        "setter" => {
+            for p in named(n).into_iter().filter(|p| p.kind() == "parameter_with_optional_type") {
+                if let Some(name) = child(p, "simple_identifier") {
+                    at.bind(text(name, cx.src), None);
+                }
+            }
+        }
         "lambda_literal" if !n.parent().is_some_and(|p| one_line_object(p).is_some()) => {
             if let Some(r) = lambda_receiver(n, &at, cx) {
                 at.receivers.push(r);
@@ -188,6 +210,15 @@ fn walk(n: Node, mut at: At, cx: &Ctx, ex: &mut Extraction) {
                     // A recursive call says nothing about what the function depends on.
                     if to != from {
                         ex.edge(&from, &to, EdgeKind::Calls, "", cx.own.rel);
+                    }
+                }
+            }
+        }
+        "simple_identifier" if is_value(n) => {
+            if let Some(from) = at.function.clone() {
+                for to in jvm::same_platform(cx.own.rel, referenced(text(n, cx.src), &at, cx)) {
+                    if to != from {
+                        ex.edge(&from, &to, EdgeKind::References, "", cx.own.rel);
                     }
                 }
             }
@@ -260,6 +291,69 @@ fn function(f: Node, at: &mut At, cx: &Ctx) {
             let ty = written_type(p, cx.src).map(|t| resolved(&t, at, cx));
             at.bind(text(name, cx.src), ty);
         }
+    }
+}
+
+/// A property as its initializer, delegate and accessors see it: its own type parameters and
+/// extension receiver, the backing `field`, and the primary constructor's parameters, which an
+/// initializer reads before any property of the same name. An accessor never sees those
+/// parameters, but reading one there as a local only costs an edge.
+fn property(p: Node, at: &mut At, cx: &Ctx) {
+    at.type_params.extend(type_params(p, cx.src));
+    if let Some(written) = receiver(p, cx.src, &at.type_params) {
+        let ids = if written.is_empty() { Vec::new() } else { resolved(&written, at, cx) };
+        at.receivers.push(Receiver::Types(ids));
+    }
+    at.bind("field", None);
+    let ctor = holder(p).filter(|h| h.kind() == "class_declaration").and_then(|h| child(h, "primary_constructor"));
+    for c in ctor.map(named).unwrap_or_default().into_iter().filter(|c| c.kind() == "class_parameter") {
+        if let Some(name) = child(c, "simple_identifier") {
+            let ty = written_type(c, cx.src).map(|t| resolved(&t, at, cx));
+            at.bind(text(name, cx.src), ty);
+        }
+    }
+}
+
+/// Whether a `simple_identifier` is a name read as a value: not a declaration's name, a named
+/// argument's, a member after `.`, a callee, an infix function, a receiver or an assignment target.
+/// The parents are listed rather than excluded, so a grammar shape not read here writes nothing.
+fn is_value(n: Node) -> bool {
+    let Some(p) = n.parent() else { return false };
+    let first = p.named_child(0) == Some(n);
+    match p.kind() {
+        "value_argument" => !(first && p.named_child_count() > 1),
+        "infix_expression" => p.named_child(1) != Some(n),
+        "indexing_expression" | "property_declaration" | "property_delegate" | "function_body" | "function_value_parameters" | "statements"
+        | "control_structure_body" | "jump_expression" | "assignment" | "parenthesized_expression" | "collection_literal" | "if_expression"
+        | "when_subject" | "when_condition" | "range_test" | "guard_condition" | "for_statement" | "while_statement" | "do_while_statement"
+        | "indexing_suffix" | "interpolated_expression" | "spread_expression" | "prefix_expression" | "postfix_expression" | "as_expression"
+        | "check_expression" | "additive_expression" | "multiplicative_expression" | "comparison_expression" | "equality_expression"
+        | "conjunction_expression" | "disjunction_expression" | "elvis_expression" | "range_expression" => true,
+        _ => false,
+    }
+}
+
+/// The declarations a bare name read as a value reaches. Kotlin reads a value among properties,
+/// objects and types only, and the lookup reads functions too, so a name whose first binding may be
+/// a function is no proof of which value is meant.
+fn referenced(name: &str, at: &At, cx: &Ctx) -> Vec<String> {
+    match lookup(name, at, cx) {
+        Named::Ids(ids) if !ids.iter().any(|id| may_be_function(id, cx)) => ids,
+        _ => Vec::new(),
+    }
+}
+
+/// This file knows each of its functions; another file's member function carries its arities in
+/// the index, and another file's top-level name is known as a function or not only when it is a type.
+fn may_be_function(id: &str, cx: &Ctx) -> bool {
+    let Some((rel, path)) = split_id(id) else { return true };
+    if rel == cx.own.rel {
+        return cx.d.lambdas.contains_key(id);
+    }
+    if path.contains('.') {
+        cx.own.index.arities(rel, path).is_some()
+    } else {
+        !cx.own.index.is_type(rel, path)
     }
 }
 
