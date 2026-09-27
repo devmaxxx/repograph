@@ -36,10 +36,11 @@ struct Cli {
     cmd: Cmd,
 }
 
-/// A walk's depth: 0 walks nothing, and its `LOW` would read as "nothing depends on this".
-fn hops(s: &str) -> Result<usize, String> {
+/// Every `--depth`, a walk's hops or a candidate list's length: 0 reaches nothing, and a walk's
+/// `LOW` or a trace's "no call path" would then read as an answer.
+fn depth(s: &str) -> Result<usize, String> {
     match s.parse::<usize>() {
-        Ok(0) => Err("a walk of 0 hops reaches nothing; the least is 1".into()),
+        Ok(0) => Err("a depth of 0 reaches nothing; the least is 1".into()),
         r => r.map_err(|e| e.to_string()),
     }
 }
@@ -60,7 +61,7 @@ enum Cmd {
         /// pool, zero tokens. Needs the exported model in `reranker_dir`.
         #[arg(long, conflicts_with = "rerank")] rerank_local: bool,
         /// Candidates the reranking model is shown; tokens per question grow with it.
-        #[arg(long, default_value_t = rerank::DEPTH)] depth: usize,
+        #[arg(long, default_value_t = rerank::DEPTH, value_parser = depth)] depth: usize,
         /// Answers from the store as it stands, without bringing it in line with the tree first.
         #[arg(long)] stale: bool,
         /// Answers in this process even when a `serve` is listening.
@@ -97,7 +98,7 @@ enum Cmd {
     /// barrel is found all the same
     Impact {
         symbol: String,
-        #[arg(long, default_value_t = 3, value_parser = hops)] depth: usize,
+        #[arg(long, default_value_t = 3, value_parser = depth)] depth: usize,
         #[arg(long)] down: bool,
         #[arg(long)] json: bool,
         /// Answers from the store as it stands, without bringing it in line with the tree first
@@ -107,7 +108,7 @@ enum Cmd {
     Trace {
         from: String,
         to: String,
-        #[arg(long, default_value_t = 6)] depth: usize,
+        #[arg(long, default_value_t = 6, value_parser = depth)] depth: usize,
         #[arg(long)] json: bool,
         #[arg(long)] stale: bool,
     },
@@ -115,7 +116,7 @@ enum Cmd {
     /// unstaged and untracked alike) mapped onto symbol spans, then the callers of each
     Changes {
         #[arg(long, default_value = "HEAD")] base: String,
-        #[arg(long, default_value_t = 2, value_parser = hops)] depth: usize,
+        #[arg(long, default_value_t = 2, value_parser = depth)] depth: usize,
         #[arg(long)] json: bool,
         #[arg(long)] stale: bool,
     },
@@ -180,7 +181,7 @@ enum Cmd {
         #[arg(long)] cases: Option<PathBuf>,
         #[arg(long)] rerank: bool,
         #[arg(long, conflicts_with = "rerank")] rerank_local: bool,
-        #[arg(long, default_value_t = rerank::DEPTH)] depth: usize,
+        #[arg(long, default_value_t = rerank::DEPTH, value_parser = depth)] depth: usize,
         /// Runs the suite this many times and prints the median beneath the runs. One run reads
         /// exactly as it always has; a bar judged against a single reading is measuring the
         /// machine as much as the change.
@@ -192,7 +193,7 @@ enum Cmd {
         #[arg(long)] queries: PathBuf,
         #[arg(long)] out: PathBuf,
         /// How deep each of the four lists is recorded.
-        #[arg(long, default_value_t = 300)] depth: usize,
+        #[arg(long, default_value_t = 300, value_parser = depth)] depth: usize,
     },
     ImportLegacy { graph_json: PathBuf },
 }
