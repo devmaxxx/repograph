@@ -520,6 +520,33 @@ fn a_constructor_call_in_a_type_whose_supertype_is_another_file_s_binds_unless_t
     assert!(calls_from(&ex, "sym:app/Store.kt::Shadowed.make").iter().all(|t| *t != "sym:app/Key.kt::Key"), "{:?}", ex.edges);
 }
 
+/// An external supertype is taken to declare no capitalised member, as a lambda's unseen receiver
+/// is: a constructor call, an object's call and a type's call bind as in a plain class.
+#[test]
+fn a_capitalised_callee_under_an_unread_supertype_binds_as_it_does_in_a_plain_class() {
+    let repo = Repo::new(&[
+        ("app/Repo.kt", "package app\n\nclass Repo {\n    fun load() {}\n}\n\nobject Analytics {\n    fun track(e: String) {}\n}\n\nfun helper() {}\n"),
+        (
+            "app/Vm.kt",
+            "package app\n\nimport androidx.lifecycle.ViewModel\n\nclass Plain {\n    fun go() {\n        Analytics.track(\"x\")\n        val r = Repo()\n        r.load()\n    }\n    fun bare() { helper() }\n    fun literal() = object : Runnable {\n        override fun run() { Repo() }\n    }\n}\n\nclass Vm : ViewModel() {\n    fun go() {\n        Analytics.track(\"x\")\n        val r = Repo()\n        r.load()\n    }\n    fun bare() { helper() }\n    fun shadow() {\n        val Repo = { }\n        Repo()\n    }\n}\n\nclass Masked<Analytics> : ViewModel() {\n    fun go(a: Analytics) { Analytics.track(\"x\") }\n}\n",
+        ),
+    ]);
+    let ex = repo.extract("app/Vm.kt");
+    let body = vec!["sym:app/Repo.kt::Analytics.track", "sym:app/Repo.kt::Repo", "sym:app/Repo.kt::Repo.load"];
+    let sorted = |from: &str| {
+        let mut to = calls_from(&ex, from);
+        to.sort();
+        to
+    };
+    assert_eq!(sorted("sym:app/Vm.kt::Plain.go"), body, "{:?}", ex.edges);
+    assert_eq!(sorted("sym:app/Vm.kt::Vm.go"), body, "ViewModel is taken to declare no capitalised member: {:?}", ex.edges);
+    assert_eq!(calls_from(&ex, "sym:app/Vm.kt::Plain.bare"), vec!["sym:app/Repo.kt::helper"], "{:?}", ex.edges);
+    assert!(calls_from(&ex, "sym:app/Vm.kt::Vm.bare").is_empty(), "ViewModel may declare helper: {:?}", ex.edges);
+    assert_eq!(calls_from(&ex, "sym:app/Vm.kt::Plain.literal"), vec!["sym:app/Repo.kt::Repo"], "an unread object literal's supertype too: {:?}", ex.edges);
+    assert!(calls_from(&ex, "sym:app/Vm.kt::Vm.shadow").is_empty(), "a local hides the type: {:?}", ex.edges);
+    assert!(calls_from(&ex, "sym:app/Vm.kt::Masked.go").is_empty(), "a type parameter is no repository type: {:?}", ex.edges);
+}
+
 #[test]
 fn an_extension_function_calls_through_its_receiver_first() {
     let src = "package app\n\nfun helper(n: Int) = n\n\nfun top() {}\n\nclass Disk\n\nclass Store(val files: Disk) {\n    fun helper(n: Int) = n\n    fun save() {}\n    fun m() {}\n}\n\nfun Store.ext() {\n    helper(1)\n    this.save()\n}\n\nclass A {\n    fun m() {}\n    fun Store.inner() {\n        this.m()\n        m()\n    }\n}\n\nfun StringBuilder.outside() { top() }\n";
@@ -925,7 +952,7 @@ class Shadow(Gap: Int) {
 }
 
 #[test]
-fn a_bare_reference_two_levels_bind_or_an_unread_supertype_may_hold_writes_nothing() {
+fn a_bare_reference_two_levels_bind_or_an_unread_supertype_may_hold_lowercase_writes_nothing() {
     let src = "package app
 
 object Gap
@@ -949,7 +976,7 @@ class Fn {
     let ex = one("app/T.kt", src);
     assert!(refs_from(&ex, "sym:app/T.kt::Two.f").iter().all(|t| *t != "sym:app/T.kt::Gap"), "{:?}", ex.edges);
     assert!(refs_from(&ex, "sym:app/T.kt::Two.f").is_empty(), "a member and the top level both bind Gap: {:?}", ex.edges);
-    assert!(refs_from(&ex, "sym:app/T.kt::Screen.a").is_empty(), "{:?}", ex.edges);
+    assert_eq!(refs_from(&ex, "sym:app/T.kt::Screen.a"), vec!["sym:app/T.kt::Gap"], "the activity is taken to declare no capitalised name: {:?}", ex.edges);
     assert!(calls_from(&ex, "sym:app/T.kt::Screen.b").is_empty(), "the activity may declare helper(): {:?}", ex.edges);
     assert!(refs_from(&ex, "sym:app/T.kt::Fn.a").is_empty(), "a bare name never references a function: {:?}", ex.edges);
 }

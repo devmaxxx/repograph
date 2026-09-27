@@ -29,8 +29,6 @@ pub fn extract(resolver: &Resolver, rel: &str, source: &str) -> Extraction {
     let index = resolver.index(Family::Jvm).unwrap_or(&empty);
     let scope = scope(root, src);
     let declared = declarations::scan(root, rel, src, &mut ex);
-    jvm::link(&declared.types, &declared.supers, index, &scope, rel, &mut ex);
-    jvm::decorate(&declared.types, &declared.annotations, index, &scope, rel, &mut ex);
     let own = jvm::Own {
         rel,
         types: &declared.types,
@@ -47,7 +45,11 @@ pub fn extract(resolver: &Resolver, rel: &str, source: &str) -> Extraction {
         scope: &scope,
         kind: jvm::Kind::All,
         call: None,
+        member_types: false,
+        past_unread: false,
     };
+    jvm::link(&declared.supers, index, &scope, rel, |at, w| own.type_at(at, w), &mut ex);
+    jvm::decorate(&declared.annotations, rel, |at, w| own.type_at(at, w), &mut ex);
     calls::scan(root, &calls::Ctx { own, src, d: &declared }, &mut ex);
     ex
 }

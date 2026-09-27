@@ -1,5 +1,12 @@
-//! What Kotlin and Java share: node helpers, how a symbol's body is built, and the order a type
-//! name is looked up in — this file first, then the one JVM index both languages fill.
+//! What Kotlin and Java share, so both walks bind a name by the same rules:
+//! - node helpers, how a symbol's body is built, and the order a type name is looked up in — this
+//!   file first, then the one JVM index both languages fill;
+//! - `Own`, the member lookup both walks call: a name among a type's own and inherited members,
+//!   walked into other files through the supertypes their headers record, the class chain before
+//!   any interface, with arity admission deciding which declarations take a call, and Java's
+//!   member types in scope before the imports;
+//! - `Imports`, `Extends` and `DecoratedBy` from a file's imports, supertypes and annotations;
+//! - `expect`/`actual` source sets, which decide which files declaring one name a caller links.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -220,8 +227,9 @@ pub(crate) fn type_ids(types: &BTreeSet<String>, index: &QualifiedIndex, scope: 
 
 /// `Imports` for every explicit and static import that names a declaration in the repository, and
 /// `Extends` for every supertype that resolves. A star import writes no `Imports`: which names it
-/// brings in is known only at a use, and the use carries the edge.
-pub(crate) fn link(types: &BTreeSet<String>, supers: &[(String, String)], index: &QualifiedIndex, scope: &Scope, rel: &str, ex: &mut Extraction) {
+/// brings in is known only at a use, and the use carries the edge. `resolve` reads a type name
+/// written inside a type path, as the family's walk reads one.
+pub(crate) fn link(supers: &[(String, String)], index: &QualifiedIndex, scope: &Scope, rel: &str, resolve: impl Fn(&str, &str) -> Vec<String>, ex: &mut Extraction) {
     let file_id = format!("file:{rel}");
     for qualified in scope.singles.values().chain(scope.statics.values()).flatten() {
         for t in declared(index, qualified) {
@@ -232,7 +240,7 @@ pub(crate) fn link(types: &BTreeSet<String>, supers: &[(String, String)], index:
     }
     for (from, written) in supers {
         // A type's header sees the types around it, not its own nested ones.
-        for target in type_ids(types, index, scope, rel, outer(path_of(from)), written) {
+        for target in resolve(outer(path_of(from)), written) {
             ex.edge(from, &target, EdgeKind::Extends, "", rel);
         }
     }
@@ -253,10 +261,10 @@ pub(crate) fn used(ids: &[String], rel: &str, ex: &mut Extraction) {
 /// resolves in the repository, exactly as a type use would, and nothing otherwise: a node every
 /// annotated file shared would pull all of them into each update's co-declared closure, and an
 /// annotation declared outside the repository names nothing `impact` can walk to.
-pub(crate) fn decorate(types: &BTreeSet<String>, annotations: &[(String, String)], index: &QualifiedIndex, scope: &Scope, rel: &str, ex: &mut Extraction) {
+pub(crate) fn decorate(annotations: &[(String, String)], rel: &str, resolve: impl Fn(&str, &str) -> Vec<String>, ex: &mut Extraction) {
     for (from, written) in annotations {
         // An annotation stands outside a type's body, so it sees the types around it, not its own.
-        for target in type_ids(types, index, scope, rel, outer(path_of(from)), written) {
+        for target in resolve(outer(path_of(from)), written) {
             ex.edge(from, &target, EdgeKind::DecoratedBy, "", rel);
         }
     }
@@ -446,6 +454,14 @@ impl Walked {
     }
 }
 
+/// One member-type lookup's climb: the levels it has read, keyed by whether every subtype below
+/// shares the level's package, and the member types it found.
+#[derive(Default)]
+struct TypeWalk {
+    seen: BTreeSet<String>,
+    found: Vec<String>,
+}
+
 /// A type's written supertypes, each as the ids it resolves to, empty when it resolves to none.
 struct Chain {
     /// The class it extends, when the file tells which one that is.
@@ -456,7 +472,7 @@ struct Chain {
 }
 
 impl Chain {
-    fn of<'w>(written: impl Iterator<Item = &'w String>, superclass: Option<&String>, implicit: bool, resolve: impl Fn(&str) -> Vec<String>) -> Chain {
+    fn of<'w>(written: impl Iterator<Item = &'w String>, superclass: Option<&String>, implicit: bool, mut resolve: impl FnMut(&str) -> Vec<String>) -> Chain {
         let mut chain = Chain { class: None, interfaces: Vec::new(), implicit };
         for w in written {
             if chain.class.is_none() && superclass == Some(w) {
@@ -495,6 +511,14 @@ pub(crate) struct Own<'a> {
     pub kind: Kind,
     /// The arguments of the call being resolved; `None` admits any declaration.
     pub call: Option<Call>,
+    /// Java reads a type name written inside a type among the member types in scope, declared or
+    /// inherited, before the imports and the package.
+    pub member_types: bool,
+    /// The name looked up is capitalised and read where a type or an object's name may stand. A
+    /// supertype the repository does not declare is then taken to declare no member of it, so that
+    /// level is skipped rather than refused: the residual both walks accept, as for a lambda's
+    /// unseen receiver. A level that declares the name is still read.
+    pub past_unread: bool,
 }
 
 impl Own<'_> {
@@ -594,6 +618,31 @@ impl Own<'_> {
         Bound::Absent
     }
 
+    /// The ids a type name written inside this file's type at `at` stands for. Java reads the
+    /// member types in scope first, declared or inherited; Kotlin's walk reads `type_ids` alone.
+    pub(crate) fn type_at(&self, at: &str, written: &str) -> Vec<String> {
+        self.type_guarded(at, written, &mut BTreeSet::new())
+    }
+
+    fn type_guarded(&self, at: &str, written: &str, resolving: &mut BTreeSet<String>) -> Vec<String> {
+        let bound = if self.member_types { self.member_type_guarded(at, written.split('.').next().unwrap_or(written), resolving) } else { Bound::Absent };
+        self.after_member_type(bound, at, written)
+    }
+
+    /// A written type once its first segment has been looked up among the member types: a member
+    /// type hides every other type of its name, so one that does not hold the rest binds nothing.
+    pub(crate) fn after_member_type(&self, bound: Bound, at: &str, written: &str) -> Vec<String> {
+        let rest = written.split_once('.').map(|(_, r)| r);
+        match bound {
+            Bound::Found(ids) => match rest {
+                None => ids,
+                Some(rest) => ids.iter().map(|id| Some(format!("{id}.{rest}")).filter(|c| self.is_type(c))).collect::<Option<Vec<_>>>().unwrap_or_default(),
+            },
+            Bound::Refused => Vec::new(),
+            Bound::Absent => type_ids(self.types, self.index, self.scope, self.rel, at, written),
+        }
+    }
+
     pub(crate) fn is_type(&self, id: &str) -> bool {
         split_id(id).is_some_and(|(rel, path)| if rel == self.rel { self.types.contains(path) } else { self.index.is_type(rel, path) })
     }
@@ -603,8 +652,9 @@ impl Own<'_> {
     /// files through the supertypes their headers record. A supertype the repository does not
     /// declare, or one in another file that declares `name` without provably taking the
     /// arguments, may hold the name, so the lookup refuses rather than let a top-level or imported
-    /// namesake stand in. Overloads of one arity told apart only by their argument types are the
-    /// residual: the first level's is written.
+    /// namesake stand in; `past_unread` takes an undeclared one to hold none. Overloads of one
+    /// arity told apart only by their argument types are the residual: the first level's is
+    /// written.
     pub(crate) fn level(&self, path: &str, name: &str) -> Bound {
         self.level_in(self.rel, path, name)
     }
@@ -676,15 +726,22 @@ impl Own<'_> {
     /// supertype the repository does not declare is not read, so a member type of the name it may
     /// hold does not stop the lookup: that is the residual.
     pub(crate) fn member_type(&self, at: &str, name: &str) -> Bound {
+        self.member_type_guarded(at, name, &mut BTreeSet::new())
+    }
+
+    /// `member_type`, with the types of this file whose supertypes are being resolved: resolving a
+    /// nested type's supertype reads the member types around it, which a cycle only broken code
+    /// writes could lead back to.
+    fn member_type_guarded(&self, at: &str, name: &str, resolving: &mut BTreeSet<String>) -> Bound {
         let mut path = at;
         while !path.is_empty() {
             let own = format!("{path}.{name}");
             if self.types.contains(&own) {
                 return Bound::Found(vec![format!("sym:{}::{own}", self.rel)]);
             }
-            let mut found = Vec::new();
-            self.types_above(self.rel, path, name, Some(&self.scope.package), &mut BTreeSet::new(), &mut found);
-            match settle(found, false) {
+            let mut walk = TypeWalk::default();
+            self.types_above(self.rel, path, name, Some(&self.scope.package), &mut walk, resolving);
+            match settle(walk.found, false) {
                 Bound::Absent => {}
                 bound => return bound,
             }
@@ -695,37 +752,36 @@ impl Own<'_> {
 
     /// `name` among the member types the supertypes `ids` pass down to a type of this file.
     pub(crate) fn inherited_type(&self, ids: &[String], name: &str) -> Bound {
-        let mut found = Vec::new();
-        let mut seen = BTreeSet::new();
+        let (mut walk, mut resolving) = (TypeWalk::default(), BTreeSet::new());
         for t in ids {
-            self.type_hop(t, name, Some(&self.scope.package), &mut seen, &mut found);
+            self.type_hop(t, name, Some(&self.scope.package), &mut walk, &mut resolving);
         }
-        settle(found, false)
+        settle(walk.found, false)
     }
 
     /// Member types, unlike methods, have no class-over-interface order: one inherited along two
     /// paths is the compiler's ambiguity, so every supertype is read.
-    fn types_above(&self, rel: &str, path: &str, name: &str, along: Option<&str>, seen: &mut BTreeSet<String>, found: &mut Vec<String>) {
+    fn types_above(&self, rel: &str, path: &str, name: &str, along: Option<&str>, walk: &mut TypeWalk, resolving: &mut BTreeSet<String>) {
         let along = along.filter(|p| *p == self.package_of(rel));
-        if !seen.insert(format!("sym:{rel}::{path} {}", along.is_some())) {
+        if !walk.seen.insert(format!("sym:{rel}::{path} {}", along.is_some())) {
             return;
         }
-        let Some(chain) = self.supertypes(rel, path) else { return };
+        let Some(chain) = self.supertypes(rel, path, resolving) else { return };
         for t in chain.class.into_iter().chain(chain.interfaces).flatten() {
-            self.type_hop(&t, name, along, seen, found);
+            self.type_hop(&t, name, along, walk, resolving);
         }
     }
 
     /// A member type the subtype does not inherit still hides every one of its name above it, so
     /// that path passes none down and the lookup falls through to imports and the package.
-    fn type_hop(&self, t: &str, name: &str, along: Option<&str>, seen: &mut BTreeSet<String>, found: &mut Vec<String>) {
+    fn type_hop(&self, t: &str, name: &str, along: Option<&str>, walk: &mut TypeWalk, resolving: &mut BTreeSet<String>) {
         let member = format!("{t}.{name}");
         if self.is_type(&member) {
             if self.inherits(&member, along) != Inherits::None {
-                found.push(member);
+                walk.found.push(member);
             }
         } else if let Some((rel, path)) = split_id(t) {
-            self.types_above(rel, path, name, along, seen, found);
+            self.types_above(rel, path, name, along, walk, resolving);
         }
     }
 
@@ -769,10 +825,10 @@ impl Own<'_> {
         if !seen.insert(format!("sym:{rel}::{path} {}", along.is_some())) {
             return Walked::default();
         }
-        let Some(chain) = self.supertypes(rel, path) else { return Walked::refused() };
-        let mut w = Walked { unread: chain.implicit, ..Walked::default() };
+        let Some(chain) = self.supertypes(rel, path, &mut BTreeSet::new()) else { return Walked::refused() };
+        let mut w = Walked { unread: chain.implicit && !self.past_unread, ..Walked::default() };
         if let Some(class) = chain.class {
-            w.class_unread = class.is_empty();
+            w.class_unread = class.is_empty() && !self.past_unread;
             for t in class {
                 match self.hop(&t, name, along, seen) {
                     Hop::Declares(id) => w.class.push(id),
@@ -797,7 +853,7 @@ impl Own<'_> {
             }
         }
         for targets in chain.interfaces {
-            w.unread |= targets.is_empty();
+            w.unread |= targets.is_empty() && !self.past_unread;
             for t in targets {
                 match self.hop(&t, name, along, seen) {
                     Hop::Declares(id) => w.found.push(id),
@@ -836,14 +892,20 @@ impl Own<'_> {
     }
 
     /// The written supertypes of the type at `path` in `rel`, resolved there. `None` when the
-    /// index records nothing of `rel`'s supertypes.
-    fn supertypes(&self, rel: &str, path: &str) -> Option<Chain> {
+    /// index records nothing of `rel`'s supertypes, or when this file's type at `path` is already
+    /// being resolved, which only a cyclic hierarchy leads to.
+    fn supertypes(&self, rel: &str, path: &str, resolving: &mut BTreeSet<String>) -> Option<Chain> {
         // A type's header sees the types around it, not its own nested ones.
         if rel == self.rel {
+            if !resolving.insert(path.to_string()) {
+                return None;
+            }
             let from = format!("sym:{rel}::{path}");
             let written = self.supers.iter().filter(|(f, _)| *f == from).map(|(_, w)| w);
             let shape = self.shape(path);
-            return Some(Chain::of(written, shape.superclass.as_ref(), shape.implicit, |w| type_ids(self.types, self.index, self.scope, rel, outer(path), w)));
+            let chain = Chain::of(written, shape.superclass.as_ref(), shape.implicit, |w| self.type_guarded(outer(path), w, resolving));
+            resolving.remove(path);
+            return Some(chain);
         }
         let (recorded, types) = (self.index.supers(rel)?, self.index.types(rel)?);
         let scope = Scope { package: recorded.package.clone(), singles: recorded.singles.clone(), stars: recorded.stars.clone(), ..Scope::default() };

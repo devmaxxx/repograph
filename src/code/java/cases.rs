@@ -109,7 +109,7 @@ fn extends_and_implements_declared_in_the_same_file_are_extended() {
     for (from, to) in [("OrderService", "Api"), ("Status", "Api"), ("Point", "Api"), ("Sub", "Api")] {
         assert!(extends.contains(&(format!("{f}{from}").as_str(), format!("{f}{to}").as_str(), "")), "{from} -> {to} missing from {extends:?}");
     }
-    // `Base` is declared nowhere in this file; only the index (Task 4) may resolve it.
+    // `Base` is declared nowhere in this file; only the index may resolve it.
     assert!(!extends.iter().any(|(_, t, _)| t.ends_with("::Base")), "{extends:?}");
 }
 
@@ -529,9 +529,11 @@ fn a_type_s_static_member_is_called_only_when_no_value_or_static_import_may_hold
         ("shop/Star.java", "package shop;\n\nimport shop.util.Money;\nimport static org.junit.Assert.*;\n\nclass Star {\n    void go() { Money.round(1); }\n}\n"),
         ("shop/Thrown.java", "package shop;\n\nimport shop.util.Money;\n\nclass Thrown extends Exception {\n    void go() { Money.round(1); }\n}\n"),
     ]);
-    let plain = repo.extract("shop/Plain.java");
-    assert_eq!(calls_from(&plain, "sym:shop/Plain.java::Plain.go"), vec!["sym:shop/util/Money.java::Money.round"]);
-    for (rel, from) in [("shop/Field.java", "Field.go"), ("shop/Star.java", "Star.go"), ("shop/Thrown.java", "Thrown.go")] {
+    for (rel, from) in [("shop/Plain.java", "Plain.go"), ("shop/Thrown.java", "Thrown.go")] {
+        let ex = repo.extract(rel);
+        assert_eq!(calls_from(&ex, &format!("sym:{rel}::{from}")), vec!["sym:shop/util/Money.java::Money.round"], "{rel}: {:?}", ex.edges);
+    }
+    for (rel, from) in [("shop/Field.java", "Field.go"), ("shop/Star.java", "Star.go")] {
         let ex = repo.extract(rel);
         assert!(calls_from(&ex, &format!("sym:{rel}::{from}")).is_empty(), "{rel}: {:?}", ex.edges);
     }
@@ -1043,6 +1045,80 @@ fn a_member_type_a_subtype_does_not_inherit_hides_its_supertype_s_namesake() {
     assert_eq!(calls_from(&aq, "sym:p/AQ.java::AQ.made"), pkg, "a package-private T in another package hides G.T: {:?}", aq.edges);
     let ao = repo.extract("p/AO.java");
     assert_eq!(calls_from(&ao, "sym:p/AO.java::AO.made"), vec!["sym:p/HO.java::HO.T"], "a public T in HO is the one inherited: {:?}", ao.edges);
+}
+
+const UTIL: (&str, &str) = ("shop/Util.java", "package shop;\n\npublic class Util {\n    public static int twice(int x) { return x; }\n}\n");
+
+/// An external supertype is taken to declare no capitalised field, so a static `Util.twice()`
+/// binds under it as `new Util()` does; a bare call may still be inherited.
+#[test]
+fn a_static_call_on_a_capitalised_type_under_an_unread_supertype_binds_as_in_a_plain_class() {
+    let repo = Repo::new(&[
+        UTIL,
+        (
+            "shop/A.java",
+            "package shop;\n\nimport android.app.Activity;\nimport static shop.Util.twice;\n\nclass Plain {\n    void go() { Util.twice(1); }\n    void bare() { twice(1); }\n    void anon() { new Runnable() { public void run() { Util.twice(1); } }; }\n}\n\nclass A extends Activity {\n    void go() { Util.twice(1); new Util(); }\n    void bare() { twice(1); }\n    void shadow() { Object Util = null; Util.twice(1); }\n}\n\nclass S implements java.io.Serializable {\n    void go() { Util.twice(1); }\n}\n\nclass M<Util> extends Activity {\n    void go() { Util.twice(1); }\n}\n",
+        ),
+    ]);
+    let ex = repo.extract("shop/A.java");
+    let twice = "sym:shop/Util.java::Util.twice";
+    assert_eq!(calls_from(&ex, "sym:shop/A.java::Plain.go"), vec![twice], "{:?}", ex.edges);
+    assert_eq!(calls_from(&ex, "sym:shop/A.java::Plain.bare"), vec![twice], "{:?}", ex.edges);
+    assert_eq!(calls_from(&ex, "sym:shop/A.java::Plain.anon"), vec![twice], "an anonymous class's unread supertype too: {:?}", ex.edges);
+    assert_eq!(calls_from(&ex, "sym:shop/A.java::A.go"), vec!["sym:shop/Util.java::Util", twice], "{:?}", ex.edges);
+    assert_eq!(calls_from(&ex, "sym:shop/A.java::S.go"), vec![twice], "{:?}", ex.edges);
+    assert!(calls_from(&ex, "sym:shop/A.java::A.bare").is_empty(), "Activity may declare twice: {:?}", ex.edges);
+    assert!(calls_from(&ex, "sym:shop/A.java::A.shadow").is_empty(), "a local hides the type: {:?}", ex.edges);
+    assert!(calls_from(&ex, "sym:shop/A.java::M.go").is_empty(), "a type parameter is no repository type: {:?}", ex.edges);
+}
+
+const B_INNER: (&str, &str) = ("shop/B.java", "package shop;\n\npublic class B {\n    public static class Inner {\n        public void run() {}\n    }\n    public @interface Mark {}\n}\n");
+const TOP_INNER: (&str, &str) = ("shop/Inner.java", "package shop;\n\npublic class Inner {\n    public void run() {}\n}\n");
+const TOP_MARK: (&str, &str) = ("shop/Mark.java", "package shop;\n\npublic @interface Mark {}\n");
+
+/// A supertype or an annotation written inside a type is read as a call's type is: a member type
+/// it inherits hides the package's namesake.
+#[test]
+fn a_nested_type_s_supertype_and_annotation_bind_the_member_type_inherited_first() {
+    let repo = Repo::new(&[
+        B_INNER,
+        TOP_INNER,
+        TOP_MARK,
+        ("shop/A.java", "package shop;\n\nclass A extends B {\n    static class C extends Inner {\n        void go() { run(); }\n    }\n    @Mark void marked() {}\n}\n"),
+    ]);
+    let ex = repo.extract("shop/A.java");
+    assert_eq!(edges(&ex, EdgeKind::Extends), vec![("sym:shop/A.java::A", "sym:shop/B.java::B", ""), ("sym:shop/A.java::A.C", "sym:shop/B.java::B.Inner", "")], "{:?}", ex.edges);
+    assert_eq!(calls_from(&ex, "sym:shop/A.java::A.C.go"), vec!["sym:shop/B.java::B.Inner.run"], "{:?}", ex.edges);
+    assert_eq!(edges(&ex, EdgeKind::DecoratedBy), vec![("sym:shop/A.java::A.marked", "sym:shop/B.java::B.Mark", "")], "{:?}", ex.edges);
+}
+
+#[test]
+fn a_nested_type_s_supertype_skips_a_member_type_it_does_not_inherit() {
+    let repo = Repo::new(&[
+        B_INNER,
+        TOP_INNER,
+        ("shop/PB.java", "package shop;\n\npublic class PB {\n    private static class Inner {}\n}\n"),
+        ("shop/PA.java", "package shop;\n\nclass PA extends PB {\n    static class C extends Inner {\n        void go() { run(); }\n    }\n}\n"),
+        ("shop/HB.java", "package shop;\n\npublic class HB extends B {\n    private static class Inner {}\n}\n"),
+        ("shop/HA.java", "package shop;\n\nclass HA extends HB {\n    static class C extends Inner {}\n}\n"),
+    ]);
+    let top = ("sym:shop/PA.java::PA.C", "sym:shop/Inner.java::Inner", "");
+    let pa = repo.extract("shop/PA.java");
+    assert!(edges(&pa, EdgeKind::Extends).contains(&top), "a private member type is not inherited: {:?}", pa.edges);
+    assert_eq!(calls_from(&pa, "sym:shop/PA.java::PA.C.go"), vec!["sym:shop/Inner.java::Inner.run"], "{:?}", pa.edges);
+    let ha = repo.extract("shop/HA.java");
+    assert!(
+        edges(&ha, EdgeKind::Extends).contains(&("sym:shop/HA.java::HA.C", "sym:shop/Inner.java::Inner", "")),
+        "HB's private Inner hides B.Inner: {:?}",
+        ha.edges
+    );
+}
+
+#[test]
+fn a_cyclic_hierarchy_through_a_nested_supertype_ends() {
+    let repo = Repo::new(&[TOP_INNER, ("shop/A.java", "package shop;\n\nclass A extends B.C {}\n\nclass B extends A {\n    static class C extends Inner {\n        void go() { run(); }\n    }\n}\n")]);
+    let ex = repo.extract("shop/A.java");
+    assert!(edges(&ex, EdgeKind::Extends).contains(&("sym:shop/A.java::A", "sym:shop/A.java::B.C", "")), "{:?}", ex.edges);
 }
 
 const RUN_BASE: (&str, &str) = ("p/A.java", "package p;\n\npublic class A {\n    public void run(int x) {}\n    public static void util() {}\n}\n");

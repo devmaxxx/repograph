@@ -29,8 +29,6 @@ pub fn extract(resolver: &Resolver, rel: &str, source: &str) -> Extraction {
     let index = resolver.index(Family::Jvm).unwrap_or(&empty);
     let scope = scope(root, src);
     let declared = declarations::scan(root, rel, src, &mut ex);
-    jvm::link(&declared.types, &declared.supers, index, &scope, rel, &mut ex);
-    jvm::decorate(&declared.types, &declared.annotations, index, &scope, rel, &mut ex);
     let methods = jvm::Own {
         rel,
         types: &declared.types,
@@ -47,7 +45,11 @@ pub fn extract(resolver: &Resolver, rel: &str, source: &str) -> Extraction {
         scope: &scope,
         kind: jvm::Kind::Method,
         call: None,
+        member_types: true,
+        past_unread: false,
     };
+    jvm::link(&declared.supers, index, &scope, rel, |at, w| methods.type_at(at, w), &mut ex);
+    jvm::decorate(&declared.annotations, rel, |at, w| methods.type_at(at, w), &mut ex);
     let fields = jvm::Own { members: &declared.values, inheritable: &declared.open_values, statics: &jvm::NONE, kind: jvm::Kind::Field, ..methods };
     let member_types = std::cell::RefCell::default();
     calls::scan(root, &calls::Ctx { methods, fields, src, d: &declared, member_types: &member_types }, &mut ex);

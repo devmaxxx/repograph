@@ -22,9 +22,8 @@
 //! - A written type name binds a member type first: at each enclosing type, from the innermost, its
 //!   own, then one its supertypes pass down, before imports and the package. A private member type
 //!   is not passed down, nor a package-private one outside its package, and either still hides a
-//!   namesake further up that path; one inherited along two paths binds nothing. A superclass the repository does not declare is not read, so a member
-//!   type of the name it holds is not seen and the import or package type keeps the edge: the
-//!   residual, taken over refusing every type named under an external superclass.
+//!   namesake further up that path; one inherited along two paths binds nothing. A nested type's
+//!   supertypes and a member's annotations are read the same way, from the type around them.
 //! - A local, parameter, lambda, catch, `for`, resource or pattern variable hides the field it
 //!   shadows; one whose type the file does not read makes a call through it no edge.
 //! - An anonymous or local class hides what it declares and whatever its unread supertype may, and
@@ -32,6 +31,13 @@
 //!   from its declaration on in a block, and in the whole body for a member class of such a type.
 //! - `Type.member()` is a static call only when no local, field, inherited field or static import
 //!   may hold the first name; a field typed as the type it is named like reads the same either way.
+//! - The residual for a supertype the repository does not declare, such as `Activity` or
+//!   `Exception`: it is taken to declare no capitalised field and no member type, as `new Util()`
+//!   already reads it. So `Util.twice()` under it binds as it does in a plain class, and a type
+//!   named under it binds the import or package type. A bare call there still refuses, since it
+//!   may be inherited. The cost is such a supertype's capitalised field or nested type of that
+//!   name, which the compiler would bind instead; refusing would drop every static call and type
+//!   named in an Android, exception or framework class.
 //! - A single static import shadows an on-demand one; two of a name, or two on-demand imports, bind
 //!   nothing.
 //! - A type named in a field's, a parameter's or a record component's type or a return type,
@@ -58,7 +64,7 @@ use tree_sitter::Node;
 
 use super::declarations::{supertypes, type_params, written_type, Declared, TYPES};
 use crate::code::index::Call;
-use crate::code::jvm::{self, child, named, outer, split_id, text, type_ids, Bound, Own};
+use crate::code::jvm::{self, child, named, outer, split_id, text, Bound, Own};
 use crate::model::{EdgeKind, Extraction};
 
 pub(super) struct Ctx<'a> {
@@ -329,7 +335,7 @@ fn resolved(written: &str, at: &At, cx: &Ctx) -> Option<Vec<String>> {
 /// A written type inside the type at `at`: a member type, declared or inherited, before what the
 /// imports and the package bind.
 fn type_named(own: &Own, at: &str, written: &str, cache: &RefCell<MemberTypes>) -> Option<Vec<String>> {
-    let (first, rest) = written.split_once('.').map_or((written, None), |(f, r)| (f, Some(r)));
+    let first = written.split('.').next().unwrap_or(written);
     let key = (at.to_string(), first.to_string());
     let cached = cache.borrow().get(&key).cloned();
     let bound = cached.unwrap_or_else(|| {
@@ -337,12 +343,7 @@ fn type_named(own: &Own, at: &str, written: &str, cache: &RefCell<MemberTypes>) 
         cache.borrow_mut().insert(key, bound.clone());
         bound
     });
-    let ids = match bound {
-        Bound::Found(ids) => return nested(ids, rest, own),
-        Bound::Refused => return None,
-        Bound::Absent => type_ids(own.types, own.index, own.scope, own.rel, at, written),
-    };
-    let ids: Vec<String> = ids.into_iter().filter(|id| own.is_type(id)).collect();
+    let ids: Vec<String> = own.after_member_type(bound, at, written).into_iter().filter(|id| own.is_type(id)).collect();
     (!ids.is_empty()).then_some(ids)
 }
 
@@ -393,6 +394,7 @@ fn field_in(local: &Local, name: &str, cx: &Ctx) -> Bound {
         return Bound::Refused;
     }
     match &local.supers {
+        None if cx.fields.past_unread => Bound::Absent,
         None => Bound::Refused,
         Some(ids) if ids.is_empty() => Bound::Absent,
         // A supertype's declaration it may not inherit leaves a namesake further out unsettled.
@@ -577,11 +579,14 @@ fn receiver(object: Node, at: &At, cx: &Ctx) -> Option<Vec<String>> {
 }
 
 /// `name` read as a value: `Some` with its types, or `Some(None)` when something that is not a
-/// type may hold it, and `None` only when the name can be nothing but a type.
+/// type may hold it, and `None` only when the name can be nothing but a type. A capitalised name
+/// skips a level only an unread supertype may hold it at, as `new Name()` does.
 fn value(name: &str, at: &At, cx: &Ctx) -> Option<Option<Vec<String>>> {
     if let Some(ty) = at.locals.get(name) {
         return Some(ty.clone());
     }
+    let capital = name.starts_with(|c: char| c.is_ascii_uppercase());
+    let cx = &Ctx { fields: Own { past_unread: capital, ..cx.fields }, ..*cx };
     for local in at.scopes.iter().rev() {
         if field_in(local, name, cx) != Bound::Absent {
             return Some(None);

@@ -12,7 +12,8 @@ use crate::model::{EdgeKind, Extraction, NodeKind};
 /// What one Kotlin file declares, kept for the passes that resolve names after this one.
 #[derive(Debug, Default)]
 pub struct Declared {
-    /// Top-level names, private ones included: the index and `widen` both read exactly these.
+    /// Top-level names, private ones included. The header keeps them beside `private`, and the index
+    /// reads only those `private` leaves out, since no other file reaches a private name.
     pub top: BTreeSet<String>,
     /// Top-level names only `private` declarations here bind.
     pub private: BTreeSet<String>,

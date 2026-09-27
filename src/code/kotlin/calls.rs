@@ -5,22 +5,30 @@
 //! - A name bound by something whose type this file does not read — `it`, an untyped lambda
 //!   parameter, a destructured or `for` variable, a `when` subject, a member of an anonymous
 //!   object — hides the property, type or function it shadows, and a call through it writes nothing.
+//!   A type parameter hides the type it is named like, so a call or a qualifier naming it binds
+//!   nothing.
 //! - Kotlin resolves a bare name level by level — locals, implicit receivers innermost first, the
 //!   enclosing types' members, then the top level — and moves outward when no candidate at a level
 //!   takes the arguments. A member binds only a function whose parameter count, read with its
-//!   defaults and `vararg`, admits the call's arguments, the type's own before a supertype's. A name two
-//!   levels bind is no edge, and so is one a level where no function takes the arguments may bind
-//!   through a supertype or a receiver the file cannot read. A superclass's member beats an
-//!   interface's, so the class chain is walked first. A receiver, written or implicit, typed in
-//!   another file is walked the same way from its header. The residual: overloads of one arity
-//!   told apart only by their argument types bind the first level's function.
+//!   defaults and `vararg`, admits the call's arguments, the type's own before a supertype's. A
+//!   name two levels bind is no edge, and so is one a level where no function takes the arguments
+//!   may bind through a supertype or a receiver the file cannot read, a capitalised name aside
+//!   (below). A superclass's member beats an interface's, so the class chain is walked first. A
+//!   receiver, written or implicit, typed in another file is walked the same way from its header.
+//!   The residual: overloads of one arity told apart only by their argument types bind the first
+//!   level's function.
 //! - A lambda passed to anything but a closed list of stdlib functions whose lambda has no
 //!   receiver may run with a receiver this file never sees, so it refuses lowercase bare names and
-//!   `this.` calls. A capitalised callee is still resolved there: receiver scopes do not declare
-//!   capitalised members, and refusing constructors and Composables would drop nearly every Compose
-//!   call. That is the residual this walk accepts, and it covers a capitalised name read as a
-//!   value too: under an unknown receiver it binds as it would outside the lambda, though a
-//!   constant of the receiver's companion would win.
+//!   `this.` calls.
+//! - The residual this walk accepts: a capitalised bare name — a callee, a qualifier such as
+//!   `Analytics` in `Analytics.track()`, or a value — is taken to be declared by no scope the file
+//!   cannot read: a lambda's unseen receiver, a receiver whose written type is unread, or a
+//!   supertype the repository does not declare, such as `ViewModel` or `Activity`. Such a level is
+//!   skipped rather than refused, so `Repo()`, a Composable, `Analytics.track()` and a local
+//!   `val r = Repo()` bind as they would in a plain class; a level that declares the name is still
+//!   read. Refusing them would drop nearly every Compose call and most of an Android class; the
+//!   cost is a receiver companion's constant or an external supertype's capitalised member or
+//!   nested type, which the compiler would bind instead.
 //!
 //! - A property's initializer, delegate and accessors are walked as a function body is, from the
 //!   property. A name read as a value — an object passed as an argument, a property read bare —
@@ -35,8 +43,8 @@
 //! Edges it leaves out: calls on a value whose type is inferred from anything but a constructor
 //! call, receivers typed by another file's properties, a lambda passed to another file's function
 //! taking `T.() -> R` (read as an unknown receiver), a companion's members from a nested type, and
-//! any bare call from a type whose supertype chain reaches a type the repository does not declare
-//! before a level that declares the name.
+//! any lowercase bare call from a type whose supertype chain reaches a type the repository does
+//! not declare before a level that declares the name.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -548,13 +556,13 @@ fn declared_receiver(ids: &[String], trailing: bool, cx: &Ctx) -> Option<Receive
     }
 }
 
-/// Whether a receiver may hold `name`. A lambda's unseen receiver is taken to hold no capitalised
-/// name: that is the residual the module doc names.
+/// Whether a receiver may hold `name`. A lambda's unseen receiver, or one whose written type is
+/// unread, is taken to hold no capitalised name: that is the residual the module doc names.
 fn holds(r: &Receiver, name: &str, cx: &Ctx) -> Bound {
     match r {
-        Receiver::Unknown if capitalised(name) => Bound::Absent,
-        Receiver::Unknown => Bound::Refused,
-        Receiver::Types(ids) => cx.own.on_receiver(ids, name),
+        Receiver::Types(ids) if !ids.is_empty() => cx.own.on_receiver(ids, name),
+        _ if cx.own.past_unread => Bound::Absent,
+        _ => Bound::Refused,
     }
 }
 
@@ -567,13 +575,18 @@ enum Named {
     Nothing,
 }
 
-/// A bare name read level by level: locals in every enclosing scope, the implicit receivers innermost first, the enclosing
-/// types, then the top level. The first level that binds it wins only when no level after it
-/// binds it too.
+/// A bare name read level by level: locals in every enclosing scope, the implicit receivers
+/// innermost first, the enclosing types, then the top level. The first level that binds it wins
+/// only when no level after it binds it too. A capitalised name skips a level only an unread type
+/// may hold it at.
 fn lookup(name: &str, at: &At, cx: &Ctx) -> Named {
-    let cx = &within(at, cx);
+    let cx = &Ctx { own: Own { at: &at.class, past_unread: capitalised(name), ..cx.own }, src: cx.src, d: cx.d };
     if let Some(ty) = at.locals.get(name) {
         return Named::Local(ty.clone());
+    }
+    // A type parameter hides the classifier it is named like, and is neither called nor a qualifier.
+    if at.type_params.contains(name) {
+        return Named::Refused;
     }
     let receivers = at.receivers.iter().rev().map(|r| holds(r, name, cx));
     let class = std::iter::once_with(|| cx.own.member(&at.class, name));
