@@ -1,7 +1,7 @@
 {
  "corpus": "/Users/max/bench/beauty-crm-test",
  "commit": "502e8a6d",
- "when": "2026-09-27T14:10:52",
+ "when": "2026-09-27T14:46:26",
  "suites": [
   "blast"
  ],
@@ -20,10 +20,10 @@
      "target": "ReplicaKey",
      "tier": "wide",
      "want_files": 8,
-     "found_files": 5,
-     "recall": 0.625,
-     "ms": 53,
-     "chars": 3837
+     "found_files": 8,
+     "recall": 1.0,
+     "ms": 52,
+     "chars": 4695
     },
     {
      "suite": "blast",
@@ -33,8 +33,8 @@
      "want_files": 2,
      "found_files": 2,
      "recall": 1.0,
-     "ms": 54,
-     "chars": 3125
+     "ms": 55,
+     "chars": 3212
     },
     {
      "suite": "blast",
@@ -45,7 +45,7 @@
      "found_files": 4,
      "recall": 1.0,
      "ms": 53,
-     "chars": 5847
+     "chars": 6097
     },
     {
      "suite": "blast",
@@ -56,7 +56,7 @@
      "found_files": 2,
      "recall": 1.0,
      "ms": 54,
-     "chars": 871
+     "chars": 1069
     },
     {
      "suite": "blast",
@@ -66,7 +66,7 @@
      "want_files": 1,
      "found_files": 1,
      "recall": 1.0,
-     "ms": 53,
+     "ms": 52,
      "chars": 1363
     },
     {
@@ -75,10 +75,10 @@
      "target": "GapNotFittingRule",
      "tier": "narrow",
      "want_files": 1,
-     "found_files": 0,
-     "recall": 0.0,
+     "found_files": 1,
+     "recall": 1.0,
      "ms": 52,
-     "chars": 290
+     "chars": 698
     },
     {
      "suite": "blast",
@@ -86,10 +86,10 @@
      "target": "ParallelLimitRule",
      "tier": "narrow",
      "want_files": 1,
-     "found_files": 0,
-     "recall": 0.0,
-     "ms": 53,
-     "chars": 290
+     "found_files": 1,
+     "recall": 1.0,
+     "ms": 51,
+     "chars": 698
     },
     {
      "suite": "blast",
@@ -97,10 +97,10 @@
      "target": "LocationClosedRule",
      "tier": "narrow",
      "want_files": 1,
-     "found_files": 0,
-     "recall": 0.0,
-     "ms": 52,
-     "chars": 290
+     "found_files": 1,
+     "recall": 1.0,
+     "ms": 51,
+     "chars": 699
     },
     {
      "suite": "blast",
@@ -110,7 +110,7 @@
      "expect": "path",
      "hit": true,
      "says_none": false,
-     "ms": 59,
+     "ms": 58,
      "chars": 589
     },
     {
@@ -121,7 +121,7 @@
      "expect": "path",
      "hit": true,
      "says_none": false,
-     "ms": 56,
+     "ms": 58,
      "chars": 599
     },
     {
@@ -158,18 +158,18 @@
        "found_symbols": 52
       }
      },
-     "ms": 448,
-     "chars": 49772
+     "ms": 539,
+     "chars": 50058
     }
    ],
    "summary": {
     "impact": {
      "n": 8,
-     "recall_mean": 0.578,
-     "files_found": 14,
+     "recall_mean": 1.0,
+     "files_found": 20,
      "files_want": 20,
-     "ms_median": 53,
-     "chars_median": 1117
+     "ms_median": 52,
+     "chars_median": 1216
     },
     "trace": {
      "n": 2,
@@ -186,8 +186,8 @@
      "symbols_want": 121,
      "files_found": 45,
      "files_want": 45,
-     "ms_median": 448,
-     "chars_median": 49772
+     "ms_median": 539,
+     "chars_median": 50058
     }
    },
    "failed_calls": 0
