@@ -129,12 +129,20 @@ impl Store {
     /// rename, which keeps its mtime and length: a writer renaming over the file a moment later
     /// cannot lend its stamp to them.
     fn write_atomic_stamped(&self, name: &str, bytes: &[u8]) -> Result<Option<crate::walk::Stamp>> {
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         std::fs::create_dir_all(&self.dir)?;
-        let tmp = self.dir.join(format!("{name}.tmp"));
-        std::fs::write(&tmp, bytes).with_context(|| format!("write {}", tmp.display()))?;
-        let stamp = std::fs::metadata(&tmp).ok().as_ref().and_then(crate::walk::stamp_of);
-        rename_over(&tmp, &self.dir.join(name)).with_context(|| format!("rename {name}"))?;
-        Ok(stamp)
+        // One name per writer: readers that refresh at once each write a whole graph, and a
+        // shared name let one rename away, or truncate, the file another was still writing.
+        let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let tmp = self.dir.join(format!("{name}.{}.{n}.tmp", std::process::id()));
+        let written = std::fs::write(&tmp, bytes).with_context(|| format!("write {}", tmp.display()))
+            .and_then(|()| {
+                let stamp = std::fs::metadata(&tmp).ok().as_ref().and_then(crate::walk::stamp_of);
+                rename_over(&tmp, &self.dir.join(name)).with_context(|| format!("rename {name}"))?;
+                Ok(stamp)
+            });
+        if written.is_err() { let _ = std::fs::remove_file(&tmp); }
+        written
     }
 
     /// Extends a store file whose first `keep` bytes the caller still stands behind, dropping
@@ -175,9 +183,16 @@ impl Store {
     /// Drops what `build` recomputes and nothing else: the dense vectors are reused by
     /// content hash, and the questions cost model tokens that a rebuild must not spend twice.
     pub fn wipe(&self) -> Result<()> {
-        for name in ["graph.json", "manifest.json", "graph.json.tmp", "manifest.json.tmp"] {
+        for name in ["graph.json", "manifest.json"] {
             let p = self.dir.join(name);
             if p.exists() { std::fs::remove_file(&p).with_context(|| format!("remove {}", p.display()))?; }
+        }
+        // What a writer killed between its write and its rename left behind.
+        for e in std::fs::read_dir(&self.dir).into_iter().flatten().flatten() {
+            let name = e.file_name().to_string_lossy().into_owned();
+            if (name.starts_with("graph.json.") || name.starts_with("manifest.json.")) && name.ends_with(".tmp") {
+                std::fs::remove_file(e.path()).with_context(|| format!("remove {}", e.path().display()))?;
+            }
         }
         Ok(())
     }
@@ -308,7 +323,7 @@ mod tests {
         let m = Manifest::default();
         store.save(&g, &m).unwrap();
         assert!(d.path().join(".repograph/graph.json").exists());
-        assert!(!d.path().join(".repograph/graph.json.tmp").exists());
+        assert_eq!(tmps(d.path()), Vec::<String>::new());
         let (g2, _) = store.load().unwrap();
         assert_eq!(g2.nodes.len(), 1);
         assert_eq!(g2.edges.len(), 1);
@@ -324,22 +339,31 @@ mod tests {
         assert!(err.contains("graph.json"), "{err}");
     }
 
+    fn tmps(repo: &Path) -> Vec<String> {
+        std::fs::read_dir(repo.join(".repograph")).unwrap().flatten()
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .filter(|n| n.ends_with(".tmp")).collect()
+    }
+
     #[test]
-    fn a_leftover_tmp_from_a_crashed_write_is_overwritten_not_read() {
+    fn a_leftover_tmp_from_a_crashed_write_is_not_read_and_wipe_drops_it() {
         let d = tempfile::tempdir().unwrap();
         let store = Store::new(d.path());
         std::fs::create_dir_all(d.path().join(".repograph")).unwrap();
-        std::fs::write(d.path().join(".repograph/graph.json.tmp"), "garbage").unwrap();
+        std::fs::write(d.path().join(".repograph/graph.json.1.0.tmp"), "garbage").unwrap();
         store.save(&Graph::default(), &Manifest::default()).unwrap();
         let (g, _) = store.load().unwrap();
         assert!(g.nodes.is_empty());
-        assert!(!d.path().join(".repograph/graph.json.tmp").exists());
+        store.wipe().unwrap();
+        assert_eq!(tmps(d.path()), Vec::<String>::new());
     }
 
     // Bytes reach the store only through a rename, so a write that fails part-way — here the
-    // temp path is occupied by a directory — cannot leave a half-written graph behind.
+    // store directory refuses new files — cannot leave a half-written graph behind.
+    #[cfg(unix)]
     #[test]
     fn a_failed_write_leaves_the_stored_graph_intact() {
+        use std::os::unix::fs::PermissionsExt;
         let d = tempfile::tempdir().unwrap();
         let store = Store::new(d.path());
         let mut g = Graph::default();
@@ -347,9 +371,32 @@ mod tests {
         e.node(NodeKind::File, "file:a.md", "a.md", "", "a.md", 1);
         g.apply(e);
         store.save(&g, &Manifest::default()).unwrap();
-        std::fs::create_dir(d.path().join(".repograph/graph.json.tmp")).unwrap();
-        assert!(store.save(&Graph::default(), &Manifest::default()).is_err());
+        let dir = d.path().join(".repograph");
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o555)).unwrap();
+        let failed = store.save(&Graph::default(), &Manifest::default()).is_err();
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(failed);
         assert_eq!(store.load().unwrap().0.nodes.len(), 1);
+    }
+
+    /// Readers that refresh at once each write a whole graph and each rename it into place:
+    /// none is refused its rename, and what stands afterwards is one writer's bytes entire.
+    #[test]
+    fn concurrent_writers_each_publish_a_whole_file() {
+        let d = tempfile::tempdir().unwrap();
+        let writers: Vec<_> = (0u8..8).map(|w| {
+            let repo = d.path().to_path_buf();
+            std::thread::spawn(move || {
+                let store = Store::new(&repo);
+                let bytes = vec![b'a' + w; 256 * 1024];
+                for _ in 0..40 { store.write_atomic("graph.json", &bytes).unwrap(); }
+            })
+        }).collect();
+        for w in writers { w.join().unwrap(); }
+        let got = Store::new(d.path()).read_bytes("graph.json").unwrap().unwrap();
+        assert_eq!(got.len(), 256 * 1024);
+        assert!(got.iter().all(|&b| b == got[0]), "a file of two writers' bytes");
+        assert_eq!(tmps(d.path()), Vec::<String>::new());
     }
 
     #[test]
