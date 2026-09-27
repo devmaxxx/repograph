@@ -307,11 +307,12 @@ pub(crate) fn apply_diff(repo: &std::path::Path, store: &store::Store, graph: &m
 /// The store brought in line with the tree.
 pub fn run_update(repo: &std::path::Path, cfg: &config::Config, wipe: bool) -> anyhow::Result<UpdateReport> {
     let store = store::Store::new(repo);
-    if wipe { store.wipe()?; }
-    let (mut graph, manifest) = store.load()?;
+    // A build starts from nothing in memory and leaves the stored graph alone until its save
+    // renames the new one over it: a build killed before then leaves a store that still answers.
+    let (mut graph, manifest) = if wipe { store.drop_leftovers()?; Default::default() } else { store.load()? };
     let entries = walk::walk(repo, cfg, &manifest)?;
     let diff = manifest.diff(&entries);
-    // A wipe has just emptied the graph, so this one test covers both fresh builds: `build`, and
+    // A build starts from an empty graph, so this one test covers both fresh builds: `build`, and
     // an `update` on a store nobody has built yet.
     let bootstrap = graph.nodes.is_empty();
     // A tree that has not moved cannot have moved its families either, and the pass over every
@@ -1069,6 +1070,20 @@ mod tests {
         assert!(query::render(&answer, &graph, &opts).contains("FR-PAY-23"));
         // The store carries the edit too, so the next reader has nothing left to redo.
         assert!(store.load().unwrap().0.nodes.contains_key("FR-PAY-23"));
+    }
+
+    /// A build that stops part-way — killed, or failed as here on a glob it cannot compile — leaves
+    /// the store it started from, not an empty one that `--stale` reads as "no node matches".
+    #[test]
+    fn a_build_that_stops_before_its_save_leaves_the_previous_store_readable() {
+        let dir = doc_repo(ONE);
+        let (repo, cfg) = (dir.path(), config::Config::default());
+        built(repo, &cfg);
+        let broken = config::Config { doc_globs: vec!["[".to_string()], ..config::Config::default() };
+        assert!(run_update(repo, &broken, true).is_err());
+        let (graph, manifest) = store::Store::new(repo).load().unwrap();
+        assert!(graph.nodes.contains_key("FR-PAY-22"));
+        assert!(!manifest.files.is_empty());
     }
 
     #[test]

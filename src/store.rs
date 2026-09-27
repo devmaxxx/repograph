@@ -180,14 +180,10 @@ impl Store {
         Ok(Some(std::fs::read(&p)?))
     }
 
-    /// Drops what `build` recomputes and nothing else: the dense vectors are reused by
-    /// content hash, and the questions cost model tokens that a rebuild must not spend twice.
-    pub fn wipe(&self) -> Result<()> {
-        for name in ["graph.json", "manifest.json"] {
-            let p = self.dir.join(name);
-            if p.exists() { std::fs::remove_file(&p).with_context(|| format!("remove {}", p.display()))?; }
-        }
-        // What a writer killed between its write and its rename left behind.
+    /// What a writer killed between its write and its rename left behind. The graph and the
+    /// manifest stay: `build` replaces them by rename when it saves, so a build that never gets
+    /// there leaves the previous store to answer from rather than none.
+    pub fn drop_leftovers(&self) -> Result<()> {
         for e in std::fs::read_dir(&self.dir).into_iter().flatten().flatten() {
             let name = e.file_name().to_string_lossy().into_owned();
             if (name.starts_with("graph.json.") || name.starts_with("manifest.json.")) && name.ends_with(".tmp") {
@@ -346,7 +342,7 @@ mod tests {
     }
 
     #[test]
-    fn a_leftover_tmp_from_a_crashed_write_is_not_read_and_wipe_drops_it() {
+    fn a_leftover_tmp_from_a_crashed_write_is_not_read_and_is_dropped() {
         let d = tempfile::tempdir().unwrap();
         let store = Store::new(d.path());
         std::fs::create_dir_all(d.path().join(".repograph")).unwrap();
@@ -354,7 +350,7 @@ mod tests {
         store.save(&Graph::default(), &Manifest::default()).unwrap();
         let (g, _) = store.load().unwrap();
         assert!(g.nodes.is_empty());
-        store.wipe().unwrap();
+        store.drop_leftovers().unwrap();
         assert_eq!(tmps(d.path()), Vec::<String>::new());
     }
 
@@ -411,18 +407,17 @@ mod tests {
     }
 
     #[test]
-    fn wipe_keeps_the_vectors_and_the_questions() {
+    fn dropping_leftovers_keeps_every_store_file() {
         let d = tempfile::tempdir().unwrap();
         let s = Store::new(d.path());
         s.save(&Graph::default(), &Manifest::default()).unwrap();
         s.write_atomic("vectors.f32", b"v").unwrap();
         s.write_atomic("questions.json", b"{}").unwrap();
-        s.wipe().unwrap();
-        assert!(!d.path().join(".repograph/graph.json").exists());
-        assert!(!d.path().join(".repograph/manifest.json").exists());
+        s.drop_leftovers().unwrap();
+        assert!(d.path().join(".repograph/graph.json").exists());
+        assert!(d.path().join(".repograph/manifest.json").exists());
         assert_eq!(s.read_bytes("vectors.f32").unwrap().as_deref(), Some(&b"v"[..]));
         assert_eq!(s.read_bytes("questions.json").unwrap().as_deref(), Some(&b"{}"[..]));
-        s.wipe().unwrap();
     }
 
     #[test]
