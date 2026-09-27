@@ -995,3 +995,34 @@ fn a_signature_type_a_type_parameter_a_local_class_or_two_stars_bind_writes_noth
         assert!(edges(&ex, EdgeKind::Imports).is_empty(), "{rel}: {:?}", ex.edges);
     }
 }
+
+#[test]
+fn an_accessor_on_its_own_line_is_walked_from_its_property() {
+    let src = "package app
+
+object Gap
+fun top() = 1
+
+class C(x: Int) {
+    val a: Int
+        get() = top()
+    // the setter follows a comment
+    var b: Any = 0
+        get() = field
+        /* and the getter */
+        set(value) { h(Gap, value) }
+    fun h(a: Any, b: Any) = a
+    val c: Int
+        get() = x
+}
+
+val t: Int
+    get() = top()
+";
+    let ex = one("app/C.kt", src);
+    assert_eq!(calls_from(&ex, "sym:app/C.kt::C.a"), vec!["sym:app/C.kt::top"], "{:?}", ex.edges);
+    assert_eq!(calls_from(&ex, "sym:app/C.kt::C.b"), vec!["sym:app/C.kt::C.h"], "{:?}", ex.edges);
+    assert_eq!(refs_from(&ex, "sym:app/C.kt::C.b"), vec!["sym:app/C.kt::Gap"], "the setter's parameter is a local: {:?}", ex.edges);
+    assert!(refs_from(&ex, "sym:app/C.kt::C.c").is_empty(), "{:?}", ex.edges);
+    assert_eq!(calls_from(&ex, "sym:app/C.kt::t"), vec!["sym:app/C.kt::top"], "{:?}", ex.edges);
+}

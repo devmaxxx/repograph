@@ -161,17 +161,11 @@ fn walk(n: Node, mut at: At, cx: &Ctx, ex: &mut Extraction) {
             }
         }
         "function_declaration" | "anonymous_function" => function(n, &mut at, cx),
-        "property_declaration" if is_declared(n) => {
-            if let Some(s) = child(n, "variable_declaration").and_then(|v| child(v, "simple_identifier")) {
-                let name = text(s, cx.src);
-                let path = if at.class.is_empty() { name.to_string() } else { format!("{}.{name}", at.class) };
-                at.function = Some(format!("sym:{}::{path}", cx.own.rel));
-                at.locals.clear();
-                at.receivers.clear();
-                property(n, &mut at, cx);
+        "property_declaration" if is_declared(n) => enter_property(n, &mut at, cx),
+        "getter" | "setter" => {
+            if let Some(p) = accessed(n).filter(|p| is_declared(*p)) {
+                enter_property(p, &mut at, cx);
             }
-        }
-        "setter" => {
             for p in named(n).into_iter().filter(|p| p.kind() == "parameter_with_optional_type") {
                 if let Some(name) = child(p, "simple_identifier") {
                     at.bind(text(name, cx.src), None);
@@ -335,6 +329,27 @@ fn function(f: Node, at: &mut At, cx: &Ctx) {
             at.bind(text(name, cx.src), ty);
         }
     }
+}
+
+/// The walk enters a declared property the way it enters a declared function, the property as the caller.
+fn enter_property(p: Node, at: &mut At, cx: &Ctx) {
+    let Some(s) = child(p, "variable_declaration").and_then(|v| child(v, "simple_identifier")) else { return };
+    let name = text(s, cx.src);
+    let path = if at.class.is_empty() { name.to_string() } else { format!("{}.{name}", at.class) };
+    at.function = Some(format!("sym:{}::{path}", cx.own.rel));
+    at.locals.clear();
+    at.receivers.clear();
+    property(p, at, cx);
+}
+
+/// The property an accessor on a line of its own belongs to: the grammar parses it beside the
+/// property, after any other accessor or comment, rather than inside it.
+fn accessed(accessor: Node) -> Option<Node> {
+    let mut p = accessor.prev_named_sibling();
+    while let Some(n) = p.filter(|n| matches!(n.kind(), "getter" | "setter" | "line_comment" | "multiline_comment")) {
+        p = n.prev_named_sibling();
+    }
+    p.filter(|n| n.kind() == "property_declaration")
 }
 
 /// A property as its initializer, delegate and accessors see it: its own type parameters and
