@@ -32,13 +32,19 @@ pub struct Declared {
     pub lambdas: BTreeMap<String, Vec<Vec<Param>>>,
     /// Per member function id, the argument counts its declarations take.
     pub arities: BTreeMap<String, Vec<Arity>>,
+    /// Member ids some declaration of which is `private`: no subtype inherits them, and no other
+    /// type reaches them.
+    pub private_members: BTreeSet<String>,
+    /// Member ids some declaration of which is not `private`.
+    pub open_members: BTreeSet<String>,
 }
 
 /// The argument counts a function takes: a parameter with a default may be left out, and a
 /// `vararg` one takes any number. The grammar writes a default as the expression after its
 /// parameter and `vararg` as a modifier before it.
 fn arity(f: Node, src: &[u8]) -> Arity {
-    let mut a = Arity { min: 0, max: 0, varargs: false };
+    let inherits = says(f, "override", src) || says(f, "actual", src);
+    let mut a = Arity { min: 0, max: 0, varargs: false, inherits };
     let mut vararg = false;
     let mut last_required = false;
     for c in child(f, "function_value_parameters").map(named).unwrap_or_default() {
@@ -81,6 +87,11 @@ pub(super) fn type_params(n: Node, src: &[u8]) -> BTreeSet<String> {
         .filter_map(|p| child(p, "type_identifier"))
         .map(|t| text(t, src).to_string())
         .collect()
+}
+
+/// Whether any modifier of `n` is `word`, whichever kind the grammar gives it.
+fn says(n: Node, word: &str, src: &[u8]) -> bool {
+    child(n, "modifiers").is_some_and(|m| named(m).into_iter().any(|c| text(c, src).split_whitespace().any(|w| w == word)))
 }
 
 fn has_modifier(n: Node, word: &str, src: &[u8]) -> bool {
@@ -206,6 +217,10 @@ pub fn scan(root: Node, rel: &str, src: &[u8], ex: &mut Extraction) -> Declared 
     }
     // An overload with no modifier makes the name reachable from the package.
     d.private.retain(|name| !public.contains(name));
+    // Overloads share an id, so one not marked `private` keeps it reachable.
+    let open = std::mem::take(&mut d.open_members);
+    d.private_members.retain(|id| !open.contains(id));
+    d.open_members = open;
     d
 }
 
@@ -232,6 +247,8 @@ fn declare(n: Node, rel: &str, src: &[u8], parent: &str, owner: Option<&str>, ex
         }
         Some(_) => {
             d.members.insert(id.clone());
+            let visibility = if says(n, "private", src) { &mut d.private_members } else { &mut d.open_members };
+            visibility.insert(id.clone());
         }
     }
     if let Some(t) = child(n, "variable_declaration").and_then(|v| written_type(v, src)) {
@@ -275,7 +292,9 @@ fn declare(n: Node, rel: &str, src: &[u8], parent: &str, owner: Option<&str>, ex
             let pid = format!("{id}.{pname}");
             ex.node_span(NodeKind::Symbol, &pid, &format!("{path}.{pname}"), &jvm::body(p, pname_at, src, COMMENTS), rel, span(p));
             ex.edge(&id, &pid, EdgeKind::Declares, if hidden(p, src) { "" } else { "export" }, rel);
-            d.members.insert(pid);
+            d.members.insert(pid.clone());
+            let visibility = if says(p, "private", src) { &mut d.private_members } else { &mut d.open_members };
+            visibility.insert(pid);
             if let Some(t) = written_type(p, src) {
                 d.fields.entry(path.clone()).or_default().insert(pname, t);
             }

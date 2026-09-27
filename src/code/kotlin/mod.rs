@@ -34,15 +34,17 @@ pub fn extract(resolver: &Resolver, rel: &str, source: &str) -> Extraction {
         rel,
         types: &declared.types,
         members: &declared.members,
-        inheritable: &declared.members,
+        inheritable: &declared.open_members,
         statics: &jvm::NONE,
         arities: &declared.arities,
+        private: &declared.private_members,
+        at: "",
         supers: &declared.supers,
         shapes: &declared.shapes,
         index,
         scope: &scope,
         kind: jvm::Kind::All,
-        args: None,
+        call: None,
     };
     calls::scan(root, &calls::Ctx { own, src, d: &declared }, &mut ex);
     ex
@@ -58,8 +60,11 @@ pub fn header(source: &str) -> Header {
     let package = package_of(root, src);
     let mut scratch = Extraction::default();
     let d = declarations::scan(root, "", src, &mut scratch);
-    let arities = d.arities.iter().map(|(id, a)| (jvm::path_of(id).to_string(), a.clone())).collect();
-    let nested = Nested { types: d.types, members: d.members.iter().map(|id| jvm::path_of(id).to_string()).collect(), arities, ..Default::default() };
+    // A private member reaches no other file, not even a subclass's.
+    let reached = |id: &&String| !d.private_members.contains(*id);
+    let arities = d.arities.iter().filter(|(id, _)| reached(id)).map(|(id, a)| (jvm::path_of(id).to_string(), a.clone())).collect();
+    let members = d.members.iter().filter(reached).map(|id| jvm::path_of(id).to_string()).collect();
+    let nested = Nested { types: d.types, members, arities, ..Default::default() };
     Header { scope: if package.is_empty() { Vec::new() } else { vec![package] }, top: d.top, nested, private: d.private, ..Default::default() }
 }
 

@@ -54,7 +54,7 @@ pub struct Declared {
 pub(super) fn arity(params: Option<Node>) -> Arity {
     let params: Vec<Node> = params.map(named).unwrap_or_default().into_iter().filter(|p| matches!(p.kind(), "formal_parameter" | "spread_parameter")).collect();
     let varargs = params.last().is_some_and(|p| p.kind() == "spread_parameter");
-    Arity { min: params.len() - usize::from(varargs), max: params.len(), varargs }
+    Arity { min: params.len() - usize::from(varargs), max: params.len(), varargs, inherits: false }
 }
 
 /// A type's or a method's own type parameters.

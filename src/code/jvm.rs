@@ -5,7 +5,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use tree_sitter::Node;
 
-use crate::code::index::{Arity, QualifiedIndex};
+use crate::code::index::{self, Admission, Arity, Call, QualifiedIndex};
 use crate::model::{EdgeKind, Extraction};
 
 pub(crate) fn text<'a>(n: Node, src: &'a [u8]) -> &'a str {
@@ -327,23 +327,45 @@ pub(crate) struct Own<'a> {
     pub statics: &'a BTreeSet<String>,
     /// Per member id, the argument counts its declarations take.
     pub arities: &'a BTreeMap<String, Vec<Arity>>,
+    /// Kotlin's `private` members, which only their own type and the types inside it reach.
+    pub private: &'a BTreeSet<String>,
+    /// The type path the call is made from.
+    pub at: &'a str,
     pub supers: &'a [(String, String)],
     pub shapes: &'a BTreeMap<String, Shape>,
     pub index: &'a QualifiedIndex,
     pub scope: &'a Scope,
     pub kind: Kind,
-    /// The argument count of the call being resolved; `None` admits any declaration.
-    pub args: Option<usize>,
+    /// The arguments of the call being resolved; `None` admits any declaration.
+    pub call: Option<Call>,
 }
 
 impl Own<'_> {
+    fn arities_of(&self, id: &str) -> Option<&Vec<Arity>> {
+        match split_id(id) {
+            Some((rel, path)) if rel != self.rel => self.index.arities(rel, path),
+            _ => self.arities.get(id),
+        }
+    }
+
     /// Whether a declaration of the member `id` takes this call's arguments. One that does not is
     /// read as absent, so the lookup goes on to the supertypes or the next scope out.
-    fn admits(&self, id: &str) -> bool {
-        match split_id(id) {
-            Some((rel, path)) if rel != self.rel => self.index.admits(rel, path, self.args),
-            _ => crate::code::index::admits(self.arities.get(id), self.args),
-        }
+    fn admission(&self, id: &str) -> Admission {
+        index::admission(self.arities_of(id), self.call)
+    }
+
+    /// Whether the member `id` of the type at `path` is visible where the call is made.
+    fn visible(&self, id: &str, path: &str) -> bool {
+        !self.private.contains(id) || self.at == path || self.at.strip_prefix(path).is_some_and(|rest| rest.starts_with('.'))
+    }
+
+    /// Java binds a supertype's method that takes the arguments without varargs before an own
+    /// one that takes them only through varargs.
+    fn beaten_by_fixed(&self, id: &str, path: &str, name: &str) -> bool {
+        self.kind == Kind::Method
+            && self.call.is_some()
+            && !index::fixed(self.arities_of(id), self.call)
+            && matches!(self.inherited(path, name, &mut BTreeSet::new()), Bound::Found(ids) if ids.iter().any(|i| index::fixed(self.arities_of(i), self.call)))
     }
 
     fn shape(&self, path: &str) -> Shape {
@@ -395,8 +417,13 @@ impl Own<'_> {
     /// told apart only by their argument types are the residual: the first level's is written.
     pub(crate) fn level(&self, path: &str, name: &str) -> Bound {
         let id = format!("sym:{}::{path}.{name}", self.rel);
-        if self.members.contains(&id) && self.admits(&id) {
-            return Bound::Found(vec![id]);
+        if self.members.contains(&id) && self.visible(&id, path) {
+            match self.admission(&id) {
+                Admission::Yes if self.beaten_by_fixed(&id, path, name) => return Bound::Refused,
+                Admission::Yes => return Bound::Found(vec![id]),
+                Admission::Unsure => return Bound::Refused,
+                Admission::No => {}
+            }
         }
         let object = self.kind == Kind::Method && OBJECT_MEMBERS.contains(&name);
         if IMPLICIT_MEMBERS.contains(&name) || object || (self.shape(path).data && generated(name)) {
@@ -415,7 +442,7 @@ impl Own<'_> {
             let Some((rel, path)) = split_id(id) else { return Bound::Refused };
             let here = if rel == self.rel {
                 self.level(path, name)
-            } else if self.elsewhere(rel, &format!("{path}.{name}")) && self.admits(&format!("{id}.{name}")) {
+            } else if self.elsewhere(rel, &format!("{path}.{name}")) && self.admission(&format!("{id}.{name}")) == Admission::Yes {
                 Bound::Found(vec![format!("{id}.{name}")])
             } else {
                 Bound::Refused
@@ -453,14 +480,15 @@ impl Own<'_> {
             for t in targets {
                 let Some((rel, tpath)) = split_id(&t) else { continue };
                 let member = format!("{t}.{name}");
-                if rel != self.rel {
-                    if self.elsewhere(rel, &format!("{tpath}.{name}")) && self.admits(&member) {
-                        found.push(member);
-                    } else {
-                        unread = true;
-                    }
-                } else if self.inheritable.contains(&member) && self.admits(&member) {
+                let declared = if rel != self.rel { self.elsewhere(rel, &format!("{tpath}.{name}")) } else { self.inheritable.contains(&member) };
+                let admission = if declared { self.admission(&member) } else { Admission::No };
+                if admission == Admission::Unsure {
+                    return Bound::Refused;
+                }
+                if admission == Admission::Yes {
                     found.push(member);
+                } else if rel != self.rel {
+                    unread = true;
                 } else {
                     match self.inherited(tpath, name, seen) {
                         Bound::Found(ids) => found.extend(ids),

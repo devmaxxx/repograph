@@ -37,12 +37,14 @@ pub fn extract(resolver: &Resolver, rel: &str, source: &str) -> Extraction {
         inheritable: &declared.open_methods,
         statics: &declared.statics,
         arities: &declared.arities,
+        private: &jvm::NONE,
+        at: "",
         supers: &declared.supers,
         shapes: &declared.shapes,
         index,
         scope: &scope,
         kind: jvm::Kind::Method,
-        args: None,
+        call: None,
     };
     let fields = jvm::Own { members: &declared.values, inheritable: &declared.open_values, statics: &jvm::NONE, kind: jvm::Kind::Field, ..methods };
     calls::scan(root, &calls::Ctx { methods, fields, src, d: &declared }, &mut ex);

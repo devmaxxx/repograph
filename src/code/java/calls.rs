@@ -30,6 +30,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use tree_sitter::Node;
 
 use super::declarations::{supertypes, type_params, written_type, Declared, TYPES};
+use crate::code::index::Call;
 use crate::code::jvm::{self, child, named, outer, path_of, split_id, text, type_ids, Bound, Own};
 use crate::model::{EdgeKind, Extraction};
 
@@ -157,7 +158,8 @@ fn walk(n: Node, mut at: At, cx: &Ctx, ex: &mut Extraction) {
         "method_invocation" => {
             if let Some(from) = at.method.clone() {
                 let args = n.child_by_field_name("arguments").map(|a| named(a).into_iter().filter(|x| !x.kind().ends_with("comment")).count());
-                let called = Ctx { methods: Own { args, ..cx.methods }, fields: cx.fields, src: cx.src, d: cx.d };
+                let call = args.map(|args| Call { args, spread: false });
+                let called = Ctx { methods: Own { call, at: &at.class, ..cx.methods }, fields: cx.fields, src: cx.src, d: cx.d };
                 for to in targets(n, &at, &called) {
                     if to != from {
                         ex.edge(&from, &to, EdgeKind::Calls, "", cx.methods.rel);

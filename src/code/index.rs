@@ -62,20 +62,58 @@ pub struct Arity {
     pub max: usize,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub varargs: bool,
+    /// A Kotlin `override` or `actual`, which takes its defaults from the declaration it
+    /// implements and may write none: fewer arguments than `min` may still bind it.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub inherits: bool,
+}
+
+/// The arguments a call passes. With a spread (`*arr`) their number is unknown, and only a
+/// varargs parameter takes one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Call {
+    pub args: usize,
+    pub spread: bool,
+}
+
+/// Whether a declaration takes a call's arguments.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Admission {
+    Yes,
+    No,
+    /// It may, through defaults this file does not see: neither bind it nor look past it.
+    Unsure,
 }
 
 impl Arity {
-    pub fn admits(&self, args: usize) -> bool {
-        args >= self.min && (self.varargs || args <= self.max)
+    pub fn admission(&self, call: Call) -> Admission {
+        let under_max = self.varargs || call.args <= self.max;
+        if call.spread {
+            if self.varargs { Admission::Yes } else { Admission::No }
+        } else if call.args >= self.min && under_max {
+            Admission::Yes
+        } else if self.inherits && under_max {
+            Admission::Unsure
+        } else {
+            Admission::No
+        }
     }
 }
 
-/// Whether a declaration among `arities` takes `args` arguments. A member with none recorded — a
-/// type, a property — and a call whose count is unknown admit anything.
-pub fn admits(arities: Option<&Vec<Arity>>, args: Option<usize>) -> bool {
-    match (arities, args) {
-        (Some(all), Some(n)) => all.iter().any(|a| a.admits(n)),
-        _ => true,
+/// Whether a declaration among `arities` takes the call. A member with none recorded — a type, a
+/// property — and a call whose count is unknown admit anything.
+pub fn admission(arities: Option<&Vec<Arity>>, call: Option<Call>) -> Admission {
+    let (Some(all), Some(call)) = (arities, call) else { return Admission::Yes };
+    let each: Vec<Admission> = all.iter().map(|a| a.admission(call)).collect();
+    [Admission::Yes, Admission::Unsure].into_iter().find(|a| each.contains(a)).unwrap_or(Admission::No)
+}
+
+/// Whether a declaration among `arities` without varargs takes the call, as Java's first phase
+/// of overload resolution, which never expands varargs, reads it.
+pub fn fixed(arities: Option<&Vec<Arity>>, call: Option<Call>) -> bool {
+    match (arities, call) {
+        (Some(all), Some(call)) => all.iter().any(|a| !a.varargs && a.admission(call) == Admission::Yes),
+        _ => false,
     }
 }
 
@@ -119,9 +157,9 @@ impl QualifiedIndex {
         self.declares_member(rel, path) && self.nested.get(rel).is_some_and(|n| !n.values.contains(path))
     }
 
-    /// Whether a declaration of the method `rel` declares at `path` takes `args` arguments.
-    pub fn admits(&self, rel: &str, path: &str, args: Option<usize>) -> bool {
-        admits(self.nested.get(rel).and_then(|n| n.arities.get(path)), args)
+    /// The argument counts of the method `rel` declares at `path`.
+    pub fn arities(&self, rel: &str, path: &str) -> Option<&Vec<Arity>> {
+        self.nested.get(rel).and_then(|n| n.arities.get(path))
     }
 
     /// Every file declaring `qualified`, sorted.

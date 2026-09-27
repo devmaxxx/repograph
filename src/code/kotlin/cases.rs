@@ -671,3 +671,53 @@ fn a_kotlin_default_vararg_or_trailing_lambda_counts_toward_the_arguments_a_func
     assert_eq!(calls_from(&ex, "sym:app/K.kt::K.many"), vec!["sym:app/K.kt::K.v"]);
     assert_eq!(calls_from(&ex, "sym:app/K.kt::K.lambda"), vec!["sym:app/K.kt::K.t"]);
 }
+
+#[test]
+fn an_override_or_actual_taking_its_defaults_from_its_base_is_never_passed_over_for_the_base() {
+    let repo = Repo::new(&[
+        ("app/Repo.kt", "package app\n\ninterface Repo {\n    fun find(id: Int, cache: Boolean = true)\n}\n\nclass RepoImpl : Repo {\n    override fun find(id: Int, cache: Boolean) {}\n    fun x() { find(1) }\n    fun y() { find(1, false) }\n}\n\nclass U {\n    fun z(r: RepoImpl) { r.find(1) }\n}\n"),
+        ("app/Base.kt", "package app\n\nabstract class Base {\n    abstract fun load(force: Boolean = false)\n}\n"),
+        ("app/Screen.kt", "package app\n\nclass Screen : Base() {\n    override fun load(force: Boolean) {}\n    fun go() { load() }\n}\n"),
+        ("shared/src/commonMain/kotlin/p/Clock.kt", "package p\n\nexpect class Clock() {\n    fun tick(n: Int = 1)\n}\n"),
+        ("shared/src/jvmMain/kotlin/p/Clock.jvm.kt", "package p\n\nfun tick() {}\n\nactual class Clock actual constructor() {\n    actual fun tick(n: Int) {}\n    fun go() { tick() }\n}\n"),
+    ]);
+    let r = repo.extract("app/Repo.kt");
+    assert!(calls_from(&r, "sym:app/Repo.kt::RepoImpl.x").is_empty(), "{:?}", r.edges);
+    assert_eq!(calls_from(&r, "sym:app/Repo.kt::RepoImpl.y"), vec!["sym:app/Repo.kt::RepoImpl.find"]);
+    assert!(calls_from(&r, "sym:app/Repo.kt::U.z").is_empty(), "{:?}", r.edges);
+    let screen = repo.extract("app/Screen.kt");
+    assert!(calls_from(&screen, "sym:app/Screen.kt::Screen.go").is_empty(), "{:?}", screen.edges);
+    let clock = repo.extract("shared/src/jvmMain/kotlin/p/Clock.jvm.kt");
+    assert!(calls_from(&clock, "sym:shared/src/jvmMain/kotlin/p/Clock.jvm.kt::Clock.go").is_empty(), "{:?}", clock.edges);
+}
+
+#[test]
+fn a_private_kotlin_member_is_neither_inherited_nor_reached_from_outside_its_class() {
+    let repo = Repo::new(&[
+        ("app/Same.kt", "package app\n\nopen class A {\n    private fun helper() {}\n}\n\nclass Outer {\n    fun helper() {}\n    inner class B : A() {\n        fun go() { helper() }\n    }\n}\n"),
+        ("ext/C.kt", "package ext\n\nclass C {\n    private fun helper() {}\n    fun self(o: C) { o.helper() }\n}\n\nfun C.helper() {}\n\nclass User {\n    fun go(c: C) { c.helper() }\n}\n"),
+        ("app/P.kt", "package app\n\nopen class P {\n    private fun helper() {}\n}\n"),
+        ("app/Cross.kt", "package app\n\nclass Cross {\n    fun helper() {}\n    inner class B : P() {\n        fun go() { helper() }\n    }\n}\n"),
+    ]);
+    let same = repo.extract("app/Same.kt");
+    assert_eq!(calls_from(&same, "sym:app/Same.kt::Outer.B.go"), vec!["sym:app/Same.kt::Outer.helper"]);
+    let c = repo.extract("ext/C.kt");
+    assert_eq!(calls_from(&c, "sym:ext/C.kt::C.self"), vec!["sym:ext/C.kt::C.helper"]);
+    assert!(!calls_from(&c, "sym:ext/C.kt::User.go").contains(&"sym:ext/C.kt::C.helper"), "{:?}", c.edges);
+    let cross = repo.extract("app/Cross.kt");
+    assert!(!calls_from(&cross, "sym:app/Cross.kt::Cross.B.go").contains(&"sym:app/P.kt::P.helper"), "{:?}", cross.edges);
+}
+
+#[test]
+fn a_kotlin_spread_argument_binds_only_a_vararg_function() {
+    let src = "package app\n\nopen class Up {\n    fun m(vararg xs: Int) {}\n}\n\nclass Down : Up() {\n    fun m(a: Int) {}\n    fun go(arr: IntArray) { m(*arr) }\n}\n";
+    let ex = one("app/Down.kt", src);
+    assert_eq!(calls_from(&ex, "sym:app/Down.kt::Down.go"), vec!["sym:app/Down.kt::Up.m"]);
+}
+
+#[test]
+fn a_local_typed_by_a_private_nested_class_reaches_its_members_from_the_outer_class() {
+    let src = "package app\n\nclass Engine {\n    fun sync() {\n        val s = Session()\n        s.record()\n    }\n    private class Session {\n        fun record() {}\n    }\n}\n";
+    let ex = one("app/Engine.kt", src);
+    assert!(calls_from(&ex, "sym:app/Engine.kt::Engine.sync").contains(&"sym:app/Engine.kt::Engine.Session.record"), "{:?}", ex.edges);
+}

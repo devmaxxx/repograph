@@ -110,3 +110,18 @@ fn a_java_method_that_comes_to_take_a_call_s_arguments_is_bound_from_the_subclas
     assert!(built.contains(&call), "{built:?}");
     assert_eq!(updated, built);
 }
+
+#[test]
+fn a_kotlin_member_made_public_reaches_the_subclass_in_another_file_that_calls_it() {
+    let base = |vis: &str| ("app/A.kt", format!("package app\n\nopen class A {{\n    {vis} fun helper() {{}}\n}}\n"));
+    let (rel, before) = base("private");
+    let (_, after) = base("public");
+    let sub = ("app/Sub.kt", "package app\n\nclass Sub : A() {\n    fun go() { helper() }\n}\n");
+    let call = ("sym:app/Sub.kt::Sub.go".to_string(), "sym:app/A.kt::A.helper".to_string(), "Calls".to_string(), String::new());
+    let (updated, built) = updated_and_built(&[(rel, &before), sub], &[(rel, &after)]);
+    assert!(built.contains(&call), "{built:?}");
+    assert_eq!(updated, built);
+    let (updated, built) = updated_and_built(&[(rel, &after), sub], &[(rel, &before)]);
+    assert!(!built.contains(&call), "{built:?}");
+    assert_eq!(updated, built);
+}

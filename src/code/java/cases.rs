@@ -599,3 +599,11 @@ fn object_record_and_enum_members_the_file_never_writes_hide_outer_and_imported_
     }
     assert_eq!(calls_from(&ex, "sym:shop/Kinds.java::P.post"), vec!["sym:shop/Kinds.java::Mail.send"], "a record component is a typed field");
 }
+
+#[test]
+fn an_own_varargs_method_never_beats_a_supertype_s_fixed_arity_one_taking_the_arguments() {
+    let src = "package shop;\n\nclass Up {\n    void m(int a) {}\n}\n\nclass Down extends Up {\n    void m(int... xs) {}\n    void go() { m(1); }\n    void two() { m(1, 2); }\n}\n";
+    let ex = one("shop/Down.java", src);
+    assert!(calls_from(&ex, "sym:shop/Down.java::Down.go").is_empty(), "{:?}", ex.edges);
+    assert_eq!(calls_from(&ex, "sym:shop/Down.java::Down.two"), vec!["sym:shop/Down.java::Down.m"]);
+}

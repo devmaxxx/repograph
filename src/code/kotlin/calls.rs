@@ -28,6 +28,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use tree_sitter::Node;
 
 use super::declarations::{holder, is_type, members_of, one_line_object, receiver, type_params, written_type, Declared, Param};
+use crate::code::index::Call;
 use crate::code::jvm::{self, child, named, outer, path_of, qualify, split_id, text, type_ids, Bound, Own};
 use crate::model::{EdgeKind, Extraction};
 
@@ -182,7 +183,7 @@ fn walk(n: Node, mut at: At, cx: &Ctx, ex: &mut Extraction) {
         }
         "call_expression" => {
             if let (Some(from), Some(callee)) = (at.function.clone(), n.named_child(0)) {
-                let called = Ctx { own: Own { args: arguments(n), ..cx.own }, src: cx.src, d: cx.d };
+                let called = Ctx { own: Own { call: arguments(n), ..cx.own }, src: cx.src, d: cx.d };
                 for to in jvm::same_platform(cx.own.rel, targets(callee, &at, &called)) {
                     // A recursive call says nothing about what the function depends on.
                     if to != from {
@@ -204,11 +205,17 @@ fn walk(n: Node, mut at: At, cx: &Ctx, ex: &mut Extraction) {
     }
 }
 
+/// The context as seen from inside `at`'s class, where that class's private members are visible.
+fn within<'a>(at: &'a At, cx: &Ctx<'a>) -> Ctx<'a> {
+    Ctx { own: Own { at: &at.class, ..cx.own }, src: cx.src, d: cx.d }
+}
+
 /// How many arguments a call passes: the parenthesised ones and a trailing lambda.
-fn arguments(call: Node) -> Option<usize> {
+fn arguments(call: Node) -> Option<Call> {
     let suffix = child(call, "call_suffix")?;
-    let listed = child(suffix, "value_arguments").map_or(0, |a| named(a).into_iter().filter(|v| v.kind() == "value_argument").count());
-    Some(listed + usize::from(child(suffix, "annotated_lambda").is_some()))
+    let listed: Vec<Node> = child(suffix, "value_arguments").map(named).unwrap_or_default().into_iter().filter(|v| v.kind() == "value_argument").collect();
+    let spread = listed.iter().any(|v| child(*v, "spread_expression").is_some());
+    Some(Call { args: listed.len() + usize::from(child(suffix, "annotated_lambda").is_some()), spread })
 }
 
 fn owner(at: &At, rel: &str) -> String {
@@ -401,13 +408,17 @@ enum Named {
 /// types, then the top level. The first level that binds it wins only when no level after it
 /// binds it too.
 fn lookup(name: &str, at: &At, cx: &Ctx) -> Named {
+    let cx = &within(at, cx);
     if let Some(ty) = at.locals.get(name) {
         return Named::Local(ty.clone());
     }
     let receivers = at.receivers.iter().rev().map(|r| holds(r, name, cx));
     let class = std::iter::once_with(|| cx.own.member(&at.class, name));
+    // A top-level function's arity is not recorded, so a spread may reach one it cannot take.
+    let spread = cx.own.call.is_some_and(|c| c.spread);
     let top = std::iter::once_with(|| match top_level(name, cx) {
         Some(ids) if ids.is_empty() => Bound::Absent,
+        Some(_) if spread => Bound::Refused,
         Some(ids) => Bound::Found(ids),
         None => Bound::Refused,
     });
@@ -422,6 +433,7 @@ fn lookup(name: &str, at: &At, cx: &Ctx) -> Named {
 /// The ids a callee reaches: `f()` and `Type()`; `x.m()` and `this.x.m()` through a parameter, a
 /// local or a property with a declared type; `Obj.m()` and `Type.m()` on an object or a companion.
 fn targets(callee: Node, at: &At, cx: &Ctx) -> Vec<String> {
+    let cx = &within(at, cx);
     match callee.kind() {
         "simple_identifier" => match lookup(text(callee, cx.src), at, cx) {
             Named::Ids(ids) => ids,
@@ -446,6 +458,7 @@ fn targets(callee: Node, at: &At, cx: &Ctx) -> Vec<String> {
 /// `this.name`: the innermost receiver's member, or the enclosing type's own or inherited one,
 /// never an outer type's.
 fn this(name: &str, at: &At, cx: &Ctx) -> Bound {
+    let cx = &within(at, cx);
     match at.receivers.last() {
         Some(Receiver::Unknown) => Bound::Refused,
         Some(Receiver::Types(ids)) => cx.own.on_receiver(ids, name),
@@ -505,6 +518,7 @@ fn top_level(name: &str, cx: &Ctx) -> Option<Vec<String>> {
 /// enclosing type's property, a top-level property or type — then a capitalised name read as a
 /// type. A value of unknown type, or a lowercase name nothing binds, claims no call.
 fn receiver_types(receiver: Node, at: &At, cx: &Ctx) -> Option<Vec<String>> {
+    let cx = &within(at, cx);
     match receiver.kind() {
         "simple_identifier" => {
             let name = text(receiver, cx.src);
