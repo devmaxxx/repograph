@@ -283,3 +283,35 @@ fn a_type_added_or_removed_is_followed_to_the_unchanged_files_whose_signatures_n
     assert_eq!(imports(&built), 0, "{built:?}");
     assert_eq!(updated, built);
 }
+
+#[test]
+fn a_member_named_like_the_constructor_added_to_a_supertype_in_another_file_drops_the_call_after_update() {
+    let wipe = |body: &str| ("app/sync/Wipe.kt", format!("package app.sync\n\ninterface Destroyer {{\n    fun destroy() {{}}\n{body}}}\n"));
+    let (rel, plain) = wipe("");
+    let (_, shadowing) = wipe("    fun Key(raw: String): Any = raw\n");
+    let key = ("app/Key.kt", "package app\n\nclass Key(val raw: String)\n");
+    let store = ("app/Store.kt", "package app\n\nimport app.sync.Destroyer\n\nclass Store : Destroyer {\n    fun make(s: String): Any = Key(s)\n}\n");
+    let call = ("sym:app/Store.kt::Store.make".to_string(), "sym:app/Key.kt::Key".to_string(), "Calls".to_string(), String::new());
+    let (updated, built) = updated_and_built(&[(rel, &plain), key, store], &[(rel, &shadowing)]);
+    assert!(!built.contains(&call), "{built:?}");
+    assert_eq!(updated, built);
+    let (updated, built) = updated_and_built(&[(rel, &shadowing), key, store], &[(rel, &plain)]);
+    assert!(built.contains(&call), "{built:?}");
+    assert_eq!(updated, built);
+}
+
+#[test]
+fn a_supertype_s_own_supertype_changed_in_its_file_is_followed_by_update() {
+    let mid = |sup: &str| ("app/B.kt", format!("package app\n\nopen class Mid : {sup}()\n"));
+    let (rel, walked) = mid("Base");
+    let (_, unread) = mid("Exception");
+    let base = ("app/A.kt", "package app\n\nopen class Base {\n    fun only() {}\n}\n");
+    let sub = ("app/C.kt", "package app\n\nclass Sub : Mid() {\n    fun go() { only() }\n}\n");
+    let call = ("sym:app/C.kt::Sub.go".to_string(), "sym:app/A.kt::Base.only".to_string(), "Calls".to_string(), String::new());
+    let (updated, built) = updated_and_built(&[(rel, &walked), base, sub], &[(rel, &unread)]);
+    assert!(!built.contains(&call), "{built:?}");
+    assert_eq!(updated, built);
+    let (updated, built) = updated_and_built(&[(rel, &unread), base, sub], &[(rel, &walked)]);
+    assert!(built.contains(&call), "{built:?}");
+    assert_eq!(updated, built);
+}

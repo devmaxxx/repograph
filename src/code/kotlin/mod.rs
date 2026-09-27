@@ -65,7 +65,8 @@ pub fn header(source: &str) -> Header {
     let reached = |id: &&String| !d.private_members.contains(*id);
     let arities = d.arities.iter().filter(|(id, _)| reached(id)).map(|(id, a)| (jvm::path_of(id).to_string(), a.clone())).collect();
     let members = d.members.iter().filter(reached).map(|id| jvm::path_of(id).to_string()).collect();
-    let nested = Nested { types: d.types, members, arities, ..Default::default() };
+    let supers = jvm::recorded(&d.types, &d.supers, &d.shapes, &scope(root, src));
+    let nested = Nested { types: d.types, members, arities, supers, ..Default::default() };
     Header { scope: if package.is_empty() { Vec::new() } else { vec![package] }, top: d.top, nested, private: d.private, ..Default::default() }
 }
 

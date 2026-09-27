@@ -368,11 +368,15 @@ fn a_bare_call_from_a_type_whose_supertype_is_unread_is_no_edge() {
         ("shop/Screen.java", "package shop;\n\nimport static shop.util.Nav.finish;\n\npublic class Screen extends android.app.Activity {\n    void go() { finish(); }\n}\n"),
         ("shop/Sub.java", "package shop;\n\nimport static shop.util.Nav.helper;\n\nclass Sub extends Mid {\n    void go() { helper(); }\n}\n"),
         ("shop/Direct.java", "package shop;\n\nimport static shop.util.Nav.helper;\n\nclass Direct extends Base {\n    void go() { helper(); }\n}\n"),
+        ("shop/Lost.java", "package shop;\n\npublic class Lost extends android.app.Activity {}\n"),
+        ("shop/Far.java", "package shop;\n\nimport static shop.util.Nav.finish;\n\nclass Far extends Lost {\n    void go() { finish(); }\n}\n"),
     ]);
+    let far = repo.extract("shop/Far.java");
+    assert!(calls_from(&far, "sym:shop/Far.java::Far.go").is_empty(), "Lost's supertype is unread: {:?}", far.edges);
     let screen = repo.extract("shop/Screen.java");
     assert!(calls_from(&screen, "sym:shop/Screen.java::Screen.go").is_empty(), "the activity may declare finish: {:?}", screen.edges);
     let sub = repo.extract("shop/Sub.java");
-    assert!(calls_from(&sub, "sym:shop/Sub.java::Sub.go").is_empty(), "Mid's own supertypes are unread here: {:?}", sub.edges);
+    assert_eq!(calls_from(&sub, "sym:shop/Sub.java::Sub.go"), vec!["sym:shop/Base.java::Base.helper"], "Mid is walked to Base: {:?}", sub.edges);
     let direct = repo.extract("shop/Direct.java");
     assert_eq!(calls_from(&direct, "sym:shop/Direct.java::Direct.go"), vec!["sym:shop/Base.java::Base.helper"]);
 }

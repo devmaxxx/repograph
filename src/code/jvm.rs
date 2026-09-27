@@ -5,7 +5,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use tree_sitter::Node;
 
-use crate::code::index::{self, Admission, Arity, Call, QualifiedIndex};
+use crate::code::index::{self, Admission, Arity, Call, QualifiedIndex, Supers};
 use crate::model::{EdgeKind, Extraction};
 
 pub(crate) fn text<'a>(n: Node, src: &'a [u8]) -> &'a str {
@@ -264,6 +264,24 @@ pub(crate) fn cite(n: Node, owner: &str, context: &str, rel: &str, src: &[u8], e
     }
 }
 
+/// What a file's header records of its supertypes, from the declarations pass run with an empty
+/// `rel`; `None` when it declares no type.
+pub(crate) fn recorded(types: &BTreeSet<String>, supers: &[(String, String)], shapes: &BTreeMap<String, Shape>, scope: &Scope) -> Option<Supers> {
+    if types.is_empty() {
+        return None;
+    }
+    let mut out = Supers { package: scope.package.clone(), ..Supers::default() };
+    for (from, written) in supers {
+        out.written.entry(path_of(from).to_string()).or_default().push(written.clone());
+    }
+    out.implicit = shapes.iter().filter(|(_, s)| s.implicit).map(|(p, _)| p.clone()).collect();
+    if !out.written.is_empty() {
+        out.singles = scope.singles.clone();
+        out.stars = scope.stars.clone();
+    }
+    Some(out)
+}
+
 /// `sym:<rel>::<path>` split into its file and its path.
 pub(crate) fn split_id(id: &str) -> Option<(&str, &str)> {
     id.strip_prefix("sym:")?.split_once("::")
@@ -452,11 +470,12 @@ impl Own<'_> {
     }
 
     /// `name` among the members of this file's type at `path`: its own declaration first when it
-    /// takes the call's arguments, as C# binds, then those of every supertype. A supertype the
-    /// repository does not declare, or one in another file that declares no `name` taking the
-    /// arguments — the index holds no supertypes to walk on — may hold the name, so the lookup
-    /// refuses rather than let a top-level or imported namesake stand in. Overloads of one arity
-    /// told apart only by their argument types are the residual: the first level's is written.
+    /// takes the call's arguments, as C# binds, then those of every supertype, walked into other
+    /// files through the supertypes their headers record. A supertype the repository does not
+    /// declare, or one in another file that declares `name` without provably taking the
+    /// arguments, may hold the name, so the lookup refuses rather than let a top-level or imported
+    /// namesake stand in. Overloads of one arity told apart only by their argument types are the
+    /// residual: the first level's is written.
     pub(crate) fn level(&self, path: &str, name: &str) -> Bound {
         let id = format!("sym:{}::{path}.{name}", self.rel);
         if self.members.contains(&id) && self.visible(&id, path) {
@@ -509,30 +528,36 @@ impl Own<'_> {
     }
 
     fn inherited(&self, path: &str, name: &str, seen: &mut BTreeSet<String>) -> Bound {
-        if !seen.insert(path.to_string()) {
+        self.above(self.rel, path, name, seen)
+    }
+
+    /// `name` among the supertypes of the type at `path` in `rel`, this file or another whose
+    /// header records its supertypes. A supertype in another file that declares the name without
+    /// provably taking the arguments refuses: its overloads are all the index knows of it.
+    fn above(&self, rel: &str, path: &str, name: &str, seen: &mut BTreeSet<String>) -> Bound {
+        if !seen.insert(format!("sym:{rel}::{path}")) {
             return Bound::Absent;
         }
-        let from = format!("sym:{}::{path}", self.rel);
+        let Some((supers, implicit)) = self.supertypes(rel, path) else { return Bound::Refused };
         let mut found = Vec::new();
-        let mut unread = self.shape(path).implicit;
-        for (_, written) in self.supers.iter().filter(|(f, _)| *f == from) {
-            // A type's header sees the types around it, not its own nested ones.
-            let targets = type_ids(self.types, self.index, self.scope, self.rel, outer(path), written);
+        let mut unread = implicit;
+        for targets in supers {
             unread |= targets.is_empty();
             for t in targets {
-                let Some((rel, tpath)) = split_id(&t) else { continue };
+                let Some((trel, tpath)) = split_id(&t) else { continue };
                 let member = format!("{t}.{name}");
-                let declared = if rel != self.rel { self.elsewhere(rel, &format!("{tpath}.{name}")) } else { self.inheritable.contains(&member) };
-                let admission = if declared { self.admission(&member, rel == self.rel && self.inside(tpath)) } else { Admission::No };
+                let elsewhere = trel != self.rel;
+                let declared = if elsewhere { self.elsewhere(trel, &format!("{tpath}.{name}")) } else { self.inheritable.contains(&member) };
+                let admission = if declared { self.admission(&member, !elsewhere && self.inside(tpath)) } else { Admission::No };
                 if admission == Admission::Unsure {
                     return Bound::Refused;
                 }
                 if admission == Admission::Yes {
                     found.push(member);
-                } else if rel != self.rel {
+                } else if elsewhere && declared {
                     unread = true;
                 } else {
-                    match self.inherited(tpath, name, seen) {
+                    match self.above(trel, tpath, name, seen) {
                         Bound::Found(ids) => found.extend(ids),
                         Bound::Refused => unread = true,
                         Bound::Absent => {}
@@ -541,6 +566,22 @@ impl Own<'_> {
             }
         }
         settle(found, unread)
+    }
+
+    /// Each written supertype of the type at `path` in `rel` as the ids it resolves to there, empty
+    /// when it resolves to none, and whether the type also has one it never writes. `None` when
+    /// the index records nothing of `rel`'s supertypes.
+    fn supertypes(&self, rel: &str, path: &str) -> Option<(Vec<Vec<String>>, bool)> {
+        // A type's header sees the types around it, not its own nested ones.
+        if rel == self.rel {
+            let from = format!("sym:{rel}::{path}");
+            let written = self.supers.iter().filter(|(f, _)| *f == from);
+            return Some((written.map(|(_, w)| type_ids(self.types, self.index, self.scope, rel, outer(path), w)).collect(), self.shape(path).implicit));
+        }
+        let (recorded, types) = (self.index.supers(rel)?, self.index.types(rel)?);
+        let scope = Scope { package: recorded.package.clone(), singles: recorded.singles.clone(), stars: recorded.stars.clone(), ..Scope::default() };
+        let written = recorded.written.get(path).map(Vec::as_slice).unwrap_or_default();
+        Some((written.iter().map(|w| type_ids(types, self.index, &scope, rel, outer(path), w)).collect(), recorded.implicit.contains(path)))
     }
 }
 

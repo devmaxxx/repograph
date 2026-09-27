@@ -493,15 +493,31 @@ fn a_supertype_outside_the_repository_may_hold_the_name_so_a_bare_call_is_no_edg
 }
 
 #[test]
-fn a_supertype_in_another_file_whose_chain_the_index_cannot_walk_is_no_proof() {
+fn a_supertype_chain_in_other_files_is_walked_until_a_level_declares_the_name_or_is_unread() {
     let repo = Repo::new(&[
-        ("app/A.kt", "package app\n\nopen class Base {\n    fun helper() {}\n}\n"),
-        ("app/B.kt", "package app\n\nopen class Mid : Base()\n"),
-        ("app/C.kt", "package app\n\nfun helper() {}\n\nfun other() {}\n\nclass Sub : Mid() {\n    fun go() { helper() }\n}\n\nclass Direct : Base() {\n    fun go() { other() }\n}\n"),
+        ("app/A.kt", "package app\n\nopen class Base {\n    fun helper() {}\n    fun only() {}\n    fun two(x: Int) {}\n}\n"),
+        ("app/B.kt", "package app\n\nopen class Mid : Base()\n\nopen class Lost : Exception()\n"),
+        ("app/C.kt", "package app\n\nfun helper() {}\n\nfun other() {}\n\nfun two() {}\n\nclass Sub : Mid() {\n    fun go() { only() }\n    fun both() { helper() }\n    fun arity() { two() }\n    fun local() {\n        val only = { }\n        only()\n    }\n}\n\nclass Direct : Base() {\n    fun go() { other() }\n}\n\nclass Far : Lost() {\n    fun go() { other() }\n}\n"),
     ]);
     let ex = repo.extract("app/C.kt");
-    assert!(calls_from(&ex, "sym:app/C.kt::Sub.go").is_empty(), "{:?}", ex.edges);
-    assert!(calls_from(&ex, "sym:app/C.kt::Direct.go").is_empty(), "Base is read, but not what Base extends: {:?}", ex.edges);
+    assert_eq!(calls_from(&ex, "sym:app/C.kt::Sub.go"), vec!["sym:app/A.kt::Base.only"], "Mid is walked to Base: {:?}", ex.edges);
+    assert!(calls_from(&ex, "sym:app/C.kt::Sub.both").is_empty(), "Base's member and the top level both bind helper: {:?}", ex.edges);
+    assert!(calls_from(&ex, "sym:app/C.kt::Sub.arity").is_empty(), "Base declares two, though not for these arguments: {:?}", ex.edges);
+    assert!(calls_from(&ex, "sym:app/C.kt::Sub.local").is_empty(), "a local hides the member: {:?}", ex.edges);
+    assert_eq!(calls_from(&ex, "sym:app/C.kt::Direct.go"), vec!["sym:app/C.kt::other"], "Base extends nothing, so other is the top level's: {:?}", ex.edges);
+    assert!(calls_from(&ex, "sym:app/C.kt::Far.go").is_empty(), "Lost's supertype is unread: {:?}", ex.edges);
+}
+
+#[test]
+fn a_constructor_call_in_a_type_whose_supertype_is_another_file_s_binds_unless_the_supertype_declares_the_name() {
+    let repo = Repo::new(&[
+        ("app/Key.kt", "package app\n\nclass Key(val raw: String)\n"),
+        ("app/sync/Wipe.kt", "package app.sync\n\nfun interface Destroyer {\n    fun destroy()\n}\n\ninterface Holder {\n    fun Key(raw: String): Any = raw\n}\n"),
+        ("app/Store.kt", "package app\n\nimport app.sync.Destroyer\nimport app.sync.Holder\n\nclass Store : Destroyer {\n    override fun destroy() {}\n    fun make(s: String?): Key? {\n        s?.let { return Key(it) }\n        return null\n    }\n}\n\nclass Shadowed : Holder {\n    fun make(s: String): Any = Key(s)\n}\n"),
+    ]);
+    let ex = repo.extract("app/Store.kt");
+    assert_eq!(calls_from(&ex, "sym:app/Store.kt::Store.make"), vec!["sym:app/Key.kt::Key"], "{:?}", ex.edges);
+    assert!(calls_from(&ex, "sym:app/Store.kt::Shadowed.make").iter().all(|t| *t != "sym:app/Key.kt::Key"), "{:?}", ex.edges);
 }
 
 #[test]

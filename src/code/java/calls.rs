@@ -7,7 +7,8 @@
 //! - A call binds only a declaration whose parameter count admits its arguments, the type's own
 //!   before a supertype's, as an override binds. A bare call binds in the innermost enclosing type
 //!   that has one, then in a static import. An `Object` method, or a level where no declaration
-//!   takes the arguments and a supertype the file cannot read may, is no edge; an unread supertype
+//!   takes the arguments and a supertype the repository does not declare may, is no edge; a
+//!   supertype in another file is read through the supertypes its header records. An unread supertype
 //!   beside one that declares a method taking the arguments does not stop it. A static nested type
 //!   reaches outer static methods, never an instance one, so an instance namesake refuses rather
 //!   than falls through to an import.

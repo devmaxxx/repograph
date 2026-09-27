@@ -29,7 +29,8 @@
 //! Edges it leaves out: calls on a value whose type is inferred from anything but a constructor
 //! call, receivers typed by another file's properties, a lambda passed to another file's function
 //! taking `T.() -> R` (read as an unknown receiver), a companion's members from a nested type, and
-//! any bare call from a type whose supertype chain leaves the file without declaring the name.
+//! any bare call from a type whose supertype chain reaches a type the repository does not declare
+//! before a level that declares the name.
 
 use std::collections::{BTreeMap, BTreeSet};
 

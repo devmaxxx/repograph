@@ -46,12 +46,37 @@ pub struct Nested {
     /// path, and a call binds only a declaration that admits its count.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub arities: BTreeMap<String, Vec<Arity>>,
+    /// How the file's types reach their supertypes; `None` for a family that records none, and
+    /// for a file that declares no type.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub supers: Option<Supers>,
 }
 
 impl Nested {
     fn is_empty(&self) -> bool {
-        self.types.is_empty() && self.members.is_empty() && self.values.is_empty() && self.arities.is_empty()
+        self.types.is_empty() && self.members.is_empty() && self.values.is_empty() && self.arities.is_empty() && self.supers.is_none()
     }
+}
+
+/// A file's supertypes as it writes them, with the names it resolves them through, so a subtype
+/// in another file can read past a supertype that does not declare a name. In the header, a
+/// supertype or an import that moves widens as any other declaration does.
+#[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Supers {
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub package: String,
+    /// Per type path, its supertypes as written; a type absent here writes none.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub written: BTreeMap<String, Vec<String>>,
+    /// Types with a supertype the file never writes, such as an enum's, which may hold any name.
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub implicit: BTreeSet<String>,
+    /// The file's explicit imports, local name to every qualified name bound to it. Recorded only
+    /// when some type writes a supertype, since only resolving one reads them.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub singles: BTreeMap<String, BTreeSet<String>>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub stars: Vec<String>,
 }
 
 /// How many arguments one method declaration takes: `min` without its defaults, `max` with every
@@ -158,6 +183,16 @@ impl QualifiedIndex {
     /// Whether `rel` declares a member at `path` a call can bind: no type, and no field alone.
     pub fn declares_method(&self, rel: &str, path: &str) -> bool {
         self.declares_member(rel, path) && self.nested.get(rel).is_some_and(|n| !n.values.contains(path))
+    }
+
+    /// The types `rel` declares, by path.
+    pub fn types(&self, rel: &str) -> Option<&BTreeSet<String>> {
+        self.nested.get(rel).map(|n| &n.types)
+    }
+
+    /// How `rel`'s types reach their supertypes, when its family records it.
+    pub fn supers(&self, rel: &str) -> Option<&Supers> {
+        self.nested.get(rel).and_then(|n| n.supers.as_ref())
     }
 
     /// The argument counts of the method `rel` declares at `path`.

@@ -68,7 +68,8 @@ pub fn header(source: &str) -> Header {
     let reached = |id: &String| d.types.contains(jvm::path_of(id)) || d.open_methods.contains(id) || d.open_values.contains(id);
     let values = d.open_values.difference(&d.open_methods).map(path).collect();
     let arities = d.arities.iter().filter(|(id, _)| d.open_methods.contains(*id)).map(|(id, a)| (path(id), a.clone())).collect();
-    let nested = Nested { members: d.members.iter().filter(|id| reached(id)).map(path).collect(), values, arities, types: d.types };
+    let supers = jvm::recorded(&d.types, &d.supers, &d.shapes, &scope(root, src));
+    let nested = Nested { members: d.members.iter().filter(|id| reached(id)).map(path).collect(), values, arities, types: d.types, supers };
     Header { scope: if package.is_empty() { Vec::new() } else { vec![package] }, top: d.top, nested, ..Default::default() }
 }
 
