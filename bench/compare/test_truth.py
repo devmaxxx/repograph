@@ -889,6 +889,39 @@ class JavaDeclarations(unittest.TestCase):
         self.assertEqual(got["symbols"], {"shop/Cart.java": ["Cart", "total"]})
 
 
+    def test_an_annotation_is_never_read_as_a_member(self):
+        src = (
+            "@RestController\n"
+            '@RequestMapping("/x")\n'
+            "public class TicketDesk {\n"
+            '    @JsonProperty("x")\n'
+            "    private String label;\n"
+            '    @JsonProperty("y") private int size;\n'
+            "\n"
+            '    @SuppressWarnings({"unchecked", "rawtypes"})\n'
+            "    public TicketDesk(Ledger ledger) {\n"
+            "    }\n"
+            "\n"
+            '    @GetMapping("/{id}")\n'
+            '    public Ticket find(@PathVariable("id") Long id) {\n'
+            "        return null;\n"
+            "    }\n"
+            "\n"
+            '    @PostMapping(value = "/a", consumes = {"b"})\n'
+            "    public void open(\n"
+            "        @RequestBody Ticket ticket) {\n"
+            "    }\n"
+            "\n"
+            "    @com.acme.web.Audited(level = Level.of(2),\n"
+            '        tags = {"a", "b"})\n'
+            "    void close() {}\n"
+            "}\n"
+        )
+        self.assertEqual(T.java_declarations(T.blank_java(src)), [
+            (3, "TicketDesk"), (5, "label"), (6, "size"), (9, "TicketDesk"),
+            (13, "find"), (18, "open"), (24, "close"),
+        ])
+
 class KotlinConstructorProperties(unittest.TestCase):
     """Read for the declarations clause only; `changed_symbols` does not count them."""
 
@@ -936,6 +969,17 @@ class JvmCallGraph(unittest.TestCase):
             self.assertEqual(every["edges"]["Checkout"], ["Gateway.charge", "Invoice.send"])
             self.assertEqual(T.shortest_path(every, "SyncEngine", "ReplicaFiles"),
                              ["SyncEngine", "RemoteWipeHandler.execute", "ReplicaFiles.delete"])
+
+    def test_a_kotlin_class_spaced_by_a_tab_or_two_spaces_is_still_a_class(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            (root / "mobile").mkdir()
+            (root / "mobile/T.kt").write_text(
+                "class\tTabbed(private val store: Store) {\n    fun go() { store.save() }\n}\n\n"
+                "internal  class  Spaced(private val clock: Clock) {\n    fun go() { clock.tick() }\n}\n")
+            edges = T.di_call_graph(root, ["mobile"])["edges"]
+            self.assertEqual(edges["Tabbed"], ["Store.save"])
+            self.assertEqual(edges["Spaced"], ["Clock.tick"])
 
     def test_build_reads_mobile_by_default_and_another_corpus_names_its_roots(self):
         with tempfile.TemporaryDirectory() as d:

@@ -377,10 +377,10 @@ JAVA_MODIFIER = (
     "public|private|protected|abstract|static|final|sealed|non-sealed|strictfp|default|"
     "synchronized|native|transient|volatile"
 )
-JAVA_ANNOTATION = r"@[\w.]+(?:\([^()\n]*\))?[ \t]*"
+# `@interface` declares an annotation type rather than applying one, so it is not an annotation here.
+JAVA_ANNOTATION = re.compile(r"@(?!interface\b)[\w$]+(?:[ \t]*\.[ \t]*[\w$]+)*")
 JAVA_DECL = re.compile(
-    rf"^[ \t]*(?:{JAVA_ANNOTATION})*"
-    rf"(?:(?:{JAVA_MODIFIER})[ \t]+)*"
+    rf"^[ \t]*(?:(?:{JAVA_MODIFIER})[ \t]+)*"
     rf"(?P<kw>class|interface|enum|record|@interface)\b"
     rf"[ \t]+(?P<name>\w+)"
 )
@@ -388,8 +388,7 @@ JAVA_DECL = re.compile(
 # parameters. An enum constant looks like the second form, so an ALL-CAPS name is refused there;
 # `return x;` and `new X();` look like the first, so their keywords are refused as a type.
 JAVA_MEMBER = re.compile(
-    rf"^[ \t]*(?:{JAVA_ANNOTATION})*"
-    rf"(?:(?:{JAVA_MODIFIER})[ \t]+)*"
+    rf"^[ \t]*(?:(?:{JAVA_MODIFIER})[ \t]+)*"
     rf"(?:{GENERIC}[ \t]+)?"
     rf"(?:"
     rf"(?!(?:return|new|throw|else|case|yield|assert|break|continue)\b)[\w.$]+(?:[ \t]*{GENERIC})?(?:[ \t]*\[\])*[ \t]+"
@@ -398,6 +397,42 @@ JAVA_MEMBER = re.compile(
     rf"(?P<name>\w+)[ \t]*[(=;,]"
 )
 JAVA_TYPE_KEYWORDS = {"class", "interface", "enum", "record", "@interface"}
+
+
+def _blank_java_annotations(blanked: str) -> str:
+    """`blanked` with every annotation and its argument list turned to spaces, newlines kept.
+
+    Skipped by structure rather than matched by the member pattern: an argument list nests
+    parentheses and braces and may span lines, and a pattern that tried to consume it could back
+    out of `@GetMapping(` and read `Mapping(` as a constructor. The text is already blanked, so a
+    bracket inside a string cannot unbalance the walk.
+    """
+    out: list[str] = []
+    last = 0
+    for m in JAVA_ANNOTATION.finditer(blanked):
+        if m.start() < last:
+            continue
+        end = m.end()
+        after = end
+        while after < len(blanked) and blanked[after] in " \t\n":
+            after += 1
+        if after < len(blanked) and blanked[after] == "(":
+            depth = 0
+            for i in range(after, len(blanked)):
+                if blanked[i] in "([{":
+                    depth += 1
+                elif blanked[i] in ")]}":
+                    depth -= 1
+                    if depth == 0:
+                        end = i + 1
+                        break
+            else:
+                end = len(blanked)
+        out.append(blanked[last : m.start()])
+        out.append(re.sub(r"[^\n]", " ", blanked[m.start() : end]))
+        last = end
+    out.append(blanked[last:])
+    return "".join(out)
 
 
 def java_declarations(blanked: str) -> list[tuple[int, str]]:
@@ -409,7 +444,9 @@ def java_declarations(blanked: str) -> list[tuple[int, str]]:
     of `int a, b;` is not counted; the extractor declares both, and the declarations clause's ±5%
     absorbs it.
     """
-    return _scoped_declarations(blanked, decl=JAVA_DECL, member=JAVA_MEMBER, type_keywords=JAVA_TYPE_KEYWORDS)
+    return _scoped_declarations(
+        _blank_java_annotations(blanked), decl=JAVA_DECL, member=JAVA_MEMBER, type_keywords=JAVA_TYPE_KEYWORDS
+    )
 
 
 KOTLIN_PRIMARY = re.compile(
@@ -822,7 +859,7 @@ class ComponentDiReader(DiReader):
 CSHARP_DI = DiReader(CS_CLASS, CS_FIELD, CS_CALL)
 RAZOR_DI = ComponentDiReader(NO_CLASS, RAZOR_FIELD, CS_CALL)
 
-KT_CLASS = re.compile(r"^(?:(?:public|internal|expect|actual|abstract|open|data|sealed)\s+)*class (\w+)", re.M)
+KT_CLASS = re.compile(r"^(?:(?:public|internal|expect|actual|abstract|open|data|sealed)\s+)*class\s+(\w+)", re.M)
 KT_FIELD = re.compile(r"\b(?:val|var)\s+(\w+)\s*:\s*(\w+)")
 # `files.delete()` and `this.files.delete()` are one call in both JVM languages.
 JVM_CALL = re.compile(r"(?:\bthis\s*\.\s*)?\b(\w+)\s*\.\s*(\w+)\s*\(", re.S)
