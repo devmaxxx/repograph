@@ -32,8 +32,8 @@ pub struct Declared {
     pub lambdas: BTreeMap<String, Vec<Vec<Param>>>,
     /// Per member function id, the argument counts its declarations take.
     pub arities: BTreeMap<String, Vec<Arity>>,
-    /// Member ids some declaration of which is `private`: no subtype inherits them, and no other
-    /// type reaches them.
+    /// Member ids every declaration of which is `private`: no subtype inherits them, and no other
+    /// type reaches them. A private overload beside a public one is told apart by its arity.
     pub private_members: BTreeSet<String>,
     /// Member ids some declaration of which is not `private`.
     pub open_members: BTreeSet<String>,
@@ -44,7 +44,7 @@ pub struct Declared {
 /// parameter and `vararg` as a modifier before it.
 fn arity(f: Node, src: &[u8]) -> Arity {
     let inherits = says(f, "override", src) || says(f, "actual", src);
-    let mut a = Arity { min: 0, max: 0, varargs: false, inherits };
+    let mut a = Arity { min: 0, max: 0, varargs: false, inherits, private: says(f, "private", src) };
     let mut vararg = false;
     let mut last_required = false;
     for c in child(f, "function_value_parameters").map(named).unwrap_or_default() {

@@ -125,3 +125,18 @@ fn a_kotlin_member_made_public_reaches_the_subclass_in_another_file_that_calls_i
     assert!(!built.contains(&call), "{built:?}");
     assert_eq!(updated, built);
 }
+
+#[test]
+fn a_kotlin_overload_made_public_beside_a_public_one_reaches_the_subclass_in_another_file() {
+    let base = |vis: &str| ("app/A.kt", format!("package app\n\nopen class A {{\n    {vis} fun helper() {{}}\n    fun helper(x: Int) {{}}\n}}\n"));
+    let (rel, before) = base("private");
+    let (_, after) = base("public");
+    let sub = ("app/Sub.kt", "package app\n\nclass Sub : A() {\n    fun go() { helper() }\n}\n");
+    let call = ("sym:app/Sub.kt::Sub.go".to_string(), "sym:app/A.kt::A.helper".to_string(), "Calls".to_string(), String::new());
+    let (updated, built) = updated_and_built(&[(rel, &before), sub], &[(rel, &after)]);
+    assert!(built.contains(&call), "{built:?}");
+    assert_eq!(updated, built);
+    let (updated, built) = updated_and_built(&[(rel, &after), sub], &[(rel, &before)]);
+    assert!(!built.contains(&call), "{built:?}");
+    assert_eq!(updated, built);
+}

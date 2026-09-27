@@ -66,6 +66,9 @@ pub struct Arity {
     /// implements and may write none: fewer arguments than `min` may still bind it.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub inherits: bool,
+    /// A Kotlin `private` overload beside a public one, which takes no call from outside its type.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub private: bool,
 }
 
 /// The arguments a call passes. With a spread (`*arr`) their number is unknown, and only a

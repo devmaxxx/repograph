@@ -350,13 +350,31 @@ impl Own<'_> {
 
     /// Whether a declaration of the member `id` takes this call's arguments. One that does not is
     /// read as absent, so the lookup goes on to the supertypes or the next scope out.
-    fn admission(&self, id: &str) -> Admission {
-        index::admission(self.arities_of(id), self.call)
+    ///
+    /// From outside the member's type only its non-private overloads count. A call that only a
+    /// private overload takes is refused: the compiler rejects it or binds a namesake further
+    /// out, and which of the two this lookup cannot tell.
+    fn admission(&self, id: &str, inside: bool) -> Admission {
+        let arities = self.arities_of(id);
+        let all = index::admission(arities, self.call);
+        if inside || !arities.is_some_and(|a| a.iter().any(|a| a.private)) {
+            return all;
+        }
+        let open: Vec<Arity> = arities.into_iter().flatten().filter(|a| !a.private).copied().collect();
+        match index::admission(Some(&open), self.call) {
+            Admission::No if all != Admission::No => Admission::Unsure,
+            admission => admission,
+        }
+    }
+
+    /// Whether the call is made inside the type at `path`, where its private members are visible.
+    fn inside(&self, path: &str) -> bool {
+        self.at == path || self.at.strip_prefix(path).is_some_and(|rest| rest.starts_with('.'))
     }
 
     /// Whether the member `id` of the type at `path` is visible where the call is made.
     fn visible(&self, id: &str, path: &str) -> bool {
-        !self.private.contains(id) || self.at == path || self.at.strip_prefix(path).is_some_and(|rest| rest.starts_with('.'))
+        !self.private.contains(id) || self.inside(path)
     }
 
     /// Java binds a supertype's method that takes the arguments without varargs before an own
@@ -418,7 +436,7 @@ impl Own<'_> {
     pub(crate) fn level(&self, path: &str, name: &str) -> Bound {
         let id = format!("sym:{}::{path}.{name}", self.rel);
         if self.members.contains(&id) && self.visible(&id, path) {
-            match self.admission(&id) {
+            match self.admission(&id, self.inside(path)) {
                 Admission::Yes if self.beaten_by_fixed(&id, path, name) => return Bound::Refused,
                 Admission::Yes => return Bound::Found(vec![id]),
                 Admission::Unsure => return Bound::Refused,
@@ -442,7 +460,7 @@ impl Own<'_> {
             let Some((rel, path)) = split_id(id) else { return Bound::Refused };
             let here = if rel == self.rel {
                 self.level(path, name)
-            } else if self.elsewhere(rel, &format!("{path}.{name}")) && self.admission(&format!("{id}.{name}")) == Admission::Yes {
+            } else if self.elsewhere(rel, &format!("{path}.{name}")) && self.admission(&format!("{id}.{name}"), false) == Admission::Yes {
                 Bound::Found(vec![format!("{id}.{name}")])
             } else {
                 Bound::Refused
@@ -481,7 +499,7 @@ impl Own<'_> {
                 let Some((rel, tpath)) = split_id(&t) else { continue };
                 let member = format!("{t}.{name}");
                 let declared = if rel != self.rel { self.elsewhere(rel, &format!("{tpath}.{name}")) } else { self.inheritable.contains(&member) };
-                let admission = if declared { self.admission(&member) } else { Admission::No };
+                let admission = if declared { self.admission(&member, rel == self.rel && self.inside(tpath)) } else { Admission::No };
                 if admission == Admission::Unsure {
                     return Bound::Refused;
                 }

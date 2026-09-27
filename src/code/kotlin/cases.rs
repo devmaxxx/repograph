@@ -721,3 +721,26 @@ fn a_local_typed_by_a_private_nested_class_reaches_its_members_from_the_outer_cl
     let ex = one("app/Engine.kt", src);
     assert!(calls_from(&ex, "sym:app/Engine.kt::Engine.sync").contains(&"sym:app/Engine.kt::Engine.Session.record"), "{:?}", ex.edges);
 }
+
+#[test]
+fn a_private_overload_beside_a_public_one_takes_no_call_from_outside_its_class() {
+    let a = "open class A {\n    private fun helper() {}\n    fun helper(x: Int) {}\n    fun self() { helper() }\n}\n";
+    let users = "class X {\n    fun go(a: A) { a.helper() }\n    fun one(a: A) { a.helper(1) }\n}\n\nclass Outer {\n    fun helper() {}\n    inner class B : A() {\n        fun go() { helper() }\n    }\n}\n";
+    let repo = Repo::new(&[
+        ("app/Same.kt", &format!("package app\n\n{a}\n{users}")),
+        ("ext/A.kt", &format!("package ext\n\n{a}\nfun A.helper() {{}}\n\nclass Y {{\n    fun go(a: A) {{ a.helper() }}\n}}\n")),
+        ("cross/A.kt", &format!("package cross\n\n{a}")),
+        ("cross/Users.kt", &format!("package cross\n\n{users}")),
+    ]);
+    let same = repo.extract("app/Same.kt");
+    assert_eq!(calls_from(&same, "sym:app/Same.kt::A.self"), vec!["sym:app/Same.kt::A.helper"]);
+    assert_eq!(calls_from(&same, "sym:app/Same.kt::X.one"), vec!["sym:app/Same.kt::A.helper"]);
+    assert!(calls_from(&same, "sym:app/Same.kt::X.go").is_empty(), "{:?}", same.edges);
+    assert!(calls_from(&same, "sym:app/Same.kt::Outer.B.go").is_empty(), "only A's private overload takes it: {:?}", same.edges);
+    let ext = repo.extract("ext/A.kt");
+    assert!(!calls_from(&ext, "sym:ext/A.kt::Y.go").contains(&"sym:ext/A.kt::A.helper"), "{:?}", ext.edges);
+    let cross = repo.extract("cross/Users.kt");
+    assert_eq!(calls_from(&cross, "sym:cross/Users.kt::X.one"), vec!["sym:cross/A.kt::A.helper"]);
+    assert!(calls_from(&cross, "sym:cross/Users.kt::X.go").is_empty(), "{:?}", cross.edges);
+    assert!(calls_from(&cross, "sym:cross/Users.kt::Outer.B.go").is_empty(), "{:?}", cross.edges);
+}
