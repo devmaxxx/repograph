@@ -273,6 +273,8 @@ pub fn trace_json(graph: &Graph, from: &str, to: &str, depth: usize, path: Optio
 /// The shortest chain of code edges from `from` to `to` (or one of its aliases or members),
 /// at most `depth` hops, each step with whether it was reached by being passed rather than called.
 pub fn trace(graph: &Graph, from: &str, to: &str, depth: usize) -> Option<Vec<(String, bool)>> {
+    // The walk marks `from` seen before it looks, so it would never arrive where it started.
+    if from == to { return Some(vec![(from.to_string(), false)]) }
     let by_source = Index::new(graph, false);
     let goal: BTreeSet<String> = by_source.seeds(to).into_iter().collect();
     let mut parent: BTreeMap<String, (String, bool)> = BTreeMap::new();
@@ -567,6 +569,11 @@ pub(crate) mod tests {
         assert_eq!(trace(&graph(), "sym:j.ts::J", "sym:s.ts::S", 6), Some(vec![("sym:j.ts::J".into(), false), ("sym:w.ts::W".into(), false), ("sym:s.ts::S.create".into(), false)]));
         assert_eq!(trace(&graph(), "sym:s.ts::S", "sym:j.ts::J", 6), None);
         assert_eq!(trace(&graph(), "sym:j.ts::J", "sym:s.ts::S", 1), None);
+    }
+
+    #[test]
+    fn a_trace_from_a_symbol_to_itself_is_the_one_node_path() {
+        assert_eq!(trace(&graph(), "sym:w.ts::W", "sym:w.ts::W", 6), Some(vec![("sym:w.ts::W".into(), false)]));
     }
 
     #[test]
