@@ -306,6 +306,11 @@ pub(crate) struct Shape {
     pub data: bool,
     /// A supertype the file never writes, such as an enum's `Enum`, which may hold any name.
     pub implicit: bool,
+    /// An enum, whose implicit superclass `Enum` is a class level for the names it declares.
+    pub enumerated: bool,
+    /// A Java record's components, each with an accessor method the file need not write. Nothing
+    /// extends an enum or a record, so only their own file reads these and no header records them.
+    pub components: BTreeSet<String>,
     /// The type's own type parameters, which a same-named repository type must never stand in for.
     pub type_params: BTreeSet<String>,
     /// The supertype written as the class it extends: Java's `extends` on a class, Kotlin's
@@ -330,6 +335,13 @@ pub(crate) enum Bound {
 const IMPLICIT_MEMBERS: [&str; 3] = ["toString", "equals", "hashCode"];
 /// And a Java class these from `Object` as well.
 const OBJECT_MEMBERS: [&str; 6] = ["getClass", "clone", "finalize", "notify", "notifyAll", "wait"];
+
+/// What an enum inherits from `java.lang.Enum` (Java) or `kotlin.Enum` (Kotlin), statics
+/// included. `Enum` is a class level above every interface the enum writes, so an interface's
+/// default of one of these names never binds; the implicit supertype stays unread for any other.
+const JAVA_ENUM_MEMBERS: [&str; 12] =
+    ["name", "ordinal", "compareTo", "equals", "hashCode", "toString", "getDeclaringClass", "describeConstable", "clone", "finalize", "values", "valueOf"];
+const KOTLIN_ENUM_MEMBERS: [&str; 6] = ["name", "ordinal", "compareTo", "entries", "values", "valueOf"];
 
 /// Whether every Java class holds a method of this name without declaring it.
 pub(crate) fn from_object(name: &str) -> bool {
@@ -588,7 +600,12 @@ impl Own<'_> {
             }
         }
         let object = self.kind == Kind::Method && OBJECT_MEMBERS.contains(&name);
-        if IMPLICIT_MEMBERS.contains(&name) || object || (self.shape(path).data && generated(name)) {
+        let shape = self.shape(path);
+        let from_enum = shape.enumerated && if self.kind == Kind::All { KOTLIN_ENUM_MEMBERS.contains(&name) } else { JAVA_ENUM_MEMBERS.contains(&name) };
+        // A record's accessor, when the file does not write it, is no symbol to bind, and it still
+        // beats an interface default of its name.
+        let accessor = self.kind != Kind::Field && shape.components.contains(name);
+        if IMPLICIT_MEMBERS.contains(&name) || object || from_enum || accessor || (shape.data && generated(name)) {
             return Bound::Refused;
         }
         self.inherited(path, name, &mut BTreeSet::new())

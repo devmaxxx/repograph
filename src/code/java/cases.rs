@@ -767,3 +767,36 @@ fn a_package_private_method_is_not_inherited_by_a_subclass_in_another_package() 
     assert_eq!(calls_from(&ex, "sym:b/Outer.java::Outer.Direct.go"), vec!["sym:b/Outer.java::Outer.help"], "{:?}", ex.edges);
     assert_eq!(calls_from(&ex, "sym:b/Outer.java::Outer.Deep.keep"), vec!["sym:a/Base.java::Base.kept"], "a protected method crosses packages: {:?}", ex.edges);
 }
+
+#[test]
+fn an_enum_s_implicit_superclass_beats_an_interface_for_the_names_enum_declares() {
+    let repo = Repo::new(&[
+        ("a/Desc.java", "package a;\n\npublic interface Desc {\n    default int ordinal() { return -1; }\n    default int rank() { return 1; }\n    default Object values() { return null; }\n}\n"),
+        (
+            "a/E.java",
+            "package a;\n\npublic enum E implements Desc {\n    X {\n        int g() { return ordinal(); }\n    };\n    int f() { return ordinal(); }\n    Object v() { return values(); }\n    int r() { return rank(); }\n}\n",
+        ),
+    ]);
+    let ex = repo.extract("a/E.java");
+    assert!(calls_from(&ex, "sym:a/E.java::E.f").is_empty(), "Enum.ordinal is final and wins: {:?}", ex.edges);
+    assert!(calls_from(&ex, "sym:a/E.java::E.v").is_empty(), "the implicit values() wins: {:?}", ex.edges);
+    assert!(!edges(&ex, EdgeKind::Calls).iter().any(|(_, t, _)| *t == "sym:a/Desc.java::Desc.ordinal"), "nor from a constant's body: {:?}", ex.edges);
+    assert_eq!(calls_from(&ex, "sym:a/E.java::E.r"), vec!["sym:a/Desc.java::Desc.rank"], "Enum declares no rank: {:?}", ex.edges);
+}
+
+const HAS_X: (&str, &str) = ("r/H.java", "package r;\n\npublic interface H {\n    default int x() { return -1; }\n}\n");
+
+#[test]
+fn a_record_s_component_accessor_beats_an_interface_default_of_its_name() {
+    let repo = Repo::new(&[
+        HAS_X,
+        (
+            "r/R.java",
+            "package r;\n\npublic record R(int x) implements H {\n    int f() { return x(); }\n}\n\nrecord S(int y) implements H {\n    int f() { return x(); }\n}\n\nrecord T(int x) implements H {\n    public int x() { return x; }\n    int f() { return x(); }\n}\n",
+        ),
+    ]);
+    let ex = repo.extract("r/R.java");
+    assert!(calls_from(&ex, "sym:r/R.java::R.f").is_empty(), "the implicit accessor is no symbol, and it wins: {:?}", ex.edges);
+    assert_eq!(calls_from(&ex, "sym:r/R.java::S.f"), vec!["sym:r/H.java::H.x"], "S has no component x: {:?}", ex.edges);
+    assert_eq!(calls_from(&ex, "sym:r/R.java::T.f"), vec!["sym:r/R.java::T.x"], "a written accessor is a method: {:?}", ex.edges);
+}

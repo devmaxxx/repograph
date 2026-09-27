@@ -164,6 +164,12 @@ fn declare_type(n: Node, rel: &str, src: &[u8], parent: &str, owner: Option<&str
         // An enum's `values`, a record's accessors and an annotation's `annotationType` are
         // members the file never writes.
         implicit: matches!(n.kind(), "enum_declaration" | "record_declaration" | "annotation_type_declaration"),
+        enumerated: n.kind() == "enum_declaration",
+        components: if n.kind() == "record_declaration" {
+            n.child_by_field_name("parameters").map(named).unwrap_or_default().into_iter().filter_map(|p| p.child_by_field_name("name")).map(|x| text(x, src).to_string()).collect()
+        } else {
+            BTreeSet::new()
+        },
         type_params: type_params(n, src),
         superclass: n.child_by_field_name("superclass").and_then(|h| named(h).into_iter().find_map(|t| written_type(t, src))),
         ..Default::default()

@@ -1070,3 +1070,15 @@ fn a_signature_or_a_value_the_grammar_failed_around_writes_nothing() {
     assert!(imports_to(&ex, "file:b/Key.kt").is_empty(), "the ERROR hides the type parameter: {:?}", ex.edges);
     assert!(edges(&ex, EdgeKind::References).is_empty(), "{:?}", ex.edges);
 }
+
+#[test]
+fn an_enum_class_s_implicit_superclass_beats_an_interface_for_the_names_enum_declares() {
+    let repo = Repo::new(&[
+        ("app/Desc.kt", "package app\n\ninterface Desc {\n    val name: String\n    fun rank(): Int = 1\n    fun values(): List<Int> = listOf()\n}\n"),
+        ("app/E.kt", "package app\n\nenum class E : Desc {\n    X;\n    fun f() = name\n    fun v() = values()\n    fun r() = rank()\n}\n"),
+    ]);
+    let ex = repo.extract("app/E.kt");
+    assert!(refs_from(&ex, "sym:app/E.kt::E.f").is_empty(), "Enum.name implements it: {:?}", ex.edges);
+    assert!(calls_from(&ex, "sym:app/E.kt::E.v").is_empty(), "the implicit values() wins: {:?}", ex.edges);
+    assert_eq!(calls_from(&ex, "sym:app/E.kt::E.r"), vec!["sym:app/Desc.kt::Desc.rank"], "Enum declares no rank: {:?}", ex.edges);
+}

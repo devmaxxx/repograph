@@ -293,8 +293,10 @@ fn declare(n: Node, rel: &str, src: &[u8], parent: &str, owner: Option<&str>, ex
         inner: has_modifier(n, "inner", src),
         object: n.kind() != "class_declaration",
         implicit: enumerated,
+        enumerated,
         type_params: type_params(n, src),
         superclass: None,
+        ..Default::default()
     };
     d.shapes.insert(path.clone(), shape);
     for spec in named(n).into_iter().filter(|c| c.kind() == "delegation_specifier") {

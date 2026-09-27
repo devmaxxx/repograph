@@ -365,3 +365,11 @@ fn a_method_made_package_private_or_protected_is_followed_by_update() {
     let protected = "package a;\n\npublic class Base {\n    protected void help() {}\n}\n";
     flipped(("a/Base.java", package), ("a/Base.java", protected), &[mid, outer], &call("sym:b/Outer.java::Outer.Deep.go", "sym:a/Base.java::Base.help"));
 }
+
+#[test]
+fn a_record_component_added_or_removed_is_followed_by_update() {
+    let h = ("r/H.java", "package r;\n\npublic interface H {\n    default int x() { return -1; }\n}\n");
+    let accessor = "package r;\n\npublic record R(int x) implements H {\n    int f() { return x(); }\n}\n";
+    let none = "package r;\n\npublic record R(int y) implements H {\n    int f() { return x(); }\n}\n";
+    flipped(("r/R.java", accessor), ("r/R.java", none), &[h], &call("sym:r/R.java::R.f", "sym:r/H.java::H.x"));
+}
