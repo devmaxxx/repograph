@@ -918,3 +918,64 @@ class Fn {
     assert!(calls_from(&ex, "sym:app/T.kt::Screen.b").is_empty(), "the activity may declare helper(): {:?}", ex.edges);
     assert!(refs_from(&ex, "sym:app/T.kt::Fn.a").is_empty(), "a bare name never references a function: {:?}", ex.edges);
 }
+
+// ---- signature types ----
+
+const KEY: &str = "package app\n\nclass Key {\n    class Inner\n}\n";
+
+fn imports_to<'a>(ex: &'a crate::model::Extraction, to: &str) -> Vec<&'a str> {
+    edges(ex, EdgeKind::Imports).into_iter().filter(|(_, t, _)| *t == to).map(|(_, _, c)| c).collect()
+}
+
+#[test]
+fn a_type_named_only_in_a_signature_writes_the_type_edge_to_its_file() {
+    let uses = [
+        ("app/Param.kt", "package app\n\nfun f(k: Key) = 1\n"),
+        ("app/Return.kt", "package app\n\nfun f(): Key? = null\n"),
+        ("app/Prop.kt", "package app\n\nclass H {\n    val k: Key? = null\n}\n"),
+        ("app/Ctor.kt", "package app\n\nclass H(k: Key)\n"),
+        ("app/Receiver.kt", "package app\n\nfun Key.ext() = 1\n"),
+        ("app/Generic.kt", "package app\n\nfun f(ks: List<Map<String, Key?>>) = ks\n"),
+        ("app/Lambda.kt", "package app\n\nfun f(on: (Key) -> Unit) = on\n"),
+        ("app/Nested.kt", "package app\n\nfun f(i: Key.Inner) = i\n"),
+        ("app/Setter.kt", "package app\n\nclass H {\n    var n: Int = 0\n        set(v: Int) { field = v }\n    fun g(): List<Key> = emptyList()\n}\n"),
+    ];
+    let mut files = vec![("app/Key.kt", KEY)];
+    files.extend(uses);
+    let repo = Repo::new(&files);
+    for (rel, _) in uses {
+        let ex = repo.extract(rel);
+        assert!(imports_to(&ex, "file:app/Key.kt").contains(&"Key"), "{rel}: {:?}", ex.edges);
+    }
+}
+
+#[test]
+fn a_signature_type_through_a_star_or_an_expect_family_names_each_file_on_the_platform() {
+    let repo = Repo::new(&[
+        ("s/src/commonMain/K.kt", "package app.storage\n\nexpect class ReplicaKey\n"),
+        ("s/src/jvmMain/K.jvm.kt", "package app.storage\n\nactual class ReplicaKey\n"),
+        ("s/src/androidMain/K.android.kt", "package app.storage\n\nactual class ReplicaKey\n"),
+        ("s/src/androidMain/D.kt", "package app.sync\n\nimport app.storage.*\n\nclass Driver {\n    fun open(key: ReplicaKey) = key\n}\n"),
+    ]);
+    let ex = repo.extract("s/src/androidMain/D.kt");
+    assert_eq!(imports_to(&ex, "file:s/src/commonMain/K.kt"), vec!["ReplicaKey"], "{:?}", ex.edges);
+    assert_eq!(imports_to(&ex, "file:s/src/androidMain/K.android.kt"), vec!["ReplicaKey"], "{:?}", ex.edges);
+    assert!(imports_to(&ex, "file:s/src/jvmMain/K.jvm.kt").is_empty(), "an Android file links no JVM actual: {:?}", ex.edges);
+}
+
+#[test]
+fn a_signature_type_a_type_parameter_a_local_class_or_two_stars_bind_writes_nothing() {
+    let repo = Repo::new(&[
+        ("app/Key.kt", KEY),
+        ("x/Dup.kt", "package x\n\nclass Dup\n"),
+        ("y/Dup.kt", "package y\n\nclass Dup\n"),
+        ("app/Mask.kt", "package app\n\nfun <Key> f(k: Key): Key = k\n\nclass G<Key>(val k: Key) {\n    fun g(): List<Key> = listOf(k)\n}\n"),
+        ("app/Local.kt", "package app\n\nfun f() {\n    class Key\n    val k: Key = Key()\n    fun g(x: Key) = x\n}\n"),
+        ("app/Stars.kt", "package app\n\nimport x.*\nimport y.*\n\nfun f(d: Dup) = d\n"),
+        ("app/Own.kt", "package app\n\nclass Key2\n\nfun f(k: Key2) = k\n"),
+    ]);
+    for rel in ["app/Mask.kt", "app/Local.kt", "app/Stars.kt", "app/Own.kt"] {
+        let ex = repo.extract(rel);
+        assert!(edges(&ex, EdgeKind::Imports).is_empty(), "{rel}: {:?}", ex.edges);
+    }
+}

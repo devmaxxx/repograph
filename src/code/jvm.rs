@@ -232,6 +232,17 @@ pub(crate) fn link(types: &BTreeSet<String>, supers: &[(String, String)], index:
     }
 }
 
+/// The `Imports` edge a type named in a signature writes to each other file declaring it, spelled
+/// as an import of that type is, so `impact` lists the file whose signatures name the type.
+pub(crate) fn used(ids: &[String], rel: &str, ex: &mut Extraction) {
+    for (to, path) in ids.iter().filter_map(|id| split_id(id)) {
+        if to != rel {
+            let top = path.split('.').next().unwrap_or(path);
+            ex.edge(&format!("file:{rel}"), &format!("file:{to}"), EdgeKind::Imports, top, rel);
+        }
+    }
+}
+
 /// `DecoratedBy` from each annotated declaration to the annotation's own declaration when the name
 /// resolves in the repository, exactly as a type use would, and nothing otherwise: a node every
 /// annotated file shared would pull all of them into each update's co-declared closure, and an

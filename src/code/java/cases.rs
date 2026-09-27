@@ -641,3 +641,48 @@ fn a_nested_annotation_type_decorates_a_member_and_a_constructor() {
     let ex = one("shop/Cart.java", src);
     assert_eq!(edges(&ex, EdgeKind::DecoratedBy), vec![("sym:shop/Cart.java::Cart.Cart", "sym:shop/Cart.java::Cart.Tracked", "")], "{:?}", ex.edges);
 }
+
+// ---- signature types ----
+
+const KEY: &str = "package shop;\n\npublic class Key {\n    public static class Inner {}\n}\n";
+
+fn imports_to<'a>(ex: &'a crate::model::Extraction, to: &str) -> Vec<&'a str> {
+    edges(ex, EdgeKind::Imports).into_iter().filter(|(_, t, _)| *t == to).map(|(_, _, c)| c).collect()
+}
+
+#[test]
+fn a_type_named_only_in_a_signature_writes_the_type_edge_to_its_file() {
+    let uses = [
+        ("shop/Param.java", "package shop;\n\nclass Param {\n    void f(Key k) {}\n}\n"),
+        ("shop/Return.java", "package shop;\n\ninterface Return {\n    Key get();\n}\n"),
+        ("shop/Field.java", "package shop;\n\nclass Field {\n    private Key k;\n}\n"),
+        ("shop/Ctor.java", "package shop;\n\nclass Ctor {\n    Ctor(Key k) {}\n}\n"),
+        ("shop/Generic.java", "package shop;\n\nclass Generic {\n    java.util.Map<String, ? extends java.util.List<Key>> f() { return null; }\n}\n"),
+        ("shop/Array.java", "package shop;\n\nclass Array {\n    void f(Key[] ks, Key... more) {}\n}\n"),
+        ("shop/Nested.java", "package shop;\n\nclass Nested {\n    void f(Key.Inner i) {}\n}\n"),
+        ("shop/Rec.java", "package shop;\n\nrecord Rec(Key k) {}\n"),
+    ];
+    let mut files = vec![("shop/Key.java", KEY)];
+    files.extend(uses);
+    let repo = Repo::new(&files);
+    for (rel, _) in uses {
+        let ex = repo.extract(rel);
+        assert!(imports_to(&ex, "file:shop/Key.java").contains(&"Key"), "{rel}: {:?}", ex.edges);
+    }
+}
+
+#[test]
+fn a_signature_type_a_type_parameter_a_local_class_or_two_stars_bind_writes_nothing() {
+    let repo = Repo::new(&[
+        ("shop/Key.java", KEY),
+        ("x/Dup.java", "package x;\n\npublic class Dup {}\n"),
+        ("y/Dup.java", "package y;\n\npublic class Dup {}\n"),
+        ("shop/Mask.java", "package shop;\n\nclass Mask<Key> {\n    Key k;\n    <Key> Key f(Key k) { return k; }\n}\n"),
+        ("shop/Local.java", "package shop;\n\nclass Local {\n    void f() {\n        class Key {}\n        java.util.function.Consumer<Key> c = (Key k) -> {};\n    }\n}\n"),
+        ("shop/Stars.java", "package shop;\n\nimport x.*;\nimport y.*;\n\nclass Stars {\n    void f(Dup d) {}\n}\n"),
+    ]);
+    for rel in ["shop/Mask.java", "shop/Local.java", "shop/Stars.java"] {
+        let ex = repo.extract(rel);
+        assert!(edges(&ex, EdgeKind::Imports).is_empty(), "{rel}: {:?}", ex.edges);
+    }
+}

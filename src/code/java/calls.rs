@@ -21,6 +21,9 @@
 //!   may hold the first name; a field typed as the type it is named like reads the same either way.
 //! - A single static import shadows an on-demand one; two of a name, or two on-demand imports, bind
 //!   nothing.
+//! - A type named in a field's, a parameter's or a record component's type or a return type,
+//!   generic arguments and array elements included, writes the file-to-file `Imports` an import of
+//!   it writes, masked as any written type is.
 //!
 //! Edges it leaves out: calls through `super`, through a chain of calls, through another file's
 //! fields, and from field initializers and initializer blocks.
@@ -171,6 +174,7 @@ fn walk(n: Node, mut at: At, cx: &Ctx, ex: &mut Extraction) {
         "string_literal" => jvm::cite(n, &owner(&at, cx.methods.rel), "string", cx.methods.rel, cx.src, ex),
         _ => {}
     }
+    signature(n, &at, cx, ex);
     let body = n.child_by_field_name("body").map(|b| b.id());
     for c in named(n) {
         let mut inside = at.clone();
@@ -209,6 +213,41 @@ fn walk(n: Node, mut at: At, cx: &Ctx, ex: &mut Extraction) {
                 declare(s, &mut at, cx);
             }
         }
+    }
+}
+
+/// A type named in a field's, a parameter's or a record component's type or a return type, generic
+/// arguments and array elements included, writes the edge an import of it would.
+fn signature(n: Node, at: &At, cx: &Ctx, ex: &mut Extraction) {
+    let t = match n.kind() {
+        "field_declaration" | "constant_declaration" | "method_declaration" | "formal_parameter" => n.child_by_field_name("type"),
+        "spread_parameter" => named(n).into_iter().find(|c| c.kind() != "modifiers" && c.kind() != "variable_declarator"),
+        _ => None,
+    };
+    let mut written = Vec::new();
+    if let Some(t) = t {
+        names(t, cx.src, &mut written);
+    }
+    for w in written {
+        jvm::used(&resolved(&w, at, cx).unwrap_or_default(), cx.methods.rel, ex);
+    }
+}
+
+/// Every type name a written type holds: `Map<K, List<V>[]>` holds `Map`, `K`, `List` and `V`.
+fn names(t: Node, src: &[u8], out: &mut Vec<String>) {
+    match t.kind() {
+        "type_identifier" | "scoped_type_identifier" => out.extend(written_type(t, src)),
+        "generic_type" => {
+            out.extend(written_type(t, src));
+            named(t).into_iter().filter(|c| c.kind() == "type_arguments").for_each(|a| names(a, src, out));
+        }
+        "array_type" => {
+            if let Some(e) = t.child_by_field_name("element") {
+                names(e, src, out);
+            }
+        }
+        "type_arguments" | "wildcard" | "annotated_type" => named(t).into_iter().for_each(|c| names(c, src, out)),
+        _ => {}
     }
 }
 

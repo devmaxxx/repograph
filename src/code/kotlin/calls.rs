@@ -22,6 +22,9 @@
 //!   property. A name read as a value — an object passed as an argument, a property read bare —
 //!   writes `References` from the declaration around it to what the same lookup binds, never to a
 //!   function, since Kotlin reads a value among properties, objects and types only.
+//! - A type named in a signature — a parameter's, a property's or a variable's type, a return type,
+//!   an extension receiver, and their generic arguments — writes the file-to-file `Imports` an
+//!   import of it writes, resolved as a supertype is, with type parameters and local classes masked.
 //!
 //! Edges it leaves out: calls on a value whose type is inferred from anything but a constructor
 //! call, receivers typed by another file's properties, a lambda passed to another file's function
@@ -227,12 +230,51 @@ fn walk(n: Node, mut at: At, cx: &Ctx, ex: &mut Extraction) {
         "string_literal" => jvm::cite(n, &owner(&at, cx.own.rel), "string", cx.own.rel, cx.src, ex),
         _ => {}
     }
+    signature(n, &at, cx, ex);
     for c in named(n) {
         // A local is seen by the statements after it, so it joins the `At` its later siblings get.
         if at.function.is_some() && !is_declared(c) {
             remember(c, &mut at, cx);
         }
         walk(c, at.clone(), cx, ex);
+    }
+}
+
+/// The kinds a type written in a declaration's own signature takes.
+const TYPE_KINDS: [&str; 6] = ["user_type", "nullable_type", "non_nullable_type", "parenthesized_type", "function_type", "receiver_type"];
+
+/// A type named in a parameter's, a property's or a variable's type, a return type or an extension
+/// receiver, generic arguments included, writes the edge an import of it would. A type parameter
+/// or a local class of that name is no repository type.
+fn signature(n: Node, at: &At, cx: &Ctx, ex: &mut Extraction) {
+    if !matches!(
+        n.kind(),
+        "parameter" | "class_parameter" | "parameter_with_optional_type" | "variable_declaration" | "function_declaration" | "anonymous_function" | "property_declaration"
+    ) {
+        return;
+    }
+    let mut written = Vec::new();
+    for t in named(n).into_iter().filter(|t| TYPE_KINDS.contains(&t.kind())) {
+        names(t, cx.src, &mut written);
+    }
+    for w in written {
+        if at.locals.contains_key(w.split('.').next().unwrap_or_default()) {
+            continue;
+        }
+        jvm::used(&jvm::same_platform(cx.own.rel, resolved(&w, at, cx)), cx.own.rel, ex);
+    }
+}
+
+/// Every type name a written type holds: `Map<K, List<V>>` holds `Map`, `K`, `List` and `V`.
+fn names(t: Node, src: &[u8], out: &mut Vec<String>) {
+    if t.kind() == "user_type" {
+        let segments: Vec<&str> = named(t).into_iter().filter(|c| c.kind() == "type_identifier").map(|c| text(c, src)).collect();
+        if !segments.is_empty() {
+            out.push(segments.join("."));
+        }
+    }
+    for c in named(t) {
+        names(c, src, out);
     }
 }
 

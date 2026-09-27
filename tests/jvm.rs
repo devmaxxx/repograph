@@ -268,3 +268,18 @@ fn a_call_path_crosses_from_kotlin_to_java_and_back() {
     assert!(out.contains("shop/Middle.java"), "the path runs through the Java class: {out}");
     assert!(out.contains("app/End.kt"), "{out}");
 }
+
+#[test]
+fn a_type_added_or_removed_is_followed_to_the_unchanged_files_whose_signatures_name_it() {
+    let key = ("app/Key.kt", "package app\n\nclass Key\n");
+    let other = ("app/Other.kt", "package app\n\nclass Other\n");
+    let kt = ("app/Driver.kt", "package app\n\ninterface Driver {\n    fun open(key: Key): List<Key>\n}\n");
+    let java = ("app/Store.java", "package app;\n\nclass Store {\n    Key key;\n}\n");
+    let imports = |edges: &Edges| edges.iter().filter(|(_, to, kind, _)| to == "file:app/Key.kt" && kind == "Imports").count();
+    let (updated, built) = updated_and_built(&[other, kt, java], &[key]);
+    assert_eq!(imports(&built), 2, "{built:?}");
+    assert_eq!(updated, built);
+    let (updated, built) = removed_updated_and_built(&[key, other, kt, java], &[], &[key.0]);
+    assert_eq!(imports(&built), 0, "{built:?}");
+    assert_eq!(updated, built);
+}
