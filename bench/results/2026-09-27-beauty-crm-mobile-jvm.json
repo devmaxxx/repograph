@@ -1,0 +1,196 @@
+{
+ "corpus": "/Users/max/bench/beauty-crm-test",
+ "commit": "502e8a6d",
+ "when": "2026-09-27T14:10:52",
+ "suites": [
+  "blast"
+ ],
+ "cases": {
+  "blast": 11
+ },
+ "case_files": {
+  "blast": "/Users/max/Documents/projects/repograph/.worktrees/jvm/bench/corpora/beauty-crm-mobile/blast.jsonl"
+ },
+ "tools": {
+  "repograph": {
+   "rows": [
+    {
+     "suite": "blast",
+     "kind": "impact",
+     "target": "ReplicaKey",
+     "tier": "wide",
+     "want_files": 8,
+     "found_files": 5,
+     "recall": 0.625,
+     "ms": 53,
+     "chars": 3837
+    },
+    {
+     "suite": "blast",
+     "kind": "impact",
+     "target": "SnapshotVerifier",
+     "tier": "narrow",
+     "want_files": 2,
+     "found_files": 2,
+     "recall": 1.0,
+     "ms": 54,
+     "chars": 3125
+    },
+    {
+     "suite": "blast",
+     "kind": "impact",
+     "target": "SigningKeyStore",
+     "tier": "narrow",
+     "want_files": 4,
+     "found_files": 4,
+     "recall": 1.0,
+     "ms": 53,
+     "chars": 5847
+    },
+    {
+     "suite": "blast",
+     "kind": "impact",
+     "target": "SessionTokens",
+     "tier": "narrow",
+     "want_files": 2,
+     "found_files": 2,
+     "recall": 1.0,
+     "ms": 54,
+     "chars": 871
+    },
+    {
+     "suite": "blast",
+     "kind": "impact",
+     "target": "ReplicaKeyStore",
+     "tier": "narrow",
+     "want_files": 1,
+     "found_files": 1,
+     "recall": 1.0,
+     "ms": 53,
+     "chars": 1363
+    },
+    {
+     "suite": "blast",
+     "kind": "impact",
+     "target": "GapNotFittingRule",
+     "tier": "narrow",
+     "want_files": 1,
+     "found_files": 0,
+     "recall": 0.0,
+     "ms": 52,
+     "chars": 290
+    },
+    {
+     "suite": "blast",
+     "kind": "impact",
+     "target": "ParallelLimitRule",
+     "tier": "narrow",
+     "want_files": 1,
+     "found_files": 0,
+     "recall": 0.0,
+     "ms": 53,
+     "chars": 290
+    },
+    {
+     "suite": "blast",
+     "kind": "impact",
+     "target": "LocationClosedRule",
+     "tier": "narrow",
+     "want_files": 1,
+     "found_files": 0,
+     "recall": 0.0,
+     "ms": 52,
+     "chars": 290
+    },
+    {
+     "suite": "blast",
+     "kind": "trace",
+     "from": "SyncEngine",
+     "to": "ReplicaFiles",
+     "expect": "path",
+     "hit": true,
+     "says_none": false,
+     "ms": 59,
+     "chars": 589
+    },
+    {
+     "suite": "blast",
+     "kind": "trace",
+     "from": "SyncEngine",
+     "to": "QuarantineSink",
+     "expect": "path",
+     "hit": true,
+     "says_none": false,
+     "ms": 56,
+     "chars": 599
+    },
+    {
+     "suite": "blast",
+     "kind": "changes",
+     "base": "68fff3a8~1",
+     "want_files": 45,
+     "found_files": 45,
+     "want_symbols": 121,
+     "found_symbols": 118,
+     "by_ext": {
+      ".mjs": {
+       "want_files": 6,
+       "found_files": 6,
+       "want_symbols": 42,
+       "found_symbols": 42
+      },
+      ".ts": {
+       "want_files": 24,
+       "found_files": 24,
+       "want_symbols": 24,
+       "found_symbols": 22
+      },
+      ".js": {
+       "want_files": 2,
+       "found_files": 2,
+       "want_symbols": 2,
+       "found_symbols": 2
+      },
+      ".kt": {
+       "want_files": 13,
+       "found_files": 13,
+       "want_symbols": 53,
+       "found_symbols": 52
+      }
+     },
+     "ms": 448,
+     "chars": 49772
+    }
+   ],
+   "summary": {
+    "impact": {
+     "n": 8,
+     "recall_mean": 0.578,
+     "files_found": 14,
+     "files_want": 20,
+     "ms_median": 53,
+     "chars_median": 1117
+    },
+    "trace": {
+     "n": 2,
+     "hit": 2,
+     "path_hit": 2,
+     "path_n": 2,
+     "none_hit": 0,
+     "none_n": 0,
+     "ms_median": 58
+    },
+    "changes": {
+     "n": 1,
+     "symbols_found": 118,
+     "symbols_want": 121,
+     "files_found": 45,
+     "files_want": 45,
+     "ms_median": 448,
+     "chars_median": 49772
+    }
+   },
+   "failed_calls": 0
+  }
+ }
+}
