@@ -174,11 +174,17 @@ class BlastShape(unittest.TestCase):
         self.assertEqual(tiers, {"hub": 2, "wide": 3, "narrow": 11})
         self.assertEqual(len({r["target"] for r in rows if r["kind"] == "impact"}), 16)
 
-    def test_mobile_baseline_has_eight_kotlin_impact_cases(self):
+    def test_mobile_corpus_has_eight_kotlin_impact_cases_two_traces_and_a_changes_window(self):
         rows = T.read_jsonl(BENCH / "corpora" / "beauty-crm-mobile" / "blast.jsonl")
-        self.assertEqual(collections.Counter(r["kind"] for r in rows), {"impact": 8})
-        self.assertTrue(all(r["file"].endswith(".kt") for r in rows))
-        self.assertEqual(collections.Counter(r["tier"] for r in rows), {"wide": 1, "narrow": 7})
+        self.assertEqual(collections.Counter(r["kind"] for r in rows), {"impact": 8, "trace": 2, "changes": 1})
+        impact = [r for r in rows if r["kind"] == "impact"]
+        self.assertTrue(all(r["file"].endswith(".kt") for r in impact))
+        self.assertEqual(collections.Counter(r["tier"] for r in impact), {"wide": 1, "narrow": 7})
+        # Each trace endpoint carries its store id: `ReplicaFiles` has three `actual`s beside its
+        # `expect`, and repograph refuses a name that matches more than one symbol.
+        for r in rows:
+            if r["kind"] == "trace":
+                self.assertTrue(r["from_id"].endswith(f"::{r['from']}") and r["to_id"].endswith(f"::{r['to']}"), r)
 
 
 def fake_proc(returncode: int, stdout: str) -> subprocess.CompletedProcess:
