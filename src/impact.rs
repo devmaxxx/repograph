@@ -7,22 +7,18 @@ use std::collections::{BTreeMap, BTreeSet};
 /// The edge kinds along which a change to the target reaches the source.
 const CODE: [EdgeKind; 2] = [EdgeKind::Calls, EdgeKind::Extends];
 
-/// `through_literal`: reached only through an object literal's methods, which share one node
-/// until each has its own, so the row may not reach the root at all and does not count to the risk.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
-pub struct Dependent { pub id: String, pub depth: usize, pub kind: EdgeKind, pub via: String, pub passed: bool, pub through_literal: bool }
+pub struct Dependent { pub id: String, pub depth: usize, pub kind: EdgeKind, pub via: String, pub passed: bool }
 
 /// How an edge reads to a person: an argument edge is `Passes`, since nothing proves it is called.
 pub(crate) fn label(kind: EdgeKind, passed: bool) -> String { if passed { "Passes".to_string() } else { format!("{kind:?}") } }
 
-/// True when `candidate` is the row to keep for a dependent over `existing`: a row that counts
-/// beats one reached only through a literal; then a shallower depth wins; at the same depth, a
-/// call beats an argument-only edge. Shared by the walk's own per-layer merge, where both are
-/// always at the same depth, and `changes::report`'s merge across every root's walk, where they
-/// can differ.
+/// True when `candidate` is the row to keep for a dependent over `existing`: a shallower depth
+/// always wins; at the same depth, a call beats an argument-only edge. Shared by the walk's own
+/// per-layer merge, where both are always at the same depth, and `changes::report`'s merge across
+/// every root's walk, where they can differ.
 pub(crate) fn beats(candidate: &Dependent, existing: &Dependent) -> bool {
-    let key = |d: &Dependent| (d.through_literal, d.depth, d.passed);
-    key(candidate) < key(existing)
+    candidate.depth < existing.depth || (candidate.depth == existing.depth && existing.passed && !candidate.passed)
 }
 
 #[derive(Debug, Default)]
@@ -164,22 +160,20 @@ impl<'a> Index<'a> {
         out
     }
 
-    /// The walk, and whether it went through the methods of a literal it met on the way.
-    fn walk(&self, root: &str, depth: usize, literals: bool) -> (Vec<Vec<Dependent>>, bool) {
+    fn walk(&self, root: &str, depth: usize) -> Vec<Vec<Dependent>> {
         let (graph, up) = (self.graph, self.up);
         let mut start = self.seeds(root);
         if up { start.extend(self.undeclared(&start)); }
         let mut seen: BTreeSet<String> = start.iter().cloned().collect();
         let mut frontier = start;
         let mut layers = Vec::new();
-        let mut through = false;
         for d in 1..=depth {
             let mut next: BTreeMap<String, Dependent> = BTreeMap::new();
             for at in &frontier {
                 for e in self.step(at) {
                     let other = if up { e.source.clone() } else { canonical(graph, &e.target).unwrap_or_else(|| e.target.clone()) };
                     if seen.contains(&other) { continue }
-                    let candidate = Dependent { id: other.clone(), depth: d, kind: e.kind, via: at.clone(), passed: e.passes(), through_literal: false };
+                    let candidate = Dependent { id: other.clone(), depth: d, kind: e.kind, via: at.clone(), passed: e.passes() };
                     // A call beats an argument edge whichever owner in the layer came first.
                     if next.get(&other).is_some_and(|x| !beats(&candidate, x)) { continue }
                     next.insert(other, candidate);
@@ -190,29 +184,12 @@ impl<'a> Index<'a> {
             let next: Vec<Dependent> = next.into_values().collect();
             frontier = next.iter().map(|x| x.id.clone()).collect();
             // A dependent that is an object literal is called through its methods, at any depth.
-            if up && literals && d < depth {
+            if up && d < depth {
                 let named: Vec<String> = frontier.iter().flat_map(|f| self.aliases(f)).chain(frontier.iter().cloned()).collect();
-                let members = self.undeclared(&named);
-                through |= !members.is_empty();
-                frontier.extend(members);
+                frontier.extend(self.undeclared(&named));
             }
             layers.push(next);
         }
-        (layers, through)
-    }
-
-    /// The upstream walk with every row that only a literal's methods reached marked: the walk
-    /// again without them says which rows reach the root some other way.
-    fn upstream_layers(&self, root: &str, depth: usize) -> Vec<Vec<Dependent>> {
-        let (full, through) = self.walk(root, depth, true);
-        if !through { return full }
-        let (mut layers, _) = self.walk(root, depth, false);
-        let counted: BTreeSet<String> = layers.iter().flatten().map(|d| d.id.clone()).collect();
-        for d in full.into_iter().flatten().filter(|d| !counted.contains(&d.id)) {
-            if layers.len() < d.depth { layers.resize_with(d.depth, Vec::new) }
-            layers[d.depth - 1].push(Dependent { through_literal: true, ..d });
-        }
-        for l in &mut layers { l.sort_by(|a, b| a.id.cmp(&b.id)) }
         layers
     }
 
@@ -244,14 +221,14 @@ impl<'a> Index<'a> {
 
     /// Callers by depth and importing files; the index must have been built upstream.
     pub fn upstream(&self, root: &str, depth: usize) -> Impact {
-        Impact { root: root.to_string(), layers: self.upstream_layers(root, depth), importers: self.importers(root) }
+        Impact { root: root.to_string(), layers: self.walk(root, depth), importers: self.importers(root) }
     }
 }
 
 pub fn upstream(graph: &Graph, root: &str, depth: usize) -> Impact { Index::new(graph, true).upstream(root, depth) }
 
 pub fn downstream(graph: &Graph, root: &str, depth: usize) -> Impact {
-    Impact { root: root.to_string(), layers: Index::new(graph, false).walk(root, depth, false).0, importers: Vec::new() }
+    Impact { root: root.to_string(), layers: Index::new(graph, false).walk(root, depth), importers: Vec::new() }
 }
 
 /// `trace` as an object: the two ends the ids resolved to, the depth asked for, and the chain as
@@ -313,10 +290,9 @@ pub fn risk(direct: usize, _total: usize, files: usize) -> &'static str {
     else { "LOW" }
 }
 
-/// The files that count to the risk: a row reached only through a literal does not.
 pub fn files(graph: &Graph, imp: &Impact) -> BTreeSet<String> {
     let mut out: BTreeSet<String> = imp.importers.iter().cloned().collect();
-    for d in imp.layers.iter().flatten().filter(|d| !d.through_literal) {
+    for d in imp.layers.iter().flatten() {
         match graph.nodes.get(&d.id) {
             Some(n) => { out.insert(n.file.clone()); }
             None => { out.insert(d.id.trim_start_matches("file:").to_string()); }
@@ -339,32 +315,25 @@ pub fn render(graph: &Graph, imp: &Impact, direction: &str) -> String {
         out.push_str(&format!("d={}  {name} ({})\n", i + 1, layer.len()));
         for d in layer {
             let arrow = if up { "→" } else { "←" };
-            let mark = if d.through_literal { "  through a literal" } else { "" };
-            out.push_str(&format!("  {}  {}  {} {arrow} {}{mark}\n", d.id, line_of(graph, &d.id), label(d.kind, d.passed), d.via));
+            out.push_str(&format!("  {}  {}  {} {arrow} {}\n", d.id, line_of(graph, &d.id), label(d.kind, d.passed), d.via));
         }
     }
     if up {
         if !imp.importers.is_empty() { out.push_str(&format!("importers ({}): {}\n", imp.importers.len(), imp.importers.join(", "))); }
-        let (direct, total) = counted(imp);
+        let direct = imp.layers.first().map_or(0, Vec::len);
+        let total: usize = imp.layers.iter().map(Vec::len).sum();
         let files = files(graph, imp).len();
-        let uncounted = imp.layers.iter().flatten().filter(|d| d.through_literal).count();
-        let uncounted = if uncounted > 0 { format!(", {uncounted} through a literal not counted") } else { String::new() };
-        out.push_str(&format!("risk: {} — {direct} direct, {total} total, {files} files{uncounted}\n", risk(direct, total, files)));
+        out.push_str(&format!("risk: {} — {direct} direct, {total} total, {files} files\n", risk(direct, total, files)));
     }
     out
 }
 
-/// Direct and total dependents, leaving out the rows reached only through a literal.
-fn counted(imp: &Impact) -> (usize, usize) {
-    let direct = imp.layers.first().map_or(0, |l| l.iter().filter(|d| !d.through_literal).count());
-    (direct, imp.layers.iter().flatten().filter(|d| !d.through_literal).count())
-}
-
 pub fn render_json(graph: &Graph, imp: &Impact, direction: &str) -> String {
-    let (direct, total) = counted(imp);
+    let direct = imp.layers.first().map_or(0, Vec::len);
+    let total: usize = imp.layers.iter().map(Vec::len).sum();
     let files = files(graph, imp);
     let layers: Vec<Vec<serde_json::Value>> = imp.layers.iter().map(|l| l.iter().map(|d| serde_json::json!({
-        "id": d.id, "at": line_of(graph, &d.id), "depth": d.depth, "kind": format!("{:?}", d.kind), "passes": d.passed, "via": d.via, "through_literal": d.through_literal,
+        "id": d.id, "at": line_of(graph, &d.id), "depth": d.depth, "kind": format!("{:?}", d.kind), "passes": d.passed, "via": d.via,
     })).collect()).collect();
     serde_json::json!({
         "root": imp.root, "at": line_of(graph, &imp.root), "direction": direction, "layers": layers,
@@ -475,33 +444,6 @@ pub(crate) mod tests {
         let imp = upstream(&g, "sym:l.ts::lock", 2);
         let d2: Vec<(&str, &str)> = imp.layers[1].iter().map(|d| (d.id.as_str(), d.via.as_str())).collect();
         assert_eq!(d2, vec![("sym:a.ts::A.run", "sym:r.ts::repo.find"), ("sym:b.ts::go", "sym:index.ts::repo.save")]);
-    }
-
-    /// `lock` is called by one method of `repo`, and nobody knows which: the callers of every
-    /// method are listed, but only a caller that reaches `lock` another way raises the risk.
-    #[test]
-    fn rows_reached_only_through_a_literals_members_are_listed_but_not_counted() {
-        let mut g = object_literal();
-        let mut e = Extraction::default();
-        e.node(NodeKind::Symbol, "sym:l.ts::lock", "lock", "", "l.ts", 1);
-        e.edge("sym:r.ts::repo", "sym:l.ts::lock", EdgeKind::Calls, "", "r.ts");
-        e.edge("sym:b.ts::go", "sym:l.ts::lock", EdgeKind::Calls, "", "b.ts");
-        e.node(NodeKind::Symbol, "sym:c.ts::top", "top", "", "c.ts", 1);
-        e.edge("sym:c.ts::top", "sym:a.ts::A.run", EdgeKind::Calls, "", "c.ts");
-        g.apply(e);
-        let imp = upstream(&g, "sym:l.ts::lock", 3);
-        let rows: Vec<(&str, usize, bool)> = imp.layers.iter().flatten().map(|d| (d.id.as_str(), d.depth, d.through_literal)).collect();
-        assert_eq!(rows, vec![
-            ("sym:b.ts::go", 1, false), ("sym:r.ts::repo", 1, false),
-            ("sym:a.ts::A.run", 2, true),
-            ("sym:c.ts::top", 3, true),
-        ]);
-        let out = render(&g, &imp, "upstream");
-        assert!(out.contains("  sym:a.ts::A.run  a.ts:4  Calls → sym:r.ts::repo.find  through a literal\n"), "{out}");
-        assert!(out.ends_with("risk: LOW — 2 direct, 2 total, 2 files, 2 through a literal not counted\n"), "{out}");
-        let v: serde_json::Value = serde_json::from_str(&render_json(&g, &imp, "upstream")).unwrap();
-        assert_eq!((&v["total"], &v["layers"][1][0]["through_literal"]), (&serde_json::json!(2), &serde_json::json!(true)));
-        assert_eq!(v["files"], serde_json::json!(["b.ts", "r.ts"]));
     }
 
     #[test]

@@ -119,12 +119,6 @@ count towards the file threshold, so a symbol re-exported by three barrels and c
 now reads `MEDIUM`: the counts beside the label are what say whether that is a real blast radius
 or a re-export chain.
 
-An object literal met on the way up is one node for all its methods, so the walk continues
-through the callers of every method, not only the one that reaches the symbol. Those rows are
-listed and marked `through a literal` (`"through_literal": true` in `--json`), but they do not
-count to the direct, total or file numbers or the risk word; the risk line says how many were
-left out. `changes` does the same.
-
 ```
 $ repograph --repo beauty-crm impact StaffService
 sym:apps/api/src/modules/staff/staff.service.ts::StaffService  apps/api/src/modules/staff/staff.service.ts:19

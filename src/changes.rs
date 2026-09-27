@@ -98,17 +98,11 @@ pub fn report(graph: &Graph, hunks: &[Hunk], depth: usize) -> Report {
     }
     let mut affected: Vec<Dependent> = affected.into_values().collect();
     affected.sort_by(|a, b| (a.depth, &a.id).cmp(&(b.depth, &b.id)));
-    // A row reached only through a literal's methods is listed but does not count to the risk.
-    files.extend(affected.iter().filter(|d| !d.through_literal).map(|d| file_of(graph, &d.id)));
+    files.extend(affected.iter().map(|d| file_of(graph, &d.id)));
     files.retain(|f| !root_files.contains(f));
-    let (direct, total) = counted(&affected);
-    let risk = impact::risk(direct, total, files.len());
+    let direct = affected.iter().filter(|d| d.depth == 1).count();
+    let risk = impact::risk(direct, affected.len(), files.len());
     Report { touched, depth, affected, files, risk }
-}
-
-fn counted(affected: &[Dependent]) -> (usize, usize) {
-    let counted = || affected.iter().filter(|d| !d.through_literal);
-    (counted().filter(|d| d.depth == 1).count(), counted().count())
 }
 
 fn file_of(graph: &Graph, id: &str) -> String {
@@ -135,12 +129,10 @@ pub fn render(graph: &Graph, r: &Report) -> String {
     out.push_str(&format!("affected (depth {}): {} in {}\n", r.depth, plural(r.affected.len(), "symbol"), plural(r.files.len(), "file")));
     for d in &r.affected {
         let at = graph.nodes.get(&d.id).map(|n| format!("{}:{}", n.file, n.line)).unwrap_or_else(|| d.id.trim_start_matches("file:").to_string());
-        let mark = if d.through_literal { "  through a literal" } else { "" };
-        out.push_str(&format!("  d={}  {}  {at}  ← {}{mark}\n", d.depth, d.id, d.via));
+        out.push_str(&format!("  d={}  {}  {at}  ← {}\n", d.depth, d.id, d.via));
     }
-    let (direct, total) = counted(&r.affected);
-    let uncounted = match r.affected.len() - total { 0 => String::new(), n => format!(", {n} through a literal not counted") };
-    out.push_str(&format!("risk: {} — {direct} direct, {total} total, {}{uncounted}\n", r.risk, plural(r.files.len(), "file")));
+    let direct = r.affected.iter().filter(|d| d.depth == 1).count();
+    out.push_str(&format!("risk: {} — {direct} direct, {} total, {}\n", r.risk, r.affected.len(), plural(r.files.len(), "file")));
     out
 }
 
@@ -148,7 +140,7 @@ pub fn render_json(graph: &Graph, r: &Report) -> String {
     let touched: Vec<serde_json::Value> = r.touched.iter()
         .map(|id| serde_json::json!({ "id": id, "at": span_of(graph, id), "indexed": graph.nodes.contains_key(id) })).collect();
     let affected: Vec<serde_json::Value> = r.affected.iter().map(|d| serde_json::json!({
-        "id": d.id, "at": graph.nodes.get(&d.id).map(|n| format!("{}:{}", n.file, n.line)), "depth": d.depth, "kind": format!("{:?}", d.kind), "passes": d.passed, "via": d.via, "through_literal": d.through_literal,
+        "id": d.id, "at": graph.nodes.get(&d.id).map(|n| format!("{}:{}", n.file, n.line)), "depth": d.depth, "kind": format!("{:?}", d.kind), "passes": d.passed, "via": d.via,
     })).collect();
     serde_json::json!({ "touched": touched, "affected": affected, "files": r.files, "risk": r.risk }).to_string() + "\n"
 }
@@ -314,21 +306,6 @@ mod tests {
         let r = report(&g, &[Hunk { file: "r.ts".into(), start: 8, end: 9 }], 1);
         assert_eq!(r.touched, vec!["sym:r.ts::repo"]);
         assert_eq!(r.affected.iter().map(|d| d.id.as_str()).collect::<Vec<_>>(), vec!["sym:a.ts::A.run", "sym:b.ts::go"]);
-    }
-
-    #[test]
-    fn a_row_reached_only_through_a_literals_methods_is_listed_and_not_counted() {
-        let mut g = crate::impact::tests::object_literal();
-        let mut e = Extraction::default();
-        e.node(NodeKind::Symbol, "sym:l.ts::lock", "lock", "", "l.ts", 1);
-        e.edge("sym:r.ts::repo", "sym:l.ts::lock", EdgeKind::Calls, "", "r.ts");
-        g.apply(e);
-        let r = report(&g, &[Hunk { file: "l.ts".into(), start: 1, end: 1 }], 2);
-        let out = render(&g, &r);
-        assert!(out.contains("  d=2  sym:a.ts::A.run  a.ts:4  ← sym:r.ts::repo.find  through a literal\n"), "{out}");
-        assert!(out.ends_with("risk: LOW — 1 direct, 1 total, 1 file, 2 through a literal not counted\n"), "{out}");
-        let v: serde_json::Value = serde_json::from_str(&render_json(&g, &r)).unwrap();
-        assert_eq!((&v["affected"][1]["through_literal"], &v["files"]), (&serde_json::json!(true), &serde_json::json!(["r.ts"])));
     }
 
     #[test]
