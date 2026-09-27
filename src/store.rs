@@ -182,17 +182,23 @@ impl Store {
 
     /// What a writer killed between its write and its rename left behind. The graph and the
     /// manifest stay: `build` replaces them by rename when it saves, so a build that never gets
-    /// there leaves the previous store to answer from rather than none.
+    /// there leaves the previous store to answer from rather than none. A temp file written in the
+    /// last few minutes may be another process's save in flight, so only an older one goes.
     pub fn drop_leftovers(&self) -> Result<()> {
         for e in std::fs::read_dir(&self.dir).into_iter().flatten().flatten() {
             let name = e.file_name().to_string_lossy().into_owned();
-            if (name.starts_with("graph.json.") || name.starts_with("manifest.json.")) && name.ends_with(".tmp") {
+            let stale = e.metadata().and_then(|m| m.modified()).ok()
+                .and_then(|t| t.elapsed().ok()).is_some_and(|age| age > LEFTOVER_AGE);
+            if (name.starts_with("graph.json.") || name.starts_with("manifest.json.")) && name.ends_with(".tmp") && stale {
                 std::fs::remove_file(e.path()).with_context(|| format!("remove {}", e.path().display()))?;
             }
         }
         Ok(())
     }
 }
+
+/// Far longer than any save takes: a temp file this old has no writer left.
+const LEFTOVER_AGE: std::time::Duration = std::time::Duration::from_secs(600);
 
 #[cfg(test)]
 mod tests {
@@ -346,12 +352,25 @@ mod tests {
         let d = tempfile::tempdir().unwrap();
         let store = Store::new(d.path());
         std::fs::create_dir_all(d.path().join(".repograph")).unwrap();
-        std::fs::write(d.path().join(".repograph/graph.json.1.0.tmp"), "garbage").unwrap();
+        let old = d.path().join(".repograph/graph.json.1.0.tmp");
+        std::fs::write(&old, "garbage").unwrap();
+        let hour_ago = std::time::SystemTime::now() - std::time::Duration::from_secs(3600);
+        std::fs::File::options().write(true).open(&old).unwrap().set_modified(hour_ago).unwrap();
         store.save(&Graph::default(), &Manifest::default()).unwrap();
         let (g, _) = store.load().unwrap();
         assert!(g.nodes.is_empty());
         store.drop_leftovers().unwrap();
         assert_eq!(tmps(d.path()), Vec::<String>::new());
+    }
+
+    #[test]
+    fn a_temp_file_another_writer_is_saving_right_now_is_kept() {
+        let d = tempfile::tempdir().unwrap();
+        let store = Store::new(d.path());
+        std::fs::create_dir_all(d.path().join(".repograph")).unwrap();
+        std::fs::write(d.path().join(".repograph/graph.json.2.0.tmp"), "half a graph").unwrap();
+        store.drop_leftovers().unwrap();
+        assert_eq!(tmps(d.path()), vec!["graph.json.2.0.tmp".to_string()]);
     }
 
     // Bytes reach the store only through a rename, so a write that fails part-way — here the
