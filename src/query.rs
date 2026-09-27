@@ -135,9 +135,11 @@ fn hit(graph: &Graph, id: &str, score: f32, via: Option<&str>) -> Option<Hit> {
 /// the whole answer to a sentence that merely uses both. A word that is a node's id is that node,
 /// whatever its shape: a task id (`BE-M17/T06`) is no id the generic matcher accepts.
 pub(crate) fn exact_seeds(graph: &Graph, words: &[String]) -> (Vec<String>, bool) {
+    // A quoted question reaches argv as one word, and no id equals a whole sentence.
+    let words: Vec<String> = words.iter().flat_map(|w| w.split_whitespace()).map(str::to_string).collect();
     let mut out = Vec::new();
     let mut whole = true;
-    for w in words {
+    for w in &words {
         if graph.nodes.contains_key(w) {
             out.push(w.clone());
             continue;
@@ -1095,6 +1097,20 @@ mod tests {
         assert_eq!(a.seeds.len(), 2);
         assert_eq!(a.seeds[0].id, "sym:packages/contracts/src/money.ts::asGrosze");
         assert_eq!(a.seeds[1].id, "FR-PAY-22");
+    }
+
+    /// Agents quote the question, and the shell hands it over as one word.
+    #[test]
+    fn a_quoted_question_gives_the_seeds_of_the_same_words_unquoted() {
+        let g = graph();
+        let run = |words: &[&str]| {
+            let words: Vec<String> = words.iter().map(|s| s.to_string()).collect();
+            ask(&g, &lex(&g, &Questions::default()), None, None, &words, &opts()).seeds
+                .into_iter().map(|h| h.id).collect::<Vec<_>>()
+        };
+        assert_eq!(run(&["asGrosze FR-PAY-22"]), run(&["asGrosze", "FR-PAY-22"]));
+        assert_eq!(run(&["FR-PAY-22 money"]), run(&["FR-PAY-22", "money"]));
+        assert_eq!(run(&["FR-PAY-22 money"])[0], "FR-PAY-22");
     }
 
     #[test]

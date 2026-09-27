@@ -97,6 +97,7 @@ Ask it something:
 repograph ask cancellation policy
 repograph ask FR-PAY-22                     # an exact id short-circuits straight to the node
 repograph ask asGrosze                      # so does an exact symbol name (a plain lowercase word does so only alone)
+repograph ask "FR-PAY-22 refund"            # quoted or not, the same words find the same ids and names
 repograph ask --bodies отмена записи        # print full requirement bodies, not just headlines
 repograph ask --json отмена записи          # machine-readable
 repograph ask --seeds 8 отмена записи       # widen the search beyond the default of 5; costs more tokens
