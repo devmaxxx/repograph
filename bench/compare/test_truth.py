@@ -993,6 +993,37 @@ class JvmCallGraph(unittest.TestCase):
             self.assertEqual(T.build(root, [], [java], roots=["android"])["trace"]["Checkout->Invoice"],
                              ["Checkout", "Invoice.send"])
 
+    def test_a_kotlin_safe_call_on_an_injected_field_is_still_a_call(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            (root / "mobile").mkdir()
+            (root / "mobile/Sync.kt").write_text(
+                "package p\n\nclass SyncEngine(private val wipe: RemoteWipeHandler?) {\n"
+                "    fun run() { wipe?.execute() }\n}\n")
+            edges = T.di_call_graph(root, ["mobile"])["edges"]
+            self.assertEqual(edges["SyncEngine"], ["RemoteWipeHandler.execute"])
+
+    def test_a_nested_kotlin_class_is_its_own_call_graph_owner(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            (root / "mobile").mkdir()
+            (root / "mobile/Sync.kt").write_text(
+                "package p\n\nclass Outer {\n    class RemoteWipeHandler(private val files: ReplicaFiles) {\n"
+                "        fun execute() { this.files.delete() }\n    }\n}\n")
+            edges = T.di_call_graph(root, ["mobile"])["edges"]
+            self.assertEqual(edges.get("Outer"), None)
+            self.assertEqual(edges["RemoteWipeHandler"], ["ReplicaFiles.delete"])
+
+    def test_a_field_typed_by_a_qualified_nested_class_keeps_only_the_last_segment(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            (root / "android").mkdir()
+            (root / "android/Widget.java").write_text(
+                "package shop;\n\npublic class Widget {\n    private final Outer.Inner helper = null;\n"
+                "    public void run() { helper.go(); }\n}\n")
+            edges = T.di_call_graph(root, ["android"])["edges"]
+            self.assertEqual(edges["Widget"], ["Inner.go"])
+
 
 if __name__ == "__main__":
     unittest.main()

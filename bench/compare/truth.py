@@ -859,17 +859,20 @@ class ComponentDiReader(DiReader):
 CSHARP_DI = DiReader(CS_CLASS, CS_FIELD, CS_CALL)
 RAZOR_DI = ComponentDiReader(NO_CLASS, RAZOR_FIELD, CS_CALL)
 
-KT_CLASS = re.compile(r"^(?:(?:public|internal|expect|actual|abstract|open|data|sealed)\s+)*class\s+(\w+)", re.M)
+KT_CLASS = re.compile(r"^[ \t]*(?:(?:public|internal|expect|actual|abstract|open|data|sealed)\s+)*class\s+(\w+)", re.M)
 KT_FIELD = re.compile(r"\b(?:val|var)\s+(\w+)\s*:\s*(\w+)")
-# `files.delete()` and `this.files.delete()` are one call in both JVM languages.
-JVM_CALL = re.compile(r"(?:\bthis\s*\.\s*)?\b(\w+)\s*\.\s*(\w+)\s*\(", re.S)
+# `files.delete()` and `this.files.delete()` are one call in both JVM languages; `?.` is Kotlin's
+# safe call on a nullable injected field, which reads as one call too.
+JVM_CALL = re.compile(r"(?:\bthis\s*\.\s*)?\b(\w+)\s*\??\.\s*(\w+)\s*\(", re.S)
 JAVA_CLASS = re.compile(
     r"^[ \t]*(?:(?:public|protected|private|abstract|static|final|sealed|non-sealed|strictfp)\s+)*(?:class|record|enum)\s+(\w+)",
     re.M,
 )
 # Java writes the type before the name; the lookahead captures the name first so group 1 is the
-# name and group 2 the type, the order `di_call_graph` reads for every language.
-JAVA_FIELD = re.compile(r"\b(?=[A-Z][\w.]*(?:<[^;=(){}]*>)?(?:\[\])*\s+(\w+)\s*[;=])([A-Z][\w.]*)")
+# name and group 2 the type, the order `di_call_graph` reads for every language. A qualified or
+# nested-class type (`Outer.Inner`) is named by its last segment, as `CS_FIELD` also does, so the
+# graph's `Type.method` edges never carry a second dot.
+JAVA_FIELD = re.compile(r"\b(?=[A-Z][\w.]*(?:<[^;=(){}]*>)?(?:\[\])*\s+(\w+)\s*[;=])(?:[A-Z]\w*\.)*([A-Z]\w*)")
 KOTLIN_DI = DiReader(KT_CLASS, KT_FIELD, JVM_CALL)
 JAVA_DI = DiReader(JAVA_CLASS, JAVA_FIELD, JVM_CALL)
 

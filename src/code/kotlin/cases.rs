@@ -1180,5 +1180,16 @@ fn a_receiver_typed_by_a_subtype_of_an_expect_class_binds_the_expect_and_the_cal
     got.sort();
     assert_eq!(got, vec!["sym:shared/src/androidMain/kotlin/p/A.android.kt::A.run", "sym:shared/src/commonMain/kotlin/p/A.kt::A.run"], "{:?}", u.edges);
     let v = repo.extract("shared/src/commonMain/kotlin/p/V.kt");
-    assert_eq!(calls_from(&v, "sym:shared/src/commonMain/kotlin/p/V.kt::V.go").len(), 3, "{:?}", v.edges);
+    let mut got = calls_from(&v, "sym:shared/src/commonMain/kotlin/p/V.kt::V.go");
+    got.sort();
+    assert_eq!(
+        got,
+        vec![
+            "sym:shared/src/androidMain/kotlin/p/A.android.kt::A.run",
+            "sym:shared/src/commonMain/kotlin/p/A.kt::A.run",
+            "sym:shared/src/iosMain/kotlin/p/A.ios.kt::A.run"
+        ],
+        "{:?}",
+        v.edges
+    );
 }
