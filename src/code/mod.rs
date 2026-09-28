@@ -1,6 +1,7 @@
 pub mod blank;
 pub mod calls;
 pub mod csharp;
+pub mod graphql;
 pub mod idrefs;
 pub mod imports;
 pub mod index;
@@ -9,6 +10,7 @@ pub mod jvm;
 pub mod kotlin;
 pub mod lang;
 pub mod razor;
+pub mod sql;
 pub mod symbols;
 
 use crate::model::{Extraction, Extractor};
@@ -31,6 +33,8 @@ impl Extractor for CodeExtractor {
             Some(lang::Lang::Razor) => razor::extract(self.symbols.resolver(), rel, text),
             Some(lang::Lang::Kotlin) => kotlin::extract(self.symbols.resolver(), rel, text),
             Some(lang::Lang::Java) => java::extract(self.symbols.resolver(), rel, text),
+            Some(lang::Lang::Sql) => sql::extract(self.symbols.resolver(), rel, text),
+            Some(lang::Lang::GraphQl) => graphql::extract(self.symbols.resolver(), rel, text),
             None => {
                 let mut ex = Extraction::default();
                 lang::file_node(rel, &mut ex);
