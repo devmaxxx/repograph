@@ -42,7 +42,7 @@ fn write(repo: &Path, rel: &str, text: &str) {
     std::fs::write(path, text).unwrap();
 }
 
-/// The repository's own config names `.sql`: the defaults read no SQL until the master's L7 PR. The store is
+/// The repository's own config names `.sql`: the defaults do not read SQL yet. The store is
 /// ignored so that `changes` diffs the migrations and nothing else.
 fn repo(files: &[(&str, &str)]) -> tempfile::TempDir {
     let dir = tempfile::tempdir().unwrap();
@@ -75,7 +75,7 @@ fn git(repo: &Path, args: &[&str]) {
 fn impact_on_a_table_names_the_migrations_that_alter_reference_or_read_it() {
     let dir = repo(&[("db/001.sql", SCHEMA), ("db/002.sql", ATTACH), ("db/003.sql", VISITS)]);
     stdout(dir.path(), &["build"]);
-    // `alter`, `references` and `from` are `References` edges; the master's `walks` (L11) is what lets `impact` follow them.
+    // `alter`, `references` and `from` are `References` edges; `walks` is what lets `impact` follow them.
     let out = stdout(dir.path(), &["impact", "sym:db/001.sql::app/clients"]);
     assert!(out.starts_with("sym:db/001.sql::app/clients  "), "{out}");
     for id in ["sym:db/002.sql::app/clients", "sym:db/003.sql::app/visits.client_id", "sym:db/003.sql::app/owned", "sym:db/001.sql::app/active"] {
