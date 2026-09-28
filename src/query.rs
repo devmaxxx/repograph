@@ -132,24 +132,30 @@ fn hit(graph: &Graph, id: &str, score: f32, via: Option<&str>) -> Option<Hit> {
 /// each carries an uppercase letter — `money` and `utf8` are topics as much as names, `asGrosze` only a name.
 /// In a question of several words a plain lowercase word is read as a word: exact seeds take
 /// their slots before fusion runs, so five helpers called `holds` and `name` would otherwise be
-/// the whole answer to a sentence that merely uses both.
+/// the whole answer to a sentence that merely uses both. A word that is a node's id is that node,
+/// whatever its shape: a task id (`BE-M17/T06`) is no id the generic matcher accepts.
 pub(crate) fn exact_seeds(graph: &Graph, words: &[String]) -> (Vec<String>, bool) {
+    // A quoted question reaches argv as one word, and no id equals a whole sentence.
+    let words: Vec<&str> = words.iter().flat_map(|w| w.split_whitespace()).collect();
     let mut out = Vec::new();
     let mut whole = true;
-    for w in words {
-        if crate::ids::generic().is_id(w) && graph.nodes.contains_key(w) {
-            out.push(w.clone());
+    for &raw in &words {
+        if let Some(n) = by_id(graph, raw) {
+            out.push(n.id.clone());
             continue;
         }
+        let w = token(raw);
+        if w.is_empty() { continue }
         if words.len() > 1 && !w.chars().any(|c| c.is_uppercase() || c == '_') {
             whole = false;
             continue;
         }
         let tail = format!("::{w}");
         let mut syms: Vec<&String> = graph.nodes.values()
-            .filter(|n| n.kind == NodeKind::Symbol && (n.label == *w || n.id.ends_with(&tail)))
+            .filter(|n| n.kind == NodeKind::Symbol && (n.label == w || n.id.ends_with(&tail)))
             .map(|n| &n.id).collect();
-        syms.sort();
+        // Production before a test, as in `resolve_code`: `routes` is the route table, not a spec's.
+        syms.sort_by_key(|id| (is_test(id), *id));
         whole &= !syms.is_empty() && w.chars().any(char::is_uppercase);
         out.extend(syms.into_iter().cloned());
     }
@@ -243,11 +249,30 @@ pub fn ask(graph: &Graph, lex: &Lexical, dense: Option<Dense>, rerank: Option<Re
     candidates.sort_by(|a, b| {
         a.0.is_none().cmp(&b.0.is_none()).then(a.0.cmp(&b.0)).then(b.1.partial_cmp(&a.1).unwrap()).then(a.2.cmp(b.2))
     });
-    answer.expanded = candidates.iter().take(MAX_EXPANDED).filter_map(|(rank, fallback, id, via)| {
+    let line = |(rank, fallback, id, via): &(Option<usize>, f32, &str, &str)| {
         let score = rank.map_or(*fallback, |r| 1.0 / (r as f32 + 1.0));
         hit(graph, id, score, Some(via))
-    }).collect();
+    };
+    answer.expanded = candidates.iter().take(MAX_EXPANDED).filter_map(line).collect();
+    // "Where is FR-X built" is the first question an anchor is asked with, and a requirement's
+    // document neighbours always outrank the code citing it: FR-CAL-40 on beauty-crm has 28
+    // symbols and never showed one. So one symbol gets a line of its own when no line is code
+    // yet — production code before a test, then the order above.
+    let code = |id: &str| id.starts_with("sym:");
+    let shown = answer.seeds.iter().chain(&answer.expanded).any(|h| code(&h.id));
+    if !shown {
+        if let Some(c) = candidates.iter().filter(|c| code(c.2)).min_by_key(|c| is_test(c.2)) {
+            answer.expanded.extend(line(c));
+        }
+    }
     answer
+}
+
+/// Code no production path runs: unit tests, end-to-end helpers and stories alike. `:test/` and
+/// `:e2e/` catch the directory at the very root of the id's path (`sym:e2e/helpers.ts::wait`),
+/// where there is no leading `/` for `/test/` and `/e2e/` to match.
+fn is_test(id: &str) -> bool {
+    ["/test/", "/e2e/", ":test/", ":e2e/", ".spec.", ".test.", ".stories."].iter().any(|m| id.contains(m))
 }
 
 /// How much of a line is shown where one is quoted: a seed's label, a family's defining line.
@@ -278,8 +303,32 @@ pub fn render(answer: &Answer, graph: &Graph, opts: &Options) -> String {
     out
 }
 
+/// What wraps a word in a sentence and is never part of an id: `FR-CAL-40,`, `(INV-07)`, `«…»`.
+const WRAPPING: &[char] = &[',', '.', ':', ';', '?', '!', '(', ')', '[', ']', '"', '\'', '«', '»', '\u{201c}', '\u{201d}', '\u{2018}', '\u{2019}'];
+
+/// A query word as it is matched against a name: the punctuation around it dropped.
+fn token(word: &str) -> &str { word.trim_matches(WRAPPING) }
+
+/// The node a query word names by its id: the word as typed, then without the punctuation around
+/// it, then ignoring case — `fr-cal-40` is typed as often as `FR-CAL-40`. Every lookup of a word
+/// against an id goes through here, so `ask`, `explain`, `impact` and `trace` read a name alike.
+fn by_id<'a>(graph: &'a Graph, word: &str) -> Option<&'a crate::model::Node> {
+    let w = token(word);
+    if w.is_empty() { return None }
+    let folded = |id: &str| id.chars().flat_map(char::to_lowercase).eq(w.chars().flat_map(char::to_lowercase));
+    graph.nodes.get(word).or_else(|| graph.nodes.get(w))
+        .or_else(|| graph.nodes.values().filter(|n| folded(&n.id)).min_by(|a, b| a.id.cmp(&b.id)))
+}
+
 pub(crate) fn resolve<'a>(graph: &'a Graph, needle: &str) -> Option<&'a crate::model::Node> {
-    if let Some(n) = graph.nodes.get(needle) { return Some(n); }
+    candidates(graph, needle).into_iter().next()
+}
+
+/// Every node a name could mean, best first: the id (`by_id`), else ids ending in `::name`, else
+/// labels equal to it ignoring case.
+fn candidates<'a>(graph: &'a Graph, needle: &str) -> Vec<&'a crate::model::Node> {
+    if let Some(n) = by_id(graph, needle) { return vec![n]; }
+    let needle = token(needle);
     let tail = format!("::{needle}");
     let mut c: Vec<&crate::model::Node> = graph.nodes.values().filter(|n| n.id.ends_with(&tail)).collect();
     if c.is_empty() {
@@ -287,19 +336,51 @@ pub(crate) fn resolve<'a>(graph: &'a Graph, needle: &str) -> Option<&'a crate::m
         c = graph.nodes.values().filter(|n| n.label.to_lowercase() == lower).collect();
     }
     c.sort_by(|a, b| a.id.cmp(&b.id));
-    c.into_iter().next()
+    c
+}
+
+/// `resolve` for the questions only code can answer — `impact` and `trace`. A PRD entity and the
+/// table or class it became share a label, and by id the entity sorts first; it has no callers,
+/// so taking it answered LOW for a name that code calls. The other candidates come back with the
+/// pick, so a caller can say which name it did not take. Production code comes before a test for
+/// the same reason `ask` puts it first: `routes` is the panel's route table, not a spec's fixture.
+pub(crate) fn resolve_code<'a>(graph: &'a Graph, needle: &str) -> Option<(&'a crate::model::Node, Vec<&'a crate::model::Node>)> {
+    let mut c = candidates(graph, needle);
+    c.sort_by_key(|n| (!n.is_code(), is_test(&n.id)));
+    let mut it = c.into_iter();
+    Some((it.next()?, it.collect()))
+}
+
+/// The stderr line naming what `resolve_code` passed over: three of them and a count, since a
+/// name like `routes` matches thirty ids and a line listing all of them is not read.
+pub(crate) fn passed_over(name: &str, pick: &crate::model::Node, rest: &[&crate::model::Node]) -> Option<String> {
+    if rest.is_empty() { return None }
+    let ids: Vec<&str> = rest.iter().take(3).map(|n| n.id.as_str()).collect();
+    let more = if rest.len() > 3 { format!(" and {} more", rest.len() - 3) } else { String::new() };
+    Some(format!("{name}: took {}; also matches {}{more}", pick.id, ids.join(", ")))
+}
+
+/// A node's edges, and the ones that reach it through a barrel: a caller that imported the
+/// symbol from an `index.ts` points at the barrel's `sym:<barrel>::Name`, not at the node, and
+/// `impact` counts it as a caller all the same.
+fn edges_of<'a>(graph: &'a Graph, id: &str) -> Vec<&'a crate::model::Edge> {
+    let mut edges = graph.neighbours(id);
+    let ix = crate::impact::Index::names(graph);
+    let reach: BTreeSet<String> = ix.aliases(id).into_iter().collect();
+    if !reach.is_empty() { edges.extend(graph.edges.iter().filter(|e| reach.contains(&e.target))); }
+    edges.sort_by_key(|e| (e.kind == EdgeKind::Legacy, e.kind, e.source.clone(), e.target.clone()));
+    edges
 }
 
 pub fn explain(graph: &Graph, needle: &str) -> Option<String> {
     let n = resolve(graph, needle)?;
     let mut out = format!("{}  {}:{}  {:?}  {}\n", n.id, n.file, n.line, n.kind, headline(&n.label));
     if let Some(c) = &n.community { out.push_str(&format!("  community: {c}\n")); }
-    let mut edges = graph.neighbours(&n.id);
-    edges.sort_by_key(|e| (e.kind == EdgeKind::Legacy, e.kind, e.source.clone(), e.target.clone()));
-    for e in edges {
+    for e in edges_of(graph, &n.id) {
         let (arrow, other) = if e.source == n.id { ("→", &e.target) } else { ("←", &e.source) };
-        let ctx = if e.context.is_empty() { String::new() } else { format!("  [{}]", e.context) };
-        out.push_str(&format!("  {:?} {arrow} {other}{ctx}\n", e.kind));
+        let ctx = if e.context.is_empty() || e.passes() { String::new() } else { format!("  [{}]", e.context) };
+        let kind = crate::impact::label(e.kind, e.passes());
+        out.push_str(&format!("  {kind} {arrow} {other}{ctx}\n"));
     }
     Some(out)
 }
@@ -316,8 +397,7 @@ pub fn explain_json(graph: &Graph, needle: &str) -> Option<String> {
         community: Option<&'a str>, edges: Vec<Edge<'a>>,
     }
     let n = resolve(graph, needle)?;
-    let mut edges = graph.neighbours(&n.id);
-    edges.sort_by_key(|e| (e.kind == EdgeKind::Legacy, e.kind, e.source.clone(), e.target.clone()));
+    let edges = edges_of(graph, &n.id);
     let out = Out {
         id: &n.id,
         kind: format!("{:?}", n.kind),
@@ -548,6 +628,82 @@ mod tests {
         let g = file_hub_only_graph();
         let a = ask(&g, &lex(&g, &Questions::default()), None, None, &["FR-X".to_string()], &opts());
         assert!(a.expanded.is_empty());
+    }
+
+    #[test]
+    fn a_requirement_cited_by_code_shows_one_production_symbol_beside_its_document_neighbour() {
+        let mut g = graph();
+        let mut e = Extraction::default();
+        e.node(NodeKind::Symbol, "sym:api/test/policies.spec.ts::service", "service", "", "api/test/policies.spec.ts", 3);
+        e.node(NodeKind::Symbol, "sym:api/policies.service.ts::PoliciesService", "PoliciesService", "", "api/policies.service.ts", 9);
+        e.edge("sym:api/test/policies.spec.ts::service", "FR-PAY-22", EdgeKind::References, "comment", "api/test/policies.spec.ts");
+        e.edge("sym:api/policies.service.ts::PoliciesService", "FR-PAY-22", EdgeKind::References, "comment", "api/policies.service.ts");
+        g.apply(e);
+        let a = ask(&g, &lex(&g, &Questions::default()), None, None, &["FR-PAY-22".to_string()], &opts());
+        let ex: Vec<&str> = a.expanded.iter().map(|h| h.id.as_str()).collect();
+        assert_eq!(ex.len(), 2, "the document neighbour stays and code is added: {ex:?}");
+        assert!(!ex[0].starts_with("sym:"));
+        assert_eq!(ex[1], "sym:api/policies.service.ts::PoliciesService");
+    }
+
+    #[test]
+    fn a_label_shared_by_an_entity_and_code_resolves_to_the_code_for_impact() {
+        let mut g = Graph::default();
+        let mut e = Extraction::default();
+        e.node(NodeKind::Entity, "entity:CancellationPolicy", "CancellationPolicy", "", "docs/06.md", 385);
+        e.node(NodeKind::Symbol, "sym:db/scheduling.ts::cancellationPolicy", "cancellationPolicy", "", "db/scheduling.ts", 186);
+        g.apply(e);
+        assert_eq!(resolve(&g, "CancellationPolicy").unwrap().id, "entity:CancellationPolicy", "explain keeps the document");
+        let (pick, rest) = resolve_code(&g, "CancellationPolicy").unwrap();
+        assert_eq!(pick.id, "sym:db/scheduling.ts::cancellationPolicy");
+        assert_eq!(rest.iter().map(|n| n.id.as_str()).collect::<Vec<_>>(), ["entity:CancellationPolicy"]);
+    }
+
+    #[test]
+    fn a_name_shared_by_a_test_and_production_code_resolves_to_the_production_symbol() {
+        let mut g = Graph::default();
+        let mut e = Extraction::default();
+        for f in ["apps/api/test/a.spec.ts", "apps/panel/src/routes.ts", "apps/panel/test/b.test.tsx", "apps/x/c.spec.ts", "apps/y/d.test.ts"] {
+            e.node(NodeKind::Symbol, &format!("sym:{f}::routes"), "routes", "", f, 1);
+        }
+        g.apply(e);
+        let (pick, rest) = resolve_code(&g, "routes").unwrap();
+        assert_eq!(pick.id, "sym:apps/panel/src/routes.ts::routes");
+        assert_eq!(
+            passed_over("routes", pick, &rest).unwrap(),
+            "routes: took sym:apps/panel/src/routes.ts::routes; also matches sym:apps/api/test/a.spec.ts::routes, \
+             sym:apps/panel/test/b.test.tsx::routes, sym:apps/x/c.spec.ts::routes and 1 more"
+        );
+        assert_eq!(passed_over("routes", pick, &rest[..1]).unwrap(), "routes: took sym:apps/panel/src/routes.ts::routes; also matches sym:apps/api/test/a.spec.ts::routes");
+        assert_eq!(passed_over("routes", pick, &[]), None);
+    }
+
+    #[test]
+    fn an_e2e_helper_or_a_story_does_not_count_as_production() {
+        let mut g = Graph::default();
+        let mut e = Extraction::default();
+        for f in ["apps/panel/e2e/calendar.ts", "apps/panel/src/calendar.ts", "packages/ui/src/d.stories.tsx", "tools/runner.mjs"] {
+            e.node(NodeKind::Symbol, &format!("sym:{f}::DAY"), "DAY", "", f, 1);
+        }
+        g.apply(e);
+        assert_eq!(resolve_code(&g, "DAY").unwrap().0.id, "sym:apps/panel/src/calendar.ts::DAY");
+        g.nodes.remove("sym:apps/panel/src/calendar.ts::DAY");
+        assert_eq!(resolve_code(&g, "DAY").unwrap().0.id, "sym:tools/runner.mjs::DAY");
+        let a = ask(&g, &lex(&g, &Questions::default()), None, None, &["DAY".to_string()], &opts());
+        assert_eq!(a.seeds[0].id, "sym:tools/runner.mjs::DAY");
+    }
+
+    #[test]
+    fn a_one_word_question_lists_production_symbols_before_test_symbols() {
+        let mut g = Graph::default();
+        let mut e = Extraction::default();
+        for f in ["apps/api/test/a.spec.ts", "apps/panel/src/routes.ts", "apps/panel/test/b.test.tsx"] {
+            e.node(NodeKind::Symbol, &format!("sym:{f}::routes"), "routes", "", f, 1);
+        }
+        g.apply(e);
+        let a = ask(&g, &lex(&g, &Questions::default()), None, None, &["routes".to_string()], &opts());
+        let seeds: Vec<&str> = a.seeds.iter().map(|h| h.id.as_str()).collect();
+        assert_eq!(seeds, ["sym:apps/panel/src/routes.ts::routes", "sym:apps/api/test/a.spec.ts::routes", "sym:apps/panel/test/b.test.tsx::routes"]);
     }
 
     #[test]
@@ -916,6 +1072,19 @@ mod tests {
     }
 
     #[test]
+    fn a_task_id_present_in_the_graph_is_the_first_seed() {
+        // `BE-M17/T06` is no id the generic matcher accepts, and text search put the milestone
+        // whose body repeats its parts first.
+        let mut g = graph();
+        let mut e = Extraction::default();
+        e.node(NodeKind::Task, "BE-M17/T06", "Public booking path", "", "docs/m17.md", 58);
+        e.node(NodeKind::Milestone, "BE-M07", "Reviews", "BE M17 T06 BE M17 T06 BE M17 T06", "docs/m07.md", 1);
+        g.apply(e);
+        let a = ask(&g, &lex(&g, &Questions::default()), None, None, &["BE-M17/T06".to_string()], &opts());
+        assert_eq!(a.seeds.iter().map(|h| h.id.as_str()).collect::<Vec<_>>(), ["BE-M17/T06"]);
+    }
+
+    #[test]
     fn an_id_shaped_word_absent_from_the_graph_yields_no_seeds() {
         let g = graph();
         let a = ask(&g, &lex(&g, &Questions::default()), None, None, &["FR-PAY-999".to_string()], &opts());
@@ -945,6 +1114,50 @@ mod tests {
         assert_eq!(a.seeds.len(), 2);
         assert_eq!(a.seeds[0].id, "sym:packages/contracts/src/money.ts::asGrosze");
         assert_eq!(a.seeds[1].id, "FR-PAY-22");
+    }
+
+    /// Agents quote the question, and the shell hands it over as one word.
+    #[test]
+    fn a_quoted_question_gives_the_seeds_of_the_same_words_unquoted() {
+        let g = graph();
+        let run = |words: &[&str]| {
+            let words: Vec<String> = words.iter().map(|s| s.to_string()).collect();
+            ask(&g, &lex(&g, &Questions::default()), None, None, &words, &opts()).seeds
+                .into_iter().map(|h| h.id).collect::<Vec<_>>()
+        };
+        assert_eq!(run(&["asGrosze FR-PAY-22"]), run(&["asGrosze", "FR-PAY-22"]));
+        assert_eq!(run(&["FR-PAY-22 money"]), run(&["FR-PAY-22", "money"]));
+        assert_eq!(run(&["FR-PAY-22 money"])[0], "FR-PAY-22");
+    }
+
+    /// How an id arrives in a question: after a comma, in brackets, before a colon, at the end
+    /// of a sentence, typed in lower case. Each is the id, and an exact seed ranks first.
+    #[test]
+    fn an_id_wrapped_in_punctuation_or_typed_in_lower_case_is_the_first_seed() {
+        let mut g = graph();
+        let mut e = Extraction::default();
+        e.node(NodeKind::Requirement, "FR-CAL-40", "Overlap is allowed", "", "docs/04.md", 40);
+        e.node(NodeKind::Invariant, "INV-07", "No double booking", "", "docs/constitution.yaml", 7);
+        e.node(NodeKind::Task, "BE-M17/T06", "Public booking path", "", "docs/m17.md", 58);
+        g.apply(e);
+        // The exact seeds, not the fused answer: on a graph this small BM25 alone would put the id
+        // first, and on beauty-crm's it did not.
+        let first = |q: &str| exact_seeds(&g, &[q.to_string()]).0;
+        for (q, want) in [
+            ("FR-CAL-40, INV-07?", &["FR-CAL-40", "INV-07"][..]),
+            ("(FR-CAL-40)", &["FR-CAL-40"]),
+            ("FR-CAL-40: overlap", &["FR-CAL-40"]),
+            ("INV-07.", &["INV-07"]),
+            ("BE-M17/T06, что осталось?", &["BE-M17/T06"]),
+            ("fr-cal-40", &["FR-CAL-40"]),
+            ("«inv-07»", &["INV-07"]),
+            ("[asGrosze]", &["sym:packages/contracts/src/money.ts::asGrosze"]),
+        ] {
+            let got = first(q);
+            assert_eq!(&got[..want.len().min(got.len())], want, "{q}: {got:?}");
+        }
+        assert_eq!(resolve(&g, "fr-cal-40,").unwrap().id, "FR-CAL-40", "explain reads a name the way ask does");
+        assert_eq!(resolve_code(&g, "(asGrosze)").unwrap().0.id, "sym:packages/contracts/src/money.ts::asGrosze");
     }
 
     #[test]
@@ -992,6 +1205,31 @@ mod tests {
         for key in ["id", "file", "line", "label", "score", "via"] {
             assert!(seed.get(key).is_some(), "missing {key}");
         }
+    }
+
+    #[test]
+    fn explain_lists_a_caller_that_reached_the_symbol_through_a_barrel() {
+        let mut g = Graph::default();
+        let mut e = Extraction::default();
+        e.node(NodeKind::Symbol, "sym:s.ts::f", "f", "", "s.ts", 2);
+        e.edge("file:index.ts", "file:s.ts", EdgeKind::ReExports, "*", "index.ts");
+        e.node(NodeKind::Symbol, "sym:c.ts::g", "g", "", "c.ts", 5);
+        e.edge("sym:c.ts::g", "sym:index.ts::f", EdgeKind::Calls, "", "c.ts");
+        g.apply(e);
+        assert!(explain(&g, "sym:s.ts::f").unwrap().contains("  Calls ← sym:c.ts::g\n"));
+        let v: serde_json::Value = serde_json::from_str(&explain_json(&g, "sym:s.ts::f").unwrap()).unwrap();
+        assert_eq!(v["edges"][0]["other"], "sym:c.ts::g");
+        assert_eq!(v["edges"][0]["dir"], "in");
+    }
+
+    #[test]
+    fn explain_labels_an_argument_edge_as_passes() {
+        let mut g = Graph::default();
+        let mut e = Extraction::default();
+        e.node(NodeKind::Symbol, "sym:a.ts::A", "A", "", "a.ts", 1);
+        e.edge("sym:a.ts::A", "sym:t.ts::TOKEN", EdgeKind::Calls, "arg", "a.ts");
+        g.apply(e);
+        assert!(explain(&g, "sym:a.ts::A").unwrap().ends_with("  Passes → sym:t.ts::TOKEN\n"));
     }
 
     #[test]
