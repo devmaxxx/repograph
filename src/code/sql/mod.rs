@@ -30,6 +30,15 @@ pub fn header(source: &str) -> Header {
     Header { top, ..Header::default() }
 }
 
+/// The file node, one `sym:<rel>::<schema>/<object>` per object the file creates or attaches to (declared by the
+/// file, context `export`), and one `<table>.<member>` per column, trigger, policy and named index (declared by
+/// its table).
+///
+/// A name the file uses resolves through `resolver`'s SQL index to every file declaring it, the file itself
+/// included. A name no file declares is not linked. The edges are `References` with context `alter`, `rename`,
+/// `references` or `from`, `Calls` from a trigger to its function, and `References` from the enclosing statement,
+/// or the file between statements, to each id a comment or a string cites. A source the grammar cannot parse
+/// yields the file node alone.
 pub fn extract(resolver: &Resolver, rel: &str, source: &str) -> Extraction {
     let mut ex = Extraction::default();
     file_node(rel, &mut ex);

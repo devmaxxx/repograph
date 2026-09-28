@@ -199,24 +199,34 @@ fn statement(stmt: Node, src: &[u8], at: (u32, u32), body: &str, lines: &[&str],
 }
 
 /// The name `ALTER TABLE t RENAME TO n` or `ALTER TABLE t SET SCHEMA s` gives `t`. PostgreSQL keeps a renamed
-/// table in its schema. `RENAME COLUMN` and `RENAME CONSTRAINT` rename a member and do not match.
+/// table in its schema. `RENAME COLUMN` and `RENAME CONSTRAINT` rename a member and do not match. The clause is
+/// read from the statement's own keyword nodes, so the same words in a string or a comment rename nothing.
 fn new_name(stmt: Node, src: &[u8], table: &str) -> Option<String> {
-    let words: Vec<&str> = text(stmt, src).split_whitespace().map(|w| w.trim_end_matches(';')).collect();
-    let after = |a: &str, b: &str| {
-        words.windows(3).find(|w| w[0].eq_ignore_ascii_case(a) && w[1].eq_ignore_ascii_case(b)).map(|w| names::fold(w[2]))
-    };
-    if let Some(name) = after("rename", "to") {
+    if let Some(name) = clause(stmt, &["kw_rename", "kw_to"]).and_then(|n| names::object(n, src)) {
         return Some(match table.rsplit_once('/') {
             Some((schema, _)) => format!("{schema}/{name}"),
             None => name,
         });
     }
-    after("set", "schema").map(|schema| format!("{schema}/{}", names::bare(table)))
+    clause(stmt, &["kw_set", "kw_schema"]).and_then(|n| names::object(n, src)).map(|schema| format!("{schema}/{}", names::bare(table)))
+}
+
+/// The `name` directly after `keywords`, among the statement's own children with comments set aside.
+fn clause<'t>(stmt: Node<'t>, keywords: &[&str]) -> Option<Node<'t>> {
+    let kids: Vec<Node> = named(stmt).into_iter().filter(|k| k.kind() != "comment").collect();
+    kids.windows(keywords.len() + 1).find_map(|w| {
+        let (words, last) = w.split_at(keywords.len());
+        (words.iter().map(Node::kind).eq(keywords.iter().copied()) && last[0].kind() == "name").then_some(last[0])
+    })
 }
 
 /// The table an `ALTER TABLE` or a `CREATE INDEX … ON` names, behind `ONLY` or `IF EXISTS` when written.
 fn relation(stmt: Node, src: &[u8]) -> Option<String> {
-    let rel = child(stmt, "relation_expr")?;
+    relation_name(child(stmt, "relation_expr")?, src)
+}
+
+/// A `relation_expr`'s name, written bare or behind `ONLY`.
+fn relation_name(rel: Node, src: &[u8]) -> Option<String> {
     let q = child(rel, "qualified_name").or_else(|| child(rel, "extended_relation_expr").and_then(|x| child(x, "qualified_name")))?;
     names::object(q, src)
 }
@@ -256,16 +266,28 @@ fn references(elem: Node, from: &str, src: &[u8], r: &mut Read) {
     }
 }
 
-/// Every relation a view's query reads or joins, subqueries included. A CTE's name is read too, and resolves to
-/// nothing unless a table of that name exists.
+/// Every relation a view's query reads or joins, subqueries included. An unqualified name a `WITH` in the query
+/// binds is that CTE, not a table, wherever in the query the `WITH` sits: a CTE cannot be schema-qualified, so a
+/// qualified name is always a relation.
 fn reads(stmt: Node, view: &str, src: &[u8], r: &mut Read) {
+    let mut bound = Vec::new();
+    ctes(stmt, src, &mut bound);
     let mut relations = Vec::new();
     find(stmt, &["relation_expr"], &mut relations);
-    for rel in relations {
-        let q = child(rel, "qualified_name").or_else(|| child(rel, "extended_relation_expr").and_then(|x| child(x, "qualified_name")));
-        if let Some(to) = q.and_then(|q| names::object(q, src)) {
+    for to in relations.into_iter().filter_map(|rel| relation_name(rel, src)) {
+        if !bound.contains(&to) {
             r.links.push(Link { from: view.to_string(), to, kind: EdgeKind::References, context: "from" });
         }
+    }
+}
+
+/// The name of every CTE under `n`, a `WITH` inside another CTE's body included.
+fn ctes(n: Node, src: &[u8], out: &mut Vec<String>) {
+    for c in named(n) {
+        if c.kind() == "common_table_expr" {
+            out.extend(child(c, "name").and_then(|name| names::object(name, src)));
+        }
+        ctes(c, src, out);
     }
 }
 

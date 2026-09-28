@@ -327,3 +327,41 @@ fn a_renamed_table_is_declared_under_its_new_name_and_references_its_old_one() {
     }
     assert!(!fks.iter().any(|(_, target, _)| target.ends_with("app/clients")), "{fks:?}");
 }
+
+#[test]
+fn rename_words_inside_a_string_or_a_comment_rename_nothing() {
+    let repo = Repo::with(&[
+        ("db/001.sql", "CREATE TABLE app.clients (id int);\n"),
+        ("db/002.sql", "ALTER TABLE app.clients ADD COLUMN note text DEFAULT 'please rename to backup';\nALTER TABLE app.clients -- rename to x\n  ADD COLUMN a int;\nALTER TABLE app.clients ADD COLUMN b text CHECK (b <> 'set schema crm');\n"),
+    ]);
+    let migration_002 = repo.extract("db/002.sql");
+    let mut got = ids(&migration_002);
+    got.sort_unstable();
+    assert_eq!(got, vec!["file:db/002.sql", "sym:db/002.sql::app/clients", "sym:db/002.sql::app/clients.a", "sym:db/002.sql::app/clients.b", "sym:db/002.sql::app/clients.note"]);
+    let refs = edges(&migration_002, EdgeKind::References);
+    assert!(!refs.iter().any(|(_, _, context)| *context == "rename"), "{refs:?}");
+    assert_eq!(header(&std::fs::read_to_string(repo.dir.path().join("db/002.sql")).unwrap()).top.len(), 1);
+}
+
+#[test]
+fn a_rename_to_a_quoted_name_keeps_its_case() {
+    let repo = Repo::with(&[
+        ("db/001.sql", "CREATE TABLE app.t (id int);\n"),
+        ("db/002.sql", "ALTER TABLE IF EXISTS ONLY app.t RENAME TO \"Big\";\n"),
+    ]);
+    let migration_002 = repo.extract("db/002.sql");
+    let refs = edges(&migration_002, EdgeKind::References);
+    assert!(refs.contains(&("sym:db/002.sql::app/Big", "sym:db/001.sql::app/t", "rename")), "{refs:?}");
+}
+
+#[test]
+fn a_view_does_not_read_a_table_its_own_with_clause_shadows() {
+    let repo = Repo::with(&[
+        ("db/001.sql", "CREATE TABLE clients (id int);\nCREATE TABLE app.orders (id int);\n"),
+        ("db/002.sql", "CREATE VIEW app.v AS WITH clients AS (SELECT id FROM app.orders) SELECT id FROM clients;\nCREATE VIEW app.w AS WITH outer_q AS (WITH clients AS (SELECT 1 AS id) SELECT id FROM clients) SELECT id FROM outer_q;\n"),
+    ]);
+    let migration_002 = repo.extract("db/002.sql");
+    let mut reads = edges(&migration_002, EdgeKind::References);
+    reads.sort_unstable();
+    assert_eq!(reads, vec![("sym:db/002.sql::app/v", "sym:db/001.sql::app/orders", "from")]);
+}
