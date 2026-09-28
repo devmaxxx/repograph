@@ -65,3 +65,15 @@ fn a_store_that_holds_no_name_indexed_file_carries_no_header_file() {
     assert!(common::run(repo, &["update"]).status.success());
     assert!(!repo.join(".repograph").join("headers.json").exists());
 }
+
+#[test]
+fn a_build_replaces_the_headers_an_older_store_left_at_its_save() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path();
+    write(repo, "web/a.ts", "export function boot() {}\n");
+    assert!(common::run(repo, &["build"]).status.success());
+    let path = repo.join(".repograph").join("headers.json");
+    std::fs::write(&path, r#"{"gone/A.java":{"package":["p"],"types":["A"]}}"#).unwrap();
+    assert!(common::run(repo, &["build"]).status.success());
+    assert!(!path.exists(), "a build reads beside no headers, so it leaves none the old graph was read beside");
+}

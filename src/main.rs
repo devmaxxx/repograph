@@ -227,6 +227,8 @@ pub struct UpdateReport {
 /// and the whole tree is read once. Once, because the manifest saved below carries this build's
 /// generation — after which an update is the incremental one again.
 pub(crate) fn apply_diff(repo: &std::path::Path, store: &store::Store, graph: &mut model::Graph, entries: &[walk::Entry], diff: &walk::Diff, manifest: &walk::Manifest, ex: &Extractors) -> anyhow::Result<UpdateReport> {
+    // A graph read from nothing is read beside no headers either, whatever an older store left.
+    let fresh = graph.nodes.is_empty();
     let named: std::collections::BTreeSet<&str> = diff.changed.iter().map(|e| e.rel.as_str()).collect();
     let code_changed = diff.changed.iter().filter(|e| e.kind == walk::FileKind::Code).map(|e| e.rel.as_str());
     if let Some(note) = code::lang::files_only_note(code_changed) {
@@ -245,7 +247,7 @@ pub(crate) fn apply_diff(repo: &std::path::Path, store: &store::Store, graph: &m
     let code_rels: Vec<String> = entries.iter().filter(|e| e.kind == walk::FileKind::Code).map(|e| e.rel.clone()).collect();
     let rereading: Vec<String> = diff.changed.iter().chain(regrammar.iter().copied())
         .filter(|e| e.kind == walk::FileKind::Code).map(|e| e.rel.clone()).collect();
-    let mut headers = code::index::Headers::load(store)?;
+    let mut headers = if fresh { code::index::Headers::default() } else { code::index::Headers::load(store)? };
     let recorded = headers.clone();
     let widened_rels = code::index::widen(repo, &rereading, &diff.removed, &mut headers, &code_rels);
     let widened: Vec<&walk::Entry> = entries.iter().filter(|e| widened_rels.binary_search(&e.rel).is_ok()).collect();
@@ -310,7 +312,7 @@ pub(crate) fn apply_diff(repo: &std::path::Path, store: &store::Store, graph: &m
     let graph_at = store.save(graph, &saved)?;
     // After the graph and never before: a crash between the two leaves the older headers, which
     // widen the next update once more rather than hide a move from it.
-    if headers != recorded {
+    if fresh || headers != recorded {
         headers.save(store)?;
     }
     // Only when something was re-extracted: a tree that did not move cannot have grown a node

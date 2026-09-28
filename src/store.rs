@@ -191,10 +191,8 @@ impl Store {
     /// The graph and the manifest stay: `build` replaces them by rename when it saves, so a build
     /// that never gets there leaves the previous store to answer from rather than none. A temp file
     /// written in the last few minutes may be another process's save in flight, so only an older
-    /// one goes. The headers go because `build` starts without them; one missing costs the next
-    /// update a widening per family, never an answer.
+    /// one goes. The headers stay with the graph they were read beside, for the same reason.
     pub fn drop_leftovers(&self) -> Result<()> {
-        self.remove("headers.json")?;
         for e in std::fs::read_dir(&self.dir).into_iter().flatten().flatten() {
             let name = e.file_name().to_string_lossy().into_owned();
             let stale = e.metadata().and_then(|m| m.modified()).ok()
