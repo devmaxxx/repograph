@@ -31,13 +31,10 @@ impl Repo {
     }
 }
 
-// Shared by the extraction cases the later tasks add to this file.
-#[allow(dead_code)]
 pub(super) fn ids(ex: &Extraction) -> Vec<&str> {
     ex.nodes.iter().map(|n| n.id.as_str()).collect()
 }
 
-#[allow(dead_code)]
 pub(super) fn edges(ex: &Extraction, kind: EdgeKind) -> Vec<(&str, &str, &str)> {
     ex.edges.iter().filter(|e| e.kind == kind).map(|e| (e.source.as_str(), e.target.as_str(), e.context.as_str())).collect()
 }
@@ -98,4 +95,128 @@ fn the_resolver_reads_every_cargo_manifest_its_walk_reaches() {
         repo.resolver().rust().resolve("crates/shopd/src/main.rs", &[], &path),
         Some(Target::Item { file: "crates/shop-core/src/hmac.rs".into(), name: "sign".into() })
     );
+}
+
+fn node<'a>(ex: &'a Extraction, id: &str) -> &'a crate::model::Node {
+    ex.nodes.iter().find(|n| n.id == id).unwrap_or_else(|| panic!("{id} not extracted: {:?}", ids(ex)))
+}
+
+const SHOP: &str = r#"//! Orders.
+
+/// An order line.
+#[derive(Debug, Clone)]
+pub struct Line { pub sku: String, qty: u32 }
+
+pub enum State { Open, Paid }
+pub union Bits { a: u32, b: f32 }
+pub(crate) type Lines = Vec<Line>;
+pub const LIMIT: usize = 10;
+static mut COUNT: usize = 0;
+
+macro_rules! money { ($x:expr) => { $x * 100 }; }
+
+pub trait Priced {
+    type Money;
+    const ZERO: u32;
+    fn price(&self) -> u32;
+    fn doubled(&self) -> u32 { self.price() * 2 }
+}
+
+impl Line {
+    pub fn new(sku: &str) -> Line { Line { sku: sku.into(), qty: 1 } }
+    const MAX: u32 = 99;
+}
+
+fn helper() {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    fn fixture() -> Line { Line::new("a") }
+    mod deeper { pub fn inner() {} }
+}
+"#;
+
+#[test]
+fn items_trait_members_and_impl_members_are_symbols() {
+    let repo = Repo::new(&[("Cargo.toml", "[package]\nname = \"shop\"\n"), ("src/lib.rs", SHOP)]);
+    let ex = repo.extract("src/lib.rs");
+    let want = [
+        "Line", "State", "Bits", "Lines", "LIMIT", "COUNT", "money", "Priced", "Priced.Money", "Priced.ZERO",
+        "Priced.price", "Priced.doubled", "Line.new", "Line.MAX", "helper", "tests/fixture", "tests/deeper/inner",
+    ];
+    for s in want {
+        assert!(ids(&ex).contains(&format!("sym:src/lib.rs::{s}").as_str()), "{s}: {:?}", ids(&ex));
+    }
+    assert_eq!(ex.nodes.iter().filter(|n| n.kind == NodeKind::Symbol).count(), want.len(), "an inline module is a scope, not a symbol: {:?}", ids(&ex));
+    assert_eq!(node(&ex, "sym:src/lib.rs::tests/deeper/inner").label, "tests::deeper::inner");
+}
+
+#[test]
+fn any_pub_is_an_export_and_members_hang_off_their_container() {
+    let repo = Repo::new(&[("Cargo.toml", "[package]\nname = \"shop\"\n"), ("src/lib.rs", SHOP)]);
+    let ex = repo.extract("src/lib.rs");
+    let declares = edges(&ex, EdgeKind::Declares);
+    for want in [
+        ("file:src/lib.rs", "sym:src/lib.rs::Line", "export"),
+        ("file:src/lib.rs", "sym:src/lib.rs::Lines", "export"),
+        ("file:src/lib.rs", "sym:src/lib.rs::helper", ""),
+        ("file:src/lib.rs", "sym:src/lib.rs::COUNT", ""),
+        ("sym:src/lib.rs::Line", "sym:src/lib.rs::Line.new", ""),
+        ("sym:src/lib.rs::Priced", "sym:src/lib.rs::Priced.price", ""),
+        ("file:src/lib.rs", "sym:src/lib.rs::tests/fixture", ""),
+    ] {
+        assert!(declares.contains(&want), "{want:?} in {declares:?}");
+    }
+}
+
+#[test]
+fn a_body_is_the_doc_comment_and_the_signature_not_the_block() {
+    let repo = Repo::new(&[("Cargo.toml", "[package]\nname = \"shop\"\n"), ("src/lib.rs", SHOP)]);
+    let ex = repo.extract("src/lib.rs");
+    let line = node(&ex, "sym:src/lib.rs::Line");
+    assert_eq!(line.body, "An order line.\npub struct Line");
+    assert_eq!((line.line, line.end), (5, 5));
+    let new = node(&ex, "sym:src/lib.rs::Line.new");
+    assert_eq!(new.body, "pub fn new(sku: &str) -> Line");
+    assert_eq!((new.line, new.end), (23, 23));
+    assert_eq!((node(&ex, "sym:src/lib.rs::Priced").line, node(&ex, "sym:src/lib.rs::Priced").end), (15, 20));
+}
+
+#[test]
+fn a_foreign_impl_declares_its_members_from_the_file() {
+    let repo = Repo::new(&[
+        ("Cargo.toml", "[package]\nname = \"shop\"\n"),
+        ("src/lib.rs", "pub mod store;\npub mod ops;\n"),
+        ("src/store.rs", "pub struct Store;\n"),
+        ("src/ops.rs", "use crate::store::Store;\nimpl Store {\n    pub fn open() -> Store { Store }\n    fn check(&self) {}\n}\n"),
+    ]);
+    let ex = repo.extract("src/ops.rs");
+    let declares = edges(&ex, EdgeKind::Declares);
+    assert!(declares.contains(&("file:src/ops.rs", "sym:src/ops.rs::Store.open", "export")), "{declares:?}");
+    assert!(declares.contains(&("file:src/ops.rs", "sym:src/ops.rs::Store.check", "")), "{declares:?}");
+    assert!(!ids(&ex).contains(&"sym:src/ops.rs::Store"), "the type is not this file's to declare");
+}
+
+#[test]
+fn ids_in_comments_and_strings_belong_to_the_enclosing_item() {
+    let src = "pub struct Line;\nimpl Line {\n    // FR-PAY-03 rounding\n    fn total(&self) -> &'static str { \"INV-11\" }\n}\n/// See FR-SEC-21.\npub fn f() {}\n";
+    let repo = Repo::new(&[("src/lib.rs", src)]);
+    let ex = repo.extract("src/lib.rs");
+    let refs = edges(&ex, EdgeKind::References);
+    assert!(refs.contains(&("sym:src/lib.rs::Line", "FR-PAY-03", "comment")), "{refs:?}");
+    assert!(refs.contains(&("sym:src/lib.rs::Line.total", "INV-11", "string")), "{refs:?}");
+    // A doc comment sits beside its item, not inside it, as TypeScript's does.
+    assert!(refs.contains(&("file:src/lib.rs", "FR-SEC-21", "comment")), "{refs:?}");
+}
+
+#[test]
+fn cfg_twins_are_one_symbol_whose_span_covers_both() {
+    let src = "#[cfg(unix)]\nfn rename_over() {}\n\n#[cfg(windows)]\nfn rename_over() {\n    retry();\n}\n";
+    let repo = Repo::new(&[("Cargo.toml", "[package]\nname = \"x\"\n"), ("src/lib.rs", src)]);
+    let ex = repo.extract("src/lib.rs");
+    let twins: Vec<_> = ex.nodes.iter().filter(|n| n.id == "sym:src/lib.rs::rename_over").collect();
+    assert_eq!(twins.len(), 1, "{:?}", ids(&ex));
+    assert_eq!((twins[0].line, twins[0].end), (2, 7), "a hunk in the windows twin is a change to rename_over");
+    assert_eq!(edges(&ex, EdgeKind::Declares).len(), 1, "one Declares edge for the pair");
 }
