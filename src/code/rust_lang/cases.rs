@@ -6,6 +6,7 @@ use crate::code::imports::Resolver;
 use crate::code::lang::Lang;
 use crate::config::Config;
 use crate::model::{EdgeKind, Extraction, Extractor, NodeKind};
+use super::crates::Target;
 
 pub(super) struct Repo {
     dir: tempfile::TempDir,
@@ -24,8 +25,7 @@ impl Repo {
 
     pub(super) fn extract(&self, rel: &str) -> Extraction {
         // The language is not in the defaults until L7's PR, so the case names its glob, as a user would.
-        let cfg = Config { code_globs: vec!["**/*.rs".into()], ..Config::default() };
-        let resolver = Resolver::new(self.dir.path(), &cfg).unwrap();
+        let resolver = self.resolver();
         let src = std::fs::read_to_string(self.dir.path().join(rel)).unwrap();
         CodeExtractor::new(resolver).extract(rel, &src)
     }
@@ -74,4 +74,28 @@ fn every_kind_the_walk_matches_is_in_the_grammar() {
     for field in ["name", "body", "argument", "path", "list", "alias", "trait", "type", "function", "value", "field", "macro", "bounds", "left", "type_parameters", "arguments"] {
         assert!(lang.field_id_for_name(field).is_some(), "field {field} missing");
     }
+}
+
+impl Repo {
+    pub(super) fn resolver(&self) -> Resolver {
+        let cfg = Config { code_globs: vec!["**/*.rs".into()], ..Config::default() };
+        Resolver::new(self.dir.path(), &cfg).unwrap()
+    }
+}
+
+#[test]
+fn the_resolver_reads_every_cargo_manifest_its_walk_reaches() {
+    let repo = Repo::new(&[
+        ("Cargo.toml", "[workspace]\nmembers = [\"crates/*\"]\n"),
+        ("crates/shop-core/Cargo.toml", "[package]\nname = \"shop-core\"\nversion = \"0.1.0\"\n"),
+        ("crates/shop-core/src/lib.rs", "pub mod hmac;\n"),
+        ("crates/shop-core/src/hmac.rs", "pub fn sign() {}\n"),
+        ("crates/shopd/Cargo.toml", "[package]\nname = \"shopd\"\nversion = \"0.1.0\"\n"),
+        ("crates/shopd/src/main.rs", "fn main() {}\n"),
+    ]);
+    let path: Vec<String> = ["shop_core", "hmac", "sign"].map(String::from).to_vec();
+    assert_eq!(
+        repo.resolver().rust().resolve("crates/shopd/src/main.rs", &[], &path),
+        Some(Target::Item { file: "crates/shop-core/src/hmac.rs".into(), name: "sign".into() })
+    );
 }

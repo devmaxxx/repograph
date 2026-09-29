@@ -10,8 +10,8 @@ pub mod jvm;
 pub mod kotlin;
 pub mod lang;
 pub(crate) mod python;
-pub(crate) mod rust_lang;
 pub mod razor;
+pub(crate) mod rust_lang;
 pub mod sql;
 pub mod symbols;
 
