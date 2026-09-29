@@ -365,3 +365,13 @@ fn a_view_does_not_read_a_table_its_own_with_clause_shadows() {
     reads.sort_unstable();
     assert_eq!(reads, vec![("sym:db/002.sql::app/v", "sym:db/001.sql::app/orders", "from")]);
 }
+
+#[test]
+fn a_statement_thousands_of_levels_deep_is_read_without_overflowing_the_stack() {
+    let rows: Vec<String> = (0..60_000).map(|i| format!("({i}, 'x')")).collect();
+    let chain: Vec<String> = (0..20_000).map(|i| format!("a = {i}")).collect();
+    let source = format!("CREATE TABLE t (a int, b text);\nINSERT INTO t VALUES {};\nCREATE VIEW v AS SELECT a FROM t WHERE {};\n", rows.join(",\n"), chain.join(" OR "));
+    // Both a left-recursive list and a left-associative chain nest as deep as they are long.
+    let read = std::thread::Builder::new().stack_size(1 << 20).spawn(move || header(&source).top).unwrap().join().unwrap();
+    assert_eq!(read.into_iter().collect::<Vec<_>>(), vec!["t".to_string(), "v".to_string()]);
+}

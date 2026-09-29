@@ -319,3 +319,25 @@ type Lamp {\n  \"directive @glow on FIELD, and every Lamp returns Book\"\n  id: 
         assert!(edges(&ex, kind).is_empty(), "{kind:?}: {:?}", edges(&ex, kind));
     }
 }
+
+#[test]
+fn a_directive_on_a_spread_or_a_variable_decorates_the_operation_holding_it() {
+    let repo = Repo::with(&[(
+        "app/q.gql",
+        "directive @live on QUERY\ndirective @cached on FRAGMENT_SPREAD\ndirective @old on VARIABLE_DEFINITION\nfragment F on Book { id }\n\
+query Q($a: Int @old) {\n  books { ...F @cached }\n}\n",
+    )]);
+    let ex = repo.extract("app/q.gql");
+    let decorated = edges(&ex, EdgeKind::DecoratedBy);
+    for directive in ["cached", "old"] {
+        let target = format!("sym:app/q.gql::directive/{directive}");
+        assert!(decorated.contains(&("sym:app/q.gql::query/Q", target.as_str(), "")), "{directive}: {decorated:?}");
+    }
+}
+
+#[test]
+fn a_comment_ending_the_line_of_the_definition_before_it_is_not_the_next_ones_description() {
+    let repo = Repo::with(&[("schema/s.graphql", "type Old { id: ID } # retired soon\ntype Next { id: ID }\n")]);
+    let ex = repo.extract("schema/s.graphql");
+    assert_eq!(node(&ex, "sym:schema/s.graphql::Next").body, "type Next { id: ID }");
+}

@@ -4,6 +4,7 @@
 use tree_sitter::Node;
 
 use super::names;
+use crate::code::jvm::{child, descend, find, named, span, text};
 use crate::model::EdgeKind;
 
 /// Capped as TypeScript's doc comments are, so a migration's essay does not drown its statement line.
@@ -47,34 +48,6 @@ pub(super) struct Read {
     pub members: Vec<Member>,
     pub links: Vec<Link>,
     pub cites: Vec<Cite>,
-}
-
-fn text<'a>(n: Node, src: &'a [u8]) -> &'a str {
-    n.utf8_text(src).unwrap_or("")
-}
-
-fn named(n: Node<'_>) -> Vec<Node<'_>> {
-    let mut c = n.walk();
-    n.named_children(&mut c).collect()
-}
-
-fn child<'t>(n: Node<'t>, kind: &str) -> Option<Node<'t>> {
-    named(n).into_iter().find(|c| c.kind() == kind)
-}
-
-fn span(n: Node) -> (u32, u32) {
-    (n.start_position().row as u32 + 1, n.end_position().row as u32 + 1)
-}
-
-/// Every descendant of one of `kinds`, not descending into a match.
-fn find<'t>(n: Node<'t>, kinds: &[&str], out: &mut Vec<Node<'t>>) {
-    for c in named(n) {
-        if kinds.contains(&c.kind()) {
-            out.push(c);
-        } else {
-            find(c, kinds, out);
-        }
-    }
 }
 
 fn line_at<'a>(lines: &[&'a str], row: u32) -> &'a str {
@@ -270,8 +243,7 @@ fn references(elem: Node, from: &str, src: &[u8], r: &mut Read) {
 /// binds is that CTE, not a table, wherever in the query the `WITH` sits: a CTE cannot be schema-qualified, so a
 /// qualified name is always a relation.
 fn reads(stmt: Node, view: &str, src: &[u8], r: &mut Read) {
-    let mut bound = Vec::new();
-    ctes(stmt, src, &mut bound);
+    let bound = ctes(stmt, src);
     let mut relations = Vec::new();
     find(stmt, &["relation_expr"], &mut relations);
     for to in relations.into_iter().filter_map(|rel| relation_name(rel, src)) {
@@ -282,13 +254,15 @@ fn reads(stmt: Node, view: &str, src: &[u8], r: &mut Read) {
 }
 
 /// The name of every CTE under `n`, a `WITH` inside another CTE's body included.
-fn ctes(n: Node, src: &[u8], out: &mut Vec<String>) {
-    for c in named(n) {
+fn ctes(n: Node, src: &[u8]) -> Vec<String> {
+    let mut out = Vec::new();
+    descend(n, &mut |c| {
         if c.kind() == "common_table_expr" {
             out.extend(child(c, "name").and_then(|name| names::object(name, src)));
         }
-        ctes(c, src, out);
-    }
+        true
+    });
+    out
 }
 
 /// Comments, string literals and dollar-quoted bodies. PL/pgSQL is not parsed, so the ids a body cites are the one

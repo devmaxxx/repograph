@@ -3,6 +3,7 @@
 //! and `extract` read one list of declarations.
 use tree_sitter::Node;
 
+use crate::code::jvm::{child, find, named, text};
 use crate::model::EdgeKind;
 
 /// Capped as TypeScript's doc comments are, so a long description does not drown the declaring line.
@@ -45,29 +46,6 @@ pub(super) struct Read {
     pub members: Vec<Member>,
     pub links: Vec<Link>,
     pub cites: Vec<Cite>,
-}
-
-fn text<'a>(n: Node, src: &'a [u8]) -> &'a str {
-    n.utf8_text(src).unwrap_or("")
-}
-
-fn named(n: Node<'_>) -> Vec<Node<'_>> {
-    let mut c = n.walk();
-    n.named_children(&mut c).collect()
-}
-
-fn child<'t>(n: Node<'t>, kind: &str) -> Option<Node<'t>> {
-    named(n).into_iter().find(|c| c.kind() == kind)
-}
-
-fn find<'t>(n: Node<'t>, kinds: &[&str], out: &mut Vec<Node<'t>>) {
-    for c in named(n) {
-        if kinds.contains(&c.kind()) {
-            out.push(c);
-        } else {
-            find(c, kinds, out);
-        }
-    }
 }
 
 pub(super) fn read(root: Node, src: &[u8], lines: &[&str]) -> Read {
@@ -119,7 +97,9 @@ fn doc(d: Node, n: Node, src: &[u8]) -> String {
                 None => break,
             }
         };
-        if prev.kind() != "comment" || prev.end_position().row + 1 < next.start_position().row {
+        // A comment on the row the definition before it ends on is that definition's tail, not this one's doc.
+        let trailing = prev.prev_named_sibling().is_some_and(|p| p.end_position().row == prev.start_position().row);
+        if prev.kind() != "comment" || trailing || prev.end_position().row + 1 < next.start_position().row {
             break;
         }
         parts.push(text(prev, src).trim_start_matches('#').trim().to_string());
@@ -194,11 +174,24 @@ fn uses(n: Node, owner: Option<&str>, src: &[u8], r: &mut Read) {
             "fragment_spread" => {
                 let name = child(u, "fragment_name").and_then(|f| child(f, "name")).map(|x| format!("fragment/{}", text(x, src)));
                 link(r, owner, name, EdgeKind::Calls, "");
+                spread_directives(u, owner, src, r);
             }
             "type_condition" => link(r, owner, named_type(u, src), EdgeKind::References, "on"),
-            "variable_definition" => link(r, owner, child(u, "type").and_then(|t| named_type(t, src)), EdgeKind::References, "variable"),
+            "variable_definition" => {
+                link(r, owner, child(u, "type").and_then(|t| named_type(t, src)), EdgeKind::References, "variable");
+                spread_directives(u, owner, src, r);
+            }
             _ => link(r, owner, child(u, "name").map(|x| format!("directive/{}", text(x, src))), EdgeKind::DecoratedBy, ""),
         }
+    }
+}
+
+/// The directives written on a spread or a variable, which `find` does not reach because it stops at the node.
+fn spread_directives(n: Node, owner: Option<&str>, src: &[u8], r: &mut Read) {
+    let mut found = Vec::new();
+    find(n, &["directive"], &mut found);
+    for d in found {
+        link(r, owner, child(d, "name").map(|x| format!("directive/{}", text(x, src))), EdgeKind::DecoratedBy, "");
     }
 }
 
