@@ -902,6 +902,8 @@ DI_READERS: dict[str, DiReader] = {
     ".kt": KOTLIN_DI,
     ".java": JAVA_DI,
 }
+# The last line of a declaration where counting brackets from its first line ends it too soon.
+DECLARATION_ENDS: dict[str, Callable[[list[str], int], int]] = {}
 # `(caller, callee)` name pairs for a chain no field-and-call pattern can say: a migration altering
 # a table another created, a resolver answering a query. A callee is `Owner` or `Owner.member`, the
 # shape `shortest_path` hops on. A file whose extension has one is read by it and by no DiReader.
@@ -912,6 +914,387 @@ def code_globs() -> tuple[str, ...]:
     """ripgrep's `-g` arguments for every extension a reader is registered for, in registration order."""
     exts = list(dict.fromkeys([*DECLARATIONS, *DI_READERS, *CALL_READERS]))
     return tuple(arg for ext in exts for arg in ("-g", f"*{ext}"))
+
+
+SQL_DOLLAR = re.compile(r"\$([A-Za-z_][A-Za-z_0-9]*)?\$")
+
+
+def blank_sql(src: str) -> str:
+    """`src` with its comments, string literals and dollar-quoted bodies blanked, line count kept.
+
+    A quoted identifier stays, because `"Status"` is a name. A dollar-quoted body goes, because PL/pgSQL is not
+    read for declarations, and a `CREATE TABLE` inside a function body declares nothing until the function runs.
+    """
+    out: list[str] = []
+    i, size = 0, len(src)
+    while i < size:
+        char, pair = src[i], src[i : i + 2]
+        if pair == "--":
+            end = src.find("\n", i)
+            i = size if end < 0 else end
+        elif pair == "/*":
+            # PostgreSQL nests block comments, unlike C.
+            depth, end = 1, i + 2
+            while end < size and depth:
+                if src[end : end + 2] == "/*":
+                    depth, end = depth + 1, end + 2
+                elif src[end : end + 2] == "*/":
+                    depth, end = depth - 1, end + 2
+                else:
+                    end += 1
+            out.append("\n" * src.count("\n", i, end))
+            i = end
+        elif char == '"':
+            end = i + 1
+            while end < size and not (src[end] == '"' and src[end + 1 : end + 2] != '"'):
+                end += 2 if src[end : end + 2] == '""' else 1
+            out.append(src[i : end + 1])
+            i = end + 1
+        elif char == "'":
+            # Only an `E'…'` string treats a backslash as an escape; a standard string doubles its quotes.
+            escapes = i > 0 and src[i - 1] in "eE" and (i < 2 or not (src[i - 2].isalnum() or src[i - 2] == "_"))
+            end = i + 1
+            while end < size:
+                if escapes and src[end] == "\\":
+                    end += 2
+                elif src[end : end + 2] == "''":
+                    end += 2
+                elif src[end] == "'":
+                    break
+                else:
+                    end += 1
+            out.append("'" + "\n" * src.count("\n", i, end) + "'")
+            i = end + 1
+        elif char == "$" and not (i > 0 and (src[i - 1].isalnum() or src[i - 1] == "_")) and (dollar := SQL_DOLLAR.match(src, i)):
+            tag = dollar.group(0)
+            end = src.find(tag, dollar.end())
+            end = size if end < 0 else end + len(tag)
+            out.append("$$" + "\n" * src.count("\n", i, end) + "$$")
+            i = end
+        else:
+            out.append(char)
+            i += 1
+    return "".join(out)
+
+
+SQL_TOKEN = re.compile(r'"(?:[^"]|"")*"|[A-Za-z_][A-Za-z_0-9$]*|\d+|\S')
+SQL_OBJECTS = {"table", "view", "function", "procedure", "type", "schema", "sequence", "trigger", "policy", "index"}
+SQL_CREATE_MODIFIERS = {"or", "replace", "temp", "temporary", "unlogged", "global", "local", "constraint", "unique", "materialized", "recursive"}
+SQL_NOT_A_COLUMN = {"constraint", "primary", "unique", "foreign", "check", "exclude", "like"}
+
+
+def _sql_statements(blanked: str) -> list[list[tuple[str, int, int]]]:
+    """Blanked SQL as statements of (token, line, paren depth). A `;` inside parentheses ends nothing."""
+    statements: list[list[tuple[str, int, int]]] = []
+    current: list[tuple[str, int, int]] = []
+    depth, line, last = 0, 1, 0
+    for match in SQL_TOKEN.finditer(blanked):
+        line += blanked.count("\n", last, match.start())
+        last = match.start()
+        token = match.group(0)
+        if token == ";" and depth == 0:
+            if current:
+                statements.append(current)
+            current = []
+            continue
+        if token == ")":
+            depth = max(0, depth - 1)
+        current.append((token, line, depth))
+        if token == "(":
+            depth += 1
+    if current:
+        statements.append(current)
+    return statements
+
+
+def _sql_word(tokens, i: int, *words: str) -> bool:
+    return i < len(tokens) and not tokens[i][0].startswith('"') and tokens[i][0].lower() in words
+
+
+def _sql_skip(tokens, i: int, *sequence: str) -> int:
+    for offset, word in enumerate(sequence):
+        if not _sql_word(tokens, i + offset, word):
+            return i
+    return i + len(sequence)
+
+
+def _sql_is_name(token: str) -> bool:
+    return token.startswith('"') or token[:1].isalpha() or token[:1] == "_"
+
+
+def _sql_ident(token: str) -> str:
+    # PostgreSQL folds an unquoted identifier to lower case and keeps a quoted one.
+    return token[1:-1].replace('""', '"') if token.startswith('"') else token.lower()
+
+
+def _sql_name(tokens, i: int) -> tuple[str | None, int]:
+    if i >= len(tokens) or not _sql_is_name(tokens[i][0]):
+        return None, i
+    parts = [_sql_ident(tokens[i][0])]
+    i += 1
+    while i + 1 < len(tokens) and tokens[i][0] == "." and _sql_is_name(tokens[i + 1][0]):
+        parts.append(_sql_ident(tokens[i + 1][0]))
+        i += 2
+    return "/".join(parts), i
+
+
+def _sql_columns(tokens, i: int, table: str, found: list) -> None:
+    expect = True
+    for token, line, depth in tokens[i + 1 :]:
+        if depth == 0:
+            return
+        if depth == 1 and token == ",":
+            expect = True
+        elif expect and depth == 1:
+            expect = False
+            if _sql_is_name(token) and not (not token.startswith('"') and token.lower() in SQL_NOT_A_COLUMN):
+                found.append((line, f"{table}.{_sql_ident(token)}"))
+
+
+def sql_declarations(blanked: str) -> list[tuple[int, str]]:
+    """(line, name) for each object a statement creates or alters, and each column, trigger, policy and named index.
+
+    Names are the repository's: schema parts joined with `/`, a member after `.`. An `ALTER TABLE` declares its
+    table, so every file altering a table is one that declares it.
+    """
+    found: list[tuple[int, str]] = []
+    for tokens in _sql_statements(blanked):
+        line = tokens[0][1]
+        if _sql_word(tokens, 0, "alter") and _sql_word(tokens, 1, "table"):
+            i = _sql_skip(tokens, 2, "if", "exists")
+            i = _sql_skip(tokens, i, "only")
+            table, i = _sql_name(tokens, i)
+            if table is None:
+                continue
+            found.append((line, table))
+            while i < len(tokens):
+                if _sql_word(tokens, i, "add") and tokens[i][2] == 0:
+                    j = _sql_skip(tokens, i + 1, "column")
+                    j = _sql_skip(tokens, j, "if", "not", "exists")
+                    if j < len(tokens) and _sql_is_name(tokens[j][0]) and not _sql_word(tokens, j, *SQL_NOT_A_COLUMN):
+                        found.append((tokens[j][1], f"{table}.{_sql_ident(tokens[j][0])}"))
+                    i = j
+                i += 1
+            continue
+        if not _sql_word(tokens, 0, "create"):
+            continue
+        i = 1
+        while _sql_word(tokens, i, *SQL_CREATE_MODIFIERS):
+            i += 1
+        if not _sql_word(tokens, i, *SQL_OBJECTS):
+            continue
+        kind = tokens[i][0].lower()
+        i = _sql_skip(tokens, i + 1, "concurrently")
+        i = _sql_skip(tokens, i, "if", "not", "exists")
+        if kind == "schema" and _sql_word(tokens, i, "authorization"):
+            continue
+        name = None
+        if not _sql_word(tokens, i, "on"):
+            name, i = _sql_name(tokens, i)
+        if kind in ("trigger", "policy", "index"):
+            while i < len(tokens) and not (_sql_word(tokens, i, "on") and tokens[i][2] == 0):
+                i += 1
+            table, _ = _sql_name(tokens, _sql_skip(tokens, i + 1, "only"))
+            if table is None:
+                continue
+            found.append((line, table))
+            if name:
+                found.append((line, f"{table}.{name}"))
+            continue
+        if name is None:
+            continue
+        found.append((line, name))
+        if kind == "table" and i < len(tokens) and tokens[i][0] == "(":
+            _sql_columns(tokens, i, name, found)
+    return found
+
+
+def sql_trigger_calls(blanked: str) -> list[tuple[str, str]]:
+    """(table, function) for each `CREATE TRIGGER … ON table … EXECUTE FUNCTION|PROCEDURE function`."""
+    edges: list[tuple[str, str]] = []
+    for tokens in _sql_statements(blanked):
+        if not _sql_word(tokens, 0, "create"):
+            continue
+        i = 1
+        while _sql_word(tokens, i, "or", "replace", "constraint"):
+            i += 1
+        if not _sql_word(tokens, i, "trigger"):
+            continue
+        table = function = None
+        for k in range(i, len(tokens)):
+            if table is None and _sql_word(tokens, k, "on") and tokens[k][2] == 0:
+                table, _ = _sql_name(tokens, _sql_skip(tokens, k + 1, "only"))
+            if _sql_word(tokens, k, "execute") and _sql_word(tokens, k + 1, "function", "procedure"):
+                function, _ = _sql_name(tokens, k + 2)
+        if table and function:
+            edges.append((table, function))
+    return edges
+
+
+def blank_graphql(src: str) -> str:
+    """`src` with `#` comments and strings blanked, line count kept; a block string keeps its newlines."""
+    out: list[str] = []
+    i, size = 0, len(src)
+    while i < size:
+        char = src[i]
+        if char == "#":
+            end = src.find("\n", i)
+            i = size if end < 0 else end
+        elif src.startswith('"""', i):
+            end = i + 3
+            while end < size and not src.startswith('"""', end):
+                end += 4 if src.startswith('\\"""', end) else 1
+            end = min(size, end + 3)
+            out.append('""' + "\n" * src.count("\n", i, end))
+            i = end
+        elif char == '"':
+            end = i + 1
+            while end < size and src[end] not in '"\n':
+                end += 2 if src[end] == "\\" else 1
+            out.append('""')
+            i = end + 1 if end < size and src[end] == '"' else end
+        else:
+            out.append(char)
+            i += 1
+    return "".join(out)
+
+
+GQL_NAME = r"[_A-Za-z][_0-9A-Za-z]*"
+GQL_TOP = re.compile(
+    rf"(?P<op>query|mutation|subscription)\s+(?P<opname>{GQL_NAME})"
+    rf"|fragment\s+(?P<frag>{GQL_NAME})\s+on\b"
+    rf"|(?:extend\s+)?(?P<kw>type|interface|input|enum|union|scalar)\s+(?P<type>{GQL_NAME})"
+    rf"|directive\s+@(?P<dir>{GQL_NAME})"
+)
+GQL_FIELD = re.compile(rf"(?P<name>{GQL_NAME})\s*[(:]")
+# An enum's values are not fields, and a union has no body; only these three hold `name:` fields.
+GQL_HOLDS_FIELDS = {"type", "interface", "input"}
+
+
+def graphql_declarations(blanked: str) -> list[tuple[int, str]]:
+    """(line, name) for each operation, fragment, directive and type defined or extended at the top level, and each field.
+
+    An argument list is skipped by its parentheses, so `books(first: Int)` declares `books` and not `first`.
+    """
+    found: list[tuple[int, str]] = []
+    depth = parens = 0
+    holder = pending = None
+    pos, size = 0, len(blanked)
+    while pos < size:
+        before = blanked[pos - 1] if pos else " "
+        starts_word = not (before.isalnum() or before in "_@")
+        top = GQL_TOP.match(blanked, pos) if depth == 0 and parens == 0 and starts_word else None
+        if top:
+            line = blanked.count("\n", 0, pos) + 1
+            if top.group("opname"):
+                name, pending = f"{top.group('op')}/{top.group('opname')}", None
+            elif top.group("frag"):
+                name, pending = f"fragment/{top.group('frag')}", None
+            elif top.group("type"):
+                name = top.group("type")
+                pending = name if top.group("kw") in GQL_HOLDS_FIELDS else None
+            else:
+                name, pending = f"directive/{top.group('dir')}", None
+            found.append((line, name))
+            pos = top.end()
+            continue
+        char = blanked[pos]
+        if char == "(":
+            parens += 1
+        elif char == ")":
+            parens = max(0, parens - 1)
+        elif parens:
+            pass
+        elif char == "{":
+            depth += 1
+            if depth == 1:
+                holder, pending = pending, None
+        elif char == "}":
+            depth = max(0, depth - 1)
+            if depth == 0:
+                holder = None
+        elif depth == 1 and holder and starts_word and (field := GQL_FIELD.match(blanked, pos)):
+            found.append((blanked.count("\n", 0, pos) + 1, f"{holder}.{field.group('name')}"))
+            pos = field.end("name")
+            continue
+        pos += 1
+    return found
+
+
+GQL_SPREAD_SCAN = re.compile(
+    rf"\b(?P<op>query|mutation|subscription)\s+(?P<opname>{GQL_NAME})"
+    rf"|\bfragment\s+(?P<frag>{GQL_NAME})\s+on\b"
+    rf"|\.\.\.\s*(?!on\b)(?P<spread>{GQL_NAME})"
+    rf"|(?P<mark>[{{}}()])"
+)
+
+
+def graphql_spread_calls(blanked: str) -> list[tuple[str, str]]:
+    """(owner, `fragment/Name`) for each `...Name` inside a named operation or a fragment.
+
+    An anonymous operation declares nothing to own its spreads, so they are left out, and an inline `... on T`
+    is a type condition, not a spread.
+    """
+    edges: list[tuple[str, str]] = []
+    owner, armed, depth, parens = None, False, 0, 0
+    for match in GQL_SPREAD_SCAN.finditer(blanked):
+        mark = match.group("mark")
+        if mark in ("(", ")"):
+            parens = parens + 1 if mark == "(" else max(0, parens - 1)
+        elif parens:
+            continue
+        elif mark == "{":
+            if depth == 0 and not armed:
+                owner = None
+            depth, armed = depth + 1, False
+        elif mark == "}":
+            depth = max(0, depth - 1)
+        elif depth == 0 and (match.group("opname") or match.group("frag")):
+            owner = f"{match.group('op')}/{match.group('opname')}" if match.group("opname") else f"fragment/{match.group('frag')}"
+            armed = True
+        elif depth and match.group("spread") and owner:
+            edges.append((owner, f"fragment/{match.group('spread')}"))
+    return edges
+
+
+DECLARATIONS[".sql"] = sql_declarations
+DECLARATIONS[".gql"] = graphql_declarations
+DECLARATIONS[".graphql"] = graphql_declarations
+BLANKERS[".sql"] = blank_sql
+BLANKERS[".gql"] = blank_graphql
+BLANKERS[".graphql"] = blank_graphql
+
+# A trigger naming its function and a spread naming its fragment are the `trace` chains of these languages, and
+# neither has the class and typed field a `DiReader` follows. `di_call_graph` hands a reader raw text, so each blanks it.
+CALL_READERS[".sql"] = lambda src: sql_trigger_calls(blank_sql(src))
+CALL_READERS[".gql"] = lambda src: graphql_spread_calls(blank_graphql(src))
+CALL_READERS[".graphql"] = lambda src: graphql_spread_calls(blank_graphql(src))
+
+SQL_OPENS = re.compile(r"\s*(create|alter)\b", re.IGNORECASE)
+
+
+def sql_declaration_end(lines: list[str], start: int) -> int:
+    """The last line of the declaration beginning at `start` (1-based), in blanked SQL.
+
+    A line opening a statement runs to the `;` that ends it, as the extractor spans it: `ALTER TABLE t` with its
+    commands below, or a `CREATE TRIGGER` over several lines, opens no bracket on its first line. A member line, a
+    column inside `CREATE TABLE (…)`, keeps `declaration_end`'s bracket count, which ends it on its own line.
+    """
+    if not SQL_OPENS.match(lines[start - 1]):
+        return declaration_end(lines, start)
+    depth = 0
+    for i in range(start - 1, len(lines)):
+        for char in lines[i]:
+            if char == "(":
+                depth += 1
+            elif char == ")":
+                depth -= 1
+            elif char == ";" and depth <= 0:
+                return i + 1
+    return len(lines)
+
+
+DECLARATION_ENDS[".sql"] = sql_declaration_end
 
 
 def declarations(rel: str, src: str) -> tuple[list[str], list[tuple[int, str]]]:
@@ -1067,7 +1450,7 @@ def changed_symbols(repo: Path, base: str) -> dict:
         lines, starts = declarations(rel, path.read_text(encoding="utf8", errors="replace"))
         hit = set()
         for start, name in starts:
-            end = declaration_end(lines, start)
+            end = DECLARATION_ENDS.get(Path(rel).suffix, declaration_end)(lines, start)
             if any(lo <= end and hi >= start for lo, hi in spans):
                 hit.add(name)
         if hit:

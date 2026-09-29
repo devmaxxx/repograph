@@ -1,5 +1,6 @@
 """What counts as a reference, on the lines that were miscounted."""
 
+import shutil
 import subprocess
 import tempfile
 import unittest
@@ -468,10 +469,11 @@ class Registries(unittest.TestCase):
         self.assertIs(T.DECLARATIONS[".kt"], T.kotlin_declarations)
         self.assertIs(T.BLANKERS[".kt"], T.blank_kotlin)
         self.assertEqual(list(T.DI_READERS), [*T.JS_FAMILY, ".cs", ".razor", ".kt", ".java"])
-        self.assertEqual(T.CALL_READERS, {})
+        self.assertLessEqual({".sql", ".gql", ".graphql"}, set(T.CALL_READERS))
         self.assertEqual(
             T.code_globs(),
-            ("-g", "*.ts", "-g", "*.tsx", "-g", "*.js", "-g", "*.jsx", "-g", "*.mjs", "-g", "*.cjs", "-g", "*.kt", "-g", "*.cs", "-g", "*.razor", "-g", "*.cshtml", "-g", "*.java"),
+            ("-g", "*.ts", "-g", "*.tsx", "-g", "*.js", "-g", "*.jsx", "-g", "*.mjs", "-g", "*.cjs", "-g", "*.kt", "-g", "*.cs", "-g", "*.razor", "-g", "*.cshtml", "-g", "*.java",
+             "-g", "*.sql", "-g", "*.gql", "-g", "*.graphql"),
         )
 
     def test_a_registered_reader_is_the_one_declarations_uses(self):
@@ -1023,6 +1025,178 @@ class JvmCallGraph(unittest.TestCase):
                 "    public void run() { helper.go(); }\n}\n")
             edges = T.di_call_graph(root, ["android"])["edges"]
             self.assertEqual(edges["Widget"], ["Inner.go"])
+
+
+SQL_MIGRATION = """CREATE SCHEMA app;
+CREATE TABLE app.clients (
+  id uuid PRIMARY KEY,
+  "Status" text,
+  CONSTRAINT k UNIQUE (id)
+);
+CREATE OR REPLACE VIEW app.active AS SELECT id FROM app.clients;
+CREATE MATERIALIZED VIEW app.mv AS SELECT 1;
+CREATE FUNCTION app.touch() RETURNS trigger AS $$ BEGIN CREATE TABLE app.hidden (x int); END $$ LANGUAGE plpgsql;
+CREATE TYPE app.status AS ENUM ('a;b', 'c');
+CREATE SEQUENCE IF NOT EXISTS app.seq;
+CREATE UNLOGGED TABLE app.owners (age int);
+CREATE TRIGGER t BEFORE UPDATE ON app.clients FOR EACH ROW EXECUTE FUNCTION app.touch();
+CREATE POLICY p ON app.clients USING (true);
+CREATE UNIQUE INDEX CONCURRENTLY i ON ONLY app.clients (id);
+ALTER TABLE IF EXISTS app.clients ADD COLUMN IF NOT EXISTS note text, ADD CONSTRAINT u UNIQUE (id);
+-- CREATE TABLE app.commented (x int);
+ALTER TABLE app.owners RENAME COLUMN age TO years;
+GRANT SELECT ON app.clients TO reader;
+"""
+
+GQL_SCHEMA = '''"""A shelf of books."""
+type Shelf implements Node & Named @key(fields: "id") {
+  id: ID!
+  books(first: Int, genre: Genre): [Book!]! @auth(role: "reader")
+}
+
+interface Node {
+  id: ID!
+}
+
+interface Named implements Node {
+  id: ID!
+  name: String
+}
+
+input BookInput {
+  title: String!
+  genre: Genre
+}
+
+enum Genre {
+  SCIFI
+  POETRY
+}
+
+union Item = Book | Shelf
+
+scalar Date
+
+directive @auth(role: String) on FIELD_DEFINITION | MUTATION
+
+type Book {
+  id: ID!
+  title: String
+}
+'''
+
+GQL_OPS = """# The shelf screen.
+query GetShelf($id: ID!, $filter: BookInput) {
+  shelf(id: $id) {
+    ...ShelfFields
+    books { ... on Book { title } }
+  }
+}
+
+mutation AddBook($input: BookInput!) @auth(role: "writer") {
+  addBook(input: $input) { id }
+}
+
+subscription BookAdded {
+  bookAdded { ...BookFields }
+}
+
+{ viewer { ...BookFields } }
+"""
+
+GQL_FRAGMENTS = """fragment ShelfFields on Shelf {
+  id
+  books { ...BookFields }
+}
+
+# FR-WEB-01 names the fields a book card shows.
+fragment BookFields on Book {
+  id
+  title
+}
+"""
+
+
+class SqlReaders(unittest.TestCase):
+    def test_blank_sql_keeps_quoted_names_and_lines_and_blanks_comments_strings_and_bodies(self):
+        src = "SELECT 'it''s -- not' AS \"Qu\"\"ote\", $tag$ body; $tag$ /* a /* nested */ b */ x -- tail\ny"
+        self.assertEqual(T.blank_sql(src), "SELECT '' AS \"Qu\"\"ote\", $$$$  x \ny")
+        self.assertEqual(T.blank_sql("a $$\n;\n$$ b").count("\n"), 2)
+
+    def test_sql_declarations_read_objects_members_and_attachments_by_line(self):
+        self.assertEqual(T.sql_declarations(T.blank_sql(SQL_MIGRATION)), [
+            (1, "app"), (2, "app/clients"), (3, "app/clients.id"), (4, "app/clients.Status"),
+            (7, "app/active"), (8, "app/mv"), (9, "app/touch"), (10, "app/status"), (11, "app/seq"),
+            (12, "app/owners"), (12, "app/owners.age"),
+            (13, "app/clients"), (13, "app/clients.t"), (14, "app/clients"), (14, "app/clients.p"),
+            (15, "app/clients"), (15, "app/clients.i"), (16, "app/clients"), (16, "app/clients.note"),
+            (18, "app/owners"),
+        ])
+
+    def test_a_trigger_calls_its_function(self):
+        self.assertEqual(T.sql_trigger_calls(T.blank_sql(SQL_MIGRATION)), [("app/clients", "app/touch")])
+
+    def test_a_statement_runs_to_its_semicolon_and_a_member_line_to_its_brackets(self):
+        lines = T.blank_sql(
+            "ALTER TABLE app.clients\n  ADD COLUMN note text;\n"
+            "CREATE TRIGGER t\n  BEFORE UPDATE ON app.clients\n  FOR EACH ROW EXECUTE FUNCTION app.touch();\n"
+            "CREATE TABLE app.x (\n  id int,\n  y int\n);\n"
+        ).splitlines()
+        self.assertEqual([T.sql_declaration_end(lines, start) for start in (1, 3, 6, 7)], [2, 5, 9, 7])
+        self.assertIs(T.DECLARATION_ENDS[".sql"], T.sql_declaration_end)
+
+
+class GraphQlReaders(unittest.TestCase):
+    def test_blank_graphql_blanks_comments_and_strings_and_keeps_lines(self):
+        src = '"""doc\nmore""" type A { b: String # x\n c(d: String = "e"): Int }\n'
+        self.assertEqual(T.blank_graphql(src), '""\n type A { b: String \n c(d: String = ""): Int }\n')
+
+    def test_graphql_declarations_read_definitions_and_fields_but_not_enum_values_or_arguments(self):
+        self.assertEqual(T.graphql_declarations(T.blank_graphql(GQL_SCHEMA)), [
+            (2, "Shelf"), (3, "Shelf.id"), (4, "Shelf.books"), (7, "Node"), (8, "Node.id"),
+            (11, "Named"), (12, "Named.id"), (13, "Named.name"),
+            (16, "BookInput"), (17, "BookInput.title"), (18, "BookInput.genre"),
+            (21, "Genre"), (26, "Item"), (28, "Date"), (30, "directive/auth"),
+            (32, "Book"), (33, "Book.id"), (34, "Book.title"),
+        ])
+        self.assertEqual(T.graphql_declarations(T.blank_graphql(GQL_OPS)), [(2, "query/GetShelf"), (9, "mutation/AddBook"), (13, "subscription/BookAdded")])
+        self.assertEqual(T.graphql_declarations(T.blank_graphql(GQL_FRAGMENTS)), [(1, "fragment/ShelfFields"), (7, "fragment/BookFields")])
+
+    def test_a_spread_is_a_call_from_the_named_definition_holding_it(self):
+        self.assertEqual(T.graphql_spread_calls(T.blank_graphql(GQL_OPS)), [("query/GetShelf", "fragment/ShelfFields"), ("subscription/BookAdded", "fragment/BookFields")])
+        self.assertEqual(T.graphql_spread_calls(T.blank_graphql(GQL_FRAGMENTS)), [("fragment/ShelfFields", "fragment/BookFields")])
+
+
+class SqlAndGraphQlRegistered(unittest.TestCase):
+    def test_each_extension_is_registered_for_declarations_blanking_and_calls(self):
+        for ext, reader, blanker in (
+            (".sql", T.sql_declarations, T.blank_sql),
+            (".gql", T.graphql_declarations, T.blank_graphql),
+            (".graphql", T.graphql_declarations, T.blank_graphql),
+        ):
+            self.assertIs(T.DECLARATIONS[ext], reader)
+            self.assertIs(T.BLANKERS[ext], blanker)
+            self.assertIn(f"*{ext}", T.code_globs())
+
+    def test_a_call_reader_blanks_the_raw_source_it_is_handed(self):
+        # `di_call_graph` passes raw text: a comment above a trigger, or a brace in a `#` comment, must not hide the chain.
+        sql = "-- touch on update\nCREATE TRIGGER t BEFORE UPDATE ON app.clients FOR EACH ROW EXECUTE FUNCTION app.touch();\n"
+        self.assertEqual(T.CALL_READERS[".sql"](sql), [("app/clients", "app/touch")])
+        gql = "# { the shelf screen\nquery GetShelf { shelf { ...ShelfFields } }\n"
+        for ext in (".gql", ".graphql"):
+            self.assertEqual(T.CALL_READERS[ext](gql), [("query/GetShelf", "fragment/ShelfFields")])
+
+    @unittest.skipUnless(shutil.which("rg"), "the truth lists files with ripgrep")
+    def test_di_call_graph_follows_a_trigger_and_a_spread_chain(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            for rel, text in (("packages/db/001.sql", SQL_MIGRATION), ("apps/web/shelf.gql", GQL_OPS), ("apps/web/fragments.gql", GQL_FRAGMENTS)):
+                (repo / rel).parent.mkdir(parents=True, exist_ok=True)
+                (repo / rel).write_text(text, encoding="utf8")
+            graph = T.di_call_graph(repo, ["apps", "packages"])
+            self.assertEqual(T.shortest_path(graph, "app/clients", "app/touch"), ["app/clients", "app/touch"])
+            self.assertEqual(T.shortest_path(graph, "query/GetShelf", "fragment/BookFields"), ["query/GetShelf", "fragment/ShelfFields", "fragment/BookFields"])
+            self.assertIsNone(T.shortest_path(graph, "fragment/BookFields", "query/GetShelf"))
 
 
 if __name__ == "__main__":
