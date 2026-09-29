@@ -9,6 +9,8 @@ pub mod java;
 pub mod jvm;
 pub mod kotlin;
 pub mod lang;
+pub(crate) mod python;
+pub(crate) mod rust_lang;
 pub mod razor;
 pub mod sql;
 pub mod symbols;
@@ -35,6 +37,8 @@ impl Extractor for CodeExtractor {
             Some(lang::Lang::Java) => java::extract(self.symbols.resolver(), rel, text),
             Some(lang::Lang::Sql) => sql::extract(self.symbols.resolver(), rel, text),
             Some(lang::Lang::GraphQl) => graphql::extract(self.symbols.resolver(), rel, text),
+            Some(lang::Lang::Rust) => rust_lang::extract(self.symbols.resolver(), rel, text),
+            Some(lang::Lang::Python) => python::extract(self.symbols.resolver(), rel, text),
             None => {
                 let mut ex = Extraction::default();
                 lang::file_node(rel, &mut ex);
