@@ -2,9 +2,12 @@
 //! extracting a file never opens another.
 
 use crate::code::imports::Resolver;
+use crate::code::jvm::text;
 use crate::code::lang::{file_node, Lang};
+use crate::code::rust_lang::field_text;
 use crate::model::Extraction;
 
+mod defs;
 mod modules;
 
 pub use modules::Modules;
@@ -12,9 +15,17 @@ pub use modules::Modules;
 #[cfg(test)]
 mod cases;
 
+/// One file's graph: its `file:` node, a symbol per module-level and class-level `def`, `class`
+/// and plain-name assignment with `Declares` edges (`export` on the module's public names), and
+/// `References` from the definition that holds each requirement id cited in a comment,
+/// docstring or string.
 pub fn extract(_resolver: &Resolver, rel: &str, source: &str) -> Extraction {
     let mut ex = Extraction::default();
     file_node(rel, &mut ex);
-    let Some(_tree) = Lang::Python.parse(source.as_bytes()) else { return ex };
+    let src = source.as_bytes();
+    let Some(tree) = Lang::Python.parse(src) else { return ex };
+    let root = tree.root_node();
+    defs::read(rel, src, root, &mut ex);
+    defs::id_refs(rel, src, root, &mut ex);
     ex
 }
