@@ -486,3 +486,18 @@ fn a_call_inside_a_foreign_impl_starts_from_a_node_the_file_writes() {
     assert_eq!(calls[0].target, "sym:src/store.rs::helper");
     assert!(ids(&ex).contains(&calls[0].source.as_str()), "{} is not a node: {:?}", calls[0].source, ids(&ex));
 }
+
+#[test]
+fn a_path_call_prefers_the_member_this_files_foreign_impl_writes() {
+    let repo = Repo::new(&[
+        ("Cargo.toml", "[package]\nname = \"shop\"\n"),
+        ("src/lib.rs", "pub mod store;\npub mod ops;\n"),
+        ("src/store.rs", "pub struct Store;\nimpl Store {\n    pub fn open() -> Store { Store }\n}\n"),
+        ("src/ops.rs", "use crate::store::Store;\nimpl Store {\n    pub fn sync_all() {}\n}\npub fn sync() {\n    Store::sync_all();\n    Store::open();\n}\n"),
+    ]);
+    let ex = repo.extract("src/ops.rs");
+    assert_eq!(
+        calls_from(&ex, "sym:src/ops.rs::sync"),
+        ["sym:src/ops.rs::Store.sync_all", "sym:src/store.rs::Store.open"].into_iter().collect()
+    );
+}
