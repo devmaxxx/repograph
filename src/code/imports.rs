@@ -224,8 +224,6 @@ impl Resolver {
         &self.rust
     }
 
-    // No reader until the Python reference pass lands; the accessor is that pass's only way in.
-    #[cfg_attr(not(test), expect(dead_code, reason = "read by the Python reference pass, not yet written"))]
     pub(crate) fn python(&self) -> &crate::code::python::Modules {
         &self.python
     }
@@ -254,6 +252,7 @@ impl Resolver {
         }
         if lang == Lang::Python {
             self.python.file(rel);
+            self.python.init(rel, source);
         }
     }
 

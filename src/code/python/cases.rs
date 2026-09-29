@@ -225,3 +225,159 @@ fn a_citation_below_a_redefinition_starts_from_a_written_node() {
     }
     assert!(edges(&ex, EdgeKind::References).contains(&("sym:m.py::C.b", "FR-PAY-03", "string")));
 }
+
+fn set<'a>(v: Vec<(&'a str, &'a str, &'a str)>) -> std::collections::BTreeSet<(&'a str, &'a str, &'a str)> {
+    v.into_iter().collect()
+}
+
+fn calls_from<'a>(ex: &'a Extraction, from: &str) -> std::collections::BTreeSet<&'a str> {
+    ex.edges.iter().filter(|e| e.kind == EdgeKind::Calls && e.source == from).map(|e| e.target.as_str()).collect()
+}
+
+const ORDERS: &str = r##"import shop.store
+from . import base
+from .store import Store as Db, connect
+from shop.base import *
+from os import path
+
+
+class Order(base.Base):
+    ledger: Db
+
+    def __init__(self, db: Db):
+        self.db = db
+        self.backup = Db()
+        self.cache = make_cache()
+
+    @base.traced
+    def pay(self):
+        self.db.open()
+        self.backup.close()
+        self.ledger.open()
+        self.cache.clear()
+        self.refund()
+        shop.store.connect()
+        Db.open(self)
+
+    def refund(self):
+        connect()
+        path.join("a")
+
+
+def make_cache():
+    return {}
+
+
+def main():
+    Order(connect()).pay()
+"##;
+
+fn orders_repo() -> Repo {
+    Repo::new(&[
+        ("lib/pyproject.toml", "[project]\nname = \"shop\"\n"),
+        ("lib/shop/__init__.py", ""),
+        ("lib/shop/store.py", "class Store:\n    def open(self):\n        pass\n\n    def close(self):\n        pass\n\n\ndef connect():\n    return Store()\n"),
+        ("lib/shop/base.py", "class Base:\n    pass\n\n\ndef traced(f):\n    return f\n"),
+        ("lib/shop/orders.py", ORDERS),
+    ])
+}
+
+#[test]
+fn imports_name_a_module_or_a_name_and_an_outside_module_writes_nothing() {
+    let ex = orders_repo().extract("lib/shop/orders.py");
+    assert_eq!(
+        set(edges(&ex, EdgeKind::Imports)),
+        set(vec![
+            ("file:lib/shop/orders.py", "file:lib/shop/base.py", "*"),
+            ("file:lib/shop/orders.py", "file:lib/shop/store.py", "*"),
+            ("file:lib/shop/orders.py", "file:lib/shop/store.py", "Store"),
+            ("file:lib/shop/orders.py", "file:lib/shop/store.py", "connect"),
+        ])
+    );
+}
+
+#[test]
+fn calls_through_imports_self_and_typed_attributes() {
+    let ex = orders_repo().extract("lib/shop/orders.py");
+    assert_eq!(
+        calls_from(&ex, "sym:lib/shop/orders.py::Order.pay"),
+        [
+            "sym:lib/shop/orders.py::Order.refund",
+            "sym:lib/shop/store.py::Store.close",
+            "sym:lib/shop/store.py::Store.open",
+            "sym:lib/shop/store.py::connect",
+        ]
+        .into_iter()
+        .collect(),
+        "`self.cache` has no class type, so `clear` is not resolved"
+    );
+    assert_eq!(calls_from(&ex, "sym:lib/shop/orders.py::Order.refund"), ["sym:lib/shop/store.py::connect"].into_iter().collect());
+    assert_eq!(calls_from(&ex, "sym:lib/shop/orders.py::main"), ["sym:lib/shop/orders.py::Order", "sym:lib/shop/store.py::connect"].into_iter().collect());
+    let ex = orders_repo().extract("lib/shop/store.py");
+    assert_eq!(calls_from(&ex, "sym:lib/shop/store.py::connect"), ["sym:lib/shop/store.py::Store"].into_iter().collect());
+}
+
+#[test]
+fn a_resolved_base_extends_and_a_resolved_decorator_decorates() {
+    let ex = orders_repo().extract("lib/shop/orders.py");
+    assert_eq!(edges(&ex, EdgeKind::Extends), vec![("sym:lib/shop/orders.py::Order", "sym:lib/shop/base.py::Base", "")]);
+    assert_eq!(edges(&ex, EdgeKind::DecoratedBy), vec![("sym:lib/shop/orders.py::Order.pay", "sym:lib/shop/base.py::traced", "base.traced")]);
+    let plain = Repo::new(&[("a.py", "import dataclasses\n\n\n@dataclasses.dataclass\nclass A:\n    @property\n    def x(self):\n        return 1\n")]).extract("a.py");
+    assert!(edges(&plain, EdgeKind::DecoratedBy).is_empty(), "a decorator outside the repository names nothing (L8)");
+}
+
+#[test]
+fn a_binding_inside_a_function_stays_in_that_function() {
+    let repo = Repo::new(&[
+        ("tools/util.py", "def helper():\n    pass\n"),
+        ("tools/main.py", "def one():\n    from util import helper\n    helper()\n\n\ndef two():\n    helper()\n\n\nif __name__ == \"__main__\":\n    one()\n"),
+    ]);
+    let ex = repo.extract("tools/main.py");
+    assert_eq!(calls_from(&ex, "sym:tools/main.py::one"), ["sym:tools/util.py::helper"].into_iter().collect());
+    assert!(calls_from(&ex, "sym:tools/main.py::two").is_empty(), "`helper` is not bound in `two`");
+    assert_eq!(calls_from(&ex, "file:tools/main.py"), ["sym:tools/main.py::one"].into_iter().collect(), "the main guard calls from the file");
+}
+
+#[test]
+fn a_name_re_exported_by_a_package_init_resolves_to_its_declaring_module() {
+    let repo = Repo::new(&[
+        ("shop/__init__.py", "from .store import Store\n"),
+        ("shop/store.py", "class Store:\n    def open(self):\n        pass\n"),
+        ("app.py", "from shop import Store\n\n\ndef main():\n    Store()\n    Store.open(None)\n"),
+    ]);
+    let ex = repo.extract("app.py");
+    let calls = calls_from(&ex, "sym:app.py::main");
+    assert!(!calls.iter().any(|c| c.starts_with("sym:shop/__init__.py::")), "no symbol has that id: {calls:?}");
+    assert_eq!(calls, ["sym:shop/store.py::Store", "sym:shop/store.py::Store.open"].into_iter().collect());
+    assert_eq!(edges(&ex, EdgeKind::Imports), vec![("file:app.py", "file:shop/__init__.py", "Store")], "the edge names what the statement imports");
+}
+
+#[test]
+fn a_decorator_called_with_arguments_decorates_with_its_callee() {
+    let repo = Repo::new(&[
+        ("tools/retry.py", "def retry(times):\n    def wrap(f):\n        return f\n    return wrap\n"),
+        ("tools/job.py", "from retry import retry\n\n\n@retry(3)\ndef run():\n    pass\n\n\nclass Job:\n    @retry(times=2)\n    def go(self):\n        pass\n"),
+    ]);
+    let ex = repo.extract("tools/job.py");
+    assert_eq!(
+        set(edges(&ex, EdgeKind::DecoratedBy)),
+        set(vec![
+            ("sym:tools/job.py::Job.go", "sym:tools/retry.py::retry", "retry"),
+            ("sym:tools/job.py::run", "sym:tools/retry.py::retry", "retry"),
+        ])
+    );
+}
+
+#[test]
+fn an_own_file_target_no_node_backs_writes_no_edge() {
+    let src = "class A:\n    def go(self):\n        self.missing()\n        A.absent()\n        self.t.run()\n\n    def __init__(self):\n        self.t = T()\n        self.t = U()\n\n\nclass T:\n    def run(self):\n        pass\n\n\nclass U:\n    def run(self):\n        pass\n";
+    let ex = Repo::new(&[("m.py", src)]).extract("m.py");
+    assert!(calls_from(&ex, "sym:m.py::A.go").is_empty(), "{:?}", calls_from(&ex, "sym:m.py::A.go"));
+}
+
+#[test]
+fn a_decorated_definition_inside_a_function_does_not_decorate_the_function() {
+    let src = "def deco(f):\n    return f\n\n\ndef outer():\n    @deco\n    def inner():\n        pass\n";
+    let ex = Repo::new(&[("m.py", src)]).extract("m.py");
+    assert!(edges(&ex, EdgeKind::DecoratedBy).is_empty(), "{:?}", edges(&ex, EdgeKind::DecoratedBy));
+}

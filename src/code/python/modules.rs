@@ -1,13 +1,21 @@
 //! Python module names, read from file paths and project manifests alone, so resolving an
 //! import never opens the module it names.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
+use std::sync::LazyLock;
+
+// A package's `__init__.py` re-exports with column-0 `from .x import A, B as C` lines; a line scan
+// reads them, since `Resolver::new` must not parse every file twice.
+static INIT_FROM: LazyLock<regex::Regex> =
+    LazyLock::new(|| regex::Regex::new(r"(?m)^from[ \t]+(\.+)([A-Za-z_][\w.]*)[ \t]+import[ \t]+([^\n(#\\]+)").expect("valid pattern"));
 
 #[derive(Debug, Default)]
 pub struct Modules {
     files: BTreeSet<String>,
     /// Directories holding `pyproject.toml`, `setup.py` or `setup.cfg`.
     roots: BTreeSet<String>,
+    /// `__init__.py` → name it binds → (dots, module, the name there).
+    inits: BTreeMap<String, BTreeMap<String, (usize, String, String)>>,
 }
 
 fn parent(rel: &str) -> &str {
@@ -28,6 +36,31 @@ impl Modules {
         self.files.insert(rel.to_string());
     }
 
+    /// Every globbed `.py` file's source; only a package's `__init__.py` is read.
+    pub fn init(&mut self, rel: &str, source: &str) {
+        if rel != "__init__.py" && !rel.ends_with("/__init__.py") {
+            return;
+        }
+        for c in INIT_FROM.captures_iter(source) {
+            for item in c[3].split(',') {
+                let words: Vec<&str> = item.split_whitespace().collect();
+                let (there, bound) = match words.as_slice() {
+                    [n] if *n != "*" => (*n, *n),
+                    [n, "as", a] => (*n, *a),
+                    _ => continue,
+                };
+                self.inits.entry(rel.to_string()).or_default().insert(bound.to_string(), (c[1].len(), c[2].to_string(), there.to_string()));
+            }
+        }
+    }
+
+    /// The module that declares `name` when the package `init` re-exports it, and the name there:
+    /// one hop, since a chain of `__init__.py` re-exports is rare and a cycle must not loop.
+    pub fn reexport(&self, init: &str, name: &str) -> Option<(String, String)> {
+        let (level, dotted, there) = self.inits.get(init)?.get(name)?;
+        Some((self.relative(init, *level, dotted)?, there.clone()))
+    }
+
     /// Every `pyproject.toml`, `setup.py` and `setup.cfg`: its directory is a root. Nothing in
     /// the file is read, so a `package-dir` naming another directory resolves nothing.
     pub fn manifest(&mut self, rel: &str) {
@@ -37,7 +70,6 @@ impl Modules {
     /// The file `import dotted` names from `rel`. Roots are tried in the order Python would
     /// find them: the importing file's directory (a script's `sys.path[0]`), each manifest
     /// directory above it nearest first, then the repository root.
-    #[cfg_attr(not(test), expect(dead_code, reason = "read by the Python reference pass, not yet written"))]
     pub fn absolute(&self, rel: &str, dotted: &str) -> Option<String> {
         let mut bases = vec![parent(rel).to_string()];
         let mut dir = parent(rel);
@@ -65,7 +97,6 @@ impl Modules {
 
     /// The file `from <level dots><dotted> import ...` names from `rel`: one dot is the package
     /// holding `rel`, each further dot its parent. An empty `dotted` is that package itself.
-    #[cfg_attr(not(test), expect(dead_code, reason = "read by the Python reference pass, not yet written"))]
     pub fn relative(&self, rel: &str, level: usize, dotted: &str) -> Option<String> {
         let mut dir = parent(rel).to_string();
         for _ in 1..level {

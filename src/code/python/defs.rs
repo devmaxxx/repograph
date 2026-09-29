@@ -10,9 +10,7 @@ use tree_sitter::Node;
 /// As TypeScript's doc cap: BM25 documents are `id + label + body`, and a longer body drowns the name.
 const BODY_CHARS: usize = 600;
 
-/// The names the file declares, for the reference pass to resolve against; nothing reads the
-/// fields until that pass lands.
-#[allow(dead_code)]
+/// The names the file declares, for the reference pass to resolve against.
 #[derive(Debug, Default)]
 pub(crate) struct Defs {
     /// Every id suffix the file declares: `f`, `C`, `C.m`, `C.Inner.m`.
