@@ -1,0 +1,136 @@
+{
+ "corpus": "/Users/max/bench/beauty-crm-test",
+ "commit": "502e8a6d",
+ "when": "2026-09-29T23:05:11",
+ "suites": [
+  "blast"
+ ],
+ "cases": {
+  "blast": 5
+ },
+ "case_files": {
+  "blast": "/Users/max/Documents/projects/repograph/.worktrees/sqlgql/bench/corpora/beauty-crm-sql/blast.jsonl"
+ },
+ "tools": {
+  "repograph": {
+   "rows": [
+    {
+     "suite": "blast",
+     "kind": "impact",
+     "target": "staff_member",
+     "tier": "wide",
+     "want_files": 7,
+     "found_files": 7,
+     "recall": 1.0,
+     "ms": 52,
+     "chars": 9691
+    },
+    {
+     "suite": "blast",
+     "kind": "impact",
+     "target": "bump_updated_at",
+     "tier": "narrow",
+     "want_files": 3,
+     "found_files": 3,
+     "recall": 1.0,
+     "ms": 51,
+     "chars": 2280
+    },
+    {
+     "suite": "blast",
+     "kind": "trace",
+     "from": "salon_ctx/staff_identity",
+     "to": "salon_ctx/bump_updated_at",
+     "expect": "path",
+     "hit": true,
+     "says_none": false,
+     "ms": 51,
+     "chars": 286
+    },
+    {
+     "suite": "blast",
+     "kind": "trace",
+     "from": "salon_ctx/bump_updated_at",
+     "to": "salon_ctx/staff_identity",
+     "expect": "none",
+     "hit": true,
+     "says_none": true,
+     "ms": 49,
+     "chars": 202
+    },
+    {
+     "suite": "blast",
+     "kind": "changes",
+     "base": "0cd4cfe9~1",
+     "want_files": 112,
+     "found_files": 112,
+     "want_symbols": 556,
+     "found_symbols": 238,
+     "by_ext": {
+      ".mjs": {
+       "want_files": 7,
+       "found_files": 7,
+       "want_symbols": 43,
+       "found_symbols": 43
+      },
+      ".ts": {
+       "want_files": 53,
+       "found_files": 53,
+       "want_symbols": 172,
+       "found_symbols": 129
+      },
+      ".js": {
+       "want_files": 2,
+       "found_files": 2,
+       "want_symbols": 2,
+       "found_symbols": 2
+      },
+      ".kt": {
+       "want_files": 46,
+       "found_files": 46,
+       "want_symbols": 357,
+       "found_symbols": 79
+      },
+      ".sql": {
+       "want_files": 4,
+       "found_files": 4,
+       "want_symbols": 16,
+       "found_symbols": 16
+      }
+     },
+     "ms": 700,
+     "chars": 72991
+    }
+   ],
+   "summary": {
+    "impact": {
+     "n": 2,
+     "recall_mean": 1.0,
+     "files_found": 10,
+     "files_want": 10,
+     "ms_median": 52,
+     "chars_median": 5986
+    },
+    "trace": {
+     "n": 2,
+     "hit": 2,
+     "path_hit": 1,
+     "path_n": 1,
+     "none_hit": 1,
+     "none_n": 1,
+     "ms_median": 50
+    },
+    "changes": {
+     "n": 1,
+     "symbols_found": 238,
+     "symbols_want": 556,
+     "files_found": 112,
+     "files_want": 112,
+     "ms_median": 700,
+     "chars_median": 72991
+    }
+   },
+   "failed_calls": 0
+  }
+ }
+}
