@@ -220,3 +220,25 @@ fn cfg_twins_are_one_symbol_whose_span_covers_both() {
     assert_eq!((twins[0].line, twins[0].end), (2, 7), "a hunk in the windows twin is a change to rename_over");
     assert_eq!(edges(&ex, EdgeKind::Declares).len(), 1, "one Declares edge for the pair");
 }
+
+#[test]
+fn same_named_members_of_two_trait_impls_keep_the_first_span() {
+    let src = "struct X;\nimpl Display for X {\n    fn fmt(&self) {}\n}\n\nfn between() {}\n\nimpl Debug for X {\n    fn fmt(&self) {}\n}\n";
+    let repo = Repo::new(&[("src/lib.rs", src)]);
+    let ex = repo.extract("src/lib.rs");
+    let fmts: Vec<_> = ex.nodes.iter().filter(|n| n.id == "sym:src/lib.rs::X.fmt").collect();
+    assert_eq!(fmts.len(), 1, "{:?}", ids(&ex));
+    assert_eq!((fmts[0].line, fmts[0].end), (3, 3), "the Debug impl's fmt must not stretch the Display one over `between`");
+}
+
+#[test]
+fn an_id_cited_in_a_foreign_impl_starts_from_a_written_node() {
+    let src = "impl Store {\n    // FR-PAY-03 rounding\n    fn m() {}\n}\n";
+    let repo = Repo::new(&[("src/lib.rs", src)]);
+    let ex = repo.extract("src/lib.rs");
+    let refs = edges(&ex, EdgeKind::References);
+    assert!(refs.contains(&("file:src/lib.rs", "FR-PAY-03", "comment")), "{refs:?}");
+    for (from, _, _) in refs {
+        assert!(ids(&ex).contains(&from), "{from} is not a node: {:?}", ids(&ex));
+    }
+}

@@ -14,8 +14,6 @@ const MEMBERS: [&str; 5] = ["function_item", "function_signature_item", "associa
 /// As TypeScript's doc cap: BM25 documents are `id + label + body`, and a longer body drowns the name.
 const BODY_CHARS: usize = 600;
 
-// The use and call passes resolve against these tables; nothing reads them until those passes exist.
-#[allow(dead_code)]
 #[derive(Debug, Default)]
 pub(crate) struct Items {
     /// Every id suffix the file declares: `f`, `S`, `S.new`, `tests/helper`.
@@ -29,7 +27,8 @@ pub(crate) struct Items {
     pub impls: Vec<Impl>,
 }
 
-#[allow(dead_code)]
+// The use and call passes resolve against `ty` and `members`; nothing reads them until those passes exist.
+#[expect(dead_code)]
 #[derive(Debug)]
 pub(crate) struct Impl {
     pub inline: Vec<String>,
@@ -44,11 +43,13 @@ struct Walk<'a> {
     rel: &'a str,
     src: &'a [u8],
     items: Items,
+    /// Suffix → the parent node of its `#[cfg]`-gated declaration, to recognise the gated twin beside it.
+    gated: BTreeMap<String, usize>,
     ex: &'a mut Extraction,
 }
 
 pub(crate) fn read(rel: &str, src: &[u8], root: Node, ex: &mut Extraction) -> Items {
-    let mut walk = Walk { rel, src, items: Items::default(), ex };
+    let mut walk = Walk { rel, src, items: Items::default(), gated: BTreeMap::new(), ex };
     walk.scope(root, &[]);
     walk.items
 }
@@ -121,13 +122,21 @@ impl Walk<'_> {
         let id = format!("sym:{}::{suffix}", self.rel);
         let line = n.child_by_field_name("name").unwrap_or(n).start_position().row as u32 + 1;
         let end = n.end_position().row as u32 + 1;
-        // Only `#[cfg]` twins declare one name twice in a scope. The first twin's node grows to
-        // cover the second, so a hunk in either is a change to the one symbol.
+        let gate = cfg_gated(n, self.src).then(|| n.parent().map_or(0, |p| p.id()));
         if !self.items.names.insert(suffix.to_string()) {
-            if let Some(first) = self.ex.nodes.iter_mut().find(|x| x.id == id) {
-                first.end = first.end.max(end);
+            // Only siblings both gated by `#[cfg]` are platform twins of one item, so the first's node
+            // grows to cover the second and a hunk in either is a change to the one symbol. Any other
+            // repeat (`fmt` in a Display and a Debug impl) is a different item under a shared id:
+            // first wins, and its span must not swallow the code between them.
+            if gate.is_some() && self.gated.get(suffix) == gate.as_ref() {
+                if let Some(first) = self.ex.nodes.iter_mut().find(|x| x.id == id) {
+                    first.end = first.end.max(end);
+                }
             }
             return id;
+        }
+        if let Some(parent) = gate {
+            self.gated.insert(suffix.to_string(), parent);
         }
         // The label reads as Rust writes the path; the id keeps `/` between inline modules.
         let label = suffix.replace('/', "::");
@@ -137,7 +146,8 @@ impl Walk<'_> {
     }
 }
 
-/// The doc comment and the item's text up to its body.
+/// What BM25 indexes for a symbol: its doc comment and signature, never the block, so a long body
+/// cannot drown the name.
 fn body(n: Node, src: &[u8]) -> String {
     let head_end = n.child_by_field_name("body").map_or(n.end_byte(), |b| b.start_byte());
     let head = String::from_utf8_lossy(&src[n.start_byte()..head_end]);
@@ -145,6 +155,19 @@ fn body(n: Node, src: &[u8]) -> String {
     let doc = doc(n, src);
     let full = if doc.is_empty() { signature } else { format!("{doc}\n{signature}") };
     full.chars().take(BODY_CHARS).collect()
+}
+
+/// Whether an attribute directly above the item is `#[cfg(...)]`.
+fn cfg_gated(n: Node, src: &[u8]) -> bool {
+    let mut at = n;
+    while let Some(prev) = at.prev_named_sibling() {
+        match prev.kind() {
+            "attribute_item" if text(prev, src).replace(' ', "").starts_with("#[cfg(") => return true,
+            "attribute_item" | "line_comment" => at = prev,
+            _ => return false,
+        }
+    }
+    false
 }
 
 /// The `///` lines directly above the item, read through any attributes between them and it.
@@ -209,13 +232,21 @@ pub(crate) fn owner(n: Node, rel: &str, src: &[u8]) -> String {
 /// Requirement ids cited in comments and string literals, as `References` from their owner —
 /// the same edge TypeScript's `idrefs::scan` writes, over Rust's comment and string kinds.
 pub(crate) fn id_refs(rel: &str, src: &[u8], root: Node, ex: &mut Extraction) {
+    let written: BTreeSet<String> = ex.nodes.iter().map(|n| n.id.clone()).collect();
     descend(root, &mut |n| {
         let context = match n.kind() {
             "line_comment" | "block_comment" => "comment",
             "string_literal" | "raw_string_literal" => "string",
             _ => return true,
         };
-        cite(n, &owner(n, rel, src), context, rel, src, ex);
+        if !crate::ids::generic().find_all(text(n, src)).is_empty() {
+            let mut from = owner(n, rel, src);
+            // An `impl` of a type declared in another file writes no node for it, and an edge must start from a written one.
+            if !from.starts_with("file:") && !written.contains(&from) {
+                from = format!("file:{rel}");
+            }
+            cite(n, &from, context, rel, src, ex);
+        }
         false
     });
 }

@@ -2,8 +2,8 @@
 //! other files' contents, so extracting a file never opens another.
 
 use crate::code::imports::Resolver;
-use crate::code::lang::{file_node, Lang};
 use crate::code::jvm::text;
+use crate::code::lang::{file_node, Lang};
 use crate::model::Extraction;
 use tree_sitter::Node;
 
