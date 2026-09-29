@@ -132,8 +132,6 @@ impl Crates {
         self.crates.push(Crate { name: name.replace('-', "_"), dir, lib: lib_path, bins });
     }
 
-    // Only the unit test reads this until the call pass exists; that pass removes the attribute.
-    #[cfg_attr(not(test), expect(dead_code))]
     /// Files declaring `macro_rules! name` in the crate holding `rel`, sorted.
     pub fn macro_files(&self, rel: &str, name: &str) -> Vec<&str> {
         let here = self.crate_of(rel).map(|k| k.dir.as_str());

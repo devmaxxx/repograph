@@ -31,6 +31,8 @@ pub fn extract(resolver: &Resolver, rel: &str, source: &str) -> Extraction {
     let mut ctx = uses::Ctx { rel, src, crates: resolver.rust(), items: &items, bindings: uses::Bindings::default() };
     uses::read(&mut ctx, root, &mut ex);
     calls::impls(&ctx, &mut ex);
+    calls::read(&ctx, root, &mut ex);
+    calls::attributes(&ctx, root, &mut ex);
     ex
 }
 

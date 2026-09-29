@@ -365,3 +365,124 @@ fn a_self_import_with_an_alias_binds_the_module() {
     assert_eq!(edges(&ex, EdgeKind::Imports), vec![("file:src/ops.rs", "file:src/store.rs", "*")]);
     assert_eq!(edges(&ex, EdgeKind::References), vec![("sym:src/ops.rs::Store.extra", "sym:src/store.rs::Store", "impl")]);
 }
+
+fn calls_from<'a>(ex: &'a Extraction, from: &str) -> std::collections::BTreeSet<&'a str> {
+    ex.edges.iter().filter(|e| e.kind == EdgeKind::Calls && e.source == from).map(|e| e.target.as_str()).collect()
+}
+
+#[test]
+fn calls_through_paths_bindings_globs_and_locals() {
+    let ops = "use crate::store::{self, Store};\nuse crate::walk::*;\nfn local() {}\npub fn run() {\n    local();\n    Store::new();\n    store::open();\n    crate::store::open();\n    Manifest::load();\n    Vec::<u8>::new();\n    std::mem::drop(1);\n    String::from(\"x\").len();\n}\n";
+    let repo = shop(ops);
+    let ex = repo.extract("src/ops.rs");
+    assert_eq!(
+        calls_from(&ex, "sym:src/ops.rs::run"),
+        ["sym:src/ops.rs::local", "sym:src/store.rs::Store.new", "sym:src/store.rs::open", "sym:src/walk.rs::Manifest.load"].into_iter().collect()
+    );
+    let ex = repo.extract("src/store.rs");
+    assert_eq!(calls_from(&ex, "sym:src/store.rs::Store.reopen"), ["sym:src/store.rs::Store.new"].into_iter().collect(), "`Self::` is the impl's type");
+    assert_eq!(calls_from(&ex, "sym:src/store.rs::open"), ["sym:src/store.rs::Store.new"].into_iter().collect());
+}
+
+#[test]
+fn self_methods_and_struct_fields_resolve_by_declared_type() {
+    let repo = Repo::new(&[
+        ("Cargo.toml", "[package]\nname = \"orch\"\n"),
+        ("src/lib.rs", "pub mod exec;\npub mod tmux;\npub mod handler;\n"),
+        ("src/exec.rs", "pub trait Exec: Send {\n    fn run(&self, cmd: &str);\n    fn sleep(&self);\n}\n"),
+        ("src/tmux.rs", "use crate::exec::Exec;\npub struct Tmux<E: Exec> { exec: E }\nimpl<E: Exec> Tmux<E> {\n    pub fn capture(&self) { self.exec.run(\"x\"); }\n}\n"),
+        (
+            "src/handler.rs",
+            "use std::sync::Arc;\nuse crate::exec::Exec;\nuse crate::tmux::Tmux;\npub struct Handler<E> where E: Exec + Clone {\n    tmux: Arc<Tmux<E>>,\n    exec: E,\n    other: Unknown,\n}\nimpl<E: Exec + Clone> Handler<E> {\n    pub fn handle(&self) {\n        self.tmux.capture();\n        self.exec.sleep();\n        self.done();\n        self.other.go();\n    }\n    fn done(&self) {}\n}\n",
+        ),
+    ]);
+    let ex = repo.extract("src/handler.rs");
+    assert_eq!(
+        calls_from(&ex, "sym:src/handler.rs::Handler.handle"),
+        ["sym:src/exec.rs::Exec.sleep", "sym:src/handler.rs::Handler.done", "sym:src/tmux.rs::Tmux.capture"].into_iter().collect(),
+        "an unknown receiver type gets no edge"
+    );
+    let ex = repo.extract("src/tmux.rs");
+    assert_eq!(calls_from(&ex, "sym:src/tmux.rs::Tmux.capture"), ["sym:src/exec.rs::Exec.run"].into_iter().collect());
+}
+
+#[test]
+fn a_declared_macro_is_called_a_builtin_is_not_and_a_macro_argument_is_not_read() {
+    let repo = Repo::new(&[
+        ("Cargo.toml", "[package]\nname = \"shop\"\n"),
+        ("src/lib.rs", "mod util;\nmacro_rules! money {\n    ($x:expr) => { $x };\n}\nfn cents() -> u32 { 1 }\npub fn price() -> u32 {\n    println!(\"x\");\n    assert!(cents() > 0);\n    money!(1)\n}\n"),
+        ("src/util.rs", "pub fn f() -> u32 { money!(2) }\n"),
+    ]);
+    let ex = repo.extract("src/lib.rs");
+    assert_eq!(calls_from(&ex, "sym:src/lib.rs::price"), ["sym:src/lib.rs::money"].into_iter().collect(), "`cents()` inside `assert!` is a token tree");
+    let ex = repo.extract("src/util.rs");
+    assert_eq!(calls_from(&ex, "sym:src/util.rs::f"), ["sym:src/lib.rs::money"].into_iter().collect());
+}
+
+#[test]
+fn an_attribute_or_derive_that_resolves_decorates_and_a_builtin_does_not() {
+    let repo = Repo::new(&[
+        ("Cargo.toml", "[workspace]\nmembers = [\"crates/*\"]\n"),
+        ("crates/macros/Cargo.toml", "[package]\nname = \"shop-macros\"\n"),
+        ("crates/macros/src/lib.rs", "pub fn traced() {}\npub fn model() {}\n"),
+        ("crates/app/Cargo.toml", "[package]\nname = \"app\"\n"),
+        (
+            "crates/app/src/lib.rs",
+            "use shop_macros::traced;\nfn traced_local() {}\n#[derive(Debug, Clone, shop_macros::model)]\npub struct Order;\nimpl Order {\n    #[traced]\n    pub fn pay(&self) {}\n}\n#[shop_macros::traced]\nfn refund() {}\n#[test]\nfn t() {}\n",
+        ),
+    ]);
+    let ex = repo.extract("crates/app/src/lib.rs");
+    let mut deco = edges(&ex, EdgeKind::DecoratedBy);
+    deco.sort();
+    assert_eq!(
+        deco,
+        vec![
+            ("sym:crates/app/src/lib.rs::Order", "sym:crates/macros/src/lib.rs::model", "shop_macros::model"),
+            ("sym:crates/app/src/lib.rs::Order.pay", "sym:crates/macros/src/lib.rs::traced", "traced"),
+            ("sym:crates/app/src/lib.rs::refund", "sym:crates/macros/src/lib.rs::traced", "shop_macros::traced"),
+        ]
+    );
+    assert!(ex.nodes.iter().all(|n| !n.id.starts_with("deco:")), "no shared attribute node");
+}
+
+#[test]
+fn a_call_through_a_crate_root_re_export_lands_on_the_declaring_file() {
+    let repo = Repo::new(&[
+        ("Cargo.toml", "[package]\nname = \"shop\"\n"),
+        ("src/lib.rs", "mod store;\npub use store::Store;\npub mod ops;\n"),
+        ("src/store.rs", "pub struct Store;\nimpl Store {\n    pub fn new() -> Store { Store }\n}\n"),
+        ("src/ops.rs", "use crate::Store;\npub fn run() {\n    Store::new();\n}\n"),
+    ]);
+    let ex = repo.extract("src/ops.rs");
+    let calls = calls_from(&ex, "sym:src/ops.rs::run");
+    assert!(!calls.contains("sym:src/lib.rs::Store.new"), "no symbol has that id: {calls:?}");
+    assert_eq!(calls, ["sym:src/store.rs::Store.new"].into_iter().collect(), "a re-export is followed one hop");
+}
+
+/// Every `Handler` call in agent-orchestrator is `self.x.m(…).await`, and its `trace` case rests on it.
+#[test]
+fn an_awaited_call_through_a_typed_field_resolves() {
+    let repo = Repo::new(&[
+        ("Cargo.toml", "[package]\nname = \"orch\"\n"),
+        ("src/lib.rs", "pub mod exec;\npub mod handler;\n"),
+        ("src/exec.rs", "pub trait Exec: Send + Sync {\n    async fn sleep(&self, ms: u64);\n}\n"),
+        ("src/handler.rs", "use crate::exec::Exec;\npub struct Handler<E: Exec + Clone> {\n    exec: E,\n}\nimpl<E: Exec + Clone> Handler<E> {\n    pub async fn handle(&self) {\n        self.exec.sleep(5).await;\n        let _ = self.exec.sleep(6).await;\n    }\n}\n"),
+    ]);
+    let ex = repo.extract("src/handler.rs");
+    assert_eq!(calls_from(&ex, "sym:src/handler.rs::Handler.handle"), ["sym:src/exec.rs::Exec.sleep"].into_iter().collect());
+}
+
+#[test]
+fn a_call_inside_a_foreign_impl_starts_from_a_node_the_file_writes() {
+    let repo = Repo::new(&[
+        ("Cargo.toml", "[package]\nname = \"shop\"\n"),
+        ("src/lib.rs", "pub mod store;\npub mod ops;\n"),
+        ("src/store.rs", "pub struct Store;\npub fn helper() {}\n"),
+        ("src/ops.rs", "use crate::store::{Store, helper};\nimpl Store {\n    pub fn m(&self) { helper() }\n}\n"),
+    ]);
+    let ex = repo.extract("src/ops.rs");
+    let calls: Vec<_> = ex.edges.iter().filter(|e| e.kind == EdgeKind::Calls).collect();
+    assert_eq!(calls.len(), 1, "{calls:?}");
+    assert_eq!(calls[0].target, "sym:src/store.rs::helper");
+    assert!(ids(&ex).contains(&calls[0].source.as_str()), "{} is not a node: {:?}", calls[0].source, ids(&ex));
+}
