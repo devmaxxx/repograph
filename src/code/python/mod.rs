@@ -5,6 +5,10 @@ use crate::code::imports::Resolver;
 use crate::code::lang::{file_node, Lang};
 use crate::model::Extraction;
 
+mod modules;
+
+pub use modules::Modules;
+
 #[cfg(test)]
 mod cases;
 

@@ -21,9 +21,13 @@ impl Repo {
         Repo { dir }
     }
 
-    pub(super) fn extract(&self, rel: &str) -> Extraction {
+    pub(super) fn resolver(&self) -> Resolver {
         let cfg = Config { code_globs: vec!["**/*.py".into()], ..Config::default() };
-        let resolver = Resolver::new(self.dir.path(), &cfg).unwrap();
+        Resolver::new(self.dir.path(), &cfg).unwrap()
+    }
+
+    pub(super) fn extract(&self, rel: &str) -> Extraction {
+        let resolver = self.resolver();
         let src = std::fs::read_to_string(self.dir.path().join(rel)).unwrap();
         CodeExtractor::new(resolver).extract(rel, &src)
     }
@@ -67,4 +71,14 @@ fn every_kind_the_walk_matches_is_in_the_grammar() {
     for field in ["name", "alias", "module_name", "left", "right", "type", "definition", "superclasses", "body", "function", "object", "attribute", "arguments", "parameters", "condition", "consequence"] {
         assert!(lang.field_id_for_name(field).is_some(), "field {field} missing");
     }
+}
+
+#[test]
+fn the_resolver_reads_python_project_roots_from_its_walk() {
+    let repo = Repo::new(&[
+        ("lib/pyproject.toml", "[project]\nname = \"shop\"\n"),
+        ("lib/shop/__init__.py", ""),
+        ("lib/app/main.py", "import shop\n"),
+    ]);
+    assert_eq!(repo.resolver().python().absolute("lib/app/main.py", "shop").as_deref(), Some("lib/shop/__init__.py"));
 }

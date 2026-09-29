@@ -22,6 +22,8 @@ pub struct Resolver {
     dotnet: crate::code::csharp::index::DotNet,
     /// The Rust module tree: every `.rs` path and `Cargo.toml` the globs reach.
     rust: crate::code::rust_lang::Crates,
+    /// Python module names: every `.py` path and the directories holding a project manifest.
+    python: crate::code::python::Modules,
 }
 
 #[derive(Deserialize, Default)]
@@ -193,7 +195,7 @@ impl Resolver {
         }
         // Nearest tsconfig to the importing file wins: sort deepest directory first.
         paths.sort_by_key(|a| std::cmp::Reverse(a.0.len()));
-        let mut resolver = Resolver { repo: repo.to_path_buf(), paths, packages, indexes: BTreeMap::new(), dotnet: Default::default(), rust: Default::default() };
+        let mut resolver = Resolver { repo: repo.to_path_buf(), paths, packages, indexes: BTreeMap::new(), dotnet: Default::default(), rust: Default::default(), python: Default::default() };
         // Manifests before sources: a path family's roots decide how its sources' paths read.
         for (_, rel, path) in manifests.iter().filter(|(f, _, _)| reached.contains(f)) {
             if let Ok(text) = std::fs::read_to_string(path) {
@@ -222,6 +224,12 @@ impl Resolver {
         &self.rust
     }
 
+    // No reader until the Python reference pass lands; the accessor is that pass's only way in.
+    #[cfg_attr(not(test), expect(dead_code, reason = "read by the Python reference pass, not yet written"))]
+    pub(crate) fn python(&self) -> &crate::code::python::Modules {
+        &self.python
+    }
+
     /// What one globbed source contributes before any file is extracted. A name-indexed family's
     /// header goes into its index; a path family's plan adds its arm below, for state of its own.
     ///
@@ -244,6 +252,9 @@ impl Resolver {
         if lang == Lang::Rust {
             self.rust.file(rel, source);
         }
+        if lang == Lang::Python {
+            self.python.file(rel);
+        }
     }
 
     /// What a build manifest contributes; called only when the globs reach the manifest's family.
@@ -254,6 +265,9 @@ impl Resolver {
         }
         if rel == "Cargo.toml" || rel.ends_with("/Cargo.toml") {
             self.rust.manifest(rel, text);
+        }
+        if matches!(rel.rsplit('/').next(), Some("pyproject.toml" | "setup.py" | "setup.cfg")) {
+            self.python.manifest(rel);
         }
     }
 
