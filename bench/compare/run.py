@@ -121,8 +121,8 @@ class Tool:
         self.repo = repo
         self.opts = opts
         # Calls a tool refused to answer at all — distinct from a call it answered badly.
-        # Only Gitnexus increments this; it stays 0, and thus invisible in the report, for
-        # a tool whose failures don't need this filter.
+        # Gitnexus and repograph increment this; it stays 0, and thus invisible in the report,
+        # for a tool whose failures don't need this filter.
         self.failed_calls = 0
 
     def _exec(self, argv: list[str]) -> tuple[subprocess.CompletedProcess, float]:
@@ -155,9 +155,19 @@ class Repograph(Tool):
     def bin(self) -> list[str]:
         return [self.opts.repograph, "--repo", str(self.repo)]
 
+    def answered(self, argv: list[str], verdict_ok: bool = False) -> tuple[str, float]:
+        """A refusal is not an answer: its namesake list names the declaring files, which the
+        substring scorer would credit as found. Exit 3 is `trace`'s no-path verdict, an answer."""
+        proc, ms = self._exec(argv)
+        if proc.returncode != 0 and not (verdict_ok and proc.returncode == 3):
+            self.failed_calls += 1
+            print(f"repograph: not counted as an answer, exit {proc.returncode}: {' '.join(argv)}", file=sys.stderr)
+            return "", ms
+        return self._clean(proc.stdout + proc.stderr), ms
+
     def ask(self, q): return self.run(self.bin() + ["ask", q])
-    def impact(self, target): return self.run(self.bin() + ["impact", target, "--depth", "3"])
-    def trace(self, a, b): return self.run(self.bin() + ["trace", a, b])
+    def impact(self, target): return self.answered(self.bin() + ["impact", target, "--depth", "3"])
+    def trace(self, a, b): return self.answered(self.bin() + ["trace", a, b], verdict_ok=True)
     def changes(self, base): return self.run(self.bin() + ["changes", "--base", base])
 
 
