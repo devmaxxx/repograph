@@ -218,7 +218,7 @@ impl Resolver {
         &self.dotnet
     }
 
-    // Read by the Rust extractor's use and call passes (Tasks 4 and 5); Task 5 removes this line.
+    // Nothing reads the table until the Rust use pass lands; that pass deletes this allow.
     #[allow(dead_code)]
     pub(crate) fn rust(&self) -> &crate::code::rust_lang::Crates {
         &self.rust
@@ -249,7 +249,7 @@ impl Resolver {
     }
 
     /// What a build manifest contributes; called only when the globs reach the manifest's family.
-    /// Each path family's plan adds its arm; until one lands, no family reads a manifest.
+    /// Each path family adds its arm here.
     fn collect_manifest(&mut self, rel: &str, text: &str) {
         if rel.ends_with(".csproj") {
             self.dotnet.add_project(rel, text);
