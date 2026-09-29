@@ -501,3 +501,19 @@ fn a_path_call_prefers_the_member_this_files_foreign_impl_writes() {
         ["sym:src/ops.rs::Store.sync_all", "sym:src/store.rs::Store.open"].into_iter().collect()
     );
 }
+
+#[test]
+fn a_module_qualified_path_is_not_taken_for_this_files_foreign_impl_member() {
+    let repo = Repo::new(&[
+        ("Cargo.toml", "[package]\nname = \"shop\"\n"),
+        ("src/lib.rs", "pub mod store;\npub mod other;\npub mod ops;\n"),
+        ("src/store.rs", "pub struct Store;\n"),
+        ("src/other.rs", "pub struct Store;\nimpl Store {\n    pub fn m() {}\n}\n"),
+        ("src/ops.rs", "use crate::store::Store;\nuse crate::other;\nimpl Store {\n    pub fn m() {}\n}\npub fn run() {\n    other::Store::m();\n    Store::m();\n}\n"),
+    ]);
+    let ex = repo.extract("src/ops.rs");
+    assert_eq!(
+        calls_from(&ex, "sym:src/ops.rs::run"),
+        ["sym:src/other.rs::Store.m", "sym:src/ops.rs::Store.m"].into_iter().collect()
+    );
+}

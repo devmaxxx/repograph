@@ -172,12 +172,15 @@ fn callee(ctx: &Ctx, fields: &Fields, call: Node, f: Node) -> Option<String> {
     match f.kind() {
         "identifier" | "scoped_identifier" | "generic_function" => {
             let mut path = type_path(f, ctx.src);
+            // A module prefix may name another `Store`, so only `T::m` and `Self::m` take the local
+            // node; a longer path is the resolver's to answer.
+            let bare_member = path.len() == 2;
             if path.first().is_some_and(|s| s == "Self") {
                 path.splice(0..1, self_type(call, ctx.src)?);
             }
             // A foreign `impl T` writes `T.m` under this file, so `T::m` is that node; the type's
             // declaring file holds no `m` for a resolver to land on.
-            if let [.., ty, method] = path.as_slice() {
+            if let ([.., ty, method], true) = (path.as_slice(), bare_member) {
                 let here = scoped(&inline, &format!("{ty}.{method}"));
                 if ctx.items.names.contains(&here) {
                     return Some(format!("sym:{}::{here}", ctx.rel));

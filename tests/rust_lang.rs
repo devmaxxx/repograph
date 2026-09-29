@@ -59,9 +59,9 @@ fn a_rust_workspace_answers_impact_trace_and_changes_and_survives_an_update() {
 
     // `Store` is declared in one crate; its callers reach it through a `use` of the crate's name,
     // and through an `impl Store` in the other crate that only a `References` edge ties back.
-    let (code, out, err) = repograph(repo, &["impact", "Store"]);
+    let (code, out, err) = repograph(repo, &["impact", "sym:crates/shop-core/src/store.rs::Store"]);
     assert_eq!(code, Some(0), "{out}{err}");
-    for want in ["crates/shopd/src/main.rs", "crates/shopd/src/ops.rs", "sync"] {
+    for want in ["crates/shopd/src/main.rs", "crates/shopd/src/ops.rs", "sym:crates/shopd/src/ops.rs::Store.sync_all"] {
         assert!(out.contains(want), "impact Store names {want}: {out}");
     }
 
@@ -88,11 +88,11 @@ fn a_rust_workspace_answers_impact_trace_and_changes_and_survives_an_update() {
     let (code, out, err) = repograph(repo, &["update"]);
     assert_eq!(code, Some(0), "{out}{err}");
     assert!(out.starts_with("changed 1 removed 0"), "{out}");
-    let (_, out, _) = repograph(repo, &["impact", "Store"]);
+    let (_, out, _) = repograph(repo, &["impact", "sym:crates/shop-core/src/store.rs::Store"]);
     assert!(out.contains("crates/shopd/src/ops.rs"), "the update kept the impl's reference: {out}");
 
     // `changes` names the Rust symbol the hunk is in.
     let (code, out, err) = repograph(repo, &["changes", "--base", "HEAD"]);
     assert_eq!(code, Some(0), "{out}{err}");
-    assert!(out.contains("crates/shopd/src/ops.rs") && out.contains("sync"), "{out}");
+    assert!(out.contains("crates/shopd/src/ops.rs") && out.contains("sym:crates/shopd/src/ops.rs::sync"), "{out}");
 }
