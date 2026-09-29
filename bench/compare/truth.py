@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import re
 import subprocess
+from bisect import bisect_right
 from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
@@ -942,7 +943,8 @@ def blank_sql(src: str) -> str:
                     depth, end = depth - 1, end + 2
                 else:
                     end += 1
-            out.append("\n" * src.count("\n", i, end))
+            # A space, not nothing: `CREATE/**/TABLE` is two words, and joining them reads as none.
+            out.append(" " + "\n" * src.count("\n", i, end))
             i = end
         elif char == '"':
             end = i + 1
@@ -977,7 +979,7 @@ def blank_sql(src: str) -> str:
     return "".join(out)
 
 
-SQL_TOKEN = re.compile(r'"(?:[^"]|"")*"|[A-Za-z_][A-Za-z_0-9$]*|\d+|\S')
+SQL_TOKEN = re.compile(r'"(?:[^"]|"")*"|[^\W\d][\w$]*|\d+|\S')
 SQL_OBJECTS = {"table", "view", "function", "procedure", "type", "schema", "sequence", "trigger", "policy", "index"}
 SQL_CREATE_MODIFIERS = {"or", "replace", "temp", "temporary", "unlogged", "global", "local", "constraint", "unique", "materialized", "recursive"}
 SQL_NOT_A_COLUMN = {"constraint", "primary", "unique", "foreign", "check", "exclude", "like"}
@@ -1165,6 +1167,7 @@ GQL_TOP = re.compile(
     rf"|fragment\s+(?P<frag>{GQL_NAME})\s+on\b"
     rf"|(?:extend\s+)?(?P<kw>type|interface|input|enum|union|scalar)\s+(?P<type>{GQL_NAME})"
     rf"|directive\s+@(?P<dir>{GQL_NAME})"
+    r"|(?P<schema>schema)\b"
 )
 GQL_FIELD = re.compile(rf"(?P<name>{GQL_NAME})\s*[(:]")
 # An enum's values are not fields, and a union has no body; only these three hold `name:` fields.
@@ -1179,13 +1182,19 @@ def graphql_declarations(blanked: str) -> list[tuple[int, str]]:
     found: list[tuple[int, str]] = []
     depth = parens = 0
     holder = pending = None
+    line_starts = [0] + [m.end() for m in re.finditer("\n", blanked)]
     pos, size = 0, len(blanked)
     while pos < size:
         before = blanked[pos - 1] if pos else " "
         starts_word = not (before.isalnum() or before in "_@")
         top = GQL_TOP.match(blanked, pos) if depth == 0 and parens == 0 and starts_word else None
         if top:
-            line = blanked.count("\n", 0, pos) + 1
+            line = bisect_right(line_starts, pos)
+            if top.group("schema"):
+                # A `schema { … }` body holds operation types, not fields, and must not inherit a bodiless `type`'s name.
+                pending = None
+                pos = top.end()
+                continue
             if top.group("opname"):
                 name, pending = f"{top.group('op')}/{top.group('opname')}", None
             elif top.group("frag"):
@@ -1214,7 +1223,7 @@ def graphql_declarations(blanked: str) -> list[tuple[int, str]]:
             if depth == 0:
                 holder = None
         elif depth == 1 and holder and starts_word and (field := GQL_FIELD.match(blanked, pos)):
-            found.append((blanked.count("\n", 0, pos) + 1, f"{holder}.{field.group('name')}"))
+            found.append((bisect_right(line_starts, pos), f"{holder}.{field.group('name')}"))
             pos = field.end("name")
             continue
         pos += 1
@@ -1449,8 +1458,9 @@ def changed_symbols(repo: Path, base: str) -> dict:
         code_files.append(rel)
         lines, starts = declarations(rel, path.read_text(encoding="utf8", errors="replace"))
         hit = set()
+        end_of = DECLARATION_ENDS.get(Path(rel).suffix, declaration_end)
         for start, name in starts:
-            end = DECLARATION_ENDS.get(Path(rel).suffix, declaration_end)(lines, start)
+            end = end_of(lines, start)
             if any(lo <= end and hi >= start for lo, hi in spans):
                 hit.add(name)
         if hit:

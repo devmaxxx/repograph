@@ -1120,8 +1120,11 @@ fragment BookFields on Book {
 class SqlReaders(unittest.TestCase):
     def test_blank_sql_keeps_quoted_names_and_lines_and_blanks_comments_strings_and_bodies(self):
         src = "SELECT 'it''s -- not' AS \"Qu\"\"ote\", $tag$ body; $tag$ /* a /* nested */ b */ x -- tail\ny"
-        self.assertEqual(T.blank_sql(src), "SELECT '' AS \"Qu\"\"ote\", $$$$  x \ny")
+        self.assertEqual(T.blank_sql(src), "SELECT '' AS \"Qu\"\"ote\", $$$$   x \ny")
         self.assertEqual(T.blank_sql("a $$\n;\n$$ b").count("\n"), 2)
+
+    def test_a_block_comment_between_words_does_not_join_them(self):
+        self.assertEqual(T.sql_declarations(T.blank_sql("create/**/table t(a int);")), [(1, "t"), (1, "t.a")])
 
     def test_sql_declarations_read_objects_members_and_attachments_by_line(self):
         self.assertEqual(T.sql_declarations(T.blank_sql(SQL_MIGRATION)), [
@@ -1150,6 +1153,10 @@ class GraphQlReaders(unittest.TestCase):
     def test_blank_graphql_blanks_comments_and_strings_and_keeps_lines(self):
         src = '"""doc\nmore""" type A { b: String # x\n c(d: String = "e"): Int }\n'
         self.assertEqual(T.blank_graphql(src), '""\n type A { b: String \n c(d: String = ""): Int }\n')
+
+    def test_a_schema_body_after_a_bodiless_extension_holds_no_fields_of_it(self):
+        src = 'extend type Foo @key(fields: "id")\n\nschema { query: Query }\n'
+        self.assertEqual(T.graphql_declarations(T.blank_graphql(src)), [(1, "Foo")])
 
     def test_graphql_declarations_read_definitions_and_fields_but_not_enum_values_or_arguments(self):
         self.assertEqual(T.graphql_declarations(T.blank_graphql(GQL_SCHEMA)), [

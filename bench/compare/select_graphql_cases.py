@@ -26,7 +26,8 @@ def git(repo: Path, *args: str) -> str:
 def documents(repo: Path) -> dict[str, str]:
     """Every tracked GraphQL document, blanked as the truth reads it."""
     rels = [r for r in git(repo, "ls-files", *(f"*{e}" for e in EXTS)).split("\n") if r]
-    return {rel: truth.blank_graphql((repo / rel).read_text(encoding="utf8", errors="replace")) for rel in rels}
+    # `ls-files` still lists a file deleted from the working tree.
+    return {rel: truth.blank_graphql((repo / rel).read_text(encoding="utf8", errors="replace")) for rel in rels if (repo / rel).is_file()}
 
 
 def label(name: str) -> str:
@@ -34,12 +35,18 @@ def label(name: str) -> str:
     return name.rsplit("/", 1)[-1]
 
 
-def impact_case(docs: dict[str, str], declared: dict[str, set[str]], spreads: dict[str, list[tuple[str, str]]]) -> dict | None:
-    labels = Counter(label(n).lower() for names in declared.values() for n in names)
+def homes(declared: dict[str, set[str]]) -> dict[str, set[str]]:
+    """Each declared name to the files declaring it."""
     where: dict[str, set[str]] = defaultdict(set)
     for rel, names in declared.items():
         for n in names:
             where[n].add(rel)
+    return where
+
+
+def impact_case(docs: dict[str, str], declared: dict[str, set[str]], spreads: dict[str, list[tuple[str, str]]]) -> dict | None:
+    labels = Counter(label(n).lower() for names in declared.values() for n in names)
+    where = homes(declared)
     best = None
     for name, rels in sorted(where.items()):
         if not name.startswith("fragment/") or len(rels) != 1 or labels[label(name).lower()] != 1:
@@ -58,10 +65,7 @@ def impact_case(docs: dict[str, str], declared: dict[str, set[str]], spreads: di
 
 
 def trace_cases(declared: dict[str, set[str]], spreads: dict[str, list[tuple[str, str]]]) -> list[dict]:
-    where: dict[str, set[str]] = defaultdict(set)
-    for rel, names in declared.items():
-        for n in names:
-            where[n].add(rel)
+    where = homes(declared)
     calls: dict[str, set[str]] = defaultdict(set)
     for edges in spreads.values():
         for owner, target in edges:
