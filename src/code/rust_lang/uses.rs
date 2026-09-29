@@ -50,7 +50,11 @@ fn flatten(n: Node, src: &[u8], prefix: &[String], out: &mut Vec<Flat>) {
         "use_as_clause" => {
             // `as _` imports a trait for its methods and binds no name.
             let bound = field_text(n, "alias", src).filter(|a| *a != "_").map(str::to_string);
-            out.push(Flat { path: under(n.child_by_field_name("path")), bound, glob: false });
+            let mut path = under(n.child_by_field_name("path"));
+            if path.len() > 1 && path.last().is_some_and(|s| s == "self") {
+                path.pop();
+            }
+            out.push(Flat { path, bound, glob: false });
         }
         _ => {
             let mut path = under(Some(n));
@@ -85,7 +89,15 @@ pub(crate) fn read(ctx: &mut Ctx, root: Node, ex: &mut Extraction) {
         let mut flat = Vec::new();
         flatten(arg, ctx.src, &[], &mut flat);
         for Flat { path, bound, glob } in flat {
-            let Some(target) = ctx.resolve(&inline, &path) else { continue };
+            let Some(target) = ctx.resolve(&inline, &path) else {
+                // A name the module's file does not declare still ties this file to the module's.
+                if let Some(file) = ctx.module_file(&inline, &path) {
+                    if file != ctx.rel {
+                        ex.edge(&file_id, &format!("file:{file}"), EdgeKind::Imports, "*", ctx.rel);
+                    }
+                }
+                continue;
+            };
             let (file, name) = match &target {
                 Target::Module { file, .. } => (file.clone(), None),
                 Target::Item { file, name } => (file.clone(), Some(name.clone())),
@@ -151,6 +163,14 @@ impl Ctx<'_> {
             }
         }
         self.crates.resolve(self.rel, inline, path)
+    }
+
+    /// The file of the longest proper prefix of `path` that names a module.
+    fn module_file(&self, inline: &[String], path: &[String]) -> Option<String> {
+        (1..path.len()).rev().find_map(|k| match self.resolve(inline, &path[..k]) {
+            Some(Target::Module { file, .. }) => Some(file),
+            _ => None,
+        })
     }
 
     /// Whether a scope declares `name`: this file's scopes are known item by item; another

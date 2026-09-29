@@ -316,3 +316,52 @@ fn a_local_impl_extends_without_a_reference_and_an_external_trait_writes_nothing
     assert!(edges(&ex, EdgeKind::References).is_empty());
     assert!(edges(&ex, EdgeKind::Declares).contains(&("sym:src/lib.rs::Tokio", "sym:src/lib.rs::Tokio.run", "")));
 }
+
+/// Every edge a case writes must join ids some file writes, so a re-export the line scan cannot
+/// read loses the edge rather than pointing it at the re-exporting file's absent symbol.
+fn foreign_impl_through(lib: &str, extra: &[(&str, &str)]) -> Extraction {
+    let mut files = vec![
+        ("Cargo.toml", "[package]\nname = \"shop\"\n"),
+        ("src/lib.rs", lib),
+        ("src/store.rs", "pub struct Store;\npub struct Other;\n"),
+        ("src/ops.rs", "use crate::Store;\nuse crate::Open;\nimpl Open for Store {\n    fn open() -> Store { Store }\n}\n"),
+    ];
+    files.extend_from_slice(extra);
+    Repo::new(&files).extract("src/ops.rs")
+}
+
+fn assert_no_dangling(ex: &Extraction) {
+    assert!(edges(ex, EdgeKind::Extends).is_empty(), "{:?}", edges(ex, EdgeKind::Extends));
+    assert!(edges(ex, EdgeKind::References).iter().all(|(_, to, _)| !to.starts_with("sym:src/lib.rs::")), "{:?}", edges(ex, EdgeKind::References));
+}
+
+#[test]
+fn a_braced_re_export_writes_no_edge_to_the_re_exporting_file() {
+    let ex = foreign_impl_through("pub mod store;\npub mod ops;\npub trait Open { fn open() -> Self; }\npub use store::{Store, Other};\n", &[]);
+    assert_no_dangling(&ex);
+    assert!(edges(&ex, EdgeKind::Imports).contains(&("file:src/ops.rs", "file:src/lib.rs", "*")));
+}
+
+#[test]
+fn a_glob_re_export_writes_no_edge_to_the_re_exporting_file() {
+    let ex = foreign_impl_through("pub mod store;\npub mod ops;\npub trait Open { fn open() -> Self; }\npub use store::*;\n", &[]);
+    assert_no_dangling(&ex);
+}
+
+#[test]
+fn a_two_hop_re_export_chain_writes_no_edge() {
+    let ex = foreign_impl_through(
+        "pub mod mid;\npub mod store;\npub mod ops;\npub trait Open { fn open() -> Self; }\npub use mid::Store;\n",
+        &[("src/mid.rs", "pub use crate::store::Store;\n")],
+    );
+    assert_no_dangling(&ex);
+    assert!(!edges(&ex, EdgeKind::References).iter().any(|(_, to, _)| to.starts_with("sym:src/mid.rs::")));
+}
+
+#[test]
+fn a_self_import_with_an_alias_binds_the_module() {
+    let repo = shop("use crate::store::{self as s};\nfn f() { s::open(); }\nimpl s::Store {\n    fn extra() {}\n}\n");
+    let ex = repo.extract("src/ops.rs");
+    assert_eq!(edges(&ex, EdgeKind::Imports), vec![("file:src/ops.rs", "file:src/store.rs", "*")]);
+    assert_eq!(edges(&ex, EdgeKind::References), vec![("sym:src/ops.rs::Store.extra", "sym:src/store.rs::Store", "impl")]);
+}

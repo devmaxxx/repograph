@@ -3,8 +3,6 @@
 //! Resolution never opens a file. `mod x;` can only name `x.rs` or `x/mod.rs` below its parent
 //! module's directory, so the set of `.rs` paths already says which modules exist; what a path
 //! cannot say — a crate's name, a moved `[lib] path` — comes from the manifests.
-// `macro_files` is read by the call pass, which does not exist yet; that pass removes this line.
-#![allow(dead_code)]
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::LazyLock;
@@ -134,6 +132,8 @@ impl Crates {
         self.crates.push(Crate { name: name.replace('-', "_"), dir, lib: lib_path, bins });
     }
 
+    // Only the unit test reads this until the call pass exists; that pass removes the attribute.
+    #[cfg_attr(not(test), expect(dead_code))]
     /// Files declaring `macro_rules! name` in the crate holding `rel`, sorted.
     pub fn macro_files(&self, rel: &str, name: &str) -> Vec<&str> {
         let here = self.crate_of(rel).map(|k| k.dir.as_str());
@@ -275,6 +275,11 @@ impl Crates {
                 return self.resolve_from(&file, &[], &[via.clone(), rest[1..].to_vec()].concat(), false);
             }
         }
+        // No symbol is written for a name the file does not declare — a braced or glob re-export,
+        // a second hop — so an item id there would name a node no file has.
+        if scope.is_empty() && !self.declares(&file, &rest[0]) {
+            return None;
+        }
         Some(Target::Item { file, name: item_name(&scope, rest) })
     }
 }
@@ -288,8 +293,9 @@ mod tests {
         for (rel, text) in manifests {
             c.manifest(rel, text);
         }
+        // A path only lands on a name its file declares, so each fixture file declares the names the cases use.
         for f in files {
-            c.file(f, "");
+            c.file(f, "pub fn charge() {}\npub fn total() {}\npub fn add() {}\npub fn f() {}\npub struct Order;\npub struct Card;\npub struct Line;\nmod fixtures {}\n");
         }
         c
     }
