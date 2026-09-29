@@ -7,8 +7,10 @@ use crate::code::lang::{file_node, Lang};
 use crate::model::Extraction;
 use tree_sitter::Node;
 
+mod calls;
 mod crates;
 mod items;
+mod uses;
 
 pub use crates::Crates;
 
@@ -18,15 +20,32 @@ mod cases;
 /// The file node, a symbol for every item at a declaring scope (file, inline `mod`, `trait` and
 /// `impl` bodies) with its `Declares` edge, and a `References` edge for each requirement id cited
 /// in a comment or string. Never opens another file.
-pub fn extract(_resolver: &Resolver, rel: &str, source: &str) -> Extraction {
+pub fn extract(resolver: &Resolver, rel: &str, source: &str) -> Extraction {
     let mut ex = Extraction::default();
     file_node(rel, &mut ex);
     let src = source.as_bytes();
     let Some(tree) = Lang::Rust.parse(src) else { return ex };
     let root = tree.root_node();
-    items::read(rel, src, root, &mut ex);
+    let items = items::read(rel, src, root, &mut ex);
     items::id_refs(rel, src, root, &mut ex);
+    let mut ctx = uses::Ctx { rel, src, crates: resolver.rust(), items: &items, bindings: uses::Bindings::default() };
+    uses::read(&mut ctx, root, &mut ex);
+    calls::impls(&ctx, &mut ex);
     ex
+}
+
+/// The inline modules around `n`, outermost first.
+pub(crate) fn inline_of(n: Node, src: &[u8]) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut at = n;
+    while let Some(p) = at.parent() {
+        if p.kind() == "mod_item" {
+            out.extend(field_text(p, "name", src).map(str::to_string));
+        }
+        at = p;
+    }
+    out.reverse();
+    out
 }
 
 pub(crate) fn field_text<'a>(n: Node, field: &str, src: &'a [u8]) -> Option<&'a str> {
@@ -43,6 +62,7 @@ pub(crate) fn scoped(inline: &[String], name: &str) -> String {
 pub(crate) fn type_path(t: Node, src: &[u8]) -> Vec<String> {
     match t.kind() {
         "type_identifier" | "identifier" | "primitive_type" | "self" | "crate" | "super" => vec![text(t, src).to_string()],
+        "generic_function" => t.child_by_field_name("function").map_or_else(Vec::new, |x| type_path(x, src)),
         "generic_type" | "reference_type" | "pointer_type" => t.child_by_field_name("type").map_or_else(Vec::new, |x| type_path(x, src)),
         "scoped_type_identifier" | "scoped_identifier" => {
             let mut p = t.child_by_field_name("path").map_or_else(Vec::new, |x| type_path(x, src));

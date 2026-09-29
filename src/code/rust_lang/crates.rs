@@ -3,7 +3,7 @@
 //! Resolution never opens a file. `mod x;` can only name `x.rs` or `x/mod.rs` below its parent
 //! module's directory, so the set of `.rs` paths already says which modules exist; what a path
 //! cannot say — a crate's name, a moved `[lib] path` — comes from the manifests.
-// Read by uses.rs and calls.rs, which Tasks 4 and 5 add; Task 5 removes this line.
+// `macro_files` is read by the call pass, which does not exist yet; that pass removes this line.
 #![allow(dead_code)]
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -11,6 +11,19 @@ use std::sync::LazyLock;
 
 static MACRO_RULES: LazyLock<regex::Regex> =
     LazyLock::new(|| regex::Regex::new(r"(?m)^[ \t]*macro_rules![ \t]*([A-Za-z_]\w*)").expect("valid pattern"));
+
+// rustfmt puts every top-level item at column 0 and every member below it indented, which is
+// what lets a line scan tell a module's names from an impl's without a parse.
+static TOP_ITEM: LazyLock<regex::Regex> = LazyLock::new(|| {
+    regex::Regex::new(
+        r#"(?m)^(?:pub(?:\([^)\n]*\))?[ \t]+)?(?:(?:async|const|unsafe|extern[ \t]+"[^"\n]*")[ \t]+)*(?:fn|struct|enum|union|trait|type|const|static|mod)[ \t]+(?:mut[ \t]+)?([A-Za-z_]\w*)"#,
+    )
+    .expect("valid pattern")
+});
+static PUB_USE: LazyLock<regex::Regex> = LazyLock::new(|| {
+    regex::Regex::new(r"(?m)^pub(?:\([^)\n]*\))?[ \t]+use[ \t]+((?:[A-Za-z_]\w*::)*[A-Za-z_]\w*)(?:[ \t]+as[ \t]+([A-Za-z_]\w*))?[ \t]*;")
+        .expect("valid pattern")
+});
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Crate {
@@ -29,6 +42,9 @@ pub struct Crates {
     crates: Vec<Crate>,
     files: BTreeSet<String>,
     macros: BTreeMap<String, BTreeSet<String>>,
+    tops: BTreeMap<String, BTreeSet<String>>,
+    /// File → name a column-0 `pub use` binds → the path it re-exports.
+    reexports: BTreeMap<String, BTreeMap<String, Vec<String>>>,
 }
 
 /// A module: the directory its crate root sits in, that root, and the file-module segments below.
@@ -86,6 +102,17 @@ impl Crates {
         // would double a build's parsing for one table.
         for c in MACRO_RULES.captures_iter(source) {
             self.macros.entry(c[1].to_string()).or_default().insert(rel.to_string());
+        }
+        let names: BTreeSet<String> = TOP_ITEM.captures_iter(source).map(|c| c[1].to_string()).collect();
+        if !names.is_empty() {
+            self.tops.insert(rel.to_string(), names);
+        }
+        for c in PUB_USE.captures_iter(source) {
+            let path: Vec<String> = c[1].split("::").map(str::to_string).collect();
+            let bound = c.get(2).map_or_else(|| path.last().cloned().unwrap_or_default(), |a| a.as_str().to_string());
+            if bound != "_" {
+                self.reexports.entry(rel.to_string()).or_default().insert(bound, path);
+            }
         }
     }
 
@@ -187,9 +214,20 @@ impl Crates {
     }
 
     /// `path` as written at a site in `rel` inside inline modules `inline`. Resolves `crate`,
-    /// `self`, `super`, a workspace crate's name and a child file module; any other first segment
-    /// — an external crate, a name the file itself binds — is the caller's to try first.
+    /// `self`, `super`, a workspace crate's name and a child file module, and follows one `pub use`
+    /// to the declaring file; any other first segment — an external crate, a name the file itself
+    /// binds — is the caller's to try first.
     pub fn resolve(&self, rel: &str, inline: &[String], path: &[String]) -> Option<Target> {
+        self.resolve_from(rel, inline, path, true)
+    }
+
+    /// Whether `file` declares `name` at its top level, read for a glob import of another file,
+    /// whose names nothing else here knows.
+    pub fn declares(&self, file: &str, name: &str) -> bool {
+        self.tops.get(file).is_some_and(|n| n.contains(name))
+    }
+
+    fn resolve_from(&self, rel: &str, inline: &[String], path: &[String], hop: bool) -> Option<Target> {
         let here = self.module_of(rel);
         let first = path.first()?;
         let (mut module, scope, mut rest): (Module, Vec<String>, &[String]) = match first.as_str() {
@@ -229,6 +267,13 @@ impl Crates {
         let file = self.file_of(&module)?;
         if rest.is_empty() {
             return Some(Target::Module { file, inline: scope });
+        }
+        // A file that re-exports a name holds no symbol for it: `crate::Store` through
+        // `pub use store::Store;` is `src/store.rs`'s `Store`. One hop, so a cycle cannot loop.
+        if hop && scope.is_empty() && !self.declares(&file, &rest[0]) {
+            if let Some(via) = self.reexports.get(&file).and_then(|r| r.get(&rest[0])) {
+                return self.resolve_from(&file, &[], &[via.clone(), rest[1..].to_vec()].concat(), false);
+            }
         }
         Some(Target::Item { file, name: item_name(&scope, rest) })
     }
@@ -349,5 +394,26 @@ mod tests {
         assert_eq!(item_name(&s(&["tests"]), &s(&["Helper", "build", "x"])), "tests/Helper.build");
         assert_eq!(item_name(&[], &s(&["fixtures", "order"])), "fixtures/order");
         assert_eq!(item_name(&[], &s(&["MAX_LEN"])), "MAX_LEN");
+    }
+
+    #[test]
+    fn a_file_s_top_level_names_are_read_by_the_line_scan() {
+        let mut c = Crates::default();
+        c.file("src/walk.rs", "pub struct Manifest;\npub(crate) const fn limit() -> u32 { 1 }\nstatic mut N: u32 = 0;\nimpl Manifest {\n    pub fn load() {}\n}\n");
+        for name in ["Manifest", "limit", "N"] {
+            assert!(c.declares("src/walk.rs", name), "{name}");
+        }
+        assert!(!c.declares("src/walk.rs", "load"), "an indented member is not a top-level name");
+    }
+
+    #[test]
+    fn a_path_through_a_crate_root_re_export_lands_on_the_declaring_file() {
+        let mut c = Crates::default();
+        c.manifest("Cargo.toml", "[package]\nname = \"shop\"\n");
+        c.file("src/lib.rs", "mod store;\npub use store::Store;\npub mod ops;\n");
+        c.file("src/store.rs", "pub struct Store;\nimpl Store {\n    pub fn new() -> Store { Store }\n}\n");
+        c.file("src/ops.rs", "");
+        assert_eq!(c.resolve("src/ops.rs", &[], &path("crate::Store")), item("src/store.rs", "Store"));
+        assert_eq!(c.resolve("src/ops.rs", &[], &path("crate::Store::new")), item("src/store.rs", "Store.new"));
     }
 }

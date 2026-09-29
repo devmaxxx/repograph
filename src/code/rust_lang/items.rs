@@ -27,8 +27,6 @@ pub(crate) struct Items {
     pub impls: Vec<Impl>,
 }
 
-// The use and call passes resolve against `ty` and `members`; nothing reads them until those passes exist.
-#[expect(dead_code)]
 #[derive(Debug)]
 pub(crate) struct Impl {
     pub inline: Vec<String>,

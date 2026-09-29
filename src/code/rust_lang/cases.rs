@@ -242,3 +242,77 @@ fn an_id_cited_in_a_foreign_impl_starts_from_a_written_node() {
         assert!(ids(&ex).contains(&from), "{from} is not a node: {:?}", ids(&ex));
     }
 }
+
+fn shop(ops: &str) -> Repo {
+    Repo::new(&[
+        ("Cargo.toml", "[package]\nname = \"shop\"\nversion = \"0.1.0\"\n"),
+        ("src/lib.rs", "pub mod store;\npub mod walk;\npub mod ops;\npub trait Open {\n    fn open() -> Self;\n}\n"),
+        ("src/store.rs", "pub struct Store;\nimpl Store {\n    pub fn new() -> Store { Store }\n    pub fn reopen() -> Store { Self::new() }\n}\npub fn open() -> Store { Store::new() }\n"),
+        ("src/walk.rs", "pub struct Manifest;\nimpl Manifest {\n    pub fn load() {}\n}\n"),
+        ("src/ops.rs", ops),
+    ])
+}
+
+#[test]
+fn use_trees_flatten_into_imports_by_declared_name() {
+    let repo = shop("use crate::{store::{self, Store as Db}, walk::*};\nuse serde::Serialize;\n");
+    let ex = repo.extract("src/ops.rs");
+    let mut imports = edges(&ex, EdgeKind::Imports);
+    imports.sort();
+    assert_eq!(
+        imports,
+        vec![
+            ("file:src/ops.rs", "file:src/store.rs", "*"),
+            // `impact` matches an import against the declared name, so an alias records `Store`.
+            ("file:src/ops.rs", "file:src/store.rs", "Store"),
+            ("file:src/ops.rs", "file:src/walk.rs", "*"),
+        ]
+    );
+}
+
+#[test]
+fn pub_use_is_a_re_export_in_any_visibility() {
+    let repo = Repo::new(&[
+        ("Cargo.toml", "[package]\nname = \"shop\"\n"),
+        ("src/lib.rs", "pub mod store;\npub use store::Store;\npub(crate) use store::*;\n"),
+        ("src/store.rs", "pub struct Store;\n"),
+    ]);
+    let ex = repo.extract("src/lib.rs");
+    let mut re = edges(&ex, EdgeKind::ReExports);
+    re.sort();
+    assert_eq!(re, vec![("file:src/lib.rs", "file:src/store.rs", "*"), ("file:src/lib.rs", "file:src/store.rs", "Store")]);
+    assert!(edges(&ex, EdgeKind::Imports).is_empty());
+}
+
+#[test]
+fn a_workspace_crate_name_resolves_to_its_library_and_a_same_file_use_writes_no_edge() {
+    let repo = Repo::new(&[
+        ("Cargo.toml", "[workspace]\nmembers = [\"crates/*\"]\n"),
+        ("crates/shop-core/Cargo.toml", "[package]\nname = \"shop-core\"\n"),
+        ("crates/shop-core/src/lib.rs", "pub mod hmac;\n"),
+        ("crates/shop-core/src/hmac.rs", "pub fn sign() {}\n#[cfg(test)]\nmod tests {\n    use super::*;\n}\n"),
+        ("crates/shopd/Cargo.toml", "[package]\nname = \"shopd\"\n"),
+        ("crates/shopd/src/main.rs", "use shop_core::hmac::sign;\nfn main() { sign(); }\n"),
+    ]);
+    let ex = repo.extract("crates/shopd/src/main.rs");
+    assert_eq!(edges(&ex, EdgeKind::Imports), vec![("file:crates/shopd/src/main.rs", "file:crates/shop-core/src/hmac.rs", "sign")]);
+    assert!(edges(&repo.extract("crates/shop-core/src/hmac.rs"), EdgeKind::Imports).is_empty(), "`use super::*` in a test module names its own file");
+}
+
+#[test]
+fn a_foreign_impl_references_its_type_and_extends_its_trait() {
+    let repo = shop("use crate::store::Store;\nuse crate::Open;\nimpl Open for Store {\n    fn open() -> Store { Store }\n}\n");
+    let ex = repo.extract("src/ops.rs");
+    assert_eq!(edges(&ex, EdgeKind::References), vec![("sym:src/ops.rs::Store.open", "sym:src/store.rs::Store", "impl")]);
+    assert_eq!(edges(&ex, EdgeKind::Extends), vec![("sym:src/store.rs::Store", "sym:src/lib.rs::Open", "")]);
+}
+
+#[test]
+fn a_local_impl_extends_without_a_reference_and_an_external_trait_writes_nothing() {
+    let src = "pub trait Exec {\n    fn run(&self);\n}\npub struct Tokio;\nimpl Exec for Tokio {\n    fn run(&self) {}\n}\nimpl std::fmt::Display for Tokio {\n    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result { Ok(()) }\n}\n";
+    let repo = Repo::new(&[("Cargo.toml", "[package]\nname = \"x\"\n"), ("src/lib.rs", src)]);
+    let ex = repo.extract("src/lib.rs");
+    assert_eq!(edges(&ex, EdgeKind::Extends), vec![("sym:src/lib.rs::Tokio", "sym:src/lib.rs::Exec", "")]);
+    assert!(edges(&ex, EdgeKind::References).is_empty());
+    assert!(edges(&ex, EdgeKind::Declares).contains(&("sym:src/lib.rs::Tokio", "sym:src/lib.rs::Tokio.run", "")));
+}

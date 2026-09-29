@@ -218,8 +218,6 @@ impl Resolver {
         &self.dotnet
     }
 
-    // Nothing reads the table until the Rust use pass lands; that pass deletes this allow.
-    #[allow(dead_code)]
     pub(crate) fn rust(&self) -> &crate::code::rust_lang::Crates {
         &self.rust
     }
