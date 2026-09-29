@@ -1,0 +1,5 @@
+{"kind":"impact","target":"staff_member","file":"packages/db/migrations/0008_first_slice.sql","tier":"wide","exts":[".sql"]}
+{"kind":"impact","target":"bump_updated_at","file":"packages/db/migrations/0005_updated_at_and_actor_guard.sql","tier":"narrow"}
+{"kind":"trace","from":"salon_ctx/staff_identity","to":"salon_ctx/bump_updated_at","expect":"path","via":[]}
+{"kind":"trace","from":"salon_ctx/bump_updated_at","to":"salon_ctx/staff_identity","expect":"none","via":[]}
+{"kind":"changes","base":"0cd4cfe9~1","note":"four .sql files from the audit chain to the display-name search; one hunk is a grant outside every declaration"}
