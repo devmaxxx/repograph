@@ -135,35 +135,49 @@ impl Ctx<'_> {
         own.is_none_or(|s| self.defs.names.contains(s)).then_some(target)
     }
 
-    /// What each function makes its own: parameters, assignment, `for`, `with`/`except … as` and
-    /// walrus targets, nested definitions. A nested function's names widen its outer function's
+    /// The names a function makes its own — parameters, assignment, `for`, `with`/`except … as`
+    /// and walrus targets, nested definitions — and the names `global` and `nonlocal` hand back to
+    /// the enclosing binding.
+    fn locals(&self, f: Node) -> (BTreeSet<String>, BTreeSet<String>) {
+        let mut set = parameters_of(f, self.src);
+        let mut freed = BTreeSet::new();
+        if let Some(body) = f.child_by_field_name("body") {
+            descend(body, &mut |n| {
+                match n.kind() {
+                    "assignment" | "augmented_assignment" | "for_statement" | "for_in_clause" => {
+                        n.child_by_field_name("left").into_iter().for_each(|l| target_names(l, self.src, &mut set));
+                    }
+                    "as_pattern" | "except_clause" => n.child_by_field_name("alias").into_iter().for_each(|a| target_names(a, self.src, &mut set)),
+                    "named_expression" => n.child_by_field_name("name").into_iter().for_each(|a| target_names(a, self.src, &mut set)),
+                    "function_definition" | "class_definition" => {
+                        set.extend(field_text(n, "name", self.src).map(str::to_string));
+                    }
+                    "global_statement" | "nonlocal_statement" => named(n).into_iter().for_each(|c| target_names(c, self.src, &mut freed)),
+                    _ => {}
+                }
+                true
+            });
+        }
+        (set, freed)
+    }
+
+    /// What each function makes its own. A nested function's names widen its outer function's
     /// set, which only loses edges. `global` and `nonlocal` name the enclosing binding, so they
-    /// cancel the shadow. A local import is a binding, not a shadow.
+    /// cancel the shadow. A local import is a binding, not a shadow. A function no symbol stands
+    /// for — one under an `if` or `try` — has no set: its names must not shadow the module's, and
+    /// `calls` reads them off the function around the call instead.
     fn shadows(&mut self, root: Node) {
         let mut shadows: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
         let mut released: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
         descend(root, &mut |f| {
             let Some(name) = (f.kind() == "function_definition").then(|| f.child_by_field_name("name")).flatten() else { return true };
             let key = self.scope(name);
-            let (set, freed) = (shadows.entry(key.clone()).or_default(), released.entry(key).or_default());
-            set.extend(parameters_of(f, self.src));
-            if let Some(body) = f.child_by_field_name("body") {
-                descend(body, &mut |n| {
-                    match n.kind() {
-                        "assignment" | "augmented_assignment" | "for_statement" | "for_in_clause" => {
-                            n.child_by_field_name("left").into_iter().for_each(|l| target_names(l, self.src, set));
-                        }
-                        "as_pattern" | "except_clause" => n.child_by_field_name("alias").into_iter().for_each(|a| target_names(a, self.src, set)),
-                        "named_expression" => n.child_by_field_name("name").into_iter().for_each(|a| target_names(a, self.src, set)),
-                        "function_definition" | "class_definition" => {
-                            set.extend(field_text(n, "name", self.src).map(str::to_string));
-                        }
-                        "global_statement" | "nonlocal_statement" => named(n).into_iter().for_each(|c| target_names(c, self.src, freed)),
-                        _ => {}
-                    }
-                    true
-                });
+            if key.is_empty() {
+                return true;
             }
+            let (set, freed) = self.locals(f);
+            shadows.entry(key.clone()).or_default().extend(set);
+            released.entry(key).or_default().extend(freed);
             true
         });
         for (key, mut set) in shadows {
@@ -180,12 +194,22 @@ impl Ctx<'_> {
         sc.lambda.contains(head) || self.shadows.get(sc.name).is_some_and(|s| s.contains(head))
     }
 
-    /// The parameters of every lambda that encloses `n`.
-    fn lambda_params(&self, n: Node) -> BTreeSet<String> {
+    /// The parameters of every lambda that encloses `n`, and — when no symbol owns `n`, so no
+    /// shadow set does either — the locals of every function around it.
+    fn lambda_params(&self, n: Node, owned: bool) -> BTreeSet<String> {
         let mut out = BTreeSet::new();
-        for a in std::iter::successors(n.parent(), |p| p.parent()).filter(|a| a.kind() == "lambda") {
-            if let Some(ps) = a.child_by_field_name("parameters") {
-                named(ps).into_iter().for_each(|p| param_names(p, self.src, &mut out));
+        for a in std::iter::successors(n.parent(), |p| p.parent()) {
+            match a.kind() {
+                "lambda" => {
+                    if let Some(ps) = a.child_by_field_name("parameters") {
+                        named(ps).into_iter().for_each(|p| param_names(p, self.src, &mut out));
+                    }
+                }
+                "function_definition" if !owned => {
+                    let (set, freed) = self.locals(a);
+                    out.extend(set.into_iter().filter(|s| !freed.contains(s)));
+                }
+                _ => {}
             }
         }
         out
@@ -396,8 +420,9 @@ impl Ctx<'_> {
                 return true;
             }
             let from = self.source(n);
-            let lambda = self.lambda_params(n);
-            let sc = Sc { name: self.suffix(&from), lambda: &lambda };
+            let scope = self.suffix(&from);
+            let lambda = self.lambda_params(n, !scope.is_empty());
+            let sc = Sc { name: scope, lambda: &lambda };
             let target = n.child_by_field_name("function").and_then(|f| self.callee(sc, f));
             if let Some(target) = target.filter(|t| *t != from) {
                 ex.edge(&from, &target, EdgeKind::Calls, "", self.rel);

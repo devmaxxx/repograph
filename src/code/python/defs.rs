@@ -35,15 +35,30 @@ pub(crate) fn read(rel: &str, src: &[u8], root: Node, ex: &mut Extraction) -> De
     walk.defs
 }
 
-/// `__all__ = [...]` or `(...)` of string literals at module level; `None` when there is none,
-/// or when it is computed, since then only the underscore rule says anything.
+/// `__all__ = [...]` or `(...)` of string literals at module level, and the literal lists a later
+/// `__all__ += [...]` adds; `None` when there is none, or when it is computed, since then only
+/// the underscore rule says anything.
 fn dunder_all(root: Node, src: &[u8]) -> Option<BTreeSet<String>> {
-    named(root).into_iter().rev().find_map(|s| {
-        let a = s.named_child(0).filter(|a| s.kind() == "expression_statement" && a.kind() == "assignment")?;
-        a.child_by_field_name("left").filter(|l| text(*l, src) == "__all__")?;
-        let right = a.child_by_field_name("right").filter(|r| matches!(r.kind(), "list" | "tuple"))?;
-        named(right).into_iter().map(|i| (i.kind() == "string").then(|| string_content(i, src))).collect()
-    })
+    let literal = |r: Node| -> Option<BTreeSet<String>> {
+        if !matches!(r.kind(), "list" | "tuple") {
+            return None;
+        }
+        named(r).into_iter().map(|i| (i.kind() == "string").then(|| string_content(i, src))).collect()
+    };
+    let mut all: Option<BTreeSet<String>> = None;
+    for s in named(root) {
+        let Some(a) = s.named_child(0).filter(|a| s.kind() == "expression_statement" && matches!(a.kind(), "assignment" | "augmented_assignment")) else { continue };
+        if !a.child_by_field_name("left").is_some_and(|l| text(l, src) == "__all__") {
+            continue;
+        }
+        let right = a.child_by_field_name("right").and_then(literal);
+        if a.kind() == "assignment" {
+            all = right;
+        } else if let (Some(all), Some(more)) = (all.as_mut(), right) {
+            all.extend(more);
+        }
+    }
+    all
 }
 
 fn string_content(s: Node, src: &[u8]) -> String {

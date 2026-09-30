@@ -69,10 +69,13 @@ impl Modules {
 
     /// The file `import dotted` names from `rel`. Roots are tried in the order Python would
     /// find them: the importing file's directory (a script's `sys.path[0]`), each manifest
-    /// directory above it nearest first, then the repository root.
+    /// directory above it nearest first, then the repository root. A package's own directory is
+    /// not on the path, so a module in it never finds its siblings by bare name — `import types`
+    /// beside a `types.py` is the standard library's.
     pub fn absolute(&self, rel: &str, dotted: &str) -> Option<String> {
-        let mut bases = vec![parent(rel).to_string()];
         let mut dir = parent(rel);
+        let in_package = self.files.contains(&join(dir, "__init__.py"));
+        let mut bases = if in_package { Vec::new() } else { vec![dir.to_string()] };
         loop {
             if self.roots.contains(dir) && !bases.iter().any(|b| b == dir) {
                 bases.push(dir.to_string());
@@ -148,6 +151,16 @@ mod tests {
         assert_eq!(m.absolute("lib/app/main.py", "shop.pay").as_deref(), Some("lib/shop/pay/__init__.py"));
         assert_eq!(m.absolute("lib/app/main.py", "top").as_deref(), Some("top.py"), "from the repository root");
         assert_eq!(m.absolute("bench/compare/run.py", "os"), None, "the standard library is not in the repository");
+    }
+
+    #[test]
+    fn a_module_in_a_package_does_not_find_its_siblings_by_bare_name() {
+        let mut m = Modules::default();
+        for f in ["pkg/__init__.py", "pkg/types.py", "pkg/other.py", "scripts/types.py", "scripts/run.py"] {
+            m.file(f);
+        }
+        assert_eq!(m.absolute("pkg/other.py", "types"), None, "pkg is a package, so `types` is the standard library's");
+        assert_eq!(m.absolute("scripts/run.py", "types").as_deref(), Some("scripts/types.py"), "a script's directory is on its path");
     }
 
     #[test]

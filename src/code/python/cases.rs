@@ -432,3 +432,24 @@ fn a_global_declaration_cancels_the_shadow_and_a_local_import_is_not_one() {
     let ex = shadow_repo("def f():\n    from util import connect\n    connect()\n").extract("tools/main.py");
     assert_eq!(calls_from(&ex, "sym:tools/main.py::f"), ["sym:tools/util.py::connect"].into_iter().collect());
 }
+
+#[test]
+fn a_function_under_an_if_shadows_only_its_own_calls() {
+    let main = "from util import connect\n\n\ntry:\n    def helper(connect):\n        connect()\nexcept ImportError:\n    pass\n\nif __name__ == \"__main__\":\n    connect()\n";
+    let ex = shadow_repo(main).extract("tools/main.py");
+    assert_eq!(
+        calls_from(&ex, "file:tools/main.py"),
+        ["sym:tools/util.py::connect"].into_iter().collect(),
+        "the module-level call keeps its edge, the parameter's call adds none"
+    );
+    no_calls("from util import connect\n\n\nif True:\n    def helper(connect):\n        connect()\n", "file:tools/main.py");
+}
+
+#[test]
+fn all_extended_by_a_literal_exports_the_added_names() {
+    let src = "__all__ = [\"a\"]\n__all__ += [\"go\"]\n\n\ndef a():\n    pass\n\n\ndef go():\n    pass\n\n\ndef _b():\n    pass\n";
+    let ex = Repo::new(&[("m.py", src)]).extract("m.py");
+    let declares = edges(&ex, EdgeKind::Declares);
+    assert!(declares.contains(&("file:m.py", "sym:m.py::go", "export")), "{declares:?}");
+    assert!(declares.contains(&("file:m.py", "sym:m.py::_b", "")), "{declares:?}");
+}
