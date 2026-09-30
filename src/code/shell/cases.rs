@@ -186,3 +186,53 @@ fn a_function_added_to_a_script_while_watching_is_called_on_the_next_poll() {
         "{:?}", w.graph.edges
     );
 }
+
+fn sourcing(pairs: &[(&str, &str)]) -> crate::model::Graph {
+    let mut g = crate::model::Graph::default();
+    for (from, to) in pairs {
+        g.edges.insert(crate::model::Edge {
+            source: format!("file:{from}"),
+            target: format!("file:{to}"),
+            kind: EdgeKind::Imports,
+            context: "*".into(),
+            file: (*from).into(),
+        });
+    }
+    g
+}
+
+fn strings(v: &[&str]) -> Vec<String> {
+    v.iter().map(|s| s.to_string()).collect()
+}
+
+fn widened(stale: &[&str], removed: &[&str], g: &crate::model::Graph, all: &[&str]) -> Vec<String> {
+    let mut w = super::widen(&strings(stale), &strings(removed), g, &strings(all));
+    w.sort();
+    w
+}
+
+#[test]
+fn widening_reaches_every_script_sourcing_a_changed_one_through_the_chain() {
+    let g = sourcing(&[("a.sh", "b.sh"), ("b.sh", "c.sh")]);
+    assert_eq!(widened(&["c.sh"], &[], &g, &["a.sh", "b.sh", "c.sh", "d.sh"]), ["a.sh", "b.sh"]);
+}
+
+#[test]
+fn widening_over_a_source_cycle_ends_and_names_each_script_once() {
+    let g = sourcing(&[("a.sh", "b.sh"), ("b.sh", "a.sh")]);
+    assert_eq!(widened(&["a.sh"], &[], &g, &["a.sh", "b.sh"]), ["b.sh"]);
+    assert_eq!(widened(&[], &["a.sh"], &g, &["b.sh"]), ["b.sh"]);
+}
+
+#[test]
+fn a_removed_script_still_widens_the_scripts_that_sourced_it() {
+    let g = sourcing(&[("a.sh", "gone.sh"), ("b.sh", "a.sh")]);
+    assert_eq!(widened(&[], &["gone.sh"], &g, &["a.sh", "b.sh"]), ["a.sh", "b.sh"]);
+}
+
+#[test]
+fn widening_leaves_out_a_script_already_being_read_and_a_non_script_change() {
+    let g = sourcing(&[("a.sh", "b.sh"), ("b.sh", "c.sh")]);
+    assert_eq!(widened(&["c.sh", "b.sh"], &[], &g, &["a.sh", "b.sh", "c.sh"]), ["a.sh"]);
+    assert!(widened(&["notes.md"], &[], &g, &["a.sh", "b.sh", "c.sh"]).is_empty());
+}
