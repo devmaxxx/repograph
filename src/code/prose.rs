@@ -18,6 +18,22 @@ pub(crate) fn named<'t>(n: Node<'t>) -> Vec<Node<'t>> {
     n.named_children(&mut c).collect()
 }
 
+/// Every descendant of one of `kinds`, in source order, not descending into a match: a grandchild belongs
+/// to its own parent, so the caller reads it from there.
+pub(crate) fn find<'t>(n: Node<'t>, kinds: &[&str]) -> Vec<Node<'t>> {
+    let mut out = Vec::new();
+    let mut stack = named(n);
+    while let Some(x) = stack.pop() {
+        if kinds.contains(&x.kind()) {
+            out.push(x);
+        } else {
+            stack.extend(named(x));
+        }
+    }
+    out.sort_by_key(|x| x.start_byte());
+    out
+}
+
 /// The last row holding the node's text. A comment that swallows its newline ends at column 0 of the
 /// next row, and counting that row would join the comment to a declaration a blank line below it.
 pub(crate) fn last_row(n: Node) -> usize {
