@@ -1,0 +1,4 @@
+{"kind":"impact","target":"embedder_declared","file":"bench/probe/embedder.sh","tier":"wide","exts":[".sh"]}
+{"kind":"impact","target":"embedder_line","file":"bench/probe/embedder.sh","tier":"wide","exts":[".sh"]}
+{"kind":"trace","from":"wait_quiet","to":"ancestor_pids","file":"bench/probe/quiet.sh","expect":"path","via":["sym:bench/probe/quiet.sh::main","sym:bench/probe/quiet.sh::busy_lines"]}
+{"kind":"changes","base":"50a042f"}

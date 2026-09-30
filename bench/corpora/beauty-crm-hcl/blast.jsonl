@@ -1,0 +1,7 @@
+{"kind":"impact","target":"hcloud_server/staging","file":"infra/staging/server.tf","tier":"wide","exts":[".tf"]}
+{"kind":"impact","target":"var/domain","file":"infra/staging/variables.tf","tier":"wide","exts":[".tf"]}
+{"kind":"impact","target":"random_password/postgres_superuser","file":"infra/staging/main.tf","tier":"narrow","exts":[".tf"]}
+{"kind":"impact","target":"hcloud_zone/main","file":"infra/staging/dns.tf","tier":"narrow","exts":[".tf"]}
+{"kind":"trace","from":"hcloud_zone_rrset/a","to":"var/ssh_public_key","file":"infra/staging/dns.tf","expect":"path","via":["sym:infra/staging/server.tf::hcloud_server/staging","sym:infra/staging/server.tf::hcloud_ssh_key/admin"]}
+{"kind":"trace","from":"output/server_ipv4","to":"var/server_type","file":"infra/staging/outputs.tf","expect":"path","via":["sym:infra/staging/server.tf::hcloud_server/staging"]}
+{"kind":"changes","base":"a3c93add"}

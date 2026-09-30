@@ -8,6 +8,7 @@ wrong about the repository, not about a rival's model.
 from __future__ import annotations
 
 import json
+import posixpath
 import re
 import subprocess
 from bisect import bisect_right
@@ -1841,6 +1842,665 @@ def changed_symbols(repo: Path, base: str) -> dict:
 DI_ROOTS = ("apps", "packages", "libs-dotnet", "mobile")
 
 
+# ---- Shell, Bicep and HCL -----------------------------------------------------------------------------
+# Text readers mirroring `src/code/{shell,bicep,hcl}`. Each names a declaration as the extractor's id
+# does, so a count, a hunk and a path compare one for one. A rule simplified here says how in its comment.
+
+# What a label, a module path or a registry address looks like; any other string body is prose.
+IDENTIFIERISH = re.compile(r"[\w./:@-]*")
+HCL_HEREDOC = re.compile(r"<<-?([A-Za-z_]\w*)[ \t]*\n")
+
+
+def _interpolations_only(body: str) -> str:
+    """`body` blanked except its `${…}` interpolations, which are code. Newlines stay, so lines still count."""
+    out: list[str] = []
+    depth = 0
+    i = 0
+    while i < len(body):
+        if not depth and body.startswith("${", i) and body[i - 1 : i] != "$":
+            out.append("${")
+            depth = 1
+            i += 2
+            continue
+        c = body[i]
+        if depth:
+            depth += {"{": 1, "}": -1}.get(c, 0)
+            out.append(c)
+        else:
+            out.append(c if c == "\n" else " ")
+        i += 1
+    return "".join(out)
+
+
+def _string_body(body: str) -> str:
+    return body if IDENTIFIERISH.fullmatch(body) else _interpolations_only(body)
+
+
+def _closing(src: str, i: int, quote: str) -> int:
+    """The index of the quote closing a string whose body starts at `i`. A quote inside `${…}` belongs to
+    the interpolation. A string still open at its line's end ends there, so one stray quote cannot blank
+    the rest of the file."""
+    depth = 0
+    while i < len(src):
+        c = src[i]
+        if c == "\\":
+            i += 2
+            continue
+        if src.startswith("${", i) and src[i - 1 : i] != "$":
+            depth += 1
+            i += 2
+            continue
+        if depth and c == "}":
+            depth -= 1
+        elif not depth and c in (quote, "\n"):
+            return i
+        i += 1
+    return len(src)
+
+
+def _blank_config(src: str, *, hcl: bool) -> str:
+    quote = '"' if hcl else "'"
+    out: list[str] = []
+    i = 0
+    while i < len(src):
+        c = src[i]
+        if (hcl and c == "#") or src.startswith("//", i):
+            j = src.find("\n", i)
+            j = len(src) if j < 0 else j
+            out.append(" " * (j - i))
+            i = j
+        elif src.startswith("/*", i):
+            j = src.find("*/", i + 2)
+            j = len(src) if j < 0 else j + 2
+            out.append(re.sub(r"[^\n]", " ", src[i:j]))
+            i = j
+        elif not hcl and src.startswith("'''", i):
+            j = src.find("'''", i + 3)
+            j = len(src) if j < 0 else j + 3
+            out.append(re.sub(r"[^\n]", " ", src[i:j]))
+            i = j
+        elif c == quote:
+            j = _closing(src, i + 1, quote)
+            closed = j < len(src) and src[j] == quote
+            out.append(quote + _string_body(src[i + 1 : j]) + (quote if closed else ""))
+            i = j + 1 if closed else j
+        elif hcl and (m := HCL_HEREDOC.match(src, i)):
+            end = re.compile(rf"^[ \t]*{re.escape(m.group(1))}[ \t]*$", re.M).search(src, m.end())
+            stop = end.start() if end else len(src)
+            out.append(src[i : m.end()] + _interpolations_only(src[m.end() : stop]))
+            i = stop
+        else:
+            out.append(c)
+            i += 1
+    return "".join(out)
+
+
+def blank_hcl(src: str) -> str:
+    """HCL with comments blanked, heredocs kept to their interpolations, and each string kept only as far
+    as a reader needs it: whole when it could be a name, else its interpolations."""
+    return _blank_config(src, hcl=True)
+
+
+def blank_bicep(src: str) -> str:
+    """Bicep with comments and `'''` text blanked, and each `'…'` kept as `blank_hcl` keeps a string."""
+    return _blank_config(src, hcl=False)
+
+
+def _without_names(blanked: str, quote: str) -> str:
+    """A blanked file with the strings it kept whole blanked too, for a reader of references: a module
+    path spells `db`, and that is not a reference to a declaration named `db`."""
+    return re.sub(rf"{quote}[\w./:@-]*{quote}", lambda m: quote + " " * (len(m.group(0)) - 2) + quote, blanked)
+
+
+# `<<<` is a here-string with no terminator to hunt for, and `<<` inside `$((…))` is a shift.
+SHELL_HEREDOC = re.compile(r"(?<!<)<<(?!<)(-?)[ \t]*(['\"]?)([A-Za-z_][\w-]*)\2")
+
+
+def _arithmetic_end(src: str, i: int) -> int:
+    """The index past the `))` of a `$((…))` or command-position `((…))` starting at `i`, else 0."""
+    if src.startswith("$((", i):
+        return _paren_end(src, i + 2)
+    if src.startswith("((", i) and (i == 0 or src[i - 1] in " \t\n;|&("):
+        return _paren_end(src, i + 1)
+    return 0
+
+
+def _shell_scan(src: str, *, strings: bool) -> str:
+    """Shell with comments and heredoc bodies blanked, and string bodies too when `strings`."""
+    out: list[str] = []
+    pending: list[tuple[str, bool]] = []
+    quote = ""
+    i = 0
+    while i < len(src):
+        c = src[i]
+        if quote:
+            if c == quote:
+                quote = ""
+                out.append(c)
+            elif c == "\\" and quote == '"' and i + 1 < len(src):
+                out.append("  " if strings and src[i + 1] != "\n" else src[i : i + 2])
+                i += 2
+                continue
+            else:
+                out.append(" " if strings and c != "\n" else c)
+        elif c in "'\"":
+            quote = c
+            out.append(c)
+        elif c == "\\" and i + 1 < len(src):
+            out.append(src[i : i + 2])
+            i += 2
+            continue
+        elif arithmetic := _arithmetic_end(src, i):
+            out.append(src[i:arithmetic])
+            i = arithmetic
+            continue
+        # `#` opens a comment only at the start of a word: `$#` and `${#a[@]}` are expansions.
+        elif c == "#" and (i == 0 or src[i - 1] in " \t\n;|&("):
+            j = src.find("\n", i)
+            j = len(src) if j < 0 else j
+            out.append(" " * (j - i))
+            i = j
+            continue
+        elif (m := SHELL_HEREDOC.match(src, i)):
+            pending.append((m.group(3), m.group(1) == "-"))
+            out.append(m.group(0))
+            i = m.end()
+            continue
+        elif c == "\n" and pending:
+            out.append("\n")
+            i += 1
+            for word, tabs in pending:
+                while i < len(src):
+                    j = src.find("\n", i)
+                    j = len(src) if j < 0 else j
+                    body = src[i:j]
+                    newline = "\n" if j < len(src) else ""
+                    i = j + len(newline)
+                    if (body.lstrip("\t") if tabs else body) == word:
+                        out.append(" " * len(body) + newline)
+                        break
+                    out.append(" " * len(body) + newline)
+            pending = []
+            continue
+        else:
+            out.append(c)
+        i += 1
+    return "".join(out)
+
+
+def shell_code(src: str) -> str:
+    """Shell with comments and heredoc bodies blanked and strings kept, for reading commands."""
+    return _shell_scan(src, strings=False)
+
+
+# A case pattern's `)` has no `(`, and `declaration_end` would count the function holding it open to the
+# end of the file, or end it early on the line that closes one bracket too many.
+CASE_PATTERN = r"""\(?[ \t]*(?:"[ ]*"|'[ ]*'|[^\s()|;"'])+(?:[ \t]*\|[ \t]*(?:"[ ]*"|'[ ]*'|[^\s()|;"'])+)*[ \t]*\)"""
+CASE_ARM_AFTER = re.compile(rf"(?:^|;;&?|;&)[ \t]*{CASE_PATTERN}")
+CASE_ARM_IN = re.compile(rf"\bin[ \t]+{CASE_PATTERN}")
+
+
+def _case_pattern_spans(seen: list[str]) -> list[list[tuple[int, int]]]:
+    """Per line of string-blanked shell, the column spans of the `case` patterns it holds: after `in`
+    on the line opening a `case`, and after `;;` or at the start of a line between `case` and `esac`."""
+    out: list[list[tuple[int, int]]] = []
+    depth = 0
+    for line in seen:
+        spans = []
+        if depth:
+            spans += [m.span() for m in CASE_ARM_AFTER.finditer(line)]
+        if re.search(r"\bcase\b", line):
+            spans += [(m.start() + m.group(0).index("in") + 2, m.end()) for m in CASE_ARM_IN.finditer(line)]
+        out.append(spans)
+        depth = max(depth + len(re.findall(r"\bcase\b", line)) - len(re.findall(r"\besac\b", line)), 0)
+    return out
+
+
+def blank_shell(src: str) -> str:
+    """Shell as `declaration_end` needs it: comments, heredocs and strings blanked, case patterns too."""
+    lines = _shell_scan(src, strings=True).split("\n")
+    for k, spans in enumerate(_case_pattern_spans(lines)):
+        for a, b in spans:
+            lines[k] = lines[k][:a] + " " * (b - a) + lines[k][b:]
+    return "\n".join(lines)
+
+
+BICEP_DECL = re.compile(r"^[ \t]*(param|var|resource|module|type|func|output)[ \t]+(\w+)")
+
+
+def bicep_declarations(blanked: str) -> list[tuple[int, str]]:
+    """Top-level declarations by symbolic name, an output as `output/<name>`, and a resource declared in
+    its parent's body as `<parent>.<child>`."""
+    out: list[tuple[int, str]] = []
+    depth = 0
+    parents: list[tuple[int, str]] = []  # (the depth of a resource's body, its name)
+    for number, line in enumerate(blanked.split("\n"), 1):
+        while parents and depth < parents[-1][0]:
+            parents.pop()
+        m = BICEP_DECL.match(line)
+        child = bool(m and m.group(1) == "resource" and parents and depth == parents[-1][0])
+        if m and (depth == 0 or child):
+            keyword, name = m.groups()
+            if keyword == "output":
+                name = f"output/{name}"
+            elif child:
+                name = f"{parents[-1][1]}.{name}"
+            out.append((number, name))
+            if keyword == "resource":
+                parents.append((depth + 1, name))
+        depth = max(depth + line.count("{") - line.count("}"), 0)
+    return out
+
+
+HCL_BLOCK = re.compile(r'[ \t]*([A-Za-z_][\w-]*)((?:[ \t]+(?:"[^"\n]*"|[A-Za-z_][\w-]*))*)[ \t]*\{')
+HCL_LABEL = re.compile(r'"([^"\n]*)"|([A-Za-z_][\w-]*)')
+HCL_ATTR = re.compile(r"[ \t]*([A-Za-z_][\w-]*)[ \t]*=(?!=)")
+
+
+def _hcl_address(kind: str, labels: list[str], terraform: bool) -> str | None:
+    # A label holding a `/`, as a lock file's registry paths do, names no address an id can hold.
+    if any(not label or "/" in label for label in labels):
+        return None
+    if not terraform:
+        return f"{kind}/{'/'.join(labels)}" if labels else None
+    if kind == "resource" and len(labels) == 2:
+        return f"{labels[0]}/{labels[1]}"
+    if kind == "data" and len(labels) == 2:
+        return f"data/{labels[0]}/{labels[1]}"
+    if kind == "variable" and len(labels) == 1:
+        return f"var/{labels[0]}"
+    if kind in ("output", "module", "provider") and len(labels) == 1:
+        return f"{kind}/{labels[0]}"
+    return None
+
+
+def _hcl_declarations(blanked: str, terraform: bool) -> list[tuple[int, str]]:
+    out: list[tuple[int, str]] = []
+    depth = 0
+    in_locals = False
+    for number, line in enumerate(blanked.split("\n"), 1):
+        block = HCL_BLOCK.match(line) if depth == 0 else None
+        if block:
+            kind = block.group(1)
+            labels = [g.group(1) if g.group(1) is not None else g.group(2) for g in HCL_LABEL.finditer(block.group(2))]
+            if terraform and kind == "locals" and not labels:
+                in_locals = True
+            elif (address := _hcl_address(kind, labels, terraform)):
+                out.append((number, address))
+        elif depth == 1 and in_locals and (attribute := HCL_ATTR.match(line)):
+            out.append((number, f"local/{attribute.group(1)}"))
+        depth = max(depth + line.count("{") - line.count("}"), 0)
+        if depth == 0:
+            in_locals = False
+    return out
+
+
+def terraform_declarations(blanked: str) -> list[tuple[int, str]]:
+    return _hcl_declarations(blanked, True)
+
+
+def hcl_declarations(blanked: str) -> list[tuple[int, str]]:
+    return _hcl_declarations(blanked, False)
+
+
+SHELL_FUNCTION = re.compile(r"^[ \t]*(?:function[ \t]+([\w.:-]+)(?:[ \t]*\(\))?|([A-Za-z_][\w.:-]*)[ \t]*\(\))", re.M)
+
+
+def shell_declarations(blanked: str) -> list[tuple[int, str]]:
+    """Every function definition, nested ones included, as the extractor reads them."""
+    return [(blanked.count("\n", 0, m.start()) + 1, m.group(1) or m.group(2)) for m in SHELL_FUNCTION.finditer(blanked)]
+
+
+def _holder(spans: list[tuple[int, int, str]], line: int) -> str:
+    """The innermost declaration spanning `line`, or `""` outside them all."""
+    inside = [(end - start, name) for start, end, name in spans if start <= line <= end]
+    return min(inside)[1] if inside else ""
+
+
+def tracked(repo: Path, *patterns: str) -> list[str]:
+    """Tracked files matching `patterns`, dotted paths included, as the walker reads them."""
+    out = subprocess.run(["git", "ls-files", "-z", "--", *patterns], cwd=repo, capture_output=True, text=True).stdout
+    return sorted(r for r in out.split("\0") if r)
+
+
+def _normalise(rel: str, target: str) -> str:
+    """`doc::links::normalise`: `target` against `rel`'s directory, with `..` stopping at the root."""
+    parts = [] if target.startswith("/") or "/" not in rel else [p for p in rel.rsplit("/", 1)[0].split("/") if p]
+    for seg in target.lstrip("/").split("/"):
+        if seg in ("", "."):
+            continue
+        if seg == "..":
+            if parts:
+                parts.pop()
+        else:
+            parts.append(seg)
+    return "/".join(parts)
+
+
+TF_REF = re.compile(r"(?<![\w.\-/])([A-Za-z_][\w-]*)((?:\.[A-Za-z_][\w-]*)+)")
+TF_VALUES = {"each", "count", "path", "self", "terraform"}
+
+
+TF_FOR = re.compile(r"\bfor[ \t\n]+(\w+)(?:[ \t]*,[ \t]*(\w+))?[ \t\n]+in\b")
+
+
+def _scope_after(text: str, i: int) -> tuple[int, int]:
+    """The span of a `for` expression's body and condition: from the `:` ending its collection to the
+    bracket closing the expression. The collection before the `:` is outside the iterator's scope."""
+    depth, colon = 0, None
+    for j in range(i, len(text)):
+        c = text[j]
+        if c in "([{":
+            depth += 1
+        elif c in ")]}":
+            if depth == 0:
+                return (colon if colon is not None else j, j)
+            depth -= 1
+        elif c == ":" and depth == 0 and colon is None:
+            colon = j
+    return (colon if colon is not None else len(text), len(text))
+
+
+def _tf_refs(text: str):
+    """(offset, address) for every address `text` reads. A `for` iterator is bound in the body and the
+    condition of its expression, nested loops included, and gives no reference there."""
+    scopes = []
+    for m in TF_FOR.finditer(text):
+        start, end = _scope_after(text, m.end())
+        scopes.append((start, end, {g for g in m.groups() if g}))
+    for m in TF_REF.finditer(text):
+        root, steps = m.group(1), m.group(2).split(".")[1:]
+        need = 2 if root == "data" else 1
+        if root in TF_VALUES or len(steps) < need:
+            continue
+        if any(start <= m.start() < end and root in names for start, end, names in scopes):
+            continue
+        yield m.start(), f"{root}/{'/'.join(steps[:need])}"
+
+
+def _spans(blanked: str, reader) -> tuple[list[str], list[tuple[int, int, str]]]:
+    lines = blanked.split("\n")
+    return lines, [(start, declaration_end(lines, start), name) for start, name in reader(blanked)]
+
+
+def terraform_calls(src: str) -> list[tuple[str, str]]:
+    """(holder, address) for every address a `.tf` file's blocks read. A reader of one file joins a
+    sibling's address by name, not by directory, and does not follow a module source; neither corpus
+    declares one address in two directories."""
+    blanked = blank_hcl(src)
+    _, spans = _spans(blanked, terraform_declarations)
+    code = _without_names(blanked, '"')
+    out = []
+    for offset, address in _tf_refs(code):
+        holder = _holder(spans, code.count("\n", 0, offset) + 1)
+        if holder and address != holder:
+            out.append((holder, address))
+    return list(dict.fromkeys(out))
+
+
+def terraform_impact(repo: Path, case: dict) -> list[str]:
+    """Files of the declaring file's directory reading the address, resolved as the extractor resolves
+    it: a file that declares the address itself reads its own."""
+    decl, address = case["file"], case["target"]
+    out = []
+    for rel in tracked(repo, "*.tf"):
+        if rel == decl or posixpath.dirname(rel) != posixpath.dirname(decl):
+            continue
+        blanked = blank_hcl((repo / rel).read_text(encoding="utf8", errors="replace"))
+        if address in {a for _, a in terraform_declarations(blanked)}:
+            continue
+        if any(a == address for _, a in _tf_refs(_without_names(blanked, '"'))):
+            out.append(rel)
+    return out
+
+
+BAKE_LIST = re.compile(r"\b(?:inherits|targets)[ \t]*=[ \t]*\[([^\]]*)\]")
+
+
+def bake_calls(src: str) -> list[tuple[str, str]]:
+    """(block, block) for each `inherits` or `targets` entry naming a target, else a group, of the file."""
+    blanked = blank_hcl(src)
+    _, spans = _spans(blanked, hcl_declarations)
+    own = {name for _, _, name in spans}
+    out = []
+    for m in BAKE_LIST.finditer(blanked):
+        holder = _holder(spans, blanked.count("\n", 0, m.start()) + 1)
+        for name in re.findall(r'"([^"\n]*)"', m.group(1)):
+            target = next((a for a in (f"target/{name}", f"group/{name}") if a in own), None)
+            if holder and target and target != holder:
+                out.append((holder, target))
+    return list(dict.fromkeys(out))
+
+
+# A name read, not bound: not after `.` (a property), `@` (a decorator) or `$`, and not an object key.
+BICEP_NAME = re.compile(r"(?<![\w.@$])([A-Za-z_]\w*)(?:::([A-Za-z_]\w*))?(?!\w)")
+# The key of an object entry: first on its line or right after `{` or `,`, and followed by a single `:`.
+# Elsewhere a name before a colon is read, as in `for i in items: i` and `c ? a : b`.
+BICEP_KEY_AT = re.compile(r"(?:^|[{,])[ \t]*$")
+BICEP_COLON = re.compile(r"[ \t]*:(?!:)")
+BICEP_BINDERS = re.compile(r"\bfor[ \t]+(\w+)[ \t]+in\b|\bfor[ \t]*\(([\w \t,]*)\)[ \t]*in\b|(\w+)[ \t]*=>|\(([\w \t,]*)\)[ \t]*=>")
+BICEP_FUNC_PARAMS = re.compile(r"^[ \t]*func[ \t]+\w+[ \t]*\(([^)]*)\)")
+BICEP_MODULE = re.compile(r"^[ \t]*module[ \t]+\w+[ \t]+'([^'\n]*)'", re.M)
+
+
+def _bicep_bound(text: str, head: str) -> set[str]:
+    """Names a loop, lambda or function binds anywhere in a declaration. The extractor shadows them only
+    inside the binding expression; a declaration naming a loop variable after its loop is rare enough to
+    read the whole declaration as its scope."""
+    bound: set[str] = set()
+    for m in BICEP_BINDERS.finditer(text):
+        for group in m.groups():
+            if group:
+                bound.update(re.findall(r"\w+", group))
+    if (f := BICEP_FUNC_PARAMS.match(head)):
+        bound.update(p.split()[0] for p in f.group(1).split(",") if p.split())
+    return bound
+
+
+def bicep_calls(src: str) -> list[tuple[str, str]]:
+    """(holder, name) for every read of another declaration of the file; `vnet::subnet` reads `vnet.subnet`."""
+    blanked = blank_bicep(src)
+    lines, spans = _spans(blanked, bicep_declarations)
+    names = {name for _, _, name in spans}
+    funcs = {name for start, _, name in spans if re.match(r"[ \t]*func\b", lines[start - 1])}
+    heads = {start: BICEP_DECL.match(lines[start - 1]).end() for start, _, _ in spans}
+    code = _without_names(blanked, "'").split("\n")
+    bound = {name: _bicep_bound("\n".join(code[start - 1 : end]), code[start - 1]) for start, end, name in spans}
+    out = []
+    for number, line in enumerate(code, 1):
+        holder = _holder(spans, number)
+        if not holder:
+            continue
+        for m in BICEP_NAME.finditer(line):
+            if m.start() < heads.get(number, 0):
+                continue
+            first, child = m.group(1), m.group(2)
+            if not child and BICEP_COLON.match(line, m.end()) and BICEP_KEY_AT.search(line[: m.start()]):
+                continue
+            # A name followed by `(` is a call, and a call resolves only to a `func`, so a param named
+            # `range` is not what `range(0, 3)` reaches.
+            if not child and line[m.end() :].lstrip(" \t").startswith("("):
+                target = first if first in funcs else None
+            else:
+                target = next((s for s in ([f"{first}.{child}", first] if child else [first]) if s in names), None)
+            if target and target != holder and first not in bound[holder]:
+                out.append((holder, target))
+    return list(dict.fromkeys(out))
+
+
+def bicep_impact(repo: Path, case: dict) -> list[str]:
+    """Files deploying the module: the target when it is a `.bicep` path, else the file declaring the
+    target, since outside its file a declaration is reached only through a module call."""
+    target = case["target"] if case["target"].endswith(".bicep") else case["file"]
+    out = []
+    for rel in tracked(repo, "*.bicep"):
+        blanked = blank_bicep((repo / rel).read_text(encoding="utf8", errors="replace"))
+        paths = [m.group(1) for m in BICEP_MODULE.finditer(blanked)]
+        if rel != target and any(not p.startswith(("br:", "br/", "ts:", "ts/")) and _normalise(rel, p) == target for p in paths):
+            out.append(rel)
+    return out
+
+
+def shell_impact(repo: Path, case: dict) -> list[str]:
+    """Shell files naming the function, read with strings kept: `"$(name …)"` is a call, and the string
+    blanking `blank_shell` does for spans would hide it from `code_files_naming`."""
+    word = re.compile(rf"\b{re.escape(case['target'])}\b")
+    return [
+        rel for rel in tracked(repo, "*.sh", "*.bash")
+        if rel != case.get("file") and word.search(shell_code((repo / rel).read_text(encoding="utf8", errors="replace")))
+    ]
+
+
+SHELL_KEYWORDS = {"if", "then", "else", "elif", "fi", "do", "done", "while", "until", "!", "time", "{", "}"}
+SHELL_NOT_COMMANDS = {"for", "case", "select", "function", "in", "esac"}
+SHELL_ASSIGNMENT = re.compile(r"[A-Za-z_]\w*=")
+SHELL_NAME = re.compile(r"[A-Za-z_][\w.:-]*")
+
+
+def _paren_end(text: str, i: int) -> int:
+    """The index just past the `)` closing a `$(` whose body starts at `i`, quotes and nesting respected."""
+    depth, quote = 1, ""
+    while i < len(text):
+        c = text[i]
+        if quote:
+            if c == "\\" and quote == '"':
+                i += 1
+            elif c == quote:
+                quote = ""
+        elif c in "'\"":
+            quote = c
+        elif c == "\\":
+            i += 1
+        elif c == "(":
+            depth += 1
+        elif c == ")":
+            depth -= 1
+            if not depth:
+                return i + 1
+        i += 1
+    return len(text)
+
+
+def _shell_commands(code: str) -> list[tuple[int, list[str]]]:
+    """Every simple command as (line, words): quotes removed, expansions left as written, and each `$(…)`
+    also read as commands of its own. A reader of the forms scripts use, not a shell."""
+    out: list[tuple[int, list[str]]] = []
+
+    def scan(text: str, line: int) -> None:
+        words: list[str] = []
+        word: list[str] = []
+        start, quote, i = line, "", 0
+
+        def end_word() -> None:
+            if word:
+                words.append("".join(word))
+                word.clear()
+
+        def end_command() -> None:
+            end_word()
+            if words:
+                out.append((start, words.copy()))
+                words.clear()
+
+        while i < len(text):
+            c = text[i]
+            if not words and not word and not quote:
+                start = line
+            if quote != "'" and (j := _arithmetic_end(text, i)):
+                # `$((n + 1))` and `((n < 3))` read variables, not commands.
+                if c == "$":
+                    word.append(text[i:j])
+                line += text.count("\n", i, j)
+                i = j
+                continue
+            if quote != "'" and text.startswith("$(", i) and not text.startswith("$((", i):
+                j = _paren_end(text, i + 2)
+                scan(text[i + 2 : j - 1], line)
+                word.append(text[i:j])
+                line += text.count("\n", i, j)
+                i = j
+                continue
+            if quote:
+                if c == quote:
+                    quote = ""
+                elif c == "\\" and quote == '"' and i + 1 < len(text):
+                    i += 1
+                    word.append(text[i])
+                else:
+                    word.append(c)
+            elif c in "'\"":
+                quote = c
+                word.append("")
+            elif text.startswith("${", i):
+                j = text.find("}", i)
+                j = len(text) if j < 0 else j + 1
+                word.append(text[i:j])
+                line += text.count("\n", i, j)
+                i = j
+                continue
+            elif c == "\\" and i + 1 < len(text):
+                i += 1
+                if text[i] != "\n":
+                    word.append(text[i])
+            elif c in " \t":
+                end_word()
+            elif c in ";|&()\n":
+                end_command()
+            else:
+                word.append(c)
+            if text[i] == "\n":
+                line += 1
+            i += 1
+        end_command()
+
+    scan(code, 1)
+    return out
+
+
+def _without_case_patterns(src: str) -> str:
+    """`shell_code(src)` with each `case` pattern blanked: `lint)` names no command, and `)` would end
+    one. Strings are blanked in the copy the patterns are found in, so a `case` inside one is not counted."""
+    code = shell_code(src).split("\n")
+    for k, spans in enumerate(_case_pattern_spans(_shell_scan(src, strings=True).split("\n"))):
+        for a, b in spans:
+            # The closing `)` becomes `;` so what follows the pattern is a command of its own.
+            code[k] = code[k][:a] + " " * (b - a - 1) + ";" + code[k][b:]
+    return "\n".join(code)
+
+
+def shell_calls(src: str) -> list[tuple[str, str]]:
+    """(function, name) for each command a function runs by a bare name. The extractor resolves the name
+    through what the script sources; a reader of one file cannot, so every bare name is kept, and
+    `shortest_path` reaches only names some file defines. A call outside every function has no holder
+    a reader of one file can name, and is left out."""
+    blanked = blank_shell(src)
+    _, spans = _spans(blanked, shell_declarations)
+    out = []
+    for line, words in _shell_commands(_without_case_patterns(src)):
+        while words and (SHELL_ASSIGNMENT.match(words[0]) or words[0] in SHELL_KEYWORDS):
+            words = words[1:]
+        if not words or words[0] in SHELL_NOT_COMMANDS or not SHELL_NAME.fullmatch(words[0]):
+            continue
+        holder = _holder(spans, line)
+        if holder and words[0] != holder:
+            out.append((holder, words[0]))
+    return list(dict.fromkeys(out))
+
+
+DECLARATIONS.update({
+    ".bicep": bicep_declarations, ".tf": terraform_declarations, ".hcl": hcl_declarations,
+    ".sh": shell_declarations, ".bash": shell_declarations,
+})
+BLANKERS.update({".bicep": blank_bicep, ".tf": blank_hcl, ".hcl": blank_hcl, ".sh": blank_shell, ".bash": blank_shell})
+# Each gets a file's raw text, as `DI_READERS`' patterns do, and blanks it itself.
+CALL_READERS.update({".tf": terraform_calls, ".hcl": bake_calls, ".bicep": bicep_calls, ".sh": shell_calls, ".bash": shell_calls})
+# Keyed by the suffix of a case's declaring file. A language whose reference is its declared name spelled
+# in another file, with nothing to keep that `blanked_source` blanks, needs none: `code_files_naming` reads it.
+IMPACT_READERS: dict[str, Callable[[Path, dict], list[str]]] = {
+    ".tf": terraform_impact, ".bicep": bicep_impact, ".sh": shell_impact, ".bash": shell_impact,
+}
+
+
 def build(repo: Path, cases: list[dict], blast: list[dict], roots: list[str] | None = None) -> dict:
     """The ground truth for every case, read from `repo` by pattern rather than by any tool.
 
@@ -1860,7 +2520,8 @@ def build(repo: Path, cases: list[dict], blast: list[dict], roots: list[str] | N
         if case["kind"] == "impact":
             name = case["target"]
             decl = case.get("file") or declaration_of(repo, name)
-            refs = [f for f in code_files_naming(repo, name) if f != decl]
+            reader = IMPACT_READERS.get(Path(decl or "").suffix)
+            refs = reader(repo, case) if reader else [f for f in code_files_naming(repo, name) if f != decl]
             # A case about one language's declaration counts that language's files: a column name a
             # TypeScript field also spells would otherwise credit files the language under test never reaches.
             if case.get("exts"):

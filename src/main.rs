@@ -249,7 +249,13 @@ pub(crate) fn apply_diff(repo: &std::path::Path, store: &store::Store, graph: &m
         .filter(|e| e.kind == walk::FileKind::Code).map(|e| e.rel.clone()).collect();
     let mut headers = if fresh { code::index::Headers::default() } else { code::index::Headers::load(store)? };
     let recorded = headers.clone();
-    let widened_rels = code::index::widen(repo, &rereading, &diff.removed, &mut headers, &code_rels);
+    let mut widened_rels = code::index::widen(repo, &rereading, &diff.removed, &mut headers, &code_rels);
+    // Scripts resolve names across files with no header to compare, so they widen by a rule of their own.
+    widened_rels.extend(code::shell::widen(&rereading, &diff.removed, graph, &code_rels));
+    widened_rels.extend(code::hcl::widen(&rereading, &diff.removed, graph, &code_rels));
+    // The `binary_search` below needs the list sorted, and two rules may name one file twice.
+    widened_rels.sort();
+    widened_rels.dedup();
     let widened: Vec<&walk::Entry> = entries.iter().filter(|e| widened_rels.binary_search(&e.rel).is_ok()).collect();
     let stale: std::collections::BTreeSet<&str> = diff.removed.iter().map(String::as_str)
         .chain(diff.changed.iter().chain(regrammar.iter().copied()).chain(widened.iter().copied()).map(|e| e.rel.as_str())).collect();
@@ -459,7 +465,11 @@ impl<'a> Watcher<'a> {
             let code: Vec<String> = diff.changed.iter().filter(|e| e.kind == walk::FileKind::Code).map(|e| e.rel.clone()).collect();
             Ok(code::index::headers_move(self.repo, &code::index::Headers::load(&self.store)?, &code))
         };
-        if moved_path || self.resolver_stale || moved_header()? {
+        // Scripts, Bicep files and HCL files resolve names through the whole family's files, so an edit
+        // of an existing one can change what another resolves to without moving a path or a header.
+        let path_family = diff.changed.iter().map(|e| e.rel.as_str()).chain(diff.removed.iter().map(String::as_str))
+            .any(|rel| matches!(code::lang::Lang::of(rel), Some(code::lang::Lang::Shell | code::lang::Lang::Bicep | code::lang::Lang::Hcl)));
+        if moved_path || self.resolver_stale || path_family || moved_header()? {
             self.ex = extractors(self.repo, self.cfg)?;
             self.resolver_stale = false;
         }
