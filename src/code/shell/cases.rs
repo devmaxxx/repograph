@@ -236,3 +236,19 @@ fn widening_leaves_out_a_script_already_being_read_and_a_non_script_change() {
     assert_eq!(widened(&["c.sh", "b.sh"], &[], &g, &["a.sh", "b.sh", "c.sh"]), ["a.sh"]);
     assert!(widened(&["notes.md"], &[], &g, &["a.sh", "b.sh", "c.sh"]).is_empty());
 }
+
+#[test]
+fn a_comment_ending_a_line_of_code_is_not_the_doc_of_the_function_below() {
+    let ex = extract(&[("a.sh", "x=1 # the default\nf() { :; }\n")], "a.sh");
+    let f = ex.nodes.iter().find(|n| n.id == "sym:a.sh::f").unwrap();
+    assert_eq!(f.body, "f() { :; }");
+}
+
+#[test]
+fn a_long_doc_comment_keeps_the_lines_nearest_the_function() {
+    let header = "# licence line\n".repeat(60);
+    let ex = extract(&[("a.sh", &(header + "# Prints a greeting.\ngreet() { :; }\n"))], "a.sh");
+    let g = ex.nodes.iter().find(|n| n.id == "sym:a.sh::greet").unwrap();
+    assert!(g.body.ends_with("# Prints a greeting.\ngreet() { :; }"), "{}", g.body);
+    assert!(g.body.len() < 700, "{}", g.body.len());
+}

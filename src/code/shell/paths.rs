@@ -1,8 +1,8 @@
 //! Paths a script names through its own directory. A script runs from anywhere, so a path means
 //! something in this repository only when it is written out, or built from the script's own location:
 //! `$(dirname "$0")`, `$(dirname "${BASH_SOURCE[0]}")`, `${BASH_SOURCE%/*}`, `${0%/*}`, any of those
-//! under `$(cd … && pwd)`, or a variable assigned one of these. `$HOME`, `$1`, a glob and a backtick
-//! name nothing.
+//! under `$(cd … && pwd)`, or a variable assigned one of these. `$HOME`, `$1` and a glob name
+//! nothing.
 
 use crate::code::prose;
 use std::collections::BTreeMap;
@@ -24,14 +24,8 @@ pub(super) struct Vars(BTreeMap<String, Option<Value>>);
 
 impl Vars {
     pub(super) fn read(root: Node, src: &[u8]) -> Vars {
-        let mut assignments = Vec::new();
-        let mut stack = vec![root];
-        while let Some(n) = stack.pop() {
-            if n.kind() == "variable_assignment" { assignments.push(n) }
-            stack.extend(prose::named(n));
-        }
         // In source order, so `M="$HERE/measure.sh"` reads the `HERE` assigned above it.
-        assignments.sort_by_key(|n| n.start_byte());
+        let assignments = prose::all(root, "variable_assignment");
         let mut vars = Vars(BTreeMap::new());
         for a in assignments {
             let Some(name) = a.child_by_field_name("name") else { continue };

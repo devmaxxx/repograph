@@ -43,7 +43,7 @@ pub(crate) fn widen(stale: &[String], removed: &[String], graph: &Graph, all_rel
         .filter(|r| Lang::of(r) == Some(Lang::Shell))
         .map(|r| format!("file:{r}"))
         .collect();
-    let mut frontier: Vec<String> = reached.iter().cloned().collect();
+    let mut frontier = reached.clone();
     while !frontier.is_empty() {
         frontier = graph.edges.iter()
             .filter(|e| e.kind == EdgeKind::Imports && frontier.contains(&e.target))
@@ -51,9 +51,11 @@ pub(crate) fn widen(stale: &[String], removed: &[String], graph: &Graph, all_rel
             .filter(|s| reached.insert(s.clone()))
             .collect();
     }
+    let stale: BTreeSet<&str> = stale.iter().map(String::as_str).collect();
+    let present: BTreeSet<&str> = all_rels.iter().map(String::as_str).collect();
     reached.iter()
         .filter_map(|id| id.strip_prefix("file:"))
-        .filter(|r| !stale.iter().any(|s| s == r) && all_rels.iter().any(|a| a == r))
+        .filter(|r| !stale.contains(r) && present.contains(r))
         .map(str::to_string)
         .collect()
 }
@@ -61,14 +63,7 @@ pub(crate) fn widen(stale: &[String], removed: &[String], graph: &Graph, all_rel
 /// Every function definition, nested ones included: a function defined inside another is callable
 /// once the outer one has run.
 fn functions<'t>(root: Node<'t>) -> Vec<Node<'t>> {
-    let mut out = Vec::new();
-    let mut stack = vec![root];
-    while let Some(n) = stack.pop() {
-        if n.kind() == "function_definition" { out.push(n) }
-        stack.extend(prose::named(n));
-    }
-    out.sort_by_key(|n| n.start_byte());
-    out
+    prose::all(root, "function_definition")
 }
 
 /// What every globbed script offers the others, read before any extract, so a call resolves whatever

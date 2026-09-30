@@ -11,13 +11,7 @@ use tree_sitter::Node;
 const RUNNERS: [&str; 4] = ["bash", "sh", "zsh", "dash"];
 
 fn commands<'t>(root: Node<'t>) -> Vec<Node<'t>> {
-    let mut out = Vec::new();
-    let mut stack = vec![root];
-    while let Some(n) = stack.pop() {
-        if n.kind() == "command" { out.push(n) }
-        stack.extend(prose::named(n));
-    }
-    out
+    prose::all(root, "command")
 }
 
 /// Each `source` the script names, as candidate paths. `Scripts` picks among them once every globbed

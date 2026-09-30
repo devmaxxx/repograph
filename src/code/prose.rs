@@ -5,8 +5,9 @@
 use crate::model::{EdgeKind, Extraction, NodeKind};
 use tree_sitter::Node;
 
-/// Longer doc comments are cut: the body feeds the lexical index, where a licence header pasted above
-/// the first declaration would outweigh every name the file holds.
+/// Longer doc comments are cut, keeping the lines nearest the declaration: the body feeds the lexical
+/// index, where a licence header pasted above the first declaration would outweigh every name the file
+/// holds.
 const DOC_CAP: usize = 600;
 
 pub(crate) fn text<'s>(n: Node, src: &'s [u8]) -> &'s str {
@@ -16,6 +17,18 @@ pub(crate) fn text<'s>(n: Node, src: &'s [u8]) -> &'s str {
 pub(crate) fn named<'t>(n: Node<'t>) -> Vec<Node<'t>> {
     let mut c = n.walk();
     n.named_children(&mut c).collect()
+}
+
+/// Every node of `kind` under `root`, nested ones included, in source order.
+pub(crate) fn all<'t>(root: Node<'t>, kind: &str) -> Vec<Node<'t>> {
+    let mut out = Vec::new();
+    let mut stack = vec![root];
+    while let Some(n) = stack.pop() {
+        if n.kind() == kind { out.push(n) }
+        stack.extend(named(n));
+    }
+    out.sort_by_key(|n| n.start_byte());
+    out
 }
 
 /// Every descendant of one of `kinds`, in source order, not descending into a match: a grandchild belongs
@@ -97,19 +110,24 @@ pub(crate) fn body(n: Node, src: &[u8], between: &[&str]) -> String {
     let mut at = top;
     while let Some(p) = above(at) {
         // A shebang is the interpreter line, not documentation of the function under it.
-        if p.kind() != "comment" || text(p, src).starts_with("#!") || last_row(p) + 1 != at.start_position().row { break }
+        if p.kind() != "comment" || text(p, src).starts_with("#!") || last_row(p) + 1 != at.start_position().row || trails(p) { break }
         doc.push(text(p, src).trim_end());
         at = p;
     }
     doc.reverse();
     let mut out = doc.join("\n");
     if out.len() > DOC_CAP {
-        let mut cut = DOC_CAP;
-        while !out.is_char_boundary(cut) { cut -= 1 }
-        out.truncate(cut);
+        let mut cut = out.len() - DOC_CAP;
+        while !out.is_char_boundary(cut) { cut += 1 }
+        out.drain(..cut);
     }
     let first = text(n, src).lines().next().unwrap_or("");
     if out.is_empty() { first.to_string() } else { format!("{out}\n{first}") }
+}
+
+/// A comment that ends a line of code, `x=1 # note`, belongs to that line and not to the declaration below.
+fn trails(comment: Node) -> bool {
+    above(comment).is_some_and(|p| last_row(p) == comment.start_position().row)
 }
 
 /// The named sibling before `n`. HCL's grammar puts the comments above a file's first block outside its
@@ -127,7 +145,7 @@ pub(crate) fn declare(ex: &mut Extraction, rel: &str, parent: &str, id: &str, n:
 }
 
 /// Ids cited in comments and in the given string kinds, each from the declaration holding it: the edge
-/// the TypeScript scan writes, so an ADR named above a Terraform resource reaches the resource.
+/// the TypeScript scan writes, so an ADR named inside a Terraform resource reaches the resource.
 pub(crate) fn cite(root: Node, src: &[u8], rel: &str, strings: &[&str], spans: &Spans, ex: &mut Extraction) {
     let mut stack = vec![root];
     while let Some(n) = stack.pop() {
