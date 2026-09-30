@@ -1597,6 +1597,34 @@ class IacShellReaders(unittest.TestCase):
         self.assertEqual(bicep_calls("param range int\nvar v = range(0, 3)\n"), [])
         self.assertEqual(bicep_calls("func label(p string) string => p\nvar v = label('a')\n"), [("v", "label")])
 
+    def test_a_bicep_name_before_a_colon_is_read_unless_it_is_an_object_key(self):
+        self.assertEqual(bicep_calls("param items array\nvar x = [for i in items: i]\n"), [("x", "items")])
+        self.assertEqual(sorted(bicep_calls("param a string\nparam c bool\nvar x = c ? a : 'z'\n")), [("x", "a"), ("x", "c")])
+        self.assertEqual(bicep_calls("param a string\nvar x = {\n  a: 1\n  b: 2\n}\nvar y = { a: 1, a2: 2 }\n"), [])
+
+    def test_a_shell_case_pattern_is_not_a_command(self):
+        funcs = "lint() { :; }\nrun_lint() { :; }\n"
+        for label, body in (
+            ("one line", "case $1 in lint) run_lint ;; esac"),
+            ("multi-line", "case $1 in\n    lint) run_lint ;;\n  esac"),
+            ("alternatives", "case $1 in\n    a|lint) run_lint ;;\n  esac"),
+            ("leading paren", "case $1 in\n    (lint) run_lint ;;\n  esac"),
+            ("second arm", "case $1 in\n    x) : ;; lint) run_lint ;;\n  esac"),
+        ):
+            with self.subTest(label):
+                calls = shell_calls("main() {\n  " + body + "\n}\n" + funcs)
+                self.assertIn(("main", "run_lint"), calls)
+                self.assertNotIn(("main", "lint"), calls)
+
+    def test_a_heredoc_terminator_is_not_a_command(self):
+        self.assertEqual(shell_calls("f() {\n  cat <<EOF\nbody\nEOF\n}\n"), [("f", "cat")])
+
+    def test_an_escaped_hcl_interpolation_is_text(self):
+        self.assertEqual(terraform_calls('resource "a" "b" {\n  t = "$${var.a} ${var.c}"\n}\nvariable "a" {}\n'), [("a/b", "var/c")])
+
+    def test_a_bake_list_on_the_block_line_is_read(self):
+        self.assertEqual(bake_calls('target "base" {}\ntarget "api" { inherits = ["base"] }\n'), [("target/api", "target/base")])
+
     def test_bake_calls_follow_inherits_and_targets_to_blocks_of_the_file(self):
         self.assertEqual(sorted(bake_calls(BAKE)), [
             ("group/default", "target/api"), ("group/default", "target/web"),
@@ -1638,6 +1666,17 @@ class IacShellReaderContract(unittest.TestCase):
         for reader, blank, src, want in cases:
             with self.subTest(reader=reader.__name__):
                 self.assertEqual(reader(blank(src)), want)
+
+    def test_declaration_readers_misread_raw_text_so_the_caller_must_blank(self):
+        raw = [
+            (bicep_declarations, "x = '''\nparam ghost string\n'''\n"),
+            (terraform_declarations, 'x = <<EOT\nvariable "ghost" {}\nEOT\n'),
+            (hcl_declarations, 'x = <<EOT\ntarget "ghost" {}\nEOT\n'),
+            (shell_declarations, 'echo "\nghost() {\n"\n'),
+        ]
+        for reader, src in raw:
+            with self.subTest(reader=reader.__name__):
+                self.assertNotEqual(reader(src), [])
 
     def test_call_readers_blank_raw_text_themselves(self):
         self.assertEqual(terraform_calls('# aws_instance.web reads var.x\nresource "a" "b" {\n  n = var.y\n}\n'), [("a/b", "var/y")])

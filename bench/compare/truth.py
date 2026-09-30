@@ -1857,7 +1857,7 @@ def _interpolations_only(body: str) -> str:
     depth = 0
     i = 0
     while i < len(body):
-        if not depth and body.startswith("${", i):
+        if not depth and body.startswith("${", i) and body[i - 1 : i] != "$":
             out.append("${")
             depth = 1
             i += 2
@@ -1886,7 +1886,7 @@ def _closing(src: str, i: int, quote: str) -> int:
         if c == "\\":
             i += 2
             continue
-        if src.startswith("${", i):
+        if src.startswith("${", i) and src[i - 1 : i] != "$":
             depth += 1
             i += 2
             continue
@@ -2003,7 +2003,7 @@ def _shell_scan(src: str, *, strings: bool) -> str:
                     newline = "\n" if j < len(src) else ""
                     i = j + len(newline)
                     if (body.lstrip("\t") if tabs else body) == word:
-                        out.append(body + newline)
+                        out.append(" " * len(body) + newline)
                         break
                     out.append(" " * len(body) + newline)
             pending = []
@@ -2128,7 +2128,7 @@ def _holder(spans: list[tuple[int, int, str]], line: int) -> str:
 
 
 def tracked(repo: Path, *patterns: str) -> list[str]:
-    """Tracked files matching `patterns`, dotted paths included: the walker reads them since 0.5.3 (#64)."""
+    """Tracked files matching `patterns`, dotted paths included, as the walker reads them."""
     out = subprocess.run(["git", "ls-files", "-z", "--", *patterns], cwd=repo, capture_output=True, text=True).stdout
     return sorted(r for r in out.split("\0") if r)
 
@@ -2224,7 +2224,7 @@ def terraform_impact(repo: Path, case: dict) -> list[str]:
     return out
 
 
-BAKE_LIST = re.compile(r"^[ \t]*(?:inherits|targets)[ \t]*=[ \t]*\[([^\]]*)\]", re.M)
+BAKE_LIST = re.compile(r"\b(?:inherits|targets)[ \t]*=[ \t]*\[([^\]]*)\]")
 
 
 def bake_calls(src: str) -> list[tuple[str, str]]:
@@ -2243,7 +2243,11 @@ def bake_calls(src: str) -> list[tuple[str, str]]:
 
 
 # A name read, not bound: not after `.` (a property), `@` (a decorator) or `$`, and not an object key.
-BICEP_NAME = re.compile(r"(?<![\w.@$])([A-Za-z_]\w*)(?:::([A-Za-z_]\w*))?(?!\w|[ \t]*:(?!:))")
+BICEP_NAME = re.compile(r"(?<![\w.@$])([A-Za-z_]\w*)(?:::([A-Za-z_]\w*))?(?!\w)")
+# The key of an object entry: first on its line or right after `{` or `,`, and followed by a single `:`.
+# Elsewhere a name before a colon is read, as in `for i in items: i` and `c ? a : b`.
+BICEP_KEY_AT = re.compile(r"(?:^|[{,])[ \t]*$")
+BICEP_COLON = re.compile(r"[ \t]*:(?!:)")
 BICEP_BINDERS = re.compile(r"\bfor[ \t]+(\w+)[ \t]+in\b|\bfor[ \t]*\(([\w \t,]*)\)[ \t]*in\b|(\w+)[ \t]*=>|\(([\w \t,]*)\)[ \t]*=>")
 BICEP_FUNC_PARAMS = re.compile(r"^[ \t]*func[ \t]+\w+[ \t]*\(([^)]*)\)")
 BICEP_MODULE = re.compile(r"^[ \t]*module[ \t]+\w+[ \t]+'([^'\n]*)'", re.M)
@@ -2281,6 +2285,8 @@ def bicep_calls(src: str) -> list[tuple[str, str]]:
             if m.start() < heads.get(number, 0):
                 continue
             first, child = m.group(1), m.group(2)
+            if not child and BICEP_COLON.match(line, m.end()) and BICEP_KEY_AT.search(line[: m.start()]):
+                continue
             # A name followed by `(` is a call, and a call resolves only to a `func`, so a param named
             # `range` is not what `range(0, 3)` reaches.
             if not child and line[m.end() :].lstrip(" \t").startswith("("):
@@ -2403,6 +2409,30 @@ def _shell_commands(code: str) -> list[tuple[int, list[str]]]:
     return out
 
 
+CASE_PATTERN = r"""\(?[ \t]*(?:"[ ]*"|'[ ]*'|[^\s()|;"'])+(?:[ \t]*\|[ \t]*(?:"[ ]*"|'[ ]*'|[^\s()|;"'])+)*[ \t]*\)"""
+CASE_ARM_AFTER = re.compile(rf"(?:^|;;&?|;&)[ \t]*{CASE_PATTERN}")
+CASE_ARM_IN = re.compile(rf"\bin[ \t]+{CASE_PATTERN}")
+
+
+def _without_case_patterns(src: str) -> str:
+    """`shell_code(src)` with each `case` pattern blanked: `lint)` names no command, and `)` would end
+    one. Strings are blanked in the copy the patterns are found in, so a `case` inside one is not counted."""
+    code = shell_code(src).split("\n")
+    seen = _shell_scan(src, strings=True).split("\n")
+    depth = 0
+    for k, line in enumerate(seen):
+        spans = []
+        if depth:
+            spans += [m.span() for m in CASE_ARM_AFTER.finditer(line)]
+        if re.search(r"\bcase\b", line):
+            spans += [(m.start() + m.group(0).index("in") + 2, m.end()) for m in CASE_ARM_IN.finditer(line)]
+        for a, b in spans:
+            # The closing `)` becomes `;` so what follows the pattern is a command of its own.
+            code[k] = code[k][:a] + " " * (b - a - 1) + ";" + code[k][b:]
+        depth = max(depth + len(re.findall(r"\bcase\b", line)) - len(re.findall(r"\besac\b", line)), 0)
+    return "\n".join(code)
+
+
 def shell_calls(src: str) -> list[tuple[str, str]]:
     """(function, name) for each command a function runs by a bare name. The extractor resolves the name
     through what the script sources; a reader of one file cannot, so every bare name is kept, and
@@ -2411,7 +2441,7 @@ def shell_calls(src: str) -> list[tuple[str, str]]:
     blanked = blank_shell(src)
     _, spans = _spans(blanked, shell_declarations)
     out = []
-    for line, words in _shell_commands(shell_code(src)):
+    for line, words in _shell_commands(_without_case_patterns(src)):
         while words and (SHELL_ASSIGNMENT.match(words[0]) or words[0] in SHELL_KEYWORDS):
             words = words[1:]
         if not words or words[0] in SHELL_NOT_COMMANDS or not SHELL_NAME.fullmatch(words[0]):
