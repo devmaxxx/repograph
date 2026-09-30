@@ -1,7 +1,9 @@
+pub mod bicep;
 pub mod blank;
 pub mod calls;
 pub mod csharp;
 pub mod graphql;
+pub mod hcl;
 pub mod idrefs;
 pub mod imports;
 pub mod index;
@@ -12,6 +14,7 @@ pub mod lang;
 pub(crate) mod python;
 pub mod razor;
 pub(crate) mod rust_lang;
+pub mod shell;
 pub mod sql;
 pub mod symbols;
 
@@ -39,6 +42,9 @@ impl Extractor for CodeExtractor {
             Some(lang::Lang::GraphQl) => graphql::extract(self.symbols.resolver(), rel, text),
             Some(lang::Lang::Rust) => rust_lang::extract(self.symbols.resolver(), rel, text),
             Some(lang::Lang::Python) => python::extract(self.symbols.resolver(), rel, text),
+            Some(lang::Lang::Bicep) => bicep::extract(self.symbols.resolver(), rel, text),
+            Some(lang::Lang::Hcl) => hcl::extract(self.symbols.resolver(), rel, text),
+            Some(lang::Lang::Shell) => shell::extract(self.symbols.resolver(), rel, text),
             None => {
                 let mut ex = Extraction::default();
                 lang::file_node(rel, &mut ex);

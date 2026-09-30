@@ -730,6 +730,24 @@ fn a_crlf_source_extracts_the_same_nodes_and_edges_as_its_lf_twin() {
 // where these cases would need the crate's model.
 
 #[test]
+fn bicep_terraform_bake_and_shell_each_pick_their_grammar() {
+    use crate::code::lang::{Family, Lang};
+    for (rel, lang) in [
+        ("sample/stack.bicep", Lang::Bicep),
+        ("infra/staging/main.tf", Lang::Hcl),
+        ("docker-bake.hcl", Lang::Hcl),
+        ("bench/probe/reset.sh", Lang::Shell),
+        ("tools/x.bash", Lang::Shell),
+    ] {
+        assert_eq!(Lang::of(rel), Some(lang), "{rel}");
+        assert!(lang.parse(b"").is_some(), "{rel} has a grammar");
+    }
+    // A variable-values file assigns and declares nothing an address names.
+    assert_eq!(Lang::of("infra/staging/terraform.tfvars"), None);
+    assert_eq!((Lang::Bicep.family(), Lang::Hcl.family(), Lang::Shell.family()), (Family::Bicep, Family::Hcl, Family::Shell));
+}
+
+#[test]
 fn a_globbed_file_no_grammar_reads_is_a_file_and_nothing_else() {
     // A log is no family's language, so no 0.6.0 grammar can turn this fixture into a real one.
     let ex = extract("svc/boot.log", "boot ok\nRun() called\n");
