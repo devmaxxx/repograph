@@ -18,15 +18,21 @@ pub struct Stamp { pub mtime_ns: u64, pub len: u64 }
 pub struct Entry { pub rel: String, pub kind: FileKind, pub hash: String, pub stamp: Option<Stamp> }
 
 /// The generation of the grammar a file is read by — the id shapes, the definition heads, the
-/// registry rows, the ids a source file cites, and which of those a settled graph admits. Bumped
-/// by hand when a change to any of them would make a re-read of a file that has not moved yield a
-/// different graph, and left alone by a release that does not touch them: this number is what
-/// forces one whole-tree re-read on the first writer after an upgrade (see `apply_diff`), and a
-/// bump nobody needed is that walk paid for nothing. `0` belongs to no generation: it is what a
-/// manifest written before the stamp existed reads as, and what a writer leaves behind when a file
-/// it had to read would not open — neither store was read whole, and `0` is stale against every
-/// generation there is or will be.
-pub const GRAMMAR: u32 = 2;
+/// registry rows, the ids a source file cites, the calls it makes, and which of those a settled
+/// graph admits. Bumped by hand when a change to any of them would make a re-read of a file that
+/// has not moved yield a different graph, and left alone by a release that does not touch them:
+/// this number is what forces one whole-tree re-read on the first writer after an upgrade (see
+/// `apply_diff`), and a bump nobody needed is that walk paid for nothing. `0` belongs to no
+/// generation: it is what a manifest written before the stamp existed reads as, and what a writer
+/// leaves behind when a file it had to read would not open — neither store was read whole, and
+/// `0` is stale against every generation there is or will be.
+/// 3: a call on a helper's return value (#91), a JSX element (#93) and a function passed as an
+/// argument (#98) are calls, the last with context `arg` (#104), and a tsconfig alias whose glob
+/// holds `/*` resolves (#97).
+/// 4: `main` with the 0.5.5 fixes above forward-ported. 0.5.5 stamps its stores 3 and reads by
+/// 0.5.5's grammar, not 0.6.0's, so a 3 here would leave a store 0.5.5 wrote unread; one above
+/// both makes a 0.5.4 store (2) and a 0.5.5 store (3) re-read once on the first writer.
+pub const GRAMMAR: u32 = 4;
 
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub struct Manifest {
