@@ -34,6 +34,22 @@ pub(crate) fn find<'t>(n: Node<'t>, kinds: &[&str]) -> Vec<Node<'t>> {
     out
 }
 
+/// `text` resolved against directory `base`, both `/`-separated. `None` when `..` climbs above the root:
+/// that names something outside the repository, and clamping it would name a wrong file inside.
+pub(crate) fn join_under(base: &str, text: &str) -> Option<String> {
+    let mut parts: Vec<&str> = base.split('/').filter(|s| !s.is_empty()).collect();
+    for seg in text.split('/') {
+        match seg {
+            "" | "." => {}
+            ".." => {
+                parts.pop()?;
+            }
+            s => parts.push(s),
+        }
+    }
+    Some(parts.join("/"))
+}
+
 /// The last row holding the node's text. A comment that swallows its newline ends at column 0 of the
 /// next row, and counting that row would join the comment to a declaration a blank line below it.
 pub(crate) fn last_row(n: Node) -> usize {

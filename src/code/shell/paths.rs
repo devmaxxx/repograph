@@ -120,17 +120,7 @@ pub(super) fn words<'t, 's>(cmd: Node<'t>, src: &'s [u8]) -> Option<(&'s str, Ve
 /// climbs above the root names something outside the repository, so it has no candidate.
 pub(super) fn candidates(rel: &str, value: &Value) -> Vec<String> {
     let dir = rel.rsplit_once('/').map_or("", |(d, _)| d);
-    let under = |base: &str, text: &str| -> Option<String> {
-        let mut parts: Vec<&str> = base.split('/').filter(|s| !s.is_empty()).collect();
-        for seg in text.split('/') {
-            match seg {
-                "" | "." => {}
-                ".." => { parts.pop()?; }
-                s => parts.push(s),
-            }
-        }
-        Some(parts.join("/"))
-    };
+    let under = prose::join_under;
     match value {
         Value::Here(rest) => under(dir, rest).into_iter().collect(),
         Value::Literal(p) if !p.starts_with('/') => [under(dir, p), under("", p)].into_iter().flatten().collect(),

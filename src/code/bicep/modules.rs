@@ -48,17 +48,7 @@ fn within_repo(rel: &str, path: &str) -> Option<String> {
     if path.starts_with('/') {
         return None;
     }
-    let mut parts: Vec<&str> = rel.rsplit_once('/').map(|(dir, _)| dir.split('/').collect()).unwrap_or_default();
-    for seg in path.split('/') {
-        match seg {
-            "" | "." => {}
-            ".." => {
-                parts.pop()?;
-            }
-            s => parts.push(s),
-        }
-    }
-    Some(parts.join("/"))
+    prose::join_under(rel.rsplit_once('/').map_or("", |(dir, _)| dir), path)
 }
 
 /// The module's path when it is written out whole. An interpolated path names no one file.
