@@ -304,6 +304,12 @@ pub fn run(repo: &Path, cfg: &config::Config, every: u64, batch: usize, idle: u6
     // handed to whichever client happens to connect first.
     let mut ctx = ask::Context::open(repo, cfg, true, no_dense)?;
     log(&mut ctx);
+    // The hook starts this process at session start, and the session's first question follows
+    // within seconds: waiting `--every` for the first poll handed that question everything a pull
+    // changed — 1469 vectors, 17 s on beauty-crm. Catching up now spends the same time before
+    // anyone has asked.
+    adopt_if_moved(&mut watcher, &mut ctx, batch)?;
+    log(&mut ctx);
     eprintln!("serve: {} every {every}s, batch {batch}, idle {idle}s, model idle {idle_model}s; Ctrl-C stops", path.display());
     let (mut last_poll, mut last_request) = (Instant::now(), Instant::now());
     loop {

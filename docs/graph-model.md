@@ -9,7 +9,9 @@ semantics of the three walking commands.
 1. **Exact.** A word that is a known id, or the name of an indexed symbol, wins outright and scores
    above everything else. When every word is an id or a name with an uppercase letter (`asGrosze`,
    `ZERO`), the exact hits are the whole answer; a lowercase word that happens to be a symbol too
-   (`money` is a test helper) leads, and the fused retrievers fill the remaining seeds.
+   (`money` is a test helper) leads, and the fused retrievers fill the remaining seeds. A word is
+   matched without the punctuation around it (`FR-CAL-40,`, `(INV-07)`, `«BE-M17/T06»`) and an id
+   ignoring case (`fr-cal-40`); `explain`, `impact` and `trace` read their argument the same way.
 2. **Lexical.** BM25 over `id + label + body` for every node, with Snowball stemming — Russian for
    Cyrillic tokens, English otherwise, so `штрафа` and `штрафы` are the same term. Ids survive
    tokenization whole, so `FR-PAY-22` never becomes three tokens.
@@ -104,8 +106,10 @@ AST-only indexer misses entirely. Each construct is pinned by one inline case in
 ## Blast radius
 
 `impact <symbol>` walks `Calls` and `Extends` edges towards the symbol: `d=1` are the direct
-callers ("will break"), `d=2` their callers, and so on to `--depth` (3). A class is walked
-through its members, and a caller that imported through a barrel is found because the barrel's
+callers ("will break"), `d=2` their callers, and so on to `--depth` (3; 0 is refused as a usage
+error, exit 2, since it walks nothing). A class is walked
+through its members; an object literal is not yet walked through its methods, which no node
+declares (0.6.0, #106). A caller that imported through a barrel is found because the barrel's
 `ReExports` edges are followed back to the declaration. The barrel itself is listed among the
 importers: it names the symbol, and a rename reaches it first. `importers` are the files whose
 `import` names the symbol, whether or not a call site resolved. The risk line is four fixed thresholds
@@ -127,10 +131,18 @@ risk: MEDIUM — 3 direct, 3 total, 3 files
 ```
 
 `--down` walks the other way; `trace <from> <to>` is the shortest chain between two symbols.
+Every `--depth` — `impact`, `trace`, `changes`, and the pool depth of `ask`, `bench` and `dump` —
+refuses 0 the same way, exit 2.
+An identifier handed to a call — `rows.map(feedWire)`, `register(SESSION_COOKIE)` — is a `Calls`
+edge with context `arg`: the caller breaks when it changes, so `impact` counts it as a caller, but
+nothing proves it is called, so `--down` and `explain` print it as `Passes` and `trace` marks the
+step `passes`; the `--json` forms of `impact`, `changes` and `trace` say `"passes": true`. An owner
+that both passes and calls a target has one edge, the call.
 What the graph cannot prove it does not list: a call through a chained expression, a
 destructured method, a callback parameter or a global has no edge, so confirm a "nothing uses
-this" with `rg -l` before deleting. A target the graph knows only by name — a member of an
-imported value it never saw declared — prints `?` in place of its `path:line`.
+this" with `rg -l` before deleting. A member no node declares — `loginSchema.parse`, a method
+of an object literal — is shown as the symbol it belongs to; a target the graph knows only by
+name, with no symbol of its own to fall back to, prints `?` in place of its `path:line`.
 
 `changes` maps `git diff -U0` (staged and unstaged, plus untracked files whole) onto symbol
 spans and unions the callers of every touched symbol into one list and one risk line. Run it

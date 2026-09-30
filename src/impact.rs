@@ -5,7 +5,18 @@ use crate::model::{Edge, EdgeKind, Graph};
 use std::collections::{BTreeMap, BTreeSet};
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
-pub struct Dependent { pub id: String, pub depth: usize, pub kind: EdgeKind, pub via: String }
+pub struct Dependent { pub id: String, pub depth: usize, pub kind: EdgeKind, pub via: String, pub passed: bool }
+
+/// How an edge reads to a person: an argument edge is `Passes`, since nothing proves it is called.
+pub(crate) fn label(kind: EdgeKind, passed: bool) -> String { if passed { "Passes".to_string() } else { format!("{kind:?}") } }
+
+/// True when `candidate` is the row to keep for a dependent over `existing`: a shallower depth
+/// always wins; at the same depth, a call beats an argument-only edge. Shared by the walk's own
+/// per-layer merge, where both are always at the same depth, and `changes::report`'s merge across
+/// every root's walk, where they can differ.
+pub(crate) fn beats(candidate: &Dependent, existing: &Dependent) -> bool {
+    candidate.depth < existing.depth || (candidate.depth == existing.depth && existing.passed && !candidate.passed)
+}
 
 #[derive(Debug, Default)]
 pub struct Impact { pub root: String, pub layers: Vec<Vec<Dependent>>, pub importers: Vec<String> }
@@ -18,30 +29,15 @@ fn bare(name: &str) -> &str { name.split('.').next().unwrap_or(name) }
 
 fn exports(e: &Edge, bare: &str) -> bool { e.context == "*" || e.context.split(',').any(|c| c == bare) }
 
-/// Every `sym:<barrel>::<Name>` a caller could have reached this symbol by.
-pub fn aliases(graph: &Graph, id: &str) -> Vec<String> {
-    let Some(n) = graph.nodes.get(id) else { return Vec::new() };
-    let name = name_of(id);
-    let mut files = vec![n.file.clone()];
-    let mut seen: BTreeSet<String> = BTreeSet::new();
-    let mut out = Vec::new();
-    let mut i = 0;
-    while i < files.len() {
-        let target = format!("file:{}", files[i]);
-        for e in graph.edges.iter().filter(|e| e.kind == EdgeKind::ReExports && e.target == target && exports(e, bare(name))) {
-            let barrel = e.source.trim_start_matches("file:").to_string();
-            if seen.insert(barrel.clone()) {
-                out.push(format!("sym:{barrel}::{name}"));
-                files.push(barrel);
-            }
-        }
-        i += 1;
-    }
-    out
+/// The node a possibly-dangling `sym:<barrel>::<Name>` stands for, following re-exports forward.
+/// A member no node declares — a method of an object literal, `parse` on a zod schema — stands
+/// for its container, which has a `path:line` where the member has none.
+pub fn canonical(graph: &Graph, id: &str) -> Option<String> {
+    exact(graph, id).or_else(|| container(id).and_then(|c| canonical(graph, &c)))
 }
 
-/// The node a possibly-dangling `sym:<barrel>::<Name>` stands for, following re-exports forward.
-pub fn canonical(graph: &Graph, id: &str) -> Option<String> {
+/// `canonical` without the member fold: the node itself or the declaration behind a barrel.
+fn exact(graph: &Graph, id: &str) -> Option<String> {
     if graph.nodes.contains_key(id) { return Some(id.to_string()) }
     let (file, name) = id.strip_prefix("sym:")?.split_once("::")?;
     let mut files = vec![file.to_string()];
@@ -60,25 +56,14 @@ pub fn canonical(graph: &Graph, id: &str) -> Option<String> {
     None
 }
 
-/// Every symbol a type declares, at any depth: a nested type's members are the outer type's too, so
-/// a change to `Outer` reaches a caller of `Outer.Inner.go` (spec L4). Breadth-first, so a type's
-/// own members come first, in the order a one-level walk listed them.
-fn members(graph: &Graph, id: &str) -> Vec<String> {
-    let mut out: Vec<String> = Vec::new();
-    let mut seen: BTreeSet<String> = BTreeSet::from([id.to_string()]);
-    let mut at = 0;
-    let mut owner = id.to_string();
-    loop {
-        for e in graph.edges.iter().filter(|e| e.kind == EdgeKind::Declares && e.source == owner && e.target.starts_with("sym:")) {
-            if seen.insert(e.target.clone()) {
-                out.push(e.target.clone());
-            }
-        }
-        let Some(next) = out.get(at) else { break };
-        owner = next.clone();
-        at += 1;
+/// Where a downward step lands, and whether the walk may go on from there. A target folded into
+/// its container is shown as it, but the container's own calls are its other methods' calls,
+/// which this one does not make — walking on would report paths that only a sibling has.
+fn landing(graph: &Graph, target: &str) -> (String, bool) {
+    match exact(graph, target) {
+        Some(id) => (id, true),
+        None => (canonical(graph, target).unwrap_or_else(|| target.to_string()), false),
     }
-    out
 }
 
 /// `sym:f::C` for `sym:f::C.m`, and `sym:f::O.I` for `sym:f::O.I.m`; none for a class or a file.
@@ -101,115 +86,198 @@ pub(crate) fn walks(e: &Edge) -> bool {
     }
 }
 
-/// The root, its members (a class is changed through them) and every alias of each.
-fn seeds(graph: &Graph, root: &str) -> Vec<String> {
-    let mut out = vec![root.to_string()];
-    out.extend(members(graph, root));
-    let aliased: Vec<String> = out.iter().flat_map(|s| aliases(graph, s)).collect();
-    out.extend(aliased);
-    out
+/// The edges every walk looks up, grouped once by the end they are looked up from: code edges by
+/// target (upstream) or source (downstream), members by class, re-exports and imports by the file
+/// they name. `changes` walks one root per changed symbol, and scanning the whole edge set again
+/// for each root took a minute on a diff of 1,140 symbols.
+pub struct Index<'a> {
+    graph: &'a Graph,
+    up: bool,
+    code: BTreeMap<&'a str, Vec<&'a Edge>>,
+    members: BTreeMap<&'a str, Vec<&'a str>>,
+    re_exports: BTreeMap<&'a str, Vec<&'a Edge>>,
+    imports: BTreeMap<&'a str, Vec<&'a Edge>>,
 }
 
-/// The edges to follow from `at`. Upstream, a member is also reached through its class by a
-/// subclass — `extends C` inherits `C.m` — so the class's `Extends` edges count for the member
-/// without the class itself being listed. Downstream, a class reaches what its members call.
-fn step<'a>(graph: &Graph, by_key: &BTreeMap<&str, Vec<&'a Edge>>, at: &str, up: bool) -> Vec<&'a Edge> {
-    let mut out: Vec<&Edge> = by_key.get(at).into_iter().flatten().copied().collect();
-    if up {
-        if let Some(c) = container(at) {
-            out.extend(by_key.get(c.as_str()).into_iter().flatten().copied().filter(|e| e.kind == EdgeKind::Extends));
-        }
-    } else {
-        for m in members(graph, at) { out.extend(by_key.get(m.as_str()).into_iter().flatten().copied()); }
-    }
-    out
-}
+impl<'a> Index<'a> {
+    pub fn new(graph: &'a Graph, up: bool) -> Index<'a> { Self::build(graph, up, true) }
 
-fn index(graph: &Graph, up: bool) -> BTreeMap<&str, Vec<&Edge>> {
-    let mut by_key: BTreeMap<&str, Vec<&Edge>> = BTreeMap::new();
-    for e in graph.edges.iter().filter(|e| walks(e)) {
-        by_key.entry(if up { e.target.as_str() } else { e.source.as_str() }).or_default().push(e);
-    }
-    by_key
-}
+    /// Only what `aliases` reads, for a caller that looks a name up once and
+    /// never walks: `explain` builds one per call.
+    pub(crate) fn names(graph: &'a Graph) -> Index<'a> { Self::build(graph, true, false) }
 
-fn walk(graph: &Graph, root: &str, depth: usize, up: bool) -> Vec<Vec<Dependent>> {
-    let by_key = index(graph, up);
-    let start = seeds(graph, root);
-    let mut seen: BTreeSet<String> = start.iter().cloned().collect();
-    let mut frontier = start;
-    let mut layers = Vec::new();
-    for d in 1..=depth {
-        let mut next: Vec<Dependent> = Vec::new();
-        for at in &frontier {
-            for e in step(graph, &by_key, at, up) {
-                let other = if up { e.source.clone() } else { canonical(graph, &e.target).unwrap_or_else(|| e.target.clone()) };
-                if seen.insert(other.clone()) {
-                    next.push(Dependent { id: other, depth: d, kind: e.kind, via: at.clone() });
-                }
+    fn build(graph: &'a Graph, up: bool, full: bool) -> Index<'a> {
+        let mut ix = Index { graph, up, code: BTreeMap::new(), members: BTreeMap::new(), re_exports: BTreeMap::new(), imports: BTreeMap::new() };
+        for e in &graph.edges {
+            match e.kind {
+                _ if walks(e) => ix.code.entry(if up { e.target.as_str() } else { e.source.as_str() }).or_default().push(e),
+                EdgeKind::Declares if full && e.target.starts_with("sym:") => ix.members.entry(e.source.as_str()).or_default().push(e.target.as_str()),
+                EdgeKind::ReExports => ix.re_exports.entry(e.target.as_str()).or_default().push(e),
+                EdgeKind::Imports if full => ix.imports.entry(e.target.as_str()).or_default().push(e),
+                _ => {}
             }
         }
-        if next.is_empty() { break }
-        next.sort_by(|a, b| a.id.cmp(&b.id));
-        frontier = next.iter().map(|x| x.id.clone()).collect();
-        layers.push(next);
+        ix
     }
-    layers
-}
 
-/// Files that name the symbol without necessarily calling it: every importer of its name from
-/// its file or any barrel, and the barrels themselves — a barrel that re-exports the symbol
-/// names it as surely as an importer does, and `export { AuthService } from './auth.service.js'`
-/// breaks before any caller when the class is renamed. It was the one file `impact AuthService`
-/// left out on the bench corpus (9 of 10, 2026-09-03).
-fn importers(graph: &Graph, root: &str) -> Vec<String> {
-    let Some(n) = graph.nodes.get(root) else { return Vec::new() };
-    let name = bare(name_of(root));
-    let mut files: BTreeSet<String> = BTreeSet::from([format!("file:{}", n.file)]);
-    let mut out: BTreeSet<String> = BTreeSet::new();
-    for a in aliases(graph, root) {
-        if let Some((f, _)) = a.trim_start_matches("sym:").split_once("::") {
-            files.insert(format!("file:{f}"));
-            // A re-export cycle can walk back to the declaring file itself; it names the
-            // symbol by declaring it, not by importing it.
-            if f != n.file { out.insert(f.to_string()); }
+    /// Every `sym:<barrel>::<Name>` a caller could have reached this symbol by.
+    pub(crate) fn aliases(&self, id: &str) -> Vec<String> {
+        let Some(n) = self.graph.nodes.get(id) else { return Vec::new() };
+        let name = name_of(id);
+        let mut files = vec![n.file.clone()];
+        let mut seen: BTreeSet<String> = BTreeSet::new();
+        let mut out = Vec::new();
+        let mut i = 0;
+        while i < files.len() {
+            let target = format!("file:{}", files[i]);
+            for e in self.re_exports.get(target.as_str()).into_iter().flatten().filter(|e| exports(e, bare(name))) {
+                let barrel = e.source.trim_start_matches("file:").to_string();
+                if seen.insert(barrel.clone()) {
+                    out.push(format!("sym:{barrel}::{name}"));
+                    files.push(barrel);
+                }
+            }
+            i += 1;
         }
+        out
     }
-    for e in graph.edges.iter().filter(|e| e.kind == EdgeKind::Imports && files.contains(&e.target) && exports(e, name)) {
-        out.insert(e.source.trim_start_matches("file:").to_string());
+
+    /// Every symbol a type declares, at any depth: a nested type's members are the outer type's
+    /// too, so a change to `Outer` reaches a caller of `Outer.Inner.go` (spec L4). Breadth-first,
+    /// so a type's own members come first, in the order a one-level walk listed them.
+    fn members(&self, id: &str) -> Vec<&'a str> {
+        let mut out: Vec<&'a str> = Vec::new();
+        let mut seen: BTreeSet<&str> = BTreeSet::from([id]);
+        let mut owner = id;
+        let mut at = 0;
+        loop {
+            for &m in self.members.get(owner).into_iter().flatten() {
+                if seen.insert(m) { out.push(m); }
+            }
+            let Some(&next) = out.get(at) else { break };
+            owner = next;
+            at += 1;
+        }
+        out
     }
-    out.into_iter().collect()
+
+    /// The root, its members (a class is changed through them) and every alias of each.
+    fn seeds(&self, root: &str) -> Vec<String> {
+        let mut out = vec![root.to_string()];
+        out.extend(self.members(root).iter().map(|m| m.to_string()));
+        let aliased: Vec<String> = out.iter().flat_map(|s| self.aliases(s)).collect();
+        out.extend(aliased);
+        out
+    }
+
+    /// The edges to follow from `at`. Upstream, a member is also reached through its class by a
+    /// subclass — `extends C` inherits `C.m` — so the class's `Extends` edges count for the member
+    /// without the class itself being listed. Downstream, a class reaches what its members call.
+    fn step(&self, at: &str) -> Vec<&'a Edge> {
+        let mut out: Vec<&Edge> = self.code.get(at).into_iter().flatten().copied().collect();
+        if self.up {
+            if let Some(c) = container(at) {
+                out.extend(self.code.get(c.as_str()).into_iter().flatten().copied().filter(|e| e.kind == EdgeKind::Extends));
+            }
+        } else {
+            for m in self.members(at) { out.extend(self.code.get(m).into_iter().flatten().copied()); }
+        }
+        // A call before an argument edge, so a node reached both ways is reached by the call.
+        out.sort_by_key(|e| e.passes());
+        out
+    }
+
+    fn walk(&self, root: &str, depth: usize) -> Vec<Vec<Dependent>> {
+        let (graph, up) = (self.graph, self.up);
+        let start = self.seeds(root);
+        let mut seen: BTreeSet<String> = start.iter().cloned().collect();
+        let mut frontier = start;
+        let mut layers = Vec::new();
+        for d in 1..=depth {
+            let mut next: BTreeMap<String, Dependent> = BTreeMap::new();
+            let mut open: BTreeSet<String> = BTreeSet::new();
+            for at in &frontier {
+                for e in self.step(at) {
+                    let (other, goes_on) = if up { (e.source.clone(), true) } else { landing(graph, &e.target) };
+                    if seen.contains(&other) { continue }
+                    if goes_on { open.insert(other.clone()); }
+                    let candidate = Dependent { id: other.clone(), depth: d, kind: e.kind, via: at.clone(), passed: e.passes() };
+                    // A call beats an argument edge whichever owner in the layer came first.
+                    if next.get(&other).is_some_and(|x| !beats(&candidate, x)) { continue }
+                    next.insert(other, candidate);
+                }
+            }
+            if next.is_empty() { break }
+            seen.extend(next.keys().cloned());
+            let next: Vec<Dependent> = next.into_values().collect();
+            frontier = next.iter().map(|x| x.id.clone()).filter(|id| open.contains(id)).collect();
+            layers.push(next);
+        }
+        layers
+    }
+
+    /// Files that name the symbol without necessarily calling it: every importer of its name from
+    /// its file or any barrel, and the barrels themselves — a barrel that re-exports the symbol
+    /// names it as surely as an importer does, and `export { AuthService } from './auth.service.js'`
+    /// breaks before any caller when the class is renamed. It was the one file `impact AuthService`
+    /// left out on the bench corpus (9 of 10, 2026-09-03).
+    fn importers(&self, root: &str) -> Vec<String> {
+        let Some(n) = self.graph.nodes.get(root) else { return Vec::new() };
+        let name = bare(name_of(root));
+        let mut files: BTreeSet<String> = BTreeSet::from([format!("file:{}", n.file)]);
+        let mut out: BTreeSet<String> = BTreeSet::new();
+        for a in self.aliases(root) {
+            if let Some((f, _)) = a.trim_start_matches("sym:").split_once("::") {
+                files.insert(format!("file:{f}"));
+                // A re-export cycle can walk back to the declaring file itself; it names the
+                // symbol by declaring it, not by importing it.
+                if f != n.file { out.insert(f.to_string()); }
+            }
+        }
+        for f in &files {
+            for e in self.imports.get(f.as_str()).into_iter().flatten().filter(|e| exports(e, name)) {
+                out.insert(e.source.trim_start_matches("file:").to_string());
+            }
+        }
+        out.into_iter().collect()
+    }
+
+    /// Callers by depth and importing files; the index must have been built upstream.
+    pub fn upstream(&self, root: &str, depth: usize) -> Impact {
+        Impact { root: root.to_string(), layers: self.walk(root, depth), importers: self.importers(root) }
+    }
 }
 
-pub fn upstream(graph: &Graph, root: &str, depth: usize) -> Impact {
-    Impact { root: root.to_string(), layers: walk(graph, root, depth, true), importers: importers(graph, root) }
-}
+pub fn upstream(graph: &Graph, root: &str, depth: usize) -> Impact { Index::new(graph, true).upstream(root, depth) }
 
 pub fn downstream(graph: &Graph, root: &str, depth: usize) -> Impact {
-    Impact { root: root.to_string(), layers: walk(graph, root, depth, false), importers: Vec::new() }
+    Impact { root: root.to_string(), layers: Index::new(graph, false).walk(root, depth), importers: Vec::new() }
 }
 
 /// `trace` as an object: the two ends the ids resolved to, the depth asked for, and the chain as
 /// `{id, at}` steps — `null` when there is none within that depth, which is an answer and not an
 /// error.
-pub fn trace_json(graph: &Graph, from: &str, to: &str, depth: usize, path: Option<&[String]>) -> String {
+pub fn trace_json(graph: &Graph, from: &str, to: &str, depth: usize, path: Option<&[(String, bool)]>) -> String {
     #[derive(serde::Serialize)]
-    struct Step<'a> { id: &'a str, at: String }
+    struct Step<'a> { id: &'a str, at: String, passes: bool }
     #[derive(serde::Serialize)]
     struct Out<'a> { from: &'a str, to: &'a str, depth: usize, path: Option<Vec<Step<'a>>> }
-    let steps = path.map(|p| p.iter().map(|id| Step {
+    let steps = path.map(|p| p.iter().map(|(id, passes)| Step {
         id,
         at: graph.nodes.get(id).map(|n| format!("{}:{}", n.file, n.line)).unwrap_or_default(),
+        passes: *passes,
     }).collect());
     serde_json::to_string(&Out { from, to, depth, path: steps }).unwrap_or_else(|_| "{}".to_string())
 }
 
 /// The shortest chain of code edges from `from` to `to` (or one of its aliases or members),
-/// at most `depth` hops.
-pub fn trace(graph: &Graph, from: &str, to: &str, depth: usize) -> Option<Vec<String>> {
-    let goal: BTreeSet<String> = seeds(graph, to).into_iter().collect();
-    let by_source = index(graph, false);
-    let mut parent: BTreeMap<String, String> = BTreeMap::new();
+/// at most `depth` hops, each step with whether it was reached by being passed rather than called.
+pub fn trace(graph: &Graph, from: &str, to: &str, depth: usize) -> Option<Vec<(String, bool)>> {
+    // The walk marks `from` seen before it looks, so it would never arrive where it started.
+    if from == to { return Some(vec![(from.to_string(), false)]) }
+    let by_source = Index::new(graph, false);
+    let goal: BTreeSet<String> = by_source.seeds(to).into_iter().collect();
+    let mut parent: BTreeMap<String, (String, bool)> = BTreeMap::new();
     // The walk starts at `from` alone: `step` already reaches through its members, and the
     // printed path then names the class, not the member that happened to make the call.
     let mut frontier: Vec<String> = vec![from.to_string()];
@@ -217,17 +285,17 @@ pub fn trace(graph: &Graph, from: &str, to: &str, depth: usize) -> Option<Vec<St
     for _ in 0..depth {
         let mut next = Vec::new();
         for at in &frontier {
-            for e in step(graph, &by_source, at, false) {
-                let other = canonical(graph, &e.target).unwrap_or_else(|| e.target.clone());
+            for e in by_source.step(at) {
+                let (other, goes_on) = landing(graph, &e.target);
                 if !seen.insert(other.clone()) { continue }
-                parent.insert(other.clone(), at.clone());
+                parent.insert(other.clone(), (at.clone(), e.passes()));
                 if goal.contains(&other) {
                     let mut path = vec![other];
-                    while let Some(p) = parent.get(path.last().unwrap()) { path.push(p.clone()); }
+                    while let Some((p, _)) = parent.get(path.last().unwrap()) { path.push(p.clone()); }
                     path.reverse();
-                    return Some(path);
+                    return Some(path.into_iter().map(|id| { let passed = parent.get(&id).is_some_and(|p| p.1); (id, passed) }).collect());
                 }
-                next.push(other);
+                if goes_on { next.push(other); }
             }
         }
         if next.is_empty() { break }
@@ -270,7 +338,7 @@ pub fn render(graph: &Graph, imp: &Impact, direction: &str) -> String {
         out.push_str(&format!("d={}  {name} ({})\n", i + 1, layer.len()));
         for d in layer {
             let arrow = if up { "→" } else { "←" };
-            out.push_str(&format!("  {}  {}  {:?} {arrow} {}\n", d.id, line_of(graph, &d.id), d.kind, d.via));
+            out.push_str(&format!("  {}  {}  {} {arrow} {}\n", d.id, line_of(graph, &d.id), label(d.kind, d.passed), d.via));
         }
     }
     if up {
@@ -288,7 +356,7 @@ pub fn render_json(graph: &Graph, imp: &Impact, direction: &str) -> String {
     let total: usize = imp.layers.iter().map(Vec::len).sum();
     let files = files(graph, imp);
     let layers: Vec<Vec<serde_json::Value>> = imp.layers.iter().map(|l| l.iter().map(|d| serde_json::json!({
-        "id": d.id, "at": line_of(graph, &d.id), "depth": d.depth, "kind": format!("{:?}", d.kind), "via": d.via,
+        "id": d.id, "at": line_of(graph, &d.id), "depth": d.depth, "kind": format!("{:?}", d.kind), "passes": d.passed, "via": d.via,
     })).collect()).collect();
     serde_json::json!({
         "root": imp.root, "at": line_of(graph, &imp.root), "direction": direction, "layers": layers,
@@ -297,7 +365,7 @@ pub fn render_json(graph: &Graph, imp: &Impact, direction: &str) -> String {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::model::{Extraction, NodeKind};
 
@@ -334,8 +402,9 @@ mod tests {
 
     #[test]
     fn aliases_follow_re_exports_back_to_every_barrel() {
-        assert_eq!(aliases(&graph(), "sym:s.ts::S.create"), vec!["sym:index.ts::S.create"]);
-        assert_eq!(aliases(&graph(), "sym:s.ts::S"), vec!["sym:index.ts::S"]);
+        let g = graph();
+        assert_eq!(Index::new(&g, true).aliases("sym:s.ts::S.create"), vec!["sym:index.ts::S.create"]);
+        assert_eq!(Index::new(&g, true).aliases("sym:s.ts::S"), vec!["sym:index.ts::S"]);
     }
 
     #[test]
@@ -356,6 +425,27 @@ mod tests {
         assert_eq!(d2, vec![("sym:j.ts::J", EdgeKind::Extends)]);
         assert_eq!(imp.layers.len(), 2);
         assert_eq!(imp.importers, vec!["c.ts", "index.ts", "m.ts", "w.ts"]);
+    }
+
+    /// `export const repo = { find() {…}, save() {…} }`: the methods are not symbols, so every
+    /// call targets a `repo.*` id no node declares — directly, or through the barrel.
+    pub(crate) fn object_literal() -> Graph {
+        let mut g = Graph::default();
+        let mut e = Extraction::default();
+        e.node(NodeKind::File, "file:r.ts", "r.ts", "", "r.ts", 1);
+        e.node_span(NodeKind::Symbol, "sym:r.ts::repo", "repo", "", "r.ts", (3, 20));
+        e.edge("file:r.ts", "sym:r.ts::repo", EdgeKind::Declares, "export", "r.ts");
+        e.node(NodeKind::File, "file:index.ts", "index.ts", "", "index.ts", 1);
+        e.edge("file:index.ts", "file:r.ts", EdgeKind::ReExports, "*", "index.ts");
+        e.node(NodeKind::Symbol, "sym:a.ts::A.run", "A.run", "", "a.ts", 4);
+        e.edge("sym:a.ts::A.run", "sym:r.ts::repo.find", EdgeKind::Calls, "", "a.ts");
+        e.node(NodeKind::Symbol, "sym:b.ts::go", "go", "", "b.ts", 2);
+        e.edge("sym:b.ts::go", "sym:index.ts::repo.save", EdgeKind::Calls, "", "b.ts");
+        e.node(NodeKind::Symbol, "sym:r.ts::repository", "repository", "", "r.ts", 30);
+        e.node(NodeKind::Symbol, "sym:b.ts::other", "other", "", "b.ts", 9);
+        e.edge("sym:b.ts::other", "sym:r.ts::repository.find", EdgeKind::Calls, "", "b.ts");
+        g.apply(e);
+        g
     }
 
     #[test]
@@ -396,6 +486,37 @@ mod tests {
     }
 
     #[test]
+    fn an_undeclared_member_target_folds_into_its_container() {
+        let mut g = object_literal();
+        let mut e = Extraction::default();
+        e.edge("sym:r.ts::repo", "sym:r.ts::repo.find", EdgeKind::Calls, "", "r.ts");
+        g.apply(e);
+        assert_eq!(canonical(&g, "sym:index.ts::repo.save").as_deref(), Some("sym:r.ts::repo"));
+        assert_eq!(canonical(&g, "sym:x.ts::nobody.m"), None);
+        let imp = downstream(&g, "sym:b.ts::go", 1);
+        let d1: Vec<&str> = imp.layers[0].iter().map(|d| d.id.as_str()).collect();
+        assert_eq!(d1, vec!["sym:r.ts::repo"]);
+        // A literal's method calling a sibling is the literal reaching itself: no row at all.
+        assert!(downstream(&g, "sym:r.ts::repo", 1).layers.is_empty());
+    }
+
+    #[test]
+    fn a_walk_down_stops_at_a_container_it_reached_through_one_undeclared_method() {
+        // `go` calls `repo.save`; the literal as a whole calls `lock`, through some other method.
+        let mut g = object_literal();
+        let mut e = Extraction::default();
+        e.node(NodeKind::Symbol, "sym:l.ts::lock", "lock", "", "l.ts", 1);
+        e.edge("sym:r.ts::repo", "sym:l.ts::lock", EdgeKind::Calls, "", "r.ts");
+        g.apply(e);
+        let imp = downstream(&g, "sym:b.ts::go", 3);
+        let ids: Vec<&str> = imp.layers.iter().flatten().map(|d| d.id.as_str()).collect();
+        assert_eq!(ids, vec!["sym:r.ts::repo"]);
+        assert_eq!(trace(&g, "sym:b.ts::go", "sym:l.ts::lock", 6), None);
+        assert!(trace(&g, "sym:b.ts::go", "sym:r.ts::repo", 6).is_some());
+        assert!(trace(&g, "sym:r.ts::repo", "sym:l.ts::lock", 6).is_some());
+    }
+
+    #[test]
     fn downstream_canonicalises_a_barrel_target() {
         let imp = downstream(&graph(), "sym:w.ts::W", 2);
         let d1: Vec<&str> = imp.layers[0].iter().map(|d| d.id.as_str()).collect();
@@ -405,9 +526,67 @@ mod tests {
     #[test]
     fn trace_finds_the_shortest_call_path_and_reports_none_when_there_is_no_path() {
         // J → W by Extends, W → S.create through its member W.run and the barrel alias.
-        assert_eq!(trace(&graph(), "sym:j.ts::J", "sym:s.ts::S", 6), Some(vec!["sym:j.ts::J".into(), "sym:w.ts::W".into(), "sym:s.ts::S.create".into()]));
+        assert_eq!(trace(&graph(), "sym:j.ts::J", "sym:s.ts::S", 6), Some(vec![("sym:j.ts::J".into(), false), ("sym:w.ts::W".into(), false), ("sym:s.ts::S.create".into(), false)]));
         assert_eq!(trace(&graph(), "sym:s.ts::S", "sym:j.ts::J", 6), None);
         assert_eq!(trace(&graph(), "sym:j.ts::J", "sym:s.ts::S", 1), None);
+    }
+
+    #[test]
+    fn a_trace_from_a_symbol_to_itself_is_the_one_node_path() {
+        assert_eq!(trace(&graph(), "sym:w.ts::W", "sym:w.ts::W", 6), Some(vec![("sym:w.ts::W".into(), false)]));
+    }
+
+    #[test]
+    fn a_value_passed_as_an_argument_reads_as_passed_not_called_and_still_counts_upstream() {
+        let mut g = Graph::default();
+        let mut e = Extraction::default();
+        e.node(NodeKind::Symbol, "sym:a.ts::A", "A", "", "a.ts", 1);
+        e.node(NodeKind::Symbol, "sym:t.ts::TOKEN", "TOKEN", "", "t.ts", 1);
+        e.node(NodeKind::Symbol, "sym:t.ts::run", "run", "", "t.ts", 2);
+        e.edge("sym:a.ts::A", "sym:t.ts::TOKEN", EdgeKind::Calls, "arg", "a.ts");
+        e.edge("sym:a.ts::A", "sym:t.ts::run", EdgeKind::Calls, "", "a.ts");
+        g.apply(e);
+        let down = render(&g, &downstream(&g, "sym:a.ts::A", 1), "downstream");
+        assert!(down.contains("  sym:t.ts::TOKEN  t.ts:1  Passes ← sym:a.ts::A\n"), "{down}");
+        assert!(down.contains("  sym:t.ts::run  t.ts:2  Calls ← sym:a.ts::A\n"), "{down}");
+        assert_eq!(trace(&g, "sym:a.ts::A", "sym:t.ts::TOKEN", 2), Some(vec![("sym:a.ts::A".into(), false), ("sym:t.ts::TOKEN".into(), true)]));
+        assert_eq!(upstream(&g, "sym:t.ts::TOKEN", 1).layers[0].len(), 1);
+    }
+
+    #[test]
+    fn a_call_from_one_owner_beats_a_passed_edge_from_another_at_the_same_depth() {
+        // R calls A and Z; A only passes `repo.save`, Z calls `repo.find`, and both fold to `repo`.
+        let mut g = object_literal();
+        let mut e = Extraction::default();
+        e.node(NodeKind::Symbol, "sym:x.ts::R", "R", "", "x.ts", 1);
+        e.node(NodeKind::Symbol, "sym:x.ts::A", "A", "", "x.ts", 2);
+        e.node(NodeKind::Symbol, "sym:x.ts::Z", "Z", "", "x.ts", 3);
+        e.edge("sym:x.ts::R", "sym:x.ts::A", EdgeKind::Calls, "", "x.ts");
+        e.edge("sym:x.ts::R", "sym:x.ts::Z", EdgeKind::Calls, "", "x.ts");
+        e.edge("sym:x.ts::A", "sym:r.ts::repo.save", EdgeKind::Calls, "arg", "x.ts");
+        e.edge("sym:x.ts::Z", "sym:r.ts::repo.find", EdgeKind::Calls, "", "x.ts");
+        g.apply(e);
+        let imp = downstream(&g, "sym:x.ts::R", 2);
+        let d2: Vec<(&str, &str, bool)> = imp.layers[1].iter().map(|d| (d.id.as_str(), d.via.as_str(), d.passed)).collect();
+        assert_eq!(d2, vec![("sym:r.ts::repo", "sym:x.ts::Z", false)]);
+    }
+
+    #[test]
+    fn json_marks_an_argument_edge_as_passes_in_impact_and_trace() {
+        let mut g = Graph::default();
+        let mut e = Extraction::default();
+        e.node(NodeKind::Symbol, "sym:a.ts::A", "A", "", "a.ts", 1);
+        e.node(NodeKind::Symbol, "sym:t.ts::TOKEN", "TOKEN", "", "t.ts", 1);
+        e.node(NodeKind::Symbol, "sym:t.ts::run", "run", "", "t.ts", 2);
+        e.edge("sym:a.ts::A", "sym:t.ts::TOKEN", EdgeKind::Calls, "arg", "a.ts");
+        e.edge("sym:a.ts::A", "sym:t.ts::run", EdgeKind::Calls, "", "a.ts");
+        g.apply(e);
+        let v: serde_json::Value = serde_json::from_str(&render_json(&g, &downstream(&g, "sym:a.ts::A", 1), "downstream")).unwrap();
+        let rows: Vec<(&str, &serde_json::Value)> = v["layers"][0].as_array().unwrap().iter().map(|d| (d["id"].as_str().unwrap(), &d["passes"])).collect();
+        assert_eq!(rows, vec![("sym:t.ts::TOKEN", &serde_json::json!(true)), ("sym:t.ts::run", &serde_json::json!(false))]);
+        let path = trace(&g, "sym:a.ts::A", "sym:t.ts::TOKEN", 2);
+        let v: serde_json::Value = serde_json::from_str(&trace_json(&g, "sym:a.ts::A", "sym:t.ts::TOKEN", 2, path.as_deref())).unwrap();
+        assert_eq!((&v["path"][0]["passes"], &v["path"][1]["passes"]), (&serde_json::json!(false), &serde_json::json!(true)));
     }
 
     #[test]
@@ -443,7 +622,6 @@ mod tests {
         assert_eq!(v["risk"], "MEDIUM");
     }
 }
-
 #[cfg(test)]
 mod container_cases {
     use super::{bare, container};
@@ -486,7 +664,7 @@ mod container_cases {
         e.edge("file:all.sh", "file:lib.sh", EdgeKind::ReExports, "*", "all.sh");
         e.edge("file:run.sh", "file:all.sh", EdgeKind::Imports, "log::info", "run.sh");
         g.apply(e);
-        assert_eq!(super::aliases(&g, "sym:lib.sh::log::info"), ["sym:all.sh::log::info"]);
+        assert_eq!(super::Index::new(&g, true).aliases("sym:lib.sh::log::info"), ["sym:all.sh::log::info"]);
         assert_eq!(super::upstream(&g, "sym:lib.sh::log::info", 3).importers, ["all.sh", "run.sh"]);
     }
 }
@@ -541,7 +719,7 @@ mod walk_cases {
         assert_eq!(up.layers.len(), 1);
         assert_eq!(
             trace(&g, "sym:db/0002.sql::app/clients.status", "sym:db/0001.sql::app/clients", 3),
-            Some(vec!["sym:db/0002.sql::app/clients.status".to_string(), "sym:db/0001.sql::app/clients".to_string()])
+            Some(vec![("sym:db/0002.sql::app/clients.status".to_string(), false), ("sym:db/0001.sql::app/clients".to_string(), false)])
         );
     }
 

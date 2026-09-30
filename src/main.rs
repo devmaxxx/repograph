@@ -36,6 +36,15 @@ struct Cli {
     cmd: Cmd,
 }
 
+/// Every `--depth`, a walk's hops or a candidate list's length: 0 reaches nothing, and a walk's
+/// `LOW` or a trace's "no call path" would then read as an answer.
+fn depth(s: &str) -> Result<usize, String> {
+    match s.parse::<usize>() {
+        Ok(0) => Err("a depth of 0 reaches nothing; the least is 1".into()),
+        r => r.map_err(|e| e.to_string()),
+    }
+}
+
 #[derive(Subcommand)]
 enum Cmd {
     Build,
@@ -52,7 +61,7 @@ enum Cmd {
         /// pool, zero tokens. Needs the exported model in `reranker_dir`.
         #[arg(long, conflicts_with = "rerank")] rerank_local: bool,
         /// Candidates the reranking model is shown; tokens per question grow with it.
-        #[arg(long, default_value_t = rerank::DEPTH)] depth: usize,
+        #[arg(long, default_value_t = rerank::DEPTH, value_parser = depth)] depth: usize,
         /// Answers from the store as it stands, without bringing it in line with the tree first.
         #[arg(long)] stale: bool,
         /// Answers in this process even when a `serve` is listening.
@@ -81,13 +90,15 @@ enum Cmd {
     Explain {
         node: String,
         #[arg(long)] json: bool,
+        /// Answers from the store as it stands, without bringing it in line with the tree first
+        #[arg(long)] stale: bool,
     },
     /// Who reaches a symbol (callers by depth, importing files, a risk line), or with `--down`
     /// what it reaches. A class is walked through its members; a caller that imported through a
     /// barrel is found all the same
     Impact {
         symbol: String,
-        #[arg(long, default_value_t = 3)] depth: usize,
+        #[arg(long, default_value_t = 3, value_parser = depth)] depth: usize,
         #[arg(long)] down: bool,
         #[arg(long)] json: bool,
         /// Answers from the store as it stands, without bringing it in line with the tree first
@@ -97,7 +108,7 @@ enum Cmd {
     Trace {
         from: String,
         to: String,
-        #[arg(long, default_value_t = 6)] depth: usize,
+        #[arg(long, default_value_t = 6, value_parser = depth)] depth: usize,
         #[arg(long)] json: bool,
         #[arg(long)] stale: bool,
     },
@@ -105,7 +116,7 @@ enum Cmd {
     /// unstaged and untracked alike) mapped onto symbol spans, then the callers of each
     Changes {
         #[arg(long, default_value = "HEAD")] base: String,
-        #[arg(long, default_value_t = 2)] depth: usize,
+        #[arg(long, default_value_t = 2, value_parser = depth)] depth: usize,
         #[arg(long)] json: bool,
         #[arg(long)] stale: bool,
     },
@@ -170,7 +181,7 @@ enum Cmd {
         #[arg(long)] cases: Option<PathBuf>,
         #[arg(long)] rerank: bool,
         #[arg(long, conflicts_with = "rerank")] rerank_local: bool,
-        #[arg(long, default_value_t = rerank::DEPTH)] depth: usize,
+        #[arg(long, default_value_t = rerank::DEPTH, value_parser = depth)] depth: usize,
         /// Runs the suite this many times and prints the median beneath the runs. One run reads
         /// exactly as it always has; a bar judged against a single reading is measuring the
         /// machine as much as the change.
@@ -182,7 +193,7 @@ enum Cmd {
         #[arg(long)] queries: PathBuf,
         #[arg(long)] out: PathBuf,
         /// How deep each of the four lists is recorded.
-        #[arg(long, default_value_t = 300)] depth: usize,
+        #[arg(long, default_value_t = 300, value_parser = depth)] depth: usize,
     },
     ImportLegacy { graph_json: PathBuf },
 }
@@ -216,6 +227,8 @@ pub struct UpdateReport {
 /// and the whole tree is read once. Once, because the manifest saved below carries this build's
 /// generation — after which an update is the incremental one again.
 pub(crate) fn apply_diff(repo: &std::path::Path, store: &store::Store, graph: &mut model::Graph, entries: &[walk::Entry], diff: &walk::Diff, manifest: &walk::Manifest, ex: &Extractors) -> anyhow::Result<UpdateReport> {
+    // A graph read from nothing is read beside no headers either, whatever an older store left.
+    let fresh = graph.nodes.is_empty();
     let named: std::collections::BTreeSet<&str> = diff.changed.iter().map(|e| e.rel.as_str()).collect();
     let code_changed = diff.changed.iter().filter(|e| e.kind == walk::FileKind::Code).map(|e| e.rel.as_str());
     if let Some(note) = code::lang::files_only_note(code_changed) {
@@ -234,7 +247,7 @@ pub(crate) fn apply_diff(repo: &std::path::Path, store: &store::Store, graph: &m
     let code_rels: Vec<String> = entries.iter().filter(|e| e.kind == walk::FileKind::Code).map(|e| e.rel.clone()).collect();
     let rereading: Vec<String> = diff.changed.iter().chain(regrammar.iter().copied())
         .filter(|e| e.kind == walk::FileKind::Code).map(|e| e.rel.clone()).collect();
-    let mut headers = code::index::Headers::load(store)?;
+    let mut headers = if fresh { code::index::Headers::default() } else { code::index::Headers::load(store)? };
     let recorded = headers.clone();
     let widened_rels = code::index::widen(repo, &rereading, &diff.removed, &mut headers, &code_rels);
     let widened: Vec<&walk::Entry> = entries.iter().filter(|e| widened_rels.binary_search(&e.rel).is_ok()).collect();
@@ -299,7 +312,7 @@ pub(crate) fn apply_diff(repo: &std::path::Path, store: &store::Store, graph: &m
     let graph_at = store.save(graph, &saved)?;
     // After the graph and never before: a crash between the two leaves the older headers, which
     // widen the next update once more rather than hide a move from it.
-    if headers != recorded {
+    if fresh || headers != recorded {
         headers.save(store)?;
     }
     // Only when something was re-extracted: a tree that did not move cannot have grown a node
@@ -314,11 +327,12 @@ pub(crate) fn apply_diff(repo: &std::path::Path, store: &store::Store, graph: &m
 /// The store brought in line with the tree.
 pub fn run_update(repo: &std::path::Path, cfg: &config::Config, wipe: bool) -> anyhow::Result<UpdateReport> {
     let store = store::Store::new(repo);
-    if wipe { store.wipe()?; }
-    let (mut graph, manifest) = store.load()?;
+    // A build starts from nothing in memory and leaves the stored graph alone until its save
+    // renames the new one over it: a build killed before then leaves a store that still answers.
+    let (mut graph, manifest) = if wipe { store.drop_leftovers()?; Default::default() } else { store.load()? };
     let entries = walk::walk(repo, cfg, &manifest)?;
     let diff = manifest.diff(&entries);
-    // A wipe has just emptied the graph, so this one test covers both fresh builds: `build`, and
+    // A build starts from an empty graph, so this one test covers both fresh builds: `build`, and
     // an `update` on a store nobody has built yet.
     let bootstrap = graph.nodes.is_empty();
     // A tree that has not moved cannot have moved its families either, and the pass over every
@@ -703,6 +717,14 @@ fn switch_model(repo: &std::path::Path, cfg: &config::Config, id: &str, no_embed
     embed_opened(repo, id, &mut emb)
 }
 
+/// The node `impact` or `trace` walks from. The names it passed over go to stderr, so a LOW
+/// that came from the wrong node is visible without changing what stdout parses to.
+fn code_node<'a>(graph: &'a model::Graph, name: &str) -> anyhow::Result<&'a model::Node> {
+    let (pick, rest) = query::resolve_code(graph, name)?;
+    if let Some(note) = query::passed_over(name, pick, &rest) { eprintln!("{note}"); }
+    Ok(pick)
+}
+
 /// The graph an answer is read from: refreshed against the tree unless `--stale`, and, when
 /// the store cannot be written, the stored one with a warning — the same contract as `ask`.
 fn graph_for(repo: &std::path::Path, cfg: &config::Config, stale: bool) -> anyhow::Result<model::Graph> {
@@ -880,8 +902,8 @@ fn run() -> anyhow::Result<()> {
             cap_pools(index::embed::threads(cfg.resources));
             run_watch(&repo, &cfg, every, batch, cli.no_dense)
         }
-        Cmd::Explain { node, json } => {
-            let (graph, _) = store::Store::new(&repo).load()?;
+        Cmd::Explain { node, json, stale } => {
+            let graph = graph_for(&repo, &load_cfg()?, stale)?;
             let rendered = match json {
                 true => query::explain_json(&graph, &node).map(|j| format!("{j}\n")),
                 false => query::explain(&graph, &node),
@@ -891,15 +913,15 @@ fn run() -> anyhow::Result<()> {
         }
         Cmd::Impact { symbol, depth, down, json, stale } => {
             let graph = graph_for(&repo, &load_cfg()?, stale)?;
-            let root = query::resolve_one(&graph, &symbol)?;
+            let root = code_node(&graph, &symbol)?;
             let (imp, direction) = if down { (impact::downstream(&graph, &root.id, depth), "downstream") } else { (impact::upstream(&graph, &root.id, depth), "upstream") };
             print!("{}", if json { impact::render_json(&graph, &imp, direction) } else { impact::render(&graph, &imp, direction) });
             Ok(())
         }
         Cmd::Trace { from, to, depth, json, stale } => {
             let graph = graph_for(&repo, &load_cfg()?, stale)?;
-            let a = query::resolve_one(&graph, &from)?;
-            let b = query::resolve_one(&graph, &to)?;
+            let a = code_node(&graph, &from)?;
+            let b = code_node(&graph, &to)?;
             let found = impact::trace(&graph, &a.id, &b.id, depth);
             // No path within the depth is an answer to the question that was asked, so the JSON
             // form says so and exits 0 where the text form exits 3. A caller parsing JSON should
@@ -911,9 +933,9 @@ fn run() -> anyhow::Result<()> {
             }
             match found {
                 Some(path) => {
-                    for (i, id) in path.iter().enumerate() {
+                    for (i, (id, passed)) in path.iter().enumerate() {
                         let at = graph.nodes.get(id).map(|n| format!("{}:{}", n.file, n.line)).unwrap_or_default();
-                        println!("{}{id}  {at}", if i == 0 { "" } else { "  → " });
+                        println!("{}{id}  {at}{}", if i == 0 { "" } else { "  → " }, if *passed { "  passes" } else { "" });
                     }
                     Ok(())
                 }
@@ -1086,6 +1108,20 @@ mod tests {
         assert!(query::render(&answer, &graph, &opts).contains("FR-PAY-23"));
         // The store carries the edit too, so the next reader has nothing left to redo.
         assert!(store.load().unwrap().0.nodes.contains_key("FR-PAY-23"));
+    }
+
+    /// A build that stops part-way — killed, or failed as here on a glob it cannot compile — leaves
+    /// the store it started from, not an empty one that `--stale` reads as "no node matches".
+    #[test]
+    fn a_build_that_stops_before_its_save_leaves_the_previous_store_readable() {
+        let dir = doc_repo(ONE);
+        let (repo, cfg) = (dir.path(), config::Config::default());
+        built(repo, &cfg);
+        let broken = config::Config { doc_globs: vec!["[".to_string()], ..config::Config::default() };
+        assert!(run_update(repo, &broken, true).is_err());
+        let (graph, manifest) = store::Store::new(repo).load().unwrap();
+        assert!(graph.nodes.contains_key("FR-PAY-22"));
+        assert!(!manifest.files.is_empty());
     }
 
     #[test]
