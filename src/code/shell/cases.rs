@@ -105,11 +105,11 @@ fn running_a_script_references_its_file_from_the_function_or_file_that_runs_it()
 }
 
 #[test]
-fn a_call_resolves_to_this_file_first_then_through_what_it_sources_transitively() {
+fn a_call_resolves_to_this_file_or_through_what_it_sources_transitively() {
     let files = [
         ("a.sh", ". ./b.sh\nlog() { log_impl \"$@\"; }\nlog start\n"),
         ("b.sh", ". ./c.sh\nlog_impl() { stamp; }\n"),
-        ("c.sh", "stamp() { date; }\nlog() { :; }\n"),
+        ("c.sh", "stamp() { date; }\n"),
     ];
     let a = extract(&files, "a.sh");
     assert_eq!(lines(&a, EdgeKind::Calls), ["file:a.sh -> sym:a.sh::log []", "sym:a.sh::log -> sym:b.sh::log_impl []"]);
@@ -134,4 +134,35 @@ fn a_script_under_a_dotted_directory_sources_and_calls_like_any_other() {
     let ex = extract(&files, ".github/scripts/deploy.sh");
     assert_eq!(lines(&ex, EdgeKind::Imports), ["file:.github/scripts/deploy.sh -> file:.github/scripts/lib.sh [*]"]);
     assert_eq!(lines(&ex, EdgeKind::Calls), ["file:.github/scripts/deploy.sh -> sym:.github/scripts/lib.sh::lib_line []"]);
+}
+
+#[test]
+fn a_path_climbing_above_the_repository_root_names_no_script() {
+    let main = "source ../../x.sh\nbash ../../x.sh\nsource \"$(dirname \"$0\")/../../x.sh\"\n";
+    let ex = extract(&[("a/main.sh", main), ("x.sh", "")], "a/main.sh");
+    assert!(lines(&ex, EdgeKind::Imports).is_empty(), "{:?}", lines(&ex, EdgeKind::Imports));
+    assert!(lines(&ex, EdgeKind::References).is_empty(), "{:?}", lines(&ex, EdgeKind::References));
+    let ok = extract(&[("a/main.sh", "source ../x.sh\n"), ("x.sh", "")], "a/main.sh");
+    assert_eq!(lines(&ok, EdgeKind::Imports), ["file:a/main.sh -> file:x.sh [*]"]);
+}
+
+#[test]
+fn a_name_defined_in_more_than_one_reachable_script_is_no_call() {
+    let files = [
+        ("main.sh", ". ./c.sh\n. ./e.sh\nrun() { f; g; }\nown() { h; }\n. ./h.sh\nh() { :; }\n"),
+        ("c.sh", "f() { :; }\n"),
+        ("e.sh", ". ./d.sh\n"),
+        ("d.sh", "f() { :; }\ng() { :; }\n"),
+        ("h.sh", "h() { :; }\n"),
+    ];
+    assert_eq!(lines(&extract(&files, "main.sh"), EdgeKind::Calls), ["sym:main.sh::run -> sym:d.sh::g []"]);
+}
+
+#[test]
+fn an_interpreter_run_skips_options_and_a_command_string() {
+    let files = [("a.sh", "bash -o pipefail x.sh\nbash -e -x y.sh\nbash -c x.sh\nsh -ec y.sh\n"), ("x.sh", ""), ("y.sh", "")];
+    let ex = extract(&files, "a.sh");
+    assert_eq!(lines(&ex, EdgeKind::References), ["file:a.sh -> file:x.sh []", "file:a.sh -> file:y.sh []"]);
+    let none = extract(&[("a.sh", "bash -o pipefail\nbash -c x.sh\n"), ("pipefail", ""), ("x.sh", "")], "a.sh");
+    assert!(lines(&none, EdgeKind::References).is_empty());
 }

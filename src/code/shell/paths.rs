@@ -116,12 +116,24 @@ pub(super) fn words<'t, 's>(cmd: Node<'t>, src: &'s [u8]) -> Option<(&'s str, Ve
 }
 
 /// Where a path value may point in the repository, in the order tried: under the script's directory,
-/// then, for text written relative, from the root, where scripts are most often run from.
+/// then, for text written relative, from the root, where scripts are most often run from. A path that
+/// climbs above the root names something outside the repository, so it has no candidate.
 pub(super) fn candidates(rel: &str, value: &Value) -> Vec<String> {
-    use crate::doc::links::normalise;
+    let dir = rel.rsplit_once('/').map_or("", |(d, _)| d);
+    let under = |base: &str, text: &str| -> Option<String> {
+        let mut parts: Vec<&str> = base.split('/').filter(|s| !s.is_empty()).collect();
+        for seg in text.split('/') {
+            match seg {
+                "" | "." => {}
+                ".." => { parts.pop()?; }
+                s => parts.push(s),
+            }
+        }
+        Some(parts.join("/"))
+    };
     match value {
-        Value::Here(rest) => vec![normalise(rel, rest.trim_start_matches('/'))],
-        Value::Literal(p) if !p.starts_with('/') => vec![normalise(rel, p), normalise("", p)],
+        Value::Here(rest) => under(dir, rest).into_iter().collect(),
+        Value::Literal(p) if !p.starts_with('/') => [under(dir, p), under("", p)].into_iter().flatten().collect(),
         _ => Vec::new(),
     }
 }

@@ -86,17 +86,17 @@ impl Scripts {
         self.sources.get(rel).into_iter().flatten().filter_map(|c| self.pick(c)).collect()
     }
 
-    /// Functions `rel` can call through what it sources, directly or not: name → the defining script.
-    /// Breadth-first, and the nearest definition wins; a name two sourced scripts both define is rare
-    /// enough that reading which `source` line runs last is not worth it.
-    fn visible<'a>(&'a self, rel: &'a str) -> BTreeMap<&'a str, &'a str> {
-        let mut out = BTreeMap::new();
+    /// Functions `rel` can call through what it sources, directly or not: name → every script that
+    /// defines it. Which definition a call reaches is whichever `source` ran last, and the graph does
+    /// not model run order, so a name with more than one definition is left for the caller to drop.
+    fn visible<'a>(&'a self, rel: &'a str) -> BTreeMap<&'a str, Vec<&'a str>> {
+        let mut out: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
         let mut seen = BTreeSet::from([rel]);
         let mut queue: VecDeque<&str> = self.sourced(rel).into();
         while let Some(script) = queue.pop_front() {
             if !seen.insert(script) { continue }
             for f in self.functions.get(script).into_iter().flatten() {
-                out.entry(f.as_str()).or_insert(script);
+                out.entry(f.as_str()).or_default().push(script);
             }
             queue.extend(self.sourced(script));
         }

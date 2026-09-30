@@ -48,7 +48,14 @@ pub(super) fn write(scripts: &Scripts, root: Node, spans: &Spans, src: &[u8], re
         let Some((name, args)) = words(c, src) else { continue };
         let from = spans.owner(c.start_byte());
         if !name.contains(['/', '$', '"', '\'']) {
-            let defined = if scripts.defines(rel, name) { Some(rel) } else { visible.get(name).copied() };
+            let sourced = visible.get(name).map_or(&[][..], Vec::as_slice);
+            let own = scripts.defines(rel, name);
+            // A second definition may be the one that runs, so the name resolves to none of them.
+            let defined = match (own, sourced) {
+                (true, []) => Some(rel),
+                (false, [only]) => Some(*only),
+                _ => None,
+            };
             if let Some(script) = defined {
                 let target = format!("sym:{script}::{name}");
                 if target != from { ex.edge(from, &target, EdgeKind::Calls, "", rel) }
@@ -57,13 +64,25 @@ pub(super) fn write(scripts: &Scripts, root: Node, spans: &Spans, src: &[u8], re
         let run = match name {
             "source" | "." => None,
             "exec" => args.first().and_then(|a| vars.eval(*a, src)).filter(is_path),
-            n if RUNNERS.contains(&n) => args.iter()
-                .find(|a| !prose::text(**a, src).starts_with('-'))
-                .and_then(|a| vars.eval(*a, src)),
+            n if RUNNERS.contains(&n) => runner_script(&args, src).and_then(|a| vars.eval(a, src)),
             _ => c.child_by_field_name("name").and_then(|n| n.named_child(0)).and_then(|w| vars.eval(w, src)).filter(is_path),
         };
         if let Some(script) = run.and_then(|v| scripts.pick(&candidates(rel, &v))) {
             ex.edge(from, &format!("file:{script}"), EdgeKind::References, "", rel);
         }
     }
+}
+
+/// The script an interpreter runs: the first operand that is not an option. `-o` and `+o` take the
+/// option name after them, and `-c` runs a command string, so no file is run.
+fn runner_script<'t>(args: &[Node<'t>], src: &[u8]) -> Option<Node<'t>> {
+    let mut it = args.iter();
+    while let Some(a) = it.next() {
+        let t = prose::text(*a, src);
+        if !t.starts_with(['-', '+']) { return Some(*a) }
+        let flags = &t[1..];
+        if !flags.starts_with('-') && flags.contains('c') { return None }
+        if matches!(t, "-o" | "+o" | "-O" | "+O") { it.next(); }
+    }
+    None
 }
