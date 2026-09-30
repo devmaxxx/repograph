@@ -48,6 +48,12 @@ pub struct Edge {
     pub file: String,
 }
 
+impl Edge {
+    /// A `Calls` edge for an identifier handed to a call — `rows.map(fn)`, `register(Token)` —
+    /// rather than called: the caller depends on the target, but nothing proves it calls it.
+    pub fn passes(&self) -> bool { self.kind == EdgeKind::Calls && self.context == "arg" }
+}
+
 #[derive(Debug, Default)]
 pub struct Extraction { pub nodes: Vec<Node>, pub edges: Vec<Edge> }
 

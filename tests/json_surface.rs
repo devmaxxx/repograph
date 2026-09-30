@@ -103,3 +103,14 @@ fn explaining_a_node_that_is_not_there_fails_in_both_forms() {
         assert!(!ok, "{args:?} should fail: {out}");
     }
 }
+
+#[test]
+fn explain_refreshes_like_the_other_readers_and_takes_stale_like_them() {
+    let dir = built();
+    let repo = dir.path();
+    std::fs::write(repo.join("docs/more.md"), "**FR-PAY-30 · MUST · Чаевые**\n\nЧаевые идут мастеру.\n").unwrap();
+    let (ok, out) = repograph(repo, &["explain", "FR-PAY-30", "--stale"]);
+    assert!(!ok, "the store as it stands has not read the new document: {out}");
+    let (ok, out) = repograph(repo, &["explain", "FR-PAY-30"]);
+    assert!(ok && out.starts_with("FR-PAY-30"), "explain brought the store in line first: {out}");
+}

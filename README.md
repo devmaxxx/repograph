@@ -22,7 +22,8 @@ has since grown to the 82 cases [Bench](#bench) floors.
 ## Status
 
 0.5.4 is the version `main` carries, and every command below is implemented rather than planned:
-`build` and `update` (incremental; a no-op `update` is a fixed point), `families`, `ask`, `explain`,
+`build` (a full re-read that replaces the stored graph only when it saves, so one interrupted
+leaves the previous store answering) and `update` (incremental; a no-op `update` is a fixed point), `families`, `ask`, `explain`,
 `verify`, `impact`, `trace`, `changes`, `embed`, `watch`, `serve`, `prime`, `install-agent`,
 `import-legacy`, `dump` and `bench`. Three spend model tokens and all three are opt-in: `enrich`,
 `ask --rerank`, and `ask --rerank-local` (zero tokens, a local cross-encoder, measured and rejected
@@ -97,6 +98,7 @@ Ask it something:
 repograph ask cancellation policy
 repograph ask FR-PAY-22                     # an exact id short-circuits straight to the node
 repograph ask asGrosze                      # so does an exact symbol name (a plain lowercase word does so only alone)
+repograph ask "FR-PAY-22 refund"            # quoted or not, the same words find the same ids and names
 repograph ask --bodies отмена записи        # print full requirement bodies, not just headlines
 repograph ask --json отмена записи          # machine-readable
 repograph ask --seeds 8 отмена записи       # widen the search beyond the default of 5; costs more tokens
@@ -113,6 +115,11 @@ repograph trace StaffController StaffService  # shortest chain of calls between 
 repograph changes                           # what the uncommitted diff touches, and who reaches it
 repograph changes --base main --depth 1     # the whole branch; depth 1 is the direct callers alone
 ```
+
+`impact` and `trace` resolve a name the way `explain` does, except that when a document node and
+code share it they take the code, production code before a test (a `test/` or `e2e/` path, a
+`*.test.*`, `*.spec.*` or `*.stories.*` file), and name on stderr three of the candidates they
+passed over and how many more there are.
 
 Answers are lines of the form:
 
@@ -152,7 +159,10 @@ so a field can be added without breaking a parser written against the version be
 | `model --json` | `store`, `configured`, `configured_from`, `this_run`, `agrees`, `recommended` |
 
 `explain --json` resolves each edge's direction for you — `dir` is `in` or `out` and `other` is the
-node at the far end — so a caller never works out which end of an edge it was standing on. One
+node at the far end — so a caller never works out which end of an edge it was standing on. Each
+row of `impact` and `changes`, and each step of a `trace` path, carries `passes`: `true` when the
+edge is an identifier handed to a call rather than called, which the text forms print as `Passes`.
+`kind` stays the graph's own edge kind, `Calls`, so a reader filtering on it keeps those rows. One
 difference from the text forms is deliberate: a `trace` that finds no path within the depth is an
 answer to the question that was asked, so the JSON form prints `"path": null` and exits 0 where the
 text form exits **3**. The two are the same answer in two shapes: a caller parsing an object should
@@ -308,8 +318,10 @@ repograph explain FR-PAY-22
 repograph explain asGrosze
 ```
 
-`explain` resolves its argument as an exact id, then as a symbol name, then as a case-insensitive
-label match.
+`explain` resolves its argument as an id — as typed, then without the punctuation around it, then
+ignoring case, as `ask` reads an id in a question — then as a symbol name, then as a
+case-insensitive label match. Like every other reader it brings the store in line with the tree first; `--stale`
+answers from the store as it stands.
 
 Check the graph's health — counts by kind, dangling edges, how many citations are held aside because
 no line defines their prefix, and ids that are referenced but never declared, split into gaps inside
