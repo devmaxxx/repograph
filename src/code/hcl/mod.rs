@@ -11,7 +11,7 @@ pub(crate) use references::Modules;
 use crate::code::imports::Resolver;
 use crate::code::lang::{file_node, Lang};
 use crate::code::prose::{self, Spans};
-use crate::model::Extraction;
+use crate::model::{EdgeKind, Extraction, Graph};
 use std::collections::BTreeSet;
 use tree_sitter::Node;
 
@@ -41,6 +41,34 @@ pub fn extract(resolver: &Resolver, rel: &str, source: &str) -> Extraction {
     }
     prose::cite(root, src, rel, &["string_lit", "quoted_template", "heredoc_template"], &spans, &mut ex);
     ex
+}
+
+/// `apply_diff`'s widening for Terraform. A module is a directory, so a `.tf` file that changes or goes
+/// can add, move or drop an address that every sibling reads, and a module call reads the outputs and
+/// variables of the directory it names: both the siblings and the files calling the directory are read
+/// again. Other `.hcl` files declare nothing a neighbour resolves against, so they widen nothing.
+pub(crate) fn widen(stale: &[String], removed: &[String], graph: &Graph, all_rels: &[String]) -> Vec<String> {
+    let dirs: BTreeSet<&str> = stale.iter().chain(removed)
+        .filter(|r| r.ends_with(".tf"))
+        .map(|r| dir(r))
+        .collect();
+    if dirs.is_empty() {
+        return Vec::new();
+    }
+    let importers = graph.edges.iter()
+        .filter(|e| e.kind == EdgeKind::Imports && e.source.ends_with(".tf"))
+        .filter(|e| e.target.strip_prefix("file:").is_some_and(|t| t.ends_with(".tf") && dirs.contains(dir(t))))
+        .filter_map(|e| e.source.strip_prefix("file:"));
+    let siblings = all_rels.iter().map(String::as_str).filter(|r| r.ends_with(".tf") && dirs.contains(dir(r)));
+    let reread: BTreeSet<&str> = importers.chain(siblings).collect();
+    reread.into_iter()
+        .filter(|r| !stale.iter().any(|s| s == r) && all_rels.iter().any(|a| a == r))
+        .map(str::to_string)
+        .collect()
+}
+
+fn dir(rel: &str) -> &str {
+    rel.rsplit_once('/').map_or("", |(d, _)| d)
 }
 
 /// Every block this file declares, by address, with the node its span comes from. In Terraform,

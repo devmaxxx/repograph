@@ -210,3 +210,59 @@ fn a_for_variable_is_bound_in_the_body_and_the_condition_but_not_in_its_own_coll
     let ex = extract(&files, "m/c.tf");
     assert_eq!(lines(&ex, EdgeKind::References), ["sym:m/c.tf::local/c -> sym:m/b.tf::web/id []"]);
 }
+
+fn calling(pairs: &[(&str, &str)]) -> crate::model::Graph {
+    let mut g = crate::model::Graph::default();
+    for (from, to) in pairs {
+        g.edges.insert(crate::model::Edge {
+            source: format!("file:{from}"),
+            target: format!("file:{to}"),
+            kind: EdgeKind::Imports,
+            context: "*".into(),
+            file: (*from).into(),
+        });
+    }
+    g
+}
+
+fn widened(stale: &[&str], removed: &[&str], g: &crate::model::Graph, all: &[&str]) -> Vec<String> {
+    let owned = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+    let mut w = super::widen(&owned(stale), &owned(removed), g, &owned(all));
+    w.sort();
+    w
+}
+
+const DIR: &[&str] = &["m/a.tf", "m/b.tf", "m/c.tf", "m/.terraform.lock.hcl", "n/x.tf"];
+
+#[test]
+fn a_changed_tf_file_widens_to_every_other_tf_file_of_its_directory_and_no_other() {
+    let g = crate::model::Graph::default();
+    assert_eq!(widened(&["m/a.tf"], &[], &g, DIR), ["m/b.tf", "m/c.tf"]);
+}
+
+#[test]
+fn a_removed_tf_file_widens_to_the_siblings_left_and_to_nothing_of_itself() {
+    let g = crate::model::Graph::default();
+    assert_eq!(widened(&[], &["m/gone.tf"], &g, DIR), ["m/a.tf", "m/b.tf", "m/c.tf"]);
+}
+
+#[test]
+fn a_file_whose_module_call_imports_the_directory_is_read_again() {
+    let g = calling(&[("env/main.tf", "m/a.tf"), ("env/main.tf", "m/b.tf"), ("other/main.tf", "n/x.tf")]);
+    let all = ["env/main.tf", "other/main.tf", "m/a.tf", "m/b.tf", "n/x.tf"];
+    assert_eq!(widened(&["m/b.tf"], &[], &g, &all), ["env/main.tf", "m/a.tf"]);
+}
+
+#[test]
+fn a_file_already_being_read_is_left_out() {
+    let g = calling(&[("env/main.tf", "m/a.tf")]);
+    let all = ["env/main.tf", "m/a.tf", "m/b.tf"];
+    assert_eq!(widened(&["m/a.tf", "m/b.tf", "env/main.tf"], &[], &g, &all), Vec::<String>::new());
+}
+
+#[test]
+fn a_change_that_is_not_a_tf_file_widens_nothing() {
+    let g = calling(&[("env/main.tf", "m/a.tf")]);
+    assert!(widened(&["m/.terraform.lock.hcl"], &[], &g, DIR).is_empty());
+    assert!(widened(&["m/docker-bake.hcl", "m/notes.md"], &["m/x.hcl"], &g, DIR).is_empty());
+}
