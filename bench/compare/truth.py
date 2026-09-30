@@ -1353,7 +1353,7 @@ def blank_rust(src: str) -> str:
             end = min(end + 1, n)
             out.append('"' + newlines(i, end) + '"')
             i = end
-        elif c == "'" and src.startswith("\\", i + 1) and (close := src.find("'", i + 2)) >= 0:
+        elif c == "'" and src.startswith("\\", i + 1) and (close := src.find("'", i + 3)) >= 0:
             out.append("' '")
             i = close + 1
         elif c == "'" and i + 2 < n and src[i + 2] == "'" and src[i + 1] != "\n":

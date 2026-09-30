@@ -1240,6 +1240,9 @@ class RustTruth(unittest.TestCase):
         self.assertEqual(blanked.count("\n"), src.count("\n"))
         self.assertEqual(rust_declarations(blanked), [(1, "f"), (2, "S")])
 
+    def test_an_escaped_quote_char_literal_closes_on_its_own_quote(self):
+        self.assertEqual(blank_rust("let q = '\\''; let b = '{';"), "let q = ' '; let b = ' ';")
+
     def test_raw_strings_and_nested_block_comments_hide_what_they_hold(self):
         src = 'const A: &str = r#"fn hidden() {"#;\n/* outer /* inner */ fn gone() {} */\npub(crate) fn kept() {}\n'
         self.assertEqual(rust_declarations(blank_rust(src)), [(1, "A"), (3, "kept")])
