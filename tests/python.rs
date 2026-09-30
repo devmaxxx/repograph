@@ -3,8 +3,8 @@
 
 mod common;
 
+use common::git;
 use std::path::Path;
-use std::process::Command;
 
 // Python is not in the default globs, so the repository names it.
 const TREE: &[(&str, &str)] = &[
@@ -29,17 +29,6 @@ fn repograph(repo: &Path, args: &[&str]) -> (Option<i32>, String, String) {
     (out.status.code(), String::from_utf8_lossy(&out.stdout).into_owned(), String::from_utf8_lossy(&out.stderr).into_owned())
 }
 
-fn git(repo: &Path, args: &[&str]) {
-    let out = Command::new("git")
-        .arg("-C")
-        .arg(repo)
-        .args(["-c", "user.name=t", "-c", "user.email=t@example.com", "-c", "commit.gpgsign=false"])
-        .args(args)
-        .output()
-        .unwrap();
-    assert!(out.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&out.stderr));
-}
-
 #[test]
 fn sibling_scripts_answer_impact_trace_and_changes_and_survive_an_update() {
     let dir = tempfile::tempdir().unwrap();
@@ -61,7 +50,6 @@ fn sibling_scripts_answer_impact_trace_and_changes_and_survive_an_update() {
     let (code, out, err) = repograph(repo, &["impact", read]);
     assert_eq!(code, Some(0), "{out}{err}");
     assert!(out.contains("sym:tools/compare/run.py::Runner.go"), "impact read_jsonl names its caller: {out}");
-    assert!(out.contains("tools/compare/run.py"), "{out}");
 
     // A test file importing its script by bare name depends on the class it constructs.
     let (code, out, err) = repograph(repo, &["impact", "sym:tools/compare/run.py::Runner"]);

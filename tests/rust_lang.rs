@@ -4,8 +4,9 @@
 
 mod common;
 
+use common::git;
+
 use std::path::Path;
-use std::process::Command;
 
 // Rust is not in the default globs, so the repository names it.
 const TREE: &[(&str, &str)] = &[
@@ -28,17 +29,6 @@ const TREE: &[(&str, &str)] = &[
 fn repograph(repo: &Path, args: &[&str]) -> (Option<i32>, String, String) {
     let out = common::run(repo, args);
     (out.status.code(), String::from_utf8_lossy(&out.stdout).into_owned(), String::from_utf8_lossy(&out.stderr).into_owned())
-}
-
-fn git(repo: &Path, args: &[&str]) {
-    let out = Command::new("git")
-        .arg("-C")
-        .arg(repo)
-        .args(["-c", "user.name=t", "-c", "user.email=t@example.com", "-c", "commit.gpgsign=false"])
-        .args(args)
-        .output()
-        .unwrap();
-    assert!(out.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&out.stderr));
 }
 
 #[test]
