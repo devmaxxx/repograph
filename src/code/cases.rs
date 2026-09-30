@@ -676,6 +676,76 @@ fn a_call_through_a_typed_field_targets_the_field_type_member() {
 }
 
 #[test]
+fn a_function_passed_as_an_argument_is_called_by_the_caller() {
+    let repo = Repo::new(&[("w.ts", "export function feedWire() {}\n")]);
+    let ex = repo.extract(
+        "center.service.ts",
+        "import { feedWire } from './w';\nfunction isIndexed() { return true; }\n\
+         export function list(rows: unknown[], limit: number) { return rows.filter(isIndexed).map(feedWire).slice(0, limit); }\n",
+    );
+    let mut got = calls(&ex);
+    got.sort();
+    assert_eq!(got, vec![
+        ("sym:center.service.ts::list", "sym:center.service.ts::isIndexed"),
+        ("sym:center.service.ts::list", "sym:w.ts::feedWire"),
+    ], "a parameter passed along proves nothing and gives no edge");
+}
+
+#[test]
+fn a_value_passed_as_an_argument_is_an_arg_edge_unless_the_owner_also_calls_it() {
+    let repo = Repo::new(&[("t.ts", "export const TOKEN = 'T';\nexport function run() {}\n")]);
+    let ex = repo.extract(
+        "m.ts",
+        "import { TOKEN, run } from './t';\n\
+         export function a() { register(TOKEN); }\n\
+         export function b() { go(run); run(); }\n",
+    );
+    let mut got = edges(&ex, EdgeKind::Calls);
+    got.sort();
+    assert_eq!(got, vec![
+        ("sym:m.ts::a", "sym:t.ts::TOKEN", "arg"),
+        ("sym:m.ts::b", "sym:t.ts::run", ""),
+    ], "one edge per pair, and a real call wins over the same target passed");
+}
+
+#[test]
+fn rendering_a_component_in_jsx_is_a_call_of_it() {
+    let repo = Repo::new(&[
+        ("m.tsx", "export function CommissionMatrix() { return null; }\n"),
+        ("ui.tsx", "export function Card() { return null; }\nexport function Body() { return null; }\n"),
+    ]);
+    let ex = repo.extract(
+        "screen.tsx",
+        "import { CommissionMatrix } from './m';\nimport * as ui from './ui';\nconst div = () => 1;\n\
+         export function Screen() {\n  return <div><ui.Card><CommissionMatrix rows={[]} /></ui.Card><ui.Body/></div>;\n}\n",
+    );
+    let mut got = calls(&ex);
+    got.sort();
+    assert_eq!(got, vec![
+        ("sym:screen.tsx::Screen", "sym:m.tsx::CommissionMatrix"),
+        ("sym:screen.tsx::Screen", "sym:ui.tsx::Body"),
+        ("sym:screen.tsx::Screen", "sym:ui.tsx::Card"),
+    ]);
+}
+
+#[test]
+fn a_call_on_a_helpers_return_value_targets_the_returned_class_member() {
+    let repo = Repo::new(&[("s.ts", "export class PoliciesService { cancellationPolicy() {} }\n")]);
+    let annotated = repo.extract(
+        "a.spec.ts",
+        "import { PoliciesService } from './s';\nconst service = (): PoliciesService => make();\nit('x', async () => { await service().cancellationPolicy(); });\n",
+    );
+    assert!(calls(&annotated).contains(&("file:a.spec.ts", "sym:s.ts::PoliciesService.cancellationPolicy")));
+    let built = repo.extract(
+        "b.spec.ts",
+        "import { PoliciesService } from './s';\nfunction service() { return x; }\nconst other = () => new PoliciesService();\nit('x', () => other().cancellationPolicy());\nit('y', () => service().cancellationPolicy());\n",
+    );
+    let got = calls(&built);
+    assert!(got.contains(&("file:b.spec.ts", "sym:s.ts::PoliciesService.cancellationPolicy")));
+    assert_eq!(got.iter().filter(|c| c.1.ends_with("cancellationPolicy")).count(), 1, "an unannotated block body proves nothing");
+}
+
+#[test]
 fn a_generic_field_type_uses_its_head_name() {
     let repo = Repo::new(&[("r.ts", "export class Repository<T> { find() {} }\n")]);
     let ex = repo.extract("c.ts", "import { Repository } from './r';\nexport class C {\n  constructor(private readonly users: Repository<User>) {}\n  run() { this.users.find(); }\n}\n");

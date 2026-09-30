@@ -3,7 +3,7 @@
 //! refreshed against the working tree first — `main` does that before calling in.
 use crate::impact::{self, Dependent};
 use crate::model::{Graph, NodeKind};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -75,23 +75,28 @@ fn roots(graph: &Graph, touched: &[String]) -> BTreeSet<String> {
 
 pub fn report(graph: &Graph, hunks: &[Hunk], depth: usize) -> Report {
     let touched = touched(graph, hunks);
+    let touched_set: BTreeSet<&str> = touched.iter().map(String::as_str).collect();
     let roots = roots(graph, &touched);
     let root_files: BTreeSet<String> = roots.iter().filter_map(|r| graph.nodes.get(r).map(|n| n.file.clone())).collect();
-    let mut affected: Vec<Dependent> = Vec::new();
+    let mut affected: BTreeMap<String, Dependent> = BTreeMap::new();
     let mut files: BTreeSet<String> = BTreeSet::new();
+    let index = impact::Index::new(graph, true);
     for id in &roots {
-        let imp = impact::upstream(graph, id, depth);
+        let imp = index.upstream(id, depth);
         files.extend(imp.importers.iter().cloned());
-        // A dependent that is itself being changed is not affected, it is the change.
-        for d in imp.layers.into_iter().flatten().filter(|d| !roots.contains(&d.id)) {
-            // One row per dependent, at the shallowest depth any touched symbol reaches it.
-            match affected.iter_mut().find(|a| a.id == d.id) {
-                Some(a) if d.depth < a.depth => *a = d,
+        // A dependent that is itself being changed is not affected, it is the change — a file
+        // whose top-level code both changed and calls a changed symbol included.
+        for d in imp.layers.into_iter().flatten().filter(|d| !roots.contains(&d.id) && !touched_set.contains(d.id.as_str())) {
+            // One row per dependent, at the shallowest depth any touched symbol reaches it, and
+            // by a call rather than an argument edge at that depth.
+            match affected.get_mut(&d.id) {
+                Some(a) if impact::beats(&d, a) => *a = d,
                 Some(_) => {}
-                None => affected.push(d),
+                None => { affected.insert(d.id.clone(), d); }
             }
         }
     }
+    let mut affected: Vec<Dependent> = affected.into_values().collect();
     affected.sort_by(|a, b| (a.depth, &a.id).cmp(&(b.depth, &b.id)));
     files.extend(affected.iter().map(|d| file_of(graph, &d.id)));
     files.retain(|f| !root_files.contains(f));
@@ -135,7 +140,7 @@ pub fn render_json(graph: &Graph, r: &Report) -> String {
     let touched: Vec<serde_json::Value> = r.touched.iter()
         .map(|id| serde_json::json!({ "id": id, "at": span_of(graph, id), "indexed": graph.nodes.contains_key(id) })).collect();
     let affected: Vec<serde_json::Value> = r.affected.iter().map(|d| serde_json::json!({
-        "id": d.id, "at": graph.nodes.get(&d.id).map(|n| format!("{}:{}", n.file, n.line)), "depth": d.depth, "kind": format!("{:?}", d.kind), "via": d.via,
+        "id": d.id, "at": graph.nodes.get(&d.id).map(|n| format!("{}:{}", n.file, n.line)), "depth": d.depth, "kind": format!("{:?}", d.kind), "passes": d.passed, "via": d.via,
     })).collect();
     serde_json::json!({ "touched": touched, "affected": affected, "files": r.files, "risk": r.risk }).to_string() + "\n"
 }
@@ -271,12 +276,69 @@ mod tests {
     }
 
     #[test]
+    fn a_dependent_that_calls_one_changed_symbol_and_passes_another_is_listed_by_the_call() {
+        let mut g = graph();
+        let mut e = Extraction::default();
+        e.node(NodeKind::Symbol, "sym:d.ts::D", "D", "", "d.ts", 1);
+        e.edge("sym:d.ts::D", "sym:s.ts::S.create", EdgeKind::Calls, "arg", "d.ts");
+        e.edge("sym:d.ts::D", "sym:s.ts::S.list", EdgeKind::Calls, "", "d.ts");
+        g.apply(e);
+        let r = report(&g, &[Hunk { file: "s.ts".into(), start: 8, end: 9 }], 1);
+        let d = r.affected.iter().find(|d| d.id == "sym:d.ts::D").unwrap();
+        assert_eq!((d.via.as_str(), d.passed), ("sym:s.ts::S.list", false));
+    }
+
+    #[test]
+    fn json_marks_a_dependent_that_only_passes_the_changed_symbol() {
+        let mut g = graph();
+        let mut e = Extraction::default();
+        e.node(NodeKind::Symbol, "sym:d.ts::D", "D", "", "d.ts", 1);
+        e.edge("sym:d.ts::D", "sym:s.ts::S.create", EdgeKind::Calls, "arg", "d.ts");
+        g.apply(e);
+        let v: serde_json::Value = serde_json::from_str(&render_json(&g, &report(&g, &[Hunk { file: "s.ts".into(), start: 6, end: 7 }], 1))).unwrap();
+        let rows: Vec<(&str, &serde_json::Value)> = v["affected"].as_array().unwrap().iter().map(|d| (d["id"].as_str().unwrap(), &d["passes"])).collect();
+        assert_eq!(rows, vec![("sym:c.ts::C.create", &serde_json::json!(false)), ("sym:d.ts::D", &serde_json::json!(true))]);
+    }
+
+    #[test]
+    fn a_diff_of_thousands_of_symbols_is_walked_in_seconds_not_minutes() {
+        // Every root once regrouped and rescanned the whole edge set; 3,000 roots over 30,000
+        // edges took tens of seconds that way, and take milliseconds over one index.
+        let mut g = Graph::default();
+        let mut e = Extraction::default();
+        e.node(NodeKind::File, "file:big.ts", "big.ts", "", "big.ts", 1);
+        for i in 0..3000u32 {
+            let id = format!("sym:big.ts::f{i}");
+            e.node_span(NodeKind::Symbol, &id, "f", "", "big.ts", (i * 10 + 2, i * 10 + 9));
+            e.edge("file:big.ts", &id, EdgeKind::Declares, "export", "big.ts");
+            e.edge(&format!("sym:c{i}.ts::use"), &id, EdgeKind::Calls, "", &format!("c{i}.ts"));
+            for j in 0..8 { e.edge(&format!("FR-X-{i}"), &format!("FR-Y-{j}"), EdgeKind::References, "body", "d.md"); }
+        }
+        g.apply(e);
+        let started = std::time::Instant::now();
+        let r = report(&g, &[Hunk { file: "big.ts".into(), start: 1, end: u32::MAX }], 2);
+        assert_eq!(r.affected.len(), 3000);
+        assert!(started.elapsed() < std::time::Duration::from_secs(3), "{:?}", started.elapsed());
+    }
+
+    #[test]
     fn a_file_level_change_walks_every_symbol_of_the_file_and_lists_none_of_them_as_affected() {
         let g = graph();
         let r = report(&g, &[Hunk { file: "s.ts".into(), start: 1, end: 1 }], 2);
         assert_eq!(r.touched, vec!["file:s.ts"]);
         assert_eq!(r.affected.iter().map(|d| d.id.as_str()).collect::<Vec<_>>(), vec!["sym:c.ts::C.create"]);
         assert_eq!(r.files, BTreeSet::from(["c.ts".to_string()]));
+    }
+
+    #[test]
+    fn a_changed_file_whose_top_level_calls_a_changed_symbol_is_not_also_affected() {
+        let mut g = graph();
+        let mut e = Extraction::default();
+        e.edge("file:s.ts", "sym:s.ts::helper", EdgeKind::Calls, "", "s.ts");
+        g.apply(e);
+        let r = report(&g, &[Hunk { file: "s.ts".into(), start: 1, end: 1 }], 2);
+        assert_eq!(r.touched, vec!["file:s.ts"]);
+        assert!(r.affected.iter().all(|d| !r.touched.contains(&d.id)), "{:?}", r.affected);
     }
 
     #[test]

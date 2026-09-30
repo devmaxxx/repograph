@@ -195,6 +195,23 @@ fn a_usage_error_exits_two_and_is_therefore_not_a_verdict() {
     assert_eq!(out(&usage), "", "nothing was measured: {}", out(&usage));
 }
 
+/// A walk of no hops reaches nothing, and `LOW` with no callers would read as "nothing depends on
+/// it"; a `trace` of none would answer "no call path", a verdict, and a candidate pool of none
+/// ranks nothing. Every `--depth` is refused before any store is read, like any other bad argument.
+#[test]
+fn a_depth_of_zero_is_a_usage_error_for_every_command_that_takes_one() {
+    let _g = env_lock();
+    let dir = tempfile::tempdir().unwrap();
+    for args in [
+        &["impact", "Money", "--depth", "0"][..], &["changes", "--depth", "0"], &["trace", "a", "b", "--depth", "0"],
+        &["ask", "money", "--depth", "0"], &["bench", "--depth", "0"], &["dump", "--queries", "q", "--out", "o", "--depth", "0"],
+    ] {
+        let usage = run(dir.path(), args);
+        assert_eq!(code(&usage), Some(2), "{args:?}: {}", err(&usage));
+        assert_eq!(out(&usage), "", "{args:?}");
+    }
+}
+
 /// What a shell that has been running the bench kit exports, and what a test may not inherit from
 /// it. `REPOGRAPH_BENCH_REPO` sends `bench` to another repository: the case below would read an
 /// empty directory, fail on the missing graph and exit 1 — a verdict test failing as though the
