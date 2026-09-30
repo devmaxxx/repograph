@@ -34,6 +34,12 @@ tree-sitter-c-sharp = "=0.23.5"
 tree-sitter-kotlin-sg = "=0.4.1"
 # Java: the tree-sitter org's grammar, the only one on this ABI.
 tree-sitter-java = "=0.23.5"
+# PostgreSQL. Chosen over tree-sitter-sequel 0.3.11, which errors in 72 of the census's 95 .sql files;
+# 1.2.4 parses every one and is not a beta. It is the largest grammar in the build (+14.6 MB stripped),
+# so it is read against the archive bar rather than assumed small.
+tree-sitter-postgres = "=1.2.4"
+# The only GraphQL grammar on tree-sitter 0.27's ABI; none of the census's 191 files has an error.
+tree-sitter-graphql = "=0.2.1"
 postcard = { version = "=1.1.3", features = ["use-std"] }
 
 [dev-dependencies]

@@ -34,6 +34,38 @@ pub(crate) fn child<'t>(n: Node<'t>, kind: &str) -> Option<Node<'t>> {
     named(n).into_iter().find(|c| c.kind() == kind)
 }
 
+/// Every descendant of one of `kinds`, in source order, not descending into a match.
+pub(crate) fn find<'t>(n: Node<'t>, kinds: &[&str], out: &mut Vec<Node<'t>>) {
+    descend(n, &mut |c| {
+        let hit = kinds.contains(&c.kind());
+        if hit {
+            out.push(c);
+        }
+        !hit
+    });
+}
+
+/// Visits every named descendant of `n` in source order, and goes below one only when `visit` returns true.
+/// It walks with a cursor and no recursion: a generated grammar nests a left-recursive list as deep as it is
+/// long, so a 50,000-row `INSERT … VALUES` is 50,000 levels and overflows the stack of a recursive walk.
+pub(crate) fn descend<'t>(n: Node<'t>, visit: &mut impl FnMut(Node<'t>) -> bool) {
+    let mut cursor = n.walk();
+    if !cursor.goto_first_child() {
+        return;
+    }
+    loop {
+        let node = cursor.node();
+        if node.is_named() && visit(node) && cursor.goto_first_child() {
+            continue;
+        }
+        while !cursor.goto_next_sibling() {
+            if !cursor.goto_parent() {
+                return;
+            }
+        }
+    }
+}
+
 pub(crate) fn span(n: Node) -> (u32, u32) {
     (n.start_position().row as u32 + 1, n.end_position().row as u32 + 1)
 }

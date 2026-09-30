@@ -336,6 +336,46 @@ class AskedByStoreId(unittest.TestCase):
         self.assertFalse(any(a.startswith("sym:") for argv in argvs for a in argv), argvs)
 
 
+class RepographRefusalScoresNothing(unittest.TestCase):
+    """A refused call's namesake list names the declaring files; none of them count as found."""
+
+    REFUSAL = (
+        "Error: staff_member matches 2 nodes; name one by its id:\n"
+        "  sym:db/0008.sql::salon_ctx/staff_member  db/0008.sql:36\n"
+        "  sym:db/0009.sql::salon_ctx/staff_member  db/0009.sql:15\n"
+    )
+    TRUTH = {"impact": {"staff_member": {"refs": ["db/0008.sql", "db/0009.sql"]}}}
+
+    def _tool(self) -> Repograph:
+        return Repograph(Path("/tmp"), argparse.Namespace(repograph="repograph", timeout=180, strip_prefix=[]))
+
+    def test_a_refused_impact_names_no_file(self):
+        tool = self._tool()
+        case = {"kind": "impact", "target": "staff_member", "tier": "wide"}
+        with mock.patch("run.subprocess.run", return_value=fake_proc(1, self.REFUSAL)):
+            rows = score_blast(tool, cases=[case], truth=self.TRUTH)
+        self.assertEqual((rows[0]["found_files"], rows[0]["want_files"]), (0, 2))
+        self.assertEqual(tool.failed_calls, 1)
+
+    def test_a_refused_trace_is_a_miss_even_when_it_names_the_target(self):
+        tool = self._tool()
+        case = {"kind": "trace", "from": "staff_member", "to": "db/0009.sql", "expect": "path", "via": []}
+        with mock.patch("run.subprocess.run", return_value=fake_proc(1, self.REFUSAL)):
+            rows = score_blast(tool, cases=[case], truth={})
+        self.assertEqual(rows[0]["hit"], False)
+        self.assertEqual(tool.failed_calls, 1)
+
+    def test_a_no_path_verdict_is_an_answer(self):
+        tool = self._tool()
+        case = {"kind": "trace", "from": "a", "to": "b", "expect": "none", "via": []}
+        verdict = subprocess.CompletedProcess(args=[], returncode=3, stdout="",
+                                              stderr="no call path from sym:a to sym:b within 6 hops")
+        with mock.patch("run.subprocess.run", return_value=verdict):
+            rows = score_blast(tool, cases=[case], truth={})
+        self.assertEqual(rows[0]["hit"], True)
+        self.assertEqual(tool.failed_calls, 0)
+
+
 class SpellsSymbol(unittest.TestCase):
     """A symbol is credited when the answer names it, not when the letters happen to occur."""
 

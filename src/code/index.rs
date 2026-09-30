@@ -275,8 +275,8 @@ pub fn header_for(lang: Lang, rel: &str, source: &str) -> Option<Header> {
             #[allow(unreachable_patterns)]
             _ => unreachable!("{lang:?} has no JVM header arm: its plan has not landed"),
         },
-        // The name-indexed families. Each family plan replaces its own name here with its arm.
-        Family::Sql | Family::GraphQl => None,
+        Family::Sql => Some(crate::code::sql::header(source)),
+        Family::GraphQl => Some(crate::code::graphql::header(source)),
     }
 }
 
