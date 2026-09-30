@@ -308,7 +308,7 @@ mod tests {
     }
 
     #[test]
-    fn a_record_left_empty_removes_the_file_and_a_build_starts_without_one() {
+    fn a_record_left_empty_removes_the_file_and_leftover_cleanup_keeps_a_full_one() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::create_dir_all(dir.path().join(".repograph")).unwrap();
         let store = crate::store::Store::new(dir.path());
@@ -319,7 +319,7 @@ mod tests {
         k.save(&store).unwrap();
         assert!(!path.exists(), "a store with no name-indexed file carries no header file");
         known(&[("a.jv", h(&["p"], &["A"]))]).save(&store).unwrap();
-        store.wipe().unwrap();
-        assert!(!path.exists(), "`build` wipes the headers with the graph they were read beside");
+        store.drop_leftovers().unwrap();
+        assert!(path.exists(), "a build killed before its save leaves the headers beside the graph that still answers");
     }
 }
