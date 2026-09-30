@@ -117,7 +117,14 @@ fn bound_by_iteration(n: Node, src: &[u8]) -> bool {
     let mut at = n.parent();
     while let Some(a) = at {
         let bound = match a.kind() {
-            "for_intro" => prose::named(a).into_iter().any(|c| c.kind() == "identifier" && prose::text(c, src) == name),
+            // `for_intro` is a sibling of the body and condition, not their ancestor. Its own collection
+            // is evaluated outside the loop, so only what stands beside it is bound.
+            "for_tuple_expr" | "for_object_expr" => prose::named(a).into_iter()
+                .find(|c| c.kind() == "for_intro")
+                .is_some_and(|intro| {
+                    let inside = intro.start_byte() <= n.start_byte() && n.end_byte() <= intro.end_byte();
+                    !inside && prose::named(intro).into_iter().any(|c| c.kind() == "identifier" && prose::text(c, src) == name)
+                }),
             "block" => dynamic_iterator(a, src).is_some_and(|i| i == name),
             _ => false,
         };

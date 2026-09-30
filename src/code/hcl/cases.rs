@@ -199,3 +199,14 @@ fn the_last_operand_of_a_comparison_keeps_its_attribute_steps() {
         "sym:m/main.tf::output/o -> sym:m/main.tf::var/b []",
     ]);
 }
+
+#[test]
+fn a_for_variable_is_bound_in_the_body_and_the_condition_but_not_in_its_own_collection() {
+    // The resources sit in another file, so the self-reference guard cannot hide a wrong edge.
+    let files = [
+        ("m/b.tf", "resource \"web\" \"id\" {}\n"),
+        ("m/c.tf", "locals {\n  b = [for web in var.x : web.id]\n  c = [for x in web.id : x]\n  d = {for web, v in var.x : web => web.id if web.id != \"\"}\n  e = [for web in var.x : [for y in web.id : web.id]]\n}\n"),
+    ];
+    let ex = extract(&files, "m/c.tf");
+    assert_eq!(lines(&ex, EdgeKind::References), ["sym:m/c.tf::local/c -> sym:m/b.tf::web/id []"]);
+}
