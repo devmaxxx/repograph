@@ -1,0 +1,1226 @@
+//! Java extraction on inline sources, so the grammar's shape is pinned by the assertion.
+
+use std::collections::BTreeSet;
+
+use crate::code::jvm::fixture::{edges, ids, one, Repo};
+use crate::model::EdgeKind;
+
+const ORDERS: &str = "package shop.orders;
+
+import shop.billing.Invoice;
+
+public class OrderService extends Base implements Api {
+    private final Invoice invoice;
+    public static int COUNT = 0;
+    int a, b;
+
+    public OrderService(Invoice invoice) {
+        this.invoice = invoice;
+    }
+
+    public void place(int n) {}
+
+    static class Nested {
+        public void deep() {}
+    }
+}
+
+interface Api {
+    void place(int n);
+    int LIMIT = 3;
+    private void hidden() {}
+}
+
+enum Status implements Api {
+    OPEN, CLOSED;
+    public void place(int n) {}
+    void flip() {}
+}
+
+record Point(int x, int y) implements Api {
+    public void place(int n) {}
+    int sum() { return x + y; }
+}
+
+@interface Audited {
+    String value();
+}
+
+interface Sub extends Api {}
+";
+
+#[test]
+fn types_members_constructors_and_nested_types_are_declared() {
+    let ex = one("shop/orders/OrderService.java", ORDERS);
+    for id in [
+        "file:shop/orders/OrderService.java",
+        "sym:shop/orders/OrderService.java::OrderService",
+        "sym:shop/orders/OrderService.java::OrderService.invoice",
+        "sym:shop/orders/OrderService.java::OrderService.COUNT",
+        "sym:shop/orders/OrderService.java::OrderService.a",
+        "sym:shop/orders/OrderService.java::OrderService.b",
+        "sym:shop/orders/OrderService.java::OrderService.OrderService",
+        "sym:shop/orders/OrderService.java::OrderService.place",
+        "sym:shop/orders/OrderService.java::OrderService.Nested",
+        "sym:shop/orders/OrderService.java::OrderService.Nested.deep",
+        "sym:shop/orders/OrderService.java::Api",
+        "sym:shop/orders/OrderService.java::Api.place",
+        "sym:shop/orders/OrderService.java::Api.LIMIT",
+        "sym:shop/orders/OrderService.java::Status",
+        "sym:shop/orders/OrderService.java::Status.flip",
+        "sym:shop/orders/OrderService.java::Point",
+        "sym:shop/orders/OrderService.java::Point.sum",
+        "sym:shop/orders/OrderService.java::Audited",
+        "sym:shop/orders/OrderService.java::Audited.value",
+        "sym:shop/orders/OrderService.java::Sub",
+    ] {
+        assert!(ids(&ex).contains(&id), "{id} missing from {:?}", ids(&ex));
+    }
+    // Enum constants and record components are not symbols, in the extractor or the truth reader.
+    for absent in ["Status.OPEN", "Point.x", "Point.y"] {
+        assert!(!ids(&ex).iter().any(|i| i.ends_with(absent)), "{absent} in {:?}", ids(&ex));
+    }
+}
+
+#[test]
+fn only_public_is_exported_and_an_interface_member_is_public_without_the_word() {
+    let ex = one("shop/orders/OrderService.java", ORDERS);
+    let declares = edges(&ex, EdgeKind::Declares);
+    let f = "sym:shop/orders/OrderService.java::";
+    let ctx = |from: &str, to: &str| declares.iter().find(|(s, t, _)| *s == from && *t == to).map(|(_, _, c)| *c);
+    assert_eq!(ctx("file:shop/orders/OrderService.java", &format!("{f}OrderService")), Some("export"));
+    assert_eq!(ctx("file:shop/orders/OrderService.java", &format!("{f}Api")), Some(""));
+    assert_eq!(ctx(&format!("{f}Api"), &format!("{f}Api.place")), Some("export"));
+    assert_eq!(ctx(&format!("{f}Api"), &format!("{f}Api.LIMIT")), Some("export"));
+    assert_eq!(ctx(&format!("{f}Api"), &format!("{f}Api.hidden")), Some(""));
+    assert_eq!(ctx(&format!("{f}OrderService"), &format!("{f}OrderService.invoice")), Some(""));
+    assert_eq!(ctx(&format!("{f}OrderService"), &format!("{f}OrderService.place")), Some("export"));
+    assert_eq!(ctx(&format!("{f}OrderService"), &format!("{f}OrderService.Nested")), Some(""));
+    assert_eq!(ctx(&format!("{f}OrderService.Nested"), &format!("{f}OrderService.Nested.deep")), Some("export"));
+    assert_eq!(ctx(&format!("{f}Status"), &format!("{f}Status.flip")), Some(""));
+    assert_eq!(ctx(&format!("{f}Audited"), &format!("{f}Audited.value")), Some("export"));
+}
+
+#[test]
+fn extends_and_implements_declared_in_the_same_file_are_extended() {
+    let ex = one("shop/orders/OrderService.java", ORDERS);
+    let extends = edges(&ex, EdgeKind::Extends);
+    let f = "sym:shop/orders/OrderService.java::";
+    for (from, to) in [("OrderService", "Api"), ("Status", "Api"), ("Point", "Api"), ("Sub", "Api")] {
+        assert!(extends.contains(&(format!("{f}{from}").as_str(), format!("{f}{to}").as_str(), "")), "{from} -> {to} missing from {extends:?}");
+    }
+    // `Base` is declared nowhere in this file; only the index may resolve it.
+    assert!(!extends.iter().any(|(_, t, _)| t.ends_with("::Base")), "{extends:?}");
+}
+
+#[test]
+fn a_declaration_spans_its_lines_and_its_body_is_its_doc_and_its_name_line() {
+    let ex = one("shop/orders/OrderService.java", ORDERS);
+    let n = ex.nodes.iter().find(|n| n.id == "sym:shop/orders/OrderService.java::OrderService").unwrap();
+    assert_eq!((n.line, n.end), (5, 19));
+    let src = "package shop;\n\npublic class Cart {\n    /** Totals the lines. FR-PAY-22 */\n    @Deprecated\n    public int total() { return 0; }\n}\n";
+    let ex = one("shop/Cart.java", src);
+    let n = ex.nodes.iter().find(|n| n.id == "sym:shop/Cart.java::Cart.total").unwrap();
+    assert_eq!(n.body, "Totals the lines. FR-PAY-22\npublic int total() { return 0; }");
+}
+
+#[test]
+fn the_header_names_exactly_the_top_level_types_the_file_declares() {
+    let ex = one("shop/orders/OrderService.java", ORDERS);
+    let declared: BTreeSet<String> = edges(&ex, EdgeKind::Declares).into_iter()
+        .filter(|(s, _, _)| *s == "file:shop/orders/OrderService.java")
+        .filter_map(|(_, t, _)| t.strip_prefix("sym:shop/orders/OrderService.java::"))
+        .map(str::to_string)
+        .collect();
+    let h = super::header(ORDERS);
+    assert_eq!(h.scope, vec!["shop.orders".to_string()]);
+    assert_eq!(h.top, declared);
+    assert_eq!(h.top.len(), 6, "{:?}", h.top);
+    assert_eq!(super::header("class NoPackage {}\n").scope, Vec::<String>::new());
+}
+
+// Android and Windows-built Java often starts with a BOM and ends its lines in CRLF.
+#[test]
+fn a_bom_and_crlf_file_declares_as_a_plain_one() {
+    let ex = one("shop/Crlf.java", "\u{feff}package shop;\r\n\r\npublic class Crlf {\r\n    public void go() {}\r\n}\r\n");
+    assert!(ids(&ex).contains(&"sym:shop/Crlf.java::Crlf.go"), "{:?}", ids(&ex));
+    assert_eq!(super::header("\u{feff}package shop;\r\nclass A {}\r\n").scope, vec!["shop".to_string()]);
+    let n = ex.nodes.iter().find(|n| n.id == "sym:shop/Crlf.java::Crlf.go").unwrap();
+    assert!(!n.body.contains('\r'), "{:?}", n.body);
+}
+
+#[test]
+fn a_member_three_types_deep_keeps_every_segment() {
+    let ex = one("shop/Deep.java", "package shop;\n\npublic class A {\n    static class B {\n        static class C {\n            void m() {}\n        }\n    }\n}\n");
+    assert!(ids(&ex).contains(&"sym:shop/Deep.java::A.B.C.m"), "{:?}", ids(&ex));
+    let declares = edges(&ex, EdgeKind::Declares);
+    assert!(declares.contains(&("sym:shop/Deep.java::A.B", "sym:shop/Deep.java::A.B.C", "")), "{declares:?}");
+    assert!(declares.contains(&("sym:shop/Deep.java::A.B.C", "sym:shop/Deep.java::A.B.C.m", "")), "{declares:?}");
+}
+
+const INVOICE: &str = "package shop.billing;\n\npublic class Invoice {\n    public void send() {}\n    public static class Line {}\n}\n";
+const MONEY: &str = "package shop.util;\n\npublic final class Money {\n    public static int round(int n) { return n; }\n}\n";
+
+#[test]
+fn a_single_a_nested_and_a_static_import_each_name_their_file() {
+    let repo = Repo::new(&[
+        ("shop/billing/Invoice.java", INVOICE),
+        ("shop/util/Money.java", MONEY),
+        ("shop/orders/Use.java", "package shop.orders;\n\nimport shop.billing.Invoice;\nimport shop.billing.Invoice.Line;\nimport static shop.util.Money.round;\n\npublic class Use extends Invoice {\n    static class Row extends Line {}\n}\n"),
+    ]);
+    let ex = repo.extract("shop/orders/Use.java");
+    let imports = edges(&ex, EdgeKind::Imports);
+    assert!(imports.contains(&("file:shop/orders/Use.java", "file:shop/billing/Invoice.java", "Invoice")), "{imports:?}");
+    assert!(imports.contains(&("file:shop/orders/Use.java", "file:shop/util/Money.java", "Money")), "{imports:?}");
+    let extends = edges(&ex, EdgeKind::Extends);
+    assert!(extends.contains(&("sym:shop/orders/Use.java::Use", "sym:shop/billing/Invoice.java::Invoice", "")), "{extends:?}");
+    assert!(extends.contains(&("sym:shop/orders/Use.java::Use.Row", "sym:shop/billing/Invoice.java::Invoice.Line", "")), "{extends:?}");
+}
+
+#[test]
+fn a_supertype_resolves_through_its_package_a_star_and_its_full_name() {
+    let repo = Repo::new(&[
+        ("shop/billing/Invoice.java", INVOICE),
+        ("shop/billing/Draft.java", "package shop.billing;\n\nclass Draft extends Invoice {}\n"),
+        ("shop/orders/Star.java", "package shop.orders;\n\nimport shop.billing.*;\n\nclass Star extends Invoice {}\n"),
+        ("shop/orders/Full.java", "package shop.orders;\n\nclass Full extends shop.billing.Invoice {}\n"),
+    ]);
+    for (rel, class) in [("shop/billing/Draft.java", "Draft"), ("shop/orders/Star.java", "Star"), ("shop/orders/Full.java", "Full")] {
+        let ex = repo.extract(rel);
+        let from = format!("sym:{rel}::{class}");
+        assert!(edges(&ex, EdgeKind::Extends).contains(&(from.as_str(), "sym:shop/billing/Invoice.java::Invoice", "")), "{rel}: {:?}", ex.edges);
+    }
+    assert!(edges(&repo.extract("shop/orders/Star.java"), EdgeKind::Imports).is_empty());
+}
+
+#[test]
+fn a_generic_and_a_sealed_supertype_resolve_to_their_raw_type() {
+    let repo = Repo::new(&[
+        ("shop/Repo.java", "package shop;\n\npublic interface Repo<T> { T get(); }\n"),
+        ("shop/Shape.java", "package shop;\n\npublic sealed interface Shape permits Circle {}\n"),
+        ("shop/Circle.java", "package shop;\n\npublic record Circle(int r) implements Shape, Repo<Circle> { public Circle get() { return this; } }\n"),
+    ]);
+    let circle = repo.extract("shop/Circle.java");
+    let ext = edges(&circle, EdgeKind::Extends);
+    for to in ["sym:shop/Shape.java::Shape", "sym:shop/Repo.java::Repo"] {
+        assert!(ext.contains(&("sym:shop/Circle.java::Circle", to, "")), "{to}: {ext:?}");
+    }
+    // `permits` names a subtype, not a supertype.
+    assert!(edges(&repo.extract("shop/Shape.java"), EdgeKind::Extends).is_empty());
+}
+
+#[test]
+fn a_name_two_star_imports_both_supply_resolves_to_nothing() {
+    let repo = Repo::new(&[
+        ("shop/billing/Invoice.java", INVOICE),
+        ("shop/legacy/Invoice.java", "package shop.legacy;\n\npublic class Invoice {}\n"),
+        ("shop/orders/Both.java", "package shop.orders;\n\nimport shop.billing.*;\nimport shop.legacy.*;\n\nclass Both extends Invoice {}\n"),
+    ]);
+    let ex = repo.extract("shop/orders/Both.java");
+    assert!(edges(&ex, EdgeKind::Extends).is_empty(), "{:?}", ex.edges);
+}
+
+#[test]
+fn a_supertype_outside_the_repository_never_walks_into_a_type_star_or_a_package() {
+    let repo = Repo::new(&[
+        ("shop/billing/Invoice.java", INVOICE),
+        ("shop/orders/Use.java", "package shop.orders;\n\nimport shop.billing.Invoice.*;\n\nclass Use extends Exception {}\n"),
+        ("p.java", "public class p {}\n"),
+        ("p/X.java", "package p;\n\nclass X extends Exception {}\n"),
+    ]);
+    for rel in ["shop/orders/Use.java", "p/X.java"] {
+        let ex = repo.extract(rel);
+        assert!(edges(&ex, EdgeKind::Extends).is_empty(), "{rel}: {:?}", ex.edges);
+    }
+}
+
+#[test]
+fn an_inherited_member_type_is_not_guessed_at_the_subclass_path() {
+    let repo = Repo::new(&[
+        ("shop/Base.java", "package shop;\n\npublic class Base { public static class Inner {} }\n"),
+        ("shop/Sub.java", "package shop;\n\npublic class Sub extends Base {}\n"),
+        ("shop/Use.java", "package shop;\n\nclass Use extends Sub.Inner {}\n"),
+    ]);
+    let ex = repo.extract("shop/Use.java");
+    assert!(edges(&ex, EdgeKind::Extends).is_empty(), "{:?}", ex.edges);
+}
+
+#[test]
+fn two_static_imports_of_one_name_each_name_their_file() {
+    let repo = Repo::new(&[
+        ("a/A.java", "package a;\n\npublic class A { public static int of(int n) { return n; } }\n"),
+        ("b/B.java", "package b;\n\npublic class B { public static int of(int n) { return n; } }\n"),
+        ("c/Use.java", "package c;\n\nimport static a.A.of;\nimport static b.B.of;\n\nclass Use {}\n"),
+    ]);
+    let imports = edges(&repo.extract("c/Use.java"), EdgeKind::Imports).into_iter().map(|(_, to, _)| to.to_string()).collect::<Vec<_>>();
+    assert_eq!(imports, ["file:a/A.java", "file:b/B.java"]);
+}
+
+const CHECKOUT: &str = "package shop.orders;
+
+import shop.billing.Invoice;
+import shop.util.Money;
+import static shop.util.Money.round;
+
+public class Checkout {
+    private final Invoice invoice;
+
+    public Checkout(Invoice invoice) {
+        this.invoice = invoice;
+    }
+
+    public void pay(Invoice given, int n) {
+        Invoice local = given;
+        var built = new Invoice();
+        invoice.send();
+        this.invoice.send();
+        given.send();
+        local.send();
+        built.send();
+        Money.round(n);
+        round(n);
+        total();
+        Checkout.Lines.count();
+        new Task() { public void run() { fromAnonymous(); } };
+        pay(given, n);
+    }
+
+    int total() { return 0; }
+
+    void fromAnonymous() {}
+
+    static class Lines {
+        static int count() { return 0; }
+    }
+}
+
+interface Task {
+    void run();
+}
+";
+
+fn calls_from<'a>(ex: &'a crate::model::Extraction, from: &str) -> Vec<&'a str> {
+    let mut to: Vec<&str> = edges(ex, EdgeKind::Calls).into_iter().filter(|(s, _, _)| *s == from).map(|(_, t, _)| t).collect();
+    to.sort();
+    to.dedup();
+    to
+}
+
+#[test]
+fn calls_through_fields_this_parameters_locals_statics_and_nested_types_are_edges() {
+    let repo = Repo::new(&[
+        ("shop/billing/Invoice.java", INVOICE),
+        ("shop/util/Money.java", MONEY),
+        ("shop/orders/Checkout.java", CHECKOUT),
+    ]);
+    let ex = repo.extract("shop/orders/Checkout.java");
+    let from = "sym:shop/orders/Checkout.java::Checkout.pay";
+    let got = calls_from(&ex, from);
+    for to in [
+        "sym:shop/billing/Invoice.java::Invoice.send",
+        "sym:shop/util/Money.java::Money.round",
+        "sym:shop/orders/Checkout.java::Checkout.total",
+        "sym:shop/orders/Checkout.java::Checkout.Lines.count",
+        // An anonymous class's method is not a symbol, so its call belongs to the method around it.
+        "sym:shop/orders/Checkout.java::Checkout.fromAnonymous",
+    ] {
+        assert!(got.contains(&to), "{to} missing from {got:?}");
+    }
+    assert!(!got.contains(&from), "a recursive call is dropped: {got:?}");
+    assert!(!edges(&ex, EdgeKind::Calls).iter().any(|(s, _, _)| s.ends_with(".run")), "{:?}", ex.edges);
+}
+
+#[test]
+fn an_on_demand_static_import_resolves_only_when_it_is_the_only_one() {
+    let repo = Repo::new(&[
+        ("shop/util/Money.java", MONEY),
+        ("shop/util/Tax.java", "package shop.util;\n\npublic final class Tax {\n    public static int round(int n) { return n; }\n}\n"),
+        ("shop/One.java", "package shop;\n\nimport static shop.util.Money.*;\n\nclass One {\n    int go() { return round(1); }\n}\n"),
+        ("shop/Two.java", "package shop;\n\nimport static shop.util.Money.*;\nimport static shop.util.Tax.*;\n\nclass Two {\n    int go() { return round(1); }\n}\n"),
+    ]);
+    let one = repo.extract("shop/One.java");
+    assert!(calls_from(&one, "sym:shop/One.java::One.go").contains(&"sym:shop/util/Money.java::Money.round"), "{:?}", one.edges);
+    let two = repo.extract("shop/Two.java");
+    assert!(calls_from(&two, "sym:shop/Two.java::Two.go").is_empty(), "{:?}", two.edges);
+}
+
+#[test]
+fn a_requirement_cited_in_a_java_comment_or_string_is_a_reference_from_its_declaration() {
+    let src = "/* ADR-001 governs this file */\npackage shop;\n\npublic class Cart {\n    // FR-PAY-22: totals are rounded once\n    int total() {\n        String note = \"ADR-022\";\n        return 0;\n    }\n}\n";
+    let ex = one("shop/Cart.java", src);
+    let refs = edges(&ex, EdgeKind::References);
+    assert!(refs.iter().any(|(s, t, c)| *s == "file:shop/Cart.java" && t.contains("ADR-001") && *c == "comment"), "{refs:?}");
+    assert!(refs.iter().any(|(s, t, c)| *s == "sym:shop/Cart.java::Cart" && t.contains("FR-PAY-22") && *c == "comment"), "{refs:?}");
+    assert!(refs.iter().any(|(s, t, c)| *s == "sym:shop/Cart.java::Cart.total" && t.contains("ADR-022") && *c == "string"), "{refs:?}");
+}
+
+const NAV: (&str, &str) = (
+    "shop/util/Nav.java",
+    "package shop.util;\n\npublic final class Nav {\n    public static void finish() {}\n    public static void helper() {}\n    public static void send() {}\n    public static void values() {}\n    public static void x() {}\n}\n",
+);
+
+#[test]
+fn a_bare_call_from_a_type_whose_supertype_is_unread_is_no_edge() {
+    let repo = Repo::new(&[
+        NAV,
+        ("shop/Base.java", "package shop;\n\npublic class Base {\n    public void helper() {}\n}\n"),
+        ("shop/Mid.java", "package shop;\n\npublic class Mid extends Base {}\n"),
+        ("shop/Screen.java", "package shop;\n\nimport static shop.util.Nav.finish;\n\npublic class Screen extends android.app.Activity {\n    void go() { finish(); }\n}\n"),
+        ("shop/Sub.java", "package shop;\n\nimport static shop.util.Nav.helper;\n\nclass Sub extends Mid {\n    void go() { helper(); }\n}\n"),
+        ("shop/Direct.java", "package shop;\n\nimport static shop.util.Nav.helper;\n\nclass Direct extends Base {\n    void go() { helper(); }\n}\n"),
+        ("shop/Lost.java", "package shop;\n\npublic class Lost extends android.app.Activity {}\n"),
+        ("shop/Far.java", "package shop;\n\nimport static shop.util.Nav.finish;\n\nclass Far extends Lost {\n    void go() { finish(); }\n}\n"),
+    ]);
+    let far = repo.extract("shop/Far.java");
+    assert!(calls_from(&far, "sym:shop/Far.java::Far.go").is_empty(), "Lost's supertype is unread: {:?}", far.edges);
+    let screen = repo.extract("shop/Screen.java");
+    assert!(calls_from(&screen, "sym:shop/Screen.java::Screen.go").is_empty(), "the activity may declare finish: {:?}", screen.edges);
+    let sub = repo.extract("shop/Sub.java");
+    assert_eq!(calls_from(&sub, "sym:shop/Sub.java::Sub.go"), vec!["sym:shop/Base.java::Base.helper"], "Mid is walked to Base: {:?}", sub.edges);
+    let direct = repo.extract("shop/Direct.java");
+    assert_eq!(calls_from(&direct, "sym:shop/Direct.java::Direct.go"), vec!["sym:shop/Base.java::Base.helper"]);
+}
+
+#[test]
+fn an_own_method_taking_the_arguments_wins_and_one_that_does_not_leaves_the_supertype_s() {
+    let repo = Repo::new(&[
+        ("shop/Base.java", "package shop;\n\npublic abstract class Base {\n    public abstract int size();\n    public void m(String s) {}\n}\n"),
+        ("shop/Coll.java", "package shop;\n\nclass Coll extends Base {\n    public int size() { return 0; }\n    void m(int a, int b) {}\n    boolean isEmpty() { return size() == 0; }\n    void go() { m(\"x\"); }\n}\n"),
+        ("shop/Two.java", "package shop;\n\ninterface Svc {\n    void run();\n}\n\nclass Impl implements Svc {\n    public void run() {}\n    void go() { run(); }\n}\n\nclass Up {\n    void m(String s) {}\n}\n\nclass Down extends Up {\n    void m(int a, int b) {}\n    void go() { m(\"x\"); }\n    void on(Down d) { d.m(\"x\"); }\n}\n"),
+    ]);
+    let coll = repo.extract("shop/Coll.java");
+    assert_eq!(calls_from(&coll, "sym:shop/Coll.java::Coll.isEmpty"), vec!["sym:shop/Coll.java::Coll.size"], "an override binds the own method");
+    assert_eq!(calls_from(&coll, "sym:shop/Coll.java::Coll.go"), vec!["sym:shop/Base.java::Base.m"]);
+    let two = repo.extract("shop/Two.java");
+    assert_eq!(calls_from(&two, "sym:shop/Two.java::Impl.go"), vec!["sym:shop/Two.java::Impl.run"]);
+    assert_eq!(calls_from(&two, "sym:shop/Two.java::Down.go"), vec!["sym:shop/Two.java::Up.m"]);
+    assert_eq!(calls_from(&two, "sym:shop/Two.java::Down.on"), vec!["sym:shop/Two.java::Up.m"]);
+}
+
+#[test]
+fn an_own_method_that_cannot_take_the_arguments_leaves_the_call_to_an_unread_supertype() {
+    let repo = Repo::new(&[
+        ("shop/Screen.java", "package shop;\n\npublic class Screen extends android.app.Dialog {\n    void show(String msg) {}\n    void go() { show(); }\n    void say() { show(\"x\"); }\n}\n\nclass User {\n    Screen screen;\n    void go() { screen.show(); }\n}\n"),
+        ("shop/Mixed.java", "package shop;\n\nclass Up {\n    void show(String m) {}\n}\n\nclass Mixed extends Up implements android.view.Shower {\n    void go() { show(); }\n}\n"),
+    ]);
+    let screen = repo.extract("shop/Screen.java");
+    assert!(calls_from(&screen, "sym:shop/Screen.java::Screen.go").is_empty(), "{:?}", screen.edges);
+    assert!(calls_from(&screen, "sym:shop/Screen.java::User.go").is_empty(), "{:?}", screen.edges);
+    assert_eq!(calls_from(&screen, "sym:shop/Screen.java::Screen.say"), vec!["sym:shop/Screen.java::Screen.show"]);
+    let mixed = repo.extract("shop/Mixed.java");
+    assert!(calls_from(&mixed, "sym:shop/Mixed.java::Mixed.go").is_empty(), "{:?}", mixed.edges);
+}
+
+#[test]
+fn a_receiver_in_another_file_binds_only_a_method_taking_the_arguments() {
+    let repo = Repo::new(&[
+        ("shop/Up.java", "package shop;\n\npublic class Up {\n    public void m(String s) {}\n}\n"),
+        ("shop/Down.java", "package shop;\n\npublic class Down extends Up {\n    public void m() {}\n    public void v(String... xs) {}\n}\n"),
+        ("shop/User.java", "package shop;\n\nclass User {\n    void on(Down d) { d.m(\"x\"); }\n    void off(Down d) { d.m(); }\n    void many(Down d) { d.v(\"a\", \"b\", \"c\"); }\n}\n"),
+    ]);
+    let user = repo.extract("shop/User.java");
+    assert!(calls_from(&user, "sym:shop/User.java::User.on").is_empty(), "{:?}", user.edges);
+    assert_eq!(calls_from(&user, "sym:shop/User.java::User.off"), vec!["sym:shop/Down.java::Down.m"]);
+    assert_eq!(calls_from(&user, "sym:shop/User.java::User.many"), vec!["sym:shop/Down.java::Down.v"]);
+}
+
+#[test]
+fn a_private_method_of_a_supertype_in_the_same_file_is_not_inherited() {
+    let repo = Repo::new(&[
+        NAV,
+        ("shop/B.java", "package shop;\n\nimport static shop.util.Nav.helper;\n\nclass A {\n    private void helper() {}\n}\n\nclass B extends A {\n    void go() { helper(); }\n}\n"),
+    ]);
+    let ex = repo.extract("shop/B.java");
+    assert_eq!(calls_from(&ex, "sym:shop/B.java::B.go"), vec!["sym:shop/util/Nav.java::Nav.helper"]);
+}
+
+#[test]
+fn a_static_nested_class_calls_an_outer_static_method_but_not_one_an_instance_overload_shares() {
+    let src = "package shop;\n\nclass Outer {\n    static int max2(int a) { return a; }\n    static void mixed() {}\n    void mixed(int n) {}\n    static class Builder {\n        void b() { max2(1); }\n        void c() { mixed(); }\n    }\n}\n";
+    let ex = one("shop/Outer.java", src);
+    assert_eq!(calls_from(&ex, "sym:shop/Outer.java::Outer.Builder.b"), vec!["sym:shop/Outer.java::Outer.max2"]);
+    assert!(calls_from(&ex, "sym:shop/Outer.java::Outer.Builder.c").is_empty(), "{:?}", ex.edges);
+}
+
+#[test]
+fn a_local_parameter_lambda_catch_for_resource_or_pattern_variable_hides_the_field_it_shadows() {
+    let src = "package shop;
+
+import java.util.List;
+
+class Mail {
+    void send() {}
+    static void round() {}
+}
+
+class Other {
+    void send() {}
+    static void round() {}
+}
+
+class Post {
+    Mail mail;
+    List<Other> others;
+
+    void param(Other mail) { mail.send(); }
+    void lambda() { others.forEach(mail -> mail.send()); }
+    void caught() { try { } catch (RuntimeException mail) { mail.send(); } }
+    void loop() { for (Other mail = null; ; ) { mail.send(); } }
+    void each() { for (var mail : others) { mail.send(); } }
+    void pattern(Object o) { if (o instanceof Other mail) { mail.send(); } }
+    void resource() throws Exception { try (AutoCloseable mail = null) { mail.send(); } }
+    void local() { Other mail = null; mail.send(); }
+    void cases(int k) { switch (k) { case 1: Other mail; break; default: mail = new Other(); mail.send(); } }
+    void typeNamed() { Other Mail = null; Mail.round(); }
+    void field() { mail.send(); }
+}
+";
+    let ex = one("shop/Post.java", src);
+    let wrong: Vec<_> = edges(&ex, EdgeKind::Calls).into_iter().filter(|(s, t, _)| t.ends_with("::Mail.send") && !s.ends_with(".field")).collect();
+    assert!(wrong.is_empty(), "{wrong:?}");
+    for m in ["param", "loop", "local"] {
+        assert_eq!(calls_from(&ex, &format!("sym:shop/Post.java::Post.{m}")), vec!["sym:shop/Post.java::Other.send"], "{m}");
+    }
+    assert_eq!(calls_from(&ex, "sym:shop/Post.java::Post.cases"), vec!["sym:shop/Post.java::Other", "sym:shop/Post.java::Other.send"]);
+    assert_eq!(calls_from(&ex, "sym:shop/Post.java::Post.typeNamed"), vec!["sym:shop/Post.java::Other.round"]);
+    assert_eq!(calls_from(&ex, "sym:shop/Post.java::Post.field"), vec!["sym:shop/Post.java::Mail.send"]);
+}
+
+#[test]
+fn an_anonymous_or_local_class_hides_what_it_or_its_unread_supertype_may_declare() {
+    let src = "package shop;
+
+class Mail {
+    void send() {}
+}
+
+interface Task {
+    void run();
+}
+
+class Job {
+    void helper() {}
+    void unread() { new Runnable() { public void run() { helper(); } }; }
+    void own() { new Task() { public void run() { helper(); } void helper() {} }; }
+    void local() {
+        class Step { void helper() {} void run() { helper(); } }
+        new Step().run();
+    }
+    void named() {
+        class Mail { void other() {} }
+        Mail m = new Mail();
+        m.send();
+    }
+}
+";
+    let ex = one("shop/Job.java", src);
+    for m in ["unread", "local", "named"] {
+        assert!(calls_from(&ex, &format!("sym:shop/Job.java::Job.{m}")).is_empty(), "{m}: {:?}", ex.edges);
+    }
+    assert_eq!(calls_from(&ex, "sym:shop/Job.java::Job.own"), vec!["sym:shop/Job.java::Task"], "creating it, never helper: {:?}", ex.edges);
+}
+
+#[test]
+fn a_type_s_static_member_is_called_only_when_no_value_or_static_import_may_hold_the_name() {
+    let repo = Repo::new(&[
+        ("shop/util/Money.java", MONEY),
+        ("shop/Plain.java", "package shop;\n\nimport shop.util.Money;\n\nclass Plain {\n    void go() { Money.round(1); }\n}\n"),
+        ("shop/Field.java", "package shop;\n\nimport shop.util.Money;\n\nclass Field {\n    java.util.logging.Logger Money;\n    void go() { Money.round(1); }\n}\n"),
+        ("shop/Star.java", "package shop;\n\nimport shop.util.Money;\nimport static org.junit.Assert.*;\n\nclass Star {\n    void go() { Money.round(1); }\n}\n"),
+        ("shop/Thrown.java", "package shop;\n\nimport shop.util.Money;\n\nclass Thrown extends Exception {\n    void go() { Money.round(1); }\n}\n"),
+    ]);
+    for (rel, from) in [("shop/Plain.java", "Plain.go"), ("shop/Thrown.java", "Thrown.go")] {
+        let ex = repo.extract(rel);
+        assert_eq!(calls_from(&ex, &format!("sym:{rel}::{from}")), vec!["sym:shop/util/Money.java::Money.round"], "{rel}: {:?}", ex.edges);
+    }
+    for (rel, from) in [("shop/Field.java", "Field.go"), ("shop/Star.java", "Star.go")] {
+        let ex = repo.extract(rel);
+        assert!(calls_from(&ex, &format!("sym:{rel}::{from}")).is_empty(), "{rel}: {:?}", ex.edges);
+    }
+}
+
+#[test]
+fn two_static_imports_of_one_name_bind_no_call() {
+    let repo = Repo::new(&[
+        ("a/A.java", "package a;\n\npublic class A { public static int of(int n) { return n; } }\n"),
+        ("b/B.java", "package b;\n\npublic class B { public static int of(int n) { return n; } }\n"),
+        ("c/Use.java", "package c;\n\nimport static a.A.of;\nimport static b.B.of;\n\nclass Use {\n    int go() { return of(1); }\n}\n"),
+    ]);
+    let ex = repo.extract("c/Use.java");
+    assert!(calls_from(&ex, "sym:c/Use.java::Use.go").is_empty(), "{:?}", ex.edges);
+}
+
+#[test]
+fn a_static_nested_class_reaches_no_outer_instance_method_and_an_inner_one_does() {
+    let repo = Repo::new(&[
+        NAV,
+        ("shop/Outer.java", "package shop;\n\nimport static shop.util.Nav.helper;\n\nclass Outer {\n    void helper() {}\n    static class Nested {\n        void g() { helper(); }\n    }\n    class Inner {\n        void h() { helper(); }\n    }\n    interface Api {\n        default void i() { helper(); }\n    }\n}\n"),
+    ]);
+    let ex = repo.extract("shop/Outer.java");
+    assert!(calls_from(&ex, "sym:shop/Outer.java::Outer.Nested.g").is_empty(), "{:?}", ex.edges);
+    assert!(calls_from(&ex, "sym:shop/Outer.java::Outer.Api.i").is_empty(), "{:?}", ex.edges);
+    assert_eq!(calls_from(&ex, "sym:shop/Outer.java::Outer.Inner.h"), vec!["sym:shop/Outer.java::Outer.helper"]);
+}
+
+#[test]
+fn a_type_parameter_is_not_the_repository_type_it_is_named_like() {
+    let src = "package shop;\n\nclass State {\n    void reduce() {}\n}\n\nclass Store<State> {\n    State s;\n    void f() { s.reduce(); }\n}\n\nclass Box {\n    <State> void g(State x) { x.reduce(); }\n}\n";
+    let ex = one("shop/Store.java", src);
+    let wrong: Vec<_> = edges(&ex, EdgeKind::Calls).into_iter().filter(|(_, t, _)| t.ends_with("State.reduce")).collect();
+    assert!(wrong.is_empty(), "{wrong:?}");
+}
+
+#[test]
+fn a_field_never_stands_in_for_a_method_of_its_name() {
+    let repo = Repo::new(&[
+        NAV,
+        ("shop/Base.java", "package shop;\n\npublic class Base {\n    public Object send;\n}\n"),
+        ("shop/Holder.java", "package shop;\n\nimport static shop.util.Nav.send;\n\nclass Holder {\n    Object send;\n    void go() { send(); }\n}\n"),
+        ("shop/Sub.java", "package shop;\n\nimport static shop.util.Nav.send;\n\nclass Sub extends Base {\n    void go() { send(); }\n}\n"),
+    ]);
+    let holder = repo.extract("shop/Holder.java");
+    assert_eq!(calls_from(&holder, "sym:shop/Holder.java::Holder.go"), vec!["sym:shop/util/Nav.java::Nav.send"]);
+    let sub = repo.extract("shop/Sub.java");
+    assert!(!calls_from(&sub, "sym:shop/Sub.java::Sub.go").contains(&"sym:shop/Base.java::Base.send"), "{:?}", sub.edges);
+}
+
+#[test]
+fn a_private_method_of_another_file_s_supertype_is_not_inherited() {
+    let repo = Repo::new(&[
+        NAV,
+        ("shop/Base.java", "package shop;\n\npublic class Base {\n    private void helper() {}\n}\n"),
+        ("shop/Sub.java", "package shop;\n\nimport static shop.util.Nav.helper;\n\nclass Sub extends Base {\n    void go() { helper(); }\n}\n"),
+    ]);
+    let sub = repo.extract("shop/Sub.java");
+    assert!(!calls_from(&sub, "sym:shop/Sub.java::Sub.go").contains(&"sym:shop/Base.java::Base.helper"), "{:?}", sub.edges);
+}
+
+#[test]
+fn object_record_and_enum_members_the_file_never_writes_hide_outer_and_imported_namesakes() {
+    let repo = Repo::new(&[
+        NAV,
+        ("shop/Kinds.java", "package shop;\n\nimport static shop.util.Nav.values;\nimport static shop.util.Nav.x;\n\nclass Outer {\n    public Outer clone() { return this; }\n    class In {\n        void g() { clone(); }\n    }\n}\n\nenum Kind {\n    A;\n    void go() { values(); }\n}\n\nrecord P(int x, Mail mail) {\n    void go() { x(); }\n    void post() { mail.send(); }\n}\n\nclass Mail {\n    void send() {}\n}\n"),
+    ]);
+    let ex = repo.extract("shop/Kinds.java");
+    for from in ["Outer.In.g", "Kind.go", "P.go"] {
+        assert!(calls_from(&ex, &format!("sym:shop/Kinds.java::{from}")).is_empty(), "{from}: {:?}", ex.edges);
+    }
+    assert_eq!(calls_from(&ex, "sym:shop/Kinds.java::P.post"), vec!["sym:shop/Kinds.java::Mail.send"], "a record component is a typed field");
+}
+
+#[test]
+fn an_own_varargs_method_never_beats_a_supertype_s_fixed_arity_one_taking_the_arguments() {
+    let src = "package shop;\n\nclass Up {\n    void m(int a) {}\n}\n\nclass Down extends Up {\n    void m(int... xs) {}\n    void go() { m(1); }\n    void two() { m(1, 2); }\n}\n";
+    let ex = one("shop/Down.java", src);
+    assert!(calls_from(&ex, "sym:shop/Down.java::Down.go").is_empty(), "{:?}", ex.edges);
+    assert_eq!(calls_from(&ex, "sym:shop/Down.java::Down.two"), vec!["sym:shop/Down.java::Down.m"]);
+}
+
+#[test]
+fn an_annotation_type_in_the_repository_decorates_and_a_platform_one_writes_nothing() {
+    let repo = Repo::new(&[
+        ("shop/meta/Audited.java", "package shop.meta;\n\npublic @interface Audited {\n    String value();\n}\n"),
+        ("shop/Cart.java", "package shop;\n\nimport shop.meta.Audited;\n\n@Audited(\"cart\")\n@Deprecated\npublic class Cart {\n    @Audited(\"total\") int total;\n\n    @Override\n    @shop.meta.Audited(\"s\")\n    public String toString() { return \"\"; }\n}\n"),
+    ]);
+    let ex = repo.extract("shop/Cart.java");
+    let deco = edges(&ex, EdgeKind::DecoratedBy);
+    for from in ["sym:shop/Cart.java::Cart", "sym:shop/Cart.java::Cart.total", "sym:shop/Cart.java::Cart.toString"] {
+        assert!(deco.contains(&(from, "sym:shop/meta/Audited.java::Audited", "")), "{from}: {deco:?}");
+    }
+    assert_eq!(deco.len(), 3, "`@Deprecated` and `@Override` resolve nowhere and write nothing: {deco:?}");
+    assert!(!ids(&ex).iter().any(|i| i.starts_with("anno:") || i.starts_with("deco:")), "{:?}", ids(&ex));
+}
+
+// A type variable named like the annotation type shadows it; the compiler rejects the use, and the
+// graph must not pretend it reached the type.
+#[test]
+fn an_annotation_named_like_a_type_variable_in_scope_decorates_nothing() {
+    let repo = Repo::new(&[
+        ("shop/Audited.java", "package shop;\n\npublic @interface Audited {}\n"),
+        ("shop/Box.java", "package shop;\n\nclass Box<Audited> {\n    @Audited int size;\n}\n\nclass Other {\n    @Audited <Audited> void lift() {}\n    @Audited void drop() {}\n}\n"),
+    ]);
+    let ex = repo.extract("shop/Box.java");
+    assert_eq!(edges(&ex, EdgeKind::DecoratedBy), vec![("sym:shop/Box.java::Other.drop", "sym:shop/Audited.java::Audited", "")], "{:?}", ex.edges);
+}
+
+#[test]
+fn a_nested_annotation_type_decorates_a_member_and_a_constructor() {
+    let src = "package shop;\n\npublic class Cart {\n    @interface Tracked {}\n\n    @Tracked\n    public Cart() {}\n}\n";
+    let ex = one("shop/Cart.java", src);
+    assert_eq!(edges(&ex, EdgeKind::DecoratedBy), vec![("sym:shop/Cart.java::Cart.Cart", "sym:shop/Cart.java::Cart.Tracked", "")], "{:?}", ex.edges);
+}
+
+// ---- signature types ----
+
+const KEY: &str = "package shop;\n\npublic class Key {\n    public static class Inner {}\n}\n";
+
+fn imports_to<'a>(ex: &'a crate::model::Extraction, to: &str) -> Vec<&'a str> {
+    edges(ex, EdgeKind::Imports).into_iter().filter(|(_, t, _)| *t == to).map(|(_, _, c)| c).collect()
+}
+
+#[test]
+fn a_type_named_only_in_a_signature_writes_the_type_edge_to_its_file() {
+    let uses = [
+        ("shop/Param.java", "package shop;\n\nclass Param {\n    void f(Key k) {}\n}\n"),
+        ("shop/Return.java", "package shop;\n\ninterface Return {\n    Key get();\n}\n"),
+        ("shop/Field.java", "package shop;\n\nclass Field {\n    private Key k;\n}\n"),
+        ("shop/Ctor.java", "package shop;\n\nclass Ctor {\n    Ctor(Key k) {}\n}\n"),
+        ("shop/Generic.java", "package shop;\n\nclass Generic {\n    java.util.Map<String, ? extends java.util.List<Key>> f() { return null; }\n}\n"),
+        ("shop/Array.java", "package shop;\n\nclass Array {\n    void f(Key[] ks, Key... more) {}\n}\n"),
+        ("shop/Nested.java", "package shop;\n\nclass Nested {\n    void f(Key.Inner i) {}\n}\n"),
+        ("shop/Rec.java", "package shop;\n\nrecord Rec(Key k) {}\n"),
+    ];
+    let mut files = vec![("shop/Key.java", KEY)];
+    files.extend(uses);
+    let repo = Repo::new(&files);
+    for (rel, _) in uses {
+        let ex = repo.extract(rel);
+        assert!(imports_to(&ex, "file:shop/Key.java").contains(&"Key"), "{rel}: {:?}", ex.edges);
+    }
+}
+
+#[test]
+fn a_signature_type_a_type_parameter_a_local_class_or_two_stars_bind_writes_nothing() {
+    let repo = Repo::new(&[
+        ("shop/Key.java", KEY),
+        ("x/Dup.java", "package x;\n\npublic class Dup {}\n"),
+        ("y/Dup.java", "package y;\n\npublic class Dup {}\n"),
+        ("shop/Mask.java", "package shop;\n\nclass Mask<Key> {\n    Key k;\n    <Key> Key f(Key k) { return k; }\n}\n"),
+        ("shop/Local.java", "package shop;\n\nclass Local {\n    void f() {\n        class Key {}\n        java.util.function.Consumer<Key> c = (Key k) -> {};\n    }\n}\n"),
+        ("shop/Stars.java", "package shop;\n\nimport x.*;\nimport y.*;\n\nclass Stars {\n    void f(Dup d) {}\n}\n"),
+    ]);
+    for rel in ["shop/Mask.java", "shop/Local.java", "shop/Stars.java"] {
+        let ex = repo.extract(rel);
+        assert!(edges(&ex, EdgeKind::Imports).is_empty(), "{rel}: {:?}", ex.edges);
+    }
+}
+
+const MAP: (&str, &str) = ("u/Map.java", "package u;\n\npublic interface Map {\n    boolean isEmpty();\n    default int size() { return 0; }\n}\n");
+const ABSTRACT_MAP: (&str, &str) = (
+    "u/AbstractMap.java",
+    "package u;\n\npublic abstract class AbstractMap implements Map {\n    public boolean isEmpty() { return true; }\n    public int size() { return 1; }\n}\n",
+);
+
+#[test]
+fn a_superclass_method_beats_the_interface_a_class_also_implements() {
+    let repo = Repo::new(&[
+        MAP,
+        ABSTRACT_MAP,
+        ("u/HashMap.java", "package u;\n\npublic class HashMap extends AbstractMap implements Map {\n    void go() { isEmpty(); }\n    void count() { size(); }\n}\n\nclass Near extends AbstractMap implements Map {\n    void go() { isEmpty(); }\n}\n"),
+    ]);
+    let ex = repo.extract("u/HashMap.java");
+    assert_eq!(calls_from(&ex, "sym:u/HashMap.java::HashMap.go"), vec!["sym:u/AbstractMap.java::AbstractMap.isEmpty"], "over the interface's abstract method: {:?}", ex.edges);
+    assert_eq!(calls_from(&ex, "sym:u/HashMap.java::HashMap.count"), vec!["sym:u/AbstractMap.java::AbstractMap.size"], "over the interface's default: {:?}", ex.edges);
+    assert_eq!(calls_from(&ex, "sym:u/HashMap.java::Near.go"), vec!["sym:u/AbstractMap.java::AbstractMap.isEmpty"], "{:?}", ex.edges);
+}
+
+#[test]
+fn an_interface_binds_only_when_no_superclass_level_declares_the_name_and_none_is_unread() {
+    let repo = Repo::new(&[
+        MAP,
+        ("u/Base.java", "package u;\n\npublic class Base {}\n"),
+        ("u/Lost.java", "package u;\n\npublic class Lost extends android.app.Activity {}\n"),
+        ("u/Sized.java", "package u;\n\npublic interface Sized extends Map {\n    default int size() { return 2; }\n}\n"),
+        ("u/Holder.java", "package u;\n\npublic class Holder implements Map {\n    public boolean isEmpty() { return true; }\n}\n"),
+        (
+            "u/Users.java",
+            "package u;\n\nclass Plain extends Base implements Map {\n    void go() { size(); }\n}\n\nclass Screen extends android.app.Activity implements Map {\n    void go() { isEmpty(); }\n}\n\nclass Far extends Lost implements Map {\n    void go() { isEmpty(); }\n}\n\nclass Specific extends Holder implements Sized {\n    void go() { size(); }\n}\n",
+        ),
+    ]);
+    let ex = repo.extract("u/Users.java");
+    assert_eq!(calls_from(&ex, "sym:u/Users.java::Plain.go"), vec!["sym:u/Map.java::Map.size"], "Base declares no size: {:?}", ex.edges);
+    assert!(calls_from(&ex, "sym:u/Users.java::Screen.go").is_empty(), "the activity may declare isEmpty: {:?}", ex.edges);
+    assert!(calls_from(&ex, "sym:u/Users.java::Far.go").is_empty(), "Lost's superclass may declare isEmpty: {:?}", ex.edges);
+    assert!(calls_from(&ex, "sym:u/Users.java::Specific.go").is_empty(), "Holder inherits Map's size and Sized overrides it: {:?}", ex.edges);
+}
+
+const NAMESAKE: (&str, &str) = ("a/u/U.java", "package a.u;\n\npublic class U {\n    public static void help() {}\n}\n");
+
+#[test]
+fn an_interface_s_static_method_is_not_inherited_by_its_implementors_or_subinterfaces() {
+    let repo = Repo::new(&[
+        NAMESAKE,
+        ("a/I.java", "package a;\n\npublic interface I {\n    static void help() {}\n}\n"),
+        ("a/J.java", "package a;\n\npublic interface J extends I {}\n"),
+        (
+            "a/D.java",
+            "package a;\n\nimport static a.u.U.help;\n\nclass D implements J {\n    void go() { help(); }\n}\n\nclass C implements I {\n    void go() { help(); }\n}\n\ninterface K {\n    static void help() {}\n}\n\nclass E implements K {\n    void go() { help(); }\n}\n",
+        ),
+    ]);
+    let ex = repo.extract("a/D.java");
+    for from in ["D", "C", "E"] {
+        assert_eq!(calls_from(&ex, &format!("sym:a/D.java::{from}.go")), vec!["sym:a/u/U.java::U.help"], "{from}: {:?}", ex.edges);
+    }
+}
+
+#[test]
+fn a_package_private_method_is_not_inherited_by_a_subclass_in_another_package() {
+    let repo = Repo::new(&[
+        ("a/Base.java", "package a;\n\npublic class Base {\n    void help() {}\n    protected void kept() {}\n}\n"),
+        ("a/Mid.java", "package a;\n\npublic class Mid extends Base {}\n"),
+        ("a/Near.java", "package a;\n\nclass Near extends Mid {\n    void go() { help(); }\n}\n"),
+        (
+            "b/Outer.java",
+            "package b;\n\nclass Outer {\n    void help() {}\n    void kept() {}\n    class Deep extends a.Mid {\n        void go() { help(); }\n        void keep() { kept(); }\n    }\n    class Direct extends a.Base {\n        void go() { help(); }\n    }\n}\n",
+        ),
+    ]);
+    let near = repo.extract("a/Near.java");
+    assert_eq!(calls_from(&near, "sym:a/Near.java::Near.go"), vec!["sym:a/Base.java::Base.help"], "one package: {:?}", near.edges);
+    let ex = repo.extract("b/Outer.java");
+    assert_eq!(calls_from(&ex, "sym:b/Outer.java::Outer.Deep.go"), vec!["sym:b/Outer.java::Outer.help"], "{:?}", ex.edges);
+    assert_eq!(calls_from(&ex, "sym:b/Outer.java::Outer.Direct.go"), vec!["sym:b/Outer.java::Outer.help"], "{:?}", ex.edges);
+    assert_eq!(calls_from(&ex, "sym:b/Outer.java::Outer.Deep.keep"), vec!["sym:a/Base.java::Base.kept"], "a protected method crosses packages: {:?}", ex.edges);
+}
+
+#[test]
+fn an_enum_s_implicit_superclass_beats_an_interface_for_the_names_enum_declares() {
+    let repo = Repo::new(&[
+        ("a/Desc.java", "package a;\n\npublic interface Desc {\n    default int ordinal() { return -1; }\n    default int rank() { return 1; }\n    default Object values() { return null; }\n}\n"),
+        (
+            "a/E.java",
+            "package a;\n\npublic enum E implements Desc {\n    X {\n        int g() { return ordinal(); }\n    };\n    int f() { return ordinal(); }\n    Object v() { return values(); }\n    int r() { return rank(); }\n}\n",
+        ),
+    ]);
+    let ex = repo.extract("a/E.java");
+    assert!(calls_from(&ex, "sym:a/E.java::E.f").is_empty(), "Enum.ordinal is final and wins: {:?}", ex.edges);
+    assert!(calls_from(&ex, "sym:a/E.java::E.v").is_empty(), "the implicit values() wins: {:?}", ex.edges);
+    assert!(!edges(&ex, EdgeKind::Calls).iter().any(|(_, t, _)| *t == "sym:a/Desc.java::Desc.ordinal"), "nor from a constant's body: {:?}", ex.edges);
+    assert_eq!(calls_from(&ex, "sym:a/E.java::E.r"), vec!["sym:a/Desc.java::Desc.rank"], "Enum declares no rank: {:?}", ex.edges);
+}
+
+const HAS_X: (&str, &str) = ("r/H.java", "package r;\n\npublic interface H {\n    default int x() { return -1; }\n}\n");
+
+#[test]
+fn a_record_s_component_accessor_beats_an_interface_default_of_its_name() {
+    let repo = Repo::new(&[
+        HAS_X,
+        (
+            "r/R.java",
+            "package r;\n\npublic record R(int x) implements H {\n    int f() { return x(); }\n}\n\nrecord S(int y) implements H {\n    int f() { return x(); }\n}\n\nrecord T(int x) implements H {\n    public int x() { return x; }\n    int f() { return x(); }\n}\n",
+        ),
+    ]);
+    let ex = repo.extract("r/R.java");
+    assert!(calls_from(&ex, "sym:r/R.java::R.f").is_empty(), "the implicit accessor is no symbol, and it wins: {:?}", ex.edges);
+    assert_eq!(calls_from(&ex, "sym:r/R.java::S.f"), vec!["sym:r/H.java::H.x"], "S has no component x: {:?}", ex.edges);
+    assert_eq!(calls_from(&ex, "sym:r/R.java::T.f"), vec!["sym:r/R.java::T.x"], "a written accessor is a method: {:?}", ex.edges);
+}
+
+const TARGET: (&str, &str) = ("shop/orders/Target.java", "package shop.orders;\n\npublic class Target {\n    public Target() {}\n    public Target(int n) {}\n    public static class Part {}\n}\n");
+const RECV: (&str, &str) = ("shop/orders/Recv.java", "package shop.orders;\n\nclass Recv {\n    static <T> void m(T t) {}\n}\n");
+const INVOICE_BARE: (&str, &str) = ("shop/billing/Invoice.java", "package shop.billing;\n\npublic class Invoice {\n    public class Line {}\n}\n");
+const BOX: (&str, &str) = ("shop/util/Box.java", "package shop.util;\n\npublic class Box<T> {}\n");
+
+#[test]
+fn an_object_creation_calls_the_type_it_creates_wherever_the_file_resolves_it() {
+    let uses = [
+        ("shop/orders/Same.java", "package shop.orders;\n\nclass Same {\n    void go() { Recv.<Target>m(new Target()); }\n}\n", "sym:shop/orders/Same.java::Same.go", "sym:shop/orders/Target.java::Target"),
+        ("shop/orders/Args.java", "package shop.orders;\n\nclass Args {\n    Args() { Object o = new Target(1); }\n    void go() {}\n}\n", "sym:shop/orders/Args.java::Args.Args", "sym:shop/orders/Target.java::Target"),
+        ("shop/Imported.java", "package shop;\n\nimport shop.billing.Invoice;\n\nclass Imported {\n    void go() { new Invoice(); }\n}\n", "sym:shop/Imported.java::Imported.go", "sym:shop/billing/Invoice.java::Invoice"),
+        ("shop/Starred.java", "package shop;\n\nimport shop.billing.*;\n\nclass Starred {\n    void go() { new Invoice(); }\n}\n", "sym:shop/Starred.java::Starred.go", "sym:shop/billing/Invoice.java::Invoice"),
+        ("shop/Qualified.java", "package shop;\n\nclass Qualified {\n    void go() { new shop.billing.Invoice(); }\n}\n", "sym:shop/Qualified.java::Qualified.go", "sym:shop/billing/Invoice.java::Invoice"),
+        ("shop/orders/Member.java", "package shop.orders;\n\nclass Member {\n    void go() { new Target.Part(); }\n}\n", "sym:shop/orders/Member.java::Member.go", "sym:shop/orders/Target.java::Target.Part"),
+        ("shop/Diamond.java", "package shop;\n\nimport shop.util.Box;\n\nclass Diamond {\n    void go() { Box<String> a = new Box<>(); Object b = new Box<String>(); }\n}\n", "sym:shop/Diamond.java::Diamond.go", "sym:shop/util/Box.java::Box"),
+    ];
+    let mut files = vec![TARGET, RECV, INVOICE_BARE, BOX];
+    files.extend(uses.iter().map(|(rel, src, _, _)| (*rel, *src)));
+    let repo = Repo::new(&files);
+    for (rel, _, from, to) in uses {
+        let ex = repo.extract(rel);
+        let found: Vec<(&str, &str)> = edges(&ex, EdgeKind::Calls).into_iter().filter(|(_, t, _)| *t == to).map(|(s, t, _)| (s, t)).collect();
+        assert_eq!(found, vec![(from, to)], "{rel}: {:?}", ex.edges);
+    }
+    let own = one("shop/Own.java", "package shop;\n\nclass Own {\n    static class Nested {}\n    void go() { new Nested(); }\n}\n");
+    assert_eq!(calls_from(&own, "sym:shop/Own.java::Own.go"), vec!["sym:shop/Own.java::Own.Nested"], "{:?}", own.edges);
+}
+
+#[test]
+fn an_object_creation_the_file_cannot_resolve_or_a_local_name_hides_calls_nothing() {
+    let repo = Repo::new(&[
+        TARGET,
+        ("x/Dup.java", "package x;\n\npublic class Dup {}\n"),
+        ("y/Dup.java", "package y;\n\npublic class Dup {}\n"),
+        ("shop/orders/Platform.java", "package shop.orders;\n\nclass Platform {\n    void go() { new String(); new java.util.ArrayList<String>(); new StringBuilder(); }\n}\n"),
+        ("shop/orders/Stars.java", "package shop.orders;\n\nimport x.*;\nimport y.*;\n\nclass Stars {\n    void go() { new Dup(); }\n}\n"),
+        ("shop/orders/ClassParam.java", "package shop.orders;\n\nclass ClassParam<Target> {\n    void go() { Object o = new Target(); }\n}\n"),
+        ("shop/orders/MethodParam.java", "package shop.orders;\n\nclass MethodParam {\n    <Target> void go() { Object o = new Target(); }\n}\n"),
+        ("shop/orders/Local.java", "package shop.orders;\n\nclass Local {\n    void go() {\n        class Target {}\n        new Target();\n    }\n}\n"),
+        ("shop/orders/Anon.java", "package shop.orders;\n\nclass Anon {\n    void go() { new Object() { void f() { new Target(); } class Target {} }; }\n}\n"),
+        ("shop/orders/InLocal.java", "package shop.orders;\n\nclass InLocal {\n    void go() {\n        class L { void f() { new Target(); } class Target {} }\n    }\n}\n"),
+    ]);
+    for rel in ["shop/orders/Platform.java", "shop/orders/Stars.java", "shop/orders/ClassParam.java", "shop/orders/MethodParam.java", "shop/orders/Local.java"] {
+        let ex = repo.extract(rel);
+        assert!(edges(&ex, EdgeKind::Calls).is_empty(), "{rel}: {:?}", ex.edges);
+    }
+    // A member class masks for the whole body it is declared in, the methods before it included.
+    for (rel, from) in [("shop/orders/Anon.java", "sym:shop/orders/Anon.java::Anon.go"), ("shop/orders/InLocal.java", "sym:shop/orders/InLocal.java::InLocal.go")] {
+        let ex = repo.extract(rel);
+        assert!(!calls_from(&ex, from).contains(&"sym:shop/orders/Target.java::Target"), "{rel}: {:?}", ex.edges);
+    }
+}
+
+#[test]
+fn a_local_class_masks_its_name_only_after_its_declaration() {
+    let repo = Repo::new(&[TARGET, ("shop/orders/Before.java", "package shop.orders;\n\nclass Before {\n    void go() {\n        new Target();\n        class Target {}\n    }\n}\n")]);
+    let ex = repo.extract("shop/orders/Before.java");
+    assert_eq!(calls_from(&ex, "sym:shop/orders/Before.java::Before.go"), vec!["sym:shop/orders/Target.java::Target"], "{:?}", ex.edges);
+}
+
+#[test]
+fn an_anonymous_class_calls_its_supertype_only_when_the_supertype_resolves() {
+    let src = "package shop;
+
+interface Task {
+    void run();
+}
+
+class Job {
+    void helper() {}
+    void named() { new Task() { public void run() { helper(); } }; }
+    void unread() { new Runnable() { public void run() { helper(); } }; }
+}
+";
+    let ex = one("shop/Job.java", src);
+    assert_eq!(calls_from(&ex, "sym:shop/Job.java::Job.named"), vec!["sym:shop/Job.java::Job.helper", "sym:shop/Job.java::Task"], "{:?}", ex.edges);
+    assert!(calls_from(&ex, "sym:shop/Job.java::Job.unread").is_empty(), "Runnable may declare helper: {:?}", ex.edges);
+}
+
+#[test]
+fn a_qualified_inner_creation_calls_the_inner_type_only_through_a_receiver_that_declares_it() {
+    let repo = Repo::new(&[
+        INVOICE_BARE,
+        ("shop/Line.java", "package shop;\n\npublic class Line {}\n"),
+        (
+            "shop/Use.java",
+            "package shop;\n\nimport shop.billing.Invoice;\n\nclass Use {\n    void typed(Invoice inv) { inv.new Line(); }\n    void unread(Object o, java.util.List<String> l) { l.new Line(); }\n}\n",
+        ),
+    ]);
+    let ex = repo.extract("shop/Use.java");
+    assert_eq!(calls_from(&ex, "sym:shop/Use.java::Use.typed"), vec!["sym:shop/billing/Invoice.java::Invoice.Line"], "{:?}", ex.edges);
+    assert!(calls_from(&ex, "sym:shop/Use.java::Use.unread").is_empty(), "never the package's Line: {:?}", ex.edges);
+}
+
+#[test]
+fn an_array_creation_is_a_type_use_not_a_call() {
+    let repo = Repo::new(&[
+        TARGET,
+        ("shop/Arrays.java", "package shop;\n\nimport shop.orders.Target;\n\nclass Arrays {\n    Object go() { return new Target[3]; }\n}\n"),
+        ("shop/orders/Same.java", "package shop.orders;\n\nclass Same {\n    Object go() { return new Target[][] { new Target[1] }; }\n    Object prim() { return new int[2]; }\n}\n"),
+    ]);
+    let imported = repo.extract("shop/Arrays.java");
+    assert!(edges(&imported, EdgeKind::Calls).is_empty(), "{:?}", imported.edges);
+    let same = repo.extract("shop/orders/Same.java");
+    assert!(edges(&same, EdgeKind::Calls).is_empty(), "{:?}", same.edges);
+    assert_eq!(imports_to(&same, "file:shop/orders/Target.java"), vec!["Target"], "{:?}", same.edges);
+}
+
+const PKG_T: (&str, &str) = ("p/T.java", "package p;\n\npublic class T {\n    public static void m() {}\n    public static class Part {}\n}\n");
+const BASE_T: (&str, &str) = ("p/B.java", "package p;\n\npublic class B {\n    public static class T {\n        public static void m() {}\n    }\n}\n");
+const IFACE_T: (&str, &str) = ("p/I.java", "package p;\n\npublic interface I {\n    class T {}\n}\n");
+
+#[test]
+fn a_member_type_inherited_from_a_read_superclass_shadows_the_package_type_of_its_name() {
+    let repo = Repo::new(&[
+        PKG_T,
+        BASE_T,
+        IFACE_T,
+        (
+            "p/A.java",
+            "package p;\n\nclass A extends B {\n    T field;\n    void made() { new T(); }\n    void called() { T.m(); }\n    static class Inner {\n        void made() { new T(); }\n    }\n}\n",
+        ),
+        ("p/C.java", "package p;\n\nclass C extends A {\n    void made() { new T(); }\n}\n"),
+        ("p/D.java", "package p;\n\nclass D implements I {\n    void made() { new T(); }\n}\n"),
+        ("p/Own.java", "package p;\n\nclass Own extends B {\n    static class T {}\n    void made() { new T(); }\n}\n"),
+        ("p/Anon.java", "package p;\n\nclass Anon {\n    void made() { new B() { void f() { new T(); } }; }\n}\n"),
+    ]);
+    let a = repo.extract("p/A.java");
+    assert_eq!(calls_from(&a, "sym:p/A.java::A.made"), vec!["sym:p/B.java::B.T"], "{:?}", a.edges);
+    assert_eq!(calls_from(&a, "sym:p/A.java::A.called"), vec!["sym:p/B.java::B.T.m"], "{:?}", a.edges);
+    assert_eq!(calls_from(&a, "sym:p/A.java::A.Inner.made"), vec!["sym:p/B.java::B.T"], "an enclosing type's inherited member: {:?}", a.edges);
+    assert_eq!(imports_to(&a, "file:p/B.java"), vec!["B"], "{:?}", a.edges);
+    assert!(imports_to(&a, "file:p/T.java").is_empty(), "{:?}", a.edges);
+    let c = repo.extract("p/C.java");
+    assert_eq!(calls_from(&c, "sym:p/C.java::C.made"), vec!["sym:p/B.java::B.T"], "inherited through A: {:?}", c.edges);
+    let d = repo.extract("p/D.java");
+    assert_eq!(calls_from(&d, "sym:p/D.java::D.made"), vec!["sym:p/I.java::I.T"], "an interface's member type: {:?}", d.edges);
+    let own = repo.extract("p/Own.java");
+    assert_eq!(calls_from(&own, "sym:p/Own.java::Own.made"), vec!["sym:p/Own.java::Own.T"], "its own beats an inherited one: {:?}", own.edges);
+    let anon = repo.extract("p/Anon.java");
+    assert_eq!(calls_from(&anon, "sym:p/Anon.java::Anon.made"), vec!["sym:p/B.java::B", "sym:p/B.java::B.T"], "an anonymous body inherits it too: {:?}", anon.edges);
+}
+
+#[test]
+fn a_member_type_a_subtype_does_not_inherit_or_inherits_twice_never_binds() {
+    let repo = Repo::new(&[
+        PKG_T,
+        BASE_T,
+        IFACE_T,
+        ("p/J.java", "package p;\n\npublic interface J {\n    class T {}\n}\n"),
+        ("p/PB.java", "package p;\n\npublic class PB {\n    private static class T {}\n}\n"),
+        ("p/PA.java", "package p;\n\nclass PA extends PB {\n    void made() { new T(); }\n}\n"),
+        ("q/QB.java", "package q;\n\npublic class QB {\n    static class T {}\n}\n"),
+        ("p/QA.java", "package p;\n\nimport q.QB;\n\nclass QA extends QB {\n    void made() { new T(); }\n}\n"),
+        ("p/Two.java", "package p;\n\nclass Two implements I, J {\n    void made() { new T(); }\n}\n"),
+        ("p/Both.java", "package p;\n\nclass Both extends B implements I {\n    void made() { new T(); }\n}\n"),
+        ("p/Part.java", "package p;\n\nclass Part extends B {\n    void made() { new T.Part(); }\n}\n"),
+        ("p/Ext.java", "package p;\n\nclass Ext extends java.util.ArrayList<String> {\n    void made() { new T(); }\n}\n"),
+    ]);
+    let pkg = vec!["sym:p/T.java::T"];
+    let pa = repo.extract("p/PA.java");
+    assert_eq!(calls_from(&pa, "sym:p/PA.java::PA.made"), pkg, "a private member type is not inherited: {:?}", pa.edges);
+    let qa = repo.extract("p/QA.java");
+    assert_eq!(calls_from(&qa, "sym:p/QA.java::QA.made"), pkg, "nor a package-private one outside its package: {:?}", qa.edges);
+    for (rel, from) in [("p/Two.java", "sym:p/Two.java::Two.made"), ("p/Both.java", "sym:p/Both.java::Both.made")] {
+        let ex = repo.extract(rel);
+        assert!(calls_from(&ex, from).is_empty(), "two inherited T are ambiguous: {:?}", ex.edges);
+    }
+    let part = repo.extract("p/Part.java");
+    assert!(calls_from(&part, "sym:p/Part.java::Part.made").is_empty(), "B.T holds no Part, and B.T hides the package's T: {:?}", part.edges);
+    let ext = repo.extract("p/Ext.java");
+    assert_eq!(calls_from(&ext, "sym:p/Ext.java::Ext.made"), pkg, "an unread superclass is the residual: {:?}", ext.edges);
+}
+
+#[test]
+fn a_field_initializer_calls_from_the_field_and_an_initializer_block_from_its_class() {
+    let repo = Repo::new(&[
+        TARGET,
+        (
+            "shop/orders/Init.java",
+            "package shop.orders;\n\nclass Init {\n    static final Target FIRST = new Target(), SECOND = new Target(1);\n    int x = compute();\n    static { boot(); }\n    { Target t = new Target(); warm(); }\n    int compute() { return 1; }\n    static void boot() {}\n    void warm() {}\n    static class Deep {\n        Object d = new Target.Part();\n    }\n}\n",
+        ),
+    ]);
+    let ex = repo.extract("shop/orders/Init.java");
+    let from = |f: &str| calls_from(&ex, &format!("sym:shop/orders/Init.java::{f}")).into_iter().map(str::to_string).collect::<Vec<_>>();
+    assert_eq!(from("Init.FIRST"), vec!["sym:shop/orders/Target.java::Target"], "{:?}", ex.edges);
+    assert_eq!(from("Init.SECOND"), vec!["sym:shop/orders/Target.java::Target"], "{:?}", ex.edges);
+    assert_eq!(from("Init.x"), vec!["sym:shop/orders/Init.java::Init.compute"], "{:?}", ex.edges);
+    assert_eq!(
+        from("Init"),
+        vec!["sym:shop/orders/Init.java::Init.boot", "sym:shop/orders/Init.java::Init.warm", "sym:shop/orders/Target.java::Target"],
+        "{:?}",
+        ex.edges
+    );
+    assert_eq!(from("Init.Deep.d"), vec!["sym:shop/orders/Target.java::Target.Part"], "{:?}", ex.edges);
+}
+
+#[test]
+fn a_field_initializer_or_an_initializer_block_refuses_what_a_body_refuses() {
+    let repo = Repo::new(&[
+        TARGET,
+        ("shop/orders/Masked.java", "package shop.orders;\n\nclass Masked<Target> {\n    Object o = new Target();\n}\n"),
+        ("shop/orders/Local.java", "package shop.orders;\n\nclass Local {\n    { class Target {} new Target(); }\n}\n"),
+        ("shop/orders/Anon.java", "package shop.orders;\n\nclass Anon {\n    void helper() {}\n    Runnable r = new Runnable() { public void run() { helper(); } };\n}\n"),
+        ("shop/orders/Obj.java", "package shop.orders;\n\nclass Obj {\n    int h = hashCode();\n    static { new java.util.ArrayList<String>(); }\n}\n"),
+        ("shop/orders/Shadow.java", "package shop.orders;\n\nclass Shadow {\n    Helper t;\n    { Object t = null; t.go(); }\n}\n\nclass Helper {\n    void go() {}\n}\n"),
+    ]);
+    for rel in ["shop/orders/Masked.java", "shop/orders/Local.java", "shop/orders/Anon.java", "shop/orders/Obj.java", "shop/orders/Shadow.java"] {
+        let ex = repo.extract(rel);
+        assert!(edges(&ex, EdgeKind::Calls).is_empty(), "{rel}: {:?}", ex.edges);
+    }
+}
+
+#[test]
+fn an_enum_constant_s_arguments_and_body_are_left_out() {
+    let repo = Repo::new(&[TARGET, ("shop/orders/E.java", "package shop.orders;\n\nenum E {\n    A(new Target()) { void f() { new Target(); } };\n    E(Object o) {}\n    void f() {}\n}\n")]);
+    let ex = repo.extract("shop/orders/E.java");
+    assert!(edges(&ex, EdgeKind::Calls).is_empty(), "{:?}", ex.edges);
+}
+
+#[test]
+fn a_member_type_a_subtype_does_not_inherit_hides_its_supertype_s_namesake() {
+    let grand = ("p/G.java", "package p;\n\npublic class G {\n    public static class T {}\n}\n");
+    let repo = Repo::new(&[
+        PKG_T,
+        grand,
+        ("p/HP.java", "package p;\n\npublic class HP extends G {\n    private static class T {}\n}\n"),
+        ("p/AP.java", "package p;\n\nclass AP extends HP {\n    void made() { new T(); }\n}\n"),
+        ("q/HQ.java", "package q;\n\npublic class HQ extends p.G {\n    static class T {}\n}\n"),
+        ("p/AQ.java", "package p;\n\nimport q.HQ;\n\nclass AQ extends HQ {\n    void made() { new T(); }\n}\n"),
+        ("p/HO.java", "package p;\n\npublic class HO extends G {\n    public static class T {}\n}\n"),
+        ("p/AO.java", "package p;\n\nclass AO extends HO {\n    void made() { new T(); }\n}\n"),
+    ]);
+    let pkg = vec!["sym:p/T.java::T"];
+    let ap = repo.extract("p/AP.java");
+    assert_eq!(calls_from(&ap, "sym:p/AP.java::AP.made"), pkg, "a private T in HP hides G.T: {:?}", ap.edges);
+    let aq = repo.extract("p/AQ.java");
+    assert_eq!(calls_from(&aq, "sym:p/AQ.java::AQ.made"), pkg, "a package-private T in another package hides G.T: {:?}", aq.edges);
+    let ao = repo.extract("p/AO.java");
+    assert_eq!(calls_from(&ao, "sym:p/AO.java::AO.made"), vec!["sym:p/HO.java::HO.T"], "a public T in HO is the one inherited: {:?}", ao.edges);
+}
+
+const UTIL: (&str, &str) = ("shop/Util.java", "package shop;\n\npublic class Util {\n    public static int twice(int x) { return x; }\n}\n");
+
+/// An external supertype is taken to declare no capitalised field, so a static `Util.twice()`
+/// binds under it as `new Util()` does; a bare call may still be inherited.
+#[test]
+fn a_static_call_on_a_capitalised_type_under_an_unread_supertype_binds_as_in_a_plain_class() {
+    let repo = Repo::new(&[
+        UTIL,
+        (
+            "shop/A.java",
+            "package shop;\n\nimport android.app.Activity;\nimport static shop.Util.twice;\n\nclass Plain {\n    void go() { Util.twice(1); }\n    void bare() { twice(1); }\n    void anon() { new Runnable() { public void run() { Util.twice(1); } }; }\n}\n\nclass A extends Activity {\n    void go() { Util.twice(1); new Util(); }\n    void bare() { twice(1); }\n    void shadow() { Object Util = null; Util.twice(1); }\n}\n\nclass S implements java.io.Serializable {\n    void go() { Util.twice(1); }\n}\n\nclass M<Util> extends Activity {\n    void go() { Util.twice(1); }\n}\n",
+        ),
+    ]);
+    let ex = repo.extract("shop/A.java");
+    let twice = "sym:shop/Util.java::Util.twice";
+    assert_eq!(calls_from(&ex, "sym:shop/A.java::Plain.go"), vec![twice], "{:?}", ex.edges);
+    assert_eq!(calls_from(&ex, "sym:shop/A.java::Plain.bare"), vec![twice], "{:?}", ex.edges);
+    assert_eq!(calls_from(&ex, "sym:shop/A.java::Plain.anon"), vec![twice], "an anonymous class's unread supertype too: {:?}", ex.edges);
+    assert_eq!(calls_from(&ex, "sym:shop/A.java::A.go"), vec!["sym:shop/Util.java::Util", twice], "{:?}", ex.edges);
+    assert_eq!(calls_from(&ex, "sym:shop/A.java::S.go"), vec![twice], "{:?}", ex.edges);
+    assert!(calls_from(&ex, "sym:shop/A.java::A.bare").is_empty(), "Activity may declare twice: {:?}", ex.edges);
+    assert!(calls_from(&ex, "sym:shop/A.java::A.shadow").is_empty(), "a local hides the type: {:?}", ex.edges);
+    assert!(calls_from(&ex, "sym:shop/A.java::M.go").is_empty(), "a type parameter is no repository type: {:?}", ex.edges);
+}
+
+const B_INNER: (&str, &str) = ("shop/B.java", "package shop;\n\npublic class B {\n    public static class Inner {\n        public void run() {}\n    }\n    public @interface Mark {}\n}\n");
+const TOP_INNER: (&str, &str) = ("shop/Inner.java", "package shop;\n\npublic class Inner {\n    public void run() {}\n}\n");
+const TOP_MARK: (&str, &str) = ("shop/Mark.java", "package shop;\n\npublic @interface Mark {}\n");
+
+/// A supertype or an annotation written inside a type is read as a call's type is: a member type
+/// it inherits hides the package's namesake.
+#[test]
+fn a_nested_type_s_supertype_and_annotation_bind_the_member_type_inherited_first() {
+    let repo = Repo::new(&[
+        B_INNER,
+        TOP_INNER,
+        TOP_MARK,
+        ("shop/A.java", "package shop;\n\nclass A extends B {\n    static class C extends Inner {\n        void go() { run(); }\n    }\n    @Mark void marked() {}\n}\n"),
+    ]);
+    let ex = repo.extract("shop/A.java");
+    assert_eq!(edges(&ex, EdgeKind::Extends), vec![("sym:shop/A.java::A", "sym:shop/B.java::B", ""), ("sym:shop/A.java::A.C", "sym:shop/B.java::B.Inner", "")], "{:?}", ex.edges);
+    assert_eq!(calls_from(&ex, "sym:shop/A.java::A.C.go"), vec!["sym:shop/B.java::B.Inner.run"], "{:?}", ex.edges);
+    assert_eq!(edges(&ex, EdgeKind::DecoratedBy), vec![("sym:shop/A.java::A.marked", "sym:shop/B.java::B.Mark", "")], "{:?}", ex.edges);
+}
+
+#[test]
+fn a_nested_type_s_supertype_skips_a_member_type_it_does_not_inherit() {
+    let repo = Repo::new(&[
+        B_INNER,
+        TOP_INNER,
+        ("shop/PB.java", "package shop;\n\npublic class PB {\n    private static class Inner {}\n}\n"),
+        ("shop/PA.java", "package shop;\n\nclass PA extends PB {\n    static class C extends Inner {\n        void go() { run(); }\n    }\n}\n"),
+        ("shop/HB.java", "package shop;\n\npublic class HB extends B {\n    private static class Inner {}\n}\n"),
+        ("shop/HA.java", "package shop;\n\nclass HA extends HB {\n    static class C extends Inner {}\n}\n"),
+    ]);
+    let top = ("sym:shop/PA.java::PA.C", "sym:shop/Inner.java::Inner", "");
+    let pa = repo.extract("shop/PA.java");
+    assert!(edges(&pa, EdgeKind::Extends).contains(&top), "a private member type is not inherited: {:?}", pa.edges);
+    assert_eq!(calls_from(&pa, "sym:shop/PA.java::PA.C.go"), vec!["sym:shop/Inner.java::Inner.run"], "{:?}", pa.edges);
+    let ha = repo.extract("shop/HA.java");
+    assert!(
+        edges(&ha, EdgeKind::Extends).contains(&("sym:shop/HA.java::HA.C", "sym:shop/Inner.java::Inner", "")),
+        "HB's private Inner hides B.Inner: {:?}",
+        ha.edges
+    );
+}
+
+#[test]
+fn a_cyclic_hierarchy_through_a_nested_supertype_ends() {
+    let repo = Repo::new(&[TOP_INNER, ("shop/A.java", "package shop;\n\nclass A extends B.C {}\n\nclass B extends A {\n    static class C extends Inner {\n        void go() { run(); }\n    }\n}\n")]);
+    let ex = repo.extract("shop/A.java");
+    assert!(edges(&ex, EdgeKind::Extends).contains(&("sym:shop/A.java::A", "sym:shop/A.java::B.C", "")), "{:?}", ex.edges);
+}
+
+const RUN_BASE: (&str, &str) = ("p/A.java", "package p;\n\npublic class A {\n    public void run(int x) {}\n    public static void util() {}\n}\n");
+
+#[test]
+fn a_receiver_typed_by_another_file_s_subtype_binds_the_member_its_supertype_declares() {
+    let repo = Repo::new(&[
+        RUN_BASE,
+        ("p/B.java", "package p;\n\npublic class B extends A {}\n"),
+        ("p/C.java", "package p;\n\npublic class C extends B {}\n"),
+        ("p/Sub.java", "package p;\n\npublic class Sub extends Local {}\n"),
+        (
+            "p/U.java",
+            "package p;\n\nclass Local {\n    void ping(int x) {}\n}\n\nclass U {\n    void go(B b) { b.run(1); }\n    void far(C c) { c.run(2); }\n    void stat() { B.util(); }\n    void back(Sub s) { s.ping(3); }\n    void none(B b) { b.run(); }\n}\n",
+        ),
+    ]);
+    let ex = repo.extract("p/U.java");
+    assert_eq!(calls_from(&ex, "sym:p/U.java::U.go"), vec!["sym:p/A.java::A.run"], "{:?}", ex.edges);
+    assert_eq!(calls_from(&ex, "sym:p/U.java::U.far"), vec!["sym:p/A.java::A.run"], "two levels up: {:?}", ex.edges);
+    assert_eq!(calls_from(&ex, "sym:p/U.java::U.stat"), vec!["sym:p/A.java::A.util"], "a class passes its statics down: {:?}", ex.edges);
+    assert_eq!(calls_from(&ex, "sym:p/U.java::U.back"), vec!["sym:p/U.java::Local.ping"], "the walk comes back into this file: {:?}", ex.edges);
+    assert!(calls_from(&ex, "sym:p/U.java::U.none").is_empty(), "no declaration takes no argument: {:?}", ex.edges);
+}
+
+#[test]
+fn a_receiver_typed_by_another_file_s_subtype_refuses_what_a_supertype_walk_refuses() {
+    let repo = Repo::new(&[
+        MAP,
+        ABSTRACT_MAP,
+        ("u/HashMap.java", "package u;\n\npublic class HashMap extends AbstractMap implements Map {}\n"),
+        ("u/Screen.java", "package u;\n\npublic class Screen extends android.app.Activity implements Map {}\n"),
+        ("u/Lost.java", "package u;\n\npublic class Lost extends android.app.Activity {}\n"),
+        ("u/Far.java", "package u;\n\npublic class Far extends Lost implements Map {}\n"),
+        ("u/Pinger.java", "package u;\n\npublic interface Pinger {\n    void ping();\n}\n"),
+        ("u/Other.java", "package u;\n\npublic interface Other {\n    void ping();\n}\n"),
+        ("u/Two.java", "package u;\n\npublic class Two implements Pinger, Other {}\n"),
+        ("u/Priv.java", "package u;\n\npublic class Priv {\n    private void hide(int x) {}\n}\n"),
+        ("u/PSub.java", "package u;\n\npublic class PSub extends Priv {}\n"),
+        ("u/Up.java", "package u;\n\npublic class Up {\n    public void v(String s) {}\n}\n"),
+        ("u/Down.java", "package u;\n\npublic class Down extends Up {\n    public void v(String... xs) {}\n}\n"),
+        (
+            "u/U.java",
+            "package u;\n\nclass U {\n    void cls(HashMap h) { h.isEmpty(); }\n    void def(HashMap h) { h.size(); }\n    void screen(Screen s) { s.isEmpty(); }\n    void far(Far f) { f.isEmpty(); }\n    void two(Two t) { t.ping(); }\n    void hide(PSub p) { p.hide(1); }\n    void fixed(Down d) { d.v(\"x\"); }\n    void object(HashMap h) { h.hashCode(); h.getClass(); }\n}\n",
+        ),
+    ]);
+    let ex = repo.extract("u/U.java");
+    assert_eq!(calls_from(&ex, "sym:u/U.java::U.cls"), vec!["sym:u/AbstractMap.java::AbstractMap.isEmpty"], "the class level drops the interface: {:?}", ex.edges);
+    assert_eq!(calls_from(&ex, "sym:u/U.java::U.def"), vec!["sym:u/AbstractMap.java::AbstractMap.size"], "over the interface's default: {:?}", ex.edges);
+    assert!(calls_from(&ex, "sym:u/U.java::U.screen").is_empty(), "the activity may declare isEmpty: {:?}", ex.edges);
+    assert!(calls_from(&ex, "sym:u/U.java::U.far").is_empty(), "Lost's superclass may declare isEmpty: {:?}", ex.edges);
+    assert!(calls_from(&ex, "sym:u/U.java::U.two").is_empty(), "two interfaces declare ping: {:?}", ex.edges);
+    assert!(calls_from(&ex, "sym:u/U.java::U.hide").is_empty(), "a private method is not inherited: {:?}", ex.edges);
+    assert!(calls_from(&ex, "sym:u/U.java::U.fixed").is_empty(), "phase 1 binds Up.v over the own varargs one: {:?}", ex.edges);
+    assert!(calls_from(&ex, "sym:u/U.java::U.object").is_empty(), "{:?}", ex.edges);
+}
+
+#[test]
+fn a_receiver_typed_by_another_file_s_subtype_passes_down_only_what_the_subtype_inherits() {
+    let repo = Repo::new(&[
+        ("a/Base.java", "package a;\n\npublic class Base {\n    void help() {}\n    public void open() {}\n}\n"),
+        ("a/Mid.java", "package a;\n\npublic class Mid extends Base {}\n"),
+        ("a/I.java", "package a;\n\npublic interface I {\n    static void stat() {}\n    default void dflt() {}\n}\n"),
+        ("a/Impl.java", "package a;\n\npublic class Impl implements I {}\n"),
+        ("a/Near.java", "package a;\n\nclass Near {\n    void go(Mid m) { m.help(); }\n    void stat(Impl i) { i.stat(); }\n    void own() { I.stat(); }\n    void dflt(Impl i) { i.dflt(); }\n}\n"),
+        ("b/Sub.java", "package b;\n\npublic class Sub extends a.Base {}\n"),
+        ("b/Far.java", "package b;\n\nclass Far {\n    void go(Sub s) { s.help(); }\n    void mid(a.Mid m) { m.help(); }\n    void open(Sub s) { s.open(); }\n}\n"),
+    ]);
+    let near = repo.extract("a/Near.java");
+    assert_eq!(calls_from(&near, "sym:a/Near.java::Near.go"), vec!["sym:a/Base.java::Base.help"], "one package: {:?}", near.edges);
+    assert!(calls_from(&near, "sym:a/Near.java::Near.stat").is_empty(), "an interface's static is not inherited: {:?}", near.edges);
+    assert_eq!(calls_from(&near, "sym:a/Near.java::Near.own"), vec!["sym:a/I.java::I.stat"], "{:?}", near.edges);
+    assert_eq!(calls_from(&near, "sym:a/Near.java::Near.dflt"), vec!["sym:a/I.java::I.dflt"], "{:?}", near.edges);
+    let far = repo.extract("b/Far.java");
+    assert!(calls_from(&far, "sym:b/Far.java::Far.go").is_empty(), "Sub is outside Base's package: {:?}", far.edges);
+    assert!(calls_from(&far, "sym:b/Far.java::Far.mid").is_empty(), "the caller is outside Base's package: {:?}", far.edges);
+    assert_eq!(calls_from(&far, "sym:b/Far.java::Far.open"), vec!["sym:a/Base.java::Base.open"], "{:?}", far.edges);
+}
+
+#[test]
+fn a_receiver_typed_by_another_file_s_enum_or_record_reads_what_they_never_write() {
+    let repo = Repo::new(&[
+        ("a/Desc.java", "package a;\n\npublic interface Desc {\n    default int ordinal() { return -1; }\n    default int rank() { return 1; }\n    default int x() { return -1; }\n}\n"),
+        ("a/E.java", "package a;\n\npublic enum E implements Desc {\n    X\n}\n"),
+        ("a/R.java", "package a;\n\npublic record R(int x) implements Desc {}\n"),
+        ("a/S.java", "package a;\n\npublic record S(int y) implements Desc {}\n"),
+        ("a/U.java", "package a;\n\nclass U {\n    void ord(E e) { e.ordinal(); }\n    void rank(E e) { e.rank(); }\n    void acc(R r) { r.x(); }\n    void dflt(S s) { s.x(); }\n}\n"),
+    ]);
+    let ex = repo.extract("a/U.java");
+    assert!(calls_from(&ex, "sym:a/U.java::U.ord").is_empty(), "Enum.ordinal wins: {:?}", ex.edges);
+    assert_eq!(calls_from(&ex, "sym:a/U.java::U.rank"), vec!["sym:a/Desc.java::Desc.rank"], "Enum declares no rank: {:?}", ex.edges);
+    assert!(calls_from(&ex, "sym:a/U.java::U.acc").is_empty(), "R's accessor wins: {:?}", ex.edges);
+    assert_eq!(calls_from(&ex, "sym:a/U.java::U.dflt"), vec!["sym:a/Desc.java::Desc.x"], "S has no component x: {:?}", ex.edges);
+}
+
+#[test]
+fn a_receiver_whose_supertype_is_a_refused_candidate_beside_a_declaring_one_is_no_edge() {
+    let repo = Repo::new(&[
+        ("shared/Base1.java", "package shared;\n\npublic class Base {\n    public void run(int a) {}\n    void run(String s) {}\n}\n"),
+        ("shared/Base2.java", "package shared;\n\npublic class Base {\n    public void run(int n) {}\n}\n"),
+        ("app/Leaf.java", "package app;\n\nimport shared.Base;\n\npublic class Leaf extends Base {}\n"),
+        ("app/U.java", "package app;\n\nclass U {\n    void go(Leaf l) { l.run(5); }\n}\n"),
+    ]);
+    let ex = repo.extract("app/U.java");
+    assert!(calls_from(&ex, "sym:app/U.java::U.go").is_empty(), "{:?}", ex.edges);
+}

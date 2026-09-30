@@ -4,6 +4,9 @@ pub mod csharp;
 pub mod idrefs;
 pub mod imports;
 pub mod index;
+pub mod java;
+pub mod jvm;
+pub mod kotlin;
 pub mod lang;
 pub mod razor;
 pub mod symbols;
@@ -26,6 +29,8 @@ impl Extractor for CodeExtractor {
             Some(lang::Lang::TypeScript | lang::Lang::Tsx) => self.typescript(rel, text),
             Some(lang::Lang::CSharp) => csharp::extract(self.symbols.resolver(), rel, text),
             Some(lang::Lang::Razor) => razor::extract(self.symbols.resolver(), rel, text),
+            Some(lang::Lang::Kotlin) => kotlin::extract(self.symbols.resolver(), rel, text),
+            Some(lang::Lang::Java) => java::extract(self.symbols.resolver(), rel, text),
             None => {
                 let mut ex = Extraction::default();
                 lang::file_node(rel, &mut ex);

@@ -20,6 +20,160 @@ pub struct Header {
     /// family wrote any reads back with none.
     #[serde(default)]
     pub directives: BTreeSet<String>,
+    /// What a family whose names nest declares below the top level. Resolution confirms a nested
+    /// name against it, so it sits in the header for `widen` to see it move; empty for every other
+    /// family, and for a header recorded before it existed.
+    #[serde(default, skip_serializing_if = "Nested::is_empty")]
+    pub nested: Nested,
+    /// Top-level names every declaration of which in this file is file-private, as Kotlin's
+    /// `private` is: the index leaves them out, so no other file resolves to them. Empty for
+    /// every family without file-private top-level names.
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub private: BTreeSet<String>,
+}
+
+/// Every type path (`Outer`, `Outer.Inner`, top-level ones included) and every member path
+/// (`Outer.run`) one file declares where another file can reach it.
+#[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Nested {
+    pub types: BTreeSet<String>,
+    pub members: BTreeSet<String>,
+    /// Member paths only a field declares, which no Java call binds. Empty for a family that reads
+    /// its members as one namespace.
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub values: BTreeSet<String>,
+    /// Per method path, the argument counts each of its declarations takes: overloads share a
+    /// path, and a call binds only a declaration that admits its count.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub arities: BTreeMap<String, Vec<Arity>>,
+    /// How the file's types reach their supertypes; `None` for a family that records none, and
+    /// for a file that declares no type.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub supers: Option<Supers>,
+    /// Java member paths some declaration of which a subtype may not inherit; one absent here
+    /// every subtype inherits.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub reach: BTreeMap<String, Reach>,
+}
+
+impl Nested {
+    fn is_empty(&self) -> bool {
+        self.types.is_empty() && self.members.is_empty() && self.values.is_empty() && self.arities.is_empty() && self.supers.is_none() && self.reach.is_empty()
+    }
+}
+
+/// A file's supertypes as it writes them, with the names it resolves them through, so a subtype
+/// in another file can read past a supertype that does not declare a name. In the header, a
+/// supertype or an import that moves widens as any other declaration does.
+#[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Supers {
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub package: String,
+    /// Per type path, its supertypes as written; a type absent here writes none.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub written: BTreeMap<String, Vec<String>>,
+    /// Types with a supertype the file never writes, such as an enum's, which may hold any name.
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub implicit: BTreeSet<String>,
+    /// Per type path, the supertype it extends as a class, when the file writes which one that is.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub classes: BTreeMap<String, String>,
+    /// Enums, whose implicit `Enum` superclass declares names an interface's never beat.
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub enums: BTreeSet<String>,
+    /// Kotlin data classes, whose `copy` and `componentN` the file never writes.
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub data: BTreeSet<String>,
+    /// Per Java record path, its components, each with an accessor the file need not write.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub components: BTreeMap<String, BTreeSet<String>>,
+    /// The file's explicit imports, local name to every qualified name bound to it. Recorded only
+    /// when some type writes a supertype, since only resolving one reads them.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub singles: BTreeMap<String, BTreeSet<String>>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub stars: Vec<String>,
+}
+
+/// Which subtypes inherit a member, across the declarations that share its id. Java inherits
+/// neither an interface's `static` method nor, outside its package, a package-private member.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Reach {
+    /// Some declaration every subtype inherits.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub always: bool,
+    /// Some package-private declaration, which only a subtype in its package inherits.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub package: bool,
+    /// Some declaration no subtype inherits.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub never: bool,
+}
+
+/// How many arguments one method declaration takes: `min` without its defaults, `max` with every
+/// parameter, and any number past `min` when its last parameter is varargs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+pub struct Arity {
+    pub min: usize,
+    pub max: usize,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub varargs: bool,
+    /// A Kotlin `override` or `actual`, which takes its defaults from the declaration it
+    /// implements and may write none: fewer arguments than `min` may still bind it.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub inherits: bool,
+    /// A Kotlin `private` overload beside a public one, which takes no call from outside its type.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub private: bool,
+}
+
+/// The arguments a call passes. With a spread (`*arr`) their number is unknown, and only a
+/// varargs parameter takes one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Call {
+    pub args: usize,
+    pub spread: bool,
+}
+
+/// Whether a declaration takes a call's arguments.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Admission {
+    Yes,
+    No,
+    /// It may, through defaults this file does not see: neither bind it nor look past it.
+    Unsure,
+}
+
+impl Arity {
+    pub fn admission(&self, call: Call) -> Admission {
+        let under_max = self.varargs || call.args <= self.max;
+        if call.spread {
+            if self.varargs { Admission::Yes } else { Admission::No }
+        } else if call.args >= self.min && under_max {
+            Admission::Yes
+        } else if self.inherits && under_max {
+            Admission::Unsure
+        } else {
+            Admission::No
+        }
+    }
+}
+
+/// Whether a declaration among `arities` takes the call. A member with none recorded — a type, a
+/// property — and a call whose count is unknown admit anything.
+pub fn admission(arities: Option<&Vec<Arity>>, call: Option<Call>) -> Admission {
+    let (Some(all), Some(call)) = (arities, call) else { return Admission::Yes };
+    let each: Vec<Admission> = all.iter().map(|a| a.admission(call)).collect();
+    [Admission::Yes, Admission::Unsure].into_iter().find(|a| each.contains(a)).unwrap_or(Admission::No)
+}
+
+/// Whether a declaration among `arities` without varargs takes the call, as Java's first phase
+/// of overload resolution, which never expands varargs, reads it.
+pub fn fixed(arities: Option<&Vec<Arity>>, call: Option<Call>) -> bool {
+    match (arities, call) {
+        (Some(all), Some(call)) => all.iter().any(|a| !a.varargs && a.admission(call) == Admission::Yes),
+        _ => false,
+    }
 }
 
 /// Qualified name -> every declaring file. A name several files declare — an `expect` and its
@@ -27,6 +181,10 @@ pub struct Header {
 #[derive(Debug, Default)]
 pub struct QualifiedIndex {
     by_name: BTreeMap<String, BTreeSet<String>>,
+    /// Per file, the type paths and member paths it declares below the top level, for a family
+    /// whose names nest. The qualified names stop at the top level, so without these a name like
+    /// `a.b.Outer.Inner` could only be guessed to live in `Outer`'s file.
+    nested: BTreeMap<String, Nested>,
 }
 
 impl QualifiedIndex {
@@ -34,9 +192,51 @@ impl QualifiedIndex {
         self.by_name.entry(qualified.to_string()).or_default().insert(rel.to_string());
     }
 
+    pub fn insert_nested(&mut self, rel: &str, nested: Nested) {
+        self.nested.insert(rel.to_string(), nested);
+    }
+
+    /// Whether `rel` declares a type at `path`.
+    pub fn is_type(&self, rel: &str, path: &str) -> bool {
+        self.nested.get(rel).is_some_and(|n| n.types.contains(path))
+    }
+
+    /// Whether `rel` declares a type or a member at `path`.
+    pub fn declares(&self, rel: &str, path: &str) -> bool {
+        self.nested.get(rel).is_some_and(|n| n.types.contains(path) || n.members.contains(path))
+    }
+
+    /// Whether `rel` declares a member at `path` that is no type.
+    pub fn declares_member(&self, rel: &str, path: &str) -> bool {
+        self.nested.get(rel).is_some_and(|n| n.members.contains(path) && !n.types.contains(path))
+    }
+
+    /// Whether `rel` declares a member at `path` a call can bind: no type, and no field alone.
+    pub fn declares_method(&self, rel: &str, path: &str) -> bool {
+        self.declares_member(rel, path) && self.nested.get(rel).is_some_and(|n| !n.values.contains(path))
+    }
+
+    /// The types `rel` declares, by path.
+    pub fn types(&self, rel: &str) -> Option<&BTreeSet<String>> {
+        self.nested.get(rel).map(|n| &n.types)
+    }
+
+    /// Which subtypes inherit the member `rel` declares at `path`; `None` when every one does.
+    pub fn reach(&self, rel: &str, path: &str) -> Option<Reach> {
+        self.nested.get(rel).and_then(|n| n.reach.get(path)).copied()
+    }
+
+    /// How `rel`'s types reach their supertypes, when its family records it.
+    pub fn supers(&self, rel: &str) -> Option<&Supers> {
+        self.nested.get(rel).and_then(|n| n.supers.as_ref())
+    }
+
+    /// The argument counts of the method `rel` declares at `path`.
+    pub fn arities(&self, rel: &str, path: &str) -> Option<&Vec<Arity>> {
+        self.nested.get(rel).and_then(|n| n.arities.get(path))
+    }
+
     /// Every file declaring `qualified`, sorted.
-    // Read by the name-indexed families' resolution, which their plans add.
-    #[allow(dead_code)]
     pub fn files(&self, qualified: &str) -> Vec<&str> {
         self.by_name.get(qualified).map(|f| f.iter().map(String::as_str).collect()).unwrap_or_default()
     }
@@ -68,8 +268,15 @@ pub fn header_for(lang: Lang, rel: &str, source: &str) -> Option<Header> {
             #[allow(unreachable_patterns)]
             _ => unreachable!("{lang:?} has no DotNet header arm: its plan has not landed"),
         },
+        Family::Jvm => match lang {
+            Lang::Kotlin => Some(crate::code::kotlin::header(source)),
+            Lang::Java => Some(crate::code::java::header(source)),
+            // Reached only by a variant `of` cannot return yet for this family; see `Lang::family`.
+            #[allow(unreachable_patterns)]
+            _ => unreachable!("{lang:?} has no JVM header arm: its plan has not landed"),
+        },
         // The name-indexed families. Each family plan replaces its own name here with its arm.
-        Family::Jvm | Family::Sql | Family::GraphQl => None,
+        Family::Sql | Family::GraphQl => None,
     }
 }
 
@@ -109,14 +316,22 @@ impl Headers {
 /// resolve a name to another file. A body-only edit leaves the header as it was and widens nothing.
 pub fn widen(repo: &Path, stale: &[String], removed: &[String], known: &mut Headers, all_rels: &[String]) -> Vec<String> {
     let family_of = |rel: &str| Lang::of(rel).map(Lang::family).filter(|f| *f != Family::TypeScript);
-    // TypeScript resolves through tsconfig and package.json and has no header, so its sources are
-    // not opened here: a TypeScript-only update pays nothing for this rule.
-    let header_of = |rel: &str| {
-        let lang = Lang::of(rel).filter(|l| l.family() != Family::TypeScript)?;
-        let source = std::fs::read_to_string(repo.join(rel)).ok()?;
-        header_for(lang, rel, &source)
-    };
-    widen_by(stale, removed, known, all_rels, &family_of, &header_of)
+    widen_by(stale, removed, known, all_rels, &family_of, &|rel| read_header(repo, rel))
+}
+
+/// TypeScript resolves through tsconfig and package.json and has no header, so its sources are
+/// not opened here: a TypeScript-only update pays nothing for L3.
+fn read_header(repo: &Path, rel: &str) -> Option<Header> {
+    let lang = Lang::of(rel).filter(|l| l.family() != Family::TypeScript)?;
+    let source = std::fs::read_to_string(repo.join(rel)).ok()?;
+    header_for(lang, rel, &source)
+}
+
+/// Whether any of `changed` now reads to a header other than the one recorded — the case where
+/// `widen` re-reads a family, and where a resolver built before the edit would resolve those
+/// re-reads against declarations the file no longer holds, or without ones it gained.
+pub fn headers_move(repo: &Path, known: &Headers, changed: &[String]) -> bool {
+    changed.iter().any(|rel| read_header(repo, rel).as_ref() != known.0.get(rel))
 }
 
 fn widen_by(
@@ -273,6 +488,13 @@ mod tests {
     fn typescript_has_no_header() {
         assert_eq!(header_for(Lang::TypeScript, "a.ts", "export class A {}\n"), None);
         assert_eq!(header_for(Lang::Tsx, "a.tsx", "export const A = () => <p/>;\n"), None);
+    }
+
+    #[test]
+    fn a_header_recorded_before_nested_paths_existed_reads_back_and_one_without_them_writes_none() {
+        let old: Header = serde_json::from_str(r#"{"scope":["a"],"top":["B"]}"#).unwrap();
+        assert_eq!(old, h(&["a"], &["B"]));
+        assert_eq!(serde_json::to_string(&old).unwrap(), r#"{"scope":["a"],"top":["B"],"directives":[]}"#);
     }
 
     #[test]

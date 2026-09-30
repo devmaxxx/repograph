@@ -36,6 +36,8 @@ impl Lang {
             Some("cs") => Some(Lang::CSharp),
             // A view (`.cshtml`) is Razor too: same directives, same `@functions`, one reader.
             Some("razor" | "cshtml") => Some(Lang::Razor),
+            Some("kt") => Some(Lang::Kotlin),
+            Some("java") => Some(Lang::Java),
             _ => None,
         }
     }
@@ -47,6 +49,8 @@ impl Lang {
             Lang::Tsx => Some(Language::new(tree_sitter_typescript::LANGUAGE_TSX)),
             Lang::CSharp => Some(Language::new(tree_sitter_c_sharp::LANGUAGE)),
             Lang::Razor => None,
+            Lang::Kotlin => Some(Language::new(tree_sitter_kotlin_sg::LANGUAGE)),
+            Lang::Java => Some(Language::new(tree_sitter_java::LANGUAGE)),
             // A language whose family plan has not landed has no crate in this build, and `of`
             // never returns it. Once every plan has landed the arm is unreachable, and harmless.
             #[allow(unreachable_patterns)]
@@ -64,6 +68,7 @@ impl Lang {
         match self {
             Lang::TypeScript | Lang::Tsx => Family::TypeScript,
             Lang::CSharp | Lang::Razor => Family::DotNet,
+            Lang::Kotlin | Lang::Java => Family::Jvm,
             // Reached only by a variant `of` cannot return yet; see `grammar`.
             #[allow(unreachable_patterns)]
             other => unreachable!("{other:?} has no family arm: its plan has not landed"),

@@ -452,7 +452,14 @@ impl<'a> Watcher<'a> {
         // a file added since. A refresh that moves a path, or follows a store another process wrote,
         // walks again; a body-only edit, the common poll, pays nothing.
         let moved_path = !diff.removed.is_empty() || diff.changed.iter().any(|e| !self.manifest.files.contains_key(&e.rel));
-        if moved_path || self.resolver_stale {
+        // A body edit that moves a header is the other case: the index holds what each file
+        // declares, so a nested type added or removed must reach the resolver before the family
+        // is re-read against it.
+        let moved_header = || -> anyhow::Result<bool> {
+            let code: Vec<String> = diff.changed.iter().filter(|e| e.kind == walk::FileKind::Code).map(|e| e.rel.clone()).collect();
+            Ok(code::index::headers_move(self.repo, &code::index::Headers::load(&self.store)?, &code))
+        };
+        if moved_path || self.resolver_stale || moved_header()? {
             self.ex = extractors(self.repo, self.cfg)?;
             self.resolver_stale = false;
         }
@@ -1284,6 +1291,25 @@ mod tests {
         assert_eq!((r.changed, r.removed), (1, 0));
         assert!(store::Store::new(repo).load().unwrap().0.nodes.contains_key("FR-PAY-23"));
         assert!(matches!(w.poll(1).unwrap(), Polled::Quiet));
+    }
+
+    #[test]
+    fn a_watch_poll_resolves_against_a_nested_type_the_edit_added() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = dir.path();
+        let cfg = config::Config { code_globs: vec!["**/*.java".into()], ..config::Config::default() };
+        let write = |rel: &str, text: &str| {
+            std::fs::create_dir_all(repo.join(rel).parent().unwrap()).unwrap();
+            std::fs::write(repo.join(rel), text).unwrap();
+        };
+        write("shop/billing/Invoice.java", "package shop.billing;\n\npublic class Invoice {}\n");
+        write("shop/orders/Use.java", "package shop.orders;\n\nimport shop.billing.Invoice.Line;\n\nclass Use extends Line {}\n");
+        built(repo, &cfg);
+        let mut w = Watcher::open(repo, &cfg).unwrap();
+        write("shop/billing/Invoice.java", "package shop.billing;\n\npublic class Invoice {\n    public static class Line {}\n}\n");
+        assert!(matches!(w.poll(1).unwrap(), Polled::Refreshed(_)));
+        let graph = store::Store::new(repo).load().unwrap().0;
+        assert!(graph.edges.iter().any(|e| e.source == "sym:shop/orders/Use.java::Use" && e.target == "sym:shop/billing/Invoice.java::Invoice.Line"), "{:?}", graph.edges);
     }
 
     // Under a batch a lone edit waits, but only for the three polls the cap allows — and the

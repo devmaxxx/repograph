@@ -100,16 +100,19 @@ fn export_target(v: &serde_json::Value) -> Option<String> {
 /// Every top-level name of a header under each scope it names. The header does not pair a name
 /// with its scope, so a file holding two namespaces lists each name under both: the index names
 /// every candidate file, a superset. `directives` stay out: they name what a file reads from, not
-/// what it declares.
+/// what it declares, and so do file-private names, which no other file can reach.
 fn index_header(indexes: &mut BTreeMap<Family, QualifiedIndex>, family: Family, rel: &str, header: &Header) {
     let index = indexes.entry(family).or_default();
-    for name in &header.top {
+    for name in header.top.difference(&header.private) {
         if header.scope.is_empty() {
             index.insert(name, rel);
         }
         for scope in &header.scope {
             index.insert(&format!("{scope}.{name}"), rel);
         }
+    }
+    if header.nested != Default::default() {
+        index.insert_nested(rel, header.nested.clone());
     }
 }
 
@@ -218,8 +221,6 @@ impl Resolver {
     }
 
     /// The index of a name-indexed family the globs reach; `None` for every other family.
-    // Read by the name-indexed families' resolution, which their plans add.
-    #[allow(dead_code)]
     pub fn index(&self, family: Family) -> Option<&QualifiedIndex> {
         self.indexes.get(&family)
     }
@@ -546,7 +547,7 @@ mod tests {
     fn a_directive_never_enters_the_index() {
         use crate::code::index::Header;
         let mut indexes = BTreeMap::new();
-        let header = Header { scope: vec!["Shop.Orders".into()], top: ["Order".to_string()].into(), directives: ["Shop.Legacy".to_string()].into() };
+        let header = Header { scope: vec!["Shop.Orders".into()], top: ["Order".to_string()].into(), directives: ["Shop.Legacy".to_string()].into(), ..Default::default() };
         index_header(&mut indexes, Family::DotNet, "src/Order.cs", &header);
         let idx = &indexes[&Family::DotNet];
         assert_eq!(idx.files("Shop.Orders.Order"), ["src/Order.cs"]);
