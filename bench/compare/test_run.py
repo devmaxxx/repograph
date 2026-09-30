@@ -14,6 +14,8 @@ import truth as T
 from run import (
     FAMILIES_CACHE,
     Gitnexus,
+    Graphify,
+    Repograph,
     gitnexus_failure_reason,
     gitnexus_looks_like_a_result,
     load_id_families,
@@ -296,6 +298,36 @@ class GitnexusUnansweredCallsDoNotScoreAsHits(unittest.TestCase):
         with mock.patch("run.subprocess.run", return_value=fake_proc(0, payload)):
             score_blast(tool, cases=[self._case(), self._case()], truth={})
         self.assertEqual(tool.failed_calls, 2)
+
+
+class AskedByStoreId(unittest.TestCase):
+    """A case carrying repograph's store ids asks repograph by them, and every other tool by name."""
+
+    CASES = [
+        {"kind": "impact", "target": "Foo", "id": "sym:Shop/Foo.cs::Foo", "tier": "narrow"},
+        {"kind": "trace", "from": "Foo", "to": "Bar", "from_id": "sym:Shop/Foo.cs::Foo",
+         "to_id": "sym:Shop/Bar.cs::Bar", "expect": "path", "via": []},
+        {"kind": "impact", "target": "Baz", "tier": "narrow"},
+    ]
+    TRUTH = {"impact": {"Foo": {"refs": ["Shop/Use.cs"]}, "Baz": {"refs": ["Shop/Use.cs"]}}}
+
+    def argvs(self, tool) -> list[list[str]]:
+        with mock.patch("run.subprocess.run", return_value=fake_proc(0, "Shop/Use.cs Bar")) as call:
+            score_blast(tool, cases=self.CASES, truth=self.TRUTH)
+        return [c.args[0] for c in call.call_args_list]
+
+    def test_repograph_is_asked_by_id_and_by_name_where_a_case_has_no_id(self):
+        opts = argparse.Namespace(repograph="repograph", timeout=180, strip_prefix=[])
+        argvs = self.argvs(Repograph(Path("/tmp"), opts))
+        self.assertIn("sym:Shop/Foo.cs::Foo", argvs[0])
+        self.assertEqual(argvs[1][-2:], ["sym:Shop/Foo.cs::Foo", "sym:Shop/Bar.cs::Bar"])
+        self.assertIn("Baz", argvs[2])
+
+    def test_another_tool_keeps_the_bare_name(self):
+        opts = argparse.Namespace(graphify_graph="", timeout=180, strip_prefix=[])
+        argvs = self.argvs(Graphify(Path("/tmp"), opts))
+        self.assertIn("Foo", argvs[0])
+        self.assertFalse(any(a.startswith("sym:") for argv in argvs for a in argv), argvs)
 
 
 class SpellsSymbol(unittest.TestCase):

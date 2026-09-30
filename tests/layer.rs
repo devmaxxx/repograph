@@ -15,14 +15,14 @@ fn write(repo: &Path, rel: &str, text: &str) {
 fn a_globbed_file_no_grammar_reads_is_named_once_on_stderr() {
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path();
-    write(repo, "repograph.toml", "code_globs = [\"**/*.ts\", \"**/*.cs\"]\n");
+    write(repo, "repograph.toml", "code_globs = [\"**/*.ts\", \"**/*.log\"]\n");
     write(repo, "web/a.ts", "export function boot() {}\n");
-    write(repo, "svc/Program.cs", "public class Program {}\n");
-    write(repo, "svc/Order.cs", "public class Order {}\n");
+    write(repo, "svc/boot.log", "boot ok\n");
+    write(repo, "svc/stop.log", "stop ok\n");
     let out = common::run(repo, &["build"]);
     let err = String::from_utf8_lossy(&out.stderr);
     assert!(out.status.success(), "{err}");
-    assert_eq!(err.matches("code: no grammar reads 2 .cs — indexed as files only").count(), 1, "{err}");
+    assert_eq!(err.matches("code: no grammar reads 2 .log — indexed as files only").count(), 1, "{err}");
 }
 
 /// A family's readings take its language in before the defaults do, and write no `repograph.toml`

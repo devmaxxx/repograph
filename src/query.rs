@@ -320,12 +320,26 @@ fn by_id<'a>(graph: &'a Graph, word: &str) -> Option<&'a crate::model::Node> {
         .or_else(|| graph.nodes.values().filter(|n| folded(&n.id)).min_by(|a, b| a.id.cmp(&b.id)))
 }
 
-pub(crate) fn resolve<'a>(graph: &'a Graph, needle: &str) -> Option<&'a crate::model::Node> {
-    candidates(graph, needle).into_iter().next()
+/// What a name typed on the command line stands for. A bare name several symbols share is not
+/// narrowed to one of them: in a mixed-language repository a C# `Foo` and a TypeScript `Foo` both
+/// end in `::Foo`, and whichever sorted first would answer for the other without a word.
+pub(crate) enum Resolved<'a> {
+    None,
+    One(&'a crate::model::Node),
+    Several(Vec<&'a crate::model::Node>),
 }
 
-/// Every node a name could mean, best first: the id (`by_id`), else ids ending in `::name`, else
-/// labels equal to it ignoring case.
+pub(crate) fn resolve<'a>(graph: &'a Graph, needle: &str) -> Resolved<'a> {
+    let c = candidates(graph, needle);
+    match c.len() {
+        0 => Resolved::None,
+        1 => Resolved::One(c[0]),
+        _ => Resolved::Several(c),
+    }
+}
+
+/// Every node a name could mean, sorted by id: the id (`by_id`), else ids ending in `::name`,
+/// else labels equal to it ignoring case.
 fn candidates<'a>(graph: &'a Graph, needle: &str) -> Vec<&'a crate::model::Node> {
     if let Some(n) = by_id(graph, needle) { return vec![n]; }
     let needle = token(needle);
@@ -341,14 +355,21 @@ fn candidates<'a>(graph: &'a Graph, needle: &str) -> Vec<&'a crate::model::Node>
 
 /// `resolve` for the questions only code can answer — `impact` and `trace`. A PRD entity and the
 /// table or class it became share a label, and by id the entity sorts first; it has no callers,
-/// so taking it answered LOW for a name that code calls. The other candidates come back with the
-/// pick, so a caller can say which name it did not take. Production code comes before a test for
+/// so taking it answered LOW for a name that code calls. Production code comes before a test for
 /// the same reason `ask` puts it first: `routes` is the panel's route table, not a spec's fixture.
-pub(crate) fn resolve_code<'a>(graph: &'a Graph, needle: &str) -> Option<(&'a crate::model::Node, Vec<&'a crate::model::Node>)> {
+/// That ranking only breaks a tie between kinds of candidate: two that rank alike, such as a C#
+/// and a TypeScript class of one name, are refused the way `resolve_one` refuses them, since the
+/// id order would pick one for the other. The candidates passed over come back with the pick, so a
+/// caller can say which names it did not take.
+pub(crate) fn resolve_code<'a>(graph: &'a Graph, needle: &str) -> anyhow::Result<(&'a crate::model::Node, Vec<&'a crate::model::Node>)> {
+    let rank = |n: &crate::model::Node| (!n.is_code(), is_test(&n.id));
     let mut c = candidates(graph, needle);
-    c.sort_by_key(|n| (!n.is_code(), is_test(&n.id)));
+    c.sort_by_key(|n| rank(n));
+    let Some(&first) = c.first() else { anyhow::bail!("no node matches {needle}") };
+    let tied = c.iter().take_while(|n| rank(n) == rank(first)).count();
+    if tied > 1 { return Err(ambiguous(needle, &c[..tied])) }
     let mut it = c.into_iter();
-    Some((it.next()?, it.collect()))
+    Ok((it.next().expect("a first candidate"), it.collect()))
 }
 
 /// The stderr line naming what `resolve_code` passed over: three of them and a count, since a
@@ -372,8 +393,30 @@ fn edges_of<'a>(graph: &'a Graph, id: &str) -> Vec<&'a crate::model::Edge> {
     edges
 }
 
-pub fn explain(graph: &Graph, needle: &str) -> Option<String> {
-    let n = resolve(graph, needle)?;
+/// An ambiguous name, listing every candidate so the next call can pass the id.
+fn ambiguous(needle: &str, c: &[&crate::model::Node]) -> anyhow::Error {
+    // A common short name in a large repository can match far more than a terminal scrollback
+    // (or a script's captured stderr) should carry, so the listing itself is capped; the count
+    // up front already says how many there are.
+    const MAX_LISTED: usize = 20;
+    let mut msg = format!("{needle} matches {} nodes; name one by its id:", c.len());
+    for n in c.iter().take(MAX_LISTED) { msg.push_str(&format!("\n  {}  {}:{}", n.id, n.file, n.line)); }
+    if c.len() > MAX_LISTED { msg.push_str(&format!("\n  … and {} more", c.len() - MAX_LISTED)); }
+    anyhow::anyhow!(msg)
+}
+
+/// `resolve` for a command that needs exactly one node. Both misses are the same failure — the
+/// name did not pick out a node — so both take the error path and exit 1.
+pub(crate) fn resolve_one<'a>(graph: &'a Graph, needle: &str) -> anyhow::Result<&'a crate::model::Node> {
+    match resolve(graph, needle) {
+        Resolved::One(n) => Ok(n),
+        Resolved::None => anyhow::bail!("no node matches {needle}"),
+        Resolved::Several(c) => Err(ambiguous(needle, &c)),
+    }
+}
+
+pub fn explain(graph: &Graph, needle: &str) -> anyhow::Result<String> {
+    let n = resolve_one(graph, needle)?;
     let mut out = format!("{}  {}:{}  {:?}  {}\n", n.id, n.file, n.line, n.kind, headline(&n.label));
     if let Some(c) = &n.community { out.push_str(&format!("  community: {c}\n")); }
     for e in edges_of(graph, &n.id) {
@@ -382,13 +425,13 @@ pub fn explain(graph: &Graph, needle: &str) -> Option<String> {
         let kind = crate::impact::label(e.kind, e.passes());
         out.push_str(&format!("  {kind} {arrow} {other}{ctx}\n"));
     }
-    Some(out)
+    Ok(out)
 }
 
 /// `explain` for a reader that would rather not parse prose: the node, then one entry per edge
 /// with the direction already resolved, so a caller never has to know which end of an edge the
 /// node was. A view struct rather than the graph's own types — a store layout is not an interface.
-pub fn explain_json(graph: &Graph, needle: &str) -> Option<String> {
+pub fn explain_json(graph: &Graph, needle: &str) -> anyhow::Result<String> {
     #[derive(serde::Serialize)]
     struct Edge<'a> { kind: String, dir: &'a str, other: &'a str, context: &'a str }
     #[derive(serde::Serialize)]
@@ -396,7 +439,7 @@ pub fn explain_json(graph: &Graph, needle: &str) -> Option<String> {
         id: &'a str, kind: String, label: &'a str, file: &'a str, line: u32,
         community: Option<&'a str>, edges: Vec<Edge<'a>>,
     }
-    let n = resolve(graph, needle)?;
+    let n = resolve_one(graph, needle)?;
     let edges = edges_of(graph, &n.id);
     let out = Out {
         id: &n.id,
@@ -410,7 +453,7 @@ pub fn explain_json(graph: &Graph, needle: &str) -> Option<String> {
             Edge { kind: format!("{:?}", e.kind), dir, other, context: &e.context }
         }).collect(),
     };
-    serde_json::to_string(&out).ok()
+    Ok(serde_json::to_string(&out)?)
 }
 
 /// `verify`'s own numbers, the same partitions under names instead of indentation.
@@ -653,7 +696,7 @@ mod tests {
         e.node(NodeKind::Entity, "entity:CancellationPolicy", "CancellationPolicy", "", "docs/06.md", 385);
         e.node(NodeKind::Symbol, "sym:db/scheduling.ts::cancellationPolicy", "cancellationPolicy", "", "db/scheduling.ts", 186);
         g.apply(e);
-        assert_eq!(resolve(&g, "CancellationPolicy").unwrap().id, "entity:CancellationPolicy", "explain keeps the document");
+        assert!(explain(&g, "CancellationPolicy").is_err(), "explain names no one of the two");
         let (pick, rest) = resolve_code(&g, "CancellationPolicy").unwrap();
         assert_eq!(pick.id, "sym:db/scheduling.ts::cancellationPolicy");
         assert_eq!(rest.iter().map(|n| n.id.as_str()).collect::<Vec<_>>(), ["entity:CancellationPolicy"]);
@@ -686,7 +729,8 @@ mod tests {
             e.node(NodeKind::Symbol, &format!("sym:{f}::DAY"), "DAY", "", f, 1);
         }
         g.apply(e);
-        assert_eq!(resolve_code(&g, "DAY").unwrap().0.id, "sym:apps/panel/src/calendar.ts::DAY");
+        let msg = resolve_code(&g, "DAY").unwrap_err().to_string();
+        assert!(msg.starts_with("DAY matches 2 nodes") && msg.contains("apps/panel/src/calendar.ts") && msg.contains("tools/runner.mjs"), "two production symbols tie: {msg}");
         g.nodes.remove("sym:apps/panel/src/calendar.ts::DAY");
         assert_eq!(resolve_code(&g, "DAY").unwrap().0.id, "sym:tools/runner.mjs::DAY");
         let a = ask(&g, &lex(&g, &Questions::default()), None, None, &["DAY".to_string()], &opts());
@@ -1019,13 +1063,62 @@ mod tests {
         assert!(a.seeds.is_empty());
     }
 
+    fn namesakes_graph() -> Graph {
+        let mut g = Graph::default();
+        let mut e = Extraction::default();
+        e.node(NodeKind::Symbol, "sym:Shop/Foo.cs::Foo", "Foo", "", "Shop/Foo.cs", 3);
+        e.node(NodeKind::Symbol, "sym:web/foo.ts::Foo", "Foo", "", "web/foo.ts", 7);
+        e.node(NodeKind::Symbol, "sym:web/foo.ts::Bar", "Bar", "", "web/foo.ts", 9);
+        g.apply(e);
+        g
+    }
+
+    #[test]
+    fn a_name_nothing_ends_in_resolves_to_none() {
+        let g = namesakes_graph();
+        assert!(matches!(resolve(&g, "Baz"), Resolved::None));
+        assert_eq!(resolve_one(&g, "Baz").unwrap_err().to_string(), "no node matches Baz");
+    }
+
+    #[test]
+    fn a_name_one_symbol_ends_in_resolves_to_it_as_does_its_id() {
+        let g = namesakes_graph();
+        for needle in ["Bar", "sym:web/foo.ts::Bar", "bar"] {
+            let Resolved::One(n) = resolve(&g, needle) else { panic!("{needle} resolved to one node") };
+            assert_eq!(n.id, "sym:web/foo.ts::Bar");
+        }
+        assert_eq!(resolve_one(&g, "sym:Shop/Foo.cs::Foo").unwrap().id, "sym:Shop/Foo.cs::Foo");
+    }
+
+    #[test]
+    fn a_name_several_symbols_end_in_lists_every_one_and_picks_none() {
+        let g = namesakes_graph();
+        let Resolved::Several(c) = resolve(&g, "Foo") else { panic!("Foo is ambiguous") };
+        let ids: Vec<&str> = c.iter().map(|n| n.id.as_str()).collect();
+        assert_eq!(ids, ["sym:Shop/Foo.cs::Foo", "sym:web/foo.ts::Foo"]);
+        let msg = resolve_one(&g, "Foo").unwrap_err().to_string();
+        assert!(msg.contains("sym:Shop/Foo.cs::Foo  Shop/Foo.cs:3"), "{msg}");
+        assert!(msg.contains("sym:web/foo.ts::Foo  web/foo.ts:7"), "{msg}");
+        assert!(explain(&g, "Foo").is_err() && explain_json(&g, "Foo").is_err());
+    }
+
+    #[test]
+    fn a_case_insensitive_label_shared_by_two_nodes_is_ambiguous() {
+        let mut g = Graph::default();
+        let mut e = Extraction::default();
+        e.node(NodeKind::Entity, "entity:Ledger", "Ledger", "", "docs/a.md", 1);
+        e.node(NodeKind::Entity, "entity:ledger-v2", "ledger", "", "docs/b.md", 1);
+        g.apply(e);
+        assert!(matches!(resolve(&g, "Ledger"), Resolved::Several(ref c) if c.len() == 2));
+    }
+
     #[test]
     fn explain_groups_edges_by_kind() {
         let g = graph();
         let out = explain(&g, "CancellationPolicy").unwrap();
         assert!(out.starts_with("entity:CancellationPolicy  docs/06.md:385"));
         assert!(out.contains("References ← FR-PAY-22  [title]"));
-        assert!(explain(&g, "nope").is_none());
+        assert!(explain(&g, "nope").is_err());
     }
 
     #[test]
@@ -1156,7 +1249,7 @@ mod tests {
             let got = first(q);
             assert_eq!(&got[..want.len().min(got.len())], want, "{q}: {got:?}");
         }
-        assert_eq!(resolve(&g, "fr-cal-40,").unwrap().id, "FR-CAL-40", "explain reads a name the way ask does");
+        assert_eq!(resolve_one(&g, "fr-cal-40,").unwrap().id, "FR-CAL-40", "explain reads a name the way ask does");
         assert_eq!(resolve_code(&g, "(asGrosze)").unwrap().0.id, "sym:packages/contracts/src/money.ts::asGrosze");
     }
 
@@ -1233,9 +1326,9 @@ mod tests {
     }
 
     #[test]
-    fn explain_of_an_unknown_node_is_none() {
+    fn explain_of_an_unknown_node_is_an_error() {
         let g = graph();
-        assert!(explain(&g, "not-a-real-id-or-label").is_none());
+        assert!(explain(&g, "not-a-real-id-or-label").is_err());
     }
 
     #[test]

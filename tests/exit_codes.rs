@@ -97,6 +97,36 @@ fn a_trace_with_no_path_is_a_verdict_and_an_unknown_symbol_is_a_failure() {
     assert_eq!(code(&unknown_to), Some(1), "nothing was traced: {}", err(&unknown_to));
 }
 
+/// A C# `Foo` and a TypeScript `Foo` in one repository: the bare name picks out neither, which is
+/// the same failure as a name that picks out nothing — exit 1, never a verdict — and the answer is
+/// both ids with where they are written, so the next call can name one.
+#[test]
+fn a_bare_name_two_languages_share_lists_both_and_is_a_failure() {
+    let _g = env_lock();
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("repograph.toml"), "code_globs = [\"**/*.cs\", \"**/*.ts\"]\n").unwrap();
+    std::fs::create_dir_all(dir.path().join("Shop")).unwrap();
+    std::fs::create_dir_all(dir.path().join("web")).unwrap();
+    std::fs::write(dir.path().join("Shop/Foo.cs"), "namespace Shop;\npublic class Foo\n{\n}\n").unwrap();
+    std::fs::write(dir.path().join("web/foo.ts"), "export class Foo {}\n").unwrap();
+    let built = run(dir.path(), &["build"]);
+    assert!(built.status.success(), "the fixture repository built: {}", err(&built));
+
+    let impact = run(dir.path(), &["impact", "Foo"]);
+    assert_eq!(code(&impact), Some(1), "no node was chosen: {}", err(&impact));
+    assert!(is_anyhow_error(&err(&impact)), "a failure, not a verdict: {}", err(&impact));
+    assert!(err(&impact).contains("sym:Shop/Foo.cs::Foo  Shop/Foo.cs:2"), "{}", err(&impact));
+    assert!(err(&impact).contains("sym:web/foo.ts::Foo  web/foo.ts:1"), "{}", err(&impact));
+    assert!(out(&impact).is_empty(), "nothing was answered: {}", out(&impact));
+
+    let named = run(dir.path(), &["impact", "sym:Shop/Foo.cs::Foo"]);
+    assert_eq!(code(&named), Some(0), "an id names one node: {}", err(&named));
+    for args in [["trace", "Foo", "sym:web/foo.ts::Foo"], ["explain", "Foo", "--json"]] {
+        let r = run(dir.path(), &args);
+        assert_eq!(code(&r), Some(1), "{args:?}: {}", err(&r));
+    }
+}
+
 #[test]
 fn a_bench_that_missed_its_floors_is_a_verdict_and_an_empty_store_is_a_failure() {
     let _g = env_lock();

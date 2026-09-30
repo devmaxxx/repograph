@@ -713,7 +713,7 @@ fn switch_model(repo: &std::path::Path, cfg: &config::Config, id: &str, no_embed
 /// The node `impact` or `trace` walks from. The names it passed over go to stderr, so a LOW
 /// that came from the wrong node is visible without changing what stdout parses to.
 fn code_node<'a>(graph: &'a model::Graph, name: &str) -> anyhow::Result<&'a model::Node> {
-    let Some((pick, rest)) = query::resolve_code(graph, name) else { anyhow::bail!("no node matches {name}") };
+    let (pick, rest) = query::resolve_code(graph, name)?;
     if let Some(note) = query::passed_over(name, pick, &rest) { eprintln!("{note}"); }
     Ok(pick)
 }
@@ -900,11 +900,9 @@ fn run() -> anyhow::Result<()> {
             let rendered = match json {
                 true => query::explain_json(&graph, &node).map(|j| format!("{j}\n")),
                 false => query::explain(&graph, &node),
-            };
-            match rendered {
-                Some(s) => { print!("{s}"); Ok(()) }
-                None => anyhow::bail!("no node matches {node}"),
-            }
+            }?;
+            print!("{rendered}");
+            Ok(())
         }
         Cmd::Impact { symbol, depth, down, json, stale } => {
             let graph = graph_for(&repo, &load_cfg()?, stale)?;
