@@ -19,8 +19,8 @@ WIDE = 5
 
 
 def visible(repo: Path, ext: str) -> list[str]:
-    # `truth.rg` walks dotted paths, as `build` does; the resolver's walk does not (spec L3), so
-    # an import inside a dotted directory binds nothing. Only undotted files make cases.
+    # `truth.rg` walks dotted paths, as `build` does; the resolver's walk does not, so an import
+    # inside a dotted directory binds nothing. Only undotted files make cases.
     files = T.rg(repo, ["--files", "-g", f"*{ext}"])
     return sorted(f for f in files if not any(p.startswith(".") for p in f.split("/")))
 
@@ -37,13 +37,18 @@ def imports_module(src: str, module: str) -> bool:
     return bool(re.search(rf"^[ \t]*(?:from[ \t]+\.*(?:[\w.]*\.)?{stem}[ \t]+import\b|import[ \t]+(?:[\w.]*\.)?{stem}\b)", src, re.M))
 
 
-def impact_cases(repo: Path, ext: str, files: list[str]) -> list[dict]:
+def top_level(repo: Path, files: list[str]) -> dict[str, list[str]]:
     declared: dict[str, list[str]] = {}
     for rel in files:
         lines, found = T.declarations(rel, (repo / rel).read_text(encoding="utf8", errors="replace"))
         for line, name in found:
             if not lines[line - 1].startswith((" ", "\t")):
                 declared.setdefault(name, []).append(rel)
+    return declared
+
+
+def impact_cases(repo: Path, ext: str, files: list[str]) -> list[dict]:
+    declared = top_level(repo, files)
     candidates = []
     for name, where in declared.items():
         if len(where) != 1 or name.startswith(("_", "test")):
@@ -69,9 +74,14 @@ def trace_case(graph: dict, src: str, dst: str, expect: str) -> dict:
 
 def trace_cases(repo: Path, files: list[str]) -> tuple[list[dict], list[str]]:
     graph = T.di_call_graph(repo, files)
+    # `di_call_graph` keeps one file per name, so a name two files declare would get the other
+    # file's id: a wrong case is worse than none.
+    unique = {name for name, where in top_level(repo, files).items() if len(where) == 1}
     for src in sorted(graph["edges"]):
+        if src not in unique:
+            continue
         for dst in sorted({e.split(".")[0] for e in graph["edges"][src]} - {src}):
-            if dst not in graph["declared"] or T.shortest_path(graph, src, dst) is None:
+            if dst not in graph["declared"] or dst not in unique or T.shortest_path(graph, src, dst) is None:
                 continue
             cases = [trace_case(graph, src, dst, "path")]
             if T.shortest_path(graph, dst, src) is None:

@@ -90,6 +90,15 @@ class Roots(unittest.TestCase):
             cases, _ = S.trace_cases(repo, S.visible(repo, ".py"))
             self.assertEqual(len(cases), 2)
 
+    def test_a_class_two_files_declare_makes_no_trace_case(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            repository(repo)
+            (repo / "tools/twin.py").write_text("class Store:\n    pass\n", encoding="utf8")
+            cases, waivers = S.trace_cases(repo, S.visible(repo, ".py"))
+            self.assertEqual(cases, [], "one of the two ids would name the wrong file")
+            self.assertEqual(len(waivers), 1)
+
 
 if __name__ == "__main__":
     unittest.main()
