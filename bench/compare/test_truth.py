@@ -8,6 +8,21 @@ from pathlib import Path
 
 from truth import blank_kotlin, blank_typescript, changed_symbols, declaration_end, declarations
 import truth as T
+from truth import (
+    DECLARATIONS,
+    DI_READERS,
+    blank_python,
+    blank_rust,
+    build,
+    di_call_graph,
+    python_declaration_end,
+    python_declarations,
+    rust_declaration_end,
+    rust_declarations,
+    rust_calls,
+    CALL_READERS,
+    shortest_path,
+)
 
 
 def changes_of(base_files: dict[str, str], edits: dict[str, str | None]) -> dict:
@@ -468,12 +483,12 @@ class Registries(unittest.TestCase):
         self.assertIs(T.DECLARATIONS[".tsx"], T.typescript_declarations)
         self.assertIs(T.DECLARATIONS[".kt"], T.kotlin_declarations)
         self.assertIs(T.BLANKERS[".kt"], T.blank_kotlin)
-        self.assertEqual(list(T.DI_READERS), [*T.JS_FAMILY, ".cs", ".razor", ".kt", ".java"])
+        self.assertEqual(list(T.DI_READERS), [*T.JS_FAMILY, ".cs", ".razor", ".kt", ".java", ".py"])
         self.assertLessEqual({".sql", ".gql", ".graphql"}, set(T.CALL_READERS))
         self.assertEqual(
             T.code_globs(),
             ("-g", "*.ts", "-g", "*.tsx", "-g", "*.js", "-g", "*.jsx", "-g", "*.mjs", "-g", "*.cjs", "-g", "*.kt", "-g", "*.cs", "-g", "*.razor", "-g", "*.cshtml", "-g", "*.java",
-             "-g", "*.sql", "-g", "*.gql", "-g", "*.graphql"),
+             "-g", "*.sql", "-g", "*.gql", "-g", "*.graphql", "-g", "*.rs", "-g", "*.py"),
         )
 
     def test_a_registered_reader_is_the_one_declarations_uses(self):
@@ -1204,6 +1219,144 @@ class SqlAndGraphQlRegistered(unittest.TestCase):
             self.assertEqual(T.shortest_path(graph, "app/clients", "app/touch"), ["app/clients", "app/touch"])
             self.assertEqual(T.shortest_path(graph, "query/GetShelf", "fragment/BookFields"), ["query/GetShelf", "fragment/ShelfFields", "fragment/BookFields"])
             self.assertIsNone(T.shortest_path(graph, "fragment/BookFields", "query/GetShelf"))
+
+
+def tree(files: dict[str, str]) -> tempfile.TemporaryDirectory:
+    """A throwaway directory holding `files`; the caller keeps the handle alive."""
+    tmp = tempfile.TemporaryDirectory()
+    for rel, body in files.items():
+        path = Path(tmp.name) / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(body, encoding="utf8")
+    return tmp
+
+
+class RustTruth(unittest.TestCase):
+    def test_a_lifetime_is_code_and_a_char_literal_is_blanked(self):
+        src = "fn f<'a>(s: &'a str) -> char { '{' }\nstruct S;\n"
+        blanked = blank_rust(src)
+        self.assertIn("&'a str", blanked)
+        self.assertNotIn("'{'", blanked)
+        self.assertEqual(blanked.count("\n"), src.count("\n"))
+        self.assertEqual(rust_declarations(blanked), [(1, "f"), (2, "S")])
+
+    def test_raw_strings_and_nested_block_comments_hide_what_they_hold(self):
+        src = 'const A: &str = r#"fn hidden() {"#;\n/* outer /* inner */ fn gone() {} */\npub(crate) fn kept() {}\n'
+        self.assertEqual(rust_declarations(blank_rust(src)), [(1, "A"), (3, "kept")])
+
+    def test_items_at_declaring_scopes_count_and_a_fn_in_a_fn_does_not(self):
+        src = (
+            "pub mod m {\n"
+            "    pub struct S { x: u32 }\n"
+            "    impl S {\n"
+            "        pub fn new() -> S {\n"
+            "            fn local() {}\n"
+            "            S { x: 1 }\n"
+            "        }\n"
+            "    }\n"
+            "    pub trait T {\n"
+            "        type Out;\n"
+            "        fn go(&self);\n"
+            "    }\n"
+            "    macro_rules! mac { () => {} }\n"
+            "    static mut N: u32 = 0;\n"
+            "}\n"
+        )
+        self.assertEqual(rust_declarations(blank_rust(src)), [(2, "S"), (4, "new"), (9, "T"), (10, "Out"), (11, "go"), (13, "mac"), (14, "N")])
+
+    def test_a_where_clause_on_its_own_lines_keeps_the_body_in_the_span(self):
+        lines = blank_rust("fn f<T>(t: T) -> u32\nwhere\n    T: Copy,\n{\n    1\n}\nstruct U;\nfn g() {}\n").split("\n")
+        self.assertEqual(rust_declaration_end(lines, 1), 6)
+        self.assertEqual(rust_declaration_end(lines, 7), 7)
+        self.assertEqual(rust_declaration_end(lines, 8), 8)
+
+    def test_a_field_typed_by_a_bound_parameter_reaches_the_trait(self):
+        src = (
+            "pub struct Handler<E: Exec + Clone> {\n    tmux: Arc<Tmux<E>>,\n    exec: E,\n}\n"
+            "impl<E: Exec + Clone> Handler<E> {\n    fn go(&self) {\n        self.exec.run();\n        self.tmux.capture();\n        self.unknown.m();\n    }\n}\n"
+            "pub struct Tmux<E: Exec> { exec: E }\nimpl<E> Tmux<E> where E: Exec {\n    fn capture(&self) { self.exec.run(); }\n}\n"
+        )
+        self.assertEqual(rust_calls(src), [("Handler", "Exec.run"), ("Handler", "Tmux.capture"), ("Tmux", "Exec.run")])
+
+    def test_di_call_graph_reads_rust_through_its_call_reader(self):
+        tmp = tree({"crates/a/src/handler.rs": "pub struct Handler<E: Exec> { exec: E }\nimpl<E: Exec> Handler<E> {\n    fn go(&self) { self.exec.run(); }\n}\n"})
+        with tmp:
+            graph = di_call_graph(Path(tmp.name), ["crates"])
+        self.assertEqual(graph["edges"], {"Handler": ["Exec.run"]})
+        self.assertEqual(shortest_path(graph, "Handler", "Exec"), ["Handler", "Exec.run"])
+
+class PythonTruth(unittest.TestCase):
+    def test_the_blanker_keeps_every_column_and_hides_strings_and_comments(self):
+        src = 'x = "a # not a comment"  # FR-1\ns = """\ndef hidden():\n"""\ndef kept():\n    return f\'{x}\'\n'
+        blanked = blank_python(src)
+        self.assertEqual(len(blanked), len(src))
+        self.assertEqual([len(l) for l in blanked.split("\n")], [len(l) for l in src.split("\n")])
+        self.assertNotIn("hidden", blanked)
+        self.assertNotIn("FR-1", blanked)
+        self.assertEqual(python_declarations(blanked), [(1, "x"), (2, "s"), (5, "kept")])
+
+    def test_members_count_and_locals_and_the_main_guard_do_not(self):
+        src = (
+            "class A:\n"
+            "    x: int = 1\n"
+            "\n"
+            "    @property\n"
+            "    def y(self):\n"
+            "        z = 1\n"
+            "        return z\n"
+            "\n"
+            "    class B:\n"
+            "        w = 2\n"
+            "\n"
+            "\n"
+            "def f(\n"
+            "    a,\n"
+            "):\n"
+            "    pass\n"
+            "\n"
+            "\n"
+            'if __name__ == "__main__":\n'
+            "    main = 1\n"
+        )
+        self.assertEqual(python_declarations(blank_python(src)), [(1, "A"), (2, "x"), (5, "y"), (9, "B"), (10, "w"), (13, "f")])
+
+    def test_a_span_ends_where_the_indentation_does(self):
+        lines = blank_python("def f(\n    a,\n):\n    x = 1\n\n    return x\n\n\nY = 2\n").split("\n")
+        self.assertEqual(python_declaration_end(lines, 1), 6)
+        self.assertEqual(python_declaration_end(lines, 9), 9)
+
+    def test_the_di_reader_types_a_field_by_its_constructor(self):
+        tmp = tree({"tools/run.py": "class Runner:\n    def __init__(self):\n        self.graph = truth.Graph()\n\n    def go(self):\n        self.graph.shortest()\n        self.other.m()\n"})
+        with tmp:
+            graph = di_call_graph(Path(tmp.name), ["tools"])
+        self.assertEqual(graph["edges"], {"Runner": ["Graph.shortest"]})
+
+
+class RustAndPythonInTheTruth(unittest.TestCase):
+    def test_the_registries_name_both_languages_and_rust_reads_its_chain_through_call_readers(self):
+        self.assertIn(".rs", DECLARATIONS)
+        self.assertIn(".py", DECLARATIONS)
+        self.assertIn(".py", DI_READERS)
+        self.assertIn(".rs", CALL_READERS)
+        self.assertNotIn(".rs", DI_READERS)
+
+    def test_a_body_hunk_is_credited_to_its_python_and_rust_declaration(self):
+        got = changes_of(
+            {"a.py": "def f():\n    x = 1\n    return x\n\n\ndef g():\n    pass\n", "b.rs": "fn h() -> u32\nwhere\n    u32: Copy,\n{\n    1\n}\n"},
+            {"a.py": "def f():\n    x = 2\n    return x\n\n\ndef g():\n    pass\n", "b.rs": "fn h() -> u32\nwhere\n    u32: Copy,\n{\n    2\n}\n"},
+        )
+        self.assertEqual(got["code_files"], ["a.py", "b.rs"])
+        self.assertEqual(got["symbols"], {"a.py": ["f"], "b.rs": ["h"]})
+
+    def test_build_reads_the_roots_it_is_given(self):
+        tmp = tree({
+            "crates/a/src/exec.rs": "pub trait Exec {\n    fn run(&self);\n}\n",
+            "crates/a/src/handler.rs": "pub struct Handler<E: Exec> { exec: E }\nimpl<E: Exec> Handler<E> {\n    fn go(&self) { self.exec.run(); }\n}\n",
+        })
+        with tmp:
+            truth = build(Path(tmp.name), [], [{"kind": "trace", "from": "Handler", "to": "Exec", "expect": "path", "via": []}], roots=["crates"])
+        self.assertEqual(truth["trace"]["Handler->Exec"], ["Handler", "Exec.run"])
+        self.assertEqual(truth["di_edges"], 1)
 
 
 if __name__ == "__main__":

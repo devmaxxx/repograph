@@ -450,6 +450,7 @@ def main() -> None:
     ap.add_argument("--strip-prefix", action="append", default=[])
     ap.add_argument("--timeout", type=int, default=180)
     ap.add_argument("--truth", default="", help="reuse a truth file instead of rebuilding it")
+    ap.add_argument("--di-root", action="append", default=[], help="a source root the trace truth reads; repeatable; default: truth.DI_ROOTS")
     ap.add_argument("--id-families", default="", help=f"read the scorer's families from this cached artefact instead of asking repograph; {FAMILIES_CACHE.name} is the one shipped here")
     ap.add_argument("--save-id-families", default="", help="write the families derived from the corpus to this file, for a later offline run")
     ap.add_argument("--out", required=True)
@@ -470,7 +471,7 @@ def main() -> None:
     if args.truth and Path(args.truth).exists():
         truth = json.loads(Path(args.truth).read_text(encoding="utf8"))
     else:
-        truth = T.build(repo, cases, blast)
+        truth = T.build(repo, cases, blast, roots=args.di_root or None)
         if args.truth:
             Path(args.truth).write_text(json.dumps(truth, ensure_ascii=False, indent=1), encoding="utf8")
 
