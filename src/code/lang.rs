@@ -40,6 +40,8 @@ impl Lang {
             Some("java") => Some(Lang::Java),
             Some("sql") => Some(Lang::Sql),
             Some("gql" | "graphql") => Some(Lang::GraphQl),
+            Some("rs") => Some(Lang::Rust),
+            Some("py") => Some(Lang::Python),
             _ => None,
         }
     }
@@ -55,6 +57,8 @@ impl Lang {
             Lang::Java => Some(Language::new(tree_sitter_java::LANGUAGE)),
             Lang::Sql => Some(Language::new(tree_sitter_postgres::LANGUAGE)),
             Lang::GraphQl => Some(Language::new(tree_sitter_graphql::LANGUAGE)),
+            Lang::Rust => Some(Language::new(tree_sitter_rust::LANGUAGE)),
+            Lang::Python => Some(Language::new(tree_sitter_python::LANGUAGE)),
             // A language whose family plan has not landed has no crate in this build, and `of`
             // never returns it. Once every plan has landed the arm is unreachable, and harmless.
             #[allow(unreachable_patterns)]
@@ -75,6 +79,8 @@ impl Lang {
             Lang::Kotlin | Lang::Java => Family::Jvm,
             Lang::Sql => Family::Sql,
             Lang::GraphQl => Family::GraphQl,
+            Lang::Rust => Family::Rust,
+            Lang::Python => Family::Python,
             // Reached only by a variant `of` cannot return yet; see `grammar`.
             #[allow(unreachable_patterns)]
             other => unreachable!("{other:?} has no family arm: its plan has not landed"),

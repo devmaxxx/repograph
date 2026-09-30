@@ -40,6 +40,9 @@ tree-sitter-java = "=0.23.5"
 tree-sitter-postgres = "=1.2.4"
 # The only GraphQL grammar on tree-sitter 0.27's ABI; none of the census's 191 files has an error.
 tree-sitter-graphql = "=0.2.1"
+# Rust and Python: the tree-sitter org's grammars, both MIT and on tree-sitter 0.27's ABI.
+tree-sitter-rust = "=0.24.2"
+tree-sitter-python = "=0.25.0"
 postcard = { version = "=1.1.3", features = ["use-std"] }
 
 [dev-dependencies]

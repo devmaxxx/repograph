@@ -1,0 +1,5 @@
+{"kind":"impact","target":"sign_command","id":"sym:crates/orch-core/src/hmac.rs::sign_command","file":"crates/orch-core/src/hmac.rs","tier":"wide","exts":[".rs"]}
+{"kind":"impact","target":"MachineConfig","id":"sym:crates/orch-core/src/config.rs::MachineConfig","file":"crates/orch-core/src/config.rs","tier":"wide","exts":[".rs"]}
+{"kind":"trace","from":"Handler","to":"Exec","from_id":"sym:crates/orchestrator/src/commands.rs::Handler","to_id":"sym:crates/orchestrator/src/exec.rs::Exec","expect":"path","via":[]}
+{"kind":"trace","from":"Exec","to":"Handler","from_id":"sym:crates/orchestrator/src/exec.rs::Exec","to_id":"sym:crates/orchestrator/src/commands.rs::Handler","expect":"none","via":[]}
+{"kind":"changes","base":"cbc76c1~1"}

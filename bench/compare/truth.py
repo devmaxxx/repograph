@@ -1306,6 +1306,375 @@ def sql_declaration_end(lines: list[str], start: int) -> int:
 DECLARATION_ENDS[".sql"] = sql_declaration_end
 
 
+RUST_RAW_STRING = re.compile(r'b?r(#*)"')
+
+
+def blank_rust(src: str) -> str:
+    """`src` with Rust comments, strings and character literals blanked, line count kept.
+
+    Brace scope is all the Rust reader needs, so a string collapses to its quotes and its
+    newlines. A `'` opens a character literal only when it is escaped (`'\\n'`) or closes two
+    characters on (`'{'`); otherwise it is a lifetime (`'a`, `'static`), which is code, and
+    blanking it as a literal would swallow the rest of the line. Block comments nest, as Rust's do.
+    """
+    out: list[str] = []
+    i, n = 0, len(src)
+
+    def newlines(a: int, b: int) -> str:
+        return "\n" * src.count("\n", a, b)
+
+    while i < n:
+        c = src[i]
+        after_word = i > 0 and (src[i - 1].isalnum() or src[i - 1] == "_")
+        if src.startswith("//", i):
+            end = src.find("\n", i)
+            i = n if end < 0 else end
+        elif src.startswith("/*", i):
+            depth, end = 1, i + 2
+            while end < n and depth:
+                if src.startswith("/*", end):
+                    depth, end = depth + 1, end + 2
+                elif src.startswith("*/", end):
+                    depth, end = depth - 1, end + 2
+                else:
+                    end += 1
+            out.append(newlines(i, end))
+            i = end
+        elif (raw := RUST_RAW_STRING.match(src, i)) and not after_word:
+            close = '"' + raw.group(1)
+            end = src.find(close, raw.end())
+            end = n if end < 0 else end + len(close)
+            out.append('"' + newlines(i, end) + '"')
+            i = end
+        elif c == '"' or (c == "b" and src.startswith('"', i + 1) and not after_word):
+            end = i + (1 if c == '"' else 2)
+            while end < n and src[end] != '"':
+                end += 2 if src[end] == "\\" else 1
+            end = min(end + 1, n)
+            out.append('"' + newlines(i, end) + '"')
+            i = end
+        elif c == "'" and src.startswith("\\", i + 1) and (close := src.find("'", i + 3)) >= 0:
+            out.append("' '")
+            i = close + 1
+        elif c == "'" and i + 2 < n and src[i + 2] == "'" and src[i + 1] != "\n":
+            out.append("' '")
+            i += 3
+        else:
+            out.append(c)
+            i += 1
+    return "".join(out)
+
+
+RUST_DECL = re.compile(
+    r"^[ \t]*(?:#!?\[[^\n]*\][ \t]*)*"
+    r"(?:pub(?:[ \t]*\([^()\n]*\))?[ \t]+)?"
+    r"(?:(?:default|const|async|unsafe|extern[ \t]+\"[^\"\n]*\")[ \t]+)*"
+    r"(?:(?P<kw>impl|mod|trait|fn|struct|enum|union|type|const|static)\b|(?P<macro>macro_rules!))"
+    r"(?:(?<=impl)|(?<=mod)[ \t]+\w+|[ \t]*(?:mut[ \t]+)?(?P<name>r#\w+|\w+))"
+)
+RUST_TYPE_KEYWORDS = {"impl", "mod", "trait"}
+
+
+@dataclass(frozen=True)
+class _RustMatch:
+    kw: str
+    name: str | None
+
+    def group(self, which: str) -> str | None:
+        return self.kw if which == "kw" else self.name
+
+
+class _RustDeclaration:
+    """`RUST_DECL` as `_scoped_declarations` reads a match: `kw` always set, and no `name` for an
+    `impl` or a `mod`, which open a declaring scope and are not themselves symbols."""
+
+    def match(self, line: str) -> _RustMatch | None:
+        m = RUST_DECL.match(line)
+        if not m:
+            return None
+        kw = m.group("kw") or "macro_rules"
+        name = None if kw in ("impl", "mod") else m.group("name")
+        return _RustMatch(kw, None if name == "mut" else name)
+
+
+def rust_declarations(blanked: str) -> list[tuple[int, str]]:
+    """(line, name) for every Rust item at a declaring scope — the file, a `mod`, `impl` or
+    `trait` body — in already-blanked source. A `fn` inside a `fn` is a local."""
+    return _scoped_declarations(blanked, decl=_RustDeclaration(), member=None, type_keywords=RUST_TYPE_KEYWORDS)
+
+
+def rust_declaration_end(lines: list[str], start: int) -> int:
+    """The last line of the Rust item beginning at `start`: its body's closing brace, or the `;`
+    that ends an item with none. A header may close its parentheses and open its body lines
+    later — a `where` clause, a return type on its own line — so the count waits for the body."""
+    depth = 0
+    opened = False
+    for i in range(start - 1, len(lines)):
+        for char in lines[i]:
+            if char in "{[(":
+                depth += 1
+                opened = opened or char == "{"
+            elif char in "}])":
+                depth -= 1
+            elif char == ";" and depth == 0 and not opened:
+                return i + 1
+        if opened and depth <= 0:
+            return i + 1
+    return len(lines)
+
+
+RUST_STRUCT = re.compile(r"\bstruct\s+(\w+)\s*(?:<(?P<params>[^{;]*?)>)?\s*(?:where\b(?P<where>[^{;]*))?\{")
+RUST_IMPL = re.compile(r"(?m)^[ \t]*(?:unsafe[ \t]+)?impl\b(?P<head>[^{;]*)\{")
+RUST_SELF_CALL = re.compile(r"\bself\s*\.\s*(\w+)\s*\.\s*(\w+)\s*\(")
+# What a method call sees through: `&'a mut T`, `Box<T>`, `Arc<T>`, `Rc<T>`, `dyn T`, `impl T`.
+RUST_PEEL = re.compile(r"^(?:&\s*(?:'\w+\s+)?(?:mut\s+)?|(?:Box|Arc|Rc)\s*<|dyn\s+|impl\s+)")
+
+
+def _matching_brace(text: str, open_at: int) -> int:
+    depth = 0
+    for i in range(open_at, len(text)):
+        if text[i] == "{":
+            depth += 1
+        elif text[i] == "}":
+            depth -= 1
+            if depth == 0:
+                return i
+    return len(text)
+
+
+def _mask_arrows(text: str) -> str:
+    """`text` with each `->` blanked: its `>` closes no `<`, and counted as one it ends a generic list early."""
+    return text.replace("->", "  ")
+
+
+def _split_top(text: str) -> list[str]:
+    """`text` split at commas outside `<>`, `()` and `[]`."""
+    parts, depth, current = [], 0, ""
+    for char in _mask_arrows(text):
+        depth += (char in "<([") - (char in ">)]")
+        if char == "," and depth == 0:
+            parts.append(current)
+            current = ""
+        else:
+            current += char
+    return parts + [current]
+
+
+def _strip_generics(text: str) -> str:
+    out, depth = "", 0
+    for char in _mask_arrows(text):
+        if char == "<":
+            depth += 1
+        elif char == ">":
+            depth -= 1
+        elif depth == 0:
+            out += char
+    return out
+
+
+def _rust_bounds(params: str | None, where: str | None) -> dict[str, str]:
+    """Type parameter → its first bound's last segment, from `<E: Exec>` and `where E: Exec`."""
+    bounds: dict[str, str] = {}
+    for part in _split_top(params or "") + _split_top(where or ""):
+        if ":" not in part:
+            continue
+        name, rest = part.split(":", 1)
+        first = re.match(r"\s*(?:\w+::)*(\w+)", rest)
+        if first and name.strip().isidentifier():
+            bounds.setdefault(name.strip(), first.group(1))
+    return bounds
+
+
+def _rust_type_name(written: str, bounds: dict[str, str]) -> str:
+    text = written.strip()
+    while peeled := RUST_PEEL.match(text):
+        text = text[peeled.end():].strip()
+    name = re.match(r"\w*", _strip_generics(text).split("::")[-1].strip()).group(0)
+    return bounds.get(name, name)
+
+
+def rust_calls(src: str) -> list[tuple[str, str]]:
+    """(struct, `Type.method`) for every `self.field.method(` an `impl` in this file makes through
+    a field its struct declares in this file.
+
+    A field typed by the struct's own parameter is called through that parameter's first bound —
+    `exec: E` with `E: Exec` calls `Exec::run` — and the `impl` is a block apart from the struct,
+    so a pattern read inside one class body cannot see the chain. A struct whose `impl` sits in
+    another file is not read, as the extractor does not read it either.
+    """
+    blanked = blank_rust(src)
+    fields: dict[str, dict[str, str]] = defaultdict(dict)
+    for m in RUST_STRUCT.finditer(blanked):
+        body = blanked[m.end() : _matching_brace(blanked, m.end() - 1)]
+        bounds = _rust_bounds(m.group("params"), m.group("where"))
+        for field in _split_top(body):
+            fm = re.match(r"\s*(?:pub(?:\s*\([^)]*\))?\s+)?(\w+)\s*:\s*(.+)", field, re.S)
+            if fm:
+                fields[m.group(1)][fm.group(1)] = _rust_type_name(fm.group(2), bounds)
+    pairs: set[tuple[str, str]] = set()
+    for m in RUST_IMPL.finditer(blanked):
+        head = _mask_arrows(m.group("head")).lstrip()
+        if head.startswith("<"):
+            depth = 0
+            for i, char in enumerate(head):
+                depth += (char == "<") - (char == ">")
+                if depth == 0:
+                    head = head[i + 1 :]
+                    break
+        head = re.split(r"\bfor\b", re.split(r"\bwhere\b", head)[0])[-1]
+        owner = re.match(r"\w*", _strip_generics(head).strip().lstrip("&").strip().split("::")[-1].strip()).group(0)
+        body = blanked[m.end() : _matching_brace(blanked, m.end() - 1)]
+        for call in RUST_SELF_CALL.finditer(body):
+            if call.group(1) in fields.get(owner, {}):
+                pairs.add((owner, f"{fields[owner][call.group(1)]}.{call.group(2)}"))
+    return sorted(pairs)
+
+
+PY_STRING_OPEN = re.compile(r"([rRbBuUfF]{0,2})('''|\"\"\"|'|\")")
+
+
+def blank_python(src: str) -> str:
+    """`src` with Python comments and string bodies turned to spaces, every column kept.
+
+    The Python reader reads blocks by indentation, so nothing may move: a docstring collapsed
+    to its quotes would put the closing quotes in column 0 and end every block above it. The
+    quotes and newlines stay; an unterminated single-quoted string ends at its line.
+    """
+    out: list[str] = []
+    i, n = 0, len(src)
+    while i < n:
+        c = src[i]
+        if c == "#":
+            end = src.find("\n", i)
+            end = n if end < 0 else end
+            out.append(" " * (end - i))
+            i = end
+            continue
+        opened = PY_STRING_OPEN.match(src, i) if c in "\"'rRbBuUfF" else None
+        if opened and not (i > 0 and (src[i - 1].isalnum() or src[i - 1] == "_")):
+            quote = opened.group(2)
+            end = opened.end()
+            while end < n and not src.startswith(quote, end):
+                if src[end] == "\\":
+                    end += 2
+                    continue
+                if len(quote) == 1 and src[end] == "\n":
+                    break
+                end += 1
+            end = min(end, n)
+            out.append(src[i : opened.end()])
+            out.append("".join(ch if ch == "\n" else " " for ch in src[opened.end() : end]))
+            if src.startswith(quote, end):
+                out.append(quote)
+                end += len(quote)
+            i = end
+            continue
+        out.append(c)
+        i += 1
+    return "".join(out)
+
+
+PY_KEYWORDS = frozenset({
+    "if", "elif", "else", "for", "while", "try", "except", "finally", "with", "match", "case", "return",
+    "lambda", "def", "class", "async", "await", "import", "from", "global", "nonlocal", "pass", "break",
+    "continue", "raise", "del", "assert", "yield", "not", "and", "or", "in", "is",
+})
+PY_LINE = re.compile(
+    r"^(?P<indent>[ \t]*)(?:"
+    r"(?:async[ \t]+)?(?P<kw>def|class)[ \t]+(?P<name>\w+)"
+    r"|(?P<assign>[A-Za-z_]\w*)[ \t]*(?::[^=\n]*)?=(?!=)"
+    r"|(?P<ann>[A-Za-z_]\w*)[ \t]*:[ \t]*[^=\s][^=\n]*$"
+    r"|(?P<block>\w+)\b[^\n]*:[ \t]*$)"
+)
+
+
+def python_declarations(blanked: str) -> list[tuple[int, str]]:
+    """(line, name) for every `def`, `class` and plain-name assignment directly in the module or
+    in a class body, in already-blanked source.
+
+    Indentation, not brackets: a stack records, for each open block, whether it is a class.
+    A line declares when every block around it is a class. A line that starts inside brackets or
+    after a `\\` continues a statement, and a decorator line is its definition's.
+    """
+    found: list[tuple[int, str]] = []
+    stack: list[tuple[int, bool]] = []
+    depth = 0
+    continued = False
+    for index, line in enumerate(blanked.split("\n")):
+        inside = depth > 0 or continued
+        for char in line:
+            if char in "([{":
+                depth += 1
+            elif char in ")]}" and depth:
+                depth -= 1
+        continued = line.rstrip().endswith("\\")
+        stripped = line.strip()
+        if not stripped or inside or stripped.startswith("@"):
+            continue
+        indent = len(line) - len(line.lstrip())
+        while stack and stack[-1][0] >= indent:
+            stack.pop()
+        declaring = all(is_class for _, is_class in stack)
+        m = PY_LINE.match(line)
+        if not m:
+            continue
+        if m.group("kw"):
+            if declaring:
+                found.append((index + 1, m.group("name")))
+            stack.append((indent, m.group("kw") == "class"))
+        elif m.group("block"):
+            stack.append((indent, False))
+        elif declaring and (name := m.group("assign") or m.group("ann")) and name not in PY_KEYWORDS:
+            found.append((index + 1, name))
+    return found
+
+
+def python_declaration_end(lines: list[str], start: int) -> int:
+    """The last line of the Python declaration beginning at `start`: its header through any
+    open brackets, then every following line indented deeper than the header. Blank lines —
+    and blanked docstring lines — neither end a block nor extend it."""
+    header = lines[start - 1]
+    indent = len(header) - len(header.lstrip())
+    depth = 0
+    i = start - 1
+    while i < len(lines):
+        depth += sum(lines[i].count(c) for c in "([{") - sum(lines[i].count(c) for c in ")]}")
+        if depth <= 0:
+            break
+        i += 1
+    last = min(i, len(lines) - 1) + 1
+    for j in range(last, len(lines)):
+        if not lines[j].strip():
+            continue
+        if len(lines[j]) - len(lines[j].lstrip()) <= indent:
+            break
+        last = j + 1
+    return last
+
+
+PYTHON_DI = DiReader(
+    # Column zero only: a nested `class Meta:` would otherwise cut its owner's body in two, and
+    # every method written after it would be read as the nested class's.
+    re.compile(r"(?m)^class[ \t]+(\w+)"),
+    # `self.x = T(…)`, `self.x: T = T(…)`, `self.x = mod.T(…)`: the constructor names the type.
+    re.compile(r"\bself\.(\w+)\s*(?::[^=\n]*)?=\s*(?:[A-Za-z_]\w*\.)*([A-Za-z_]\w*)\s*\("),
+    re.compile(r"\bself\.(\w+)\s*\.\s*(\w+)\s*\("),
+)
+
+DECLARATIONS[".rs"] = rust_declarations
+DECLARATIONS[".py"] = python_declarations
+BLANKERS[".rs"] = blank_rust
+BLANKERS[".py"] = blank_python
+DI_READERS[".py"] = PYTHON_DI
+# Rust's chain runs through a struct and its `impl` block, which no field-and-call pattern reads; `di_call_graph`
+# hands a reader raw text, and `rust_calls` blanks it.
+CALL_READERS[".rs"] = rust_calls
+# A `def` balances its brackets on its own line and a Rust `where` clause opens its body lines later, so
+# counting brackets would end both before their bodies.
+DECLARATION_ENDS[".rs"] = rust_declaration_end
+DECLARATION_ENDS[".py"] = python_declaration_end
+
+
 def declarations(rel: str, src: str) -> tuple[list[str], list[tuple[int, str]]]:
     """The blanked lines of one file and the (line, name) of every declaration in it."""
     blanked = blanked_source(rel, src)

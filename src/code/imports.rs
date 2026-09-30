@@ -20,6 +20,10 @@ pub struct Resolver {
     indexes: BTreeMap<Family, QualifiedIndex>,
     /// .NET: C# types with their members, extension methods, projects and their `global using`s.
     dotnet: crate::code::csharp::index::DotNet,
+    /// The Rust module tree: every `.rs` path and `Cargo.toml` the globs reach.
+    rust: crate::code::rust_lang::Crates,
+    /// Python module names: every `.py` path and the directories holding a project manifest.
+    python: crate::code::python::Modules,
 }
 
 #[derive(Deserialize, Default)]
@@ -204,7 +208,7 @@ impl Resolver {
         }
         // Nearest tsconfig to the importing file wins: sort deepest directory first.
         paths.sort_by_key(|a| std::cmp::Reverse(a.0.len()));
-        let mut resolver = Resolver { repo: repo.to_path_buf(), paths, packages, indexes: BTreeMap::new(), dotnet: Default::default() };
+        let mut resolver = Resolver { repo: repo.to_path_buf(), paths, packages, indexes: BTreeMap::new(), dotnet: Default::default(), rust: Default::default(), python: Default::default() };
         // Manifests before sources: a path family's roots decide how its sources' paths read.
         for (_, rel, path) in manifests.iter().filter(|(f, _, _)| reached.contains(f)) {
             if let Ok(text) = std::fs::read_to_string(path) {
@@ -229,6 +233,14 @@ impl Resolver {
         &self.dotnet
     }
 
+    pub(crate) fn rust(&self) -> &crate::code::rust_lang::Crates {
+        &self.rust
+    }
+
+    pub(crate) fn python(&self) -> &crate::code::python::Modules {
+        &self.python
+    }
+
     /// What one globbed source contributes before any file is extracted. A name-indexed family's
     /// header goes into its index; a path family's plan adds its arm below, for state of its own.
     ///
@@ -248,13 +260,26 @@ impl Resolver {
         if lang == Lang::CSharp {
             self.dotnet.add_cs(rel, &crate::code::csharp::index::facts(rel, source));
         }
+        if lang == Lang::Rust {
+            self.rust.file(rel, source);
+        }
+        if lang == Lang::Python {
+            self.python.file(rel);
+            self.python.init(rel, source);
+        }
     }
 
     /// What a build manifest contributes; called only when the globs reach the manifest's family.
-    /// Each path family's plan adds its arm; until one lands, no family reads a manifest.
+    /// Each path family adds its arm here.
     fn collect_manifest(&mut self, rel: &str, text: &str) {
         if rel.ends_with(".csproj") {
             self.dotnet.add_project(rel, text);
+        }
+        if rel == "Cargo.toml" || rel.ends_with("/Cargo.toml") {
+            self.rust.manifest(rel, text);
+        }
+        if matches!(rel.rsplit('/').next(), Some("pyproject.toml" | "setup.py" | "setup.cfg")) {
+            self.python.manifest(rel);
         }
     }
 

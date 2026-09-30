@@ -141,6 +141,11 @@ class Tool:
         proc, ms = self._exec(argv)
         return self._clean(proc.stdout + proc.stderr), ms
 
+    def _unanswered(self, reason: str, argv: list[str], ms: float) -> tuple[str, float]:
+        self.failed_calls += 1
+        print(f"{self.name}: not counted as an answer, {reason}: {' '.join(argv)}", file=sys.stderr)
+        return "", ms
+
     def ask(self, q: str): raise NotImplementedError
     def impact(self, target: str): return None
     def trace(self, a: str, b: str): return None
@@ -160,9 +165,7 @@ class Repograph(Tool):
         substring scorer would credit as found. Exit 3 is `trace`'s no-path verdict, an answer."""
         proc, ms = self._exec(argv)
         if proc.returncode != 0 and not (verdict_ok and proc.returncode == 3):
-            self.failed_calls += 1
-            print(f"repograph: not counted as an answer, exit {proc.returncode}: {' '.join(argv)}", file=sys.stderr)
-            return "", ms
+            return self._unanswered(f"exit {proc.returncode}", argv, ms)
         return self._clean(proc.stdout + proc.stderr), ms
 
     def ask(self, q): return self.run(self.bin() + ["ask", q])
@@ -242,9 +245,7 @@ class Gitnexus(Tool):
         proc, ms = self._exec(argv)
         reason = gitnexus_failure_reason(argv, proc)
         if reason:
-            self.failed_calls += 1
-            print(f"gitnexus: not counted as an answer, {reason}: {' '.join(argv)}", file=sys.stderr)
-            return "", ms
+            return self._unanswered(reason, argv, ms)
         return self._clean(proc.stdout + proc.stderr), ms
 
     def ask(self, q): return self.run(["gitnexus", "query", q, *self.r()])
@@ -450,6 +451,7 @@ def main() -> None:
     ap.add_argument("--strip-prefix", action="append", default=[])
     ap.add_argument("--timeout", type=int, default=180)
     ap.add_argument("--truth", default="", help="reuse a truth file instead of rebuilding it")
+    ap.add_argument("--di-root", action="append", default=[], help="a source root the trace truth reads; repeatable; default: truth.DI_ROOTS")
     ap.add_argument("--id-families", default="", help=f"read the scorer's families from this cached artefact instead of asking repograph; {FAMILIES_CACHE.name} is the one shipped here")
     ap.add_argument("--save-id-families", default="", help="write the families derived from the corpus to this file, for a later offline run")
     ap.add_argument("--out", required=True)
@@ -470,7 +472,7 @@ def main() -> None:
     if args.truth and Path(args.truth).exists():
         truth = json.loads(Path(args.truth).read_text(encoding="utf8"))
     else:
-        truth = T.build(repo, cases, blast)
+        truth = T.build(repo, cases, blast, roots=args.di_root or None)
         if args.truth:
             Path(args.truth).write_text(json.dumps(truth, ensure_ascii=False, indent=1), encoding="utf8")
 
