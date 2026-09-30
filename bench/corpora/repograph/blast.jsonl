@@ -1,0 +1,9 @@
+{"kind":"impact","target":"Store","id":"sym:src/store.rs::Store","file":"src/store.rs","tier":"wide","exts":[".rs"]}
+{"kind":"impact","target":"Manifest","id":"sym:src/walk.rs::Manifest","file":"src/walk.rs","tier":"narrow","exts":[".rs"]}
+{"kind":"impact","target":"CodeExtractor","id":"sym:src/code/mod.rs::CodeExtractor","file":"src/code/mod.rs","tier":"narrow","exts":[".rs"]}
+{"kind":"impact","target":"read_jsonl","id":"sym:bench/compare/truth.py::read_jsonl","file":"bench/compare/truth.py","tier":"narrow","exts":[".py"]}
+{"kind":"impact","target":"changed_symbols","id":"sym:bench/compare/truth.py::changed_symbols","file":"bench/compare/truth.py","tier":"narrow","exts":[".py"]}
+{"kind":"trace","from":"CodeExtractor","to":"Resolver","from_id":"sym:src/code/mod.rs::CodeExtractor","to_id":"sym:src/code/imports.rs::Resolver","expect":"path","via":["SymbolScanner"]}
+{"kind":"trace","from":"Resolver","to":"CodeExtractor","from_id":"sym:src/code/imports.rs::Resolver","to_id":"sym:src/code/mod.rs::CodeExtractor","expect":"none","via":[]}
+{"kind":"trace","from":"Repograph","to":"Gitnexus","from_id":"sym:bench/compare/run.py::Repograph","to_id":"sym:bench/compare/run.py::Gitnexus","expect":"none","via":[]}
+{"kind":"changes","base":"50a042f"}
