@@ -30,9 +30,11 @@ pub fn extract(resolver: &Resolver, rel: &str, source: &str) -> Extraction {
         // A variable and an output are a Terraform module's interface; every bake block is invoked by
         // name from outside its file.
         let context = if !terraform || address.starts_with("var/") || address.starts_with("output/") { "export" } else { "" };
-        prose::declare(&mut ex, rel, &file, &id, n, &prose::body(n, src, &[]), context);
         spans.push(n, &id);
-        own.insert(address);
+        // Aliased `provider "aws"` blocks share one address; the first block is the symbol.
+        if own.insert(address) {
+            prose::declare(&mut ex, rel, &file, &id, n, &prose::body(n, src, &[]), context);
+        }
     }
     if terraform {
         references::terraform(resolver.hcl(), root, &own, &spans, src, rel, &mut ex);
@@ -50,24 +52,26 @@ pub fn extract(resolver: &Resolver, rel: &str, source: &str) -> Extraction {
 pub(crate) fn widen(stale: &[String], removed: &[String], graph: &Graph, all_rels: &[String]) -> Vec<String> {
     let dirs: BTreeSet<&str> = stale.iter().chain(removed)
         .filter(|r| r.ends_with(".tf"))
-        .map(|r| dir(r))
+        .map(|r| dir_of(r))
         .collect();
     if dirs.is_empty() {
         return Vec::new();
     }
     let importers = graph.edges.iter()
         .filter(|e| e.kind == EdgeKind::Imports && e.source.ends_with(".tf"))
-        .filter(|e| e.target.strip_prefix("file:").is_some_and(|t| t.ends_with(".tf") && dirs.contains(dir(t))))
+        .filter(|e| e.target.strip_prefix("file:").is_some_and(|t| t.ends_with(".tf") && dirs.contains(dir_of(t))))
         .filter_map(|e| e.source.strip_prefix("file:"));
-    let siblings = all_rels.iter().map(String::as_str).filter(|r| r.ends_with(".tf") && dirs.contains(dir(r)));
+    let siblings = all_rels.iter().map(String::as_str).filter(|r| r.ends_with(".tf") && dirs.contains(dir_of(r)));
     let reread: BTreeSet<&str> = importers.chain(siblings).collect();
+    let stale: BTreeSet<&str> = stale.iter().map(String::as_str).collect();
+    let present: BTreeSet<&str> = all_rels.iter().map(String::as_str).collect();
     reread.into_iter()
-        .filter(|r| !stale.iter().any(|s| s == r) && all_rels.iter().any(|a| a == r))
+        .filter(|r| !stale.contains(r) && present.contains(r))
         .map(str::to_string)
         .collect()
 }
 
-fn dir(rel: &str) -> &str {
+pub(super) fn dir_of(rel: &str) -> &str {
     rel.rsplit_once('/').map_or("", |(d, _)| d)
 }
 

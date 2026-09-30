@@ -266,3 +266,22 @@ fn a_change_that_is_not_a_tf_file_widens_nothing() {
     assert!(widened(&["m/.terraform.lock.hcl"], &[], &g, DIR).is_empty());
     assert!(widened(&["m/docker-bake.hcl", "m/notes.md"], &["m/x.hcl"], &g, DIR).is_empty());
 }
+
+#[test]
+fn a_negated_operand_keeps_its_attribute_steps_however_deep_the_operation_nests() {
+    let main = "variable \"on\" {}\nresource \"r\" \"x\" {}\nresource \"r\" \"y\" {}\noutput \"a\" {\n  value = !var.on\n}\noutput \"b\" {\n  value = -r.x.id\n}\noutput \"c\" {\n  value = var.on && !r.y.id\n}\n";
+    let ex = extract(&[("m/main.tf", main)], "m/main.tf");
+    assert_eq!(lines(&ex, EdgeKind::References), [
+        "sym:m/main.tf::output/a -> sym:m/main.tf::var/on []",
+        "sym:m/main.tf::output/b -> sym:m/main.tf::r/x []",
+        "sym:m/main.tf::output/c -> sym:m/main.tf::r/y []",
+        "sym:m/main.tf::output/c -> sym:m/main.tf::var/on []",
+    ]);
+}
+
+#[test]
+fn aliased_provider_blocks_are_one_symbol() {
+    let main = "provider \"aws\" {\n  alias = \"one\"\n}\nprovider \"aws\" {\n  alias = \"two\"\n}\n";
+    let ex = extract(&[("m/main.tf", main)], "m/main.tf");
+    assert_eq!(ex.nodes.iter().filter(|n| n.id == "sym:m/main.tf::provider/aws").count(), 1);
+}

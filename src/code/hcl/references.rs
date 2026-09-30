@@ -2,7 +2,7 @@
 //! `server.tf` names the variable `variables.tf` declares. `Modules` holds every directory's addresses,
 //! read once per globbed `.tf` file before any extract, so the answer does not hang on walk order.
 
-use super::{declarations, inner};
+use super::{declarations, dir_of, inner};
 use crate::code::lang::Lang;
 use crate::code::prose::{self, Spans};
 use crate::model::{EdgeKind, Extraction};
@@ -30,10 +30,6 @@ impl Modules {
             addresses.entry(address).or_default().push(rel.to_string());
         }
     }
-}
-
-fn dir_of(rel: &str) -> &str {
-    rel.rsplit_once('/').map_or("", |(dir, _)| dir)
 }
 
 pub(super) fn terraform(modules: &Modules, root: Node, own: &BTreeSet<String>, spans: &Spans, src: &[u8], rel: &str, ex: &mut Extraction) {
@@ -103,11 +99,22 @@ fn address(n: Node, src: &[u8]) -> Option<String> {
     }
 }
 
-/// The grammar hangs the attribute steps after a binary operation's last operand on the operation, not
-/// on the operand: in `a == c.d` the `.d` follows the whole `a == c`.
-fn trailing_steps(n: Node) -> Option<Node> {
-    let operation = n.parent().filter(|p| p.kind() == "binary_operation")?.parent().filter(|p| p.kind() == "operation")?;
-    operation.next_named_sibling()
+/// The grammar hangs the attribute steps after an operation's last operand on the operation, not on
+/// the operand: in `a == c.d` and in `!c.d` the `.d` follows the whole `a == c` or `!c`, and when that
+/// operation is itself the last operand of another, on the outermost.
+fn trailing_steps<'t>(n: Node<'t>) -> Option<Node<'t>> {
+    fn operation_of<'t>(n: Node<'t>) -> Option<Node<'t>> {
+        n.parent()
+            .filter(|p| matches!(p.kind(), "binary_operation" | "unary_operation"))?
+            .parent().filter(|p| p.kind() == "operation")
+    }
+    let mut operation = operation_of(n)?;
+    loop {
+        if let Some(next) = operation.next_named_sibling() {
+            return Some(next);
+        }
+        operation = operation_of(operation)?;
+    }
 }
 
 /// Whether a `for` expression's variable or a `dynamic` block's iterator binds the root first: `x.name`
