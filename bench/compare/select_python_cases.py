@@ -14,6 +14,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import truth as T  # noqa: E402
+from select_dotnet import private  # noqa: E402
 
 WIDE = 5
 
@@ -122,8 +123,10 @@ def main(argv: list[str] | None = None) -> None:
     ap.add_argument("--out", required=True, help="the case file to write")
     ap.add_argument("--waivers", required=True, help="the file each waiver's reason is written to")
     args = ap.parse_args(argv)
-    cases, waivers = select(Path(args.repo), args.ext)
     out, waiver_file = Path(args.out).expanduser(), Path(args.waivers).expanduser()
+    if not (private(out) and private(waiver_file)):
+        sys.exit("select_python_cases: --out or --waivers is inside this repository, and the cases name private code")
+    cases, waivers = select(Path(args.repo), args.ext)
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text("".join(json.dumps(c, ensure_ascii=False) + "\n" for c in cases), encoding="utf8")
     waiver_file.parent.mkdir(parents=True, exist_ok=True)

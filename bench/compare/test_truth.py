@@ -1281,6 +1281,13 @@ class RustTruth(unittest.TestCase):
         )
         self.assertEqual(rust_calls(src), [("Handler", "Exec.run"), ("Handler", "Tmux.capture"), ("Tmux", "Exec.run")])
 
+    def test_a_fn_pointer_field_does_not_hide_the_fields_after_it(self):
+        src = (
+            "pub struct Handler {\n    cb: Box<dyn Fn(i32) -> i32>,\n    exec: Exec,\n}\n"
+            "impl<F: Fn() -> u32> Handler {\n    fn go(&self) { self.exec.run(); }\n}\n"
+        )
+        self.assertEqual(rust_calls(src), [("Handler", "Exec.run")])
+
     def test_di_call_graph_reads_rust_through_its_call_reader(self):
         tmp = tree({"crates/a/src/handler.rs": "pub struct Handler<E: Exec> { exec: E }\nimpl<E: Exec> Handler<E> {\n    fn go(&self) { self.exec.run(); }\n}\n"})
         with tmp:
@@ -1289,6 +1296,12 @@ class RustTruth(unittest.TestCase):
         self.assertEqual(shortest_path(graph, "Handler", "Exec"), ["Handler", "Exec.run"])
 
 class PythonTruth(unittest.TestCase):
+    def test_a_nested_class_does_not_take_its_owners_later_calls(self):
+        tmp = tree({"app/svc.py": "class Svc:\n    def __init__(self):\n        self.repo = Repo()\n    class Meta:\n        x = 1\n    def go(self):\n        self.repo.save()\n"})
+        with tmp:
+            graph = di_call_graph(Path(tmp.name), ["app"])
+        self.assertEqual(graph["edges"], {"Svc": ["Repo.save"]})
+
     def test_the_blanker_keeps_every_column_and_hides_strings_and_comments(self):
         src = 'x = "a # not a comment"  # FR-1\ns = """\ndef hidden():\n"""\ndef kept():\n    return f\'{x}\'\n'
         blanked = blank_python(src)

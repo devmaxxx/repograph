@@ -1442,10 +1442,15 @@ def _matching_brace(text: str, open_at: int) -> int:
     return len(text)
 
 
+def _mask_arrows(text: str) -> str:
+    """`text` with each `->` blanked: its `>` closes no `<`, and counted as one it ends a generic list early."""
+    return text.replace("->", "  ")
+
+
 def _split_top(text: str) -> list[str]:
     """`text` split at commas outside `<>`, `()` and `[]`."""
     parts, depth, current = [], 0, ""
-    for char in text:
+    for char in _mask_arrows(text):
         depth += (char in "<([") - (char in ">)]")
         if char == "," and depth == 0:
             parts.append(current)
@@ -1457,7 +1462,7 @@ def _split_top(text: str) -> list[str]:
 
 def _strip_generics(text: str) -> str:
     out, depth = "", 0
-    for char in text:
+    for char in _mask_arrows(text):
         if char == "<":
             depth += 1
         elif char == ">":
@@ -1508,7 +1513,7 @@ def rust_calls(src: str) -> list[tuple[str, str]]:
                 fields[m.group(1)][fm.group(1)] = _rust_type_name(fm.group(2), bounds)
     pairs: set[tuple[str, str]] = set()
     for m in RUST_IMPL.finditer(blanked):
-        head = m.group("head").lstrip()
+        head = _mask_arrows(m.group("head")).lstrip()
         if head.startswith("<"):
             depth = 0
             for i, char in enumerate(head):
@@ -1648,7 +1653,9 @@ def python_declaration_end(lines: list[str], start: int) -> int:
 
 
 PYTHON_DI = DiReader(
-    re.compile(r"(?m)^[ \t]*class[ \t]+(\w+)"),
+    # Column zero only: a nested `class Meta:` would otherwise cut its owner's body in two, and
+    # every method written after it would be read as the nested class's.
+    re.compile(r"(?m)^class[ \t]+(\w+)"),
     # `self.x = T(…)`, `self.x: T = T(…)`, `self.x = mod.T(…)`: the constructor names the type.
     re.compile(r"\bself\.(\w+)\s*(?::[^=\n]*)?=\s*(?:[A-Za-z_]\w*\.)*([A-Za-z_]\w*)\s*\("),
     re.compile(r"\bself\.(\w+)\s*\.\s*(\w+)\s*\("),
