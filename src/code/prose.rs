@@ -95,7 +95,7 @@ pub(crate) fn body(n: Node, src: &[u8], between: &[&str]) -> String {
     }
     let mut doc = Vec::new();
     let mut at = top;
-    while let Some(p) = at.prev_named_sibling() {
+    while let Some(p) = above(at) {
         // A shebang is the interpreter line, not documentation of the function under it.
         if p.kind() != "comment" || text(p, src).starts_with("#!") || last_row(p) + 1 != at.start_position().row { break }
         doc.push(text(p, src).trim_end());
@@ -110,6 +110,12 @@ pub(crate) fn body(n: Node, src: &[u8], between: &[&str]) -> String {
     }
     let first = text(n, src).lines().next().unwrap_or("");
     if out.is_empty() { first.to_string() } else { format!("{out}\n{first}") }
+}
+
+/// The named sibling before `n`. HCL's grammar puts the comments above a file's first block outside its
+/// `body`, so a first child of a `body` looks past it.
+fn above(n: Node) -> Option<Node> {
+    n.prev_named_sibling().or_else(|| n.parent().filter(|p| p.kind() == "body").and_then(|p| p.prev_named_sibling()))
 }
 
 /// A symbol spanning `n`, declared by `parent`. The label is the id's name as `impact` splits it, at the first `::`, so what
