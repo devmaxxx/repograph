@@ -166,3 +166,23 @@ fn an_interpreter_run_skips_options_and_a_command_string() {
     let none = extract(&[("a.sh", "bash -o pipefail\nbash -c x.sh\n"), ("pipefail", ""), ("x.sh", "")], "a.sh");
     assert!(lines(&none, EdgeKind::References).is_empty());
 }
+
+#[test]
+fn a_function_added_to_a_script_while_watching_is_called_on_the_next_poll() {
+    let dir = tempfile::tempdir().unwrap();
+    let r = dir.path();
+    std::fs::write(r.join("repograph.toml"), "doc_globs = []\ncode_globs = [\"**/*.sh\"]\n").unwrap();
+    std::fs::write(r.join("lib.sh"), "lib_other() {\n  :\n}\n").unwrap();
+    std::fs::write(r.join("run.sh"), ". ./lib.sh\nlib_line start\n").unwrap();
+    let cfg = crate::config::Config::load(r).unwrap();
+    crate::run_update(r, &cfg, true).unwrap();
+    let mut w = crate::Watcher::open(r, &cfg).unwrap();
+    // A body edit of a file the watcher already knows moves no path and no header, so the resolver
+    // built at open would still not know `lib_line`; `run.sh` is left alone and is re-read by widening.
+    std::fs::write(r.join("lib.sh"), "lib_other() {\n  :\n}\nlib_line() {\n  :\n}\n").unwrap();
+    assert!(matches!(w.poll(1).unwrap(), crate::Polled::Refreshed(_)));
+    assert!(
+        w.graph.edges.iter().any(|e| e.kind == EdgeKind::Calls && e.source == "file:run.sh" && e.target == "sym:lib.sh::lib_line"),
+        "{:?}", w.graph.edges
+    );
+}

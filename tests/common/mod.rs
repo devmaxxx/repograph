@@ -48,3 +48,22 @@ pub fn git(repo: &Path, args: &[&str]) {
         .unwrap_or_else(|e| panic!("git {args:?}: {e}"));
     assert!(out.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&out.stderr));
 }
+
+pub fn write(repo: &Path, rel: &str, text: &str) {
+    let path = repo.join(rel);
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(path, text).unwrap();
+}
+
+/// Runs a command that must succeed and returns its stdout.
+pub fn ok(repo: &Path, args: &[&str]) -> String {
+    let out = run(repo, args);
+    let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+    assert!(out.status.success(), "{args:?}: {stdout}{}", String::from_utf8_lossy(&out.stderr));
+    stdout
+}
+
+/// The node ids of a `trace` answer, one per line.
+pub fn path(out: &str) -> Vec<&str> {
+    out.lines().map(|l| l.trim_start_matches("  → ").split_whitespace().next().unwrap_or("")).collect()
+}

@@ -10,7 +10,7 @@ mod cases;
 use crate::code::imports::Resolver;
 use crate::code::lang::{file_node, Lang};
 use crate::code::prose::{self, Spans};
-use crate::model::Extraction;
+use crate::model::{EdgeKind, Extraction, Graph};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use tree_sitter::Node;
 
@@ -31,6 +31,31 @@ pub fn extract(resolver: &Resolver, rel: &str, source: &str) -> Extraction {
     commands::write(resolver.shell(), root, &spans, src, rel, &mut ex);
     prose::cite(root, src, rel, &["string", "raw_string", "heredoc_body"], &spans, &mut ex);
     ex
+}
+
+/// `apply_diff`'s widening for scripts. Bash resolves a called name across the files a script sources
+/// with no header to compare, so a changed or removed script can add or drop a function that a script
+/// sourcing it calls: every script sourcing it, directly or through another, is read again. A script
+/// whose `source` named a file that did not exist yet has no `Imports` edge to follow, and waits for
+/// its own next edit.
+pub(crate) fn widen(stale: &[String], removed: &[String], graph: &Graph, all_rels: &[String]) -> Vec<String> {
+    let mut reached: BTreeSet<String> = stale.iter().chain(removed)
+        .filter(|r| Lang::of(r) == Some(Lang::Shell))
+        .map(|r| format!("file:{r}"))
+        .collect();
+    let mut frontier: Vec<String> = reached.iter().cloned().collect();
+    while !frontier.is_empty() {
+        frontier = graph.edges.iter()
+            .filter(|e| e.kind == EdgeKind::Imports && frontier.contains(&e.target))
+            .map(|e| e.source.clone())
+            .filter(|s| reached.insert(s.clone()))
+            .collect();
+    }
+    reached.iter()
+        .filter_map(|id| id.strip_prefix("file:"))
+        .filter(|r| !stale.iter().any(|s| s == r) && all_rels.iter().any(|a| a == r))
+        .map(str::to_string)
+        .collect()
 }
 
 /// Every function definition, nested ones included: a function defined inside another is callable
