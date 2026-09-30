@@ -6,7 +6,7 @@ use super::modules::Modules;
 use super::{field_text, text};
 use crate::code::jvm::{descend, named};
 use crate::model::{EdgeKind, Extraction};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use tree_sitter::Node;
 
 /// What an imported name stands for.
@@ -30,11 +30,21 @@ struct Ctx<'a> {
     bindings: BTreeMap<String, BTreeMap<String, Bound>>,
     /// Class id suffix → attribute → its type as a dotted path; empty when the file types it two ways.
     attrs: BTreeMap<String, BTreeMap<String, String>>,
+    /// Function scope → names a parameter or local assignment makes its own for the whole function.
+    shadows: BTreeMap<String, BTreeSet<String>>,
+}
+
+/// Where a lookup happens: the scope's id suffix, and the parameters of the lambdas around it.
+#[derive(Clone, Copy)]
+struct Sc<'a> {
+    name: &'a str,
+    lambda: &'a BTreeSet<String>,
 }
 
 pub(crate) fn read(modules: &Modules, rel: &str, src: &[u8], root: Node, defs: &Defs, ex: &mut Extraction) {
-    let mut ctx = Ctx { rel, src, modules, defs, bindings: BTreeMap::new(), attrs: BTreeMap::new() };
+    let mut ctx = Ctx { rel, src, modules, defs, bindings: BTreeMap::new(), attrs: BTreeMap::new(), shadows: BTreeMap::new() };
     ctx.imports(root, ex);
+    ctx.shadows(root);
     ctx.attribute_types(root);
     ctx.calls(root, ex);
     ctx.classes(root, ex);
@@ -57,6 +67,39 @@ fn name_and_alias(n: Node, src: &[u8]) -> Option<(String, Option<String>)> {
         "dotted_name" => Some((text(n, src).to_string(), None)),
         _ => None,
     }
+}
+
+/// The names an assignment-like target binds: `a`, `a, (b, *c)`; an attribute or subscript binds none.
+fn target_names(n: Node, src: &[u8], out: &mut BTreeSet<String>) {
+    match n.kind() {
+        "identifier" => {
+            out.insert(text(n, src).to_string());
+        }
+        "pattern_list" | "tuple_pattern" | "list_pattern" | "list_splat_pattern" | "parenthesized_expression" | "tuple" | "list"
+        | "as_pattern_target" => {
+            named(n).into_iter().for_each(|c| target_names(c, src, out));
+        }
+        _ => {}
+    }
+}
+
+/// The name a parameter of any shape binds; `*args` and `**kw` wrap theirs.
+fn param_names(p: Node, src: &[u8], out: &mut BTreeSet<String>) {
+    match p.kind() {
+        "identifier" => target_names(p, src, out),
+        "list_splat_pattern" | "dictionary_splat_pattern" => named(p).into_iter().for_each(|c| target_names(c, src, out)),
+        "typed_parameter" => named(p).into_iter().take(1).for_each(|c| param_names(c, src, out)),
+        "default_parameter" | "typed_default_parameter" => p.child_by_field_name("name").into_iter().for_each(|c| target_names(c, src, out)),
+        _ => {}
+    }
+}
+
+fn parameters_of(f: Node, src: &[u8]) -> BTreeSet<String> {
+    let mut out = BTreeSet::new();
+    if let Some(ps) = f.child_by_field_name("parameters") {
+        named(ps).into_iter().for_each(|p| param_names(p, src, &mut out));
+    }
+    out
 }
 
 /// Records `attr: ty`; a second, different type makes the attribute untyped, since which one a
@@ -90,6 +133,62 @@ impl Ctx<'_> {
     fn written(&self, target: String) -> Option<String> {
         let own = target.strip_prefix("sym:").and_then(|s| s.strip_prefix(self.rel)).and_then(|s| s.strip_prefix("::"));
         own.is_none_or(|s| self.defs.names.contains(s)).then_some(target)
+    }
+
+    /// What each function makes its own: parameters, assignment, `for`, `with`/`except … as` and
+    /// walrus targets, nested definitions. A nested function's names widen its outer function's
+    /// set, which only loses edges. `global` and `nonlocal` name the enclosing binding, so they
+    /// cancel the shadow. A local import is a binding, not a shadow.
+    fn shadows(&mut self, root: Node) {
+        let mut shadows: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+        let mut released: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+        descend(root, &mut |f| {
+            let Some(name) = (f.kind() == "function_definition").then(|| f.child_by_field_name("name")).flatten() else { return true };
+            let key = self.scope(name);
+            let (set, freed) = (shadows.entry(key.clone()).or_default(), released.entry(key).or_default());
+            set.extend(parameters_of(f, self.src));
+            if let Some(body) = f.child_by_field_name("body") {
+                descend(body, &mut |n| {
+                    match n.kind() {
+                        "assignment" | "augmented_assignment" | "for_statement" | "for_in_clause" => {
+                            n.child_by_field_name("left").into_iter().for_each(|l| target_names(l, self.src, set));
+                        }
+                        "as_pattern" | "except_clause" => n.child_by_field_name("alias").into_iter().for_each(|a| target_names(a, self.src, set)),
+                        "named_expression" => n.child_by_field_name("name").into_iter().for_each(|a| target_names(a, self.src, set)),
+                        "function_definition" | "class_definition" => {
+                            set.extend(field_text(n, "name", self.src).map(str::to_string));
+                        }
+                        "global_statement" | "nonlocal_statement" => named(n).into_iter().for_each(|c| target_names(c, self.src, freed)),
+                        _ => {}
+                    }
+                    true
+                });
+            }
+            true
+        });
+        for (key, mut set) in shadows {
+            if let Some(freed) = released.get(&key) {
+                set.retain(|n| !freed.contains(n));
+            }
+            self.shadows.insert(key, set);
+        }
+    }
+
+    /// Whether the head of a path is a local of the scope or a parameter of a lambda around the
+    /// call. `self` is a parameter too, but the receiver rules read it before any lookup.
+    fn shadowed(&self, sc: Sc, head: &str) -> bool {
+        sc.lambda.contains(head) || self.shadows.get(sc.name).is_some_and(|s| s.contains(head))
+    }
+
+    /// The parameters of every lambda that encloses `n`.
+    fn lambda_params(&self, n: Node) -> BTreeSet<String> {
+        let mut out = BTreeSet::new();
+        for a in std::iter::successors(n.parent(), |p| p.parent()).filter(|a| a.kind() == "lambda") {
+            if let Some(ps) = a.child_by_field_name("parameters") {
+                named(ps).into_iter().for_each(|p| param_names(p, self.src, &mut out));
+            }
+        }
+        out
     }
 
     fn bound(&self, scope: &str, name: &str) -> Option<&Bound> {
@@ -227,7 +326,11 @@ impl Ctx<'_> {
 
     /// `obj.attr` where `obj` is a dotted path: a bound module (`truth.read_jsonl`, `a.b.f`), a
     /// class bound by name or declared here (`Store.open`), or a bound prefix of the path (`mod.Cls.m`).
-    fn qualified(&self, scope: &str, obj: &str, attr: &str) -> Option<String> {
+    fn qualified(&self, sc: Sc, obj: &str, attr: &str, local: bool) -> Option<String> {
+        let scope = sc.name;
+        if local && self.shadowed(sc, obj.split('.').next().unwrap_or(obj)) {
+            return None;
+        }
         let at = |b: &Bound, rest: &str| match b {
             Bound::Module(f) if rest.is_empty() => format!("sym:{f}::{attr}"),
             Bound::Module(f) => format!("sym:{f}::{rest}.{attr}"),
@@ -250,23 +353,28 @@ impl Ctx<'_> {
         None
     }
 
-    fn callee(&self, scope: &str, f: Node) -> Option<String> {
+    fn callee(&self, sc: Sc, f: Node) -> Option<String> {
+        let scope = sc.name;
         let target = match f.kind() {
             "identifier" => {
                 let name = text(f, self.src);
+                if self.shadowed(sc, name) {
+                    return None;
+                }
                 match self.bound(scope, name) {
                     Some(Bound::Name(file, n)) => Some(format!("sym:{file}::{n}")),
                     Some(Bound::Module(_)) => None,
                     None => self.defs.top.contains(name).then(|| format!("sym:{}::{name}", self.rel)),
                 }
             }
-            "attribute" => self.member(scope, f),
+            "attribute" => self.member(sc, f),
             _ => None,
         };
         self.written(target?)
     }
 
-    fn member(&self, scope: &str, f: Node) -> Option<String> {
+    fn member(&self, sc: Sc, f: Node) -> Option<String> {
+        let scope = sc.name;
         let attr = field_text(f, "attribute", self.src)?;
         let object = f.child_by_field_name("object")?;
         let class = scope.rsplit_once('.').map(|(c, _)| c).filter(|c| self.defs.classes.contains(*c));
@@ -277,9 +385,9 @@ impl Ctx<'_> {
         if object.kind() == "attribute" && object.child_by_field_name("object").is_some_and(is_self) {
             let field = field_text(object, "attribute", self.src)?;
             let ty = self.attrs.get(class?)?.get(field).filter(|t| !t.is_empty())?;
-            return self.qualified(scope, ty, attr);
+            return self.qualified(sc, ty, attr, false);
         }
-        self.qualified(scope, &dotted(object, self.src)?, attr)
+        self.qualified(sc, &dotted(object, self.src)?, attr, true)
     }
 
     fn calls(&self, root: Node, ex: &mut Extraction) {
@@ -288,7 +396,9 @@ impl Ctx<'_> {
                 return true;
             }
             let from = self.source(n);
-            let target = n.child_by_field_name("function").and_then(|f| self.callee(self.suffix(&from), f));
+            let lambda = self.lambda_params(n);
+            let sc = Sc { name: self.suffix(&from), lambda: &lambda };
+            let target = n.child_by_field_name("function").and_then(|f| self.callee(sc, f));
             if let Some(target) = target.filter(|t| *t != from) {
                 ex.edge(&from, &target, EdgeKind::Calls, "", self.rel);
             }
@@ -298,7 +408,7 @@ impl Ctx<'_> {
 
     /// A path as a class or decorator names it: a bound or top-level name, or a qualified one.
     fn path_target(&self, n: Node) -> Option<String> {
-        self.callee("", n)
+        self.callee(Sc { name: "", lambda: &BTreeSet::new() }, n)
     }
 
     fn classes(&self, root: Node, ex: &mut Extraction) {

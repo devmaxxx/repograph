@@ -381,3 +381,54 @@ fn a_decorated_definition_inside_a_function_does_not_decorate_the_function() {
     let ex = Repo::new(&[("m.py", src)]).extract("m.py");
     assert!(edges(&ex, EdgeKind::DecoratedBy).is_empty(), "{:?}", edges(&ex, EdgeKind::DecoratedBy));
 }
+
+fn shadow_repo(main: &str) -> Repo {
+    Repo::new(&[("tools/util.py", "def connect():\n    pass\n\n\nclass Store:\n    def open(self):\n        pass\n"), ("tools/store.py", "def open():\n    pass\n"), ("tools/main.py", main)])
+}
+
+fn no_calls(main: &str, from: &str) {
+    let ex = shadow_repo(main).extract("tools/main.py");
+    assert!(calls_from(&ex, from).is_empty(), "{:?}", calls_from(&ex, from));
+}
+
+#[test]
+fn a_parameter_shadows_an_imported_name() {
+    no_calls("from util import connect\n\n\ndef f(connect):\n    connect()\n", "sym:tools/main.py::f");
+    no_calls("from util import connect\n\n\ndef f(*connect, **kw):\n    connect()\n", "sym:tools/main.py::f");
+    no_calls("from util import connect\n\n\ndef f(a, *, connect=None):\n    connect()\n", "sym:tools/main.py::f");
+}
+
+#[test]
+fn a_local_assignment_shadows_a_bound_module() {
+    no_calls("import store\n\n\ndef f():\n    store = make()\n    store.open()\n", "sym:tools/main.py::f");
+    no_calls("import store\n\n\ndef f():\n    a, (store, b) = make()\n    store.open()\n", "sym:tools/main.py::f");
+}
+
+#[test]
+fn a_lambda_parameter_shadows_only_inside_the_lambda() {
+    no_calls("from util import connect\n\n\nrun = lambda connect: connect()\n", "sym:tools/main.py::run");
+    let ex = shadow_repo("from util import connect\n\n\ndef f():\n    g = lambda connect: connect()\n    connect()\n").extract("tools/main.py");
+    assert_eq!(calls_from(&ex, "sym:tools/main.py::f"), ["sym:tools/util.py::connect"].into_iter().collect());
+}
+
+#[test]
+fn a_loop_with_except_or_walrus_target_shadows() {
+    no_calls("from util import Store\n\n\ndef f(xs):\n    for Store in xs:\n        Store.open()\n", "sym:tools/main.py::f");
+    no_calls("from util import connect\n\n\ndef f(p):\n    with p as connect:\n        connect()\n", "sym:tools/main.py::f");
+    no_calls("from util import connect\n\n\ndef f(p):\n    try:\n        p()\n    except OSError as connect:\n        connect()\n", "sym:tools/main.py::f");
+    no_calls("from util import connect\n\n\ndef f(p):\n    if (connect := p):\n        connect()\n", "sym:tools/main.py::f");
+}
+
+#[test]
+fn a_local_shadows_a_top_level_name_and_a_class() {
+    no_calls("def helper():\n    pass\n\n\ndef f(helper):\n    helper()\n", "sym:tools/main.py::f");
+    no_calls("class A:\n    def m(self):\n        pass\n\n\ndef f(A):\n    A.m(1)\n", "sym:tools/main.py::f");
+}
+
+#[test]
+fn a_global_declaration_cancels_the_shadow_and_a_local_import_is_not_one() {
+    let ex = shadow_repo("from util import connect\n\n\ndef f():\n    global connect\n    connect = 1\n    connect()\n").extract("tools/main.py");
+    assert_eq!(calls_from(&ex, "sym:tools/main.py::f"), ["sym:tools/util.py::connect"].into_iter().collect());
+    let ex = shadow_repo("def f():\n    from util import connect\n    connect()\n").extract("tools/main.py");
+    assert_eq!(calls_from(&ex, "sym:tools/main.py::f"), ["sym:tools/util.py::connect"].into_iter().collect());
+}
