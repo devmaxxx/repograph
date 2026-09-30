@@ -1653,6 +1653,43 @@ class IacShellReaders(unittest.TestCase):
             self.assertEqual(build(Path(tmp), [], [case], roots=["."])["impact"]["lib_line"]["refs"], ["probe/run.sh"])
 
 
+class ShellReaderEdges(unittest.TestCase):
+    def test_a_here_string_or_a_shift_does_not_open_a_heredoc(self):
+        for label, line in (("here-string", "grep x <<< word"), ("shift", "n=$(( 1 << shift ))"), ("command shift", "(( n = 1 << shift ))")):
+            with self.subTest(label):
+                src = f"f() {{\n  {line}\n  helper\n}}\nhelper() {{ :; }}\n"
+                self.assertEqual(shell_declarations(blank_shell(src)), [(1, "f"), (5, "helper")])
+                self.assertIn(("f", "helper"), shell_calls(src))
+
+    def test_a_function_spans_past_a_one_line_case_and_a_line_of_several_arms(self):
+        for label, body in (
+            ("one line", "case $1 in lint) run_lint ;; esac"),
+            ("several arms", "case $1 in\n    a) x ;; b) y ;;\n  esac"),
+        ):
+            with self.subTest(label):
+                src = "main() {\n  " + body + "\n  after\n}\n"
+                lines = blank_shell(src).split("\n")
+                self.assertEqual(declaration_end(lines, 1), src.count("\n"))
+                self.assertIn(("main", "after"), shell_calls(src))
+
+    def test_a_quoted_dollar_paren_and_arithmetic_are_not_calls(self):
+        self.assertEqual(shell_calls("f() {\n  echo '$(helper)'\n  n=$((count + 1))\n  ((count < 3))\n}\n"), [("f", "echo")])
+        self.assertEqual(shell_calls('f() {\n  x="$(helper a)"\n}\n'), [("f", "helper")])
+
+    def test_a_multi_line_expansion_keeps_the_line_of_the_next_command(self):
+        self.assertEqual(shell_calls('a() {\n  x=${y:-\n}\n  b\n}\nb() { :; }\n'), [("a", "b")])
+
+    def test_a_shell_impact_case_reads_a_call_inside_a_double_quoted_substitution(self):
+        files = {
+            "probe/lib.sh": "lib_line() {\n  :\n}\n",
+            "probe/run.sh": 'x="$(lib_line a)"\n',
+            "probe/quiet.sh": "# lib_line is not called here\n",
+        }
+        case = {"kind": "impact", "target": "lib_line", "file": "probe/lib.sh", "tier": "narrow", "exts": [".sh"]}
+        with tracked_repo(files) as tmp:
+            self.assertEqual(build(Path(tmp), [], [case], roots=["."])["impact"]["lib_line"]["refs"], ["probe/run.sh"])
+
+
 class IacShellReaderContract(unittest.TestCase):
     """A declaration reader trusts its caller to have blanked; a call or reference reader blanks for itself."""
 

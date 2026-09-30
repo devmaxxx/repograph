@@ -1952,7 +1952,17 @@ def _without_names(blanked: str, quote: str) -> str:
     return re.sub(rf"{quote}[\w./:@-]*{quote}", lambda m: quote + " " * (len(m.group(0)) - 2) + quote, blanked)
 
 
-SHELL_HEREDOC = re.compile(r"<<(-?)[ \t]*(['\"]?)([A-Za-z_][\w-]*)\2")
+# `<<<` is a here-string with no terminator to hunt for, and `<<` inside `$((…))` is a shift.
+SHELL_HEREDOC = re.compile(r"(?<!<)<<(?!<)(-?)[ \t]*(['\"]?)([A-Za-z_][\w-]*)\2")
+
+
+def _arithmetic_end(src: str, i: int) -> int:
+    """The index past the `))` of a `$((…))` or command-position `((…))` starting at `i`, else 0."""
+    if src.startswith("$((", i):
+        return _paren_end(src, i + 2)
+    if src.startswith("((", i) and (i == 0 or src[i - 1] in " \t\n;|&("):
+        return _paren_end(src, i + 1)
+    return 0
 
 
 def _shell_scan(src: str, *, strings: bool) -> str:
@@ -1979,6 +1989,10 @@ def _shell_scan(src: str, *, strings: bool) -> str:
         elif c == "\\" and i + 1 < len(src):
             out.append(src[i : i + 2])
             i += 2
+            continue
+        elif arithmetic := _arithmetic_end(src, i):
+            out.append(src[i:arithmetic])
+            i = arithmetic
             continue
         # `#` opens a comment only at the start of a word: `$#` and `${#a[@]}` are expansions.
         elif c == "#" and (i == 0 or src[i - 1] in " \t\n;|&("):
@@ -2020,18 +2034,34 @@ def shell_code(src: str) -> str:
 
 
 # A case pattern's `)` has no `(`, and `declaration_end` would count the function holding it open to the
-# end of the file. Lines between `case` and `esac` whose first word ends in a bare `)` lose both.
-CASE_ARM = re.compile(r"^([ \t]*)(\(?[^()\n]*[^()\s][^()\n]*\))")
+# end of the file, or end it early on the line that closes one bracket too many.
+CASE_PATTERN = r"""\(?[ \t]*(?:"[ ]*"|'[ ]*'|[^\s()|;"'])+(?:[ \t]*\|[ \t]*(?:"[ ]*"|'[ ]*'|[^\s()|;"'])+)*[ \t]*\)"""
+CASE_ARM_AFTER = re.compile(rf"(?:^|;;&?|;&)[ \t]*{CASE_PATTERN}")
+CASE_ARM_IN = re.compile(rf"\bin[ \t]+{CASE_PATTERN}")
+
+
+def _case_pattern_spans(seen: list[str]) -> list[list[tuple[int, int]]]:
+    """Per line of string-blanked shell, the column spans of the `case` patterns it holds: after `in`
+    on the line opening a `case`, and after `;;` or at the start of a line between `case` and `esac`."""
+    out: list[list[tuple[int, int]]] = []
+    depth = 0
+    for line in seen:
+        spans = []
+        if depth:
+            spans += [m.span() for m in CASE_ARM_AFTER.finditer(line)]
+        if re.search(r"\bcase\b", line):
+            spans += [(m.start() + m.group(0).index("in") + 2, m.end()) for m in CASE_ARM_IN.finditer(line)]
+        out.append(spans)
+        depth = max(depth + len(re.findall(r"\bcase\b", line)) - len(re.findall(r"\besac\b", line)), 0)
+    return out
 
 
 def blank_shell(src: str) -> str:
-    """Shell as `declaration_end` needs it: comments, heredocs and strings blanked, case patterns unbracketed."""
+    """Shell as `declaration_end` needs it: comments, heredocs and strings blanked, case patterns too."""
     lines = _shell_scan(src, strings=True).split("\n")
-    depth = 0
-    for k, line in enumerate(lines):
-        if depth and (m := CASE_ARM.match(line)):
-            lines[k] = line[: m.start(2)] + m.group(2).replace("(", " ").replace(")", " ") + line[m.end(2) :]
-        depth = max(depth + len(re.findall(r"\bcase\b", lines[k])) - len(re.findall(r"\besac\b", lines[k])), 0)
+    for k, spans in enumerate(_case_pattern_spans(lines)):
+        for a, b in spans:
+            lines[k] = lines[k][:a] + " " * (b - a) + lines[k][b:]
     return "\n".join(lines)
 
 
@@ -2311,6 +2341,16 @@ def bicep_impact(repo: Path, case: dict) -> list[str]:
     return out
 
 
+def shell_impact(repo: Path, case: dict) -> list[str]:
+    """Shell files naming the function, read with strings kept: `"$(name …)"` is a call, and the string
+    blanking `blank_shell` does for spans would hide it from `code_files_naming`."""
+    word = re.compile(rf"\b{re.escape(case['target'])}\b")
+    return [
+        rel for rel in tracked(repo, "*.sh", "*.bash")
+        if rel != case.get("file") and word.search(shell_code((repo / rel).read_text(encoding="utf8", errors="replace")))
+    ]
+
+
 SHELL_KEYWORDS = {"if", "then", "else", "elif", "fi", "do", "done", "while", "until", "!", "time", "{", "}"}
 SHELL_NOT_COMMANDS = {"for", "case", "select", "function", "in", "esac"}
 SHELL_ASSIGNMENT = re.compile(r"[A-Za-z_]\w*=")
@@ -2366,7 +2406,14 @@ def _shell_commands(code: str) -> list[tuple[int, list[str]]]:
             c = text[i]
             if not words and not word and not quote:
                 start = line
-            if text.startswith("$(", i) and not text.startswith("$((", i):
+            if quote != "'" and (j := _arithmetic_end(text, i)):
+                # `$((n + 1))` and `((n < 3))` read variables, not commands.
+                if c == "$":
+                    word.append(text[i:j])
+                line += text.count("\n", i, j)
+                i = j
+                continue
+            if quote != "'" and text.startswith("$(", i) and not text.startswith("$((", i):
                 j = _paren_end(text, i + 2)
                 scan(text[i + 2 : j - 1], line)
                 word.append(text[i:j])
@@ -2388,6 +2435,7 @@ def _shell_commands(code: str) -> list[tuple[int, list[str]]]:
                 j = text.find("}", i)
                 j = len(text) if j < 0 else j + 1
                 word.append(text[i:j])
+                line += text.count("\n", i, j)
                 i = j
                 continue
             elif c == "\\" and i + 1 < len(text):
@@ -2409,27 +2457,14 @@ def _shell_commands(code: str) -> list[tuple[int, list[str]]]:
     return out
 
 
-CASE_PATTERN = r"""\(?[ \t]*(?:"[ ]*"|'[ ]*'|[^\s()|;"'])+(?:[ \t]*\|[ \t]*(?:"[ ]*"|'[ ]*'|[^\s()|;"'])+)*[ \t]*\)"""
-CASE_ARM_AFTER = re.compile(rf"(?:^|;;&?|;&)[ \t]*{CASE_PATTERN}")
-CASE_ARM_IN = re.compile(rf"\bin[ \t]+{CASE_PATTERN}")
-
-
 def _without_case_patterns(src: str) -> str:
     """`shell_code(src)` with each `case` pattern blanked: `lint)` names no command, and `)` would end
     one. Strings are blanked in the copy the patterns are found in, so a `case` inside one is not counted."""
     code = shell_code(src).split("\n")
-    seen = _shell_scan(src, strings=True).split("\n")
-    depth = 0
-    for k, line in enumerate(seen):
-        spans = []
-        if depth:
-            spans += [m.span() for m in CASE_ARM_AFTER.finditer(line)]
-        if re.search(r"\bcase\b", line):
-            spans += [(m.start() + m.group(0).index("in") + 2, m.end()) for m in CASE_ARM_IN.finditer(line)]
+    for k, spans in enumerate(_case_pattern_spans(_shell_scan(src, strings=True).split("\n"))):
         for a, b in spans:
             # The closing `)` becomes `;` so what follows the pattern is a command of its own.
             code[k] = code[k][:a] + " " * (b - a - 1) + ";" + code[k][b:]
-        depth = max(depth + len(re.findall(r"\bcase\b", line)) - len(re.findall(r"\besac\b", line)), 0)
     return "\n".join(code)
 
 
@@ -2460,8 +2495,10 @@ BLANKERS.update({".bicep": blank_bicep, ".tf": blank_hcl, ".hcl": blank_hcl, ".s
 # Each gets a file's raw text, as `DI_READERS`' patterns do, and blanks it itself.
 CALL_READERS.update({".tf": terraform_calls, ".hcl": bake_calls, ".bicep": bicep_calls, ".sh": shell_calls, ".bash": shell_calls})
 # Keyed by the suffix of a case's declaring file. A language whose reference is its declared name spelled
-# in another file needs none, and Shell is one: `code_files_naming` under `"exts"` reads it.
-IMPACT_READERS: dict[str, Callable[[Path, dict], list[str]]] = {".tf": terraform_impact, ".bicep": bicep_impact}
+# in another file, with nothing to keep that `blanked_source` blanks, needs none: `code_files_naming` reads it.
+IMPACT_READERS: dict[str, Callable[[Path, dict], list[str]]] = {
+    ".tf": terraform_impact, ".bicep": bicep_impact, ".sh": shell_impact, ".bash": shell_impact,
+}
 
 
 def build(repo: Path, cases: list[dict], blast: list[dict], roots: list[str] | None = None) -> dict:
