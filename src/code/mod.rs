@@ -11,6 +11,7 @@ pub mod java;
 pub mod jvm;
 pub mod kotlin;
 pub mod lang;
+pub(crate) mod prose;
 pub(crate) mod python;
 pub mod razor;
 pub(crate) mod rust_lang;

@@ -24,6 +24,9 @@ pub struct Resolver {
     rust: crate::code::rust_lang::Crates,
     /// Python module names: every `.py` path and the directories holding a project manifest.
     python: crate::code::python::Modules,
+    /// Every globbed script's functions and `source` lines, so a call resolves through what a script
+    /// sources whatever order the walk reads files in.
+    shell: crate::code::shell::Scripts,
 }
 
 #[derive(Deserialize, Default)]
@@ -127,10 +130,28 @@ impl Resolver {
         let mut sources: Vec<(Lang, String, PathBuf)> = Vec::new();
         let mut manifests: Vec<(Family, String, PathBuf)> = Vec::new();
         let mut reached: BTreeSet<Family> = BTreeSet::new();
-        for dent in ignore::WalkBuilder::new(repo).hidden(true).git_ignore(true).build().flatten() {
+        // `walk` reads dotted directories, so this one does too, and admits from them only what Shell
+        // collects: CI keeps its scripts under `.github/`, while a tsconfig, a package.json or a manifest
+        // under a dotted directory stays out, as it was before this walk opened.
+        let walker = ignore::WalkBuilder::new(repo)
+            .hidden(false)
+            .filter_entry(|e| e.file_name() != ".git")
+            .git_ignore(true)
+            .build();
+        for dent in walker.flatten() {
             let p = dent.path();
             let Some(name) = p.file_name().and_then(|n| n.to_str()) else { continue };
             let rel = p.strip_prefix(repo).unwrap_or(p).to_string_lossy().replace('\\', "/");
+            if rel.split('/').any(|part| part.starts_with('.')) {
+                let is_file = dent.file_type().is_some_and(|t| t.is_file());
+                if let Some(lang) = Lang::of(&rel).filter(|l| l.family() == Family::Shell) {
+                    if is_file && !skip.is_match(&rel) && code.is_match(&rel) {
+                        reached.insert(Family::Shell);
+                        sources.push((lang, rel, p.to_path_buf()));
+                    }
+                }
+                continue;
+            }
             if dent.file_type().is_some_and(|t| t.is_file()) && !skip.is_match(&rel) {
                 if code.is_match(&rel) {
                     if let Some(lang) = Lang::of(&rel) {
@@ -195,7 +216,7 @@ impl Resolver {
         }
         // Nearest tsconfig to the importing file wins: sort deepest directory first.
         paths.sort_by_key(|a| std::cmp::Reverse(a.0.len()));
-        let mut resolver = Resolver { repo: repo.to_path_buf(), paths, packages, indexes: BTreeMap::new(), dotnet: Default::default(), rust: Default::default(), python: Default::default() };
+        let mut resolver = Resolver { repo: repo.to_path_buf(), paths, packages, indexes: BTreeMap::new(), dotnet: Default::default(), rust: Default::default(), python: Default::default(), shell: Default::default() };
         // Manifests before sources: a path family's roots decide how its sources' paths read.
         for (_, rel, path) in manifests.iter().filter(|(f, _, _)| reached.contains(f)) {
             if let Ok(text) = std::fs::read_to_string(path) {
@@ -228,6 +249,10 @@ impl Resolver {
         &self.python
     }
 
+    pub(crate) fn shell(&self) -> &crate::code::shell::Scripts {
+        &self.shell
+    }
+
     /// What one globbed source contributes before any file is extracted. A name-indexed family's
     /// header goes into its index; a path family's plan adds its arm below, for state of its own.
     ///
@@ -253,6 +278,9 @@ impl Resolver {
         if lang == Lang::Python {
             self.python.file(rel);
             self.python.init(rel, source);
+        }
+        if lang == Lang::Shell {
+            self.shell.add(rel, source);
         }
     }
 
