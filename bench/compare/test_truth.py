@@ -13,8 +13,21 @@ from truth import (
     DI_READERS,
     blank_python,
     blank_rust,
+    bake_calls,
+    bicep_calls,
+    bicep_declarations,
+    bicep_impact,
+    blank_bicep,
+    blank_hcl,
+    blank_shell,
     build,
     di_call_graph,
+    hcl_declarations,
+    shell_calls,
+    shell_declarations,
+    terraform_calls,
+    terraform_declarations,
+    terraform_impact,
     python_declaration_end,
     python_declarations,
     rust_declaration_end,
@@ -488,7 +501,8 @@ class Registries(unittest.TestCase):
         self.assertEqual(
             T.code_globs(),
             ("-g", "*.ts", "-g", "*.tsx", "-g", "*.js", "-g", "*.jsx", "-g", "*.mjs", "-g", "*.cjs", "-g", "*.kt", "-g", "*.cs", "-g", "*.razor", "-g", "*.cshtml", "-g", "*.java",
-             "-g", "*.sql", "-g", "*.gql", "-g", "*.graphql", "-g", "*.rs", "-g", "*.py"),
+             "-g", "*.sql", "-g", "*.gql", "-g", "*.graphql", "-g", "*.rs", "-g", "*.py",
+             "-g", "*.bicep", "-g", "*.tf", "-g", "*.hcl", "-g", "*.sh", "-g", "*.bash"),
         )
 
     def test_a_registered_reader_is_the_one_declarations_uses(self):
@@ -1373,6 +1387,263 @@ class RustAndPythonInTheTruth(unittest.TestCase):
             truth = build(Path(tmp.name), [], [{"kind": "trace", "from": "Handler", "to": "Exec", "expect": "path", "via": []}], roots=["crates"])
         self.assertEqual(truth["trace"]["Handler->Exec"], ["Handler", "Exec.run"])
         self.assertEqual(truth["di_edges"], 1)
+
+
+def tracked_repo(files: dict[str, str]) -> tempfile.TemporaryDirectory:
+    """`tree(files)` with every file in the index, which is what `git ls-files` reads."""
+    tmp = tree(files)
+    subprocess.run(["git", "-c", "core.hooksPath=", "init", "-q", tmp.name], check=True, capture_output=True)
+    subprocess.run(["git", "add", "-A"], cwd=tmp.name, check=True, capture_output=True)
+    return tmp
+
+
+TF_DECLS = '''# Region the server lands in.
+variable "region" {
+  type = string
+}
+locals {
+  name = "web-${var.region}"
+}
+provider "hcloud" {
+  token = var.token
+}
+data "aws_ami" "ubuntu" {}
+resource "aws_instance" "web" {
+  ami = data.aws_ami.ubuntu.id
+}
+module "dns" {
+  source = "./dns"
+}
+output "ip" {
+  value = aws_instance.web[0].public_ip
+}
+terraform {
+  required_version = ">= 1.6"
+}
+'''
+
+BAKE = '''variable "TAG" {
+  default = "latest"
+}
+group "default" {
+  targets = ["api", "web"]
+}
+target "base" {
+  platforms = ["linux/amd64"]
+}
+target "api" {
+  inherits = ["base"]
+  tags     = ["app/api:${TAG}"]
+}
+target "web" {
+  inherits = ["base", "missing"]
+}
+'''
+
+BICEP_DECLS = """// The region every resource lands in.
+@description('region')
+param location string
+var prefix = 'app'
+@export()
+type sku = 'A' | 'B'
+func label(p string) string => '${p}-x'
+resource vnet 'Microsoft.Network/virtualNetworks@2023-04-01' existing = {
+  name: 'vnet'
+  resource subnet 'subnets' existing = {
+    name: 'default'
+  }
+}
+output id string = vnet.id
+"""
+
+BICEP_REFS = """param location string
+param n int = 2
+param description string
+var name = '${location}-app'
+resource vnet 'Microsoft.Network/virtualNetworks@2023-04-01' existing = {
+  name: name
+  resource subnet 'subnets' existing = {
+    name: 'default'
+  }
+}
+@description('the vault')
+resource kv 'Microsoft.KeyVault/vaults@2023-02-01' = {
+  name: 'kv'
+  location: location
+  properties: {
+    subnetId: vnet::subnet.id
+    copies: [for n in range(0, 3): n]
+  }
+}
+output id string = kv.id
+"""
+
+
+class IacShellBlankers(unittest.TestCase):
+    """The blankers keep what a reader needs — labels, module paths, interpolations — and nothing whose brackets would move a span."""
+
+    def test_hcl_keeps_labels_and_interpolations_and_blanks_prose_and_comments(self):
+        src = 'resource "aws_instance" "web" { # web {\n  name = "a { b"\n  tag  = "x-${var.region}"\n}\n'
+        out = blank_hcl(src)
+        self.assertEqual(out.count("\n"), src.count("\n"))
+        self.assertIn('"aws_instance" "web"', out)
+        self.assertNotIn("# web", out)
+        self.assertIn("${var.region}", out)
+        self.assertEqual(out.count("{"), out.count("}"))
+
+    def test_an_hcl_heredoc_keeps_its_interpolations_only(self):
+        out = blank_hcl("x = <<-EOT\n  hello {\n  ${local.name}\nEOT\n")
+        self.assertIn("${local.name}", out)
+        self.assertNotIn("hello", out)
+
+    def test_bicep_keeps_a_type_string_and_interpolations_and_blanks_comments_and_multiline_text(self):
+        src = "resource vnet 'Microsoft.Network/virtualNetworks@2023-04-01' = {\n  name: '${prefix}-{x}'\n  // note {\n  desc: '''\n{\n'''\n}\n"
+        out = blank_bicep(src)
+        self.assertEqual(out.count("\n"), src.count("\n"))
+        self.assertIn("'Microsoft.Network/virtualNetworks@2023-04-01'", out)
+        self.assertIn("${prefix}", out)
+        self.assertNotIn("note", out)
+        self.assertEqual(out.count("{"), out.count("}"))
+
+    def test_a_shell_case_arm_and_a_string_do_not_move_a_function_span(self):
+        src = 'greet() {\n  case "$1" in\n    a|b) echo x ;;\n    *) echo "(" ;;\n  esac\n}\nfunction bye {\n  :\n}\nrefuse() { echo "$*"; }\n'
+        blanked = blank_shell(src)
+        lines = blanked.split("\n")
+        starts = shell_declarations(blanked)
+        self.assertEqual(starts, [(1, "greet"), (7, "bye"), (10, "refuse")])
+        self.assertEqual([declaration_end(lines, s) for s, _ in starts], [6, 9, 10])
+
+
+class IacShellDeclarations(unittest.TestCase):
+    """Each reader names a declaration exactly as the extractor's id does, so the counts compare."""
+
+    def test_terraform_addresses(self):
+        self.assertEqual(terraform_declarations(blank_hcl(TF_DECLS)), [
+            (2, "var/region"), (6, "local/name"), (8, "provider/hcloud"), (11, "data/aws_ami/ubuntu"),
+            (12, "aws_instance/web"), (15, "module/dns"), (18, "output/ip"),
+        ])
+
+    def test_a_bake_file_by_type_and_label_and_a_lock_file_not_at_all(self):
+        self.assertEqual(hcl_declarations(blank_hcl(BAKE)), [
+            (1, "variable/TAG"), (4, "group/default"), (7, "target/base"), (10, "target/api"), (14, "target/web"),
+        ])
+        lock = 'provider "registry.terraform.io/hetznercloud/hcloud" {\n  version = "1.49.1"\n}\n'
+        self.assertEqual(hcl_declarations(blank_hcl(lock)), [])
+
+    def test_bicep_children_and_outputs(self):
+        self.assertEqual(bicep_declarations(blank_bicep(BICEP_DECLS)), [
+            (3, "location"), (4, "prefix"), (6, "sku"), (7, "label"), (8, "vnet"), (10, "vnet.subnet"), (14, "output/id"),
+        ])
+
+    def test_a_tf_window_names_the_variable_its_hunk_sits_in(self):
+        base = 'variable "domain" {\n  type = string\n}\n'
+        got = changes_of({"infra/v.tf": base}, {"infra/v.tf": base + 'variable "extra" {\n  type = string\n}\n'})
+        self.assertEqual(got["code_files"], ["infra/v.tf"])
+        self.assertEqual(got["symbols"], {"infra/v.tf": ["var/extra"]})
+
+
+class IacShellReaders(unittest.TestCase):
+    """The call readers agree with the extractor's cases in `src/code/*/cases.rs`, and the impact readers resolve as it does."""
+
+    SERVER = 'resource "hcloud_ssh_key" "admin" {\n  name       = "admin"\n  public_key = var.ssh_public_key\n}\nresource "hcloud_server" "staging" {\n  server_type = var.server_type\n  ssh_keys    = [hcloud_ssh_key.admin.id]\n}\n'
+    DNS = 'resource "hcloud_zone_rrset" "a" {\n  zone    = var.domain\n  records = [hcloud_server.staging.ipv4_address]\n}\n'
+    VARIABLES = 'variable "domain" {\n  type = string\n}\nvariable "server_type" {\n  default = "cx22"\n}\nvariable "ssh_public_key" {\n  type = string\n}\n'
+
+    def test_terraform_calls_name_what_each_block_reads_and_chain_across_files(self):
+        self.assertEqual(sorted(terraform_calls(self.SERVER)), [
+            ("hcloud_server/staging", "hcloud_ssh_key/admin"), ("hcloud_server/staging", "var/server_type"),
+            ("hcloud_ssh_key/admin", "var/ssh_public_key"),
+        ])
+        edges: dict[str, list[str]] = {}
+        for src in (self.SERVER, self.DNS, self.VARIABLES):
+            for holder, name in terraform_calls(src):
+                edges.setdefault(holder, []).append(name)
+        self.assertEqual(shortest_path({"edges": edges}, "hcloud_zone_rrset/a", "var/ssh_public_key"), [
+            "hcloud_zone_rrset/a", "hcloud_server/staging", "hcloud_ssh_key/admin", "var/ssh_public_key",
+        ])
+
+    def test_terraform_impact_resolves_an_address_within_its_directory(self):
+        files = {
+            "infra/staging/variables.tf": self.VARIABLES, "infra/staging/server.tf": self.SERVER, "infra/staging/dns.tf": self.DNS,
+            "infra/prod/dns.tf": self.DNS,
+        }
+        with tracked_repo(files) as tmp:
+            repo = Path(tmp)
+            self.assertEqual(terraform_impact(repo, {"target": "hcloud_server/staging", "file": "infra/staging/server.tf"}), ["infra/staging/dns.tf"])
+            self.assertEqual(terraform_impact(repo, {"target": "var/domain", "file": "infra/staging/variables.tf"}), ["infra/staging/dns.tf"])
+
+    def test_bicep_calls_in_a_file_and_the_files_deploying_a_module(self):
+        self.assertEqual(sorted(bicep_calls(BICEP_REFS)), [
+            ("kv", "location"), ("kv", "vnet.subnet"), ("name", "location"), ("output/id", "kv"), ("vnet", "name"),
+        ])
+        files = {
+            "stack.bicep": "module app './parts/web.bicep' = {\n  name: 'app'\n}\nmodule store 'parts/pg.bicep' = {\n  name: 'store'\n}\nmodule reg 'br/public:avm/res/x:0.1.0' = {\n  name: 'reg'\n}\n",
+            "parts/web.bicep": "module db './pg.bicep' = {\n  name: 'db'\n}\n",
+            "parts/pg.bicep": "param sku string = 'B1'\n",
+        }
+        with tracked_repo(files) as tmp:
+            self.assertEqual(bicep_impact(Path(tmp), {"target": "parts/pg.bicep", "file": "parts/pg.bicep"}), ["parts/web.bicep", "stack.bicep"])
+
+    def test_a_for_iterator_binds_its_body_and_not_its_collection(self):
+        head = 'resource "web" "id" {}\nresource "a" "b" {\n'
+        self.assertEqual(terraform_calls(head + '  x = [for web in var.x : web.id]\n}\n'), [("a/b", "var/x")])
+        self.assertIn(("a/b", "web/id"), terraform_calls(head + '  x = [for x in web.id : x]\n}\n'))
+        self.assertEqual(
+            terraform_calls(head + '  x = [for web in var.x : [for k in var.y : web.id]]\n  y = web.id\n}\n'),
+            [("a/b", "var/x"), ("a/b", "var/y"), ("a/b", "web/id")],
+        )
+
+    def test_a_bicep_call_reaches_only_a_func(self):
+        self.assertEqual(bicep_calls("param range int\nvar v = range(0, 3)\n"), [])
+        self.assertEqual(bicep_calls("func label(p string) string => p\nvar v = label('a')\n"), [("v", "label")])
+
+    def test_bake_calls_follow_inherits_and_targets_to_blocks_of_the_file(self):
+        self.assertEqual(sorted(bake_calls(BAKE)), [
+            ("group/default", "target/api"), ("group/default", "target/web"),
+            ("target/api", "target/base"), ("target/web", "target/base"),
+        ])
+
+    def test_shell_calls_are_held_by_functions_and_chain_to_a_trace(self):
+        src = 'pids() {\n  ps -o pid= -p "$$"\n}\nbusy() {\n  echo " $(pids) "\n}\nmain() {\n  busy\n}\nwait_quiet() {\n  until main; do sleep 1; done\n}\nwait_quiet\n'
+        calls = shell_calls(src)
+        self.assertIn(("busy", "pids"), calls)
+        self.assertIn(("wait_quiet", "main"), calls)
+        self.assertNotIn("wait_quiet", [name for holder, name in calls if holder == ""], "a call no function holds has no name to hang on")
+        edges: dict[str, list[str]] = {}
+        for holder, name in calls:
+            edges.setdefault(holder, []).append(name)
+        self.assertEqual(shortest_path({"edges": edges}, "wait_quiet", "pids"), ["wait_quiet", "main", "busy", "pids"])
+
+    def test_a_shell_impact_case_is_read_by_name_within_its_extension(self):
+        files = {
+            "probe/lib.sh": "lib_line() {\n  printf '%s\\n' \"$1\"\n}\n",
+            "probe/run.sh": ". ./lib.sh\nlib_line start\n",
+            "docs/probe.md": "Call lib_line to print a row.\n",
+        }
+        case = {"kind": "impact", "target": "lib_line", "file": "probe/lib.sh", "tier": "narrow", "exts": [".sh"]}
+        with tracked_repo(files) as tmp:
+            self.assertEqual(build(Path(tmp), [], [case], roots=["."])["impact"]["lib_line"]["refs"], ["probe/run.sh"])
+
+
+class IacShellReaderContract(unittest.TestCase):
+    """A declaration reader trusts its caller to have blanked; a call or reference reader blanks for itself."""
+
+    def test_declaration_readers_take_blanked_text(self):
+        cases = [
+            (bicep_declarations, blank_bicep, "// param ghost string\nparam real string\n", [(2, "real")]),
+            (terraform_declarations, blank_hcl, '# variable "ghost" {}\nvariable "real" {}\n', [(2, "var/real")]),
+            (hcl_declarations, blank_hcl, '# target "ghost" {}\ntarget "real" {}\n', [(2, "target/real")]),
+            (shell_declarations, blank_shell, "# ghost() {\nreal() {\n:\n}\n", [(2, "real")]),
+        ]
+        for reader, blank, src, want in cases:
+            with self.subTest(reader=reader.__name__):
+                self.assertEqual(reader(blank(src)), want)
+
+    def test_call_readers_blank_raw_text_themselves(self):
+        self.assertEqual(terraform_calls('# aws_instance.web reads var.x\nresource "a" "b" {\n  n = var.y\n}\n'), [("a/b", "var/y")])
+        self.assertEqual(bicep_calls("param p string\nvar v = p // p again\nvar w = '''\nv\n'''\n"), [("v", "p")])
+        self.assertEqual(shell_calls("# helper\nrun() {\n  # helper\n  echo helper\n}\n"), [("run", "echo")])
+        self.assertEqual(bake_calls('# inherits = ["base"]\ntarget "base" {}\ntarget "api" {\n  # inherits = ["base"]\n}\n'), [])
 
 
 if __name__ == "__main__":
