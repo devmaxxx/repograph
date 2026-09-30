@@ -14,9 +14,14 @@ static MACRO_RULES: LazyLock<regex::Regex> =
 // what lets a line scan tell a module's names from an impl's without a parse.
 static TOP_ITEM: LazyLock<regex::Regex> = LazyLock::new(|| {
     regex::Regex::new(
-        r#"(?m)^(?:pub(?:\([^)\n]*\))?[ \t]+)?(?:(?:async|const|unsafe|extern[ \t]+"[^"\n]*")[ \t]+)*(?:fn|struct|enum|union|trait|type|const|static|mod)[ \t]+(?:mut[ \t]+)?([A-Za-z_]\w*)"#,
+        r#"(?m)^(?:pub(?:\([^)\n]*\))?[ \t]+)?(?:(?:async|const|unsafe|extern[ \t]+"[^"\n]*")[ \t]+)*(?:fn|struct|enum|union|trait|type|const|static)[ \t]+(?:mut[ \t]+)?([A-Za-z_]\w*)"#,
     )
     .expect("valid pattern")
+});
+// An inline `mod x {` declares `x` in its file; a `mod x;` names a file, which `file_of` answers,
+// and counting it here would let a path through a module whose file is absent land on a symbol nobody wrote.
+static INLINE_MOD: LazyLock<regex::Regex> = LazyLock::new(|| {
+    regex::Regex::new(r"(?m)^(?:pub(?:\([^)\n]*\))?[ \t]+)?mod[ \t]+([A-Za-z_]\w*)[ \t]*\{").expect("valid pattern")
 });
 static PUB_USE: LazyLock<regex::Regex> = LazyLock::new(|| {
     regex::Regex::new(r"(?m)^pub(?:\([^)\n]*\))?[ \t]+use[ \t]+((?:[A-Za-z_]\w*::)*[A-Za-z_]\w*)(?:[ \t]+as[ \t]+([A-Za-z_]\w*))?[ \t]*;")
@@ -71,10 +76,11 @@ fn join(dir: &str, rest: &str) -> String {
     if dir.is_empty() { rest.to_string() } else { format!("{dir}/{rest}") }
 }
 
-/// Rust's naming lints keep types CamelCase and modules snake_case, and that is the only way a
-/// path says where its modules end without opening the file it names.
+/// Rust's naming lints keep types upper-initial and modules snake_case, and that is the only way a
+/// path says where its modules end without opening the file it names. A segment followed by
+/// another cannot be a constant, so an acronym type (`IO`, `UUID`) is a type too.
 pub(crate) fn is_type_name(seg: &str) -> bool {
-    seg.starts_with(|c: char| c.is_ascii_uppercase()) && seg.chars().any(|c| c.is_ascii_lowercase())
+    seg.starts_with(|c: char| c.is_ascii_uppercase())
 }
 
 /// The id suffix for `rest` inside inline modules `inline`: modules join with `/`, a type and its
@@ -101,7 +107,7 @@ impl Crates {
         for c in MACRO_RULES.captures_iter(source) {
             self.macros.entry(c[1].to_string()).or_default().insert(rel.to_string());
         }
-        let names: BTreeSet<String> = TOP_ITEM.captures_iter(source).map(|c| c[1].to_string()).collect();
+        let names: BTreeSet<String> = TOP_ITEM.captures_iter(source).chain(INLINE_MOD.captures_iter(source)).map(|c| c[1].to_string()).collect();
         if !names.is_empty() {
             self.tops.insert(rel.to_string(), names);
         }
@@ -145,7 +151,10 @@ impl Crates {
     }
 
     fn crate_of(&self, rel: &str) -> Option<&Crate> {
-        self.crates.iter().filter(|k| k.dir.is_empty() || rel.starts_with(&format!("{}/", k.dir))).max_by_key(|k| k.dir.len())
+        self.crates
+            .iter()
+            .filter(|k| k.dir.is_empty() || rel.strip_prefix(k.dir.as_str()).is_some_and(|r| r.starts_with('/')))
+            .max_by_key(|k| k.dir.len())
     }
 
     fn is_root(&self, rel: &str) -> bool {
@@ -223,6 +232,11 @@ impl Crates {
     /// whose names nothing else here knows.
     pub fn declares(&self, file: &str, name: &str) -> bool {
         self.tops.get(file).is_some_and(|n| n.contains(name))
+    }
+
+    /// Whether `file` re-exports `name` with a column-0 `pub use`, so a glob of it binds a name it does not declare.
+    pub fn reexports(&self, file: &str, name: &str) -> bool {
+        self.reexports.get(file).is_some_and(|r| r.contains_key(name))
     }
 
     fn resolve_from(&self, rel: &str, inline: &[String], path: &[String], hop: bool) -> Option<Target> {
@@ -398,6 +412,7 @@ mod tests {
         assert_eq!(item_name(&s(&["tests"]), &s(&["Helper", "build", "x"])), "tests/Helper.build");
         assert_eq!(item_name(&[], &s(&["fixtures", "order"])), "fixtures/order");
         assert_eq!(item_name(&[], &s(&["MAX_LEN"])), "MAX_LEN");
+        assert_eq!(item_name(&[], &s(&["UUID", "new"])), "UUID.new", "an acronym is a type");
     }
 
     #[test]

@@ -517,3 +517,28 @@ fn a_module_qualified_path_is_not_taken_for_this_files_foreign_impl_member() {
         ["sym:src/other.rs::Store.m", "sym:src/ops.rs::Store.m"].into_iter().collect()
     );
 }
+
+#[test]
+fn a_crate_qualified_macro_and_a_prelude_glob_resolve() {
+    let repo = Repo::new(&[
+        ("Cargo.toml", "[package]\nname = \"shop\"\n"),
+        ("src/lib.rs", "mod macros;\npub mod store;\npub mod prelude;\npub mod ops;\n"),
+        ("src/macros.rs", "#[macro_export]\nmacro_rules! money {\n    () => { 1 };\n}\n"),
+        ("src/store.rs", "pub struct Store;\nimpl Store {\n    pub fn open() {}\n}\n"),
+        ("src/prelude.rs", "pub use crate::store::Store;\n"),
+        ("src/ops.rs", "use crate::prelude::*;\npub fn run() {\n    let _ = crate::money!();\n    Store::open();\n}\n"),
+    ]);
+    let ex = repo.extract("src/ops.rs");
+    assert_eq!(calls_from(&ex, "sym:src/ops.rs::run"), ["sym:src/macros.rs::money", "sym:src/store.rs::Store.open"].into_iter().collect());
+}
+
+#[test]
+fn a_path_through_a_module_whose_file_is_absent_writes_no_symbol() {
+    let repo = Repo::new(&[
+        ("Cargo.toml", "[package]\nname = \"shop\"\n"),
+        ("src/lib.rs", "pub mod gone;\npub mod ops;\n"),
+        ("src/ops.rs", "use crate::gone::Thing;\npub fn run() {\n    Thing::new();\n}\n"),
+    ]);
+    let ex = repo.extract("src/ops.rs");
+    assert!(ex.edges.iter().all(|e| e.kind != EdgeKind::Calls && !e.target.contains("gone/")), "{:?}", ex.edges);
+}

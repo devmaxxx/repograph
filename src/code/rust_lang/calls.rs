@@ -209,13 +209,26 @@ fn callee(ctx: &Ctx, fields: &Fields, call: Node, f: Node) -> Option<String> {
 fn macro_target(ctx: &Ctx, n: Node) -> Option<String> {
     let m = n.child_by_field_name("macro")?;
     if m.kind() != "identifier" {
-        return id_of(&ctx.resolve(&inline_of(n, ctx.src), &type_path(m, ctx.src))?);
+        let path = type_path(m, ctx.src);
+        if let Some(id) = ctx.resolve(&inline_of(n, ctx.src), &path).as_ref().and_then(id_of) {
+            return Some(id);
+        }
+        // `#[macro_export]` roots a macro at its crate whichever file writes it, so `crate::m!`
+        // names a file the path cannot.
+        return match path.as_slice() {
+            [first, name] if first == "crate" => crate_macro(ctx, name),
+            _ => None,
+        };
     }
     let name = text(m, ctx.src);
     // Textual scope: this file's own definition first, then one the crate holds unambiguously.
     if let Some(suffix) = ctx.items.macros.get(name) {
         return Some(format!("sym:{}::{suffix}", ctx.rel));
     }
+    crate_macro(ctx, name)
+}
+
+fn crate_macro(ctx: &Ctx, name: &str) -> Option<String> {
     match ctx.crates.macro_files(ctx.rel, name).as_slice() {
         [one] => Some(format!("sym:{one}::{name}")),
         _ => None,

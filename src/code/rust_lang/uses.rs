@@ -159,6 +159,12 @@ impl Ctx<'_> {
                     if self.in_scope(file, scope, first) {
                         return Some(Target::Item { file: file.clone(), name: item_name(scope, path) });
                     }
+                    // A prelude module holds `pub use` lines and declares nothing itself.
+                    if scope.is_empty() && self.crates.reexports(file, first) {
+                        if let Some(t) = self.crates.resolve(file, scope, &[vec!["self".to_string()], path.to_vec()].concat()) {
+                            return Some(t);
+                        }
+                    }
                 }
             }
         }
