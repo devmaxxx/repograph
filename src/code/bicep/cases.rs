@@ -173,3 +173,20 @@ fn an_id_in_a_comment_or_string_is_cited_by_the_declaration_holding_it() {
         "sym:stack.bicep::location -> FR-APP-54 [string]",
     ]);
 }
+
+#[test]
+fn a_function_parameter_binds_its_name_in_the_body() {
+    let ex = extract(&[("s.bicep", "var first = 'a'\nfunc fmt(first string) string => first\nvar x = fmt('b')\n")], "s.bicep");
+    assert_eq!(lines(&ex, EdgeKind::References), ["sym:s.bicep::x -> sym:s.bicep::fmt []"]);
+}
+
+#[test]
+fn a_call_names_only_a_func_never_a_param_or_var_of_the_same_name() {
+    let src = "param range int\nvar length = 1\nvar xs = [for i in range(0, 3): i]\nvar n = length(xs)\nfunc twice(v int) int => v * 2\nvar t = twice(range)\n";
+    let ex = extract(&[("s.bicep", src)], "s.bicep");
+    assert_eq!(lines(&ex, EdgeKind::References), [
+        "sym:s.bicep::n -> sym:s.bicep::xs []",
+        "sym:s.bicep::t -> sym:s.bicep::range []",
+        "sym:s.bicep::t -> sym:s.bicep::twice []",
+    ]);
+}

@@ -9,6 +9,7 @@ use tree_sitter::Node;
 
 pub(super) fn write(root: Node, decls: &[Decl], spans: &Spans, src: &[u8], rel: &str, ex: &mut Extraction) {
     let by_name: BTreeMap<&str, &str> = decls.iter().map(|d| (d.name.as_str(), d.id.as_str())).collect();
+    let funcs: Vec<&str> = decls.iter().filter(|d| d.node.kind() == "user_defined_function").map(|d| d.name.as_str()).collect();
     // A decorator sits outside its declaration's span, so what it reads is owned from the declaration
     // after it: the second field is that owner's byte while the walk is inside one.
     let mut stack: Vec<(Node, Option<usize>)> = vec![(root, None)];
@@ -27,6 +28,12 @@ pub(super) fn write(root: Node, decls: &[Decl], spans: &Spans, src: &[u8], rel: 
                 }
                 _ => Vec::new(),
             },
+            // A call names a function, and only a `func` of this file is one: `range(0, 3)` beside
+            // `param range` is the built-in.
+            "identifier" if is_callee(n) => {
+                let name = prose::text(n, src);
+                if funcs.contains(&name) { vec![name.to_string()] } else { Vec::new() }
+            }
             "identifier" if refers(n) => vec![prose::text(n, src).to_string()],
             "identifier" => Vec::new(),
             _ => {
@@ -59,6 +66,10 @@ fn refers(n: Node) -> bool {
     }
 }
 
+fn is_callee(n: Node) -> bool {
+    n.parent().is_some_and(|p| p.kind() == "call_expression" && p.child_by_field_name("function").is_some_and(|f| f.id() == n.id()))
+}
+
 /// A lambda's last named child is its body; every child before it is a parameter list.
 fn is_body(lambda: Node, n: Node) -> bool {
     prose::named(lambda).last().is_some_and(|b| b.id() == n.id())
@@ -84,7 +95,9 @@ fn shadowed(n: Node, name: &str, src: &[u8]) -> bool {
                 params.into_iter().flat_map(|p| if p.kind() == "identifier" { vec![p] } else { prose::named(p) }).collect()
             }
             "user_defined_function" if child.kind() != "parameters" => {
-                a.child_by_field_name("parameters").map(|ps| prose::named(ps).into_iter().filter_map(|p| p.named_child(0)).collect()).unwrap_or_default()
+                // `parameters` is a child node here, not a field of the grammar.
+                prose::named(a).into_iter().find(|c| c.kind() == "parameters")
+                    .map(|ps| prose::named(ps).into_iter().filter_map(|p| p.named_child(0)).collect()).unwrap_or_default()
             }
             _ => Vec::new(),
         };
