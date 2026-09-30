@@ -185,7 +185,7 @@ def changes_cases(repo: Path) -> tuple[list[dict], int]:
 
 
 def select(repo: Path, out: Path) -> dict:
-    files = sorted(f for f in git(repo, "ls-files", "*.java", "*.kt").split("\n") if f)
+    files = sorted(f for f in git(repo, "ls-files", "-z", "*.java", "*.kt").split("\0") if f)
     roots = sorted({f.split("/", 1)[0] if "/" in f else "." for f in files})
     impact, impact_candidates = impact_cases(repo, files)
     trace, trace_candidates, trace_undeclared, trace_unmade = trace_cases(repo, files, roots)

@@ -15,6 +15,7 @@ import subprocess
 import sys
 from collections import defaultdict
 from dataclasses import dataclass, field
+from functools import lru_cache
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -62,8 +63,9 @@ def git(repo: Path, *args: str) -> str:
 def tracked(repo: Path, suffixes: tuple[str, ...]) -> list[str]:
     """Every tracked file of `suffixes`, not only those under `ROOTS`: the truth counts references
     across the whole tree, so a declaration anywhere in it can make a name ambiguous."""
-    # A pathspec's `*` crosses `/`, so `*.cs` is every C# file at any depth.
-    return sorted(git(repo, "ls-files", "--", *[f"*{s}" for s in suffixes]).split())
+    # A pathspec's `*` crosses `/`, so `*.cs` is every C# file at any depth. NUL-separated: git
+    # quotes a non-ASCII name and a whitespace split would cut one with a space in it.
+    return sorted(n for n in git(repo, "ls-files", "-z", "--", *[f"*{s}" for s in suffixes]).split("\0") if n)
 
 
 def read(repo: Path, rel: str) -> str:
@@ -268,15 +270,26 @@ def traces(repo: Path, graph: dict, f: Facts, quota: dict[str, int] = TRACE) -> 
     return cases
 
 
+@lru_cache(maxsize=None)
+def window(repo: Path, n: int) -> tuple[str, tuple[str, ...]] | None:
+    """`HEAD~N` resolved, and the files its diff to HEAD touches; None past the start of history.
+    Cached because every suffix `select` asks about walks the same windows."""
+    probe = subprocess.run(["git", "rev-parse", "--verify", "-q", f"HEAD~{n}"], cwd=repo, capture_output=True, text=True)
+    if probe.returncode:
+        return None
+    base = probe.stdout.strip()
+    return base, tuple(name for name in git(repo, "diff", "--name-only", "-z", base, "HEAD").split("\0") if name)
+
+
 def changes_base(repo: Path, suffix: str, fewest: int, limit: int = 1000) -> tuple[str, int] | None:
     """The smallest N whose `HEAD~N` diff carries at least `fewest` files of `suffix`: the resolved
     base, and that count. First parents only, so N counts the history the branch saw."""
     for n in range(1, limit + 1):
-        probe = subprocess.run(["git", "rev-parse", "--verify", "-q", f"HEAD~{n}"], cwd=repo, capture_output=True, text=True)
-        if probe.returncode:
+        found = window(repo, n)
+        if found is None:
             return None
-        base = probe.stdout.strip()
-        count = sum(1 for name in git(repo, "diff", "--name-only", base, "HEAD").split() if name.endswith(suffix))
+        base, names = found
+        count = sum(1 for name in names if name.endswith(suffix))
         if count >= fewest:
             return base, count
     return None
@@ -315,7 +328,8 @@ def main() -> None:
     if not private(out):
         sys.exit("select_dotnet: --out is inside this repository, and the cases name private code")
     cases, counts = select(repo)
-    truth = T.build(repo, [], cases)
+    # The roots `select` read the graph from, or a `mobile` tree would join a truth the cases were not chosen against.
+    truth = T.build(repo, [], cases, roots=list(ROOTS))
     empty = [c["kind"] for c in cases if (
         (c["kind"] == "impact" and not truth["impact"][c["target"]]["refs"])
         or (c["kind"] == "trace" and truth["trace"][f"{c['from']}->{c['to']}"] is None)

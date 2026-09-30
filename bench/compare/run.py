@@ -141,6 +141,11 @@ class Tool:
         proc, ms = self._exec(argv)
         return self._clean(proc.stdout + proc.stderr), ms
 
+    def _unanswered(self, reason: str, argv: list[str], ms: float) -> tuple[str, float]:
+        self.failed_calls += 1
+        print(f"{self.name}: not counted as an answer, {reason}: {' '.join(argv)}", file=sys.stderr)
+        return "", ms
+
     def ask(self, q: str): raise NotImplementedError
     def impact(self, target: str): return None
     def trace(self, a: str, b: str): return None
@@ -160,9 +165,7 @@ class Repograph(Tool):
         substring scorer would credit as found. Exit 3 is `trace`'s no-path verdict, an answer."""
         proc, ms = self._exec(argv)
         if proc.returncode != 0 and not (verdict_ok and proc.returncode == 3):
-            self.failed_calls += 1
-            print(f"repograph: not counted as an answer, exit {proc.returncode}: {' '.join(argv)}", file=sys.stderr)
-            return "", ms
+            return self._unanswered(f"exit {proc.returncode}", argv, ms)
         return self._clean(proc.stdout + proc.stderr), ms
 
     def ask(self, q): return self.run(self.bin() + ["ask", q])
@@ -242,9 +245,7 @@ class Gitnexus(Tool):
         proc, ms = self._exec(argv)
         reason = gitnexus_failure_reason(argv, proc)
         if reason:
-            self.failed_calls += 1
-            print(f"gitnexus: not counted as an answer, {reason}: {' '.join(argv)}", file=sys.stderr)
-            return "", ms
+            return self._unanswered(reason, argv, ms)
         return self._clean(proc.stdout + proc.stderr), ms
 
     def ask(self, q): return self.run(["gitnexus", "query", q, *self.r()])
