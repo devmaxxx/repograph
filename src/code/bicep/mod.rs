@@ -101,7 +101,7 @@ fn exported(n: Node, src: &[u8]) -> bool {
     if matches!(n.kind(), "parameter_declaration" | "output_declaration") {
         return true;
     }
-    let mut at = n.prev_named_sibling();
+    let mut at = prev_code(n);
     while let Some(d) = at.filter(|p| p.kind() == "decorators") {
         let named = prose::named(d).into_iter().any(|dec| {
             let t = prose::text(dec, src);
@@ -110,7 +110,16 @@ fn exported(n: Node, src: &[u8]) -> bool {
         if named {
             return true;
         }
-        at = d.prev_named_sibling();
+        at = prev_code(d);
     }
     false
+}
+
+/// A comment may sit between a decorator and the declaration it decorates, and it does not end the pair.
+fn prev_code(n: Node) -> Option<Node> {
+    std::iter::successors(n.prev_named_sibling(), |p| p.prev_named_sibling()).find(|p| p.kind() != "comment")
+}
+
+pub(super) fn next_code(n: Node) -> Option<Node> {
+    std::iter::successors(n.next_named_sibling(), |p| p.next_named_sibling()).find(|p| p.kind() != "comment")
 }

@@ -4,19 +4,21 @@
 use super::Decl;
 use crate::code::prose::{self, Spans};
 use crate::model::{EdgeKind, Extraction};
+use std::borrow::Cow;
 use std::collections::BTreeMap;
 use tree_sitter::Node;
 
 pub(super) fn write(root: Node, decls: &[Decl], spans: &Spans, src: &[u8], rel: &str, ex: &mut Extraction) {
     let by_name: BTreeMap<&str, &str> = decls.iter().map(|d| (d.name.as_str(), d.id.as_str())).collect();
+    let by_node: BTreeMap<usize, &str> = decls.iter().map(|d| (d.node.id(), d.name.as_str())).collect();
     let funcs: Vec<&str> = decls.iter().filter(|d| d.node.kind() == "user_defined_function").map(|d| d.name.as_str()).collect();
     // A decorator sits outside its declaration's span, so what it reads is owned from the declaration
     // after it: the second field is that owner's byte while the walk is inside one.
     let mut stack: Vec<(Node, Option<usize>)> = vec![(root, None)];
     while let Some((n, owner)) = stack.pop() {
-        let spelled: Vec<String> = match n.kind() {
+        let spelled: Vec<Cow<str>> = match n.kind() {
             "decorators" => {
-                let owner = n.next_named_sibling().map(|d| d.start_byte());
+                let owner = super::next_code(n).map(|d| d.start_byte());
                 stack.extend(prose::named(n).into_iter().map(|c| (c, owner)));
                 continue;
             }
@@ -24,7 +26,7 @@ pub(super) fn write(root: Node, decls: &[Decl], spans: &Spans, src: &[u8], rel: 
             "resource_expression" => match (n.child_by_field_name("object"), n.child_by_field_name("resource")) {
                 (Some(o), Some(r)) => {
                     let parent = prose::text(o, src);
-                    vec![format!("{parent}.{}", prose::text(r, src)), parent.to_string()]
+                    vec![Cow::Owned(format!("{parent}.{}", prose::text(r, src))), Cow::Borrowed(parent)]
                 }
                 _ => Vec::new(),
             },
@@ -32,21 +34,34 @@ pub(super) fn write(root: Node, decls: &[Decl], spans: &Spans, src: &[u8], rel: 
             // `param range` is the built-in.
             "identifier" if is_callee(n) => {
                 let name = prose::text(n, src);
-                if funcs.contains(&name) { vec![name.to_string()] } else { Vec::new() }
+                if funcs.contains(&name) { vec![Cow::Borrowed(name)] } else { Vec::new() }
             }
-            "identifier" if refers(n) => vec![prose::text(n, src).to_string()],
+            "identifier" if refers(n) => scoped(n, prose::text(n, src), &by_node),
             "identifier" => Vec::new(),
             _ => {
                 stack.extend(prose::named(n).into_iter().map(|c| (c, owner)));
                 continue;
             }
         };
-        let Some((name, target)) = spelled.iter().find_map(|s| by_name.get(s.as_str()).map(|t| (s, *t))) else { continue };
+        let Some((name, target)) = spelled.iter().find_map(|s| by_name.get(s.as_ref()).map(|t| (s, *t))) else { continue };
         let from = spans.owner(owner.unwrap_or_else(|| n.start_byte()));
-        if from != target && !shadowed(n, name.split('.').next().unwrap_or(name), src) {
+        // The name a binder would have to spell: the object of `vnet::subnet`, or the bare identifier.
+        let spelling = if n.kind() == "identifier" { prose::text(n, src) } else { name.split('.').next().unwrap_or(name) };
+        if from != target && !shadowed(n, spelling, src) {
             ex.edge(from, target, EdgeKind::References, "", rel);
         }
     }
+}
+
+/// What a bare name can mean at `n`. Inside a resource, its nested resources answer to their short
+/// name (`dependsOn: [subnet]` beside `resource subnet`), nearest parent first, then the file's own.
+fn scoped<'s>(n: Node, name: &'s str, by_node: &BTreeMap<usize, &str>) -> Vec<Cow<'s, str>> {
+    let mut out: Vec<Cow<str>> = std::iter::successors(n.parent(), |p| p.parent())
+        .filter_map(|p| by_node.get(&p.id()).filter(|_| p.kind() == "resource_declaration"))
+        .map(|parent| Cow::Owned(format!("{parent}.{name}")))
+        .collect();
+    out.push(Cow::Borrowed(name));
+    out
 }
 
 /// Whether an identifier is read rather than bound: a declaration's own name, an object key, a function
@@ -61,7 +76,6 @@ fn refers(n: Node) -> bool {
         "lambda_expression" => is_body(p, n),
         "parenthesized_expression" => !p.parent().is_some_and(|l| l.kind() == "lambda_expression" && !is_body(l, p)),
         // `@description('…')` calls the built-in even in a file that declares `param description`.
-        "call_expression" => !p.parent().is_some_and(|g| g.kind() == "decorator"),
         _ => true,
     }
 }

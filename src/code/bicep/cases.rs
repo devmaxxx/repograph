@@ -190,3 +190,18 @@ fn a_call_names_only_a_func_never_a_param_or_var_of_the_same_name() {
         "sym:s.bicep::t -> sym:s.bicep::twice []",
     ]);
 }
+
+#[test]
+fn a_comment_between_a_decorator_and_its_declaration_leaves_both_attached() {
+    let src = "param max int\n@maxValue(max)\n// the cap\nparam n int\n@export()\n// shared\ntype sku = 'A'\n";
+    let ex = extract(&[("s.bicep", src)], "s.bicep");
+    assert_eq!(lines(&ex, EdgeKind::References), ["sym:s.bicep::n -> sym:s.bicep::max []"]);
+    assert!(lines(&ex, EdgeKind::Declares).contains(&"file:s.bicep -> sym:s.bicep::sku [export]".to_string()));
+}
+
+#[test]
+fn a_nested_resource_is_read_by_its_short_name_inside_its_parent_only() {
+    let src = "resource vnet 'a/b@1' = {\n  name: 'v'\n  resource subnet 'subnets' = {\n    name: 's'\n  }\n  resource other 'subnets' = {\n    name: 'o'\n    dependsOn: [subnet]\n  }\n}\nvar outside = subnet\n";
+    let ex = extract(&[("s.bicep", src)], "s.bicep");
+    assert_eq!(lines(&ex, EdgeKind::References), ["sym:s.bicep::vnet.other -> sym:s.bicep::vnet.subnet []"]);
+}
