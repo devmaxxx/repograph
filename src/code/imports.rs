@@ -35,6 +35,8 @@ pub struct Resolver {
     hcl: crate::code::hcl::Modules,
     /// Every globbed Dart file's directives and top-level names, and every pubspec's package name.
     dart: crate::code::dart::library::Libraries,
+    /// Every `.vue` file the walk globbed: a TypeScript import of one is an edge to a node only then.
+    vue: BTreeSet<String>,
 }
 
 #[derive(Deserialize, Default)]
@@ -179,7 +181,8 @@ impl Resolver {
                         reached.insert(lang.family());
                         // TypeScript's state is the tsconfig and package.json read below; its sources
                         // are the extractor's alone, so a TypeScript repository opens nothing more here.
-                        if lang.family() != Family::TypeScript {
+                        // A `.vue` file is in the TypeScript family, and the resolver keeps its path.
+                        if lang == Lang::Vue || lang.family() != Family::TypeScript {
                             sources.push((lang, rel.clone(), p.to_path_buf()));
                         }
                     }
@@ -237,7 +240,7 @@ impl Resolver {
         }
         // Nearest tsconfig to the importing file wins: sort deepest directory first.
         paths.sort_by_key(|a| std::cmp::Reverse(a.0.len()));
-        let mut resolver = Resolver { repo: repo.to_path_buf(), paths, packages, indexes: BTreeMap::new(), dotnet: Default::default(), rust: Default::default(), python: Default::default(), shell: Default::default(), bicep: Default::default(), hcl: Default::default(), dart: Default::default() };
+        let mut resolver = Resolver { repo: repo.to_path_buf(), paths, packages, indexes: BTreeMap::new(), dotnet: Default::default(), rust: Default::default(), python: Default::default(), shell: Default::default(), bicep: Default::default(), hcl: Default::default(), dart: Default::default(), vue: Default::default() };
         // Manifests before sources: a path family's roots decide how its sources' paths read.
         for (_, rel, path) in manifests.iter().filter(|(f, _, _)| reached.contains(f)) {
             if let Ok(text) = std::fs::read_to_string(path) {
@@ -324,6 +327,9 @@ impl Resolver {
         if lang == Lang::Dart {
             self.dart.collect(rel, source);
         }
+        if lang == Lang::Vue {
+            self.vue.insert(rel.to_string());
+        }
     }
 
     /// What a build manifest contributes; called only when the globs reach the manifest's family.
@@ -347,6 +353,9 @@ impl Resolver {
     /// `.ts`/`.tsx` source, never a `dist/` build artifact or `node_modules` — otherwise
     /// `resolve` would point an edge at a file with no corresponding graph node.
     fn is_indexed(&self, rel: &str) -> bool {
+        if self.vue.contains(rel) {
+            return true;
+        }
         let ext_ok = matches!(
             Path::new(rel).extension().and_then(|e| e.to_str()),
             Some("ts") | Some("tsx") | Some("js") | Some("jsx") | Some("mjs") | Some("cjs")

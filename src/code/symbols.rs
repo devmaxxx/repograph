@@ -420,7 +420,12 @@ impl Walk<'_> {
             let mut ic = c.walk();
             for part in c.named_children(&mut ic) {
                 match part.kind() {
-                    "identifier" => names.push(text(part, src).to_string()),
+                    // An SFC's one default export is its component, `sym:<rel>::<FileStem>`, so the edge
+                    // names the stem `importers` matches, whatever local name the importer binds.
+                    "identifier" => names.push(match target.strip_suffix(".vue") {
+                        Some(path) => path.rsplit('/').next().unwrap_or(path).to_string(),
+                        None => text(part, src).to_string(),
+                    }),
                     "named_imports" => {
                         let mut nc = part.walk();
                         for s in part.named_children(&mut nc) {

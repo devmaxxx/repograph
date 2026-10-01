@@ -47,6 +47,7 @@ impl Lang {
             Some("tf" | "hcl") => Some(Lang::Hcl),
             Some("sh" | "bash") => Some(Lang::Shell),
             Some("dart") => Some(Lang::Dart),
+            Some("vue") => Some(Lang::Vue),
             _ => None,
         }
     }
@@ -94,6 +95,8 @@ impl Lang {
             Lang::Hcl => Family::Hcl,
             Lang::Shell => Family::Shell,
             Lang::Dart => Family::Dart,
+            // A Vue script resolves names through the TypeScript resolver, and L10 puts no edge between families.
+            Lang::Vue => Family::TypeScript,
             // Reached only by a variant `of` cannot return yet; see `grammar`.
             #[allow(unreachable_patterns)]
             other => unreachable!("{other:?} has no family arm: its plan has not landed"),
