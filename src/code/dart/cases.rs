@@ -173,3 +173,108 @@ fn extends_with_and_implements_are_supertypes_and_a_generic_argument_is_not() {
     }
     assert!(!supers.contains(&"Cart"), "Comparable<Cart> does not extend Cart: {supers:?}");
 }
+
+fn resolver_in(files: &[(&str, &str)]) -> (tempfile::TempDir, Resolver) {
+    let dir = tempfile::tempdir().unwrap();
+    for (p, c) in files {
+        let full = dir.path().join(p);
+        std::fs::create_dir_all(full.parent().unwrap()).unwrap();
+        std::fs::write(full, c).unwrap();
+    }
+    let cfg = Config { code_globs: vec!["**/*.dart".into()], ..Config::default() };
+    let r = Resolver::new(dir.path(), &cfg).unwrap();
+    (dir, r)
+}
+
+const MONOREPO: &[(&str, &str)] = &[
+    ("packages/core/pubspec.yaml", "name: core\nversion: 1.0.0\n"),
+    ("packages/core/lib/orders.dart", "export 'src/orders_impl.dart' show Orders;\n"),
+    ("packages/core/lib/src/orders_impl.dart", "class Orders {\n  void place() {}\n}\n\nclass Ledger {}\n"),
+    ("app/pubspec.yaml", "name: shop\n"),
+    ("app/lib/main.dart", "import 'dart:math';\nimport 'package:flutter/material.dart';\nimport 'package:core/orders.dart';\nimport 'state/cart.dart';\n\nclass Home {\n  late final Orders orders;\n  final cart = Cart();\n}\n"),
+    ("app/lib/state/cart.dart", "class Cart {}\n\nclass Unused {}\n"),
+];
+
+#[test]
+fn a_package_uri_names_lib_under_the_directory_whose_pubspec_says_that_name() {
+    let (_d, r) = resolver_in(MONOREPO);
+    assert_eq!(r.dart().target("app/lib/main.dart", "package:core/orders.dart").as_deref(), Some("packages/core/lib/orders.dart"));
+    assert_eq!(r.dart().target("app/lib/main.dart", "package:shop/state/cart.dart").as_deref(), Some("app/lib/state/cart.dart"));
+    assert_eq!(r.dart().target("app/lib/main.dart", "package:flutter/material.dart"), None);
+    assert_eq!(r.dart().target("app/lib/main.dart", "dart:math"), None);
+    assert_eq!(r.dart().target("app/lib/main.dart", "state/cart.dart").as_deref(), Some("app/lib/state/cart.dart"));
+}
+
+#[test]
+fn an_import_writes_the_names_the_file_uses_and_an_external_one_writes_nothing() {
+    let ex = extract_in(MONOREPO, "app/lib/main.dart");
+    let imports = edges(&ex, EdgeKind::Imports);
+    assert!(imports.contains(&("file:app/lib/main.dart", "file:packages/core/lib/orders.dart", "Orders")), "{imports:?}");
+    assert!(imports.contains(&("file:app/lib/main.dart", "file:app/lib/state/cart.dart", "Cart")), "{imports:?}");
+    assert_eq!(imports.len(), 2, "dart: and an external package name no file: {imports:?}");
+}
+
+#[test]
+fn a_name_passed_on_by_an_export_resolves_to_the_file_that_declares_it() {
+    let (_d, r) = resolver_in(MONOREPO);
+    assert_eq!(r.dart().resolve("app/lib/main.dart", "Orders"), vec!["packages/core/lib/src/orders_impl.dart".to_string()]);
+    // `show Orders` keeps `Ledger` out of the barrel.
+    assert!(r.dart().resolve("app/lib/main.dart", "Ledger").is_empty());
+}
+
+#[test]
+fn an_export_is_a_re_export_carrying_its_show_list_or_every_name() {
+    let ex = extract_in(&[
+        ("lib/shop.dart", "export 'src/cart.dart' show Cart;\nexport 'src/pay.dart';\n"),
+        ("lib/src/cart.dart", "class Cart {}\n"),
+        ("lib/src/pay.dart", "class Pay {}\n"),
+    ], "lib/shop.dart");
+    let re = edges(&ex, EdgeKind::ReExports);
+    assert!(re.contains(&("file:lib/shop.dart", "file:lib/src/cart.dart", "Cart")), "{re:?}");
+    assert!(re.contains(&("file:lib/shop.dart", "file:lib/src/pay.dart", "*")), "{re:?}");
+}
+
+#[test]
+fn hide_keeps_a_name_out_and_a_prefix_is_read_through_its_prefix() {
+    let files: &[(&str, &str)] = &[
+        ("lib/b.dart", "class B {}\n\nclass C {}\n"),
+        ("lib/a.dart", "import 'b.dart' hide B;\nimport 'b.dart' as bb;\n\nvoid f() { B(); C(); bb.B(); }\n"),
+    ];
+    let ex = extract_in(files, "lib/a.dart");
+    let imports = edges(&ex, EdgeKind::Imports);
+    assert!(imports.contains(&("file:lib/a.dart", "file:lib/b.dart", "C")), "{imports:?}");
+    assert!(imports.contains(&("file:lib/a.dart", "file:lib/b.dart", "B")), "the prefixed import used as bb.B: {imports:?}");
+    let (_d, r) = resolver_in(files);
+    assert!(r.dart().resolve("lib/a.dart", "B").is_empty(), "hidden and not declared here");
+    assert_eq!(r.dart().imported("lib/a.dart", Some("bb"), "B"), vec!["lib/b.dart".to_string()]);
+}
+
+#[test]
+fn a_part_and_its_library_are_one_scope_and_the_part_sees_the_library_imports() {
+    let files: &[(&str, &str)] = &[
+        ("lib/util.dart", "class Util {}\n"),
+        ("lib/shop.dart", "library shop;\n\nimport 'util.dart';\n\npart 'src/cart_part.dart';\npart 'src/pay_part.dart';\n\nclass Shop {}\n"),
+        ("lib/src/cart_part.dart", "part of '../shop.dart';\n\nclass CartPart {\n  final u = Util();\n}\n"),
+        ("lib/src/pay_part.dart", "part of shop;\n\nclass PayPart {}\n"),
+    ];
+    let (_d, r) = resolver_in(files);
+    assert_eq!(r.dart().library_of("lib/src/cart_part.dart"), "lib/shop.dart");
+    assert_eq!(r.dart().library_of("lib/src/pay_part.dart"), "lib/shop.dart");
+    assert_eq!(r.dart().resolve("lib/shop.dart", "CartPart"), vec!["lib/src/cart_part.dart".to_string()]);
+    assert_eq!(r.dart().resolve("lib/src/pay_part.dart", "Util"), vec!["lib/util.dart".to_string()]);
+    let ex = extract_in(files, "lib/src/cart_part.dart");
+    assert!(edges(&ex, EdgeKind::Imports).contains(&("file:lib/src/cart_part.dart", "file:lib/util.dart", "Util")), "{:?}", ex.edges);
+}
+
+#[test]
+fn a_conditional_import_names_its_default_and_each_configured_file() {
+    // Flutter's stub/io/web split: the default URI is what the analyzer reads, the configured one is what a device runs.
+    let ex = extract_in(&[
+        ("lib/storage_stub.dart", "class Storage {}\n"),
+        ("lib/storage_io.dart", "class Storage {}\n"),
+        ("lib/app.dart", "import 'storage_stub.dart' if (dart.library.io) 'storage_io.dart';\n\nclass App {\n  final s = Storage();\n}\n"),
+    ], "lib/app.dart");
+    let imports = edges(&ex, EdgeKind::Imports);
+    assert!(imports.contains(&("file:lib/app.dart", "file:lib/storage_stub.dart", "Storage")), "{imports:?}");
+    assert!(imports.contains(&("file:lib/app.dart", "file:lib/storage_io.dart", "Storage")), "the configured file is the one that runs on a device: {imports:?}");
+}
