@@ -60,7 +60,12 @@ fn name_of(n: Node, src: &[u8]) -> Option<String> {
 pub fn scan(rel: &str, source: &str, ex: &mut Extraction) {
     let src = source.as_bytes();
     let Some(tree) = parse(rel, src) else { return };
-    let mut stack = vec![tree.root_node()];
+    scan_tree(tree.root_node(), rel, src, ex);
+}
+
+/// `scan` over a tree someone else parsed.
+pub fn scan_tree(root: Node, rel: &str, src: &[u8], ex: &mut Extraction) {
+    let mut stack = vec![root];
     while let Some(n) = stack.pop() {
         let ctx = match n.kind() {
             "comment" => "comment",

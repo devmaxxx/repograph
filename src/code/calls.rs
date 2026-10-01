@@ -196,7 +196,11 @@ impl Scope {
 pub(crate) fn scan(resolver: &Resolver, rel: &str, source: &str, locals: &BTreeSet<String>, ex: &mut Extraction) {
     let src = source.as_bytes();
     let Some(tree) = parse(rel, src) else { return };
-    let root = tree.root_node();
+    scan_tree(resolver, rel, tree.root_node(), src, locals, ex);
+}
+
+/// `scan` over a tree someone else parsed: an embedded script is TypeScript at its host file's rows.
+pub(crate) fn scan_tree(resolver: &Resolver, rel: &str, root: Node, src: &[u8], locals: &BTreeSet<String>, ex: &mut Extraction) {
     let scope = Scope::collect(root, rel, src, resolver, locals);
     // (owner, target) -> whether any site calls it rather than only passing it: one edge per
     // pair keeps `impact`'s counts, and a real call is the stronger claim, so it wins.

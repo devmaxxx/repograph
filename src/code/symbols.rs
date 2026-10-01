@@ -6,6 +6,12 @@ pub struct SymbolScanner {
     resolver: Resolver,
 }
 
+/// The declaration walk over a tree someone else parsed. It borrows its resolver, so an embedded
+/// language, which is handed `&Resolver`, runs exactly the walk a `.ts` file gets.
+pub(crate) struct Walk<'r> {
+    pub(crate) resolver: &'r Resolver,
+}
+
 pub fn parse(rel: &str, src: &[u8]) -> Option<tree_sitter::Tree> {
     crate::code::lang::Lang::of(rel)?.parse(src)
 }
@@ -161,11 +167,21 @@ impl SymbolScanner {
     pub(crate) fn resolver(&self) -> &Resolver { &self.resolver }
 
     pub fn scan(&self, rel: &str, source: &str) -> Extraction {
+        let src = source.as_bytes();
+        let Some(tree) = parse(rel, src) else {
+            let mut ex = Extraction::default();
+            crate::code::lang::file_node(rel, &mut ex);
+            return ex;
+        };
+        Walk { resolver: &self.resolver }.scan_tree(rel, tree.root_node(), src)
+    }
+}
+
+impl Walk<'_> {
+    /// The declarations, imports and exports under `root`, as `scan` writes them for a file it parsed.
+    pub(crate) fn scan_tree(&self, rel: &str, root: Node, src: &[u8]) -> Extraction {
         let mut ex = Extraction::default();
         let file_id = format!("file:{rel}");
-        let src = source.as_bytes();
-        let Some(tree) = parse(rel, src) else { crate::code::lang::file_node(rel, &mut ex); return ex };
-        let root = tree.root_node();
         ex.node(NodeKind::File, &file_id, rel, &file_head(root, src), rel, 1);
         let mut cur = root.walk();
         for stmt in root.named_children(&mut cur) {
