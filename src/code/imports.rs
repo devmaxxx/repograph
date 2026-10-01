@@ -37,6 +37,8 @@ pub struct Resolver {
     dart: crate::code::dart::library::Libraries,
     /// Every `.vue` file the walk globbed: a TypeScript import of one is an edge to a node only then.
     vue: BTreeSet<String>,
+    /// Every globbed Swift file's top-level type names, by name: where an inheritance clause resolves.
+    swift: BTreeMap<String, BTreeSet<String>>,
 }
 
 #[derive(Deserialize, Default)]
@@ -240,7 +242,7 @@ impl Resolver {
         }
         // Nearest tsconfig to the importing file wins: sort deepest directory first.
         paths.sort_by_key(|a| std::cmp::Reverse(a.0.len()));
-        let mut resolver = Resolver { repo: repo.to_path_buf(), paths, packages, indexes: BTreeMap::new(), dotnet: Default::default(), rust: Default::default(), python: Default::default(), shell: Default::default(), bicep: Default::default(), hcl: Default::default(), dart: Default::default(), vue: Default::default() };
+        let mut resolver = Resolver { repo: repo.to_path_buf(), paths, packages, indexes: BTreeMap::new(), dotnet: Default::default(), rust: Default::default(), python: Default::default(), shell: Default::default(), bicep: Default::default(), hcl: Default::default(), dart: Default::default(), vue: Default::default(), swift: Default::default() };
         // Manifests before sources: a path family's roots decide how its sources' paths read.
         for (_, rel, path) in manifests.iter().filter(|(f, _, _)| reached.contains(f)) {
             if let Ok(text) = std::fs::read_to_string(path) {
@@ -289,6 +291,11 @@ impl Resolver {
         &self.dart
     }
 
+    /// The files declaring the top-level Swift type `name`, in path order.
+    pub(crate) fn swift_files(&self, name: &str) -> Vec<String> {
+        self.swift.get(name).map(|files| files.iter().cloned().collect()).unwrap_or_default()
+    }
+
     /// What one globbed source contributes before any file is extracted. A name-indexed family's
     /// header goes into its index; a path family's plan adds its arm below, for state of its own.
     ///
@@ -329,6 +336,11 @@ impl Resolver {
         }
         if lang == Lang::Vue {
             self.vue.insert(rel.to_string());
+        }
+        if lang == Lang::Swift {
+            for name in crate::code::swift::types(source) {
+                self.swift.entry(name).or_default().insert(rel.to_string());
+            }
         }
     }
 

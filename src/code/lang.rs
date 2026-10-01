@@ -48,6 +48,7 @@ impl Lang {
             Some("sh" | "bash") => Some(Lang::Shell),
             Some("dart") => Some(Lang::Dart),
             Some("vue") => Some(Lang::Vue),
+            Some("swift") => Some(Lang::Swift),
             _ => None,
         }
     }
@@ -69,6 +70,7 @@ impl Lang {
             Lang::Hcl => Some(Language::new(tree_sitter_hcl::LANGUAGE)),
             Lang::Shell => Some(Language::new(tree_sitter_bash::LANGUAGE)),
             Lang::Dart => Some(Language::new(tree_sitter_dart::LANGUAGE)),
+            Lang::Swift => Some(Language::new(tree_sitter_swift::LANGUAGE)),
             // A language whose family plan has not landed has no crate in this build, and `of`
             // never returns it. Once every plan has landed the arm is unreachable, and harmless.
             #[allow(unreachable_patterns)]
@@ -95,6 +97,7 @@ impl Lang {
             Lang::Hcl => Family::Hcl,
             Lang::Shell => Family::Shell,
             Lang::Dart => Family::Dart,
+            Lang::Swift => Family::Swift,
             // A Vue script resolves names through the TypeScript resolver, and L10 puts no edge between families.
             Lang::Vue => Family::TypeScript,
             // Reached only by a variant `of` cannot return yet; see `grammar`.

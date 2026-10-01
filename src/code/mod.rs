@@ -18,6 +18,7 @@ pub mod razor;
 pub(crate) mod rust_lang;
 pub mod shell;
 pub mod sql;
+pub mod swift;
 pub mod symbols;
 pub mod vue;
 
@@ -50,6 +51,7 @@ impl Extractor for CodeExtractor {
             Some(lang::Lang::Shell) => shell::extract(self.symbols.resolver(), rel, text),
             Some(lang::Lang::Dart) => dart::extract(self.symbols.resolver(), rel, text),
             Some(lang::Lang::Vue) => vue::extract(self.symbols.resolver(), rel, text),
+            Some(lang::Lang::Swift) => swift::extract(self.symbols.resolver(), rel, text),
             None => {
                 let mut ex = Extraction::default();
                 lang::file_node(rel, &mut ex);

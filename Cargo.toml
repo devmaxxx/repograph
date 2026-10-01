@@ -50,6 +50,8 @@ tree-sitter-bicep = "=1.1.0"
 tree-sitter-hcl = "=1.1.0"
 # Dart: the only grammar crate on tree-sitter 0.27's ABI (spec §2). MIT.
 tree-sitter-dart = "=0.2.0"
+# Swift: the only maintained grammar crate (spec §2). MIT. 3.7 MB stripped; spec §9 item 3 is the files-only alternative.
+tree-sitter-swift = "=0.7.3"
 postcard = { version = "=1.1.3", features = ["use-std"] }
 
 [dev-dependencies]
