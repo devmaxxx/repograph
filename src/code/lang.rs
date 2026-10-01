@@ -46,6 +46,7 @@ impl Lang {
             // Terraform and every other HCL dialect share one grammar; `hcl::extract` tells them apart by extension.
             Some("tf" | "hcl") => Some(Lang::Hcl),
             Some("sh" | "bash") => Some(Lang::Shell),
+            Some("dart") => Some(Lang::Dart),
             _ => None,
         }
     }
@@ -66,6 +67,7 @@ impl Lang {
             Lang::Bicep => Some(Language::new(tree_sitter_bicep::LANGUAGE)),
             Lang::Hcl => Some(Language::new(tree_sitter_hcl::LANGUAGE)),
             Lang::Shell => Some(Language::new(tree_sitter_bash::LANGUAGE)),
+            Lang::Dart => Some(Language::new(tree_sitter_dart::LANGUAGE)),
             // A language whose family plan has not landed has no crate in this build, and `of`
             // never returns it. Once every plan has landed the arm is unreachable, and harmless.
             #[allow(unreachable_patterns)]
@@ -91,6 +93,7 @@ impl Lang {
             Lang::Bicep => Family::Bicep,
             Lang::Hcl => Family::Hcl,
             Lang::Shell => Family::Shell,
+            Lang::Dart => Family::Dart,
             // Reached only by a variant `of` cannot return yet; see `grammar`.
             #[allow(unreachable_patterns)]
             other => unreachable!("{other:?} has no family arm: its plan has not landed"),

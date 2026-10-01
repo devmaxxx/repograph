@@ -2,6 +2,7 @@ pub mod bicep;
 pub mod blank;
 pub mod calls;
 pub mod csharp;
+pub mod dart;
 pub mod graphql;
 pub mod hcl;
 pub mod idrefs;
@@ -46,6 +47,7 @@ impl Extractor for CodeExtractor {
             Some(lang::Lang::Bicep) => bicep::extract(self.symbols.resolver(), rel, text),
             Some(lang::Lang::Hcl) => hcl::extract(self.symbols.resolver(), rel, text),
             Some(lang::Lang::Shell) => shell::extract(self.symbols.resolver(), rel, text),
+            Some(lang::Lang::Dart) => dart::extract(self.symbols.resolver(), rel, text),
             None => {
                 let mut ex = Extraction::default();
                 lang::file_node(rel, &mut ex);
