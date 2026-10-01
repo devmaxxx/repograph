@@ -278,3 +278,89 @@ fn a_conditional_import_names_its_default_and_each_configured_file() {
     assert!(imports.contains(&("file:lib/app.dart", "file:lib/storage_stub.dart", "Storage")), "{imports:?}");
     assert!(imports.contains(&("file:lib/app.dart", "file:lib/storage_io.dart", "Storage")), "the configured file is the one that runs on a device: {imports:?}");
 }
+
+const HOME: &[(&str, &str)] = &[
+    ("lib/state/store.dart", "class Store {\n  void open(String id) {}\n}\n"),
+    ("lib/net/client.dart", "class Client {\n  void connect() {}\n  static Client make() => Client();\n}\n\nClient connectNow() => Client();\n"),
+    ("lib/base.dart", "abstract class Base {}\n\nmixin Logs {}\n"),
+    ("lib/home.dart", "import 'package:flutter/widgets.dart';
+import 'base.dart';
+import 'state/store.dart';
+import 'net/client.dart';
+import 'net/client.dart' as net;
+
+class Home extends Base with Logs implements StatelessWidget {
+  final _store = Store();
+  late final Client _client;
+
+  void start() {
+    _store.open('a');
+    this._client.connect();
+    _refresh();
+    Client.make();
+    net.connectNow();
+    helper();
+    start();
+  }
+
+  void _refresh() {
+    start();
+  }
+}
+
+void helper() {}
+"),
+];
+
+#[test]
+fn a_call_reaches_the_member_its_receiver_s_declared_or_constructed_type_declares() {
+    let ex = extract_in(HOME, "lib/home.dart");
+    let calls = edges(&ex, EdgeKind::Calls);
+    let from = "sym:lib/home.dart::Home.start";
+    for to in [
+        "sym:lib/state/store.dart::Store.open",
+        "sym:lib/net/client.dart::Client.connect",
+        "sym:lib/home.dart::Home._refresh",
+        "sym:lib/net/client.dart::Client.make",
+        "sym:lib/net/client.dart::connectNow",
+        "sym:lib/home.dart::helper",
+    ] {
+        assert!(calls.iter().any(|(s, t, _)| *s == from && *t == to), "{from} -> {to} missing from {calls:?}");
+    }
+    assert!(!calls.iter().any(|(s, t, _)| s == t), "a self-call is dropped: {calls:?}");
+    assert!(calls.contains(&("sym:lib/home.dart::Home._refresh", "sym:lib/home.dart::Home.start", "")), "{calls:?}");
+}
+
+#[test]
+fn a_constructor_call_in_a_field_initializer_is_a_call_from_that_field() {
+    let ex = extract_in(HOME, "lib/home.dart");
+    assert!(edges(&ex, EdgeKind::Calls).contains(&("sym:lib/home.dart::Home._store", "sym:lib/state/store.dart::Store", "")), "{:?}", ex.edges);
+}
+
+#[test]
+fn a_supertype_the_repository_declares_is_extended_and_an_external_one_is_not() {
+    let ex = extract_in(HOME, "lib/home.dart");
+    let extends = edges(&ex, EdgeKind::Extends);
+    assert!(extends.contains(&("sym:lib/home.dart::Home", "sym:lib/base.dart::Base", "")), "{extends:?}");
+    assert!(extends.contains(&("sym:lib/home.dart::Home", "sym:lib/base.dart::Logs", "")), "{extends:?}");
+    assert!(!extends.iter().any(|(_, t, _)| t.contains("StatelessWidget")), "{extends:?}");
+}
+
+#[test]
+fn a_name_a_file_declares_shadows_the_same_name_an_import_brings() {
+    let ex = extract_in(&[
+        ("lib/other.dart", "void helper() {}\n"),
+        ("lib/a.dart", "import 'other.dart';\n\nvoid helper() {}\n\nvoid run() { helper(); }\n"),
+    ], "lib/a.dart");
+    let calls = edges(&ex, EdgeKind::Calls);
+    assert!(calls.contains(&("sym:lib/a.dart::run", "sym:lib/a.dart::helper", "")), "{calls:?}");
+    assert!(!calls.iter().any(|(_, t, _)| t.starts_with("sym:lib/other.dart")), "{calls:?}");
+}
+
+
+#[test]
+fn a_call_on_this_reaches_the_type_s_own_member() {
+    // The grammar files `this` under `object` as a bare token, so it must read as no receiver at all.
+    let ex = extract("lib/a.dart", "class A {\n  void a() { this.b(); }\n  void b() {}\n}\n");
+    assert!(edges(&ex, EdgeKind::Calls).contains(&("sym:lib/a.dart::A.a", "sym:lib/a.dart::A.b", "")), "{:?}", ex.edges);
+}

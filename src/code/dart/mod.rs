@@ -1,3 +1,4 @@
+pub mod calls;
 pub mod declarations;
 pub mod library;
 
@@ -21,8 +22,16 @@ pub fn extract(resolver: &Resolver, rel: &str, source: &str) -> Extraction {
     let src = source.as_bytes();
     let Some(tree) = Lang::Dart.parse(src) else { return ex };
     let root = tree.root_node();
-    declarations::scan(root, rel, src, &mut ex);
+    let declared = declarations::scan(root, rel, src, &mut ex);
     directives(resolver.dart(), rel, root, src, &mut ex);
+    calls::scan(root, resolver.dart(), rel, src, &declared, &mut ex);
+    // Only a supertype that resolves is an edge. Every Flutter widget extends a class declared
+    // outside the repository, and a same-file guess would name a symbol no file declares.
+    for (from, name) in &declared.supers {
+        for f in resolver.dart().resolve(rel, name) {
+            ex.edge(from, &format!("sym:{f}::{name}"), EdgeKind::Extends, "", rel);
+        }
+    }
     ex
 }
 
