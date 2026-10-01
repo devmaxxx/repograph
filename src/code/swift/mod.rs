@@ -33,7 +33,8 @@ pub fn extract(resolver: &Resolver, rel: &str, source: &str) -> Extraction {
         let from: Vec<String> = if *here {
             vec![format!("sym:{rel}::{ty}")]
         } else {
-            files_of(ty).into_iter().map(|f| format!("sym:{f}::{ty}")).collect()
+            // `extension Outer.Inner` is declared wherever the top-level `Outer` is.
+            files_of(ty.split('.').next().unwrap_or(ty)).into_iter().map(|f| format!("sym:{f}::{ty}")).collect()
         };
         // An SDK name (`UIResponder`, `String`) is declared by no file in the repository, so it writes nothing.
         for f in files_of(sup) {

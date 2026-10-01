@@ -15,6 +15,8 @@ fn owner(n: Node, rel: &str, src: &[u8]) -> String {
     let mut cur = n;
     while let Some(p) = cur.parent() {
         match p.kind() {
+            // A name declared inside a block is a local, never the member or top-level name that owns the call.
+            "block" => var = None,
             "initialized_identifier" | "static_final_declaration" if var.is_none() => {
                 var = p.child_by_field_name("name").map(|x| text(x, src).to_string());
             }
@@ -91,7 +93,8 @@ fn targets(callee: Node, class: Option<&str>, lib: &Libraries, rel: &str, src: &
             let Some(prop) = callee.child_by_field_name("property").map(|p| text(p, src).to_string()) else { return Vec::new() };
             match receiver(callee) {
                 // No `object` field: the receiver is the `this` keyword, which has no node of its own.
-                None => class.map(|c| vec![format!("sym:{rel}::{c}.{prop}")]).unwrap_or_default(),
+                // Only a member the type declares here: an inherited one is declared on another type.
+                None => class.map(|c| format!("sym:{rel}::{c}.{prop}")).filter(|m| d.members.contains(m)).into_iter().collect(),
                 Some(obj) if obj.kind() == "identifier" => {
                     let receiver = text(obj, src);
                     if let Some(t) = field(receiver) {

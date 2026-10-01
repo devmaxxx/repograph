@@ -57,6 +57,16 @@ fn used_names(root: Node, src: &[u8]) -> Used {
                     }
                 }
             }
+            // `p.Widget` as a type is one `type` holding two `type_identifier`s around the `.`.
+            "type" => {
+                let parts = named(n);
+                if let [p, name, ..] = parts.as_slice() {
+                    let between = src.get(p.end_byte()..name.start_byte()).and_then(|b| std::str::from_utf8(b).ok());
+                    if p.kind() == "type_identifier" && name.kind() == "type_identifier" && between.is_some_and(|b| b.trim() == ".") {
+                        u.prefixed.insert((text(*p, src).to_string(), text(*name, src).to_string()));
+                    }
+                }
+            }
             _ => {}
         }
         stack.extend(named(n));
@@ -82,8 +92,7 @@ fn directives(lib: &Libraries, rel: &str, root: Node, src: &[u8], ex: &mut Extra
     }
     let Some(h) = lib.header(rel) else { return };
     for e in &h.exports {
-        let Some(t) = lib.target(rel, &e.uri) else { continue };
-        let context = if e.show.is_empty() { "*".to_string() } else { e.show.join(",") };
+        let (Some(t), Some(context)) = (lib.target(rel, &e.uri), lib.export_context(rel, e)) else { continue };
         ex.edge(&file_id, &format!("file:{t}"), EdgeKind::ReExports, &context, rel);
     }
 }

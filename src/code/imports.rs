@@ -155,6 +155,7 @@ impl Resolver {
         let mut sources: Vec<(Lang, String, PathBuf)> = Vec::new();
         let mut manifests: Vec<(Family, String, PathBuf)> = Vec::new();
         let mut reached: BTreeSet<Family> = BTreeSet::new();
+        let mut vue: BTreeSet<String> = BTreeSet::new();
         // `walk` reads dotted directories, so this one does too, and admits from them only what Shell
         // collects: CI keeps its scripts under `.github/`, while a tsconfig, a package.json or a manifest
         // under a dotted directory stays out, as it was before this walk opened.
@@ -183,8 +184,10 @@ impl Resolver {
                         reached.insert(lang.family());
                         // TypeScript's state is the tsconfig and package.json read below; its sources
                         // are the extractor's alone, so a TypeScript repository opens nothing more here.
-                        // A `.vue` file is in the TypeScript family, and the resolver keeps its path.
-                        if lang == Lang::Vue || lang.family() != Family::TypeScript {
+                        // A `.vue` file is in the TypeScript family, and the resolver keeps only its path.
+                        if lang == Lang::Vue {
+                            vue.insert(rel.clone());
+                        } else if lang.family() != Family::TypeScript {
                             sources.push((lang, rel.clone(), p.to_path_buf()));
                         }
                     }
@@ -242,7 +245,7 @@ impl Resolver {
         }
         // Nearest tsconfig to the importing file wins: sort deepest directory first.
         paths.sort_by_key(|a| std::cmp::Reverse(a.0.len()));
-        let mut resolver = Resolver { repo: repo.to_path_buf(), paths, packages, indexes: BTreeMap::new(), dotnet: Default::default(), rust: Default::default(), python: Default::default(), shell: Default::default(), bicep: Default::default(), hcl: Default::default(), dart: Default::default(), vue: Default::default(), swift: Default::default() };
+        let mut resolver = Resolver { repo: repo.to_path_buf(), paths, packages, indexes: BTreeMap::new(), dotnet: Default::default(), rust: Default::default(), python: Default::default(), shell: Default::default(), bicep: Default::default(), hcl: Default::default(), dart: Default::default(), vue, swift: Default::default() };
         // Manifests before sources: a path family's roots decide how its sources' paths read.
         for (_, rel, path) in manifests.iter().filter(|(f, _, _)| reached.contains(f)) {
             if let Ok(text) = std::fs::read_to_string(path) {
@@ -333,9 +336,6 @@ impl Resolver {
         }
         if lang == Lang::Dart {
             self.dart.collect(rel, source);
-        }
-        if lang == Lang::Vue {
-            self.vue.insert(rel.to_string());
         }
         if lang == Lang::Swift {
             for name in crate::code::swift::types(source) {

@@ -141,3 +141,9 @@ fn a_private_type_in_another_file_is_not_a_supertype_and_the_file_s_own_declarat
         ("sym:Sources/B.swift::Sub", "sym:Sources/B.swift::Store", ""),
     ], "{extends:?}");
 }
+
+#[test]
+fn an_extension_of_a_nested_type_inherits_from_the_file_declaring_its_outer_type() {
+    let ex = extract_in(&[("a.swift", "extension Outer.Inner: Proto { func go() {} }\n"), ("b.swift", "class Outer { class Inner {} }\nprotocol Proto {}\n")], "a.swift");
+    assert_eq!(edges(&ex, EdgeKind::Extends), vec![("sym:b.swift::Outer.Inner", "sym:b.swift::Proto", "")]);
+}

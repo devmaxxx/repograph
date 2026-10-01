@@ -178,7 +178,8 @@ impl Libraries {
     }
 
     /// The public names a library exports, each with its declaring files: its own units' names, then
-    /// whatever its `export`s pass on. `seen` stops an export cycle.
+    /// whatever its `export`s pass on. `seen` holds the libraries on the current export chain, which
+    /// stops a cycle; a library two exports reach is read through each, since each filters it apart.
     fn namespace(&self, lib: &str, seen: &mut BTreeSet<String>) -> BTreeMap<String, BTreeSet<String>> {
         let mut out: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
         if !seen.insert(lib.to_string()) {
@@ -199,7 +200,18 @@ impl Libraries {
                 }
             }
         }
+        seen.remove(lib);
         out
+    }
+
+    /// A re-export's context: `*` when it passes on everything, else the names it admits.
+    pub fn export_context(&self, from: &str, e: &Directive) -> Option<String> {
+        let t = self.target(from, &e.uri)?;
+        if e.show.is_empty() && e.hide.is_empty() {
+            return Some("*".to_string());
+        }
+        let names: Vec<String> = self.namespace(&t, &mut BTreeSet::new()).into_keys().filter(|n| e.admits(n)).collect();
+        Some(names.join(","))
     }
 
     /// Files declaring `name` as `from` sees it. Its own library comes first and shadows every import,

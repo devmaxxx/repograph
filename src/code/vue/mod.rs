@@ -31,13 +31,19 @@ fn tag_end(src: &str, at: usize) -> Option<usize> {
     None
 }
 
-/// The `</template` that closes a top-level template, counting the `<template v-if>` inside it.
+/// The `</template` that closes a top-level template, counting the `<template v-if>` inside it and
+/// stepping over HTML comments, where a `<template>` opens nothing.
 fn template_end(src: &str, from: usize) -> Option<usize> {
     let (mut depth, mut i) = (1, from);
     loop {
         let close = src[i..].find("</template").map(|c| i + c)?;
-        match src[i..].find("<template").map(|o| i + o) {
-            Some(open) if open < close => {
+        let comment = src[i..].find("<!--").map(|c| i + c).filter(|c| *c < close);
+        let open = src[i..].find("<template").map(|o| i + o).filter(|o| *o < close);
+        match (comment, open) {
+            (Some(c), o) if o.is_none_or(|o| c < o) => {
+                i = src[c..].find("-->").map(|e| c + e + 3)?;
+            }
+            (_, Some(open)) => {
                 depth += 1;
                 i = open + "<template".len();
             }
@@ -143,8 +149,16 @@ fn decorators_to_declarations(rel: &str, ex: &mut Extraction) {
     }
 }
 
+/// The symbol a `.vue` file's component is: its file stem, `sym:<rel>::<FileStem>`. An SFC's one
+/// default export is that component, so a default import of the file names it, whatever local
+/// name the importer binds. None for any other path.
+pub(crate) fn component_name(rel: &str) -> Option<&str> {
+    let path = rel.strip_suffix(".vue")?;
+    Some(path.rsplit('/').next().unwrap_or(path))
+}
+
 pub fn extract(resolver: &Resolver, rel: &str, source: &str) -> Extraction {
-    let stem = rel.rsplit('/').next().unwrap_or(rel).trim_end_matches(".vue");
+    let stem = component_name(rel).unwrap_or(rel);
     let component = format!("sym:{rel}::{stem}");
     let last = source.lines().count().max(1) as u32;
     let signature = source.lines().map(str::trim).find(|l| l.starts_with("export default")).unwrap_or(stem).to_string();

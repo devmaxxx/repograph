@@ -212,3 +212,21 @@ fn vue_census() {
     }
     println!("Vue files {files} scripts {scripts} bad {bad}");
 }
+
+#[test]
+fn a_template_in_an_html_comment_does_not_hide_the_script() {
+    let blocks = super::script_blocks("<template><div><!-- <template> --></div></template>\n<script>\nexport const a = 1;\n</script>\n");
+    assert_eq!(blocks.len(), 1, "{blocks:?}");
+}
+
+#[test]
+fn a_call_through_a_default_import_of_a_component_names_the_component() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("Dialog.vue"), "<script lang=\"ts\">\nexport default {}\n</script>\n").unwrap();
+    let src = "import MyDialog from './Dialog.vue';\nexport function open() { MyDialog.show(); }\n";
+    std::fs::write(dir.path().join("main.ts"), src).unwrap();
+    let cfg = Config { code_globs: vec!["**/*.ts".into(), "**/*.vue".into()], ..Config::default() };
+    let ex = CodeExtractor::new(Resolver::new(dir.path(), &cfg).unwrap()).extract("main.ts", src);
+    let calls: Vec<_> = ex.edges.iter().filter(|e| e.kind == EdgeKind::Calls).map(|e| e.target.as_str()).collect();
+    assert_eq!(calls, vec!["sym:Dialog.vue::Dialog.show"]);
+}

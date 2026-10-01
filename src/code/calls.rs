@@ -80,7 +80,12 @@ impl Scope {
                 match part.kind() {
                     // A default import binds whatever name the importer chose; the declaring
                     // file's symbol is a best guess under that name.
-                    "identifier" => { let n = text(part, src).to_string(); self.names.insert(n.clone(), (target.clone(), n)); }
+                    // A `.vue` default import is the component, declared under the file's stem.
+                    "identifier" => {
+                        let n = text(part, src).to_string();
+                        let declared = crate::code::vue::component_name(&target).map_or_else(|| n.clone(), str::to_string);
+                        self.names.insert(n, (target.clone(), declared));
+                    }
                     "namespace_import" => {
                         if let Some(id) = part.named_child(0) { self.namespaces.insert(text(id, src).to_string(), target.clone()); }
                     }

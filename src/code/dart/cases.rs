@@ -364,3 +364,37 @@ fn a_call_on_this_reaches_the_type_s_own_member() {
     let ex = extract("lib/a.dart", "class A {\n  void a() { this.b(); }\n  void b() {}\n}\n");
     assert!(edges(&ex, EdgeKind::Calls).contains(&("sym:lib/a.dart::A.a", "sym:lib/a.dart::A.b", "")), "{:?}", ex.edges);
 }
+
+#[test]
+fn a_library_two_exports_reach_passes_on_what_each_export_admits() {
+    // `b.dart` reaches `e.dart` once filtered to `X` and once whole: `Y` still arrives through `d.dart`.
+    let ex = extract_in(&[
+        ("lib/a.dart", "import 'b.dart';\nvoid f() { X(); Y(); }\n"),
+        ("lib/b.dart", "export 'c.dart' show X;\nexport 'd.dart';\n"),
+        ("lib/c.dart", "export 'e.dart';\n"),
+        ("lib/d.dart", "export 'e.dart';\n"),
+        ("lib/e.dart", "class X {}\nclass Y {}\n"),
+    ], "lib/a.dart");
+    let calls = edges(&ex, EdgeKind::Calls);
+    assert!(calls.contains(&("sym:lib/a.dart::f", "sym:lib/e.dart::X", "")), "{calls:?}");
+    assert!(calls.contains(&("sym:lib/a.dart::f", "sym:lib/e.dart::Y", "")), "{calls:?}");
+}
+
+#[test]
+fn a_local_in_a_method_does_not_own_the_call_in_its_initializer() {
+    let ex = extract("lib/a.dart", "class C {\n  void m() {\n    final a = 1, b = helper();\n    this.inherited();\n  }\n}\nint helper() => 1;\n");
+    let calls = edges(&ex, EdgeKind::Calls);
+    assert_eq!(calls, vec![("sym:lib/a.dart::C.m", "sym:lib/a.dart::helper", "")]);
+}
+
+#[test]
+fn a_prefixed_type_annotation_is_a_name_the_import_context_keeps() {
+    let ex = extract_in(&[("lib/a.dart", "import 'b.dart' as p;\nclass C { p.Widget? w; }\n"), ("lib/b.dart", "class Widget {}\n")], "lib/a.dart");
+    assert_eq!(edges(&ex, EdgeKind::Imports), vec![("file:lib/a.dart", "file:lib/b.dart", "Widget")]);
+}
+
+#[test]
+fn an_export_with_hide_names_what_it_passes_on() {
+    let ex = extract_in(&[("lib/a.dart", "export 'b.dart' hide Secret;\n"), ("lib/b.dart", "class Secret {}\nclass Open {}\n")], "lib/a.dart");
+    assert_eq!(edges(&ex, EdgeKind::ReExports), vec![("file:lib/a.dart", "file:lib/b.dart", "Open")]);
+}

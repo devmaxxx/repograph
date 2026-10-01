@@ -2572,8 +2572,15 @@ def _template_end(src: str, i: int) -> int | None:
         close = src.find("</template", i)
         if close < 0:
             return None
+        comment = src.find("<!--", i)
         opened = src.find("<template", i)
-        if 0 <= opened < close:
+        # A `<template>` inside an HTML comment opens nothing.
+        if 0 <= comment < close and (opened < 0 or comment < opened):
+            end = src.find("-->", comment)
+            if end < 0:
+                return None
+            i = end + 3
+        elif 0 <= opened < close:
             depth += 1
             i = opened + len("<template")
         else:
