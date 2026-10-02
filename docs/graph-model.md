@@ -69,6 +69,7 @@ cited above.
 | `File`          | one per indexed file; owns ids that occur outside any block                   |
 | `Symbol`        | a top-level export, class, method, or decorated class member                  |
 | `LegacyConcept` | an `import-legacy` node that resolution could not tie to a real node          |
+| `Text`          | a file only `text_globs` claims, read as text: its whole text the body, nothing below it and no edge out |
 
 **Edge kinds:**
 

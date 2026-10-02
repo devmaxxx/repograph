@@ -50,12 +50,57 @@ pub struct DenseIndex {
 /// Every text embedded for a node, e5-prefixed. The passage is the node itself; each generated
 /// question is embedded as a query, since the reader's question is one too (e5's symmetric case).
 /// A file has no passage row — its head comment is for the prompt, not the index — and is
-/// present through its questions alone, once `enrich --code` has asked about it.
+/// present through its questions alone, once `enrich --code` has asked about it. A text file is
+/// its body in rows of at most `TEXT_ROW_CHARS`: the embedder reads 256 tokens of a row and drops
+/// the rest, so one row would leave everything past a file's first screen unreachable.
 fn rows(n: &crate::model::Node, questions: &Questions) -> Vec<String> {
     let mut out = Vec::new();
-    if n.kind != NodeKind::File { out.push(format!("passage: {}\n{}", n.label, n.indexed_body())); }
+    match n.kind {
+        NodeKind::File => {}
+        NodeKind::Text => out.extend(text_rows(&n.label, &n.body)),
+        _ => out.push(format!("passage: {}\n{}", n.label, n.indexed_body())),
+    }
     out.extend(questions.get(&n.id).iter().map(|q| format!("query: {q}")));
     out
+}
+
+/// Under 256 tokens for the small model in Cyrillic, its densest script (about 2.5 chars a token).
+const TEXT_ROW_CHARS: usize = 600;
+
+fn text_rows(label: &str, body: &str) -> Vec<String> {
+    // The label rides in every row and the embedder counts it too, so the body gets what is left;
+    // half the row at least, so a deep path cannot shrink a chunk to nothing.
+    let room = TEXT_ROW_CHARS.saturating_sub(label.chars().count()).max(TEXT_ROW_CHARS / 2);
+    let mut chunks = Vec::new();
+    let (mut cur, mut len) = (String::new(), 0usize);
+    for line in body.split_inclusive('\n') {
+        for piece in pieces(line, room) {
+            let n = piece.chars().count();
+            if len + n > room && !cur.is_empty() {
+                chunks.push(std::mem::take(&mut cur));
+                len = 0;
+            }
+            cur.push_str(piece);
+            len += n;
+        }
+    }
+    chunks.push(cur);
+    if chunks.iter().all(|c| c.trim().is_empty()) {
+        return Vec::new();
+    }
+    chunks.into_iter().map(|c| format!("passage: {label}\n{c}")).collect()
+}
+
+/// `s` in runs of at most `n` chars, cut on char boundaries.
+fn pieces(s: &str, n: usize) -> impl Iterator<Item = &str> {
+    let mut rest = s;
+    std::iter::from_fn(move || {
+        if rest.is_empty() { return None; }
+        let cut = rest.char_indices().nth(n).map_or(rest.len(), |(i, _)| i);
+        let (head, tail) = rest.split_at(cut);
+        rest = tail;
+        Some(head)
+    })
 }
 
 /// Which model a store's rows belong to, given the name it records and whether it holds rows at
@@ -831,5 +876,27 @@ mod tests {
         let q = fake(&["z".to_string()]).unwrap().remove(0);
         let (passages, _) = idx.search(&q, 5);
         assert_eq!(passages, vec!["FR-PAY-11".to_string(), "FR-PAY-99".to_string()]);
+    }
+
+    #[test]
+    fn a_text_file_is_cut_into_rows_the_embedder_reads_whole() {
+        let body = format!("{}\n", "a".repeat(99)).repeat(15);
+        let rows = text_rows("ops.yaml", &body);
+        let head = "passage: ops.yaml\n";
+        assert_eq!(rows.len(), 3);
+        assert!(rows.iter().all(|r| r.starts_with(head) && r.chars().count() <= "passage: \n".len() + TEXT_ROW_CHARS));
+        assert_eq!(rows.iter().map(|r| &r[head.len()..]).collect::<String>(), body);
+    }
+
+    #[test]
+    fn a_text_file_with_no_line_break_is_still_cut() {
+        let rows = text_rows("blob.txt", &"é".repeat(1_500));
+        assert_eq!(rows.len(), 3);
+        assert!(rows.iter().all(|r| r.chars().count() <= "passage: \n".len() + TEXT_ROW_CHARS));
+    }
+
+    #[test]
+    fn a_blank_text_file_has_no_row() {
+        assert!(text_rows("empty.txt", "\n\n  \n").is_empty());
     }
 }

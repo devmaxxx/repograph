@@ -265,6 +265,13 @@ pub fn ask(graph: &Graph, lex: &Lexical, dense: Option<Dense>, rerank: Option<Re
             answer.expanded.extend(line(c));
         }
     }
+    // A text file is one node however long it is, so its line says where in it the question was
+    // answered, as a document section's line does.
+    for h in answer.seeds.iter_mut().chain(answer.expanded.iter_mut()) {
+        if let Some(n) = graph.nodes.get(&h.id).filter(|n| n.kind == crate::model::NodeKind::Text) {
+            h.line = matching_line(&n.body, &query);
+        }
+    }
     answer
 }
 
@@ -274,6 +281,27 @@ pub fn ask(graph: &Graph, lex: &Lexical, dense: Option<Dense>, rerank: Option<Re
 fn is_test(id: &str) -> bool {
     ["/test/", "/e2e/", ":test/", ":e2e/", ".spec.", ".test.", ".stories."].iter().any(|m| id.contains(m))
 }
+
+/// The line of a text file holding the most of the question's words, the first of equals, or 1.
+/// A word is matched on its first five letters, so `windows` and an inflected `окна` still find
+/// `window` and `окно`'s line; a word under two letters says nothing about where it is.
+fn matching_line(body: &str, query: &str) -> u32 {
+    let words: Vec<String> = query.split(|c: char| !c.is_alphanumeric())
+        .filter(|w| w.chars().count() >= 2)
+        .map(|w| w.chars().flat_map(char::to_lowercase).take(5).collect())
+        .collect();
+    let mut best = (0, 1);
+    for (i, l) in body.lines().enumerate() {
+        let l = l.to_lowercase();
+        let n = words.iter().filter(|w| l.contains(w.as_str())).count();
+        if n > best.0 { best = (n, i as u32 + 1); }
+    }
+    best.1
+}
+
+/// How much of a text file `--bodies` prints: the lines around where the question was answered.
+/// Its body is the whole file, up to 1 MiB, and a document seed's body is one section.
+const TEXT_BODY_LINES: usize = 12;
 
 /// How much of a line is shown where one is quoted: a seed's label, a family's defining line.
 pub(crate) const HEADLINE: usize = 80;
@@ -293,7 +321,16 @@ pub fn render(answer: &Answer, graph: &Graph, opts: &Options) -> String {
         out.push_str(&format!("{}  {}:{}  {}\n", h.id, h.file, h.line, headline(&h.label)));
         if opts.bodies {
             if let Some(n) = graph.nodes.get(&h.id) {
-                for l in n.body.lines() { out.push_str(&format!("    {l}\n")); }
+                if n.kind == crate::model::NodeKind::Text {
+                    let lines: Vec<&str> = n.body.lines().collect();
+                    let start = (h.line as usize).saturating_sub(3).min(lines.len());
+                    let end = (start + TEXT_BODY_LINES).min(lines.len());
+                    if start > 0 { out.push_str(&format!("    … {start} lines above\n")); }
+                    for l in &lines[start..end] { out.push_str(&format!("    {l}\n")); }
+                    if end < lines.len() { out.push_str(&format!("    … {} lines below\n", lines.len() - end)); }
+                } else {
+                    for l in n.body.lines() { out.push_str(&format!("    {l}\n")); }
+                }
             }
         }
     }
@@ -1282,6 +1319,24 @@ mod tests {
         assert!(out.lines().any(|l| l.starts_with("    ") && l.contains("штраф")));
         let out = render(&a, &g, &opts());
         assert!(!out.lines().any(|l| l.starts_with("    ")));
+    }
+
+    #[test]
+    fn a_text_seed_points_at_its_matching_line_and_bodies_prints_the_lines_around_it() {
+        let mut g = Graph::default();
+        let mut e = Extraction::default();
+        let body: String = (1..=200).map(|i| if i == 120 { "window: saturday-night\n".to_string() } else { format!("key{i}: value\n") }).collect();
+        e.node(NodeKind::Text, "file:ops/deploy.yaml", "ops/deploy.yaml", &body, "ops/deploy.yaml", 1);
+        g.apply(e);
+        let a = ask(&g, &lex(&g, &Questions::default()), None, None, &["saturday".to_string(), "windows".to_string()], &opts());
+        assert_eq!((a.seeds[0].id.as_str(), a.seeds[0].line), ("file:ops/deploy.yaml", 120));
+        let mut o = opts();
+        o.bodies = true;
+        let out = render(&a, &g, &o);
+        let shown: Vec<&str> = out.lines().filter(|l| l.starts_with("    ") && !l.contains('…')).collect();
+        assert_eq!(shown.len(), TEXT_BODY_LINES, "{out}");
+        assert!(shown.iter().any(|l| l.contains("saturday-night")), "{out}");
+        assert!(out.contains("… 117 lines above") && out.contains("… 71 lines below"), "{out}");
     }
 
     #[test]

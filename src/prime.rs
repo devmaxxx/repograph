@@ -23,7 +23,7 @@ pub fn brief(graph: &Graph, questions: &Questions, families: usize, model: Optio
     let count = |f: fn(&NodeKind) -> bool| graph.nodes.values().filter(|n| f(&n.kind)).count();
     let (covered, eligible) = enrich::coverage(graph, questions);
     Brief {
-        docs: count(|k| !matches!(k, NodeKind::File | NodeKind::Symbol)),
+        docs: count(|k| !matches!(k, NodeKind::File | NodeKind::Symbol | NodeKind::Text)),
         code: count(|k| matches!(k, NodeKind::File | NodeKind::Symbol)),
         edges: graph.edges.len(),
         covered,
@@ -133,5 +133,17 @@ mod tests {
         assert!(b.text().contains("enriched=true (2/2 nodes)"), "{}", b.text());
         assert!(b.json().contains("\"model\":\"intfloat/multilingual-e5-small\""), "{}", b.json());
         assert!(b.json().contains("\"families\":54"), "{}", b.json());
+    }
+
+    #[test]
+    fn a_text_file_is_counted_as_neither_a_document_nor_code() {
+        use crate::model::{Extraction, Graph, NodeKind};
+        let mut g = Graph::default();
+        let mut e = Extraction::default();
+        e.node(NodeKind::Requirement, "FR-1", "cancel", "", "a.md", 1);
+        e.node(NodeKind::Text, "file:ops.yaml", "ops.yaml", "deploy: blue\n", "ops.yaml", 1);
+        g.apply(e);
+        let b = brief(&g, &crate::enrich::Questions::default(), 0, None);
+        assert_eq!((b.docs, b.code), (1, 0));
     }
 }

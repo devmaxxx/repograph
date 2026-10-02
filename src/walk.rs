@@ -6,7 +6,7 @@ use std::collections::BTreeMap;
 use std::path::Path;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum FileKind { Doc, Code, Registry }
+pub enum FileKind { Doc, Code, Registry, Text }
 
 /// What a `stat` says about a file: enough to decide that re-reading it would be wasted work.
 /// The blake3 hash stays the truth — a stamp only ever skips recomputing one, never declares a
@@ -34,6 +34,31 @@ pub struct Entry { pub rel: String, pub kind: FileKind, pub hash: String, pub st
 /// both makes a 0.5.4 store (2) and a 0.5.5 store (3) re-read once on the first writer.
 pub const GRAMMAR: u32 = 4;
 
+/// Refused as text whatever `text_globs` says: machine output nobody asks a question of, any one of
+/// which would outweigh the hand-written files in the lexical index. Text entries only — `skip`
+/// still decides for docs and code, so nothing already in the graph leaves it (spec §11, T1).
+const TEXT_REFUSED: [&str; 11] = [
+    "**/package-lock.json", "**/yarn.lock", "**/pnpm-lock.yaml", "**/Cargo.lock", "**/poetry.lock",
+    "**/Gemfile.lock", "**/composer.lock", "**/go.sum", "**/*.min.*", "**/*.map", "**/vendor/**",
+];
+
+/// Over this a text file is data, not something written to be read, and is left out and counted.
+pub const TEXT_MAX_BYTES: u64 = 1 << 20;
+
+/// How far `git` looks for a NUL before calling a file binary.
+const BINARY_PROBE: usize = 8_000;
+
+fn binary(head: &[u8]) -> bool { head[..head.len().min(BINARY_PROBE)].contains(&0) }
+
+/// Only the head is read: a binary over the limit is left out without being counted as text,
+/// and without reading the rest of it.
+fn binary_at(path: &Path) -> std::io::Result<bool> {
+    use std::io::Read;
+    let mut head = Vec::with_capacity(BINARY_PROBE);
+    std::fs::File::open(path)?.take(BINARY_PROBE as u64).read_to_end(&mut head)?;
+    Ok(binary(&head))
+}
+
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub struct Manifest {
     pub files: BTreeMap<String, String>,
@@ -45,6 +70,11 @@ pub struct Manifest {
     /// and stamps do — must this file be read again — and every writer holds the manifest at the
     /// moment it asks.
     #[serde(default)] pub grammar: u32,
+    /// Which reader each file went to. The hash alone cannot tell that a glob moved a file from one
+    /// reader to another — `text_globs` reaching a `.py` file a later `code_globs` claims — so a file
+    /// whose kind moved diffs as changed. Empty in a manifest written before kinds were recorded,
+    /// which compares nothing until the next save writes them.
+    #[serde(default)] pub kinds: BTreeMap<String, FileKind>,
 }
 
 #[derive(Debug, Default)]
@@ -66,10 +96,23 @@ pub(crate) fn stamp_of(meta: &std::fs::Metadata) -> Option<Stamp> {
 /// `prev` is the manifest of the last walk; a file whose stamp still matches keeps its recorded
 /// hash instead of being read. Pass `&Manifest::default()` to hash everything.
 pub fn walk(repo: &Path, cfg: &Config, prev: &Manifest) -> Result<Vec<Entry>> {
+    Ok(walk_inner(repo, cfg, prev, false)?.0)
+}
+
+/// As `walk`, with the number of text files left out for size. Only a caller that reports the
+/// count pays for it: telling an oversized text file from a binary opens every one of them.
+pub fn walk_counted(repo: &Path, cfg: &Config, prev: &Manifest) -> Result<(Vec<Entry>, usize)> {
+    walk_inner(repo, cfg, prev, true)
+}
+
+fn walk_inner(repo: &Path, cfg: &Config, prev: &Manifest, count: bool) -> Result<(Vec<Entry>, usize)> {
     let docs = globs(&cfg.doc_globs)?;
     let code = globs(&cfg.code_globs)?;
     let skip = globs(&cfg.skip)?;
     let registries = globs(&cfg.registries)?;
+    let text = globs(&cfg.text_globs)?;
+    let refused = globs(&TEXT_REFUSED.map(String::from))?;
+    let mut oversized = 0usize;
     let mut out = Vec::new();
     // A repository keeps its agent rules, its hooks and its CI in dotted directories, so the
     // walk reads them and `skip` decides, as it does for every other path. `.git` is the one
@@ -100,24 +143,38 @@ pub fn walk(repo: &Path, cfg: &Config, prev: &Manifest) -> Result<Vec<Entry>> {
         let kind = if registries.is_match(&rel) { FileKind::Registry }
             else if docs.is_match(&rel) { FileKind::Doc }
             else if code.is_match(&rel) { FileKind::Code }
+            else if text.is_match(&rel) && !refused.is_match(&rel) { FileKind::Text }
             else { continue };
         // Stamped before the read, never after: a write racing this walk then leaves a stamp
         // older than the file, and the next walk hashes it again rather than trusting the hash.
         let stamp = dent.metadata().ok().as_ref().and_then(stamp_of);
+        // Before the cache: a file that grew past the limit keeps its stamp's old hash otherwise.
+        if kind == FileKind::Text && stamp.is_some_and(|s| s.len > TEXT_MAX_BYTES) {
+            if count && !binary_at(dent.path()).unwrap_or(true) { oversized += 1; }
+            continue;
+        }
         if let (Some(s), Some(hash)) = (stamp, prev.files.get(&rel)) {
             if prev.stamps.get(&rel) == Some(&s) {
                 out.push(Entry { rel, kind, hash: hash.clone(), stamp });
                 continue;
             }
         }
+        // A binary is never in the manifest, so the cache above never answers for it: probing the
+        // head keeps every walk from reading each one whole again.
+        if kind == FileKind::Text && binary_at(dent.path()).unwrap_or(false) { continue; }
         let bytes = match std::fs::read(dent.path()) {
             Ok(b) => b,
             Err(e) => { eprintln!("walk: skipping {rel}: {e}"); continue; }
         };
+        if kind == FileKind::Text && (binary(&bytes) || bytes.len() as u64 > TEXT_MAX_BYTES) {
+            // Reached over the limit only when the stat above failed and gave no stamp.
+            if !binary(&bytes) { oversized += 1; }
+            continue;
+        }
         out.push(Entry { rel, kind, hash: blake3::hash(&bytes).to_hex().to_string(), stamp });
     }
     out.sort_by(|a, b| a.rel.cmp(&b.rel));
-    Ok(out)
+    Ok((out, oversized))
 }
 
 impl Manifest {
@@ -126,6 +183,7 @@ impl Manifest {
             files: entries.iter().map(|e| (e.rel.clone(), e.hash.clone())).collect(),
             stamps: entries.iter().filter_map(|e| Some((e.rel.clone(), e.stamp?))).collect(),
             grammar: GRAMMAR,
+            kinds: entries.iter().map(|e| (e.rel.clone(), e.kind)).collect(),
         }
     }
 
@@ -140,7 +198,7 @@ impl Manifest {
     pub fn diff(&self, now: &[Entry]) -> Diff {
         let mut d = Diff::default();
         for e in now {
-            if self.files.get(&e.rel) != Some(&e.hash) {
+            if self.files.get(&e.rel) != Some(&e.hash) || self.kinds.get(&e.rel).is_some_and(|k| *k != e.kind) {
                 d.changed.push(e.clone());
             }
         }
@@ -219,6 +277,7 @@ mod tests {
             files: Manifest::from_entries(&hashed).files,
             stamps: BTreeMap::new(),
             grammar: GRAMMAR,
+            kinds: BTreeMap::new(),
         }).unwrap()).unwrap();
         assert!(old.stamps.is_empty());
         let again = walk(d.path(), &Config::default(), &old).unwrap();
@@ -402,5 +461,70 @@ mod tests {
         std::fs::write(d.path().join("a.md"), "z\n").unwrap();
         let entries = walk(d.path(), &Config::default(), &Manifest::default()).unwrap();
         assert_eq!(entries.iter().map(|e| e.rel.as_str()).collect::<Vec<_>>(), vec!["a.md", "абрикос.md", "яблоко.md"]);
+    }
+
+    fn text_cfg() -> Config { Config { text_globs: vec!["**/*".into()], ..Config::default() } }
+
+    #[test]
+    fn a_file_no_glob_claims_is_text_by_its_content_and_nothing_else_decides() {
+        let d = repo();
+        let p = d.path();
+        std::fs::write(p.join("ops.yaml"), "deploy: blue\n").unwrap();
+        std::fs::write(p.join("Makefile"), "all:\n\techo hi\n").unwrap();
+        let mut early = vec![b'x'; 7_999];
+        early.push(0);
+        std::fs::write(p.join("notes.txt"), &early).unwrap();
+        // `git`'s rule: only the first 8,000 bytes are looked at.
+        let mut late = vec![b'x'; 8_000];
+        late.extend_from_slice(b"\0tail");
+        std::fs::write(p.join("late.txt"), &late).unwrap();
+        std::fs::create_dir_all(p.join("web/vendor/x")).unwrap();
+        std::fs::write(p.join("web/package-lock.json"), "{}\n").unwrap();
+        std::fs::write(p.join("web/vendor/x/lib.txt"), "vendored\n").unwrap();
+        std::fs::write(p.join("app.min.css"), "a{}\n").unwrap();
+        std::fs::write(p.join("app.js.map"), "{}\n").unwrap();
+        std::fs::write(p.join("big.log"), "x".repeat(TEXT_MAX_BYTES as usize + 1)).unwrap();
+        let mut png = vec![0u8; TEXT_MAX_BYTES as usize + 1];
+        png[..4].copy_from_slice(b"\x89PNG");
+        std::fs::write(p.join("big.png"), &png).unwrap();
+        let (entries, oversized) = walk_counted(p, &text_cfg(), &Manifest::default()).unwrap();
+        let text: Vec<&str> = entries.iter().filter(|e| e.kind == FileKind::Text).map(|e| e.rel.as_str()).collect();
+        assert_eq!(text, [".gitignore", "Makefile", "late.txt", "ops.yaml"]);
+        assert_eq!(oversized, 1, "big.log alone: a binary over the limit is not text left out");
+    }
+
+    #[test]
+    fn a_doc_a_code_file_a_registry_or_a_skipped_path_never_becomes_text() {
+        let d = repo();
+        let entries = walk(d.path(), &text_cfg(), &Manifest::default()).unwrap();
+        let kind = |rel: &str| entries.iter().find(|e| e.rel == rel).map(|e| e.kind);
+        assert_eq!(kind("b.ts"), Some(FileKind::Code));
+        assert_eq!(kind("docs/a.md"), Some(FileKind::Doc));
+        assert_eq!(kind("docs/constitution.yaml"), Some(FileKind::Registry));
+        assert_eq!(kind("docs/TRACKER.md"), None);
+        assert_eq!(kind("node_modules/x/c.ts"), None);
+        assert_eq!(kind("ignored.md"), None);
+    }
+
+    #[test]
+    fn a_file_a_glob_moves_to_another_reader_diffs_as_changed() {
+        let d = repo();
+        std::fs::write(d.path().join("tool.py"), "print(1)\n").unwrap();
+        let manifest = Manifest::from_entries(&walk(d.path(), &text_cfg(), &Manifest::default()).unwrap());
+        let mut code = text_cfg();
+        code.code_globs.push("**/*.py".into());
+        let after = walk(d.path(), &code, &manifest).unwrap();
+        let changed: Vec<_> = manifest.diff(&after).changed.into_iter().map(|e| (e.rel, e.kind)).collect();
+        assert_eq!(changed, [("tool.py".to_string(), FileKind::Code)]);
+    }
+
+    #[test]
+    fn a_text_file_that_grows_past_the_limit_leaves_on_the_next_walk() {
+        let d = repo();
+        std::fs::write(d.path().join("ops.yaml"), "deploy: blue\n").unwrap();
+        let manifest = Manifest::from_entries(&walk(d.path(), &text_cfg(), &Manifest::default()).unwrap());
+        std::fs::write(d.path().join("ops.yaml"), "x".repeat(TEXT_MAX_BYTES as usize + 1)).unwrap();
+        let after = walk(d.path(), &text_cfg(), &manifest).unwrap();
+        assert_eq!(manifest.diff(&after).removed, vec!["ops.yaml".to_string()]);
     }
 }

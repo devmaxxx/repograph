@@ -238,6 +238,9 @@ impl Scan {
 pub fn survey(repo: &Path, entries: &[Entry]) -> Result<Vec<Mention>> {
     let mut scan = Scan::default();
     for e in entries {
+        // A text node has no edge out of it, so what it says cites nothing a reader can follow,
+        // and reading every one would make `families` pay for the whole tree.
+        if e.kind == FileKind::Text { continue; }
         let bytes = match (std::fs::read(repo.join(&e.rel)), e.kind) {
             (Ok(b), _) => b,
             // The mention half of the report is the whole of what this command says about the
@@ -246,7 +249,7 @@ pub fn survey(repo: &Path, entries: &[Entry]) -> Result<Vec<Mention>> {
             // instead of quietly shortening it.
             (Err(err), FileKind::Doc | FileKind::Registry) =>
                 return Err(err).with_context(|| format!("families: read {}", e.rel)),
-            (Err(err), FileKind::Code) => { eprintln!("families: skipping {}: {err}", e.rel); continue; }
+            (Err(err), FileKind::Code | FileKind::Text) => { eprintln!("families: skipping {}: {err}", e.rel); continue; }
         };
         // A file the extractor refuses for the same reason cites nothing in the graph either, so
         // leaving it out of the tally cannot hide a prefix a reader could have followed.
@@ -256,7 +259,7 @@ pub fn survey(repo: &Path, entries: &[Entry]) -> Result<Vec<Mention>> {
         };
         match e.kind {
             FileKind::Doc => scan.doc(&e.rel, &text),
-            FileKind::Code | FileKind::Registry => scan.tally_lines(&e.rel, &text),
+            FileKind::Code | FileKind::Registry | FileKind::Text => scan.tally_lines(&e.rel, &text),
         }
     }
     Ok(scan.finish())
