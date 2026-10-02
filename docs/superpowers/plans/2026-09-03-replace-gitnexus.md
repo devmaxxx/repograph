@@ -2584,7 +2584,7 @@ Start a Claude Code session in `beauty-crm`, read any `.ts` file: the full notic
 
 Not planned here; brainstormed and specified on its own when 0.5.0 is out. What is known:
 
-- **Corpora:** `bonliva-crm-nx` — C# ~700 files (`packages/crm-api-client-dotnet`, `apps/bonliva-crm-timereport-api`, `libs-dotnet/*`); `beauty-crm/mobile/shared` — Kotlin 122 files; `bonliva-erp` — a handful of Python files. Order: C#, Kotlin, Python.
+- **Corpora:** `bonliva-crm-nx` — C# ~700 files (`packages/crm-api-client-dotnet`, `libs-dotnet/*`); `beauty-crm/mobile/shared` — Kotlin 122 files; `bonliva-erp` — a handful of Python files. Order: C#, Kotlin, Python.
 - **Shape:** `FileKind::Code` dispatched by extension to a per-language `symbols`/`calls`/`imports` trio; `idrefs` is grammar-agnostic (it walks `comment` and `string` nodes) and is reused as is; `impact`, `changes`, `repos` need nothing. Grammars: `tree-sitter-c-sharp`, `tree-sitter-kotlin`, `tree-sitter-python`, pinned.
 - **Config:** `id_families` are `beauty-crm`'s census; the Bonliva repositories get a `repograph.toml` with `ERP`, `CRMDEV`, `BON`. No code.
 - **Then, and only then:** the two GitNexus hooks and the `gitnexus` MCP server leave `~/.claude/settings.json` and `~/.claude.json`, and `~/.gitnexus/` is deleted.
