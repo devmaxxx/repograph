@@ -80,7 +80,12 @@ impl Scope {
                 match part.kind() {
                     // A default import binds whatever name the importer chose; the declaring
                     // file's symbol is a best guess under that name.
-                    "identifier" => { let n = text(part, src).to_string(); self.names.insert(n.clone(), (target.clone(), n)); }
+                    // A `.vue` default import is the component, declared under the file's stem.
+                    "identifier" => {
+                        let n = text(part, src).to_string();
+                        let declared = crate::code::vue::component_name(&target).map_or_else(|| n.clone(), str::to_string);
+                        self.names.insert(n, (target.clone(), declared));
+                    }
                     "namespace_import" => {
                         if let Some(id) = part.named_child(0) { self.namespaces.insert(text(id, src).to_string(), target.clone()); }
                     }
@@ -196,7 +201,11 @@ impl Scope {
 pub(crate) fn scan(resolver: &Resolver, rel: &str, source: &str, locals: &BTreeSet<String>, ex: &mut Extraction) {
     let src = source.as_bytes();
     let Some(tree) = parse(rel, src) else { return };
-    let root = tree.root_node();
+    scan_tree(resolver, rel, tree.root_node(), src, locals, ex);
+}
+
+/// `scan` over a tree someone else parsed: an embedded script is TypeScript at its host file's rows.
+pub(crate) fn scan_tree(resolver: &Resolver, rel: &str, root: Node, src: &[u8], locals: &BTreeSet<String>, ex: &mut Extraction) {
     let scope = Scope::collect(root, rel, src, resolver, locals);
     // (owner, target) -> whether any site calls it rather than only passing it: one edge per
     // pair keeps `impact`'s counts, and a real call is the stronger claim, so it wins.

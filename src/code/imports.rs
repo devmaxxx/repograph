@@ -33,6 +33,12 @@ pub struct Resolver {
     /// Every directory's Terraform addresses and `.tf` files, so a reference and a module source
     /// resolve whatever order the walk reads files in.
     hcl: crate::code::hcl::Modules,
+    /// Every globbed Dart file's directives and top-level names, and every pubspec's package name.
+    dart: crate::code::dart::library::Libraries,
+    /// Every `.vue` file the walk globbed: a TypeScript import of one is an edge to a node only then.
+    vue: BTreeSet<String>,
+    /// Every globbed Swift file's top-level type names, by name: where an inheritance clause resolves.
+    swift: BTreeMap<String, BTreeSet<String>>,
 }
 
 #[derive(Deserialize, Default)]
@@ -149,6 +155,7 @@ impl Resolver {
         let mut sources: Vec<(Lang, String, PathBuf)> = Vec::new();
         let mut manifests: Vec<(Family, String, PathBuf)> = Vec::new();
         let mut reached: BTreeSet<Family> = BTreeSet::new();
+        let mut vue: BTreeSet<String> = BTreeSet::new();
         // `walk` reads dotted directories, so this one does too, and admits from them only what Shell
         // collects: CI keeps its scripts under `.github/`, while a tsconfig, a package.json or a manifest
         // under a dotted directory stays out, as it was before this walk opened.
@@ -177,7 +184,10 @@ impl Resolver {
                         reached.insert(lang.family());
                         // TypeScript's state is the tsconfig and package.json read below; its sources
                         // are the extractor's alone, so a TypeScript repository opens nothing more here.
-                        if lang.family() != Family::TypeScript {
+                        // A `.vue` file is in the TypeScript family, and the resolver keeps only its path.
+                        if lang == Lang::Vue {
+                            vue.insert(rel.clone());
+                        } else if lang.family() != Family::TypeScript {
                             sources.push((lang, rel.clone(), p.to_path_buf()));
                         }
                     }
@@ -235,7 +245,7 @@ impl Resolver {
         }
         // Nearest tsconfig to the importing file wins: sort deepest directory first.
         paths.sort_by_key(|a| std::cmp::Reverse(a.0.len()));
-        let mut resolver = Resolver { repo: repo.to_path_buf(), paths, packages, indexes: BTreeMap::new(), dotnet: Default::default(), rust: Default::default(), python: Default::default(), shell: Default::default(), bicep: Default::default(), hcl: Default::default() };
+        let mut resolver = Resolver { repo: repo.to_path_buf(), paths, packages, indexes: BTreeMap::new(), dotnet: Default::default(), rust: Default::default(), python: Default::default(), shell: Default::default(), bicep: Default::default(), hcl: Default::default(), dart: Default::default(), vue, swift: Default::default() };
         // Manifests before sources: a path family's roots decide how its sources' paths read.
         for (_, rel, path) in manifests.iter().filter(|(f, _, _)| reached.contains(f)) {
             if let Ok(text) = std::fs::read_to_string(path) {
@@ -280,6 +290,15 @@ impl Resolver {
         &self.hcl
     }
 
+    pub(crate) fn dart(&self) -> &crate::code::dart::library::Libraries {
+        &self.dart
+    }
+
+    /// The files declaring the top-level Swift type `name`, in path order.
+    pub(crate) fn swift_files(&self, name: &str) -> Vec<String> {
+        self.swift.get(name).map(|files| files.iter().cloned().collect()).unwrap_or_default()
+    }
+
     /// What one globbed source contributes before any file is extracted. A name-indexed family's
     /// header goes into its index; a path family's plan adds its arm below, for state of its own.
     ///
@@ -315,6 +334,14 @@ impl Resolver {
         if lang == Lang::Hcl {
             self.hcl.add(rel, source);
         }
+        if lang == Lang::Dart {
+            self.dart.collect(rel, source);
+        }
+        if lang == Lang::Swift {
+            for name in crate::code::swift::types(source) {
+                self.swift.entry(name).or_default().insert(rel.to_string());
+            }
+        }
     }
 
     /// What a build manifest contributes; called only when the globs reach the manifest's family.
@@ -329,12 +356,18 @@ impl Resolver {
         if matches!(rel.rsplit('/').next(), Some("pyproject.toml" | "setup.py" | "setup.cfg")) {
             self.python.manifest(rel);
         }
+        if rel == "pubspec.yaml" || rel.ends_with("/pubspec.yaml") {
+            self.dart.collect_manifest(rel, text);
+        }
     }
 
     /// A resolved candidate is only useful if it is a node the walker actually indexes:
     /// `.ts`/`.tsx` source, never a `dist/` build artifact or `node_modules` — otherwise
     /// `resolve` would point an edge at a file with no corresponding graph node.
     fn is_indexed(&self, rel: &str) -> bool {
+        if self.vue.contains(rel) {
+            return true;
+        }
         let ext_ok = matches!(
             Path::new(rel).extension().and_then(|e| e.to_str()),
             Some("ts") | Some("tsx") | Some("js") | Some("jsx") | Some("mjs") | Some("cjs")

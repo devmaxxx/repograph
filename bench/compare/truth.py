@@ -92,7 +92,7 @@ def _regex_end(src: str, start: int) -> int | None:
     return None
 
 
-def _blank_source(src: str, *, kotlin: bool, nested_comments: bool | None = None) -> str:
+def _blank_source(src: str, *, kotlin: bool, nested_comments: bool | None = None, triple_single: bool = False) -> str:
     r"""Comments and text blanked out of `src`, line for line, in one left-to-right pass.
 
     Prose is not a reference and neither is a string. This corpus writes long docblocks that
@@ -159,10 +159,11 @@ def _blank_source(src: str, *, kotlin: bool, nested_comments: bool | None = None
                     end += 1
             emit("\n" * src.count("\n", i, end))
             i = end
-        elif kotlin and src[i : i + 3] == '"""':
-            end = src.find('"""', i + 3)
+        elif kotlin and (src[i : i + 3] == '"""' or (triple_single and src[i : i + 3] == "'''")):
+            quote = src[i : i + 3]
+            end = src.find(quote, i + 3)
             end = size if end < 0 else end + 3
-            emit('"""' + "\n" * src.count("\n", i, end) + '"""')
+            emit(quote + "\n" * src.count("\n", i, end) + quote)
             i = end
         elif kotlin and char == "`":
             end = src.find("`", i + 1)
@@ -1681,7 +1682,12 @@ def declarations(rel: str, src: str) -> tuple[list[str], list[tuple[int, str]]]:
     blanked = blanked_source(rel, src)
     # TypeScript's reader stays the fallback, as it was for every extension but `.kt`.
     reader = DECLARATIONS.get(Path(rel).suffix, typescript_declarations)
-    return blanked.split("\n"), reader(blanked)
+    found = reader(blanked)
+    # A template-only component declares nothing in script, and is still the symbol a hunk in it names.
+    whole = WHOLE_FILE.get(Path(rel).suffix)
+    if whole and whole(rel) not in {name for _, name in found}:
+        found = [(1, whole(rel)), *found]
+    return blanked.split("\n"), found
 
 
 def code_files_naming(repo: Path, token: str) -> list[str]:
@@ -1833,6 +1839,11 @@ def changed_symbols(repo: Path, base: str) -> dict:
             end = end_of(lines, start)
             if any(lo <= end and hi >= start for lo, hi in spans):
                 hit.add(name)
+        # Any hunk in a component's file is in the component, as the extractor's whole-file span says;
+        # added after the span test, so no `DECLARATION_ENDS` entry is needed for `.vue`.
+        whole = WHOLE_FILE.get(Path(rel).suffix)
+        if whole:
+            hit.add(whole(rel))
         if hit:
             symbols[rel] = sorted(hit)
     return {"files": sorted(hunks), "code_files": sorted(code_files), "symbols": symbols}
@@ -2538,6 +2549,284 @@ def build(repo: Path, cases: list[dict], blast: list[dict], roots: list[str] | N
 
 def read_jsonl(path: Path) -> list[dict]:
     return [json.loads(line) for line in path.read_text(encoding="utf8").split("\n") if line.strip()]
+
+
+# ---- Dart, Swift and Vue -----------------------------------------------------------------------------
+
+def blank_dart(src: str) -> str:
+    """Dart nests block comments and has both triple-quoted strings. It has no backtick and no regex
+    literal, so it is the Kotlin dialect plus `'''`. A `${…}` is blanked with its string, as in the
+    other dialects."""
+    return _blank_source(src, kotlin=True, triple_single=True)
+
+
+def blank_swift(src: str) -> str:
+    """Swift nests block comments, has `\"\"\"` multi-line strings and quotes a name in backticks, which
+    is the Kotlin dialect. A raw `#"…"#` leaves its `#` marks as code, which names nothing."""
+    return _blank_source(src, kotlin=True)
+
+
+def _template_end(src: str, i: int) -> int | None:
+    depth = 1
+    while True:
+        close = src.find("</template", i)
+        if close < 0:
+            return None
+        comment = src.find("<!--", i)
+        opened = src.find("<template", i)
+        # A `<template>` inside an HTML comment opens nothing.
+        if 0 <= comment < close and (opened < 0 or comment < opened):
+            end = src.find("-->", comment)
+            if end < 0:
+                return None
+            i = end + 3
+        elif 0 <= opened < close:
+            depth += 1
+            i = opened + len("<template")
+        else:
+            depth -= 1
+            if depth == 0:
+                return close
+            i = close + len("</template")
+
+
+VUE_TAG = re.compile(r"<!--.*?-->|<([A-Za-z][\w-]*)((?:[^>\"']|\"[^\"]*\"|'[^']*')*)>", re.S)
+
+
+def vue_script_ranges(src: str) -> list[tuple[int, int]]:
+    """(start, end) of each top-level `<script>` block's content, found the way the extractor finds
+    them: each top-level element ends at its own closing tag, and nested `<template>` elements count."""
+    out: list[tuple[int, int]] = []
+    i = 0
+    while True:
+        m = VUE_TAG.search(src, i)
+        if not m:
+            return out
+        name, attrs = m.group(1), m.group(2) or ""
+        if name is None or attrs.rstrip().endswith("/"):
+            i = m.end()
+            continue
+        body = m.end()
+        if name == "template":
+            end = _template_end(src, body)
+        else:
+            found = src.find(f"</{name}", body)
+            end = None if found < 0 else found
+        if end is None:
+            return out
+        if name == "script":
+            out.append((body, end))
+        close = src.find(">", end)
+        i = len(src) if close < 0 else close + 1
+
+
+def blank_vue(src: str) -> str:
+    """Everything outside the script blocks blanked, newlines kept, then the script in TypeScript's
+    dialect. A template names components in tags, and a tag is not an import."""
+    pieces: list[str] = []
+    pos = 0
+    for start, end in vue_script_ranges(src):
+        pieces.append(re.sub(r"[^\n]", " ", src[pos:start]))
+        pieces.append(src[start:end])
+        pos = end
+    pieces.append(re.sub(r"[^\n]", " ", src[pos:]))
+    return blank_typescript("".join(pieces))
+
+
+def _segments(blanked: str):
+    """(line, text, parens, delimiter) for each run of code between braces, top-level `;`s and line
+    ends, with the parenthesis depth the run started at.
+
+    Split finer than a line because `class Nested { func deep() {} }` and
+    `struct Point { var x: Int; func moved() }` hold several declarations on one line, and the
+    extractor names each of them.
+    """
+    line, parens, start_parens, buf = 1, 0, 0, []
+    for char in blanked:
+        if char in "{}\n" or (char == ";" and parens == 0):
+            yield line, "".join(buf), start_parens, char
+            buf = []
+            if char == "\n":
+                line += 1
+            continue
+        if not buf:
+            start_parens = parens
+        buf.append(char)
+        if char == "(":
+            parens += 1
+        elif char == ")" and parens:
+            parens -= 1
+    yield line, "".join(buf), start_parens, ""
+
+
+DART_TYPE = re.compile(
+    rf"^[ \t]*(?:@[\w.]+\b(?:\([^()\n]*\))?[ \t]*)*"
+    rf"(?:(?:abstract|base|final|sealed|interface)[ \t]+)*"
+    rf"(?P<kw>mixin[ \t]+class|class|mixin|extension|enum|typedef)\b"
+    rf"(?:[ \t]+(?!on\b)(?P<name>[A-Za-z_$][\w$]*))?"
+)
+DART_DIRECTIVE = re.compile(r"^[ \t]*(?:import|export|part|library)\b")
+DART_TYPE_REF = rf"[\w$]+(?:\.[\w$]+)?(?:{GENERIC})?\??"
+# A member or top-level function or variable carries no keyword; it is an optional type, an optional
+# `get`/`set`/`operator`, a name, and what follows a name in a declaration.
+DART_MEMBER = re.compile(
+    rf"^[ \t]*(?:@[\w.]+\b(?:\([^()\n]*\))?[ \t]*)*"
+    rf"(?:(?:static|external|late|final|const|var|covariant|abstract|factory)[ \t]+)*"
+    rf"(?:(?:(?:{DART_TYPE_REF})[ \t]+)?Function[ \t]*(?:{GENERIC})?\([^()\n]*\)\??[ \t]+|(?:{DART_TYPE_REF})[ \t]+)??"
+    rf"(?:(?P<acc>get|set|operator)[ \t]+)?"
+    rf"(?P<name>[\w$]+(?:\.[\w$]+)?)[ \t]*(?:{GENERIC})?[ \t]*(?P<after>=>|[(=,]|$)"
+)
+
+
+def _dart_more_names(rest: str) -> list[str]:
+    """The further names of `const a = 1, b = 2`: a comma outside every bracket starts one."""
+    names: list[str] = []
+    depth = 0
+    for i, char in enumerate(rest):
+        if char in "([{":
+            depth += 1
+        elif char in ")]}":
+            depth -= 1
+        elif char == "," and depth == 0:
+            m = re.match(r"\s*([A-Za-z_$][\w$]*)\s*(?==|,|$)", rest[i + 1 :])
+            if m:
+                names.append(m.group(1))
+    return names
+
+
+def _dart_member(match: re.Match, text: str, owner: str | None, line: int, found: list[tuple[int, str]]) -> None:
+    name = match.group("name")
+    if match.group("acc") == "operator":
+        return
+    if "." in name:
+        head, tail = name.split(".", 1)
+        # `Type.name(…)` inside `Type` is a named constructor or factory; any other dotted name is not a declaration.
+        if head == owner:
+            found.append((line, tail))
+        return
+    if name == owner:
+        return
+    found.append((line, name))
+    if match.group("after") in ("=", ","):
+        found.extend((line, extra) for extra in _dart_more_names(text[match.end("name") :]))
+
+
+def dart_declarations(blanked: str) -> list[tuple[int, str]]:
+    """(line, name) for every Dart declaration the extractor names, in already-blanked source.
+
+    Brace scope, as the other readers use: a top-level type's body holds members, and every other
+    brace holds statements. Dart has no nested types. An enum lists its constants before its first
+    `;`, and they are values. An unnamed extension's body names nothing a caller writes. A getter
+    and a setter of one name are two lines here and one symbol in the store; neither corpus holds a
+    setter.
+    """
+    found: list[tuple[int, str]] = []
+    # [type name or None, still listing enum constants]
+    frames: list[list] = []
+    pending: tuple[str | None, bool] | None = None
+    for line, text, parens, delim in _segments(blanked):
+        frame = frames[-1] if frames else None
+        at_top = frame is None
+        in_type = frame is not None and frame[0] is not None
+        constants = in_type and frame[1]
+        if constants:
+            if delim == ";" and parens == 0:
+                frame[1] = False
+        elif parens == 0 and pending is None and (at_top or in_type) and text.strip() and not DART_DIRECTIVE.match(text):
+            typ = DART_TYPE.match(text) if at_top else None
+            if typ:
+                kw = " ".join(typ.group("kw").split())
+                if typ.group("name"):
+                    found.append((line, typ.group("name")))
+                if kw != "typedef":
+                    pending = (typ.group("name"), kw == "enum")
+            else:
+                member = DART_MEMBER.match(text)
+                if member:
+                    _dart_member(member, text, frame[0] if in_type else None, line, found)
+        if delim == "{":
+            frames.append(list(pending) if pending is not None else [None, False])
+            pending = None
+        elif delim == "}" and frames:
+            frames.pop()
+        elif delim == ";" and pending is not None:
+            pending = None
+    return found
+
+
+SWIFT_MODIFIER = (
+    r"(?:public|private|fileprivate|internal|open)(?:\(set\))?|final|static|override|mutating|nonmutating|"
+    r"convenience|required|lazy|weak|unowned|dynamic|indirect|nonisolated|class(?=[ \t]+(?:func|var|let)\b)"
+)
+SWIFT_DECL = re.compile(
+    rf"^[ \t]*(?:@[\w.]+\b(?:\([^()\n]*\))?[ \t]*)*"
+    rf"(?:(?:{SWIFT_MODIFIER})[ \t]+)*"
+    rf"(?P<kw>class|struct|enum|protocol|extension|actor|func|let|var|init|typealias)\b"
+    rf"(?:[ \t]+(?P<name>`[^`\n]+`|[\w.]+))?"
+)
+
+
+def swift_declarations(blanked: str) -> list[tuple[int, str]]:
+    """(line, name) for the Swift declarations the spec names: classes, structs, enums, protocols and
+    functions at any declaring scope, constants at top level only. An extension's body holds members
+    and the extension names nothing. Properties, initialisers, enum cases, `typealias` and `actor`
+    are not declarations here, as they are not symbols in the store.
+    """
+    found: list[tuple[int, str]] = []
+    frames: list[bool] = []
+    pending: bool | None = None
+    for line, text, parens, delim in _segments(blanked):
+        m = SWIFT_DECL.match(text) if parens == 0 and (not frames or frames[-1]) else None
+        if m:
+            kw, name = m.group("kw"), (m.group("name") or "").strip("`")
+            if kw in ("class", "struct", "enum", "protocol"):
+                found.append((line, name))
+                pending = True
+            elif kw == "extension":
+                pending = True
+            elif kw == "func" or (kw == "let" and not frames):
+                found.append((line, name))
+                pending = False
+            else:
+                pending = False
+        if delim == "{":
+            frames.append(bool(pending))
+            pending = None
+        elif delim == "}" and frames:
+            frames.pop()
+    return found
+
+
+DART_CLASS = re.compile(r"^[ \t]*(?:(?:abstract|base|final|sealed|interface)[ \t]+)*(?:mixin[ \t]+)?class[ \t]+(\w+)", re.M)
+# A Flutter class holds what it owns in two spellings: a declared type (`late final RelayClient _relay;`)
+# or the class its initializer constructs (`final _state = OfficeState();`). `DiReader` needs the field
+# in group 1 and its class in group 2 for both, and one pattern with two alternatives numbers them
+# apart, so both groups are read by lookaheads over the same text. `di_call_graph` reads the whole
+# class text, so a typed local or an assignment in a method reads as a field too: it costs an edge
+# only when a local shares a field's name and a call goes through it.
+DART_FIELD = re.compile(
+    r"^[ \t]*(?:(?:static|late|final|var|const|covariant|external)[ \t]+)*"
+    r"(?=(?:[A-Z][\w.]*(?:<[^;=\n]*>)?\??[ \t]+)?(\w+)[ \t]*[;=])"
+    r"(?=(?:\w+[ \t]*=[ \t]*(?:const[ \t]+|new[ \t]+)?)?([A-Z]\w*))",
+    re.M,
+)
+# Dart reaches a field without `this.`, and `?.` calls through a nullable one.
+DART_CALL = re.compile(r"(?<![\w$.])(?:this[ \t]*\.[ \t]*)?(\w+)[ \t]*\??\.[ \t]*(\w+)[ \t]*\(")
+DART_DI = DiReader(DART_CLASS, DART_FIELD, DART_CALL)
+
+# A component's script is indented inside its block, and a class component declares injected and prop
+# fields with `!:`, which `FIELD` does not read. The raw text is read, and a template holds no class.
+VUE_CLASS = re.compile(r"^[ \t]*export (?:default )?(?:abstract )?class (\w+)", re.M)
+VUE_FIELD = re.compile(r"(?:private|public|protected|readonly)\s+(?:readonly\s+)?(\w+)[!?]?\s*:\s*(\w+)")
+VUE_DI = DiReader(VUE_CLASS, VUE_FIELD, CALL)
+
+# A component spans its file. The template is part of it, so the truth declares it and names it for
+# any hunk in the file, as the extractor's whole-file span does.
+WHOLE_FILE: dict[str, Callable[[str], str]] = {".vue": lambda rel: Path(rel).stem}
+
+BLANKERS.update({".dart": blank_dart, ".swift": blank_swift, ".vue": blank_vue})
+DECLARATIONS.update({".dart": dart_declarations, ".swift": swift_declarations, ".vue": typescript_declarations})
+DI_READERS.update({".dart": DART_DI, ".vue": VUE_DI})
 
 
 if __name__ == "__main__":

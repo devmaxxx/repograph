@@ -918,3 +918,29 @@ fn an_uppercase_extension_is_a_file_named_by_the_note() {
     assert_eq!(ids(&ex), vec!["file:a/Legacy.JAVA"]);
     assert!(files_only_note(["a/Legacy.JAVA"].into_iter()).is_some_and(|n| n.contains(".JAVA")));
 }
+
+#[test]
+fn the_walk_over_a_parsed_tree_writes_exactly_what_the_scan_of_the_file_writes() {
+    let repo = Repo::new(&[("s.ts", "export class S {\n  create() {}\n}\n")]);
+    let src = "import { S } from './s';\n// FR-PAY-03\n@Injectable()\nexport class C {\n  constructor(private s: S) {}\n  run() { this.s.create(); return 'INV-11'; }\n}\n";
+    let whole = repo.extract("c.ts", src);
+
+    let resolver = Resolver::new(repo.dir.path(), &crate::config::Config::default()).unwrap();
+    let tree = crate::code::lang::Lang::TypeScript.parse(src.as_bytes()).unwrap();
+    let root = tree.root_node();
+    let mut ex = crate::code::symbols::Walk { resolver: &resolver }.scan_tree("c.ts", root, src.as_bytes());
+    let locals: std::collections::BTreeSet<String> = ex.nodes.iter()
+        .filter_map(|n| n.id.strip_prefix("sym:c.ts::"))
+        .filter(|n| !n.contains('.'))
+        .map(str::to_string)
+        .collect();
+    crate::code::calls::scan_tree(&resolver, "c.ts", root, src.as_bytes(), &locals, &mut ex);
+    crate::code::idrefs::scan_tree(root, "c.ts", src.as_bytes(), &mut ex);
+    let mut seen = std::collections::HashSet::new();
+    ex.nodes.retain(|n| seen.insert(n.id.clone()));
+    ex.edges.sort();
+    ex.edges.dedup();
+
+    assert_eq!(whole.nodes, ex.nodes);
+    assert_eq!(whole.edges, ex.edges);
+}
