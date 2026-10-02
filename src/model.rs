@@ -2,7 +2,10 @@ use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-pub enum NodeKind { Requirement, Entity, Invariant, Adr, Milestone, Task, File, Symbol, LegacyConcept }
+pub enum NodeKind { Requirement, Entity, Invariant, Adr, Milestone, Task, File, Symbol, LegacyConcept,
+    /// A file read as text alone (spec §11). Not a `File`: both passage indexes leave `File` out,
+    /// and a text file's body is meant for them.
+    Text }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum EdgeKind { References, Declares, Links, Implements, Imports, ReExports, Calls, Extends, DecoratedBy, Legacy }

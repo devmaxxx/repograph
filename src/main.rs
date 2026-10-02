@@ -18,6 +18,7 @@ mod prime;
 mod query;
 mod serve;
 mod store;
+mod text;
 mod walk;
 
 use clap::{Parser, Subcommand};
@@ -202,6 +203,7 @@ pub struct Extractors {
     pub doc: Box<dyn Extractor>,
     pub code: Box<dyn Extractor>,
     pub registry: Box<dyn Extractor>,
+    pub text: Box<dyn Extractor>,
 }
 
 pub struct UpdateReport {
@@ -298,6 +300,7 @@ pub(crate) fn apply_diff(repo: &std::path::Path, store: &store::Store, graph: &m
             walk::FileKind::Doc => &ex.doc,
             walk::FileKind::Code => &ex.code,
             walk::FileKind::Registry => &ex.registry,
+            walk::FileKind::Text => &ex.text,
         };
         graph.apply(extractor.extract(&e.rel, &text));
     }
@@ -336,7 +339,7 @@ pub fn run_update(repo: &std::path::Path, cfg: &config::Config, wipe: bool) -> a
     // A build starts from nothing in memory and leaves the stored graph alone until its save
     // renames the new one over it: a build killed before then leaves a store that still answers.
     let (mut graph, manifest) = if wipe { store.drop_leftovers()?; Default::default() } else { store.load()? };
-    let entries = walk::walk(repo, cfg, &manifest)?;
+    let (entries, oversized) = walk::walk_counted(repo, cfg, &manifest)?;
     let diff = manifest.diff(&entries);
     // A build starts from an empty graph, so this one test covers both fresh builds: `build`, and
     // an `update` on a store nobody has built yet.
@@ -349,7 +352,12 @@ pub fn run_update(repo: &std::path::Path, cfg: &config::Config, wipe: bool) -> a
     // `settle` has already moved the citations a new family admits or a lost one withdraws; what
     // is left is to say so, since the next `ask` answers over edges that were not there before.
     match (bootstrap, before) {
-        (true, _) => eprintln!("{}", families::line(&families::of_graph(&graph))),
+        (true, _) => {
+            eprintln!("{}", families::line(&families::of_graph(&graph)));
+            if oversized > 0 {
+                eprintln!("text: {oversized} file{} over 1 MiB left out", if oversized == 1 { "" } else { "s" });
+            }
+        }
         (false, Some(before)) => {
             let moved = families::moved(&before, &families::of_graph(&graph));
             if !moved.is_empty() { eprintln!("families: {}", moved.join(", ")); }
@@ -532,6 +540,7 @@ pub(crate) fn extractors(repo: &std::path::Path, cfg: &config::Config) -> anyhow
         doc: Box::new(doc::DocExtractor::new()),
         code: Box::new(code::CodeExtractor::new(resolver)),
         registry: Box::new(doc::registry::RegistryExtractor),
+        text: Box::new(text::TextExtractor),
     })
 }
 
@@ -1158,7 +1167,7 @@ mod tests {
         let files = store.load().unwrap().1.files;
         // The grammar is this build's: what is missing here is the stamps, and a store behind on
         // both would be re-read for the other reason.
-        store.save_manifest(&walk::Manifest { files, stamps: Default::default(), grammar: walk::GRAMMAR }).unwrap();
+        store.save_manifest(&walk::Manifest { files, stamps: Default::default(), grammar: walk::GRAMMAR, kinds: Default::default() }).unwrap();
         let graph_before = std::fs::read(repo.join(".repograph/graph.json")).unwrap();
         assert!(ask::graph_for_ask(repo, &cfg, &store, false, &ask::Timing::new()).unwrap().1.is_none());
         let manifest = store.load().unwrap().1;
