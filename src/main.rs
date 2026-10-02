@@ -18,6 +18,7 @@ mod prime;
 mod query;
 mod serve;
 mod store;
+mod text;
 mod walk;
 
 use clap::{Parser, Subcommand};

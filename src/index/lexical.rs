@@ -54,8 +54,10 @@ impl LexicalIndex {
     /// lifted every document's score by a quarter while the passage scores the gate compares
     /// against stayed put, and a keyword case that had kept the questions list out at 0.80
     /// admitted it at 1.03.
+    ///
+    /// A text file has no questions; as an id-only document it would only lengthen the index.
     pub fn build_questions(graph: &Graph, questions: &Questions) -> LexicalIndex {
-        Self::build_with(graph, |n| n.kind != NodeKind::File,
+        Self::build_with(graph, |n| !matches!(n.kind, NodeKind::File | NodeKind::Text),
                          |n| if n.is_code() { n.id.clone() } else { format!("{} {}", n.id, questions.get(&n.id).join(" ")) })
     }
 
@@ -446,5 +448,17 @@ mod tests {
         assert_eq!(lex.code.as_ref().map(|i| i.search("выйти устройств", 5)[0].0.clone()), Some("sym:apps/a.ts::revoke".to_string()));
         assert_eq!(lex.passages.search("штраф", 5), passages_before, "a later --rerank gets the code list without losing what already answered fine");
         assert_eq!(lex.questions.as_ref().map(|i| i.search("деньги уходят", 5)), questions_before);
+    }
+
+    #[test]
+    fn a_text_file_is_a_passage_and_never_a_questions_document() {
+        let mut g = Graph::default();
+        let mut e = Extraction::default();
+        e.node(NodeKind::Text, "file:ops/deploy.yaml", "ops/deploy.yaml", "strategy: blue-green\nwindow: saturday\n", "ops/deploy.yaml", 1);
+        e.node(NodeKind::Requirement, "FR-1", "cancel", "a visit is cancelled", "a.md", 1);
+        g.apply(e);
+        assert_eq!(LexicalIndex::build(&g).search("saturday", 5)[0].0, "file:ops/deploy.yaml");
+        let q = LexicalIndex::build_questions(&g, &Questions::default());
+        assert!(q.search("file:ops/deploy.yaml", 5).iter().all(|(id, _)| id != "file:ops/deploy.yaml"));
     }
 }
