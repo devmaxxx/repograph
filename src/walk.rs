@@ -6,7 +6,7 @@ use std::collections::BTreeMap;
 use std::path::Path;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum FileKind { Doc, Code, Registry }
+pub enum FileKind { Doc, Code, Registry, Text }
 
 /// What a `stat` says about a file: enough to decide that re-reading it would be wasted work.
 /// The blake3 hash stays the truth — a stamp only ever skips recomputing one, never declares a
@@ -33,6 +33,31 @@ pub struct Entry { pub rel: String, pub kind: FileKind, pub hash: String, pub st
 /// 0.5.5's grammar, not 0.6.0's, so a 3 here would leave a store 0.5.5 wrote unread; one above
 /// both makes a 0.5.4 store (2) and a 0.5.5 store (3) re-read once on the first writer.
 pub const GRAMMAR: u32 = 4;
+
+/// Refused as text whatever `text_globs` says: machine output nobody asks a question of, any one of
+/// which would outweigh the hand-written files in the lexical index. Text entries only — `skip`
+/// still decides for docs and code, so nothing already in the graph leaves it (spec §11, T1).
+const TEXT_REFUSED: [&str; 11] = [
+    "**/package-lock.json", "**/yarn.lock", "**/pnpm-lock.yaml", "**/Cargo.lock", "**/poetry.lock",
+    "**/Gemfile.lock", "**/composer.lock", "**/go.sum", "**/*.min.*", "**/*.map", "**/vendor/**",
+];
+
+/// Over this a text file is data, not something written to be read, and is left out and counted.
+pub const TEXT_MAX_BYTES: u64 = 1 << 20;
+
+/// How far `git` looks for a NUL before calling a file binary.
+const BINARY_PROBE: usize = 8_000;
+
+fn binary(head: &[u8]) -> bool { head[..head.len().min(BINARY_PROBE)].contains(&0) }
+
+/// Only the head is read: a binary over the limit is left out without being counted as text,
+/// and without reading the rest of it.
+fn binary_at(path: &Path) -> std::io::Result<bool> {
+    use std::io::Read;
+    let mut head = Vec::with_capacity(BINARY_PROBE);
+    std::fs::File::open(path)?.take(BINARY_PROBE as u64).read_to_end(&mut head)?;
+    Ok(binary(&head))
+}
 
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub struct Manifest {
@@ -66,10 +91,18 @@ pub(crate) fn stamp_of(meta: &std::fs::Metadata) -> Option<Stamp> {
 /// `prev` is the manifest of the last walk; a file whose stamp still matches keeps its recorded
 /// hash instead of being read. Pass `&Manifest::default()` to hash everything.
 pub fn walk(repo: &Path, cfg: &Config, prev: &Manifest) -> Result<Vec<Entry>> {
+    Ok(walk_counted(repo, cfg, prev)?.0)
+}
+
+/// As `walk`, with the number of text files left out for size.
+pub fn walk_counted(repo: &Path, cfg: &Config, prev: &Manifest) -> Result<(Vec<Entry>, usize)> {
     let docs = globs(&cfg.doc_globs)?;
     let code = globs(&cfg.code_globs)?;
     let skip = globs(&cfg.skip)?;
     let registries = globs(&cfg.registries)?;
+    let text = globs(&cfg.text_globs)?;
+    let refused = globs(&TEXT_REFUSED.map(String::from))?;
+    let mut oversized = 0usize;
     let mut out = Vec::new();
     // A repository keeps its agent rules, its hooks and its CI in dotted directories, so the
     // walk reads them and `skip` decides, as it does for every other path. `.git` is the one
@@ -100,10 +133,16 @@ pub fn walk(repo: &Path, cfg: &Config, prev: &Manifest) -> Result<Vec<Entry>> {
         let kind = if registries.is_match(&rel) { FileKind::Registry }
             else if docs.is_match(&rel) { FileKind::Doc }
             else if code.is_match(&rel) { FileKind::Code }
+            else if text.is_match(&rel) && !refused.is_match(&rel) { FileKind::Text }
             else { continue };
         // Stamped before the read, never after: a write racing this walk then leaves a stamp
         // older than the file, and the next walk hashes it again rather than trusting the hash.
         let stamp = dent.metadata().ok().as_ref().and_then(stamp_of);
+        // Before the cache: a file that grew past the limit keeps its stamp's old hash otherwise.
+        if kind == FileKind::Text && stamp.is_some_and(|s| s.len > TEXT_MAX_BYTES) {
+            if !binary_at(dent.path()).unwrap_or(true) { oversized += 1; }
+            continue;
+        }
         if let (Some(s), Some(hash)) = (stamp, prev.files.get(&rel)) {
             if prev.stamps.get(&rel) == Some(&s) {
                 out.push(Entry { rel, kind, hash: hash.clone(), stamp });
@@ -114,10 +153,15 @@ pub fn walk(repo: &Path, cfg: &Config, prev: &Manifest) -> Result<Vec<Entry>> {
             Ok(b) => b,
             Err(e) => { eprintln!("walk: skipping {rel}: {e}"); continue; }
         };
+        if kind == FileKind::Text && (binary(&bytes) || bytes.len() as u64 > TEXT_MAX_BYTES) {
+            // Reached over the limit only when the stat above failed and gave no stamp.
+            if !binary(&bytes) { oversized += 1; }
+            continue;
+        }
         out.push(Entry { rel, kind, hash: blake3::hash(&bytes).to_hex().to_string(), stamp });
     }
     out.sort_by(|a, b| a.rel.cmp(&b.rel));
-    Ok(out)
+    Ok((out, oversized))
 }
 
 impl Manifest {
@@ -402,5 +446,58 @@ mod tests {
         std::fs::write(d.path().join("a.md"), "z\n").unwrap();
         let entries = walk(d.path(), &Config::default(), &Manifest::default()).unwrap();
         assert_eq!(entries.iter().map(|e| e.rel.as_str()).collect::<Vec<_>>(), vec!["a.md", "абрикос.md", "яблоко.md"]);
+    }
+
+    fn text_cfg() -> Config { Config { text_globs: vec!["**/*".into()], ..Config::default() } }
+
+    #[test]
+    fn a_file_no_glob_claims_is_text_by_its_content_and_nothing_else_decides() {
+        let d = repo();
+        let p = d.path();
+        std::fs::write(p.join("ops.yaml"), "deploy: blue\n").unwrap();
+        std::fs::write(p.join("Makefile"), "all:\n\techo hi\n").unwrap();
+        let mut early = vec![b'x'; 7_999];
+        early.push(0);
+        std::fs::write(p.join("notes.txt"), &early).unwrap();
+        // `git`'s rule: only the first 8,000 bytes are looked at.
+        let mut late = vec![b'x'; 8_000];
+        late.extend_from_slice(b"\0tail");
+        std::fs::write(p.join("late.txt"), &late).unwrap();
+        std::fs::create_dir_all(p.join("web/vendor/x")).unwrap();
+        std::fs::write(p.join("web/package-lock.json"), "{}\n").unwrap();
+        std::fs::write(p.join("web/vendor/x/lib.txt"), "vendored\n").unwrap();
+        std::fs::write(p.join("app.min.css"), "a{}\n").unwrap();
+        std::fs::write(p.join("app.js.map"), "{}\n").unwrap();
+        std::fs::write(p.join("big.log"), "x".repeat(TEXT_MAX_BYTES as usize + 1)).unwrap();
+        let mut png = vec![0u8; TEXT_MAX_BYTES as usize + 1];
+        png[..4].copy_from_slice(b"\x89PNG");
+        std::fs::write(p.join("big.png"), &png).unwrap();
+        let (entries, oversized) = walk_counted(p, &text_cfg(), &Manifest::default()).unwrap();
+        let text: Vec<&str> = entries.iter().filter(|e| e.kind == FileKind::Text).map(|e| e.rel.as_str()).collect();
+        assert_eq!(text, [".gitignore", "Makefile", "late.txt", "ops.yaml"]);
+        assert_eq!(oversized, 1, "big.log alone: a binary over the limit is not text left out");
+    }
+
+    #[test]
+    fn a_doc_a_code_file_a_registry_or_a_skipped_path_never_becomes_text() {
+        let d = repo();
+        let entries = walk(d.path(), &text_cfg(), &Manifest::default()).unwrap();
+        let kind = |rel: &str| entries.iter().find(|e| e.rel == rel).map(|e| e.kind);
+        assert_eq!(kind("b.ts"), Some(FileKind::Code));
+        assert_eq!(kind("docs/a.md"), Some(FileKind::Doc));
+        assert_eq!(kind("docs/constitution.yaml"), Some(FileKind::Registry));
+        assert_eq!(kind("docs/TRACKER.md"), None);
+        assert_eq!(kind("node_modules/x/c.ts"), None);
+        assert_eq!(kind("ignored.md"), None);
+    }
+
+    #[test]
+    fn a_text_file_that_grows_past_the_limit_leaves_on_the_next_walk() {
+        let d = repo();
+        std::fs::write(d.path().join("ops.yaml"), "deploy: blue\n").unwrap();
+        let manifest = Manifest::from_entries(&walk(d.path(), &text_cfg(), &Manifest::default()).unwrap());
+        std::fs::write(d.path().join("ops.yaml"), "x".repeat(TEXT_MAX_BYTES as usize + 1)).unwrap();
+        let after = walk(d.path(), &text_cfg(), &manifest).unwrap();
+        assert_eq!(manifest.diff(&after).removed, vec!["ops.yaml".to_string()]);
     }
 }

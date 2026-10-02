@@ -77,3 +77,24 @@ fn a_build_replaces_the_headers_an_older_store_left_at_its_save() {
     assert!(common::run(repo, &["build"]).status.success());
     assert!(!path.exists(), "a build reads beside no headers, so it leaves none the old graph was read beside");
 }
+
+/// The oversized count is said once, by the build, so a glob that reaches data files says how
+/// many it left out instead of leaving the graph silently thinner than the tree.
+#[test]
+fn a_build_names_the_text_files_it_left_out_for_size() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path();
+    write(repo, "web/a.ts", "export function boot() {}\n");
+    write(repo, "ops/deploy.yaml", "strategy: blue-green\n");
+    write(repo, "data/dump.csv", &"a,b\n".repeat(300_000));
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_repograph"))
+        .env_remove("REPOGRAPH_BENCH_REPO").env_remove("REPOGRAPH_EMBED_MODEL").env_remove("REPOGRAPH_CODE_GLOBS")
+        .env("REPOGRAPH_TEXT_GLOBS", "**/*")
+        .args(["--no-dense", "--repo"]).arg(repo).arg("build").output().unwrap();
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(out.status.success(), "{err}");
+    assert_eq!(err.matches("text: 1 file over 1 MiB left out").count(), 1, "{err}");
+    let graph: serde_json::Value = serde_json::from_slice(&std::fs::read(repo.join(".repograph/graph.json")).unwrap()).unwrap();
+    assert_eq!(graph["nodes"]["file:ops/deploy.yaml"]["kind"], "Text");
+    assert!(graph["nodes"].get("file:data/dump.csv").is_none());
+}

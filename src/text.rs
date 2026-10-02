@@ -4,7 +4,6 @@
 
 use crate::model::{Extraction, Extractor, NodeKind};
 
-#[allow(dead_code)] // Wired into the walk's dispatch by the next commit.
 pub struct TextExtractor;
 
 impl Extractor for TextExtractor {
