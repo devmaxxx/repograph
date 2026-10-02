@@ -7,6 +7,7 @@ import unittest
 from pathlib import Path
 
 from truth import blank_kotlin, blank_typescript, changed_symbols, declaration_end, declarations
+from truth import blank_dart, blank_swift, blank_vue, dart_declarations, di_call_graph, kotlin_declarations, shortest_path, swift_declarations
 import truth as T
 from truth import (
     DECLARATIONS,
@@ -496,13 +497,14 @@ class Registries(unittest.TestCase):
         self.assertIs(T.DECLARATIONS[".tsx"], T.typescript_declarations)
         self.assertIs(T.DECLARATIONS[".kt"], T.kotlin_declarations)
         self.assertIs(T.BLANKERS[".kt"], T.blank_kotlin)
-        self.assertEqual(list(T.DI_READERS), [*T.JS_FAMILY, ".cs", ".razor", ".kt", ".java", ".py"])
+        self.assertEqual(list(T.DI_READERS), [*T.JS_FAMILY, ".cs", ".razor", ".kt", ".java", ".py", ".dart", ".vue"])
         self.assertLessEqual({".sql", ".gql", ".graphql"}, set(T.CALL_READERS))
         self.assertEqual(
             T.code_globs(),
             ("-g", "*.ts", "-g", "*.tsx", "-g", "*.js", "-g", "*.jsx", "-g", "*.mjs", "-g", "*.cjs", "-g", "*.kt", "-g", "*.cs", "-g", "*.razor", "-g", "*.cshtml", "-g", "*.java",
              "-g", "*.sql", "-g", "*.gql", "-g", "*.graphql", "-g", "*.rs", "-g", "*.py",
-             "-g", "*.bicep", "-g", "*.tf", "-g", "*.hcl", "-g", "*.sh", "-g", "*.bash"),
+             "-g", "*.bicep", "-g", "*.tf", "-g", "*.hcl", "-g", "*.sh", "-g", "*.bash",
+             "-g", "*.dart", "-g", "*.swift", "-g", "*.vue"),
         )
 
     def test_a_registered_reader_is_the_one_declarations_uses(self):
@@ -1720,6 +1722,195 @@ class IacShellReaderContract(unittest.TestCase):
         self.assertEqual(bicep_calls("param p string\nvar v = p // p again\nvar w = '''\nv\n'''\n"), [("v", "p")])
         self.assertEqual(shell_calls("# helper\nrun() {\n  # helper\n  echo helper\n}\n"), [("run", "echo")])
         self.assertEqual(bake_calls('# inherits = ["base"]\ntarget "base" {}\ntarget "api" {\n  # inherits = ["base"]\n}\n'), [])
+
+
+
+DART_DECLS = """typedef Pricer = int Function(int);
+
+const limit = 3, _hidden = 4;
+
+int total(int a) => a;
+
+int get version => 1;
+
+abstract class Base {
+  void must();
+}
+
+mixin Audited on Base {
+  void audit() {}
+}
+
+class Cart extends Base with Audited implements Comparable<Cart> {
+  final Order order;
+  final _store = Store();
+  static const int max = 2;
+
+  Cart(this.order);
+  Cart.empty() : order = Order();
+  factory Cart.of(Order o) => Cart(o);
+
+  int get size => 1;
+  void add(int n) {}
+  void _drop() {}
+  int operator +(int other) => other;
+}
+
+extension CartX on Cart {
+  int twice() => size * 2;
+}
+
+extension on Base {
+  void hidden() {}
+}
+
+enum Status {
+  open,
+  closed;
+
+  bool get done => this == closed;
+}
+
+class _Private {}
+"""
+
+SWIFT_RUNNER = """import UIKit
+
+let limit = 3
+private let secret = 1
+var counter = 0
+
+func helper(_ n: Int) -> Int { n }
+fileprivate func hidden() {}
+
+protocol Store {
+    func load() -> Int
+    var size: Int { get }
+}
+
+@objc final class Cart: Base, Store {
+    let id: Int = 1
+    init(id: Int) {}
+    func load() -> Int { 1 }
+    private func drop() {}
+    var size: Int { 1 }
+    class Nested { func deep() {} }
+    static func make() -> Cart { Cart(id: 1) }
+}
+
+struct Point { var x: Int; func moved() -> Point { self } }
+
+enum Mode: String { case a, b; func flip() -> Mode { .a } }
+
+extension Cart {
+    func extra() {}
+}
+"""
+
+VUE_CHECKOUT = """<template>
+  <div class="checkout">
+    <p>Pay with <script> in a sentence</p>
+    <template v-if="ready"><Cart /></template>
+  </div>
+</template>
+
+<!-- <script>not a block</script> -->
+<script lang="ts">
+  import { Component, Vue } from 'vue-property-decorator';
+  import Cart from '@/components/Cart.vue';
+
+  @Component({ components: { Cart } })
+  export default class Checkout extends Vue {
+    private pricing!: Pricing;
+    amount = 0;
+    pay(): number { return this.pricing.total(this.amount); }
+  }
+</script>
+
+<style scoped>
+.checkout { color: red; }
+</style>
+"""
+
+
+class NewLanguageReaders(unittest.TestCase):
+    """Each reader names what its extractor's inline case declares, on the same source."""
+
+    def test_the_dart_reader_names_what_the_dart_extractor_declares(self):
+        names = sorted(n for _, n in dart_declarations(blank_dart(DART_DECLS)))
+        self.assertEqual(names, sorted([
+            "Pricer", "limit", "_hidden", "total", "version", "Base", "must", "Audited", "audit",
+            "Cart", "order", "_store", "max", "empty", "of", "size", "add", "_drop",
+            "CartX", "twice", "Status", "done", "_Private",
+        ]))
+
+    def test_a_dart_one_line_body_is_read_and_a_triple_single_quoted_string_is_not(self):
+        src = "class A { void f() {} }\nvar s = '''\nclass Fake {}\n''';\nclass Real {}\n"
+        self.assertEqual([n for _, n in dart_declarations(blank_dart(src))], ["A", "f", "s", "Real"])
+
+    def test_kotlin_blanking_is_unchanged_by_the_dart_dialect(self):
+        self.assertEqual([n for _, n in kotlin_declarations(blank_kotlin("val q = '\\''\nfun f() {}\n"))], ["q", "f"])
+
+    def test_the_swift_reader_names_what_the_swift_extractor_declares(self):
+        names = sorted(n for _, n in swift_declarations(blank_swift(SWIFT_RUNNER)))
+        self.assertEqual(names, sorted([
+            "limit", "secret", "helper", "hidden", "Store", "load", "Cart", "load", "drop",
+            "Nested", "deep", "make", "Point", "moved", "Mode", "flip", "extra",
+        ]))
+
+    def test_vue_blanking_keeps_the_script_at_its_rows_and_nothing_else(self):
+        blanked = blank_vue(VUE_CHECKOUT)
+        self.assertEqual(blanked.count("\n"), VUE_CHECKOUT.count("\n"))
+        self.assertNotIn("sentence", blanked)
+        self.assertNotIn("color", blanked)
+        self.assertEqual(blanked.split("\n")[13].strip(), "export default class Checkout extends Vue {")
+
+    def test_a_component_is_declared_once_and_a_template_only_one_is_its_file_stem(self):
+        _, found = declarations("src/components/Checkout.vue", VUE_CHECKOUT)
+        names = [n for _, n in found]
+        self.assertEqual(names.count("Checkout"), 1)
+        self.assertIn("pay", names)
+        _, found = declarations("src/components/Cart.vue", "<template>\n  <ul></ul>\n</template>\n")
+        self.assertEqual(found, [(1, "Cart")])
+
+    def test_a_template_hunk_names_the_component(self):
+        got = changes_of({"src/Cart.vue": "<template>\n  <ul></ul>\n</template>\n"},
+                         {"src/Cart.vue": "<template>\n  <ol></ol>\n</template>\n"})
+        self.assertEqual(got["symbols"], {"src/Cart.vue": ["Cart"]})
+
+    def _graph(self, rel, src):
+        """`di_call_graph` over a one-file repository, read by the `DiReader` the extension selects."""
+        with tempfile.TemporaryDirectory() as d:
+            path = Path(d) / rel
+            path.parent.mkdir(parents=True)
+            path.write_text(src, encoding="utf8")
+            return di_call_graph(Path(d), [rel.split("/", 1)[0]])
+
+    def test_a_dart_field_typed_by_its_declaration_or_its_constructor_is_a_call_edge(self):
+        src = (
+            "class _HomeScreenState extends State<HomeScreen> {\n"
+            "  final _state = OfficeState();\n"
+            "  late final RelayClient _relay;\n\n"
+            "  void initState() {\n"
+            "    _relay = RelayClient(onStatus: _state.setStatus);\n"
+            "    _state.loadDemo();\n"
+            "  }\n\n"
+            "  void open(String id) {\n"
+            "    this._relay.connect(id);\n"
+            "    final int count = 0;\n"
+            "    return Scaffold(body: Text(id));\n"
+            "  }\n"
+            "}\n"
+        )
+        graph = self._graph("lib/main.dart", src)
+        self.assertEqual(graph["declared"], {"_HomeScreenState": "lib/main.dart"})
+        self.assertEqual(graph["edges"]["_HomeScreenState"], ["OfficeState.loadDemo", "RelayClient.connect"])
+        self.assertEqual(shortest_path(graph, "_HomeScreenState", "RelayClient"), ["_HomeScreenState", "RelayClient.connect"])
+
+    def test_an_indented_class_component_s_definite_field_is_a_call_edge(self):
+        graph = self._graph("src/components/Checkout.vue", VUE_CHECKOUT)
+        self.assertEqual(graph["declared"], {"Checkout": "src/components/Checkout.vue"})
+        self.assertEqual(graph["edges"]["Checkout"], ["Pricing.total"])
 
 
 if __name__ == "__main__":

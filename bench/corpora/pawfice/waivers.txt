@@ -1,0 +1,3 @@
+swift	impact	no-swift-type-named-outside-its-file	at 808d6e08, AppDelegate, SceneDelegate and RunnerTests are each spelled by their own file only among the tracked .dart, .swift, .ts and .tsx files
+swift	trace	no-call-between-swift-files	spec §5: the three written Swift files call nothing of each other
+swift	changes	no-swift-change-with-a-parent	git log -- '*.swift' at 808d6e08 lists only 312cfbb7, the root commit, which has no parent to diff from
