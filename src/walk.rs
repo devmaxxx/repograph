@@ -70,6 +70,11 @@ pub struct Manifest {
     /// and stamps do — must this file be read again — and every writer holds the manifest at the
     /// moment it asks.
     #[serde(default)] pub grammar: u32,
+    /// Which reader each file went to. The hash alone cannot tell that a glob moved a file from one
+    /// reader to another — `text_globs` reaching a `.py` file a later `code_globs` claims — so a file
+    /// whose kind moved diffs as changed. Empty in a manifest written before kinds were recorded,
+    /// which compares nothing until the next save writes them.
+    #[serde(default)] pub kinds: BTreeMap<String, FileKind>,
 }
 
 #[derive(Debug, Default)]
@@ -91,11 +96,16 @@ pub(crate) fn stamp_of(meta: &std::fs::Metadata) -> Option<Stamp> {
 /// `prev` is the manifest of the last walk; a file whose stamp still matches keeps its recorded
 /// hash instead of being read. Pass `&Manifest::default()` to hash everything.
 pub fn walk(repo: &Path, cfg: &Config, prev: &Manifest) -> Result<Vec<Entry>> {
-    Ok(walk_counted(repo, cfg, prev)?.0)
+    Ok(walk_inner(repo, cfg, prev, false)?.0)
 }
 
-/// As `walk`, with the number of text files left out for size.
+/// As `walk`, with the number of text files left out for size. Only a caller that reports the
+/// count pays for it: telling an oversized text file from a binary opens every one of them.
 pub fn walk_counted(repo: &Path, cfg: &Config, prev: &Manifest) -> Result<(Vec<Entry>, usize)> {
+    walk_inner(repo, cfg, prev, true)
+}
+
+fn walk_inner(repo: &Path, cfg: &Config, prev: &Manifest, count: bool) -> Result<(Vec<Entry>, usize)> {
     let docs = globs(&cfg.doc_globs)?;
     let code = globs(&cfg.code_globs)?;
     let skip = globs(&cfg.skip)?;
@@ -140,7 +150,7 @@ pub fn walk_counted(repo: &Path, cfg: &Config, prev: &Manifest) -> Result<(Vec<E
         let stamp = dent.metadata().ok().as_ref().and_then(stamp_of);
         // Before the cache: a file that grew past the limit keeps its stamp's old hash otherwise.
         if kind == FileKind::Text && stamp.is_some_and(|s| s.len > TEXT_MAX_BYTES) {
-            if !binary_at(dent.path()).unwrap_or(true) { oversized += 1; }
+            if count && !binary_at(dent.path()).unwrap_or(true) { oversized += 1; }
             continue;
         }
         if let (Some(s), Some(hash)) = (stamp, prev.files.get(&rel)) {
@@ -149,6 +159,9 @@ pub fn walk_counted(repo: &Path, cfg: &Config, prev: &Manifest) -> Result<(Vec<E
                 continue;
             }
         }
+        // A binary is never in the manifest, so the cache above never answers for it: probing the
+        // head keeps every walk from reading each one whole again.
+        if kind == FileKind::Text && binary_at(dent.path()).unwrap_or(false) { continue; }
         let bytes = match std::fs::read(dent.path()) {
             Ok(b) => b,
             Err(e) => { eprintln!("walk: skipping {rel}: {e}"); continue; }
@@ -170,6 +183,7 @@ impl Manifest {
             files: entries.iter().map(|e| (e.rel.clone(), e.hash.clone())).collect(),
             stamps: entries.iter().filter_map(|e| Some((e.rel.clone(), e.stamp?))).collect(),
             grammar: GRAMMAR,
+            kinds: entries.iter().map(|e| (e.rel.clone(), e.kind)).collect(),
         }
     }
 
@@ -184,7 +198,7 @@ impl Manifest {
     pub fn diff(&self, now: &[Entry]) -> Diff {
         let mut d = Diff::default();
         for e in now {
-            if self.files.get(&e.rel) != Some(&e.hash) {
+            if self.files.get(&e.rel) != Some(&e.hash) || self.kinds.get(&e.rel).is_some_and(|k| *k != e.kind) {
                 d.changed.push(e.clone());
             }
         }
@@ -263,6 +277,7 @@ mod tests {
             files: Manifest::from_entries(&hashed).files,
             stamps: BTreeMap::new(),
             grammar: GRAMMAR,
+            kinds: BTreeMap::new(),
         }).unwrap()).unwrap();
         assert!(old.stamps.is_empty());
         let again = walk(d.path(), &Config::default(), &old).unwrap();
@@ -489,6 +504,18 @@ mod tests {
         assert_eq!(kind("docs/TRACKER.md"), None);
         assert_eq!(kind("node_modules/x/c.ts"), None);
         assert_eq!(kind("ignored.md"), None);
+    }
+
+    #[test]
+    fn a_file_a_glob_moves_to_another_reader_diffs_as_changed() {
+        let d = repo();
+        std::fs::write(d.path().join("tool.py"), "print(1)\n").unwrap();
+        let manifest = Manifest::from_entries(&walk(d.path(), &text_cfg(), &Manifest::default()).unwrap());
+        let mut code = text_cfg();
+        code.code_globs.push("**/*.py".into());
+        let after = walk(d.path(), &code, &manifest).unwrap();
+        let changed: Vec<_> = manifest.diff(&after).changed.into_iter().map(|e| (e.rel, e.kind)).collect();
+        assert_eq!(changed, [("tool.py".to_string(), FileKind::Code)]);
     }
 
     #[test]

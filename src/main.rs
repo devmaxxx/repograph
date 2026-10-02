@@ -1167,7 +1167,7 @@ mod tests {
         let files = store.load().unwrap().1.files;
         // The grammar is this build's: what is missing here is the stamps, and a store behind on
         // both would be re-read for the other reason.
-        store.save_manifest(&walk::Manifest { files, stamps: Default::default(), grammar: walk::GRAMMAR }).unwrap();
+        store.save_manifest(&walk::Manifest { files, stamps: Default::default(), grammar: walk::GRAMMAR, kinds: Default::default() }).unwrap();
         let graph_before = std::fs::read(repo.join(".repograph/graph.json")).unwrap();
         assert!(ask::graph_for_ask(repo, &cfg, &store, false, &ask::Timing::new()).unwrap().1.is_none());
         let manifest = store.load().unwrap().1;

@@ -68,12 +68,15 @@ fn rows(n: &crate::model::Node, questions: &Questions) -> Vec<String> {
 const TEXT_ROW_CHARS: usize = 600;
 
 fn text_rows(label: &str, body: &str) -> Vec<String> {
+    // The label rides in every row and the embedder counts it too, so the body gets what is left;
+    // half the row at least, so a deep path cannot shrink a chunk to nothing.
+    let room = TEXT_ROW_CHARS.saturating_sub(label.chars().count()).max(TEXT_ROW_CHARS / 2);
     let mut chunks = Vec::new();
     let (mut cur, mut len) = (String::new(), 0usize);
     for line in body.split_inclusive('\n') {
-        for piece in pieces(line, TEXT_ROW_CHARS) {
+        for piece in pieces(line, room) {
             let n = piece.chars().count();
-            if len + n > TEXT_ROW_CHARS && !cur.is_empty() {
+            if len + n > room && !cur.is_empty() {
                 chunks.push(std::mem::take(&mut cur));
                 len = 0;
             }
@@ -881,7 +884,7 @@ mod tests {
         let rows = text_rows("ops.yaml", &body);
         let head = "passage: ops.yaml\n";
         assert_eq!(rows.len(), 3);
-        assert!(rows.iter().all(|r| r.starts_with(head) && r.chars().count() <= head.len() + TEXT_ROW_CHARS));
+        assert!(rows.iter().all(|r| r.starts_with(head) && r.chars().count() <= "passage: \n".len() + TEXT_ROW_CHARS));
         assert_eq!(rows.iter().map(|r| &r[head.len()..]).collect::<String>(), body);
     }
 
@@ -889,7 +892,7 @@ mod tests {
     fn a_text_file_with_no_line_break_is_still_cut() {
         let rows = text_rows("blob.txt", &"é".repeat(1_500));
         assert_eq!(rows.len(), 3);
-        assert!(rows.iter().all(|r| r.chars().count() <= "passage: blob.txt\n".len() + TEXT_ROW_CHARS));
+        assert!(rows.iter().all(|r| r.chars().count() <= "passage: \n".len() + TEXT_ROW_CHARS));
     }
 
     #[test]
