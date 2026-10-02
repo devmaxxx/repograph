@@ -8,6 +8,10 @@ use std::path::Path;
 pub struct Config {
     pub doc_globs: Vec<String>,
     pub code_globs: Vec<String>,
+    /// Files no doc or code glob claims, each indexed as one `Text` node when its content is text.
+    /// Empty by default: text in the passage indexes moves retrieval, and that is read before it
+    /// ships (spec §11, T5). `REPOGRAPH_TEXT_GLOBS` replaces it for one run.
+    pub text_globs: Vec<String>,
     pub skip: Vec<String>,
     /// Accepted so that a `repograph.toml` written when these were settings still parses, and
     /// read for nothing else: a repository's families are the prefixes its own documents define.
@@ -100,6 +104,7 @@ impl Default for Config {
             // corpus by holding what no `.ts` file does: the hooks, the lint config and the CI
             // wrappers a repository wires itself together with.
             code_globs: s(&["**/*.ts", "**/*.tsx", "**/*.js", "**/*.jsx", "**/*.mjs", "**/*.cjs"]),
+            text_globs: Vec::new(),
             // A bundle is one line of machine output under a source extension: every symbol in
             // it is a minifier's letter, and the file drowns a lexical index by itself. Now that
             // dotted directories are walked, `.yarn/` and `.pnp.cjs` are the same problem under a
@@ -288,15 +293,8 @@ impl Config {
         // globs without a `repograph.toml` written into the tree it measures. Whitespace-separated,
         // because a glob may hold a comma inside braces; a comma outside them is refused, since it
         // would join two globs into one that matches nothing and the build would say nothing.
-        if let Ok(g) = std::env::var("REPOGRAPH_CODE_GLOBS") {
-            let globs: Vec<String> = g.split_whitespace().map(str::to_string).collect();
-            if let Some(bad) = globs.iter().find(|g| comma_outside_braces(g)) {
-                anyhow::bail!("REPOGRAPH_CODE_GLOBS: `{bad}` holds a comma outside braces; separate globs with whitespace");
-            }
-            if !globs.is_empty() {
-                cfg.code_globs = globs;
-            }
-        }
+        if let Some(g) = globs_from_env("REPOGRAPH_CODE_GLOBS")? { cfg.code_globs = g; }
+        if let Some(g) = globs_from_env("REPOGRAPH_TEXT_GLOBS")? { cfg.text_globs = g; }
         cfg.resources = crate::index::embed::resources_from_env(cfg.resources, std::env::var("REPOGRAPH_RESOURCES").ok().as_deref())?;
         cfg.enrich_command = enrich_template.replace(MODEL_SLOT, &cfg.enrich_model);
         cfg.rerank_command = rerank_template.replace(MODEL_SLOT, &cfg.rerank_model);
@@ -336,6 +334,16 @@ impl Config {
         let text = std::fs::read_to_string(&path).with_context(|| format!("read {}", path.display()))?;
         toml::from_str(&text).with_context(|| format!("parse {}", path.display()))
     }
+}
+
+/// A blank value names no globs, so it leaves the configured list rather than emptying it.
+fn globs_from_env(var: &str) -> anyhow::Result<Option<Vec<String>>> {
+    let Ok(g) = std::env::var(var) else { return Ok(None) };
+    let globs: Vec<String> = g.split_whitespace().map(str::to_string).collect();
+    if let Some(bad) = globs.iter().find(|g| comma_outside_braces(g)) {
+        anyhow::bail!("{var}: `{bad}` holds a comma outside braces; separate globs with whitespace");
+    }
+    Ok((!globs.is_empty()).then_some(globs))
 }
 
 /// `a,b` is two globs spelled as one; `*.{ts,tsx}` is one glob with an alternation.
@@ -784,6 +792,7 @@ mod tests {
             std::env::remove_var("REPOGRAPH_ENRICH_LANGUAGES");
             std::env::remove_var("REPOGRAPH_RESOURCES");
             std::env::remove_var("REPOGRAPH_CODE_GLOBS");
+            std::env::remove_var("REPOGRAPH_TEXT_GLOBS");
         }
         let out = f();
         unsafe { std::env::remove_var("REPOGRAPH_CONFIG") };
@@ -1133,6 +1142,36 @@ mod tests {
             let err = comma.expect_err("a comma outside braces joins two globs into one that matches nothing").to_string();
             assert!(err.contains("REPOGRAPH_CODE_GLOBS") && err.contains("whitespace"), "{err}");
             assert_eq!(braced.unwrap(), ["**/*.{ts,tsx}", "**/*.kt"]);
+        });
+    }
+
+    #[test]
+    fn text_globs_are_empty_by_default_and_the_environment_names_them_for_one_run() {
+        with_machine(None, || {
+            let dir = tempfile::tempdir().unwrap();
+            assert!(Config::load(dir.path()).unwrap().text_globs.is_empty());
+            std::fs::write(dir.path().join("repograph.toml"), "text_globs = [\"ops/**\"]\n").unwrap();
+            // Safety: `with_machine` holds the environment lock.
+            unsafe { std::env::set_var("REPOGRAPH_TEXT_GLOBS", "**/*") };
+            let widened = Config::load(dir.path()).unwrap().text_globs;
+            unsafe { std::env::set_var("REPOGRAPH_TEXT_GLOBS", "  ") };
+            let blank = Config::load(dir.path()).unwrap().text_globs;
+            unsafe { std::env::remove_var("REPOGRAPH_TEXT_GLOBS") };
+            assert_eq!(widened, ["**/*"]);
+            assert_eq!(blank, ["ops/**"]);
+        });
+    }
+
+    #[test]
+    fn a_comma_separated_text_globs_value_is_refused_by_name() {
+        with_machine(None, || {
+            let dir = tempfile::tempdir().unwrap();
+            // Safety: `with_machine` holds the environment lock.
+            unsafe { std::env::set_var("REPOGRAPH_TEXT_GLOBS", "ops/**,**/*.yaml") };
+            let comma = Config::load(dir.path()).map(|c| c.text_globs);
+            unsafe { std::env::remove_var("REPOGRAPH_TEXT_GLOBS") };
+            let err = comma.expect_err("a comma outside braces joins two globs into one").to_string();
+            assert!(err.contains("REPOGRAPH_TEXT_GLOBS") && err.contains("whitespace"), "{err}");
         });
     }
 }
