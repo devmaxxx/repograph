@@ -98,3 +98,40 @@ fn a_build_names_the_text_files_it_left_out_for_size() {
     assert_eq!(graph["nodes"]["file:ops/deploy.yaml"]["kind"], "Text");
     assert!(graph["nodes"].get("file:data/dump.csv").is_none());
 }
+
+fn git(repo: &Path, args: &[&str]) {
+    let out = std::process::Command::new("git").arg("-C").arg(repo)
+        .env_remove("GIT_DIR").env_remove("GIT_WORK_TREE").env_remove("GIT_INDEX_FILE")
+        .args(["-c", "user.name=repograph tests", "-c", "user.email=tests@example.invalid", "-c", "commit.gpgsign=false"])
+        .args(args).output().unwrap();
+    assert!(out.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&out.stderr));
+}
+
+fn with_text(repo: &Path, args: &[&str]) -> (String, String) {
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_repograph"))
+        .env_remove("REPOGRAPH_BENCH_REPO").env_remove("REPOGRAPH_EMBED_MODEL").env_remove("REPOGRAPH_CODE_GLOBS")
+        .env("REPOGRAPH_TEXT_GLOBS", "**/*")
+        .args(["--no-dense", "--repo"]).arg(repo).args(args).output().unwrap();
+    let (o, e) = (String::from_utf8_lossy(&out.stdout).into_owned(), String::from_utf8_lossy(&out.stderr).into_owned());
+    assert!(out.status.success(), "{args:?}: {e}");
+    (o, e)
+}
+
+/// T3: a text file is found by a phrase only it holds, and named when a diff touches it alone.
+#[test]
+fn a_text_file_is_found_by_what_it_says_and_named_when_it_changes() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path();
+    write(repo, "web/a.ts", "export function boot() {}\n");
+    write(repo, "ops/deploy.yaml", "strategy: blue-green\nwindow: saturday-night\n");
+    git(repo, &["init", "-q"]);
+    git(repo, &["add", "."]);
+    git(repo, &["commit", "-qm", "init"]);
+    with_text(repo, &["build"]);
+    let (asked, _) = with_text(repo, &["ask", "saturday night window"]);
+    let top: Vec<&str> = asked.lines().filter(|l| !l.starts_with(' ')).take(5).collect();
+    assert!(top.iter().any(|l| l.starts_with("file:ops/deploy.yaml ")), "{asked}");
+    write(repo, "ops/deploy.yaml", "strategy: canary\nwindow: saturday-night\n");
+    let (changed, _) = with_text(repo, &["changes", "--base", "HEAD"]);
+    assert!(changed.contains("ops/deploy.yaml"), "{changed}");
+}

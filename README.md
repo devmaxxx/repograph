@@ -396,6 +396,7 @@ in full, not an empty config:
 | -------------------- | ------------------------------------------------------------------------------------------- |
 | `doc_globs`          | `["**/*.md"]`                                                                               |
 | `code_globs`         | `["**/*.ts", "**/*.tsx", "**/*.js", "**/*.jsx", "**/*.mjs", "**/*.cjs"]`                    |
+| `text_globs`         | `[]` — files no doc or code glob claims, each read as one text node when its content is text  |
 | `skip`               | `["**/node_modules/**", "**/dist/**", "**/*.min.js", "**/.yarn/**", "**/.pnp.*", "**/TRACKER.md", "graphify-out/**", ".repograph/**"]` |
 | `registries`         | `["docs/constitution.yaml"]`                                                                |
 | `enrich_command`     | **machine file only** — headless `claude -p --model {model}` with thinking off, see [Spending tokens on purpose](#spending-tokens-on-purpose) |
@@ -410,6 +411,12 @@ in full, not an empty config:
 `REPOGRAPH_CODE_GLOBS`, whitespace-separated, replaces `code_globs` for one run. It is a measurement's
 switch, as `REPOGRAPH_EMBED_MODEL` is, so a reading can name other globs without writing a
 `repograph.toml` into the tree it measures.
+
+`text_globs` (empty by default) takes in every file no doc or code glob claims whose content is
+text — configuration, YAML, JSON, data — as one node each, searchable by `ask` and named by
+`changes`, with nothing parsed below it. A file is binary when its first 8,000 bytes hold a NUL.
+Lockfiles, `*.min.*`, `*.map`, `vendor/` and text over 1 MiB are left out; the build says how
+many were over the size. `REPOGRAPH_TEXT_GLOBS`, whitespace-separated, replaces the list for one run.
 
 ### Choosing a model, and where the choice lives
 
