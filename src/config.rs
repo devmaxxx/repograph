@@ -336,9 +336,12 @@ impl Config {
     }
 }
 
-/// A blank value names no globs, so it leaves the configured list rather than emptying it.
+/// A blank value names no globs, so it leaves the configured list rather than emptying it; `-`
+/// alone empties it, so a measurement can turn a list off for one run without writing a
+/// `repograph.toml` into the tree it measures.
 fn globs_from_env(var: &str) -> anyhow::Result<Option<Vec<String>>> {
     let Ok(g) = std::env::var(var) else { return Ok(None) };
+    if g.trim() == "-" { return Ok(Some(Vec::new())); }
     let globs: Vec<String> = g.split_whitespace().map(str::to_string).collect();
     if let Some(bad) = globs.iter().find(|g| comma_outside_braces(g)) {
         anyhow::bail!("{var}: `{bad}` holds a comma outside braces; separate globs with whitespace");
@@ -1157,8 +1160,12 @@ mod tests {
             unsafe { std::env::set_var("REPOGRAPH_TEXT_GLOBS", "  ") };
             let blank = Config::load(dir.path()).unwrap().text_globs;
             unsafe { std::env::remove_var("REPOGRAPH_TEXT_GLOBS") };
+            unsafe { std::env::set_var("REPOGRAPH_TEXT_GLOBS", "-") };
+            let off = Config::load(dir.path()).unwrap().text_globs;
+            unsafe { std::env::remove_var("REPOGRAPH_TEXT_GLOBS") };
             assert_eq!(widened, ["**/*"]);
             assert_eq!(blank, ["ops/**"]);
+            assert!(off.is_empty(), "`-` turns the configured list off for one run");
         });
     }
 
