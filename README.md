@@ -433,6 +433,9 @@ and `REPOGRAPH_TEXT_GLOBS=-` turns it off for one (`-` does the same for `REPOGR
 prints the twelve lines around it rather than the whole file. A store holding text nodes is read by
 0.6.0 and later only: 0.5.x stops on `graph.json: unknown variant Text`, and `build` with that
 binary rebuilds a store it can read.
+It stays empty by default because text files cost `ask` recall: on the bench fixture, `text_globs = ["**/*"]`
+took paraphrase questions from 15 to 8 of 30 and held-out recall@5 from 100 to 90 of 400, so turn
+it on where finding a configuration file matters more than finding the requirement.
 
 ### Choosing a model, and where the choice lives
 
