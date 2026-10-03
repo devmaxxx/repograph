@@ -7,8 +7,8 @@
 {"kind":"impact","target":"SessionSheet","file":"app/lib/ui/session_sheet.dart","tier":"narrow"}
 {"kind":"impact","target":"SpawnSheet","file":"app/lib/ui/spawn_sheet.dart","tier":"narrow"}
 {"kind":"impact","target":"SettingsSheet","file":"app/lib/ui/settings_sheet.dart","tier":"narrow"}
-{"kind":"trace","from":"_HomeScreenState","to":"RelayClient","expect":"path","via":[],"note":"late final RelayClient _relay; then _relay.connect(…)"}
+{"kind":"trace","from":"_HomeScreenState","to":"RelayClient","to_id":"sym:app/lib/net/relay_client.dart::RelayClient","expect":"path","via":[],"note":"late final RelayClient _relay; then _relay.connect(…)"}
 {"kind":"trace","from":"_HomeScreenState","to":"OfficeState","expect":"path","via":[],"note":"final _state = OfficeState(); then _state.loadDemo()"}
-{"kind":"trace","from":"RelayClient","to":"OfficeState","expect":"none","note":"the client reports status through a callback it is handed"}
+{"kind":"trace","from":"RelayClient","to":"OfficeState","from_id":"sym:app/lib/net/relay_client.dart::RelayClient","expect":"none","note":"the client reports status through a callback it is handed"}
 {"kind":"changes","base":"c6adc417f17cb866dad9cee2d9db1374b57e6dcd","note":"cat_worker, office_game and relay_client to the pin; README, daemon TypeScript, assets and a Python tool ride along, and the Dart gate reads by_ext[\".dart\"]"}
 {"kind":"changes","base":"984bc14a5b028c6e80c92b184bdb265ea1a11c80","note":"office_game.dart alone, in the pin's own commit"}
