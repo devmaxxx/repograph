@@ -373,7 +373,9 @@ grammars says so instead of producing a graph silently thinner than the tree.
 Every language in the table below is read by default. The first `build`, `update` or refreshing
 `ask` after upgrading from 0.5.x re-reads the whole tree once, because this release reads files by
 a new grammar generation; the next reads only what changed. `REPOGRAPH_CODE_GLOBS` withdraws a
-language for one run without writing config into the tree.
+language for one run without writing config into the tree. A `repograph.toml` that names `code_globs`
+keeps exactly the list it names, so a 0.5.x config that wrote the old default out reads no new
+language until the line is removed or widened.
 
 | language | extensions | reads | not read |
 |---|---|---|---|
@@ -406,7 +408,7 @@ in full, not an empty config:
 | `doc_globs`          | `["**/*.md"]`                                                                               |
 | `code_globs`         | `["**/*.ts", "**/*.tsx", "**/*.js", "**/*.jsx", "**/*.mjs", "**/*.cjs", "**/*.kt", "**/*.java", "**/*.cs", "**/*.rs", "**/*.py", "**/*.dart", "**/*.swift", "**/*.gql", "**/*.graphql", "**/*.sql", "**/*.bicep", "**/*.tf", "**/*.hcl", "**/*.sh", "**/*.bash", "**/*.vue"]` — every language in [Languages](#languages) |
 | `text_globs`         | `[]` — files no doc or code glob claims, each read as one text node when its content is text  |
-| `skip`               | `["**/node_modules/**", "**/dist/**", "**/*.min.js", "**/.yarn/**", "**/.pnp.*", "**/TRACKER.md", "graphify-out/**", ".repograph/**"]` |
+| `skip`               | `["**/node_modules/**", "**/dist/**", "**/*.min.js", "**/.yarn/**", "**/.pnp.*", "**/target/**", "**/.venv/**", "**/venv/**", "**/__pycache__/**", "**/.terraform/**", "**/.dart_tool/**", "**/Pods/**", "**/TRACKER.md", "graphify-out/**", ".repograph/**"]` |
 | `registries`         | `["docs/constitution.yaml"]`                                                                |
 | `enrich_command`     | **machine file only** — headless `claude -p --model {model}` with thinking off, see [Spending tokens on purpose](#spending-tokens-on-purpose) |
 | `rerank_command`     | **machine file only** — the same command, with `rerank_model` in its `{model}`               |

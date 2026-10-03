@@ -25,6 +25,8 @@ const TREE: &[(&str, &str)] = &[
     ("infra/main.tf", "resource \"aws_instance\" \"web\" {\n  ami = \"x\"\n}\n"),
     ("docker-bake.hcl", "target \"api\" {\n  context = \".\"\n}\n"),
     ("scripts/deploy.sh", "settle() {\n  :\n}\n"),
+    ("tools/.venv/lib/site.py", "def vendored():\n    return 1\n"),
+    ("crates/core/target/debug/build/out.rs", "pub fn generated() {}\n"),
     ("web/Card.vue", "<template><p/></template>\n<script lang=\"ts\">\nexport default {}\n</script>\n"),
 ];
 
@@ -75,5 +77,6 @@ fn a_repository_with_no_config_reads_every_default_language() {
         assert!(ids.contains(*id), "{id} missing from {ids:?}");
     }
     assert!(!ids.contains("file:web/vendor.min.js"), "a bundle is skipped by default: {ids:?}");
+    assert!(!ids.iter().any(|id| id.contains("/.venv/") || id.contains("/target/")), "a virtualenv and a build directory are skipped by default: {ids:?}");
     assert!(!ids.iter().any(|id| id.contains("svc/Card.razor")), "Razor is read only where a glob names it: {ids:?}");
 }

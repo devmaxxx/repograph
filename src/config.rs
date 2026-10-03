@@ -117,13 +117,23 @@ impl Default for Config {
             // dotted directories are walked, `.yarn/` and `.pnp.cjs` are the same problem under a
             // different name: Yarn Berry commits its bundled releases, plugins and PnP map for
             // zero-installs, and none of that is gitignored — it is meant to be read by Node, not
-            // by a reader asking what this repository's authors wrote by hand.
+            // by a reader asking what this repository's authors wrote by hand. The other
+            // languages' toolchains leave the same kind of tree beside the sources: a build
+            // directory, a virtualenv, a provider or pod cache. `.gitignore` keeps them out only
+            // inside a git checkout, and a virtualenv checked in is not rare.
             skip: s(&[
                 "**/node_modules/**",
                 "**/dist/**",
                 "**/*.min.js",
                 "**/.yarn/**",
                 "**/.pnp.*",
+                "**/target/**",
+                "**/.venv/**",
+                "**/venv/**",
+                "**/__pycache__/**",
+                "**/.terraform/**",
+                "**/.dart_tool/**",
+                "**/Pods/**",
                 "**/TRACKER.md",
                 "graphify-out/**",
                 ".repograph/**",
