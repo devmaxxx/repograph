@@ -82,7 +82,7 @@ fn write(repo: &Path, rel: &str, text: &str) {
     std::fs::write(path, text).unwrap();
 }
 
-/// The repository's own config names GraphQL: the defaults do not read GraphQL yet. The store is ignored so that
+/// The repository's own config names GraphQL, so no other default language joins the diff. The store is ignored so that
 /// `changes` diffs the documents and nothing else.
 fn repo(files: &[(&str, &str)]) -> tempfile::TempDir {
     let dir = tempfile::tempdir().unwrap();
