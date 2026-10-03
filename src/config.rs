@@ -103,20 +103,37 @@ impl Default for Config {
             // extensions cost a glob each and no second parser. They earn their place in the
             // corpus by holding what no `.ts` file does: the hooks, the lint config and the CI
             // wrappers a repository wires itself together with.
-            code_globs: s(&["**/*.ts", "**/*.tsx", "**/*.js", "**/*.jsx", "**/*.mjs", "**/*.cjs"]),
+            // Razor is the one language 0.6.0 reads and leaves out: its readings failed `impact`
+            // and `trace`, so it is read only where a config or `REPOGRAPH_CODE_GLOBS` names it.
+            code_globs: s(&[
+                "**/*.ts", "**/*.tsx", "**/*.js", "**/*.jsx", "**/*.mjs", "**/*.cjs",
+                "**/*.kt", "**/*.java", "**/*.cs", "**/*.rs", "**/*.py", "**/*.dart", "**/*.swift",
+                "**/*.gql", "**/*.graphql", "**/*.sql", "**/*.bicep", "**/*.tf", "**/*.hcl",
+                "**/*.sh", "**/*.bash", "**/*.vue",
+            ]),
             text_globs: Vec::new(),
             // A bundle is one line of machine output under a source extension: every symbol in
             // it is a minifier's letter, and the file drowns a lexical index by itself. Now that
             // dotted directories are walked, `.yarn/` and `.pnp.cjs` are the same problem under a
             // different name: Yarn Berry commits its bundled releases, plugins and PnP map for
             // zero-installs, and none of that is gitignored — it is meant to be read by Node, not
-            // by a reader asking what this repository's authors wrote by hand.
+            // by a reader asking what this repository's authors wrote by hand. The other
+            // languages' toolchains leave the same kind of tree beside the sources: a build
+            // directory, a virtualenv, a provider or pod cache. `.gitignore` keeps them out only
+            // inside a git checkout, and a virtualenv checked in is not rare.
             skip: s(&[
                 "**/node_modules/**",
                 "**/dist/**",
                 "**/*.min.js",
                 "**/.yarn/**",
                 "**/.pnp.*",
+                "**/target/**",
+                "**/.venv/**",
+                "**/venv/**",
+                "**/__pycache__/**",
+                "**/.terraform/**",
+                "**/.dart_tool/**",
+                "**/Pods/**",
                 "**/TRACKER.md",
                 "graphify-out/**",
                 ".repograph/**",
@@ -1180,5 +1197,15 @@ mod tests {
             let err = comma.expect_err("a comma outside braces joins two globs into one").to_string();
             assert!(err.contains("REPOGRAPH_TEXT_GLOBS") && err.contains("whitespace"), "{err}");
         });
+    }
+
+    #[test]
+    fn every_language_0_6_0_ships_is_globbed_by_default_and_razor_is_not() {
+        assert_eq!(Config::default().code_globs, [
+            "**/*.ts", "**/*.tsx", "**/*.js", "**/*.jsx", "**/*.mjs", "**/*.cjs",
+            "**/*.kt", "**/*.java", "**/*.cs", "**/*.rs", "**/*.py", "**/*.dart", "**/*.swift",
+            "**/*.gql", "**/*.graphql", "**/*.sql", "**/*.bicep", "**/*.tf", "**/*.hcl",
+            "**/*.sh", "**/*.bash", "**/*.vue",
+        ]);
     }
 }

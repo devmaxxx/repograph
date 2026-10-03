@@ -1024,7 +1024,7 @@ pub(crate) mod fixture {
         }
 
         /// The file at `rel` as `build` extracts it. The JVM globs are set because the index is
-        /// filled only for the families `code_globs` reaches (L3), and the defaults do not yet.
+        /// filled only for the families `code_globs` reaches, and a case should not widen with the defaults.
         pub(crate) fn extract(&self, rel: &str) -> Extraction {
             let cfg = Config { code_globs: vec!["**/*.kt".into(), "**/*.java".into()], ..Config::default() };
             let text = std::fs::read_to_string(self.dir.path().join(rel)).unwrap();

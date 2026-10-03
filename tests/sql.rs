@@ -42,7 +42,7 @@ fn write(repo: &Path, rel: &str, text: &str) {
     std::fs::write(path, text).unwrap();
 }
 
-/// The repository's own config names `.sql`: the defaults do not read SQL yet. The store is
+/// The repository's own config names `.sql`, so no other default language joins the diff. The store is
 /// ignored so that `changes` diffs the migrations and nothing else.
 fn repo(files: &[(&str, &str)]) -> tempfile::TempDir {
     let dir = tempfile::tempdir().unwrap();

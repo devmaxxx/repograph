@@ -169,8 +169,8 @@ pub(crate) mod testing {
     use crate::config::Config;
     use crate::model::{EdgeKind, Extraction};
 
-    /// `files` on disk and a resolver over them with `globs` as the only code globs, because none of
-    /// these languages is read by default until its readings pass.
+    /// `files` on disk and a resolver over them with `globs` as the only code globs, so a case reads
+    /// the one language it names and nothing the defaults would add.
     pub(crate) fn repo(globs: &[&str], files: &[(&str, &str)]) -> (tempfile::TempDir, Resolver) {
         let dir = tempfile::tempdir().unwrap();
         for (rel, text) in files {

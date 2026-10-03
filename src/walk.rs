@@ -32,7 +32,9 @@ pub struct Entry { pub rel: String, pub kind: FileKind, pub hash: String, pub st
 /// 4: `main` with the 0.5.5 fixes above forward-ported. 0.5.5 stamps its stores 3 and reads by
 /// 0.5.5's grammar, not 0.6.0's, so a 3 here would leave a store 0.5.5 wrote unread; one above
 /// both makes a 0.5.4 store (2) and a 0.5.5 store (3) re-read once on the first writer.
-pub const GRAMMAR: u32 = 4;
+/// 5: 0.6.0 — every language ships, read by default, and text files are a node kind; a store any
+/// 0.5.x or the forward-ported `main` wrote is re-read once.
+pub const GRAMMAR: u32 = 5;
 
 /// Refused as text whatever `text_globs` says: machine output nobody asks a question of, any one of
 /// which would outweigh the hand-written files in the lexical index. Text entries only — `skip`
@@ -509,13 +511,13 @@ mod tests {
     #[test]
     fn a_file_a_glob_moves_to_another_reader_diffs_as_changed() {
         let d = repo();
-        std::fs::write(d.path().join("tool.py"), "print(1)\n").unwrap();
+        std::fs::write(d.path().join("tool.lua"), "print(1)\n").unwrap();
         let manifest = Manifest::from_entries(&walk(d.path(), &text_cfg(), &Manifest::default()).unwrap());
         let mut code = text_cfg();
-        code.code_globs.push("**/*.py".into());
+        code.code_globs.push("**/*.lua".into());
         let after = walk(d.path(), &code, &manifest).unwrap();
         let changed: Vec<_> = manifest.diff(&after).changed.into_iter().map(|e| (e.rel, e.kind)).collect();
-        assert_eq!(changed, [("tool.py".to_string(), FileKind::Code)]);
+        assert_eq!(changed, [("tool.lua".to_string(), FileKind::Code)]);
     }
 
     #[test]
