@@ -336,6 +336,59 @@ and an arm of those reads high for a retriever that does nothing but match token
 Write the cells into `bench/history/runs.jsonl` like any other run, with the arm named
 so the suite is obvious (`paraphrase60:<model>[+rerank]`).
 
+## Cutting a release
+
+Seven steps, in order. Each one exists because skipping it once cost a release run.
+
+1. **Prove the binaries first.**
+   ```bash
+   gh workflow run release.yml --ref <release branch>
+   ```
+   A dispatch from a branch builds, smokes and packs all three targets and publishes nothing, so
+   the three `build` jobs are green before the PR merges, not after the tag.
+
+2. **Bump in one PR.** Change `Cargo.toml`'s `version`, let `cargo build` update `Cargo.lock`, and
+   replace every old version string under `npm/` and in the README status line:
+   ```bash
+   grep -rn '"<old>"' npm/
+   ```
+   One PR keeps the crate, the lockfile and the npm launcher naming the same version at every commit.
+
+3. **Squash with a written message.**
+   ```bash
+   gh pr merge <n> --squash --subject "chore(release): <version>" --body "<one paragraph>"
+   ```
+   The default body concatenates every branch commit's message, and a docs commit's `[skip ci]` in it
+   silences the tag's run.
+
+4. **Check the commit the tag goes on.**
+   ```bash
+   git fetch origin main && SHA=$(git rev-parse origin/main) && git log -1 --format=%B $SHA | grep -iE '\[(skip ci|ci skip|no ci|skip actions|actions skip)\]'
+   ```
+   A match means the tag's push will start no run, and step 6 has to dispatch one.
+
+5. **Tag and push.**
+   ```bash
+   git tag v<version> $SHA && gh auth switch --hostname github.com --user devmaxxx && git push origin v<version>
+   ```
+   The tag goes on the commit step 4 read, and it is pushed from the account that owns the repository.
+
+6. **Exactly one publishing run.** If step 4 matched, dispatch at once:
+   ```bash
+   gh workflow run release.yml --ref v<version>
+   ```
+   If it did not, `gh run list --workflow release --branch v<version>` shows a run within two
+   minutes, or dispatch then. A dispatch from the tag publishes because the publish steps test
+   `startsWith(github.ref, 'refs/tags/')`. Two runs would race to publish the same assets.
+
+7. **Verify.**
+   ```bash
+   gh api repos/devmaxxx/repograph/releases/latest --jq .tag_name
+   npm view @devmaxxx/repograph@<version> version --registry=https://npm.pkg.github.com
+   ```
+   The first prints the tag, the release carries three assets, and the second prints the version: a
+   release is done when someone else can install it, not when the tag exists.
+
 ## Post-run cleanup, if the run was not in a worktree
 
 - [ ] `rm -rf .claude/skills/gitnexus`
