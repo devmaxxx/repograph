@@ -21,7 +21,9 @@ has since grown to the 82 cases [Bench](#bench) floors.
 
 ## Status
 
-0.5.4 is the version `main` carries, and every command below is implemented rather than planned:
+0.6.0 is the version `main` carries. Its default globs read TypeScript and JavaScript, Kotlin, Java,
+C#, Rust, Python, Dart, Swift, GraphQL, SQL, Bicep, HCL, Shell and Vue; every command below is
+implemented rather than planned:
 `build` (a full re-read that replaces the stored graph only when it saves, so one interrupted
 leaves the previous store answering) and `update` (incremental; a no-op `update` is a fixed point), `families`, `ask`, `explain`,
 `verify`, `impact`, `trace`, `changes`, `embed`, `watch`, `serve`, `prime`, `install-agent`,
