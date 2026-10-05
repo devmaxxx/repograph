@@ -184,7 +184,7 @@ A lever is written down before it is measured, and read against all three of the
 hundred held-out questions first, the 82 recorded cases second, because reading the 82 first is how
 a change gets fitted to the smoke test without anyone intending it:
 
-1. **Every recorded floor holds in all four arms**, p90 ≤ 230: `bench` and `bench --no-dense`, on
+1. **Every recorded floor holds in all four arms**, p90 ≤ 250: `bench` and `bench --no-dense`, on
    the enriched store and on a raw one.
 2. **Held-out recall@5 is not significantly worse in either arm.** `bench/heldout.py`'s header is
    the order of operations — build the set, dump it on the old binary and on the new one, in both

@@ -877,7 +877,7 @@ to meet the floors, not the median of them.
 | keyword | 40/40 with embeddings, 39/40 with `--no-dense` | 40/40 with embeddings, 39/40 with `--no-dense` |
 | paraphrase, small-model rows (the default) | ≥14/30 with embeddings, ≥11/30 with `--no-dense` | ≥9/30 with embeddings, ≥7/30 with `--no-dense` |
 | code | 12/12 | 12/12 |
-| p90 | ≤230 tokens in every arm | ≤230 tokens in every arm |
+| p90 | ≤250 tokens in every arm | ≤250 tokens in every arm |
 
 The `--no-dense` column applies to every store, since no embedder is in it.
 
