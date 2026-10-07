@@ -60,6 +60,10 @@ fn explain_verify_and_trace_answer_in_json_like_the_rest() {
     let edges = v["edges"].as_array().expect("edges is an array");
     assert!(edges.iter().all(|e| e["dir"] == "out" || e["dir"] == "in"), "{out}");
     assert!(edges.iter().any(|e| e["other"] == "FR-PAY-26"), "the cited requirement is a neighbour: {out}");
+    // Where each edge is written, so two edges to one neighbour from two files are told apart.
+    let cite = edges.iter().find(|e| e["other"] == "FR-PAY-26").unwrap();
+    assert_eq!(cite["file"], "docs/req.md", "{out}");
+    assert!(cite["line"].is_u64(), "{out}");
 
     let (ok, out) = repograph(repo, &["verify", "--json"]);
     assert!(ok, "{out}");
