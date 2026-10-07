@@ -52,9 +52,23 @@ pub struct Edge {
 }
 
 impl Edge {
+    /// The context of a `Calls` edge for an identifier handed to a call rather than called.
+    pub const PASSED: &'static str = "arg";
+
+    /// The context of a `Calls` edge for reading an accessor: `this.secret` runs `get secret()`
+    /// as surely as a call would. A read of another file's member is one that file cannot tell
+    /// from a field read, so it is written down as a candidate and `settle` keeps it only while
+    /// the target's signature declares an accessor — a field that later becomes one gains its
+    /// readers when they are next read.
+    pub const READ: &'static str = "get";
+
     /// A `Calls` edge for an identifier handed to a call — `rows.map(fn)`, `register(Token)` —
     /// rather than called: the caller depends on the target, but nothing proves it calls it.
-    pub fn passes(&self) -> bool { self.kind == EdgeKind::Calls && self.context == "arg" }
+    pub fn passes(&self) -> bool { self.kind == EdgeKind::Calls && self.context == Self::PASSED }
+
+    /// A `Calls` edge for reading an accessor, which `settle` keeps only while its target still
+    /// declares one.
+    pub fn reads_member(&self) -> bool { self.kind == EdgeKind::Calls && self.context == Self::READ }
 }
 
 #[derive(Debug, Default)]
@@ -109,7 +123,8 @@ impl Graph {
     /// Every edge sorted to the side of the line its target's family is on: cited-and-declared
     /// in `edges`, cited-and-not in `pending`. Run once after a batch of `apply`s, because only
     /// then is it known which families the batch declared — a file citing `OQ-25` may be read
-    /// before the file that defines `OQ-1`.
+    /// before the file that defines `OQ-1`. A getter read whose target is not an accessor, or
+    /// no longer one, is dropped here for the same reason: only the whole batch knows.
     pub fn settle(&mut self) {
         let (ids, milestones) = crate::families::of_graph(self);
         let admitted = |target: &str| match crate::families::classify(target) {
@@ -119,6 +134,7 @@ impl Graph {
         };
         let all: Vec<Edge> = std::mem::take(&mut self.edges).into_iter().chain(std::mem::take(&mut self.pending)).collect();
         for e in all {
+            if e.reads_member() && !self.nodes.get(&e.target).is_some_and(|n| crate::code::calls::declares_accessor(&n.label, &n.body)) { continue }
             if admitted(&e.target) { self.edges.insert(e); } else { self.pending.insert(e); }
         }
     }
