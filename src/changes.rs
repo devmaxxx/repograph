@@ -166,11 +166,14 @@ pub(crate) fn git(repo: &Path, args: &[&str]) -> anyhow::Result<String> {
 /// Hunks of the working tree against `base` — staged and unstaged alike, plus every untracked
 /// file as one hunk over its whole length, so a new file's symbols count as changed too.
 pub fn hunks_from_git(repo: &Path, base: &str) -> anyhow::Result<Vec<Hunk>> {
-    let mut hunks = parse(&git(repo, &["diff", "-U0", "--no-color", "--no-ext-diff", base, "--", "."])?);
+    // The store is written by every refresh, so in a repository that does not ignore it, it would
+    // be reported as changed by the command that just wrote it.
+    const NOT_STORE: &str = ":(exclude).repograph";
+    let mut hunks = parse(&git(repo, &["diff", "-U0", "--no-color", "--no-ext-diff", base, "--", ".", NOT_STORE])?);
     // NUL rather than lines: turning the quoting off reaches the bytes above ASCII and no
     // further, so a name holding a newline still arrived quoted and matched nothing. Separated
     // this way it arrives as itself, and the line it holds cannot be read as a second file.
-    for f in git(repo, &["ls-files", "-z", "--others", "--exclude-standard"])?.split('\0').filter(|f| !f.is_empty()) {
+    for f in git(repo, &["ls-files", "-z", "--others", "--exclude-standard", "--", ".", NOT_STORE])?.split('\0').filter(|f| !f.is_empty()) {
         hunks.push(Hunk { file: f.to_string(), start: 1, end: u32::MAX });
     }
     Ok(hunks)
@@ -438,6 +441,18 @@ mod tests {
         assert_eq!(
             hunks_from_git(dir.path(), "HEAD").unwrap(),
             vec![Hunk { file: "docs/Новое.ts".into(), start: 1, end: u32::MAX }]
+        );
+    }
+
+    #[test]
+    fn the_store_is_not_a_change_even_when_nothing_ignores_it() {
+        let dir = quoting_repo();
+        std::fs::create_dir_all(dir.path().join(".repograph")).unwrap();
+        std::fs::write(dir.path().join(".repograph/graph.bin"), "x").unwrap();
+        std::fs::write(dir.path().join("docs/new.ts"), "one\n").unwrap();
+        assert_eq!(
+            hunks_from_git(dir.path(), "HEAD").unwrap(),
+            vec![Hunk { file: "docs/new.ts".into(), start: 1, end: u32::MAX }]
         );
     }
 }
