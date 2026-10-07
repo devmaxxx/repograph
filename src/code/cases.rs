@@ -1009,3 +1009,94 @@ fn the_walk_over_a_parsed_tree_writes_exactly_what_the_scan_of_the_file_writes()
     assert_eq!(whole.nodes, ex.nodes);
     assert_eq!(whole.edges, ex.edges);
 }
+
+// ---- value uses: DI objects, arrays, decorator arguments, getter reads ----
+
+#[test]
+/// A class decorator sits outside the class it decorates, so the file owns what it hands over.
+fn identifiers_in_di_objects_and_arrays_are_arg_edges_within_one_file() {
+    let ex = extract(
+        "identity.module.ts",
+        "class Kms {}\nclass Cfg {}\nfunction createKms() { return new Kms(); }\nconst imports = [];\n\
+         @Module({ providers: [Cfg, { provide: Kms, useFactory: createKms, inject: [Cfg] }], imports })\n\
+         export class IdentityModule {}\n",
+    );
+    let all = edges(&ex, EdgeKind::Calls);
+    let got: Vec<(&str, &str)> = all.iter()
+        .filter(|e| e.0 == "file:identity.module.ts").map(|e| (e.1, e.2)).collect();
+    assert_eq!(got, vec![
+        ("sym:identity.module.ts::Cfg", "arg"),
+        ("sym:identity.module.ts::Kms", "arg"),
+        ("sym:identity.module.ts::createKms", "arg"),
+        ("sym:identity.module.ts::imports", "arg"),
+    ], "{all:?}");
+}
+
+#[test]
+fn a_type_named_in_a_decorator_object_is_an_arg_edge_of_the_decorated_member() {
+    let repo = Repo::new(&[("dto.ts", "export class CreateDto {}\n")]);
+    let ex = repo.extract(
+        "c.ts",
+        "import { CreateDto } from './dto';\nexport class C {\n  @ApiBody({ type: CreateDto, examples: { a: { value: [CreateDto] } } })\n  create() {}\n}\n",
+    );
+    let got: Vec<(&str, &str)> = edges(&ex, EdgeKind::Calls).into_iter().filter(|e| e.1 == "sym:dto.ts::CreateDto").map(|e| (e.0, e.2)).collect();
+    assert_eq!(got.len(), 1, "{got:?}");
+    assert_eq!(got[0].1, "arg");
+}
+
+#[test]
+fn a_function_inside_an_argument_object_is_its_own_call_site() {
+    let ex = extract("a.ts", "function mk() {}\nexport function run() { f({ useFactory: () => mk() }); }\n");
+    assert_eq!(edges(&ex, EdgeKind::Calls), vec![("sym:a.ts::run", "sym:a.ts::mk", "")]);
+}
+
+#[test]
+fn reading_a_getter_of_the_own_class_is_an_edge_and_reading_a_field_is_not() {
+    let ex = extract(
+        "a.ts",
+        "export class A {\n  private n = 1;\n  get secret(): string { return ''; }\n  run() { this.n = 2; return this.secret.length + this.n; }\n}\n",
+    );
+    assert_eq!(edges(&ex, EdgeKind::Calls), vec![("sym:a.ts::A.run", "sym:a.ts::A.secret", "get")]);
+}
+
+#[test]
+fn assigning_through_a_setter_is_not_a_read() {
+    let ex = extract("a.ts", "export class A {\n  set v(x: number) {}\n  get w() { return 1; }\n  run() { this.v = 1; this.w = 2; }\n}\n");
+    assert!(edges(&ex, EdgeKind::Calls).is_empty(), "{:?}", edges(&ex, EdgeKind::Calls));
+}
+
+#[test]
+fn a_method_named_get_is_not_an_accessor() {
+    let ex = extract("a.ts", "export class A {\n  get(k: string) { return k; }\n  run() { return this.get; }\n}\n");
+    assert!(edges(&ex, EdgeKind::Calls).is_empty(), "{:?}", edges(&ex, EdgeKind::Calls));
+}
+
+#[test]
+fn a_getter_read_through_an_injected_field_survives_settle_and_a_field_read_does_not() {
+    let tokens = "export class StorageTokens {\n  label = 'x';\n  get secret(): string { return ''; }\n}\n";
+    let reader = "import { StorageTokens } from './tokens';\nexport class SignedLinks {\n  constructor(private readonly tokens: StorageTokens) {}\n  sign() { return this.tokens.secret + this.tokens.label; }\n}\n";
+    let repo = Repo::new(&[("tokens.ts", tokens), ("signed-links.ts", reader)]);
+    let mut g = crate::model::Graph::default();
+    g.apply(repo.extract("tokens.ts", tokens));
+    g.apply(repo.extract("signed-links.ts", reader));
+    g.settle();
+    let got: Vec<(&str, &str, &str)> = g.edges.iter().filter(|e| e.kind == EdgeKind::Calls)
+        .map(|e| (e.source.as_str(), e.target.as_str(), e.context.as_str())).collect();
+    assert_eq!(got, vec![("sym:signed-links.ts::SignedLinks.sign", "sym:tokens.ts::StorageTokens.secret", "get")]);
+    assert!(g.pending.is_empty(), "a field read is dropped, not held aside");
+}
+
+#[test]
+fn a_getter_that_becomes_a_field_loses_its_readers_at_the_next_settle() {
+    let reader = "import { T } from './t';\nexport function run(t: T) { return T.now; }\n";
+    let repo = Repo::new(&[("t.ts", "export class T { static get now() { return 1; } }\n"), ("r.ts", reader)]);
+    let mut g = crate::model::Graph::default();
+    g.apply(repo.extract("t.ts", "export class T { static get now() { return 1; } }\n"));
+    g.apply(repo.extract("r.ts", reader));
+    g.settle();
+    assert!(g.edges.iter().any(|e| e.reads_member() && e.target == "sym:t.ts::T.now"));
+    g.remove_file("t.ts");
+    g.apply(repo.extract("t.ts", "export class T { static now = 1; }\n"));
+    g.settle();
+    assert!(!g.edges.iter().any(|e| e.reads_member()), "{:?}", g.edges);
+}

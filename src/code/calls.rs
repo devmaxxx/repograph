@@ -7,7 +7,7 @@
 //! when the target changes, and either caller does.
 use crate::code::idrefs::owner;
 use crate::code::imports::Resolver;
-use crate::code::symbols::{is_top_level, parse};
+use crate::code::symbols::{is_top_level, member_name, parse};
 use crate::model::{EdgeKind, Extraction};
 use std::collections::{BTreeMap, BTreeSet};
 use tree_sitter::Node;
@@ -29,6 +29,8 @@ struct Scope {
     /// top-level function -> the class it returns, from `(): T` or a body that is `new T(…)` —
     /// the test-helper shape `service().method()` goes through
     returns: BTreeMap<String, String>,
+    /// `Class.member` for every `get`/`set` accessor of this file's top-level classes
+    accessors: BTreeSet<String>,
 }
 
 /// `T` of `: T` or `: T<…>`; other annotations (unions, literals, arrays) name no class.
@@ -61,6 +63,52 @@ fn binds_this(n: Node) -> bool {
         cur = p;
     }
     false
+}
+
+/// The `get`/`set` keyword is an unnamed child; a method named `get` has it as its name instead.
+fn is_accessor(m: Node) -> bool {
+    let mut c = m.walk();
+    let found = m.children(&mut c).any(|k| matches!(k.kind(), "get" | "set"));
+    found
+}
+
+/// Whether a symbol's signature line declares an accessor: `get` or `set` (after any modifiers)
+/// directly ahead of the member's own name. A getter/setter pair is one symbol, and whichever
+/// half came first wrote its signature, so a setter's counts as the pair's.
+pub(crate) fn declares_accessor(label: &str, body: &str) -> bool {
+    let Some((_, member)) = label.rsplit_once('.') else { return false };
+    let Some(signature) = body.lines().last() else { return false };
+    let words: Vec<&str> = signature.split_whitespace().collect();
+    words.windows(2).any(|w| matches!(w[0], "get" | "set") && w[1].strip_prefix(member).is_some_and(|rest| rest.starts_with(['(', '<'])))
+}
+
+/// The identifiers a call argument hands over: the argument itself, and every identifier in a
+/// property value or array element of it, however deep — `providers: [X]`, `useFactory: mk`,
+/// `{ type: Dto }`, the shorthand `{ imports }`. A function or call inside is not looked into:
+/// what it calls is its own call site.
+fn handed_over<'t>(arg: Node<'t>, out: &mut Vec<Node<'t>>) {
+    match arg.kind() {
+        "identifier" | "shorthand_property_identifier" => out.push(arg),
+        "pair" => if let Some(v) = arg.child_by_field_name("value") { handed_over(v, out) },
+        "object" | "array" => {
+            let mut c = arg.walk();
+            for x in arg.named_children(&mut c) { handed_over(x, out); }
+        }
+        _ => {}
+    }
+}
+
+/// A member read that is neither called nor assigned to: `this.secret`, `this.tokens.secret`.
+fn is_read(n: Node) -> bool {
+    let Some(p) = n.parent() else { return true };
+    let callee = match p.kind() {
+        "call_expression" => p.child_by_field_name("function"),
+        "new_expression" => p.child_by_field_name("constructor"),
+        "assignment_expression" => p.child_by_field_name("left"),
+        "jsx_opening_element" | "jsx_self_closing_element" | "jsx_closing_element" => p.child_by_field_name("name"),
+        _ => None,
+    };
+    callee != Some(n)
 }
 
 impl Scope {
@@ -118,9 +166,12 @@ impl Scope {
         if !matches!(decl.kind(), "class_declaration" | "abstract_class_declaration") { return }
         let Some(name) = decl.child_by_field_name("name").map(|n| text(n, src).to_string()) else { return };
         let Some(body) = decl.child_by_field_name("body") else { return };
-        let fields = self.fields.entry(name).or_default();
+        let fields = self.fields.entry(name.clone()).or_default();
         let mut bc = body.walk();
         for m in body.named_children(&mut bc) {
+            if m.kind() == "method_definition" && is_accessor(m) {
+                if let Some(member) = member_name(m, src) { self.accessors.insert(format!("{name}.{member}")); }
+            }
             match m.kind() {
                 "public_field_definition" => {
                     if let (Some(n), Some(t)) = (m.child_by_field_name("name"), m.child_by_field_name("type").and_then(|t| type_name(t, src))) {
@@ -169,7 +220,7 @@ impl Scope {
 
     fn target(&self, callee: Node, class: Option<&str>, rel: &str, src: &[u8]) -> Option<String> {
         match callee.kind() {
-            "identifier" => {
+            "identifier" | "shorthand_property_identifier" => {
                 let (f, n) = self.names.get(text(callee, src))?;
                 Some(format!("sym:{f}::{n}"))
             }
@@ -206,6 +257,24 @@ impl Scope {
     }
 }
 
+/// How a site reaches its target, strongest first: one edge per (owner, target) keeps `impact`'s
+/// counts, and the strongest claim any site makes is the one it carries.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum Reach { Call, Read, Pass }
+
+impl Reach {
+    fn context(self) -> &'static str {
+        match self { Reach::Call => "", Reach::Read => GETTER_READ, Reach::Pass => "arg" }
+    }
+}
+
+/// The context of an edge for reading an accessor: `this.secret` runs `get secret()` as surely
+/// as a call would. A read of another file's member is one this file cannot tell from a field
+/// read, so it is written down as a candidate and `Graph::settle` keeps it only while the
+/// target's signature declares an accessor — a field that later becomes one gains its readers
+/// when they are next read.
+pub const GETTER_READ: &str = "get";
+
 /// Every call and `new` in the file, as an edge from its owner to what the scope proves it
 /// reaches. `locals` are the names this file declares at top level (the scanner already knows
 /// them); a self-call is dropped, and a repeated call collapses into one edge.
@@ -218,9 +287,7 @@ pub(crate) fn scan(resolver: &Resolver, rel: &str, source: &str, locals: &BTreeS
 /// `scan` over a tree someone else parsed: an embedded script is TypeScript at its host file's rows.
 pub(crate) fn scan_tree(resolver: &Resolver, rel: &str, root: Node, src: &[u8], locals: &BTreeSet<String>, ex: &mut Extraction) {
     let scope = Scope::collect(root, rel, src, resolver, locals);
-    // (owner, target) -> whether any site calls it rather than only passing it: one edge per
-    // pair keeps `impact`'s counts, and a real call is the stronger claim, so it wins.
-    let mut found: BTreeMap<(String, String), bool> = BTreeMap::new();
+    let mut found: BTreeMap<(String, String), Reach> = BTreeMap::new();
     let mut stack = vec![root];
     while let Some(n) = stack.pop() {
         let mut c = n.walk();
@@ -232,30 +299,63 @@ pub(crate) fn scan_tree(resolver: &Resolver, rel: &str, root: Node, src: &[u8], 
             // reads it, even when a binding of that name is in scope.
             "jsx_opening_element" | "jsx_self_closing_element" => n.child_by_field_name("name")
                 .filter(|c| c.kind() != "identifier" || text(*c, src).starts_with(|ch: char| ch.is_ascii_uppercase())),
+            "member_expression" if is_read(n) => {
+                read(&scope, n, rel, src, &mut found);
+                None
+            }
             _ => None,
         };
         let Some(callee) = callee else { continue };
         let from = owner(n, rel, src);
-        // Outside a class, an owner with a member is a method of a top-level object literal, and
-        // `this` there is the literal: `this.find()` is a call of its sibling `repo.find`.
-        let class = class_of(n, src).or_else(|| {
-            if !binds_this(n) { return None }
-            let name = from.strip_prefix("sym:")?.split_once("::")?.1;
-            name.split_once('.').map(|(literal, _)| literal.to_string())
-        });
+        let class = this_class(n, &from, src);
         // A function handed to another — `rows.map(feedWire)`, `.filter(isIndexedType)` — is
         // called on the caller's behalf, and a change to it breaks the caller all the same; the
         // edge says `arg`, because a constant or a DI token handed over the same way is not.
-        let mut ac = n.walk();
-        let passed: Vec<Node> = n.child_by_field_name("arguments")
-            .map(|a| a.named_children(&mut ac).filter(|x| x.kind() == "identifier").collect())
-            .unwrap_or_default();
-        for (i, x) in std::iter::once(callee).chain(passed).enumerate() {
+        let mut passed = Vec::new();
+        if let Some(args) = n.child_by_field_name("arguments") {
+            let mut ac = args.walk();
+            for a in args.named_children(&mut ac) { handed_over(a, &mut passed); }
+        }
+        let sites = std::iter::once((callee, Reach::Call)).chain(passed.into_iter().map(|x| (x, Reach::Pass)));
+        for (x, how) in sites {
             let Some(target) = scope.target(x, class.as_deref(), rel, src) else { continue };
-            if from != target { *found.entry((from.clone(), target)).or_default() |= i == 0; }
+            note(&mut found, &from, target, how);
         }
     }
-    for ((from, target), called) in found {
-        ex.edge(&from, &target, EdgeKind::Calls, if called { "" } else { "arg" }, rel);
+    for ((from, target), how) in found {
+        ex.edge(&from, &target, EdgeKind::Calls, how.context(), rel);
     }
+}
+
+/// The class `this` names at `n`. Outside a class, an owner with a member is a method of a
+/// top-level object literal, and `this` there is the literal: `this.find()` is a call of its
+/// sibling `repo.find`.
+fn this_class(n: Node, from: &str, src: &[u8]) -> Option<String> {
+    class_of(n, src).or_else(|| {
+        if !binds_this(n) { return None }
+        let name = from.strip_prefix("sym:")?.split_once("::")?.1;
+        name.split_once('.').map(|(literal, _)| literal.to_string())
+    })
+}
+
+fn note(found: &mut BTreeMap<(String, String), Reach>, from: &str, target: String, how: Reach) {
+    if from == target { return }
+    let slot = found.entry((from.to_string(), target)).or_insert(how);
+    *slot = (*slot).min(how);
+}
+
+/// A member read that resolves to an accessor. One of this file's own classes is checked here;
+/// any other member is a candidate for `settle`, while a bare export (`ns.x`) never is one. The
+/// class and the owner are looked up only when needed — most reads are of fields or of names the
+/// file cannot prove — and an object literal's `this` is never one of the classes whose accessors
+/// are known.
+fn read(scope: &Scope, n: Node, rel: &str, src: &[u8], found: &mut BTreeMap<(String, String), Reach>) {
+    let Some(obj) = n.child_by_field_name("object") else { return };
+    let through_this = obj.kind() == "this" || obj.child_by_field_name("object").is_some_and(|o| o.kind() == "this");
+    let class = if through_this { class_of(n, src) } else { None };
+    let Some(target) = scope.target(n, class.as_deref(), rel, src) else { return };
+    let Some((file, name)) = target.strip_prefix("sym:").and_then(|t| t.split_once("::")) else { return };
+    if !name.contains('.') { return }
+    if file == rel && !scope.accessors.contains(name) { return }
+    note(found, &owner(n, rel, src), target, Reach::Read);
 }

@@ -55,6 +55,10 @@ impl Edge {
     /// A `Calls` edge for an identifier handed to a call — `rows.map(fn)`, `register(Token)` —
     /// rather than called: the caller depends on the target, but nothing proves it calls it.
     pub fn passes(&self) -> bool { self.kind == EdgeKind::Calls && self.context == "arg" }
+
+    /// A `Calls` edge for reading an accessor, which `settle` keeps only while its target still
+    /// declares one.
+    pub fn reads_member(&self) -> bool { self.kind == EdgeKind::Calls && self.context == crate::code::calls::GETTER_READ }
 }
 
 #[derive(Debug, Default)]
@@ -109,7 +113,8 @@ impl Graph {
     /// Every edge sorted to the side of the line its target's family is on: cited-and-declared
     /// in `edges`, cited-and-not in `pending`. Run once after a batch of `apply`s, because only
     /// then is it known which families the batch declared — a file citing `OQ-25` may be read
-    /// before the file that defines `OQ-1`.
+    /// before the file that defines `OQ-1`. A getter read whose target is not an accessor, or
+    /// no longer one, is dropped here for the same reason: only the whole batch knows.
     pub fn settle(&mut self) {
         let (ids, milestones) = crate::families::of_graph(self);
         let admitted = |target: &str| match crate::families::classify(target) {
@@ -119,6 +124,7 @@ impl Graph {
         };
         let all: Vec<Edge> = std::mem::take(&mut self.edges).into_iter().chain(std::mem::take(&mut self.pending)).collect();
         for e in all {
+            if e.reads_member() && !self.nodes.get(&e.target).is_some_and(|n| crate::code::calls::declares_accessor(&n.label, &n.body)) { continue }
             if admitted(&e.target) { self.edges.insert(e); } else { self.pending.insert(e); }
         }
     }
