@@ -199,6 +199,31 @@ fn implements_is_not_extends() {
 }
 
 #[test]
+fn implements_names_each_interface_through_its_import_without_type_arguments() {
+    let repo = Repo::new(&[("port.ts", "export interface Port {}\nexport interface Sink<T> {}\n")]);
+    let ex = repo.extract("a.ts", "import { Port, Sink } from './port';\ninterface Local {}\nexport class A extends Object implements Port, Sink<string>, Local {}\n");
+    assert_eq!(edges(&ex, EdgeKind::Implements), vec![
+        ("sym:a.ts::A", "sym:a.ts::Local", ""),
+        ("sym:a.ts::A", "sym:port.ts::Port", ""),
+        ("sym:a.ts::A", "sym:port.ts::Sink", ""),
+    ]);
+}
+
+#[test]
+fn the_methods_and_function_properties_of_an_interface_are_its_members() {
+    let src = "export interface Port {\n  /** Suggests the next visit. */\n  suggest(id: string): Promise<void>;\n  maybe?(): void;\n  notify: (x: number) => void;\n  limit: number;\n  [key: string]: unknown;\n}\n";
+    let ex = extract("a.ts", src);
+    for s in ["Port.suggest", "Port.maybe", "Port.notify"] {
+        let id = format!("sym:a.ts::{s}");
+        assert!(ids(&ex).contains(&id.as_str()), "{s} in {:?}", ids(&ex));
+        assert!(edges(&ex, EdgeKind::Declares).contains(&("sym:a.ts::Port", id.as_str(), "")), "{s} is declared by its interface");
+    }
+    assert!(!ids(&ex).contains(&"sym:a.ts::Port.limit"), "a data property is not called through the interface");
+    let m = node(&ex, "sym:a.ts::Port.suggest");
+    assert_eq!((m.line, m.body.as_str()), (3, "Suggests the next visit.\nsuggest(id: string): Promise<void>"));
+}
+
+#[test]
 fn extends_drops_type_arguments_and_follows_the_import() {
     let repo = Repo::new(&[("base.ts", "export class Base<T> {}\n")]);
     let ex = repo.extract("a.ts", "import { Base } from './base';\nexport class A extends Base<string> {}\nclass L {}\nclass M extends L {}\n");
