@@ -118,11 +118,13 @@ fn container(id: &str) -> Option<String> {
 /// Whether a change to an edge's target reaches its source along it. A `References` edge counts
 /// only when it points at a symbol: until 0.6.0 every one pointed at a requirement id, an entity or
 /// a file, which `ask` expands and no blast walk follows, and the new languages write them between
-/// declarations — a migration altering a table, a field naming a type (spec L11).
+/// declarations — a migration altering a table, a field naming a type (spec L11). An `Implements`
+/// edge from a document — a task, an invariant's test — points at a requirement or a file, and
+/// only a class's points at a symbol.
 pub(crate) fn walks(e: &Edge) -> bool {
     match e.kind {
         EdgeKind::Calls | EdgeKind::Extends => true,
-        EdgeKind::References => e.target.starts_with("sym:"),
+        EdgeKind::References | EdgeKind::Implements => e.target.starts_with("sym:"),
         _ => false,
     }
 }
@@ -138,6 +140,10 @@ pub struct Index<'a> {
     members: BTreeMap<&'a str, Vec<&'a str>>,
     re_exports: BTreeMap<&'a str, Vec<&'a Edge>>,
     imports: BTreeMap<&'a str, Vec<&'a Edge>>,
+    /// Class to the interfaces it implements, and back, by the interface's declaration: an
+    /// `implements` clause names the interface by the file it was imported from, often a barrel.
+    interfaces: BTreeMap<&'a str, Vec<String>>,
+    implementers: BTreeMap<String, Vec<&'a str>>,
 }
 
 impl<'a> Index<'a> {
@@ -148,8 +154,13 @@ impl<'a> Index<'a> {
     pub(crate) fn names(graph: &'a Graph) -> Index<'a> { Self::build(graph, true, false) }
 
     fn build(graph: &'a Graph, up: bool, full: bool) -> Index<'a> {
-        let mut ix = Index { graph, up, code: BTreeMap::new(), members: BTreeMap::new(), re_exports: BTreeMap::new(), imports: BTreeMap::new() };
+        let mut ix = Index {
+            graph, up, code: BTreeMap::new(), members: BTreeMap::new(), re_exports: BTreeMap::new(), imports: BTreeMap::new(),
+            interfaces: BTreeMap::new(), implementers: BTreeMap::new(),
+        };
+        let mut implements: Vec<&Edge> = Vec::new();
         for e in &graph.edges {
+            if e.kind == EdgeKind::Implements && e.target.starts_with("sym:") { implements.push(e); }
             match e.kind {
                 _ if walks(e) => ix.code.entry(if up { e.target.as_str() } else { e.source.as_str() }).or_default().push(e),
                 EdgeKind::Declares if e.target.starts_with("sym:") => ix.members.entry(e.source.as_str()).or_default().push(e.target.as_str()),
@@ -157,6 +168,17 @@ impl<'a> Index<'a> {
                 EdgeKind::Imports if full => ix.imports.entry(e.target.as_str()).or_default().push(e),
                 _ => {}
             }
+        }
+        // Only a barrel can stand for an interface no node is: an `implements OnModuleInit` from
+        // a package names a file that re-exports nothing, and `exact` would scan every edge to
+        // learn that, once per class.
+        let barrels: BTreeSet<&str> = ix.re_exports.values().flatten().map(|e| e.source.trim_start_matches("file:")).collect();
+        for e in implements {
+            let declared = graph.nodes.contains_key(&e.target);
+            let in_barrel = || e.target.strip_prefix("sym:").and_then(|t| t.split_once("::")).is_some_and(|(f, _)| barrels.contains(f));
+            let Some(iface) = (declared || in_barrel()).then(|| exact(graph, &e.target)).flatten() else { continue };
+            ix.interfaces.entry(e.source.as_str()).or_default().push(iface.clone());
+            ix.implementers.entry(iface).or_default().push(e.source.as_str());
         }
         ix
     }
@@ -214,14 +236,52 @@ impl<'a> Index<'a> {
         out
     }
 
+    /// The interface members `C.m` stands behind: `I.m` for every `I` that `C` implements and
+    /// that declares `m`.
+    fn contracts(&self, at: &str) -> Vec<String> {
+        let Some(class) = container(at) else { return Vec::new() };
+        let name = &at[class.len() + 1..];
+        self.interfaces.get(class.as_str()).into_iter().flatten()
+            .map(|i| format!("{i}.{name}"))
+            .filter(|m| self.graph.nodes.contains_key(m))
+            .collect()
+    }
+
+    /// The methods a call on `I.m` runs: `C.m` for every class `C` that implements `I` and
+    /// declares `m` itself.
+    fn implementations(&self, id: &str) -> Vec<String> {
+        let Some(iface) = container(id) else { return Vec::new() };
+        let name = &id[iface.len() + 1..];
+        self.implementers.get(&iface).into_iter().flatten()
+            .map(|c| format!("{c}.{name}"))
+            .filter(|m| self.graph.nodes.contains_key(m))
+            .collect()
+    }
+
+    /// Every id a caller of the root reaches it by through an interface: the members of the
+    /// interfaces the root's class implements, and each one's barrel aliases.
+    pub(crate) fn dispatched(&self, root: &str) -> Vec<String> {
+        self.seeds(root).iter().flat_map(|s| self.contracts(s))
+            .flat_map(|i| { let aliases = self.aliases(&i); std::iter::once(i).chain(aliases) })
+            .collect()
+    }
+
     /// The edges to follow from `at`. Upstream, a member is also reached through its class by a
-    /// subclass — `extends C` inherits `C.m` — so the class's `Extends` edges count for the member
-    /// without the class itself being listed. Downstream, a class reaches what its members call.
+    /// subclass — `extends C` inherits `C.m` — and by an implemented interface's change, so the
+    /// class's `Extends` and `Implements` edges count for the member without the class itself
+    /// being listed; and a call through an interface `C` implements is a call on `C.m`.
+    /// Downstream, a class reaches what its members call.
     fn step(&self, at: &str) -> Vec<&'a Edge> {
         let mut out: Vec<&Edge> = self.code.get(at).into_iter().flatten().copied().collect();
         if self.up {
             if let Some(c) = container(at) {
-                out.extend(self.code.get(c.as_str()).into_iter().flatten().copied().filter(|e| e.kind == EdgeKind::Extends));
+                out.extend(self.code.get(c.as_str()).into_iter().flatten().copied().filter(|e| matches!(e.kind, EdgeKind::Extends | EdgeKind::Implements)));
+            }
+            for i in self.contracts(at) {
+                let aliases = self.aliases(&i);
+                for via in std::iter::once(i).chain(aliases) {
+                    out.extend(self.code.get(via.as_str()).into_iter().flatten().copied());
+                }
             }
         } else {
             for m in self.members(at) { out.extend(self.code.get(m).into_iter().flatten().copied()); }
@@ -249,8 +309,18 @@ impl<'a> Index<'a> {
         out
     }
 
+    /// Where an edge followed from its walked end arrives, and whether the walk may go on from
+    /// there. Upstream that is the edge's source. Downstream, a call on an interface member lands
+    /// on it and on each implementation, since the graph cannot tell which one runs.
+    fn lands(&self, e: &Edge) -> Vec<(String, bool)> {
+        if self.up { return vec![(e.source.clone(), true)] }
+        let (id, goes_on) = landing(self.graph, &e.target);
+        let dispatch = if goes_on { self.implementations(&id) } else { Vec::new() };
+        std::iter::once((id, goes_on)).chain(dispatch.into_iter().map(|m| (m, true))).collect()
+    }
+
     fn walk(&self, root: &str, depth: usize) -> Vec<Vec<Dependent>> {
-        let (graph, up) = (self.graph, self.up);
+        let up = self.up;
         let mut start = self.seeds(root);
         // A row reached through an undeclared member names the symbol it belongs to as `via`, as
         // `canonical` names it in a row.
@@ -264,8 +334,7 @@ impl<'a> Index<'a> {
             let mut open: BTreeSet<String> = BTreeSet::new();
             for at in &frontier {
                 let via = undeclared.get(at).unwrap_or(at);
-                for e in self.step(at) {
-                    let (other, goes_on) = if up { (e.source.clone(), true) } else { landing(graph, &e.target) };
+                for (e, (other, goes_on)) in self.step(at).into_iter().flat_map(|e| self.lands(e).into_iter().map(move |l| (e, l))) {
                     if seen.contains(&other) { continue }
                     if goes_on { open.insert(other.clone()); }
                     let candidate = Dependent { id: other.clone(), depth: d, kind: e.kind, via: via.clone(), passed: e.passes() };
@@ -353,8 +422,7 @@ pub fn trace(graph: &Graph, from: &str, to: &str, depth: usize) -> Option<Vec<(S
     for _ in 0..depth {
         let mut next = Vec::new();
         for at in &frontier {
-            for e in by_source.step(at) {
-                let (other, goes_on) = landing(graph, &e.target);
+            for (e, (other, goes_on)) in by_source.step(at).into_iter().flat_map(|e| by_source.lands(e).into_iter().map(move |l| (e, l))) {
                 if !seen.insert(other.clone()) { continue }
                 parent.insert(other.clone(), (at.clone(), e.passes()));
                 if goal.contains(&other) {
@@ -752,6 +820,14 @@ mod walk_cases {
         assert!(walks(&edge("sym:a.ts::S", EdgeKind::Calls)));
         assert!(walks(&edge("sym:a.ts::S", EdgeKind::Extends)));
         assert!(walks(&edge("sym:db/0001.sql::app/clients", EdgeKind::References)));
+        assert!(walks(&edge("sym:a.ts::Port", EdgeKind::Implements)));
+    }
+
+    #[test]
+    fn a_document_s_implements_edge_to_a_requirement_or_a_file_is_not_walked() {
+        for target in ["FR-DM-05", "gate:ranking_input_whitelist_test", "file:packages/db/test/contours.spec.ts"] {
+            assert!(!walks(&edge(target, EdgeKind::Implements)), "{target}");
+        }
     }
 
     #[test]
@@ -939,6 +1015,20 @@ mod walk_cases {
         g
     }
 
+    /// A port and two adapters, extracted from source: `Receipts` holds the port and calls it
+    /// through a barrel, `NextVisitAdapter` implements it and calls `score`, `Stub` implements it
+    /// through the barrel and calls nothing.
+    fn port_and_adapters() -> Graph {
+        extracted(&[
+            ("port.ts", "export interface NextVisitPort {\n  suggest(id: string): void;\n}\n"),
+            ("index.ts", "export * from './port';\n"),
+            ("score.ts", "export function score() {}\n"),
+            ("adapter.ts", "import { NextVisitPort } from './port';\nimport { score } from './score';\nexport class NextVisitAdapter implements NextVisitPort {\n  suggest(id: string) {\n    score();\n  }\n}\n"),
+            ("stub.ts", "import { NextVisitPort } from './index';\nexport class Stub implements NextVisitPort {\n  suggest(id: string) {}\n}\n"),
+            ("receipts.ts", "import { NextVisitPort } from './index';\nexport class Receipts {\n  constructor(private nextVisit: NextVisitPort) {}\n  close() {\n    this.nextVisit.suggest('x');\n  }\n}\n"),
+        ])
+    }
+
     /// `contrast` renamed twice: in its own file (`export { contrast as contrastRatio }`) and by a
     /// barrel (`export { contrast as ratio } from`), with a caller importing each of the three names.
     fn renamed_contrast() -> Graph {
@@ -961,6 +1051,56 @@ mod walk_cases {
         for from in ["sym:one.ts::one", "sym:three.ts::three"] {
             assert_eq!(ids(downstream(&g, from, 1).layers), [root], "{from} reaches the original");
             assert!(trace(&g, from, root, 3).is_some(), "{from} traces to the original");
+        }
+    }
+
+    #[test]
+    fn a_call_through_a_port_is_a_caller_of_every_adapter() {
+        let g = port_and_adapters();
+        for adapter in ["sym:adapter.ts::NextVisitAdapter.suggest", "sym:stub.ts::Stub.suggest", "sym:adapter.ts::NextVisitAdapter"] {
+            let d1: Vec<String> = upstream(&g, adapter, 1).layers.into_iter().flatten().map(|d| d.id).collect();
+            assert_eq!(d1, ["sym:receipts.ts::Receipts.close"], "{adapter}");
+        }
+        assert_eq!(ids(upstream(&g, "sym:score.ts::score", 3).layers), ["sym:adapter.ts::NextVisitAdapter.suggest", "sym:receipts.ts::Receipts.close"]);
+    }
+
+    #[test]
+    fn a_change_to_a_port_s_member_breaks_its_callers_and_every_class_that_implements_it() {
+        let d1 = ids(upstream(&port_and_adapters(), "sym:port.ts::NextVisitPort.suggest", 1).layers);
+        assert_eq!(d1, ["sym:adapter.ts::NextVisitAdapter", "sym:receipts.ts::Receipts.close", "sym:stub.ts::Stub"]);
+    }
+
+    #[test]
+    fn a_walk_down_through_a_port_lands_on_the_port_and_every_adapter() {
+        let g = port_and_adapters();
+        let down = downstream(&g, "sym:receipts.ts::Receipts.close", 3);
+        let layers: Vec<Vec<String>> = down.layers.into_iter().map(|l| l.into_iter().map(|d| d.id).collect()).collect();
+        assert_eq!(layers, [
+            vec!["sym:adapter.ts::NextVisitAdapter.suggest", "sym:port.ts::NextVisitPort.suggest", "sym:stub.ts::Stub.suggest"],
+            vec!["sym:score.ts::score"],
+        ]);
+        let path: Vec<String> = trace(&g, "sym:receipts.ts::Receipts.close", "sym:score.ts::score", 3).unwrap().into_iter().map(|(id, _)| id).collect();
+        assert_eq!(path, ["sym:receipts.ts::Receipts.close", "sym:adapter.ts::NextVisitAdapter.suggest", "sym:score.ts::score"]);
+    }
+
+    #[test]
+    fn impact_up_and_down_trace_and_changes_agree_on_every_pair_across_a_port() {
+        let g = port_and_adapters();
+        let symbols = [
+            "sym:receipts.ts::Receipts.close", "sym:port.ts::NextVisitPort.suggest", "sym:adapter.ts::NextVisitAdapter.suggest",
+            "sym:stub.ts::Stub.suggest", "sym:score.ts::score",
+        ];
+        for s in symbols { assert!(g.nodes.contains_key(s), "{s} is a node"); }
+        for from in symbols {
+            let down = ids(downstream(&g, from, 3).layers);
+            for to in symbols.iter().filter(|&&t| t != from) {
+                let up = ids(upstream(&g, to, 3).layers);
+                let line = g.nodes[*to].line;
+                let changed = crate::changes::report(&g, &[crate::changes::Hunk { file: g.nodes[*to].file.clone(), start: line, end: line }], 3);
+                let traced = trace(&g, from, to, 3).is_some();
+                let reached = [down.iter().any(|d| d == to), up.iter().any(|u| u == from), changed.affected.iter().any(|d| d.id == from)];
+                assert_eq!(reached, [traced; 3], "{from} → {to}: down, up, changes against trace");
+            }
         }
     }
 
@@ -1012,5 +1152,18 @@ mod walk_cases {
         let v: serde_json::Value = serde_json::from_str(&crate::changes::render_json(&g, &r)).unwrap();
         let vias: Vec<(&str, &str)> = v["affected"].as_array().unwrap().iter().map(|d| (d["id"].as_str().unwrap(), d["via"].as_str().unwrap())).collect();
         assert_eq!(vias, [("sym:far.ts::far", "sym:index.ts::KEYS"), ("sym:keys.ts::pick", "sym:keys.ts::KEYS")]);
+    }
+
+    #[test]
+    fn explain_lists_a_call_through_the_port_as_a_caller_of_the_adapter_as_impact_does() {
+        let g = port_and_adapters();
+        let id = "sym:adapter.ts::NextVisitAdapter.suggest";
+        let d1 = ids(upstream(&g, id, 1).layers);
+        let v: serde_json::Value = serde_json::from_str(&crate::query::explain_json(&g, id).unwrap()).unwrap();
+        let mut callers: Vec<&str> = v["edges"].as_array().unwrap().iter()
+            .filter(|e| e["dir"] == "in" && e["kind"] == "Calls").map(|e| e["other"].as_str().unwrap()).collect();
+        callers.sort();
+        callers.dedup();
+        assert_eq!(callers, d1);
     }
 }

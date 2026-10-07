@@ -218,12 +218,39 @@ fn literal_body(obj: Node, owner_id: &str, owner: &str, rel: &str, src: &[u8], e
     let mut cur = obj.walk();
     for m in obj.named_children(&mut cur) {
         let Some(name) = literal_member(m, src) else { continue };
-        let id = format!("sym:{rel}::{owner}.{name}");
-        let signature = text(m, src).lines().next().unwrap_or("").trim().to_string();
-        let body = with_doc(&doc_comment(m, src), &signature);
-        ex.node_span(NodeKind::Symbol, &id, &format!("{owner}.{name}"), &body, rel, (m.start_position().row as u32 + 1, m.end_position().row as u32 + 1));
-        ex.edge(owner_id, &id, EdgeKind::Declares, "", rel);
+        member(m, &name, owner_id, owner, rel, src, ex);
     }
+}
+
+/// The name an interface member is a symbol under: a method signature, or a property typed as a
+/// function. A call through a field typed as the interface targets `Port.suggest`, and without a
+/// node there it reached nothing, not even the adapter that implements it.
+fn interface_member(m: Node, src: &[u8]) -> Option<String> {
+    match m.kind() {
+        "method_signature" => member_name(m, src),
+        "property_signature" => {
+            let ty = m.child_by_field_name("type")?.named_child(0)?;
+            (ty.kind() == "function_type").then(|| member_name(m, src)).flatten()
+        }
+        _ => None,
+    }
+}
+
+fn interface_body(iface: Node, owner_id: &str, owner: &str, rel: &str, src: &[u8], ex: &mut Extraction) {
+    let Some(body) = iface.child_by_field_name("body") else { return };
+    let mut cur = body.walk();
+    for m in body.named_children(&mut cur) {
+        let Some(name) = interface_member(m, src) else { continue };
+        member(m, &name, owner_id, owner, rel, src, ex);
+    }
+}
+
+fn member(m: Node, name: &str, owner_id: &str, owner: &str, rel: &str, src: &[u8], ex: &mut Extraction) {
+    let id = format!("sym:{rel}::{owner}.{name}");
+    let signature = text(m, src).lines().next().unwrap_or("").trim().to_string();
+    let body = with_doc(&doc_comment(m, src), &signature);
+    ex.node_span(NodeKind::Symbol, &id, &format!("{owner}.{name}"), &body, rel, (m.start_position().row as u32 + 1, m.end_position().row as u32 + 1));
+    ex.edge(owner_id, &id, EdgeKind::Declares, "", rel);
 }
 
 impl Walk<'_> {
@@ -355,7 +382,10 @@ impl Walk<'_> {
             }
             _ => {
                 if let Some(n) = name_of(decl, src).filter(|n| !n.starts_with(['\'', '"'])) {
-                    declare(&n, ex);
+                    let id = declare(&n, ex);
+                    if decl.kind() == "interface_declaration" {
+                        interface_body(decl, &id, &n, rel, src, ex);
+                    }
                 }
             }
         }
@@ -373,6 +403,15 @@ impl Walk<'_> {
                             let base = text(base, src).trim();
                             let file = self.import_origin(class, base, rel, src).unwrap_or_else(|| rel.to_string());
                             ex.edge(class_id, &format!("sym:{file}::{base}"), EdgeKind::Extends, "", rel);
+                        }
+                    }
+                    if h.kind() == "implements_clause" {
+                        let mut ic = h.walk();
+                        for t in h.named_children(&mut ic) {
+                            let t = if t.kind() == "generic_type" { t.child_by_field_name("name").unwrap_or(t) } else { t };
+                            let iface = text(t, src).trim();
+                            let file = self.import_origin(class, iface, rel, src).unwrap_or_else(|| rel.to_string());
+                            ex.edge(class_id, &format!("sym:{file}::{iface}"), EdgeKind::Implements, "", rel);
                         }
                     }
                 }
