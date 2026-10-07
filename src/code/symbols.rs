@@ -85,7 +85,10 @@ fn unquote(s: &str) -> String {
 /// The name a class member is known by: `'quoted'()` and `['computed']()` lose their quotes,
 /// a computed name that is not a string literal (`[Symbol.iterator]`) names nothing.
 pub(crate) fn member_name(m: Node, src: &[u8]) -> Option<String> {
-    let name = m.child_by_field_name("name")?;
+    key_name(m.child_by_field_name("name")?, src)
+}
+
+fn key_name(name: Node, src: &[u8]) -> Option<String> {
     match name.kind() {
         "string" => Some(unquote(text(name, src))),
         "computed_property_name" => {
@@ -93,6 +96,30 @@ pub(crate) fn member_name(m: Node, src: &[u8]) -> Option<String> {
             (inner.kind() == "string").then(|| unquote(text(inner, src)))
         }
         _ => Some(text(name, src).to_string()),
+    }
+}
+
+/// The object a `const X = …` binds, seen through `as const`, `satisfies T` and parentheses.
+pub(crate) fn literal_of(declarator: Node) -> Option<Node> {
+    let mut v = declarator.child_by_field_name("value")?;
+    while matches!(v.kind(), "as_expression" | "satisfies_expression" | "parenthesized_expression") {
+        v = v.named_child(0)?;
+    }
+    (v.kind() == "object").then_some(v)
+}
+
+/// The name a member of an object literal is a symbol under: a method, or a property whose value
+/// is a function. A data property, a shorthand or a spread is not called through the literal, and
+/// a nested literal's methods are reached by a chain no call edge resolves, so neither is one.
+pub(crate) fn literal_member(m: Node, src: &[u8]) -> Option<String> {
+    match m.kind() {
+        "method_definition" => member_name(m, src),
+        "pair" => {
+            let value = m.child_by_field_name("value")?;
+            if !matches!(value.kind(), "arrow_function" | "function_expression" | "generator_function") { return None }
+            key_name(m.child_by_field_name("key")?, src)
+        }
+        _ => None,
     }
 }
 
@@ -174,6 +201,19 @@ impl SymbolScanner {
             return ex;
         };
         Walk { resolver: &self.resolver }.scan_tree(rel, tree.root_node(), src)
+    }
+}
+
+/// The members of a top-level object literal, each declared by the `const` that binds it.
+fn literal_body(obj: Node, owner_id: &str, owner: &str, rel: &str, src: &[u8], ex: &mut Extraction) {
+    let mut cur = obj.walk();
+    for m in obj.named_children(&mut cur) {
+        let Some(name) = literal_member(m, src) else { continue };
+        let id = format!("sym:{rel}::{owner}.{name}");
+        let signature = text(m, src).lines().next().unwrap_or("").trim().to_string();
+        let body = with_doc(&doc_comment(m, src), &signature);
+        ex.node_span(NodeKind::Symbol, &id, &format!("{owner}.{name}"), &body, rel, (m.start_position().row as u32 + 1, m.end_position().row as u32 + 1));
+        ex.edge(owner_id, &id, EdgeKind::Declares, "", rel);
     }
 }
 
@@ -282,13 +322,17 @@ impl Walk<'_> {
             "lexical_declaration" | "variable_declaration" => {
                 let mut cur = decl.walk();
                 for d in decl.named_children(&mut cur) {
-                    if d.kind() == "variable_declarator" {
-                        let mut names = Vec::new();
-                        if let Some(pat) = d.child_by_field_name("name") {
-                            bindings(pat, src, &mut names);
-                        }
-                        for n in names {
-                            declare(&n, ex);
+                    if d.kind() != "variable_declarator" { continue }
+                    let Some(pat) = d.child_by_field_name("name") else { continue };
+                    let mut names = Vec::new();
+                    bindings(pat, src, &mut names);
+                    for n in names {
+                        let id = declare(&n, ex);
+                        // `export const repo = { find() {…} }` is a repository written without a
+                        // class; its methods are called as `repo.find()` and are members as a
+                        // class's are, or every such call points at a node nobody declares.
+                        if let Some(obj) = literal_of(d).filter(|_| pat.kind() == "identifier") {
+                            literal_body(obj, &id, &n, rel, src, ex);
                         }
                     }
                 }
