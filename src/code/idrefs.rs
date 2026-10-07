@@ -1,12 +1,16 @@
-use crate::code::symbols::{is_top_level, member_name, parse};
+use crate::code::symbols::{is_top_level, literal_member, literal_of, member_name, parse};
 use crate::model::{EdgeKind, Extraction};
 use tree_sitter::Node;
 
 /// The symbol an id reference belongs to: the top-level function, class (with its method)
-/// or `const` that lexically contains it, else the file. Only top-level declarations are
-/// symbols, so a nested function or class is climbed through rather than named.
+/// or `const` (with the member of its object literal) that lexically contains it, else the file.
+/// Only top-level declarations are symbols, so a nested function or class is climbed through
+/// rather than named.
 pub(crate) fn owner(mut n: Node, rel: &str, src: &[u8]) -> String {
     let mut method: Option<String> = None;
+    // The member of the last object climbed through, keyed by that object: only the literal a
+    // top-level `const` binds names one, and a nested literal is overwritten by its parent's.
+    let mut member: Option<(usize, String)> = None;
     while let Some(p) = n.parent() {
         match p.kind() {
             // A decorator sits beside the member it decorates in `class_body`; the member is
@@ -21,7 +25,9 @@ pub(crate) fn owner(mut n: Node, rel: &str, src: &[u8]) -> String {
                     s = m.next_named_sibling();
                 }
             }
-            "method_definition" | "public_field_definition" => {
+            "object" => member = literal_member(n, src).map(|m| (p.id(), m)),
+            // A method of an object literal inside a class method is not the class's member.
+            "method_definition" | "public_field_definition" if p.parent().is_some_and(|b| b.kind() == "class_body") => {
                 if method.is_none() {
                     method = member_name(p, src);
                 }
@@ -43,7 +49,11 @@ pub(crate) fn owner(mut n: Node, rel: &str, src: &[u8]) -> String {
             }
             "variable_declarator" if is_top_level(p) => {
                 if let Some(v) = p.child_by_field_name("name").filter(|x| x.kind() == "identifier") {
-                    return format!("sym:{rel}::{}", v.utf8_text(src).unwrap_or(""));
+                    let v = v.utf8_text(src).unwrap_or("");
+                    return match member.filter(|(obj, _)| literal_of(p).is_some_and(|o| o.id() == *obj)) {
+                        Some((_, m)) => format!("sym:{rel}::{v}.{m}"),
+                        None => format!("sym:{rel}::{v}"),
+                    };
                 }
             }
             _ => {}
