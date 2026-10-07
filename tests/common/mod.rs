@@ -23,6 +23,7 @@ pub fn run(repo: &Path, args: &[&str]) -> Output {
         .env_remove("REPOGRAPH_EMBED_MODEL")
         .env_remove("REPOGRAPH_CODE_GLOBS")
         .env_remove("REPOGRAPH_TEXT_GLOBS")
+        .env_remove("REPOGRAPH_READER_BUDGET")
         .arg("--no-dense")
         .arg("--repo")
         .arg(repo)

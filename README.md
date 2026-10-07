@@ -204,6 +204,36 @@ repograph ask --stale отмена записи         # answer from the store 
 `--stale` never pays for that walk and never repairs it: it answers from the store as it stands,
 which is the whole of what it promises.
 
+A reader never waits on a refresh longer than `reader_budget` (10 s by default). `ask`, `impact`,
+`trace`, `changes` and `explain` estimate the refresh first — about 40 ms a changed file, 5 ms a
+vector row, and then the rate the rows actually embed at — and when it does not fit, answer from the
+store as it stands, say so in one stderr line, and start one detached `repograph update` that waits
+for the store's writer lock and catches it up for the next reader:
+
+```
+index: 576 files behind, refreshing in background
+dense: 1683 vectors pending, answered from the stored ones, refreshing in background
+```
+
+A reader that finds a refresh already holding the lock starts nothing and answers the same way,
+ending its line `a refresh is already running`. `--json` carries what the answer was given without
+as a first field, present only when it is behind, so an agent can read those files itself:
+
+```json
+{"stale":{"files":["src/billing.ts","src/refund.ts"],"vectors":0},"root":"sym:…", …}
+```
+
+The detached refresh writes its output to `.repograph/background.log`. `repograph update --detach`
+starts the same refresh by hand, and `install-agent` writes `post-merge` and `post-checkout` git
+hooks that run it, so a pull or a branch switch starts catching the store up before anyone asks. An
+existing hook keeps its own lines and gets the block appended between `# repograph:begin` and
+`# repograph:end`; `core.hooksPath` is honoured. A foreground `update` or `build` prints where its
+embed is every two seconds:
+
+```
+embedded 400/1683 (14.2 rows/s, ~90 s left)
+```
+
 Readers that do not refresh themselves — an editor plugin, an MCP server — can be kept supplied by
 a poller instead:
 
@@ -411,6 +441,7 @@ in full, not an empty config:
 | `enrich_languages`   | `[]` — the languages `enrich` writes questions in, named as the model reads them (`["Russian", "English"]`); empty = detected from the documents, English where they name none; any language name is accepted, see [Spending tokens on purpose](#spending-tokens-on-purpose) |
 | `reranker_dir`       | directory of the exported cross-encoder for `--rerank-local`; empty = `~/.cache/repograph/reranker` |
 | `embed_model`        | `intfloat/multilingual-e5-small`; the model the vectors are written with — nine were measured and `repograph model` switches it, see [Embeddings](#embeddings) |
+| `reader_budget`      | `10` — seconds a reader may spend refreshing before it answers from the store as it stands and leaves the rest to a detached `update`; `0` never refreshes inline. The machine file may set it; `REPOGRAPH_READER_BUDGET` overrides, see [Keeping it fresh](#keeping-it-fresh) |
 | `resources`          | `"balanced"` = a third of the logical cores; `"low"` a sixth, `"full"` a half — how much of the machine a run may take, see [Resources](#resources) |
 
 `REPOGRAPH_CODE_GLOBS`, whitespace-separated, replaces `code_globs` for one run. It is a measurement's
@@ -669,7 +700,7 @@ model: 137 MB of vectors for that corpus, against the other model's 51 MB on it
 model: 384-d → 1024-d, so every row is re-embedded and the whole index rewritten, not extended
 model: opened in 5.2s, 1024-d vectors
 model: embed_model = "Snowflake/snowflake-arctic-embed-l-v2.0" in /repo/repograph.toml
-dense: 33525/33525 rows, 14.5 rows/s, ~0 min left
+embedded 33525/33525 (14.5 rows/s, ~0 s left)
 dense: embedded 33525 rows in 2317.4s
 ```
 

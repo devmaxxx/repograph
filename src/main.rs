@@ -16,6 +16,7 @@ mod legacy;
 mod model;
 mod prime;
 mod query;
+mod refresh;
 mod serve;
 mod store;
 mod text;
@@ -49,7 +50,11 @@ fn depth(s: &str) -> Result<usize, String> {
 #[derive(Subcommand)]
 enum Cmd {
     Build,
-    Update,
+    Update {
+        /// Starts the update in a process of its own and returns at once; its output goes to
+        /// `.repograph/background.log`. What the git hooks `install-agent` writes run.
+        #[arg(long)] detach: bool,
+    },
     Ask {
         #[arg(required = true)] words: Vec<String>,
         #[arg(long)] json: bool,
@@ -592,16 +597,36 @@ fn embed_opened(repo: &std::path::Path, model: &str, emb: &mut index::embed::Emb
     let mut dense = index::dense::DenseIndex::load(&store)?;
     let t = std::time::Instant::now();
     dense.written_by(model, emb.dim()?);
-    let n = dense.sync_chunked(&graph, &questions, &mut |texts| emb.embed(texts), SYNC_CHUNK, &mut |idx, p| {
-        idx.save(&store)?;
-        let rate = p.done as f32 / t.elapsed().as_secs_f32().max(f32::EPSILON);
-        eprintln!("dense: {}/{} rows, {rate:.1} rows/s, ~{:.0} min left", p.done, p.total, (p.total - p.done) as f32 / rate / 60.0);
-        Ok(())
-    })?;
+    let mut meter = Meter::new(dense.owed(&graph, &questions));
+    let n = dense.sync_chunked(&graph, &questions, &mut |texts| emb.embed_with(texts, &mut |k| meter.add(k)), SYNC_CHUNK, &mut |idx, _| idx.save(&store))?;
     dense.synced_against(graph_at);
     dense.save(&store)?;
     println!("dense: embedded {n} rows in {:.1}s", t.elapsed().as_secs_f32());
     Ok(())
+}
+
+/// How often a foreground embed says where it is. A checkpoint is a minute's work, and a person
+/// or a hook watching stderr cannot tell a minute of silence from a hang.
+const PROGRESS_EVERY: std::time::Duration = std::time::Duration::from_secs(2);
+
+/// `embedded 400/1683` on stderr, every `PROGRESS_EVERY` and once at the end.
+struct Meter { total: usize, done: usize, start: std::time::Instant, last: std::time::Instant }
+
+impl Meter {
+    fn new(total: usize) -> Meter {
+        let now = std::time::Instant::now();
+        Meter { total, done: 0, start: now, last: now }
+    }
+
+    fn add(&mut self, rows: usize) {
+        self.done += rows;
+        if self.last.elapsed() < PROGRESS_EVERY && self.done < self.total { return; }
+        self.last = std::time::Instant::now();
+        let rate = self.done as f32 / self.start.elapsed().as_secs_f32().max(f32::EPSILON);
+        let left = self.total.saturating_sub(self.done) as f32 / rate.max(f32::EPSILON);
+        let left = if left < 120.0 { format!("{left:.0} s") } else { format!("{:.0} min", left / 60.0) };
+        eprintln!("embedded {}/{} ({rate:.1} rows/s, ~{left} left)", self.done, self.total);
+    }
 }
 
 /// What the store is on, what the file asks for, and what else has been measured. The store's own
@@ -744,17 +769,28 @@ fn code_node<'a>(graph: &'a model::Graph, name: &str) -> anyhow::Result<&'a mode
     Ok(pick)
 }
 
-/// The graph an answer is read from: refreshed against the tree unless `--stale`, and, when
-/// the store cannot be written, the stored one with a warning — the same contract as `ask`.
-fn graph_for(repo: &std::path::Path, cfg: &config::Config, stale: bool) -> anyhow::Result<model::Graph> {
+/// The graph an answer is read from: refreshed against the tree unless `--stale` or the refresh
+/// would not fit the reader's budget, and, when the store cannot be written, the stored one with a
+/// warning — the same contract as `ask`. The second value is what the answer is behind by.
+fn graph_for(repo: &std::path::Path, cfg: &config::Config, stale: bool, no_dense: bool) -> anyhow::Result<(model::Graph, Option<refresh::Stale>)> {
     let timing = ask::Timing::new();
     let store = store::Store::new(repo);
-    match ask::graph_for_ask(repo, cfg, &store, stale, &timing) {
-        Ok((graph, refreshed)) => {
-            if let Some(r) = refreshed { eprintln!("refresh: {} changed, {} removed", r.changed, r.removed); }
-            Ok(graph)
+    let budget = refresh::Budget::seconds(cfg.reader_budget, no_dense);
+    match ask::graph_for_ask(repo, cfg, &store, stale, &timing, &budget) {
+        Ok(read) => {
+            if let Some(r) = read.refreshed { eprintln!("refresh: {} changed, {} removed", r.changed, r.removed); }
+            let behind = read.behind.map(|(files, line)| { eprintln!("{line}"); refresh::Stale { files, vectors: 0 } });
+            Ok((read.graph, behind))
         }
-        Err(err) => { eprintln!("refresh: skipped ({err:#})"); Ok(store.load()?.0) }
+        Err(err) => { eprintln!("refresh: skipped ({err:#})"); Ok((store.load()?.0, None)) }
+    }
+}
+
+/// A reader's `--json` answer, carrying `stale` when the graph it was read from is behind.
+fn json_out(text: String, stale: &Option<refresh::Stale>) -> String {
+    match stale {
+        Some(s) => refresh::with_stale(text, s),
+        None => text,
     }
 }
 
@@ -814,9 +850,24 @@ fn run() -> anyhow::Result<()> {
     let load_cfg = || config::Config::load(&repo);
     let wipe = matches!(cli.cmd, Cmd::Build);
     match cli.cmd {
-        Cmd::Build | Cmd::Update => {
+        Cmd::Update { detach: true } => {
+            refresh::spawn_update(&repo, cli.no_dense)?;
+            eprintln!("update: started in the background; .repograph/background.log has its output");
+            Ok(())
+        }
+        Cmd::Build | Cmd::Update { detach: false } => {
             let cfg = load_cfg()?;
             cap_pools(index::embed::threads(cfg.resources));
+            // Held to the end of the embed: a reader that finds it held answers from the store as
+            // it stands rather than racing this process to the same rows.
+            let store = store::Store::new(&repo);
+            let _lock = match store.try_lock_writer()? {
+                Some(lock) => lock,
+                None => {
+                    eprintln!("update: waiting for the refresh already running");
+                    store.lock_writer()?
+                }
+            };
             let r = run_update(&repo, &cfg, wipe)?;
             println!("changed {} removed {} nodes {} edges {}", r.changed, r.removed, r.nodes, r.edges);
             if let Some(n) = r.unenriched {
@@ -922,23 +973,23 @@ fn run() -> anyhow::Result<()> {
             run_watch(&repo, &cfg, every, batch, cli.no_dense)
         }
         Cmd::Explain { node, json, stale } => {
-            let graph = graph_for(&repo, &load_cfg()?, stale)?;
+            let (graph, behind) = graph_for(&repo, &load_cfg()?, stale, cli.no_dense)?;
             let rendered = match json {
-                true => query::explain_json(&graph, &node).map(|j| format!("{j}\n")),
+                true => query::explain_json(&graph, &node).map(|j| json_out(format!("{j}\n"), &behind)),
                 false => query::explain(&graph, &node),
             }?;
             print!("{rendered}");
             Ok(())
         }
         Cmd::Impact { symbol, depth, down, json, stale } => {
-            let graph = graph_for(&repo, &load_cfg()?, stale)?;
+            let (graph, behind) = graph_for(&repo, &load_cfg()?, stale, cli.no_dense)?;
             let root = code_node(&graph, &symbol)?;
             let (imp, direction) = if down { (impact::downstream(&graph, &root.id, depth), "downstream") } else { (impact::upstream(&graph, &root.id, depth), "upstream") };
-            print!("{}", if json { impact::render_json(&graph, &imp, direction) } else { impact::render(&graph, &imp, direction) });
+            print!("{}", if json { json_out(impact::render_json(&graph, &imp, direction), &behind) } else { impact::render(&graph, &imp, direction) });
             Ok(())
         }
         Cmd::Trace { from, to, depth, json, stale } => {
-            let graph = graph_for(&repo, &load_cfg()?, stale)?;
+            let (graph, behind) = graph_for(&repo, &load_cfg()?, stale, cli.no_dense)?;
             let a = code_node(&graph, &from)?;
             let b = code_node(&graph, &to)?;
             let found = impact::trace(&graph, &a.id, &b.id, depth);
@@ -947,7 +998,7 @@ fn run() -> anyhow::Result<()> {
             // not have to read an exit code to learn what the object already says, and a `null`
             // path is easier to handle than a non-zero exit with no object.
             if json {
-                println!("{}", impact::trace_json(&graph, &a.id, &b.id, depth, found.as_deref()));
+                println!("{}", json_out(impact::trace_json(&graph, &a.id, &b.id, depth, found.as_deref()), &behind));
                 return Ok(());
             }
             match found {
@@ -962,10 +1013,10 @@ fn run() -> anyhow::Result<()> {
             }
         }
         Cmd::Changes { base, depth, json, stale } => {
-            let graph = graph_for(&repo, &load_cfg()?, stale)?;
+            let (graph, behind) = graph_for(&repo, &load_cfg()?, stale, cli.no_dense)?;
             let hunks = changes::hunks_from_git(&repo, &base)?;
             let r = changes::report(&graph, &hunks, depth);
-            print!("{}", if json { changes::render_json(&graph, &r) } else { changes::render(&graph, &r) });
+            print!("{}", if json { json_out(changes::render_json(&graph, &r), &behind) } else { changes::render(&graph, &r) });
             Ok(())
         }
         Cmd::Verify { json } => {
@@ -1013,6 +1064,10 @@ fn run() -> anyhow::Result<()> {
                              install_agent::codex_hooks_block(&abs.display().to_string()));
                 }
             }
+            // Once whatever the harnesses: git runs these, not the agent.
+            let r = install_agent::install_git_hooks(&repo, &command)?;
+            if r.written > 0 { println!("git: wrote {} hooks\n  {}", r.written, r.paths.join("\n  ")); }
+            for note in &r.notes { println!("git: {note}"); }
             Ok(())
         }
         Cmd::Prime { json } => {
@@ -1118,7 +1173,7 @@ mod tests {
         built(repo, &cfg);
         std::fs::write(repo.join("docs/a.md"), TWO).unwrap();
         let store = store::Store::new(repo);
-        let (graph, refreshed) = ask::graph_for_ask(repo, &cfg, &store, false, &ask::Timing::new()).unwrap();
+        let (graph, refreshed) = ask::graph_for_ask(repo, &cfg, &store, false, &ask::Timing::new(), &refresh::Budget::unlimited()).map(|r| (r.graph, r.refreshed)).unwrap();
         let r = refreshed.expect("the edit is a refresh");
         assert_eq!((r.changed, r.removed), (1, 0));
         let opts = query::Options { seeds: 5, bodies: false, dense: false, json: false, depth: rerank::DEPTH };
@@ -1150,7 +1205,7 @@ mod tests {
         built(repo, &cfg);
         let saved = |name: &str| std::fs::metadata(repo.join(".repograph").join(name)).unwrap().modified().unwrap();
         let (before_graph, before_manifest) = (saved("graph.json"), saved("manifest.json"));
-        let (graph, refreshed) = ask::graph_for_ask(repo, &cfg, &store::Store::new(repo), false, &ask::Timing::new()).unwrap();
+        let (graph, refreshed) = ask::graph_for_ask(repo, &cfg, &store::Store::new(repo), false, &ask::Timing::new(), &refresh::Budget::unlimited()).map(|r| (r.graph, r.refreshed)).unwrap();
         assert!(refreshed.is_none());
         assert!(graph.nodes.contains_key("FR-PAY-22"));
         assert_eq!((saved("graph.json"), saved("manifest.json")), (before_graph, before_manifest));
@@ -1169,7 +1224,7 @@ mod tests {
         // both would be re-read for the other reason.
         store.save_manifest(&walk::Manifest { files, stamps: Default::default(), grammar: walk::GRAMMAR, kinds: Default::default() }).unwrap();
         let graph_before = std::fs::read(repo.join(".repograph/graph.json")).unwrap();
-        assert!(ask::graph_for_ask(repo, &cfg, &store, false, &ask::Timing::new()).unwrap().1.is_none());
+        assert!(ask::graph_for_ask(repo, &cfg, &store, false, &ask::Timing::new(), &refresh::Budget::unlimited()).map(|r| (r.graph, r.refreshed)).unwrap().1.is_none());
         let manifest = store.load().unwrap().1;
         assert_eq!(manifest.stamps.len(), manifest.files.len());
         assert_eq!(std::fs::read(repo.join(".repograph/graph.json")).unwrap(), graph_before);
@@ -1292,7 +1347,7 @@ mod tests {
         built(repo, &cfg);
         let before = std::fs::read(repo.join(".repograph/graph.json")).unwrap();
         std::fs::write(repo.join("docs/a.md"), TWO).unwrap();
-        let (graph, refreshed) = ask::graph_for_ask(repo, &cfg, &store::Store::new(repo), true, &ask::Timing::new()).unwrap();
+        let (graph, refreshed) = ask::graph_for_ask(repo, &cfg, &store::Store::new(repo), true, &ask::Timing::new(), &refresh::Budget::unlimited()).map(|r| (r.graph, r.refreshed)).unwrap();
         assert!(refreshed.is_none());
         assert!(!graph.nodes.contains_key("FR-PAY-23"));
         assert_eq!(std::fs::read(repo.join(".repograph/graph.json")).unwrap(), before);

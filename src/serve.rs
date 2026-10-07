@@ -435,6 +435,7 @@ fn answer(mut stream: sys::Stream, watcher: &mut crate::Watcher, ctx: &mut ask::
     // Anything still waiting predates this request — a poll's refresh, an answer that ended in
     // an error. A client is told what its own answer did and nothing else.
     log(ctx);
+    ctx.begin();
     if hello.req.stale {
         // `--stale` skips the walk, not the store. A one-shot answers from whatever is on disk
         // at this instant, so a resident one reads the store back when another process has
