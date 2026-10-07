@@ -1,6 +1,6 @@
 # fix/impact-via-and-reexport-alias
 
-Stacked on `feat/object-literal-members` (PR #144); merges after it.
+Based on main after #144 (object-literal members) landed.
 
 ## Tickets
 - **#124: impact, changes: via shows an undeclared member instead of its symbol** (bug · open)
@@ -47,7 +47,7 @@ Stacked on `feat/object-literal-members` (PR #144); merges after it.
 - `src/query.rs` — `resolve_code("contrastRatio")` picks `contrast`.
 
 ## Decisions
-- Base: `--base feat/object-literal-members` as instructed; PR stacks on #144.
+- Base: first stacked on #144, rebased onto main once it landed.
 - #124 re-checked against #144: on that branch no `via` can be an undeclared member any more —
   the literal-wide `undeclared` seeding that produced `KEYS.filter` was reverted (55f8883), and
   #144 declares literal methods instead. But the revert left a gap the issue's own premise

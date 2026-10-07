@@ -435,9 +435,12 @@ fn edges_of<'a>(graph: &'a Graph, id: &str) -> Vec<&'a crate::model::Edge> {
     // A file declares every symbol in it, so seeding from a file node would list the callers of
     // the whole file; only a symbol has members of its own.
     if id.starts_with("sym:") {
-        let seeds: BTreeSet<String> = ix.seeds(id).into_iter().collect();
+        let seed_list = ix.seeds(id);
+        // `KEYS.filter` is a call no node declares; `impact` counts it as a call of `KEYS`.
+        let folded = ix.undeclared(&seed_list);
+        let seeds: BTreeSet<String> = seed_list.into_iter().collect();
         edges.extend(graph.edges.iter().filter(|e| crate::impact::walks(e) && e.target != id && !aliases.contains(&e.target)
-            && seeds.contains(&e.target) && !seeds.contains(&e.source)));
+            && (seeds.contains(&e.target) || folded.contains_key(&e.target)) && !seeds.contains(&e.source)));
     }
     edges.sort_by_key(|e| (e.kind == EdgeKind::Legacy, e.kind, e.source.clone(), e.target.clone()));
     edges
@@ -1402,6 +1405,17 @@ mod tests {
         let v: serde_json::Value = serde_json::from_str(&explain_json(&g, "sym:s.ts::f").unwrap()).unwrap();
         assert_eq!(v["edges"][0]["other"], "sym:c.ts::g");
         assert_eq!(v["edges"][0]["dir"], "in");
+    }
+
+    #[test]
+    fn explain_lists_a_caller_of_an_undeclared_member_of_the_symbol() {
+        let mut g = Graph::default();
+        let mut e = Extraction::default();
+        e.node(NodeKind::Symbol, "sym:k.ts::KEYS", "KEYS", "", "k.ts", 1);
+        e.node(NodeKind::Symbol, "sym:k.ts::pick", "pick", "", "k.ts", 2);
+        e.edge("sym:k.ts::pick", "sym:k.ts::KEYS.filter", EdgeKind::Calls, "", "k.ts");
+        g.apply(e);
+        assert!(explain(&g, "sym:k.ts::KEYS").unwrap().contains("  Calls ← sym:k.ts::pick  k.ts:2\n"));
     }
 
     #[test]

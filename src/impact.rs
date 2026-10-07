@@ -236,7 +236,7 @@ impl<'a> Index<'a> {
     /// seed of its own, not one of these. `--down` and `trace` land such a
     /// target on `X` and stop there, so a caller of it is a caller of `X` at the first layer and
     /// at no other; a longer seed (`S.m` over `S`) claims `S.m.bind`.
-    fn undeclared(&self, seeds: &[String]) -> BTreeMap<String, String> {
+    pub(crate) fn undeclared(&self, seeds: &[String]) -> BTreeMap<String, String> {
         let mut out: BTreeMap<String, String> = BTreeMap::new();
         for seed in seeds {
             let prefix = format!("{seed}.");
