@@ -215,6 +215,71 @@ fn extends_of_a_call_or_member_expression_keeps_the_expression_text() {
     assert!(ext.contains(&("sym:a.ts::B", "sym:a.ts::Outer.Inner", "")), "{ext:?}");
 }
 
+// ---- object-literal members ----
+
+#[test]
+fn the_methods_and_function_properties_of_a_top_level_literal_are_its_members() {
+    let src = "export const repo = {\n  find() {\n    return 1;\n  },\n  save: async (x: number) => x,\n  drop: function () {},\n  gen: function* () {},\n  limit: 10,\n  get size() { return 1; },\n  'quoted-name'() {},\n  shorthand,\n  ...rest,\n} as const;\n";
+    let ex = extract("a.ts", src);
+    let got = ids(&ex);
+    for s in ["repo.find", "repo.save", "repo.drop", "repo.gen", "repo.size", "repo.quoted-name"] {
+        assert!(got.contains(&format!("sym:a.ts::{s}").as_str()), "{s} in {got:?}");
+    }
+    for s in ["repo.limit", "repo.shorthand", "repo.rest"] {
+        assert!(!got.contains(&format!("sym:a.ts::{s}").as_str()), "a value that is not a function is no member: {s}");
+    }
+    assert!(edges(&ex, EdgeKind::Declares).contains(&("sym:a.ts::repo", "sym:a.ts::repo.find", "")));
+    assert_eq!(declares(&ex, "repo").as_deref(), Some("export"));
+    let find = node(&ex, "sym:a.ts::repo.find");
+    assert_eq!((find.label.as_str(), find.line, find.end), ("repo.find", 2, 4));
+    assert_eq!(node(&ex, "sym:a.ts::repo.save").line, 5);
+}
+
+#[test]
+fn a_literal_behind_satisfies_or_parentheses_still_names_its_members() {
+    let ex = extract("a.ts", "const routes = ({ home() {} }) satisfies Routes;\n");
+    assert!(ids(&ex).contains(&"sym:a.ts::routes.home"), "{:?}", ids(&ex));
+}
+
+#[test]
+fn a_nested_literal_and_a_literal_inside_a_function_are_not_scanned_for_members() {
+    let ex = extract("a.ts", "export const a = { inner: { deep() {} } };\nfunction f() { const b = { m() {} }; return b; }\n");
+    let got = ids(&ex);
+    assert!(!got.iter().any(|i| i.contains("deep") || i.contains("inner") || i.contains("b.m")), "{got:?}");
+}
+
+#[test]
+fn a_call_and_an_id_inside_a_literal_method_belong_to_that_method() {
+    let repo = Repo::new(&[("lib.ts", "export function lock() {}\n")]);
+    let ex = repo.extract("r.ts", "import { lock } from './lib';\nexport const repo = {\n  guard() { lock(); return 'FR-PAY-01'; },\n  other: () => 'INV-11',\n};\n");
+    assert_eq!(calls(&ex), vec![("sym:r.ts::repo.guard", "sym:lib.ts::lock")]);
+    let refs = edges(&ex, EdgeKind::References);
+    assert!(refs.contains(&("sym:r.ts::repo.guard", "FR-PAY-01", "string")), "{refs:?}");
+    assert!(refs.contains(&("sym:r.ts::repo.other", "INV-11", "string")), "{refs:?}");
+}
+
+#[test]
+fn this_in_a_literal_method_targets_the_sibling_member() {
+    let ex = extract("r.ts", "export const repo = {\n  a() { this.b(); },\n  b() {},\n  c: () => this.b(),\n};\n");
+    assert_eq!(calls(&ex), vec![("sym:r.ts::repo.a", "sym:r.ts::repo.b")], "an arrow's `this` is not the literal");
+}
+
+#[test]
+fn a_call_on_an_imported_literal_lands_on_the_member_its_file_declares() {
+    let literal = "export const repo = { find() {} };\n";
+    let repo = Repo::new(&[("r.ts", literal)]);
+    let ex = repo.extract("a.ts", "import { repo } from './r';\nexport function run() { repo.find(); }\n");
+    assert_eq!(calls(&ex), vec![("sym:a.ts::run", "sym:r.ts::repo.find")]);
+    assert!(ids(&repo.extract("r.ts", literal)).contains(&"sym:r.ts::repo.find"));
+}
+
+#[test]
+fn a_literal_returned_from_a_class_method_does_not_rename_the_method() {
+    let ex = extract("a.ts", "class A {\n  run() { return { foo() { return 'FR-PAY-01'; } }; }\n}\n");
+    let refs = edges(&ex, EdgeKind::References);
+    assert_eq!(refs, vec![("sym:a.ts::A.run", "FR-PAY-01", "string")]);
+}
+
 // ---- decorators ----
 
 #[test]

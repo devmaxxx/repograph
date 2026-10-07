@@ -418,14 +418,23 @@ pub(crate) fn passed_over(name: &str, pick: &crate::model::Node, rest: &[&crate:
     Some(format!("{name}: took {}; also matches {}{more}", pick.id, ids.join(", ")))
 }
 
-/// A node's edges, and the ones that reach it through a barrel: a caller that imported the
-/// symbol from an `index.ts` points at the barrel's `sym:<barrel>::Name`, not at the node, and
-/// `impact` counts it as a caller all the same.
+/// A node's edges, and the ones that reach it through a barrel or a member: a caller that
+/// imported the symbol from an `index.ts` points at the barrel's `sym:<barrel>::Name`, a caller
+/// of a method at `Name.method`, not at the node, and `impact` counts both as callers all the same.
 fn edges_of<'a>(graph: &'a Graph, id: &str) -> Vec<&'a crate::model::Edge> {
     let mut edges = graph.neighbours(id);
     let ix = crate::impact::Index::names(graph);
-    let reach: BTreeSet<String> = ix.aliases(id).into_iter().collect();
-    if !reach.is_empty() { edges.extend(graph.edges.iter().filter(|e| reach.contains(&e.target))); }
+    let aliases: BTreeSet<String> = ix.aliases(id).into_iter().collect();
+    if !aliases.is_empty() { edges.extend(graph.edges.iter().filter(|e| aliases.contains(&e.target))); }
+    // A member's callers are the container's, as `impact` seeds them; one member calling another
+    // is the container reaching itself, and a member's own `Declares` is already listed above it.
+    // A file declares every symbol in it, so seeding from a file node would list the callers of
+    // the whole file; only a symbol has members of its own.
+    if id.starts_with("sym:") {
+        let seeds: BTreeSet<String> = ix.seeds(id).into_iter().collect();
+        edges.extend(graph.edges.iter().filter(|e| crate::impact::walks(e) && e.target != id && !aliases.contains(&e.target)
+            && seeds.contains(&e.target) && !seeds.contains(&e.source)));
+    }
     edges.sort_by_key(|e| (e.kind == EdgeKind::Legacy, e.kind, e.source.clone(), e.target.clone()));
     edges
 }
@@ -1368,6 +1377,20 @@ mod tests {
         let v: serde_json::Value = serde_json::from_str(&explain_json(&g, "sym:s.ts::f").unwrap()).unwrap();
         assert_eq!(v["edges"][0]["other"], "sym:c.ts::g");
         assert_eq!(v["edges"][0]["dir"], "in");
+    }
+
+    #[test]
+    fn explain_of_a_file_does_not_list_the_callers_of_the_symbols_it_declares() {
+        let mut g = Graph::default();
+        let mut e = Extraction::default();
+        e.node(NodeKind::File, "file:s.ts", "s.ts", "", "s.ts", 1);
+        e.node(NodeKind::Symbol, "sym:s.ts::f", "f", "", "s.ts", 2);
+        e.edge("file:s.ts", "sym:s.ts::f", EdgeKind::Declares, "export", "s.ts");
+        e.node(NodeKind::Symbol, "sym:c.ts::g", "g", "", "c.ts", 5);
+        e.edge("sym:c.ts::g", "sym:s.ts::f", EdgeKind::Calls, "", "c.ts");
+        g.apply(e);
+        let out = explain(&g, "file:s.ts").unwrap();
+        assert!(!out.contains("sym:c.ts::g"), "{out}");
     }
 
     #[test]

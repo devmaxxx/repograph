@@ -67,7 +67,7 @@ cited above.
 | `Milestone`     | a `<PREFIX>-M##` requirement, or the whole document of a milestone file       |
 | `Task`          | a `- [ ] **T##** …` checklist line inside a milestone file                    |
 | `File`          | one per indexed file; owns ids that occur outside any block                   |
-| `Symbol`        | a top-level export, class, method, or decorated class member                  |
+| `Symbol`        | a top-level export, class, method, decorated class member, or method of a top-level object literal |
 | `LegacyConcept` | an `import-legacy` node that resolution could not tie to a real node          |
 | `Text`          | a file only `text_globs` claims, read as text: its whole text the body, nothing below it and no edge out |
 
@@ -95,8 +95,9 @@ forms, ids referenced in prose (including ranges like `FR-RPT-42…48` and slash
 `INV-11/12/20`), backticked entity names, markdown links, and `constitution.yaml`-shaped registries.
 
 From TypeScript it takes a `Symbol` per top-level declaration — exported or not, `declare`d,
-destructured, overloaded, a namespace or an enum — and per class member, quoted and computed
-names included; imports resolved through relative paths, `tsconfig` `paths` (with `baseUrl`) and
+destructured, overloaded, a namespace or an enum — per class member, quoted and computed
+names included, and per method or function-valued property of a top-level object literal;
+imports resolved through relative paths, `tsconfig` `paths` (with `baseUrl`) and
 `package.json` `exports` (wildcard subpaths included, `main`/`types` as the fallback), plus
 `import()` and `require()` calls; decorators with their first string argument as context; and
 every id quoted in a comment or string literal, attributed to the top-level function, class
@@ -109,8 +110,10 @@ AST-only indexer misses entirely. Each construct is pinned by one inline case in
 `impact <symbol>` walks `Calls` and `Extends` edges towards the symbol: `d=1` are the direct
 callers ("will break"), `d=2` their callers, and so on to `--depth` (3; 0 is refused as a usage
 error, exit 2, since it walks nothing). A class is walked
-through its members; an object literal is not yet walked through its methods, which no node
-declares (0.6.0, #106). A caller that imported through a barrel is found because the barrel's
+through its members, and so is an object literal: `export const repo = { find() {…} }` declares
+`repo.find`, so a path through one method never reaches the callers of another; `explain` on
+either lists its members' callers beside its own, the ones `impact --depth 1` counts. A caller
+that imported through a barrel is found because the barrel's
 `ReExports` edges are followed back to the declaration. The barrel itself is listed among the
 importers: it names the symbol, and a rename reaches it first. `importers` are the files whose
 `import` names the symbol, whether or not a call site resolved. The risk line is four fixed thresholds
@@ -141,8 +144,8 @@ step `passes`; the `--json` forms of `impact`, `changes` and `trace` say `"passe
 that both passes and calls a target has one edge, the call.
 What the graph cannot prove it does not list: a call through a chained expression, a
 destructured method, a callback parameter or a global has no edge, so confirm a "nothing uses
-this" with `rg -l` before deleting. A member no node declares — `loginSchema.parse`, a method
-of an object literal — is shown as the symbol it belongs to; a target the graph knows only by
+this" with `rg -l` before deleting. A member no node declares — `loginSchema.parse`, a shorthand
+property of an object literal — is shown as the symbol it belongs to; a target the graph knows only by
 name, with no symbol of its own to fall back to, prints `?` in place of its `path:line`.
 
 `changes` maps `git diff -U0` (staged and unstaged, plus untracked files whole) onto symbol

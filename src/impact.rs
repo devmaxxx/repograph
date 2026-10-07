@@ -30,8 +30,8 @@ fn bare(name: &str) -> &str { name.split('.').next().unwrap_or(name) }
 fn exports(e: &Edge, bare: &str) -> bool { e.context == "*" || e.context.split(',').any(|c| c == bare) }
 
 /// The node a possibly-dangling `sym:<barrel>::<Name>` stands for, following re-exports forward.
-/// A member no node declares — a method of an object literal, `parse` on a zod schema — stands
-/// for its container, which has a `path:line` where the member has none.
+/// A member no node declares — `parse` on a zod schema, a literal's shorthand property —
+/// stands for its container, which has a `path:line` where the member has none.
 pub fn canonical(graph: &Graph, id: &str) -> Option<String> {
     exact(graph, id).or_else(|| container(id).and_then(|c| canonical(graph, &c)))
 }
@@ -102,7 +102,7 @@ pub struct Index<'a> {
 impl<'a> Index<'a> {
     pub fn new(graph: &'a Graph, up: bool) -> Index<'a> { Self::build(graph, up, true) }
 
-    /// Only what `aliases` reads, for a caller that looks a name up once and
+    /// Only what `seeds` reads, for a caller that looks a name up once and
     /// never walks: `explain` builds one per call.
     pub(crate) fn names(graph: &'a Graph) -> Index<'a> { Self::build(graph, true, false) }
 
@@ -111,7 +111,7 @@ impl<'a> Index<'a> {
         for e in &graph.edges {
             match e.kind {
                 _ if walks(e) => ix.code.entry(if up { e.target.as_str() } else { e.source.as_str() }).or_default().push(e),
-                EdgeKind::Declares if full && e.target.starts_with("sym:") => ix.members.entry(e.source.as_str()).or_default().push(e.target.as_str()),
+                EdgeKind::Declares if e.target.starts_with("sym:") => ix.members.entry(e.source.as_str()).or_default().push(e.target.as_str()),
                 EdgeKind::ReExports => ix.re_exports.entry(e.target.as_str()).or_default().push(e),
                 EdgeKind::Imports if full => ix.imports.entry(e.target.as_str()).or_default().push(e),
                 _ => {}
@@ -162,7 +162,7 @@ impl<'a> Index<'a> {
     }
 
     /// The root, its members (a class is changed through them) and every alias of each.
-    fn seeds(&self, root: &str) -> Vec<String> {
+    pub(crate) fn seeds(&self, root: &str) -> Vec<String> {
         let mut out = vec![root.to_string()];
         out.extend(self.members(root).iter().map(|m| m.to_string()));
         let aliased: Vec<String> = out.iter().flat_map(|s| self.aliases(s)).collect();
@@ -427,9 +427,10 @@ pub(crate) mod tests {
         assert_eq!(imp.importers, vec!["c.ts", "index.ts", "m.ts", "w.ts"]);
     }
 
-    /// `export const repo = { find() {…}, save() {…} }`: the methods are not symbols, so every
-    /// call targets a `repo.*` id no node declares — directly, or through the barrel.
-    pub(crate) fn object_literal() -> Graph {
+    /// A `repo` whose members no node declares — a schema's `parse`, a literal's shorthand
+    /// property — so every call targets a `repo.*` id that is only a name, directly or through
+    /// the barrel.
+    pub(crate) fn undeclared_members() -> Graph {
         let mut g = Graph::default();
         let mut e = Extraction::default();
         e.node(NodeKind::File, "file:r.ts", "r.ts", "", "r.ts", 1);
@@ -487,7 +488,7 @@ pub(crate) mod tests {
 
     #[test]
     fn an_undeclared_member_target_folds_into_its_container() {
-        let mut g = object_literal();
+        let mut g = undeclared_members();
         let mut e = Extraction::default();
         e.edge("sym:r.ts::repo", "sym:r.ts::repo.find", EdgeKind::Calls, "", "r.ts");
         g.apply(e);
@@ -496,14 +497,14 @@ pub(crate) mod tests {
         let imp = downstream(&g, "sym:b.ts::go", 1);
         let d1: Vec<&str> = imp.layers[0].iter().map(|d| d.id.as_str()).collect();
         assert_eq!(d1, vec!["sym:r.ts::repo"]);
-        // A literal's method calling a sibling is the literal reaching itself: no row at all.
+        // A member calling a sibling is its container reaching itself: no row at all.
         assert!(downstream(&g, "sym:r.ts::repo", 1).layers.is_empty());
     }
 
     #[test]
     fn a_walk_down_stops_at_a_container_it_reached_through_one_undeclared_method() {
-        // `go` calls `repo.save`; the literal as a whole calls `lock`, through some other method.
-        let mut g = object_literal();
+        // `go` calls `repo.save`; the container as a whole calls `lock`, through some other member.
+        let mut g = undeclared_members();
         let mut e = Extraction::default();
         e.node(NodeKind::Symbol, "sym:l.ts::lock", "lock", "", "l.ts", 1);
         e.edge("sym:r.ts::repo", "sym:l.ts::lock", EdgeKind::Calls, "", "r.ts");
@@ -556,7 +557,7 @@ pub(crate) mod tests {
     #[test]
     fn a_call_from_one_owner_beats_a_passed_edge_from_another_at_the_same_depth() {
         // R calls A and Z; A only passes `repo.save`, Z calls `repo.find`, and both fold to `repo`.
-        let mut g = object_literal();
+        let mut g = undeclared_members();
         let mut e = Extraction::default();
         e.node(NodeKind::Symbol, "sym:x.ts::R", "R", "", "x.ts", 1);
         e.node(NodeKind::Symbol, "sym:x.ts::A", "A", "", "x.ts", 2);
@@ -782,5 +783,75 @@ mod walk_cases {
         let up = upstream(&g, "sym:a.cs::Outer", 3);
         let d1: Vec<&str> = up.layers.first().map(|l| l.iter().map(|d| d.id.as_str()).collect()).unwrap_or_default();
         assert_eq!(d1, ["sym:b.cs::Caller.Run"]);
+    }
+
+    /// A repository written as an object literal, extracted from source rather than drawn: one
+    /// method reaches `lockOverlapGroup`, a sibling reaches nothing, a third reaches
+    /// `recomputeOverlapFlags`, and each has its own caller in another file.
+    fn literal_repository() -> Graph {
+        use crate::model::Extractor;
+        let files = [
+            ("l.ts", "export function lockOverlapGroup() {}\nexport function recomputeOverlapFlags() {}\n"),
+            ("r.ts", "import { lockOverlapGroup, recomputeOverlapFlags } from './l';\nexport const repo = {\n  lock() {\n    lockOverlapGroup();\n  },\n  applyEdit() {\n    return 1;\n  },\n  recompute: () => recomputeOverlapFlags(),\n};\n"),
+            ("brief.ts", "import { repo } from './r';\nexport class BriefService {\n  get() { return repo.applyEdit(); }\n}\n"),
+            ("guard.ts", "import { repo } from './r';\nexport function guard() { repo.lock(); }\n"),
+            ("move.ts", "import { repo } from './r';\nexport function applyMove() { repo.recompute(); }\n"),
+        ];
+        let dir = tempfile::tempdir().unwrap();
+        for (p, c) in files { std::fs::write(dir.path().join(p), c).unwrap(); }
+        let resolver = crate::code::imports::Resolver::new(dir.path(), &crate::config::Config::default()).unwrap();
+        let extractor = crate::code::CodeExtractor::new(resolver);
+        let mut g = Graph::default();
+        for (p, c) in files { g.apply(extractor.extract(p, c)); }
+        g
+    }
+
+    fn ids(layers: Vec<Vec<crate::impact::Dependent>>) -> Vec<String> { layers.into_iter().flatten().map(|d| d.id).collect() }
+
+    #[test]
+    fn a_path_through_a_literal_s_other_method_is_walked_by_no_command() {
+        let g = literal_repository();
+        let up = ids(upstream(&g, "sym:l.ts::lockOverlapGroup", 3).layers);
+        assert_eq!(up, ["sym:r.ts::repo.lock", "sym:guard.ts::guard"], "the callers of the sibling methods do not reach it");
+        assert_eq!(ids(downstream(&g, "sym:brief.ts::BriefService.get", 3).layers), ["sym:r.ts::repo.applyEdit"]);
+        assert_eq!(trace(&g, "sym:brief.ts::BriefService.get", "sym:l.ts::lockOverlapGroup", 6), None);
+        assert_eq!(ids(downstream(&g, "sym:move.ts::applyMove", 3).layers), ["sym:r.ts::repo.recompute", "sym:l.ts::recomputeOverlapFlags"]);
+        let changed = crate::changes::report(&g, &[crate::changes::Hunk { file: "r.ts".into(), start: 4, end: 4 }], 3);
+        assert_eq!(changed.touched, ["sym:r.ts::repo.lock"]);
+        assert_eq!(changed.affected.into_iter().map(|d| d.id).collect::<Vec<_>>(), ["sym:guard.ts::guard"]);
+    }
+
+    #[test]
+    fn impact_up_and_down_trace_and_changes_agree_on_every_pair_across_a_literal() {
+        let g = literal_repository();
+        let symbols = [
+            "sym:brief.ts::BriefService.get", "sym:guard.ts::guard", "sym:move.ts::applyMove", "sym:r.ts::repo.lock",
+            "sym:r.ts::repo.applyEdit", "sym:r.ts::repo.recompute", "sym:l.ts::lockOverlapGroup", "sym:l.ts::recomputeOverlapFlags",
+        ];
+        for s in symbols { assert!(g.nodes.contains_key(s), "{s} is a node"); }
+        for from in symbols {
+            let down = ids(downstream(&g, from, 3).layers);
+            for to in symbols.iter().filter(|&&t| t != from) {
+                let up = ids(upstream(&g, to, 3).layers);
+                let line = g.nodes[*to].line;
+                let changed = crate::changes::report(&g, &[crate::changes::Hunk { file: g.nodes[*to].file.clone(), start: line, end: line }], 3);
+                let traced = trace(&g, from, to, 3).is_some();
+                let reached = [down.iter().any(|d| d == to), up.iter().any(|u| u == from), changed.affected.iter().any(|d| d.id == from)];
+                assert_eq!(reached, [traced; 3], "{from} → {to}: down, up, changes against trace");
+            }
+        }
+    }
+
+    #[test]
+    fn a_literal_is_changed_through_its_methods_and_explain_lists_the_callers_impact_does() {
+        let g = literal_repository();
+        let d1 = ids(upstream(&g, "sym:r.ts::repo", 1).layers);
+        assert_eq!(d1, ["sym:brief.ts::BriefService.get", "sym:guard.ts::guard", "sym:move.ts::applyMove"]);
+        let v: serde_json::Value = serde_json::from_str(&crate::query::explain_json(&g, "sym:r.ts::repo").unwrap()).unwrap();
+        let mut callers: Vec<&str> = v["edges"].as_array().unwrap().iter()
+            .filter(|e| e["dir"] == "in" && e["kind"] == "Calls").map(|e| e["other"].as_str().unwrap()).collect();
+        callers.sort();
+        callers.dedup();
+        assert_eq!(callers, d1);
     }
 }

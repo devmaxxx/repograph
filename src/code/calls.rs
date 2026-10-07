@@ -52,6 +52,17 @@ fn class_of(n: Node, src: &[u8]) -> Option<String> {
     None
 }
 
+/// Whether a function that binds its own `this` encloses `n`. An arrow does not: `find: () =>
+/// this.b()` reads the module's `this`, not the literal the arrow is a property of.
+fn binds_this(n: Node) -> bool {
+    let mut cur = n;
+    while let Some(p) = cur.parent() {
+        if matches!(p.kind(), "method_definition" | "function_expression" | "generator_function" | "function_declaration") { return true }
+        cur = p;
+    }
+    false
+}
+
 impl Scope {
     fn collect(root: Node, rel: &str, src: &[u8], resolver: &Resolver, locals: &BTreeSet<String>) -> Scope {
         let mut s = Scope::default();
@@ -224,7 +235,14 @@ pub(crate) fn scan_tree(resolver: &Resolver, rel: &str, root: Node, src: &[u8], 
             _ => None,
         };
         let Some(callee) = callee else { continue };
-        let class = class_of(n, src);
+        let from = owner(n, rel, src);
+        // Outside a class, an owner with a member is a method of a top-level object literal, and
+        // `this` there is the literal: `this.find()` is a call of its sibling `repo.find`.
+        let class = class_of(n, src).or_else(|| {
+            if !binds_this(n) { return None }
+            let name = from.strip_prefix("sym:")?.split_once("::")?.1;
+            name.split_once('.').map(|(literal, _)| literal.to_string())
+        });
         // A function handed to another — `rows.map(feedWire)`, `.filter(isIndexedType)` — is
         // called on the caller's behalf, and a change to it breaks the caller all the same; the
         // edge says `arg`, because a constant or a DI token handed over the same way is not.
@@ -232,7 +250,6 @@ pub(crate) fn scan_tree(resolver: &Resolver, rel: &str, root: Node, src: &[u8], 
         let passed: Vec<Node> = n.child_by_field_name("arguments")
             .map(|a| a.named_children(&mut ac).filter(|x| x.kind() == "identifier").collect())
             .unwrap_or_default();
-        let from = owner(n, rel, src);
         for (i, x) in std::iter::once(callee).chain(passed).enumerate() {
             let Some(target) = scope.target(x, class.as_deref(), rel, src) else { continue };
             if from != target { *found.entry((from.clone(), target)).or_default() |= i == 0; }
