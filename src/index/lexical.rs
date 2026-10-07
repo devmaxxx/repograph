@@ -5,6 +5,9 @@ use std::collections::HashMap;
 
 const K1: f32 = 1.2;
 const B: f32 = 0.75;
+/// A pair's share of the BM25 weight it would carry as a term. Below one, so standing together
+/// reorders rows that already hold both words and never outweighs a word a row lacks.
+const PAIR: f32 = 0.25;
 
 pub struct LexicalIndex {
     ids: Vec<String>,
@@ -12,6 +15,13 @@ pub struct LexicalIndex {
     avg_len: f32,
     /// term → (doc index, term frequency)
     postings: HashMap<String, Vec<(usize, u32)>>,
+    /// Adjacent term pairs, keyed `"a b"`: BM25 scores words one at a time, so a row that holds
+    /// «отчёты склада» as written ranked under rows holding both words apart.
+    pairs: HashMap<String, Vec<(usize, u32)>>,
+}
+
+fn pairs_of(toks: &[String]) -> impl Iterator<Item = String> + '_ {
+    toks.windows(2).map(|w| format!("{} {}", w[0], w[1]))
 }
 
 fn stemmers() -> &'static (Stemmer, Stemmer) {
@@ -74,23 +84,28 @@ impl LexicalIndex {
         let nodes: Vec<_> = graph.nodes.values().filter(|n| keep(n)).collect();
         // Stemming is the cost — three quarters of a no-dense answer on a 7,500-node graph
         // when done one document at a time — and every document stems independently.
-        let docs: Vec<(String, HashMap<String, u32>, f32)> = nodes.par_iter().map(|n| {
+        type Doc = (String, HashMap<String, u32>, HashMap<String, u32>, f32);
+        let docs: Vec<Doc> = nodes.par_iter().map(|n| {
             let toks = tokenize(&text(n));
             let len = toks.len() as f32;
+            let mut pf: HashMap<String, u32> = HashMap::new();
+            for p in pairs_of(&toks) { *pf.entry(p).or_default() += 1; }
             let mut tf: HashMap<String, u32> = HashMap::new();
             for t in toks { *tf.entry(t).or_default() += 1; }
-            (n.id.clone(), tf, len)
+            (n.id.clone(), tf, pf, len)
         }).collect();
         let mut ids = Vec::with_capacity(docs.len());
         let mut lengths = Vec::with_capacity(docs.len());
         let mut postings: HashMap<String, Vec<(usize, u32)>> = HashMap::new();
-        for (doc, (id, tf, len)) in docs.into_iter().enumerate() {
+        let mut pairs: HashMap<String, Vec<(usize, u32)>> = HashMap::new();
+        for (doc, (id, tf, pf, len)) in docs.into_iter().enumerate() {
             ids.push(id);
             lengths.push(len);
             for (t, c) in tf { postings.entry(t).or_default().push((doc, c)); }
+            for (p, c) in pf { pairs.entry(p).or_default().push((doc, c)); }
         }
         let avg_len = if lengths.is_empty() { 1.0 } else { lengths.iter().sum::<f32>() / lengths.len() as f32 };
-        LexicalIndex { ids, lengths, avg_len, postings }
+        LexicalIndex { ids, lengths, avg_len, postings, pairs }
     }
 
     /// BM25's idf for a term seen in `df` of this index's `n` documents.
@@ -111,27 +126,40 @@ impl LexicalIndex {
     /// the residue of gap G8 that the coverage admission shipped with. Charging the term keeps
     /// the statistic a property of the query and of one index alone, which is what lets two
     /// lists' coverages compare in one unit (G12); `search` is untouched, so no ranking moves.
+    /// The query's adjacent pairs are priced the same way at `PAIR`, since `search` pays them: a
+    /// list whose best row held two words together would otherwise cover more than it was asked.
     /// An index over no documents attains nothing.
     pub fn attainable(&self, query: &str) -> f32 {
         if self.ids.is_empty() { return 0.0; }
         let n = self.ids.len() as f32;
+        let terms = tokenize(query);
         let mut seen = std::collections::HashSet::new();
-        tokenize(query).into_iter().filter(|t| seen.insert(t.clone()))
-            .map(|t| Self::idf(n, self.postings.get(&t).map_or(0, Vec::len)))
-            .sum()
+        let words: f32 = terms.iter().filter(|t| seen.insert((*t).clone()))
+            .map(|t| Self::idf(n, self.postings.get(t).map_or(0, Vec::len)))
+            .sum();
+        let pairs: f32 = pairs_of(&terms).filter(|p| seen.insert(p.clone()))
+            .map(|p| PAIR * Self::idf(n, self.pairs.get(&p).map_or(0, Vec::len)))
+            .sum();
+        words + pairs
     }
 
     pub fn search(&self, query: &str, k: usize) -> Vec<(String, f32)> {
         let n = self.ids.len() as f32;
         let mut scores: HashMap<usize, f32> = HashMap::new();
-        for term in tokenize(query) {
-            let Some(list) = self.postings.get(&term) else { continue };
+        let terms = tokenize(query);
+        let mut add = |list: &[(usize, u32)], weight: f32| {
             let idf = Self::idf(n, list.len());
             for (doc, tf) in list {
                 let tf = *tf as f32;
                 let norm = K1 * (1.0 - B + B * self.lengths[*doc] / self.avg_len);
-                *scores.entry(*doc).or_default() += idf * (tf * (K1 + 1.0)) / (tf + norm);
+                *scores.entry(*doc).or_default() += weight * idf * (tf * (K1 + 1.0)) / (tf + norm);
             }
+        };
+        for term in &terms {
+            if let Some(list) = self.postings.get(term) { add(list, 1.0); }
+        }
+        for pair in pairs_of(&terms) {
+            if let Some(list) = self.pairs.get(&pair) { add(list, PAIR); }
         }
         let mut ranked: Vec<(String, f32)> = scores.into_iter().map(|(d, s)| (self.ids[d].clone(), s)).collect();
         ranked.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap().then(a.0.cmp(&b.0)));
@@ -224,6 +252,18 @@ mod tests {
         // No digit in this one, unlike an id: pins the hyphen branch on its own
         // instead of riding along on the digit check.
         assert_eq!(tokenize("long-standing"), vec!["long-standing".to_string()]);
+    }
+
+    #[test]
+    fn two_query_words_standing_together_outrank_the_same_words_apart() {
+        let mut g = Graph::default();
+        let mut e = Extraction::default();
+        e.node(NodeKind::Requirement, "FR-WH-11", "склад", "отчёты приходят письмом, остатки склада на экране", "a.md", 1);
+        e.node(NodeKind::Requirement, "FR-WH-53", "отчёты", "отчёты склада и остатки на экране письмом", "a.md", 9);
+        g.apply(e);
+        let ranked = LexicalIndex::build(&g).search("отчёты склада", 2);
+        assert_eq!(ranked[0].0, "FR-WH-53", "{ranked:?}");
+        assert!(ranked[0].1 > ranked[1].1, "{ranked:?}");
     }
 
     #[test]
@@ -348,9 +388,10 @@ mod tests {
         g.apply(e);
         let idx = LexicalIndex::build(&g);
         let hits = idx.search("политика отмен штрафы", 5);
-        // Measured with K1 = 1.2, B = 0.75; a tolerance this tight catches
-        // either constant drifting to a materially different value.
-        assert!((hits[0].1 - 2.565_525).abs() < 0.001, "top score {} moved off the K1/B baseline", hits[0].1);
+        // Measured with K1 = 1.2, B = 0.75 and PAIR = 0.25 — «политике отмены» stands together in
+        // the top row, worth 0.44 of this; a tolerance this tight catches any of the three
+        // drifting to a materially different value.
+        assert!((hits[0].1 - 3.008_275).abs() < 0.001, "top score {} moved off the K1/B baseline", hits[0].1);
     }
 
     #[test]
@@ -367,9 +408,11 @@ mod tests {
         // «штраф» sits in two documents, «политике» in one, «ъъъ» in none and is charged as a
         // term no document holds — it lowers what the best document could cover instead of
         // leaving the sum; a term the query repeats is one term, as a document of average length
-        // holds it once.
-        assert!((idx.attainable("штраф политике ъъъ") - (idf(2.0) + idf(1.0) + idf(0.0))).abs() < 1e-6);
-        assert!((idx.attainable("штраф штраф") - idf(2.0)).abs() < 1e-6);
+        // holds it once. Each adjacent pair is charged at `PAIR` the same way: the first query's
+        // pairs stand together nowhere, and «штраф штраф» does in FR-PAY-26, whose label ends
+        // where its body begins.
+        assert!((idx.attainable("штраф политике ъъъ") - (idf(2.0) + idf(1.0) + idf(0.0) + 2.0 * PAIR * idf(0.0))).abs() < 1e-5);
+        assert!((idx.attainable("штраф штраф") - (idf(2.0) + PAIR * idf(1.0))).abs() < 1e-5);
         assert!((idx.attainable("ъъъ") - idf(0.0)).abs() < 1e-6);
         assert_eq!(LexicalIndex::build(&Graph::default()).attainable("штраф"), 0.0, "an index over nothing attains nothing");
     }

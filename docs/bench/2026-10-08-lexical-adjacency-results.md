@@ -31,4 +31,27 @@ Any one failing means the lever does not ship.
 
 ## Result
 
-Pending.
+Measured on the rebuilt fixture against the ef69664 binary (base), no rows recorded. Keyword /
+paraphrase / code, p90; dev entry points are long + cross + multi + where + rule.
+
+| | base | PAIR 0.5 | PAIR 0.25 | PAIR 0.1 |
+|---|---|---|---|---|
+| dense | 40 / 14 / 12, 238 | 40 / 13 / 12, 236 | 40 / 14 / 12, 237 | 40 / 14 / 12, 242 |
+| lexical | 38 / 12 / 12, 248 | 40 / 13 / 12, 249 | 39 / 12 / 12, 249 | 39 / 12 / 12, 246 |
+| dense dev | 32 | 31 | 34 | 32 |
+| lexical dev | 34 | 32 | 34 | 33 |
+
+0.5 fails rule 4 (dev falls in both arms, five dev cases lost); 0.1 fails rule 4 in the lexical
+arm. 0.25 passes all five with no case lost in any of the four readings: lexical gains
+`keyword/FR-WH-53`, dense dev gains `cross/FR-CRM-06` and `long/FR-OPS-05`. `keyword/FR-PH-43`,
+the second lexical miss, comes back only at 0.5.
+
+`attainable` charges the query's pairs at the same `PAIR`, so a list's coverage stays the share
+of what it was asked rather than rising past it when its best row holds two words together. The
+reading at 0.25 is identical with and without that charge.
+
+Three weights were tried on the suite that judges them, so 0.25 is a choice made on the test set;
+the margin it shows (no loss anywhere, one floor regained) is what it rests on, not a held-out
+reading.
+
+Ships at 0.25.

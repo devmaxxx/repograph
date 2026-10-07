@@ -1040,13 +1040,14 @@ mod tests {
         // was. Charged, the two queries separate, and in opposite directions.
         //
         // «штраф считается»: «считается» is in FR-PAY-22's body and in no stored question, so it
-        // is the questions index that pays. Its coverage falls to 0.256 against the passages'
-        // 0.858 and the admission to 0.299 — under the constant, refused, and the plain answer is
+        // is the questions index that pays. Its coverage falls to 0.221 against the passages'
+        // 0.858 and the admission with it — under the constant, refused, and the plain answer is
         // the passage the query actually names.
         //
         // «штраф отмену»: the missing term is the passage index's, so the arithmetic runs the
-        // other way — the questions list keeps 0.696 while the passages fall to 0.316 and the
-        // admission rises to 2.200. Charging the term does not favour one list; it charges
+        // other way — the questions list keeps 0.573 while the passages fall to 0.273 and the
+        // admission rises. Both figures include the pair the two words make, which stands
+        // together in neither index. Charging the term does not favour one list; it charges
         // whichever index was being flattered.
         let g = graph();
         let mut qs = questions();
@@ -1060,10 +1061,10 @@ mod tests {
             (coverage(bq, aq), coverage(bp, ap), admits(bq, aq, bp, ap, QUESTIONS_GATE))
         };
         let (cq, cp, seated) = read("штраф считается");
-        assert!((cq - 0.256).abs() < 5e-4 && (cp - 0.858).abs() < 5e-4, "questions {cq}, passages {cp}");
+        assert!((cq - 0.221).abs() < 5e-4 && (cp - 0.858).abs() < 5e-4, "questions {cq}, passages {cp}");
         assert!(!seated, "the questions list covered {cq} of what it was asked against the passages' {cp}");
         let (cq, cp, seated) = read("штраф отмену");
-        assert!((cq - 0.696).abs() < 5e-4 && (cp - 0.316).abs() < 5e-4, "questions {cq}, passages {cp}");
+        assert!((cq - 0.573).abs() < 5e-4 && (cp - 0.273).abs() < 5e-4, "questions {cq}, passages {cp}");
         assert!(seated, "the questions list covered {cq} against the passages' {cp}");
 
         let a = ask(&g, &lex(&g, &qs), None, None, &["штраф".into(), "считается".into()], &opts());
