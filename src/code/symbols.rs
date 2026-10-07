@@ -24,6 +24,15 @@ fn name_of(n: Node, src: &[u8]) -> Option<String> {
     n.child_by_field_name("name").map(|c| text(c, src).to_string())
 }
 
+/// An `export_specifier` as a re-export's context entry: `a`, or `a as b` when it renames.
+fn specifier(n: Node, src: &[u8]) -> Option<String> {
+    let name = name_of(n, src)?;
+    Some(match n.child_by_field_name("alias").map(|a| text(a, src)) {
+        Some(alias) if alias != name => format!("{name} as {alias}"),
+        _ => name,
+    })
+}
+
 /// A one-line preview of a declaration: every physical line trimmed and rejoined with a
 /// single space, so a multi-line function body still reads as one signature string.
 fn flatten(s: &str) -> String {
@@ -256,9 +265,7 @@ impl Walk<'_> {
                         let mut cc = c.walk();
                         for s in c.named_children(&mut cc) {
                             if s.kind() == "export_specifier" {
-                                if let Some(n) = name_of(s, src) {
-                                    names.push(n);
-                                }
+                                names.extend(specifier(s, src));
                             }
                         }
                     }
@@ -488,6 +495,7 @@ impl Walk<'_> {
     /// elsewhere in the file: their `declares` edges are upgraded rather than re-created.
     fn export_clauses(&self, root: Node, file_id: &str, src: &[u8], ex: &mut Extraction) {
         let mut names: Vec<String> = Vec::new();
+        let mut renames: Vec<String> = Vec::new();
         let mut cur = root.walk();
         for stmt in root.named_children(&mut cur) {
             if stmt.kind() != "export_statement" || stmt.child_by_field_name("source").is_some() || stmt.child_by_field_name("declaration").is_some() {
@@ -499,11 +507,19 @@ impl Walk<'_> {
                     "identifier" => names.push(text(c, src).to_string()),
                     "export_clause" => {
                         let mut cc = c.walk();
-                        names.extend(c.named_children(&mut cc).filter(|s| s.kind() == "export_specifier").filter_map(|s| name_of(s, src)));
+                        for s in c.named_children(&mut cc).filter(|s| s.kind() == "export_specifier") {
+                            names.extend(name_of(s, src));
+                            renames.extend(specifier(s, src).filter(|entry| entry.contains(" as ")));
+                        }
                     }
                     _ => {}
                 }
             }
+        }
+        // The file re-exports itself under the new name, so a caller importing the alias is
+        // walked back to the declaration the way a barrel's is.
+        if !renames.is_empty() {
+            ex.edge(file_id, file_id, EdgeKind::ReExports, &renames.join(","), file_id.trim_start_matches("file:"));
         }
         for e in &mut ex.edges {
             if e.kind == EdgeKind::Declares && e.source == file_id {

@@ -27,7 +27,44 @@ fn name_of(id: &str) -> &str { id.split_once("::").map_or(id, |(_, name)| name) 
 /// `S.create` is exported as `S`; a barrel names the class, not the member.
 fn bare(name: &str) -> &str { name.split('.').next().unwrap_or(name) }
 
-fn exports(e: &Edge, bare: &str) -> bool { e.context == "*" || e.context.split(',').any(|c| c == bare) }
+/// The `(original, exported)` pairs an import or re-export names: `export { a as b }` is written
+/// `a as b`, every other entry names one thing under its own name.
+fn entries(e: &Edge) -> impl Iterator<Item = (&str, &str)> {
+    e.context.split(',').map(|c| c.split_once(" as ").unwrap_or((c, c)))
+}
+
+fn exports(e: &Edge, bare: &str) -> bool { e.context == "*" || entries(e).any(|(_, exported)| exported == bare) }
+
+/// The names a re-export gives `bare` in the file that re-exports it: itself through `*`, its
+/// alias through a rename, none when the edge does not carry it.
+fn renamed_to(e: &Edge, bare: &str) -> Vec<String> {
+    if e.context == "*" { return vec![bare.to_string()] }
+    entries(e).filter(|(orig, _)| *orig == bare).map(|(_, exported)| exported.to_string()).collect()
+}
+
+/// `renamed_to` read backwards: the names in the re-exported file that a barrel's `bare` stands for.
+fn renamed_from(e: &Edge, bare: &str) -> Vec<String> {
+    if e.context == "*" { return vec![bare.to_string()] }
+    entries(e).filter(|(_, exported)| *exported == bare).map(|(orig, _)| orig.to_string()).collect()
+}
+
+/// `name` with its first segment replaced: `S.create` under `T` is `T.create`.
+fn rebase(name: &str, head: &str) -> String { format!("{head}{}", &name[bare(name).len()..]) }
+
+/// The declarations a renamed re-export stands for, for a name no node carries:
+/// `export { contrast as contrastRatio }` makes `contrastRatio` name `contrast`. An alias typed
+/// as its id, `sym:<barrel>::contrastRatio`, is followed from that barrel alone.
+pub(crate) fn renamed(graph: &Graph, name: &str) -> Vec<String> {
+    if name.starts_with("sym:") { return exact(graph, name).into_iter().collect() }
+    let mut out: BTreeSet<String> = BTreeSet::new();
+    for e in graph.edges.iter().filter(|e| e.kind == EdgeKind::ReExports) {
+        if entries(e).any(|(orig, exported)| orig != exported && exported == bare(name)) {
+            let file = e.source.trim_start_matches("file:");
+            out.extend(exact(graph, &format!("sym:{file}::{name}")));
+        }
+    }
+    out.into_iter().collect()
+}
 
 /// The node a possibly-dangling `sym:<barrel>::<Name>` stands for, following re-exports forward.
 /// A member no node declares — `parse` on a zod schema, a literal's shorthand property —
@@ -40,16 +77,20 @@ pub fn canonical(graph: &Graph, id: &str) -> Option<String> {
 fn exact(graph: &Graph, id: &str) -> Option<String> {
     if graph.nodes.contains_key(id) { return Some(id.to_string()) }
     let (file, name) = id.strip_prefix("sym:")?.split_once("::")?;
-    let mut files = vec![file.to_string()];
-    let mut seen: BTreeSet<String> = BTreeSet::new();
+    // A barrel that renames hands the walk on under the original name, so a step is a file and
+    // the name the symbol has there.
+    let mut at = vec![(file.to_string(), name.to_string())];
+    let mut seen: BTreeSet<(String, String)> = at.iter().cloned().collect();
     let mut i = 0;
-    while i < files.len() {
-        let source = format!("file:{}", files[i]);
-        for e in graph.edges.iter().filter(|e| e.kind == EdgeKind::ReExports && e.source == source && exports(e, bare(name))) {
-            let next = e.target.trim_start_matches("file:").to_string();
-            let candidate = format!("sym:{next}::{name}");
-            if graph.nodes.contains_key(&candidate) { return Some(candidate) }
-            if seen.insert(next.clone()) { files.push(next) }
+    while i < at.len() {
+        let (source, name) = (format!("file:{}", at[i].0), at[i].1.clone());
+        for e in graph.edges.iter().filter(|e| e.kind == EdgeKind::ReExports && e.source == source) {
+            for orig in renamed_from(e, bare(&name)) {
+                let next = (e.target.trim_start_matches("file:").to_string(), rebase(&name, &orig));
+                let candidate = format!("sym:{}::{}", next.0, next.1);
+                if graph.nodes.contains_key(&candidate) { return Some(candidate) }
+                if seen.insert(next.clone()) { at.push(next) }
+            }
         }
         i += 1;
     }
@@ -123,18 +164,21 @@ impl<'a> Index<'a> {
     /// Every `sym:<barrel>::<Name>` a caller could have reached this symbol by.
     pub(crate) fn aliases(&self, id: &str) -> Vec<String> {
         let Some(n) = self.graph.nodes.get(id) else { return Vec::new() };
-        let name = name_of(id);
-        let mut files = vec![n.file.clone()];
-        let mut seen: BTreeSet<String> = BTreeSet::new();
+        // `exact` in reverse. A local `export { a as b }` is the file re-exporting itself, so
+        // that alias comes out in the declaring file.
+        let mut at = vec![(n.file.clone(), name_of(id).to_string())];
+        let mut seen: BTreeSet<(String, String)> = at.iter().cloned().collect();
         let mut out = Vec::new();
         let mut i = 0;
-        while i < files.len() {
-            let target = format!("file:{}", files[i]);
-            for e in self.re_exports.get(target.as_str()).into_iter().flatten().filter(|e| exports(e, bare(name))) {
-                let barrel = e.source.trim_start_matches("file:").to_string();
-                if seen.insert(barrel.clone()) {
-                    out.push(format!("sym:{barrel}::{name}"));
-                    files.push(barrel);
+        while i < at.len() {
+            let (target, name) = (format!("file:{}", at[i].0), at[i].1.clone());
+            for e in self.re_exports.get(target.as_str()).into_iter().flatten() {
+                for exported in renamed_to(e, bare(&name)) {
+                    let next = (e.source.trim_start_matches("file:").to_string(), rebase(&name, &exported));
+                    if seen.insert(next.clone()) {
+                        out.push(format!("sym:{}::{}", next.0, next.1));
+                        at.push(next);
+                    }
                 }
             }
             i += 1;
@@ -187,9 +231,31 @@ impl<'a> Index<'a> {
         out
     }
 
+    /// Upstream only: each target `X.m` that no node declares, for a seed `X` — `KEYS.filter`,
+    /// `loginSchema.parse` — mapped to the seed it belongs to; a barrel's alias of a member is a
+    /// seed of its own, not one of these. `--down` and `trace` land such a
+    /// target on `X` and stop there, so a caller of it is a caller of `X` at the first layer and
+    /// at no other; a longer seed (`S.m` over `S`) claims `S.m.bind`.
+    pub(crate) fn undeclared(&self, seeds: &[String]) -> BTreeMap<String, String> {
+        let mut out: BTreeMap<String, String> = BTreeMap::new();
+        for seed in seeds {
+            let prefix = format!("{seed}.");
+            let range = self.code.range::<str, _>((std::ops::Bound::Included(prefix.as_str()), std::ops::Bound::Unbounded));
+            for (target, _) in range.take_while(|(t, _)| t.starts_with(&prefix)).filter(|(t, _)| !self.graph.nodes.contains_key(**t) && !seeds.iter().any(|s| s == *t)) {
+                let owner = out.entry(target.to_string()).or_insert_with(|| seed.clone());
+                if seed.len() > owner.len() { *owner = seed.clone(); }
+            }
+        }
+        out
+    }
+
     fn walk(&self, root: &str, depth: usize) -> Vec<Vec<Dependent>> {
         let (graph, up) = (self.graph, self.up);
-        let start = self.seeds(root);
+        let mut start = self.seeds(root);
+        // A row reached through an undeclared member names the symbol it belongs to as `via`, as
+        // `canonical` names it in a row.
+        let undeclared = if up { self.undeclared(&start) } else { BTreeMap::new() };
+        start.extend(undeclared.keys().cloned());
         let mut seen: BTreeSet<String> = start.iter().cloned().collect();
         let mut frontier = start;
         let mut layers = Vec::new();
@@ -197,11 +263,12 @@ impl<'a> Index<'a> {
             let mut next: BTreeMap<String, Dependent> = BTreeMap::new();
             let mut open: BTreeSet<String> = BTreeSet::new();
             for at in &frontier {
+                let via = undeclared.get(at).unwrap_or(at);
                 for e in self.step(at) {
                     let (other, goes_on) = if up { (e.source.clone(), true) } else { landing(graph, &e.target) };
                     if seen.contains(&other) { continue }
                     if goes_on { open.insert(other.clone()); }
-                    let candidate = Dependent { id: other.clone(), depth: d, kind: e.kind, via: at.clone(), passed: e.passes() };
+                    let candidate = Dependent { id: other.clone(), depth: d, kind: e.kind, via: via.clone(), passed: e.passes() };
                     // A call beats an argument edge whichever owner in the layer came first.
                     if next.get(&other).is_some_and(|x| !beats(&candidate, x)) { continue }
                     next.insert(other, candidate);
@@ -223,18 +290,19 @@ impl<'a> Index<'a> {
     /// left out on the bench corpus (9 of 10, 2026-09-03).
     fn importers(&self, root: &str) -> Vec<String> {
         let Some(n) = self.graph.nodes.get(root) else { return Vec::new() };
-        let name = bare(name_of(root));
-        let mut files: BTreeSet<String> = BTreeSet::from([format!("file:{}", n.file)]);
+        // Each file with the name the symbol is imported by from it: a rename exports it under
+        // another.
+        let mut names: BTreeSet<(String, String)> = BTreeSet::from([(format!("file:{}", n.file), bare(name_of(root)).to_string())]);
         let mut out: BTreeSet<String> = BTreeSet::new();
         for a in self.aliases(root) {
-            if let Some((f, _)) = a.trim_start_matches("sym:").split_once("::") {
-                files.insert(format!("file:{f}"));
-                // A re-export cycle can walk back to the declaring file itself; it names the
-                // symbol by declaring it, not by importing it.
+            if let Some((f, name)) = a.trim_start_matches("sym:").split_once("::") {
+                names.insert((format!("file:{f}"), bare(name).to_string()));
+                // A re-export cycle, or a local rename, leads back to the declaring file itself;
+                // it names the symbol by declaring it, not by importing it.
                 if f != n.file { out.insert(f.to_string()); }
             }
         }
-        for f in &files {
+        for (f, name) in &names {
             for e in self.imports.get(f.as_str()).into_iter().flatten().filter(|e| exports(e, name)) {
                 out.insert(e.source.trim_start_matches("file:").to_string());
             }
@@ -853,5 +921,96 @@ mod walk_cases {
         callers.sort();
         callers.dedup();
         assert_eq!(callers, d1);
+    }
+
+    /// Every file extracted from source, imports resolved against the others.
+    fn extracted(files: &[(&str, &str)]) -> Graph {
+        use crate::model::Extractor;
+        let dir = tempfile::tempdir().unwrap();
+        for (p, c) in files {
+            let path = dir.path().join(p);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, c).unwrap();
+        }
+        let resolver = crate::code::imports::Resolver::new(dir.path(), &crate::config::Config::default()).unwrap();
+        let extractor = crate::code::CodeExtractor::new(resolver);
+        let mut g = Graph::default();
+        for (p, c) in files { g.apply(extractor.extract(p, c)); }
+        g
+    }
+
+    /// `contrast` renamed twice: in its own file (`export { contrast as contrastRatio }`) and by a
+    /// barrel (`export { contrast as ratio } from`), with a caller importing each of the three names.
+    fn renamed_contrast() -> Graph {
+        extracted(&[
+            ("theme/contrast.ts", "export function contrast(a: number, b: number) { return a / b; }\nexport { contrast as contrastRatio };\n"),
+            ("theme/index.ts", "export { contrast as ratio } from './contrast';\n"),
+            ("one.ts", "import { contrastRatio } from './theme/contrast';\nexport function one() { return contrastRatio(1, 2); }\n"),
+            ("two.ts", "import { contrast } from './theme/contrast';\nexport function two() { return contrast(1, 2); }\n"),
+            ("three.ts", "import { ratio } from './theme';\nexport function three() { return ratio(1, 2); }\n"),
+        ])
+    }
+
+    #[test]
+    fn a_renamed_re_export_counts_the_callers_of_every_name_it_goes_by() {
+        let g = renamed_contrast();
+        let root = "sym:theme/contrast.ts::contrast";
+        let imp = upstream(&g, root, 3);
+        assert_eq!(ids(imp.layers), ["sym:one.ts::one", "sym:three.ts::three", "sym:two.ts::two"]);
+        assert_eq!(imp.importers, ["one.ts", "theme/index.ts", "three.ts", "two.ts"]);
+        for from in ["sym:one.ts::one", "sym:three.ts::three"] {
+            assert_eq!(ids(downstream(&g, from, 1).layers), [root], "{from} reaches the original");
+            assert!(trace(&g, from, root, 3).is_some(), "{from} traces to the original");
+        }
+    }
+
+    #[test]
+    fn an_alias_typed_by_name_or_id_resolves_to_the_original() {
+        let g = renamed_contrast();
+        let root = "sym:theme/contrast.ts::contrast";
+        for alias in ["contrastRatio", "ratio", "sym:theme/contrast.ts::contrastRatio", "sym:theme/index.ts::ratio"] {
+            assert_eq!(crate::query::resolve_code(&g, alias).unwrap().0.id, root, "{alias}");
+        }
+        assert!(crate::query::resolve_code(&g, "nothing").is_err());
+    }
+
+    /// `KEYS.filter` is an array method no node declares; the call depends on `KEYS` all the same.
+    /// `far` reaches it through a barrel.
+    fn keys() -> Graph {
+        extracted(&[
+            ("keys.ts", "export const KEYS = ['a', 'b'];\nexport function pick() {\n  return KEYS.filter((k) => k === 'a');\n}\n"),
+            ("index.ts", "export * from './keys';\n"),
+            ("far.ts", "import { KEYS } from './index';\nexport function far() { return KEYS.map((k) => k); }\n"),
+        ])
+    }
+
+    #[test]
+    fn a_caller_of_an_undeclared_member_is_a_caller_of_its_symbol_and_names_it_as_via() {
+        let g = keys();
+        let root = "sym:keys.ts::KEYS";
+        let imp = upstream(&g, root, 3);
+        let rows: Vec<(&str, &str)> = imp.layers.iter().flatten().map(|d| (d.id.as_str(), d.via.as_str())).collect();
+        assert_eq!(rows, [("sym:far.ts::far", "sym:index.ts::KEYS"), ("sym:keys.ts::pick", root)]);
+        let text = super::render(&g, &imp, "upstream");
+        assert!(text.contains("  sym:keys.ts::pick  keys.ts:2  Calls → sym:keys.ts::KEYS\n"), "{text}");
+        let v: serde_json::Value = serde_json::from_str(&super::render_json(&g, &imp, "upstream")).unwrap();
+        assert_eq!(v["layers"][0][1]["via"], root);
+        // The commands agree: `--down` and `trace` land `KEYS.filter` on `KEYS` too.
+        for from in ["sym:keys.ts::pick", "sym:far.ts::far"] {
+            assert_eq!(ids(downstream(&g, from, 3).layers), [root], "{from}");
+            assert!(trace(&g, from, root, 3).is_some(), "{from}");
+        }
+    }
+
+    #[test]
+    fn changes_to_a_symbol_name_it_as_the_via_of_a_caller_of_its_undeclared_member() {
+        let g = keys();
+        let r = crate::changes::report(&g, &[crate::changes::Hunk { file: "keys.ts".into(), start: 1, end: 1 }], 3);
+        assert_eq!(r.touched, ["sym:keys.ts::KEYS"]);
+        let text = crate::changes::render(&g, &r);
+        assert!(text.contains("  d=1  sym:keys.ts::pick  keys.ts:2  ← sym:keys.ts::KEYS\n"), "{text}");
+        let v: serde_json::Value = serde_json::from_str(&crate::changes::render_json(&g, &r)).unwrap();
+        let vias: Vec<(&str, &str)> = v["affected"].as_array().unwrap().iter().map(|d| (d["id"].as_str().unwrap(), d["via"].as_str().unwrap())).collect();
+        assert_eq!(vias, [("sym:far.ts::far", "sym:index.ts::KEYS"), ("sym:keys.ts::pick", "sym:keys.ts::KEYS")]);
     }
 }

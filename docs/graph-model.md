@@ -80,7 +80,7 @@ cited above.
 | `Links`       | a markdown link between two files                                                                                           |
 | `Implements`  | a task or registry row and the requirement or gate its text names                                                           |
 | `Imports`     | a resolved TypeScript import                                                                                                |
-| `ReExports`   | a barrel `export * from`                                                                                                    |
+| `ReExports`   | a barrel `export * from`; a rename is `a as b`, and a local `export { a as b }` re-exports the file to itself               |
 | `Extends`     | a class's `extends` clause                                                                                                  |
 | `DecoratedBy` | a decorator application, its first string argument as context                                                               |
 | `Legacy`      | an edge carried over by `import-legacy`                                                                                     |
@@ -114,7 +114,9 @@ through its members, and so is an object literal: `export const repo = { find() 
 `repo.find`, so a path through one method never reaches the callers of another; `explain` on
 either lists its members' callers beside its own, the ones `impact --depth 1` counts. A caller
 that imported through a barrel is found because the barrel's
-`ReExports` edges are followed back to the declaration. The barrel itself is listed among the
+`ReExports` edges are followed back to the declaration, under the new name where one renames:
+`export { contrast as contrastRatio }` counts the callers of `contrastRatio` as callers of
+`contrast`, and `impact contrastRatio` answers for `contrast`. The barrel itself is listed among the
 importers: it names the symbol, and a rename reaches it first. `importers` are the files whose
 `import` names the symbol, whether or not a call site resolved. The risk line is four fixed thresholds
 on the direct count and the file count — `MEDIUM` from 5 direct or 3 files, `HIGH` from 15 or
@@ -145,7 +147,8 @@ that both passes and calls a target has one edge, the call.
 What the graph cannot prove it does not list: a call through a chained expression, a
 destructured method, a callback parameter or a global has no edge, so confirm a "nothing uses
 this" with `rg -l` before deleting. A member no node declares — `loginSchema.parse`, a shorthand
-property of an object literal — is shown as the symbol it belongs to; a target the graph knows only by
+property of an object literal — is shown as the symbol it belongs to, as a row and as a `via`, and
+its callers are callers of that symbol at the first layer, where `--down` and `trace` land on it too; a target the graph knows only by
 name, with no symbol of its own to fall back to, prints `?` in place of its `path:line`.
 
 `changes` maps `git diff -U0` (staged and unstaged, plus untracked files whole) onto symbol
