@@ -53,7 +53,8 @@ GRADED = ("keyword", "paraphrase", "code")
 
 # One row per line of `FLOORS` in src/bench.rs: (enriched, dense, Floors::<Model>, keyword, paraphrase).
 ROW = re.compile(r"\((true|false),\s*(true|false),\s*Floors::(Small),\s*(\d+),\s*(\d+)\)")
-TAIL = re.compile(r"s\.kind\(\"code\"\)\.0 >= (\d+) && s\.p90_tokens <= (\d+)")
+# The ceiling may be a literal or a named `const`; a name is resolved in the same source.
+TAIL = re.compile(r"s\.kind\(\"code\"\)\.0 >= (\d+) && s\.p90_tokens <= (\d+|[A-Z_][A-Z0-9_]*)\b")
 
 
 def passes_body(text):
@@ -81,6 +82,14 @@ def passes_body(text):
     return None
 
 
+def resolve(text, token):
+    """A literal as itself, a name as the number its `const` declares, or None."""
+    if token.isdigit():
+        return int(token)
+    m = re.search(rf"\bconst {token}\s*:\s*usize\s*=\s*(\d+)\s*;", text)
+    return int(m.group(1)) if m else None
+
+
 def floors(source=None):
     """Every (enriched, dense, model) arm's floors plus the code floor and token ceiling,
     read from `FLOORS` and `passes` in src/bench.rs rather than restated here."""
@@ -90,9 +99,10 @@ def floors(source=None):
     tail = TAIL.search(body)
     table = re.search(r"const FLOORS[^=]*=\s*\[(.*?)\];", text, re.S)
     rows = ROW.findall(table.group(1)) if table else []
-    if not body or not tail or len(rows) < 4:
+    p90 = tail and resolve(text, tail.group(2))
+    if not body or not tail or p90 is None or len(rows) < 4:
         raise SystemExit("cannot read the floors out of src/bench.rs -- `FLOORS` or `passes` changed shape")
-    code, p90 = int(tail.group(1)), int(tail.group(2))
+    code = int(tail.group(1))
     out = {}
     for enriched, dense, model, keyword, paraphrase in rows:
         out[(enriched == "true", dense == "true", model.lower())] = {"keyword": int(keyword), "paraphrase": int(paraphrase), "code": code, "p90_tokens": p90}
