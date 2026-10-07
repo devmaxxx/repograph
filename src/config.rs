@@ -66,6 +66,12 @@ pub struct Config {
     /// (docs/bench/2026-09-09-normal-band-only-results.md). `REPOGRAPH_RESOURCES` overrides it
     /// for one run.
     pub resources: crate::index::embed::Resources,
+    /// Seconds a reader (`ask`, `impact`, `trace`, `changes`, `explain`) may spend bringing the
+    /// store in line before it answers. A refresh that would not fit is left to a detached
+    /// `update` and the answer comes from the store as it stands, with one line saying so. It
+    /// describes the reader's patience rather than the corpus, so the global file may set it too;
+    /// `REPOGRAPH_READER_BUDGET` overrides it for one run. `0` never refreshes inline.
+    pub reader_budget: u64,
 }
 
 // Headless Claude Code with thinking off: the same answers, 4-5× faster and cheaper. `{model}`
@@ -134,9 +140,14 @@ impl Default for Config {
             reranker_dir: String::new(),
             embed_model: crate::index::embed::DEFAULT_MODEL.into(),
             resources: crate::index::embed::Resources::default(),
+            reader_budget: READER_BUDGET,
         }
     }
 }
+
+/// The agreed ceiling on a reader's wait: an agent hook or a person cannot tell a longer silence
+/// from a hang.
+const READER_BUDGET: u64 = 10;
 
 /// The settings that describe the machine rather than the corpus: which command runs a model,
 /// which model it runs and how much of itself it offers. A global file may set these and nothing
@@ -153,6 +164,7 @@ struct Machine {
     rerank_model: Option<String>,
     reranker_dir: Option<String>,
     resources: Option<crate::index::embed::Resources>,
+    reader_budget: Option<u64>,
 }
 
 /// `$REPOGRAPH_CONFIG`, else `$XDG_CONFIG_HOME/repograph/config.toml`, else
@@ -242,6 +254,7 @@ impl Config {
         layer(&named, "enrich_model", machine.enrich_model, &mut cfg.enrich_model);
         layer(&named, "rerank_model", machine.rerank_model, &mut cfg.rerank_model);
         layer(&named, "resources", machine.resources, &mut cfg.resources);
+        layer(&named, "reader_budget", machine.reader_budget, &mut cfg.reader_budget);
 
         // A cloned repository is untrusted input and these two keys are a shell command run on the
         // machine that reads it. The machine file is the reader's own and keeps them; the project
@@ -296,6 +309,9 @@ impl Config {
         if let Some(g) = globs_from_env("REPOGRAPH_CODE_GLOBS")? { cfg.code_globs = g; }
         if let Some(g) = globs_from_env("REPOGRAPH_TEXT_GLOBS")? { cfg.text_globs = g; }
         cfg.resources = crate::index::embed::resources_from_env(cfg.resources, std::env::var("REPOGRAPH_RESOURCES").ok().as_deref())?;
+        if let Some(v) = std::env::var("REPOGRAPH_READER_BUDGET").ok().filter(|v| !v.trim().is_empty()) {
+            cfg.reader_budget = v.trim().parse().with_context(|| format!("REPOGRAPH_READER_BUDGET={v:?} is not a whole number of seconds"))?;
+        }
         cfg.enrich_command = enrich_template.replace(MODEL_SLOT, &cfg.enrich_model);
         cfg.rerank_command = rerank_template.replace(MODEL_SLOT, &cfg.rerank_model);
         Ok(cfg)
@@ -794,6 +810,7 @@ mod tests {
             std::env::remove_var("REPOGRAPH_RERANK_MODEL");
             std::env::remove_var("REPOGRAPH_ENRICH_LANGUAGES");
             std::env::remove_var("REPOGRAPH_RESOURCES");
+            std::env::remove_var("REPOGRAPH_READER_BUDGET");
             std::env::remove_var("REPOGRAPH_CODE_GLOBS");
             std::env::remove_var("REPOGRAPH_TEXT_GLOBS");
         }
@@ -993,6 +1010,22 @@ mod tests {
             unsafe { std::env::set_var("REPOGRAPH_RESOURCES", "") };
             assert_eq!(Config::load(dir.path()).unwrap().resources, Resources::Low);
             unsafe { std::env::remove_var("REPOGRAPH_RESOURCES") };
+        });
+    }
+
+    #[test]
+    fn the_reader_budget_is_ten_seconds_and_every_layer_may_move_it() {
+        with_machine(Some("reader_budget = 30\n"), || {
+            let dir = tempfile::tempdir().unwrap();
+            assert_eq!(Config::default().reader_budget, 10);
+            assert_eq!(Config::load(dir.path()).unwrap().reader_budget, 30, "the machine file sets it");
+            std::fs::write(dir.path().join("repograph.toml"), "reader_budget = 4\n").unwrap();
+            assert_eq!(Config::load(dir.path()).unwrap().reader_budget, 4, "the project wins over the machine");
+            unsafe { std::env::set_var("REPOGRAPH_READER_BUDGET", "0") };
+            assert_eq!(Config::load(dir.path()).unwrap().reader_budget, 0, "the environment wins over both");
+            unsafe { std::env::set_var("REPOGRAPH_READER_BUDGET", "soon") };
+            assert!(Config::load(dir.path()).is_err(), "a budget that is not a number is refused, not guessed");
+            unsafe { std::env::remove_var("REPOGRAPH_READER_BUDGET") };
         });
     }
 

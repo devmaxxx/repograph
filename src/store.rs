@@ -203,7 +203,40 @@ impl Store {
         }
         Ok(())
     }
+
+    /// The store's writer lock, or `None` when another process holds it. A reader asks this way
+    /// and answers from the store as it stands when it is held: the holder is a refresh already
+    /// under way, and a second one would only race it to the same rename.
+    pub fn try_lock_writer(&self) -> Result<Option<WriterLock>> {
+        let f = self.lock_file()?;
+        match f.try_lock() {
+            Ok(()) => Ok(Some(WriterLock(f))),
+            Err(std::fs::TryLockError::WouldBlock) => Ok(None),
+            Err(std::fs::TryLockError::Error(e)) => Err(e).context("lock .repograph/writer.lock"),
+        }
+    }
+
+    /// The writer lock, waited for. For a foreground `update` or `build`, whose caller asked for
+    /// the store to be brought in line and would rather wait for a running refresh than skip it.
+    pub fn lock_writer(&self) -> Result<WriterLock> {
+        let f = self.lock_file()?;
+        f.lock().context("lock .repograph/writer.lock")?;
+        Ok(WriterLock(f))
+    }
+
+    /// Never removed: a lock file deleted while one process holds it lets the next process lock
+    /// a new file of the same name, and both believe they are the only writer.
+    fn lock_file(&self) -> Result<std::fs::File> {
+        std::fs::create_dir_all(&self.dir)?;
+        let p = self.dir.join("writer.lock");
+        std::fs::OpenOptions::new().create(true).truncate(false).write(true).open(&p)
+            .with_context(|| format!("open {}", p.display()))
+    }
 }
+
+/// Held for as long as this value lives. The operating system releases it with the handle, so a
+/// writer that is killed leaves no lock behind.
+pub struct WriterLock(#[allow(dead_code)] std::fs::File);
 
 /// Far longer than any save takes: a temp file this old has no writer left.
 const LEFTOVER_AGE: std::time::Duration = std::time::Duration::from_secs(600);
@@ -212,6 +245,18 @@ const LEFTOVER_AGE: std::time::Duration = std::time::Duration::from_secs(600);
 mod tests {
     use super::*;
     use crate::model::{EdgeKind, Extraction, NodeKind};
+
+    /// Two handles in one process contend exactly as two processes do: the lock belongs to the
+    /// open file, not to the process, on Unix and on Windows alike.
+    #[test]
+    fn a_held_writer_lock_is_reported_busy_until_it_is_dropped() {
+        let d = tempfile::tempdir().unwrap();
+        let store = Store::new(d.path());
+        let held = store.try_lock_writer().unwrap().expect("nobody holds it yet");
+        assert!(store.try_lock_writer().unwrap().is_none(), "a second writer is told it is held");
+        drop(held);
+        assert!(store.try_lock_writer().unwrap().is_some(), "dropping the first frees it");
+    }
 
     fn graph(label: &str) -> Graph {
         let mut g = Graph::default();

@@ -44,3 +44,8 @@ reranker_dir = ""
 # "onnx-community/embeddinggemma-300m-ONNX" — paraphrase 21/30 against 15/30 at five times the
 # embed, and a licence that is not an OSI one (docs/bench/2026-09-22-embedders-results.md).
 embed_model = "intfloat/multilingual-e5-small"
+
+# Seconds a reader (ask, impact, trace, changes, explain) may spend bringing the store in line
+# before it answers from the store as it stands and leaves the rest to one detached `update`. A
+# 576-file pull cost 69.5 s of re-reading and 246.9 s of embedding inline before this existed.
+reader_budget = 10

@@ -3,7 +3,7 @@
 //! turns a `Request` into the text the command prints. A one-shot `ask` opens a context, answers
 //! once and leaves; a resident process opens one and answers many times, over the same code.
 
-use crate::{config, enrich, index, model, query, rerank, store, walk};
+use crate::{config, enrich, index, model, query, refresh, rerank, store, walk};
 use anyhow::Context as _;
 use std::cell::{Cell, RefCell};
 use std::path::{Path, PathBuf};
@@ -57,19 +57,58 @@ pub(crate) fn warm_model(dense: bool, whole: bool, model: &str, threads: usize, 
     Some(std::thread::spawn(move || embedder_or_notice(false, &model, threads, weights)))
 }
 
-/// The stored graph brought in line with the working tree, plus what that cost when the tree had
-/// moved. `ask` runs this before answering so an edit never has to be followed by an `update`;
-/// the extractors are built only when there is something to re-read.
-pub(crate) fn graph_for_ask(repo: &Path, cfg: &config::Config, store: &store::Store, stale: bool, timing: &Timing) -> anyhow::Result<(model::Graph, Option<crate::UpdateReport>)> {
+/// What a reader's look at the tree left it holding: the graph to answer from, what bringing it
+/// in line cost, and, when it was not brought in line, what it is behind by.
+pub(crate) struct Read {
+    pub graph: model::Graph,
+    pub refreshed: Option<crate::UpdateReport>,
+    /// The files the graph is behind the tree by, with the line that says so, when the refresh
+    /// did not fit the budget or another writer held the lock.
+    pub behind: Option<(Vec<String>, String)>,
+    pub writer: Writer,
+}
+
+/// Whether this reader may write the store, decided once at the walk and held to by the dense
+/// sync after it.
+pub(crate) enum Writer {
+    /// It took the lock and refreshed (or had nothing to refresh), and keeps the lock until it
+    /// exits, so its own vector sync cannot race a detached one.
+    Held(#[allow(dead_code)] store::WriterLock),
+    /// The store could not be locked at all — a read-only checkout — so it writes as it always
+    /// did, and a write that fails says so.
+    Unlocked,
+    /// It answers from the store as it stands: another writer held the lock, or the refresh was
+    /// left to a detached one. Either way the vectors are that writer's too.
+    Barred,
+    /// It did not look: `--stale`, or a resident context whose watcher owns the walk. Its dense
+    /// sync takes the lock for itself, per answer.
+    PerAnswer,
+}
+
+/// The stored graph brought in line with the working tree when that fits `budget`, plus what it
+/// cost. `ask` runs this before answering so an edit never has to be followed by an `update`; the
+/// extractors are built only when there is something to re-read. A refresh over budget is left
+/// to a detached `update`, and the stored graph answers.
+pub(crate) fn graph_for_ask(repo: &Path, cfg: &config::Config, store: &store::Store, stale: bool, timing: &Timing, budget: &refresh::Budget) -> anyhow::Result<Read> {
     let (mut graph, manifest, source) = store.load_traced()?;
     timing.stage("graph loaded");
-    if stale { return Ok((graph, None)); }
+    if stale { return Ok(Read { graph, refreshed: None, behind: None, writer: Writer::PerAnswer }); }
+    let writer = match store.try_lock_writer() {
+        Ok(Some(lock)) => Writer::Held(lock),
+        Ok(None) => Writer::Barred,
+        Err(_) => Writer::Unlocked,
+    };
     let entries = walk::walk(repo, cfg, &manifest)?;
     let diff = manifest.diff(&entries);
     timing.stage("tree walked");
+    let busy = matches!(writer, Writer::Barred);
+    let unlocked = matches!(writer, Writer::Unlocked);
     // A store an older grammar wrote holds less than the tree says it does, and no hash reports
     // it, so an unchanged tree is not on its own a reason to answer from what is there.
     if diff.changed.is_empty() && diff.removed.is_empty() && !manifest.stale_grammar() {
+        // A reader that found the lock held writes nothing at all: the stamps it would record
+        // are older than the manifest the holder is about to save.
+        if busy { return Ok(Read { graph, refreshed: None, behind: None, writer }); }
         crate::record_stamps(store, &manifest, &entries)?;
         // A store another release or a bare `graph.json` left without a mirror pays the JSON
         // parse once; a refresh below writes the mirror on its own.
@@ -77,12 +116,34 @@ pub(crate) fn graph_for_ask(repo: &Path, cfg: &config::Config, store: &store::St
             store.write_mirror("graph.json", &graph)?;
             timing.stage("mirror written");
         }
-        return Ok((graph, None));
+        return Ok(Read { graph, refreshed: None, behind: None, writer });
+    }
+    let work = match manifest.stale_grammar() { true => entries.len(), false => diff.changed.len() + diff.removed.len() };
+    if busy || !budget.fits(work, refresh::FILE_COST) {
+        // Released before the spawn, though the refresh would wait for it: there is nothing left
+        // for this process to write, and no reason to hold the next writer up until it exits.
+        drop(writer);
+        let what = refresh::files_line(work);
+        // A store that cannot be locked cannot be written by a detached `update` either.
+        let line = match unlocked {
+            true => format!("{what}; the store cannot be locked for a background refresh — run `repograph update`"),
+            false => refresh::left_behind(repo, budget.no_dense, &what, busy),
+        };
+        // A grammar-stale store re-reads every file, so every file is what it is behind by.
+        let files = match manifest.stale_grammar() {
+            true => { let mut all: Vec<String> = entries.iter().map(|e| e.rel.clone()).collect(); all.sort(); all }
+            false => refresh::files_of(&diff),
+        };
+        return Ok(Read { graph, refreshed: None, behind: Some((files, line)), writer: Writer::Barred });
     }
     let r = crate::apply_diff(repo, store, &mut graph, &entries, &diff, &manifest, &crate::extractors(repo, cfg)?)?;
     timing.stage("refreshed");
-    Ok((graph, Some(r)))
+    Ok(Read { graph, refreshed: Some(r), behind: None, writer })
 }
+
+/// A reader's sync in small steps that grow, so the first one measures the machine's rate before
+/// much of the budget is spent: 16 rows, then 32, up to 256.
+const READER_CHUNK: index::dense::ChunkBudget = index::dense::ChunkBudget { chars: 40_000, max_rows: 256, ramp: 16 };
 
 /// One question and the flags it is asked under — everything `Cmd::Ask` carries that is not the
 /// store itself, so a request can cross a socket without the context moving with it.
@@ -115,6 +176,14 @@ pub struct Context {
     graph_at: Option<walk::Stamp>,
     notices: RefCell<Vec<String>>,
     timing: Timing,
+    repo: PathBuf,
+    writer: Writer,
+    /// When the answer in progress has to be printed by. Set at `open` for a one-shot, whose
+    /// refresh counts against it, and again by a resident process for each request.
+    budget: Cell<refresh::Budget>,
+    /// What the answer in progress was given without; `files` is the open's, `vectors` the
+    /// answer's own.
+    stale: RefCell<Option<refresh::Stale>>,
 }
 
 impl Context {
@@ -122,19 +191,21 @@ impl Context {
     /// stored graph with a warning when the store cannot be written.
     pub fn open(repo: &Path, cfg: &config::Config, stale: bool, no_dense: bool) -> anyhow::Result<Context> {
         let timing = Timing::new();
+        let budget = refresh::Budget::seconds(cfg.reader_budget, no_dense);
         let store = store::Store::new(repo);
         let mut notices = Vec::new();
         // Stamped before the read, never after; a refresh rewrites the file and reports the stamp
         // of its own bytes, since a `stat` after it may already see another writer's graph.
         let read_at = store.stamp("graph.json");
-        let (graph, refreshed, graph_at) = match graph_for_ask(repo, cfg, &store, stale, &timing) {
-            Ok((graph, None)) => (graph, None, read_at),
-            Ok((graph, Some(r))) => { let at = r.graph_at; (graph, Some(r), at) }
+        let (graph, refreshed, graph_at, behind, writer) = match graph_for_ask(repo, cfg, &store, stale, &timing, &budget) {
+            Ok(Read { graph, refreshed: None, behind, writer }) => (graph, None, read_at, behind, writer),
+            Ok(Read { graph, refreshed: Some(r), behind, writer }) => { let at = r.graph_at; (graph, Some(r), at, behind, writer) }
             // A store that cannot be written (read-only checkout, a walk that failed) still
             // holds an answer: say once that it may be behind, then give the stored one.
-            Err(err) => { notices.push(format!("refresh: skipped ({err:#})")); (store.load()?.0, None, None) }
+            Err(err) => { notices.push(format!("refresh: skipped ({err:#})")); (store.load()?.0, None, None, None, Writer::Unlocked) }
         };
         if let Some(r) = &refreshed { notices.push(format!("refresh: {} changed, {} removed", r.changed, r.removed)); }
+        let stale_report = behind.map(|(files, line)| { notices.push(line); refresh::Stale { files, vectors: 0 } });
         let (questions, source) = enrich::Questions::load_traced(&store)?;
         if !stale && source == store::Source::Json { questions.write_mirror(&store)?; }
         let questions_stamp = store.stamp(enrich::FILE);
@@ -149,7 +220,19 @@ impl Context {
             graph_at,
             notices: RefCell::new(notices),
             timing,
+            repo: repo.to_path_buf(),
+            writer,
+            budget: Cell::new(budget),
+            stale: RefCell::new(stale_report),
         })
+    }
+
+    /// Starts the budget over for a request a resident process is about to answer, whose clock
+    /// starts when the question arrives and not when the process did. Whatever the last answer
+    /// was given without is that answer's, and goes with it.
+    pub(crate) fn begin(&self) {
+        self.budget.set(refresh::Budget::seconds(self.cfg.reader_budget, self.no_dense));
+        *self.stale.borrow_mut() = None;
     }
 
     /// The arm this context was opened in. A resident process hands it to every client in the
@@ -187,7 +270,7 @@ impl Context {
         // so it narrows a fused request and never the other way; `serve` refuses that pairing.
         let no_dense = self.no_dense || req.no_dense;
         let opts = query::Options { seeds: req.seeds, bodies: req.bodies, dense: !no_dense && index::dense::DenseIndex::present(&self.store), json: req.json, depth: req.depth };
-        let Context { cfg, store, graph, questions, lexical, dense_idx, warm, embedder, cross, graph_at, notices, timing, .. } = &*self;
+        let Context { cfg, store, graph, questions, lexical, dense_idx, warm, embedder, cross, graph_at, notices, timing, repo, writer, budget, stale, .. } = &*self;
         // Opening the ONNX model costs ~220 ms and 1.3 GB, the vectors 50 MB; an exact id or
         // symbol match never asks for either, so on that path both still open lazily, on the
         // first fused query that never comes. A fused question starts both below, once the
@@ -233,21 +316,69 @@ impl Context {
             // `ask` an exact id answered after refreshing all leave the same store behind.
             if !req.stale && graph_at.is_some_and(|at| idx.behind(at)) {
                 if let Some(emb) = e.as_mut() {
-                    // A reader appends to the store's own rows and never re-embeds them into
-                    // another model's index: it claims the index for the model it opened, at
-                    // the width this very query just measured.
-                    let width = qvec.as_ref().map_or(idx.dim, |v| v.len());
-                    idx.written_by(emb.name(), width);
-                    match idx.sync(graph, questions, &mut |texts| emb.embed(texts)) {
-                        Ok(n) => {
-                            idx.synced_against(*graph_at);
-                            // Saved with nothing embedded as well: the claim is what spares the
-                            // next answer this pass.
-                            if let Err(err) = idx.save(store) { notices.borrow_mut().push(format!("refresh: vectors not saved ({err:#})")); }
-                            if n > 0 { notices.borrow_mut().push(format!("refresh: {n} vectors embedded")); }
+                    // Rows owed and not embedded here: said once, and carried to `--json`. The
+                    // refresh that will embed them is started unless one is running already.
+                    let owe = |left: usize, start: bool| {
+                        let what = refresh::vectors_line(left);
+                        let line = match (start, stale.borrow().is_some()) {
+                            (true, _) => refresh::left_behind(repo, no_dense, &what, false),
+                            // The graph's refresh was left to a detached `update` a moment ago,
+                            // and that one embeds as well.
+                            (false, true) => what,
+                            (false, false) => refresh::left_behind(repo, no_dense, &what, true),
+                        };
+                        notices.borrow_mut().push(line);
+                        stale.borrow_mut().get_or_insert_with(Default::default).vectors = left;
+                    };
+                    // A resident context takes the lock for this sync alone, and finding it held
+                    // is a refresh another process is running — the same as a one-shot's.
+                    let per_answer = matches!(writer, Writer::PerAnswer).then(|| store.try_lock_writer());
+                    if matches!(writer, Writer::Barred) || matches!(per_answer, Some(Ok(None))) {
+                        let left = idx.owed(graph, questions);
+                        if left > 0 { owe(left, false); }
+                    } else {
+                        // A reader appends to the store's own rows and never re-embeds them into
+                        // another model's index: it claims the index for the model it opened, at
+                        // the width this very query just measured.
+                        let width = qvec.as_ref().map_or(idx.dim, |v| v.len());
+                        idx.written_by(emb.name(), width);
+                        let budget = budget.get();
+                        let owed = idx.owed(graph, questions);
+                        let started = std::time::Instant::now();
+                        // Weighed at an idle machine's rate first, so a pull's worth of rows is
+                        // not started at all; past that, each chunk's own rate decides.
+                        let synced = match budget.fits(owed, refresh::ROW_COST) {
+                            true => idx.sync_chunked(graph, questions, &mut |texts| emb.embed(texts), READER_CHUNK, &mut |_, p| {
+                                match budget.overrun(p.done, p.total, started.elapsed()) {
+                                    true => Err(refresh::OutOfBudget(p.total - p.done).into()),
+                                    false => Ok(()),
+                                }
+                            }),
+                            false => Err(refresh::OutOfBudget(owed).into()),
+                        };
+                        match synced {
+                            Ok(n) => {
+                                idx.synced_against(*graph_at);
+                                // Saved with nothing embedded as well: the claim is what spares the
+                                // next answer this pass.
+                                if let Err(err) = idx.save(store) { notices.borrow_mut().push(format!("refresh: vectors not saved ({err:#})")); }
+                                if n > 0 { notices.borrow_mut().push(format!("refresh: {n} vectors embedded")); }
+                            }
+                            Err(err) => match err.downcast_ref::<refresh::OutOfBudget>() {
+                                Some(&refresh::OutOfBudget(left)) => {
+                                    // What was embedded before the stop is kept: the refresh that
+                                    // finishes matches those rows by hash and embeds the rest.
+                                    if left < owed {
+                                        idx.checkpointed();
+                                        if let Err(err) = idx.save(store) { notices.borrow_mut().push(format!("refresh: vectors not saved ({err:#})")); }
+                                    }
+                                    owe(left, true);
+                                }
+                                None => notices.borrow_mut().push(format!("refresh: vectors unchanged ({err:#})")),
+                            },
                         }
-                        Err(err) => notices.borrow_mut().push(format!("refresh: vectors unchanged ({err:#})")),
                     }
+                    drop(per_answer);
                     timing.stage("vectors synced");
                 }
             }
@@ -326,7 +457,11 @@ impl Context {
         };
         let answer = query::ask(graph, lex, Some(&dense_fn), rerank, &req.words, &opts);
         timing.stage("answered");
-        Ok(query::render(&answer, graph, &opts))
+        let text = query::render(&answer, graph, &opts);
+        Ok(match (req.json, stale.borrow().as_ref()) {
+            (true, Some(s)) => refresh::with_stale(text, s),
+            _ => text,
+        })
     }
 
     /// The watcher's graph taken over after a poll moved it, which is how a resident context

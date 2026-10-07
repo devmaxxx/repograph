@@ -458,14 +458,23 @@ impl Embedder {
     /// put a 300-token Cyrillic passage in the same batch as a 60-token Latin one and pad both
     /// to the longer, which is the padding this budget exists to stop paying for.
     pub fn embed(&mut self, texts: &[String]) -> Result<Vec<Vec<f32>>> {
+        self.embed_with(texts, &mut |_| {})
+    }
+
+    /// `embed`, telling `forwarded` how many texts each forward finished. A forward is at most
+    /// `BATCH` texts, which is what lets a progress line come every few seconds when a
+    /// checkpoint's worth of rows takes a minute.
+    pub fn embed_with(&mut self, texts: &[String], forwarded: &mut dyn FnMut(usize)) -> Result<Vec<Vec<f32>>> {
         let texts: Vec<std::borrow::Cow<str>> = texts.iter().map(|t| reword(t, &self.profile)).collect();
         let lens = self.token_lengths(&texts)?;
         let mut out: Vec<Vec<f32>> = vec![Vec::new(); texts.len()];
         for chunk in token_batches(&lens, BATCH, TOKEN_BUDGET) {
             let batch: Vec<&str> = chunk.iter().map(|&i| texts[i].as_ref()).collect();
+            let n = batch.len();
             for (i, v) in chunk.into_iter().zip(self.forward(&batch)?) {
                 out[i] = v;
             }
+            forwarded(n);
         }
         Ok(out)
     }

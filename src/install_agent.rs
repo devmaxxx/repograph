@@ -200,6 +200,119 @@ pub fn install(root: &Path, target: Target, command: &str) -> Result<Report> {
     Ok(report)
 }
 
+/// The git events after which the tree can have moved by a pull's worth of files.
+const GIT_HOOKS: [&str; 2] = ["post-merge", "post-checkout"];
+const GIT_BEGIN: &str = "# repograph:begin";
+const GIT_END: &str = "# repograph:end";
+
+/// The block each git hook runs. `update --detach` starts the refresh and returns, so neither a
+/// pull nor a checkout waits for it, and a binary missing from PATH costs the hook nothing.
+/// `$3` is post-checkout's flag, `0` for a file checkout that moves nothing worth a refresh;
+/// post-merge passes no third argument.
+fn git_block(command: &str) -> String {
+    format!("{GIT_BEGIN}\n\
+        # Brings repograph's index in line with what this pull or checkout moved, in the background.\n\
+        if [ \"$3\" != \"0\" ]; then {command} update --detach >/dev/null 2>&1 || true; fi\n\
+        {GIT_END}\n")
+}
+
+/// A hook script with our block in it: replaced between the markers when they are there, and
+/// otherwise appended after whatever the repository's own hook does, which keeps running first.
+/// A hook that was not there starts as a POSIX shell script, which Git for Windows runs as well.
+pub fn merged_git_hook(existing: &str, command: &str) -> String {
+    let block = git_block(command);
+    match (existing.find(GIT_BEGIN), existing.find(GIT_END)) {
+        (Some(a), Some(b)) if b > a => {
+            let tail = existing[b + GIT_END.len()..].strip_prefix('\n').unwrap_or(&existing[b + GIT_END.len()..]);
+            format!("{}{block}{tail}", &existing[..a])
+        }
+        _ if existing.trim().is_empty() => format!("#!/bin/sh\n{block}"),
+        _ => {
+            let sep = if existing.ends_with('\n') { "" } else { "\n" };
+            format!("{existing}{sep}{block}")
+        }
+    }
+}
+
+/// Writes the `post-merge` and `post-checkout` hooks into the directory git itself runs hooks
+/// from — `core.hooksPath` when a hook manager set one, the worktree's common `hooks/` otherwise.
+/// Outside a git repository, or without git on PATH, it writes nothing and says so.
+pub fn install_git_hooks(root: &Path, command: &str) -> Result<Report> {
+    let mut report = Report::default();
+    let out = std::process::Command::new("git").arg("-C").arg(root).args(["rev-parse", "--git-path", "hooks"]).output();
+    let dir = match out {
+        Ok(o) if o.status.success() => root.join(String::from_utf8_lossy(&o.stdout).trim()),
+        _ => {
+            report.notes.push("not a git repository, or no git on PATH: the post-merge and post-checkout hooks were not written".into());
+            return Ok(report);
+        }
+    };
+    if hooks_path_is_shared(root) {
+        report.notes.push("core.hooksPath is set outside this repository, so its hooks run in every repository that shares it: the post-merge and post-checkout hooks were not written".into());
+        return Ok(report);
+    }
+    for name in GIT_HOOKS {
+        let path = dir.join(name);
+        let existing = match std::fs::read_to_string(&path) {
+            Ok(text) => text,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
+            Err(e) => {
+                report.notes.push(format!("{name}: the hook already there could not be read as text ({e}), left alone"));
+                continue;
+            }
+        };
+        if !is_shell_hook(&existing) {
+            report.notes.push(format!("{name}: the hook already there is not a shell script, left alone; run `{command} update --detach` from it"));
+            continue;
+        }
+        let before = report.written;
+        write_if_changed(&path, &merged_git_hook(&existing, command), &mut report)?;
+        if report.written > before {
+            make_executable(&path)?;
+            if !existing.trim().is_empty() && !existing.contains(GIT_BEGIN) {
+                report.notes.push(format!("{name}: appended to the hook already there, which still runs first"));
+            }
+        }
+    }
+    Ok(report)
+}
+
+/// A hook whose interpreter is named and is not a shell would be corrupted by a shell block
+/// appended to it.
+fn is_shell_hook(existing: &str) -> bool {
+    match existing.strip_prefix("#!") {
+        Some(rest) => rest.lines().next().is_some_and(|line| line.contains("sh")),
+        None => true,
+    }
+}
+
+/// Whether `core.hooksPath` comes from a global or system config rather than this repository's
+/// own: a hook written there runs in every repository that reads it, and would start an index in
+/// ones that never asked for one.
+fn hooks_path_is_shared(root: &Path) -> bool {
+    let get = |local: bool| {
+        let mut cmd = std::process::Command::new("git");
+        cmd.arg("-C").arg(root).arg("config");
+        if local { cmd.arg("--local"); }
+        cmd.args(["--get", "core.hooksPath"]).output().ok()
+            .filter(|o| o.status.success())
+            .is_some_and(|o| !o.stdout.iter().all(u8::is_ascii_whitespace))
+    };
+    get(false) && !get(true)
+}
+
+#[cfg(unix)]
+fn make_executable(path: &Path) -> Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    let mut p = std::fs::metadata(path)?.permissions();
+    p.set_mode(p.mode() | 0o755);
+    std::fs::set_permissions(path, p).with_context(|| format!("chmod {}", path.display()))
+}
+
+/// Git for Windows runs a hook by its shebang and has no executable bit to ask for.
+#[cfg(windows)]
+fn make_executable(_: &Path) -> Result<()> { Ok(()) }
+
 /// Writes `enrich_languages` into the repository's `repograph.toml` from the documents this root
 /// holds, and returns the list it wrote — or `None` where the key was already named, the file
 /// could not be parsed, or the documents named no language at all. Nothing is written in any of
@@ -237,6 +350,73 @@ mod tests {
     use super::*;
 
     fn root() -> tempfile::TempDir { tempfile::tempdir().unwrap() }
+
+    fn git_repo() -> tempfile::TempDir {
+        let dir = root();
+        let ok = std::process::Command::new("git").arg("-C").arg(dir.path()).args(["init", "-q"])
+            .env_remove("GIT_DIR").env_remove("GIT_WORK_TREE").status().unwrap().success();
+        assert!(ok, "git init");
+        dir
+    }
+
+    #[test]
+    fn the_git_hooks_are_written_once_and_start_a_detached_update() {
+        let dir = git_repo();
+        let first = install_git_hooks(dir.path(), "repograph").unwrap();
+        assert_eq!(first.written, 2, "{first:?}");
+        for name in GIT_HOOKS {
+            let text = std::fs::read_to_string(dir.path().join(".git/hooks").join(name)).unwrap();
+            assert!(text.starts_with("#!/bin/sh\n"), "{text}");
+            assert!(text.contains("repograph update --detach"), "{text}");
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let mode = std::fs::metadata(dir.path().join(".git/hooks").join(name)).unwrap().permissions().mode();
+                assert!(mode & 0o111 != 0, "{name} is executable");
+            }
+        }
+        assert_eq!(install_git_hooks(dir.path(), "repograph").unwrap().written, 0, "a second install is a no-op");
+    }
+
+    #[test]
+    fn a_hook_already_there_keeps_its_own_lines_and_gets_the_block_once() {
+        let mine = "#!/bin/sh\nnpx lefthook run post-merge\n";
+        let once = merged_git_hook(mine, "repograph");
+        assert!(once.starts_with(mine), "{once}");
+        assert_eq!(merged_git_hook(&once, "repograph"), once, "re-merging is a no-op");
+        let upgraded = merged_git_hook(&once, "pnpm exec repograph");
+        assert!(upgraded.starts_with(mine) && upgraded.contains("pnpm exec repograph update --detach"), "{upgraded}");
+        assert_eq!(upgraded.matches(GIT_BEGIN).count(), 1);
+    }
+
+    #[test]
+    fn a_hook_in_another_language_is_left_alone() {
+        let dir = git_repo();
+        let hook = dir.path().join(".git/hooks/post-merge");
+        std::fs::write(&hook, "#!/usr/bin/env node\nconsole.log(1)\n").unwrap();
+        let r = install_git_hooks(dir.path(), "repograph").unwrap();
+        assert_eq!(r.written, 1, "only post-checkout: {r:?}");
+        assert_eq!(std::fs::read_to_string(&hook).unwrap(), "#!/usr/bin/env node\nconsole.log(1)\n");
+    }
+
+    #[test]
+    fn a_hooks_path_a_hook_manager_set_is_where_the_hooks_go() {
+        let dir = git_repo();
+        let ok = std::process::Command::new("git").arg("-C").arg(dir.path()).args(["config", "core.hooksPath", ".githooks"])
+            .env_remove("GIT_DIR").status().unwrap().success();
+        assert!(ok);
+        install_git_hooks(dir.path(), "repograph").unwrap();
+        assert!(dir.path().join(".githooks/post-merge").exists());
+        assert!(!dir.path().join(".git/hooks/post-merge").exists());
+    }
+
+    #[test]
+    fn outside_a_git_repository_nothing_is_written_and_it_says_so() {
+        let dir = root();
+        let r = install_git_hooks(dir.path(), "repograph").unwrap();
+        assert_eq!(r.written, 0);
+        assert_eq!(r.notes.len(), 1, "{r:?}");
+    }
 
     #[test]
     fn installing_twice_writes_the_same_tree_and_says_it_changed_nothing() {
