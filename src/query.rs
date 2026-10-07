@@ -242,6 +242,9 @@ pub fn ask(graph: &Graph, lex: &Lexical, dense: Option<Dense>, rerank: Option<Re
             if !EXPAND.contains(&e.kind) { continue; }
             let other = if e.source == seed.id { &e.target } else { &e.source };
             if seed_ids.contains(other) || other.starts_with("file:") || other.starts_with("deco:") { continue; }
+            // An edge to an id no node holds — `implements OnModuleInit` from a package — has
+            // no line to show, and taking a slot would leave the expanded line empty.
+            if !graph.nodes.contains_key(other) { continue; }
             if candidates.iter().any(|c| c.2 == other) { continue; }
             candidates.push((ranked.get(other).copied(), seed.score * 0.5, other, &seed.id));
         }
@@ -434,13 +437,16 @@ fn edges_of<'a>(graph: &'a Graph, id: &str) -> Vec<&'a crate::model::Edge> {
     // is the container reaching itself, and a member's own `Declares` is already listed above it.
     // A file declares every symbol in it, so seeding from a file node would list the callers of
     // the whole file; only a symbol has members of its own.
+    // A call through an interface the class implements is a caller of the implementation too.
     if id.starts_with("sym:") {
         let seed_list = ix.seeds(id);
         // `KEYS.filter` is a call no node declares; `impact` counts it as a call of `KEYS`.
         let folded = ix.undeclared(&seed_list);
         let seeds: BTreeSet<String> = seed_list.into_iter().collect();
+        let mut targets = seeds.clone();
+        targets.extend(ix.dispatched(id));
         edges.extend(graph.edges.iter().filter(|e| crate::impact::walks(e) && e.target != id && !aliases.contains(&e.target)
-            && (seeds.contains(&e.target) || folded.contains_key(&e.target)) && !seeds.contains(&e.source)));
+            && (targets.contains(&e.target) || folded.contains_key(&e.target)) && !seeds.contains(&e.source)));
     }
     edges.sort_by_key(|e| (e.kind == EdgeKind::Legacy, e.kind, e.source.clone(), e.target.clone()));
     edges
