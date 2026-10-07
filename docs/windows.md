@@ -28,6 +28,13 @@ which is what the next `serve` sweeps before binding. Stop the server before rep
 `npm i -g`, `cargo install` and `Expand-Archive -Force` all fail with a sharing error against a
 running image.
 
+A reader over its refresh budget, and the git hooks `install-agent` writes, start `repograph update`
+detached: no console, a process group of its own, and out of the caller's job object where the job
+allows breakaway. A job that forbids it — some CI runners and agent harnesses — keeps the refresh
+inside, and closing that job ends it partway; the vectors it embedded are checkpointed and the next
+reader starts another for the rest. Git for Windows runs the `#!/bin/sh` hooks through its own
+shell, so they need no executable bit.
+
 Keep the repository out of a OneDrive, Dropbox or Google Drive tree. `.repograph` is per machine
 and worth nothing to another one, every store write is a rename the client sees as a new file to
 upload, and `serve.sock` is a reparse point of a tag no sync client knows — what a given client

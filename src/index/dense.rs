@@ -271,6 +271,23 @@ impl DenseIndex {
         store.write_atomic("vectors.json", &serde_json::to_vec(self)?)
     }
 
+    /// How many rows a `sync` against this graph would embed, without embedding any: what a
+    /// reader weighs against its budget before it opens the work, and reports when it does not.
+    pub fn owed(&self, graph: &Graph, questions: &Questions) -> usize {
+        if self.dim == 0 { return graph.nodes.values().map(|n| rows(n, questions).len()).sum(); }
+        let held: std::collections::HashSet<(&str, &str)> =
+            self.live.iter().map(|&i| (self.ids[i].as_str(), self.hashes[i].as_str())).collect();
+        graph.nodes.values()
+            .map(|n| rows(n, questions).iter().filter(|t| !held.contains(&(n.id.as_str(), blake3::hash(t.as_bytes()).to_hex().as_str()))).count())
+            .sum()
+    }
+
+    /// The index in hand made searchable again after a sync its callback stopped: the rows that
+    /// sync appended join the scan beside the ones they will replace, which is the state a
+    /// checkpoint saved to disk loads into. Without it a resident reader would scan only the old
+    /// rows, and its next sync, matching against those alone, would embed the new ones twice.
+    pub fn checkpointed(&mut self) { self.reindex(); }
+
     #[allow(clippy::type_complexity)]
     pub fn sync(&mut self, graph: &Graph, questions: &Questions, embed: &mut dyn FnMut(&[String]) -> Result<Vec<Vec<f32>>>) -> Result<usize> {
         self.sync_chunked(graph, questions, embed, ChunkBudget::rows(usize::MAX), &mut |_, _| Ok(()))
@@ -566,6 +583,32 @@ mod tests {
         g.remove_file("a.md");
         assert_eq!(idx.sync(&g, &Questions::default(), &mut fake).unwrap(), 0);
         assert!(idx.ids.is_empty() && idx.vectors.is_empty());
+    }
+
+    #[test]
+    fn owed_counts_the_rows_a_sync_would_embed_and_embeds_none() {
+        let mut idx = DenseIndex::default();
+        assert_eq!(idx.owed(&wide(0), &Questions::default()), 10, "an empty index owes every row");
+        idx.sync(&wide(0), &Questions::default(), &mut fake).unwrap();
+        assert_eq!(idx.owed(&wide(0), &Questions::default()), 0);
+        assert_eq!(idx.owed(&wide(3), &Questions::default()), 3);
+        assert_eq!(idx.sync(&wide(3), &Questions::default(), &mut fake).unwrap(), 3, "the count is the sync's own");
+    }
+
+    /// A reader out of budget stops its sync after a chunk. What it answers from then is the old
+    /// rows and the new ones together, and the sync that finishes later embeds only the rest.
+    #[test]
+    fn a_stopped_sync_answers_from_old_and_new_rows_and_the_next_embeds_only_the_rest() {
+        let mut idx = DenseIndex::default();
+        idx.sync(&wide(0), &Questions::default(), &mut fake).unwrap();
+        let stopped = idx.sync_chunked(&wide(10), &Questions::default(), &mut fake, ChunkBudget::rows(4),
+            &mut |_, p| if p.done < p.total { anyhow::bail!("out of budget") } else { Ok(()) });
+        assert!(stopped.is_err());
+        idx.checkpointed();
+        assert_eq!(idx.live.len(), 14, "ten old rows and the four the stopped sync appended");
+        assert_eq!(idx.owed(&wide(10), &Questions::default()), 6);
+        assert_eq!(idx.sync(&wide(10), &Questions::default(), &mut fake).unwrap(), 6);
+        assert_eq!(idx.live.len(), 10, "the replaced rows are retired by the sync that finished");
     }
 
     #[test]
