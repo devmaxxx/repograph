@@ -1100,3 +1100,10 @@ fn a_getter_that_becomes_a_field_loses_its_readers_at_the_next_settle() {
     g.settle();
     assert!(!g.edges.iter().any(|e| e.reads_member()), "{:?}", g.edges);
 }
+
+#[test]
+fn a_getter_declared_with_a_space_before_its_parentheses_is_still_an_accessor() {
+    assert!(crate::code::calls::declares_accessor("T.secret", "get secret () { return 1; }"));
+    assert!(crate::code::calls::declares_accessor("T.secret", "static get secret(): string { return ''; }"));
+    assert!(!crate::code::calls::declares_accessor("T.get", "get(k: string) { return k; }"));
+}

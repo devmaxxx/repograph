@@ -8,7 +8,7 @@
 use crate::code::idrefs::owner;
 use crate::code::imports::Resolver;
 use crate::code::symbols::{is_top_level, member_name, parse};
-use crate::model::{EdgeKind, Extraction};
+use crate::model::{Edge, EdgeKind, Extraction};
 use std::collections::{BTreeMap, BTreeSet};
 use tree_sitter::Node;
 
@@ -79,7 +79,7 @@ pub(crate) fn declares_accessor(label: &str, body: &str) -> bool {
     let Some((_, member)) = label.rsplit_once('.') else { return false };
     let Some(signature) = body.lines().last() else { return false };
     let words: Vec<&str> = signature.split_whitespace().collect();
-    words.windows(2).any(|w| matches!(w[0], "get" | "set") && w[1].strip_prefix(member).is_some_and(|rest| rest.starts_with(['(', '<'])))
+    words.windows(2).any(|w| matches!(w[0], "get" | "set") && w[1].strip_prefix(member).is_some_and(|rest| rest.is_empty() || rest.starts_with(['(', '<'])))
 }
 
 /// The identifiers a call argument hands over: the argument itself, and every identifier in a
@@ -264,16 +264,9 @@ enum Reach { Call, Read, Pass }
 
 impl Reach {
     fn context(self) -> &'static str {
-        match self { Reach::Call => "", Reach::Read => GETTER_READ, Reach::Pass => "arg" }
+        match self { Reach::Call => "", Reach::Read => Edge::READ, Reach::Pass => Edge::PASSED }
     }
 }
-
-/// The context of an edge for reading an accessor: `this.secret` runs `get secret()` as surely
-/// as a call would. A read of another file's member is one this file cannot tell from a field
-/// read, so it is written down as a candidate and `Graph::settle` keeps it only while the
-/// target's signature declares an accessor — a field that later becomes one gains its readers
-/// when they are next read.
-pub const GETTER_READ: &str = "get";
 
 /// Every call and `new` in the file, as an edge from its owner to what the scope proves it
 /// reaches. `locals` are the names this file declares at top level (the scanner already knows

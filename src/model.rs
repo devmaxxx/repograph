@@ -52,13 +52,23 @@ pub struct Edge {
 }
 
 impl Edge {
+    /// The context of a `Calls` edge for an identifier handed to a call rather than called.
+    pub const PASSED: &'static str = "arg";
+
+    /// The context of a `Calls` edge for reading an accessor: `this.secret` runs `get secret()`
+    /// as surely as a call would. A read of another file's member is one that file cannot tell
+    /// from a field read, so it is written down as a candidate and `settle` keeps it only while
+    /// the target's signature declares an accessor — a field that later becomes one gains its
+    /// readers when they are next read.
+    pub const READ: &'static str = "get";
+
     /// A `Calls` edge for an identifier handed to a call — `rows.map(fn)`, `register(Token)` —
     /// rather than called: the caller depends on the target, but nothing proves it calls it.
-    pub fn passes(&self) -> bool { self.kind == EdgeKind::Calls && self.context == "arg" }
+    pub fn passes(&self) -> bool { self.kind == EdgeKind::Calls && self.context == Self::PASSED }
 
     /// A `Calls` edge for reading an accessor, which `settle` keeps only while its target still
     /// declares one.
-    pub fn reads_member(&self) -> bool { self.kind == EdgeKind::Calls && self.context == crate::code::calls::GETTER_READ }
+    pub fn reads_member(&self) -> bool { self.kind == EdgeKind::Calls && self.context == Self::READ }
 }
 
 #[derive(Debug, Default)]
