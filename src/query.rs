@@ -469,9 +469,29 @@ pub fn explain(graph: &Graph, needle: &str) -> anyhow::Result<String> {
         let (arrow, other) = if e.source == n.id { ("→", &e.target) } else { ("←", &e.source) };
         let ctx = if e.context.is_empty() || e.passes() { String::new() } else { format!("  [{}]", e.context) };
         let kind = crate::impact::label(e.kind, e.passes());
-        out.push_str(&format!("  {kind} {arrow} {other}{ctx}\n"));
+        let at = match edge_location(graph, e) {
+            (file, Some(line)) => format!("  {file}:{line}"),
+            (file, None) => format!("  {file}"),
+        };
+        out.push_str(&format!("  {kind} {arrow} {other}{ctx}{at}\n"));
     }
     Ok(out)
+}
+
+/// Where an edge is written, for telling apart two rows that name the same neighbour: two
+/// documents that declare one id each cite from their own file. The file is the edge's own; the
+/// graph keeps no line per edge, so the line is that of the one endpoint that sits in the edge's
+/// file and is the edge's place there — the declared node for `Declares`, the referrer for every
+/// other kind — and is left out when that endpoint is not declared in it. The other end is never
+/// borrowed: a callee declared in the same file says where it is defined, not where it was
+/// called. A `File` endpoint is passed over too: its line is always 1, which would claim a place
+/// the reference was never seen at.
+fn edge_location<'a>(graph: &Graph, e: &'a crate::model::Edge) -> (&'a str, Option<u32>) {
+    let at = if e.kind == EdgeKind::Declares { &e.target } else { &e.source };
+    let line = graph.nodes.get(at.as_str())
+        .filter(|n| n.file == e.file && n.kind != NodeKind::File)
+        .map(|n| n.line);
+    (&e.file, line)
 }
 
 /// `explain` for a reader that would rather not parse prose: the node, then one entry per edge
@@ -479,7 +499,7 @@ pub fn explain(graph: &Graph, needle: &str) -> anyhow::Result<String> {
 /// node was. A view struct rather than the graph's own types — a store layout is not an interface.
 pub fn explain_json(graph: &Graph, needle: &str) -> anyhow::Result<String> {
     #[derive(serde::Serialize)]
-    struct Edge<'a> { kind: String, dir: &'a str, other: &'a str, context: &'a str }
+    struct Edge<'a> { kind: String, dir: &'a str, other: &'a str, context: &'a str, file: &'a str, line: Option<u32> }
     #[derive(serde::Serialize)]
     struct Out<'a> {
         id: &'a str, kind: String, label: &'a str, file: &'a str, line: u32,
@@ -496,7 +516,8 @@ pub fn explain_json(graph: &Graph, needle: &str) -> anyhow::Result<String> {
         community: n.community.as_deref(),
         edges: edges.iter().map(|e| {
             let (dir, other) = if e.source == n.id { ("out", e.target.as_str()) } else { ("in", e.source.as_str()) };
-            Edge { kind: format!("{:?}", e.kind), dir, other, context: &e.context }
+            let (file, line) = edge_location(graph, e);
+            Edge { kind: format!("{:?}", e.kind), dir, other, context: &e.context, file, line }
         }).collect(),
     };
     Ok(serde_json::to_string(&out)?)
@@ -1373,7 +1394,7 @@ mod tests {
         e.node(NodeKind::Symbol, "sym:c.ts::g", "g", "", "c.ts", 5);
         e.edge("sym:c.ts::g", "sym:index.ts::f", EdgeKind::Calls, "", "c.ts");
         g.apply(e);
-        assert!(explain(&g, "sym:s.ts::f").unwrap().contains("  Calls ← sym:c.ts::g\n"));
+        assert!(explain(&g, "sym:s.ts::f").unwrap().contains("  Calls ← sym:c.ts::g  c.ts:5\n"));
         let v: serde_json::Value = serde_json::from_str(&explain_json(&g, "sym:s.ts::f").unwrap()).unwrap();
         assert_eq!(v["edges"][0]["other"], "sym:c.ts::g");
         assert_eq!(v["edges"][0]["dir"], "in");
@@ -1400,7 +1421,45 @@ mod tests {
         e.node(NodeKind::Symbol, "sym:a.ts::A", "A", "", "a.ts", 1);
         e.edge("sym:a.ts::A", "sym:t.ts::TOKEN", EdgeKind::Calls, "arg", "a.ts");
         g.apply(e);
-        assert!(explain(&g, "sym:a.ts::A").unwrap().ends_with("  Passes → sym:t.ts::TOKEN\n"));
+        assert!(explain(&g, "sym:a.ts::A").unwrap().ends_with("  Passes → sym:t.ts::TOKEN  a.ts:1\n"));
+    }
+
+    #[test]
+    fn explain_tells_two_declarers_of_one_id_apart_by_file() {
+        let mut g = Graph::default();
+        let mut e = Extraction::default();
+        e.node(NodeKind::Requirement, "FR-CAL-40", "slot", "", "docs/prd.md", 12);
+        e.node(NodeKind::Adr, "ADR-008", "Domain twice", "", "docs/adr/ADR-008-domain.md", 3);
+        e.edge("ADR-008", "FR-CAL-40", EdgeKind::References, "prose", "docs/adr/ADR-008-domain.md");
+        e.node(NodeKind::Adr, "ADR-008", "Appendix", "", "docs/adr/ADR-008-appendix.md", 1);
+        e.edge("ADR-008", "FR-CAL-40", EdgeKind::References, "prose", "docs/adr/ADR-008-appendix.md");
+        g.apply(e);
+        let out = explain(&g, "FR-CAL-40").unwrap();
+        assert!(out.contains("  References ← ADR-008  [prose]  docs/adr/ADR-008-domain.md:3\n"), "{out}");
+        // The appendix is not ADR-008's primary file, so no line of the graph's is its own.
+        assert!(out.contains("  References ← ADR-008  [prose]  docs/adr/ADR-008-appendix.md\n"), "{out}");
+        let v: serde_json::Value = serde_json::from_str(&explain_json(&g, "FR-CAL-40").unwrap()).unwrap();
+        let at: Vec<(String, serde_json::Value)> = v["edges"].as_array().unwrap().iter()
+            .map(|e| (e["file"].as_str().unwrap().to_string(), e["line"].clone())).collect();
+        assert_eq!(at, [
+            ("docs/adr/ADR-008-appendix.md".to_string(), serde_json::Value::Null),
+            ("docs/adr/ADR-008-domain.md".to_string(), serde_json::json!(3)),
+        ]);
+    }
+
+    #[test]
+    fn a_declares_row_is_placed_at_the_declaration_not_the_file() {
+        let mut g = Graph::default();
+        let mut e = Extraction::default();
+        e.node(NodeKind::File, "file:docs/prd.md", "docs/prd.md", "", "docs/prd.md", 1);
+        e.node(NodeKind::Requirement, "FR-CAL-40", "slot", "", "docs/prd.md", 12);
+        e.edge("file:docs/prd.md", "FR-CAL-40", EdgeKind::Declares, "", "docs/prd.md");
+        e.node(NodeKind::Requirement, "FR-CAL-41", "other", "", "docs/prd.md", 20);
+        e.edge("file:docs/prd.md", "FR-CAL-41", EdgeKind::References, "prose", "docs/prd.md");
+        g.apply(e);
+        let out = explain(&g, "file:docs/prd.md").unwrap();
+        assert!(out.contains("  Declares → FR-CAL-40  docs/prd.md:12\n"), "{out}");
+        assert!(out.contains("  References → FR-CAL-41  [prose]  docs/prd.md\n"), "a file-level citation has no line of its own, and the cited node's declaration is not it: {out}");
     }
 
     #[test]

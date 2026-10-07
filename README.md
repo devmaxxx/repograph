@@ -159,7 +159,10 @@ so a field can be added without breaking a parser written against the version be
 | `model --json` | `store`, `configured`, `configured_from`, `this_run`, `agrees`, `recommended` |
 
 `explain --json` resolves each edge's direction for you — `dir` is `in` or `out` and `other` is the
-node at the far end — so a caller never works out which end of an edge it was standing on. Each
+node at the far end — so a caller never works out which end of an edge it was standing on. `file`
+and `line` say where the edge is written, as the text form's trailing `path:line` does, so two
+edges from one id that two documents declare read as two: the line is that of the declaration the
+edge sits in, and `null` when no node declared in that file is an end of it. Each
 row of `impact` and `changes`, and each step of a `trace` path, carries `passes`: `true` when the
 edge is an identifier handed to a call rather than called, which the text forms print as `Passes`.
 `kind` stays the graph's own edge kind, `Calls`, so a reader filtering on it keeps those rows. One
