@@ -386,6 +386,10 @@ fn candidates<'a>(graph: &'a Graph, needle: &str) -> Vec<&'a crate::model::Node>
         let lower = needle.to_lowercase();
         c = graph.nodes.values().filter(|n| n.label.to_lowercase() == lower).collect();
     }
+    // A name only a renamed re-export gives has no node of its own: it stands for the original.
+    if c.is_empty() {
+        c = crate::impact::renamed(graph, needle).iter().filter_map(|id| graph.nodes.get(id)).collect();
+    }
     c.sort_by(|a, b| a.id.cmp(&b.id));
     c
 }

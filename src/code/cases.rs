@@ -337,7 +337,15 @@ fn re_export_forms() {
     let ex = repo.extract("a.ts", src);
     let mut re: Vec<&str> = edges(&ex, EdgeKind::ReExports).iter().map(|e| e.2).collect();
     re.sort();
-    assert_eq!(re, vec!["*", "T", "a,b", "ns"]);
+    assert_eq!(re, vec!["*", "T", "a,b as bee", "ns"]);
+}
+
+#[test]
+fn a_local_renamed_export_re_exports_the_file_to_itself_under_the_alias() {
+    let ex = extract("a.ts", "function contrast() {}\nfunction keep() {}\nexport { contrast as contrastRatio, keep };\n");
+    assert_eq!(edges(&ex, EdgeKind::ReExports), vec![("file:a.ts", "file:a.ts", "contrast as contrastRatio")]);
+    assert_eq!(declares(&ex, "contrast").as_deref(), Some("export"));
+    assert!(edges(&extract("b.ts", "const a = 1;\nexport { a };\n"), EdgeKind::ReExports).is_empty(), "no rename, no edge");
 }
 
 #[test]
