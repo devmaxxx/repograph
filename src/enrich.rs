@@ -511,9 +511,9 @@ impl EmptyCwd {
     /// alone, so a shared temp directory lends the command nothing.
     fn new() -> Result<Self> {
         static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-        let mut builder = std::fs::DirBuilder::new();
+        let builder = std::fs::DirBuilder::new();
         #[cfg(unix)]
-        std::os::unix::fs::DirBuilderExt::mode(&mut builder, 0o700);
+        let builder = { let mut b = builder; std::os::unix::fs::DirBuilderExt::mode(&mut b, 0o700); b };
         let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_nanos());
         for _ in 0..16 {
             let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
