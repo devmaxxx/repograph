@@ -84,3 +84,25 @@ fn a_reader_that_refreshes_heals_the_store_and_a_stale_one_leaves_it_alone() {
     let (ok, out, _) = repograph(repo, &["verify"]);
     assert!(ok && out.contains(HELD), "{out}");
 }
+
+/// A store stamped by the generation before this build's is re-read once by the first writer after
+/// an upgrade, which says so: 0.5.x and the forward-ported `main` stamped 4 at most.
+#[test]
+fn a_store_0_5_x_wrote_is_re_read_once() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path();
+    std::fs::create_dir_all(repo.join("docs")).unwrap();
+    std::fs::write(repo.join("docs/req.md"), "**REQ-7 · MUST · Отмена визита**\n\nсроки по ISO-8601\n").unwrap();
+    assert!(repograph(repo, &["build"]).0);
+    let p = repo.join(".repograph").join("manifest.json");
+    let mut v: serde_json::Value = serde_json::from_slice(&std::fs::read(&p).unwrap()).unwrap();
+    let older = v["grammar"].as_u64().unwrap() - 1;
+    v["grammar"] = serde_json::json!(older);
+    std::fs::write(&p, serde_json::to_vec(&v).unwrap()).unwrap();
+    let (ok, out, err) = repograph(repo, &["update"]);
+    assert!(ok, "{out}{err}");
+    let notice = format!("generation {older} and this build reads by {}", older + 1);
+    assert!(err.contains(&notice) && err.contains("re-reading all 1 files once"), "{err}");
+    let (ok, _, err) = repograph(repo, &["update"]);
+    assert!(ok && !err.contains("grammar:"), "{err}");
+}

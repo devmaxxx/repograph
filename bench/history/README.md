@@ -28,6 +28,12 @@ differ only by repograph's own code. The script refuses to run if the fixture ha
 dirty, because a run against a changed corpus produces history rows that cannot be compared to
 the rows before them — and the difference would read as a regression in repograph.
 
+The fixture was lost and rebuilt on 2026-10-08 at the same commit, with its questions copied
+from another enrich run of the corpus (2144 of 2146 requirement nodes). Questions are part of
+what the suite reads, so rows from that day on are a new baseline: a 0.5.4-era binary reads the
+same as 0.6.0 on the rebuilt fixture, and the lexical arm's paraphrase 16 → 12 belongs to the
+questions, not to the tool.
+
 `bench/compare/run.py` is the other harness and answers a different question: how the three
 tools compare. It needs the graphify and gitnexus indexes and takes far longer. Import its
 results here when you run it:

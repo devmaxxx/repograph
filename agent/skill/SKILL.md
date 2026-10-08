@@ -20,6 +20,9 @@ for a literal, the graph is right for a concept, and the two questions look diff
 5. **Spend a model only on a miss.** `ask --rerank` re-picks the seeds with a model from a 200-deep
    pool: ~4 s and about $0.03 a question, and it reads paraphrase 29/30 where the free path reads
    15/30. It is for the question that came back wrong, not for the first question.
+6. **Cite or say "not found".** Every claim about the code names a `path:line` an answer printed
+   and you opened. If no answer holds it — after a rephrase, and a rerank — say the repository
+   does not show it. Never fill the gap from a neighbour's name.
 
 ## Which command answers which question
 

@@ -1,0 +1,12 @@
+{"kind":"config","q":"which registry decides how many days a norm can go without being re-verified before the review is overdue","expect":"gates/legal-register.yaml"}
+{"kind":"config","q":"where is the list of destructive operations whose consequences have to be shown before the user accepts","expect":"gates/irreversible.yaml"}
+{"kind":"config","q":"где перечислены ограничения на параметры автономной работы панели без сети","expect":"gates/offline-matrix.yaml"}
+{"kind":"config","q":"which file lists every paid mechanic with the endpoint that switches it off and how many seconds the effect may take","expect":"gates/paid-features.yaml"}
+{"kind":"config","q":"which workflow releases tasks claimed by sessions that nobody touched for a while","expect":".github/workflows/stale-claims.yml"}
+{"kind":"config","q":"which nightly job runs the full simulator matrix with five seeds and the fault sets","expect":".github/workflows/sync-simulator-nightly.yml"}
+{"kind":"config","q":"why does the cold build of each mobile platform not run on pull requests and what is its twenty minute limit measured against","expect":".github/workflows/mobile-cold-build.yml"}
+{"kind":"config","q":"which gate file holds the closed whitelist of fields allowed to influence the order of search results","expect":"gates/ranking-input.yaml"}
+{"kind":"config","q":"где записан порог доли общего кода между платформами и почему он пока информационный, а не блокирующий","expect":"gates/shared-code-ratio.yaml"}
+{"kind":"config","q":"which file records where a feature is missing on a surface, with the closed list of reasons for it","expect":"gates/surface-parity.yaml"}
+{"kind":"config","q":"which file sets the floor of the conformance corpus that binds in the current wave","expect":"gates/conformance.yaml"}
+{"kind":"config","q":"which file lists every public claim with the evidence, its source date and the date it expires","expect":"gates/claims.yaml"}

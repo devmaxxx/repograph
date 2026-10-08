@@ -13,15 +13,15 @@ use serde::Deserialize;
 use std::path::{Path, PathBuf};
 use tokenizers::{PaddingParams, PaddingStrategy, Tokenizer, TruncationParams};
 
-/// What a writer embeds with when the repository names no model: the small one, priced for a
-/// first build nobody has tuned yet, and the only model `bench` holds floors for
-/// (docs/adr/ADR-002-two-defaults-multiplied.md).
-pub const DEFAULT_MODEL: &str = "intfloat/multilingual-e5-small";
+/// What a writer embeds with when the repository names no model: embeddinggemma-300m, the
+/// cheapest of the four that read 21/30 where the small one reads 15/30
+/// (docs/adr/ADR-003-gemma-is-the-default.md). `bench` holds floors for the small model's four
+/// arms and for this model's enriched dense arm; the fixture's store still records the small one.
+pub const DEFAULT_MODEL: &str = "onnx-community/embeddinggemma-300m-ONNX";
 
 /// What a store that records no model at all was written with. Pinned to the name rather than to
-/// `DEFAULT_MODEL` — which holds the same string today and has already held the other one: every
-/// store written before the field existed holds small-model rows, and that stays true however the
-/// default moves afterwards. Tying the two together would tell a reader that yesterday's 384-d
+/// `DEFAULT_MODEL`, which has held both models and may move again: every store written before the
+/// field existed holds small-model rows, and that stays true however the default moves. Tying the two together would tell a reader that yesterday's 384-d
 /// store is today's default, and re-embed it whole to find out otherwise.
 pub const UNNAMED_MODEL: &str = "intfloat/multilingual-e5-small";
 
@@ -37,6 +37,17 @@ pub fn resolve(recorded: Option<&str>, configured: &str) -> String {
 fn resolve_from(override_: Option<&str>, recorded: Option<&str>, configured: &str) -> String {
     let named = |m: Option<&str>| m.map(str::trim).filter(|m| !m.is_empty()).map(str::to_string);
     named(override_).or_else(|| named(recorded)).unwrap_or_else(|| configured.to_string())
+}
+
+/// Whether the store should be moved to the model `repograph.toml` names: only a model the
+/// project file itself names, so a store embedded under `REPOGRAPH_EMBED_MODEL` to be measured is
+/// never pulled back to the built-in default, and never while that override is set.
+pub fn switch_owed(named: bool, recorded: Option<&str>, configured: &str) -> bool {
+    switch_owed_from(std::env::var("REPOGRAPH_EMBED_MODEL").ok().as_deref(), named, recorded, configured)
+}
+
+fn switch_owed_from(override_: Option<&str>, named: bool, recorded: Option<&str>, configured: &str) -> bool {
+    named && override_.is_none_or(|m| m.trim().is_empty()) && recorded.is_some_and(|m| m.trim() != configured.trim())
 }
 
 /// What `ask`, `bench` and `dump` say when the model they opened cannot search the store's rows.
@@ -190,17 +201,18 @@ pub struct Measured {
     pub licence: &'static str,
 }
 
-/// The control and the model this project recommends over it. Seven further candidates were
-/// measured the same way and are not listed here: the readings document holds them, and a
-/// catalogue is a thing to choose from rather than the record of what was tried.
+/// The default, the small model it replaced, and the one with the most recall. Six further
+/// candidates were measured the same way and are not listed here: the readings document holds
+/// them, and a catalogue is a thing to choose from rather than the record of what was tried.
 pub const MEASURED: &[Measured] = &[
-    Measured { model: DEFAULT_MODEL, dim: 384, paraphrase: 15, embed_s: 144, vectors_mb: 51, cache: "578M", licence: "MIT" },
+    Measured { model: DEFAULT_MODEL, dim: 768, paraphrase: 21, embed_s: 733, vectors_mb: 103, cache: "1.2G", licence: "Gemma" },
+    Measured { model: UNNAMED_MODEL, dim: 384, paraphrase: 15, embed_s: 144, vectors_mb: 51, cache: "578M", licence: "MIT" },
     Measured { model: RECOMMENDED, dim: 1024, paraphrase: 21, embed_s: 1944, vectors_mb: 137, cache: "2.1G", licence: "Apache-2.0" },
 ];
 
 /// The model the readings point at for a project that wants more recall than the default's. Not
-/// the default itself: a first build would pay 13.5× the embed for recall nobody has asked for
-/// yet, and a 1024-d index is 137 MB against 51 MB of the same rows.
+/// the default itself: a first build pays 2.7× gemma's embed for it, and a 1024-d index is
+/// 137 MB against 103 MB of the same rows.
 ///
 /// Four models read 21/30 on the recorded paraphrase arm and nothing there separated them. A
 /// widened arm of 60 cases did: 39/60 here against 35/60 for embeddinggemma-300m, whose licence is
@@ -239,14 +251,13 @@ pub fn catalogue(on: Option<&str>) -> String {
     }
     s.push_str(&format!("\npara is the paraphrase arm of the 82-case suite; embed is the whole store\n\
         against the default's {} s on the bench fixture. One run each, so anything\n\
-        within four hits of the control is noise. The seven candidates this table does\n\
+        within four hits of the default is noise. The six candidates this table does\n\
         not list are in docs/bench/2026-09-22-embedders-results.md.\n\n\
-        {RECOMMENDED} is what the readings point at,\n\
-        under Apache-2.0. Four models tied at 21/30 and that arm could not separate\n\
-        them; a widened arm of 60 paraphrase cases did, and this one took 39/60. It is\n\
-        not the default because its cost lands on a first build, before anyone knows\n\
-        whether they need the recall: 13.5× the embed, and 137 MB of vectors for the\n\
-        rows the default writes 51 MB for.\n", control().embed_s));
+        Four models tied at 21/30 and the default is the cheapest of them. A widened\n\
+        arm of 60 paraphrase cases separated them:\n\
+        {RECOMMENDED} took 39/60 against the default's 35/60,\n\
+        under Apache-2.0 rather than Gemma's terms, for 2.7× the embed and 137 MB of\n\
+        vectors for the default's 103 MB.\n", control().embed_s));
     s
 }
 
@@ -603,6 +614,17 @@ mod tests {
     use super::*;
 
     #[test]
+    fn a_switch_is_owed_only_to_a_model_the_project_file_names_and_nothing_overrides() {
+        let (small, gemma) = ("intfloat/multilingual-e5-small", "onnx-community/embeddinggemma-300m-ONNX");
+        assert!(switch_owed_from(None, true, Some(small), gemma));
+        assert!(!switch_owed_from(None, true, Some(gemma), gemma), "the store already holds it");
+        assert!(!switch_owed_from(None, false, Some(gemma), small), "the default never pulls a measured store back");
+        assert!(!switch_owed_from(Some(gemma), true, Some(gemma), small), "an override wins over the project file");
+        assert!(switch_owed_from(Some(" "), true, Some(small), gemma), "a blank override is no override");
+        assert!(!switch_owed_from(None, true, None, gemma), "a store with no vectors is embedded by its first build");
+    }
+
+    #[test]
     fn cls_takes_the_first_position_and_last_token_the_last_attended_one() {
         // One text of three positions, the third padded.
         let hidden = [1.0, 0.0,  0.0, 2.0,  9.0, 9.0];
@@ -634,7 +656,7 @@ mod tests {
         }
         assert!(measured(DEFAULT_MODEL).is_some(), "the control is the row every other is quoted against");
         assert!(measured(RECOMMENDED).is_some(), "the recommendation is one of the measured rows");
-        assert_eq!(control().embed_s, 144);
+        assert_eq!(control().embed_s, 733);
     }
 
     /// The table is printed into whatever terminal ran the command, and a folded row is unreadable
@@ -688,7 +710,7 @@ mod tests {
     fn the_embed_cost_is_quoted_against_the_default() {
         assert_eq!(measured(DEFAULT_MODEL).unwrap().times_the_default(), 1.0);
         let best = measured(RECOMMENDED).unwrap();
-        assert!((best.times_the_default() - 13.5).abs() < 0.01, "{}", best.times_the_default());
+        assert!((best.times_the_default() - 2.65).abs() < 0.01, "{}", best.times_the_default());
     }
 
     #[test]

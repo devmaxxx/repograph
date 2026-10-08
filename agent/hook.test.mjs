@@ -3,7 +3,7 @@
 // Run: `node --test agent/hook.test.mjs`, on every platform the hook is installed on.
 import { test } from 'node:test';
 import assert from 'node:assert';
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, chmodSync, copyFileSync, symlinkSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, chmodSync, copyFileSync, symlinkSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname, delimiter } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -222,7 +222,9 @@ test('the local shim the hook picks is one this platform can start', () => {
   const bin = join(w.root, 'node_modules', '.bin');
   mkdirSync(bin, { recursive: true });
   const named = process.env.REPOGRAPH_BIN;
+  const path = process.env.PATH;
   delete process.env.REPOGRAPH_BIN;                 // this is the resolution when nothing names it
+  process.env.PATH = join(w.root, 'empty-path');    // a machine with no repograph of its own
   try {
     assert.equal(binary(w.root), 'repograph', 'nothing installed locally: PATH answers');
 
@@ -235,7 +237,39 @@ test('the local shim the hook picks is one this platform can start', () => {
     assert.equal(binary(w.root), join(bin, WIN ? 'repograph.cmd' : 'repograph'));
   } finally {
     if (named !== undefined) process.env.REPOGRAPH_BIN = named;
+    process.env.PATH = path;
   }
+});
+
+test('a repograph on PATH wins over the repository\'s own node_modules shim, and REPOGRAPH_BIN over both', () => {
+  const w = world();
+  const local = join(w.root, 'node_modules', '.bin');
+  mkdirSync(local, { recursive: true });
+  writeFileSync(join(local, WIN ? 'repograph.cmd' : 'repograph'), '#!/bin/sh\n');
+  const onPath = join(w.root, 'on-path');
+  mkdirSync(onPath, { recursive: true });
+  writeFileSync(join(onPath, WIN ? 'repograph.exe' : 'repograph'), '');
+  const named = process.env.REPOGRAPH_BIN;
+  const path = process.env.PATH;
+  delete process.env.REPOGRAPH_BIN;
+  process.env.PATH = `${onPath}${delimiter}${path}`;
+  try {
+    assert.equal(binary(w.root), 'repograph', 'the clone ships a shim; the machine\'s binary is the one that runs');
+    process.env.REPOGRAPH_BIN = '/opt/repograph';
+    assert.equal(binary(w.root), '/opt/repograph');
+  } finally {
+    if (named === undefined) delete process.env.REPOGRAPH_BIN; else process.env.REPOGRAPH_BIN = named;
+    process.env.PATH = path;
+  }
+});
+
+test('the hook keeps its session state in a directory private to the user', { skip: WIN }, () => {
+  const w = world();
+  const payload = { hook_event_name: 'PreToolUse', tool_name: 'Grep', tool_input: { pattern: 'cancellation window' } };
+  fire(w, payload);
+  const root = join(w.root, 'tmp', `repograph-hook-${process.getuid()}`);
+  assert.equal(statSync(root).mode & 0o777, 0o700);
+  assert.ok(!existsSync(join(w.root, 'tmp', 'repograph-hook')), 'the predictable shared name is gone');
 });
 
 test('the rule the hook hands a subagent is the file the installer ships', () => {

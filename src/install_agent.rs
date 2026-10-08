@@ -128,9 +128,21 @@ pub fn merged_settings(existing: &str, hook_path: &str) -> Result<(String, Vec<S
     Ok((serde_json::to_string_pretty(&root)? + "\n", retired))
 }
 
+/// A repository can ship `.claude/settings.json` or `repograph.toml` as a link to a file elsewhere
+/// on the machine, and a write through it would overwrite that file with ours.
+fn refuse_symlink(path: &Path) -> Result<()> {
+    if std::fs::symlink_metadata(path).is_ok_and(|m| m.file_type().is_symlink()) {
+        anyhow::bail!("{} is a symlink; refusing to write through it — replace it with a regular file and run again", path.display());
+    }
+    Ok(())
+}
+
 /// Writes `text` at `path` unless the same bytes are already there, and says which it did.
 fn write_if_changed(path: &Path, text: &str, report: &mut Report) -> Result<()> {
+    // Checked after the no-op test: a `CLAUDE.md` linked to `AGENTS.md` that already holds our
+    // block needs no write, and refusing it would fail every re-run for nothing.
     if std::fs::read_to_string(path).is_ok_and(|old| old == text) { return Ok(()); }
+    refuse_symlink(path)?;
     if let Some(parent) = path.parent() { std::fs::create_dir_all(parent)?; }
     std::fs::write(path, text).with_context(|| format!("write {}", path.display()))?;
     report.written += 1;
@@ -198,6 +210,78 @@ pub fn install(root: &Path, target: Target, command: &str) -> Result<Report> {
     let existing = std::fs::read_to_string(&instructions).unwrap_or_default();
     write_if_changed(&instructions, &merged_instructions(&existing, command), &mut report)?;
     Ok(report)
+}
+
+const MCP_NAME: &str = "repograph";
+
+/// The words of a command line the way a shell would split it, for the quotes and backslashes a
+/// `--command` like `pnpm exec "my repograph"` needs: the registered argv has to be the one the
+/// person meant, not whatever whitespace splitting makes of it.
+fn split_words(command: &str) -> Vec<String> {
+    let (mut words, mut word, mut quote, mut started) = (Vec::new(), String::new(), None::<char>, false);
+    let mut chars = command.chars();
+    while let Some(c) = chars.next() {
+        match (c, quote) {
+            ('\\', Some('"') | None) => { word.extend(chars.next()); started = true; }
+            (q, Some(open)) if q == open => quote = None,
+            (q @ ('"' | '\''), None) => { quote = Some(q); started = true; }
+            (c, None) if c.is_whitespace() => if started { words.push(std::mem::take(&mut word)); started = false; },
+            (c, _) => { word.push(c); started = true; }
+        }
+    }
+    if started { words.push(word); }
+    words
+}
+
+/// Registers `repograph --repo <root> mcp` with Claude Code for the project at `root`, through
+/// `claude mcp add` so the harness keeps its own registry's format. `--repo` is explicit because
+/// the server's working directory is the harness's choice. `run` is how `claude` is invoked: a
+/// test passes its own, and `None` from it means the binary is not on PATH. A registration that
+/// already says this is left alone, which is what makes a re-run write nothing; one that says
+/// something else (another command, another repository) is removed and made again. A missing
+/// `claude` is a note and not a failure, since the files this install wrote are useful without it.
+pub fn register_mcp(root: &Path, command: &str, run: &dyn Fn(&Path, &[&str]) -> Option<std::process::Output>) -> Report {
+    let mut report = Report::default();
+    let words = split_words(command);
+    let Some((program, rest)) = words.split_first() else {
+        report.notes.push("--command is empty, so the MCP server was not registered".to_string());
+        return report;
+    };
+    let root_arg = root.display().to_string();
+    let tail: Vec<&str> = rest.iter().map(String::as_str).chain(["--repo", &root_arg, "mcp"]).collect();
+    let by_hand = format!("claude mcp add {MCP_NAME} -- {command} --repo {root_arg} mcp");
+    let Some(existing) = run(root, &["mcp", "get", MCP_NAME]) else {
+        report.notes.push(format!("`claude` is not on PATH, so the MCP server was not registered; run `{by_hand}` where it is"));
+        return report;
+    };
+    if existing.status.success() {
+        let shown = String::from_utf8_lossy(&existing.stdout);
+        if shown.contains(program.as_str()) && shown.contains(&tail.join(" ")) {
+            report.notes.push("MCP server already registered, left alone".to_string());
+            return report;
+        }
+        if !run(root, &["mcp", "remove", MCP_NAME]).is_some_and(|o| o.status.success()) {
+            report.notes.push(format!("the registered MCP server differs and `claude mcp remove {MCP_NAME}` failed; run it, then `{by_hand}`"));
+            return report;
+        }
+    }
+    let mut args = vec!["mcp", "add", MCP_NAME, "--", program.as_str()];
+    args.extend(&tail);
+    match run(root, &args) {
+        Some(added) if added.status.success() => {
+            report.written = 1;
+            report.paths.push(by_hand);
+        }
+        Some(failed) => report.notes.push(format!("`claude mcp add` failed, the MCP server was not registered: {}", String::from_utf8_lossy(&failed.stderr).trim())),
+        None => report.notes.push("`claude` went away between two calls; the MCP server was not registered".to_string()),
+    }
+    report
+}
+
+/// `claude` run in `root`, where its local-scope registration belongs; `None` when it is not
+/// installed.
+pub fn run_claude(root: &Path, args: &[&str]) -> Option<std::process::Output> {
+    std::process::Command::new("claude").args(args).current_dir(root).stdin(std::process::Stdio::null()).output().ok()
 }
 
 /// The git events after which the tree can have moved by a pull's worth of files.
@@ -341,6 +425,7 @@ pub fn set_languages(root: &Path, cfg: &crate::config::Config) -> Result<Option<
     text.push_str(&format!(
         "# Languages `enrich` writes questions in, set by `install-agent` from the documents it found.\n\
          enrich_languages = {value}\n"));
+    refuse_symlink(&path)?;
     std::fs::write(&path, text).with_context(|| format!("write {}", path.display()))?;
     Ok(Some(languages))
 }
@@ -350,6 +435,70 @@ mod tests {
     use super::*;
 
     fn root() -> tempfile::TempDir { tempfile::tempdir().unwrap() }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_symlinked_target_is_refused_and_what_it_points_at_is_left_alone() {
+        let dir = root();
+        let victim = dir.path().join("elsewhere.json");
+        std::fs::write(&victim, "{}").unwrap();
+        std::fs::create_dir_all(dir.path().join(".claude")).unwrap();
+        std::os::unix::fs::symlink(&victim, dir.path().join(".claude/settings.json")).unwrap();
+        let err = install(dir.path(), Target::Claude, "repograph").unwrap_err().to_string();
+        assert!(err.contains("symlink"), "{err}");
+        assert_eq!(std::fs::read_to_string(&victim).unwrap(), "{}");
+    }
+
+    #[cfg(unix)]
+    fn exited(code: i32, stdout: &str) -> std::process::Output {
+        use std::os::unix::process::ExitStatusExt;
+        std::process::Output { status: std::process::ExitStatus::from_raw(code << 8), stdout: stdout.as_bytes().to_vec(), stderr: Vec::new() }
+    }
+
+    #[test]
+    fn a_command_is_split_the_way_a_shell_would() {
+        assert_eq!(split_words("repograph"), ["repograph"]);
+        assert_eq!(split_words("pnpm exec  repograph"), ["pnpm", "exec", "repograph"]);
+        assert_eq!(split_words(r#"pnpm exec "my repo graph" 'a b' c\ d"#), ["pnpm", "exec", "my repo graph", "a b", "c d"]);
+        assert_eq!(split_words(r#"x "" y"#), ["x", "", "y"]);
+        assert!(split_words("   ").is_empty());
+    }
+
+    /// A `claude` whose registry holds at most one entry, shown the way `mcp get` prints it.
+    #[cfg(unix)]
+    #[test]
+    fn the_mcp_server_is_registered_once_a_second_run_leaves_it_and_a_different_one_is_replaced() {
+        let calls = std::cell::RefCell::new(Vec::<Vec<String>>::new());
+        let entry = std::cell::RefCell::new(None::<String>);
+        let claude = |_: &Path, args: &[&str]| {
+            calls.borrow_mut().push(args.iter().map(|a| a.to_string()).collect());
+            Some(match args {
+                ["mcp", "get", _] => match &*entry.borrow() { Some(shown) => exited(0, shown), None => exited(1, "") },
+                ["mcp", "remove", _] => { *entry.borrow_mut() = None; exited(0, "") }
+                ["mcp", "add", _, "--", program, rest @ ..] => { *entry.borrow_mut() = Some(format!("repograph:\n  Command: {program}\n  Args: {}\n", rest.join(" "))); exited(0, "") }
+                _ => exited(1, ""),
+            })
+        };
+        let root = Path::new("/work/proj");
+        let first = register_mcp(root, "pnpm exec repograph", &claude);
+        assert_eq!(first.written, 1);
+        assert_eq!(calls.borrow()[1], ["mcp", "add", "repograph", "--", "pnpm", "exec", "repograph", "--repo", "/work/proj", "mcp"]);
+        let second = register_mcp(root, "pnpm exec repograph", &claude);
+        assert_eq!(second.written, 0);
+        assert_eq!(calls.borrow().len(), 3, "the second run only asked");
+        assert!(second.notes[0].contains("already registered"));
+        let moved = register_mcp(Path::new("/work/other"), "pnpm exec repograph", &claude);
+        assert_eq!(moved.written, 1, "another repository replaces the entry");
+        assert!(calls.borrow().iter().any(|c| c[..2] == ["mcp", "remove"]));
+        assert!(entry.borrow().as_deref().unwrap().contains("/work/other"));
+    }
+
+    #[test]
+    fn a_machine_without_claude_gets_a_note_and_the_command_to_run() {
+        let r = register_mcp(Path::new("."), "repograph", &|_, _| None);
+        assert_eq!(r.written, 0);
+        assert!(r.notes[0].contains("claude mcp add repograph -- repograph --repo . mcp"), "{:?}", r.notes);
+    }
 
     fn git_repo() -> tempfile::TempDir {
         let dir = root();

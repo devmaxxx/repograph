@@ -52,9 +52,24 @@ allowed to do to the machine that reads it, and none moves a floor: the read pat
 reproduces every recorded count, and the reranker is measured and not floored. They have an order
 of their own at the end, after the cost family.
 
+G1 and G6 carry a second status line from the 0.6.0 readings
+([`2026-09-11-0.6.0-results.md`](2026-09-11-0.6.0-results.md), 2026-10-03), and G43 was raised
+by them: the one language 0.6.0 reads but leaves out of its defaults. It sits in the third family's
+table.
+
 ---
 
 ## G1 · A third of a large blast radius is invisible — `changes` 27/38 symbols
+
+**Status (2026-10-03, 0.6.0):** the symbol half **fails its gate and is waived for 0.6.0**. Read on
+the release candidate (`4dd1bf1`) over `bench/blast.jsonl`'s eight `changes` cases, every language
+the truth reads summed: 505 symbols missed against B0's 2,228, where the bar is ≤ 222 (10% of B0).
+The languages closed their share — `.kt` 1,517 → 23, `.sql` 0 — and what keeps the sum over the bar
+is TypeScript's own: `.ts` 575 → 368, `.tsx` 136 → 114, 482 in all, which no 0.6.0 language owns.
+TypeScript symbols named rose 1,865 → 2,094, and `impact` and `trace` held at B0 (123 files, 8
+paths). Max ruled on 2026-10-05: waived for the release, TypeScript's 482 carried as debt in #143.
+Transcript: `~/bench/0.6.0-2026-09-11/log/master-t14/main.json`, verdict `main-verdict.txt`;
+results: [`2026-09-11-0.6.0-results.md`](2026-09-11-0.6.0-results.md) §5.
 
 **Status (2026-09-04):** the file half is **closed by Task 2, against a narrow
 denominator** — `changes` names 498/498 files over 8 diffs, and the case that read 11/18
@@ -193,6 +208,40 @@ the 14 ids that are absent, and finding them would not by itself put them first.
 ---
 
 ## G6 · One corpus, one language, one id census
+
+**Status (2026-10-03, 0.6.0):** **closed for every language 0.6.0 ships.** Each one has `impact`,
+`trace` and `changes` cases in a corpus of its own and a result beside them, or a waiver Max ruled
+on. Per language, from [`2026-09-11-0.6.0-results.md`](2026-09-11-0.6.0-results.md)'s `## L`
+sections, each re-read on the release candidate (`4dd1bf1`) with its default globs:
+
+| language | corpus | parse | declarations | impact | trace | changes |
+|---|---|---|---|---|---|---|
+| Kotlin | `beauty-crm-mobile` | pass | pass | pass | pass | pass |
+| Java | private | pass | pass | pass | waived | pass |
+| C# | private | pass | pass | pass | pass | pass |
+| Razor | private | pass | pass | **fail** | **fail** | pass |
+| Rust | `repograph`, `agent-orchestrator` | pass | pass | pass | pass | pass |
+| Python | `repograph`; private | pass | pass | pass; waived on the private corpus | pass; waived on the private corpus | pass |
+| Dart | `pawfice` | pass | pass | pass | pass | pass |
+| Swift | `pawfice` | pass | pass | waived | waived | waived |
+| GraphQL | private | pass | pass | pass | pass | pass |
+| SQL | `beauty-crm-sql` | pass | pass | pass | pass | pass |
+| Bicep | private | pass | pass | pass | pass | pass |
+| HCL | `beauty-crm-hcl` | pass | pass | pass | pass | pass |
+| Shell | `repograph`; private | pass | pass | pass | pass; waived on the private corpus | pass |
+| Vue | private | pass | pass | pass | waived | pass |
+
+The waivers, each a case the corpus cannot hold, ruled by Max on 2026-10-03 (Java, Python, Shell)
+and 2026-10-05 (Swift, Vue): Java `trace` — no injected call path through Java (all three candidate
+paths end at a type the corpus does not declare); Python `impact` on the private corpus — no name is
+referenced only by files that import its module; Python `trace` there — no class calls another
+through a typed field (0 injection edges); Shell `trace` there — no function chain of two hops
+among names declared once; Swift `impact`, `trace` and `changes` — the three files are the
+generated iOS runner, no Swift type named outside its file, no call between Swift files, no Swift
+change with a parent in `pawfice`'s seven commits; Vue `trace` — no injected call path through a
+component (0 candidates). Razor's two failures keep it behind its glob: G43. Text files are not a
+language and carry no blast cases; their retrieval gate (T5) failed, so `text_globs` ships empty.
+The retrieval half's census is still one corpus's: no new corpus brought its own `id_families`.
 
 **Status (2026-09-04):** **baseline written; the extractor is 0.6.0's, and so are two
 thirds of this gate.** `bench/corpora/beauty-crm-mobile/blast.jsonl` holds eight Kotlin
@@ -1885,6 +1934,33 @@ that on this machine — which is G23's reading and G23 is still open.
 
 ---
 
+## G43 · Razor is behind an explicit glob — `impact` 4/8, `trace` 1/2
+
+**Raised (2026-10-03)** by Task 14, the last language left out of 0.6.0's defaults. Read on the
+private `.NET` corpus, aggregates only: [`2026-09-11-0.6.0-results.md`](2026-09-11-0.6.0-results.md)
+`## L · Razor`.
+
+**Measured.** Parse (41 of 41 `@code` blocks read, 0 unclean), declarations (469 against the
+truth's 469) and `changes` (3/3 files) pass. `impact` reads 4/8 files over three cases, one naming
+none; `trace` reads 1/2. Re-read after the C# type-edge fix and again on the release candidate: the
+same. The four missed `impact` files are component tags whose nearest enclosing tag is not a repo
+symbol, which Task 8 skips by design: 1,087 tags skipped under an external parent, 39 of which would
+render a repo component. The missed `trace` reaches its service only through an `[Inject]`
+property, and every call on that property sits in a markup expression or an event-handler
+attribute, which the blanked copy does not read.
+
+**Lever.** Two, one per clause. For `impact`, a component tag under an external parent attributed
+to the nearest repo component above it, or to the file, rather than skipped — the 39 tags are the
+measured ceiling. For `trace`, an expression reader over markup expressions and event-handler
+attributes, so a call on an injected property outside `@code` is an edge. The second is a reader,
+not a missing edge, and the larger of the two.
+
+**Gate.** `impact` ≥ 90% of wanted files over the corpus's cases with every case naming one, and
+every `trace` case returning the truth's path, on the same cases; C# unmoved; then `**/*.razor`
+joins the default globs and `GRAMMAR` steps once.
+
+---
+
 ## Suggested order
 
 | | gap | why here |
@@ -1895,18 +1971,18 @@ that on this machine — which is G23's reading and G23 is still open.
 | 4 | **G14** the prompt does not know the document's kind | measured three times, not closed (2026-09-06, 0.5.0) — the prompt-shape diagnostic read 1 of 4 and 2 of 4 against a bar of 3; the retrieval reading that followed found the cause, register rather than shape; and the successor lever, one generator asked for both registers, was run on the default enricher under a rule committed first and failed four of six clauses — `rule` 5/9 → 2/9 in both arms, paraphrase 15/30 → 13/30, a broken dense floor, and the register share it rests on falling 0.211 → 0.147. L4 as framed is retired. The prompt is reverted; the only reading that ever moved these numbers upward is the union of two generators' stores, which has no rule in front of it. ≈ $4.16 spent once |
 | 2 | **G13** ten `where` anchors ranked and gated out | measured, not closed (2026-09-06, 0.5.0) — stage B was replayed on the code-enriched copy at a constant of the code list's own, `c_code = 0.902`, derived on 800 mixed held-out questions before either suite was opened. The seat moves `where` 0/9 → 2/9 in both arms and the code held-out set 54 → 122 and 40 → 115 at p = 0.0000, and it clears A4's clause — five document questions lost per arm at p = 0.0625 against A4's six at p = 0.031. It fails on the recorded suite instead: lexical paraphrase 15/30 → 14/30, through the fifth seed the code seed displaces. `CODE_SEAT` unwritten, the price now known |
 | — | ~~**G16** `enrich` reads a failed generator as an answer~~ | closed 2026-09-09 — all three places: a `pipefail` prefix where the shell has one, a batch that answers for nobody twice counted `failed`, and a non-zero exit when a run asked to write wrote nothing. The exit condition is `failed > 0 && generated == 0` rather than `left > 0`, because a store legitimately keeps the nodes a model declines. G14's next attempt now spends money through a path that says when it did not work. The run's price is still bytes ÷ 4 and still unmetered — that half is G31's |
-| 5 | **G15** the grade cannot see an answer getting thinner | raised 2026-09-06 — one developer case reads `HIT 3/3` → `HIT 1/3` in both arms under a change every clause of rule R called identical, and it is the only case in either suite in either arm that moved its completeness. `src/bench.rs:336` prints the number; the summary, the floors and the exit code are counts of cases and read none of it. The same seventeen cases moved upward too — three anchors from seed 2 to seed 1 and one from seed 4 — and the instrument is blind to that as well. G10's constraint, measured through a gap in the instrument |
+| 5 | **G15** the grade cannot see an answer getting thinner | **unread 2026-10-03 (0.6.0)**: the four arms on `v0.5.0` were never taken in a quiet sitting (`quiet.sh` refused 2026-09-23 and every sitting since). G32's *before* on the same binary and store stood in as 0.6.0's arms baseline. Raised 2026-09-06: one developer case reads `HIT 3/3` → `HIT 1/3` in both arms under a change every clause of rule R called identical, and it is the only case in either suite in either arm that moved its completeness. `src/bench.rs:336` prints the number; the summary, the floors and the exit code are counts of cases and read none of it. The same seventeen cases moved upward too — three anchors from seed 2 to seed 1 and one from seed 4 — and the instrument is blind to that as well. G10's constraint, measured through a gap in the instrument |
 | — | ~~the lexical arm's 49 ms~~ | closed 2026-09-05 (0.5.0) — the perf results left this number here and nowhere else. The BM25 indexes are built once by a resident context and kept: socket lexical 55.0 → 6.8 ms, median of 33 against a base spread of 0.9 ms, the design note's 30 ms target met; Rule 1 sixteen byte-identical verdicts and Rule 2 142/142 in four pairings |
 | — | ~~**G9** code is unreachable from prose~~ | measured 2026-09-05 — A1 to A4 each rejected by the rule; the code questions ship into an index of their own for the `ask --rerank` pool, `where` stays 0/9 in the plain fusion, and G12 is what would move it |
 | — | ~~**G10** five seeds over three lists~~ | measured 2026-09-05 — A4 prices one seat for a fourth list at 6 held-out questions in each arm, none gained, p = 0.031; closed as measured, not as fixed |
 | — | ~~**G11** the embedder for Russian paraphrase~~ | shipped 2026-09-05 as a store option — e5-large reads paraphrase 22/30 and held-out 103 → 119, at 0.8 s an `ask` and a 2.1 GB download; the default followed at `35357c1` and went back to the small model on 2026-09-07 ([ADR-002](../adr/ADR-002-two-defaults-multiplied.md)) with the option unchanged, and a store with no recorded model still reads as the small one |
 | — | ~~**G5** rank + MRR~~ | closed by Task 1 (2026-09-04) — every retrieval row carries `rank`, the summary carries `mrr`, and the run reads 0.635; the 2026-09-03 rows cannot be rescored |
 | — | ~~**G18** a non-ASCII path drops its file from `changes`~~ | closed 2026-09-09 — `-c core.quotepath=false` on both invocations, two tests over a scratch repository that pins the quoting on, the untracked listing asked for NUL-separated, and the ambient `GIT_DIR` dropped. A non-UTF-8 path and a decomposed one still lose their file, recorded in the section above. Raised 2026-09-07 by the Windows port's CI work, latent — `core.quotepath` is on by default, so `parse` reads no name from a quoted `+++` line and drops every hunk in that file, with Task 2's file-id fallback unreachable because no hunk exists. The pinned fixture has 0 such paths, so no recorded number moved on it. Above G1 because it is one argument on two `git` calls and it restores files that vanish today with nothing printed |
-| 7 | **G1** unparsed files get a file node | the file half is closed by Task 2 (2026-09-04) against a `code_files` denominator; the symbol half is 57 Kotlin declarations and waits on 0.6.0's extractor |
+| 7 | **G1** unparsed files get a file node | the file half is closed by Task 2 (2026-09-04) against a `code_files` denominator. The symbol half **failed 2026-10-03 (0.6.0)**: 505 missed against a bar of 222. Kotlin is down from 1,517 to 23, and TypeScript's own 482 remain. Waived for the release by Max on 2026-10-05 and carried in #143 |
 | — | ~~**G3** the three impact diagnostics~~ | closed by Tasks 3 and 4 (2026-09-04) — 123/123 files over 16 targets, mean recall 1.0 |
 | — | ~~**G4** grow the blast set~~ | closed by Task 5 (2026-09-04) — `blast.jsonl` is 32 cases and the per-suite decision rule is written down before the changes judged on it |
 | 8 | **G2** fourteen paraphrases a neighbour away | the lever this row named is measured and rejected (2026-09-04): `--rerank-local` reads 17/30 against a control of 15/30, at 17.9 s a question; the gap stays open with nothing cheaper left to try |
-| 9 | **G6** a case file per new corpus | the `impact` third is a written baseline (2026-09-04); `trace` and `changes` ship with the 0.6.0 languages, not after them |
+| — | ~~**G6** a case file per new corpus~~ | closed 2026-10-03 (0.6.0) — every shipped language has `impact`, `trace` and `changes` cases in its own corpus, each re-read on the release candidate, with Java, Python, Shell, Swift and Vue's missing cases waived by Max as cases their corpora cannot hold. Razor failed `impact` 4/8 and `trace` 1/2 and stays behind its glob (G43). The retrieval half's census is still one corpus's |
 | 10 | **G17** the constant's derivation set is the plan's own | raised 2026-09-06 — `c_code = 0.902` was taken on an 800-question mixed set fixed at equal halves in the design note before any dump, by the same plan that proposed the seat it judges. The order of operations held and is not what is weak; what is unmeasured is whether the verdict moves with the mix. Last because no verdict is known to have turned on it, and first among method gaps if the seat is retried |
 
 ## Suggested order — the cost family
@@ -1919,9 +1995,9 @@ answer different questions, and no row below moves a retrieval floor.
 | | gap | why here |
 |---|---|---|
 | — | ~~**G42** no row under two seconds has a CPU reading~~ | **closed 2026-09-11** — `avg_cpu` is `(user + sys) / wall` off the report `measure.sh` already writes, medianed like the rest and printed by `compare` as a fourth column; the embed keeps the sampled peak, every reader row now carries a CPU number, and a summary without `user`/`sys` is read without the column rather than refused. Reported and judged by nobody: `/usr/bin/time` reports to 10 ms, so a 0.04 s row moves a fifth on one tick, and the spread a bar would come from is what `control` now prints — that is G23's reading, still open |
-| 1 | **G23** the reader bars are tighter than the suite's own repeatability | every other row in this family is read through those bars, and the control already fails them on a change that touches no reader: `ask-fused` 0.58 s against 0.35, max RSS 1.36–1.56 GB on both binaries. n runs and a median, and it is fixed |
+| 1 | **G23** the reader bars are tighter than the suite's own repeatability | **unread 2026-10-03 (0.6.0)**: no quiet sitting, so there is no reference (`master-t2/readers-reference.txt`), and 0.6.0's reader-suite and build-wall cost rows went ungated. Every other row in this family is read through those bars, and the control already fails them on a change that touches no reader: `ask-fused` 0.58 s against 0.35, max RSS 1.36–1.56 GB on both binaries. n runs and a median, and it is fixed |
 | 2 | ~~**G20** the whole-store run in the band has no wall~~ | ~~the second round's headline is a product of ratios — 4.1–4.5× of 1,930 s — because three attempts starved on a working laptop~~ — closed 2026-09-09 — the band was removed |
-| 3 | **G19** the progress cadence is a count of rows | a fixed bar the plan set and the shipped code misses at both tails, 102.4 s and 96.7 s against 60, with the batching rule that would fix it already written one file away |
+| 3 | **G19** the progress cadence is a count of rows | **unread 2026-10-03 (0.6.0)**: §9 of the levers results is empty. A fixed bar the plan set and the shipped code misses at both tails, 102.4 s and 96.7 s against 60, with the batching rule that would fix it already written one file away |
 | 4 | **G22** mapped weights under memory pressure | a shipped default whose price is +6% to +26% of wall exactly on the machines that most need the 1.14 GB it saves, and all three candidate policies are unmeasured |
 | 5 | ~~**G21** one platform measured, three reasoned~~ | ~~the largest unmeasured surface in the family, and the one that needs hardware this session did not have~~ — closed 2026-09-09 — the band was removed |
 | — | ~~**G27** `serve`'s socket path and its leftover~~ | closed 2026-09-09 — the socket falls back to `$TMPDIR/repograph-<hash>.sock` when `.repograph/serve.sock` will not fit in `sun_path`, proved on a 230-byte repository path that could not bind at all before; and a `SIGTERM` sets a flag the loop reads, so the exit is the identity-checked one every other exit takes |
@@ -1938,10 +2014,10 @@ clones a repository they did not write.
 | | gap | why here |
 |---|---|---|
 | — | ~~**G36** the project file runs any command~~ | closed 2026-09-09 — and it took two refusals, not one: the `*_command` keys became machine-file-only, and the model name, which is interpolated into that command unquoted and was never checked, is now a token or it is not used. One refused key would have left the second door open |
-| 2 | **G32** a rebuilt enriched store is graded raw | the first thing anyone will hit after this branch merges: 150 nodes without questions and a bench that quietly grades against the raw floors. A stderr line and one `enrich` close it; the fixture's own rebuild is the recorded pair that says so |
+| — | ~~**G32** a rebuilt enriched store is graded raw~~ | closed 2026-09-23 — read on `v0.5.0`: before, rebuilt and after green, the stderr line naming the 150 nodes, one `enrich` writing all 150 (0 failed), coverage 2,146/2,146. The original reason for the row: the first thing anyone will hit after this branch merges: 150 nodes without questions and a bench that quietly grades against the raw floors. A stderr line and one `enrich` close it; the fixture's own rebuild is the recorded pair that says so |
 | — | ~~**G41** a verdict that is an answer exits like a crash~~ | **closed 2026-09-11** — `3` for a verdict, `1` for everything else, in both commands; `2` was refused because `clap` and the npm launcher both already write it. Five cases run the binary, `bench/probe` reads the status and dropped its grep, and the README states the codes. The kit now needs a 0.5.0 binary: an older one's missed floors are refused as the failures they are indistinguishable from |
-| 3 | **G34** two copies of one grammar | **one grammar in code since #27**; what is left here is a measurement, not a change — the bench line's `families=` retired in favour of the invariant, read on a corpus build (§4 of the 2026-09-10 levers doc, Reading empty) |
-| 4 | **G39** the family set is an input to extraction | **landed in code by #27** — the generic grammar, `Graph::pending`/`settle`, families as a view — and what stands open is the price the gap calls the whole question: the store's growth and the one-file `update`, on the corpus copy (§6, Task 6, Reading empty). It stays above the rest of this family because an unread price is what would reopen the design |
+| 3 | **G34** two copies of one grammar | **corpus half green 2026-09-23**: 8,475 nodes and 30,363 edges with no label changed, `main` against `v0.5.0`. The property test on CI and the `track.py` half are unread. **One grammar in code since #27**; what is left here is a measurement, not a change — the bench line's `families=` retired in favour of the invariant, read on a corpus build (§4 of the 2026-09-10 levers doc, Reading empty) |
+| 4 | **G39** the family set is an input to extraction | **read 2026-09-23 on `v0.5.0`**: (a) and (b) green (nodes and edges the same, bytes 1.085 ≤ 1.100); (c) green on counts, its wall unread; (d) and (e) unread for want of a quiet sitting. **Landed in code by #27** — the generic grammar, `Graph::pending`/`settle`, families as a view — and what stands open is the price the gap calls the whole question: the store's growth and the one-file `update`, on the corpus copy (§6, Task 6, Reading empty). It stays above the rest of this family because an unread price is what would reopen the design |
 | ~~5~~ | ~~**G30** where the reranker's gains sit in the pool~~ | **closed 2026-09-09** — thirteen gains at ranks 6, 14, 18, 22, 23, 51, 109, 122, 135, 152, 155, 173, 196; five are within reach of a zero-token lever and eight are the model's alone |
 | ~~6~~ | ~~**G28** the reranked p90 straddles the ceiling~~ | **answered 2026-09-09** — the cause is pick order (identical pool, identical prompt, 21 of 30 cases moving ±25 tokens); the arm's own bar is written at p90 240, unread |
 | ~~7~~ | ~~**G29** the one paraphrase sonnet never picks~~ | **closed 2026-09-09** — `pool=-/200`: the id is outside the pool, so the lever is depth or fusion and never the snippet |
@@ -1951,6 +2027,7 @@ clones a repository they did not write.
 | — | ~~**G40** the empty set is a never-matching regex~~ | **closed 2026-09-11** — the constructor the row asked to wrap no longer exists, so the state is the graph's and a test is what closes it: no definitions, one file node, `(none)` on both halves, both mentions held aside |
 | — | ~~**G38** the report has no edge~~ | **closed 2026-09-11** — `definitions` per family with `defined once` on the single ones, `ids` per mention-only prefix, and both sorts. The gate's first clause is unread: the sort that would put `OQ` first is tested, the corpus that would show it is not |
 | — | **G33** thirteen families are text now | closed as accepted the day it was raised, with the names recorded; reopens on a recorded case that needs a mention-only family |
+| 10 | **G43** Razor is behind an explicit glob | raised 2026-10-03 (0.6.0): `impact` 4/8 and `trace` 1/2 on the private `.NET` corpus, so Razor is the one language read but not in the defaults. Last because a Razor user can turn it on with one glob, and both levers are readers |
 
 ## What is explicitly not on this list
 

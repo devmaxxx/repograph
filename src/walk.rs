@@ -32,7 +32,9 @@ pub struct Entry { pub rel: String, pub kind: FileKind, pub hash: String, pub st
 /// 4: `main` with the 0.5.5 fixes above forward-ported. 0.5.5 stamps its stores 3 and reads by
 /// 0.5.5's grammar, not 0.6.0's, so a 3 here would leave a store 0.5.5 wrote unread; one above
 /// both makes a 0.5.4 store (2) and a 0.5.5 store (3) re-read once on the first writer.
-pub const GRAMMAR: u32 = 4;
+/// 5: 0.6.0 — every language ships, read by default, and text files are a node kind; a store any
+/// 0.5.x or the forward-ported `main` wrote is re-read once.
+pub const GRAMMAR: u32 = 5;
 
 /// Refused as text whatever `text_globs` says: machine output nobody asks a question of, any one of
 /// which would outweigh the hand-written files in the lexical index. Text entries only — `skip`
@@ -41,6 +43,25 @@ const TEXT_REFUSED: [&str; 11] = [
     "**/package-lock.json", "**/yarn.lock", "**/pnpm-lock.yaml", "**/Cargo.lock", "**/poetry.lock",
     "**/Gemfile.lock", "**/composer.lock", "**/go.sum", "**/*.min.*", "**/*.map", "**/vendor/**",
 ];
+
+/// Never read, whatever a glob or `skip` says: files that hold credentials. Their content would
+/// land in `graph.json`, the BM25 and dense indexes, an `enrich` prompt sent to a model, and every
+/// answer that seeds them. `.gitignore` keeps most of them out already; this is the floor for the
+/// repository that commits one, or is not under git at all.
+/// Matched without regard to case: `.ENV` and `Prod.PEM` hold the same thing.
+const SECRET: [&str; 40] = [
+    "**/.env", "**/.env.*", "**/.env-*", "**/.env_*", "**/*.env", "**/.envrc", "**/.dev.vars", "**/*.pem", "**/*.key",
+    "**/*.p12", "**/*.pfx", "**/*.jks", "**/*.keystore", "**/*.kdbx", "**/*.ppk", "**/*.gpg",
+    "**/*.asc", "**/id_{rsa,dsa,ecdsa,ed25519}", "**/.npmrc", "**/.pypirc", "**/.netrc",
+    "**/.pgpass", "**/.git-credentials", "**/.htpasswd", "**/.boto", "**/.s3cfg", "**/.dockercfg",
+    "**/.aws/credentials", "**/.docker/config.json", "**/kubeconfig", "**/.kube/config",
+    "**/*.tfvars", "**/*.tfvars.json", "**/*.tfstate", "**/*.tfstate.*", "**/credentials*.json",
+    "**/service-account*.json", "**/{secret,secrets}.{yaml,yml,json,toml,ini,conf,txt}", "**/*.{secret,secrets}", "**/.vault_pass*",
+];
+
+/// Templates that name a project's variables with placeholder values: the one shape of env file
+/// worth a question, and written to be committed.
+const SECRET_TEMPLATES: [&str; 4] = ["**/.env.example", "**/.env.sample", "**/.env.template", "**/.env.dist"];
 
 /// Over this a text file is data, not something written to be read, and is left out and counted.
 pub const TEXT_MAX_BYTES: u64 = 1 << 20;
@@ -88,6 +109,27 @@ pub(crate) fn globs(globs: &[String]) -> Result<GlobSet> {
     Ok(b.build()?)
 }
 
+/// `include` as globs: a plain directory reaches everything under it, and `./` or a trailing `/`
+/// mean nothing. `None` for an empty list, which is the whole repository.
+fn included(include: &[String]) -> Result<Option<GlobSet>> {
+    let mut out = Vec::new();
+    for raw in include {
+        let p = raw.trim().trim_start_matches("./").trim_start_matches('/').trim_end_matches('/');
+        if p.is_empty() || p == "." { return Ok(None); }
+        // A glob can name a directory too (`packages/*/src`), and its files are under it.
+        out.push(p.to_string());
+        out.push(format!("{p}/**"));
+    }
+    if out.is_empty() { return Ok(None); }
+    globs(&out).map(Some)
+}
+
+fn globs_any_case(globs: &[&str]) -> Result<GlobSet> {
+    let mut b = GlobSetBuilder::new();
+    for g in globs { b.add(globset::GlobBuilder::new(g).case_insensitive(true).build()?); }
+    Ok(b.build()?)
+}
+
 pub(crate) fn stamp_of(meta: &std::fs::Metadata) -> Option<Stamp> {
     let ns = meta.modified().ok()?.duration_since(std::time::UNIX_EPOCH).ok()?.as_nanos();
     Some(Stamp { mtime_ns: u64::try_from(ns).ok()?, len: meta.len() })
@@ -112,6 +154,9 @@ fn walk_inner(repo: &Path, cfg: &Config, prev: &Manifest, count: bool) -> Result
     let registries = globs(&cfg.registries)?;
     let text = globs(&cfg.text_globs)?;
     let refused = globs(&TEXT_REFUSED.map(String::from))?;
+    let include = included(&cfg.include)?;
+    let secret = globs_any_case(&SECRET)?;
+    let template = globs_any_case(&SECRET_TEMPLATES)?;
     let mut oversized = 0usize;
     let mut out = Vec::new();
     // A repository keeps its agent rules, its hooks and its CI in dotted directories, so the
@@ -137,7 +182,10 @@ fn walk_inner(repo: &Path, cfg: &Config, prev: &Manifest, count: bool) -> Result
             eprintln!("walk: skipping non-UTF-8 path {}", rel_path.display());
             continue;
         };
-        if skip.is_match(&rel) {
+        if include.as_ref().is_some_and(|i| !i.is_match(&rel))
+            || skip.is_match(&rel)
+            || (secret.is_match(&rel) && !template.is_match(&rel))
+        {
             continue;
         }
         let kind = if registries.is_match(&rel) { FileKind::Registry }
@@ -494,6 +542,52 @@ mod tests {
     }
 
     #[test]
+    fn include_reads_only_the_directories_it_names() {
+        let d = repo();
+        let p = d.path();
+        std::fs::create_dir_all(p.join("srcx")).unwrap();
+        std::fs::write(p.join("srcx/c.ts"), "export const c = 1;\n").unwrap();
+        let rels = |include: &[&str]| -> Vec<String> {
+            let cfg = Config { include: include.iter().map(|s| s.to_string()).collect(), ..Config::default() };
+            walk(p, &cfg, &Manifest::default()).unwrap().into_iter().map(|e| e.rel).collect()
+        };
+        let all = rels(&[]);
+        assert!(all.contains(&"b.ts".to_string()) && all.contains(&"docs/a.md".to_string()));
+        assert_eq!(rels(&["./docs/"]).iter().filter(|r| !r.starts_with("docs/")).count(), 0);
+        assert!(rels(&["docs"]).contains(&"docs/a.md".to_string()));
+        assert_eq!(rels(&["srcx/*.ts"]), ["srcx/c.ts"], "a glob is matched as it is written");
+        assert_eq!(rels(&["src"]), Vec::<String>::new(), "src is not a prefix of srcx");
+        assert_eq!(rels(&["sr?x"]), ["srcx/c.ts"], "a glob naming a directory reaches the files under it");
+        assert_eq!(rels(&["/srcx"]), ["srcx/c.ts"], "a leading slash is the repository root");
+        assert_eq!(rels(&["."]), all);
+    }
+
+    #[test]
+    fn a_credential_file_is_never_read_whatever_the_globs_say() {
+        let d = repo();
+        let p = d.path();
+        std::fs::create_dir_all(p.join("api/.aws")).unwrap();
+        for f in [".env", ".env.local", "api/.env.production", "prod.env", ".envrc", "api/tls.pem",
+                  "api/tls.key", "id_ed25519", ".npmrc", "api/.aws/credentials", "infra.tfvars",
+                  "terraform.tfstate", "credentials-ci.json", "secrets.yaml", ".env.md", ".ENV", ".env-prod", ".env_ci",
+                  "Prod.PEM", "ID_RSA", "main.tfvars.json", "app.secret", ".pgpass"] {
+            std::fs::write(p.join(f), "API_KEY=sk-live-123\n").unwrap();
+        }
+        for f in [".env.example", "id_ed25519.pub"] {
+            std::fs::write(p.join(f), "API_KEY=\n").unwrap();
+        }
+        let mut cfg = text_cfg();
+        // A config that claims everything as docs and code still reads none of them.
+        cfg.doc_globs.push("**/*".into());
+        cfg.code_globs.push("**/*".into());
+        let entries = walk(p, &cfg, &Manifest::default()).unwrap();
+        let read: Vec<&str> = entries.iter().map(|e| e.rel.as_str())
+            .filter(|r| { let r = r.to_lowercase(); ["env", "id_", "key", "cred", "secret", "tf", ".pem", "npmrc", "pgpass"].iter().any(|k| r.contains(k)) })
+            .collect();
+        assert_eq!(read, [".env.example", "id_ed25519.pub"]);
+    }
+
+    #[test]
     fn a_doc_a_code_file_a_registry_or_a_skipped_path_never_becomes_text() {
         let d = repo();
         let entries = walk(d.path(), &text_cfg(), &Manifest::default()).unwrap();
@@ -509,13 +603,13 @@ mod tests {
     #[test]
     fn a_file_a_glob_moves_to_another_reader_diffs_as_changed() {
         let d = repo();
-        std::fs::write(d.path().join("tool.py"), "print(1)\n").unwrap();
+        std::fs::write(d.path().join("tool.lua"), "print(1)\n").unwrap();
         let manifest = Manifest::from_entries(&walk(d.path(), &text_cfg(), &Manifest::default()).unwrap());
         let mut code = text_cfg();
-        code.code_globs.push("**/*.py".into());
+        code.code_globs.push("**/*.lua".into());
         let after = walk(d.path(), &code, &manifest).unwrap();
         let changed: Vec<_> = manifest.diff(&after).changed.into_iter().map(|e| (e.rel, e.kind)).collect();
-        assert_eq!(changed, [("tool.py".to_string(), FileKind::Code)]);
+        assert_eq!(changed, [("tool.lua".to_string(), FileKind::Code)]);
     }
 
     #[test]

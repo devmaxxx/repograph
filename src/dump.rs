@@ -34,12 +34,15 @@ struct Record {
     bm25_passages: Vec<(String, f32)>,
     bm25_questions: Vec<(String, f32)>,
     bm25_code: Vec<(String, f32)>,
+    /// Empty on a store without text nodes, as `Lexical::build` leaves the text index unbuilt.
+    bm25_text: Vec<(String, f32)>,
     /// What each query could reach in the index its list came from, the denominator of the
     /// coverage admission (`LexicalIndex::attainable`). Recorded so an admission rule can be
     /// replayed over these lists offline, one binary and no re-run per candidate rule.
     attainable_passages: f32,
     attainable_questions: f32,
     attainable_code: f32,
+    attainable_text: f32,
     loo_hash: String,
     loo_rows: Vec<usize>,
     ask: Ask,
@@ -130,6 +133,7 @@ pub fn run(repo: &Path, queries: &Path, out: &Path, depth: usize, no_dense: bool
             // fusion, and this `[]` records that same absence rather than a list nothing reads.
             bm25_questions: lex.questions.as_ref().map(|i| i.search(&q.q, depth)).unwrap_or_default(),
             bm25_code: lex.code.as_ref().map(|i| i.search(&q.q, depth)).unwrap_or_default(),
+            bm25_text: lex.text.as_ref().map(|i| i.search(&q.q, depth)).unwrap_or_default(),
             attainable_passages: lex.passages.attainable(&q.q),
             // -0.0, not 0.0: the sign an empty sum takes under `f32`'s `Sum`. `questions`' index
             // is never built at all on a store with none (see `bm25_questions` above), so -0.0
@@ -137,6 +141,7 @@ pub fn run(repo: &Path, queries: &Path, out: &Path, depth: usize, no_dense: bool
             // produced — an index that was built and holds no documents attains a plain 0.0.
             attainable_questions: lex.questions.as_ref().map(|i| i.attainable(&q.q)).unwrap_or(-0.0),
             attainable_code: lex.code.as_ref().map(|i| i.attainable(&q.q)).unwrap_or(-0.0),
+            attainable_text: lex.text.as_ref().map(|i| i.attainable(&q.q)).unwrap_or(-0.0),
             dense_passages,
             dense_questions,
             loo_hash,
@@ -226,15 +231,17 @@ mod tests {
             bm25_passages: vec![],
             bm25_questions: vec![],
             bm25_code: vec![],
+            bm25_text: vec![],
             attainable_passages: 1.5,
             attainable_questions: 0.0,
             attainable_code: 0.0,
+            attainable_text: 0.0,
             loo_hash: "abc".into(),
             loo_rows: vec![3],
             ask: Ask { seeds: vec![("FR-PAY-22".into(), 1.0)], expanded: vec![("N-151".into(), 0.5, "FR-PAY-22".into())] },
         };
         let v = serde_json::to_value(&record).unwrap();
-        for key in ["q", "expect", "kind", "exact", "qvec", "dense_passages", "dense_questions", "bm25_passages", "bm25_questions", "bm25_code", "attainable_passages", "attainable_questions", "attainable_code", "loo_hash", "loo_rows", "ask"] {
+        for key in ["q", "expect", "kind", "exact", "qvec", "dense_passages", "dense_questions", "bm25_passages", "bm25_questions", "bm25_code", "bm25_text", "attainable_passages", "attainable_questions", "attainable_code", "attainable_text", "loo_hash", "loo_rows", "ask"] {
             assert!(v.get(key).is_some(), "missing field {key}");
         }
         assert_eq!(v["expect"], "FR-PAY-22");

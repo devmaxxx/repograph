@@ -5,7 +5,7 @@ use crate::code::CodeExtractor;
 use crate::config::Config;
 use crate::model::{EdgeKind, Extraction, Extractor};
 
-/// The defaults do not glob .NET until L7, and `Resolver::new` collects only globbed families.
+/// Razor is outside the defaults, and `Resolver::new` collects only globbed families.
 pub(crate) fn dotnet_config() -> Config {
     Config { code_globs: vec!["**/*.cs".into(), "**/*.razor".into(), "**/*.cshtml".into()], ..Config::default() }
 }

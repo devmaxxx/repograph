@@ -1,0 +1,231 @@
+{
+ "corpus": "/Users/max/bench/corpora-src/pawfice-808d6e08",
+ "commit": "808d6e0",
+ "when": "2026-10-03T13:19:10",
+ "suites": [
+  "blast"
+ ],
+ "cases": {
+  "blast": 14
+ },
+ "case_files": {
+  "blast": "/Users/max/Documents/projects/repograph/bench/corpora/pawfice/blast.jsonl"
+ },
+ "tools": {
+  "repograph": {
+   "rows": [
+    {
+     "suite": "blast",
+     "kind": "impact",
+     "target": "OfficeState",
+     "tier": "wide",
+     "want_files": 3,
+     "found_files": 3,
+     "recall": 1.0,
+     "ms": 9,
+     "chars": 815
+    },
+    {
+     "suite": "blast",
+     "kind": "impact",
+     "target": "ConnStatus",
+     "tier": "narrow",
+     "want_files": 2,
+     "found_files": 2,
+     "recall": 1.0,
+     "ms": 9,
+     "chars": 183
+    },
+    {
+     "suite": "blast",
+     "kind": "impact",
+     "target": "OfficeGame",
+     "tier": "narrow",
+     "want_files": 2,
+     "found_files": 2,
+     "recall": 1.0,
+     "ms": 8,
+     "chars": 330
+    },
+    {
+     "suite": "blast",
+     "kind": "impact",
+     "target": "CatWorker",
+     "tier": "narrow",
+     "want_files": 1,
+     "found_files": 1,
+     "recall": 1.0,
+     "ms": 9,
+     "chars": 694
+    },
+    {
+     "suite": "blast",
+     "kind": "impact",
+     "target": "ScanPage",
+     "tier": "narrow",
+     "want_files": 1,
+     "found_files": 1,
+     "recall": 1.0,
+     "ms": 10,
+     "chars": 153
+    },
+    {
+     "suite": "blast",
+     "kind": "impact",
+     "target": "StateIcons",
+     "tier": "narrow",
+     "want_files": 1,
+     "found_files": 1,
+     "recall": 1.0,
+     "ms": 9,
+     "chars": 162
+    },
+    {
+     "suite": "blast",
+     "kind": "impact",
+     "target": "SessionSheet",
+     "tier": "narrow",
+     "want_files": 1,
+     "found_files": 1,
+     "recall": 1.0,
+     "ms": 10,
+     "chars": 153
+    },
+    {
+     "suite": "blast",
+     "kind": "impact",
+     "target": "SpawnSheet",
+     "tier": "narrow",
+     "want_files": 1,
+     "found_files": 1,
+     "recall": 1.0,
+     "ms": 11,
+     "chars": 146
+    },
+    {
+     "suite": "blast",
+     "kind": "impact",
+     "target": "SettingsSheet",
+     "tier": "narrow",
+     "want_files": 1,
+     "found_files": 1,
+     "recall": 1.0,
+     "ms": 10,
+     "chars": 155
+    },
+    {
+     "suite": "blast",
+     "kind": "trace",
+     "from": "_HomeScreenState",
+     "to": "RelayClient",
+     "expect": "path",
+     "hit": true,
+     "says_none": false,
+     "ms": 9,
+     "chars": 154
+    },
+    {
+     "suite": "blast",
+     "kind": "trace",
+     "from": "_HomeScreenState",
+     "to": "OfficeState",
+     "expect": "path",
+     "hit": true,
+     "says_none": false,
+     "ms": 9,
+     "chars": 159
+    },
+    {
+     "suite": "blast",
+     "kind": "trace",
+     "from": "RelayClient",
+     "to": "OfficeState",
+     "expect": "none",
+     "hit": true,
+     "says_none": true,
+     "ms": 9,
+     "chars": 130
+    },
+    {
+     "suite": "blast",
+     "kind": "changes",
+     "base": "c6adc417f17cb866dad9cee2d9db1374b57e6dcd",
+     "want_files": 6,
+     "found_files": 6,
+     "want_symbols": 107,
+     "found_symbols": 68,
+     "by_ext": {
+      ".dart": {
+       "want_files": 3,
+       "found_files": 3,
+       "want_symbols": 67,
+       "found_symbols": 67
+      },
+      ".ts": {
+       "want_files": 2,
+       "found_files": 2,
+       "want_symbols": 1,
+       "found_symbols": 1
+      },
+      ".py": {
+       "want_files": 1,
+       "found_files": 1,
+       "want_symbols": 39,
+       "found_symbols": 0
+      }
+     },
+     "ms": 38,
+     "chars": 6883
+    },
+    {
+     "suite": "blast",
+     "kind": "changes",
+     "base": "984bc14a5b028c6e80c92b184bdb265ea1a11c80",
+     "want_files": 1,
+     "found_files": 1,
+     "want_symbols": 6,
+     "found_symbols": 6,
+     "by_ext": {
+      ".dart": {
+       "want_files": 1,
+       "found_files": 1,
+       "want_symbols": 6,
+       "found_symbols": 6
+      }
+     },
+     "ms": 36,
+     "chars": 879
+    }
+   ],
+   "summary": {
+    "impact": {
+     "n": 9,
+     "recall_mean": 1.0,
+     "files_found": 13,
+     "files_want": 13,
+     "ms_median": 9,
+     "chars_median": 162
+    },
+    "trace": {
+     "n": 3,
+     "hit": 3,
+     "path_hit": 2,
+     "path_n": 2,
+     "none_hit": 1,
+     "none_n": 1,
+     "ms_median": 9
+    },
+    "changes": {
+     "n": 2,
+     "symbols_found": 74,
+     "symbols_want": 113,
+     "files_found": 7,
+     "files_want": 7,
+     "ms_median": 37,
+     "chars_median": 3881
+    }
+   },
+   "failed_calls": 0
+  }
+ }
+}

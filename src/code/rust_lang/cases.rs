@@ -24,7 +24,6 @@ impl Repo {
     }
 
     pub(super) fn extract(&self, rel: &str) -> Extraction {
-        // The language is not in the defaults until L7's PR, so the case names its glob, as a user would.
         let resolver = self.resolver();
         let src = std::fs::read_to_string(self.dir.path().join(rel)).unwrap();
         CodeExtractor::new(resolver).extract(rel, &src)

@@ -21,10 +21,12 @@ has since grown to the 82 cases [Bench](#bench) floors.
 
 ## Status
 
-0.5.4 is the version `main` carries, and every command below is implemented rather than planned:
+0.6.0 is the version `main` carries. Its default globs read TypeScript and JavaScript, Kotlin, Java,
+C#, Rust, Python, Dart, Swift, GraphQL, SQL, Bicep, HCL, Shell and Vue; every command below is
+implemented rather than planned:
 `build` (a full re-read that replaces the stored graph only when it saves, so one interrupted
 leaves the previous store answering) and `update` (incremental; a no-op `update` is a fixed point), `families`, `ask`, `explain`,
-`verify`, `impact`, `trace`, `changes`, `embed`, `watch`, `serve`, `prime`, `install-agent`,
+`verify`, `impact`, `trace`, `changes`, `embed`, `watch`, `serve`, `mcp`, `prime`, `install-agent`,
 `import-legacy`, `dump` and `bench`. Three spend model tokens and all three are opt-in: `enrich`,
 `ask --rerank`, and `ask --rerank-local` (zero tokens, a local cross-encoder, measured and rejected
 as a floor candidate). `bench` fails the process when a floor in [Bench](#bench) is missed; floors
@@ -382,6 +384,29 @@ repograph bench --cases other.jsonl  # any shape: the 40/30/12 shape is graded, 
 repograph dump --queries qs.jsonl --out lists.json   # every retriever's ranked list per question, 300 deep
 ```
 
+### As an MCP server
+
+```bash
+repograph mcp                    # a stdio MCP server (protocol 2025-06-18) over the current repository
+claude mcp add repograph -- repograph mcp   # what `install-agent --claude` runs, once
+```
+
+`install-agent --claude` registers the server through the `claude` CLI, leaves one that is already
+registered alone, and prints the command to run by hand where `claude` is not on `PATH`. The
+protocol is newline-delimited JSON-RPC on stdout and nothing else; diagnostics go to stderr. A tool
+that fails returns an `isError` result and the server carries on.
+
+| tool | does |
+| --- | --- |
+| `ask` | `question` (plus `seeds`, `bodies`, `rerank`, `rerank_local`, `depth`, `stale`) to the answer `ask` prints, with the low-confidence line when the retrievers disagree |
+| `explain`, `impact`, `trace`, `changes` | the commands of those names, with their flags; an answer given while files are behind the tree says so |
+| `status` | nodes and edges, enrich coverage, files behind the tree, the store's model against the configured one, vector rows owed, and whether a background refresh is running with its last progress line from `.repograph/background.log` |
+| `reindex` | starts a detached `update` and returns at once; says so when one is already running |
+| `switch_model` | `model <hub id>` in the background. Only catalogued models and ones trusted on this machine with `repograph model <id>`; any other id is refused, because the caller is an agent and a model is code this machine downloads |
+
+`status` reports progress while the writer lock is held and nothing once the refresh is over. Each
+read tool loads the store per call, or asks a running `serve` for `ask`.
+
 ## How a question becomes an answer, and what ends up in the graph
 
 Exact id or symbol first, then BM25 over passages and over `enrich`'s generated questions, then a
@@ -403,26 +428,32 @@ such a file, names those extensions once on stderr — `code: no grammar reads 2
 only` — so a glob that reaches past the
 grammars says so instead of producing a graph silently thinner than the tree.
 
+Every language in the table below is read by default. The first `build`, `update` or refreshing
+`ask` after upgrading from 0.5.x re-reads the whole tree once, because this release reads files by
+a new grammar generation; the next reads only what changed. `REPOGRAPH_CODE_GLOBS` withdraws a
+language for one run without writing config into the tree. A `repograph.toml` that names `code_globs`
+keeps exactly the list it names, so a 0.5.x config that wrote the old default out reads no new
+language until the line is removed or widened.
+
 | language | extensions | reads | not read |
 |---|---|---|---|
 | TypeScript, JavaScript | `.ts` `.tsx` `.mts` `.cts` `.js` `.jsx` `.mjs` `.cjs` | exports and declarations with class members; imports through relative paths, `tsconfig.json` paths and `package.json` exports; calls; requirement ids cited in comments and strings; decorators | `.mts` and `.cts` are read when globbed by name; the default `skip` keeps bundles out (`**/*.min.js`, `**/.yarn/**`, `**/.pnp.*`) |
-| C# | `.cs` | types — classes, records, structs, interfaces, enums, delegates — with their members, primary-constructor parameters and nested types; `namespace` blocks and file-scoped namespaces; `using`, `using static`, aliases, `global::`, and a project's `global using`s; base types; partial types across files; calls through fields, properties, parameters, locals, `this`, `base`, static types and extension methods, and a typed value's calls up its base chain; static member access `X.Member` and generic arguments on expression calls (`AddScoped<IFoo, Foo>()`) as type uses; `typeof`, `default` and casts; attributes; requirement ids in comments and strings; generated files like any other | a call on `this`, a bare name or a static type to a member it inherits, and a call through an inherited field or property; a type found only through a using, which links as `X.Member` only when invoked as `X.M()`, since any other shape could be a package's namespace; `dynamic`, reflection and registrations in a DI container; a `.csproj` edit, which widens nothing until the next `build` (accepted in 0.6.0); read only when globbed until the defaults include it |
+| C# | `.cs` | types — classes, records, structs, interfaces, enums, delegates — with their members, primary-constructor parameters and nested types; `namespace` blocks and file-scoped namespaces; `using`, `using static`, aliases, `global::`, and a project's `global using`s; base types; partial types across files; calls through fields, properties, parameters, locals, `this`, `base`, static types and extension methods, and a typed value's calls up its base chain; static member access `X.Member` and generic arguments on expression calls (`AddScoped<IFoo, Foo>()`) as type uses; `typeof`, `default` and casts; attributes; requirement ids in comments and strings; generated files like any other | a call on `this`, a bare name or a static type to a member it inherits, and a call through an inherited field or property; a type found only through a using, which links as `X.Member` only when invoked as `X.M()`, since any other shape could be a package's namespace; `dynamic`, reflection and registrations in a DI container; a `.csproj` edit, which widens nothing until the next `build` (accepted in 0.6.0) |
 | Kotlin | `.kt` | classes, interfaces, `fun interface`, enums, data, sealed and annotation classes, objects; top-level `fun`, `val`, `var`, `typealias`, and extensions named without their receiver; members, constructor `val`s and companion members as `Class.member`; nested declarations; `Extends`, `Calls` through parameters, locals, typed properties and objects, `Imports`, cited ids, and `DecoratedBy` to an annotation declared in the repository; names resolve through one index shared with Java, and a call to an `expect` binds it and the caller's platform `actual`, or every `actual` from common code | `.kts` Gradle scripts, indexed as files only; calls on a value whose type is inferred from anything but a constructor, through another file's property types, inside a lambda passed to another file's `T.() -> R` function, to a companion's members from a nested type, a lowercase bare call under a supertype the repository does not declare, and `init` blocks; `private` and `protected` names are not exported, `internal` ones are |
 | Java | `.java` | classes, interfaces, enums, records and annotation types; methods, fields and constructors (`Type.Type`) as `Type.member`; nested types; `extends` and `implements` as `Extends`; `Calls` through parameters, locals, typed fields, `this.x`, `Type.m()` and `new T()` to the type it creates; a field's initializer walked from the field, and a static or instance initializer block from its class; `Imports` for `import a.b.C` and `import static a.b.C.m`, with `a.b.*` resolved at each use; cited ids; `DecoratedBy` to an annotation type declared in the repository; Kotlin and Java resolve each other | record components and enum constants as symbols; `super.` calls, call chains, calls through another file's fields, calls in an enum constant's arguments or body, and a lowercase bare call under a supertype the repository does not declare; a nested class in another file whose supertype is a member type it inherits, named like a top-level type of the package, may be read as extending the top-level one; anything not `public` is not exported, except an interface's members |
 | SQL (PostgreSQL) | `.sql` | Several kinds of object are symbols, their schema joined as `app/clients`: tables, views, materialized views, functions, procedures, types, schemas and sequences. Columns, triggers, policies and indexes are members of their table (`app/clients.status`). Every migration that creates or alters an object declares it. `ALTER TABLE`, a foreign key and a view's `FROM` are references; a trigger calls its function. A table renamed by `RENAME TO` or `SET SCHEMA` is declared under its new name by the `ALTER`, which references the old one. An unquoted name folds to lower case. | PL/pgSQL bodies, though the ids they cite still reach `ask`; `DROP`, `GRANT` and `COMMENT ON`; domains, extensions and aggregates; edges from TypeScript query builders |
 | GraphQL | `.gql` `.graphql` | Operations are `query/Name`, `mutation/Name` and `subscription/Name`, and fragments are `fragment/Name`. Types, inputs, enums, interfaces, unions, scalars and directives are symbols, and fields are `Type.field`. A spread calls its fragment wherever the repository declares it. `on T` and variable, field and argument types are references; `implements` extends; a directive decorates. | selections checked against the schema; enum values and arguments as symbols; edges from TypeScript |
-| Rust | `.rs` | `fn`, `struct`, `enum`, `union`, `trait`, `type`, `const`, `static` and `macro_rules!`, with trait and `impl` members as `Type.member` and any `pub` as an export; the module tree from paths and every `Cargo.toml` — `crate::`, `self::`, `super::`, a workspace crate's name, `[lib] path`; `use` trees with braces, globs and `as`, `pub use` as a re-export, and a path through a column-0 `pub use a::b::C;` followed one hop to the declaring file; calls through paths, bound names, `self`, and fields whose struct declares their type, through `&`, `Box`, `Arc`, `Rc`, `dyn` and a type parameter's bound; `macro_rules!` invocations; an `impl` of another file's type, tied to that type; attributes and derives that resolve in the repository; requirement ids in comments and strings | `#[path]` modules; calls written inside a macro's arguments; a method on a receiver that is neither `self` nor a typed field; field-typed calls when the struct's `impl` is in another file; a re-export written with braces or a glob, or a chain of re-exports past the first hop; external crates. Not in the default globs yet: name `**/*.rs` in `code_globs` |
-| Python | `.py` | `def`, `class` and plain-name assignments in the module and in class bodies, nested classes as `Class.Inner`; exports by `__all__`, else by the leading underscore; imports resolved from the importing file's directory, each `pyproject.toml`, `setup.py` or `setup.cfg` directory above it — and its `src/` when the package is not beside the manifest — and the repository root, relative imports by package; a name a package's `__init__.py` re-exports with `from .x import …`, followed one hop to the declaring module; calls through imported and top-level names, modules, classes, `self`, and attributes typed by an annotation or by `self.x = T(…)` in `__init__`; base classes that resolve, as `Extends`; decorators that resolve in the repository; requirement ids in comments, docstrings and strings | declarations under `if __name__ == "__main__":` or any other top-level `if` or `try`; a local variable's type; `super()` calls; the names a wildcard import brings in; imports inside dotted directories (`.github/` and the like), which are extracted but which the resolver's walk skips; a `package-dir` a manifest names other than `src/`; parenthesised multi-line re-exports in an `__init__.py`. Not in the default globs yet: name `**/*.py` in `code_globs` |
-| Shell | `.sh` `.bash` | functions, all exported; `source` and `.` of a written-out path or one built from the script's own directory (`$(dirname "$0")`, `${BASH_SOURCE%/*}`, `$(cd … && pwd)`, or a variable assigned one); calls to a function of the script or of a script it sources; a script run by path or through `bash` or `sh`, recorded and not walked; requirement ids in comments and strings | a path through any other variable, `$HOME` or a glob; `eval`; aliases; not in the default globs until its readings pass |
-| Bicep | `.bicep` | `param`, `var`, `resource` (a child as `parent.child`), `module`, `type` and `func` by symbolic name, outputs as `output/<name>`; references between declarations of a file; a `module` path in the repository, reaching what that file declares; requirement ids in comments and strings | registry and template-spec modules (`br:`, `ts:`); `import … from`; `.bicepparam`; not in the default globs until its readings pass |
-| HCL | `.tf` `.hcl` | Terraform addresses with `/` for `.` (`aws_instance/web`, `data/aws_ami/ubuntu`, `var/region`, `local/name`, `module/dns`, `output/ip`, `provider/hcloud`), each reference resolved within its module's directory; a local `module` source, reaching what that directory declares; other HCL by block type and label, with bake `inherits` and `targets`; requirement ids in comments and strings | `.tfvars`; `.terraform.lock.hcl`, which is a file and declares nothing; registry modules; provider-defined functions; `${VAR}` in a bake file; not in the default globs until its readings pass |
+| Rust | `.rs` | `fn`, `struct`, `enum`, `union`, `trait`, `type`, `const`, `static` and `macro_rules!`, with trait and `impl` members as `Type.member` and any `pub` as an export; the module tree from paths and every `Cargo.toml` — `crate::`, `self::`, `super::`, a workspace crate's name, `[lib] path`; `use` trees with braces, globs and `as`, `pub use` as a re-export, and a path through a column-0 `pub use a::b::C;` followed one hop to the declaring file; calls through paths, bound names, `self`, and fields whose struct declares their type, through `&`, `Box`, `Arc`, `Rc`, `dyn` and a type parameter's bound; `macro_rules!` invocations; an `impl` of another file's type, tied to that type; attributes and derives that resolve in the repository; requirement ids in comments and strings | `#[path]` modules; calls written inside a macro's arguments; a method on a receiver that is neither `self` nor a typed field; field-typed calls when the struct's `impl` is in another file; a re-export written with braces or a glob, or a chain of re-exports past the first hop; external crates |
+| Python | `.py` | `def`, `class` and plain-name assignments in the module and in class bodies, nested classes as `Class.Inner`; exports by `__all__`, else by the leading underscore; imports resolved from the importing file's directory, each `pyproject.toml`, `setup.py` or `setup.cfg` directory above it — and its `src/` when the package is not beside the manifest — and the repository root, relative imports by package; a name a package's `__init__.py` re-exports with `from .x import …`, followed one hop to the declaring module; calls through imported and top-level names, modules, classes, `self`, and attributes typed by an annotation or by `self.x = T(…)` in `__init__`; base classes that resolve, as `Extends`; decorators that resolve in the repository; requirement ids in comments, docstrings and strings | declarations under `if __name__ == "__main__":` or any other top-level `if` or `try`; a local variable's type; `super()` calls; the names a wildcard import brings in; imports inside dotted directories (`.github/` and the like), which are extracted but which the resolver's walk skips; a `package-dir` a manifest names other than `src/`; parenthesised multi-line re-exports in an `__init__.py` |
+| Shell | `.sh` `.bash` | functions, all exported; `source` and `.` of a written-out path or one built from the script's own directory (`$(dirname "$0")`, `${BASH_SOURCE%/*}`, `$(cd … && pwd)`, or a variable assigned one); calls to a function of the script or of a script it sources; a script run by path or through `bash` or `sh`, recorded and not walked; requirement ids in comments and strings | a path through any other variable, `$HOME` or a glob; `eval`; aliases |
+| Bicep | `.bicep` | `param`, `var`, `resource` (a child as `parent.child`), `module`, `type` and `func` by symbolic name, outputs as `output/<name>`; references between declarations of a file; a `module` path in the repository, reaching what that file declares; requirement ids in comments and strings | registry and template-spec modules (`br:`, `ts:`); `import … from`; `.bicepparam` |
+| HCL | `.tf` `.hcl` | Terraform addresses with `/` for `.` (`aws_instance/web`, `data/aws_ami/ubuntu`, `var/region`, `local/name`, `module/dns`, `output/ip`, `provider/hcloud`), each reference resolved within its module's directory; a local `module` source, reaching what that directory declares; other HCL by block type and label, with bake `inherits` and `targets`; requirement ids in comments and strings | `.tfvars`; `.terraform.lock.hcl`, which is a file and declares nothing; registry modules; provider-defined functions; `${VAR}` in a bake file |
 | Dart | `.dart` | classes, mixins, extensions, enums, typedefs, top-level functions and variables; members, fields and named constructors as `Type.member`; `extends`, `with` and `implements` as `Extends`; `Imports` through `package:` URIs, resolved by each `pubspec.yaml`'s `name:`, and relative URIs; `export` as `ReExports`; `part` and `part of` read as one library; `Calls` through the library's own names, imported names, typed fields and implicit `this` | `dart:` and external package imports; an unnamed extension's members; operators; cited requirement ids; a name with a leading `_` is not exported |
 | Swift | `.swift` | classes, structs, enums, protocols, functions and top-level `let` constants; members as `Type.member`, with an extension's members named on the extended type; inheritance as `Extends` when a globbed Swift file declares the name | imports, calls and cited ids; properties, top-level `var`, `init`, enum cases, `typealias` and `actor`; `private` and `fileprivate` names are not exported |
 | Vue | `.vue` | each `<script>` block, `setup` or not, through the TypeScript reading (`lang="tsx"` through TSX); the component as `<FileStem>`, exported and spanning its file, so a template edit changes it; decorators as `DecoratedBy` to a declaration the file declares or imports | the template, styles and custom blocks; a component used only as a template tag is not a reference |
 
-Kotlin and Java are read when `code_globs` names them — `code_globs = ["**/*.ts", "**/*.tsx", "**/*.js", "**/*.jsx", "**/*.mjs", "**/*.cjs", "**/*.kt", "**/*.java"]`, or `REPOGRAPH_CODE_GLOBS='**/*.ts **/*.tsx **/*.js **/*.jsx **/*.mjs **/*.cjs **/*.kt **/*.java'` for one run; the first update after adding them re-reads every JVM file once.
-
-Dart, Swift and Vue are read when `code_globs` names them — `code_globs = ["**/*.ts", "**/*.tsx", "**/*.js", "**/*.jsx", "**/*.mjs", "**/*.cjs", "**/*.dart", "**/*.swift", "**/*.vue"]`, or `REPOGRAPH_CODE_GLOBS='**/*.ts **/*.tsx **/*.js **/*.jsx **/*.mjs **/*.cjs **/*.dart **/*.swift **/*.vue'` for one run.
+Razor (`.razor`, `.cshtml`) is read only where `code_globs` or `REPOGRAPH_CODE_GLOBS` names it: its
+`@code` blocks are read as C#, but its readings did not pass `impact` and `trace` in 0.6.0.
 
 ## Configure
 
@@ -433,23 +464,35 @@ in full, not an empty config:
 | Key                  | Default                                                                                     |
 | -------------------- | ------------------------------------------------------------------------------------------- |
 | `doc_globs`          | `["**/*.md"]`                                                                               |
-| `code_globs`         | `["**/*.ts", "**/*.tsx", "**/*.js", "**/*.jsx", "**/*.mjs", "**/*.cjs"]`                    |
+| `code_globs`         | `["**/*.ts", "**/*.tsx", "**/*.js", "**/*.jsx", "**/*.mjs", "**/*.cjs", "**/*.kt", "**/*.java", "**/*.cs", "**/*.rs", "**/*.py", "**/*.dart", "**/*.swift", "**/*.gql", "**/*.graphql", "**/*.sql", "**/*.bicep", "**/*.tf", "**/*.hcl", "**/*.sh", "**/*.bash", "**/*.vue"]` — every language in [Languages](#languages) |
 | `text_globs`         | `[]` — files no doc or code glob claims, each read as one text node when its content is text  |
-| `skip`               | `["**/node_modules/**", "**/dist/**", "**/*.min.js", "**/.yarn/**", "**/.pnp.*", "**/TRACKER.md", "graphify-out/**", ".repograph/**"]` |
+| `skip`               | `["**/node_modules/**", "**/dist/**", "**/*.min.js", "**/.yarn/**", "**/.pnp.*", "**/target/**", "**/.venv/**", "**/venv/**", "**/__pycache__/**", "**/.terraform/**", "**/.dart_tool/**", "**/Pods/**", "**/TRACKER.md", "graphify-out/**", ".repograph/**"]` |
+| `include`            | `[]` — the whole repository; set, only these directories (`src`, `docs/specs`) or globs are read |
 | `registries`         | `["docs/constitution.yaml"]`                                                                |
 | `enrich_command`     | **machine file only** — headless `claude -p --model {model}` with thinking off, see [Spending tokens on purpose](#spending-tokens-on-purpose) |
 | `rerank_command`     | **machine file only** — the same command, with `rerank_model` in its `{model}`               |
 | `enrich_model`       | `haiku` — whatever goes in `enrich_command`'s `{model}`                                      |
 | `rerank_model`       | `sonnet` — the same for `rerank_command`                                                    |
 | `enrich_languages`   | `[]` — the languages `enrich` writes questions in, named as the model reads them (`["Russian", "English"]`); empty = detected from the documents, English where they name none; any language name is accepted, see [Spending tokens on purpose](#spending-tokens-on-purpose) |
-| `reranker_dir`       | directory of the exported cross-encoder for `--rerank-local`; empty = `~/.cache/repograph/reranker` |
-| `embed_model`        | `intfloat/multilingual-e5-small`; the model the vectors are written with — nine were measured and `repograph model` switches it, see [Embeddings](#embeddings) |
+| `reranker_dir`       | directory of the exported cross-encoder for `--rerank-local`; empty = `~/.cache/repograph/reranker`. Machine file only: a repository's is ignored, like the commands |
+| `embed_model`        | `onnx-community/embeddinggemma-300m-ONNX`; the model the vectors are written with — nine were measured and `repograph model` switches it, see [Embeddings](#embeddings) |
 | `reader_budget`      | `10` — seconds a reader may spend refreshing before it answers from the store as it stands and leaves the rest to a detached `update`; `0` never refreshes inline. The machine file may set it; `REPOGRAPH_READER_BUDGET` overrides, see [Keeping it fresh](#keeping-it-fresh) |
 | `resources`          | `"balanced"` = a third of the logical cores; `"low"` a sixth, `"full"` a half — how much of the machine a run may take, see [Resources](#resources) |
 
 `REPOGRAPH_CODE_GLOBS`, whitespace-separated, replaces `code_globs` for one run. It is a measurement's
 switch, as `REPOGRAPH_EMBED_MODEL` is, so a reading can name other globs without writing a
 `repograph.toml` into the tree it measures.
+
+`include` narrows the walk to what a project lets a reader see: `include = ["src", "docs"]` reads
+nothing outside those two directories, whatever the other globs claim, and the next `update` drops
+what an earlier store held outside them. Credential files are never read under any setting: `.env`
+and `.env.*` (the templates `.env.example`, `.sample`, `.template` and `.dist` excepted), private
+keys and keystores, `.npmrc`, `.pypirc`, `.netrc`, `.git-credentials`, cloud credentials,
+`*.tfvars`, `*.tfstate` and `secrets.{yaml,json,toml,…}` — their content would otherwise reach the store, an
+`enrich` prompt sent to a model, and the answers.
+
+The store writes its own `.gitignore` holding `*`, so `.repograph/` stays out of a commit in a
+repository that never listed it.
 
 `text_globs` (empty by default) takes in every file no doc or code glob claims whose content is
 text — configuration, YAML, JSON, data — as one node each, searchable by `ask` and named by
@@ -461,6 +504,13 @@ and `REPOGRAPH_TEXT_GLOBS=-` turns it off for one (`-` does the same for `REPOGR
 prints the twelve lines around it rather than the whole file. A store holding text nodes is read by
 0.6.0 and later only: 0.5.x stops on `graph.json: unknown variant Text`, and `build` with that
 binary rebuilds a store it can read.
+Text nodes ride a list of their own in the fusion, seated only when a configuration file covers the
+question's words as completely as a requirement does — the admission the generated questions are
+seated under. It stays empty by default because text still costs a little `ask` recall: on the bench
+fixture under the default embedder, `text_globs = ["**/*"]` takes paraphrase questions from 20 to 19
+of 30 and the dev suite from 36 to 33 of 60 (one shared list cost 18 and 30), while twelve
+config-file questions read 12/12. Turn it on where finding a configuration file matters more than
+finding the requirement; the readings are in `docs/bench/2026-10-08-text-list-rule.md`.
 
 ### Choosing a model, and where the choice lives
 
@@ -556,7 +606,8 @@ rerank_model = "sonnet"
 
 # Anything else — any API, any account: five lines that read stdin and print the answer, and the
 # model stays a word in a config file.
-# rerank_command = "python3 tools/rerank-via-some-api.py --model {model}"
+# The command runs in an empty directory of its own, so name the script by absolute path.
+# rerank_command = "python3 /home/you/tools/rerank-via-some-api.py --model {model}"
 ```
 
 No non-Claude model has been read on these cases, so none of the rows above is a claim about one.
@@ -618,8 +669,8 @@ unaffected.
 
 ## Embeddings
 
-Dense retrieval embeds by default with `intfloat/multilingual-e5-small` (384-d, ONNX, ≈470 MB on
-disk) run through `ort` directly: the tokenizer and the session open concurrently at optimisation
+Dense retrieval embeds by default with `onnx-community/embeddinggemma-300m-ONNX` (768-d, ONNX,
+≈1.2 GB on disk, downloaded on first use) run through `ort` directly: the tokenizer and the session open concurrently at optimisation
 level 1,
 which halves model-open time against the library default. The files are a one-time Hugging Face
 download cached under `FASTEMBED_CACHE_DIR` if that is set, else `~/.cache/repograph/fastembed`
@@ -642,7 +693,12 @@ recorded one — so a store keeps answering with the model that wrote it whateve
 says today, and a new default never silently reinterprets an index nobody re-embedded. A store
 written before the field existed is the small model's. `repograph model <hub id>` switches it —
 [below](#choosing-the-model) — and rows another model wrote are dropped and the file rewritten, on
-width as well as on name.
+width as well as on name. Naming a model in `repograph.toml` by hand is enough: the first `ask`
+after it says so on stderr, answers from the stored vectors, and starts a background `update` that
+downloads the model and re-embeds. That holds for the catalogue's models; any other hub id is a
+model a cloned repository would have this machine download and load, so the file's word is not
+enough for it: `repograph model <hub id>` trusts it on this machine (in `trusted-models` beside the
+machine config), and until then the default stands and stderr says why.
 `REPOGRAPH_EMBED_MODEL=<hub id>` outranks both for one command, which is how a copy of a store is
 measured under a second model — query that copy with `ask --stale`, or with `bench` and `dump`,
 which read the store as it stands; a refreshing `ask` would claim the index for the overriding
@@ -676,19 +732,23 @@ Embedding times, and what a rebuild reuses rather than pays for twice, are in
 
 Nine models were embedded over the same corpus and read on the same 82 cases — one run each, the
 whole store re-embedded per model. Keyword and code read 40/40 and 12/12 for every model but the
-smallest, which drops one keyword case, so paraphrase is the column the embedder moves. Two of the
-nine are offered here; [the readings](docs/bench/2026-09-22-embedders-results.md) hold the rest.
+smallest, which drops one keyword case, so paraphrase is the column the embedder moves. Three of
+the nine are offered here; [the readings](docs/bench/2026-09-22-embedders-results.md) hold the rest.
 
 | hub id | dim | paraphrase | embed | vectors | licence |
 | --- | --- | --- | --- | --- | --- |
-| `intfloat/multilingual-e5-small` (default) | 384 | 15/30 | 1.0× | 51 MB | MIT |
-| `Snowflake/snowflake-arctic-embed-l-v2.0` | 1024 | **21/30** | 13.5× | 137 MB | Apache-2.0 |
+| `onnx-community/embeddinggemma-300m-ONNX` (default) | 768 | **21/30** | 1.0× | 103 MB | Gemma |
+| `intfloat/multilingual-e5-small` | 384 | 15/30 | 0.2× | 51 MB | MIT |
+| `Snowflake/snowflake-arctic-embed-l-v2.0` | 1024 | **21/30** | 2.7× | 137 MB | Apache-2.0 |
 
-`Snowflake/snowflake-arctic-embed-l-v2.0` is the upgrade, under Apache-2.0. Four models read 21/30
-and that arm could not separate them — a widened arm of 60 paraphrase cases could, and this one
-took 39/60 against 35/60 for the next candidate. It is not the default because its cost lands on a
-first build, before anyone knows whether they need the recall: 13.5× the embed and 137 MB of
-vectors where the default writes 51 MB. The conditions, the other seven candidates, the flips and
+The default is the cheapest of the four models that read 21/30; the small model it replaced reads
+15/30. A reader answers with the model that wrote the store, but a writer embeds with the
+configured one: a store the small model wrote, in a repository that names no `embed_model`, moves
+to the default at its next `update` — one 1.2 GB download and one whole re-embed, in the background
+band. Pin `embed_model = "intfloat/multilingual-e5-small"` to stay on the small model.
+`Snowflake/snowflake-arctic-embed-l-v2.0` is the upgrade, and the choice under an OSI licence: a
+widened arm of 60 paraphrase cases separated the four, and it took 39/60 against the default's
+35/60, for 2.7× the embed and 137 MB of vectors where the default writes 103 MB. The conditions, the other seven candidates, the flips and
 the caveats are in [the readings](docs/bench/2026-09-22-embedders-results.md).
 
 `repograph model` prints that table with the store's own model marked, and
@@ -698,7 +758,7 @@ the caveats are in [the readings](docs/bench/2026-09-22-embedders-results.md).
 $ repograph model Snowflake/snowflake-arctic-embed-l-v2.0
 model: intfloat/multilingual-e5-small → Snowflake/snowflake-arctic-embed-l-v2.0
 model: 2.1G of files in the hub cache, fetched once
-model: 13.5× the default's embed — 1944 s for the bench fixture's 33,525 rows
+model: 2.7× the default's embed — 1944 s for the bench fixture's 33,525 rows
 model: 137 MB of vectors for that corpus, against the other model's 51 MB on it
 model: 384-d → 1024-d, so every row is re-embedded and the whole index rewritten, not extended
 model: opened in 5.2s, 1024-d vectors
@@ -868,7 +928,7 @@ to meet the floors, not the median of them.
 | keyword | 40/40 with embeddings, 39/40 with `--no-dense` | 40/40 with embeddings, 39/40 with `--no-dense` |
 | paraphrase, small-model rows (the default) | ≥14/30 with embeddings, ≥11/30 with `--no-dense` | ≥9/30 with embeddings, ≥7/30 with `--no-dense` |
 | code | 12/12 | 12/12 |
-| p90 | ≤230 tokens in every arm | ≤230 tokens in every arm |
+| p90 | ≤250 tokens in every arm | ≤250 tokens in every arm |
 
 The `--no-dense` column applies to every store, since no embedder is in it.
 
