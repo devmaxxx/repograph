@@ -39,3 +39,28 @@ Candidate rules: `cov < T`; `cos < D`; `!agree`; `cov < T && !agree`; `cos < D &
 A hit is `bench`'s: an anchor id among seeds or the expanded line, or an anchor file among the
 seeds. The offline count is checked against `bench`'s totals for the same store before any rule is
 read.
+
+## Results, 2026-10-08
+
+Read with `repograph dump` over both suites on each store, and replayed offline. The offline hit
+count matched `bench` on both stores before any rule was read: 40/14/12 and dev 34/60 under
+e5-small, 40/20/12 and dev 36/60 under embeddinggemma-300m.
+
+Recorded suite, with each threshold chosen on the dev suite:
+
+| rule | e5-small misses | e5-small hits | gemma misses | gemma hits |
+| --- | --- | --- | --- | --- |
+| `cov < T` | 0/16 | 0/66 | 0/10 | 0/72 |
+| `cos < D` | 12/16 | 25/66 | 5/10 | 15/72 |
+| `!agree` | no setting under 15% of dev hits | | no setting | |
+| `cov < T && !agree` | 0/16 | 0/66 | 0/10 | 0/72 |
+| `cos < D && !agree` | **9/16** | **9/66** | 4/10 | 11/72 |
+
+**Not shipped.** `cos < D && !agree` passes on the small model and misses the bar on gemma by one
+case, 4 of 10 misses where 5 were required. No rule passes on both stores, and gemma is the default,
+so no line is printed. The skill's rule ships alone: cite a `path:line` an answer printed, or say
+the repository does not show it.
+
+BM25 coverage separates nothing on the recorded suite: every recorded question, hit or miss, covers
+more of its query than the dev-chosen threshold. The dense cosine and the agreement between
+retrievers are where any signal is, and ten gemma misses are too few to calibrate one on.
