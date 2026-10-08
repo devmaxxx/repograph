@@ -323,10 +323,11 @@ fn is_test(id: &str) -> bool {
 /// The line of a text file holding the most of the question's words, the first of equals, or 1.
 /// A word is matched on its first five letters, so `windows` and an inflected `окна` still find
 /// `window` and `окно`'s line; a word under three letters says nothing about where it is, since
-/// `to` and `on` are in nearly every line.
+/// `to` and `on` are in nearly every line — except in Hangul and Han, where two syllables are a
+/// whole word like `환불`.
 fn matching_line(body: &str, query: &str) -> u32 {
     let words: Vec<String> = query.split(|c: char| !c.is_alphanumeric())
-        .filter(|w| w.chars().count() >= 3)
+        .filter(|w| w.chars().count() >= 3 || (w.chars().count() == 2 && w.chars().all(|c| c >= '\u{1100}')))
         .map(|w| w.chars().flat_map(char::to_lowercase).take(5).collect())
         .collect();
     let mut best = (0, 1);
@@ -1394,6 +1395,7 @@ mod tests {
     fn a_two_letter_word_does_not_pick_the_line() {
         let body = "go to the top\non and on\nthe refund window closes";
         assert_eq!(matching_line(body, "refund to on"), 3);
+        assert_eq!(matching_line("기간\n환불 기간 안내", "환불 기간"), 2, "two Hangul syllables are a word");
     }
 
     #[test]

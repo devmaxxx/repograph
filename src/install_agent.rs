@@ -289,10 +289,15 @@ fn shell_word(word: &str) -> String {
 /// `tail` in order. Each is looked for on its own because the harness decides how it joins them,
 /// and a path with a space in it does not survive being compared as one space-joined string.
 fn said_in_order(shown: &str, program: &str, tail: &[&str]) -> bool {
+    // A word counts only where whitespace or an end bounds it, or `/proj/app` is read inside `/proj/app2`.
     let mut rest = shown;
-    std::iter::once(program).chain(tail.iter().copied()).all(|word| match rest.find(word) {
-        Some(at) => { rest = &rest[at + word.len()..]; true }
-        None => false,
+    std::iter::once(program).chain(tail.iter().copied()).all(|word| {
+        let whole = |at: usize| rest[..at].chars().next_back().is_none_or(char::is_whitespace)
+            && rest[at + word.len()..].chars().next().is_none_or(char::is_whitespace);
+        match rest.match_indices(word).map(|(at, _)| at).find(|&at| whole(at)) {
+            Some(at) => { rest = &rest[at + word.len()..]; true }
+            None => false,
+        }
     })
 }
 
@@ -318,17 +323,18 @@ fn git_block(command: &str) -> String {
         {GIT_END}\n")
 }
 
-/// A hook script with our block in it: replaced between the markers when they are there, and
-/// otherwise inserted right after the shebang, ahead of whatever the repository's own hook does:
-/// a hook manager's script ends in `exit 0` or `exec`, and a block after that never runs. Running
-/// first costs nothing, since the block only starts a background update. A hook that was not
-/// there starts as a POSIX shell script, which Git for Windows runs as well.
+/// A hook script with our block in it, right after the shebang, ahead of whatever the
+/// repository's own hook does: a hook manager's script ends in `exit 0` or `exec`, and a block
+/// after that never runs. Running first costs nothing, since the block only starts a background
+/// update. A block already there is taken out first and put back in that place, which moves one
+/// an older install appended at the end. A hook that was not there starts as a POSIX shell
+/// script, which Git for Windows runs as well.
 pub fn merged_git_hook(existing: &str, command: &str) -> String {
     let block = git_block(command);
     match (existing.find(GIT_BEGIN), existing.find(GIT_END)) {
         (Some(a), Some(b)) if b > a => {
             let tail = existing[b + GIT_END.len()..].strip_prefix('\n').unwrap_or(&existing[b + GIT_END.len()..]);
-            format!("{}{block}{tail}", &existing[..a])
+            merged_git_hook(&format!("{}{tail}", &existing[..a]), command)
         }
         _ if existing.trim().is_empty() => format!("#!/bin/sh\n{block}"),
         _ if existing.starts_with("#!") => {
@@ -411,8 +417,11 @@ fn hooks_path_is_foreign(root: &Path, dir: &Path) -> bool {
     let common = std::process::Command::new("git").arg("-C").arg(root).args(["rev-parse", "--git-common-dir"]).output().ok()
         .filter(|o| o.status.success())
         .and_then(|o| root.join(String::from_utf8_lossy(&o.stdout).trim()).canonicalize().ok());
-    match (common, dir.canonicalize()) {
-        (Some(common), Ok(dir)) => !dir.starts_with(common),
+    // A hooks directory not made yet is judged by where its parent is.
+    let dir = dir.canonicalize().ok()
+        .or_else(|| Some(dir.parent()?.canonicalize().ok()?.join(dir.file_name()?)));
+    match (common, dir) {
+        (Some(common), Some(dir)) => !dir.starts_with(common),
         _ => true,
     }
 }
@@ -568,6 +577,9 @@ mod tests {
         let upgraded = merged_git_hook(&once, "pnpm exec repograph");
         assert!(upgraded.ends_with("npx lefthook run post-merge\n") && upgraded.contains("pnpm exec repograph update --detach"), "{upgraded}");
         assert_eq!(upgraded.matches(GIT_BEGIN).count(), 1);
+        let appended = format!("#!/bin/sh\nexec npx lefthook run post-merge\n{}", git_block("repograph"));
+        let moved = merged_git_hook(&appended, "repograph");
+        assert!(moved.ends_with("exec npx lefthook run post-merge\n") && moved.find(GIT_BEGIN) < moved.find("exec"), "an older install's block moves ahead of exec: {moved}");
     }
 
     #[test]
@@ -596,6 +608,7 @@ mod tests {
         assert_eq!(shell_word("--repo"), "--repo");
         assert!(said_in_order("Command: repograph\nArgs: --repo /a b mcp", "repograph", &["--repo", "/a b", "mcp"]));
         assert!(!said_in_order("Args: mcp --repo /a b", "repograph", &["--repo", "/a b", "mcp"]));
+        assert!(!said_in_order("Command: repograph\nArgs: --repo /a b2 mcp", "repograph", &["--repo", "/a b", "mcp"]), "another root");
     }
 
     #[test]
@@ -617,10 +630,9 @@ mod tests {
         let r = install_git_hooks(dir.path(), "repograph").unwrap();
         assert_eq!(r.written, 0, "{r:?}");
         assert!(!dir.path().join(".husky/post-merge").exists());
-        std::fs::create_dir_all(dir.path().join(".git/my-hooks")).unwrap();
         set(".git/my-hooks");
         install_git_hooks(dir.path(), "repograph").unwrap();
-        assert!(dir.path().join(".git/my-hooks/post-merge").exists());
+        assert!(dir.path().join(".git/my-hooks/post-merge").exists(), "a directory not made yet is still inside");
     }
 
     #[test]
