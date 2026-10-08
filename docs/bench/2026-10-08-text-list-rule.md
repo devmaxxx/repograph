@@ -49,3 +49,38 @@ A hit is `bench`'s: an anchor id among the seeds or the expanded line, or an anc
 seeds.
 
 ## Results
+
+Read 2026-10-08 on a copy of the fixture under embeddinggemma-300m (2144/2146 nodes enriched).
+The text-on store holds 442 text nodes; the text-off store is the same store after
+`REPOGRAPH_TEXT_GLOBS=- update`, which removed exactly those 442 and embedded nothing. Two binaries:
+the base, `88f66d2` (one fused list, text inside the passage lists), and this branch.
+
+| suite, arm | text off | on, one list (base) | on, text list (this branch) |
+| --- | --- | --- | --- |
+| recorded, dense | 40/40 · 20/30 · 12/12 · p90 244 | 40 · 18 · 12 · p90 246 | 40 · 19 · 12 · p90 234 |
+| recorded, lexical | 39/40 · 12/30 · 12/12 · p90 249 | 40 · 9 · 12 · p90 262 | 39 · 11 · 12 · p90 238 |
+| dev, dense (of 60) | 36 | 30 | 33 |
+| dev, lexical (of 60) | 34 | 27 | 33 |
+| config, dense (of 12) | — | 12 | 12 |
+| config, lexical (of 12) | — | 10 | 7 |
+
+Cases that hit with text off and miss with it on (none hit the other way in any arm):
+
+| suite, arm | one list | text list |
+| --- | --- | --- |
+| recorded, dense | 3 (FR-LIFE-17, FR-OPS-24, INV-16) | 1 (FR-OPS-24) |
+| recorded, lexical | 4 | 1 (FR-VIS-76) |
+| dev, dense | 7 | 3 |
+| dev, lexical | 15 | 1 |
+
+Text off, the config suite does not run: its twelve anchors are files the store does not hold.
+
+**Verdict: the rule fails.** Rule 1 fails on the dense arm — paraphrase 19 against 20, FR-OPS-24
+lost — and rule 2 fails on it too, 33 against 36. The separate list ships behind `text_globs` and
+the default stays empty.
+
+What the list buys is most of the loss back: one list loses ten dense cases and nineteen lexical
+ones, the text list four and two, and its p90 falls below the text-off reading in both arms. The config questions read 12/12 dense either way; the lexical arm reads three fewer than
+under one list, since a lexical question the admission refuses drops the text rows that BM25 alone
+would have seated. The reranked path, which seats the list unconditionally, was not read: it costs
+model tokens per question.

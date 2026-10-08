@@ -504,9 +504,13 @@ and `REPOGRAPH_TEXT_GLOBS=-` turns it off for one (`-` does the same for `REPOGR
 prints the twelve lines around it rather than the whole file. A store holding text nodes is read by
 0.6.0 and later only: 0.5.x stops on `graph.json: unknown variant Text`, and `build` with that
 binary rebuilds a store it can read.
-It stays empty by default because text files cost `ask` recall: on the bench fixture, `text_globs = ["**/*"]`
-took paraphrase questions from 15 to 8 of 30 and held-out recall@5 from 100 to 90 of 400, so turn
-it on where finding a configuration file matters more than finding the requirement.
+Text nodes ride a list of their own in the fusion, seated only when a configuration file covers the
+question's words as completely as a requirement does — the admission the generated questions are
+seated under. It stays empty by default because text still costs a little `ask` recall: on the bench
+fixture under the default embedder, `text_globs = ["**/*"]` takes paraphrase questions from 20 to 19
+of 30 and the dev suite from 36 to 33 of 60 (one shared list cost 18 and 30), while twelve
+config-file questions read 12/12. Turn it on where finding a configuration file matters more than
+finding the requirement; the readings are in `docs/bench/2026-10-08-text-list-rule.md`.
 
 ### Choosing a model, and where the choice lives
 
