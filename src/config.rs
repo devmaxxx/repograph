@@ -344,7 +344,13 @@ impl Config {
         cfg.enrich_command = enrich_template.replace(MODEL_SLOT, &cfg.enrich_model);
         cfg.rerank_command = rerank_template.replace(MODEL_SLOT, &cfg.rerank_model);
         if names_model && !model_is_trusted(&cfg.embed_model) {
-            let _ = writeln!(std::io::stderr(), "repograph.toml: embed_model {:?} is not a catalogued model, so it is not downloaded on a repository's word — `repograph model {}` trusts it on this machine; using {}", cfg.embed_model, cfg.embed_model, crate::index::embed::DEFAULT_MODEL);
+            // The name is a repository's text: echoed escaped, and offered as a command only when
+            // it is a plain token, so a crafted value cannot ride a copy-paste into the shell.
+            let how = match model_token_is_safe(&cfg.embed_model) {
+                true => format!("`repograph model {}` trusts it on this machine", cfg.embed_model),
+                false => "it is not a plain hub id".to_string(),
+            };
+            let _ = writeln!(std::io::stderr(), "repograph.toml: embed_model {:?} is not a catalogued model, so it is not downloaded on a repository's word — {how}; using {}", cfg.embed_model, crate::index::embed::DEFAULT_MODEL);
             cfg.embed_model = crate::index::embed::DEFAULT_MODEL.into();
         }
         Ok(cfg)
@@ -429,7 +435,7 @@ fn trust_path() -> Option<std::path::PathBuf> {
 pub fn model_is_trusted(model: &str) -> bool {
     crate::index::embed::measured(model).is_some()
         || trust_path().and_then(|p| std::fs::read_to_string(p).ok())
-            .is_some_and(|t| t.lines().any(|l| l.trim().eq_ignore_ascii_case(model.trim())))
+            .is_some_and(|t| t.lines().any(|l| !l.trim().is_empty() && l.trim().eq_ignore_ascii_case(model.trim())))
 }
 
 /// Records `model` as one this machine's reader chose; `None` when nothing needed writing.
@@ -439,7 +445,8 @@ pub fn trust_model(model: &str) -> Result<Option<std::path::PathBuf>> {
     if let Some(dir) = path.parent() { std::fs::create_dir_all(dir)?; }
     let mut f = std::fs::OpenOptions::new().create(true).append(true).open(&path)
         .with_context(|| format!("open {}", path.display()))?;
-    writeln!(f, "{}", model.trim())?;
+    // A hand-edited file may end without a newline, which would fuse this id onto its last line.
+    writeln!(f, "\n{}", model.trim())?;
     Ok(Some(path))
 }
 
