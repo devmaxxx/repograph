@@ -130,6 +130,11 @@ pub fn merged_settings(existing: &str, hook_path: &str) -> Result<(String, Vec<S
 
 /// Writes `text` at `path` unless the same bytes are already there, and says which it did.
 fn write_if_changed(path: &Path, text: &str, report: &mut Report) -> Result<()> {
+    // A repository can ship `.claude/settings.json` as a link to a file elsewhere on the machine,
+    // and a write through it would overwrite that file with ours.
+    if std::fs::symlink_metadata(path).is_ok_and(|m| m.file_type().is_symlink()) {
+        anyhow::bail!("{} is a symlink; refusing to write through it — replace it with a regular file and run again", path.display());
+    }
     if std::fs::read_to_string(path).is_ok_and(|old| old == text) { return Ok(()); }
     if let Some(parent) = path.parent() { std::fs::create_dir_all(parent)?; }
     std::fs::write(path, text).with_context(|| format!("write {}", path.display()))?;
@@ -350,6 +355,19 @@ mod tests {
     use super::*;
 
     fn root() -> tempfile::TempDir { tempfile::tempdir().unwrap() }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_symlinked_target_is_refused_and_what_it_points_at_is_left_alone() {
+        let dir = root();
+        let victim = dir.path().join("elsewhere.json");
+        std::fs::write(&victim, "{}").unwrap();
+        std::fs::create_dir_all(dir.path().join(".claude")).unwrap();
+        std::os::unix::fs::symlink(&victim, dir.path().join(".claude/settings.json")).unwrap();
+        let err = install(dir.path(), Target::Claude, "repograph").unwrap_err().to_string();
+        assert!(err.contains("symlink"), "{err}");
+        assert_eq!(std::fs::read_to_string(&victim).unwrap(), "{}");
+    }
 
     fn git_repo() -> tempfile::TempDir {
         let dir = root();
