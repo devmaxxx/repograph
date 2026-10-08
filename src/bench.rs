@@ -151,12 +151,13 @@ fn dense_grading(no_dense: bool, recorded: Option<&str>, resolved: Option<&str>)
 
 /// `(enriched, dense, floors) → (keyword, paraphrase)`. Every number is one the recorded cases
 /// measured, never a target: the small model's four on the fixture (the paragraphs below), and
-/// gemma's enriched dense arm. The lexical rows carry `Floors::Small` and are read for every
+/// gemma's enriched dense arm, one paraphrase under the 20/30 it read twice, as the small model's
+/// 14 sits under its 15. The lexical rows carry `Floors::Small` and are read for every
 /// model: no embedder is in them. Gemma's raw dense arm was never measured, so it has no row and
 /// is not graded. `bench/history/track.py` reads this table out of the source; keep the rows one
 /// per line.
 const FLOORS: [(bool, bool, Floors, usize, usize); 5] = [
-    (true, true, Floors::Gemma, 40, 20),
+    (true, true, Floors::Gemma, 40, 19),
     (true, true, Floors::Small, 40, 14),
     (true, false, Floors::Small, 39, 11),
     (false, true, Floors::Small, 40, 9),

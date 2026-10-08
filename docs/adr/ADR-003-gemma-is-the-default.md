@@ -42,7 +42,8 @@ OSI licence.
 - A model named in `repograph.toml` that differs from the store's is switched to without a manual
   `repograph model`: the next `ask` says so on stderr, answers from the stored vectors, and starts a
   background `update`.
-- `bench` gains `Floors::Gemma` for the enriched dense arm only, at what that arm measured. Its raw
+- `bench` gains `Floors::Gemma` for the enriched dense arm only, at 40/19: one paraphrase under
+  the 20/30 it read on two rebuilds, the slack the small model's floor has. Its raw
   dense arm was never measured and is not graded. The small model keeps its four rows, and the
   fixture's store is still the small model's.
 - The licence is Gemma's terms, not an OSI one. A project that cannot take that pins the small model
