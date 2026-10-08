@@ -18,7 +18,7 @@
  */
 import { existsSync, readFileSync, writeFileSync, mkdirSync, realpathSync, lstatSync } from 'node:fs';
 import { spawn, spawnSync } from 'node:child_process';
-import { join, dirname, relative, delimiter } from 'node:path';
+import { join, dirname, relative, delimiter, isAbsolute } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { tmpdir } from 'node:os';
 import { createHash } from 'node:crypto';
@@ -67,10 +67,14 @@ function debug(...args) {
   if (process.env.REPOGRAPH_HOOK_DEBUG) console.error('[repograph-hook]', ...args);
 }
 
-/** Whether a `repograph` the machine's own PATH resolves exists, so that it can win over the repository's. */
+/**
+ * Whether a `repograph` the machine's own PATH resolves exists, so that it can win over the
+ * repository's. A relative entry (`.`, `node_modules/.bin`) resolves against the repository the
+ * hook runs in, so it is the repository's file and not the machine's.
+ */
 function onPath() {
   const names = process.platform === 'win32' ? ['repograph.exe', 'repograph.cmd'] : ['repograph'];
-  return (process.env.PATH || '').split(delimiter).some((d) => d && names.some((n) => existsSync(join(d, n))));
+  return (process.env.PATH || '').split(delimiter).some((d) => d && isAbsolute(d) && names.some((n) => existsSync(join(d, n))));
 }
 
 /**

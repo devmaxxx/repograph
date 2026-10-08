@@ -128,14 +128,21 @@ pub fn merged_settings(existing: &str, hook_path: &str) -> Result<(String, Vec<S
     Ok((serde_json::to_string_pretty(&root)? + "\n", retired))
 }
 
-/// Writes `text` at `path` unless the same bytes are already there, and says which it did.
-fn write_if_changed(path: &Path, text: &str, report: &mut Report) -> Result<()> {
-    // A repository can ship `.claude/settings.json` as a link to a file elsewhere on the machine,
-    // and a write through it would overwrite that file with ours.
+/// A repository can ship `.claude/settings.json` or `repograph.toml` as a link to a file elsewhere
+/// on the machine, and a write through it would overwrite that file with ours.
+fn refuse_symlink(path: &Path) -> Result<()> {
     if std::fs::symlink_metadata(path).is_ok_and(|m| m.file_type().is_symlink()) {
         anyhow::bail!("{} is a symlink; refusing to write through it — replace it with a regular file and run again", path.display());
     }
+    Ok(())
+}
+
+/// Writes `text` at `path` unless the same bytes are already there, and says which it did.
+fn write_if_changed(path: &Path, text: &str, report: &mut Report) -> Result<()> {
+    // Checked after the no-op test: a `CLAUDE.md` linked to `AGENTS.md` that already holds our
+    // block needs no write, and refusing it would fail every re-run for nothing.
     if std::fs::read_to_string(path).is_ok_and(|old| old == text) { return Ok(()); }
+    refuse_symlink(path)?;
     if let Some(parent) = path.parent() { std::fs::create_dir_all(parent)?; }
     std::fs::write(path, text).with_context(|| format!("write {}", path.display()))?;
     report.written += 1;
@@ -346,6 +353,7 @@ pub fn set_languages(root: &Path, cfg: &crate::config::Config) -> Result<Option<
     text.push_str(&format!(
         "# Languages `enrich` writes questions in, set by `install-agent` from the documents it found.\n\
          enrich_languages = {value}\n"));
+    refuse_symlink(&path)?;
     std::fs::write(&path, text).with_context(|| format!("write {}", path.display()))?;
     Ok(Some(languages))
 }

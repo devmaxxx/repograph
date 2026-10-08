@@ -239,7 +239,7 @@ pub(crate) fn apply_diff(repo: &std::path::Path, store: &store::Store, graph: &m
     let named: std::collections::BTreeSet<&str> = diff.changed.iter().map(|e| e.rel.as_str()).collect();
     let code_changed = diff.changed.iter().filter(|e| e.kind == walk::FileKind::Code).map(|e| e.rel.as_str());
     if let Some(note) = code::lang::files_only_note(code_changed) {
-        eprintln!("{note}");
+        eprintln!("{}", terminal_safe(&note));
     }
     let regrammar: Vec<&walk::Entry> = match manifest.stale_grammar() {
         true => entries.iter().filter(|e| !named.contains(e.rel.as_str())).collect(),
@@ -295,11 +295,11 @@ pub(crate) fn apply_diff(repo: &std::path::Path, store: &store::Store, graph: &m
             // NUL is legal inside a TypeScript string literal; only invalid UTF-8 marks a binary.
             Ok(b) => match String::from_utf8(b) {
                 Ok(s) => s,
-                Err(_) => { eprintln!("skipping {}: not UTF-8", e.rel); continue; }
+                Err(_) => { eprintln!("{}", terminal_safe(&format!("skipping {}: not UTF-8", e.rel))); continue; }
             },
             // Not the arm above: a binary yields nothing however often it is read, where a file
             // that would not open is one this pass has no reading of at all.
-            Err(err) => { eprintln!("read {}: {err}", e.rel); unread = true; continue; }
+            Err(err) => { eprintln!("{}", terminal_safe(&format!("read {}: {err}", e.rel))); unread = true; continue; }
         };
         let extractor = match e.kind {
             walk::FileKind::Doc => &ex.doc,
@@ -768,7 +768,7 @@ fn switch_model(repo: &std::path::Path, cfg: &config::Config, id: &str, no_embed
 /// that came from the wrong node is visible without changing what stdout parses to.
 fn code_node<'a>(graph: &'a model::Graph, name: &str) -> anyhow::Result<&'a model::Node> {
     let (pick, rest) = query::resolve_code(graph, name)?;
-    if let Some(note) = query::passed_over(name, pick, &rest) { eprintln!("{note}"); }
+    if let Some(note) = query::passed_over(name, pick, &rest) { eprintln!("{}", terminal_safe(&note)); }
     Ok(pick)
 }
 
@@ -959,7 +959,7 @@ fn run() -> anyhow::Result<()> {
             // variable is for everything else that must be measured against a cold process.
             let resident = if no_serve || std::env::var_os("REPOGRAPH_NO_SERVE").is_some() { None } else { serve::try_ask(&repo, &req) };
             if let Some(reply) = resident {
-                for n in reply.stderr { eprintln!("{n}"); }
+                for n in reply.stderr { eprintln!("{}", terminal_safe(&n)); }
                 eprintln!("serve: answered by the resident process");
                 emit(&reply.stdout);
                 use std::io::Write;
@@ -970,7 +970,7 @@ fn run() -> anyhow::Result<()> {
             let text = ctx.answer(&req)?;
             // Before the answer: a refresh line reached the reader ahead of it back when it was
             // printed the moment it happened, and that is the order a human reads.
-            for n in ctx.notices() { eprintln!("{n}"); }
+            for n in ctx.notices() { eprintln!("{}", terminal_safe(&n)); }
             emit(&text);
             // Nothing here is written back, and unwinding a 1.3 GB model session plus the graph
             // costs a fused answer a measurable share of its wall time: leave without it.

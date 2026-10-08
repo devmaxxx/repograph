@@ -579,7 +579,8 @@ rerank_model = "sonnet"
 
 # Anything else — any API, any account: five lines that read stdin and print the answer, and the
 # model stays a word in a config file.
-# rerank_command = "python3 tools/rerank-via-some-api.py --model {model}"
+# The command runs in an empty directory of its own, so name the script by absolute path.
+# rerank_command = "python3 /home/you/tools/rerank-via-some-api.py --model {model}"
 ```
 
 No non-Claude model has been read on these cases, so none of the rows above is a claim about one.

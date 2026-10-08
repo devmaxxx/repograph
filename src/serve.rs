@@ -31,9 +31,11 @@ mod sys {
     /// Whether the user running this process owns the file at the name. A socket in a shared
     /// directory that someone else bound is not a server of ours, and its answers would be theirs.
     pub fn ours(path: &Path) -> bool {
-        use std::os::unix::fs::MetadataExt;
+        use std::os::unix::fs::{FileTypeExt, MetadataExt};
+        // A link is judged by its own owner, and a repository can ship one that points at another
+        // user's socket: only a socket at the name itself counts.
         // SAFETY: geteuid has no preconditions and cannot fail.
-        std::fs::symlink_metadata(path).is_ok_and(|m| m.uid() == unsafe { libc::geteuid() })
+        std::fs::symlink_metadata(path).is_ok_and(|m| m.file_type().is_socket() && m.uid() == unsafe { libc::geteuid() })
     }
     /// Whether the process on the other end runs as the user running this one. The socket's mode
     /// already keeps others out; this holds if the file is ever reachable some other way.
