@@ -119,13 +119,32 @@ const LOG_CAP: u64 = 1 << 20;
 
 /// Starts `repograph update` in a process of its own and returns without waiting.
 pub(crate) fn spawn_update(repo: &Path, no_dense: bool) -> anyhow::Result<()> {
-    spawn_detached(repo, no_dense, &["update"])
+    spawn_detached(repo, no_dense, &["update"]).map(drop)
 }
+
+/// What a long-lived caller needs of a child it will not wait for: set while the process runs.
+pub(crate) type Alive = std::sync::Arc<std::sync::atomic::AtomicBool>;
+
+/// Waited for on a thread of its own: a server that spawns refreshes for days would otherwise
+/// collect one zombie per refresh, and has no other moment to wait.
+pub(crate) fn reap(mut child: std::process::Child) -> Alive {
+    let alive = Alive::new(std::sync::atomic::AtomicBool::new(true));
+    let flag = alive.clone();
+    std::thread::spawn(move || {
+        let _ = child.wait();
+        flag.store(false, std::sync::atomic::Ordering::SeqCst);
+    });
+    alive
+}
+
+/// The line a refresh writes to its log once it holds the store, so a reader of the log can tell
+/// this run's lines from those a killed run left.
+pub(crate) const RUN_MARKER: &str = "refresh: started";
 
 /// Starts `repograph <args>` in a process of its own and returns without waiting. It inherits
 /// none of this process's standard streams: a caller reading this reader's output through a pipe
 /// would otherwise wait for the refresh to close it too, which is the wait this exists to remove.
-pub(crate) fn spawn_detached(repo: &Path, no_dense: bool, args: &[&str]) -> anyhow::Result<()> {
+pub(crate) fn spawn_detached(repo: &Path, no_dense: bool, args: &[&str]) -> anyhow::Result<Alive> {
     let log = log_file(repo)?;
     let mut cmd = std::process::Command::new(std::env::current_exe()?);
     cmd.arg("--repo").arg(repo);
@@ -136,8 +155,7 @@ pub(crate) fn spawn_detached(repo: &Path, no_dense: bool, args: &[&str]) -> anyh
         .stdin(std::process::Stdio::null())
         .stdout(log.try_clone()?)
         .stderr(log);
-    detach(&mut cmd)?;
-    Ok(())
+    Ok(reap(detach(&mut cmd)?))
 }
 
 fn log_file(repo: &Path) -> anyhow::Result<std::fs::File> {
@@ -154,12 +172,11 @@ fn log_file(repo: &Path) -> anyhow::Result<std::fs::File> {
 }
 
 /// Its own process group, so the Ctrl-C a terminal sends the reader's group does not reach a
-/// refresh that has nothing left to tell it. The child is not waited for; this process exits
-/// within moments and the child is reparented.
+/// refresh that has nothing left to tell it.
 #[cfg(unix)]
-fn detach(cmd: &mut std::process::Command) -> std::io::Result<()> {
+fn detach(cmd: &mut std::process::Command) -> std::io::Result<std::process::Child> {
     use std::os::unix::process::CommandExt;
-    cmd.process_group(0).spawn().map(drop)
+    cmd.process_group(0).spawn()
 }
 
 /// No console and a process group of its own, so neither the console closing nor a Ctrl-C in it
@@ -167,15 +184,15 @@ fn detach(cmd: &mut std::process::Command) -> std::io::Result<()> {
 /// its members when it closes; breaking away from it is asked for first, and a job that refuses
 /// breakaway fails the spawn, which is retried inside it rather than given up.
 #[cfg(windows)]
-fn detach(cmd: &mut std::process::Command) -> std::io::Result<()> {
+fn detach(cmd: &mut std::process::Command) -> std::io::Result<std::process::Child> {
     use std::os::windows::process::CommandExt;
     const DETACHED_PROCESS: u32 = 0x0000_0008;
     const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
     const CREATE_BREAKAWAY_FROM_JOB: u32 = 0x0100_0000;
     let flags = DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP;
     match cmd.creation_flags(flags | CREATE_BREAKAWAY_FROM_JOB).spawn() {
-        Ok(child) => { drop(child); Ok(()) }
-        Err(_) => cmd.creation_flags(flags).spawn().map(drop),
+        Ok(child) => Ok(child),
+        Err(_) => cmd.creation_flags(flags).spawn(),
     }
 }
 

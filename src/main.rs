@@ -777,7 +777,6 @@ fn code_node<'a>(graph: &'a model::Graph, name: &str) -> anyhow::Result<&'a mode
     Ok(pick)
 }
 
-/// The chain of a text `trace`, one hop a line.
 fn trace_text(graph: &model::Graph, path: &[(String, bool)]) -> String {
     let mut out = String::new();
     for (i, (id, passed)) in path.iter().enumerate() {
@@ -791,16 +790,26 @@ fn trace_text(graph: &model::Graph, path: &[(String, bool)]) -> String {
 /// would not fit the reader's budget, and, when the store cannot be written, the stored one with a
 /// warning — the same contract as `ask`. The second value is what the answer is behind by.
 fn graph_for(repo: &std::path::Path, cfg: &config::Config, stale: bool, no_dense: bool) -> anyhow::Result<(model::Graph, Option<refresh::Stale>)> {
+    let (graph, behind, notes) = graph_with_notes(repo, cfg, stale, no_dense)?;
+    for n in notes { eprintln!("{n}"); }
+    Ok((graph, behind))
+}
+
+/// `graph_for` with what it would have said on stderr returned instead, for a caller whose reader
+/// never sees stderr: a refresh that failed or did not start is as much part of the answer as the
+/// files it is behind by.
+fn graph_with_notes(repo: &std::path::Path, cfg: &config::Config, stale: bool, no_dense: bool) -> anyhow::Result<(model::Graph, Option<refresh::Stale>, Vec<String>)> {
     let timing = ask::Timing::new();
     let store = store::Store::new(repo);
     let budget = refresh::Budget::seconds(cfg.reader_budget, no_dense);
+    let mut notes = Vec::new();
     match ask::graph_for_ask(repo, cfg, &store, stale, &timing, &budget) {
         Ok(read) => {
-            if let Some(r) = read.refreshed { eprintln!("refresh: {} changed, {} removed", r.changed, r.removed); }
-            let behind = read.behind.map(|(files, line)| { eprintln!("{line}"); refresh::Stale { files, vectors: 0 } });
-            Ok((read.graph, behind))
+            if let Some(r) = read.refreshed { notes.push(format!("refresh: {} changed, {} removed", r.changed, r.removed)); }
+            let behind = read.behind.map(|(files, line)| { notes.push(line); refresh::Stale { files, vectors: 0 } });
+            Ok((read.graph, behind, notes))
         }
-        Err(err) => { eprintln!("refresh: skipped ({err:#})"); Ok((store.load()?.0, None)) }
+        Err(err) => { notes.push(format!("refresh: skipped ({err:#})")); Ok((store.load()?.0, None, notes)) }
     }
 }
 
@@ -886,6 +895,7 @@ fn run() -> anyhow::Result<()> {
                     store.lock_writer()?
                 }
             };
+            eprintln!("{}", refresh::RUN_MARKER);
             let r = run_update(&repo, &cfg, wipe)?;
             println!("changed {} removed {} nodes {} edges {}", r.changed, r.removed, r.nodes, r.edges);
             if let Some(n) = r.unenriched {
@@ -947,7 +957,7 @@ fn run() -> anyhow::Result<()> {
             match hub_id {
                 None if json => { print!("{}", model_json(&repo, &cfg)?); Ok(()) }
                 None => { print!("{}", model_report(&repo, &cfg)?); Ok(()) }
-                Some(id) => switch_model(&repo, &cfg, &id, no_embed, cli.no_dense),
+                Some(id) => { eprintln!("{}", refresh::RUN_MARKER); switch_model(&repo, &cfg, &id, no_embed, cli.no_dense) }
             }
         }
         Cmd::Ask { words, json, seeds, bodies, rerank, rerank_local, depth, stale, no_serve } => {

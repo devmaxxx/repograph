@@ -32,10 +32,14 @@ and returns at once.";
 struct Server {
     repo: PathBuf,
     no_dense: bool,
+    /// The refresh this server started last, until its process exits. The child takes the writer
+    /// lock only once it is running, so for that moment the lock says "none" of a refresh that
+    /// is on its way.
+    spawned: std::sync::Mutex<Option<refresh::Alive>>,
 }
 
 pub fn run(repo: &Path, no_dense: bool) -> Result<()> {
-    let server = Server { repo: repo.to_path_buf(), no_dense };
+    let server = Server::new(repo, no_dense);
     let mut out = std::io::stdout().lock();
     // Split on bytes rather than `lines()`: one message that is not UTF-8 would end the server
     // through `?`, and it is owed a parse error like any other malformed line.
@@ -64,6 +68,19 @@ fn text_result(text: String, is_error: bool) -> Value {
 }
 
 impl Server {
+    fn new(repo: &Path, no_dense: bool) -> Server {
+        Server { repo: repo.to_path_buf(), no_dense, spawned: std::sync::Mutex::new(None) }
+    }
+
+    fn spawn_in_flight(&self) -> bool {
+        let spawned = self.spawned.lock().unwrap_or_else(|e| e.into_inner());
+        spawned.as_ref().is_some_and(|alive| alive.load(std::sync::atomic::Ordering::SeqCst))
+    }
+
+    fn remember(&self, alive: refresh::Alive) {
+        *self.spawned.lock().unwrap_or_else(|e| e.into_inner()) = Some(alive);
+    }
+
     /// The reply to one line, or `None` for a notification, which is owed none.
     fn handle_line(&self, line: &str) -> Option<String> {
         let reply = match serde_json::from_str::<Value>(line) {
@@ -81,6 +98,7 @@ impl Server {
         let id = object.get("id").cloned();
         let Some(method) = object.get("method").and_then(Value::as_str) else {
             // A response to a request this server never sent is not worth an answer either.
+            if object.contains_key("result") || object.contains_key("error") { return None; }
             return id.map(|id| error(id, INVALID_REQUEST, "no method"));
         };
         let params = object.get("params").cloned().unwrap_or(Value::Null);
@@ -177,41 +195,41 @@ impl Server {
 
     fn explain(&self, args: &Args) -> Result<String> {
         let node = args.string("node")?;
-        let (graph, behind) = crate::graph_for(&self.repo, &self.config()?, args.flag("stale"), self.no_dense)?;
-        Ok(with_behind(query::explain(&graph, &node)?, &behind))
+        let (graph, _, notes) = crate::graph_with_notes(&self.repo, &self.config()?, args.flag("stale"), self.no_dense)?;
+        Ok(with_notices(query::explain(&graph, &node)?, notes))
     }
 
     fn impact(&self, args: &Args) -> Result<String> {
         let symbol = args.string("symbol")?;
         let depth = args.number("depth", 3)?;
-        let (graph, behind) = crate::graph_for(&self.repo, &self.config()?, args.flag("stale"), self.no_dense)?;
+        let (graph, _, notes) = crate::graph_with_notes(&self.repo, &self.config()?, args.flag("stale"), self.no_dense)?;
         let root = crate::code_node(&graph, &symbol)?;
         let text = match args.flag("down") {
             true => impact::render(&graph, &impact::downstream(&graph, &root.id, depth), "downstream"),
             false => impact::render(&graph, &impact::upstream(&graph, &root.id, depth), "upstream"),
         };
-        Ok(with_behind(text, &behind))
+        Ok(with_notices(text, notes))
     }
 
     fn trace(&self, args: &Args) -> Result<String> {
         let (from, to) = (args.string("from")?, args.string("to")?);
         let depth = args.number("depth", 6)?;
-        let (graph, behind) = crate::graph_for(&self.repo, &self.config()?, args.flag("stale"), self.no_dense)?;
+        let (graph, _, notes) = crate::graph_with_notes(&self.repo, &self.config()?, args.flag("stale"), self.no_dense)?;
         let (a, b) = (crate::code_node(&graph, &from)?, crate::code_node(&graph, &to)?);
         // The CLI exits 3 on no path; here it is the answer to the question, not a failed call.
         let text = match impact::trace(&graph, &a.id, &b.id, depth) {
             Some(path) => crate::trace_text(&graph, &path),
             None => format!("no call path from {} to {} within {depth} hops\n", a.id, b.id),
         };
-        Ok(with_behind(text, &behind))
+        Ok(with_notices(text, notes))
     }
 
     fn changes(&self, args: &Args) -> Result<String> {
         let base = args.optional_string("base").unwrap_or_else(|| "HEAD".to_string());
         let depth = args.number("depth", 2)?;
-        let (graph, behind) = crate::graph_for(&self.repo, &self.config()?, args.flag("stale"), self.no_dense)?;
+        let (graph, _, notes) = crate::graph_with_notes(&self.repo, &self.config()?, args.flag("stale"), self.no_dense)?;
         let report = changes::report(&graph, &changes::hunks_from_git(&self.repo, &base)?, depth);
-        Ok(with_behind(changes::render(&graph, &report), &behind))
+        Ok(with_notices(changes::render(&graph, &report), notes))
     }
 
     fn status(&self) -> Result<String> {
@@ -231,6 +249,9 @@ impl Server {
         match &cfg {
             Ok(cfg) => say(match walk::walk(&self.repo, cfg, &manifest) {
                 Ok(entries) => match manifest.diff(&entries) {
+                    // No hash reports a store another grammar wrote, but a read treats it as behind
+                    // and re-reads every file, so "in step" would contradict the next answer.
+                    d if d.changed.is_empty() && d.removed.is_empty() && manifest.stale_grammar() => "tree: the index was written by another grammar and is re-read whole by the next read or `reindex`".to_string(),
                     d if d.changed.is_empty() && d.removed.is_empty() => "tree: the index is in step with it".to_string(),
                     d => {
                         let files = refresh::files_of(&d);
@@ -263,25 +284,28 @@ impl Server {
         Ok(out)
     }
 
-    /// Whether the writer lock is held is the only fact about a refresh that cannot go stale: a
-    /// killed process releases it with its handle, where a pid file would outlive it.
+    /// Whether the writer lock is held cannot go stale: a killed process releases it with its
+    /// handle, where a pid file would outlive it. A refresh this server started is running from
+    /// the spawn, which is earlier than its lock.
     fn refresh_line(&self, store: &store::Store) -> String {
-        match store.try_lock_writer() {
-            Ok(Some(_)) => "refresh: none running".to_string(),
-            Ok(None) => format!("refresh: running ({})", progress(&self.repo)),
-            Err(err) => format!("refresh: unknown ({err:#})"),
+        match (store.try_lock_writer(), self.spawn_in_flight()) {
+            (Ok(Some(_)), false) => "refresh: none running".to_string(),
+            (Ok(Some(_)), true) => "refresh: running (starting)".to_string(),
+            (Ok(None), _) => format!("refresh: running ({})", progress(&self.repo)),
+            (Err(err), _) => format!("refresh: unknown ({err:#})"),
         }
     }
 
     fn reindex(&self) -> Result<String> {
         let store = store::Store::new(&self.repo);
-        match store.try_lock_writer()? {
-            None => Ok(format!("a refresh is already running ({}); `status` follows it", progress(&self.repo))),
-            Some(lock) => {
+        match (store.try_lock_writer()?, self.spawn_in_flight()) {
+            (None, _) => Ok(format!("a refresh is already running ({}); `status` follows it", progress(&self.repo))),
+            (Some(_), true) => Ok("a refresh is already running (starting); `status` follows it".to_string()),
+            (Some(lock), false) => {
                 // Released first: the child takes the lock itself, and waits on this process for it
                 // if it is still held when the child asks.
                 drop(lock);
-                refresh::spawn_update(&self.repo, self.no_dense)?;
+                self.remember(refresh::spawn_detached(&self.repo, self.no_dense, &["update"])?);
                 Ok("refresh started in the background; `status` shows how far it has got".to_string())
             }
         }
@@ -305,13 +329,14 @@ impl Server {
         if recorded.as_deref().is_some_and(|m| m.eq_ignore_ascii_case(id)) && self.config()?.embed_model.eq_ignore_ascii_case(id) {
             return Ok(format!("the store is already on {id}; nothing to do"));
         }
-        match store.try_lock_writer()? {
-            None => bail!("a refresh is running ({}); switch once it is over, so the two do not write the same rows", progress(&self.repo)),
-            Some(lock) => drop(lock),
+        match (store.try_lock_writer()?, self.spawn_in_flight()) {
+            (None, _) => bail!("a refresh is running ({}); switch once it is over, so the two do not write the same rows", progress(&self.repo)),
+            (Some(_), true) => bail!("a refresh is starting; switch once it is over, so the two do not write the same rows"),
+            (Some(lock), false) => drop(lock),
         }
         // The CLI's own switch, detached: it opens the model before it writes anything, so an id
         // the hub cannot serve leaves the project as it was and says why in the log.
-        refresh::spawn_detached(&self.repo, false, &["model", id])?;
+        self.remember(refresh::spawn_detached(&self.repo, false, &["model", id])?);
         Ok(format!("switching to {id} in the background: the model is fetched and opened, then `repograph.toml` is written and the vectors rewritten. \
                     `status` follows it; `.repograph/background.log` has the reason if it fails."))
     }
@@ -327,13 +352,6 @@ fn with_notices(mut text: String, notices: Vec<String>) -> String {
     text
 }
 
-fn with_behind(text: String, behind: &Option<refresh::Stale>) -> String {
-    match behind {
-        Some(s) => with_notices(text, vec![format!("{} ({})", refresh::files_line(s.files.len()), preview(&s.files))]),
-        None => text,
-    }
-}
-
 fn preview(files: &[String]) -> String {
     const SHOWN: usize = 5;
     let more = files.len().saturating_sub(SHOWN);
@@ -345,16 +363,14 @@ fn preview(files: &[String]) -> String {
 }
 
 /// How far the running refresh has got, from the end of the log it writes. Only the lines after
-/// the last finished embed are this run's: the log is kept across runs.
+/// the last start marker are this run's: the log is kept across runs, and a run that was killed
+/// leaves a meter behind that no later line takes back.
 fn progress(repo: &Path) -> String {
     let lines = log_tail(repo);
-    let current = match lines.iter().rposition(|l| l.starts_with("dense: embedded ")) {
-        Some(done) => &lines[done + 1..],
-        None => &lines[..],
-    };
-    let meter = current.iter().rev().find(|l| l.starts_with("embedded "));
-    match (meter, current.last()) {
-        (Some(m), _) => m.to_string(),
+    let Some(started) = lines.iter().rposition(|l| l == refresh::RUN_MARKER) else { return "no output yet".to_string() };
+    let current = &lines[started + 1..];
+    match (current.iter().rev().find(|l| l.starts_with("embedded ")), current.last()) {
+        (Some(meter), _) => meter.to_string(),
         (None, Some(last)) => last.to_string(),
         (None, None) => "no output yet".to_string(),
     }
@@ -458,7 +474,7 @@ mod tests {
         std::fs::create_dir_all(dir.path().join("src")).unwrap();
         std::fs::write(dir.path().join("src/x.ts"), CODE).unwrap();
         crate::run_update(dir.path(), &config::Config::default(), true).unwrap();
-        let server = Server { repo: dir.path().to_path_buf(), no_dense: true };
+        let server = Server::new(dir.path(), true);
         (dir, server)
     }
 
@@ -500,6 +516,7 @@ mod tests {
         let (_dir, server) = served();
         assert!(server.handle_line(r#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#).is_none());
         assert!(server.handle_line(r#"{"jsonrpc":"2.0","method":"no/such/notification"}"#).is_none());
+        assert!(server.handle_line(r#"{"jsonrpc":"2.0","id":9,"result":{}}"#).is_none(), "a response is not a request");
         assert_eq!(send(&server, json!({ "jsonrpc": "2.0", "id": "p", "method": "ping" })), json!({ "jsonrpc": "2.0", "id": "p", "result": {} }));
     }
 
@@ -570,13 +587,51 @@ mod tests {
         assert!(text.contains("1 file behind") && text.contains("docs/b.md"), "{text}");
 
         let log = dir.path().join(".repograph/background.log");
-        std::fs::write(&log, "dense: embedded 9 rows in 1.0s\nembedded 16/40 (8.0 rows/s, ~3 s left)\nembedded 32/40 (8.0 rows/s, ~1 s left)\n").unwrap();
+        std::fs::write(&log, "embedded 99/100 (1.0 rows/s, ~1 s left)\nrefresh: started\nembedded 16/40 (8.0 rows/s, ~3 s left)\nembedded 32/40 (8.0 rows/s, ~1 s left)\n").unwrap();
         let held = store::Store::new(dir.path()).try_lock_writer().unwrap().unwrap();
         let (_, text) = call(&server, "status", json!({}));
         assert!(text.contains("refresh: running (embedded 32/40"), "{text}");
         drop(held);
         let (_, text) = call(&server, "status", json!({}));
         assert!(text.contains("refresh: none running") && !text.contains("32/40"), "{text}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_spawned_refresh_is_running_before_it_holds_the_lock_and_is_reaped_after() {
+        let (dir, server) = served();
+        let child = std::process::Command::new("sleep").arg("1").spawn().unwrap();
+        server.remember(refresh::reap(child));
+        let (_, text) = call(&server, "status", json!({}));
+        assert!(text.contains("refresh: running (starting)"), "{text}");
+        let (is_error, text) = call(&server, "reindex", json!({}));
+        assert!(!is_error && text.contains("already running"), "{text}");
+        let (is_error, text) = call(&server, "switch_model", json!({ "model": index::embed::RECOMMENDED }));
+        assert!(is_error || text.contains("already on"), "{text}");
+        assert!(!dir.path().join(".repograph/background.log").exists(), "a second spawn did not happen");
+        let until = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while server.spawn_in_flight() && std::time::Instant::now() < until { std::thread::sleep(std::time::Duration::from_millis(50)); }
+        let (_, text) = call(&server, "status", json!({}));
+        assert!(text.contains("refresh: none running"), "{text}");
+    }
+
+    #[test]
+    fn an_answer_carries_the_refresh_notes_the_terminal_would_have_seen() {
+        let (dir, server) = served();
+        std::fs::write(dir.path().join("docs/b.md"), DOC).unwrap();
+        std::fs::write(dir.path().join("repograph.toml"), "reader_budget = 0\n").unwrap();
+        let _held = store::Store::new(dir.path()).try_lock_writer().unwrap().unwrap();
+        let (is_error, text) = call(&server, "explain", json!({ "node": "FR-PAY-22" }));
+        assert!(!is_error && text.contains("index: 1 file behind, a refresh is already running"), "{text}");
+    }
+
+    #[test]
+    fn a_meter_from_before_the_current_run_started_is_not_shown() {
+        let (dir, server) = served();
+        std::fs::write(dir.path().join(".repograph/background.log"), "embedded 99/100 (1.0 rows/s, ~1 s left)\n").unwrap();
+        let _held = store::Store::new(dir.path()).try_lock_writer().unwrap().unwrap();
+        let (_, text) = call(&server, "status", json!({}));
+        assert!(text.contains("refresh: running (no output yet)"), "{text}");
     }
 
     #[test]
