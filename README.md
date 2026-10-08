@@ -26,7 +26,7 @@ C#, Rust, Python, Dart, Swift, GraphQL, SQL, Bicep, HCL, Shell and Vue; every co
 implemented rather than planned:
 `build` (a full re-read that replaces the stored graph only when it saves, so one interrupted
 leaves the previous store answering) and `update` (incremental; a no-op `update` is a fixed point), `families`, `ask`, `explain`,
-`verify`, `impact`, `trace`, `changes`, `embed`, `watch`, `serve`, `prime`, `install-agent`,
+`verify`, `impact`, `trace`, `changes`, `embed`, `watch`, `serve`, `mcp`, `prime`, `install-agent`,
 `import-legacy`, `dump` and `bench`. Three spend model tokens and all three are opt-in: `enrich`,
 `ask --rerank`, and `ask --rerank-local` (zero tokens, a local cross-encoder, measured and rejected
 as a floor candidate). `bench` fails the process when a floor in [Bench](#bench) is missed; floors
@@ -383,6 +383,29 @@ repograph bench                      # bench/cases.jsonl: 40 keyword + 30 paraph
 repograph bench --cases other.jsonl  # any shape: the 40/30/12 shape is graded, any other is measured ungated
 repograph dump --queries qs.jsonl --out lists.json   # every retriever's ranked list per question, 300 deep
 ```
+
+### As an MCP server
+
+```bash
+repograph mcp                    # a stdio MCP server (protocol 2025-06-18) over the current repository
+claude mcp add repograph -- repograph mcp   # what `install-agent --claude` runs, once
+```
+
+`install-agent --claude` registers the server through the `claude` CLI, leaves one that is already
+registered alone, and prints the command to run by hand where `claude` is not on `PATH`. The
+protocol is newline-delimited JSON-RPC on stdout and nothing else; diagnostics go to stderr. A tool
+that fails returns an `isError` result and the server carries on.
+
+| tool | does |
+| --- | --- |
+| `ask` | `question` (plus `seeds`, `bodies`, `rerank`, `rerank_local`, `depth`, `stale`) to the answer `ask` prints, with the low-confidence line when the retrievers disagree |
+| `explain`, `impact`, `trace`, `changes` | the commands of those names, with their flags; an answer given while files are behind the tree says so |
+| `status` | nodes and edges, enrich coverage, files behind the tree, the store's model against the configured one, vector rows owed, and whether a background refresh is running with its last progress line from `.repograph/background.log` |
+| `reindex` | starts a detached `update` and returns at once; says so when one is already running |
+| `switch_model` | `model <hub id>` in the background. Only catalogued models and ones trusted on this machine with `repograph model <id>`; any other id is refused, because the caller is an agent and a model is code this machine downloads |
+
+`status` reports progress while the writer lock is held and nothing once the refresh is over. Each
+read tool loads the store per call, or asks a running `serve` for `ask`.
 
 ## How a question becomes an answer, and what ends up in the graph
 

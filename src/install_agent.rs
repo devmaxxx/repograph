@@ -200,6 +200,44 @@ pub fn install(root: &Path, target: Target, command: &str) -> Result<Report> {
     Ok(report)
 }
 
+/// The server's name in Claude Code's registry, and what `claude mcp get` is asked for.
+const MCP_NAME: &str = "repograph";
+
+/// Registers `repograph mcp` with Claude Code for the project at `root`, through `claude mcp add`
+/// so the harness keeps its own registry's format. `run` is how `claude` is invoked: a test passes
+/// its own, and `None` from it means the binary is not on PATH. A server already registered is
+/// left alone, which is what makes a re-run write nothing; a missing `claude` is a note and not a
+/// failure, since the files this install wrote are useful without it.
+pub fn register_mcp(root: &Path, command: &str, run: &dyn Fn(&Path, &[&str]) -> Option<std::process::Output>) -> Report {
+    let mut report = Report::default();
+    let Some(registered) = run(root, &["mcp", "get", MCP_NAME]) else {
+        report.notes.push(format!("`claude` is not on PATH, so the MCP server was not registered; run `claude mcp add {MCP_NAME} -- {command} mcp` where it is"));
+        return report;
+    };
+    if registered.status.success() {
+        report.notes.push("MCP server already registered, left alone".to_string());
+        return report;
+    }
+    let mut args = vec!["mcp", "add", MCP_NAME, "--"];
+    args.extend(command.split_whitespace());
+    args.push("mcp");
+    match run(root, &args) {
+        Some(added) if added.status.success() => {
+            report.written = 1;
+            report.paths.push(format!("claude mcp add {MCP_NAME} -- {command} mcp"));
+        }
+        Some(failed) => report.notes.push(format!("`claude mcp add` failed, the MCP server was not registered: {}", String::from_utf8_lossy(&failed.stderr).trim())),
+        None => report.notes.push("`claude` went away between two calls; the MCP server was not registered".to_string()),
+    }
+    report
+}
+
+/// `claude` run in `root`, where its local-scope registration belongs; `None` when it is not
+/// installed.
+pub fn run_claude(root: &Path, args: &[&str]) -> Option<std::process::Output> {
+    std::process::Command::new("claude").args(args).current_dir(root).stdin(std::process::Stdio::null()).output().ok()
+}
+
 /// The git events after which the tree can have moved by a pull's worth of files.
 const GIT_HOOKS: [&str; 2] = ["post-merge", "post-checkout"];
 const GIT_BEGIN: &str = "# repograph:begin";
@@ -350,6 +388,41 @@ mod tests {
     use super::*;
 
     fn root() -> tempfile::TempDir { tempfile::tempdir().unwrap() }
+
+    #[cfg(unix)]
+    fn exited(code: i32) -> std::process::Output {
+        use std::os::unix::process::ExitStatusExt;
+        std::process::Output { status: std::process::ExitStatus::from_raw(code << 8), stdout: Vec::new(), stderr: Vec::new() }
+    }
+
+    /// A `claude` whose registry is a list, so a re-run can be told from a first run.
+    #[cfg(unix)]
+    #[test]
+    fn the_mcp_server_is_registered_once_and_a_second_run_leaves_it() {
+        let calls = std::cell::RefCell::new(Vec::<Vec<String>>::new());
+        let registered = std::cell::Cell::new(false);
+        let claude = |_: &Path, args: &[&str]| {
+            calls.borrow_mut().push(args.iter().map(|a| a.to_string()).collect());
+            Some(match args {
+                ["mcp", "get", _] => exited(if registered.get() { 0 } else { 1 }),
+                _ => { registered.set(true); exited(0) }
+            })
+        };
+        let first = register_mcp(Path::new("."), "pnpm exec repograph", &claude);
+        assert_eq!(first.written, 1);
+        assert_eq!(calls.borrow()[1], ["mcp", "add", "repograph", "--", "pnpm", "exec", "repograph", "mcp"]);
+        let second = register_mcp(Path::new("."), "pnpm exec repograph", &claude);
+        assert_eq!(second.written, 0);
+        assert_eq!(calls.borrow().len(), 3, "the second run only asked");
+        assert!(second.notes[0].contains("already registered"));
+    }
+
+    #[test]
+    fn a_machine_without_claude_gets_a_note_and_the_command_to_run() {
+        let r = register_mcp(Path::new("."), "repograph", &|_, _| None);
+        assert_eq!(r.written, 0);
+        assert!(r.notes[0].contains("claude mcp add repograph -- repograph mcp"), "{:?}", r.notes);
+    }
 
     fn git_repo() -> tempfile::TempDir {
         let dir = root();

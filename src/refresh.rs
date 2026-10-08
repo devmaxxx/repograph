@@ -117,17 +117,22 @@ pub(crate) fn with_stale(json: String, stale: &Stale) -> String {
 /// cut the first one's lines off while it is still writing them.
 const LOG_CAP: u64 = 1 << 20;
 
-/// Starts `repograph update` in a process of its own and returns without waiting. It inherits
+/// Starts `repograph update` in a process of its own and returns without waiting.
+pub(crate) fn spawn_update(repo: &Path, no_dense: bool) -> anyhow::Result<()> {
+    spawn_detached(repo, no_dense, &["update"])
+}
+
+/// Starts `repograph <args>` in a process of its own and returns without waiting. It inherits
 /// none of this process's standard streams: a caller reading this reader's output through a pipe
 /// would otherwise wait for the refresh to close it too, which is the wait this exists to remove.
-pub(crate) fn spawn_update(repo: &Path, no_dense: bool) -> anyhow::Result<()> {
+pub(crate) fn spawn_detached(repo: &Path, no_dense: bool, args: &[&str]) -> anyhow::Result<()> {
     let log = log_file(repo)?;
     let mut cmd = std::process::Command::new(std::env::current_exe()?);
     cmd.arg("--repo").arg(repo);
     if no_dense { cmd.arg("--no-dense"); }
     // No `current_dir`: `--repo` may be relative, and a child started inside it would resolve it
     // a second time.
-    cmd.arg("update")
+    cmd.args(args)
         .stdin(std::process::Stdio::null())
         .stdout(log.try_clone()?)
         .stderr(log);
