@@ -741,7 +741,7 @@ mod tests {
     }
 
     #[test]
-    fn the_embed_model_defaults_to_the_small_e5_and_reads_from_the_file() {
+    fn the_embed_model_defaults_to_gemma_and_reads_from_the_file() {
         with_machine(None, || {
             let dir = tempfile::tempdir().unwrap();
             assert_eq!(Config::load(dir.path()).unwrap().embed_model, "onnx-community/embeddinggemma-300m-ONNX");

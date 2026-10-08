@@ -16,12 +16,12 @@ semantics of the three walking commands.
    Cyrillic tokens, English otherwise, so `штрафа` and `штрафы` are the same term. Ids survive
    tokenization whole, so `FR-PAY-22` never becomes three tokens.
 3. **Dense.** A local embedding of the query, cosine-ranked against every node's stored vector
-   (see [Embeddings](../README.md#embeddings)). Skipped by `--no-dense`, or when the model cannot be opened —
-   no cache and no network (see [Embeddings](../README.md#embeddings) for the fallback rules).
+   (see [Embeddings](embeddings.md)). Skipped by `--no-dense`, or when the model cannot be opened —
+   no cache and no network (see [Embeddings](embeddings.md) for the fallback rules).
 4. **Fuse.** The lists are interleaved — rank 1 of each, then rank 2 of each — dense passages
    first, then BM25 over the generated questions (when `enrich` has written any), then BM25 over
    the passages, and the top seeds survive (with `--rerank`, a model picks them from a 200-deep
-   pool instead — see [Spending tokens on purpose](../README.md#spending-tokens-on-purpose)). Reciprocal rank
+   pool instead — see [Spending tokens on purpose](enrich-and-rerank.md)). Reciprocal rank
    fusion was measured to bury a retriever's second hit under ids both lists merely agreed on; the
    interleave lifted paraphrase recall from 5/14 to 6/14 at +2 tokens p90. The question list was
    measured on 400 held-out generated questions: recall@5 0.445 → 0.515 beside the dense list and
@@ -30,7 +30,7 @@ semantics of the three walking commands.
    of that on the 14-case set of the day. On the 82 cases recorded since, leading the merge with
    that list cost the no-dense arm two exact seeds — keyword 39/40 without the questions against
    37/40 with them — until 2026-09-05, when the questions list was gated on its own confidence;
-   it now reads 39/40 either way. See [Spending tokens on purpose](../README.md#spending-tokens-on-purpose)
+   it now reads 39/40 either way. See [Spending tokens on purpose](enrich-and-rerank.md)
    and the Bench table below.
 5. **Expand.** One hop over `References`, `Implements`, `Declares`, `Links` and `Legacy` edges, in
    both directions, keeping the single neighbour the retrievers ranked best, however far down
