@@ -39,7 +39,7 @@ stage earns its keep in proportion to the model behind it: on the default it is 
 paraphrase and one keyword, which is why the model and the `--no-dense` switch are one decision
 rather than two.
 
-The floors in [Bench](../README.md#bench) are keyed by the model the store's rows were written with, since
+The floors in [Bench](benchmarks.md#bench) are keyed by the model the store's rows were written with, since
 0.5.0. Only the two dense arms depend on the embedder at all, and `e5-large` has floors of its own
 there too, measured on a copy of the fixture re-embedded under it and read twice per arm:
 `keyword 40/40  paraphrase 22/30  code 12/12  p90 224` with `enrich`'s questions and
@@ -184,7 +184,7 @@ and on no floor.
 
 The `bench` floors apply to the zero-token query path in each of the two states a store can be
 in — with `enrich`'s generated questions and without them, each on its own numbers, see
-[Bench](../README.md#bench); `--rerank` is measured, not
+[Bench](benchmarks.md#bench); `--rerank` is measured, not
 floored, because a model's pick can vary by one hit between identical runs — which is also why the
 default is the configuration that read 14/14 three times, not the one that read it once. A
 per-question query rewrite by the model was measured too — 20/24 keyword, 6/14 paraphrase,
@@ -195,7 +195,7 @@ per-question query rewrite by the model was measured too — 20/24 keyword, 6/14
 **Keyword is 39, not 40, in both lexical-only arms.** `FR-PH-43` sits at passage rank 23 and no
 lexical path reaches it, enriched or raw. The enriched arm read **37/40** until 2026-09-05, losing
 `FR-WH-53` and `W-206` as well, because the generated-questions list took an equal turn in the
-fusion on questions it had nothing to say about; the gate described under [Spending tokens on purpose](../README.md#spending-tokens-on-purpose)
+fusion on questions it had nothing to say about; the gate described under [Spending tokens on purpose](enrich-and-rerank.md)
 put it level with the raw store. The floor moved to 39 only once it was level — at 37 it stayed 40,
 because 37 was a cost enrichment itself imposed and a floor that blesses one is not a floor. The
 measurement is in [G7](bench/next-version-gaps.md).
@@ -293,17 +293,17 @@ keyword 40/40, paraphrase 15/30, code 12/12 at 220 p90 tokens with embeddings; 3
 at 215 p90 with `--no-dense`, both arms green. Those are the numbers with `enrich`'s generated
 questions in the store — the one thing above that was paid for, roughly $2.5 of Haiku, once. The
 lexical-only arm read **37/40** until 2026-09-05, when the gate described under
-[Spending tokens on purpose](../README.md#spending-tokens-on-purpose) put it level with the raw store; the
-floor it is held to is 39, which [Bench](../README.md#bench) explains. The same corpus indexed and queried at
+[Spending tokens on purpose](enrich-and-rerank.md) put it level with the raw store; the
+floor it is held to is 39, which [Bench](benchmarks.md#bench) explains. The same corpus indexed and queried at
 zero tokens throughout reads 40/40, 9/30, 12/12 at 221 p90 and 39/40, 7/30, 12/12 at 226;
-[Bench](../README.md#bench) floors each state on its own numbers.
+[Bench](benchmarks.md#bench) floors each state on its own numbers.
 
 The prior art on the same corpus was an LLM-extracted graph that cost **14.6 million input tokens
 over 13 runs** — see the table at the top of this document for how it and repograph compare on the
 38 questions of the day. Cost is not the only reason to replace it, but it is the easiest one to
 state.
 
-See [Bench](../README.md#bench) for the retrieval-quality floors these numbers are held to, and the ADR for the
+See [Bench](benchmarks.md#bench) for the retrieval-quality floors these numbers are held to, and the ADR for the
 one figure that didn't hold up on first measurement.
 
 ## What a rebuild costs the machine
@@ -415,7 +415,7 @@ reaches 3+ GB.
 
 Measured on the same corpus and the same 38 keyword/paraphrase questions against `graphify`, the
 LLM-extracted graph it replaces. That head-to-head is the case set as it stood then; the recorded
-set has since grown to 82 cases, which the [Bench](../README.md#bench) floors are measured on:
+set has since grown to 82 cases, which the [Bench](benchmarks.md#bench) floors are measured on:
 
 |                           | graphify (the incumbent) | repograph           |
 | ------------------------- | ------------------------ | ------------------- |
@@ -424,7 +424,7 @@ set has since grown to 82 cases, which the [Bench](../README.md#bench) floors ar
 | tokens per answer         | 1027-1555                | 197 median, 216 p90 |
 | tokens to build the graph | 14,597,195               | 0                   |
 
-Every number above came from running both tools; none is a target. See [Bench](../README.md#bench) for the full
+Every number above came from running both tools; none is a target. See [Bench](benchmarks.md#bench) for the full
 floor set and how it was recorded, and
 [`docs/adr/ADR-001-paraphrase-recall-was-a-prediction.md`](adr/ADR-001-paraphrase-recall-was-a-prediction.md)
 for the one number in this project's history that travelled from a design note into a plan as though

@@ -260,7 +260,7 @@ and the only lever here that moved it — with keyword and code unchanged and th
 hit. It closes nothing for `--no-dense`, which has no dense list to improve, and it does not touch
 `where`.
 
-The cost is in the README's [Embeddings](../../README.md#embeddings) section, measured there and
+The cost is in the README's [Embeddings](../embeddings.md) section, measured there and
 not re-measured here: an `ask` at 0.8 s against 0.55 s with the model opening in 676 ms against
 418, 1.9 GB resident against 1.7, 2,680 s to embed the corpus's 33,525 rows against ~103 s, and a
 2.1 GB download. The rows themselves are 1024 floats instead of 384, so the store's `vectors.f32`

@@ -19,7 +19,7 @@ What the seven cost, every figure read from a run recorded in this repository:
 | --- | --- | --- | --- |
 | paraphrase · keyword · code, enriched fixture | 15/30 · 40/40 · 12/12 | **22/30** · 40/40 · 12/12 | [dev cases](../bench/2026-09-05-dev-cases-results.md), [0.5.0 gaps](../bench/2026-09-05-0.5.0-gaps-results.md) |
 | held-out, 400 questions | 103 | **119** (+19 −3, p = 0.0009) | [dev cases](../bench/2026-09-05-dev-cases-results.md) |
-| weights on disk | 470 MB | 2.1 GB | the hub cache, and [Embeddings](../../README.md#embeddings) |
+| weights on disk | 470 MB | 2.1 GB | the hub cache, and [Embeddings](../embeddings.md) |
 | fp32 weights a rebuild touches | 0.45 GB | 1.63 GB | [the unnoticeable results](../bench/2026-09-07-unnoticeable-results.md) §5.5 |
 | whole store embedded, 33,525 rows, foreground | **214 s** | 1,930 s | [what every command costs](../bench/2026-09-07-resource-usage-results.md) §1.1 |
 | max RSS on that embed | 1.63 GB | 2.15 GB | the same table |
@@ -89,7 +89,7 @@ holding this decision should be retaken:
   constant, and the large default landed after it in a 0.5.0 that has never been tagged. This
   reverses a default that has not yet reached anyone.
 - **The large model is one line away, and the line sits where the cost is met.**
-  [Embeddings](../../README.md#embeddings) states both models' recall and both models' prices beside
+  [Embeddings](../embeddings.md) states both models' recall and both models' prices beside
   each other rather than naming a winner.
 
 What would reverse this again: paraphrase recall on the small model turning out to be the binding

@@ -453,7 +453,7 @@ rule, in the arm it applies to, and query latency still under a second. It ships
 the store — `embed_model` in `repograph.toml`, recorded in `vectors.json`, opened by every reader —
 and the default moved to it at `35357c1`; `UNNAMED_MODEL` keeps a store with no recorded model
 reading as the small one, so an older store never silently reinterprets under the new default. The
-cost of that default is measured in [Embeddings](../../README.md#embeddings). Nothing here reaches
+cost of that default is measured in [Embeddings](../embeddings.md). Nothing here reaches
 the `--no-dense` arm, which has no dense list to improve.
 
 **Update (2026-09-06, 0.5.0):** `bench` has floors of its own for the large model since 0.5.0 —
