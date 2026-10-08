@@ -29,7 +29,7 @@ It hadn't been. Every paraphrase number this project measured, in the order it m
 ## Decision
 
 **Superseded.** The floor below is the original 14-case measurement; Amendment 6 and the README's
-[Bench](../../README.md#bench) section carry the floors `bench` enforces today.
+[Bench](../benchmarks.md#bench) section carry the floors `bench` enforces today.
 
 Set the shipped floors to what was measured, not to what the design note predicted:
 `bench`'s paraphrase floor is 5/14 with embeddings and 2/14 with `--no-dense` (`src/bench.rs`,
