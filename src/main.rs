@@ -789,6 +789,20 @@ fn graph_for(repo: &std::path::Path, cfg: &config::Config, stale: bool, no_dense
     }
 }
 
+/// `text` with the control characters a terminal would act on taken out. Symbol names, headings
+/// and paths come from the repository being read, so a file name or a heading can carry an escape
+/// sequence that retitles the window, rewrites what is already on screen, or types into the shell
+/// on terminals that answer queries. Tab and newline are layout and stay; C0, DEL and C1 go.
+fn terminal_safe(text: &str) -> std::borrow::Cow<'_, str> {
+    let bad = |c: char| c.is_control() && c != '\t' && c != '\n';
+    if !text.contains(bad) { return std::borrow::Cow::Borrowed(text); }
+    std::borrow::Cow::Owned(text.chars().filter(|c| !bad(*c)).collect())
+}
+
+/// Where every answer built from a repository's text reaches stdout, so that none skips
+/// `terminal_safe`.
+fn emit(text: &str) { print!("{}", terminal_safe(text)); }
+
 /// A reader's `--json` answer, carrying `stale` when the graph it was read from is behind.
 fn json_out(text: String, stale: &Option<refresh::Stale>) -> String {
     match stale {
@@ -838,8 +852,8 @@ fn main() -> std::process::ExitCode {
         // `{e:?}` is what `Termination for Result` printed before this function existed: an
         // anyhow report with its context chain, which several transcripts are read for.
         Err(e) => match e.downcast_ref::<Verdict>() {
-            Some(v) => { eprintln!("{v}"); std::process::ExitCode::from(3) }
-            None => { eprintln!("Error: {e:?}"); std::process::ExitCode::FAILURE }
+            Some(v) => { eprintln!("{}", terminal_safe(&v.to_string())); std::process::ExitCode::from(3) }
+            None => { eprintln!("{}", terminal_safe(&format!("Error: {e:?}"))); std::process::ExitCode::FAILURE }
         },
     }
 }
@@ -947,7 +961,7 @@ fn run() -> anyhow::Result<()> {
             if let Some(reply) = resident {
                 for n in reply.stderr { eprintln!("{n}"); }
                 eprintln!("serve: answered by the resident process");
-                print!("{}", reply.stdout);
+                emit(&reply.stdout);
                 use std::io::Write;
                 std::io::stdout().flush()?;
                 std::process::exit(0)
@@ -957,7 +971,7 @@ fn run() -> anyhow::Result<()> {
             // Before the answer: a refresh line reached the reader ahead of it back when it was
             // printed the moment it happened, and that is the order a human reads.
             for n in ctx.notices() { eprintln!("{n}"); }
-            print!("{text}");
+            emit(&text);
             // Nothing here is written back, and unwinding a 1.3 GB model session plus the graph
             // costs a fused answer a measurable share of its wall time: leave without it.
             use std::io::Write;
@@ -981,14 +995,14 @@ fn run() -> anyhow::Result<()> {
                 true => query::explain_json(&graph, &node).map(|j| json_out(format!("{j}\n"), &behind)),
                 false => query::explain(&graph, &node),
             }?;
-            print!("{rendered}");
+            emit(&rendered);
             Ok(())
         }
         Cmd::Impact { symbol, depth, down, json, stale } => {
             let (graph, behind) = graph_for(&repo, &load_cfg()?, stale, cli.no_dense)?;
             let root = code_node(&graph, &symbol)?;
             let (imp, direction) = if down { (impact::downstream(&graph, &root.id, depth), "downstream") } else { (impact::upstream(&graph, &root.id, depth), "upstream") };
-            print!("{}", if json { json_out(impact::render_json(&graph, &imp, direction), &behind) } else { impact::render(&graph, &imp, direction) });
+            emit(&if json { json_out(impact::render_json(&graph, &imp, direction), &behind) } else { impact::render(&graph, &imp, direction) });
             Ok(())
         }
         Cmd::Trace { from, to, depth, json, stale } => {
@@ -1001,14 +1015,14 @@ fn run() -> anyhow::Result<()> {
             // not have to read an exit code to learn what the object already says, and a `null`
             // path is easier to handle than a non-zero exit with no object.
             if json {
-                println!("{}", json_out(impact::trace_json(&graph, &a.id, &b.id, depth, found.as_deref()), &behind));
+                emit(&format!("{}\n", json_out(impact::trace_json(&graph, &a.id, &b.id, depth, found.as_deref()), &behind)));
                 return Ok(());
             }
             match found {
                 Some(path) => {
                     for (i, (id, passed)) in path.iter().enumerate() {
                         let at = graph.nodes.get(id).map(|n| format!("{}:{}", n.file, n.line)).unwrap_or_default();
-                        println!("{}{id}  {at}{}", if i == 0 { "" } else { "  → " }, if *passed { "  passes" } else { "" });
+                        emit(&format!("{}{id}  {at}{}\n", if i == 0 { "" } else { "  → " }, if *passed { "  passes" } else { "" }));
                     }
                     Ok(())
                 }
@@ -1019,14 +1033,14 @@ fn run() -> anyhow::Result<()> {
             let (graph, behind) = graph_for(&repo, &load_cfg()?, stale, cli.no_dense)?;
             let hunks = changes::hunks_from_git(&repo, &base)?;
             let r = changes::report(&graph, &hunks, depth);
-            print!("{}", if json { json_out(changes::render_json(&graph, &r), &behind) } else { changes::render(&graph, &r) });
+            emit(&if json { json_out(changes::render_json(&graph, &r), &behind) } else { changes::render(&graph, &r) });
             Ok(())
         }
         Cmd::Verify { json } => {
             let (graph, _) = store::Store::new(&repo).load()?;
             match json {
-                true => println!("{}", query::verify_json(&graph)),
-                false => print!("{}", query::verify(&graph)),
+                true => emit(&format!("{}\n", query::verify_json(&graph))),
+                false => emit(&query::verify(&graph)),
             }
             if graph.nodes.is_empty() { anyhow::bail!("graph is empty — run `repograph build`"); }
             Ok(())
@@ -1130,6 +1144,13 @@ mod tests {
         std::fs::create_dir_all(dir.path().join("docs")).unwrap();
         std::fs::write(dir.path().join("docs/a.md"), body).unwrap();
         dir
+    }
+
+    #[test]
+    fn terminal_escapes_are_dropped_and_layout_and_text_are_not() {
+        let hostile = "ok\u{1b}]0;pwned\u{7}\u{9b}31m name\tcol\nnext\u{7f}\r";
+        assert_eq!(terminal_safe(hostile), "ok]0;pwned31m name\tcol\nnext");
+        assert!(matches!(terminal_safe("Привет → мир"), std::borrow::Cow::Borrowed(_)), "clean text is not copied");
     }
 
     #[test]
