@@ -158,8 +158,9 @@ pub(crate) fn exact_seeds(graph: &Graph, words: &[String]) -> (Vec<String>, bool
     let words: Vec<&str> = words.iter().flat_map(|w| w.split_whitespace()).collect();
     let mut out = Vec::new();
     let mut whole = true;
+    let folded = Folded::new();
     for &raw in &words {
-        if let Some(n) = by_id(graph, raw) {
+        if let Some(n) = by_id_in(graph, raw, &folded) {
             out.push(n.id.clone());
             continue;
         }
@@ -321,10 +322,12 @@ fn is_test(id: &str) -> bool {
 
 /// The line of a text file holding the most of the question's words, the first of equals, or 1.
 /// A word is matched on its first five letters, so `windows` and an inflected `окна` still find
-/// `window` and `окно`'s line; a word under two letters says nothing about where it is.
+/// `window` and `окно`'s line; a word under three letters says nothing about where it is, since
+/// `to` and `on` are in nearly every line — except in Hangul and Han, where two syllables are a
+/// whole word like `환불`.
 fn matching_line(body: &str, query: &str) -> u32 {
     let words: Vec<String> = query.split(|c: char| !c.is_alphanumeric())
-        .filter(|w| w.chars().count() >= 2)
+        .filter(|w| w.chars().count() >= 3 || (w.chars().count() == 2 && w.chars().all(|c| c >= '\u{1100}')))
         .map(|w| w.chars().flat_map(char::to_lowercase).take(5).collect())
         .collect();
     let mut best = (0, 1);
@@ -387,11 +390,31 @@ fn token(word: &str) -> &str { word.trim_matches(WRAPPING) }
 /// it, then ignoring case — `fr-cal-40` is typed as often as `FR-CAL-40`. Every lookup of a word
 /// against an id goes through here, so `ask`, `explain`, `impact` and `trace` read a name alike.
 fn by_id<'a>(graph: &'a Graph, word: &str) -> Option<&'a crate::model::Node> {
+    by_id_in(graph, word, &std::cell::OnceCell::new())
+}
+
+/// Case-folded id to the node with the smallest id among those folding alike.
+type Folded<'a> = std::cell::OnceCell<HashMap<String, &'a crate::model::Node>>;
+
+/// `by_id` with the case-folded lookup shared across a question's words: it is one pass over the
+/// graph's nodes, built the first time a word misses both exact spellings, and not one pass per word.
+fn by_id_in<'a>(graph: &'a Graph, word: &str, folded: &Folded<'a>) -> Option<&'a crate::model::Node> {
     let w = token(word);
     if w.is_empty() { return None }
-    let folded = |id: &str| id.chars().flat_map(char::to_lowercase).eq(w.chars().flat_map(char::to_lowercase));
-    graph.nodes.get(word).or_else(|| graph.nodes.get(w))
-        .or_else(|| graph.nodes.values().filter(|n| folded(&n.id)).min_by(|a, b| a.id.cmp(&b.id)))
+    graph.nodes.get(word).or_else(|| graph.nodes.get(w)).or_else(|| {
+        let map = folded.get_or_init(|| {
+            let mut map: HashMap<String, &crate::model::Node> = HashMap::new();
+            for n in graph.nodes.values() {
+                let key: String = n.id.chars().flat_map(char::to_lowercase).collect();
+                match map.entry(key) {
+                    std::collections::hash_map::Entry::Occupied(mut e) => if n.id < e.get().id { e.insert(n); },
+                    std::collections::hash_map::Entry::Vacant(e) => { e.insert(n); }
+                }
+            }
+            map
+        });
+        map.get(&w.chars().flat_map(char::to_lowercase).collect::<String>()).copied()
+    })
 }
 
 /// What a name typed on the command line stands for. A bare name several symbols share is not
@@ -1366,6 +1389,13 @@ mod tests {
         }
         assert_eq!(resolve_one(&g, "fr-cal-40,").unwrap().id, "FR-CAL-40", "explain reads a name the way ask does");
         assert_eq!(resolve_code(&g, "(asGrosze)").unwrap().0.id, "sym:packages/contracts/src/money.ts::asGrosze");
+    }
+
+    #[test]
+    fn a_two_letter_word_does_not_pick_the_line() {
+        let body = "go to the top\non and on\nthe refund window closes";
+        assert_eq!(matching_line(body, "refund to on"), 3);
+        assert_eq!(matching_line("기간\n환불 기간 안내", "환불 기간"), 2, "two Hangul syllables are a word");
     }
 
     #[test]

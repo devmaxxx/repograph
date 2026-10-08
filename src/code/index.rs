@@ -292,8 +292,12 @@ const HEADERS: &str = "headers.json";
 impl Headers {
     pub fn load(store: &crate::store::Store) -> anyhow::Result<Headers> {
         Ok(match store.read_bytes(HEADERS)? {
-            // A record that does not parse costs one widening per family on the next update, not the update.
-            Some(bytes) => serde_json::from_slice(&bytes).unwrap_or_default(),
+            // A record that does not parse costs one widening per family on the next update, not the
+            // update: every file then reads as new. Said, because the cost is otherwise unexplained.
+            Some(bytes) => serde_json::from_slice(&bytes).unwrap_or_else(|_| {
+                eprintln!("headers.json unreadable; the next update re-reads every family");
+                Headers::default()
+            }),
             None => Headers::default(),
         })
     }

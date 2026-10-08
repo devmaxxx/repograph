@@ -170,6 +170,7 @@ impl Server {
 
     fn ask(&self, args: &Args) -> Result<String> {
         let question = args.string("question")?;
+        if question.len() > serve::HELLO_MAX { bail!("the question is {} bytes; the most one can be is {}", question.len(), serve::HELLO_MAX); }
         let (rerank, rerank_local) = (args.flag("rerank"), args.flag("rerank_local"));
         if rerank && rerank_local { bail!("rerank and rerank_local are two ways to pick the seeds; name one"); }
         let req = ask::Request {
@@ -543,6 +544,8 @@ mod tests {
         assert!(is_error, "{text}");
         let (is_error, text) = call(&server, "ask", json!({}));
         assert!(is_error && text.contains("question"), "{text}");
+        let (is_error, text) = call(&server, "ask", json!({ "question": "a ".repeat(serve::HELLO_MAX) }));
+        assert!(is_error && text.contains("the most one can be"), "{text}");
         let (is_error, _) = call(&server, "impact", json!({ "symbol": "callee", "depth": 0 }));
         assert!(is_error, "a depth of 0 reaches nothing");
     }

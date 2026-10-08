@@ -497,7 +497,7 @@ fn hello_line(stream: &sys::Stream) -> Option<String> {
 
 /// The most a hello may be. A request is a handful of words and flags; a peer sending more is not
 /// a client.
-const HELLO_MAX: usize = 64 * 1024;
+pub(crate) const HELLO_MAX: usize = 64 * 1024;
 
 /// How long a client has, in all, to finish its hello line. The serving loop is one thread, so a
 /// peer that sends a byte every few seconds would pass any per-read timeout and hold every other
