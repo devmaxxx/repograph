@@ -182,7 +182,7 @@ pub const PARAPHRASE_CASES: u32 = 30;
 
 /// A model this project has measured end to end — one run each, on the pinned beauty-crm fixture's
 /// 33,525 rows, enriched store, no rerank, fp32 ONNX on CPU
-/// (docs/bench/2026-09-22-embedders-results.md). One list, so that `repograph model`, the README's
+/// (docs/bench/2026-09-22-embedders-results.md). One list, so that `repograph model`, docs/embeddings.md's
 /// table and the prose quote the same figures; every id in it resolves to a profile `profile`
 /// recognises, which a test holds.
 pub struct Measured {
@@ -675,13 +675,13 @@ mod tests {
         assert!(catalogue(Some("someone/unmeasured")).contains(DEFAULT_MODEL));
     }
 
-    /// One table, three copies: this list, the README's and the readings'. A figure corrected in
-    /// the code and left standing in a document contradicts the binary the reader is holding, and
+    /// One table, three copies: this list, docs/embeddings.md's and the readings'. A figure corrected
+    /// in the code and left standing in a document contradicts the binary the reader is holding, and
     /// nothing else here would catch it — the documents are checked against the list instead of
     /// trusted to follow it.
     #[test]
     fn the_documents_quote_the_figures_this_list_holds() {
-        const README: &str = include_str!("../../README.md");
+        const GUIDE: &str = include_str!("../../docs/embeddings.md");
         const READINGS: &str = include_str!("../../docs/bench/2026-09-22-embedders-results.md");
         let row = |doc: &'static str, model: &str| {
             // The paraphrase column is what picks the measurement table out of the documents'
@@ -691,15 +691,15 @@ mod tests {
                 .unwrap_or_else(|| panic!("no table row for {model}"))
         };
         for m in MEASURED {
-            let readme = row(README, m.model);
+            let guide = row(GUIDE, m.model);
             let readings = row(READINGS, m.model);
-            for (doc, line) in [("README", readme), ("readings", readings)] {
+            for (doc, line) in [("embeddings guide", guide), ("readings", readings)] {
                 for want in [format!("| {} |", m.dim), format!("{}/{PARAPHRASE_CASES}", m.paraphrase), m.licence.to_string()] {
                     assert!(line.contains(&want), "{doc} row for {} does not say {want}: {line}", m.model);
                 }
             }
-            assert!(readme.contains(&format!("{:.1}×", m.times_the_default())), "README row for {}: {readme}", m.model);
-            assert!(readme.contains(&format!("{} MB", m.vectors_mb)), "README row for {}: {readme}", m.model);
+            assert!(guide.contains(&format!("{:.1}×", m.times_the_default())), "embeddings guide row for {}: {guide}", m.model);
+            assert!(guide.contains(&format!("{} MB", m.vectors_mb)), "embeddings guide row for {}: {guide}", m.model);
             for want in [format!("| {} |", m.embed_s), format!("| {} |", m.vectors_mb), format!("| {} |", m.cache)] {
                 assert!(readings.contains(&want), "readings row for {} does not say {want}: {readings}", m.model);
             }
