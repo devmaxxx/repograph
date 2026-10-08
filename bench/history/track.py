@@ -52,7 +52,7 @@ MODEL = re.compile(r"model=(\S+)")
 GRADED = ("keyword", "paraphrase", "code")
 
 # One row per line of `FLOORS` in src/bench.rs: (enriched, dense, Floors::<Model>, keyword, paraphrase).
-ROW = re.compile(r"\((true|false),\s*(true|false),\s*Floors::(Small),\s*(\d+),\s*(\d+)\)")
+ROW = re.compile(r"\((true|false),\s*(true|false),\s*Floors::(Small|Gemma),\s*(\d+),\s*(\d+)\)")
 # The ceiling may be a literal or a named `const`; a name is resolved in the same source.
 TAIL = re.compile(r"s\.kind\(\"code\"\)\.0 >= (\d+) && s\.p90_tokens <= (\d+|[A-Z_][A-Z0-9_]*)\b")
 
@@ -200,7 +200,7 @@ def arm_name(parsed):
     """`bench:dense+enriched` for the recorded suite; another suite names itself in brackets,
     so its runs never share a history -- or a comparability window -- with the recorded one.
     A dense arm under a model other than the small default names itself too (by its model string,
-    since only the small model has floors), so its history never pools with the small model's."""
+    since floors are per model), so its history never pools with the small model's."""
     parts = ["dense" if parsed["dense"] else "lexical", "enriched" if parsed["enriched"] else "raw"]
     if parsed["dense"] and parsed["model"] != "small":
         parts.append(parsed["model"])

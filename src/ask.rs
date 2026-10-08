@@ -284,6 +284,16 @@ impl Context {
                 let i = index::dense::DenseIndex::load(store).unwrap_or_else(|err| { notices.borrow_mut().push(format!("dense: index unreadable, continuing lexical-only ({err:#})")); Default::default() });
                 timing.stage("vectors loaded"); i
             });
+            // A model named in `repograph.toml` after the store was embedded takes effect at the
+            // next `update`; a reader that only asks would otherwise keep the old one forever.
+            // This answer still comes from the stored vectors — the rewrite is a whole re-embed.
+            if !req.stale && index::embed::switch_owed(config::names_embed_model(repo), idx.model_of_rows().as_deref(), &cfg.embed_model) {
+                let what = format!("dense: {} names {}, the vectors are {}'s", config::PROJECT_FILE, cfg.embed_model, idx.model_of_rows().unwrap_or_default());
+                let busy = match writer { Writer::Barred => true, Writer::PerAnswer => matches!(store.try_lock_writer(), Ok(None)), _ => false };
+                let line = refresh::left_behind_as(repo, no_dense, &what, busy, "switching");
+                let mut n = notices.borrow_mut();
+                if !n.contains(&line) { n.push(line); }
+            }
             let mut slot = embedder.borrow_mut();
             let e = slot.get_or_insert_with(|| {
                 // Collected, never printed: on the warm thread this line used to race the main

@@ -74,9 +74,15 @@ pub(crate) fn files_of(diff: &walk::Diff) -> Vec<String> {
 /// catch it up — unless `busy`, when one is already running and a second would only queue behind
 /// it.
 pub(crate) fn left_behind(repo: &Path, no_dense: bool, what: &str, busy: bool) -> String {
+    left_behind_as(repo, no_dense, what, busy, "refreshing")
+}
+
+/// `left_behind` with the running refresh named by `doing`, for a caller whose refresh is not a
+/// catch-up but a move to another model.
+pub(crate) fn left_behind_as(repo: &Path, no_dense: bool, what: &str, busy: bool, doing: &str) -> String {
     if busy { return format!("{what}, a refresh is already running"); }
     match spawn_update(repo, no_dense) {
-        Ok(()) => format!("{what}, refreshing in background"),
+        Ok(()) => format!("{what}, {doing} in background"),
         Err(err) => format!("{what}; the background refresh did not start ({err:#}) — run `repograph update`"),
     }
 }

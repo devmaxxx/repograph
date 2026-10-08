@@ -451,7 +451,7 @@ in full, not an empty config:
 | `rerank_model`       | `sonnet` — the same for `rerank_command`                                                    |
 | `enrich_languages`   | `[]` — the languages `enrich` writes questions in, named as the model reads them (`["Russian", "English"]`); empty = detected from the documents, English where they name none; any language name is accepted, see [Spending tokens on purpose](#spending-tokens-on-purpose) |
 | `reranker_dir`       | directory of the exported cross-encoder for `--rerank-local`; empty = `~/.cache/repograph/reranker` |
-| `embed_model`        | `intfloat/multilingual-e5-small`; the model the vectors are written with — nine were measured and `repograph model` switches it, see [Embeddings](#embeddings) |
+| `embed_model`        | `onnx-community/embeddinggemma-300m-ONNX`; the model the vectors are written with — nine were measured and `repograph model` switches it, see [Embeddings](#embeddings) |
 | `reader_budget`      | `10` — seconds a reader may spend refreshing before it answers from the store as it stands and leaves the rest to a detached `update`; `0` never refreshes inline. The machine file may set it; `REPOGRAPH_READER_BUDGET` overrides, see [Keeping it fresh](#keeping-it-fresh) |
 | `resources`          | `"balanced"` = a third of the logical cores; `"low"` a sixth, `"full"` a half — how much of the machine a run may take, see [Resources](#resources) |
 
@@ -629,8 +629,8 @@ unaffected.
 
 ## Embeddings
 
-Dense retrieval embeds by default with `intfloat/multilingual-e5-small` (384-d, ONNX, ≈470 MB on
-disk) run through `ort` directly: the tokenizer and the session open concurrently at optimisation
+Dense retrieval embeds by default with `onnx-community/embeddinggemma-300m-ONNX` (768-d, ONNX,
+≈1.2 GB on disk, downloaded on first use) run through `ort` directly: the tokenizer and the session open concurrently at optimisation
 level 1,
 which halves model-open time against the library default. The files are a one-time Hugging Face
 download cached under `FASTEMBED_CACHE_DIR` if that is set, else `~/.cache/repograph/fastembed`
@@ -653,7 +653,9 @@ recorded one — so a store keeps answering with the model that wrote it whateve
 says today, and a new default never silently reinterprets an index nobody re-embedded. A store
 written before the field existed is the small model's. `repograph model <hub id>` switches it —
 [below](#choosing-the-model) — and rows another model wrote are dropped and the file rewritten, on
-width as well as on name.
+width as well as on name. Naming a model in `repograph.toml` by hand is enough: the first `ask`
+after it says so on stderr, answers from the stored vectors, and starts a background `update` that
+downloads the model and re-embeds.
 `REPOGRAPH_EMBED_MODEL=<hub id>` outranks both for one command, which is how a copy of a store is
 measured under a second model — query that copy with `ask --stale`, or with `bench` and `dump`,
 which read the store as it stands; a refreshing `ask` would claim the index for the overriding
@@ -687,19 +689,23 @@ Embedding times, and what a rebuild reuses rather than pays for twice, are in
 
 Nine models were embedded over the same corpus and read on the same 82 cases — one run each, the
 whole store re-embedded per model. Keyword and code read 40/40 and 12/12 for every model but the
-smallest, which drops one keyword case, so paraphrase is the column the embedder moves. Two of the
-nine are offered here; [the readings](docs/bench/2026-09-22-embedders-results.md) hold the rest.
+smallest, which drops one keyword case, so paraphrase is the column the embedder moves. Three of
+the nine are offered here; [the readings](docs/bench/2026-09-22-embedders-results.md) hold the rest.
 
 | hub id | dim | paraphrase | embed | vectors | licence |
 | --- | --- | --- | --- | --- | --- |
-| `intfloat/multilingual-e5-small` (default) | 384 | 15/30 | 1.0× | 51 MB | MIT |
-| `Snowflake/snowflake-arctic-embed-l-v2.0` | 1024 | **21/30** | 13.5× | 137 MB | Apache-2.0 |
+| `onnx-community/embeddinggemma-300m-ONNX` (default) | 768 | **21/30** | 1.0× | 103 MB | Gemma |
+| `intfloat/multilingual-e5-small` | 384 | 15/30 | 0.2× | 51 MB | MIT |
+| `Snowflake/snowflake-arctic-embed-l-v2.0` | 1024 | **21/30** | 2.7× | 137 MB | Apache-2.0 |
 
-`Snowflake/snowflake-arctic-embed-l-v2.0` is the upgrade, under Apache-2.0. Four models read 21/30
-and that arm could not separate them — a widened arm of 60 paraphrase cases could, and this one
-took 39/60 against 35/60 for the next candidate. It is not the default because its cost lands on a
-first build, before anyone knows whether they need the recall: 13.5× the embed and 137 MB of
-vectors where the default writes 51 MB. The conditions, the other seven candidates, the flips and
+The default is the cheapest of the four models that read 21/30; the small model it replaced reads
+15/30. A reader answers with the model that wrote the store, but a writer embeds with the
+configured one: a store the small model wrote, in a repository that names no `embed_model`, moves
+to the default at its next `update` — one 1.2 GB download and one whole re-embed, in the background
+band. Pin `embed_model = "intfloat/multilingual-e5-small"` to stay on the small model.
+`Snowflake/snowflake-arctic-embed-l-v2.0` is the upgrade, and the choice under an OSI licence: a
+widened arm of 60 paraphrase cases separated the four, and it took 39/60 against the default's
+35/60, for 2.7× the embed and 137 MB of vectors where the default writes 103 MB. The conditions, the other seven candidates, the flips and
 the caveats are in [the readings](docs/bench/2026-09-22-embedders-results.md).
 
 `repograph model` prints that table with the store's own model marked, and
@@ -709,7 +715,7 @@ the caveats are in [the readings](docs/bench/2026-09-22-embedders-results.md).
 $ repograph model Snowflake/snowflake-arctic-embed-l-v2.0
 model: intfloat/multilingual-e5-small → Snowflake/snowflake-arctic-embed-l-v2.0
 model: 2.1G of files in the hub cache, fetched once
-model: 13.5× the default's embed — 1944 s for the bench fixture's 33,525 rows
+model: 2.7× the default's embed — 1944 s for the bench fixture's 33,525 rows
 model: 137 MB of vectors for that corpus, against the other model's 51 MB on it
 model: 384-d → 1024-d, so every row is re-embedded and the whole index rewritten, not extended
 model: opened in 5.2s, 1024-d vectors

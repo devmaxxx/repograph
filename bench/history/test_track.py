@@ -320,7 +320,7 @@ class Floors(unittest.TestCase):
     def test_the_live_source_still_parses(self):
         f = track.floors()
         self.assertEqual(set(f), {(True, True, "small"), (True, False, "small"),
-                                   (False, True, "small"), (False, False, "small")})
+                                   (False, True, "small"), (False, False, "small"), (True, True, "gemma")})
         for arm in f.values():
             self.assertGreater(arm["keyword"], 0)
             self.assertGreater(arm["p90_tokens"], 0)

@@ -650,7 +650,8 @@ fn model_report(repo: &std::path::Path, cfg: &config::Config) -> anyhow::Result<
     if recorded.as_deref().is_some_and(|m| m != cfg.embed_model) {
         out.push_str("\nThe two disagree. The store keeps answering with the model that wrote it; the\n\
             configured one takes effect at the next `build`, `update`, `enrich`, `embed` or\n\
-            `watch`, which drops every row the other model wrote and rewrites the index whole.\n");
+            `watch` (an `ask` starts one when repograph.toml names the model), which drops\n\
+            every row the other model wrote and rewrites the index whole.\n");
     }
     out.push('\n');
     out.push_str(&index::embed::catalogue(recorded.as_deref().or(Some(&cfg.embed_model))));
