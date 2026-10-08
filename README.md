@@ -465,7 +465,7 @@ nothing outside those two directories, whatever the other globs claim, and the n
 what an earlier store held outside them. Credential files are never read under any setting: `.env`
 and `.env.*` (the templates `.env.example`, `.sample`, `.template` and `.dist` excepted), private
 keys and keystores, `.npmrc`, `.pypirc`, `.netrc`, `.git-credentials`, cloud credentials,
-`*.tfvars`, `*.tfstate` and `secrets.*` — their content would otherwise reach the store, an
+`*.tfvars`, `*.tfstate` and `secrets.{yaml,json,toml,…}` — their content would otherwise reach the store, an
 `enrich` prompt sent to a model, and the answers.
 
 The store writes its own `.gitignore` holding `*`, so `.repograph/` stays out of a commit in a

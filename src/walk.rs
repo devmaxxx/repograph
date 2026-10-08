@@ -49,14 +49,14 @@ const TEXT_REFUSED: [&str; 11] = [
 /// answer that seeds them. `.gitignore` keeps most of them out already; this is the floor for the
 /// repository that commits one, or is not under git at all.
 /// Matched without regard to case: `.ENV` and `Prod.PEM` hold the same thing.
-const SECRET: [&str; 38] = [
-    "**/.env", "**/.env.*", "**/*.env", "**/.envrc", "**/.dev.vars", "**/*.pem", "**/*.key",
+const SECRET: [&str; 40] = [
+    "**/.env", "**/.env.*", "**/.env-*", "**/.env_*", "**/*.env", "**/.envrc", "**/.dev.vars", "**/*.pem", "**/*.key",
     "**/*.p12", "**/*.pfx", "**/*.jks", "**/*.keystore", "**/*.kdbx", "**/*.ppk", "**/*.gpg",
     "**/*.asc", "**/id_{rsa,dsa,ecdsa,ed25519}", "**/.npmrc", "**/.pypirc", "**/.netrc",
     "**/.pgpass", "**/.git-credentials", "**/.htpasswd", "**/.boto", "**/.s3cfg", "**/.dockercfg",
     "**/.aws/credentials", "**/.docker/config.json", "**/kubeconfig", "**/.kube/config",
     "**/*.tfvars", "**/*.tfvars.json", "**/*.tfstate", "**/*.tfstate.*", "**/credentials*.json",
-    "**/service-account*.json", "**/{secret,secrets}.*", "**/*.{secret,secrets}", "**/.vault_pass*",
+    "**/service-account*.json", "**/{secret,secrets}.{yaml,yml,json,toml,ini,conf,txt}", "**/*.{secret,secrets}", "**/.vault_pass*",
 ];
 
 /// Templates that name a project's variables with placeholder values: the one shape of env file
@@ -114,10 +114,11 @@ pub(crate) fn globs(globs: &[String]) -> Result<GlobSet> {
 fn included(include: &[String]) -> Result<Option<GlobSet>> {
     let mut out = Vec::new();
     for raw in include {
-        let p = raw.trim().trim_start_matches("./").trim_end_matches('/');
+        let p = raw.trim().trim_start_matches("./").trim_start_matches('/').trim_end_matches('/');
         if p.is_empty() || p == "." { return Ok(None); }
-        if p.contains(['*', '?', '[', '{']) { out.push(p.to_string()); }
-        else { out.push(p.to_string()); out.push(format!("{p}/**")); }
+        // A glob can name a directory too (`packages/*/src`), and its files are under it.
+        out.push(p.to_string());
+        out.push(format!("{p}/**"));
     }
     if out.is_empty() { return Ok(None); }
     globs(&out).map(Some)
@@ -556,6 +557,8 @@ mod tests {
         assert!(rels(&["docs"]).contains(&"docs/a.md".to_string()));
         assert_eq!(rels(&["srcx/*.ts"]), ["srcx/c.ts"], "a glob is matched as it is written");
         assert_eq!(rels(&["src"]), Vec::<String>::new(), "src is not a prefix of srcx");
+        assert_eq!(rels(&["sr?x"]), ["srcx/c.ts"], "a glob naming a directory reaches the files under it");
+        assert_eq!(rels(&["/srcx"]), ["srcx/c.ts"], "a leading slash is the repository root");
         assert_eq!(rels(&["."]), all);
     }
 
@@ -566,7 +569,7 @@ mod tests {
         std::fs::create_dir_all(p.join("api/.aws")).unwrap();
         for f in [".env", ".env.local", "api/.env.production", "prod.env", ".envrc", "api/tls.pem",
                   "api/tls.key", "id_ed25519", ".npmrc", "api/.aws/credentials", "infra.tfvars",
-                  "terraform.tfstate", "credentials-ci.json", "secrets.yaml", ".env.md", ".ENV",
+                  "terraform.tfstate", "credentials-ci.json", "secrets.yaml", ".env.md", ".ENV", ".env-prod", ".env_ci",
                   "Prod.PEM", "ID_RSA", "main.tfvars.json", "app.secret", ".pgpass"] {
             std::fs::write(p.join(f), "API_KEY=sk-live-123\n").unwrap();
         }

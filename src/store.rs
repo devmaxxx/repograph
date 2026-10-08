@@ -108,7 +108,7 @@ impl Store {
     /// The store holds passages of the repository's documents and code and the questions a model
     /// wrote about them, so it carries its own `.gitignore`: a `git add -A` in a repository that
     /// never listed `.repograph/` would otherwise commit it.
-    fn ensure_dir(&self) -> Result<()> {
+    pub(crate) fn ensure_dir(&self) -> Result<()> {
         std::fs::create_dir_all(&self.dir)?;
         let ignore = self.dir.join(".gitignore");
         if !ignore.exists() { std::fs::write(&ignore, "*\n")?; }

@@ -403,13 +403,13 @@ fn adopt_if_moved(watcher: &mut crate::Watcher, ctx: &mut ask::Context, batch: u
     Ok(())
 }
 
+const HELLO_MAX: u64 = 64 * 1024;
+
 /// The client's hello, or None when the peer was gone before it said anything. A connect that
 /// closes with nothing on it is a probe, not a question: `serve`'s own check for another server
 /// makes exactly that shape, and so does a client that gave up. On macOS a socket with no other
 /// end refuses the `setsockopt` below with EINVAL, which reached the server's stderr as an
 /// unattributable `serve: Invalid argument (os error 22)`; elsewhere it is an empty read.
-const HELLO_MAX: u64 = 64 * 1024;
-
 fn hello_line(stream: &sys::Stream) -> Option<String> {
     stream.set_read_timeout(Some(IO_TIMEOUT)).ok()?;
     stream.set_write_timeout(Some(IO_TIMEOUT)).ok()?;

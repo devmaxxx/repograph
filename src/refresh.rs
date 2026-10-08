@@ -136,9 +136,9 @@ pub(crate) fn spawn_update(repo: &Path, no_dense: bool) -> anyhow::Result<()> {
 }
 
 fn log_file(repo: &Path) -> anyhow::Result<std::fs::File> {
-    let dir = repo.join(".repograph");
-    std::fs::create_dir_all(&dir)?;
-    let p = dir.join("background.log");
+    let store = crate::store::Store::new(repo);
+    store.ensure_dir()?;
+    let p = repo.join(".repograph").join("background.log");
     let long = std::fs::metadata(&p).is_ok_and(|m| m.len() > LOG_CAP);
     let mut o = std::fs::OpenOptions::new();
     match long {
