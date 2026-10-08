@@ -150,6 +150,7 @@ impl Resolver {
     pub fn new(repo: &Path, cfg: &crate::config::Config) -> Result<Resolver> {
         let code = crate::walk::globs(&cfg.code_globs)?;
         let skip = crate::walk::globs(&cfg.skip)?;
+        let include = crate::walk::included(&cfg.include)?;
         let mut paths: PathsTier = Vec::new();
         let mut packages = BTreeMap::new();
         let mut sources: Vec<(Lang, String, PathBuf)> = Vec::new();
@@ -159,9 +160,18 @@ impl Resolver {
         // `walk` reads dotted directories, so this one does too, and admits from them only what Shell
         // collects: CI keeps its scripts under `.github/`, while a tsconfig, a package.json or a manifest
         // under a dotted directory stays out, as it was before this walk opened.
+        // A directory `skip` covers is not entered: `node_modules/**` is a pattern for files, so the
+        // directory is asked about as if a file were in it, and a tree of a hundred thousand
+        // dependency files is never listed only to be dropped one by one.
+        let (pruned_skip, root) = (skip.clone(), repo.to_path_buf());
         let walker = ignore::WalkBuilder::new(repo)
             .hidden(false)
-            .filter_entry(|e| e.file_name() != ".git")
+            .filter_entry(move |e| {
+                if e.file_name() == ".git" { return false; }
+                if !e.file_type().is_some_and(|t| t.is_dir()) { return true; }
+                let rel = e.path().strip_prefix(&root).unwrap_or(e.path()).to_string_lossy().replace('\\', "/");
+                rel.is_empty() || !pruned_skip.is_match(format!("{rel}/\u{1}"))
+            })
             .git_ignore(true)
             .build();
         for dent in walker.flatten() {
@@ -171,7 +181,7 @@ impl Resolver {
             if rel.split('/').any(|part| part.starts_with('.')) {
                 let is_file = dent.file_type().is_some_and(|t| t.is_file());
                 if let Some(lang) = Lang::of(&rel).filter(|l| l.family() == Family::Shell) {
-                    if is_file && !skip.is_match(&rel) && code.is_match(&rel) {
+                    if is_file && !skip.is_match(&rel) && code.is_match(&rel) && include.as_ref().is_none_or(|i| i.is_match(&rel)) {
                         reached.insert(Family::Shell);
                         sources.push((lang, rel, p.to_path_buf()));
                     }
@@ -179,7 +189,7 @@ impl Resolver {
                 continue;
             }
             if dent.file_type().is_some_and(|t| t.is_file()) && !skip.is_match(&rel) {
-                if code.is_match(&rel) {
+                if code.is_match(&rel) && include.as_ref().is_none_or(|i| i.is_match(&rel)) {
                     if let Some(lang) = Lang::of(&rel) {
                         reached.insert(lang.family());
                         // TypeScript's state is the tsconfig and package.json read below; its sources
@@ -504,6 +514,15 @@ mod tests {
         assert_eq!(r.resolve("apps/api/src/x.ts", "@beauty-crm/contracts").as_deref(), Some("packages/contracts/src/index.ts"));
         assert_eq!(r.resolve("apps/api/src/x.ts", "@beauty-crm/contracts/money").as_deref(), Some("packages/contracts/src/money.ts"));
         assert_eq!(r.resolve("packages/ui/src/app.tsx", "@/button").as_deref(), Some("packages/ui/src/button/index.tsx"));
+    }
+
+    #[test]
+    fn a_directory_skip_covers_is_not_read_for_its_tsconfig() {
+        let d = repo();
+        let cfg = crate::config::Config { skip: vec!["packages/ui/**".into()], ..Default::default() };
+        let r = Resolver::new(d.path(), &cfg).unwrap();
+        assert_eq!(r.resolve("packages/ui/src/app.tsx", "@/button"), None);
+        assert_eq!(r.resolve("apps/api/src/x.ts", "@beauty-crm/contracts").as_deref(), Some("packages/contracts/src/index.ts"));
     }
 
     #[test]

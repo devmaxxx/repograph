@@ -505,11 +505,26 @@ fn pipefail_prefix() -> &'static str {
 struct EmptyCwd(PathBuf);
 
 impl EmptyCwd {
+    /// The counter is what keeps two batches of one process apart: macOS reads the clock to the
+    /// microsecond, so batches started together drew the same name and one of them failed. A name
+    /// someone else made first is skipped rather than entered, and the directory is the owner's
+    /// alone, so a shared temp directory lends the command nothing.
     fn new() -> Result<Self> {
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let builder = std::fs::DirBuilder::new();
+        #[cfg(unix)]
+        let builder = { let mut b = builder; std::os::unix::fs::DirBuilderExt::mode(&mut b, 0o700); b };
         let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_nanos());
-        let dir = std::env::temp_dir().join(format!("repograph-cwd-{}-{nanos}", std::process::id()));
-        std::fs::create_dir(&dir).with_context(|| format!("create {}", dir.display()))?;
-        Ok(Self(dir))
+        for _ in 0..16 {
+            let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            let dir = std::env::temp_dir().join(format!("repograph-cwd-{}-{nanos}-{n}", std::process::id()));
+            match builder.create(&dir) {
+                Ok(()) => return Ok(Self(dir)),
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                Err(e) => return Err(e).with_context(|| format!("create {}", dir.display())),
+            }
+        }
+        anyhow::bail!("create an empty directory under {}: every name tried was taken", std::env::temp_dir().display())
     }
 }
 
@@ -1025,6 +1040,21 @@ mod tests {
         let prompt = "x".repeat(1 << 20);
         let out = run_command("exec 0<&-; printf 'answered\\n'", &prompt).unwrap();
         assert_eq!(out, "answered\n");
+    }
+
+    #[test]
+    fn batches_started_together_each_get_their_own_empty_directory() {
+        let dirs: Vec<EmptyCwd> = std::thread::scope(|s| {
+            let handles: Vec<_> = (0..8).map(|_| s.spawn(|| (0..32).map(|_| EmptyCwd::new().unwrap()).collect::<Vec<_>>())).collect();
+            handles.into_iter().flat_map(|h| h.join().unwrap()).collect()
+        });
+        let distinct: std::collections::BTreeSet<&PathBuf> = dirs.iter().map(|d| &d.0).collect();
+        assert_eq!(distinct.len(), 256);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(std::fs::metadata(&dirs[0].0).unwrap().permissions().mode() & 0o777, 0o700);
+        }
     }
 
     #[test]

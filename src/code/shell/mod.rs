@@ -43,13 +43,17 @@ pub(crate) fn widen(stale: &[String], removed: &[String], graph: &Graph, all_rel
         .filter(|r| Lang::of(r) == Some(Lang::Shell))
         .map(|r| format!("file:{r}"))
         .collect();
-    let mut frontier = reached.clone();
-    while !frontier.is_empty() {
-        frontier = graph.edges.iter()
-            .filter(|e| e.kind == EdgeKind::Imports && frontier.contains(&e.target))
-            .map(|e| e.source.clone())
-            .filter(|s| reached.insert(s.clone()))
-            .collect();
+    // Grouped once: a chain of `source` lines is as many hops as it is long, and each hop would
+    // otherwise be a scan of every edge in the graph.
+    let mut sourced_by: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
+    for e in graph.edges.iter().filter(|e| e.kind == EdgeKind::Imports) {
+        sourced_by.entry(e.target.as_str()).or_default().push(e.source.as_str());
+    }
+    let mut frontier: Vec<String> = reached.iter().cloned().collect();
+    while let Some(file) = frontier.pop() {
+        for &importer in sourced_by.get(file.as_str()).into_iter().flatten() {
+            if reached.insert(importer.to_string()) { frontier.push(importer.to_string()); }
+        }
     }
     let stale: BTreeSet<&str> = stale.iter().map(String::as_str).collect();
     let present: BTreeSet<&str> = all_rels.iter().map(String::as_str).collect();

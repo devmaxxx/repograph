@@ -75,6 +75,12 @@ pub fn canonical(graph: &Graph, id: &str) -> Option<String> {
 
 /// `canonical` without the member fold: the node itself or the declaration behind a barrel.
 fn exact(graph: &Graph, id: &str) -> Option<String> {
+    exact_via(graph, id, |source| graph.edges.iter().filter(|e| e.kind == EdgeKind::ReExports && e.source == source).collect())
+}
+
+/// `exact` with the re-exports of a file supplied by `from`: a scan of every edge for a caller
+/// that asks once, an `Index`'s grouped map for a walk that asks at every hop.
+fn exact_via<'g>(graph: &Graph, id: &str, from: impl Fn(&str) -> Vec<&'g Edge>) -> Option<String> {
     if graph.nodes.contains_key(id) { return Some(id.to_string()) }
     let (file, name) = id.strip_prefix("sym:")?.split_once("::")?;
     // A barrel that renames hands the walk on under the original name, so a step is a file and
@@ -84,7 +90,7 @@ fn exact(graph: &Graph, id: &str) -> Option<String> {
     let mut i = 0;
     while i < at.len() {
         let (source, name) = (format!("file:{}", at[i].0), at[i].1.clone());
-        for e in graph.edges.iter().filter(|e| e.kind == EdgeKind::ReExports && e.source == source) {
+        for e in from(&source) {
             for orig in renamed_from(e, bare(&name)) {
                 let next = (e.target.trim_start_matches("file:").to_string(), rebase(&name, &orig));
                 let candidate = format!("sym:{}::{}", next.0, next.1);
@@ -95,16 +101,6 @@ fn exact(graph: &Graph, id: &str) -> Option<String> {
         i += 1;
     }
     None
-}
-
-/// Where a downward step lands, and whether the walk may go on from there. A target folded into
-/// its container is shown as it, but the container's own calls are its other methods' calls,
-/// which this one does not make — walking on would report paths that only a sibling has.
-fn landing(graph: &Graph, target: &str) -> (String, bool) {
-    match exact(graph, target) {
-        Some(id) => (id, true),
-        None => (canonical(graph, target).unwrap_or_else(|| target.to_string()), false),
-    }
 }
 
 /// `sym:f::C` for `sym:f::C.m`, and `sym:f::O.I` for `sym:f::O.I.m`; none for a class or a file.
@@ -139,6 +135,8 @@ pub struct Index<'a> {
     code: BTreeMap<&'a str, Vec<&'a Edge>>,
     members: BTreeMap<&'a str, Vec<&'a str>>,
     re_exports: BTreeMap<&'a str, Vec<&'a Edge>>,
+    /// The same re-exports by the barrel that makes them, which is the end `exact` follows.
+    re_exports_from: BTreeMap<&'a str, Vec<&'a Edge>>,
     imports: BTreeMap<&'a str, Vec<&'a Edge>>,
     /// Class to the interfaces it implements, and back, by the interface's declaration: an
     /// `implements` clause names the interface by the file it was imported from, often a barrel.
@@ -155,7 +153,7 @@ impl<'a> Index<'a> {
 
     fn build(graph: &'a Graph, up: bool, full: bool) -> Index<'a> {
         let mut ix = Index {
-            graph, up, code: BTreeMap::new(), members: BTreeMap::new(), re_exports: BTreeMap::new(), imports: BTreeMap::new(),
+            graph, up, code: BTreeMap::new(), members: BTreeMap::new(), re_exports: BTreeMap::new(), re_exports_from: BTreeMap::new(), imports: BTreeMap::new(),
             interfaces: BTreeMap::new(), implementers: BTreeMap::new(),
         };
         let mut implements: Vec<&Edge> = Vec::new();
@@ -164,7 +162,10 @@ impl<'a> Index<'a> {
             match e.kind {
                 _ if walks(e) => ix.code.entry(if up { e.target.as_str() } else { e.source.as_str() }).or_default().push(e),
                 EdgeKind::Declares if e.target.starts_with("sym:") => ix.members.entry(e.source.as_str()).or_default().push(e.target.as_str()),
-                EdgeKind::ReExports => ix.re_exports.entry(e.target.as_str()).or_default().push(e),
+                EdgeKind::ReExports => {
+                    ix.re_exports.entry(e.target.as_str()).or_default().push(e);
+                    ix.re_exports_from.entry(e.source.as_str()).or_default().push(e);
+                }
                 EdgeKind::Imports if full => ix.imports.entry(e.target.as_str()).or_default().push(e),
                 _ => {}
             }
@@ -176,11 +177,26 @@ impl<'a> Index<'a> {
         for e in implements {
             let declared = graph.nodes.contains_key(&e.target);
             let in_barrel = || e.target.strip_prefix("sym:").and_then(|t| t.split_once("::")).is_some_and(|(f, _)| barrels.contains(f));
-            let Some(iface) = (declared || in_barrel()).then(|| exact(graph, &e.target)).flatten() else { continue };
+            let Some(iface) = (declared || in_barrel()).then(|| ix.exact(&e.target)).flatten() else { continue };
             ix.interfaces.entry(e.source.as_str()).or_default().push(iface.clone());
             ix.implementers.entry(iface).or_default().push(e.source.as_str());
         }
         ix
+    }
+
+    /// `exact` over the grouped re-exports, so a hop reads one barrel's edges and not the graph's.
+    fn exact(&self, id: &str) -> Option<String> {
+        exact_via(self.graph, id, |source| self.re_exports_from.get(source).cloned().unwrap_or_default())
+    }
+
+    /// Where a downward step lands, and whether the walk may go on from there. A target folded into
+    /// its container is shown as it, but the container's own calls are its other methods' calls,
+    /// which this one does not make — walking on would report paths that only a sibling has.
+    fn landing(&self, target: &str) -> (String, bool) {
+        match self.exact(target) {
+            Some(id) => (id, true),
+            None => (canonical(self.graph, target).unwrap_or_else(|| target.to_string()), false),
+        }
     }
 
     /// Every `sym:<barrel>::<Name>` a caller could have reached this symbol by.
@@ -314,7 +330,7 @@ impl<'a> Index<'a> {
     /// on it and on each implementation, since the graph cannot tell which one runs.
     fn lands(&self, e: &Edge) -> Vec<(String, bool)> {
         if self.up { return vec![(e.source.clone(), true)] }
-        let (id, goes_on) = landing(self.graph, &e.target);
+        let (id, goes_on) = self.landing(&e.target);
         let dispatch = if goes_on { self.implementations(&id) } else { Vec::new() };
         std::iter::once((id, goes_on)).chain(dispatch.into_iter().map(|m| (m, true))).collect()
     }

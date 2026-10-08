@@ -111,7 +111,7 @@ pub(crate) fn globs(globs: &[String]) -> Result<GlobSet> {
 
 /// `include` as globs: a plain directory reaches everything under it, and `./` or a trailing `/`
 /// mean nothing. `None` for an empty list, which is the whole repository.
-fn included(include: &[String]) -> Result<Option<GlobSet>> {
+pub(crate) fn included(include: &[String]) -> Result<Option<GlobSet>> {
     let mut out = Vec::new();
     for raw in include {
         let p = raw.trim().trim_start_matches("./").trim_start_matches('/').trim_end_matches('/');
