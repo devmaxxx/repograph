@@ -249,14 +249,14 @@ pub fn register_mcp(root: &Path, command: &str, run: &dyn Fn(&Path, &[&str]) -> 
     };
     let root_arg = root.display().to_string();
     let tail: Vec<&str> = rest.iter().map(String::as_str).chain(["--repo", &root_arg, "mcp"]).collect();
-    let by_hand = format!("claude mcp add {MCP_NAME} -- {command} --repo {root_arg} mcp");
+    let by_hand = format!("claude mcp add {MCP_NAME} -- {}", words.iter().map(String::as_str).chain(["--repo", &root_arg, "mcp"]).map(shell_word).collect::<Vec<_>>().join(" "));
     let Some(existing) = run(root, &["mcp", "get", MCP_NAME]) else {
         report.notes.push(format!("`claude` is not on PATH, so the MCP server was not registered; run `{by_hand}` where it is"));
         return report;
     };
     if existing.status.success() {
         let shown = String::from_utf8_lossy(&existing.stdout);
-        if shown.contains(program.as_str()) && shown.contains(&tail.join(" ")) {
+        if said_in_order(&shown, program.as_str(), &tail) {
             report.notes.push("MCP server already registered, left alone".to_string());
             return report;
         }
@@ -276,6 +276,24 @@ pub fn register_mcp(root: &Path, command: &str, run: &dyn Fn(&Path, &[&str]) -> 
         None => report.notes.push("`claude` went away between two calls; the MCP server was not registered".to_string()),
     }
     report
+}
+
+/// `word` as one shell word: bare when it has nothing the shell would split or expand, and
+/// single-quoted otherwise, so a path with a space still pastes as the one argument it is.
+fn shell_word(word: &str) -> String {
+    let plain = !word.is_empty() && word.chars().all(|c| c.is_alphanumeric() || "-_./:=@%+,".contains(c));
+    if plain { word.to_string() } else { format!("'{}'", word.replace('\'', "'\\''")) }
+}
+
+/// Whether `shown`, what `claude mcp get` printed, names `program` and then every argument of
+/// `tail` in order. Each is looked for on its own because the harness decides how it joins them,
+/// and a path with a space in it does not survive being compared as one space-joined string.
+fn said_in_order(shown: &str, program: &str, tail: &[&str]) -> bool {
+    let mut rest = shown;
+    std::iter::once(program).chain(tail.iter().copied()).all(|word| match rest.find(word) {
+        Some(at) => { rest = &rest[at + word.len()..]; true }
+        None => false,
+    })
 }
 
 /// `claude` run in `root`, where its local-scope registration belongs; `None` when it is not
@@ -301,8 +319,10 @@ fn git_block(command: &str) -> String {
 }
 
 /// A hook script with our block in it: replaced between the markers when they are there, and
-/// otherwise appended after whatever the repository's own hook does, which keeps running first.
-/// A hook that was not there starts as a POSIX shell script, which Git for Windows runs as well.
+/// otherwise inserted right after the shebang, ahead of whatever the repository's own hook does:
+/// a hook manager's script ends in `exit 0` or `exec`, and a block after that never runs. Running
+/// first costs nothing, since the block only starts a background update. A hook that was not
+/// there starts as a POSIX shell script, which Git for Windows runs as well.
 pub fn merged_git_hook(existing: &str, command: &str) -> String {
     let block = git_block(command);
     match (existing.find(GIT_BEGIN), existing.find(GIT_END)) {
@@ -311,10 +331,11 @@ pub fn merged_git_hook(existing: &str, command: &str) -> String {
             format!("{}{block}{tail}", &existing[..a])
         }
         _ if existing.trim().is_empty() => format!("#!/bin/sh\n{block}"),
-        _ => {
-            let sep = if existing.ends_with('\n') { "" } else { "\n" };
-            format!("{existing}{sep}{block}")
+        _ if existing.starts_with("#!") => {
+            let (shebang, body) = existing.split_once('\n').unwrap_or((existing, ""));
+            format!("{shebang}\n{block}{body}")
         }
+        _ => format!("{block}{existing}"),
     }
 }
 
@@ -331,8 +352,8 @@ pub fn install_git_hooks(root: &Path, command: &str) -> Result<Report> {
             return Ok(report);
         }
     };
-    if hooks_path_is_shared(root) {
-        report.notes.push("core.hooksPath is set outside this repository, so its hooks run in every repository that shares it: the post-merge and post-checkout hooks were not written".into());
+    if hooks_path_is_foreign(root, &dir) {
+        report.notes.push("core.hooksPath points outside the git directory (a shared hooks directory, or a tracked one like .husky): the post-merge and post-checkout hooks were not written".into());
         return Ok(report);
     }
     for name in GIT_HOOKS {
@@ -354,35 +375,46 @@ pub fn install_git_hooks(root: &Path, command: &str) -> Result<Report> {
         if report.written > before {
             make_executable(&path)?;
             if !existing.trim().is_empty() && !existing.contains(GIT_BEGIN) {
-                report.notes.push(format!("{name}: appended to the hook already there, which still runs first"));
+                report.notes.push(format!("{name}: inserted into the hook already there, which runs after it"));
             }
         }
     }
     Ok(report)
 }
 
-/// A hook whose interpreter is named and is not a shell would be corrupted by a shell block
-/// appended to it.
+/// A hook whose interpreter is named and is not a POSIX-style shell would be corrupted by a shell
+/// block put into it; `fish` and the like parse `if [ ... ]; then` differently.
 fn is_shell_hook(existing: &str) -> bool {
-    match existing.strip_prefix("#!") {
-        Some(rest) => rest.lines().next().is_some_and(|line| line.contains("sh")),
-        None => true,
-    }
+    const SHELLS: [&str; 6] = ["sh", "bash", "dash", "ksh", "zsh", "ash"];
+    let Some(rest) = existing.strip_prefix("#!") else { return true };
+    let mut words = rest.lines().next().unwrap_or("").split_whitespace();
+    let base = |path: &str| path.rsplit('/').next().unwrap_or(path).to_string();
+    let Some(first) = words.next().map(base) else { return false };
+    let interpreter = match first.as_str() {
+        "env" => words.find(|w| !w.starts_with('-') && !w.contains('=')).map(base).unwrap_or_default(),
+        "busybox" => words.next().map(base).unwrap_or_default(),
+        _ => first,
+    };
+    SHELLS.contains(&interpreter.as_str())
 }
 
-/// Whether `core.hooksPath` comes from a global or system config rather than this repository's
-/// own: a hook written there runs in every repository that reads it, and would start an index in
-/// ones that never asked for one.
-fn hooks_path_is_shared(root: &Path) -> bool {
-    let get = |local: bool| {
-        let mut cmd = std::process::Command::new("git");
-        cmd.arg("-C").arg(root).arg("config");
-        if local { cmd.arg("--local"); }
-        cmd.args(["--get", "core.hooksPath"]).output().ok()
-            .filter(|o| o.status.success())
-            .is_some_and(|o| !o.stdout.iter().all(u8::is_ascii_whitespace))
-    };
-    get(false) && !get(true)
+/// Whether `core.hooksPath` is set at any level and resolves outside this repository's git
+/// directory. A global or system value is run by every repository that reads it, and a local one
+/// like `.husky` lands in a tracked directory, so a hook written there would be committed and
+/// start an index for everyone who pulls it. A path inside the git directory is private to this
+/// clone and fine.
+fn hooks_path_is_foreign(root: &Path, dir: &Path) -> bool {
+    let set = std::process::Command::new("git").arg("-C").arg(root).args(["config", "--get", "core.hooksPath"]).output().ok()
+        .filter(|o| o.status.success())
+        .is_some_and(|o| !o.stdout.iter().all(u8::is_ascii_whitespace));
+    if !set { return false; }
+    let common = std::process::Command::new("git").arg("-C").arg(root).args(["rev-parse", "--git-common-dir"]).output().ok()
+        .filter(|o| o.status.success())
+        .and_then(|o| root.join(String::from_utf8_lossy(&o.stdout).trim()).canonicalize().ok());
+    match (common, dir.canonicalize()) {
+        (Some(common), Ok(dir)) => !dir.starts_with(common),
+        _ => true,
+    }
 }
 
 #[cfg(unix)]
@@ -531,11 +563,39 @@ mod tests {
     fn a_hook_already_there_keeps_its_own_lines_and_gets_the_block_once() {
         let mine = "#!/bin/sh\nnpx lefthook run post-merge\n";
         let once = merged_git_hook(mine, "repograph");
-        assert!(once.starts_with(mine), "{once}");
+        assert!(once.starts_with("#!/bin/sh\n") && once.ends_with("npx lefthook run post-merge\n"), "{once}");
         assert_eq!(merged_git_hook(&once, "repograph"), once, "re-merging is a no-op");
         let upgraded = merged_git_hook(&once, "pnpm exec repograph");
-        assert!(upgraded.starts_with(mine) && upgraded.contains("pnpm exec repograph update --detach"), "{upgraded}");
+        assert!(upgraded.ends_with("npx lefthook run post-merge\n") && upgraded.contains("pnpm exec repograph update --detach"), "{upgraded}");
         assert_eq!(upgraded.matches(GIT_BEGIN).count(), 1);
+    }
+
+    #[test]
+    fn the_block_runs_before_a_hook_that_ends_in_exit_or_exec() {
+        let husky = "#!/usr/bin/env sh\n. husky.sh\nexec npx lefthook run post-merge\n";
+        let merged = merged_git_hook(husky, "repograph");
+        assert!(merged.find(GIT_BEGIN).unwrap() < merged.find("exec npx").unwrap(), "{merged}");
+        assert!(merged.starts_with("#!/usr/bin/env sh\n"), "{merged}");
+        let bare = merged_git_hook("echo hi\n", "repograph");
+        assert!(bare.starts_with(GIT_BEGIN) && bare.ends_with("echo hi\n"), "{bare}");
+    }
+
+    #[test]
+    fn only_posix_style_shells_count_as_shell_hooks() {
+        for ok in ["#!/bin/sh\n", "#!/usr/bin/env bash\n", "#!/usr/bin/env -S zsh\n", "#!/bin/busybox sh\n", "echo\n"] {
+            assert!(is_shell_hook(ok), "{ok}");
+        }
+        for no in ["#!/usr/bin/fish\n", "#!/usr/bin/env fish\n", "#!/usr/bin/env node\n", "#!/usr/bin/python3\n"] {
+            assert!(!is_shell_hook(no), "{no}");
+        }
+    }
+
+    #[test]
+    fn a_path_with_a_space_is_quoted_for_hand_use_and_matches_what_claude_printed() {
+        assert_eq!(shell_word("/a b/it's"), "'/a b/it'\\''s'");
+        assert_eq!(shell_word("--repo"), "--repo");
+        assert!(said_in_order("Command: repograph\nArgs: --repo /a b mcp", "repograph", &["--repo", "/a b", "mcp"]));
+        assert!(!said_in_order("Args: mcp --repo /a b", "repograph", &["--repo", "/a b", "mcp"]));
     }
 
     #[test]
@@ -549,14 +609,18 @@ mod tests {
     }
 
     #[test]
-    fn a_hooks_path_a_hook_manager_set_is_where_the_hooks_go() {
+    fn a_tracked_hooks_path_a_hook_manager_set_is_refused_and_one_inside_the_git_dir_is_used() {
         let dir = git_repo();
-        let ok = std::process::Command::new("git").arg("-C").arg(dir.path()).args(["config", "core.hooksPath", ".githooks"])
-            .env_remove("GIT_DIR").status().unwrap().success();
-        assert!(ok);
+        let set = |value: &str| assert!(std::process::Command::new("git").arg("-C").arg(dir.path()).args(["config", "core.hooksPath", value])
+            .env_remove("GIT_DIR").status().unwrap().success());
+        set(".husky");
+        let r = install_git_hooks(dir.path(), "repograph").unwrap();
+        assert_eq!(r.written, 0, "{r:?}");
+        assert!(!dir.path().join(".husky/post-merge").exists());
+        std::fs::create_dir_all(dir.path().join(".git/my-hooks")).unwrap();
+        set(".git/my-hooks");
         install_git_hooks(dir.path(), "repograph").unwrap();
-        assert!(dir.path().join(".githooks/post-merge").exists());
-        assert!(!dir.path().join(".git/hooks/post-merge").exists());
+        assert!(dir.path().join(".git/my-hooks/post-merge").exists());
     }
 
     #[test]

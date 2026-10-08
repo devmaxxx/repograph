@@ -48,8 +48,9 @@ impl Budget {
     pub(crate) fn overrun(&self, done: usize, total: usize, spent: Duration) -> bool {
         let Some(deadline) = self.deadline else { return false };
         if done >= total { return false; }
-        let left = spent.mul_f64((total - done) as f64 / done.max(1) as f64);
-        Instant::now() + left > deadline
+        // A rate that overflows a Duration is a sync that will not finish, which is an overrun.
+        let Ok(left) = Duration::try_from_secs_f64(spent.as_secs_f64() * ((total - done) as f64 / done.max(1) as f64)) else { return true };
+        Instant::now().checked_add(left).is_none_or(|end| end > deadline)
     }
 }
 
@@ -112,9 +113,10 @@ pub(crate) fn with_stale(json: String, stale: &Stale) -> String {
     format!("{}{field}{rest}", &json[..=open])
 }
 
-/// The log a detached refresh writes, kept from one run to the next until it passes this size:
-/// two refreshes can be queued on the lock at once, and truncating at the second's start would
-/// cut the first one's lines off while it is still writing them.
+/// The log a detached refresh writes, kept from one run to the next until it passes this size,
+/// then rotated to `background.log.1`: two refreshes can be queued on the lock at once, and
+/// truncating at the second's start would cut the first one's lines off while it is still
+/// writing them, where a renamed file keeps taking them under its new name.
 const LOG_CAP: u64 = 1 << 20;
 
 /// Starts `repograph update` in a process of its own and returns without waiting.
@@ -163,8 +165,10 @@ fn log_file(repo: &Path) -> anyhow::Result<std::fs::File> {
     store.ensure_dir()?;
     let p = repo.join(".repograph").join("background.log");
     let long = std::fs::metadata(&p).is_ok_and(|m| m.len() > LOG_CAP);
+    // Windows refuses to rename a file another process holds open; that run keeps truncating.
+    let rotated = long && std::fs::rename(&p, p.with_extension("log.1")).is_ok();
     let mut o = std::fs::OpenOptions::new();
-    match long {
+    match long && !rotated {
         true => o.write(true).create(true).truncate(true),
         false => o.append(true).create(true),
     };
@@ -228,6 +232,17 @@ mod tests {
     }
 
     #[test]
+    fn a_log_over_the_cap_is_rotated_and_not_truncated() {
+        let dir = tempfile::tempdir().unwrap();
+        let log = dir.path().join(".repograph/background.log");
+        std::fs::create_dir_all(log.parent().unwrap()).unwrap();
+        std::fs::write(&log, vec![b'x'; LOG_CAP as usize + 1]).unwrap();
+        drop(log_file(dir.path()).unwrap());
+        assert_eq!(std::fs::metadata(log.with_extension("log.1")).unwrap().len(), LOG_CAP + 1, "the old lines are kept");
+        assert_eq!(std::fs::metadata(&log).unwrap().len(), 0);
+    }
+
+    #[test]
     fn what_is_not_an_object_is_left_alone() {
         assert_eq!(with_stale("[1]".into(), &stale()), "[1]");
         assert_eq!(with_stale("no match\n".into(), &stale()), "no match\n");
@@ -251,5 +266,6 @@ mod tests {
         assert!(ten.overrun(16, 1683, Duration::from_millis(2350)), "147 ms a row does not");
         assert!(!ten.overrun(5, 5, Duration::from_secs(60)), "a finished sync never overruns");
         assert!(!Budget::unlimited().overrun(1, 1_000_000, Duration::from_secs(60)));
+        assert!(ten.overrun(1, usize::MAX, Duration::from_secs(u64::MAX / 2)), "a rate too large for a Duration is an overrun");
     }
 }
