@@ -44,6 +44,23 @@ const TEXT_REFUSED: [&str; 11] = [
     "**/Gemfile.lock", "**/composer.lock", "**/go.sum", "**/*.min.*", "**/*.map", "**/vendor/**",
 ];
 
+/// Never read, whatever a glob or `skip` says: files that hold credentials. Their content would
+/// land in `graph.json`, the BM25 and dense indexes, an `enrich` prompt sent to a model, and every
+/// answer that seeds them. `.gitignore` keeps most of them out already; this is the floor for the
+/// repository that commits one, or is not under git at all.
+const SECRET: [&str; 26] = [
+    "**/.env", "**/.env.*", "**/*.env", "**/.envrc", "**/.dev.vars", "**/*.pem", "**/*.key",
+    "**/*.p12", "**/*.pfx", "**/*.jks", "**/*.keystore", "**/*.kdbx",
+    "**/id_{rsa,dsa,ecdsa,ed25519}", "**/.npmrc", "**/.pypirc", "**/.netrc", "**/.git-credentials",
+    "**/.htpasswd", "**/.aws/credentials", "**/.docker/config.json", "**/*.tfvars",
+    "**/*.tfstate", "**/*.tfstate.*", "**/credentials*.json", "**/service-account*.json",
+    "**/secrets.{yaml,yml,json,toml}",
+];
+
+/// Templates that name a project's variables with placeholder values: the one shape of env file
+/// worth a question, and written to be committed.
+const SECRET_TEMPLATES: [&str; 4] = ["**/.env.example", "**/.env.sample", "**/.env.template", "**/.env.dist"];
+
 /// Over this a text file is data, not something written to be read, and is left out and counted.
 pub const TEXT_MAX_BYTES: u64 = 1 << 20;
 
@@ -90,6 +107,20 @@ pub(crate) fn globs(globs: &[String]) -> Result<GlobSet> {
     Ok(b.build()?)
 }
 
+/// `include` as globs: a plain directory reaches everything under it, and `./` or a trailing `/`
+/// mean nothing. `None` for an empty list, which is the whole repository.
+fn included(include: &[String]) -> Result<Option<GlobSet>> {
+    let mut out = Vec::new();
+    for raw in include {
+        let p = raw.trim().trim_start_matches("./").trim_end_matches('/');
+        if p.is_empty() || p == "." { return Ok(None); }
+        if p.contains(['*', '?', '[', '{']) { out.push(p.to_string()); }
+        else { out.push(p.to_string()); out.push(format!("{p}/**")); }
+    }
+    if out.is_empty() { return Ok(None); }
+    globs(&out).map(Some)
+}
+
 pub(crate) fn stamp_of(meta: &std::fs::Metadata) -> Option<Stamp> {
     let ns = meta.modified().ok()?.duration_since(std::time::UNIX_EPOCH).ok()?.as_nanos();
     Some(Stamp { mtime_ns: u64::try_from(ns).ok()?, len: meta.len() })
@@ -114,6 +145,9 @@ fn walk_inner(repo: &Path, cfg: &Config, prev: &Manifest, count: bool) -> Result
     let registries = globs(&cfg.registries)?;
     let text = globs(&cfg.text_globs)?;
     let refused = globs(&TEXT_REFUSED.map(String::from))?;
+    let include = included(&cfg.include)?;
+    let secret = globs(&SECRET.map(String::from))?;
+    let template = globs(&SECRET_TEMPLATES.map(String::from))?;
     let mut oversized = 0usize;
     let mut out = Vec::new();
     // A repository keeps its agent rules, its hooks and its CI in dotted directories, so the
@@ -139,7 +173,10 @@ fn walk_inner(repo: &Path, cfg: &Config, prev: &Manifest, count: bool) -> Result
             eprintln!("walk: skipping non-UTF-8 path {}", rel_path.display());
             continue;
         };
-        if skip.is_match(&rel) {
+        if include.as_ref().is_some_and(|i| !i.is_match(&rel))
+            || skip.is_match(&rel)
+            || (secret.is_match(&rel) && !template.is_match(&rel))
+        {
             continue;
         }
         let kind = if registries.is_match(&rel) { FileKind::Registry }
@@ -493,6 +530,49 @@ mod tests {
         let text: Vec<&str> = entries.iter().filter(|e| e.kind == FileKind::Text).map(|e| e.rel.as_str()).collect();
         assert_eq!(text, [".gitignore", "Makefile", "late.txt", "ops.yaml"]);
         assert_eq!(oversized, 1, "big.log alone: a binary over the limit is not text left out");
+    }
+
+    #[test]
+    fn include_reads_only_the_directories_it_names() {
+        let d = repo();
+        let p = d.path();
+        std::fs::create_dir_all(p.join("srcx")).unwrap();
+        std::fs::write(p.join("srcx/c.ts"), "export const c = 1;\n").unwrap();
+        let rels = |include: &[&str]| -> Vec<String> {
+            let cfg = Config { include: include.iter().map(|s| s.to_string()).collect(), ..Config::default() };
+            walk(p, &cfg, &Manifest::default()).unwrap().into_iter().map(|e| e.rel).collect()
+        };
+        let all = rels(&[]);
+        assert!(all.contains(&"b.ts".to_string()) && all.contains(&"docs/a.md".to_string()));
+        assert_eq!(rels(&["./docs/"]).iter().filter(|r| !r.starts_with("docs/")).count(), 0);
+        assert!(rels(&["docs"]).contains(&"docs/a.md".to_string()));
+        assert_eq!(rels(&["srcx/*.ts"]), ["srcx/c.ts"], "a glob is matched as it is written");
+        assert_eq!(rels(&["src"]), Vec::<String>::new(), "src is not a prefix of srcx");
+        assert_eq!(rels(&["."]), all);
+    }
+
+    #[test]
+    fn a_credential_file_is_never_read_whatever_the_globs_say() {
+        let d = repo();
+        let p = d.path();
+        std::fs::create_dir_all(p.join("api/.aws")).unwrap();
+        for f in [".env", ".env.local", "api/.env.production", "prod.env", ".envrc", "api/tls.pem",
+                  "api/tls.key", "id_ed25519", ".npmrc", "api/.aws/credentials", "infra.tfvars",
+                  "terraform.tfstate", "credentials-ci.json", "secrets.yaml", ".env.md"] {
+            std::fs::write(p.join(f), "API_KEY=sk-live-123\n").unwrap();
+        }
+        for f in [".env.example", "id_ed25519.pub"] {
+            std::fs::write(p.join(f), "API_KEY=\n").unwrap();
+        }
+        let mut cfg = text_cfg();
+        // A config that claims everything as docs and code still reads none of them.
+        cfg.doc_globs.push("**/*".into());
+        cfg.code_globs.push("**/*".into());
+        let entries = walk(p, &cfg, &Manifest::default()).unwrap();
+        let read: Vec<&str> = entries.iter().map(|e| e.rel.as_str())
+            .filter(|r| r.contains("env") || r.contains("id_") || r.contains("key") || r.contains("cred") || r.contains("secret") || r.contains("tf") || r.ends_with(".pem") || r.ends_with("npmrc"))
+            .collect();
+        assert_eq!(read, [".env.example", "id_ed25519.pub"]);
     }
 
     #[test]

@@ -13,6 +13,11 @@ pub struct Config {
     /// ships (spec §11, T5). `REPOGRAPH_TEXT_GLOBS` replaces it for one run.
     pub text_globs: Vec<String>,
     pub skip: Vec<String>,
+    /// The only paths the walk reads, as directories (`src`, `docs/specs`) or globs. Empty — the
+    /// default — is the whole repository. Narrower than `skip`: what a project lets a reader see,
+    /// rather than what it keeps out, so a directory nobody listed never reaches the store, an
+    /// `enrich` prompt or an answer.
+    pub include: Vec<String>,
     /// Accepted so that a `repograph.toml` written when these were settings still parses, and
     /// read for nothing else: a repository's families are the prefixes its own documents define.
     /// `Some` means the file named the key, which is worth one line on stderr and no more.
@@ -118,6 +123,7 @@ impl Default for Config {
                 "**/*.sh", "**/*.bash", "**/*.vue",
             ]),
             text_globs: Vec::new(),
+            include: Vec::new(),
             // A bundle is one line of machine output under a source extension: every symbol in
             // it is a minifier's letter, and the file drowns a lexical index by itself. Now that
             // dotted directories are walked, `.yarn/` and `.pnp.cjs` are the same problem under a

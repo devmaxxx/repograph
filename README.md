@@ -444,6 +444,7 @@ in full, not an empty config:
 | `code_globs`         | `["**/*.ts", "**/*.tsx", "**/*.js", "**/*.jsx", "**/*.mjs", "**/*.cjs", "**/*.kt", "**/*.java", "**/*.cs", "**/*.rs", "**/*.py", "**/*.dart", "**/*.swift", "**/*.gql", "**/*.graphql", "**/*.sql", "**/*.bicep", "**/*.tf", "**/*.hcl", "**/*.sh", "**/*.bash", "**/*.vue"]` — every language in [Languages](#languages) |
 | `text_globs`         | `[]` — files no doc or code glob claims, each read as one text node when its content is text  |
 | `skip`               | `["**/node_modules/**", "**/dist/**", "**/*.min.js", "**/.yarn/**", "**/.pnp.*", "**/target/**", "**/.venv/**", "**/venv/**", "**/__pycache__/**", "**/.terraform/**", "**/.dart_tool/**", "**/Pods/**", "**/TRACKER.md", "graphify-out/**", ".repograph/**"]` |
+| `include`            | `[]` — the whole repository; set, only these directories (`src`, `docs/specs`) or globs are read |
 | `registries`         | `["docs/constitution.yaml"]`                                                                |
 | `enrich_command`     | **machine file only** — headless `claude -p --model {model}` with thinking off, see [Spending tokens on purpose](#spending-tokens-on-purpose) |
 | `rerank_command`     | **machine file only** — the same command, with `rerank_model` in its `{model}`               |
@@ -458,6 +459,14 @@ in full, not an empty config:
 `REPOGRAPH_CODE_GLOBS`, whitespace-separated, replaces `code_globs` for one run. It is a measurement's
 switch, as `REPOGRAPH_EMBED_MODEL` is, so a reading can name other globs without writing a
 `repograph.toml` into the tree it measures.
+
+`include` narrows the walk to what a project lets a reader see: `include = ["src", "docs"]` reads
+nothing outside those two directories, whatever the other globs claim, and the next `update` drops
+what an earlier store held outside them. Credential files are never read under any setting: `.env`
+and `.env.*` (the templates `.env.example`, `.sample`, `.template` and `.dist` excepted), private
+keys and keystores, `.npmrc`, `.pypirc`, `.netrc`, `.git-credentials`, cloud credentials,
+`*.tfvars`, `*.tfstate` and `secrets.*` — their content would otherwise reach the store, an
+`enrich` prompt sent to a model, and the answers.
 
 `text_globs` (empty by default) takes in every file no doc or code glob claims whose content is
 text — configuration, YAML, JSON, data — as one node each, searchable by `ask` and named by
