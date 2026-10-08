@@ -49,7 +49,8 @@ const HERE = dirname(fileURLToPath(import.meta.url));
  */
 const RULE_FALLBACK = `This repository has a repograph index. Ask it before grepping for a concept: \`${COMMAND} ask <words>\`
 answers by meaning, \`${COMMAND} impact <Symbol>\` names who calls a symbol, \`${COMMAND} changes\` maps
-your diff onto the callers it reaches. Read only the \`path:line\` those answers print.
+your diff onto the callers it reaches. Read only the \`path:line\` those answers print, and cite one
+for every claim; when nothing printed holds it, say so.
 Grep is still the right tool for a literal — an env var name, a string in a test, a config key.
 `;
 
