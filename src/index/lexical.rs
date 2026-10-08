@@ -51,18 +51,20 @@ pub fn tokenize(text: &str) -> Vec<String> {
     out
 }
 
+fn passage_text(n: &crate::model::Node) -> String { format!("{} {} {}", n.id, n.label, n.indexed_body()) }
+
 impl LexicalIndex {
     /// The passages: every document-side node but a file's own, and not the text files, which are
     /// an index of their own (`build_text`) so that a configuration file is never a rival for the
     /// passages' BM25 statistics or their seats.
     pub fn build(graph: &Graph) -> LexicalIndex {
-        Self::build_with(graph, |n| !matches!(n.kind, NodeKind::File | NodeKind::Text), |n| format!("{} {} {}", n.id, n.label, n.indexed_body()))
+        Self::build_with(graph, |n| !matches!(n.kind, NodeKind::File | NodeKind::Text), passage_text)
     }
 
     /// The text nodes alone, text as the passages carry it. Its coverage is read against the
     /// passages' by the admission in `query`, so it is scored in its own index and not pooled.
     pub fn build_text(graph: &Graph) -> LexicalIndex {
-        Self::build_with(graph, |n| n.kind == NodeKind::Text, |n| format!("{} {} {}", n.id, n.label, n.indexed_body()))
+        Self::build_with(graph, |n| n.kind == NodeKind::Text, passage_text)
     }
 
     /// The documents' questions, and them alone: mixed into the passage text they cost a keyword

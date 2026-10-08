@@ -1420,7 +1420,7 @@ mod tests {
         let l = lex(&g, &Questions::default());
         assert_eq!(lexical_lists(&l, "retention", 10, false).text, Some(vec!["file:ops/deploy.yaml".to_string()]));
         let dense = dense_text_first();
-        let a = ask(&g, &l, Some(&dense), None, &["retention".to_string()], &opts());
+        let a = ask(&g, &l, Some(&dense), None, &["retention".to_string()], &Options { dense: true, ..opts() });
         assert!(a.seeds.iter().any(|h| h.id == "file:ops/deploy.yaml"), "{:?}", a.seeds);
     }
 
@@ -1431,7 +1431,7 @@ mod tests {
         let q = ["штраф", "считается", "политике", "отмены"].map(String::from);
         assert_eq!(lexical_lists(&l, &q.join(" "), 10, false).text, None);
         let dense = dense_text_first();
-        let a = ask(&g, &l, Some(&dense), None, &q, &opts());
+        let a = ask(&g, &l, Some(&dense), None, &q, &Options { dense: true, ..opts() });
         assert!(a.seeds.iter().all(|h| h.id != "file:ops/deploy.yaml"), "{:?}", a.seeds);
         assert_eq!(a.seeds[0].id, "FR-PAY-22");
     }
@@ -1441,6 +1441,11 @@ mod tests {
         let g = graph_with_config();
         let l = lex(&g, &Questions::default());
         assert!(lexical_lists(&l, "штраф считается политике отмены", 10, true).text.is_some());
+        let dense = |_: &str, _: usize| (vec!["file:ops/deploy.yaml".to_string()], Vec::new());
+        let pooled = std::cell::RefCell::new(Vec::new());
+        let rerank = |_: &str, candidates: &[(String, String)]| { pooled.borrow_mut().extend(candidates.iter().map(|(id, _)| id.clone())); Vec::new() };
+        ask(&g, &l, Some(&dense), Some(&rerank), &["штраф".to_string(), "отмены".to_string()], &Options { dense: true, ..opts() });
+        assert!(pooled.borrow().contains(&"file:ops/deploy.yaml".to_string()), "the dense text row reaches the pool: {:?}", pooled.borrow());
     }
 
     #[test]
