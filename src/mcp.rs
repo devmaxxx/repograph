@@ -63,8 +63,9 @@ fn result(id: Value, result: Value) -> Value {
     json!({ "jsonrpc": "2.0", "id": id, "result": result })
 }
 
+/// The agent may print what it is handed, so repository text reaches it as the terminal would.
 fn text_result(text: String, is_error: bool) -> Value {
-    json!({ "content": [{ "type": "text", "text": text }], "isError": is_error })
+    json!({ "content": [{ "type": "text", "text": crate::terminal_safe(&text) }], "isError": is_error })
 }
 
 impl Server {

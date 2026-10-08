@@ -498,8 +498,41 @@ fn pipefail_prefix() -> &'static str {
     if ok { "set -o pipefail; " } else { "" }
 }
 
+/// An empty directory of the command's own to run in. The generator is a tool like `claude -p`
+/// that reads project files from its working directory — a `CLAUDE.md`, a settings file — and the
+/// directory repograph was started in is a cloned repository's, whose files steer the tool
+/// instead of the person who configured the command.
+struct EmptyCwd(PathBuf);
+
+impl EmptyCwd {
+    fn new() -> Result<Self> {
+        let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_nanos());
+        let dir = std::env::temp_dir().join(format!("repograph-cwd-{}-{nanos}", std::process::id()));
+        std::fs::create_dir(&dir).with_context(|| format!("create {}", dir.display()))?;
+        Ok(Self(dir))
+    }
+}
+
+impl Drop for EmptyCwd {
+    fn drop(&mut self) { let _ = std::fs::remove_dir_all(&self.0); }
+}
+
+/// What of a command's stderr goes into an error. A generator that fails verbosely would
+/// otherwise put its whole log, prompt echo included, into the run's output and `background.log`.
+const STDERR_ECHO: usize = 2048;
+
+fn clip_stderr(stderr: &[u8]) -> String {
+    let text = String::from_utf8_lossy(stderr);
+    let text = text.trim();
+    if text.len() <= STDERR_ECHO { return text.to_string(); }
+    let mut end = STDERR_ECHO;
+    while !text.is_char_boundary(end) { end -= 1; }
+    format!("{}… [{} more bytes]", &text[..end], text.len() - end)
+}
+
 pub fn run_command(command: &str, input: &str) -> Result<String> {
-    let mut child = shell()?.arg("-c").arg(format!("{}{command}", pipefail_prefix()))
+    let cwd = EmptyCwd::new()?;
+    let mut child = shell()?.arg("-c").arg(format!("{}{command}", pipefail_prefix())).current_dir(&cwd.0)
         .stdin(std::process::Stdio::piped()).stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::piped())
         .spawn().with_context(|| format!("spawn `{command}`"))?;
     // A command that answers without reading its whole prompt closes the pipe early — `claude -p`
@@ -514,7 +547,7 @@ pub fn run_command(command: &str, input: &str) -> Result<String> {
     drop(stdin);
     let out = child.wait_with_output()?;
     if !out.status.success() {
-        anyhow::bail!("`{command}` exited {}: {}", out.status, String::from_utf8_lossy(&out.stderr).trim());
+        anyhow::bail!("`{command}` exited {}: {}", out.status, clip_stderr(&out.stderr));
     }
     Ok(String::from_utf8_lossy(&out.stdout).into_owned())
 }
@@ -992,6 +1025,23 @@ mod tests {
         let prompt = "x".repeat(1 << 20);
         let out = run_command("exec 0<&-; printf 'answered\\n'", &prompt).unwrap();
         assert_eq!(out, "answered\n");
+    }
+
+    #[test]
+    fn a_command_runs_in_an_empty_directory_that_is_not_the_callers() {
+        let out = run_command("ls -A | wc -l; pwd", "").unwrap();
+        let mut lines = out.lines();
+        assert_eq!(lines.next().unwrap().trim(), "0");
+        let pwd = lines.next().unwrap();
+        assert_ne!(std::path::Path::new(pwd), std::env::current_dir().unwrap());
+        assert!(!std::path::Path::new(pwd).exists(), "the directory goes with the run");
+    }
+
+    #[test]
+    fn a_failing_commands_stderr_is_clipped_in_the_error() {
+        let err = run_command("head -c 100000 /dev/zero | tr '\\0' 'e' >&2; exit 1", "").unwrap_err().to_string();
+        assert!(err.len() < 4096, "{} bytes", err.len());
+        assert!(err.contains("more bytes"), "{err}");
     }
 
     #[test]

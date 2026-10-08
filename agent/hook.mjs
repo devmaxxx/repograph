@@ -16,9 +16,9 @@
  * Contract: exit 0 always, stdout only when there is something to say, stderr only under
  * REPOGRAPH_HOOK_DEBUG. Every call is --no-dense; every call but `changes` is --stale.
  */
-import { existsSync, readFileSync, writeFileSync, mkdirSync, realpathSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync, mkdirSync, realpathSync, lstatSync } from 'node:fs';
 import { spawn, spawnSync } from 'node:child_process';
-import { join, dirname, relative } from 'node:path';
+import { join, dirname, relative, delimiter, isAbsolute } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { tmpdir } from 'node:os';
 import { createHash } from 'node:crypto';
@@ -68,8 +68,20 @@ function debug(...args) {
 }
 
 /**
- * PATH first, the package's own bin second, and nothing else: a hook that installed things would
- * not be a hook. npm, pnpm and yarn all write the same trio under `node_modules/.bin` — an
+ * Whether a `repograph` the machine's own PATH resolves exists, so that it can win over the
+ * repository's. A relative entry (`.`, `node_modules/.bin`) resolves against the repository the
+ * hook runs in, so it is the repository's file and not the machine's.
+ */
+function onPath() {
+  const names = process.platform === 'win32' ? ['repograph.exe', 'repograph.cmd'] : ['repograph'];
+  return (process.env.PATH || '').split(delimiter).some((d) => d && isAbsolute(d) && names.some((n) => existsSync(join(d, n))));
+}
+
+/**
+ * `REPOGRAPH_BIN`, then PATH, then the package's own bin, and nothing else: a hook that installed
+ * things would not be a hook. The repository's `node_modules/.bin` comes after PATH because it is
+ * the repository's own file, and a cloned repository that ships one would otherwise run its
+ * binary the moment a session starts in it. npm, pnpm and yarn all write the same trio under `node_modules/.bin` — an
  * extensionless shell script, a `.cmd` and a `.ps1` — and on Windows the `.cmd` is the one that
  * starts. The extensionless shim is worse than nothing there: returning it spawns a file
  * `CreateProcess` cannot read, where falling through finds whatever `repograph.exe` an installer
@@ -77,6 +89,7 @@ function debug(...args) {
  */
 function binary(root) {
   if (process.env.REPOGRAPH_BIN) return process.env.REPOGRAPH_BIN;
+  if (onPath()) return 'repograph';
   const local = join(root, 'node_modules', '.bin', 'repograph');
   const shim = process.platform === 'win32' ? `${local}.cmd` : local;
   return existsSync(shim) ? shim : 'repograph';
@@ -111,7 +124,9 @@ function run(root, args) {
     encoding: 'utf8', timeout: TIMEOUT_MS, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true, ...opts,
   });
   if (r.status !== 0) debug('exit', r.status, args.join(' '), (r.stderr || '').slice(0, 200));
-  return r.status === 0 ? r.stdout : '';
+  // Identifiers and headings in the answer are the repository's text, and it is about to enter an
+  // agent's context and possibly a terminal log; control characters other than tab and newline carry nothing.
+  return r.status === 0 ? r.stdout.replace(/[\x00-\x08\x0b-\x1f\x7f-\x9f]/g, '') : '';
 }
 
 function built(root) { return existsSync(join(root, '.repograph', 'manifest.json')); }
@@ -226,27 +241,53 @@ export function searchPattern(tool, input) {
 }
 
 /**
+ * The directory the hook keeps its markers in: one per user under the temp directory, made 0700
+ * and checked to be ours on every use. A name anyone can predict in a shared `/tmp` is a name
+ * another user can create first, or point at a file of yours; null here means no state, which
+ * costs a repeated answer and nothing else. Windows' temp directory is already per-user.
+ */
+function stateRoot() {
+  const uid = process.getuid?.();
+  const root = join(tmpdir(), uid === undefined ? 'repograph-hook' : `repograph-hook-${uid}`);
+  if (uid === undefined) return root;
+  try {
+    mkdirSync(root, { recursive: true, mode: 0o700 });
+    const st = lstatSync(root);
+    return st.isDirectory() && st.uid === uid && (st.mode & 0o077) === 0 ? root : null;
+  } catch { return null; }
+}
+
+/**
  * The per-session state directory. The key is built from ids the harness supplies, so it is
  * reduced to word characters before it becomes a path segment: an id carrying a slash or a `..`
  * would otherwise put this hook's empty marker files anywhere the process can write.
  */
-function stateDir(sessionKey) { return join(tmpdir(), 'repograph-hook', sessionKey.replace(/\W+/g, '-')); }
+function stateDir(sessionKey) {
+  const root = stateRoot();
+  return root && join(root, sessionKey.replace(/\W+/g, '-'));
+}
 
 /** True the first time this session asks about this key; an unwritable tmp answers once and never dedups. */
 function once(sessionKey, kind, key) {
-  const file = join(stateDir(sessionKey), `${kind}-${createHash('sha1').update(key).digest('hex').slice(0, 16)}`);
+  const dir = stateDir(sessionKey);
+  if (!dir) return true;
+  const file = join(dir, `${kind}-${createHash('sha1').update(key).digest('hex').slice(0, 16)}`);
   if (existsSync(file)) return false;
-  try { mkdirSync(stateDir(sessionKey), { recursive: true }); writeFileSync(file, ''); } catch { /* answer this one */ }
+  try { mkdirSync(dir, { recursive: true }); writeFileSync(file, ''); } catch { /* answer this one */ }
   return true;
 }
 
 function count(sessionKey, name) {
-  try { return Number(readFileSync(join(stateDir(sessionKey), `count-${name}`), 'utf8')) || 0; } catch { return 0; }
+  const dir = stateDir(sessionKey);
+  if (!dir) return 0;
+  try { return Number(readFileSync(join(dir, `count-${name}`), 'utf8')) || 0; } catch { return 0; }
 }
 
 function bump(sessionKey, name) {
   const n = count(sessionKey, name) + 1;
-  try { mkdirSync(stateDir(sessionKey), { recursive: true }); writeFileSync(join(stateDir(sessionKey), `count-${name}`), String(n)); } catch { /* no state, no cadence */ }
+  const dir = stateDir(sessionKey);
+  if (!dir) return n;
+  try { mkdirSync(dir, { recursive: true }); writeFileSync(join(dir, `count-${name}`), String(n)); } catch { /* no state, no cadence */ }
   return n;
 }
 
