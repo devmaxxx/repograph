@@ -1,7 +1,7 @@
 {
   "name": "@devmaxxx/repograph",
   "version": "0.6.0",
-  "description": "Knowledge graph of a repository's requirement docs and TypeScript code, built and refreshed at zero model tokens, asked by id, keyword or paraphrase",
+  "description": "Knowledge graph of a repository's requirement docs and code in fifteen languages, built and refreshed at zero model tokens, asked by id, keyword or paraphrase",
   "license": "MIT",
   "repository": {
     "type": "git",
