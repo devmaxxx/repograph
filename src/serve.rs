@@ -16,11 +16,48 @@ mod sys {
     use std::io;
     use std::path::Path;
     pub use std::os::unix::net::{UnixListener as Listener, UnixStream as Stream};
-    pub fn bind(path: &Path) -> io::Result<Listener> { Listener::bind(path) }
+    pub fn bind(path: &Path) -> io::Result<Listener> {
+        let l = Listener::bind(path)?;
+        // Connecting to a unix socket needs write permission on the file, and the umask decides
+        // what a fresh one gets: closed to everyone else before the first accept, not after.
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
+        Ok(l)
+    }
     pub fn connect(path: &Path) -> io::Result<Stream> { Stream::connect(path) }
     pub fn accept(listener: &Listener) -> io::Result<Stream> { listener.accept().map(|(s, _)| s) }
     /// Whether the name is there at all — a file, not a listener.
     pub fn present(path: &Path) -> bool { path.exists() }
+    /// Whether the user running this process owns the file at the name. A socket in a shared
+    /// directory that someone else bound is not a server of ours, and its answers would be theirs.
+    pub fn ours(path: &Path) -> bool {
+        use std::os::unix::fs::{FileTypeExt, MetadataExt};
+        // A link is judged by its own owner, and a repository can ship one that points at another
+        // user's socket: only a socket at the name itself counts.
+        // SAFETY: geteuid has no preconditions and cannot fail.
+        std::fs::symlink_metadata(path).is_ok_and(|m| m.file_type().is_socket() && m.uid() == unsafe { libc::geteuid() })
+    }
+    /// Whether the process on the other end runs as the user running this one. The socket's mode
+    /// already keeps others out; this holds if the file is ever reachable some other way.
+    pub fn peer_is_us(stream: &Stream) -> bool {
+        use std::os::fd::AsRawFd;
+        // SAFETY: geteuid has no preconditions and cannot fail.
+        peer_uid(stream.as_raw_fd()).is_some_and(|uid| uid == unsafe { libc::geteuid() })
+    }
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    fn peer_uid(fd: std::os::fd::RawFd) -> Option<libc::uid_t> {
+        let mut cred: libc::ucred = unsafe { std::mem::zeroed() };
+        let mut len = std::mem::size_of::<libc::ucred>() as libc::socklen_t;
+        // SAFETY: `cred` and `len` are valid for the size `len` states.
+        let rc = unsafe { libc::getsockopt(fd, libc::SOL_SOCKET, libc::SO_PEERCRED, (&mut cred as *mut libc::ucred).cast(), &mut len) };
+        (rc == 0).then_some(cred.uid)
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "android")))]
+    fn peer_uid(fd: std::os::fd::RawFd) -> Option<libc::uid_t> {
+        let (mut uid, mut gid) = (0, 0);
+        // SAFETY: both out-pointers are valid for one write.
+        (unsafe { libc::getpeereid(fd, &mut uid, &mut gid) } == 0).then_some(uid)
+    }
     /// The device and inode of a socket file, which is how a name is told from the thing that was
     /// bound to it: the path can hold a replacement server's socket by the time this one exits.
     pub fn id(path: &Path) -> Option<(u64, u64)> {
@@ -50,6 +87,9 @@ mod sys {
         Ok(s)
     }
     pub fn accept(listener: &Listener) -> io::Result<Stream> { listener.accept().map(|(s, _)| s) }
+    /// The per-user temp directory and the profile ACLs are what keep other users out here.
+    pub fn ours(_path: &Path) -> bool { true }
+    pub fn peer_is_us(_stream: &Stream) -> bool { true }
     /// The socket file is a reparse point with nothing behind it, so the metadata that says it
     /// is there has to be its own, never a target's.
     pub fn present(path: &Path) -> bool { std::fs::symlink_metadata(path).is_ok() }
@@ -129,7 +169,7 @@ const WAKE: Duration = Duration::from_millis(250);
 /// The socket a repository's server binds and its clients connect to: `.repograph/serve.sock`,
 /// which is where a person looks for it — unless that name will not fit in `sun_path`, 104 bytes
 /// on macOS including the NUL, in which case a name derived from the canonical repository path
-/// goes in the temporary directory. 100 rather than 104 is one margin for every platform, and
+/// goes in `fallback_dir`. 100 rather than 104 is one margin for every platform, and
 /// four bytes is not worth two numbers. Server and client both come here, so the fallback is
 /// never half-taken. The hash names a file; it defends nothing, which is why it is four lines of
 /// FNV rather than a dependency.
@@ -142,8 +182,46 @@ pub fn socket_path(repo: &Path) -> PathBuf {
         h ^= u64::from(*b);
         h = h.wrapping_mul(0x0000_0100_0000_01b3);
     }
-    std::env::temp_dir().join(format!("repograph-{h:016x}.sock"))
+    fallback_dir().join(format!("repograph-{h:016x}.sock"))
 }
+
+/// Where a socket goes when the repository's own path is too long. `/tmp` is shared, and a name
+/// there that anyone can predict is a name another user can bind first and answer under, so on
+/// unix the socket sits in a directory named for the user, which `prepare_socket_dir` makes
+/// private. Windows' temp directory is already per-user.
+#[cfg(unix)]
+fn fallback_dir() -> PathBuf {
+    // SAFETY: geteuid has no preconditions and cannot fail.
+    std::env::temp_dir().join(format!("repograph-{}", unsafe { libc::geteuid() }))
+}
+
+#[cfg(not(unix))]
+fn fallback_dir() -> PathBuf { std::env::temp_dir() }
+
+/// Makes the directory a socket will be bound in, refusing one that is not ours alone: another
+/// user may have created the name first, or planted a symlink at it, and a socket bound there is
+/// theirs to read and replace. Only the fallback directory is checked; the repository's own
+/// `.repograph` is the repository owner's to protect.
+#[cfg(unix)]
+fn prepare_socket_dir(path: &Path) -> Result<()> {
+    use std::os::unix::fs::{DirBuilderExt, MetadataExt, PermissionsExt};
+    let Some(dir) = path.parent().filter(|d| *d == fallback_dir()) else { return Ok(()) };
+    match std::fs::DirBuilder::new().mode(0o700).create(dir) {
+        Ok(()) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
+        Err(e) => return Err(e).with_context(|| format!("create {}", dir.display())),
+    }
+    let meta = std::fs::symlink_metadata(dir).with_context(|| format!("stat {}", dir.display()))?;
+    // SAFETY: geteuid has no preconditions and cannot fail.
+    let mine = meta.uid() == unsafe { libc::geteuid() };
+    if !meta.is_dir() || !mine || meta.permissions().mode() & 0o077 != 0 {
+        anyhow::bail!("{} is not a directory private to this user; remove it and start serve again", dir.display());
+    }
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn prepare_socket_dir(_path: &Path) -> Result<()> { Ok(()) }
 
 /// What a `stat` says about `repograph.toml`, or None where there is none — the configuration a
 /// one-shot `ask` would read, watched so a resident process cannot answer under an older one.
@@ -209,7 +287,7 @@ pub fn try_ask(repo: &Path, req: &ask::Request) -> Option<Reply> {
 /// shorten without the server's cooperation.
 fn try_ask_within(repo: &Path, req: &ask::Request, first_line: Duration) -> Option<Reply> {
     let path = socket_path(repo);
-    if !sys::present(&path) { return None; }
+    if !sys::present(&path) || !sys::ours(&path) { return None; }
     let mut stream = sys::connect(&path).ok()?;
     // Whatever the question costs the server, its first line is owed straight away.
     stream.set_read_timeout(Some(first_line)).ok()?;
@@ -267,6 +345,7 @@ pub fn run(repo: &Path, cfg: &config::Config, every: u64, batch: usize, idle: u6
     // was at its path when it started, and nothing it stats later can still say so.
     let build = build_stamp();
     let path = socket_path(repo);
+    prepare_socket_dir(&path)?;
     if sys::present(&path) && sys::connect(&path).is_ok() { anyhow::bail!("another serve answers at {}", path.display()); }
     let _ = std::fs::remove_file(&path);
     let listener = sys::bind(&path).with_context(|| format!("bind {}", path.display()))?;
@@ -291,6 +370,10 @@ pub fn run(repo: &Path, cfg: &config::Config, every: u64, batch: usize, idle: u6
             // which is not this thread's business: the loop below is what decides that a
             // connection carrying no hello asked nothing.
             Ok(mut s) => {
+                if !sys::peer_is_us(&s) {
+                    eprintln!("serve: refused a connection from another user");
+                    continue;
+                }
                 let _ = s.set_write_timeout(Some(IO_TIMEOUT));
                 let _ = writeln!(s, "{}", ack_line());
                 if tx.send(s).is_err() { return; }
@@ -409,14 +492,47 @@ fn adopt_if_moved(watcher: &mut crate::Watcher, ctx: &mut ask::Context, batch: u
 /// end refuses the `setsockopt` below with EINVAL, which reached the server's stderr as an
 /// unattributable `serve: Invalid argument (os error 22)`; elsewhere it is an empty read.
 fn hello_line(stream: &sys::Stream) -> Option<String> {
-    stream.set_read_timeout(Some(IO_TIMEOUT)).ok()?;
+    hello_line_within(stream, HELLO_DEADLINE)
+}
+
+/// The most a hello may be. A request is a handful of words and flags; a peer sending more is not
+/// a client.
+const HELLO_MAX: usize = 64 * 1024;
+
+/// How long a client has, in all, to finish its hello line. The serving loop is one thread, so a
+/// peer that sends a byte every few seconds would pass any per-read timeout and hold every other
+/// question behind it for as long as it liked.
+const HELLO_DEADLINE: Duration = Duration::from_secs(10);
+
+fn hello_line_within(stream: &sys::Stream, total: Duration) -> Option<String> {
     stream.set_write_timeout(Some(IO_TIMEOUT)).ok()?;
-    let mut line = String::new();
-    let n = BufReader::new(stream.try_clone().ok()?).read_line(&mut line)
-        .inspect_err(|e| if matches!(e.kind(), std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut) {
-            eprintln!("serve: a client connected and said nothing for {}s; not counted as a question", IO_TIMEOUT.as_secs());
-        }).ok()?;
-    (n > 0).then_some(line)
+    let deadline = Instant::now() + total;
+    let mut reader = BufReader::new(stream.try_clone().ok()?);
+    let mut line = Vec::new();
+    loop {
+        let Some(left) = deadline.checked_duration_since(Instant::now()).filter(|d| !d.is_zero()) else {
+            eprintln!("serve: a client did not finish its hello in {}s; not counted as a question", total.as_secs());
+            return None;
+        };
+        // Set on the reader's own handle each round: on Windows `try_clone` duplicates the socket.
+        reader.get_ref().set_read_timeout(Some(left)).ok()?;
+        let chunk = match reader.fill_buf() {
+            Ok(c) => c,
+            Err(e) => {
+                if matches!(e.kind(), std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut) {
+                    eprintln!("serve: a client connected and said nothing for {}s; not counted as a question", total.as_secs());
+                }
+                return None;
+            }
+        };
+        if chunk.is_empty() { break; }
+        let end = chunk.iter().position(|b| *b == b'\n').map_or(chunk.len(), |i| i + 1);
+        line.extend_from_slice(&chunk[..end]);
+        reader.consume(end);
+        if line.len() > HELLO_MAX { eprintln!("serve: a hello over {HELLO_MAX} bytes; dropped"); return None; }
+        if line.ends_with(b"\n") { break; }
+    }
+    (!line.is_empty()).then(|| String::from_utf8_lossy(&line).into_owned())
 }
 
 /// Whether a question was asked, which is what `--idle` counts — a peer that vanished before
@@ -514,6 +630,8 @@ mod tests {
         let p = socket_path(&deep);
         assert!(p.as_os_str().len() <= 100, "{}", p.display());
         assert!(p.file_name().unwrap().to_string_lossy().starts_with("repograph-"), "{}", p.display());
+        #[cfg(unix)]
+        assert!(p.parent().unwrap().ends_with(format!("repograph-{}", unsafe { libc::geteuid() })), "the fallback is a directory of the user's own: {}", p.display());
         assert_eq!(socket_path(&deep), p, "a client that computes it again finds the same name");
         assert_ne!(socket_path(&deep.join("x")), p, "another repository is another socket");
     }
@@ -703,5 +821,79 @@ mod tests {
         let _listener = sys::bind(&path).unwrap();
         assert!(sys::present(&path));
         sys::connect(&path).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_bound_socket_is_closed_to_everyone_but_its_owner() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("serve.sock");
+        let _l = sys::bind(&path).unwrap();
+        assert_eq!(std::fs::metadata(&path).unwrap().permissions().mode() & 0o777, 0o600);
+        assert!(sys::ours(&path));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_peer_of_the_same_user_passes_the_uid_check() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("serve.sock");
+        let l = sys::bind(&path).unwrap();
+        let _c = sys::connect(&path).unwrap();
+        assert!(sys::peer_is_us(&sys::accept(&l).unwrap()));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_fallback_directory_that_is_not_private_is_refused() {
+        use std::os::unix::fs::PermissionsExt;
+        let long = std::path::PathBuf::from("/private/tmp").join("b".repeat(120)).join("x");
+        let sock = socket_path(&long);
+        let dir = sock.parent().unwrap().to_path_buf();
+        super::prepare_socket_dir(&sock).unwrap();
+        assert_eq!(std::fs::metadata(&dir).unwrap().permissions().mode() & 0o777, 0o700);
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let refused = super::prepare_socket_dir(&sock);
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700)).unwrap();
+        assert!(refused.is_err(), "a group- or world-accessible directory is not ours alone");
+    }
+
+    /// A peer that sends a byte at a time, each inside the per-read timeout, is a hold on the
+    /// one thread that answers everybody.
+    #[test]
+    fn a_peer_trickling_its_hello_is_dropped_at_the_total_deadline() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("serve.sock");
+        let l = sys::bind(&path).unwrap();
+        let trickle = std::thread::spawn(move || {
+            let mut c = sys::connect(&path).unwrap();
+            for _ in 0..40 {
+                if c.write_all(b"x").is_err() { return; }
+                std::thread::sleep(Duration::from_millis(50));
+            }
+        });
+        let s = sys::accept(&l).unwrap();
+        let started = std::time::Instant::now();
+        assert!(super::hello_line_within(&s, Duration::from_millis(400)).is_none());
+        assert!(started.elapsed() < Duration::from_millis(1500), "held for {:?}", started.elapsed());
+        drop(s);
+        let _ = trickle.join();
+    }
+
+    #[test]
+    fn a_hello_that_arrives_in_pieces_in_time_is_read_whole() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("serve.sock");
+        let l = sys::bind(&path).unwrap();
+        let c = std::thread::spawn(move || {
+            let mut c = sys::connect(&path).unwrap();
+            c.write_all(b"{\"a\"").unwrap();
+            std::thread::sleep(Duration::from_millis(100));
+            c.write_all(b":1}\n").unwrap();
+        });
+        let s = sys::accept(&l).unwrap();
+        assert_eq!(super::hello_line_within(&s, Duration::from_secs(5)).as_deref(), Some("{\"a\":1}\n"));
+        c.join().unwrap();
     }
 }

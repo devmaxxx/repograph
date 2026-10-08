@@ -166,11 +166,16 @@ pub(crate) fn git(repo: &Path, args: &[&str]) -> anyhow::Result<String> {
 /// Hunks of the working tree against `base` — staged and unstaged alike, plus every untracked
 /// file as one hunk over its whole length, so a new file's symbols count as changed too.
 pub fn hunks_from_git(repo: &Path, base: &str) -> anyhow::Result<Vec<Hunk>> {
-    let mut hunks = parse(&git(repo, &["diff", "-U0", "--no-color", "--no-ext-diff", base, "--", "."])?);
+    // Before `--`, git reads a leading dash as an option: `--output=<file>` would write anywhere.
+    anyhow::ensure!(!base.starts_with('-'), "changes: base `{base}` is not a revision");
+    // The store is written by every refresh, so in a repository that does not ignore it, it would
+    // be reported as changed by the command that just wrote it.
+    const NOT_STORE: &str = ":(exclude).repograph";
+    let mut hunks = parse(&git(repo, &["diff", "-U0", "--no-color", "--no-ext-diff", base, "--", ".", NOT_STORE])?);
     // NUL rather than lines: turning the quoting off reaches the bytes above ASCII and no
     // further, so a name holding a newline still arrived quoted and matched nothing. Separated
     // this way it arrives as itself, and the line it holds cannot be read as a second file.
-    for f in git(repo, &["ls-files", "-z", "--others", "--exclude-standard"])?.split('\0').filter(|f| !f.is_empty()) {
+    for f in git(repo, &["ls-files", "-z", "--others", "--exclude-standard", "--", ".", NOT_STORE])?.split('\0').filter(|f| !f.is_empty()) {
         hunks.push(Hunk { file: f.to_string(), start: 1, end: u32::MAX });
     }
     Ok(hunks)
@@ -182,6 +187,13 @@ mod tests {
     use crate::model::{EdgeKind, Extraction};
 
     const DIFF: &str = "diff --git a/s.ts b/s.ts\n--- a/s.ts\n+++ b/s.ts\n@@ -6,2 +6,3 @@ export class S {\n+  // more\n@@ -20 +21,0 @@\n-old\ndiff --git a/new.ts b/new.ts\nnew file mode 100644\n--- /dev/null\n+++ b/new.ts\n@@ -0,0 +1,2 @@\n+a\n+b\ndiff --git a/gone.ts b/gone.ts\n--- a/gone.ts\n+++ /dev/null\n@@ -1,3 +0,0 @@\n-x\n";
+
+    #[test]
+    fn a_base_that_reads_as_an_option_is_refused_before_git_sees_it() {
+        let d = tempfile::tempdir().unwrap();
+        let err = hunks_from_git(d.path(), "--output=/tmp/x").unwrap_err().to_string();
+        assert!(err.contains("is not a revision"), "{err}");
+    }
 
     #[test]
     fn parse_takes_new_side_ranges_and_records_a_pure_deletion_as_one_line() {
@@ -438,6 +450,18 @@ mod tests {
         assert_eq!(
             hunks_from_git(dir.path(), "HEAD").unwrap(),
             vec![Hunk { file: "docs/Новое.ts".into(), start: 1, end: u32::MAX }]
+        );
+    }
+
+    #[test]
+    fn the_store_is_not_a_change_even_when_nothing_ignores_it() {
+        let dir = quoting_repo();
+        std::fs::create_dir_all(dir.path().join(".repograph")).unwrap();
+        std::fs::write(dir.path().join(".repograph/graph.bin"), "x").unwrap();
+        std::fs::write(dir.path().join("docs/new.ts"), "one\n").unwrap();
+        assert_eq!(
+            hunks_from_git(dir.path(), "HEAD").unwrap(),
+            vec![Hunk { file: "docs/new.ts".into(), start: 1, end: u32::MAX }]
         );
     }
 }

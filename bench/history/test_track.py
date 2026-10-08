@@ -304,10 +304,23 @@ class Floors(unittest.TestCase):
         arm = track.floors(path)[(True, True, "small")]
         self.assertEqual((arm["code"], arm["p90_tokens"]), (12, 230))
 
+    def test_a_named_ceiling_is_read_from_its_const(self):
+        named = PASSES.replace("s.p90_tokens <= 230", "s.p90_tokens <= P90_CEILING")
+        for source, expected in ((FLOORS_TABLE + "const P90_CEILING: usize = 250;\n" + named, 250),
+                                 (FLOORS_TABLE + named, None)):
+            with tempfile.NamedTemporaryFile("w", suffix=".rs", delete=False) as f:
+                f.write(source)
+                path = Path(f.name)
+            if expected is None:
+                with self.assertRaises(SystemExit):
+                    track.floors(path)
+            else:
+                self.assertEqual(track.floors(path)[(True, True, "small")]["p90_tokens"], expected)
+
     def test_the_live_source_still_parses(self):
         f = track.floors()
         self.assertEqual(set(f), {(True, True, "small"), (True, False, "small"),
-                                   (False, True, "small"), (False, False, "small")})
+                                   (False, True, "small"), (False, False, "small"), (True, True, "gemma")})
         for arm in f.values():
             self.assertGreater(arm["keyword"], 0)
             self.assertGreater(arm["p90_tokens"], 0)

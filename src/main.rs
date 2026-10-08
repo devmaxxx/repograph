@@ -13,6 +13,7 @@ mod impact;
 mod install_agent;
 mod index;
 mod legacy;
+mod mcp;
 mod model;
 mod prime;
 mod query;
@@ -202,6 +203,10 @@ enum Cmd {
         #[arg(long, default_value_t = 300, value_parser = depth)] depth: usize,
     },
     ImportLegacy { graph_json: PathBuf },
+    /// A stdio MCP server: `ask`, `explain`, `impact`, `trace` and `changes` as tools, plus
+    /// `status` (what the index is behind by and how far a background refresh has got), `reindex`
+    /// and `switch_model`. Protocol on stdout, diagnostics on stderr; `install-agent` registers it.
+    Mcp,
 }
 
 pub struct Extractors {
@@ -239,7 +244,7 @@ pub(crate) fn apply_diff(repo: &std::path::Path, store: &store::Store, graph: &m
     let named: std::collections::BTreeSet<&str> = diff.changed.iter().map(|e| e.rel.as_str()).collect();
     let code_changed = diff.changed.iter().filter(|e| e.kind == walk::FileKind::Code).map(|e| e.rel.as_str());
     if let Some(note) = code::lang::files_only_note(code_changed) {
-        eprintln!("{note}");
+        eprintln!("{}", terminal_safe(&note));
     }
     let regrammar: Vec<&walk::Entry> = match manifest.stale_grammar() {
         true => entries.iter().filter(|e| !named.contains(e.rel.as_str())).collect(),
@@ -295,11 +300,11 @@ pub(crate) fn apply_diff(repo: &std::path::Path, store: &store::Store, graph: &m
             // NUL is legal inside a TypeScript string literal; only invalid UTF-8 marks a binary.
             Ok(b) => match String::from_utf8(b) {
                 Ok(s) => s,
-                Err(_) => { eprintln!("skipping {}: not UTF-8", e.rel); continue; }
+                Err(_) => { eprintln!("{}", terminal_safe(&format!("skipping {}: not UTF-8", e.rel))); continue; }
             },
             // Not the arm above: a binary yields nothing however often it is read, where a file
             // that would not open is one this pass has no reading of at all.
-            Err(err) => { eprintln!("read {}: {err}", e.rel); unread = true; continue; }
+            Err(err) => { eprintln!("{}", terminal_safe(&format!("read {}: {err}", e.rel))); unread = true; continue; }
         };
         let extractor = match e.kind {
             walk::FileKind::Doc => &ex.doc,
@@ -650,7 +655,8 @@ fn model_report(repo: &std::path::Path, cfg: &config::Config) -> anyhow::Result<
     if recorded.as_deref().is_some_and(|m| m != cfg.embed_model) {
         out.push_str("\nThe two disagree. The store keeps answering with the model that wrote it; the\n\
             configured one takes effect at the next `build`, `update`, `enrich`, `embed` or\n\
-            `watch`, which drops every row the other model wrote and rewrites the index whole.\n");
+            `watch` (an `ask` starts one when repograph.toml names the model), which drops\n\
+            every row the other model wrote and rewrites the index whole.\n");
     }
     out.push('\n');
     out.push_str(&index::embed::catalogue(recorded.as_deref().or(Some(&cfg.embed_model))));
@@ -745,6 +751,8 @@ fn switch_model(repo: &std::path::Path, cfg: &config::Config, id: &str, no_embed
     // turns them into a fact before the configuration is changed on the strength of them.
     let dim = emb.dim()?;
     eprintln!("model: opened in {:.1}s, {dim}-d vectors", open.elapsed().as_secs_f32());
+    // The reader typed this id, so it is theirs to load; a repository naming it is not.
+    if let Some(trusted) = config::trust_model(id)? { eprintln!("model: {id} is trusted on this machine ({})", trusted.display()); }
     let path = config::set_embed_model(repo, id)?;
     println!("model: embed_model = \"{id}\" in {}", path.display());
     if no_embed {
@@ -765,26 +773,59 @@ fn switch_model(repo: &std::path::Path, cfg: &config::Config, id: &str, no_embed
 /// that came from the wrong node is visible without changing what stdout parses to.
 fn code_node<'a>(graph: &'a model::Graph, name: &str) -> anyhow::Result<&'a model::Node> {
     let (pick, rest) = query::resolve_code(graph, name)?;
-    if let Some(note) = query::passed_over(name, pick, &rest) { eprintln!("{note}"); }
+    if let Some(note) = query::passed_over(name, pick, &rest) { eprintln!("{}", terminal_safe(&note)); }
     Ok(pick)
+}
+
+fn trace_text(graph: &model::Graph, path: &[(String, bool)]) -> String {
+    let mut out = String::new();
+    for (i, (id, passed)) in path.iter().enumerate() {
+        let at = graph.nodes.get(id).map(|n| format!("{}:{}", n.file, n.line)).unwrap_or_default();
+        out.push_str(&format!("{}{id}  {at}{}\n", if i == 0 { "" } else { "  → " }, if *passed { "  passes" } else { "" }));
+    }
+    out
 }
 
 /// The graph an answer is read from: refreshed against the tree unless `--stale` or the refresh
 /// would not fit the reader's budget, and, when the store cannot be written, the stored one with a
 /// warning — the same contract as `ask`. The second value is what the answer is behind by.
 fn graph_for(repo: &std::path::Path, cfg: &config::Config, stale: bool, no_dense: bool) -> anyhow::Result<(model::Graph, Option<refresh::Stale>)> {
+    let (graph, behind, notes) = graph_with_notes(repo, cfg, stale, no_dense)?;
+    for n in notes { eprintln!("{n}"); }
+    Ok((graph, behind))
+}
+
+/// `graph_for` with what it would have said on stderr returned instead, for a caller whose reader
+/// never sees stderr: a refresh that failed or did not start is as much part of the answer as the
+/// files it is behind by.
+fn graph_with_notes(repo: &std::path::Path, cfg: &config::Config, stale: bool, no_dense: bool) -> anyhow::Result<(model::Graph, Option<refresh::Stale>, Vec<String>)> {
     let timing = ask::Timing::new();
     let store = store::Store::new(repo);
     let budget = refresh::Budget::seconds(cfg.reader_budget, no_dense);
+    let mut notes = Vec::new();
     match ask::graph_for_ask(repo, cfg, &store, stale, &timing, &budget) {
         Ok(read) => {
-            if let Some(r) = read.refreshed { eprintln!("refresh: {} changed, {} removed", r.changed, r.removed); }
-            let behind = read.behind.map(|(files, line)| { eprintln!("{line}"); refresh::Stale { files, vectors: 0 } });
-            Ok((read.graph, behind))
+            if let Some(r) = read.refreshed { notes.push(format!("refresh: {} changed, {} removed", r.changed, r.removed)); }
+            let behind = read.behind.map(|(files, line)| { notes.push(line); refresh::Stale { files, vectors: 0 } });
+            Ok((read.graph, behind, notes))
         }
-        Err(err) => { eprintln!("refresh: skipped ({err:#})"); Ok((store.load()?.0, None)) }
+        Err(err) => { notes.push(format!("refresh: skipped ({err:#})")); Ok((store.load()?.0, None, notes)) }
     }
 }
+
+/// `text` with the control characters a terminal would act on taken out. Symbol names, headings
+/// and paths come from the repository being read, so a file name or a heading can carry an escape
+/// sequence that retitles the window, rewrites what is already on screen, or types into the shell
+/// on terminals that answer queries. Tab and newline are layout and stay; C0, DEL and C1 go.
+pub(crate) fn terminal_safe(text: &str) -> std::borrow::Cow<'_, str> {
+    let bad = |c: char| c.is_control() && c != '\t' && c != '\n';
+    if !text.contains(bad) { return std::borrow::Cow::Borrowed(text); }
+    std::borrow::Cow::Owned(text.chars().filter(|c| !bad(*c)).collect())
+}
+
+/// Where every answer built from a repository's text reaches stdout, so that none skips
+/// `terminal_safe`.
+fn emit(text: &str) { print!("{}", terminal_safe(text)); }
 
 /// A reader's `--json` answer, carrying `stale` when the graph it was read from is behind.
 fn json_out(text: String, stale: &Option<refresh::Stale>) -> String {
@@ -835,8 +876,8 @@ fn main() -> std::process::ExitCode {
         // `{e:?}` is what `Termination for Result` printed before this function existed: an
         // anyhow report with its context chain, which several transcripts are read for.
         Err(e) => match e.downcast_ref::<Verdict>() {
-            Some(v) => { eprintln!("{v}"); std::process::ExitCode::from(3) }
-            None => { eprintln!("Error: {e:?}"); std::process::ExitCode::FAILURE }
+            Some(v) => { eprintln!("{}", terminal_safe(&v.to_string())); std::process::ExitCode::from(3) }
+            None => { eprintln!("{}", terminal_safe(&format!("Error: {e:?}"))); std::process::ExitCode::FAILURE }
         },
     }
 }
@@ -868,6 +909,7 @@ fn run() -> anyhow::Result<()> {
                     store.lock_writer()?
                 }
             };
+            eprintln!("{}", refresh::RUN_MARKER);
             let r = run_update(&repo, &cfg, wipe)?;
             println!("changed {} removed {} nodes {} edges {}", r.changed, r.removed, r.nodes, r.edges);
             if let Some(n) = r.unenriched {
@@ -929,7 +971,7 @@ fn run() -> anyhow::Result<()> {
             match hub_id {
                 None if json => { print!("{}", model_json(&repo, &cfg)?); Ok(()) }
                 None => { print!("{}", model_report(&repo, &cfg)?); Ok(()) }
-                Some(id) => switch_model(&repo, &cfg, &id, no_embed, cli.no_dense),
+                Some(id) => { eprintln!("{}", refresh::RUN_MARKER); switch_model(&repo, &cfg, &id, no_embed, cli.no_dense) }
             }
         }
         Cmd::Ask { words, json, seeds, bodies, rerank, rerank_local, depth, stale, no_serve } => {
@@ -942,9 +984,9 @@ fn run() -> anyhow::Result<()> {
             // variable is for everything else that must be measured against a cold process.
             let resident = if no_serve || std::env::var_os("REPOGRAPH_NO_SERVE").is_some() { None } else { serve::try_ask(&repo, &req) };
             if let Some(reply) = resident {
-                for n in reply.stderr { eprintln!("{n}"); }
+                for n in reply.stderr { eprintln!("{}", terminal_safe(&n)); }
                 eprintln!("serve: answered by the resident process");
-                print!("{}", reply.stdout);
+                emit(&reply.stdout);
                 use std::io::Write;
                 std::io::stdout().flush()?;
                 std::process::exit(0)
@@ -953,8 +995,8 @@ fn run() -> anyhow::Result<()> {
             let text = ctx.answer(&req)?;
             // Before the answer: a refresh line reached the reader ahead of it back when it was
             // printed the moment it happened, and that is the order a human reads.
-            for n in ctx.notices() { eprintln!("{n}"); }
-            print!("{text}");
+            for n in ctx.notices() { eprintln!("{}", terminal_safe(&n)); }
+            emit(&text);
             // Nothing here is written back, and unwinding a 1.3 GB model session plus the graph
             // costs a fused answer a measurable share of its wall time: leave without it.
             use std::io::Write;
@@ -978,14 +1020,14 @@ fn run() -> anyhow::Result<()> {
                 true => query::explain_json(&graph, &node).map(|j| json_out(format!("{j}\n"), &behind)),
                 false => query::explain(&graph, &node),
             }?;
-            print!("{rendered}");
+            emit(&rendered);
             Ok(())
         }
         Cmd::Impact { symbol, depth, down, json, stale } => {
             let (graph, behind) = graph_for(&repo, &load_cfg()?, stale, cli.no_dense)?;
             let root = code_node(&graph, &symbol)?;
             let (imp, direction) = if down { (impact::downstream(&graph, &root.id, depth), "downstream") } else { (impact::upstream(&graph, &root.id, depth), "upstream") };
-            print!("{}", if json { json_out(impact::render_json(&graph, &imp, direction), &behind) } else { impact::render(&graph, &imp, direction) });
+            emit(&if json { json_out(impact::render_json(&graph, &imp, direction), &behind) } else { impact::render(&graph, &imp, direction) });
             Ok(())
         }
         Cmd::Trace { from, to, depth, json, stale } => {
@@ -998,15 +1040,12 @@ fn run() -> anyhow::Result<()> {
             // not have to read an exit code to learn what the object already says, and a `null`
             // path is easier to handle than a non-zero exit with no object.
             if json {
-                println!("{}", json_out(impact::trace_json(&graph, &a.id, &b.id, depth, found.as_deref()), &behind));
+                emit(&format!("{}\n", json_out(impact::trace_json(&graph, &a.id, &b.id, depth, found.as_deref()), &behind)));
                 return Ok(());
             }
             match found {
                 Some(path) => {
-                    for (i, (id, passed)) in path.iter().enumerate() {
-                        let at = graph.nodes.get(id).map(|n| format!("{}:{}", n.file, n.line)).unwrap_or_default();
-                        println!("{}{id}  {at}{}", if i == 0 { "" } else { "  → " }, if *passed { "  passes" } else { "" });
-                    }
+                    emit(&trace_text(&graph, &path));
                     Ok(())
                 }
                 None => Err(Verdict(format!("no call path from {} to {} within {depth} hops", a.id, b.id)).into()),
@@ -1016,14 +1055,14 @@ fn run() -> anyhow::Result<()> {
             let (graph, behind) = graph_for(&repo, &load_cfg()?, stale, cli.no_dense)?;
             let hunks = changes::hunks_from_git(&repo, &base)?;
             let r = changes::report(&graph, &hunks, depth);
-            print!("{}", if json { json_out(changes::render_json(&graph, &r), &behind) } else { changes::render(&graph, &r) });
+            emit(&if json { json_out(changes::render_json(&graph, &r), &behind) } else { changes::render(&graph, &r) });
             Ok(())
         }
         Cmd::Verify { json } => {
             let (graph, _) = store::Store::new(&repo).load()?;
             match json {
-                true => println!("{}", query::verify_json(&graph)),
-                false => print!("{}", query::verify(&graph)),
+                true => emit(&format!("{}\n", query::verify_json(&graph))),
+                false => emit(&query::verify(&graph)),
             }
             if graph.nodes.is_empty() { anyhow::bail!("graph is empty — run `repograph build`"); }
             Ok(())
@@ -1049,6 +1088,11 @@ fn run() -> anyhow::Result<()> {
                     n => println!("{target:?}: wrote {n} files\n  {}", r.paths.join("\n  ")),
                 }
                 for note in &r.notes { println!("{target:?}: {note}"); }
+                if target == install_agent::Target::Claude {
+                    let m = install_agent::register_mcp(&repo, &command, &install_agent::run_claude);
+                    for path in &m.paths { println!("Claude: registered the MCP server\n  {path}"); }
+                    for note in &m.notes { println!("Claude: {note}"); }
+                }
                 // Codex reads its hooks from `~/.codex/hooks.json`, which is the machine's and not
                 // this repository's. Printed for a person to paste; see `agent/codex.md`.
                 if target == install_agent::Target::Codex {
@@ -1102,6 +1146,7 @@ fn run() -> anyhow::Result<()> {
             // average is one whose exit code depends on which run a reader looked at.
             if met { Ok(()) } else { Err(Verdict("bench floors not met".to_string()).into()) }
         }
+        Cmd::Mcp => mcp::run(&repo, cli.no_dense),
         Cmd::Dump { queries, out, depth } => dump::run(&repo, &queries, &out, depth, cli.no_dense),
         Cmd::ImportLegacy { graph_json } => {
             let store = store::Store::new(&repo);
@@ -1130,6 +1175,13 @@ mod tests {
     }
 
     #[test]
+    fn terminal_escapes_are_dropped_and_layout_and_text_are_not() {
+        let hostile = "ok\u{1b}]0;pwned\u{7}\u{9b}31m name\tcol\nnext\u{7f}\r";
+        assert_eq!(terminal_safe(hostile), "ok]0;pwned31m name\tcol\nnext");
+        assert!(matches!(terminal_safe("Привет → мир"), std::borrow::Cow::Borrowed(_)), "clean text is not copied");
+    }
+
+    #[test]
     fn cap_pools_tolerates_a_pool_already_built() {
         cap_pools(2);
         cap_pools(2);
@@ -1154,15 +1206,15 @@ mod tests {
         assert!(quiet.contains("the built-in default"), "{quiet}");
         assert!(!quiet.contains("The two disagree"), "{quiet}");
 
-        config::set_embed_model(repo, "BAAI/bge-m3").unwrap();
+        config::set_embed_model(repo, index::embed::RECOMMENDED).unwrap();
         let store = store::Store::new(repo);
         let mut dense = index::dense::DenseIndex::load(&store).unwrap();
         dense.written_by(index::embed::DEFAULT_MODEL, 384);
         dense.save(&store).unwrap();
-        let cfg = config::Config { embed_model: "BAAI/bge-m3".to_string(), ..config::Config::default() };
+        let cfg = config::Config { embed_model: index::embed::RECOMMENDED.to_string(), ..config::Config::default() };
         let split = model_report(repo, &cfg).unwrap();
         assert!(split.contains(index::embed::DEFAULT_MODEL), "the store's own model: {split}");
-        assert!(split.contains(&format!("BAAI/bge-m3 ({})", config::PROJECT_FILE)), "{split}");
+        assert!(split.contains(&format!("{} ({})", index::embed::RECOMMENDED, config::PROJECT_FILE)), "{split}");
         assert!(split.contains("The two disagree"), "{split}");
     }
 

@@ -13,6 +13,11 @@ pub struct Config {
     /// ships (spec §11, T5). `REPOGRAPH_TEXT_GLOBS` replaces it for one run.
     pub text_globs: Vec<String>,
     pub skip: Vec<String>,
+    /// The only paths the walk reads, as directories (`src`, `docs/specs`) or globs. Empty — the
+    /// default — is the whole repository. Narrower than `skip`: what a project lets a reader see,
+    /// rather than what it keeps out, so a directory nobody listed never reaches the store, an
+    /// `enrich` prompt or an answer.
+    pub include: Vec<String>,
     /// Accepted so that a `repograph.toml` written when these were settings still parses, and
     /// read for nothing else: a repository's families are the prefixes its own documents define.
     /// `Some` means the file named the key, which is worth one line on stderr and no more.
@@ -109,20 +114,38 @@ impl Default for Config {
             // extensions cost a glob each and no second parser. They earn their place in the
             // corpus by holding what no `.ts` file does: the hooks, the lint config and the CI
             // wrappers a repository wires itself together with.
-            code_globs: s(&["**/*.ts", "**/*.tsx", "**/*.js", "**/*.jsx", "**/*.mjs", "**/*.cjs"]),
+            // Razor is the one language 0.6.0 reads and leaves out: its readings failed `impact`
+            // and `trace`, so it is read only where a config or `REPOGRAPH_CODE_GLOBS` names it.
+            code_globs: s(&[
+                "**/*.ts", "**/*.tsx", "**/*.js", "**/*.jsx", "**/*.mjs", "**/*.cjs",
+                "**/*.kt", "**/*.java", "**/*.cs", "**/*.rs", "**/*.py", "**/*.dart", "**/*.swift",
+                "**/*.gql", "**/*.graphql", "**/*.sql", "**/*.bicep", "**/*.tf", "**/*.hcl",
+                "**/*.sh", "**/*.bash", "**/*.vue",
+            ]),
             text_globs: Vec::new(),
+            include: Vec::new(),
             // A bundle is one line of machine output under a source extension: every symbol in
             // it is a minifier's letter, and the file drowns a lexical index by itself. Now that
             // dotted directories are walked, `.yarn/` and `.pnp.cjs` are the same problem under a
             // different name: Yarn Berry commits its bundled releases, plugins and PnP map for
             // zero-installs, and none of that is gitignored — it is meant to be read by Node, not
-            // by a reader asking what this repository's authors wrote by hand.
+            // by a reader asking what this repository's authors wrote by hand. The other
+            // languages' toolchains leave the same kind of tree beside the sources: a build
+            // directory, a virtualenv, a provider or pod cache. `.gitignore` keeps them out only
+            // inside a git checkout, and a virtualenv checked in is not rare.
             skip: s(&[
                 "**/node_modules/**",
                 "**/dist/**",
                 "**/*.min.js",
                 "**/.yarn/**",
                 "**/.pnp.*",
+                "**/target/**",
+                "**/.venv/**",
+                "**/venv/**",
+                "**/__pycache__/**",
+                "**/.terraform/**",
+                "**/.dart_tool/**",
+                "**/Pods/**",
                 "**/TRACKER.md",
                 "graphify-out/**",
                 ".repograph/**",
@@ -245,12 +268,18 @@ impl Config {
             None => toml::Table::new(),
         };
         let machine = Self::machine()?;
+        let names_model = named.contains_key("embed_model");
         // Said here rather than in the commands, because every command that reads the file has
         // been answering with derived families since the key stopped being read, and a setting
         // silently ignored is worse than one refused.
         cfg.say_the_family_keys_are_no_longer_read(&mut std::io::stderr());
 
-        layer(&named, "reranker_dir", machine.reranker_dir, &mut cfg.reranker_dir);
+        // A model file a cloned repository points at is a parser fed untrusted bytes: the
+        // directory is the reader's to choose, like the commands below.
+        cfg.reranker_dir = machine.reranker_dir.unwrap_or_default();
+        if named.contains_key("reranker_dir") {
+            let _ = writeln!(std::io::stderr(), "repograph.toml: reranker_dir is not read from a repository — set it in the machine config if this is a model you chose");
+        }
         layer(&named, "enrich_model", machine.enrich_model, &mut cfg.enrich_model);
         layer(&named, "rerank_model", machine.rerank_model, &mut cfg.rerank_model);
         layer(&named, "resources", machine.resources, &mut cfg.resources);
@@ -314,6 +343,16 @@ impl Config {
         }
         cfg.enrich_command = enrich_template.replace(MODEL_SLOT, &cfg.enrich_model);
         cfg.rerank_command = rerank_template.replace(MODEL_SLOT, &cfg.rerank_model);
+        if names_model && !model_is_trusted(&cfg.embed_model) {
+            // The name is a repository's text: echoed escaped, and offered as a command only when
+            // it is a plain token, so a crafted value cannot ride a copy-paste into the shell.
+            let how = match model_token_is_safe(&cfg.embed_model) {
+                true => format!("`repograph model {}` trusts it on this machine", cfg.embed_model),
+                false => "it is not a plain hub id".to_string(),
+            };
+            let _ = writeln!(std::io::stderr(), "repograph.toml: embed_model {:?} is not a catalogued model, so it is not downloaded on a repository's word — {how}; using {}", cfg.embed_model, crate::index::embed::DEFAULT_MODEL);
+            cfg.embed_model = crate::index::embed::DEFAULT_MODEL.into();
+        }
         Ok(cfg)
     }
 
@@ -382,13 +421,44 @@ fn comma_outside_braces(glob: &str) -> bool {
 /// The one file outside `.repograph/` this tool writes, and the only key it writes into it.
 pub const PROJECT_FILE: &str = "repograph.toml";
 
+/// Beside the machine file: the hub ids this machine's reader agreed to download and load, one per
+/// line, written by `repograph model`. Not a key of the machine file, which is the reader's prose
+/// and is never rewritten.
+fn trust_path() -> Option<std::path::PathBuf> {
+    Some(machine_path()?.with_file_name("trusted-models"))
+}
+
+/// Whether `embed_model` may be read from a repository's file. A model is code this machine
+/// downloads and hands to a parser, and a cloned repository is untrusted input: the catalogue's
+/// models are the ones `bench` measured, and any other is one the reader named with
+/// `repograph model` on this machine.
+pub fn model_is_trusted(model: &str) -> bool {
+    crate::index::embed::measured(model).is_some()
+        || trust_path().and_then(|p| std::fs::read_to_string(p).ok())
+            .is_some_and(|t| t.lines().any(|l| !l.trim().is_empty() && l.trim().eq_ignore_ascii_case(model.trim())))
+}
+
+/// Records `model` as one this machine's reader chose; `None` when nothing needed writing.
+pub fn trust_model(model: &str) -> Result<Option<std::path::PathBuf>> {
+    if model_is_trusted(model) { return Ok(None); }
+    let path = trust_path().context("no home directory to keep trusted models in")?;
+    if let Some(dir) = path.parent() { std::fs::create_dir_all(dir)?; }
+    let mut f = std::fs::OpenOptions::new().create(true).append(true).open(&path)
+        .with_context(|| format!("open {}", path.display()))?;
+    // A hand-edited file may end without a newline, which would fuse this id onto its last line.
+    writeln!(f, "\n{}", model.trim())?;
+    Ok(Some(path))
+}
+
 /// Whether the project's file names `embed_model` itself, as opposed to the built-in default
 /// standing in for it. A report that said "configured" of a value nobody wrote would send a
 /// reader looking for a line that is not there. A file that is missing or does not parse names
 /// nothing: `Config::load` is where a broken file is reported, and this is a question about text.
 pub fn names_embed_model(repo: &Path) -> bool {
     let Ok(text) = std::fs::read_to_string(repo.join(PROJECT_FILE)) else { return false };
-    toml::from_str::<toml::Table>(&text).is_ok_and(|t| t.contains_key("embed_model"))
+    toml::from_str::<toml::Table>(&text).ok()
+        .and_then(|t| t.get("embed_model").and_then(|v| v.as_str()).map(model_is_trusted))
+        .unwrap_or(false)
 }
 
 /// Writes `embed_model` into the repository's `repograph.toml` and leaves every other byte of it
@@ -603,6 +673,20 @@ mod tests {
     }
 
     #[test]
+    fn a_reranker_dir_is_read_from_the_machine_file_and_never_from_a_repository() {
+        with_machine(Some("reranker_dir = \"/opt/mine\"\n"), || {
+            let dir = tempfile::tempdir().unwrap();
+            std::fs::write(dir.path().join("repograph.toml"), "reranker_dir = \"./m\"\n").unwrap();
+            assert_eq!(Config::load(dir.path()).unwrap().reranker_dir, "/opt/mine");
+        });
+        with_machine(None, || {
+            let dir = tempfile::tempdir().unwrap();
+            std::fs::write(dir.path().join("repograph.toml"), "reranker_dir = \"./m\"\n").unwrap();
+            assert_eq!(Config::load(dir.path()).unwrap().reranker_dir, "");
+        });
+    }
+
+    #[test]
     fn partial_file_overrides_only_named_keys() {
         with_machine(None, || {
             let dir = tempfile::tempdir().unwrap();
@@ -660,9 +744,16 @@ mod tests {
     fn the_embed_model_defaults_to_the_small_e5_and_reads_from_the_file() {
         with_machine(None, || {
             let dir = tempfile::tempdir().unwrap();
-            assert_eq!(Config::load(dir.path()).unwrap().embed_model, "intfloat/multilingual-e5-small");
+            assert_eq!(Config::load(dir.path()).unwrap().embed_model, "onnx-community/embeddinggemma-300m-ONNX");
             std::fs::write(dir.path().join("repograph.toml"), "embed_model = \"BAAI/bge-m3\"\n").unwrap();
+            assert_eq!(Config::load(dir.path()).unwrap().embed_model, crate::index::embed::DEFAULT_MODEL, "not catalogued, not trusted");
+            assert!(!names_embed_model(dir.path()), "a refused name is not a switch owed");
+            trust_model("BAAI/bge-m3").unwrap();
             assert_eq!(Config::load(dir.path()).unwrap().embed_model, "BAAI/bge-m3");
+            assert!(names_embed_model(dir.path()));
+            assert_eq!(trust_model("baai/BGE-M3").unwrap(), None, "trusted once is enough");
+            std::fs::write(dir.path().join("repograph.toml"), format!("embed_model = \"{}\"\n", crate::index::embed::RECOMMENDED)).unwrap();
+            assert_eq!(Config::load(dir.path()).unwrap().embed_model, crate::index::embed::RECOMMENDED, "the catalogue needs no trust");
         });
     }
 
@@ -753,14 +844,15 @@ mod tests {
     fn the_written_file_is_the_one_the_next_load_reads() {
         with_machine(None, || {
             let dir = tempfile::tempdir().unwrap();
-            let path = set_embed_model(dir.path(), "BAAI/bge-m3").unwrap();
+            let arctic = crate::index::embed::RECOMMENDED;
+            let path = set_embed_model(dir.path(), arctic).unwrap();
             assert_eq!(path, dir.path().join(PROJECT_FILE));
             assert!(names_embed_model(dir.path()));
-            assert_eq!(Config::load(dir.path()).unwrap().embed_model, "BAAI/bge-m3");
-            set_embed_model(dir.path(), "intfloat/multilingual-e5-base").unwrap();
+            assert_eq!(Config::load(dir.path()).unwrap().embed_model, arctic);
+            set_embed_model(dir.path(), crate::index::embed::UNNAMED_MODEL).unwrap();
             let text = std::fs::read_to_string(&path).unwrap();
             assert_eq!(text.matches("embed_model =").count(), 1, "replaced once, not appended twice: {text}");
-            assert_eq!(Config::load(dir.path()).unwrap().embed_model, "intfloat/multilingual-e5-base");
+            assert_eq!(Config::load(dir.path()).unwrap().embed_model, crate::index::embed::UNNAMED_MODEL);
             assert!(!dir.path().join("repograph.toml.tmp").exists());
         });
     }
@@ -1213,5 +1305,15 @@ mod tests {
             let err = comma.expect_err("a comma outside braces joins two globs into one").to_string();
             assert!(err.contains("REPOGRAPH_TEXT_GLOBS") && err.contains("whitespace"), "{err}");
         });
+    }
+
+    #[test]
+    fn every_language_0_6_0_ships_is_globbed_by_default_and_razor_is_not() {
+        assert_eq!(Config::default().code_globs, [
+            "**/*.ts", "**/*.tsx", "**/*.js", "**/*.jsx", "**/*.mjs", "**/*.cjs",
+            "**/*.kt", "**/*.java", "**/*.cs", "**/*.rs", "**/*.py", "**/*.dart", "**/*.swift",
+            "**/*.gql", "**/*.graphql", "**/*.sql", "**/*.bicep", "**/*.tf", "**/*.hcl",
+            "**/*.sh", "**/*.bash", "**/*.vue",
+        ]);
     }
 }

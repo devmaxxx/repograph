@@ -121,7 +121,7 @@ pub fn hit(case: &Case, answer: &Answer, is_id: &dyn Fn(&str) -> bool) -> bool {
 /// read one set whatever the store's rows were written by; a dense arm under a model with no
 /// floors of its own is measured and not graded, the way another case file is.
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub enum Floors { Small, None }
+pub enum Floors { Small, Gemma, None }
 
 /// Private on purpose: `dense_grading` is the only way to reach the floors, so a caller cannot
 /// key them off the store's recorded rows while the embedder that answers is a resolved override.
@@ -129,6 +129,7 @@ fn floors_for(model: Option<&str>) -> Floors {
     match model {
         None => Floors::Small,
         Some(m) if m == crate::index::embed::UNNAMED_MODEL => Floors::Small,
+        Some(m) if m == crate::index::embed::DEFAULT_MODEL => Floors::Gemma,
         Some(_) => Floors::None,
     }
 }
@@ -142,26 +143,42 @@ fn dense_grading(no_dense: bool, recorded: Option<&str>, resolved: Option<&str>)
     let floors = floors_for(model);
     let field = match floors {
         Floors::Small => "small".to_string(),
+        Floors::Gemma => "gemma".to_string(),
         Floors::None => model.unwrap_or_default().to_string(),
     };
     (floors, field)
 }
 
 /// `(enriched, dense, floors) → (keyword, paraphrase)`. Every number is one the recorded cases
-/// measured, never a target: the small model's four on the fixture (the paragraphs below). The lexical rows carry
-/// `Floors::Small` and are read for every model: no embedder is in them.
-/// `bench/history/track.py` reads this table out of the source; keep the rows one per line.
-const FLOORS: [(bool, bool, Floors, usize, usize); 4] = [
+/// measured, never a target: the small model's four on the fixture (the paragraphs below), and
+/// gemma's enriched dense arm, one paraphrase under the 20/30 it read twice, as the small model's
+/// 14 sits under its 15. The lexical rows carry `Floors::Small` and are read for every
+/// model: no embedder is in them. Gemma's raw dense arm was never measured, so it has no row and
+/// is not graded. `bench/history/track.py` reads this table out of the source; keep the rows one
+/// per line.
+const FLOORS: [(bool, bool, Floors, usize, usize); 5] = [
+    (true, true, Floors::Gemma, 40, 19),
     (true, true, Floors::Small, 40, 14),
     (true, false, Floors::Small, 39, 11),
     (false, true, Floors::Small, 40, 9),
     (false, false, Floors::Small, 39, 7),
 ];
 
+const P90_CEILING: usize = 250;
+
+/// Whether an arm has floors to be graded against: a lexical one always does, a dense one only
+/// where its model measured that arm.
+fn graded(enriched: bool, dense: bool, floors: Floors) -> bool {
+    !dense || FLOORS.iter().any(|r| r.0 == enriched && r.1 && r.2 == floors)
+}
+
 pub fn passes(s: &Summary, dense: bool, enriched: bool, floors: Floors) -> bool {
-    // Every floor is the number the recorded cases measure; only the token ceiling is rounded,
-    // up to the next ten, and the small model's four p90s (220 to 226) all fit under that one. A count equal to its total is an exact floor: `run`
-    // grades against these only when the case file has the recorded 40/30/12 shape.
+    // Every floor is the number the recorded cases measure; only the token ceiling is rounded.
+    // It was 230, over the small model's four p90s (220 to 226), until a requirement's answer gained
+    // the line naming one symbol that cites it: that moved the p90 to 236 with every count unchanged,
+    // and 250 holds it with the share every default language adds (238 and 250 on the fixture).
+    // A count equal to its total is an exact floor: `run` grades against these only when the case
+    // file has the recorded 40/30/12 shape.
     //
     // `enrich` spends model tokens and is optional, so the store it has never touched is graded
     // on what it reads rather than on what the enriched store calibrated: paraphrase measures 9
@@ -179,13 +196,12 @@ pub fn passes(s: &Summary, dense: bool, enriched: bool, floors: Floors) -> bool 
     // on one day sitting flush on the noisiest split, while 14 has a point of slack and weeks of
     // runs under it. If the raw floors flap, they are the first thing to relax.
     //
-    // A dense arm has no floors of its own once the store's embedder is not the small model —
-    // those numbers were never measured, so grading them would be inventing a
-    // bar. `run` still prints what it found; it just cannot say pass or fail.
+    // A dense arm has no floors of its own under a model that never measured that arm — grading
+    // it would be inventing a bar. `run` still prints what it found; it just cannot say pass or fail.
     if dense && floors == Floors::None { return false; }
     let key = if dense { floors } else { Floors::Small };
     let Some(&(_, _, _, keyword, paraphrase)) = FLOORS.iter().find(|r| r.0 == enriched && r.1 == dense && r.2 == key) else { return false };
-    s.kind("keyword").0 >= keyword && s.kind("paraphrase").0 >= paraphrase && s.kind("code").0 >= 12 && s.p90_tokens <= 230
+    s.kind("keyword").0 >= keyword && s.kind("paraphrase").0 >= paraphrase && s.kind("code").0 >= 12 && s.p90_tokens <= P90_CEILING
 }
 
 // The recorded cases travel inside the binary so a release build benches from any directory.
@@ -427,7 +443,7 @@ pub fn run(repo: &Path, cases: Option<&Path>, no_dense: bool, rerank: bool, rera
     // A dense arm under a model with no floors of its own is still worth running — the case
     // file's shape earned grading, the store's embedder just never measured any. `gated` says so
     // through the exit code rather than a bail, so the run still prints what it found.
-    let mut gated = shape_ok && !(dense_on && floors == Floors::None);
+    let mut gated = shape_ok && graded(enriched, dense_on, floors);
     // Named before the cases run, not after: a reader comparing the counts below against the
     // README floors is comparing them against this tree.
     let pin = built_in.then(|| BUILT_IN_PIN.trim()).filter(|p| !p.is_empty());
@@ -734,8 +750,8 @@ mod tests {
         assert!(!passes(&at_floor_dense.clone().with("code", (11, 12)), true, true, Floors::Small));
 
         // p90: one token over the shared ceiling reddens either arm.
-        assert!(!passes(&Summary { p90_tokens: 231, ..at_floor_nodense.clone() }, false, true, Floors::Small));
-        assert!(!passes(&Summary { p90_tokens: 231, ..at_floor_dense.clone() }, true, true, Floors::Small));
+        assert!(!passes(&Summary { p90_tokens: P90_CEILING + 1, ..at_floor_nodense.clone() }, false, true, Floors::Small));
+        assert!(!passes(&Summary { p90_tokens: P90_CEILING + 1, ..at_floor_dense.clone() }, true, true, Floors::Small));
 
         // paraphrase no-dense floor is 11: one short reddens the `dense: false` call.
         assert!(!passes(&at_floor_nodense.clone().with("paraphrase", (10, 30)), false, true, Floors::Small));
@@ -773,7 +789,7 @@ mod tests {
         assert!(!passes(&raw_dense.clone().with("keyword", (39, 40)), true, false, Floors::Small));
         assert!(!passes(&raw_nodense.clone().with("keyword", (38, 40)), false, false, Floors::Small));
         assert!(!passes(&raw_dense.clone().with("code", (11, 12)), true, false, Floors::Small));
-        assert!(!passes(&Summary { p90_tokens: 231, ..raw_nodense.clone() }, false, false, Floors::Small));
+        assert!(!passes(&Summary { p90_tokens: P90_CEILING + 1, ..raw_nodense.clone() }, false, false, Floors::Small));
     }
 
     #[test]
@@ -786,6 +802,15 @@ mod tests {
         // merely measured: a default moved to a model with no floors of its own would turn every
         // fresh store's `bench` green-by-abstention, `gated=false` with nothing red to say so.
         assert_ne!(floors_for(Some(crate::index::embed::DEFAULT_MODEL)), Floors::None);
+        assert!(graded(true, true, floors_for(Some(crate::index::embed::DEFAULT_MODEL))));
+    }
+
+    #[test]
+    fn an_arm_its_model_never_measured_is_measured_and_not_graded() {
+        assert!(graded(false, false, Floors::None), "a lexical arm reads no model");
+        assert!(graded(false, true, Floors::Small));
+        assert!(!graded(false, true, Floors::Gemma), "gemma's raw dense arm has no row");
+        assert!(!graded(true, true, Floors::None));
     }
 
     #[test]

@@ -139,6 +139,20 @@ This corpus has no Kotlin symbol at hub scale — its widest target has eight re
 files — so its tiers read wide and narrow only, not lopsided against the same cutoffs the
 main suite uses.
 
+- **Pins.** A corpus is pinned outside the checkout it is worked on: a `git clone --no-local` under
+  `~/bench/corpora-src/<name>-<sha8>/`, with its path in `~/bench/corpora-src/<name>.path`. Every
+  writer runs in the pin, so a reading never depends on what the working checkout holds that day.
+- **Case files.** Max's own corpora's case files go under `bench/corpora/<name>/`. Employer code's
+  cases, truth and results live in `~/bench/corpora-private/<name>/`, and only aggregates (counts,
+  ratios, verdicts) enter this repository, never a symbol name, path, id or commit of that code.
+- **Readers.** A language's truth readers are registered by extension in `DECLARATIONS`,
+  `BLANKERS`, `DI_READERS` and `CALL_READERS` (`bench/compare/truth.py`), and a case about one
+  language's declaration carries `exts`, so a mixed corpus judges it on that language alone.
+- **Mixed windows.** A `changes` window carrying several languages is judged through the row's
+  `by_ext`, one slot per extension, so one language's misses cannot hide behind another's hits.
+- **The case directories 0.6.0 added:** `beauty-crm-sql`, `beauty-crm-hcl`, `repograph`,
+  `agent-orchestrator` and `pawfice`, beside `beauty-crm-mobile`.
+
 ## Reading a result file
 
 `bench/results/<date>-<repo>.json` carries the corpus path, the commit, the case counts,
