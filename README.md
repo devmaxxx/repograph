@@ -667,7 +667,10 @@ written before the field existed is the small model's. `repograph model <hub id>
 [below](#choosing-the-model) — and rows another model wrote are dropped and the file rewritten, on
 width as well as on name. Naming a model in `repograph.toml` by hand is enough: the first `ask`
 after it says so on stderr, answers from the stored vectors, and starts a background `update` that
-downloads the model and re-embeds.
+downloads the model and re-embeds. That holds for the catalogue's models; any other hub id is a
+model a cloned repository would have this machine download and load, so the file's word is not
+enough for it: `repograph model <hub id>` trusts it on this machine (in `trusted-models` beside the
+machine config), and until then the default stands and stderr says why.
 `REPOGRAPH_EMBED_MODEL=<hub id>` outranks both for one command, which is how a copy of a store is
 measured under a second model — query that copy with `ask --stale`, or with `bench` and `dump`,
 which read the store as it stands; a refreshing `ask` would claim the index for the overriding

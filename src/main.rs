@@ -746,6 +746,8 @@ fn switch_model(repo: &std::path::Path, cfg: &config::Config, id: &str, no_embed
     // turns them into a fact before the configuration is changed on the strength of them.
     let dim = emb.dim()?;
     eprintln!("model: opened in {:.1}s, {dim}-d vectors", open.elapsed().as_secs_f32());
+    // The reader typed this id, so it is theirs to load; a repository naming it is not.
+    if let Some(trusted) = config::trust_model(id)? { eprintln!("model: {id} is trusted on this machine ({})", trusted.display()); }
     let path = config::set_embed_model(repo, id)?;
     println!("model: embed_model = \"{id}\" in {}", path.display());
     if no_embed {
@@ -1155,15 +1157,15 @@ mod tests {
         assert!(quiet.contains("the built-in default"), "{quiet}");
         assert!(!quiet.contains("The two disagree"), "{quiet}");
 
-        config::set_embed_model(repo, "BAAI/bge-m3").unwrap();
+        config::set_embed_model(repo, index::embed::RECOMMENDED).unwrap();
         let store = store::Store::new(repo);
         let mut dense = index::dense::DenseIndex::load(&store).unwrap();
         dense.written_by(index::embed::DEFAULT_MODEL, 384);
         dense.save(&store).unwrap();
-        let cfg = config::Config { embed_model: "BAAI/bge-m3".to_string(), ..config::Config::default() };
+        let cfg = config::Config { embed_model: index::embed::RECOMMENDED.to_string(), ..config::Config::default() };
         let split = model_report(repo, &cfg).unwrap();
         assert!(split.contains(index::embed::DEFAULT_MODEL), "the store's own model: {split}");
-        assert!(split.contains(&format!("BAAI/bge-m3 ({})", config::PROJECT_FILE)), "{split}");
+        assert!(split.contains(&format!("{} ({})", index::embed::RECOMMENDED, config::PROJECT_FILE)), "{split}");
         assert!(split.contains("The two disagree"), "{split}");
     }
 

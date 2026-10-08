@@ -268,6 +268,7 @@ impl Config {
             None => toml::Table::new(),
         };
         let machine = Self::machine()?;
+        let names_model = named.contains_key("embed_model");
         // Said here rather than in the commands, because every command that reads the file has
         // been answering with derived families since the key stopped being read, and a setting
         // silently ignored is worse than one refused.
@@ -342,6 +343,10 @@ impl Config {
         }
         cfg.enrich_command = enrich_template.replace(MODEL_SLOT, &cfg.enrich_model);
         cfg.rerank_command = rerank_template.replace(MODEL_SLOT, &cfg.rerank_model);
+        if names_model && !model_is_trusted(&cfg.embed_model) {
+            let _ = writeln!(std::io::stderr(), "repograph.toml: embed_model {:?} is not a catalogued model, so it is not downloaded on a repository's word — `repograph model {}` trusts it on this machine; using {}", cfg.embed_model, cfg.embed_model, crate::index::embed::DEFAULT_MODEL);
+            cfg.embed_model = crate::index::embed::DEFAULT_MODEL.into();
+        }
         Ok(cfg)
     }
 
@@ -410,13 +415,43 @@ fn comma_outside_braces(glob: &str) -> bool {
 /// The one file outside `.repograph/` this tool writes, and the only key it writes into it.
 pub const PROJECT_FILE: &str = "repograph.toml";
 
+/// Beside the machine file: the hub ids this machine's reader agreed to download and load, one per
+/// line, written by `repograph model`. Not a key of the machine file, which is the reader's prose
+/// and is never rewritten.
+fn trust_path() -> Option<std::path::PathBuf> {
+    Some(machine_path()?.with_file_name("trusted-models"))
+}
+
+/// Whether `embed_model` may be read from a repository's file. A model is code this machine
+/// downloads and hands to a parser, and a cloned repository is untrusted input: the catalogue's
+/// models are the ones `bench` measured, and any other is one the reader named with
+/// `repograph model` on this machine.
+pub fn model_is_trusted(model: &str) -> bool {
+    crate::index::embed::measured(model).is_some()
+        || trust_path().and_then(|p| std::fs::read_to_string(p).ok())
+            .is_some_and(|t| t.lines().any(|l| l.trim().eq_ignore_ascii_case(model.trim())))
+}
+
+/// Records `model` as one this machine's reader chose; `None` when nothing needed writing.
+pub fn trust_model(model: &str) -> Result<Option<std::path::PathBuf>> {
+    if model_is_trusted(model) { return Ok(None); }
+    let path = trust_path().context("no home directory to keep trusted models in")?;
+    if let Some(dir) = path.parent() { std::fs::create_dir_all(dir)?; }
+    let mut f = std::fs::OpenOptions::new().create(true).append(true).open(&path)
+        .with_context(|| format!("open {}", path.display()))?;
+    writeln!(f, "{}", model.trim())?;
+    Ok(Some(path))
+}
+
 /// Whether the project's file names `embed_model` itself, as opposed to the built-in default
 /// standing in for it. A report that said "configured" of a value nobody wrote would send a
 /// reader looking for a line that is not there. A file that is missing or does not parse names
 /// nothing: `Config::load` is where a broken file is reported, and this is a question about text.
 pub fn names_embed_model(repo: &Path) -> bool {
     let Ok(text) = std::fs::read_to_string(repo.join(PROJECT_FILE)) else { return false };
-    toml::from_str::<toml::Table>(&text).is_ok_and(|t| t.contains_key("embed_model"))
+    toml::from_str::<toml::Table>(&text).ok()
+        .and_then(|t| t.get("embed_model").and_then(|v| v.as_str()).map(model_is_trusted))
+        .unwrap_or(false)
 }
 
 /// Writes `embed_model` into the repository's `repograph.toml` and leaves every other byte of it
@@ -704,7 +739,14 @@ mod tests {
             let dir = tempfile::tempdir().unwrap();
             assert_eq!(Config::load(dir.path()).unwrap().embed_model, "onnx-community/embeddinggemma-300m-ONNX");
             std::fs::write(dir.path().join("repograph.toml"), "embed_model = \"BAAI/bge-m3\"\n").unwrap();
+            assert_eq!(Config::load(dir.path()).unwrap().embed_model, crate::index::embed::DEFAULT_MODEL, "not catalogued, not trusted");
+            assert!(!names_embed_model(dir.path()), "a refused name is not a switch owed");
+            trust_model("BAAI/bge-m3").unwrap();
             assert_eq!(Config::load(dir.path()).unwrap().embed_model, "BAAI/bge-m3");
+            assert!(names_embed_model(dir.path()));
+            assert_eq!(trust_model("baai/BGE-M3").unwrap(), None, "trusted once is enough");
+            std::fs::write(dir.path().join("repograph.toml"), format!("embed_model = \"{}\"\n", crate::index::embed::RECOMMENDED)).unwrap();
+            assert_eq!(Config::load(dir.path()).unwrap().embed_model, crate::index::embed::RECOMMENDED, "the catalogue needs no trust");
         });
     }
 
@@ -795,14 +837,15 @@ mod tests {
     fn the_written_file_is_the_one_the_next_load_reads() {
         with_machine(None, || {
             let dir = tempfile::tempdir().unwrap();
-            let path = set_embed_model(dir.path(), "BAAI/bge-m3").unwrap();
+            let arctic = crate::index::embed::RECOMMENDED;
+            let path = set_embed_model(dir.path(), arctic).unwrap();
             assert_eq!(path, dir.path().join(PROJECT_FILE));
             assert!(names_embed_model(dir.path()));
-            assert_eq!(Config::load(dir.path()).unwrap().embed_model, "BAAI/bge-m3");
-            set_embed_model(dir.path(), "intfloat/multilingual-e5-base").unwrap();
+            assert_eq!(Config::load(dir.path()).unwrap().embed_model, arctic);
+            set_embed_model(dir.path(), crate::index::embed::UNNAMED_MODEL).unwrap();
             let text = std::fs::read_to_string(&path).unwrap();
             assert_eq!(text.matches("embed_model =").count(), 1, "replaced once, not appended twice: {text}");
-            assert_eq!(Config::load(dir.path()).unwrap().embed_model, "intfloat/multilingual-e5-base");
+            assert_eq!(Config::load(dir.path()).unwrap().embed_model, crate::index::embed::UNNAMED_MODEL);
             assert!(!dir.path().join("repograph.toml.tmp").exists());
         });
     }
