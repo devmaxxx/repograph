@@ -451,7 +451,7 @@ in full, not an empty config:
 | `enrich_model`       | `haiku` — whatever goes in `enrich_command`'s `{model}`                                      |
 | `rerank_model`       | `sonnet` — the same for `rerank_command`                                                    |
 | `enrich_languages`   | `[]` — the languages `enrich` writes questions in, named as the model reads them (`["Russian", "English"]`); empty = detected from the documents, English where they name none; any language name is accepted, see [Spending tokens on purpose](#spending-tokens-on-purpose) |
-| `reranker_dir`       | directory of the exported cross-encoder for `--rerank-local`; empty = `~/.cache/repograph/reranker` |
+| `reranker_dir`       | directory of the exported cross-encoder for `--rerank-local`; empty = `~/.cache/repograph/reranker`. Machine file only: a repository's is ignored, like the commands |
 | `embed_model`        | `onnx-community/embeddinggemma-300m-ONNX`; the model the vectors are written with — nine were measured and `repograph model` switches it, see [Embeddings](#embeddings) |
 | `reader_budget`      | `10` — seconds a reader may spend refreshing before it answers from the store as it stands and leaves the rest to a detached `update`; `0` never refreshes inline. The machine file may set it; `REPOGRAPH_READER_BUDGET` overrides, see [Keeping it fresh](#keeping-it-fresh) |
 | `resources`          | `"balanced"` = a third of the logical cores; `"low"` a sixth, `"full"` a half — how much of the machine a run may take, see [Resources](#resources) |
@@ -467,6 +467,9 @@ and `.env.*` (the templates `.env.example`, `.sample`, `.template` and `.dist` e
 keys and keystores, `.npmrc`, `.pypirc`, `.netrc`, `.git-credentials`, cloud credentials,
 `*.tfvars`, `*.tfstate` and `secrets.*` — their content would otherwise reach the store, an
 `enrich` prompt sent to a model, and the answers.
+
+The store writes its own `.gitignore` holding `*`, so `.repograph/` stays out of a commit in a
+repository that never listed it.
 
 `text_globs` (empty by default) takes in every file no doc or code glob claims whose content is
 text — configuration, YAML, JSON, data — as one node each, searchable by `ask` and named by

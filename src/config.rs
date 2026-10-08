@@ -273,7 +273,12 @@ impl Config {
         // silently ignored is worse than one refused.
         cfg.say_the_family_keys_are_no_longer_read(&mut std::io::stderr());
 
-        layer(&named, "reranker_dir", machine.reranker_dir, &mut cfg.reranker_dir);
+        // A model file a cloned repository points at is a parser fed untrusted bytes: the
+        // directory is the reader's to choose, like the commands below.
+        cfg.reranker_dir = machine.reranker_dir.unwrap_or_default();
+        if named.contains_key("reranker_dir") {
+            let _ = writeln!(std::io::stderr(), "repograph.toml: reranker_dir is not read from a repository — set it in the machine config if this is a model you chose");
+        }
         layer(&named, "enrich_model", machine.enrich_model, &mut cfg.enrich_model);
         layer(&named, "rerank_model", machine.rerank_model, &mut cfg.rerank_model);
         layer(&named, "resources", machine.resources, &mut cfg.resources);
@@ -622,6 +627,20 @@ mod tests {
             let cfg = Config::load(dir.path()).unwrap();
             assert_eq!(cfg.doc_globs, vec!["**/*.md".to_string()]);
             assert_eq!(cfg.registries, vec!["docs/constitution.yaml".to_string()]);
+        });
+    }
+
+    #[test]
+    fn a_reranker_dir_is_read_from_the_machine_file_and_never_from_a_repository() {
+        with_machine(Some("reranker_dir = \"/opt/mine\"\n"), || {
+            let dir = tempfile::tempdir().unwrap();
+            std::fs::write(dir.path().join("repograph.toml"), "reranker_dir = \"./m\"\n").unwrap();
+            assert_eq!(Config::load(dir.path()).unwrap().reranker_dir, "/opt/mine");
+        });
+        with_machine(None, || {
+            let dir = tempfile::tempdir().unwrap();
+            std::fs::write(dir.path().join("repograph.toml"), "reranker_dir = \"./m\"\n").unwrap();
+            assert_eq!(Config::load(dir.path()).unwrap().reranker_dir, "");
         });
     }
 

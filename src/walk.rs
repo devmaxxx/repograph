@@ -48,13 +48,15 @@ const TEXT_REFUSED: [&str; 11] = [
 /// land in `graph.json`, the BM25 and dense indexes, an `enrich` prompt sent to a model, and every
 /// answer that seeds them. `.gitignore` keeps most of them out already; this is the floor for the
 /// repository that commits one, or is not under git at all.
-const SECRET: [&str; 26] = [
+/// Matched without regard to case: `.ENV` and `Prod.PEM` hold the same thing.
+const SECRET: [&str; 38] = [
     "**/.env", "**/.env.*", "**/*.env", "**/.envrc", "**/.dev.vars", "**/*.pem", "**/*.key",
-    "**/*.p12", "**/*.pfx", "**/*.jks", "**/*.keystore", "**/*.kdbx",
-    "**/id_{rsa,dsa,ecdsa,ed25519}", "**/.npmrc", "**/.pypirc", "**/.netrc", "**/.git-credentials",
-    "**/.htpasswd", "**/.aws/credentials", "**/.docker/config.json", "**/*.tfvars",
-    "**/*.tfstate", "**/*.tfstate.*", "**/credentials*.json", "**/service-account*.json",
-    "**/secrets.{yaml,yml,json,toml}",
+    "**/*.p12", "**/*.pfx", "**/*.jks", "**/*.keystore", "**/*.kdbx", "**/*.ppk", "**/*.gpg",
+    "**/*.asc", "**/id_{rsa,dsa,ecdsa,ed25519}", "**/.npmrc", "**/.pypirc", "**/.netrc",
+    "**/.pgpass", "**/.git-credentials", "**/.htpasswd", "**/.boto", "**/.s3cfg", "**/.dockercfg",
+    "**/.aws/credentials", "**/.docker/config.json", "**/kubeconfig", "**/.kube/config",
+    "**/*.tfvars", "**/*.tfvars.json", "**/*.tfstate", "**/*.tfstate.*", "**/credentials*.json",
+    "**/service-account*.json", "**/{secret,secrets}.*", "**/*.{secret,secrets}", "**/.vault_pass*",
 ];
 
 /// Templates that name a project's variables with placeholder values: the one shape of env file
@@ -121,6 +123,12 @@ fn included(include: &[String]) -> Result<Option<GlobSet>> {
     globs(&out).map(Some)
 }
 
+fn globs_any_case(globs: &[&str]) -> Result<GlobSet> {
+    let mut b = GlobSetBuilder::new();
+    for g in globs { b.add(globset::GlobBuilder::new(g).case_insensitive(true).build()?); }
+    Ok(b.build()?)
+}
+
 pub(crate) fn stamp_of(meta: &std::fs::Metadata) -> Option<Stamp> {
     let ns = meta.modified().ok()?.duration_since(std::time::UNIX_EPOCH).ok()?.as_nanos();
     Some(Stamp { mtime_ns: u64::try_from(ns).ok()?, len: meta.len() })
@@ -146,8 +154,8 @@ fn walk_inner(repo: &Path, cfg: &Config, prev: &Manifest, count: bool) -> Result
     let text = globs(&cfg.text_globs)?;
     let refused = globs(&TEXT_REFUSED.map(String::from))?;
     let include = included(&cfg.include)?;
-    let secret = globs(&SECRET.map(String::from))?;
-    let template = globs(&SECRET_TEMPLATES.map(String::from))?;
+    let secret = globs_any_case(&SECRET)?;
+    let template = globs_any_case(&SECRET_TEMPLATES)?;
     let mut oversized = 0usize;
     let mut out = Vec::new();
     // A repository keeps its agent rules, its hooks and its CI in dotted directories, so the
@@ -558,7 +566,8 @@ mod tests {
         std::fs::create_dir_all(p.join("api/.aws")).unwrap();
         for f in [".env", ".env.local", "api/.env.production", "prod.env", ".envrc", "api/tls.pem",
                   "api/tls.key", "id_ed25519", ".npmrc", "api/.aws/credentials", "infra.tfvars",
-                  "terraform.tfstate", "credentials-ci.json", "secrets.yaml", ".env.md"] {
+                  "terraform.tfstate", "credentials-ci.json", "secrets.yaml", ".env.md", ".ENV",
+                  "Prod.PEM", "ID_RSA", "main.tfvars.json", "app.secret", ".pgpass"] {
             std::fs::write(p.join(f), "API_KEY=sk-live-123\n").unwrap();
         }
         for f in [".env.example", "id_ed25519.pub"] {
@@ -570,7 +579,7 @@ mod tests {
         cfg.code_globs.push("**/*".into());
         let entries = walk(p, &cfg, &Manifest::default()).unwrap();
         let read: Vec<&str> = entries.iter().map(|e| e.rel.as_str())
-            .filter(|r| r.contains("env") || r.contains("id_") || r.contains("key") || r.contains("cred") || r.contains("secret") || r.contains("tf") || r.ends_with(".pem") || r.ends_with("npmrc"))
+            .filter(|r| { let r = r.to_lowercase(); ["env", "id_", "key", "cred", "secret", "tf", ".pem", "npmrc", "pgpass"].iter().any(|k| r.contains(k)) })
             .collect();
         assert_eq!(read, [".env.example", "id_ed25519.pub"]);
     }

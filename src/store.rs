@@ -105,10 +105,20 @@ impl Store {
         self.write_atomic(&mirror_name(json), &bytes)
     }
 
+    /// The store holds passages of the repository's documents and code and the questions a model
+    /// wrote about them, so it carries its own `.gitignore`: a `git add -A` in a repository that
+    /// never listed `.repograph/` would otherwise commit it.
+    fn ensure_dir(&self) -> Result<()> {
+        std::fs::create_dir_all(&self.dir)?;
+        let ignore = self.dir.join(".gitignore");
+        if !ignore.exists() { std::fs::write(&ignore, "*\n")?; }
+        Ok(())
+    }
+
     /// Returns the stamp of the `graph.json` this call wrote, for a writer that claims vectors
     /// against it: a `stat` after the save could already be describing another writer's graph.
     pub fn save(&self, g: &Graph, m: &Manifest) -> Result<Option<crate::walk::Stamp>> {
-        std::fs::create_dir_all(&self.dir)?;
+        self.ensure_dir()?;
         let written = self.write_atomic_stamped("graph.json", &serde_json::to_vec(g)?)?;
         self.write_mirror("graph.json", g)?;
         self.save_manifest(m)?;
@@ -130,7 +140,7 @@ impl Store {
     /// cannot lend its stamp to them.
     fn write_atomic_stamped(&self, name: &str, bytes: &[u8]) -> Result<Option<crate::walk::Stamp>> {
         static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-        std::fs::create_dir_all(&self.dir)?;
+        self.ensure_dir()?;
         // One name per writer: readers that refresh at once each write a whole graph, and a
         // shared name let one rename away, or truncate, the file another was still writing.
         let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -151,7 +161,7 @@ impl Store {
     /// points at rows a crash could still lose.
     pub fn append_after(&self, name: &str, keep: u64, bytes: &[u8]) -> Result<()> {
         use std::io::{Seek, SeekFrom, Write};
-        std::fs::create_dir_all(&self.dir)?;
+        self.ensure_dir()?;
         let p = self.dir.join(name);
         let mut f = std::fs::OpenOptions::new().write(true).create(true).truncate(false).open(&p)
             .with_context(|| format!("open {}", p.display()))?;
@@ -227,7 +237,7 @@ impl Store {
     /// Never removed: a lock file deleted while one process holds it lets the next process lock
     /// a new file of the same name, and both believe they are the only writer.
     fn lock_file(&self) -> Result<std::fs::File> {
-        std::fs::create_dir_all(&self.dir)?;
+        self.ensure_dir()?;
         let p = self.dir.join("writer.lock");
         std::fs::OpenOptions::new().create(true).truncate(false).write(true).open(&p)
             .with_context(|| format!("open {}", p.display()))
@@ -245,6 +255,15 @@ const LEFTOVER_AGE: std::time::Duration = std::time::Duration::from_secs(600);
 mod tests {
     use super::*;
     use crate::model::{EdgeKind, Extraction, NodeKind};
+
+    #[test]
+    fn the_store_ignores_itself_so_a_commit_of_everything_leaves_it_out() {
+        let d = tempfile::tempdir().unwrap();
+        let store = Store::new(d.path());
+        drop(store.try_lock_writer().unwrap());
+        let dir = d.path().join(".repograph");
+        assert_eq!(std::fs::read_to_string(dir.join(".gitignore")).unwrap(), "*\n");
+    }
 
     /// Two handles in one process contend exactly as two processes do: the lock belongs to the
     /// open file, not to the process, on Unix and on Windows alike.

@@ -3,7 +3,7 @@
 //! model (measured on the bench corpus) and 5 ms to use it; a resident one pays the open once.
 use crate::{ask, config};
 use anyhow::{Context as _, Result};
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
@@ -408,11 +408,15 @@ fn adopt_if_moved(watcher: &mut crate::Watcher, ctx: &mut ask::Context, batch: u
 /// makes exactly that shape, and so does a client that gave up. On macOS a socket with no other
 /// end refuses the `setsockopt` below with EINVAL, which reached the server's stderr as an
 /// unattributable `serve: Invalid argument (os error 22)`; elsewhere it is an empty read.
+const HELLO_MAX: u64 = 64 * 1024;
+
 fn hello_line(stream: &sys::Stream) -> Option<String> {
     stream.set_read_timeout(Some(IO_TIMEOUT)).ok()?;
     stream.set_write_timeout(Some(IO_TIMEOUT)).ok()?;
     let mut line = String::new();
-    let n = BufReader::new(stream.try_clone().ok()?).read_line(&mut line)
+    // A hello is one short JSON line; a peer that streams without a newline is cut off here
+    // rather than growing the line until memory runs out.
+    let n = BufReader::new(stream.try_clone().ok()?.take(HELLO_MAX)).read_line(&mut line)
         .inspect_err(|e| if matches!(e.kind(), std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut) {
             eprintln!("serve: a client connected and said nothing for {}s; not counted as a question", IO_TIMEOUT.as_secs());
         }).ok()?;

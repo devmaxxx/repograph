@@ -166,6 +166,8 @@ pub(crate) fn git(repo: &Path, args: &[&str]) -> anyhow::Result<String> {
 /// Hunks of the working tree against `base` — staged and unstaged alike, plus every untracked
 /// file as one hunk over its whole length, so a new file's symbols count as changed too.
 pub fn hunks_from_git(repo: &Path, base: &str) -> anyhow::Result<Vec<Hunk>> {
+    // Before `--`, git reads a leading dash as an option: `--output=<file>` would write anywhere.
+    anyhow::ensure!(!base.starts_with('-'), "changes: base `{base}` is not a revision");
     // The store is written by every refresh, so in a repository that does not ignore it, it would
     // be reported as changed by the command that just wrote it.
     const NOT_STORE: &str = ":(exclude).repograph";
@@ -185,6 +187,13 @@ mod tests {
     use crate::model::{EdgeKind, Extraction};
 
     const DIFF: &str = "diff --git a/s.ts b/s.ts\n--- a/s.ts\n+++ b/s.ts\n@@ -6,2 +6,3 @@ export class S {\n+  // more\n@@ -20 +21,0 @@\n-old\ndiff --git a/new.ts b/new.ts\nnew file mode 100644\n--- /dev/null\n+++ b/new.ts\n@@ -0,0 +1,2 @@\n+a\n+b\ndiff --git a/gone.ts b/gone.ts\n--- a/gone.ts\n+++ /dev/null\n@@ -1,3 +0,0 @@\n-x\n";
+
+    #[test]
+    fn a_base_that_reads_as_an_option_is_refused_before_git_sees_it() {
+        let d = tempfile::tempdir().unwrap();
+        let err = hunks_from_git(d.path(), "--output=/tmp/x").unwrap_err().to_string();
+        assert!(err.contains("is not a revision"), "{err}");
+    }
 
     #[test]
     fn parse_takes_new_side_ranges_and_records_a_pure_deletion_as_one_line() {
