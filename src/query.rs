@@ -84,6 +84,14 @@ fn admits(best: f32, attainable: f32, passages_best: f32, passages_attainable: f
     theirs <= 0.0 || coverage(best, attainable) / theirs >= c
 }
 
+/// What the lexical side hands the fusion for one question: the lists in fusion order, and the
+/// text files' BM25 rows when the text list is seated.
+struct LexicalLists {
+    lists: Vec<Vec<String>>,
+    /// `None` is a question the text files do not answer: their dense rows are dropped with them.
+    text: Option<Vec<String>>,
+}
+
 /// The lexical lists for one question, in fusion order. A store `enrich` never touched has one:
 /// an index of id-only documents is shorter than the passages and ranks an id-bearing term above
 /// the passage that carries it, so on a raw store the questions list would be admitted for the
@@ -93,10 +101,23 @@ fn admits(best: f32, attainable: f32, passages_best: f32, passages_attainable: f
 /// measured the questions list as what carries paraphrase targets into that pool. The questions
 /// about code are a third list on the reranked path and on no other: the plain fusion's five seats
 /// were measured to be worth more to the documents than to them.
-fn lexical_lists(lex: &Lexical, query: &str, depth: usize, reranked: bool) -> Vec<Vec<String>> {
+///
+/// The text files are a list of their own, seated under the same coverage admission as the
+/// questions: pooled into the passages they took paraphrase from 15 to 8 of 30, each
+/// configuration file that shared a few words with a requirement question holding a seat the
+/// requirement needed. A question the text answers as completely as the passages answer theirs
+/// seats it; any other leaves the text out of the fusion altogether.
+fn lexical_lists(lex: &Lexical, query: &str, depth: usize, reranked: bool) -> LexicalLists {
     let only_ids = |scored: Vec<(String, f32)>| -> Vec<String> { scored.into_iter().map(|(id, _)| id).collect() };
+    let best = |l: &[(String, f32)]| l.first().map(|(_, s)| *s).unwrap_or(0.0);
     let passages = lex.passages.search(query, depth);
-    let Some(questions_index) = &lex.questions else { return vec![only_ids(passages)]; };
+    let (passages_best, passages_attainable) = (best(&passages), lex.passages.attainable(query));
+    let text = lex.text.as_ref().and_then(|index| {
+        let rows = index.search(query, depth);
+        let seated = reranked || admits(best(&rows), index.attainable(query), passages_best, passages_attainable, questions_gate());
+        seated.then(|| only_ids(rows))
+    });
+    let Some(questions_index) = &lex.questions else { return LexicalLists { lists: vec![only_ids(passages)], text }; };
     let generated = questions_index.search(query, depth);
     if reranked {
         let mut pool = vec![only_ids(passages), only_ids(generated)];
@@ -111,16 +132,14 @@ fn lexical_lists(lex: &Lexical, query: &str, depth: usize, reranked: bool) -> Ve
             let code = code_index.search(query, depth);
             if !code.is_empty() { pool.push(only_ids(code)); }
         }
-        return pool;
+        return LexicalLists { lists: pool, text };
     }
-    let best = |l: &[(String, f32)]| l.first().map(|(_, s)| *s).unwrap_or(0.0);
-    let (passages_best, passages_attainable) = (best(&passages), lex.passages.attainable(query));
     let mut lists = Vec::with_capacity(2);
     if admits(best(&generated), questions_index.attainable(query), passages_best, passages_attainable, questions_gate()) {
         lists.push(only_ids(generated));
     }
     lists.push(only_ids(passages));
-    lists
+    LexicalLists { lists, text }
 }
 
 fn hit(graph: &Graph, id: &str, score: f32, via: Option<&str>) -> Option<Hit> {
@@ -203,14 +222,23 @@ pub fn ask(graph: &Graph, lex: &Lexical, dense: Option<Dense>, rerank: Option<Re
         // then the dense question rows on the reranked path, then these.
         let lexical = lexical_lists(lex, &query, depth, rerank.is_some());
         let mut lists: Vec<Vec<String>> = Vec::new();
+        let mut dense_text: Vec<String> = Vec::new();
         if opts.dense {
             if let Some(d) = dense {
-                let (passages, questions_rows) = d(&query, depth);
+                let (rows, questions_rows) = d(&query, depth);
+                let is_text = |id: &String| graph.nodes.get(id).is_some_and(|n| n.kind == NodeKind::Text);
+                let (text_rows, passages): (Vec<String>, Vec<String>) = rows.into_iter().partition(is_text);
+                dense_text = text_rows;
                 lists.push(passages);
                 if rerank.is_some() { lists.push(questions_rows); }
             }
         }
-        lists.extend(lexical);
+        lists.extend(lexical.lists);
+        // Last, so the text files take the seat after the documents' own lists have taken theirs.
+        // Their dense and BM25 rows are one list: two would hand them two of five seats.
+        if let Some(bm25_text) = lexical.text {
+            lists.push(fuse::interleave(&[dense_text, bm25_text]).into_iter().map(|(id, _)| id).collect());
+        }
         lists.retain(|l| !l.is_empty());
         let mut fused = fuse::interleave(&lists);
         if let Some(r) = rerank {
@@ -868,7 +896,7 @@ mod tests {
         let g = graph();
         let none = Questions::default();
         for reranked in [false, true] {
-            let lists = lexical_lists(&lex(&g, &none), "FR-PAY-22 штраф", 10, reranked);
+            let lists = lexical_lists(&lex(&g, &none), "FR-PAY-22 штраф", 10, reranked).lists;
             assert_eq!(lists.len(), 1, "reranked={reranked}: {lists:?}");
             assert_eq!(lists[0][0], "FR-PAY-22");
         }
@@ -882,15 +910,15 @@ mod tests {
         // «считается» is in FR-PAY-22's body and in no stored question, so the questions index
         // scores nothing and is refused. This is the only refusal a two-node graph can produce:
         // see the test below for why the raw ratio's other refusals do not survive the change.
-        let weak = lexical_lists(&lex(&g, &qs), "считается", 10, false);
+        let weak = lexical_lists(&lex(&g, &qs), "считается", 10, false).lists;
         assert_eq!(weak.len(), 1);
         assert_eq!(weak[0][0], "FR-PAY-22");
         // Ratio above the gate: the questions list first, then the passages.
-        let strong = lexical_lists(&lex(&g, &qs), "штраф отмену", 10, false);
+        let strong = lexical_lists(&lex(&g, &qs), "штраф отмену", 10, false).lists;
         assert_eq!(strong.len(), 2);
         assert_eq!((strong[0][0].as_str(), strong[1][0].as_str()), ("FR-PAY-20", "FR-PAY-22"));
         // Reranked: both lists whatever the ratio, passages first — a pool, not five seats.
-        let pool = lexical_lists(&lex(&g, &qs), "штраф считается", 10, true);
+        let pool = lexical_lists(&lex(&g, &qs), "штраф считается", 10, true).lists;
         assert_eq!(pool.len(), 2);
         assert_eq!(pool[0][0], "FR-PAY-22");
     }
@@ -920,15 +948,15 @@ mod tests {
         let passages_best = best(&passages_index.search(query, 10));
         assert!(admits(code_best, code_index.attainable(query), passages_best, passages_index.attainable(query), QUESTIONS_GATE),
             "the code list must be admissible for this test to say anything: {code_best} against {passages_best}");
-        let plain = lexical_lists(&lex(&g, &qs), query, 10, false);
+        let plain = lexical_lists(&lex(&g, &qs), query, 10, false).lists;
         assert_eq!(plain.len(), 1, "{plain:?}");
         assert_eq!(plain[0][0], "FR-PAY-22");
         // The pool is `depth` deep, not five seats, so the code list joins it whole and last.
-        let pool = lexical_lists(&lex(&g, &qs), query, 10, true);
+        let pool = lexical_lists(&lex(&g, &qs), query, 10, true).lists;
         assert_eq!(pool.len(), 3, "{pool:?}");
         assert_eq!(pool[2], vec!["sym:apps/a.ts::revoke".to_string(), "sym:apps/a.ts::revokeOne".to_string()]);
         // No word of either code question: the list is absent from the pool, not empty.
-        assert_eq!(lexical_lists(&lex(&g, &qs), "штраф считается", 10, true).len(), 2);
+        assert_eq!(lexical_lists(&lex(&g, &qs), "штраф считается", 10, true).lists.len(), 2);
     }
 
     #[test]
@@ -1363,6 +1391,56 @@ mod tests {
         assert!(out.lines().any(|l| l.starts_with("    ") && l.contains("штраф")));
         let out = render(&a, &g, &opts());
         assert!(!out.lines().any(|l| l.starts_with("    ")));
+    }
+
+    fn graph_with_config() -> Graph {
+        let mut g = graph();
+        let mut e = Extraction::default();
+        e.node(NodeKind::Text, "file:ops/deploy.yaml", "ops/deploy.yaml", "retention: 30\nштраф: 0\nwindow: saturday-night\n", "ops/deploy.yaml", 1);
+        g.apply(e);
+        g
+    }
+
+    fn dense_text_first<'a>() -> impl Fn(&str, usize) -> (Vec<String>, Vec<String>) + 'a {
+        |_, _| (vec!["file:ops/deploy.yaml".to_string(), "FR-PAY-22".to_string()], Vec::new())
+    }
+
+    #[test]
+    fn text_nodes_are_no_part_of_the_passage_list() {
+        let g = graph_with_config();
+        let l = lex(&g, &Questions::default());
+        assert!(l.passages.search("retention", 10).is_empty());
+        assert_eq!(l.text.as_ref().unwrap().search("retention", 10)[0].0, "file:ops/deploy.yaml");
+        assert!(lex(&graph(), &Questions::default()).text.is_none(), "no text node, no text index");
+    }
+
+    #[test]
+    fn a_question_the_text_answers_seats_the_text_list() {
+        let g = graph_with_config();
+        let l = lex(&g, &Questions::default());
+        assert_eq!(lexical_lists(&l, "retention", 10, false).text, Some(vec!["file:ops/deploy.yaml".to_string()]));
+        let dense = dense_text_first();
+        let a = ask(&g, &l, Some(&dense), None, &["retention".to_string()], &opts());
+        assert!(a.seeds.iter().any(|h| h.id == "file:ops/deploy.yaml"), "{:?}", a.seeds);
+    }
+
+    #[test]
+    fn a_requirement_question_leaves_text_out_of_the_fusion_dense_rows_included() {
+        let g = graph_with_config();
+        let l = lex(&g, &Questions::default());
+        let q = ["штраф", "считается", "политике", "отмены"].map(String::from);
+        assert_eq!(lexical_lists(&l, &q.join(" "), 10, false).text, None);
+        let dense = dense_text_first();
+        let a = ask(&g, &l, Some(&dense), None, &q, &opts());
+        assert!(a.seeds.iter().all(|h| h.id != "file:ops/deploy.yaml"), "{:?}", a.seeds);
+        assert_eq!(a.seeds[0].id, "FR-PAY-22");
+    }
+
+    #[test]
+    fn the_reranked_pool_always_carries_the_text_list() {
+        let g = graph_with_config();
+        let l = lex(&g, &Questions::default());
+        assert!(lexical_lists(&l, "штраф считается политике отмены", 10, true).text.is_some());
     }
 
     #[test]

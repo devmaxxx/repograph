@@ -52,8 +52,17 @@ pub fn tokenize(text: &str) -> Vec<String> {
 }
 
 impl LexicalIndex {
+    /// The passages: every document-side node but a file's own, and not the text files, which are
+    /// an index of their own (`build_text`) so that a configuration file is never a rival for the
+    /// passages' BM25 statistics or their seats.
     pub fn build(graph: &Graph) -> LexicalIndex {
-        Self::build_with(graph, |n| n.kind != NodeKind::File, |n| format!("{} {} {}", n.id, n.label, n.indexed_body()))
+        Self::build_with(graph, |n| !matches!(n.kind, NodeKind::File | NodeKind::Text), |n| format!("{} {} {}", n.id, n.label, n.indexed_body()))
+    }
+
+    /// The text nodes alone, text as the passages carry it. Its coverage is read against the
+    /// passages' by the admission in `query`, so it is scored in its own index and not pooled.
+    pub fn build_text(graph: &Graph) -> LexicalIndex {
+        Self::build_with(graph, |n| n.kind == NodeKind::Text, |n| format!("{} {} {}", n.id, n.label, n.indexed_body()))
     }
 
     /// The documents' questions, and them alone: mixed into the passage text they cost a keyword
@@ -184,6 +193,8 @@ pub struct Lexical {
     pub questions: Option<LexicalIndex>,
     /// Absent when no code node carries a question, or when nobody asked `build` for one yet.
     pub code: Option<LexicalIndex>,
+    /// Absent when the graph holds no text node, which is every store with `text_globs` empty.
+    pub text: Option<LexicalIndex>,
     /// Whether `code` was ever asked for. A plain answer's first build passes `false`: on a
     /// store `enrich --code` touched, building it unasked cost 18.5 ms of a one-shot lexical
     /// `ask`'s 128.3 ms median, for a list the plain fusion never seats (`lexical_lists`) —
@@ -201,7 +212,7 @@ impl Lexical {
         // Built through the same constructor as every other index, not hand-rolled: `build`'s
         // empty-corpus case already carries the `avg_len: 1.0` divide-by-zero guard, pinned by
         // `empty_index_unknown_terms_and_empty_query_all_answer_empty` below.
-        Lexical { passages: LexicalIndex::build(&Graph::default()), questions: None, code: None, code_seat: false }
+        Lexical { passages: LexicalIndex::build(&Graph::default()), questions: None, code: None, text: None, code_seat: false }
     }
 
     /// `code_seat` is the caller's promise that it can use a code list at all: `dump` and `bench`
@@ -210,9 +221,10 @@ impl Lexical {
     /// the plain path.
     pub fn build(graph: &Graph, questions: &Questions, code_seat: bool) -> Lexical {
         let passages = LexicalIndex::build(graph);
-        if questions.entries.is_empty() { return Lexical { passages, questions: None, code: None, code_seat }; }
+        let text = Some(LexicalIndex::build_text(graph)).filter(|t| !t.is_empty());
+        if questions.entries.is_empty() { return Lexical { passages, questions: None, code: None, text, code_seat }; }
         let code = if code_seat { Self::code_index(graph, questions) } else { None };
-        Lexical { passages, questions: Some(LexicalIndex::build_questions(graph, questions)), code, code_seat }
+        Lexical { passages, questions: Some(LexicalIndex::build_questions(graph, questions)), code, text, code_seat }
     }
 
     fn code_index(graph: &Graph, questions: &Questions) -> Option<LexicalIndex> {
@@ -494,13 +506,14 @@ mod tests {
     }
 
     #[test]
-    fn a_text_file_is_a_passage_and_never_a_questions_document() {
+    fn a_text_file_is_an_index_of_its_own_and_never_a_questions_document() {
         let mut g = Graph::default();
         let mut e = Extraction::default();
         e.node(NodeKind::Text, "file:ops/deploy.yaml", "ops/deploy.yaml", "strategy: blue-green\nwindow: saturday\n", "ops/deploy.yaml", 1);
         e.node(NodeKind::Requirement, "FR-1", "cancel", "a visit is cancelled", "a.md", 1);
         g.apply(e);
-        assert_eq!(LexicalIndex::build(&g).search("saturday", 5)[0].0, "file:ops/deploy.yaml");
+        assert!(LexicalIndex::build(&g).search("strategy", 5).is_empty(), "the passages never rank a text file");
+        assert_eq!(LexicalIndex::build_text(&g).search("strategy", 5)[0].0, "file:ops/deploy.yaml");
         let q = LexicalIndex::build_questions(&g, &Questions::default());
         assert!(q.search("file:ops/deploy.yaml", 5).iter().all(|(id, _)| id != "file:ops/deploy.yaml"));
     }
