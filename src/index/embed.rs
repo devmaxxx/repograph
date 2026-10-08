@@ -47,7 +47,7 @@ pub fn switch_owed(named: bool, recorded: Option<&str>, configured: &str) -> boo
 }
 
 fn switch_owed_from(override_: Option<&str>, named: bool, recorded: Option<&str>, configured: &str) -> bool {
-    named && override_.is_none_or(|m| m.trim().is_empty()) && recorded.is_some_and(|m| m.trim() != configured.trim())
+    named && override_.is_none_or(|m| m.trim().is_empty()) && recorded.is_some_and(|m| !m.trim().eq_ignore_ascii_case(configured.trim()))
 }
 
 /// What `ask`, `bench` and `dump` say when the model they opened cannot search the store's rows.
@@ -618,6 +618,7 @@ mod tests {
         let (small, gemma) = ("intfloat/multilingual-e5-small", "onnx-community/embeddinggemma-300m-ONNX");
         assert!(switch_owed_from(None, true, Some(small), gemma));
         assert!(!switch_owed_from(None, true, Some(gemma), gemma), "the store already holds it");
+        assert!(!switch_owed_from(None, true, Some(&gemma.to_uppercase()), gemma), "a model id differing in case is the same model");
         assert!(!switch_owed_from(None, false, Some(gemma), small), "the default never pulls a measured store back");
         assert!(!switch_owed_from(Some(gemma), true, Some(gemma), small), "an override wins over the project file");
         assert!(switch_owed_from(Some(" "), true, Some(small), gemma), "a blank override is no override");
