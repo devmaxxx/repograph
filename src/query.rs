@@ -225,9 +225,15 @@ pub fn ask(graph: &Graph, lex: &Lexical, dense: Option<Dense>, rerank: Option<Re
         let mut dense_text: Vec<String> = Vec::new();
         if opts.dense {
             if let Some(d) = dense {
-                let (rows, questions_rows) = d(&query, depth);
+                // Text rows share the dense passage list, so it is read twice as deep when the store
+                // holds any: a config file in the top `depth` must not cost a requirement its row.
+                let fetch = if lex.text.is_some() { depth * 2 } else { depth };
+                let (rows, mut questions_rows) = d(&query, fetch);
+                questions_rows.truncate(depth);
                 let is_text = |id: &String| graph.nodes.get(id).is_some_and(|n| n.kind == NodeKind::Text);
-                let (text_rows, passages): (Vec<String>, Vec<String>) = rows.into_iter().partition(is_text);
+                let (mut text_rows, mut passages): (Vec<String>, Vec<String>) = rows.into_iter().partition(is_text);
+                passages.truncate(depth);
+                text_rows.truncate(depth);
                 dense_text = text_rows;
                 lists.push(passages);
                 if rerank.is_some() { lists.push(questions_rows); }
