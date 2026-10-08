@@ -13,6 +13,7 @@ mod impact;
 mod install_agent;
 mod index;
 mod legacy;
+mod mcp;
 mod model;
 mod prime;
 mod query;
@@ -202,6 +203,10 @@ enum Cmd {
         #[arg(long, default_value_t = 300, value_parser = depth)] depth: usize,
     },
     ImportLegacy { graph_json: PathBuf },
+    /// A stdio MCP server: `ask`, `explain`, `impact`, `trace` and `changes` as tools, plus
+    /// `status` (what the index is behind by and how far a background refresh has got), `reindex`
+    /// and `switch_model`. Protocol on stdout, diagnostics on stderr; `install-agent` registers it.
+    Mcp,
 }
 
 pub struct Extractors {
@@ -772,20 +777,39 @@ fn code_node<'a>(graph: &'a model::Graph, name: &str) -> anyhow::Result<&'a mode
     Ok(pick)
 }
 
+fn trace_text(graph: &model::Graph, path: &[(String, bool)]) -> String {
+    let mut out = String::new();
+    for (i, (id, passed)) in path.iter().enumerate() {
+        let at = graph.nodes.get(id).map(|n| format!("{}:{}", n.file, n.line)).unwrap_or_default();
+        out.push_str(&format!("{}{id}  {at}{}\n", if i == 0 { "" } else { "  → " }, if *passed { "  passes" } else { "" }));
+    }
+    out
+}
+
 /// The graph an answer is read from: refreshed against the tree unless `--stale` or the refresh
 /// would not fit the reader's budget, and, when the store cannot be written, the stored one with a
 /// warning — the same contract as `ask`. The second value is what the answer is behind by.
 fn graph_for(repo: &std::path::Path, cfg: &config::Config, stale: bool, no_dense: bool) -> anyhow::Result<(model::Graph, Option<refresh::Stale>)> {
+    let (graph, behind, notes) = graph_with_notes(repo, cfg, stale, no_dense)?;
+    for n in notes { eprintln!("{n}"); }
+    Ok((graph, behind))
+}
+
+/// `graph_for` with what it would have said on stderr returned instead, for a caller whose reader
+/// never sees stderr: a refresh that failed or did not start is as much part of the answer as the
+/// files it is behind by.
+fn graph_with_notes(repo: &std::path::Path, cfg: &config::Config, stale: bool, no_dense: bool) -> anyhow::Result<(model::Graph, Option<refresh::Stale>, Vec<String>)> {
     let timing = ask::Timing::new();
     let store = store::Store::new(repo);
     let budget = refresh::Budget::seconds(cfg.reader_budget, no_dense);
+    let mut notes = Vec::new();
     match ask::graph_for_ask(repo, cfg, &store, stale, &timing, &budget) {
         Ok(read) => {
-            if let Some(r) = read.refreshed { eprintln!("refresh: {} changed, {} removed", r.changed, r.removed); }
-            let behind = read.behind.map(|(files, line)| { eprintln!("{line}"); refresh::Stale { files, vectors: 0 } });
-            Ok((read.graph, behind))
+            if let Some(r) = read.refreshed { notes.push(format!("refresh: {} changed, {} removed", r.changed, r.removed)); }
+            let behind = read.behind.map(|(files, line)| { notes.push(line); refresh::Stale { files, vectors: 0 } });
+            Ok((read.graph, behind, notes))
         }
-        Err(err) => { eprintln!("refresh: skipped ({err:#})"); Ok((store.load()?.0, None)) }
+        Err(err) => { notes.push(format!("refresh: skipped ({err:#})")); Ok((store.load()?.0, None, notes)) }
     }
 }
 
@@ -871,6 +895,7 @@ fn run() -> anyhow::Result<()> {
                     store.lock_writer()?
                 }
             };
+            eprintln!("{}", refresh::RUN_MARKER);
             let r = run_update(&repo, &cfg, wipe)?;
             println!("changed {} removed {} nodes {} edges {}", r.changed, r.removed, r.nodes, r.edges);
             if let Some(n) = r.unenriched {
@@ -932,7 +957,7 @@ fn run() -> anyhow::Result<()> {
             match hub_id {
                 None if json => { print!("{}", model_json(&repo, &cfg)?); Ok(()) }
                 None => { print!("{}", model_report(&repo, &cfg)?); Ok(()) }
-                Some(id) => switch_model(&repo, &cfg, &id, no_embed, cli.no_dense),
+                Some(id) => { eprintln!("{}", refresh::RUN_MARKER); switch_model(&repo, &cfg, &id, no_embed, cli.no_dense) }
             }
         }
         Cmd::Ask { words, json, seeds, bodies, rerank, rerank_local, depth, stale, no_serve } => {
@@ -1006,10 +1031,7 @@ fn run() -> anyhow::Result<()> {
             }
             match found {
                 Some(path) => {
-                    for (i, (id, passed)) in path.iter().enumerate() {
-                        let at = graph.nodes.get(id).map(|n| format!("{}:{}", n.file, n.line)).unwrap_or_default();
-                        println!("{}{id}  {at}{}", if i == 0 { "" } else { "  → " }, if *passed { "  passes" } else { "" });
-                    }
+                    print!("{}", trace_text(&graph, &path));
                     Ok(())
                 }
                 None => Err(Verdict(format!("no call path from {} to {} within {depth} hops", a.id, b.id)).into()),
@@ -1052,6 +1074,11 @@ fn run() -> anyhow::Result<()> {
                     n => println!("{target:?}: wrote {n} files\n  {}", r.paths.join("\n  ")),
                 }
                 for note in &r.notes { println!("{target:?}: {note}"); }
+                if target == install_agent::Target::Claude {
+                    let m = install_agent::register_mcp(&repo, &command, &install_agent::run_claude);
+                    for path in &m.paths { println!("Claude: registered the MCP server\n  {path}"); }
+                    for note in &m.notes { println!("Claude: {note}"); }
+                }
                 // Codex reads its hooks from `~/.codex/hooks.json`, which is the machine's and not
                 // this repository's. Printed for a person to paste; see `agent/codex.md`.
                 if target == install_agent::Target::Codex {
@@ -1105,6 +1132,7 @@ fn run() -> anyhow::Result<()> {
             // average is one whose exit code depends on which run a reader looked at.
             if met { Ok(()) } else { Err(Verdict("bench floors not met".to_string()).into()) }
         }
+        Cmd::Mcp => mcp::run(&repo, cli.no_dense),
         Cmd::Dump { queries, out, depth } => dump::run(&repo, &queries, &out, depth, cli.no_dense),
         Cmd::ImportLegacy { graph_json } => {
             let store = store::Store::new(&repo);
