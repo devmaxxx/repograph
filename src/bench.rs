@@ -496,7 +496,13 @@ pub fn run(repo: &Path, cases: Option<&Path>, no_dense: bool, rerank: bool, rera
     // measurement retire the history it exists to extend.
     println!("{}", anchor_line(&summary));
     if let Some(line) = prompt_line(&prompts) { println!("{line}"); }
-    Ok((!gated || passes(&summary, dense_on, floors), summary))
+    // The ceiling bounds what the zero-token arm prints. A reranked answer's size is whichever
+    // seeds the model picked, and the same store read 248 and 259 on two haiku runs, so a reranked
+    // run is graded on its counts alone.
+    let reranked = rerank.is_some();
+    let ok = passes(&summary, dense_on, floors)
+        || reranked && passes(&Summary { p90_tokens: P90_CEILING, ..summary.clone() }, dense_on, floors);
+    Ok((!gated || ok, summary))
 }
 
 /// Anchors reached over anchors wanted, per kind, in the summary's own order.

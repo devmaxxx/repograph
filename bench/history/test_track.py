@@ -212,6 +212,16 @@ class ParseBench(unittest.TestCase):
         self.assertFalse(graded["green"])
         self.assertEqual(track.state_of(graded), "RED")
 
+    def test_a_reranked_run_over_the_token_ceiling_is_graded_on_its_counts(self):
+        table = {(False, True, "gemma"): {"keyword": 40, "paraphrase": 18, "code": 12, "p90_tokens": 250}}
+        line = ("keyword 40/40  paraphrase 29/30  code 12/12  p90 259 tok  dense=true  model=gemma "
+                "rerank=true depth=200  suite=built-in gated=true\n")
+        row = track.build_row(track.parse_bench(line), "beauty-crm", "502e8a6d", "", "abc", False, table)
+        self.assertEqual(row["headroom"]["p90_tokens"], -9)
+        self.assertTrue(row["green"])
+        plain = track.build_row(track.parse_bench(line.replace(" rerank=true depth=200", "")), "beauty-crm", "502e8a6d", "", "abc", False, table)
+        self.assertFalse(plain["green"])
+
     def test_a_transcript_without_the_model_field_is_a_small_model_run(self):
         # A transcript from before the model field existed is what every store was, back then.
         p = track.parse_bench(ENRICHED_NO_MODEL)
