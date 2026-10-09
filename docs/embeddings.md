@@ -96,3 +96,16 @@ The model is opened before anything is written, so an id with no ONNX export fai
 own error and leaves the repository exactly as it was. `repograph.toml` is then rewritten in place —
 only that one value, comments and everything else kept — and the store re-embedded, which
 `--no-embed` stops if you would rather pay for it later.
+
+### Licence
+
+The default's weights are published under the [Gemma Terms of Use](https://ai.google.dev/gemma/terms),
+not an OSI licence: they carry a prohibited-use policy that Google may update, and anyone who
+redistributes the weights passes those terms on. repograph does not redistribute them — the files
+are fetched from the Hugging Face hub onto the machine that runs it, so whoever runs repograph is
+the one taking the terms. The default stays on gemma because it reads arctic's recall on the
+recorded arm for under two fifths of its embed, at 1.3 GB peak RSS ([ADR-003](adr/ADR-003-gemma-is-the-default.md)).
+
+A project whose policy admits only OSI licences pins another model in `repograph.toml`:
+`Snowflake/snowflake-arctic-embed-l-v2.0` (Apache-2.0) for the same or better recall, or
+`intfloat/multilingual-e5-small` (MIT) for the cheapest embed.

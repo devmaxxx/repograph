@@ -46,5 +46,7 @@ OSI licence.
   the 20/30 it read on two rebuilds, the slack the small model's floor has. Its raw
   dense arm was never measured and is not graded. The small model keeps its four rows, and the
   fixture's store is still the small model's.
-- The licence is Gemma's terms, not an OSI one. A project that cannot take that pins the small model
-  or arctic.
+- The licence is Gemma's terms, not an OSI one, and it was weighed and accepted for the default:
+  repograph does not redistribute the weights — the hub download puts them on the user's machine,
+  so the user takes the terms. A project that cannot take them pins the small model or arctic
+  ([Embeddings](../embeddings.md#licence)).
