@@ -83,9 +83,10 @@ pub struct Config {
 // instead — 4 of 333 batches on one corpus, 15 of 359 on another. `--strict-mcp-config` with no
 // `--mcp-config` leaves it none.
 const RERANK_COMMAND: &str = "MAX_THINKING_TOKENS=0 claude -p --model {model} --output-format text --tools \"\" --system-prompt \"You write plain text. You have no tools, no files and no memory: the only thing you can do is print your answer. Do all of the task at once: never ask a question, never ask to confirm, never comment — print only the answer.\" --setting-sources \"\" --strict-mcp-config --no-session-persistence";
-// Picking seeds from a 200-deep pool, the cheap model reads 11/14 against the stronger one's
-// 14/14, so the reranker defaults to the stronger one.
-const RERANK_MODEL: &str = "sonnet";
+// Haiku read 11/14 against sonnet's 14/14 while each candidate was shown its first 120 characters;
+// shown the sentence that matches the question, it reads what sonnet reads for cheaper tokens
+// (docs/adr/ADR-004-haiku-reranks-by-default.md).
+const RERANK_MODEL: &str = "haiku";
 const MODEL_SLOT: &str = "{model}";
 
 impl Default for Config {
@@ -942,7 +943,7 @@ mod tests {
             .unwrap();
             let cfg = Config::load(dir.path()).unwrap();
             assert!(!cfg.rerank_command.contains("evil"), "{}", cfg.rerank_command);
-            assert!(cfg.rerank_command.starts_with("MAX_THINKING_TOKENS=0 claude -p --model sonnet"));
+            assert!(cfg.rerank_command.starts_with("MAX_THINKING_TOKENS=0 claude -p --model haiku"));
         });
     }
 
@@ -980,7 +981,7 @@ mod tests {
         with_machine(Some("rerank_command = \"my-wrapper --model {model}\"\n"), || {
             let dir = tempfile::tempdir().unwrap();
             let cfg = Config::load(dir.path()).unwrap();
-            assert_eq!(cfg.rerank_command, "my-wrapper --model sonnet");
+            assert_eq!(cfg.rerank_command, "my-wrapper --model haiku");
         });
     }
 
