@@ -273,7 +273,14 @@ mod tests {
         let held = store.try_lock_writer().unwrap().expect("nobody holds it yet");
         assert!(store.try_lock_writer().unwrap().is_none(), "a second writer is told it is held");
         drop(held);
-        assert!(store.try_lock_writer().unwrap().is_some(), "dropping the first frees it");
+        // A shell another test spawns in the same instant shares the lock's open file until its
+        // exec, so the release can land a moment late: under load the `command` tests made a
+        // single attempt fail 4 runs in 30. Waiting for it still fails a lock that is never freed.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while store.try_lock_writer().unwrap().is_none() {
+            assert!(std::time::Instant::now() < deadline, "dropping the first frees it");
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
     }
 
     fn graph(label: &str) -> Graph {
