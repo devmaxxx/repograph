@@ -4,6 +4,12 @@ The store's dense index is written by one sentence-embedding model, named by `em
 defaulting to `intfloat/multilingual-e5-small`. This document is what nine candidates for that seat
 read on the bench suite, and what changing the seat costs in time, memory and disk.
 
+> **Since 2026-10-08 the default is `onnx-community/embeddinggemma-300m-ONNX`**
+> ([ADR-003](../adr/ADR-003-gemma-is-the-default.md)). This document is the reading taken while
+> e5-small held the seat. Where it says the default is not changed, or that the project ships
+> arctic, it describes that date: arctic is the documented upgrade, not the default, and the Gemma
+> terms were weighed and accepted for the default (see [Embeddings](../embeddings.md#licence)).
+
 One run per model, sequentially, on an idle machine. Corpus: the pinned fixture beauty-crm at
 `502e8a6d` — Russian requirement documents and a TypeScript monorepo — enriched, 1,996 enriched
 nodes, 33,525 embedded rows. Suite: the 82 cases, 40 keyword, 30 paraphrase, 12 code, against the
