@@ -80,16 +80,17 @@ impl RequirementScanner {
                 end = start + 1 + j;
             }
             let end = end.min(start + 1 + BODY_CAP);
-            let mut body = lines[start + 1..end].join("\n");
             // An ADR's title heading opens on a `Status / Date` table and keeps its reasoning in
             // `## Context` and `## Decision`: stopping at the first heading left the node nothing
             // but the table, and ADR-003 sat at fused rank 299 for a question its Context answers.
             // Only the text reads on; its ids stay the file's prose, since reading them as body
             // references doubled the ADRs' edges and grew every answer that expands through one.
-            if kind_for(id) == NodeKind::Adr && lines[*start].starts_with("# ") {
+            let mut body = if kind_for(id) == NodeKind::Adr && lines[*start].starts_with("# ") {
                 let from = start + 1 + lines[start + 1..next].iter().take_while(|l| l.trim().is_empty() || l.trim_start().starts_with('|')).count();
-                body = lines[from..next.min(from + BODY_CAP)].join("\n");
-            }
+                lines[from..next.min(from + BODY_CAP)].join("\n")
+            } else {
+                lines[start + 1..end].join("\n")
+            };
             if !tail.is_empty() { body = format!("{tail}\n{body}"); }
             in_block[*start..end].fill(true);
             ex.node(kind_for(id), id, title, body.trim(), rel, *start as u32 + 1);
