@@ -11,19 +11,49 @@ pub const DEPTH: usize = 200;
 /// Characters of a candidate's body shown after its title.
 const SNIPPET: usize = 120;
 
-/// What the model sees of a candidate: its title, then the start of its text on one line.
-pub fn text(n: &crate::model::Node) -> String {
+/// The question's stemmed terms, the ones `text` looks for in a candidate's sentences.
+pub fn terms(question: &str) -> std::collections::HashSet<String> {
+    crate::index::lexical::tokenize(question).into_iter().collect()
+}
+
+/// What the model sees of a candidate: its title, then on one line the sentence of its text that
+/// shares the most terms with the question, or the start of the text where no later sentence
+/// shares more. The start alone hid the evidence: NFR-STAFF-04 says «ведомость мастера не видна»
+/// 170 characters in, behind a sentence about attribution, and both models passed it over.
+pub fn text(n: &crate::model::Node, terms: &std::collections::HashSet<String>) -> String {
     let title: String = n.label.chars().take(100).collect();
-    let body: Vec<&str> = n.body.split_whitespace().collect();
-    let mut snippet: String = body.join(" ").chars().take(SNIPPET).collect();
-    if snippet.is_empty() { return title; }
-    if n.body.chars().count() > SNIPPET { snippet.push('…'); }
+    let body = n.body.split_whitespace().collect::<Vec<_>>().join(" ");
+    if body.is_empty() { return title; }
+    let from = best_sentence(&body, terms);
+    let shown = &body[from..];
+    let mut snippet: String = shown.chars().take(SNIPPET).collect();
+    if shown.chars().count() > SNIPPET { snippet.push('…'); }
+    if from > 0 { snippet.insert(0, '…'); }
     format!("{title} — {snippet}")
+}
+
+/// Byte offset of the sentence sharing the most distinct terms with the question; the first
+/// sentence wins a tie, so a body that matches nowhere keeps showing its start.
+fn best_sentence(body: &str, terms: &std::collections::HashSet<String>) -> usize {
+    if terms.is_empty() { return 0; }
+    let mut best = (0, 0);
+    let mut start = 0;
+    let mut chars = body.char_indices().peekable();
+    while let Some((i, c)) = chars.next() {
+        let end = matches!(c, '.' | '!' | '?' | ';') && chars.peek().is_none_or(|&(_, next)| next == ' ');
+        if !end && chars.peek().is_some() { continue; }
+        let stop = i + c.len_utf8();
+        let shared = crate::index::lexical::tokenize(&body[start..stop]).into_iter()
+            .filter(|t| terms.contains(t)).collect::<std::collections::HashSet<_>>().len();
+        if shared > best.1 { best = (start, shared); }
+        start = (stop + 1).min(body.len());
+    }
+    best.0
 }
 
 pub fn prompt(question: &str, candidates: &[(String, String)]) -> String {
     let mut p = format!(
-        "Question: \"{question}\"\nBelow are candidate entries as `id<TAB>title — start of text`. Output the ids \
+        "Question: \"{question}\"\nBelow are candidate entries as `id<TAB>title — excerpt of its text`. Output the ids \
          of up to 5 entries most relevant to the question, one per line, most relevant first. Nothing but ids.\n\n");
     for (id, text) in candidates {
         p.push_str(&format!("{id}\t{text}\n"));
@@ -88,13 +118,13 @@ mod tests {
         let mut x = crate::model::Extraction::default();
         x.node(crate::model::NodeKind::Requirement, "A-1", &"x".repeat(150), &format!("  first\n\n  line   {}", "y".repeat(200)), "f.md", 1);
         let mut n = x.nodes.remove(0);
-        let t = text(&n);
+        let t = text(&n, &Default::default());
         assert!(t.starts_with(&format!("{} — first line yyy", "x".repeat(100))));
         assert!(!t.contains(&"x".repeat(101)));
         assert!(t.ends_with('…'));
         assert_eq!(t.chars().count(), 100 + 3 + SNIPPET + 1);
         n.body.clear();
-        assert_eq!(text(&n), "x".repeat(100));
+        assert_eq!(text(&n, &Default::default()), "x".repeat(100));
     }
 
     #[test]
@@ -121,7 +151,7 @@ mod tests {
         let mut x = crate::model::Extraction::default();
         x.node(crate::model::NodeKind::Requirement, "A-1", "title", "   \n\t  \n", "f.md", 1);
         let n = x.nodes.remove(0);
-        assert_eq!(text(&n), "title");
+        assert_eq!(text(&n, &Default::default()), "title");
     }
 
     #[test]
@@ -131,11 +161,45 @@ mod tests {
         let body: String = "щ".repeat(200);
         x.node(crate::model::NodeKind::Requirement, "A-1", &title, &body, "f.md", 1);
         let n = x.nodes.remove(0);
-        let t = text(&n);
+        let t = text(&n, &Default::default());
         assert!(t.starts_with(&"ж".repeat(100)));
         assert!(!t.starts_with(&"ж".repeat(101)));
         assert_eq!(t.chars().count(), 100 + 3 + SNIPPET + 1);
         assert!(t.ends_with('…'));
+    }
+
+    fn node(body: &str) -> crate::model::Node {
+        let mut x = crate::model::Extraction::default();
+        x.node(crate::model::NodeKind::Requirement, "NFR-STAFF-04", "Приватность и атрибуция.", body, "f.md", 1);
+        x.nodes.remove(0)
+    }
+
+    const PRIVACY: &str = "Всё в разделе атрибутировано актору (INV-12): правка графика, утверждение отсутствия, \
+        изменение ставки, строка ведомости, отметка выплаты. Ведомость мастера не видна другим мастерам ни одним \
+        экраном и ни одним отчётом; `report.staff.compare` — отдельное право.";
+
+    #[test]
+    fn the_snippet_is_the_sentence_that_answers_the_question_not_the_start() {
+        let t = text(&node(PRIVACY), &terms("ведомость мастера не видна"));
+        assert!(t.starts_with("Приватность и атрибуция. — …Ведомость мастера не видна другим мастерам"), "{t}");
+    }
+
+    #[test]
+    fn a_question_sharing_no_word_with_the_body_is_shown_its_start() {
+        let t = text(&node(PRIVACY), &terms("сертификаты подарочные"));
+        assert!(t.starts_with("Приватность и атрибуция. — Всё в разделе атрибутировано"), "{t}");
+    }
+
+    #[test]
+    fn a_tie_keeps_the_earlier_sentence() {
+        let t = text(&node("Мастер видит график. Мастер видит отпуск."), &terms("мастер"));
+        assert_eq!(t, "Приватность и атрибуция. — Мастер видит график. Мастер видит отпуск.");
+    }
+
+    #[test]
+    fn a_full_stop_inside_a_word_does_not_end_a_sentence() {
+        let t = text(&node("Право payroll.view даёт выписку. Ведомость скрыта."), &terms("ведомость скрыта"));
+        assert_eq!(t, "Приватность и атрибуция. — …Ведомость скрыта.");
     }
 
     #[test]
