@@ -5,7 +5,7 @@ mod code;
 mod config;
 mod doc;
 mod dump;
-mod enrich;
+mod command;
 mod families;
 mod rerank;
 mod ids;
@@ -142,8 +142,7 @@ enum Cmd {
         #[arg(long, default_value = "repograph")] command: String,
     },
     /// What a coding agent should be told about this repository at the start of a session: node
-    /// counts, whether the questions are written, which embedder the vectors belong to, how many
-    /// families the documents define, and the five commands. Reads the store; never refreshes.
+    /// counts, which embedder the vectors belong to, how many families the documents define, and the five commands. Reads the store; never refreshes.
     Prime {
         #[arg(long)] json: bool,
     },
@@ -153,23 +152,8 @@ enum Cmd {
     Families {
         #[arg(long)] json: bool,
     },
-    /// Writes reader questions for every requirement-like node through the configured
-    /// command, then re-embeds. Costs model tokens once per passage; nothing per query.
-    Enrich {
-        #[arg(long, default_value_t = 12)] batch: usize,
-        #[arg(long, default_value_t = 8)] parallel: usize,
-        #[arg(long)] limit: Option<usize>,
-        /// Also asks about code: symbols with a doc comment or a body, files with a head comment.
-        #[arg(long)] code: bool,
-        /// Reads the corpus's languages again instead of re-using the list the store was
-        /// enriched under. A list that changes restales every entry, so it is taken once.
-        #[arg(long)] detect_languages: bool,
-        /// Leaves the prompt and the generator's reply of every batch that came back short in
-        /// this directory, as `<first id>.in` and `.out`. `REPOGRAPH_ENRICH_KEEP` does the same.
-        #[arg(long, value_name = "DIR")] keep_raw: Option<std::path::PathBuf>,
-    },
     /// Embeds every row the dense index lacks, without re-reading the tree: a store copied
-    /// without its vectors is re-embedded from its graph and questions alone, which is how a
+    /// without its vectors is re-embedded from its graph alone, which is how a
     /// store is measured under another `REPOGRAPH_EMBED_MODEL`.
     Embed,
     /// Which embedder this store's vectors belong to, and what else has been measured. With a hub
@@ -216,15 +200,16 @@ pub struct Extractors {
     pub text: Box<dyn Extractor>,
 }
 
+/// What `enrich` wrote before 0.6.0 removed it; named so the update that finds one can say so.
+const ORPHAN_QUESTIONS: &str = "questions.json";
+
 pub struct UpdateReport {
     pub changed: usize,
     pub removed: usize,
     pub nodes: usize,
     pub edges: usize,
-    /// Eligible nodes left without questions, when the store has questions for some others.
-    /// Computed here because the graph is already in hand: a writer that re-loaded the store to
-    /// say this would pay a whole graph read on the no-op update a commit hook fires.
-    pub unenriched: Option<usize>,
+    /// A `questions.json` an older binary's `enrich` wrote, which nothing reads any more.
+    pub orphan_questions: bool,
     /// The stamp of the `graph.json` this update wrote, as written.
     pub graph_at: Option<walk::Stamp>,
 }
@@ -334,13 +319,9 @@ pub(crate) fn apply_diff(repo: &std::path::Path, store: &store::Store, graph: &m
     if fresh || headers != recorded {
         headers.save(store)?;
     }
-    // Only when something was re-extracted: a tree that did not move cannot have grown a node
-    // without questions, and the no-op update a commit hook fires should not read the questions
-    // file to be told so.
-    let unenriched = moved
-        .then(|| enrich::Questions::load(store).ok().and_then(|q| enrich::unenriched_note(graph, &q)))
-        .flatten();
-    Ok(UpdateReport { changed: diff.changed.len(), removed: diff.removed.len(), nodes: graph.nodes.len(), edges: graph.edges.len(), unenriched, graph_at })
+    // Only when something was re-extracted, so the no-op update a commit hook fires stays quiet.
+    let orphan_questions = moved && store.stamp(ORPHAN_QUESTIONS).is_some();
+    Ok(UpdateReport { changed: diff.changed.len(), removed: diff.removed.len(), nodes: graph.nodes.len(), edges: graph.edges.len(), orphan_questions, graph_at })
 }
 
 /// The store brought in line with the tree.
@@ -526,9 +507,8 @@ fn run_watch(repo: &std::path::Path, cfg: &config::Config, every: u64, batch: us
                 // takes from a person on a 16 GB laptop, and it used to hold it until exit.
                 if let Some(mut e) = ask::open_embedder(no_dense, &model, threads, index::embed::Weights::Mapped) {
                     let mut idx = index::dense::DenseIndex::load(&w.store)?;
-                    let questions = enrich::Questions::load(&w.store)?;
                     idx.written_by(&model, e.dim()?);
-                    embedded = idx.sync(&w.graph, &questions, &mut |texts| e.embed(texts))?;
+                    embedded = idx.sync(&w.graph, &mut |texts| e.embed(texts))?;
                     idx.synced_against(w.graph_at);
                     // Saved with nothing embedded as well: the refresh moved the graph, and the
                     // claim is what tells the next reader it owes no rows.
@@ -598,12 +578,11 @@ fn embed_opened(repo: &std::path::Path, model: &str, emb: &mut index::embed::Emb
     let store = store::Store::new(repo);
     let graph_at = store.stamp("graph.json");
     let (graph, _) = store.load()?;
-    let questions = enrich::Questions::load(&store)?;
     let mut dense = index::dense::DenseIndex::load(&store)?;
     let t = std::time::Instant::now();
     dense.written_by(model, emb.dim()?);
-    let mut meter = Meter::new(dense.owed(&graph, &questions));
-    let n = dense.sync_chunked(&graph, &questions, &mut |texts| emb.embed_with(texts, &mut |k| meter.add(k)), SYNC_CHUNK, &mut |idx, _| idx.save(&store))?;
+    let mut meter = Meter::new(dense.owed(&graph));
+    let n = dense.sync_chunked(&graph, &mut |texts| emb.embed_with(texts, &mut |k| meter.add(k)), SYNC_CHUNK, &mut |idx, _| idx.save(&store))?;
     dense.synced_against(graph_at);
     dense.save(&store)?;
     println!("dense: embedded {n} rows in {:.1}s", t.elapsed().as_secs_f32());
@@ -654,7 +633,7 @@ fn model_report(repo: &std::path::Path, cfg: &config::Config) -> anyhow::Result<
     }
     if recorded.as_deref().is_some_and(|m| m != cfg.embed_model) {
         out.push_str("\nThe two disagree. The store keeps answering with the model that wrote it; the\n\
-            configured one takes effect at the next `build`, `update`, `enrich`, `embed` or\n\
+            configured one takes effect at the next `build`, `update`, `embed` or\n\
             `watch` (an `ask` starts one when repograph.toml names the model), which drops\n\
             every row the other model wrote and rewrites the index whole.\n");
     }
@@ -912,36 +891,8 @@ fn run() -> anyhow::Result<()> {
             eprintln!("{}", refresh::RUN_MARKER);
             let r = run_update(&repo, &cfg, wipe)?;
             println!("changed {} removed {} nodes {} edges {}", r.changed, r.removed, r.nodes, r.edges);
-            if let Some(n) = r.unenriched {
-                eprintln!("repograph: {n} requirement-like nodes have no questions — run `repograph enrich` to search them");
-            }
-            embed_all(&repo, cli.no_dense, &cfg)
-        }
-        Cmd::Enrich { batch, parallel, limit, code, detect_languages, keep_raw } => {
-            let cfg = load_cfg()?;
-            if let Some(why) = cfg.refusal("enrich_command") { anyhow::bail!(why); }
-            cap_pools(index::embed::threads(cfg.resources));
-            let store = store::Store::new(&repo);
-            let (graph, _) = store.load()?;
-            if graph.nodes.is_empty() { anyhow::bail!("graph is empty — run `repograph build`"); }
-            let questions = enrich::Questions::load(&store)?;
-            // Said before the run because it is the one thing about a 20-minute pass that cannot
-            // be read back off the result: questions in the wrong language look like questions.
-            let (languages, where_from) = match cfg.enrich_languages.is_empty() {
-                false if cfg.enrich_languages_from_env => (cfg.enrich_languages.clone(), "REPOGRAPH_ENRICH_LANGUAGES"),
-                false => (cfg.enrich_languages.clone(), "repograph.toml"),
-                true => enrich::languages_for(&questions, &graph, detect_languages),
-            };
-            eprintln!("enrich: questions in {} ({where_from})", languages.join(", "));
-            let keep = keep_raw.or_else(|| std::env::var_os("REPOGRAPH_ENRICH_KEEP").map(Into::into));
-            let t = std::time::Instant::now();
-            let r = enrich::run(&store, &graph, questions, &cfg.enrich_command, batch, parallel, enrich::Scope { limit, code, keep }, &languages)?;
-            println!("enrich: {} nodes written, {} dropped, {} still without questions, {} batches ({} failed) in {:.0}s", r.generated, r.dropped, r.left, r.batches, r.failed, t.elapsed().as_secs_f32());
-            // A run that was asked to write and wrote nothing has to exit like one, or a campaign
-            // grades a store nobody enriched. `left > 0` is not the condition: a store legitimately
-            // keeps nodes the model declines, and every honest run would then be red.
-            if r.failed > 0 && r.generated == 0 {
-                anyhow::bail!("enrich: {} of {} batches produced nothing — the generator did not answer", r.failed, r.batches);
+            if r.orphan_questions {
+                eprintln!("repograph: .repograph/questions.json and questions.bin are no longer read (enrich was removed in 0.6.0); delete them");
             }
             embed_all(&repo, cli.no_dense, &cfg)
         }
@@ -952,7 +903,7 @@ fn run() -> anyhow::Result<()> {
             // itself, so the check is here rather than in it: a sync against an empty graph
             // marks every row dead and saves an index of nothing, and run before the first
             // `build` it writes a `vectors.*` pair that makes `DenseIndex::present` true over
-            // no rows. `build`, `update` and `enrich` over a tree that yields nothing keep
+            // no rows. `build` and `update` over a tree that yields nothing keep
             // writing their empty graph and exiting 0.
             let (graph, _) = store::Store::new(&repo).load()?;
             if graph.nodes.is_empty() { anyhow::bail!("graph is empty — run `repograph build`"); }
@@ -1073,14 +1024,6 @@ fn run() -> anyhow::Result<()> {
                 (c, x) => [(c, install_agent::Target::Claude), (x, install_agent::Target::Codex)]
                     .into_iter().filter(|(on, _)| *on).map(|(_, t)| t).collect(),
             };
-            // The languages key is read out of `repograph.toml` and written back to it, so a file
-            // this binary cannot read costs the line and not the install.
-            match config::Config::load(&repo) {
-                Ok(cfg) => if let Some(l) = install_agent::set_languages(&repo, &cfg)? {
-                    println!("repograph.toml: enrich_languages = {l:?} (detected from the documents; edit the line to change)");
-                },
-                Err(err) => eprintln!("install-agent: repograph.toml was not read ({err:#}); enrich_languages left unset"),
-            }
             for target in targets {
                 let r = install_agent::install(&repo, target, &command)?;
                 match r.written {
@@ -1118,10 +1061,9 @@ fn run() -> anyhow::Result<()> {
             let store = store::Store::new(&repo);
             let (graph, _) = store.load()?;
             if graph.nodes.is_empty() { anyhow::bail!("graph is empty — run `repograph build`"); }
-            let questions = enrich::Questions::load(&store)?;
             let families = families::of_graph(&graph).0.len();
             let model = index::dense::DenseIndex::recorded_model(&store)?;
-            let b = prime::brief(&graph, &questions, families, model.as_deref());
+            let b = prime::brief(&graph, families, model.as_deref());
             match json {
                 true => println!("{}", b.json()),
                 false => print!("{}", b.text()),
@@ -1230,7 +1172,7 @@ mod tests {
         assert_eq!((r.changed, r.removed), (1, 0));
         let opts = query::Options { seeds: 5, bodies: false, dense: false, json: false, depth: rerank::DEPTH };
         let words = ["refund".to_string(), "window".to_string()];
-        let answer = query::ask(&graph, &index::lexical::Lexical::build(&graph, &enrich::Questions::default(), false), None, None, &words, &opts);
+        let answer = query::ask(&graph, &index::lexical::Lexical::build(&graph), None, None, &words, &opts);
         assert!(query::render(&answer, &graph, &opts).contains("FR-PAY-23"));
         // The store carries the edit too, so the next reader has nothing left to redo.
         assert!(store.load().unwrap().0.nodes.contains_key("FR-PAY-23"));

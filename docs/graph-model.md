@@ -19,19 +19,13 @@ semantics of the three walking commands.
    (see [Embeddings](embeddings.md)). Skipped by `--no-dense`, or when the model cannot be opened —
    no cache and no network (see [Embeddings](embeddings.md) for the fallback rules).
 4. **Fuse.** The lists are interleaved — rank 1 of each, then rank 2 of each — dense passages
-   first, then BM25 over the generated questions (when `enrich` has written any), then BM25 over
-   the passages, and the top seeds survive (with `--rerank`, a model picks them from a 200-deep
-   pool instead — see [Spending tokens on purpose](enrich-and-rerank.md)). Reciprocal rank
-   fusion was measured to bury a retriever's second hit under ids both lists merely agreed on; the
-   interleave lifted paraphrase recall from 5/14 to 6/14 at +2 tokens p90. The question list was
-   measured on 400 held-out generated questions: recall@5 0.445 → 0.515 beside the dense list and
-   0.395 → 0.527 without it (exact McNemar p < 0.001 both), keyword and code cases unchanged, the
-   no-dense paraphrase cases 3/14 → 5/14, at +3 tokens p90 with embeddings and +15 without — all
-   of that on the 14-case set of the day. On the 82 cases recorded since, leading the merge with
-   that list cost the no-dense arm two exact seeds — keyword 39/40 without the questions against
-   37/40 with them — until 2026-09-05, when the questions list was gated on its own confidence;
-   it now reads 39/40 either way. See [Spending tokens on purpose](enrich-and-rerank.md)
-   and the Bench table below.
+   first, then BM25 over the passages, then the text files' list when it covers enough more of
+   the query than the passages do, and the top seeds survive (with `--rerank`, a model picks
+   them from a 200-deep pool instead — see [Spending tokens on purpose](rerank.md)). Reciprocal
+   rank fusion was measured to bury a retriever's second hit under ids both lists merely agreed
+   on; the interleave lifted paraphrase recall from 5/14 to 6/14 at +2 tokens p90. Until 0.6.0 a
+   BM25 list over `enrich`'s generated questions led the lexical lists; it bought one paraphrase
+   case under the default embedder, and was removed with the command.
 5. **Expand.** One hop over `References`, `Implements`, `Declares`, `Links` and `Legacy` edges, in
    both directions, keeping the single neighbour the retrievers ranked best, however far down
    their lists; a neighbour no retriever ranked falls back to its seed's rank. Measured on 400
@@ -46,8 +40,8 @@ The lexical index is built in memory rather than stored on disk, and since 0.5.0
 per context rather than once per question: a one-shot `ask` pays one build, and a resident `serve`
 pays one on the first answer that fuses and then keeps it. Nothing lexical is on disk, so there is
 no stored lexical state to go stale; the copy a context holds is exactly what can drift from the
-graph or the questions, which is why it is dropped rather than refreshed whenever the context takes
-up a moved store — not on a `questions.json` rewrite alone. The
+graph, which is why it is dropped rather than refreshed whenever the context takes up a moved
+store. The
 build costs about 120 ms on a 7,500-node graph. A later sitting bounds that build, the question
 index beside it, their scoring and the fusion at about 49 ms of a 54 ms lexical ask on the bench
 corpus at 8.3k nodes, and a later one still reads the same socket answer at 6.8 ms once the indexes

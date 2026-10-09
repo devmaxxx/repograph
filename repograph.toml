@@ -10,24 +10,19 @@ registries = ["docs/constitution.yaml"]
 # `**FR-PAY-22 · MUST · …**`, `## FR-CAL-40 · …`, a `BE-M01-….md`, a registry row.
 # `repograph families` prints what was derived and what was left as text.
 
-# The two stages that spend model tokens, both opt-in (`repograph enrich`,
-# `ask --rerank`), each a shell command reading its prompt on stdin — and neither is a key this
-# file may set. A repository is something a reader clones, and `enrich_command` is a command that
-# would then run on their machine. They live in ~/.config/repograph/config.toml, whose defaults
-# are the headless Claude Code lines, and any vendor's CLI goes there in their place:
-#   enrich_command = "MAX_THINKING_TOKENS=0 claude -p --model {model} --output-format text --tools \"\" --system-prompt \"You write plain text. You have no tools, no files and no memory: the only thing you can do is print your answer.\" --setting-sources \"\" --no-session-persistence"
+# The one stage that spends model tokens, opt-in (`ask --rerank`), is a shell command reading its
+# prompt on stdin — and not a key this file may set. A repository is something a reader clones,
+# and `rerank_command` is a command that would then run on their machine. It lives in
+# ~/.config/repograph/config.toml, whose default is the headless Claude Code line, and any
+# vendor's CLI goes there in its place:
 #   rerank_command = "codex exec --skip-git-repo-check -m {model} -o /dev/stdout"
 #   rerank_command = "ollama run {model} --hidethinking"
 # What a repository may say is which model that command runs, below.
 
-# `enrich` wants cheap, multilingual and obedient to a line format: haiku's questions read
-# paraphrase 15/30 and the developer suite's `rule` 5/9 where a stronger model reads 17/30 and
-# 2/9 — the register beats the model, and 8-way over ~2k nodes costs ~$2.5. `--rerank` wants
-# reading comprehension over 200 near-duplicate candidates in ~14-19k mostly Cyrillic tokens:
-# sonnet reads paraphrase 29/30 of the 82 cases, haiku 11/14 of the older set, opus 14/14
-# paraphrase but 23/24 keyword. Set once for the machine instead in
-# ~/.config/repograph/config.toml, or for one run with REPOGRAPH_ENRICH_MODEL.
-enrich_model = "haiku"
+# `--rerank` wants reading comprehension over 200 near-duplicate candidates in ~14-19k mostly
+# Cyrillic tokens: sonnet reads paraphrase 29/30 of the 82 cases, haiku 11/14 of the older set,
+# opus 14/14 paraphrase but 23/24 keyword. Set once for the machine instead in
+# ~/.config/repograph/config.toml, or for one run with REPOGRAPH_RERANK_MODEL.
 rerank_model = "sonnet"
 
 # `ask --rerank-local`: a local cross-encoder over the same 200-deep pool, zero tokens. Empty

@@ -195,7 +195,7 @@ per-question query rewrite by the model was measured too — 20/24 keyword, 6/14
 **Keyword is 39, not 40, in both lexical-only arms.** `FR-PH-43` sits at passage rank 23 and no
 lexical path reaches it, enriched or raw. The enriched arm read **37/40** until 2026-09-05, losing
 `FR-WH-53` and `W-206` as well, because the generated-questions list took an equal turn in the
-fusion on questions it had nothing to say about; the gate described under [Spending tokens on purpose](enrich-and-rerank.md)
+fusion on questions it had nothing to say about; the gate described under [Spending tokens on purpose](rerank.md)
 put it level with the raw store. The floor moved to 39 only once it was level — at 37 it stayed 40,
 because 37 was a cost enrichment itself imposed and a floor that blesses one is not a floor. The
 measurement is in [G7](bench/next-version-gaps.md).
@@ -293,7 +293,7 @@ keyword 40/40, paraphrase 15/30, code 12/12 at 220 p90 tokens with embeddings; 3
 at 215 p90 with `--no-dense`, both arms green. Those are the numbers with `enrich`'s generated
 questions in the store — the one thing above that was paid for, roughly $2.5 of Haiku, once. The
 lexical-only arm read **37/40** until 2026-09-05, when the gate described under
-[Spending tokens on purpose](enrich-and-rerank.md) put it level with the raw store; the
+[Spending tokens on purpose](rerank.md) put it level with the raw store; the
 floor it is held to is 39, which [Bench](benchmarks.md#bench) explains. The same corpus indexed and queried at
 zero tokens throughout reads 40/40, 9/30, 12/12 at 221 p90 and 39/40, 7/30, 12/12 at 226;
 [Bench](benchmarks.md#bench) floors each state on its own numbers.

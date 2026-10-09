@@ -280,7 +280,7 @@ test('the rule the hook hands a subagent is the file the installer ships', () =>
 });
 
 test('SessionStart prints the brief, and nothing where there is no store', () => {
-  const w = world({ answer: 'repograph: 3076 doc nodes, 5240 code nodes\nenriched=true (1996/1996 nodes)' });
+  const w = world({ answer: 'repograph: 3076 doc nodes, 5240 code nodes\nmodel=onnx-community/embeddinggemma-300m-ONNX' });
   const c = context(fire(w, { hook_event_name: 'SessionStart', source: 'startup' }));
   assert.ok(c.startsWith('repograph:'), c);
   assert.ok(Buffer.byteLength(c) <= 700, `${Buffer.byteLength(c)} B`);

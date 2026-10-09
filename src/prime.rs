@@ -1,33 +1,26 @@
 //! `repograph prime`: what a coding agent should be told about this repository at the start of a
 //! session, in a few hundred tokens rather than a few thousand. Every number is read off the store
-//! rather than claimed by prose — whether the questions are written, which embedder the vectors
-//! belong to, how many families the documents define — because a brief that is wrong about the
+//! rather than claimed by prose — which embedder the vectors belong to, how many families the documents define — because a brief that is wrong about the
 //! store sends an agent to a command that will answer badly, which is worse than saying nothing.
 //! Reads; never refreshes. A brief that rebuilds is a brief nobody can afford at session start.
-use crate::enrich::{self, Questions};
 use crate::model::{Graph, NodeKind};
 
 pub struct Brief {
     pub docs: usize,
     pub code: usize,
     pub edges: usize,
-    pub covered: usize,
-    pub eligible: usize,
     pub families: usize,
     pub model: Option<String>,
 }
 
 /// Everything the brief says, from the store alone. `model` is the embedder the rows were written
 /// by — `None` for a store with no rows for a name to be wrong about.
-pub fn brief(graph: &Graph, questions: &Questions, families: usize, model: Option<&str>) -> Brief {
+pub fn brief(graph: &Graph, families: usize, model: Option<&str>) -> Brief {
     let count = |f: fn(&NodeKind) -> bool| graph.nodes.values().filter(|n| f(&n.kind)).count();
-    let (covered, eligible) = enrich::coverage(graph, questions);
     Brief {
         docs: count(|k| !matches!(k, NodeKind::File | NodeKind::Symbol | NodeKind::Text)),
         code: count(|k| matches!(k, NodeKind::File | NodeKind::Symbol)),
         edges: graph.edges.len(),
-        covered,
-        eligible,
         families,
         model: model.map(str::to_string),
     }
@@ -37,10 +30,9 @@ impl Brief {
     /// The line a `SessionStart` hook prints. Facts first, then the five commands and the one rule:
     /// an agent that reads only the first line still learns whether this store can answer it.
     pub fn text(&self) -> String {
-        let enriched = enrich::enriched(self.covered, self.eligible);
         format!(
             "repograph: {} doc nodes, {} code nodes, {} edges, {} id families\n\
-             enriched={enriched} ({}/{} nodes)  model={}\n\
+             model={}\n\
              ask <words> — what the docs and code say about it, by meaning not by grep\n\
              impact <symbol> — who calls it, how far, how risky a change is\n\
              changes — what the working diff touches and who reaches it\n\
@@ -51,8 +43,6 @@ impl Brief {
             self.code,
             self.edges,
             self.families,
-            self.covered,
-            self.eligible,
             self.model.as_deref().unwrap_or("unnamed"),
         )
     }
@@ -60,14 +50,10 @@ impl Brief {
     /// The same facts for a hook that would rather not parse prose.
     pub fn json(&self) -> String {
         format!(
-            "{{\"nodes\":{{\"doc\":{},\"code\":{}}},\"edges\":{},\"enriched\":{},\
-             \"questions\":{{\"covered\":{},\"eligible\":{}}},\"families\":{},\"model\":{}}}",
+            "{{\"nodes\":{{\"doc\":{},\"code\":{}}},\"edges\":{},\"families\":{},\"model\":{}}}",
             self.docs,
             self.code,
             self.edges,
-            enrich::enriched(self.covered, self.eligible),
-            self.covered,
-            self.eligible,
             self.families,
             // Through a JSON writer rather than quoted by hand: `embed_model` is never checked
             // for shell safety the way the two command models are — it never reaches a shell — so
@@ -103,34 +89,26 @@ mod tests {
     /// keeps this from growing into it.
     #[test]
     fn the_brief_fits_in_its_own_budget() {
-        let b = brief(&graph(), &Questions::default(), 54, Some("Alibaba-NLP/gte-multilingual-base"));
+        let b = brief(&graph(), 54, Some("Alibaba-NLP/gte-multilingual-base"));
         let t = b.text();
         assert!(t.len() <= BUDGET, "the brief is {} bytes:\n{t}", t.len());
         assert!(t.lines().count() <= 12, "{t}");
     }
 
-    /// A brief that claims an enriched store when the store is raw sends the agent to a command
-    /// that will answer badly. Every number here is one the store can be asked for.
+    /// A brief that misstates the store sends the agent to a command that will answer badly. Every number here is one the store can be asked for.
     #[test]
     fn the_brief_states_the_store_it_actually_read() {
-        let b = brief(&graph(), &Questions::default(), 3, None);
+        let b = brief(&graph(), 3, None);
         let t = b.text();
-        assert!(t.contains("enriched=false (0/2 nodes)"), "{t}");
         assert!(t.contains("model=unnamed"), "a store with no recorded model says so: {t}");
         assert!(t.contains("2 doc nodes, 1 code nodes"), "{t}");
-        assert!(b.json().contains("\"enriched\":false"), "{}", b.json());
         assert!(b.json().contains("\"model\":null"), "{}", b.json());
     }
 
     #[test]
-    fn a_named_model_and_a_full_store_read_as_themselves() {
-        let g = graph();
-        let mut q = Questions::default();
-        for id in ["FR-PAY-22", "FR-PAY-26"] {
-            q.entries.insert(id.into(), crate::enrich::Entry { hash: String::new(), questions: vec!["q".into()] });
-        }
-        let b = brief(&g, &q, 54, Some("intfloat/multilingual-e5-small"));
-        assert!(b.text().contains("enriched=true (2/2 nodes)"), "{}", b.text());
+    fn a_named_model_reads_as_itself() {
+        let b = brief(&graph(), 54, Some("intfloat/multilingual-e5-small"));
+        assert!(b.text().contains("model=intfloat/multilingual-e5-small"), "{}", b.text());
         assert!(b.json().contains("\"model\":\"intfloat/multilingual-e5-small\""), "{}", b.json());
         assert!(b.json().contains("\"families\":54"), "{}", b.json());
     }
@@ -143,7 +121,7 @@ mod tests {
         e.node(NodeKind::Requirement, "FR-1", "cancel", "", "a.md", 1);
         e.node(NodeKind::Text, "file:ops.yaml", "ops.yaml", "deploy: blue\n", "ops.yaml", 1);
         g.apply(e);
-        let b = brief(&g, &crate::enrich::Questions::default(), 0, None);
+        let b = brief(&g, 0, None);
         assert_eq!((b.docs, b.code), (1, 0));
     }
 }

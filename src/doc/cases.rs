@@ -243,7 +243,7 @@ fn multiple_links_stay_in_text_order_after_the_requirement_edges_are_sorted() {
 }
 
 /// A checkout with core.autocrlf=true — Git for Windows' installer default — is the same corpus:
-/// every id, label, body and line number, and so every passage hash a questions.json was written
+/// every id, label, body and line number, and so every passage hash the vectors were written
 /// under. By construction today, since the extractors split with `lines()`; pinned so a slice of
 /// raw text in some future extractor cannot quietly make it false.
 #[test]

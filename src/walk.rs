@@ -45,7 +45,7 @@ const TEXT_REFUSED: [&str; 11] = [
 ];
 
 /// Never read, whatever a glob or `skip` says: files that hold credentials. Their content would
-/// land in `graph.json`, the BM25 and dense indexes, an `enrich` prompt sent to a model, and every
+/// land in `graph.json`, the BM25 and dense indexes, a rerank prompt sent to a model, and every
 /// answer that seeds them. `.gitignore` keeps most of them out already; this is the floor for the
 /// repository that commits one, or is not under git at all.
 /// Matched without regard to case: `.ENV` and `Prod.PEM` hold the same thing.

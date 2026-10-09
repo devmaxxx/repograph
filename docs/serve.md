@@ -60,7 +60,7 @@ The server refreshes before every answer with the same walk a one-shot `ask` doe
 between them like `watch`, so its **graph** is never staler than a fresh process's; `--stale` skips
 that walk and reads the stored graph as it is on disk. It answers one question at a time, and a
 second client waits rather than being turned away. Both reads are decided by `manifest.json`, so a
-running server does not see `enrich` writing `questions.json` or `embed` writing `vectors.*` — stop
+running server does not see `embed` writing `vectors.*` — stop
 it, or ask with `--no-serve`, to answer from the new ones.
 
 The configuration is read once, at start-up. Editing `repograph.toml` stops the server after its

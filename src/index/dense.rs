@@ -1,4 +1,3 @@
-use crate::enrich::Questions;
 use crate::model::{Graph, NodeKind};
 use crate::store::Store;
 use crate::walk::Stamp;
@@ -22,7 +21,8 @@ pub struct DenseIndex {
     /// row holds an empty id until the next compaction closes the gap.
     pub ids: Vec<String>,
     pub hashes: Vec<String>,
-    /// True for a generated-question row; stores written before enrichment existed have none.
+    /// True for a generated-question row, which only a store an older binary enriched holds:
+    /// `search` skips them and the next sync retires them.
     #[serde(default)] pub kinds: Vec<bool>,
     pub dim: usize,
     /// Hub id of the model every row was embedded with. Empty in a store written before the
@@ -47,21 +47,16 @@ pub struct DenseIndex {
     #[serde(skip)] stamp: Option<Stamp>,
 }
 
-/// Every text embedded for a node, e5-prefixed. The passage is the node itself; each generated
-/// question is embedded as a query, since the reader's question is one too (e5's symmetric case).
-/// A file has no passage row — its head comment is for the prompt, not the index — and is
-/// present through its questions alone, once `enrich --code` has asked about it. A text file is
-/// its body in rows of at most `TEXT_ROW_CHARS`: the embedder reads 256 tokens of a row and drops
-/// the rest, so one row would leave everything past a file's first screen unreachable.
-fn rows(n: &crate::model::Node, questions: &Questions) -> Vec<String> {
-    let mut out = Vec::new();
+/// Every text embedded for a node, e5-prefixed. A file has no passage row — its head comment is
+/// for the prompt, not the index. A text file is its body in rows of at most `TEXT_ROW_CHARS`: the
+/// embedder reads 256 tokens of a row and drops the rest, so one row would leave everything past a
+/// file's first screen unreachable.
+fn rows(n: &crate::model::Node) -> Vec<String> {
     match n.kind {
-        NodeKind::File => {}
-        NodeKind::Text => out.extend(text_rows(&n.label, &n.body)),
-        _ => out.push(format!("passage: {}\n{}", n.label, n.indexed_body())),
+        NodeKind::File => Vec::new(),
+        NodeKind::Text => text_rows(&n.label, &n.body),
+        _ => vec![format!("passage: {}\n{}", n.label, n.indexed_body())],
     }
-    out.extend(questions.get(&n.id).iter().map(|q| format!("query: {q}")));
-    out
 }
 
 /// Under 256 tokens for the small model in Cyrillic, its densest script (about 2.5 chars a token).
@@ -168,7 +163,7 @@ impl DenseIndex {
 
     /// The model a store's rows belong to, read from `vectors.json` without loading the rows —
     /// what a reader opens. The configured model takes effect at the next `build`, `update`,
-    /// `enrich`, `embed` or `watch`, which rewrites the index whole.
+    /// `embed` or `watch`, which rewrites the index whole.
     pub fn recorded_model(store: &Store) -> Result<Option<String>> {
         #[derive(serde::Deserialize)]
         struct Written { #[serde(default)] model: String }
@@ -273,12 +268,12 @@ impl DenseIndex {
 
     /// How many rows a `sync` against this graph would embed, without embedding any: what a
     /// reader weighs against its budget before it opens the work, and reports when it does not.
-    pub fn owed(&self, graph: &Graph, questions: &Questions) -> usize {
-        if self.dim == 0 { return graph.nodes.values().map(|n| rows(n, questions).len()).sum(); }
+    pub fn owed(&self, graph: &Graph) -> usize {
+        if self.dim == 0 { return graph.nodes.values().map(|n| rows(n).len()).sum(); }
         let held: std::collections::HashSet<(&str, &str)> =
             self.live.iter().map(|&i| (self.ids[i].as_str(), self.hashes[i].as_str())).collect();
         graph.nodes.values()
-            .map(|n| rows(n, questions).iter().filter(|t| !held.contains(&(n.id.as_str(), blake3::hash(t.as_bytes()).to_hex().as_str()))).count())
+            .map(|n| rows(n).iter().filter(|t| !held.contains(&(n.id.as_str(), blake3::hash(t.as_bytes()).to_hex().as_str()))).count())
             .sum()
     }
 
@@ -289,8 +284,8 @@ impl DenseIndex {
     pub fn checkpointed(&mut self) { self.reindex(); }
 
     #[allow(clippy::type_complexity)]
-    pub fn sync(&mut self, graph: &Graph, questions: &Questions, embed: &mut dyn FnMut(&[String]) -> Result<Vec<Vec<f32>>>) -> Result<usize> {
-        self.sync_chunked(graph, questions, embed, ChunkBudget::rows(usize::MAX), &mut |_, _| Ok(()))
+    pub fn sync(&mut self, graph: &Graph, embed: &mut dyn FnMut(&[String]) -> Result<Vec<Vec<f32>>>) -> Result<usize> {
+        self.sync_chunked(graph, embed, ChunkBudget::rows(usize::MAX), &mut |_, _| Ok(()))
     }
 
     /// `sync`, embedding a `budget`'s worth of rows at a time and calling `after_chunk` after each with the
@@ -305,7 +300,6 @@ impl DenseIndex {
     pub fn sync_chunked(
         &mut self,
         graph: &Graph,
-        questions: &Questions,
         embed: &mut dyn FnMut(&[String]) -> Result<Vec<Vec<f32>>>,
         budget: ChunkBudget,
         after_chunk: &mut dyn FnMut(&mut DenseIndex, Progress) -> Result<()>,
@@ -322,12 +316,11 @@ impl DenseIndex {
         let old: std::collections::HashMap<(&str, &str), usize> =
             self.live.iter().map(|&i| ((self.ids[i].as_str(), self.hashes[i].as_str()), i)).collect();
         for n in graph.nodes.values() {
-            for text in rows(n, questions) {
+            for text in rows(n) {
                 let hash = blake3::hash(text.as_bytes()).to_hex().to_string();
-                let is_q = text.starts_with("query: ");
                 match old.get(&(n.id.as_str(), hash.as_str())).copied() {
                     Some(i) if self.dim > 0 => alive[i] = true,
-                    _ => { todo_ids.push(n.id.clone()); todo_texts.push(text); todo_hashes.push(hash); todo_kinds.push(is_q); }
+                    _ => { todo_ids.push(n.id.clone()); todo_texts.push(text); todo_hashes.push(hash); todo_kinds.push(false); }
                 }
             }
         }
@@ -390,32 +383,25 @@ impl DenseIndex {
         if self.ids.is_empty() { self.dim = 0; }
     }
 
-    /// The passage rows and the question rows ranked separately, a node once per list by its
-    /// best row. Pooling both kinds into one list buries targets: a passage at rank 2 fell to 87
-    /// behind other nodes' question rows.
-    pub fn search(&self, query: &[f32], k: usize) -> (Vec<String>, Vec<String>) {
-        let (passages, generated) = self.search_scored(query, k, None);
-        (passages.into_iter().map(|(id, _)| id).collect(), generated.into_iter().map(|(id, _)| id).collect())
+    /// The passage rows, a node once by its best row.
+    pub fn search(&self, query: &[f32], k: usize) -> Vec<String> {
+        self.search_scored(query, k).into_iter().map(|(id, _)| id).collect()
     }
 
-    /// `search` with each node's best cosine, skipping the rows whose hash is `exclude`: a
-    /// query that is itself a stored question must not be answered by its own row.
-    pub fn search_scored(&self, query: &[f32], k: usize, exclude: Option<&str>) -> (Scored, Scored) {
-        if self.dim == 0 || query.len() != self.dim { return (Vec::new(), Vec::new()); }
+    /// `search` with each node's best cosine.
+    pub fn search_scored(&self, query: &[f32], k: usize) -> Scored {
+        if self.dim == 0 || query.len() != self.dim { return Vec::new(); }
         let mut q = query.to_vec();
         normalise(&mut q);
-        let mut rows: Vec<(f32, &str, bool)> = self.live.iter().copied()
-            .filter(|&i| exclude.is_none_or(|h| self.hashes[i] != *h))
+        let mut rows: Vec<(f32, &str)> = self.live.iter().copied()
+            .filter(|&i| !self.kinds[i])
             .map(|i| {
                 let v = &self.vectors[i * self.dim..(i + 1) * self.dim];
-                (v.iter().zip(&q).map(|(a, b)| a * b).sum::<f32>(), self.ids[i].as_str(), self.kinds[i])
+                (v.iter().zip(&q).map(|(a, b)| a * b).sum::<f32>(), self.ids[i].as_str())
             }).collect();
         rows.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap().then(a.1.cmp(b.1)));
-        let pick = |want: bool| -> Scored {
-            let mut seen = std::collections::HashSet::new();
-            rows.iter().filter(|r| r.2 == want).filter(|r| seen.insert(r.1)).take(k).map(|r| (r.1.to_string(), r.0)).collect()
-        };
-        (pick(false), pick(true))
+        let mut seen = std::collections::HashSet::new();
+        rows.iter().filter(|r| seen.insert(r.1)).take(k).map(|r| (r.1.to_string(), r.0)).collect()
     }
 }
 
@@ -465,7 +451,7 @@ mod tests {
 
     fn synced(g: &Graph) -> DenseIndex {
         let mut idx = DenseIndex::default();
-        idx.sync(g, &Questions::default(), &mut fake).unwrap();
+        idx.sync(g, &mut fake).unwrap();
         idx
     }
 
@@ -493,7 +479,7 @@ mod tests {
     fn sync_chunked_appends_every_row_and_reports_progress_after_each_chunk() {
         let mut idx = DenseIndex::default();
         let mut seen = Vec::new();
-        let n = idx.sync_chunked(&wide(0), &Questions::default(), &mut fake, ChunkBudget::rows(4),
+        let n = idx.sync_chunked(&wide(0), &mut fake, ChunkBudget::rows(4),
             &mut |_, p| { seen.push((p.done, p.total)); Ok(()) }).unwrap();
         assert_eq!(n, 10);
         assert_eq!(seen, vec![(4, 10), (8, 10), (10, 10)]);
@@ -507,16 +493,16 @@ mod tests {
         let store = Store::new(d.path());
         let mut idx = DenseIndex::default();
         // A run killed after its first checkpoint: the rows it embedded are on disk.
-        let err = idx.sync_chunked(&wide(0), &Questions::default(), &mut fake, ChunkBudget::rows(4), &mut |i, _| {
+        let err = idx.sync_chunked(&wide(0), &mut fake, ChunkBudget::rows(4), &mut |i, _| {
             i.save(&store)?;
             anyhow::bail!("interrupted")
         }).unwrap_err().to_string();
         assert!(err.contains("interrupted"), "{err}");
         let mut back = DenseIndex::load(&store).unwrap();
         assert_eq!(back.ids.len(), 4);
-        assert_eq!(back.sync(&wide(0), &Questions::default(), &mut fake).unwrap(), 6, "only what the checkpoint lacks");
+        assert_eq!(back.sync(&wide(0), &mut fake).unwrap(), 6, "only what the checkpoint lacks");
         let q = fake(&["passage: n7x\nтело".to_string()]).unwrap().remove(0);
-        assert_eq!(back.search_scored(&q, 10, None), synced(&wide(0)).search_scored(&q, 10, None));
+        assert_eq!(back.search_scored(&q, 10), synced(&wide(0)).search_scored(&q, 10));
     }
 
     #[test]
@@ -542,7 +528,7 @@ mod tests {
         idx.synced_against(Some(at));
         // Another model: every row goes, and the graph `at` names is embedded again from nothing.
         idx.written_by("another/model", 3);
-        let err = idx.sync_chunked(&wide(0), &Questions::default(), &mut fake, ChunkBudget::rows(4), &mut |i, _| {
+        let err = idx.sync_chunked(&wide(0), &mut fake, ChunkBudget::rows(4), &mut |i, _| {
             i.save(&store)?;
             anyhow::bail!("interrupted")
         }).unwrap_err().to_string();
@@ -555,7 +541,7 @@ mod tests {
     #[test]
     fn a_chunked_sync_over_an_edited_store_leaves_the_same_holes_as_a_plain_one() {
         let mut idx = synced(&wide(0));
-        assert_eq!(idx.sync_chunked(&wide(1), &Questions::default(), &mut fake, ChunkBudget::rows(3), &mut |_, _| Ok(())).unwrap(), 1);
+        assert_eq!(idx.sync_chunked(&wide(1), &mut fake, ChunkBudget::rows(3), &mut |_, _| Ok(())).unwrap(), 1);
         assert_eq!(idx.free, vec![0]);
         assert_eq!(idx.live, (1..11).collect::<Vec<_>>());
     }
@@ -563,10 +549,10 @@ mod tests {
     #[test]
     fn sync_is_sync_chunked_with_one_chunk() {
         let mut plain = DenseIndex::default();
-        let n = plain.sync(&wide(0), &Questions::default(), &mut fake).unwrap();
+        let n = plain.sync(&wide(0), &mut fake).unwrap();
         let mut chunked = DenseIndex::default();
         let mut seen = Vec::new();
-        let m = chunked.sync_chunked(&wide(0), &Questions::default(), &mut fake, ChunkBudget::rows(usize::MAX),
+        let m = chunked.sync_chunked(&wide(0), &mut fake, ChunkBudget::rows(usize::MAX),
             &mut |_, p| { seen.push((p.done, p.total)); Ok(()) }).unwrap();
         assert_eq!((m, seen), (n, vec![(n, n)]));
         assert_eq!((chunked.ids, chunked.vectors), (plain.ids, plain.vectors));
@@ -575,24 +561,24 @@ mod tests {
     #[test]
     fn sync_embeds_only_changed_nodes_and_drops_removed_ones() {
         let mut idx = DenseIndex::default();
-        assert_eq!(idx.sync(&graph("политика"), &Questions::default(), &mut fake).unwrap(), 2);
+        assert_eq!(idx.sync(&graph("политика"), &mut fake).unwrap(), 2);
         assert_eq!(idx.ids.len(), 2);
-        assert_eq!(idx.sync(&graph("политика"), &Questions::default(), &mut fake).unwrap(), 0);
-        assert_eq!(idx.sync(&graph("другое"), &Questions::default(), &mut fake).unwrap(), 1);
+        assert_eq!(idx.sync(&graph("политика"), &mut fake).unwrap(), 0);
+        assert_eq!(idx.sync(&graph("другое"), &mut fake).unwrap(), 1);
         let mut g = graph("другое");
         g.remove_file("a.md");
-        assert_eq!(idx.sync(&g, &Questions::default(), &mut fake).unwrap(), 0);
+        assert_eq!(idx.sync(&g, &mut fake).unwrap(), 0);
         assert!(idx.ids.is_empty() && idx.vectors.is_empty());
     }
 
     #[test]
     fn owed_counts_the_rows_a_sync_would_embed_and_embeds_none() {
         let mut idx = DenseIndex::default();
-        assert_eq!(idx.owed(&wide(0), &Questions::default()), 10, "an empty index owes every row");
-        idx.sync(&wide(0), &Questions::default(), &mut fake).unwrap();
-        assert_eq!(idx.owed(&wide(0), &Questions::default()), 0);
-        assert_eq!(idx.owed(&wide(3), &Questions::default()), 3);
-        assert_eq!(idx.sync(&wide(3), &Questions::default(), &mut fake).unwrap(), 3, "the count is the sync's own");
+        assert_eq!(idx.owed(&wide(0)), 10, "an empty index owes every row");
+        idx.sync(&wide(0), &mut fake).unwrap();
+        assert_eq!(idx.owed(&wide(0)), 0);
+        assert_eq!(idx.owed(&wide(3)), 3);
+        assert_eq!(idx.sync(&wide(3), &mut fake).unwrap(), 3, "the count is the sync's own");
     }
 
     /// A reader out of budget stops its sync after a chunk. What it answers from then is the old
@@ -600,14 +586,14 @@ mod tests {
     #[test]
     fn a_stopped_sync_answers_from_old_and_new_rows_and_the_next_embeds_only_the_rest() {
         let mut idx = DenseIndex::default();
-        idx.sync(&wide(0), &Questions::default(), &mut fake).unwrap();
-        let stopped = idx.sync_chunked(&wide(10), &Questions::default(), &mut fake, ChunkBudget::rows(4),
+        idx.sync(&wide(0), &mut fake).unwrap();
+        let stopped = idx.sync_chunked(&wide(10), &mut fake, ChunkBudget::rows(4),
             &mut |_, p| if p.done < p.total { anyhow::bail!("out of budget") } else { Ok(()) });
         assert!(stopped.is_err());
         idx.checkpointed();
         assert_eq!(idx.live.len(), 14, "ten old rows and the four the stopped sync appended");
-        assert_eq!(idx.owed(&wide(10), &Questions::default()), 6);
-        assert_eq!(idx.sync(&wide(10), &Questions::default(), &mut fake).unwrap(), 6);
+        assert_eq!(idx.owed(&wide(10)), 6);
+        assert_eq!(idx.sync(&wide(10), &mut fake).unwrap(), 6);
         assert_eq!(idx.live.len(), 10, "the replaced rows are retired by the sync that finished");
     }
 
@@ -619,7 +605,7 @@ mod tests {
         idx.written_by("BAAI/bge-m3", 3);
         assert!(idx.ids.is_empty() && idx.vectors.is_empty() && idx.dim == 0, "another model's rows cannot be appended to");
         assert_eq!(idx.model, "BAAI/bge-m3");
-        assert_eq!(idx.sync(&graph("x"), &Questions::default(), &mut fake).unwrap(), 2);
+        assert_eq!(idx.sync(&graph("x"), &mut fake).unwrap(), 2);
         idx.written_by("BAAI/bge-m3", 3);
         assert_eq!(idx.ids.len(), 2, "the same model keeps its rows");
     }
@@ -637,7 +623,7 @@ mod tests {
         idx.written_by(crate::index::embed::UNNAMED_MODEL, 5);
         assert!(idx.ids.is_empty() && idx.vectors.is_empty() && idx.dim == 0,
             "rows of another width cannot be appended to, whatever the name says");
-        assert_eq!(idx.sync(&graph("x"), &Questions::default(), &mut fake_wide).unwrap(), 2);
+        assert_eq!(idx.sync(&graph("x"), &mut fake_wide).unwrap(), 2);
         assert_eq!(idx.dim, 5);
     }
 
@@ -647,7 +633,7 @@ mod tests {
         let store = Store::new(dir.path());
         let mut idx = synced(&graph("x"));
         idx.written_by("BAAI/bge-m3", 3);
-        idx.sync(&graph("x"), &Questions::default(), &mut fake).unwrap();
+        idx.sync(&graph("x"), &mut fake).unwrap();
         idx.save(&store).unwrap();
         assert_eq!(DenseIndex::recorded_model(&store).unwrap().as_deref(), Some("BAAI/bge-m3"));
         assert_eq!(DenseIndex::load(&store).unwrap().model, "BAAI/bge-m3");
@@ -659,7 +645,7 @@ mod tests {
         let store = Store::new(dir.path());
         let mut idx = synced(&graph("x"));
         idx.written_by("BAAI/bge-m3", 3);
-        idx.sync(&graph("x"), &Questions::default(), &mut fake).unwrap();
+        idx.sync(&graph("x"), &mut fake).unwrap();
         idx.save(&store).unwrap();
         // A crash between the two writes leaves metadata naming more rows than the file holds.
         // The rows are gone either way; the name must not be, or `ask` reads the store as
@@ -694,36 +680,23 @@ mod tests {
             "an unnamed store holds the small model's rows, so a reader opens the small model");
         let mut idx = synced(&graph("x"));
         idx.written_by("BAAI/bge-m3", 3);
-        idx.sync(&graph("x"), &Questions::default(), &mut fake).unwrap();
+        idx.sync(&graph("x"), &mut fake).unwrap();
         idx.save(&store).unwrap();
         assert_eq!(DenseIndex::recorded_model(&store).unwrap().as_deref(), Some("BAAI/bge-m3"));
-    }
-
-    #[test]
-    fn a_file_has_no_passage_row_and_is_present_through_its_questions() {
-        let mut idx = DenseIndex::default();
-        assert_eq!(idx.sync(&graph("x"), &Questions::default(), &mut fake).unwrap(), 2, "two requirements, no row for the file");
-        let mut q = Questions::default();
-        q.entries.insert("file:a.md".into(), crate::enrich::Entry { hash: String::new(), questions: vec!["где список".into()] });
-        assert_eq!(idx.sync(&graph("x"), &q, &mut fake).unwrap(), 1);
-        let v = fake(&["query: где список".to_string()]).unwrap().remove(0);
-        let (passages, questions) = idx.search(&v, 3);
-        assert_eq!(questions[0], "file:a.md");
-        assert!(!passages.contains(&"file:a.md".to_string()));
     }
 
     #[test]
     fn search_is_cosine_descending() {
         let idx = synced(&graph("x"));
         let q = fake(&["штраф".to_string()]).unwrap().remove(0);
-        assert_eq!(idx.search(&q, 2).0[0], "FR-PAY-26");
+        assert_eq!(idx.search(&q, 2)[0], "FR-PAY-26");
     }
 
     #[test]
     fn an_append_leaves_the_surviving_rows_at_their_offsets() {
         let mut idx = synced(&wide(0));
         let before = idx.vectors.clone();
-        assert_eq!(idx.sync(&wide(1), &Questions::default(), &mut fake).unwrap(), 1);
+        assert_eq!(idx.sync(&wide(1), &mut fake).unwrap(), 1);
         assert_eq!(idx.free, vec![0]);
         assert_eq!(idx.ids.len(), 11);
         assert_eq!(idx.vectors[idx.dim..before.len()], before[idx.dim..]);
@@ -735,8 +708,8 @@ mod tests {
     fn a_dead_row_is_never_returned() {
         let mut idx = synced(&wide(0));
         let stale = fake(&["passage: n0x\nтело".to_string()]).unwrap().remove(0);
-        idx.sync(&wide(1), &Questions::default(), &mut fake).unwrap();
-        let (passages, _) = idx.search(&stale, 20);
+        idx.sync(&wide(1), &mut fake).unwrap();
+        let passages = idx.search(&stale, 20);
         assert_eq!(passages.len(), 10, "one row per live node, the hole scanned by nobody");
         assert!(!passages.iter().any(|id| id.is_empty()));
     }
@@ -745,12 +718,12 @@ mod tests {
     fn compaction_fires_past_the_hole_share_and_searches_identically() {
         let mut idx = synced(&wide(0));
         // Three of ten rows die at once: past a quarter of the live rows, so the holes close.
-        idx.sync(&wide(3), &Questions::default(), &mut fake).unwrap();
+        idx.sync(&wide(3), &mut fake).unwrap();
         assert!(idx.free.is_empty());
         assert_eq!(idx.ids.len(), 10);
         let fresh = synced(&wide(3));
         let q = fake(&["passage: n7x\nтело".to_string()]).unwrap().remove(0);
-        assert_eq!(idx.search_scored(&q, 10, None), fresh.search_scored(&q, 10, None));
+        assert_eq!(idx.search_scored(&q, 10), fresh.search_scored(&q, 10));
     }
 
     #[test]
@@ -761,7 +734,7 @@ mod tests {
         idx.save(&store).unwrap();
         let rows = d.path().join(".repograph/vectors.f32");
         let before = std::fs::read(&rows).unwrap();
-        idx.sync(&wide(1), &Questions::default(), &mut fake).unwrap();
+        idx.sync(&wide(1), &mut fake).unwrap();
         idx.save(&store).unwrap();
         let after = std::fs::read(&rows).unwrap();
         assert_eq!(after.len(), before.len() + idx.dim * 4, "one row longer, nothing rewritten");
@@ -769,7 +742,7 @@ mod tests {
         let back = DenseIndex::load(&store).unwrap();
         let q = fake(&["passage: n4x\nтело".to_string()]).unwrap().remove(0);
         assert_eq!(back.free, vec![0]);
-        assert_eq!(back.search_scored(&q, 10, None), idx.search_scored(&q, 10, None));
+        assert_eq!(back.search_scored(&q, 10), idx.search_scored(&q, 10));
     }
 
     #[test]
@@ -784,7 +757,7 @@ mod tests {
         let back = DenseIndex::load(&store).unwrap();
         assert_eq!(back.kinds, vec![false, false]);
         let q = fake(&["штраф".to_string()]).unwrap().remove(0);
-        assert_eq!(back.search(&q, 2).0[0], "FR-PAY-26");
+        assert_eq!(back.search(&q, 2)[0], "FR-PAY-26");
     }
 
     #[test]
@@ -807,79 +780,28 @@ mod tests {
         let mut back = DenseIndex::load(&store).unwrap();
         assert_eq!(back.vectors.len(), 10 * back.dim);
         let q = fake(&["passage: n4x\nтело".to_string()]).unwrap().remove(0);
-        assert_eq!(back.search_scored(&q, 10, None), idx.search_scored(&q, 10, None));
-        back.sync(&wide(1), &Questions::default(), &mut fake).unwrap();
+        assert_eq!(back.search_scored(&q, 10), idx.search_scored(&q, 10));
+        back.sync(&wide(1), &mut fake).unwrap();
         back.save(&store).unwrap();
         assert_eq!(std::fs::metadata(&rows).unwrap().len() as usize, good.len() + back.dim * 4);
         assert_eq!(DenseIndex::load(&store).unwrap().ids, back.ids);
     }
 
-    // The fake embeds the first three bytes, so a question row starting with "query: " lands far
-    // from a passage row; a query shaped like the question reaches the node through the question
-    // list alone, and once however many of its rows match.
+    // A store an older binary enriched holds question rows; the probe is one of them exactly, so
+    // a search that read it would score 1.0.
     #[test]
-    fn a_question_row_answers_for_its_node_once() {
-        let mut idx = DenseIndex::default();
-        let mut q = Questions::default();
-        q.entries.insert("FR-PAY-22".into(), crate::enrich::Entry { hash: String::new(), questions: vec!["a".into(), "b".into()] });
-        assert_eq!(idx.sync(&graph("x"), &q, &mut fake).unwrap(), 4);
-        let probe = fake(&["query: z".to_string()]).unwrap().remove(0);
-        let (passages, generated) = idx.search(&probe, 5);
-        assert_eq!(generated, vec!["FR-PAY-22".to_string()]);
-        assert_eq!(passages.len(), 2);
-        // Dropping the questions re-embeds nothing and forgets the question rows.
-        assert_eq!(idx.sync(&graph("x"), &Questions::default(), &mut fake).unwrap(), 0);
-        assert_eq!(idx.ids.len(), 2);
-    }
-
-    // The probe is the stored question "a" itself; excluded by its hash, the node is reached
-    // only through its other question row, and the passage list does not move.
-    #[test]
-    fn excluding_a_row_by_hash_leaves_the_node_to_its_other_rows() {
-        let mut idx = DenseIndex::default();
-        let mut q = Questions::default();
-        q.entries.insert("FR-PAY-22".into(), crate::enrich::Entry { hash: String::new(), questions: vec!["a".into(), "bz".into()] });
-        idx.sync(&graph("x"), &q, &mut fake).unwrap();
-        let probe = fake(&["query: a".to_string()]).unwrap().remove(0);
-        let own = blake3::hash(b"query: a").to_hex().to_string();
-        let (with, _) = idx.search_scored(&probe, 5, None);
-        let (passages, generated) = idx.search_scored(&probe, 5, Some(&own));
-        assert_eq!(generated.iter().map(|(id, _)| id.as_str()).collect::<Vec<_>>(), vec!["FR-PAY-22"]);
-        assert!(generated[0].1 < 1.0 - 1e-6, "the surviving row is not the probe itself");
-        assert_eq!(passages.iter().map(|(id, _)| id.as_str()).collect::<Vec<_>>(), with.iter().map(|(id, _)| id.as_str()).collect::<Vec<_>>());
-        q.entries.get_mut("FR-PAY-22").unwrap().questions.truncate(1);
-        idx.sync(&graph("x"), &q, &mut fake).unwrap();
-        assert!(idx.search_scored(&probe, 5, Some(&own)).1.is_empty());
-    }
-
-    #[test]
-    fn round_trips_through_the_store() {
-        let d = tempfile::tempdir().unwrap();
-        let store = Store::new(d.path());
+    fn a_question_row_an_older_binary_wrote_is_never_returned_and_the_next_sync_retires_it() {
         let mut idx = synced(&graph("x"));
-        idx.save(&store).unwrap();
-        let back = DenseIndex::load(&store).unwrap();
-        assert_eq!(back.ids, idx.ids);
-        assert_eq!(back.vectors, idx.vectors);
-        assert_eq!(back.dim, 3);
-    }
-
-    #[test]
-    fn loading_with_nothing_on_disk_yields_a_default_index() {
-        let d = tempfile::tempdir().unwrap();
-        let idx = DenseIndex::load(&Store::new(d.path())).unwrap();
-        assert!(idx.ids.is_empty() && idx.vectors.is_empty() && idx.dim == 0);
-    }
-
-    #[test]
-    fn a_torn_pair_missing_its_vectors_file_is_treated_as_no_index() {
-        let d = tempfile::tempdir().unwrap();
-        let store = Store::new(d.path());
-        let idx = synced(&graph("x"));
-        // Only the metadata half is written, simulating a write interrupted between the two files.
-        store.write_atomic("vectors.json", &serde_json::to_vec(&idx).unwrap()).unwrap();
-        let back = DenseIndex::load(&store).unwrap();
-        assert!(back.ids.is_empty() && back.vectors.is_empty());
+        let mut v = fake(&["query: a".to_string()]).unwrap().remove(0);
+        normalise(&mut v);
+        idx.ids.push("FR-PAY-22".into());
+        idx.hashes.push("q".into());
+        idx.kinds.push(true);
+        idx.vectors.extend(&v);
+        idx.reindex();
+        assert!(idx.search_scored(&v, 5).iter().all(|(_, s)| *s < 1.0 - 1e-6));
+        assert_eq!(idx.sync(&graph("x"), &mut fake).unwrap(), 0, "nothing to embed");
+        assert!(idx.live.iter().all(|&i| !idx.kinds[i]), "the question row is retired");
     }
 
     #[test]
@@ -893,17 +815,16 @@ mod tests {
     }
 
     #[test]
-    fn a_query_of_the_wrong_dimension_yields_empty_lists_not_a_panic() {
+    fn a_query_of_the_wrong_dimension_yields_an_empty_list_not_a_panic() {
         let idx = synced(&graph("x"));
-        let (passages, generated) = idx.search(&[1.0, 2.0], 5);
-        assert!(passages.is_empty() && generated.is_empty());
+        assert!(idx.search(&[1.0, 2.0], 5).is_empty());
     }
 
     #[test]
     fn k_larger_than_the_collection_returns_every_row_without_padding() {
         let idx = synced(&graph("x"));
         let q = fake(&["штраф".to_string()]).unwrap().remove(0);
-        let (passages, _) = idx.search(&q, 1000);
+        let passages = idx.search(&q, 1000);
         assert_eq!(passages.len(), 2);
     }
 
@@ -917,7 +838,7 @@ mod tests {
         g.apply(e);
         let idx = synced(&g);
         let q = fake(&["z".to_string()]).unwrap().remove(0);
-        let (passages, _) = idx.search(&q, 5);
+        let passages = idx.search(&q, 5);
         assert_eq!(passages, vec!["FR-PAY-11".to_string(), "FR-PAY-99".to_string()]);
     }
 

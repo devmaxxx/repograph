@@ -8,13 +8,13 @@ implemented rather than planned:
 `build` (a full re-read that replaces the stored graph only when it saves, so one interrupted
 leaves the previous store answering) and `update` (incremental; a no-op `update` is a fixed point), `families`, `ask`, `explain`,
 `verify`, `impact`, `trace`, `changes`, `embed`, `watch`, `serve`, `mcp`, `prime`, `install-agent`,
-`import-legacy`, `dump` and `bench`. Three spend model tokens and all three are opt-in: `enrich`,
-`ask --rerank`, and `ask --rerank-local` (zero tokens, a local cross-encoder, measured and rejected
-as a floor candidate). `bench` fails the process when a floor in [Bench](benchmarks.md#bench) is missed; floors
-are keyed by enrichment and by the store's embedder, and a store under any other model is measured
-and not graded.
+`import-legacy`, `dump` and `bench`. Two rerank the fused pool and both are opt-in: `ask --rerank`,
+which spends model tokens, and `ask --rerank-local` (zero tokens, a local cross-encoder, measured and
+rejected as a floor candidate). `bench` fails the process when a floor in [Bench](benchmarks.md#bench) is missed;
+floors are keyed by the store's embedder, and a store under any other model is measured and not
+graded. `enrich` was removed in 0.6.0: an older store's `questions.json` is no longer read.
 
-`--no-dense` skips the embedding stage everywhere it could apply — `build`, `update`, `enrich`,
+`--no-dense` skips the embedding stage everywhere it could apply — `build`, `update`,
 `embed`, `watch`, `serve`, `ask`, `bench`, `dump`. Without it, those commands use local embeddings
 once the model is cached (see [Embeddings](embeddings.md)).
 
@@ -100,7 +100,7 @@ so a field can be added without breaking a parser written against the version be
 | `explain --json` | `id`, `kind`, `label`, `file`, `line`, `community`, `edges` |
 | `verify --json` | `nodes`, `edges`, `nodes_by_kind`, `edges_by_kind`, `dangling`, `undeclared`, `gaps`, `cite_only`, `held_aside`, `held_aside_prefixes` |
 | `trace --json` | `from`, `to`, `depth`, `path` |
-| `prime --json` | `nodes`, `edges`, `enriched`, `questions`, `families`, `model` |
+| `prime --json` | `nodes`, `edges`, `families`, `model` |
 | `model --json` | `store`, `configured`, `configured_from`, `this_run`, `agrees`, `recommended` |
 
 `explain --json` resolves each edge's direction for you — `dir` is `in` or `out` and `other` is the

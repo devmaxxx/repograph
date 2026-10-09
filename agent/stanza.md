@@ -16,7 +16,7 @@ Every one takes `--json`. `ask` and the rest bring the index in line with the tr
 freshness is not your problem; `--stale` skips that when you want the answer now.
 
 **Ask the graph before you grep for a concept, and read only the `path:line` it prints.** Grep is
-still right for a literal — an env var, a string in a test, a config key. Two stages cost model
-tokens and are opt-in: `enrich` writes the questions once, `ask --rerank` picks seeds from a deep
-pool per question. Everything above is free.
+still right for a literal — an env var, a string in a test, a config key. One stage costs model
+tokens and is opt-in: `ask --rerank` picks seeds from a deep pool per question. Everything above is
+free.
 <!-- repograph:end -->
