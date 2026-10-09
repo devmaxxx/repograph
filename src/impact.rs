@@ -902,7 +902,7 @@ mod walk_cases {
         e.node_span(NodeKind::Symbol, "sym:db/0002.sql::app/clients.status", "app/clients.status", "", "db/0002.sql", (1, 1));
         e.edge("sym:db/0002.sql::app/clients.status", "sym:db/0001.sql::app/clients", EdgeKind::References, "", "db/0002.sql");
         g.apply(e);
-        let r = report(&g, &[Hunk { file: "db/0001.sql".into(), start: 1, end: 1, comment_only: false }], 3);
+        let r = report(&g, &[Hunk::code("db/0001.sql", 1, 1)], 3);
         let affected: Vec<(&str, EdgeKind)> = r.affected.iter().map(|d| (d.id.as_str(), d.kind)).collect();
         assert_eq!(affected, [("sym:db/0002.sql::app/clients.status", EdgeKind::References)]);
         assert!(r.files.contains("db/0002.sql") && !r.files.contains("db/0001.sql"), "{:?}", r.files);
@@ -976,7 +976,7 @@ mod walk_cases {
         assert_eq!(ids(downstream(&g, "sym:brief.ts::BriefService.get", 3).layers), ["sym:r.ts::repo.applyEdit"]);
         assert_eq!(trace(&g, "sym:brief.ts::BriefService.get", "sym:l.ts::lockOverlapGroup", 6), None);
         assert_eq!(ids(downstream(&g, "sym:move.ts::applyMove", 3).layers), ["sym:r.ts::repo.recompute", "sym:l.ts::recomputeOverlapFlags"]);
-        let changed = crate::changes::report(&g, &[crate::changes::Hunk { file: "r.ts".into(), start: 4, end: 4, comment_only: false }], 3);
+        let changed = crate::changes::report(&g, &[crate::changes::Hunk::code("r.ts", 4, 4)], 3);
         assert_eq!(changed.touched, ["sym:r.ts::repo.lock"]);
         assert_eq!(changed.affected.into_iter().map(|d| d.id).collect::<Vec<_>>(), ["sym:guard.ts::guard"]);
     }
@@ -994,7 +994,7 @@ mod walk_cases {
             for to in symbols.iter().filter(|&&t| t != from) {
                 let up = ids(upstream(&g, to, 3).layers);
                 let line = g.nodes[*to].line;
-                let changed = crate::changes::report(&g, &[crate::changes::Hunk { file: g.nodes[*to].file.clone(), start: line, end: line, comment_only: false }], 3);
+                let changed = crate::changes::report(&g, &[crate::changes::Hunk::code(g.nodes[*to].file.clone(), line, line)], 3);
                 let traced = trace(&g, from, to, 3).is_some();
                 let reached = [down.iter().any(|d| d == to), up.iter().any(|u| u == from), changed.affected.iter().any(|d| d.id == from)];
                 assert_eq!(reached, [traced; 3], "{from} → {to}: down, up, changes against trace");
@@ -1112,7 +1112,7 @@ mod walk_cases {
             for to in symbols.iter().filter(|&&t| t != from) {
                 let up = ids(upstream(&g, to, 3).layers);
                 let line = g.nodes[*to].line;
-                let changed = crate::changes::report(&g, &[crate::changes::Hunk { file: g.nodes[*to].file.clone(), start: line, end: line, comment_only: false }], 3);
+                let changed = crate::changes::report(&g, &[crate::changes::Hunk::code(g.nodes[*to].file.clone(), line, line)], 3);
                 let traced = trace(&g, from, to, 3).is_some();
                 let reached = [down.iter().any(|d| d == to), up.iter().any(|u| u == from), changed.affected.iter().any(|d| d.id == from)];
                 assert_eq!(reached, [traced; 3], "{from} → {to}: down, up, changes against trace");
@@ -1161,7 +1161,7 @@ mod walk_cases {
     #[test]
     fn changes_to_a_symbol_name_it_as_the_via_of_a_caller_of_its_undeclared_member() {
         let g = keys();
-        let r = crate::changes::report(&g, &[crate::changes::Hunk { file: "keys.ts".into(), start: 1, end: 1, comment_only: false }], 3);
+        let r = crate::changes::report(&g, &[crate::changes::Hunk::code("keys.ts", 1, 1)], 3);
         assert_eq!(r.touched, ["sym:keys.ts::KEYS"]);
         let text = crate::changes::render(&g, &r);
         assert!(text.contains("  d=1  sym:keys.ts::pick  keys.ts:2  ← sym:keys.ts::KEYS\n"), "{text}");
