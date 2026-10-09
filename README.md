@@ -6,7 +6,7 @@ A project knowledge graph that costs **zero API tokens** to build, keep fresh, a
 already wrote by hand (requirement ids, cross-references, exports, imports, calls, decorators, ids
 quoted in comments) and answers questions about it in a few lines of text.
 
-- **Zero tokens by default.** Build, refresh and query run locally. `enrich` and `ask --rerank` can spend model tokens and are opt-in.
+- **Zero tokens by default.** Build, refresh and query run locally. `ask --rerank` can spend model tokens and is opt-in.
 - **A better door, not a better graph.** Exact id, BM25 and local dense retrieval find the entry point from a question in ordinary words, in about 200 tokens an answer.
 - **Built for agents.** `--json` on every reader, an MCP server, and hooks that keep the graph fresh.
 
@@ -56,14 +56,13 @@ repograph explain FR-PAY-22                # one node and everything attached to
 | Resident process | `serve` answers a fused question in 66 ms instead of 326 ms ([serve](docs/serve.md)) |
 | Agents | `repograph mcp`, `install-agent`, `prime` ([MCP](docs/mcp.md)) |
 | Languages | TypeScript and JavaScript, Kotlin, Java, C#, Rust, Python, Dart, Swift, GraphQL, SQL, Bicep, HCL, Shell, Vue ([languages](docs/languages.md)) |
-| Optional spend | `enrich` (generated questions, about $2.5 of haiku once) and `ask --rerank` ([enrich and rerank](docs/enrich-and-rerank.md)) |
+| Optional spend | `ask --rerank`, a model picking seeds from a 200-deep pool per question ([rerank](docs/rerank.md)) |
 | Bench | `repograph bench` fails the process when a recall floor is missed ([benchmarks](docs/benchmarks.md)) |
 
 ## Benchmarks
 
-On the recorded 82 cases (40 keyword, 30 paraphrase, 12 code) with the default embedder and `enrich`'s
-questions: keyword 40/40, paraphrase 19/30, code 12/12 at 234 p90 tokens; with `--no-dense` 39/40, 11/30,
-12/12. The graph itself costs nothing to build. Floors, exit codes and the full tables:
+On the recorded 82 cases (40 keyword, 30 paraphrase, 12 code) with the default embedder: keyword 40/40,
+paraphrase 19/30, code 12/12 at 244 p90 tokens; with `--no-dense` 39/40, 7/30, 12/12. The graph itself costs nothing to build. Floors, exit codes and the full tables:
 [benchmarks](docs/benchmarks.md).
 
 ## Configuration
@@ -75,7 +74,7 @@ and `resources` keys, and the `REPOGRAPH_*` environment variables are in
 
 ## How it works
 
-Exact id or symbol first, then BM25 over passages and generated questions, then a dense list,
+Exact id or symbol first, then BM25 over passages, then a dense list,
 interleaved rank by rank; the surviving seeds expand one hop over the id graph. The graph records only
 what a file proves, so a call through a chained expression or a callback has no edge: pair a "nothing
 uses this" with `rg -l`. See [how it works](docs/how-it-works.md) and [the graph model](docs/graph-model.md).
@@ -86,7 +85,7 @@ All reference material lives in [docs/](docs/README.md):
 [install](docs/install.md), [commands](docs/commands.md), [keeping fresh](docs/keeping-fresh.md),
 [serve](docs/serve.md), [MCP](docs/mcp.md), [how it works](docs/how-it-works.md),
 [languages](docs/languages.md), [configuration](docs/configuration.md), [embeddings](docs/embeddings.md),
-[enrich and rerank](docs/enrich-and-rerank.md), [benchmarks](docs/benchmarks.md),
+[rerank](docs/rerank.md), [benchmarks](docs/benchmarks.md),
 [the graph model](docs/graph-model.md), [the measurements](docs/history.md),
 [running on Windows](docs/windows.md), [bench campaigns](docs/bench/), [decisions](docs/adr/).
 

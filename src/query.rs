@@ -6,8 +6,8 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 /// `depth`: how many fused candidates a reranking model is shown; each retriever runs that deep.
 pub struct Options { pub seeds: usize, pub bodies: bool, pub dense: bool, pub json: bool, pub depth: usize }
 
-/// Dense retrieval for a question: the passage-row list and the question-row list, each `k` deep.
-pub type Dense<'a> = &'a dyn Fn(&str, usize) -> (Vec<String>, Vec<String>);
+/// Dense retrieval for a question: the passage rows, `k` deep.
+pub type Dense<'a> = &'a dyn Fn(&str, usize) -> Vec<String>;
 
 /// Picks seeds for a question from `(id, label)` candidates, best first.
 pub type Rerank<'a> = &'a dyn Fn(&str, &[(String, String)]) -> Vec<String>;
@@ -27,8 +27,9 @@ const MAX_EXPANDED: usize = 1;
 /// first, so two seeds were pinned; shown text, the pins were the retrievers' guess taking two
 /// of the model's five slots, and unpinning them is what took paraphrase from 13/14 to 14/14.
 const PINNED: usize = 0;
-/// How much more of the query the generated-questions BM25 list must have covered, against the
-/// passage list, to join the plain-path fusion. Each list is first asked about itself — what
+/// How much more of the query the text files' BM25 list must have covered, against the passage
+/// list, to join the plain-path fusion. It was derived for the generated-questions list `enrich`
+/// once wrote, and the text list took it over unchanged (`docs/bench/2026-10-08-text-list-rule.md`). Each list is first asked about itself — what
 /// fraction of what the query could reach in that index its best document actually reached,
 /// `best / attainable` — and the admission compares those two coverages. A coverage is
 /// dimensionless, so the two lists arrive in one unit whatever their raw scores are worth. The
@@ -73,9 +74,9 @@ fn coverage(best: f32, attainable: f32) -> f64 {
 }
 
 /// Whether a list is seated beside the passages under the coverage admission. The arithmetic is
-/// `f64` over the `f32` scores because the constant was derived by `bench/admission.py` in double
-/// precision, and that replay is checked against this function query by query — in `f32` the two
-/// would be different functions at the boundary.
+/// `f64` over the `f32` scores because the constant was derived in double precision by a replay
+/// that was checked against this function query by query — in `f32` the two would be different
+/// functions at the boundary.
 fn admits(best: f32, attainable: f32, passages_best: f32, passages_attainable: f32, c: f64) -> bool {
     if best <= 0.0 { return false; }
     let theirs = coverage(passages_best, passages_attainable);
@@ -92,21 +93,13 @@ struct LexicalLists {
     text: Option<Vec<String>>,
 }
 
-/// The lexical lists for one question, in fusion order. A store `enrich` never touched has one:
-/// an index of id-only documents is shorter than the passages and ranks an id-bearing term above
-/// the passage that carries it, so on a raw store the questions list would be admitted for the
-/// wrong reason and cost a build per question to do it. On the reranked path both lists are
-/// admitted unconditionally: the fused order there is a candidate pool `depth` deep rather than
-/// five seats, so a list there costs the reranking model candidates and not seeds, and Amendment 2
-/// measured the questions list as what carries paraphrase targets into that pool. The questions
-/// about code are a third list on the reranked path and on no other: the plain fusion's five seats
-/// were measured to be worth more to the documents than to them.
-///
-/// The text files are a list of their own, seated under the same coverage admission as the
-/// questions: pooled into the passages they took paraphrase from 15 to 8 of 30, each
-/// configuration file that shared a few words with a requirement question holding a seat the
-/// requirement needed. A question the text answers as completely as the passages answer theirs
-/// seats it; any other leaves the text out of the fusion altogether.
+/// The lexical lists for one question, in fusion order: the passages, and the text files as a
+/// list of their own, seated under the coverage admission. Pooled into the passages they took
+/// paraphrase from 15 to 8 of 30, each configuration file that shared a few words with a
+/// requirement holding a seat the requirement needed. A question the text answers as completely
+/// as the passages answer theirs seats it; any other leaves the text out of the fusion
+/// altogether. On the reranked path it is seated unconditionally: the fused order there is a
+/// candidate pool `depth` deep rather than five seats.
 fn lexical_lists(lex: &Lexical, query: &str, depth: usize, reranked: bool) -> LexicalLists {
     let only_ids = |scored: Vec<(String, f32)>| -> Vec<String> { scored.into_iter().map(|(id, _)| id).collect() };
     let best = |l: &[(String, f32)]| l.first().map(|(_, s)| *s).unwrap_or(0.0);
@@ -117,29 +110,7 @@ fn lexical_lists(lex: &Lexical, query: &str, depth: usize, reranked: bool) -> Le
         let seated = reranked || admits(best(&rows), index.attainable(query), passages_best, passages_attainable, questions_gate());
         seated.then(|| only_ids(rows))
     });
-    let Some(questions_index) = &lex.questions else { return LexicalLists { lists: vec![only_ids(passages)], text }; };
-    let generated = questions_index.search(query, depth);
-    if reranked {
-        let mut pool = vec![only_ids(passages), only_ids(generated)];
-        // Not on the plain path. Given a seat there instead — one, on the same admission — the
-        // code questions read `where` 0/9 → 2/9 on the developer suite but held-out 103 → 97 and
-        // 109 → 103, 0 gained and 6 lost in each arm, p = 0.031 (2026-09-05): five seats are the
-        // budget the floors were set on, and a seat given to code is a document question's answer
-        // lost. Here the pool is `--depth` deep (200 by default) rather than five seats, so the
-        // list costs the reranking model candidates and not seeds; what it is worth to that
-        // model is unmeasured.
-        if let Some(code_index) = &lex.code {
-            let code = code_index.search(query, depth);
-            if !code.is_empty() { pool.push(only_ids(code)); }
-        }
-        return LexicalLists { lists: pool, text };
-    }
-    let mut lists = Vec::with_capacity(2);
-    if admits(best(&generated), questions_index.attainable(query), passages_best, passages_attainable, questions_gate()) {
-        lists.push(only_ids(generated));
-    }
-    lists.push(only_ids(passages));
-    LexicalLists { lists, text }
+    LexicalLists { lists: vec![only_ids(passages)], text }
 }
 
 fn hit(graph: &Graph, id: &str, score: f32, via: Option<&str>) -> Option<Hit> {
@@ -200,27 +171,8 @@ pub fn ask(graph: &Graph, lex: &Lexical, dense: Option<Dense>, rerank: Option<Re
     if !whole_question {
         let depth = if rerank.is_some() { opts.depth } else { 20 };
         // Dense passages go first: they are the retriever the paraphrase floor rests on, so they
-        // get the odd seed. The BM25 list over the generated questions comes before the one over
-        // the passages: on 400 held-out generated questions it lifted recall@5 from 0.445 to
-        // 0.515 beside the dense list and from 0.395 to 0.527 without it. Pooled into the
-        // passage rows instead it buries targets (a passage at rank 2 fell to 87), so it stays a
-        // list of its own. The dense rows over the generated questions add nothing at five seeds
-        // and only feed the reranker's pool.
-        //
-        // On a keyword-shaped question the questions list has little to say — over the forty
-        // recorded keyword cases it holds the answer in its top five eight times and lacks it
-        // outright ten — yet an equal turn in the round-robin hands it half of five seeds, and
-        // the exact passage row goes past the cut. Thinning its turns for every question was
-        // measured and rejected (gap G7): on held-out paraphrases it is the retriever doing the
-        // work. So it is admitted per question, on how much of the question its best document
-        // covered against how much the passages' best covered — `QUESTIONS_GATE`, and
-        // `lexical_lists` for what the two paths do with it. The raw arms are untouched by
-        // construction: a store without questions gets no questions list built at all.
-
-        // The builds now happen once in the caller, not here — the overlap with the model open
-        // lives there too, in `Context::answer`, where `Lexical::build` runs before this
-        // function is even called. What this order still decides is the seat: dense passages,
-        // then the dense question rows on the reranked path, then these.
+        // get the odd seed. The builds happen once in the caller — `Lexical::build` runs in
+        // `Context::answer` before this function is called.
         let lexical = lexical_lists(lex, &query, depth, rerank.is_some());
         let mut lists: Vec<Vec<String>> = Vec::new();
         let mut dense_text: Vec<String> = Vec::new();
@@ -229,15 +181,13 @@ pub fn ask(graph: &Graph, lex: &Lexical, dense: Option<Dense>, rerank: Option<Re
                 // Text rows share the dense passage list, so it is read twice as deep when the store
                 // holds any: a config file in the top `depth` must not cost a requirement its row.
                 let fetch = if lex.text.is_some() { depth * 2 } else { depth };
-                let (rows, mut questions_rows) = d(&query, fetch);
-                questions_rows.truncate(depth);
+                let rows = d(&query, fetch);
                 let is_text = |id: &String| graph.nodes.get(id).is_some_and(|n| n.kind == NodeKind::Text);
                 let (mut text_rows, mut passages): (Vec<String>, Vec<String>) = rows.into_iter().partition(is_text);
                 passages.truncate(depth);
                 text_rows.truncate(depth);
                 dense_text = text_rows;
                 lists.push(passages);
-                if rerank.is_some() { lists.push(questions_rows); }
             }
         }
         lists.extend(lexical.lists);
@@ -670,11 +620,9 @@ fn family(id: &str) -> &str {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::enrich::Questions;
-    use crate::index::lexical::LexicalIndex;
     use crate::model::{EdgeKind, Extraction, NodeKind};
 
-    fn lex(g: &Graph, qs: &Questions) -> Lexical { Lexical::build(g, qs, true) }
+    fn lex(g: &Graph) -> Lexical { Lexical::build(g) }
 
     fn graph() -> Graph {
         let mut g = Graph::default();
@@ -734,7 +682,7 @@ mod tests {
     #[test]
     fn exact_id_wins_and_expands_one_hop() {
         let g = graph();
-        let a = ask(&g, &lex(&g, &Questions::default()), None, None, &["FR-PAY-22".to_string()], &opts());
+        let a = ask(&g, &lex(&g), None, None, &["FR-PAY-22".to_string()], &opts());
         assert_eq!(a.seeds[0].id, "FR-PAY-22");
         assert_eq!(a.seeds[0].score, 1.0);
         assert_eq!(a.expanded.len(), 1);
@@ -747,8 +695,8 @@ mod tests {
     #[test]
     fn a_lowercase_word_that_is_also_a_symbol_leads_but_still_fuses() {
         let g = graph();
-        let dense = |_: &str, _: usize| (vec!["FR-PAY-20".to_string()], Vec::new());
-        let a = ask(&g, &lex(&g, &Questions::default()), Some(&dense), None, &["money".to_string()], &Options { dense: true, ..opts() });
+        let dense = |_: &str, _: usize| vec!["FR-PAY-20".to_string()];
+        let a = ask(&g, &lex(&g), Some(&dense), None, &["money".to_string()], &Options { dense: true, ..opts() });
         assert_eq!(a.seeds[0].id, "sym:packages/domain/test/money.spec.ts::money");
         assert!(a.seeds.iter().any(|h| h.id == "FR-PAY-20"));
     }
@@ -756,8 +704,8 @@ mod tests {
     #[test]
     fn a_code_shaped_name_is_the_whole_question() {
         let g = graph();
-        let dense = |_: &str, _: usize| (vec!["FR-PAY-20".to_string()], Vec::new());
-        let a = ask(&g, &lex(&g, &Questions::default()), Some(&dense), None, &["asGrosze".to_string()], &Options { dense: true, ..opts() });
+        let dense = |_: &str, _: usize| vec!["FR-PAY-20".to_string()];
+        let a = ask(&g, &lex(&g), Some(&dense), None, &["asGrosze".to_string()], &Options { dense: true, ..opts() });
         assert_eq!(a.seeds.len(), 1);
         assert_eq!(a.seeds[0].id, "sym:packages/contracts/src/money.ts::asGrosze");
     }
@@ -766,7 +714,7 @@ mod tests {
     fn a_symbol_asked_twice_is_one_seed() {
         let g = graph();
         let words: Vec<String> = ["asGrosze", "foo", "asGrosze"].iter().map(|s| s.to_string()).collect();
-        let a = ask(&g, &lex(&g, &Questions::default()), None, None, &words, &opts());
+        let a = ask(&g, &lex(&g), None, None, &words, &opts());
         assert_eq!(a.seeds.iter().filter(|h| h.id.ends_with("::asGrosze")).count(), 1);
     }
 
@@ -774,7 +722,7 @@ mod tests {
     fn exact_match_leaves_the_other_seed_slots_empty() {
         let g = graph();
         // "N-151" is also a lexical hit on FR-PAY-22's body; it must arrive by expansion, not as a seed.
-        let a = ask(&g, &lex(&g, &Questions::default()), None, None, &["N-151".to_string()], &opts());
+        let a = ask(&g, &lex(&g), None, None, &["N-151".to_string()], &opts());
         assert_eq!(a.seeds.len(), 1);
         assert_eq!(a.seeds[0].id, "N-151");
         assert_eq!(a.expanded[0].id, "FR-PAY-22");
@@ -783,7 +731,7 @@ mod tests {
     #[test]
     fn backticked_entity_is_reachable_by_expansion() {
         let g = single_neighbour_graph();
-        let a = ask(&g, &lex(&g, &Questions::default()), None, None, &["FR-PAY-22".to_string()], &opts());
+        let a = ask(&g, &lex(&g), None, None, &["FR-PAY-22".to_string()], &opts());
         assert_eq!(a.expanded.len(), 1);
         assert_eq!(a.expanded[0].id, "entity:CancellationPolicy");
         assert_eq!(a.expanded[0].via.as_deref(), Some("FR-PAY-22"));
@@ -794,7 +742,7 @@ mod tests {
         let g = duplicated_symbol_graph();
         let mut o = opts();
         o.seeds = 2;
-        let a = ask(&g, &lex(&g, &Questions::default()), None, None, &["buildClientParams".to_string()], &o);
+        let a = ask(&g, &lex(&g), None, None, &["buildClientParams".to_string()], &o);
         assert_eq!(a.seeds.len(), 2);
         let ids: Vec<&str> = a.seeds.iter().map(|h| h.id.as_str()).collect();
         assert_eq!(ids, vec![
@@ -806,7 +754,7 @@ mod tests {
     #[test]
     fn file_hub_is_never_expanded_to() {
         let g = file_hub_only_graph();
-        let a = ask(&g, &lex(&g, &Questions::default()), None, None, &["FR-X".to_string()], &opts());
+        let a = ask(&g, &lex(&g), None, None, &["FR-X".to_string()], &opts());
         assert!(a.expanded.is_empty());
     }
 
@@ -819,7 +767,7 @@ mod tests {
         e.edge("sym:api/test/policies.spec.ts::service", "FR-PAY-22", EdgeKind::References, "comment", "api/test/policies.spec.ts");
         e.edge("sym:api/policies.service.ts::PoliciesService", "FR-PAY-22", EdgeKind::References, "comment", "api/policies.service.ts");
         g.apply(e);
-        let a = ask(&g, &lex(&g, &Questions::default()), None, None, &["FR-PAY-22".to_string()], &opts());
+        let a = ask(&g, &lex(&g), None, None, &["FR-PAY-22".to_string()], &opts());
         let ex: Vec<&str> = a.expanded.iter().map(|h| h.id.as_str()).collect();
         assert_eq!(ex.len(), 2, "the document neighbour stays and code is added: {ex:?}");
         assert!(!ex[0].starts_with("sym:"));
@@ -870,7 +818,7 @@ mod tests {
         assert!(msg.starts_with("DAY matches 2 nodes") && msg.contains("apps/panel/src/calendar.ts") && msg.contains("tools/runner.mjs"), "two production symbols tie: {msg}");
         g.nodes.remove("sym:apps/panel/src/calendar.ts::DAY");
         assert_eq!(resolve_code(&g, "DAY").unwrap().0.id, "sym:tools/runner.mjs::DAY");
-        let a = ask(&g, &lex(&g, &Questions::default()), None, None, &["DAY".to_string()], &opts());
+        let a = ask(&g, &lex(&g), None, None, &["DAY".to_string()], &opts());
         assert_eq!(a.seeds[0].id, "sym:tools/runner.mjs::DAY");
     }
 
@@ -882,7 +830,7 @@ mod tests {
             e.node(NodeKind::Symbol, &format!("sym:{f}::routes"), "routes", "", f, 1);
         }
         g.apply(e);
-        let a = ask(&g, &lex(&g, &Questions::default()), None, None, &["routes".to_string()], &opts());
+        let a = ask(&g, &lex(&g), None, None, &["routes".to_string()], &opts());
         let seeds: Vec<&str> = a.seeds.iter().map(|h| h.id.as_str()).collect();
         assert_eq!(seeds, ["sym:apps/panel/src/routes.ts::routes", "sym:apps/api/test/a.spec.ts::routes", "sym:apps/panel/test/b.test.tsx::routes"]);
     }
@@ -890,14 +838,14 @@ mod tests {
     #[test]
     fn exact_symbol_name_resolves_to_its_file() {
         let g = graph();
-        let a = ask(&g, &lex(&g, &Questions::default()), None, None, &["asGrosze".to_string()], &opts());
+        let a = ask(&g, &lex(&g), None, None, &["asGrosze".to_string()], &opts());
         assert_eq!(a.seeds[0].file, "packages/contracts/src/money.ts");
     }
 
     #[test]
     fn lexical_query_in_russian_finds_the_requirement() {
         let g = graph();
-        let a = ask(&g, &lex(&g, &Questions::default()), None, None, &["политика".into(), "отмены".into(), "штраф".into()], &opts());
+        let a = ask(&g, &lex(&g), None, None, &["политика".into(), "отмены".into(), "штраф".into()], &opts());
         assert_eq!(a.seeds[0].id, "FR-PAY-22");
     }
 
@@ -905,87 +853,10 @@ mod tests {
     fn the_dense_top_hit_takes_the_first_seed_and_its_second_hit_the_third() {
         let g = graph();
         // Lexical alone ranks FR-PAY-22 first for "штраф"; dense disagrees on both of its slots.
-        let dense = |_: &str, _: usize| (vec!["N-151".to_string(), "FR-PAY-20".to_string()], Vec::new());
-        let a = ask(&g, &lex(&g, &Questions::default()), Some(&dense), None, &["штраф".to_string()], &Options { dense: true, ..opts() });
+        let dense = |_: &str, _: usize| vec!["N-151".to_string(), "FR-PAY-20".to_string()];
+        let a = ask(&g, &lex(&g), Some(&dense), None, &["штраф".to_string()], &Options { dense: true, ..opts() });
         let order: Vec<&str> = a.seeds.iter().map(|h| h.id.as_str()).collect();
         assert_eq!(&order[..3], ["N-151", "FR-PAY-22", "FR-PAY-20"]);
-    }
-
-    fn questions() -> Questions {
-        let mut qs = Questions::default();
-        qs.entries.insert("FR-PAY-20".into(), crate::enrich::Entry { hash: String::new(), questions: vec!["можно ли аннулировать бронь самому".into()] });
-        qs
-    }
-
-    #[test]
-    fn a_store_without_questions_gets_one_lexical_list_on_either_path() {
-        // The old guard was `!entries.is_empty()`; without it a raw store builds an index of
-        // id-only documents, and "FR-PAY-22" scores higher there than in the passage that
-        // carries it, so the list would clear the gate on the strength of its own shortness.
-        let g = graph();
-        let none = Questions::default();
-        for reranked in [false, true] {
-            let lists = lexical_lists(&lex(&g, &none), "FR-PAY-22 штраф", 10, reranked).lists;
-            assert_eq!(lists.len(), 1, "reranked={reranked}: {lists:?}");
-            assert_eq!(lists[0][0], "FR-PAY-22");
-        }
-    }
-
-    #[test]
-    fn the_questions_list_leads_when_admitted_and_is_absent_when_it_matched_nothing() {
-        let g = graph();
-        let mut qs = questions();
-        qs.entries.get_mut("FR-PAY-20").unwrap().questions.push("какой штраф за отмену".into());
-        // «считается» is in FR-PAY-22's body and in no stored question, so the questions index
-        // scores nothing and is refused. This is the only refusal a two-node graph can produce:
-        // see the test below for why the raw ratio's other refusals do not survive the change.
-        let weak = lexical_lists(&lex(&g, &qs), "считается", 10, false).lists;
-        assert_eq!(weak.len(), 1);
-        assert_eq!(weak[0][0], "FR-PAY-22");
-        // Ratio above the gate: the questions list first, then the passages.
-        let strong = lexical_lists(&lex(&g, &qs), "штраф отмену", 10, false).lists;
-        assert_eq!(strong.len(), 2);
-        assert_eq!((strong[0][0].as_str(), strong[1][0].as_str()), ("FR-PAY-20", "FR-PAY-22"));
-        // Reranked: both lists whatever the ratio, passages first — a pool, not five seats.
-        let pool = lexical_lists(&lex(&g, &qs), "штраф считается", 10, true).lists;
-        assert_eq!(pool.len(), 2);
-        assert_eq!(pool[0][0], "FR-PAY-22");
-    }
-
-    #[test]
-    fn code_questions_reach_the_reranked_pool_and_never_the_plain_fusion() {
-        let mut g = Graph::default();
-        let mut e = Extraction::default();
-        e.node(NodeKind::Requirement, "FR-PAY-22", "правило отмены", "штраф считается по политике отмены", "a.md", 1);
-        e.node(NodeKind::Symbol, "sym:apps/a.ts::revoke", "revoke", "Ends every session.\nrevoke() {}", "apps/a.ts", 3);
-        e.node(NodeKind::Symbol, "sym:apps/a.ts::revokeOne", "revokeOne", "Ends one session.\nrevokeOne() {}", "apps/a.ts", 9);
-        g.apply(e);
-        let mut qs = Questions::default();
-        let entry = |t: &str| crate::enrich::Entry { hash: String::new(), questions: vec![t.into()] };
-        qs.entries.insert("sym:apps/a.ts::revoke".into(), entry("как выйти со всех устройств"));
-        qs.entries.insert("sym:apps/a.ts::revokeOne".into(), entry("как выйти с одного устройства"));
-        // Every query word but one is a code question's, and the list would clear the admission
-        // the documents' list is held to: the plain fusion is the passages alone all the same.
-        // The premise is asserted rather than asserted-by-comment, so a scoring change that made
-        // the code list weak would fail here instead of leaving the plain-path check passing for
-        // the wrong reason.
-        let query = "штраф выйти всех устройств";
-        let best = |l: &[(String, f32)]| l.first().map(|(_, s)| *s).unwrap_or(0.0);
-        let code_index = LexicalIndex::build_code_questions(&g, &qs);
-        let passages_index = LexicalIndex::build(&g);
-        let code_best = best(&code_index.search(query, 10));
-        let passages_best = best(&passages_index.search(query, 10));
-        assert!(admits(code_best, code_index.attainable(query), passages_best, passages_index.attainable(query), QUESTIONS_GATE),
-            "the code list must be admissible for this test to say anything: {code_best} against {passages_best}");
-        let plain = lexical_lists(&lex(&g, &qs), query, 10, false).lists;
-        assert_eq!(plain.len(), 1, "{plain:?}");
-        assert_eq!(plain[0][0], "FR-PAY-22");
-        // The pool is `depth` deep, not five seats, so the code list joins it whole and last.
-        let pool = lexical_lists(&lex(&g, &qs), query, 10, true).lists;
-        assert_eq!(pool.len(), 3, "{pool:?}");
-        assert_eq!(pool[2], vec!["sym:apps/a.ts::revoke".to_string(), "sym:apps/a.ts::revokeOne".to_string()]);
-        // No word of either code question: the list is absent from the pool, not empty.
-        assert_eq!(lexical_lists(&lex(&g, &qs), "штраф считается", 10, true).lists.len(), 2);
     }
 
     #[test]
@@ -1001,7 +872,7 @@ mod tests {
     }
 
     #[test]
-    fn an_empty_questions_list_is_never_seated_not_even_where_the_passages_are_no_bar() {
+    fn an_empty_list_is_never_seated_not_even_where_the_passages_are_no_bar() {
         // An empty list is handed a best of zero by `lexical_lists`, and a passage list that
         // covered nothing is otherwise no bar at all: the two ends meet here and the seat still
         // goes nowhere, because a list with nothing to say cannot be the one holding the answer.
@@ -1021,38 +892,15 @@ mod tests {
     }
 
     #[test]
-    fn an_index_that_lacks_a_query_term_covers_less_of_the_query_not_more() {
-        // Two indexes over the same two nodes. The passages hold both words of «штраф отмены»;
-        // the stored question holds «штраф» alone. Under the shipped denominator the questions
-        // list covered as much of the query as the passages did — the term it lacked left its
-        // denominator, which is the residue of G8 — and it was seated level with a list that
-        // answered twice as much. Now the missing term is charged and it is refused.
-        let mut g = Graph::default();
-        let mut e = Extraction::default();
-        e.node(NodeKind::Requirement, "FR-A", "штраф отмены", "", "a.md", 1);
-        e.node(NodeKind::Requirement, "FR-B", "другое", "", "a.md", 5);
-        g.apply(e);
-        let mut qs = Questions::default();
-        qs.entries.insert("FR-A".into(), crate::enrich::Entry { hash: String::new(), questions: vec!["какой штраф".into()] });
-        let l = lex(&g, &qs);
-        let qi = l.questions.as_ref().unwrap();
-        let best = |x: &[(String, f32)]| x.first().map(|(_, s)| *s).unwrap_or(0.0);
-        let q = "штраф отмены";
-        let (bq, aq, bp, ap) = (best(&qi.search(q, 10)), qi.attainable(q), best(&l.passages.search(q, 10)), l.passages.attainable(q));
-        assert!(coverage(bq, aq) < coverage(bp, ap), "questions covered {}, passages {}", coverage(bq, aq), coverage(bp, ap));
-        assert!(!admits(bq, aq, bp, ap, QUESTIONS_GATE), "{} against {}", coverage(bq, aq), coverage(bp, ap));
-    }
-
-    #[test]
     fn a_passage_list_whose_best_is_zero_is_no_bar_at_all() {
         // Nothing scored in the passage index, so its coverage is zero however much the query
-        // could have reached there, and the questions list takes the seat unopposed.
+        // could have reached there, and the other list takes the seat unopposed.
         assert!(admits(0.01, 8.0, 0.0, 4.0, QUESTIONS_GATE));
     }
 
     #[test]
     fn the_coverage_seats_what_the_ratio_of_raw_bests_refuses_and_refuses_what_it_seats() {
-        // The form's whole point, in two lines. A questions list at half the passages' raw best
+        // The form's whole point, in two lines. A list at half the passages' raw best
         // has covered twice as much of the question when the passage index could have offered
         // four times more; a list level on raw score has covered a fifth as much when its own
         // index could have offered five times more. The raw bests cannot tell these apart —
@@ -1062,80 +910,6 @@ mod tests {
         assert!(admits(1.0, 2.0, 2.0, 8.0, QUESTIONS_GATE), "its coverage, 0.50 against 0.25, seats it");
         assert!(ratio(2.0, 2.0), "the ratio seats this one");
         assert!(!admits(2.0, 10.0, 2.0, 2.0, QUESTIONS_GATE), "its coverage, 0.20 against 1.00, refuses it");
-    }
-
-    #[test]
-    fn a_generated_question_seeds_the_plain_answer_without_the_reranker() {
-        let g = graph();
-        // No label or body contains «аннулировать» or «бронь»; only the stored question does.
-        let a = ask(&g, &lex(&g, &questions()), None, None, &["аннулировать".into(), "бронь".into()], &opts());
-        assert_eq!(a.seeds[0].id, "FR-PAY-20");
-        let a = ask(&g, &lex(&g, &Questions::default()), None, None, &["аннулировать".into(), "бронь".into()], &opts());
-        assert!(a.seeds.is_empty());
-    }
-
-    #[test]
-    fn dense_leads_then_the_question_list_then_the_passages() {
-        let g = graph();
-        // Lexical passages rank FR-PAY-22 first for «штраф отмену»; the question list and dense
-        // each bring a node of their own. Both query words sit in the stored question and only
-        // one in any passage, so the question list clears the gate (2.14 against 1.32).
-        let dense = |_: &str, _: usize| (vec!["N-151".to_string()], Vec::new());
-        let mut qs = questions();
-        qs.entries.get_mut("FR-PAY-20").unwrap().questions.push("какой штраф за отмену".into());
-        let a = ask(&g, &lex(&g, &qs), Some(&dense), None, &["штраф".into(), "отмену".into()], &Options { dense: true, ..opts() });
-        let order: Vec<&str> = a.seeds.iter().map(|h| h.id.as_str()).collect();
-        assert_eq!(&order[..3], ["N-151", "FR-PAY-20", "FR-PAY-22"]);
-    }
-
-    #[test]
-    fn a_term_the_questions_index_lacks_now_costs_it_the_seat_the_shipped_form_gave_it() {
-        // The two queries the raw ratio ranked furthest apart on this graph. Under the shipped
-        // denominator — which dropped a term the index did not hold instead of charging it —
-        // both read 0.696 against 0.858 and were admitted at 0.811, because each query has one
-        // term that one of the two indices lacks and dropping it flattered whichever index that
-        // was. Charged, the two queries separate, and in opposite directions.
-        //
-        // «штраф считается»: «считается» is in FR-PAY-22's body and in no stored question, so it
-        // is the questions index that pays. Its coverage falls to 0.221 against the passages'
-        // 0.858 and the admission with it — under the constant, refused, and the plain answer is
-        // the passage the query actually names.
-        //
-        // «штраф отмену»: the missing term is the passage index's, so the arithmetic runs the
-        // other way — the questions list keeps 0.573 while the passages fall to 0.273 and the
-        // admission rises. Both figures include the pair the two words make, which stands
-        // together in neither index. Charging the term does not favour one list; it charges
-        // whichever index was being flattered.
-        let g = graph();
-        let mut qs = questions();
-        qs.entries.get_mut("FR-PAY-20").unwrap().questions.push("какой штраф за отмену".into());
-        let l = lex(&g, &qs);
-        let qi = l.questions.as_ref().unwrap();
-        let best = |x: &[(String, f32)]| x.first().map(|(_, s)| *s).unwrap_or(0.0);
-        let read = |q: &str| {
-            let (bq, aq) = (best(&qi.search(q, 10)), qi.attainable(q));
-            let (bp, ap) = (best(&l.passages.search(q, 10)), l.passages.attainable(q));
-            (coverage(bq, aq), coverage(bp, ap), admits(bq, aq, bp, ap, QUESTIONS_GATE))
-        };
-        let (cq, cp, seated) = read("штраф считается");
-        assert!((cq - 0.221).abs() < 5e-4 && (cp - 0.858).abs() < 5e-4, "questions {cq}, passages {cp}");
-        assert!(!seated, "the questions list covered {cq} of what it was asked against the passages' {cp}");
-        let (cq, cp, seated) = read("штраф отмену");
-        assert!((cq - 0.573).abs() < 5e-4 && (cp - 0.273).abs() < 5e-4, "questions {cq}, passages {cp}");
-        assert!(seated, "the questions list covered {cq} against the passages' {cp}");
-
-        let a = ask(&g, &lex(&g, &qs), None, None, &["штраф".into(), "считается".into()], &opts());
-        let order: Vec<&str> = a.seeds.iter().map(|h| h.id.as_str()).collect();
-        assert_eq!(order[0], "FR-PAY-22", "{order:?}");
-
-        // The gate is relative. «штраф отмену» is both words of the stored question and one of
-        // the passage, 2.14 against 1.32, and the question list leads as before.
-        let a = ask(&g, &lex(&g, &qs), None, None, &["штраф".into(), "отмену".into()], &opts());
-        assert_eq!(a.seeds[0].id, "FR-PAY-20");
-
-        // And a list that is the only one with anything to say always clears it.
-        let a = ask(&g, &lex(&g, &qs), None, None, &["аннулировать".into(), "бронь".into()], &opts());
-        assert_eq!(a.seeds[0].id, "FR-PAY-20");
     }
 
     #[test]
@@ -1150,31 +924,31 @@ mod tests {
         e.edge("A1", "X", EdgeKind::References, "body", "docs/a.md");
         e.edge("A5", "Y", EdgeKind::References, "body", "docs/a.md");
         g.apply(e);
-        let dense = |_: &str, _: usize| (["A1", "A2", "A3", "A4", "A5", "Y"].iter().map(|s| s.to_string()).collect(), Vec::new());
-        let a = ask(&g, &lex(&g, &Questions::default()), Some(&dense), None, &["ничего".into()], &Options { dense: true, ..opts() });
+        let dense = |_: &str, _: usize| ["A1", "A2", "A3", "A4", "A5", "Y"].iter().map(|s| s.to_string()).collect();
+        let a = ask(&g, &lex(&g), Some(&dense), None, &["ничего".into()], &Options { dense: true, ..opts() });
         assert_eq!(a.seeds.iter().map(|h| h.id.as_str()).collect::<Vec<_>>(), ["A1", "A2", "A3", "A4", "A5"]);
         assert_eq!(a.expanded.len(), 1);
         assert_eq!((a.expanded[0].id.as_str(), a.expanded[0].via.as_deref()), ("Y", Some("A5")));
         // Without a ranked neighbour the seed's own rank decides, as before.
-        let dense = |_: &str, _: usize| (["A1", "A2", "A3", "A4", "A5"].iter().map(|s| s.to_string()).collect(), Vec::new());
-        let a = ask(&g, &lex(&g, &Questions::default()), Some(&dense), None, &["ничего".into()], &Options { dense: true, ..opts() });
+        let dense = |_: &str, _: usize| ["A1", "A2", "A3", "A4", "A5"].iter().map(|s| s.to_string()).collect();
+        let a = ask(&g, &lex(&g), Some(&dense), None, &["ничего".into()], &Options { dense: true, ..opts() });
         assert_eq!((a.expanded[0].id.as_str(), a.expanded[0].via.as_deref()), ("X", Some("A1")));
     }
 
     #[test]
     fn dense_callback_is_fused_when_present() {
         let g = graph();
-        let dense = |_q: &str, _k: usize| (vec!["FR-PAY-20".to_string()], Vec::new());
+        let dense = |_q: &str, _k: usize| vec!["FR-PAY-20".to_string()];
         let mut o = opts();
         o.dense = true;
-        let a = ask(&g, &lex(&g, &Questions::default()), Some(&dense), None, &["ничего".into(), "похожего".into()], &o);
+        let a = ask(&g, &lex(&g), Some(&dense), None, &["ничего".into(), "похожего".into()], &o);
         assert_eq!(a.seeds[0].id, "FR-PAY-20");
     }
 
     #[test]
     fn render_shape_is_id_path_line_headline() {
         let g = graph();
-        let a = ask(&g, &lex(&g, &Questions::default()), None, None, &["FR-PAY-22".to_string()], &opts());
+        let a = ask(&g, &lex(&g), None, None, &["FR-PAY-22".to_string()], &opts());
         let out = render(&a, &g, &opts());
         let first = out.lines().next().unwrap();
         assert!(first.starts_with("FR-PAY-22  docs/06.md:385  `CancellationPolicy`"), "{first}");
@@ -1194,10 +968,10 @@ mod tests {
     #[test]
     fn a_question_no_retriever_answers_yields_an_empty_answer_not_a_panic() {
         let g = graph();
-        let a = ask(&g, &lex(&g, &Questions::default()), None, None, &["ъъъ".to_string(), "?!".to_string()], &opts());
+        let a = ask(&g, &lex(&g), None, None, &["ъъъ".to_string(), "?!".to_string()], &opts());
         assert!(a.seeds.is_empty() && a.expanded.is_empty());
         assert_eq!(render(&a, &g, &opts()), "");
-        let a = ask(&g, &lex(&g, &Questions::default()), None, None, &[String::new()], &opts());
+        let a = ask(&g, &lex(&g), None, None, &[String::new()], &opts());
         assert!(a.seeds.is_empty());
     }
 
@@ -1298,7 +1072,7 @@ mod tests {
     fn several_ids_in_one_question_all_become_seeds_in_word_order() {
         let g = graph();
         let words: Vec<String> = ["FR-PAY-22", "FR-PAY-20"].iter().map(|s| s.to_string()).collect();
-        let a = ask(&g, &lex(&g, &Questions::default()), None, None, &words, &opts());
+        let a = ask(&g, &lex(&g), None, None, &words, &opts());
         assert_eq!(a.seeds.iter().map(|h| h.id.as_str()).collect::<Vec<_>>(), ["FR-PAY-22", "FR-PAY-20"]);
     }
 
@@ -1311,14 +1085,14 @@ mod tests {
         e.node(NodeKind::Task, "BE-M17/T06", "Public booking path", "", "docs/m17.md", 58);
         e.node(NodeKind::Milestone, "BE-M07", "Reviews", "BE M17 T06 BE M17 T06 BE M17 T06", "docs/m07.md", 1);
         g.apply(e);
-        let a = ask(&g, &lex(&g, &Questions::default()), None, None, &["BE-M17/T06".to_string()], &opts());
+        let a = ask(&g, &lex(&g), None, None, &["BE-M17/T06".to_string()], &opts());
         assert_eq!(a.seeds.iter().map(|h| h.id.as_str()).collect::<Vec<_>>(), ["BE-M17/T06"]);
     }
 
     #[test]
     fn an_id_shaped_word_absent_from_the_graph_yields_no_seeds() {
         let g = graph();
-        let a = ask(&g, &lex(&g, &Questions::default()), None, None, &["FR-PAY-999".to_string()], &opts());
+        let a = ask(&g, &lex(&g), None, None, &["FR-PAY-999".to_string()], &opts());
         assert!(a.seeds.is_empty());
         assert!(a.expanded.is_empty());
     }
@@ -1331,9 +1105,9 @@ mod tests {
     fn a_lowercase_word_in_a_sentence_takes_no_seed_as_a_symbol_name() {
         let g = graph();
         let words: Vec<String> = ["политика", "отмены", "штраф", "money"].iter().map(|s| s.to_string()).collect();
-        let a = ask(&g, &lex(&g, &Questions::default()), None, None, &words, &opts());
+        let a = ask(&g, &lex(&g), None, None, &words, &opts());
         assert_eq!(a.seeds[0].id, "FR-PAY-22", "the sentence's topic ranks by fusion");
-        let alone = ask(&g, &lex(&g, &Questions::default()), None, None, &["money".to_string()], &opts());
+        let alone = ask(&g, &lex(&g), None, None, &["money".to_string()], &opts());
         assert_eq!(alone.seeds[0].id, "sym:packages/domain/test/money.spec.ts::money", "asked alone, the word is still a name");
     }
 
@@ -1341,7 +1115,7 @@ mod tests {
     fn a_symbol_and_an_id_together_both_become_exact_seeds() {
         let g = graph();
         let words: Vec<String> = ["asGrosze", "FR-PAY-22"].iter().map(|s| s.to_string()).collect();
-        let a = ask(&g, &lex(&g, &Questions::default()), None, None, &words, &opts());
+        let a = ask(&g, &lex(&g), None, None, &words, &opts());
         assert_eq!(a.seeds.len(), 2);
         assert_eq!(a.seeds[0].id, "sym:packages/contracts/src/money.ts::asGrosze");
         assert_eq!(a.seeds[1].id, "FR-PAY-22");
@@ -1353,7 +1127,7 @@ mod tests {
         let g = graph();
         let run = |words: &[&str]| {
             let words: Vec<String> = words.iter().map(|s| s.to_string()).collect();
-            ask(&g, &lex(&g, &Questions::default()), None, None, &words, &opts()).seeds
+            ask(&g, &lex(&g), None, None, &words, &opts()).seeds
                 .into_iter().map(|h| h.id).collect::<Vec<_>>()
         };
         assert_eq!(run(&["asGrosze FR-PAY-22"]), run(&["asGrosze", "FR-PAY-22"]));
@@ -1403,7 +1177,7 @@ mod tests {
         let g = graph();
         let mut o = opts();
         o.seeds = 0;
-        let a = ask(&g, &lex(&g, &Questions::default()), None, None, &["FR-PAY-22".to_string()], &o);
+        let a = ask(&g, &lex(&g), None, None, &["FR-PAY-22".to_string()], &o);
         assert!(a.seeds.is_empty());
         assert!(a.expanded.is_empty());
     }
@@ -1413,14 +1187,14 @@ mod tests {
         let g = duplicated_symbol_graph();
         let mut o = opts();
         o.seeds = 100;
-        let a = ask(&g, &lex(&g, &Questions::default()), None, None, &["buildClientParams".to_string()], &o);
+        let a = ask(&g, &lex(&g), None, None, &["buildClientParams".to_string()], &o);
         assert_eq!(a.seeds.len(), 4);
     }
 
     #[test]
     fn render_includes_body_lines_only_when_bodies_is_set() {
         let g = graph();
-        let a = ask(&g, &lex(&g, &Questions::default()), None, None, &["FR-PAY-22".to_string()], &opts());
+        let a = ask(&g, &lex(&g), None, None, &["FR-PAY-22".to_string()], &opts());
         let mut with_bodies = opts();
         with_bodies.bodies = true;
         let out = render(&a, &g, &with_bodies);
@@ -1437,23 +1211,23 @@ mod tests {
         g
     }
 
-    fn dense_text_first<'a>() -> impl Fn(&str, usize) -> (Vec<String>, Vec<String>) + 'a {
-        |_, _| (vec!["file:ops/deploy.yaml".to_string(), "FR-PAY-22".to_string()], Vec::new())
+    fn dense_text_first<'a>() -> impl Fn(&str, usize) -> Vec<String> + 'a {
+        |_, _| vec!["file:ops/deploy.yaml".to_string(), "FR-PAY-22".to_string()]
     }
 
     #[test]
     fn text_nodes_are_no_part_of_the_passage_list() {
         let g = graph_with_config();
-        let l = lex(&g, &Questions::default());
+        let l = lex(&g);
         assert!(l.passages.search("retention", 10).is_empty());
         assert_eq!(l.text.as_ref().unwrap().search("retention", 10)[0].0, "file:ops/deploy.yaml");
-        assert!(lex(&graph(), &Questions::default()).text.is_none(), "no text node, no text index");
+        assert!(lex(&graph()).text.is_none(), "no text node, no text index");
     }
 
     #[test]
     fn a_question_the_text_answers_seats_the_text_list() {
         let g = graph_with_config();
-        let l = lex(&g, &Questions::default());
+        let l = lex(&g);
         assert_eq!(lexical_lists(&l, "retention", 10, false).text, Some(vec!["file:ops/deploy.yaml".to_string()]));
         let dense = dense_text_first();
         let a = ask(&g, &l, Some(&dense), None, &["retention".to_string()], &Options { dense: true, ..opts() });
@@ -1463,7 +1237,7 @@ mod tests {
     #[test]
     fn a_requirement_question_leaves_text_out_of_the_fusion_dense_rows_included() {
         let g = graph_with_config();
-        let l = lex(&g, &Questions::default());
+        let l = lex(&g);
         let q = ["штраф", "считается", "политике", "отмены"].map(String::from);
         assert_eq!(lexical_lists(&l, &q.join(" "), 10, false).text, None);
         let dense = dense_text_first();
@@ -1475,9 +1249,9 @@ mod tests {
     #[test]
     fn the_reranked_pool_always_carries_the_text_list() {
         let g = graph_with_config();
-        let l = lex(&g, &Questions::default());
+        let l = lex(&g);
         assert!(lexical_lists(&l, "штраф считается политике отмены", 10, true).text.is_some());
-        let dense = |_: &str, _: usize| (vec!["file:ops/deploy.yaml".to_string()], Vec::new());
+        let dense = |_: &str, _: usize| vec!["file:ops/deploy.yaml".to_string()];
         let pooled = std::cell::RefCell::new(Vec::new());
         let rerank = |_: &str, candidates: &[(String, String)]| { pooled.borrow_mut().extend(candidates.iter().map(|(id, _)| id.clone())); Vec::new() };
         ask(&g, &l, Some(&dense), Some(&rerank), &["штраф".to_string(), "отмены".to_string()], &Options { dense: true, ..opts() });
@@ -1491,7 +1265,7 @@ mod tests {
         let body: String = (1..=200).map(|i| if i == 120 { "window: saturday-night\n".to_string() } else { format!("key{i}: value\n") }).collect();
         e.node(NodeKind::Text, "file:ops/deploy.yaml", "ops/deploy.yaml", &body, "ops/deploy.yaml", 1);
         g.apply(e);
-        let a = ask(&g, &lex(&g, &Questions::default()), None, None, &["saturday".to_string(), "windows".to_string()], &opts());
+        let a = ask(&g, &lex(&g), None, None, &["saturday".to_string(), "windows".to_string()], &opts());
         assert_eq!((a.seeds[0].id.as_str(), a.seeds[0].line), ("file:ops/deploy.yaml", 120));
         let mut o = opts();
         o.bodies = true;
@@ -1505,7 +1279,7 @@ mod tests {
     #[test]
     fn json_render_is_valid_json_with_seeds_and_expanded_keys() {
         let g = graph();
-        let a = ask(&g, &lex(&g, &Questions::default()), None, None, &["FR-PAY-22".to_string()], &opts());
+        let a = ask(&g, &lex(&g), None, None, &["FR-PAY-22".to_string()], &opts());
         let mut o = opts();
         o.json = true;
         let out = render(&a, &g, &o);
@@ -1638,21 +1412,21 @@ mod tests {
     #[test]
     fn a_question_of_only_punctuation_yields_an_empty_answer_not_a_panic() {
         let g = graph();
-        let a = ask(&g, &lex(&g, &Questions::default()), None, None, &["???".to_string(), "!!!".to_string()], &opts());
+        let a = ask(&g, &lex(&g), None, None, &["???".to_string(), "!!!".to_string()], &opts());
         assert!(a.seeds.is_empty() && a.expanded.is_empty());
     }
 
     #[test]
     fn a_question_of_only_whitespace_words_yields_an_empty_answer_not_a_panic() {
         let g = graph();
-        let a = ask(&g, &lex(&g, &Questions::default()), None, None, &["   ".to_string(), "\t".to_string()], &opts());
+        let a = ask(&g, &lex(&g), None, None, &["   ".to_string(), "\t".to_string()], &opts());
         assert!(a.seeds.is_empty() && a.expanded.is_empty());
     }
 
     #[test]
     fn a_single_cyrillic_word_reaches_the_lexical_path() {
         let g = graph();
-        let a = ask(&g, &lex(&g, &Questions::default()), None, None, &["штраф".to_string()], &opts());
+        let a = ask(&g, &lex(&g), None, None, &["штраф".to_string()], &opts());
         assert_eq!(a.seeds[0].id, "FR-PAY-22");
     }
 
@@ -1660,7 +1434,7 @@ mod tests {
     fn expansion_skips_a_neighbour_that_is_already_a_seed() {
         let g = graph();
         let words: Vec<String> = ["FR-PAY-22", "N-151"].iter().map(|s| s.to_string()).collect();
-        let a = ask(&g, &lex(&g, &Questions::default()), None, None, &words, &opts());
+        let a = ask(&g, &lex(&g), None, None, &words, &opts());
         assert_eq!(a.seeds.iter().map(|h| h.id.as_str()).collect::<Vec<_>>(), ["FR-PAY-22", "N-151"]);
         assert_eq!(a.expanded.len(), 1);
         assert_eq!(a.expanded[0].id, "entity:CancellationPolicy");
@@ -1677,9 +1451,8 @@ mod tests {
         e.edge("FR-WEB-1", "FR-WEB-40", EdgeKind::References, "body", "docs/a.md");
         e.edge("FR-WEB-1", "FR-WEB-30", EdgeKind::References, "body", "docs/a.md");
         g.apply(e);
-        let a = ask(&g, &lex(&g, &Questions::default()), None, None, &["FR-WEB-1".to_string()], &opts());
+        let a = ask(&g, &lex(&g), None, None, &["FR-WEB-1".to_string()], &opts());
         assert_eq!(a.expanded.len(), 1);
         assert_eq!(a.expanded[0].id, "FR-WEB-30");
     }
-
 }

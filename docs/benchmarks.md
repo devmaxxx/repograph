@@ -26,25 +26,13 @@ tools/tasks/src/cli.ts -> packages/task-sync/src/cli.ts`). An id anchor is grade
 names, never on another node declared in the same document: `ADR-024` counts when the ADR's own
 node is reached, not when `entity:StaffMember.role_id`, which the ADR defines, is.
 
-The floors are two sets, not one, because [`enrich`](enrich-and-rerank.md) is optional and
-paraphrase recall is what it buys. `bench` reads which state the store is in and says so on its
-summary line (`dense=true  enriched=true (1996/1996 nodes) model=gemma`): a store carrying questions
-on at least 99% of its requirement-like nodes is graded against the enriched floors, anything else
-against the raw ones. The bar is a high-water mark rather than every node because equality over
-~2,000 nodes is a cliff — one node the model skipped would regrade a paid-for store five paraphrase
-points lower, and `bench` would say so through its exit code alone. Questions written for another
-language list than the `enrich_languages` the configuration names count for nothing: `enrich` would
-rewrite them, and a store whose ADRs carry English questions only is not enriched for a reader who
-asks in Russian, so `bench` says so above the cases and grades it `enriched=false`.
-
-The dense floors are keyed by the store's embedder too, since a floor measured on one model says
-nothing about another: small-model rows (or rows under no name) are graded against the small model's
-numbers, rows under the default model (`embeddinggemma-300m`, printed `model=gemma`) against its own
-enriched row, and rows under any other model are measured and never graded. The default model's raw
-dense arm (a store with no questions) was never measured, so it has no row and is not graded. The lexical arms
-have no embedder in them and keep one set whatever the rows are. The summary line also carries
-`code_questions=<covered>/<eligible>` on a store that carries questions about code, which are
-searched for the `--rerank` pool rather than in the fusion the floors measure. Beneath it, on a line
+The dense floors are keyed by the store's embedder, since a floor measured on one model says nothing
+about another: `bench` names the model on its summary line (`dense=true  model=gemma`), rows under
+the default model (`embeddinggemma-300m`, printed `model=gemma`) are graded against its own numbers,
+small-model rows (or rows under no name) against the small model's, and rows under any other model
+are measured and never graded. The lexical arm has no embedder in it and keeps one floor whatever
+the rows are. Until 0.6.0 the floors were two sets, one for a store `enrich` had written questions
+into and one for a store without; `enrich` is gone and the raw set is the only one. Beneath it, on a line
 of its own, `anchors  <kind> <reached>/<wanted> …` says how much of each answer was reached, not only
 whether it was: a case that keeps its verdict and loses two of its three anchors moves that line and
 nothing else. `bench --repeat N` runs the suite N times, judges every run on the floors, and prints
@@ -59,32 +47,30 @@ command and says nothing about a suite: `clap` exits 2 on a usage error, and `np
 2 when no platform binary is installed. A `--repeat` run takes the worst of its runs: every run has
 to meet the floors, not the median of them.
 
-| | enriched store | store with no questions |
-| --- | --- | --- |
-| keyword | 40/40 with embeddings, 39/40 with `--no-dense` | 40/40 with embeddings, 39/40 with `--no-dense` |
-| paraphrase, gemma rows (the default) | ≥19/30 with embeddings | not graded (never measured) |
-| paraphrase, small-model rows | ≥14/30 with embeddings | ≥9/30 with embeddings |
-| paraphrase, `--no-dense` (no embedder) | ≥11/30 | ≥7/30 |
-| code | 12/12 | 12/12 |
-| p90 | ≤250 tokens in every arm | ≤250 tokens in every arm |
+| | floor |
+| --- | --- |
+| keyword | 40/40 with embeddings, 39/40 with `--no-dense` |
+| paraphrase, gemma rows (the default) | ≥18/30 |
+| paraphrase, small-model rows | ≥9/30 |
+| paraphrase, `--no-dense` (no embedder) | ≥7/30 |
+| code | 12/12 |
+| p90 | ≤250 tokens in every arm |
 
-The `--no-dense` column applies to every store, since no embedder is in it.
+The gemma row was first measured on a store with no questions at 19/30 on 2026-10-08, and its floor
+sits one case under that reading, the margin the enriched gemma row carried.
 
 Where each of those floors came from, why keyword is 39 and not 40 in the lexical arms, how the p90
-is counted, and the 400-question held-out set a retrieval change has to clear before the 82 cases
+is counted, and the 400-question held-out set retrieval changes were cleared against before the 82 cases
 are consulted, are in [the measurements](history.md#the-bench-floors-case-by-case).
 
 ## Measured
 
-The bench fixture is 908 files and about 8.3k nodes. At 0.6.0, under the default embedder, an
-enriched store reads **keyword 40/40, paraphrase 19/30, code 12/12 at 234 p90 tokens** with
-embeddings and **39/40, 11/30, 12/12 at 238** with `--no-dense`. The readings below were taken
-under the small model that preceded the default. On the recorded 82 cases, both arms run twice
-with identical results: **keyword 40/40, paraphrase 15/30, code 12/12 at 220 p90 tokens** with
-embeddings, and **39/40, 14/30, 12/12 at 215 p90** with `--no-dense`, both green. Those are the
-numbers with `enrich`'s generated questions in the store — the one thing paid for, roughly $2.5 of
-haiku, once. The same corpus at zero tokens throughout reads 40/40, 9/30, 12/12 at 221 and 39/40,
-7/30, 12/12 at 226; [Bench](benchmarks.md#bench) floors each state on its own numbers.
+The bench fixture is 908 files and about 8.3k nodes. At 0.6.0, under the default embedder, the store
+reads **keyword 40/40, paraphrase 19/30, code 12/12 at 244 p90 tokens**. Under the small model that
+preceded the default it reads 40/40, 9/30, 12/12 at 237 with embeddings and 39/40, 7/30, 12/12 at
+238 with `--no-dense`, per case identical to the binary before the removal on the same store. Zero model tokens
+throughout. What `enrich`'s questions bought before 0.6.0 removed them — one paraphrase case under
+the default embedder, five under the small one — is in [the measurements](history.md).
 
 The graph itself costs nothing to build: 7,525 nodes and 27,412 edges on the corpus of 2026-09-02,
 10.2 MB on disk, ~19 ms to load, zero model tokens. The full snapshot, the prior art it replaced and

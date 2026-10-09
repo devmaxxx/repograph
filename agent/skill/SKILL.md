@@ -55,7 +55,6 @@ barrel, and you will not.
 
 ## What costs money, and when
 
-Two stages are opt-in and everything else is free. `enrich` writes reader questions once per node
-(a cheap model, about $2.50 for two thousand nodes) and is what makes paraphrase answers work at
-all. `ask --rerank` spends a stronger model per question, as above. Which model each stage runs is a
-config key — `enrich_model`, `rerank_model` — set on the machine, not in the repository.
+One stage is opt-in and everything else is free: `ask --rerank` spends a model per question, as
+above. Which model it runs is a config key — `rerank_model` — set on the machine, not in the
+repository.

@@ -15,8 +15,8 @@ use tokenizers::{PaddingParams, PaddingStrategy, Tokenizer, TruncationParams};
 
 /// What a writer embeds with when the repository names no model: embeddinggemma-300m, the
 /// cheapest of the four that read 21/30 where the small one reads 15/30
-/// (docs/adr/ADR-003-gemma-is-the-default.md). `bench` holds floors for the small model's four
-/// arms and for this model's enriched dense arm; the fixture's store still records the small one.
+/// (docs/adr/ADR-003-gemma-is-the-default.md). `bench` holds floors for the small model's two
+/// arms and for this model's dense arm.
 pub const DEFAULT_MODEL: &str = "onnx-community/embeddinggemma-300m-ONNX";
 
 /// What a store that records no model at all was written with. Pinned to the name rather than to
