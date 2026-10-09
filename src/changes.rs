@@ -17,11 +17,15 @@ pub fn parse(diff: &str) -> Vec<Hunk> {
     // Header lines only come between `diff --git` and the first `@@`, and a removed SQL comment
     // reads `--- note` inside a hunk, so a line is content only once a hunk has opened.
     let mut in_hunk = false;
+    // A hunk with no body line to judge, whatever the diff holds instead, is walked as code.
+    let mut bodies = 0;
+    let close = |out: &mut Vec<Hunk>, bodies: usize| if let Some(h) = out.last_mut() { h.comment_only &= bodies > 0 };
     for line in diff.lines() {
         if line.starts_with("diff ") { in_hunk = false; continue; }
         if in_hunk && !line.starts_with("@@ ") {
             if let (Some(body), Some(h)) = (line.strip_prefix(['+', '-']), out.last_mut()) {
                 h.comment_only &= is_comment(&h.file, body);
+                bodies += 1;
             }
             continue;
         }
@@ -37,34 +41,47 @@ pub fn parse(diff: &str) -> Vec<Hunk> {
             None => (plus[1..].parse::<u32>().unwrap_or(0), 1),
         };
         let (start, end) = if d == 0 { (c.max(1), c.max(1)) } else { (c, c + d - 1) };
+        close(&mut out, bodies);
         out.push(Hunk { file: f.clone(), start, end, comment_only: comment_syntax(f).is_some() });
+        bodies = 0;
         in_hunk = true;
     }
+    close(&mut out, bodies);
     out
 }
 
-fn comment_syntax(file: &str) -> Option<&'static [&'static str]> {
-    const SLASH: &[&str] = &["//", "/*", "*/", "* ", "*"];
-    const HASH: &[&str] = &["#"];
-    const HCL: &[&str] = &["#", "//", "/*", "*/", "* ", "*"];
-    const SQL: &[&str] = &["--", "/*", "*/", "* ", "*"];
+/// A file's line-comment markers, and whether it has `/* */` blocks.
+fn comment_syntax(file: &str) -> Option<(&'static [&'static str], bool)> {
     let ext = file.rsplit_once('.').map(|(_, e)| e)?;
     match ext {
-        "ts" | "tsx" | "js" | "jsx" | "mjs" | "cjs" | "kt" | "kts" | "java" | "cs" | "rs" | "dart" | "swift" | "bicep" => Some(SLASH),
-        "py" | "sh" | "bash" | "gql" | "graphql" | "yaml" | "yml" | "toml" => Some(HASH),
-        "tf" | "hcl" => Some(HCL),
-        "sql" => Some(SQL),
+        "ts" | "tsx" | "js" | "jsx" | "mjs" | "cjs" | "kt" | "kts" | "java" | "cs" | "rs" | "dart" | "swift" | "bicep" => Some((&["//"], true)),
+        "py" | "sh" | "bash" | "gql" | "graphql" | "yaml" | "yml" | "toml" => Some((&["#"], false)),
+        "tf" | "hcl" => Some((&["#", "//"], true)),
+        "sql" => Some((&["--"], true)),
         _ => None,
     }
 }
 
-/// A blank line, or one that opens with its file's comment marker. A lone `*` counts only as the
-/// whole line or before a space, so a wrapped multiplication is not read as a block comment's body.
+// A comment that steers a tool changes what the file does even though it declares nothing.
+const DIRECTIVES: &[&str] = &[
+    "@ts-", "eslint", "prettier-ignore", "biome-ignore", "istanbul", "c8 ignore", "@flow", "@jsx",
+    "noqa", "type: ignore", "pyright:", "pylint:", "mypy:", "shellcheck", "tflint-ignore", "checkov:",
+];
+
+/// A blank line, or a comment that holds no code and steers no tool. Anything it cannot be sure of
+/// is code: reading code as a comment hides callers, reading a comment as code only walks wide. So
+/// a block comment's `* body` line is code here, because a wrapped `* rate` looks the same.
 fn is_comment(file: &str, body: &str) -> bool {
     let t = body.trim();
     if t.is_empty() { return true }
-    let Some(marks) = comment_syntax(file) else { return false };
-    marks.iter().any(|m| if *m == "*" { t == "*" } else { t.starts_with(m) })
+    let Some((lines, blocks)) = comment_syntax(file) else { return false };
+    let lower = t.to_ascii_lowercase();
+    if t.starts_with("#!") || DIRECTIVES.iter().any(|d| lower.contains(d)) { return false }
+    if lines.iter().any(|m| t.starts_with(m)) { return true }
+    if !blocks { return false }
+    if t == "*" || t == "*/" { return true }
+    // `/* note */` is a comment, `/* note */ call();` is a call.
+    t.strip_prefix("/*").is_some_and(|rest| rest.split_once("*/").is_none_or(|(_, after)| after.trim().is_empty()))
 }
 
 /// Symbols whose span meets a hunk; a hunk outside every symbol falls to its file node. A class
@@ -296,8 +313,24 @@ mod tests {
         assert!(!one("a.ts", "+  #count = 0;\n"));
         assert!(!one("a.py", "+-- x\n"));
         assert!(!one("a.ts", "+// note\n+import { x } from './x';\n"));
+        // What might be code is code: a wrapped multiplication, code after a block comment.
+        assert!(!one("a.ts", "+  * rate;\n"));
+        assert!(!one("a.ts", "+/* c */ import x from 'x';\n"));
+        assert!(one("a.ts", "+/* c */\n+*/\n"));
+        // A comment that steers a tool is not trivia.
+        assert!(!one("a.ts", "+// @ts-nocheck\n"));
+        assert!(!one("a.ts", "+// eslint-disable-next-line no-console\n"));
+        assert!(!one("a.py", "+import os  # noqa\n"));
+        assert!(!one("a.py", "+# type: ignore\n"));
+        assert!(!one("a.sh", "+#!/bin/bash\n"));
         // A file whose comment syntax is not known is walked as it always was.
         assert!(!one("Makefile", "+# note\n"));
+    }
+
+    #[test]
+    fn a_hunk_with_no_body_line_is_not_comment_only() {
+        let hunks = parse("--- a/a.ts\n+++ b/a.ts\n@@ -1 +1 @@\n\\ No newline at end of file\n@@ -5 +5 @@\n+// note\n");
+        assert_eq!(hunks.iter().map(|h| h.comment_only).collect::<Vec<_>>(), vec![false, true]);
     }
 
     #[test]
