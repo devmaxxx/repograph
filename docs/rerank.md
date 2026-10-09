@@ -30,6 +30,11 @@ chronic miss, `FR-MKT-35` — which the [rerank diagnostics](bench/2026-09-09-re
 found is not in the 200-deep pool at all. That document also has the pool rank of every gained case,
 which is what says whether a zero-token lever could reach it.
 
+Since 2026-10-09 the model is shown the sentence of each candidate that shares the most stemmed
+terms with the question, rather than the start of its text, and the default model is haiku: on a
+gemma store without enrich, haiku and sonnet both read keyword 40/40, paraphrase 30/30, code 12/12
+and 55/60 on the dev suite ([ADR-004](adr/ADR-004-haiku-reranks-by-default.md)).
+
 **`--rerank-local`** is the same pool and the same pick, scored by a local cross-encoder
 (`BAAI/bge-reranker-v2-m3`, exported once with `optimum-cli export onnx --model
 BAAI/bge-reranker-v2-m3 --task text-classification ~/.cache/repograph/reranker`, ~2.2 GB) at

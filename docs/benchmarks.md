@@ -54,7 +54,7 @@ to meet the floors, not the median of them.
 | paraphrase, small-model rows | ≥9/30 |
 | paraphrase, `--no-dense` (no embedder) | ≥7/30 |
 | code | 12/12 |
-| p90 | ≤250 tokens in every arm |
+| p90 | ≤250 tokens in every arm without `--rerank`; a reranked answer is whichever seeds the model picked (248 and 259 on two haiku runs of one store), so a reranked run is graded on its counts alone |
 
 The gemma row was first measured on a store with no questions at 19/30 on 2026-10-08, and its floor
 sits one case under that reading, the margin the enriched gemma row carried.

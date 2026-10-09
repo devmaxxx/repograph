@@ -199,8 +199,9 @@ pub fn ask(graph: &Graph, lex: &Lexical, dense: Option<Dense>, rerank: Option<Re
         lists.retain(|l| !l.is_empty());
         let mut fused = fuse::interleave(&lists);
         if let Some(r) = rerank {
+            let terms = crate::rerank::terms(&query);
             let candidates: Vec<(String, String)> = fused.iter().take(depth)
-                .map(|(id, _)| (id.clone(), crate::rerank::text(&graph.nodes[id]))).collect();
+                .map(|(id, _)| (id.clone(), crate::rerank::text(&graph.nodes[id], &terms))).collect();
             let mut order: Vec<String> = candidates.iter().take(PINNED).map(|(id, _)| id.clone()).collect();
             for id in r(&query, &candidates) {
                 if !order.contains(&id) { order.push(id); }
