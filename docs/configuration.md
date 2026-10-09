@@ -13,7 +13,7 @@ in full, not an empty config:
 | `include`            | `[]` — the whole repository; set, only these directories (`src`, `docs/specs`) or globs are read |
 | `registries`         | `["docs/constitution.yaml"]`                                                                |
 | `rerank_command`     | **machine file only** — headless `claude -p --model {model}` with thinking off, see [Spending tokens on purpose](rerank.md) |
-| `rerank_model`       | `sonnet` — whatever goes in `rerank_command`'s `{model}`                                     |
+| `rerank_model`       | `haiku` — whatever goes in `rerank_command`'s `{model}`                                     |
 | `reranker_dir`       | directory of the exported cross-encoder for `--rerank-local`; empty = `~/.cache/repograph/reranker`. Machine file only: a repository's is ignored, like the commands |
 | `embed_model`        | `onnx-community/embeddinggemma-300m-ONNX`; the model the vectors are written with — nine were measured and `repograph model` switches it, see [Embeddings](embeddings.md) |
 | `reader_budget`      | `10` — seconds a reader may spend refreshing before it answers from the store as it stands and leaves the rest to a detached `update`; `0` never refreshes inline. The machine file may set it; `REPOGRAPH_READER_BUDGET` overrides, see [Keeping it fresh](keeping-fresh.md#keeping-it-fresh) |
@@ -105,8 +105,9 @@ parse, so a config written for 0.5.x keeps working, and each one present prints 
 delete them.
 
 Two of those keys name a model and one names a directory, and they are three different jobs.
-`rerank_model` picks five ids out of a 200-deep pool (`sonnet`: opus buys
-nothing and costs a keyword hit, haiku loses three paraphrases); `embed_model` is the store's own
+`rerank_model` picks five ids out of a 200-deep pool (`haiku`: shown the sentence of each
+candidate that matches the question it reads what sonnet reads, faster —
+[ADR-004](adr/ADR-004-haiku-reranks-by-default.md)); `embed_model` is the store's own
 and is weighed in [ADR-002](adr/ADR-002-two-defaults-multiplied.md); `reranker_dir` is the
 local cross-encoder, measured and rejected as a floor candidate. Every one of those readings, with
 what each stage asks of a model, is in
@@ -130,7 +131,7 @@ because a command a cloned repository names is a command it runs on your machine
 # ~/.config/repograph/config.toml
 # The shipped default: headless Claude Code, thinking off.
 rerank_command = "MAX_THINKING_TOKENS=0 claude -p --model {model} --output-format text --tools \"\" --system-prompt \"You write plain text. You have no tools, no files and no memory: the only thing you can do is print your answer. Do all of the task at once: never ask a question, never ask to confirm, never comment — print only the answer.\" --setting-sources \"\" --strict-mcp-config --no-session-persistence"
-rerank_model = "sonnet"
+rerank_model = "haiku"
 
 # OpenAI's Codex CLI. Read from `codex exec --help` here and not run: with no prompt argument
 # the instructions are read from stdin, `-m, --model <MODEL>` names the model, and

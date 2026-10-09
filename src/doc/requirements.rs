@@ -74,12 +74,23 @@ impl RequirementScanner {
 
         let mut in_block = vec![false; lines.len()];
         for (n, (start, id, title, tail)) in heads.iter().enumerate() {
-            let mut end = heads.get(n + 1).map(|h| h.0).unwrap_or(lines.len());
+            let next = heads.get(n + 1).map(|h| h.0).unwrap_or(lines.len());
+            let mut end = next;
             if let Some(j) = lines[start + 1..end].iter().position(|l| l.starts_with('#')) {
                 end = start + 1 + j;
             }
             let end = end.min(start + 1 + BODY_CAP);
-            let mut body = lines[start + 1..end].join("\n");
+            // An ADR's title heading opens on a `Status / Date` table and keeps its reasoning in
+            // `## Context` and `## Decision`: stopping at the first heading left the node nothing
+            // but the table, and ADR-003 sat at fused rank 299 for a question its Context answers.
+            // Only the text reads on; its ids stay the file's prose, since reading them as body
+            // references doubled the ADRs' edges and grew every answer that expands through one.
+            let mut body = if kind_for(id) == NodeKind::Adr && lines[*start].starts_with("# ") {
+                let from = start + 1 + lines[start + 1..next].iter().take_while(|l| l.trim().is_empty() || l.trim_start().starts_with('|')).count();
+                lines[from..next.min(from + BODY_CAP)].join("\n")
+            } else {
+                lines[start + 1..end].join("\n")
+            };
             if !tail.is_empty() { body = format!("{tail}\n{body}"); }
             in_block[*start..end].fill(true);
             ex.node(kind_for(id), id, title, body.trim(), rel, *start as u32 + 1);
@@ -218,6 +229,23 @@ mod tests {
         assert_eq!(n.kind, NodeKind::Adr);
         assert_eq!(n.label, "ADR-001: Monorepo");
         assert!(has(&ex, "ADR-001", "INV-06", EdgeKind::References));
+    }
+
+    #[test]
+    fn an_adr_body_skips_its_metadata_table_and_reads_on_into_its_sections() {
+        let text = "# ADR-003 · Tenancy\n\n| | |\n|---|---|\n| **Status** | Accepted |\n\n## Context\n\nEvery query carries a WHERE clause.\n\n## Decision\n\nRow-level security, see INV-06.\n";
+        let ex = scan("docs/adr/ADR-003-tenancy.md", text);
+        let n = ex.nodes.iter().find(|n| n.id == "ADR-003" && !n.body.is_empty()).unwrap();
+        assert!(n.body.starts_with("## Context"), "{}", n.body);
+        assert!(!n.body.contains("Status"));
+        assert!(n.body.contains("Row-level security"));
+        assert!(has(&ex, "ADR-003", "INV-06", EdgeKind::References));
+    }
+
+    #[test]
+    fn a_requirement_heading_still_stops_at_the_next_heading() {
+        let ex = scan("docs/a.md", "## FR-WEB-1 · первая\nтело\n### Подраздел\nпроза\n");
+        assert_eq!(ex.nodes.iter().find(|n| n.id == "FR-WEB-1").unwrap().body, "тело");
     }
 
     #[test]

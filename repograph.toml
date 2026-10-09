@@ -19,11 +19,11 @@ registries = ["docs/constitution.yaml"]
 #   rerank_command = "ollama run {model} --hidethinking"
 # What a repository may say is which model that command runs, below.
 
-# `--rerank` wants reading comprehension over 200 near-duplicate candidates in ~14-19k mostly
-# Cyrillic tokens: sonnet reads paraphrase 29/30 of the 82 cases, haiku 11/14 of the older set,
-# opus 14/14 paraphrase but 23/24 keyword. Set once for the machine instead in
+# `--rerank` reads 200 near-duplicate candidates in ~14-19k mostly Cyrillic tokens. Shown the
+# sentence of each that matches the question, haiku and sonnet both read 40/30/12 and 55/60 on the
+# dev suite, and haiku's tokens are the cheaper ones (ADR-004). Set once for the machine instead in
 # ~/.config/repograph/config.toml, or for one run with REPOGRAPH_RERANK_MODEL.
-rerank_model = "sonnet"
+rerank_model = "haiku"
 
 # `ask --rerank-local`: a local cross-encoder over the same 200-deep pool, zero tokens. Empty
 # means ~/.cache/repograph/reranker, where `optimum-cli export onnx` was pointed. Measured and

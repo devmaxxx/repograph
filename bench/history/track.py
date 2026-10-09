@@ -261,7 +261,9 @@ def build_row(parsed, corpus, corpus_commit, note, tool_commit, dirty, floor_tab
         "anchors": parsed.get("anchors"),
         "floors": floor,
         "headroom": room,
-        "green": all(v >= 0 for v in room.values()) if gated else None,
+        # A reranked run is graded on its counts alone, as `bench` grades it: its p90 is the
+        # model's picks, not the retrievers'. The headroom still records how far it sat.
+        "green": all(v >= 0 for k, v in room.items() if not (parsed["rerank"] and k == "p90_tokens")) if gated else None,
         "cases": parsed["cases"],
         "worst_tokens": sorted(parsed["tokens"].items(), key=lambda kv: -kv[1])[:3],
         "note": note,
