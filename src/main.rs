@@ -303,7 +303,9 @@ pub(crate) fn apply_diff(repo: &std::path::Path, store: &store::Store, graph: &m
     // no-op update — the one a commit hook fires — the settle below would read every node and
     // rebuild the whole edge set to arrive at what is already there.
     let moved = !diff.changed.is_empty() || !diff.removed.is_empty() || !regrammar.is_empty();
+    ask::mark("extracted");
     if moved { graph.settle(); }
+    ask::mark("settled");
     let mut saved = walk::Manifest::from_entries(entries);
     // A file removed from the graph above and then not read is a hole, and the stamp is the only
     // thing that can recover it — on this path as much as on the grammar walk. The manifest below
@@ -319,6 +321,7 @@ pub(crate) fn apply_diff(repo: &std::path::Path, store: &store::Store, graph: &m
     if fresh || headers != recorded {
         headers.save(store)?;
     }
+    ask::mark("saved");
     // Only when something was re-extracted, so the no-op update a commit hook fires stays quiet.
     let orphan_questions = moved && store.stamp(ORPHAN_QUESTIONS).is_some();
     Ok(UpdateReport { changed: diff.changed.len(), removed: diff.removed.len(), nodes: graph.nodes.len(), edges: graph.edges.len(), orphan_questions, graph_at })
@@ -329,8 +332,10 @@ pub fn run_update(repo: &std::path::Path, cfg: &config::Config, wipe: bool) -> a
     let store = store::Store::new(repo);
     // A build starts from nothing in memory and leaves the stored graph alone until its save
     // renames the new one over it: a build killed before then leaves a store that still answers.
+    ask::mark("update started");
     let (mut graph, manifest) = if wipe { store.drop_leftovers()?; Default::default() } else { store.load()? };
     let (entries, oversized) = walk::walk_counted(repo, cfg, &manifest)?;
+    ask::mark("walked");
     let diff = manifest.diff(&entries);
     // A build starts from an empty graph, so this one test covers both fresh builds: `build`, and
     // an `update` on a store nobody has built yet.
