@@ -35,6 +35,16 @@ fn label_of(statement: &str) -> String {
     }
 }
 
+/// The statement's prose after its bold span, which states the rule the title only names:
+/// «Никакой лояльности платформы» is followed by «В схеме нет сущности „баллы платформы"», the
+/// words a question about shared loyalty points is asked in.
+fn rest_of(statement: &str) -> &str {
+    match bold_span().find(statement) {
+        Some(m) => statement[m.end()..].trim(),
+        None => statement.split_once('\n').map_or("", |(_, rest)| rest.trim()),
+    }
+}
+
 impl Extractor for RegistryExtractor {
     fn extract(&self, rel: &str, text: &str) -> Extraction {
         let mut ex = Extraction::default();
@@ -47,7 +57,8 @@ impl Extractor for RegistryExtractor {
         for (i, row) in reg.invariants.iter().enumerate() {
             let label = label_of(&row.statement);
             // Row order is the only line information YAML gives cheaply; good enough for `path:line`.
-            ex.node(NodeKind::Invariant, &row.id, &label, row.mechanism.trim(), rel, i as u32 + 1);
+            let body = [rest_of(&row.statement), row.mechanism.trim()].into_iter().filter(|p| !p.is_empty()).collect::<Vec<_>>().join("\n");
+            ex.node(NodeKind::Invariant, &row.id, &label, &body, rel, i as u32 + 1);
             ex.edge(&file_id, &row.id, EdgeKind::Declares, "", rel);
             if let Some(t) = &row.test_ref {
                 let target = if t.contains('/') { format!("file:{t}") } else { format!("gate:{t}") };
@@ -97,6 +108,21 @@ mod tests {
     fn label_of_falls_back_to_the_trimmed_first_line_without_a_bold_span() {
         assert_eq!(label_of("No bold marker here\nsecond line"), "No bold marker here");
         assert_eq!(label_of("**stray unclosed marker\nsecond line"), "stray unclosed marker");
+    }
+
+    #[test]
+    fn the_body_carries_the_statements_prose_before_the_mechanism() {
+        let yaml = "invariants:\n  - id: INV-07\n    statement: \"**Никакой лояльности платформы.** В схеме нет сущности «баллы платформы»\"\n    mechanism: \"Инвариант схемы\"\n";
+        let ex = RegistryExtractor.extract("docs/x.yaml", yaml);
+        let n = ex.nodes.iter().find(|n| n.id == "INV-07").unwrap();
+        assert_eq!(n.label, "Никакой лояльности платформы.");
+        assert_eq!(n.body, "В схеме нет сущности «баллы платформы»\nИнвариант схемы");
+    }
+
+    #[test]
+    fn a_statement_that_is_all_bold_leaves_the_mechanism_alone_in_the_body() {
+        let yaml = "invariants:\n  - id: INV-A\n    statement: \"**A.**\"\n    mechanism: \"m\"\n";
+        assert_eq!(RegistryExtractor.extract("docs/x.yaml", yaml).nodes[1].body, "m");
     }
 
     #[test]
