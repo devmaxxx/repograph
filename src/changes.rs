@@ -9,23 +9,29 @@ use std::path::Path;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Hunk { pub file: String, pub start: u32, pub end: u32, pub comment_only: bool }
 
+impl Hunk {
+    pub fn code(file: impl Into<String>, start: u32, end: u32) -> Hunk {
+        Hunk { file: file.into(), start, end, comment_only: false }
+    }
+}
+
 /// New-side ranges of a zero-context unified diff. A pure deletion (`+c,0`) has no new lines;
 /// it is recorded as the line the cut lands on, so the symbol around it still counts as changed.
 pub fn parse(diff: &str) -> Vec<Hunk> {
     let mut out: Vec<Hunk> = Vec::new();
     let mut file: Option<String> = None;
+    let mut syntax: Option<CommentSyntax> = None;
     // Header lines only come between `diff --git` and the first `@@`, and a removed SQL comment
     // reads `--- note` inside a hunk, so a line is content only once a hunk has opened.
     let mut in_hunk = false;
     // A hunk with no body line to judge, whatever the diff holds instead, is walked as code.
-    let mut bodies = 0;
-    let close = |out: &mut Vec<Hunk>, bodies: usize| if let Some(h) = out.last_mut() { h.comment_only &= bodies > 0 };
+    let mut judged = false;
     for line in diff.lines() {
         if line.starts_with("diff ") { in_hunk = false; continue; }
         if in_hunk && !line.starts_with("@@ ") {
             if let (Some(body), Some(h)) = (line.strip_prefix(['+', '-']), out.last_mut()) {
-                h.comment_only &= is_comment(&h.file, body);
-                bodies += 1;
+                h.comment_only = (h.comment_only || !judged) && syntax.is_some_and(|s| is_comment(s, body));
+                judged = true;
             }
             continue;
         }
@@ -41,24 +47,33 @@ pub fn parse(diff: &str) -> Vec<Hunk> {
             None => (plus[1..].parse::<u32>().unwrap_or(0), 1),
         };
         let (start, end) = if d == 0 { (c.max(1), c.max(1)) } else { (c, c + d - 1) };
-        close(&mut out, bodies);
-        out.push(Hunk { file: f.clone(), start, end, comment_only: comment_syntax(f).is_some() });
-        bodies = 0;
+        out.push(Hunk::code(f.clone(), start, end));
+        syntax = comment_syntax(f);
+        judged = false;
         in_hunk = true;
     }
-    close(&mut out, bodies);
     out
 }
 
-/// A file's line-comment markers, and whether it has `/* */` blocks.
-fn comment_syntax(file: &str) -> Option<(&'static [&'static str], bool)> {
-    let ext = file.rsplit_once('.').map(|(_, e)| e)?;
-    match ext {
-        "ts" | "tsx" | "js" | "jsx" | "mjs" | "cjs" | "kt" | "kts" | "java" | "cs" | "rs" | "dart" | "swift" | "bicep" => Some((&["//"], true)),
-        "py" | "sh" | "bash" | "gql" | "graphql" | "yaml" | "yml" | "toml" => Some((&["#"], false)),
-        "tf" | "hcl" => Some((&["#", "//"], true)),
-        "sql" => Some((&["--"], true)),
-        _ => None,
+#[derive(Clone, Copy)]
+struct CommentSyntax { lines: &'static [&'static str], blocks: bool }
+
+fn comment_syntax(file: &str) -> Option<CommentSyntax> {
+    use crate::code::lang::Lang;
+    const C: CommentSyntax = CommentSyntax { lines: &["//"], blocks: true };
+    const HASH: CommentSyntax = CommentSyntax { lines: &["#"], blocks: false };
+    match Lang::of(file) {
+        Some(Lang::TypeScript | Lang::Tsx | Lang::Kotlin | Lang::Java | Lang::CSharp | Lang::Rust | Lang::Dart | Lang::Swift | Lang::Bicep) => Some(C),
+        Some(Lang::Python | Lang::Shell | Lang::GraphQl) => Some(HASH),
+        Some(Lang::Hcl) => Some(CommentSyntax { lines: &["#", "//"], blocks: true }),
+        Some(Lang::Sql) => Some(CommentSyntax { lines: &["--"], blocks: true }),
+        // Markup around a host language: whether `//` opens a comment depends on where the line sits.
+        Some(Lang::Razor | Lang::Vue) => None,
+        None => match Path::new(file).extension().and_then(|e| e.to_str()) {
+            Some("kts") => Some(C),
+            Some("yaml" | "yml" | "toml") => Some(HASH),
+            _ => None,
+        },
     }
 }
 
@@ -71,14 +86,13 @@ const DIRECTIVES: &[&str] = &[
 /// A blank line, or a comment that holds no code and steers no tool. Anything it cannot be sure of
 /// is code: reading code as a comment hides callers, reading a comment as code only walks wide. So
 /// a block comment's `* body` line is code here, because a wrapped `* rate` looks the same.
-fn is_comment(file: &str, body: &str) -> bool {
+fn is_comment(syntax: CommentSyntax, body: &str) -> bool {
     let t = body.trim();
     if t.is_empty() { return true }
-    let Some((lines, blocks)) = comment_syntax(file) else { return false };
     let lower = t.to_ascii_lowercase();
     if t.starts_with("#!") || DIRECTIVES.iter().any(|d| lower.contains(d)) { return false }
-    if lines.iter().any(|m| t.starts_with(m)) { return true }
-    if !blocks { return false }
+    if syntax.lines.iter().any(|m| t.starts_with(m)) { return true }
+    if !syntax.blocks { return false }
     if t == "*" || t == "*/" { return true }
     // `/* note */` is a comment, `/* note */ call();` is a call.
     t.strip_prefix("/*").is_some_and(|rest| rest.split_once("*/").is_none_or(|(_, after)| after.trim().is_empty()))
@@ -86,17 +100,24 @@ fn is_comment(file: &str, body: &str) -> bool {
 
 /// Symbols whose span meets a hunk; a hunk outside every symbol falls to its file node. A class
 /// whose member matched is dropped — the member is the change, the class only contains it.
-pub fn touched(graph: &Graph, hunks: &[Hunk]) -> Vec<String> {
+/// Alongside, the files whose code outside every symbol changed.
+fn touch<'h>(graph: &Graph, hunks: &'h [Hunk]) -> (Vec<String>, BTreeSet<&'h str>) {
     let mut out: BTreeSet<String> = BTreeSet::new();
+    let mut code_outside: BTreeSet<&str> = BTreeSet::new();
     for h in hunks {
         let mut any = false;
-        for n in symbols_meeting(graph, h) { out.insert(n.id.clone()); any = true; }
+        for n in graph.nodes.values().filter(|n| n.kind == NodeKind::Symbol && n.file == h.file && n.line > 0) {
+            let end = n.end.max(n.line);
+            if n.line <= h.end && end >= h.start { out.insert(n.id.clone()); any = true; }
+        }
+        if any { continue }
         // A file the graph never indexed — a `.kt`, a `.sql`, a lockfile — is still a file the
         // diff changed. Reported as its file id, so the answer says "this changed, I cannot say
         // which symbol" instead of saying nothing: on the bench corpus the silence was a third of
         // a large diff (2026-09-03, 11 of 18 files named). A deleted file never gets here — its
         // `+++ /dev/null` yields no hunk — so every id emitted is a file on the new side.
-        if !any { out.insert(format!("file:{}", h.file)); }
+        out.insert(format!("file:{}", h.file));
+        if !h.comment_only { code_outside.insert(&h.file); }
     }
     // Only symbol ids nest: `sym:f::C` contains `sym:f::C.m`. Two file ids that share a prefix
     // across a dot are unrelated files — `Dockerfile` and `Dockerfile.dev`, `index.d.ts` and
@@ -104,11 +125,7 @@ pub fn touched(graph: &Graph, hunks: &[Hunk]) -> Vec<String> {
     let members: Vec<String> = out.iter().filter(|id| id.starts_with("sym:")).cloned().collect();
     out.retain(|id| !id.starts_with("sym:")
         || !members.iter().any(|m| m.len() > id.len() && m.starts_with(id.as_str()) && m[id.len()..].starts_with('.')));
-    out.into_iter().collect()
-}
-
-fn symbols_meeting<'g>(graph: &'g Graph, h: &'g Hunk) -> impl Iterator<Item = &'g crate::model::Node> + 'g {
-    graph.nodes.values().filter(move |n| n.kind == NodeKind::Symbol && n.file == h.file && n.line > 0 && n.line <= h.end && n.end.max(n.line) >= h.start)
+    (out.into_iter().collect(), code_outside)
 }
 
 pub struct Report { pub touched: Vec<String>, pub depth: usize, pub affected: Vec<Dependent>, pub files: BTreeSet<String>, pub risk: &'static str }
@@ -117,10 +134,7 @@ pub struct Report { pub touched: Vec<String>, pub depth: usize, pub affected: Ve
 /// so every symbol declared in it is walked; a symbol hunk walks that symbol alone. A comment or
 /// a blank line outside every symbol changes no symbol, and walking the whole file for it read a
 /// one-line comment as the file's entire blast radius.
-fn roots(graph: &Graph, touched: &[String], hunks: &[Hunk]) -> BTreeSet<String> {
-    let code_outside: BTreeSet<&str> = hunks.iter()
-        .filter(|h| !h.comment_only && symbols_meeting(graph, h).next().is_none())
-        .map(|h| h.file.as_str()).collect();
+fn roots(graph: &Graph, touched: &[String], code_outside: &BTreeSet<&str>) -> BTreeSet<String> {
     let mut out = BTreeSet::new();
     for id in touched {
         match id.strip_prefix("file:") {
@@ -133,9 +147,9 @@ fn roots(graph: &Graph, touched: &[String], hunks: &[Hunk]) -> BTreeSet<String> 
 }
 
 pub fn report(graph: &Graph, hunks: &[Hunk], depth: usize) -> Report {
-    let touched = touched(graph, hunks);
+    let (touched, code_outside) = touch(graph, hunks);
     let touched_set: BTreeSet<&str> = touched.iter().map(String::as_str).collect();
-    let roots = roots(graph, &touched, hunks);
+    let roots = roots(graph, &touched, &code_outside);
     let root_files: BTreeSet<String> = roots.iter().filter_map(|r| graph.nodes.get(r).map(|n| n.file.clone())).collect();
     let mut affected: BTreeMap<String, Dependent> = BTreeMap::new();
     let mut files: BTreeSet<String> = BTreeSet::new();
@@ -235,7 +249,7 @@ pub fn hunks_from_git(repo: &Path, base: &str) -> anyhow::Result<Vec<Hunk>> {
     // further, so a name holding a newline still arrived quoted and matched nothing. Separated
     // this way it arrives as itself, and the line it holds cannot be read as a second file.
     for f in git(repo, &["ls-files", "-z", "--others", "--exclude-standard", "--", ".", NOT_STORE])?.split('\0').filter(|f| !f.is_empty()) {
-        hunks.push(Hunk { file: f.to_string(), start: 1, end: u32::MAX, comment_only: false });
+        hunks.push(Hunk::code(f, 1, u32::MAX));
     }
     Ok(hunks)
 }
@@ -244,6 +258,10 @@ pub fn hunks_from_git(repo: &Path, base: &str) -> anyhow::Result<Vec<Hunk>> {
 mod tests {
     use super::*;
     use crate::model::{EdgeKind, Extraction};
+
+    fn touched(graph: &Graph, hunks: &[Hunk]) -> Vec<String> {
+        touch(graph, hunks).0
+    }
 
     const DIFF: &str = "diff --git a/s.ts b/s.ts\n--- a/s.ts\n+++ b/s.ts\n@@ -6,2 +6,3 @@ export class S {\n+  // more\n@@ -20 +21,0 @@\n-old\ndiff --git a/new.ts b/new.ts\nnew file mode 100644\n--- /dev/null\n+++ b/new.ts\n@@ -0,0 +1,2 @@\n+a\n+b\ndiff --git a/gone.ts b/gone.ts\n--- a/gone.ts\n+++ /dev/null\n@@ -1,3 +0,0 @@\n-x\n";
 
@@ -257,9 +275,9 @@ mod tests {
     #[test]
     fn parse_takes_new_side_ranges_and_records_a_pure_deletion_as_one_line() {
         assert_eq!(parse(DIFF), vec![
-            Hunk { file: "s.ts".into(), start: 6, end: 8, comment_only: true },
-            Hunk { file: "s.ts".into(), start: 21, end: 21, comment_only: false },
-            Hunk { file: "new.ts".into(), start: 1, end: 2, comment_only: false },
+            Hunk { comment_only: true, ..Hunk::code("s.ts", 6, 8) },
+            Hunk::code("s.ts", 21, 21),
+            Hunk::code("new.ts", 1, 2),
         ]);
     }
 
@@ -282,22 +300,22 @@ mod tests {
 
     #[test]
     fn a_hunk_inside_a_member_names_the_member_not_the_class() {
-        assert_eq!(touched(&graph(), &[Hunk { file: "s.ts".into(), start: 6, end: 7, comment_only: false }]), vec!["sym:s.ts::S.create"]);
+        assert_eq!(touched(&graph(), &[Hunk::code("s.ts", 6, 7)]), vec!["sym:s.ts::S.create"]);
     }
 
     #[test]
     fn a_hunk_spanning_two_members_names_both() {
-        assert_eq!(touched(&graph(), &[Hunk { file: "s.ts".into(), start: 8, end: 9, comment_only: false }]), vec!["sym:s.ts::S.create", "sym:s.ts::S.list"]);
+        assert_eq!(touched(&graph(), &[Hunk::code("s.ts", 8, 9)]), vec!["sym:s.ts::S.create", "sym:s.ts::S.list"]);
     }
 
     #[test]
     fn a_hunk_in_the_class_but_outside_every_member_names_the_class() {
-        assert_eq!(touched(&graph(), &[Hunk { file: "s.ts".into(), start: 4, end: 4, comment_only: false }]), vec!["sym:s.ts::S"]);
+        assert_eq!(touched(&graph(), &[Hunk::code("s.ts", 4, 4)]), vec!["sym:s.ts::S"]);
     }
 
     #[test]
     fn a_hunk_outside_every_symbol_falls_to_the_file() {
-        assert_eq!(touched(&graph(), &[Hunk { file: "s.ts".into(), start: 1, end: 1, comment_only: false }]), vec!["file:s.ts"]);
+        assert_eq!(touched(&graph(), &[Hunk::code("s.ts", 1, 1)]), vec!["file:s.ts"]);
     }
 
     #[test]
@@ -309,6 +327,7 @@ mod tests {
         assert!(one("a.ts", "+// note\n+\n-/* was */\n"));
         assert!(one("a.py", "+# note\n"));
         assert!(one("a.sql", "+-- note\n"));
+        assert!(one("a.mts", "+// note\n"));
         // `#count` is a private field in TypeScript, and `--` opens no comment in Python.
         assert!(!one("a.ts", "+  #count = 0;\n"));
         assert!(!one("a.py", "+-- x\n"));
@@ -335,28 +354,28 @@ mod tests {
 
     #[test]
     fn a_comment_outside_every_symbol_names_its_file_and_walks_nothing() {
-        let comment = report(&graph(), &[Hunk { file: "s.ts".into(), start: 1, end: 1, comment_only: true }], 3);
+        let comment = report(&graph(), &[Hunk { comment_only: true, ..Hunk::code("s.ts", 1, 1) }], 3);
         assert_eq!(comment.touched, vec!["file:s.ts"]);
         assert!(comment.affected.is_empty(), "{:?}", comment.affected);
-        let import = report(&graph(), &[Hunk { file: "s.ts".into(), start: 1, end: 1, comment_only: false }], 3);
+        let import = report(&graph(), &[Hunk::code("s.ts", 1, 1)], 3);
         assert!(import.affected.iter().any(|d| d.id == "sym:c.ts::C.create"), "{:?}", import.affected);
     }
 
     #[test]
     fn a_comment_inside_a_symbol_still_names_that_symbol() {
-        let r = report(&graph(), &[Hunk { file: "s.ts".into(), start: 6, end: 6, comment_only: true }], 3);
+        let r = report(&graph(), &[Hunk { comment_only: true, ..Hunk::code("s.ts", 6, 6) }], 3);
         assert_eq!(r.touched, vec!["sym:s.ts::S.create"]);
         assert!(r.affected.iter().any(|d| d.id == "sym:c.ts::C.create"));
     }
 
     #[test]
     fn a_whole_file_hunk_names_every_symbol_of_the_file_but_no_containing_class() {
-        assert_eq!(touched(&graph(), &[Hunk { file: "s.ts".into(), start: 1, end: u32::MAX, comment_only: false }]), vec!["sym:s.ts::S.create", "sym:s.ts::S.list", "sym:s.ts::helper"]);
+        assert_eq!(touched(&graph(), &[Hunk::code("s.ts", 1, u32::MAX)]), vec!["sym:s.ts::S.create", "sym:s.ts::S.list", "sym:s.ts::helper"]);
     }
 
     #[test]
     fn a_hunk_in_a_file_the_graph_never_indexed_is_reported_as_that_file() {
-        assert_eq!(touched(&graph(), &[Hunk { file: "Foo.kt".into(), start: 1, end: 9, comment_only: false }]), vec!["file:Foo.kt"]);
+        assert_eq!(touched(&graph(), &[Hunk::code("Foo.kt", 1, 9)]), vec!["file:Foo.kt"]);
     }
 
     #[test]
@@ -365,8 +384,8 @@ mod tests {
         // the member suppression reads the longer name as a member of the shorter one and the diff
         // loses the shorter file outright.
         let hunks = [
-            Hunk { file: "Dockerfile".into(), start: 1, end: 1, comment_only: false },
-            Hunk { file: "Dockerfile.dev".into(), start: 1, end: 1, comment_only: false },
+            Hunk::code("Dockerfile", 1, 1),
+            Hunk::code("Dockerfile.dev", 1, 1),
         ];
         assert_eq!(touched(&graph(), &hunks), vec!["file:Dockerfile", "file:Dockerfile.dev"]);
     }
@@ -374,7 +393,7 @@ mod tests {
     #[test]
     fn an_unindexed_file_renders_as_changed_with_no_span_and_reaches_nothing() {
         let g = graph();
-        let r = report(&g, &[Hunk { file: "Foo.kt".into(), start: 1, end: 9, comment_only: false }], 2);
+        let r = report(&g, &[Hunk::code("Foo.kt", 1, 9)], 2);
         assert_eq!(r.touched, vec!["file:Foo.kt"]);
         assert!(r.affected.is_empty());
         assert_eq!(
@@ -388,7 +407,7 @@ mod tests {
     #[test]
     fn report_unions_the_callers_of_every_touched_symbol() {
         let g = graph();
-        let r = report(&g, &[Hunk { file: "s.ts".into(), start: 6, end: 7, comment_only: false }], 2);
+        let r = report(&g, &[Hunk::code("s.ts", 6, 7)], 2);
         assert_eq!(r.touched, vec!["sym:s.ts::S.create"]);
         assert_eq!(r.affected.iter().map(|d| d.id.as_str()).collect::<Vec<_>>(), vec!["sym:c.ts::C.create"]);
         assert_eq!(r.files, BTreeSet::from(["c.ts".to_string()]));
@@ -403,7 +422,7 @@ mod tests {
         e.edge("sym:d.ts::D", "sym:s.ts::S.create", EdgeKind::Calls, "arg", "d.ts");
         e.edge("sym:d.ts::D", "sym:s.ts::S.list", EdgeKind::Calls, "", "d.ts");
         g.apply(e);
-        let r = report(&g, &[Hunk { file: "s.ts".into(), start: 8, end: 9, comment_only: false }], 1);
+        let r = report(&g, &[Hunk::code("s.ts", 8, 9)], 1);
         let d = r.affected.iter().find(|d| d.id == "sym:d.ts::D").unwrap();
         assert_eq!((d.via.as_str(), d.passed), ("sym:s.ts::S.list", false));
     }
@@ -415,7 +434,7 @@ mod tests {
         e.node(NodeKind::Symbol, "sym:d.ts::D", "D", "", "d.ts", 1);
         e.edge("sym:d.ts::D", "sym:s.ts::S.create", EdgeKind::Calls, "arg", "d.ts");
         g.apply(e);
-        let v: serde_json::Value = serde_json::from_str(&render_json(&g, &report(&g, &[Hunk { file: "s.ts".into(), start: 6, end: 7, comment_only: false }], 1))).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&render_json(&g, &report(&g, &[Hunk::code("s.ts", 6, 7)], 1))).unwrap();
         let rows: Vec<(&str, &serde_json::Value)> = v["affected"].as_array().unwrap().iter().map(|d| (d["id"].as_str().unwrap(), &d["passes"])).collect();
         assert_eq!(rows, vec![("sym:c.ts::C.create", &serde_json::json!(false)), ("sym:d.ts::D", &serde_json::json!(true))]);
     }
@@ -436,7 +455,7 @@ mod tests {
         }
         g.apply(e);
         let started = std::time::Instant::now();
-        let r = report(&g, &[Hunk { file: "big.ts".into(), start: 1, end: u32::MAX, comment_only: false }], 2);
+        let r = report(&g, &[Hunk::code("big.ts", 1, u32::MAX)], 2);
         assert_eq!(r.affected.len(), 3000);
         assert!(started.elapsed() < std::time::Duration::from_secs(3), "{:?}", started.elapsed());
     }
@@ -444,7 +463,7 @@ mod tests {
     #[test]
     fn a_file_level_change_walks_every_symbol_of_the_file_and_lists_none_of_them_as_affected() {
         let g = graph();
-        let r = report(&g, &[Hunk { file: "s.ts".into(), start: 1, end: 1, comment_only: false }], 2);
+        let r = report(&g, &[Hunk::code("s.ts", 1, 1)], 2);
         assert_eq!(r.touched, vec!["file:s.ts"]);
         assert_eq!(r.affected.iter().map(|d| d.id.as_str()).collect::<Vec<_>>(), vec!["sym:c.ts::C.create"]);
         assert_eq!(r.files, BTreeSet::from(["c.ts".to_string()]));
@@ -456,7 +475,7 @@ mod tests {
         let mut e = Extraction::default();
         e.edge("file:s.ts", "sym:s.ts::helper", EdgeKind::Calls, "", "s.ts");
         g.apply(e);
-        let r = report(&g, &[Hunk { file: "s.ts".into(), start: 1, end: 1, comment_only: false }], 2);
+        let r = report(&g, &[Hunk::code("s.ts", 1, 1)], 2);
         assert_eq!(r.touched, vec!["file:s.ts"]);
         assert!(r.affected.iter().all(|d| !r.touched.contains(&d.id)), "{:?}", r.affected);
     }
@@ -464,7 +483,7 @@ mod tests {
     #[test]
     fn a_file_level_change_in_an_indexed_file_renders_zero_symbols_but_names_the_file() {
         let g = graph();
-        let r = report(&g, &[Hunk { file: "s.ts".into(), start: 1, end: 1, comment_only: false }], 2);
+        let r = report(&g, &[Hunk::code("s.ts", 1, 1)], 2);
         assert_eq!(
             render(&g, &r),
             "changed: 0 symbols in 1 file\n  file:s.ts  s.ts:1\naffected (depth 2): 1 symbol in 1 file\n  d=1  sym:c.ts::C.create  c.ts:9  ← sym:s.ts::S.create\nrisk: LOW — 1 direct, 1 total, 1 file\n"
@@ -474,7 +493,7 @@ mod tests {
     #[test]
     fn render_says_what_changed_and_what_it_reaches() {
         let g = graph();
-        let out = render(&g, &report(&g, &[Hunk { file: "s.ts".into(), start: 6, end: 7, comment_only: false }], 2));
+        let out = render(&g, &report(&g, &[Hunk::code("s.ts", 6, 7)], 2));
         assert_eq!(out, "changed: 1 symbol in 1 file\n  sym:s.ts::S.create  s.ts:5-8\naffected (depth 2): 1 symbol in 1 file\n  d=1  sym:c.ts::C.create  c.ts:9  ← sym:s.ts::S.create\nrisk: LOW — 1 direct, 1 total, 1 file\n");
     }
 
@@ -529,7 +548,7 @@ mod tests {
         git_in(dir.path(), &["add", "-A"]);
         assert_eq!(
             hunks_from_git(dir.path(), "HEAD").unwrap(),
-            vec![Hunk { file: "docs/Штраф.ts".into(), start: 1, end: 2, comment_only: false }]
+            vec![Hunk::code("docs/Штраф.ts", 1, 2)]
         );
     }
 
@@ -545,7 +564,7 @@ mod tests {
         std::fs::write(dir.path().join("docs/Штраф.ts"), "one\nthree\n").unwrap();
         assert_eq!(
             hunks_from_git(dir.path(), "HEAD").unwrap(),
-            vec![Hunk { file: "docs/Штраф.ts".into(), start: 2, end: 2, comment_only: false }]
+            vec![Hunk::code("docs/Штраф.ts", 2, 2)]
         );
     }
 
@@ -557,7 +576,7 @@ mod tests {
         std::fs::write(dir.path().join("docs/Новое.ts"), "one\n").unwrap();
         assert_eq!(
             hunks_from_git(dir.path(), "HEAD").unwrap(),
-            vec![Hunk { file: "docs/Новое.ts".into(), start: 1, end: u32::MAX, comment_only: false }]
+            vec![Hunk::code("docs/Новое.ts", 1, u32::MAX)]
         );
     }
 
@@ -569,7 +588,7 @@ mod tests {
         std::fs::write(dir.path().join("docs/new.ts"), "one\n").unwrap();
         assert_eq!(
             hunks_from_git(dir.path(), "HEAD").unwrap(),
-            vec![Hunk { file: "docs/new.ts".into(), start: 1, end: u32::MAX, comment_only: false }]
+            vec![Hunk::code("docs/new.ts", 1, u32::MAX)]
         );
     }
 }
