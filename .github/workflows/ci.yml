@@ -56,13 +56,6 @@ jobs:
         run: python3 -m unittest discover -s bench/compare
       - if: runner.os == 'Linux' && !cancelled()
         run: python3 -m unittest discover -s bench/history
-      # And the kit's root, which is neither of the three and had never run anywhere: `admission.py`
-      # and `heldout.py`'s own tests. Discovery from `bench` finds these two files and does not
-      # descend into the three directories above — they are not packages — so nothing is run twice.
-      # Both suites are arithmetic over literals and read no store, so the pinned fixture is not
-      # needed here and no case is skipped.
-      - if: runner.os == 'Linux' && !cancelled()
-        run: python3 -m unittest discover -s bench
 
       # The agent hook is JavaScript and ships with the binary that installs it, so it is tested on
       # the same three platforms: a hook that throws on Windows is a hook that fires on nobody.
@@ -75,7 +68,7 @@ jobs:
         run: node --test agent/hook.test.mjs
 
       # A default Git for Windows install puts `git` on PATH and not `sh` — the Unix tools are an
-      # opt-in — so `enrich` and `ask --rerank` look for one. Route 1: Git's shell directories
+      # opt-in — so `ask --rerank` looks for one. Route 1: Git's shell directories
       # come off PATH, `git` itself stays, and the shell is found beside it. Windows only: unix
       # has `sh` on PATH by construction, and there is no install without it to imitate.
       - if: runner.os == 'Windows'
@@ -84,7 +77,7 @@ jobs:
           $env:PATH = ($env:PATH -split ';' | Where-Object { $_ -notmatch '\\Git\\(usr\\)?bin\\?$' }) -join ';'
           if (Get-Command sh -ErrorAction SilentlyContinue) { throw "sh is still on PATH: $((Get-Command sh).Source)" }
           if (-not (Get-Command git -ErrorAction SilentlyContinue)) { throw "git left PATH too; the pattern is wrong" }
-          cargo test -- enrich:: rerank::
+          cargo test -- command:: rerank::
           if ($LASTEXITCODE -ne 0) { throw "route 1, the shell beside git: $LASTEXITCODE" }
 
       # Route 1 answers first on any box with Git on PATH, so the other two have never run on a
@@ -106,14 +99,14 @@ jobs:
           $empty = Join-Path $env:RUNNER_TEMP 'no-git-here'
           New-Item -ItemType Directory -Force -Path $empty | Out-Null
 
-          cargo test -- enrich:: rerank::
+          cargo test -- command:: rerank::
           if ($LASTEXITCODE -ne 0) { Fail "route 3, the installer's own place under Program Files: $LASTEXITCODE" }
 
           $env:ProgramFiles = $empty
           $env:ProgramW6432 = $empty
           $env:LOCALAPPDATA = $empty
           $env:CLAUDE_CODE_GIT_BASH_PATH = 'C:\Program Files\Git\bin\bash.exe'
-          cargo test -- enrich:: rerank::
+          cargo test -- command:: rerank::
           if ($LASTEXITCODE -ne 0) { Fail "route 2, the bash Claude Code names: $LASTEXITCODE" }
 
           # Nowhere left to look. A green run here is a resolver that found a shell it should not
@@ -127,7 +120,7 @@ jobs:
           }
           Write-Host "CLAUDE_CODE_GIT_BASH_PATH = '$([Environment]::GetEnvironmentVariable('CLAUDE_CODE_GIT_BASH_PATH'))'"
           Write-Host "sh.exe on PATH: '$(OnPath 'sh.exe')' ; git.exe on PATH: '$(OnPath 'git.exe')'"
-          $out = (cargo test -- enrich:: rerank:: 2>&1) | Out-String
+          $out = (cargo test -- command:: rerank:: 2>&1) | Out-String
           $code = $LASTEXITCODE
           Write-Host $out
           if ($code -eq 0) { Fail "a shell was found with nowhere left to find one" }

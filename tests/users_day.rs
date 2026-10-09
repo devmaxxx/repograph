@@ -1,6 +1,6 @@
 //! A day with the binary, on the path a person keeps a project under: a repository directory that
 //! is Cyrillic and holds a space, a `repograph.toml` written the way an editor on Windows writes
-//! one, a build, a resident `serve` and a question answered through its socket, `enrich` through
+//! one, a build, a resident `serve` and a question answered through its socket, `ask --rerank` through
 //! the configured shell against a stand-in for `claude`, an edit, `update`, `changes`, and finally
 //! the server killed the way a person kills one — leaving a socket file for the next `serve` to
 //! sweep. Every one of those is exercised somewhere on its own; none of them together, and none
@@ -78,7 +78,7 @@ fn run(repo: &Path, args: &[&str], shell_path: Option<&Path>) -> Run {
     let mut cmd = repograph();
     cmd.arg("--no-dense").arg("--repo").arg(repo).args(args);
     // On the child, never on this process: tests share one environment and run at once.
-    if let Some(dir) = shell_path { cmd.env("PATH", enrich_path(dir)); }
+    if let Some(dir) = shell_path { cmd.env("PATH", stand_in_path(dir)); }
     let out = cmd.output().unwrap();
     let r = Run {
         out: String::from_utf8_lossy(&out.stdout).into_owned(),
@@ -88,12 +88,12 @@ fn run(repo: &Path, args: &[&str], shell_path: Option<&Path>) -> Run {
     r
 }
 
-/// The PATH the `enrich` child gets: the stand-in `claude` first, and on unix only the two
+/// The PATH the reranking child gets: the stand-in `claude` first, and on unix only the two
 /// directories a shell and `awk` live in after it. A developer machine has a real `claude` on its
 /// PATH, and an inherited one would let it answer — slowly, with that person's tokens, and green.
 /// Windows keeps the rest of the PATH: nothing there is a `claude`, and the shell resolver reads
 /// it to find Git's `sh`. What makes a real answer red on either is the assertion on the text.
-fn enrich_path(bin: &Path) -> std::ffi::OsString {
+fn stand_in_path(bin: &Path) -> std::ffi::OsString {
     let mut dirs = vec![bin.to_path_buf()];
     #[cfg(unix)]
     dirs.extend([PathBuf::from("/bin"), PathBuf::from("/usr/bin")]);
@@ -105,13 +105,15 @@ fn enrich_path(bin: &Path) -> std::ffi::OsString {
     std::env::join_paths(dirs).unwrap()
 }
 
-/// A shell script named the way the default `enrich_command` names it — no extension, a `#!`
+/// A shell script named the way the default `rerank_command` names it — no extension, a `#!`
 /// line — because that is the shape npm's own shim for a node CLI has, and the reason the
 /// configured command runs under `sh` on every platform rather than under `cmd`.
 fn fake_claude(dir: &Path) {
     std::fs::create_dir_all(dir).unwrap();
     let claude = dir.join("claude");
-    std::fs::write(&claude, "#!/bin/sh\nawk '/^### /{printf \"%s\\tq for %s\\n\", $2, $2}'\n").unwrap();
+    // Picks every candidate it was shown, last first, and leaves a mark beside itself: the mark is
+    // what tells this stand-in's answer from a real `claude` that outlived the PATH below.
+    std::fs::write(&claude, "#!/bin/sh\nawk -F'\\t' 'NF>1{ids[n++]=$1} END{for(i=n-1;i>=0;i--)print ids[i]}'\n: > \"$(dirname \"$0\")/ran\"\n").unwrap();
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -120,7 +122,7 @@ fn fake_claude(dir: &Path) {
 }
 
 #[test]
-fn a_repository_under_a_cyrillic_directory_with_a_space_is_built_served_asked_enriched_and_diffed() {
+fn a_repository_under_a_cyrillic_directory_with_a_space_is_built_served_asked_reranked_and_diffed() {
     let root = short_root();
     let repo = root.path().join(REPO_DIR);
     std::fs::create_dir_all(repo.join("docs")).unwrap();
@@ -156,19 +158,16 @@ fn a_repository_under_a_cyrillic_directory_with_a_space_is_built_served_asked_en
     };
     assert_eq!(resident.out, direct, "the resident answer is the process's answer");
 
-    // The line a user's `enrich` really runs: the configured default, `claude` on PATH, through
-    // whichever `sh` this platform resolves — Git for Windows' where std has no shell of its own.
-    // Nothing else spawns the default command; the other tests hand `run_command` an awk line.
+    // The line a user's `ask --rerank` really runs: the configured default, `claude` on PATH,
+    // through whichever `sh` this platform resolves — Git for Windows' where std has no shell of
+    // its own. Nothing else spawns the default command; the other tests hand `run_command` an awk
+    // line. `--no-serve`, because the resident process kept the PATH it started with.
     let bin = root.path().join("bin");
     fake_claude(&bin);
-    let enriched = run(&repo, &["enrich", "--batch", "1", "--parallel", "1"], Some(&bin));
-    let questions = std::fs::read_to_string(repo.join(".repograph/questions.json")).unwrap();
-    let parsed: serde_json::Value = serde_json::from_str(&questions).unwrap();
-    assert!(parsed["entries"].as_object().is_some_and(|e| !e.is_empty()),
-        "the default enrich command wrote no questions: {}{}", enriched.out, questions);
-    // The stand-in's own words, not merely some words: anything else answering — a real `claude`
-    // that outlived the PATH above — would otherwise pass this for the wrong reason.
-    assert!(questions.contains("q for FR-PAY-1"), "something other than the stand-in answered: {questions}");
+    let reranked = run(&repo, &["ask", "--no-serve", "--rerank", "штраф"], Some(&bin));
+    assert!(!reranked.err.contains("rerank:"), "the default rerank command failed: {}", reranked.err);
+    assert!(reranked.out.contains("FR-PAY-1"), "{}", reranked.out);
+    assert!(bin.join("ran").exists(), "something other than the stand-in answered: {}{}", reranked.out, reranked.err);
 
     // An edit under a live server, then the two commands that read git from this path.
     let mut readme = std::fs::read_to_string(repo.join("README.md")).unwrap();

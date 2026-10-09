@@ -37,10 +37,12 @@ REPO = repo_root()
 # absent from transcripts older than the dev suite, which expected one place per case.
 CASE = re.compile(r"^(\S+)\s+(\S+)\s+(HIT|miss)(?:\s+(\d+)/(\d+))?\s+(\d+) tok  (.*)$")
 # One `kind hits/cases` pair per kind the case file named, in the order it named them, then
-# the fixed tail. Older transcripts end at `nodes)`; newer ones add `suite=… gated=…`.
+# the fixed tail. Older transcripts end at `nodes)`; newer ones add `suite=… gated=…`. The
+# `enriched=… (n/m nodes)` field is gone since 0.6.0 removed `enrich`; a transcript without it
+# reads as a raw store, which is what every store is now.
 SUMMARY = re.compile(
-    r"^((?:\S+ \d+/\d+\s+)+)p90 (\d+) tok\s+dense=(true|false)\s+enriched=(true|false) "
-    r"\((\d+)/(\d+) nodes\)(.*)$"
+    r"^((?:\S+ \d+/\d+\s+)+)p90 (\d+) tok\s+dense=(true|false)\s+"
+    r"(?:enriched=(true|false) \((\d+)/(\d+) nodes\))?(.*)$"
 )
 # `anchors  <kind> <reached>/<want> …` beneath the summary, on a line of its own so that the
 # summary's own regex -- and every transcript recorded through it -- did not have to change.
@@ -51,8 +53,8 @@ SUITE = re.compile(r"suite=(\S+) gated=(true|false)")
 MODEL = re.compile(r"model=(\S+)")
 GRADED = ("keyword", "paraphrase", "code")
 
-# One row per line of `FLOORS` in src/bench.rs: (enriched, dense, Floors::<Model>, keyword, paraphrase).
-ROW = re.compile(r"\((true|false),\s*(true|false),\s*Floors::(Small|Gemma),\s*(\d+),\s*(\d+)\)")
+# One row per line of `FLOORS` in src/bench.rs: (dense, Floors::<Model>, keyword, paraphrase).
+ROW = re.compile(r"\((true|false),\s*Floors::(Small|Gemma),\s*(\d+),\s*(\d+)\)")
 # The ceiling may be a literal or a named `const`; a name is resolved in the same source.
 TAIL = re.compile(r"s\.kind\(\"code\"\)\.0 >= (\d+) && s\.p90_tokens <= (\d+|[A-Z_][A-Z0-9_]*)\b")
 
@@ -91,8 +93,9 @@ def resolve(text, token):
 
 
 def floors(source=None):
-    """Every (enriched, dense, model) arm's floors plus the code floor and token ceiling,
-    read from `FLOORS` and `passes` in src/bench.rs rather than restated here."""
+    """Every (enriched, dense, model) arm's floors plus the code floor and token ceiling, read from
+    `FLOORS` and `passes` in src/bench.rs rather than restated here. `enriched` is always False:
+    the table has had no enriched rows since 0.6.0 removed `enrich`."""
     text = (source or REPO / "src" / "bench.rs").read_text()
     body = passes_body(text)
     body = re.sub(r"//[^\n]*|/\*.*?\*/", "", body, flags=re.S) if body else ""
@@ -100,12 +103,12 @@ def floors(source=None):
     table = re.search(r"const FLOORS[^=]*=\s*\[(.*?)\];", text, re.S)
     rows = ROW.findall(table.group(1)) if table else []
     p90 = tail and resolve(text, tail.group(2))
-    if not body or not tail or p90 is None or len(rows) < 4:
+    if not body or not tail or p90 is None or len(rows) < 3:
         raise SystemExit("cannot read the floors out of src/bench.rs -- `FLOORS` or `passes` changed shape")
     code = int(tail.group(1))
     out = {}
-    for enriched, dense, model, keyword, paraphrase in rows:
-        out[(enriched == "true", dense == "true", model.lower())] = {"keyword": int(keyword), "paraphrase": int(paraphrase), "code": code, "p90_tokens": p90}
+    for dense, model, keyword, paraphrase in rows:
+        out[(False, dense == "true", model.lower())] = {"keyword": int(keyword), "paraphrase": int(paraphrase), "code": code, "p90_tokens": p90}
     return out
 
 
@@ -180,7 +183,7 @@ def parse_bench(text):
     return {
         "dense": dense,
         "enriched": enriched,
-        "coverage": [int(g.group(5)), int(g.group(6))],
+        "coverage": [int(g.group(5)), int(g.group(6))] if g.group(5) else None,
         "rerank": ("local" if rr.group(1) else "command") if rr else None,
         "depth": int(rr.group(2)) if rr else None,
         "metrics": metrics,

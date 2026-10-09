@@ -1,5 +1,4 @@
 use crate::config::Config;
-use crate::enrich::{self, coverage, Questions};
 use crate::index::dense::DenseIndex;
 use crate::index::embed::Embedder;
 use crate::model::{Graph, NodeKind};
@@ -149,30 +148,26 @@ fn dense_grading(no_dense: bool, recorded: Option<&str>, resolved: Option<&str>)
     (floors, field)
 }
 
-/// `(enriched, dense, floors) → (keyword, paraphrase)`. Every number is one the recorded cases
-/// measured, never a target: the small model's four on the fixture (the paragraphs below), and
-/// gemma's enriched dense arm, one paraphrase under the 20/30 it read twice, as the small model's
-/// 14 sits under its 15. The lexical rows carry `Floors::Small` and are read for every
-/// model: no embedder is in them. Gemma's raw dense arm was never measured, so it has no row and
-/// is not graded. `bench/history/track.py` reads this table out of the source; keep the rows one
-/// per line.
-const FLOORS: [(bool, bool, Floors, usize, usize); 5] = [
-    (true, true, Floors::Gemma, 40, 19),
-    (true, true, Floors::Small, 40, 14),
-    (true, false, Floors::Small, 39, 11),
-    (false, true, Floors::Small, 40, 9),
-    (false, false, Floors::Small, 39, 7),
+/// `(dense, floors) → (keyword, paraphrase)`. Every number is one the recorded cases measured,
+/// never a target: gemma's dense arm sits one paraphrase under the 19/30 it read twice, and the
+/// small model's pair is flush (the paragraphs in `passes`). The lexical row carries
+/// `Floors::Small` and is read for every model: no embedder is in it. `bench/history/track.py`
+/// reads this table out of the source; keep the rows one per line.
+const FLOORS: [(bool, Floors, usize, usize); 3] = [
+    (true, Floors::Gemma, 40, 18),
+    (true, Floors::Small, 40, 9),
+    (false, Floors::Small, 39, 7),
 ];
 
 const P90_CEILING: usize = 250;
 
 /// Whether an arm has floors to be graded against: a lexical one always does, a dense one only
 /// where its model measured that arm.
-fn graded(enriched: bool, dense: bool, floors: Floors) -> bool {
-    !dense || FLOORS.iter().any(|r| r.0 == enriched && r.1 && r.2 == floors)
+fn graded(dense: bool, floors: Floors) -> bool {
+    !dense || FLOORS.iter().any(|r| r.0 && r.1 == floors)
 }
 
-pub fn passes(s: &Summary, dense: bool, enriched: bool, floors: Floors) -> bool {
+pub fn passes(s: &Summary, dense: bool, floors: Floors) -> bool {
     // Every floor is the number the recorded cases measure; only the token ceiling is rounded.
     // It was 230, over the small model's four p90s (220 to 226), until a requirement's answer gained
     // the line naming one symbol that cites it: that moved the p90 to 236 with every count unchanged,
@@ -180,27 +175,21 @@ pub fn passes(s: &Summary, dense: bool, enriched: bool, floors: Floors) -> bool 
     // A count equal to its total is an exact floor: `run` grades against these only when the case
     // file has the recorded 40/30/12 shape.
     //
-    // `enrich` spends model tokens and is optional, so the store it has never touched is graded
-    // on what it reads rather than on what the enriched store calibrated: paraphrase measures 9
-    // with embeddings and 7 without, against the 14 and 11 the questions buy. Paraphrase is the
-    // split the arms disagree on most — three of its questions are reached by the dense passage
-    // list and by neither lexical list.
+    // Paraphrase is the split the arms disagree on most: the small model measures 9 with
+    // embeddings and 7 without — three of its questions are reached by the dense passage list and
+    // by neither lexical list.
     //
-    // Keyword is 39 in both lexical-only arms, not 40: `FR-PH-43` sits at passage rank 23 and no
-    // lexical path reaches it, enriched or raw. The enriched arm read 40 on an earlier corpus
-    // commit and 37 once the questions list took an equal turn in the fusion; gating that list
-    // on its own confidence put it back level with the raw store, and level is the floor. It was
-    // not lowered while it stood at 37, because 37 was a cost enrichment itself imposed.
+    // Keyword is 39 in the lexical-only arm, not 40: `FR-PH-43` sits at passage rank 23 and no
+    // lexical path reaches it.
     //
-    // The raw pair has no headroom, unlike the enriched one: 9 and 7 are two runs on one machine
-    // on one day sitting flush on the noisiest split, while 14 has a point of slack and weeks of
-    // runs under it. If the raw floors flap, they are the first thing to relax.
+    // The small model's pair has no headroom, unlike gemma's: 9 and 7 are runs sitting flush on
+    // the noisiest split. If they flap, they are the first thing to relax.
     //
     // A dense arm has no floors of its own under a model that never measured that arm — grading
     // it would be inventing a bar. `run` still prints what it found; it just cannot say pass or fail.
     if dense && floors == Floors::None { return false; }
     let key = if dense { floors } else { Floors::Small };
-    let Some(&(_, _, _, keyword, paraphrase)) = FLOORS.iter().find(|r| r.0 == enriched && r.1 == dense && r.2 == key) else { return false };
+    let Some(&(_, _, keyword, paraphrase)) = FLOORS.iter().find(|r| r.0 == dense && r.1 == key) else { return false };
     s.kind("keyword").0 >= keyword && s.kind("paraphrase").0 >= paraphrase && s.kind("code").0 >= 12 && s.p90_tokens <= P90_CEILING
 }
 
@@ -371,21 +360,7 @@ pub fn run(repo: &Path, cases: Option<&Path>, no_dense: bool, rerank: bool, rera
     let family_count = counted.0.len() + counted.1.len();
     let dense_idx = DenseIndex::load(&store)?;
     let recorded = DenseIndex::recorded_model(&store)?;
-    let questions = Questions::load(&store)?;
-    // One build serves every case in the run, so the code list's cost is paid once regardless
-    // of whether any case reranks — unlike a resident `Context`, there is nothing to save here.
-    let lex = crate::index::lexical::Lexical::build(&graph, &questions, true);
-    // The threshold decides the floors; the counts printed on the summary line stay exact.
-    let (covered, eligible) = coverage(&graph, &questions);
-    let other_languages = enrich::written_for_other_languages(&questions, &cfg.enrich_languages);
-    let enriched = enrich::enriched(covered, eligible) && !other_languages;
-    if other_languages {
-        println!("suite: the questions were not written for enrich_languages = {:?}, so the store is graded as not enriched; `repograph enrich` rewrites them", cfg.enrich_languages);
-    }
-    // Code questions are a configuration of their own and the summary line says so; the floors
-    // read `enriched`, which counts documents alone.
-    let (code_covered, code_eligible) = enrich::code_coverage(&graph, &questions);
-    let code_note = if code_covered > 0 { format!(" code_questions={code_covered}/{code_eligible}") } else { String::new() };
+    let lex = crate::index::lexical::Lexical::build(&graph);
     // `ask` degrading to lexical-only on a missing model is fine — a person reading the answer
     // sees the stderr notice and can judge it. `bench` speaks only through its exit code, so a
     // dense run that silently falls back and then grades against the weaker no-dense floor
@@ -418,9 +393,9 @@ pub fn run(repo: &Path, cases: Option<&Path>, no_dense: bool, rerank: bool, rera
     }
     let dense_on = !no_dense;
     let embedder = std::cell::RefCell::new(embedder);
-    let dense_fn = |q: &str, k: usize| -> (Vec<String>, Vec<String>) {
+    let dense_fn = |q: &str, k: usize| -> Vec<String> {
         let mut e = embedder.borrow_mut();
-        match e.as_mut().and_then(|e| e.query(q).ok()) { Some(v) => dense_idx.search(&v, k), None => (Vec::new(), Vec::new()) }
+        match e.as_mut().and_then(|e| e.query(q).ok()) { Some(v) => dense_idx.search(&v, k), None => Vec::new() }
     };
     let built_in = cases.is_none();
     let (cases_path, suite, text) = match cases {
@@ -443,7 +418,7 @@ pub fn run(repo: &Path, cases: Option<&Path>, no_dense: bool, rerank: bool, rera
     // A dense arm under a model with no floors of its own is still worth running — the case
     // file's shape earned grading, the store's embedder just never measured any. `gated` says so
     // through the exit code rather than a bail, so the run still prints what it found.
-    let mut gated = shape_ok && graded(enriched, dense_on, floors);
+    let mut gated = shape_ok && graded(dense_on, floors);
     // Named before the cases run, not after: a reader comparing the counts below against the
     // README floors is comparing them against this tree.
     let pin = built_in.then(|| BUILT_IN_PIN.trim()).filter(|p| !p.is_empty());
@@ -509,7 +484,7 @@ pub fn run(repo: &Path, cases: Option<&Path>, no_dense: bool, rerank: bool, rera
     tokens.sort_unstable();
     summary.p90_tokens = tokens.get(tokens.len() * 9 / 10).copied().unwrap_or(0);
     let counts = summary.by_kind.iter().map(|(k, (h, t))| format!("{k} {h}/{t}")).collect::<Vec<_>>().join("  ");
-    println!("\n{counts}  p90 {} tok  dense={dense_on}  enriched={enriched} ({covered}/{eligible} nodes) model={model_field} families={}{code_note}{}  suite={suite} gated={gated}",
+    println!("\n{counts}  p90 {} tok  dense={dense_on}  model={model_field} families={}{}  suite={suite} gated={gated}",
         summary.p90_tokens, family_count, match (rerank_local, rerank.is_some()) {
             (true, _) => format!(" rerank_local=true depth={depth}"),
             (false, true) => format!(" rerank=true depth={depth}"),
@@ -521,7 +496,7 @@ pub fn run(repo: &Path, cases: Option<&Path>, no_dense: bool, rerank: bool, rera
     // measurement retire the history it exists to extend.
     println!("{}", anchor_line(&summary));
     if let Some(line) = prompt_line(&prompts) { println!("{line}"); }
-    Ok((!gated || passes(&summary, dense_on, enriched, floors), summary))
+    Ok((!gated || passes(&summary, dense_on, floors), summary))
 }
 
 /// Anchors reached over anchors wanted, per kind, in the summary's own order.
@@ -736,60 +711,43 @@ mod tests {
         // Fixtures sit exactly on each floor so a boundary shifted by one in either direction
         // reddens the corresponding call; a fixture comfortably clear of the floor (the
         // original mistake) would not notice such a shift.
-        let at_floor_nodense = Summary::recorded((39, 40), (11, 30), (12, 12), 230);
-        let at_floor_dense = Summary::recorded((40, 40), (14, 30), (12, 12), 230);
-        assert!(passes(&at_floor_nodense, false, true, Floors::Small));
-        assert!(passes(&at_floor_dense, true, true, Floors::Small));
+        let at_floor_nodense = Summary::recorded((39, 40), (7, 30), (12, 12), 230);
+        let at_floor_dense = Summary::recorded((40, 40), (9, 30), (12, 12), 230);
+        let at_floor_gemma = Summary::recorded((40, 40), (18, 30), (12, 12), 230);
+        assert!(passes(&at_floor_nodense, false, Floors::Small));
+        assert!(passes(&at_floor_dense, true, Floors::Small));
+        assert!(passes(&at_floor_gemma, true, Floors::Gemma));
 
         // keyword: one short of its floor reddens either arm — 38 without embeddings, 39 with.
-        assert!(!passes(&at_floor_nodense.clone().with("keyword", (38, 40)), false, true, Floors::Small));
-        assert!(!passes(&at_floor_dense.clone().with("keyword", (39, 40)), true, true, Floors::Small));
+        assert!(!passes(&at_floor_nodense.clone().with("keyword", (38, 40)), false, Floors::Small));
+        assert!(!passes(&at_floor_dense.clone().with("keyword", (39, 40)), true, Floors::Small));
+        assert!(!passes(&at_floor_gemma.clone().with("keyword", (39, 40)), true, Floors::Gemma));
 
-        // code must be exact: one short reddens in both dense arms.
-        assert!(!passes(&at_floor_nodense.clone().with("code", (11, 12)), false, true, Floors::Small));
-        assert!(!passes(&at_floor_dense.clone().with("code", (11, 12)), true, true, Floors::Small));
+        // code must be exact: one short reddens every arm.
+        assert!(!passes(&at_floor_nodense.clone().with("code", (11, 12)), false, Floors::Small));
+        assert!(!passes(&at_floor_dense.clone().with("code", (11, 12)), true, Floors::Small));
+        assert!(!passes(&at_floor_gemma.clone().with("code", (11, 12)), true, Floors::Gemma));
 
         // p90: one token over the shared ceiling reddens either arm.
-        assert!(!passes(&Summary { p90_tokens: P90_CEILING + 1, ..at_floor_nodense.clone() }, false, true, Floors::Small));
-        assert!(!passes(&Summary { p90_tokens: P90_CEILING + 1, ..at_floor_dense.clone() }, true, true, Floors::Small));
+        assert!(!passes(&Summary { p90_tokens: P90_CEILING + 1, ..at_floor_nodense.clone() }, false, Floors::Small));
+        assert!(!passes(&Summary { p90_tokens: P90_CEILING + 1, ..at_floor_dense.clone() }, true, Floors::Small));
 
-        // paraphrase no-dense floor is 11: one short reddens the `dense: false` call.
-        assert!(!passes(&at_floor_nodense.clone().with("paraphrase", (10, 30)), false, true, Floors::Small));
-        // paraphrase dense floor is 14: one short reddens the `dense: true` call.
-        assert!(!passes(&at_floor_dense.clone().with("paraphrase", (13, 30)), true, true, Floors::Small));
+        // paraphrase: one short of each arm's floor reddens it.
+        assert!(!passes(&at_floor_nodense.clone().with("paraphrase", (6, 30)), false, Floors::Small));
+        assert!(!passes(&at_floor_dense.clone().with("paraphrase", (8, 30)), true, Floors::Small));
+        assert!(!passes(&at_floor_gemma.clone().with("paraphrase", (17, 30)), true, Floors::Gemma));
+        // The small model's dense run does not clear gemma's bar: the floors follow the model.
+        assert!(!passes(&at_floor_dense, true, Floors::Gemma));
 
         // A summary of another suite has none of the graded kinds and reads as every floor
         // missed, which is why `run` never grades one.
-        assert!(!passes(&Summary::default().with("long", (15, 15)), true, true, Floors::Small));
+        assert!(!passes(&Summary::default().with("long", (15, 15)), true, Floors::Small));
 
         // A model with no floors of its own is measured and never graded in its dense arm; its
         // lexical arm has no embedder in it and reads the small model's floors.
-        assert!(!passes(&at_floor_dense, true, true, Floors::None));
-        assert!(passes(&at_floor_nodense, false, true, Floors::None), "lexical arms do not read the model");
-        assert!(!passes(&at_floor_nodense.clone().with("keyword", (38, 40)), false, true, Floors::None));
-    }
-
-    #[test]
-    fn a_store_without_questions_is_graded_on_the_numbers_it_reads() {
-        // Exactly what a store `enrich` has never touched measures on the corpus, so a shift of
-        // one in either direction is visible here.
-        let raw_dense = Summary::recorded((40, 40), (9, 30), (12, 12), 221);
-        let raw_nodense = Summary::recorded((39, 40), (7, 30), (12, 12), 226);
-        assert!(passes(&raw_dense, true, false, Floors::Small));
-        assert!(passes(&raw_nodense, false, false, Floors::Small));
-
-        // The same run against a store that paid for its questions is a failure, which is what
-        // keeps the enriched bar a bar.
-        assert!(!passes(&raw_dense, true, true, Floors::Small));
-        assert!(!passes(&raw_nodense, false, true, Floors::Small));
-
-        // One short of each raw floor reddens, the `--no-dense` keyword floor of 39 included.
-        assert!(!passes(&raw_dense.clone().with("paraphrase", (8, 30)), true, false, Floors::Small));
-        assert!(!passes(&raw_nodense.clone().with("paraphrase", (6, 30)), false, false, Floors::Small));
-        assert!(!passes(&raw_dense.clone().with("keyword", (39, 40)), true, false, Floors::Small));
-        assert!(!passes(&raw_nodense.clone().with("keyword", (38, 40)), false, false, Floors::Small));
-        assert!(!passes(&raw_dense.clone().with("code", (11, 12)), true, false, Floors::Small));
-        assert!(!passes(&Summary { p90_tokens: P90_CEILING + 1, ..raw_nodense.clone() }, false, false, Floors::Small));
+        assert!(!passes(&at_floor_dense, true, Floors::None));
+        assert!(passes(&at_floor_nodense, false, Floors::None), "lexical arms do not read the model");
+        assert!(!passes(&at_floor_nodense.clone().with("keyword", (38, 40)), false, Floors::None));
     }
 
     #[test]
@@ -802,15 +760,15 @@ mod tests {
         // merely measured: a default moved to a model with no floors of its own would turn every
         // fresh store's `bench` green-by-abstention, `gated=false` with nothing red to say so.
         assert_ne!(floors_for(Some(crate::index::embed::DEFAULT_MODEL)), Floors::None);
-        assert!(graded(true, true, floors_for(Some(crate::index::embed::DEFAULT_MODEL))));
+        assert!(graded(true, floors_for(Some(crate::index::embed::DEFAULT_MODEL))));
     }
 
     #[test]
     fn an_arm_its_model_never_measured_is_measured_and_not_graded() {
-        assert!(graded(false, false, Floors::None), "a lexical arm reads no model");
-        assert!(graded(false, true, Floors::Small));
-        assert!(!graded(false, true, Floors::Gemma), "gemma's raw dense arm has no row");
-        assert!(!graded(true, true, Floors::None));
+        assert!(graded(false, Floors::None), "a lexical arm reads no model");
+        assert!(graded(true, Floors::Small));
+        assert!(graded(true, Floors::Gemma));
+        assert!(!graded(true, Floors::None));
     }
 
     #[test]

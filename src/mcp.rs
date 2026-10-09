@@ -242,10 +242,8 @@ impl Server {
         if graph.nodes.is_empty() {
             say("index: empty; `reindex` builds it".to_string());
         } else {
-            let questions = crate::enrich::Questions::load(&store)?;
-            let brief = prime::brief(&graph, &questions, 0, None);
+            let brief = prime::brief(&graph, 0, None);
             say(format!("index: {} doc nodes, {} code nodes, {} edges", brief.docs, brief.code, brief.edges));
-            say(format!("questions: {}/{} eligible nodes", brief.covered, brief.eligible));
         }
         let cfg = self.config();
         match &cfg {
@@ -276,7 +274,7 @@ impl Server {
             match index::dense::DenseIndex::load(&store) {
                 Ok(dense) => {
                     let rows = dense.ids.iter().filter(|id| !id.is_empty()).count();
-                    let owed = crate::enrich::Questions::load(&store).map(|q| dense.owed(&graph, &q)).unwrap_or(0);
+                    let owed = dense.owed(&graph);
                     say(format!("vectors: {rows} rows, {owed} owed"));
                 }
                 Err(err) => say(format!("vectors: unreadable ({err:#})")),

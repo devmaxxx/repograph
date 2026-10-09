@@ -1,7 +1,7 @@
 //! `ask --rerank`: the configured model command picks the seeds from the deep fused candidate
 //! list. Costs tokens per question (≈19k on the bench corpus); nothing runs without the flag.
 
-use crate::enrich::run_command;
+use crate::command::run_command;
 
 /// How far down the fused list the model looks. Measured on the bench corpus with questions
 /// enriched and a snippet per candidate: 100 deep leaves the target at pool rank 142 out of

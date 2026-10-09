@@ -11,7 +11,7 @@
 | [languages](languages.md) | what each grammar reads and does not read |
 | [configuration](configuration.md) | `repograph.toml`, the machine file, environment variables, id families, `resources` |
 | [embeddings](embeddings.md) | the default model, the cache, choosing and switching models |
-| [enrich and rerank](enrich-and-rerank.md) | the two opt-in stages that spend model tokens |
+| [rerank](rerank.md) | the opt-in stage that spends model tokens |
 | [benchmarks](benchmarks.md) | `bench`, the floors, exit codes, measured numbers |
 | [the graph model](graph-model.md) | node and edge kinds, what the extractors take, what `impact` and `changes` can and cannot prove |
 | [the measurements](history.md) | every reading that decided a default |

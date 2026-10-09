@@ -105,8 +105,7 @@ impl Store {
         self.write_atomic(&mirror_name(json), &bytes)
     }
 
-    /// The store holds passages of the repository's documents and code and the questions a model
-    /// wrote about them, so it carries its own `.gitignore`: a `git add -A` in a repository that
+    /// The store holds passages of the repository's documents and code, so it carries its own `.gitignore`: a `git add -A` in a repository that
     /// never listed `.repograph/` would otherwise commit it.
     pub(crate) fn ensure_dir(&self) -> Result<()> {
         std::fs::create_dir_all(&self.dir)?;
@@ -503,12 +502,12 @@ mod tests {
         let s = Store::new(d.path());
         s.save(&Graph::default(), &Manifest::default()).unwrap();
         s.write_atomic("vectors.f32", b"v").unwrap();
-        s.write_atomic("questions.json", b"{}").unwrap();
+        s.write_atomic("headers.json", b"{}").unwrap();
         s.drop_leftovers().unwrap();
         assert!(d.path().join(".repograph/graph.json").exists());
         assert!(d.path().join(".repograph/manifest.json").exists());
         assert_eq!(s.read_bytes("vectors.f32").unwrap().as_deref(), Some(&b"v"[..]));
-        assert_eq!(s.read_bytes("questions.json").unwrap().as_deref(), Some(&b"{}"[..]));
+        assert_eq!(s.read_bytes("headers.json").unwrap().as_deref(), Some(&b"{}"[..]));
     }
 
     #[test]

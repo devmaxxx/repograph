@@ -12,11 +12,8 @@ in full, not an empty config:
 | `skip`               | `["**/node_modules/**", "**/dist/**", "**/*.min.js", "**/.yarn/**", "**/.pnp.*", "**/target/**", "**/.venv/**", "**/venv/**", "**/__pycache__/**", "**/.terraform/**", "**/.dart_tool/**", "**/Pods/**", "**/TRACKER.md", "graphify-out/**", ".repograph/**"]` |
 | `include`            | `[]` — the whole repository; set, only these directories (`src`, `docs/specs`) or globs are read |
 | `registries`         | `["docs/constitution.yaml"]`                                                                |
-| `enrich_command`     | **machine file only** — headless `claude -p --model {model}` with thinking off, see [Spending tokens on purpose](enrich-and-rerank.md) |
-| `rerank_command`     | **machine file only** — the same command, with `rerank_model` in its `{model}`               |
-| `enrich_model`       | `haiku` — whatever goes in `enrich_command`'s `{model}`                                      |
-| `rerank_model`       | `sonnet` — the same for `rerank_command`                                                    |
-| `enrich_languages`   | `[]` — the languages `enrich` writes questions in, named as the model reads them (`["Russian", "English"]`); empty = detected from the documents, English where they name none; any language name is accepted, see [Spending tokens on purpose](enrich-and-rerank.md) |
+| `rerank_command`     | **machine file only** — headless `claude -p --model {model}` with thinking off, see [Spending tokens on purpose](rerank.md) |
+| `rerank_model`       | `sonnet` — whatever goes in `rerank_command`'s `{model}`                                     |
 | `reranker_dir`       | directory of the exported cross-encoder for `--rerank-local`; empty = `~/.cache/repograph/reranker`. Machine file only: a repository's is ignored, like the commands |
 | `embed_model`        | `onnx-community/embeddinggemma-300m-ONNX`; the model the vectors are written with — nine were measured and `repograph model` switches it, see [Embeddings](embeddings.md) |
 | `reader_budget`      | `10` — seconds a reader may spend refreshing before it answers from the store as it stands and leaves the rest to a detached `update`; `0` never refreshes inline. The machine file may set it; `REPOGRAPH_READER_BUDGET` overrides, see [Keeping it fresh](keeping-fresh.md#keeping-it-fresh) |
@@ -31,8 +28,8 @@ nothing outside those two directories, whatever the other globs claim, and the n
 what an earlier store held outside them. Credential files are never read under any setting: `.env`
 and `.env.*` (the templates `.env.example`, `.sample`, `.template` and `.dist` excepted), private
 keys and keystores, `.npmrc`, `.pypirc`, `.netrc`, `.git-credentials`, cloud credentials,
-`*.tfvars`, `*.tfstate` and `secrets.{yaml,json,toml,…}` — their content would otherwise reach the store, an
-`enrich` prompt sent to a model, and the answers.
+`*.tfvars`, `*.tfstate` and `secrets.{yaml,json,toml,…}` — their content would otherwise reach the store, a
+`--rerank` prompt sent to a model, and the answers.
 
 The store writes its own `.gitignore` holding `*`, so `.repograph/` stays out of a commit in a
 repository that never listed it.
@@ -48,8 +45,8 @@ prints the twelve lines around it rather than the whole file. A store holding te
 0.6.0 and later only: 0.5.x stops on `graph.json: unknown variant Text`, and `build` with that
 binary rebuilds a store it can read.
 Text nodes ride a list of their own in the fusion, seated only when a configuration file covers the
-question's words as completely as a requirement does — the admission the generated questions are
-seated under. It stays empty by default because text still costs a little `ask` recall: on the bench
+question's words as completely as a requirement does — the admission `enrich`'s generated
+questions were seated under until 0.6.0. It stays empty by default because text still costs a little `ask` recall: on the bench
 fixture under the default embedder, `text_globs = ["**/*"]` takes paraphrase questions from 20 to 19
 of 30 and the dev suite from 36 to 33 of 60 (one shared list cost 18 and 30), while twelve
 config-file questions read 12/12. Turn it on where finding a configuration file matters more than
@@ -57,13 +54,13 @@ finding the requirement; the readings are in [the text-list rule](bench/2026-10-
 
 ### Choosing a model, and where the choice lives
 
-`enrich_command` and `rerank_command` are the transport — any program that reads a prompt on stdin —
-and which model that program runs is a separate key, substituted into the command's `{model}`.
+`rerank_command` is the transport — any program that reads a prompt on stdin — and which model
+that program runs is a separate key, substituted into the command's `{model}`.
 Changing model is a word rather than a rewritten command line; a command naming no `{model}` runs
-exactly as written. Nothing here assumes a vendor. Both run under `sh -c`; on Windows that is Git
+exactly as written. Nothing here assumes a vendor. It runs under `sh -c`; on Windows that is Git
 for Windows' `sh`, found on `PATH`, beside `git`, at `CLAUDE_CODE_GIT_BASH_PATH` or under Program
-Files, with Git's `usr\bin` put on the command's own `PATH`. Without Git for Windows, `enrich` and
-`ask --rerank` refuse with a line that says so and everything else runs.
+Files, with Git's `usr\bin` put on the command's own `PATH`. Without Git for Windows,
+`ask --rerank` refuses with a line that says so and everything else runs.
 
 Which model to run is usually a property of the machine — what is installed, what the account may
 spend — rather than of the corpus, so it can be set once for every repository. Three layers, each
@@ -71,29 +68,28 @@ beating the one below it:
 
 | Layer | Where |
 | --- | --- |
-| the run | `REPOGRAPH_ENRICH_MODEL`, `REPOGRAPH_RERANK_MODEL`, `REPOGRAPH_ENRICH_LANGUAGES`, `REPOGRAPH_RESOURCES` |
+| the run | `REPOGRAPH_RERANK_MODEL`, `REPOGRAPH_RESOURCES` |
 | the repository | `repograph.toml` |
 | the machine | `$REPOGRAPH_CONFIG`, else `$XDG_CONFIG_HOME/repograph/config.toml`, else `~/.config/repograph/config.toml` (`%USERPROFILE%\.config\repograph\config.toml` on Windows) |
 
 ```toml
 # ~/.config/repograph/config.toml — every repository on this machine, unless it says otherwise
-enrich_model = "haiku"
 rerank_model = "sonnet"
 ```
 
-A key the repository names wins even when it names the built-in value — with two exceptions, and
-they run the other way. **`enrich_command` and `rerank_command` are read from the machine file and
-never from a repository.** A repository you cloned is untrusted input, and those two keys are a
-shell command that would run on your machine the first time you ran `enrich` or `ask --rerank` in
-it; a `repograph.toml` that names one gets a line on stderr saying where the key belongs. If the
-machine file names its own command, that one runs. If not, `enrich` and `bench --rerank` stop
+A key the repository names wins even when it names the built-in value — with one exception, and it
+runs the other way. **`rerank_command` is read from the machine file and never from a
+repository.** A repository you cloned is untrusted input, and that key is a shell command that
+would run on your machine the first time you ran `ask --rerank` in it; a `repograph.toml` that
+names one gets a line on stderr saying where the key belongs. If the machine file names its own
+command, that one runs. If not, `bench --rerank` stops
 instead of falling through to the built-in paid model, and `ask --rerank` answers from the fused
 order: a repository naming its own transport did not ask for the default one. A repository may still say which *model* it wants,
 and because that name lands in a shell string, anything outside letters, digits and `._:/@+-` is
 refused the same way. What a clone chooses is the model; what runs it is yours.
 
-The machine file may set **only** `enrich_command`, `rerank_command`, `enrich_model`,
-`rerank_model`, `reranker_dir` and `resources`, and refuses any other key by name: the
+The machine file may set **only** `rerank_command`, `rerank_model`, `reranker_dir` and
+`resources`, and refuses any other key by name: the
 corpus-shaped keys describe one repository's documents, and a global `embed_model` would rewrite
 every store's vectors under a model nobody chose for it.
 
@@ -103,19 +99,23 @@ scheduling band any more. Either key left in a config file is a hard error namin
 key, not a setting quietly ignored — both structs are `deny_unknown_fields`, and a key that parsed
 and did nothing would leave you believing a number you wrote is still read.
 
-Three of those keys name a model and one names a directory, and they are four different jobs.
-`enrich_model` writes the questions (`haiku`: the register the questions are written in beats the
-model that writes them); `rerank_model` picks five ids out of a 200-deep pool (`sonnet`: opus buys
+`enrich_command`, `enrich_model` and `enrich_languages` went with `enrich` in 0.6.0. They still
+parse, so a config written for 0.5.x keeps working, and each one present prints `repograph.toml:
+<key> is no longer read — enrich was removed in 0.6.0` (`config.toml:` from the machine file);
+delete them.
+
+Two of those keys name a model and one names a directory, and they are three different jobs.
+`rerank_model` picks five ids out of a 200-deep pool (`sonnet`: opus buys
 nothing and costs a keyword hit, haiku loses three paraphrases); `embed_model` is the store's own
 and is weighed in [ADR-002](adr/ADR-002-two-defaults-multiplied.md); `reranker_dir` is the
 local cross-encoder, measured and rejected as a floor candidate. Every one of those readings, with
 what each stage asks of a model, is in
 [the measurements](history.md#what-each-stage-asks-of-a-model-and-every-answer-measured).
 
-**The contract a command has to meet** is the same for both stages and names no vendor. `sh -c`
+**The contract a command has to meet** is names no vendor. `sh -c`
 runs it, the prompt arrives whole on stdin, the answer is read from stdout, and `{model}` anywhere
-in the command is replaced by that stage's model key. Both parsers keep only what they recognise — `id<TAB>question` lines for ids in the batch from
-`enrich`, ids it actually showed from `--rerank`, in the model's order — so a chattier command is
+in the command is replaced by `rerank_model`. The parser keeps only what it recognises — ids `--rerank` actually
+showed, in the model's order — so a chattier command is
 survivable rather than fatal, and a failing one is answered with a notice and the fused order. A
 command that answers without reading its prompt to the end is fine too: the broken pipe the write
 hits is ignored on purpose. The default runs headless Claude Code with thinking off: the same
@@ -155,14 +155,11 @@ rerank_model = "sonnet"
 
 No non-Claude model has been read on these cases, so none of the rows above is a claim about one.
 An attempt on 2026-09-10 filled none of them and wrote down why — an account, an empty Ollama
-shelf, a 2.1 GB download, ~$6 of enrichment — in
+shelf, a 2.1 GB download, ~$6 of the since-removed enrichment — in
 [the cross-vendor refusals](bench/2026-09-10-cross-vendor-refusals.md), which also re-checks
 both shapes against the installed CLIs.
-Reading one is the same two commands the numbers here came from: `bench --rerank` against an
-enriched store measures a `rerank_model`, and a plain `bench` against a copy the other model
-enriched measures an `enrich_model`. A store records the model its *vectors* were written with and
-nothing about the model that wrote its questions, so those copies are kept apart by hand — one
-directory per enriching model — or the comparison quietly measures a mixture.
+Reading one is the command the numbers here came from: `bench --rerank` measures a
+`rerank_model`.
 
 ### Id families
 
@@ -213,7 +210,7 @@ unaffected.
 ## Resources
 
 Every reader costs a fraction of a second and the model it opened. The one command that can take a
-machine over is a writer that has to embed a store whole — `build`, `update`, `enrich`, `embed` or
+machine over is a writer that has to embed a store whole — `build`, `update`, `embed` or
 `watch` on rows another model wrote. One word bounds it:
 
 | `resources` | threads | wall | peak CPU (mean) |
