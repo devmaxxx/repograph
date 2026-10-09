@@ -54,10 +54,10 @@ pub struct Config {
     /// It describes the machine rather than the corpus — the same repository wants every core on
     /// a CI box and a quiet laptop's spare ones — so the global file may set it, unlike
     /// `embed_model`, whose value is a property of the vectors on disk. It is a straight trade
-    /// with no free side: on a whole-store embed of the bench fixture the three levels read
-    /// 168.8 s at 382% peak CPU, 265.7 s at 275% and 358.7 s at 140%
-    /// (docs/bench/2026-09-09-normal-band-only-results.md). `REPOGRAPH_RESOURCES` overrides it
-    /// for one run.
+    /// with no free side: on a whole-store `build` of the bench fixture the three levels read
+    /// 403.4 s at 580% peak CPU, 674.3 s at 301% and 970.2 s at 201%
+    /// (docs/bench/2026-10-09-bound-build-results.md). `REPOGRAPH_RESOURCES` overrides it for
+    /// one run.
     pub resources: crate::index::embed::Resources,
     /// Seconds a reader (`ask`, `impact`, `trace`, `changes`, `explain`) may spend bringing the
     /// store in line before it answers. A refresh that would not fit is left to a detached

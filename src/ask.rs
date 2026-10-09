@@ -27,6 +27,18 @@ impl Timing {
     }
 }
 
+/// One line per writer phase under `REPOGRAPH_TIMING`, in milliseconds since the first mark. A
+/// writer has no `Timing` to carry: `apply_diff` is shared by every refresh path, and threading
+/// one through each of them would be a signature change for a diagnostic. The clock starts at the
+/// first mark of the process, so the offsets read as phases only in a one-shot `build` or
+/// `update`; under `watch` or `serve` they keep counting from the first refresh.
+pub(crate) fn mark(what: &str) {
+    static START: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+    if !timing_on() { return; }
+    let start = *START.get_or_init(std::time::Instant::now);
+    eprintln!("timing: {:>9.1} ms  {what}", start.elapsed().as_secs_f64() * 1e3);
+}
+
 /// What a model open yields, named because it also crosses a thread boundary.
 pub(crate) type Opened = Result<Option<index::embed::Embedder>, String>;
 

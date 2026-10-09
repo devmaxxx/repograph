@@ -17,7 +17,7 @@ in full, not an empty config:
 | `reranker_dir`       | directory of the exported cross-encoder for `--rerank-local`; empty = `~/.cache/repograph/reranker`. Machine file only: a repository's is ignored, like the commands |
 | `embed_model`        | `onnx-community/embeddinggemma-300m-ONNX`; the model the vectors are written with — nine were measured and `repograph model` switches it, see [Embeddings](embeddings.md) |
 | `reader_budget`      | `10` — seconds a reader may spend refreshing before it answers from the store as it stands and leaves the rest to a detached `update`; `0` never refreshes inline. The machine file may set it; `REPOGRAPH_READER_BUDGET` overrides, see [Keeping it fresh](keeping-fresh.md#keeping-it-fresh) |
-| `resources`          | `"balanced"` = a third of the logical cores; `"low"` a sixth, `"full"` a half — how much of the machine a run may take, see [Resources](configuration.md#resources) |
+| `resources`          | `"balanced"` = 30% of the logical cores; `"low"` a sixth, `"full"` a half — how much of the machine a run may take, see [Resources](configuration.md#resources) |
 
 `REPOGRAPH_CODE_GLOBS`, whitespace-separated, replaces `code_globs` for one run. It is a measurement's
 switch, as `REPOGRAPH_EMBED_MODEL` is, so a reading can name other globs without writing a
@@ -213,19 +213,28 @@ Every reader costs a fraction of a second and the model it opened. The one comma
 machine over is a writer that has to embed a store whole — `build`, `update`, `embed` or
 `watch` on rows another model wrote. One word bounds it:
 
-| `resources` | threads | wall | peak CPU (mean) |
-| --- | --- | --- | --- |
-| `"full"` | 6 | 168.8 s | 382% (335%) |
-| `"balanced"` *(the default)* | 4 | 265.7 s | 275% (218%) |
-| `"low"` | 2 | 358.7 s | 140% (127%) |
+| `resources` | threads | `build` wall | `update` wall | peak CPU (mean), any phase | peak RSS |
+| --- | --- | --- | --- | --- | --- |
+| `"full"` | 6 | 403.4 s | 83.4 s | 580% (539%) | 1.35 GB |
+| `"balanced"` *(the default)* | 3 | 674.3 s | 139.2 s | 301% (296%) | 1.40 GB |
+| `"low"` | 2 | 970.2 s | 198.8 s | 201% (199%) | 1.33 GB |
 
-The fixture's 33,525 rows under the default model on a twelve-core Apple Silicon machine
-([2026-09-09](bench/2026-09-09-normal-band-only-results.md)). The rule is fractions of the
-logical cores with one thread as the floor: `full` a half, `balanced` a third, `low` a sixth — so
-the level follows the machine, and a container gets a fraction of its quota rather than of the
-host. Set it in `repograph.toml`, once for the machine in `~/.config/repograph/config.toml`, or
-`REPOGRAPH_RESOURCES=full` for one run. A build server wants `full`; a laptop you are working on
-wants `low`.
+Measured 2026-10-09 on the bench fixture under the default model on a twelve-core Apple Silicon
+machine: `build` from an empty store embeds all 11,590 rows, `update` re-reads 94 edited files and
+embeds 1,011 ([the results](bench/2026-10-09-bound-build-results.md), per phase). The embed is the
+phase that sets the peak: walk, parse, settle and save run on one thread for about two seconds, and
+the model open's half second stays under the embed's figure at every level.
+
+The rule is fractions of the logical cores with one thread as the floor: `full` a half, `balanced`
+30%, `low` a sixth — so the level follows the machine, and a container gets a fraction of its
+quota rather than of the host. A level's threads are all a run computes on: `n` threads read as
+`n` cores. `balanced` was a third until 2026-10-09; on twelve cores that was four threads and 394%,
+over the 30% it is meant to hold, and three threads cost **about 30% more wall** (521.1 s → 674.3 s
+on `build`, 107.2 s → 139.2 s on `update`) for a peak of 301%. Memory is not per thread: peak RSS is
+the model's memory-mapped weights, which the system may drop and re-read, plus about 0.35 GB of
+the graph and the rows being written, whatever the level. Set it in `repograph.toml`, once for the
+machine in `~/.config/repograph/config.toml`, or `REPOGRAPH_RESOURCES=full` for one run. A build
+server wants `full`; a laptop you are working on wants `low`.
 
 `resources` is the only resource lever there is: `threads` and `priority` were removed on
 2026-09-09, and `full` is now both the most of the machine you can ask for and the fastest setting
