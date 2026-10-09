@@ -1,5 +1,11 @@
 name: ci
-on: [push, pull_request]
+# A push to a branch with an open PR fires both events on the same commit, so branches are tested
+# through the PR and main after the merge; workflow_dispatch runs a branch that has no PR yet.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
 jobs:
   # One job definition, three platforms. Everything a user does around the binary — install it,
   # start it, ask it under a path that is not ASCII, let Claude Code's shell find `claude` — is
