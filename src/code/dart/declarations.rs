@@ -2,6 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use tree_sitter::Node;
 
+use crate::code::syntax::{child, named, span, text};
 use crate::model::{EdgeKind, Extraction, NodeKind};
 
 #[derive(Debug, Default)]
@@ -15,23 +16,6 @@ pub struct Declared {
     pub fields: BTreeMap<String, BTreeMap<String, String>>,
     /// (declaring id, supertype name) from `extends`, `with` and `implements`, resolved by the caller.
     pub supers: Vec<(String, String)>,
-}
-
-pub(crate) fn text<'a>(n: Node, src: &'a [u8]) -> &'a str {
-    n.utf8_text(src).unwrap_or("")
-}
-
-pub(crate) fn named<'t>(n: Node<'t>) -> Vec<Node<'t>> {
-    let mut c = n.walk();
-    n.named_children(&mut c).collect()
-}
-
-pub(crate) fn child<'t>(n: Node<'t>, kind: &str) -> Option<Node<'t>> {
-    named(n).into_iter().find(|c| c.kind() == kind)
-}
-
-fn span(n: Node) -> (u32, u32) {
-    (n.start_position().row as u32 + 1, n.end_position().row as u32 + 1)
 }
 
 /// Dart has no visibility keyword: a leading underscore makes a name private to its library.

@@ -2,9 +2,7 @@
 //! extracting a file never opens another.
 
 use crate::code::imports::Resolver;
-use crate::code::jvm::text;
 use crate::code::lang::{file_node, Lang};
-use crate::code::rust_lang::field_text;
 use crate::model::Extraction;
 
 mod defs;

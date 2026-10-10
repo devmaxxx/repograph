@@ -10,6 +10,7 @@ mod cases;
 use crate::code::imports::Resolver;
 use crate::code::lang::{file_node, Lang};
 use crate::code::prose::{self, Spans};
+use crate::code::syntax;
 use crate::model::{EdgeKind, Extraction, Graph};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use tree_sitter::Node;
@@ -24,7 +25,7 @@ pub fn extract(resolver: &Resolver, rel: &str, source: &str) -> Extraction {
     let mut spans = Spans::new(rel);
     for f in functions(root) {
         let Some(name) = f.child_by_field_name("name") else { continue };
-        let id = format!("sym:{rel}::{}", prose::text(name, src));
+        let id = format!("sym:{rel}::{}", syntax::text(name, src));
         prose::declare(&mut ex, rel, &file, &id, f, &prose::body(f, src, &[]), "export");
         spans.push(f, &id);
     }
@@ -90,7 +91,7 @@ impl Scripts {
         let root = tree.root_node();
         let names = functions(root).into_iter()
             .filter_map(|f| f.child_by_field_name("name"))
-            .map(|n| prose::text(n, src).to_string())
+            .map(|n| syntax::text(n, src).to_string())
             .collect();
         self.functions.insert(rel.to_string(), names);
         self.sources.insert(rel.to_string(), commands::sources(root, src, rel));

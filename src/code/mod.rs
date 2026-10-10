@@ -20,6 +20,7 @@ pub mod shell;
 pub mod sql;
 pub mod swift;
 pub mod symbols;
+pub(crate) mod syntax;
 pub mod vue;
 
 use crate::model::{Extraction, Extractor};

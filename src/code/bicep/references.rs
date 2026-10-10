@@ -2,7 +2,8 @@
 //! reference exactly when a declaration of this file has it and nothing nearer binds it.
 
 use super::Decl;
-use crate::code::prose::{self, Spans};
+use crate::code::prose::Spans;
+use crate::code::syntax;
 use crate::model::{EdgeKind, Extraction};
 use std::borrow::Cow;
 use std::collections::BTreeMap;
@@ -19,34 +20,34 @@ pub(super) fn write(root: Node, decls: &[Decl], spans: &Spans, src: &[u8], rel: 
         let spelled: Vec<Cow<str>> = match n.kind() {
             "decorators" => {
                 let owner = super::next_code(n).map(|d| d.start_byte());
-                stack.extend(prose::named(n).into_iter().map(|c| (c, owner)));
+                stack.extend(syntax::named(n).into_iter().map(|c| (c, owner)));
                 continue;
             }
             // `vnet::subnet` names the child; a parent whose child this file does not declare is still named.
             "resource_expression" => match (n.child_by_field_name("object"), n.child_by_field_name("resource")) {
                 (Some(o), Some(r)) => {
-                    let parent = prose::text(o, src);
-                    vec![Cow::Owned(format!("{parent}.{}", prose::text(r, src))), Cow::Borrowed(parent)]
+                    let parent = syntax::text(o, src);
+                    vec![Cow::Owned(format!("{parent}.{}", syntax::text(r, src))), Cow::Borrowed(parent)]
                 }
                 _ => Vec::new(),
             },
             // A call names a function, and only a `func` of this file is one: `range(0, 3)` beside
             // `param range` is the built-in.
             "identifier" if is_callee(n) => {
-                let name = prose::text(n, src);
+                let name = syntax::text(n, src);
                 if funcs.contains(&name) { vec![Cow::Borrowed(name)] } else { Vec::new() }
             }
-            "identifier" if refers(n) => scoped(n, prose::text(n, src), &by_node),
+            "identifier" if refers(n) => scoped(n, syntax::text(n, src), &by_node),
             "identifier" => Vec::new(),
             _ => {
-                stack.extend(prose::named(n).into_iter().map(|c| (c, owner)));
+                stack.extend(syntax::named(n).into_iter().map(|c| (c, owner)));
                 continue;
             }
         };
         let Some((name, target)) = spelled.iter().find_map(|s| by_name.get(s.as_ref()).map(|t| (s, *t))) else { continue };
         let from = spans.owner(owner.unwrap_or_else(|| n.start_byte()));
         // The name a binder would have to spell: the object of `vnet::subnet`, or the bare identifier.
-        let spelling = if n.kind() == "identifier" { prose::text(n, src) } else { name.split('.').next().unwrap_or(name) };
+        let spelling = if n.kind() == "identifier" { syntax::text(n, src) } else { name.split('.').next().unwrap_or(name) };
         if from != target && !shadowed(n, spelling, src) {
             ex.edge(from, target, EdgeKind::References, "", rel);
         }
@@ -86,7 +87,7 @@ fn is_callee(n: Node) -> bool {
 
 /// A lambda's last named child is its body; every child before it is a parameter list.
 fn is_body(lambda: Node, n: Node) -> bool {
-    prose::named(lambda).last().is_some_and(|b| b.id() == n.id())
+    syntax::named(lambda).last().is_some_and(|b| b.id() == n.id())
 }
 
 /// Whether a loop variable, lambda parameter or function parameter between the identifier and the file
@@ -100,22 +101,22 @@ fn shadowed(n: Node, name: &str, src: &[u8]) -> bool {
             "for_statement" if a.child_by_field_name("body").is_some_and(|b| b.id() == child.id()) => {
                 match a.child_by_field_name("initializer") {
                     Some(i) => vec![i],
-                    None => a.named_child(0).map(prose::named).unwrap_or_default(),
+                    None => a.named_child(0).map(syntax::named).unwrap_or_default(),
                 }
             }
             "lambda_expression" if is_body(a, child) => {
-                let mut params = prose::named(a);
+                let mut params = syntax::named(a);
                 params.pop();
-                params.into_iter().flat_map(|p| if p.kind() == "identifier" { vec![p] } else { prose::named(p) }).collect()
+                params.into_iter().flat_map(|p| if p.kind() == "identifier" { vec![p] } else { syntax::named(p) }).collect()
             }
             "user_defined_function" if child.kind() != "parameters" => {
                 // `parameters` is a child node here, not a field of the grammar.
-                prose::named(a).into_iter().find(|c| c.kind() == "parameters")
-                    .map(|ps| prose::named(ps).into_iter().filter_map(|p| p.named_child(0)).collect()).unwrap_or_default()
+                syntax::named(a).into_iter().find(|c| c.kind() == "parameters")
+                    .map(|ps| syntax::named(ps).into_iter().filter_map(|p| p.named_child(0)).collect()).unwrap_or_default()
             }
             _ => Vec::new(),
         };
-        if binders.iter().any(|b| prose::text(*b, src) == name) {
+        if binders.iter().any(|b| syntax::text(*b, src) == name) {
             return true;
         }
         child = a;

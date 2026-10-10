@@ -11,8 +11,8 @@ use tree_sitter::Node;
 
 use crate::code::imports::Resolver;
 use crate::code::lang::{file_node, Lang};
+use crate::code::syntax::{named, text};
 use crate::model::{EdgeKind, Extraction};
-use declarations::{named, text};
 use library::Libraries;
 
 /// One parse per file; every pass reads the same tree.

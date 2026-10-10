@@ -2,8 +2,8 @@
 //! other files' contents, so extracting a file never opens another.
 
 use crate::code::imports::Resolver;
-use crate::code::jvm::text;
 use crate::code::lang::{file_node, Lang};
+use crate::code::syntax::{field_text, text};
 use crate::model::Extraction;
 use tree_sitter::Node;
 
@@ -48,10 +48,6 @@ pub(crate) fn inline_of(n: Node, src: &[u8]) -> Vec<String> {
     }
     out.reverse();
     out
-}
-
-pub(crate) fn field_text<'a>(n: Node, field: &str, src: &'a [u8]) -> Option<&'a str> {
-    n.child_by_field_name(field).map(|c| text(c, src))
 }
 
 /// An item's id suffix inside inline modules: every segment but a member is joined with `/`.

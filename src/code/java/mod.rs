@@ -10,8 +10,9 @@ use tree_sitter::Node;
 
 use crate::code::imports::Resolver;
 use crate::code::index::{Header, Nested, QualifiedIndex};
-use crate::code::jvm::{self, child, named, text, Scope};
+use crate::code::jvm::{self, Scope};
 use crate::code::lang::{Family, Lang};
+use crate::code::syntax::{child, named, text};
 use crate::model::Extraction;
 
 /// The comment kinds a Java doc block is read from.

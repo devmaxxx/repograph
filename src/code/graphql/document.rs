@@ -3,7 +3,7 @@
 //! and `extract` read one list of declarations.
 use tree_sitter::Node;
 
-use crate::code::jvm::{child, find, named, text};
+use crate::code::syntax::{child, find, named, text};
 use crate::model::EdgeKind;
 
 /// Capped as TypeScript's doc comments are, so a long description does not drown the declaring line.

@@ -1,4 +1,5 @@
 use crate::code::imports::Resolver;
+use crate::code::syntax::{name_of, text};
 use crate::model::{EdgeKind, Extraction, NodeKind};
 use tree_sitter::Node;
 
@@ -14,14 +15,6 @@ pub(crate) struct Walk<'r> {
 
 pub fn parse(rel: &str, src: &[u8]) -> Option<tree_sitter::Tree> {
     crate::code::lang::Lang::of(rel)?.parse(src)
-}
-
-fn text<'a>(n: Node, src: &'a [u8]) -> &'a str {
-    n.utf8_text(src).unwrap_or("")
-}
-
-fn name_of(n: Node, src: &[u8]) -> Option<String> {
-    n.child_by_field_name("name").map(|c| text(c, src).to_string())
 }
 
 /// An `export_specifier` as a re-export's context entry: `a`, or `a as b` when it renames.

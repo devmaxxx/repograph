@@ -8,11 +8,10 @@
 use crate::code::idrefs::owner;
 use crate::code::imports::Resolver;
 use crate::code::symbols::{is_top_level, member_name, parse};
+use crate::code::syntax::text;
 use crate::model::{Edge, EdgeKind, Extraction};
 use std::collections::{BTreeMap, BTreeSet};
 use tree_sitter::Node;
-
-fn text<'a>(n: Node, src: &'a [u8]) -> &'a str { n.utf8_text(src).unwrap_or("") }
 
 /// What one file lets a call resolve to, gathered in one pass over its top-level statements.
 #[derive(Default)]

@@ -4,8 +4,8 @@
 use super::crates::Target;
 use super::items::owner;
 use super::uses::Ctx;
-use super::{field_text, inline_of, scoped, text, type_path};
-use crate::code::jvm::descend;
+use super::{inline_of, scoped, type_path};
+use crate::code::syntax::{descend, field_text, text};
 use crate::model::{EdgeKind, Extraction};
 use std::collections::{BTreeMap, BTreeSet};
 use tree_sitter::Node;

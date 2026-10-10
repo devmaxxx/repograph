@@ -11,6 +11,7 @@ pub(crate) use references::Modules;
 use crate::code::imports::Resolver;
 use crate::code::lang::{file_node, Lang};
 use crate::code::prose::{self, Spans};
+use crate::code::syntax;
 use crate::model::{EdgeKind, Extraction, Graph};
 use std::collections::BTreeSet;
 use tree_sitter::Node;
@@ -80,11 +81,11 @@ pub(super) fn dir_of(rel: &str) -> &str {
 /// attribute is `local/`, and `output`, `module` and `provider` keep their keyword. In other HCL, the
 /// address is the type and its labels.
 pub(crate) fn declarations<'t>(root: Node<'t>, src: &[u8], terraform: bool) -> Vec<(String, Node<'t>)> {
-    let Some(body) = prose::named(root).into_iter().find(|c| c.kind() == "body") else { return Vec::new() };
+    let Some(body) = syntax::named(root).into_iter().find(|c| c.kind() == "body") else { return Vec::new() };
     let mut out = Vec::new();
-    for block in prose::named(body).into_iter().filter(|c| c.kind() == "block") {
+    for block in syntax::named(body).into_iter().filter(|c| c.kind() == "block") {
         let parts = inner(block);
-        let Some(kind) = parts.first().filter(|c| c.kind() == "identifier").map(|c| prose::text(*c, src)) else { continue };
+        let Some(kind) = parts.first().filter(|c| c.kind() == "identifier").map(|c| syntax::text(*c, src)) else { continue };
         // A label that is not plain text, or that holds a `/` as a lock file's registry paths do, names no
         // address this id scheme can hold.
         let labels: Option<Vec<&str>> = parts[1..].iter()
@@ -98,10 +99,10 @@ pub(crate) fn declarations<'t>(root: Node<'t>, src: &[u8], terraform: bool) -> V
             (true, "variable", [n]) => format!("var/{n}"),
             (true, "output" | "module" | "provider", [n]) => format!("{kind}/{n}"),
             (true, "locals", []) => {
-                let attributes = parts.iter().filter(|c| c.kind() == "body").flat_map(|b| prose::named(*b)).filter(|a| a.kind() == "attribute");
+                let attributes = parts.iter().filter(|c| c.kind() == "body").flat_map(|b| syntax::named(*b)).filter(|a| a.kind() == "attribute");
                 for attribute in attributes {
                     if let Some(name) = attribute.named_child(0) {
-                        out.push((format!("local/{}", prose::text(name, src)), attribute));
+                        out.push((format!("local/{}", syntax::text(name, src)), attribute));
                     }
                 }
                 continue;
@@ -118,9 +119,9 @@ pub(crate) fn declarations<'t>(root: Node<'t>, src: &[u8], terraform: bool) -> V
 /// A label's text: a bare identifier, or a string holding written-out text alone.
 fn label<'s>(n: Node, src: &'s [u8]) -> Option<&'s str> {
     let text = match n.kind() {
-        "identifier" => prose::text(n, src),
+        "identifier" => syntax::text(n, src),
         _ => match inner(n).as_slice() {
-            [t] if t.kind() == "template_literal" => prose::text(*t, src),
+            [t] if t.kind() == "template_literal" => syntax::text(*t, src),
             _ => return None,
         },
     };
@@ -130,5 +131,5 @@ fn label<'s>(n: Node, src: &'s [u8]) -> Option<&'s str> {
 /// Named children less the delimiters the grammar names, such as `block_start`,
 /// `quoted_template_end` and `tuple_start`.
 pub(crate) fn inner<'t>(n: Node<'t>) -> Vec<Node<'t>> {
-    prose::named(n).into_iter().filter(|c| !c.kind().ends_with("_start") && !c.kind().ends_with("_end")).collect()
+    syntax::named(n).into_iter().filter(|c| !c.kind().ends_with("_start") && !c.kind().ends_with("_end")).collect()
 }

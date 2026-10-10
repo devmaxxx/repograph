@@ -1,4 +1,5 @@
 use crate::code::symbols::{is_top_level, literal_member, literal_of, member_name, parse};
+use crate::code::syntax::name_of;
 use crate::model::{EdgeKind, Extraction};
 use tree_sitter::Node;
 
@@ -61,10 +62,6 @@ pub(crate) fn owner(mut n: Node, rel: &str, src: &[u8]) -> String {
         n = p;
     }
     format!("file:{rel}")
-}
-
-fn name_of(n: Node, src: &[u8]) -> Option<String> {
-    n.child_by_field_name("name").and_then(|c| c.utf8_text(src).ok()).map(str::to_string)
 }
 
 pub fn scan(rel: &str, source: &str, ex: &mut Extraction) {

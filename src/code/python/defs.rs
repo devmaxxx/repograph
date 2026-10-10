@@ -1,8 +1,8 @@
 //! What a Python file declares: symbols and their `Declares` edges, and the table of names the
 //! reference pass resolves against.
 
-use super::{field_text, text};
-use crate::code::jvm::{cite, descend, named};
+use crate::code::jvm::cite;
+use crate::code::syntax::{descend, field_text, named, text};
 use crate::model::{EdgeKind, Extraction, NodeKind};
 use std::collections::BTreeSet;
 use tree_sitter::Node;

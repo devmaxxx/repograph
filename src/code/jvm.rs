@@ -13,62 +13,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use tree_sitter::Node;
 
 use crate::code::index::{self, Admission, Arity, Call, QualifiedIndex, Reach, Supers};
+use crate::code::syntax::text;
 use crate::model::{EdgeKind, Extraction};
-
-pub(crate) fn text<'a>(n: Node, src: &'a [u8]) -> &'a str {
-    n.utf8_text(src).unwrap_or("")
-}
-
-pub(crate) fn named<'t>(n: Node<'t>) -> Vec<Node<'t>> {
-    let mut c = n.walk();
-    n.named_children(&mut c).collect()
-}
-
-/// Whether `n` sits in a region the grammar could not read, or holds one: a name there may be
-/// one the file declares in a shape the walk never sees, such as a type parameter.
-pub(crate) fn broken(n: Node) -> bool {
-    n.has_error() || std::iter::successors(n.parent(), |p| p.parent()).any(|p| p.is_error())
-}
-
-pub(crate) fn child<'t>(n: Node<'t>, kind: &str) -> Option<Node<'t>> {
-    named(n).into_iter().find(|c| c.kind() == kind)
-}
-
-/// Every descendant of one of `kinds`, in source order, not descending into a match.
-pub(crate) fn find<'t>(n: Node<'t>, kinds: &[&str], out: &mut Vec<Node<'t>>) {
-    descend(n, &mut |c| {
-        let hit = kinds.contains(&c.kind());
-        if hit {
-            out.push(c);
-        }
-        !hit
-    });
-}
-
-/// Visits every named descendant of `n` in source order, and goes below one only when `visit` returns true.
-/// It walks with a cursor and no recursion: a generated grammar nests a left-recursive list as deep as it is
-/// long, so a 50,000-row `INSERT … VALUES` is 50,000 levels and overflows the stack of a recursive walk.
-pub(crate) fn descend<'t>(n: Node<'t>, visit: &mut impl FnMut(Node<'t>) -> bool) {
-    let mut cursor = n.walk();
-    if !cursor.goto_first_child() {
-        return;
-    }
-    loop {
-        let node = cursor.node();
-        if node.is_named() && visit(node) && cursor.goto_first_child() {
-            continue;
-        }
-        while !cursor.goto_next_sibling() {
-            if !cursor.goto_parent() {
-                return;
-            }
-        }
-    }
-}
-
-pub(crate) fn span(n: Node) -> (u32, u32) {
-    (n.start_position().row as u32 + 1, n.end_position().row as u32 + 1)
-}
 
 /// `Outer` for `Outer.Inner`, `""` for a top-level path.
 pub(crate) fn outer(path: &str) -> &str {

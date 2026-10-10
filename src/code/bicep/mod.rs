@@ -13,6 +13,7 @@ pub(crate) use modules::Files;
 use crate::code::imports::Resolver;
 use crate::code::lang::{file_node, Lang};
 use crate::code::prose::{self, Spans};
+use crate::code::syntax;
 use crate::model::Extraction;
 use tree_sitter::Node;
 
@@ -33,7 +34,7 @@ pub(crate) struct Decl<'t> {
 /// The top-level declarations and the name each is filed under, shared by the extract and by the module
 /// index so the two cannot disagree on what a file declares.
 pub(crate) fn top_level<'t>(root: Node<'t>, src: &[u8]) -> Vec<(Node<'t>, String)> {
-    prose::named(root).into_iter()
+    syntax::named(root).into_iter()
         .filter(|n| DECLARATIONS.contains(&n.kind()))
         .filter_map(|n| Some((n, symbol_name(n, src)?)))
         .collect()
@@ -46,7 +47,7 @@ fn symbol_name(n: Node, src: &[u8]) -> Option<String> {
     if id.kind() != "identifier" {
         return None;
     }
-    let name = prose::text(id, src);
+    let name = syntax::text(id, src);
     Some(if n.kind() == "output_declaration" { format!("output/{name}") } else { name.to_string() })
 }
 
@@ -85,7 +86,7 @@ impl<'t> Walk<'t, '_> {
         prose::declare(&mut self.ex, self.rel, &from, &id, n, &body, context);
         self.spans.push(n, &id);
         if n.kind() == "resource_declaration" {
-            for child in prose::find(n, &["resource_declaration"]) {
+            for child in syntax::find_all(n, &["resource_declaration"]) {
                 if let Some(child_name) = symbol_name(child, self.src) {
                     self.declare(child, child_name, Some((&id, &name)));
                 }
@@ -103,8 +104,8 @@ fn exported(n: Node, src: &[u8]) -> bool {
     }
     let mut at = prev_code(n);
     while let Some(d) = at.filter(|p| p.kind() == "decorators") {
-        let named = prose::named(d).into_iter().any(|dec| {
-            let t = prose::text(dec, src);
+        let named = syntax::named(d).into_iter().any(|dec| {
+            let t = syntax::text(dec, src);
             t.starts_with("@export(") || t.starts_with("@sys.export(")
         });
         if named {

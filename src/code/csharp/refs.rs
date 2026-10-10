@@ -9,8 +9,9 @@ use tree_sitter::Node;
 use super::declarations::{join, unbranched, Declared};
 use super::index::Part;
 use super::resolve::Scope;
-use super::{dotted, head, named, text, type_names, wrapper_name, Host};
+use super::{dotted, head, type_names, wrapper_name, Host};
 use crate::code::imports::Resolver;
+use crate::code::syntax::{named, text};
 use crate::model::{EdgeKind, Extraction};
 
 /// Where the walk is: the namespace, the innermost type's local name, the type parameters in
