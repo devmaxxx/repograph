@@ -169,8 +169,7 @@ impl Resolver {
                         reached.insert(lang.family());
                         // TypeScript's state is the tsconfig and package.json read below; its sources
                         // are the extractor's alone, so a TypeScript repository opens nothing more here.
-                        let r = reader(lang);
-                        if r.header.is_some() || !matches!(r.collect, Collect::Header) {
+                        if reader(lang).collects() {
                             sources.push((lang, rel.clone(), p.to_path_buf()));
                         }
                     }

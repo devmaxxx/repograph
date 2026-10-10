@@ -159,12 +159,19 @@ pub(crate) fn component_name(rel: &str) -> Option<&str> {
 }
 
 /// Every `.vue` file the walk globbed: a TypeScript import of one is an edge to a node only then.
-pub(crate) type Files = BTreeSet<String>;
+#[derive(Default)]
+pub(crate) struct Files(BTreeSet<String>);
+
+impl Files {
+    pub(crate) fn contains(&self, rel: &str) -> bool {
+        self.0.contains(rel)
+    }
+}
 
 pub(crate) const READER: Reader = Reader {
     extract: Extract::Whole(extract),
     collect: Collect::Path(|r, rel| {
-        r.state_mut::<Files>().insert(rel.to_string());
+        r.state_mut::<Files>().0.insert(rel.to_string());
     }),
     state: Some(reader::state::<Files>),
     ..reader::NONE

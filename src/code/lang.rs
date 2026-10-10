@@ -133,3 +133,24 @@ pub fn files_only_note<'a>(rels: impl Iterator<Item = &'a str>) -> Option<String
     let list = parts.iter().map(|(e, n)| format!("{n} {e}")).collect::<Vec<_>>().join(", ");
     Some(format!("code: no grammar reads {list} — indexed as files only"))
 }
+
+#[cfg(test)]
+mod all_tests {
+    use super::Lang;
+
+    /// `ALL` feeds the reader table's state and manifest lookups, so a language missing from it is
+    /// silently never registered. The exhaustive match fails to compile for a new variant.
+    #[test]
+    fn all_lists_every_language_once() {
+        let slot = |l: Lang| match l {
+            Lang::TypeScript => 0, Lang::Tsx => 1, Lang::Kotlin => 2, Lang::Java => 3, Lang::CSharp => 4, Lang::Razor => 5,
+            Lang::Rust => 6, Lang::Python => 7, Lang::Dart => 8, Lang::Swift => 9, Lang::GraphQl => 10, Lang::Sql => 11,
+            Lang::Bicep => 12, Lang::Hcl => 13, Lang::Shell => 14, Lang::Vue => 15,
+        };
+        let mut seen = [false; 16];
+        for l in Lang::ALL {
+            assert!(!std::mem::replace(&mut seen[slot(l)], true), "{l:?} listed twice");
+        }
+        assert!(seen.iter().all(|s| *s), "a language is missing from Lang::ALL");
+    }
+}

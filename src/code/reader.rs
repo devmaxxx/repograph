@@ -59,6 +59,13 @@ pub(crate) struct Manifest {
     pub read: fn(&mut Resolver, &str, &str),
 }
 
+impl Reader {
+    /// Whether the resolver's walk opens this language's files before extraction.
+    pub fn collects(&self) -> bool {
+        self.header.is_some() || !matches!(self.collect, Collect::Header)
+    }
+}
+
 /// The fields a reader leaves at their defaults, for `..NONE`.
 pub(crate) const NONE: Reader = Reader {
     extract: Extract::Source(|_, _, _, _| {}),
@@ -122,7 +129,8 @@ impl States {
         for lang in Lang::ALL {
             if let Some(make) = reader(lang).state {
                 let v = make();
-                s.0.entry((*v).type_id()).or_insert(v);
+                let first = s.0.insert((*v).type_id(), v).is_none();
+                assert!(first, "two readers register one state type; a state is keyed by its type, so give each its own");
             }
         }
         s
