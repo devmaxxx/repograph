@@ -133,7 +133,7 @@ impl Graph {
         };
         let all: Vec<Edge> = std::mem::take(&mut self.edges).into_iter().chain(std::mem::take(&mut self.pending)).collect();
         for e in all {
-            if e.reads_member() && !self.nodes.get(&e.target).is_some_and(|n| crate::code::calls::declares_accessor(&n.label, &n.body)) { continue }
+            if e.reads_member() && !self.nodes.get(&e.target).is_some_and(|n| crate::code::typescript::calls::declares_accessor(&n.label, &n.body)) { continue }
             if admitted(&e.target) { self.edges.insert(e); } else { self.pending.insert(e); }
         }
     }

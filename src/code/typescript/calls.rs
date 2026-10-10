@@ -5,9 +5,9 @@
 //! function handed to another call does with it is not — `rows.map(fn)` calls it,
 //! `register('T', Cls)` may only keep it — and both count, because `impact` asks what breaks
 //! when the target changes, and either caller does.
-use crate::code::idrefs::owner;
+use crate::code::typescript::idrefs::owner;
 use crate::code::imports::Resolver;
-use crate::code::symbols::{is_top_level, member_name, parse};
+use crate::code::typescript::symbols::{is_top_level, member_name, parse};
 use crate::code::syntax::text;
 use crate::model::{Edge, EdgeKind, Extraction};
 use std::collections::{BTreeMap, BTreeSet};
@@ -141,7 +141,7 @@ impl Scope {
                     // A `.vue` default import is the component, declared under the file's stem.
                     "identifier" => {
                         let n = text(part, src).to_string();
-                        let declared = crate::code::vue::component_name(&target).map_or_else(|| n.clone(), str::to_string);
+                        let declared = crate::code::typescript::vue::component_name(&target).map_or_else(|| n.clone(), str::to_string);
                         self.names.insert(n, (target.clone(), declared));
                     }
                     "namespace_import" => {

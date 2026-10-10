@@ -493,7 +493,7 @@ impl Walk<'_> {
             for part in c.named_children(&mut ic) {
                 match part.kind() {
                     // A `.vue` default import names the component, the stem `importers` matches.
-                    "identifier" => names.push(crate::code::vue::component_name(&target).unwrap_or(text(part, src)).to_string()),
+                    "identifier" => names.push(crate::code::typescript::vue::component_name(&target).unwrap_or(text(part, src)).to_string()),
                     "named_imports" => {
                         let mut nc = part.walk();
                         for s in part.named_children(&mut nc) {
@@ -572,7 +572,7 @@ impl Walk<'_> {
                 continue;
             }
             let Some(target) = self.resolver.resolve(rel, &unquote(text(arg, src))) else { continue };
-            let from = crate::code::idrefs::owner(n, rel, src);
+            let from = crate::code::typescript::idrefs::owner(n, rel, src);
             ex.edge(&from, &format!("file:{target}"), EdgeKind::Imports, "", rel);
         }
     }

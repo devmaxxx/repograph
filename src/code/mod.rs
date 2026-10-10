@@ -1,30 +1,22 @@
 pub mod bicep;
 pub mod blank;
-pub mod calls;
-pub mod csharp;
 pub mod dart;
+pub mod dotnet;
 pub mod graphql;
 pub mod hcl;
-pub mod idrefs;
 pub mod imports;
 pub mod index;
-pub mod java;
 pub mod jvm;
-pub mod kotlin;
 pub mod lang;
 pub(crate) mod prose;
 pub(crate) mod python;
-pub mod razor;
 pub(crate) mod reader;
 pub(crate) mod rust_lang;
 pub mod shell;
 pub mod sql;
 pub mod swift;
-pub mod symbols;
-pub(crate) mod typescript;
 pub(crate) mod syntax;
-pub mod vue;
-
+pub mod typescript;
 use crate::model::{Extraction, Extractor};
 
 pub struct CodeExtractor {

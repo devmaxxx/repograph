@@ -101,11 +101,11 @@ pub(crate) fn reader(lang: Lang) -> &'static Reader {
     use crate::code::*;
     match lang {
         Lang::TypeScript | Lang::Tsx => &typescript::READER,
-        Lang::Vue => &vue::READER,
-        Lang::CSharp => &csharp::READER,
-        Lang::Razor => &razor::READER,
-        Lang::Kotlin => &kotlin::READER,
-        Lang::Java => &java::READER,
+        Lang::Vue => &typescript::vue::READER,
+        Lang::CSharp => &dotnet::csharp::READER,
+        Lang::Razor => &dotnet::razor::READER,
+        Lang::Kotlin => &jvm::kotlin::READER,
+        Lang::Java => &jvm::java::READER,
         Lang::Rust => &rust_lang::READER,
         Lang::Python => &python::READER,
         Lang::Dart => &dart::READER,

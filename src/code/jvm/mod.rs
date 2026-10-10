@@ -8,6 +8,9 @@
 //! - `Imports`, `Extends` and `DecoratedBy` from a file's imports, supertypes and annotations;
 //! - `expect`/`actual` source sets, which decide which files declaring one name a caller links.
 
+pub mod java;
+pub mod kotlin;
+
 use std::collections::{BTreeMap, BTreeSet};
 
 use tree_sitter::Node;
@@ -37,11 +40,11 @@ pub(crate) fn body(n: Node, name: Node, src: &[u8], comments: &[&str]) -> String
         if !comments.contains(&prev.kind()) || prev.end_position().row + 1 < next.start_position().row {
             break;
         }
-        parts.push(crate::code::symbols::comment_text(text(prev, src)));
+        parts.push(crate::code::typescript::symbols::comment_text(text(prev, src)));
         next = prev;
     }
     parts.reverse();
-    let doc = crate::code::symbols::cap(parts.join("\n"), crate::code::symbols::DOC_CHARS);
+    let doc = crate::code::typescript::symbols::cap(parts.join("\n"), crate::code::typescript::symbols::DOC_CHARS);
     let at = name.start_byte();
     let start = src[..at].iter().rposition(|&b| b == b'\n').map_or(0, |i| i + 1);
     let end = src[at..].iter().position(|&b| b == b'\n').map_or(src.len(), |i| at + i);

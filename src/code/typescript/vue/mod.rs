@@ -191,7 +191,7 @@ pub fn extract(resolver: &Resolver, rel: &str, source: &str) -> Extraction {
         Some((blank, tree)) => {
             let src = blank.as_bytes();
             let root = tree.root_node();
-            let walked = crate::code::symbols::Walk { resolver }.scan_tree(rel, root, src);
+            let walked = crate::code::typescript::symbols::Walk { resolver }.scan_tree(rel, root, src);
             ex.nodes.extend(walked.nodes);
             ex.edges.extend(walked.edges);
             let prefix = format!("sym:{rel}::");
@@ -200,8 +200,8 @@ pub fn extract(resolver: &Resolver, rel: &str, source: &str) -> Extraction {
                 .filter(|n| !n.contains('.'))
                 .map(str::to_string)
                 .collect();
-            crate::code::calls::scan_tree(resolver, rel, root, src, &locals, &mut ex);
-            crate::code::idrefs::scan_tree(root, rel, src, &mut ex);
+            crate::code::typescript::calls::scan_tree(resolver, rel, root, src, &locals, &mut ex);
+            crate::code::typescript::idrefs::scan_tree(root, rel, src, &mut ex);
             decorators_to_declarations(rel, &mut ex);
             owned_by_the_component(source, rel, &component, &mut ex);
         }

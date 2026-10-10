@@ -282,7 +282,7 @@ impl Resolver {
     /// `.ts`/`.tsx` source, never a `dist/` build artifact or `node_modules` — otherwise
     /// `resolve` would point an edge at a file with no corresponding graph node.
     fn is_indexed(&self, rel: &str) -> bool {
-        if self.state::<crate::code::vue::Files>().contains(rel) {
+        if self.state::<crate::code::typescript::vue::Files>().contains(rel) {
             return true;
         }
         let ext_ok = matches!(

@@ -1,9 +1,14 @@
-//! TypeScript and JavaScript: three passes and three parses over one file. One parse for all three
-//! is a refactor nothing measured.
+//! The TypeScript family: TypeScript and JavaScript, and Vue single-file components whose script
+//! resolves names through the same resolver. A TypeScript file takes three passes and three parses;
+//! one parse for all three is a refactor nothing measured.
+
+pub mod calls;
+pub mod idrefs;
+pub mod symbols;
+pub mod vue;
 
 use crate::code::imports::Resolver;
 use crate::code::reader::{self, Extract, Reader};
-use crate::code::{calls, idrefs, symbols};
 use crate::model::Extraction;
 
 /// Its resolver state is the tsconfig and package.json `Resolver::new` reads, which no other
