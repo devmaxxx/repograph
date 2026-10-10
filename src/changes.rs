@@ -40,6 +40,8 @@ pub fn parse(diff: &str) -> Vec<Hunk> {
             continue;
         }
         let Some(rest) = line.strip_prefix("@@ ") else { continue };
+        // A header that cannot be read opens no hunk, and its body must not be judged into the last one.
+        in_hunk = false;
         let Some(f) = &file else { continue };
         let Some(plus) = rest.split_whitespace().find(|w| w.starts_with('+')) else { continue };
         let (c, d) = match plus[1..].split_once(',') {
@@ -69,11 +71,8 @@ fn comment_syntax(file: &str) -> Option<CommentSyntax> {
         Some(Lang::Sql) => Some(CommentSyntax { lines: &["--"], blocks: true }),
         // Markup around a host language: whether `//` opens a comment depends on where the line sits.
         Some(Lang::Razor | Lang::Vue) => None,
-        None => match Path::new(file).extension().and_then(|e| e.to_str()) {
-            Some("kts") => Some(C),
-            Some("yaml" | "yml" | "toml") => Some(HASH),
-            _ => None,
-        },
+        // A file with no grammar has no symbol nodes, so there is nothing for its judgement to spare.
+        None => None,
     }
 }
 
@@ -81,6 +80,10 @@ fn comment_syntax(file: &str) -> Option<CommentSyntax> {
 const DIRECTIVES: &[&str] = &[
     "@ts-", "eslint", "prettier-ignore", "biome-ignore", "istanbul", "c8 ignore", "@flow", "@jsx",
     "noqa", "type: ignore", "pyright:", "pylint:", "mypy:", "shellcheck", "tflint-ignore", "checkov:",
+    "v8 ignore", "@vitest", "@jest", "deno-lint", "/// <", "pragma", "nosec", "fmt:", "isort:", "-*-",
+    "swiftlint", "ktlint", "detekt", "nopmd", "nosonar", "checkstyle", "ignore:", "ignore_for_file",
+    "coverage:ignore", "dart format", "tfsec", "trivy", "+goose", "migrate:", "-- name:", "# import ",
+    "/*!", "/*+",
 ];
 
 /// A blank line, or a comment that holds no code and steers no tool. Anything it cannot be sure of
@@ -342,8 +345,20 @@ mod tests {
         assert!(!one("a.py", "+import os  # noqa\n"));
         assert!(!one("a.py", "+# type: ignore\n"));
         assert!(!one("a.sh", "+#!/bin/bash\n"));
+        assert!(!one("a.ts", "+/// <reference types=\"node\" />\n"));
+        assert!(!one("a.ts", "+/* v8 ignore next */\n"));
+        assert!(!one("a.py", "+# pragma: no cover\n"));
+        assert!(!one("a.sql", "+-- +goose Down\n"));
+        assert!(!one("a.sql", "+/*!40101 SET NAMES utf8 */;\n"));
+        assert!(one("a.rs", "+/// Rate in percent.\n"));
         // A file whose comment syntax is not known is walked as it always was.
         assert!(!one("Makefile", "+# note\n"));
+    }
+
+    #[test]
+    fn an_unreadable_hunk_header_does_not_lend_its_body_to_the_hunk_before() {
+        let hunks = parse("--- a/a.ts\n+++ b/a.ts\n@@ -1 +1 @@\n+// note\n@@ junk @@\n+call();\n");
+        assert_eq!(hunks.iter().map(|h| h.comment_only).collect::<Vec<_>>(), vec![true]);
     }
 
     #[test]
