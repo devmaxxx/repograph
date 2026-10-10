@@ -4,9 +4,9 @@
 
 **Goal:** One engine reads every language. Detection, parsing, declarations, ids, spans, bodies, citations, path imports and same-name resolution are shared and driven by data. Per-language Rust survives only as a resolve hook, and only where a measurement shows name-only resolution writes wrong edges or loses too many right ones. Max, 2026-10-10: "I don't wanna split code parsing by language, I need unified interfaces to detect and use." After the fourteen existing languages are ported, nine languages repograph does not read today arrive as `Spec`s with queries, data and no hooks, one per step (§6.2): Lua, Go, C, C++, Ruby, PHP, Scala, Elixir and OCaml.
 
-**Architecture:** Each language is a `Spec`: the grammar `lang.rs` already names, two tree-sitter queries compiled once per process from `.scm` files embedded in the binary, a few data fields (comment syntax, body recipe, export rule, visibility, ambiguity) and a `Hooks` table of optional function pointers, which is the successor of PR #170's `Reader`. The engine runs the queries, turns captures into `Facts` (definitions, references, imports, citations, locals), writes nodes and `Declares` edges generically, resolves bare names by the spec's visibility model, and hands the parsed file to whichever hooks the spec names. Old and new paths coexist per language until that language's gate passes. Detection is our own `detect`: overrides, `Lang::of`'s table, then a shebang. Each grammar stays its own pinned crate, and the query runner is ours, seeded from upstream `tags.scm` (§2.8 records the library decisions and why hyperpolyglot fell back to the table).
+**Architecture:** Each language is a `Spec`: the grammar `lang.rs` already names, two tree-sitter queries compiled once per process from `.scm` files embedded in the binary, a few data fields (comment syntax, body recipe, export rule, visibility, ambiguity) and a `Hooks` table of optional function pointers, which is the successor of PR #170's `Reader`. The engine runs the queries, turns captures into `Facts` (definitions, references, imports, citations, locals), writes nodes and `Declares` edges generically, resolves bare names by the spec's visibility model, and hands the parsed file to whichever hooks the spec names. Old and new paths coexist per language until that language's gate passes. Detection and grammars come from `ast-grep-language =0.45.3` behind our own front: `detect` tries our overrides, then its `SupportLang` extension table, then a shebang, and `Lang::grammar` hands out its grammars. Bicep, PostgreSQL, GraphQL and OCaml keep their own pinned crates behind the same front. Every grammar version stays pinned with `=`, and the query runner is ours, seeded from upstream `tags.scm` (§2.8 records the library decisions).
 
-**Tech Stack:** Rust 2021, `tree-sitter =0.27.0` (`Query`, `QueryCursor`; `streaming-iterator =0.1.9` is already pinned), the grammar crates already in `Cargo.toml`, `bench/probe/graphdiff.py` plus a new scoped classifier, `bench/compare/run.py` for blast clauses, and `repograph bench` on the pinned fixture. §6.2 adds nine grammar crates, checked against crates.io on 2026-10-10 but not yet in `Cargo.toml`.
+**Tech Stack:** Rust 2021, `tree-sitter =0.27.0` (`Query`, `QueryCursor`; `streaming-iterator =0.1.9` is already pinned), the grammar crates already in `Cargo.toml`, `ast-grep-language =0.45.3` with its default features off (added in step 0), `bench/probe/graphdiff.py` plus a new scoped classifier, `bench/compare/run.py` for blast clauses, and `repograph bench` on the pinned fixture. §6.2 adds nine grammars: eight through `ast-grep-language` features and OCaml as its own crate, checked against crates.io on 2026-10-10 but not yet in `Cargo.toml`.
 
 **Base:** branch `refactor/code-general-pipeline` (PR #170) at `b02f388`. Its `graph.json` and `headers.json` are byte-identical to `store-base` on the 776-file polyglot corpus.
 
@@ -26,6 +26,11 @@ Max then asked for:
 - other languages, which became §6.2: steps 15–23, one language each, and step 24 to close;
 - one library choice per layer, which became §2.8.
 
+Later that day Max overrode §2.8's first choice and made two more decisions, both recorded there:
+
+- `ast-grep-language` is the detection and grammar layer;
+- Bicep, PostgreSQL and GraphQL stay code, on their own pinned crates behind the same front.
+
 Steps 0–14 port; steps 15–24 add.
 
 ## Global Constraints
@@ -38,7 +43,8 @@ Steps 0–14 port; steps 15–24 add.
   - GRAMMAR moves once per release (L5): at step 14, or at step 24 when the new languages ship in the same release;
   - DecoratedBy goes to the declaring symbol (L8);
   - no edge crosses a family (L10).
-- `src/code/lang.rs` stays self-contained (model plus grammar crates), because `tests/parse_census.rs` compiles it by path. The spec table sits beside it, never inside it.
+- `src/code/lang.rs` stays self-contained (model, `ast-grep-language` and the own grammar crates), because `tests/parse_census.rs` compiles it by path.
+- No grammar crate appears in the build twice. `cargo tree --duplicates` names no `tree-sitter` crate at any step (§2.8). The spec table sits beside it, never inside it.
 - The engine evaluates tree-sitter's built-in predicates (`#eq?`, `#match?`, `#any-of?` and their `#not-` forms) and `#set!` properties, and nothing else. A query that needs a general predicate fails the contract test. This keeps the semantics inside tree-sitter, where they are documented, and out of a predicate dialect of our own.
 - A new data field is admitted to `Spec` only when at least two languages use it. Once a field is admitted, adding variants to it is free. Anything only one language needs is a hook. This rule keeps the spec from becoming a per-language switch with extra steps.
 - A port reproduces the old reader; it does not improve it. A query captures exactly what the old reader read. Widening a language (new citations, new reference kinds) is a separate change with its own gate.
@@ -279,26 +285,101 @@ So the engine wins detection, parsing, declarations, ids, spans, bodies, citatio
 
 ### 2.8 Libraries
 
-Max asked whether existing libraries could do detection and parsing, and decided one choice per layer on 2026-10-10. Each library below was checked that day against crates.io and its published source; nothing was added to `Cargo.toml`. A library enters only where it moves no existing graph, or moves it only within §5.3's accepted classes.
+Max asked whether existing libraries could do detection and parsing, and decided one choice per layer on 2026-10-10. Later that day he overrode the first choice for detection and grammars: `ast-grep-language` is that layer. Each library below was checked against crates.io and its published source. `ast-grep-language` and `ast-grep-core` 0.45.3 were downloaded and read, not built. Nothing was added to `Cargo.toml`. A library enters only where it moves no existing graph, or moves it only within §5.3's accepted classes.
 
-| layer | decided | outcome |
+| layer | decided | how |
 |---|---|---|
-| Detection | hyperpolyglot behind our own `detect`, with our overrides on top | hyperpolyglot is unusable (below), so the decision's fallback applies: `Lang::of` plus a shebang rule, behind the same `detect` |
-| Grammars | one pinned crate per grammar | as today; no grammar bundle |
-| Parsing | tree-sitter | `=0.27.0`, unchanged |
+| Detection | `ast-grep-language`'s `SupportLang::from_path` behind our own `detect`, with our overrides first and the shebang rule last | below |
+| Grammars | `ast-grep-language` where it carries the grammar; our own pinned crate where it does not (Bicep, PostgreSQL, GraphQL, OCaml) | one front, `Lang::grammar`, for both; every version pinned with `=` |
+| Parsing | tree-sitter | `=0.27.0`, unchanged; ast-grep's pattern matcher is not used |
 | Extraction | our own query runner, query files seeded from upstream `tags.scm` | §2.2–§2.6; no `tree-sitter-tags` |
 | Resolution | the default, with hooks only where §3.3 says | §3 |
 
-**Why hyperpolyglot is unusable.** Its licence and MSRV fit: it is MIT OR Apache-2.0, and edition 2018 with no `rust-version`, so Rust 1.98 builds it. It is unmaintained, and it would also move work the engine has just removed:
+**Bicep, PostgreSQL and GraphQL stay code** (Max, 2026-10-10). They are parsed into symbols and edges and are never read as docs. They keep their own pinned crates (`tree-sitter-bicep =1.1.0`, `tree-sitter-postgres =1.2.4`, `tree-sitter-graphql =0.2.1`) behind the same `detect` and `Lang::grammar`, and run through the same query engine as the `ast-grep-language` grammars. In the corpus they write no cross-family edge. They do carry 1,379, 1,715 and 192 symbols and 4,344, 388 and 69 intra-family edges, which `impact` and `changes` rely on. Step 6 also gates SQL's 145 Calls.
 
-- **Releases.** The newest is 0.1.7, of 2020-07-26. The repository's last commit, 2023-05-17, was never released, and its eight open issues (the oldest from 2021) have no answer. `hyperpolyglot_fork 0.1.7` (2025-05-05) bumps `phf` and nothing else.
-- **Data.** It carries linguist's data from 2020. It has no Bicep, knows `.tf` as HCL, and knows `.cshtml` only as `HTML+Razor`.
-- **API.** Its one public function, `detect(&Path)`, opens and reads the file itself whenever the extension is ambiguous. That is a second read of the kind §1 removes from Vue. It also errors on a path that is not on disk, which `changes` passes for a deleted file. Issues #10, #12 and #16 ask for a text API, or for the detectors to be public.
-- **Dependencies.**
-  - `clap 2.33` is a normal dependency, because the binary ships in the same package. It brings `atty 0.2.14`, which has RUSTSEC-2021-0145 and RUSTSEC-2024-0375.
-  - `serde_yaml 0.8` brings `yaml-rust 0.4.3`, which has RUSTSEC-2024-0320.
-  - `pcre2` builds the PCRE2 C library.
-  - The classifier's token table is 7.6 MB of generated source.
+**The version.** `ast-grep-language =0.45.3` (MIT, 2026-08-31) is the newest release at least two weeks old on 2026-10-10. 0.50.0 (2026-10-09) has the same grammar ranges plus Zig. 0.45.3 facts:
+
+- Edition 2024, `rust-version` 1.88, which our 1.98 builds. It has no build script and no C.
+- Dependencies: `ast-grep-core ^0.45.3`, `ignore ^0.4.22`, `serde ^1.0.200`, `tree-sitter ^0.27.0`, and 27 optional grammar crates.
+- `ast-grep-core 0.45.3` (MIT) adds `bit-set ^0.11.0`, `regex ^1.10.4`, `thiserror ^2.0.0` and an optional `tree-sitter ^0.27.0`.
+- `tree-sitter`, `ignore`, `regex`, `serde` and `thiserror` are already in our lock, at versions inside those ranges: 0.27.0, 0.4.33, 1.13.1, 1.0.229 and 2.0.20. Both sides take default features, so no feature set changes.
+- New in the lock: `ast-grep-language`, `ast-grep-core`, `bit-set 0.11.1` and `bit-vec 0.10` (Apache-2.0 OR MIT). The two ast-grep crates are 8,837 lines of Rust.
+
+**Features.** The default feature, `builtin-parser`, compiles all 27 grammars. Each grammar is also a feature of its own, named after the optional dependency. Kotlin's is `tree-sitter-kotlin`, the manifest's name for `tree-sitter-kotlin-sg`. The crate names a grammar only in `parsers.rs`, under `#[cfg(feature = …)]`, and a disabled grammar's `get_ts_language()` is `unimplemented!()`.
+
+So the dependency takes `default-features = false` and one feature per grammar we read:
+
+- step 0 turns on ten: `tree-sitter-bash`, `-c-sharp`, `-dart`, `-hcl`, `-java`, `-kotlin`, `-python`, `-rust`, `-swift` and `-typescript`;
+- steps 15–22 each turn on their own.
+
+With the defaults left on, step 0 would also compile nine grammars we never read:
+
+| crate | version |
+|---|---|
+| `tree-sitter-css` | 0.25.0 |
+| `tree-sitter-haskell` | 0.23.1 |
+| `tree-sitter-html` | 0.23.2 |
+| `tree-sitter-javascript` | 0.25.0 |
+| `tree-sitter-json` | 0.24.8 |
+| `tree-sitter-md` | 0.5.3 |
+| `tree-sitter-nix` | 0.3.0 |
+| `tree-sitter-solidity` | 1.2.13 |
+| `tree-sitter-yaml` | 0.7.2 |
+
+Together they are 30.8 MB of parser source: by Postgres's scale (§6.2), about +4.8 MB stripped and +0.27 MB compressed. The eight new-language grammars, 89 MB, would also arrive before their steps.
+
+`Lang::grammar` maps only `Lang` variants whose feature is on, so a disabled grammar is never asked for. Step 0's contract test runs one probe query per grammar, which loads every one.
+
+**Coverage.** Every constant `ast-grep-language` returns for an existing language is the one `lang.rs` uses today. They are `LANGUAGE_TYPESCRIPT` and `LANGUAGE_TSX`, and `LANGUAGE` for the other nine.
+
+| `Lang` | grammar from | crate and our pin | ast-grep 0.45.3 range |
+|---|---|---|---|
+| TypeScript, Tsx | `SupportLang::TypeScript`, `::Tsx` | `tree-sitter-typescript =0.23.2` | `^0.23.2` |
+| CSharp | `::CSharp` | `tree-sitter-c-sharp =0.23.5` | `^0.23.0` |
+| Razor | none: blanked, view CSharp (L6) | — | — |
+| Kotlin | `::Kotlin` | `tree-sitter-kotlin-sg =0.4.1` | `^0.4.1`, the same crate |
+| Java | `::Java` | `tree-sitter-java =0.23.5` | `^0.23.0` |
+| Sql | own crate | `tree-sitter-postgres =1.2.4` | not carried |
+| GraphQl | own crate | `tree-sitter-graphql =0.2.1` | not carried |
+| Rust | `::Rust` | `tree-sitter-rust =0.24.2` | `^0.24.0` |
+| Python | `::Python` | `tree-sitter-python =0.25.0` | `^0.25.0` |
+| Bicep | own crate | `tree-sitter-bicep =1.1.0` | not carried |
+| Hcl, and Terraform from step 3 | `::Hcl` | `tree-sitter-hcl =1.1.0` | `^1.1.0` |
+| Shell | `::Bash` | `tree-sitter-bash =0.25.1` | `^0.25.0` |
+| Dart | `::Dart` | `tree-sitter-dart =0.2.0` | `^0.2.0` |
+| Vue | none: blanked, view TypeScript or Tsx (L6) | — | — |
+| Swift | `::Swift` | `tree-sitter-swift =0.7.3` | `^0.7.0` |
+| Lua (step 15) | `::Lua` | `tree-sitter-lua =0.5.0` | `^0.5.0` |
+| Go (16) | `::Go` | `tree-sitter-go =0.25.0` | `^0.25.0` |
+| C (17) | `::C` | `tree-sitter-c =0.24.2` | `^0.24.0` |
+| Cpp (18) | `::Cpp` | `tree-sitter-cpp =0.23.4` | `^0.23.0` |
+| Ruby (19) | `::Ruby` | `tree-sitter-ruby =0.23.1` | `^0.23.0` |
+| Php (20) | the same crate, our constant `LANGUAGE_PHP` | `tree-sitter-php =0.24.2`, moved from 0.25.1 | `^0.24.0` |
+| Scala (21) | `::Scala` | `tree-sitter-scala =0.26.2` | `^0.26.0` |
+| Elixir (22) | `::Elixir` | `tree-sitter-elixir =0.3.5` | `^0.3.0` |
+| OCaml, OCamlInterface (23) | own crate | `tree-sitter-ocaml =0.26.0` | not carried |
+
+**Pins.**
+
+- **Every `=` pin stays in `Cargo.toml`**, beside `ast-grep-language`, even where ast-grep supplies the grammar. A caret range alone would let `cargo update` move a grammar. Cargo unifies each pin with ast-grep's range into one copy.
+- **No existing pin moves.** All ten covered pins lie inside 0.45.3's ranges, and 0.45.3's own published `Cargo.lock` holds the same ten versions. So does `tree-sitter 0.27.0`. Seven of the eight new-language pins match that lock as well.
+- **Kotlin needs no move.** ast-grep uses the same crate, `tree-sitter-kotlin-sg ^0.4.1`, renamed `tree-sitter-kotlin` in its manifest. 0.4.1 (2026-05-09) is still that crate's newest release.
+- **PHP moves from 0.25.1 to 0.24.2** (2025-08-18, the newest 0.24.x), because `^0.24.0` excludes 0.25. Both versions have ABI 15, depend on `tree-sitter-language 0.1`, and ship `tags.scm`. Their parser sources are 13.4 MB (0.24.2) and 14 MB (0.25.1).
+- **PHP keeps its own constant.** ast-grep's `Php` is `LANGUAGE_PHP_ONLY`. That grammar's `program` is `optional(php_tag), repeat(statement), optional(php_end_tag)`, so a file with HTML before `<?php` does not parse. `LANGUAGE_PHP` starts with `optional(text)`. Step 20 takes `tree_sitter_php::LANGUAGE_PHP` from the same unified crate, so there is still one copy.
+
+**Duplicates: none.** No grammar crate declares `links`. That was checked in 34 crates: our 13 pins and the 21 downloaded for this plan. Cargo would therefore build two versions of one grammar side by side, and both would define the same C symbols. For example, 0.24.2 and 0.25.1 both export `tree_sitter_php`, `tree_sitter_php_only` and the same scanner function names. The link would then fail on a duplicate symbol, or silently bind both crates to one parser. Size is the smaller cost: keeping 0.25.1 beside ast-grep's 0.24.2 would add 14 MB of parser source, about +2.2 MB stripped.
+
+Hence the rule: where ast-grep's range excludes a version a language needs, that language keeps its own crate and ast-grep's feature for it stays off, never both. Step 0 and every later step read `cargo tree --duplicates` for `tree-sitter` crates.
+
+**A grammar that changes version moves the graph.** At 0.45.3, no existing language's grammar changes version, so steps 0–14 carry no grammar-version diff.
+
+An `ast-grep-language` upgrade is its own PR, never inside a port. Each language whose grammar version moves in it is gated as an accepted grammar-version diff:
+
+- R1–R9 read zero;
+- the bounded kinds stay within §3.3;
+- the bench floors hold: keyword ≥ 39/40, paraphrase ≥ 7/30, code 12/12, p90 ≤ 250 ms, zero flips.
+
+A language that fails keeps its own crate at its old pin, with ast-grep's feature off for it. GRAMMAR moves with the upgrade (L5).
 
 **The detection seam,** built in step 0:
 
@@ -308,8 +389,17 @@ pub fn detect(rel: &str, head: Option<&str>) -> Option<Lang>;
 
 `detect` tries three sources in order, and the first answer wins:
 
-1. **Overrides.** An ordered list of our own path rules, which win over everything below. In step 0 it holds only what the walk already decides beside `Lang::of`, moved unchanged: manifests that a `hooks.manifest` claims, and the `dotted_dirs` rule. A later rule, for example scripts under `.husky/`, is added with its own case and its own gate.
-2. **The table.** `Lang::of(rel)`, unchanged (L2).
+1. **Overrides.** An ordered list of our own rules, which win over everything below:
+   - **The walk's rules,** moved unchanged: manifests that a `hooks.manifest` claims, and the `dotted_dirs` rule. A later rule, for example scripts under `.husky/`, is added with its own case and its own gate.
+   - **Extensions ast-grep does not know,** which our own grammars and embeddings read: `.bicep`, `.sql`, `.gql`, `.graphql`, `.razor`, `.cshtml` and `.vue`. `.ml` and `.mli` join at step 23.
+   - **Extensions where we keep a different answer.** `.js`, `.mjs` and `.cjs` stay TypeScript, and `.jsx` stays Tsx. ast-grep says JavaScript, a grammar we do not link. From step 3, `.tf` is Terraform where ast-grep says Hcl; the grammar is the same.
+   - **Refusals.** These extensions answer `None` although ast-grep names a language (table below). A refusal is final, so the shebang rule never reads a refused file.
+   - **The new-language steps' own rules** (table below).
+2. **ast-grep's table.** `SupportLang::from_path(rel)` reads the extension only, case-sensitively, through `Path::extension`, as today's `ext` does. One total `match` maps its answer to a `Lang`:
+   - `Bash` maps to Shell, and `CSharp`, `Dart`, `Hcl`, `Java`, `Kotlin`, `Python`, `Rust`, `Swift`, `Tsx` and `TypeScript` to their namesakes.
+   - `Lua`, `Go`, `C`, `Cpp`, `Ruby`, `Php`, `Scala` and `Elixir` map to their `Lang` from their step on, and to `None` before it.
+   - `Css`, `Haskell`, `Html`, `Json`, `Markdown`, `Nix`, `Solidity` and `Yaml` map to `None`, so `.md` and `.yaml` stay files (L1).
+   - `JavaScript` maps to `None` too, although an override always answers its extensions first.
 3. **Shebang.** It is read only when the table has no answer and the caller passes the text. The interpreter on the first line decides, in direct (`#!/bin/bash`) and `env` (`#!/usr/bin/env -S python3`) form:
    - `sh`, `bash`, `dash` and `zsh` mean Shell;
    - `python`, `python2` and `python3` mean Python;
@@ -329,22 +419,53 @@ The shebang rule moves no existing graph:
 
 It matters only to a user whose globs name extensionless scripts, and step 0's byte-identical gate holds it there.
 
-**A detection library can come later** as a fourth source after the table, with no caller changing. On any file where it disagrees with the overrides or the table, ours wins. The step that adds it lists every disagreement on the polyglot corpus and the fixture in the results document, and its graph gate is step 0's. The maintained candidate is `linguist 0.1.16` (MIT, MSRV 1.88, published 2026-09-08), which Q7 asks about:
+`Lang::of(rel)` keeps its name and signature. It is the overrides' extension rules followed by ast-grep's table, path-only, so the cases and `tests/parse_census.rs` call it unchanged. L2's one table is that ordered pair, in `lang.rs`. Callers see `detect`, `Lang::of` and `Lang::grammar`, never `SupportLang`.
 
-- it takes the text as an argument, `disambiguate(path, &str)`;
-- its data is current linguist, Bicep included;
-- it has content heuristics for `.h`;
-- it has no shebang detection.
+**Where ast-grep's table disagrees with today's `Lang::of`.** Every extension that either table or a default glob names was compared on 2026-10-10. The counts are the polyglot corpus's 840 files on disk and the fixture's 4,336 tracked or unignored files.
+
+| extension | `Lang::of` today | ast-grep | corpus | fixture | default glob | `detect` |
+|---|---|---|---|---|---|---|
+| `.js` | TypeScript | JavaScript | 0 | 11 | yes | override: TypeScript |
+| `.mjs` | TypeScript | JavaScript | 0 | 44 | yes | override: TypeScript |
+| `.cjs` | TypeScript | JavaScript | 0 | 0 | yes | override: TypeScript |
+| `.jsx` | Tsx | JavaScript | 0 | 0 | yes | override: Tsx |
+| `.sql` | Sql | none | 42 | 76 | yes | override: Sql, own crate |
+| `.gql` | GraphQl | none | 42 | 0 | yes | override: GraphQl, own crate |
+| `.graphql` | GraphQl | none | 0 | 0 | yes | override: GraphQl, own crate |
+| `.bicep` | Bicep | none | 44 | 0 | yes | override: Bicep, own crate |
+| `.vue` | Vue | none | 8 | 0 | yes | override: Vue |
+| `.razor` | Razor | none | 40 | 0 | no, opt-in | override: Razor |
+| `.cshtml` | Razor | none | 3 | 0 | no, opt-in | override: Razor |
+| `.kts` | none | Kotlin | 0 | 14 | no | refused; two cases pin `build.gradle.kts` and `release.main.kts` as `None` |
+| `.tfvars` | none | Hcl | 0 | 0 | no | refused; a case pins `terraform.tfvars` as `None` |
+| `.ktm` | none | Kotlin | 0 | 0 | no | refused |
+| `.nomad`, `.workflow` | none | Hcl | 0 | 0 | no | refused |
+| `.bats`, `.cgi`, `.command`, `.env`, `.fcgi`, `.ksh`, `.tmux`, `.tool`, `.zsh` | none | Bash | 0 | 0 | no | refused |
+| `.py3`, `.pyi`, `.bzl`, `.bazel` | none | Python | 0 | 0 | no | refused |
+
+The two tables agree on every other default glob: `.ts`, `.tsx`, `.kt`, `.java`, `.cs`, `.rs`, `.py`, `.dart`, `.swift`, `.tf`, `.hcl`, `.sh` and `.bash`. They also agree on `.mts` and `.cts`. ast-grep names the fixture's 2,081 `.md`, 789 `.json`, 82 `.html`, 61 `.yaml` and `.yml`, and 3 `.css` files as well. The map returns `None` for each, and no default glob reaches them.
+
+The refusals reproduce today's answer, because a port does not widen; Q7 asks whether any should be read later. With them, `Lang::of` returns today's answer for every path, not only on the two corpora. `detect` differs from it only by the shebang rule.
+
+**The new languages** take ast-grep's extensions, with their steps' own rules:
+
+| step | from ast-grep | our rule |
+|---|---|---|
+| 15 Lua | `.lua` | — |
+| 16 Go | `.go` | — |
+| 17 C | `.c`, `.h` | `.h` moves to Cpp if step 18's census says so |
+| 18 C++ | `.cc`, `.cpp`, `.cxx`, `.c++`, `.hh`, `.hpp`, `.ino` | adds `.hxx` and `.h++`; refuses `.cu`, whose CUDA syntax the grammar does not know |
+| 19 Ruby | `.rb`, `.rbw`, `.gemspec` | adds `.rake` |
+| 20 PHP | `.php` | — |
+| 21 Scala | `.scala`, `.sc` | refuses `.sbt`, a build definition (§8) |
+| 22 Elixir | `.ex`, `.exs` | — |
+| 23 OCaml | not carried | adds `.ml` and `.mli` |
 
 **Grammars.** Rejected:
 
 - **`tree-sitter-language-pack 1.21.0`** (MIT, 2026-10-04). Its default features download pre-compiled parsers on first use and load them with `libloading`. A build would then depend on the network and on binaries we do not pin.
-- **`ast-grep-language 0.50.0`** (MIT, published 2026-10-09). Its tree-sitter requirement, `^0.27.0`, would accept our pin. What it pins is its own grammar set and ranges:
-  - `tree-sitter-php ^0.24`, against step 20's 0.25;
-  - `tree-sitter-haskell ^0.23`;
-  - no Bicep, PostgreSQL or GraphQL crate.
 
-  Its `SupportLang::from_path` reads the extension only, as `Lang::of` does.
+From `ast-grep-language` itself, only `SupportLang::from_path` and `LanguageExt::get_ts_language` are used. Its pattern language, `file_types()` and HTML injection are not.
 
 **Extraction.** A port's first query file is seeded from the pinned crate's `queries/tags.scm` where one ships:
 
@@ -360,6 +481,8 @@ Not adopted:
 
 **Also rejected:**
 
+- **hyperpolyglot 0.1.7**, the first decision for detection. Its newest release is from 2020-07-26 and its data from the same year, with no Bicep. Its one function, `detect(&Path)`, reads the file itself and errors on a deleted path. Its dependencies bring `atty 0.2.14` (RUSTSEC-2021-0145, RUSTSEC-2024-0375), `yaml-rust 0.4.3` (RUSTSEC-2024-0320) and the PCRE2 C library.
+- **linguist 0.1.16** (MIT, 2026-09-08) would decide `.h` by content, but it would be a second detection table beside ast-grep's. No existing language needs it.
 - **tokei 15.0.0** (MIT OR Apache-2.0, 2026-09-06) has a line counter's language table: extension, filename and shebang, with no content heuristics. Its non-optional dependencies include `rayon`, `dashmap`, `grep-searcher` and `clap-cargo`.
 - **SCIP indexers** need each language's own toolchain and run out of process.
 - **stack-graphs** was archived by GitHub on 2025-09-09 and is no longer supported upstream.
@@ -477,12 +600,13 @@ This is a prediction, not a decision; §3.3 decides. It sizes the steps.
 ## 4 · Detection and the front
 
 ```rust
-pub fn detect(rel: &str, head: Option<&str>) -> Option<Lang>; // overrides, Lang::of's table (L2), then a shebang (§2.8)
+pub fn detect(rel: &str, head: Option<&str>) -> Option<Lang>; // our overrides, ast-grep-language's table (L2), then a shebang (§2.8)
+impl Lang { pub fn grammar(self) -> Option<Language>; } // ast-grep-language's grammar, or an own crate's (§2.8)
 pub(crate) fn spec(lang: Lang) -> &'static Spec;
 pub(crate) fn read(resolver: &Resolver, rel: &str, source: &str) -> Extraction;
 ```
 
-`read` is the only front:
+`read` is the only front. It is the same whichever crate holds the grammar: an `ast-grep-language` grammar and an own crate's (Bicep, PostgreSQL, GraphQL, OCaml) are both a `tree_sitter::Language` from `Lang::grammar`, parsed by our `Parser` and read by our queries.
 
 1. **Detect.** `detect(rel, Some(source))`. With no language, the file gets a file node only (L1).
 2. **Embed.** With `hooks.embed`, an unread view means a file node only. A read text is parsed with `spec.view`'s grammar and queries. With no view, the file gets a file node, as Vue does today.
@@ -633,7 +757,8 @@ Each step is one language and one PR. A step's last commit passes §5. Sizes are
 Build:
 
 - `spec.rs`, `queries.rs`, and the engine (facts, qualification, bodies, default resolution);
-- `detect` with its overrides and the shebang rule, plus cases for each interpreter form (§2.8), about 80 lines;
+- `ast-grep-language =0.45.3` in `Cargo.toml` with `default-features = false` and the ten features of §2.8. The thirteen existing `=` grammar pins stay;
+- `detect` with its overrides, ast-grep's table and the shebang rule, plus cases for each interpreter form and each refusal (§2.8), about 120 lines. `Lang::of` becomes the overrides plus `SupportLang::from_path`, and `Lang::grammar` takes the ten covered grammars from `get_ts_language()`. Bicep, PostgreSQL and GraphQL keep their own crates;
 - the front, `read`;
 - `Hooks` replacing `Reader`, whose fields map one to one, with `legacy` holding each old `extract`;
 - `Sink`, and `register` for Vue.
@@ -657,7 +782,19 @@ Record the base:
 - the kit copy (§5.1), `fixture-base`, and the base bench;
 - the base build time, compile time per grammar, and the time of the deepest file.
 
-Gate: `graph.json` and `headers.json` byte-identical to `store-base`, as #170 required; tests unedited; the bench with zero flips. This step alone closes the three reviewer defects. About 1,200 lines of Rust are added, about 200 removed, plus about 250 lines of Python.
+Gate: `graph.json` and `headers.json` byte-identical to `store-base`, as #170 required; tests unedited; the bench with zero flips. Byte-identity still holds with `ast-grep-language` in, for three reasons:
+
+- every existing grammar resolves to the same crate at the same version, because each `=` pin lies inside ast-grep's range;
+- ast-grep returns the same `LanguageFn` constants `lang.rs` uses today;
+- `Lang::of` returns today's answer for every path (§2.8's disagreement table), as the existing detection cases pin. `detect` adds only the shebang rule, which no default glob reaches.
+
+Step 0's gate adds:
+
+- `cargo tree --duplicates` names no `tree-sitter` crate;
+- `Cargo.lock` holds every grammar at its `=` pin;
+- the stripped binary and the compressed archive are read against the parent under §6.2's gate 5 bar. The ast-grep crates are expected near zero, because only `from_path` and `get_ts_language` are linked.
+
+This step alone closes the three reviewer defects. About 1,200 lines of Rust are added, about 200 removed, plus about 250 lines of Python.
 
 **Step 1 · Shell.** S. Query ~50, Rust −250, hook ~150 kept.
 
@@ -675,7 +812,7 @@ Gate: `graph.json` and `headers.json` byte-identical to `store-base`, as #170 re
 
 **Step 3 · HCL and Terraform.** S–M. Query ~90, Rust −250.
 
-- **Split (decision 2):** `.tf` becomes `Lang::Terraform`, read with the HCL grammar crate and in `Family::Hcl`; `.hcl` stays `Lang::Hcl`. Each language has its own queries and export rule (`#set! export` on `var/` and `output/` for Terraform, `All` for HCL), so no dialect field exists. `Lang::ALL`, `tests/parse_census.rs` and `docs/languages.md` gain the row. Ids, family and headers do not change, so the gate is the same as for any port.
+- **Split (decision 2):** `.tf` becomes `Lang::Terraform`, read with the HCL grammar crate and in `Family::Hcl`; `.hcl` stays `Lang::Hcl`. `.tf` is an override, because ast-grep says Hcl. Both `Lang`s take `SupportLang::Hcl`'s grammar, so only the `Lang` changes. Each language has its own queries and export rule (`#set! export` on `var/` and `output/` for Terraform, `All` for HCL), so no dialect field exists. `Lang::ALL`, `tests/parse_census.rs` and `docs/languages.md` gain the row. Ids, family and headers do not change, so the gate is the same as for any port.
 - **Queries:** Terraform addresses as `@name` parts with prefixes (`T/N`, `data/T/N`, `var/`, `local/` per attribute of `locals`, `output/`, `module/`, `provider/`). Non-Terraform blocks as kind plus labels, with `#not-match? "/"` for a skipped label. The first aliased provider wins through first-id-wins.
 - **Spec:** `Directory` for Terraform.
 - **Hooks:** `widen` stays, on Terraform.
@@ -785,12 +922,14 @@ The table below was read on 2026-10-10 from crates.io's API and from each crate'
 | C | `tree-sitter-c 0.24.2` | 2026-04-22 | MIT | 15 | tags, definitions only | 3.7 MB | kept |
 | C++ | `tree-sitter-cpp 0.23.4` | 2024-11-11 | MIT | 14 | tags, definitions only | 17 MB | kept |
 | Ruby | `tree-sitter-ruby 0.23.1` | 2024-11-11 | MIT | 14 | tags, locals | 15 MB | kept |
-| PHP | `tree-sitter-php 0.25.1` | 2026-10-06 | MIT | 15 | tags | 14 MB, two parsers | kept; pinned by age (§7) |
+| PHP | `tree-sitter-php 0.25.1`; 0.24.2 is pinned | 2026-10-06; 0.24.2 2025-08-18 | MIT | 15 | tags | 14 MB; 13.4 MB at 0.24.2; two parsers | kept at 0.24.2, ast-grep's range (§2.8) |
 | Scala | `tree-sitter-scala 0.26.2` | 2026-08-08 | MIT | 15 | tags, locals | 26 MB | kept |
 | Elixir | `tree-sitter-elixir 0.3.5` | 2026-03-02 | Apache-2.0 | 14 | tags | 12 MB | kept |
 | OCaml | `tree-sitter-ocaml 0.26.0` | 2026-09-13 | MIT | 15 | tags, locals | 62 MB, three parsers | kept; last, held by the size bar |
 | Zig | `tree-sitter-zig 1.1.2` | 2024-12-22 | MIT | 14 | highlights, indents, folds, injections | 5.6 MB | **dropped** |
 | Haskell | `tree-sitter-haskell 0.24.1` | 2026-09-30 | MIT | 15 | locals, highlights, injections | 19 MB | **dropped** |
+
+**Where each grammar comes from (§2.8).** Steps 15–22 turn on `ast-grep-language`'s feature for their grammar: `tree-sitter-lua`, `-go`, `-c`, `-cpp`, `-ruby`, `-php`, `-scala` or `-elixir`. Each adds the `=` pin from this table beside it. All eight pins lie inside 0.45.3's ranges; for PHP, that is why it is 0.24.2. Step 23 adds `tree-sitter-ocaml =0.26.0` as an own crate, because ast-grep does not carry OCaml. Each step's extensions are ast-grep's, with §2.8's rules. Each step's gate also reads `cargo tree --duplicates`.
 
 Zig has no tags query, neither in the crate nor on the repository's `master`. Haskell has none either: its `locals.scm` names local bindings, not top-level definitions. Every kept crate's external scanner is C, so MSVC builds it the way it builds today's grammars.
 
@@ -858,7 +997,7 @@ No new definition kind is needed:
 
 **Step 16 · Go.** M. Query ~90, cases ~250, engine ~150 (`Capitalized`, `ModulePrefix`, directory targets).
 
-- **Lang and family:** `Lang::Go` (`.go`), `Family::Go`.
+- **Lang and family:** `Lang::Go` (`.go`), `Family::Go`. The case `the_typescript_family_is_read_by_its_two_grammars_and_an_unknown_extension_by_none` lists `main.go` as unread, so this step drops that one example, and the results document names the edit.
 - **Queries:**
   - functions;
   - methods, with the receiver's type as `@owner` (`T.M`);
@@ -891,7 +1030,7 @@ No new definition kind is needed:
 
 **Step 18 · C++.** M. Query ~120, cases ~250, engine ~40 (`qualifiers`).
 
-- **Lang and family:** `Lang::Cpp` (`.cc`, `.cpp`, `.cxx`, `.c++`, `.hh`, `.hpp`, `.hxx`, `.h++`), `Family::C`.
+- **Lang and family:** `Lang::Cpp` (`.cc`, `.cpp`, `.cxx`, `.c++`, `.hh`, `.hpp` and `.ino` from ast-grep, with `.hxx` and `.h++` as overrides; `.cu` refused), `Family::C`.
 - **Queries:**
   - namespaces as `/` containers;
   - classes and structs as `.` containers, with methods and fields;
@@ -906,7 +1045,7 @@ No new definition kind is needed:
 
 **Step 19 · Ruby.** M. Query ~90, cases ~250, engine ~60 (`#set! visibility`).
 
-- **Lang and family:** `Lang::Ruby` (`.rb`, `.rake`, `.gemspec`), `Family::Ruby`.
+- **Lang and family:** `Lang::Ruby` (`.rb`, `.rbw` and `.gemspec` from ast-grep, with `.rake` as an override), `Family::Ruby`.
 - **Queries:**
   - modules as `/` containers and classes as `.` containers, with `qualifiers: ["::"]` for `class Foo::Bar`;
   - `def` and `def self.` methods;
@@ -926,7 +1065,8 @@ No new definition kind is needed:
 
 **Step 20 · PHP.** M. Query ~110, cases ~250, engine ~100 (`Scoped`).
 
-- **Lang and family:** `Lang::Php` (`.php`), `Family::Php`. The grammar is `LANGUAGE_PHP`, which handles PHP mixed with HTML.
+- **Lang and family:** `Lang::Php` (`.php`), `Family::Php`.
+- **Grammar:** `tree-sitter-php =0.24.2` through ast-grep's `tree-sitter-php` feature, with `tree_sitter_php::LANGUAGE_PHP`, which handles PHP mixed with HTML. ast-grep's own `Php` is `LANGUAGE_PHP_ONLY`, which does not parse text before `<?php` (§2.8). The parse census reads both constants on Slim and records them. A `LANGUAGE_PHP` census above 2% holds the step for Max, as gate 2 says.
 - **Queries:**
   - the namespace as `@scope.namespace`;
   - classes, interfaces, traits and enums as `.` containers;
@@ -947,7 +1087,7 @@ No new definition kind is needed:
 
 **Step 21 · Scala.** M. Query ~110, cases ~250.
 
-- **Lang and family:** `Lang::Scala` (`.scala`, `.sc`), `Family::Scala`.
+- **Lang and family:** `Lang::Scala` (`.scala`, `.sc`; ast-grep's `.sbt` is refused), `Family::Scala`.
 - **Queries:**
   - package clauses as `@scope.namespace`;
   - classes, traits, objects and enums as `.` containers;
@@ -983,7 +1123,7 @@ No new definition kind is needed:
 
 **Step 23 · OCaml.** M. Query ~120, cases ~250, engine ~60 (`ModuleFile`).
 
-- **Lang and family:** `Lang::OCaml` (`.ml`) and `Lang::OCamlInterface` (`.mli`), both in `Family::OCaml`. They use `LANGUAGE_OCAML` and `LANGUAGE_OCAML_INTERFACE`; the type grammar is not referenced.
+- **Lang and family:** `Lang::OCaml` (`.ml`) and `Lang::OCamlInterface` (`.mli`), both in `Family::OCaml`, detected by override. They use `LANGUAGE_OCAML` and `LANGUAGE_OCAML_INTERFACE` from the own crate `tree-sitter-ocaml =0.26.0`, because ast-grep does not carry OCaml. The type grammar is not referenced.
 - **Queries:**
   - `let` bindings;
   - `module M = struct` as a `/` container;
@@ -1082,17 +1222,18 @@ Expected net for the whole plan, steps 0–24:
 7. **Base drift.** A fix that lands on `main` in a language not yet ported goes into its old reader. A fix in a ported language goes into its query or hook. `REPOGRAPH_LEGACY` keeps O and N in one binary, so the gate compares like with like; `store-base` is rebuilt when `main` moves the graph.
 8. **Coexistence.** Each language carries two paths for one step's lifetime. Step 14 is a step with its own gate, not a cleanup to forget.
 9. **GRAMMAR.** It moves once per release: at step 14, or at step 24 when both ship together (decision 1). A release cut in the middle of the migration can leave old doc lines in stores until their files change. Retrieval never reads those lines; rerank and explain do.
-10. **The `parse_census` coupling.** For steps 0–14, `lang.rs` gains nothing, and `spec.rs` and `queries.rs` sit beside it. From step 15, each new language adds one `Lang` variant and one grammar crate to `lang.rs`, which `tests/parse_census.rs` compiles by path. The census therefore names the new language in the same commit.
+10. **The `parse_census` coupling.** For steps 0–14, `lang.rs` gains nothing, and `spec.rs` and `queries.rs` sit beside it. From step 15, each new language adds to `lang.rs` one `Lang` variant, its `SupportLang` arm and its ast-grep feature, or its own crate for OCaml. `tests/parse_census.rs` compiles that file by path. The census therefore names the new language in the same commit.
 11. **No floor for the new languages.** The 0.6.0 spec says it outright for Go: no repository of ours is written in it. The same holds for all nine. The bench has no case in them, and there is no truth reader and no blast clause. They are graded by their cases, a parse census and a hand-read precision sample of 50 per kind on one public corpus (§6.2). Recall is not measured at all.
 
     A language can therefore pass with low recall on real code. That is acceptable by the first global constraint, because a missing edge is not a wrong one. What would not be acceptable is a wrong-edge rate the 50-edge sample happened to miss: at P = 0.99, a sample of 50 shows no error 61% of the time. The mitigation is that every engine addition is shared, so a later step's sample re-reads it.
 12. **Binary size.** The nine grammars are estimated at +20 MB stripped and +1.1 MB compressed. OCaml's parser sources alone are 62 MB, about 6.5 MB stripped by the Postgres scale, and Scala's and C++'s are 26 MB and 17 MB. The per-step bar (8 MB stripped, 1 MB compressed) holds a step for Max before it merges. The release archive's 0.6.0 bar, `v0.5.3`'s asset + 3.5 MB, is read again at step 24.
 13. **Adapting upstream queries.** Upstream `tags.scm` relies on general predicates the engine refuses, and its captures name a different contract. Every adaptation is a place where a pattern can quietly stop matching. The contract test, `REPOGRAPH_DUMP_CAPTURES` and the 50-symbol declaration sample are the guard. A declaration a pattern silently lost shows up only as a missing symbol, so the sample counts symbols per file against a hand count for five files.
-14. **`.h` is ambiguous.** One extension is C, C++ or Objective-C, and `Lang::of` cannot read content. Step 18's census picks one grammar for every `.h`, and the other kind of header loses members. Q7's `linguist` would decide per file by content.
+14. **`.h` is ambiguous.** One extension is C, C++ or Objective-C. ast-grep's table, like `Lang::of`, reads the extension only and says C. Step 18's census picks one grammar for every `.h`, and the other kind of header loses members. No content-aware detector is planned (§2.8).
 15. **Upstream licence notices.** A query copied from a crate keeps its notice. The `cpp`, `ruby` and `lua` crates ship no LICENSE file, so the notice is taken from the grammar repository at the pinned tag. Elixir's grammar is Apache-2.0, whose NOTICE terms are read in step 22.
-16. **Version age.** `tree-sitter-php 0.25.1` was four days old on 2026-10-10. Each step pins with `=` the newest version that is at least two weeks old when the step starts, as the 0.6.0 pins did. For PHP that is 0.25.1 by step 20, or 0.24.2 (2025-08-18) if 0.25.1 is yanked.
+16. **Version age and ranges.** Each step pins with `=` the newest version that is at least two weeks old when the step starts, as the 0.6.0 pins did, and that `ast-grep-language 0.45.3`'s range admits. For seven of the eight crates it carries, that is the version in §6.2's table. For PHP it is 0.24.2 (2025-08-18), because `^0.24.0` excludes 0.25.1.
 17. **The engine additions touch shared code.** `receivers`, `qualifiers`, `OwnThenUnique`, the new import shapes and the `visibility` property all live in the engine every language runs. Each defaults to today's behaviour. Gate 4 (§6.2) is what proves that: the polyglot corpus and the fixture stay byte-identical at every step.
-18. **Detection stays a table.** Hyperpolyglot, the decided library, is unmaintained (§2.8), so detection keeps `Lang::of` plus shebangs. Content-based disambiguation (`.h`, `.m`, `.pl`) waits for Q7.
+18. **Detection follows a library's table.** ast-grep's table can change in an upgrade (0.50.0 adds Zig), and it reads the extension only, so `.h`, `.m` and `.pl` stay static choices. Three things hold it: the `=0.45.3` pin, the override list, and the detection cases. An upgrade is its own PR under §2.8's grammar-version gate.
+19. **One grammar, two versions.** No grammar crate declares `links`, so Cargo would accept two versions of one grammar, and both would define the same C symbols. Every step's gate reads `cargo tree --duplicates` for `tree-sitter` crates. Where ast-grep's range excludes a version a language needs, ast-grep's feature for that language stays off; a second copy is never added.
 
 ## 8 · Out of scope
 
@@ -1100,7 +1241,8 @@ Expected net for the whole plan, steps 0–24:
 - Languages beyond §6.2's nine. Zig and Haskell were checked and dropped because neither grammar ships a tags query or an equivalent. Each further language is its own step under §6.2's gate.
 - Hooks for the new languages, and per-language resolution beyond the engine additions in §6.2: receiver types, Go interfaces, C++ overloads, Ruby's `private` sections, Scala implicits, Elixir macros, OCaml functors.
 - Reading build manifests for the new languages (`composer.json`, `build.sbt`, `mix.exs`, `dune`, `CMakeLists.txt`). `go.mod`'s `module` line is the one exception, read as data.
-- Widening a ported language: more citations, more reference kinds, better resolution.
+- Widening a ported language: more citations, more reference kinds, better resolution, and the extra extensions ast-grep names for it (Q7).
+- ast-grep's pattern language, rules and HTML injection. Only its table and grammars are used.
 - Cross-family edges (L10), and any change to ids, node kinds, edge kinds or contexts.
 - Sharing trees between the collect and extract passes.
 - Native grammars for Razor and Vue (L6 stays).
@@ -1122,7 +1264,17 @@ Questions 1–6 were decided by Max on 2026-10-10, each as recommended. They are
    Until Max points to one, Java, C#, Razor, GraphQL, Bicep and Vue are judged on the polyglot corpus and their cases (§5.5).
 6. **Branching.** #170 merges first. `refactor/generic-code-engine` then branches from `main`, with one PR per step.
 
+Later on 2026-10-10 Max took two more decisions, recorded in §2.8: `ast-grep-language` is the detection and grammar layer, and Bicep, PostgreSQL and GraphQL stay code on their own pinned crates.
+
 Open, for Max:
 
-7. **A content-aware detection library?** Hyperpolyglot, as decided, is unusable (§2.8), so detection stays `Lang::of` plus shebangs. `linguist 0.1.16` fits on licence and MSRV, is maintained, takes the text as an argument, and would decide `.h` per file. It would sit after our table as a fallback, so it could not move an existing file's language. Recommendation: not now. No existing language needs it; step 18's census answers `.h` well enough for one public corpus. Revisit if a `.h` census or a user's repo shows the static choice failing.
+7. **Read ast-grep's extra extensions?** Step 0 refuses 18 extensions that ast-grep names and `Lang::of` does not (§2.8). The refusals keep today's answer, which two cases pin for `.kts` and `.tfvars`. None of the 18 occurs in the corpus, and only `.kts` occurs in the fixture (14 Gradle scripts, outside the default globs). Reading any of them is a widening:
+   - `.zsh`, `.ksh` and `.bats` are close to Bash;
+   - `.pyi` stubs would declare a second copy of every name their `.py` module declares;
+   - `.kts` files are Gradle scripts, which the 0.6.0 spec does not read;
+   - `.tfvars` declares nothing;
+   - `.env`, `.cgi`, `.fcgi`, `.tool`, `.command`, `.tmux`, `.workflow` and `.nomad` are often not the language ast-grep names;
+   - `.bzl` and `.bazel` are Starlark.
+
+   Recommendation: not in this plan. Each one is a later widening with its own case.
 8. **Do the new languages join the default globs at step 24?** Joining means every user's next build reads those files, and GRAMMAR moves once. Staying opt-in means a user names the globs, as with Razor. Recommendation: join for each language whose step passed. None of our repositories holds these files, so the fixture and the corpora do not move, and the risk falls only on users who have them. For those users a file node with symbols is better than a bare file node.
