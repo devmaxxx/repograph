@@ -5,14 +5,13 @@
 //! function handed to another call does with it is not — `rows.map(fn)` calls it,
 //! `register('T', Cls)` may only keep it — and both count, because `impact` asks what breaks
 //! when the target changes, and either caller does.
-use crate::code::idrefs::owner;
 use crate::code::imports::Resolver;
-use crate::code::symbols::{is_top_level, member_name, parse};
+use crate::code::syntax::text;
+use crate::code::typescript::idrefs::owner;
+use crate::code::typescript::symbols::{is_top_level, member_name, parse};
 use crate::model::{Edge, EdgeKind, Extraction};
 use std::collections::{BTreeMap, BTreeSet};
 use tree_sitter::Node;
-
-fn text<'a>(n: Node, src: &'a [u8]) -> &'a str { n.utf8_text(src).unwrap_or("") }
 
 /// What one file lets a call resolve to, gathered in one pass over its top-level statements.
 #[derive(Default)]
@@ -70,16 +69,6 @@ fn is_accessor(m: Node) -> bool {
     let mut c = m.walk();
     let found = m.children(&mut c).any(|k| matches!(k.kind(), "get" | "set"));
     found
-}
-
-/// Whether a symbol's signature line declares an accessor: `get` or `set` (after any modifiers)
-/// directly ahead of the member's own name. A getter/setter pair is one symbol, and whichever
-/// half came first wrote its signature, so a setter's counts as the pair's.
-pub(crate) fn declares_accessor(label: &str, body: &str) -> bool {
-    let Some((_, member)) = label.rsplit_once('.') else { return false };
-    let Some(signature) = body.lines().last() else { return false };
-    let words: Vec<&str> = signature.split_whitespace().collect();
-    words.windows(2).any(|w| matches!(w[0], "get" | "set") && w[1].strip_prefix(member).is_some_and(|rest| rest.is_empty() || rest.starts_with(['(', '<'])))
 }
 
 /// The identifiers a call argument hands over: the argument itself, and every identifier in a
@@ -142,7 +131,7 @@ impl Scope {
                     // A `.vue` default import is the component, declared under the file's stem.
                     "identifier" => {
                         let n = text(part, src).to_string();
-                        let declared = crate::code::vue::component_name(&target).map_or_else(|| n.clone(), str::to_string);
+                        let declared = crate::code::typescript::vue::component_name(&target).map_or_else(|| n.clone(), str::to_string);
                         self.names.insert(n, (target.clone(), declared));
                     }
                     "namespace_import" => {

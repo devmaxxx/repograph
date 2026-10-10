@@ -106,6 +106,16 @@ pub struct Graph {
     #[serde(default)] pub pending: BTreeSet<Edge>,
 }
 
+/// Whether a symbol's signature line declares an accessor: `get` or `set` (after any modifiers)
+/// directly ahead of the member's own name. A getter/setter pair is one symbol, and whichever
+/// half came first wrote its signature, so a setter's counts as the pair's.
+pub(crate) fn declares_accessor(label: &str, body: &str) -> bool {
+    let Some((_, member)) = label.rsplit_once('.') else { return false };
+    let Some(signature) = body.lines().last() else { return false };
+    let words: Vec<&str> = signature.split_whitespace().collect();
+    words.windows(2).any(|w| matches!(w[0], "get" | "set") && w[1].strip_prefix(member).is_some_and(|rest| rest.is_empty() || rest.starts_with(['(', '<'])))
+}
+
 impl Graph {
     pub fn apply(&mut self, ex: Extraction) {
         for n in ex.nodes {
@@ -133,7 +143,7 @@ impl Graph {
         };
         let all: Vec<Edge> = std::mem::take(&mut self.edges).into_iter().chain(std::mem::take(&mut self.pending)).collect();
         for e in all {
-            if e.reads_member() && !self.nodes.get(&e.target).is_some_and(|n| crate::code::calls::declares_accessor(&n.label, &n.body)) { continue }
+            if e.reads_member() && !self.nodes.get(&e.target).is_some_and(|n| declares_accessor(&n.label, &n.body)) { continue }
             if admitted(&e.target) { self.edges.insert(e); } else { self.pending.insert(e); }
         }
     }

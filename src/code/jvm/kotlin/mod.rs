@@ -10,25 +10,25 @@ use tree_sitter::Node;
 
 use crate::code::imports::Resolver;
 use crate::code::index::{Header, Nested, QualifiedIndex};
-use crate::code::jvm::{self, child, named, text, Scope};
+use crate::code::jvm::{self, Scope};
 use crate::code::lang::{Family, Lang};
+use crate::code::reader::{self, Reader};
+use crate::code::syntax::{child, named, text};
 use crate::model::Extraction;
 
 /// The comment kinds a Kotlin doc block is read from.
 pub(crate) const COMMENTS: &[&str] = &["line_comment", "multiline_comment"];
 
-/// One parse per file; every pass shares the tree.
-pub fn extract(resolver: &Resolver, rel: &str, source: &str) -> Extraction {
-    let mut ex = Extraction::default();
-    crate::code::lang::file_node(rel, &mut ex);
-    let src = source.as_bytes();
-    let Some(tree) = Lang::Kotlin.parse(src) else { return ex };
-    let root = tree.root_node();
+pub(crate) const READER: Reader = Reader { extract, header: Some(|_, source| header(source)), ..reader::NONE };
+
+fn extract(resolver: &Resolver, rel: &str, source: &str, ex: &mut Extraction) {
+    let Some(tree) = reader::open(Lang::Kotlin, rel, source, ex) else { return };
+    let (src, root) = (source.as_bytes(), tree.root_node());
     // A repository whose globs reach no JVM file has no index; every lookup then finds nothing.
     let empty = QualifiedIndex::default();
     let index = resolver.index(Family::Jvm).unwrap_or(&empty);
     let scope = scope(root, src);
-    let declared = declarations::scan(root, rel, src, &mut ex);
+    let declared = declarations::scan(root, rel, src, ex);
     let own = jvm::Own {
         rel,
         types: &declared.types,
@@ -48,10 +48,9 @@ pub fn extract(resolver: &Resolver, rel: &str, source: &str) -> Extraction {
         member_types: false,
         past_unread: false,
     };
-    jvm::link(&declared.supers, index, &scope, rel, |at, w| own.type_at(at, w), &mut ex);
-    jvm::decorate(&declared.annotations, rel, |at, w| own.type_at(at, w), &mut ex);
-    calls::scan(root, &calls::Ctx { own, src, d: &declared }, &mut ex);
-    ex
+    jvm::link(&declared.supers, index, &scope, rel, |at, w| own.type_at(at, w), ex);
+    jvm::decorate(&declared.annotations, rel, |at, w| own.type_at(at, w), ex);
+    calls::scan(root, &calls::Ctx { own, src, d: &declared }, ex);
 }
 
 /// The package line, every top-level name and every nested path, for the JVM index and for the

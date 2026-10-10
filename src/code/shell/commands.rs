@@ -4,6 +4,7 @@
 use super::paths::{candidates, words, Value, Vars};
 use super::Scripts;
 use crate::code::prose::{self, Spans};
+use crate::code::syntax;
 use crate::model::{EdgeKind, Extraction};
 use tree_sitter::Node;
 
@@ -72,7 +73,7 @@ pub(super) fn write(scripts: &Scripts, root: Node, spans: &Spans, src: &[u8], re
 fn runner_script<'t>(args: &[Node<'t>], src: &[u8]) -> Option<Node<'t>> {
     let mut it = args.iter();
     while let Some(a) = it.next() {
-        let t = prose::text(*a, src);
+        let t = syntax::text(*a, src);
         if !t.starts_with(['-', '+']) { return Some(*a) }
         let flags = &t[1..];
         if !flags.starts_with('-') && flags.contains('c') { return None }

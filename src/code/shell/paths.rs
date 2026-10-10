@@ -5,6 +5,7 @@
 //! nothing.
 
 use crate::code::prose;
+use crate::code::syntax;
 use std::collections::BTreeMap;
 use tree_sitter::Node;
 
@@ -30,7 +31,7 @@ impl Vars {
         for a in assignments {
             let Some(name) = a.child_by_field_name("name") else { continue };
             let value = a.child_by_field_name("value").and_then(|v| vars.eval(v, src));
-            let name = prose::text(name, src).to_string();
+            let name = syntax::text(name, src).to_string();
             match vars.0.get(&name) {
                 Some(old) if *old != value => { vars.0.insert(name, None); }
                 Some(_) => {}
@@ -43,13 +44,13 @@ impl Vars {
     /// What a word evaluates to, when the script's text fixes it.
     pub(super) fn eval(&self, n: Node, src: &[u8]) -> Option<Value> {
         match n.kind() {
-            "word" | "string_content" => literal(prose::text(n, src)),
-            "raw_string" => literal(prose::text(n, src).trim_matches('\'')),
+            "word" | "string_content" => literal(syntax::text(n, src)),
+            "raw_string" => literal(syntax::text(n, src).trim_matches('\'')),
             // A string's quotes are anonymous, so its named children are exactly its pieces.
-            "string" | "concatenation" => prose::named(n).into_iter()
+            "string" | "concatenation" => syntax::named(n).into_iter()
                 .try_fold(None, |acc, piece| join(acc, self.eval(piece, src)?).map(Some))?
                 .or_else(|| literal("")),
-            "simple_expansion" | "expansion" => self.expansion(prose::text(n, src)),
+            "simple_expansion" | "expansion" => self.expansion(syntax::text(n, src)),
             "command_substitution" => self.substitution(n, src),
             _ => None,
         }
@@ -73,7 +74,7 @@ impl Vars {
     /// `$(dirname <script>)` is the script's directory. `$(cd <dir> && pwd)` is `<dir>` with its
     /// symlinks resolved, and a path inside a repository has none to resolve.
     fn substitution(&self, n: Node, src: &[u8]) -> Option<Value> {
-        let kids = prose::named(n);
+        let kids = syntax::named(n);
         let [inner] = kids.as_slice() else { return None };
         match inner.kind() {
             "command" => match words(*inner, src)? {
@@ -81,12 +82,12 @@ impl Vars {
                 _ => None,
             },
             "list" => {
-                let steps = prose::named(*inner);
+                let steps = syntax::named(*inner);
                 let [cd, pwd] = steps.as_slice() else { return None };
                 let (cd_name, cd_args) = words(*cd, src)?;
                 let (pwd_name, _) = words(*pwd, src)?;
-                if cd_name != "cd" || pwd_name != "pwd" || !prose::text(*inner, src).contains("&&") { return None }
-                let dirs: Vec<Node> = cd_args.into_iter().filter(|a| !prose::text(*a, src).starts_with('-')).collect();
+                if cd_name != "cd" || pwd_name != "pwd" || !syntax::text(*inner, src).contains("&&") { return None }
+                let dirs: Vec<Node> = cd_args.into_iter().filter(|a| !syntax::text(*a, src).starts_with('-')).collect();
                 match dirs.as_slice() {
                     [dir] => match self.eval(*dir, src)? {
                         here @ Value::Here(_) => Some(here),
@@ -105,8 +106,8 @@ pub(super) fn words<'t, 's>(cmd: Node<'t>, src: &'s [u8]) -> Option<(&'s str, Ve
     if cmd.kind() != "command" { return None }
     let name = cmd.child_by_field_name("name")?;
     let mut c = cmd.walk();
-    let args = cmd.children_by_field_name("argument", &mut c).filter(|a| prose::text(*a, src) != "--").collect();
-    Some((prose::text(name, src), args))
+    let args = cmd.children_by_field_name("argument", &mut c).filter(|a| syntax::text(*a, src) != "--").collect();
+    Some((syntax::text(name, src), args))
 }
 
 /// Where a path value may point in the repository, in the order tried: under the script's directory,

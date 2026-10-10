@@ -10,29 +10,37 @@ use std::collections::BTreeSet;
 use tree_sitter::Node;
 
 use crate::code::imports::Resolver;
-use crate::code::lang::{file_node, Lang};
+use crate::code::lang::Lang;
+use crate::code::reader::{self, Manifest, Reader};
+use crate::code::syntax::{named, text};
 use crate::model::{EdgeKind, Extraction};
-use declarations::{named, text};
 use library::Libraries;
 
-/// One parse per file; every pass reads the same tree.
-pub fn extract(resolver: &Resolver, rel: &str, source: &str) -> Extraction {
-    let mut ex = Extraction::default();
-    file_node(rel, &mut ex);
-    let src = source.as_bytes();
-    let Some(tree) = Lang::Dart.parse(src) else { return ex };
-    let root = tree.root_node();
-    let declared = declarations::scan(root, rel, src, &mut ex);
-    directives(resolver.dart(), rel, root, src, &mut ex);
-    calls::scan(root, resolver.dart(), rel, src, &declared, &mut ex);
+/// Dart state: every globbed file's directives and top-level names, and every pubspec's package name.
+pub(crate) const READER: Reader = Reader {
+    extract,
+    collect: Some(|r, rel, source| {
+        r.state_mut::<Libraries>().collect(rel, source);
+        None
+    }),
+    state: Some(reader::state::<Libraries>),
+    manifest: Some(Manifest { matches: |name| name == "pubspec.yaml", read: |r, rel, text| r.state_mut::<Libraries>().collect_manifest(rel, text) }),
+    ..reader::NONE
+};
+
+fn extract(resolver: &Resolver, rel: &str, source: &str, ex: &mut Extraction) {
+    let Some(tree) = reader::open(Lang::Dart, rel, source, ex) else { return };
+    let (src, root) = (source.as_bytes(), tree.root_node());
+    let declared = declarations::scan(root, rel, src, ex);
+    directives(resolver.state::<Libraries>(), rel, root, src, ex);
+    calls::scan(root, resolver.state::<Libraries>(), rel, src, &declared, ex);
     // Only a supertype that resolves is an edge. Every Flutter widget extends a class declared
     // outside the repository, and a same-file guess would name a symbol no file declares.
     for (from, name) in &declared.supers {
-        for f in resolver.dart().resolve(rel, name) {
+        for f in resolver.state::<Libraries>().resolve(rel, name) {
             ex.edge(from, &format!("sym:{f}::{name}"), EdgeKind::Extends, "", rel);
         }
     }
-    ex
 }
 
 #[derive(Default)]

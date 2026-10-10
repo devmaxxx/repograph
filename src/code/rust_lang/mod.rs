@@ -2,8 +2,9 @@
 //! other files' contents, so extracting a file never opens another.
 
 use crate::code::imports::Resolver;
-use crate::code::jvm::text;
-use crate::code::lang::{file_node, Lang};
+use crate::code::lang::Lang;
+use crate::code::reader::{self, Manifest, Reader};
+use crate::code::syntax::{field_text, text};
 use crate::model::Extraction;
 use tree_sitter::Node;
 
@@ -17,23 +18,31 @@ pub use crates::Crates;
 #[cfg(test)]
 mod cases;
 
+/// Rust state: the module tree, every `.rs` path and `Cargo.toml` the globs reach.
+pub(crate) const READER: Reader = Reader {
+    extract,
+    collect: Some(|r, rel, source| {
+        r.state_mut::<Crates>().file(rel, source);
+        None
+    }),
+    state: Some(reader::state::<Crates>),
+    manifest: Some(Manifest { matches: |name| name == "Cargo.toml", read: |r, rel, text| r.state_mut::<Crates>().manifest(rel, text) }),
+    ..reader::NONE
+};
+
 /// The file node, a symbol for every item at a declaring scope (file, inline `mod`, `trait` and
 /// `impl` bodies) with its `Declares` edge, and a `References` edge for each requirement id cited
 /// in a comment or string. Never opens another file.
-pub fn extract(resolver: &Resolver, rel: &str, source: &str) -> Extraction {
-    let mut ex = Extraction::default();
-    file_node(rel, &mut ex);
-    let src = source.as_bytes();
-    let Some(tree) = Lang::Rust.parse(src) else { return ex };
-    let root = tree.root_node();
-    let items = items::read(rel, src, root, &mut ex);
-    items::id_refs(rel, src, root, &mut ex);
-    let mut ctx = uses::Ctx { rel, src, crates: resolver.rust(), items: &items, bindings: uses::Bindings::default() };
-    uses::read(&mut ctx, root, &mut ex);
-    calls::impls(&ctx, &mut ex);
-    calls::read(&ctx, root, &mut ex);
-    calls::attributes(&ctx, root, &mut ex);
-    ex
+fn extract(resolver: &Resolver, rel: &str, source: &str, ex: &mut Extraction) {
+    let Some(tree) = reader::open(Lang::Rust, rel, source, ex) else { return };
+    let (src, root) = (source.as_bytes(), tree.root_node());
+    let items = items::read(rel, src, root, ex);
+    items::id_refs(rel, src, root, ex);
+    let mut ctx = uses::Ctx { rel, src, crates: resolver.state::<Crates>(), items: &items, bindings: uses::Bindings::default() };
+    uses::read(&mut ctx, root, ex);
+    calls::impls(&ctx, ex);
+    calls::read(&ctx, root, ex);
+    calls::attributes(&ctx, root, ex);
 }
 
 /// The inline modules around `n`, outermost first.
@@ -48,10 +57,6 @@ pub(crate) fn inline_of(n: Node, src: &[u8]) -> Vec<String> {
     }
     out.reverse();
     out
-}
-
-pub(crate) fn field_text<'a>(n: Node, field: &str, src: &'a [u8]) -> Option<&'a str> {
-    n.child_by_field_name(field).map(|c| text(c, src))
 }
 
 /// An item's id suffix inside inline modules: every segment but a member is joined with `/`.

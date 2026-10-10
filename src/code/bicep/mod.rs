@@ -11,8 +11,10 @@ mod cases;
 pub(crate) use modules::Files;
 
 use crate::code::imports::Resolver;
-use crate::code::lang::{file_node, Lang};
+use crate::code::lang::Lang;
 use crate::code::prose::{self, Spans};
+use crate::code::reader::{self, Reader};
+use crate::code::syntax;
 use crate::model::Extraction;
 use tree_sitter::Node;
 
@@ -33,7 +35,7 @@ pub(crate) struct Decl<'t> {
 /// The top-level declarations and the name each is filed under, shared by the extract and by the module
 /// index so the two cannot disagree on what a file declares.
 pub(crate) fn top_level<'t>(root: Node<'t>, src: &[u8]) -> Vec<(Node<'t>, String)> {
-    prose::named(root).into_iter()
+    syntax::named(root).into_iter()
         .filter(|n| DECLARATIONS.contains(&n.kind()))
         .filter_map(|n| Some((n, symbol_name(n, src)?)))
         .collect()
@@ -46,7 +48,7 @@ fn symbol_name(n: Node, src: &[u8]) -> Option<String> {
     if id.kind() != "identifier" {
         return None;
     }
-    let name = prose::text(id, src);
+    let name = syntax::text(id, src);
     Some(if n.kind() == "output_declaration" { format!("output/{name}") } else { name.to_string() })
 }
 
@@ -55,23 +57,31 @@ struct Walk<'t, 's> {
     src: &'s [u8],
     spans: Spans,
     decls: Vec<Decl<'t>>,
-    ex: Extraction,
+    ex: &'s mut Extraction,
 }
 
-pub fn extract(resolver: &Resolver, rel: &str, source: &str) -> Extraction {
-    let mut ex = Extraction::default();
-    file_node(rel, &mut ex);
-    let src = source.as_bytes();
-    let Some(tree) = Lang::Bicep.parse(src) else { return ex };
-    let root = tree.root_node();
+/// Bicep state: every globbed `.bicep` file and its top-level names, so a module path resolves to
+/// a file that will have a node, and a module call to what that file declares.
+pub(crate) const READER: Reader = Reader {
+    extract,
+    collect: Some(|r, rel, source| {
+        r.state_mut::<Files>().add(rel, source);
+        None
+    }),
+    state: Some(reader::state::<Files>),
+    ..reader::NONE
+};
+
+fn extract(resolver: &Resolver, rel: &str, source: &str, ex: &mut Extraction) {
+    let Some(tree) = reader::open(Lang::Bicep, rel, source, ex) else { return };
+    let (src, root) = (source.as_bytes(), tree.root_node());
     let mut w = Walk { rel, src, spans: Spans::new(rel), decls: Vec::new(), ex };
     for (n, name) in top_level(root, src) {
         w.declare(n, name, None);
     }
-    references::write(root, &w.decls, &w.spans, src, rel, &mut w.ex);
-    modules::write(resolver.bicep(), &w.decls, src, rel, &mut w.ex);
-    prose::cite(root, src, rel, &["string"], &w.spans, &mut w.ex);
-    w.ex
+    references::write(root, &w.decls, &w.spans, src, rel, w.ex);
+    modules::write(resolver.state::<Files>(), &w.decls, src, rel, w.ex);
+    prose::cite(root, src, rel, &["string"], &w.spans, w.ex);
 }
 
 impl<'t> Walk<'t, '_> {
@@ -82,10 +92,10 @@ impl<'t> Walk<'t, '_> {
         let from = parent.map_or_else(|| format!("file:{}", self.rel), |(p, _)| p.to_string());
         let context = if exported(n, self.src) { "export" } else { "" };
         let body = prose::body(n, self.src, &["decorators"]);
-        prose::declare(&mut self.ex, self.rel, &from, &id, n, &body, context);
+        prose::declare(self.ex, self.rel, &from, &id, n, &body, context);
         self.spans.push(n, &id);
         if n.kind() == "resource_declaration" {
-            for child in prose::find(n, &["resource_declaration"]) {
+            for child in syntax::find_all(n, &["resource_declaration"]) {
                 if let Some(child_name) = symbol_name(child, self.src) {
                     self.declare(child, child_name, Some((&id, &name)));
                 }
@@ -103,8 +113,8 @@ fn exported(n: Node, src: &[u8]) -> bool {
     }
     let mut at = prev_code(n);
     while let Some(d) = at.filter(|p| p.kind() == "decorators") {
-        let named = prose::named(d).into_iter().any(|dec| {
-            let t = prose::text(dec, src);
+        let named = syntax::named(d).into_iter().any(|dec| {
+            let t = syntax::text(dec, src);
             t.starts_with("@export(") || t.starts_with("@sys.export(")
         });
         if named {

@@ -248,8 +248,9 @@ pub(crate) fn apply_diff(repo: &std::path::Path, store: &store::Store, graph: &m
     let recorded = headers.clone();
     let mut widened_rels = code::index::widen(repo, &rereading, &diff.removed, &mut headers, &code_rels);
     // Scripts resolve names across files with no header to compare, so they widen by a rule of their own.
-    widened_rels.extend(code::shell::widen(&rereading, &diff.removed, graph, &code_rels));
-    widened_rels.extend(code::hcl::widen(&rereading, &diff.removed, graph, &code_rels));
+    for widen in code::lang::Lang::ALL.into_iter().filter_map(|l| code::reader::reader(l).widen) {
+        widened_rels.extend(widen(&rereading, &diff.removed, graph, &code_rels));
+    }
     // The `binary_search` below needs the list sorted, and two rules may name one file twice.
     widened_rels.sort();
     widened_rels.dedup();

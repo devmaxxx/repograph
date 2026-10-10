@@ -5,6 +5,7 @@
 use super::{top_level, Decl};
 use crate::code::lang::Lang;
 use crate::code::prose;
+use crate::code::syntax;
 use crate::model::{EdgeKind, Extraction};
 use std::collections::BTreeMap;
 use tree_sitter::Node;
@@ -53,9 +54,9 @@ fn within_repo(rel: &str, path: &str) -> Option<String> {
 
 /// The module's path when it is written out whole. An interpolated path names no one file.
 fn literal<'s>(module: Node, src: &'s [u8]) -> Option<&'s str> {
-    let string = prose::named(module).into_iter().find(|c| c.kind() == "string")?;
-    match prose::named(string).as_slice() {
-        [content] if content.kind() == "string_content" => Some(prose::text(*content, src)),
+    let string = syntax::named(module).into_iter().find(|c| c.kind() == "string")?;
+    match syntax::named(string).as_slice() {
+        [content] if content.kind() == "string_content" => Some(syntax::text(*content, src)),
         _ => None,
     }
 }

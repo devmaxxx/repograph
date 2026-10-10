@@ -256,28 +256,9 @@ impl QualifiedIndex {
     }
 }
 
-/// Header for an indexed family's file; None for every other language. Family plans add arms.
+/// Header for a name-indexed family's file; None for every other language.
 pub fn header_for(lang: Lang, rel: &str, source: &str) -> Option<Header> {
-    match lang.family() {
-        // Path-resolved families (L3): the importer names a file, and no header is needed.
-        Family::TypeScript | Family::Rust | Family::Python | Family::Dart | Family::Swift | Family::Bicep | Family::Hcl | Family::Shell => None,
-        Family::DotNet => match lang {
-            Lang::CSharp => Some(crate::code::csharp::index::facts(rel, source).header()),
-            Lang::Razor => Some(crate::code::razor::header(rel, source)),
-            // Reached only by a variant `of` cannot return yet for this family; see `Lang::family`.
-            #[allow(unreachable_patterns)]
-            _ => unreachable!("{lang:?} has no DotNet header arm: its plan has not landed"),
-        },
-        Family::Jvm => match lang {
-            Lang::Kotlin => Some(crate::code::kotlin::header(source)),
-            Lang::Java => Some(crate::code::java::header(source)),
-            // Reached only by a variant `of` cannot return yet for this family; see `Lang::family`.
-            #[allow(unreachable_patterns)]
-            _ => unreachable!("{lang:?} has no JVM header arm: its plan has not landed"),
-        },
-        Family::Sql => Some(crate::code::sql::header(source)),
-        Family::GraphQl => Some(crate::code::graphql::header(source)),
-    }
+    crate::code::reader::reader(lang).header.map(|header| header(rel, source))
 }
 
 /// Every name-indexed file's header as it was last read, kept in `.repograph/headers.json`.

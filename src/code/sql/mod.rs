@@ -12,6 +12,7 @@ use std::collections::BTreeSet;
 use crate::code::imports::Resolver;
 use crate::code::index::Header;
 use crate::code::lang::{file_node, Family, Lang};
+use crate::code::reader::{self, Reader};
 use crate::model::{EdgeKind, Extraction, NodeKind};
 
 fn read(source: &str) -> Option<statements::Read> {
@@ -30,6 +31,8 @@ pub fn header(source: &str) -> Header {
     Header { top, ..Header::default() }
 }
 
+pub(crate) const READER: Reader = Reader { extract, header: Some(|_, source| header(source)), ..reader::NONE };
+
 /// The file node, one `sym:<rel>::<schema>/<object>` per object the file creates or attaches to (declared by the
 /// file, context `export`), and one `<table>.<member>` per column, trigger, policy and named index (declared by
 /// its table).
@@ -39,14 +42,12 @@ pub fn header(source: &str) -> Header {
 /// `references` or `from`, `Calls` from a trigger to its function, and `References` from the enclosing statement,
 /// or the file between statements, to each id a comment or a string cites. A source the grammar cannot parse
 /// yields the file node alone.
-pub fn extract(resolver: &Resolver, rel: &str, source: &str) -> Extraction {
-    let mut ex = Extraction::default();
-    file_node(rel, &mut ex);
+fn extract(resolver: &Resolver, rel: &str, source: &str, ex: &mut Extraction) {
+    file_node(rel, ex);
     if let Some(read) = read(source) {
-        declare(&read, rel, &mut ex);
-        link(resolver, &read, rel, &mut ex);
+        declare(&read, rel, ex);
+        link(resolver, &read, rel, ex);
     }
-    ex
 }
 
 fn sym(rel: &str, tail: &str) -> String {

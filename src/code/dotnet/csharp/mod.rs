@@ -10,6 +10,8 @@ pub(crate) mod cases;
 
 use crate::code::imports::Resolver;
 use crate::code::lang::{file_node, Lang};
+use crate::code::reader::{self, Manifest, Reader};
+use crate::code::syntax::{named, text};
 use crate::model::Extraction;
 use tree_sitter::Node;
 
@@ -28,13 +30,25 @@ pub struct Host<'a> {
     pub injected: &'a [(String, String)],
 }
 
+/// .NET state: C# types with their members, extension methods, projects and their `global using`s.
+pub(crate) const READER: Reader = Reader {
+    extract,
+    header: Some(|rel, source| index::facts(rel, source).header()),
+    collect: Some(|r, rel, source| {
+        let facts = index::facts(rel, source);
+        r.state_mut::<index::DotNet>().add_cs(rel, &facts);
+        Some(facts.header())
+    }),
+    state: Some(reader::state::<index::DotNet>),
+    manifest: Some(Manifest { matches: |name| name.ends_with(".csproj"), read: |r, rel, text| r.state_mut::<index::DotNet>().add_project(rel, text) }),
+    ..reader::NONE
+};
+
 /// Parses `source` once and runs both passes over it. A file the grammar cannot parse contributes
 /// only its file node — the extractor degrades to that rather than failing the file.
-pub fn extract(resolver: &Resolver, rel: &str, source: &str) -> Extraction {
-    let mut ex = Extraction::default();
-    file_node(rel, &mut ex);
-    read(resolver, rel, source, &Host::default(), &mut ex);
-    ex
+fn extract(resolver: &Resolver, rel: &str, source: &str, ex: &mut Extraction) {
+    file_node(rel, ex);
+    read(resolver, rel, source, &Host::default(), ex);
 }
 
 /// Both passes over one parse, under `host`. Razor calls this on its blanked copy.
@@ -46,10 +60,6 @@ pub(crate) fn read(resolver: &Resolver, rel: &str, source: &str, host: &Host, ex
     own
 }
 
-pub(crate) fn text<'a>(n: Node, src: &'a [u8]) -> &'a str {
-    n.utf8_text(src).unwrap_or("")
-}
-
 /// The Razor wrapper is the blanked copy's only top-level type, and it stands for the component
 /// rather than for what it's written as. Returns the name both passes use, and whether this is
 /// that wrapper — which gets no `Symbol` node of its own (`declarations::scan`, `refs::scan`
@@ -59,17 +69,6 @@ pub(crate) fn wrapper_name(top_level: bool, host: &Host, written: String) -> (bo
         (true, Some(c)) => (true, c.to_string()),
         _ => (false, written),
     }
-}
-
-pub(crate) fn named<'t>(n: Node<'t>) -> Vec<Node<'t>> {
-    let mut c = n.walk();
-    n.named_children(&mut c).collect()
-}
-
-/// First and last line, 1-based. A declaration's extent includes its attribute lists, so a hunk
-/// that edits only `[HttpGet("x")]` still lands inside the member it changes.
-pub(crate) fn span(n: Node) -> (u32, u32) {
-    (n.start_position().row as u32 + 1, n.end_position().row as u32 + 1)
 }
 
 /// The words of a node's `modifier` children: `public`, `static`, `partial`, and `this` on an

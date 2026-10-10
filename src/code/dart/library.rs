@@ -2,8 +2,8 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use tree_sitter::Node;
 
-use super::declarations::{child, named, text};
 use crate::code::lang::Lang;
+use crate::code::syntax::{child, named, text};
 
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct Directive {
