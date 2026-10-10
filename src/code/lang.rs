@@ -1,10 +1,12 @@
-//! Which grammar reads a file, decided by its name alone.
+//! Which grammar reads a file: by its name, through our overrides and then ast-grep's extension
+//! table, and by its shebang when the name says nothing.
 //!
 //! This file names no crate module but `model`: `tests/parse_census.rs` compiles it by path,
 //! because the crate is a binary and a test cannot link against it. Its cases live in
 //! `src/code/cases.rs` for the same reason.
 
 use crate::model::{Extraction, NodeKind};
+use ast_grep_language::{Language as _, LanguageExt as _, SupportLang};
 use tree_sitter::{Language, Parser, Tree};
 
 /// One variant per grammar the 0.6.0 design reads, plus the two languages read by blanking.
@@ -24,6 +26,103 @@ fn ext(rel: &str) -> Option<&str> {
     std::path::Path::new(rel).extension().and_then(|e| e.to_str())
 }
 
+/// What a file's name says about it.
+enum Named {
+    Read(Lang),
+    /// A language we do not read, or an extension we refuse: final, so no shebang overrides it.
+    Unread,
+    /// Neither table knows the name; only the file's first line can tell.
+    Unknown,
+}
+
+/// Our overrides, then ast-grep's table (L2). Both read the extension alone, case-sensitively.
+fn by_name(rel: &str) -> Named {
+    if let Some(answer) = overridden(ext(rel)) {
+        return answer;
+    }
+    match SupportLang::from_path(rel) {
+        Some(carried) => carried_lang(carried).map_or(Named::Unread, Named::Read),
+        None => Named::Unknown,
+    }
+}
+
+/// Extensions where our answer is not ast-grep's: grammars it does not carry, languages read by
+/// blanking, JavaScript read by the TypeScript grammars, and refusals.
+fn overridden(ext: Option<&str>) -> Option<Named> {
+    Some(match ext? {
+        "bicep" => Named::Read(Lang::Bicep),
+        "sql" => Named::Read(Lang::Sql),
+        "gql" | "graphql" => Named::Read(Lang::GraphQl),
+        // A view (`.cshtml`) is Razor too: same directives, same `@functions`, one reader.
+        "razor" | "cshtml" => Named::Read(Lang::Razor),
+        "vue" => Named::Read(Lang::Vue),
+        // ast-grep says JavaScript, a grammar we do not link; the TypeScript grammar reads it.
+        "js" | "mjs" | "cjs" => Named::Read(Lang::TypeScript),
+        // JSX needs the TSX grammar; the TypeScript one reads `<div/>` as a type assertion.
+        "jsx" => Named::Read(Lang::Tsx),
+        // Names ast-grep gives a language we read, which we do not read as it: Gradle scripts, variable
+        // files that declare nothing, and extensions that are often another language. Reading any is a
+        // widening with its own case.
+        "kts" | "ktm" | "tfvars" | "nomad" | "workflow" | "bats" | "cgi" | "command" | "env" | "fcgi" | "ksh" | "tmux"
+        | "tool" | "zsh" | "py3" | "pyi" | "bzl" | "bazel" => Named::Unread,
+        _ => return None,
+    })
+}
+
+/// One arm per language ast-grep carries; `None` for the ones we leave as files (L1).
+fn carried_lang(carried: SupportLang) -> Option<Lang> {
+    match carried {
+        SupportLang::Bash => Some(Lang::Shell),
+        SupportLang::CSharp => Some(Lang::CSharp),
+        SupportLang::Dart => Some(Lang::Dart),
+        // Terraform and every other HCL dialect share one grammar; `hcl::extract` tells them apart by extension.
+        SupportLang::Hcl => Some(Lang::Hcl),
+        SupportLang::Java => Some(Lang::Java),
+        SupportLang::Kotlin => Some(Lang::Kotlin),
+        SupportLang::Python => Some(Lang::Python),
+        SupportLang::Rust => Some(Lang::Rust),
+        SupportLang::Swift => Some(Lang::Swift),
+        SupportLang::Tsx => Some(Lang::Tsx),
+        SupportLang::TypeScript => Some(Lang::TypeScript),
+        SupportLang::C | SupportLang::Cpp | SupportLang::Elixir | SupportLang::Go | SupportLang::Lua | SupportLang::Php
+        | SupportLang::Ruby | SupportLang::Scala => None,
+        SupportLang::Css | SupportLang::Haskell | SupportLang::Html | SupportLang::JavaScript | SupportLang::Json
+        | SupportLang::Markdown | SupportLang::Nix | SupportLang::Solidity | SupportLang::Yaml => None,
+    }
+}
+
+/// The language that reads `rel`: its name first, then, when neither table knows the name and the
+/// caller holds the text, the interpreter its shebang names.
+pub fn detect(rel: &str, head: Option<&str>) -> Option<Lang> {
+    match by_name(rel) {
+        Named::Read(lang) => Some(lang),
+        Named::Unread => None,
+        Named::Unknown => head.and_then(shebang),
+    }
+}
+
+/// Whether neither table knows `rel`'s name, so only its first line can say what reads it.
+pub fn unnamed(rel: &str) -> bool {
+    matches!(by_name(rel), Named::Unknown)
+}
+
+/// `#!/bin/bash` and `#!/usr/bin/env -S python3` alike: the interpreter's file name, after `env`
+/// and its flags when the line goes through `env`.
+fn shebang(text: &str) -> Option<Lang> {
+    let line = text.lines().next()?.strip_prefix("#!")?;
+    let mut words = line.split_whitespace();
+    let mut program = words.next()?.rsplit('/').next()?;
+    if program == "env" {
+        program = words.find(|w| !w.starts_with('-') && !w.contains('='))?;
+    }
+    match program {
+        "sh" | "bash" | "dash" | "zsh" => Some(Lang::Shell),
+        "python" | "python2" | "python3" => Some(Lang::Python),
+        "node" | "deno" | "bun" | "ts-node" => Some(Lang::TypeScript),
+        _ => None,
+    }
+}
+
 impl Lang {
     pub const ALL: [Lang; 16] = [
         Lang::TypeScript, Lang::Tsx, Lang::Kotlin, Lang::Java, Lang::CSharp, Lang::Razor, Lang::Rust, Lang::Python,
@@ -32,55 +131,36 @@ impl Lang {
 
     /// `None`: no grammar and no embedding reads this extension (L1). Such a file is indexed as a
     /// file and never parsed: every grammar returns a tree for any input, and a tree of the wrong
-    /// language looks right.
+    /// language looks right. The name alone decides, so a deleted file reads as it did; `detect`
+    /// adds the shebang for a caller holding the text.
     pub fn of(rel: &str) -> Option<Lang> {
-        match ext(rel) {
-            Some("ts" | "mts" | "cts" | "js" | "mjs" | "cjs") => Some(Lang::TypeScript),
-            // JSX needs the TSX grammar; the TypeScript one reads `<div/>` as a type assertion.
-            Some("tsx" | "jsx") => Some(Lang::Tsx),
-            Some("cs") => Some(Lang::CSharp),
-            // A view (`.cshtml`) is Razor too: same directives, same `@functions`, one reader.
-            Some("razor" | "cshtml") => Some(Lang::Razor),
-            Some("kt") => Some(Lang::Kotlin),
-            Some("java") => Some(Lang::Java),
-            Some("sql") => Some(Lang::Sql),
-            Some("gql" | "graphql") => Some(Lang::GraphQl),
-            Some("rs") => Some(Lang::Rust),
-            Some("py") => Some(Lang::Python),
-            Some("bicep") => Some(Lang::Bicep),
-            // Terraform and every other HCL dialect share one grammar; `hcl::extract` tells them apart by extension.
-            Some("tf" | "hcl") => Some(Lang::Hcl),
-            Some("sh" | "bash") => Some(Lang::Shell),
-            Some("dart") => Some(Lang::Dart),
-            Some("vue") => Some(Lang::Vue),
-            Some("swift") => Some(Lang::Swift),
-            _ => None,
+        match by_name(rel) {
+            Named::Read(lang) => Some(lang),
+            Named::Unread | Named::Unknown => None,
         }
     }
 
     /// `None` for the embedded languages (Razor, Vue), which are read by blanking through another grammar.
     pub fn grammar(self) -> Option<Language> {
-        match self {
-            Lang::TypeScript => Some(Language::new(tree_sitter_typescript::LANGUAGE_TYPESCRIPT)),
-            Lang::Tsx => Some(Language::new(tree_sitter_typescript::LANGUAGE_TSX)),
-            Lang::CSharp => Some(Language::new(tree_sitter_c_sharp::LANGUAGE)),
-            Lang::Razor => None,
-            Lang::Kotlin => Some(Language::new(tree_sitter_kotlin_sg::LANGUAGE)),
-            Lang::Java => Some(Language::new(tree_sitter_java::LANGUAGE)),
-            Lang::Sql => Some(Language::new(tree_sitter_postgres::LANGUAGE)),
-            Lang::GraphQl => Some(Language::new(tree_sitter_graphql::LANGUAGE)),
-            Lang::Rust => Some(Language::new(tree_sitter_rust::LANGUAGE)),
-            Lang::Python => Some(Language::new(tree_sitter_python::LANGUAGE)),
-            Lang::Bicep => Some(Language::new(tree_sitter_bicep::LANGUAGE)),
-            Lang::Hcl => Some(Language::new(tree_sitter_hcl::LANGUAGE)),
-            Lang::Shell => Some(Language::new(tree_sitter_bash::LANGUAGE)),
-            Lang::Dart => Some(Language::new(tree_sitter_dart::LANGUAGE)),
-            Lang::Swift => Some(Language::new(tree_sitter_swift::LANGUAGE)),
-            // A language whose family plan has not landed has no crate in this build, and `of`
-            // never returns it. Once every plan has landed the arm is unreachable, and harmless.
-            #[allow(unreachable_patterns)]
-            _ => None,
-        }
+        let carried = match self {
+            Lang::TypeScript => SupportLang::TypeScript,
+            Lang::Tsx => SupportLang::Tsx,
+            Lang::CSharp => SupportLang::CSharp,
+            Lang::Kotlin => SupportLang::Kotlin,
+            Lang::Java => SupportLang::Java,
+            Lang::Rust => SupportLang::Rust,
+            Lang::Python => SupportLang::Python,
+            Lang::Hcl => SupportLang::Hcl,
+            Lang::Shell => SupportLang::Bash,
+            Lang::Dart => SupportLang::Dart,
+            Lang::Swift => SupportLang::Swift,
+            // ast-grep carries none of these three; each keeps its own pinned crate.
+            Lang::Sql => return Some(Language::new(tree_sitter_postgres::LANGUAGE)),
+            Lang::GraphQl => return Some(Language::new(tree_sitter_graphql::LANGUAGE)),
+            Lang::Bicep => return Some(Language::new(tree_sitter_bicep::LANGUAGE)),
+            Lang::Razor | Lang::Vue => return None,
+        };
+        Some(carried.get_ts_language())
     }
 
     pub fn parse(self, src: &[u8]) -> Option<Tree> {

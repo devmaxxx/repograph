@@ -12,17 +12,19 @@ use crate::code::imports::Resolver;
 use crate::code::index::{Header, Nested, QualifiedIndex};
 use crate::code::jvm::{self, Scope};
 use crate::code::lang::{Family, Lang};
-use crate::code::reader::{self, Reader};
+use crate::code::engine::File;
+use crate::code::spec::{self, Hooks};
 use crate::code::syntax::{child, named, text};
 use crate::model::Extraction;
 
 /// The comment kinds a Kotlin doc block is read from.
 pub(crate) const COMMENTS: &[&str] = &["line_comment", "multiline_comment"];
 
-pub(crate) const READER: Reader = Reader { extract, header: Some(|_, source| header(source)), ..reader::NONE };
+pub(crate) const HOOKS: Hooks = Hooks { header: Some(|_, source| header(source)), ..spec::NONE };
 
-fn extract(resolver: &Resolver, rel: &str, source: &str, ex: &mut Extraction) {
-    let Some(tree) = reader::open(Lang::Kotlin, rel, source, ex) else { return };
+pub(crate) fn extract(resolver: &Resolver, file: &File, ex: &mut Extraction) {
+    let (rel, source) = (file.rel, file.src);
+    let Some(tree) = file.tree else { return };
     let (src, root) = (source.as_bytes(), tree.root_node());
     // A repository whose globs reach no JVM file has no index; every lookup then finds nothing.
     let empty = QualifiedIndex::default();

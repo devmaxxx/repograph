@@ -9,8 +9,8 @@ pub mod resolve;
 pub(crate) mod cases;
 
 use crate::code::imports::Resolver;
-use crate::code::lang::{file_node, Lang};
-use crate::code::reader::{self, Manifest, Reader};
+use crate::code::engine::File;
+use crate::code::spec::{self, Hooks, Manifest};
 use crate::code::syntax::{named, text};
 use crate::model::Extraction;
 use tree_sitter::Node;
@@ -31,30 +31,29 @@ pub struct Host<'a> {
 }
 
 /// .NET state: C# types with their members, extension methods, projects and their `global using`s.
-pub(crate) const READER: Reader = Reader {
-    extract,
+pub(crate) const HOOKS: Hooks = Hooks {
     header: Some(|rel, source| index::facts(rel, source).header()),
     collect: Some(|r, rel, source| {
         let facts = index::facts(rel, source);
         r.state_mut::<index::DotNet>().add_cs(rel, &facts);
         Some(facts.header())
     }),
-    state: Some(reader::state::<index::DotNet>),
+    state: Some(spec::state::<index::DotNet>),
     manifest: Some(Manifest { matches: |name| name.ends_with(".csproj"), read: |r, rel, text| r.state_mut::<index::DotNet>().add_project(rel, text) }),
-    ..reader::NONE
+    ..spec::NONE
 };
 
-/// Parses `source` once and runs both passes over it. A file the grammar cannot parse contributes
-/// only its file node — the extractor degrades to that rather than failing the file.
-fn extract(resolver: &Resolver, rel: &str, source: &str, ex: &mut Extraction) {
-    file_node(rel, ex);
-    read(resolver, rel, source, &Host::default(), ex);
+/// Both passes over the front's one parse. A file the grammar cannot parse contributes only its
+/// file node — the extractor degrades to that rather than failing the file.
+pub(crate) fn extract(resolver: &Resolver, file: &File, ex: &mut Extraction) {
+    if let Some(tree) = file.tree {
+        read(resolver, file.rel, tree, file.src, &Host::default(), ex);
+    }
 }
 
-/// Both passes over one parse, under `host`. Razor calls this on its blanked copy.
-pub(crate) fn read(resolver: &Resolver, rel: &str, source: &str, host: &Host, ex: &mut Extraction) -> declarations::Declared {
+/// Both passes over one tree, under `host`. Razor calls this on its blanked copy.
+pub(crate) fn read(resolver: &Resolver, rel: &str, tree: &tree_sitter::Tree, source: &str, host: &Host, ex: &mut Extraction) -> declarations::Declared {
     let src = source.as_bytes();
-    let Some(tree) = Lang::CSharp.parse(src) else { return declarations::Declared::default() };
     let own = declarations::scan(tree.root_node(), rel, src, host, ex);
     refs::scan(tree.root_node(), rel, src, host, &own, resolver, ex);
     own

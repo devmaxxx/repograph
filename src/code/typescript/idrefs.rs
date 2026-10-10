@@ -1,5 +1,5 @@
 use crate::code::syntax::name_of;
-use crate::code::typescript::symbols::{is_top_level, literal_member, literal_of, member_name, parse};
+use crate::code::typescript::symbols::{is_top_level, literal_member, literal_of, member_name};
 use crate::model::{EdgeKind, Extraction};
 use tree_sitter::Node;
 
@@ -64,9 +64,10 @@ pub(crate) fn owner(mut n: Node, rel: &str, src: &[u8]) -> String {
     format!("file:{rel}")
 }
 
+#[cfg(test)]
 pub fn scan(rel: &str, source: &str, ex: &mut Extraction) {
     let src = source.as_bytes();
-    let Some(tree) = parse(rel, src) else { return };
+    let Some(tree) = crate::code::typescript::symbols::parse(rel, src) else { return };
     scan_tree(tree.root_node(), rel, src, ex);
 }
 

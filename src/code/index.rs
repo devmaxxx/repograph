@@ -258,7 +258,7 @@ impl QualifiedIndex {
 
 /// Header for a name-indexed family's file; None for every other language.
 pub fn header_for(lang: Lang, rel: &str, source: &str) -> Option<Header> {
-    crate::code::reader::reader(lang).header.map(|header| header(rel, source))
+    crate::code::spec::spec(lang).hooks.header.map(|header| header(rel, source))
 }
 
 /// Every name-indexed file's header as it was last read, kept in `.repograph/headers.json`.

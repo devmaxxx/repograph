@@ -248,7 +248,7 @@ pub(crate) fn apply_diff(repo: &std::path::Path, store: &store::Store, graph: &m
     let recorded = headers.clone();
     let mut widened_rels = code::index::widen(repo, &rereading, &diff.removed, &mut headers, &code_rels);
     // Scripts resolve names across files with no header to compare, so they widen by a rule of their own.
-    for widen in code::lang::Lang::ALL.into_iter().filter_map(|l| code::reader::reader(l).widen) {
+    for widen in code::lang::Lang::ALL.into_iter().filter_map(|l| code::spec::spec(l).hooks.widen) {
         widened_rels.extend(widen(&rereading, &diff.removed, graph, &code_rels));
     }
     // The `binary_search` below needs the list sorted, and two rules may name one file twice.
@@ -473,7 +473,7 @@ impl<'a> Watcher<'a> {
         // Scripts, Bicep files and HCL files resolve names through the whole family's files, so an edit
         // of an existing one can change what another resolves to without moving a path or a header.
         let path_family = diff.changed.iter().map(|e| e.rel.as_str()).chain(diff.removed.iter().map(String::as_str))
-            .any(|rel| matches!(code::lang::Lang::of(rel), Some(code::lang::Lang::Shell | code::lang::Lang::Bicep | code::lang::Lang::Hcl)));
+            .any(|rel| code::lang::Lang::of(rel).is_some_and(|l| code::spec::spec(l).cross_file));
         if moved_path || self.resolver_stale || path_family || moved_header()? {
             self.ex = extractors(self.repo, self.cfg)?;
             self.resolver_stale = false;

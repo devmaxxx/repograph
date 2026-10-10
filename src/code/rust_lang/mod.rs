@@ -2,8 +2,8 @@
 //! other files' contents, so extracting a file never opens another.
 
 use crate::code::imports::Resolver;
-use crate::code::lang::Lang;
-use crate::code::reader::{self, Manifest, Reader};
+use crate::code::engine::File;
+use crate::code::spec::{self, Manifest, Hooks};
 use crate::code::syntax::{field_text, text};
 use crate::model::Extraction;
 use tree_sitter::Node;
@@ -19,22 +19,22 @@ pub use crates::Crates;
 mod cases;
 
 /// Rust state: the module tree, every `.rs` path and `Cargo.toml` the globs reach.
-pub(crate) const READER: Reader = Reader {
-    extract,
+pub(crate) const HOOKS: Hooks = Hooks {
     collect: Some(|r, rel, source| {
         r.state_mut::<Crates>().file(rel, source);
         None
     }),
-    state: Some(reader::state::<Crates>),
+    state: Some(spec::state::<Crates>),
     manifest: Some(Manifest { matches: |name| name == "Cargo.toml", read: |r, rel, text| r.state_mut::<Crates>().manifest(rel, text) }),
-    ..reader::NONE
+    ..spec::NONE
 };
 
 /// The file node, a symbol for every item at a declaring scope (file, inline `mod`, `trait` and
 /// `impl` bodies) with its `Declares` edge, and a `References` edge for each requirement id cited
 /// in a comment or string. Never opens another file.
-fn extract(resolver: &Resolver, rel: &str, source: &str, ex: &mut Extraction) {
-    let Some(tree) = reader::open(Lang::Rust, rel, source, ex) else { return };
+pub(crate) fn extract(resolver: &Resolver, file: &File, ex: &mut Extraction) {
+    let (rel, source) = (file.rel, file.src);
+    let Some(tree) = file.tree else { return };
     let (src, root) = (source.as_bytes(), tree.root_node());
     let items = items::read(rel, src, root, ex);
     items::id_refs(rel, src, root, ex);

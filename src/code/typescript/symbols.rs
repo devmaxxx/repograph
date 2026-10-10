@@ -9,6 +9,7 @@ pub(crate) struct Walk<'r> {
     pub(crate) resolver: &'r Resolver,
 }
 
+#[cfg(test)]
 pub fn parse(rel: &str, src: &[u8]) -> Option<tree_sitter::Tree> {
     crate::code::lang::Lang::of(rel)?.parse(src)
 }
@@ -46,7 +47,7 @@ fn doc_comment(n: Node, src: &[u8]) -> String {
 }
 
 /// The comments at the top of a file, before its first statement.
-fn file_head(root: Node, src: &[u8]) -> String {
+pub(crate) fn file_head(root: Node, src: &[u8]) -> String {
     let mut cur = root.walk();
     let mut parts = Vec::new();
     for c in root.named_children(&mut cur) {
@@ -172,6 +173,7 @@ fn decorator_pair(deco: Node, src: &[u8]) -> (String, String) {
 }
 
 /// The declaration walk over `source`, parsed here.
+#[cfg(test)]
 pub(crate) fn scan(resolver: &Resolver, rel: &str, source: &str) -> Extraction {
     let src = source.as_bytes();
     let Some(tree) = parse(rel, src) else {
@@ -223,7 +225,8 @@ fn member(m: Node, name: &str, owner_id: &str, owner: &str, rel: &str, src: &[u8
 }
 
 impl Walk<'_> {
-    /// The declarations, imports and exports under `root`, as `scan` writes them for a file it parsed.
+    /// The file node, and the declarations, imports and exports under `root`, as `scan` writes them for
+    /// a file it parsed.
     pub(crate) fn scan_tree(&self, rel: &str, root: Node, src: &[u8]) -> Extraction {
         let mut ex = Extraction::default();
         let file_id = format!("file:{rel}");

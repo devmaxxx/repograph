@@ -1,0 +1,562 @@
+//! The shared reader: a language's two queries run over the tree the front parsed, their captures
+//! turned into `Facts`, and the facts written as nodes and edges by the language's `Spec`. Hooks read
+//! the same facts instead of walking the tree a second time.
+//!
+//! No language reads through it yet: each keeps its `legacy` reader until its port, so until the
+//! first one the engine is reached only by its tests and by a spec that names queries.
+#![allow(dead_code)]
+
+use std::collections::{BTreeSet, VecDeque};
+use std::ops::Range;
+
+use streaming_iterator::StreamingIterator;
+use tree_sitter::{Node, QueryCursor, Tree};
+
+use crate::code::imports::Resolver;
+use crate::code::index::Header;
+use crate::code::lang::Lang;
+use crate::code::queries::{self, Compiled, Kind, Meta, Role};
+use crate::code::spec::{Ambiguity, Body, Cap, Doc, Export, Form, Line, Spec, Visibility};
+use crate::code::syntax::{self, comment_text, last_row, text_span, DOC_CHARS};
+use crate::model::{EdgeKind, Extraction, NodeKind};
+
+/// One file as the front read it.
+pub(crate) struct File<'a> {
+    pub lang: Lang,
+    pub rel: &'a str,
+    /// The file as read.
+    pub text: &'a str,
+    /// What the grammar read: `text`, or an embedded language's view of it.
+    pub src: &'a str,
+    /// `None` only for an embedded language whose file holds no embedded code.
+    pub tree: Option<&'a Tree>,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct Def {
+    pub id: String,
+    pub qualified: String,
+    pub name: String,
+    pub kind: Kind,
+    pub range: Range<usize>,
+    pub line: u32,
+    pub end: u32,
+    /// The declaring definition, by index; `None` when the file declares it.
+    pub parent: Option<usize>,
+    pub export: bool,
+    pub body: String,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct Ref {
+    /// The innermost definition holding the site, by index; `None` for the file.
+    pub source: Option<usize>,
+    pub name: String,
+    pub receiver: Option<String>,
+    pub edge: EdgeKind,
+    pub context: String,
+    pub range: Range<usize>,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct Import {
+    pub path: Option<String>,
+    pub names: Vec<String>,
+    pub alias: Option<String>,
+    pub reexport: bool,
+    pub range: Range<usize>,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct Cite {
+    pub source: Option<usize>,
+    pub context: &'static str,
+    pub range: Range<usize>,
+}
+
+/// Names bound locally, each with the scope that binds it, in the nvim locals convention.
+#[derive(Debug, Default, Clone)]
+pub(crate) struct Locals(Vec<(Range<usize>, String)>);
+
+impl Locals {
+    /// Whether a local binding of `name` encloses `byte`.
+    pub(crate) fn shadows(&self, name: &str, byte: usize) -> bool {
+        self.0.iter().any(|(scope, n)| n == name && scope.contains(&byte))
+    }
+}
+
+#[derive(Debug, Default, Clone)]
+pub(crate) struct Facts {
+    pub defs: Vec<Def>,
+    pub refs: Vec<Ref>,
+    pub imports: Vec<Import>,
+    pub cites: Vec<Cite>,
+    pub locals: Locals,
+    /// Package and namespace lines, in file order.
+    pub namespaces: Vec<String>,
+}
+
+impl Facts {
+    pub(crate) fn source_id(&self, rel: &str, source: Option<usize>) -> String {
+        source.map_or_else(|| format!("file:{rel}"), |i| self.defs[i].id.clone())
+    }
+
+    fn declares(&self, qualified: &str) -> bool {
+        self.defs.iter().any(|d| d.qualified == qualified)
+    }
+
+    fn declares_visible(&self, qualified: &str) -> bool {
+        self.defs.iter().any(|d| d.qualified == qualified && d.export)
+    }
+
+    /// The innermost definition whose node holds `byte`.
+    fn owner(&self, byte: usize) -> Option<usize> {
+        self.defs.iter().enumerate()
+            .filter(|(_, d)| d.range.contains(&byte))
+            .min_by_key(|(_, d)| d.range.len())
+            .map(|(i, _)| i)
+    }
+}
+
+/// What a hook may write: it appends, and never replaces what the engine wrote.
+pub(crate) struct Sink<'a>(&'a mut Extraction);
+
+impl Sink<'_> {
+    pub(crate) fn node(&mut self, kind: NodeKind, id: &str, label: &str, body: &str, file: &str, span: (u32, u32)) {
+        self.0.node_span(kind, id, label, body, file, span);
+    }
+
+    pub(crate) fn edge(&mut self, source: &str, target: &str, kind: EdgeKind, context: &str, file: &str) {
+        self.0.edge(source, target, kind, context, file);
+    }
+}
+
+/// Bounds runaway matching; a file that reaches it keeps what it matched.
+const MATCH_LIMIT: u32 = 64 * 1024;
+
+/// A definition or scope match before qualification.
+struct Declared<'t> {
+    node: Node<'t>,
+    pattern: usize,
+    role: Declaring,
+    names: Vec<Node<'t>>,
+    owner: Option<Node<'t>>,
+    modifiers: Vec<String>,
+    doc: Option<Node<'t>>,
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum Declaring {
+    Def(Kind),
+    Owner,
+    Namespace,
+}
+
+fn text<'a>(n: Node, src: &'a str) -> &'a str {
+    syntax::text(n, src.as_bytes())
+}
+
+fn matches_of<'t>(c: &'static Compiled, root: Node<'t>, src: &str, rel: &str, mut each: impl FnMut(usize, Vec<(Role, Node<'t>)>)) {
+    let mut cursor = QueryCursor::new();
+    cursor.set_match_limit(MATCH_LIMIT);
+    let mut it = cursor.matches(&c.query, root, src.as_bytes());
+    while let Some(m) = it.next() {
+        each(m.pattern_index, m.captures().iter().map(|cap| (c.roles[cap.index as usize], cap.node)).collect());
+    }
+    if cursor.did_exceed_match_limit() {
+        eprintln!("code: {rel} reached the query match limit; it keeps what matched before it");
+    }
+}
+
+/// The facts `decl` and, when given, `refs` read from `file`.
+pub(crate) fn facts(spec: &Spec, decl: &'static Compiled, refs: Option<&'static Compiled>, file: &File) -> Facts {
+    let mut facts = Facts::default();
+    let Some(tree) = file.tree else { return facts };
+    let (root, src) = (tree.root_node(), file.src);
+    let mut declared = Vec::new();
+    matches_of(decl, root, src, file.rel, |pattern, caps| {
+        read_declaration(&caps, pattern, &mut declared);
+        if let Some(import) = read_import(&caps, &decl.metas[pattern], src) {
+            facts.imports.push(import);
+        }
+    });
+    qualify(spec, decl, file, declared, &mut facts);
+    if let Some(refs) = refs {
+        let (mut scopes, mut bound) = (Vec::new(), Vec::new());
+        matches_of(refs, root, src, file.rel, |pattern, caps| {
+            for (role, node) in &caps {
+                match role {
+                    Role::Reference(edge) => facts.refs.push(read_reference(spec, &caps, *edge, *node, &refs.metas[pattern], src)),
+                    Role::LocalScope => scopes.push(node.byte_range()),
+                    Role::LocalDefinition => bound.push((node.start_byte(), text(*node, src).to_string())),
+                    Role::CiteComment => facts.cites.push(Cite { source: None, context: "comment", range: node.byte_range() }),
+                    Role::CiteString => facts.cites.push(Cite { source: None, context: "string", range: node.byte_range() }),
+                    _ => {}
+                }
+            }
+        });
+        for (at, name) in bound {
+            let scope = scopes.iter().filter(|s| s.contains(&at)).min_by_key(|s| s.len()).cloned().unwrap_or(0..src.len() + 1);
+            facts.locals.0.push((scope, name));
+        }
+        let owners: Vec<_> = facts.refs.iter().map(|r| facts.owner(r.range.start)).collect();
+        facts.refs.iter_mut().zip(owners).for_each(|(r, o)| r.source = o);
+        let owners: Vec<_> = facts.cites.iter().map(|c| facts.owner(c.range.start)).collect();
+        facts.cites.iter_mut().zip(owners).for_each(|(c, o)| c.source = o);
+    }
+    facts
+}
+
+fn read_declaration<'t>(caps: &[(Role, Node<'t>)], pattern: usize, out: &mut Vec<Declared<'t>>) {
+    let declaring = caps.iter().find_map(|(role, node)| match role {
+        Role::Definition(kind) => Some((Declaring::Def(*kind), *node)),
+        Role::ScopeOwner => Some((Declaring::Owner, *node)),
+        Role::ScopeNamespace => Some((Declaring::Namespace, *node)),
+        _ => None,
+    });
+    let Some((role, node)) = declaring else { return };
+    let of = |want: Role| caps.iter().filter(move |(r, _)| *r == want).map(|(_, n)| *n);
+    let mut names: Vec<Node> = of(Role::Name).collect();
+    names.sort_by_key(|n| n.start_byte());
+    out.push(Declared {
+        node,
+        pattern,
+        role,
+        names,
+        owner: of(Role::Owner).next(),
+        modifiers: Vec::new(),
+        doc: of(Role::Doc).next(),
+    });
+    let last = out.last_mut().expect("just pushed");
+    last.modifiers = caps.iter().filter(|(r, _)| *r == Role::Modifier).map(|(_, n)| n.kind().to_string()).collect();
+}
+
+fn read_import(caps: &[(Role, Node)], meta: &Meta, src: &str) -> Option<Import> {
+    let site = caps.iter().find(|(r, _)| *r == Role::Import)?.1;
+    let first = |want: Role| caps.iter().find(|(r, _)| *r == want).map(|(_, n)| text(*n, src).to_string());
+    Some(Import {
+        path: first(Role::ImportPath).map(|p| p.trim_matches(|c| c == '"' || c == '\'').to_string()),
+        names: caps.iter().filter(|(r, _)| *r == Role::ImportName).map(|(_, n)| text(*n, src).to_string()).collect(),
+        alias: first(Role::ImportAlias),
+        reexport: meta.reexport,
+        range: site.byte_range(),
+    })
+}
+
+fn read_reference(spec: &Spec, caps: &[(Role, Node)], edge: EdgeKind, site: Node, meta: &Meta, src: &str) -> Ref {
+    let name_node = caps.iter().find(|(r, _)| *r == Role::Name).map_or(site, |(_, n)| *n);
+    let name = text(name_node, src);
+    Ref {
+        source: None,
+        name: spec.hooks.fold.map_or_else(|| name.to_string(), |fold| fold(name).into_owned()),
+        receiver: caps.iter().find(|(r, _)| *r == Role::Receiver).map(|(_, n)| text(*n, src).to_string()),
+        edge,
+        context: meta.context.clone(),
+        range: site.byte_range(),
+    }
+}
+
+/// A container on the qualification stack: a container-kind definition or a scope owner.
+struct Open {
+    end: usize,
+    qualified: String,
+    join: char,
+    /// The definition's index, or `None` for a scope owner, which writes no node.
+    def: Option<usize>,
+}
+
+/// Parents, qualified names, ids, export and bodies, in source order. The first pattern to match a
+/// node in a role wins, so a query puts specific patterns before general ones.
+fn qualify(spec: &Spec, decl: &Compiled, file: &File, mut declared: Vec<Declared>, facts: &mut Facts) {
+    let src = file.src;
+    declared.sort_by_key(|d| (d.node.start_byte(), std::cmp::Reverse(d.node.end_byte()), d.pattern));
+    declared.dedup_by(|b, a| a.node.id() == b.node.id() && (a.role == b.role || matches!((a.role, b.role), (Declaring::Def(_), Declaring::Def(_)))));
+    let fold = |s: &str| spec.hooks.fold.map_or_else(|| s.to_string(), |f| f(s).into_owned());
+    let mut stack: Vec<Open> = Vec::new();
+    let mut ids = BTreeSet::new();
+    for d in declared {
+        while stack.last().is_some_and(|open| open.end < d.node.end_byte()) {
+            stack.pop();
+        }
+        if d.names.is_empty() || d.names.iter().any(|n| syntax::broken(*n)) {
+            continue;
+        }
+        let name = d.names.iter().map(|n| fold(text(*n, src))).collect::<Vec<_>>().join("/");
+        if d.role == Declaring::Namespace {
+            facts.namespaces.push(name);
+            continue;
+        }
+        let meta = &decl.metas[d.pattern];
+        let parent = stack.last();
+        let base = match d.owner {
+            Some(owner) => Some((text(owner, src).to_string(), '.')),
+            None => parent.map(|p| (p.qualified.clone(), p.join)),
+        };
+        let leaf = format!("{}{name}", meta.prefix);
+        let qualified = base.map_or_else(|| leaf.clone(), |(b, j)| format!("{b}{j}{leaf}"));
+        let Declaring::Def(kind) = d.role else {
+            stack.push(Open { end: d.node.end_byte(), qualified, join: '.', def: None });
+            continue;
+        };
+        let id = format!("sym:{}::{qualified}", file.rel);
+        if !ids.insert(id.clone()) {
+            continue;
+        }
+        let export = meta.export.unwrap_or_else(|| exported(spec.export, &d.modifiers, &name));
+        let (line, end) = text_span(d.node);
+        let def = Def {
+            id,
+            qualified: qualified.clone(),
+            name,
+            kind,
+            range: d.node.byte_range(),
+            line,
+            end,
+            parent: parent.and_then(|p| p.def),
+            export,
+            body: String::new(),
+        };
+        let signature = match spec.hooks.signature {
+            Some(signature) => signature(file, &def),
+            None => signature_line(spec.body.line, d.node, d.names[0], src),
+        };
+        let doc = doc_lines(spec.body, d.node, d.doc, src);
+        let def = Def { body: if doc.is_empty() { signature } else { format!("{doc}\n{signature}") }, ..def };
+        facts.defs.push(def);
+        if let Some(join) = kind.join() {
+            stack.push(Open { end: d.node.end_byte(), qualified, join, def: Some(facts.defs.len() - 1) });
+        }
+    }
+}
+
+fn exported(rule: Export, modifiers: &[String], name: &str) -> bool {
+    match rule {
+        Export::Show(words) => modifiers.iter().any(|m| words.contains(&m.as_str())),
+        Export::Hide(words) => !modifiers.iter().any(|m| words.contains(&m.as_str())),
+        Export::Prefix(c) => !name.starts_with(c),
+        Export::All => true,
+    }
+}
+
+fn signature_line(line: Line, def: Node, name: Node, src: &str) -> String {
+    match line {
+        Line::First => text(def, src).lines().next().unwrap_or("").to_string(),
+        Line::Name => {
+            let start = src[..name.start_byte()].rfind('\n').map_or(0, |i| i + 1);
+            let end = src[name.start_byte()..].find('\n').map_or(src.len(), |i| name.start_byte() + i);
+            src[start..end].trim().to_string()
+        }
+    }
+}
+
+/// The named sibling before `n`. HCL's grammar puts the comments above a file's first block outside its
+/// `body`, so a first child of a `body` looks past it.
+fn above(n: Node) -> Option<Node> {
+    n.prev_named_sibling().or_else(|| n.parent().filter(|p| p.kind() == "body").and_then(|p| p.prev_named_sibling()))
+}
+
+/// `comment_text`, and `#` markers too: `comment_text` serves the C family alone.
+fn stripped(raw: &str) -> String {
+    comment_text(raw).lines().map(|l| l.trim_start_matches('#').trim()).filter(|l| !l.is_empty()).collect::<Vec<_>>().join("\n")
+}
+
+fn doc_lines(body: Body, def: Node, captured: Option<Node>, src: &str) -> String {
+    let parts: Vec<&str> = match body.doc {
+        Doc::None => Vec::new(),
+        Doc::Capture => captured.map(|n| text(n, src)).into_iter().collect(),
+        Doc::Adjacent { kinds, between } => {
+            let mut top = def;
+            while let Some(p) = top.prev_named_sibling() {
+                if !between.contains(&p.kind()) || last_row(p) + 1 != top.start_position().row { break }
+                top = p;
+            }
+            let trails = |c: Node| above(c).is_some_and(|p| last_row(p) == c.start_position().row);
+            let mut doc = Vec::new();
+            let mut at = top;
+            while let Some(p) = above(at) {
+                // A shebang is the interpreter line, not documentation of what follows it.
+                if !kinds.contains(&p.kind()) || text(p, src).starts_with("#!") || last_row(p) + 1 != at.start_position().row || trails(p) {
+                    break;
+                }
+                doc.push(text(p, src).trim_end());
+                at = p;
+            }
+            doc.reverse();
+            doc
+        }
+    };
+    let joined = match body.form {
+        Form::Raw => parts.join("\n"),
+        Form::Stripped => parts.iter().map(|p| stripped(p)).filter(|p| !p.is_empty()).collect::<Vec<_>>().join("\n"),
+    };
+    match body.cap {
+        Cap::Head => syntax::cap(joined, DOC_CHARS),
+        Cap::Tail => {
+            let mut out = joined;
+            if out.len() > DOC_CHARS {
+                let mut cut = out.len() - DOC_CHARS;
+                while !out.is_char_boundary(cut) { cut += 1 }
+                out.drain(..cut);
+            }
+            out
+        }
+    }
+}
+
+/// Definitions, their `Declares` edges, and the ids cited in comments and strings.
+pub(crate) fn write(file: &File, facts: &Facts, ex: &mut Extraction) {
+    let rel = file.rel;
+    for d in &facts.defs {
+        ex.node_span(NodeKind::Symbol, &d.id, &d.qualified, &d.body, rel, (d.line, d.end));
+        ex.edge(&facts.source_id(rel, d.parent), &d.id, EdgeKind::Declares, if d.export { "export" } else { "" }, rel);
+    }
+    for c in &facts.cites {
+        for hit in crate::ids::generic().find_all(&file.src[c.range.clone()]) {
+            ex.edge(&facts.source_id(rel, c.source), &hit.id, EdgeKind::References, c.context, rel);
+        }
+    }
+}
+
+/// The repository files an import site names, by the default rule: relative to the importer's
+/// directory, then to the root when the spec says so, each with the spec's suffixes, kept only when
+/// the walk globbed the result.
+pub(crate) fn import_targets(resolver: &Resolver, spec: &Spec, rel: &str, import: &Import) -> Vec<String> {
+    let Some(path) = &import.path else { return Vec::new() };
+    let dir = rel.rsplit_once('/').map_or("", |(d, _)| d);
+    let bases = std::iter::once(dir).chain(spec.imports.root.then_some(""));
+    for base in bases {
+        for suffix in spec.imports.suffixes {
+            let Some(target) = crate::code::prose::join_under(base, &format!("{path}{suffix}")) else { continue };
+            if resolver.globbed(&target) {
+                return vec![target];
+            }
+        }
+    }
+    Vec::new()
+}
+
+fn imported_files(resolver: &Resolver, spec: &Spec, file: &File, facts: &Facts) -> Vec<String> {
+    facts.imports.iter().flat_map(|i| match spec.hooks.import {
+        Some(hook) => hook(resolver, file, i),
+        None => import_targets(resolver, spec, file.rel, i),
+    }).collect()
+}
+
+/// The files a reference may resolve into besides its own, by the spec's visibility.
+fn visible(resolver: &Resolver, spec: &Spec, file: &File, facts: &Facts, name: &str) -> Vec<String> {
+    let rel = file.rel;
+    let mut out: Vec<String> = match spec.visibility {
+        Visibility::File => Vec::new(),
+        Visibility::Imported { transitive } => {
+            let mut seen = BTreeSet::from([rel.to_string()]);
+            let mut queue: VecDeque<String> = imported_files(resolver, spec, file, facts).into();
+            while let Some(next) = queue.pop_front() {
+                if !seen.insert(next.clone()) {
+                    continue;
+                }
+                if transitive {
+                    if let Some(f) = resolver.facts(&next) {
+                        queue.extend(f.imports.iter().flat_map(|i| import_targets(resolver, spec, &next, i)));
+                    }
+                }
+            }
+            seen.remove(rel);
+            seen.into_iter().collect()
+        }
+        Visibility::Directory => resolver.siblings(rel, file.lang),
+        Visibility::Family => {
+            return resolver.index(file.lang.family())
+                .map(|index| index.files(name).into_iter().filter(|f| *f != rel).map(str::to_string).collect())
+                .unwrap_or_default();
+        }
+    };
+    out.retain(|f| resolver.facts(f).is_some_and(|facts| facts.declares_visible(name)));
+    out
+}
+
+/// Every reference with no receiver and of a kind no hook owns, resolved by name.
+pub(crate) fn resolve(resolver: &Resolver, spec: &Spec, file: &File, facts: &Facts, ex: &mut Extraction) {
+    let rel = file.rel;
+    for r in &facts.refs {
+        if r.receiver.is_some() || spec.hooks.owns.contains(&r.edge) || facts.locals.shadows(&r.name, r.range.start) {
+            continue;
+        }
+        let own = facts.declares(&r.name);
+        let others = visible(resolver, spec, file, facts, &r.name);
+        let targets: Vec<&str> = match spec.ambiguity {
+            Ambiguity::OwnFirst if own => vec![rel],
+            Ambiguity::OwnFirst => others.iter().map(String::as_str).collect(),
+            Ambiguity::Unique => match (own, others.as_slice()) {
+                (true, []) => vec![rel],
+                (false, [one]) => vec![one.as_str()],
+                _ => Vec::new(),
+            },
+            Ambiguity::All => own.then_some(rel).into_iter().chain(others.iter().map(String::as_str)).collect(),
+        };
+        let from = facts.source_id(rel, r.source);
+        let container = r.source.and_then(|i| facts.defs[i].parent).map(|p| facts.defs[p].id.clone());
+        for target in targets {
+            let to = format!("sym:{target}::{}", r.name);
+            if to != from && Some(&to) != container.as_ref() {
+                ex.edge(&from, &to, r.edge, &r.context, rel);
+            }
+        }
+    }
+}
+
+/// The header a name-indexed family records when it has no `header` hook: its namespaces, its
+/// visible top-level names, and what its containers hold.
+pub(crate) fn header(facts: &Facts) -> Header {
+    let mut h = Header { scope: facts.namespaces.clone(), ..Header::default() };
+    for d in &facts.defs {
+        match d.parent {
+            None if d.export => {
+                h.top.insert(d.qualified.clone());
+            }
+            None => {}
+            Some(_) if d.kind.join().is_some() => {
+                h.nested.types.insert(d.qualified.clone());
+            }
+            Some(_) => {
+                h.nested.members.insert(d.qualified.clone());
+            }
+        }
+        if d.parent.is_none() && d.kind.join().is_some() {
+            h.nested.types.insert(d.qualified.clone());
+        }
+    }
+    h
+}
+
+/// `decl` facts alone, for a file another file reads across: the collect pass and `Resolver::facts`.
+pub(crate) fn declarations(lang: Lang, rel: &str, source: &str) -> Option<Facts> {
+    let spec = crate::code::spec::spec(lang);
+    let decl = queries::decl(lang)?;
+    let tree = lang.parse(source.as_bytes())?;
+    let file = File { lang, rel, text: source, src: source, tree: Some(&tree) };
+    Some(facts(spec, decl, None, &file))
+}
+
+/// The engine's whole read of a file whose node the front has written.
+pub(crate) fn extract(resolver: &Resolver, spec: &Spec, file: &File, ex: &mut Extraction) {
+    let Some(decl) = queries::decl(file.lang) else { return };
+    let facts = facts(spec, decl, queries::refs(file.lang), file);
+    write(file, &facts, ex);
+    let kind = |i: &Import| if i.reexport { EdgeKind::ReExports } else { EdgeKind::Imports };
+    for i in &facts.imports {
+        let targets = match spec.hooks.import {
+            Some(hook) => hook(resolver, file, i),
+            None => import_targets(resolver, spec, file.rel, i),
+        };
+        for t in targets {
+            ex.edge(&format!("file:{}", file.rel), &format!("file:{t}"), kind(i), "*", file.rel);
+        }
+    }
+    resolve(resolver, spec, file, &facts, ex);
+    if let Some(hook) = spec.hooks.resolve {
+        hook(resolver, file, &facts, &mut Sink(ex));
+    }
+}
+
+#[cfg(test)]
+mod tests;

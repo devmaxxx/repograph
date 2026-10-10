@@ -2,6 +2,8 @@ pub mod bicep;
 pub mod blank;
 pub mod dart;
 pub(crate) mod dotnet;
+pub(crate) mod engine;
+pub(crate) mod front;
 pub mod graphql;
 pub mod hcl;
 pub mod imports;
@@ -10,9 +12,10 @@ pub mod jvm;
 pub mod lang;
 pub(crate) mod prose;
 pub(crate) mod python;
-pub(crate) mod reader;
+pub(crate) mod queries;
 pub(crate) mod rust_lang;
 pub mod shell;
+pub(crate) mod spec;
 pub mod sql;
 pub mod swift;
 pub(crate) mod syntax;
@@ -32,15 +35,7 @@ impl CodeExtractor {
 
 impl Extractor for CodeExtractor {
     fn extract(&self, rel: &str, text: &str) -> Extraction {
-        let ex = match lang::Lang::of(rel) {
-            Some(lang) => reader::extract(lang, &self.resolver, rel, text),
-            None => {
-                let mut ex = Extraction::default();
-                lang::file_node(rel, &mut ex);
-                ex
-            }
-        };
-        finish(ex)
+        finish(front::read(&self.resolver, rel, text))
     }
 }
 

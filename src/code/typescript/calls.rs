@@ -8,7 +8,7 @@
 use crate::code::imports::Resolver;
 use crate::code::syntax::text;
 use crate::code::typescript::idrefs::owner;
-use crate::code::typescript::symbols::{is_top_level, member_name, parse};
+use crate::code::typescript::symbols::{is_top_level, member_name};
 use crate::model::{Edge, EdgeKind, Extraction};
 use std::collections::{BTreeMap, BTreeSet};
 use tree_sitter::Node;
@@ -257,16 +257,10 @@ impl Reach {
     }
 }
 
-/// Every call and `new` in the file, as an edge from its owner to what the scope proves it
+/// Every call and `new` under `root`, as an edge from its owner to what the scope proves it
 /// reaches. `locals` are the names this file declares at top level (the scanner already knows
-/// them); a self-call is dropped, and a repeated call collapses into one edge.
-pub(crate) fn scan(resolver: &Resolver, rel: &str, source: &str, locals: &BTreeSet<String>, ex: &mut Extraction) {
-    let src = source.as_bytes();
-    let Some(tree) = parse(rel, src) else { return };
-    scan_tree(resolver, rel, tree.root_node(), src, locals, ex);
-}
-
-/// `scan` over a tree someone else parsed: an embedded script is TypeScript at its host file's rows.
+/// them); a self-call is dropped, and a repeated call collapses into one edge. An embedded script
+/// is TypeScript at its host file's rows.
 pub(crate) fn scan_tree(resolver: &Resolver, rel: &str, root: Node, src: &[u8], locals: &BTreeSet<String>, ex: &mut Extraction) {
     let scope = Scope::collect(root, rel, src, resolver, locals);
     let mut found: BTreeMap<(String, String), Reach> = BTreeMap::new();

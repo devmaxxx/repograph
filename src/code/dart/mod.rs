@@ -10,26 +10,26 @@ use std::collections::BTreeSet;
 use tree_sitter::Node;
 
 use crate::code::imports::Resolver;
-use crate::code::lang::Lang;
-use crate::code::reader::{self, Manifest, Reader};
+use crate::code::engine::File;
+use crate::code::spec::{self, Manifest, Hooks};
 use crate::code::syntax::{named, text};
 use crate::model::{EdgeKind, Extraction};
 use library::Libraries;
 
 /// Dart state: every globbed file's directives and top-level names, and every pubspec's package name.
-pub(crate) const READER: Reader = Reader {
-    extract,
+pub(crate) const HOOKS: Hooks = Hooks {
     collect: Some(|r, rel, source| {
         r.state_mut::<Libraries>().collect(rel, source);
         None
     }),
-    state: Some(reader::state::<Libraries>),
+    state: Some(spec::state::<Libraries>),
     manifest: Some(Manifest { matches: |name| name == "pubspec.yaml", read: |r, rel, text| r.state_mut::<Libraries>().collect_manifest(rel, text) }),
-    ..reader::NONE
+    ..spec::NONE
 };
 
-fn extract(resolver: &Resolver, rel: &str, source: &str, ex: &mut Extraction) {
-    let Some(tree) = reader::open(Lang::Dart, rel, source, ex) else { return };
+pub(crate) fn extract(resolver: &Resolver, file: &File, ex: &mut Extraction) {
+    let (rel, source) = (file.rel, file.src);
+    let Some(tree) = file.tree else { return };
     let (src, root) = (source.as_bytes(), tree.root_node());
     let declared = declarations::scan(root, rel, src, ex);
     directives(resolver.state::<Libraries>(), rel, root, src, ex);

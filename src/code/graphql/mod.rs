@@ -10,14 +10,18 @@ use std::collections::BTreeSet;
 
 use crate::code::imports::Resolver;
 use crate::code::index::Header;
-use crate::code::lang::{file_node, Family, Lang};
-use crate::code::reader::{self, Reader};
+use crate::code::engine::File;
+use crate::code::lang::{Family, Lang};
+use crate::code::spec::{self, Hooks};
 use crate::model::{EdgeKind, Extraction, NodeKind};
 
 fn read(source: &str) -> Option<document::Read> {
-    let tree = Lang::GraphQl.parse(source.as_bytes())?;
+    Some(read_tree(&Lang::GraphQl.parse(source.as_bytes())?, source))
+}
+
+fn read_tree(tree: &tree_sitter::Tree, source: &str) -> document::Read {
     let lines: Vec<&str> = source.lines().collect();
-    Some(document::read(tree.root_node(), source.as_bytes(), &lines))
+    document::read(tree.root_node(), source.as_bytes(), &lines)
 }
 
 /// Every operation, fragment, directive and type the document defines or extends. A document that starts declaring
@@ -27,7 +31,7 @@ pub fn header(source: &str) -> Header {
     Header { top, ..Header::default() }
 }
 
-pub(crate) const READER: Reader = Reader { extract, header: Some(|_, source| header(source)), ..reader::NONE };
+pub(crate) const HOOKS: Hooks = Hooks { header: Some(|_, source| header(source)), ..spec::NONE };
 
 /// The file node, one `sym:<rel>::<tail>` per operation, fragment, directive and type the document defines or
 /// extends (declared by the file, context `export`), and one `Type.field` per field of an object type, an
@@ -39,12 +43,11 @@ pub(crate) const READER: Reader = Reader { extract, header: Some(|_, source| hea
 /// `References` with context `on`, `variable`, `type`, `argument`, `member` or `extend`, `Extends` for
 /// `implements`, `DecoratedBy` to a defined directive, and `References` with context `comment` or `string` to
 /// each id a comment or a string cites. A source the grammar cannot parse yields the file node alone.
-fn extract(resolver: &Resolver, rel: &str, source: &str, ex: &mut Extraction) {
-    file_node(rel, ex);
-    if let Some(read) = read(source) {
-        declare(&read, rel, ex);
-        link(resolver, &read, rel, ex);
-    }
+pub(crate) fn extract(resolver: &Resolver, file: &File, ex: &mut Extraction) {
+    let Some(tree) = file.tree else { return };
+    let read = read_tree(tree, file.src);
+    declare(&read, file.rel, ex);
+    link(resolver, &read, file.rel, ex);
 }
 
 fn sym(rel: &str, tail: &str) -> String {

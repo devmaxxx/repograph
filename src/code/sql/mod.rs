@@ -11,14 +11,18 @@ use std::collections::BTreeSet;
 
 use crate::code::imports::Resolver;
 use crate::code::index::Header;
-use crate::code::lang::{file_node, Family, Lang};
-use crate::code::reader::{self, Reader};
+use crate::code::engine::File;
+use crate::code::lang::{Family, Lang};
+use crate::code::spec::{self, Hooks};
 use crate::model::{EdgeKind, Extraction, NodeKind};
 
 fn read(source: &str) -> Option<statements::Read> {
-    let tree = Lang::Sql.parse(source.as_bytes())?;
+    Some(read_tree(&Lang::Sql.parse(source.as_bytes())?, source))
+}
+
+fn read_tree(tree: &tree_sitter::Tree, source: &str) -> statements::Read {
     let lines: Vec<&str> = source.lines().collect();
-    Some(statements::read(tree.root_node(), source.as_bytes(), &lines))
+    statements::read(tree.root_node(), source.as_bytes(), &lines)
 }
 
 /// Every object the file creates or attaches to, `ALTER TABLE t` and `CREATE TRIGGER … ON t` included.
@@ -31,7 +35,7 @@ pub fn header(source: &str) -> Header {
     Header { top, ..Header::default() }
 }
 
-pub(crate) const READER: Reader = Reader { extract, header: Some(|_, source| header(source)), ..reader::NONE };
+pub(crate) const HOOKS: Hooks = Hooks { header: Some(|_, source| header(source)), ..spec::NONE };
 
 /// The file node, one `sym:<rel>::<schema>/<object>` per object the file creates or attaches to (declared by the
 /// file, context `export`), and one `<table>.<member>` per column, trigger, policy and named index (declared by
@@ -42,12 +46,11 @@ pub(crate) const READER: Reader = Reader { extract, header: Some(|_, source| hea
 /// `references` or `from`, `Calls` from a trigger to its function, and `References` from the enclosing statement,
 /// or the file between statements, to each id a comment or a string cites. A source the grammar cannot parse
 /// yields the file node alone.
-fn extract(resolver: &Resolver, rel: &str, source: &str, ex: &mut Extraction) {
-    file_node(rel, ex);
-    if let Some(read) = read(source) {
-        declare(&read, rel, ex);
-        link(resolver, &read, rel, ex);
-    }
+pub(crate) fn extract(resolver: &Resolver, file: &File, ex: &mut Extraction) {
+    let Some(tree) = file.tree else { return };
+    let read = read_tree(tree, file.src);
+    declare(&read, file.rel, ex);
+    link(resolver, &read, file.rel, ex);
 }
 
 fn sym(rel: &str, tail: &str) -> String {

@@ -9,7 +9,7 @@ const GLOBS: &[&str] = &["**/*.bicep"];
 fn extract(files: &[(&str, &str)], rel: &str) -> crate::model::Extraction {
     let (_dir, resolver) = repo(GLOBS, files);
     let text = files.iter().find(|(f, _)| *f == rel).map(|(_, t)| *t).unwrap();
-    crate::code::reader::extract(crate::code::lang::Lang::Bicep, &resolver, rel, text)
+    crate::code::front::read(&resolver, rel, text)
 }
 
 const DECLS: &str = "\

@@ -644,6 +644,8 @@ fn a_malformed_package_json_or_tsconfig_does_not_abort_the_walk() {
 /// set, `dump.tsx` under `REPOGRAPH_DUMP_TSX`).
 /// `REPOGRAPH_DUMP='export * as ns from "./lib";' cargo test dump_tree -- --ignored --nocapture`
 /// `REPOGRAPH_DUMP=path/to/Order.cs cargo test dump_tree -- --ignored --nocapture`
+/// With `REPOGRAPH_DUMP_CAPTURES` set it also prints each capture of the language's two queries, so a
+/// query is written against what it matches rather than against what it was meant to.
 #[test]
 #[ignore]
 fn dump_tree() {
@@ -659,6 +661,24 @@ fn dump_tree() {
     let lang = crate::code::lang::Lang::of(&rel).unwrap_or_else(|| panic!("no grammar reads {rel}"));
     let tree = lang.parse(&src).unwrap_or_else(|| panic!("{lang:?} is read by blanking, not by a grammar of its own"));
     println!("{}", tree.root_node().to_sexp());
+    if std::env::var_os("REPOGRAPH_DUMP_CAPTURES").is_some() {
+        use streaming_iterator::StreamingIterator;
+        for (part, compiled) in [("decl", crate::code::queries::decl(lang)), ("refs", crate::code::queries::refs(lang))] {
+            let Some(c) = compiled else {
+                println!("{lang:?} has no {part} query");
+                continue;
+            };
+            let mut cursor = tree_sitter::QueryCursor::new();
+            let mut matches = cursor.matches(&c.query, tree.root_node(), &src[..]);
+            while let Some(m) = matches.next() {
+                for cap in m.captures() {
+                    let at = cap.node.start_position();
+                    let text = cap.node.utf8_text(&src).unwrap_or("");
+                    println!("{part} #{} @{} {}:{} {text:?}", m.pattern_index, c.query.capture_names()[cap.index as usize], at.row + 1, at.column);
+                }
+            }
+        }
+    }
 }
 
 // ---- spans ----
@@ -1139,4 +1159,100 @@ fn a_getter_declared_with_a_space_before_its_parentheses_is_still_an_accessor() 
     assert!(crate::model::declares_accessor("T.secret", "get secret () { return 1; }"));
     assert!(crate::model::declares_accessor("T.secret", "static get secret(): string { return ''; }"));
     assert!(!crate::model::declares_accessor("T.get", "get(k: string) { return k; }"));
+}
+
+// ---- detection: the name, then ast-grep's table, then the shebang (L2) ----
+
+#[test]
+fn a_file_no_table_names_is_read_by_the_interpreter_its_shebang_names() {
+    use crate::code::lang::{detect, Lang};
+    for (head, lang) in [
+        ("#!/bin/sh\n", Lang::Shell),
+        ("#!/bin/bash\n", Lang::Shell),
+        ("#!/bin/dash\n", Lang::Shell),
+        ("#!/bin/zsh\n", Lang::Shell),
+        ("#! /bin/bash -eu\n", Lang::Shell),
+        ("#!/usr/bin/env bash\n", Lang::Shell),
+        ("#!/usr/bin/env -S bash -euo pipefail\n", Lang::Shell),
+        ("#!/usr/bin/python\n", Lang::Python),
+        ("#!/usr/bin/python2\n", Lang::Python),
+        ("#!/usr/local/bin/python3\n", Lang::Python),
+        ("#!/usr/bin/env python3\n", Lang::Python),
+        ("#!/usr/bin/env PYTHONPATH=src python3 -u\n", Lang::Python),
+        ("#!/usr/bin/env node\n", Lang::TypeScript),
+        ("#!/usr/bin/env -S deno run --allow-read\n", Lang::TypeScript),
+        ("#!/usr/bin/env bun\n", Lang::TypeScript),
+        ("#!/usr/bin/env ts-node\n", Lang::TypeScript),
+    ] {
+        assert_eq!(detect("bin/deploy", Some(head)), Some(lang), "{head:?}");
+    }
+}
+
+#[test]
+fn a_shebang_names_no_language_when_it_is_absent_late_or_an_interpreter_we_do_not_read() {
+    use crate::code::lang::detect;
+    for head in [
+        "",
+        "echo hi\n",
+        "\n#!/bin/bash\n",
+        "# !/bin/bash\n",
+        "#!/usr/bin/env ruby\n",
+        "#!/usr/bin/perl -w\n",
+        "#!/usr/bin/env\n",
+        "#!/usr/bin/env -S\n",
+        "#!\n",
+    ] {
+        assert_eq!(detect("bin/deploy", Some(head)), None, "{head:?}");
+    }
+    // A caller without the text, as a deleted file's path is read, has only the name to go by.
+    assert_eq!(detect("bin/deploy", None), None);
+}
+
+#[test]
+fn a_name_either_table_knows_decides_whatever_the_shebang_says() {
+    use crate::code::lang::{detect, Lang};
+    assert_eq!(detect("tools/x.py", Some("#!/bin/bash\n")), Some(Lang::Python));
+    assert_eq!(detect("tools/x.sh", Some("#!/usr/bin/env python3\n")), Some(Lang::Shell));
+    // ast-grep reads these as languages we leave as files, and that answer is final.
+    for rel in ["ci.yaml", "README.md", "main.go", "a.rb", "page.html"] {
+        assert_eq!(detect(rel, Some("#!/bin/bash\n")), None, "{rel}");
+    }
+}
+
+#[test]
+fn every_refused_extension_is_a_file_even_under_a_shebang() {
+    use crate::code::lang::{detect, Lang};
+    for ext in ["kts", "ktm", "tfvars", "nomad", "workflow", "bats", "cgi", "command", "env", "fcgi", "ksh", "tmux", "tool", "zsh", "py3", "pyi", "bzl", "bazel"] {
+        let rel = format!("a/b.{ext}");
+        assert_eq!(Lang::of(&rel), None, "{rel}");
+        assert_eq!(detect(&rel, Some("#!/bin/bash\n")), None, "{rel}");
+    }
+}
+
+#[test]
+fn javascript_is_read_by_the_typescript_grammars_and_not_by_the_one_ast_grep_names() {
+    use crate::code::lang::{detect, Lang};
+    for rel in ["a.js", "a.mjs", "a.cjs"] {
+        assert_eq!(detect(rel, None), Some(Lang::TypeScript), "{rel}");
+    }
+    assert_eq!(detect("a.jsx", None), Some(Lang::Tsx));
+}
+
+#[test]
+fn a_script_with_no_extension_is_read_by_its_shebang_from_the_extractor() {
+    let ex = extract("bin/deploy", "#!/usr/bin/env bash\ngreet() {\n  echo hi\n}\n");
+    assert_eq!(ids(&ex), vec!["file:bin/deploy", "sym:bin/deploy::greet"]);
+    let ex = extract("bin/notes", "greet() {\n  echo hi\n}\n");
+    assert_eq!(ids(&ex), vec!["file:bin/notes"]);
+}
+
+#[test]
+fn every_language_names_its_grammar_once_and_the_two_embedded_ones_none() {
+    use crate::code::lang::Lang;
+    for lang in Lang::ALL {
+        match lang {
+            Lang::Razor | Lang::Vue => assert!(lang.grammar().is_none(), "{lang:?}"),
+            _ => assert!(lang.parse(b"").is_some(), "{lang:?}"),
+        }
+    }
 }

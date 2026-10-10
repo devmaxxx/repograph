@@ -1,12 +1,14 @@
 use anyhow::{Context, Result};
 use serde::Deserialize;
 use std::collections::{BTreeMap, BTreeSet};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::OnceLock;
+use std::sync::{Arc, Mutex, OnceLock};
 
+use crate::code::engine::{self, Facts};
 use crate::code::index::{Header, QualifiedIndex};
-use crate::code::lang::{Family, Lang};
-use crate::code::reader::{reader, Manifest, States};
+use crate::code::lang::{detect, Family, Lang};
+use crate::code::spec::{spec, Manifest, States};
 use crate::code::typescript::vue;
 
 /// (directory the tsconfig lives in, directory its targets are relative to — `baseUrl` —
@@ -20,8 +22,12 @@ pub struct Resolver {
     packages: BTreeMap<String, (String, BTreeMap<String, String>)>,
     /// Qualified name -> declaring files, one index per name-indexed family the globs reach.
     indexes: BTreeMap<Family, QualifiedIndex>,
-    /// What each language keeps across files, keyed by type: see `Reader::state`.
+    /// What each language keeps across files, keyed by type: see `Hooks::state`.
     states: States,
+    /// Every file the code globs reach, read or not: an import resolves only to one of them.
+    files: BTreeSet<String>,
+    /// The declarations of each file another file has resolved into, read once per build.
+    facts: Mutex<HashMap<String, Option<Arc<Facts>>>>,
 }
 
 #[derive(Deserialize, Default)]
@@ -131,12 +137,15 @@ impl Resolver {
         let include = crate::walk::included(&cfg.include)?;
         let mut paths: PathsTier = Vec::new();
         let mut packages = BTreeMap::new();
-        let mut sources: Vec<(Lang, String, PathBuf)> = Vec::new();
+        // With the text when detection already read it, so no file is read twice here.
+        let mut sources: Vec<(Lang, String, PathBuf, Option<String>)> = Vec::new();
+        let mut registered: Vec<(Lang, String)> = Vec::new();
+        let mut files: BTreeSet<String> = BTreeSet::new();
         let mut manifests: Vec<(Lang, String, PathBuf)> = Vec::new();
         let manifest_readers: Vec<(Lang, &Manifest)> =
-            Lang::ALL.into_iter().filter_map(|l| reader(l).manifest.as_ref().map(|m| (l, m))).collect();
+            Lang::ALL.into_iter().filter_map(|l| spec(l).hooks.manifest.as_ref().map(|m| (l, m))).collect();
         let mut reached: BTreeSet<Family> = BTreeSet::new();
-        // `walk` reads dotted directories, so this one does too, and admits from them only what a reader
+        // `walk` reads dotted directories, so this one does too, and admits from them only what a language
         // with `dotted_dirs` collects: CI keeps its scripts under `.github/`, while a tsconfig, a package.json or a manifest
         // under a dotted directory stays out, as it was before this walk opened.
         // A directory `skip` covers is not entered: `node_modules/**` is a pattern for files, so the
@@ -159,22 +168,35 @@ impl Resolver {
             let rel = p.strip_prefix(repo).unwrap_or(p).to_string_lossy().replace('\\', "/");
             if rel.split('/').any(|part| part.starts_with('.')) {
                 let is_file = dent.file_type().is_some_and(|t| t.is_file());
-                if let Some(lang) = Lang::of(&rel).filter(|l| reader(*l).dotted_dirs) {
+                if let Some(lang) = Lang::of(&rel).filter(|l| spec(*l).dotted_dirs) {
                     if is_file && !skip.is_match(&rel) && code.is_match(&rel) && include.as_ref().is_none_or(|i| i.is_match(&rel)) {
                         reached.insert(lang.family());
-                        sources.push((lang, rel, p.to_path_buf()));
+                        files.insert(rel.clone());
+                        sources.push((lang, rel, p.to_path_buf(), None));
                     }
                 }
                 continue;
             }
             if dent.file_type().is_some_and(|t| t.is_file()) && !skip.is_match(&rel) {
                 if code.is_match(&rel) && include.as_ref().is_none_or(|i| i.is_match(&rel)) {
-                    if let Some(lang) = Lang::of(&rel) {
+                    files.insert(rel.clone());
+                    // A name neither table knows is read for its shebang, as the extractor reads it.
+                    let (lang, read) = match Lang::of(&rel) {
+                        Some(lang) => (Some(lang), None),
+                        None if crate::code::lang::unnamed(&rel) => {
+                            let text = std::fs::read_to_string(p).ok();
+                            (text.as_deref().and_then(|t| detect(&rel, Some(t))), text)
+                        }
+                        None => (None, None),
+                    };
+                    if let Some(lang) = lang {
                         reached.insert(lang.family());
                         // TypeScript's state is the tsconfig and package.json read below; its sources
                         // are the extractor's alone, so a TypeScript repository opens nothing more here.
-                        if reader(lang).collects() {
-                            sources.push((lang, rel.clone(), p.to_path_buf()));
+                        if spec(lang).hooks.collects() {
+                            sources.push((lang, rel.clone(), p.to_path_buf(), read));
+                        } else if spec(lang).hooks.register.is_some() {
+                            registered.push((lang, rel.clone()));
                         }
                     }
                 }
@@ -231,17 +253,30 @@ impl Resolver {
         }
         // Nearest tsconfig to the importing file wins: sort deepest directory first.
         paths.sort_by_key(|a| std::cmp::Reverse(a.0.len()));
-        let mut resolver = Resolver { repo: repo.to_path_buf(), paths, packages, indexes: BTreeMap::new(), states: States::new() };
+        let mut resolver = Resolver {
+            repo: repo.to_path_buf(),
+            paths,
+            packages,
+            indexes: BTreeMap::new(),
+            states: States::new(),
+            files,
+            facts: Mutex::default(),
+        };
         // Manifests before sources: a path family's roots decide how its sources' paths read.
         for (lang, rel, path) in manifests.iter().filter(|(l, _, _)| reached.contains(&l.family())) {
-            if let (Some(m), Ok(text)) = (&reader(*lang).manifest, std::fs::read_to_string(path)) {
+            if let (Some(m), Ok(text)) = (&spec(*lang).hooks.manifest, std::fs::read_to_string(path)) {
                 (m.read)(&mut resolver, rel, &text);
             }
         }
-        for (lang, rel, path) in &sources {
+        for (lang, rel) in &registered {
+            if let Some(register) = spec(*lang).hooks.register {
+                register(&mut resolver, rel);
+            }
+        }
+        for (lang, rel, path, read) in sources {
             // Not UTF-8 is a binary, which the extractor skips as well.
-            if let Ok(text) = std::fs::read_to_string(path) {
-                resolver.collect(*lang, rel, &text);
+            if let Some(text) = read.or_else(|| std::fs::read_to_string(path).ok()) {
+                resolver.collect(lang, &rel, &text);
             }
         }
         Ok(resolver)
@@ -265,12 +300,46 @@ impl Resolver {
         index_header(&mut self.indexes, family, rel, header);
     }
 
+    /// Whether the code globs reach `rel`.
+    pub(crate) fn globbed(&self, rel: &str) -> bool {
+        self.files.contains(rel)
+    }
+
+    /// The globbed files beside `rel` in its directory that its language reads, `rel` excluded.
+    pub(crate) fn siblings(&self, rel: &str, lang: Lang) -> Vec<String> {
+        let dir = rel.rsplit_once('/').map_or("", |(d, _)| d);
+        let prefix = if dir.is_empty() { String::new() } else { format!("{dir}/") };
+        self.files.range(prefix.clone()..)
+            .take_while(|f| f.starts_with(&prefix))
+            .filter(|f| *f != rel && !f[prefix.len()..].contains('/') && Lang::of(f) == Some(lang))
+            .cloned()
+            .collect()
+    }
+
+    /// What a globbed file declares, by its language's queries; `None` for a file out of the globs,
+    /// unreadable, or in a language with no queries.
+    pub(crate) fn facts(&self, rel: &str) -> Option<Arc<Facts>> {
+        if !self.globbed(rel) {
+            return None;
+        }
+        if let Some(known) = self.facts.lock().unwrap_or_else(|e| e.into_inner()).get(rel) {
+            return known.clone();
+        }
+        // Read outside the lock: two threads may read one file, and both find the same facts.
+        let read = std::fs::read_to_string(self.repo.join(rel)).ok().and_then(|text| {
+            let lang = detect(rel, Some(&text))?;
+            engine::declarations(lang, rel, &text).map(Arc::new)
+        });
+        self.facts.lock().unwrap_or_else(|e| e.into_inner()).insert(rel.to_string(), read.clone());
+        read
+    }
+
     /// What one globbed source contributes before any file is extracted.
     fn collect(&mut self, lang: Lang, rel: &str, source: &str) {
-        let r = reader(lang);
-        let header = match r.collect {
+        let hooks = &spec(lang).hooks;
+        let header = match hooks.collect {
             Some(add) => add(self, rel, source),
-            None => r.header.map(|header| header(rel, source)),
+            None => hooks.header.map(|header| header(rel, source)),
         };
         if let Some(header) = header {
             self.add_header(lang.family(), rel, &header);
