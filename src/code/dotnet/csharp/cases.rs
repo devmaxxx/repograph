@@ -1,7 +1,7 @@
 //! C# extraction on inline sources, so the grammar's shape is pinned by the assertion.
 
-use crate::code::imports::Resolver;
 use crate::code::CodeExtractor;
+use crate::code::imports::Resolver;
 use crate::config::Config;
 use crate::model::{EdgeKind, Extraction, Extractor};
 

@@ -1136,7 +1136,7 @@ fn a_getter_that_becomes_a_field_loses_its_readers_at_the_next_settle() {
 
 #[test]
 fn a_getter_declared_with_a_space_before_its_parentheses_is_still_an_accessor() {
-    assert!(crate::code::typescript::calls::declares_accessor("T.secret", "get secret () { return 1; }"));
-    assert!(crate::code::typescript::calls::declares_accessor("T.secret", "static get secret(): string { return ''; }"));
-    assert!(!crate::code::typescript::calls::declares_accessor("T.get", "get(k: string) { return k; }"));
+    assert!(crate::model::declares_accessor("T.secret", "get secret () { return 1; }"));
+    assert!(crate::model::declares_accessor("T.secret", "static get secret(): string { return ''; }"));
+    assert!(!crate::model::declares_accessor("T.get", "get(k: string) { return k; }"));
 }

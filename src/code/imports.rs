@@ -6,7 +6,8 @@ use std::sync::OnceLock;
 
 use crate::code::index::{Header, QualifiedIndex};
 use crate::code::lang::{Family, Lang};
-use crate::code::reader::{reader, Collect, States};
+use crate::code::reader::{reader, Collect, Manifest, States};
+use crate::code::typescript::vue;
 
 /// (directory the tsconfig lives in, directory its targets are relative to — `baseUrl` —
 /// and pattern -> targets), sorted nearest-first.
@@ -117,9 +118,10 @@ fn index_header(indexes: &mut BTreeMap<Family, QualifiedIndex>, family: Family, 
     }
 }
 
-/// The language whose reader reads a build manifest, by its file name.
-fn manifest_lang(name: &str) -> Option<Lang> {
-    Lang::ALL.into_iter().find(|l| reader(*l).manifest.as_ref().is_some_and(|m| (m.matches)(name)))
+/// The language whose reader reads a build manifest, by its file name, among `readers`: the
+/// languages that read one, listed once before the walk.
+fn manifest_lang(readers: &[(Lang, &Manifest)], name: &str) -> Option<Lang> {
+    readers.iter().find(|(_, m)| (m.matches)(name)).map(|(l, _)| *l)
 }
 
 impl Resolver {
@@ -131,6 +133,8 @@ impl Resolver {
         let mut packages = BTreeMap::new();
         let mut sources: Vec<(Lang, String, PathBuf)> = Vec::new();
         let mut manifests: Vec<(Lang, String, PathBuf)> = Vec::new();
+        let manifest_readers: Vec<(Lang, &Manifest)> =
+            Lang::ALL.into_iter().filter_map(|l| reader(l).manifest.as_ref().map(|m| (l, m))).collect();
         let mut reached: BTreeSet<Family> = BTreeSet::new();
         // `walk` reads dotted directories, so this one does too, and admits from them only what a reader
         // with `dotted_dirs` collects: CI keeps its scripts under `.github/`, while a tsconfig, a package.json or a manifest
@@ -174,7 +178,7 @@ impl Resolver {
                         }
                     }
                 }
-                if let Some(lang) = manifest_lang(name) {
+                if let Some(lang) = manifest_lang(&manifest_readers, name) {
                     manifests.push((lang, rel.clone(), p.to_path_buf()));
                 }
             }
@@ -270,6 +274,10 @@ impl Resolver {
         let r = reader(lang);
         match r.collect {
             Collect::Source(add) => add(self, rel, source),
+            Collect::Indexed(add) => {
+                let header = add(self, rel, source);
+                self.add_header(lang.family(), rel, &header);
+            }
             Collect::Header | Collect::Path(_) => {
                 if let Some(header) = r.header {
                     self.add_header(lang.family(), rel, &header(rel, source));
@@ -282,7 +290,7 @@ impl Resolver {
     /// `.ts`/`.tsx` source, never a `dist/` build artifact or `node_modules` — otherwise
     /// `resolve` would point an edge at a file with no corresponding graph node.
     fn is_indexed(&self, rel: &str) -> bool {
-        if self.state::<crate::code::typescript::vue::Files>().contains(rel) {
+        if self.state::<vue::Files>().contains(rel) {
             return true;
         }
         let ext_ok = matches!(

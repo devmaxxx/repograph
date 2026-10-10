@@ -302,8 +302,8 @@ fn razor_block_census() {
 }
 
 use crate::code::dotnet::csharp::cases::{edges, ids, Repo};
-use crate::model::EdgeKind;
 use crate::code::dotnet::csharp::declarations::Using;
+use crate::model::EdgeKind;
 
 const WEB: &[(&str, &str)] = &[
     ("Web/Shop.Web.csproj", "<Project Sdk=\"Microsoft.NET.Sdk.Web\"><PropertyGroup><RootNamespace>Shop.Web</RootNamespace></PropertyGroup></Project>\n"),

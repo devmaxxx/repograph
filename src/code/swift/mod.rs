@@ -5,9 +5,9 @@ mod cases;
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use crate::code::reader::{self, Collect, Extract, Reader};
 use crate::code::imports::Resolver;
 use crate::code::lang::Lang;
+use crate::code::reader::{self, Collect, Extract, Reader};
 use tree_sitter::Node;
 use crate::model::{EdgeKind, Extraction};
 

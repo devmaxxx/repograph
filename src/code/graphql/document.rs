@@ -3,11 +3,8 @@
 //! and `extract` read one list of declarations.
 use tree_sitter::Node;
 
-use crate::code::syntax::{child, find, named, text};
+use crate::code::syntax::{child, find, named, text, DOC_CHARS};
 use crate::model::EdgeKind;
-
-/// Capped as TypeScript's doc comments are, so a long description does not drown the declaring line.
-const DOC_CHARS: usize = 600;
 
 pub(super) struct Object {
     /// The id tail: `query/GetShelf`, `fragment/ShelfFields`, `Shelf`, `directive/auth`.

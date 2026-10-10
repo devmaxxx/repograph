@@ -10,9 +10,9 @@ mod cases;
 
 pub(crate) use modules::Files;
 
-use crate::code::reader::{self, Collect, Extract, Reader};
 use crate::code::imports::Resolver;
 use crate::code::prose::{self, Spans};
+use crate::code::reader::{self, Collect, Extract, Reader};
 use crate::code::syntax;
 use crate::model::Extraction;
 use tree_sitter::Node;
@@ -56,7 +56,7 @@ struct Walk<'t, 's> {
     src: &'s [u8],
     spans: Spans,
     decls: Vec<Decl<'t>>,
-    ex: Extraction,
+    ex: &'s mut Extraction,
 }
 
 /// Bicep state: every globbed `.bicep` file and its top-level names, so a module path resolves to
@@ -69,14 +69,13 @@ pub(crate) const READER: Reader = Reader {
 };
 
 fn extract(resolver: &Resolver, rel: &str, src: &[u8], root: Node, ex: &mut Extraction) {
-    let mut w = Walk { rel, src, spans: Spans::new(rel), decls: Vec::new(), ex: std::mem::take(ex) };
+    let mut w = Walk { rel, src, spans: Spans::new(rel), decls: Vec::new(), ex };
     for (n, name) in top_level(root, src) {
         w.declare(n, name, None);
     }
-    references::write(root, &w.decls, &w.spans, src, rel, &mut w.ex);
-    modules::write(resolver.state::<Files>(), &w.decls, src, rel, &mut w.ex);
-    prose::cite(root, src, rel, &["string"], &w.spans, &mut w.ex);
-    *ex = w.ex;
+    references::write(root, &w.decls, &w.spans, src, rel, w.ex);
+    modules::write(resolver.state::<Files>(), &w.decls, src, rel, w.ex);
+    prose::cite(root, src, rel, &["string"], &w.spans, w.ex);
 }
 
 impl<'t> Walk<'t, '_> {
@@ -87,7 +86,7 @@ impl<'t> Walk<'t, '_> {
         let from = parent.map_or_else(|| format!("file:{}", self.rel), |(p, _)| p.to_string());
         let context = if exported(n, self.src) { "export" } else { "" };
         let body = prose::body(n, self.src, &["decorators"]);
-        prose::declare(&mut self.ex, self.rel, &from, &id, n, &body, context);
+        prose::declare(self.ex, self.rel, &from, &id, n, &body, context);
         self.spans.push(n, &id);
         if n.kind() == "resource_declaration" {
             for child in syntax::find_all(n, &["resource_declaration"]) {

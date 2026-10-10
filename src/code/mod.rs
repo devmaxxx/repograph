@@ -1,7 +1,7 @@
 pub mod bicep;
 pub mod blank;
 pub mod dart;
-pub mod dotnet;
+pub(crate) mod dotnet;
 pub mod graphql;
 pub mod hcl;
 pub mod imports;
@@ -16,7 +16,7 @@ pub mod shell;
 pub mod sql;
 pub mod swift;
 pub(crate) mod syntax;
-pub mod typescript;
+pub(crate) mod typescript;
 
 use crate::model::{Extraction, Extractor};
 

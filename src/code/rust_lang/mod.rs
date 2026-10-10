@@ -1,8 +1,8 @@
 //! Rust: one parse per file, the module tree read from paths and `Cargo.toml` rather than from
 //! other files' contents, so extracting a file never opens another.
 
-use crate::code::reader::{self, Collect, Extract, Manifest, Reader};
 use crate::code::imports::Resolver;
+use crate::code::reader::{self, Collect, Extract, Manifest, Reader};
 use crate::code::syntax::{field_text, text};
 use crate::model::Extraction;
 use tree_sitter::Node;

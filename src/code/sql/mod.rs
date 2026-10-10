@@ -9,10 +9,10 @@ mod cases;
 
 use std::collections::BTreeSet;
 
-use crate::code::reader::{self, Extract, Reader};
 use crate::code::imports::Resolver;
 use crate::code::index::Header;
 use crate::code::lang::{Family, Lang};
+use crate::code::reader::{self, Extract, Reader};
 use crate::model::{EdgeKind, Extraction, NodeKind};
 
 fn read(source: &str) -> Option<statements::Read> {

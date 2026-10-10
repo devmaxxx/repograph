@@ -8,9 +8,9 @@ pub mod resolve;
 #[cfg(test)]
 pub(crate) mod cases;
 
-use crate::code::reader::{self, Collect, Extract, Manifest, Reader};
 use crate::code::imports::Resolver;
-use crate::code::lang::{Family, Lang};
+use crate::code::lang::Lang;
+use crate::code::reader::{self, Collect, Extract, Manifest, Reader};
 use crate::code::syntax::{named, text};
 use crate::model::Extraction;
 use tree_sitter::Node;
@@ -34,10 +34,10 @@ pub struct Host<'a> {
 pub(crate) const READER: Reader = Reader {
     extract: Extract::Source(extract),
     header: Some(|rel, source| index::facts(rel, source).header()),
-    collect: Collect::Source(|r, rel, source| {
+    collect: Collect::Indexed(|r, rel, source| {
         let facts = index::facts(rel, source);
-        r.add_header(Family::DotNet, rel, &facts.header());
         r.state_mut::<index::DotNet>().add_cs(rel, &facts);
+        facts.header()
     }),
     state: Some(reader::state::<index::DotNet>),
     manifest: Some(Manifest { matches: |name| name.ends_with(".csproj"), read: |r, rel, text| r.state_mut::<index::DotNet>().add_project(rel, text) }),

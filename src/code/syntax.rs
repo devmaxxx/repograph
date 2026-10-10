@@ -88,3 +88,18 @@ pub(crate) fn last_row(n: Node) -> usize {
 pub(crate) fn text_span(n: Node) -> (u32, u32) {
     (n.start_position().row as u32 + 1, last_row(n) as u32 + 1)
 }
+
+/// A doc comment is capped so a class's essay does not drown the signature terms that make the
+/// symbol findable by name: BM25 documents are `id + label + body`.
+pub(crate) const DOC_CHARS: usize = 600;
+
+/// Comment text without its markers: the `/** … */` fences, a leading `*` per line, `//`.
+pub(crate) fn comment_text(raw: &str) -> String {
+    let inner = raw.trim().trim_start_matches("/**").trim_start_matches("/*").trim_end_matches("*/");
+    inner.lines()
+        .map(|l| l.trim().trim_start_matches("//").trim_start_matches('*').trim())
+        .filter(|l| !l.is_empty())
+        .collect::<Vec<_>>().join("\n")
+}
+
+pub(crate) fn cap(s: String, n: usize) -> String { s.chars().take(n).collect() }

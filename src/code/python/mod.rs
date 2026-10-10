@@ -1,8 +1,8 @@
 //! Python: one parse per file; module names are read from paths and project manifests, so
 //! extracting a file never opens another.
 
-use crate::code::reader::{self, Collect, Extract, Manifest, Reader};
 use crate::code::imports::Resolver;
+use crate::code::reader::{self, Collect, Extract, Manifest, Reader};
 use tree_sitter::Node;
 use crate::model::Extraction;
 

@@ -8,9 +8,9 @@ mod cases;
 
 pub(crate) use references::Modules;
 
-use crate::code::reader::{self, Collect, Extract, Reader};
 use crate::code::imports::Resolver;
 use crate::code::prose::{self, Spans};
+use crate::code::reader::{self, Collect, Extract, Reader};
 use crate::code::syntax;
 use crate::model::{EdgeKind, Extraction, Graph};
 use std::collections::BTreeSet;

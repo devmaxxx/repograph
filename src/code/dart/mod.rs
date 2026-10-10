@@ -9,8 +9,8 @@ use std::collections::BTreeSet;
 
 use tree_sitter::Node;
 
-use crate::code::reader::{self, Collect, Extract, Manifest, Reader};
 use crate::code::imports::Resolver;
+use crate::code::reader::{self, Collect, Extract, Manifest, Reader};
 use crate::code::syntax::{named, text};
 use crate::model::{EdgeKind, Extraction};
 use library::Libraries;

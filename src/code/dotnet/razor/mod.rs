@@ -14,16 +14,16 @@ mod cases;
 use std::collections::BTreeMap;
 use std::sync::OnceLock;
 
-use crate::code::reader::{self, Collect, Extract, Reader};
 use crate::code::dotnet::csharp::declarations::{self, join, Declared, TypeDecl, Using};
+use crate::code::dotnet::csharp::index::DotNet;
 use crate::code::dotnet::csharp::index::Part;
 use crate::code::dotnet::csharp::refs::first_segment;
 use crate::code::dotnet::csharp::resolve::Scope;
 use crate::code::dotnet::csharp::{self, Host};
 use crate::code::imports::Resolver;
 use crate::code::index::Header;
-use crate::code::dotnet::csharp::index::DotNet;
-use crate::code::lang::{Family, Lang};
+use crate::code::lang::Lang;
+use crate::code::reader::{self, Collect, Extract, Reader};
 use crate::model::{EdgeKind, Extraction, NodeKind};
 use blank::View;
 
@@ -274,10 +274,10 @@ pub fn members(rel: &str, source: &str, d: &Directives) -> BTreeMap<String, Opti
 pub(crate) const READER: Reader = Reader {
     extract: Extract::Source(extract),
     header: Some(header),
-    collect: Collect::Source(|r, rel, source| {
+    collect: Collect::Indexed(|r, rel, source| {
         let d = directives(source);
-        r.add_header(Family::DotNet, rel, &header_of(rel, &d));
         r.state_mut::<DotNet>().add_razor(rel, &d, members(rel, source, &d));
+        header_of(rel, &d)
     }),
     ..reader::NONE
 };

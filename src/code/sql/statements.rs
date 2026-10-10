@@ -4,11 +4,9 @@
 use tree_sitter::Node;
 
 use super::names;
-use crate::code::syntax::{child, descend, find, named, span, text};
+use crate::code::syntax::{child, descend, find, named, span, text, DOC_CHARS};
 use crate::model::EdgeKind;
 
-/// Capped as TypeScript's doc comments are, so a migration's essay does not drown its statement line.
-const DOC_CHARS: usize = 600;
 
 pub(super) struct Object {
     /// The id tail: `app/clients`.

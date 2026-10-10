@@ -7,10 +7,10 @@ mod paths;
 #[cfg(test)]
 mod cases;
 
-use crate::code::reader::{self, Collect, Extract, Reader};
 use crate::code::imports::Resolver;
 use crate::code::lang::Lang;
 use crate::code::prose::{self, Spans};
+use crate::code::reader::{self, Collect, Extract, Reader};
 use crate::code::syntax;
 use crate::model::{EdgeKind, Extraction, Graph};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};

@@ -1,5 +1,5 @@
-use crate::code::typescript::symbols::{is_top_level, literal_member, literal_of, member_name, parse};
 use crate::code::syntax::name_of;
+use crate::code::typescript::symbols::{is_top_level, literal_member, literal_of, member_name, parse};
 use crate::model::{EdgeKind, Extraction};
 use tree_sitter::Node;
 

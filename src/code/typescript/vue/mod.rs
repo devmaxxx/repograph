@@ -4,9 +4,9 @@ mod cases;
 use std::collections::BTreeSet;
 use std::ops::Range;
 
-use crate::code::reader::{self, Collect, Extract, Reader};
 use crate::code::imports::Resolver;
 use crate::code::lang::{file_node, Lang};
+use crate::code::reader::{self, Collect, Extract, Reader};
 use crate::model::{EdgeKind, Extraction, NodeKind};
 
 #[derive(Debug, Clone, PartialEq, Eq)]

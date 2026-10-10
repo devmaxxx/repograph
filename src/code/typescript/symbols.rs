@@ -1,5 +1,5 @@
 use crate::code::imports::Resolver;
-use crate::code::syntax::{name_of, text};
+use crate::code::syntax::{cap, comment_text, name_of, text, DOC_CHARS};
 use crate::model::{EdgeKind, Extraction, NodeKind};
 use tree_sitter::Node;
 
@@ -28,21 +28,8 @@ fn flatten(s: &str) -> String {
     s.lines().map(str::trim).filter(|l| !l.is_empty()).collect::<Vec<_>>().join(" ")
 }
 
-/// A doc comment is capped so a class's essay does not drown the signature terms that make
-/// the symbol findable by name; a file head gets twice that, being the module's own account.
-pub(crate) const DOC_CHARS: usize = 600;
-const HEAD_CHARS: usize = 1200;
-
-/// Comment text without its markers: the `/** … */` fences, a leading `*` per line, `//`.
-pub(crate) fn comment_text(raw: &str) -> String {
-    let inner = raw.trim().trim_start_matches("/**").trim_start_matches("/*").trim_end_matches("*/");
-    inner.lines()
-        .map(|l| l.trim().trim_start_matches("//").trim_start_matches('*').trim())
-        .filter(|l| !l.is_empty())
-        .collect::<Vec<_>>().join("\n")
-}
-
-pub(crate) fn cap(s: String, n: usize) -> String { s.chars().take(n).collect() }
+/// A file head gets twice a doc comment's cap, being the module's own account.
+const HEAD_CHARS: usize = 2 * DOC_CHARS;
 
 /// The comment block ending on the line before `n` starts. A comment left standing a blank
 /// line above is a section heading, not this declaration's account of itself, and stays out.

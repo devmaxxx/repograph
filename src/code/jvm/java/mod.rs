@@ -8,11 +8,11 @@ mod cases;
 
 use tree_sitter::Node;
 
-use crate::code::reader::{self, Extract, Reader};
 use crate::code::imports::Resolver;
 use crate::code::index::{Header, Nested, QualifiedIndex};
 use crate::code::jvm::{self, Scope};
 use crate::code::lang::{Family, Lang};
+use crate::code::reader::{self, Extract, Reader};
 use crate::code::syntax::{child, named, text};
 use crate::model::Extraction;
 

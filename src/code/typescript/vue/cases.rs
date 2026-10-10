@@ -1,8 +1,8 @@
 //! Vue single-file components on synthetic sources: which bytes are script, and what the
 //! TypeScript walk writes from them.
 
-use crate::code::imports::Resolver;
 use crate::code::CodeExtractor;
+use crate::code::imports::Resolver;
 use crate::config::Config;
 use crate::model::{EdgeKind, Extraction, Extractor};
 

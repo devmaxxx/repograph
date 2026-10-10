@@ -50,6 +50,9 @@ pub(crate) enum Collect {
     Path(fn(&mut Resolver, &str)),
     /// The function owns the file's whole contribution, its header included.
     Source(fn(&mut Resolver, &str, &str)),
+    /// The function adds the file's state and returns its header, read in the same pass, which then
+    /// goes into the family's index as `Header`'s would.
+    Indexed(fn(&mut Resolver, &str, &str) -> Header),
 }
 
 /// A build manifest the language reads, matched by file name; read only when the globs reach the

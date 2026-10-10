@@ -16,7 +16,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use tree_sitter::Node;
 
 use crate::code::index::{self, Admission, Arity, Call, QualifiedIndex, Reach, Supers};
-use crate::code::syntax::text;
+use crate::code::syntax::{self, text};
 use crate::model::{EdgeKind, Extraction};
 
 /// `Outer` for `Outer.Inner`, `""` for a top-level path.
@@ -40,11 +40,11 @@ pub(crate) fn body(n: Node, name: Node, src: &[u8], comments: &[&str]) -> String
         if !comments.contains(&prev.kind()) || prev.end_position().row + 1 < next.start_position().row {
             break;
         }
-        parts.push(crate::code::typescript::symbols::comment_text(text(prev, src)));
+        parts.push(syntax::comment_text(text(prev, src)));
         next = prev;
     }
     parts.reverse();
-    let doc = crate::code::typescript::symbols::cap(parts.join("\n"), crate::code::typescript::symbols::DOC_CHARS);
+    let doc = syntax::cap(parts.join("\n"), syntax::DOC_CHARS);
     let at = name.start_byte();
     let start = src[..at].iter().rposition(|&b| b == b'\n').map_or(0, |i| i + 1);
     let end = src[at..].iter().position(|&b| b == b'\n').map_or(src.len(), |i| at + i);
