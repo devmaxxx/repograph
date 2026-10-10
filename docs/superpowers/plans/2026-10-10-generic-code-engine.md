@@ -796,6 +796,27 @@ Step 0's gate adds:
 
 This step alone closes the three reviewer defects. About 1,200 lines of Rust are added, about 200 removed, plus about 250 lines of Python.
 
+**Step 0 as built.** Where the code differs from the text above, the code is the record:
+
+- `Spec::queries` is `Sources { decl, refs }`, two lists instead of one, because the two queries compile and run separately (§2.6).
+- `embed` returns `Embedded::{Unread, View(text, Lang), Empty}`: the view carries its own grammar, so `Spec::view` is not read by the front.
+- `Spec::legacy` holds each old `extract`, now `fn(&Resolver, &File, &mut Extraction)`. `read` takes it while a language has no `decl` query or is named in `REPOGRAPH_LEGACY`.
+- `collect` and `header` keep their `(rel, source)` signature until each port, since collect-time parses stay until then.
+- `detect` adds the shebang rule only. The walk's manifest and dotted-directory rules stay in `Resolver::new`.
+- `Resolver::new` reads an unnamed globbed file for its shebang and hands the same text to `collect`, so it is still read once.
+- Vue's `register` now records a `.vue` path that is not UTF-8, which the old collect skipped. No corpus file is affected.
+- `Lang::of` stays name-only in `changes.rs`, `path_family` and the resolver's sibling lookups. Only the front and the walk read shebangs.
+- TypeScript's `scan_tree` still writes the walk's own file node, which a test pins. `extract` drops it, because the front wrote the file node.
+- Three test helpers (`shell`, `hcl` and `bicep` `cases.rs`) call `front::read` in place of the removed `reader` entry. No assertion changed.
+- `Cargo.lock` gains the lock-only entries `borsh`, `borsh-derive`, `cfg_aliases`, `proc-macro-crate` and `toml_edit`, which come from `ast-grep-language`'s optional dependencies and are never built.
+- The fixture bench and `fixture-base` were not recorded in step 0. Writing them needs `~/bench/beauty-crm-test`, a separate worktree, so step 1 records them before its own reading.
+- The base readings, on the corpus with release builds:
+  - stripped binary 66,192,776 → 66,476,360 bytes (+0.28 MB);
+  - `tar -czf` archive 14,389,172 → 14,512,966 bytes (+0.12 MB);
+  - build median of three 1.349 s (parent) and 1.237 s (step 0);
+  - grammar compile (build-script run, release): PostgreSQL 7.3 s, Swift 4.1 s, C#, GraphQL, Python and Bicep 2.8 s each, TypeScript, Java and Dart 2.5 s each, Bash 2.2 s, Kotlin 1.9 s, HCL 1.1 s and Rust 1.0 s;
+  - the deepest file's time is not taken yet. Step 1 takes it with the fixture bench.
+
 **Step 1 · Shell.** S. Query ~50, Rust −250, hook ~150 kept.
 
 - **Queries:** `function_definition`; a command name as `@reference.calls`; `source` and `.` as `@import`; citations over `comment`, `string`, `raw_string` and `heredoc_body`.
