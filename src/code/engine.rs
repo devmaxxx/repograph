@@ -6,8 +6,9 @@
 //! first one the engine is reached only by its tests and by a spec that names queries.
 #![allow(dead_code)]
 
-use std::collections::{BTreeSet, VecDeque};
+use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
 use std::ops::Range;
+use std::sync::Arc;
 
 use streaming_iterator::StreamingIterator;
 use tree_sitter::{Node, QueryCursor, Tree};
@@ -76,12 +77,12 @@ pub(crate) struct Cite {
 
 /// Names bound locally, each with the scope that binds it, in the nvim locals convention.
 #[derive(Debug, Default, Clone)]
-pub(crate) struct Locals(Vec<(Range<usize>, String)>);
+pub(crate) struct Locals(HashMap<String, Vec<Range<usize>>>);
 
 impl Locals {
     /// Whether a local binding of `name` encloses `byte`.
     pub(crate) fn shadows(&self, name: &str, byte: usize) -> bool {
-        self.0.iter().any(|(scope, n)| n == name && scope.contains(&byte))
+        self.0.get(name).is_some_and(|scopes| scopes.iter().any(|scope| scope.contains(&byte)))
     }
 }
 
@@ -94,6 +95,10 @@ pub(crate) struct Facts {
     pub locals: Locals,
     /// Package and namespace lines, in file order.
     pub namespaces: Vec<String>,
+    /// Qualified names of `defs`, and of the exported ones, so a reference looks a name up instead of
+    /// scanning every definition.
+    declared: HashSet<String>,
+    exported: HashSet<String>,
 }
 
 impl Facts {
@@ -102,11 +107,11 @@ impl Facts {
     }
 
     fn declares(&self, qualified: &str) -> bool {
-        self.defs.iter().any(|d| d.qualified == qualified)
+        self.declared.contains(qualified)
     }
 
     fn declares_visible(&self, qualified: &str) -> bool {
-        self.defs.iter().any(|d| d.qualified == qualified && d.export)
+        self.exported.contains(qualified)
     }
 
     /// The innermost definition whose node holds `byte`.
@@ -175,12 +180,14 @@ pub(crate) fn facts(spec: &Spec, decl: &'static Compiled, refs: Option<&'static 
     let (root, src) = (tree.root_node(), file.src);
     let mut declared = Vec::new();
     matches_of(decl, root, src, file.rel, |pattern, caps| {
-        read_declaration(&caps, pattern, &mut declared);
+        read_declaration(&caps, pattern, src, &mut declared);
         if let Some(import) = read_import(&caps, &decl.metas[pattern], src) {
             facts.imports.push(import);
         }
     });
     qualify(spec, decl, file, declared, &mut facts);
+    facts.declared = facts.defs.iter().map(|d| d.qualified.clone()).collect();
+    facts.exported = facts.defs.iter().filter(|d| d.export).map(|d| d.qualified.clone()).collect();
     if let Some(refs) = refs {
         let (mut scopes, mut bound) = (Vec::new(), Vec::new());
         matches_of(refs, root, src, file.rel, |pattern, caps| {
@@ -197,7 +204,7 @@ pub(crate) fn facts(spec: &Spec, decl: &'static Compiled, refs: Option<&'static 
         });
         for (at, name) in bound {
             let scope = scopes.iter().filter(|s| s.contains(&at)).min_by_key(|s| s.len()).cloned().unwrap_or(0..src.len() + 1);
-            facts.locals.0.push((scope, name));
+            facts.locals.0.entry(name).or_default().push(scope);
         }
         let owners: Vec<_> = facts.refs.iter().map(|r| facts.owner(r.range.start)).collect();
         facts.refs.iter_mut().zip(owners).for_each(|(r, o)| r.source = o);
@@ -207,7 +214,7 @@ pub(crate) fn facts(spec: &Spec, decl: &'static Compiled, refs: Option<&'static 
     facts
 }
 
-fn read_declaration<'t>(caps: &[(Role, Node<'t>)], pattern: usize, out: &mut Vec<Declared<'t>>) {
+fn read_declaration<'t>(caps: &[(Role, Node<'t>)], pattern: usize, src: &str, out: &mut Vec<Declared<'t>>) {
     let declaring = caps.iter().find_map(|(role, node)| match role {
         Role::Definition(kind) => Some((Declaring::Def(*kind), *node)),
         Role::ScopeOwner => Some((Declaring::Owner, *node)),
@@ -228,7 +235,7 @@ fn read_declaration<'t>(caps: &[(Role, Node<'t>)], pattern: usize, out: &mut Vec
         doc: of(Role::Doc).next(),
     });
     let last = out.last_mut().expect("just pushed");
-    last.modifiers = caps.iter().filter(|(r, _)| *r == Role::Modifier).map(|(_, n)| n.kind().to_string()).collect();
+    last.modifiers = caps.iter().filter(|(r, _)| *r == Role::Modifier).map(|(_, n)| text(*n, src).trim().to_string()).collect();
 }
 
 fn read_import(caps: &[(Role, Node)], meta: &Meta, src: &str) -> Option<Import> {
@@ -442,11 +449,12 @@ fn imported_files(resolver: &Resolver, spec: &Spec, file: &File, facts: &Facts) 
     }).collect()
 }
 
-/// The files a reference may resolve into besides its own, by the spec's visibility.
-fn visible(resolver: &Resolver, spec: &Spec, file: &File, facts: &Facts, name: &str) -> Vec<String> {
+/// The files a reference may resolve into besides its own, by the spec's visibility, with what each
+/// declares. Computed once per file: it does not depend on the name, and `Family` has none.
+fn reach(resolver: &Resolver, spec: &Spec, file: &File, facts: &Facts) -> Vec<(String, Arc<Facts>)> {
     let rel = file.rel;
-    let mut out: Vec<String> = match spec.visibility {
-        Visibility::File => Vec::new(),
+    let files: Vec<String> = match spec.visibility {
+        Visibility::File | Visibility::Family => Vec::new(),
         Visibility::Imported { transitive } => {
             let mut seen = BTreeSet::from([rel.to_string()]);
             let mut queue: VecDeque<String> = imported_files(resolver, spec, file, facts).into();
@@ -464,25 +472,30 @@ fn visible(resolver: &Resolver, spec: &Spec, file: &File, facts: &Facts, name: &
             seen.into_iter().collect()
         }
         Visibility::Directory => resolver.siblings(rel, file.lang),
-        Visibility::Family => {
-            return resolver.index(file.lang.family())
-                .map(|index| index.files(name).into_iter().filter(|f| *f != rel).map(str::to_string).collect())
-                .unwrap_or_default();
-        }
     };
-    out.retain(|f| resolver.facts(f).is_some_and(|facts| facts.declares_visible(name)));
-    out
+    files.into_iter().filter_map(|f| resolver.facts(&f).map(|facts| (f, facts))).collect()
+}
+
+/// The files `reach` or the family's index holds a visible `name` in.
+fn visible(resolver: &Resolver, spec: &Spec, file: &File, reach: &[(String, Arc<Facts>)], name: &str) -> Vec<String> {
+    if let Visibility::Family = spec.visibility {
+        return resolver.index(file.lang.family())
+            .map(|index| index.files(name).into_iter().filter(|f| *f != file.rel).map(str::to_string).collect())
+            .unwrap_or_default();
+    }
+    reach.iter().filter(|(_, facts)| facts.declares_visible(name)).map(|(f, _)| f.clone()).collect()
 }
 
 /// Every reference with no receiver and of a kind no hook owns, resolved by name.
 pub(crate) fn resolve(resolver: &Resolver, spec: &Spec, file: &File, facts: &Facts, ex: &mut Extraction) {
     let rel = file.rel;
+    let reach = reach(resolver, spec, file, facts);
     for r in &facts.refs {
         if r.receiver.is_some() || spec.hooks.owns.contains(&r.edge) || facts.locals.shadows(&r.name, r.range.start) {
             continue;
         }
         let own = facts.declares(&r.name);
-        let others = visible(resolver, spec, file, facts, &r.name);
+        let others = visible(resolver, spec, file, &reach, &r.name);
         let targets: Vec<&str> = match spec.ambiguity {
             Ambiguity::OwnFirst if own => vec![rel],
             Ambiguity::OwnFirst => others.iter().map(String::as_str).collect(),

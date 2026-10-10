@@ -87,7 +87,8 @@ def diff(old_store, new_store, langs=None):
         for key in sorted(delta.elements()):
             source, _, kind, _, file = key
             lang = owner(source, {"file": file})
-            if kind in STRUCTURE or not (langs is None or lang in langs):
+            # A kind in neither list (`Links`, `Legacy`) is as much a regression as a lost declaration.
+            if kind in STRUCTURE or kind not in BOUNDED or not (langs is None or lang in langs):
                 count(lang, "R4")
             else:
                 (added if side == "added" else missed)[(lang, kind)].append(key)

@@ -1178,6 +1178,8 @@ fn a_file_no_table_names_is_read_by_the_interpreter_its_shebang_names() {
         ("#!/usr/bin/python2\n", Lang::Python),
         ("#!/usr/local/bin/python3\n", Lang::Python),
         ("#!/usr/bin/env python3\n", Lang::Python),
+        ("#!/usr/bin/python3.11\n", Lang::Python),
+        ("#!/usr/bin/env python3.9 -u\n", Lang::Python),
         ("#!/usr/bin/env PYTHONPATH=src python3 -u\n", Lang::Python),
         ("#!/usr/bin/env node\n", Lang::TypeScript),
         ("#!/usr/bin/env -S deno run --allow-read\n", Lang::TypeScript),

@@ -117,7 +117,8 @@ fn shebang(text: &str) -> Option<Lang> {
     }
     match program {
         "sh" | "bash" | "dash" | "zsh" => Some(Lang::Shell),
-        "python" | "python2" | "python3" => Some(Lang::Python),
+        // `python3.11` is as common as `python3`: the version is digits and dots after the name.
+        p if p.strip_prefix("python").is_some_and(|v| v.chars().all(|c| c.is_ascii_digit() || c == '.')) => Some(Lang::Python),
         "node" | "deno" | "bun" | "ts-node" => Some(Lang::TypeScript),
         _ => None,
     }

@@ -65,6 +65,11 @@ class Diff(unittest.TestCase):
         r = self.run_diff(nodes, edges)
         self.assertEqual(r["counts"]["sh"], {"R1": 1, "R4": 1})
 
+    def test_an_edge_kind_in_neither_list_is_r4_not_silently_dropped(self):
+        edges = BASE_EDGES + [edge("sym:a.sh::f", "sym:a.sh::g", "Legacy")]
+        r = self.run_diff(BASE_NODES, edges)
+        self.assertEqual(r["counts"]["sh"], {"R4": 1})
+
     def test_a_signature_change_is_r3_and_a_doc_change_is_accepted(self):
         nodes = [dict(n) for n in BASE_NODES]
         nodes[1]["body"] = "# Says hello.\nf() {"
