@@ -7,7 +7,6 @@ use super::names;
 use crate::code::syntax::{child, descend, find, named, span, text, DOC_CHARS};
 use crate::model::EdgeKind;
 
-
 pub(super) struct Object {
     /// The id tail: `app/clients`.
     pub name: String,
