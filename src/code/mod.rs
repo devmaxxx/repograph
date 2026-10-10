@@ -17,6 +17,7 @@ pub mod sql;
 pub mod swift;
 pub(crate) mod syntax;
 pub mod typescript;
+
 use crate::model::{Extraction, Extractor};
 
 pub struct CodeExtractor {
