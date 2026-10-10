@@ -40,7 +40,7 @@ impl CodeExtractor {
 impl Extractor for CodeExtractor {
     fn extract(&self, rel: &str, text: &str) -> Extraction {
         let ex = match lang::Lang::of(rel) {
-            Some(lang) => (reader::reader(lang).extract)(&self.resolver, rel, text),
+            Some(lang) => reader::extract(lang, &self.resolver, rel, text),
             None => {
                 let mut ex = Extraction::default();
                 lang::file_node(rel, &mut ex);

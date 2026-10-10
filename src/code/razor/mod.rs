@@ -14,7 +14,7 @@ mod cases;
 use std::collections::BTreeMap;
 use std::sync::OnceLock;
 
-use crate::code::reader::{self, Collect, Reader};
+use crate::code::reader::{self, Collect, Extract, Reader};
 use crate::code::csharp::declarations::{self, join, Declared, TypeDecl, Using};
 use crate::code::csharp::index::Part;
 use crate::code::csharp::refs::first_segment;
@@ -23,7 +23,7 @@ use crate::code::csharp::{self, Host};
 use crate::code::imports::Resolver;
 use crate::code::index::Header;
 use crate::code::csharp::index::DotNet;
-use crate::code::lang::{file_node, Family, Lang};
+use crate::code::lang::{Family, Lang};
 use crate::model::{EdgeKind, Extraction, NodeKind};
 use blank::View;
 
@@ -272,7 +272,7 @@ pub fn members(rel: &str, source: &str, d: &Directives) -> BTreeMap<String, Opti
 /// Razor's own directives feed both its header and `add_razor`, read once for both. Its state is
 /// the C# reader's.
 pub(crate) const READER: Reader = Reader {
-    extract,
+    extract: Extract::Source(extract),
     header: Some(header),
     collect: Collect::Source(|r, rel, source| {
         let d = directives(source);
@@ -282,11 +282,9 @@ pub(crate) const READER: Reader = Reader {
     ..reader::NONE
 };
 
-pub fn extract(resolver: &Resolver, rel: &str, source: &str) -> Extraction {
-    let mut ex = Extraction::default();
-    file_node(rel, &mut ex);
+fn extract(resolver: &Resolver, rel: &str, source: &str, ex: &mut Extraction) {
     let text = match blank::view(source) {
-        View::Unread(_) => return ex,
+        View::Unread(_) => return,
         View::Read(text) => Some(text),
         View::None => None,
     };
@@ -296,8 +294,8 @@ pub fn extract(resolver: &Resolver, rel: &str, source: &str) -> Extraction {
     usings.extend(d.usings.iter().cloned());
     let namespace = dotnet.razor_namespace(rel, d.namespace.as_deref());
     let Some(name) = component_name(rel) else {
-        view(resolver, rel, &d, &namespace, &usings, &mut ex);
-        return ex;
+        view(resolver, rel, &d, &namespace, &usings, ex);
+        return;
     };
     let file = format!("file:{rel}");
     let id = format!("sym:{rel}::{name}");
@@ -313,7 +311,7 @@ pub fn extract(resolver: &Resolver, rel: &str, source: &str) -> Extraction {
     }
     let host = Host { component: Some(&name), namespace: &namespace, usings: &usings, injected: &injected };
     let mut own = match text {
-        Some(text) => csharp::read(resolver, rel, &text, &host, &mut ex),
+        Some(text) => csharp::read(resolver, rel, &text, &host, ex),
         // Without a block the component still has injected members to resolve through.
         None => Declared {
             types: vec![TypeDecl {
@@ -338,10 +336,10 @@ pub fn extract(resolver: &Resolver, rel: &str, source: &str) -> Extraction {
     }
     let scope = Scope::new(rel, dotnet, &own, &host);
     for (t, _, _) in &d.injects {
-        imports(&scope, rel, t, &namespace, Some(&name), &mut ex);
+        imports(&scope, rel, t, &namespace, Some(&name), ex);
     }
     for (t, _, base) in &d.types {
-        imports(&scope, rel, t, &namespace, None, &mut ex);
+        imports(&scope, rel, t, &namespace, None, ex);
         // A base's name is every segment with its type arguments dropped: the first word of
         // `Outer<int>.InnerBase` is `Outer`, which is not the base.
         let name = base_name(t);
@@ -385,7 +383,6 @@ pub fn extract(resolver: &Resolver, rel: &str, source: &str) -> Extraction {
     for p in scope.full(&join(&namespace, &name)).into_iter().filter(|p| p.rel != rel) {
         ex.edge(&file, &format!("file:{}", p.rel), EdgeKind::Imports, first_segment(&p.local), rel);
     }
-    ex
 }
 
 /// The parameters a framework base declares, `None` for a base the repo cannot list. The interfaces

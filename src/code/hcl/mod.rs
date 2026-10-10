@@ -8,9 +8,8 @@ mod cases;
 
 pub(crate) use references::Modules;
 
-use crate::code::reader::{self, Collect, Reader};
+use crate::code::reader::{self, Collect, Extract, Reader};
 use crate::code::imports::Resolver;
-use crate::code::lang::{file_node, Lang};
 use crate::code::prose::{self, Spans};
 use crate::code::syntax;
 use crate::model::{EdgeKind, Extraction, Graph};
@@ -20,19 +19,14 @@ use tree_sitter::Node;
 /// HCL state: every directory's Terraform addresses and `.tf` files, so a reference and a module
 /// source resolve whatever order the walk reads files in.
 pub(crate) const READER: Reader = Reader {
-    extract,
+    extract: Extract::Tree(extract),
     collect: Collect::Source(|r, rel, source| r.state_mut::<Modules>().add(rel, source)),
     state: Some(reader::state::<Modules>),
     widen: Some(widen),
     ..reader::NONE
 };
 
-pub fn extract(resolver: &Resolver, rel: &str, source: &str) -> Extraction {
-    let mut ex = Extraction::default();
-    file_node(rel, &mut ex);
-    let src = source.as_bytes();
-    let Some(tree) = Lang::Hcl.parse(src) else { return ex };
-    let root = tree.root_node();
+fn extract(resolver: &Resolver, rel: &str, src: &[u8], root: Node, ex: &mut Extraction) {
     let terraform = rel.ends_with(".tf");
     let file = format!("file:{rel}");
     let mut spans = Spans::new(rel);
@@ -45,16 +39,15 @@ pub fn extract(resolver: &Resolver, rel: &str, source: &str) -> Extraction {
         spans.push(n, &id);
         // Aliased `provider "aws"` blocks share one address; the first block is the symbol.
         if own.insert(address) {
-            prose::declare(&mut ex, rel, &file, &id, n, &prose::body(n, src, &[]), context);
+            prose::declare(ex, rel, &file, &id, n, &prose::body(n, src, &[]), context);
         }
     }
     if terraform {
-        references::terraform(resolver.state::<Modules>(), root, &own, &spans, src, rel, &mut ex);
+        references::terraform(resolver.state::<Modules>(), root, &own, &spans, src, rel, ex);
     } else {
-        references::bake(root, &own, &spans, src, rel, &mut ex);
+        references::bake(root, &own, &spans, src, rel, ex);
     }
-    prose::cite(root, src, rel, &["string_lit", "quoted_template", "heredoc_template"], &spans, &mut ex);
-    ex
+    prose::cite(root, src, rel, &["string_lit", "quoted_template", "heredoc_template"], &spans, ex);
 }
 
 /// `apply_diff`'s widening for Terraform. A module is a directory, so a `.tf` file that changes or goes

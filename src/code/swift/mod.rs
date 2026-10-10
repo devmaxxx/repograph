@@ -5,9 +5,10 @@ mod cases;
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use crate::code::reader::{self, Collect, Reader};
+use crate::code::reader::{self, Collect, Extract, Reader};
 use crate::code::imports::Resolver;
-use crate::code::lang::{file_node, Lang};
+use crate::code::lang::Lang;
+use tree_sitter::Node;
 use crate::model::{EdgeKind, Extraction};
 
 /// The top-level type names one Swift file declares. `Resolver::collect` gathers them from every globbed
@@ -32,7 +33,7 @@ impl Types {
 }
 
 pub(crate) const READER: Reader = Reader {
-    extract,
+    extract: Extract::Tree(extract),
     collect: Collect::Source(|r, rel, source| {
         for name in types(source) {
             r.state_mut::<Types>().0.entry(name).or_default().insert(rel.to_string());
@@ -42,12 +43,8 @@ pub(crate) const READER: Reader = Reader {
     ..reader::NONE
 };
 
-pub fn extract(resolver: &Resolver, rel: &str, source: &str) -> Extraction {
-    let mut ex = Extraction::default();
-    file_node(rel, &mut ex);
-    let src = source.as_bytes();
-    let Some(tree) = Lang::Swift.parse(src) else { return ex };
-    let d = declarations::scan(tree.root_node(), rel, src, &mut ex);
+fn extract(resolver: &Resolver, rel: &str, src: &[u8], root: Node, ex: &mut Extraction) {
+    let d = declarations::scan(root, rel, src, ex);
     // A file's own declaration shadows the module's, and another file's `private` type is never seen,
     // because `types` leaves it out of the resolver.
     let files_of = |name: &str| if d.own.contains(name) { vec![rel.to_string()] } else { resolver.state::<Types>().files(name) };
@@ -66,5 +63,4 @@ pub fn extract(resolver: &Resolver, rel: &str, source: &str) -> Extraction {
             }
         }
     }
-    ex
 }

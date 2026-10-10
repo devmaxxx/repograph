@@ -9,7 +9,7 @@ const GLOBS: &[&str] = &["**/*.sh", "**/*.bash"];
 fn extract(files: &[(&str, &str)], rel: &str) -> Extraction {
     let (_dir, resolver) = repo(GLOBS, files);
     let text = files.iter().find(|(f, _)| *f == rel).map(|(_, t)| *t).unwrap();
-    super::extract(&resolver, rel, text)
+    crate::code::reader::extract(crate::code::lang::Lang::Shell, &resolver, rel, text)
 }
 
 const FUNCTIONS: &str = r#"#!/usr/bin/env bash

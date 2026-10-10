@@ -4,7 +4,7 @@ mod cases;
 use std::collections::BTreeSet;
 use std::ops::Range;
 
-use crate::code::reader::{self, Collect, Reader};
+use crate::code::reader::{self, Collect, Extract, Reader};
 use crate::code::imports::Resolver;
 use crate::code::lang::{file_node, Lang};
 use crate::model::{EdgeKind, Extraction, NodeKind};
@@ -162,7 +162,7 @@ pub(crate) fn component_name(rel: &str) -> Option<&str> {
 pub(crate) type Files = BTreeSet<String>;
 
 pub(crate) const READER: Reader = Reader {
-    extract,
+    extract: Extract::Whole(extract),
     collect: Collect::Path(|r, rel| {
         r.state_mut::<Files>().insert(rel.to_string());
     }),

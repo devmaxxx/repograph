@@ -10,9 +10,10 @@ use crate::code::imports::Resolver;
 use crate::code::index::Header;
 use crate::code::lang::Lang;
 use crate::model::{Extraction, Graph};
+use tree_sitter::Node;
 
 pub(crate) struct Reader {
-    pub extract: fn(&Resolver, &str, &str) -> Extraction,
+    pub extract: Extract,
     /// What a name-indexed family records of a file, from `(rel, source)`. A file whose header
     /// moves re-reads every other file of its family.
     pub header: Option<fn(&str, &str) -> Header>,
@@ -27,6 +28,17 @@ pub(crate) struct Reader {
     /// Whether files under a dotted directory are read. CI keeps its scripts under `.github/`,
     /// while a tsconfig or a manifest there stays out.
     pub dotted_dirs: bool,
+}
+
+pub(crate) enum Extract {
+    /// Parsed with the language's own grammar, the tree read into an extraction that already holds
+    /// the file node. A file the grammar cannot parse keeps the file node alone.
+    Tree(fn(&Resolver, &str, &[u8], Node, &mut Extraction)),
+    /// Reads the source itself, through blanking or a reader of its own, into an extraction that
+    /// already holds the file node.
+    Source(fn(&Resolver, &str, &str, &mut Extraction)),
+    /// Builds the whole extraction, file node included, in an order of its own.
+    Whole(fn(&Resolver, &str, &str) -> Extraction),
 }
 
 pub(crate) type Widen = fn(&[String], &[String], &Graph, &[String]) -> Vec<String>;
@@ -49,7 +61,7 @@ pub(crate) struct Manifest {
 
 /// The fields a reader leaves at their defaults, for `..NONE`.
 pub(crate) const NONE: Reader = Reader {
-    extract: files_only,
+    extract: Extract::Source(|_, _, _, _| {}),
     header: None,
     collect: Collect::Header,
     state: None,
@@ -58,9 +70,23 @@ pub(crate) const NONE: Reader = Reader {
     dotted_dirs: false,
 };
 
-fn files_only(_: &Resolver, rel: &str, _: &str) -> Extraction {
+/// What `lang`'s reader makes of one file.
+pub(crate) fn extract(lang: Lang, resolver: &Resolver, rel: &str, source: &str) -> Extraction {
     let mut ex = Extraction::default();
-    crate::code::lang::file_node(rel, &mut ex);
+    match reader(lang).extract {
+        Extract::Whole(read) => return read(resolver, rel, source),
+        Extract::Source(read) => {
+            crate::code::lang::file_node(rel, &mut ex);
+            read(resolver, rel, source, &mut ex);
+        }
+        Extract::Tree(read) => {
+            crate::code::lang::file_node(rel, &mut ex);
+            let src = source.as_bytes();
+            if let Some(tree) = lang.parse(src) {
+                read(resolver, rel, src, tree.root_node(), &mut ex);
+            }
+        }
+    }
     ex
 }
 

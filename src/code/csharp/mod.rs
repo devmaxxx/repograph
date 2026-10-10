@@ -8,9 +8,9 @@ pub mod resolve;
 #[cfg(test)]
 pub(crate) mod cases;
 
-use crate::code::reader::{self, Collect, Manifest, Reader};
+use crate::code::reader::{self, Collect, Extract, Manifest, Reader};
 use crate::code::imports::Resolver;
-use crate::code::lang::{file_node, Family, Lang};
+use crate::code::lang::{Family, Lang};
 use crate::code::syntax::{named, text};
 use crate::model::Extraction;
 use tree_sitter::Node;
@@ -32,7 +32,7 @@ pub struct Host<'a> {
 
 /// .NET state: C# types with their members, extension methods, projects and their `global using`s.
 pub(crate) const READER: Reader = Reader {
-    extract,
+    extract: Extract::Source(extract),
     header: Some(|rel, source| index::facts(rel, source).header()),
     collect: Collect::Source(|r, rel, source| {
         let facts = index::facts(rel, source);
@@ -46,11 +46,8 @@ pub(crate) const READER: Reader = Reader {
 
 /// Parses `source` once and runs both passes over it. A file the grammar cannot parse contributes
 /// only its file node — the extractor degrades to that rather than failing the file.
-pub fn extract(resolver: &Resolver, rel: &str, source: &str) -> Extraction {
-    let mut ex = Extraction::default();
-    file_node(rel, &mut ex);
-    read(resolver, rel, source, &Host::default(), &mut ex);
-    ex
+fn extract(resolver: &Resolver, rel: &str, source: &str, ex: &mut Extraction) {
+    read(resolver, rel, source, &Host::default(), ex);
 }
 
 /// Both passes over one parse, under `host`. Razor calls this on its blanked copy.

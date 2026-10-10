@@ -2,13 +2,13 @@
 //! is a refactor nothing measured.
 
 use crate::code::imports::Resolver;
-use crate::code::reader::{self, Reader};
+use crate::code::reader::{self, Extract, Reader};
 use crate::code::{calls, idrefs, symbols};
 use crate::model::Extraction;
 
 /// Its resolver state is the tsconfig and package.json `Resolver::new` reads, which no other
 /// language shares; its sources are the extractor's alone.
-pub(crate) const READER: Reader = Reader { extract, ..reader::NONE };
+pub(crate) const READER: Reader = Reader { extract: Extract::Whole(extract), ..reader::NONE };
 
 fn extract(resolver: &Resolver, rel: &str, text: &str) -> Extraction {
     let mut ex = symbols::scan(resolver, rel, text);

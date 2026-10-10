@@ -8,7 +8,7 @@ mod cases;
 
 use tree_sitter::Node;
 
-use crate::code::reader::{self, Reader};
+use crate::code::reader::{self, Extract, Reader};
 use crate::code::imports::Resolver;
 use crate::code::index::{Header, Nested, QualifiedIndex};
 use crate::code::jvm::{self, Scope};
@@ -19,20 +19,14 @@ use crate::model::Extraction;
 /// The comment kinds a Java doc block is read from.
 pub(crate) const COMMENTS: &[&str] = &["line_comment", "block_comment"];
 
-pub(crate) const READER: Reader = Reader { extract, header: Some(|_, source| header(source)), ..reader::NONE };
+pub(crate) const READER: Reader = Reader { extract: Extract::Tree(extract), header: Some(|_, source| header(source)), ..reader::NONE };
 
-/// One parse per file; every pass shares the tree.
-pub fn extract(resolver: &Resolver, rel: &str, source: &str) -> Extraction {
-    let mut ex = Extraction::default();
-    crate::code::lang::file_node(rel, &mut ex);
-    let src = source.as_bytes();
-    let Some(tree) = Lang::Java.parse(src) else { return ex };
-    let root = tree.root_node();
+fn extract(resolver: &Resolver, rel: &str, src: &[u8], root: Node, ex: &mut Extraction) {
     // A repository whose globs reach no JVM file has no index; every lookup then finds nothing.
     let empty = QualifiedIndex::default();
     let index = resolver.index(Family::Jvm).unwrap_or(&empty);
     let scope = scope(root, src);
-    let declared = declarations::scan(root, rel, src, &mut ex);
+    let declared = declarations::scan(root, rel, src, ex);
     let methods = jvm::Own {
         rel,
         types: &declared.types,
@@ -52,12 +46,11 @@ pub fn extract(resolver: &Resolver, rel: &str, source: &str) -> Extraction {
         member_types: true,
         past_unread: false,
     };
-    jvm::link(&declared.supers, index, &scope, rel, |at, w| methods.type_at(at, w), &mut ex);
-    jvm::decorate(&declared.annotations, rel, |at, w| methods.type_at(at, w), &mut ex);
+    jvm::link(&declared.supers, index, &scope, rel, |at, w| methods.type_at(at, w), ex);
+    jvm::decorate(&declared.annotations, rel, |at, w| methods.type_at(at, w), ex);
     let fields = jvm::Own { members: &declared.values, inheritable: &declared.open_values, statics: &jvm::NONE, kind: jvm::Kind::Field, ..methods };
     let member_types = std::cell::RefCell::default();
-    calls::scan(root, &calls::Ctx { methods, fields, src, d: &declared, member_types: &member_types }, &mut ex);
-    ex
+    calls::scan(root, &calls::Ctx { methods, fields, src, d: &declared, member_types: &member_types }, ex);
 }
 
 /// The package line, every top-level type and every nested path, for the JVM index and for the

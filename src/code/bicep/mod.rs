@@ -10,9 +10,8 @@ mod cases;
 
 pub(crate) use modules::Files;
 
-use crate::code::reader::{self, Collect, Reader};
+use crate::code::reader::{self, Collect, Extract, Reader};
 use crate::code::imports::Resolver;
-use crate::code::lang::{file_node, Lang};
 use crate::code::prose::{self, Spans};
 use crate::code::syntax;
 use crate::model::Extraction;
@@ -63,26 +62,21 @@ struct Walk<'t, 's> {
 /// Bicep state: every globbed `.bicep` file and its top-level names, so a module path resolves to
 /// a file that will have a node, and a module call to what that file declares.
 pub(crate) const READER: Reader = Reader {
-    extract,
+    extract: Extract::Tree(extract),
     collect: Collect::Source(|r, rel, source| r.state_mut::<Files>().add(rel, source)),
     state: Some(reader::state::<Files>),
     ..reader::NONE
 };
 
-pub fn extract(resolver: &Resolver, rel: &str, source: &str) -> Extraction {
-    let mut ex = Extraction::default();
-    file_node(rel, &mut ex);
-    let src = source.as_bytes();
-    let Some(tree) = Lang::Bicep.parse(src) else { return ex };
-    let root = tree.root_node();
-    let mut w = Walk { rel, src, spans: Spans::new(rel), decls: Vec::new(), ex };
+fn extract(resolver: &Resolver, rel: &str, src: &[u8], root: Node, ex: &mut Extraction) {
+    let mut w = Walk { rel, src, spans: Spans::new(rel), decls: Vec::new(), ex: std::mem::take(ex) };
     for (n, name) in top_level(root, src) {
         w.declare(n, name, None);
     }
     references::write(root, &w.decls, &w.spans, src, rel, &mut w.ex);
     modules::write(resolver.state::<Files>(), &w.decls, src, rel, &mut w.ex);
     prose::cite(root, src, rel, &["string"], &w.spans, &mut w.ex);
-    w.ex
+    *ex = w.ex;
 }
 
 impl<'t> Walk<'t, '_> {

@@ -9,32 +9,25 @@ use std::collections::BTreeSet;
 
 use tree_sitter::Node;
 
-use crate::code::reader::{self, Collect, Manifest, Reader};
+use crate::code::reader::{self, Collect, Extract, Manifest, Reader};
 use crate::code::imports::Resolver;
-use crate::code::lang::{file_node, Lang};
 use crate::code::syntax::{named, text};
 use crate::model::{EdgeKind, Extraction};
 use library::Libraries;
 
 /// Dart state: every globbed file's directives and top-level names, and every pubspec's package name.
 pub(crate) const READER: Reader = Reader {
-    extract,
+    extract: Extract::Tree(extract),
     collect: Collect::Source(|r, rel, source| r.state_mut::<Libraries>().collect(rel, source)),
     state: Some(reader::state::<Libraries>),
     manifest: Some(Manifest { matches: |name| name == "pubspec.yaml", read: |r, rel, text| r.state_mut::<Libraries>().collect_manifest(rel, text) }),
     ..reader::NONE
 };
 
-/// One parse per file; every pass reads the same tree.
-pub fn extract(resolver: &Resolver, rel: &str, source: &str) -> Extraction {
-    let mut ex = Extraction::default();
-    file_node(rel, &mut ex);
-    let src = source.as_bytes();
-    let Some(tree) = Lang::Dart.parse(src) else { return ex };
-    let root = tree.root_node();
-    let declared = declarations::scan(root, rel, src, &mut ex);
-    directives(resolver.state::<Libraries>(), rel, root, src, &mut ex);
-    calls::scan(root, resolver.state::<Libraries>(), rel, src, &declared, &mut ex);
+fn extract(resolver: &Resolver, rel: &str, src: &[u8], root: Node, ex: &mut Extraction) {
+    let declared = declarations::scan(root, rel, src, ex);
+    directives(resolver.state::<Libraries>(), rel, root, src, ex);
+    calls::scan(root, resolver.state::<Libraries>(), rel, src, &declared, ex);
     // Only a supertype that resolves is an edge. Every Flutter widget extends a class declared
     // outside the repository, and a same-file guess would name a symbol no file declares.
     for (from, name) in &declared.supers {
@@ -42,7 +35,6 @@ pub fn extract(resolver: &Resolver, rel: &str, source: &str) -> Extraction {
             ex.edge(from, &format!("sym:{f}::{name}"), EdgeKind::Extends, "", rel);
         }
     }
-    ex
 }
 
 #[derive(Default)]
