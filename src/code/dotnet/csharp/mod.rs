@@ -9,8 +9,8 @@ pub mod resolve;
 pub(crate) mod cases;
 
 use crate::code::imports::Resolver;
-use crate::code::lang::Lang;
-use crate::code::reader::{self, Collect, Extract, Manifest, Reader};
+use crate::code::lang::{file_node, Lang};
+use crate::code::reader::{self, Manifest, Reader};
 use crate::code::syntax::{named, text};
 use crate::model::Extraction;
 use tree_sitter::Node;
@@ -32,12 +32,12 @@ pub struct Host<'a> {
 
 /// .NET state: C# types with their members, extension methods, projects and their `global using`s.
 pub(crate) const READER: Reader = Reader {
-    extract: Extract::Source(extract),
+    extract,
     header: Some(|rel, source| index::facts(rel, source).header()),
-    collect: Collect::Indexed(|r, rel, source| {
+    collect: Some(|r, rel, source| {
         let facts = index::facts(rel, source);
         r.state_mut::<index::DotNet>().add_cs(rel, &facts);
-        facts.header()
+        Some(facts.header())
     }),
     state: Some(reader::state::<index::DotNet>),
     manifest: Some(Manifest { matches: |name| name.ends_with(".csproj"), read: |r, rel, text| r.state_mut::<index::DotNet>().add_project(rel, text) }),
@@ -47,6 +47,7 @@ pub(crate) const READER: Reader = Reader {
 /// Parses `source` once and runs both passes over it. A file the grammar cannot parse contributes
 /// only its file node — the extractor degrades to that rather than failing the file.
 fn extract(resolver: &Resolver, rel: &str, source: &str, ex: &mut Extraction) {
+    file_node(rel, ex);
     read(resolver, rel, source, &Host::default(), ex);
 }
 

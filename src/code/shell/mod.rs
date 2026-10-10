@@ -10,7 +10,7 @@ mod cases;
 use crate::code::imports::Resolver;
 use crate::code::lang::Lang;
 use crate::code::prose::{self, Spans};
-use crate::code::reader::{self, Collect, Extract, Reader};
+use crate::code::reader::{self, Reader};
 use crate::code::syntax;
 use crate::model::{EdgeKind, Extraction, Graph};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
@@ -19,15 +19,20 @@ use tree_sitter::Node;
 /// Shell state: every globbed script's functions and `source` lines, so a call resolves through
 /// what a script sources whatever order the walk reads files in.
 pub(crate) const READER: Reader = Reader {
-    extract: Extract::Tree(extract),
-    collect: Collect::Source(|r, rel, source| r.state_mut::<Scripts>().add(rel, source)),
+    extract,
+    collect: Some(|r, rel, source| {
+        r.state_mut::<Scripts>().add(rel, source);
+        None
+    }),
     state: Some(reader::state::<Scripts>),
     widen: Some(widen),
     dotted_dirs: true,
     ..reader::NONE
 };
 
-fn extract(resolver: &Resolver, rel: &str, src: &[u8], root: Node, ex: &mut Extraction) {
+fn extract(resolver: &Resolver, rel: &str, source: &str, ex: &mut Extraction) {
+    let Some(tree) = reader::open(Lang::Shell, rel, source, ex) else { return };
+    let (src, root) = (source.as_bytes(), tree.root_node());
     let file = format!("file:{rel}");
     let mut spans = Spans::new(rel);
     for f in functions(root) {

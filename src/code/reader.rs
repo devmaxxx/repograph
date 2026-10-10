@@ -10,15 +10,18 @@ use crate::code::imports::Resolver;
 use crate::code::index::Header;
 use crate::code::lang::Lang;
 use crate::model::{Extraction, Graph};
-use tree_sitter::Node;
 
 pub(crate) struct Reader {
+    /// Reads one file into an empty extraction: the file node, through `open` for a language read by
+    /// its grammar alone, then what the file declares and uses.
     pub extract: Extract,
     /// What a name-indexed family records of a file, from `(rel, source)`. A file whose header
     /// moves re-reads every other file of its family.
     pub header: Option<fn(&str, &str) -> Header>,
-    /// What one globbed file adds to the resolver before any file is extracted.
-    pub collect: Collect,
+    /// What one globbed file adds to the resolver before any file is extracted, and the header it
+    /// read, if any, which goes into the family's index. `None` reads `header` alone, and a reader
+    /// with neither never has its files opened.
+    pub collect: Option<Collect>,
     /// The resolver's state for this language, created empty for every reader that has one.
     pub state: Option<fn() -> Box<dyn Any + Send + Sync>>,
     pub manifest: Option<Manifest>,
@@ -30,30 +33,11 @@ pub(crate) struct Reader {
     pub dotted_dirs: bool,
 }
 
-pub(crate) enum Extract {
-    /// Parsed with the language's own grammar, the tree read into an extraction that already holds
-    /// the file node. A file the grammar cannot parse keeps the file node alone.
-    Tree(fn(&Resolver, &str, &[u8], Node, &mut Extraction)),
-    /// Reads the source itself, through blanking or a reader of its own, into an extraction that
-    /// already holds the file node.
-    Source(fn(&Resolver, &str, &str, &mut Extraction)),
-    /// Builds the whole extraction, file node included, in an order of its own.
-    Whole(fn(&Resolver, &str, &str) -> Extraction),
-}
+pub(crate) type Extract = fn(&Resolver, &str, &str, &mut Extraction);
+
+pub(crate) type Collect = fn(&mut Resolver, &str, &str) -> Option<Header>;
 
 pub(crate) type Widen = fn(&[String], &[String], &Graph, &[String]) -> Vec<String>;
-
-pub(crate) enum Collect {
-    /// The header, when there is one, goes into the family's index and nothing else is kept.
-    Header,
-    /// Only the path is kept; the file is not opened.
-    Path(fn(&mut Resolver, &str)),
-    /// The function owns the file's whole contribution, its header included.
-    Source(fn(&mut Resolver, &str, &str)),
-    /// The function adds the file's state and returns its header, read in the same pass, which then
-    /// goes into the family's index as `Header`'s would.
-    Indexed(fn(&mut Resolver, &str, &str) -> Header),
-}
 
 /// A build manifest the language reads, matched by file name; read only when the globs reach the
 /// language's family.
@@ -65,15 +49,15 @@ pub(crate) struct Manifest {
 impl Reader {
     /// Whether the resolver's walk opens this language's files before extraction.
     pub fn collects(&self) -> bool {
-        self.header.is_some() || !matches!(self.collect, Collect::Header)
+        self.header.is_some() || self.collect.is_some()
     }
 }
 
 /// The fields a reader leaves at their defaults, for `..NONE`.
 pub(crate) const NONE: Reader = Reader {
-    extract: Extract::Source(|_, _, _, _| {}),
+    extract: |_, rel, _, ex| crate::code::lang::file_node(rel, ex),
     header: None,
-    collect: Collect::Header,
+    collect: None,
     state: None,
     manifest: None,
     widen: None,
@@ -83,21 +67,15 @@ pub(crate) const NONE: Reader = Reader {
 /// What `lang`'s reader makes of one file.
 pub(crate) fn extract(lang: Lang, resolver: &Resolver, rel: &str, source: &str) -> Extraction {
     let mut ex = Extraction::default();
-    match reader(lang).extract {
-        Extract::Whole(read) => return read(resolver, rel, source),
-        Extract::Source(read) => {
-            crate::code::lang::file_node(rel, &mut ex);
-            read(resolver, rel, source, &mut ex);
-        }
-        Extract::Tree(read) => {
-            crate::code::lang::file_node(rel, &mut ex);
-            let src = source.as_bytes();
-            if let Some(tree) = lang.parse(src) {
-                read(resolver, rel, src, tree.root_node(), &mut ex);
-            }
-        }
-    }
+    (reader(lang).extract)(resolver, rel, source, &mut ex);
     ex
+}
+
+/// The file node, then the file parsed with `lang`'s grammar; `None` when the grammar cannot read
+/// it, and the file keeps its file node alone.
+pub(crate) fn open(lang: Lang, rel: &str, source: &str, ex: &mut Extraction) -> Option<tree_sitter::Tree> {
+    crate::code::lang::file_node(rel, ex);
+    lang.parse(source.as_bytes())
 }
 
 pub(crate) fn reader(lang: Lang) -> &'static Reader {

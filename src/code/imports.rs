@@ -6,7 +6,7 @@ use std::sync::OnceLock;
 
 use crate::code::index::{Header, QualifiedIndex};
 use crate::code::lang::{Family, Lang};
-use crate::code::reader::{reader, Collect, Manifest, States};
+use crate::code::reader::{reader, Manifest, States};
 use crate::code::typescript::vue;
 
 /// (directory the tsconfig lives in, directory its targets are relative to — `baseUrl` —
@@ -239,10 +239,6 @@ impl Resolver {
             }
         }
         for (lang, rel, path) in &sources {
-            if let Collect::Path(add) = reader(*lang).collect {
-                add(&mut resolver, rel);
-                continue;
-            }
             // Not UTF-8 is a binary, which the extractor skips as well.
             if let Ok(text) = std::fs::read_to_string(path) {
                 resolver.collect(*lang, rel, &text);
@@ -272,17 +268,12 @@ impl Resolver {
     /// What one globbed source contributes before any file is extracted.
     fn collect(&mut self, lang: Lang, rel: &str, source: &str) {
         let r = reader(lang);
-        match r.collect {
-            Collect::Source(add) => add(self, rel, source),
-            Collect::Indexed(add) => {
-                let header = add(self, rel, source);
-                self.add_header(lang.family(), rel, &header);
-            }
-            Collect::Header | Collect::Path(_) => {
-                if let Some(header) = r.header {
-                    self.add_header(lang.family(), rel, &header(rel, source));
-                }
-            }
+        let header = match r.collect {
+            Some(add) => add(self, rel, source),
+            None => r.header.map(|header| header(rel, source)),
+        };
+        if let Some(header) = header {
+            self.add_header(lang.family(), rel, &header);
         }
     }
 

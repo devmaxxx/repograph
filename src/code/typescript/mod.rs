@@ -8,15 +8,16 @@ pub mod symbols;
 pub mod vue;
 
 use crate::code::imports::Resolver;
-use crate::code::reader::{self, Extract, Reader};
+use crate::code::reader::{self, Reader};
 use crate::model::Extraction;
 
 /// Its resolver state is the tsconfig and package.json `Resolver::new` reads, which no other
 /// language shares; its sources are the extractor's alone.
-pub(crate) const READER: Reader = Reader { extract: Extract::Whole(extract), ..reader::NONE };
+pub(crate) const READER: Reader = Reader { extract, ..reader::NONE };
 
-fn extract(resolver: &Resolver, rel: &str, text: &str) -> Extraction {
-    let mut ex = symbols::scan(resolver, rel, text);
+fn extract(resolver: &Resolver, rel: &str, text: &str, ex: &mut Extraction) {
+    // The walk writes the file node itself, with the file head as its body.
+    *ex = symbols::scan(resolver, rel, text);
     // Top-level names this file declares; a member id carries a dot and is not one.
     let prefix = format!("sym:{rel}::");
     let locals: std::collections::BTreeSet<String> = ex.nodes.iter()
@@ -24,7 +25,6 @@ fn extract(resolver: &Resolver, rel: &str, text: &str) -> Extraction {
         .filter(|n| !n.contains('.'))
         .map(str::to_string)
         .collect();
-    calls::scan(resolver, rel, text, &locals, &mut ex);
-    idrefs::scan(rel, text, &mut ex);
-    ex
+    calls::scan(resolver, rel, text, &locals, ex);
+    idrefs::scan(rel, text, ex);
 }

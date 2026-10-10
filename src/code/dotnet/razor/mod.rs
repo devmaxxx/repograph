@@ -22,8 +22,8 @@ use crate::code::dotnet::csharp::resolve::Scope;
 use crate::code::dotnet::csharp::{self, Host};
 use crate::code::imports::Resolver;
 use crate::code::index::Header;
-use crate::code::lang::Lang;
-use crate::code::reader::{self, Collect, Extract, Reader};
+use crate::code::lang::{file_node, Lang};
+use crate::code::reader::{self, Reader};
 use crate::model::{EdgeKind, Extraction, NodeKind};
 use blank::View;
 
@@ -272,17 +272,18 @@ pub fn members(rel: &str, source: &str, d: &Directives) -> BTreeMap<String, Opti
 /// Razor's own directives feed both its header and `add_razor`, read once for both. Its state is
 /// the C# reader's.
 pub(crate) const READER: Reader = Reader {
-    extract: Extract::Source(extract),
+    extract,
     header: Some(header),
-    collect: Collect::Indexed(|r, rel, source| {
+    collect: Some(|r, rel, source| {
         let d = directives(source);
         r.state_mut::<DotNet>().add_razor(rel, &d, members(rel, source, &d));
-        header_of(rel, &d)
+        Some(header_of(rel, &d))
     }),
     ..reader::NONE
 };
 
 fn extract(resolver: &Resolver, rel: &str, source: &str, ex: &mut Extraction) {
+    file_node(rel, ex);
     let text = match blank::view(source) {
         View::Unread(_) => return,
         View::Read(text) => Some(text),

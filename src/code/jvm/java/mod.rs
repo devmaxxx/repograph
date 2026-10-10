@@ -12,16 +12,18 @@ use crate::code::imports::Resolver;
 use crate::code::index::{Header, Nested, QualifiedIndex};
 use crate::code::jvm::{self, Scope};
 use crate::code::lang::{Family, Lang};
-use crate::code::reader::{self, Extract, Reader};
+use crate::code::reader::{self, Reader};
 use crate::code::syntax::{child, named, text};
 use crate::model::Extraction;
 
 /// The comment kinds a Java doc block is read from.
 pub(crate) const COMMENTS: &[&str] = &["line_comment", "block_comment"];
 
-pub(crate) const READER: Reader = Reader { extract: Extract::Tree(extract), header: Some(|_, source| header(source)), ..reader::NONE };
+pub(crate) const READER: Reader = Reader { extract, header: Some(|_, source| header(source)), ..reader::NONE };
 
-fn extract(resolver: &Resolver, rel: &str, src: &[u8], root: Node, ex: &mut Extraction) {
+fn extract(resolver: &Resolver, rel: &str, source: &str, ex: &mut Extraction) {
+    let Some(tree) = reader::open(Lang::Java, rel, source, ex) else { return };
+    let (src, root) = (source.as_bytes(), tree.root_node());
     // A repository whose globs reach no JVM file has no index; every lookup then finds nothing.
     let empty = QualifiedIndex::default();
     let index = resolver.index(Family::Jvm).unwrap_or(&empty);

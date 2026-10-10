@@ -9,8 +9,9 @@ mod cases;
 pub(crate) use references::Modules;
 
 use crate::code::imports::Resolver;
+use crate::code::lang::Lang;
 use crate::code::prose::{self, Spans};
-use crate::code::reader::{self, Collect, Extract, Reader};
+use crate::code::reader::{self, Reader};
 use crate::code::syntax;
 use crate::model::{EdgeKind, Extraction, Graph};
 use std::collections::BTreeSet;
@@ -19,14 +20,19 @@ use tree_sitter::Node;
 /// HCL state: every directory's Terraform addresses and `.tf` files, so a reference and a module
 /// source resolve whatever order the walk reads files in.
 pub(crate) const READER: Reader = Reader {
-    extract: Extract::Tree(extract),
-    collect: Collect::Source(|r, rel, source| r.state_mut::<Modules>().add(rel, source)),
+    extract,
+    collect: Some(|r, rel, source| {
+        r.state_mut::<Modules>().add(rel, source);
+        None
+    }),
     state: Some(reader::state::<Modules>),
     widen: Some(widen),
     ..reader::NONE
 };
 
-fn extract(resolver: &Resolver, rel: &str, src: &[u8], root: Node, ex: &mut Extraction) {
+fn extract(resolver: &Resolver, rel: &str, source: &str, ex: &mut Extraction) {
+    let Some(tree) = reader::open(Lang::Hcl, rel, source, ex) else { return };
+    let (src, root) = (source.as_bytes(), tree.root_node());
     let terraform = rel.ends_with(".tf");
     let file = format!("file:{rel}");
     let mut spans = Spans::new(rel);
