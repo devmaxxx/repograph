@@ -149,11 +149,13 @@ name, with no symbol of its own to fall back to, prints `?` in place of its `pat
 spans and unions the callers of every touched symbol into one list and one risk line. Run it
 before committing; `--base main` before opening a pull request. Code outside every symbol —
 an import line, a top-level statement — is reported on the file and walks every symbol the file
-declares; a hunk of only comments and blank lines there is reported on the file and walks
-nothing; a hunk in a file the graph does not index at all — a `.kt`, a `.sql`, a lockfile — is
-listed as that file with `not indexed` in place of a span, so the answer says the file changed
-rather than nothing; what is being changed is never listed as affected by itself. Deleted files do not
-appear: their symbols are gone from the graph, and their former callers surface as dangling
+declares; a hunk of only line comments, block comment openers and closers and blank lines
+there is reported on the file and walks nothing (anything that might be code, a `* `
+continuation line of a block comment or a comment that steers a tool such as
+`// @ts-nocheck`, is walked as code); a hunk in a file the graph does not index at all — a
+`.kt`, a `.sql`, a lockfile — is listed as that file with `not indexed` in place of a span, so
+the answer says the file changed rather than nothing; what is being changed is never listed as
+affected by itself. Deleted files do not appear: their symbols are gone from the graph, and their former callers surface as dangling
 edges in `verify`.
 
 ```
