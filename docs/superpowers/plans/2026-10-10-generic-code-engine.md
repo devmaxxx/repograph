@@ -1268,7 +1268,7 @@ Later on 2026-10-10 Max took two more decisions, recorded in §2.8: `ast-grep-la
 
 Open, for Max:
 
-7. **Read ast-grep's extra extensions?** Step 0 refuses 18 extensions that ast-grep names and `Lang::of` does not (§2.8). The refusals keep today's answer, which two cases pin for `.kts` and `.tfvars`. None of the 18 occurs in the corpus, and only `.kts` occurs in the fixture (14 Gradle scripts, outside the default globs). Reading any of them is a widening:
+7. **Decided 2026-10-10: ast-grep's extra extensions stay unread in this plan.** Was: read ast-grep's extra extensions? Step 0 refuses 18 extensions that ast-grep names and `Lang::of` does not (§2.8). The refusals keep today's answer, which two cases pin for `.kts` and `.tfvars`. None of the 18 occurs in the corpus, and only `.kts` occurs in the fixture (14 Gradle scripts, outside the default globs). Reading any of them is a widening:
    - `.zsh`, `.ksh` and `.bats` are close to Bash;
    - `.pyi` stubs would declare a second copy of every name their `.py` module declares;
    - `.kts` files are Gradle scripts, which the 0.6.0 spec does not read;
@@ -1277,4 +1277,4 @@ Open, for Max:
    - `.bzl` and `.bazel` are Starlark.
 
    Recommendation: not in this plan. Each one is a later widening with its own case.
-8. **Do the new languages join the default globs at step 24?** Joining means every user's next build reads those files, and GRAMMAR moves once. Staying opt-in means a user names the globs, as with Razor. Recommendation: join for each language whose step passed. None of our repositories holds these files, so the fixture and the corpora do not move, and the risk falls only on users who have them. For those users a file node with symbols is better than a bare file node.
+8. **Decided 2026-10-10: each new language whose step passed joins the default globs at step 24.** Was: do the new languages join the default globs at step 24? Joining means every user's next build reads those files, and GRAMMAR moves once. Staying opt-in means a user names the globs, as with Razor. Recommendation: join for each language whose step passed. None of our repositories holds these files, so the fixture and the corpora do not move, and the risk falls only on users who have them. For those users a file node with symbols is better than a bare file node.
