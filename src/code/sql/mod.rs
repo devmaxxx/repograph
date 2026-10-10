@@ -9,6 +9,7 @@ mod cases;
 
 use std::collections::BTreeSet;
 
+use crate::code::reader::{self, Reader};
 use crate::code::imports::Resolver;
 use crate::code::index::Header;
 use crate::code::lang::{file_node, Family, Lang};
@@ -29,6 +30,8 @@ pub fn header(source: &str) -> Header {
     let top = read(source).map(|r| r.objects.into_iter().map(|o| o.name).collect()).unwrap_or_default();
     Header { top, ..Header::default() }
 }
+
+pub(crate) const READER: Reader = Reader { extract, header: Some(|_, source| header(source)), ..reader::NONE };
 
 /// The file node, one `sym:<rel>::<schema>/<object>` per object the file creates or attaches to (declared by the
 /// file, context `export`), and one `<table>.<member>` per column, trigger, policy and named index (declared by

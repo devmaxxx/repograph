@@ -4,6 +4,7 @@ mod cases;
 use std::collections::BTreeSet;
 use std::ops::Range;
 
+use crate::code::reader::{self, Collect, Reader};
 use crate::code::imports::Resolver;
 use crate::code::lang::{file_node, Lang};
 use crate::model::{EdgeKind, Extraction, NodeKind};
@@ -156,6 +157,18 @@ pub(crate) fn component_name(rel: &str) -> Option<&str> {
     let path = rel.strip_suffix(".vue")?;
     Some(path.rsplit('/').next().unwrap_or(path))
 }
+
+/// Every `.vue` file the walk globbed: a TypeScript import of one is an edge to a node only then.
+pub(crate) type Files = BTreeSet<String>;
+
+pub(crate) const READER: Reader = Reader {
+    extract,
+    collect: Collect::Path(|r, rel| {
+        r.state_mut::<Files>().insert(rel.to_string());
+    }),
+    state: Some(reader::state::<Files>),
+    ..reader::NONE
+};
 
 pub fn extract(resolver: &Resolver, rel: &str, source: &str) -> Extraction {
     let stem = component_name(rel).unwrap_or(rel);

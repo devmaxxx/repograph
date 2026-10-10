@@ -338,7 +338,7 @@ fn a_bom_before_a_first_line_directive_is_not_part_of_it() {
 #[test]
 fn a_component_is_a_symbol_in_the_namespace_the_razor_compiler_gives_it() {
     let repo = Repo::new(WEB);
-    assert_eq!(repo.resolver().dotnet().razor_namespace("Web/Pages/Checkout.razor", None), "Shop.Web.Pages");
+    assert_eq!(repo.resolver().state::<crate::code::csharp::index::DotNet>().razor_namespace("Web/Pages/Checkout.razor", None), "Shop.Web.Pages");
     let ex = repo.extract("Web/Pages/Checkout.razor");
     let f = "sym:Web/Pages/Checkout.razor::";
     for id in ["Checkout", "Checkout.Payments", "Checkout.total", "Checkout.Pay"] {
@@ -438,8 +438,8 @@ fn a_component_namespace_is_sanitised_as_the_razor_compiler_does() {
         ("Site/Area/Deep/Page.razor", "<h3/>\n"),
     ]);
     let r = repo.resolver();
-    assert_eq!(r.dotnet().razor_namespace("App/2024/Admin Pages/Report.razor", None), "My_App._2024.Admin_Pages");
-    assert_eq!(r.dotnet().razor_namespace("Site/Area/Deep/Page.razor", None), "Shop.Named.Deep", "an imports file's @namespace plus the folders below it");
+    assert_eq!(r.state::<crate::code::csharp::index::DotNet>().razor_namespace("App/2024/Admin Pages/Report.razor", None), "My_App._2024.Admin_Pages");
+    assert_eq!(r.state::<crate::code::csharp::index::DotNet>().razor_namespace("Site/Area/Deep/Page.razor", None), "Shop.Named.Deep", "an imports file's @namespace plus the folders below it");
 }
 
 #[test]
@@ -450,7 +450,7 @@ fn an_imports_file_above_the_project_does_not_reach_its_components() {
         ("Payments/IPaymentGateway.cs", "namespace Shop.Payments;\npublic interface IPaymentGateway { void Charge(int amount); }\n"),
         ("Web/Pages/Pay.razor", "@inject IPaymentGateway Payments\n"),
     ]);
-    assert_eq!(repo.resolver().dotnet().razor_namespace("Web/Pages/Pay.razor", None), "Shop.Web.Pages");
+    assert_eq!(repo.resolver().state::<crate::code::csharp::index::DotNet>().razor_namespace("Web/Pages/Pay.razor", None), "Shop.Web.Pages");
     let ex = repo.extract("Web/Pages/Pay.razor");
     let imports = edges(&ex, EdgeKind::Imports);
     assert!(imports.is_empty(), "{imports:?}");
@@ -542,7 +542,7 @@ fn a_view_reads_its_view_imports_namespace_and_usings() {
         ("Web/Pages/Index.cshtml", "@using Shop.Admin\n@model IndexModel\n@inject IPaymentGateway Payments\n"),
     ]);
     let repo = Repo::new(&files);
-    assert_eq!(repo.resolver().dotnet().razor_namespace("Web/Pages/Index.cshtml", None), "Shop.Web.Pages");
+    assert_eq!(repo.resolver().state::<crate::code::csharp::index::DotNet>().razor_namespace("Web/Pages/Index.cshtml", None), "Shop.Web.Pages");
     let ex = repo.extract("Web/Pages/Index.cshtml");
     let imports = edges(&ex, EdgeKind::Imports);
     assert_eq!(imports, vec![

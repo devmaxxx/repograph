@@ -8,8 +8,9 @@ pub mod resolve;
 #[cfg(test)]
 pub(crate) mod cases;
 
+use crate::code::reader::{self, Collect, Manifest, Reader};
 use crate::code::imports::Resolver;
-use crate::code::lang::{file_node, Lang};
+use crate::code::lang::{file_node, Family, Lang};
 use crate::code::syntax::{named, text};
 use crate::model::Extraction;
 use tree_sitter::Node;
@@ -28,6 +29,20 @@ pub struct Host<'a> {
     /// `@inject T Name` as (name, type head): members of the component with a declared type.
     pub injected: &'a [(String, String)],
 }
+
+/// .NET state: C# types with their members, extension methods, projects and their `global using`s.
+pub(crate) const READER: Reader = Reader {
+    extract,
+    header: Some(|rel, source| index::facts(rel, source).header()),
+    collect: Collect::Source(|r, rel, source| {
+        let facts = index::facts(rel, source);
+        r.add_header(Family::DotNet, rel, &facts.header());
+        r.state_mut::<index::DotNet>().add_cs(rel, &facts);
+    }),
+    state: Some(reader::state::<index::DotNet>),
+    manifest: Some(Manifest { matches: |name| name.ends_with(".csproj"), read: |r, rel, text| r.state_mut::<index::DotNet>().add_project(rel, text) }),
+    ..reader::NONE
+};
 
 /// Parses `source` once and runs both passes over it. A file the grammar cannot parse contributes
 /// only its file node — the extractor degrades to that rather than failing the file.

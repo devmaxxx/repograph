@@ -8,6 +8,7 @@ mod cases;
 
 pub(crate) use references::Modules;
 
+use crate::code::reader::{self, Collect, Reader};
 use crate::code::imports::Resolver;
 use crate::code::lang::{file_node, Lang};
 use crate::code::prose::{self, Spans};
@@ -15,6 +16,16 @@ use crate::code::syntax;
 use crate::model::{EdgeKind, Extraction, Graph};
 use std::collections::BTreeSet;
 use tree_sitter::Node;
+
+/// HCL state: every directory's Terraform addresses and `.tf` files, so a reference and a module
+/// source resolve whatever order the walk reads files in.
+pub(crate) const READER: Reader = Reader {
+    extract,
+    collect: Collect::Source(|r, rel, source| r.state_mut::<Modules>().add(rel, source)),
+    state: Some(reader::state::<Modules>),
+    widen: Some(widen),
+    ..reader::NONE
+};
 
 pub fn extract(resolver: &Resolver, rel: &str, source: &str) -> Extraction {
     let mut ex = Extraction::default();
@@ -38,7 +49,7 @@ pub fn extract(resolver: &Resolver, rel: &str, source: &str) -> Extraction {
         }
     }
     if terraform {
-        references::terraform(resolver.hcl(), root, &own, &spans, src, rel, &mut ex);
+        references::terraform(resolver.state::<Modules>(), root, &own, &spans, src, rel, &mut ex);
     } else {
         references::bake(root, &own, &spans, src, rel, &mut ex);
     }

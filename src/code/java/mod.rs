@@ -8,6 +8,7 @@ mod cases;
 
 use tree_sitter::Node;
 
+use crate::code::reader::{self, Reader};
 use crate::code::imports::Resolver;
 use crate::code::index::{Header, Nested, QualifiedIndex};
 use crate::code::jvm::{self, Scope};
@@ -17,6 +18,8 @@ use crate::model::Extraction;
 
 /// The comment kinds a Java doc block is read from.
 pub(crate) const COMMENTS: &[&str] = &["line_comment", "block_comment"];
+
+pub(crate) const READER: Reader = Reader { extract, header: Some(|_, source| header(source)), ..reader::NONE };
 
 /// One parse per file; every pass shares the tree.
 pub fn extract(resolver: &Resolver, rel: &str, source: &str) -> Extraction {

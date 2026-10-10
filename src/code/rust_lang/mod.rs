@@ -1,6 +1,7 @@
 //! Rust: one parse per file, the module tree read from paths and `Cargo.toml` rather than from
 //! other files' contents, so extracting a file never opens another.
 
+use crate::code::reader::{self, Collect, Manifest, Reader};
 use crate::code::imports::Resolver;
 use crate::code::lang::{file_node, Lang};
 use crate::code::syntax::{field_text, text};
@@ -17,6 +18,15 @@ pub use crates::Crates;
 #[cfg(test)]
 mod cases;
 
+/// Rust state: the module tree, every `.rs` path and `Cargo.toml` the globs reach.
+pub(crate) const READER: Reader = Reader {
+    extract,
+    collect: Collect::Source(|r, rel, source| r.state_mut::<Crates>().file(rel, source)),
+    state: Some(reader::state::<Crates>),
+    manifest: Some(Manifest { matches: |name| name == "Cargo.toml", read: |r, rel, text| r.state_mut::<Crates>().manifest(rel, text) }),
+    ..reader::NONE
+};
+
 /// The file node, a symbol for every item at a declaring scope (file, inline `mod`, `trait` and
 /// `impl` bodies) with its `Declares` edge, and a `References` edge for each requirement id cited
 /// in a comment or string. Never opens another file.
@@ -28,7 +38,7 @@ pub fn extract(resolver: &Resolver, rel: &str, source: &str) -> Extraction {
     let root = tree.root_node();
     let items = items::read(rel, src, root, &mut ex);
     items::id_refs(rel, src, root, &mut ex);
-    let mut ctx = uses::Ctx { rel, src, crates: resolver.rust(), items: &items, bindings: uses::Bindings::default() };
+    let mut ctx = uses::Ctx { rel, src, crates: resolver.state::<Crates>(), items: &items, bindings: uses::Bindings::default() };
     uses::read(&mut ctx, root, &mut ex);
     calls::impls(&ctx, &mut ex);
     calls::read(&ctx, root, &mut ex);

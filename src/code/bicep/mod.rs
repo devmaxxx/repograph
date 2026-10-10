@@ -10,6 +10,7 @@ mod cases;
 
 pub(crate) use modules::Files;
 
+use crate::code::reader::{self, Collect, Reader};
 use crate::code::imports::Resolver;
 use crate::code::lang::{file_node, Lang};
 use crate::code::prose::{self, Spans};
@@ -59,6 +60,15 @@ struct Walk<'t, 's> {
     ex: Extraction,
 }
 
+/// Bicep state: every globbed `.bicep` file and its top-level names, so a module path resolves to
+/// a file that will have a node, and a module call to what that file declares.
+pub(crate) const READER: Reader = Reader {
+    extract,
+    collect: Collect::Source(|r, rel, source| r.state_mut::<Files>().add(rel, source)),
+    state: Some(reader::state::<Files>),
+    ..reader::NONE
+};
+
 pub fn extract(resolver: &Resolver, rel: &str, source: &str) -> Extraction {
     let mut ex = Extraction::default();
     file_node(rel, &mut ex);
@@ -70,7 +80,7 @@ pub fn extract(resolver: &Resolver, rel: &str, source: &str) -> Extraction {
         w.declare(n, name, None);
     }
     references::write(root, &w.decls, &w.spans, src, rel, &mut w.ex);
-    modules::write(resolver.bicep(), &w.decls, src, rel, &mut w.ex);
+    modules::write(resolver.state::<Files>(), &w.decls, src, rel, &mut w.ex);
     prose::cite(root, src, rel, &["string"], &w.spans, &mut w.ex);
     w.ex
 }

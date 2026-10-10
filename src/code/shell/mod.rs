@@ -7,6 +7,7 @@ mod paths;
 #[cfg(test)]
 mod cases;
 
+use crate::code::reader::{self, Collect, Reader};
 use crate::code::imports::Resolver;
 use crate::code::lang::{file_node, Lang};
 use crate::code::prose::{self, Spans};
@@ -14,6 +15,17 @@ use crate::code::syntax;
 use crate::model::{EdgeKind, Extraction, Graph};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use tree_sitter::Node;
+
+/// Shell state: every globbed script's functions and `source` lines, so a call resolves through
+/// what a script sources whatever order the walk reads files in.
+pub(crate) const READER: Reader = Reader {
+    extract,
+    collect: Collect::Source(|r, rel, source| r.state_mut::<Scripts>().add(rel, source)),
+    state: Some(reader::state::<Scripts>),
+    widen: Some(widen),
+    dotted_dirs: true,
+    ..reader::NONE
+};
 
 pub fn extract(resolver: &Resolver, rel: &str, source: &str) -> Extraction {
     let mut ex = Extraction::default();
@@ -29,7 +41,7 @@ pub fn extract(resolver: &Resolver, rel: &str, source: &str) -> Extraction {
         prose::declare(&mut ex, rel, &file, &id, f, &prose::body(f, src, &[]), "export");
         spans.push(f, &id);
     }
-    commands::write(resolver.shell(), root, &spans, src, rel, &mut ex);
+    commands::write(resolver.state::<Scripts>(), root, &spans, src, rel, &mut ex);
     prose::cite(root, src, rel, &["string", "raw_string", "heredoc_body"], &spans, &mut ex);
     ex
 }

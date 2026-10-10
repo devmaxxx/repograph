@@ -3,10 +3,6 @@ use crate::code::syntax::{name_of, text};
 use crate::model::{EdgeKind, Extraction, NodeKind};
 use tree_sitter::Node;
 
-pub struct SymbolScanner {
-    resolver: Resolver,
-}
-
 /// The declaration walk over a tree someone else parsed. It borrows its resolver, so an embedded
 /// language, which is handed `&Resolver`, runs exactly the walk a `.ts` file gets.
 pub(crate) struct Walk<'r> {
@@ -188,22 +184,15 @@ fn decorator_pair(deco: Node, src: &[u8]) -> (String, String) {
     }
 }
 
-impl SymbolScanner {
-    pub fn new(resolver: Resolver) -> SymbolScanner {
-        SymbolScanner { resolver }
-    }
-
-    pub(crate) fn resolver(&self) -> &Resolver { &self.resolver }
-
-    pub fn scan(&self, rel: &str, source: &str) -> Extraction {
-        let src = source.as_bytes();
-        let Some(tree) = parse(rel, src) else {
-            let mut ex = Extraction::default();
-            crate::code::lang::file_node(rel, &mut ex);
-            return ex;
-        };
-        Walk { resolver: &self.resolver }.scan_tree(rel, tree.root_node(), src)
-    }
+/// The declaration walk over `source`, parsed here.
+pub(crate) fn scan(resolver: &Resolver, rel: &str, source: &str) -> Extraction {
+    let src = source.as_bytes();
+    let Some(tree) = parse(rel, src) else {
+        let mut ex = Extraction::default();
+        crate::code::lang::file_node(rel, &mut ex);
+        return ex;
+    };
+    Walk { resolver }.scan_tree(rel, tree.root_node(), src)
 }
 
 /// The members of a top-level object literal, each declared by the `const` that binds it.
@@ -606,7 +595,7 @@ mod tests {
             std::fs::write(p, "export {};\n").unwrap();
         }
         let text = std::fs::read_to_string(format!("{}/tests/fixtures/{fixture}", env!("CARGO_MANIFEST_DIR"))).unwrap();
-        SymbolScanner::new(Resolver::new(d.path(), &crate::config::Config::default()).unwrap()).scan(rel, &text)
+        super::scan(&Resolver::new(d.path(), &crate::config::Config::default()).unwrap(), rel, &text)
     }
 
     fn has(ex: &Extraction, s: &str, t: &str, k: EdgeKind, ctx: &str) -> bool {
@@ -678,7 +667,7 @@ mod tests {
 
     fn inline(rel: &str, src: &str) -> Extraction {
         let d = tempfile::tempdir().unwrap();
-        SymbolScanner::new(Resolver::new(d.path(), &crate::config::Config::default()).unwrap()).scan(rel, src)
+        super::scan(&Resolver::new(d.path(), &crate::config::Config::default()).unwrap(), rel, src)
     }
 
     #[test]
@@ -730,7 +719,7 @@ mod tests {
     fn import_equals_require_edge_carries_the_bound_name() {
         let d = tempfile::tempdir().unwrap();
         std::fs::write(d.path().join("thing.ts"), "export {};\n").unwrap();
-        let ex = SymbolScanner::new(Resolver::new(d.path(), &crate::config::Config::default()).unwrap()).scan("m.ts", "import thing = require('./thing');\n");
+        let ex = super::scan(&Resolver::new(d.path(), &crate::config::Config::default()).unwrap(), "m.ts", "import thing = require('./thing');\n");
         assert!(has(&ex, "file:m.ts", "file:thing.ts", EdgeKind::Imports, "thing"));
     }
 }

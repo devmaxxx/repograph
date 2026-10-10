@@ -25,6 +25,11 @@ fn ext(rel: &str) -> Option<&str> {
 }
 
 impl Lang {
+    pub const ALL: [Lang; 16] = [
+        Lang::TypeScript, Lang::Tsx, Lang::Kotlin, Lang::Java, Lang::CSharp, Lang::Razor, Lang::Rust, Lang::Python,
+        Lang::Dart, Lang::Swift, Lang::GraphQl, Lang::Sql, Lang::Bicep, Lang::Hcl, Lang::Shell, Lang::Vue,
+    ];
+
     /// `None`: no grammar and no embedding reads this extension (L1). Such a file is indexed as a
     /// file and never parsed: every grammar returns a tree for any input, and a tree of the wrong
     /// language looks right.

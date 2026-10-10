@@ -7,7 +7,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use tree_sitter::Node;
 
 use super::declarations::{join, unbranched, Declared};
-use super::index::Part;
+use super::index::{DotNet, Part};
 use super::resolve::Scope;
 use super::{dotted, head, type_names, wrapper_name, Host};
 use crate::code::imports::Resolver;
@@ -56,7 +56,7 @@ pub(crate) fn first_segment(local: &str) -> &str {
 }
 
 pub fn scan(root: Node, rel: &str, src: &[u8], host: &Host, own: &Declared, resolver: &Resolver, ex: &mut Extraction) {
-    let reader = Reader { rel, src, host, scope: Scope::new(rel, resolver.dotnet(), own, host), file: format!("file:{rel}") };
+    let reader = Reader { rel, src, host, scope: Scope::new(rel, resolver.state::<DotNet>(), own, host), file: format!("file:{rel}") };
     let at = At { namespace: host.namespace.to_string(), class: None, owner: reader.file.clone(), type_params: BTreeSet::new() };
     reader.walk(root, &at, &mut Locals::new(), ex);
 }

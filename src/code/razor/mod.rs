@@ -14,6 +14,7 @@ mod cases;
 use std::collections::BTreeMap;
 use std::sync::OnceLock;
 
+use crate::code::reader::{self, Collect, Reader};
 use crate::code::csharp::declarations::{self, join, Declared, TypeDecl, Using};
 use crate::code::csharp::index::Part;
 use crate::code::csharp::refs::first_segment;
@@ -21,7 +22,8 @@ use crate::code::csharp::resolve::Scope;
 use crate::code::csharp::{self, Host};
 use crate::code::imports::Resolver;
 use crate::code::index::Header;
-use crate::code::lang::{file_node, Lang};
+use crate::code::csharp::index::DotNet;
+use crate::code::lang::{file_node, Family, Lang};
 use crate::model::{EdgeKind, Extraction, NodeKind};
 use blank::View;
 
@@ -267,6 +269,19 @@ pub fn members(rel: &str, source: &str, d: &Directives) -> BTreeMap<String, Opti
     members
 }
 
+/// Razor's own directives feed both its header and `add_razor`, read once for both. Its state is
+/// the C# reader's.
+pub(crate) const READER: Reader = Reader {
+    extract,
+    header: Some(header),
+    collect: Collect::Source(|r, rel, source| {
+        let d = directives(source);
+        r.add_header(Family::DotNet, rel, &header_of(rel, &d));
+        r.state_mut::<DotNet>().add_razor(rel, &d, members(rel, source, &d));
+    }),
+    ..reader::NONE
+};
+
 pub fn extract(resolver: &Resolver, rel: &str, source: &str) -> Extraction {
     let mut ex = Extraction::default();
     file_node(rel, &mut ex);
@@ -276,7 +291,7 @@ pub fn extract(resolver: &Resolver, rel: &str, source: &str) -> Extraction {
         View::None => None,
     };
     let d = directives(source);
-    let dotnet = resolver.dotnet();
+    let dotnet = resolver.state::<DotNet>();
     let mut usings = dotnet.razor_usings(rel);
     usings.extend(d.usings.iter().cloned());
     let namespace = dotnet.razor_namespace(rel, d.namespace.as_deref());
@@ -452,7 +467,7 @@ fn without_comments(line: &str) -> String {
 fn view(resolver: &Resolver, rel: &str, d: &Directives, namespace: &str, usings: &[Using], ex: &mut Extraction) {
     let own = Declared::default();
     let host = Host { namespace, usings, ..Host::default() };
-    let scope = Scope::new(rel, resolver.dotnet(), &own, &host);
+    let scope = Scope::new(rel, resolver.state::<DotNet>(), &own, &host);
     for written in d.injects.iter().map(|(t, _, _)| t).chain(d.types.iter().map(|(t, _, _)| t)) {
         imports(&scope, rel, written, namespace, None, ex);
     }
