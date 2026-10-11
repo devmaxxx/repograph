@@ -917,6 +917,36 @@ This step alone closes the three reviewer defects. About 1,200 lines of Rust are
 - **Spec:** `Words { hide: private, fileprivate }`, `Family`, `OwnFirst`, `Name` for the signature line, or the `signature` hook if that changes R3.
 - **Gate:** 11 symbols, so the cases decide everything; plus the `pawfice` blast.
 
+**Step 4 as built.** Where the code differs from the text above, the code is the record:
+
+- Four step-3 review findings were fixed first, in their own commit (`2d3be08`), with the graph byte-identical on both corpora and the fixture:
+  - A scope that only a binder's pattern captures holds a plain local definition inside it when no plain scope does, so a body local of a function scoped through its parameters no longer shadows the whole file. Plain scopes still come first, which keeps the walrus case binding in the function around a comprehension. An engine test pins the new case.
+  - `Import::targets` is computed in `engine::facts`, where the import is read, so `Resolver::facts` hands out the same targets `extract` writes. `engine::declarations` takes the resolver.
+  - The single-quoted Shell twin is `limitation_…`, with the reason in its doc comment and an `#[ignore]`d case of the behaviour it should have.
+  - `widen` looks each file's directory and language up once, and only for `Directory` languages.
+- **Queries:** `queries/swift/{decl,refs}.scm`, 77 and 3 lines.
+  - The `class_declaration` variants are told apart by the `declaration_kind` field. An actor declares nothing, as before.
+  - Members are reached through chains of type bodies from `source_file`, never through a function body. A query cannot recurse, so the chains stop at four: a type nested inside four others is declared, and nothing inside it is. The old reader had no such limit, and a `limitation_` case pins it.
+  - A function's name is `"func" . name: _`, because the grammar puts the return type under the same field. Operators (`==`, `<*>`) keep their names.
+  - An extension is a `@scope.owner` named by its whole type, `extension [Int]` included.
+  - `refs.scm` takes each inheritance clause's first type segment. The hook decides whose clause it is.
+- **Spec:** `Hide(private, fileprivate)`, `Family`, `OwnFirst`, no doc. `cross_file` stays false, as it was.
+- **Hooks (§3.3; the corpus has 0 Extends, so the cases decide):**
+  - `exceptions/inheritance_clauses.rs`, `collect` and `resolve`, owning Extends. The default starts an edge at the site's owner, and an extension owns nothing, so `extension Token: Store` fails the cases under it. The hook keeps the old rule: own top-level types first, then the family index. The index is fed by `collect` with the top-level types a file does not hide. An extension's edge starts at the extended type in every file declaring its outermost name. The hook reads the tree to tell a declared type's clause from an extension's, and drops a clause of anything else, such as a type in a function body or an actor.
+  - `exceptions/attribute_lines.rs` (`signature`): the first line that does not open with `@`. `Line::Name` would move R3 for `@objc final class Cart: Base {`, whose old signature is the line after it.
+  - `exceptions/type_paths.rs` (`fold`): `extension Box<Int>` names its members on `Box`. An operator's name is left alone.
+  - The Swift `Types` state is gone. `Hooks` lost no field.
+- **Engine (deviation):** two changes, both byte-identical on both corpora and the fixture.
+  - One pattern matching one node once per name declares each name, so `let a = 1, b = 2` gives two constants over the whole statement. Before, the first name took the node.
+  - A repeated id writes its own `Declares`, from its own parent and with its own export (`Facts::redeclared`). This covers an overload in an extension, or a private overload, as the old reader did.
+- **Divergence:** an adversarial repository of 61 symbols and 81 edges, built for this step, differs from the old reader in two places only:
+  - `extension [Int]` names its members `[Int].total` where the old reader wrote `.total`.
+  - The members of a type nested inside four others are not declared.
+
+  The repository covers attributes, multi-binding and tuple `let`s, `#if` twins, overloads, generic and nested extensions, operators, local types, an actor, `private(set)`, and private supertypes in other files. Every one of its 18 Extends matches.
+- The cases moved to `src/code/cases/swift.rs`, with every assertion kept. Eight cases were added: multi-binding `let`, the attribute signature, the overload's Declares, generic extensions, operators, local types and actors, sugared extensions, and the depth limit.
+- Size: the queries are 80 lines against ~60 planned. Rust is −196 for the old reader and +108 for the three rules, plus ~45 in the spec and the engine.
+
 **Step 5 · GraphQL.** S. Query ~60, Rust −300.
 
 - **Queries:** definitions with `Type.field` members, type links, `extend type` as `@reference.references` with `#set! context "extend"`, and citations from descriptions and comments.

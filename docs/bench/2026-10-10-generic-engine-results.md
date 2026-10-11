@@ -104,3 +104,39 @@ old reader is deleted, so the old graph cannot come from `REPOGRAPH_LEGACY`.
   warnings` is clean. One assertion was edited, as the split forces: the grammar case now expects
   `main.tf` to be `Lang::Terraform`. `cargo tree --duplicates --depth 0` lists no tree-sitter
   crate, and `src/code/hcl/` is gone.
+
+## Step 4 · Swift
+
+Old: `bin/repograph-step3`. New: `bin/repograph-step4`. Swift's old reader is deleted, so the old
+graph cannot come from `REPOGRAPH_LEGACY`.
+
+- **Step-3 review fixes** landed first (`2d3be08`). On both corpora and the fixture, `graph.json` and
+  `headers.json` are byte-identical to `new-3`, `store-step3` and `fixture-base`
+  (`bin/repograph-step4a`).
+- **Regressions:** R1–R9 = 0 from `langdiff.py --lang swift` on two inputs: the kit corpus (`new-3`
+  vs `new-4`) and the scratchpad corpus (`store-base` vs `store-step4`). The readings are in
+  `log/langdiff-step4-kit.txt` and `log/langdiff-step4-scratch.txt`. The fixture holds no `.swift`.
+  Its store, rebuilt by the port in `~/bench/beauty-crm-test` after `reset.sh`, is byte-identical
+  to `fixture-base`.
+- **Accepted:** none. On both corpora and the fixture, `graph.json` and `headers.json` are
+  byte-identical to the old store, so every other language is untouched, including by the two
+  engine changes (one definition per name, a repeated id's own Declares).
+- **Bounded kinds:** none changed. The corpus has 4 `.swift` files, with 11 symbols, 11 Declares and
+  0 Extends, each identical. No hand read is needed.
+- **§3.3 decision for Extends:** the corpus is thin (0 edges), so the cases decide. Under the default,
+  an extension's clause starts at the file, which owns the site, and not at the extended type, so
+  `an_inheritance_clause_is_an_edge_only_to_a_name_the_repository_declares` and the nested-extension
+  case fail. Extends is therefore owned by `exceptions/inheritance_clauses.rs`, which keeps the old
+  rule.
+- **Adversarial repository:** 3 files, 61 symbols and 81 edges, kept in `adversarial-step4/`. Old and
+  new differ by 5 nodes and 5 Declares, from two constructs (`log/langdiff-step4-adversarial.txt`):
+  - `extension [Int]` names its member `[Int].arr`, where the old reader wrote `.arr`.
+  - The members of a type nested inside four others are not declared, because a query cannot
+    recurse.
+
+  All 18 of its Extends match, as do every span and every body.
+- **Blast:** `pawfice` was skipped under §5.5, because the graph is identical.
+- **Bench:** not scheduled at this step. The fixture holds no Swift, and its graph is byte-identical.
+- **Gate:** `cargo test --all-targets` shows 1,378 passed, 0 failed and 8 ignored, with no assertion
+  edited. `cargo clippy --all-targets -- -D warnings` is clean. `cargo tree --duplicates --depth 0`
+  lists no tree-sitter crate, and `src/code/swift/` is gone.
