@@ -842,6 +842,22 @@ This step alone closes the three reviewer defects. About 1,200 lines of Rust are
 - **Hooks:** `import` keeps `paths.rs` and the run-by-path References; `collect` and `widen` stay.
 - **Gate:** the corpus decides Calls (192). Cases decide References (11).
 
+**Step 1 as built.** Where the code differs from the text above, the code is the record:
+
+- The old graph comes from the step-0 binary (`bin/repograph-step0`) and `store-base`, not from `REPOGRAPH_LEGACY`: Shell's old reader is deleted in this step, so no switch can force it.
+- The queries are `src/code/queries/shell/{decl,refs}.scm`, embedded through `queries::sources`. `.gitattributes` pins `*.scm` to LF, so a Windows checkout embeds the same text.
+- The hooks live in `src/code/exceptions/computed_paths.rs`, named for the rule: a path a script computes from its own location (§2.7). It holds what `paths.rs` and the run detection in `commands.rs` did. `collect` keeps its own parse and `(rel, source)` signature, and records each `source` site's candidate paths by the command's start byte. `import` picks the first candidate that is a globbed script. The run-by-path References are written by `resolve`, not by `import`, because a run is no import.
+- `ImportHook` takes the importer's path, `fn(&Resolver, &str, &Import)`. The transitive walk holds only the declarations of the files it reaches, not a `File`, and it now asks the hook for each of them. Before this step it computed their imports with the default paths, which cannot evaluate `$HERE/lib.sh`.
+- `widen` is not a Shell hook. `engine::widen` widens every language with `Imported` visibility and no `header` hook, through the whole chain when the visibility is transitive, and `apply_diff` calls it beside the hooks' `widen`. Only HCL keeps a `widen` hook.
+- The engine reads only the outermost citation, because `prose::cite` never descended into a node it matched. A heredoc inside a string, or a string inside a comment-like node, cites once.
+- A name defined twice in one file is one node, as before. The second definition's range still owns what it contains through `Facts::repeats`, so a call inside it comes from that symbol and not from the file.
+- `detect_path` reads at most 256 bytes for a shebang and opens the file once to do it. This replaces step 0's claim that `Resolver::new` hands the same text to `collect`. An unnamed globbed file is now read twice: the prefix for its shebang, and then the whole file when a language collects it. Files in a dotted directory go through `detect_path` too, so an extensionless script under `.github/` is read by its shebang.
+- `files_only_note` takes paths and leaves out a file whose shebang a grammar reads.
+- `Extractor::forget` drops the resolver's memoized facts for the files a poll re-reads when the resolver is kept. Shell is `cross_file`, so a Shell edit still rebuilds the resolver. The hook exists for the ports that follow, and a case pins it at the resolver.
+- The cases moved to `src/code/cases/shell.rs`, a submodule of `cases.rs`. The only changed line is the widen tests' path, `super::widen` → `crate::code::engine::widen`. No assertion changed. Five cases were added: a chain of computed `source` paths, an extensionless script under a dotted directory, a shebang read from the head of a long file, the note skipping a shebang script, and `forget`.
+- The graph on the corpus, the scratchpad corpus and the fixture is byte-identical to the old one, with `headers.json` identical too. No bounded kind changed, so §5.5's blast clause is skipped.
+- The deepest corpus file by bracket nesting is `beauty-crm/apps/booking/src/account/visits.tsx`, at depth 17. It builds alone in 0.01 s (median of three) on both the step-0 and the step-1 binary.
+
 **Step 2 · Bicep.** S–M. Query ~70, Rust −250.
 
 - **Queries:** the seven declaration kinds; a child resource as a `.` container; `output/` as a `prefix`; `#set! export` on `param`, `output` and `@export()`; in-file references with locals for shadowing; `module` as `@import` with the registry predicate.
