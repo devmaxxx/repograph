@@ -666,6 +666,9 @@ Measured but not on its own row:
   `extension Box<Int>.Inner: Proto`: its mid-path arguments now stay in the name, which no type
   declares.
 
+**Bench.** The run was made on `b2521b5` (`--no-dense`, e5-small): keyword 39/40, paraphrase 7/30,
+code 12/12, p90 238 tok, green. It has zero flips: its transcript is identical to step 3's.
+
 **Accepted diffs.**
 
 - *Swift, R3 = 1.* AppDelegate's line is now its declaration line, `@objc class AppDelegate: …`.

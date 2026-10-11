@@ -140,3 +140,36 @@ graph cannot come from `REPOGRAPH_LEGACY`.
 - **Gate:** `cargo test --all-targets` shows 1,378 passed, 0 failed and 8 ignored, with no assertion
   edited. `cargo clippy --all-targets -- -D warnings` is clean. `cargo tree --duplicates --depth 0`
   lists no tree-sitter crate, and `src/code/swift/` is gone.
+
+## Exception sweep · 2026-10-12
+
+Old: today's stores (`new-4`, `store-step4` and `fixture-base`). New: `bin/repograph-sweep`, built
+on the clean commit `b2521b5`. Every exception was measured under §3.3's rule of 2026-10-12, and the
+table, the accepted diff and the rewritten assertions are in the plan's §3.5.
+
+- **Deleted:**
+  - `symbolic_names`;
+  - `traversal_addresses`;
+  - `target_or_group`;
+  - `inheritance_clauses`, `attribute_lines` and `type_paths`;
+  - `module_reach`'s two import hooks.
+- **Kept:**
+  - `computed_paths`, without which Shell loses all 15 Imports, 26 of 192 Calls and all 11
+    References;
+  - `module_reach::reach`, without which Bicep loses 2,046 of 4,344 References.
+- **Regressions:** `langdiff.py --lang sh,bash,bicep,hcl,tf,swift` on three inputs:
+  - kit corpus: R3 = 1 (Swift), and every other class 0;
+  - scratchpad corpus: R3 = 1 (Swift), and every other class 0;
+  - fixture: 0.
+
+  The readings are in `log/langdiff-sweep-{kit,scratch,fixture}.txt`.
+- **Accepted:** the one R3 diff. AppDelegate's signature line is now its declaration line. Every edge
+  and `headers.json` are identical on both corpora, and the fixture graph is byte-identical to
+  `fixture-base`. The kit store is kept as `new-sweep`.
+- **Bench** (`--no-dense`, e5-small): keyword 39/40, paraphrase 7/30, code 12/12, p90 238 tok, green.
+  There are zero flips: the transcript `log/bench-sweep.txt` is identical line for line to
+  `log/bench-step3.txt`. The row is appended to `bench/history/runs.jsonl`.
+- **Gate:**
+  - `cargo test --all-targets`: 1,381 passed, 0 failed, 8 ignored;
+  - `cargo clippy --all-targets -- -D warnings`: clean;
+  - `cargo tree --duplicates --depth 0`: no tree-sitter crate.
