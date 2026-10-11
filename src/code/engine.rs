@@ -66,8 +66,8 @@ pub(crate) struct Import {
     pub alias: Option<String>,
     pub reexport: bool,
     pub range: Range<usize>,
-    /// The files the site resolved to. Only the file being extracted has them, and its hooks read
-    /// them there instead of resolving the site again.
+    /// The files the site resolves to, by the spec's import rule, resolved once where the facts are
+    /// read so that no reader resolves a site again.
     pub targets: Vec<String>,
 }
 
@@ -78,8 +78,8 @@ pub(crate) struct Cite {
     pub range: Range<usize>,
 }
 
-/// Names bound locally, each with the scopes it binds in: the innermost `@local.scope` holding the
-/// definition, as nvim's locals convention has it, or the scope the definition's own pattern captures.
+/// Names bound locally, each with the scopes it binds in: the scope the definition's own pattern
+/// captures, or else the innermost `@local.scope` holding it, as nvim's locals convention has it.
 #[derive(Debug, Default, Clone)]
 pub(crate) struct Locals(HashMap<String, Vec<Range<usize>>>);
 
@@ -188,15 +188,16 @@ fn matches_of<'t>(c: &'static Compiled, root: Node<'t>, src: &str, rel: &str, mu
     }
 }
 
-/// The facts `decl` and, when given, `refs` read from `file`.
-pub(crate) fn facts(spec: &Spec, decl: &'static Compiled, refs: Option<&'static Compiled>, file: &File) -> Facts {
+/// The facts `decl` and, when given, `refs` read from `file`, each import site with its targets.
+pub(crate) fn facts(resolver: &Resolver, spec: &Spec, decl: &'static Compiled, refs: Option<&'static Compiled>, file: &File) -> Facts {
     let mut facts = Facts::default();
     let Some(tree) = file.tree else { return facts };
     let (root, src) = (tree.root_node(), file.src);
     let mut declared = Vec::new();
     matches_of(decl, root, src, file.rel, |pattern, caps| {
         read_declaration(&caps, pattern, src, &mut declared);
-        if let Some(import) = read_import(&caps, &decl.metas[pattern], src) {
+        if let Some(mut import) = read_import(&caps, &decl.metas[pattern], src) {
+            import.targets = targets(resolver, spec, file.rel, &import);
             facts.imports.push(import);
         }
     });
@@ -208,18 +209,17 @@ pub(crate) fn facts(spec: &Spec, decl: &'static Compiled, refs: Option<&'static 
         facts.at.entry((r.start, r.end)).or_insert(i);
     }
     if let Some(refs) = refs {
-        let (mut scopes, mut bound) = (Vec::new(), Vec::new());
+        let (mut scopes, mut binder_scopes, mut bound) = (Vec::new(), Vec::new(), Vec::new());
         matches_of(refs, root, src, file.rel, |pattern, caps| {
             // A definition whose own pattern captures a scope binds there and nowhere else: a loop
             // variable covers the loop's body, never the iterable it sits beside.
-            // Such a scope is that binder's alone: a plain definition inside it, which binds in the
-            // innermost scope holding it, must not take it for its own.
             let binds = caps.iter().any(|(r, _)| *r == Role::LocalDefinition);
             let own: Vec<Range<usize>> = caps.iter().filter(|(r, _)| *r == Role::LocalScope).map(|(_, n)| n.byte_range()).collect();
             for (role, node) in &caps {
                 match role {
                     Role::Reference(edge) => facts.refs.push(read_reference(spec, &caps, *edge, *node, &refs.metas[pattern], src)),
-                    Role::LocalScope if !binds => scopes.push(node.byte_range()),
+                    Role::LocalScope if binds => binder_scopes.push(node.byte_range()),
+                    Role::LocalScope => scopes.push(node.byte_range()),
                     Role::LocalDefinition => bound.push((node.start_byte(), text(*node, src).to_string(), own.clone())),
                     Role::CiteComment => facts.cites.push(Cite { source: None, context: "comment", range: node.byte_range() }),
                     Role::CiteString => facts.cites.push(Cite { source: None, context: "string", range: node.byte_range() }),
@@ -236,9 +236,14 @@ pub(crate) fn facts(spec: &Spec, decl: &'static Compiled, refs: Option<&'static 
             end = end.max(c.range.end);
             outer
         });
+        // A plain definition binds in the innermost plain scope holding it. A scope that only a
+        // binder's pattern captures serves it when no plain scope does: a comprehension's walrus
+        // binds in the function around it, while a body local still stays in a function whose
+        // pattern captures it together with the parameters, instead of shadowing the whole file.
+        let innermost = |at: usize, among: &[Range<usize>]| among.iter().filter(|s| s.contains(&at)).min_by_key(|s| s.len()).cloned();
         for (at, name, own) in bound {
             let scopes = match own.is_empty() {
-                true => vec![scopes.iter().filter(|s| s.contains(&at)).min_by_key(|s| s.len()).cloned().unwrap_or(0..src.len() + 1)],
+                true => vec![innermost(at, &scopes).or_else(|| innermost(at, &binder_scopes)).unwrap_or(0..src.len() + 1)],
                 false => own,
             };
             facts.locals.0.entry(name).or_default().extend(scopes);
@@ -513,7 +518,7 @@ fn reach(resolver: &Resolver, spec: &Spec, file: &File, facts: &Facts) -> Vec<(S
                 }
                 if transitive {
                     if let Some(f) = resolver.facts(&next) {
-                        queue.extend(f.imports.iter().flat_map(|i| targets(resolver, spec, &next, i)));
+                        queue.extend(f.imports.iter().flat_map(|i| i.targets.iter().cloned()));
                     }
                 }
             }
@@ -614,12 +619,16 @@ pub(crate) fn widen(stale: &[String], removed: &[String], graph: &Graph, all_rel
         }
     }
     if !modules.is_empty() {
-        let in_module = |rel: &str| module(rel).is_some_and(|m| modules.contains(&m));
-        reached.extend(all_rels.iter().filter(|r| in_module(r)).map(|r| format!("file:{r}")));
+        // Once per file: every importer target and every file of the repository is looked up here,
+        // and most are of no language a directory reads as one module. A removed file is still a
+        // target of the edges its importers held.
+        let module_of: HashMap<&str, (&str, Lang)> =
+            all_rels.iter().chain(removed).filter_map(|r| module(r).map(|m| (r.as_str(), m))).collect();
+        let in_module = |rel: &str| module_of.get(rel).filter(|m| modules.contains(m)).map(|&(_, lang)| lang);
+        reached.extend(module_of.iter().filter(|(_, m)| modules.contains(m)).map(|(r, _)| format!("file:{r}")));
         for (target, sources) in &importers {
-            let Some(rel) = target.strip_prefix("file:").filter(|t| in_module(t)) else { continue };
-            let lang = Lang::of(rel);
-            let same = sources.iter().filter(|s| s.strip_prefix("file:").is_some_and(|s| Lang::of(s) == lang));
+            let Some(lang) = target.strip_prefix("file:").and_then(in_module) else { continue };
+            let same = sources.iter().filter(|s| s.strip_prefix("file:").is_some_and(|s| Lang::of(s) == Some(lang)));
             reached.extend(same.map(|s| s.to_string()));
         }
     }
@@ -656,23 +665,22 @@ pub(crate) fn header(facts: &Facts) -> Header {
     h
 }
 
-/// `decl` facts alone, for a file another file reads across: the collect pass and `Resolver::facts`.
-pub(crate) fn declarations(lang: Lang, rel: &str, source: &str) -> Option<Facts> {
+/// `decl` facts alone, for a file another file reads across through `Resolver::facts`.
+pub(crate) fn declarations(resolver: &Resolver, lang: Lang, rel: &str, source: &str) -> Option<Facts> {
     let spec = crate::code::spec::spec(lang);
     let decl = queries::decl(lang)?;
     let tree = lang.parse(source.as_bytes())?;
     let file = File { lang, rel, text: source, src: source, tree: Some(&tree) };
-    Some(facts(spec, decl, None, &file))
+    Some(facts(resolver, spec, decl, None, &file))
 }
 
 /// The engine's whole read of a file whose node the front has written.
 pub(crate) fn extract(resolver: &Resolver, spec: &Spec, file: &File, ex: &mut Extraction) {
     let Some(decl) = queries::decl(file.lang) else { return };
-    let mut facts = facts(spec, decl, queries::refs(file.lang), file);
+    let facts = facts(resolver, spec, decl, queries::refs(file.lang), file);
     write(file, &facts, ex);
     let kind = |i: &Import| if i.reexport { EdgeKind::ReExports } else { EdgeKind::Imports };
-    for i in &mut facts.imports {
-        i.targets = targets(resolver, spec, file.rel, i);
+    for i in &facts.imports {
         for t in &i.targets {
             ex.edge(&format!("file:{}", file.rel), &format!("file:{t}"), kind(i), "*", file.rel);
         }

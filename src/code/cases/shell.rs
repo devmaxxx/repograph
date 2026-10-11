@@ -89,13 +89,23 @@ fn a_source_line_is_imported_from_text_edited_since_the_resolver_collected_it() 
     ]);
 }
 
+const QUOTED_TWIN: &str = "HERE=\"$(dirname \"$0\")\"\nsource \"$HERE/lib.sh\"\nsource '$HERE/lib.sh'\n";
+
+/// Known limitation, pinned so a change to it is seen: a site is keyed by its operand's text, so
+/// that a buffer edited since the collect pass still finds its candidates. Single quotes keep
+/// `$HERE` literal, so the second site names no file while the first names lib.sh. Both read
+/// `$HERE/lib.sh`, the key cannot tell them apart, and the real import is lost with the twin.
 #[test]
-fn two_source_sites_reading_alike_and_evaluating_apart_import_neither() {
-    // Single quotes keep `$HERE` literal, so the second site names no file while the first names
-    // lib.sh; the extractor keys a site by its text, and cannot tell which of the two it is reading.
-    let run = "HERE=\"$(dirname \"$0\")\"\nsource \"$HERE/lib.sh\"\nsource '$HERE/lib.sh'\n";
-    let ex = extract(&[("tools/run.sh", run), ("tools/lib.sh", "")], "tools/run.sh");
+fn limitation_a_single_quoted_twin_of_a_source_site_cancels_its_import() {
+    let ex = extract(&[("tools/run.sh", QUOTED_TWIN), ("tools/lib.sh", "")], "tools/run.sh");
     assert!(lines(&ex, EdgeKind::Imports).is_empty(), "{:?}", lines(&ex, EdgeKind::Imports));
+}
+
+#[test]
+#[ignore = "a site is keyed by its operand's text, which the two sites share"]
+fn a_single_quoted_twin_of_a_source_site_leaves_the_real_import() {
+    let ex = extract(&[("tools/run.sh", QUOTED_TWIN), ("tools/lib.sh", "")], "tools/run.sh");
+    assert_eq!(lines(&ex, EdgeKind::Imports), ["file:tools/run.sh -> file:tools/lib.sh [*]"]);
 }
 
 const RUNS: &str = r#"HERE="$(cd "$(dirname "$0")" && pwd)"

@@ -73,8 +73,8 @@ fn compiled(sources: &[&str]) -> &'static Compiled {
 fn read(spec: &Spec, rel: &str, source: &str) -> (Facts, Extraction) {
     let tree = Lang::Python.parse(source.as_bytes()).unwrap();
     let file = File { lang: Lang::Python, rel, text: source, src: source, tree: Some(&tree) };
-    let facts = facts(spec, compiled(DECL), Some(compiled(REFS)), &file);
     let (_dir, resolver) = repo(&["**/*.py"], &[(rel, source)]);
+    let facts = facts(&resolver, spec, compiled(DECL), Some(compiled(REFS)), &file);
     let mut ex = Extraction::default();
     write(&file, &facts, &mut ex);
     resolve(&resolver, spec, &file, &facts, &mut ex);
@@ -182,12 +182,30 @@ fn a_scope_a_binder_captures_for_itself_is_not_the_scope_of_a_plain_definition_i
         "(list_comprehension (for_in_clause left: (identifier) @local.definition)) @local.scope",
     ];
     let source = "def x():\n    pass\n\ndef run():\n    [(x := v) for v in range(3)]\n    x()\n\ndef go():\n    x()\n";
+    assert_eq!(calls(OWN, source), ["sym:a.py::go -> sym:a.py::x []"]);
+}
+
+#[test]
+fn a_scope_only_a_binder_captures_still_holds_a_plain_definition_inside_it() {
+    // The function is a scope only through its parameters' pattern. The assignment in its body
+    // binds there, so it shadows the call beside it and not the call in another function.
+    const PARAMS: &[&str] = &[
+        "(call function: (identifier) @name) @reference.calls",
+        "(function_definition parameters: (parameters (identifier) @local.definition)) @local.scope",
+        "(assignment left: (identifier) @local.definition)",
+    ];
+    let source = "def x():\n    pass\n\ndef run(a):\n    x = a\n    x()\n\ndef go():\n    x()\n";
+    assert_eq!(calls(PARAMS, source), ["sym:a.py::go -> sym:a.py::x []"]);
+}
+
+/// The Calls `refs` resolves in `a.py`, declarations read by `DECL`.
+fn calls(refs: &[&str], source: &str) -> Vec<String> {
     let tree = Lang::Python.parse(source.as_bytes()).unwrap();
     let file = File { lang: Lang::Python, rel: "a.py", text: source, src: source, tree: Some(&tree) };
     let s = spec(STRIPPED, Export::All);
-    let facts = facts(&s, compiled(DECL), Some(compiled(OWN)), &file);
     let (_dir, resolver) = repo(&["**/*.py"], &[("a.py", source)]);
+    let facts = facts(&resolver, &s, compiled(DECL), Some(compiled(refs)), &file);
     let mut ex = Extraction::default();
     resolve(&resolver, &s, &file, &facts, &mut ex);
-    assert_eq!(lines(&ex, EdgeKind::Calls), ["sym:a.py::go -> sym:a.py::x []"]);
+    lines(&ex, EdgeKind::Calls)
 }
