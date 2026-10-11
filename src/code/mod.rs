@@ -15,7 +15,6 @@ pub(crate) mod queries;
 pub(crate) mod rust_lang;
 pub(crate) mod spec;
 pub mod sql;
-pub mod swift;
 pub(crate) mod syntax;
 pub(crate) mod typescript;
 

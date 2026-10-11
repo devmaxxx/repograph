@@ -106,6 +106,9 @@ pub(crate) struct Facts {
     /// A definition whose id an earlier one took, by its range and the earlier one's index: a site
     /// inside it is still owned by that id, as `finish` keeps the first node of an id.
     repeats: Vec<(Range<usize>, usize)>,
+    /// A repeated id's own parent and export, by the first's index. An overload in an extension or
+    /// a private overload declares the one node from another parent or with another export.
+    redeclared: Vec<(Option<usize>, usize, bool)>,
     /// `defs` and `repeats` by their node's range, the first to hold a range kept.
     at: HashMap<(usize, usize), usize>,
 }
@@ -325,7 +328,12 @@ struct Open {
 fn qualify(spec: &Spec, decl: &Compiled, file: &File, mut declared: Vec<Declared>, facts: &mut Facts) {
     let src = file.src;
     declared.sort_by_key(|d| (d.node.start_byte(), std::cmp::Reverse(d.node.end_byte()), d.pattern));
-    declared.dedup_by(|b, a| a.node.id() == b.node.id() && (a.role == b.role || matches!((a.role, b.role), (Declaring::Def(_), Declaring::Def(_)))));
+    // One pattern matching one node once per name, as `let a = 1, b = 2` does, declares each name.
+    declared.dedup_by(|b, a| {
+        a.node.id() == b.node.id()
+            && (a.role == b.role || matches!((a.role, b.role), (Declaring::Def(_), Declaring::Def(_))))
+            && (a.pattern != b.pattern || a.names == b.names)
+    });
     let fold = |s: &str| spec.hooks.fold.map_or_else(|| s.to_string(), |f| f(s).into_owned());
     let mut stack: Vec<Open> = Vec::new();
     let mut ids: HashMap<String, usize> = HashMap::new();
@@ -356,6 +364,8 @@ fn qualify(spec: &Spec, decl: &Compiled, file: &File, mut declared: Vec<Declared
         let id = format!("sym:{}::{qualified}", file.rel);
         if let Some(&first) = ids.get(&id) {
             facts.repeats.push((d.node.byte_range(), first));
+            let export = meta.export.unwrap_or_else(|| exported(spec.export, &d.modifiers, &name));
+            facts.redeclared.push((parent.and_then(|p| p.def), first, export));
             if let Some(join) = kind.join() {
                 stack.push(Open { end: d.node.end_byte(), qualified, join, def: Some(first) });
             }
@@ -469,6 +479,9 @@ pub(crate) fn write(file: &File, facts: &Facts, ex: &mut Extraction) {
     for d in &facts.defs {
         ex.node_span(NodeKind::Symbol, &d.id, &d.qualified, &d.body, rel, (d.line, d.end));
         ex.edge(&facts.source_id(rel, d.parent), &d.id, EdgeKind::Declares, if d.export { "export" } else { "" }, rel);
+    }
+    for &(parent, first, export) in &facts.redeclared {
+        ex.edge(&facts.source_id(rel, parent), &facts.defs[first].id, EdgeKind::Declares, if export { "export" } else { "" }, rel);
     }
     for c in &facts.cites {
         for hit in crate::ids::generic().find_all(&file.src[c.range.clone()]) {

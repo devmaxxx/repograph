@@ -147,3 +147,76 @@ fn an_extension_of_a_nested_type_inherits_from_the_file_declaring_its_outer_type
     let ex = extract_in(&[("a.swift", "extension Outer.Inner: Proto { func go() {} }\n"), ("b.swift", "class Outer { class Inner {} }\nprotocol Proto {}\n")], "a.swift");
     assert_eq!(edges(&ex, EdgeKind::Extends), vec![("sym:b.swift::Outer.Inner", "sym:b.swift::Proto", "")]);
 }
+
+#[test]
+fn each_name_of_a_multi_binding_let_is_a_constant_over_the_whole_statement() {
+    let ex = extract_in(&[("a.swift", "let a = 1, b = [\n    2,\n]\n")], "a.swift");
+    let spans: Vec<(&str, u32, u32)> = ex.nodes.iter().filter(|n| n.id.starts_with("sym:")).map(|n| (n.id.as_str(), n.line, n.end)).collect();
+    assert_eq!(spans, vec![("sym:a.swift::a", 1, 3), ("sym:a.swift::b", 1, 3)]);
+}
+
+#[test]
+fn a_signature_skips_every_line_that_opens_with_an_attribute() {
+    let ex = extract_in(&[("Sources/Cart.swift", RUNNER)], "Sources/Cart.swift");
+    let body = |id: &str| ex.nodes.iter().find(|n| n.id == id).map(|n| n.body.as_str());
+    // The attribute shares its line with the declaration, and the whole line is skipped.
+    assert_eq!(body("sym:Sources/Cart.swift::Cart"), Some("let id: Int = 1"));
+    let ex = extract_in(&[("a.swift", "@available(iOS 13, *)\n@MainActor\npublic struct Panel {}\n")], "a.swift");
+    assert_eq!(ex.nodes.iter().find(|n| n.id == "sym:a.swift::Panel").map(|n| n.body.as_str()), Some("public struct Panel {}"));
+}
+
+#[test]
+fn an_overload_declares_its_one_node_from_each_parent_and_with_each_export() {
+    let src = "class Over {\n    func f(a: Int) {}\n    private func f(b: Int) {}\n}\nextension Over { func f(c: Int) {} }\n";
+    let ex = extract_in(&[("a.swift", src)], "a.swift");
+    let mut declares: Vec<_> = edges(&ex, EdgeKind::Declares).into_iter().filter(|(_, t, _)| *t == "sym:a.swift::Over.f").collect();
+    declares.sort();
+    assert_eq!(declares, vec![
+        ("file:a.swift", "sym:a.swift::Over.f", "export"),
+        ("sym:a.swift::Over", "sym:a.swift::Over.f", ""),
+        ("sym:a.swift::Over", "sym:a.swift::Over.f", "export"),
+    ]);
+}
+
+#[test]
+fn an_extension_names_its_members_on_the_type_without_generic_arguments() {
+    let src = "struct Box<T> { class Inner {} }\nextension Box<Int> { func boxed() {} }\nextension Box<Int>.Inner: P { func i() {} }\nprotocol P {}\n";
+    let ex = extract_in(&[("a.swift", src)], "a.swift");
+    assert!(ids(&ex).contains(&"sym:a.swift::Box.boxed"), "{:?}", ids(&ex));
+    assert!(ids(&ex).contains(&"sym:a.swift::Box.Inner.i"), "{:?}", ids(&ex));
+    assert_eq!(edges(&ex, EdgeKind::Extends), vec![("sym:a.swift::Box.Inner", "sym:a.swift::P", "")]);
+}
+
+#[test]
+fn an_operator_is_named_by_its_symbol_and_a_return_type_names_nothing() {
+    let src = "struct P {\n    static func == (l: P, r: P) -> Bool { true }\n    static func <*> (l: P, r: P) -> P { l }\n    func size() -> Int { 1 }\n}\n";
+    let ex = extract_in(&[("a.swift", src)], "a.swift");
+    let syms: Vec<&str> = ids(&ex).into_iter().filter(|i| i.starts_with("sym:")).collect();
+    assert_eq!(syms, vec!["sym:a.swift::P", "sym:a.swift::P.==", "sym:a.swift::P.<*>", "sym:a.swift::P.size"]);
+}
+
+#[test]
+fn a_type_in_a_function_body_or_an_actor_declares_nothing_and_extends_nothing() {
+    let src = "class Base {}\nfunc outer() {\n    class Local: Base { func lm() {} }\n}\nactor Act: Base { func a() {} }\nlet made: Int = {\n    class InClosure: Base {}\n    return 1\n}()\n";
+    let ex = extract_in(&[("a.swift", src)], "a.swift");
+    let syms: Vec<&str> = ids(&ex).into_iter().filter(|i| i.starts_with("sym:")).collect();
+    assert_eq!(syms, vec!["sym:a.swift::Base", "sym:a.swift::outer", "sym:a.swift::made"]);
+    assert_eq!(edges(&ex, EdgeKind::Extends), vec![]);
+}
+
+#[test]
+fn an_extension_of_sugared_type_names_its_members_on_the_sugar() {
+    let ex = extract_in(&[("a.swift", "extension [Int] { func total() -> Int { 0 } }\n")], "a.swift");
+    assert!(ids(&ex).contains(&"sym:a.swift::[Int].total"), "{:?}", ids(&ex));
+}
+
+/// A query cannot recurse, so the chains of nested types it follows stop at a depth: a type nested
+/// inside four others is declared, and nothing inside it is.
+#[test]
+fn limitation_a_type_nested_inside_four_others_declares_nothing_of_its_own() {
+    let src = "class A { class B { class C { class D {\n    class E { func deep() {} }\n    func atD() {}\n} } } }\n";
+    let ex = extract_in(&[("a.swift", src)], "a.swift");
+    assert!(ids(&ex).contains(&"sym:a.swift::A.B.C.D.atD"), "{:?}", ids(&ex));
+    assert!(ids(&ex).contains(&"sym:a.swift::A.B.C.D.E"), "{:?}", ids(&ex));
+    assert!(!ids(&ex).contains(&"sym:a.swift::A.B.C.D.E.deep"), "{:?}", ids(&ex));
+}

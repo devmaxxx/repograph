@@ -200,6 +200,9 @@ pub(crate) mod sources {
     pub(crate) const SHELL: Sources =
         Sources { decl: &[include_str!("queries/shell/decl.scm")], refs: &[include_str!("queries/shell/refs.scm")] };
 
+    pub(crate) const SWIFT: Sources =
+        Sources { decl: &[include_str!("queries/swift/decl.scm")], refs: &[include_str!("queries/swift/refs.scm")] };
+
     pub(crate) const TERRAFORM: Sources =
         Sources { decl: &[include_str!("queries/terraform/decl.scm")], refs: &[include_str!("queries/terraform/refs.scm")] };
 }

@@ -4,6 +4,7 @@
 mod bicep;
 mod hcl;
 mod shell;
+mod swift;
 
 use super::CodeExtractor;
 use crate::code::imports::Resolver;

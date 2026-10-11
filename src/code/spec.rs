@@ -3,7 +3,7 @@
 //! names every language: the front, the resolver, the header index, `changes` and the update's
 //! widening read this table instead of matching on `Lang` each in its own way.
 //!
-//! Most of the vocabulary below describes ported languages, and only Shell, Bicep, HCL and Terraform are ported yet.
+//! Most of the vocabulary below describes ported languages, and only Shell, Bicep, HCL, Terraform and Swift are ported yet.
 #![allow(dead_code)]
 
 use std::any::{Any, TypeId};
@@ -240,7 +240,10 @@ const PROSE: Body = Body { doc: Doc::Adjacent { kinds: &["comment"], between: &[
 
 mod table {
     use super::*;
-    use crate::code::exceptions::{computed_paths, module_reach, symbolic_names, target_or_group, traversal_addresses};
+    use crate::code::exceptions::{
+        attribute_lines, computed_paths, inheritance_clauses, module_reach, symbolic_names, target_or_group, traversal_addresses,
+        type_paths,
+    };
     use crate::code::*;
 
     pub(super) const TYPESCRIPT: Spec = Spec { comments: C, hooks: typescript::HOOKS, legacy: Some(typescript::extract), ..UNPORTED };
@@ -252,7 +255,6 @@ mod table {
     pub(super) const RUST: Spec = Spec { comments: C, hooks: rust_lang::HOOKS, legacy: Some(rust_lang::extract), ..UNPORTED };
     pub(super) const PYTHON: Spec = Spec { comments: HASH, hooks: python::HOOKS, legacy: Some(python::extract), ..UNPORTED };
     pub(super) const DART: Spec = Spec { comments: C, hooks: dart::HOOKS, legacy: Some(dart::extract), ..UNPORTED };
-    pub(super) const SWIFT: Spec = Spec { comments: C, hooks: swift::HOOKS, legacy: Some(swift::extract), ..UNPORTED };
     pub(super) const GRAPHQL: Spec = Spec { comments: HASH, hooks: graphql::HOOKS, legacy: Some(graphql::extract), ..UNPORTED };
     pub(super) const SQL: Spec = Spec {
         comments: Some(CommentSyntax { lines: &["--"], blocks: true }),
@@ -319,6 +321,29 @@ mod table {
                 module_reach::reach(r, file, facts, sink);
             }),
             owns: &[EdgeKind::References],
+            ..NONE
+        },
+        legacy: None,
+    };
+    pub(super) const SWIFT: Spec = Spec {
+        queries: crate::code::queries::sources::SWIFT,
+        view: None,
+        comments: C,
+        // No doc, and the `signature` hook picks the line.
+        body: Body { doc: Doc::None, form: Form::Raw, cap: Cap::Tail, line: Line::Name },
+        export: Export::Hide(&["private", "fileprivate"]),
+        // A module sees every file in it without an import.
+        visibility: Visibility::Family,
+        ambiguity: Ambiguity::OwnFirst,
+        cross_file: false,
+        imports: ImportPaths { root: false, suffixes: &[""] },
+        dotted_dirs: false,
+        hooks: Hooks {
+            collect: Some(inheritance_clauses::collect),
+            fold: Some(type_paths::fold),
+            signature: Some(attribute_lines::signature),
+            resolve: Some(inheritance_clauses::resolve),
+            owns: &[EdgeKind::Extends],
             ..NONE
         },
         legacy: None,
