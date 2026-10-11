@@ -74,7 +74,7 @@ fn read(spec: &Spec, rel: &str, source: &str) -> (Facts, Extraction) {
     let tree = Lang::Python.parse(source.as_bytes()).unwrap();
     let file = File { lang: Lang::Python, rel, text: source, src: source, tree: Some(&tree) };
     let (_dir, resolver) = repo(&["**/*.py"], &[(rel, source)]);
-    let facts = facts(&resolver, spec, compiled(DECL), Some(compiled(REFS)), &file);
+    let facts = facts(spec, compiled(DECL), Some(compiled(REFS)), &file);
     let mut ex = Extraction::default();
     write(&file, &facts, &mut ex);
     resolve(&resolver, spec, &file, &facts, &mut ex);
@@ -142,7 +142,7 @@ fn an_import_site_keeps_its_path_and_names() {
 #[test]
 fn an_import_path_resolves_beside_the_importer_then_at_the_root_and_only_to_a_globbed_file() {
     let (_dir, resolver) = repo(&["**/*.py"], &[("pkg/a.py", ""), ("pkg/util.py", ""), ("lib/x.py", ""), ("pkg/notes.txt", "")]);
-    let import = |path: &str| Import { path: Some(path.to_string()), names: Vec::new(), alias: None, reexport: false, range: 0..0, targets: Vec::new() };
+    let import = |path: &str| Import { path: Some(path.to_string()), names: Vec::new(), alias: None, reexport: false, range: 0..0, targets: OnceLock::new() };
     let mut s = spec(STRIPPED, Export::All);
     s.imports = ImportPaths { root: false, suffixes: &["", ".py"] };
     assert_eq!(import_targets(&resolver, &s, "pkg/a.py", &import("util")), ["pkg/util.py"]);
@@ -172,17 +172,45 @@ fn a_name_the_grammar_could_not_read_declares_nothing() {
 }
 
 #[test]
-fn a_scope_a_binder_captures_for_itself_is_not_the_scope_of_a_plain_definition_inside_it() {
-    // The comprehension binds its loop variable in itself, while a walrus inside it binds in the
-    // function holding it, so the call after the comprehension is to that local and not to `x`.
+fn a_binding_that_outlives_its_construct_names_its_scope_in_its_own_pattern() {
+    // The comprehension binds its loop variable in itself. The walrus inside it binds in the function
+    // holding it, which its pattern captures, so the call after the comprehension is to that local.
     const OWN: &[&str] = &[
+        "(call function: (identifier) @name) @reference.calls",
+        "(function_definition) @local.scope",
+        "(function_definition body: (block (expression_statement (list_comprehension (parenthesized_expression (named_expression name: (identifier) @local.definition)))))) @local.scope",
+        "(list_comprehension (for_in_clause left: (identifier) @local.definition)) @local.scope",
+    ];
+    let source = "def x():\n    pass\n\ndef run():\n    [(x := v) for v in range(3)]\n    x()\n\ndef go():\n    x()\n";
+    assert_eq!(calls(OWN, source), ["sym:a.py::go -> sym:a.py::x []"]);
+}
+
+#[test]
+fn a_plain_definition_binds_in_its_construct_when_no_pattern_names_another_scope() {
+    // Module level and function level read alike: a walrus with no pattern of its own binds in the
+    // comprehension around it, so both calls after it reach `x`.
+    const PLAIN: &[&str] = &[
         "(call function: (identifier) @name) @reference.calls",
         "(function_definition) @local.scope",
         "(named_expression name: (identifier) @local.definition)",
         "(list_comprehension (for_in_clause left: (identifier) @local.definition)) @local.scope",
     ];
-    let source = "def x():\n    pass\n\ndef run():\n    [(x := v) for v in range(3)]\n    x()\n\ndef go():\n    x()\n";
-    assert_eq!(calls(OWN, source), ["sym:a.py::go -> sym:a.py::x []"]);
+    let source = "def x():\n    pass\n\n[(x := v) for v in range(3)]\nx()\n\ndef run():\n    [(x := v) for v in range(3)]\n    x()\n";
+    assert_eq!(calls(PLAIN, source), ["file:a.py -> sym:a.py::x []", "sym:a.py::run -> sym:a.py::x []"]);
+}
+
+#[test]
+fn a_method_local_binds_in_the_method_and_not_in_the_class_around_it() {
+    // The class is a plain scope and the method a scope only through its parameters' pattern; the
+    // nearer one holds the assignment, so a sibling method's call still reaches `x`.
+    const NEAREST: &[&str] = &[
+        "(call function: (identifier) @name) @reference.calls",
+        "(class_definition) @local.scope",
+        "(function_definition parameters: (parameters (identifier) @local.definition)) @local.scope",
+        "(assignment left: (identifier) @local.definition)",
+    ];
+    let source = "def x():\n    pass\n\nclass C:\n    def run(self, a):\n        x = a\n        x()\n\n    def go(self):\n        x()\n";
+    assert_eq!(calls(NEAREST, source), ["sym:a.py::C.go -> sym:a.py::x []"]);
 }
 
 #[test]
@@ -204,8 +232,24 @@ fn calls(refs: &[&str], source: &str) -> Vec<String> {
     let file = File { lang: Lang::Python, rel: "a.py", text: source, src: source, tree: Some(&tree) };
     let s = spec(STRIPPED, Export::All);
     let (_dir, resolver) = repo(&["**/*.py"], &[("a.py", source)]);
-    let facts = facts(&resolver, &s, compiled(DECL), Some(compiled(refs)), &file);
+    let facts = facts(&s, compiled(DECL), Some(compiled(refs)), &file);
     let mut ex = Extraction::default();
     resolve(&resolver, &s, &file, &facts, &mut ex);
     lines(&ex, EdgeKind::Calls)
+}
+
+#[test]
+fn a_node_another_node_of_its_span_sorts_between_two_matches_of_is_still_claimed_once() {
+    // `x = 1` is an assignment inside an expression statement of the same span, so the statement's
+    // match sorts between the assignment's two. The first pattern keeps the assignment.
+    let decl = compiled(&[
+        "(assignment left: (identifier) @name) @definition.variable",
+        r#"((expression_statement (assignment left: (identifier) @name)) @definition.constant (#set! prefix "s/"))"#,
+        r#"((assignment left: (identifier) @name) @definition.function (#set! prefix "f/"))"#,
+    ]);
+    let source = "x = 1\n";
+    let tree = Lang::Python.parse(source.as_bytes()).unwrap();
+    let file = File { lang: Lang::Python, rel: "a.py", text: source, src: source, tree: Some(&tree) };
+    let facts = facts(&spec(STRIPPED, Export::All), decl, None, &file);
+    assert_eq!(facts.defs.iter().map(|d| d.qualified.as_str()).collect::<Vec<_>>(), ["x", "s/x"]);
 }
