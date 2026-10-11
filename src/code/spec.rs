@@ -284,8 +284,9 @@ mod table {
         // Which of two definitions a call reaches is whichever `source` ran last, which the graph
         // does not model, so a name defined twice resolves to neither.
         ambiguity: Ambiguity::Unique,
-        imports: ImportPaths { root: true, suffixes: &[""] },
         cross_file: true,
+        // Unread: the `import` hook resolves every `source`, and a path it cannot place imports nothing.
+        imports: ImportPaths { root: false, suffixes: &[] },
         dotted_dirs: true,
         hooks: Hooks {
             collect: Some(computed_paths::collect),

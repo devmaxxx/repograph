@@ -481,8 +481,9 @@ impl<'a> Watcher<'a> {
             self.resolver_stale = false;
         } else {
             // A kept resolver has memoized the declarations of files read across; an edited one
-            // must be read again, or a file resolving into it sees what it declared before.
-            let moved: Vec<String> = diff.changed.iter().map(|e| e.rel.clone()).chain(diff.removed.iter().cloned()).collect();
+            // must be read again, or a file resolving into it sees what it declared before. A removal
+            // never lands here: it moves a path, which rebuilds the resolver.
+            let moved: Vec<String> = diff.changed.iter().map(|e| e.rel.clone()).collect();
             self.ex.code.forget(&moved);
         }
         // This poll is an `update` in everything but name — it re-extracts and it writes — so it

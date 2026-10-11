@@ -548,12 +548,6 @@ pub(crate) fn widen(stale: &[String], removed: &[String], graph: &Graph, all_rel
         Some(Spec { visibility: Visibility::Imported { transitive }, hooks, .. }) if hooks.header.is_none() => Some(*transitive),
         _ => None,
     };
-    // Grouped once: a chain of imports is as many hops as it is long, and each hop would otherwise
-    // be a scan of every edge in the graph.
-    let mut importers: HashMap<&str, Vec<&str>> = HashMap::new();
-    for e in graph.edges.iter().filter(|e| e.kind == EdgeKind::Imports) {
-        importers.entry(e.target.as_str()).or_default().push(e.source.as_str());
-    }
     let mut reached: BTreeSet<String> = BTreeSet::new();
     let mut frontier: Vec<(String, bool)> = Vec::new();
     for rel in stale.iter().chain(removed) {
@@ -562,6 +556,16 @@ pub(crate) fn widen(stale: &[String], removed: &[String], graph: &Graph, all_rel
             reached.insert(id.clone());
             frontier.push((id, transitive));
         }
+    }
+    // Most refreshes touch no file of such a language, and then no edge needs grouping.
+    if frontier.is_empty() {
+        return Vec::new();
+    }
+    // Grouped once: a chain of imports is as many hops as it is long, and each hop would otherwise
+    // be a scan of every edge in the graph.
+    let mut importers: HashMap<&str, Vec<&str>> = HashMap::new();
+    for e in graph.edges.iter().filter(|e| e.kind == EdgeKind::Imports) {
+        importers.entry(e.target.as_str()).or_default().push(e.source.as_str());
     }
     while let Some((file, transitive)) = frontier.pop() {
         for &importer in importers.get(file.as_str()).into_iter().flatten() {
