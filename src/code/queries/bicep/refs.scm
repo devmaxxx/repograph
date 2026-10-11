@@ -1,6 +1,7 @@
-; A name read anywhere an expression is: what it names, and from which declaration, is the
-; `symbolic_names` rule's. A declaration's own name, an object key, a parameter and a loop variable
-; bind rather than read, so no pattern takes them.
+; A name read anywhere an expression is names this file's declaration of that name. A declaration's
+; own name, an object key, a parameter and a loop variable bind rather than read, so no pattern takes
+; them. A call needs no pattern of its own to tell a function from a parameter: Bicep refuses a call
+; to a name a parameter or variable shadows, so a shadowed built-in is spelled `sys.range(…)`.
 [
   (arguments (identifier) @reference.references)
   (array (identifier) @reference.references)
@@ -27,8 +28,6 @@
   (lambda_expression (identifier) @reference.references .)
   (for_statement . (_) (identifier) @reference.references)
   (call_expression function: (identifier) @reference.references)
-  ; `vnet::subnet` names a child resource through its parent.
-  (resource_expression) @reference.references
 ]
 
 [

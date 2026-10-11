@@ -63,7 +63,7 @@ resource vnet 'Microsoft.Network/virtualNetworks@2023-04-01' existing = {
     name: 'default'
   }
 }
-@description('the vault')
+@sys.description('the vault')
 resource kv 'Microsoft.KeyVault/vaults@2023-02-01' = {
   name: 'kv'
   location: location
@@ -77,10 +77,10 @@ output id string = kv.id
 
 #[test]
 fn a_name_read_in_the_file_is_a_reference_and_a_key_a_loop_variable_or_a_decorator_is_not() {
+    // `vnet::subnet` spells no declared name, so it reads nothing.
     let ex = extract(&[("stack.bicep", REFS)], "stack.bicep");
     assert_eq!(lines(&ex, EdgeKind::References), [
         "sym:stack.bicep::kv -> sym:stack.bicep::location []",
-        "sym:stack.bicep::kv -> sym:stack.bicep::vnet.subnet []",
         "sym:stack.bicep::name -> sym:stack.bicep::location []",
         "sym:stack.bicep::output/id -> sym:stack.bicep::kv []",
         "sym:stack.bicep::vnet -> sym:stack.bicep::name []",
@@ -101,10 +101,10 @@ fn a_lambda_parameter_and_an_iterable_named_like_a_declaration_bind_only_where_t
 }
 
 #[test]
-fn a_decorator_argument_is_read_for_the_declaration_it_decorates() {
+fn a_decorator_argument_is_read_by_the_file_since_the_decorator_stands_outside_its_declaration() {
     let src = "param max int\n@maxValue(max)\nparam n int\n";
     let ex = extract(&[("s.bicep", src)], "s.bicep");
-    assert_eq!(lines(&ex, EdgeKind::References), ["sym:s.bicep::n -> sym:s.bicep::max []"]);
+    assert_eq!(lines(&ex, EdgeKind::References), ["file:s.bicep -> sym:s.bicep::max []"]);
 }
 
 const MODULES: &str = "\
@@ -181,8 +181,9 @@ fn a_function_parameter_binds_its_name_in_the_body() {
 }
 
 #[test]
-fn a_call_names_only_a_func_never_a_param_or_var_of_the_same_name() {
-    let src = "param range int\nvar length = 1\nvar xs = [for i in range(0, 3): i]\nvar n = length(xs)\nfunc twice(v int) int => v * 2\nvar t = twice(range)\n";
+fn a_built_in_a_param_or_var_shadows_is_called_through_sys_and_names_nothing() {
+    // Bicep refuses `range(0, 3)` while `param range` is in scope, so the built-in is `sys.range`.
+    let src = "param range int\nvar length = 1\nvar xs = [for i in sys.range(0, 3): i]\nvar n = sys.length(xs)\nfunc twice(v int) int => v * 2\nvar t = twice(range)\n";
     let ex = extract(&[("s.bicep", src)], "s.bicep");
     assert_eq!(lines(&ex, EdgeKind::References), [
         "sym:s.bicep::n -> sym:s.bicep::xs []",
@@ -195,15 +196,16 @@ fn a_call_names_only_a_func_never_a_param_or_var_of_the_same_name() {
 fn a_comment_between_a_decorator_and_its_declaration_leaves_both_attached() {
     let src = "param max int\n@maxValue(max)\n// the cap\nparam n int\n@export()\n// shared\ntype sku = 'A'\n";
     let ex = extract(&[("s.bicep", src)], "s.bicep");
-    assert_eq!(lines(&ex, EdgeKind::References), ["sym:s.bicep::n -> sym:s.bicep::max []"]);
+    assert_eq!(lines(&ex, EdgeKind::References), ["file:s.bicep -> sym:s.bicep::max []"]);
     assert!(lines(&ex, EdgeKind::Declares).contains(&"file:s.bicep -> sym:s.bicep::sku [export]".to_string()));
 }
 
 #[test]
-fn a_nested_resource_is_read_by_its_short_name_inside_its_parent_only() {
+fn a_nested_resource_is_not_read_by_its_short_name() {
+    // A child resource is declared as `vnet.subnet`, which neither `subnet` nor `vnet::subnet` spells.
     let src = "resource vnet 'a/b@1' = {\n  name: 'v'\n  resource subnet 'subnets' = {\n    name: 's'\n  }\n  resource other 'subnets' = {\n    name: 'o'\n    dependsOn: [subnet]\n  }\n}\nvar outside = subnet\n";
     let ex = extract(&[("s.bicep", src)], "s.bicep");
-    assert_eq!(lines(&ex, EdgeKind::References), ["sym:s.bicep::vnet.other -> sym:s.bicep::vnet.subnet []"]);
+    assert_eq!(lines(&ex, EdgeKind::References), Vec::<String>::new());
 }
 
 #[test]

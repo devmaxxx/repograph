@@ -6,7 +6,6 @@ pub(crate) mod attribute_lines;
 pub(crate) mod computed_paths;
 pub(crate) mod inheritance_clauses;
 pub(crate) mod module_reach;
-pub(crate) mod symbolic_names;
 pub(crate) mod target_or_group;
 pub(crate) mod traversal_addresses;
 pub(crate) mod type_paths;

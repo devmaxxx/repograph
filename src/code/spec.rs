@@ -241,8 +241,7 @@ const PROSE: Body = Body { doc: Doc::Adjacent { kinds: &["comment"], between: &[
 mod table {
     use super::*;
     use crate::code::exceptions::{
-        attribute_lines, computed_paths, inheritance_clauses, module_reach, symbolic_names, target_or_group, traversal_addresses,
-        type_paths,
+        attribute_lines, computed_paths, inheritance_clauses, module_reach, target_or_group, traversal_addresses, type_paths,
     };
     use crate::code::*;
 
@@ -277,11 +276,7 @@ mod table {
         dotted_dirs: false,
         hooks: Hooks {
             import: Some(module_reach::import),
-            resolve: Some(|r, file, facts, sink| {
-                symbolic_names::resolve(r, file, facts, sink);
-                module_reach::reach(r, file, facts, sink);
-            }),
-            owns: &[EdgeKind::References],
+            resolve: Some(module_reach::reach),
             ..NONE
         },
         legacy: None,
