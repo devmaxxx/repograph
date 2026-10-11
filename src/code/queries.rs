@@ -242,6 +242,18 @@ pub(crate) fn refs(lang: Lang) -> Option<&'static Compiled> {
     cached(&REFS[slot(lang)], lang, spec(lang).queries.refs)
 }
 
+/// Compiles the queries of `langs` on other threads. A writer reads its files one after another,
+/// so a query compiled on first use stops that read for as long as the grammar takes: Postgres's
+/// two take a tenth of a second. Started before the read, they compile beside it.
+pub(crate) fn warm(langs: std::collections::BTreeSet<Lang>) {
+    use rayon::prelude::*;
+    std::thread::spawn(move || {
+        langs.into_par_iter().for_each(|lang| {
+            rayon::join(|| decl(lang), || refs(lang));
+        });
+    });
+}
+
 #[cfg(test)]
 mod contract {
     use super::*;

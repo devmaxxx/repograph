@@ -340,6 +340,8 @@ pub fn run_update(repo: &std::path::Path, cfg: &config::Config, wipe: bool) -> a
     // A build starts from an empty graph, so this one test covers both fresh builds: `build`, and
     // an `update` on a store nobody has built yet.
     let bootstrap = graph.nodes.is_empty();
+    let reread = if manifest.stale_grammar() { &entries[..] } else { &diff.changed[..] };
+    code::queries::warm(reread.iter().filter_map(|e| code::lang::Lang::of(&e.rel)).collect());
     // A tree that has not moved cannot have moved its families either, and the pass over every
     // node it takes to say so is what the no-op update a commit hook fires would pay for nothing.
     let quiet = !bootstrap && diff.changed.is_empty() && diff.removed.is_empty() && !manifest.stale_grammar();
