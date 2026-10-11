@@ -13,7 +13,6 @@ pub(crate) mod python;
 pub(crate) mod queries;
 pub(crate) mod rust_lang;
 pub(crate) mod spec;
-pub mod sql;
 pub(crate) mod syntax;
 pub(crate) mod typescript;
 

@@ -17,7 +17,7 @@ use crate::code::imports::Resolver;
 use crate::code::index::Header;
 use crate::code::lang::Lang;
 use crate::code::queries::{self, Compiled, Kind, Meta, Role};
-use crate::code::spec::{Ambiguity, Body, Cap, Doc, Export, Form, Label, Line, Spec, Visibility};
+use crate::code::spec::{Ambiguity, Cap, Doc, Export, Form, Label, Line, Spec, Visibility};
 use crate::code::syntax::{self, comment_text, last_row, text_span, DOC_CHARS};
 use crate::model::{EdgeKind, Extraction, Graph, NodeKind};
 
@@ -154,12 +154,20 @@ impl Facts {
         self.stands_for.iter().filter(|(range, _)| range.contains(&byte)).min_by_key(|(range, _)| range.len()).map(|(_, q)| q.as_str())
     }
 
-    /// The innermost definition whose node holds `byte`.
+    /// The innermost definition whose node holds `byte`. Of nodes spanning one range, as a wrapper
+    /// and the statement it wraps do, the one qualified under the other is the inner.
     pub(crate) fn owner(&self, byte: usize) -> Option<usize> {
+        let depth = |mut i: usize| {
+            let mut n = 0;
+            while let Some(p) = self.defs[i].parent {
+                (n, i) = (n + 1, p);
+            }
+            n
+        };
         let defs = self.defs.iter().enumerate().map(|(i, d)| (&d.range, i));
         defs.chain(self.repeats.iter().map(|(range, i)| (range, *i)))
             .filter(|(range, _)| range.contains(&byte))
-            .min_by_key(|(range, _)| range.len())
+            .min_by_key(|(range, i)| (range.len(), std::cmp::Reverse(depth(*i))))
             .map(|(_, i)| i)
     }
 }
@@ -243,7 +251,7 @@ pub(crate) fn facts(spec: &Spec, decl: &'static Compiled, refs: Option<&'static 
                 match role {
                     Role::Reference(edge) => facts.refs.push(read_reference(spec, &caps, *edge, *node, &refs.metas[pattern], src)),
                     Role::LocalScope => scopes.push(node.byte_range()),
-                    Role::LocalDefinition => bound.push((node.start_byte(), text(*node, src).to_string(), own.clone())),
+                    Role::LocalDefinition => bound.push((node.start_byte(), fold(spec, text(*node, src)), own.clone())),
                     Role::CiteComment => facts.cites.push(Cite { source: None, context: "comment", range: node.byte_range() }),
                     Role::CiteString => facts.cites.push(Cite { source: None, context: "string", range: node.byte_range() }),
                     _ => {}
@@ -321,15 +329,20 @@ fn read_import(caps: &[(Role, Node)], meta: &Meta, src: &str) -> Option<Import> 
     })
 }
 
+/// `name` as the spec's `fold` compares it.
+fn fold(spec: &Spec, name: &str) -> String {
+    spec.hooks.fold.map_or_else(|| name.to_string(), |fold| fold(name).into_owned())
+}
+
 fn read_reference(spec: &Spec, caps: &[(Role, Node)], edge: EdgeKind, site: Node, meta: &Meta, src: &str) -> Ref {
     // Repeated names spell one path, as they do for a definition: `var.region` reads `var/region`.
-    let names: Vec<&str> = caps.iter().filter(|(r, _)| *r == Role::Name).map(|(_, n)| text(*n, src)).collect();
-    let path = if names.is_empty() { text(site, src).to_string() } else { names.join("/") };
-    // A prefix spells the address a bare name stands for, as it does for a definition.
-    let name = format!("{}{path}", meta.prefix);
+    // Each is folded alone, as a quoted part keeps its case beside an unquoted one.
+    let names: Vec<String> = caps.iter().filter(|(r, _)| *r == Role::Name).map(|(_, n)| fold(spec, text(*n, src))).collect();
+    let path = if names.is_empty() { fold(spec, text(site, src)) } else { names.join("/") };
     Ref {
         source: None,
-        name: spec.hooks.fold.map_or_else(|| name.clone(), |fold| fold(&name).into_owned()),
+        // A prefix spells the address a bare name stands for, as it does for a definition.
+        name: format!("{}{path}", meta.prefix),
         receiver: caps.iter().find(|(r, _)| *r == Role::Receiver).map(|(_, n)| text(*n, src).to_string()),
         edge,
         context: meta.context.clone(),
@@ -369,7 +382,7 @@ fn qualify(spec: &Spec, decl: &Compiled, file: &File, mut declared: Vec<Declared
             another
         }
     });
-    let fold = |s: &str| spec.hooks.fold.map_or_else(|| s.to_string(), |f| f(s).into_owned());
+    let fold = |s: &str| fold(spec, s);
     let mut stack: Vec<Open> = Vec::new();
     let mut ids: HashMap<String, usize> = HashMap::new();
     for d in declared {
@@ -390,11 +403,11 @@ fn qualify(spec: &Spec, decl: &Compiled, file: &File, mut declared: Vec<Declared
             Some(owner) => Some((text(owner, src).to_string(), '.')),
             None => parent.map(|p| (p.qualified.clone(), p.join)),
         };
-        let under = |tail: String| match &base {
+        let under = |base: &Option<(String, char)>, tail: String| match base {
             Some((b, j)) => format!("{b}{j}{tail}"),
             None => tail,
         };
-        let qualified = under(format!("{}{name}", meta.prefix));
+        let qualified = under(&base, format!("{}{name}", meta.prefix));
         let Declaring::Def(kind) = d.role else {
             facts.stands_for.push((d.node.byte_range(), qualified.clone()));
             stack.push(Open { end: d.node.end_byte(), qualified, join: '.', def: None });
@@ -414,7 +427,13 @@ fn qualify(spec: &Spec, decl: &Compiled, file: &File, mut declared: Vec<Declared
         let (line, end) = text_span(d.node);
         let label = match spec.label {
             Label::Qualified => qualified.clone(),
-            Label::Name => under(fold(text(d.names[d.names.len() - 1], src))),
+            Label::Name => {
+                let container = match (d.owner, parent.and_then(|p| p.def)) {
+                    (None, Some(p)) => Some((facts.defs[p].label.clone(), parent.map_or('.', |p| p.join))),
+                    _ => base.clone(),
+                };
+                under(&container, fold(text(d.names[d.names.len() - 1], src)))
+            }
         };
         let def = Def {
             id,
@@ -433,7 +452,7 @@ fn qualify(spec: &Spec, decl: &Compiled, file: &File, mut declared: Vec<Declared
             Some(signature) => signature(file, &def),
             None => signature_line(spec.body.line, d.node, d.names[0], src),
         };
-        let doc = doc_lines(spec.body, d.node, d.doc, src);
+        let doc = doc_lines(spec, d.node, d.doc, src);
         let def = Def { body: if doc.is_empty() { signature } else { format!("{doc}\n{signature}") }, ..def };
         facts.defs.push(def);
         if let Some(join) = kind.join() {
@@ -461,6 +480,11 @@ fn signature_line(line: Line, def: Node, name: Node, src: &str) -> String {
             let end = src[name.start_byte()..].find('\n').map_or(src.len(), |i| name.start_byte() + i).min(def.end_byte());
             src[start..end].trim().to_string()
         }
+        Line::Row => {
+            let start = src[..def.start_byte()].rfind('\n').map_or(0, |i| i + 1);
+            let end = src[def.start_byte()..].find('\n').map_or(src.len(), |i| def.start_byte() + i);
+            src[start..end].trim().to_string()
+        }
     }
 }
 
@@ -470,17 +494,20 @@ fn above(n: Node) -> Option<Node> {
     n.prev_named_sibling().or_else(|| n.parent().filter(|p| p.kind() == "body").and_then(|p| p.prev_named_sibling()))
 }
 
-/// `comment_text`, and `#` markers too: `comment_text` serves the C family alone. A string is
-/// unquoted and nothing else: its lines are prose, where a leading `*`, `#` or `//` is markdown.
-fn stripped(raw: &str) -> String {
+/// `comment_text`, and `#` and the language's own line markers too: `comment_text` serves the C
+/// family alone. A string is unquoted and nothing else: its lines are prose, where a leading `*`,
+/// `#` or `//` is markdown.
+fn stripped(raw: &str, markers: &[&str]) -> String {
     let raw = raw.trim();
     if raw.starts_with('"') {
         return raw.trim_matches('"').trim().to_string();
     }
-    comment_text(raw).lines().map(|l| l.trim_start_matches('#').trim()).filter(|l| !l.is_empty()).collect::<Vec<_>>().join("\n")
+    let unmark = |l: &str| markers.iter().fold(l.trim_start_matches('#'), |l, m| l.trim_start_matches(m)).trim().to_string();
+    comment_text(raw).lines().map(unmark).filter(|l| !l.is_empty()).collect::<Vec<_>>().join("\n")
 }
 
-fn doc_lines(body: Body, def: Node, captured: Option<Node>, src: &str) -> String {
+fn doc_lines(spec: &Spec, def: Node, captured: Option<Node>, src: &str) -> String {
+    let body = spec.body;
     let parts: Vec<&str> = match body.doc {
         Doc::None => Vec::new(),
         Doc::Capture => captured.map(|n| text(n, src)).into_iter().collect(),
@@ -507,7 +534,10 @@ fn doc_lines(body: Body, def: Node, captured: Option<Node>, src: &str) -> String
     };
     let joined = match body.form {
         Form::Raw => parts.join("\n"),
-        Form::Stripped => parts.iter().map(|p| stripped(p)).filter(|p| !p.is_empty()).collect::<Vec<_>>().join("\n"),
+        Form::Stripped => {
+            let markers = spec.comments.map_or(&[][..], |c| c.lines);
+            parts.iter().map(|p| stripped(p, markers)).filter(|p| !p.is_empty()).collect::<Vec<_>>().join("\n")
+        }
     };
     match body.cap {
         Cap::Head => syntax::cap(joined, DOC_CHARS),

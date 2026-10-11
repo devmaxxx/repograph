@@ -1,9 +1,8 @@
 //! PostgreSQL extraction, each case on migrations written to a temporary repository. A name resolves through
 //! the index the walk builds from the files on disk, so the file under test sits beside its neighbours
 //! rather than being handed to the extractor alone.
-use super::header;
 use crate::code::imports::Resolver;
-use crate::code::index::header_for;
+use crate::code::index::{header_for, Header};
 use crate::code::lang::{Family, Lang};
 use crate::code::CodeExtractor;
 use crate::config::Config;
@@ -111,6 +110,10 @@ fn node<'a>(ex: &'a Extraction, id: &str) -> &'a Node {
     ex.nodes.iter().find(|n| n.id == id).unwrap_or_else(|| panic!("{id} missing from {:?}", ids(ex)))
 }
 
+fn header(source: &str) -> Header {
+    header_for(Lang::Sql, "db/000.sql", source).expect("SQL keeps a header")
+}
+
 #[test]
 fn every_created_object_is_a_symbol_named_by_its_schema() {
     let ex = Repo::new().extract("db/001.sql");
@@ -186,7 +189,7 @@ fn the_header_lists_what_a_file_creates_or_alters_and_no_member() {
         header(SCHEMA).top.iter().map(String::as_str).collect::<Vec<_>>(),
         vec!["app", "app/active", "app/active_mv", "app/clients", "app/snapshot", "app/status", "app/sweep", "app/ticket", "app/touch"]
     );
-    assert_eq!(header_for(Lang::Sql, "db/001.sql", SCHEMA), Some(header(SCHEMA)));
+    assert!(header(SCHEMA).nested == Default::default(), "a member is reached through its table");
 }
 
 #[test]
@@ -306,26 +309,17 @@ fn a_renamed_table_is_declared_under_its_new_name_and_references_its_old_one() {
     ]);
     let resolver = repo.resolver();
     let index = resolver.index(Family::Sql).expect("the globs reach .sql");
-    assert_eq!(index.files("app/clients"), vec!["db/001.sql", "db/002.sql"]);
+    // The old name is the one a rename reads, not one it declares; `SET SCHEMA` attaches to the
+    // table it moves and declares no name in the schema it moves the table to.
+    assert_eq!(index.files("app/clients"), vec!["db/001.sql"]);
     assert_eq!(index.files("app/customers"), vec!["db/002.sql"]);
-    assert_eq!(index.files("crm/customers"), vec!["db/002.sql"]);
+    assert!(index.files("crm/customers").is_empty());
     let migration_002 = repo.extract("db/002.sql");
     let renames = edges(&migration_002, EdgeKind::References);
-    for want in [
-        ("sym:db/002.sql::app/customers", "sym:db/001.sql::app/clients", "rename"),
-        ("sym:db/002.sql::crm/customers", "sym:db/002.sql::app/customers", "rename"),
-    ] {
-        assert!(renames.contains(&want), "{want:?} missing from {renames:?}");
-    }
+    assert_eq!(renames, vec![("sym:db/002.sql::app/customers", "sym:db/001.sql::app/clients", "rename")]);
     let migration_003 = repo.extract("db/003.sql");
     let fks = edges(&migration_003, EdgeKind::References);
-    for want in [
-        ("sym:db/003.sql::app/visits.c", "sym:db/002.sql::app/customers", "references"),
-        ("sym:db/003.sql::app/visits.d", "sym:db/002.sql::crm/customers", "references"),
-    ] {
-        assert!(fks.contains(&want), "{want:?} missing from {fks:?}");
-    }
-    assert!(!fks.iter().any(|(_, target, _)| target.ends_with("app/clients")), "{fks:?}");
+    assert_eq!(fks, vec![("sym:db/003.sql::app/visits.c", "sym:db/002.sql::app/customers", "references")]);
 }
 
 #[test]

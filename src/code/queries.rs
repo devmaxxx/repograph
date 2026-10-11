@@ -125,7 +125,7 @@ impl Role {
 
 /// Edge contexts in use today; a new one is a change to the graph model, not to a query.
 const CONTEXTS: &[&str] =
-    &["", "export", "arg", "get", "*", "comment", "string", "alter", "impl", "extend", "on", "type", "variable", "argument", "member"];
+    &["", "export", "arg", "get", "*", "comment", "string", "alter", "impl", "extend", "on", "type", "variable", "argument", "member", "references", "from", "rename"];
 
 /// A pattern's `#set!` properties.
 #[derive(Debug, Default, Clone)]
@@ -202,6 +202,9 @@ pub(crate) mod sources {
 
     pub(crate) const SHELL: Sources =
         Sources { decl: &[include_str!("queries/shell/decl.scm")], refs: &[include_str!("queries/shell/refs.scm")] };
+
+    pub(crate) const SQL: Sources =
+        Sources { decl: &[include_str!("queries/sql/decl.scm")], refs: &[include_str!("queries/sql/refs.scm")] };
 
     pub(crate) const SWIFT: Sources =
         Sources { decl: &[include_str!("queries/swift/decl.scm")], refs: &[include_str!("queries/swift/refs.scm")] };

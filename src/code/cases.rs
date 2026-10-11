@@ -5,6 +5,7 @@ mod bicep;
 mod graphql;
 mod hcl;
 mod shell;
+mod sql;
 mod swift;
 
 use super::CodeExtractor;

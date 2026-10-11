@@ -3,7 +3,7 @@
 
 use super::*;
 use crate::code::prose::testing::{lines, repo};
-use crate::code::spec::{ImportPaths, Sources, NONE};
+use crate::code::spec::{Body, ImportPaths, Sources, NONE};
 
 const DECL: &[&str] = &[
     r#"((function_definition name: (identifier) @name) @definition.function (#eq? @name "_kept") (#set! export "always"))"#,

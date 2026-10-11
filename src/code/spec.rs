@@ -3,7 +3,7 @@
 //! names every language: the front, the resolver, the header index, `changes` and the update's
 //! widening read this table instead of matching on `Lang` each in its own way.
 //!
-//! Most of the vocabulary below describes ported languages, and only Shell, Bicep, HCL, Terraform, Swift and GraphQL are ported yet.
+//! Most of the vocabulary below describes ported languages, and only Shell, Bicep, HCL, Terraform, Swift, GraphQL and SQL are ported yet.
 #![allow(dead_code)]
 
 use std::any::{Any, TypeId};
@@ -79,7 +79,7 @@ pub(crate) enum Doc {
 pub(crate) enum Form {
     /// Markers kept, as Shell, Bicep and HCL write them.
     Raw,
-    /// `//`, `///`, `/** */` and `#` removed.
+    /// `//`, `///`, `/** */`, `#` and the language's own line markers removed.
     Stripped,
 }
 
@@ -97,15 +97,18 @@ pub(crate) enum Line {
     First,
     /// The line holding `@name`, past any annotation lines.
     Name,
+    /// The whole row the definition starts on: a migration's statement reads with the marker a tool
+    /// wrote after it, as the line a reader greps for.
+    Row,
 }
 
 #[derive(Clone, Copy)]
 pub(crate) enum Label {
     /// The qualified name, as the id ends.
     Qualified,
-    /// The last `@name` part without its prefix, under its container's qualified name: the id says
+    /// The last `@name` part without its prefix, under its container's label: the id says
     /// `query/GetShelf` so a query and a mutation of one name stay apart, and a reader asks for
-    /// `GetShelf`.
+    /// `GetShelf`, and a column of `app/clients` reads `clients.id`.
     Name,
 }
 
@@ -253,7 +256,7 @@ const PROSE: Body = Body { doc: Doc::Adjacent { kinds: &["comment"], between: &[
 
 mod table {
     use super::*;
-    use crate::code::exceptions::{computed_paths, module_reach};
+    use crate::code::exceptions::{attachments, computed_paths, identifier_case, module_reach};
     use crate::code::*;
 
     pub(super) const TYPESCRIPT: Spec = Spec { comments: C, hooks: typescript::HOOKS, legacy: Some(typescript::extract), ..UNPORTED };
@@ -266,10 +269,28 @@ mod table {
     pub(super) const PYTHON: Spec = Spec { comments: HASH, hooks: python::HOOKS, legacy: Some(python::extract), ..UNPORTED };
     pub(super) const DART: Spec = Spec { comments: C, hooks: dart::HOOKS, legacy: Some(dart::extract), ..UNPORTED };
     pub(super) const SQL: Spec = Spec {
+        queries: crate::code::queries::sources::SQL,
+        view: None,
         comments: Some(CommentSyntax { lines: &["--"], blocks: true }),
-        hooks: sql::HOOKS,
-        legacy: Some(sql::extract),
-        ..UNPORTED
+        body: Body { form: Form::Stripped, cap: Cap::Head, line: Line::Row, ..PROSE },
+        label: Label::Name,
+        export: Export::All,
+        // `search_path` is session state no file records, so a name is looked up as written.
+        visibility: Visibility::Family,
+        // Every migration that creates or alters a table is one of its declarations.
+        ambiguity: Ambiguity::All,
+        cross_file: false,
+        imports: ImportPaths { root: false, suffixes: &[""] },
+        dotted_dirs: false,
+        // The objects alone, in `headers.json`, so a migration that starts or stops creating or
+        // altering a table re-reads the ones that name it.
+        hooks: Hooks {
+            header: Some(|rel, source| Header { top: crate::code::engine::default_header(Lang::Sql, rel, source).top, ..Header::default() }),
+            fold: Some(identifier_case::fold),
+            resolve: Some(attachments::alters),
+            ..NONE
+        },
+        legacy: None,
     };
     pub(super) const BICEP: Spec = Spec {
         queries: crate::code::queries::sources::BICEP,

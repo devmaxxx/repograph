@@ -30,18 +30,6 @@ pub(crate) fn broken(n: Node) -> bool {
     n.has_error() || std::iter::successors(n.parent(), |p| p.parent()).any(|p| p.is_error())
 }
 
-/// Every descendant of one of `kinds`, in source order, not descending into a match: a grandchild
-/// belongs to its own parent, so the caller reads it from there.
-pub(crate) fn find<'t>(n: Node<'t>, kinds: &[&str], out: &mut Vec<Node<'t>>) {
-    descend(n, &mut |c| {
-        let hit = kinds.contains(&c.kind());
-        if hit {
-            out.push(c);
-        }
-        !hit
-    });
-}
-
 /// Visits every named descendant of `n` in source order, and goes below one only when `visit` returns true.
 /// It walks with a cursor and no recursion: a generated grammar nests a left-recursive list as deep as it is
 /// long, so a 50,000-row `INSERT … VALUES` is 50,000 levels and overflows the stack of a recursive walk.
