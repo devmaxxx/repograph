@@ -17,7 +17,7 @@ use crate::code::imports::Resolver;
 use crate::code::index::Header;
 use crate::code::lang::Lang;
 use crate::code::queries::{self, Compiled, Kind, Meta, Role};
-use crate::code::spec::{Ambiguity, Body, Cap, Doc, Export, Form, Line, Spec, Visibility};
+use crate::code::spec::{Ambiguity, Body, Cap, Doc, Export, Form, Label, Line, Spec, Visibility};
 use crate::code::syntax::{self, comment_text, last_row, text_span, DOC_CHARS};
 use crate::model::{EdgeKind, Extraction, Graph, NodeKind};
 
@@ -37,6 +37,7 @@ pub(crate) struct File<'a> {
 pub(crate) struct Def {
     pub id: String,
     pub qualified: String,
+    pub label: String,
     pub name: String,
     pub kind: Kind,
     pub range: Range<usize>,
@@ -389,8 +390,8 @@ fn qualify(spec: &Spec, decl: &Compiled, file: &File, mut declared: Vec<Declared
             Some(owner) => Some((text(owner, src).to_string(), '.')),
             None => parent.map(|p| (p.qualified.clone(), p.join)),
         };
-        let leaf = format!("{}{name}", meta.prefix);
-        let qualified = base.map_or_else(|| leaf.clone(), |(b, j)| format!("{b}{j}{leaf}"));
+        let under = |tail: String| base.as_ref().map_or_else(|| tail.clone(), |(b, j)| format!("{b}{j}{tail}"));
+        let qualified = under(format!("{}{name}", meta.prefix));
         let Declaring::Def(kind) = d.role else {
             facts.stands_for.push((d.node.byte_range(), qualified.clone()));
             stack.push(Open { end: d.node.end_byte(), qualified, join: '.', def: None });
@@ -408,9 +409,14 @@ fn qualify(spec: &Spec, decl: &Compiled, file: &File, mut declared: Vec<Declared
         }
         ids.insert(id.clone(), facts.defs.len());
         let (line, end) = text_span(d.node);
+        let label = match spec.label {
+            Label::Qualified => qualified.clone(),
+            Label::Name => under(fold(text(d.names[d.names.len() - 1], src))),
+        };
         let def = Def {
             id,
             qualified: qualified.clone(),
+            label,
             name,
             kind,
             range: d.node.byte_range(),
@@ -461,8 +467,13 @@ fn above(n: Node) -> Option<Node> {
     n.prev_named_sibling().or_else(|| n.parent().filter(|p| p.kind() == "body").and_then(|p| p.prev_named_sibling()))
 }
 
-/// `comment_text`, and `#` markers too: `comment_text` serves the C family alone.
+/// `comment_text`, and `#` markers and a string's quotes too: `comment_text` serves the C family alone.
 fn stripped(raw: &str) -> String {
+    // A description or a docstring is a string, whose quotes mark it as a comment's markers do.
+    let raw = match raw.trim() {
+        s if s.starts_with('"') => s.trim_matches('"'),
+        s => s,
+    };
     comment_text(raw).lines().map(|l| l.trim_start_matches('#').trim()).filter(|l| !l.is_empty()).collect::<Vec<_>>().join("\n")
 }
 
@@ -513,7 +524,7 @@ fn doc_lines(body: Body, def: Node, captured: Option<Node>, src: &str) -> String
 pub(crate) fn write(file: &File, facts: &Facts, ex: &mut Extraction) {
     let rel = file.rel;
     for d in &facts.defs {
-        ex.node_span(NodeKind::Symbol, &d.id, &d.qualified, &d.body, rel, (d.line, d.end));
+        ex.node_span(NodeKind::Symbol, &d.id, &d.label, &d.body, rel, (d.line, d.end));
         ex.edge(&facts.source_id(rel, d.parent), &d.id, EdgeKind::Declares, if d.export { "export" } else { "" }, rel);
     }
     for &(parent, first, export) in &facts.redeclared {
@@ -734,6 +745,12 @@ pub(crate) fn header(facts: &Facts) -> Header {
         }
     }
     h
+}
+
+/// `header` of what `source` declares, for a family that keeps it in `headers.json`; empty when the
+/// grammar reads nothing.
+pub(crate) fn default_header(lang: Lang, rel: &str, source: &str) -> Header {
+    declarations(lang, rel, source).map(|facts| header(&facts)).unwrap_or_default()
 }
 
 /// `decl` facts alone, for a file another file reads across through `Resolver::facts`.

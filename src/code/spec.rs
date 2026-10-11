@@ -3,7 +3,7 @@
 //! names every language: the front, the resolver, the header index, `changes` and the update's
 //! widening read this table instead of matching on `Lang` each in its own way.
 //!
-//! Most of the vocabulary below describes ported languages, and only Shell, Bicep, HCL, Terraform and Swift are ported yet.
+//! Most of the vocabulary below describes ported languages, and only Shell, Bicep, HCL, Terraform, Swift and GraphQL are ported yet.
 #![allow(dead_code)]
 
 use std::any::{Any, TypeId};
@@ -24,6 +24,7 @@ pub(crate) struct Spec {
     /// What `changes` tells a comment-only hunk by; `None` where markup decides what a line is.
     pub comments: Option<CommentSyntax>,
     pub body: Body,
+    pub label: Label,
     pub export: Export,
     pub visibility: Visibility,
     pub ambiguity: Ambiguity,
@@ -95,6 +96,16 @@ pub(crate) enum Line {
     /// The definition node's first line.
     First,
     /// The line holding `@name`, past any annotation lines.
+    Name,
+}
+
+#[derive(Clone, Copy)]
+pub(crate) enum Label {
+    /// The qualified name, as the id ends.
+    Qualified,
+    /// The last `@name` part without its prefix, under its container's qualified name: the id says
+    /// `query/GetShelf` so a query and a mutation of one name stay apart, and a reader asks for
+    /// `GetShelf`.
     Name,
 }
 
@@ -226,6 +237,7 @@ const UNPORTED: Spec = Spec {
     view: None,
     comments: None,
     body: Body { doc: Doc::None, form: Form::Raw, cap: Cap::Tail, line: Line::First },
+    label: Label::Qualified,
     export: Export::All,
     visibility: Visibility::File,
     ambiguity: Ambiguity::Unique,
@@ -253,7 +265,6 @@ mod table {
     pub(super) const RUST: Spec = Spec { comments: C, hooks: rust_lang::HOOKS, legacy: Some(rust_lang::extract), ..UNPORTED };
     pub(super) const PYTHON: Spec = Spec { comments: HASH, hooks: python::HOOKS, legacy: Some(python::extract), ..UNPORTED };
     pub(super) const DART: Spec = Spec { comments: C, hooks: dart::HOOKS, legacy: Some(dart::extract), ..UNPORTED };
-    pub(super) const GRAPHQL: Spec = Spec { comments: HASH, hooks: graphql::HOOKS, legacy: Some(graphql::extract), ..UNPORTED };
     pub(super) const SQL: Spec = Spec {
         comments: Some(CommentSyntax { lines: &["--"], blocks: true }),
         hooks: sql::HOOKS,
@@ -265,6 +276,7 @@ mod table {
         view: None,
         comments: C,
         body: Body { doc: Doc::Adjacent { kinds: &["comment"], between: &["decorators"] }, ..PROSE },
+        label: Label::Qualified,
         // The query's `#set! export` decides: a parameter, an output, or what `@export()` decorates.
         export: Export::Show(&[]),
         visibility: Visibility::File,
@@ -281,6 +293,7 @@ mod table {
         view: None,
         comments: HCL_COMMENTS,
         body: PROSE,
+        label: Label::Qualified,
         // A bake file's every block is invoked by name from outside it.
         export: Export::All,
         visibility: Visibility::File,
@@ -296,6 +309,7 @@ mod table {
         view: None,
         comments: HCL_COMMENTS,
         body: PROSE,
+        label: Label::Qualified,
         // The query's `#set! export` decides: a variable and an output are the module's interface.
         export: Export::Show(&[]),
         // A module is a directory: what one file declares, every file beside it reads.
@@ -313,6 +327,7 @@ mod table {
         comments: C,
         // No doc. A declaration starts at its attributes, so the line is the one holding its name.
         body: Body { doc: Doc::None, form: Form::Raw, cap: Cap::Tail, line: Line::Name },
+        label: Label::Qualified,
         export: Export::Hide(&["private", "fileprivate"]),
         // A module sees every file in it without an import.
         visibility: Visibility::Family,
@@ -323,11 +338,33 @@ mod table {
         hooks: NONE,
         legacy: None,
     };
+    pub(super) const GRAPHQL: Spec = Spec {
+        queries: crate::code::queries::sources::GRAPHQL,
+        view: None,
+        comments: HASH,
+        // A description sits inside its definition, above the name.
+        body: Body { doc: Doc::Capture, form: Form::Stripped, cap: Cap::Head, line: Line::Name },
+        label: Label::Name,
+        export: Export::All,
+        // Codegen treats a fragment's name as global, as the schema does a type's.
+        visibility: Visibility::Family,
+        // A fragment two documents declare is spread from both, and `extend type` adds to every
+        // definition of its type.
+        ambiguity: Ambiguity::All,
+        cross_file: false,
+        imports: ImportPaths { root: false, suffixes: &[""] },
+        dotted_dirs: false,
+        // The default header, kept in `headers.json` so a document that starts or stops declaring a
+        // name re-reads the documents that use it.
+        hooks: Hooks { header: Some(|rel, source| crate::code::engine::default_header(Lang::GraphQl, rel, source)), ..NONE },
+        legacy: None,
+    };
     pub(super) const SHELL: Spec = Spec {
         queries: crate::code::queries::sources::SHELL,
         view: None,
         comments: HASH,
         body: PROSE,
+        label: Label::Qualified,
         // Any script that sources the file can call its functions.
         export: Export::All,
         visibility: Visibility::Imported { transitive: true },

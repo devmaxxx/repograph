@@ -1,12 +1,12 @@
 //! GraphQL extraction, each case on documents written to a temporary repository. A spread or a type resolves
 //! through the index the walk builds from every document on disk, so the document under test sits beside
 //! the ones it names.
-use super::header;
 use crate::code::imports::Resolver;
 use crate::code::index::header_for;
 use crate::code::lang::{Family, Lang};
 use crate::code::CodeExtractor;
 use crate::config::Config;
+use crate::code::index::Header;
 use crate::model::{EdgeKind, Extraction, Extractor, Node};
 
 const OPS: &str = r##"# The shelf screen.
@@ -122,6 +122,10 @@ fn node<'a>(ex: &'a Extraction, id: &str) -> &'a Node {
     ex.nodes.iter().find(|n| n.id == id).unwrap_or_else(|| panic!("{id} missing from {:?}", ids(ex)))
 }
 
+fn header(source: &str) -> Header {
+    header_for(Lang::GraphQl, "h.graphql", source).expect("GraphQL keeps a header")
+}
+
 fn top(source: &str) -> Vec<String> {
     header(source).top.into_iter().collect()
 }
@@ -153,17 +157,28 @@ fn schema_definitions_are_symbols_and_fields_are_members() {
 }
 
 #[test]
-fn a_description_or_the_comments_above_are_the_body_and_the_name_line_starts_the_span() {
+fn a_description_is_the_doc_and_the_name_line_the_last_line_of_the_body() {
     let repo = Repo::new();
-    let ops = repo.extract("app/shelf.gql");
-    let query = node(&ops, "sym:app/shelf.gql::query/GetShelf");
-    assert_eq!((query.line, query.end, query.body.as_str()), (2, 7, "The shelf screen.\nquery GetShelf($id: ID!, $filter: BookInput) {"));
     let schema = repo.extract("schema/schema.graphql");
     let shelf = node(&schema, "sym:schema/schema.graphql::Shelf");
-    assert_eq!((shelf.line, shelf.end), (2, 5));
+    // The description sits inside the definition, so the span starts at it.
+    assert_eq!((shelf.line, shelf.end), (1, 5));
     assert_eq!(shelf.body, "A shelf of books, FR-WEB-02.\ntype Shelf implements Node & Named @key(fields: \"id\") {");
+    // An operation or a fragment has no description, and a comment above it is not one.
+    let ops = repo.extract("app/shelf.gql");
+    let query = node(&ops, "sym:app/shelf.gql::query/GetShelf");
+    assert_eq!((query.line, query.end, query.body.as_str()), (2, 7, "query GetShelf($id: ID!, $filter: BookInput) {"));
     let fragments = repo.extract("app/fragments.gql");
-    assert_eq!(node(&fragments, "sym:app/fragments.gql::fragment/BookFields").body, "FR-WEB-01 names the fields a book card shows.\nfragment BookFields on Book {");
+    assert_eq!(node(&fragments, "sym:app/fragments.gql::fragment/BookFields").body, "fragment BookFields on Book {");
+}
+
+#[test]
+fn a_block_description_reads_without_its_quotes_and_a_field_keeps_its_own() {
+    let src = "type Lamp {\n  \"\"\"\n  Lights the shelf.\n  \"\"\"\n  glow(level: Int): Int\n}\n";
+    let ex = Repo::with(&[("schema/lamp.graphql", src)]).extract("schema/lamp.graphql");
+    let glow = node(&ex, "sym:schema/lamp.graphql::Lamp.glow");
+    assert_eq!((glow.line, glow.end, glow.body.as_str()), (2, 5, "Lights the shelf.\nglow(level: Int): Int"));
+    assert_eq!(node(&ex, "sym:schema/lamp.graphql::Lamp").body, "type Lamp {");
 }
 
 #[test]
@@ -340,4 +355,24 @@ fn a_comment_ending_the_line_of_the_definition_before_it_is_not_the_next_ones_de
     let repo = Repo::with(&[("schema/s.graphql", "type Old { id: ID } # retired soon\ntype Next { id: ID }\n")]);
     let ex = repo.extract("schema/s.graphql");
     assert_eq!(node(&ex, "sym:schema/s.graphql::Next").body, "type Next { id: ID }");
+}
+
+#[test]
+fn a_type_beneath_nested_list_and_non_null_wrappers_is_referenced() {
+    let src = "type Grid {\n  cells(at: [[Int!]!]!): [[Cell!]]!\n}\n\ntype Cell {\n  id: ID!\n}\n\nquery Q($rows: [[Cell!]!]!) {\n  grid { id }\n}\n";
+    let ex = Repo::with(&[("schema/grid.graphql", src)]).extract("schema/grid.graphql");
+    assert_eq!(edges(&ex, EdgeKind::References), vec![
+        ("sym:schema/grid.graphql::Grid.cells", "sym:schema/grid.graphql::Cell", "type"),
+        ("sym:schema/grid.graphql::query/Q", "sym:schema/grid.graphql::Cell", "variable"),
+    ]);
+}
+
+#[test]
+fn a_directive_on_an_argument_decorates_the_field_and_one_on_an_enum_value_the_enum() {
+    let src = "directive @old on ARGUMENT_DEFINITION | ENUM_VALUE\n\ntype Shelf {\n  books(first: Int @old): Int\n}\n\nenum Genre {\n  SCIFI @old\n}\n";
+    let ex = Repo::with(&[("schema/old.graphql", src)]).extract("schema/old.graphql");
+    assert_eq!(edges(&ex, EdgeKind::DecoratedBy), vec![
+        ("sym:schema/old.graphql::Genre", "sym:schema/old.graphql::directive/old", ""),
+        ("sym:schema/old.graphql::Shelf.books", "sym:schema/old.graphql::directive/old", ""),
+    ]);
 }

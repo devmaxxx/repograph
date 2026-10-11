@@ -53,6 +53,7 @@ fn spec(body: Body, export: Export) -> Spec {
         view: None,
         comments: None,
         body,
+        label: Label::Qualified,
         export,
         visibility: Visibility::File,
         ambiguity: Ambiguity::Unique,

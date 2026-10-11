@@ -2,6 +2,7 @@
 //! construct is pinned by the assertion rather than by a shared fixture.
 
 mod bicep;
+mod graphql;
 mod hcl;
 mod shell;
 mod swift;
