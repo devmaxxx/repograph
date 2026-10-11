@@ -991,10 +991,12 @@ fn the_file_node_every_language_writes_is_the_one_an_unread_file_always_got() {
 #[test]
 fn the_note_names_each_extension_once_with_its_count() {
     use crate::code::lang::files_only_note;
+    // An empty root: the note reads a shebang under it, never under the process's directory.
+    let root = tempfile::tempdir().unwrap();
     let rels = ["a/B.log", "a/C.log", "b/x.ts", "Makefile"];
-    assert_eq!(files_only_note(rels.into_iter()).as_deref(),
+    assert_eq!(files_only_note(root.path(), rels.into_iter()).as_deref(),
         Some("code: no grammar reads 2 .log, 1 (no extension) — indexed as files only"));
-    assert_eq!(files_only_note(["b/x.ts", "c/y.tsx", "d/z.mjs"].into_iter()), None);
+    assert_eq!(files_only_note(root.path(), ["b/x.ts", "c/y.tsx", "d/z.mjs"].into_iter()), None);
 }
 
 #[test]
@@ -1036,7 +1038,8 @@ fn an_uppercase_extension_is_a_file_named_by_the_note() {
     assert_eq!(Lang::of("a/Legacy.JAVA"), None);
     let ex = extract("a/Legacy.JAVA", "package a;\n\npublic class Legacy {}\n");
     assert_eq!(ids(&ex), vec!["file:a/Legacy.JAVA"]);
-    assert!(files_only_note(["a/Legacy.JAVA"].into_iter()).is_some_and(|n| n.contains(".JAVA")));
+    let root = tempfile::tempdir().unwrap();
+    assert!(files_only_note(root.path(), ["a/Legacy.JAVA"].into_iter()).is_some_and(|n| n.contains(".JAVA")));
 }
 
 #[test]

@@ -75,6 +75,20 @@ fn a_source_path_built_from_the_scripts_own_directory_is_imported_and_nothing_el
     assert_eq!(lines(&ex, EdgeKind::Calls), ["file:tools/run.sh -> sym:tools/lib.sh::helper []"]);
 }
 
+#[test]
+fn a_source_line_is_imported_from_text_edited_since_the_resolver_collected_it() {
+    let on_disk = "HERE=\"$(dirname \"$0\")\"\n. \"$HERE/lib.sh\"\nsource -- \"$HERE/two.sh\"\n";
+    let files = [("tools/run.sh", on_disk), ("tools/lib.sh", ""), ("tools/two.sh", "")];
+    let (_dir, resolver) = repo(GLOBS, &files);
+    // A serve poll extracts the editor's text against a resolver that collected the file before the edit.
+    let edited = format!("# moved down a line\n{on_disk}");
+    let ex = crate::code::front::read(&resolver, "tools/run.sh", &edited);
+    assert_eq!(lines(&ex, EdgeKind::Imports), [
+        "file:tools/run.sh -> file:tools/lib.sh [*]",
+        "file:tools/run.sh -> file:tools/two.sh [*]",
+    ]);
+}
+
 const RUNS: &str = r#"HERE="$(cd "$(dirname "$0")" && pwd)"
 check() {
   "$HERE/quiet.sh" --wait 600
@@ -290,8 +304,7 @@ fn the_note_leaves_out_a_script_its_shebang_has_read() {
     let dir = tempfile::tempdir().unwrap();
     std::fs::write(dir.path().join("deploy"), "#!/usr/bin/env bash\n").unwrap();
     std::fs::write(dir.path().join("notes"), "plain\n").unwrap();
-    let paths = [dir.path().join("deploy"), dir.path().join("notes")];
-    assert_eq!(crate::code::lang::files_only_note(paths.iter()).as_deref(),
+    assert_eq!(crate::code::lang::files_only_note(dir.path(), ["deploy", "notes"].into_iter()).as_deref(),
         Some("code: no grammar reads 1 (no extension) — indexed as files only"));
 }
 

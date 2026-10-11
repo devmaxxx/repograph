@@ -227,8 +227,8 @@ pub(crate) fn apply_diff(repo: &std::path::Path, store: &store::Store, graph: &m
     // A graph read from nothing is read beside no headers either, whatever an older store left.
     let fresh = graph.nodes.is_empty();
     let named: std::collections::BTreeSet<&str> = diff.changed.iter().map(|e| e.rel.as_str()).collect();
-    let code_changed = diff.changed.iter().filter(|e| e.kind == walk::FileKind::Code).map(|e| repo.join(&e.rel));
-    if let Some(note) = code::lang::files_only_note(code_changed) {
+    let code_changed = diff.changed.iter().filter(|e| e.kind == walk::FileKind::Code).map(|e| e.rel.as_str());
+    if let Some(note) = code::lang::files_only_note(repo, code_changed) {
         eprintln!("{}", terminal_safe(&note));
     }
     let regrammar: Vec<&walk::Entry> = match manifest.stale_grammar() {

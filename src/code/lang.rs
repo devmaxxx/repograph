@@ -214,15 +214,13 @@ pub fn file_node(rel: &str, ex: &mut Extraction) {
 /// One stderr line naming what was indexed without being read, so a glob that reaches past the
 /// grammars says so instead of producing a graph that is silently thinner than the tree. A script
 /// whose shebang names a language is read, so it is not named.
-pub fn files_only_note<P: AsRef<std::path::Path>>(paths: impl Iterator<Item = P>) -> Option<String> {
+pub fn files_only_note<'r>(root: &std::path::Path, rels: impl Iterator<Item = &'r str>) -> Option<String> {
     let mut by_ext = std::collections::BTreeMap::<String, usize>::new();
-    for path in paths {
-        let path = path.as_ref();
-        let name = path.to_string_lossy();
-        if detect_path(&name, path).is_some() {
+    for rel in rels {
+        if detect_path(rel, &root.join(rel)).is_some() {
             continue;
         }
-        let label = ext(&name).map(|e| format!(".{e}")).unwrap_or_else(|| "(no extension)".to_string());
+        let label = ext(rel).map(|e| format!(".{e}")).unwrap_or_else(|| "(no extension)".to_string());
         *by_ext.entry(label).or_default() += 1;
     }
     if by_ext.is_empty() {

@@ -251,11 +251,16 @@ fn read_declaration<'t>(caps: &[(Role, Node<'t>)], pattern: usize, src: &str, ou
     last.modifiers = caps.iter().filter(|(r, _)| *r == Role::Modifier).map(|(_, n)| text(*n, src).trim().to_string()).collect();
 }
 
+/// An `@import.path` capture as a hook sees it: a quoted path without its quotes.
+pub(crate) fn import_path(text: &str) -> &str {
+    text.trim_matches(|c| c == '"' || c == '\'')
+}
+
 fn read_import(caps: &[(Role, Node)], meta: &Meta, src: &str) -> Option<Import> {
     let site = caps.iter().find(|(r, _)| *r == Role::Import)?.1;
     let first = |want: Role| caps.iter().find(|(r, _)| *r == want).map(|(_, n)| text(*n, src).to_string());
     Some(Import {
-        path: first(Role::ImportPath).map(|p| p.trim_matches(|c| c == '"' || c == '\'').to_string()),
+        path: first(Role::ImportPath).map(|p| import_path(&p).to_string()),
         names: caps.iter().filter(|(r, _)| *r == Role::ImportName).map(|(_, n)| text(*n, src).to_string()).collect(),
         alias: first(Role::ImportAlias),
         reexport: meta.reexport,

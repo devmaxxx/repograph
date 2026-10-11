@@ -11,7 +11,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use tree_sitter::Node;
 
-use crate::code::engine::{Facts, File, Import, Sink};
+use crate::code::engine::{self, Facts, File, Import, Sink};
 use crate::code::imports::Resolver;
 use crate::code::index::Header;
 use crate::code::lang::Lang;
@@ -28,8 +28,10 @@ const RUNNERS: [&str; 4] = ["bash", "sh", "zsh", "dash"];
 #[derive(Default)]
 pub(crate) struct Scripts {
     globbed: BTreeSet<String>,
-    /// script → `source` site start byte → candidate paths, in the order they are tried
-    sources: BTreeMap<String, BTreeMap<usize, Vec<String>>>,
+    /// script → `source` operand as written → candidate paths, in the order they are tried. Keyed by
+    /// the operand, not its offset: the text extracted may not be the text collected, and the same
+    /// operand evaluates alike anywhere in one script, because its variables are the script's.
+    sources: BTreeMap<String, BTreeMap<String, Vec<String>>>,
 }
 
 impl Scripts {
@@ -47,14 +49,17 @@ pub(crate) fn collect(r: &mut Resolver, rel: &str, source: &str) -> Option<Heade
     let tree = Lang::Shell.parse(src)?;
     let root = tree.root_node();
     let vars = Vars::read(root, src);
-    let sites = commands(root).into_iter()
-        .filter_map(|c| {
-            let (name, args) = words(c, src)?;
-            if name != "source" && name != "." { return None }
-            Some((c.start_byte(), candidates(rel, &vars.eval(*args.first()?, src)?)))
-        })
-        .filter(|(_, c)| !c.is_empty())
-        .collect();
+    let mut sites = BTreeMap::<String, Vec<String>>::new();
+    for c in commands(root) {
+        let Some((name, args)) = words(c, src) else { continue };
+        let Some(operand) = args.first().filter(|_| name == "source" || name == ".") else { continue };
+        let found = vars.eval(*operand, src).map(|v| candidates(rel, &v)).unwrap_or_default();
+        // Two operands that read alike once unquoted but evaluate apart leave the key naming neither.
+        sites.entry(engine::import_path(syntax::text(*operand, src)).to_string())
+            .and_modify(|seen| if *seen != found { seen.clear() })
+            .or_insert(found);
+    }
+    sites.retain(|_, c| !c.is_empty());
     scripts.sources.insert(rel.to_string(), sites);
     None
 }
@@ -62,7 +67,8 @@ pub(crate) fn collect(r: &mut Resolver, rel: &str, source: &str) -> Option<Heade
 /// The script a `source` line imports.
 pub(crate) fn import(r: &Resolver, rel: &str, site: &Import) -> Vec<String> {
     let scripts = r.state::<Scripts>();
-    scripts.sources.get(rel).and_then(|sites| sites.get(&site.range.start)).and_then(|c| scripts.pick(c)).into_iter().collect()
+    let Some(operand) = &site.path else { return Vec::new() };
+    scripts.sources.get(rel).and_then(|sites| sites.get(operand)).and_then(|c| scripts.pick(c)).into_iter().collect()
 }
 
 /// A command that runs another script by its path references that script's file, from the
