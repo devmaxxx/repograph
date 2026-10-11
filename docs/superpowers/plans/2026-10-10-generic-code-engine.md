@@ -487,6 +487,24 @@ Not adopted:
 - **SCIP indexers** need each language's own toolchain and run out of process.
 - **stack-graphs** was archived by GitHub on 2025-09-09 and is no longer supported upstream.
 
+### 2.9 Layout: languages are data, exceptions are Rust
+
+Decided 2026-10-11. No per-language Rust folder survives step 14. What a language is lives in data: its `Spec` row and `queries/<lang>/{decl,refs}.scm`. What a language cannot say in data lives in `src/code/exceptions/`, one file per resolution rule, named for the rule and not for a language:
+
+```
+src/code/
+  engine.rs  front.rs  spec.rs  lang.rs
+  queries/<lang>/{decl,refs}.scm
+  exceptions/
+    overloads.rs      Java, Kotlin, C#: a call picks its method by arity
+    partials.rs       C#: one type declared across files
+    module_paths.rs   Rust's module tree, Python packages, TS tsconfig paths
+    reexports.rs      TS barrels
+    part_of.rs        Dart
+```
+
+The list is the expected end state, not a quota. A hook joins `exceptions/` only through the §3.3 criterion, and a rule two languages share is one file, not two. Every port step deletes its language's folder and moves what survives the criterion into `exceptions/`; a step that leaves a `src/code/<lang>/` folder behind fails its gate. Header, collect and manifest readers that a language still needs go to the exception file of the rule they serve, or to `spec.rs` when they are data.
+
 ## 3 · Resolution
 
 ### 3.1 What the engine resolves by default
