@@ -19,7 +19,7 @@
 - all fourteen porting steps run, with a re-read of the numbers at step 9;
 - the hook thresholds are P ≥ 0.99 and R ≥ 0.97;
 - the private corpora are restored if a copy is found, and otherwise the corpus and cases judge;
-- #170 merges first, then one PR per step on `refactor/generic-code-engine`.
+- #170 merges first. All steps then ship in one PR, #172, each adding commits to `refactor/generic-code-engine` (§9, Q6).
 
 Max then asked for:
 
@@ -766,7 +766,7 @@ A row is written before its step merges and is never edited afterwards.
 
 ## 6 · Steps
 
-Each step is one language and one PR. A step's last commit passes §5. Sizes are rough. **S** is under 400 lines changed, **M** is 400–1,200, **L** is over 1,200. "Query" is new `.scm` lines and "Rust" is old lines removed.
+Each step is one language and a run of commits on #172. A step's last commit passes §5. Sizes are rough. **S** is under 400 lines changed, **M** is 400–1,200, **L** is over 1,200. "Query" is new `.scm` lines and "Rust" is old lines removed.
 
 ### 6.1 The existing languages, steps 0–14
 
@@ -1331,7 +1331,7 @@ Questions 1–6 were decided by Max on 2026-10-10, each as recommended. They are
    - a search of `~/bench` and `~/Documents` to depth 3 found none either.
 
    Until Max points to one, Java, C#, Razor, GraphQL, Bicep and Vue are judged on the polyglot corpus and their cases (§5.5).
-6. **Branching.** #170 merges first. `refactor/generic-code-engine` then branches from `main`, with one PR per step.
+6. **Branching.** Max, 2026-10-11: all steps ship in one PR, #172; each step adds commits to `refactor/generic-code-engine`.
 
 Later on 2026-10-10 Max took two more decisions, recorded in §2.8: `ast-grep-language` is the detection and grammar layer, and Bicep, PostgreSQL and GraphQL stay code on their own pinned crates.
 
