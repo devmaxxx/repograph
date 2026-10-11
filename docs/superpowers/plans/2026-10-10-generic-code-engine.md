@@ -576,6 +576,24 @@ pub(crate) const NONE: Hooks = Hooks { register: None, /* … */ owns: &[], wide
 
 ### 3.3 When a language keeps a hook
 
+**The rule since 2026-10-12.** Max: "I just need to minimize language file dependencies." So an
+exception, meaning a file in `src/code/exceptions/` or a language's hook, stays only if real code
+needs it. Real code is the kit corpus, the scratchpad corpus and the fixture; a unit case is not.
+
+- **The test.** Remove the exception, so the language falls back to the engine's default and its
+  queries. Rebuild all three inputs and compare against today's graph.
+- **Deleted** when all of these hold:
+  - P ≥ 0.99 and R ≥ 0.97 for each bounded edge kind;
+  - R1–R9 = 0, except for diffs accepted and recorded with the exception;
+  - the bench floors hold with zero flips.
+- **Unit cases** that only pinned an old reader's quirk are rewritten to the generic behaviour. Each
+  rewritten assertion is listed in §3.5 with its reason.
+- **A query may grow** to absorb a quirk when that is cheaper than Rust. So may the engine, when the
+  change is one any language would read alike.
+- **An exception the numbers keep** is named by its rule and shared across languages where it can be.
+
+The procedure below still measures each kind, with "the old path" now meaning today's graph.
+
 The criterion is applied per language L and per edge kind K in {Calls, References, Extends, Implements, DecoratedBy}. Compare N, L on the new path with K resolved by default, against O, L on the old path. Both come from the same binary through `REPOGRAPH_LEGACY` (§5.2). Compare L's files only.
 
 1. `added` = N ∖ O and `missed` = O ∖ N, with edges compared as `(from, to, kind, context)`.
@@ -589,7 +607,7 @@ The criterion is applied per language L and per edge kind K in {Calls, Reference
    - the bench has no flip, where L is in the fixture (§5.4).
 
    Otherwise K goes into L's `hooks.owns`, and the hook must reproduce O exactly.
-5. **Thin corpora.** When `|O| < 50` on the corpus, the corpus cannot decide. This covers Swift Extends (0), Java Calls (14), Vue Calls (7), Shell References (11), Python Extends (5), Kotlin Extends (15) and every Razor kind. The default then keeps K only if L's cases (the family's `cases.rs` and `tests/<lang>.rs`) pass with no assertion edited; otherwise K is a hook.
+5. **Thin corpora.** When `|O| < 50` on the corpus, the corpus alone cannot decide. This covers Swift Extends (0), Java Calls (14), Vue Calls (7), Shell References (11), Python Extends (5), Kotlin Extends (15) and every Razor kind. The fixture and the kit then decide together, not the unit cases (this replaces the cases-decide clause, 2026-10-12). Where the fixture and the kit hold no edge of K either, the default keeps K, and any case it fails is rewritten under the rule above.
 6. **Imports and ReExports are not on this list; they are strict.** A wrong import edge widens the wrong files, and a missing one drops a whole file from impact. The default import resolution is used only where it reproduces O exactly; anywhere else L has an `import` hook.
 
 Each decision is recorded in the results document (§5.6), with the hand-read edges listed.
@@ -614,6 +632,116 @@ This is a prediction, not a decision; §3.3 decides. It sizes the steps.
 | Razor | `embed`, `collect` (directives), `header`; resolution through C#'s | blanking (L6) |
 | TS, TSX | `head`, `import` (tsconfig tiers, package exports), `resolve` owning Calls and DecoratedBy | receivers; `deco:<Name>` is a shared node (the L8 exception) |
 | Vue | `embed`, `register`, `resolve` writing the component symbol | the component is not in the script |
+
+### 3.5 The exception sweep, 2026-10-12
+
+Every exception and hook of the ported languages was measured under §3.3's rule, one at a time,
+against today's graph:
+
+- the kit corpus (`new-4`) and the scratchpad corpus (`store-step4`), which hold the same files;
+- the fixture (`fixture-base`), built in `~/bench/beauty-crm-test` after `reset.sh`.
+
+"Same" in the table means the default rebuilt the graph byte for byte, so P = R = 1. The fixture has
+no Bicep, Swift or bake edge.
+
+| exception | lang · kind | corpus and kit | fixture | verdict | assertions rewritten |
+|---|---|---|---|---|---|
+| `symbolic_names` | Bicep References | same, 4,344 of 4,344 | none | deleted | 5 cases |
+| `module_reach::import` | Bicep Imports | same, 66 of 66 | none | deleted, into the default | 0 |
+| `module_reach::directory` | Terraform Imports | same, 0 of 0 | same, 0 | deleted, into the default | 0 |
+| `module_reach::reach` | Bicep References | R = 2,298 / 4,344 = 0.53 | none | **kept** | — |
+| `traversal_addresses` | Terraform References | same, 66 of 66 | same, 37 of 37 | deleted | 1 |
+| `target_or_group` | HCL References | same, 0 of 0 | same, 0 of 0 | deleted | 0 |
+| `inheritance_clauses` | Swift Extends | same, 0 of 0 | none | deleted | 2 |
+| `type_paths` (fold) | Swift Declares | same, 11 of 11 | none | deleted | 2, shared with the row above |
+| `attribute_lines` (signature) | Swift bodies | R3 = 1, accepted | none | deleted | 1 |
+| `computed_paths`, all hooks | Shell Imports, Calls, References | Imports R4 = 15 (0 of 15), Calls R = 166 / 192 = 0.86, References 0 of 11 | same, no import or run | **kept** | — |
+| `computed_paths::runs` alone | Shell References | 0 of 11 | same | **kept** | — |
+
+Measured but not on its own row:
+
+- **The `redeclared` Declares, for every language.** Turning it off leaves all three graphs equal, so
+  it stays ungated.
+- **The step-4 adversarial Swift repository.** It holds 17 of its 18 Extends. The one lost is
+  `extension Box<Int>.Inner: Proto`: its mid-path arguments now stay in the name, which no type
+  declares.
+
+**Accepted diffs.**
+
+- *Swift, R3 = 1.* AppDelegate's line is now its declaration line, `@objc class AppDelegate: …`.
+  The old signature hook skipped every line that opened with an attribute, so it landed on
+  `override func application(` inside the body. The diff appears on both corpora.
+
+**What replaced the deleted Rust.** The engine changes are generic, and every language reads them
+alike:
+
+- **Default imports.**
+  - An import never names the importer's own file or directory.
+  - A path naming a directory names every file of the importer's language directly in it.
+- **Reference names.**
+  - Repeated `@name` captures join with `/`, as a definition's do.
+  - `#set! prefix` spells a reference's address.
+  - A local binding shadows a path by its first segment.
+- **Directory visibility.** It sees a sibling's every declaration.
+- **Family languages.**
+  - A Family language with no collect or header hook is indexed by its queries. `headers.json` is
+    unchanged, because only the header hook writes it.
+- **Inheritance.**
+  - Only a type inherits.
+  - A scope owner's clause belongs to the type the owner stands for, found by its outermost name as
+    any other name is.
+- **Signatures.** `Line::Name` keeps to the definition's own span.
+
+The queries grow by 72 lines, from 381 to 453:
+
+- Terraform's traversal, operation and binding patterns;
+- the bake prefixes;
+- Swift's generic-extension pattern.
+
+`src/code/exceptions/` goes from 9 files and 624 lines to 3 files and 273 lines:
+
+- `mod.rs`;
+- `computed_paths.rs` (Shell);
+- `module_reach.rs`, now only the reach Bicep and Terraform share.
+
+The ported languages' hooks that remain:
+
+- Bicep and Terraform: `resolve: module_reach::reach`;
+- Shell: `collect`, `state`, `import` and `resolve` from `computed_paths`;
+- HCL and Swift: none.
+
+**Rewritten assertions**, each because it pinned a quirk of the old reader:
+
+- **Bicep** (`src/code/cases/bicep.rs`):
+  - `a_name_read_in_the_file_is_a_reference_…`:
+    - drops `kv -> vnet.subnet`, because `vnet::subnet` spells no declared name;
+    - the input's `@description` becomes `@sys.description`, since Bicep refuses a decorator a
+      parameter shadows.
+  - `a_decorator_argument_is_read_by_the_file_…` (was `…_for_the_declaration_it_decorates`) expects
+    `file -> max`, where it expected `n -> max`. The decorator stands outside the declaration's node.
+  - `a_comment_between_a_decorator_and_its_declaration_…` expects `file -> max`, for the same reason.
+  - `a_built_in_a_param_or_var_shadows_is_called_through_sys_…` (was `a_call_names_only_a_func_…`).
+    The input calls `sys.range` and `sys.length`, as Bicep requires once a parameter or variable
+    shadows the built-in. The expected edges are unchanged.
+  - `a_nested_resource_is_not_read_by_its_short_name` (was `…_inside_its_parent_only`) expects no
+    edge. A child is declared `vnet.subnet`, which neither `subnet` nor `vnet::subnet` spells.
+- **Terraform** (`src/code/cases/hcl.rs`):
+  - The `for` and `dynamic` case drops `web/x -> ebs/x`. A query cannot tell a label that
+    `iterator =` renamed from one it did not, so the label still binds.
+  - `a_negated_operand_keeps_its_attribute_steps_through_two_nested_operations` is renamed from
+    `…_however_deep_the_operation_nests`. The query reads two levels, and the assertion is unchanged.
+- **Swift** (`src/code/cases/swift.rs`):
+  - `a_signature_is_the_line_holding_the_name_past_any_attribute_line` (was
+    `a_signature_skips_every_line_that_opens_with_an_attribute`):
+    - expects `@objc final class Cart: Base, Store {`, where it expected `let id: Int = 1`;
+    - gains a one-line member, `Point.moved`.
+  - `an_extension_names_its_members_on_the_type_without_its_last_generic_arguments` expects
+    `Box<Int>.Inner.i` and no Extends.
+- **Engine** (`src/code/engine/tests.rs`). The walrus test now names its scope in its own pattern,
+  with the assertion unchanged. Three tests are new:
+  - a class with a method;
+  - a module-level walrus;
+  - interleaved nodes of one span.
 
 ## 4 · Detection and the front
 
