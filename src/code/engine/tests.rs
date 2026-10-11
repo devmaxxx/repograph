@@ -142,7 +142,7 @@ fn an_import_site_keeps_its_path_and_names() {
 #[test]
 fn an_import_path_resolves_beside_the_importer_then_at_the_root_and_only_to_a_globbed_file() {
     let (_dir, resolver) = repo(&["**/*.py"], &[("pkg/a.py", ""), ("pkg/util.py", ""), ("lib/x.py", ""), ("pkg/notes.txt", "")]);
-    let import = |path: &str| Import { path: Some(path.to_string()), names: Vec::new(), alias: None, reexport: false, range: 0..0 };
+    let import = |path: &str| Import { path: Some(path.to_string()), names: Vec::new(), alias: None, reexport: false, range: 0..0, targets: Vec::new() };
     let mut s = spec(STRIPPED, Export::All);
     s.imports = ImportPaths { root: false, suffixes: &["", ".py"] };
     assert_eq!(import_targets(&resolver, &s, "pkg/a.py", &import("util")), ["pkg/util.py"]);
@@ -169,4 +169,25 @@ fn a_name_the_grammar_could_not_read_declares_nothing() {
     assert!(facts.defs.is_empty(), "{:?}", facts.defs);
     let (facts, _) = read(&spec(STRIPPED, Export::All), "a.py", &broken.replace("class (:", "class C:"));
     assert_eq!(facts.defs.iter().map(|d| d.qualified.as_str()).collect::<Vec<_>>(), ["ok", "C", "C.inner"]);
+}
+
+#[test]
+fn a_scope_a_binder_captures_for_itself_is_not_the_scope_of_a_plain_definition_inside_it() {
+    // The comprehension binds its loop variable in itself, while a walrus inside it binds in the
+    // function holding it, so the call after the comprehension is to that local and not to `x`.
+    const OWN: &[&str] = &[
+        "(call function: (identifier) @name) @reference.calls",
+        "(function_definition) @local.scope",
+        "(named_expression name: (identifier) @local.definition)",
+        "(list_comprehension (for_in_clause left: (identifier) @local.definition)) @local.scope",
+    ];
+    let source = "def x():\n    pass\n\ndef run():\n    [(x := v) for v in range(3)]\n    x()\n\ndef go():\n    x()\n";
+    let tree = Lang::Python.parse(source.as_bytes()).unwrap();
+    let file = File { lang: Lang::Python, rel: "a.py", text: source, src: source, tree: Some(&tree) };
+    let s = spec(STRIPPED, Export::All);
+    let facts = facts(&s, compiled(DECL), Some(compiled(OWN)), &file);
+    let (_dir, resolver) = repo(&["**/*.py"], &[("a.py", source)]);
+    let mut ex = Extraction::default();
+    resolve(&resolver, &s, &file, &facts, &mut ex);
+    assert_eq!(lines(&ex, EdgeKind::Calls), ["sym:a.py::go -> sym:a.py::x []"]);
 }

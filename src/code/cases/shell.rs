@@ -89,6 +89,15 @@ fn a_source_line_is_imported_from_text_edited_since_the_resolver_collected_it() 
     ]);
 }
 
+#[test]
+fn two_source_sites_reading_alike_and_evaluating_apart_import_neither() {
+    // Single quotes keep `$HERE` literal, so the second site names no file while the first names
+    // lib.sh; the extractor keys a site by its text, and cannot tell which of the two it is reading.
+    let run = "HERE=\"$(dirname \"$0\")\"\nsource \"$HERE/lib.sh\"\nsource '$HERE/lib.sh'\n";
+    let ex = extract(&[("tools/run.sh", run), ("tools/lib.sh", "")], "tools/run.sh");
+    assert!(lines(&ex, EdgeKind::Imports).is_empty(), "{:?}", lines(&ex, EdgeKind::Imports));
+}
+
 const RUNS: &str = r#"HERE="$(cd "$(dirname "$0")" && pwd)"
 check() {
   "$HERE/quiet.sh" --wait 600

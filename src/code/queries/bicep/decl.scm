@@ -35,10 +35,8 @@
     (type_declaration . (identifier) @name) @definition.type
     (user_defined_function name: (identifier) @name) @definition.function
     (module_declaration . (identifier) @name) @definition.value
+    (resource_declaration . (identifier) @name) @definition.resource
   ])
-
-(infrastructure
-  (resource_declaration . (identifier) @name) @definition.resource)
 
 ; A child resource is `<parent>.<child>`, the member its parent keeps. It stands in its parent's
 ; body, which a condition or a loop may wrap; nothing but a resource holds one.

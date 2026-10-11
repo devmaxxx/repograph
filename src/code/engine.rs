@@ -66,6 +66,9 @@ pub(crate) struct Import {
     pub alias: Option<String>,
     pub reexport: bool,
     pub range: Range<usize>,
+    /// The files the site resolved to. Only the file being extracted has them, and its hooks read
+    /// them there instead of resolving the site again.
+    pub targets: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -103,6 +106,8 @@ pub(crate) struct Facts {
     /// A definition whose id an earlier one took, by its range and the earlier one's index: a site
     /// inside it is still owned by that id, as `finish` keeps the first node of an id.
     repeats: Vec<(Range<usize>, usize)>,
+    /// `defs` and `repeats` by their node's range, the first to hold a range kept.
+    at: HashMap<(usize, usize), usize>,
 }
 
 impl Facts {
@@ -120,8 +125,7 @@ impl Facts {
 
     /// The definition whose node spans exactly `range`, a repeated one included.
     pub(crate) fn declared_at(&self, range: &Range<usize>) -> Option<usize> {
-        let defs = self.defs.iter().enumerate().map(|(i, d)| (&d.range, i));
-        defs.chain(self.repeats.iter().map(|(r, i)| (r, *i))).find(|(r, _)| *r == range).map(|(_, i)| i)
+        self.at.get(&(range.start, range.end)).copied()
     }
 
     /// The innermost definition whose node holds `byte`.
@@ -199,16 +203,23 @@ pub(crate) fn facts(spec: &Spec, decl: &'static Compiled, refs: Option<&'static 
     qualify(spec, decl, file, declared, &mut facts);
     facts.declared = facts.defs.iter().map(|d| d.qualified.clone()).collect();
     facts.exported = facts.defs.iter().filter(|d| d.export).map(|d| d.qualified.clone()).collect();
+    let ranges = facts.defs.iter().enumerate().map(|(i, d)| (&d.range, i)).chain(facts.repeats.iter().map(|(r, i)| (r, *i)));
+    for (r, i) in ranges {
+        facts.at.entry((r.start, r.end)).or_insert(i);
+    }
     if let Some(refs) = refs {
         let (mut scopes, mut bound) = (Vec::new(), Vec::new());
         matches_of(refs, root, src, file.rel, |pattern, caps| {
             // A definition whose own pattern captures a scope binds there and nowhere else: a loop
             // variable covers the loop's body, never the iterable it sits beside.
+            // Such a scope is that binder's alone: a plain definition inside it, which binds in the
+            // innermost scope holding it, must not take it for its own.
+            let binds = caps.iter().any(|(r, _)| *r == Role::LocalDefinition);
             let own: Vec<Range<usize>> = caps.iter().filter(|(r, _)| *r == Role::LocalScope).map(|(_, n)| n.byte_range()).collect();
             for (role, node) in &caps {
                 match role {
                     Role::Reference(edge) => facts.refs.push(read_reference(spec, &caps, *edge, *node, &refs.metas[pattern], src)),
-                    Role::LocalScope => scopes.push(node.byte_range()),
+                    Role::LocalScope if !binds => scopes.push(node.byte_range()),
                     Role::LocalDefinition => bound.push((node.start_byte(), text(*node, src).to_string(), own.clone())),
                     Role::CiteComment => facts.cites.push(Cite { source: None, context: "comment", range: node.byte_range() }),
                     Role::CiteString => facts.cites.push(Cite { source: None, context: "string", range: node.byte_range() }),
@@ -278,6 +289,7 @@ fn read_import(caps: &[(Role, Node)], meta: &Meta, src: &str) -> Option<Import> 
         alias: first(Role::ImportAlias),
         reexport: meta.reexport,
         range: site.byte_range(),
+        targets: Vec::new(),
     })
 }
 
@@ -494,7 +506,7 @@ fn reach(resolver: &Resolver, spec: &Spec, file: &File, facts: &Facts) -> Vec<(S
         Visibility::File | Visibility::Family => Vec::new(),
         Visibility::Imported { transitive } => {
             let mut seen = BTreeSet::from([rel.to_string()]);
-            let mut queue: VecDeque<String> = facts.imports.iter().flat_map(|i| targets(resolver, spec, rel, i)).collect();
+            let mut queue: VecDeque<String> = facts.imports.iter().flat_map(|i| i.targets.iter().cloned()).collect();
             while let Some(next) = queue.pop_front() {
                 if !seen.insert(next.clone()) {
                     continue;
@@ -637,11 +649,12 @@ pub(crate) fn declarations(lang: Lang, rel: &str, source: &str) -> Option<Facts>
 /// The engine's whole read of a file whose node the front has written.
 pub(crate) fn extract(resolver: &Resolver, spec: &Spec, file: &File, ex: &mut Extraction) {
     let Some(decl) = queries::decl(file.lang) else { return };
-    let facts = facts(spec, decl, queries::refs(file.lang), file);
+    let mut facts = facts(spec, decl, queries::refs(file.lang), file);
     write(file, &facts, ex);
     let kind = |i: &Import| if i.reexport { EdgeKind::ReExports } else { EdgeKind::Imports };
-    for i in &facts.imports {
-        for t in targets(resolver, spec, file.rel, i) {
+    for i in &mut facts.imports {
+        i.targets = targets(resolver, spec, file.rel, i);
+        for t in &i.targets {
             ex.edge(&format!("file:{}", file.rel), &format!("file:{t}"), kind(i), "*", file.rel);
         }
     }
