@@ -156,11 +156,13 @@ fn each_name_of_a_multi_binding_let_is_a_constant_over_the_whole_statement() {
 }
 
 #[test]
-fn a_signature_skips_every_line_that_opens_with_an_attribute() {
+fn a_signature_is_the_line_holding_the_name_past_any_attribute_line() {
     let ex = extract_in(&[("Sources/Cart.swift", RUNNER)], "Sources/Cart.swift");
     let body = |id: &str| ex.nodes.iter().find(|n| n.id == id).map(|n| n.body.as_str());
-    // The attribute shares its line with the declaration, and the whole line is skipped.
-    assert_eq!(body("sym:Sources/Cart.swift::Cart"), Some("let id: Int = 1"));
+    // The attribute shares its line with the declaration, and the line is the declaration's.
+    assert_eq!(body("sym:Sources/Cart.swift::Cart"), Some("@objc final class Cart: Base, Store {"));
+    // A member on its type's line reads as itself.
+    assert_eq!(body("sym:Sources/Cart.swift::Point.moved"), Some("func moved() -> Point { self }"));
     let ex = extract_in(&[("a.swift", "@available(iOS 13, *)\n@MainActor\npublic struct Panel {}\n")], "a.swift");
     assert_eq!(ex.nodes.iter().find(|n| n.id == "sym:a.swift::Panel").map(|n| n.body.as_str()), Some("public struct Panel {}"));
 }
@@ -179,12 +181,13 @@ fn an_overload_declares_its_one_node_from_each_parent_and_with_each_export() {
 }
 
 #[test]
-fn an_extension_names_its_members_on_the_type_without_generic_arguments() {
+fn an_extension_names_its_members_on_the_type_without_its_last_generic_arguments() {
     let src = "struct Box<T> { class Inner {} }\nextension Box<Int> { func boxed() {} }\nextension Box<Int>.Inner: P { func i() {} }\nprotocol P {}\n";
     let ex = extract_in(&[("a.swift", src)], "a.swift");
     assert!(ids(&ex).contains(&"sym:a.swift::Box.boxed"), "{:?}", ids(&ex));
-    assert!(ids(&ex).contains(&"sym:a.swift::Box.Inner.i"), "{:?}", ids(&ex));
-    assert_eq!(edges(&ex, EdgeKind::Extends), vec![("sym:a.swift::Box.Inner", "sym:a.swift::P", "")]);
+    // Arguments mid-path stay in the name, which no type declares, so its clause reaches nothing.
+    assert!(ids(&ex).contains(&"sym:a.swift::Box<Int>.Inner.i"), "{:?}", ids(&ex));
+    assert_eq!(edges(&ex, EdgeKind::Extends), vec![]);
 }
 
 #[test]

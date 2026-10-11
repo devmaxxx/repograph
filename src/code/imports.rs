@@ -8,7 +8,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 use crate::code::engine::{self, Facts};
 use crate::code::index::{Header, QualifiedIndex};
 use crate::code::lang::{detect, detect_path, Family, Lang};
-use crate::code::spec::{spec, Manifest, States};
+use crate::code::spec::{spec, Manifest, States, Visibility};
 use crate::code::typescript::vue;
 
 /// (directory the tsconfig lives in, directory its targets are relative to — `baseUrl` —
@@ -183,7 +183,7 @@ impl Resolver {
                         reached.insert(lang.family());
                         // TypeScript's state is the tsconfig and package.json read below; its sources
                         // are the extractor's alone, so a TypeScript repository opens nothing more here.
-                        if spec(lang).hooks.collects() {
+                        if spec(lang).collects() {
                             sources.push((lang, rel.clone(), p.to_path_buf()));
                         } else if spec(lang).hooks.register.is_some() {
                             registered.push((lang, rel.clone()));
@@ -341,9 +341,13 @@ impl Resolver {
     /// What one globbed source contributes before any file is extracted.
     fn collect(&mut self, lang: Lang, rel: &str, source: &str) {
         let hooks = &spec(lang).hooks;
-        let header = match hooks.collect {
-            Some(add) => add(self, rel, source),
-            None => hooks.header.map(|header| header(rel, source)),
+        let header = match (hooks.collect, hooks.header) {
+            (Some(add), _) => add(self, rel, source),
+            (None, Some(header)) => Some(header(rel, source)),
+            (None, None) if matches!(spec(lang).visibility, Visibility::Family) => {
+                engine::declarations(self, lang, rel, source).map(|facts| engine::header(&facts))
+            }
+            (None, None) => None,
         };
         if let Some(header) = header {
             self.add_header(lang.family(), rel, &header);

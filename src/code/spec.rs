@@ -185,10 +185,11 @@ pub(crate) struct Hooks {
     pub owns: &'static [EdgeKind],
 }
 
-impl Hooks {
-    /// Whether the resolver's walk opens this language's files before extraction.
+impl Spec {
+    /// Whether the resolver's walk opens this language's files before extraction: a hook reads them,
+    /// or a family that sees its files without an import is indexed by its queries.
     pub fn collects(&self) -> bool {
-        self.header.is_some() || self.collect.is_some()
+        self.hooks.header.is_some() || self.hooks.collect.is_some() || matches!(self.visibility, Visibility::Family)
     }
 }
 
@@ -240,9 +241,7 @@ const PROSE: Body = Body { doc: Doc::Adjacent { kinds: &["comment"], between: &[
 
 mod table {
     use super::*;
-    use crate::code::exceptions::{
-        attribute_lines, computed_paths, inheritance_clauses, module_reach, type_paths,
-    };
+    use crate::code::exceptions::{computed_paths, module_reach};
     use crate::code::*;
 
     pub(super) const TYPESCRIPT: Spec = Spec { comments: C, hooks: typescript::HOOKS, legacy: Some(typescript::extract), ..UNPORTED };
@@ -312,7 +311,7 @@ mod table {
         queries: crate::code::queries::sources::SWIFT,
         view: None,
         comments: C,
-        // No doc, and the `signature` hook picks the line.
+        // No doc. A declaration starts at its attributes, so the line is the one holding its name.
         body: Body { doc: Doc::None, form: Form::Raw, cap: Cap::Tail, line: Line::Name },
         export: Export::Hide(&["private", "fileprivate"]),
         // A module sees every file in it without an import.
@@ -321,14 +320,7 @@ mod table {
         cross_file: false,
         imports: ImportPaths { root: false, suffixes: &[""] },
         dotted_dirs: false,
-        hooks: Hooks {
-            collect: Some(inheritance_clauses::collect),
-            fold: Some(type_paths::fold),
-            signature: Some(attribute_lines::signature),
-            resolve: Some(inheritance_clauses::resolve),
-            owns: &[EdgeKind::Extends],
-            ..NONE
-        },
+        hooks: NONE,
         legacy: None,
     };
     pub(super) const SHELL: Spec = Spec {

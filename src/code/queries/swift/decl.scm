@@ -3,6 +3,11 @@
 ; property, an initializer or an enum case. A `private` or `fileprivate` word hides a declaration;
 ; `private(set)` restricts its setter alone.
 
+; `extension Box<Int>` names its members on `Box`. A pattern of its own, ahead of the one below, so it
+; wins the node; a path with arguments mid-way, `Box<Int>.Inner`, keeps them.
+(source_file
+  (class_declaration declaration_kind: "extension" name: (user_type . (type_identifier) @name . (type_arguments) .)) @scope.owner)
+
 (source_file
   [
     (class_declaration (modifiers (visibility_modifier)* @modifier)? declaration_kind: "class" name: (type_identifier) @name) @definition.class

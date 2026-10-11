@@ -111,6 +111,9 @@ pub(crate) struct Facts {
     /// A repeated id's own parent and export, by the first's index. An overload in an extension or
     /// a private overload declares the one node from another parent or with another export.
     redeclared: Vec<(Option<usize>, usize, bool)>,
+    /// A scope owner's range and the qualified name it stands for: `extension Cart: Store` holds a
+    /// clause of `Cart`'s, though it writes no node of its own.
+    stands_for: Vec<(Range<usize>, String)>,
     /// `defs` and `repeats` by their node's range, the first to hold a range kept.
     at: HashMap<(usize, usize), usize>,
 }
@@ -134,6 +137,11 @@ impl Facts {
     }
 
     /// The innermost definition whose node holds `byte`.
+    /// The innermost scope owner around `byte`, by the name it stands for.
+    fn stands_for(&self, byte: usize) -> Option<&str> {
+        self.stands_for.iter().filter(|(range, _)| range.contains(&byte)).min_by_key(|(range, _)| range.len()).map(|(_, q)| q.as_str())
+    }
+
     pub(crate) fn owner(&self, byte: usize) -> Option<usize> {
         let defs = self.defs.iter().enumerate().map(|(i, d)| (&d.range, i));
         defs.chain(self.repeats.iter().map(|(range, i)| (range, *i)))
@@ -363,6 +371,7 @@ fn qualify(spec: &Spec, decl: &Compiled, file: &File, mut declared: Vec<Declared
         let leaf = format!("{}{name}", meta.prefix);
         let qualified = base.map_or_else(|| leaf.clone(), |(b, j)| format!("{b}{j}{leaf}"));
         let Declaring::Def(kind) = d.role else {
+            facts.stands_for.push((d.node.byte_range(), qualified.clone()));
             stack.push(Open { end: d.node.end_byte(), qualified, join: '.', def: None });
             continue;
         };
@@ -415,9 +424,11 @@ fn exported(rule: Export, modifiers: &[String], name: &str) -> bool {
 fn signature_line(line: Line, def: Node, name: Node, src: &str) -> String {
     match line {
         Line::First => text(def, src).lines().next().unwrap_or("").to_string(),
+        // Held to the definition's own span: a member declared on its container's line reads as
+        // itself, not as the container's line.
         Line::Name => {
-            let start = src[..name.start_byte()].rfind('\n').map_or(0, |i| i + 1);
-            let end = src[name.start_byte()..].find('\n').map_or(src.len(), |i| name.start_byte() + i);
+            let start = src[..name.start_byte()].rfind('\n').map_or(0, |i| i + 1).max(def.start_byte());
+            let end = src[name.start_byte()..].find('\n').map_or(src.len(), |i| name.start_byte() + i).min(def.end_byte());
             src[start..end].trim().to_string()
         }
     }
@@ -575,28 +586,43 @@ fn visible(resolver: &Resolver, spec: &Spec, file: &File, reach: &[(String, Arc<
 pub(crate) fn resolve(resolver: &Resolver, spec: &Spec, file: &File, facts: &Facts, ex: &mut Extraction) {
     let rel = file.rel;
     let reach = reach(resolver, spec, file, facts);
+    // The files whose declaration of `name` a reference reaches, by the spec's ambiguity rule.
+    let declaring = |name: &str| -> Vec<String> {
+        let own = facts.declares(name);
+        let others = visible(resolver, spec, file, &reach, name);
+        match spec.ambiguity {
+            Ambiguity::OwnFirst if own => vec![rel.to_string()],
+            Ambiguity::OwnFirst => others,
+            Ambiguity::Unique => match (own, others.as_slice()) {
+                (true, []) => vec![rel.to_string()],
+                (false, [_]) => others,
+                _ => Vec::new(),
+            },
+            Ambiguity::All => own.then(|| rel.to_string()).into_iter().chain(others).collect(),
+        }
+    };
     for r in &facts.refs {
         if r.receiver.is_some() || spec.hooks.owns.contains(&r.edge) || facts.locals.shadows(&r.name, r.range.start) {
             continue;
         }
-        let own = facts.declares(&r.name);
-        let others = visible(resolver, spec, file, &reach, &r.name);
-        let targets: Vec<&str> = match spec.ambiguity {
-            Ambiguity::OwnFirst if own => vec![rel],
-            Ambiguity::OwnFirst => others.iter().map(String::as_str).collect(),
-            Ambiguity::Unique => match (own, others.as_slice()) {
-                (true, []) => vec![rel],
-                (false, [one]) => vec![one.as_str()],
-                _ => Vec::new(),
-            },
-            Ambiguity::All => own.then_some(rel).into_iter().chain(others.iter().map(String::as_str)).collect(),
+        let targets = declaring(&r.name);
+        // Only a type inherits. A clause a scope owner holds is the type the owner stands for, found
+        // by its outermost name as any other name is; one a file or a function holds names no subtype.
+        let froms = if !matches!(r.edge, EdgeKind::Extends | EdgeKind::Implements)
+            || r.source.is_some_and(|i| facts.defs[i].kind.join() == Some('.'))
+        {
+            vec![facts.source_id(rel, r.source)]
+        } else if let Some(owner) = r.source.is_none().then(|| facts.stands_for(r.range.start)).flatten() {
+            let outer = owner.split('.').next().unwrap_or(owner);
+            declaring(outer).into_iter().map(|f| format!("sym:{f}::{owner}")).collect()
+        } else {
+            continue;
         };
-        let from = facts.source_id(rel, r.source);
         let container = r.source.and_then(|i| facts.defs[i].parent).map(|p| facts.defs[p].id.clone());
-        for target in targets {
+        for (from, target) in froms.iter().flat_map(|from| targets.iter().map(move |t| (from, t))) {
             let to = format!("sym:{target}::{}", r.name);
-            if to != from && Some(&to) != container.as_ref() {
-                ex.edge(&from, &to, r.edge, &r.context, rel);
+            if to != *from && Some(&to) != container.as_ref() {
+                ex.edge(from, &to, r.edge, &r.context, rel);
             }
         }
     }
