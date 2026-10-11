@@ -25,6 +25,11 @@ fn ext(rel: &str) -> Option<&str> {
 }
 
 impl Lang {
+    pub const ALL: [Lang; 16] = [
+        Lang::TypeScript, Lang::Tsx, Lang::Kotlin, Lang::Java, Lang::CSharp, Lang::Razor, Lang::Rust, Lang::Python,
+        Lang::Dart, Lang::Swift, Lang::GraphQl, Lang::Sql, Lang::Bicep, Lang::Hcl, Lang::Shell, Lang::Vue,
+    ];
+
     /// `None`: no grammar and no embedding reads this extension (L1). Such a file is indexed as a
     /// file and never parsed: every grammar returns a tree for any input, and a tree of the wrong
     /// language looks right.
@@ -127,4 +132,25 @@ pub fn files_only_note<'a>(rels: impl Iterator<Item = &'a str>) -> Option<String
     parts.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
     let list = parts.iter().map(|(e, n)| format!("{n} {e}")).collect::<Vec<_>>().join(", ");
     Some(format!("code: no grammar reads {list} — indexed as files only"))
+}
+
+#[cfg(test)]
+mod all_tests {
+    use super::Lang;
+
+    /// `ALL` feeds the reader table's state and manifest lookups, so a language missing from it is
+    /// silently never registered. The exhaustive match fails to compile for a new variant.
+    #[test]
+    fn all_lists_every_language_once() {
+        let slot = |l: Lang| match l {
+            Lang::TypeScript => 0, Lang::Tsx => 1, Lang::Kotlin => 2, Lang::Java => 3, Lang::CSharp => 4, Lang::Razor => 5,
+            Lang::Rust => 6, Lang::Python => 7, Lang::Dart => 8, Lang::Swift => 9, Lang::GraphQl => 10, Lang::Sql => 11,
+            Lang::Bicep => 12, Lang::Hcl => 13, Lang::Shell => 14, Lang::Vue => 15,
+        };
+        let mut seen = [false; 16];
+        for l in Lang::ALL {
+            assert!(!std::mem::replace(&mut seen[slot(l)], true), "{l:?} listed twice");
+        }
+        assert!(seen.iter().all(|s| *s), "a language is missing from Lang::ALL");
+    }
 }

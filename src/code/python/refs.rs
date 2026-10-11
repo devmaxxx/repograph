@@ -3,8 +3,7 @@
 
 use super::defs::{owner, Defs};
 use super::modules::Modules;
-use super::{field_text, text};
-use crate::code::jvm::{descend, named};
+use crate::code::syntax::{descend, field_text, named, text};
 use crate::model::{EdgeKind, Extraction};
 use std::collections::{BTreeMap, BTreeSet};
 use tree_sitter::Node;

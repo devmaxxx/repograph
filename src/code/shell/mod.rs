@@ -8,29 +8,41 @@ mod paths;
 mod cases;
 
 use crate::code::imports::Resolver;
-use crate::code::lang::{file_node, Lang};
+use crate::code::lang::Lang;
 use crate::code::prose::{self, Spans};
+use crate::code::reader::{self, Reader};
+use crate::code::syntax;
 use crate::model::{EdgeKind, Extraction, Graph};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use tree_sitter::Node;
 
-pub fn extract(resolver: &Resolver, rel: &str, source: &str) -> Extraction {
-    let mut ex = Extraction::default();
-    file_node(rel, &mut ex);
-    let src = source.as_bytes();
-    let Some(tree) = Lang::Shell.parse(src) else { return ex };
-    let root = tree.root_node();
+/// Shell state: every globbed script's functions and `source` lines, so a call resolves through
+/// what a script sources whatever order the walk reads files in.
+pub(crate) const READER: Reader = Reader {
+    extract,
+    collect: Some(|r, rel, source| {
+        r.state_mut::<Scripts>().add(rel, source);
+        None
+    }),
+    state: Some(reader::state::<Scripts>),
+    widen: Some(widen),
+    dotted_dirs: true,
+    ..reader::NONE
+};
+
+fn extract(resolver: &Resolver, rel: &str, source: &str, ex: &mut Extraction) {
+    let Some(tree) = reader::open(Lang::Shell, rel, source, ex) else { return };
+    let (src, root) = (source.as_bytes(), tree.root_node());
     let file = format!("file:{rel}");
     let mut spans = Spans::new(rel);
     for f in functions(root) {
         let Some(name) = f.child_by_field_name("name") else { continue };
-        let id = format!("sym:{rel}::{}", prose::text(name, src));
-        prose::declare(&mut ex, rel, &file, &id, f, &prose::body(f, src, &[]), "export");
+        let id = format!("sym:{rel}::{}", syntax::text(name, src));
+        prose::declare(ex, rel, &file, &id, f, &prose::body(f, src, &[]), "export");
         spans.push(f, &id);
     }
-    commands::write(resolver.shell(), root, &spans, src, rel, &mut ex);
-    prose::cite(root, src, rel, &["string", "raw_string", "heredoc_body"], &spans, &mut ex);
-    ex
+    commands::write(resolver.state::<Scripts>(), root, &spans, src, rel, ex);
+    prose::cite(root, src, rel, &["string", "raw_string", "heredoc_body"], &spans, ex);
 }
 
 /// `apply_diff`'s widening for scripts. Bash resolves a called name across the files a script sources
@@ -90,7 +102,7 @@ impl Scripts {
         let root = tree.root_node();
         let names = functions(root).into_iter()
             .filter_map(|f| f.child_by_field_name("name"))
-            .map(|n| prose::text(n, src).to_string())
+            .map(|n| syntax::text(n, src).to_string())
             .collect();
         self.functions.insert(rel.to_string(), names);
         self.sources.insert(rel.to_string(), commands::sources(root, src, rel));

@@ -4,8 +4,9 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use tree_sitter::Node;
 
-use super::{dotted, generic, head, modifiers, named, span, text, wrapper_name, Host};
+use super::{dotted, generic, head, modifiers, wrapper_name, Host};
 use crate::code::index::Header;
+use crate::code::syntax::{name_of, named, span, text};
 use crate::model::{EdgeKind, Extraction, NodeKind};
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -109,10 +110,6 @@ fn plain_type(t: Option<Node>) -> bool {
         "qualified_name" => ["qualifier", "name"].iter().all(|f| plain_type(t.child_by_field_name(f))),
         _ => false,
     })
-}
-
-fn name_of(n: Node, src: &[u8]) -> Option<String> {
-    n.child_by_field_name("name").map(|x| text(x, src).to_string())
 }
 
 /// C#'s defaults as the spec reads them: `public`, `internal` and `protected internal` cross files;

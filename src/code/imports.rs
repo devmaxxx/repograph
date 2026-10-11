@@ -6,6 +6,8 @@ use std::sync::OnceLock;
 
 use crate::code::index::{Header, QualifiedIndex};
 use crate::code::lang::{Family, Lang};
+use crate::code::reader::{reader, Manifest, States};
+use crate::code::typescript::vue;
 
 /// (directory the tsconfig lives in, directory its targets are relative to — `baseUrl` —
 /// and pattern -> targets), sorted nearest-first.
@@ -18,27 +20,8 @@ pub struct Resolver {
     packages: BTreeMap<String, (String, BTreeMap<String, String>)>,
     /// Qualified name -> declaring files, one index per name-indexed family the globs reach.
     indexes: BTreeMap<Family, QualifiedIndex>,
-    /// .NET: C# types with their members, extension methods, projects and their `global using`s.
-    dotnet: crate::code::csharp::index::DotNet,
-    /// The Rust module tree: every `.rs` path and `Cargo.toml` the globs reach.
-    rust: crate::code::rust_lang::Crates,
-    /// Python module names: every `.py` path and the directories holding a project manifest.
-    python: crate::code::python::Modules,
-    /// Every globbed script's functions and `source` lines, so a call resolves through what a script
-    /// sources whatever order the walk reads files in.
-    shell: crate::code::shell::Scripts,
-    /// Every globbed `.bicep` file and its top-level names, so a module path resolves to a file that will
-    /// have a node, and a module call to what that file declares.
-    bicep: crate::code::bicep::Files,
-    /// Every directory's Terraform addresses and `.tf` files, so a reference and a module source
-    /// resolve whatever order the walk reads files in.
-    hcl: crate::code::hcl::Modules,
-    /// Every globbed Dart file's directives and top-level names, and every pubspec's package name.
-    dart: crate::code::dart::library::Libraries,
-    /// Every `.vue` file the walk globbed: a TypeScript import of one is an edge to a node only then.
-    vue: BTreeSet<String>,
-    /// Every globbed Swift file's top-level type names, by name: where an inheritance clause resolves.
-    swift: BTreeMap<String, BTreeSet<String>>,
+    /// What each language keeps across files, keyed by type: see `Reader::state`.
+    states: States,
 }
 
 #[derive(Deserialize, Default)]
@@ -135,15 +118,10 @@ fn index_header(indexes: &mut BTreeMap<Family, QualifiedIndex>, family: Family, 
     }
 }
 
-/// The family a build manifest speaks for, by its file name.
-fn manifest_family(name: &str) -> Option<Family> {
-    match name {
-        "Cargo.toml" => Some(Family::Rust),
-        "pubspec.yaml" => Some(Family::Dart),
-        "pyproject.toml" | "setup.cfg" | "setup.py" => Some(Family::Python),
-        n if n.ends_with(".csproj") => Some(Family::DotNet),
-        _ => None,
-    }
+/// The language whose reader reads a build manifest, by its file name, among `readers`: the
+/// languages that read one, listed once before the walk.
+fn manifest_lang(readers: &[(Lang, &Manifest)], name: &str) -> Option<Lang> {
+    readers.iter().find(|(_, m)| (m.matches)(name)).map(|(l, _)| *l)
 }
 
 impl Resolver {
@@ -154,11 +132,12 @@ impl Resolver {
         let mut paths: PathsTier = Vec::new();
         let mut packages = BTreeMap::new();
         let mut sources: Vec<(Lang, String, PathBuf)> = Vec::new();
-        let mut manifests: Vec<(Family, String, PathBuf)> = Vec::new();
+        let mut manifests: Vec<(Lang, String, PathBuf)> = Vec::new();
+        let manifest_readers: Vec<(Lang, &Manifest)> =
+            Lang::ALL.into_iter().filter_map(|l| reader(l).manifest.as_ref().map(|m| (l, m))).collect();
         let mut reached: BTreeSet<Family> = BTreeSet::new();
-        let mut vue: BTreeSet<String> = BTreeSet::new();
-        // `walk` reads dotted directories, so this one does too, and admits from them only what Shell
-        // collects: CI keeps its scripts under `.github/`, while a tsconfig, a package.json or a manifest
+        // `walk` reads dotted directories, so this one does too, and admits from them only what a reader
+        // with `dotted_dirs` collects: CI keeps its scripts under `.github/`, while a tsconfig, a package.json or a manifest
         // under a dotted directory stays out, as it was before this walk opened.
         // A directory `skip` covers is not entered: `node_modules/**` is a pattern for files, so the
         // directory is asked about as if a file were in it, and a tree of a hundred thousand
@@ -180,9 +159,9 @@ impl Resolver {
             let rel = p.strip_prefix(repo).unwrap_or(p).to_string_lossy().replace('\\', "/");
             if rel.split('/').any(|part| part.starts_with('.')) {
                 let is_file = dent.file_type().is_some_and(|t| t.is_file());
-                if let Some(lang) = Lang::of(&rel).filter(|l| l.family() == Family::Shell) {
+                if let Some(lang) = Lang::of(&rel).filter(|l| reader(*l).dotted_dirs) {
                     if is_file && !skip.is_match(&rel) && code.is_match(&rel) && include.as_ref().is_none_or(|i| i.is_match(&rel)) {
-                        reached.insert(Family::Shell);
+                        reached.insert(lang.family());
                         sources.push((lang, rel, p.to_path_buf()));
                     }
                 }
@@ -194,16 +173,13 @@ impl Resolver {
                         reached.insert(lang.family());
                         // TypeScript's state is the tsconfig and package.json read below; its sources
                         // are the extractor's alone, so a TypeScript repository opens nothing more here.
-                        // A `.vue` file is in the TypeScript family, and the resolver keeps only its path.
-                        if lang == Lang::Vue {
-                            vue.insert(rel.clone());
-                        } else if lang.family() != Family::TypeScript {
+                        if reader(lang).collects() {
                             sources.push((lang, rel.clone(), p.to_path_buf()));
                         }
                     }
                 }
-                if let Some(family) = manifest_family(name) {
-                    manifests.push((family, rel.clone(), p.to_path_buf()));
+                if let Some(lang) = manifest_lang(&manifest_readers, name) {
+                    manifests.push((lang, rel.clone(), p.to_path_buf()));
                 }
             }
             let rel_dir = p
@@ -255,11 +231,11 @@ impl Resolver {
         }
         // Nearest tsconfig to the importing file wins: sort deepest directory first.
         paths.sort_by_key(|a| std::cmp::Reverse(a.0.len()));
-        let mut resolver = Resolver { repo: repo.to_path_buf(), paths, packages, indexes: BTreeMap::new(), dotnet: Default::default(), rust: Default::default(), python: Default::default(), shell: Default::default(), bicep: Default::default(), hcl: Default::default(), dart: Default::default(), vue, swift: Default::default() };
+        let mut resolver = Resolver { repo: repo.to_path_buf(), paths, packages, indexes: BTreeMap::new(), states: States::new() };
         // Manifests before sources: a path family's roots decide how its sources' paths read.
-        for (_, rel, path) in manifests.iter().filter(|(f, _, _)| reached.contains(f)) {
-            if let Ok(text) = std::fs::read_to_string(path) {
-                resolver.collect_manifest(rel, &text);
+        for (lang, rel, path) in manifests.iter().filter(|(l, _, _)| reached.contains(&l.family())) {
+            if let (Some(m), Ok(text)) = (&reader(*lang).manifest, std::fs::read_to_string(path)) {
+                (m.read)(&mut resolver, rel, &text);
             }
         }
         for (lang, rel, path) in &sources {
@@ -276,98 +252,28 @@ impl Resolver {
         self.indexes.get(&family)
     }
 
-    pub fn dotnet(&self) -> &crate::code::csharp::index::DotNet {
-        &self.dotnet
+    pub(crate) fn state<T: std::any::Any>(&self) -> &T {
+        self.states.get()
     }
 
-    pub(crate) fn rust(&self) -> &crate::code::rust_lang::Crates {
-        &self.rust
+    pub(crate) fn state_mut<T: std::any::Any>(&mut self) -> &mut T {
+        self.states.get_mut()
     }
 
-    pub(crate) fn python(&self) -> &crate::code::python::Modules {
-        &self.python
+    /// Puts a name-indexed family's header for `rel` into that family's index.
+    pub(crate) fn add_header(&mut self, family: Family, rel: &str, header: &Header) {
+        index_header(&mut self.indexes, family, rel, header);
     }
 
-    pub(crate) fn shell(&self) -> &crate::code::shell::Scripts {
-        &self.shell
-    }
-
-    pub(crate) fn bicep(&self) -> &crate::code::bicep::Files {
-        &self.bicep
-    }
-
-    pub(crate) fn hcl(&self) -> &crate::code::hcl::Modules {
-        &self.hcl
-    }
-
-    pub(crate) fn dart(&self) -> &crate::code::dart::library::Libraries {
-        &self.dart
-    }
-
-    /// The files declaring the top-level Swift type `name`, in path order.
-    pub(crate) fn swift_files(&self, name: &str) -> Vec<String> {
-        self.swift.get(name).map(|files| files.iter().cloned().collect()).unwrap_or_default()
-    }
-
-    /// What one globbed source contributes before any file is extracted. A name-indexed family's
-    /// header goes into its index; a path family's plan adds its arm below, for state of its own.
-    ///
-    /// Razor's own directives feed both its header and `add_razor`; reading them once and passing
-    /// the result to both avoids scanning the same file twice back to back, the way `facts`'s own
-    /// cache already avoids it for C#.
+    /// What one globbed source contributes before any file is extracted.
     fn collect(&mut self, lang: Lang, rel: &str, source: &str) {
-        if lang == Lang::Razor {
-            let d = crate::code::razor::directives(source);
-            index_header(&mut self.indexes, lang.family(), rel, &crate::code::razor::header_of(rel, &d));
-            self.dotnet.add_razor(rel, &d, crate::code::razor::members(rel, source, &d));
-            return;
-        }
-        if let Some(header) = crate::code::index::header_for(lang, rel, source) {
-            index_header(&mut self.indexes, lang.family(), rel, &header);
-        }
-        if lang == Lang::CSharp {
-            self.dotnet.add_cs(rel, &crate::code::csharp::index::facts(rel, source));
-        }
-        if lang == Lang::Rust {
-            self.rust.file(rel, source);
-        }
-        if lang == Lang::Python {
-            self.python.file(rel);
-            self.python.init(rel, source);
-        }
-        if lang == Lang::Shell {
-            self.shell.add(rel, source);
-        }
-        if lang == Lang::Bicep {
-            self.bicep.add(rel, source);
-        }
-        if lang == Lang::Hcl {
-            self.hcl.add(rel, source);
-        }
-        if lang == Lang::Dart {
-            self.dart.collect(rel, source);
-        }
-        if lang == Lang::Swift {
-            for name in crate::code::swift::types(source) {
-                self.swift.entry(name).or_default().insert(rel.to_string());
-            }
-        }
-    }
-
-    /// What a build manifest contributes; called only when the globs reach the manifest's family.
-    /// Each path family adds its arm here.
-    fn collect_manifest(&mut self, rel: &str, text: &str) {
-        if rel.ends_with(".csproj") {
-            self.dotnet.add_project(rel, text);
-        }
-        if rel == "Cargo.toml" || rel.ends_with("/Cargo.toml") {
-            self.rust.manifest(rel, text);
-        }
-        if matches!(rel.rsplit('/').next(), Some("pyproject.toml" | "setup.py" | "setup.cfg")) {
-            self.python.manifest(rel);
-        }
-        if rel == "pubspec.yaml" || rel.ends_with("/pubspec.yaml") {
-            self.dart.collect_manifest(rel, text);
+        let r = reader(lang);
+        let header = match r.collect {
+            Some(add) => add(self, rel, source),
+            None => r.header.map(|header| header(rel, source)),
+        };
+        if let Some(header) = header {
+            self.add_header(lang.family(), rel, &header);
         }
     }
 
@@ -375,7 +281,7 @@ impl Resolver {
     /// `.ts`/`.tsx` source, never a `dist/` build artifact or `node_modules` — otherwise
     /// `resolve` would point an edge at a file with no corresponding graph node.
     fn is_indexed(&self, rel: &str) -> bool {
-        if self.vue.contains(rel) {
+        if self.state::<vue::Files>().contains(rel) {
             return true;
         }
         let ext_ok = matches!(

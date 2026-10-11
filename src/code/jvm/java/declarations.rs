@@ -6,7 +6,8 @@ use tree_sitter::Node;
 
 use super::COMMENTS;
 use crate::code::index::{Arity, Reach};
-use crate::code::jvm::{self, child, named, span, text};
+use crate::code::jvm;
+use crate::code::syntax::{child, named, span, text};
 use crate::model::{EdgeKind, Extraction, NodeKind};
 
 pub(crate) const TYPES: &[&str] = &[

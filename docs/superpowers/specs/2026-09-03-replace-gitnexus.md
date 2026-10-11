@@ -1,5 +1,7 @@
 # Replacing GitNexus with repograph — gap analysis and design
 
+> Paths have moved since this was written: `src/code` is grouped by family. The TypeScript walks (`symbols.rs`, `calls.rs`, `idrefs.rs`) and `vue/` are under `src/code/typescript/`, Java and Kotlin under `src/code/jvm/`, and C# and Razor under `src/code/dotnet/`. Line numbers are as of the commit the document names.
+
 Source: the 2026-09-03 three-graph measurement of `beauty-crm` @ `aba308b1` (82 recorded cases,
 `bench/cases.jsonl`; artifact "Три графа beauty-crm"), the GitNexus rules `beauty-crm` ran under
 until `d04b19a4`, and the current repograph 0.3.0 graph model.

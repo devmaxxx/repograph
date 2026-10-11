@@ -1,7 +1,7 @@
 //! C# extraction on inline sources, so the grammar's shape is pinned by the assertion.
 
-use crate::code::imports::Resolver;
 use crate::code::CodeExtractor;
+use crate::code::imports::Resolver;
 use crate::config::Config;
 use crate::model::{EdgeKind, Extraction, Extractor};
 
@@ -233,7 +233,7 @@ fn resolves(repo: &Repo, rel: &str, name: &str, namespace: &str, class: Option<&
     let resolver = repo.resolver();
     let src = std::fs::read_to_string(repo.dir.path().join(rel)).unwrap();
     let own = own(rel, &src);
-    let scope = Scope::new(rel, resolver.dotnet(), &own, &Host::default());
+    let scope = Scope::new(rel, resolver.state::<DotNet>(), &own, &Host::default());
     scope.types(name, namespace, class).into_iter().map(|p| format!("sym:{}::{}", p.rel, p.local)).collect()
 }
 

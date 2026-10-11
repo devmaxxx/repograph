@@ -5,6 +5,7 @@
 use super::{declarations, dir_of, inner};
 use crate::code::lang::Lang;
 use crate::code::prose::{self, Spans};
+use crate::code::syntax;
 use crate::model::{EdgeKind, Extraction};
 use std::collections::{BTreeMap, BTreeSet};
 use tree_sitter::Node;
@@ -54,7 +55,7 @@ pub(super) fn terraform(modules: &Modules, root: Node, own: &BTreeSet<String>, s
             }
         }
         if n.kind() != "variable_expr" {
-            stack.extend(prose::named(n));
+            stack.extend(syntax::named(n));
             continue;
         }
         let Some(address) = address(n, src) else { continue };
@@ -84,11 +85,11 @@ pub(super) fn terraform(modules: &Modules, root: Node, own: &BTreeSet<String>, s
 /// `aws_instance/web`. `each`, `count`, `path`, `self` and `terraform` are values of the block, not
 /// addresses. A traversal that ends before its address does names nothing.
 fn address(n: Node, src: &[u8]) -> Option<String> {
-    let root = prose::text(n, src);
+    let root = syntax::text(n, src);
     let mut steps = Vec::new();
     let mut at = n.next_named_sibling().or_else(|| trailing_steps(n));
     while let Some(step) = at.filter(|s| s.kind() == "get_attr") {
-        steps.push(prose::text(step.named_child(0)?, src));
+        steps.push(syntax::text(step.named_child(0)?, src));
         at = step.next_named_sibling();
     }
     let take = |k: usize| (steps.len() >= k).then(|| steps[..k].join("/"));
@@ -120,17 +121,17 @@ fn trailing_steps<'t>(n: Node<'t>) -> Option<Node<'t>> {
 /// Whether a `for` expression's variable or a `dynamic` block's iterator binds the root first: `x.name`
 /// inside `[for x in var.list : x.name]` reads the loop's `x`, never a resource type named `x`.
 fn bound_by_iteration(n: Node, src: &[u8]) -> bool {
-    let name = prose::text(n, src);
+    let name = syntax::text(n, src);
     let mut at = n.parent();
     while let Some(a) = at {
         let bound = match a.kind() {
             // `for_intro` is a sibling of the body and condition, not their ancestor. Its own collection
             // is evaluated outside the loop, so only what stands beside it is bound.
-            "for_tuple_expr" | "for_object_expr" => prose::named(a).into_iter()
+            "for_tuple_expr" | "for_object_expr" => syntax::named(a).into_iter()
                 .find(|c| c.kind() == "for_intro")
                 .is_some_and(|intro| {
                     let inside = intro.start_byte() <= n.start_byte() && n.end_byte() <= intro.end_byte();
-                    !inside && prose::named(intro).into_iter().any(|c| c.kind() == "identifier" && prose::text(c, src) == name)
+                    !inside && syntax::named(intro).into_iter().any(|c| c.kind() == "identifier" && syntax::text(c, src) == name)
                 }),
             "block" => dynamic_iterator(a, src).is_some_and(|i| i == name),
             _ => false,
@@ -146,15 +147,15 @@ fn bound_by_iteration(n: Node, src: &[u8]) -> bool {
 /// A `dynamic "label"` block's iterator: `iterator = x` when written, else the label.
 fn dynamic_iterator<'s>(block: Node, src: &'s [u8]) -> Option<&'s str> {
     let parts = inner(block);
-    if parts.first().map(|k| prose::text(*k, src)) != Some("dynamic") {
+    if parts.first().map(|k| syntax::text(*k, src)) != Some("dynamic") {
         return None;
     }
     let body = parts.iter().find(|c| c.kind() == "body");
-    let explicit = body.into_iter().flat_map(|b| prose::named(*b)).filter(|a| a.kind() == "attribute")
-        .find(|a| a.named_child(0).is_some_and(|k| prose::text(k, src) == "iterator"))
+    let explicit = body.into_iter().flat_map(|b| syntax::named(*b)).filter(|a| a.kind() == "attribute")
+        .find(|a| a.named_child(0).is_some_and(|k| syntax::text(k, src) == "iterator"))
         .and_then(|a| a.named_child(1))
-        .map(|v| prose::text(v, src));
-    explicit.or_else(|| parts.get(1).and_then(|l| inner(*l).first().map(|t| prose::text(*t, src))))
+        .map(|v| syntax::text(v, src));
+    explicit.or_else(|| parts.get(1).and_then(|l| inner(*l).first().map(|t| syntax::text(*t, src))))
 }
 
 /// `module "m" { source = "./dns" }`: the module's directory. Terraform reads only `./` and `../` as
@@ -162,13 +163,13 @@ fn dynamic_iterator<'s>(block: Node, src: &'s [u8]) -> Option<&'s str> {
 /// which names a directory outside the repository, and for the directory the call is in.
 fn module_dir(block: Node, src: &[u8], rel: &str) -> Option<String> {
     let parts = inner(block);
-    if parts.first().map(|k| prose::text(*k, src)) != Some("module") {
+    if parts.first().map(|k| syntax::text(*k, src)) != Some("module") {
         return None;
     }
     let body = parts.iter().find(|c| c.kind() == "body")?;
-    let path = prose::named(*body).into_iter()
+    let path = syntax::named(*body).into_iter()
         .filter(|a| a.kind() == "attribute")
-        .find(|a| a.named_child(0).is_some_and(|k| prose::text(k, src) == "source"))
+        .find(|a| a.named_child(0).is_some_and(|k| syntax::text(k, src) == "source"))
         .and_then(|a| a.named_child(1))
         .and_then(|v| literal(v, src))
         .filter(|p| p.starts_with("./") || p.starts_with("../"))?;
@@ -180,7 +181,7 @@ fn literal<'s>(expr: Node, src: &'s [u8]) -> Option<&'s str> {
     let mut n = expr;
     loop {
         match inner(n).as_slice() {
-            [t] if t.kind() == "template_literal" => return Some(prose::text(*t, src)),
+            [t] if t.kind() == "template_literal" => return Some(syntax::text(*t, src)),
             [one] if matches!(one.kind(), "expression" | "literal_value" | "string_lit" | "template_expr" | "quoted_template") => n = *one,
             _ => return None,
         }
@@ -192,13 +193,13 @@ fn literal<'s>(expr: Node, src: &'s [u8]) -> Option<&'s str> {
 pub(super) fn bake(root: Node, own: &BTreeSet<String>, spans: &Spans, src: &[u8], rel: &str, ex: &mut Extraction) {
     let mut stack = vec![root];
     while let Some(n) = stack.pop() {
-        let key = (n.kind() == "attribute").then(|| n.named_child(0)).flatten().map(|k| prose::text(k, src));
+        let key = (n.kind() == "attribute").then(|| n.named_child(0)).flatten().map(|k| syntax::text(k, src));
         if !matches!(key, Some("inherits" | "targets")) {
-            stack.extend(prose::named(n));
+            stack.extend(syntax::named(n));
             continue;
         }
         let from = spans.owner(n.start_byte());
-        for item in n.named_child(1).map(|v| prose::find(v, &["tuple"])).unwrap_or_default().first().map(|t| inner(*t)).unwrap_or_default() {
+        for item in n.named_child(1).map(|v| syntax::find_all(v, &["tuple"])).unwrap_or_default().first().map(|t| inner(*t)).unwrap_or_default() {
             let Some(name) = literal(item, src) else { continue };
             let Some(address) = ["target", "group"].iter().map(|k| format!("{k}/{name}")).find(|a| own.contains(a)) else { continue };
             let target = format!("sym:{rel}::{address}");

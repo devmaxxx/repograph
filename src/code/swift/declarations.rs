@@ -2,6 +2,7 @@ use std::collections::BTreeSet;
 
 use tree_sitter::Node;
 
+use crate::code::syntax::{child, named, span, text};
 use crate::model::{EdgeKind, Extraction, NodeKind};
 
 #[derive(Debug, Default)]
@@ -15,23 +16,6 @@ pub struct Declared {
     /// (the type's qualified name, a name in its inheritance clause, whether this file declares the type).
     /// An extension's clause belongs to a type declared wherever the index says.
     pub supers: Vec<(String, String, bool)>,
-}
-
-fn text<'a>(n: Node, src: &'a [u8]) -> &'a str {
-    n.utf8_text(src).unwrap_or("")
-}
-
-fn named<'t>(n: Node<'t>) -> Vec<Node<'t>> {
-    let mut c = n.walk();
-    n.named_children(&mut c).collect()
-}
-
-fn child<'t>(n: Node<'t>, kind: &str) -> Option<Node<'t>> {
-    named(n).into_iter().find(|c| c.kind() == kind)
-}
-
-fn span(n: Node) -> (u32, u32) {
-    (n.start_position().row as u32 + 1, n.end_position().row as u32 + 1)
 }
 
 const TYPE_KEYWORDS: [&str; 3] = ["class", "struct", "enum"];

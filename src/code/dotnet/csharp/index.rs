@@ -263,14 +263,14 @@ impl DotNet {
     }
 
     /// `members` are what `razor::members` reads from the component's blocks and injects.
-    pub(crate) fn add_razor(&mut self, rel: &str, d: &crate::code::razor::Directives, members: Members) {
+    pub(crate) fn add_razor(&mut self, rel: &str, d: &crate::code::dotnet::razor::Directives, members: Members) {
         if d.unread {
             return;
         }
-        if crate::code::razor::is_imports(rel) {
+        if crate::code::dotnet::razor::is_imports(rel) {
             let map = if is_view(rel) { &mut self.view_imports } else { &mut self.razor_imports };
             map.insert(parent(rel).to_string(), (d.usings.clone(), d.namespace.clone()));
-        } else if crate::code::razor::component_name(rel).is_some() {
+        } else if crate::code::dotnet::razor::component_name(rel).is_some() {
             self.instance_members.extend(members.keys().cloned());
             let generic_bases = d.inherits.iter().filter(|_| d.inherits_generic).cloned().collect();
             let component = Component { namespace: d.namespace.clone(), members, bases: d.inherits.iter().cloned().collect(), generic_bases, usings: d.usings.clone() };
@@ -332,7 +332,7 @@ impl DotNet {
         let by = self.components_by_full.get_or_init(|| {
             let mut m: BTreeMap<String, Vec<Part>> = BTreeMap::new();
             for (rel, Component { namespace: own, .. }) in &self.components {
-                let Some(stem) = crate::code::razor::component_name(rel) else { continue };
+                let Some(stem) = crate::code::dotnet::razor::component_name(rel) else { continue };
                 let full = join(&self.razor_namespace(rel, own.as_deref()), &stem);
                 m.entry(full.clone()).or_default().push(Part { rel: rel.clone(), local: stem, full });
             }

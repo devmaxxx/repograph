@@ -6,6 +6,7 @@ use std::ops::Range;
 
 use crate::code::imports::Resolver;
 use crate::code::lang::{file_node, Lang};
+use crate::code::reader::{self, Reader};
 use crate::model::{EdgeKind, Extraction, NodeKind};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -157,21 +158,40 @@ pub(crate) fn component_name(rel: &str) -> Option<&str> {
     Some(path.rsplit('/').next().unwrap_or(path))
 }
 
-pub fn extract(resolver: &Resolver, rel: &str, source: &str) -> Extraction {
+/// Every `.vue` file the walk globbed: a TypeScript import of one is an edge to a node only then.
+#[derive(Default)]
+pub(crate) struct Files(BTreeSet<String>);
+
+impl Files {
+    pub(crate) fn contains(&self, rel: &str) -> bool {
+        self.0.contains(rel)
+    }
+}
+
+pub(crate) const READER: Reader = Reader {
+    extract,
+    collect: Some(|r, rel, _| {
+        r.state_mut::<Files>().0.insert(rel.to_string());
+        None
+    }),
+    state: Some(reader::state::<Files>),
+    ..reader::NONE
+};
+
+fn extract(resolver: &Resolver, rel: &str, source: &str, ex: &mut Extraction) {
     let stem = component_name(rel).unwrap_or(rel);
     let component = format!("sym:{rel}::{stem}");
     let last = source.lines().count().max(1) as u32;
     let signature = source.lines().map(str::trim).find(|l| l.starts_with("export default")).unwrap_or(stem).to_string();
-    let mut ex = Extraction::default();
     // First, so the whole-file span survives the dedup when the script's class has the file's name.
     ex.node_span(NodeKind::Symbol, &component, stem, &signature, rel, (1, last));
     let tree = blanked(source).and_then(|(blank, lang)| lang.parse(blank.as_bytes()).map(|t| (blank, t)));
     match tree {
-        None => file_node(rel, &mut ex),
+        None => file_node(rel, ex),
         Some((blank, tree)) => {
             let src = blank.as_bytes();
             let root = tree.root_node();
-            let walked = crate::code::symbols::Walk { resolver }.scan_tree(rel, root, src);
+            let walked = crate::code::typescript::symbols::Walk { resolver }.scan_tree(rel, root, src);
             ex.nodes.extend(walked.nodes);
             ex.edges.extend(walked.edges);
             let prefix = format!("sym:{rel}::");
@@ -180,14 +200,13 @@ pub fn extract(resolver: &Resolver, rel: &str, source: &str) -> Extraction {
                 .filter(|n| !n.contains('.'))
                 .map(str::to_string)
                 .collect();
-            crate::code::calls::scan_tree(resolver, rel, root, src, &locals, &mut ex);
-            crate::code::idrefs::scan_tree(root, rel, src, &mut ex);
-            decorators_to_declarations(rel, &mut ex);
-            owned_by_the_component(source, rel, &component, &mut ex);
+            crate::code::typescript::calls::scan_tree(resolver, rel, root, src, &locals, ex);
+            crate::code::typescript::idrefs::scan_tree(root, rel, src, ex);
+            decorators_to_declarations(rel, ex);
+            owned_by_the_component(source, rel, &component, ex);
         }
     }
     ex.edge(&format!("file:{rel}"), &component, EdgeKind::Declares, "export", rel);
-    ex
 }
 
 /// The component spans the file, so what the walk leaves on `file:<rel>` is the component's: an
