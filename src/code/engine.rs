@@ -353,7 +353,7 @@ fn qualify(spec: &Spec, decl: &Compiled, file: &File, mut declared: Vec<Declared
     // The first pattern to match a node in a role keeps it, and one pattern matching one node once
     // per name, as `let a = 1, b = 2` does, declares each name. Kept by a set, since another node of
     // the same span may sort between two matches of one node.
-    let mut seen: HashMap<(usize, std::mem::Discriminant<Declaring>), (usize, Vec<Vec<Node>>)> = HashMap::new();
+    let mut seen = HashMap::new();
     declared.retain(|d| match seen.entry((d.node.id(), std::mem::discriminant(&d.role))) {
         std::collections::hash_map::Entry::Vacant(e) => {
             e.insert((d.pattern, vec![d.names.clone()]));
