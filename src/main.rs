@@ -250,9 +250,6 @@ pub(crate) fn apply_diff(repo: &std::path::Path, store: &store::Store, graph: &m
     // Languages that see names through imports, and Terraform's modules, resolve across files with no
     // header to compare, so they widen by rules of their own.
     widened_rels.extend(code::engine::widen(&rereading, &diff.removed, graph, &code_rels));
-    for widen in code::lang::Lang::ALL.into_iter().filter_map(|l| code::spec::spec(l).hooks.widen) {
-        widened_rels.extend(widen(&rereading, &diff.removed, graph, &code_rels));
-    }
     // The `binary_search` below needs the list sorted, and two rules may name one file twice.
     widened_rels.sort();
     widened_rels.dedup();
@@ -472,7 +469,7 @@ impl<'a> Watcher<'a> {
             let code: Vec<String> = diff.changed.iter().filter(|e| e.kind == walk::FileKind::Code).map(|e| e.rel.clone()).collect();
             Ok(code::index::headers_move(self.repo, &code::index::Headers::load(&self.store)?, &code))
         };
-        // Scripts, Bicep files and HCL files resolve names through the whole family's files, so an edit
+        // Scripts, Bicep files and Terraform files resolve names through other files of their language, so an edit
         // of an existing one can change what another resolves to without moving a path or a header.
         let path_family = diff.changed.iter().map(|e| e.rel.as_str()).chain(diff.removed.iter().map(String::as_str))
             .any(|rel| code::lang::Lang::of(rel).is_some_and(|l| code::spec::spec(l).cross_file));

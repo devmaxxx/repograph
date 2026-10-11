@@ -115,7 +115,7 @@ impl Facts {
         source.map_or_else(|| format!("file:{rel}"), |i| self.defs[i].id.clone())
     }
 
-    fn declares(&self, qualified: &str) -> bool {
+    pub(crate) fn declares(&self, qualified: &str) -> bool {
         self.declared.contains(qualified)
     }
 
@@ -566,11 +566,14 @@ pub(crate) fn resolve(resolver: &Resolver, spec: &Spec, file: &File, facts: &Fac
     }
 }
 
-/// `apply_diff`'s widening for the languages that see names through their imports, with no header to
-/// compare: a changed or removed file can add or drop a name a file importing it calls, so every
-/// importer is read again, through the whole chain where the visibility is transitive. A file whose
-/// import named a file that did not exist yet has no `Imports` edge to follow, and waits for its
-/// own next edit.
+/// `apply_diff`'s widening for the languages that resolve across files with no header to compare.
+/// Where names are seen through imports, a changed or removed file can add or drop a name a file
+/// importing it calls, so every importer is read again, through the whole chain where the
+/// visibility is transitive. A file whose import named a file that did not exist yet has no
+/// `Imports` edge to follow, and waits for its own next edit. Where a directory is the module, a
+/// changed or removed file can add, move or drop a name every file beside it reads, and a call of
+/// the module reads what it declares: the files of that directory and their importers are read
+/// again.
 pub(crate) fn widen(stale: &[String], removed: &[String], graph: &Graph, all_rels: &[String]) -> Vec<String> {
     // A language with a header widens through `headers_move` instead, which re-reads only when a
     // declaration moved.
@@ -578,17 +581,23 @@ pub(crate) fn widen(stale: &[String], removed: &[String], graph: &Graph, all_rel
         Some(Spec { visibility: Visibility::Imported { transitive }, hooks, .. }) if hooks.header.is_none() => Some(*transitive),
         _ => None,
     };
+    fn module(rel: &str) -> Option<(&str, Lang)> {
+        let lang = Lang::of(rel).filter(|l| matches!(crate::code::spec::spec(*l).visibility, Visibility::Directory))?;
+        Some((rel.rsplit_once('/').map_or("", |(d, _)| d), lang))
+    }
     let mut reached: BTreeSet<String> = BTreeSet::new();
     let mut frontier: Vec<(String, bool)> = Vec::new();
+    let mut modules: BTreeSet<(&str, Lang)> = BTreeSet::new();
     for rel in stale.iter().chain(removed) {
         if let Some(transitive) = chain(rel) {
             let id = format!("file:{rel}");
             reached.insert(id.clone());
             frontier.push((id, transitive));
         }
+        modules.extend(module(rel));
     }
     // Most refreshes touch no file of such a language, and then no edge needs grouping.
-    if frontier.is_empty() {
+    if frontier.is_empty() && modules.is_empty() {
         return Vec::new();
     }
     // Grouped once: a chain of imports is as many hops as it is long, and each hop would otherwise
@@ -602,6 +611,16 @@ pub(crate) fn widen(stale: &[String], removed: &[String], graph: &Graph, all_rel
             if reached.insert(importer.to_string()) && transitive {
                 frontier.push((importer.to_string(), transitive));
             }
+        }
+    }
+    if !modules.is_empty() {
+        let in_module = |rel: &str| module(rel).is_some_and(|m| modules.contains(&m));
+        reached.extend(all_rels.iter().filter(|r| in_module(r)).map(|r| format!("file:{r}")));
+        for (target, sources) in &importers {
+            let Some(rel) = target.strip_prefix("file:").filter(|t| in_module(t)) else { continue };
+            let lang = Lang::of(rel);
+            let same = sources.iter().filter(|s| s.strip_prefix("file:").is_some_and(|s| Lang::of(s) == lang));
+            reached.extend(same.map(|s| s.to_string()));
         }
     }
     let stale: BTreeSet<&str> = stale.iter().map(String::as_str).collect();

@@ -227,7 +227,7 @@ fn calling(pairs: &[(&str, &str)]) -> crate::model::Graph {
 
 fn widened(stale: &[&str], removed: &[&str], g: &crate::model::Graph, all: &[&str]) -> Vec<String> {
     let owned = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
-    let mut w = super::widen(&owned(stale), &owned(removed), g, &owned(all));
+    let mut w = crate::code::engine::widen(&owned(stale), &owned(removed), g, &owned(all));
     w.sort();
     w
 }
@@ -284,4 +284,36 @@ fn aliased_provider_blocks_are_one_symbol() {
     let main = "provider \"aws\" {\n  alias = \"one\"\n}\nprovider \"aws\" {\n  alias = \"two\"\n}\n";
     let ex = extract(&[("m/main.tf", main)], "m/main.tf");
     assert_eq!(ex.nodes.iter().filter(|n| n.id == "sym:m/main.tf::provider/aws").count(), 1);
+}
+
+#[test]
+fn a_bake_name_both_a_target_and_a_group_hold_is_the_target() {
+    // Bake looks a name up among targets first; a group of the same name is not what is inherited.
+    let bake = "group \"api\" {\n  targets = [\"api\"]\n}\ntarget \"api\" {}\ntarget \"web\" {\n  inherits = [\"api\"]\n}\n";
+    let ex = extract(&[("docker-bake.hcl", bake)], "docker-bake.hcl");
+    assert_eq!(lines(&ex, EdgeKind::References), [
+        "sym:docker-bake.hcl::group/api -> sym:docker-bake.hcl::target/api []",
+        "sym:docker-bake.hcl::target/web -> sym:docker-bake.hcl::target/api []",
+    ]);
+}
+
+#[test]
+fn a_label_is_a_bare_identifier_or_plain_text_and_a_bake_block_keeps_every_label() {
+    let tf = "resource aws_instance web {}\nresource \"aws_instance\" \"\" {}\nresource \"aws_instance\" {}\n";
+    let ex = extract(&[("m/main.tf", tf)], "m/main.tf");
+    assert_eq!(ids(&ex), ["file:m/main.tf", "sym:m/main.tf::aws_instance/web"], "an empty label and a missing one name nothing");
+    let hcl = "a \"b\" c \"d\" {}\nplain {}\nbad \"x\" \"y/z\" {}\n";
+    let ex = extract(&[("conf.hcl", hcl)], "conf.hcl");
+    assert_eq!(ids(&ex), ["file:conf.hcl", "sym:conf.hcl::a/b/c/d"], "an unlabelled block and a label holding `/` name nothing");
+}
+
+#[test]
+fn a_tf_file_is_terraform_and_an_hcl_file_reading_like_it_is_not() {
+    // The same text resolves `var.region` in a module and nothing in a plain HCL file.
+    let text = "variable \"region\" {}\noutput \"r\" {\n  value = var.region\n}\n";
+    let ex = extract(&[("m/main.tf", text)], "m/main.tf");
+    assert_eq!(lines(&ex, EdgeKind::References), ["sym:m/main.tf::output/r -> sym:m/main.tf::var/region []"]);
+    let ex = extract(&[("m/main.hcl", text)], "m/main.hcl");
+    assert_eq!(ids(&ex), ["file:m/main.hcl", "sym:m/main.hcl::output/r", "sym:m/main.hcl::variable/region"]);
+    assert!(lines(&ex, EdgeKind::References).is_empty(), "{:?}", lines(&ex, EdgeKind::References));
 }

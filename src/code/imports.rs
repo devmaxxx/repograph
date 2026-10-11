@@ -297,11 +297,17 @@ impl Resolver {
 
     /// The globbed files beside `rel` in its directory that its language reads, `rel` excluded.
     pub(crate) fn siblings(&self, rel: &str, lang: Lang) -> Vec<String> {
-        let dir = rel.rsplit_once('/').map_or("", |(d, _)| d);
+        let mut files = self.in_dir(rel.rsplit_once('/').map_or("", |(d, _)| d), lang);
+        files.retain(|f| f != rel);
+        files
+    }
+
+    /// The globbed files of `lang` directly in `dir`, `""` being the root.
+    pub(crate) fn in_dir(&self, dir: &str, lang: Lang) -> Vec<String> {
         let prefix = if dir.is_empty() { String::new() } else { format!("{dir}/") };
         self.files.range(prefix.clone()..)
             .take_while(|f| f.starts_with(&prefix))
-            .filter(|f| *f != rel && !f[prefix.len()..].contains('/') && Lang::of(f) == Some(lang))
+            .filter(|f| !f[prefix.len()..].contains('/') && Lang::of(f) == Some(lang))
             .cloned()
             .collect()
     }

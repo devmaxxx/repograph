@@ -3,7 +3,7 @@
 //! names every language: the front, the resolver, the header index, `changes` and the update's
 //! widening read this table instead of matching on `Lang` each in its own way.
 //!
-//! Most of the vocabulary below describes ported languages, and only Shell and Bicep are ported yet.
+//! Most of the vocabulary below describes ported languages, and only Shell, Bicep, HCL and Terraform are ported yet.
 #![allow(dead_code)]
 
 use std::any::{Any, TypeId};
@@ -14,7 +14,7 @@ use crate::code::engine::{Def, Facts, File, Import, Sink};
 use crate::code::imports::Resolver;
 use crate::code::index::Header;
 use crate::code::lang::Lang;
-use crate::model::{EdgeKind, Extraction, Graph};
+use crate::model::{EdgeKind, Extraction};
 
 pub(crate) struct Spec {
     pub queries: Sources,
@@ -29,7 +29,7 @@ pub(crate) struct Spec {
     pub ambiguity: Ambiguity,
     pub imports: ImportPaths,
     /// An edit of one file can change what another resolves to without moving a path or a header,
-    /// so `serve` rebuilds the resolver when such a file changes. Not the `widen` set: Bicep has none.
+    /// so `serve` rebuilds the resolver when such a file changes.
     pub cross_file: bool,
     /// Whether files under a dotted directory are read. CI keeps its scripts under `.github/`,
     /// while a tsconfig or a manifest there stays out.
@@ -148,7 +148,6 @@ pub(crate) type Collect = fn(&mut Resolver, &str, &str) -> Option<Header>;
 /// files it has only the declarations of.
 pub(crate) type ImportHook = fn(&Resolver, &str, &Import) -> Vec<String>;
 
-pub(crate) type Widen = fn(&[String], &[String], &Graph, &[String]) -> Vec<String>;
 
 /// What a blanking reader keeps of a file for its view's grammar.
 pub(crate) enum Embedded {
@@ -185,9 +184,6 @@ pub(crate) struct Hooks {
     pub resolve: Option<fn(&Resolver, &File, &Facts, &mut Sink)>,
     /// Edge kinds the default resolution leaves to `resolve`.
     pub owns: &'static [EdgeKind],
-    /// A widening rule for a language that resolves across files without a header to compare:
-    /// `(stale, removed, graph, all_rels)` to the other files to re-read.
-    pub widen: Option<Widen>,
 }
 
 impl Hooks {
@@ -218,11 +214,11 @@ pub(crate) const NONE: Hooks = Hooks {
     import: None,
     resolve: None,
     owns: &[],
-    widen: None,
 };
 
 const C: Option<CommentSyntax> = Some(CommentSyntax { lines: &["//"], blocks: true });
 const HASH: Option<CommentSyntax> = Some(CommentSyntax { lines: &["#"], blocks: false });
+const HCL_COMMENTS: Option<CommentSyntax> = Some(CommentSyntax { lines: &["#", "//"], blocks: true });
 
 /// The fields a language's port has yet to write down; nothing reads them while `legacy` is set.
 const UNPORTED: Spec = Spec {
@@ -245,7 +241,7 @@ const PROSE: Body = Body { doc: Doc::Adjacent { kinds: &["comment"], between: &[
 
 mod table {
     use super::*;
-    use crate::code::exceptions::{computed_paths, module_reach, symbolic_names};
+    use crate::code::exceptions::{computed_paths, module_reach, symbolic_names, target_or_group, traversal_addresses};
     use crate::code::*;
 
     pub(super) const TYPESCRIPT: Spec = Spec { comments: C, hooks: typescript::HOOKS, legacy: Some(typescript::extract), ..UNPORTED };
@@ -290,11 +286,43 @@ mod table {
         legacy: None,
     };
     pub(super) const HCL: Spec = Spec {
-        comments: Some(CommentSyntax { lines: &["#", "//"], blocks: true }),
+        queries: crate::code::queries::sources::HCL,
+        view: None,
+        comments: HCL_COMMENTS,
+        body: PROSE,
+        // A bake file's every block is invoked by name from outside it.
+        export: Export::All,
+        visibility: Visibility::File,
+        ambiguity: Ambiguity::OwnFirst,
+        cross_file: false,
+        imports: ImportPaths { root: false, suffixes: &[""] },
+        dotted_dirs: false,
+        hooks: Hooks { resolve: Some(target_or_group::resolve), owns: &[EdgeKind::References], ..NONE },
+        legacy: None,
+    };
+    pub(super) const TERRAFORM: Spec = Spec {
+        queries: crate::code::queries::sources::TERRAFORM,
+        view: None,
+        comments: HCL_COMMENTS,
+        body: PROSE,
+        // The query's `#set! export` decides: a variable and an output are the module's interface.
+        export: Export::Show(&[]),
+        // A module is a directory: what one file declares, every file beside it reads.
+        visibility: Visibility::Directory,
+        ambiguity: Ambiguity::OwnFirst,
         cross_file: true,
-        hooks: hcl::HOOKS,
-        legacy: Some(hcl::extract),
-        ..UNPORTED
+        imports: ImportPaths { root: false, suffixes: &[""] },
+        dotted_dirs: false,
+        hooks: Hooks {
+            import: Some(module_reach::directory),
+            resolve: Some(|r, file, facts, sink| {
+                traversal_addresses::resolve(r, file, facts, sink);
+                module_reach::reach(r, file, facts, sink);
+            }),
+            owns: &[EdgeKind::References],
+            ..NONE
+        },
+        legacy: None,
     };
     pub(super) const SHELL: Spec = Spec {
         queries: crate::code::queries::sources::SHELL,
@@ -338,6 +366,7 @@ pub(crate) fn spec(lang: Lang) -> &'static Spec {
         Lang::Sql => &table::SQL,
         Lang::Bicep => &table::BICEP,
         Lang::Hcl => &table::HCL,
+        Lang::Terraform => &table::TERRAFORM,
         Lang::Shell => &table::SHELL,
     }
 }

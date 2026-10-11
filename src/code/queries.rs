@@ -194,8 +194,14 @@ pub(crate) mod sources {
     pub(crate) const BICEP: Sources =
         Sources { decl: &[include_str!("queries/bicep/decl.scm")], refs: &[include_str!("queries/bicep/refs.scm")] };
 
+    pub(crate) const HCL: Sources =
+        Sources { decl: &[include_str!("queries/hcl/decl.scm")], refs: &[include_str!("queries/hcl/refs.scm")] };
+
     pub(crate) const SHELL: Sources =
         Sources { decl: &[include_str!("queries/shell/decl.scm")], refs: &[include_str!("queries/shell/refs.scm")] };
+
+    pub(crate) const TERRAFORM: Sources =
+        Sources { decl: &[include_str!("queries/terraform/decl.scm")], refs: &[include_str!("queries/terraform/refs.scm")] };
 }
 
 const N: usize = Lang::ALL.len();

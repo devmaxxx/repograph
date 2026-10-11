@@ -13,7 +13,7 @@ use tree_sitter::{Language, Parser, Tree};
 // Declared ahead of the family plans that construct them, so that no plan edits the declaration.
 #[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum Lang { TypeScript, Tsx, Kotlin, Java, CSharp, Razor, Rust, Python, Dart, Swift, GraphQl, Sql, Bicep, Hcl, Shell, Vue }
+pub enum Lang { TypeScript, Tsx, Kotlin, Java, CSharp, Razor, Rust, Python, Dart, Swift, GraphQl, Sql, Bicep, Hcl, Terraform, Shell, Vue }
 
 /// The unit a resolver works over: languages that compile together share one.
 #[allow(dead_code)]
@@ -51,6 +51,9 @@ fn by_name(rel: &str) -> Named {
 fn overridden(ext: Option<&str>) -> Option<Named> {
     Some(match ext? {
         "bicep" => Named::Read(Lang::Bicep),
+        // A `.tf` file is a Terraform module's: its blocks are addresses that resolve across the
+        // directory. Every other HCL dialect is read by block type and labels.
+        "tf" => Named::Read(Lang::Terraform),
         "sql" => Named::Read(Lang::Sql),
         "gql" | "graphql" => Named::Read(Lang::GraphQl),
         // A view (`.cshtml`) is Razor too: same directives, same `@functions`, one reader.
@@ -75,7 +78,6 @@ fn carried_lang(carried: SupportLang) -> Option<Lang> {
         SupportLang::Bash => Some(Lang::Shell),
         SupportLang::CSharp => Some(Lang::CSharp),
         SupportLang::Dart => Some(Lang::Dart),
-        // Terraform and every other HCL dialect share one grammar; `hcl::extract` tells them apart by extension.
         SupportLang::Hcl => Some(Lang::Hcl),
         SupportLang::Java => Some(Lang::Java),
         SupportLang::Kotlin => Some(Lang::Kotlin),
@@ -138,9 +140,10 @@ fn shebang(text: &str) -> Option<Lang> {
 }
 
 impl Lang {
-    pub const ALL: [Lang; 16] = [
+    pub const ALL: [Lang; 17] = [
         Lang::TypeScript, Lang::Tsx, Lang::Kotlin, Lang::Java, Lang::CSharp, Lang::Razor, Lang::Rust, Lang::Python,
-        Lang::Dart, Lang::Swift, Lang::GraphQl, Lang::Sql, Lang::Bicep, Lang::Hcl, Lang::Shell, Lang::Vue,
+        Lang::Dart, Lang::Swift, Lang::GraphQl, Lang::Sql, Lang::Bicep, Lang::Hcl, Lang::Terraform, Lang::Shell,
+        Lang::Vue,
     ];
 
     /// `None`: no grammar and no embedding reads this extension (L1). Such a file is indexed as a
@@ -164,7 +167,7 @@ impl Lang {
             Lang::Java => SupportLang::Java,
             Lang::Rust => SupportLang::Rust,
             Lang::Python => SupportLang::Python,
-            Lang::Hcl => SupportLang::Hcl,
+            Lang::Hcl | Lang::Terraform => SupportLang::Hcl,
             Lang::Shell => SupportLang::Bash,
             Lang::Dart => SupportLang::Dart,
             Lang::Swift => SupportLang::Swift,
@@ -193,7 +196,7 @@ impl Lang {
             Lang::Rust => Family::Rust,
             Lang::Python => Family::Python,
             Lang::Bicep => Family::Bicep,
-            Lang::Hcl => Family::Hcl,
+            Lang::Hcl | Lang::Terraform => Family::Hcl,
             Lang::Shell => Family::Shell,
             Lang::Dart => Family::Dart,
             Lang::Swift => Family::Swift,
@@ -243,9 +246,9 @@ mod all_tests {
         let slot = |l: Lang| match l {
             Lang::TypeScript => 0, Lang::Tsx => 1, Lang::Kotlin => 2, Lang::Java => 3, Lang::CSharp => 4, Lang::Razor => 5,
             Lang::Rust => 6, Lang::Python => 7, Lang::Dart => 8, Lang::Swift => 9, Lang::GraphQl => 10, Lang::Sql => 11,
-            Lang::Bicep => 12, Lang::Hcl => 13, Lang::Shell => 14, Lang::Vue => 15,
+            Lang::Bicep => 12, Lang::Hcl => 13, Lang::Terraform => 14, Lang::Shell => 15, Lang::Vue => 16,
         };
-        let mut seen = [false; 16];
+        let mut seen = [false; 17];
         for l in Lang::ALL {
             assert!(!std::mem::replace(&mut seen[slot(l)], true), "{l:?} listed twice");
         }

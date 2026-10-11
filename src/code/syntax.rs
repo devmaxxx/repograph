@@ -42,12 +42,6 @@ pub(crate) fn find<'t>(n: Node<'t>, kinds: &[&str], out: &mut Vec<Node<'t>>) {
     });
 }
 
-pub(crate) fn find_all<'t>(n: Node<'t>, kinds: &[&str]) -> Vec<Node<'t>> {
-    let mut out = Vec::new();
-    find(n, kinds, &mut out);
-    out
-}
-
 /// Visits every named descendant of `n` in source order, and goes below one only when `visit` returns true.
 /// It walks with a cursor and no recursion: a generated grammar nests a left-recursive list as deep as it is
 /// long, so a 50,000-row `INSERT … VALUES` is 50,000 levels and overflows the stack of a recursive walk.

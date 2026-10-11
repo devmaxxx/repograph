@@ -2,6 +2,7 @@
 //! construct is pinned by the assertion rather than by a shared fixture.
 
 mod bicep;
+mod hcl;
 mod shell;
 
 use super::CodeExtractor;
@@ -925,7 +926,7 @@ fn bicep_terraform_bake_and_shell_each_pick_their_grammar() {
     use crate::code::lang::{Family, Lang};
     for (rel, lang) in [
         ("sample/stack.bicep", Lang::Bicep),
-        ("infra/staging/main.tf", Lang::Hcl),
+        ("infra/staging/main.tf", Lang::Terraform),
         ("docker-bake.hcl", Lang::Hcl),
         ("bench/probe/reset.sh", Lang::Shell),
         ("tools/x.bash", Lang::Shell),
@@ -936,6 +937,7 @@ fn bicep_terraform_bake_and_shell_each_pick_their_grammar() {
     // A variable-values file assigns and declares nothing an address names.
     assert_eq!(Lang::of("infra/staging/terraform.tfvars"), None);
     assert_eq!((Lang::Bicep.family(), Lang::Hcl.family(), Lang::Shell.family()), (Family::Bicep, Family::Hcl, Family::Shell));
+    assert_eq!(Lang::Terraform.family(), Family::Hcl);
 }
 
 #[test]

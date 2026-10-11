@@ -5,7 +5,6 @@ pub(crate) mod engine;
 pub(crate) mod exceptions;
 pub(crate) mod front;
 pub mod graphql;
-pub mod hcl;
 pub mod imports;
 pub mod index;
 pub mod jvm;
