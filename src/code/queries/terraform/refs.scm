@@ -38,14 +38,15 @@
 (for_object_expr (for_intro (identifier) @local.definition) (expression) @local.scope)
 (for_object_expr (for_intro (identifier) @local.definition) (for_cond) @local.scope)
 
-; A `dynamic "label"` block's iterator binds in its body: the label, and an `iterator = x` written
-; there. Binding the label beside an explicit iterator costs only a resource type spelled like a
-; nested block's type.
+; A `dynamic "label"` block's iterator binds in its body: the label, unless an `iterator = x` written
+; there renames it to `x`. A repetition from the body's first item captures every item, and the
+; negated match must hold for each, so the label binds only when no item is an `iterator` attribute.
 (block
   . (identifier) @_kind
   . (string_lit (template_literal) @local.definition)
-  (body) @local.scope
-  (#eq? @_kind "dynamic"))
+  (body . (_)+ @_item) @local.scope
+  (#eq? @_kind "dynamic")
+  (#not-match? @_item "^iterator[ \t]*="))
 (block
   . (identifier) @_kind
   (body

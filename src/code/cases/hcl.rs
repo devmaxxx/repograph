@@ -163,9 +163,22 @@ fn a_lock_file_handed_to_the_extractor_declares_nothing_because_its_labels_are_r
 fn a_for_variable_and_a_dynamic_iterator_are_not_references_to_a_declaration_of_the_same_name() {
     let main = "resource \"web\" \"x\" {\n  a = [for web in var.list : web.x]\n  dynamic \"ebs\" {\n    for_each = var.disks\n    iterator = disk\n    content {\n      size = disk.x\n      kind = ebs.x\n    }\n  }\n  dynamic \"rule\" {\n    for_each = var.rules\n    content {\n      port = rule.x\n    }\n  }\n}\nresource \"disk\" \"x\" {}\nresource \"ebs\" \"x\" {}\nresource \"rule\" \"x\" {}\nvariable \"list\" {}\n";
     let ex = extract(&[("m/main.tf", main)], "m/main.tf");
-    // `web.x` is the loop's own element, though `resource "web" "x"` exists. A query cannot tell a
-    // label `iterator = disk` renamed from one it did not, so `ebs.x` stays bound by the label too.
-    assert_eq!(lines(&ex, EdgeKind::References), ["sym:m/main.tf::web/x -> sym:m/main.tf::var/list []"]);
+    // `web.x` is the loop's own element, though `resource "web" "x"` exists. `iterator = disk`
+    // renames the label, so `ebs.x` is the resource again.
+    assert_eq!(lines(&ex, EdgeKind::References), [
+        "sym:m/main.tf::web/x -> sym:m/main.tf::ebs/x []",
+        "sym:m/main.tf::web/x -> sym:m/main.tf::var/list []",
+    ]);
+}
+
+#[test]
+fn a_dynamic_label_binds_unless_its_own_body_names_an_iterator_after_any_other_item() {
+    let main = "resource \"web\" \"x\" {\n  dynamic \"ebs\" {\n    for_each = var.disks\n    content {\n      kind = ebs.x\n      dynamic \"rule\" {\n        for_each = ebs.value\n        content {\n          port = rule.x\n        }\n        # renamed\n        iterator = r\n      }\n    }\n  }\n}\nresource \"ebs\" \"x\" {}\nresource \"rule\" \"x\" {}\nvariable \"disks\" {}\n";
+    let ex = extract(&[("m/main.tf", main)], "m/main.tf");
+    assert_eq!(lines(&ex, EdgeKind::References), [
+        "sym:m/main.tf::web/x -> sym:m/main.tf::rule/x []",
+        "sym:m/main.tf::web/x -> sym:m/main.tf::var/disks []",
+    ]);
 }
 
 #[test]

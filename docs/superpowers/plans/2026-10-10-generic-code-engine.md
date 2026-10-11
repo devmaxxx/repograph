@@ -729,8 +729,8 @@ The ported languages' hooks that remain:
   - `a_nested_resource_is_not_read_by_its_short_name` (was `…_inside_its_parent_only`) expects no
     edge. A child is declared `vnet.subnet`, which neither `subnet` nor `vnet::subnet` spells.
 - **Terraform** (`src/code/cases/hcl.rs`):
-  - The `for` and `dynamic` case drops `web/x -> ebs/x`. A query cannot tell a label that
-    `iterator =` renamed from one it did not, so the label still binds.
+  - The `for` and `dynamic` case dropped `web/x -> ebs/x` in the sweep, and step 5's first commit
+    restored it (below).
   - `a_negated_operand_keeps_its_attribute_steps_through_two_nested_operations` is renamed from
     `…_however_deep_the_operation_nests`. The query reads two levels, and the assertion is unchanged.
 - **Swift** (`src/code/cases/swift.rs`):
@@ -745,6 +745,22 @@ The ported languages' hooks that remain:
   - a class with a method;
   - a module-level walrus;
   - interleaved nodes of one span.
+
+**Review fixes, queries only.** Two findings of the sweep's review were fixed in queries, each with a
+case that failed before it. All three graphs are byte-identical to the sweep's gate stores, so no edge
+moved and none needed a hand read.
+
+- **Bicep.** `@description('x')` read a `param description` of the same name, because the call
+  pattern matched a decorator's call. The pattern now skips a call whose parent's text opens with
+  `@`. Decorators are statements beside the declaration, so only a decorator's text does. A case with
+  `@description`, beside the `@sys.description` one, pins it.
+- **Terraform.** A `dynamic` label bound in the body even where `iterator = x` renamed it. The label
+  pattern now captures every item of the body through a repetition anchored at its first item, with
+  `#not-match? "^iterator[ \t]*="`, which must hold for each. The `web/x -> ebs/x` assertion is back,
+  and a second case pins an `iterator` written last, after a comment, in a `dynamic` nested in
+  another's `content`. Narrower forms let a match skip the `iterator` item: a repetition of
+  attributes alone missed one written last, and one anchored at the body's end missed one in the
+  middle.
 
 ## 4 · Detection and the front
 

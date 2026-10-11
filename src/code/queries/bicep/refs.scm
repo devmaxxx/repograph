@@ -27,8 +27,12 @@
   (object_property (_) . (identifier) @reference.references)
   (lambda_expression (identifier) @reference.references .)
   (for_statement . (_) (identifier) @reference.references)
-  (call_expression function: (identifier) @reference.references)
 ]
+
+; A decorator names a built-in, never a declaration of its name. Decorators are statements beside the
+; declaration, so only a decorator's text opens with `@`.
+((_ (call_expression function: (identifier) @reference.references)) @_site
+  (#not-match? @_site "^@"))
 
 [
   (parameter_declaration . (_) (identifier) @reference.references)

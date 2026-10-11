@@ -88,6 +88,13 @@ fn a_name_read_in_the_file_is_a_reference_and_a_key_a_loop_variable_or_a_decorat
 }
 
 #[test]
+fn a_decorator_reads_no_param_of_its_name() {
+    let src = "param description string\n@description('the vault')\nresource kv 'Microsoft.KeyVault/vaults@2023-02-01' = {\n  name: description\n}\n";
+    let ex = extract(&[("s.bicep", src)], "s.bicep");
+    assert_eq!(lines(&ex, EdgeKind::References), ["sym:s.bicep::kv -> sym:s.bicep::description []"]);
+}
+
+#[test]
 fn a_lambda_parameter_and_an_iterable_named_like_a_declaration_bind_only_where_they_are_written() {
     let src = "param n int\nparam items array\nvar a = map(items, n => n)\nvar b = map(items, (n, i) => n)\nvar c = [for n in items: n]\nvar d = [for item in items: n]\n";
     let ex = extract(&[("s.bicep", src)], "s.bicep");
