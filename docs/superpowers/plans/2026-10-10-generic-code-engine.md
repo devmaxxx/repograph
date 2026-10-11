@@ -887,6 +887,30 @@ This step alone closes the three reviewer defects. About 1,200 lines of Rust are
 - **Hooks:** `widen` stays, on Terraform.
 - **Gate:** References (66) is just enough for the corpus to decide. The `beauty-crm-hcl` blast and the fixture's 5 `.tf` files also apply.
 
+**Step 3 as built.** Where the code differs from the text above, the code is the record:
+
+- Five step-2 review findings were fixed first, in their own commit, with the graph byte-identical:
+  - A scope a definition's own pattern captures no longer joins the fallback scopes, so a plain definition inside it binds in the innermost plain scope. An engine test pins it.
+  - `Facts::declared_at` reads a range index built once per file.
+  - `Import` carries the files the engine resolved it to (`targets`), and `module_reach::reach` reads them instead of resolving each site again. No hook signature changed.
+  - Bicep's top-level resource joined the plain alternation.
+  - A Shell case pins that two `source` sites with the same text and different evaluations import neither.
+- **The split.** `.tf` is an override to `Lang::Terraform`, with the HCL grammar and `Family::Hcl`. `Lang::ALL` has 17 entries. `tests/parse_census.rs` needed no edit, because it derives its rows from `Lang::of`. `docs/languages.md` has a Terraform row and an HCL row. In the graph the split moves nothing: no node or edge carries a `Lang`, and ids, family and headers are unchanged. On both corpora and on the fixture, `graph.json` and `headers.json` are byte-identical to step 2's.
+- **Queries.** They are `queries/terraform/{decl,refs}.scm` and `queries/hcl/{decl,refs}.scm`.
+  - A label is `[(identifier) (string_lit . start . (template_literal) . end .)]` with `#not-match? @name "/"`. The anchor `. (block_start)` holds each kind to its label count.
+  - HCL's labels are a quantified alternation, so a bake block keeps every label.
+  - The module source is an `@import` at any depth with `#match? "^\\.\\.?/"`.
+- **References is a hook in both (§3.3).**
+  - Terraform: the default, measured with the same query, reads 0 of the corpus's 66 References (`log/langdiff-step3-default.txt`). It looks up the root (`var`), which names no address, so `exceptions/traversal_addresses.rs` keeps the old rule. That rule covers the address from the root and its steps, steps hung on an operation, and `for` and `dynamic` binders.
+  - HCL: the corpus holds no `.hcl` file, so the cases decide. Bake names a block by its bare label, target first. That is `exceptions/target_or_group.rs`, and a new case pins a group and a target sharing a name.
+- **Module reach.** Terraform's module call is in `exceptions/module_reach.rs` beside Bicep's. `module_reach::directory` is the import hook: it gives the `.tf` files of the named directory through the new `Resolver::in_dir`, and nothing for the caller's own directory or for a path above the root. `Resolver::facts` replaces the `Modules` collect pass and its state, so neither language has `collect` or `state`.
+- **Widen is not a hook (deviation).** `engine::widen` now also covers `Visibility::Directory`: the same-language files of a changed directory and their same-language importers. That is exactly the old Terraform rule, so `Hooks::widen` lost its last user. The field and its loop in `apply_diff` are gone, and the widen cases call `engine::widen`.
+- **`cross_file`** is true for Terraform and false for HCL, since a bake file resolves only within itself. `serve` no longer rebuilds the resolver on a `.hcl` edit.
+- `prose.rs` lost `Spans`, `body`, `declare` and `cite`, and `syntax.rs` lost `find_all`, because HCL was their last user.
+- The cases moved to `src/code/cases/hcl.rs`, and every assertion is kept. Three cases were added: a bake target over a group of the same name; identifier, empty and missing labels together with HCL's labels; and the same text as `.tf` and as `.hcl`. One assertion was edited, as the split forces: `bicep_terraform_bake_and_shell_each_pick_their_grammar` now expects `main.tf` to be `Lang::Terraform`. It gained a line that checks `Terraform.family()`.
+- **Divergence.** A list inside a function call, such as bake's `inherits = concat(["base"], ["api"])`, is not read. The old reader took the first list it found anywhere in the value. An adversarial file of 47 nodes, written for this step, differs from the old reader by that one edge and nothing else. The file covers aliased providers, a duplicate output, `for` and `dynamic` binders, operations, registry, self and climbing sources, a lock file, heredoc citations and bad labels. No corpus holds such a call.
+- Size: the queries are 128 lines against ~90 planned. Rust is −356 for the old reader and +147 for the two rules, plus ~60 for the import hook, `in_dir` and the widening.
+
 **Step 4 · Swift.** S. Query ~60, Rust −180.
 
 - **Queries:** the `class_declaration` variants told apart by their keyword token (`(class_declaration "struct")`), `protocol_declaration`, `extension` as `@scope.owner`, top-level `let`.
