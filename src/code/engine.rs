@@ -491,7 +491,9 @@ pub(crate) fn write(file: &File, facts: &Facts, ex: &mut Extraction) {
 
 /// The repository files an import site names, by the default rule: relative to the importer's
 /// directory, then to the root when the spec says so, each with the spec's suffixes, kept only when
-/// the walk globbed the result.
+/// the walk globbed the result. A path naming a directory names every file of the importer's
+/// language directly in it, as a Terraform module source does. The importer's own file and own
+/// directory add nothing it does not already hold, so they name nothing.
 pub(crate) fn import_targets(resolver: &Resolver, spec: &Spec, rel: &str, import: &Import) -> Vec<String> {
     let Some(path) = &import.path else { return Vec::new() };
     let dir = rel.rsplit_once('/').map_or("", |(d, _)| d);
@@ -499,8 +501,15 @@ pub(crate) fn import_targets(resolver: &Resolver, spec: &Spec, rel: &str, import
     for base in bases {
         for suffix in spec.imports.suffixes {
             let Some(target) = crate::code::prose::join_under(base, &format!("{path}{suffix}")) else { continue };
+            if target == rel || target == dir {
+                continue;
+            }
             if resolver.globbed(&target) {
                 return vec![target];
+            }
+            let module = Lang::of(rel).map(|lang| resolver.in_dir(&target, lang)).unwrap_or_default();
+            if !module.is_empty() {
+                return module;
             }
         }
     }

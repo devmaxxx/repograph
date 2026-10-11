@@ -274,11 +274,7 @@ mod table {
         cross_file: true,
         imports: ImportPaths { root: false, suffixes: &[""] },
         dotted_dirs: false,
-        hooks: Hooks {
-            import: Some(module_reach::import),
-            resolve: Some(module_reach::reach),
-            ..NONE
-        },
+        hooks: Hooks { resolve: Some(module_reach::reach), ..NONE },
         legacy: None,
     };
     pub(super) const HCL: Spec = Spec {
@@ -310,7 +306,6 @@ mod table {
         imports: ImportPaths { root: false, suffixes: &[""] },
         dotted_dirs: false,
         hooks: Hooks {
-            import: Some(module_reach::directory),
             resolve: Some(|r, file, facts, sink| {
                 traversal_addresses::resolve(r, file, facts, sink);
                 module_reach::reach(r, file, facts, sink);
