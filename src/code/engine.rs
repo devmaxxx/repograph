@@ -148,12 +148,12 @@ impl Facts {
         self.at.get(&(range.start, range.end)).copied()
     }
 
-    /// The innermost definition whose node holds `byte`.
     /// The innermost scope owner around `byte`, by the name it stands for.
     fn stands_for(&self, byte: usize) -> Option<&str> {
         self.stands_for.iter().filter(|(range, _)| range.contains(&byte)).min_by_key(|(range, _)| range.len()).map(|(_, q)| q.as_str())
     }
 
+    /// The innermost definition whose node holds `byte`.
     pub(crate) fn owner(&self, byte: usize) -> Option<usize> {
         let defs = self.defs.iter().enumerate().map(|(i, d)| (&d.range, i));
         defs.chain(self.repeats.iter().map(|(range, i)| (range, *i)))
@@ -553,7 +553,6 @@ pub(crate) fn import_targets(resolver: &Resolver, spec: &Spec, rel: &str, import
     Vec::new()
 }
 
-/// The files an import site names: the spec's `import` hook where it has one, else the default.
 /// The files a reference may resolve into besides its own, by the spec's visibility, with what each
 /// declares. Computed once per file: it does not depend on the name, and `Family` has none.
 fn reach(resolver: &Resolver, spec: &Spec, file: &File, facts: &Facts) -> Vec<(String, Arc<Facts>)> {
@@ -562,7 +561,7 @@ fn reach(resolver: &Resolver, spec: &Spec, file: &File, facts: &Facts) -> Vec<(S
         Visibility::File | Visibility::Family => Vec::new(),
         Visibility::Imported { transitive } => {
             let mut seen = BTreeSet::from([rel.to_string()]);
-            let mut queue: VecDeque<String> = facts.imports.iter().flat_map(|i| i.targets(resolver, spec, rel).to_vec()).collect();
+            let mut queue: VecDeque<String> = facts.imports.iter().flat_map(|i| i.targets(resolver, spec, rel).iter().cloned()).collect();
             while let Some(next) = queue.pop_front() {
                 if !seen.insert(next.clone()) {
                     continue;
@@ -570,7 +569,7 @@ fn reach(resolver: &Resolver, spec: &Spec, file: &File, facts: &Facts) -> Vec<(S
                 if transitive {
                     if let Some(f) = resolver.facts(&next) {
                         let theirs = f.lang.map(crate::code::spec::spec).unwrap_or(spec);
-                        queue.extend(f.imports.iter().flat_map(|i| i.targets(resolver, theirs, &next).to_vec()));
+                        queue.extend(f.imports.iter().flat_map(|i| i.targets(resolver, theirs, &next).iter().cloned()));
                     }
                 }
             }
