@@ -52,7 +52,8 @@ use tree_sitter::Node;
 
 use super::declarations::{holder, is_type, members_of, one_line_object, receiver, type_params, written_type, Declared, Param};
 use crate::code::index::Call;
-use crate::code::jvm::{self, child, named, outer, qualify, split_id, text, type_ids, Bound, Own};
+use crate::code::jvm::{self, outer, qualify, split_id, type_ids, Bound, Own};
+use crate::code::syntax::{self, child, named, text};
 use crate::model::{EdgeKind, Extraction};
 
 pub(super) struct Ctx<'a> {
@@ -226,7 +227,7 @@ fn walk(n: Node, mut at: At, cx: &Ctx, ex: &mut Extraction) {
                 }
             }
         }
-        "simple_identifier" if is_value(n) && !jvm::broken(n) => {
+        "simple_identifier" if is_value(n) && !syntax::broken(n) => {
             if let Some(from) = at.function.clone() {
                 for to in jvm::same_platform(cx.own.rel, referenced(text(n, cx.src), &at, cx)) {
                     if to != from {
@@ -259,7 +260,7 @@ fn signature(n: Node, at: &At, cx: &Ctx, ex: &mut Extraction) {
     if !matches!(
         n.kind(),
         "parameter" | "class_parameter" | "parameter_with_optional_type" | "variable_declaration" | "function_declaration" | "anonymous_function" | "property_declaration"
-    ) || jvm::broken(n)
+    ) || syntax::broken(n)
     {
         return;
     }
@@ -348,7 +349,7 @@ fn function(f: Node, at: &mut At, cx: &Ctx) {
 
 /// The walk enters a declared property the way it enters a declared function, the property as the caller.
 fn enter_property(p: Node, at: &mut At, cx: &Ctx) {
-    if jvm::broken(p) {
+    if syntax::broken(p) {
         at.function = None;
         return;
     }

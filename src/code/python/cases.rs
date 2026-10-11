@@ -77,7 +77,7 @@ fn the_resolver_reads_python_project_roots_from_its_walk() {
         ("lib/shop/__init__.py", ""),
         ("lib/app/main.py", "import shop\n"),
     ]);
-    assert_eq!(repo.resolver().python().absolute("lib/app/main.py", "shop").as_deref(), Some("lib/shop/__init__.py"));
+    assert_eq!(repo.resolver().state::<crate::code::python::Modules>().absolute("lib/app/main.py", "shop").as_deref(), Some("lib/shop/__init__.py"));
 }
 
 fn node<'a>(ex: &'a Extraction, id: &str) -> &'a crate::model::Node {

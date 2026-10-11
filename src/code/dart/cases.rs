@@ -1,7 +1,7 @@
 //! Dart extraction on inline sources, so the grammar's shape is pinned by the assertion.
 
-use crate::code::imports::Resolver;
 use crate::code::CodeExtractor;
+use crate::code::imports::Resolver;
 use crate::config::Config;
 use crate::model::{EdgeKind, Extraction, Extractor, NodeKind};
 
@@ -198,11 +198,11 @@ const MONOREPO: &[(&str, &str)] = &[
 #[test]
 fn a_package_uri_names_lib_under_the_directory_whose_pubspec_says_that_name() {
     let (_d, r) = resolver_in(MONOREPO);
-    assert_eq!(r.dart().target("app/lib/main.dart", "package:core/orders.dart").as_deref(), Some("packages/core/lib/orders.dart"));
-    assert_eq!(r.dart().target("app/lib/main.dart", "package:shop/state/cart.dart").as_deref(), Some("app/lib/state/cart.dart"));
-    assert_eq!(r.dart().target("app/lib/main.dart", "package:flutter/material.dart"), None);
-    assert_eq!(r.dart().target("app/lib/main.dart", "dart:math"), None);
-    assert_eq!(r.dart().target("app/lib/main.dart", "state/cart.dart").as_deref(), Some("app/lib/state/cart.dart"));
+    assert_eq!(r.state::<crate::code::dart::library::Libraries>().target("app/lib/main.dart", "package:core/orders.dart").as_deref(), Some("packages/core/lib/orders.dart"));
+    assert_eq!(r.state::<crate::code::dart::library::Libraries>().target("app/lib/main.dart", "package:shop/state/cart.dart").as_deref(), Some("app/lib/state/cart.dart"));
+    assert_eq!(r.state::<crate::code::dart::library::Libraries>().target("app/lib/main.dart", "package:flutter/material.dart"), None);
+    assert_eq!(r.state::<crate::code::dart::library::Libraries>().target("app/lib/main.dart", "dart:math"), None);
+    assert_eq!(r.state::<crate::code::dart::library::Libraries>().target("app/lib/main.dart", "state/cart.dart").as_deref(), Some("app/lib/state/cart.dart"));
 }
 
 #[test]
@@ -217,9 +217,9 @@ fn an_import_writes_the_names_the_file_uses_and_an_external_one_writes_nothing()
 #[test]
 fn a_name_passed_on_by_an_export_resolves_to_the_file_that_declares_it() {
     let (_d, r) = resolver_in(MONOREPO);
-    assert_eq!(r.dart().resolve("app/lib/main.dart", "Orders"), vec!["packages/core/lib/src/orders_impl.dart".to_string()]);
+    assert_eq!(r.state::<crate::code::dart::library::Libraries>().resolve("app/lib/main.dart", "Orders"), vec!["packages/core/lib/src/orders_impl.dart".to_string()]);
     // `show Orders` keeps `Ledger` out of the barrel.
-    assert!(r.dart().resolve("app/lib/main.dart", "Ledger").is_empty());
+    assert!(r.state::<crate::code::dart::library::Libraries>().resolve("app/lib/main.dart", "Ledger").is_empty());
 }
 
 #[test]
@@ -245,8 +245,8 @@ fn hide_keeps_a_name_out_and_a_prefix_is_read_through_its_prefix() {
     assert!(imports.contains(&("file:lib/a.dart", "file:lib/b.dart", "C")), "{imports:?}");
     assert!(imports.contains(&("file:lib/a.dart", "file:lib/b.dart", "B")), "the prefixed import used as bb.B: {imports:?}");
     let (_d, r) = resolver_in(files);
-    assert!(r.dart().resolve("lib/a.dart", "B").is_empty(), "hidden and not declared here");
-    assert_eq!(r.dart().imported("lib/a.dart", Some("bb"), "B"), vec!["lib/b.dart".to_string()]);
+    assert!(r.state::<crate::code::dart::library::Libraries>().resolve("lib/a.dart", "B").is_empty(), "hidden and not declared here");
+    assert_eq!(r.state::<crate::code::dart::library::Libraries>().imported("lib/a.dart", Some("bb"), "B"), vec!["lib/b.dart".to_string()]);
 }
 
 #[test]
@@ -258,10 +258,10 @@ fn a_part_and_its_library_are_one_scope_and_the_part_sees_the_library_imports() 
         ("lib/src/pay_part.dart", "part of shop;\n\nclass PayPart {}\n"),
     ];
     let (_d, r) = resolver_in(files);
-    assert_eq!(r.dart().library_of("lib/src/cart_part.dart"), "lib/shop.dart");
-    assert_eq!(r.dart().library_of("lib/src/pay_part.dart"), "lib/shop.dart");
-    assert_eq!(r.dart().resolve("lib/shop.dart", "CartPart"), vec!["lib/src/cart_part.dart".to_string()]);
-    assert_eq!(r.dart().resolve("lib/src/pay_part.dart", "Util"), vec!["lib/util.dart".to_string()]);
+    assert_eq!(r.state::<crate::code::dart::library::Libraries>().library_of("lib/src/cart_part.dart"), "lib/shop.dart");
+    assert_eq!(r.state::<crate::code::dart::library::Libraries>().library_of("lib/src/pay_part.dart"), "lib/shop.dart");
+    assert_eq!(r.state::<crate::code::dart::library::Libraries>().resolve("lib/shop.dart", "CartPart"), vec!["lib/src/cart_part.dart".to_string()]);
+    assert_eq!(r.state::<crate::code::dart::library::Libraries>().resolve("lib/src/pay_part.dart", "Util"), vec!["lib/util.dart".to_string()]);
     let ex = extract_in(files, "lib/src/cart_part.dart");
     assert!(edges(&ex, EdgeKind::Imports).contains(&("file:lib/src/cart_part.dart", "file:lib/util.dart", "Util")), "{:?}", ex.edges);
 }

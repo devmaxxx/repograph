@@ -3,10 +3,11 @@ pub mod declarations;
 #[cfg(test)]
 mod cases;
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use crate::code::imports::Resolver;
-use crate::code::lang::{file_node, Lang};
+use crate::code::lang::Lang;
+use crate::code::reader::{self, Reader};
 use crate::model::{EdgeKind, Extraction};
 
 /// The top-level type names one Swift file declares. `Resolver::collect` gathers them from every globbed
@@ -19,15 +20,36 @@ pub fn types(source: &str) -> BTreeSet<String> {
         .unwrap_or_default()
 }
 
-pub fn extract(resolver: &Resolver, rel: &str, source: &str) -> Extraction {
-    let mut ex = Extraction::default();
-    file_node(rel, &mut ex);
-    let src = source.as_bytes();
-    let Some(tree) = Lang::Swift.parse(src) else { return ex };
-    let d = declarations::scan(tree.root_node(), rel, src, &mut ex);
+/// Every globbed Swift file's top-level type names, by name: where an inheritance clause resolves.
+#[derive(Default)]
+pub(crate) struct Types(BTreeMap<String, BTreeSet<String>>);
+
+impl Types {
+    /// The files declaring the top-level type `name`, in path order.
+    pub(crate) fn files(&self, name: &str) -> Vec<String> {
+        self.0.get(name).map(|files| files.iter().cloned().collect()).unwrap_or_default()
+    }
+}
+
+pub(crate) const READER: Reader = Reader {
+    extract,
+    collect: Some(|r, rel, source| {
+        for name in types(source) {
+            r.state_mut::<Types>().0.entry(name).or_default().insert(rel.to_string());
+        }
+        None
+    }),
+    state: Some(reader::state::<Types>),
+    ..reader::NONE
+};
+
+fn extract(resolver: &Resolver, rel: &str, source: &str, ex: &mut Extraction) {
+    let Some(tree) = reader::open(Lang::Swift, rel, source, ex) else { return };
+    let (src, root) = (source.as_bytes(), tree.root_node());
+    let d = declarations::scan(root, rel, src, ex);
     // A file's own declaration shadows the module's, and another file's `private` type is never seen,
     // because `types` leaves it out of the resolver.
-    let files_of = |name: &str| if d.own.contains(name) { vec![rel.to_string()] } else { resolver.swift_files(name) };
+    let files_of = |name: &str| if d.own.contains(name) { vec![rel.to_string()] } else { resolver.state::<Types>().files(name) };
     for (ty, sup, here) in &d.supers {
         // An extension's clause belongs to the extended type, in whichever file declares it.
         let from: Vec<String> = if *here {
@@ -43,5 +65,4 @@ pub fn extract(resolver: &Resolver, rel: &str, source: &str) -> Extraction {
             }
         }
     }
-    ex
 }

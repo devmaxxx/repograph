@@ -1026,14 +1026,14 @@ fn the_walk_over_a_parsed_tree_writes_exactly_what_the_scan_of_the_file_writes()
     let resolver = Resolver::new(repo.dir.path(), &crate::config::Config::default()).unwrap();
     let tree = crate::code::lang::Lang::TypeScript.parse(src.as_bytes()).unwrap();
     let root = tree.root_node();
-    let mut ex = crate::code::symbols::Walk { resolver: &resolver }.scan_tree("c.ts", root, src.as_bytes());
+    let mut ex = crate::code::typescript::symbols::Walk { resolver: &resolver }.scan_tree("c.ts", root, src.as_bytes());
     let locals: std::collections::BTreeSet<String> = ex.nodes.iter()
         .filter_map(|n| n.id.strip_prefix("sym:c.ts::"))
         .filter(|n| !n.contains('.'))
         .map(str::to_string)
         .collect();
-    crate::code::calls::scan_tree(&resolver, "c.ts", root, src.as_bytes(), &locals, &mut ex);
-    crate::code::idrefs::scan_tree(root, "c.ts", src.as_bytes(), &mut ex);
+    crate::code::typescript::calls::scan_tree(&resolver, "c.ts", root, src.as_bytes(), &locals, &mut ex);
+    crate::code::typescript::idrefs::scan_tree(root, "c.ts", src.as_bytes(), &mut ex);
     let mut seen = std::collections::HashSet::new();
     ex.nodes.retain(|n| seen.insert(n.id.clone()));
     ex.edges.sort();
@@ -1136,7 +1136,7 @@ fn a_getter_that_becomes_a_field_loses_its_readers_at_the_next_settle() {
 
 #[test]
 fn a_getter_declared_with_a_space_before_its_parentheses_is_still_an_accessor() {
-    assert!(crate::code::calls::declares_accessor("T.secret", "get secret () { return 1; }"));
-    assert!(crate::code::calls::declares_accessor("T.secret", "static get secret(): string { return ''; }"));
-    assert!(!crate::code::calls::declares_accessor("T.get", "get(k: string) { return k; }"));
+    assert!(crate::model::declares_accessor("T.secret", "get secret () { return 1; }"));
+    assert!(crate::model::declares_accessor("T.secret", "static get secret(): string { return ''; }"));
+    assert!(!crate::model::declares_accessor("T.get", "get(k: string) { return k; }"));
 }

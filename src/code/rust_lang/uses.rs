@@ -3,8 +3,8 @@
 
 use super::crates::{item_name, Crates, Target};
 use super::items::Items;
-use super::{field_text, inline_of, scoped, type_path};
-use crate::code::jvm::{descend, named};
+use super::{inline_of, scoped, type_path};
+use crate::code::syntax::{descend, field_text, named};
 use crate::model::{EdgeKind, Extraction};
 use std::collections::BTreeMap;
 use tree_sitter::Node;

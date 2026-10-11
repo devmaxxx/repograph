@@ -69,7 +69,8 @@ use tree_sitter::Node;
 
 use super::declarations::{supertypes, type_params, written_type, Declared, TYPES};
 use crate::code::index::Call;
-use crate::code::jvm::{self, child, named, outer, split_id, text, Bound, Own};
+use crate::code::jvm::{self, outer, split_id, Bound, Own};
+use crate::code::syntax::{self, child, named, text};
 use crate::model::{EdgeKind, Extraction};
 
 pub(super) struct Ctx<'a> {
@@ -284,7 +285,7 @@ fn signature(n: Node, at: &At, cx: &Ctx, ex: &mut Extraction) {
         _ => None,
     };
     // An `ERROR` may hide the type parameter that masks a name.
-    let t = t.filter(|_| !jvm::broken(n));
+    let t = t.filter(|_| !syntax::broken(n));
     let mut written = Vec::new();
     if let Some(t) = t {
         names(t, cx.src, &mut written);

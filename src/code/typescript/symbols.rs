@@ -1,10 +1,7 @@
 use crate::code::imports::Resolver;
+use crate::code::syntax::{cap, comment_text, name_of, text, DOC_CHARS};
 use crate::model::{EdgeKind, Extraction, NodeKind};
 use tree_sitter::Node;
-
-pub struct SymbolScanner {
-    resolver: Resolver,
-}
 
 /// The declaration walk over a tree someone else parsed. It borrows its resolver, so an embedded
 /// language, which is handed `&Resolver`, runs exactly the walk a `.ts` file gets.
@@ -14,14 +11,6 @@ pub(crate) struct Walk<'r> {
 
 pub fn parse(rel: &str, src: &[u8]) -> Option<tree_sitter::Tree> {
     crate::code::lang::Lang::of(rel)?.parse(src)
-}
-
-fn text<'a>(n: Node, src: &'a [u8]) -> &'a str {
-    n.utf8_text(src).unwrap_or("")
-}
-
-fn name_of(n: Node, src: &[u8]) -> Option<String> {
-    n.child_by_field_name("name").map(|c| text(c, src).to_string())
 }
 
 /// An `export_specifier` as a re-export's context entry: `a`, or `a as b` when it renames.
@@ -39,21 +28,8 @@ fn flatten(s: &str) -> String {
     s.lines().map(str::trim).filter(|l| !l.is_empty()).collect::<Vec<_>>().join(" ")
 }
 
-/// A doc comment is capped so a class's essay does not drown the signature terms that make
-/// the symbol findable by name; a file head gets twice that, being the module's own account.
-pub(crate) const DOC_CHARS: usize = 600;
-const HEAD_CHARS: usize = 1200;
-
-/// Comment text without its markers: the `/** … */` fences, a leading `*` per line, `//`.
-pub(crate) fn comment_text(raw: &str) -> String {
-    let inner = raw.trim().trim_start_matches("/**").trim_start_matches("/*").trim_end_matches("*/");
-    inner.lines()
-        .map(|l| l.trim().trim_start_matches("//").trim_start_matches('*').trim())
-        .filter(|l| !l.is_empty())
-        .collect::<Vec<_>>().join("\n")
-}
-
-pub(crate) fn cap(s: String, n: usize) -> String { s.chars().take(n).collect() }
+/// A file head gets twice a doc comment's cap, being the module's own account.
+const HEAD_CHARS: usize = 2 * DOC_CHARS;
 
 /// The comment block ending on the line before `n` starts. A comment left standing a blank
 /// line above is a section heading, not this declaration's account of itself, and stays out.
@@ -195,22 +171,15 @@ fn decorator_pair(deco: Node, src: &[u8]) -> (String, String) {
     }
 }
 
-impl SymbolScanner {
-    pub fn new(resolver: Resolver) -> SymbolScanner {
-        SymbolScanner { resolver }
-    }
-
-    pub(crate) fn resolver(&self) -> &Resolver { &self.resolver }
-
-    pub fn scan(&self, rel: &str, source: &str) -> Extraction {
-        let src = source.as_bytes();
-        let Some(tree) = parse(rel, src) else {
-            let mut ex = Extraction::default();
-            crate::code::lang::file_node(rel, &mut ex);
-            return ex;
-        };
-        Walk { resolver: &self.resolver }.scan_tree(rel, tree.root_node(), src)
-    }
+/// The declaration walk over `source`, parsed here.
+pub(crate) fn scan(resolver: &Resolver, rel: &str, source: &str) -> Extraction {
+    let src = source.as_bytes();
+    let Some(tree) = parse(rel, src) else {
+        let mut ex = Extraction::default();
+        crate::code::lang::file_node(rel, &mut ex);
+        return ex;
+    };
+    Walk { resolver }.scan_tree(rel, tree.root_node(), src)
 }
 
 /// The members of a top-level object literal, each declared by the `const` that binds it.
@@ -511,7 +480,7 @@ impl Walk<'_> {
             for part in c.named_children(&mut ic) {
                 match part.kind() {
                     // A `.vue` default import names the component, the stem `importers` matches.
-                    "identifier" => names.push(crate::code::vue::component_name(&target).unwrap_or(text(part, src)).to_string()),
+                    "identifier" => names.push(crate::code::typescript::vue::component_name(&target).unwrap_or(text(part, src)).to_string()),
                     "named_imports" => {
                         let mut nc = part.walk();
                         for s in part.named_children(&mut nc) {
@@ -590,7 +559,7 @@ impl Walk<'_> {
                 continue;
             }
             let Some(target) = self.resolver.resolve(rel, &unquote(text(arg, src))) else { continue };
-            let from = crate::code::idrefs::owner(n, rel, src);
+            let from = crate::code::typescript::idrefs::owner(n, rel, src);
             ex.edge(&from, &format!("file:{target}"), EdgeKind::Imports, "", rel);
         }
     }
@@ -613,7 +582,7 @@ mod tests {
             std::fs::write(p, "export {};\n").unwrap();
         }
         let text = std::fs::read_to_string(format!("{}/tests/fixtures/{fixture}", env!("CARGO_MANIFEST_DIR"))).unwrap();
-        SymbolScanner::new(Resolver::new(d.path(), &crate::config::Config::default()).unwrap()).scan(rel, &text)
+        super::scan(&Resolver::new(d.path(), &crate::config::Config::default()).unwrap(), rel, &text)
     }
 
     fn has(ex: &Extraction, s: &str, t: &str, k: EdgeKind, ctx: &str) -> bool {
@@ -685,7 +654,7 @@ mod tests {
 
     fn inline(rel: &str, src: &str) -> Extraction {
         let d = tempfile::tempdir().unwrap();
-        SymbolScanner::new(Resolver::new(d.path(), &crate::config::Config::default()).unwrap()).scan(rel, src)
+        super::scan(&Resolver::new(d.path(), &crate::config::Config::default()).unwrap(), rel, src)
     }
 
     #[test]
@@ -737,7 +706,7 @@ mod tests {
     fn import_equals_require_edge_carries_the_bound_name() {
         let d = tempfile::tempdir().unwrap();
         std::fs::write(d.path().join("thing.ts"), "export {};\n").unwrap();
-        let ex = SymbolScanner::new(Resolver::new(d.path(), &crate::config::Config::default()).unwrap()).scan("m.ts", "import thing = require('./thing');\n");
+        let ex = super::scan(&Resolver::new(d.path(), &crate::config::Config::default()).unwrap(), "m.ts", "import thing = require('./thing');\n");
         assert!(has(&ex, "file:m.ts", "file:thing.ts", EdgeKind::Imports, "thing"));
     }
 }

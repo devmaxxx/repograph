@@ -9,18 +9,30 @@ mod cases;
 pub(crate) use references::Modules;
 
 use crate::code::imports::Resolver;
-use crate::code::lang::{file_node, Lang};
+use crate::code::lang::Lang;
 use crate::code::prose::{self, Spans};
+use crate::code::reader::{self, Reader};
+use crate::code::syntax;
 use crate::model::{EdgeKind, Extraction, Graph};
 use std::collections::BTreeSet;
 use tree_sitter::Node;
 
-pub fn extract(resolver: &Resolver, rel: &str, source: &str) -> Extraction {
-    let mut ex = Extraction::default();
-    file_node(rel, &mut ex);
-    let src = source.as_bytes();
-    let Some(tree) = Lang::Hcl.parse(src) else { return ex };
-    let root = tree.root_node();
+/// HCL state: every directory's Terraform addresses and `.tf` files, so a reference and a module
+/// source resolve whatever order the walk reads files in.
+pub(crate) const READER: Reader = Reader {
+    extract,
+    collect: Some(|r, rel, source| {
+        r.state_mut::<Modules>().add(rel, source);
+        None
+    }),
+    state: Some(reader::state::<Modules>),
+    widen: Some(widen),
+    ..reader::NONE
+};
+
+fn extract(resolver: &Resolver, rel: &str, source: &str, ex: &mut Extraction) {
+    let Some(tree) = reader::open(Lang::Hcl, rel, source, ex) else { return };
+    let (src, root) = (source.as_bytes(), tree.root_node());
     let terraform = rel.ends_with(".tf");
     let file = format!("file:{rel}");
     let mut spans = Spans::new(rel);
@@ -33,16 +45,15 @@ pub fn extract(resolver: &Resolver, rel: &str, source: &str) -> Extraction {
         spans.push(n, &id);
         // Aliased `provider "aws"` blocks share one address; the first block is the symbol.
         if own.insert(address) {
-            prose::declare(&mut ex, rel, &file, &id, n, &prose::body(n, src, &[]), context);
+            prose::declare(ex, rel, &file, &id, n, &prose::body(n, src, &[]), context);
         }
     }
     if terraform {
-        references::terraform(resolver.hcl(), root, &own, &spans, src, rel, &mut ex);
+        references::terraform(resolver.state::<Modules>(), root, &own, &spans, src, rel, ex);
     } else {
-        references::bake(root, &own, &spans, src, rel, &mut ex);
+        references::bake(root, &own, &spans, src, rel, ex);
     }
-    prose::cite(root, src, rel, &["string_lit", "quoted_template", "heredoc_template"], &spans, &mut ex);
-    ex
+    prose::cite(root, src, rel, &["string_lit", "quoted_template", "heredoc_template"], &spans, ex);
 }
 
 /// `apply_diff`'s widening for Terraform. A module is a directory, so a `.tf` file that changes or goes
@@ -80,11 +91,11 @@ pub(super) fn dir_of(rel: &str) -> &str {
 /// attribute is `local/`, and `output`, `module` and `provider` keep their keyword. In other HCL, the
 /// address is the type and its labels.
 pub(crate) fn declarations<'t>(root: Node<'t>, src: &[u8], terraform: bool) -> Vec<(String, Node<'t>)> {
-    let Some(body) = prose::named(root).into_iter().find(|c| c.kind() == "body") else { return Vec::new() };
+    let Some(body) = syntax::named(root).into_iter().find(|c| c.kind() == "body") else { return Vec::new() };
     let mut out = Vec::new();
-    for block in prose::named(body).into_iter().filter(|c| c.kind() == "block") {
+    for block in syntax::named(body).into_iter().filter(|c| c.kind() == "block") {
         let parts = inner(block);
-        let Some(kind) = parts.first().filter(|c| c.kind() == "identifier").map(|c| prose::text(*c, src)) else { continue };
+        let Some(kind) = parts.first().filter(|c| c.kind() == "identifier").map(|c| syntax::text(*c, src)) else { continue };
         // A label that is not plain text, or that holds a `/` as a lock file's registry paths do, names no
         // address this id scheme can hold.
         let labels: Option<Vec<&str>> = parts[1..].iter()
@@ -98,10 +109,10 @@ pub(crate) fn declarations<'t>(root: Node<'t>, src: &[u8], terraform: bool) -> V
             (true, "variable", [n]) => format!("var/{n}"),
             (true, "output" | "module" | "provider", [n]) => format!("{kind}/{n}"),
             (true, "locals", []) => {
-                let attributes = parts.iter().filter(|c| c.kind() == "body").flat_map(|b| prose::named(*b)).filter(|a| a.kind() == "attribute");
+                let attributes = parts.iter().filter(|c| c.kind() == "body").flat_map(|b| syntax::named(*b)).filter(|a| a.kind() == "attribute");
                 for attribute in attributes {
                     if let Some(name) = attribute.named_child(0) {
-                        out.push((format!("local/{}", prose::text(name, src)), attribute));
+                        out.push((format!("local/{}", syntax::text(name, src)), attribute));
                     }
                 }
                 continue;
@@ -118,9 +129,9 @@ pub(crate) fn declarations<'t>(root: Node<'t>, src: &[u8], terraform: bool) -> V
 /// A label's text: a bare identifier, or a string holding written-out text alone.
 fn label<'s>(n: Node, src: &'s [u8]) -> Option<&'s str> {
     let text = match n.kind() {
-        "identifier" => prose::text(n, src),
+        "identifier" => syntax::text(n, src),
         _ => match inner(n).as_slice() {
-            [t] if t.kind() == "template_literal" => prose::text(*t, src),
+            [t] if t.kind() == "template_literal" => syntax::text(*t, src),
             _ => return None,
         },
     };
@@ -130,5 +141,5 @@ fn label<'s>(n: Node, src: &'s [u8]) -> Option<&'s str> {
 /// Named children less the delimiters the grammar names, such as `block_start`,
 /// `quoted_template_end` and `tuple_start`.
 pub(crate) fn inner<'t>(n: Node<'t>) -> Vec<Node<'t>> {
-    prose::named(n).into_iter().filter(|c| !c.kind().ends_with("_start") && !c.kind().ends_with("_end")).collect()
+    syntax::named(n).into_iter().filter(|c| !c.kind().ends_with("_start") && !c.kind().ends_with("_end")).collect()
 }

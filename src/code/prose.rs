@@ -2,6 +2,7 @@
 //! the body the index reads for a declaration, and the ids cited in comments and strings. None of it
 //! resolves a name; each family's module does that.
 
+use crate::code::syntax::{last_row, named, text, text_span};
 use crate::model::{EdgeKind, Extraction, NodeKind};
 use tree_sitter::Node;
 
@@ -9,15 +10,6 @@ use tree_sitter::Node;
 /// index, where a licence header pasted above the first declaration would outweigh every name the file
 /// holds.
 const DOC_CAP: usize = 600;
-
-pub(crate) fn text<'s>(n: Node, src: &'s [u8]) -> &'s str {
-    n.utf8_text(src).unwrap_or("")
-}
-
-pub(crate) fn named<'t>(n: Node<'t>) -> Vec<Node<'t>> {
-    let mut c = n.walk();
-    n.named_children(&mut c).collect()
-}
 
 /// Every node of `kind` under `root`, nested ones included, in source order.
 pub(crate) fn all<'t>(root: Node<'t>, kind: &str) -> Vec<Node<'t>> {
@@ -28,22 +20,6 @@ pub(crate) fn all<'t>(root: Node<'t>, kind: &str) -> Vec<Node<'t>> {
         stack.extend(named(n));
     }
     out.sort_by_key(|n| n.start_byte());
-    out
-}
-
-/// Every descendant of one of `kinds`, in source order, not descending into a match: a grandchild belongs
-/// to its own parent, so the caller reads it from there.
-pub(crate) fn find<'t>(n: Node<'t>, kinds: &[&str]) -> Vec<Node<'t>> {
-    let mut out = Vec::new();
-    let mut stack = named(n);
-    while let Some(x) = stack.pop() {
-        if kinds.contains(&x.kind()) {
-            out.push(x);
-        } else {
-            stack.extend(named(x));
-        }
-    }
-    out.sort_by_key(|x| x.start_byte());
     out
 }
 
@@ -61,18 +37,6 @@ pub(crate) fn join_under(base: &str, text: &str) -> Option<String> {
         }
     }
     Some(parts.join("/"))
-}
-
-/// The last row holding the node's text. A comment that swallows its newline ends at column 0 of the
-/// next row, and counting that row would join the comment to a declaration a blank line below it.
-pub(crate) fn last_row(n: Node) -> usize {
-    let (start, end) = (n.start_position(), n.end_position());
-    if end.column == 0 && end.row > start.row { end.row - 1 } else { end.row }
-}
-
-/// 1-based first and last line, the span `changes` compares a hunk against.
-pub(crate) fn span(n: Node) -> (u32, u32) {
-    (n.start_position().row as u32 + 1, last_row(n) as u32 + 1)
 }
 
 /// Declarations by byte range. The innermost one holding a byte owns it; outside them all, the file does.
@@ -140,7 +104,7 @@ fn above(n: Node) -> Option<Node> {
 /// `explain` prints is what `impact` was asked for.
 pub(crate) fn declare(ex: &mut Extraction, rel: &str, parent: &str, id: &str, n: Node, body: &str, context: &str) {
     let label = id.split_once("::").map_or(id, |(_, name)| name);
-    ex.node_span(NodeKind::Symbol, id, label, body, rel, span(n));
+    ex.node_span(NodeKind::Symbol, id, label, body, rel, text_span(n));
     ex.edge(parent, id, EdgeKind::Declares, context, rel);
 }
 

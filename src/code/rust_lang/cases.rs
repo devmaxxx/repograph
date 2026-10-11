@@ -91,7 +91,7 @@ fn the_resolver_reads_every_cargo_manifest_its_walk_reaches() {
     ]);
     let path: Vec<String> = ["shop_core", "hmac", "sign"].map(String::from).to_vec();
     assert_eq!(
-        repo.resolver().rust().resolve("crates/shopd/src/main.rs", &[], &path),
+        repo.resolver().state::<crate::code::rust_lang::Crates>().resolve("crates/shopd/src/main.rs", &[], &path),
         Some(Target::Item { file: "crates/shop-core/src/hmac.rs".into(), name: "sign".into() })
     );
 }

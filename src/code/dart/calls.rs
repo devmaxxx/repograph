@@ -1,7 +1,8 @@
 use tree_sitter::Node;
 
-use super::declarations::{member_names, named, text, Declared};
+use super::declarations::{member_names, Declared};
 use super::library::Libraries;
+use crate::code::syntax::{named, text};
 use crate::model::{EdgeKind, Extraction};
 
 const TYPES: [&str; 4] = ["class_declaration", "mixin_declaration", "extension_declaration", "enum_declaration"];
