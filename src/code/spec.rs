@@ -148,7 +148,6 @@ pub(crate) type Collect = fn(&mut Resolver, &str, &str) -> Option<Header>;
 /// files it has only the declarations of.
 pub(crate) type ImportHook = fn(&Resolver, &str, &Import) -> Vec<String>;
 
-
 /// What a blanking reader keeps of a file for its view's grammar.
 pub(crate) enum Embedded {
     /// The markup could not be read; the file keeps its file node alone.
