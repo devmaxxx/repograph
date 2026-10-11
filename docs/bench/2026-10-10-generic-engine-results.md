@@ -38,3 +38,31 @@ graph cannot come from `REPOGRAPH_LEGACY`.
   takes 0.01 s on both.
 - **Gate:** `cargo test --all-targets` shows 0 failed, `cargo clippy --all-targets -- -D warnings`
   is clean, `cargo tree --duplicates` lists no tree-sitter crate, and `src/code/shell/` is gone.
+
+## Step 2 · Bicep
+
+Old: `bin/repograph-step1c`, the step-1 binary rebuilt on the clean commit `00022dd` (below). New:
+`bin/repograph-step2`. Bicep's old reader is deleted, so the old graph cannot come from
+`REPOGRAPH_LEGACY`.
+
+- **Step 1 re-recorded.** The step-1 fixture row was taken from an uncommitted tree on `c7e8b68`
+  (`tool_dirty: true`). It was re-run on `00022dd`, which is step 1 plus its two deferred review
+  fixes, from a clean tree. The result is keyword 39/40, paraphrase 7/30, code 12/12, p90 238 tok,
+  green, and every case reads as before. The transcript is `log/bench-step1c.txt`, the new row
+  supersedes the dirty one, and the old row stays. On that binary the kit corpus graph equals
+  `new-1` byte for byte, and the fixture graph equals `fixture-base`.
+- **Regressions:** R1–R9 = 0 from `langdiff.py --lang bicep` on three inputs: the kit corpus
+  (`new-1c` vs `new-2`), the scratchpad corpus (`store-base` vs `store-step2`) and the fixture
+  (`fixture-base` vs the port's store).
+- **Accepted:** none. On all three, `graph.json` and `headers.json` are byte-identical to the old
+  store, so every other language is untouched too.
+- **Bounded kinds:** none changed. Bicep reads 1,379 symbols, 1,379 Declares, 66 Imports and 4,344
+  References on the corpus, each identical, so no hand read is needed.
+- **§3.3 decision for References:** the default resolution, measured with the same query, read
+  4,344 of 4,344 with 0 added (P = R = 1). It fails five Bicep cases, so References is owned by
+  `exceptions/symbolic_names.rs`. The reading is in `log/langdiff-step2-default.txt`.
+- **Blast:** skipped under §5.5, because the graph is identical.
+- **Bench:** not run. The fixture holds no Bicep file (§5.4), and its graph is byte-identical.
+- **Gate:** `cargo test --all-targets` shows 0 failed, with no assertion edited, and
+  `cargo clippy --all-targets -- -D warnings` is clean. `cargo tree --duplicates --depth 0` lists
+  no tree-sitter crate, and `src/code/bicep/` is gone.
