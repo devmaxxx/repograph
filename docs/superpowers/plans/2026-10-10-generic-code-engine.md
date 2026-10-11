@@ -1127,6 +1127,7 @@ This step alone closes the three reviewer defects. About 1,200 lines of Rust are
   - A directive on an argument now decorates the field, and one on an enum value decorates the enum: DecoratedBy +2.
   - A type extended above its own definition in the same document takes the extension's span and body, because the first node of an id wins. The old reader preferred the definition.
   - A schema document's header now carries `nested` types and members, so a field added or removed re-reads the family. An operations document's header is unchanged.
+  - A comment or a string inside a field definition cites from the field (`Type.field`), not from its type, because the field is the innermost definition around it. Found after the step's gate, in review; no gate input moves.
 - **Cases** moved to `src/code/cases/graphql.rs`. One was rewritten and renamed `a_description_is_the_doc_and_the_name_line_the_last_line_of_the_body`. It no longer reads the operation's and the fragment's comments as doc, and `Shelf`'s span starts at line 1, its description, instead of line 2. Three cases were added: a block description and a field's own doc, nested wrappers, and directives on arguments and enum values. The header cases read `header_for`, because the old `header` is gone.
 - Size: the queries are 99 lines against ~60 planned. Rust is −359 for the old reader and about +60 in the spec and the engine.
 
@@ -1137,6 +1138,63 @@ This step alone closes the three reviewer defects. About 1,200 lines of Rust are
 - **Hooks:** `fold`.
 - **Timing:** compile time and build time are measured here, because Postgres is the largest grammar.
 - **Gate:** Calls (145) and References (388) by the corpus; the `beauty-crm-sql` blast; the fixture's 76 `.sql` files.
+
+**Step 6 as built.** Where the code differs from the text above, the code is the record:
+
+- **Queries:** `queries/sql/{decl,refs}.scm`, 76 and 84 lines against ~130 planned.
+  - **Declarations.** Every created object is matched on its `toplevel_stmt`, the first of the equal-range wrappers, so the statement's text is the body. A name is `@name` parts, schema then name, and a third part is not read.
+    - `type`: tables (foreign ones included), `CREATE TABLE AS`, views, materialized views, `CREATE TYPE`, and the new name of `ALTER TABLE … RENAME TO`. `PARTITION OF` names a second table, which the partition does not declare, so the pattern anchors the first name after `TABLE` or `EXISTS`.
+    - `function` (functions and procedures), `module` (schemas) and `value` (sequences).
+    - `record`: a table a file alters, renames, moves, indexes, triggers or polices without creating it. Because the first pattern on a node wins, the rename's `type` is listed above it.
+    - `field`: columns, added columns, indexes, triggers and policies. They read as `clients.id`, because `Label::Name` now labels a member under its parent's label.
+  - **References.** Foreign keys (`references`), a view's or a materialized view's reads (`from`), a trigger's function (Calls) and a rename's old name (`rename`). Citations come from comments, strings and dollar-quoted bodies.
+    - A view's relation sits five to fourteen levels below its query, depending on its clauses and joins. Every node between is a clause, so the query tells them apart by depth alone, ten alternatives per statement.
+    - A CTE name is a `@local.definition` scoped to its `toplevel_stmt`, so a view does not read a table its own `WITH` shadows.
+    - Foreign keys and trigger functions keep the old `public` fallback in the query. An unqualified name is also matched under `#set! prefix "public/"`, and a `public.` name is also matched as its bare name.
+- **Spec:**
+  - `Family` visibility and `All` ambiguity, with `cross_file` false;
+  - `Export::All` and `Label::Name`;
+  - body `Form::Stripped`, `Cap::Head` and the new `Line::Row`, which is the whole row the statement starts on;
+  - hooks `header`, `fold` and `resolve`.
+
+  The `header` hook keeps `default_header`'s `top` alone. Without it, the members would enter `headers.json` as `nested` (R7).
+- **Exceptions:** two new ones, each measured against the engine default plus the queries.
+  - `exceptions/identifier_case.rs` (15 lines) is the `fold` hook. It folds an unquoted name to lower case, and takes a quoted one's quotes off and un-doubles its inner quotes. A query cannot take a quote off. Without the hook, every SQL node changes id:
+    - kit corpus: R1 = R4 = 3,396, R7 = 1;
+    - fixture: R1 = R4 = 3,100.
+  - `exceptions/attachments.rs` (20 lines) is the `resolve` hook. It gives each `record` (a table the file only attaches to) a References edge, context `alter`, to every other file that declares the same name. A query cannot know whether another file creates the table. The query says only that this file does not, by kind. Without the hook, the `alter` edges are gone:
+    - kit corpus: 174 of 388 References, R 0.55;
+    - fixture: 476 of 828, R 0.43.
+
+    Emitting them from the query instead, as a reference from the attaching statement, gave the kit corpus P 0.59 / R 0.74. The sources moved to the trigger and policy members, and a creating file gained `alter` edges.
+- **Engine:** three generic changes. Langdiff R6 is 0 on all three inputs, and every non-SQL node and edge is identical to step 5 on all three.
+  - `Facts::owner`: when several definitions span one range, the one qualified under the others owns the site. Without this, a trigger's Calls started at the statement wrapper's table, not at the trigger.
+  - `Label::Name` labels a member under its parent definition's label, where it used the qualified base. A column of `app/clients` reads `clients.id`.
+  - `Form::Stripped` also trims the language's own line-comment markers, from `spec.comments`. `fold` now applies to each `@name` part and to local definitions, not only to the joined id.
+- **Timing.**
+  - Query compile with `Query::new` on the Postgres grammar, release: `decl` 43 ms and `refs` 73 ms. About 11 ms of each is fixed per query, and the two view patterns are 25 ms each.
+  - The corpus build first read 1.62 s against step 0's 1.27 s, which is over the 1.20× bar. The cause was the compile, not matching: matching all 42 corpus `.sql` files takes 12 ms. The writer reads files one after another, so each language's compile stopped the read.
+  - `queries::warm` (commit `f7358e1`) now compiles every changed language's queries on other threads once the walk ends.
+  - Median of five, interleaved, on the same machine: step 0 1.211 s, step 5 1.391 s, step 6 1.436 s. That is 1.19× step 0, and 1.16× the recorded base of 1.237 s.
+- **Gate:** langdiff `--lang sql` with the final binary on three inputs.
+  - Kit corpus (`new-5` → `new-6`): R1–R9 = 0. Calls 145/145 and References 388/388, so P = R = 1.0.
+  - Scratchpad corpus (vs `store-base`): SQL R1–R9 = 0. Only the Swift R3 accepted in the exception sweep remains.
+  - Fixture (vs `fixture-base`): R1 = 3, R4 = 3 and R7 = 1, all one accepted divergence (below). Calls 79/79 and References 828/828.
+  - `body-above` is 11 on the kit corpus and 15 on the fixture. `Stripped` drops a doc's blank lines, so the 600-character head cap ends later in the same text.
+- **Divergence:** these differ from the old reader. Only the first is in a gate input.
+  - A foreign table is declared, with its columns: `salon_ctx/fixture_foreign_table` plus `.id` and `.label` in the fixture's `packages/db/test/fixtures/d-foreign-table-grant.sql`. The old reader skipped `CREATE FOREIGN TABLE`, and `headers.json` gains the table's name. This is accepted.
+  - `RENAME TO` declares only the new name. The old name is no longer indexed under the renaming file. The file still reaches the old name through its `rename` edge.
+  - `SET SCHEMA` declares nothing in the target schema. It attaches to the table it moves.
+  - A view's name keeps no `public` twin. A relation read deeper than fourteen levels below a view's query is not read.
+  - A citation inside a column, such as a `DEFAULT` string, cites from the column, not from the table.
+  - `ALTER TABLE` above the same file's `CREATE TABLE` now makes the table an attachment there, because the first statement wins.
+  - A three-part name reads as its first two parts.
+- **Cases** moved to `src/code/cases/sql.rs`. Two assertions were rewritten, and no case was dropped:
+  - `the_header_lists_what_a_file_creates_or_alters_and_no_member` compared `header_for` with the old module's own `header`. There is one path now, so it asserts the case's own claim instead: the header has no `nested` member.
+  - `a_renamed_table_is_declared_under_its_new_name_and_references_its_old_one` pinned two old-reader quirks: `app/clients` indexed under the renaming file, and `crm/customers` declared by `SET SCHEMA`. It now pins the index without them, the one `rename` edge, and the one foreign key that still resolves.
+
+  The header cases read `header_for`. The deep-statement case keeps its 1 MB stack, and the queries hold under it.
+- **Size:** −448 lines for `src/code/sql/` and −12 for an unused `syntax::find`. The added Rust is 35 lines in the two exceptions, plus about 50 in the engine, the spec and `queries`.
 
 **Step 7 · Dart.** M. Query ~100, Rust −350, hook ~330 kept.
 

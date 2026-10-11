@@ -173,3 +173,44 @@ table, the accepted diff and the rewritten assertions are in the plan's §3.5.
   - `cargo test --all-targets`: 1,381 passed, 0 failed, 8 ignored;
   - `cargo clippy --all-targets -- -D warnings`: clean;
   - `cargo tree --duplicates --depth 0`: no tree-sitter crate.
+
+## Step 6 · SQL
+
+Old: `bin/repograph-5`, with its stores (`new-5`, the scratchpad's step-5 store and `fixture-base`).
+New: `bin/repograph-step6`, built on `f7358e1`. `bin/repograph-step6a`, built on the clean commit
+`8c2e454` before the compile warm-up, ran the bench. Both write byte-identical graphs on both
+corpora. SQL's old reader is deleted, so the old graph cannot come from `REPOGRAPH_LEGACY`.
+
+- **Regressions:** from `langdiff.py --lang sql` on three inputs:
+  - kit corpus (`new-5` → `new-6`): R1–R9 = 0;
+  - scratchpad corpus (vs `store-base`): 0 for SQL, plus the Swift R3 the exception sweep accepted;
+  - fixture: R1 = 3, R4 = 3 and R7 = 1.
+
+  The readings are in `log/langdiff-step6-{kit,scratch,fixture}.txt`.
+- **Accepted:** the fixture's seven are one construct. `CREATE FOREIGN TABLE` is now declared, with
+  its two columns, in `packages/db/test/fixtures/d-foreign-table-grant.sql`, and `headers.json`
+  gains the table's name. Every node and edge of any other language is identical on all three
+  inputs.
+- **Bounded kinds:** all are unchanged.
+  - Kit corpus: Calls 145/145 and References 388/388, so P = R = 1.0.
+  - Fixture: Calls 79/79 and References 828/828.
+- **Exceptions:**
+  - `identifier_case`: without it, R1 = R4 = 3,396 on the kit corpus and 3,100 on the fixture.
+  - `attachments`: without it, References R is 0.55 on the kit corpus and 0.43 on the fixture.
+- **Bench** (`--no-dense`, e5-small): keyword 39/40, paraphrase 7/30, code 12/12, p90 238 tok,
+  green.
+  - There are zero flips: the transcript `log/bench-step6.txt` is identical line for line to
+    `log/bench-sweep.txt`.
+  - The row is appended to `bench/history/runs.jsonl` at `8c2e454`.
+- **Build time:** median of five, interleaved, on the corpus:
+  - step 0: 1.211 s;
+  - step 5: 1.391 s;
+  - step 6: 1.436 s, which is 1.19×.
+
+  Before the warm-up, step 6 read 1.62 s. Query compile on the Postgres grammar takes 43 ms for
+  `decl` and 73 ms for `refs`.
+- **Gate:**
+  - `cargo test --all-targets`: 1,387 passed, 0 failed, 8 ignored;
+  - `cargo clippy --all-targets -- -D warnings`: clean;
+  - `cargo tree --duplicates --depth 0`: no tree-sitter crate;
+  - `src/code/sql/` is gone.
