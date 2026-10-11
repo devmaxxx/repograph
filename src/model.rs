@@ -176,6 +176,8 @@ impl Graph {
 
 pub trait Extractor {
     fn extract(&self, rel: &str, text: &str) -> Extraction;
+    /// `rels` changed or went since this extractor was made; what it remembers of them is stale.
+    fn forget(&self, _rels: &[String]) {}
 }
 
 #[cfg(test)]

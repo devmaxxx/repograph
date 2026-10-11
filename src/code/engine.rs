@@ -19,7 +19,7 @@ use crate::code::lang::Lang;
 use crate::code::queries::{self, Compiled, Kind, Meta, Role};
 use crate::code::spec::{Ambiguity, Body, Cap, Doc, Export, Form, Line, Spec, Visibility};
 use crate::code::syntax::{self, comment_text, last_row, text_span, DOC_CHARS};
-use crate::model::{EdgeKind, Extraction, NodeKind};
+use crate::model::{EdgeKind, Extraction, Graph, NodeKind};
 
 /// One file as the front read it.
 pub(crate) struct File<'a> {
@@ -99,6 +99,9 @@ pub(crate) struct Facts {
     /// scanning every definition.
     declared: HashSet<String>,
     exported: HashSet<String>,
+    /// A definition whose id an earlier one took, by its range and the earlier one's index: a site
+    /// inside it is still owned by that id, as `finish` keeps the first node of an id.
+    repeats: Vec<(Range<usize>, usize)>,
 }
 
 impl Facts {
@@ -115,11 +118,12 @@ impl Facts {
     }
 
     /// The innermost definition whose node holds `byte`.
-    fn owner(&self, byte: usize) -> Option<usize> {
-        self.defs.iter().enumerate()
-            .filter(|(_, d)| d.range.contains(&byte))
-            .min_by_key(|(_, d)| d.range.len())
-            .map(|(i, _)| i)
+    pub(crate) fn owner(&self, byte: usize) -> Option<usize> {
+        let defs = self.defs.iter().enumerate().map(|(i, d)| (&d.range, i));
+        defs.chain(self.repeats.iter().map(|(range, i)| (range, *i)))
+            .filter(|(range, _)| range.contains(&byte))
+            .min_by_key(|(range, _)| range.len())
+            .map(|(_, i)| i)
     }
 }
 
@@ -202,6 +206,15 @@ pub(crate) fn facts(spec: &Spec, decl: &'static Compiled, refs: Option<&'static 
                 }
             }
         });
+        // A citation inside another is read as part of the outer one, as a comment or string
+        // walk that stops at the first it meets reads it.
+        facts.cites.sort_by_key(|c| (c.range.start, std::cmp::Reverse(c.range.end)));
+        let mut end = 0;
+        facts.cites.retain(|c| {
+            let outer = c.range.start >= end;
+            end = end.max(c.range.end);
+            outer
+        });
         for (at, name) in bound {
             let scope = scopes.iter().filter(|s| s.contains(&at)).min_by_key(|s| s.len()).cloned().unwrap_or(0..src.len() + 1);
             facts.locals.0.entry(name).or_default().push(scope);
@@ -280,7 +293,7 @@ fn qualify(spec: &Spec, decl: &Compiled, file: &File, mut declared: Vec<Declared
     declared.dedup_by(|b, a| a.node.id() == b.node.id() && (a.role == b.role || matches!((a.role, b.role), (Declaring::Def(_), Declaring::Def(_)))));
     let fold = |s: &str| spec.hooks.fold.map_or_else(|| s.to_string(), |f| f(s).into_owned());
     let mut stack: Vec<Open> = Vec::new();
-    let mut ids = BTreeSet::new();
+    let mut ids: HashMap<String, usize> = HashMap::new();
     for d in declared {
         while stack.last().is_some_and(|open| open.end < d.node.end_byte()) {
             stack.pop();
@@ -306,9 +319,14 @@ fn qualify(spec: &Spec, decl: &Compiled, file: &File, mut declared: Vec<Declared
             continue;
         };
         let id = format!("sym:{}::{qualified}", file.rel);
-        if !ids.insert(id.clone()) {
+        if let Some(&first) = ids.get(&id) {
+            facts.repeats.push((d.node.byte_range(), first));
+            if let Some(join) = kind.join() {
+                stack.push(Open { end: d.node.end_byte(), qualified, join, def: Some(first) });
+            }
             continue;
         }
+        ids.insert(id.clone(), facts.defs.len());
         let export = meta.export.unwrap_or_else(|| exported(spec.export, &d.modifiers, &name));
         let (line, end) = text_span(d.node);
         let def = Def {
@@ -442,11 +460,12 @@ pub(crate) fn import_targets(resolver: &Resolver, spec: &Spec, rel: &str, import
     Vec::new()
 }
 
-fn imported_files(resolver: &Resolver, spec: &Spec, file: &File, facts: &Facts) -> Vec<String> {
-    facts.imports.iter().flat_map(|i| match spec.hooks.import {
-        Some(hook) => hook(resolver, file, i),
-        None => import_targets(resolver, spec, file.rel, i),
-    }).collect()
+/// The files an import site names: the spec's `import` hook where it has one, else the default.
+fn targets(resolver: &Resolver, spec: &Spec, rel: &str, import: &Import) -> Vec<String> {
+    match spec.hooks.import {
+        Some(hook) => hook(resolver, rel, import),
+        None => import_targets(resolver, spec, rel, import),
+    }
 }
 
 /// The files a reference may resolve into besides its own, by the spec's visibility, with what each
@@ -457,14 +476,14 @@ fn reach(resolver: &Resolver, spec: &Spec, file: &File, facts: &Facts) -> Vec<(S
         Visibility::File | Visibility::Family => Vec::new(),
         Visibility::Imported { transitive } => {
             let mut seen = BTreeSet::from([rel.to_string()]);
-            let mut queue: VecDeque<String> = imported_files(resolver, spec, file, facts).into();
+            let mut queue: VecDeque<String> = facts.imports.iter().flat_map(|i| targets(resolver, spec, rel, i)).collect();
             while let Some(next) = queue.pop_front() {
                 if !seen.insert(next.clone()) {
                     continue;
                 }
                 if transitive {
                     if let Some(f) = resolver.facts(&next) {
-                        queue.extend(f.imports.iter().flat_map(|i| import_targets(resolver, spec, &next, i)));
+                        queue.extend(f.imports.iter().flat_map(|i| targets(resolver, spec, &next, i)));
                     }
                 }
             }
@@ -517,6 +536,49 @@ pub(crate) fn resolve(resolver: &Resolver, spec: &Spec, file: &File, facts: &Fac
     }
 }
 
+/// `apply_diff`'s widening for the languages that see names through their imports, with no header to
+/// compare: a changed or removed file can add or drop a name a file importing it calls, so every
+/// importer is read again, through the whole chain where the visibility is transitive. A file whose
+/// import named a file that did not exist yet has no `Imports` edge to follow, and waits for its
+/// own next edit.
+pub(crate) fn widen(stale: &[String], removed: &[String], graph: &Graph, all_rels: &[String]) -> Vec<String> {
+    // A language with a header widens through `headers_move` instead, which re-reads only when a
+    // declaration moved.
+    let chain = |rel: &str| match Lang::of(rel).map(crate::code::spec::spec) {
+        Some(Spec { visibility: Visibility::Imported { transitive }, hooks, .. }) if hooks.header.is_none() => Some(*transitive),
+        _ => None,
+    };
+    // Grouped once: a chain of imports is as many hops as it is long, and each hop would otherwise
+    // be a scan of every edge in the graph.
+    let mut importers: HashMap<&str, Vec<&str>> = HashMap::new();
+    for e in graph.edges.iter().filter(|e| e.kind == EdgeKind::Imports) {
+        importers.entry(e.target.as_str()).or_default().push(e.source.as_str());
+    }
+    let mut reached: BTreeSet<String> = BTreeSet::new();
+    let mut frontier: Vec<(String, bool)> = Vec::new();
+    for rel in stale.iter().chain(removed) {
+        if let Some(transitive) = chain(rel) {
+            let id = format!("file:{rel}");
+            reached.insert(id.clone());
+            frontier.push((id, transitive));
+        }
+    }
+    while let Some((file, transitive)) = frontier.pop() {
+        for &importer in importers.get(file.as_str()).into_iter().flatten() {
+            if reached.insert(importer.to_string()) && transitive {
+                frontier.push((importer.to_string(), transitive));
+            }
+        }
+    }
+    let stale: BTreeSet<&str> = stale.iter().map(String::as_str).collect();
+    let present: BTreeSet<&str> = all_rels.iter().map(String::as_str).collect();
+    reached.iter()
+        .filter_map(|id| id.strip_prefix("file:"))
+        .filter(|r| !stale.contains(r) && present.contains(r))
+        .map(str::to_string)
+        .collect()
+}
+
 /// The header a name-indexed family records when it has no `header` hook: its namespaces, its
 /// visible top-level names, and what its containers hold.
 pub(crate) fn header(facts: &Facts) -> Header {
@@ -557,11 +619,7 @@ pub(crate) fn extract(resolver: &Resolver, spec: &Spec, file: &File, ex: &mut Ex
     write(file, &facts, ex);
     let kind = |i: &Import| if i.reexport { EdgeKind::ReExports } else { EdgeKind::Imports };
     for i in &facts.imports {
-        let targets = match spec.hooks.import {
-            Some(hook) => hook(resolver, file, i),
-            None => import_targets(resolver, spec, file.rel, i),
-        };
-        for t in targets {
+        for t in targets(resolver, spec, file.rel, i) {
             ex.edge(&format!("file:{}", file.rel), &format!("file:{t}"), kind(i), "*", file.rel);
         }
     }

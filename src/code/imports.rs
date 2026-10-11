@@ -7,7 +7,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 
 use crate::code::engine::{self, Facts};
 use crate::code::index::{Header, QualifiedIndex};
-use crate::code::lang::{detect, Family, Lang};
+use crate::code::lang::{detect, detect_path, Family, Lang};
 use crate::code::spec::{spec, Manifest, States};
 use crate::code::typescript::vue;
 
@@ -137,8 +137,7 @@ impl Resolver {
         let include = crate::walk::included(&cfg.include)?;
         let mut paths: PathsTier = Vec::new();
         let mut packages = BTreeMap::new();
-        // With the text when detection already read it, so no file is read twice here.
-        let mut sources: Vec<(Lang, String, PathBuf, Option<String>)> = Vec::new();
+        let mut sources: Vec<(Lang, String, PathBuf)> = Vec::new();
         let mut registered: Vec<(Lang, String)> = Vec::new();
         let mut files: BTreeSet<String> = BTreeSet::new();
         let mut manifests: Vec<(Lang, String, PathBuf)> = Vec::new();
@@ -166,35 +165,26 @@ impl Resolver {
             let p = dent.path();
             let Some(name) = p.file_name().and_then(|n| n.to_str()) else { continue };
             let rel = p.strip_prefix(repo).unwrap_or(p).to_string_lossy().replace('\\', "/");
+            let is_file = dent.file_type().is_some_and(|t| t.is_file());
+            let globbed = is_file && !skip.is_match(&rel) && code.is_match(&rel) && include.as_ref().is_none_or(|i| i.is_match(&rel));
             if rel.split('/').any(|part| part.starts_with('.')) {
-                let is_file = dent.file_type().is_some_and(|t| t.is_file());
-                if let Some(lang) = Lang::of(&rel).filter(|l| spec(*l).dotted_dirs) {
-                    if is_file && !skip.is_match(&rel) && code.is_match(&rel) && include.as_ref().is_none_or(|i| i.is_match(&rel)) {
-                        reached.insert(lang.family());
-                        files.insert(rel.clone());
-                        sources.push((lang, rel, p.to_path_buf(), None));
-                    }
+                // A name neither table knows is read for its shebang, as the extractor reads it.
+                if let Some(lang) = globbed.then(|| detect_path(&rel, p)).flatten().filter(|l| spec(*l).dotted_dirs) {
+                    reached.insert(lang.family());
+                    files.insert(rel.clone());
+                    sources.push((lang, rel, p.to_path_buf()));
                 }
                 continue;
             }
-            if dent.file_type().is_some_and(|t| t.is_file()) && !skip.is_match(&rel) {
-                if code.is_match(&rel) && include.as_ref().is_none_or(|i| i.is_match(&rel)) {
+            if is_file && !skip.is_match(&rel) {
+                if globbed {
                     files.insert(rel.clone());
-                    // A name neither table knows is read for its shebang, as the extractor reads it.
-                    let (lang, read) = match Lang::of(&rel) {
-                        Some(lang) => (Some(lang), None),
-                        None if crate::code::lang::unnamed(&rel) => {
-                            let text = std::fs::read_to_string(p).ok();
-                            (text.as_deref().and_then(|t| detect(&rel, Some(t))), text)
-                        }
-                        None => (None, None),
-                    };
-                    if let Some(lang) = lang {
+                    if let Some(lang) = detect_path(&rel, p) {
                         reached.insert(lang.family());
                         // TypeScript's state is the tsconfig and package.json read below; its sources
                         // are the extractor's alone, so a TypeScript repository opens nothing more here.
                         if spec(lang).hooks.collects() {
-                            sources.push((lang, rel.clone(), p.to_path_buf(), read));
+                            sources.push((lang, rel.clone(), p.to_path_buf()));
                         } else if spec(lang).hooks.register.is_some() {
                             registered.push((lang, rel.clone()));
                         }
@@ -273,9 +263,9 @@ impl Resolver {
                 register(&mut resolver, rel);
             }
         }
-        for (lang, rel, path, read) in sources {
+        for (lang, rel, path) in sources {
             // Not UTF-8 is a binary, which the extractor skips as well.
-            if let Some(text) = read.or_else(|| std::fs::read_to_string(path).ok()) {
+            if let Ok(text) = std::fs::read_to_string(path) {
                 resolver.collect(lang, &rel, &text);
             }
         }
@@ -332,6 +322,14 @@ impl Resolver {
         });
         self.facts.lock().unwrap_or_else(|e| e.into_inner()).insert(rel.to_string(), read.clone());
         read
+    }
+
+    /// Drops what `facts` read of `rels`, so a resolver kept across an edit reads them again.
+    pub(crate) fn forget(&self, rels: &[String]) {
+        let mut facts = self.facts.lock().unwrap_or_else(|e| e.into_inner());
+        for rel in rels {
+            facts.remove(rel);
+        }
     }
 
     /// What one globbed source contributes before any file is extracted.

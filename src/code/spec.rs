@@ -3,7 +3,7 @@
 //! names every language: the front, the resolver, the header index, `changes` and the update's
 //! widening read this table instead of matching on `Lang` each in its own way.
 //!
-//! Most of the vocabulary below describes ported languages, and none is ported yet.
+//! Most of the vocabulary below describes ported languages, and only Shell is ported yet.
 #![allow(dead_code)]
 
 use std::any::{Any, TypeId};
@@ -144,7 +144,9 @@ pub(crate) type Legacy = fn(&Resolver, &File, &mut Extraction);
 
 pub(crate) type Collect = fn(&mut Resolver, &str, &str) -> Option<Header>;
 
-pub(crate) type ImportHook = fn(&Resolver, &File, &Import) -> Vec<String>;
+/// `(resolver, importer, site)`: the importer by path alone, because the transitive walk asks it of
+/// files it has only the declarations of.
+pub(crate) type ImportHook = fn(&Resolver, &str, &Import) -> Vec<String>;
 
 pub(crate) type Widen = fn(&[String], &[String], &Graph, &[String]) -> Vec<String>;
 
@@ -238,8 +240,12 @@ const UNPORTED: Spec = Spec {
     legacy: None,
 };
 
+/// The comment lines directly above a declaration, markers kept, and its first line.
+const PROSE: Body = Body { doc: Doc::Adjacent { kinds: &["comment"], between: &[] }, form: Form::Raw, cap: Cap::Tail, line: Line::First };
+
 mod table {
     use super::*;
+    use crate::code::exceptions::computed_paths;
     use crate::code::*;
 
     pub(super) const TYPESCRIPT: Spec = Spec { comments: C, hooks: typescript::HOOKS, legacy: Some(typescript::extract), ..UNPORTED };
@@ -268,12 +274,27 @@ mod table {
         ..UNPORTED
     };
     pub(super) const SHELL: Spec = Spec {
+        queries: crate::code::queries::sources::SHELL,
+        view: None,
         comments: HASH,
+        body: PROSE,
+        // Any script that sources the file can call its functions.
+        export: Export::All,
+        visibility: Visibility::Imported { transitive: true },
+        // Which of two definitions a call reaches is whichever `source` ran last, which the graph
+        // does not model, so a name defined twice resolves to neither.
+        ambiguity: Ambiguity::Unique,
+        imports: ImportPaths { root: true, suffixes: &[""] },
         cross_file: true,
         dotted_dirs: true,
-        hooks: shell::HOOKS,
-        legacy: Some(shell::extract),
-        ..UNPORTED
+        hooks: Hooks {
+            collect: Some(computed_paths::collect),
+            state: Some(state::<computed_paths::Scripts>),
+            import: Some(computed_paths::import),
+            resolve: Some(computed_paths::runs),
+            ..NONE
+        },
+        legacy: None,
     };
 }
 

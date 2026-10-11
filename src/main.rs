@@ -227,7 +227,7 @@ pub(crate) fn apply_diff(repo: &std::path::Path, store: &store::Store, graph: &m
     // A graph read from nothing is read beside no headers either, whatever an older store left.
     let fresh = graph.nodes.is_empty();
     let named: std::collections::BTreeSet<&str> = diff.changed.iter().map(|e| e.rel.as_str()).collect();
-    let code_changed = diff.changed.iter().filter(|e| e.kind == walk::FileKind::Code).map(|e| e.rel.as_str());
+    let code_changed = diff.changed.iter().filter(|e| e.kind == walk::FileKind::Code).map(|e| repo.join(&e.rel));
     if let Some(note) = code::lang::files_only_note(code_changed) {
         eprintln!("{}", terminal_safe(&note));
     }
@@ -247,7 +247,9 @@ pub(crate) fn apply_diff(repo: &std::path::Path, store: &store::Store, graph: &m
     let mut headers = if fresh { code::index::Headers::default() } else { code::index::Headers::load(store)? };
     let recorded = headers.clone();
     let mut widened_rels = code::index::widen(repo, &rereading, &diff.removed, &mut headers, &code_rels);
-    // Scripts resolve names across files with no header to compare, so they widen by a rule of their own.
+    // Languages that see names through imports, and Terraform's modules, resolve across files with no
+    // header to compare, so they widen by rules of their own.
+    widened_rels.extend(code::engine::widen(&rereading, &diff.removed, graph, &code_rels));
     for widen in code::lang::Lang::ALL.into_iter().filter_map(|l| code::spec::spec(l).hooks.widen) {
         widened_rels.extend(widen(&rereading, &diff.removed, graph, &code_rels));
     }
@@ -477,6 +479,11 @@ impl<'a> Watcher<'a> {
         if moved_path || self.resolver_stale || path_family || moved_header()? {
             self.ex = extractors(self.repo, self.cfg)?;
             self.resolver_stale = false;
+        } else {
+            // A kept resolver has memoized the declarations of files read across; an edited one
+            // must be read again, or a file resolving into it sees what it declared before.
+            let moved: Vec<String> = diff.changed.iter().map(|e| e.rel.clone()).chain(diff.removed.iter().cloned()).collect();
+            self.ex.code.forget(&moved);
         }
         // This poll is an `update` in everything but name — it re-extracts and it writes — so it
         // says which families moved the way one does. A quiet poll pays none of it.

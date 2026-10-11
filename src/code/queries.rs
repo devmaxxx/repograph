@@ -187,6 +187,14 @@ pub(crate) fn compile(grammar: &Language, sources: &[&str]) -> Result<Compiled, 
     Ok(Compiled { query, roles, metas })
 }
 
+/// Each ported language's `.scm` sources, embedded so the binary never reads a query from disk.
+pub(crate) mod sources {
+    use crate::code::spec::Sources;
+
+    pub(crate) const SHELL: Sources =
+        Sources { decl: &[include_str!("queries/shell/decl.scm")], refs: &[include_str!("queries/shell/refs.scm")] };
+}
+
 const N: usize = Lang::ALL.len();
 
 /// Compiled once per process, on first use; `None` for a language with no queries yet.

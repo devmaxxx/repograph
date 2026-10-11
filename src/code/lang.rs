@@ -101,9 +101,22 @@ pub fn detect(rel: &str, head: Option<&str>) -> Option<Lang> {
     }
 }
 
-/// Whether neither table knows `rel`'s name, so only its first line can say what reads it.
-pub fn unnamed(rel: &str) -> bool {
-    matches!(by_name(rel), Named::Unknown)
+/// How much of a file its shebang is looked for in: Linux reads no more of the line than this.
+const SHEBANG_BYTES: u64 = 256;
+
+/// `detect` for a file on disk: its name, and only for a name neither table knows, the shebang in
+/// its first bytes, so a file is never read whole to learn what reads it.
+pub fn detect_path(rel: &str, path: &std::path::Path) -> Option<Lang> {
+    use std::io::Read as _;
+    match by_name(rel) {
+        Named::Read(lang) => Some(lang),
+        Named::Unread => None,
+        Named::Unknown => {
+            let mut head = Vec::new();
+            std::fs::File::open(path).ok()?.take(SHEBANG_BYTES).read_to_end(&mut head).ok()?;
+            shebang(&String::from_utf8_lossy(&head))
+        }
+    }
 }
 
 /// `#!/bin/bash` and `#!/usr/bin/env -S python3` alike: the interpreter's file name, after `env`
@@ -199,11 +212,17 @@ pub fn file_node(rel: &str, ex: &mut Extraction) {
 }
 
 /// One stderr line naming what was indexed without being read, so a glob that reaches past the
-/// grammars says so instead of producing a graph that is silently thinner than the tree.
-pub fn files_only_note<'a>(rels: impl Iterator<Item = &'a str>) -> Option<String> {
+/// grammars says so instead of producing a graph that is silently thinner than the tree. A script
+/// whose shebang names a language is read, so it is not named.
+pub fn files_only_note<P: AsRef<std::path::Path>>(paths: impl Iterator<Item = P>) -> Option<String> {
     let mut by_ext = std::collections::BTreeMap::<String, usize>::new();
-    for rel in rels.filter(|r| Lang::of(r).is_none()) {
-        let label = ext(rel).map(|e| format!(".{e}")).unwrap_or_else(|| "(no extension)".to_string());
+    for path in paths {
+        let path = path.as_ref();
+        let name = path.to_string_lossy();
+        if detect_path(&name, path).is_some() {
+            continue;
+        }
+        let label = ext(&name).map(|e| format!(".{e}")).unwrap_or_else(|| "(no extension)".to_string());
         *by_ext.entry(label).or_default() += 1;
     }
     if by_ext.is_empty() {

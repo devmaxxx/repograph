@@ -3,6 +3,7 @@ pub mod blank;
 pub mod dart;
 pub(crate) mod dotnet;
 pub(crate) mod engine;
+pub(crate) mod exceptions;
 pub(crate) mod front;
 pub mod graphql;
 pub mod hcl;
@@ -14,7 +15,6 @@ pub(crate) mod prose;
 pub(crate) mod python;
 pub(crate) mod queries;
 pub(crate) mod rust_lang;
-pub mod shell;
 pub(crate) mod spec;
 pub mod sql;
 pub mod swift;
@@ -36,6 +36,10 @@ impl CodeExtractor {
 impl Extractor for CodeExtractor {
     fn extract(&self, rel: &str, text: &str) -> Extraction {
         finish(front::read(&self.resolver, rel, text))
+    }
+
+    fn forget(&self, rels: &[String]) {
+        self.resolver.forget(rels);
     }
 }
 

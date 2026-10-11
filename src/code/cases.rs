@@ -1,6 +1,8 @@
 //! Edge cases of the code extractor, each on an inline source so the grammar's shape for the
 //! construct is pinned by the assertion rather than by a shared fixture.
 
+mod shell;
+
 use super::CodeExtractor;
 use crate::code::imports::Resolver;
 use crate::model::{EdgeKind, Extraction, Extractor, NodeKind};

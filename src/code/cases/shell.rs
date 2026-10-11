@@ -206,7 +206,7 @@ fn strings(v: &[&str]) -> Vec<String> {
 }
 
 fn widened(stale: &[&str], removed: &[&str], g: &crate::model::Graph, all: &[&str]) -> Vec<String> {
-    let mut w = super::widen(&strings(stale), &strings(removed), g, &strings(all));
+    let mut w = crate::code::engine::widen(&strings(stale), &strings(removed), g, &strings(all));
     w.sort();
     w
 }
@@ -251,4 +251,58 @@ fn a_long_doc_comment_keeps_the_lines_nearest_the_function() {
     let g = ex.nodes.iter().find(|n| n.id == "sym:a.sh::greet").unwrap();
     assert!(g.body.ends_with("# Prints a greeting.\ngreet() { :; }"), "{}", g.body);
     assert!(g.body.len() < 700, "{}", g.body.len());
+}
+
+#[test]
+fn a_call_reaches_through_a_chain_of_sources_each_built_from_the_scripts_own_directory() {
+    let here = "HERE=\"$(cd \"$(dirname \"${BASH_SOURCE[0]}\")\" && pwd)\"\n";
+    let a = format!("{here}. \"$HERE/lib/b.sh\"\nstamp\n");
+    let b = format!("{here}. \"$HERE/c.sh\"\n");
+    let files = [("a.sh", a.as_str()), ("lib/b.sh", b.as_str()), ("lib/c.sh", "stamp() { date; }\n")];
+    assert_eq!(lines(&extract(&files, "a.sh"), EdgeKind::Calls), ["file:a.sh -> sym:lib/c.sh::stamp []"]);
+}
+
+#[test]
+fn a_script_with_no_extension_under_a_dotted_directory_is_read_by_its_shebang() {
+    let files = [
+        (".github/bin/deploy", "#!/usr/bin/env bash\n. \"$(dirname \"$0\")/lib.sh\"\nlib_line\n"),
+        (".github/bin/lib.sh", "lib_line() { :; }\n"),
+    ];
+    let (_dir, resolver) = repo(&["**/*"], &files);
+    let ex = crate::code::front::read(&resolver, ".github/bin/deploy", files[0].1);
+    assert_eq!(lines(&ex, EdgeKind::Calls), ["file:.github/bin/deploy -> sym:.github/bin/lib.sh::lib_line []"]);
+}
+
+#[test]
+fn a_shebang_is_read_from_the_head_of_a_file_however_long_the_rest() {
+    let dir = tempfile::tempdir().unwrap();
+    let long = format!("#!/bin/sh\n{}", "# padding\n".repeat(100_000));
+    std::fs::write(dir.path().join("deploy"), &long).unwrap();
+    std::fs::write(dir.path().join("notes"), "no shebang\n").unwrap();
+    use crate::code::lang::{detect_path, Lang};
+    assert_eq!(detect_path("deploy", &dir.path().join("deploy")), Some(Lang::Shell));
+    assert_eq!(detect_path("notes", &dir.path().join("notes")), None);
+    assert_eq!(detect_path("gone", &dir.path().join("gone")), None);
+}
+
+#[test]
+fn the_note_leaves_out_a_script_its_shebang_has_read() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("deploy"), "#!/usr/bin/env bash\n").unwrap();
+    std::fs::write(dir.path().join("notes"), "plain\n").unwrap();
+    let paths = [dir.path().join("deploy"), dir.path().join("notes")];
+    assert_eq!(crate::code::lang::files_only_note(paths.iter()).as_deref(),
+        Some("code: no grammar reads 1 (no extension) — indexed as files only"));
+}
+
+#[test]
+fn a_resolver_reads_again_what_it_was_told_to_forget() {
+    let (dir, resolver) = repo(GLOBS, &[("lib.sh", "lib_other() { :; }\n")]);
+    let names = |r: &crate::code::imports::Resolver| r.facts("lib.sh").unwrap().defs.iter().map(|d| d.name.clone()).collect::<Vec<_>>();
+    assert_eq!(names(&resolver), ["lib_other"]);
+    std::fs::write(dir.path().join("lib.sh"), "lib_other() { :; }\nlib_line() { :; }\n").unwrap();
+    // Remembered: a resolver kept across polls answers from what it read before the edit.
+    assert_eq!(names(&resolver), ["lib_other"]);
+    resolver.forget(&["lib.sh".to_string()]);
+    assert_eq!(names(&resolver), ["lib_other", "lib_line"]);
 }

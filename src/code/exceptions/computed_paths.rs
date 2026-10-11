@@ -1,16 +1,114 @@
-//! Paths a script names through its own directory. A script runs from anywhere, so a path means
+//! Paths a script computes from its own location. A script runs from anywhere, so a path means
 //! something in this repository only when it is written out, or built from the script's own location:
 //! `$(dirname "$0")`, `$(dirname "${BASH_SOURCE[0]}")`, `${BASH_SOURCE%/*}`, `${0%/*}`, any of those
 //! under `$(cd … && pwd)`, or a variable assigned one of these. `$HOME`, `$1` and a glob name
 //! nothing.
+//!
+//! No query can evaluate a path, so this rule supplies what the default cannot: the files a
+//! `source` line imports, and the scripts a command runs by path, written as References to the file.
 
-use crate::code::prose;
-use crate::code::syntax;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
+
 use tree_sitter::Node;
 
+use crate::code::engine::{Facts, File, Import, Sink};
+use crate::code::imports::Resolver;
+use crate::code::index::Header;
+use crate::code::lang::Lang;
+use crate::code::prose;
+use crate::code::syntax;
+use crate::model::EdgeKind;
+
+/// Interpreters a script is run through: the first operand that is not a flag is the script.
+const RUNNERS: [&str; 4] = ["bash", "sh", "zsh", "dash"];
+
+/// Every globbed script, and the paths each `source` line names, read before any extract: a
+/// `source` resolves through what the walk found, whatever order it reads files in, and the
+/// transitive walk asks for the imports of a file it holds only the declarations of.
+#[derive(Default)]
+pub(crate) struct Scripts {
+    globbed: BTreeSet<String>,
+    /// script → `source` site start byte → candidate paths, in the order they are tried
+    sources: BTreeMap<String, BTreeMap<usize, Vec<String>>>,
+}
+
+impl Scripts {
+    /// The first candidate that is a globbed script.
+    fn pick(&self, candidates: &[String]) -> Option<String> {
+        candidates.iter().find(|c| self.globbed.contains(c.as_str())).cloned()
+    }
+}
+
+/// The collect pass: a script's `source` lines, evaluated with the variables it assigns.
+pub(crate) fn collect(r: &mut Resolver, rel: &str, source: &str) -> Option<Header> {
+    let scripts = r.state_mut::<Scripts>();
+    scripts.globbed.insert(rel.to_string());
+    let src = source.as_bytes();
+    let tree = Lang::Shell.parse(src)?;
+    let root = tree.root_node();
+    let vars = Vars::read(root, src);
+    let sites = commands(root).into_iter()
+        .filter_map(|c| {
+            let (name, args) = words(c, src)?;
+            if name != "source" && name != "." { return None }
+            Some((c.start_byte(), candidates(rel, &vars.eval(*args.first()?, src)?)))
+        })
+        .filter(|(_, c)| !c.is_empty())
+        .collect();
+    scripts.sources.insert(rel.to_string(), sites);
+    None
+}
+
+/// The script a `source` line imports.
+pub(crate) fn import(r: &Resolver, rel: &str, site: &Import) -> Vec<String> {
+    let scripts = r.state::<Scripts>();
+    scripts.sources.get(rel).and_then(|sites| sites.get(&site.range.start)).and_then(|c| scripts.pick(c)).into_iter().collect()
+}
+
+/// A command that runs another script by its path references that script's file, from the
+/// function or file that runs it.
+pub(crate) fn runs(r: &Resolver, file: &File, facts: &Facts, sink: &mut Sink) {
+    let Some(tree) = file.tree else { return };
+    let (root, src, rel) = (tree.root_node(), file.src.as_bytes(), file.rel);
+    let scripts = r.state::<Scripts>();
+    let vars = Vars::read(root, src);
+    // A path that is only text and holds no `/` is a PATH lookup, not a script of this repository.
+    let is_path = |v: &Value| !matches!(v, Value::Literal(p) if !p.contains('/'));
+    for c in commands(root) {
+        let Some((name, args)) = words(c, src) else { continue };
+        let run = match name {
+            "source" | "." => None,
+            "exec" => args.first().and_then(|a| vars.eval(*a, src)).filter(is_path),
+            n if RUNNERS.contains(&n) => runner_script(&args, src).and_then(|a| vars.eval(a, src)),
+            _ => c.child_by_field_name("name").and_then(|n| n.named_child(0)).and_then(|w| vars.eval(w, src)).filter(is_path),
+        };
+        if let Some(script) = run.and_then(|v| scripts.pick(&candidates(rel, &v))) {
+            let from = facts.source_id(rel, facts.owner(c.start_byte()));
+            sink.edge(&from, &format!("file:{script}"), EdgeKind::References, "", rel);
+        }
+    }
+}
+
+fn commands<'t>(root: Node<'t>) -> Vec<Node<'t>> {
+    prose::all(root, "command")
+}
+
+/// The script an interpreter runs: the first operand that is not an option. `-o` and `+o` take the
+/// option name after them, and `-c` runs a command string, so no file is run.
+fn runner_script<'t>(args: &[Node<'t>], src: &[u8]) -> Option<Node<'t>> {
+    let mut it = args.iter();
+    while let Some(a) = it.next() {
+        let t = syntax::text(*a, src);
+        if !t.starts_with(['-', '+']) { return Some(*a) }
+        let flags = &t[1..];
+        if !flags.starts_with('-') && flags.contains('c') { return None }
+        if matches!(t, "-o" | "+o" | "-O" | "+O") { it.next(); }
+    }
+    None
+}
+
 #[derive(Clone, Debug, PartialEq)]
-pub(super) enum Value {
+enum Value {
     /// The script's own path, `$0` or `${BASH_SOURCE[0]}`; only its directory names anything.
     Script,
     /// A path under the script's directory: the text after it, `/lib.sh`, or empty for the directory.
@@ -21,10 +119,10 @@ pub(super) enum Value {
 
 /// Variables assigned a path value. A name assigned two different values names neither, because which
 /// one holds depends on how the script ran.
-pub(super) struct Vars(BTreeMap<String, Option<Value>>);
+struct Vars(BTreeMap<String, Option<Value>>);
 
 impl Vars {
-    pub(super) fn read(root: Node, src: &[u8]) -> Vars {
+    fn read(root: Node, src: &[u8]) -> Vars {
         // In source order, so `M="$HERE/measure.sh"` reads the `HERE` assigned above it.
         let assignments = prose::all(root, "variable_assignment");
         let mut vars = Vars(BTreeMap::new());
@@ -42,7 +140,7 @@ impl Vars {
     }
 
     /// What a word evaluates to, when the script's text fixes it.
-    pub(super) fn eval(&self, n: Node, src: &[u8]) -> Option<Value> {
+    fn eval(&self, n: Node, src: &[u8]) -> Option<Value> {
         match n.kind() {
             "word" | "string_content" => literal(syntax::text(n, src)),
             "raw_string" => literal(syntax::text(n, src).trim_matches('\'')),
@@ -102,7 +200,7 @@ impl Vars {
 }
 
 /// A command's name as written, and its arguments with `--` dropped.
-pub(super) fn words<'t, 's>(cmd: Node<'t>, src: &'s [u8]) -> Option<(&'s str, Vec<Node<'t>>)> {
+fn words<'t, 's>(cmd: Node<'t>, src: &'s [u8]) -> Option<(&'s str, Vec<Node<'t>>)> {
     if cmd.kind() != "command" { return None }
     let name = cmd.child_by_field_name("name")?;
     let mut c = cmd.walk();
@@ -113,7 +211,7 @@ pub(super) fn words<'t, 's>(cmd: Node<'t>, src: &'s [u8]) -> Option<(&'s str, Ve
 /// Where a path value may point in the repository, in the order tried: under the script's directory,
 /// then, for text written relative, from the root, where scripts are most often run from. A path that
 /// climbs above the root names something outside the repository, so it has no candidate.
-pub(super) fn candidates(rel: &str, value: &Value) -> Vec<String> {
+fn candidates(rel: &str, value: &Value) -> Vec<String> {
     let dir = rel.rsplit_once('/').map_or("", |(d, _)| d);
     let under = prose::join_under;
     match value {
