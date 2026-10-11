@@ -241,7 +241,7 @@ const PROSE: Body = Body { doc: Doc::Adjacent { kinds: &["comment"], between: &[
 mod table {
     use super::*;
     use crate::code::exceptions::{
-        attribute_lines, computed_paths, inheritance_clauses, module_reach, target_or_group, traversal_addresses, type_paths,
+        attribute_lines, computed_paths, inheritance_clauses, module_reach, target_or_group, type_paths,
     };
     use crate::code::*;
 
@@ -305,14 +305,7 @@ mod table {
         cross_file: true,
         imports: ImportPaths { root: false, suffixes: &[""] },
         dotted_dirs: false,
-        hooks: Hooks {
-            resolve: Some(|r, file, facts, sink| {
-                traversal_addresses::resolve(r, file, facts, sink);
-                module_reach::reach(r, file, facts, sink);
-            }),
-            owns: &[EdgeKind::References],
-            ..NONE
-        },
+        hooks: Hooks { resolve: Some(module_reach::reach), ..NONE },
         legacy: None,
     };
     pub(super) const SWIFT: Spec = Spec {

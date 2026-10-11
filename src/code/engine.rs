@@ -84,9 +84,11 @@ pub(crate) struct Cite {
 pub(crate) struct Locals(HashMap<String, Vec<Range<usize>>>);
 
 impl Locals {
-    /// Whether a local binding of `name` encloses `byte`.
+    /// Whether a local binding of `name`'s first segment encloses `byte`: a loop variable `x` binds
+    /// the path `x/name` read through it.
     pub(crate) fn shadows(&self, name: &str, byte: usize) -> bool {
-        self.0.get(name).is_some_and(|scopes| scopes.iter().any(|scope| scope.contains(&byte)))
+        let root = name.split_once('/').map_or(name, |(root, _)| root);
+        self.0.get(root).is_some_and(|scopes| scopes.iter().any(|scope| scope.contains(&byte)))
     }
 }
 
@@ -302,11 +304,12 @@ fn read_import(caps: &[(Role, Node)], meta: &Meta, src: &str) -> Option<Import> 
 }
 
 fn read_reference(spec: &Spec, caps: &[(Role, Node)], edge: EdgeKind, site: Node, meta: &Meta, src: &str) -> Ref {
-    let name_node = caps.iter().find(|(r, _)| *r == Role::Name).map_or(site, |(_, n)| *n);
-    let name = text(name_node, src);
+    // Repeated names spell one path, as they do for a definition: `var.region` reads `var/region`.
+    let names: Vec<&str> = caps.iter().filter(|(r, _)| *r == Role::Name).map(|(_, n)| text(*n, src)).collect();
+    let name = if names.is_empty() { text(site, src).to_string() } else { names.join("/") };
     Ref {
         source: None,
-        name: spec.hooks.fold.map_or_else(|| name.to_string(), |fold| fold(name).into_owned()),
+        name: spec.hooks.fold.map_or_else(|| name.clone(), |fold| fold(&name).into_owned()),
         receiver: caps.iter().find(|(r, _)| *r == Role::Receiver).map(|(_, n)| text(*n, src).to_string()),
         edge,
         context: meta.context.clone(),
@@ -558,7 +561,12 @@ fn visible(resolver: &Resolver, spec: &Spec, file: &File, reach: &[(String, Arc<
             .map(|index| index.files(name).into_iter().filter(|f| *f != file.rel).map(str::to_string).collect())
             .unwrap_or_default();
     }
-    reach.iter().filter(|(_, facts)| facts.declares_visible(name)).map(|(f, _)| f.clone()).collect()
+    // A directory is one module, so a sibling's every declaration is in scope, exported or not.
+    let seen = |facts: &Facts| match spec.visibility {
+        Visibility::Directory => facts.declares(name),
+        _ => facts.declares_visible(name),
+    };
+    reach.iter().filter(|(_, facts)| seen(facts)).map(|(f, _)| f.clone()).collect()
 }
 
 /// Every reference with no receiver and of a kind no hook owns, resolved by name.

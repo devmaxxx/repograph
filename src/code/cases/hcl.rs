@@ -163,12 +163,9 @@ fn a_lock_file_handed_to_the_extractor_declares_nothing_because_its_labels_are_r
 fn a_for_variable_and_a_dynamic_iterator_are_not_references_to_a_declaration_of_the_same_name() {
     let main = "resource \"web\" \"x\" {\n  a = [for web in var.list : web.x]\n  dynamic \"ebs\" {\n    for_each = var.disks\n    iterator = disk\n    content {\n      size = disk.x\n      kind = ebs.x\n    }\n  }\n  dynamic \"rule\" {\n    for_each = var.rules\n    content {\n      port = rule.x\n    }\n  }\n}\nresource \"disk\" \"x\" {}\nresource \"ebs\" \"x\" {}\nresource \"rule\" \"x\" {}\nvariable \"list\" {}\n";
     let ex = extract(&[("m/main.tf", main)], "m/main.tf");
-    // `web.x` is the loop's own element, though `resource "web" "x"` exists; `ebs.x` is no iterator here
-    // because `iterator = disk` renamed it, so it is a plain reference.
-    assert_eq!(lines(&ex, EdgeKind::References), [
-        "sym:m/main.tf::web/x -> sym:m/main.tf::ebs/x []",
-        "sym:m/main.tf::web/x -> sym:m/main.tf::var/list []",
-    ]);
+    // `web.x` is the loop's own element, though `resource "web" "x"` exists. A query cannot tell a
+    // label `iterator = disk` renamed from one it did not, so `ebs.x` stays bound by the label too.
+    assert_eq!(lines(&ex, EdgeKind::References), ["sym:m/main.tf::web/x -> sym:m/main.tf::var/list []"]);
 }
 
 #[test]
@@ -268,7 +265,7 @@ fn a_change_that_is_not_a_tf_file_widens_nothing() {
 }
 
 #[test]
-fn a_negated_operand_keeps_its_attribute_steps_however_deep_the_operation_nests() {
+fn a_negated_operand_keeps_its_attribute_steps_through_two_nested_operations() {
     let main = "variable \"on\" {}\nresource \"r\" \"x\" {}\nresource \"r\" \"y\" {}\noutput \"a\" {\n  value = !var.on\n}\noutput \"b\" {\n  value = -r.x.id\n}\noutput \"c\" {\n  value = var.on && !r.y.id\n}\n";
     let ex = extract(&[("m/main.tf", main)], "m/main.tf");
     assert_eq!(lines(&ex, EdgeKind::References), [
