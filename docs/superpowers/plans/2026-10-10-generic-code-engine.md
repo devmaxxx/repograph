@@ -1100,6 +1100,36 @@ This step alone closes the three reviewer defects. About 1,200 lines of Rust are
 - **Spec:** `All` export, `Family`, `All` ambiguity, container edges dropped, the default header.
 - **Gate:** Calls (69) by the corpus.
 
+**Step 5 as built.** Where the code differs from the text above, the code is the record:
+
+- **Review fixes first.** Two findings of the exception sweep's review were fixed in the queries alone, in their own commit (`5ba73c1`). §3.5's "Review fixes, queries only" covers them, and the graph stayed byte-identical.
+- **Queries:** `queries/graphql/{decl,refs}.scm`, 20 and 79 lines.
+  - **Declarations.**
+    - An operation's name is two `@name` parts, its operation type and its name, so its id is still `query/GetShelf`.
+    - Fragments and directives take `#set! prefix`.
+    - A type definition or extension is one wildcard pattern each, of kind `type`.
+    - Fields are `field_definition` under `fields_definition`, and `input_value_definition` under `input_fields_definition`. An argument or an enum value declares nothing, as before.
+  - **References.**
+    - A spread is Calls with the `fragment/` prefix. A directive is DecoratedBy with the `directive/` prefix, and `implements` is Extends.
+    - Union members, type conditions and `extend type` are References with `member`, `on` and `extend`.
+    - A type position names its type under list and non-null wrappers. Every node between the two is a wrapper, so the query tells them apart by depth alone, eight alternatives down to `[[T!]!]!`. The four positions are variable (`variable`), field and input field (`type`), and argument (`argument`), so that block is most of the 79 lines.
+- **Spec:** `Export::All`, `Family`, `All`. The body is `Doc::Capture` (the description), `Form::Stripped`, `Cap::Head` and `Line::Name`. The engine's existing container rule drops the edge from a field to its own type. `cross_file` is false, as for Swift.
+- **Exceptions:** none. One hook pointer remains, `header`, which returns `engine::default_header`. Only a header hook writes `headers.json`, which held 42 GraphQL entries on the corpus. Without the pointer that file would move (R7), and a document gaining or losing a fragment would no longer widen the update.
+- **Engine:** two generic additions, both byte-identical on both corpora and the fixture.
+  - `Spec::label`. `Label::Name` labels a symbol by its last `@name` part, without its prefix, under its container: `query/GetShelf` is labelled `GetShelf`, and a field `Shelf.books`. The other ported languages keep `Label::Qualified`. SQL, which labels 1,709 of its 1,715 nodes by the last `/` segment, is the second user.
+  - `Form::Stripped` drops a string's quotes as it drops comment markers, so a description reads without them. A Python docstring will read the same way. No ported language used `Stripped` before.
+- **Gate:** on the kit corpus (new-sweep → `new-5`), the scratchpad corpus and the fixture, `graph.json` and `headers.json` are byte-identical to the item-1 stores. Langdiff `--lang gql,graphql,bicep,tf` gives R1–R9 = 0 on all three. Against `store-base`, only the Swift R3 that step 4 accepted remains. The corpus holds 192 GraphQL symbols and 69 Calls, unchanged. No bounded kind moved, so no hand read was needed. `cargo tree --duplicates` lists no tree-sitter crate.
+- **Divergence:** an adversarial repository built for this step differs from the old reader in these places. No gate input holds any of them.
+  - Comments above an operation, a fragment or a type are no longer its doc. One recipe per language: the description, which only schema definitions have. The corpus has no doc line either way.
+  - A described type or field starts its span at the description, because the description sits inside the node. It was the name row.
+  - A field's description is now its doc. Before, a field had none.
+  - Two fields on one line each keep their own text, not the whole line.
+  - A directive on an argument now decorates the field, and one on an enum value decorates the enum: DecoratedBy +2.
+  - A type extended above its own definition in the same document takes the extension's span and body, because the first node of an id wins. The old reader preferred the definition.
+  - A schema document's header now carries `nested` types and members, so a field added or removed re-reads the family. An operations document's header is unchanged.
+- **Cases** moved to `src/code/cases/graphql.rs`. One was rewritten and renamed `a_description_is_the_doc_and_the_name_line_the_last_line_of_the_body`. It no longer reads the operation's and the fragment's comments as doc, and `Shelf`'s span starts at line 1, its description, instead of line 2. Three cases were added: a block description and a field's own doc, nested wrappers, and directives on arguments and enum values. The header cases read `header_for`, because the old `header` is gone.
+- Size: the queries are 99 lines against ~60 planned. Rust is −359 for the old reader and about +60 in the spec and the engine.
+
 **Step 6 · SQL.** M. Query ~130, Rust −380.
 
 - **Queries:** the Postgres statements that declare (tables, views, functions, types, indexes, triggers, policies); schema and name as `@name` parts; references with their contexts (`alter`, `on`, `type`, …).
