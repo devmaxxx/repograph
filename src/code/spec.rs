@@ -241,7 +241,7 @@ const PROSE: Body = Body { doc: Doc::Adjacent { kinds: &["comment"], between: &[
 mod table {
     use super::*;
     use crate::code::exceptions::{
-        attribute_lines, computed_paths, inheritance_clauses, module_reach, target_or_group, type_paths,
+        attribute_lines, computed_paths, inheritance_clauses, module_reach, type_paths,
     };
     use crate::code::*;
 
@@ -289,7 +289,7 @@ mod table {
         cross_file: false,
         imports: ImportPaths { root: false, suffixes: &[""] },
         dotted_dirs: false,
-        hooks: Hooks { resolve: Some(target_or_group::resolve), owns: &[EdgeKind::References], ..NONE },
+        hooks: NONE,
         legacy: None,
     };
     pub(super) const TERRAFORM: Spec = Spec {

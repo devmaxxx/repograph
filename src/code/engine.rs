@@ -306,7 +306,9 @@ fn read_import(caps: &[(Role, Node)], meta: &Meta, src: &str) -> Option<Import> 
 fn read_reference(spec: &Spec, caps: &[(Role, Node)], edge: EdgeKind, site: Node, meta: &Meta, src: &str) -> Ref {
     // Repeated names spell one path, as they do for a definition: `var.region` reads `var/region`.
     let names: Vec<&str> = caps.iter().filter(|(r, _)| *r == Role::Name).map(|(_, n)| text(*n, src)).collect();
-    let name = if names.is_empty() { text(site, src).to_string() } else { names.join("/") };
+    let path = if names.is_empty() { text(site, src).to_string() } else { names.join("/") };
+    // A prefix spells the address a bare name stands for, as it does for a definition.
+    let name = format!("{}{path}", meta.prefix);
     Ref {
         source: None,
         name: spec.hooks.fold.map_or_else(|| name.clone(), |fold| fold(&name).into_owned()),
