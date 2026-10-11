@@ -390,7 +390,10 @@ fn qualify(spec: &Spec, decl: &Compiled, file: &File, mut declared: Vec<Declared
             Some(owner) => Some((text(owner, src).to_string(), '.')),
             None => parent.map(|p| (p.qualified.clone(), p.join)),
         };
-        let under = |tail: String| base.as_ref().map_or_else(|| tail.clone(), |(b, j)| format!("{b}{j}{tail}"));
+        let under = |tail: String| match &base {
+            Some((b, j)) => format!("{b}{j}{tail}"),
+            None => tail,
+        };
         let qualified = under(format!("{}{name}", meta.prefix));
         let Declaring::Def(kind) = d.role else {
             facts.stands_for.push((d.node.byte_range(), qualified.clone()));
@@ -467,13 +470,13 @@ fn above(n: Node) -> Option<Node> {
     n.prev_named_sibling().or_else(|| n.parent().filter(|p| p.kind() == "body").and_then(|p| p.prev_named_sibling()))
 }
 
-/// `comment_text`, and `#` markers and a string's quotes too: `comment_text` serves the C family alone.
+/// `comment_text`, and `#` markers too: `comment_text` serves the C family alone. A string is
+/// unquoted and nothing else: its lines are prose, where a leading `*`, `#` or `//` is markdown.
 fn stripped(raw: &str) -> String {
-    // A description or a docstring is a string, whose quotes mark it as a comment's markers do.
-    let raw = match raw.trim() {
-        s if s.starts_with('"') => s.trim_matches('"'),
-        s => s,
-    };
+    let raw = raw.trim();
+    if raw.starts_with('"') {
+        return raw.trim_matches('"').trim().to_string();
+    }
     comment_text(raw).lines().map(|l| l.trim_start_matches('#').trim()).filter(|l| !l.is_empty()).collect::<Vec<_>>().join("\n")
 }
 

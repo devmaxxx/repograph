@@ -376,3 +376,10 @@ fn a_directive_on_an_argument_decorates_the_field_and_one_on_an_enum_value_the_e
         ("sym:schema/old.graphql::Shelf.books", "sym:schema/old.graphql::directive/old", ""),
     ]);
 }
+
+#[test]
+fn a_description_keeps_the_markdown_a_comment_marker_would_have_stripped() {
+    let repo = Repo::with(&[("a.graphql", "\"\"\"\nThe shelf.\n* one\n# two\n// three\n\"\"\"\ntype Shelf { id: ID }\n")]);
+    let ex = repo.extract("a.graphql");
+    assert_eq!(node(&ex, "sym:a.graphql::Shelf").body, "The shelf.\n* one\n# two\n// three\ntype Shelf { id: ID }");
+}
