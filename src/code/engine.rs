@@ -362,9 +362,9 @@ fn qualify(spec: &Spec, decl: &Compiled, file: &File, mut declared: Vec<Declared
             continue;
         };
         let id = format!("sym:{}::{qualified}", file.rel);
+        let export = meta.export.unwrap_or_else(|| exported(spec.export, &d.modifiers, &name));
         if let Some(&first) = ids.get(&id) {
             facts.repeats.push((d.node.byte_range(), first));
-            let export = meta.export.unwrap_or_else(|| exported(spec.export, &d.modifiers, &name));
             facts.redeclared.push((parent.and_then(|p| p.def), first, export));
             if let Some(join) = kind.join() {
                 stack.push(Open { end: d.node.end_byte(), qualified, join, def: Some(first) });
@@ -372,7 +372,6 @@ fn qualify(spec: &Spec, decl: &Compiled, file: &File, mut declared: Vec<Declared
             continue;
         }
         ids.insert(id.clone(), facts.defs.len());
-        let export = meta.export.unwrap_or_else(|| exported(spec.export, &d.modifiers, &name));
         let (line, end) = text_span(d.node);
         let def = Def {
             id,
