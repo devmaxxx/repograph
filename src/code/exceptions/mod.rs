@@ -3,3 +3,5 @@
 //! resolution, measured on the language's files, writes wrong edges or loses too many right ones.
 
 pub(crate) mod computed_paths;
+pub(crate) mod module_reach;
+pub(crate) mod symbolic_names;

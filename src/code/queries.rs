@@ -191,6 +191,9 @@ pub(crate) fn compile(grammar: &Language, sources: &[&str]) -> Result<Compiled, 
 pub(crate) mod sources {
     use crate::code::spec::Sources;
 
+    pub(crate) const BICEP: Sources =
+        Sources { decl: &[include_str!("queries/bicep/decl.scm")], refs: &[include_str!("queries/bicep/refs.scm")] };
+
     pub(crate) const SHELL: Sources =
         Sources { decl: &[include_str!("queries/shell/decl.scm")], refs: &[include_str!("queries/shell/refs.scm")] };
 }

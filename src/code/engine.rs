@@ -75,7 +75,8 @@ pub(crate) struct Cite {
     pub range: Range<usize>,
 }
 
-/// Names bound locally, each with the scope that binds it, in the nvim locals convention.
+/// Names bound locally, each with the scopes it binds in: the innermost `@local.scope` holding the
+/// definition, as nvim's locals convention has it, or the scope the definition's own pattern captures.
 #[derive(Debug, Default, Clone)]
 pub(crate) struct Locals(HashMap<String, Vec<Range<usize>>>);
 
@@ -115,6 +116,12 @@ impl Facts {
 
     fn declares_visible(&self, qualified: &str) -> bool {
         self.exported.contains(qualified)
+    }
+
+    /// The definition whose node spans exactly `range`, a repeated one included.
+    pub(crate) fn declared_at(&self, range: &Range<usize>) -> Option<usize> {
+        let defs = self.defs.iter().enumerate().map(|(i, d)| (&d.range, i));
+        defs.chain(self.repeats.iter().map(|(r, i)| (r, *i))).find(|(r, _)| *r == range).map(|(_, i)| i)
     }
 
     /// The innermost definition whose node holds `byte`.
@@ -195,11 +202,14 @@ pub(crate) fn facts(spec: &Spec, decl: &'static Compiled, refs: Option<&'static 
     if let Some(refs) = refs {
         let (mut scopes, mut bound) = (Vec::new(), Vec::new());
         matches_of(refs, root, src, file.rel, |pattern, caps| {
+            // A definition whose own pattern captures a scope binds there and nowhere else: a loop
+            // variable covers the loop's body, never the iterable it sits beside.
+            let own: Vec<Range<usize>> = caps.iter().filter(|(r, _)| *r == Role::LocalScope).map(|(_, n)| n.byte_range()).collect();
             for (role, node) in &caps {
                 match role {
                     Role::Reference(edge) => facts.refs.push(read_reference(spec, &caps, *edge, *node, &refs.metas[pattern], src)),
                     Role::LocalScope => scopes.push(node.byte_range()),
-                    Role::LocalDefinition => bound.push((node.start_byte(), text(*node, src).to_string())),
+                    Role::LocalDefinition => bound.push((node.start_byte(), text(*node, src).to_string(), own.clone())),
                     Role::CiteComment => facts.cites.push(Cite { source: None, context: "comment", range: node.byte_range() }),
                     Role::CiteString => facts.cites.push(Cite { source: None, context: "string", range: node.byte_range() }),
                     _ => {}
@@ -215,9 +225,12 @@ pub(crate) fn facts(spec: &Spec, decl: &'static Compiled, refs: Option<&'static 
             end = end.max(c.range.end);
             outer
         });
-        for (at, name) in bound {
-            let scope = scopes.iter().filter(|s| s.contains(&at)).min_by_key(|s| s.len()).cloned().unwrap_or(0..src.len() + 1);
-            facts.locals.0.entry(name).or_default().push(scope);
+        for (at, name, own) in bound {
+            let scopes = match own.is_empty() {
+                true => vec![scopes.iter().filter(|s| s.contains(&at)).min_by_key(|s| s.len()).cloned().unwrap_or(0..src.len() + 1)],
+                false => own,
+            };
+            facts.locals.0.entry(name).or_default().extend(scopes);
         }
         let owners: Vec<_> = facts.refs.iter().map(|r| facts.owner(r.range.start)).collect();
         facts.refs.iter_mut().zip(owners).for_each(|(r, o)| r.source = o);

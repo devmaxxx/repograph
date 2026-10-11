@@ -205,3 +205,49 @@ fn a_nested_resource_is_read_by_its_short_name_inside_its_parent_only() {
     let ex = extract(&[("s.bicep", src)], "s.bicep");
     assert_eq!(lines(&ex, EdgeKind::References), ["sym:s.bicep::vnet.other -> sym:s.bicep::vnet.subnet []"]);
 }
+
+#[test]
+fn a_binder_covers_what_it_scopes_over_and_not_the_iterable_or_parameter_type_beside_it() {
+    let src = "param x array\ntype sku = 'A'\nvar loop = [for x in x: x]\nfunc f(sku sku) sku => sku\n";
+    let ex = extract(&[("s.bicep", src)], "s.bicep");
+    assert_eq!(lines(&ex, EdgeKind::References), [
+        "sym:s.bicep::f -> sym:s.bicep::sku []",
+        "sym:s.bicep::loop -> sym:s.bicep::x []",
+    ]);
+}
+
+#[test]
+fn a_child_resource_stands_in_its_parents_body_under_a_condition_or_a_loop_and_nowhere_else() {
+    let src = "\
+param names array
+resource each 'a/b@1' = [for n in names: if (true) {
+  name: n
+  resource kid 'k' = {
+    name: 'k'
+  }
+}]
+resource maybe 'a/b@1' = if (true) {
+  name: 'm'
+  resource kid 'k' = {
+    name: 'k'
+  }
+}
+var shaped = {
+  resource stray 's' = {}
+}
+";
+    let ex = extract(&[("s.bicep", src)], "s.bicep");
+    assert_eq!(ids(&ex), [
+        "file:s.bicep", "sym:s.bicep::each", "sym:s.bicep::each.kid", "sym:s.bicep::maybe", "sym:s.bicep::maybe.kid",
+        "sym:s.bicep::names", "sym:s.bicep::shaped",
+    ]);
+}
+
+#[test]
+fn a_module_path_naming_a_file_of_another_language_imports_nothing() {
+    let files = [("stack.bicep", "module arm './parts/t.json' = {\n  name: 'arm'\n}\n"), ("parts/t.json", "{}\n")];
+    let (_dir, resolver) = repo(&["**/*"], &files);
+    let ex = crate::code::front::read(&resolver, "stack.bicep", files[0].1);
+    assert_eq!(lines(&ex, EdgeKind::Imports), Vec::<String>::new());
+    assert_eq!(lines(&ex, EdgeKind::References), Vec::<String>::new());
+}

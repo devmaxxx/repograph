@@ -3,7 +3,7 @@
 //! names every language: the front, the resolver, the header index, `changes` and the update's
 //! widening read this table instead of matching on `Lang` each in its own way.
 //!
-//! Most of the vocabulary below describes ported languages, and only Shell is ported yet.
+//! Most of the vocabulary below describes ported languages, and only Shell and Bicep are ported yet.
 #![allow(dead_code)]
 
 use std::any::{Any, TypeId};
@@ -245,7 +245,7 @@ const PROSE: Body = Body { doc: Doc::Adjacent { kinds: &["comment"], between: &[
 
 mod table {
     use super::*;
-    use crate::code::exceptions::computed_paths;
+    use crate::code::exceptions::{computed_paths, module_reach, symbolic_names};
     use crate::code::*;
 
     pub(super) const TYPESCRIPT: Spec = Spec { comments: C, hooks: typescript::HOOKS, legacy: Some(typescript::extract), ..UNPORTED };
@@ -265,7 +265,30 @@ mod table {
         legacy: Some(sql::extract),
         ..UNPORTED
     };
-    pub(super) const BICEP: Spec = Spec { comments: C, cross_file: true, hooks: bicep::HOOKS, legacy: Some(bicep::extract), ..UNPORTED };
+    pub(super) const BICEP: Spec = Spec {
+        queries: crate::code::queries::sources::BICEP,
+        view: None,
+        comments: C,
+        body: Body { doc: Doc::Adjacent { kinds: &["comment"], between: &["decorators"] }, ..PROSE },
+        // The query's `#set! export` decides: a parameter, an output, or what `@export()` decorates.
+        export: Export::Show(&[]),
+        visibility: Visibility::File,
+        ambiguity: Ambiguity::OwnFirst,
+        // A module reaches what its file declares, which an edit there moves.
+        cross_file: true,
+        imports: ImportPaths { root: false, suffixes: &[""] },
+        dotted_dirs: false,
+        hooks: Hooks {
+            import: Some(module_reach::import),
+            resolve: Some(|r, file, facts, sink| {
+                symbolic_names::resolve(r, file, facts, sink);
+                module_reach::reach(r, file, facts, sink);
+            }),
+            owns: &[EdgeKind::References],
+            ..NONE
+        },
+        legacy: None,
+    };
     pub(super) const HCL: Spec = Spec {
         comments: Some(CommentSyntax { lines: &["#", "//"], blocks: true }),
         cross_file: true,

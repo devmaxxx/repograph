@@ -1,6 +1,7 @@
 //! Edge cases of the code extractor, each on an inline source so the grammar's shape for the
 //! construct is pinned by the assertion rather than by a shared fixture.
 
+mod bicep;
 mod shell;
 
 use super::CodeExtractor;

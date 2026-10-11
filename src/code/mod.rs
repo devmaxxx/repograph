@@ -1,4 +1,3 @@
-pub mod bicep;
 pub mod blank;
 pub mod dart;
 pub(crate) mod dotnet;
