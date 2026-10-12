@@ -1415,6 +1415,10 @@ This step alone closes the three reviewer defects. About 1,200 lines of Rust are
 - **Cases** moved to `src/code/cases/kotlin.rs`, with the shared module's `fixture` and `cross` tests. A `super::header(src)` call became `header("", src)`. No assertion was rewritten.
 - **Timing:** median of five, interleaved, on the corpus: step 0 1.276 s, step 10 1.509 s, 1.18× (`log/buildtime-step10.txt`). A first run on the same code read 1.16×.
 - **Size:** `src/code/jvm/kotlin/` held 1,191 lines outside its cases. The exception keeps 1,096, so −95, against the re-estimate's −350 to −500 and its 700–850 kept. The walk was not split: 775 of the 1,096 lines are the receiver walk, which no query replaces. Added: 100 lines of query, 26 net in the spec, 3 in `queries.rs` and 11 in the engine.
+- **Review fix re-verified.** `330b9aa` declares the members of a type inside a Kotlin companion. Its binary (`bin/repograph-step10b`) against step 10's added no edge and removed none on any input. The kit (`new-10` → `new-10b`) is byte-identical, 9,885 nodes and 19,757 edges. The fixture's edge set equals `fixture-8p`'s (41,116 edges), and the scratchpad corpus is byte-identical too. Langdiff `--lang kt` reads 0 on all three (`log/langdiff-step10b-{kit,fixture-vs-8p}.txt`). The fix costs no measurable time. Three medians of five, interleaved, at load 6–10: 1.155×, 1.182× and 1.189× step 0 (`log/buildtime-step10b-{4,5}.txt`, `log/buildtime-step11-3.txt`).
+- **Open, not fixed:**
+  - Members the grammar wraps in an `ERROR` inside a `class_body` are not declared. The old reader flattened an `ERROR` child of the body and declared what it held. Ten probe shapes did not reproduce it: step 9's binary and step 10b's read them alike.
+  - `receivers::resolve` wrote into a throwaway `Extraction` and copied its edges to the sink, because the shared `link` and `decorate` still took an `Extraction` for Java's reader. Step 11 moved them, and the walk, to the sink, which removed the copy (`bb4aa59`).
 
 **Step 11 · Java.** M. Query ~100, Rust −500.
 
