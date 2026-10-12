@@ -40,6 +40,14 @@
   ])
   (kw_rename) . (kw_to) . (name) @name))) @definition.type
 
+; An unqualified table is renamed to an unqualified name.
+(toplevel_stmt (stmt (RenameStmt (kw_alter) . (kw_table)
+  (relation_expr [
+    (qualified_name . (ColId) .)
+    (extended_relation_expr (qualified_name . (ColId) .))
+  ])
+  (kw_rename) . (kw_to) . (name) @name))) @definition.type
+
 ; The grammar reads `ALTER TABLE` and `ALTER INDEX` as one statement.
 (toplevel_stmt (stmt [
   (AlterTableStmt (kw_alter) . (kw_table) (relation_expr [

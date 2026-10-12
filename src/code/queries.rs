@@ -247,6 +247,9 @@ pub(crate) fn refs(lang: Lang) -> Option<&'static Compiled> {
 /// two take a tenth of a second. Started before the read, they compile beside it.
 pub(crate) fn warm(langs: std::collections::BTreeSet<Lang>) {
     use rayon::prelude::*;
+    if langs.is_empty() {
+        return;
+    }
     std::thread::spawn(move || {
         langs.into_par_iter().for_each(|lang| {
             rayon::join(|| decl(lang), || refs(lang));

@@ -323,6 +323,21 @@ fn a_renamed_table_is_declared_under_its_new_name_and_references_its_old_one() {
 }
 
 #[test]
+fn an_unqualified_table_renamed_is_declared_under_its_new_name() {
+    let repo = Repo::with(&[
+        ("db/001.sql", "CREATE TABLE t (id int);\n"),
+        ("db/002.sql", "ALTER TABLE t RENAME TO n;\n"),
+        ("db/003.sql", "CREATE TABLE u (t int REFERENCES n);\n"),
+    ]);
+    let resolver = repo.resolver();
+    let index = resolver.index(Family::Sql).expect("the globs reach .sql");
+    assert_eq!(index.files("n"), vec!["db/002.sql"]);
+    let migration_003 = repo.extract("db/003.sql");
+    let fks = edges(&migration_003, EdgeKind::References);
+    assert_eq!(fks, vec![("sym:db/003.sql::u.t", "sym:db/002.sql::n", "references")]);
+}
+
+#[test]
 fn rename_words_inside_a_string_or_a_comment_rename_nothing() {
     let repo = Repo::with(&[
         ("db/001.sql", "CREATE TABLE app.clients (id int);\n"),
