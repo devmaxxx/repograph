@@ -1,17 +1,19 @@
-//! Python extraction cases, each on an inline source.
+//! Python's shapes, each on an inline source, so the grammar's reading of a declaration, an import
+//! or a call is pinned by the assertion rather than by a corpus.
 
 use crate::code::CodeExtractor;
+use crate::code::exceptions::module_paths::{absolute, relative};
 use crate::code::imports::Resolver;
 use crate::code::lang::Lang;
 use crate::config::Config;
 use crate::model::{EdgeKind, Extraction, Extractor, NodeKind};
 
-pub(super) struct Repo {
+struct Repo {
     dir: tempfile::TempDir,
 }
 
 impl Repo {
-    pub(super) fn new(files: &[(&str, &str)]) -> Repo {
+    fn new(files: &[(&str, &str)]) -> Repo {
         let dir = tempfile::tempdir().unwrap();
         for (p, c) in files {
             let full = dir.path().join(p);
@@ -21,23 +23,23 @@ impl Repo {
         Repo { dir }
     }
 
-    pub(super) fn resolver(&self) -> Resolver {
+    fn resolver(&self) -> Resolver {
         let cfg = Config { code_globs: vec!["**/*.py".into()], ..Config::default() };
         Resolver::new(self.dir.path(), &cfg).unwrap()
     }
 
-    pub(super) fn extract(&self, rel: &str) -> Extraction {
+    fn extract(&self, rel: &str) -> Extraction {
         let resolver = self.resolver();
         let src = std::fs::read_to_string(self.dir.path().join(rel)).unwrap();
         CodeExtractor::new(resolver).extract(rel, &src)
     }
 }
 
-pub(super) fn ids(ex: &Extraction) -> Vec<&str> {
+fn ids(ex: &Extraction) -> Vec<&str> {
     ex.nodes.iter().map(|n| n.id.as_str()).collect()
 }
 
-pub(super) fn edges(ex: &Extraction, kind: EdgeKind) -> Vec<(&str, &str, &str)> {
+fn edges(ex: &Extraction, kind: EdgeKind) -> Vec<(&str, &str, &str)> {
     ex.edges.iter().filter(|e| e.kind == kind).map(|e| (e.source.as_str(), e.target.as_str(), e.context.as_str())).collect()
 }
 
@@ -77,7 +79,7 @@ fn the_resolver_reads_python_project_roots_from_its_walk() {
         ("lib/shop/__init__.py", ""),
         ("lib/app/main.py", "import shop\n"),
     ]);
-    assert_eq!(repo.resolver().state::<crate::code::python::Modules>().absolute("lib/app/main.py", "shop").as_deref(), Some("lib/shop/__init__.py"));
+    assert_eq!(absolute(&repo.resolver(), "lib/app/main.py", "shop").as_deref(), Some("lib/shop/__init__.py"));
 }
 
 fn node<'a>(ex: &'a Extraction, id: &str) -> &'a crate::model::Node {
@@ -157,25 +159,22 @@ fn defs_classes_members_and_plain_assignments_are_symbols() {
 }
 
 #[test]
-fn all_decides_exports_and_members_hang_off_their_class() {
-    let repo = Repo::new(&[("shop.py", SHOP), ("plain.py", "def run():\n    pass\n\ndef _private():\n    pass\n")]);
+fn a_leading_underscore_hides_a_name_and_members_hang_off_their_class() {
+    let repo = Repo::new(&[("shop.py", SHOP)]);
     let ex = repo.extract("shop.py");
     let declares = edges(&ex, EdgeKind::Declares);
     for want in [
         ("file:shop.py", "sym:shop.py::Order", "export"),
-        ("file:shop.py", "sym:shop.py::_hidden", "export"),
-        ("file:shop.py", "sym:shop.py::LIMIT", ""),
-        ("file:shop.py", "sym:shop.py::helper", ""),
+        ("file:shop.py", "sym:shop.py::LIMIT", "export"),
+        ("file:shop.py", "sym:shop.py::helper", "export"),
+        ("file:shop.py", "sym:shop.py::_hidden", ""),
+        ("file:shop.py", "sym:shop.py::_cache", ""),
         ("sym:shop.py::Order", "sym:shop.py::Order.total", ""),
         ("sym:shop.py::Order", "sym:shop.py::Order.Line", ""),
         ("sym:shop.py::Order.Line", "sym:shop.py::Order.Line.price", ""),
     ] {
         assert!(declares.contains(&want), "{want:?} in {declares:?}");
     }
-    let ex = repo.extract("plain.py");
-    let declares = edges(&ex, EdgeKind::Declares);
-    assert!(declares.contains(&("file:plain.py", "sym:plain.py::run", "export")));
-    assert!(declares.contains(&("file:plain.py", "sym:plain.py::_private", "")));
 }
 
 #[test]
@@ -426,9 +425,10 @@ fn a_local_shadows_a_top_level_name_and_a_class() {
 }
 
 #[test]
-fn a_global_declaration_cancels_the_shadow_and_a_local_import_is_not_one() {
-    let ex = shadow_repo("from util import connect\n\n\ndef f():\n    global connect\n    connect = 1\n    connect()\n").extract("tools/main.py");
-    assert_eq!(calls_from(&ex, "sym:tools/main.py::f"), ["sym:tools/util.py::connect"].into_iter().collect());
+fn a_global_declaration_still_shadows_and_a_local_import_is_not_one() {
+    // A local binds for the whole function, and nothing unbinds it: a `global` rebinding an imported
+    // name inside a function is rarer than a missed edge is costly to read around.
+    no_calls("from util import connect\n\n\ndef f():\n    global connect\n    connect = 1\n    connect()\n", "sym:tools/main.py::f");
     let ex = shadow_repo("def f():\n    from util import connect\n    connect()\n").extract("tools/main.py");
     assert_eq!(calls_from(&ex, "sym:tools/main.py::f"), ["sym:tools/util.py::connect"].into_iter().collect());
 }
@@ -445,11 +445,58 @@ fn a_function_under_an_if_shadows_only_its_own_calls() {
     no_calls("from util import connect\n\n\nif True:\n    def helper(connect):\n        connect()\n", "file:tools/main.py");
 }
 
+fn tree(files: &[&str], manifests: &[&str]) -> Repo {
+    let mut all: Vec<(&str, &str)> = files.iter().map(|f| (*f, "")).collect();
+    all.extend(manifests.iter().map(|m| (*m, "[project]\n")));
+    Repo::new(&all)
+}
+
 #[test]
-fn all_extended_by_a_literal_exports_the_added_names() {
-    let src = "__all__ = [\"a\"]\n__all__ += [\"go\"]\n\n\ndef a():\n    pass\n\n\ndef go():\n    pass\n\n\ndef _b():\n    pass\n";
-    let ex = Repo::new(&[("m.py", src)]).extract("m.py");
-    let declares = edges(&ex, EdgeKind::Declares);
-    assert!(declares.contains(&("file:m.py", "sym:m.py::go", "export")), "{declares:?}");
-    assert!(declares.contains(&("file:m.py", "sym:m.py::_b", "")), "{declares:?}");
+fn an_import_names_a_module_or_a_package_from_the_nearest_root() {
+    let files = [
+        "bench/compare/run.py",
+        "bench/compare/truth.py",
+        "lib/shop/__init__.py",
+        "lib/shop/orders.py",
+        "lib/shop/pay/__init__.py",
+        "lib/shop/pay/card.py",
+        "lib/app/main.py",
+        "top.py",
+    ];
+    let r = tree(&files, &["lib/pyproject.toml"]).resolver();
+    assert_eq!(absolute(&r, "bench/compare/run.py", "truth").as_deref(), Some("bench/compare/truth.py"), "a sibling, as a script imports it");
+    assert_eq!(absolute(&r, "lib/app/main.py", "shop.pay.card").as_deref(), Some("lib/shop/pay/card.py"), "from the project root");
+    assert_eq!(absolute(&r, "lib/app/main.py", "shop.pay").as_deref(), Some("lib/shop/pay/__init__.py"));
+    assert_eq!(absolute(&r, "lib/app/main.py", "top").as_deref(), Some("top.py"), "from the repository root");
+    assert_eq!(absolute(&r, "bench/compare/run.py", "os"), None, "the standard library is not in the repository");
+    assert_eq!(relative(&r, "lib/shop/pay/card.py", 1, "").as_deref(), Some("lib/shop/pay/__init__.py"));
+    assert_eq!(relative(&r, "lib/shop/pay/card.py", 2, "orders").as_deref(), Some("lib/shop/orders.py"));
+    assert_eq!(relative(&r, "lib/shop/orders.py", 1, "pay.card").as_deref(), Some("lib/shop/pay/card.py"));
+    assert_eq!(relative(&r, "top.py", 2, "x"), None, "no package above the repository root");
+}
+
+#[test]
+fn a_module_in_a_package_does_not_find_its_siblings_by_bare_name() {
+    let r = tree(&["pkg/__init__.py", "pkg/types.py", "pkg/other.py", "scripts/types.py", "scripts/run.py"], &[]).resolver();
+    assert_eq!(absolute(&r, "pkg/other.py", "types"), None, "pkg is a package, so `types` is the standard library's");
+    assert_eq!(absolute(&r, "scripts/run.py", "types").as_deref(), Some("scripts/types.py"), "a script's directory is on its path");
+}
+
+#[test]
+fn a_src_layout_project_is_imported_by_its_package_name() {
+    let files = [
+        "svc/src/billing/__init__.py",
+        "svc/src/billing/invoice.py",
+        "svc/src/util.py",
+        "svc/util.py",
+        "svc/tests/test_invoice.py",
+        "loose/src/orphan.py",
+        "loose/main.py",
+    ];
+    let r = tree(&files, &["svc/pyproject.toml"]).resolver();
+    let test = "svc/tests/test_invoice.py";
+    assert_eq!(absolute(&r, test, "billing.invoice").as_deref(), Some("svc/src/billing/invoice.py"));
+    assert_eq!(absolute(&r, test, "billing").as_deref(), Some("svc/src/billing/__init__.py"));
+    assert_eq!(absolute(&r, test, "util").as_deref(), Some("svc/util.py"), "a module beside the manifest wins over src/");
+    assert_eq!(absolute(&r, "loose/main.py", "orphan"), None, "src/ is tried only in a directory holding a manifest");
 }

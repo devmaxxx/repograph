@@ -505,6 +505,10 @@ fn signature_line(line: Line, def: Node, name: Node, src: &str) -> String {
             let end = src[def.start_byte()..].find('\n').map_or(src.len(), |i| def.start_byte() + i);
             src[start..end].trim().to_string()
         }
+        Line::Header => match def.child_by_field_name("body") {
+            Some(body) => src[def.start_byte()..body.start_byte()].split_whitespace().collect::<Vec<_>>().join(" "),
+            None => text(def, src).lines().next().unwrap_or("").trim().to_string(),
+        },
     }
 }
 
@@ -519,8 +523,8 @@ fn above(n: Node) -> Option<Node> {
 /// `#` or `//` is markdown.
 fn stripped(raw: &str, markers: &[&str]) -> String {
     let raw = raw.trim();
-    if raw.starts_with('"') {
-        return raw.trim_matches('"').trim().to_string();
+    if let Some(quote) = raw.chars().next().filter(|c| matches!(c, '"' | '\'')) {
+        return raw.trim_matches(quote).trim().to_string();
     }
     let unmark = |l: &str| markers.iter().fold(l.trim_start_matches('#'), |l, m| l.trim_start_matches(m)).trim().to_string();
     comment_text(raw).lines().map(unmark).filter(|l| !l.is_empty()).collect::<Vec<_>>().join("\n")

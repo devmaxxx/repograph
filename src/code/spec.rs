@@ -3,7 +3,7 @@
 //! names every language: the front, the resolver, the header index, `changes` and the update's
 //! widening read this table instead of matching on `Lang` each in its own way.
 //!
-//! Most of the vocabulary below describes ported languages, and only Shell, Bicep, HCL, Terraform, Swift, GraphQL, SQL and Dart are ported yet.
+//! Most of the vocabulary below describes ported languages, and only Shell, Bicep, HCL, Terraform, Swift, GraphQL, SQL, Dart and Python are ported yet.
 #![allow(dead_code)]
 
 use std::any::{Any, TypeId};
@@ -100,6 +100,9 @@ pub(crate) enum Line {
     /// The whole row the definition starts on: a migration's statement reads with the marker a tool
     /// wrote after it, as the line a reader greps for.
     Row,
+    /// Up to the definition's `body` field, whitespace collapsed: a signature over several lines
+    /// reads as one. A definition with no body reads as its first line.
+    Header,
 }
 
 #[derive(Clone, Copy)]
@@ -256,7 +259,7 @@ const PROSE: Body = Body { doc: Doc::Adjacent { kinds: &["comment"], between: &[
 
 mod table {
     use super::*;
-    use crate::code::exceptions::{attachments, computed_paths, identifier_case, library_scope, module_reach};
+    use crate::code::exceptions::{attachments, computed_paths, identifier_case, library_scope, module_paths, module_reach};
     use crate::code::*;
 
     pub(super) const TYPESCRIPT: Spec = Spec { comments: C, hooks: typescript::HOOKS, legacy: Some(typescript::extract), ..UNPORTED };
@@ -266,7 +269,32 @@ mod table {
     pub(super) const KOTLIN: Spec = Spec { comments: C, hooks: jvm::kotlin::HOOKS, legacy: Some(jvm::kotlin::extract), ..UNPORTED };
     pub(super) const JAVA: Spec = Spec { comments: C, hooks: jvm::java::HOOKS, legacy: Some(jvm::java::extract), ..UNPORTED };
     pub(super) const RUST: Spec = Spec { comments: C, hooks: rust_lang::HOOKS, legacy: Some(rust_lang::extract), ..UNPORTED };
-    pub(super) const PYTHON: Spec = Spec { comments: HASH, hooks: python::HOOKS, legacy: Some(python::extract), ..UNPORTED };
+    pub(super) const PYTHON: Spec = Spec {
+        queries: crate::code::queries::sources::PYTHON,
+        view: None,
+        comments: HASH,
+        // The docstring and the signature up to its colon.
+        body: Body { doc: Doc::Capture, form: Form::Stripped, cap: Cap::Head, line: Line::Header },
+        label: Label::Qualified,
+        export: Export::Prefix('_'),
+        visibility: Visibility::File,
+        ambiguity: Ambiguity::OwnFirst,
+        cross_file: false,
+        // Unread: `module_paths` places every import and writes its edge with the names it binds.
+        imports: ImportPaths { root: false, suffixes: &[] },
+        dotted_dirs: false,
+        hooks: Hooks {
+            state: Some(state::<module_paths::Roots>),
+            manifest: Some(Manifest {
+                matches: |name| matches!(name, "pyproject.toml" | "setup.py" | "setup.cfg"),
+                read: module_paths::manifest,
+            }),
+            resolve: Some(module_paths::resolve),
+            owns: &[EdgeKind::Calls, EdgeKind::Extends, EdgeKind::DecoratedBy],
+            ..NONE
+        },
+        legacy: None,
+    };
     pub(super) const DART: Spec = Spec {
         queries: crate::code::queries::sources::DART,
         view: None,

@@ -5,6 +5,7 @@ mod bicep;
 mod dart;
 mod graphql;
 mod hcl;
+mod python;
 mod shell;
 mod sql;
 mod swift;
