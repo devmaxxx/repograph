@@ -154,6 +154,12 @@ impl Facts {
         self.at.get(&(range.start, range.end)).copied()
     }
 
+    /// Every declaration site with the definition it declares, a repeated one included: an overload
+    /// adds its own arity to the one node.
+    pub(crate) fn sites(&self) -> impl Iterator<Item = (&Range<usize>, usize)> {
+        self.defs.iter().enumerate().map(|(i, d)| (&d.range, i)).chain(self.repeats.iter().map(|(range, i)| (range, *i)))
+    }
+
     /// The innermost scope owner around `byte`, by the name it stands for.
     fn stands_for(&self, byte: usize) -> Option<&str> {
         self.stands_for.iter().filter(|(range, _)| range.contains(&byte)).min_by_key(|(range, _)| range.len()).map(|(_, q)| q.as_str())
@@ -563,6 +569,11 @@ fn signature_line(line: Line, def: Node, name: Node, src: &str) -> String {
         Line::Name => {
             let start = src[..name.start_byte()].rfind('\n').map_or(0, |i| i + 1).max(def.start_byte());
             let end = src[name.start_byte()..].find('\n').map_or(src.len(), |i| name.start_byte() + i).min(def.end_byte());
+            src[start..end].trim().to_string()
+        }
+        Line::Whole => {
+            let start = src[..name.start_byte()].rfind('\n').map_or(0, |i| i + 1);
+            let end = src[name.start_byte()..].find('\n').map_or(src.len(), |i| name.start_byte() + i);
             src[start..end].trim().to_string()
         }
         Line::Row => {

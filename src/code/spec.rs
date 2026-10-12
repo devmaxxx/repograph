@@ -3,7 +3,7 @@
 //! names every language: the front, the resolver, the header index, `changes` and the update's
 //! widening read this table instead of matching on `Lang` each in its own way.
 //!
-//! Most of the vocabulary below describes ported languages, and only Shell, Bicep, HCL, Terraform, Swift, GraphQL, SQL, Dart, Python and Rust are ported yet.
+//! Most of the vocabulary below describes ported languages, and only Shell, Bicep, HCL, Terraform, Swift, GraphQL, SQL, Dart, Python, Rust and Kotlin are ported yet.
 #![allow(dead_code)]
 
 use std::any::{Any, TypeId};
@@ -98,6 +98,9 @@ pub enum Line {
     First,
     /// The line holding `@name`, past any annotation lines.
     Name,
+    /// The whole line holding `@name`, past its definition's span: a constructor's property reads
+    /// with the class that declares it.
+    Whole,
     /// The whole row the definition starts on: a migration's statement reads with the marker a tool
     /// wrote after it, as the line a reader greps for.
     Row,
@@ -267,14 +270,37 @@ const PROSE: Body = Body { doc: Doc::Adjacent { kinds: &["comment"], between: &[
 
 mod table {
     use super::*;
-    use crate::code::exceptions::{attachments, computed_paths, crate_paths, identifier_case, library_scope, module_paths, module_reach};
+    use crate::code::exceptions::{attachments, computed_paths, crate_paths, identifier_case, library_scope, module_paths, module_reach, package_scope};
     use crate::code::*;
 
     pub(super) const TYPESCRIPT: Spec = Spec { comments: C, hooks: typescript::HOOKS, legacy: Some(typescript::extract), ..UNPORTED };
     pub(super) const VUE: Spec = Spec { view: Some(Lang::TypeScript), hooks: typescript::vue::HOOKS, legacy: Some(typescript::vue::extract), ..UNPORTED };
     pub(super) const CSHARP: Spec = Spec { comments: C, hooks: dotnet::csharp::HOOKS, legacy: Some(dotnet::csharp::extract), ..UNPORTED };
     pub(super) const RAZOR: Spec = Spec { view: Some(Lang::CSharp), hooks: dotnet::razor::HOOKS, legacy: Some(dotnet::razor::extract), ..UNPORTED };
-    pub(super) const KOTLIN: Spec = Spec { comments: C, hooks: jvm::kotlin::HOOKS, legacy: Some(jvm::kotlin::extract), ..UNPORTED };
+    pub(super) const KOTLIN: Spec = Spec {
+        queries: crate::code::queries::sources::KOTLIN,
+        view: None,
+        comments: C,
+        body: Body {
+            doc: Doc::Adjacent { kinds: &["line_comment", "multiline_comment"], between: &[] },
+            form: Form::Stripped,
+            cap: Cap::Head,
+            line: Line::Whole,
+        },
+        label: Label::Qualified,
+        // Kotlin is public by default, and `internal` crosses files inside a module.
+        export: Export::Hide(&["private", "protected"]),
+        // A package sees every file in it without an import.
+        visibility: Visibility::Family,
+        ambiguity: Ambiguity::OwnFirst,
+        cross_file: false,
+        imports: ImportPaths { root: false, suffixes: &[] },
+        dotted_dirs: false,
+        // The JVM index needs each file's arities and supertypes, and a call binds through
+        // receivers, supertypes and overloads no query reads.
+        hooks: Hooks { header: Some(package_scope::declared::header), resolve: Some(package_scope::receivers::resolve), ..NONE },
+        legacy: None,
+    };
     pub(super) const JAVA: Spec = Spec { comments: C, hooks: jvm::java::HOOKS, legacy: Some(jvm::java::extract), ..UNPORTED };
     pub(super) const RUST: Spec = Spec {
         queries: crate::code::queries::sources::RUST,

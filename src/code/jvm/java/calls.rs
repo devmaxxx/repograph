@@ -69,7 +69,7 @@ use tree_sitter::Node;
 
 use super::declarations::{supertypes, type_params, written_type, Declared, TYPES};
 use crate::code::index::Call;
-use crate::code::jvm::{self, outer, split_id, Bound, Own};
+use crate::code::exceptions::package_scope::{self as jvm, outer, split_id, Bound, Own};
 use crate::code::syntax::{self, child, named, text};
 use crate::model::{EdgeKind, Extraction};
 

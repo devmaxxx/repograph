@@ -10,7 +10,7 @@ use tree_sitter::Node;
 
 use crate::code::imports::Resolver;
 use crate::code::index::{Header, Nested, QualifiedIndex};
-use crate::code::jvm::{self, Scope};
+use crate::code::exceptions::package_scope::{self as jvm, Scope};
 use crate::code::lang::{Family, Lang};
 use crate::code::engine::File;
 use crate::code::spec::{self, Hooks};

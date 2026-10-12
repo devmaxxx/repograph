@@ -9,3 +9,4 @@ pub(crate) mod identifier_case;
 pub(crate) mod library_scope;
 pub(crate) mod module_paths;
 pub(crate) mod module_reach;
+pub(crate) mod package_scope;

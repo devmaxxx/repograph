@@ -250,6 +250,9 @@ pub(crate) mod sources {
     pub(crate) const HCL: Sources =
         Sources { decl: &[include_str!("queries/hcl/decl.scm")], refs: &[include_str!("queries/hcl/refs.scm")] };
 
+    pub(crate) const KOTLIN: Sources =
+        Sources { decl: &[include_str!("queries/kotlin/decl.scm")], refs: &[include_str!("queries/kotlin/refs.scm")] };
+
     pub(crate) const PYTHON: Sources =
         Sources { decl: &[include_str!("queries/python/decl.scm")], refs: &[include_str!("queries/python/refs.scm")] };
 

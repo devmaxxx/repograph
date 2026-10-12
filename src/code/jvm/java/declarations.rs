@@ -6,7 +6,7 @@ use tree_sitter::Node;
 
 use super::COMMENTS;
 use crate::code::index::{Arity, Reach};
-use crate::code::jvm;
+use crate::code::exceptions::package_scope as jvm;
 use crate::code::syntax::{child, named, span, text};
 use crate::model::{EdgeKind, Extraction, NodeKind};
 

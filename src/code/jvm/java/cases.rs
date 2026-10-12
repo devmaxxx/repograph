@@ -2,7 +2,7 @@
 
 use std::collections::BTreeSet;
 
-use crate::code::jvm::fixture::{edges, ids, one, Repo};
+use crate::code::cases::kotlin::fixture::{edges, ids, one, Repo};
 use crate::model::EdgeKind;
 
 const ORDERS: &str = "package shop.orders;

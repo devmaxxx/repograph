@@ -1,4 +1,4 @@
-//! Kotlin's calls and cited ids, one walk over the tree the declarations pass read.
+//! Kotlin's calls, value reads and signature types, one walk over the tree the engine read.
 //!
 //! A call edge is written only where the file proves its target; a missing edge is acceptable, a
 //! wrong one is not. So:
@@ -50,16 +50,59 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use tree_sitter::Node;
 
-use super::declarations::{holder, is_type, members_of, one_line_object, receiver, type_params, written_type, Declared, Param};
-use crate::code::index::Call;
-use crate::code::jvm::{self, outer, qualify, split_id, type_ids, Bound, Own};
+use super::declared::{self, is_type, members_of, one_line_object, receiver, type_params, written_type, Declared, Param};
+use crate::code::engine::{Facts, File, Sink};
+use crate::code::exceptions::package_scope::{self as jvm, outer, qualify, split_id, type_ids, Bound, Own};
+use crate::code::imports::Resolver;
+use crate::code::index::{Call, QualifiedIndex};
+use crate::code::lang::Family;
 use crate::code::syntax::{self, child, named, text};
 use crate::model::{EdgeKind, Extraction};
 
-pub(super) struct Ctx<'a> {
-    pub own: Own<'a>,
-    pub src: &'a [u8],
-    pub d: &'a Declared,
+/// `Imports`, `Extends` and `DecoratedBy` from what the file declares, then the walk's `Calls`,
+/// `References` and signature `Imports`.
+pub(crate) fn resolve(resolver: &Resolver, file: &File, facts: &Facts, sink: &mut Sink) {
+    let Some(tree) = file.tree else { return };
+    let (rel, src, root) = (file.rel, file.src.as_bytes(), tree.root_node());
+    // A repository whose globs reach no JVM file has no index; every lookup then finds nothing.
+    let empty = QualifiedIndex::default();
+    let index = resolver.index(Family::Jvm).unwrap_or(&empty);
+    let scope = declared::scope(facts);
+    let d = declared::read(facts, root, src);
+    let own = Own {
+        rel,
+        types: &d.types,
+        members: &d.members,
+        inheritable: &d.open_members,
+        statics: &jvm::NONE,
+        arities: &d.arities,
+        private: &d.private_members,
+        reach: &jvm::ALWAYS,
+        at: "",
+        supers: &d.supers,
+        shapes: &d.shapes,
+        index,
+        scope: &scope,
+        kind: jvm::Kind::All,
+        call: None,
+        member_types: false,
+        past_unread: false,
+    };
+    // The shared rules write into an extraction, which Java's reader still hands them.
+    let mut ex = Extraction::default();
+    jvm::link(&d.supers, index, &scope, rel, |at, w| own.type_at(at, w), &mut ex);
+    jvm::decorate(&d.annotations, rel, |at, w| own.type_at(at, w), &mut ex);
+    walk(root, At::default(), &Ctx { own, src, d: &d, facts }, &mut ex);
+    for e in ex.edges {
+        sink.edge(&e.source, &e.target, e.kind, &e.context, &e.file);
+    }
+}
+
+struct Ctx<'a> {
+    own: Own<'a>,
+    src: &'a [u8],
+    d: &'a Declared,
+    facts: &'a Facts,
 }
 
 /// A local's type as ids of the declarations it resolves to, or `None` when the file does not
@@ -112,20 +155,16 @@ fn capitalised(name: &str) -> bool {
     name.starts_with(|c: char| c.is_ascii_uppercase())
 }
 
-/// A declaration the declarations pass reached: top level, or in the body of a declared type. A
-/// local `fun`, or one inside an `object :` literal or a lambda, is not a symbol, so its calls
-/// belong to the declared function around it and no `Calls` edge starts at an id no node has.
-fn is_declared(n: Node) -> bool {
-    holder(n).is_some_and(|h| h.kind() == "source_file" || ((is_type(h) || h.kind() == "companion_object") && is_declared(h)))
-}
-
-pub(super) fn scan(root: Node, cx: &Ctx, ex: &mut Extraction) {
-    walk(root, At::default(), cx, ex);
+/// A declaration the engine wrote: top level, or in the body of a declared type. A local `fun`, or
+/// one inside an `object :` literal or a lambda, is not a symbol, so its calls belong to the
+/// declared function around it and no `Calls` edge starts at an id no node has.
+fn is_declared(n: Node, cx: &Ctx) -> bool {
+    cx.facts.declared_at(&n.byte_range()).is_some()
 }
 
 fn walk(n: Node, mut at: At, cx: &Ctx, ex: &mut Extraction) {
     match n.kind() {
-        _ if is_type(n) && is_declared(n) => {
+        _ if is_type(n) && is_declared(n, cx) => {
             let name = one_line_object(n).map(|(name, _)| name).or_else(|| child(n, "type_identifier"));
             if let Some(name) = name {
                 let name = text(name, cx.src);
@@ -165,7 +204,7 @@ fn walk(n: Node, mut at: At, cx: &Ctx, ex: &mut Extraction) {
                 }
             }
         }
-        "function_declaration" if is_declared(n) => {
+        "function_declaration" if is_declared(n, cx) => {
             if let Some(s) = child(n, "simple_identifier") {
                 let name = text(s, cx.src);
                 let path = if at.class.is_empty() { name.to_string() } else { format!("{}.{name}", at.class) };
@@ -176,9 +215,9 @@ fn walk(n: Node, mut at: At, cx: &Ctx, ex: &mut Extraction) {
             }
         }
         "function_declaration" | "anonymous_function" => function(n, &mut at, cx),
-        "property_declaration" if is_declared(n) => enter_property(n, &mut at, cx),
+        "property_declaration" if is_declared(n, cx) => enter_property(n, &mut at, cx),
         "getter" | "setter" => {
-            if let Some(p) = accessed(n).filter(|p| is_declared(*p)) {
+            if let Some(p) = accessed(n).filter(|p| is_declared(*p, cx)) {
                 enter_property(p, &mut at, cx);
             }
             for p in named(n).into_iter().filter(|p| p.kind() == "parameter_with_optional_type") {
@@ -218,7 +257,7 @@ fn walk(n: Node, mut at: At, cx: &Ctx, ex: &mut Extraction) {
         }
         "call_expression" => {
             if let (Some(from), Some(callee)) = (at.function.clone(), n.named_child(0)) {
-                let called = Ctx { own: Own { call: arguments(n), ..cx.own }, src: cx.src, d: cx.d };
+                let called = Ctx { own: Own { call: arguments(n), ..cx.own }, ..*cx };
                 for to in jvm::same_platform(cx.own.rel, targets(callee, &at, &called)) {
                     // A recursive call says nothing about what the function depends on.
                     if to != from {
@@ -236,14 +275,12 @@ fn walk(n: Node, mut at: At, cx: &Ctx, ex: &mut Extraction) {
                 }
             }
         }
-        "line_comment" | "multiline_comment" => jvm::cite(n, &owner(&at, cx.own.rel), "comment", cx.own.rel, cx.src, ex),
-        "string_literal" => jvm::cite(n, &owner(&at, cx.own.rel), "string", cx.own.rel, cx.src, ex),
         _ => {}
     }
     signature(n, &at, cx, ex);
     for c in named(n) {
         // A local is seen by the statements after it, so it joins the `At` its later siblings get.
-        if at.function.is_some() && !is_declared(c) {
+        if at.function.is_some() && !is_declared(c, cx) {
             remember(c, &mut at, cx);
         }
         walk(c, at.clone(), cx, ex);
@@ -291,7 +328,7 @@ fn names(t: Node, src: &[u8], out: &mut Vec<String>) {
 
 /// The context as seen from inside `at`'s class, where that class's private members are visible.
 fn within<'a>(at: &'a At, cx: &Ctx<'a>) -> Ctx<'a> {
-    Ctx { own: Own { at: &at.class, ..cx.own }, src: cx.src, d: cx.d }
+    Ctx { own: Own { at: &at.class, ..cx.own }, ..*cx }
 }
 
 /// How many arguments a call passes: the parenthesised ones and a trailing lambda.
@@ -300,14 +337,6 @@ fn arguments(call: Node) -> Option<Call> {
     let listed: Vec<Node> = child(suffix, "value_arguments").map(named).unwrap_or_default().into_iter().filter(|v| v.kind() == "value_argument").collect();
     let spread = listed.iter().any(|v| child(*v, "spread_expression").is_some());
     Some(Call { args: listed.len() + usize::from(child(suffix, "annotated_lambda").is_some()), spread })
-}
-
-fn owner(at: &At, rel: &str) -> String {
-    match (&at.function, at.class.is_empty()) {
-        (Some(f), _) => f.clone(),
-        (None, false) => format!("sym:{rel}::{}", at.class),
-        (None, true) => format!("file:{rel}"),
-    }
 }
 
 /// The name a member of an anonymous or local type declares.
@@ -383,7 +412,8 @@ fn property(p: Node, at: &mut At, cx: &Ctx) {
         at.receivers.push(Receiver::Types(ids));
     }
     at.bind("field", None);
-    let ctor = holder(p).filter(|h| h.kind() == "class_declaration").and_then(|h| child(h, "primary_constructor"));
+    let body = p.parent().filter(|b| matches!(b.kind(), "class_body" | "enum_class_body"));
+    let ctor = body.and_then(|b| b.parent()).filter(|h| h.kind() == "class_declaration").and_then(|h| child(h, "primary_constructor"));
     for c in ctor.map(named).unwrap_or_default().into_iter().filter(|c| c.kind() == "class_parameter") {
         if let Some(name) = child(c, "simple_identifier") {
             let ty = written_type(c, cx.src).map(|t| resolved(&t, at, cx));
@@ -581,7 +611,7 @@ enum Named {
 /// only when no level after it binds it too. A capitalised name skips a level only an unread type
 /// may hold it at.
 fn lookup(name: &str, at: &At, cx: &Ctx) -> Named {
-    let cx = &Ctx { own: Own { at: &at.class, past_unread: capitalised(name), ..cx.own }, src: cx.src, d: cx.d };
+    let cx = &Ctx { own: Own { at: &at.class, past_unread: capitalised(name), ..cx.own }, ..*cx };
     if let Some(ty) = at.locals.get(name) {
         return Named::Local(ty.clone());
     }

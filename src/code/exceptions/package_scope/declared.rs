@@ -1,14 +1,18 @@
-//! Kotlin's declarations: symbols, `Declares`, visibility, and supertypes as written.
+//! What a Kotlin file declares, as the lookup reads it: the engine's definitions, with the arity,
+//! visibility, supertypes and annotations each declaration's node writes. The file's header for the
+//! JVM index comes from the same read, so the index never names a symbol the graph lacks.
 
 use std::collections::{BTreeMap, BTreeSet};
 
 use tree_sitter::Node;
 
-use super::COMMENTS;
-use crate::code::index::Arity;
-use crate::code::jvm;
-use crate::code::syntax::{child, named, span, text};
-use crate::model::{EdgeKind, Extraction, NodeKind};
+use crate::code::engine::{self, Facts, File};
+use crate::code::exceptions::package_scope::{self as jvm, Scope};
+use crate::code::index::{Arity, Header, Nested};
+use crate::code::lang::Lang;
+use crate::code::queries;
+use crate::code::spec::spec;
+use crate::code::syntax::{child, named, text};
 
 /// What one Kotlin file declares, kept for the passes that resolve names after this one.
 #[derive(Debug, Default)]
@@ -188,51 +192,63 @@ pub(super) fn members_of(body: Node) -> Vec<Node> {
     named(body).into_iter().flat_map(|m| if m.kind() == "ERROR" { named(m) } else { vec![m] }).collect()
 }
 
-/// The node declaring `n` as a member: a type's declaration, a companion, or the file. `None` for
-/// a statement inside a function, a lambda or an initializer.
-pub(super) fn holder(n: Node) -> Option<Node> {
-    let mut p = n.parent()?;
-    if p.kind() == "ERROR" && p.parent().is_some_and(|b| matches!(b.kind(), "class_body" | "enum_class_body")) {
-        p = p.parent()?;
+/// The declaration node a site's range spans: a node with a single child spans its range too.
+fn node_at<'t>(root: Node<'t>, range: &std::ops::Range<usize>) -> Option<Node<'t>> {
+    let mut n = root.descendant_for_byte_range(range.start, range.end)?;
+    while !DECLARATIONS.contains(&n.kind()) {
+        n = n.parent().filter(|p| p.byte_range() == *range)?;
     }
-    match p.kind() {
-        "source_file" => Some(p),
-        "class_body" | "enum_class_body" => p.parent(),
-        "statements" | "lambda_literal" => {
-            let lambda = if p.kind() == "statements" { p.parent()? } else { p };
-            lambda.parent().filter(|o| one_line_object(*o).is_some())
-        }
-        _ => None,
-    }
+    Some(n)
 }
 
-fn name_node(n: Node) -> Option<Node> {
-    if let Some((name, _)) = one_line_object(n) {
-        return Some(name);
-    }
-    match n.kind() {
-        "class_declaration" | "object_declaration" | "type_alias" => child(n, "type_identifier"),
-        // An extension's receiver sits before the name and is not part of it.
-        "function_declaration" => child(n, "simple_identifier"),
-        "property_declaration" => child(n, "variable_declaration").and_then(|v| child(v, "simple_identifier")),
-        _ => None,
-    }
-}
+const DECLARATIONS: [&str; 7] =
+    ["class_declaration", "object_declaration", "type_alias", "function_declaration", "property_declaration", "class_parameter", "infix_expression"];
 
-/// Writes every symbol `root` declares into `ex`, and returns what the passes after it resolve against.
-pub fn scan(root: Node, rel: &str, src: &[u8], ex: &mut Extraction) -> Declared {
-    let file_id = format!("file:{rel}");
+/// What the lookup needs of every site the engine declared, read in source order so a type's
+/// shape is known before its members are.
+pub(crate) fn read(facts: &Facts, root: Node, src: &[u8]) -> Declared {
     let mut d = Declared::default();
     let mut public = BTreeSet::new();
-    for n in named(root) {
-        declare(n, rel, src, &file_id, None, ex, &mut d);
-        if let Some(name) = name_node(n) {
-            let name = text(name, src).to_string();
-            if hidden(n, src) {
-                d.private.insert(name);
-            } else {
-                public.insert(name);
+    let mut sites: Vec<_> = facts.sites().collect();
+    sites.sort_by_key(|(range, _)| (range.start, std::cmp::Reverse(range.end)));
+    for (range, i) in sites {
+        let Some(n) = node_at(root, range) else { continue };
+        let def = &facts.defs[i];
+        let (id, path, name) = (&def.id, &def.qualified, &def.name);
+        let owner = def.parent.map(|p| facts.defs[p].qualified.as_str());
+        let mut around = owner.map(|o| d.masked(o)).unwrap_or_default();
+        if n.kind() != "class_parameter" {
+            around.extend(type_params(n, src));
+        }
+        annotate(n, id, &around, src, &mut d);
+        match owner {
+            None => {
+                d.top.insert(name.clone());
+                if hidden(n, src) { d.private.insert(name.clone()) } else { public.insert(name.clone()) };
             }
+            Some(_) => {
+                d.members.insert(id.clone());
+                let visibility = if says(n, "private", src) { &mut d.private_members } else { &mut d.open_members };
+                visibility.insert(id.clone());
+            }
+        }
+        let written = if n.kind() == "class_parameter" { written_type(n, src) } else { child(n, "variable_declaration").and_then(|v| written_type(v, src)) };
+        if let Some(t) = written {
+            d.fields.entry(owner.unwrap_or_default().to_string()).or_default().insert(name.clone(), t);
+        }
+        if n.kind() == "function_declaration" {
+            let mut masked = type_params(n, src);
+            masked.extend(owner.map(|o| d.masked(o)).unwrap_or_default());
+            d.lambdas.entry(id.clone()).or_default().push(params(n, src, &masked));
+            if owner.is_some() {
+                let arities = d.arities.entry(id.clone()).or_default();
+                arities.push(arity(n, src));
+                arities.sort();
+                arities.dedup();
+            }
+        }
+        if is_type(n) {
+            shape(n, id, path, src, &mut d);
         }
     }
     // An overload with no modifier makes the name reachable from the package.
@@ -244,54 +260,9 @@ pub fn scan(root: Node, rel: &str, src: &[u8], ex: &mut Extraction) -> Declared 
     d
 }
 
-fn declare(n: Node, rel: &str, src: &[u8], parent: &str, owner: Option<&str>, ex: &mut Extraction, d: &mut Declared) {
-    if n.kind() == "companion_object" {
-        // A caller writes `Outer.make()`, never `Outer.Companion.make()`, so a companion's members
-        // take the class's own path and the id a call resolves to is the id declared.
-        if let (Some(body), Some(_)) = (child(n, "class_body"), owner) {
-            for m in members_of(body) {
-                declare(m, rel, src, parent, owner, ex, d);
-            }
-        }
-        return;
-    }
-    let Some(name_at) = name_node(n) else { return };
-    let name = text(name_at, src).to_string();
-    let path = owner.map_or_else(|| name.clone(), |o| format!("{o}.{name}"));
-    let id = format!("sym:{rel}::{path}");
-    ex.node_span(NodeKind::Symbol, &id, &path, &jvm::body(n, name_at, src, COMMENTS), rel, span(n));
-    ex.edge(parent, &id, EdgeKind::Declares, if hidden(n, src) { "" } else { "export" }, rel);
-    let mut around = owner.map(|o| d.masked(o)).unwrap_or_default();
-    around.extend(type_params(n, src));
-    annotate(n, &id, &around, src, d);
-    match owner {
-        None => {
-            d.top.insert(name.clone());
-        }
-        Some(_) => {
-            d.members.insert(id.clone());
-            let visibility = if says(n, "private", src) { &mut d.private_members } else { &mut d.open_members };
-            visibility.insert(id.clone());
-        }
-    }
-    if let Some(t) = child(n, "variable_declaration").and_then(|v| written_type(v, src)) {
-        d.fields.entry(owner.unwrap_or_default().to_string()).or_default().insert(name.clone(), t);
-    }
-    if n.kind() == "function_declaration" {
-        let mut masked = type_params(n, src);
-        masked.extend(owner.map(|o| d.masked(o)).unwrap_or_default());
-        d.lambdas.entry(id.clone()).or_default().push(params(n, src, &masked));
-        if owner.is_some() {
-            let arities = d.arities.entry(id.clone()).or_default();
-            arities.push(arity(n, src));
-            arities.sort();
-            arities.dedup();
-        }
-    }
-    if !is_type(n) {
-        return;
-    }
-    d.types.insert(path.clone());
+/// A type's shape and its supertypes as written.
+fn shape(n: Node, id: &str, path: &str, src: &[u8], d: &mut Declared) {
+    d.types.insert(path.to_string());
     let enumerated = child(n, "enum_class_body").is_some() || has_modifier(n, "enum", src);
     let shape = jvm::Shape {
         data: has_modifier(n, "data", src),
@@ -303,37 +274,48 @@ fn declare(n: Node, rel: &str, src: &[u8], parent: &str, owner: Option<&str>, ex
         superclass: None,
         ..Default::default()
     };
-    d.shapes.insert(path.clone(), shape);
+    d.shapes.insert(path.to_string(), shape);
     for spec in named(n).into_iter().filter(|c| c.kind() == "delegation_specifier") {
         let invoked = child(spec, "constructor_invocation");
         if let Some(t) = written_type(invoked.unwrap_or(spec), src) {
             if invoked.is_some() {
-                d.shapes.entry(path.clone()).or_default().superclass = Some(t.clone());
+                d.shapes.entry(path.to_string()).or_default().superclass = Some(t.clone());
             }
-            d.supers.push((id.clone(), t));
+            d.supers.push((id.to_string(), t));
         }
     }
-    if let Some(ctor) = child(n, "primary_constructor") {
-        // Only `val` and `var` parameters are properties; a plain parameter lives in the constructor.
-        for p in named(ctor).into_iter().filter(|p| p.kind() == "class_parameter" && child(*p, "binding_pattern_kind").is_some()) {
-            let Some(pname_at) = child(p, "simple_identifier") else { continue };
-            let pname = text(pname_at, src).to_string();
-            let pid = format!("{id}.{pname}");
-            ex.node_span(NodeKind::Symbol, &pid, &format!("{path}.{pname}"), &jvm::body(p, pname_at, src, COMMENTS), rel, span(p));
-            ex.edge(&id, &pid, EdgeKind::Declares, if hidden(p, src) { "" } else { "export" }, rel);
-            annotate(p, &pid, &d.masked(&path), src, d);
-            d.members.insert(pid.clone());
-            let visibility = if says(p, "private", src) { &mut d.private_members } else { &mut d.open_members };
-            visibility.insert(pid);
-            if let Some(t) = written_type(p, src) {
-                d.fields.entry(path.clone()).or_default().insert(pname, t);
-            }
+}
+
+/// The package and the imports. Kotlin has no static import: `import a.b.C.m` names a member, and
+/// the lookup finds it through `C`'s file as a nested path.
+pub(crate) fn scope(facts: &Facts) -> Scope {
+    let mut s = Scope { package: facts.namespaces.first().cloned().unwrap_or_default(), ..Scope::default() };
+    for import in &facts.imports {
+        let Some(qualified) = import.path.clone() else { continue };
+        if import.names.iter().any(|n| n == "*") {
+            s.stars.push(qualified);
+            continue;
         }
+        let local = import.alias.clone().unwrap_or_else(|| qualified.rsplit('.').next().unwrap_or(&qualified).to_string());
+        s.singles.entry(local).or_default().insert(qualified);
     }
-    let body = one_line_object(n).map(|(_, members)| members).or_else(|| child(n, "class_body")).or_else(|| child(n, "enum_class_body"));
-    if let Some(body) = body {
-        for m in members_of(body) {
-            declare(m, rel, src, &id, Some(&path), ex, d);
-        }
-    }
+    s
+}
+
+/// The package line, every top-level name and every nested path, for the JVM index and for the
+/// headers `widen` stores.
+pub(crate) fn header(rel: &str, source: &str) -> Header {
+    let (Some(decl), Some(tree)) = (queries::decl(Lang::Kotlin), Lang::Kotlin.parse(source.as_bytes())) else { return Header::default() };
+    let file = File { lang: Lang::Kotlin, rel, text: source, src: source, tree: Some(&tree) };
+    let facts = engine::facts(spec(Lang::Kotlin), decl, None, &file);
+    let scope = scope(&facts);
+    let d = read(&facts, tree.root_node(), source.as_bytes());
+    // A private member reaches no other file, not even a subclass's.
+    let reached = |id: &&String| !d.private_members.contains(*id);
+    let arities = d.arities.iter().filter(|(id, _)| reached(id)).map(|(id, a)| (jvm::path_of(id).to_string(), a.clone())).collect();
+    let members = d.members.iter().filter(reached).map(|id| jvm::path_of(id).to_string()).collect();
+    let supers = jvm::recorded(&d.types, &d.supers, &d.shapes, &scope);
+    let nested = Nested { types: d.types, members, arities, supers, ..Default::default() };
+    let package = if scope.package.is_empty() { Vec::new() } else { vec![scope.package] };
+    Header { scope: package, top: d.top, nested, private: d.private, ..Default::default() }
 }

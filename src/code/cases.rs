@@ -5,6 +5,7 @@ mod bicep;
 mod dart;
 mod graphql;
 mod hcl;
+pub(super) mod kotlin;
 mod python;
 mod rust;
 mod shell;
