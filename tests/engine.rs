@@ -1,9 +1,15 @@
 //! The engine over synthetic Python queries: no language has queries yet, so these pin the
 //! qualification, export, body, resolution and citation rules every port will lean on.
 
-use super::*;
-use crate::code::prose::testing::{lines, repo};
-use crate::code::spec::{Body, ImportPaths, Sources, NONE};
+mod common;
+
+use std::sync::OnceLock;
+
+use common::code::{lines, repo};
+use repograph::code::engine::{
+    facts, header, import_targets, queries, resolve, write, Ambiguity, Body, Cap, Compiled, Doc, EdgeKind, Export, Extraction,
+    Facts, File, Form, Import, ImportPaths, Label, Lang, Line, Sources, Spec, Visibility, NONE,
+};
 
 const DECL: &[&str] = &[
     r#"((function_definition name: (identifier) @name) @definition.function (#eq? @name "_kept") (#set! export "always"))"#,

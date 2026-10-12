@@ -13,16 +13,21 @@ use std::sync::{Arc, OnceLock};
 use streaming_iterator::StreamingIterator;
 use tree_sitter::{Node, QueryCursor, Tree};
 
-use crate::code::imports::Resolver;
 use crate::code::index::Header;
-use crate::code::lang::Lang;
-use crate::code::queries::{self, Compiled, Kind, Meta, Role};
-use crate::code::spec::{Ambiguity, Cap, Doc, Export, Form, Label, Line, Spec, Visibility};
+use crate::code::queries::{Kind, Meta, Role};
 use crate::code::syntax::{self, comment_text, last_row, text_span, DOC_CHARS};
-use crate::model::{EdgeKind, Extraction, Graph, NodeKind};
+use crate::model::{Graph, NodeKind};
+
+// What `tests/engine.rs` names besides the engine itself: re-exported here, so the modules that
+// define it stay private to the crate.
+pub use crate::code::imports::Resolver;
+pub use crate::code::lang::Lang;
+pub use crate::code::queries::{self, Compiled};
+pub use crate::code::spec::{Ambiguity, Body, Cap, Doc, Export, Form, ImportPaths, Label, Line, Sources, Spec, Visibility, NONE};
+pub use crate::model::{EdgeKind, Extraction};
 
 /// One file as the front read it.
-pub(crate) struct File<'a> {
+pub struct File<'a> {
     pub lang: Lang,
     pub rel: &'a str,
     /// The file as read.
@@ -34,12 +39,12 @@ pub(crate) struct File<'a> {
 }
 
 #[derive(Debug, Clone)]
-pub(crate) struct Def {
+pub struct Def {
     pub id: String,
     pub qualified: String,
     pub label: String,
     pub name: String,
-    pub kind: Kind,
+    pub(crate) kind: Kind,
     pub range: Range<usize>,
     pub line: u32,
     pub end: u32,
@@ -61,7 +66,7 @@ pub(crate) struct Ref {
 }
 
 #[derive(Debug, Clone)]
-pub(crate) struct Import {
+pub struct Import {
     pub path: Option<String>,
     pub names: Vec<String>,
     pub alias: Option<String>,
@@ -69,7 +74,7 @@ pub(crate) struct Import {
     pub range: Range<usize>,
     /// The files the site resolves to, resolved on the first read: a file read across for what it
     /// declares never needs them.
-    targets: OnceLock<Vec<String>>,
+    pub targets: OnceLock<Vec<String>>,
 }
 
 impl Import {
@@ -104,14 +109,14 @@ impl Locals {
 }
 
 #[derive(Debug, Default, Clone)]
-pub(crate) struct Facts {
+pub struct Facts {
     /// The language the facts were read in, whose spec resolves their import sites.
     pub lang: Option<Lang>,
     pub defs: Vec<Def>,
-    pub refs: Vec<Ref>,
+    pub(crate) refs: Vec<Ref>,
     pub imports: Vec<Import>,
-    pub cites: Vec<Cite>,
-    pub locals: Locals,
+    pub(crate) cites: Vec<Cite>,
+    pub(crate) locals: Locals,
     /// Package and namespace lines, in file order.
     pub namespaces: Vec<String>,
     /// Qualified names of `defs`, and of the exported ones, so a reference looks a name up instead of
@@ -246,7 +251,7 @@ fn inside(root: Node, node: Node, kind: u16) -> bool {
 }
 
 /// The facts `decl` and, when given, `refs` read from `file`. An import site's targets wait for a reader.
-pub(crate) fn facts(spec: &Spec, decl: &'static Compiled, refs: Option<&'static Compiled>, file: &File) -> Facts {
+pub fn facts(spec: &Spec, decl: &'static Compiled, refs: Option<&'static Compiled>, file: &File) -> Facts {
     let mut facts = Facts { lang: Some(file.lang), ..Facts::default() };
     let Some(tree) = file.tree else { return facts };
     let (root, src) = (tree.root_node(), file.src);
@@ -654,7 +659,7 @@ fn doc_lines(spec: &Spec, def: Node, captured: Option<Node>, src: &str) -> Strin
 }
 
 /// Definitions, their `Declares` edges, and the ids cited in comments and strings.
-pub(crate) fn write(file: &File, facts: &Facts, ex: &mut Extraction) {
+pub fn write(file: &File, facts: &Facts, ex: &mut Extraction) {
     let rel = file.rel;
     for d in &facts.defs {
         ex.node_span(NodeKind::Symbol, &d.id, &d.label, &d.body, rel, (d.line, d.end));
@@ -675,7 +680,7 @@ pub(crate) fn write(file: &File, facts: &Facts, ex: &mut Extraction) {
 /// the walk globbed the result. A path naming a directory names every file of the importer's
 /// language directly in it, as a Terraform module source does. The importer's own file and own
 /// directory add nothing it does not already hold, so they name nothing.
-pub(crate) fn import_targets(resolver: &Resolver, spec: &Spec, rel: &str, import: &Import) -> Vec<String> {
+pub fn import_targets(resolver: &Resolver, spec: &Spec, rel: &str, import: &Import) -> Vec<String> {
     let Some(path) = &import.path else { return Vec::new() };
     let dir = rel.rsplit_once('/').map_or("", |(d, _)| d);
     let bases = std::iter::once(dir).chain(spec.imports.root.then_some(""));
@@ -741,7 +746,7 @@ fn visible(resolver: &Resolver, spec: &Spec, file: &File, reach: &[(String, Arc<
 }
 
 /// Every reference with no receiver and of a kind no hook owns, resolved by name.
-pub(crate) fn resolve(resolver: &Resolver, spec: &Spec, file: &File, facts: &Facts, ex: &mut Extraction) {
+pub fn resolve(resolver: &Resolver, spec: &Spec, file: &File, facts: &Facts, ex: &mut Extraction) {
     let rel = file.rel;
     let reach = reach(resolver, spec, file, facts);
     // The files whose declaration of `name` a reference reaches, by the spec's ambiguity rule.
@@ -858,7 +863,7 @@ pub(crate) fn widen(stale: &[String], removed: &[String], graph: &Graph, all_rel
 
 /// The header a name-indexed family records when it has no `header` hook: its namespaces, its
 /// visible top-level names, and what its containers hold.
-pub(crate) fn header(facts: &Facts) -> Header {
+pub fn header(facts: &Facts) -> Header {
     let mut h = Header { scope: facts.namespaces.clone(), ..Header::default() };
     for d in &facts.defs {
         match d.parent {
@@ -911,6 +916,3 @@ pub(crate) fn extract(resolver: &Resolver, spec: &Spec, file: &File, ex: &mut Ex
         hook(resolver, file, &facts, &mut Sink(ex));
     }
 }
-
-#[cfg(test)]
-mod tests;

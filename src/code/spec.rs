@@ -16,7 +16,7 @@ use crate::code::index::Header;
 use crate::code::lang::Lang;
 use crate::model::{EdgeKind, Extraction};
 
-pub(crate) struct Spec {
+pub struct Spec {
     pub queries: Sources,
     /// Whose grammar and queries read an embedded view. Vue's script picks TypeScript or TSX per file,
     /// so its `embed` names the grammar and this is the default.
@@ -43,7 +43,7 @@ pub(crate) struct Spec {
 
 /// `.scm` sources, concatenated in order into the two compiled queries (`queries.rs`).
 #[derive(Clone, Copy)]
-pub(crate) struct Sources {
+pub struct Sources {
     /// Definitions, scopes, docs and imports: the collect pass and extract both run it.
     pub decl: &'static [&'static str],
     /// References, locals and citations: extract alone runs it.
@@ -51,14 +51,14 @@ pub(crate) struct Sources {
 }
 
 #[derive(Clone, Copy)]
-pub(crate) struct CommentSyntax {
+pub struct CommentSyntax {
     pub lines: &'static [&'static str],
     pub blocks: bool,
 }
 
 /// A body is doc lines and then one signature line; only the last line reaches the indexes.
 #[derive(Clone, Copy)]
-pub(crate) struct Body {
+pub struct Body {
     pub doc: Doc,
     pub form: Form,
     pub cap: Cap,
@@ -66,7 +66,7 @@ pub(crate) struct Body {
 }
 
 #[derive(Clone, Copy)]
-pub(crate) enum Doc {
+pub enum Doc {
     /// Comment nodes of `kinds` directly above the definition; `between` are kinds that may stand
     /// between the two, as Bicep's decorators do. A shebang and a trailing comment are never doc.
     /// `line_comment.outer` is a kind with a field: Rust's `///`, where a plain `//` is no doc.
@@ -77,7 +77,7 @@ pub(crate) enum Doc {
 }
 
 #[derive(Clone, Copy)]
-pub(crate) enum Form {
+pub enum Form {
     /// Markers kept, as Shell, Bicep and HCL write them.
     Raw,
     /// `//`, `///`, `/** */`, `#` and the language's own line markers removed.
@@ -85,7 +85,7 @@ pub(crate) enum Form {
 }
 
 #[derive(Clone, Copy)]
-pub(crate) enum Cap {
+pub enum Cap {
     /// The last `DOC_CHARS` bytes, the lines nearest the declaration.
     Tail,
     /// The first `DOC_CHARS` characters.
@@ -93,7 +93,7 @@ pub(crate) enum Cap {
 }
 
 #[derive(Clone, Copy)]
-pub(crate) enum Line {
+pub enum Line {
     /// The definition node's first line.
     First,
     /// The line holding `@name`, past any annotation lines.
@@ -111,7 +111,7 @@ pub(crate) enum Line {
 }
 
 #[derive(Clone, Copy)]
-pub(crate) enum Label {
+pub enum Label {
     /// The qualified name, as the id ends.
     Qualified,
     /// The last `@name` part without its prefix, under its container's label: the id says
@@ -124,7 +124,7 @@ pub(crate) enum Label {
 }
 
 #[derive(Clone, Copy)]
-pub(crate) enum Export {
+pub enum Export {
     /// Exported only with one of these `@modifier` words.
     Show(&'static [&'static str]),
     /// Exported unless one of these `@modifier` words is present.
@@ -135,7 +135,7 @@ pub(crate) enum Export {
 }
 
 #[derive(Clone, Copy)]
-pub(crate) enum Visibility {
+pub enum Visibility {
     /// The reference's own file.
     File,
     /// The own file and the files its resolved imports reach, transitively when asked.
@@ -147,7 +147,7 @@ pub(crate) enum Visibility {
 }
 
 #[derive(Clone, Copy)]
-pub(crate) enum Ambiguity {
+pub enum Ambiguity {
     /// A match in the own file shadows the others; otherwise every candidate.
     OwnFirst,
     /// Exactly one candidate across the own file and the visible ones, otherwise nothing.
@@ -156,7 +156,7 @@ pub(crate) enum Ambiguity {
 }
 
 #[derive(Clone, Copy)]
-pub(crate) struct ImportPaths {
+pub struct ImportPaths {
     /// Tried after the importer's directory: the path as written relative to the repository root.
     pub root: bool,
     /// Appended to the path as written, in order; `""` tries it as written.
@@ -183,31 +183,31 @@ pub(crate) enum Embedded {
     View(String, Lang),
 }
 
-pub(crate) struct Hooks {
+pub struct Hooks {
     /// The collect pass, for a file it does not read: Vue's bookkeeping needs the path alone.
-    pub register: Option<fn(&mut Resolver, &str)>,
+    pub(crate) register: Option<fn(&mut Resolver, &str)>,
     /// What one globbed file adds to the resolver before any file is extracted, and the header it
     /// read, if any, which goes into the family's index. `None` reads `header` alone, and a language
     /// with neither never has its files opened.
-    pub collect: Option<Collect>,
+    pub(crate) collect: Option<Collect>,
     /// What a name-indexed family records of a file, from `(rel, source)`. A file whose header moves
     /// re-reads every other file of its family.
-    pub header: Option<fn(&str, &str) -> Header>,
-    pub manifest: Option<Manifest>,
+    pub(crate) header: Option<fn(&str, &str) -> Header>,
+    pub(crate) manifest: Option<Manifest>,
     /// The resolver's state for this language, created empty for every language that has one.
-    pub state: Option<fn() -> Box<dyn Any + Send + Sync>>,
-    pub embed: Option<fn(&str) -> Embedded>,
+    pub(crate) state: Option<fn() -> Box<dyn Any + Send + Sync>>,
+    pub(crate) embed: Option<fn(&str) -> Embedded>,
     /// The file node's body; every other file node's is empty.
-    pub head: Option<fn(&File) -> String>,
+    pub(crate) head: Option<fn(&File) -> String>,
     /// Definition and reference names as the language compares them.
-    pub fold: Option<fn(&str) -> Cow<str>>,
+    pub(crate) fold: Option<fn(&str) -> Cow<str>>,
     /// A body's last line that no `Line` gives.
-    pub signature: Option<fn(&File, &Def) -> String>,
+    pub(crate) signature: Option<fn(&File, &Def) -> String>,
     /// The files an import site names, for the paths the default cannot compute.
-    pub import: Option<ImportHook>,
-    pub resolve: Option<fn(&Resolver, &File, &Facts, &mut Sink)>,
+    pub(crate) import: Option<ImportHook>,
+    pub(crate) resolve: Option<fn(&Resolver, &File, &Facts, &mut Sink)>,
     /// Edge kinds the default resolution leaves to `resolve`.
-    pub owns: &'static [EdgeKind],
+    pub(crate) owns: &'static [EdgeKind],
 }
 
 impl Spec {
@@ -226,7 +226,7 @@ pub(crate) struct Manifest {
 }
 
 /// The hooks a language leaves at their defaults, for `..NONE`.
-pub(crate) const NONE: Hooks = Hooks {
+pub const NONE: Hooks = Hooks {
     register: None,
     collect: None,
     header: None,

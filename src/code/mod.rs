@@ -1,21 +1,21 @@
-pub mod blank;
+pub(crate) mod blank;
 pub(crate) mod dotnet;
-pub(crate) mod engine;
+pub mod engine;
 pub(crate) mod exceptions;
 pub(crate) mod front;
-pub mod imports;
-pub mod index;
-pub mod jvm;
-pub mod lang;
+pub(crate) mod imports;
+pub(crate) mod index;
+pub(crate) mod jvm;
+pub(crate) mod lang;
 pub(crate) mod prose;
-pub(crate) mod queries;
+pub mod queries;
 pub(crate) mod spec;
 pub(crate) mod syntax;
 pub(crate) mod typescript;
 
 use crate::model::{Extraction, Extractor};
 
-pub struct CodeExtractor {
+pub(crate) struct CodeExtractor {
     resolver: imports::Resolver,
 }
 

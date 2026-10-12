@@ -14,6 +14,8 @@
 // it that it needs; anything the others use is dead code from where that one stands.
 #![allow(dead_code)]
 
+pub mod code;
+
 use std::path::Path;
 use std::process::{Command, Output};
 

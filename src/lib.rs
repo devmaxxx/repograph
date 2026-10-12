@@ -1,7 +1,7 @@
 mod ask;
 mod bench;
 mod changes;
-mod code;
+pub mod code;
 mod config;
 mod doc;
 mod dump;
@@ -22,6 +22,9 @@ mod serve;
 mod store;
 mod text;
 mod walk;
+
+// What a code resolver is built from, so `tests/` can build one over files of its own.
+pub use config::Config;
 
 use clap::{Parser, Subcommand};
 use model::Extractor;

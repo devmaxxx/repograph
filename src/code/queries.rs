@@ -154,12 +154,12 @@ pub(crate) struct Meta {
     pub depth: Option<u32>,
 }
 
-pub(crate) struct Compiled {
+pub struct Compiled {
     pub query: Query,
     /// By capture index.
-    pub roles: Vec<Role>,
+    pub(crate) roles: Vec<Role>,
     /// By pattern index.
-    pub metas: Vec<Meta>,
+    pub(crate) metas: Vec<Meta>,
     /// The deepest any pattern may start, when every pattern is rooted at the file or sets `depth`:
     /// the matcher then never walks a function body, which costs more than the match.
     pub depth: Option<u32>,
@@ -172,7 +172,7 @@ impl std::fmt::Debug for Compiled {
 }
 
 /// `sources` concatenated in order and compiled against `grammar`, held to the capture contract.
-pub(crate) fn compile(grammar: &Language, sources: &[&str]) -> Result<Compiled, String> {
+pub fn compile(grammar: &Language, sources: &[&str]) -> Result<Compiled, String> {
     let text = sources.join("\n");
     let query = Query::new(grammar, &text).map_err(|e| format!("query does not compile: {e}"))?;
     let roles = query.capture_names().iter()
