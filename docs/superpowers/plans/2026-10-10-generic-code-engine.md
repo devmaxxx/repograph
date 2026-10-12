@@ -835,7 +835,13 @@ cmp $K/old-<step>/headers.json $K/new-<step>/headers.json
 - **Output.** It prints the class counts of §5.3 per language, the added and missed edge lists per kind, and `--sample 50 --seed N` for the hand read.
 - **Exit codes.** 0 when every regression count is zero, 1 otherwise.
 
-**Build time** is measured at steps 0, 6, 9, 13 and 14, as the median of three `build --no-dense` runs on the corpus. It must stay at or below 1.20× the step-0 base median.
+**Build time** is part of every step's gate from step 10 on (2026-10-12). Before that it was taken at steps 0, 6, 9, 13 and 14, as a median of three.
+
+- **The reading.** Five `build --no-dense` runs of the corpus, each from an empty store, interleaved with five of the step-0 binary (`bin/repograph-step0`), the pairs written to `log/buildtime-step<N>.txt`. The step's figure is its median over step 0's median from the same run.
+- **The bar.** At most 1.20×.
+- **When a step crosses it,** the engine is fixed first, as SQL's compile warm-up and Rust's start depth were, and the step is measured again. A language's own exception is not where the time is bought back.
+- **When the bar cannot be held,** the step stops with its numbers reported and does not land over it.
+- **Measure early.** A port takes its first reading as soon as its queries read the corpus, before its exception is written, so the cost is seen while the queries can still change.
 
 ### 5.3 What a diff may contain
 
@@ -1362,6 +1368,19 @@ This step alone closes the three reviewer defects. About 1,200 lines of Rust are
 - **Timing:** median of five, interleaved, on the corpus: step 0 1.203 s, step 9 1.420 s, 1.18× (`log/buildtime-step9.txt`). Before the start depth it read 1.21×.
 - **Size:** `src/code/rust_lang/` held 1,157 lines outside its cases. The exception keeps 924, so −233. Added: 161 lines of query, 30 net in the spec and 124 in the engine commit.
 
+**Re-estimate of steps 10–13 (2026-10-12).** It supersedes the figures in the step entries below and the expected net after step 14. It comes from the re-read after step 9 (`docs/bench/2026-10-10-generic-engine-results.md`). Every port that resolves across files kept an exception at 0.59–0.71 of the old reader it replaced (Dart 0.59, Rust 0.71; Python's 0.33 is the outlier, where `__init__.py` re-exports were the only module rule). Shell kept 0.68 and SQL 0.08. The table applies 0.6–0.7 to each language's old reader outside its cases.
+
+| step | old reader outside cases | queries | exception lines kept | net Rust | build-time risk |
+|---|---|---|---|---|---|
+| 10 · Kotlin | −1,191 (`jvm/kotlin/`) | ~120 | 700–850, plus the part of `jvm/mod.rs` (951 outside its tests) Kotlin and Java share, which moves into `exceptions/` and is not counted twice | −350 to −500 | **high.** 43 corpus files and the fixture's 126; Kotlin's queries compile beside the read; step 9 left 33 ms under the bar |
+| 11 · Java | −1,015 (`jvm/java/`), plus what is left of `jvm/mod.rs` | ~100 | 300–700: the shared exception exists, so Java adds its own rules only | −300 to −700 | medium: 4 corpus files, one more query set to compile |
+| 12 · C#, Razor | −2,704 (C# 1,885, Razor 819) | ~150 | 1,600–1,900 | −800 to −1,100 | high: 40 `.cs` and 43 Razor views, the project state read from 20 `.csproj` |
+| 13 · TS, TSX, Vue | −1,282 (TypeScript 1,044, Vue 238) | ~220 | 770–900 | −380 to −510 | **highest.** 334 of the corpus's 776 code files are `.ts` or `.tsx` |
+| **10–13** | **−6,192** | **~590** | **3,370–4,350** | **−1,840 to −2,820** | |
+
+- **Steps 0–13, projected.** About 11,100 old-reader lines gone (4,938 by step 9), about 1,700 query lines, and 5,300–6,300 exception lines, against §6's 6,000, 1,300 and 3,500.
+- **Build time decides more than lines.** Steps 6–9 all read 1.17–1.19×. Kotlin, C# and TypeScript each read more corpus files than any port so far, so each is timed early (§5.2).
+
 **Step 10 · Kotlin.** L. Query ~120, Rust −700. The shared JVM hook is extracted here.
 
 - **Queries:** declarations; `package` as `@scope.namespace`; an extension receiver as `@owner`; modifiers.
@@ -1398,7 +1417,7 @@ Then:
 - Update `docs/languages.md` and `docs/graph-model.md`, and make the 0.6.0 spec's "hand walk" paragraph point here.
 - Run the dense bench and the build time.
 
-Expected net for steps 0–14: about 6,000 lines of Rust leave, about 1,300 lines of queries arrive, and about 3,500 lines of hooks remain. Most of those hooks are in JVM, .NET and TypeScript.
+~~Expected net for steps 0–14: about 6,000 lines of Rust leave, about 1,300 lines of queries arrive, and about 3,500 lines of hooks remain. Most of those hooks are in JVM, .NET and TypeScript.~~ Superseded on 2026-10-12 by the re-estimate above step 10: exceptions held 1,949 lines after step 9 alone, and steps 10–13 are projected to keep 3,370–4,350 more.
 
 ### 6.2 New languages, steps 15–24
 
