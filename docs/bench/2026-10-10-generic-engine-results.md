@@ -289,3 +289,251 @@ the scratchpad corpus and the fixture are byte-identical to step 7's.
   - `cargo clippy --all-targets -- -D warnings`: clean;
   - `cargo tree --duplicates --depth 0`: no tree-sitter crate;
   - `src/code/python/` is gone.
+
+## Re-read after step 9
+
+Plan §6.1 asks for this re-read before step 10 starts (decision 3). Every number comes from one of:
+
+- the plan's "as built" notes and the sections above;
+- `bench/history/runs.jsonl`;
+- `git diff` and `git log` from the merge-base `7286a56` to `e1a4c68`;
+- the logs in `~/bench/engine-2026-10-10/log/`.
+
+Steps 5 and 9 have no section above, so their readings come from the plan's notes.
+
+### Lines per step
+
+The counts come from git, `--no-renames`, with each step's review fixes in its group. The columns
+are:
+
+- **old reader:** the language's directory outside its cases;
+- **exceptions:** `src/code/exceptions/`, net;
+- **engine and spec:** the rest of `src/` outside cases, net. That is the engine, `spec.rs`,
+  `queries.rs`, the front and `lang.rs`.
+
+The plan column is §6.1's "Query ~ / Rust − / hook ~" for each step.
+
+| step | plan: query / Rust − / hook | queries | old reader | exceptions | engine and spec |
+|---|---|---|---|---|---|
+| 0 · engine and front | +1,200 Rust, −200, +250 Python | 0 | +7 (edits) | 0 | +1,383 (+1,719 / −336); +274 Python |
+| 1 · Shell | 50 / −250 / 150 | +36 | −365 | +250 | +131 |
+| 2 · Bicep | 70 / −250 / — | +137 | −323 | +102 | +52 |
+| 3 · HCL, Terraform | 90 / −250 / — | +128 | −356 | +161 | −34 |
+| 4 · Swift | 60 / −180 / — | +80 | −196 | +111 | +41 |
+| sweep · 2026-10-12 | — | +77 | 0 | −351 | +37 |
+| 5 · GraphQL | 60 / −300 / — | +99 | −359 | 0 | +60 |
+| 6 · SQL | 130 / −380 / — | +168 | −448 | +37 | +59 |
+| 7 · Dart | 100 / −350 / 330 | +82 | −688 | +409 | +54 |
+| 8 · Python | 110 / −450 / 450 | +166 | −913 | +305 | +64 |
+| 9 · Rust | 150 / −600 / 700 | +162 | −1,297 | +925 | +154 |
+| **total, steps 0–9** | **820 / −3,010 / 1,630** (steps 1–9) | **1,135** | **−4,938** | **1,949** | **+2,001** |
+
+- **The total is measured against the merge-base.** The per-step old-reader counts include the lines
+  step 0 edited, so the column sums to 4,945 before step 0's +7.
+- **Where the plan's notes differ, they count the language alone.**
+  - Step 6's queries are 160 there. Git also counts a later fix's 8 lines.
+  - Step 7's are 98 Dart lines. Git nets in the 31 SQL lines the `within` key removed.
+  - Step 8's are 138. Git adds the review fix's 28 lines.
+  - Step 9's old reader is −1,157 there. Git also counts the 140-line test module of `crates.rs`,
+    which moved to the cases. The note's net for Rust is −233.
+- **Spec rows at HEAD** take 216 of `spec.rs`'s 548 lines: Shell 25, Bicep 17, HCL 16, Terraform
+  17, Swift 17, GraphQL 21, SQL 24, Dart 25, Python 26, Rust 28.
+- **Kept against removed.** Each step's exception lines over its old-reader lines read: Shell 0.68,
+  SQL 0.08, Dart 0.59, Python 0.33 and Rust 0.71. After the sweep, Bicep, HCL, Terraform, Swift and
+  GraphQL hold 22 lines between them, all of it `module_reach`.
+- **The four predicted hooks against HEAD:**
+  - Shell: ~150 predicted, 245 kept;
+  - Dart: ~330 predicted, 408 kept;
+  - Python: ~450 predicted, 304 kept;
+  - Rust: ~700 predicted, 924 kept.
+- **Against §6's totals for steps 0–14.** §6 expects about 6,000 Rust lines to leave, about 1,300
+  query lines to arrive and about 3,500 hook lines to remain. After step 9:
+  - 4,938 old-reader lines are gone;
+  - the queries hold 1,135 lines, 87% of the total;
+  - the exceptions hold 1,949 lines, 56%.
+
+  Steps 10–13 plan another 590 query lines. They also plan ~1,700 hook lines for C# (~1,100) and
+  TypeScript (~600) alone, and give no figure for the JVM hook.
+
+### Exceptions at HEAD
+
+`src/code/exceptions/` holds 10 files and 1,949 lines (`e1a4c68`). In the table, "without it" is the
+reading with the exception removed, the engine's default plus the queries, from the as-built notes.
+"Kit" is the kit corpus.
+
+| file | lines | rule | languages | without it |
+|---|---|---|---|---|
+| `mod.rs` | 11 | the module list | — | — |
+| `computed_paths.rs` | 245 | a path a script computes from its own location, and a run by path; `collect`, `state`, `import`, `resolve` | Shell | Imports 0 of 15, Calls 166 of 192 (R 0.86), References 0 of 11 (kit) |
+| `module_reach.rs` | 22 | a module call reaches every top-level name of its target; `resolve` | Bicep, Terraform | Bicep References 2,298 of 4,344 (R 0.53, kit) |
+| `identifier_case.rs` | 15 | an unquoted name folds to lower case, and a quoted one loses its quotes; `fold` | SQL | every SQL id moves: R1 = R4 = 3,396 and R7 = 1 (kit); R1 = R4 = 3,100 (fixture) |
+| `attachments.rs` | 20 | a table a file only alters references every other file that declares it; `resolve` | SQL | References R 0.55 (174 of 388 lost, kit); R 0.43 (476 of 828 lost, fixture) |
+| `library_scope.rs` | 408 | Dart's library model: parts, `part of`, `show`/`hide`/prefix, export chains, pubspec packages; `collect`, `resolve`, which owns Calls and Extends | Dart | Calls 6 of 76 (R 0.08), Imports 0 of 18 (kit) |
+| `module_paths.rs` | 304 | a dotted import placed through package roots, with one `__init__.py` re-export followed; calls, bases and decorators through the bindings; `resolve`, which owns Calls, Extends and DecoratedBy | Python | Calls 445 of 841 (R 0.529), Imports 0 of 28 (kit). Its attribute types move no edge on any input, and stay for `tests/python.rs` |
+| `crate_paths.rs`, `crate_paths/uses.rs`, `crate_paths/calls.rs` | 393 + 193 + 338 | the crate module tree, `use` flattening, calls, macros, `impl` ties and attributes; `collect`, `resolve` | Rust | Calls 645 of 1,068 (R 0.604), Imports and ReExports "0 of 4" (kit) |
+
+### Build time against the 1.20× bar
+
+The corpus build is timed as a median of five runs, interleaved with step 0's binary, except where
+noted. The bar is 1.20 × 1.211 s = 1.453 s.
+
+| step | step 0, same run | step | same run | against 1.211 s | source |
+|---|---|---|---|---|---|
+| 0 (base) | — | 1.237 s | 0.92× the parent's 1.349 s | — | plan, step 0 (median of three) |
+| 1 | 1.26 s | 1.22 s | 0.97× | — | step 1 above (median of three) |
+| 2, 3, 4, sweep | — | — | not taken | — | — |
+| 5 | 1.211 s | 1.391 s | 1.15× | 1.15× | step 6 above |
+| 6, before the warm-up | 1.27 s | 1.62 s | 1.28× | — | plan, step 6 |
+| 6 | 1.211 s | 1.436 s | 1.19× | 1.19× | step 6 above |
+| 7a (`within` alone) | 1.204 s | 1.424 s | 1.18× | 1.18× | plan, step 7 |
+| 7 | 1.225 s | 1.452 s | 1.19× | 1.199× | step 7 above |
+| 8 | 1.206 s | 1.412 s | 1.17× | 1.166× | `log/buildtime-step8.txt` |
+| 9, before the start depth | — | — | 1.21× | — | plan, step 9 |
+| 9 | 1.203 s | 1.420 s | 1.18× | 1.173× | `log/buildtime-step9.txt` |
+
+- **Step 9 sits 24 ms under the bar in its own run** (1.444 s), and 33 ms under it against 1.211 s.
+- **Two ports crossed 1.20×.** SQL crossed it until `queries::warm` compiled queries beside the read.
+  Rust crossed it until the matcher's start depth kept rooted queries out of function bodies.
+- **Every step from 6 on lands between 1.17× and 1.19×.**
+
+### P and R for every bounded kind so far
+
+The kit and the scratchpad corpus hold the same files, and each reading is the same on both.
+"Same graph" means the fixture's graph is byte-identical to the old one. P = R = 1.0 in every row
+below. Imports and ReExports are strict (§3.3), not bounded, and are listed for completeness.
+
+| lang | kind | kit corpus | fixture | owner |
+|---|---|---|---|---|
+| Shell | Calls · References · Imports | 192/192 · 11/11 · 15/15 | same graph | default, plus `computed_paths` |
+| Bicep | References · Imports | 4,344/4,344 · 66/66 | none | default, plus `module_reach` |
+| Terraform | References · Imports | 66/66 · 0/0 | 37/37 · 0 | default |
+| HCL | References | 0/0 | 0/0 | default |
+| Swift | Extends | 0/0 | none | default (thin) |
+| GraphQL | Calls | 69/69 | same graph | default |
+| SQL | Calls · References | 145/145 · 388/388 | 79/79 · 828/828 | default, plus `identifier_case` and `attachments` |
+| Dart | Calls · Imports · Extends · ReExports | 76/76 · 18/18 · 0/0 · 0/0 | no `.dart` | `library_scope` |
+| Python | Calls · Imports · Extends · DecoratedBy · ReExports | 841/841 · 28/28 · 5/5 · 0/0 · 0/0 | same graph | `module_paths` |
+| Rust | Calls · Imports · ReExports | 1,068/1,068 · 3/3 · 2/2 | no `.rs` | `crate_paths` |
+
+**Accepted diffs.** None moves an edge.
+
+| diff | inputs | step | why |
+|---|---|---|---|
+| Swift R3 = 1 | kit, scratchpad | sweep | AppDelegate's signature is now its declaration line. |
+| SQL R1 = 3, R4 = 3, R7 = 1 | fixture | 6 | `CREATE FOREIGN TABLE` is declared with its two columns, and `headers.json` gains its name. |
+| SQL body-above 11 and 15 | kit and scratchpad (11), fixture (15) | 6 | `Stripped` drops a doc's blank lines, so the 600-character cap ends later. |
+| Python R3 = 12 | kit, scratchpad | 8 | A docstring over 600 characters no longer cuts the signature off. |
+| Rust R3 = 3, body-above 7 | kit, scratchpad | 9 | `Stripped` drops a blank `///` line, so the shared cap falls a few characters later. |
+
+The adversarial repositories differ in more places. None is a gate input, and each is listed under
+open items below.
+
+### §3.4's predictions against what was built
+
+| lang | predicted | at HEAD | predicted, not needed | needed, not predicted |
+|---|---|---|---|---|
+| Shell | `import`, `collect`, `widen` | `collect`, `state`, `import`, `resolve` | `widen` (`engine::widen` covers it) | `resolve`, for the runs by path |
+| Bicep | `resolve` (reach) | `resolve` (reach) | — | — |
+| HCL | `widen`; `resolve` only if `Directory` misses | none | `widen`, `resolve` | — |
+| Terraform | as HCL | `resolve` (reach) | `widen` | the reach shared with Bicep |
+| Swift | none | none | — | — |
+| GraphQL | none | `header`, pointing at `default_header` | — | `header`, which keeps `headers.json` (R7) |
+| SQL | `fold` | `fold`, `resolve`, `header` (top only) | — | `resolve` (`attachments`) and `header` |
+| Dart | `collect`, `import`, `resolve` owning Calls and Extends | `collect`, `state`, `manifest`, `resolve` owning Calls and Extends | `import`: the exception writes Imports itself | — |
+| Python | `collect` (packages, `__all__`), `import`, `resolve` owning Calls | `state`, `manifest`, `resolve` owning Calls, Extends and DecoratedBy | `collect`, `import` | the ownership of Extends and DecoratedBy |
+| Rust | `collect`, `import`, `resolve` owning Calls | `collect`, `state`, `manifest`, `resolve`, owning nothing: the queries capture no call site | `import` | — |
+
+- **Predicted but not needed:**
+  - `widen` for Shell and Terraform;
+  - `import` for Dart, Python and Rust;
+  - `collect` for Python;
+  - `resolve` for HCL.
+- **Needed but not predicted:**
+  - Shell's `resolve`;
+  - GraphQL's and SQL's `header` pointers;
+  - SQL's `attachments`;
+  - Terraform's share of the reach;
+  - Python's ownership of Extends and DecoratedBy.
+- **Built, then deleted.** Steps 2–4 built six exceptions the prediction did not call for: Bicep's
+  `symbolic_names`, the Bicep and Terraform import hooks, `traversal_addresses`, `target_or_group`,
+  and Swift's three. The sweep measured them against real code and deleted them, taking the folder
+  from 624 lines to 273.
+
+### Bench rows
+
+Each run is `--no-dense` with e5-small on the pinned fixture. Every row reads keyword 39/40,
+paraphrase 7/30, code 12/12 and p90 238 tok, and is green.
+
+| commit | step | clean | flips against the base, over 82 cases |
+|---|---|---|---|
+| `c7e8b68` | 0 (base) | yes | — |
+| `c7e8b68` | 1, superseded | no (`tool_dirty`) | 0 |
+| `00022dd` | 1, re-recorded | yes | 0 |
+| `23748b5` | 3 | yes | 0 |
+| `b2521b5` | sweep | yes | 0 |
+| `8c2e454` | 6 | yes | 0 |
+
+- **The flips are counted from the rows' own `cases`.** The transcripts of steps 1c, 3, sweep and 6
+  have one md5. Step 0's transcript differs from step 1c's as a file, while its 82 cases are equal.
+- **Steps 2, 4, 5, 7, 8 and 9 ran no bench.** The fixture holds none of their files, or its graph was
+  byte-identical.
+
+### Open items carried forward
+
+Review findings left unfixed, and divergences documented but not fixed:
+
+- **SQL:**
+  - `CREATE TABLE a.b.c` declares `a`.
+  - `ALTER` above the same file's `CREATE` writes `alter` edges to every other creating file.
+- **Dart:**
+  - A call in a later initializer of a multi-name declaration is owned by the first name.
+  - `Libraries::resolve` runs once per call site, uncached.
+  - A Dart file is parsed twice.
+- **Python:**
+  - `__all__` is not read.
+  - `global` and `nonlocal` do not unbind.
+  - A nested function's locals do not shadow its outer function.
+  - A class three deep is not declared.
+  - A function-local relative import in `__init__.py` reads as a re-export.
+- **Rust:**
+  - A `mod` more than three deep declares nothing.
+  - A `mod` in a function body declares its items as the file's.
+  - A `cfg` twin inside an `impl` or a trait is not merged.
+  - An `impl` for a pointer, or a reference to a reference, declares nothing.
+  - A `///` block a blank line away is not doc.
+  - A `# Panics` heading reads `Panics`.
+- **Swift:**
+  - A type nested more than four deep declares nothing inside it.
+  - `extension [Int]` names `[Int].total`.
+  - `extension Box<Int>.Inner: Proto` loses its Extends.
+- **GraphQL:** comments above an operation are no longer its doc, and the description starts a
+  span. Six smaller shifts are listed in the plan's step-5 note.
+- **SQL, documented:**
+  - `RENAME TO` drops the old name's index.
+  - `SET SCHEMA` declares nothing.
+  - A view keeps no `public` twin.
+  - A citation inside a column cites from the column.
+- **HCL:** a list inside a function call (`concat(["base"], …)`) is not read.
+- **Shell:** the single-quoted `source` twin is an ignored `limitation_` case.
+- **The record:**
+  - Step 5 and step 9 have no section in this document.
+  - Step 9's note gives Rust's no-hook Imports and ReExports as "0 of 4", where the gate reads 3
+    and 2.
+- **GRAMMAR moves at step 14.** Accepted classes read non-zero (decision 1), so the bump is due.
+
+### For Max
+
+- **The 1.20× bar is at risk.** Step 9 reads 1.18×, 24 ms under the bar in its own run, and SQL and
+  Rust each crossed it until an engine fix. Kotlin, Java, C#, TypeScript and Vue hold 429 of the
+  corpus's 776 code files, against Rust's 38.
+- **Exceptions look certain for all four.** Every port that resolves across files kept one: without
+  it, Calls R was 0.08–0.60 and Imports 0. Expect them for the JVM pair (one shared exception plus a
+  `header` for arity and supertypes), for C# (project state, `global using`, partial types), and
+  for TypeScript (tsconfig imports, `deco:` nodes), as §3.4 predicts.
+- **The size plan is off, not the approach.** Exceptions hold 1,949 lines against the 1,630 §6.1
+  predicted for steps 1–9,
+  and Rust kept 925 for 1,297 removed. §6's "~3,500 hooks remain" will be passed. Re-estimate steps
+  10–13 from the measured ratios before starting.
+- **Nothing in the gates argues for stopping.** No bounded edge moved on any input, and the bench
+  has zero flips. Step 10 is the first port since SQL that the fixture sees (126 `.kt` files), so the
+  bench runs again there.
