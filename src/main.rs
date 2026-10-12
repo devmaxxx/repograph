@@ -471,7 +471,7 @@ impl<'a> Watcher<'a> {
             let code: Vec<String> = diff.changed.iter().filter(|e| e.kind == walk::FileKind::Code).map(|e| e.rel.clone()).collect();
             Ok(code::index::headers_move(self.repo, &code::index::Headers::load(&self.store)?, &code))
         };
-        // Scripts, Bicep files and Terraform files resolve names through other files of their language, so an edit
+        // Scripts, Bicep, Terraform and Dart files resolve names through other files of their language, so an edit
         // of an existing one can change what another resolves to without moving a path or a header.
         let path_family = diff.changed.iter().map(|e| e.rel.as_str()).chain(diff.removed.iter().map(String::as_str))
             .any(|rel| code::lang::Lang::of(rel).is_some_and(|l| code::spec::spec(l).cross_file));

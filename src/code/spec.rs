@@ -3,7 +3,7 @@
 //! names every language: the front, the resolver, the header index, `changes` and the update's
 //! widening read this table instead of matching on `Lang` each in its own way.
 //!
-//! Most of the vocabulary below describes ported languages, and only Shell, Bicep, HCL, Terraform, Swift, GraphQL and SQL are ported yet.
+//! Most of the vocabulary below describes ported languages, and only Shell, Bicep, HCL, Terraform, Swift, GraphQL, SQL and Dart are ported yet.
 #![allow(dead_code)]
 
 use std::any::{Any, TypeId};
@@ -256,7 +256,7 @@ const PROSE: Body = Body { doc: Doc::Adjacent { kinds: &["comment"], between: &[
 
 mod table {
     use super::*;
-    use crate::code::exceptions::{attachments, computed_paths, identifier_case, module_reach};
+    use crate::code::exceptions::{attachments, computed_paths, identifier_case, library_scope, module_reach};
     use crate::code::*;
 
     pub(super) const TYPESCRIPT: Spec = Spec { comments: C, hooks: typescript::HOOKS, legacy: Some(typescript::extract), ..UNPORTED };
@@ -267,7 +267,31 @@ mod table {
     pub(super) const JAVA: Spec = Spec { comments: C, hooks: jvm::java::HOOKS, legacy: Some(jvm::java::extract), ..UNPORTED };
     pub(super) const RUST: Spec = Spec { comments: C, hooks: rust_lang::HOOKS, legacy: Some(rust_lang::extract), ..UNPORTED };
     pub(super) const PYTHON: Spec = Spec { comments: HASH, hooks: python::HOOKS, legacy: Some(python::extract), ..UNPORTED };
-    pub(super) const DART: Spec = Spec { comments: C, hooks: dart::HOOKS, legacy: Some(dart::extract), ..UNPORTED };
+    pub(super) const DART: Spec = Spec {
+        queries: crate::code::queries::sources::DART,
+        view: None,
+        comments: C,
+        // No doc. A declaration starts at its annotations, as the old reader's line did.
+        body: Body { doc: Doc::None, form: Form::Raw, cap: Cap::Tail, line: Line::First },
+        label: Label::Qualified,
+        export: Export::Prefix('_'),
+        visibility: Visibility::File,
+        ambiguity: Ambiguity::OwnFirst,
+        // What a file's names resolve to moves with the directives and declarations of every library
+        // it imports.
+        cross_file: true,
+        imports: ImportPaths { root: false, suffixes: &[""] },
+        dotted_dirs: false,
+        hooks: Hooks {
+            collect: Some(library_scope::collect),
+            state: Some(state::<library_scope::Libraries>),
+            manifest: Some(Manifest { matches: |name| name == "pubspec.yaml", read: library_scope::pubspec }),
+            resolve: Some(library_scope::resolve),
+            owns: &[EdgeKind::Calls],
+            ..NONE
+        },
+        legacy: None,
+    };
     pub(super) const SQL: Spec = Spec {
         queries: crate::code::queries::sources::SQL,
         view: None,

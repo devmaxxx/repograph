@@ -1,13 +1,15 @@
-//! Dart extraction on inline sources, so the grammar's shape is pinned by the assertion.
+//! Dart's shapes, each on an inline source, so the grammar's reading of a declaration, a directive
+//! or a call is pinned by the assertion rather than by a corpus.
 
 use crate::code::CodeExtractor;
+use crate::code::exceptions::library_scope::Libraries;
 use crate::code::imports::Resolver;
 use crate::config::Config;
 use crate::model::{EdgeKind, Extraction, Extractor, NodeKind};
 
 /// A repository on disk with these files, Dart globbed, and `rel` extracted from it. The resolver
 /// reads headers from disk, so the file under test is written like the rest.
-pub(super) fn extract_in(files: &[(&str, &str)], rel: &str) -> Extraction {
+fn extract_in(files: &[(&str, &str)], rel: &str) -> Extraction {
     let dir = tempfile::tempdir().unwrap();
     for (p, c) in files {
         let full = dir.path().join(p);
@@ -19,15 +21,15 @@ pub(super) fn extract_in(files: &[(&str, &str)], rel: &str) -> Extraction {
     CodeExtractor::new(Resolver::new(dir.path(), &cfg).unwrap()).extract(rel, src)
 }
 
-pub(super) fn extract(rel: &str, src: &str) -> Extraction {
+fn extract(rel: &str, src: &str) -> Extraction {
     extract_in(&[(rel, src)], rel)
 }
 
-pub(super) fn ids(ex: &Extraction) -> Vec<&str> {
+fn ids(ex: &Extraction) -> Vec<&str> {
     ex.nodes.iter().map(|n| n.id.as_str()).collect()
 }
 
-pub(super) fn edges(ex: &Extraction, kind: EdgeKind) -> Vec<(&str, &str, &str)> {
+fn edges(ex: &Extraction, kind: EdgeKind) -> Vec<(&str, &str, &str)> {
     ex.edges.iter().filter(|e| e.kind == kind).map(|e| (e.source.as_str(), e.target.as_str(), e.context.as_str())).collect()
 }
 
@@ -150,28 +152,25 @@ fn a_class_spans_its_lines() {
     assert_eq!((n.line, n.end), (17, 30));
 }
 
-fn declared(src: &str) -> super::declarations::Declared {
-    let tree = crate::code::lang::Lang::Dart.parse(src.as_bytes()).unwrap();
-    let mut ex = Extraction::default();
-    super::declarations::scan(tree.root_node(), "lib/cart.dart", src.as_bytes(), &mut ex)
-}
-
 #[test]
-fn a_field_has_the_type_it_declares_or_the_class_its_initializer_constructs() {
-    let d = declared(DECLS);
-    let fields = &d.fields["Cart"];
-    assert_eq!(fields.get("order").map(String::as_str), Some("Order"));
-    assert_eq!(fields.get("_store").map(String::as_str), Some("Store"));
+fn a_call_through_a_field_reaches_the_type_it_declares_or_the_class_its_initializer_constructs() {
+    let ex = extract_in(&[
+        ("lib/order.dart", "class Order {\n  void place() {}\n}\n\nclass Store {\n  void open() {}\n}\n"),
+        ("lib/cart.dart", "import 'order.dart';\n\nclass Cart {\n  final Order order;\n  final _store = Store();\n\n  void go() {\n    order.place();\n    _store.open();\n  }\n}\n"),
+    ], "lib/cart.dart");
+    let calls = edges(&ex, EdgeKind::Calls);
+    assert!(calls.contains(&("sym:lib/cart.dart::Cart.go", "sym:lib/order.dart::Order.place", "")), "{calls:?}");
+    assert!(calls.contains(&("sym:lib/cart.dart::Cart.go", "sym:lib/order.dart::Store.open", "")), "{calls:?}");
 }
 
 #[test]
 fn extends_with_and_implements_are_supertypes_and_a_generic_argument_is_not() {
-    let d = declared(DECLS);
-    let supers: Vec<&str> = d.supers.iter().filter(|(from, _)| from == "sym:lib/cart.dart::Cart").map(|(_, s)| s.as_str()).collect();
-    for s in ["Base", "Audited", "Comparable"] {
+    let ex = extract("lib/cart.dart", "abstract class Base {}\n\nmixin Audited on Base {}\n\nabstract class Comparable<T> {}\n\nclass Cart extends Base with Audited implements Comparable<Cart> {}\n");
+    let supers: Vec<&str> = edges(&ex, EdgeKind::Extends).into_iter().filter(|(from, _, _)| *from == "sym:lib/cart.dart::Cart").map(|(_, to, _)| to).collect();
+    for s in ["sym:lib/cart.dart::Base", "sym:lib/cart.dart::Audited", "sym:lib/cart.dart::Comparable"] {
         assert!(supers.contains(&s), "{s} missing from {supers:?}");
     }
-    assert!(!supers.contains(&"Cart"), "Comparable<Cart> does not extend Cart: {supers:?}");
+    assert!(!supers.contains(&"sym:lib/cart.dart::Cart"), "Comparable<Cart> does not extend Cart: {supers:?}");
 }
 
 fn resolver_in(files: &[(&str, &str)]) -> (tempfile::TempDir, Resolver) {
@@ -198,11 +197,11 @@ const MONOREPO: &[(&str, &str)] = &[
 #[test]
 fn a_package_uri_names_lib_under_the_directory_whose_pubspec_says_that_name() {
     let (_d, r) = resolver_in(MONOREPO);
-    assert_eq!(r.state::<crate::code::dart::library::Libraries>().target("app/lib/main.dart", "package:core/orders.dart").as_deref(), Some("packages/core/lib/orders.dart"));
-    assert_eq!(r.state::<crate::code::dart::library::Libraries>().target("app/lib/main.dart", "package:shop/state/cart.dart").as_deref(), Some("app/lib/state/cart.dart"));
-    assert_eq!(r.state::<crate::code::dart::library::Libraries>().target("app/lib/main.dart", "package:flutter/material.dart"), None);
-    assert_eq!(r.state::<crate::code::dart::library::Libraries>().target("app/lib/main.dart", "dart:math"), None);
-    assert_eq!(r.state::<crate::code::dart::library::Libraries>().target("app/lib/main.dart", "state/cart.dart").as_deref(), Some("app/lib/state/cart.dart"));
+    assert_eq!(r.state::<Libraries>().target("app/lib/main.dart", "package:core/orders.dart").as_deref(), Some("packages/core/lib/orders.dart"));
+    assert_eq!(r.state::<Libraries>().target("app/lib/main.dart", "package:shop/state/cart.dart").as_deref(), Some("app/lib/state/cart.dart"));
+    assert_eq!(r.state::<Libraries>().target("app/lib/main.dart", "package:flutter/material.dart"), None);
+    assert_eq!(r.state::<Libraries>().target("app/lib/main.dart", "dart:math"), None);
+    assert_eq!(r.state::<Libraries>().target("app/lib/main.dart", "state/cart.dart").as_deref(), Some("app/lib/state/cart.dart"));
 }
 
 #[test]
@@ -217,9 +216,9 @@ fn an_import_writes_the_names_the_file_uses_and_an_external_one_writes_nothing()
 #[test]
 fn a_name_passed_on_by_an_export_resolves_to_the_file_that_declares_it() {
     let (_d, r) = resolver_in(MONOREPO);
-    assert_eq!(r.state::<crate::code::dart::library::Libraries>().resolve("app/lib/main.dart", "Orders"), vec!["packages/core/lib/src/orders_impl.dart".to_string()]);
+    assert_eq!(r.state::<Libraries>().resolve("app/lib/main.dart", "Orders"), vec!["packages/core/lib/src/orders_impl.dart".to_string()]);
     // `show Orders` keeps `Ledger` out of the barrel.
-    assert!(r.state::<crate::code::dart::library::Libraries>().resolve("app/lib/main.dart", "Ledger").is_empty());
+    assert!(r.state::<Libraries>().resolve("app/lib/main.dart", "Ledger").is_empty());
 }
 
 #[test]
@@ -245,8 +244,8 @@ fn hide_keeps_a_name_out_and_a_prefix_is_read_through_its_prefix() {
     assert!(imports.contains(&("file:lib/a.dart", "file:lib/b.dart", "C")), "{imports:?}");
     assert!(imports.contains(&("file:lib/a.dart", "file:lib/b.dart", "B")), "the prefixed import used as bb.B: {imports:?}");
     let (_d, r) = resolver_in(files);
-    assert!(r.state::<crate::code::dart::library::Libraries>().resolve("lib/a.dart", "B").is_empty(), "hidden and not declared here");
-    assert_eq!(r.state::<crate::code::dart::library::Libraries>().imported("lib/a.dart", Some("bb"), "B"), vec!["lib/b.dart".to_string()]);
+    assert!(r.state::<Libraries>().resolve("lib/a.dart", "B").is_empty(), "hidden and not declared here");
+    assert_eq!(r.state::<Libraries>().imported("lib/a.dart", Some("bb"), "B"), vec!["lib/b.dart".to_string()]);
 }
 
 #[test]
@@ -258,10 +257,10 @@ fn a_part_and_its_library_are_one_scope_and_the_part_sees_the_library_imports() 
         ("lib/src/pay_part.dart", "part of shop;\n\nclass PayPart {}\n"),
     ];
     let (_d, r) = resolver_in(files);
-    assert_eq!(r.state::<crate::code::dart::library::Libraries>().library_of("lib/src/cart_part.dart"), "lib/shop.dart");
-    assert_eq!(r.state::<crate::code::dart::library::Libraries>().library_of("lib/src/pay_part.dart"), "lib/shop.dart");
-    assert_eq!(r.state::<crate::code::dart::library::Libraries>().resolve("lib/shop.dart", "CartPart"), vec!["lib/src/cart_part.dart".to_string()]);
-    assert_eq!(r.state::<crate::code::dart::library::Libraries>().resolve("lib/src/pay_part.dart", "Util"), vec!["lib/util.dart".to_string()]);
+    assert_eq!(r.state::<Libraries>().library_of("lib/src/cart_part.dart"), "lib/shop.dart");
+    assert_eq!(r.state::<Libraries>().library_of("lib/src/pay_part.dart"), "lib/shop.dart");
+    assert_eq!(r.state::<Libraries>().resolve("lib/shop.dart", "CartPart"), vec!["lib/src/cart_part.dart".to_string()]);
+    assert_eq!(r.state::<Libraries>().resolve("lib/src/pay_part.dart", "Util"), vec!["lib/util.dart".to_string()]);
     let ex = extract_in(files, "lib/src/cart_part.dart");
     assert!(edges(&ex, EdgeKind::Imports).contains(&("file:lib/src/cart_part.dart", "file:lib/util.dart", "Util")), "{:?}", ex.edges);
 }
@@ -338,11 +337,11 @@ fn a_constructor_call_in_a_field_initializer_is_a_call_from_that_field() {
 }
 
 #[test]
-fn a_supertype_the_repository_declares_is_extended_and_an_external_one_is_not() {
-    let ex = extract_in(HOME, "lib/home.dart");
+fn a_supertype_the_file_declares_is_extended_and_an_external_one_is_not() {
+    let ex = extract("lib/home.dart", "abstract class Base {}\n\nmixin Logs {}\n\nclass Home extends Base with Logs implements StatelessWidget {}\n");
     let extends = edges(&ex, EdgeKind::Extends);
-    assert!(extends.contains(&("sym:lib/home.dart::Home", "sym:lib/base.dart::Base", "")), "{extends:?}");
-    assert!(extends.contains(&("sym:lib/home.dart::Home", "sym:lib/base.dart::Logs", "")), "{extends:?}");
+    assert!(extends.contains(&("sym:lib/home.dart::Home", "sym:lib/home.dart::Base", "")), "{extends:?}");
+    assert!(extends.contains(&("sym:lib/home.dart::Home", "sym:lib/home.dart::Logs", "")), "{extends:?}");
     assert!(!extends.iter().any(|(_, t, _)| t.contains("StatelessWidget")), "{extends:?}");
 }
 
