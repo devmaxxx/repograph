@@ -683,3 +683,22 @@ mod crate_tree {
         assert_eq!(c.resolve("src/ops.rs", &[], &path("crate::Store::new")), item("src/store.rs", "Store.new"));
     }
 }
+
+#[test]
+fn cfg_twins_among_impl_members_traits_and_macros_are_one_symbol() {
+    let src = "pub struct Store;\nimpl Store {\n    #[cfg(unix)]\n    pub fn open(&self) {}\n    #[cfg(windows)]\n    pub fn open(&self) {\n    }\n}\n#[cfg(unix)]\npub trait T { fn x(&self); }\n#[cfg(windows)]\npub trait T {\n    fn x(&self);\n}\n#[cfg(unix)]\nmacro_rules! mm { () => {}; }\n#[cfg(windows)]\nmacro_rules! mm {\n    () => {};\n}\n";
+    let repo = Repo::new(&[("Cargo.toml", "[package]\nname = \"x\"\n"), ("src/lib.rs", src)]);
+    let ex = repo.extract("src/lib.rs");
+    for (id, span) in [("Store.open", (4, 7)), ("T", (10, 14)), ("mm", (16, 20))] {
+        assert_eq!((node(&ex, &format!("sym:src/lib.rs::{id}")).line, node(&ex, &format!("sym:src/lib.rs::{id}")).end), span, "{id}");
+    }
+}
+
+#[test]
+fn an_impl_for_a_path_leaves_its_members_to_the_file_even_when_the_file_declares_that_name() {
+    let src = "pub struct Store;\nmod a {\n    pub struct Store;\n}\nimpl a::Store {\n    pub fn extra(&self) {}\n}\n";
+    let repo = Repo::new(&[("Cargo.toml", "[package]\nname = \"x\"\n"), ("src/lib.rs", src)]);
+    let ex = repo.extract("src/lib.rs");
+    let declares = edges(&ex, EdgeKind::Declares);
+    assert!(declares.contains(&("file:src/lib.rs", "sym:src/lib.rs::Store.extra", "export")), "{declares:?}");
+}

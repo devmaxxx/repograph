@@ -1,6 +1,7 @@
 ; A file and each inline `mod` declare their items, a trait its members, and an `impl` the members of
 ; its type. Nothing in a function body is declared, nor in a `mod` nested more than three deep: a
-; pattern that may start anywhere walks every function body to find out. An inline `mod` writes no
+; pattern that may start anywhere walks every function body to find out. A `mod` written inside a
+; function body is the one exception, since no pattern can tell it from a `mod` inside a `mod`. An inline `mod` writes no
 ; symbol: it names what it holds, `tests/helper`, as a path does. Any `pub` exports an item,
 ; `pub(crate)` too, since what the crate sees is what a change reaches.
 
@@ -14,11 +15,15 @@
   .
   [
     (function_item (visibility_modifier "pub" @modifier)? name: (identifier) @name) @definition.function
+    (function_signature_item (visibility_modifier "pub" @modifier)? name: (identifier) @name) @definition.function
+    (macro_definition name: (identifier) @name) @definition.function
     (struct_item (visibility_modifier "pub" @modifier)? name: (type_identifier) @name) @definition.struct
+    (union_item (visibility_modifier "pub" @modifier)? name: (type_identifier) @name) @definition.struct
     (enum_item (visibility_modifier "pub" @modifier)? name: (type_identifier) @name) @definition.enum
     (type_item (visibility_modifier "pub" @modifier)? name: (type_identifier) @name) @definition.type
     (const_item (visibility_modifier "pub" @modifier)? name: (identifier) @name) @definition.constant
     (static_item (visibility_modifier "pub" @modifier)? name: (identifier) @name) @definition.variable
+    (trait_item (visibility_modifier "pub" @modifier)? name: (type_identifier) @name) @definition.trait
   ]
   (#eq? @_cfg "cfg")
   (#set! variant))
@@ -30,11 +35,15 @@
   .
   [
     (function_item (visibility_modifier "pub" @modifier)? name: (identifier) @name) @definition.function
+    (function_signature_item (visibility_modifier "pub" @modifier)? name: (identifier) @name) @definition.function
+    (macro_definition name: (identifier) @name) @definition.function
     (struct_item (visibility_modifier "pub" @modifier)? name: (type_identifier) @name) @definition.struct
+    (union_item (visibility_modifier "pub" @modifier)? name: (type_identifier) @name) @definition.struct
     (enum_item (visibility_modifier "pub" @modifier)? name: (type_identifier) @name) @definition.enum
     (type_item (visibility_modifier "pub" @modifier)? name: (type_identifier) @name) @definition.type
     (const_item (visibility_modifier "pub" @modifier)? name: (identifier) @name) @definition.constant
     (static_item (visibility_modifier "pub" @modifier)? name: (identifier) @name) @definition.variable
+    (trait_item (visibility_modifier "pub" @modifier)? name: (type_identifier) @name) @definition.trait
   ]
   (#eq? @_cfg "cfg")
   (#set! variant))
@@ -90,36 +99,97 @@
   (#set! depth "5"))
 
 ; An `impl` names its members on its type's last segment, without generic arguments or a reference.
-; A type this file declares adopts them; one declared elsewhere leaves them to the file, exported
-; when `pub`, since this file is where they are written. An `impl` for a slice, a tuple or a
-; function type has no name to hang members on, and declares nothing.
+; A bare type name this file declares adopts them; a path (`a::Store`) or a type declared elsewhere
+; leaves them to the file, exported when `pub`, since this file is where they are written. An `impl`
+; for a slice, a tuple or a function type has no name to hang members on, and declares nothing.
 ((source_file (impl_item type: [
     (type_identifier) @name
     (primitive_type) @name
-    (scoped_type_identifier name: (type_identifier) @name)
-    (generic_type type: [(type_identifier) @name (scoped_type_identifier name: (type_identifier) @name)])
+    (generic_type type: (type_identifier) @name)
     (reference_type type: [
       (type_identifier) @name
       (primitive_type) @name
-      (scoped_type_identifier name: (type_identifier) @name)
-      (generic_type type: [(type_identifier) @name (scoped_type_identifier name: (type_identifier) @name)])
+      (generic_type type: (type_identifier) @name)
     ])
   ]) @scope.owner)
   (#set! adopt))
 
+(source_file (impl_item type: [
+    (scoped_type_identifier name: (type_identifier) @name)
+    (generic_type type: (scoped_type_identifier name: (type_identifier) @name))
+    (reference_type type: [
+      (scoped_type_identifier name: (type_identifier) @name)
+      (generic_type type: (scoped_type_identifier name: (type_identifier) @name))
+    ])
+  ]) @scope.owner)
+
 ((mod_item body: (declaration_list (impl_item type: [
     (type_identifier) @name
     (primitive_type) @name
-    (scoped_type_identifier name: (type_identifier) @name)
-    (generic_type type: [(type_identifier) @name (scoped_type_identifier name: (type_identifier) @name)])
+    (generic_type type: (type_identifier) @name)
     (reference_type type: [
       (type_identifier) @name
       (primitive_type) @name
-      (scoped_type_identifier name: (type_identifier) @name)
-      (generic_type type: [(type_identifier) @name (scoped_type_identifier name: (type_identifier) @name)])
+      (generic_type type: (type_identifier) @name)
     ])
   ]) @scope.owner))
   (#set! adopt)
+  (#set! depth "5"))
+
+((mod_item body: (declaration_list (impl_item type: [
+    (scoped_type_identifier name: (type_identifier) @name)
+    (generic_type type: (scoped_type_identifier name: (type_identifier) @name))
+    (reference_type type: [
+      (scoped_type_identifier name: (type_identifier) @name)
+      (generic_type type: (scoped_type_identifier name: (type_identifier) @name))
+    ])
+  ]) @scope.owner))
+  (#set! depth "5"))
+
+; The same twins among an `impl`'s members, merged only under one `impl` block.
+(source_file (impl_item
+  type: [
+    (type_identifier)
+    (primitive_type)
+    (scoped_type_identifier)
+    (generic_type)
+    (reference_type type: [(type_identifier) (primitive_type) (scoped_type_identifier) (generic_type)])
+  ]
+  body: (declaration_list
+    (attribute_item (attribute (identifier) @_cfg))
+    .
+    [(attribute_item) (line_comment)]*
+    .
+    [
+      (function_item (visibility_modifier "pub" @modifier)? name: (identifier) @name) @definition.method
+      (function_signature_item (visibility_modifier "pub" @modifier)? name: (identifier) @name) @definition.method
+      (const_item (visibility_modifier "pub" @modifier)? name: (identifier) @name) @definition.constant
+      (type_item (visibility_modifier "pub" @modifier)? name: (type_identifier) @name) @definition.type
+    ]
+    (#eq? @_cfg "cfg")
+    (#set! variant))))
+
+(mod_item body: (declaration_list (impl_item
+  type: [
+    (type_identifier)
+    (primitive_type)
+    (scoped_type_identifier)
+    (generic_type)
+    (reference_type type: [(type_identifier) (primitive_type) (scoped_type_identifier) (generic_type)])
+  ]
+  body: (declaration_list
+    (attribute_item (attribute (identifier) @_cfg))
+    .
+    [(attribute_item) (line_comment)]*
+    .
+    [
+      (function_item (visibility_modifier "pub" @modifier)? name: (identifier) @name) @definition.method
+      (function_signature_item (visibility_modifier "pub" @modifier)? name: (identifier) @name) @definition.method
+      (const_item (visibility_modifier "pub" @modifier)? name: (identifier) @name) @definition.constant
+      (type_item (visibility_modifier "pub" @modifier)? name: (type_identifier) @name) @definition.type
+    ]
+    (#eq? @_cfg "cfg")
+    (#set! variant))))
   (#set! depth "5"))
 
 (source_file (impl_item

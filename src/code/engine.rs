@@ -576,8 +576,7 @@ fn signature_line(line: Line, def: Node, name: Node, src: &str) -> String {
     }
 }
 
-/// The named sibling before `n`. HCL's grammar puts the comments above a file's first block outside its
-/// `body`, so a first child of a `body` looks past it.
+/// Whether `n` is of `kind`, or of `kind.field` when it also has that field: Rust's `line_comment.outer`.
 fn is_kind(n: Node, kind: &str) -> bool {
     match kind.split_once('.') {
         Some((kind, field)) => n.kind() == kind && n.child_by_field_name(field).is_some(),
@@ -585,6 +584,8 @@ fn is_kind(n: Node, kind: &str) -> bool {
     }
 }
 
+/// The named sibling before `n`. HCL's grammar puts the comments above a file's first block outside its
+/// `body`, so a first child of a `body` looks past it.
 fn above(n: Node) -> Option<Node> {
     n.prev_named_sibling().or_else(|| n.parent().filter(|p| p.kind() == "body").and_then(|p| p.prev_named_sibling()))
 }
