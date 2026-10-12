@@ -19,9 +19,9 @@
 (program (_ (modifiers "public" @modifier)? ["class" "interface" "enum" "record" "@interface"] name: (identifier) @name) @definition.class)
 
 ; A type's members by how deep it nests: a query cannot recurse. Each step names a type by its keyword,
-; so no step passes through a method, an enum constant or an anonymous class. A type nested in an enum
-; declares itself and not its members, and so does one four deep: each further level, or a step into an
-; enum's declarations, costs compile time on every build, and no input holds either.
+; so no step passes through a method, an enum constant or an anonymous class. A type four deep declares
+; itself and not its members: each further level costs compile time on every build, and no input holds
+; one. A step into an enum's declarations is taken at the two shallow levels only, below.
 (program
   (_ ["class" "enum" "record" "interface" @modifier "@interface" @modifier] body: (_ [
     (_ (modifiers "public" @modifier)? ["class" "interface" "enum" "record" "@interface"] name: (identifier) @name) @definition.class
@@ -57,6 +57,44 @@
       (constant_declaration (modifiers "public" @modifier)? declarator: (variable_declarator name: (identifier) @name)) @definition.field
     ])
   ])))))
+
+; A type nested in an enum reaches its own members through the enum's declarations, a step the levels
+; above do not take: once from a top-level enum, once from an enum nested in a type.
+(program
+  (_ body: (enum_body (enum_body_declarations (_ ["class" "enum" "record" "interface" @modifier "@interface" @modifier] body: (_ [
+    (_ (modifiers "public" @modifier)? ["class" "interface" "enum" "record" "@interface"] name: (identifier) @name) @definition.class
+    (method_declaration (modifiers "public" @modifier)? name: (identifier) @name) @definition.method
+    (constructor_declaration (modifiers "public" @modifier)? name: (identifier) @name) @definition.method
+    (annotation_type_element_declaration (modifiers "public" @modifier)? name: (identifier) @name) @definition.method
+    (field_declaration (modifiers "public" @modifier)? declarator: (variable_declarator name: (identifier) @name)) @definition.field
+    (constant_declaration (modifiers "public" @modifier)? declarator: (variable_declarator name: (identifier) @name)) @definition.field
+    (enum_body_declarations [
+      (_ (modifiers "public" @modifier)? ["class" "interface" "enum" "record" "@interface"] name: (identifier) @name) @definition.class
+      (method_declaration (modifiers "public" @modifier)? name: (identifier) @name) @definition.method
+      (constructor_declaration (modifiers "public" @modifier)? name: (identifier) @name) @definition.method
+      (annotation_type_element_declaration (modifiers "public" @modifier)? name: (identifier) @name) @definition.method
+      (field_declaration (modifiers "public" @modifier)? declarator: (variable_declarator name: (identifier) @name)) @definition.field
+      (constant_declaration (modifiers "public" @modifier)? declarator: (variable_declarator name: (identifier) @name)) @definition.field
+    ])
+  ]))))))
+
+(program
+  (_ ["class" "interface" "enum" "record" "@interface"] body: (_ (_ body: (enum_body (enum_body_declarations (_ ["class" "enum" "record" "interface" @modifier "@interface" @modifier] body: (_ [
+    (_ (modifiers "public" @modifier)? ["class" "interface" "enum" "record" "@interface"] name: (identifier) @name) @definition.class
+    (method_declaration (modifiers "public" @modifier)? name: (identifier) @name) @definition.method
+    (constructor_declaration (modifiers "public" @modifier)? name: (identifier) @name) @definition.method
+    (annotation_type_element_declaration (modifiers "public" @modifier)? name: (identifier) @name) @definition.method
+    (field_declaration (modifiers "public" @modifier)? declarator: (variable_declarator name: (identifier) @name)) @definition.field
+    (constant_declaration (modifiers "public" @modifier)? declarator: (variable_declarator name: (identifier) @name)) @definition.field
+    (enum_body_declarations [
+      (_ (modifiers "public" @modifier)? ["class" "interface" "enum" "record" "@interface"] name: (identifier) @name) @definition.class
+      (method_declaration (modifiers "public" @modifier)? name: (identifier) @name) @definition.method
+      (constructor_declaration (modifiers "public" @modifier)? name: (identifier) @name) @definition.method
+      (annotation_type_element_declaration (modifiers "public" @modifier)? name: (identifier) @name) @definition.method
+      (field_declaration (modifiers "public" @modifier)? declarator: (variable_declarator name: (identifier) @name)) @definition.field
+      (constant_declaration (modifiers "public" @modifier)? declarator: (variable_declarator name: (identifier) @name)) @definition.field
+    ])
+  ]))))))))
 
 (program
   (_ ["class" "interface" "enum" "record" "@interface"] body: (_ (_ ["class" "interface" "enum" "record" "@interface"] body: (_ (_ ["class" "enum" "record" "interface" @modifier "@interface" @modifier] body: (_ [

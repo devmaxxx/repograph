@@ -1225,3 +1225,12 @@ fn a_receiver_whose_supertype_is_a_refused_candidate_beside_a_declaring_one_is_n
     let ex = repo.extract("app/U.java");
     assert!(calls_from(&ex, "sym:app/U.java::U.go").is_empty(), "{:?}", ex.edges);
 }
+
+#[test]
+fn a_type_nested_in_an_enum_declares_its_members() {
+    let src = "package shop;\n\npublic class A {\n    enum E { X; static class N { public void m() {} } interface I { void q(); } }\n}\nenum T { Y; static class M { void z() {} } }\n";
+    let ex = one("shop/A.java", src);
+    for id in ["A.E.N.m", "A.E.I.q", "T.M.z"] {
+        assert!(ids(&ex).contains(&format!("sym:shop/A.java::{id}").as_str()), "{id} missing from {:?}", ids(&ex));
+    }
+}
