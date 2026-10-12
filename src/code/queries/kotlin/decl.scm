@@ -93,3 +93,25 @@
         (class_declaration (primary_constructor (class_parameter (modifiers (visibility_modifier) @modifier)? (binding_pattern_kind) (simple_identifier) @name) @definition.property))
       ]))
     ])))))))
+
+; A type declared in a companion is one level deeper than the class around it, and the walk above
+; counts only bodies of types. Its members, as the class's own members are.
+(source_file
+  (_ (type_identifier) (_ (companion_object (class_body (_ (type_identifier) (_ 
+    [
+      (class_declaration (modifiers (visibility_modifier) @modifier)? (type_identifier) @name) @definition.class
+      (object_declaration (modifiers (visibility_modifier) @modifier)? (type_identifier) @name) @definition.object
+      (type_alias (modifiers (visibility_modifier) @modifier)? (type_identifier) @name) @definition.type
+      (function_declaration (modifiers (visibility_modifier) @modifier)? (simple_identifier) @name) @definition.method
+      (property_declaration (modifiers (visibility_modifier) @modifier)? (variable_declaration (simple_identifier) @name)) @definition.property
+      (class_declaration (primary_constructor (class_parameter (modifiers (visibility_modifier) @modifier)? (binding_pattern_kind) (simple_identifier) @name) @definition.property))
+      (companion_object (class_body [
+        (class_declaration (modifiers (visibility_modifier) @modifier)? (type_identifier) @name) @definition.class
+        (object_declaration (modifiers (visibility_modifier) @modifier)? (type_identifier) @name) @definition.object
+        (type_alias (modifiers (visibility_modifier) @modifier)? (type_identifier) @name) @definition.type
+        (function_declaration (modifiers (visibility_modifier) @modifier)? (simple_identifier) @name) @definition.method
+        (property_declaration (modifiers (visibility_modifier) @modifier)? (variable_declaration (simple_identifier) @name)) @definition.property
+        (class_declaration (primary_constructor (class_parameter (modifiers (visibility_modifier) @modifier)? (binding_pattern_kind) (simple_identifier) @name) @definition.property))
+      ]))
+    ]
+    )))))))

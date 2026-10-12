@@ -381,6 +381,15 @@ fn an_id_in_a_string_template_is_cited_once_and_its_hole_is_code() {
 }
 
 #[test]
+fn the_members_of_a_type_declared_in_a_companion_are_declared() {
+    let src = "package app\n\nclass A {\n    companion object {\n        class Builder {\n            fun build() = 1\n            val size = 2\n        }\n        object Keys {\n            fun k() = 1\n        }\n    }\n}\n";
+    let ex = one("app/P.kt", src);
+    for id in ["A.Builder", "A.Builder.build", "A.Builder.size", "A.Keys", "A.Keys.k"] {
+        assert!(ids(&ex).contains(&format!("sym:app/P.kt::{id}").as_str()), "{id} missing from {:?}", ids(&ex));
+    }
+}
+
+#[test]
 fn a_one_line_object_declares_itself_and_its_members() {
     let src = "package app\n\nobject Keys { fun token() = 1 }\n\nobject Names { val TOKEN = 1 }\n\nclass Outer {\n    object Inner { fun size() = 2 }\n    fun go() {\n        Keys.token()\n        Inner.size()\n    }\n}\n";
     let ex = one("app/K.kt", src);

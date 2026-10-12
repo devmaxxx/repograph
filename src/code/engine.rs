@@ -175,8 +175,7 @@ impl Facts {
             }
             n
         };
-        let defs = self.defs.iter().enumerate().map(|(i, d)| (&d.range, i));
-        defs.chain(self.repeats.iter().map(|(range, i)| (range, *i)))
+        self.sites()
             .filter(|(range, _)| range.contains(&byte))
             .min_by_key(|(range, i)| (range.len(), std::cmp::Reverse(depth(*i))))
             .map(|(_, i)| i)

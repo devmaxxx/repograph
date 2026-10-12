@@ -98,8 +98,8 @@ pub enum Line {
     First,
     /// The line holding `@name`, past any annotation lines.
     Name,
-    /// The whole line holding `@name`, past its definition's span: a constructor's property reads
-    /// with the class that declares it.
+    /// The whole line holding `@name`, past its definition's span: a member written on its
+    /// container's line reads with that line, as a `val` parameter does on its `class` line.
     Whole,
     /// The whole row the definition starts on: a migration's statement reads with the marker a tool
     /// wrote after it, as the line a reader greps for.
