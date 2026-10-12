@@ -1203,6 +1203,49 @@ This step alone closes the three reviewer defects. About 1,200 lines of Rust are
 - **Hooks:** `collect` (libraries), `import` (`package:`), `resolve` owning Calls and Extends.
 - **Gate:** Calls (76) by the corpus; the `pawfice` blast.
 
+**Step 7 as built.** Where the code differs from the text above, the code is the record:
+
+- **Engine first, in its own commit (`47e6c4f`).** A pattern's `#set! within "<node kind>"` keeps a match only when its first capture sits under a node of that kind, at any depth. The kind is resolved to an id at compile, and an unknown kind fails the contract test.
+  - SQL's two ten-depth view ladders became two patterns, one for `ViewStmt` and one for `CreateMatViewStmt`. `refs.scm` compiles in 27.7 ms, down from 70.2 ms (median of five, interleaved).
+  - The kit, scratchpad and fixture graphs are byte-identical to step 6's.
+  - Two new cases: a view reads a relation in a scalar subquery and in a `LATERAL` subquery (it failed before), and a materialized view reads both branches of a `UNION ALL`.
+  - The review of step 6 found two divergences, now listed under step 6 above and not fixed: a three-part name declares its first part, and an `ALTER` above the same file's `CREATE` writes `alter` edges to the other creating files.
+- **Queries:** `queries/dart/{decl,refs}.scm`, 57 and 41 lines against ~100 planned.
+  - **Declarations.** Classes, mixins, named extensions and the `class M = A with B` name are `class`. Enums are `enum`, typedefs are `type`, top-level functions, getters and setters are `function`, and top-level variables are `variable`, one match per name.
+    - Members are matched only under a body whose type has a `name:`, so an unnamed extension's members declare nothing, as before.
+    - A named constructor or factory declares its second name. The unnamed constructor, an operator and an enum constant declare nothing.
+    - A declaration spans its annotations, so `Line::First` is `@override` or `@immutable`, as the old reader's line was.
+  - **References.** There are three groups.
+    - Calls by callee shape: a bare name, or `x.m`, `this.m` and `this.f.m`, each with its receiver.
+    - Supertypes as `extends`, read by their outermost name, so a generic argument is not one. The mixin `on` clause and an enum's `with` stay out, as before.
+    - A field's class, as a reference with the field as its receiver: the type it declares, or else a capitalised constructor in its initializer. A reference with a receiver writes no edge, so these are read by the hook alone.
+  - No import site is captured. The engine would write each with context `*`, and the old contexts are the names used.
+- **Spec:** `Export::Prefix('_')`, `Label::Qualified`, body `Doc::None` with `Line::First`, `File` visibility with `OwnFirst`. The hooks are `collect`, `state`, `manifest` (`pubspec.yaml`) and `resolve`, which owns Calls.
+  - `cross_file` is now true. The old row kept the false of `UNPORTED`, so `serve` kept a resolver whose libraries were stale after an edit. No graph changes.
+  - No `import` hook. `package:` URIs are resolved inside the exception, which writes the Imports edges itself.
+- **Exception:** one, `exceptions/library_scope.rs` (397 lines; §2.9 named it `part_of.rs`). It holds the old library model: parts, `part of`, `show`/`hide`/prefix, export chains and pubspec packages. A file's own queries cannot see the other files of the chain.
+  - `collect` parses the directives. It reads the top-level names with the decl query on the same tree, which replaced `declarations::scan`.
+  - `resolve` writes Imports, whose context is the names the file uses from the import, and ReExports, whose context is the `show` list or `*`. It then resolves every call: the type's own member first, then through a field's class, a prefixed import, or `Type.member`.
+  - Measured against the engine default plus the queries on the kit corpus, without the hook: Calls 6 of 76 (R 0.08) and Imports 0 of 18 (R4 = 18). Imports are strict, so the hook would stay for them alone.
+  - The top-level names were first read through `Resolver::facts` at resolve time, which parsed every reached file a second time: +0.6 ms per Dart file, and +24 ms on the corpus's ten. Reading them in `collect` from the tree it already parsed brings a 200-file copy back to the old reader's time (483 ms against 487 ms).
+- **Thin corpus:** Extends goes to the default. The kit and the fixture hold no Dart Extends edge (0 and 0), so same-file supertypes resolve by `OwnFirst`, and one declared in another file is no longer an edge.
+- **Gate:** langdiff `--lang dart` and `--lang sql` with the final binary on three inputs. All three graphs are byte-identical to the step-6 stores, so R1–R9 = 0 everywhere.
+  - Kit corpus (`new-6` → `new-7`). Dart Declares 239 (165 `export`, 74 private), Calls 76/76, Imports 18/18. ReExports and Extends are 0 in both.
+  - Scratchpad corpus (vs `store-base` through step 6): identical.
+  - Fixture: no `.dart` file; identical.
+  - The `pawfice` blast is unchanged, since no bounded kind moved.
+- **Divergence:** found on a probe repository outside the inputs, by langdiff against the step-6 binary. Nothing else differed: bodies, spans, Declares, Imports and ReExports all matched.
+  - A supertype from another file of the library or an import is no longer an edge (3 on the probe). This is the thin-corpus clause.
+  - In a declaration of several names, such as `final a = f(), b = g();`, a call in a later initializer is owned by the first name, as each name's definition spans the whole declaration (3 on the probe).
+- **Cases** moved to `src/code/cases/dart.rs`. Three assertions were rewritten, and no case was dropped:
+  - `a_field_has_the_type_it_declares_or_the_class_its_initializer_constructs` read the old `Declared.fields` map. It is now `a_call_through_a_field_reaches_the_type_it_declares_or_the_class_its_initializer_constructs`, which asserts the two Calls edges the map produced.
+  - `extends_with_and_implements_are_supertypes_and_a_generic_argument_is_not` read `Declared.supers`. It now asserts the Extends edges, with the supertypes declared in the same file.
+  - `a_supertype_the_repository_declares_is_extended_and_an_external_one_is_not` asserted Extends into another file. It is now `a_supertype_the_file_declares_is_extended_and_an_external_one_is_not`, under the thin-corpus clause.
+
+  The `Libraries` cases (`target`, `resolve`, `imported`, `library_of`) read the same methods at their new path.
+- **Timing:** median of five, interleaved, on the corpus: step 0 1.225 s, step 7 1.452 s. That is 1.19× step 0 in the same run, and 1.199× the recorded 1.211 s. Step 7a (the `within` commit alone) read 1.424 s against step 0's 1.204 s.
+- **Size:** −688 lines for `src/code/dart/` outside its cases. The added Rust is 397 lines in the exception and 32 in the spec, `queries` and `main`, plus 98 lines of query.
+
 **Step 8 · Python.** M. Query ~110, Rust −450, hook ~450 kept.
 
 - **Queries:** `def` and `class`; the docstring as `@doc`; the decorated span, chosen to match the old reader; locals for parameters and comprehensions; citations.

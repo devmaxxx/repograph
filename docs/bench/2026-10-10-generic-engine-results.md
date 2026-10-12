@@ -214,3 +214,38 @@ corpora. SQL's old reader is deleted, so the old graph cannot come from `REPOGRA
   - `cargo clippy --all-targets -- -D warnings`: clean;
   - `cargo tree --duplicates --depth 0`: no tree-sitter crate;
   - `src/code/sql/` is gone.
+
+## Step 7 · Dart
+
+New: `bin/repograph-step7a`, built on `47e6c4f` (the `within` key alone), and `bin/repograph-step7`,
+built on the Dart port. Dart's old reader is deleted. The step-6 binary `bin/repograph-step6b-head`
+(`fd3de01`) is the old graph.
+
+- **Regressions:** from `langdiff.py --lang dart` and `--lang sql` on three inputs. All three
+  graphs are byte-identical to step 6's, so R1–R9 = 0 for both languages:
+  - kit corpus (`new-6` → `new-7`);
+  - scratchpad corpus (vs the step-6 store);
+  - fixture, which holds no `.dart` file.
+
+  The readings are in `log/langdiff-step7-{kit,scratch,fixture}.txt`. `step7a` was byte-identical
+  on all three as well.
+- **Bounded kinds:** on the kit corpus, Dart Calls 76/76, so P = R = 1.0. Imports are 18/18, with
+  their used-name contexts. Declares are 239 (165 `export`). ReExports and Extends are 0 before and
+  after.
+- **Exception:** `library_scope`. Without its `resolve` hook, the kit corpus keeps Calls 6 of 76
+  (R 0.08) and Imports 0 of 18.
+- **Outside the inputs:** a probe repository diffed against step 6 shows two divergences:
+  - a supertype from another file loses its Extends edge (−3), under the thin-corpus clause;
+  - a call in a later initializer of a multi-name declaration is owned by the first name (3 moved).
+- **Bench:** not run. The fixture has no Dart, so no floor can move.
+- **Build time:** median of five, interleaved, on the corpus:
+  - step 0: 1.225 s;
+  - step 7: 1.452 s, which is 1.19× (1.199× the recorded 1.211 s).
+
+  Reading the top-level names through `Resolver::facts` cost +24 ms here and was replaced; a
+  200-file Dart copy extracts in 483 ms, against the old reader's 487 ms.
+- **Gate:**
+  - `cargo test --all-targets`: 1,390 passed, 0 failed, 8 ignored;
+  - `cargo clippy --all-targets -- -D warnings`: clean;
+  - `cargo tree --duplicates --depth 0`: no tree-sitter crate;
+  - `src/code/dart/` is gone.
