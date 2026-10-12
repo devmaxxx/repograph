@@ -1245,6 +1245,10 @@ This step alone closes the three reviewer defects. About 1,200 lines of Rust are
   The `Libraries` cases (`target`, `resolve`, `imported`, `library_of`) read the same methods at their new path.
 - **Timing:** median of five, interleaved, on the corpus: step 0 1.225 s, step 7 1.452 s. That is 1.19× step 0 in the same run, and 1.199× the recorded 1.211 s. Step 7a (the `within` commit alone) read 1.424 s against step 0's 1.204 s.
 - **Size:** −688 lines for `src/code/dart/` outside its cases. The added Rust is 397 lines in the exception and 32 in the spec, `queries` and `main`, plus 98 lines of query.
+- **Open, documented and not fixed.** These three items came up in step 7's review and stay open:
+  - A call in a later initializer of a multi-name declaration is owned by the first name. See the divergence above.
+  - `Libraries::resolve` runs once per call site and once per supertype. Nothing caches it per name and file, so a file that calls one name a hundred times walks its library's imports a hundred times.
+  - A Dart file is parsed twice. `collect` parses it for its directives and top-level names, and the extraction parses it again for the queries.
 
 **Step 8 · Python.** M. Query ~110, Rust −450, hook ~450 kept.
 
@@ -1252,6 +1256,55 @@ This step alone closes the three reviewer defects. About 1,200 lines of Rust are
 - **Spec:** `Prefix('_')`, with `__all__` in `collect`.
 - **Hooks:** `import` (package roots, relative imports), `resolve` owning Calls.
 - **Gate:** Calls (841) by the corpus. Extends (5) by the cases.
+
+**Step 8 as built.** Where the code differs from the text above, the code is the record:
+
+- **Engine first, in its own commit (`8bac67f`).** A `within` match is now placed by its outermost capture, not by its first one. A pattern that sets `within` but can match with nothing to place is refused at compile. The kit, scratchpad and fixture graphs are byte-identical to step 7's.
+- **Engine, with the port:**
+  - `Line::Header`: the text from the definition to its `body` field, with whitespace collapsed. A definition with no body reads as its first line.
+  - `Form::Stripped` unquotes a `'` docstring as it does a `"` one.
+- **Queries:** `queries/python/{decl,refs}.scm`, 80 and 58 lines, against ~110 planned.
+  - **Declarations.** `def`, `class` and plain-name assignments, in the module and in class bodies through classes nested two deep. Each depth is spelled out, with the decorated form beside the plain one.
+    - A definition spans its `def` or `class` line, not its decorators, as the old reader's did.
+    - The docstring is an optional anchored `@doc`.
+    - Members set `export "never"`.
+    - Each imported module or name is its own `@import` site, with its path, name and alias. A relative path keeps its dots.
+  - **References.**
+    - Calls: a bare name, or `obj.m` with `obj` as the receiver.
+    - Bases as `extends`.
+    - Decorators as `decorated_by`, with the decorated definition as the site.
+    - An attribute's class as a `references` site with context `type`: a class-level annotation, an annotated `self.x`, `self.x = T(…)`, or `self.x = p` for an annotated parameter `p`.
+    - Locals: parameters, lambda parameters, assignment, loop, `with`, `except` and walrus targets, and the names of definitions directly in a function. Comprehension variables bind in the comprehension.
+    - Citations, with a lone string statement read as a comment.
+- **Spec:**
+  - `Prefix('_')`, `Label::Qualified`, `Visibility::File` and `OwnFirst`.
+  - The body is `Doc::Capture`, `Stripped`, `Head` and `Line::Header`.
+  - `ImportPaths { suffixes: &[] }`, so the engine writes no Imports edge itself.
+  - The hooks are `state`, `manifest` (`pyproject.toml`, `setup.py`, `setup.cfg`) and `resolve`, which owns Calls, Extends and DecoratedBy.
+  - No `collect`: `__all__` is not read.
+  - No `import` hook: the exception places imports itself.
+- **Exception:** one, `exceptions/module_paths.rs` (299 lines). It places a dotted import, absolute or relative, and follows one `__init__.py` re-export by reading the package's import sites through `Resolver::facts`. It writes Imports with the bound name as context, or `*` for a whole module. It then resolves calls, bases and decorators through the bindings, `self`, the file's own classes, and an attribute's class.
+  - Measured on the kit corpus with the engine default plus the queries and no hook: Calls 445 of 841 (P 1.000, R 0.529) and Imports 0 of 28. Imports are strict, so the hook stays for them alone.
+  - Attribute types change no edge on any of the three inputs: with their four patterns removed, all four kinds stay at P = R = 1.000. They stay because `tests/python.rs` traces `Runner.go` to `Graph.shortest` through `self.graph`, an annotated `__init__` parameter. Dropping them would cost that test and about 20 lines of Rust.
+  - Extends and DecoratedBy reuse the import bindings. The default would keep Extends at 5 of 5 on the kit, all of them same-file. The hook owns them so that a base or decorator imported from another file resolves, as the cases assert.
+- **Gate:** langdiff `--lang py` with the final binary on three inputs.
+  - Kit corpus (`new-7` → `new-8`): R1, R2, R4–R9 = 0 and R3 = 12. Every edge is identical: Calls 841, Declares 1,123 (647 `export`), Extends 5, Imports 28 (15 by name, 13 `*`), pending 141. All other languages are byte-identical.
+  - Scratchpad corpus (vs `store-base`): py R3 = 12. Swift R3 = 1 and SQL body-above 11 are the already-accepted diffs.
+  - Fixture: graph and headers byte-identical.
+  - **Accepted R3 = 12:** each body has a docstring over 600 characters. The old reader capped docstring and signature together, which cut the signature off. The new body caps the docstring alone and keeps the signature.
+- **Divergence outside the inputs.** None of these occurs in the three inputs:
+  - `__all__` no longer decides exports, so a name it lists with a leading underscore is private. The engine cannot set a Declares context from a hook, and no input has `__all__`.
+  - `global` and `nonlocal` no longer cancel a local binding. Engine locals have no unbind. The corpus has one `global`, which affects no edge.
+  - A nested function's locals no longer shadow names in its outer function. A comprehension variable binds in the comprehension alone.
+  - Members of a class nested three deep are not declared.
+  - A package's `__init__.py` re-export is read in any form the query captures, parenthesised multi-line lists included. The old regex read one line.
+- **Cases** moved to `src/code/cases/python.rs`, with the four `Modules` unit tests rewritten against `module_paths::{absolute, relative}` on a temporary repository. Rewrites:
+  - `all_decides_exports_and_members_hang_off_their_class` is now `a_leading_underscore_hides_a_name_and_members_hang_off_their_class`, under the underscore rule: `LIMIT` and `helper` are exported and `_cache` is not.
+  - `all_extended_by_a_literal_exports_the_added_names` is removed, since `__all__` is not read.
+  - `a_global_declaration_cancels_the_shadow_and_a_local_import_is_not_one` is now `a_global_declaration_still_shadows_and_a_local_import_is_not_one`.
+  - `the_resolver_reads_python_project_roots_from_its_walk` calls `module_paths::absolute` instead of the old `Modules` state.
+- **Timing:** median of five, interleaved, on the corpus: step 0 1.206 s, step 8 1.412 s. That is 1.17× step 0 in the same run, and 1.166× the recorded 1.211 s.
+- **Size:** −906 lines for `src/code/python/` outside its cases. The added Rust is 299 lines in the exception and 35 net in the spec, `queries` and `engine`, plus 138 lines of query.
 
 **Step 9 · Rust.** L. Query ~150, Rust −600, hook ~700 kept.
 

@@ -249,3 +249,43 @@ built on the Dart port. Dart's old reader is deleted. The step-6 binary `bin/rep
   - `cargo clippy --all-targets -- -D warnings`: clean;
   - `cargo tree --duplicates --depth 0`: no tree-sitter crate;
   - `src/code/dart/` is gone.
+
+## Step 8 · Python
+
+New: `bin/repograph-step8a`, built on `8bac67f` (`within` placed by the outermost capture), and
+`bin/repograph-step8`, built on the Python port. Python's old reader is deleted. The step-8a
+binary still carried the old reader and is the old graph (`sweep/s8-base`); its graphs on the kit,
+the scratchpad corpus and the fixture are byte-identical to step 7's.
+
+- **Regressions:** from `langdiff.py --lang py` on three inputs.
+  - Kit corpus (`new-7` → `new-8`): R3 = 12, every other class 0. No other language moved.
+  - Scratchpad corpus (vs `store-base`): py R3 = 12, plus the accepted Swift R3 = 1 and SQL
+    body-above 11.
+  - Fixture: graph and headers byte-identical.
+
+  The 12 are docstrings over 600 characters: the old body capped docstring and signature
+  together and cut the signature off; the new one keeps it. The readings are in
+  `log/langdiff-step8-{kit,scratch,fixture}.txt`.
+- **Bounded kinds:** on the kit corpus, P = R = 1.000 for each.
+  - Calls: 841 of 841.
+  - Imports: 28 of 28, with 15 by name and 13 `*`.
+  - Declares: 1,123, of which 647 are `export`.
+  - Extends: 5 of 5.
+  - DecoratedBy and ReExports: 0 before and after.
+- **Exception:** `module_paths`.
+  - Without its `resolve` hook, the kit corpus keeps Calls at 445 of 841 (R 0.529) and Imports at
+    0 of 28.
+  - Without the attribute-type patterns, all four kinds stay at 1.000. They are kept for
+    `tests/python.rs`.
+  - The readings are in `log/pr-step8-{nohook,notypes}.txt`.
+- **Bench:** not run. The fixture's graph and headers are byte-identical to step 7's, so no floor
+  can move.
+- **Build time:** median of five, interleaved, on the corpus. The readings are in
+  `log/buildtime-step8.txt`.
+  - step 0: 1.206 s;
+  - step 8: 1.412 s, which is 1.17× (1.166× the recorded 1.211 s).
+- **Gate:**
+  - `cargo test --all-targets`: 1,391 passed, 0 failed, 8 ignored;
+  - `cargo clippy --all-targets -- -D warnings`: clean;
+  - `cargo tree --duplicates --depth 0`: no tree-sitter crate;
+  - `src/code/python/` is gone.
