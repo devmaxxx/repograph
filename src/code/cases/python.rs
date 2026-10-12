@@ -191,6 +191,15 @@ fn a_body_is_the_docstring_and_the_header() {
 }
 
 #[test]
+fn a_docstring_reads_without_its_prefix_and_quotes() {
+    let src = "def a():\n    r\"\"\"Raw \\d.\"\"\"\n\n\ndef b():\n    \'\'\'Single.\'\'\'\n\n\ndef c():\n    u\'Short.\'\n";
+    let ex = Repo::new(&[("m.py", src)]).extract("m.py");
+    assert_eq!(node(&ex, "sym:m.py::a").body, "Raw \\d.\ndef a():");
+    assert_eq!(node(&ex, "sym:m.py::b").body, "Single.\ndef b():");
+    assert_eq!(node(&ex, "sym:m.py::c").body, "Short.\ndef c():");
+}
+
+#[test]
 fn ids_in_docstrings_comments_and_strings_belong_to_the_enclosing_definition() {
     let repo = Repo::new(&[("shop.py", SHOP)]);
     let ex = repo.extract("shop.py");

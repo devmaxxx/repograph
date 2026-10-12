@@ -121,7 +121,7 @@ struct Scope<'a> {
     rel: &'a str,
     facts: &'a Facts,
     /// By the definition holding the import, `None` for the module.
-    bindings: HashMap<(Option<usize>, String), Bound>,
+    bindings: HashMap<Option<usize>, HashMap<String, Bound>>,
     /// By class and attribute, the attribute's class as a dotted path; empty where the file gives it
     /// two, since which one a call sees depends on control flow.
     attrs: HashMap<(usize, String), String>,
@@ -129,7 +129,7 @@ struct Scope<'a> {
 
 impl Scope<'_> {
     fn bound(&self, scope: Option<usize>, name: &str) -> Option<&Bound> {
-        [scope, None].iter().find_map(|s| self.bindings.get(&(*s, name.to_string())))
+        [scope, None].iter().find_map(|s| self.bindings.get(s).and_then(|m| m.get(name)))
     }
 
     /// The class `self` is inside a member of.
@@ -240,12 +240,12 @@ pub(crate) fn resolve(r: &Resolver, file: &File, facts: &Facts, sink: &mut Sink)
     let file_id = format!("file:{rel}");
     let mut sites: Vec<&Import> = facts.imports.iter().collect();
     sites.sort_by_key(|i| i.range.start);
-    let mut bindings = HashMap::new();
+    let mut bindings: HashMap<Option<usize>, HashMap<String, Bound>> = HashMap::new();
     for site in sites {
         let Some(Placed { target, context, binding }) = import(r, rel, site) else { continue };
         sink.edge(&file_id, &format!("file:{target}"), EdgeKind::Imports, &context, rel);
         if let Some((name, bound)) = binding {
-            bindings.insert((facts.owner(site.range.start), name), bound);
+            bindings.entry(facts.owner(site.range.start)).or_default().insert(name, bound);
         }
     }
     let mut scope = Scope { rel, facts, bindings, attrs: HashMap::new() };

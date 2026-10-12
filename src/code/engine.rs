@@ -215,12 +215,13 @@ fn matches_of<'t>(c: &'static Compiled, root: Node<'t>, src: &str, rel: &str, mu
     cursor.set_match_limit(MATCH_LIMIT);
     let mut it = cursor.matches(&c.query, root, src.as_bytes());
     while let Some(m) = it.next() {
-        // The outermost capture stands for the match, in whatever order the pattern lists them: a
-        // name inside the construct may sit under a node the construct itself is not under.
-        let outer = m.captures().iter().map(|cap| cap.node).min_by_key(|n| (n.start_byte(), std::cmp::Reverse(n.end_byte())));
-        let within = c.metas[m.pattern_index].within;
-        if within.is_some_and(|kind| !outer.is_some_and(|n| inside(root, n, kind))) {
-            continue;
+        if let Some(kind) = c.metas[m.pattern_index].within {
+            // The outermost capture stands for the match, in whatever order the pattern lists them: a
+            // name inside the construct may sit under a node the construct itself is not under.
+            let outer = m.captures().iter().map(|cap| cap.node).min_by_key(|n| (n.start_byte(), std::cmp::Reverse(n.end_byte())));
+            if !outer.is_some_and(|n| inside(root, n, kind)) {
+                continue;
+            }
         }
         each(m.pattern_index, m.captures().iter().map(|cap| (c.roles[cap.index as usize], cap.node)).collect());
     }
@@ -523,8 +524,10 @@ fn above(n: Node) -> Option<Node> {
 /// `#` or `//` is markdown.
 fn stripped(raw: &str, markers: &[&str]) -> String {
     let raw = raw.trim();
-    if let Some(quote) = raw.chars().next().filter(|c| matches!(c, '"' | '\'')) {
-        return raw.trim_matches(quote).trim().to_string();
+    // A string prefix (`r"""`, `u'`, `f"`) is no part of the prose, and a comment never starts with one.
+    let literal = raw.trim_start_matches(|c: char| "rRuUbBfF".contains(c));
+    if let Some(quote) = literal.chars().next().filter(|c| matches!(c, '"' | '\'')) {
+        return literal.trim_matches(quote).trim().to_string();
     }
     let unmark = |l: &str| markers.iter().fold(l.trim_start_matches('#'), |l, m| l.trim_start_matches(m)).trim().to_string();
     comment_text(raw).lines().map(unmark).filter(|l| !l.is_empty()).collect::<Vec<_>>().join("\n")
