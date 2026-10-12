@@ -185,6 +185,15 @@ pub(crate) fn compile(grammar: &Language, sources: &[&str]) -> Result<Compiled, 
         }
         let present = |want: fn(Role) -> bool| query.capture_quantifiers(i).iter().zip(&roles)
             .any(|(q, r)| *q != CaptureQuantifier::Zero && want(*r));
+        // A match that captures nothing gives the engine nothing to read, and `within` nothing to
+        // place, so it would be dropped without a word.
+        let certain = query.capture_quantifiers(i).iter().any(|q| matches!(q, CaptureQuantifier::One | CaptureQuantifier::OneOrMore));
+        if !present(|_| true) {
+            return Err(format!("pattern at byte {at} captures nothing"));
+        }
+        if meta.within.is_some() && !certain {
+            return Err(format!("pattern at byte {at} sets within but may match with no capture to place"));
+        }
         let declares = present(|r| matches!(r, Role::Definition(_) | Role::ScopeOwner | Role::ScopeNamespace));
         if declares && !present(|r| r == Role::Name) {
             return Err(format!("pattern at byte {at} declares without capturing @name"));
@@ -323,6 +332,12 @@ mod contract {
     fn a_general_predicate_is_refused() {
         assert!(rejects(r#"((identifier) @reference.calls (#select-adjacent! @reference.calls))"#).contains("predicate"));
         assert!(rejects(r#"((identifier) @reference.calls (#is-not? local))"#).contains("predicate"));
+    }
+
+    #[test]
+    fn a_pattern_with_nothing_to_place_is_refused() {
+        assert!(rejects("(function_definition name: (identifier))").contains("captures nothing"));
+        assert!(rejects(r#"((call arguments: (argument_list (identifier)? @name)) (#set! within "class_definition"))"#).contains("within"));
     }
 
     #[test]

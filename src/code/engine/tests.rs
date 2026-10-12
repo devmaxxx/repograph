@@ -254,3 +254,15 @@ fn a_node_another_node_of_its_span_sorts_between_two_matches_of_is_still_claimed
     let facts = facts(&spec(STRIPPED, Export::All), decl, None, &file);
     assert_eq!(facts.defs.iter().map(|d| d.qualified.as_str()).collect::<Vec<_>>(), ["x", "s/x"]);
 }
+
+#[test]
+fn within_places_a_match_by_its_outermost_capture() {
+    // The statement, its call and the callee's name all start at one byte. The name sits inside a
+    // call and the statement does not, and the statement places the match.
+    let refs = &[
+        r#"((expression_statement (call function: (identifier) @name)) @reference.calls (#set! within "call"))"#,
+        r#"((call function: (identifier) @name) @reference.calls (#set! within "argument_list"))"#,
+    ];
+    let source = "def f():\n    pass\n\ndef g(x):\n    pass\n\ndef run():\n    f()\n    g(f())\n";
+    assert_eq!(calls(refs, source), ["sym:a.py::run -> sym:a.py::f []"]);
+}

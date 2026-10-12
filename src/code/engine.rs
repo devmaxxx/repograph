@@ -215,8 +215,11 @@ fn matches_of<'t>(c: &'static Compiled, root: Node<'t>, src: &str, rel: &str, mu
     cursor.set_match_limit(MATCH_LIMIT);
     let mut it = cursor.matches(&c.query, root, src.as_bytes());
     while let Some(m) = it.next() {
+        // The outermost capture stands for the match, in whatever order the pattern lists them: a
+        // name inside the construct may sit under a node the construct itself is not under.
+        let outer = m.captures().iter().map(|cap| cap.node).min_by_key(|n| (n.start_byte(), std::cmp::Reverse(n.end_byte())));
         let within = c.metas[m.pattern_index].within;
-        if within.is_some_and(|kind| !m.captures().first().is_some_and(|cap| inside(root, cap.node, kind))) {
+        if within.is_some_and(|kind| !outer.is_some_and(|n| inside(root, n, kind))) {
             continue;
         }
         each(m.pattern_index, m.captures().iter().map(|cap| (c.roles[cap.index as usize], cap.node)).collect());

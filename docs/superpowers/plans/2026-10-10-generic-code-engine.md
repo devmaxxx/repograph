@@ -169,7 +169,7 @@ A function nested in a function is qualified by its nearest container, if it has
 - `context` is the edge context.
 - `export` is `always` or `never`.
 - `reexport` marks an import as a re-export.
-- `within` names a node kind the match must sit inside, at any depth. The engine drops a match whose first capture has no such ancestor. A construct that nests what it reads at any depth, such as a view's relations, needs it, because a pattern can only spell depth as one alternative per level. Step 7 adds it, before the Dart port.
+- `within` names a node kind the match must sit inside, at any depth. The engine drops a match whose outermost capture has no such ancestor, and refuses at compile a pattern that captures nothing, or that may match with no capture while it sets `within`. A construct that nests what it reads at any depth, such as a view's relations, needs it, because a pattern can only spell depth as one alternative per level. Step 7 adds it, before the Dart port.
 - `visibility` overrides `spec.visibility` for one reference pattern. Step 19 adds it (§6.2).
 
 Contexts form a closed list, which is the list in use today: `""`, `export`, `arg`, `get`, `*`, `comment`, `string`, `alter`, `impl`, `extend`, `on`, `type`, `variable`, `argument`, `member`.
