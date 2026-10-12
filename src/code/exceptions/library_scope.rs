@@ -328,12 +328,23 @@ fn directives(lib: &Libraries, rel: &str, root: Node, src: &[u8], sink: &mut Sin
     }
 }
 
-/// The import edges, then each call resolved through the library's scope. A supertype is the
-/// default's: no corpus holds a Dart class extending one from another file.
+/// The import edges, then each supertype and each call resolved through the library's scope. The
+/// default reads a file alone, which misses a supertype a part or an import declares.
 pub(crate) fn resolve(r: &Resolver, file: &File, facts: &Facts, sink: &mut Sink) {
     let (lib, rel) = (r.state::<Libraries>(), file.rel);
     if let Some(tree) = file.tree {
         directives(lib, rel, tree.root_node(), file.src.as_bytes(), sink);
+    }
+    for r in facts.refs.iter().filter(|r| r.edge == EdgeKind::Extends) {
+        // Only a type inherits; a supertype that resolves nowhere is a Flutter class this repository
+        // does not hold, and a same-file guess would name a symbol no file declares.
+        let Some(sub) = r.source.map(|i| &facts.defs[i]).filter(|d| d.kind.join().is_some()) else { continue };
+        for f in lib.resolve(rel, &r.name) {
+            let to = format!("sym:{f}::{}", r.name);
+            if to != sub.id {
+                sink.edge(&sub.id, &to, EdgeKind::Extends, &r.context, rel);
+            }
+        }
     }
     let class_of = |mut at: Option<usize>| {
         while let Some(i) = at {

@@ -235,7 +235,7 @@ built on the Dart port. Dart's old reader is deleted. The step-6 binary `bin/rep
 - **Exception:** `library_scope`. Without its `resolve` hook, the kit corpus keeps Calls 6 of 76
   (R 0.08) and Imports 0 of 18.
 - **Outside the inputs:** a probe repository diffed against step 6 shows two divergences:
-  - a supertype from another file loses its Extends edge (−3), under the thin-corpus clause;
+  - a supertype from another file lost its Extends edge (−3) until `library_scope` resolved supertypes too;
   - a call in a later initializer of a multi-name declaration is owned by the first name (3 moved).
 - **Bench:** not run. The fixture has no Dart, so no floor can move.
 - **Build time:** median of five, interleaved, on the corpus:

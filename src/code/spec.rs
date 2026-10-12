@@ -287,7 +287,7 @@ mod table {
             state: Some(state::<library_scope::Libraries>),
             manifest: Some(Manifest { matches: |name| name == "pubspec.yaml", read: library_scope::pubspec }),
             resolve: Some(library_scope::resolve),
-            owns: &[EdgeKind::Calls],
+            owns: &[EdgeKind::Calls, EdgeKind::Extends],
             ..NONE
         },
         legacy: None,

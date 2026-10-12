@@ -397,3 +397,20 @@ fn an_export_with_hide_names_what_it_passes_on() {
     let ex = extract_in(&[("lib/a.dart", "export 'b.dart' hide Secret;\n"), ("lib/b.dart", "class Secret {}\nclass Open {}\n")], "lib/a.dart");
     assert_eq!(edges(&ex, EdgeKind::ReExports), vec![("file:lib/a.dart", "file:lib/b.dart", "Open")]);
 }
+
+#[test]
+fn a_supertype_another_file_or_a_part_declares_is_extended() {
+    let ex = extract_in(&[
+        ("lib/a.dart", "import 'b.dart';\nclass A extends B with M implements I {}\n"),
+        ("lib/b.dart", "class B {}\nmixin M {}\nclass I {}\n"),
+    ], "lib/a.dart");
+    let extends = edges(&ex, EdgeKind::Extends);
+    for to in ["sym:lib/b.dart::B", "sym:lib/b.dart::M", "sym:lib/b.dart::I"] {
+        assert!(extends.contains(&("sym:lib/a.dart::A", to, "")), "{to} missing from {extends:?}");
+    }
+    let ex = extract_in(&[
+        ("lib/a.dart", "library a;\npart 'p.dart';\nclass A extends B {}\n"),
+        ("lib/p.dart", "part of a;\nclass B {}\n"),
+    ], "lib/a.dart");
+    assert!(edges(&ex, EdgeKind::Extends).contains(&("sym:lib/a.dart::A", "sym:lib/p.dart::B", "")), "{:?}", ex.edges);
+}
