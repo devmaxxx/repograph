@@ -69,6 +69,7 @@ pub(crate) struct Body {
 pub(crate) enum Doc {
     /// Comment nodes of `kinds` directly above the definition; `between` are kinds that may stand
     /// between the two, as Bicep's decorators do. A shebang and a trailing comment are never doc.
+    /// `line_comment.outer` is a kind with a field: Rust's `///`, where a plain `//` is no doc.
     Adjacent { kinds: &'static [&'static str], between: &'static [&'static str] },
     /// The `@doc` capture: a Python docstring, a GraphQL description.
     Capture,
@@ -103,6 +104,10 @@ pub(crate) enum Line {
     /// Up to the definition's `body` field, whitespace collapsed: a signature over several lines
     /// reads as one. A definition with no body reads as its first line.
     Header,
+    /// As `Header`, but a definition with no body reads whole, whitespace collapsed: a Rust `const`
+    /// reads with its value and a `macro_rules!` with its rules, so doc and signature share one
+    /// `DOC_CHARS` cap.
+    Signature,
 }
 
 #[derive(Clone, Copy)]
@@ -113,6 +118,9 @@ pub(crate) enum Label {
     /// `query/GetShelf` so a query and a mutation of one name stay apart, and a reader asks for
     /// `GetShelf`, and a column of `app/clients` reads `clients.id`.
     Name,
+    /// The qualified name with each `/` between modules spelled as the language writes a path:
+    /// Rust's `tests/helper` reads `tests::helper`.
+    Spelled(&'static str),
 }
 
 #[derive(Clone, Copy)]

@@ -203,6 +203,7 @@ struct Declared<'t> {
 enum Declaring {
     Def(Kind),
     Owner,
+    Module,
     Namespace,
 }
 
@@ -213,6 +214,7 @@ fn text<'a>(n: Node, src: &'a str) -> &'a str {
 fn matches_of<'t>(c: &'static Compiled, root: Node<'t>, src: &str, rel: &str, mut each: impl FnMut(usize, Vec<(Role, Node<'t>)>)) {
     let mut cursor = QueryCursor::new();
     cursor.set_match_limit(MATCH_LIMIT);
+    cursor.set_max_start_depth(c.depth);
     let mut it = cursor.matches(&c.query, root, src.as_bytes());
     while let Some(m) = it.next() {
         if let Some(kind) = c.metas[m.pattern_index].within {
@@ -312,6 +314,7 @@ fn read_declaration<'t>(caps: &[(Role, Node<'t>)], pattern: usize, src: &str, ou
     let declaring = caps.iter().find_map(|(role, node)| match role {
         Role::Definition(kind) => Some((Declaring::Def(*kind), *node)),
         Role::ScopeOwner => Some((Declaring::Owner, *node)),
+        Role::ScopeModule => Some((Declaring::Module, *node)),
         Role::ScopeNamespace => Some((Declaring::Namespace, *node)),
         _ => None,
     });
@@ -378,6 +381,8 @@ struct Open {
     join: char,
     /// The definition's index, or `None` for a scope owner, which writes no node.
     def: Option<usize>,
+    /// An adopting scope owner's index in `adopting`.
+    adopt: Option<usize>,
 }
 
 /// Parents, qualified names, ids, export and bodies, in source order. The first pattern to match a
@@ -406,6 +411,13 @@ fn qualify(spec: &Spec, decl: &Compiled, file: &File, mut declared: Vec<Declared
     let fold = |s: &str| fold(spec, s);
     let mut stack: Vec<Open> = Vec::new();
     let mut ids: HashMap<String, usize> = HashMap::new();
+    // Adopting owners by range and the name they stand for, and the definitions and repeats
+    // directly under each: whether the type is the file's is known only once the file is read,
+    // since an `impl` may come before its type.
+    let mut adopting: Vec<(Range<usize>, String)> = Vec::new();
+    let (mut members, mut remembers) = (Vec::new(), Vec::new());
+    // A variant's first definition, by its parent node.
+    let mut variants: HashMap<usize, Option<usize>> = HashMap::new();
     for d in declared {
         while stack.last().is_some_and(|open| open.end < d.node.end_byte()) {
             stack.pop();
@@ -429,25 +441,51 @@ fn qualify(spec: &Spec, decl: &Compiled, file: &File, mut declared: Vec<Declared
             None => tail,
         };
         let qualified = under(&base, format!("{}{name}", meta.prefix));
-        let Declaring::Def(kind) = d.role else {
-            facts.stands_for.push((d.node.byte_range(), qualified.clone()));
-            stack.push(Open { end: d.node.end_byte(), qualified, join: '.', def: None });
-            continue;
+        let kind = match d.role {
+            Declaring::Def(kind) => kind,
+            Declaring::Module => {
+                stack.push(Open { end: d.node.end_byte(), qualified, join: '/', def: None, adopt: None });
+                continue;
+            }
+            _ => {
+                facts.stands_for.push((d.node.byte_range(), qualified.clone()));
+                let adopt = meta.adopt.then(|| {
+                    adopting.push((d.node.byte_range(), qualified.clone()));
+                    adopting.len() - 1
+                });
+                stack.push(Open { end: d.node.end_byte(), qualified, join: '.', def: None, adopt });
+                continue;
+            }
         };
         let id = format!("sym:{}::{qualified}", file.rel);
         let export = meta.export.unwrap_or_else(|| exported(spec.export, &d.modifiers, &name));
+        let adopted = parent.and_then(|p| p.adopt);
         if let Some(&first) = ids.get(&id) {
             facts.repeats.push((d.node.byte_range(), first));
+            if let Some(k) = adopted {
+                remembers.push((facts.redeclared.len(), k));
+            }
             facts.redeclared.push((parent.and_then(|p| p.def), first, export));
+            let sibling = || d.node.parent().map(|p| p.id());
+            if meta.variant && variants.get(&first).is_some_and(|at| *at == sibling()) {
+                facts.defs[first].end = facts.defs[first].end.max(text_span(d.node).1);
+            }
             if let Some(join) = kind.join() {
-                stack.push(Open { end: d.node.end_byte(), qualified, join, def: Some(first) });
+                stack.push(Open { end: d.node.end_byte(), qualified, join, def: Some(first), adopt: None });
             }
             continue;
+        }
+        if meta.variant {
+            variants.insert(facts.defs.len(), d.node.parent().map(|p| p.id()));
+        }
+        if let Some(k) = adopted {
+            members.push((facts.defs.len(), k));
         }
         ids.insert(id.clone(), facts.defs.len());
         let (line, end) = text_span(d.node);
         let label = match spec.label {
             Label::Qualified => qualified.clone(),
+            Label::Spelled(separator) => qualified.replace('/', separator),
             Label::Name => {
                 let container = match (d.owner, parent.and_then(|p| p.def)) {
                     (None, Some(p)) => Some((facts.defs[p].label.clone(), parent.map_or('.', |p| p.join))),
@@ -474,10 +512,31 @@ fn qualify(spec: &Spec, decl: &Compiled, file: &File, mut declared: Vec<Declared
             None => signature_line(spec.body.line, d.node, d.names[0], src),
         };
         let doc = doc_lines(spec, d.node, d.doc, src);
-        let def = Def { body: if doc.is_empty() { signature } else { format!("{doc}\n{signature}") }, ..def };
+        let body = if doc.is_empty() { signature } else { format!("{doc}\n{signature}") };
+        // A whole `const` or `macro_rules!` reads as its signature, so the cap holds the two together.
+        let body = if matches!(spec.body.line, Line::Signature) { syntax::cap(body, DOC_CHARS) } else { body };
+        let def = Def { body, ..def };
         facts.defs.push(def);
         if let Some(join) = kind.join() {
-            stack.push(Open { end: d.node.end_byte(), qualified, join, def: Some(facts.defs.len() - 1) });
+            stack.push(Open { end: d.node.end_byte(), qualified, join, def: Some(facts.defs.len() - 1), adopt: None });
+        }
+    }
+    let types: Vec<Option<usize>> = adopting.iter().map(|(_, q)| {
+        ids.get(&format!("sym:{}::{q}", file.rel)).copied().filter(|t| facts.defs[*t].kind.join() == Some('.'))
+    }).collect();
+    for (k, (range, _)) in adopting.into_iter().enumerate() {
+        if let Some(t) = types[k] {
+            facts.repeats.push((range, t));
+        }
+    }
+    for (i, k) in members {
+        if let Some(t) = types[k] {
+            (facts.defs[i].parent, facts.defs[i].export) = (Some(t), false);
+        }
+    }
+    for (i, k) in remembers {
+        if let Some(t) = types[k] {
+            (facts.redeclared[i].0, facts.redeclared[i].2) = (Some(t), false);
         }
     }
 }
@@ -510,11 +569,22 @@ fn signature_line(line: Line, def: Node, name: Node, src: &str) -> String {
             Some(body) => src[def.start_byte()..body.start_byte()].split_whitespace().collect::<Vec<_>>().join(" "),
             None => text(def, src).lines().next().unwrap_or("").trim().to_string(),
         },
+        Line::Signature => {
+            let head = def.child_by_field_name("body").map_or(def.end_byte(), |body| body.start_byte());
+            src[def.start_byte()..head].split_whitespace().collect::<Vec<_>>().join(" ")
+        }
     }
 }
 
 /// The named sibling before `n`. HCL's grammar puts the comments above a file's first block outside its
 /// `body`, so a first child of a `body` looks past it.
+fn is_kind(n: Node, kind: &str) -> bool {
+    match kind.split_once('.') {
+        Some((kind, field)) => n.kind() == kind && n.child_by_field_name(field).is_some(),
+        None => n.kind() == kind,
+    }
+}
+
 fn above(n: Node) -> Option<Node> {
     n.prev_named_sibling().or_else(|| n.parent().filter(|p| p.kind() == "body").and_then(|p| p.prev_named_sibling()))
 }
@@ -523,7 +593,9 @@ fn above(n: Node) -> Option<Node> {
 /// family alone. A string is unquoted and nothing else: its lines are prose, where a leading `*`,
 /// `#` or `//` is markdown.
 fn stripped(raw: &str, markers: &[&str]) -> String {
+    // `comment_text` reads `///` as `//` and a stray `/`.
     let raw = raw.trim();
+    let raw = raw.strip_prefix("///").unwrap_or(raw);
     // A string prefix (`r"""`, `u'`, `f"`) is no part of the prose, and a comment never starts with one.
     let literal = raw.trim_start_matches(|c: char| "rRuUbBfF".contains(c));
     if let Some(quote) = literal.chars().next().filter(|c| matches!(c, '"' | '\'')) {
@@ -549,7 +621,7 @@ fn doc_lines(spec: &Spec, def: Node, captured: Option<Node>, src: &str) -> Strin
             let mut at = top;
             while let Some(p) = above(at) {
                 // A shebang is the interpreter line, not documentation of what follows it.
-                if !kinds.contains(&p.kind()) || text(p, src).starts_with("#!") || last_row(p) + 1 != at.start_position().row || trails(p) {
+                if !kinds.iter().any(|k| is_kind(p, k)) || text(p, src).starts_with("#!") || last_row(p) + 1 != at.start_position().row || trails(p) {
                     break;
                 }
                 doc.push(text(p, src).trim_end());

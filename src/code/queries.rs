@@ -67,6 +67,8 @@ pub(crate) enum Role {
     Name,
     Owner,
     ScopeOwner,
+    /// A module that writes no node and joins what it holds with `/`: Rust's inline `mod`.
+    ScopeModule,
     ScopeNamespace,
     Modifier,
     Doc,
@@ -106,6 +108,7 @@ impl Role {
             "name" => Role::Name,
             "owner" => Role::Owner,
             "scope.owner" => Role::ScopeOwner,
+            "scope.module" => Role::ScopeModule,
             "scope.namespace" => Role::ScopeNamespace,
             "modifier" => Role::Modifier,
             "doc" => Role::Doc,
@@ -138,6 +141,17 @@ pub(crate) struct Meta {
     /// A node kind the match must sit inside: a construct nests what it reads at any depth, which a
     /// pattern can only spell as one alternative per depth.
     pub within: Option<u16>,
+    /// On a scope owner: when the file declares the type it stands for, it is that type. Its
+    /// members hang off the type and are reached through it, so none is the file's export, and a
+    /// site between them is the type's. Rust's `impl` is its type's; Swift's `extension` is not.
+    pub adopt: bool,
+    /// On a definition: a repeat of its id, matched by a pattern that sets it too, under the same
+    /// parent, is a build variant of the first, whose span grows over it. A hunk in either is a
+    /// change to the one symbol.
+    pub variant: bool,
+    /// How deep the pattern's outermost node may sit, the file's root at 0: Rust's inline `mod` is
+    /// never deep in a function body.
+    pub depth: Option<u32>,
 }
 
 pub(crate) struct Compiled {
@@ -146,6 +160,9 @@ pub(crate) struct Compiled {
     pub roles: Vec<Role>,
     /// By pattern index.
     pub metas: Vec<Meta>,
+    /// The deepest any pattern may start, when every pattern is rooted at the file or sets `depth`:
+    /// the matcher then never walks a function body, which costs more than the match.
+    pub depth: Option<u32>,
 }
 
 impl std::fmt::Debug for Compiled {
@@ -162,6 +179,11 @@ pub(crate) fn compile(grammar: &Language, sources: &[&str]) -> Result<Compiled, 
         .map(|name| Role::of(name).ok_or_else(|| format!("@{name} is not in the capture contract")))
         .collect::<Result<Vec<_>, _>>()?;
     let mut metas = Vec::with_capacity(query.pattern_count());
+    let root = {
+        let mut parser = tree_sitter::Parser::new();
+        parser.set_language(grammar).ok().and_then(|_| parser.parse("", None)).map(|t| t.root_node().kind().to_string())
+    };
+    let mut depth = Some(0);
     for i in 0..query.pattern_count() {
         let at = query.start_byte_for_pattern(i);
         if !query.general_predicates(i).is_empty() || !query.property_predicates(i).is_empty() {
@@ -176,6 +198,12 @@ pub(crate) fn compile(grammar: &Language, sources: &[&str]) -> Result<Compiled, 
                 "export" if value == "always" => meta.export = Some(true),
                 "export" if value == "never" => meta.export = Some(false),
                 "reexport" => meta.reexport = true,
+                "adopt" => meta.adopt = true,
+                "variant" => meta.variant = true,
+                "depth" => match value.parse() {
+                    Ok(n) => meta.depth = Some(n),
+                    Err(_) => return Err(format!("pattern at byte {at} sets depth {value:?}, which is no count")),
+                },
                 "within" => match grammar.id_for_node_kind(value, true) {
                     0 => return Err(format!("pattern at byte {at} sets within {value:?}, which the grammar has no node for")),
                     kind => meta.within = Some(kind),
@@ -194,13 +222,16 @@ pub(crate) fn compile(grammar: &Language, sources: &[&str]) -> Result<Compiled, 
         if meta.within.is_some() && !certain {
             return Err(format!("pattern at byte {at} sets within but may match with no capture to place"));
         }
-        let declares = present(|r| matches!(r, Role::Definition(_) | Role::ScopeOwner | Role::ScopeNamespace));
+        let declares = present(|r| matches!(r, Role::Definition(_) | Role::ScopeOwner | Role::ScopeModule | Role::ScopeNamespace));
         if declares && !present(|r| r == Role::Name) {
             return Err(format!("pattern at byte {at} declares without capturing @name"));
         }
+        let outermost = text[at..].trim_start_matches(|c: char| c == '(' || c.is_whitespace());
+        let rooted = root.as_deref().is_some_and(|r| outermost.strip_prefix(r).is_some_and(|rest| !rest.starts_with(|c: char| c.is_alphanumeric() || c == '_')));
+        depth = depth.zip(if rooted { Some(0) } else { meta.depth }).map(|(a, b)| a.max(b));
         metas.push(meta);
     }
-    Ok(Compiled { query, roles, metas })
+    Ok(Compiled { query, roles, metas, depth })
 }
 
 /// Each ported language's `.scm` sources, embedded so the binary never reads a query from disk.
@@ -362,5 +393,18 @@ mod contract {
         assert!(c.metas[1].reexport);
         assert_eq!(c.metas[2].context, "arg");
         assert_eq!(c.metas[3].within, Some(Lang::Python.grammar().unwrap().id_for_node_kind("class_definition", true)));
+    }
+
+    #[test]
+    fn the_matcher_starts_no_deeper_than_every_pattern_allows() {
+        let rust = Lang::Rust.grammar().unwrap();
+        let depth = |sources: &[&str]| compile(&rust, sources).unwrap().depth;
+        let rooted = "(source_file (function_item name: (identifier) @name) @definition.function)";
+        assert_eq!(depth(&[rooted]), Some(0));
+        assert_eq!(depth(&[rooted, r#"((mod_item name: (identifier) @name body: (_)) @scope.module (#set! depth "5"))"#]), Some(5));
+        // One pattern that may start anywhere lets the whole query start anywhere.
+        assert_eq!(depth(&[rooted, "(line_comment) @cite.comment"]), None);
+        let deep = r#"((line_comment) @cite.comment (#set! depth "deep"))"#;
+        assert!(compile(&rust, &[deep]).expect_err(deep).contains("no count"));
     }
 }
