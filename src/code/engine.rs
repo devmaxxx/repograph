@@ -14,7 +14,7 @@ use streaming_iterator::StreamingIterator;
 use tree_sitter::{Node, QueryCursor, Tree};
 
 use crate::code::index::Header;
-use crate::code::queries::{Kind, Meta, Role};
+use crate::code::queries::{self, Kind, Meta, Role};
 use crate::code::syntax::{self, comment_text, last_row, text_span, DOC_CHARS};
 use crate::model::{Graph, NodeKind};
 
@@ -22,7 +22,7 @@ use crate::model::{Graph, NodeKind};
 // define it stay private to the crate.
 pub use crate::code::imports::Resolver;
 pub use crate::code::lang::Lang;
-pub use crate::code::queries::{self, Compiled};
+pub use crate::code::queries::{compile, Compiled};
 pub use crate::code::spec::{Ambiguity, Body, Cap, Doc, Export, Form, ImportPaths, Label, Line, Sources, Spec, Visibility, NONE};
 pub use crate::model::{EdgeKind, Extraction};
 

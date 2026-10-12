@@ -7,7 +7,7 @@ use std::sync::OnceLock;
 
 use common::code::{lines, repo};
 use repograph::code::engine::{
-    facts, header, import_targets, queries, resolve, write, Ambiguity, Body, Cap, Compiled, Doc, EdgeKind, Export, Extraction,
+    compile, facts, header, import_targets, resolve, write, Ambiguity, Body, Cap, Compiled, Doc, EdgeKind, Export, Extraction,
     Facts, File, Form, Import, ImportPaths, Label, Lang, Line, Sources, Spec, Visibility, NONE,
 };
 
@@ -74,7 +74,7 @@ fn spec(body: Body, export: Export) -> Spec {
 const STRIPPED: Body = Body { doc: Doc::Adjacent { kinds: &["comment"], between: &[] }, form: Form::Stripped, cap: Cap::Head, line: Line::First };
 
 fn compiled(sources: &[&str]) -> &'static Compiled {
-    Box::leak(Box::new(queries::compile(&Lang::Python.grammar().unwrap(), sources).unwrap()))
+    Box::leak(Box::new(compile(&Lang::Python.grammar().unwrap(), sources).unwrap()))
 }
 
 fn read(spec: &Spec, rel: &str, source: &str) -> (Facts, Extraction) {

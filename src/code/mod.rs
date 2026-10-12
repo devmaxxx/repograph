@@ -8,7 +8,7 @@ pub(crate) mod index;
 pub(crate) mod jvm;
 pub(crate) mod lang;
 pub(crate) mod prose;
-pub mod queries;
+pub(crate) mod queries;
 pub(crate) mod spec;
 pub(crate) mod syntax;
 pub(crate) mod typescript;
