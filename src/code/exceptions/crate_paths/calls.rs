@@ -1,14 +1,15 @@
 //! What a Rust file's code reaches: an `impl`'s ties to its type and trait, its calls and macro
 //! invocations, and the attributes and derives on its items.
 
-use super::crates::Target;
-use super::items::owner;
-use super::uses::Ctx;
-use super::{inline_of, scoped, type_path};
-use crate::code::syntax::{descend, field_text, text};
-use crate::model::{EdgeKind, Extraction};
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
+
 use tree_sitter::Node;
+
+use super::uses::Ctx;
+use super::{inline_of, scoped, type_path, Target};
+use crate::code::engine::Sink;
+use crate::code::syntax::{descend, field_text, named, text};
+use crate::model::EdgeKind;
 
 pub(crate) fn id_of(t: &Target) -> Option<String> {
     match t {
@@ -29,19 +30,30 @@ fn written(ctx: &Ctx, t: &Target) -> bool {
 /// An `impl` ties its members to their type with `References` when the type is declared in
 /// another file — an edge `impact::walks` follows, so `impact` on the type reaches them — and the
 /// type to its trait with `Extends` when both resolve in the repository.
-pub(crate) fn impls(ctx: &Ctx, ex: &mut Extraction) {
+pub(crate) fn impls(ctx: &Ctx, root: Node, sink: &mut Sink) {
     let own = format!("sym:{}::", ctx.rel);
-    for imp in &ctx.items.impls {
-        let Some(ty) = ctx.resolve(&imp.inline, &imp.ty).filter(|t| written(ctx, t)).as_ref().and_then(id_of) else { continue };
+    descend(root, &mut |n| {
+        if n.kind() != "impl_item" {
+            return matches!(n.kind(), "source_file" | "mod_item" | "declaration_list");
+        }
+        let inline = inline_of(n, ctx.src);
+        let ty_path = n.child_by_field_name("type").map(|t| type_path(t, ctx.src)).unwrap_or_default();
+        if ty_path.is_empty() {
+            return false;
+        }
+        let Some(ty) = ctx.resolve(&inline, &ty_path).filter(|t| written(ctx, t)).as_ref().and_then(id_of) else { return false };
         if !ty.starts_with(&own) {
-            for m in &imp.members {
-                ex.edge(&format!("{own}{m}"), &ty, EdgeKind::References, "impl", ctx.rel);
+            let members = n.child_by_field_name("body").map(named).unwrap_or_default();
+            for m in members.into_iter().filter_map(|m| ctx.facts.declared_at(&m.byte_range())) {
+                sink.edge(&ctx.facts.defs[m].id, &ty, EdgeKind::References, "impl", ctx.rel);
             }
         }
-        if let Some(tr) = imp.trait_path.as_ref().and_then(|p| ctx.resolve(&imp.inline, p)).filter(|t| written(ctx, t)).as_ref().and_then(id_of) {
-            ex.edge(&ty, &tr, EdgeKind::Extends, "", ctx.rel);
+        let trait_path = n.child_by_field_name("trait").map(|t| type_path(t, ctx.src)).filter(|p| !p.is_empty());
+        if let Some(tr) = trait_path.and_then(|p| ctx.resolve(&inline, &p)).filter(|t| written(ctx, t)).as_ref().and_then(id_of) {
+            sink.edge(&ty, &tr, EdgeKind::Extends, "", ctx.rel);
         }
-    }
+        false
+    });
 }
 
 /// Struct name → field → the type the field's methods are called on.
@@ -157,7 +169,7 @@ fn self_type(n: Node, src: &[u8]) -> Option<Vec<String>> {
 fn member(ctx: &Ctx, inline: &[String], ty: &[String], method: &str) -> Option<String> {
     let last = ty.last()?;
     let here = scoped(inline, &format!("{last}.{method}"));
-    if ctx.items.names.contains(&here) {
+    if ctx.local.names.contains(&here) {
         return Some(format!("sym:{}::{here}", ctx.rel));
     }
     let Target::Item { file, name } = ctx.resolve(inline, ty)? else { return None };
@@ -182,7 +194,7 @@ fn callee(ctx: &Ctx, fields: &Fields, call: Node, f: Node) -> Option<String> {
             // declaring file holds no `m` for a resolver to land on.
             if let ([.., ty, method], true) = (path.as_slice(), bare_member) {
                 let here = scoped(&inline, &format!("{ty}.{method}"));
-                if ctx.items.names.contains(&here) {
+                if ctx.local.names.contains(&here) {
                     return Some(format!("sym:{}::{here}", ctx.rel));
                 }
             }
@@ -222,7 +234,7 @@ fn macro_target(ctx: &Ctx, n: Node) -> Option<String> {
     }
     let name = text(m, ctx.src);
     // Textual scope: this file's own definition first, then one the crate holds unambiguously.
-    if let Some(suffix) = ctx.items.macros.get(name) {
+    if let Some(suffix) = ctx.local.macros.get(name) {
         return Some(format!("sym:{}::{suffix}", ctx.rel));
     }
     crate_macro(ctx, name)
@@ -235,33 +247,19 @@ fn crate_macro(ctx: &Ctx, name: &str) -> Option<String> {
     }
 }
 
-/// Node ids this file writes, so an edge starts and ends only at ids that exist: another file's
-/// ids are vouched for by the resolver, this file's by what it declared.
-struct Written {
-    own: String,
-    ids: BTreeSet<String>,
-}
-
-impl Written {
-    fn new(ctx: &Ctx, ex: &Extraction) -> Written {
-        Written { own: format!("sym:{}::", ctx.rel), ids: ex.nodes.iter().map(|n| n.id.clone()).collect() }
-    }
-
-    fn target(&self, id: String) -> Option<String> {
-        (!id.starts_with(&self.own) || self.ids.contains(&id)).then_some(id)
-    }
-
-    /// An `impl` of a type declared elsewhere writes no node for a bare container, so its calls start at the file.
-    fn source(&self, rel: &str, id: String) -> String {
-        if id.starts_with("file:") || self.ids.contains(&id) { id } else { format!("file:{rel}") }
+/// `id` when a node is written for it: another file's ids are vouched for by the resolver, this
+/// file's by what it declared.
+fn landed(ctx: &Ctx, id: String) -> Option<String> {
+    match id.strip_prefix(&format!("sym:{}::", ctx.rel)) {
+        Some(suffix) if !ctx.local.names.contains(suffix) => None,
+        _ => Some(id),
     }
 }
 
 /// Every call and macro invocation in the file, as an edge from its owner to what the scope
 /// proves it reaches. A self-call is dropped; a repeated call collapses in the extractor's dedup.
-pub(crate) fn read(ctx: &Ctx, root: Node, ex: &mut Extraction) {
+pub(crate) fn read(ctx: &Ctx, root: Node, sink: &mut Sink) {
     let fields = Fields::read(ctx.src, root);
-    let written = Written::new(ctx, ex);
     let mut edges = Vec::new();
     descend(root, &mut |n| {
         let target = match n.kind() {
@@ -269,8 +267,8 @@ pub(crate) fn read(ctx: &Ctx, root: Node, ex: &mut Extraction) {
             "macro_invocation" => macro_target(ctx, n),
             _ => None,
         };
-        if let Some(target) = target.and_then(|t| written.target(t)) {
-            let from = written.source(ctx.rel, owner(n, ctx.rel, ctx.src));
+        if let Some(target) = target.and_then(|t| landed(ctx, t)) {
+            let from = ctx.facts.source_id(ctx.rel, ctx.facts.owner(n.start_byte()));
             if from != target {
                 edges.push((from, target));
             }
@@ -278,7 +276,7 @@ pub(crate) fn read(ctx: &Ctx, root: Node, ex: &mut Extraction) {
         true
     });
     for (from, to) in edges {
-        ex.edge(&from, &to, EdgeKind::Calls, "", ctx.rel);
+        sink.edge(&from, &to, EdgeKind::Calls, "", ctx.rel);
     }
 }
 
@@ -301,8 +299,7 @@ fn derive_paths(args: Node, src: &[u8]) -> Vec<Vec<String>> {
 const DECORATED: [&str; 9] =
     ["function_item", "function_signature_item", "struct_item", "enum_item", "union_item", "trait_item", "type_item", "const_item", "static_item"];
 
-pub(crate) fn attributes(ctx: &Ctx, root: Node, ex: &mut Extraction) {
-    let written = Written::new(ctx, ex);
+pub(crate) fn attributes(ctx: &Ctx, root: Node, sink: &mut Sink) {
     let mut found = Vec::new();
     descend(root, &mut |n| {
         if n.kind() != "attribute_item" {
@@ -314,7 +311,8 @@ pub(crate) fn attributes(ctx: &Ctx, root: Node, ex: &mut Extraction) {
             next = s.next_named_sibling();
         }
         let Some(name) = next.filter(|i| DECORATED.contains(&i.kind())).and_then(|item| item.child_by_field_name("name")) else { return false };
-        let from = owner(name, ctx.rel, ctx.src);
+        // Only a symbol is decorated: an item in an `extern` block or a function body has none.
+        let Some(from) = ctx.facts.owner(name.start_byte()).map(|i| ctx.facts.defs[i].id.clone()) else { return false };
         let Some(attr) = n.named_child(0).filter(|a| a.kind() == "attribute") else { return false };
         let Some(head) = attr.named_child(0).map(|p| type_path(p, ctx.src)) else { return false };
         let paths = match (head.as_slice(), attr.child_by_field_name("arguments")) {
@@ -328,16 +326,13 @@ pub(crate) fn attributes(ctx: &Ctx, root: Node, ex: &mut Extraction) {
                 [one] => ctx.bindings.names.get(&inline.join("/")).and_then(|m| m.get(one)).cloned(),
                 _ => ctx.resolve(&inline, &path),
             };
-            if let Some(id) = target.as_ref().and_then(id_of).and_then(|t| written.target(t)) {
+            if let Some(id) = target.as_ref().and_then(id_of).and_then(|t| landed(ctx, t)) {
                 found.push((from.clone(), id, path.join("::")));
             }
         }
         false
     });
     for (from, to, context) in found {
-        // Only a symbol this file writes is decorated; a bare container has none.
-        if written.ids.contains(&from) {
-            ex.edge(&from, &to, EdgeKind::DecoratedBy, &context, ctx.rel);
-        }
+        sink.edge(&from, &to, EdgeKind::DecoratedBy, &context, ctx.rel);
     }
 }

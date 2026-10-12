@@ -6,14 +6,14 @@ use crate::code::imports::Resolver;
 use crate::code::lang::Lang;
 use crate::config::Config;
 use crate::model::{EdgeKind, Extraction, Extractor, NodeKind};
-use super::crates::Target;
+use crate::code::exceptions::crate_paths::{Crates, Target};
 
-pub(super) struct Repo {
+struct Repo {
     dir: tempfile::TempDir,
 }
 
 impl Repo {
-    pub(super) fn new(files: &[(&str, &str)]) -> Repo {
+    fn new(files: &[(&str, &str)]) -> Repo {
         let dir = tempfile::tempdir().unwrap();
         for (p, c) in files {
             let full = dir.path().join(p);
@@ -23,18 +23,18 @@ impl Repo {
         Repo { dir }
     }
 
-    pub(super) fn extract(&self, rel: &str) -> Extraction {
+    fn extract(&self, rel: &str) -> Extraction {
         let resolver = self.resolver();
         let src = std::fs::read_to_string(self.dir.path().join(rel)).unwrap();
         CodeExtractor::new(resolver).extract(rel, &src)
     }
 }
 
-pub(super) fn ids(ex: &Extraction) -> Vec<&str> {
+fn ids(ex: &Extraction) -> Vec<&str> {
     ex.nodes.iter().map(|n| n.id.as_str()).collect()
 }
 
-pub(super) fn edges(ex: &Extraction, kind: EdgeKind) -> Vec<(&str, &str, &str)> {
+fn edges(ex: &Extraction, kind: EdgeKind) -> Vec<(&str, &str, &str)> {
     ex.edges.iter().filter(|e| e.kind == kind).map(|e| (e.source.as_str(), e.target.as_str(), e.context.as_str())).collect()
 }
 
@@ -73,7 +73,7 @@ fn every_kind_the_walk_matches_is_in_the_grammar() {
 }
 
 impl Repo {
-    pub(super) fn resolver(&self) -> Resolver {
+    fn resolver(&self) -> Resolver {
         let cfg = Config { code_globs: vec!["**/*.rs".into()], ..Config::default() };
         Resolver::new(self.dir.path(), &cfg).unwrap()
     }
@@ -91,7 +91,7 @@ fn the_resolver_reads_every_cargo_manifest_its_walk_reaches() {
     ]);
     let path: Vec<String> = ["shop_core", "hmac", "sign"].map(String::from).to_vec();
     assert_eq!(
-        repo.resolver().state::<crate::code::rust_lang::Crates>().resolve("crates/shopd/src/main.rs", &[], &path),
+        repo.resolver().state::<Crates>().resolve("crates/shopd/src/main.rs", &[], &path),
         Some(Target::Item { file: "crates/shop-core/src/hmac.rs".into(), name: "sign".into() })
     );
 }
@@ -540,4 +540,146 @@ fn a_path_through_a_module_whose_file_is_absent_writes_no_symbol() {
     ]);
     let ex = repo.extract("src/ops.rs");
     assert!(ex.edges.iter().all(|e| e.kind != EdgeKind::Calls && !e.target.contains("gone/")), "{:?}", ex.edges);
+}
+
+/// The module tree alone, read from paths and manifests with no file parsed.
+mod crate_tree {
+    use crate::code::exceptions::crate_paths::{item_name, Crates, Module, Target};
+    use crate::code::imports::parent;
+
+    fn table(manifests: &[(&str, &str)], files: &[&str]) -> Crates {
+        let mut c = Crates::default();
+        for (rel, text) in manifests {
+            c.manifest(rel, text);
+        }
+        // A path only lands on a name its file declares, so each fixture file declares the names the cases use.
+        for f in files {
+            c.file(f, "pub fn charge() {}\npub fn total() {}\npub fn add() {}\npub fn f() {}\npub struct Order;\npub struct Card;\npub struct Line;\nmod fixtures {}\n");
+        }
+        c
+    }
+
+    fn path(p: &str) -> Vec<String> {
+        p.split("::").map(str::to_string).collect()
+    }
+
+    fn item(file: &str, name: &str) -> Option<Target> {
+        Some(Target::Item { file: file.into(), name: name.into() })
+    }
+
+    fn shop() -> Crates {
+        table(
+            &[
+                ("Cargo.toml", "[workspace]\nmembers = [\"crates/*\"]\n"),
+                ("crates/shop-core/Cargo.toml", "[package]\nname = \"shop-core\"\nversion = \"0.1.0\"\n"),
+                ("crates/shopd/Cargo.toml", "[package]\nname = \"shopd\"\nversion = \"0.1.0\"\n\n[[bin]]\nname = \"admin\"\npath = \"tools/admin.rs\"\n"),
+            ],
+            &[
+                "crates/shop-core/src/lib.rs",
+                "crates/shop-core/src/orders.rs",
+                "crates/shop-core/src/orders/line.rs",
+                "crates/shop-core/src/pay/mod.rs",
+                "crates/shop-core/src/pay/card.rs",
+                "crates/shop-core/tests/checkout.rs",
+                "crates/shop-core/tests/common/mod.rs",
+                "crates/shopd/src/lib.rs",
+                "crates/shopd/src/main.rs",
+                "crates/shopd/src/routes/mod.rs",
+                "crates/shopd/src/routes/cart.rs",
+                "crates/shopd/src/bin/seed.rs",
+                "crates/shopd/tools/admin.rs",
+            ],
+        )
+    }
+
+    #[test]
+    fn a_module_is_named_by_its_path_below_the_nearest_root() {
+        let c = shop();
+        assert_eq!(
+            c.module_of("crates/shop-core/src/orders/line.rs"),
+            Module { dir: "crates/shop-core/src".into(), root: "crates/shop-core/src/lib.rs".into(), segs: vec!["orders".into(), "line".into()] }
+        );
+        assert_eq!(c.module_of("crates/shop-core/src/pay/mod.rs").segs, vec!["pay".to_string()]);
+        let common = c.module_of("crates/shop-core/tests/common/mod.rs");
+        assert_eq!((common.dir.as_str(), common.segs.clone()), ("crates/shop-core/tests", vec!["common".to_string()]));
+        // A crate with a library and a binary: a module under `src/` is the library's.
+        assert_eq!(c.module_of("crates/shopd/src/routes/cart.rs").root, "crates/shopd/src/lib.rs");
+        for root in ["crates/shopd/src/bin/seed.rs", "crates/shopd/tools/admin.rs", "crates/shop-core/tests/checkout.rs"] {
+            assert_eq!(c.module_of(root), Module { dir: parent(root).into(), root: root.into(), segs: vec![] }, "{root}");
+        }
+    }
+
+    #[test]
+    fn crate_self_super_and_a_workspace_crate_resolve_through_the_tree() {
+        let c = shop();
+        let line = "crates/shop-core/src/orders/line.rs";
+        assert_eq!(c.resolve(line, &[], &path("crate::pay::card::charge")), item("crates/shop-core/src/pay/card.rs", "charge"));
+        assert_eq!(c.resolve(line, &[], &path("super::Order")), item("crates/shop-core/src/orders.rs", "Order"));
+        assert_eq!(c.resolve("crates/shop-core/src/pay/card.rs", &[], &path("self::Card::new")), item("crates/shop-core/src/pay/card.rs", "Card.new"));
+        assert_eq!(c.resolve("crates/shopd/src/routes/cart.rs", &[], &path("shop_core::orders::line::Line")), item("crates/shop-core/src/orders/line.rs", "Line"));
+        // Uniform paths: a child module is named without `self::`.
+        assert_eq!(c.resolve("crates/shopd/src/lib.rs", &[], &path("routes::cart::add")), item("crates/shopd/src/routes/cart.rs", "add"));
+        assert_eq!(c.resolve("crates/shopd/src/lib.rs", &[], &path("crate::routes")), Some(Target::Module { file: "crates/shopd/src/routes/mod.rs".into(), inline: vec![] }));
+        assert_eq!(c.resolve(line, &[], &path("serde::Serialize")), None, "an external crate resolves to nothing");
+    }
+
+    #[test]
+    fn an_inline_module_nests_inside_its_file() {
+        let c = shop();
+        let orders = "crates/shop-core/src/orders.rs";
+        let tests = vec!["tests".to_string()];
+        assert_eq!(c.resolve(orders, &tests, &path("super::total")), item(orders, "total"));
+        assert_eq!(c.resolve(orders, &tests, &path("super")), Some(Target::Module { file: orders.into(), inline: vec![] }));
+        assert_eq!(c.resolve(orders, &[], &path("self::fixtures::order")), item(orders, "fixtures/order"));
+        assert_eq!(c.resolve(orders, &[], &path("self::line::Line")), item("crates/shop-core/src/orders/line.rs", "Line"));
+    }
+
+    #[test]
+    fn a_lib_table_renames_and_moves_the_library() {
+        let c = table(&[("x/Cargo.toml", "[package]\nname = \"a-b\"\n\n[lib]\nname = \"ab_core\"\npath = \"./lib/core.rs\"\n")], &["x/lib/core.rs", "x/lib/util.rs", "y/main.rs"]);
+        assert_eq!(c.module_of("x/lib/util.rs").segs, vec!["util".to_string()]);
+        assert_eq!(c.resolve("x/lib/util.rs", &[], &path("ab_core::util::f")), item("x/lib/util.rs", "f"));
+        assert_eq!(c.resolve("x/lib/util.rs", &[], &path("a_b::util::f")), None, "the package name is not the library's when [lib] names it");
+        // A file no manifest reaches is a crate of its own: `mod x;` beside it still resolves.
+        assert_eq!(c.module_of("y/main.rs").root, "y/main.rs");
+    }
+
+    #[test]
+    fn a_macro_is_found_by_a_line_scan_within_its_crate() {
+        let mut c = shop();
+        c.file("crates/shop-core/src/orders.rs", "#[macro_export]\nmacro_rules! money {\n    () => {};\n}\n");
+        assert_eq!(c.macro_files("crates/shop-core/src/pay/card.rs", "money"), vec!["crates/shop-core/src/orders.rs"]);
+        assert!(c.macro_files("crates/shopd/src/main.rs", "money").is_empty(), "another crate needs a path to it");
+    }
+
+    #[test]
+    fn item_names_join_modules_with_a_slash_and_members_with_a_dot() {
+        let s = |v: &[&str]| v.iter().map(|x| x.to_string()).collect::<Vec<_>>();
+        assert_eq!(item_name(&[], &s(&["Store", "new"])), "Store.new");
+        assert_eq!(item_name(&s(&["tests"]), &s(&["Helper", "build", "x"])), "tests/Helper.build");
+        assert_eq!(item_name(&[], &s(&["fixtures", "order"])), "fixtures/order");
+        assert_eq!(item_name(&[], &s(&["MAX_LEN"])), "MAX_LEN");
+        assert_eq!(item_name(&[], &s(&["UUID", "new"])), "UUID.new", "an acronym is a type");
+    }
+
+    #[test]
+    fn a_file_s_top_level_names_are_read_by_the_line_scan() {
+        let mut c = Crates::default();
+        c.file("src/walk.rs", "pub struct Manifest;\npub(crate) const fn limit() -> u32 { 1 }\nstatic mut N: u32 = 0;\nimpl Manifest {\n    pub fn load() {}\n}\n");
+        for name in ["Manifest", "limit", "N"] {
+            assert!(c.declares("src/walk.rs", name), "{name}");
+        }
+        assert!(!c.declares("src/walk.rs", "load"), "an indented member is not a top-level name");
+    }
+
+    #[test]
+    fn a_path_through_a_crate_root_re_export_lands_on_the_declaring_file() {
+        let mut c = Crates::default();
+        c.manifest("Cargo.toml", "[package]\nname = \"shop\"\n");
+        c.file("src/lib.rs", "mod store;\npub use store::Store;\npub mod ops;\n");
+        c.file("src/store.rs", "pub struct Store;\nimpl Store {\n    pub fn new() -> Store { Store }\n}\n");
+        c.file("src/ops.rs", "");
+        assert_eq!(c.resolve("src/ops.rs", &[], &path("crate::Store")), item("src/store.rs", "Store"));
+        assert_eq!(c.resolve("src/ops.rs", &[], &path("crate::Store::new")), item("src/store.rs", "Store.new"));
+    }
 }

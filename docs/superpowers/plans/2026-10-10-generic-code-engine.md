@@ -1325,6 +1325,43 @@ This step alone closes the three reviewer defects. About 1,200 lines of Rust are
 
   Step 10 starts after that re-read, not before.
 
+**Step 9 as built.** Where the code differs from the text above, the code is the record:
+
+- **Engine first, in its own commit.** It adds data, no language-specific branch:
+  - `@scope.module` opens a scope that writes no node and joins what it holds with `/`.
+  - `#set! adopt` on a scope owner makes it the type it names when the file declares that type, settled after the whole file is read, since an `impl` may come before its type. The members then hang off the type and are never the file's export, and a site between them is the type's.
+  - `#set! variant` grows the first definition's span over a repeat that sets it too under the same parent node.
+  - `Label::Spelled("::")` and `Line::Signature`, which reads a bodiless item whole and caps doc and signature together at 600 characters, as the old reader did.
+  - A doc kind may name a field (`line_comment.outer`), and `Form::Stripped` drops a `///` marker whole.
+  - The matcher's start depth. A query whose every pattern is rooted at the file, or sets `#set! depth`, never starts a match deeper, so it skips function bodies. Without it, Rust's `mod` patterns walked every body, and the corpus build read 1.21× step 0. The bound changes no match for a rooted query, so Python, Swift and the others read faster with identical output.
+  - Gate: the kit graph and headers are byte-identical to `new-8p`, and every test passes.
+- **Queries** (155 + 6 lines):
+  - Items at the file and in inline `mod`s: `fn`, signature and `macro_rules!` as functions, `struct` and `union`, `enum`, `type`, `const`, `static`, `trait`. A `mod` is `@scope.module` and sets `depth "5"`, so a `mod` nested more than three deep declares nothing.
+  - A trait's members set `export "never"`.
+  - An `impl` is an adopting `@scope.owner`, named by the type's last segment through generics and one reference. Its members are matched only under the same type shapes, so an `impl` for a slice, a tuple or a function type declares nothing, as before.
+  - A `cfg` twin is a pattern ahead of the items: a `#[cfg(..)]` attribute, then any attributes or line comments, then the item, with `#set! variant`.
+  - `pub` as `Export::Show(["pub"])`, so `pub(crate)` exports too.
+  - Citations from line and block comments and from string and raw string literals. No call or import sites: the exception reads those off the tree.
+- **Spec:** `Label::Spelled("::")`, `Export::Show(["pub"])`, `Visibility::File` and `OwnFirst`. The body is `Adjacent { kinds: ["line_comment.outer"], between: ["attribute_item"] }`, `Stripped`, `Head` and `Line::Signature`. `ImportPaths { suffixes: &[] }`, so the engine writes no Imports edge itself. The hooks are `collect` (the line scan behind the crate tree), `state`, `manifest` (`Cargo.toml`) and `resolve`. No `import` hook: no other language reads a Rust file's imports.
+- **Exception:** one, `exceptions/crate_paths.rs` with `crate_paths/uses.rs` and `crate_paths/calls.rs` (393 + 193 + 338 lines). It is the old reader's module tree, `use` flattening, calls, macros, `impl` ties and attributes, now reading what the file declares from `Facts` and placing a site's owner by `Facts::owner`.
+  - Measured on the kit corpus with the engine default, the queries plus call sites (bare and path calls, method calls with a receiver, macros) and no hook: Calls 645 of 1,068 (P 1.000, R 0.604), and Imports and ReExports 0 of 4. The hook stays.
+  - It is its own file, not part of `module_paths.rs` as §2.9 lists it. The Rust crate tree and the Python search path share `parent` and `join`, which already live in `imports.rs`, and nothing else.
+- **Gate:** langdiff `--lang rs` with the final binary on three inputs.
+  - Kit corpus (`new-8p` → `new-9`): R1, R2, R4–R9 = 0, R3 = 3 and body-above 7. Every edge is identical: Calls 1,068, Declares 1,107 (200 `export`), Imports 3, ReExports 2. All other languages are byte-identical.
+  - Scratchpad corpus (vs `store-base`): rs R3 = 3 and body-above 7, the same nodes. py R3 = 12, Swift R3 = 1 and SQL body-above 11 are the already-accepted diffs.
+  - Fixture: no `.rs` file. The graph and headers are byte-identical to step 8's, so the bench was not run.
+  - **Accepted body-above 7 and R3 = 3:** `Stripped` drops a blank `///` line between paragraphs, which the old reader kept. Where doc and signature reach the 600-character cap together, the cut then falls a few characters later, so the last line differs in three bodies.
+  - No bounded edge moved on any input, so the blasts were not run (§5.5).
+- **Divergence outside the inputs.** Read on this repository's and `agent-orchestrator`'s sources, step 8's binary against step 9's: R1, R2 and R4–R9 = 0 on both, and no edge moved. R3 = 9 and 8, body-above 10 and 52: the blank `///` line above, and a `# Panics` heading reads `Panics`, since `Stripped` drops a leading `#`. Not in any input:
+  - A `mod` nested more than three deep declares nothing. The old reader read any depth.
+  - A `mod` inside a function body declares its items as if the file did: `fn f() { mod m { pub fn g() {} } }` declares `g`. The old reader declared nothing under a function. A pattern cannot tell that `mod` from one in another `mod`, since both sit at depth 3.
+  - A `cfg` twin inside an `impl` or a trait is not merged: the first keeps its span. Only file and `mod` items are.
+  - An `impl` for a pointer or a reference to a reference declares nothing. One for a path whose last segment the file declares at that scope (`impl crate::a::Store` beside `struct Store`) adopts it, where the old reader required a bare name.
+  - A `///` block separated from its item by a blank line is not its doc.
+- **Cases** moved to `src/code/cases/rust.rs`, with the crate tree's unit tests in its `crate_tree` module. No assertion was rewritten.
+- **Timing:** median of five, interleaved, on the corpus: step 0 1.203 s, step 9 1.420 s, 1.18× (`log/buildtime-step9.txt`). Before the start depth it read 1.21×.
+- **Size:** `src/code/rust_lang/` held 1,157 lines outside its cases. The exception keeps 924, so −233. Added: 161 lines of query, 30 net in the spec and 124 in the engine commit.
+
 **Step 10 · Kotlin.** L. Query ~120, Rust −700. The shared JVM hook is extracted here.
 
 - **Queries:** declarations; `package` as `@scope.namespace`; an extension receiver as `@owner`; modifiers.

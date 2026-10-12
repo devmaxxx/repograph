@@ -6,6 +6,7 @@ mod dart;
 mod graphql;
 mod hcl;
 mod python;
+mod rust;
 mod shell;
 mod sql;
 mod swift;

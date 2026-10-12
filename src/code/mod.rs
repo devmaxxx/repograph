@@ -9,7 +9,6 @@ pub mod jvm;
 pub mod lang;
 pub(crate) mod prose;
 pub(crate) mod queries;
-pub(crate) mod rust_lang;
 pub(crate) mod spec;
 pub(crate) mod syntax;
 pub(crate) mod typescript;

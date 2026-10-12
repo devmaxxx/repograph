@@ -3,7 +3,7 @@
 //! names every language: the front, the resolver, the header index, `changes` and the update's
 //! widening read this table instead of matching on `Lang` each in its own way.
 //!
-//! Most of the vocabulary below describes ported languages, and only Shell, Bicep, HCL, Terraform, Swift, GraphQL, SQL, Dart and Python are ported yet.
+//! Most of the vocabulary below describes ported languages, and only Shell, Bicep, HCL, Terraform, Swift, GraphQL, SQL, Dart, Python and Rust are ported yet.
 #![allow(dead_code)]
 
 use std::any::{Any, TypeId};
@@ -267,7 +267,7 @@ const PROSE: Body = Body { doc: Doc::Adjacent { kinds: &["comment"], between: &[
 
 mod table {
     use super::*;
-    use crate::code::exceptions::{attachments, computed_paths, identifier_case, library_scope, module_paths, module_reach};
+    use crate::code::exceptions::{attachments, computed_paths, crate_paths, identifier_case, library_scope, module_paths, module_reach};
     use crate::code::*;
 
     pub(super) const TYPESCRIPT: Spec = Spec { comments: C, hooks: typescript::HOOKS, legacy: Some(typescript::extract), ..UNPORTED };
@@ -276,7 +276,34 @@ mod table {
     pub(super) const RAZOR: Spec = Spec { view: Some(Lang::CSharp), hooks: dotnet::razor::HOOKS, legacy: Some(dotnet::razor::extract), ..UNPORTED };
     pub(super) const KOTLIN: Spec = Spec { comments: C, hooks: jvm::kotlin::HOOKS, legacy: Some(jvm::kotlin::extract), ..UNPORTED };
     pub(super) const JAVA: Spec = Spec { comments: C, hooks: jvm::java::HOOKS, legacy: Some(jvm::java::extract), ..UNPORTED };
-    pub(super) const RUST: Spec = Spec { comments: C, hooks: rust_lang::HOOKS, legacy: Some(rust_lang::extract), ..UNPORTED };
+    pub(super) const RUST: Spec = Spec {
+        queries: crate::code::queries::sources::RUST,
+        view: None,
+        comments: C,
+        // The `///` lines, read through attributes, and the signature, or a whole `const`.
+        body: Body {
+            doc: Doc::Adjacent { kinds: &["line_comment.outer"], between: &["attribute_item"] },
+            form: Form::Stripped,
+            cap: Cap::Head,
+            line: Line::Signature,
+        },
+        label: Label::Spelled("::"),
+        export: Export::Show(&["pub"]),
+        visibility: Visibility::File,
+        ambiguity: Ambiguity::OwnFirst,
+        cross_file: false,
+        // Unread: `crate_paths` places every `use` and writes its edge with the name it binds.
+        imports: ImportPaths { root: false, suffixes: &[] },
+        dotted_dirs: false,
+        hooks: Hooks {
+            collect: Some(crate_paths::collect),
+            state: Some(state::<crate_paths::Crates>),
+            manifest: Some(Manifest { matches: |name| name == "Cargo.toml", read: crate_paths::manifest }),
+            resolve: Some(crate_paths::resolve),
+            ..NONE
+        },
+        legacy: None,
+    };
     pub(super) const PYTHON: Spec = Spec {
         queries: crate::code::queries::sources::PYTHON,
         view: None,

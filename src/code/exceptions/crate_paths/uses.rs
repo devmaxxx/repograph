@@ -1,15 +1,16 @@
 //! `use` declarations: each tree flattened into the names it binds, written as `Imports` — or
 //! `ReExports` for any `pub use` — from this file to the file each path lands in.
 
-use super::crates::{item_name, Crates, Target};
-use super::items::Items;
-use super::{inline_of, scoped, type_path};
-use crate::code::syntax::{descend, field_text, named};
-use crate::model::{EdgeKind, Extraction};
 use std::collections::BTreeMap;
+
 use tree_sitter::Node;
 
-/// What the file's `use` declarations bind, per inline scope, keyed as `Items::scopes` is.
+use super::{inline_of, item_name, scoped, type_path, Crates, Local, Target};
+use crate::code::engine::{Facts, Sink};
+use crate::code::syntax::{descend, field_text, named};
+use crate::model::EdgeKind;
+
+/// What the file's `use` declarations bind, per inline scope, keyed as `Local::scopes` is.
 #[derive(Debug, Default)]
 pub(crate) struct Bindings {
     pub names: BTreeMap<String, BTreeMap<String, Target>>,
@@ -21,7 +22,8 @@ pub(crate) struct Ctx<'a> {
     pub rel: &'a str,
     pub src: &'a [u8],
     pub crates: &'a Crates,
-    pub items: &'a Items,
+    pub facts: &'a Facts,
+    pub local: Local,
     pub bindings: Bindings,
 }
 
@@ -69,7 +71,7 @@ fn flatten(n: Node, src: &[u8], prefix: &[String], out: &mut Vec<Flat>) {
     }
 }
 
-pub(crate) fn read(ctx: &mut Ctx, root: Node, ex: &mut Extraction) {
+pub(crate) fn read(ctx: &mut Ctx, root: Node, sink: &mut Sink) {
     let file_id = format!("file:{}", ctx.rel);
     let mut decls = Vec::new();
     descend(root, &mut |n| {
@@ -93,7 +95,7 @@ pub(crate) fn read(ctx: &mut Ctx, root: Node, ex: &mut Extraction) {
                 // A name the module's file does not declare still ties this file to the module's.
                 if let Some(file) = ctx.module_file(&inline, &path) {
                     if file != ctx.rel {
-                        ex.edge(&file_id, &format!("file:{file}"), EdgeKind::Imports, "*", ctx.rel);
+                        sink.edge(&file_id, &format!("file:{file}"), EdgeKind::Imports, "*", ctx.rel);
                     }
                 }
                 continue;
@@ -116,7 +118,7 @@ pub(crate) fn read(ctx: &mut Ctx, root: Node, ex: &mut Extraction) {
                 _ => "*".to_string(),
             };
             let kind = if public { EdgeKind::ReExports } else { EdgeKind::Imports };
-            ex.edge(&file_id, &format!("file:{file}"), kind, &context, ctx.rel);
+            sink.edge(&file_id, &format!("file:{file}"), kind, &context, ctx.rel);
         }
     }
 }
@@ -183,7 +185,7 @@ impl Ctx<'_> {
     /// file's top level is known from the line scan, and its inline modules not at all.
     fn in_scope(&self, file: &str, inline: &[String], name: &str) -> bool {
         if file == self.rel {
-            self.items.scopes.get(&inline.join("/")).is_some_and(|s| s.contains(name)) || self.items.modules.contains(&scoped(inline, name))
+            self.local.scopes.get(&inline.join("/")).is_some_and(|s| s.contains(name)) || self.local.modules.contains(&scoped(inline, name))
         } else {
             inline.is_empty() && self.crates.declares(file, name)
         }

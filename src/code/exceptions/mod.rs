@@ -4,6 +4,7 @@
 
 pub(crate) mod attachments;
 pub(crate) mod computed_paths;
+pub(crate) mod crate_paths;
 pub(crate) mod identifier_case;
 pub(crate) mod library_scope;
 pub(crate) mod module_paths;

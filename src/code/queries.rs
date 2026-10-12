@@ -253,6 +253,9 @@ pub(crate) mod sources {
     pub(crate) const PYTHON: Sources =
         Sources { decl: &[include_str!("queries/python/decl.scm")], refs: &[include_str!("queries/python/refs.scm")] };
 
+    pub(crate) const RUST: Sources =
+        Sources { decl: &[include_str!("queries/rust/decl.scm")], refs: &[include_str!("queries/rust/refs.scm")] };
+
     pub(crate) const SHELL: Sources =
         Sources { decl: &[include_str!("queries/shell/decl.scm")], refs: &[include_str!("queries/shell/refs.scm")] };
 
