@@ -11,7 +11,7 @@
 use std::collections::{BTreeSet, HashMap};
 
 use crate::code::engine::{Facts, File, Import, Sink};
-use crate::code::imports::Resolver;
+use crate::code::imports::{join, parent, Resolver};
 use crate::code::queries::Kind;
 use crate::model::EdgeKind;
 
@@ -22,14 +22,6 @@ pub(crate) struct Roots(BTreeSet<String>);
 
 pub(crate) fn manifest(r: &mut Resolver, rel: &str, _: &str) {
     r.state_mut::<Roots>().0.insert(parent(rel).to_string());
-}
-
-fn parent(rel: &str) -> &str {
-    rel.rsplit_once('/').map_or("", |(d, _)| d)
-}
-
-fn join(dir: &str, rest: &str) -> String {
-    if dir.is_empty() { rest.to_string() } else { format!("{dir}/{rest}") }
 }
 
 fn module_file(r: &Resolver, base: &str, dotted: &str) -> Option<String> {
@@ -249,15 +241,28 @@ pub(crate) fn resolve(r: &Resolver, file: &File, facts: &Facts, sink: &mut Sink)
         }
     }
     let mut scope = Scope { rel, facts, bindings, attrs: HashMap::new() };
-    for t in facts.refs.iter().filter(|t| t.edge == EdgeKind::References && t.context == "type") {
+    let params: HashMap<(usize, &str), &str> = facts
+        .refs
+        .iter()
+        .filter(|p| p.edge == EdgeKind::References && p.context == "argument")
+        .filter_map(|p| Some(((p.source?, p.receiver.as_deref()?), p.name.as_str())))
+        .collect();
+    for t in facts.refs.iter().filter(|t| t.edge == EdgeKind::References && matches!(t.context.as_str(), "type" | "variable")) {
         let (Some(source), Some(attr)) = (t.source, t.receiver.as_deref()) else { continue };
+        let named = match t.context.as_str() {
+            "variable" => match params.get(&(source, t.name.as_str())) {
+                Some(ty) => *ty,
+                None => continue,
+            },
+            _ => t.name.as_str(),
+        };
         // A class-level annotation is a declaration of the class; a `self` attribute counts in
         // `__init__` alone, which every instance runs.
         let d = &facts.defs[source];
         if d.kind != Kind::Variable && d.name != "__init__" {
             continue;
         }
-        let (Some(class), Some(ty)) = (scope.class_of(Some(source)), dotted(&t.name)) else { continue };
+        let (Some(class), Some(ty)) = (scope.class_of(Some(source)), dotted(named)) else { continue };
         let typed = scope.attrs.entry((class, attr.to_string())).or_insert_with(|| ty.clone());
         if *typed != ty {
             typed.clear();

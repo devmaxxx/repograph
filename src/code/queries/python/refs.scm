@@ -27,15 +27,17 @@
   (#match? @name "(^|\\.)[A-Z][A-Za-z0-9_]*$")
   (#set! context "type"))
 
-((function_definition
-  parameters: (parameters [
-    (typed_parameter . (identifier) @_param type: (type [(identifier) (attribute)] @name))
-    (typed_default_parameter name: (identifier) @_param type: (type [(identifier) (attribute)] @name))
-  ])
-  body: (block (expression_statement (assignment left: (attribute object: (identifier) @_self attribute: (identifier) @receiver) !type right: (identifier) @_value) @reference.references)))
+; A parameter's annotation, and a `self.x` set to a bare name at any depth of a function, which the
+; hook joins by the parameter's name: a query cannot tie a body statement under an `if` to the
+; parameter list.
+([(typed_parameter . (identifier) @receiver type: (type [(identifier) (attribute)] @name))
+  (typed_default_parameter name: (identifier) @receiver type: (type [(identifier) (attribute)] @name))] @reference.references
+  (#set! context "argument"))
+
+((assignment left: (attribute object: (identifier) @_self attribute: (identifier) @receiver) !type right: (identifier) @name) @reference.references
   (#eq? @_self "self")
-  (#eq? @_param @_value)
-  (#set! context "type"))
+  (#set! within "function_definition")
+  (#set! context "variable"))
 
 ; What a function binds for its whole body: parameters, assignment, loop, `with`, `except` and walrus
 ; targets, and the definitions directly in it. A lambda binds its parameters and a comprehension its

@@ -7,6 +7,7 @@ use std::sync::OnceLock;
 
 use super::declarations::{self, join, Declared, Using};
 use super::Host;
+use crate::code::imports::parent;
 use crate::code::lang::Lang;
 use crate::model::Extraction;
 
@@ -57,10 +58,6 @@ pub fn facts(rel: &str, source: &str) -> Declared {
         .unwrap_or_default();
     LAST.with(|l| *l.borrow_mut() = Some((rel.to_string(), key, d.clone())));
     d
-}
-
-fn parent(rel: &str) -> &str {
-    rel.rsplit_once('/').map_or("", |(d, _)| d)
 }
 
 /// One namespace segment as the Razor compiler writes it (`CSharpIdentifier.AppendSanitized`):

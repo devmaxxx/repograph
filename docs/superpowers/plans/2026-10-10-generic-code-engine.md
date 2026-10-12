@@ -1296,13 +1296,19 @@ This step alone closes the three reviewer defects. About 1,200 lines of Rust are
   - `__all__` no longer decides exports, so a name it lists with a leading underscore is private. The engine cannot set a Declares context from a hook, and no input has `__all__`.
   - `global` and `nonlocal` no longer cancel a local binding. Engine locals have no unbind. The corpus has one `global`, which affects no edge.
   - A nested function's locals no longer shadow names in its outer function. A comprehension variable binds in the comprehension alone.
-  - Members of a class nested three deep are not declared.
+  - A class nested three deep (`A.B.C`) is not declared itself, and nothing in it is; the members of `A.B` are. The third nested class itself is not declared because each depth is spelled out in the query.
+  - A relative import inside a function of a package's `__init__.py` is followed as a re-export of that package, since `reexport` reads every import site the file has. The old regex read module-level lines alone.
   - A package's `__init__.py` re-export is read in any form the query captures, parenthesised multi-line lists included. The old regex read one line.
 - **Cases** moved to `src/code/cases/python.rs`, with the four `Modules` unit tests rewritten against `module_paths::{absolute, relative}` on a temporary repository. Rewrites:
   - `all_decides_exports_and_members_hang_off_their_class` is now `a_leading_underscore_hides_a_name_and_members_hang_off_their_class`, under the underscore rule: `LIMIT` and `helper` are exported and `_cache` is not.
   - `all_extended_by_a_literal_exports_the_added_names` is removed, since `__all__` is not read.
   - `a_global_declaration_cancels_the_shadow_and_a_local_import_is_not_one` is now `a_global_declaration_still_shadows_and_a_local_import_is_not_one`.
   - `the_resolver_reads_python_project_roots_from_its_walk` calls `module_paths::absolute` instead of the old `Modules` state.
+- **After review, in its own commit.** Queries and a shared helper, no new exception:
+  - `self.x = p` for an annotated parameter `p` is now read at any depth of the function, as the old reader read it, so `if k: self.k = k` types `k`. The query cannot tie a nested statement to the parameter list, so it writes two sites: each annotated parameter (context `argument`, the parameter as receiver) and each `self.x = name` under a function (`within`, context `variable`). `module_paths` joins them by function and name, in 13 lines. The case `a_parameter_set_on_self_under_a_branch_types_the_attribute` pins it.
+  - `parent` and `join` for repository-relative paths live once in `imports.rs`, shared by `module_paths`, the Rust crate tree and the C# index.
+  - Gate: the kit graph and headers are byte-identical to step 8's (`new-8` → `new-8p`). The scratchpad corpus reads step 8's counts against `store-base`: the accepted py R3 = 12, Swift R3 = 1 and SQL body-above 11, with no bounded edge moved. On the fixture (vs `fixture-base`) py reads R1–R9 = 0, beside step 7's accepted SQL R1 = 3, R4 = 3 and R7 = 1. The change adds no edge on any input, so none needed a hand read.
+  - Left as documented above: `__all__`, `global` and `nonlocal`, the nesting depth, and the function-local relative import in `__init__.py`.
 - **Timing:** median of five, interleaved, on the corpus: step 0 1.206 s, step 8 1.412 s. That is 1.17× step 0 in the same run, and 1.166× the recorded 1.211 s.
 - **Size:** −906 lines for `src/code/python/` outside its cases. The added Rust is 299 lines in the exception and 35 net in the spec, `queries` and `engine`, plus 138 lines of query.
 

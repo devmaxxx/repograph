@@ -326,6 +326,19 @@ fn calls_through_imports_self_and_typed_attributes() {
 }
 
 #[test]
+fn a_parameter_set_on_self_under_a_branch_types_the_attribute() {
+    let src = "from shop.store import Store\n\n\nclass Cart:\n    def __init__(self, k: Store = None):\n        if k:\n            self.k = k\n\n    def go(self):\n        self.k.open()\n";
+    let repo = Repo::new(&[
+        ("lib/pyproject.toml", "[project]\nname = \"shop\"\n"),
+        ("lib/shop/__init__.py", ""),
+        ("lib/shop/store.py", "class Store:\n    def open(self):\n        pass\n"),
+        ("lib/shop/cart.py", src),
+    ]);
+    let ex = repo.extract("lib/shop/cart.py");
+    assert_eq!(calls_from(&ex, "sym:lib/shop/cart.py::Cart.go"), ["sym:lib/shop/store.py::Store.open"].into_iter().collect());
+}
+
+#[test]
 fn a_resolved_base_extends_and_a_resolved_decorator_decorates() {
     let ex = orders_repo().extract("lib/shop/orders.py");
     assert_eq!(edges(&ex, EdgeKind::Extends), vec![("sym:lib/shop/orders.py::Order", "sym:lib/shop/base.py::Base", "")]);

@@ -7,6 +7,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::LazyLock;
 
+use crate::code::imports::{join, parent};
+
 static MACRO_RULES: LazyLock<regex::Regex> =
     LazyLock::new(|| regex::Regex::new(r"(?m)^[ \t]*macro_rules![ \t]*([A-Za-z_]\w*)").expect("valid pattern"));
 
@@ -65,15 +67,6 @@ pub enum Target {
     Module { file: String, inline: Vec<String> },
     /// An item, named as it follows `sym:<file>::` — `Store`, `tests/helper`, `Store.new`.
     Item { file: String, name: String },
-}
-
-pub(crate) fn parent(rel: &str) -> &str {
-    rel.rsplit_once('/').map_or("", |(d, _)| d)
-}
-
-fn join(dir: &str, rest: &str) -> String {
-    let rest = rest.trim_start_matches("./");
-    if dir.is_empty() { rest.to_string() } else { format!("{dir}/{rest}") }
 }
 
 /// Rust's naming lints keep types upper-initial and modules snake_case, and that is the only way a

@@ -126,6 +126,17 @@ fn index_header(indexes: &mut BTreeMap<Family, QualifiedIndex>, family: Family, 
 
 /// The language whose reader reads a build manifest, by its file name, among `readers`: the
 /// languages that read one, listed once before the walk.
+/// The directory holding a repository-relative path, empty at the root.
+pub(crate) fn parent(rel: &str) -> &str {
+    rel.rsplit_once('/').map_or("", |(d, _)| d)
+}
+
+/// `rest` under the repository-relative `dir`; a manifest's `./x` means `x`.
+pub(crate) fn join(dir: &str, rest: &str) -> String {
+    let rest = rest.trim_start_matches("./");
+    if dir.is_empty() { rest.to_string() } else { format!("{dir}/{rest}") }
+}
+
 fn manifest_lang(readers: &[(Lang, &Manifest)], name: &str) -> Option<Lang> {
     readers.iter().find(|(_, m)| (m.matches)(name)).map(|(l, _)| *l)
 }
