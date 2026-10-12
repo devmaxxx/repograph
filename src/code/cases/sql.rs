@@ -245,6 +245,30 @@ fn a_view_references_the_relations_it_reads() {
 }
 
 #[test]
+fn a_view_reads_a_relation_at_any_depth_of_its_query() {
+    let repo = Repo::with(&[
+        ("db/001.sql", "CREATE TABLE a (id int);\nCREATE TABLE b (id int);\n"),
+        ("db/002.sql", "CREATE VIEW v AS SELECT (SELECT max(id) FROM a), * FROM LATERAL (SELECT * FROM b) z;\n"),
+    ]);
+    let migration_002 = repo.extract("db/002.sql");
+    let mut reads = edges(&migration_002, EdgeKind::References);
+    reads.sort_unstable();
+    assert_eq!(reads, vec![("sym:db/002.sql::v", "sym:db/001.sql::a", "from"), ("sym:db/002.sql::v", "sym:db/001.sql::b", "from")]);
+}
+
+#[test]
+fn a_materialized_view_reads_every_branch_of_a_union_below_it() {
+    let repo = Repo::with(&[
+        ("db/001.sql", "CREATE TABLE app.a (id int);\nCREATE TABLE app.b (id int);\n"),
+        ("db/002.sql", "CREATE MATERIALIZED VIEW app.mv AS SELECT id FROM (SELECT id FROM app.a UNION ALL SELECT id FROM app.b) u;\n"),
+    ]);
+    let migration_002 = repo.extract("db/002.sql");
+    let mut reads = edges(&migration_002, EdgeKind::References);
+    reads.sort_unstable();
+    assert_eq!(reads, vec![("sym:db/002.sql::app/mv", "sym:db/001.sql::app/a", "from"), ("sym:db/002.sql::app/mv", "sym:db/001.sql::app/b", "from")]);
+}
+
+#[test]
 fn an_unqualified_name_is_itself_or_public_and_a_public_name_is_also_unqualified() {
     let migration_003 = Repo::new().extract("db/003.sql");
     let refs = edges(&migration_003, EdgeKind::References);

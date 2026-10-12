@@ -135,6 +135,9 @@ pub(crate) struct Meta {
     /// `Some` overrides the spec's export rule for this pattern.
     pub export: Option<bool>,
     pub reexport: bool,
+    /// A node kind the match must sit inside: a construct nests what it reads at any depth, which a
+    /// pattern can only spell as one alternative per depth.
+    pub within: Option<u16>,
 }
 
 pub(crate) struct Compiled {
@@ -173,6 +176,10 @@ pub(crate) fn compile(grammar: &Language, sources: &[&str]) -> Result<Compiled, 
                 "export" if value == "always" => meta.export = Some(true),
                 "export" if value == "never" => meta.export = Some(false),
                 "reexport" => meta.reexport = true,
+                "within" => match grammar.id_for_node_kind(value, true) {
+                    0 => return Err(format!("pattern at byte {at} sets within {value:?}, which the grammar has no node for")),
+                    kind => meta.within = Some(kind),
+                },
                 key => return Err(format!("pattern at byte {at} sets {key} {value:?}, outside the closed set")),
             }
         }
@@ -306,6 +313,7 @@ mod contract {
         assert!(rejects(r#"((identifier) @reference.calls (#set! context "nearby"))"#).contains("context"));
         assert!(rejects(r#"((identifier) @reference.calls (#set! weight "2"))"#).contains("weight"));
         assert!(rejects(r#"((function_definition name: (identifier) @name) @definition.function (#set! export "maybe"))"#).contains("export"));
+        assert!(rejects(r#"((identifier) @reference.calls (#set! within "no_such_node"))"#).contains("no_such_node"));
     }
 
     #[test]
@@ -326,10 +334,12 @@ mod contract {
             r#"((function_definition name: (identifier) @name) @definition.function (#not-match? @name "^_") (#set! prefix "fn/") (#set! export "never"))"#,
             r#"((import_from_statement module_name: (dotted_name) @import.path) @import (#set! reexport))"#,
             r#"((call function: (identifier) @name) @reference.calls (#any-of? @name "a" "b") (#set! context "arg"))"#,
+            r#"((call function: (identifier) @name) @reference.calls (#set! within "class_definition"))"#,
         ]).unwrap();
         assert_eq!(c.metas[0].prefix, "fn/");
         assert_eq!(c.metas[0].export, Some(false));
         assert!(c.metas[1].reexport);
         assert_eq!(c.metas[2].context, "arg");
+        assert_eq!(c.metas[3].within, Some(Lang::Python.grammar().unwrap().id_for_node_kind("class_definition", true)));
     }
 }

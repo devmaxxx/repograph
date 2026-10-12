@@ -1,6 +1,6 @@
 ; A migration declares what it creates and every table it attaches to: `ALTER TABLE t`, and an
 ; index, a policy or a trigger `ON t`. A table holds its columns and what is attached to it. A name
-; is its schema and object as two parts, and a 3-part name is read as its first two.
+; is its schema and object as two parts, and a 3-part name is read as its first part alone.
 ;
 ; A table created here is a `type` and one only attached to a `record`: the first statement to name
 ; a table in a file decides which, as the first to declare an id keeps it.

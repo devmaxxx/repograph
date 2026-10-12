@@ -169,6 +169,7 @@ A function nested in a function is qualified by its nearest container, if it has
 - `context` is the edge context.
 - `export` is `always` or `never`.
 - `reexport` marks an import as a re-export.
+- `within` names a node kind the match must sit inside, at any depth. The engine drops a match whose first capture has no such ancestor. A construct that nests what it reads at any depth, such as a view's relations, needs it, because a pattern can only spell depth as one alternative per level. Step 7 adds it, before the Dart port.
 - `visibility` overrides `spec.visibility` for one reference pattern. Step 19 adds it (§6.2).
 
 Contexts form a closed list, which is the list in use today: `""`, `export`, `arg`, `get`, `*`, `comment`, `string`, `alter`, `impl`, `extend`, `on`, `type`, `variable`, `argument`, `member`.
@@ -1185,10 +1186,10 @@ This step alone closes the three reviewer defects. About 1,200 lines of Rust are
   - A foreign table is declared, with its columns: `salon_ctx/fixture_foreign_table` plus `.id` and `.label` in the fixture's `packages/db/test/fixtures/d-foreign-table-grant.sql`. The old reader skipped `CREATE FOREIGN TABLE`, and `headers.json` gains the table's name. This is accepted.
   - `RENAME TO` declares only the new name. The old name is no longer indexed under the renaming file. The file still reaches the old name through its `rename` edge.
   - `SET SCHEMA` declares nothing in the target schema. It attaches to the table it moves.
-  - A view's name keeps no `public` twin. A relation read deeper than fourteen levels below a view's query is not read.
+  - A view's name keeps no `public` twin. A relation read deeper than fourteen levels below a view's query was not read; step 7's `within` key reads one at any depth.
   - A citation inside a column, such as a `DEFAULT` string, cites from the column, not from the table.
-  - `ALTER TABLE` above the same file's `CREATE TABLE` now makes the table an attachment there, because the first statement wins.
-  - A three-part name reads as its first two parts.
+  - `ALTER TABLE` above the same file's `CREATE TABLE` now makes the table an attachment there, because the first statement wins. The attachment then has an `alter` edge to every other file that creates the table, where the old reader wrote none. Found in review, not fixed; no gate input has the construct.
+  - A three-part name reads as its first part alone: `CREATE TABLE a.b.c` declares `a`. Found in review, not fixed.
 - **Cases** moved to `src/code/cases/sql.rs`. Two assertions were rewritten, and no case was dropped:
   - `the_header_lists_what_a_file_creates_or_alters_and_no_member` compared `header_for` with the old module's own `header`. There is one path now, so it asserts the case's own claim instead: the header has no `nested` member.
   - `a_renamed_table_is_declared_under_its_new_name_and_references_its_old_one` pinned two old-reader quirks: `app/clients` indexed under the renaming file, and `crm/customers` declared by `SET SCHEMA`. It now pins the index without them, the one `rename` edge, and the one foreign key that still resolves.

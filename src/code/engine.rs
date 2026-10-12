@@ -215,11 +215,28 @@ fn matches_of<'t>(c: &'static Compiled, root: Node<'t>, src: &str, rel: &str, mu
     cursor.set_match_limit(MATCH_LIMIT);
     let mut it = cursor.matches(&c.query, root, src.as_bytes());
     while let Some(m) = it.next() {
+        let within = c.metas[m.pattern_index].within;
+        if within.is_some_and(|kind| !m.captures().first().is_some_and(|cap| inside(root, cap.node, kind))) {
+            continue;
+        }
         each(m.pattern_index, m.captures().iter().map(|cap| (c.roles[cap.index as usize], cap.node)).collect());
     }
     if cursor.did_exceed_match_limit() {
         eprintln!("code: {rel} reached the query match limit; it keeps what matched before it");
     }
+}
+
+/// Whether a node of `kind` encloses `node`. It walks down from the root, because `parent` walks
+/// down from the root itself on every call and a generated grammar nests thousands of levels deep.
+fn inside(root: Node, node: Node, kind: u16) -> bool {
+    let mut at = root;
+    while at.kind_id() != kind {
+        match at.child_with_descendant(node) {
+            Some(next) if next != node => at = next,
+            _ => return false,
+        }
+    }
+    true
 }
 
 /// The facts `decl` and, when given, `refs` read from `file`. An import site's targets wait for a reader.

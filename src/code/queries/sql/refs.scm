@@ -22,37 +22,21 @@
   (#match? @_schema "^([Pp][Uu][Bb][Ll][Ii][Cc]|\"public\")$")
   (#set! context "references"))
 
-; A view depends on every relation its query reads, a join's, a subquery's and a CTE's included. The
-; query nests a relation under its clauses and its joins, so the depth alone reaches it: five levels
-; below the query for a plain `FROM t`, up to fourteen. A view's name reads as written, with no
-; `public` twin.
-((ViewStmt (SelectStmt [
-    (_ (_ (_ (_ (table_ref (relation_expr [(qualified_name (ColId) @name (indirection . (indirection_el (attr_name (ColLabel) @name)))?) (extended_relation_expr (qualified_name (ColId) @name (indirection . (indirection_el (attr_name (ColLabel) @name)))?))]) @reference.references)))))
-    (_ (_ (_ (_ (_ (table_ref (relation_expr [(qualified_name (ColId) @name (indirection . (indirection_el (attr_name (ColLabel) @name)))?) (extended_relation_expr (qualified_name (ColId) @name (indirection . (indirection_el (attr_name (ColLabel) @name)))?))]) @reference.references))))))
-    (_ (_ (_ (_ (_ (_ (table_ref (relation_expr [(qualified_name (ColId) @name (indirection . (indirection_el (attr_name (ColLabel) @name)))?) (extended_relation_expr (qualified_name (ColId) @name (indirection . (indirection_el (attr_name (ColLabel) @name)))?))]) @reference.references)))))))
-    (_ (_ (_ (_ (_ (_ (_ (table_ref (relation_expr [(qualified_name (ColId) @name (indirection . (indirection_el (attr_name (ColLabel) @name)))?) (extended_relation_expr (qualified_name (ColId) @name (indirection . (indirection_el (attr_name (ColLabel) @name)))?))]) @reference.references))))))))
-    (_ (_ (_ (_ (_ (_ (_ (_ (table_ref (relation_expr [(qualified_name (ColId) @name (indirection . (indirection_el (attr_name (ColLabel) @name)))?) (extended_relation_expr (qualified_name (ColId) @name (indirection . (indirection_el (attr_name (ColLabel) @name)))?))]) @reference.references)))))))))
-    (_ (_ (_ (_ (_ (_ (_ (_ (_ (table_ref (relation_expr [(qualified_name (ColId) @name (indirection . (indirection_el (attr_name (ColLabel) @name)))?) (extended_relation_expr (qualified_name (ColId) @name (indirection . (indirection_el (attr_name (ColLabel) @name)))?))]) @reference.references))))))))))
-    (_ (_ (_ (_ (_ (_ (_ (_ (_ (_ (table_ref (relation_expr [(qualified_name (ColId) @name (indirection . (indirection_el (attr_name (ColLabel) @name)))?) (extended_relation_expr (qualified_name (ColId) @name (indirection . (indirection_el (attr_name (ColLabel) @name)))?))]) @reference.references)))))))))))
-    (_ (_ (_ (_ (_ (_ (_ (_ (_ (_ (_ (table_ref (relation_expr [(qualified_name (ColId) @name (indirection . (indirection_el (attr_name (ColLabel) @name)))?) (extended_relation_expr (qualified_name (ColId) @name (indirection . (indirection_el (attr_name (ColLabel) @name)))?))]) @reference.references))))))))))))
-    (_ (_ (_ (_ (_ (_ (_ (_ (_ (_ (_ (_ (table_ref (relation_expr [(qualified_name (ColId) @name (indirection . (indirection_el (attr_name (ColLabel) @name)))?) (extended_relation_expr (qualified_name (ColId) @name (indirection . (indirection_el (attr_name (ColLabel) @name)))?))]) @reference.references)))))))))))))
-    (_ (_ (_ (_ (_ (_ (_ (_ (_ (_ (_ (_ (_ (table_ref (relation_expr [(qualified_name (ColId) @name (indirection . (indirection_el (attr_name (ColLabel) @name)))?) (extended_relation_expr (qualified_name (ColId) @name (indirection . (indirection_el (attr_name (ColLabel) @name)))?))]) @reference.references))))))))))))))
-  ]))
-  (#set! context "from"))
+; A view depends on every relation its query reads, a join's, a subquery's and a CTE's included, at
+; whatever depth its clauses nest it. A view's name reads as written, with no `public` twin.
+((relation_expr [
+    (qualified_name (ColId) @name (indirection . (indirection_el (attr_name (ColLabel) @name)))?)
+    (extended_relation_expr (qualified_name (ColId) @name (indirection . (indirection_el (attr_name (ColLabel) @name)))?))
+  ]) @reference.references
+  (#set! context "from")
+  (#set! within "ViewStmt"))
 
-((CreateMatViewStmt (SelectStmt [
-    (_ (_ (_ (_ (table_ref (relation_expr [(qualified_name (ColId) @name (indirection . (indirection_el (attr_name (ColLabel) @name)))?) (extended_relation_expr (qualified_name (ColId) @name (indirection . (indirection_el (attr_name (ColLabel) @name)))?))]) @reference.references)))))
-    (_ (_ (_ (_ (_ (table_ref (relation_expr [(qualified_name (ColId) @name (indirection . (indirection_el (attr_name (ColLabel) @name)))?) (extended_relation_expr (qualified_name (ColId) @name (indirection . (indirection_el (attr_name (ColLabel) @name)))?))]) @reference.references))))))
-    (_ (_ (_ (_ (_ (_ (table_ref (relation_expr [(qualified_name (ColId) @name (indirection . (indirection_el (attr_name (ColLabel) @name)))?) (extended_relation_expr (qualified_name (ColId) @name (indirection . (indirection_el (attr_name (ColLabel) @name)))?))]) @reference.references)))))))
-    (_ (_ (_ (_ (_ (_ (_ (table_ref (relation_expr [(qualified_name (ColId) @name (indirection . (indirection_el (attr_name (ColLabel) @name)))?) (extended_relation_expr (qualified_name (ColId) @name (indirection . (indirection_el (attr_name (ColLabel) @name)))?))]) @reference.references))))))))
-    (_ (_ (_ (_ (_ (_ (_ (_ (table_ref (relation_expr [(qualified_name (ColId) @name (indirection . (indirection_el (attr_name (ColLabel) @name)))?) (extended_relation_expr (qualified_name (ColId) @name (indirection . (indirection_el (attr_name (ColLabel) @name)))?))]) @reference.references)))))))))
-    (_ (_ (_ (_ (_ (_ (_ (_ (_ (table_ref (relation_expr [(qualified_name (ColId) @name (indirection . (indirection_el (attr_name (ColLabel) @name)))?) (extended_relation_expr (qualified_name (ColId) @name (indirection . (indirection_el (attr_name (ColLabel) @name)))?))]) @reference.references))))))))))
-    (_ (_ (_ (_ (_ (_ (_ (_ (_ (_ (table_ref (relation_expr [(qualified_name (ColId) @name (indirection . (indirection_el (attr_name (ColLabel) @name)))?) (extended_relation_expr (qualified_name (ColId) @name (indirection . (indirection_el (attr_name (ColLabel) @name)))?))]) @reference.references)))))))))))
-    (_ (_ (_ (_ (_ (_ (_ (_ (_ (_ (_ (table_ref (relation_expr [(qualified_name (ColId) @name (indirection . (indirection_el (attr_name (ColLabel) @name)))?) (extended_relation_expr (qualified_name (ColId) @name (indirection . (indirection_el (attr_name (ColLabel) @name)))?))]) @reference.references))))))))))))
-    (_ (_ (_ (_ (_ (_ (_ (_ (_ (_ (_ (_ (table_ref (relation_expr [(qualified_name (ColId) @name (indirection . (indirection_el (attr_name (ColLabel) @name)))?) (extended_relation_expr (qualified_name (ColId) @name (indirection . (indirection_el (attr_name (ColLabel) @name)))?))]) @reference.references)))))))))))))
-    (_ (_ (_ (_ (_ (_ (_ (_ (_ (_ (_ (_ (_ (table_ref (relation_expr [(qualified_name (ColId) @name (indirection . (indirection_el (attr_name (ColLabel) @name)))?) (extended_relation_expr (qualified_name (ColId) @name (indirection . (indirection_el (attr_name (ColLabel) @name)))?))]) @reference.references))))))))))))))
-  ]))
-  (#set! context "from"))
+((relation_expr [
+    (qualified_name (ColId) @name (indirection . (indirection_el (attr_name (ColLabel) @name)))?)
+    (extended_relation_expr (qualified_name (ColId) @name (indirection . (indirection_el (attr_name (ColLabel) @name)))?))
+  ]) @reference.references
+  (#set! context "from")
+  (#set! within "CreateMatViewStmt"))
 
 ; A CTE binds its name for the statement it is part of.
 (common_table_expr (name) @local.definition)
