@@ -1425,6 +1425,60 @@ This step alone closes the three reviewer defects. About 1,200 lines of Rust are
 - **Hooks:** shares Kotlin's JVM hook.
 - **Gate:** Calls (14), so the cases decide.
 
+**Step 11 as built.** Where the code differs from the text above, the code is the record:
+
+- **Engine:** unchanged.
+- **Queries** (76 + 5 lines, generated to three member levels):
+  - The package as `@scope.namespace`. Imports, with `static` and `*` among their names, which the engine does not resolve.
+  - Types at the file and in a type's body. Methods, constructors (`Type.Type`), annotation elements, and fields and constants one per declarator. An enum's members come from its body declarations.
+  - A type's keyword is captured as its members' `@modifier`, since an interface's and an annotation type's members are public without the word. A private interface method is matched first, with `export "never"`.
+  - Citations from line and block comments and string literals. No call, supertype or reference site: the exception walks those.
+  - Each step between levels names a type by its keyword alone, so the three levels compile in about 11 ms. Stepping into an enum's declarations as well doubled that to 24 ms, and a fourth level would add about 4 ms more. Neither changes any input, so neither was added.
+- **Spec:**
+  - `Label::Qualified`, `Visibility::Family`, `OwnFirst` and `ImportPaths { root: false }`, as Kotlin.
+  - `Export::Show(["public", "interface", "@interface"])`.
+  - The body is `Adjacent { kinds: ["line_comment", "block_comment"] }`, `Stripped`, `Head` and `Line::Whole`.
+  - Hooks: `header` and `resolve`.
+- **Exception:** `package_scope`, shared with Kotlin. `src/code/jvm/` is gone.
+  - `package_scope/java.rs` (295 lines) reads the engine's `Facts` back into the arities, shapes, supertypes, reach and annotations that the header and the walk need, as `declared.rs` does for Kotlin.
+  - `package_scope/java/calls.rs` (639 lines) is the old walk. It asks the `Facts` whether a declaration is a symbol, and writes through the sink. Its citation arms are gone.
+  - Gained by the shared code:
+    - `declared::sites` and `declared::facts_of`, which both languages' readers and headers call;
+    - Java's static and static-on-demand imports in `declared::scope`, with whitespace dropped from a path;
+    - `link`, `used` and `decorate` on the sink. Kotlin's walk moved too, so its `Extraction` copy is gone.
+  - Lost by the shared code: `body` and `cite`, which only Java's old reader called.
+  - Without the `resolve` hook, 49 of the 75 Java and JVM cases fail. The kit's Java (4 files, 35 symbols, 1 Import, 14 Calls) is too thin to decide (§3.3), and with `ImportPaths { root: false }` and no call sites the default resolve would keep none of it. The hook stays.
+- **Gate:** langdiff `--lang java,kt` with the final binary on three inputs. Every class is 0 on each:
+  - Kit corpus (`new-10` → `new-11`): `graph.json` and `headers.json` are byte-identical. Java holds Declares 35 (31 `export`), Imports 1 and Calls 14.
+  - Scratchpad corpus (vs `store-base`): byte-identical to step 10's store. The R6 column reads py 12, rs 10, SQL 11 and Swift 1, which are the accepted py R3 = 12, rs R3 = 3 and body-above 7, SQL body-above 11 and Swift R3 = 1.
+  - Fixture: byte-identical to `fixture-8p` (13,002 nodes, 41,116 edges). Against `fixture-base` only step 6's accepted SQL diffs and R7 = 1 read, in R6. The fixture holds no Java, so there is no bench.
+  - No bounded edge moved on any input, so no sample was hand-read.
+- **Divergence outside the inputs.** Step 10b's binary against step 11's, on 949 Java files. These are Android SDK 35's `java/util`, `android/util`, `android/text` and `android/os`, jruby's `nkf` and concurrent-ruby's extensions vendored in `bonliva-consultant-portal`, and one probe file (`log/langdiff-step11-outside.txt`):
+  - R1 = 82 nodes, and R4 = 82 for their `Declares`. 74 are members of a type nested four deep, such as `BatteryStats.Uid.Pkg.Serv.getLaunches`. 8 are members of a type nested in an enum's declarations, such as `StreamOpFlag.MaskBuilder.build`. Kotlin's three levels leave the first out too. The old reader read any depth.
+  - Calls 26,822 → 26,728. All 94 lost run from or to those nodes. None was added, and no edge between nodes both binaries declare changed, so P stays 1.000 and R is 0.996.
+  - R7 = 1, since the headers no longer name those members.
+  - Body-above 720, all in the doc above the last line:
+    - 573 lose a comment that trails the code on the line above. The old reader took it as the doc.
+    - 76 lose a `//` that starts a Javadoc line, as in a code sample.
+    - 57 lose a `#` that starts a Javadoc line, as in a wrapped `{@link #peek}`.
+    - 14 lose a blank line between two comments.
+
+    Each is the engine's shared `Stripped` form.
+  - Citations, by probe:
+    - an id in the second declarator's initializer (`int a = 1, b = "INV-11"…`) is owned by the first declarator, since the declarators share one range;
+    - an id in a comment among a field's modifiers is owned by the field, where the old reader gave it to the class.
+- **Cases** moved to `src/code/cases/java.rs`, and `cases/jvm.rs` is private again. Three `super::header(src)` calls became `header(rel, src)`. No assertion was rewritten.
+- **Timing:** step 11 against step 0, interleaved, at load 6–12.
+  - Median of five: 1.181× (`log/buildtime-step11-4.txt`). An earlier median of five, at load 11, read 1.211× (`-2`).
+  - Median of nine, three-way: step 0 1.263 s, step 10b 1.502 s (1.189×), step 11 1.495 s (1.184×) (`-3`).
+
+  Lead (a) was not needed: `header` still parses each file and builds its facts apart from the extraction.
+- **Size:**
+  - Java's old reader held 1,018 lines: `mod.rs` 112, `declarations.rs` 262, `calls.rs` 641 and `jvm/mod.rs` 3.
+  - Java's own Rust is now 934 lines.
+  - The shared files moved: `package_scope.rs` 956 → 924, `declared.rs` 321 → 341, `receivers.rs` 775 → 770.
+  - Net Rust is −101 against the estimate's −500, and the queries add 81 lines. As in step 10, the walk (639 of the 934 lines) is what no query replaces.
+
 **Step 12 · C#, then Razor.** L. Query ~150, Rust −800, hook ~1,100 kept.
 
 - **Queries:** declarations; block and file-scoped namespaces as `@scope.namespace`; members; modifiers.

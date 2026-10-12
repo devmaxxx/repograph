@@ -628,3 +628,52 @@ deleted. What Kotlin and Java share moved from `src/code/jvm/mod.rs` to
   - `cargo clippy --all-targets -- -D warnings`: clean;
   - `cargo tree --duplicates --depth 0`: no tree-sitter crate;
   - `src/code/jvm/kotlin/` is gone.
+
+## Step 11 · Java
+
+New: `bin/repograph-step11`, built on `bb4aa59`. Java's old reader (`src/code/jvm/java/`) and
+`src/code/jvm/` are deleted. Java's lookup lives in `src/code/exceptions/package_scope/` beside
+Kotlin's, as `java.rs` and `java/calls.rs`.
+
+- **Regressions:** from `langdiff.py --lang java,kt` on three inputs. The readings are in
+  `log/langdiff-step11-{kit,scratch,fixture,fixture-vs-8p}.txt`.
+  - Kit corpus (`new-10` → `new-11`): every class 0. `graph.json` and `headers.json` are
+    byte-identical.
+  - Scratchpad corpus (vs `store-base`): java and kt 0, and the store is byte-identical to step
+    10's. The R6 column reads py 12, rs 10, SQL 11 and Swift 1, which are the accepted py R3 = 12,
+    rs R3 = 3 and body-above 7, SQL body-above 11 and Swift R3 = 1.
+  - Fixture (vs `fixture-base`): java and kt 0. The R6 column reads SQL 21 and the store R7 = 1,
+    which are step 6's accepted diffs. Against `fixture-8p` the store is byte-identical.
+- **Bounded and strict kinds:** P = R = 1.000 for each on the kit. The fixture holds no Java.
+
+  | kind | kit |
+  |---|---|
+  | Declares (`export`) | 35 (31) |
+  | Imports | 1 |
+  | Calls | 14 |
+  | References, Extends, DecoratedBy, Implements | 0 |
+
+- **Exception:** `package_scope`, shared with Kotlin. Without the `resolve` hook, 49 of the 75 Java
+  and JVM cases fail. The kit is too thin to decide (§3.3), so the cases decide, and the hook stays.
+  - Gained by the shared code: `declared::sites`, `declared::facts_of`, and Java's static imports
+    in `declared::scope`. `link`, `used` and `decorate` now write through the sink.
+  - Lost by the shared code: `body` and `cite`. Kotlin's throwaway `Extraction` copy is gone too.
+- **Outside the inputs:** step 10b's binary against step 11's on 949 Java files from Android SDK 35,
+  two vendored Ruby gems' Java extensions and a probe file (`log/langdiff-step11-outside.txt`).
+  - R1 and R4 are 82. Of these, 74 are members of a type nested four deep, and 8 are members of a
+    type nested in an enum's declarations.
+  - Calls fall from 26,822 to 26,728, all from or to those nodes, with none added (P 1.000,
+    R 0.996).
+  - Body-above is 720, all in the doc above the last line. The divergences are listed in the plan's
+    "Step 11 as built" note.
+- **Bench:** not run. The fixture holds no Java, so the graph the bench reads is byte-identical to
+  `fixture-8p`'s.
+- **Build time:** interleaved with step 0, on the corpus.
+  - Median of five: 1.181× (`log/buildtime-step11-4.txt`). An earlier run at load 11 read 1.211×.
+  - Median of nine, three-way: step 0 1.263 s, step 10b 1.502 s (1.189×), step 11 1.495 s (1.184×)
+    (`log/buildtime-step11-3.txt`).
+- **Gate:**
+  - `cargo test --all-targets`: 1,397 passed, 0 failed;
+  - `cargo clippy --all-targets -- -D warnings`: clean;
+  - `cargo tree --duplicates --depth 0`: no tree-sitter crate;
+  - `src/code/jvm/` is gone.
