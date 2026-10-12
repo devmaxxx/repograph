@@ -1387,6 +1387,35 @@ This step alone closes the three reviewer defects. About 1,200 lines of Rust are
 - **Hooks:** the JVM `header` (arity, supertypes) and `resolve` owning Calls. References (73) and Extends (15) try the default first.
 - **Gate:** the fixture's 126 `.kt` files; the `beauty-crm-mobile` blast.
 
+**Step 10 as built.** Where the code differs from the text above, the code is the record:
+
+- **Engine:** two additions in the port's commit, both data:
+  - `Line::Whole`, the whole line holding `@name` even past the definition's span. A constructor's `val` parameter reads with the `class` line that declares it, as the old reader's body did.
+  - `Facts::sites`, every declaration site with the definition it declares, repeats included. The exception reads an overload's arity from it, so each overload adds its arity to the one node.
+- **Queries** (95 + 5 lines, generated to three member levels):
+  - The package as `@scope.namespace`. Imports with their alias or `*`, which the engine does not resolve: Kotlin's import is a package path, not a file.
+  - Classes, objects, type aliases, functions and properties at the file and in a type's body, with `val` and `var` constructor parameters as properties. A companion's members take the class's path. The one-line `object Keys { … }`, which the grammar reads as an infix call on an object literal, and its members.
+  - Citations from line and block comments and string literals. No call, supertype or reference site: the exception walks those.
+  - Each member level costs about 20 ms of query compile. Three levels held the inputs, so no fourth was added.
+- **Spec:** `Label::Qualified`, `Export::Hide(["private", "protected"])`, `Visibility::Family`, `OwnFirst`, `ImportPaths { root: false }`. The body is `Adjacent { kinds: ["line_comment", "multiline_comment"] }`, `Stripped`, `Head` and `Line::Whole`. Hooks: `header` and `resolve`.
+- **No `@owner` for an extension receiver.** `fun String.shout()` stays `shout`, as in the old reader. `@owner` would move the id to `String.shout`, an R1 the rule does not buy.
+- **Exception:** one, `exceptions/package_scope.rs`, not the `overloads.rs` of §2.9. Its rule is the JVM lookup (file, package, imports, supertype chain), and overloads by arity are one part of it. It is the old `jvm/mod.rs` moved, so Java's walk shares it until step 11.
+  - `package_scope/declared.rs` (321 lines) reads the engine's `Facts` back into arities, shapes and supertypes, for `header` and for the walk.
+  - `package_scope/receivers.rs` (775 lines) is the old call walk: calls, value reads and signature types through receivers, supertypes and overloads. It writes through the engine's sink. Citations left it, since the engine writes them.
+  - Measured without its `resolve` hook, with the queries plus bare and receiver call sites, delegation supertypes and value-argument references under the default resolve: declarations exact (R1–R3 = 0) on both inputs. Imports were 0 of 59 (kit) and 0 of 379 (fixture). Calls were 18 of 155 (R 0.116) and 471 of 2,046 (P 0.915, R 0.230), References 12 of 73 (R 0.164) and 616 of 852 (P 0.905, R 0.723), Extends 0 of 15 and 4 of 50. The hook stays.
+- **Gate:** langdiff `--lang kt` with the final binary on three inputs.
+  - Kit corpus (`new-9` → `new-10`): every class 0, every other language byte-identical. Declares 461 (371 `export`), Imports 59, Calls 155, References 73, Extends 15.
+  - Scratchpad corpus (vs `store-base`, 43 files): kt 0. The accepted py R3 = 12, rs R3 = 3 and body-above 7, Swift R3 = 1 and SQL body-above 11 read in R6.
+  - Fixture (126 files): kt 0 against `fixture-base` and `fixture-8p`. Step 6's accepted SQL R1 = 3, R4 = 3, body-above 15 and R7 = 1 read in R6 against `fixture-base`. Declares 1,777, Imports 379, Calls 2,046, References 852, Extends 50.
+  - No bounded edge moved on any input, so the `beauty-crm-mobile` blast was not run (§5.5).
+  - Bench on `f064778`: keyword 39/40, paraphrase 7/30, code 12/12, p90 238, zero flips.
+- **Divergence outside the inputs.** Step 9's binary against step 10's on the Kotlin of `beauty-crm`'s main clone and four worktrees (630 files) reads 0 in every class. A probe file found two, in no input:
+  - A type nested four deep (`A.B.C.D`) declares itself, but none of its members. The old reader read any depth.
+  - A class inside a one-line object (`object Keys { class Inner { fun size() = 2 } }`) declares itself, but not `size`.
+- **Cases** moved to `src/code/cases/kotlin.rs`, with the shared module's `fixture` and `cross` tests. A `super::header(src)` call became `header("", src)`. No assertion was rewritten.
+- **Timing:** median of five, interleaved, on the corpus: step 0 1.276 s, step 10 1.509 s, 1.18× (`log/buildtime-step10.txt`). A first run on the same code read 1.16×.
+- **Size:** `src/code/jvm/kotlin/` held 1,191 lines outside its cases. The exception keeps 1,096, so −95, against the re-estimate's −350 to −500 and its 700–850 kept. The walk was not split: 775 of the 1,096 lines are the receiver walk, which no query replaces. Added: 100 lines of query, 26 net in the spec, 3 in `queries.rs` and 11 in the engine.
+
 **Step 11 · Java.** M. Query ~100, Rust −500.
 
 - **Hooks:** shares Kotlin's JVM hook.

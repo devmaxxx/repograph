@@ -290,6 +290,41 @@ the scratchpad corpus and the fixture are byte-identical to step 7's.
   - `cargo tree --duplicates --depth 0`: no tree-sitter crate;
   - `src/code/python/` is gone.
 
+## Step 9 · Rust
+
+Written after step 10, since the re-read below found this section missing. The readings come from
+the plan's "Step 9 as built" note and the kit's stores. The engine's additions are `145ab3e` and the
+port is `e1a4c68`; their binaries are `bin/repograph-step9e` and `bin/repograph-step9`. Rust's old
+reader is deleted.
+
+- **Regressions:** from `langdiff.py --lang rs` on three inputs.
+  - Kit corpus (`new-8p` → `new-9`): R3 = 3 and body-above 7, every other class 0. No other
+    language moved.
+  - Scratchpad corpus (vs `store-base`): rs R3 = 3 and body-above 7, plus the accepted py R3 = 12,
+    Swift R3 = 1 and SQL body-above 11.
+  - Fixture: no `.rs` file; graph and headers byte-identical to step 8's.
+
+  The 10 are `///` docs: `Stripped` drops a blank `///` line between paragraphs, and where doc and
+  signature reach the 600-character cap together, the cut falls a few characters later.
+- **Bounded and strict kinds:** on the kit corpus, P = R = 1.000 for each.
+  - Calls: 1,068 of 1,068.
+  - Imports: 3 of 3. ReExports: 2 of 2.
+  - Declares: 1,107, of which 200 are `export`.
+- **Exception:** `crate_paths`, with `crate_paths/uses.rs` and `crate_paths/calls.rs`.
+  - Without it, the kit corpus keeps Calls at 645 of 1,068 (P 1.000, R 0.604), and no Imports or
+    ReExports edge.
+  - The plan's note gives that as "Imports and ReExports 0 of 4", where the gate reads Imports 3
+    and ReExports 2. Both are right: the five edges join four file pairs. `src/code/dart/mod.rs`
+    imports `src/code/dart/declarations.rs` twice, once for `named` and once for `text`, and the
+    edge's context keeps them apart. Counted as edges, it is 0 of 5.
+- **Bench:** not run. The fixture's graph and headers are byte-identical to step 8's.
+- **Build time:** median of five, interleaved, on the corpus (`log/buildtime-step9.txt`).
+  - step 0: 1.203 s;
+  - step 9: 1.420 s, which is 1.18×. Before the matcher's start depth it read 1.21×.
+- **After the re-read:** `135e627` keeps an `impl` for a path off the file's bare type and merges
+  every `cfg` twin. The kit graph is unchanged by it: step 10's `--lang kt` reading finds every
+  other language byte-identical to `new-9`.
+
 ## Re-read after step 9
 
 Plan §6.1 asks for this re-read before step 10 starts (decision 3). Every number comes from one of:
@@ -537,3 +572,59 @@ Review findings left unfixed, and divergences documented but not fixed:
 - **Nothing in the gates argues for stopping.** No bounded edge moved on any input, and the bench
   has zero flips. Step 10 is the first port since SQL that the fixture sees (126 `.kt` files), so the
   bench runs again there.
+
+## Step 10 · Kotlin
+
+New: `bin/repograph-step10`, built on `f064778`. Kotlin's old reader (`src/code/jvm/kotlin/`) is
+deleted. What Kotlin and Java share moved from `src/code/jvm/mod.rs` to
+`src/code/exceptions/package_scope.rs`; Java still reads through its own walk until step 11.
+
+- **Regressions:** from `langdiff.py --lang kt` on three inputs. The readings are in
+  `log/langdiff-step10-{kit,scratch,fixture}.txt`.
+  - Kit corpus (`new-9` → `new-10`): every class 0, and every other language byte-identical.
+  - Scratchpad corpus (vs `store-base`, 43 `.kt` files): kt 0. The R6 column reads py 12, rs 10,
+    SQL 11 and Swift 1, which are the accepted py R3 = 12, rs R3 = 3 and body-above 7, SQL
+    body-above 11 and Swift R3 = 1.
+  - Fixture (vs `fixture-base`, 126 `.kt` files): kt 0. The R6 column reads SQL 21 and the store
+    R7 = 1, which are step 6's accepted SQL R1 = 3, R4 = 3, body-above 15 and R7 = 1. Against
+    `fixture-8p` every class is 0.
+- **Bounded and strict kinds:** P = R = 1.000 for each, on both stores.
+
+  | kind | kit | fixture |
+  |---|---|---|
+  | Declares (`export`) | 461 (371) | 1,777 (1,468) |
+  | Imports | 59 | 379 |
+  | Calls | 155 | 2,046 |
+  | References | 73 | 852 |
+  | Extends | 15 | 50 |
+  | DecoratedBy, Implements | 0 | 0 |
+
+- **Exception:** `package_scope`, with `package_scope/declared.rs` and
+  `package_scope/receivers.rs`. Without its `resolve` hook, measured with the queries plus bare and
+  receiver call sites, delegation supertypes and value-argument references under the engine's
+  default resolve, declarations stay exact (R1, R2, R3 = 0) and the rest is lost:
+
+  | kind | kit kept (P, R) | fixture kept (P, R) |
+  |---|---|---|
+  | Imports | 0 of 59 | 0 of 379 |
+  | Calls | 18 of 155 (1.000, 0.116) | 471 of 2,046 (0.915, 0.230) |
+  | References | 12 of 73 (1.000, 0.164) | 616 of 852 (0.905, 0.723) |
+  | Extends | 0 of 15 (—, 0.000) | 4 of 50 (1.000, 0.080) |
+
+  The hook stays. The readings are in `log/pr-step10-nohook-{kit,fixture}.txt`.
+- **Outside the inputs:** step 9's binary against step 10's on the Kotlin of `beauty-crm`'s main
+  clone and four of its worktrees, each with two or three files that differ from the fixture (630
+  files, 10,135 nodes, 29,195 edges): every class 0 (`log/langdiff-step10-outside.txt`). A probe file
+  found two divergences, listed in the plan's "Step 10 as built" note.
+- **Bench:** on `f064778`, `--no-dense`, `intfloat/multilingual-e5-small`, the store written in
+  `~/bench/beauty-crm-test` after `reset.sh`: keyword 39/40, paraphrase 7/30, code 12/12, p90 238
+  tok, green. Zero flips against step 0 and step 6, across all 58 cases. The transcript is
+  `log/bench-step10.txt`, and the row is in `bench/history/runs.jsonl`.
+- **Build time:** median of five, interleaved, on the corpus (`log/buildtime-step10.txt`).
+  - step 0: 1.276 s;
+  - step 10: 1.509 s, which is 1.18×. A first run on the same code read 1.16×.
+- **Gate:**
+  - `cargo test --all-targets`: 1,396 passed, 0 failed;
+  - `cargo clippy --all-targets -- -D warnings`: clean;
+  - `cargo tree --duplicates --depth 0`: no tree-sitter crate;
+  - `src/code/jvm/kotlin/` is gone.
