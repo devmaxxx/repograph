@@ -1,4 +1,5 @@
-//! Java's calls and cited ids, one walk over the tree the declarations pass read.
+//! Java's calls, supertypes, annotations and signature types, one walk over the tree the engine
+//! declared.
 //!
 //! A call edge is written only where the file proves its target; a missing edge is acceptable, a
 //! wrong one is not. So:
@@ -67,11 +68,12 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use tree_sitter::Node;
 
-use super::declarations::{supertypes, type_params, written_type, Declared, TYPES};
-use crate::code::index::Call;
+use super::{supertypes, type_params, written_type, Declared, TYPES};
+use crate::code::engine::{Facts, Sink};
 use crate::code::exceptions::package_scope::{self as jvm, outer, split_id, Bound, Own};
+use crate::code::index::Call;
 use crate::code::syntax::{self, child, named, text};
-use crate::model::{EdgeKind, Extraction};
+use crate::model::EdgeKind;
 
 pub(super) struct Ctx<'a> {
     /// The file's methods, looked up as a bare or a qualified call reads them.
@@ -80,6 +82,7 @@ pub(super) struct Ctx<'a> {
     pub fields: Own<'a>,
     pub src: &'a [u8],
     pub d: &'a Declared,
+    pub facts: &'a Facts,
     /// `member_type` per (enclosing type, name): a type name is looked up at every signature,
     /// receiver and creation, and each lookup walks the supertypes through the headers.
     pub member_types: &'a RefCell<MemberTypes>,
@@ -114,24 +117,29 @@ struct At {
     masked: BTreeSet<String>,
 }
 
-/// A declaration the declarations pass reached, so its id is a symbol.
-fn is_declared(n: Node) -> bool {
-    let Some(p) = n.parent() else { return false };
-    match p.kind() {
-        "program" => true,
-        "class_body" | "interface_body" | "annotation_type_body" => p.parent().is_some_and(|t| TYPES.contains(&t.kind()) && is_declared(t)),
-        "enum_body_declarations" => p.parent().and_then(|b| b.parent()).is_some_and(|t| t.kind() == "enum_declaration" && is_declared(t)),
-        _ => false,
+/// A declaration the engine declared, so its id is a symbol. An initializer block is none; it
+/// stands for its class when the class is one.
+fn is_declared(n: Node, cx: &Ctx) -> bool {
+    match n.kind() {
+        "block" | "static_initializer" => {
+            let ty = n.parent().and_then(|b| match b.kind() {
+                "class_body" => b.parent(),
+                "enum_body_declarations" => b.parent().and_then(|e| e.parent()),
+                _ => None,
+            });
+            ty.is_some_and(|t| TYPES.contains(&t.kind()) && is_declared(t, cx))
+        }
+        _ => cx.facts.declared_at(&n.byte_range()).is_some(),
     }
 }
 
-pub(super) fn scan(root: Node, cx: &Ctx, ex: &mut Extraction) {
-    walk(root, At::default(), cx, ex);
+pub(super) fn scan(root: Node, cx: &Ctx, sink: &mut Sink) {
+    walk(root, At::default(), cx, sink);
 }
 
-fn walk(n: Node, mut at: At, cx: &Ctx, ex: &mut Extraction) {
+fn walk(n: Node, mut at: At, cx: &Ctx, sink: &mut Sink) {
     match n.kind() {
-        k if TYPES.contains(&k) && is_declared(n) => {
+        k if TYPES.contains(&k) && is_declared(n, cx) => {
             if let Some(name) = n.child_by_field_name("name") {
                 let name = text(name, cx.src);
                 at.class = if at.class.is_empty() { name.to_string() } else { format!("{}.{name}", at.class) };
@@ -159,7 +167,7 @@ fn walk(n: Node, mut at: At, cx: &Ctx, ex: &mut Extraction) {
         }
         "method_declaration" | "constructor_declaration" | "compact_constructor_declaration" => {
             // A compact constructor is no symbol; its calls stay unattributed.
-            if is_declared(n) && n.kind() != "compact_constructor_declaration" {
+            if is_declared(n, cx) && n.kind() != "compact_constructor_declaration" {
                 at.method = n.child_by_field_name("name").map(|name| format!("sym:{}::{}.{}", cx.methods.rel, at.class, text(name, cx.src)));
                 at.locals.clear();
             }
@@ -173,12 +181,12 @@ fn walk(n: Node, mut at: At, cx: &Ctx, ex: &mut Extraction) {
                 patterns(body, &mut at, cx.src);
             }
         }
-        "variable_declarator" if n.parent().is_some_and(|p| matches!(p.kind(), "field_declaration" | "constant_declaration") && is_declared(p)) => {
+        "variable_declarator" if n.parent().is_some_and(|p| matches!(p.kind(), "field_declaration" | "constant_declaration") && is_declared(p, cx)) => {
             at.method = n.child_by_field_name("name").map(|name| format!("sym:{}::{}.{}", cx.methods.rel, at.class, text(name, cx.src)));
             at.locals.clear();
         }
         // An initializer block is no symbol; what it calls, its class calls.
-        "static_initializer" | "block" if is_declared(n) => {
+        "static_initializer" | "block" if is_declared(n, cx) => {
             at.method = Some(format!("sym:{}::{}", cx.methods.rel, at.class));
             at.locals.clear();
         }
@@ -217,7 +225,7 @@ fn walk(n: Node, mut at: At, cx: &Ctx, ex: &mut Extraction) {
                 let called = Ctx { methods: Own { call, at: &at.class, ..cx.methods }, ..*cx };
                 for to in targets(n, &at, &called) {
                     if to != from {
-                        ex.edge(&from, &to, EdgeKind::Calls, "", cx.methods.rel);
+                        sink.edge(&from, &to, EdgeKind::Calls, "", cx.methods.rel);
                     }
                 }
             }
@@ -226,15 +234,13 @@ fn walk(n: Node, mut at: At, cx: &Ctx, ex: &mut Extraction) {
         "object_creation_expression" => {
             if let Some(from) = &at.method {
                 for to in created(n, &at, cx).into_iter().filter(|to| to != from) {
-                    ex.edge(from, &to, EdgeKind::Calls, "", cx.methods.rel);
+                    sink.edge(from, &to, EdgeKind::Calls, "", cx.methods.rel);
                 }
             }
         }
-        "line_comment" | "block_comment" => jvm::cite(n, &owner(&at, cx.methods.rel), "comment", cx.methods.rel, cx.src, ex),
-        "string_literal" => jvm::cite(n, &owner(&at, cx.methods.rel), "string", cx.methods.rel, cx.src, ex),
         _ => {}
     }
-    signature(n, &at, cx, ex);
+    signature(n, &at, cx, sink);
     let body = n.child_by_field_name("body").map(|b| b.id());
     for c in named(n) {
         let mut inside = at.clone();
@@ -265,7 +271,7 @@ fn walk(n: Node, mut at: At, cx: &Ctx, ex: &mut Extraction) {
             let id = format!("sym:{}::{}", cx.methods.rel, at.class);
             enter(members_of(Some(c), Some(vec![id]), cx), &mut inside, cx);
         }
-        walk(c, inside, cx, ex);
+        walk(c, inside, cx, sink);
         declare(c, &mut at, cx);
         if c.kind() == "switch_block_statement_group" {
             // A local declared under one label is in scope under the labels after it.
@@ -278,7 +284,7 @@ fn walk(n: Node, mut at: At, cx: &Ctx, ex: &mut Extraction) {
 
 /// A type named in a field's, a parameter's or a record component's type or a return type, generic
 /// arguments and array elements included, writes the edge an import of it would.
-fn signature(n: Node, at: &At, cx: &Ctx, ex: &mut Extraction) {
+fn signature(n: Node, at: &At, cx: &Ctx, sink: &mut Sink) {
     let t = match n.kind() {
         "field_declaration" | "constant_declaration" | "method_declaration" | "formal_parameter" | "array_creation_expression" => n.child_by_field_name("type"),
         "spread_parameter" => named(n).into_iter().find(|c| c.kind() != "modifiers" && c.kind() != "variable_declarator"),
@@ -291,7 +297,7 @@ fn signature(n: Node, at: &At, cx: &Ctx, ex: &mut Extraction) {
         names(t, cx.src, &mut written);
     }
     for w in written {
-        jvm::used(&resolved(&w, at, cx).unwrap_or_default(), cx.methods.rel, ex);
+        jvm::used(&resolved(&w, at, cx).unwrap_or_default(), cx.methods.rel, sink);
     }
 }
 
@@ -310,14 +316,6 @@ fn names(t: Node, src: &[u8], out: &mut Vec<String>) {
         }
         "type_arguments" | "wildcard" | "annotated_type" => named(t).into_iter().for_each(|c| names(c, src, out)),
         _ => {}
-    }
-}
-
-fn owner(at: &At, rel: &str) -> String {
-    match (&at.method, at.class.is_empty()) {
-        (Some(m), _) => m.clone(),
-        (None, false) => format!("sym:{rel}::{}", at.class),
-        (None, true) => format!("file:{rel}"),
     }
 }
 
@@ -473,7 +471,7 @@ fn declare(n: Node, at: &mut At, cx: &Ctx) {
                 at.locals.insert(text(name, cx.src).to_string(), ty);
             }
         }
-        "class_declaration" | "interface_declaration" | "enum_declaration" | "record_declaration" if !is_declared(n) => {
+        "class_declaration" | "interface_declaration" | "enum_declaration" | "record_declaration" if !is_declared(n, cx) => {
             if let Some(name) = n.child_by_field_name("name") {
                 at.masked.insert(text(name, cx.src).to_string());
             }

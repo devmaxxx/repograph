@@ -2,8 +2,8 @@
 //! and a call picks among overloads by arity, as both compilers do. No query sees any of that: it
 //! needs every file's package, top-level names and supertypes, which the family's index holds.
 //! Kotlin and Java share this file, so both walks bind a name by the same rules:
-//! - node helpers, how a Java symbol's body is built, and the order a type name is looked up in:
-//!   this file first, then the one JVM index both languages fill;
+//! - the order a type name is looked up in: this file first, then the one JVM index both
+//!   languages fill;
 //! - `Own`, the member lookup both walks call: a name among a type's own and inherited members,
 //!   walked into other files through the supertypes their headers record, the class chain before
 //!   any interface, with arity admission deciding which declarations take a call, and Java's
@@ -11,19 +11,18 @@
 //! - `Imports`, `Extends` and `DecoratedBy` from a file's imports, supertypes and annotations;
 //! - `expect`/`actual` source sets, which decide which files declaring one name a caller links.
 //!
-//! Kotlin's declarations are the engine's; `declared` reads what the lookup needs of them, and
-//! `receivers` walks a file's calls and value reads.
+//! Both languages' declarations are the engine's. `declared` reads what the lookup needs of a
+//! Kotlin file's and `receivers` walks its calls and value reads; `java` does both for a Java file.
 
 pub(crate) mod declared;
+pub(crate) mod java;
 pub(crate) mod receivers;
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use tree_sitter::Node;
-
+use crate::code::engine::Sink;
 use crate::code::index::{self, Admission, Arity, Call, QualifiedIndex, Reach, Supers};
-use crate::code::syntax::{self, text};
-use crate::model::{EdgeKind, Extraction};
+use crate::model::EdgeKind;
 
 /// `Outer` for `Outer.Inner`, `""` for a top-level path.
 pub(crate) fn outer(path: &str) -> &str {
@@ -33,29 +32,6 @@ pub(crate) fn outer(path: &str) -> &str {
 /// `Outer.Inner` for `sym:a.kt::Outer.Inner`.
 pub(crate) fn path_of(id: &str) -> &str {
     id.rsplit_once("::").map_or(id, |(_, p)| p)
-}
-
-/// A symbol's body as a TypeScript one is built: the comment block ending on the line above,
-/// capped, then the line holding the name. The name's line and not the node's first, because a
-/// Kotlin annotation sits inside the declaration node and `@Serializable` alone would be the one
-/// line the retrievers index.
-pub(crate) fn body(n: Node, name: Node, src: &[u8], comments: &[&str]) -> String {
-    let mut parts = Vec::new();
-    let mut next = n;
-    while let Some(prev) = next.prev_named_sibling() {
-        if !comments.contains(&prev.kind()) || prev.end_position().row + 1 < next.start_position().row {
-            break;
-        }
-        parts.push(syntax::comment_text(text(prev, src)));
-        next = prev;
-    }
-    parts.reverse();
-    let doc = syntax::cap(parts.join("\n"), syntax::DOC_CHARS);
-    let at = name.start_byte();
-    let start = src[..at].iter().rposition(|&b| b == b'\n').map_or(0, |i| i + 1);
-    let end = src[at..].iter().position(|&b| b == b'\n').map_or(src.len(), |i| at + i);
-    let line = std::str::from_utf8(&src[start..end]).unwrap_or("").trim();
-    if doc.is_empty() { line.to_string() } else { format!("{doc}\n{line}") }
 }
 
 /// A type name written inside the type at `at` (`""` at top level), resolved in this file: the
@@ -216,30 +192,30 @@ pub(crate) fn type_ids(types: &BTreeSet<String>, index: &QualifiedIndex, scope: 
 /// `Extends` for every supertype that resolves. A star import writes no `Imports`: which names it
 /// brings in is known only at a use, and the use carries the edge. `resolve` reads a type name
 /// written inside a type path, as the family's walk reads one.
-pub(crate) fn link(supers: &[(String, String)], index: &QualifiedIndex, scope: &Scope, rel: &str, resolve: impl Fn(&str, &str) -> Vec<String>, ex: &mut Extraction) {
+pub(crate) fn link(supers: &[(String, String)], index: &QualifiedIndex, scope: &Scope, rel: &str, resolve: impl Fn(&str, &str) -> Vec<String>, sink: &mut Sink) {
     let file_id = format!("file:{rel}");
     for qualified in scope.singles.values().chain(scope.statics.values()).flatten() {
         for t in declared(index, qualified) {
             if t.rel != rel {
-                ex.edge(&file_id, &format!("file:{}", t.rel), EdgeKind::Imports, t.top(), rel);
+                sink.edge(&file_id, &format!("file:{}", t.rel), EdgeKind::Imports, t.top(), rel);
             }
         }
     }
     for (from, written) in supers {
         // A type's header sees the types around it, not its own nested ones.
         for target in resolve(outer(path_of(from)), written) {
-            ex.edge(from, &target, EdgeKind::Extends, "", rel);
+            sink.edge(from, &target, EdgeKind::Extends, "", rel);
         }
     }
 }
 
 /// The `Imports` edge a type named in a signature writes to each other file declaring it, spelled
 /// as an import of that type is, so `impact` lists the file whose signatures name the type.
-pub(crate) fn used(ids: &[String], rel: &str, ex: &mut Extraction) {
+pub(crate) fn used(ids: &[String], rel: &str, sink: &mut Sink) {
     for (to, path) in ids.iter().filter_map(|id| split_id(id)) {
         if to != rel {
             let top = path.split('.').next().unwrap_or(path);
-            ex.edge(&format!("file:{rel}"), &format!("file:{to}"), EdgeKind::Imports, top, rel);
+            sink.edge(&format!("file:{rel}"), &format!("file:{to}"), EdgeKind::Imports, top, rel);
         }
     }
 }
@@ -248,25 +224,17 @@ pub(crate) fn used(ids: &[String], rel: &str, ex: &mut Extraction) {
 /// resolves in the repository, exactly as a type use would, and nothing otherwise: a node every
 /// annotated file shared would pull all of them into each update's co-declared closure, and an
 /// annotation declared outside the repository names nothing `impact` can walk to.
-pub(crate) fn decorate(annotations: &[(String, String)], rel: &str, resolve: impl Fn(&str, &str) -> Vec<String>, ex: &mut Extraction) {
+pub(crate) fn decorate(annotations: &[(String, String)], rel: &str, resolve: impl Fn(&str, &str) -> Vec<String>, sink: &mut Sink) {
     for (from, written) in annotations {
         // An annotation stands outside a type's body, so it sees the types around it, not its own.
         for target in resolve(outer(path_of(from)), written) {
-            ex.edge(from, &target, EdgeKind::DecoratedBy, "", rel);
+            sink.edge(from, &target, EdgeKind::DecoratedBy, "", rel);
         }
     }
 }
 
-/// Requirement and ADR ids a comment or a string cites, from the declaration holding it, with the
-/// contexts TypeScript's pass writes, so `ask` reads a citation the same in every language.
-pub(crate) fn cite(n: Node, owner: &str, context: &str, rel: &str, src: &[u8], ex: &mut Extraction) {
-    for hit in crate::ids::generic().find_all(text(n, src)) {
-        ex.edge(owner, &hit.id, EdgeKind::References, context, rel);
-    }
-}
-
-/// What a file's header records of its supertypes, from the declarations pass run with an empty
-/// `rel`; `None` when it declares no type.
+/// What a file's header records of its supertypes, keyed by path so the file's own `rel` is no
+/// part of it; `None` when it declares no type.
 pub(crate) fn recorded(types: &BTreeSet<String>, supers: &[(String, String)], shapes: &BTreeMap<String, Shape>, scope: &Scope) -> Option<Supers> {
     if types.is_empty() {
         return None;

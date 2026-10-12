@@ -57,7 +57,7 @@ use crate::code::imports::Resolver;
 use crate::code::index::{Call, QualifiedIndex};
 use crate::code::lang::Family;
 use crate::code::syntax::{self, child, named, text};
-use crate::model::{EdgeKind, Extraction};
+use crate::model::EdgeKind;
 
 /// `Imports`, `Extends` and `DecoratedBy` from what the file declares, then the walk's `Calls`,
 /// `References` and signature `Imports`.
@@ -88,14 +88,9 @@ pub(crate) fn resolve(resolver: &Resolver, file: &File, facts: &Facts, sink: &mu
         member_types: false,
         past_unread: false,
     };
-    // The shared rules write into an extraction, which Java's reader still hands them.
-    let mut ex = Extraction::default();
-    jvm::link(&d.supers, index, &scope, rel, |at, w| own.type_at(at, w), &mut ex);
-    jvm::decorate(&d.annotations, rel, |at, w| own.type_at(at, w), &mut ex);
-    walk(root, At::default(), &Ctx { own, src, d: &d, facts }, &mut ex);
-    for e in ex.edges {
-        sink.edge(&e.source, &e.target, e.kind, &e.context, &e.file);
-    }
+    jvm::link(&d.supers, index, &scope, rel, |at, w| own.type_at(at, w), sink);
+    jvm::decorate(&d.annotations, rel, |at, w| own.type_at(at, w), sink);
+    walk(root, At::default(), &Ctx { own, src, d: &d, facts }, sink);
 }
 
 struct Ctx<'a> {
@@ -162,7 +157,7 @@ fn is_declared(n: Node, cx: &Ctx) -> bool {
     cx.facts.declared_at(&n.byte_range()).is_some()
 }
 
-fn walk(n: Node, mut at: At, cx: &Ctx, ex: &mut Extraction) {
+fn walk(n: Node, mut at: At, cx: &Ctx, sink: &mut Sink) {
     match n.kind() {
         _ if is_type(n) && is_declared(n, cx) => {
             let name = one_line_object(n).map(|(name, _)| name).or_else(|| child(n, "type_identifier"));
@@ -261,7 +256,7 @@ fn walk(n: Node, mut at: At, cx: &Ctx, ex: &mut Extraction) {
                 for to in jvm::same_platform(cx.own.rel, targets(callee, &at, &called)) {
                     // A recursive call says nothing about what the function depends on.
                     if to != from {
-                        ex.edge(&from, &to, EdgeKind::Calls, "", cx.own.rel);
+                        sink.edge(&from, &to, EdgeKind::Calls, "", cx.own.rel);
                     }
                 }
             }
@@ -270,20 +265,20 @@ fn walk(n: Node, mut at: At, cx: &Ctx, ex: &mut Extraction) {
             if let Some(from) = at.function.clone() {
                 for to in jvm::same_platform(cx.own.rel, referenced(text(n, cx.src), &at, cx)) {
                     if to != from {
-                        ex.edge(&from, &to, EdgeKind::References, "", cx.own.rel);
+                        sink.edge(&from, &to, EdgeKind::References, "", cx.own.rel);
                     }
                 }
             }
         }
         _ => {}
     }
-    signature(n, &at, cx, ex);
+    signature(n, &at, cx, sink);
     for c in named(n) {
         // A local is seen by the statements after it, so it joins the `At` its later siblings get.
         if at.function.is_some() && !is_declared(c, cx) {
             remember(c, &mut at, cx);
         }
-        walk(c, at.clone(), cx, ex);
+        walk(c, at.clone(), cx, sink);
     }
 }
 
@@ -293,7 +288,7 @@ const TYPE_KINDS: [&str; 6] = ["user_type", "nullable_type", "non_nullable_type"
 /// A type named in a parameter's, a property's or a variable's type, a return type or an extension
 /// receiver, generic arguments included, writes the edge an import of it would. A type parameter
 /// or a local class of that name is no repository type.
-fn signature(n: Node, at: &At, cx: &Ctx, ex: &mut Extraction) {
+fn signature(n: Node, at: &At, cx: &Ctx, sink: &mut Sink) {
     if !matches!(
         n.kind(),
         "parameter" | "class_parameter" | "parameter_with_optional_type" | "variable_declaration" | "function_declaration" | "anonymous_function" | "property_declaration"
@@ -309,7 +304,7 @@ fn signature(n: Node, at: &At, cx: &Ctx, ex: &mut Extraction) {
         if at.locals.contains_key(w.split('.').next().unwrap_or_default()) {
             continue;
         }
-        jvm::used(&jvm::same_platform(cx.own.rel, resolved(&w, at, cx)), cx.own.rel, ex);
+        jvm::used(&jvm::same_platform(cx.own.rel, resolved(&w, at, cx)), cx.own.rel, sink);
     }
 }
 

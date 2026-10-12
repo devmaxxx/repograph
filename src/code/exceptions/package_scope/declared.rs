@@ -4,7 +4,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use tree_sitter::Node;
+use tree_sitter::{Node, Tree};
 
 use crate::code::engine::{self, Facts, File};
 use crate::code::exceptions::package_scope::{self as jvm, Scope};
@@ -193,26 +193,38 @@ pub(super) fn members_of(body: Node) -> Vec<Node> {
 }
 
 /// The declaration node a site's range spans: a node with a single child spans its range too.
-fn node_at<'t>(root: Node<'t>, range: &std::ops::Range<usize>) -> Option<Node<'t>> {
+fn node_at<'t>(root: Node<'t>, range: &std::ops::Range<usize>, kinds: &[&str]) -> Option<Node<'t>> {
     let mut n = root.descendant_for_byte_range(range.start, range.end)?;
-    while !DECLARATIONS.contains(&n.kind()) {
+    while !kinds.contains(&n.kind()) {
         n = n.parent().filter(|p| p.byte_range() == *range)?;
     }
     Some(n)
 }
 
+/// Every site the engine declared, with its node of `kinds` and its definition, in source order so a
+/// type's shape is known before its members are.
+pub(super) fn sites<'t>(facts: &Facts, root: Node<'t>, kinds: &[&str]) -> Vec<(Node<'t>, usize)> {
+    let mut sites: Vec<_> = facts.sites().collect();
+    sites.sort_by_key(|(range, _)| (range.start, std::cmp::Reverse(range.end)));
+    sites.into_iter().filter_map(|(range, i)| node_at(root, range, kinds).map(|n| (n, i))).collect()
+}
+
+/// A file's declarations alone, read by the language's own query, for its header.
+pub(super) fn facts_of(lang: Lang, rel: &str, source: &str) -> Option<(Facts, Tree)> {
+    let (decl, tree) = (queries::decl(lang)?, lang.parse(source.as_bytes())?);
+    let file = File { lang, rel, text: source, src: source, tree: Some(&tree) };
+    let facts = engine::facts(spec(lang), decl, None, &file);
+    Some((facts, tree))
+}
+
 const DECLARATIONS: [&str; 7] =
     ["class_declaration", "object_declaration", "type_alias", "function_declaration", "property_declaration", "class_parameter", "infix_expression"];
 
-/// What the lookup needs of every site the engine declared, read in source order so a type's
-/// shape is known before its members are.
+/// What the lookup needs of every site the engine declared.
 pub(crate) fn read(facts: &Facts, root: Node, src: &[u8]) -> Declared {
     let mut d = Declared::default();
     let mut public = BTreeSet::new();
-    let mut sites: Vec<_> = facts.sites().collect();
-    sites.sort_by_key(|(range, _)| (range.start, std::cmp::Reverse(range.end)));
-    for (range, i) in sites {
-        let Some(n) = node_at(root, range) else { continue };
+    for (n, i) in sites(facts, root, &DECLARATIONS) {
         let def = &facts.defs[i];
         let (id, path, name) = (&def.id, &def.qualified, &def.name);
         let owner = def.parent.map(|p| facts.defs[p].qualified.as_str());
@@ -287,17 +299,27 @@ fn shape(n: Node, id: &str, path: &str, src: &[u8], d: &mut Declared) {
 }
 
 /// The package and the imports. Kotlin has no static import: `import a.b.C.m` names a member, and
-/// the lookup finds it through `C`'s file as a nested path.
+/// the lookup finds it through `C`'s file as a nested path. Java's query keeps `static` among an
+/// import's names. A path is read with its whitespace dropped, as the compiler reads `a . b`.
 pub(crate) fn scope(facts: &Facts) -> Scope {
-    let mut s = Scope { package: facts.namespaces.first().cloned().unwrap_or_default(), ..Scope::default() };
+    let dense = |s: &str| s.split_whitespace().collect::<String>();
+    let mut s = Scope { package: facts.namespaces.first().map(|p| dense(p)).unwrap_or_default(), ..Scope::default() };
     for import in &facts.imports {
-        let Some(qualified) = import.path.clone() else { continue };
-        if import.names.iter().any(|n| n == "*") {
-            s.stars.push(qualified);
-            continue;
+        let Some(qualified) = import.path.as_deref().map(dense) else { continue };
+        let named = |word: &str| import.names.iter().any(|n| n == word);
+        match (named("static"), named("*")) {
+            (false, true) => s.stars.push(qualified),
+            (true, true) => s.static_stars.push(qualified),
+            (true, false) => {
+                if let Some((ty, member)) = qualified.rsplit_once('.') {
+                    s.statics.entry(member.to_string()).or_default().insert(ty.to_string());
+                }
+            }
+            (false, false) => {
+                let local = import.alias.clone().unwrap_or_else(|| qualified.rsplit('.').next().unwrap_or(&qualified).to_string());
+                s.singles.entry(local).or_default().insert(qualified);
+            }
         }
-        let local = import.alias.clone().unwrap_or_else(|| qualified.rsplit('.').next().unwrap_or(&qualified).to_string());
-        s.singles.entry(local).or_default().insert(qualified);
     }
     s
 }
@@ -305,9 +327,7 @@ pub(crate) fn scope(facts: &Facts) -> Scope {
 /// The package line, every top-level name and every nested path, for the JVM index and for the
 /// headers `widen` stores.
 pub(crate) fn header(rel: &str, source: &str) -> Header {
-    let (Some(decl), Some(tree)) = (queries::decl(Lang::Kotlin), Lang::Kotlin.parse(source.as_bytes())) else { return Header::default() };
-    let file = File { lang: Lang::Kotlin, rel, text: source, src: source, tree: Some(&tree) };
-    let facts = engine::facts(spec(Lang::Kotlin), decl, None, &file);
+    let Some((facts, tree)) = facts_of(Lang::Kotlin, rel, source) else { return Header::default() };
     let scope = scope(&facts);
     let d = read(&facts, tree.root_node(), source.as_bytes());
     // A private member reaches no other file, not even a subclass's.

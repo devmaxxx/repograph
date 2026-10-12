@@ -2,7 +2,8 @@
 
 use std::collections::BTreeSet;
 
-use crate::code::cases::jvm::fixture::{edges, ids, one, Repo};
+use super::jvm::fixture::{edges, ids, one, Repo};
+use crate::code::exceptions::package_scope::java::header;
 use crate::model::EdgeKind;
 
 const ORDERS: &str = "package shop.orders;
@@ -132,11 +133,11 @@ fn the_header_names_exactly_the_top_level_types_the_file_declares() {
         .filter_map(|(_, t, _)| t.strip_prefix("sym:shop/orders/OrderService.java::"))
         .map(str::to_string)
         .collect();
-    let h = super::header(ORDERS);
+    let h = header("Orders.java", ORDERS);
     assert_eq!(h.scope, vec!["shop.orders".to_string()]);
     assert_eq!(h.top, declared);
     assert_eq!(h.top.len(), 6, "{:?}", h.top);
-    assert_eq!(super::header("class NoPackage {}\n").scope, Vec::<String>::new());
+    assert_eq!(header("A.java", "class NoPackage {}\n").scope, Vec::<String>::new());
 }
 
 // Android and Windows-built Java often starts with a BOM and ends its lines in CRLF.
@@ -144,7 +145,7 @@ fn the_header_names_exactly_the_top_level_types_the_file_declares() {
 fn a_bom_and_crlf_file_declares_as_a_plain_one() {
     let ex = one("shop/Crlf.java", "\u{feff}package shop;\r\n\r\npublic class Crlf {\r\n    public void go() {}\r\n}\r\n");
     assert!(ids(&ex).contains(&"sym:shop/Crlf.java::Crlf.go"), "{:?}", ids(&ex));
-    assert_eq!(super::header("\u{feff}package shop;\r\nclass A {}\r\n").scope, vec!["shop".to_string()]);
+    assert_eq!(header("A.java", "\u{feff}package shop;\r\nclass A {}\r\n").scope, vec!["shop".to_string()]);
     let n = ex.nodes.iter().find(|n| n.id == "sym:shop/Crlf.java::Crlf.go").unwrap();
     assert!(!n.body.contains('\r'), "{:?}", n.body);
 }

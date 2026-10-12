@@ -3,7 +3,7 @@
 //! names every language: the front, the resolver, the header index, `changes` and the update's
 //! widening read this table instead of matching on `Lang` each in its own way.
 //!
-//! Most of the vocabulary below describes ported languages, and only Shell, Bicep, HCL, Terraform, Swift, GraphQL, SQL, Dart, Python, Rust and Kotlin are ported yet.
+//! Most of the vocabulary below describes ported languages, and only Shell, Bicep, HCL, Terraform, Swift, GraphQL, SQL, Dart, Python, Rust, Kotlin and Java are ported yet.
 #![allow(dead_code)]
 
 use std::any::{Any, TypeId};
@@ -301,7 +301,30 @@ mod table {
         hooks: Hooks { header: Some(package_scope::declared::header), resolve: Some(package_scope::receivers::resolve), ..NONE },
         legacy: None,
     };
-    pub(super) const JAVA: Spec = Spec { comments: C, hooks: jvm::java::HOOKS, legacy: Some(jvm::java::extract), ..UNPORTED };
+    pub(super) const JAVA: Spec = Spec {
+        queries: crate::code::queries::sources::JAVA,
+        view: None,
+        comments: C,
+        body: Body {
+            doc: Doc::Adjacent { kinds: &["line_comment", "block_comment"], between: &[] },
+            form: Form::Stripped,
+            cap: Cap::Head,
+            line: Line::Whole,
+        },
+        label: Label::Qualified,
+        // Only `public` crosses a package; the query writes an interface's and an annotation
+        // type's keyword as its members' modifier, since they are public without the word.
+        export: Export::Show(&["public", "interface", "@interface"]),
+        visibility: Visibility::Family,
+        ambiguity: Ambiguity::OwnFirst,
+        cross_file: false,
+        imports: ImportPaths { root: false, suffixes: &[] },
+        dotted_dirs: false,
+        // As Kotlin's: the JVM index needs arities and supertypes, and a call binds through
+        // receivers, supertypes and overloads no query reads.
+        hooks: Hooks { header: Some(package_scope::java::header), resolve: Some(package_scope::java::resolve), ..NONE },
+        legacy: None,
+    };
     pub(super) const RUST: Spec = Spec {
         queries: crate::code::queries::sources::RUST,
         view: None,

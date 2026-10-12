@@ -5,7 +5,6 @@ pub(crate) mod exceptions;
 pub(crate) mod front;
 pub(crate) mod imports;
 pub(crate) mod index;
-pub(crate) mod jvm;
 pub(crate) mod lang;
 pub(crate) mod prose;
 pub(crate) mod queries;
