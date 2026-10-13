@@ -49,6 +49,11 @@
 ; import reaches `M`'s members and no other function of the file.
 (chunk (return_statement (expression_list . (identifier) @export.root .)))
 
+; `return setmetatable(M, mt)` returns `M` itself.
+((chunk (return_statement (expression_list
+   . (function_call name: (identifier) @_setmetatable arguments: (arguments . (identifier) @export.root)) .)))
+  (#eq? @_setmetatable "setmetatable"))
+
 ; `local m = require("a.b")` binds `m`, and so does `m = require("a.b")` on a local declared before.
 ; A bare `require "a.b"` loads the module for its effects, and `return require("a.b")` hands it on.
 ; Each shape sits under a different parent, so no site is read twice.
@@ -88,10 +93,21 @@
     (function_call
       name: (identifier) @_require
       arguments: (arguments . (string content: (string_content) @import.path) .)) @import)
-  (return_statement
-    (expression_list
-      . (function_call
-        name: (identifier) @_require
-        arguments: (arguments . (string content: (string_content) @import.path) .)) @import .))
+  (block
+    (return_statement
+      (expression_list
+        . (function_call
+          name: (identifier) @_require
+          arguments: (arguments . (string content: (string_content) @import.path) .)) @import .)))
  ]
   (#eq? @_require "require"))
+
+; `return require("a.b")` at the file's level hands its importers `a.b`'s members as its own.
+((chunk
+   (return_statement
+     (expression_list
+       . (function_call
+         name: (identifier) @_require
+         arguments: (arguments . (string content: (string_content) @import.path) .)) @import .)))
+  (#eq? @_require "require")
+  (#set! reexport))

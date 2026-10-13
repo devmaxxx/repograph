@@ -46,6 +46,20 @@
 
 (parameters name: (identifier) @local.definition)
 
+; A `self` parameter of a member, `function M.f(self)` or `M.f = function(self)`, is the member's table
+; as `function M:f()`'s implicit one is; a `local self` after it is some other value.
+((function_declaration
+   name: [(dot_index_expression) (method_index_expression)]
+   parameters: (parameters . name: (identifier) @local.definition))
+  (#eq? @local.definition "self")
+  (#set! receiver "owner"))
+
+((assignment_statement
+   (variable_list . name: (dot_index_expression) .)
+   (expression_list . value: (function_definition parameters: (parameters . name: (identifier) @local.definition)) .))
+  (#eq? @local.definition "self")
+  (#set! receiver "owner"))
+
 (function_call name: (identifier) @reference.calls)
 
 ; `m.f()` and `m:f()`: `m` is a table the file declares members of, or a `require`'s alias.
@@ -55,7 +69,7 @@
 ((function_call name: (method_index_expression table: (identifier) @receiver method: (identifier) @reference.calls))
   (#not-eq? @receiver "self"))
 
-; `self` in `function M:g()` is `M`.
+; `self` in `function M:g()` is `M` unless a binding around the call says otherwise.
 ((function_call name: (dot_index_expression table: (identifier) @receiver field: (identifier) @reference.calls))
   (#eq? @receiver "self")
   (#set! receiver "owner"))

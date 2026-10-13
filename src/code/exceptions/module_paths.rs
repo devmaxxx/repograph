@@ -138,7 +138,7 @@ impl Scope<'_> {
     /// a bound prefix of the path (`mod.Cls.m`). A local the path starts with, at `at`, names nothing.
     fn qualified(&self, scope: Option<usize>, at: Option<usize>, obj: &str, attr: &str) -> Option<String> {
         let head = obj.split('.').next().unwrap_or(obj);
-        if at.is_some_and(|byte| self.facts.locals.shadows(head, byte)) {
+        if at.is_some_and(|byte| self.facts.locals.shadows(head, byte, None)) {
             return None;
         }
         let under = |b: &Bound, rest: &str| match (b, rest) {
@@ -169,7 +169,7 @@ impl Scope<'_> {
         let scope = at.and(source);
         let target = match receiver {
             None => {
-                if at.is_some_and(|byte| self.facts.locals.shadows(name, byte)) {
+                if at.is_some_and(|byte| self.facts.locals.shadows(name, byte, None)) {
                     return None;
                 }
                 match self.bound(scope, name) {

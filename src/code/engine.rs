@@ -94,22 +94,34 @@ pub(crate) struct Cite {
 /// Names bound locally, each with the scopes it binds in: the scope the definition's own pattern
 /// captures, or else the innermost `@local.scope` holding it, as nvim's locals convention has it.
 #[derive(Debug, Default, Clone)]
-pub(crate) struct Locals(HashMap<String, Vec<Range<usize>>>);
+pub(crate) struct Locals(HashMap<String, Vec<Binding>>);
+
+#[derive(Debug, Clone)]
+pub(crate) struct Binding {
+    scope: Range<usize>,
+    at: usize,
+    /// The name stands for the receiver of the definition it is bound in, as a Go method's receiver
+    /// and Lua's `self` parameter do, so a call through it reaches the definition's owner.
+    owner: bool,
+}
 
 impl Locals {
-    /// Whether a local binding of `name`'s first segment encloses `byte`: a loop variable `x` binds
-    /// the path `x/name` read through it.
-    pub(crate) fn shadows(&self, name: &str, byte: usize) -> bool {
-        let root = name.split_once('/').map_or(name, |(root, _)| root);
-        self.0.get(root).is_some_and(|scopes| scopes.iter().any(|scope| scope.contains(&byte)))
+    /// Whether a local binding of `name`'s first segment encloses `byte`, in a scope that does not
+    /// also hold `apart` when given: a loop variable `x` binds the path `x/name` read through it, and
+    /// the file's table `M` binds around its own `M.f` declared at `apart`, while a parameter named
+    /// `M` is some other value.
+    pub(crate) fn shadows(&self, name: &str, byte: usize, apart: Option<usize>) -> bool {
+        let root = name.split(['.', '/']).next().unwrap_or(name);
+        let binds = |b: &Binding| b.scope.contains(&byte) && !apart.is_some_and(|d| b.scope.contains(&d));
+        self.0.get(root).is_some_and(|bindings| bindings.iter().any(binds))
     }
 
-    /// Whether a local binding of `name`'s first part encloses `byte` in a scope that does not also
-    /// hold `declared`, where the name's member is declared: the file's table `M` binds around its
-    /// own `M.f`, while a parameter named `M` is some other value.
-    fn shadows_apart(&self, name: &str, byte: usize, declared: usize) -> bool {
-        let root = name.split(['.', '/']).next().unwrap_or(name);
-        self.0.get(root).is_some_and(|scopes| scopes.iter().any(|scope| scope.contains(&byte) && !scope.contains(&declared)))
+    /// The binding of `name` a site at `byte` reads: of those written before it, the innermost
+    /// scope's, and in one scope the last, as `local self = …` rebinds a parameter for what follows
+    /// it and not for what precedes it.
+    fn binding(&self, name: &str, byte: usize) -> Option<&Binding> {
+        let bindings = self.0.get(name)?.iter().filter(|b| b.scope.contains(&byte) && b.at <= byte);
+        bindings.min_by_key(|b| (b.scope.len(), std::cmp::Reverse(b.at), !b.owner))
     }
 }
 
@@ -382,7 +394,7 @@ fn refer(spec: &Spec, refs: &'static Compiled, file: &File, facts: &mut Facts) {
                     facts.refs.push(read_reference(spec, &caps, *edge, *node, &refs.metas[pattern], src));
                 }
                 Role::LocalScope => scopes.push(node.byte_range()),
-                Role::LocalDefinition => bound.push((node.start_byte(), fold(spec, text(*node, src)), own.clone())),
+                Role::LocalDefinition => bound.push((node.start_byte(), fold(spec, text(*node, src)), own.clone(), refs.metas[pattern].owner_receiver)),
                 Role::CiteComment => facts.cites.push(Cite { source: None, context: "comment", range: node.byte_range() }),
                 Role::CiteString => facts.cites.push(Cite { source: None, context: "string", range: node.byte_range() }),
                 _ => {}
@@ -403,26 +415,44 @@ fn refer(spec: &Spec, refs: &'static Compiled, file: &File, facts: &mut Facts) {
     // parameters, never in the class around it. A binding that outlives its construct, as
     // Python's walrus outlives a comprehension, is a pattern that captures its own scope.
     let innermost = |at: usize| scopes.iter().filter(|s: &&Range<usize>| s.contains(&at)).min_by_key(|s| s.len()).cloned();
-    for (at, name, own) in bound {
+    let mut binds_owner = false;
+    for (at, name, own, owner) in bound {
         let scopes = match own.is_empty() {
             true => vec![innermost(at).unwrap_or(0..src.len() + 1)],
             false => own,
         };
-        facts.locals.0.entry(name).or_default().extend(scopes);
+        binds_owner |= owner;
+        facts.locals.0.entry(name).or_default().extend(scopes.into_iter().map(|scope| Binding { scope, at, owner }));
     }
     let owners: Vec<_> = facts.refs.iter().map(|r| facts.owner(r.range.start)).collect();
     facts.refs.iter_mut().zip(owners).for_each(|(r, o)| r.source = o);
-    // Outside a member, the word names no owner and stays as written, which nothing declares.
-    for i in owned {
-        let source = facts.refs[i].source.map(|s| facts.defs[s].qualified.as_str());
-        if let Some((owner, _)) = source.and_then(|q| q.rsplit_once(['.', '/'])) {
-            facts.refs[i].receiver = Some(owner.to_string());
-        }
+    if binds_owner || !owned.is_empty() {
+        owner_receivers(facts, &owned);
     }
     if !facts.cites.is_empty() {
         let decorators = syntax::Decorators::of(root);
         let owners: Vec<_> = facts.cites.iter().map(|c| facts.owner(decorators.said_at(c.range.start))).collect();
         facts.cites.iter_mut().zip(owners).for_each(|(c, o)| c.source = o);
+    }
+}
+
+/// Rewrites a receiver that names the definition's own owner to that owner. The binding the site
+/// reads decides: one bound as the receiver names the owner, and any other names some other value. An
+/// unbound word names the owner only in a method, where a pattern in `owned` says the word is the
+/// implicit receiver, as Lua's `self` in `function M:g()` is. Outside a member, the word names no owner
+/// and stays as written, which nothing declares.
+fn owner_receivers(facts: &mut Facts, owned: &[usize]) {
+    for i in 0..facts.refs.len() {
+        let r = &facts.refs[i];
+        let Some(receiver) = &r.receiver else { continue };
+        let names_owner = match facts.locals.binding(receiver, r.range.start) {
+            Some(b) => b.owner,
+            None => owned.binary_search(&i).is_ok() && r.source.is_some_and(|s| facts.defs[s].kind == Kind::Method),
+        };
+        let source = r.source.map(|s| facts.defs[s].qualified.as_str());
+        if let Some((owner, _)) = source.and_then(|q| q.rsplit_once(['.', '/'])).filter(|_| names_owner) {
+            facts.refs[i].receiver = Some(owner.to_string());
+        }
     }
 }
 
@@ -920,7 +950,7 @@ pub fn resolve(resolver: &Resolver, spec: &Spec, file: &File, facts: &Facts, ex:
             }
             continue;
         }
-        if facts.locals.shadows(&r.name, r.range.start) {
+        if facts.locals.shadows(&r.name, r.range.start, None) {
             continue;
         }
         let targets = declaring(&r.name);
@@ -973,9 +1003,18 @@ impl<'f> Receiving<'f> {
         }
         files.into_iter().map(|(alias, files)| {
             let mut members: HashMap<String, BTreeSet<String>> = HashMap::new();
-            for theirs in files.into_iter().filter_map(|f| resolver.facts(f)) {
+            // A file that re-exports a whole module, as Lua's `return require("a")` does, hands
+            // that module's members on as its own.
+            let mut queue: Vec<String> = files.into_iter().map(str::to_string).collect();
+            let mut seen = BTreeSet::new();
+            while let Some(f) = queue.pop() {
+                let Some(theirs) = seen.insert(f.clone()).then(|| resolver.facts(&f)).flatten() else { continue };
                 for (member, id) in exposed(&theirs) {
                     members.entry(member.to_string()).or_default().insert(id.to_string());
+                }
+                let their_spec = theirs.lang.map(crate::code::spec::spec).unwrap_or(spec);
+                for i in theirs.imports.iter().filter(|i| i.reexport && i.names.is_empty() && i.alias.is_none()) {
+                    queue.extend(i.targets(resolver, their_spec, &f).iter().cloned());
                 }
             }
             (alias, members)
@@ -989,9 +1028,9 @@ impl<'f> Receiving<'f> {
     fn target<'a>(&'a self, facts: &'a Facts, r: &Ref, receiver: &str, imports: impl FnOnce() -> Imported<'f>) -> Option<&'a str> {
         if let Some(&i) = self.own.get(&(receiver, r.name.as_str())) {
             let def = &facts.defs[i];
-            return (!facts.locals.shadows_apart(receiver, r.range.start, def.range.start)).then_some(def.id.as_str());
+            return (!facts.locals.shadows(receiver, r.range.start, Some(def.range.start))).then_some(def.id.as_str());
         }
-        if facts.locals.shadows(receiver, r.range.start) {
+        if facts.locals.shadows(receiver, r.range.start, None) {
             return None;
         }
         let ids = self.imported.get_or_init(imports).get(receiver)?.get(r.name.as_str())?;

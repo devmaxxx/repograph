@@ -159,8 +159,9 @@ pub(crate) struct Meta {
     /// How deep the pattern's outermost node may sit, the file's root at 0: Rust's inline `mod` is
     /// never deep in a function body.
     pub depth: Option<u32>,
-    /// On a reference: its receiver stands for the owner of the definition holding the site, as
-    /// Lua's `self` inside `function M:g()` stands for `M`.
+    /// On a local definition: the name it binds is the receiver of the definition it is bound in,
+    /// as a Go method's receiver is. On a reference: an unbound receiver stands for the owner of the
+    /// method holding the site, as Lua's implicit `self` inside `function M:g()` stands for `M`.
     pub owner_receiver: bool,
 }
 

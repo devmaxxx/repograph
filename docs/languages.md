@@ -44,12 +44,15 @@ Lua (`.lua`, and a script whose shebang names `lua` or `lua5.x`) is read only wh
   is the file's own and is not exported. `require("a.b")` and `require "a.b"` import `a/b.lua` or
   `a/b/init.lua` under the repository root, `src/` or `lua/`. A bare call reaches the file's own
   function, or the one global function a required file declares. `m.f()` and `m:f()` through a
-  `require`'s alias reach the member `f` of the table the required file returns (`return M`), or its
-  top-level function `f` when it returns no table. `M.f()` on the file's own table and `self:f()`
-  inside `function M:g()` reach the file's `M.f`. Requirement ids are read in comments and strings.
+  `require`'s alias reach the member `f` of the table the required file returns (`return M` or
+  `return setmetatable(M, …)`), or its top-level function `f` when it returns no table; a file that
+  ends in `return require("a")` hands on `a`'s members, and its import is a re-export. `M.f()` on the
+  file's own table reaches the file's `M.f`, and so does `self:f()` inside `function M:g()`,
+  `function M.g(self)` or `M.g = function(self)`, until a `local self` rebinds it. Requirement ids
+  are read in comments and strings.
 - **Not read:** a function defined inside another function's body, or two blocks deep;
   `M.f = function` inside a branch; a method called on a value (`obj:m()`) or one `self` inherits;
-  the members of a table a module returns any other way (`return setmetatable(M, …)`,
-  `return { … }`), or of a module it hands on with `return require(…)`; a `require` of a computed
-  name, of a module outside the repository, or inside a larger expression (`require("a").b`,
-  `require("a") or {}`), whose local is then a plain value; `luajit` shebangs.
+  `self` in a function with no `self` of its own (`function M.f()`); the members of a table a module
+  returns as a constructor (`return { f = f }`); a `require` of a computed name, of a module outside
+  the repository, or inside a larger expression (`require("a").b`, `require("a") or {}`), whose local
+  is then a plain value; `luajit` shebangs.

@@ -947,3 +947,31 @@ resolves `M.f()` on the file's own table and `self` in a member (`#set! receiver
 - **Gate:**
   - `cargo test --all-targets`: 1,416 passed, 0 failed;
   - `cargo clippy --all-targets -- -D warnings`: clean.
+
+## Step 16 · item 0 · Lua leftovers
+
+New: `bin/repograph-step16a`, built from the item 0 tree. Parent: `bin/repograph-step15r`.
+
+- **What changed:** `return setmetatable(M, …)` is an export root; a file-level `return require(…)`
+  is a `ReExports` edge whose target's members a receiver reaches; `self` reads its binding
+  (`#set! receiver "owner"` on a `@local.definition`), so `local self = …` rebinds it and
+  `function M.f()` has none; `Locals::shadows` and `shadows_apart` are one helper.
+- **Cases:** 14 in `src/code/cases/lua.rs`, 3 new: a rebound `self` beside an explicit and an
+  assigned `self` parameter, `function M.f()` with no `self`, and a closure's own `self`; an alias
+  that is also the file's own table; `setmetatable` and `return require` exposing a table's members.
+- **luarocks** (`--no-dense`, the defaults plus `**/*.lua`), `step15r` against `step16a`:
+  - Calls: the same 1,484 edges. luarocks has no `return setmetatable(`. Its five `local self`
+    sit in dotted constructors (`results.new`, `queries.new`, `queries.from_dep_string`,
+    `multipart.new_file`, `api.new`), and only `api.new` calls through it: `self:load_config()`
+    read as `api.load_config` before and as the local now, and the method is `api.Api.load_config`
+    either way, so no edge moves.
+  - Imports 556 → 552 and ReExports 0 → 4 (`log/langdiff-step16a-luarocks.txt`, lua R4 8). Read
+    by hand, all four are right: `require.lua` line 2, `fetch/hg_ssh.lua` and `fetch/hg_https.lua`
+    line 8, `fetch/git_https.lua` line 7, each `return require(…)` at the file's level. Nothing in
+    luarocks calls through an alias of those files, so no Calls edge follows them.
+  - Declares 898 and References 0 are the same sets.
+  - `return { … }`: three files, `tlconfig.lua`, `spec/util/versions.lua` and
+    `spec/fixtures/a_rock.lua`, all data. Left unread (plan, step 15 as built).
+- **Byte-identity:** kit and scratchpad corpora, `step15r` against `step16a`, with and without the
+  Lua globs: `graph.json` and `headers.json` identical, and the scratchpad's matches `store-14`.
+- **Gate:** `cargo test --all-targets` 1,419 passed, 0 failed; clippy `-D warnings` clean.

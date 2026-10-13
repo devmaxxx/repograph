@@ -172,7 +172,7 @@ A function nested in a function is qualified by its nearest container, if it has
 - `reexport` marks an import as a re-export.
 - `within` names a node kind the match must sit inside, at any depth. The engine drops a match whose outermost capture has no such ancestor, and refuses at compile a pattern that captures nothing, or that may match with no capture while it sets `within`. A construct that nests what it reads at any depth, such as a view's relations, needs it, because a pattern can only spell depth as one alternative per level. Step 7 adds it, before the Dart port.
 - `visibility` overrides `spec.visibility` for one reference pattern. Step 19 adds it (§6.2).
-- `receiver` is `owner`: the pattern's `@receiver` stands for the owner of the definition holding the site, as Lua's `self` inside `function M:g()` stands for `M`. The step 15 review fix adds it.
+- `receiver` is `owner`. On a `@local.definition`, the name it binds is the receiver of the definition it is bound in, as a Go method's receiver and Lua's `self` parameter are, so a call through it reaches the definition's owner. On a reference, an unbound `@receiver` stands for the owner of the method holding the site, as Lua's implicit `self` inside `function M:g()` stands for `M`. The binding a site reads decides: of those written before it, the innermost scope's and in one scope the last, so `local self = other()` rebinds `self` for what follows. The step 15 review fix adds the reference form and step 16's item 0 the binding form.
 
 Contexts form a closed list, which is the list in use today: `""`, `export`, `arg`, `get`, `*`, `comment`, `string`, `alter`, `impl`, `extend`, `on`, `type`, `variable`, `argument`, `member`.
 
@@ -1821,6 +1821,13 @@ No new definition kind is needed:
   - **What Go reuses:** the no-root rule gives `pkg.F` the package's unowned top-level definitions with no query change; `Export::Capitalized` (step 16) hides the rest. A method's receiver variable (`func (s *T) M()`) can use `#set! receiver "owner"` where a pattern can tie the call's operand to the receiver parameter with `#eq? @receiver @_param`, at the depth that pattern spells.
   - **Still missing:** a module that returns its table any other way (`return setmetatable(M, …)`, `return { … }`) exposes only its top-level definitions; `return require(…)` hands nothing on; a `require` inside a larger expression imports nothing; and `local m = require(name)` with a computed name is neither a local nor an import.
   - **Two new engine words:** the `@export.root` capture and the `receiver` property key (§2.2). Every existing language is byte-identical on the kit and scratchpad corpora.
+- **Leftovers, closed before step 16** (step 16's item 0):
+  - `return setmetatable(M, …)` at the file's level is an `@export.root` too, so such a module exposes `M`'s members and not its top-level functions.
+  - `return require("a")` at the file's level sets `reexport`, so its edge is `ReExports`, and a receiver naming the file reaches `a`'s members: `Receiving::imports` follows a whole-module re-export (no names, no alias) through every hop it can reach. Inside a function the shape stays a plain import.
+  - `return { f = f }` stays unread. It needs a table field tied to the definition its value names, which is a new capture role and has no luarocks module to earn it: the three such files return data.
+  - **`self` reads its binding.** `#set! receiver "owner"` on a `@local.definition` marks a binding as the receiver of the definition it sits in: Lua's first parameter named `self` of `function M.f(self)` and `M.f = function(self)`. The binding a site reads decides, so a `local self = other()` after the parameter rebinds it. A `self` with no binding names the owner only inside a method (`function M:g()`); `function M.f()` has no `self`, and a call through it names nothing.
+  - `Locals::shadows` and `shadows_apart` are one helper, `shadows(name, byte, apart)`, with one segment split on `.` and `/`.
+  - On luarocks the Calls are the same 1,484 edges; the only move is the four file-level `return require(…)` edges, now `ReExports`.
 
 **Step 16 · Go.** M. Query ~90, cases ~250, engine ~150 (`Capitalized`, `ModulePrefix`, directory targets).
 

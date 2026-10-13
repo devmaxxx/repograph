@@ -254,3 +254,56 @@ fn a_local_holding_more_than_the_require_call_is_a_value_and_shadows_a_global() 
     ];
     assert!(lines(&extract(&files, "a.lua"), EdgeKind::Calls).is_empty(), "`cfg` and `m` are locals, not the globals `g.lua` defines");
 }
+
+#[test]
+fn self_is_the_member_s_table_until_a_local_rebinds_it_and_names_nothing_in_a_dotted_function() {
+    let src = r#"local M = {}
+function M.h() end
+function M:m()
+  self:h()
+  local self = other()
+  self:h()
+end
+function M.explicit(self) return self.h() end
+M.assigned = function(self) return self.h() end
+function M.dotted() return self.h() end
+function M:closure()
+  return function(self) return self.h() end
+end
+return M
+"#;
+    assert_eq!(lines(&extract(&[("m.lua", src)], "m.lua"), EdgeKind::Calls), [
+        "sym:m.lua::M.assigned -> sym:m.lua::M.h []",
+        "sym:m.lua::M.explicit -> sym:m.lua::M.h []",
+        "sym:m.lua::M.m -> sym:m.lua::M.h []",
+    ], "the second `self:h()` reads the local, `M.dotted` has no `self`, and a function value's own `self` \
+        parameter is whatever it is called with");
+}
+
+#[test]
+fn an_alias_that_is_also_the_file_s_own_table_reaches_its_own_members_first() {
+    let files = [
+        ("a.lua", "local M = require(\"x\")\nfunction M.own() end\nlocal function go()\n  M.own()\n  M.run()\nend\nreturn M\n"),
+        ("x.lua", "local X = {}\nfunction X.run() end\nfunction X.own() end\nreturn X\n"),
+    ];
+    assert_eq!(lines(&extract(&files, "a.lua"), EdgeKind::Calls), [
+        "sym:a.lua::go -> sym:a.lua::M.own []",
+        "sym:a.lua::go -> sym:x.lua::X.run []",
+    ], "the file's own `M.own` wins, and a member it does not declare is the required table's");
+}
+
+#[test]
+fn a_table_returned_through_setmetatable_or_handed_on_by_require_exposes_its_members() {
+    let files = [
+        ("a.lua", "local m = require(\"x\")\nlocal n = require(\"y\")\nlocal function go()\n  m.run()\n  m.top()\n  n.run()\nend\n"),
+        ("x.lua", "local X = {}\nfunction X.run() end\nfunction top() end\nreturn setmetatable(X, { __index = X })\n"),
+        ("y.lua", "return require(\"x\")\n"),
+    ];
+    let ex = extract(&files, "a.lua");
+    assert_eq!(lines(&ex, EdgeKind::Calls), [
+        "sym:a.lua::go -> sym:x.lua::X.run []",
+    ], "`m.run()` and `n.run()` both reach `X.run`, and `top` is not the returned table's");
+    assert_eq!(ex.edges.iter().filter(|e| e.kind == EdgeKind::Calls).count(), 2);
+    let y = extract(&files, "y.lua");
+    assert_eq!(lines(&y, EdgeKind::ReExports), ["file:y.lua -> file:x.lua [*]"]);
+}
