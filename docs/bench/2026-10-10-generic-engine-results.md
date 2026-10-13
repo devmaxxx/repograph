@@ -1370,6 +1370,110 @@ tokenizer cases of the attribute-macro view. Plan, step 18 as built, has each fi
 - **Gate:** `cargo test --all-targets` 1,469 passed, 0 failed; `cargo clippy --all-targets -- -D
   warnings` clean. No release build; fixture, bench and platforms not run.
 
+## Step 19 · Ruby
+
+New: `bin/repograph-ruby`, built at the tree committed as `ffeaabf`. Parent: `bin/repograph-step17`,
+built at `77b7d8f`. Ruby is read only when a config or `REPOGRAPH_CODE_GLOBS` names `**/*.rb`,
+`**/*.rbw`, `**/*.gemspec` and `**/*.rake`.
+
+- **Corpus:** `rack/rack` at `v3.2.7`, `70d2e1046789a70e240e01b9ac0b3ffc9b26d33f`, 93 `.rb` and one
+  `.gemspec`, MIT. It is read as data only: no script of it was run.
+- **Parse census:** 94 files, 0 with an ERROR or MISSING node.
+- **Cases:** 10 in `src/code/cases/ruby.rs`. They cover modules joining with `/` and classes with
+  `.`, a reopened class as one symbol, `class << self`, the `private` and `protected` sections and
+  `private def`, doc comments above a first method, `require`, `require_relative` and `autoload`
+  beside the requirer and under `lib/`, `.rake` and `.gemspec`, a bare call reaching its class and
+  the file, a `self.` call its owner, constants read under each container and as written, paths,
+  the superclass, a reopened module reached in every file, block parameters, rescued errors and
+  loop variables hiding a method, a hidden method out of another file's reach, a constant passing
+  over a method spelled like it, and citations.
+- **What Ruby writes** (`--no-dense`, the defaults plus the four Ruby globs): 1,158 nodes (94 Ruby
+  files, 1,056 symbols: 67 modules, 92 classes, 726 methods, 171 constants), Declares 1,056 (975
+  exported), Imports 291, Calls 455, References 802, Extends 12. The pending count gains 11, ten
+  `UTF-8` and one `RFC-3330` citation in Ruby files.
+- **Census recall.** A text census over comment-, string-, symbol- and heredoc-blanked source,
+  nested by indentation, independent of the grammar (`s19/census.py`, `s19/blank.py`,
+  `s19/icensus.py` in the scratchpad), every miss hand-read:
+  - Definitions: modules 67 of 67, classes 92 of 92, methods 725 of 726, constants 171 of 171. The
+    miss is `def YAML.unsafe_load` in `test/psych_fix.rb`, a method on a constant receiver, read by
+    neither side's rule. 39 `def value.m` and 13 `class << value` sit on values no name reaches and
+    are left out of both. The store has one symbol the census lacks: `test/spec_response.rb::<<`,
+    from `alias << call` inside a `class_eval` block, counted wrong. Export: 0 disagreements against
+    `private`, `protected` and `public` read from the raw text.
+  - Calls: 458 pairs, 454 with an edge. The misses are `stat(…)` twice in `directory.rb` and
+    `query_parser()` in `spec_request.rb`, each beside a local of its name, and the call of
+    `YAML.unsafe_load`. The store's one edge outside the census, `builder` in `spec_builder.rb`, is
+    right; the census misread it.
+  - References: 801 pairs, 801 with an edge. The store's one more, `DOCROOT` from
+    `defined? DOCROOT`, is right.
+  - Extends: 13, 12 with an edge. The miss is `TestProxyRequest < RackRequestTest`, a nested class
+    extending the class around it, an edge to the source's container, which the engine drops.
+  - Unclaimed: 828 constant references and 8 constant-named bare calls name nothing the repository
+    declares (`Minitest`, `File`, `StringIO`; `Array(…)`, `Integer(…)`, `Float(…)`).
+  - Requires: 342 literal sites (248 `require_relative`, 51 `require`, 43 `autoload`) and one built
+    at run time; 291 reach a file of the repository, 291 edges, none missing, none extra, under the
+    step's rule and under Ruby's own (`require_relative` beside, `require` and `autoload` under
+    `lib/`).
+  - `OwnThenUnique` instead of `OwnFirst`: −69 References, every one to a reopened `Rack` or
+    `Rack::Multipart` in another file, all right; none gained.
+  - A bare call kept to its innermost container and the top level: −18 Calls, all of
+    `Response::Helpers` reaching `Response#get_header`, `set_header` and `has_header?`, right because
+    `Response` includes `Helpers`. Not taken.
+- **Hand read:**
+  - Symbols (seed 19): 50 of 50 right in id, line and end.
+  - Five seeded files, counted by hand against the source: `lib/rack/body_proxy.rb` 7 Declares and
+    1 Call of 7 and 1; `lib/rack/directory.rb` 19 Declares, 5 Imports, 22 References of 19, 5, 22,
+    and 13 Calls of 15, the two misses the `stat = stat(…)` pair above; `test/spec_directory.rb` 3,
+    6, 11 and 4 of the same; `test/spec_etag.rb` 3 Declares, 4 Imports, 5 References, 4 Calls of
+    the same; `test/spec_sendfile.rb` 5, 4, 7 and 10 of the same.
+  - Declares (seed 19): 50 of 50, the three plain ones each after a `private` in its body.
+  - Imports (seed 19): 50 of 50, each against its `require_relative` or `autoload` line.
+  - Calls (seed 19): 50 of 50. One, `Parser.parse → handle_consume_token`, is made in the instance
+    method `parse`, which shares its qualified name with `def self.parse`; the first definition is
+    the one symbol, as planned.
+  - References (seed 19): 50 of 50. A first sample, before a constant passed over methods, held
+    `form_data? → Helpers/POST`, a constant `POST` read as the method `def POST`: wrong. That rule
+    moved 3 References to `Rack::POST` and `Rack::GET`, and the census took the same rule.
+  - Extends: 12 of 12.
+- **P and R per kind** (§3.3; P from the hand read and the census, R from the census):
+
+  | kind | edges | sample | P | R |
+  |---|---|---|---|---|
+  | Calls | 455 | 50/50 | 1.000 (455 of 455) | 0.9913 (454 of 458) |
+  | References | 802 | 50/50 | 1.000 | 1.000 (801 of 801) |
+  | Extends | 12 | 12/12 | 1.000 | 0.9231 (12 of 13) |
+  | Declares, modules and classes | 159 | 50/50 | 1.000 | 1.000 (159 of 159) |
+  | Declares, methods | 726 | | 0.9986 (725 of 726) | 0.9986 (725 of 726) |
+  | Declares, constants | 171 | | 1.000 | 1.000 (171 of 171) |
+  | Imports | 291 | 50/50 | 1.000 | 1.000 (291 of 291) |
+
+  Extends is thin (|O| under 50), so its row is read whole rather than gated on R. The Declares
+  sample of 50 spans all three rows.
+- **Regressions** (`log/langdiff-step19-rack.txt`), rack without against with the Ruby globs: rb R1
+  1,149 and gemspec R1 1 (every new node), R4 1,346 and 1 (Declares and Imports), Calls +455,
+  References +801 and +1, Extends +12, R2 0, R3 0, R5 0, R6 0, R7 0, R9 0. R8 is 1, the pending
+  count above.
+- **Byte-identity**, `step17` against `ruby`, every build on a copy:
+  - Scratchpad corpus and kit corpus, each with its `repograph.toml`, with the default globs and
+    with the defaults plus the Ruby globs: `graph.json` identical in all six pairs
+    (`dff8b36a53bb0548`, `store-14`'s), `headers.json` identical (`a5470b352b46ebc0`). Neither corpus
+    holds a Ruby file.
+  - luarocks with `**/*.lua`, and with the Ruby globs too: `368f10ad0de3ba07` in all four builds.
+  - gin with `**/*.go`, and with the Ruby globs too: `119169be4bd8aa62` in all four.
+  - hiredis with `**/*.c **/*.h`, and with the Ruby globs too: `1396190e7661e0c7` in all four.
+- **Fixture and bench:** not run. Ruby is not in the fixture's globs.
+- **Licence reading:** `tree-sitter-ruby 0.23.1 MIT ok`, ABI 14. The crate ships no `LICENSE` file;
+  its `Cargo.toml` says `license = "MIT"` and its `tree-sitter.json` names Rob Rix. `refs.scm`'s
+  locals are adapted from the crate's `locals.scm` and carry its notice, "Copyright (c) 2016 Rob
+  Rix, MIT License".
+- **Edited tests:** `cases.rs`'s shebang test names `a.hs` instead of `a.rb` as a file ast-grep
+  reads and we leave as a file, since `.rb` is now read. `lang.rs`'s
+  `all_lists_every_language_once` gains Ruby's slot. No assertion changed.
+- **Platforms:** not verified. The branch was not pushed, so `ci` has not run on it.
+- **Gate:**
+  - `cargo test --all-targets`: 1,460 passed, 0 failed. A first run under load from parallel builds
+    failed five `tests/serve.rs` tests on timing; `serve` alone and a second full run passed;
+
 ## Step 20 · PHP
 
 New: `bin/repograph-php`, built at the tree committed on `feat/engine-php`. Parent:

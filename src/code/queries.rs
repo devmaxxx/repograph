@@ -177,6 +177,10 @@ pub(crate) struct Meta {
     /// On a definition: it is the file's, whatever container it is written in, as a C++ friend
     /// defined in its class is a function of the namespace around the class.
     pub detached: bool,
+    /// On a reference: it reaches its own file's definitions alone, whatever the spec's visibility.
+    /// A Ruby method called without a receiver is the caller's class's, which another file
+    /// reopening that class is no witness to.
+    pub own_file: bool,
 }
 
 pub struct Compiled {
@@ -228,6 +232,7 @@ pub fn compile(grammar: &Language, sources: &[&str]) -> Result<Compiled, String>
                 "receiver" if value == "owner" => meta.owner_receiver = true,
                 "receiver" if value == "scope" => meta.scoped = true,
                 "parent" if value == "none" => meta.detached = true,
+                "visibility" if value == "file" => meta.own_file = true,
                 "depth" => match value.parse() {
                     Ok(n) => meta.depth = Some(n),
                     Err(_) => return Err(format!("pattern at byte {at} sets depth {value:?}, which is no count")),
@@ -308,6 +313,9 @@ pub(crate) mod sources {
 
     pub(crate) const PYTHON: Sources =
         Sources { decl: &[include_str!("queries/python/decl.scm")], refs: &[include_str!("queries/python/refs.scm")] };
+
+    pub(crate) const RUBY: Sources =
+        Sources { decl: &[include_str!("queries/ruby/decl.scm")], refs: &[include_str!("queries/ruby/refs.scm")] };
 
     pub(crate) const RUST: Sources =
         Sources { decl: &[include_str!("queries/rust/decl.scm")], refs: &[include_str!("queries/rust/refs.scm")] };
