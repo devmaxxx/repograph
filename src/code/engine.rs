@@ -279,7 +279,11 @@ static DECLARED: Mutex<BTreeMap<String, (u64, Arc<Facts>)>> = Mutex::new(BTreeMa
 fn fingerprint(spec: &Spec, file: &File) -> u64 {
     use std::hash::{Hash, Hasher};
     let mut h = std::collections::hash_map::DefaultHasher::new();
-    (std::ptr::from_ref(spec) as usize, file.lang, file.text, file.src).hash(&mut h);
+    (std::ptr::from_ref(spec) as usize, file.lang, file.src).hash(&mut h);
+    // A view's text is the file as written and its source the copy read; otherwise they are one string.
+    if !std::ptr::eq(file.text, file.src) {
+        file.text.hash(&mut h);
+    }
     h.finish()
 }
 
@@ -354,8 +358,8 @@ fn refer(spec: &Spec, refs: &'static Compiled, file: &File, facts: &mut Facts) {
                 Role::Reference(edge) => facts.refs.push(read_reference(spec, &caps, *edge, *node, &refs.metas[pattern], src)),
                 Role::LocalScope => scopes.push(node.byte_range()),
                 Role::LocalDefinition => bound.push((node.start_byte(), fold(spec, text(*node, src)), own.clone())),
-                Role::CiteComment => facts.cites.push(Cite { source: facts.owner(said_at(root, node.start_byte())), context: "comment", range: node.byte_range() }),
-                Role::CiteString => facts.cites.push(Cite { source: facts.owner(said_at(root, node.start_byte())), context: "string", range: node.byte_range() }),
+                Role::CiteComment => facts.cites.push(Cite { source: None, context: "comment", range: node.byte_range() }),
+                Role::CiteString => facts.cites.push(Cite { source: None, context: "string", range: node.byte_range() }),
                 _ => {}
             }
         }
@@ -383,6 +387,9 @@ fn refer(spec: &Spec, refs: &'static Compiled, file: &File, facts: &mut Facts) {
     }
     let owners: Vec<_> = facts.refs.iter().map(|r| facts.owner(r.range.start)).collect();
     facts.refs.iter_mut().zip(owners).for_each(|(r, o)| r.source = o);
+    // After the nested citations are dropped: each lookup walks down from the root.
+    let owners: Vec<_> = facts.cites.iter().map(|c| facts.owner(said_at(root, c.range.start))).collect();
+    facts.cites.iter_mut().zip(owners).for_each(|(c, o)| c.source = o);
 }
 
 /// Where a cite is said: at the declaration a decorator stands beside, whose words the decorator's

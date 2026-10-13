@@ -1057,3 +1057,11 @@ fn a_call_that_computes_a_destructured_value_is_the_file_s() {
     assert!(got.contains(&("sym:a.ts::c", "sym:lib.ts::load", "")), "{got:?}");
     assert!(!got.iter().any(|e| e.0 == "sym:a.ts::a"), "{got:?}");
 }
+
+#[test]
+fn a_decorated_field_reads_its_own_line_whatever_the_decorator_spans() {
+    let ex = extract("a.ts", "export class A {\n  @Input() name: string;\n  @Column({\n    type: 'int',\n  })\n  age: number;\n}\n");
+    let body = |id: &str| ex.nodes.iter().find(|n| n.id == id).map(|n| n.body.clone());
+    assert_eq!(body("sym:a.ts::A.name").as_deref(), Some("name: string"));
+    assert_eq!(body("sym:a.ts::A.age").as_deref(), Some("age: number"));
+}

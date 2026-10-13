@@ -29,7 +29,14 @@ pub(crate) fn body(file: &File, def: &Def) -> String {
     let Some(node) = file.tree.and_then(|t| spanning(t.root_node(), &def.range)) else { return String::new() };
     let src = file.src.as_bytes();
     if def.parent.is_some() {
-        let signature = text(node, src).lines().find(|l| !l.trim_start().starts_with('@')).unwrap_or("").trim();
+        // A field holds its decorators as children, so the line starts at the first child past them; a
+        // decorator on the line of its field, or one spread over several lines, is not the signature.
+        let from = {
+            let mut c = node.walk();
+            let first = node.children(&mut c).find(|k| k.kind() != "decorator");
+            first.map_or(node.start_byte(), |k| k.start_byte())
+        };
+        let signature = file.src[from..node.end_byte()].lines().next().unwrap_or("").trim();
         return with_doc(doc_comment(node, src), signature.to_string());
     }
     let decl = match node.kind() {
