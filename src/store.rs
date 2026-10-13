@@ -71,6 +71,24 @@ pub(crate) fn rename_over(from: &Path, to: &Path) -> std::io::Result<()> {
     }
 }
 
+/// Opens a store file, never through a symlink. A cloned repository controls every entry under
+/// `.repograph/`, so a committed link there would carry this process's write — a log line, a
+/// vector row, a truncation — to a file outside the repository. The check names the refusal; the
+/// open flag closes the gap between the check and the open.
+pub(crate) fn open_unlinked(o: &mut std::fs::OpenOptions, p: &Path) -> std::io::Result<std::fs::File> {
+    if std::fs::symlink_metadata(p).is_ok_and(|m| m.file_type().is_symlink()) {
+        return Err(std::io::Error::other(format!("{} is a symlink; refusing to write through it", p.display())));
+    }
+    #[cfg(unix)]
+    { use std::os::unix::fs::OpenOptionsExt; o.custom_flags(libc::O_NOFOLLOW); }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        o.custom_flags(windows_sys::Win32::Storage::FileSystem::FILE_FLAG_OPEN_REPARSE_POINT);
+    }
+    o.open(p)
+}
+
 impl Store {
     pub fn new(repo: &Path) -> Store { Store { dir: repo.join(".repograph") } }
 
@@ -121,10 +139,20 @@ impl Store {
 
     /// The store holds passages of the repository's documents and code, so it carries its own `.gitignore`: a `git add -A` in a repository that
     /// never listed `.repograph/` would otherwise commit it.
+    ///
+    /// A `.repograph` that is itself a link is refused for the same reason a link inside it is:
+    /// every write below would land wherever the clone pointed it.
     pub(crate) fn ensure_dir(&self) -> Result<()> {
+        if std::fs::symlink_metadata(&self.dir).is_ok_and(|m| m.file_type().is_symlink()) {
+            anyhow::bail!("{} is a symlink; refusing to write through it — remove it and run again", self.dir.display());
+        }
         std::fs::create_dir_all(&self.dir)?;
         let ignore = self.dir.join(".gitignore");
-        if !ignore.exists() { std::fs::write(&ignore, "*\n")?; }
+        match open_unlinked(std::fs::OpenOptions::new().write(true).create_new(true), &ignore) {
+            Ok(mut f) => { use std::io::Write; f.write_all(b"*\n")?; }
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
+            Err(e) => return Err(e).with_context(|| format!("write {}", ignore.display())),
+        }
         Ok(())
     }
 
@@ -158,7 +186,10 @@ impl Store {
         // shared name let one rename away, or truncate, the file another was still writing.
         let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let tmp = self.dir.join(format!("{name}.{}.{n}.tmp", std::process::id()));
-        let written = std::fs::write(&tmp, bytes).with_context(|| format!("write {}", tmp.display()))
+        // `create_new`: a name a clone committed in advance is refused, never written through.
+        let written = open_unlinked(std::fs::OpenOptions::new().write(true).create_new(true), &tmp)
+            .and_then(|mut f| { use std::io::Write; f.write_all(bytes) })
+            .with_context(|| format!("write {}", tmp.display()))
             .and_then(|()| {
                 let stamp = std::fs::metadata(&tmp).ok();
                 rename_over(&tmp, &self.dir.join(name)).with_context(|| format!("rename {name}"))?;
@@ -176,7 +207,7 @@ impl Store {
         use std::io::{Seek, SeekFrom, Write};
         self.ensure_dir()?;
         let p = self.dir.join(name);
-        let mut f = std::fs::OpenOptions::new().write(true).create(true).truncate(false).open(&p)
+        let mut f = open_unlinked(std::fs::OpenOptions::new().write(true).create(true).truncate(false), &p)
             .with_context(|| format!("open {}", p.display()))?;
         f.set_len(keep).with_context(|| format!("truncate {}", p.display()))?;
         f.seek(SeekFrom::Start(keep))?;
@@ -252,7 +283,7 @@ impl Store {
     fn lock_file(&self) -> Result<std::fs::File> {
         self.ensure_dir()?;
         let p = self.dir.join("writer.lock");
-        std::fs::OpenOptions::new().create(true).truncate(false).write(true).open(&p)
+        open_unlinked(std::fs::OpenOptions::new().create(true).truncate(false).write(true), &p)
             .with_context(|| format!("open {}", p.display()))
     }
 }
@@ -575,6 +606,55 @@ mod tests {
         store.write_atomic("vectors.f32", b"keepGARBAGE").unwrap();
         store.append_after("vectors.f32", 4, b"more").unwrap();
         assert_eq!(store.read_bytes("vectors.f32").unwrap().as_deref(), Some(&b"keepmore"[..]));
+    }
+
+    // A cloned repository commits `.repograph/` whole, links included. Each write a reader or
+    // writer makes there must stay inside it: the file outside is left exactly as it was.
+    #[cfg(unix)]
+    #[test]
+    fn a_link_a_clone_committed_in_the_store_is_never_written_through() {
+        let d = tempfile::tempdir().unwrap();
+        let outside = d.path().join("outside");
+        std::fs::write(&outside, "victim\n").unwrap();
+        let repo = d.path().join("repo");
+        std::fs::create_dir_all(repo.join(".repograph")).unwrap();
+        let store = Store::new(&repo);
+        for name in ["vectors.f32", "writer.lock", ".gitignore", "background.log"] {
+            let link = repo.join(".repograph").join(name);
+            let _ = std::fs::remove_file(&link);
+            std::os::unix::fs::symlink(&outside, &link).unwrap();
+            let refused = match name {
+                "vectors.f32" => store.append_after(name, 0, b"rows").is_err(),
+                "writer.lock" => store.lock_writer().is_err(),
+                ".gitignore" => store.ensure_dir().is_err(),
+                _ => crate::refresh::log_file(&repo).is_err(),
+            };
+            assert!(refused, "{name}");
+            std::fs::remove_file(&link).unwrap();
+        }
+        // A dangling link reads as absent to `exists`, the case a plain write would have followed.
+        let unborn = d.path().join("unborn");
+        let _ = std::fs::remove_file(repo.join(".repograph/.gitignore"));
+        std::os::unix::fs::symlink(&unborn, repo.join(".repograph/.gitignore")).unwrap();
+        assert!(store.ensure_dir().is_err());
+        assert!(!unborn.exists());
+        let tmp = repo.join(".repograph").join(format!("graph.json.{}.0.tmp", std::process::id()));
+        std::os::unix::fs::symlink(&outside, &tmp).unwrap();
+        let _ = store.write_atomic("graph.json", b"{}");
+        assert_eq!(std::fs::read_to_string(&outside).unwrap(), "victim\n");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_store_directory_that_is_a_link_is_refused() {
+        let d = tempfile::tempdir().unwrap();
+        let elsewhere = d.path().join("elsewhere");
+        std::fs::create_dir_all(&elsewhere).unwrap();
+        let repo = d.path().join("repo");
+        std::fs::create_dir_all(&repo).unwrap();
+        std::os::unix::fs::symlink(&elsewhere, repo.join(".repograph")).unwrap();
+        assert!(Store::new(&repo).save(&Graph::default(), &Manifest::default()).is_err());
+        assert_eq!(std::fs::read_dir(&elsewhere).unwrap().count(), 0);
     }
 
     #[test]

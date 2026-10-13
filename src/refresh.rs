@@ -160,7 +160,7 @@ pub(crate) fn spawn_detached(repo: &Path, no_dense: bool, args: &[&str]) -> anyh
     Ok(reap(detach(&mut cmd)?))
 }
 
-fn log_file(repo: &Path) -> anyhow::Result<std::fs::File> {
+pub(crate) fn log_file(repo: &Path) -> anyhow::Result<std::fs::File> {
     let store = crate::store::Store::new(repo);
     store.ensure_dir()?;
     let p = repo.join(".repograph").join("background.log");
@@ -172,7 +172,7 @@ fn log_file(repo: &Path) -> anyhow::Result<std::fs::File> {
         true => o.write(true).create(true).truncate(true),
         false => o.append(true).create(true),
     };
-    Ok(o.open(&p)?)
+    Ok(crate::store::open_unlinked(&mut o, &p)?)
 }
 
 /// Its own process group, so the Ctrl-C a terminal sends the reader's group does not reach a

@@ -52,7 +52,7 @@ impl Extractor for RegistryExtractor {
         ex.node(NodeKind::File, &file_id, rel, "", rel, 1);
         let reg = match serde_yaml::from_str::<Registry>(text) {
             Ok(r) => r,
-            Err(e) => { eprintln!("registry {rel}: {e}"); return ex; }
+            Err(e) => { eprintln!("{}", crate::terminal_safe(&format!("registry {rel:?}: {e}"))); return ex; }
         };
         for (i, row) in reg.invariants.iter().enumerate() {
             let label = label_of(&row.statement);

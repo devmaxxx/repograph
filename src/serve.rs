@@ -470,7 +470,7 @@ fn catch_termination() {}
 
 /// Notices no client asked for, on the server's stderr.
 fn log(ctx: &mut ask::Context) {
-    for n in ctx.notices() { eprintln!("serve: {n}"); }
+    for n in ctx.notices() { eprintln!("{}", crate::terminal_safe(&format!("serve: {n}"))); }
 }
 
 /// The poll `ask` does before it answers, and the one case the poll's own answer does not

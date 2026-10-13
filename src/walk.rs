@@ -175,14 +175,14 @@ fn walk_inner(repo: &Path, cfg: &Config, prev: &Manifest, count: bool) -> Result
     for dent in walker {
         let dent = match dent {
             Ok(d) => d,
-            Err(e) => { eprintln!("walk: {e}"); continue; }
+            Err(e) => { eprintln!("{}", crate::terminal_safe(&format!("walk: {e}"))); continue; }
         };
         if !dent.file_type().map(|t| t.is_file()).unwrap_or(false) {
             continue;
         }
         let rel_path = dent.path().strip_prefix(repo).unwrap_or(dent.path());
         let Some(rel) = rel_path.to_str().map(|s| s.replace('\\', "/")) else {
-            eprintln!("walk: skipping non-UTF-8 path {}", rel_path.display());
+            eprintln!("walk: skipping non-UTF-8 path {:?}", rel_path);
             continue;
         };
         if include.as_ref().is_some_and(|i| !i.is_match(&rel))
@@ -215,7 +215,7 @@ fn walk_inner(repo: &Path, cfg: &Config, prev: &Manifest, count: bool) -> Result
         if kind == FileKind::Text && binary_at(dent.path()).unwrap_or(false) { continue; }
         let bytes = match std::fs::read(dent.path()) {
             Ok(b) => b,
-            Err(e) => { eprintln!("walk: skipping {rel}: {e}"); continue; }
+            Err(e) => { eprintln!("{}", crate::terminal_safe(&format!("walk: skipping {rel:?}: {e}"))); continue; }
         };
         if kind == FileKind::Text && (binary(&bytes) || bytes.len() as u64 > TEXT_MAX_BYTES) {
             // Reached over the limit only when the stat above failed and gave no stamp.
