@@ -454,9 +454,12 @@ fn owner_receivers(facts: &mut Facts, owned: &[usize]) {
     for i in 0..facts.refs.len() {
         let r = &facts.refs[i];
         let Some(receiver) = &r.receiver else {
-            let method = r.source.filter(|s| facts.defs[*s].kind == Kind::Method).map(|s| facts.defs[s].qualified.as_str());
-            if let Some(at) = method.and_then(|q| q.rfind(['.', '/'])).filter(|_| owned.binary_search(&i).is_ok()) {
-                facts.refs[i].implicit = method.map(|q| q[..=at].to_string());
+            // The owner is what precedes the method's own name: a separator search would cut `A.operator/`
+            // at the slash the operator is spelled with.
+            let method = r.source.map(|s| &facts.defs[s]).filter(|d| d.kind == Kind::Method);
+            let owner = method.and_then(|d| d.qualified.strip_suffix(d.name.as_str())).filter(|o| !o.is_empty());
+            if let Some(owner) = owner.filter(|_| owned.binary_search(&i).is_ok()) {
+                facts.refs[i].implicit = Some(owner.to_string());
             }
             continue;
         };

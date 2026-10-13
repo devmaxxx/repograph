@@ -222,3 +222,15 @@ fn a_cpp_source_and_header_are_read_by_their_extension_and_cuda_is_not() {
     assert_eq!(Lang::of("kernel.cu"), None, "CUDA's grammar is not C++'s");
     assert_eq!(Lang::Cpp.family(), Family::C);
 }
+
+#[test]
+fn an_operator_spelled_with_a_slash_still_names_its_class_for_a_bare_call() {
+    let files = [(
+        "v.cc",
+        "class V { public: V operator/(V o) { return g(); } V operator/=(V o); V g() { return *this; } };\nV V::operator/=(V o) { return g(); }\n",
+    )];
+    assert_eq!(lines(&extract(&files, "v.cc"), EdgeKind::Calls), [
+        "sym:v.cc::V.operator/ -> sym:v.cc::V.g []",
+        "sym:v.cc::V.operator/= -> sym:v.cc::V.g []",
+    ]);
+}
