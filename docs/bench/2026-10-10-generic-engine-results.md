@@ -975,3 +975,90 @@ New: `bin/repograph-step16a`, built from the item 0 tree. Parent: `bin/repograph
 - **Byte-identity:** kit and scratchpad corpora, `step15r` against `step16a`, with and without the
   Lua globs: `graph.json` and `headers.json` identical, and the scratchpad's matches `store-14`.
 - **Gate:** `cargo test --all-targets` 1,419 passed, 0 failed; clippy `-D warnings` clean.
+
+## Step 16 · Go
+
+New: `bin/repograph-step16`, built at the tree committed as `e8510ae`. Parent: `bin/repograph-step16a`,
+built at `904039b`. Go is read only when a config or `REPOGRAPH_CODE_GLOBS` names `**/*.go`.
+
+- **Corpus:** `gin-gonic/gin` at `v1.12.0`, `73726dc606796a025971fe451f0aa6f1b9b847f6`, 98 `.go`
+  files (40 `_test.go`), one `go.mod` (`module github.com/gin-gonic/gin`), eight package
+  directories, MIT. It is read as data only: no script of it was run.
+- **Parse census:** 98 files, 0 with an ERROR or a MISSING node.
+- **Cases:** 11 in `src/code/cases/go.rs`. They cover every capture role, docs on single and grouped
+  specs, `_` and embedded fields, module-path imports with a nested module and the module root,
+  the implicit and explicit alias, build variants with the own file first, the receiver call
+  across sibling files, generic calls in both parsed shapes, a parameter named like its type,
+  `(*T)(nil)`, and the references left unresolved on purpose: a promoted method, a call on a value,
+  a rebound receiver, an unexported member through an import, and a local hiding an import.
+- **What Go writes** (`--no-dense`, the defaults plus `**/*.go`): 2,119 nodes (98 files, 2,021
+  symbols), Declares 2,021 (1,558 exported), Imports 227, Calls 1,347, References 1,482, all
+  `[type]`. The pending count goes from 1 to 12 with eleven `UTF-8` citations in strings.
+- **Hand read:**
+  - Symbols (seed 16): 50 of 50 right in id, line and end.
+  - Five seeded files, counted by hand against the source: `codec/json/jsoniter.go` 9/9, `doc.go`
+    0/0, `ginS/gins_test.go` 19/19, `internal/fs/fs_test.go` 5/5, `logger.go` 47/47.
+  - Declares (seed 16): 50 of 50. A method is exported by its own name, so `queryBinding.Name` is
+    exported though its type is not.
+  - Imports (seed 17): 50 of 50. Beyond the sample, the 227 edges equal a census of every
+    module-path import string expanded to its directory's non-test files: none missing, none extra.
+  - Calls (seed 20): 50 of 50. `formBinding.Bind` reaches `binding.go`'s `validate`, and a test
+    reaches both build variants of it, `binding.go` and `binding_nomsgpack.go`.
+  - References (seed 21): 50 of 50.
+- **Census recall.** A new language has no old path, so recall is read from a text census of the
+  shapes the rule claims, independent of the grammar, and every miss is hand-read
+  (`s16/crecall.py`, `s16/rrecall.py` in the scratchpad):
+  - Calls: 1,868 sites (a bare call of a package name, `pkg.F(` through a module import, `recv.m(`
+    on a method's receiver), 1,866 with an edge. The two misses are not calls: an interface's method
+    declaration, and `c.handlers[c.index](c)`, which calls an element. The four edges no site
+    explains are right: three `getTyped[map[string]any](c, key)` the census cannot spell, and the
+    conversion `(FOO)(0)`.
+  - References: 2,185 sites of a package type's name, 2,075 with an edge. Of the 110 misses, 109
+    are not type uses: 90 locals or fields named like a lower-case type (`route`, `header`, `node`),
+    14 fields named `Data`, four words inside raw strings, and `(FOO)(0)`, which is a call. One is a
+    real miss: `node := &node{}` in `tree_test.go`, whose type reads the new local. The two edges no
+    site explains are wrong: `c.handlers[c.index](c)` parses as a conversion to a generic
+    qualified type, and the receiver rewrite names `Context.handlers` and `Context.index`.
+- **P and R per kind** (§3.3; P from the hand read and the census, R from the census):
+
+  | kind | edges | sample | P | R |
+  |---|---|---|---|---|
+  | Calls | 1,347 | 50/50 | 1.000 | 1.000 (1,866 of 1,866) |
+  | References | 1,482 | 50/50 | 0.9987 (1,480 of 1,482) | 0.9995 (2,075 of 2,076) |
+  | Declares | 2,021 | 50/50 | 1.000 | 1.000 (five files) |
+  | Imports | 227 | 50/50 | 1.000 | 1.000 (227 of 227) |
+
+  Extends, Implements and DecoratedBy: none, since Go has no such syntax the queries read.
+- **What the hand read changed before the commit:** a first build at `OwnFirst`'s predecessor `All`
+  wrote 21 References from one build variant into another (`binding_nomsgpack.go` to `binding.go`'s
+  `BindingBody`); after the switch, no Calls or References edge leaves a file that declares the same
+  name. The census found 16 instantiated calls with two arguments (`getTyped[bool](c, key)`), 31
+  `(*T)(nil)` assertions and three signatures with a parameter named like its type unread; each
+  is a pattern now, pinned by a case.
+- **Regressions** (`log/langdiff-step16-gin.txt`), gin without against with the Go globs: go R1
+  2,119 (every new node), R4 2,248 (its Declares and Imports), Calls +1,347, References +1,482, R2 0,
+  R3 0, R5 0, R6 0, R7 0, R9 0. R8 is 1, the pending count above.
+- **Byte-identity:**
+  - Kit corpus and scratchpad corpus, `step16a` against `step16`, with the default globs, with
+    `**/*.lua` and with `**/*.go`: `graph.json` and `headers.json` identical in all six pairs, and
+    the scratchpad's graph equals `store-14`'s (`dff8b36a53bb0548…`). Neither corpus holds a `.go`
+    file.
+  - luarocks with `**/*.lua`: `graph.json` identical to `step16a`'s, so item 0's diffs are the
+    only ones since step 15r.
+- **Fixture and bench:** not run. The fixture holds no `.go` file and Go is not in its globs.
+- **Size:** stripped 66,998,976 → 67,263,536 bytes (+264,560); `tar czf` 14,524,012 → 14,579,325
+  (+55,313). Both are far under the 8 MB and 1 MB bars.
+- **Build time:** median of five, interleaved with step 0, at load 11.0 falling to 8.9
+  (`log/buildtime-step16.txt`). Step 0 ran 1.323 s and step 16 1.483 s, which is 1.121×.
+- **Licence reading:** `tree-sitter-go 0.25.0 MIT ok`, ABI 15. Its `LICENSE`: "The MIT License (MIT)
+  Copyright (c) 2014 Max Brunsfeld". The queries are written to the engine's contract, not adapted
+  from the crate's `tags.scm`, so they carry no notice.
+- **Edited tests:** `main.go` leaves the unread examples of
+  `the_typescript_family_is_read_by_its_two_grammars_and_an_unknown_extension_by_none` and
+  `a_name_either_table_knows_decides_whatever_the_shebang_says`, since `.go` is read now.
+  `lang.rs`'s `all_lists_every_language_once` gains Go's slot. No other assertion changed.
+- **Platforms:** not verified. The branch was not pushed, so `ci` has not run on it.
+- **Gate:**
+  - `cargo test --all-targets`: 1,430 passed, 0 failed;
+  - `cargo clippy --all-targets -- -D warnings`: clean;
+  - `cargo tree --duplicates --depth 0`: no tree-sitter crate.

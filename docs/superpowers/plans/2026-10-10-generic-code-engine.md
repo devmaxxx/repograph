@@ -1847,6 +1847,37 @@ No new definition kind is needed:
 - **Default enough:** yes for package-level code.
 - **Corpus:** `gin-gonic/gin` at `v1.12.0`, 98 `.go`, MIT. It has several packages under one module, imported by module path.
 
+**Step 16 as built.** Where the code differs from the text above, the code is the record. The work is in `e8510ae`.
+
+- **Data:** the `GO` spec row, `queries/go/decl.scm` (68 lines) and `refs.scm` (133 lines), `hooks: NONE`. No exception was needed. The cases are in `src/code/cases/go.rs` (11 tests).
+- **Reused from step 15 as it stood:** `Receivers::Imports` with the no-root rule, so `pkg.F` reaches a package's unowned top-level definitions with no query for it; the own-file receiver; `#set! receiver "owner"` on a `@local.definition`, here the method's receiver parameter, so `s.handle()` inside `func (s *Server) Run()` reads `Server.handle`. `ImportPaths::Dotted`, `@export.root` and `OwnThenUnique` are not used: Go names a package by its path and exposes every top-level name.
+- **Declarations:**
+  - A declaration with one spec is the definition node, so its doc comment above `type`, `const` or `var` is the spec's body. In a group, each spec is its own definition.
+  - Struct and interface patterns come before the general `type` pattern, because the first pattern to match a node in a role wins.
+  - `_` declares nothing, and an embedded field has no name, so it declares nothing either. A method hangs off its file, wherever its type is declared, and is exported by its own name.
+- **Engine additions:**
+  - `Export::Capitalized`.
+  - `ImportPaths::ModulePrefix { manifest, directive, skip }`, the plan's `ModulePrefix` with `skip` added for `_test.go`. `Resolver::module_of` reads the nearest manifest from disk once per directory, walking up to the root, and strips a `//` comment and quotes from the directive's value. A path equal to the module names the manifest's own directory. A nested module reads its own `go.mod`, and a path into another module of the same repository names nothing.
+  - `Receivers::Imports`, two widenings, both inert for Lua (no `@scope.namespace`, `Imported` visibility):
+    - an import with no `@import.alias` is named by the first namespace its target files declare, which is Go's package clause;
+    - under `Visibility::Directory`, `receiver.name` that the file does not declare resolves through the directory's declarations before the imports, so a method's receiver reaches the type's method in a sibling file.
+  - `Receiving::target` returns every definition of an imported member under `OwnFirst` or `All`, and the one definition otherwise, as before.
+- **Resolution differs from the text above:** `OwnFirst`, not `All`. A build-tagged variant that declares the name itself builds only with its own; a file that does not reaches every variant. Under `All`, `binding_nomsgpack.go` referenced `binding.go`'s `BindingBody`, 21 such References on gin.
+- **Two shapes the grammar spells unexpectedly,** each a query pattern:
+  - `f[T](a, b)` parses as a call of an `index_expression`, and `f[[]T](a, b)` as a call with `type_arguments`. A one-argument `f[T](x)` parses as a conversion of a generic type, and stays a type use.
+  - `(*T)(nil)` parses as a call of a parenthesised unary expression, so `var _ I = (*T)(nil)` needs its own pattern to reference `T`. On gin, 31 sites name a gin type.
+- **Parameters bind in the body:** a parameter pattern captures the function's `body` as its own scope, so its type, written in the signature, reads the package (`func mapping(setter setter)`). The receiver binding does the same.
+- **Known misses on gin:** `node := &node{}` reads `node` as the new local, because a binding starts where its name is written, not after its statement (1 reference). `c.handlers[c.index](c)` parses as a conversion to a generic qualified type, and the owner rewrite turns `c` into `Context`, so two References name the fields `Context.handlers` and `Context.index`.
+- **Edited tests:** `main.go` leaves the unread examples of `the_typescript_family_is_read_by_its_two_grammars_and_an_unknown_extension_by_none` and `a_name_either_table_knows_decides_whatever_the_shebang_says`. `lang.rs`'s `all_lists_every_language_once` gains Go's slot.
+- **For steps 17–24:**
+  - The cases live in `src/code/cases/<lang>.rs`, not `src/code/queries/<lang>/cases.rs` as the gate's item 1 says.
+  - Recall on a new language has no old path to compare with. Step 16 read it from a text census of the shapes its rule claims, independent of the grammar, and hand-read every miss. Each later step should do the same, per bounded kind.
+  - A parameter's scope is a body the pattern captures, where the grammar puts the signature inside the function node (C, C++, Scala).
+  - `OwnFirst` is the shape for variants of one name chosen at build time (C's and C++'s `#ifdef` files as well as Go's tags), and a `Receivers::Imports` row under it reaches every definition through an alias.
+  - The implicit alias reads the target files' first `@scope.namespace`. A language whose namespace is a path (PHP, Scala) must give every import an `@import.alias`, or check that the implicit one names nothing: a receiver never spells a `/`, so a path alias is inert, not wrong.
+  - The directory receiver lookup applies only under `Visibility::Directory`. Scala's same-package objects and PHP's same-namespace classes need it under their own visibility, or stay missing.
+  - A manifest is read once per build. Serve keeps a resolver across edits, so a manifest edit (`go.mod` here, `composer.json` or `dune` later) widens nothing until the next build.
+
 **Step 17 · C.** S–M. Query ~70, cases ~200.
 
 - **Lang and family:** `Lang::C` (`.c`, and `.h` pending step 18's census). `Family::C` is shared with C++: they are one link namespace, and `extern "C"` code calls across.
