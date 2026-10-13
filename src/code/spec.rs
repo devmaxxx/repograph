@@ -755,6 +755,26 @@ mod table {
         dotted_dirs: false,
         hooks: NONE,
     };
+    pub(super) const ELIXIR: Spec = Spec {
+        queries: crate::code::queries::sources::ELIXIR,
+        view: None,
+        comments: HASH,
+        // `@doc`, `@spec` and `@impl` above a function are what documents it, as comments are.
+        body: Body { doc: Doc::Adjacent { kinds: &["comment", "unary_operator"], between: &[] }, ..PROSE },
+        // A protocol implementation is named by its protocol and its type, `Inspect.Plug.Conn`.
+        label: Label::Spelled("."),
+        // The query hides `defp`, `defmacrop` and `defguardp`.
+        export: Export::All,
+        // A module is global by its full dotted name, wherever it is declared.
+        visibility: Visibility::Lexical,
+        ambiguity: Ambiguity::OwnFirst,
+        cross_file: true,
+        // `alias`, `import`, `require` and `use` name a module, never a file: no suffix names one.
+        imports: ImportPaths::Relative { roots: &[], suffixes: &[] },
+        receivers: Receivers::Hook,
+        dotted_dirs: false,
+        hooks: NONE,
+    };
 }
 
 pub(crate) fn spec(lang: Lang) -> &'static Spec {
@@ -781,6 +801,7 @@ pub(crate) fn spec(lang: Lang) -> &'static Spec {
         Lang::Cpp => &table::CPP,
         Lang::Php => &table::PHP,
         Lang::Ruby => &table::RUBY,
+        Lang::Elixir => &table::ELIXIR,
     }
 }
 

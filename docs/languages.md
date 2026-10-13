@@ -164,3 +164,24 @@ the default globs yet.
   (`\A\B\C`); a type named only by its `use … as` alias; group uses (`use A\{B, C}`), `use function`
   and `use const`; `require` and `include`; classes of other packages under `vendor/`; a
   `composer.json` edit, which widens nothing until the next `build`.
+
+Elixir (`.ex` and `.exs`) is read only where `code_globs` or `REPOGRAPH_CODE_GLOBS` names them; it
+stays opt-in until step 24 of the engine plan puts it in the default globs.
+
+- **Read:** `defmodule`, `defprotocol` and `defimpl`, under Elixir's own dotted names, a nested
+  module joining its parent's with `.`; `def`, `defmacro`, `defguard` and `defdelegate`, with
+  `defp`, `defmacrop` and `defguardp` hidden from other modules. Every clause and arity of one name
+  is one symbol, and the `@doc` and `@spec` above it are its doc. A module is global by its full
+  name: a name is read under each module around it, innermost first, then as written. `alias X`
+  and `alias X, as: Y` make the alias stand for `X` after it, in the module or function that holds
+  the directive; `import X` makes `X`'s functions callable bare there, after the own module's.
+  A bare call `f()`, a pipe's `|> f` and a capture `&f/1` reach the own module's function first;
+  `Mod.f()` and `__MODULE__.f()` reach `Mod`'s or the own module's public function. A module named
+  anywhere (a directive, a struct, a call's module, `@behaviour`) is a reference. Requirement ids
+  are read in comments and strings.
+- **Not read:** functions a `use` brings in, and anything else a macro writes; a bare call inside a
+  `quote`, which runs in the caller's module; a call in a module attribute; `alias X.{A, B}`;
+  `import`'s `only:` and `except:`, so an import opens every function; `defstruct` and
+  `defexception`, whose struct is its module; a call on a variable (`mod.f()`); Kernel and other
+  packages' modules. `alias`, `import`, `require` and `use` name modules, never files, so they write
+  no Imports edge.

@@ -2114,6 +2114,28 @@ No new definition kind is needed:
 - **Default enough:** yes.
 - **Corpus:** `elixir-plug/plug` at `v1.20.3`, 42 `.ex` and 36 `.exs`, Apache-2.0.
 
+**Step 22 as built.** Where the code differs from the text above, the code is the record. The work is in `7276359`.
+
+- **Data:** the `ELIXIR` spec row, `queries/elixir/decl.scm` (63 lines) and `refs.scm` (44 lines), `hooks: NONE`. No exception was needed. The cases are in `src/code/cases/elixir.rs` (6 tests). The crate is `tree-sitter-elixir =0.3.5`, the one ast-grep carries, Apache-2.0 (its `LICENSE` ships in the crate), ABI 14.
+- **Differs from the text above:**
+  - A module is `@definition.class`, not `module`, so it joins what it holds with `.` and the id is Elixir's own name: `Plug.Conn`, a nested `Plug.Conn.Unfetched`, a function `Plug.Conn.send_resp`. The alias token is one `@name`, so no `qualifiers` field exists. A function is `@definition.method`, which gives a bare call its module through the implicit owner.
+  - `defprotocol` is a protocol, `defimpl P, for: T` a class named `P/T` and labelled `P.T`; `defguard` and `defdelegate` are functions, and `defmacrop` and `defguardp` hide as `defp` does. Every clause and arity of one name is one symbol, whose span runs from its first clause to its last (`#set! variant`).
+  - `defstruct` and `defexception` declare nothing: the struct is its module, and `%Mod{}` is a reference to it.
+  - There is no `Named` import kind and no Imports edge. `alias`, `import`, `require` and `use` name a module, never a file, so `imports` is `Relative` with no root and no suffix, which names no file. The directives are read for what they bind (below) and, through the alias token, as References.
+  - Resolution is `Visibility::Lexical` with `OwnFirst`, as Ruby's: a module is global by its full dotted name, and a name is read under each module around its site, then as written. `receivers: Hook` with no hook: `Mod.f` is a two-part `@name`, a path like Ruby's `A::B.f`, and needs no receiver table.
+  - Code a `use` macro injects stays missing, as planned, and so do calls in a `quote`, which run in the module the macro writes into. Remote calls in a `quote` are read, since their module is named.
+- **Engine additions, each inert for every earlier language:**
+  - `#set! outside "<kind> <word>"`: a pattern is dropped inside a node of that kind whose first child spells the word. Elixir's `quote` and `@` are calls and unary operators like any other; the word tells `quote do … end` from a call of `f`. A value without a space takes the old path (`word` is `None`).
+  - `#set! binds "alias"` and `"open"` on an `@import` (`Meta.binds`, `Import.binds`). In `lexical`, an alias in scope whose name is the reference's first segment rewrites the reference to the alias's path, and that path is the only candidate: `alias Plug.Conn` makes `Conn.f` `Plug.Conn.f`, and `alias Plug.Router.Utils, as: U` makes `U.build` `Plug.Router.Utils.build`. The alias is `@import.alias`, else the path's last segment; of two in scope the later wins. An open import adds `path/name` for a bare name after the lexical candidates, so the own module wins. An import is in scope after its site, within the innermost definition holding it, or to the end of the file when none does. Only `elixir/decl.scm` sets `binds`, and with no binding import in a file `lexical` returns the candidates it did before.
+  - `Import.binds` is a `pub` field, so `tests/engine.rs`'s literal `Import` gains `binds: None`.
+  - Inertness: the scratchpad corpus and the kit, with their own globs and with `REPOGRAPH_CODE_GLOBS` set to the Elixir globs, and luarocks, gin, hiredis, leveldb, Slim and rack with their globs and with the Elixir globs added, are byte-identical to `repograph-merge19`.
+- **Known misses on plug:** calls to functions a `use Plug.Builder` or `use Plug.Router` imports (`plug` 52, `resp` 31, `assign` 5, `send_resp` 2, `halt` 1, `match` 1), and `Plug.Parsers.ParseError.exception`, which `defexception` generates. `import X, only: […]` opens all of `X`. A `defimpl` inside a module is named under that module (`Plug.DebuggerTest.Plug.Exception/ActionableError`), where Elixir names it `Plug.Exception.Plug.DebuggerTest.ActionableError`; no call names an implementation module.
+- **Parse census:** 78 files, 0 with an ERROR or MISSING node.
+- **For steps 23–24:**
+  - `binds` is generic: any language whose imports bind a name to a path (an alias) or open a path's members (a wildcard) can set it rather than writing a receiver table, provided its names are global by full path under `Visibility::Lexical`.
+  - `outside` with a word serves any grammar whose constructs are all calls (Lisps, Elixir, Nix).
+  - Five plug names have both a public and a private arity (`put_session`, `read_part_body`, …). They are one symbol, exported, with one plain and one `export` Declares edge, as any redeclared name gets.
+
 **Step 23 · OCaml.** M. Query ~120, cases ~250, engine ~60 (`ModuleFile`).
 
 - **Lang and family:** `Lang::OCaml` (`.ml`) and `Lang::OCamlInterface` (`.mli`), both in `Family::OCaml`, detected by override. They use `LANGUAGE_OCAML` and `LANGUAGE_OCAML_INTERFACE` from the own crate `tree-sitter-ocaml =0.26.0`, because ast-grep does not carry OCaml. The type grammar is not referenced.

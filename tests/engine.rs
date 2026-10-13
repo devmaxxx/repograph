@@ -155,6 +155,7 @@ fn an_import_path_resolves_beside_the_importer_then_at_the_root_and_only_to_a_gl
         alias: None,
         reexport: false,
         base: ImportBase::Either,
+        binds: None,
         range: 0..0,
         targets: OnceLock::new(),
     };

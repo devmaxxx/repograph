@@ -1612,3 +1612,88 @@ New: `bin/repograph-php`, built at the tree committed on `feat/engine-php`. Pare
   - `cargo test --all-targets`: 1,461 passed, 0 failed;
   - `cargo clippy --all-targets -- -D warnings`: clean;
   - `cargo tree --duplicates --depth 0`: no tree-sitter crate.
+
+## Step 22 · Elixir
+
+New: `bin/repograph-elixir`, built at the tree committed as `7276359`. Parent:
+`bin/repograph-merge19`. Elixir is read only when a config or `REPOGRAPH_CODE_GLOBS` names
+`**/*.ex` and `**/*.exs`.
+
+- **Corpus:** `elixir-plug/plug` at `v1.20.3`, `9fa11c8ebedbe68531eba25d8f81b9282e0514da`, 42 `.ex`
+  and 36 `.exs`, Apache-2.0. It is read as data only: no script of it was run.
+- **Parse census:** 78 files, 0 with an ERROR or MISSING node.
+- **Cases:** 6 in `src/code/cases/elixir.rs`. They cover modules nesting with `.`, `defp` hidden,
+  `defprotocol`, `defimpl` with and without `for:`, `defguard`, `defstruct` declaring nothing, a
+  `def` in a `quote` left to the caller, every clause of a name as one symbol spanning them all,
+  `@doc` and `@spec` as the doc; a bare call reaching the own module before an `import`, a pipe's
+  right side and `&f/1` as calls, `alias` with and without `as:`, `__MODULE__.f`, `@spec` and a
+  `quote` calling nothing, Kernel's `inspect` and an unknown module naming nothing; an alias in a
+  function reaching only that function; a hidden function out of another module's reach;
+  citations; and the extensions.
+- **What Elixir writes** (`--no-dense`, the defaults plus the two Elixir globs): 817 nodes (78
+  Elixir files, 735 symbols: 143 modules, protocols and implementations, 592 functions), Declares
+  740, Calls 840, References 508, no Imports. The five Declares over the symbol count are names with
+  a public and a private arity (`put_session`, `read_part_body`, `read_part_headers`,
+  `Utils.params`, `build_path_clause`): one symbol, with a plain and an `export` edge. The pending
+  count gains 8 string citations (`UTF-8` six times, `X-1337`, `RFC-1341`).
+- **Census recall.** A text census over comment-, string-, charlist-, sigil- and heredoc-blanked
+  source, nested by indentation, independent of the grammar (`s22/census.py`, `s22/blank.py` in the
+  scratchpad). It keeps `alias` and `import` per block, skips `quote` bodies for definitions and
+  bare calls, and skips `@` attribute lines for calls. Every miss hand-read:
+  - Definitions: 735 of 735 (143 modules, 592 functions), none extra; export 0 disagreements against
+    `def`/`defp` read from the raw text.
+  - Calls: 840 pairs, 840 with an edge, none extra.
+  - References: 508 pairs, 508 with an edge, none extra.
+  - Unclaimed by both sides' rule: 175 bare calls whose name a repository function also has. 83 are
+    Kernel's (`inspect` 81, `reraise` 2); 92 are functions a `use Plug.Builder` or `use Plug.Router`
+    imports (`plug` 52, `resp` 31, `assign` 5, `send_resp` 2, `halt` 1, `match` 1), missing by
+    design. 13 remote calls on a `Plug.`-prefixed module: 12 to `Plug.Crypto`, another package, and
+    `Plug.Parsers.ParseError.exception`, which `defexception` generates.
+- **Hand read:**
+  - Symbols (seed 22): 50 of 50 right in id, line and end.
+  - Five seeded files, counted by hand against the source: `lib/plug/adapters/cowboy.ex` 7
+    Declares, 12 Calls, 5 References of 7, 12, 5; `lib/plug/method_override.ex` 4, 1, 4 of the same;
+    `lib/plug/router.ex` 26, 28, 12 of the same, with `Plug.Router.Utils.decode_path_info!` and
+    `Plug.Conn.WrapperError.reraise` read in `__using__`'s `quote` and the bare `do_match` there
+    left out; `lib/plug/debugger.ex` 38, 53, 14 of the same; `test/plug/debugger_test.exs` 15, 23,
+    24 of the same, nested `Router` reached as `Plug.DebuggerTest.Router` and `send_resp` through the
+    outer module's `import Plug.Conn`.
+  - Declares (seed 22): 50 of 50, every plain one a `defp`.
+  - Calls (seed 22): 50 of 50, each against its site: pipes, captures, `CSRFProtection.f` through
+    an alias, `Plug.Test.conn` and `Plug.Conn.f` through `import`.
+  - References (seed 22): 50 of 50: `use`, `alias`, `import` and `@behaviour` targets, `%Mod{}`,
+    `raise Mod`, a module in a tuple, a nested module by its short name.
+- **P and R per kind** (§3.3; P from the hand read and the census, R from the census):
+
+  | kind | edges | sample | P | R |
+  |---|---|---|---|---|
+  | Calls | 840 | 50/50 | 1.000 | 1.000 (840 of 840) |
+  | References | 508 | 50/50 | 1.000 | 1.000 (508 of 508) |
+  | Declares, modules | 143 | 50/50 | 1.000 | 1.000 (143 of 143) |
+  | Declares, functions | 592 | | 1.000 | 1.000 (592 of 592) |
+
+  The Declares sample of 50 spans both rows.
+- **Regressions** (`log/langdiff-step22-plug.txt`), plug without against with the Elixir globs: ex
+  R1 588 and exs R1 225 (every new node), R4 551 and 189 (Declares), Calls +522 and +318,
+  References +227 and +281, R2 0, R3 0, R5 0, R6 0, R7 0, R9 0. R8 is 1, the pending count above.
+- **Byte-identity** (`log/ident-step22.txt`), `merge19` against `elixir`, every build on a copy:
+  - Scratchpad corpus and kit corpus, each with its `repograph.toml`: `graph.json` identical in all
+    four builds (`566f40d972ba1d21`, `store-14`'s), `headers.json` identical (`7c73aee1e9db81f6`).
+    With `REPOGRAPH_CODE_GLOBS` set to the Elixir globs, which replaces the file's globs, all four
+    give `857c2920c237c69c`. Neither corpus holds an Elixir file.
+  - luarocks (`**/*.lua **/*.c **/*.h`, `5d118eab6ba8aeb6`), gin (`**/*.go`, `03a6c87a79dd5bfe`),
+    hiredis (`**/*.c **/*.h`, `c598315d5dbcc0d9`), leveldb (`**/*.cc **/*.h`, `4daa7236ae432db6`),
+    Slim (`**/*.php`, `06bfcd802019ae73`) and rack (`**/*.rb **/*.rbw **/*.gemspec **/*.rake`,
+    `ed9fae8e9517f193`): identical in all four builds each, with the Elixir globs added and without.
+- **Fixture and bench:** not run. Elixir is not in the fixture's globs.
+- **Size and build time:** not measured, per the wave's rule; the session measures them at merge.
+- **Licence reading:** `tree-sitter-elixir 0.3.5 Apache-2.0 ok`, ABI 14; the crate ships its
+  `LICENSE`. The queries are written to the engine's contract, not adapted from the crate's
+  `tags.scm` or `locals.scm`, so they carry no notice.
+- **Edited tests:** `lang.rs`'s `all_lists_every_language_once` gains Elixir's slot, and
+  `tests/engine.rs`'s literal `Import` gains `binds: None`. No assertion changed.
+- **Platforms:** not verified. The branch was not pushed, so `ci` has not run on it.
+- **Gate:**
+  - `cargo test --all-targets`: 1,496 passed, 0 failed;
+  - `cargo clippy --all-targets -- -D warnings`: clean;
+  - `cargo tree --duplicates --depth 0`: no tree-sitter crate.

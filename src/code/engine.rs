@@ -11,7 +11,7 @@ use streaming_iterator::StreamingIterator;
 use tree_sitter::{Node, QueryCursor, Tree};
 
 use crate::code::index::Header;
-use crate::code::queries::{self, Kind, Meta, Role};
+use crate::code::queries::{self, Binds, Kind, Meta, Role};
 use crate::code::syntax::{self, comment_text, last_row, text_span, DOC_CHARS};
 use crate::model::{Graph, NodeKind};
 
@@ -76,6 +76,7 @@ pub struct Import {
     pub alias: Option<String>,
     pub reexport: bool,
     pub base: ImportBase,
+    pub binds: Option<Binds>,
     pub range: Range<usize>,
     /// The files the site resolves to, resolved on the first read: a file read across for what it
     /// declares never needs them.
@@ -269,10 +270,10 @@ fn matches_of<'t>(c: &'static Compiled, root: Node<'t>, src: &str, rel: &str, mu
             // The outermost capture stands for the match, in whatever order the pattern lists them: a
             // name inside the construct may sit under a node the construct itself is not under.
             let outer = m.captures().iter().map(|cap| cap.node).min_by_key(|n| (n.start_byte(), std::cmp::Reverse(n.end_byte())));
-            if meta.within.is_some_and(|kind| !outer.is_some_and(|n| inside(root, n, kind))) {
+            if meta.within.is_some_and(|kind| !outer.is_some_and(|n| inside(root, n, kind, None, src))) {
                 continue;
             }
-            if meta.outside.iter().any(|kind| outer.is_some_and(|n| inside(root, n, *kind))) {
+            if meta.outside.iter().any(|(kind, word)| outer.is_some_and(|n| inside(root, n, *kind, word.as_deref(), src))) {
                 continue;
             }
         }
@@ -283,17 +284,20 @@ fn matches_of<'t>(c: &'static Compiled, root: Node<'t>, src: &str, rel: &str, mu
     }
 }
 
-/// Whether a node of `kind` encloses `node`. It walks down from the root, because `parent` walks
-/// down from the root itself on every call and a generated grammar nests thousands of levels deep.
-fn inside(root: Node, node: Node, kind: u16) -> bool {
+/// Whether a node of `kind` encloses `node`, one whose first child spells `word` when given. It walks
+/// down from the root, because `parent` walks down from the root itself on every call and a
+/// generated grammar nests thousands of levels deep.
+fn inside(root: Node, node: Node, kind: u16, word: Option<&str>, src: &str) -> bool {
     let mut at = root;
-    while at.kind_id() != kind {
+    loop {
+        if at.kind_id() == kind && word.is_none_or(|w| at.child(0).is_some_and(|c| text(c, src) == w)) {
+            return true;
+        }
         match at.child_with_descendant(node) {
             Some(next) if next != node => at = next,
             _ => return false,
         }
     }
-    true
 }
 
 /// The facts `decl` and, when given, `refs` read from `file`. An import site's targets wait for a reader.
@@ -525,6 +529,7 @@ fn read_import(caps: &[(Role, Node)], meta: &Meta, src: &str) -> Option<Import> 
         alias: first(Role::ImportAlias),
         reexport: meta.reexport,
         base: meta.base,
+        binds: meta.binds,
         range: site.byte_range(),
         targets: OnceLock::new(),
     })
@@ -1173,7 +1178,27 @@ pub fn resolve(resolver: &Resolver, spec: &Spec, file: &File, facts: &Facts, ex:
 /// first, then as written. A base clause is read where its type is declared, outside the type. A
 /// path does not say which of its parts are types, whose members join with `.`, so each joint is
 /// tried both ways, as written first: `Request::Helpers::TOKEN` may be `Request.Helpers/TOKEN`.
+///
+/// An import that binds a name changes that: an alias in scope stands for its path, and the path it
+/// expands to is the one name meant, as Elixir's `alias Plug.Conn` makes `Conn.f` mean
+/// `Plug.Conn.f` and nothing else. A bare name may last be a member of a path an import in scope
+/// opens.
 fn lexical(facts: &Facts, r: &Ref) -> Vec<String> {
+    let spell = |name: &str| -> Vec<String> {
+        let joints: Vec<usize> = name.match_indices('/').map(|(i, _)| i).take(4).collect();
+        (0..1usize << joints.len()).map(|mask| {
+            let mut name = name.to_string().into_bytes();
+            joints.iter().enumerate().filter(|(bit, _)| mask >> bit & 1 == 1).for_each(|(_, &i)| name[i] = b'.');
+            String::from_utf8(name).unwrap_or_default()
+        }).collect()
+    };
+    let binding = facts.imports.iter().any(|i| i.binds.is_some());
+    let first = r.name.split(['.', '/']).next().unwrap_or(&r.name);
+    // Of two aliases of one name, the later one written is the one in force.
+    let aliased = binding.then(|| bound(facts, r.range.start, Binds::Alias).filter(|(_, _, alias)| *alias == first).max_by_key(|(at, _, _)| *at));
+    if let Some((_, path, _)) = aliased.flatten() {
+        return spell(&format!("{path}{}", &r.name[first.len()..]));
+    }
     let base = matches!(r.edge, EdgeKind::Extends | EdgeKind::Implements);
     let mut at = r.source.and_then(|i| if base { facts.defs[i].parent } else { Some(i) });
     let mut scopes = Vec::new();
@@ -1185,13 +1210,28 @@ fn lexical(facts: &Facts, r: &Ref) -> Vec<String> {
         at = d.parent;
     }
     scopes.push(String::new());
-    let joints: Vec<usize> = r.name.match_indices('/').map(|(i, _)| i).take(4).collect();
-    let spellings: Vec<String> = (0..1usize << joints.len()).map(|mask| {
-        let mut name = r.name.clone().into_bytes();
-        joints.iter().enumerate().filter(|(bit, _)| mask >> bit & 1 == 1).for_each(|(_, &i)| name[i] = b'.');
-        String::from_utf8(name).unwrap_or_default()
-    }).collect();
-    scopes.iter().flat_map(|scope| spellings.iter().map(move |name| format!("{scope}{name}"))).collect()
+    let spellings = spell(&r.name);
+    let mut names: Vec<String> = scopes.iter().flat_map(|scope| spellings.iter().map(move |name| format!("{scope}{name}"))).collect();
+    if binding && first.len() == r.name.len() {
+        names.extend(bound(facts, r.range.start, Binds::Open).flat_map(|(_, path, _)| spell(&format!("{path}/{}", r.name))));
+    }
+    names
+}
+
+/// The imports binding `binds` in scope at `byte`, each by its site, its path and its alias: one
+/// written before `byte`, in the innermost definition holding the import, or anywhere after it in the
+/// file when no definition holds it.
+fn bound(facts: &Facts, byte: usize, binds: Binds) -> impl Iterator<Item = (usize, &str, &str)> {
+    facts.imports.iter().filter(move |i| i.binds == Some(binds) && i.range.end <= byte).filter_map(move |i| {
+        let at = i.range.start;
+        let scope = facts.sites().filter(|(range, _)| range.contains(&at)).min_by_key(|(range, _)| range.len());
+        if scope.is_some_and(|(range, _)| !range.contains(&byte)) {
+            return None;
+        }
+        let path = i.path.as_deref()?;
+        let alias = i.alias.as_deref().unwrap_or_else(|| path.rsplit('.').next().unwrap_or(path).trim());
+        Some((at, path, alias))
+    })
 }
 
 /// The name most of `files` declare themselves under. A directory can hold a file of another package,
