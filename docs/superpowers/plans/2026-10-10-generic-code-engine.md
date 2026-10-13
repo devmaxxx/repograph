@@ -1961,6 +1961,32 @@ No new definition kind is needed:
 - **Default enough:** yes.
 - **Corpus:** `rack/rack` at `v3.2.7`, 93 `.rb`, MIT.
 
+**Step 19 as built.** Where the code differs from the text above, the code is the record. The work is in `ffeaabf`.
+
+- **Data:** the `RUBY` spec row, `queries/ruby/decl.scm` (59 lines) and `refs.scm` (166 lines), `hooks: NONE`. No exception was needed. The cases are in `src/code/cases/ruby.rs` (10 tests). The crate is `tree-sitter-ruby 0.23.1`, the one ast-grep carries, MIT, ABI 14.
+- **Differs from the text above:**
+  - Visibility is a new `Visibility::Lexical`, not `Family`, with `OwnFirst` as planned.
+  - `class A::B` is read by the name pattern, which captures each part of the path, not by `qualifiers`.
+  - Export is `All` with a query-only `private` rule: a method after a bare `private` or `protected` in the same body, or written `private def`, is `export "never"`, and one after a later bare `public` is `"always"`. The first pattern to match a node wins, so the order is public…private…def, then private…public…def, then private…def. A body that hides, shows, hides and shows again misreads its last section; rack has none.
+  - `include` and `extend` are plain References from the constant pattern, with no `impl` or `extend` context.
+  - `require` tries beside the requirer before `lib/`, as `require_relative` does, and the roots are `["lib"]` without `""`. On rack this gives the same 291 edges as Ruby's own reading.
+  - Calls with a constant receiver (`Utils.escape`, `Rack::Utils.escape`, `::Rack::Utils.f`) and with `self` resolve; only a variable or other value receiver stays missing.
+- **Engine additions, all reached only through the Ruby row:**
+  - `Visibility::Lexical`: a reference is read under each class and module around its site, innermost first, then as written, and reaches the first of those names its own file or the family's index declares. A base clause starts outside its class. A path does not say which of its parts are classes, so each `::` joint is tried as `/` and as `.`, as written first (at most four joints, 16 spellings). A constant passes over a name only methods declare, since Ruby lets a method be spelled `POST`.
+  - `#set! visibility "file"` (`Meta.own_file`): a reference that reaches its own file's definitions alone. Ruby's bare calls set it, since a method without a receiver is the caller's class's, which another file reopening that class is no witness to.
+  - `engine::paths`: a Lexical family's header lists every exported name at any depth, so the index finds `Rack/Utils/escape` by its full path.
+  - `above` looks past a `body_statement` as it does past HCL's `body`, so the comment above a class's first method is its doc. Of the grammars in the tree, only tree-sitter-ruby has a `body_statement` node.
+  - Inertness: `Visibility::Lexical` and `visibility "file"` appear only in the Ruby row and `ruby/refs.scm`; the scratchpad corpus and the kit, with the default globs and with the Ruby globs, luarocks, gin and hiredis are byte-identical to step 17.
+- **Bare calls reach outer classes in their own file.** A rule that kept a bare call to its innermost container and the top level was measured and dropped: it lost 18 rack calls, `Response::Helpers`'s methods calling `Response#get_header` and `set_header`, which are right because `Response` mixes `Helpers` in. A module's method calling its outer class's is right whenever that class includes it, which is how Ruby nests helpers.
+- **`OwnThenUnique`** was measured on rack: it loses 69 References, every one to a reopened module (`Rack`, `Rack::Multipart`) that several files declare, all right, and gains none.
+- **Known misses on rack:** `stat = stat(path)` and `query_parser()` beside a local of the same name (3 calls), since the locals rule hides the name; `def YAML.unsafe_load` on a constant receiver (1 call); a nested class whose base is the class around it (`TestProxyRequest < RackRequestTest`), since an edge to the source's container is dropped (1 Extends). One extra symbol: `alias << call` inside a `class_eval` block on a value declares `<<` at the file level.
+- **Parse census:** 94 files, 0 with an ERROR or MISSING node.
+- **For steps 20–24:**
+  - Tree-sitter 0.27 silently ignores a negated field (`!receiver`, `!name`) on a wildcard parent `(_ …)`, as step 17 found for `!declarator`. `refs.scm` lists the value-position parents by kind, and a path uses a wildcard parent with `#set! outside "scope_resolution"`.
+  - `Visibility::Lexical` and the joint spellings are generic: PHP namespaces, or any language whose names are global by full path, can take them.
+  - A mixin's methods reached through `include` need a type step and stay missing.
+  - Ruby reads `f(…)` with parentheses as a call even beside a local `f`. A locals rule that knows this would recover 3 of rack's 4 Calls misses.
+
 **Step 20 · PHP.** M. Query ~110, cases ~250, engine ~100 (`Scoped`).
 
 - **Lang and family:** `Lang::Php` (`.php`), `Family::Php`.

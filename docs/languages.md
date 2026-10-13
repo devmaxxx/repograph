@@ -96,3 +96,28 @@ C (`.c` and `.h`) is read only where `code_globs` or `REPOGRAPH_CODE_GLOBS` name
   declares, and a type written in a variable's declaration (`static struct { … } config;`); a
   definition the grammar cannot parse, as when a branch of `#if` repeats a function's header; C++
   written in a `.h`.
+
+Ruby (`.rb`, `.rbw`, `.gemspec` and `.rake`) is read only where `code_globs` or
+`REPOGRAPH_CODE_GLOBS` names them; it stays opt-in until step 24 of the engine plan puts it in the
+default globs.
+
+- **Read:** modules and classes, with modules joining what they hold with `/` and classes with `.`,
+  so `module Rack; class Request; module Helpers` holds `Rack/Request.Helpers/host`; `class A::B`
+  under its path; `def` and `def self.` methods, and the methods of a `class << self` body, as the
+  class's; `alias`; constants. A class or module reopened in one file is one symbol, the first
+  definition; reopened in several files, each file declares it and a reference reaches every one.
+  A method after a bare `private` or `protected`, or written as `private def`, stays out of other
+  files' reach. A constant is read under each class and module around it, innermost first, then as
+  written, and reaches the file that declares that full name anywhere in the repository, since
+  autoloading needs no `require`. `A::B::C` paths, and `A::B.f` and `self.f` calls, resolve the same
+  way. A bare call reaches a method of a class or module around it in its own file, or a top-level
+  one there. `require` and `require_relative` of one literal path, and `autoload :X, "path"`, reach
+  `path.rb` beside the requiring file, else under `lib/`. The superclass is an Extends edge.
+  Requirement ids are read in comments and strings.
+- **Not read:** a method called on a variable or any other value (`req.host`), since its type is
+  not inferred; a method a mixin (`include`) brings, unless the module sits inside the class that
+  mixes it in; `include` and `extend` themselves, which are read as plain references to the module;
+  `def obj.f` and `class << obj` on anything but `self`; `alias :new :old` with symbols;
+  `define_method`, `attr_*` and other metaprogramming; a call written `stat(…)` whose name a local
+  of the same name shadows (`stat = stat(path)`); a nested class's base when it is the class around
+  it; gems and the standard library.
