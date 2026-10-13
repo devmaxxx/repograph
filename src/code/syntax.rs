@@ -92,23 +92,87 @@ pub(crate) fn comment_text(raw: &str) -> String {
 
 pub(crate) fn cap(s: String, n: usize) -> String { s.chars().take(n).collect() }
 
-/// Where the declaration beside the decorator holding byte `at` starts, and the kind of node the two
-/// sit in: a decorator is said of that declaration, though it sits outside the declaration's node.
-/// A cursor walks down to `at`, since a node's `parent` walks down from the root on every call.
-pub(crate) fn decorated<'t>(root: Node<'t>, at: usize) -> Option<(&'t str, usize)> {
-    let mut cur = root.walk();
-    let mut container = root.kind();
-    while cur.goto_first_child_for_byte(at).is_some() && cur.node().start_byte() <= at {
-        if cur.node().kind() == "decorator" {
-            while cur.goto_next_sibling() {
-                let s = cur.node();
-                if s.is_named() && !matches!(s.kind(), "decorator" | "comment") {
-                    return Some((container, s.start_byte()));
+/// Each outermost decorator of a tree, with where the declaration it stands beside starts and
+/// whether the two sit in a class body: a decorator is said of that declaration, though it sits
+/// outside the declaration's node. One walk reads them all, so a site asks a sorted list where a walk
+/// down from the root scanned every level.
+pub(crate) struct Decorators(Vec<(std::ops::Range<usize>, usize, bool)>);
+
+impl Decorators {
+    pub(crate) fn of(root: Node) -> Decorators {
+        let mut found = Vec::new();
+        // Most grammars have no decorator, and their files pay nothing for the walk.
+        if root.language().id_for_node_kind("decorator", true) == 0 {
+            return Decorators(found);
+        }
+        let mut cur = root.walk();
+        if !cur.goto_first_child() {
+            return Decorators(found);
+        }
+        loop {
+            let n = cur.node();
+            let decorator = n.kind() == "decorator";
+            if decorator {
+                let mut sibling = cur.clone();
+                while sibling.goto_next_sibling() {
+                    let s = sibling.node();
+                    if s.is_named() && !matches!(s.kind(), "decorator" | "comment") {
+                        let mut parent = cur.clone();
+                        let member = parent.goto_parent() && parent.node().kind() == "class_body";
+                        found.push((n.byte_range(), s.start_byte(), member));
+                        break;
+                    }
                 }
             }
-            return None;
+            if n.is_named() && !decorator && cur.goto_first_child() {
+                continue;
+            }
+            while !cur.goto_next_sibling() {
+                if !cur.goto_parent() {
+                    return Decorators(found);
+                }
+            }
         }
-        container = cur.node().kind();
     }
-    None
+
+    /// Where a site at byte `at` is said: at the declaration when it sits in a decorator.
+    pub(crate) fn said_at(&self, at: usize) -> usize {
+        self.holding(at).map_or(at, |&(_, declaration, _)| declaration)
+    }
+
+    /// Like `said_at`, but only for a member's decorator. A class's own decorator sits outside the
+    /// class, so what it hands over, such as a module's providers, the file hands over.
+    pub(crate) fn member_at(&self, at: usize) -> usize {
+        self.holding(at).filter(|(_, _, member)| *member).map_or(at, |&(_, declaration, _)| declaration)
+    }
+
+    fn holding(&self, at: usize) -> Option<&(std::ops::Range<usize>, usize, bool)> {
+        let i = self.0.partition_point(|(range, _, _)| range.start <= at).checked_sub(1)?;
+        Some(&self.0[i]).filter(|(range, _, _)| at < range.end)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Decorators;
+    use crate::code::lang::Lang;
+
+    #[test]
+    fn a_site_in_a_decorator_is_said_at_what_it_decorates_and_only_a_member_s_moves_for_member_at() {
+        let src = "@Module({ a: f() })\nexport class M {\n  @Get({ b: g() })\n  // note\n  find() {}\n  plain() { h(); }\n}\n";
+        let tree = Lang::TypeScript.parse(src.as_bytes()).unwrap();
+        let d = Decorators::of(tree.root_node());
+        let (f, g, h) = (src.find("f()").unwrap(), src.find("g()").unwrap(), src.find("h()").unwrap());
+        let (class, method) = (src.find("class M").unwrap(), src.find("find()").unwrap());
+        assert_eq!((d.said_at(f), d.member_at(f)), (class, f));
+        assert_eq!((d.said_at(g), d.member_at(g)), (method, method), "the comment between is passed over");
+        assert_eq!((d.said_at(h), d.member_at(h)), (h, h));
+    }
+
+    #[test]
+    fn a_grammar_without_decorators_reads_none() {
+        let src = "fn main() { f(); }\n";
+        let tree = Lang::Rust.parse(src.as_bytes()).unwrap();
+        assert_eq!(Decorators::of(tree.root_node()).0.len(), 0);
+    }
 }

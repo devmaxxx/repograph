@@ -398,15 +398,9 @@ fn refer(spec: &Spec, refs: &'static Compiled, file: &File, facts: &mut Facts) {
     }
     let owners: Vec<_> = facts.refs.iter().map(|r| facts.owner(r.range.start)).collect();
     facts.refs.iter_mut().zip(owners).for_each(|(r, o)| r.source = o);
-    // After the nested citations are dropped: each lookup walks down from the root.
-    let owners: Vec<_> = facts.cites.iter().map(|c| facts.owner(said_at(root, c.range.start))).collect();
+    let decorators = syntax::Decorators::of(root);
+    let owners: Vec<_> = facts.cites.iter().map(|c| facts.owner(decorators.said_at(c.range.start))).collect();
     facts.cites.iter_mut().zip(owners).for_each(|(c, o)| c.source = o);
-}
-
-/// Where a cite is said: at the declaration a decorator stands beside, whose words the decorator's
-/// are though they sit outside its node.
-fn said_at(root: Node, at: usize) -> usize {
-    syntax::decorated(root, at).map_or(at, |(_, declaration)| declaration)
 }
 
 fn read_declaration<'t>(caps: &[(Role, Node<'t>)], pattern: usize, src: &str, out: &mut Vec<Declared<'t>>) {

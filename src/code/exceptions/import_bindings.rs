@@ -24,7 +24,7 @@ use crate::code::engine::{Def, Facts, File, Sink};
 use crate::code::exceptions::single_file_components::component_name;
 use crate::code::imports::Resolver;
 use crate::code::queries::Kind;
-use crate::code::syntax::{decorated, name_of, named, spanning, text};
+use crate::code::syntax::{name_of, named, spanning, text, Decorators};
 use crate::model::{Edge, EdgeKind, NodeKind};
 
 pub(crate) fn resolve(resolver: &Resolver, file: &File, facts: &Facts, sink: &mut Sink) {
@@ -45,7 +45,7 @@ pub(crate) fn bind(resolver: &Resolver, file: &File, facts: &Facts, component: O
     let decorated = Decorated { facts, rel, src, own: &own, imported: &imported, component: component.is_some() };
     classes(resolver, root, &decorated, sink);
     let scope = Scope::collect(root, rel, src, resolver, &own);
-    let owners = Owners { facts, rel, root, src, classes: facts.defs.iter().filter(|d| d.parent.is_none() && d.kind == Kind::Class).map(|d| (d.range.clone(), d.qualified.as_str())).collect() };
+    let owners = Owners { facts, rel, decorators: Decorators::of(root), src, classes: facts.defs.iter().filter(|d| d.parent.is_none() && d.kind == Kind::Class).map(|d| (d.range.clone(), d.qualified.as_str())).collect() };
     calls(resolver, &scope, &owners, root, src, component, sink);
 }
 
@@ -58,21 +58,17 @@ fn destructures(src: &[u8], def: &Def) -> bool {
 
 /// What a site inside the file belongs to: the innermost definition holding it, and for a decorator
 /// in a class body, the member it decorates, which follows it there as a sibling.
-struct Owners<'a, 't> {
+struct Owners<'a> {
     facts: &'a Facts,
     rel: &'a str,
-    root: Node<'t>,
+    decorators: Decorators,
     src: &'a [u8],
     classes: Vec<(std::ops::Range<usize>, &'a str)>,
 }
 
-impl Owners<'_, '_> {
+impl Owners<'_> {
     fn of(&self, n: Node) -> String {
-        let byte = match decorated(self.root, n.start_byte()) {
-            Some(("class_body", member)) => member,
-            _ => n.start_byte(),
-        };
-        let owner = self.facts.owner(byte).filter(|&i| !destructures(self.src, &self.facts.defs[i]));
+        let owner = self.facts.owner(self.decorators.member_at(n.start_byte())).filter(|&i| !destructures(self.src, &self.facts.defs[i]));
         self.facts.source_id(self.rel, owner)
     }
 
