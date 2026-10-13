@@ -1062,3 +1062,22 @@ built at `904039b`. Go is read only when a config or `REPOGRAPH_CODE_GLOBS` name
   - `cargo test --all-targets`: 1,430 passed, 0 failed;
   - `cargo clippy --all-targets -- -D warnings`: clean;
   - `cargo tree --duplicates --depth 0`: no tree-sitter crate.
+
+### Step 16 · review fix `5cd204b`, re-verified
+
+New: `bin/repograph-step16r`, built at `5cd204b`. Parent: `bin/repograph-step16`. The fix names an
+unaliased import by the package most of its files declare, unquotes a raw-string import path, and
+binds a generic receiver's type parameters in the method.
+
+- **gin** (`--no-dense`, the defaults plus `**/*.go`), `step16` against `step16r`: `graph.json`
+  byte-identical (`119169be4bd8aa62`), langdiff `--lang go` R1–R9 all 0
+  (`log/langdiff-step16r-gin.txt`). Nothing moves because gin holds none of the three shapes: each
+  of its eight package directories declares one package, no import path is a raw string, and no
+  method has a generic receiver. The three cases in `src/code/cases/go.rs` pin them.
+- **`Locals::shadows`** splits a name on `.` as well as `/` since step 16's item 0. No store moved,
+  because no reference the default resolves spells a dotted name in any language today. The case
+  `a_local_hides_a_path_through_it_whichever_separator_joins_the_path` in `src/code/cases.rs` pins
+  it: a local `a` hides `a`, `a.b.C`, `a/b` and `a.b/c`, and not `ab.C`, `b.a` or `C`, nor anything
+  past its scope.
+- **Recorded open** (plan, step 16 as built): a `go.mod` edit widens no importer until the next
+  `build`; `go.work` and `replace` are not read; `shadows` ignores binding order.

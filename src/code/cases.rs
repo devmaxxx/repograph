@@ -442,3 +442,25 @@ fn every_language_names_its_grammar_once_and_the_two_embedded_ones_none() {
         }
     }
 }
+
+#[test]
+fn a_local_hides_a_path_through_it_whichever_separator_joins_the_path() {
+    use crate::code::engine::{facts, File};
+    use crate::code::lang::Lang;
+    use crate::code::queries;
+    // A dotted name and a slashed one start at the same segment, so a local `a` hides `a.b.C` and
+    // `a/b` alike in every language, and hides no name that only starts with the same letters.
+    let src = "local function f(a)\n  return a\nend\n";
+    let tree = Lang::Lua.parse(src.as_bytes()).unwrap();
+    let file = File { lang: Lang::Lua, rel: "f.lua", text: src, src, tree: Some(&tree) };
+    let spec = crate::code::spec::spec(Lang::Lua);
+    let facts = facts(spec, queries::decl(Lang::Lua).unwrap(), queries::refs(Lang::Lua), &file);
+    let inside = src.find("return").unwrap();
+    for name in ["a", "a.b.C", "a/b", "a.b/c"] {
+        assert!(facts.locals.shadows(name, inside, None), "{name}");
+    }
+    for name in ["ab.C", "b.a", "C"] {
+        assert!(!facts.locals.shadows(name, inside, None), "{name}");
+    }
+    assert!(!facts.locals.shadows("a.b.C", src.len(), None), "past the function's body");
+}
