@@ -2,6 +2,7 @@
 //! turned into `Facts`, and the facts written as nodes and edges by the language's `Spec`. Hooks read
 //! the same facts instead of walking the tree a second time.
 
+use std::cell::OnceCell;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
 use std::ops::Range;
 use std::sync::{Arc, Mutex, OnceLock};
@@ -908,8 +909,8 @@ pub fn resolve(resolver: &Resolver, spec: &Spec, file: &File, facts: &Facts, ex:
         }
         if let Some(receiver) = &r.receiver {
             if let Receivers::Imports = spec.receivers {
-                let receiving = receiving.get_or_insert_with(|| Receiving::of(resolver, spec, rel, facts));
-                if let Some(to) = receiving.target(facts, r, receiver) {
+                let receiving = receiving.get_or_insert_with(|| Receiving::of(facts));
+                if let Some(to) = receiving.target(facts, r, receiver, || Receiving::imports(resolver, spec, rel, facts)) {
                     let from = facts.source_id(rel, r.source);
                     let container = r.source.and_then(|i| facts.defs[i].parent).map(|p| facts.defs[p].id.as_str());
                     if to != from && Some(to) != container {
@@ -945,24 +946,32 @@ pub fn resolve(resolver: &Resolver, spec: &Spec, file: &File, facts: &Facts, ex:
     }
 }
 
+/// The members each import alias exposes, with every definition of each.
+type Imported<'f> = HashMap<&'f str, HashMap<String, BTreeSet<String>>>;
+
 /// What a receiver names from one file, built at its first reference with a receiver: the file's
-/// own definitions by the receiver and member they spell, and the members each import alias
-/// exposes, with every definition of each.
+/// own definitions by the receiver and member they spell, and, only once a receiver is no member of
+/// the file's own, the members each import alias exposes. A file that calls through `self` alone
+/// never reads the files it requires.
 struct Receiving<'f> {
     own: HashMap<(&'f str, &'f str), usize>,
-    imported: HashMap<&'f str, HashMap<String, BTreeSet<String>>>,
+    imported: OnceCell<Imported<'f>>,
 }
 
 impl<'f> Receiving<'f> {
-    fn of(resolver: &Resolver, spec: &Spec, rel: &str, facts: &'f Facts) -> Self {
+    fn of(facts: &'f Facts) -> Self {
         let own = facts.defs.iter().enumerate().filter_map(|(i, d)| d.qualified.rsplit_once(['.', '/']).map(|q| (q, i))).collect();
+        Receiving { own, imported: OnceCell::new() }
+    }
+
+    fn imports(resolver: &Resolver, spec: &Spec, rel: &str, facts: &'f Facts) -> Imported<'f> {
         let mut files: HashMap<&str, BTreeSet<&str>> = HashMap::new();
         for i in &facts.imports {
             if let Some(alias) = &i.alias {
                 files.entry(alias).or_default().extend(i.targets(resolver, spec, rel).iter().map(String::as_str));
             }
         }
-        let imported = files.into_iter().map(|(alias, files)| {
+        files.into_iter().map(|(alias, files)| {
             let mut members: HashMap<String, BTreeSet<String>> = HashMap::new();
             for theirs in files.into_iter().filter_map(|f| resolver.facts(f)) {
                 for (member, id) in exposed(&theirs) {
@@ -970,15 +979,14 @@ impl<'f> Receiving<'f> {
                 }
             }
             (alias, members)
-        }).collect();
-        Receiving { own, imported }
+        }).collect()
     }
 
     /// The one definition `receiver.name` names. A table the file declares members of is the file's
     /// own, unless a binding around the site and not around the member names another value; an
     /// import's alias reaches the one member of that name its files expose, unless a binding around
     /// the site shadows the alias.
-    fn target<'a>(&'a self, facts: &'a Facts, r: &Ref, receiver: &str) -> Option<&'a str> {
+    fn target<'a>(&'a self, facts: &'a Facts, r: &Ref, receiver: &str, imports: impl FnOnce() -> Imported<'f>) -> Option<&'a str> {
         if let Some(&i) = self.own.get(&(receiver, r.name.as_str())) {
             let def = &facts.defs[i];
             return (!facts.locals.shadows_apart(receiver, r.range.start, def.range.start)).then_some(def.id.as_str());
@@ -986,7 +994,7 @@ impl<'f> Receiving<'f> {
         if facts.locals.shadows(receiver, r.range.start) {
             return None;
         }
-        let ids = self.imported.get(receiver)?.get(r.name.as_str())?;
+        let ids = self.imported.get_or_init(imports).get(receiver)?.get(r.name.as_str())?;
         let mut ids = ids.iter();
         match (ids.next(), ids.next()) {
             (Some(id), None) => Some(id.as_str()),
