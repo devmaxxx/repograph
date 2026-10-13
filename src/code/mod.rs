@@ -9,7 +9,6 @@ pub(crate) mod prose;
 pub(crate) mod queries;
 pub(crate) mod spec;
 pub(crate) mod syntax;
-pub(crate) mod typescript;
 
 use crate::model::{Extraction, Extractor};
 

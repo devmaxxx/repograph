@@ -1,6 +1,7 @@
 //! Vue single-file components on synthetic sources: which bytes are script, and what the
 //! TypeScript walk writes from them.
 
+use crate::code::exceptions::single_file_components as sfc;
 use crate::code::CodeExtractor;
 use crate::code::imports::Resolver;
 use crate::config::Config;
@@ -68,18 +69,18 @@ fn edges(ex: &Extraction, kind: EdgeKind) -> Vec<(&str, &str, &str)> {
 
 #[test]
 fn only_top_level_script_elements_are_blocks() {
-    let blocks = super::script_blocks(CHECKOUT);
+    let blocks = sfc::script_blocks(CHECKOUT);
     assert_eq!(blocks.len(), 1, "{blocks:?}");
     assert!(CHECKOUT[blocks[0].content.clone()].trim_start().starts_with("import { Component, Vue }"));
     let two = "<script lang=\"ts\">export const a = 1;</script>\n<script setup lang='tsx'>const b = <i />;</script>\n";
-    let blocks = super::script_blocks(two);
+    let blocks = sfc::script_blocks(two);
     assert_eq!(blocks.iter().map(|b| (b.setup, b.tsx)).collect::<Vec<_>>(), vec![(false, false), (true, true)]);
-    assert!(super::script_blocks("<script lang=tsx>\n</script>\n")[0].tsx, "an unquoted value counts");
+    assert!(sfc::script_blocks("<script lang=tsx>\n</script>\n")[0].tsx, "an unquoted value counts");
 }
 
 #[test]
 fn the_blanked_copy_keeps_every_row_and_column() {
-    let (blank, lang) = super::blanked(CHECKOUT).unwrap();
+    let (blank, lang) = sfc::blanked(CHECKOUT).unwrap();
     assert_eq!(lang, crate::code::lang::Lang::TypeScript);
     assert_eq!(blank.len(), CHECKOUT.len());
     let (orig, copy): (Vec<&str>, Vec<&str>) = (CHECKOUT.lines().collect(), blank.lines().collect());
@@ -197,8 +198,8 @@ fn vue_census() {
             }
             files += 1;
             let src = std::fs::read_to_string(dent.path()).unwrap();
-            scripts += super::script_blocks(&src).len();
-            let Some((blank, lang)) = super::blanked(&src) else { continue };
+            scripts += sfc::script_blocks(&src).len();
+            let Some((blank, lang)) = sfc::blanked(&src) else { continue };
             let tree = lang.parse(blank.as_bytes()).unwrap();
             let mut stack = vec![tree.root_node()];
             let mut broken = false;
@@ -215,7 +216,7 @@ fn vue_census() {
 
 #[test]
 fn a_template_in_an_html_comment_does_not_hide_the_script() {
-    let blocks = super::script_blocks("<template><div><!-- <template> --></div></template>\n<script>\nexport const a = 1;\n</script>\n");
+    let blocks = sfc::script_blocks("<template><div><!-- <template> --></div></template>\n<script>\nexport const a = 1;\n</script>\n");
     assert_eq!(blocks.len(), 1, "{blocks:?}");
 }
 

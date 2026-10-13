@@ -24,6 +24,19 @@ pub(crate) fn name_of(n: Node, src: &[u8]) -> Option<String> {
     field_text(n, "name", src).map(str::to_string)
 }
 
+/// The outermost node below the root spanning exactly `range`: a definition's node, found again from
+/// the range a hook is handed.
+pub(crate) fn spanning<'t>(root: Node<'t>, range: &std::ops::Range<usize>) -> Option<Node<'t>> {
+    let mut n = root.descendant_for_byte_range(range.start, range.end)?;
+    if n.byte_range() != *range {
+        return None;
+    }
+    while let Some(p) = n.parent().filter(|p| p.byte_range() == *range && p.parent().is_some()) {
+        n = p;
+    }
+    Some(n)
+}
+
 /// Whether `n` sits in a region the grammar could not read, or holds one: a name there may be
 /// one the file declares in a shape the walk never sees, such as a type parameter.
 pub(crate) fn broken(n: Node) -> bool {
@@ -78,3 +91,24 @@ pub(crate) fn comment_text(raw: &str) -> String {
 }
 
 pub(crate) fn cap(s: String, n: usize) -> String { s.chars().take(n).collect() }
+
+/// Where the declaration beside the decorator holding byte `at` starts, and the kind of node the two
+/// sit in: a decorator is said of that declaration, though it sits outside the declaration's node.
+/// A cursor walks down to `at`, since a node's `parent` walks down from the root on every call.
+pub(crate) fn decorated<'t>(root: Node<'t>, at: usize) -> Option<(&'t str, usize)> {
+    let mut cur = root.walk();
+    let mut container = root.kind();
+    while cur.goto_first_child_for_byte(at).is_some() && cur.node().start_byte() <= at {
+        if cur.node().kind() == "decorator" {
+            while cur.goto_next_sibling() {
+                let s = cur.node();
+                if s.is_named() && !matches!(s.kind(), "decorator" | "comment") {
+                    return Some((container, s.start_byte()));
+                }
+            }
+            return None;
+        }
+        container = cur.node().kind();
+    }
+    None
+}

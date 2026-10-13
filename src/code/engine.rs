@@ -313,14 +313,25 @@ fn declare(spec: &Spec, decl: &'static Compiled, file: &File) -> Facts {
     let mut facts = Facts { lang: Some(file.lang), ..Facts::default() };
     let Some(tree) = file.tree else { return facts };
     let (root, src) = (tree.root_node(), file.src);
-    let mut declared = Vec::new();
+    let (mut declared, mut exports) = (Vec::new(), HashSet::new());
     matches_of(decl, root, src, file.rel, |pattern, caps| {
         read_declaration(&caps, pattern, src, &mut declared);
         if let Some(import) = read_import(&caps, &decl.metas[pattern], src) {
             facts.imports.push(import);
         }
+        exports.extend(caps.iter().filter(|(r, _)| *r == Role::ExportName).map(|(_, n)| fold(spec, text(*n, src))));
     });
     qualify(spec, decl, file, declared, &mut facts);
+    // A later `export { a }` exports what the file declared plain, which the declaration's own
+    // words never say.
+    if !exports.is_empty() {
+        for d in facts.defs.iter_mut().filter(|d| d.parent.is_none() && exports.contains(&d.qualified)) {
+            d.export = true;
+        }
+        for r in facts.redeclared.iter_mut().filter(|r| r.0.is_none()) {
+            r.2 |= exports.contains(&facts.defs[r.1].qualified);
+        }
+    }
     facts.declared = facts.defs.iter().map(|d| d.qualified.clone()).collect();
     facts.exported = facts.defs.iter().filter(|d| d.export).map(|d| d.qualified.clone()).collect();
     let ranges = facts.defs.iter().enumerate().map(|(i, d)| (&d.range, i)).chain(facts.repeats.iter().map(|(r, i)| (r, *i)));
@@ -343,8 +354,8 @@ fn refer(spec: &Spec, refs: &'static Compiled, file: &File, facts: &mut Facts) {
                 Role::Reference(edge) => facts.refs.push(read_reference(spec, &caps, *edge, *node, &refs.metas[pattern], src)),
                 Role::LocalScope => scopes.push(node.byte_range()),
                 Role::LocalDefinition => bound.push((node.start_byte(), fold(spec, text(*node, src)), own.clone())),
-                Role::CiteComment => facts.cites.push(Cite { source: None, context: "comment", range: node.byte_range() }),
-                Role::CiteString => facts.cites.push(Cite { source: None, context: "string", range: node.byte_range() }),
+                Role::CiteComment => facts.cites.push(Cite { source: facts.owner(said_at(root, node.start_byte())), context: "comment", range: node.byte_range() }),
+                Role::CiteString => facts.cites.push(Cite { source: facts.owner(said_at(root, node.start_byte())), context: "string", range: node.byte_range() }),
                 _ => {}
             }
         }
@@ -372,8 +383,12 @@ fn refer(spec: &Spec, refs: &'static Compiled, file: &File, facts: &mut Facts) {
     }
     let owners: Vec<_> = facts.refs.iter().map(|r| facts.owner(r.range.start)).collect();
     facts.refs.iter_mut().zip(owners).for_each(|(r, o)| r.source = o);
-    let owners: Vec<_> = facts.cites.iter().map(|c| facts.owner(c.range.start)).collect();
-    facts.cites.iter_mut().zip(owners).for_each(|(c, o)| c.source = o);
+}
+
+/// Where a cite is said: at the declaration a decorator stands beside, whose words the decorator's
+/// are though they sit outside its node.
+fn said_at(root: Node, at: usize) -> usize {
+    syntax::decorated(root, at).map_or(at, |(_, declaration)| declaration)
 }
 
 fn read_declaration<'t>(caps: &[(Role, Node<'t>)], pattern: usize, src: &str, out: &mut Vec<Declared<'t>>) {

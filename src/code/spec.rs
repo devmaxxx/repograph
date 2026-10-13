@@ -3,7 +3,7 @@
 //! names every language: the front, the resolver, the header index, `changes` and the update's
 //! widening read this table instead of matching on `Lang` each in its own way.
 //!
-//! Most of the vocabulary below describes ported languages, and only Shell, Bicep, HCL, Terraform, Swift, GraphQL, SQL, Dart, Python, Rust, Kotlin, Java, C# and Razor are ported yet.
+//! Every language is ported: no entry reads through `legacy` any more.
 #![allow(dead_code)]
 
 use std::any::{Any, TypeId};
@@ -271,11 +271,40 @@ const PROSE: Body = Body { doc: Doc::Adjacent { kinds: &["comment"], between: &[
 
 mod table {
     use super::*;
-    use crate::code::exceptions::{attachments, computed_paths, crate_paths, identifier_case, library_scope, module_paths, module_reach, namespace_scope, package_scope, rendered_components};
-    use crate::code::*;
+    use crate::code::exceptions::{
+        attachments, computed_paths, crate_paths, identifier_case, import_bindings, library_scope, module_paths, module_reach, namespace_scope,
+        package_scope, rendered_components, single_file_components, statement_prose,
+    };
 
-    pub(super) const TYPESCRIPT: Spec = Spec { comments: C, hooks: typescript::HOOKS, legacy: Some(typescript::extract), ..UNPORTED };
-    pub(super) const VUE: Spec = Spec { view: Some(Lang::TypeScript), hooks: typescript::vue::HOOKS, legacy: Some(typescript::vue::extract), ..UNPORTED };
+    pub(super) const TYPESCRIPT: Spec = Spec {
+        queries: crate::code::queries::sources::TYPESCRIPT,
+        view: None,
+        comments: C,
+        // `statement_prose` writes the whole body.
+        body: Body { doc: Doc::None, form: Form::Raw, cap: Cap::Head, line: Line::First },
+        label: Label::Qualified,
+        export: Export::Show(&["export"]),
+        // Unread: `import_bindings` resolves every name the file uses through its own imports.
+        visibility: Visibility::File,
+        ambiguity: Ambiguity::Unique,
+        // Unread: `Resolver::resolve` places every specifier, through the tsconfig and package exports.
+        imports: ImportPaths { root: false, suffixes: &[] },
+        cross_file: false,
+        dotted_dirs: false,
+        hooks: Hooks {
+            head: Some(statement_prose::head),
+            fold: Some(|name| match name.strip_prefix('[').and_then(|n| n.strip_suffix(']')).unwrap_or(name) {
+                quoted if quoted.starts_with(['\'', '"', '`']) => Cow::Owned(quoted.trim_matches(['\'', '"', '`']).to_string()),
+                _ => Cow::Borrowed(name),
+            }),
+            signature: Some(statement_prose::body),
+            resolve: Some(import_bindings::resolve),
+            owns: &[EdgeKind::Calls, EdgeKind::Extends, EdgeKind::Implements, EdgeKind::DecoratedBy],
+            ..NONE
+        },
+        legacy: None,
+    };
+    pub(super) const VUE: Spec = Spec { view: Some(Lang::TypeScript), hooks: single_file_components::HOOKS, ..UNPORTED };
     pub(super) const CSHARP: Spec = Spec {
         queries: crate::code::queries::sources::CSHARP,
         view: None,

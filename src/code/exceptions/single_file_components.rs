@@ -1,17 +1,23 @@
-#[cfg(test)]
-mod cases;
+//! A Vue single-file component is one symbol, its file's stem, that spans the file and that a
+//! default import of the file names. Its `<script>` blocks are TypeScript, or TSX when one says
+//! `lang="tsx"`, read at the file's own rows and columns with every other byte blanked, and read
+//! as a `.ts` file is: what they declare is the file's, and what their bindings reach the
+//! component reaches. A `<script setup>` block's top-level bindings are the component's instance
+//! state, so the component references each.
 
 use std::collections::BTreeSet;
 use std::ops::Range;
 
+use crate::code::engine::{self, Facts, File, Sink};
+use crate::code::exceptions::{import_bindings, statement_prose};
 use crate::code::imports::Resolver;
 use crate::code::lang::Lang;
-use crate::code::engine::File;
+use crate::code::queries;
 use crate::code::spec::{self, Embedded, Hooks};
-use crate::model::{EdgeKind, Extraction, NodeKind};
+use crate::model::{EdgeKind, NodeKind};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Script {
+pub(crate) struct Script {
     /// The bytes between `<script …>` and `</script>`.
     pub content: Range<usize>,
     pub tsx: bool,
@@ -72,7 +78,7 @@ fn has_attr(attrs: &str, key: &str) -> bool {
 
 /// The `<script>` blocks among a single-file component's top-level elements. Each top-level element
 /// ends at its own closing tag, so a `<script>` in template text or in a comment is not a block.
-pub fn script_blocks(src: &str) -> Vec<Script> {
+pub(crate) fn script_blocks(src: &str) -> Vec<Script> {
     let mut out = Vec::new();
     let mut i = 0;
     while let Some(off) = src[i..].find('<') {
@@ -109,7 +115,7 @@ pub fn script_blocks(src: &str) -> Vec<Script> {
 
 /// The file with only its script blocks kept, each at its own rows and columns (L6), and the grammar
 /// that reads them. None when the component has no script.
-pub fn blanked(src: &str) -> Option<(String, Lang)> {
+pub(crate) fn blanked(src: &str) -> Option<(String, Lang)> {
     let scripts = script_blocks(src);
     if scripts.is_empty() {
         return None;
@@ -117,38 +123,6 @@ pub fn blanked(src: &str) -> Option<(String, Lang)> {
     let keep: Vec<Range<usize>> = scripts.iter().map(|s| s.content.clone()).collect();
     let lang = if scripts.iter().any(|s| s.tsx) { Lang::Tsx } else { Lang::TypeScript };
     Some((crate::code::blank::keep_ranges(src, &keep), lang))
-}
-
-/// L8: a `deco:<Name>` shared by every decorated component would chain them all through `apply_diff`'s
-/// co-declared closure, so the edge goes to the declaration the name resolves to, or nowhere.
-fn decorators_to_declarations(rel: &str, ex: &mut Extraction) {
-    let file_id = format!("file:{rel}");
-    let prefix = format!("sym:{rel}::");
-    let own: BTreeSet<String> = ex.nodes.iter()
-        .filter_map(|n| n.id.strip_prefix(&prefix))
-        .filter(|n| !n.contains('.'))
-        .map(str::to_string)
-        .collect();
-    let imported: Vec<(String, String)> = ex.edges.iter()
-        .filter(|e| e.kind == EdgeKind::Imports && e.source == file_id)
-        .flat_map(|e| {
-            let target = e.target.trim_start_matches("file:").to_string();
-            e.context.split(',').filter(|n| !n.is_empty()).map(move |n| (n.to_string(), target.clone())).collect::<Vec<_>>()
-        })
-        .collect();
-    ex.nodes.retain(|n| !n.id.starts_with("deco:"));
-    for mut e in std::mem::take(&mut ex.edges) {
-        if let Some(name) = e.target.strip_prefix("deco:").map(str::to_string) {
-            let target = if own.contains(&name) {
-                Some(format!("sym:{rel}::{name}"))
-            } else {
-                imported.iter().find(|(n, _)| *n == name).map(|(_, f)| format!("sym:{f}::{name}"))
-            };
-            let Some(target) = target else { continue };
-            e.target = target;
-        }
-        ex.edges.push(e);
-    }
 }
 
 /// The symbol a `.vue` file's component is: its file stem, `sym:<rel>::<FileStem>`. An SFC's one
@@ -176,63 +150,37 @@ pub(crate) const HOOKS: Hooks = Hooks {
     }),
     state: Some(spec::state::<Files>),
     embed: Some(|source| blanked(source).map_or(Embedded::Empty, |(view, lang)| Embedded::View(view, lang))),
-    head: Some(crate::code::typescript::head),
+    head: Some(statement_prose::head),
+    resolve: Some(resolve),
     ..spec::NONE
 };
 
-pub(crate) fn extract(resolver: &Resolver, file: &File, ex: &mut Extraction) {
+/// The component first, so its whole-file span survives the dedup when the script's class has the
+/// file's name.
+fn resolve(resolver: &Resolver, file: &File, _: &Facts, sink: &mut Sink) {
     let (rel, source) = (file.rel, file.text);
     let stem = component_name(rel).unwrap_or(rel);
     let component = format!("sym:{rel}::{stem}");
     let last = source.lines().count().max(1) as u32;
-    let signature = source.lines().map(str::trim).find(|l| l.starts_with("export default")).unwrap_or(stem).to_string();
-    // First, so the whole-file span survives the dedup when the script's class has the file's name.
-    ex.node_span(NodeKind::Symbol, &component, stem, &signature, rel, (1, last));
-    if let Some(tree) = file.tree {
-        let src = file.src.as_bytes();
-        let root = tree.root_node();
-        let walked = crate::code::typescript::symbols::Walk { resolver }.scan_tree(rel, root, src);
-        // The walk's file node is the one the front wrote, from the same `head`.
-        ex.nodes.extend(walked.nodes.into_iter().filter(|n| n.kind != NodeKind::File));
-        ex.edges.extend(walked.edges);
-        let prefix = format!("sym:{rel}::");
-        let locals: BTreeSet<String> = ex.nodes.iter()
-            .filter_map(|n| n.id.strip_prefix(&prefix))
-            .filter(|n| !n.contains('.'))
-            .map(str::to_string)
+    let signature = source.lines().map(str::trim).find(|l| l.starts_with("export default")).unwrap_or(stem);
+    sink.node(NodeKind::Symbol, &component, stem, signature, rel, (1, last));
+    let scripts = script_blocks(source);
+    let view = if scripts.iter().any(|s| s.tsx) { Lang::Tsx } else { Lang::TypeScript };
+    if let (Some(_), Some(decl)) = (file.tree, queries::decl(view)) {
+        let script = File { lang: view, ..*file };
+        let facts = engine::facts(spec::spec(view), decl, queries::refs(view), &script);
+        sink.facts(&script, &facts);
+        import_bindings::bind(resolver, &script, &facts, Some(&component), sink);
+        let line_of = |byte: usize| source[..byte].matches('\n').count() as u32 + 1;
+        let setup: Vec<(u32, u32)> = scripts.iter().filter(|s| s.setup).map(|s| (line_of(s.content.start), line_of(s.content.end))).collect();
+        let bindings: BTreeSet<&str> = facts.defs.iter()
+            .filter(|d| d.parent.is_none() && !d.qualified.contains('.') && d.id != component)
+            .filter(|d| setup.iter().any(|(a, b)| *a <= d.line && d.line <= *b))
+            .map(|d| d.id.as_str())
             .collect();
-        crate::code::typescript::calls::scan_tree(resolver, rel, root, src, &locals, ex);
-        crate::code::typescript::idrefs::scan_tree(root, rel, src, ex);
-        decorators_to_declarations(rel, ex);
-        owned_by_the_component(source, rel, &component, ex);
-    }
-    ex.edge(&format!("file:{rel}"), &component, EdgeKind::Declares, "export", rel);
-}
-
-/// The component spans the file, so what the walk leaves on `file:<rel>` is the component's: an
-/// Options-API object (`export default defineComponent({…})`) declares nothing the walk names, and its
-/// calls land on the file. A `<script setup>` block's top-level bindings are the component's instance
-/// state, so the component references each; L11 then walks from the component to what they call.
-fn owned_by_the_component(source: &str, rel: &str, component: &str, ex: &mut Extraction) {
-    let file_id = format!("file:{rel}");
-    for e in ex.edges.iter_mut() {
-        let walked = e.kind == EdgeKind::Calls || (e.kind == EdgeKind::References && e.target.starts_with("sym:"));
-        if walked && e.source == file_id && e.target != component {
-            e.source = component.to_string();
+        for id in bindings {
+            sink.edge(&component, id, EdgeKind::References, "", rel);
         }
     }
-    let line_of = |byte: usize| source[..byte].matches('\n').count() as u32 + 1;
-    let setup: Vec<(u32, u32)> = script_blocks(source).into_iter()
-        .filter(|s| s.setup)
-        .map(|s| (line_of(s.content.start), line_of(s.content.end)))
-        .collect();
-    let prefix = format!("sym:{rel}::");
-    let bindings: Vec<String> = ex.nodes.iter()
-        .filter(|n| n.id != component && n.id.strip_prefix(&prefix).is_some_and(|name| !name.contains('.')))
-        .filter(|n| setup.iter().any(|(a, b)| *a <= n.line && n.line <= *b))
-        .map(|n| n.id.clone())
-        .collect();
-    for id in bindings {
-        ex.edge(component, &id, EdgeKind::References, "", rel);
-    }
+    sink.edge(&format!("file:{rel}"), &component, EdgeKind::Declares, "export", rel);
 }

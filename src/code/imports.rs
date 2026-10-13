@@ -9,7 +9,7 @@ use crate::code::engine::{self, Facts};
 use crate::code::index::{Header, QualifiedIndex};
 use crate::code::lang::{detect, detect_path, Family, Lang};
 use crate::code::spec::{spec, Manifest, States, Visibility};
-use crate::code::typescript::vue;
+use crate::code::exceptions::single_file_components as vue;
 
 /// (directory the tsconfig lives in, directory its targets are relative to — `baseUrl` —
 /// and pattern -> targets), sorted nearest-first.

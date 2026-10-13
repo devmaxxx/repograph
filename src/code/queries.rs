@@ -82,6 +82,8 @@ pub(crate) enum Role {
     LocalDefinition,
     CiteComment,
     CiteString,
+    /// A name the file exports apart from its declaration: TypeScript's `export { a }`.
+    ExportName,
     /// `@_…`: read by a predicate, never by the engine.
     Private,
 }
@@ -121,6 +123,7 @@ impl Role {
             "local.definition" => Role::LocalDefinition,
             "cite.comment" => Role::CiteComment,
             "cite.string" => Role::CiteString,
+            "export.name" => Role::ExportName,
             _ => return None,
         })
     }
@@ -273,6 +276,11 @@ pub(crate) mod sources {
 
     pub(crate) const SWIFT: Sources =
         Sources { decl: &[include_str!("queries/swift/decl.scm")], refs: &[include_str!("queries/swift/refs.scm")] };
+
+    pub(crate) const TYPESCRIPT: Sources = Sources {
+        decl: &[include_str!("queries/typescript/decl.scm")],
+        refs: &[include_str!("queries/typescript/refs.scm")],
+    };
 
     pub(crate) const TERRAFORM: Sources =
         Sources { decl: &[include_str!("queries/terraform/decl.scm")], refs: &[include_str!("queries/terraform/refs.scm")] };
