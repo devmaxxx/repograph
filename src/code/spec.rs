@@ -152,6 +152,12 @@ pub enum Visibility {
     /// container around it, innermost first, before it is read as written: Ruby's `Utils` inside
     /// `module Rack` is `Rack::Utils` wherever that is declared.
     Lexical,
+    /// As `Family`, where a namespace spans directories and nests: a file's names live in the
+    /// namespace its `@scope.namespace` captures spell together, joined by `.`, and the index keys
+    /// them by that full path at any depth. A name is read through the file's imports, then under
+    /// its own namespaces, innermost first, then as written: Scala's `package os` holds `os.Path`
+    /// in every directory, and `import os._` opens it.
+    Package,
 }
 
 #[derive(Clone, Copy)]
@@ -194,6 +200,12 @@ pub enum ImportPaths {
         suffixes: &'static [&'static str],
         skip: &'static [&'static str],
     },
+    /// A declared name's full path, its namespace's parts and its own split by `sep`, found through
+    /// the family's index (`Visibility::Package`): `os.Path` names the files declaring `Path` in
+    /// `package os`. A path is read under the importer's own namespaces first, so a relative
+    /// `import TestUtil._` finds its package's `TestUtil`. An `@import.name` `_` opens the whole
+    /// scope, and names every file declaring a name directly in it.
+    Scoped { sep: char },
 }
 
 /// Where a manifest states its prefixes.
@@ -271,7 +283,7 @@ impl Spec {
     /// Whether the resolver's walk opens this language's files before extraction: a hook reads them,
     /// or a family that sees its files without an import is indexed by its queries.
     pub fn collects(&self) -> bool {
-        self.hooks.header.is_some() || self.hooks.collect.is_some() || matches!(self.visibility, Visibility::Family | Visibility::Lexical)
+        self.hooks.header.is_some() || self.hooks.collect.is_some() || matches!(self.visibility, Visibility::Family | Visibility::Lexical | Visibility::Package)
     }
 }
 
@@ -775,6 +787,21 @@ mod table {
         dotted_dirs: false,
         hooks: NONE,
     };
+    pub(super) const SCALA: Spec = Spec {
+        queries: crate::code::queries::sources::SCALA,
+        view: None,
+        comments: C,
+        body: Body { line: Line::Header, ..PROSE },
+        label: Label::Qualified,
+        export: Export::Hide(&["private", "protected"]),
+        visibility: Visibility::Package,
+        ambiguity: Ambiguity::OwnFirst,
+        cross_file: true,
+        imports: ImportPaths::Scoped { sep: '.' },
+        receivers: Receivers::Imports,
+        dotted_dirs: false,
+        hooks: NONE,
+    };
 }
 
 pub(crate) fn spec(lang: Lang) -> &'static Spec {
@@ -802,6 +829,7 @@ pub(crate) fn spec(lang: Lang) -> &'static Spec {
         Lang::Php => &table::PHP,
         Lang::Ruby => &table::RUBY,
         Lang::Elixir => &table::ELIXIR,
+        Lang::Scala => &table::SCALA,
     }
 }
 

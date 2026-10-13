@@ -395,9 +395,10 @@ impl Resolver {
         let header = match (hooks.collect, hooks.header) {
             (Some(add), _) => add(self, rel, source),
             (None, Some(header)) => Some(header(rel, source)),
-            (None, None) if matches!(spec(lang).visibility, Visibility::Family | Visibility::Lexical) => {
+            (None, None) if matches!(spec(lang).visibility, Visibility::Family | Visibility::Lexical | Visibility::Package) => {
                 engine::declarations(lang, rel, source).map(|facts| match spec(lang).visibility {
                     Visibility::Lexical => engine::paths(&facts),
+                    Visibility::Package => engine::package_paths(&facts),
                     _ => engine::header(&facts),
                 })
             }

@@ -360,6 +360,9 @@ pub(crate) mod sources {
     pub(crate) const RUST: Sources =
         Sources { decl: &[include_str!("queries/rust/decl.scm")], refs: &[include_str!("queries/rust/refs.scm")] };
 
+    pub(crate) const SCALA: Sources =
+        Sources { decl: &[include_str!("queries/scala/decl.scm")], refs: &[include_str!("queries/scala/refs.scm")] };
+
     pub(crate) const SHELL: Sources =
         Sources { decl: &[include_str!("queries/shell/decl.scm")], refs: &[include_str!("queries/shell/refs.scm")] };
 

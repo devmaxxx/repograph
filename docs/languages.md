@@ -165,6 +165,32 @@ the default globs yet.
   and `use const`; `require` and `include`; classes of other packages under `vendor/`; a
   `composer.json` edit, which widens nothing until the next `build`.
 
+Scala (`.scala`, and `.sc` scripts) is read only where `code_globs` or `REPOGRAPH_CODE_GLOBS` names
+them; it stays opt-in until step 24 of the engine plan puts it in the default globs. An sbt build
+definition (`.sbt`) is never read.
+
+- **Read:** classes, traits, objects and enums, with their `def`s as methods, `val`s and `var`s as
+  properties, `type`s and enum cases as `Type.member`, nested types under their path (`read.lines`,
+  `Path./`). A class and its companion object are one symbol, as are a method's overloads. A
+  package object's and the top level's definitions are the package's functions and values. A
+  member marked `private` or `protected` is hidden; one with a qualifier (`private[os]`) stays
+  visible. Names are keyed by their package's full path across directories: a file's
+  `package a.b` clauses, nested or dotted, put its names in `a.b`. A name is read through the
+  file's imports (`import a.b.C`, `import a.b.{C, D}`, `import a.b._`), then under its own packages,
+  innermost first, then as written, and reaches each file that declares it, so a name two source
+  variants (`src-2`, `src-3`) declare reaches both. An import reaches the files that declare what it
+  names, and a wildcard every file of the package. A bare call or `this.m()` reaches a member of the
+  type around it first; `os.read(p)`, `Path.apply(…)` and `os.remove.all(p)` reach what that path
+  declares. `extends` and every `with` are Extends edges; type uses (parameters, results, type
+  arguments, `new X`, typed patterns, annotations) are references. Requirement ids are read in
+  comments and strings.
+- **Not read:** a call on a value (`p.relativeTo(q)`), since its type is not inferred; a member
+  inherited through `this`; implicit conversions and parameters, `given`s and extension methods; a
+  field read with no call (`os.pwd`); a renamed or hidden import selector (`D => E`, `D => _`);
+  an auxiliary constructor (`def this(…)`), which `new` names as the class; definitions inside a
+  function body, a block, a `val`'s initialiser or an anonymous class; libraries outside the
+  repository.
+
 Elixir (`.ex` and `.exs`) is read only where `code_globs` or `REPOGRAPH_CODE_GLOBS` names them; it
 stays opt-in until step 24 of the engine plan puts it in the default globs.
 

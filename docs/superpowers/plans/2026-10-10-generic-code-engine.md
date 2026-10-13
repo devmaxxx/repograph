@@ -2095,6 +2095,33 @@ No new definition kind is needed:
 - **Default enough:** for types and objects, yes.
 - **Corpus:** `com-lihaoyi/os-lib` at `0.11.8`, 59 `.scala`, MIT.
 
+**Step 21 as built.** Where the code differs from the text above, the code is the record.
+
+- **Data:** the `SCALA` spec row, `queries/scala/decl.scm` (114 lines) and `refs.scm` (92 lines), `hooks: NONE`. No exception was needed. The cases are in `src/code/cases/scala.rs` (9 tests). The crate is `tree-sitter-scala =0.26.2`, the tree-sitter org's, the one ast-grep carries, MIT, ABI 15.
+- **Differs from the text above:**
+  - Resolution is a new `Visibility::Package` (below), not imports then "the same package scope" through `Namespace`: os-lib's `package os` spans `os/src`, `os/src-jvm`, `os/src-2`, `os/src-3` and the test trees, and step 20's `Namespace` is one directory.
+  - A package qualifies nothing in an id: `Path.root`, not `os.Path.root`. The index keys a name by its package's full path apart from the id.
+  - A package object is a `@scope.namespace`, so `package object os { def pwd }` declares `pwd` in `os`, as Scala reads it. Its definitions and the top level's are functions and values, not methods.
+  - A `val` or `var` member is a property; a caller reads it as it reads a parameterless `def`.
+  - `.sc` is read: a script is Scala source with top-level statements. `.sbt` is refused (`Named::Unread`); its names resolve against sbt's API.
+  - Ambiguity is `OwnFirst`: a name two source variants declare (`src-2/Macros.scala` and `src-3/Macros.scala`) reaches both, as the build picks one.
+- **Engine additions, each inert for every earlier language:**
+  - `Visibility::Package`: a file's `@scope.namespace` captures joined by `.` are its package, and `package_paths` keys its names in the family's index by that full path. A name resolves through the file's named imports, then its wildcard imports' scopes, then its own packages, innermost first, then as written; the first full path some file declares wins, and each declaring file is reached under the name it declares (the path less its own package). Only the `SCALA` row sets it.
+  - `ImportPaths::Scoped { sep }`: an import's path is read under the importer's own packages first, then as written; a named selector reaches the files declaring it, `_` every file declaring a name directly in the scope, no selector the path's own files. Only the `SCALA` row sets it.
+  - `read_import` reads several `@import.path` captures as the text they span, since the grammar writes `a.b.C` as sibling identifiers. No earlier query puts two `@import.path` captures in one match.
+  - A definition's span ends on its last text, not on the whitespace an indentation grammar's block holds up to the next token (`def_rows`). It changes only a node that ends in whitespace at a non-zero column; every earlier store is byte-identical.
+  - A plain name's targets carry the name each file declares it under. Every other visibility maps to the name as written, as before.
+- **Calls:** a bare call and `this.m()` take `receiver "owner"`, step 18's implicit owner, so `secret()` in `Path.size` reaches `Path.secret`. `a.b.f(…)` captures `a.b` as `@receiver` and resolves the path by `Receivers::Imports` through the package index: `os.remove.all(p)` reaches `remove.all`, and `Path("x")` reaches `Path`. A call on a value stays missing.
+- **Known misses on os-lib:** none against the census after the hand read. The one census Calls miss is the census's: `require(… Path.driveRelative …)` at `Path.scala:574` is a class-body statement, which the store gives to `Path` and the census gave to the method above it.
+- **Parse census (gate 2):** 59 files, 0 with an ERROR or MISSING node.
+- **For steps 22–24:**
+  - In a tree-sitter query a field pattern on a repeated field (`extends_clause type:`) matches only the first child; match the children without the field.
+  - `outside` is tested on the strict ancestors of the outermost capture. An `outside` naming the kind the pattern itself sits under (`stable_type_identifier` around its own `@receiver`) drops the pattern on every match.
+  - Ids merge where a language lets one name stand twice in a scope: a companion and its class, and a method's overloads, are one symbol with the first span.
+  - `Visibility::Package` keys by any `@scope.namespace` nesting, so a language whose modules nest across files (Elixir's `defmodule A.B`, OCaml's file modules) can take it rather than a new variant.
+  - Scala 2 keeps a top-level `private` visible across its package. The engine hides the name, and its members stay reachable by path; os-lib has no such definition.
+  - Missing by design: implicits, givens, extension methods, calls on values, members inherited through `this`, field reads with no call, and renamed or hidden import selectors.
+
 **Step 22 · Elixir.** S–M. Query ~80, cases ~200, engine ~50 (`Named`).
 
 - **Lang and family:** `Lang::Elixir` (`.ex`, `.exs`), `Family::Elixir`.
