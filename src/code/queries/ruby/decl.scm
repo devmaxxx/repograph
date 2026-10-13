@@ -18,21 +18,44 @@
 ; A bare `private` or `protected` hides the methods after it in its body, until a bare `public`. A
 ; query cannot say "the last switch before", so the first pattern to match wins: a hide after a show
 ; hides, then a show after a hide shows. A body that hides, shows, hides and shows again is misread.
+; A singleton class's body is read by the patterns below, so that a value's declares nothing.
 ((body_statement (identifier) @_show (identifier) @_hide (method name: (_) @name) @definition.method)
   (#eq? @_show "public")
   (#any-of? @_hide "private" "protected")
-  (#set! export "never"))
+  (#set! export "never")
+  (#set! outside "singleton_class"))
 
 ((body_statement (identifier) @_hide (identifier) @_show (method name: (_) @name) @definition.method)
   (#any-of? @_hide "private" "protected")
   (#eq? @_show "public")
-  (#set! export "always"))
+  (#set! export "always")
+  (#set! outside "singleton_class"))
 
 ((body_statement (identifier) @_hide (method name: (_) @name) @definition.method)
   (#any-of? @_hide "private" "protected")
-  (#set! export "never"))
+  (#set! export "never")
+  (#set! outside "singleton_class"))
 
 ((call !receiver method: (identifier) @_hide arguments: (argument_list . (method name: (_) @name) @definition.method .))
+  (#any-of? @_hide "private" "protected")
+  (#set! export "never")
+  (#set! outside "singleton_class"))
+
+((singleton_class value: (self) (body_statement (identifier) @_show (identifier) @_hide (method name: (_) @name) @definition.method))
+  (#eq? @_show "public")
+  (#any-of? @_hide "private" "protected")
+  (#set! export "never"))
+
+((singleton_class value: (self) (body_statement (identifier) @_hide (identifier) @_show (method name: (_) @name) @definition.method))
+  (#any-of? @_hide "private" "protected")
+  (#eq? @_show "public")
+  (#set! export "always"))
+
+((singleton_class value: (self) (body_statement (identifier) @_hide (method name: (_) @name) @definition.method))
+  (#any-of? @_hide "private" "protected")
+  (#set! export "never"))
+
+((singleton_class value: (self) (body_statement (call !receiver method: (identifier) @_hide arguments: (argument_list . (method name: (_) @name) @definition.method .))))
   (#any-of? @_hide "private" "protected")
   (#set! export "never"))
 
@@ -51,9 +74,16 @@
 (assignment left: (constant) @name) @definition.constant
 
 ; `require` and `require_relative` of one literal path, and `autoload :Name, "path"`. A path built
-; at run time names no file the graph can find.
+; at run time names no file the graph can find. `require` and `autoload` search the load path, never
+; the requirer's directory, and `require_relative` that directory alone.
 ((call !receiver method: (identifier) @_require arguments: (argument_list . (string . (string_content) @import.path .) .)) @import
-  (#any-of? @_require "require" "require_relative"))
+  (#eq? @_require "require")
+  (#set! import "rooted"))
+
+((call !receiver method: (identifier) @_require arguments: (argument_list . (string . (string_content) @import.path .) .)) @import
+  (#eq? @_require "require_relative")
+  (#set! import "relative"))
 
 ((call !receiver method: (identifier) @_autoload arguments: (argument_list . (simple_symbol) . (string . (string_content) @import.path .) .)) @import
-  (#eq? @_autoload "autoload"))
+  (#eq? @_autoload "autoload")
+  (#set! import "rooted"))

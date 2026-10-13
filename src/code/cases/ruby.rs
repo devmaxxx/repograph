@@ -123,7 +123,7 @@ fn modules_join_with_a_slash_classes_with_a_dot_and_a_reopened_class_is_one_symb
 }
 
 #[test]
-fn a_require_names_a_file_beside_the_requirer_and_then_under_lib() {
+fn a_require_names_a_file_under_lib_and_a_require_relative_one_beside_the_requirer() {
     let files = [
         ("lib/rack.rb", "module Rack\n  autoload :Builder, \"rack/builder\"\n  autoload :Lint, \"rack/#{name}\"\nend\n"),
         ("lib/rack/builder.rb", "require_relative 'utils'\nrequire 'rack/media'\nrequire 'set'\nrequire \"rack\"\nrequire_relative \"../../missing\"\n"),
@@ -139,16 +139,34 @@ fn a_require_names_a_file_beside_the_requirer_and_then_under_lib() {
         "file:lib/rack.rb -> file:lib/rack/builder.rb [*]",
     ], "an autoload of a literal path names its file, and one built at run time names nothing");
     assert_eq!(lines(&extract(&files, "lib/rack/builder.rb"), EdgeKind::Imports), [
+        "file:lib/rack/builder.rb -> file:lib/rack.rb [*]",
         "file:lib/rack/builder.rb -> file:lib/rack/media.rb [*]",
-        "file:lib/rack/builder.rb -> file:lib/rack/rack.rb [*]",
         "file:lib/rack/builder.rb -> file:lib/rack/utils.rb [*]",
-    ], "a file beside the requirer comes first, a gem names nothing, and a path outside the repository nothing");
+    ], "`require \"rack\"` names `lib/rack.rb`, not the `rack.rb` beside the requirer, a gem names nothing, and a path outside the repository nothing");
     assert_eq!(lines(&extract(&files, "test/spec_builder.rb"), EdgeKind::Imports), [
         "file:test/spec_builder.rb -> file:lib/rack/builder.rb [*]",
         "file:test/spec_builder.rb -> file:test/helper.rb [*]",
     ]);
     assert_eq!(lines(&extract(&files, "Rakefile.rake"), EdgeKind::Imports), ["file:Rakefile.rake -> file:lib/rack.rb [*]"]);
     assert_eq!(lines(&extract(&files, "rack.gemspec"), EdgeKind::Imports), ["file:rack.gemspec -> file:lib/rack/media.rb [*]"]);
+}
+
+#[test]
+fn a_require_searches_lib_alone_and_a_require_relative_the_requirer_s_directory_alone() {
+    let files = [
+        (
+            "lib/app/server.rb",
+            "require \"logger\"\nrequire \"app/router.rb\"\nrequire_relative \"view.rb\"\nrequire_relative \"app\"\nmodule App\n  autoload :Logger, \"logger\"\nend\n",
+        ),
+        ("lib/app/logger.rb", ""),
+        ("lib/app/router.rb", ""),
+        ("lib/app/view.rb", ""),
+        ("lib/app.rb", ""),
+    ];
+    assert_eq!(lines(&extract(&files, "lib/app/server.rb"), EdgeKind::Imports), [
+        "file:lib/app/server.rb -> file:lib/app/router.rb [*]",
+        "file:lib/app/server.rb -> file:lib/app/view.rb [*]",
+    ], "the gem `logger` is no sibling `logger.rb`, a written `.rb` is not added twice, and `require_relative \"app\"` never falls back to `lib/app.rb`");
 }
 
 const REQUEST: &str = r#"module Rack
@@ -303,4 +321,16 @@ fn a_name_in_an_endless_body_a_when_clause_or_a_loop_header_is_read_as_one_in_a_
         "sym:a.rb::A.g -> sym:a.rb::A.h []",
         "sym:a.rb::A.s -> sym:a.rb::A.t []",
     ]);
+}
+
+#[test]
+fn a_value_s_singleton_class_declares_nothing_and_self_s_hides_as_a_class_body_does() {
+    let source = "class << obj\n  private\n  def hid; end\n  def pub; end\nend\n\nclass A\n  class << other\n    def plain; end\n    private def own; end\n  end\n\n  class << self\n    private\n    def boot; end\n    public\n    def open; end\n    private def secret; end\n  end\nend\n";
+    let ex = extract(&[("a.rb", source)], "a.rb");
+    assert_eq!(lines(&ex, EdgeKind::Declares), [
+        "file:a.rb -> sym:a.rb::A [export]",
+        "sym:a.rb::A -> sym:a.rb::A.boot []",
+        "sym:a.rb::A -> sym:a.rb::A.open [export]",
+        "sym:a.rb::A -> sym:a.rb::A.secret []",
+    ], "`private` in `class << obj` declares nothing, as the same body without it does");
 }

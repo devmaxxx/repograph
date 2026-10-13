@@ -170,9 +170,11 @@ pub enum Ambiguity {
 pub enum ImportPaths {
     Relative {
         /// Directories of the repository tried in order after the importer's own: `""` is the root, as
-        /// C's include path lists `include` and `src` after the includer's directory.
+        /// C's include path lists `include` and `src` after the includer's directory. A query may
+        /// keep a site to one or the other (`#set! import "rooted"` or `"relative"`).
         roots: &'static [&'static str],
-        /// Appended to the path as written, in order; `""` tries it as written.
+        /// Appended to the path as written, in order, unless it already ends in one; `""` tries it
+        /// as written.
         suffixes: &'static [&'static str],
     },
     /// A module name whose dots are directories, under each of `roots` of the repository and never the
@@ -744,8 +746,9 @@ mod table {
         visibility: Visibility::Lexical,
         ambiguity: Ambiguity::OwnFirst,
         cross_file: true,
-        // `require` and `require_relative` name a file beside the requirer, else under `lib/`. A
-        // suffix of `.rb` alone, so that `require "rack"` never names the directory `rack/`.
+        // The query says which base a site reads: `require` names a file under `lib/`, and
+        // `require_relative` one beside the requirer. A suffix of `.rb` alone, so that
+        // `require "rack"` never names the directory `rack/`.
         imports: ImportPaths::Relative { roots: &["lib"], suffixes: &[".rb"] },
         // `self.f` is the owner's.
         receivers: Receivers::Imports,

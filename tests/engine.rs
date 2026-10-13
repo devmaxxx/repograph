@@ -8,7 +8,7 @@ use std::sync::OnceLock;
 use common::code::{lines, repo};
 use repograph::code::engine::{
     compile, facts, header, import_targets, resolve, write, Ambiguity, Body, Cap, Compiled, Doc, EdgeKind, Export, Extraction,
-    Facts, File, Form, Import, ImportPaths, Label, Lang, Line, Receivers, Sources, Spec, Visibility, NONE,
+    Facts, File, Form, Import, ImportBase, ImportPaths, Label, Lang, Line, Receivers, Sources, Spec, Visibility, NONE,
 };
 
 const DECL: &[&str] = &[
@@ -149,7 +149,15 @@ fn an_import_site_keeps_its_path_and_names() {
 #[test]
 fn an_import_path_resolves_beside_the_importer_then_at_the_root_and_only_to_a_globbed_file() {
     let (_dir, resolver) = repo(&["**/*.py"], &[("pkg/a.py", ""), ("pkg/util.py", ""), ("lib/x.py", ""), ("pkg/notes.txt", "")]);
-    let import = |path: &str| Import { path: Some(path.to_string()), names: Vec::new(), alias: None, reexport: false, range: 0..0, targets: OnceLock::new() };
+    let import = |path: &str| Import {
+        path: Some(path.to_string()),
+        names: Vec::new(),
+        alias: None,
+        reexport: false,
+        base: ImportBase::Either,
+        range: 0..0,
+        targets: OnceLock::new(),
+    };
     let mut s = spec(STRIPPED, Export::All);
     s.imports = ImportPaths::Relative { roots: &[], suffixes: &["", ".py"] };
     assert_eq!(import_targets(&resolver, &s, "pkg/a.py", &import("util")), ["pkg/util.py"]);
@@ -157,6 +165,13 @@ fn an_import_path_resolves_beside_the_importer_then_at_the_root_and_only_to_a_gl
     assert!(import_targets(&resolver, &s, "pkg/a.py", &import("notes.txt")).is_empty());
     s.imports = ImportPaths::Relative { roots: &[""], suffixes: &["", ".py"] };
     assert_eq!(import_targets(&resolver, &s, "pkg/a.py", &import("lib/x")), ["lib/x.py"]);
+    let based = |path: &str, base| Import { base, ..import(path) };
+    assert!(import_targets(&resolver, &s, "pkg/a.py", &based("util", ImportBase::Roots)).is_empty(), "a rooted import never reads the importer's directory");
+    assert_eq!(import_targets(&resolver, &s, "pkg/a.py", &based("lib/x", ImportBase::Roots)), ["lib/x.py"]);
+    assert!(import_targets(&resolver, &s, "pkg/a.py", &based("lib/x", ImportBase::Importer)).is_empty(), "a relative import never reads a root");
+    assert_eq!(import_targets(&resolver, &s, "pkg/a.py", &based("util", ImportBase::Importer)), ["pkg/util.py"]);
+    s.imports = ImportPaths::Relative { roots: &[], suffixes: &[".py"] };
+    assert_eq!(import_targets(&resolver, &s, "pkg/a.py", &import("util.py")), ["pkg/util.py"], "a path that ends in its suffix is not given it twice");
 }
 
 #[test]

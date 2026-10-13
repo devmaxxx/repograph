@@ -181,6 +181,22 @@ pub(crate) struct Meta {
     /// A Ruby method called without a receiver is the caller's class's, which another file
     /// reopening that class is no witness to.
     pub own_file: bool,
+    /// On an import, where `ImportPaths::Relative` looks for its path.
+    pub base: ImportBase,
+}
+
+/// Where an import's path is looked for under `ImportPaths::Relative`. One language may spell both
+/// rules: Ruby's `require` searches the load path alone, and `require_relative` the requirer's
+/// directory alone.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub enum ImportBase {
+    /// The importer's directory, then each of the spec's roots.
+    #[default]
+    Either,
+    /// The spec's roots alone (`#set! import "rooted"`).
+    Roots,
+    /// The importer's directory alone (`#set! import "relative"`).
+    Importer,
 }
 
 pub struct Compiled {
@@ -233,6 +249,8 @@ pub fn compile(grammar: &Language, sources: &[&str]) -> Result<Compiled, String>
                 "receiver" if value == "scope" => meta.scoped = true,
                 "parent" if value == "none" => meta.detached = true,
                 "visibility" if value == "file" => meta.own_file = true,
+                "import" if value == "rooted" => meta.base = ImportBase::Roots,
+                "import" if value == "relative" => meta.base = ImportBase::Importer,
                 "depth" => match value.parse() {
                     Ok(n) => meta.depth = Some(n),
                     Err(_) => return Err(format!("pattern at byte {at} sets depth {value:?}, which is no count")),
@@ -470,6 +488,17 @@ mod contract {
         assert!(c.metas[1].reexport);
         assert_eq!(c.metas[2].context, "arg");
         assert_eq!(c.metas[3].within, Some(Lang::Python.grammar().unwrap().id_for_node_kind("class_definition", true)));
+    }
+
+    #[test]
+    fn an_import_names_where_its_path_is_looked_for() {
+        let c = compile(&Lang::Python.grammar().unwrap(), &[
+            r#"((import_statement name: (dotted_name) @import.path) @import (#set! import "rooted"))"#,
+            r#"((import_statement name: (dotted_name) @import.path) @import (#set! import "relative"))"#,
+            r#"((import_statement name: (dotted_name) @import.path) @import)"#,
+        ]).unwrap();
+        assert_eq!(c.metas.iter().map(|m| m.base).collect::<Vec<_>>(), [ImportBase::Roots, ImportBase::Importer, ImportBase::Either]);
+        assert!(rejects(r#"((import_statement name: (dotted_name) @import.path) @import (#set! import "nearby"))"#).contains("closed set"));
     }
 
     #[test]

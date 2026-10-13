@@ -133,13 +133,15 @@ default globs.
   written, and reaches the file that declares that full name anywhere in the repository, since
   autoloading needs no `require`. `A::B::C` paths, and `A::B.f` and `self.f` calls, resolve the same
   way. A bare call reaches a method of a class or module around it in its own file, or a top-level
-  one there. `require` and `require_relative` of one literal path, and `autoload :X, "path"`, reach
-  `path.rb` beside the requiring file, else under `lib/`. The superclass is an Extends edge.
+  one there. `require_relative` of one literal path reaches `path.rb` beside the requiring file
+  only; `require` and `autoload :X, "path"` reach it under `lib/` only, as Ruby's load path does,
+  so `require "logger"` names no sibling `logger.rb`. A path already ending in `.rb` is taken as
+  written. The superclass is an Extends edge.
   Requirement ids are read in comments and strings.
 - **Not read:** a method called on a variable or any other value (`req.host`), since its type is
   not inferred; a method a mixin (`include`) brings, unless the module sits inside the class that
   mixes it in; `include` and `extend` themselves, which are read as plain references to the module;
-  `def obj.f` and `class << obj` on anything but `self`; `alias :new :old` with symbols;
+  `def obj.f` and the body of `class << obj` on anything but `self`, after a `private` or not; `alias :new :old` with symbols;
   `define_method`, `attr_*` and other metaprogramming; a call written `stat(…)` whose name a local
   of the same name shadows (`stat = stat(path)`); a nested class's base when it is the class around
   it; gems and the standard library.

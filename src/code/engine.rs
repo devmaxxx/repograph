@@ -19,7 +19,7 @@ use crate::model::{Graph, NodeKind};
 // define it stay private to the crate.
 pub use crate::code::imports::Resolver;
 pub use crate::code::lang::Lang;
-pub use crate::code::queries::{compile, Compiled};
+pub use crate::code::queries::{compile, Compiled, ImportBase};
 pub use crate::code::spec::{Ambiguity, Body, Cap, Doc, Export, Form, ImportPaths, Label, Line, Prefixes, Receivers, Sources, Spec, Visibility, NONE};
 pub use crate::model::{EdgeKind, Extraction};
 
@@ -75,6 +75,7 @@ pub struct Import {
     pub names: Vec<String>,
     pub alias: Option<String>,
     pub reexport: bool,
+    pub base: ImportBase,
     pub range: Range<usize>,
     /// The files the site resolves to, resolved on the first read: a file read across for what it
     /// declares never needs them.
@@ -523,6 +524,7 @@ fn read_import(caps: &[(Role, Node)], meta: &Meta, src: &str) -> Option<Import> 
         names: caps.iter().filter(|(r, _)| *r == Role::ImportName).map(|(_, n)| text(*n, src).to_string()).collect(),
         alias: first(Role::ImportAlias),
         reexport: meta.reexport,
+        base: meta.base,
         range: site.byte_range(),
         targets: OnceLock::new(),
     })
@@ -875,11 +877,12 @@ pub fn write(file: &File, facts: &Facts, ex: &mut Extraction) {
 }
 
 /// The repository files an import site names, by the default rule: relative to the importer's
-/// directory, then under each of the spec's roots in order, each with its suffixes, kept only when
-/// the walk globbed the result. A path naming a directory names every file of the importer's
-/// language directly in it, as a Terraform module source does. The importer's own file and own
-/// directory add nothing it does not already hold, so they name nothing. A `Dotted` spec reads none of
-/// this: see `dotted`.
+/// directory, then under each of the spec's roots in order, or one of the two alone as the site's
+/// `base` says, each with its suffixes, kept only when the walk globbed the result. A path that
+/// already ends in a suffix is tried as written, as Ruby's `require "x.rb"` names `x.rb`. A path
+/// naming a directory names every file of the importer's language directly in it, as a Terraform
+/// module source does. The importer's own file and own directory add nothing it does not already
+/// hold, so they name nothing. A `Dotted` spec reads none of this: see `dotted`.
 pub fn import_targets(resolver: &Resolver, spec: &Spec, rel: &str, import: &Import) -> Vec<String> {
     let Some(path) = &import.path else { return Vec::new() };
     let (roots, suffixes) = match spec.imports {
@@ -890,10 +893,15 @@ pub fn import_targets(resolver: &Resolver, spec: &Spec, rel: &str, import: &Impo
         }
     };
     let dir = rel.rsplit_once('/').map_or("", |(d, _)| d);
-    let bases = std::iter::once(dir).chain(roots.iter().copied());
-    for base in bases {
+    let here = (import.base != ImportBase::Roots).then_some(dir);
+    let roots = roots.iter().copied().filter(|_| import.base != ImportBase::Importer);
+    for base in here.into_iter().chain(roots) {
         for suffix in suffixes {
-            let Some(target) = crate::code::prose::join_under(base, &format!("{path}{suffix}")) else { continue };
+            let named = match !suffix.is_empty() && path.ends_with(suffix) {
+                true => path.clone(),
+                false => format!("{path}{suffix}"),
+            };
+            let Some(target) = crate::code::prose::join_under(base, &named) else { continue };
             if target == rel || target == dir {
                 continue;
             }
