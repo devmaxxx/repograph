@@ -119,7 +119,9 @@ impl Default for Config {
             // by a reader asking what this repository's authors wrote by hand. The other
             // languages' toolchains leave the same kind of tree beside the sources: a build
             // directory, a virtualenv, a provider or pod cache. `.gitignore` keeps them out only
-            // inside a git checkout, and a virtualenv checked in is not rare.
+            // inside a git checkout, and a virtualenv checked in is not rare. Go commits its
+            // `vendor/` as often as not, and Composer and Bundler install theirs there; Mix and dune
+            // build into `_build/`, which dune fills with copies of the sources.
             skip: s(&[
                 "**/node_modules/**",
                 "**/dist/**",
@@ -133,6 +135,8 @@ impl Default for Config {
                 "**/.terraform/**",
                 "**/.dart_tool/**",
                 "**/Pods/**",
+                "**/vendor/**",
+                "**/_build/**",
                 "**/TRACKER.md",
                 "graphify-out/**",
                 ".repograph/**",
