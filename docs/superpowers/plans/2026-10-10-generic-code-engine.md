@@ -1983,6 +1983,30 @@ No new definition kind is needed:
 - **Default enough:** yes.
 - **Corpus:** `slimphp/Slim` at `4.15.3`, 125 `.php`, MIT.
 
+**Step 20 as built.** Where the code differs from the text above, the code is the record.
+
+- **Data:** the `PHP` spec row, `queries/php/decl.scm` (53 lines) and `refs.scm` (57 lines), `hooks: NONE`. No exception was needed. The cases are in `src/code/cases/php.rs` (11 tests). The crate is `tree-sitter-php =0.24.2`, the one ast-grep carries, MIT; the reader uses its `LANGUAGE_PHP`, not ast-grep's `Php`.
+- **Differs from the text above:**
+  - Imports read composer.json, not `Scoped` with no manifest. PSR-4 maps a namespace prefix to one or more directories, and Slim's tests sit under `Slim\Tests\` → `tests/`, which no "the namespace is the path" rule reaches. `ImportPaths::ModulePrefix` grows to take it (below); there is no `Scoped`.
+  - A namespace qualifies nothing: ids are `Route.run`, not `Slim\Routing\Route.run`, as Go's package qualifies nothing.
+  - `require` and `include` are not read. A spec has one `ImportPaths`, Slim has no literal one (its only `require` is `__DIR__ . '/../vendor/autoload.php'`), and under composer a class file is reached by its `use`.
+  - `parent::m()` is not read: `receiver "owner"` would name the calling class, and the method is the parent's.
+  - Export is `Export::Hide(&["private", "protected"])`. A member with no modifier is public, and a type or function is always exported.
+  - Resolution is `Visibility::Namespace` (below) with `OwnThenUnique`, not `Family`: a class sees its namespace's classes without a `use`, and another namespace's only through one.
+  - The alias is explicit, the last segment of the `use` path or its `as X`, captured as `@import.alias`. The implicit alias step 16 built reads the first namespace, which names nothing in PHP.
+  - The body's first line is `Line::Header`, so a constructor whose promoted parameters span lines reads as one signature.
+- **Engine additions, each inert for every earlier language:**
+  - `ImportPaths::ModulePrefix { manifest, prefixes, sep, suffixes, skip }`. `prefixes` is a new `Prefixes::Directive(word)` (go.mod's `module` line, as before) or `Prefixes::Json(paths)`: the objects at those key paths map a prefix to a directory or a list of them. The resolver's `module_of` now returns every (prefix, directory) pair of the nearest manifest; the longest prefix wins, composer's empty prefix holding every path, and the rest of the path joins under its directory with `sep` turned into `/`. With no `suffixes` the target is the directory's files (Go); with `[".php"]` it is the one file. The Go row is `{ manifest: "go.mod", prefixes: Directive("module"), sep: '/', suffixes: &[], skip: &["_test.go"] }`, and gin's graph is byte-identical to step 17's (`119169be4bd8aa62`).
+  - `Visibility::Namespace`: the own file, the same directory's files of the language whose first `@scope.namespace` matches, and the files the resolved imports reach, hidden names excluded. The directory receiver lookup (`module("receiver.member")`) and `widen`'s directory spread take it as they take `Directory`. No other row sets it, so every other store is byte-identical.
+- **Calls:** `$this->m()`, `$this?->m()`, `self::m()` and `static::m()` capture `this`, `self` or `static` as `@receiver` with `receiver "owner"`, which rewrites the unbound receiver to the method's class. The generic implicit owner on `feat/engine-cpp` (`receiver "owner"` with no `@receiver`) was not needed and is not duplicated. `X::m()`, `X::NAME` and `X::class` resolve `X` through the own file, the namespace's directory and the `use` alias map.
+- **Known miss on Slim:** one Extends edge, `RouteTest extends TestCase`. `tests/Routing/RouteTest.php` declares `namespace Slim\Tests` but sits in `tests/Routing`, so its directory does not hold `tests/TestCase.php`.
+- **Parse census (gate 2):** 125 files, 0 with an ERROR or MISSING node under `LANGUAGE_PHP`, and 0 under `LANGUAGE_PHP_ONLY`.
+- **For steps 21–24:**
+  - `Prefixes::Json` reads any JSON manifest's prefix map; a language whose package map sits in JSON can take it rather than a new variant.
+  - `Visibility::Namespace` keys on the first `@scope.namespace` within one directory. A language whose namespace spans directories (C#, Scala) needs the namespace's files across the family, which the engine does not index yet.
+  - A `use` does not shadow a same-namespace class of the same short name: both are in reach, so `OwnThenUnique` drops the name. Slim has no such pair.
+  - Missing by design: a type named only through a `use … as Alias` (the alias map serves receivers only), fully qualified names, group uses (`use A\{B, C}`), `use function` and `use const`, `parent::`, and a method inherited through `$this`. A composer.json edit widens nothing until the next `build`.
+
 **Step 21 · Scala.** M. Query ~110, cases ~250.
 
 - **Lang and family:** `Lang::Scala` (`.scala`, `.sc`; ast-grep's `.sbt` is refused), `Family::Scala`.

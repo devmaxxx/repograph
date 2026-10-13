@@ -96,3 +96,22 @@ C (`.c` and `.h`) is read only where `code_globs` or `REPOGRAPH_CODE_GLOBS` name
   declares, and a type written in a variable's declaration (`static struct { … } config;`); a
   definition the grammar cannot parse, as when a branch of `#if` repeats a function's header; C++
   written in a `.h`.
+
+PHP (`.php`) is read only where `code_globs` or `REPOGRAPH_CODE_GLOBS` names `**/*.php`; it is not in
+the default globs yet.
+
+- **Read:** classes, interfaces, traits and enums, with their methods, properties (a constructor's
+  promoted parameters among them), constants and enum cases as `Class.member`; functions. A member
+  marked `private` or `protected` is hidden; any other, and every type and function, is exported.
+  A `use A\B\C;` or `use A\B\C as D;` reaches the file the nearest `composer.json`'s PSR-4 map
+  (`autoload` and `autoload-dev`) gives the class, by the longest prefix. A class name reaches the
+  own file's class, else the one class of that name among the files the `use`s reach and the same
+  directory's files under the same namespace; two such classes resolve to neither. `$this->m()`, `self::m()` and `static::m()` reach the own class's method; `X::m()`,
+  `X::NAME` and `X::class` reach `X`'s public member or `X` itself. Type uses are references:
+  parameter, return and property types, `new X`, `instanceof X`, `catch (X $e)`, and trait uses.
+  Text before `<?php` is read as markup. Requirement ids are read in comments and strings.
+- **Not read:** a method called on any other value (`$x->m()`), since its type is not inferred; a
+  method or constant inherited from a parent or a trait; `parent::m()`; a fully qualified name
+  (`\A\B\C`); a type named only by its `use … as` alias; group uses (`use A\{B, C}`), `use function`
+  and `use const`; `require` and `include`; classes of other packages under `vendor/`; a
+  `composer.json` edit, which widens nothing until the next `build`.
