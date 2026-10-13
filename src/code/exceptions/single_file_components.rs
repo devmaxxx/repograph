@@ -149,7 +149,7 @@ pub(crate) const HOOKS: Hooks = Hooks {
         r.state_mut::<Files>().0.insert(rel.to_string());
     }),
     state: Some(spec::state::<Files>),
-    embed: Some(|source| blanked(source).map_or(Embedded::Empty, |(view, lang)| Embedded::View(view, lang))),
+    embed: Some(|source| blanked(source).map_or(Embedded::Empty, |(view, lang)| Embedded::View(view.into(), lang))),
     head: Some(statement_prose::head),
     resolve: Some(resolve),
     ..spec::NONE

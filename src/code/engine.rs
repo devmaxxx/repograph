@@ -60,6 +60,8 @@ pub(crate) struct Ref {
     /// The owner, joiner included, whose member a bare name inside a method names first, as C++'s
     /// implicit `this` does.
     pub implicit: Option<String>,
+    /// `receiver` is a static qualifier, its segments joined with `.`, not a value.
+    pub scoped: bool,
     pub edge: EdgeKind,
     pub context: String,
     pub range: Range<usize>,
@@ -139,6 +141,8 @@ pub struct Facts {
     pub(crate) locals: Locals,
     /// Package and namespace lines, in file order.
     pub namespaces: Vec<String>,
+    /// Open namespaces the file writes, which a qualifier may name and which scope none of its names.
+    pub(crate) open: BTreeSet<String>,
     /// What the file hands its importers, by name: a receiver naming the import reaches the members
     /// of these and nothing else. Empty, it reaches the file's unowned top-level definitions.
     pub(crate) roots: Vec<String>,
@@ -453,6 +457,9 @@ fn refer(spec: &Spec, refs: &'static Compiled, file: &File, facts: &mut Facts) {
 fn owner_receivers(facts: &mut Facts, owned: &[usize]) {
     for i in 0..facts.refs.len() {
         let r = &facts.refs[i];
+        if r.scoped {
+            continue;
+        }
         let Some(receiver) = &r.receiver else {
             // The owner is what precedes the method's own name: a separator search would cut `A.operator/`
             // at the slash the operator is spelled with.
@@ -529,12 +536,21 @@ fn read_reference(spec: &Spec, caps: &[(Role, Node)], edge: EdgeKind, site: Node
     // Each is folded alone, as a quoted part keeps its case beside an unquoted one.
     let names: Vec<String> = caps.iter().filter(|(r, _)| *r == Role::Name).map(|(_, n)| fold(spec, text(*n, src))).collect();
     let path = if names.is_empty() { fold(spec, text(site, src)) } else { names.join("/") };
+    let mut receivers: Vec<Node> = caps.iter().filter(|(r, _)| *r == Role::Receiver).map(|(_, n)| *n).collect();
+    let receiver = match meta.scoped {
+        true => {
+            receivers.sort_by_key(|n| n.start_byte());
+            Some(receivers.iter().map(|n| text(*n, src)).collect::<Vec<_>>().join(".")).filter(|r| !r.is_empty())
+        }
+        false => receivers.first().map(|n| text(*n, src).to_string()),
+    };
     Ref {
         source: None,
         // A prefix spells the address a bare name stands for, as it does for a definition.
         name: format!("{}{path}", meta.prefix),
-        receiver: caps.iter().find(|(r, _)| *r == Role::Receiver).map(|(_, n)| text(*n, src).to_string()),
+        receiver,
         implicit: None,
+        scoped: meta.scoped,
         edge,
         context: meta.context.clone(),
         range: site.byte_range(),
@@ -585,6 +601,11 @@ fn qualify(spec: &Spec, decl: &Compiled, file: &File, mut declared: Vec<Declared
     let (mut members, mut remembers) = (Vec::new(), Vec::new());
     // A variant's first definition, by its parent node.
     let mut variants: HashMap<usize, Option<usize>> = HashMap::new();
+    // Read first, since a definition may name a namespace the file opens only below it.
+    let open = |d: &Declared| d.role == Declaring::Namespace && decl.metas[d.pattern].scoped;
+    facts.open = declared.iter().filter(|d| open(d) && !d.names.iter().any(|n| syntax::broken(*n)))
+        .flat_map(|d| d.names.iter().map(|n| fold(text(*n, src))))
+        .collect();
     for d in declared {
         while stack.last().is_some_and(|open| open.end < d.node.end_byte()) {
             stack.pop();
@@ -594,14 +615,18 @@ fn qualify(spec: &Spec, decl: &Compiled, file: &File, mut declared: Vec<Declared
         }
         let name = d.names.iter().map(|n| fold(text(*n, src))).collect::<Vec<_>>().join("/");
         if d.role == Declaring::Namespace {
-            facts.namespaces.push(name);
+            if !decl.metas[d.pattern].scoped {
+                facts.namespaces.push(name);
+            }
             continue;
         }
         let meta = &decl.metas[d.pattern];
         let parent = stack.last().filter(|_| !meta.detached);
-        let base = match d.owners.as_slice() {
+        // Every owner joins in source order, past a leading run of namespaces the file opens.
+        let owners: Vec<&str> = d.owners.iter().map(|o| text(*o, src)).skip_while(|o| facts.open.contains(*o)).collect();
+        let base = match owners.as_slice() {
             [] => parent.map(|p| (p.qualified.clone(), p.join)),
-            owners => Some((owners.iter().map(|o| text(*o, src)).collect::<Vec<_>>().join("."), '.')),
+            owners => Some((owners.join("."), '.')),
         };
         let under = |base: &Option<(String, char)>, tail: String| match base {
             Some((b, j)) => format!("{b}{j}{tail}"),
@@ -609,6 +634,8 @@ fn qualify(spec: &Spec, decl: &Compiled, file: &File, mut declared: Vec<Declared
         };
         let qualified = under(&base, format!("{}{name}", meta.prefix));
         let kind = match d.role {
+            // A method whose every owner is a namespace the file opens is that namespace's function.
+            Declaring::Def(Kind::Method) if !d.owners.is_empty() && owners.is_empty() && parent.is_none() => Kind::Function,
             Declaring::Def(kind) => kind,
             Declaring::Module => {
                 stack.push(Open { end: d.node.end_byte(), qualified, join: '/', def: None, adopt: None });
@@ -654,7 +681,7 @@ fn qualify(spec: &Spec, decl: &Compiled, file: &File, mut declared: Vec<Declared
             Label::Qualified => qualified.clone(),
             Label::Spelled(separator) => qualified.replace('/', separator),
             Label::Name => {
-                let container = match (d.owners.is_empty(), parent.and_then(|p| p.def)) {
+                let container = match (owners.is_empty(), parent.and_then(|p| p.def)) {
                     (true, Some(p)) => Some((facts.defs[p].label.clone(), parent.map_or('.', |p| p.join))),
                     _ => base.clone(),
                 };
@@ -955,6 +982,32 @@ fn nested(resolver: &Resolver, file: &File, member: &str) -> Vec<String> {
     }
 }
 
+/// A reference through a static qualifier (`A::B::f`). A leading run of namespaces the family opens
+/// qualifies nothing, so a namespace's function is named bare. What remains names a type, whose
+/// member is found as an implicit owner's is; a qualifier naming neither, as `std::` does, names
+/// nothing the family declares, and a bare name of the same spelling is no stand-in for it.
+fn scoped(resolver: &Resolver, file: &File, facts: &Facts, r: &Ref, declaring: &dyn Fn(&str) -> Vec<String>, ex: &mut Extraction) {
+    let Some(qualifier) = &r.receiver else { return };
+    let index = resolver.index(file.lang.family());
+    let open = |s: &&str| facts.open.contains(*s) || index.is_some_and(|i| i.is_open(s));
+    let path: Vec<&str> = qualifier.split('.').skip_while(open).collect();
+    let (member, files) = match path.as_slice() {
+        [] => (r.name.clone(), declaring(&r.name)),
+        path => {
+            let member = format!("{}.{}", path.join("."), r.name);
+            let files = Some(declaring(&member)).filter(|f| !f.is_empty()).unwrap_or_else(|| nested(resolver, file, &member));
+            (member, files)
+        }
+    };
+    let from = facts.source_id(file.rel, r.source);
+    let container = r.source.and_then(|i| facts.defs[i].parent).map(|p| facts.defs[p].id.as_str());
+    for to in files.iter().map(|f| format!("sym:{f}::{member}")) {
+        if to != from && Some(to.as_str()) != container {
+            ex.edge(&from, &to, r.edge, &r.context, file.rel);
+        }
+    }
+}
+
 /// Every reference of a kind no hook owns, resolved by name; one with a receiver only where the spec
 /// reads receivers itself (`Receivers::Imports`).
 pub fn resolve(resolver: &Resolver, spec: &Spec, file: &File, facts: &Facts, ex: &mut Extraction) {
@@ -983,6 +1036,10 @@ pub fn resolve(resolver: &Resolver, spec: &Spec, file: &File, facts: &Facts, ex:
     let mut receiving: Option<Receiving> = None;
     for r in &facts.refs {
         if spec.hooks.owns.contains(&r.edge) {
+            continue;
+        }
+        if r.scoped {
+            scoped(resolver, file, facts, r, &declaring, ex);
             continue;
         }
         if let Some(receiver) = &r.receiver {
@@ -1223,7 +1280,7 @@ pub(crate) fn widen(stale: &[String], removed: &[String], graph: &Graph, all_rel
 /// The header a name-indexed family records when it has no `header` hook: its namespaces, its
 /// visible top-level names, and what its containers hold.
 pub fn header(facts: &Facts) -> Header {
-    let mut h = Header { scope: facts.namespaces.clone(), ..Header::default() };
+    let mut h = Header { scope: facts.namespaces.clone(), open: facts.open.clone(), ..Header::default() };
     for d in &facts.defs {
         match d.parent {
             None if d.export => {
@@ -1256,7 +1313,7 @@ pub(crate) fn declarations(lang: Lang, rel: &str, source: &str) -> Option<Arc<Fa
     let decl = queries::decl(lang)?;
     // The view the front reads, so the index holds what extraction declares.
     let src = match spec.hooks.embed.map(|embed| embed(source)) {
-        Some(crate::code::spec::Embedded::View(view, by)) if by == lang => std::borrow::Cow::Owned(view),
+        Some(crate::code::spec::Embedded::View(view, by)) if by == lang => view,
         Some(_) => return None,
         None => std::borrow::Cow::Borrowed(source),
     };

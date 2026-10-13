@@ -25,7 +25,7 @@ pub(crate) fn read(resolver: &Resolver, rel: &str, text: &str) -> Extraction {
             return ex;
         }
         Some(Embedded::Empty) => (Cow::Borrowed(text), None),
-        Some(Embedded::View(view, by)) => (Cow::Owned(view), Some(by)),
+        Some(Embedded::View(view, by)) => (view, Some(by)),
     };
     let tree = grammar.and_then(|g| g.parse(src.as_bytes()));
     let file = File { lang, rel, text, src: &src, tree: tree.as_ref() };

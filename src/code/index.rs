@@ -30,6 +30,10 @@ pub struct Header {
     /// every family without file-private top-level names.
     #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
     pub private: BTreeSet<String>,
+    /// Open namespaces the file writes, as C++'s are: a qualifier naming one names a free name of the
+    /// family, and one naming none of them nor a type names nothing the family declares.
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub open: BTreeSet<String>,
 }
 
 /// Every type path (`Outer`, `Outer.Inner`, top-level ones included) and every member path
@@ -185,6 +189,8 @@ pub struct QualifiedIndex {
     /// whose names nest. The qualified names stop at the top level, so without these a name like
     /// `a.b.Outer.Inner` could only be guessed to live in `Outer`'s file.
     nested: BTreeMap<String, Nested>,
+    /// Every open namespace a file of the family writes.
+    open: BTreeSet<String>,
 }
 
 impl QualifiedIndex {
@@ -194,6 +200,15 @@ impl QualifiedIndex {
 
     pub fn insert_nested(&mut self, rel: &str, nested: Nested) {
         self.nested.insert(rel.to_string(), nested);
+    }
+
+    pub fn insert_open(&mut self, names: &BTreeSet<String>) {
+        self.open.extend(names.iter().cloned());
+    }
+
+    /// Whether some file of the family opens a namespace named `name`.
+    pub fn is_open(&self, name: &str) -> bool {
+        self.open.contains(name)
     }
 
     /// Whether `rel` declares a type at `path`.

@@ -10,6 +10,7 @@
 //! with an argument list that holds no two adjacent words, and only before `;`, `=` or `,`: a
 //! parameter list always holds a type beside a name, so `Status MAKE_IT(int n);` stays a prototype.
 
+use std::borrow::Cow;
 use std::ops::Range;
 
 use crate::code::blank::keep_ranges;
@@ -41,8 +42,8 @@ fn tokens(src: &str) -> Vec<(Tok, Range<usize>)> {
             continue;
         }
         if line_start && c == b'#' {
-            // A directive runs to the first line end no backslash continues.
-            while i < b.len() && !(b[i] == b'\n' && b[i - 1] != b'\\') {
+            // A directive runs to the first line end no backslash continues, `\r\n` or `\n`.
+            while i < b.len() && !(b[i] == b'\n' && !b[..i].ends_with(b"\\") && !b[..i].ends_with(b"\\\r")) {
                 i += 1;
             }
             continue;
@@ -64,7 +65,9 @@ fn tokens(src: &str) -> Vec<(Tok, Range<usize>)> {
             i = j + 1;
         } else if c.is_ascii_alphanumeric() || c == b'_' {
             let start = i;
-            while i < b.len() && (b[i].is_ascii_alphanumeric() || b[i] == b'_') {
+            // In a number, a quote between two digits is C++14's separator (`1'000`, `0xFF'FF`).
+            let separator = |i: usize| c.is_ascii_digit() && b[i] == b'\'' && b.get(i + 1).is_some_and(u8::is_ascii_alphanumeric);
+            while i < b.len() && (b[i].is_ascii_alphanumeric() || b[i] == b'_' || separator(i)) {
                 i += 1;
             }
             // A number is a word too: it never reads as a macro, and it stops a run as one does.
@@ -93,7 +96,7 @@ const KEYWORDS: &[&str] = &[
 const CONTROL: &[&str] = &["if", "while", "for", "switch", "catch", "return", "sizeof", "alignof", "decltype", "noexcept"];
 
 /// The view, or the file as it is when no macro sits where an attribute goes.
-fn view(src: &str) -> Embedded {
+fn view(src: &str) -> Embedded<'_> {
     let toks = tokens(src);
     let word = |k: usize| toks.get(k).filter(|(t, _)| *t == Tok::Word).map(|(_, r)| &src[r.clone()]);
     let punct = |k: usize| toks.get(k).and_then(|(t, _)| match t { Tok::Punct(c) => Some(*c), Tok::Word => None });
@@ -195,7 +198,7 @@ fn view(src: &str) -> Embedded {
         }
     }
     if blank.is_empty() {
-        return Embedded::View(src.to_string(), Lang::Cpp);
+        return Embedded::View(Cow::Borrowed(src), Lang::Cpp);
     }
     blank.sort_by_key(|r| r.start);
     blank.dedup();
@@ -208,17 +211,19 @@ fn view(src: &str) -> Embedded {
         }
     }
     keep.push(at..src.len());
-    Embedded::View(keep_ranges(src, &keep), Lang::Cpp)
+    Embedded::View(Cow::Owned(keep_ranges(src, &keep)), Lang::Cpp)
 }
 
 #[cfg(test)]
 mod tests {
+    use std::borrow::Cow;
+
     use super::view;
     use crate::code::spec::Embedded;
 
     fn read(src: &str) -> String {
         match view(src) {
-            Embedded::View(v, _) => v,
+            Embedded::View(v, _) => v.into_owned(),
             _ => unreachable!("the view is always the file's"),
         }
     }
@@ -282,6 +287,29 @@ mod tests {
             "#define DECL class LIB_EXPORT Status {",
         ] {
             assert_eq!(read(src), src);
+        }
+    }
+
+    #[test]
+    fn a_file_with_nothing_to_blank_is_read_as_it_is_without_a_copy() {
+        let src = "class Status {\n  int n_;\n};\n";
+        assert!(matches!(view(src), Embedded::View(Cow::Borrowed(v), _) if std::ptr::eq(v, src)));
+    }
+
+    #[test]
+    fn a_digit_separator_opens_no_character_literal() {
+        let src = "const int kMax = 1'000; int n_ GUARDED_BY(mu_);\nunsigned m = 0xFF'FF; class LIB_EXPORT Range {};";
+        assert_eq!(read(src), blanked(src, &["GUARDED_BY(mu_)", "LIB_EXPORT"]));
+        let chars = "char q = '\\'';\nchar c = L'x';\nclass LIB_EXPORT Status {};";
+        assert_eq!(read(chars), blanked(chars, &["LIB_EXPORT"]), "a quote after a letter still opens a literal");
+    }
+
+    #[test]
+    fn a_directive_continued_across_a_crlf_line_end_stays_one_directive() {
+        for eol in ["\n", "\r\n"] {
+            let src = format!("#define DECL(x) \\{eol}  class LIB_EXPORT x {{}};{eol}class LIB_EXPORT Status {{}};{eol}");
+            let once = src.replacen("LIB_EXPORT Status", &format!("{} Status", " ".repeat(10)), 1);
+            assert_eq!(read(&src), once, "{eol:?}: the continued line is the directive's, and the class after it is code");
         }
     }
 }

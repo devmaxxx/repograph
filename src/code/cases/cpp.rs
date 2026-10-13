@@ -192,15 +192,24 @@ void Reset() { Size(); }
 }
 
 #[test]
-fn a_namespace_qualified_call_names_the_function_and_a_member_or_class_qualified_one_stays_unresolved() {
+fn a_qualified_call_names_a_class_s_member_or_past_a_namespace_a_function_and_any_other_qualifier_nothing() {
     let files = [
         ("env.cc", "namespace io {\nint Open() { return 0; }\n}\nclass Env { public: static Env* Default(); };\nEnv* Env::Default() { return nullptr; }\n"),
+        ("status.h", "namespace io {\nclass Status {\n public:\n  static Status OK() { return Status(); }\n  struct Code { static int Of(int c) { return c; } };\n};\n}\n"),
+        ("util.cc", "void swap(int& a, int& b) {}\nint Of(int c) { return c; }\nint OK() { return 1; }\n"),
         ("main.cc", r#"#include "env.cc"
+#include "status.h"
 struct Db { void Close() {} };
 int main() {
   io::Open();
   ::io::Open();
   Env::Default();
+  io::Status::OK();
+  Status::Code::Of(1);
+  int a = 0, b = 1;
+  std::swap(a, b);
+  testing::Of(2);
+  Missing::OK();
   Db d;
   d.Close();
   Db* p = &d;
@@ -209,8 +218,35 @@ int main() {
 }
 "#),
     ];
-    assert_eq!(lines(&extract(&files, "main.cc"), EdgeKind::Calls), ["sym:main.cc::main -> sym:env.cc::Open []"],
-        "a class's static member and a value's member need a type, which nothing here reads");
+    assert_eq!(lines(&extract(&files, "main.cc"), EdgeKind::Calls), [
+        "sym:main.cc::main -> sym:env.cc::Env.Default []",
+        "sym:main.cc::main -> sym:env.cc::Open []",
+        "sym:main.cc::main -> sym:status.h::Status.Code.Of []",
+        "sym:main.cc::main -> sym:status.h::Status.OK []",
+    ], "a class's static member is found as an implicit owner's is, a namespace the family opens qualifies nothing, \
+        and `std::`, `testing::` or an unknown class never fall through to a free function of the name; a value's \
+        member needs its type, which nothing here reads");
+}
+
+#[test]
+fn an_out_of_line_method_of_a_nested_class_is_named_by_every_class_around_it() {
+    let files = [
+        ("outer.h", "class Outer {\n public:\n  class Inner {\n   public:\n    void Run();\n    void Stop() { Run(); }\n  };\n};\n"),
+        ("outer.cc", "#include \"outer.h\"\nvoid Outer::Inner::Run() { Stop(); }\n"),
+    ];
+    let ex = extract(&files, "outer.cc");
+    assert_eq!(ids(&ex), ["file:outer.cc", "sym:outer.cc::Outer.Inner.Run"], "the id the method defined in its class would have");
+    assert_eq!(lines(&ex, EdgeKind::Calls), ["sym:outer.cc::Outer.Inner.Run -> sym:outer.h::Outer.Inner.Stop []"],
+        "its implicit owner is the nested class, found through the outer one's header");
+}
+
+#[test]
+fn a_definition_qualified_by_a_namespace_the_file_opens_is_the_namespace_s_function() {
+    let src = "namespace net {\nint Dial(int port);\nclass Conn { void Close(); };\n}\nint net::Dial(int port) { return port; }\nvoid net::Conn::Close() { Dial(0); }\n";
+    let ex = extract(&[("net.cc", src)], "net.cc");
+    assert_eq!(ids(&ex), ["file:net.cc", "sym:net.cc::Conn", "sym:net.cc::Conn.Close", "sym:net.cc::Dial"]);
+    assert_eq!(lines(&ex, EdgeKind::Calls), ["sym:net.cc::Conn.Close -> sym:net.cc::Dial []"],
+        "a call inside the namespace names the function bare, and so does its id");
 }
 
 #[test]

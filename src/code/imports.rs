@@ -128,6 +128,7 @@ fn index_header(indexes: &mut BTreeMap<Family, QualifiedIndex>, family: Family, 
     if header.nested != Default::default() {
         index.insert_nested(rel, header.nested.clone());
     }
+    index.insert_open(&header.open);
 }
 
 /// The directory holding a repository-relative path, empty at the root.

@@ -281,7 +281,7 @@ pub(crate) const HOOKS: Hooks = Hooks {
     }),
     embed: Some(|source| match blank::view(source) {
         View::Unread(_) => Embedded::Unread,
-        View::Read(text) => Embedded::View(text, Lang::CSharp),
+        View::Read(text) => Embedded::View(text.into(), Lang::CSharp),
         View::None => Embedded::Empty,
     }),
     resolve: Some(resolve),

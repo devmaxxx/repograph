@@ -200,13 +200,14 @@ pub(crate) type Collect = fn(&mut Resolver, &str, &str) -> Option<Header>;
 pub(crate) type ImportHook = fn(&Resolver, &str, &Import) -> Vec<String>;
 
 /// What a blanking reader keeps of a file for its view's grammar.
-pub(crate) enum Embedded {
+pub(crate) enum Embedded<'a> {
     /// The markup could not be read; the file keeps its file node alone.
     Unread,
     /// No embedded code: the reader still runs, with no tree.
     Empty,
-    /// The view, at the file's own rows and columns, and the grammar that reads it.
-    View(String, Lang),
+    /// The view, at the file's own rows and columns, and the grammar that reads it: the file itself,
+    /// borrowed, when the reader blanks nothing.
+    View(Cow<'a, str>, Lang),
 }
 
 pub struct Hooks {
@@ -222,7 +223,7 @@ pub struct Hooks {
     pub(crate) manifest: Option<Manifest>,
     /// The resolver's state for this language, created empty for every language that has one.
     pub(crate) state: Option<fn() -> Box<dyn Any + Send + Sync>>,
-    pub(crate) embed: Option<fn(&str) -> Embedded>,
+    pub(crate) embed: Option<fn(&str) -> Embedded<'_>>,
     /// The file node's body; every other file node's is empty.
     pub(crate) head: Option<fn(&File) -> String>,
     /// Definition and reference names as the language compares them.

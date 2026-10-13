@@ -76,12 +76,28 @@
 ])
   (#set! receiver "owner"))
 
-; `ns::f()` and `::f()` name `f`, since a namespace qualifies nothing.
-(call_expression function: (qualified_identifier name: [
-  (identifier) @reference.calls
-  (template_function name: (identifier) @reference.calls)
-  (qualified_identifier name: (identifier) @reference.calls)
-]))
+; `::f()` names the global `f`, which the family's free names hold.
+(call_expression function: (qualified_identifier !scope name: [(identifier) @reference.calls (template_function name: (identifier) @reference.calls)]))
+
+; `A::B::f()`, `ns::f()` and `::ns::f()`: the scopes are the qualifier, which names a type's member,
+; or past the namespaces the family opens, a free name; `std::swap()` names nothing here.
+((call_expression function: [
+  (qualified_identifier scope: [(namespace_identifier) @receiver (template_type name: (type_identifier) @receiver)]
+    name: [(identifier) @reference.calls (template_function name: (identifier) @reference.calls)])
+  (qualified_identifier scope: [(namespace_identifier) @receiver (template_type name: (type_identifier) @receiver)]
+    name: (qualified_identifier scope: [(namespace_identifier) @receiver (template_type name: (type_identifier) @receiver)]
+      name: [(identifier) @reference.calls (template_function name: (identifier) @reference.calls)]))
+  (qualified_identifier scope: [(namespace_identifier) @receiver (template_type name: (type_identifier) @receiver)]
+    name: (qualified_identifier scope: [(namespace_identifier) @receiver (template_type name: (type_identifier) @receiver)]
+      name: (qualified_identifier scope: [(namespace_identifier) @receiver (template_type name: (type_identifier) @receiver)]
+        name: [(identifier) @reference.calls (template_function name: (identifier) @reference.calls)])))
+  (qualified_identifier !scope name: (qualified_identifier scope: [(namespace_identifier) @receiver (template_type name: (type_identifier) @receiver)]
+      name: [(identifier) @reference.calls (template_function name: (identifier) @reference.calls)]))
+  (qualified_identifier !scope name: (qualified_identifier scope: [(namespace_identifier) @receiver (template_type name: (type_identifier) @receiver)]
+      name: (qualified_identifier scope: [(namespace_identifier) @receiver (template_type name: (type_identifier) @receiver)]
+        name: [(identifier) @reference.calls (template_function name: (identifier) @reference.calls)])))
+])
+  (#set! receiver "scope"))
 
 (comment) @cite.comment
 

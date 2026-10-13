@@ -52,9 +52,10 @@
   (#set! outside "field_declaration_list")
   (#set! outside "compound_statement"))
 
-; `R A::f() { … }`, `A::~A()`, `A<T>::f` and `A<T>::B::f`: the class is the scope nearest the name, and
-; a template around it is a class too. A plain name around it may be a namespace, which qualifies
-; nothing, so `ns::A::f` and `A::B::f` both read `A.f` and `B.f`.
+; `R A::f() { … }`, `A::~A()`, `A<T>::f` and `A::B::f`: every scope joins in source order, past a
+; leading run of namespaces the file opens, so `A::B::f` reads `A.B.f`, the id the method defined in
+; `B`'s body inside `A` has, and in a file opening `ns`, `ns::A::f` reads `A.f`. A namespace the file
+; does not open is read as a class.
 (function_definition
   declarator: [
     (function_declarator declarator: [
@@ -62,49 +63,68 @@
         scope: [(namespace_identifier) @owner (template_type name: (type_identifier) @owner)]
         name: [(identifier) (destructor_name) (operator_name)] @name)
       (qualified_identifier
-        scope: (namespace_identifier)
+        scope: [(namespace_identifier) @owner (template_type name: (type_identifier) @owner)]
         name: (qualified_identifier
           scope: [(namespace_identifier) @owner (template_type name: (type_identifier) @owner)]
           name: [(identifier) (destructor_name) (operator_name)] @name))
       (qualified_identifier
-        scope: (template_type name: (type_identifier) @owner)
+        scope: [(namespace_identifier) @owner (template_type name: (type_identifier) @owner)]
         name: (qualified_identifier
           scope: [(namespace_identifier) @owner (template_type name: (type_identifier) @owner)]
-          name: [(identifier) (destructor_name) (operator_name)] @name))
+          name: (qualified_identifier
+            scope: [(namespace_identifier) @owner (template_type name: (type_identifier) @owner)]
+            name: [(identifier) (destructor_name) (operator_name)] @name)))
     ])
     (pointer_declarator declarator: (function_declarator declarator: [
       (qualified_identifier
         scope: [(namespace_identifier) @owner (template_type name: (type_identifier) @owner)]
         name: [(identifier) (operator_name)] @name)
       (qualified_identifier
-        scope: (namespace_identifier)
+        scope: [(namespace_identifier) @owner (template_type name: (type_identifier) @owner)]
         name: (qualified_identifier
           scope: [(namespace_identifier) @owner (template_type name: (type_identifier) @owner)]
           name: [(identifier) (operator_name)] @name))
-      (qualified_identifier
-        scope: (template_type name: (type_identifier) @owner)
-        name: (qualified_identifier
-          scope: [(namespace_identifier) @owner (template_type name: (type_identifier) @owner)]
-          name: [(identifier) (operator_name)] @name))
-    ]))
-    (pointer_declarator declarator: (pointer_declarator declarator: (function_declarator declarator:
       (qualified_identifier
         scope: [(namespace_identifier) @owner (template_type name: (type_identifier) @owner)]
-        name: (identifier) @name))))
+        name: (qualified_identifier
+          scope: [(namespace_identifier) @owner (template_type name: (type_identifier) @owner)]
+          name: (qualified_identifier
+            scope: [(namespace_identifier) @owner (template_type name: (type_identifier) @owner)]
+            name: [(identifier) (operator_name)] @name)))
+    ]))
+    (pointer_declarator declarator: (pointer_declarator declarator: (function_declarator declarator: [
+      (qualified_identifier
+        scope: [(namespace_identifier) @owner (template_type name: (type_identifier) @owner)]
+        name: (identifier) @name)
+      (qualified_identifier
+        scope: [(namespace_identifier) @owner (template_type name: (type_identifier) @owner)]
+        name: (qualified_identifier
+          scope: [(namespace_identifier) @owner (template_type name: (type_identifier) @owner)]
+          name: (identifier) @name))
+      (qualified_identifier
+        scope: [(namespace_identifier) @owner (template_type name: (type_identifier) @owner)]
+        name: (qualified_identifier
+          scope: [(namespace_identifier) @owner (template_type name: (type_identifier) @owner)]
+          name: (qualified_identifier
+            scope: [(namespace_identifier) @owner (template_type name: (type_identifier) @owner)]
+            name: (identifier) @name)))
+    ])))
     (reference_declarator (function_declarator declarator: [
       (qualified_identifier
         scope: [(namespace_identifier) @owner (template_type name: (type_identifier) @owner)]
         name: [(identifier) (operator_name)] @name)
       (qualified_identifier
-        scope: (namespace_identifier)
+        scope: [(namespace_identifier) @owner (template_type name: (type_identifier) @owner)]
         name: (qualified_identifier
           scope: [(namespace_identifier) @owner (template_type name: (type_identifier) @owner)]
           name: [(identifier) (operator_name)] @name))
       (qualified_identifier
-        scope: (template_type name: (type_identifier) @owner)
+        scope: [(namespace_identifier) @owner (template_type name: (type_identifier) @owner)]
         name: (qualified_identifier
           scope: [(namespace_identifier) @owner (template_type name: (type_identifier) @owner)]
-          name: [(identifier) (operator_name)] @name))
+          name: (qualified_identifier
+            scope: [(namespace_identifier) @owner (template_type name: (type_identifier) @owner)]
+            name: [(identifier) (operator_name)] @name)))
     ]))
   ] body: (_)) @definition.method
 
@@ -144,20 +164,56 @@
   declarator: (type_identifier) @name) @definition.enum
   (#set! outside "compound_statement"))
 
-; `struct A::Impl { … }` defines the nested type its class declared.
+; `struct A::Impl { … }` defines the nested type its class declared; its scopes join as a method's do.
 ([
   (class_specifier
-    name: (qualified_identifier
-      scope: [(namespace_identifier) @owner (template_type name: (type_identifier) @owner)]
-      name: (type_identifier) @name)
+    name: [
+      (qualified_identifier
+        scope: [(namespace_identifier) @owner (template_type name: (type_identifier) @owner)]
+        name: (type_identifier) @name)
+      (qualified_identifier
+        scope: [(namespace_identifier) @owner (template_type name: (type_identifier) @owner)]
+        name: (qualified_identifier
+          scope: [(namespace_identifier) @owner (template_type name: (type_identifier) @owner)]
+          name: (type_identifier) @name))
+      (qualified_identifier
+        scope: [(namespace_identifier) @owner (template_type name: (type_identifier) @owner)]
+        name: (qualified_identifier
+          scope: [(namespace_identifier) @owner (template_type name: (type_identifier) @owner)]
+          name: (qualified_identifier
+            scope: [(namespace_identifier) @owner (template_type name: (type_identifier) @owner)]
+            name: (type_identifier) @name)))
+    ]
     body: (_)) @definition.class
   (struct_specifier
-    name: (qualified_identifier
-      scope: [(namespace_identifier) @owner (template_type name: (type_identifier) @owner)]
-      name: (type_identifier) @name)
+    name: [
+      (qualified_identifier
+        scope: [(namespace_identifier) @owner (template_type name: (type_identifier) @owner)]
+        name: (type_identifier) @name)
+      (qualified_identifier
+        scope: [(namespace_identifier) @owner (template_type name: (type_identifier) @owner)]
+        name: (qualified_identifier
+          scope: [(namespace_identifier) @owner (template_type name: (type_identifier) @owner)]
+          name: (type_identifier) @name))
+      (qualified_identifier
+        scope: [(namespace_identifier) @owner (template_type name: (type_identifier) @owner)]
+        name: (qualified_identifier
+          scope: [(namespace_identifier) @owner (template_type name: (type_identifier) @owner)]
+          name: (qualified_identifier
+            scope: [(namespace_identifier) @owner (template_type name: (type_identifier) @owner)]
+            name: (type_identifier) @name)))
+    ]
     body: (_)) @definition.struct
 ]
   (#set! outside "compound_statement"))
+
+; A namespace is open: every file reopens it, and a call inside it names its functions bare. It
+; qualifies nothing, and a qualifier naming it names the family's free names.
+([
+  (namespace_definition name: (namespace_identifier) @name)
+  (namespace_definition name: (nested_namespace_specifier (namespace_identifier) @name))
+] @scope.namespace
+  (#set! receiver "scope"))
 
 ; A class or struct with a body, nested in another or not. One written in a variable's declaration is
 ; the variable's shape, and one a function body declares is a local.

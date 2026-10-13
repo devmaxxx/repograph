@@ -168,6 +168,12 @@ pub(crate) struct Meta {
     /// a reference with no receiver: the owner is implicit, as C++'s `this` is, so a bare name in a
     /// method names the owner's member first.
     pub owner_receiver: bool,
+    /// On a reference: its `@receiver` captures spell a static qualifier, outermost first, as C++'s
+    /// `A::B::f()` does: a leading run of open namespaces qualifies nothing, and what remains names a
+    /// type whose member the reference reaches, or nothing. On a `@scope.namespace`: the namespace is
+    /// open, one such a qualifier may name, and it scopes none of the file's names, so the index holds
+    /// them bare and an out-of-line definition's qualifier naming it is dropped.
+    pub scoped: bool,
     /// On a definition: it is the file's, whatever container it is written in, as a C++ friend
     /// defined in its class is a function of the namespace around the class.
     pub detached: bool,
@@ -220,6 +226,7 @@ pub fn compile(grammar: &Language, sources: &[&str]) -> Result<Compiled, String>
                 "adopt" => meta.adopt = true,
                 "variant" => meta.variant = true,
                 "receiver" if value == "owner" => meta.owner_receiver = true,
+                "receiver" if value == "scope" => meta.scoped = true,
                 "parent" if value == "none" => meta.detached = true,
                 "depth" => match value.parse() {
                     Ok(n) => meta.depth = Some(n),
