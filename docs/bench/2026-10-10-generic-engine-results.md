@@ -1559,3 +1559,91 @@ New: `bin/repograph-php`, built at the tree committed on `feat/engine-php`. Pare
   - `cargo test --all-targets`: 1,461 passed, 0 failed;
   - `cargo clippy --all-targets -- -D warnings`: clean;
   - `cargo tree --duplicates --depth 0`: no tree-sitter crate.
+
+## Step 21 · Scala
+
+New: `bin/repograph-scala`, built at the tree committed on `feat/engine-scala`. Parent:
+`bin/repograph-merge19`. Scala is read only when a config or `REPOGRAPH_CODE_GLOBS` names
+`**/*.scala` or `**/*.sc`.
+
+- **Corpus:** `com-lihaoyi/os-lib` at `0.11.8`, `b14ae532fbbf082b2c22d9f58f7f475be3e3fe79`, 59
+  `.scala`, MIT. It is read as data only: no script of it was run. `package os` spans `os/src`,
+  `os/src-jvm`, `os/src-2`, `os/src-3`, `os/watch` and the test trees; `src-2` and `src-3` hold one
+  file each of the same names, one per Scala version.
+- **Parse census:** 0 of 59 files hold an ERROR or a MISSING node.
+- **Cases:** 9 in `src/code/cases/scala.rs`: types with their members, a companion sharing its
+  class's id, an auxiliary constructor and a block's `def` declaring nothing, export by modifier;
+  a package object's names as its package's; `extends` with every `with`, a base's type arguments
+  as references; a nested `package a; package b` clause reaching both packages across directories;
+  an import's wildcard, name, selector and a path under the own package, with renamed and hidden
+  selectors writing nothing; a name two variant files declare reaching both; citations; the
+  extensions, `.sbt` refused; a definition whose indented body is followed by a blank line ending
+  on its own last line.
+- **What Scala writes** (`--no-dense`, the defaults plus `**/*.scala **/*.sc`): 810 nodes (59 files,
+  751 symbols: 47 classes, 130 objects, 20 traits, 456 methods, 76 properties, 8 types, 6 functions,
+  8 values), Declares 751 (723 exported), Imports 145, Calls 538, References 390 (all `type`),
+  Extends 48. No edge dangles. The pending count rises by 2, two `UTF-8` citations in one comment.
+- **Regressions** (`log/langdiff-step21-oslib.txt`), os-lib without against with the Scala globs:
+  scala R1 810 (every new node), R4 896 (Declares and Imports), Calls +538, References +390, Extends
+  +48, R2 0, R3 0, R5 0, R6 0, R7 0, R9 0. R8 is 1, the pending count above.
+- **Census.** A text census over comment- and string-blanked source, independent of the grammar
+  (`s21/census.py` in the scratchpad, `log/census-step21-oslib.txt`), resolving a name by Scala's
+  rule (a named import, a wildcard import's package, the own packages innermost first, the root)
+  over a package index it builds itself, every miss and extra hand-read:
+  - Declarations: 751 of 751 with a symbol, none outside the census, no export disagreement.
+  - Imports: 145 of 145, none extra. 177 imports name packages outside the repository (`java.`,
+    `scala.`, `utest.`, `geny.`) and 3 selectors are renamed or hidden; they write nothing.
+  - Calls: 537 of 538 matched, 1 extra, the same edge from another source.
+    `require(… Path.driveRelative(…))` at `os/src/Path.scala:574` is a statement of the class body;
+    the store gives it to `Path`, which is right, and the census gave it to `Path.toSource`, the
+    definition on the line above. Read by hand, 538 of 538.
+  - References: 374 of 374, 16 extra, each right by hand: 6 `@experimental` annotations on the
+    definition they mark, 6 typed case patterns (`case p: RelPath` in `symlink.apply`, `Path.apply`,
+    `RelPath.equals`, `SubPath.equals`), 3 `PathError.*` types in `intercept[…]` and in patterns, and `case path:
+    os.Path` in `AccessChecker.onRead`. The census reads neither annotations nor patterns.
+  - Extends: 48 of 48, none extra.
+  - Sites no rule claims: 826 calls and 137 type uses through a local value, 1,802 calls and 1,534
+    type uses of names outside the repository, 84 bases outside it (`TestSuite`,
+    `Function1`, `StaticAnnotation`), 2 extends of a local type, 11 `this.a.b` paths, and 6,465
+    value reads with no call (`os.pwd`, `wd / "x"`).
+- **P and R per kind** (§3.3; P from the hand read and the census, R from the census):
+
+  | kind | edges | sample | P | R |
+  |---|---|---|---|---|
+  | Declares | 751 | 50/50 | 1.000 | 1.000 (751 of 751) |
+  | Imports | 145 | 50/50 | 1.000 | 1.000 (145 of 145) |
+  | Calls | 538 | 50/50 | 1.000 | 0.9981 (537 of 538; 538 of 538 read by hand) |
+  | References | 390 | 50/50 | 1.000 | 1.000 (374 of 374) |
+  | Extends | 48 | 48/48 | 1.000 | 1.000 (48 of 48) |
+
+- **Hand read** (seed 21, `log/samples-step21-oslib.txt`):
+  - Symbols: 50 of 50 right in id, line and end; none of the 751 ends on a blank line.
+  - Four seeded files, counted by hand against the source: `os/src/Internals.scala` 4/4 symbols
+    (two `transfer0` and two `transfer` overloads, one id each) and 0/0 imports,
+    `os/test/src/OsTestMain.scala` 2/2 and 0/0, `os/test/src/SegmentsFromStringTests.scala` 2/2 and
+    1/1, `os/test/src-jvm/ExampleTests.scala` 2/2 and 1/1. A fifth, `os/src/StatOps.scala`, 22/22
+    against the census.
+  - Calls 50 of 50, References 50 of 50, Extends 48 of 48, Imports 50 of 50. Among the imports,
+    `import acyclic.skipped` reaches `os/src-3/acyclic.scala` through the own package `os`, and
+    `import os._` reaches every file of `os`.
+- **Byte-identity** (`log/ident-step21.txt`), `merge19` against `scala` on copies:
+  - Kit corpus and scratchpad corpus, with the default globs and with `**/*.scala **/*.sc`:
+    `graph.json` and `headers.json` identical in all four pairs (`dff8b36a53bb0548`), and the
+    scratchpad's graph equals `store-14`'s. Neither corpus holds a `.scala` file.
+  - luarocks with `**/*.lua **/*.c **/*.h` (`58bfff811cf5cb80`), gin with `**/*.go`
+    (`119169be4bd8aa62`), hiredis with `**/*.c **/*.h` (`ee379ffbd70010d6`), leveldb with
+    `**/*.cc **/*.h` (`af2c68ffce6bff3e`), Slim with `**/*.php` (`511cb2812dd60ab8`) and rack with
+    `**/*.rb **/*.rbw **/*.gemspec **/*.rake` (`a4985948aaa4f7d7`): identical; luarocks and rack
+    again with `**/*.scala` added.
+- **Fixture and bench:** not run. Scala is not in the fixture's globs.
+- **Size and build time:** not measured, per the wave's rule; the session measures them at merge.
+- **Licence reading:** `tree-sitter-scala 0.26.2 MIT ok`, ABI 15. Its `LICENSE`: "The MIT License
+  (MIT) Copyright (c) 2018 Max Brunsfeld and GitHub". The queries are written to the
+  engine's contract, not adapted from the crate's `tags.scm`, so they carry no notice.
+- **Edited tests:** `lang.rs`'s `all_lists_every_language_once` gains Scala's slot. No assertion
+  changed.
+- **Platforms:** not verified. The branch was not pushed, so `ci` has not run on it.
+- **Gate:**
+  - `cargo test --all-targets`: 1,499 passed, 0 failed;
+  - `cargo clippy --all-targets -- -D warnings`: clean;
+  - `cargo tree --duplicates --depth 0`: no tree-sitter crate.
