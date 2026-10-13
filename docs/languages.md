@@ -8,7 +8,7 @@ grammars says so instead of producing a graph silently thinner than the tree.
 
 Every language is read the same way: two tree-sitter queries and its row of data, with hooks for
 what the data cannot say ([graph-model.md](graph-model.md) says how). Every language in the table
-below, and every one after it but Razor and OCaml, is read by default. The first `build`, `update` or refreshing
+below, and every one after it but Razor, is read by default. The first `build`, `update` or refreshing
 `ask` after upgrading from 0.5.x re-reads the whole tree once, because this release reads files by
 a new grammar generation; the next reads only what changed. `REPOGRAPH_CODE_GLOBS` withdraws a
 language for one run without writing config into the tree. A `repograph.toml` that names `code_globs`
@@ -204,8 +204,7 @@ Elixir (`.ex` and `.exs`) is read by default.
   no Imports edge.
 
 OCaml (`.ml`, read by the implementation grammar, and `.mli`, read by the interface grammar) is read
-only where `code_globs` or `REPOGRAPH_CODE_GLOBS` names `**/*.ml` and `**/*.mli`: its grammar adds
-9 MB to the binary, more than any other language's, for files few repositories hold.
+by default.
 
 - **Read:** top-level `let` bindings (each of a `let rec … and …`), `external`, `val` in an
   interface, exceptions, classes and methods; types, with their constructors and record fields as
