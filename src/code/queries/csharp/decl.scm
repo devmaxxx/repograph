@@ -6,7 +6,8 @@
 ;
 ; What crosses a file: `public` and `internal` always, `protected internal` with them; a top-level type
 ; with no word, being `internal`; an interface's members unless `private` or `protected`, and its
-; types unless `private`. A member or a nested type with no word is `private`. Patterns are ordered
+; types unless `private`. An interface's `protected internal` member reads as `protected`: a pattern
+; telling the two apart cost the compile 27 to 60 ms, and no input writes one. A member or a nested type with no word is `private`. Patterns are ordered
 ; so the first to match a node decides.
 ;
 ; Each pattern that reads a default from the body around a declaration costs the compile 2 to 15 ms,
