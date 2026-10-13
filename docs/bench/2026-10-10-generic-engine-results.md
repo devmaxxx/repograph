@@ -1474,6 +1474,59 @@ built at `77b7d8f`. Ruby is read only when a config or `REPOGRAPH_CODE_GLOBS` na
   - `cargo test --all-targets`: 1,460 passed, 0 failed. A first run under load from parallel builds
     failed five `tests/serve.rs` tests on timing; `serve` alone and a second full run passed;
 
+### Step 19 · review fix `6943fdc`
+
+New: `bin/repograph-ruby-fix`, built at `6943fdc`'s source. Parent: `bin/repograph-ruby-rev`, built at
+`67e2c99`. The fix keeps `require` and `autoload` to `lib/` and `require_relative` to the requirer's
+directory through a new `#set! import` key, takes a path already ending in `.rb` as written, and
+stops a value's singleton class declaring its methods after a bare `private`. Plan, step 19 as
+built, has each finding.
+
+- **Repro** (`s19r/tiny` in the scratchpad, `**/*.rb`), read by hand against the source:
+  - `lib/app/server.rb` with `require "logger"`, `require "app/router.rb"`,
+    `require_relative "view.rb"`, `require_relative "app"` and `autoload :Logger, "logger"`, beside
+    `lib/app/logger.rb`, `router.rb`, `view.rb` and `lib/app.rb`. `ruby-rev`: Imports to
+    `lib/app/logger.rb` and `lib/app.rb`, both wrong. `ruby-fix`: Imports to `lib/app/router.rb` and
+    `lib/app/view.rb`, both right.
+  - `class << obj; private; def hid; def pub; end` at the top level, `class << other; private def own`
+    and `class << self; private; def boot; public; def open; private def secret` in `class A`.
+    `ruby-rev` declares `hid`, `pub` and `A.own`, all wrong. `ruby-fix` declares `A.boot` hidden,
+    `A.open` exported and `A.secret` hidden, and none of the three.
+- **rack, step 19's criterion re-run** (the defaults plus the four Ruby globs, `s19/census.py` and
+  `s19/icensus.py`): `graph.json` is byte-identical between the two binaries, so no edge changed
+  and there is nothing to hand-read. A text scan of rack finds no `require` or `autoload` of a
+  sibling's name that `lib/` lacks, one `require './app.rb'`, in a comment of `builder.rb`, and no
+  `private` or `protected` in a `class << value` body.
+
+  | kind | edges | P before → after | R before → after |
+  |---|---|---|---|
+  | Imports | 291 | 1.000 → 1.000 | 1.000 → 1.000 (291 of 291, under Ruby's rule and under step 19's) |
+  | Calls | 455 | 1.000 → 1.000 | 0.9913 → 0.9913 (454 of 458) |
+  | Declares, modules and classes | 159 | 1.000 → 1.000 | 1.000 → 1.000 (159 of 159) |
+  | Declares, methods | 726 | 0.9986 → 0.9986 | 0.9986 → 0.9986 (725 of 726) |
+  | Declares, constants | 171 | 1.000 → 1.000 | 1.000 → 1.000 (171 of 171) |
+
+  Export disagreements 0 in both. The misses are step 19's: the three `stat`/`query_parser` calls
+  beside a local and `def YAML.unsafe_load`.
+- **Byte-identity**, `ruby-rev` against `ruby-fix`, every build on a copy (`graph.json`, SHA-256
+  prefix):
+  - leveldb with `**/*.cc **/*.h`: `4daa7236ae432db6`;
+  - hiredis with `**/*.c **/*.h`: `c598315d5dbcc0d9`;
+  - gin with `**/*.go`: `03a6c87a79dd5bfe`;
+  - luarocks with `**/*.lua **/*.c **/*.h`: `5d118eab6ba8aeb6`;
+  - Slim with `**/*.php`: `06bfcd802019ae73`;
+  - rack with the defaults plus the Ruby globs: `cf4ce541c06dd796`;
+  - scratchpad corpus with its `repograph.toml`: `566f40d972ba1d21`, equal to `store-14`'s, and
+    `headers.json` `7c73aee1e9db81f6` in both.
+- **Cases:** `src/code/cases/ruby.rs` 13 tests (two added): `require` searching `lib/` alone, a
+  written `.rb` taken as written and `require_relative` never falling back to `lib/`; a value's
+  singleton class declaring nothing with `private` or `private def`, and `class << self` hiding,
+  showing and hiding again. One assertion rewritten: `lib/rack/builder.rb`'s `require "rack"` now
+  names `lib/rack.rb`, not the `lib/rack/rack.rb` beside it, which pinned the finding. `queries.rs`
+  gains a contract test for the key, and `tests/engine.rs` the rooted, relative and suffix rules.
+- **Gate:** `cargo test --all-targets` 1,494 passed, 0 failed; `cargo clippy --all-targets -- -D
+  warnings` clean. No release build; fixture, bench and platforms not run.
+
 ## Step 20 · PHP
 
 New: `bin/repograph-php`, built at the tree committed on `feat/engine-php`. Parent:
