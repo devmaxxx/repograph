@@ -98,8 +98,9 @@ impl Default for Config {
             // extensions cost a glob each and no second parser. They earn their place in the
             // corpus by holding what no `.ts` file does: the hooks, the lint config and the CI
             // wrappers a repository wires itself together with.
-            // Razor is the one language 0.6.0 reads and leaves out: its readings failed `impact`
-            // and `trace`, so it is read only where a config or `REPOGRAPH_CODE_GLOBS` names it.
+            // Razor and OCaml are the languages 0.6.0 reads and leaves out, read only where a config
+            // or `REPOGRAPH_CODE_GLOBS` names them: Razor's readings failed `impact` and `trace`, and
+            // OCaml's grammar is the largest the binary carries for a language few repositories hold.
             code_globs: s(&[
                 "**/*.ts", "**/*.tsx", "**/*.js", "**/*.jsx", "**/*.mjs", "**/*.cjs",
                 "**/*.kt", "**/*.java", "**/*.cs", "**/*.rs", "**/*.py", "**/*.dart", "**/*.swift",
@@ -107,7 +108,7 @@ impl Default for Config {
                 "**/*.sh", "**/*.bash", "**/*.vue", "**/*.lua", "**/*.go", "**/*.c", "**/*.h",
                 "**/*.cc", "**/*.cpp", "**/*.cxx", "**/*.c++", "**/*.ino", "**/*.hh", "**/*.hpp",
                 "**/*.hxx", "**/*.h++", "**/*.php", "**/*.rb", "**/*.rbw", "**/*.gemspec",
-                "**/*.rake", "**/*.ex", "**/*.exs", "**/*.scala", "**/*.sc", "**/*.ml", "**/*.mli",
+                "**/*.rake", "**/*.ex", "**/*.exs", "**/*.scala", "**/*.sc",
             ]),
             text_globs: Vec::new(),
             include: Vec::new(),
@@ -1201,7 +1202,7 @@ mod tests {
     }
 
     #[test]
-    fn every_language_0_6_0_reads_is_globbed_by_default_and_razor_is_not() {
+    fn every_language_0_6_0_reads_is_globbed_by_default_but_razor_and_ocaml() {
         assert_eq!(Config::default().code_globs, [
             "**/*.ts", "**/*.tsx", "**/*.js", "**/*.jsx", "**/*.mjs", "**/*.cjs",
             "**/*.kt", "**/*.java", "**/*.cs", "**/*.rs", "**/*.py", "**/*.dart", "**/*.swift",
@@ -1209,7 +1210,7 @@ mod tests {
             "**/*.sh", "**/*.bash", "**/*.vue", "**/*.lua", "**/*.go", "**/*.c", "**/*.h",
             "**/*.cc", "**/*.cpp", "**/*.cxx", "**/*.c++", "**/*.ino", "**/*.hh", "**/*.hpp",
             "**/*.hxx", "**/*.h++", "**/*.php", "**/*.rb", "**/*.rbw", "**/*.gemspec",
-            "**/*.rake", "**/*.ex", "**/*.exs", "**/*.scala", "**/*.sc", "**/*.ml", "**/*.mli",
+            "**/*.rake", "**/*.ex", "**/*.exs", "**/*.scala", "**/*.sc",
         ]);
     }
 }

@@ -1928,3 +1928,10 @@ same unreleased 0.6.0.
   (12.57 MB) + 3.5 MB = 16.07 MB, is already passed before step 18 (16.32 MB) and reads 18.51 MB
   at step 24.
 - **Gate:** `cargo test --all-targets` 1,526 passed, 0 failed; clippy clean.
+
+## Step 24 · OCaml off by default
+
+Max, 2026-10-13: OCaml stays opt-in, as Razor does. `**/*.ml` and `**/*.mli` leave the default
+`code_globs`; the grammar stays linked, so the binary and the archive keep the sizes above. The
+fixture and the corpus hold no OCaml, so the bench and the identity readings stand.
+`cargo test --all-targets` 1,526 passed, 0 failed; clippy clean.

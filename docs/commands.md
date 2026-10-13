@@ -4,7 +4,7 @@
 
 0.6.0 is the version `main` carries. Its default globs read TypeScript and JavaScript, Kotlin, Java,
 C#, Rust, Python, Dart, Swift, GraphQL, SQL, Bicep, HCL, Shell, Vue, Lua, Go, C, C++, PHP, Ruby,
-Scala, Elixir and OCaml; every command below is
+Scala and Elixir; every command below is
 implemented rather than planned:
 `build` (a full re-read that replaces the stored graph only when it saves, so one interrupted
 leaves the previous store answering) and `update` (incremental; a no-op `update` is a fixed point), `families`, `ask`, `explain`,
