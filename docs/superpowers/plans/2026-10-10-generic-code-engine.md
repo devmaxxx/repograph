@@ -1551,6 +1551,7 @@ This step alone closes the three reviewer defects. About 1,200 lines of Rust are
   - `protected internal` on an interface member still reads as `protected`. The query's header now says why (`241b838`): a pattern telling the two apart cost the compile 27 to 60 ms, and no input writes one.
   - A member of a C# `partial` type attaches to the part whose body holds it (`f67e366`). Before, two same-named types in different namespaces shared one id, and every member went to the first.
   - The C# run outside the inputs is still not done. No C# outside a Bonliva repository is on this machine.
+- **Still open after step 14:** `#else` and `#elif`, `protected internal` on an interface member, and the run outside the inputs. Step 14 changed none of them.
 
 **Step 13 · TypeScript, TSX, then Vue.** L. Query ~220, Rust −700, hook ~600 kept.
 
@@ -1648,6 +1649,10 @@ This step alone closes the three reviewer defects. About 1,200 lines of Rust are
   - Fixture (vs `fixture-13`, step 13's own store rebuilt for this reading): `graph.json` and `headers.json` are byte-identical. No fixture class member is decorated on a line of its own.
   - Hand read, all 123 accepted. In 121 the old line was a decorator's inner line (`type: Number,`, `description: '…'`, `default: 1,`) and the new one is the field (`notDistributed!: number`, `limit?: number = 20`). In 2, Vue's `@Prop() mode: string` read as empty and now reads `mode: string`. None of the new lines is a comment, a decorator or empty. The 123 sit in 13 files, nearly all NestJS DTOs.
   - Bench on `082861f`, from a store built by `repograph-step13b`: `--no-dense` `keyword 39/40 paraphrase 7/30 code 12/12 p90 238 tok`; dense `keyword 40/40 paraphrase 9/30 code 12/12 p90 237 tok` under e5-small, with 50 rows re-embedded after the reset. Both transcripts match step 13's case for case, so zero flips. Both rows are in `bench/history/runs.jsonl`.
+- **Still open after step 14:**
+  - A literal behind `as unknown as` or `({…}) satisfies T` names no member, above.
+  - A call through a renamed export targets a node nobody writes. With `function a() {}` and `export { a as b }` in `lib.ts`, `import { b } from './lib'; b()` calls `sym:lib.ts::b`, while the node is `sym:lib.ts::a`. A re-export under a new name, `export { b as c } from './lib'`, does the same one file further. `repograph-step0` writes the same two edges, so the port did not cause this.
+  - A cite in a class's own decorator belongs to the class, while a call or value in it belongs to the file. A case pins the second (`identifiers_in_di_objects_and_arrays_are_arg_edges_within_one_file`). Since step 14 both read one list, `syntax::Decorators`, and differ only in that condition.
 
 **Step 14 · Remove the old paths.** M, net negative. Remove:
 
@@ -1662,6 +1667,32 @@ Then:
 - Run the dense bench and the build time.
 
 ~~Expected net for steps 0–14: about 6,000 lines of Rust leave, about 1,300 lines of queries arrive, and about 3,500 lines of hooks remain. Most of those hooks are in JVM, .NET and TypeScript.~~ Superseded on 2026-10-12 by the re-estimate above step 10: exceptions held 1,949 lines after step 9 alone, and steps 10–13 are projected to keep 3,370–4,350 more.
+
+**Step 14 as built.** Where the code differs from the text above, the code is the record. The work is in `198dab5`, `f9479b6`, `0617036`, `5bdaf64` and `0fab918`.
+
+- **Removed** (`0617036`, 62 lines out and 10 in):
+  - The front's switch, so `engine::extract` is the only reader. Gone with it are `REPOGRAPH_LEGACY`, the spec's `legacy` field and the `Legacy` type.
+  - Every `dead_code` allowance that covered code whose callers were still to land: the engine, the spec table, blanking, `Lang`, `Family` and `Index::under`. The build and clippy are clean without them, so they hid no dead code.
+  - The spec row Vue and Razor start from is renamed from `UNPORTED` to `HOOKS_ONLY`.
+  - The plan's other items had gone with their ports. No per-language declaration walker is left, and `prose::declare`, `prose::cite` and `idrefs` are gone. `Reader` in `namespace_scope/walk.rs` is the C# reference pass's own struct, not the old trait.
+- **`walk::GRAMMAR` 5 → 6** (`5bdaf64`). Accepted classes read non-zero, as the readings against the base stores below show, so decision 1 calls for the bump. 0.6.0 is not tagged, so 5 shipped in no release. If steps 15–24 ship in the same release, step 24 must not bump again.
+- **Docs** (`0fab918`). `docs/languages.md` and `docs/graph-model.md` say every language is read by two queries, its spec row and hooks, and cite cases at `src/code/cases/<language>.rs`. The 0.6.0 spec's "hand walk" paragraph now points here.
+- **Read-ahead ends with the update** (`198dab5`). The engine's `DECLARED` and the index's `COLLECTED` held every name-indexed file the resolver read ahead, and only the files an update extracted took their entries back. Under `watch` or `serve`, the rest stayed for the life of the process. An update now holds a `code::Pass` whose drop clears both maps, and `Watcher::open` clears them after building its resolver.
+  - `an_update_keeps_no_read_ahead_of_a_file_it_did_not_extract` changes one of two Java files and checks that neither file has an entry left. Without the pass it fails on the unchanged file.
+  - The maps are process-wide, so one test's update can clear another's read-ahead. Fingerprints already guarded what is read, so the cost is a re-read, never a wrong graph.
+- **Decorators read once per file** (`f9479b6`). Engine cites and TypeScript call sites each found their decorator by a cursor descent from the root. `syntax::Decorators::of` now lists a file's outermost decorators in one walk, and a site looks itself up by binary search. A grammar with no `decorator` kind skips the walk.
+  - The two rules stay two. `said_at` takes any decorator, and `member_at` only one in a class body, which a case pins.
+  - Kit, scratchpad corpus and fixture: byte-identical to `082861f`'s stores in every language (`log/langdiff-step14a-*.txt`).
+  - Corpus build, median of five interleaved runs (`log/buildtime-step14a.txt`): `repograph-step13b` 1.390 s wall and 1.852 s CPU; with both fixes, 1.374 s and 1.816 s. That is 16 ms wall and 36 ms CPU less, within the noise.
+- **Regressions:** from `langdiff.py` over every language on three inputs, against `082861f`'s stores. All three are byte-identical, so R1–R9 = 0 (`log/langdiff-step14-{kit,scratch,fixture}.txt`).
+  - Against the base stores, only the accepted diffs remain (`-cumulative.txt`). On the scratchpad corpus and the kit (`store-base`) they are swift R3 1, sql body-above 11, py R3 12, rs R3 3 and body-above 7, cs R3 1 and body-above 1, tsx R2 2, ts R3 121 and vue R3 2. R7–R9 are 0.
+  - On the fixture (`fixture-base`) they are step 6's SQL R1 3, R4 3, body-above 15 and R7 1, and step 13's ts R2 10 and References ±7.
+- **Bench** on the fixture at `0fab918`, from a store built by `repograph-step14`. The reset settles with `repograph-step13b`, since a GRAMMAR 6 binary re-reads the fixture's older store.
+  - `--no-dense`: `keyword 39/40 paraphrase 7/30 code 12/12 p90 238 tok`.
+  - Dense: `keyword 40/40 paraphrase 9/30 code 12/12 p90 237 tok`, under e5-small, with 50 rows re-embedded.
+  - Both match `082861f` case for case, so there are zero flips and the floors hold. Both rows are in `bench/history/runs.jsonl`.
+- **Build time:** median of five, interleaved with step 0 on the corpus, at load 8.8 (`log/buildtime-step14.txt`). Step 0 ran 1.191 s and step 14 1.349 s, which is 1.132× against the 1.20× bound.
+- **Checks:** `cargo test --all-targets` 1,405 passed and 0 failed; clippy `-D warnings` is clean; `cargo tree --duplicates --depth 0` shows no tree-sitter crate.
 
 ### 6.2 New languages, steps 15–24
 

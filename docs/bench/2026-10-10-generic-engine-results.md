@@ -811,3 +811,31 @@ not a decorator, where it read the first line not opening with `@`.
 - **Bench** on `082861f`: `--no-dense` `keyword 39/40 paraphrase 7/30 code 12/12 p90 238 tok`; dense
   `keyword 40/40 paraphrase 9/30 code 12/12 p90 237 tok` (e5-small). Both match step 13 case for
   case: zero flips.
+
+## Step 14 · Remove the old paths
+
+New: `bin/repograph-step14`, built at `0fab918`. The front calls the engine alone, and
+`REPOGRAPH_LEGACY` is gone. `walk::GRAMMAR` moves from 5 to 6. Before that, two fixes from step 13's
+review: an update drops the read-ahead it did not use (`198dab5`), and a file's decorators are read
+in one walk (`f9479b6`, binary `bin/repograph-step14a`).
+
+- **Regressions:** from `langdiff.py` over every language, in `log/langdiff-step14{a,}-{kit,scratch,fixture}.txt`.
+  - `step14a` and `step14` against `082861f`'s stores: byte-identical on the kit, the scratchpad
+    corpus and the fixture.
+  - Against the base stores (`-cumulative.txt`), only the accepted diffs remain. On the scratchpad
+    corpus and the kit: swift R3 1, sql body-above 11, py R3 12, rs R3 3 and body-above 7, cs R3 1
+    and body-above 1, tsx R2 2, ts R3 121 and vue R3 2. On the fixture: SQL R1 3, R4 3, body-above
+    15 and R7 1 (step 6), and ts R2 10 and References ±7 (step 13). R8 and R9 are 0 everywhere.
+- **Read-ahead:** the new test fails without the pass and passes with it.
+- **Decorators:** corpus build, median of five interleaved (`log/buildtime-step14a.txt`):
+  `step13b` 1.390 s wall and 1.852 s CPU, `step14a` 1.374 s and 1.816 s. That is within the noise.
+- **Bench** on `0fab918`: `--no-dense` `keyword 39/40 paraphrase 7/30 code 12/12 p90 238 tok`; dense
+  `keyword 40/40 paraphrase 9/30 code 12/12 p90 237 tok` (e5-small). Both match `082861f` case for
+  case: zero flips. The reset settles with `repograph-step13b`, as a GRAMMAR 6 binary re-reads the
+  fixture's store.
+- **Build time:** median of five, interleaved with step 0, at load 8.8 (`log/buildtime-step14.txt`).
+  Step 0 ran 1.191 s and step 14 1.349 s, which is 1.132×.
+- **Gate:**
+  - `cargo test --all-targets`: 1,405 passed, 0 failed;
+  - `cargo clippy --all-targets -- -D warnings`: clean;
+  - `cargo tree --duplicates --depth 0`: no tree-sitter crate.
