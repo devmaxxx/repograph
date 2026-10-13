@@ -351,7 +351,11 @@ impl Resolver {
             Prefixes::Json(paths) => json_prefixes(&text, paths, dir),
         });
         let found = match read {
-            Some(found) => Arc::new(found),
+            // Longest first, so the importer's lookup takes the most specific prefix that names a file.
+            Some(mut found) => {
+                found.sort_by_key(|(prefix, _): &(String, String)| std::cmp::Reverse(prefix.len()));
+                Arc::new(found)
+            }
             None if dir.is_empty() => Arc::default(),
             None => self.module_of(dir.rsplit_once('/').map_or("", |(up, _)| up), manifest, prefixes),
         };
@@ -496,7 +500,6 @@ impl Resolver {
         None
     }
 }
-
 
 /// The `(prefix, directory)` pairs of the objects at `paths` in a JSON manifest at `dir`, each value
 /// a directory or a list of them under `dir`. A manifest that does not parse maps nothing.

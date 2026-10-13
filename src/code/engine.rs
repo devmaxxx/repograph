@@ -932,10 +932,7 @@ fn under_module(
     // `import_path` unquotes the two quotes Go shares with other languages, not a raw string's
     // backticks; a leading separator is PHP's fully qualified `\App\Kernel`.
     let path = path.trim_matches('`').trim_start_matches(sep);
-    let module = resolver.module_of(dir, manifest, prefixes);
-    let mut pairs: Vec<&(String, String)> = module.iter().collect();
-    pairs.sort_by_key(|(prefix, _)| std::cmp::Reverse(prefix.len()));
-    for (prefix, base) in pairs {
+    for (prefix, base) in resolver.module_of(dir, manifest, prefixes).iter() {
         // A prefix ends at a separator, its own or the path's: `Slim\` holds `Slim\App`, and so does
         // the module `a/b` hold `a/b/c`, but not `a/bc`. Composer's empty prefix holds every class.
         let Some(sub) = path.strip_prefix(prefix.as_str()) else { continue };
@@ -1252,9 +1249,9 @@ fn exposed(facts: &Facts) -> impl Iterator<Item = (&str, &str)> {
 /// importing it calls, so every importer is read again, through the whole chain where the
 /// visibility is transitive. A file whose import named a file that did not exist yet has no
 /// `Imports` edge to follow, and waits for its own next edit. Where a directory is the module or a
-/// namespace, a changed or removed file can add, move or drop a name every file beside it reads, and a call of
-/// the module reads what it declares: the files of that directory and their importers are read
-/// again.
+/// namespace, a changed or removed file can add, move or drop a name every file beside it reads, and
+/// a call of the module reads what it declares: the files of that directory and their importers are
+/// read again.
 pub(crate) fn widen(stale: &[String], removed: &[String], graph: &Graph, all_rels: &[String]) -> Vec<String> {
     // A language with a header widens through `headers_move` instead, which re-reads only when a
     // declaration moved.
