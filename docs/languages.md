@@ -8,7 +8,7 @@ grammars says so instead of producing a graph silently thinner than the tree.
 
 Every language is read the same way: two tree-sitter queries and its row of data, with hooks for
 what the data cannot say ([graph-model.md](graph-model.md) says how). Every language in the table
-below is read by default. The first `build`, `update` or refreshing
+below, and every one after it but Razor, is read by default. The first `build`, `update` or refreshing
 `ask` after upgrading from 0.5.x re-reads the whole tree once, because this release reads files by
 a new grammar generation; the next reads only what changed. `REPOGRAPH_CODE_GLOBS` withdraws a
 language for one run without writing config into the tree. A `repograph.toml` that names `code_globs`
@@ -36,8 +36,7 @@ language until the line is removed or widened.
 Razor (`.razor`, `.cshtml`) is read only where `code_globs` or `REPOGRAPH_CODE_GLOBS` names it: its
 `@code` blocks are read as C#, but its readings did not pass `impact` and `trace` in 0.6.0.
 
-Lua (`.lua`, and a script whose shebang names `lua` or `lua5.x`) is read only where `code_globs` or
-`REPOGRAPH_CODE_GLOBS` names `**/*.lua`; it is not in the default globs yet.
+Lua (`.lua`, and a script whose shebang names `lua` or `lua5.x`) is read by default.
 
 - **Read:** `function f()`, `function M.f()` and `function M:m()` (as `M.f` and `M.m`), and
   `M.f = function`, at the file's level or in a `do` block or `if` branch there. A `local function`
@@ -57,8 +56,7 @@ Lua (`.lua`, and a script whose shebang names `lua` or `lua5.x`) is read only wh
   the repository, or inside a larger expression (`require("a").b`, `require("a") or {}`), whose local
   is then a plain value; `luajit` shebangs.
 
-Go (`.go`) is read only where `code_globs` or `REPOGRAPH_CODE_GLOBS` names `**/*.go`; it is not in
-the default globs yet.
+Go (`.go`) is read by default.
 
 - **Read:** functions; methods as `T.m` on their receiver's type, pointer or generic; structs,
   interfaces and other named types, with a struct's named fields and an interface's methods as
@@ -76,8 +74,7 @@ the default globs yet.
   `go.mod` edit, which widens nothing until the next `build`; a one-argument generic call
   (`f[T](x)`), which the grammar reads as a conversion, so it is a type use and not a call; the type in `node := &node{}`, which reads as the new local.
 
-C (`.c`) is read only where `code_globs` or `REPOGRAPH_CODE_GLOBS` names `**/*.c`; it is not in
-the default globs yet. Its headers are read as C++, below.
+C (`.c`) is read by default. Its headers are read as C++, below.
 
 - **Read:** function definitions, wherever a prototype stands, so the header's prototype and the
   source's definition are one symbol, the definition; function-like `#define`s as functions;
@@ -97,8 +94,7 @@ the default globs yet. Its headers are read as C++, below.
   definition the grammar cannot parse, as when a branch of `#if` repeats a function's header.
 
 C++ (`.cc`, `.cpp`, `.cxx`, `.c++`, `.ino`, and the headers `.h`, `.hh`, `.hpp`, `.hxx`, `.h++`) is read
-only where `code_globs` or `REPOGRAPH_CODE_GLOBS` names its extensions; it is not in the default
-globs yet. `.cu` is not read. A `.h` is read as C++ whether a C or a C++ file includes it: the C++
+by default. `.cu` is not read. A `.h` is read as C++ whether a C or a C++ file includes it: the C++
 grammar parses C's headers no worse, and reads a class. C and C++ link as one build.
 
 - **Read:** everything C reads; classes, structs and unions as `T.member`, with their methods,
@@ -119,9 +115,7 @@ grammar parses C's headers no worse, and reads a class. C and C++ link as one bu
   function a test macro defines (`TEST(…) { … }` is a function named `TEST`); a class a function
   body declares.
 
-Ruby (`.rb`, `.rbw`, `.gemspec` and `.rake`) is read only where `code_globs` or
-`REPOGRAPH_CODE_GLOBS` names them; it stays opt-in until step 24 of the engine plan puts it in the
-default globs.
+Ruby (`.rb`, `.rbw`, `.gemspec` and `.rake`) is read by default.
 
 - **Read:** modules and classes, with modules joining what they hold with `/` and classes with `.`,
   so `module Rack; class Request; module Helpers` holds `Rack/Request.Helpers/host`; `class A::B`
@@ -146,8 +140,7 @@ default globs.
   of the same name shadows (`stat = stat(path)`); a nested class's base when it is the class around
   it; gems and the standard library.
 
-PHP (`.php`) is read only where `code_globs` or `REPOGRAPH_CODE_GLOBS` names `**/*.php`; it is not in
-the default globs yet.
+PHP (`.php`) is read by default.
 
 - **Read:** classes, interfaces, traits and enums, with their methods, properties (a constructor's
   promoted parameters among them), constants and enum cases as `Class.member`; functions. A member
@@ -165,8 +158,7 @@ the default globs yet.
   and `use const`; `require` and `include`; classes of other packages under `vendor/`; a
   `composer.json` edit, which widens nothing until the next `build`.
 
-Scala (`.scala`, and `.sc` scripts) is read only where `code_globs` or `REPOGRAPH_CODE_GLOBS` names
-them; it stays opt-in until step 24 of the engine plan puts it in the default globs. An sbt build
+Scala (`.scala`, and `.sc` scripts) is read by default. An sbt build
 definition (`.sbt`) is never read.
 
 - **Read:** classes, traits, objects and enums, with their `def`s as methods, `val`s and `var`s as
@@ -191,8 +183,7 @@ definition (`.sbt`) is never read.
   function body, a block, a `val`'s initialiser or an anonymous class; libraries outside the
   repository.
 
-Elixir (`.ex` and `.exs`) is read only where `code_globs` or `REPOGRAPH_CODE_GLOBS` names them; it
-stays opt-in until step 24 of the engine plan puts it in the default globs.
+Elixir (`.ex` and `.exs`) is read by default.
 
 - **Read:** `defmodule`, `defprotocol` and `defimpl`, under Elixir's own dotted names, a nested
   module joining its parent's with `.`; `def`, `defmacro`, `defguard` and `defdelegate`, with
@@ -213,8 +204,7 @@ stays opt-in until step 24 of the engine plan puts it in the default globs.
   no Imports edge.
 
 OCaml (`.ml`, read by the implementation grammar, and `.mli`, read by the interface grammar) is read
-only where `code_globs` or `REPOGRAPH_CODE_GLOBS` names `**/*.ml` and `**/*.mli`; it stays opt-in
-until step 24 of the engine plan puts it in the default globs.
+by default.
 
 - **Read:** top-level `let` bindings (each of a `let rec … and …`), `external`, `val` in an
   interface, exceptions, classes and methods; types, with their constructors and record fields as

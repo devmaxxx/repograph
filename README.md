@@ -55,7 +55,7 @@ repograph explain FR-PAY-22                # one node and everything attached to
 | Ask | `ask`, `explain`, `impact`, `trace`, `changes`, `verify`, `families`, all with `--json` ([commands](docs/commands.md)) |
 | Resident process | `serve` answers a fused question in 66 ms instead of 326 ms ([serve](docs/serve.md)) |
 | Agents | `repograph mcp`, `install-agent`, `prime` ([MCP](docs/mcp.md)) |
-| Languages | TypeScript and JavaScript, Kotlin, Java, C#, Rust, Python, Dart, Swift, GraphQL, SQL, Bicep, HCL, Shell, Vue ([languages](docs/languages.md)) |
+| Languages | TypeScript and JavaScript, Kotlin, Java, C#, Rust, Python, Dart, Swift, GraphQL, SQL, Bicep, HCL, Shell, Vue, Lua, Go, C, C++, PHP, Ruby, Scala, Elixir, OCaml ([languages](docs/languages.md)) |
 | Optional spend | `ask --rerank`, a model picking seeds from a 200-deep pool per question ([rerank](docs/rerank.md)) |
 | Bench | `repograph bench` fails the process when a recall floor is missed ([benchmarks](docs/benchmarks.md)) |
 

@@ -607,10 +607,10 @@ mod tests {
     fn a_file_a_glob_moves_to_another_reader_diffs_as_changed() {
         let d = repo();
         std::fs::write(d.path().join("tool.lua"), "print(1)\n").unwrap();
-        let manifest = Manifest::from_entries(&walk(d.path(), &text_cfg(), &Manifest::default()).unwrap());
-        let mut code = text_cfg();
-        code.code_globs.push("**/*.lua".into());
-        let after = walk(d.path(), &code, &manifest).unwrap();
+        let mut text = text_cfg();
+        text.code_globs.retain(|g| g != "**/*.lua");
+        let manifest = Manifest::from_entries(&walk(d.path(), &text, &Manifest::default()).unwrap());
+        let after = walk(d.path(), &text_cfg(), &manifest).unwrap();
         let changed: Vec<_> = manifest.diff(&after).changed.into_iter().map(|e| (e.rel, e.kind)).collect();
         assert_eq!(changed, [("tool.lua".to_string(), FileKind::Code)]);
     }
