@@ -57,6 +57,9 @@ pub(crate) struct Ref {
     pub source: Option<usize>,
     pub name: String,
     pub receiver: Option<String>,
+    /// The owner, joiner included, whose member a bare name inside a method names first, as C++'s
+    /// implicit `this` does.
+    pub implicit: Option<String>,
     pub edge: EdgeKind,
     pub context: String,
     pub range: Range<usize>,
@@ -230,7 +233,8 @@ struct Declared<'t> {
     pattern: usize,
     role: Declaring,
     names: Vec<Node<'t>>,
-    owner: Option<Node<'t>>,
+    /// Outermost first: `A<T>::B::f` names `A.B`.
+    owners: Vec<Node<'t>>,
     modifiers: Vec<String>,
     doc: Option<Node<'t>>,
 }
@@ -444,11 +448,18 @@ fn refer(spec: &Spec, refs: &'static Compiled, file: &File, facts: &mut Facts) {
 /// reads decides: one bound as the receiver names the owner, and any other names some other value. An
 /// unbound word names the owner only in a method, where a pattern in `owned` says the word is the
 /// implicit receiver, as Lua's `self` in `function M:g()` is. Outside a member, the word names no owner
-/// and stays as written, which nothing declares.
+/// and stays as written, which nothing declares. A pattern in `owned` with no receiver at all makes
+/// the owner implicit: a bare name in a method names the owner's member before anything else.
 fn owner_receivers(facts: &mut Facts, owned: &[usize]) {
     for i in 0..facts.refs.len() {
         let r = &facts.refs[i];
-        let Some(receiver) = &r.receiver else { continue };
+        let Some(receiver) = &r.receiver else {
+            let method = r.source.filter(|s| facts.defs[*s].kind == Kind::Method).map(|s| facts.defs[s].qualified.as_str());
+            if let Some(at) = method.and_then(|q| q.rfind(['.', '/'])).filter(|_| owned.binary_search(&i).is_ok()) {
+                facts.refs[i].implicit = method.map(|q| q[..=at].to_string());
+            }
+            continue;
+        };
         let names_owner = match facts.locals.binding(receiver, r.range.start) {
             Some(b) => b.owner,
             None => owned.binary_search(&i).is_ok() && r.source.is_some_and(|s| facts.defs[s].kind == Kind::Method),
@@ -472,12 +483,14 @@ fn read_declaration<'t>(caps: &[(Role, Node<'t>)], pattern: usize, src: &str, ou
     let of = |want: Role| caps.iter().filter(move |(r, _)| *r == want).map(|(_, n)| *n);
     let mut names: Vec<Node> = of(Role::Name).collect();
     names.sort_by_key(|n| n.start_byte());
+    let mut owners: Vec<Node> = of(Role::Owner).collect();
+    owners.sort_by_key(|n| n.start_byte());
     out.push(Declared {
         node,
         pattern,
         role,
         names,
-        owner: of(Role::Owner).next(),
+        owners,
         modifiers: Vec::new(),
         doc: of(Role::Doc).next(),
     });
@@ -518,6 +531,7 @@ fn read_reference(spec: &Spec, caps: &[(Role, Node)], edge: EdgeKind, site: Node
         // A prefix spells the address a bare name stands for, as it does for a definition.
         name: format!("{}{path}", meta.prefix),
         receiver: caps.iter().find(|(r, _)| *r == Role::Receiver).map(|(_, n)| text(*n, src).to_string()),
+        implicit: None,
         edge,
         context: meta.context.clone(),
         range: site.byte_range(),
@@ -581,10 +595,10 @@ fn qualify(spec: &Spec, decl: &Compiled, file: &File, mut declared: Vec<Declared
             continue;
         }
         let meta = &decl.metas[d.pattern];
-        let parent = stack.last();
-        let base = match d.owner {
-            Some(owner) => Some((text(owner, src).to_string(), '.')),
-            None => parent.map(|p| (p.qualified.clone(), p.join)),
+        let parent = stack.last().filter(|_| !meta.detached);
+        let base = match d.owners.as_slice() {
+            [] => parent.map(|p| (p.qualified.clone(), p.join)),
+            owners => Some((owners.iter().map(|o| text(*o, src)).collect::<Vec<_>>().join("."), '.')),
         };
         let under = |base: &Option<(String, char)>, tail: String| match base {
             Some((b, j)) => format!("{b}{j}{tail}"),
@@ -637,8 +651,8 @@ fn qualify(spec: &Spec, decl: &Compiled, file: &File, mut declared: Vec<Declared
             Label::Qualified => qualified.clone(),
             Label::Spelled(separator) => qualified.replace('/', separator),
             Label::Name => {
-                let container = match (d.owner, parent.and_then(|p| p.def)) {
-                    (None, Some(p)) => Some((facts.defs[p].label.clone(), parent.map_or('.', |p| p.join))),
+                let container = match (d.owners.is_empty(), parent.and_then(|p| p.def)) {
+                    (true, Some(p)) => Some((facts.defs[p].label.clone(), parent.map_or('.', |p| p.join))),
                     _ => base.clone(),
                 };
                 under(&container, fold(text(d.names[d.names.len() - 1], src)))
@@ -927,6 +941,17 @@ fn visible(resolver: &Resolver, spec: &Spec, file: &File, reach: &[(String, Arc<
     reach.iter().filter(|(_, facts)| seen(facts)).map(|(f, _)| f.clone()).collect()
 }
 
+/// The one file holding `member` below the top level, found through its outermost type's files: a
+/// class's members nest under it, and the index names only what a file declares at its top.
+fn nested(resolver: &Resolver, file: &File, member: &str) -> Vec<String> {
+    let Some(index) = resolver.index(file.lang.family()) else { return Vec::new() };
+    let outer = member.split(['.', '/']).next().unwrap_or(member);
+    match index.files(outer).into_iter().filter(|f| index.declares_member(f, member)).collect::<Vec<_>>().as_slice() {
+        [one] => vec![one.to_string()],
+        _ => Vec::new(),
+    }
+}
+
 /// Every reference of a kind no hook owns, resolved by name; one with a receiver only where the spec
 /// reads receivers itself (`Receivers::Imports`).
 pub fn resolve(resolver: &Resolver, spec: &Spec, file: &File, facts: &Facts, ex: &mut Extraction) {
@@ -977,6 +1002,18 @@ pub fn resolve(resolver: &Resolver, spec: &Spec, file: &File, facts: &Facts, ex:
         }
         if facts.locals.shadows(&r.name, r.range.start, None) {
             continue;
+        }
+        // A member found is the name's meaning even when it is the caller itself, so a recursive
+        // method never falls through to a free function of its name.
+        if let Some(member) = r.implicit.as_ref().map(|owner| format!("{owner}{}", r.name)) {
+            let files = Some(declaring(&member)).filter(|f| !f.is_empty()).unwrap_or_else(|| nested(resolver, file, &member));
+            if !files.is_empty() {
+                let from = facts.source_id(rel, r.source);
+                for to in files.iter().map(|f| format!("sym:{f}::{member}")).filter(|to| *to != from) {
+                    ex.edge(&from, &to, r.edge, &r.context, rel);
+                }
+                continue;
+            }
         }
         let targets = declaring(&r.name);
         // Only a type inherits. A clause a scope owner holds is the type the owner stands for, found
@@ -1214,8 +1251,14 @@ pub(crate) fn default_header(lang: Lang, rel: &str, source: &str) -> Header {
 pub(crate) fn declarations(lang: Lang, rel: &str, source: &str) -> Option<Arc<Facts>> {
     let spec = crate::code::spec::spec(lang);
     let decl = queries::decl(lang)?;
-    let tree = lang.parse(source.as_bytes())?;
-    let file = File { lang, rel, text: source, src: source, tree: Some(&tree) };
+    // The view the front reads, so the index holds what extraction declares.
+    let src = match spec.hooks.embed.map(|embed| embed(source)) {
+        Some(crate::code::spec::Embedded::View(view, by)) if by == lang => std::borrow::Cow::Owned(view),
+        Some(_) => return None,
+        None => std::borrow::Cow::Borrowed(source),
+    };
+    let tree = lang.parse(src.as_bytes())?;
+    let file = File { lang, rel, text: source, src: &src, tree: Some(&tree) };
     Some(declared(spec, decl, &file))
 }
 

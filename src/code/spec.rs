@@ -295,7 +295,7 @@ const PROSE: Body = Body { doc: Doc::Adjacent { kinds: &["comment"], between: &[
 mod table {
     use super::*;
     use crate::code::exceptions::{
-        attachments, computed_paths, crate_paths, identifier_case, import_bindings, library_scope, module_paths, module_reach, namespace_scope,
+        attachments, attribute_macros, computed_paths, crate_paths, identifier_case, import_bindings, library_scope, module_paths, module_reach, namespace_scope,
         package_scope, rendered_components, single_file_components, statement_prose,
     };
 
@@ -670,6 +670,8 @@ mod table {
         dotted_dirs: false,
         hooks: NONE,
     };
+    // C's linking and includes; the queries differ, and the file is read past its attribute macros.
+    pub(super) const CPP: Spec = Spec { queries: crate::code::queries::sources::CPP, hooks: attribute_macros::HOOKS, ..C_LANG };
 }
 
 pub(crate) fn spec(lang: Lang) -> &'static Spec {
@@ -693,6 +695,7 @@ pub(crate) fn spec(lang: Lang) -> &'static Spec {
         Lang::Lua => &table::LUA,
         Lang::Go => &table::GO,
         Lang::C => &table::C_LANG,
+        Lang::Cpp => &table::CPP,
     }
 }
 

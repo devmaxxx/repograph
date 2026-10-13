@@ -272,8 +272,10 @@ fn an_id_in_a_comment_or_string_is_cited_by_what_holds_it() {
 fn a_c_source_and_a_header_are_read_by_their_extension() {
     use crate::code::lang::{Family, Lang};
     assert_eq!(Lang::of("src/net.c"), Some(Lang::C));
-    assert_eq!(Lang::of("include/net.h"), Some(Lang::C));
+    // A header is read as C++, whose grammar parses C's headers no worse and reads a class.
+    assert_eq!(Lang::of("include/net.h"), Some(Lang::Cpp));
     assert_eq!(Lang::C.family(), Family::C);
+    assert_eq!(Lang::Cpp.family(), Family::C);
 }
 
 #[test]

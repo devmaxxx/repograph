@@ -164,8 +164,13 @@ pub(crate) struct Meta {
     pub depth: Option<u32>,
     /// On a local definition: the name it binds is the receiver of the definition it is bound in,
     /// as a Go method's receiver is. On a reference: an unbound receiver stands for the owner of the
-    /// method holding the site, as Lua's implicit `self` inside `function M:g()` stands for `M`.
+    /// method holding the site, as Lua's implicit `self` inside `function M:g()` stands for `M`. On
+    /// a reference with no receiver: the owner is implicit, as C++'s `this` is, so a bare name in a
+    /// method names the owner's member first.
     pub owner_receiver: bool,
+    /// On a definition: it is the file's, whatever container it is written in, as a C++ friend
+    /// defined in its class is a function of the namespace around the class.
+    pub detached: bool,
 }
 
 pub struct Compiled {
@@ -215,6 +220,7 @@ pub fn compile(grammar: &Language, sources: &[&str]) -> Result<Compiled, String>
                 "adopt" => meta.adopt = true,
                 "variant" => meta.variant = true,
                 "receiver" if value == "owner" => meta.owner_receiver = true,
+                "parent" if value == "none" => meta.detached = true,
                 "depth" => match value.parse() {
                     Ok(n) => meta.depth = Some(n),
                     Err(_) => return Err(format!("pattern at byte {at} sets depth {value:?}, which is no count")),
@@ -262,6 +268,9 @@ pub(crate) mod sources {
 
     pub(crate) const C: Sources =
         Sources { decl: &[include_str!("queries/c/decl.scm")], refs: &[include_str!("queries/c/refs.scm")] };
+
+    pub(crate) const CPP: Sources =
+        Sources { decl: &[include_str!("queries/cpp/decl.scm")], refs: &[include_str!("queries/cpp/refs.scm")] };
 
     pub(crate) const CSHARP: Sources =
         Sources { decl: &[include_str!("queries/csharp/decl.scm")], refs: &[include_str!("queries/csharp/refs.scm")] };

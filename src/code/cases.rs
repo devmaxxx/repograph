@@ -3,6 +3,7 @@
 
 mod bicep;
 mod c;
+mod cpp;
 mod csharp;
 mod dart;
 mod go;
