@@ -283,6 +283,16 @@ pub(crate) fn collected(lang: Lang, rel: &str, source: &str, header: &Header) {
     COLLECTED.lock().unwrap_or_else(|e| e.into_inner()).insert(rel.to_string(), (fingerprint(lang, source), header.clone()));
 }
 
+/// Drops every header the collect pass kept, which only the pass that read it can use.
+pub(crate) fn forget_read_ahead() {
+    COLLECTED.lock().unwrap_or_else(|e| e.into_inner()).clear();
+}
+
+#[cfg(test)]
+pub(crate) fn read_ahead(rel: &str) -> bool {
+    COLLECTED.lock().unwrap_or_else(|e| e.into_inner()).contains_key(rel)
+}
+
 /// Every name-indexed file's header as it was last read, kept in `.repograph/headers.json`.
 ///
 /// Not the graph: a `Declares` edge names what a file declares but not the package or namespace it

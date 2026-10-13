@@ -272,8 +272,9 @@ pub fn facts(spec: &Spec, decl: &'static Compiled, refs: Option<&'static Compile
 
 /// What `decl` read of files not yet extracted, each under the fingerprint of what it read. A
 /// name-indexed family reads every file's declarations for the index before extracting any, and the
-/// extraction reading them again cost the query twice; it takes its file's entry, so a build holds
-/// only the files it has yet to reach.
+/// extraction reading them again cost the query twice. It takes its file's entry, and the pass drops
+/// the rest when it ends: an update reads ahead every file of the family but extracts only those that
+/// moved.
 static DECLARED: Mutex<BTreeMap<String, (u64, Arc<Facts>)>> = Mutex::new(BTreeMap::new());
 
 fn fingerprint(spec: &Spec, file: &File) -> u64 {
@@ -298,6 +299,16 @@ pub(crate) fn declared(spec: &Spec, decl: &'static Compiled, file: &File) -> Arc
     let facts = Arc::new(declare(spec, decl, file));
     DECLARED.lock().unwrap_or_else(|e| e.into_inner()).insert(file.rel.to_string(), (key, facts.clone()));
     facts
+}
+
+/// Drops every file's read-ahead, which only the pass that read it can use.
+pub(crate) fn forget_read_ahead() {
+    DECLARED.lock().unwrap_or_else(|e| e.into_inner()).clear();
+}
+
+#[cfg(test)]
+pub(crate) fn read_ahead(rel: &str) -> bool {
+    DECLARED.lock().unwrap_or_else(|e| e.into_inner()).contains_key(rel)
 }
 
 /// `facts`, taking what a header already read of the file.

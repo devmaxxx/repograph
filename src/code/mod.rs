@@ -32,6 +32,22 @@ impl Extractor for CodeExtractor {
     }
 }
 
+/// Held for one update: what the resolver read ahead of extraction goes when it drops. An update
+/// extracts only the files that moved, and a watcher or `serve` would otherwise keep every other
+/// file's read-ahead for as long as the process runs.
+pub(crate) struct Pass;
+
+impl Drop for Pass {
+    fn drop(&mut self) {
+        forget_read_ahead();
+    }
+}
+
+pub(crate) fn forget_read_ahead() {
+    engine::forget_read_ahead();
+    index::forget_read_ahead();
+}
+
 /// Overloads, a getter/setter pair and repeated decorators name one symbol each, in every language.
 fn finish(mut ex: Extraction) -> Extraction {
     let mut seen = std::collections::HashSet::new();

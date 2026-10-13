@@ -227,6 +227,7 @@ pub(crate) struct UpdateReport {
 /// and the whole tree is read once. Once, because the manifest saved below carries this build's
 /// generation — after which an update is the incremental one again.
 pub(crate) fn apply_diff(repo: &std::path::Path, store: &store::Store, graph: &mut model::Graph, entries: &[walk::Entry], diff: &walk::Diff, manifest: &walk::Manifest, ex: &Extractors) -> anyhow::Result<UpdateReport> {
+    let _pass = code::Pass;
     // A graph read from nothing is read beside no headers either, whatever an older store left.
     let fresh = graph.nodes.is_empty();
     let named: std::collections::BTreeSet<&str> = diff.changed.iter().map(|e| e.rel.as_str()).collect();
@@ -423,6 +424,8 @@ impl<'a> Watcher<'a> {
         let (graph, manifest) = store.load()?;
         let seen = store.stamp("manifest.json");
         let ex = extractors(repo, cfg)?;
+        // No update follows this resolver, and a quiet tree may keep the first one away for hours.
+        code::forget_read_ahead();
         Ok(Watcher { repo, cfg, ex, store, graph, graph_at, manifest, seen, deferred: 0, reloaded: false, resolver_stale: false })
     }
 
@@ -1240,6 +1243,28 @@ mod tests {
         let manifest = store.load().unwrap().1;
         assert_eq!(manifest.stamps.len(), manifest.files.len());
         assert_eq!(std::fs::read(repo.join(".repograph/graph.json")).unwrap(), graph_before);
+    }
+
+    /// The resolver reads every Java file's header and declarations ahead of extraction, and an
+    /// update extracts only the file that moved. What it read of the others must go with the update,
+    /// or a watcher keeps it for as long as it runs. The names are this test's own, since the
+    /// read-ahead is shared by every test running beside it.
+    #[test]
+    fn an_update_keeps_no_read_ahead_of_a_file_it_did_not_extract() {
+        let dir = tempfile::tempdir().unwrap();
+        let (repo, cfg) = (dir.path(), config::Config::default());
+        std::fs::create_dir_all(repo.join("src/probe")).unwrap();
+        let (moved, kept) = ("src/probe/ReadAheadMoved.java", "src/probe/ReadAheadKept.java");
+        std::fs::write(repo.join(moved), "package probe;\npublic class ReadAheadMoved { void a() {} }\n").unwrap();
+        std::fs::write(repo.join(kept), "package probe;\npublic class ReadAheadKept { void b() {} }\n").unwrap();
+        built(repo, &cfg);
+        std::fs::write(repo.join(moved), "package probe;\npublic class ReadAheadMoved { void a() { new ReadAheadKept(); } }\n").unwrap();
+        let r = run_update(repo, &cfg, false).unwrap();
+        assert_eq!(r.changed, 1);
+        for rel in [moved, kept] {
+            assert!(!code::engine::read_ahead(rel), "declarations of {rel} outlived the update");
+            assert!(!code::index::read_ahead(rel), "header of {rel} outlived the update");
+        }
     }
 
     /// A store an earlier release wrote holds only what the grammar of the day could see, and no
