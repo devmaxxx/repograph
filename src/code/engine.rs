@@ -1071,6 +1071,14 @@ pub fn resolve(resolver: &Resolver, spec: &Spec, file: &File, facts: &Facts, ex:
             Ambiguity::All => own.then(|| rel.to_string()).into_iter().chain(others).collect(),
         }
     };
+    // Whether every definition of a qualified name is a method, found once rather than per reference.
+    let mut methods: HashMap<&str, bool> = HashMap::new();
+    if let Visibility::Lexical = spec.visibility {
+        for d in &facts.defs {
+            let only = methods.entry(d.qualified.as_str()).or_insert(true);
+            *only &= d.kind == Kind::Method;
+        }
+    }
     let mut receiving: Option<Receiving> = None;
     for r in &facts.refs {
         if spec.hooks.owns.contains(&r.edge) {
@@ -1107,7 +1115,7 @@ pub fn resolve(resolver: &Resolver, spec: &Spec, file: &File, facts: &Facts, ex:
         // A member found is the name's meaning even when it is the caller itself, so a recursive
         // method never falls through to a free function of its name.
         if let Some(member) = r.implicit.as_ref().map(|owner| format!("{owner}{}", r.name)) {
-            let files = Some(declaring(&member, r.own_file)).filter(|f| !f.is_empty()).unwrap_or_else(|| nested(resolver, file, &member));
+            let files = Some(declaring(&member, r.own_file)).filter(|f| !f.is_empty()).unwrap_or_else(|| if r.own_file { Vec::new() } else { nested(resolver, file, &member) });
             if !files.is_empty() {
                 let from = facts.source_id(rel, r.source);
                 for to in files.iter().map(|f| format!("sym:{f}::{member}")).filter(|to| *to != from) {
@@ -1118,10 +1126,7 @@ pub fn resolve(resolver: &Resolver, spec: &Spec, file: &File, facts: &Facts, ex:
         }
         // The first of the names a lexical reference may mean that something declares is the one
         // it means. A constant never names a method, though Ruby lets a method be spelled `POST`.
-        let method_only = |name: &str| {
-            let mut kinds = facts.defs.iter().filter(|d| d.qualified == name).map(|d| d.kind);
-            kinds.next().is_some_and(|k| k == Kind::Method) && kinds.all(|k| k == Kind::Method)
-        };
+        let method_only = |name: &str| methods.get(name).copied().unwrap_or(false);
         let (name, targets) = match spec.visibility {
             Visibility::Lexical => lexical(facts, r)
                 .into_iter()

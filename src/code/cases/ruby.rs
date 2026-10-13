@@ -292,3 +292,15 @@ fn a_ruby_file_is_read_by_its_extension_and_a_rake_file_too() {
     }
     assert_eq!(Lang::Ruby.family(), Family::Ruby);
 }
+
+#[test]
+fn a_name_in_an_endless_body_a_when_clause_or_a_loop_header_is_read_as_one_in_a_statement_is() {
+    let source = "class A\n  def a = b\n  def self.s = t\n  def c; case 1 when d then 1 end; end\n  def e; for i in f do end; end\n  def g\n    case h\n    in 1 then 1\n    end\n  end\n  def b; end\n  def t; end\n  def d; end\n  def f; end\n  def h; end\nend\n";
+    assert_eq!(lines(&extract(&[("a.rb", source)], "a.rb"), EdgeKind::Calls), [
+        "sym:a.rb::A.a -> sym:a.rb::A.b []",
+        "sym:a.rb::A.c -> sym:a.rb::A.d []",
+        "sym:a.rb::A.e -> sym:a.rb::A.f []",
+        "sym:a.rb::A.g -> sym:a.rb::A.h []",
+        "sym:a.rb::A.s -> sym:a.rb::A.t []",
+    ]);
+}
