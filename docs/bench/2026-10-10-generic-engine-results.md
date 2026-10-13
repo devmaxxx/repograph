@@ -1081,3 +1081,112 @@ binds a generic receiver's type parameters in the method.
   past its scope.
 - **Recorded open** (plan, step 16 as built): a `go.mod` edit widens no importer until the next
   `build`; `go.work` and `replace` are not read; `shadows` ignores binding order.
+
+## Step 17 · C
+
+New: `bin/repograph-step17`, built at the tree committed as `77b7d8f` (measured as `step17w`, the
+same tree). Parent: `bin/repograph-step16r`, built at `5cd204b`; item 0 is `f22c2a1`, which
+changed no store. C is read only when a config or `REPOGRAPH_CODE_GLOBS` names `**/*.c` and `**/*.h`.
+
+- **Corpus:** `redis/hiredis` at `v1.4.1`, `616f2286ba5503f74ae96e720623fa11dbc690af`, 25 `.c` and
+  27 `.h`, BSD-3-Clause. It is read as data only: no script of it was run.
+- **Parse census, held for Max:** 18 of 52 files hold an ERROR or a MISSING node, 234 nodes, far
+  above the 2% bar. By cause:
+  - six headers (`alloc.h`, `async.h`, `hiredis.h`, `hiredis_ssl.h`, `read.h`, `sds.h`) carry one
+    `MISSING #endif` each, where `#ifdef __cplusplus } #endif` closes the `extern "C" {` block;
+    nothing in them drops;
+  - macros the grammar cannot see through: the vendored `ffc.h`'s attribute macros (140 nodes),
+    `EV_P_` in the libev adapter and example, `G_GNUC_UNUSED` in the glib example, `va_arg(ap, T)`
+    in `hiredis.c` and `sds.c`, the test macros in `test.c` and `sds.c`; `ssl.c`'s `} else` split
+    across `#ifdef`; `__unused` in `adapters/macosx.h`'s parameters;
+  - `adapters/libuv.h`, one ERROR over the whole file, from an `#if … #else` that repeats a
+    function's header;
+  - `adapters/qt.h` and `examples/example-qt.h`, which are C++.
+
+  Only the last two causes cost definitions: 13 of the census's 692.
+- **Cases:** 14 in `src/code/cases/c.rs`, and one contract test in `queries.rs` for `outside`. They
+  cover every capture role: functions, function-like macros, bodied and plain typedefs, tagged
+  types, members through every declarator shape, an unnamed nested struct's members as the
+  holder's, enumerators, a prototype declaring nothing, `static` hidden, includes beside the
+  includer and under the roots with `<…>` dropped, the own file first and then the one linked
+  definition, a parameter or local hiding a function, `#ifdef` variants as one symbol, `extern "C"`,
+  a function body's and a variable's inline types declaring nothing, and citations.
+- **What C writes** (`--no-dense`, the defaults plus `**/*.c **/*.h`): 1,140 nodes (52 files, 1,088
+  symbols: 609 functions, 70 macros, 81 types, 328 members), Declares 1,088 (842 exported), Imports
+  78, Calls 1,192. The pending count is 1, a `LICENSE-2` citation in `ffc.h`.
+- **Census recall.** A text census over comment- and string-blanked source, independent of the
+  grammar (`s17/census.py`, `s17/tcensus.py` in the scratchpad), every miss hand-read:
+  - Functions and macros: 692 definitions, 679 with a symbol. The 13 misses are `libuv.h`'s 11 and
+    one function in each C++ header.
+  - Types 81 of 82, members 328 of 332: every miss is in `libuv.h`. No member and no top-level
+    symbol is outside the census.
+  - Calls, under the plan's linker rule (own file, else the one non-`static` definition): 1,197
+    pairs, 1,185 with an edge. The 12 misses sit in `libuv.h` and `qt.h`, whose definitions drop;
+    five of them land on the file instead, the edges no site explains. Of the 1,197 pairs, two are
+    not C calls: `connect(…)` in `qt.h` is `QObject::connect`, and `read()` there is inside Qt's
+    `SLOT(…)`.
+  - Sites the linker rule claims nothing for: 115 calls of a `static` function defined in another
+    file (a header's `static inline`, `sdslen` alone 56, the adapters' `Attach` functions, and
+    `dict.c`'s functions, which `async.c` pulls in with `#include "dict.c"`); 20 of `assert`, which
+    `async.c` and `test.c` both define; 14 of an adapter's `static` function behind
+    `#include <adapters/…>`.
+  - Against a truth that follows quoted includes transitively, recall is 0.884 (1,114 of 1,260
+    pairs), or 0.942 counting `alloc.h`'s `static inline hi_malloc` and `alloc.c`'s `_WIN32`
+    `hi_malloc` as one variant. The other 71 pairs are header statics. This is recorded for step
+    18, not gated (plan, step 17 as built).
+  - Includes: 81 quoted, 78 resolving to a file of the repository, 78 edges, none missing, none
+    extra; the other three name files outside it.
+  - `OwnFirst` instead of `OwnThenUnique`: +28 Calls edges, all `assert` reaching both files'
+    macros, wrong; none gained.
+- **Hand read:**
+  - Symbols (seed 17): 50 of 50 right in id, line and end.
+  - Five seeded files, counted by hand against the source: `examples/example-ae.c` 4/4,
+    `examples/example-libevent-ssl.c` 4/4, `examples/example-libsdevent.c` 5/5,
+    `examples/example-ssl.c` 1/1, `win32.h` 4/4 (two function-like macros, two `__inline`
+    functions). `example-ae.c`'s five Calls are right; its sixth call, `redisAeAttach`, is an
+    adapter's `static` behind an angle include.
+  - Declares (seed 17): 50 of 50. Two are `qt.h`'s C++ methods (`delWrite`, `setContext`), which
+    stand in the file as functions and are read as C reads them, with no class.
+  - Imports (seed 17): 50 of 50, each against its `#include` line.
+  - Calls (seed 17): 50 of 50.
+- **P and R per kind** (§3.3; P from the hand read and the census, R from the census):
+
+  | kind | edges | sample | P | R |
+  |---|---|---|---|---|
+  | Calls | 1,192 | 50/50 | 0.9941 (1,185 of 1,192) | 0.9900 (1,185 of 1,197) |
+  | Declares, functions and macros | 679 | 50/50 | 1.000 | 0.9812 (679 of 692) |
+  | Declares, types | 81 | | 1.000 | 0.9878 (81 of 82) |
+  | Declares, members | 328 | | 1.000 | 0.9880 (328 of 332) |
+  | Imports | 78 | 50/50 | 1.000 | 1.000 (78 of 78) |
+
+  Calls P counts all seven edges no site explains as wrong: five from `libuv.h`'s file node to the
+  right targets, and `qt.h`'s `connect` and `read`. The Declares sample of 50 spans all three rows.
+- **Regressions** (`log/langdiff-step17-hiredis.txt`), hiredis without against with the C globs:
+  c R1 454, h R1 686 (every new node), R4 478 and 688 (Declares and Imports), Calls +886 and +306,
+  R2 0, R3 0, R5 0, R6 0, R7 0, R9 0. R8 is 1, the pending count above.
+- **Byte-identity:**
+  - Kit corpus and scratchpad corpus, `step16r` against `step17`, with the default globs, with
+    `**/*.lua`, with `**/*.go` and with `**/*.c **/*.h`: `graph.json` and `headers.json` identical
+    in all eight pairs (`dff8b36a53bb0548`), and the scratchpad's graph equals `store-14`'s. Neither
+    corpus holds a `.c` or `.h` file.
+  - gin with `**/*.go`: identical to `step16r`'s (`119169be4bd8aa62`).
+  - luarocks with `**/*.lua`: identical to `step16r`'s (`368f10ad0de3ba07`), which is step 16a's.
+- **Fixture and bench:** not run. C is not in the fixture's globs.
+- **Size:** stripped 67,296,488 → 67,940,648 bytes (+644,160); `tar czf` 14,600,535 → 14,669,745
+  (+69,210). Both are under the 8 MB and 1 MB bars.
+- **Build time:** median of five, interleaved with step 0 (`log/buildtime-step17.txt`): step 0
+  1.347 s, step 17 1.502 s, 1.115×, at load 6.3 to 6.4. A first run read 1.233× at load 6.1
+  (`log/buildtime-step17-first.txt`, one round at 1.677 s), and a three-way run of seven rounds
+  read step 16r at 1.095× and step 17 at 1.118× (`log/buildtime-step17-3way.txt`), so the first was
+  noise.
+- **Licence reading:** `tree-sitter-c 0.24.2 MIT ok`, ABI 15. Its `LICENSE`: "The MIT License (MIT)
+  Copyright (c) 2014 Max Brunsfeld". The queries are written to the engine's contract, not adapted
+  from the crate's `tags.scm`, so they carry no notice.
+- **Edited tests:** `tests/engine.rs` builds one `ImportPaths::Relative` and moves from
+  `root: false`/`true` to `roots: &[]`/`&[""]`, construction only. `lang.rs`'s
+  `all_lists_every_language_once` gains C's slot. No assertion changed.
+- **Platforms:** not verified. The branch was not pushed, so `ci` has not run on it.
+- **Gate:**
+  - `cargo test --all-targets`: 1,448 passed, 0 failed;
+  - `cargo clippy --all-targets -- -D warnings`: clean;
+  - `cargo tree --duplicates --depth 0`: no tree-sitter crate.

@@ -75,3 +75,24 @@ the default globs yet.
   method promoted from an embedded field; dot imports; the standard library, other modules, and a
   `go.mod` edit, which widens nothing until the next `build`; a one-argument generic call
   (`f[T](x)`), which the grammar reads as a conversion, so it is a type use and not a call; the type in `node := &node{}`, which reads as the new local.
+
+C (`.c` and `.h`) is read only where `code_globs` or `REPOGRAPH_CODE_GLOBS` names `**/*.c` and
+`**/*.h`; it is not in the default globs yet.
+
+- **Read:** function definitions, wherever a prototype stands, so the header's prototype and the
+  source's definition are one symbol, the definition; function-like `#define`s as functions;
+  structs, unions and enums with their members as `T.member`, named by the typedef when one names
+  them, so `typedef struct reply { … } reply_t;` is `reply_t`; the members of an unnamed nested
+  struct or union are the holder's; enumerators; typedefs of anything else. A `static` name stays in
+  its file; any other links across the build. A bare call reaches the file's own definition, else
+  the one non-`static` definition anywhere in the repository. `#include "x.h"` reaches `x.h` beside
+  the including file, else at the root, under `include/` or under `src/`. Definitions are read in
+  every `#ifdef` branch and inside `extern "C" { … }`; two branches defining one name are one
+  symbol. Requirement ids are read in comments and strings.
+- **Not read:** a prototype or an `extern` declaration; a call through a function pointer or a
+  member (`p->fn()`, `ops.fn()`); a name a macro builds; a `static` function a header defines and
+  its includers call (`static inline` helpers), since only the file that defines it reaches it;
+  `#include <…>`, including one of the repository's own headers; a type or member a function body
+  declares, and a type written in a variable's declaration (`static struct { … } config;`); a
+  definition the grammar cannot parse, as when a branch of `#if` repeats a function's header; C++
+  written in a `.h`.

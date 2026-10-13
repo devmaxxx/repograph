@@ -1899,6 +1899,33 @@ No new definition kind is needed:
 - **Default enough:** yes.
 - **Corpus:** `redis/hiredis` at `v1.4.1`, 25 `.c` and 27 `.h`, BSD-3-Clause.
 
+**Step 17 as built.** Where the code differs from the text above, the code is the record. The work is in `77b7d8f`.
+
+- **Data:** the `C_LANG` spec row, `queries/c/decl.scm` (90 lines) and `refs.scm` (48 lines), `hooks: NONE`. No exception was needed. The cases are in `src/code/cases/c.rs` (14 tests). The crate is `tree-sitter-c 0.24.2`, the one ast-grep carries, MIT, ABI 15.
+- **Differs from the text above:**
+  - Export is `Export::Hide(&["static"])`, the existing variant, not `Words { hide }`.
+  - `<…>` drops because the import pattern captures only a `string_literal` path, not by a kind check in the engine.
+  - `.h` stays `Lang::C`; step 18 decides (below).
+  - The body's first line is `Line::Header`, so a signature over several lines reads as one.
+- **Engine additions, both inert for every earlier language:**
+  - `ImportPaths::Relative { roots, suffixes }` replaces `root: bool`: the directories tried in order after the importer's own, `""` being the root. Every earlier row is `roots: &[]` and C's is `["", "include", "src"]`. `tests/engine.rs` builds one `Relative` value and changes from `root: false`/`true` to `roots: &[]`/`&[""]`, construction only.
+  - `#set! outside "<kind>"`, the mirror of `within`: a match whose outermost capture sits under that kind at any depth is dropped, and a pattern may set it more than once. A wildcard parent's negated field (`(_ !declarator …)`) is silently ignored by tree-sitter, and `([(a) (b)] (c))` is a sibling sequence, not a parent constraint, so "a struct not in a typedef, a declaration or a function body" has no other spelling short of listing every parent. The contract refuses a kind the grammar lacks. No earlier query sets it, so every earlier store is byte-identical.
+- **Declarations:**
+  - A bodied `typedef struct … name;` is captured on the `type_definition` node, so the comment above the typedef is its doc, and it comes before the general typedef pattern: the first pattern to match a node in a role wins, so the general one cannot redeclare it as a `type`.
+  - A tagged type is declared alone only outside a typedef, a declaration and a function body. A type nested in a member list is not declared apart, so the members of `struct { int port; } tcp;` inside `reply` are `reply.port`: leaves qualify nothing.
+  - Members are read from one declarator on the `field_declaration` node (its doc above it), and from each declarator when there are several. Function-pointer members, including ones returning a pointer (`void *(*mallocFn)(size_t)`), are members.
+  - The grammar reads a standard type name as `primitive_type`, so `typedef intptr_t ssize_t;` needs its own alternative.
+  - Fields, typedefs, enumerators and tagged types inside a function body declare nothing (`outside "compound_statement"`): hiredis's `test.c` declared `resp` and `val` from a local `static const struct { … } dcases[]` before it.
+- **Resolution:** `Family` with `OwnThenUnique`, as planned. `OwnFirst` was measured on hiredis: it adds 28 Calls edges, all wrong (`assert` reaching the macros `async.c` and `test.c` each define), and gains none.
+- **Known misses on hiredis:** `adapters/libuv.h` is one whole-file ERROR (`#if … #else` repeating a function header), so its 11 definitions drop and its calls hang off the file; `adapters/qt.h` and `examples/example-qt.h` are C++; a `static` function a header defines (`sdslen`, the adapters' `Attach` functions, `dict.c` pulled in by `#include "dict.c"`) is reached only from its own file, 115 call sites.
+- **Parse census, held for Max:** 18 of 52 files hold an ERROR or MISSING node (234 nodes), far above the 2% bar. Six headers carry exactly one `MISSING #endif`, at the close of `#ifdef __cplusplus } #endif` around `extern "C" {`, and lose nothing. The rest are macros the grammar cannot see through (`EV_P_`, `G_GNUC_UNUSED`, `__unused`, `va_arg(ap, T)`, the vendored `ffc.h`'s attribute macros, `test.c`'s test macros), `ssl.c`'s `} else` split across `#ifdef`, `libuv.h`, and the two C++ headers. Only `libuv.h` and the C++ headers lose definitions: the census misses are 13 of 692.
+- **`.h` for step 18:** C reads hiredis's 27 headers with 12 ERROR files, six of them the single `MISSING #endif`. Step 18 runs the C++ grammar over the same 27 and over leveldb's 56 as planned, and if `.h` moves to `Lang::Cpp` it re-runs this step's criterion on hiredis, since a C header read as C++ may parse differently (`typedef struct x x;`, designated initialisers, `restrict`).
+- **For steps 18–24:**
+  - Header statics: C reaches a `static` (or `static inline`) function only from its own file, so an includer's call stays missing. Against a truth that follows quoted includes transitively, hiredis's store recalls 0.884 of call pairs (0.942 counting `alloc.h`'s `static inline hi_malloc` and `alloc.c`'s `hi_malloc` as one variant), against 0.990 under the linker rule the criterion reads. C++ headers are mostly inline code, so step 18 should weigh a `Visibility` that adds the included files' hidden names, and C should take it too if it lands.
+  - A `.h` C++ header (`qt.h`) read as C declares its methods as top-level functions and resolves `connect(…)` to `sockcompat.h`'s `connect` macro: the one wrong Calls target on hiredis.
+  - `outside` exists now; a later language that needs "not under X at any depth" sets it rather than enumerating parents.
+  - A census of call pairs needs a rule for build variants in one header and one source (`alloc.h` against `alloc.c` under `#ifdef _WIN32`), or it counts them as misses.
+
 **Step 18 · C++.** M. Query ~120, cases ~250, engine ~40 (`qualifiers`).
 
 - **Lang and family:** `Lang::Cpp` (`.cc`, `.cpp`, `.cxx`, `.c++`, `.hh`, `.hpp` and `.ino` from ast-grep, with `.hxx` and `.h++` as overrides; `.cu` refused), `Family::C`.
