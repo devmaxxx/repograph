@@ -10,7 +10,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 use streaming_iterator::StreamingIterator;
 use tree_sitter::{Node, QueryCursor, Tree};
 
-use crate::code::index::Header;
+use crate::code::index::{Header, QualifiedIndex};
 use crate::code::queries::{self, Kind, Meta, Role};
 use crate::code::syntax::{self, comment_text, last_row, text_span, DOC_CHARS};
 use crate::model::{Graph, NodeKind};
@@ -518,8 +518,14 @@ pub(crate) fn import_path(text: &str) -> &str {
 fn read_import(caps: &[(Role, Node)], meta: &Meta, src: &str) -> Option<Import> {
     let site = caps.iter().find(|(r, _)| *r == Role::Import)?.1;
     let first = |want: Role| caps.iter().find(|(r, _)| *r == want).map(|(_, n)| text(*n, src).to_string());
+    // A path the grammar writes as several nodes, as Scala's `a.b.C` is, reads as the text they span.
+    let parts: Vec<Node> = caps.iter().filter(|(r, _)| *r == Role::ImportPath).map(|(_, n)| *n).collect();
+    let path = match parts.as_slice() {
+        [_, .., last] => src.get(parts[0].start_byte()..last.end_byte()).map(str::to_string),
+        _ => first(Role::ImportPath),
+    };
     Some(Import {
-        path: first(Role::ImportPath).map(|p| import_path(&p).to_string()),
+        path: path.map(|p| import_path(&p).to_string()),
         names: caps.iter().filter(|(r, _)| *r == Role::ImportName).map(|(_, n)| text(*n, src).to_string()).collect(),
         alias: first(Role::ImportAlias),
         reexport: meta.reexport,
@@ -665,7 +671,7 @@ fn qualify(spec: &Spec, decl: &Compiled, file: &File, mut declared: Vec<Declared
             facts.redeclared.push((parent.and_then(|p| p.def), first, export));
             let sibling = || d.node.parent().map(|p| p.id());
             if meta.variant && variants.get(&first).is_some_and(|at| *at == sibling()) {
-                facts.defs[first].end = facts.defs[first].end.max(text_span(d.node).1);
+                facts.defs[first].end = facts.defs[first].end.max(def_rows(d.node, src).1);
             }
             if let Some(join) = kind.join() {
                 stack.push(Open { end: d.node.end_byte(), qualified, join, def: Some(first), adopt: None });
@@ -679,7 +685,7 @@ fn qualify(spec: &Spec, decl: &Compiled, file: &File, mut declared: Vec<Declared
             members.push((facts.defs.len(), k));
         }
         ids.insert(id.clone(), facts.defs.len());
-        let (line, end) = text_span(d.node);
+        let (line, end) = def_rows(d.node, src);
         let label = match spec.label {
             Label::Qualified => qualified.clone(),
             Label::Spelled(separator) => qualified.replace('/', separator),
@@ -888,6 +894,7 @@ pub fn import_targets(resolver: &Resolver, spec: &Spec, rel: &str, import: &Impo
         ImportPaths::ModulePrefix { manifest, prefixes, sep, suffixes, skip } => {
             return under_module(resolver, rel, path, (manifest, prefixes), sep, suffixes, skip)
         }
+        ImportPaths::Scoped { sep } => return scoped_import(resolver, rel, &path.replace(sep, "."), &import.names),
     };
     let dir = rel.rsplit_once('/').map_or("", |(d, _)| d);
     let bases = std::iter::once(dir).chain(roots.iter().copied());
@@ -918,6 +925,116 @@ fn dotted(resolver: &Resolver, rel: &str, path: &str, roots: &[&str], suffixes: 
         .find(|target| target != rel && resolver.globbed(target))
         .into_iter()
         .collect()
+}
+
+/// The full path an import's `path` names: under the importer's own namespaces, innermost first,
+/// then as written, the first some file declares or declares a name directly under.
+fn package_base(index: &QualifiedIndex, own: &[String], path: &str) -> Option<String> {
+    let known = |base: &String| !index.files(base).is_empty() || !index.under(base).is_empty();
+    own.iter().map(|scope| format!("{scope}.{path}")).chain([path.to_string()]).find(known)
+}
+
+/// The namespaces a file's names live in, innermost first: `package a; package b` opens `a.b`
+/// and `a`, as nested blocks would.
+fn package_scopes(facts: &Facts) -> Vec<String> {
+    let mut scopes: Vec<String> = facts.namespaces.iter()
+        .scan(String::new(), |path, part| {
+            *path = if path.is_empty() { part.clone() } else { format!("{path}.{part}") };
+            Some(path.clone())
+        })
+        .collect();
+    scopes.reverse();
+    scopes
+}
+
+/// The files an import names by `ImportPaths::Scoped`: each `@import.name`'s declaring files, the
+/// whole scope's for `_`, or with no name the path's own.
+fn scoped_import(resolver: &Resolver, rel: &str, path: &str, names: &[String]) -> Vec<String> {
+    let Some(lang) = Lang::of(rel) else { return Vec::new() };
+    let Some(index) = resolver.index(lang.family()) else { return Vec::new() };
+    let own = resolver.facts(rel).map(|f| package_scopes(&f)).unwrap_or_default();
+    let Some(base) = package_base(index, &own, path) else { return Vec::new() };
+    let mut files: BTreeSet<&str> = BTreeSet::new();
+    if names.is_empty() {
+        files.extend(index.files(&base));
+    }
+    for name in names {
+        if name == "_" {
+            files.extend(index.files(&base));
+            files.extend(index.under(&base).into_iter().flat_map(|(_, f)| f));
+        } else {
+            files.extend(index.files(&format!("{base}.{name}")));
+        }
+    }
+    files.into_iter().filter(|f| *f != rel).map(str::to_string).collect()
+}
+
+/// Where a `Visibility::Package` file reads a name: what each imported name binds, the scopes its
+/// wildcard imports open, and its own namespaces, innermost first.
+struct Packaged {
+    named: Vec<(String, String)>,
+    open: Vec<String>,
+    own: Vec<String>,
+}
+
+impl Packaged {
+    fn of(index: &QualifiedIndex, facts: &Facts) -> Self {
+        let own = package_scopes(facts);
+        let (mut named, mut open) = (Vec::new(), Vec::new());
+        for import in &facts.imports {
+            let Some(path) = &import.path else { continue };
+            let Some(base) = package_base(index, &own, path) else { continue };
+            if import.names.is_empty() {
+                let bound = base.rsplit('.').next().unwrap_or(&base).to_string();
+                named.push((bound, base.clone()));
+            }
+            for name in &import.names {
+                match name.as_str() {
+                    "_" => open.push(base.clone()),
+                    _ => named.push((name.clone(), format!("{base}.{name}"))),
+                }
+            }
+        }
+        Packaged { named, open, own }
+    }
+
+    /// The files declaring `name` by its first full path some file declares, each with the name
+    /// the file declares it under: the path less the file's own namespace. Scala's order: an
+    /// explicit import, then a wildcard one, then the own package, then the root.
+    fn targets(&self, resolver: &Resolver, index: &QualifiedIndex, name: &str) -> Vec<(String, String)> {
+        let (head, rest) = name.split_once('.').map_or((name, ""), |(h, r)| (h, r));
+        let tail = |key: &str| if rest.is_empty() { key.to_string() } else { format!("{key}.{rest}") };
+        let keys = self.named.iter().filter(|(bound, _)| bound == head).map(|(_, key)| tail(key))
+            .chain(self.open.iter().chain(&self.own).map(|scope| format!("{scope}.{name}")))
+            .chain([name.to_string()]);
+        for key in keys {
+            let files = index.files(&key);
+            if files.is_empty() {
+                continue;
+            }
+            return files.into_iter().filter_map(|f| {
+                let scope = resolver.facts(f).and_then(|facts| package_scopes(&facts).into_iter().next());
+                let local = match scope {
+                    Some(scope) => key.strip_prefix(&scope)?.strip_prefix('.')?.to_string(),
+                    None => key.clone(),
+                };
+                Some((f.to_string(), local))
+            }).collect();
+        }
+        Vec::new()
+    }
+}
+
+/// `text_span` ending on the definition's last text. An indentation grammar, as Scala's is, closes
+/// a block at the next line's first token, so the node holds the blank lines and the indent before it.
+fn def_rows(n: Node, src: &str) -> (u32, u32) {
+    let (line, end) = text_span(n);
+    if n.end_position().column == 0 {
+        return (line, end);
+    }
+    let text = src.get(n.byte_range()).unwrap_or("");
+    let rows = text[text.trim_end().len()..].matches('\n').count() as u32;
+    (line, end - rows)
 }
 
 /// The file or the directory's files `path` names under a prefix of the importer's manifest, by
@@ -962,7 +1079,7 @@ fn under_module(
 fn reach(resolver: &Resolver, spec: &Spec, file: &File, facts: &Facts) -> Vec<(String, Arc<Facts>)> {
     let rel = file.rel;
     let files: Vec<String> = match spec.visibility {
-        Visibility::File | Visibility::Family | Visibility::Lexical => Vec::new(),
+        Visibility::File | Visibility::Family | Visibility::Lexical | Visibility::Package => Vec::new(),
         Visibility::Imported { transitive } => {
             let mut seen = BTreeSet::from([rel.to_string()]);
             let mut queue: VecDeque<String> = facts.imports.iter().flat_map(|i| i.targets(resolver, spec, rel).iter().cloned()).collect();
@@ -996,7 +1113,7 @@ fn reach(resolver: &Resolver, spec: &Spec, file: &File, facts: &Facts) -> Vec<(S
 
 /// The files `reach` or the family's index holds a visible `name` in.
 fn visible(resolver: &Resolver, spec: &Spec, file: &File, reach: &[(String, Arc<Facts>)], name: &str) -> Vec<String> {
-    if let Visibility::Family | Visibility::Lexical = spec.visibility {
+    if let Visibility::Family | Visibility::Lexical | Visibility::Package = spec.visibility {
         return resolver.index(file.lang.family())
             .map(|index| index.files(name).into_iter().filter(|f| *f != file.rel).map(str::to_string).collect())
             .unwrap_or_default();
@@ -1071,6 +1188,18 @@ pub fn resolve(resolver: &Resolver, spec: &Spec, file: &File, facts: &Facts, ex:
             Ambiguity::All => own.then(|| rel.to_string()).into_iter().chain(others).collect(),
         }
     };
+    // Where names are global by their full path, the files and the names they declare a name under.
+    let packaged: OnceCell<Option<(&QualifiedIndex, Packaged)>> = OnceCell::new();
+    let package = |name: &str| -> Vec<(String, String)> {
+        let Some((index, scopes)) = packaged.get_or_init(|| resolver.index(file.lang.family()).map(|index| (index, Packaged::of(index, facts)))) else {
+            return Vec::new();
+        };
+        let targets = scopes.targets(resolver, index, name);
+        match spec.ambiguity {
+            Ambiguity::Unique | Ambiguity::OwnThenUnique if targets.len() != 1 => Vec::new(),
+            _ => targets,
+        }
+    };
     let mut receiving: Option<Receiving> = None;
     for r in &facts.refs {
         if spec.hooks.owns.contains(&r.edge) {
@@ -1089,6 +1218,7 @@ pub fn resolve(resolver: &Resolver, spec: &Spec, file: &File, facts: &Facts, ex:
                     Visibility::Directory | Visibility::Namespace => {
                         declaring(member, false).into_iter().map(|f| format!("sym:{f}::{member}")).collect()
                     }
+                    Visibility::Package => package(member).into_iter().map(|(f, local)| format!("sym:{f}::{local}")).collect(),
                     _ => Vec::new(),
                 };
                 let all = matches!(spec.ambiguity, Ambiguity::All | Ambiguity::OwnFirst);
@@ -1122,17 +1252,21 @@ pub fn resolve(resolver: &Resolver, spec: &Spec, file: &File, facts: &Facts, ex:
             let mut kinds = facts.defs.iter().filter(|d| d.qualified == name).map(|d| d.kind);
             kinds.next().is_some_and(|k| k == Kind::Method) && kinds.all(|k| k == Kind::Method)
         };
-        let (name, targets) = match spec.visibility {
-            Visibility::Lexical => lexical(facts, r)
-                .into_iter()
-                .filter(|name| r.edge != EdgeKind::References || !method_only(name))
-                .map(|name| {
-                    let targets = declaring(&name, r.own_file);
-                    (name, targets)
-                })
-                .find(|(_, targets)| !targets.is_empty())
-                .unwrap_or_default(),
-            _ => (r.name.clone(), declaring(&r.name, r.own_file)),
+        let targets: Vec<(String, String)> = match spec.visibility {
+            Visibility::Lexical => {
+                let (name, files) = lexical(facts, r)
+                    .into_iter()
+                    .filter(|name| r.edge != EdgeKind::References || !method_only(name))
+                    .map(|name| {
+                        let targets = declaring(&name, r.own_file);
+                        (name, targets)
+                    })
+                    .find(|(_, targets)| !targets.is_empty())
+                    .unwrap_or_default();
+                files.into_iter().map(|f| (f, name.clone())).collect()
+            }
+            Visibility::Package if !r.own_file && !facts.declares(&r.name) => package(&r.name),
+            _ => declaring(&r.name, r.own_file).into_iter().map(|f| (f, r.name.clone())).collect(),
         };
         // Only a type inherits. A clause a scope owner holds is the type the owner stands for, found
         // by its outermost name as any other name is; one a file or a function holds names no subtype.
@@ -1147,7 +1281,7 @@ pub fn resolve(resolver: &Resolver, spec: &Spec, file: &File, facts: &Facts, ex:
             continue;
         };
         let container = r.source.and_then(|i| facts.defs[i].parent).map(|p| facts.defs[p].id.clone());
-        for (from, target) in froms.iter().flat_map(|from| targets.iter().map(move |t| (from, t))) {
+        for (from, (target, name)) in froms.iter().flat_map(|from| targets.iter().map(move |t| (from, t))) {
             let to = format!("sym:{target}::{name}");
             if to != *from && Some(&to) != container.as_ref() {
                 ex.edge(from, &to, r.edge, &r.context, rel);
@@ -1390,6 +1524,13 @@ pub fn header(facts: &Facts) -> Header {
 pub fn paths(facts: &Facts) -> Header {
     let mut h = header(facts);
     h.top.extend(facts.defs.iter().filter(|d| d.export).map(|d| d.qualified.clone()));
+    h
+}
+
+/// `paths` under the one namespace a file's namespaces spell together (`Visibility::Package`).
+pub fn package_paths(facts: &Facts) -> Header {
+    let mut h = paths(facts);
+    h.scope = package_scopes(facts).into_iter().take(1).collect();
     h
 }
 

@@ -18,6 +18,7 @@ mod python;
 mod razor;
 mod ruby;
 mod rust;
+mod scala;
 mod shell;
 mod sql;
 mod swift;
