@@ -29,13 +29,18 @@
   declarator: [
     (identifier) @local.definition
     (pointer_declarator declarator: (identifier) @local.definition)
+    (pointer_declarator declarator: (pointer_declarator declarator: (identifier) @local.definition))
     (array_declarator declarator: (identifier) @local.definition)
+    (array_declarator declarator: (array_declarator declarator: (identifier) @local.definition))
+    (pointer_declarator declarator: (array_declarator declarator: (identifier) @local.definition))
     (function_declarator declarator: (parenthesized_declarator (pointer_declarator declarator: (identifier) @local.definition)))
     (init_declarator declarator: [
       (identifier) @local.definition
       (pointer_declarator declarator: (identifier) @local.definition)
       (pointer_declarator declarator: (pointer_declarator declarator: (identifier) @local.definition))
       (array_declarator declarator: (identifier) @local.definition)
+      (array_declarator declarator: (array_declarator declarator: (identifier) @local.definition))
+      (pointer_declarator declarator: (array_declarator declarator: (identifier) @local.definition))
       (function_declarator declarator: (parenthesized_declarator (pointer_declarator declarator: (identifier) @local.definition)))
     ])
   ]

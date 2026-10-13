@@ -275,3 +275,29 @@ fn a_c_source_and_a_header_are_read_by_their_extension() {
     assert_eq!(Lang::of("include/net.h"), Some(Lang::C));
     assert_eq!(Lang::C.family(), Family::C);
 }
+
+#[test]
+fn an_array_member_and_a_named_type_nested_in_a_member_are_read_as_their_holder_does() {
+    let src = "struct s { char *names[4]; int m[2][2]; unsigned flags : 3; int a, *b[2]; struct s *peers[2]; struct in { int x; } n; };\n";
+    assert_eq!(ids(&extract(&[("a.c", src)], "a.c")), [
+        "file:a.c",
+        "sym:a.c::s",
+        "sym:a.c::s.a",
+        "sym:a.c::s.b",
+        "sym:a.c::s.flags",
+        "sym:a.c::s.m",
+        "sym:a.c::s.n",
+        "sym:a.c::s.names",
+        "sym:a.c::s.peers",
+        "sym:a.c::s.x",
+    ], "a pointer array and a two-dimensional one are members, and a type written in a member is no type apart, so its members are the holder's");
+}
+
+#[test]
+fn a_local_pointer_pointer_or_array_hides_a_function_named_like_it() {
+    let files = [
+        ("b.c", "void p(int x) {}\nvoid q(int x) {}\nvoid r(int x) {}\n"),
+        ("a.c", "void f(void) { char **p; char *q[3]; int r[2][2]; p(1); q(2); r(3); }\n"),
+    ];
+    assert!(lines(&extract(&files, "a.c"), EdgeKind::Calls).is_empty());
+}

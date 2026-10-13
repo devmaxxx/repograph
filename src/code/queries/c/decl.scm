@@ -34,11 +34,13 @@
 ] @definition.struct
   (#set! outside "type_definition")
   (#set! outside "declaration")
+  (#set! outside "field_declaration")
   (#set! outside "compound_statement"))
 
 ((enum_specifier name: (type_identifier) @name body: (_)) @definition.enum
   (#set! outside "type_definition")
   (#set! outside "declaration")
+  (#set! outside "field_declaration")
   (#set! outside "compound_statement"))
 
 ; A typedef of anything else: a scalar, a pointer, a function or a function pointer. A typedef the
@@ -65,6 +67,9 @@
       (pointer_declarator declarator: (field_identifier) @name)
       (pointer_declarator declarator: (pointer_declarator declarator: (field_identifier) @name))
       (array_declarator declarator: (field_identifier) @name)
+      (array_declarator declarator: (array_declarator declarator: (field_identifier) @name))
+      (pointer_declarator declarator: (array_declarator declarator: (field_identifier) @name))
+      (array_declarator declarator: (parenthesized_declarator (pointer_declarator declarator: (field_identifier) @name)))
       (function_declarator declarator: (parenthesized_declarator (pointer_declarator declarator: (field_identifier) @name)))
       (pointer_declarator declarator: (function_declarator declarator: (parenthesized_declarator (pointer_declarator declarator: (field_identifier) @name))))
     ] .) @definition.field)
@@ -78,6 +83,8 @@
       (pointer_declarator declarator: (field_identifier) @name)
       (pointer_declarator declarator: (pointer_declarator declarator: (field_identifier) @name))
       (array_declarator declarator: (field_identifier) @name)
+      (array_declarator declarator: (array_declarator declarator: (field_identifier) @name))
+      (pointer_declarator declarator: (array_declarator declarator: (field_identifier) @name))
     ] @definition.field))
   (#set! outside "declaration")
   (#set! outside "compound_statement"))
