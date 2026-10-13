@@ -30,13 +30,22 @@ pub const UNNAMED_MODEL: &str = "intfloat/multilingual-e5-small";
 /// one. A reader passes the recorded model so a store answers with what wrote it; a writer
 /// passes `None` and takes the configuration, and `DenseIndex::written_by` drops rows another
 /// model wrote before the sync.
+///
+/// The recorded model is read out of `.repograph/vectors.json`, which a cloned repository can
+/// commit, so it passes the same trust gate as a model `repograph.toml` names: otherwise a clone
+/// would choose the model this machine downloads and parses, the gate's whole exposure.
 pub fn resolve(recorded: Option<&str>, configured: &str) -> String {
-    resolve_from(std::env::var("REPOGRAPH_EMBED_MODEL").ok().as_deref(), recorded, configured)
+    resolve_from(std::env::var("REPOGRAPH_EMBED_MODEL").ok().as_deref(), recorded, configured, crate::config::model_is_trusted)
 }
 
-fn resolve_from(override_: Option<&str>, recorded: Option<&str>, configured: &str) -> String {
+fn resolve_from(override_: Option<&str>, recorded: Option<&str>, configured: &str, trusted: impl Fn(&str) -> bool) -> String {
     let named = |m: Option<&str>| m.map(str::trim).filter(|m| !m.is_empty()).map(str::to_string);
-    named(override_).or_else(|| named(recorded)).unwrap_or_else(|| configured.to_string())
+    let recorded = named(recorded).filter(|m| {
+        let ok = trusted(m);
+        if !ok { eprintln!("dense: the store's vectors name {m:?}, a model this machine has not trusted; opening {configured} instead (`repograph model {m}` trusts it)"); }
+        ok
+    });
+    named(override_).or(recorded).unwrap_or_else(|| configured.to_string())
 }
 
 /// Whether the store should be moved to the model `repograph.toml` names: only a model the
@@ -731,10 +740,19 @@ mod tests {
 
     #[test]
     fn the_override_outranks_the_store_which_outranks_the_config() {
-        assert_eq!(resolve_from(Some(" x/y "), Some("a/b"), "c/d"), "x/y");
-        assert_eq!(resolve_from(Some(""), Some("a/b"), "c/d"), "a/b");
-        assert_eq!(resolve_from(None, None, "c/d"), "c/d");
-        assert_eq!(resolve_from(None, Some("  "), "c/d"), "c/d");
+        let any = |_: &str| true;
+        assert_eq!(resolve_from(Some(" x/y "), Some("a/b"), "c/d", any), "x/y");
+        assert_eq!(resolve_from(Some(""), Some("a/b"), "c/d", any), "a/b");
+        assert_eq!(resolve_from(None, None, "c/d", any), "c/d");
+        assert_eq!(resolve_from(None, Some("  "), "c/d", any), "c/d");
+    }
+
+    #[test]
+    fn a_store_cannot_name_a_model_this_machine_has_not_trusted() {
+        let trusted = |m: &str| m == "a/b";
+        assert_eq!(resolve_from(None, Some("evil/model"), "c/d", trusted), "c/d");
+        assert_eq!(resolve_from(None, Some("a/b"), "c/d", trusted), "a/b");
+        assert_eq!(resolve_from(Some("evil/model"), Some("evil/model"), "c/d", trusted), "evil/model", "the override is this machine's own");
     }
 
     #[test]
