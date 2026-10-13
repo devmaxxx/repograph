@@ -839,3 +839,62 @@ in one walk (`f9479b6`, binary `bin/repograph-step14a`).
   - `cargo test --all-targets`: 1,405 passed, 0 failed;
   - `cargo clippy --all-targets -- -D warnings`: clean;
   - `cargo tree --duplicates --depth 0`: no tree-sitter crate.
+
+## Step 15 · Lua
+
+New: `bin/repograph-step15`, built at `c9415d7`. Parent: `bin/repograph-step14b`, built at
+`eb316a2`. Lua is read only when a config or `REPOGRAPH_CODE_GLOBS` names `**/*.lua`.
+
+- **Corpus:** `luarocks/luarocks` at `v3.13.0`, `3421bedc2ce2b64e79530bb97497531b014899a8`, 162
+  `.lua` files, MIT. It is read as data only: no script of it was run.
+- **Parse census:** 162 files, 0 with an ERROR or a MISSING node.
+- **Cases:** 8 in `src/code/cases/lua.rs`. They cover every capture role, the three import shapes,
+  the roots and `init.lua`, the own-file call, the receiver call, a duplicate member resolving to
+  neither file, and the references left unresolved on purpose: `obj:close()` on a value, a function
+  two files define, and a parameter named like an import.
+- **Hand-read precision** (`--no-dense`, the defaults plus `**/*.lua`, seed 15 unless noted):
+  - Lua writes 1,060 nodes (162 files, 898 symbols), Declares 898, Imports 556, Calls 1,283, and no
+    References: every Lua citation names an id nothing declares.
+  - Symbols: 50 of 50 right in id, line and end.
+  - Declares (seed 16): 50 of 50. `os.execute` in `fs/win32.lua` is right: the file assigns it.
+  - Imports (seed 17): 50 of 50. Beyond the sample, every one of the 556 edges matches a
+    `require` in its file. Of the 558 `require` strings that name a corpus file, the two without an
+    edge sit inside shell command strings in `spec/loader_spec.lua` and `spec/unit/loader_spec.lua`.
+  - Calls: 50 of 50. A call from a function value is the file's, as in `core/cfg.lua` line 139.
+  - Five seeded files: `spec/cmd_spec.lua`, `spec/fixtures/a_rock.lua`,
+    `spec/unit/rockspecs_spec.lua` and `spec/which_spec.lua` declare no function, and
+    `src/luarocks/pack.lua` declares 5; all five match the hand count. A second draw of files that
+    declare something:
+    - `legacyexternalcommand.lua` 1/1, `cmd/install.lua` 7/7 and `fs/linux.lua` 2/2 match;
+    - `spec/util/quick.lua` has 8 of 14 `function` statements. The other six are inside
+      `parse`'s body.
+    - `tools/zip.lua` has 20 of 26. The other six are `function zlib_compress()` and two siblings,
+      once in each `if` branch, assigning `local`s declared above.
+    - `fs/lua.lua` has 62 symbols for 69 statements. Three are second definitions of one id in the
+      other branch (`exists`, `file_age`, `download`), three sit two blocks deep (`get_md5`,
+      `_unix_umask` and the first `make_temp_dir`), and one is `md5.sumhexa = function` inside a
+      branch.
+- **Regressions** (`log/langdiff-step15-*.txt`):
+  - luarocks, without against with the Lua globs: lua R1 1,060 (every new node), R4 1,454 (its
+    Declares and Imports) and Calls +1,283, R5 0, R6 0, R7 0, R9 0. R8 is 1: the pending count goes
+    from 2 to 7 with Lua's five citations of undeclared ids.
+  - Kit corpus, `step14b` against `step15` with the Lua globs: `graph.json` and `headers.json`
+    byte-identical.
+  - Scratchpad corpus, `store-14` against `step15` with the Lua globs: byte-identical. `step14b`'s
+    store is byte-identical to both.
+- **Fixture and bench:** not run. The fixture holds no `.lua` file and Lua is not in its globs, so
+  its graph cannot move.
+- **Size:** stripped 66,866,256 → 66,982,072 bytes (+115,816); compressed 14,497,719 → 14,539,712
+  (+41,993). Both are far under the 8 MB and 1 MB bars.
+- **Build time:** median of five, interleaved with step 0, at load 3.3 (`log/buildtime-step15.txt`).
+  Step 0 ran 1.242 s and step 15 1.388 s, which is 1.117×.
+- **Licence reading:** `tree-sitter-lua 0.5.0 MIT ok`. Its `LICENSE.md` at v0.5.0: "The MIT
+  License (MIT) Copyright (c) 2021 Munif Tanjim". `refs.scm` adapts the grammar's `locals.scm` and
+  keeps that notice at its top.
+- **Edited tests, construction only:** `lang.rs`'s `all_lists_every_language_once` gains Lua's slot,
+  and `tests/engine.rs` builds `ImportPaths::Relative` and `Receivers::Hook`. No assertion changed.
+- **Platforms:** not verified. The branch was not pushed, so `ci` has not run on it.
+- **Gate:**
+  - `cargo test --all-targets`: 1,413 passed, 0 failed;
+  - `cargo clippy --all-targets -- -D warnings`: clean;
+  - `cargo tree --duplicates --depth 0`: no tree-sitter crate.

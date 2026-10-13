@@ -1787,6 +1787,29 @@ No new definition kind is needed:
 - **Corpus:** `luarocks/luarocks` at `v3.13.0`, 162 `.lua`, MIT.
 - **Why first:** it is the smallest grammar, and it proves a language can arrive as data only.
 
+**Step 15 as built.** Where the code differs from the text above, the code is the record. The work is in `c9415d7`.
+
+- **Data:** the `LUA` spec row, `queries/lua/decl.scm` (93 lines) and `refs.scm` (48 lines), `hooks: NONE`. No exception was needed. The cases are in `src/code/cases/lua.rs`, where step 14 put every language's cases, not `src/code/queries/<lang>/cases.rs` as the gate's text says.
+- **Declarations:**
+  - A file declares the functions its own statements define, and those of a `do` block or an `if`/`elseif`/`else` branch at its level. A generated or portable module wraps its optional parts in those: luarocks' `fs/lua.lua` defines most of its members inside `if lfs_ok then`. A function inside another function's body is not the file's.
+  - Only one block deep. A member two blocks down (`if md5_ok` > `if md5.sumhexa`) and `M.f = function` inside a branch stay missing, as do plain `function f()` statements in a branch. Those assign a `local` declared earlier as often as a global, and a query cannot tell which, so exporting them would be wrong half the time.
+  - A `local function` is `export "never"`, at the file's level or in such a block. In a function's body it is a local, with `#set! within` keeping the two apart.
+  - Two definitions of one id keep the first.
+- **Grammar quirk:** in `tree-sitter-lua` 0.5.0, a `local function` is a `function_declaration` with an anonymous `"local"` child. `(chunk local_declaration: (function_declaration ...))` stops matching after an earlier sibling with the same field, so both queries match the `"local"` token instead.
+- **Imports, three shapes,** each under a different parent so no site is read twice:
+  - `local m = require("a.b")` binds `m`;
+  - `m = require("a.b")` at a chunk or block level binds `m` too;
+  - a bare `require "a.b"` and `return require("a.b")` import with no alias.
+
+  A `local` whose value is a `require` is not a local binding, so its alias reaches the receiver rule. A `local x` with no value binds nothing: tests declare their modules that way and assign them in setup.
+- **Engine additions:**
+  - `ImportPaths` becomes an enum. The old struct is `Relative { root, suffixes }`, and every existing row was rewritten to it. `Dotted { roots, suffixes }` takes the first globbed file under the first root and suffix that names one, and never reads the importer's directory.
+  - `Receivers { Hook, Imports }`. Every existing row is `Hook`, and `resolve` checks the hook's `owns` before the receiver, then locals, so `Hook` reads as before. Under `Imports`, the receiver must be an import's alias that no binding around the call shadows. The member resolves only when exactly one exported definition in the imported files has it as its last name part. The plan's other half, a declared module's qualified name as a receiver, has no user in Lua and is not built.
+  - `Ambiguity::OwnThenUnique` as the plan states it.
+- **Citations:** `@cite.comment` and `@cite.string` are on. Five citations in luarocks (`UTF-8`, `UTF-16` twice, `CWORD-1`, `A-Z0-9`) name ids nothing declares, so they wait as pending, and the pending count is the one store class that moves (R8).
+- **Shebang:** `lua` and `lua5.4` read as Lua, and `luajit` does not. `python3.11`'s rule became a shared `versioned` helper.
+- **Edited tests, construction only:** `lang.rs`'s `all_lists_every_language_once` gains the Lua slot, because its match is exhaustive. `tests/engine.rs` builds `ImportPaths::Relative` and `receivers: Receivers::Hook` where it built the struct. No assertion changed.
+
 **Step 16 · Go.** M. Query ~90, cases ~250, engine ~150 (`Capitalized`, `ModulePrefix`, directory targets).
 
 - **Lang and family:** `Lang::Go` (`.go`), `Family::Go`. The case `the_typescript_family_is_read_by_its_two_grammars_and_an_unknown_extension_by_none` lists `main.go` as unread, so this step drops that one example, and the results document names the edit.
