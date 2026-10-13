@@ -77,6 +77,8 @@ pub struct Import {
     pub reexport: bool,
     pub base: ImportBase,
     pub binds: Option<Binds>,
+    /// It reaches only the sites `range` holds.
+    pub local: bool,
     pub range: Range<usize>,
     /// The files the site resolves to, resolved on the first read: a file read across for what it
     /// declares never needs them.
@@ -178,6 +180,15 @@ impl Facts {
 
     fn declares_visible(&self, qualified: &str) -> bool {
         self.exported.contains(qualified)
+    }
+
+    /// As `declares`, or `declares_visible` where `visible`, kept to one namespace: a type where
+    /// `ty`, else what is no type. OCaml's `t` may name a type and a value at once, and the two
+    /// share an id, so a name declared twice is taken to be in either.
+    fn declares_in(&self, qualified: &str, ty: bool, visible: bool) -> bool {
+        let named = if visible { self.declares_visible(qualified) } else { self.declares(qualified) };
+        named && (self.defs.iter().any(|d| d.qualified == qualified && (d.kind.join() == Some('.')) == ty)
+            || self.repeats.iter().any(|&(_, first)| self.defs[first].qualified == qualified))
     }
 
     /// The definition whose node spans exactly `range`, a repeated one included.
@@ -396,6 +407,23 @@ fn declare(spec: &Spec, decl: &'static Compiled, file: &File) -> Facts {
     facts
 }
 
+/// The module the file itself binds `i`'s first segment to at `i`'s site: one it defines before the
+/// site, in the module around it. Inside the definition, as in `module Cset = Cset`, the name is still
+/// the outer module's. `Some(None)` is a module written out, `Some(Some(a))` one bound to another
+/// (`module Re = Core`) by the import `a`.
+fn own_binding<'a>(facts: &'a Facts, i: &Import) -> Option<Option<&'a Import>> {
+    let head = i.path.as_deref().unwrap_or("").split('.').next().unwrap_or("");
+    let at = i.range.start;
+    let named = |d: &Def| d.kind == Kind::Module && d.name == head;
+    let mut ranges = facts.defs.iter().filter(|d| named(d)).map(|d| &d.range)
+        .chain(facts.repeats.iter().filter(|(_, first)| named(&facts.defs[*first])).map(|(r, _)| r));
+    if ranges.any(|r| r.contains(&at)) {
+        return None;
+    }
+    let d = facts.defs.iter().rfind(|d| named(d) && d.range.end <= at && d.parent.is_none_or(|p| facts.defs[p].range.contains(&at)))?;
+    Some(facts.imports.iter().find(|a| a.reexport && a.alias.as_deref() == Some(head) && a.range.start < d.range.end && d.range.start < a.range.end))
+}
+
 fn refer(spec: &Spec, refs: &'static Compiled, file: &File, facts: &mut Facts) {
     let Some(tree) = file.tree else { return };
     let (root, src) = (tree.root_node(), file.src);
@@ -539,6 +567,7 @@ fn read_import(caps: &[(Role, Node)], meta: &Meta, src: &str) -> Option<Import> 
         reexport: meta.reexport,
         base: meta.base,
         binds: meta.binds,
+        local: meta.local,
         range: site.byte_range(),
         targets: OnceLock::new(),
     })
@@ -807,7 +836,9 @@ fn is_kind(n: Node, kind: &str) -> bool {
 /// `body`, and Ruby's those above a class's or module's first statement outside its `body_statement`,
 /// so a first child of either looks past it.
 fn above(n: Node) -> Option<Node> {
-    n.prev_named_sibling().or_else(|| n.parent().filter(|p| matches!(p.kind(), "body" | "body_statement")).and_then(|p| p.prev_named_sibling()))
+    // OCaml's `let` and `module` keywords stand on the item around the first binding, not on it.
+    let wraps = |p: &Node| matches!(p.kind(), "body" | "body_statement" | "value_definition" | "module_definition");
+    n.prev_named_sibling().or_else(|| n.parent().filter(wraps).and_then(|p| p.prev_named_sibling()))
 }
 
 /// `comment_text`, and `#` and the language's own line markers too: `comment_text` serves the C
@@ -906,6 +937,7 @@ pub fn import_targets(resolver: &Resolver, spec: &Spec, rel: &str, import: &Impo
             return under_module(resolver, rel, path, (manifest, prefixes), sep, suffixes, skip)
         }
         ImportPaths::Scoped { sep } => return scoped_import(resolver, rel, &path.replace(sep, "."), &import.names),
+        ImportPaths::ModuleFile { suffixes } => return module_file(resolver, rel, path, suffixes),
     };
     let dir = rel.rsplit_once('/').map_or("", |(d, _)| d);
     let here = (import.base != ImportBase::Roots).then_some(dir);
@@ -1090,12 +1122,40 @@ fn under_module(
     Vec::new()
 }
 
+/// The file `path`'s first segment names by `ImportPaths::ModuleFile`.
+fn module_file(resolver: &Resolver, rel: &str, path: &str, suffixes: &[&str]) -> Vec<String> {
+    let head = path.split('.').next().unwrap_or(path);
+    let mut chars = head.chars();
+    let Some(first) = chars.next() else { return Vec::new() };
+    let lowered = format!("{}{}", first.to_lowercase(), chars.as_str());
+    let (dir, own) = rel.rsplit_once('/').unwrap_or(("", rel));
+    // `foo.ml` and `foo.mli` are one module, and a module cannot name itself.
+    if suffixes.iter().any(|s| own.strip_suffix(s).is_some_and(|stem| stem == lowered || stem == head)) {
+        return Vec::new();
+    }
+    let names: Vec<String> = [lowered.as_str(), head].iter().flat_map(|stem| suffixes.iter().map(move |s| format!("{stem}{s}"))).collect();
+    let beside = names.iter().map(|name| if dir.is_empty() { name.clone() } else { format!("{dir}/{name}") }).find(|f| resolver.globbed(f));
+    if let Some(file) = beside {
+        return vec![file];
+    }
+    // Elsewhere, a name two files share names neither: two libraries may each have a `util.ml`.
+    for name in &names {
+        match resolver.named(name) {
+            [] => continue,
+            [one] => return vec![one.clone()],
+            _ => return Vec::new(),
+        }
+    }
+    Vec::new()
+}
+
 /// The files a reference may resolve into besides its own, by the spec's visibility, with what each
 /// declares. Computed once per file: it does not depend on the name, and `Family` has none.
 fn reach(resolver: &Resolver, spec: &Spec, file: &File, facts: &Facts) -> Vec<(String, Arc<Facts>)> {
     let rel = file.rel;
     let files: Vec<String> = match spec.visibility {
-        Visibility::File | Visibility::Family | Visibility::Lexical | Visibility::Package => Vec::new(),
+        // An opened module is read by `module_path`, through the path each open names.
+        Visibility::File | Visibility::Family | Visibility::Lexical | Visibility::Package | Visibility::Opened => Vec::new(),
         Visibility::Imported { transitive } => {
             let mut seen = BTreeSet::from([rel.to_string()]);
             let mut queue: VecDeque<String> = facts.imports.iter().flat_map(|i| i.targets(resolver, spec, rel).iter().cloned()).collect();
@@ -1229,6 +1289,14 @@ pub fn resolve(resolver: &Resolver, spec: &Spec, file: &File, facts: &Facts, ex:
         if spec.hooks.owns.contains(&r.edge) {
             continue;
         }
+        if let Receivers::Modules = spec.receivers {
+            let from = facts.source_id(rel, r.source);
+            let container = r.source.and_then(|i| facts.defs[i].parent).map(|p| facts.defs[p].id.as_str());
+            for to in module_path(resolver, spec, file, facts, r).iter().filter(|to| **to != from && Some(to.as_str()) != container) {
+                ex.edge(&from, to, r.edge, &r.context, rel);
+            }
+            continue;
+        }
         if r.scoped {
             scoped(resolver, file, facts, r, &|name| declaring(name, r.own_file), ex);
             continue;
@@ -1274,7 +1342,7 @@ pub fn resolve(resolver: &Resolver, spec: &Spec, file: &File, facts: &Facts, ex:
         // it means. A constant never names a method, though Ruby lets a method be spelled `POST`.
         let method_only = |name: &str| methods.get(name).copied().unwrap_or(false);
         let targets: Vec<(String, String)> = match spec.visibility {
-            Visibility::Lexical => {
+            Visibility::Lexical | Visibility::Opened => {
                 let (name, files) = lexical(facts, r)
                     .into_iter()
                     .filter(|name| r.edge != EdgeKind::References || !method_only(name))
@@ -1337,6 +1405,17 @@ fn lexical(facts: &Facts, r: &Ref) -> Vec<String> {
             return spell(&format!("{}{}", expanded(facts, at, path), &r.name[first.len()..]));
         }
     }
+    let scopes = scopes(facts, r);
+    let spellings = spell(&r.name);
+    let mut names: Vec<String> = scopes.iter().flat_map(|scope| spellings.iter().map(move |name| format!("{scope}{name}"))).collect();
+    if binding && first.len() == r.name.len() {
+        names.extend(bound(facts, r.range.start, Binds::Open, None).flat_map(|(at, path, _)| spell(&format!("{}/{}", expanded(facts, at, path), r.name))));
+    }
+    names
+}
+
+/// The containers around `r`'s site, innermost first, each with its join, and last the top level.
+fn scopes(facts: &Facts, r: &Ref) -> Vec<String> {
     let base = matches!(r.edge, EdgeKind::Extends | EdgeKind::Implements);
     let mut at = r.source.and_then(|i| if base { facts.defs[i].parent } else { Some(i) });
     let mut scopes = Vec::new();
@@ -1348,12 +1427,7 @@ fn lexical(facts: &Facts, r: &Ref) -> Vec<String> {
         at = d.parent;
     }
     scopes.push(String::new());
-    let spellings = spell(&r.name);
-    let mut names: Vec<String> = scopes.iter().flat_map(|scope| spellings.iter().map(move |name| format!("{scope}{name}"))).collect();
-    if binding && first.len() == r.name.len() {
-        names.extend(bound(facts, r.range.start, Binds::Open, None).flat_map(|(at, path, _)| spell(&format!("{}/{}", expanded(facts, at, path), r.name))));
-    }
-    names
+    scopes
 }
 
 /// `path` with its first segment taken through the alias that stands for it at `byte`, which is itself
@@ -1384,6 +1458,109 @@ fn bound<'f>(facts: &'f Facts, byte: usize, binds: Binds, named: Option<&'f str>
         }
         Some((at, path, alias))
     })
+}
+
+/// The definition a name names where every name is a module path (`Receivers::Modules`), bare or
+/// behind a receiver: in the own file under the containers around the site, else in the one module
+/// the file opens that holds it, else through the module the path's first segment is bound to. One
+/// id or none. A reference in a type's context names a type, any other what is no type.
+fn module_path(resolver: &Resolver, spec: &Spec, file: &File, facts: &Facts, r: &Ref) -> Vec<String> {
+    let path: Vec<&str> = r.receiver.iter().flat_map(|receiver| receiver.split('.')).chain([r.name.as_str()]).collect();
+    let ty = r.context == "type";
+    // A local is a value or a functor's module, so a bare type name, as in `(t : t)`, is never one.
+    if (path.len() > 1 || !ty) && facts.locals.shadows(path[0], r.range.start, None) {
+        return Vec::new();
+    }
+    let joined = path.join("/");
+    if let Some(own) = scopes(facts, r).into_iter().map(|scope| format!("{scope}{joined}")).find(|q| facts.declares_in(q, ty, false)) {
+        return vec![format!("sym:{}::{own}", file.rel)];
+    }
+    // `open A.B` opens the module `B` inside the file `A` is, not the file's top level, and a module
+    // the file defines itself is opened there.
+    let opened = |i: &Import| -> BTreeSet<String> {
+        let module = i.path.as_deref().unwrap_or("").replace('.', "/");
+        if let Some(own) = scopes(facts, r).into_iter().map(|scope| format!("{scope}{module}")).find(|q| facts.declares(q)) {
+            let q = format!("{own}/{joined}");
+            return if facts.declares_in(&q, ty, false) { BTreeSet::from([format!("sym:{}::{q}", file.rel)]) } else { BTreeSet::new() };
+        }
+        let inner: Vec<&str> = i.path.as_deref().unwrap_or("").split('.').skip(1).chain(path.iter().copied()).collect();
+        let mut found = BTreeSet::new();
+        for target in i.targets(resolver, spec, file.rel) {
+            found.extend(module_lookup(resolver, target, &inner, ty, &mut BTreeSet::new()));
+        }
+        found
+    };
+    // An open around the site shadows those further out, innermost first, and all of them the
+    // file's own opens, which are read together.
+    let mut around: Vec<&Import> = facts.imports.iter()
+        .filter(|i| i.alias.is_none() && i.local && i.range.start <= r.range.start && r.range.end <= i.range.end)
+        .collect();
+    around.sort_by_key(|i| i.range.len());
+    for i in around {
+        let found = opened(i);
+        if !found.is_empty() {
+            return if found.len() == 1 { found.into_iter().collect() } else { Vec::new() };
+        }
+    }
+    let found: BTreeSet<String> = facts.imports.iter().filter(|i| i.alias.is_none() && !i.local).flat_map(opened).collect();
+    if !found.is_empty() {
+        return if found.len() == 1 { found.into_iter().collect() } else { Vec::new() };
+    }
+    // A module the file defines as another (`module Re = Core`) is the name's meaning before a file
+    // the name happens to spell.
+    let bound = facts.imports.iter().filter(|i| i.alias.as_deref() == Some(path[0]));
+    let (defined, named): (Vec<&Import>, Vec<&Import>) = bound.partition(|i| i.reexport);
+    for imports in [defined, named] {
+        let mut found = BTreeSet::new();
+        for i in imports {
+            let inner: Vec<&str> = i.path.as_deref().unwrap_or("").split('.').skip(1).chain(path[1..].iter().copied()).collect();
+            for target in i.targets(resolver, spec, file.rel) {
+                found.extend(module_lookup(resolver, target, &inner, ty, &mut BTreeSet::new()));
+            }
+        }
+        if !found.is_empty() {
+            return if found.len() == 1 { found.into_iter().collect() } else { Vec::new() };
+        }
+    }
+    Vec::new()
+}
+
+/// The ids `path` names inside the module `rel` is: a definition the file holds, or one reached
+/// through a module the file defines as another or one it includes; a type where `ty`.
+fn module_lookup(resolver: &Resolver, rel: &str, path: &[&str], ty: bool, seen: &mut BTreeSet<(String, String)>) -> BTreeSet<String> {
+    let joined = path.join("/");
+    // Two modules that include each other grow the path rather than repeat it.
+    let Some(facts) = resolver.facts(rel).filter(|_| (1..=16).contains(&path.len()) && seen.insert((rel.to_string(), joined.clone()))) else {
+        return BTreeSet::new();
+    };
+    if facts.declares_in(&joined, ty, true) {
+        return BTreeSet::from([format!("sym:{rel}::{joined}")]);
+    }
+    let spec = facts.lang.map(crate::code::spec::spec);
+    let mut found = BTreeSet::new();
+    for i in facts.imports.iter().filter(|i| i.reexport) {
+        let tail = i.path.as_deref().unwrap_or("").split('.').skip(1);
+        let inner: Vec<&str> = match i.alias.as_deref() {
+            Some(alias) if alias == path[0] => tail.chain(path[1..].iter().copied()).collect(),
+            Some(_) => continue,
+            None => tail.chain(path.iter().copied()).collect(),
+        };
+        // `include M` of a module the file defines, as `include Pmark` after `module Pmark = struct`.
+        let module = i.path.as_deref().unwrap_or("");
+        if i.alias.is_none() && facts.declares(&module.replace('.', "/")) {
+            // Inside the module the include stays where it is, so the path never grows through it.
+            if path.starts_with(&module.split('.').collect::<Vec<_>>()) {
+                continue;
+            }
+            let own: Vec<&str> = module.split('.').chain(path.iter().copied()).collect();
+            found.extend(module_lookup(resolver, rel, &own, ty, seen));
+            continue;
+        }
+        for target in spec.map(|s| i.targets(resolver, s, rel)).unwrap_or_default() {
+            found.extend(module_lookup(resolver, target, &inner, ty, seen));
+        }
+    }
+    found
 }
 
 /// The name most of `files` declare themselves under. A directory can hold a file of another package,
@@ -1508,9 +1685,10 @@ pub(crate) fn widen(stale: &[String], removed: &[String], graph: &Graph, all_rel
     // declaration moved.
     let chain = |rel: &str| match Lang::of(rel).map(crate::code::spec::spec) {
         Some(Spec { visibility: Visibility::Imported { transitive }, hooks, .. }) if hooks.header.is_none() => Some(*transitive),
-        Some(Spec { visibility: Visibility::Namespace, .. }) => Some(false),
+        Some(Spec { visibility: Visibility::Namespace | Visibility::Opened, .. }) => Some(false),
         _ => None,
     };
+    let opened = |rel: &str| Lang::of(rel).is_some_and(|l| matches!(crate::code::spec::spec(l).visibility, Visibility::Opened));
     fn module(rel: &str) -> Option<(&str, Lang)> {
         let lang = Lang::of(rel).filter(|l| matches!(crate::code::spec::spec(*l).visibility, Visibility::Directory | Visibility::Namespace))?;
         Some((rel.rsplit_once('/').map_or("", |(d, _)| d), lang))
@@ -1536,10 +1714,24 @@ pub(crate) fn widen(stale: &[String], removed: &[String], graph: &Graph, all_rel
     for e in graph.edges.iter().filter(|e| e.kind == EdgeKind::Imports) {
         importers.entry(e.target.as_str()).or_default().push(e.source.as_str());
     }
+    // Where a file opened is read with what it includes and a module is read through its aliases, a
+    // file handing a changed one on changes with it, however many hands it passes through; a file
+    // that only names one of them reads it once.
+    let mut handers: HashMap<&str, Vec<&str>> = HashMap::new();
+    for e in graph.edges.iter().filter(|e| e.kind == EdgeKind::ReExports && opened(&e.file)) {
+        handers.entry(e.target.as_str()).or_default().push(e.source.as_str());
+    }
+    let mut handed: BTreeSet<String> = BTreeSet::new();
     while let Some((file, transitive)) = frontier.pop() {
         for &importer in importers.get(file.as_str()).into_iter().flatten() {
             if reached.insert(importer.to_string()) && transitive {
                 frontier.push((importer.to_string(), transitive));
+            }
+        }
+        for &hander in handers.get(file.as_str()).into_iter().flatten() {
+            if handed.insert(hander.to_string()) {
+                reached.insert(hander.to_string());
+                frontier.push((hander.to_string(), transitive));
             }
         }
     }
@@ -1638,7 +1830,15 @@ pub(crate) fn extract(resolver: &Resolver, spec: &Spec, file: &File, ex: &mut Ex
     let facts = extracted(spec, decl, queries::refs(file.lang), file);
     write(file, &facts, ex);
     let kind = |i: &Import| if i.reexport { EdgeKind::ReExports } else { EdgeKind::Imports };
-    for i in &facts.imports {
+    // A name the file binds to a module of its own, or to one a file holds, is no mention of the file
+    // the name spells, as ocamldep reads it. One bound to a module no file holds, as dune's wrapper
+    // `Lib.M` is, is read as its own name, the one guess left.
+    let own = |i: &Import| match own_binding(&facts, i) {
+        Some(None) => true,
+        Some(Some(a)) => !a.targets(resolver, spec, file.rel).is_empty(),
+        None => false,
+    };
+    for i in facts.imports.iter().filter(|i| !matches!(spec.imports, ImportPaths::ModuleFile { .. }) || !own(i)) {
         for t in i.targets(resolver, spec, file.rel) {
             ex.edge(&format!("file:{}", file.rel), &format!("file:{t}"), kind(i), "*", file.rel);
         }

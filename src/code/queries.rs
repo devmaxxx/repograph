@@ -188,6 +188,9 @@ pub(crate) struct Meta {
     pub binds: Option<Binds>,
     /// On an import, where `ImportPaths::Relative` looks for its path.
     pub base: ImportBase,
+    /// On an import: it reaches the sites its node holds alone, as OCaml's `let open M in e` and
+    /// `M.(e)` open `M` for `e` only.
+    pub local: bool,
 }
 
 /// Where an import's path is looked for under `ImportPaths::Relative`. One language may spell both
@@ -265,6 +268,7 @@ pub fn compile(grammar: &Language, sources: &[&str]) -> Result<Compiled, String>
                 "visibility" if value == "file" => meta.own_file = true,
                 "import" if value == "rooted" => meta.base = ImportBase::Roots,
                 "import" if value == "relative" => meta.base = ImportBase::Importer,
+                "visibility" if value == "node" => meta.local = true,
                 "depth" => match value.parse() {
                     Ok(n) => meta.depth = Some(n),
                     Err(_) => return Err(format!("pattern at byte {at} sets depth {value:?}, which is no count")),
@@ -356,6 +360,9 @@ pub(crate) mod sources {
 
     pub(crate) const RUBY: Sources =
         Sources { decl: &[include_str!("queries/ruby/decl.scm")], refs: &[include_str!("queries/ruby/refs.scm")] };
+
+    pub(crate) const OCAML: Sources =
+        Sources { decl: &[include_str!("queries/ocaml/decl.scm")], refs: &[include_str!("queries/ocaml/refs.scm")] };
 
     pub(crate) const RUST: Sources =
         Sources { decl: &[include_str!("queries/rust/decl.scm")], refs: &[include_str!("queries/rust/refs.scm")] };

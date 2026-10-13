@@ -1781,5 +1781,97 @@ New: `bin/repograph-elixir`, built at the tree committed as `7276359`. Parent:
 - **Platforms:** not verified. The branch was not pushed, so `ci` has not run on it.
 - **Gate:**
   - `cargo test --all-targets`: 1,496 passed, 0 failed;
+
+## Step 23 · OCaml
+
+New: `bin/repograph-ocaml`, built at the tree committed on `feat/engine-ocaml`. Parent:
+`bin/repograph-merge19`. OCaml is read only when a config or `REPOGRAPH_CODE_GLOBS` names `**/*.ml`
+and `**/*.mli`.
+
+- **Corpus:** `ocaml/ocaml-re` at `1.14.0`, `4367d9c785f9d8a59029bf2a1bea2e2060ac2c64`, 71 `.ml`
+  and 26 `.mli`, LGPL-2.1 or later with the OCaml static-linking exception. It is read as data
+  only: no script of it was run. `lib_test/expect/test_pcre.ml` is not UTF-8, so the build reads 70
+  `.ml` files.
+- **Parse census** (`tests/parse_census.rs`): 0 of 71 `.ml` files hold an ERROR or a MISSING node
+  under `LANGUAGE_OCAML`, and 0 of 26 `.mli` under `LANGUAGE_OCAML_INTERFACE`.
+- **Cases:** 9 in `src/code/cases/ocaml.rs`: the extensions and the interface grammar; bindings,
+  modules, types with constructors and fields, classes, and a local `let` declaring nothing; an
+  interface's `val` and its doc comment; a module as its file beside the user first, then the one
+  file of its name, with a name two files share naming neither; a bare name read own file first,
+  then the opened modules, and a path read module by module through `include` and aliases, with a
+  functor's parameter shadowing a file; `open A.B`, an `include` of the file's own module, a type
+  and a value under one id, a field pattern's names, local opens shadowing the file's, and a type
+  never read as a value; a name the file binds to a module being no mention of the file it spells;
+  citations; `widen` through users and through what hands a module on.
+- **What OCaml writes** (`--no-dense`, the defaults plus `**/*.ml **/*.mli`): 1,857 nodes (96
+  OCaml files, 3 Markdown, 1,758 symbols: 869 functions, 324 values, 189 constants, 155 types, 124
+  modules, 96 fields, 1 module type), Declares 1,758 (all exported), Imports 220, ReExports 32,
+  Calls 1,216, References 1,287 (858 `type`, 429 plain). No edge dangles. The pending count rises by
+  1, a `UTF-8` citation.
+- **Regressions** (`s23/langdiff-ocaml.txt` in the scratchpad), ocaml-re without against with the
+  OCaml globs: ml R1 1,217 and mli R1 637 (every new node), ml R4 1,353 and mli R4 657 (Declares,
+  Imports and ReExports), ml Calls +1,216, ml References +689, mli References +598, R2 0, R3 0, R5
+  0, R6 0, R7 0, R9 0. R8 is 1, the pending count above.
+- **Census.** A text census over comment- and string-blanked source, independent of the grammar
+  (`s23/py/census.py` in the scratchpad, `s23/census-out.txt`). It reads items by keyword and
+  bracket frames, binders and type regions by token, and resolves a module path by OCaml's rule:
+  the own file under each module around the site, a local open around it innermost first, the
+  file's opens, then the module the first segment is bound to, through `include` and aliases, a
+  module being its file by name. Every miss was hand-read:
+  - Declarations: 1,758 of 1,758 with a symbol, none outside the census, every line equal.
+  - Imports: 220 of 220, none extra. 686 mentions name a module the file binds itself and are not
+    imports; the six `module Re = Core` files no longer import `re.ml`.
+  - ReExports: 32 of 32, none extra.
+  - Calls: 1,215 of 1,215, one extra. The extra is right: `benchmark.ml`'s `prefixes` calls
+    `char '.'` under `let open Re in`, which reaches `Ast.Export/char`; the census read an earlier
+    local `char` as still bound there.
+  - References: 429 of 429 values and 858 of 858 types, none extra.
+  - Sites no rule claims, value and type: 678 and 48 whose head names no file (`List.`, `Format.`,
+    `Base.`, `Re_private.`), 902 and 819 bare names nothing in reach declares (stdlib values and
+    types, labels), and 15 and 7 whose head file does not declare the rest: functor applications
+    (`Pmark.Set.*` 12, `Cset.CSetMap.*` 3, `Automata.State.Table.*` 3) and `Domain.cpu_relax`,
+    `spawn` and `join` (4), stdlib names `lib/fake/domain.ml` lacks.
+- **P and R per kind** (§3.3; P from the hand read and the census, R from the census):
+
+  | kind | edges | sample | P | R |
+  |---|---|---|---|---|
+  | Declares | 1,758 | 50/50 | 1.000 | 1.000 (1,758 of 1,758) |
+  | Imports | 220 | 50/50 | 1.000 | 1.000 (220 of 220) |
+  | ReExports | 32 | 32/32 | 1.000 | 1.000 (32 of 32) |
+  | Calls | 1,216 | 50/50 | 1.000 | 1.000 (1,215 of 1,215) |
+  | References, value | 429 | 50/50 | 1.000 | 1.000 (429 of 429) |
+  | References, type | 858 | 50/50 | 1.000 | 1.000 (858 of 858) |
+
+- **Hand read** (seed 23, `s23/samp-*.txt`):
+  - Symbols: 50 of 50 right in id, line and end.
+  - Five seeded files, counted by hand against the source: `benchmarks/http.ml` 16/16 symbols and
+    1/1 imports, `deprecated/re_posix.ml` 0/0 and 1/1 with its ReExport, `lib/glob.ml` 42/42 and
+    3/3 (`Core` as import and as ReExport, `Re` being the file's alias of `Core`), `lib/group.ml` 31/31 and 3/3,
+    `lib_test/expect/test_color.ml` 1/1 and 2/2.
+  - Declares 50 of 50. Imports 50 of 50 by the rule; three of them name a stdlib module a
+    repository file spells (`test_str.ml` → `lib/str.ml`, and `Domain`, `Mutex` → `lib/fake/`),
+    which the rule cannot tell apart without dune. ReExports 32 of 32. Calls 50 of 50, four of
+    them from three names declared twice (`benchmarks`, `piece`, `Desc.status`), whose node spans
+    the first. References 50 of 50 values and 50 of 50 types.
+- **Byte-identity** (`s23/ident.txt`), `merge19` against `ocaml` on copies:
+  - Kit corpus and scratchpad corpus, with the default globs and with `**/*.ml **/*.mli`:
+    `graph.json` and `headers.json` identical in all four pairs (`dff8b36a53bb0548`), and the
+    scratchpad's graph equals `store-14`'s. Neither corpus holds an OCaml file.
+  - luarocks with `**/*.lua **/*.c **/*.h` (`58bfff811cf5cb80`), gin with `**/*.go`
+    (`119169be4bd8aa62`), hiredis with `**/*.c **/*.h` (`ee379ffbd70010d6`), leveldb with
+    `**/*.cc **/*.h` (`af2c68ffce6bff3e`), Slim with `**/*.php` (`511cb2812dd60ab8`) and rack with
+    `**/*.rb **/*.rbw **/*.gemspec **/*.rake` (`a4985948aaa4f7d7`): identical.
+- **Fixture and bench:** not run. OCaml is not in the fixture's globs.
+- **Size and build time:** not measured, per the wave's rule. The two parsers' object files are
+  4.84 MB (`LANGUAGE_OCAML`) and 4.10 MB (`LANGUAGE_OCAML_INTERFACE`), unstripped; the session
+  measures the binary and the archive at merge.
+- **Licence reading:** `tree-sitter-ocaml 0.26.0 MIT ok`, ABI 15. The locals in `refs.scm` are
+  adapted from the crate's `locals.scm` and carry its MIT notice; the rest of both queries is
+  written to the engine's contract.
+- **Edited tests:** `lang.rs`'s `all_lists_every_language_once` gains two slots, and
+  `tests/engine.rs`'s `Import` literal gains `local: false`. No assertion changed.
+- **Platforms:** not verified. The branch was not pushed, so `ci` has not run on it.
+- **Gate:**
+  - `cargo test --all-targets`: 1,499 passed, 0 failed;
   - `cargo clippy --all-targets -- -D warnings`: clean;
   - `cargo tree --duplicates --depth 0`: no tree-sitter crate.

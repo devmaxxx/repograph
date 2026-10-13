@@ -69,6 +69,9 @@ tree-sitter-ruby = "=0.23.1"
 tree-sitter-elixir = "=0.3.5"
 # Scala: the tree-sitter org's grammar, the one ast-grep carries. MIT, ABI 15, 26 MB of parser source.
 tree-sitter-scala = "=0.26.2"
+# OCaml: the tree-sitter org's grammar, its own crate because ast-grep does not carry it. MIT, ABI 15. We
+# read `LANGUAGE_OCAML` and `LANGUAGE_OCAML_INTERFACE`, never its type grammar.
+tree-sitter-ocaml = "=0.26.0"
 # Detection and grammars behind `lang::detect` and `Lang::grammar`: its extension table and the grammars
 # it carries. Default features off, because the default compiles 27 grammars and nine of them we never
 # read. Each feature is a grammar pinned above; Cargo unifies the two into one copy, and the `=` pins keep
