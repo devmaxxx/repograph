@@ -84,6 +84,9 @@ pub(crate) enum Role {
     CiteString,
     /// A name the file exports apart from its declaration: TypeScript's `export { a }`.
     ExportName,
+    /// The table or object the file hands its importers, whose members are what a receiver naming
+    /// the import reaches: Lua's `return M`.
+    ExportRoot,
     /// `@_…`: read by a predicate, never by the engine.
     Private,
 }
@@ -124,6 +127,7 @@ impl Role {
             "cite.comment" => Role::CiteComment,
             "cite.string" => Role::CiteString,
             "export.name" => Role::ExportName,
+            "export.root" => Role::ExportRoot,
             _ => return None,
         })
     }
@@ -155,6 +159,9 @@ pub(crate) struct Meta {
     /// How deep the pattern's outermost node may sit, the file's root at 0: Rust's inline `mod` is
     /// never deep in a function body.
     pub depth: Option<u32>,
+    /// On a reference: its receiver stands for the owner of the definition holding the site, as
+    /// Lua's `self` inside `function M:g()` stands for `M`.
+    pub owner_receiver: bool,
 }
 
 pub struct Compiled {
@@ -203,6 +210,7 @@ pub fn compile(grammar: &Language, sources: &[&str]) -> Result<Compiled, String>
                 "reexport" => meta.reexport = true,
                 "adopt" => meta.adopt = true,
                 "variant" => meta.variant = true,
+                "receiver" if value == "owner" => meta.owner_receiver = true,
                 "depth" => match value.parse() {
                     Ok(n) => meta.depth = Some(n),
                     Err(_) => return Err(format!("pattern at byte {at} sets depth {value:?}, which is no count")),

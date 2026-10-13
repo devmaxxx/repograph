@@ -174,9 +174,11 @@ pub enum ImportPaths {
 pub enum Receivers {
     /// A hook, or nobody.
     Hook,
-    /// A receiver that is an import's alias resolves its member, by the member's last name part, in
-    /// the files that import reaches, when exactly one of them declares it visibly: Lua's `m.f` finds
-    /// `M.f` in the required file. A receiver a local binding shadows is a value, and stays missing.
+    /// The engine resolves `receiver.name`, first in the own file: a receiver the file declares
+    /// members of, as Lua's `M` in `M.f()`, names the member `receiver.name` there. Otherwise a
+    /// receiver that is an import's alias names the one member of that name the import's files
+    /// expose: the members of their `@export.root` (`return M`), or with no root their unowned
+    /// top-level definitions. A receiver a local binding shadows is a value, and stays missing.
     Imports,
 }
 

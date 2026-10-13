@@ -35,3 +35,21 @@ language until the line is removed or widened.
 
 Razor (`.razor`, `.cshtml`) is read only where `code_globs` or `REPOGRAPH_CODE_GLOBS` names it: its
 `@code` blocks are read as C#, but its readings did not pass `impact` and `trace` in 0.6.0.
+
+Lua (`.lua`, and a script whose shebang names `lua` or `lua5.x`) is read only where `code_globs` or
+`REPOGRAPH_CODE_GLOBS` names `**/*.lua`; it is not in the default globs yet.
+
+- **Read:** `function f()`, `function M.f()` and `function M:m()` (as `M.f` and `M.m`), and
+  `M.f = function`, at the file's level or in a `do` block or `if` branch there. A `local function`
+  is the file's own and is not exported. `require("a.b")` and `require "a.b"` import `a/b.lua` or
+  `a/b/init.lua` under the repository root, `src/` or `lua/`. A bare call reaches the file's own
+  function, or the one global function a required file declares. `m.f()` and `m:f()` through a
+  `require`'s alias reach the member `f` of the table the required file returns (`return M`), or its
+  top-level function `f` when it returns no table. `M.f()` on the file's own table and `self:f()`
+  inside `function M:g()` reach the file's `M.f`. Requirement ids are read in comments and strings.
+- **Not read:** a function defined inside another function's body, or two blocks deep;
+  `M.f = function` inside a branch; a method called on a value (`obj:m()`) or one `self` inherits;
+  the members of a table a module returns any other way (`return setmetatable(M, …)`,
+  `return { … }`), or of a module it hands on with `return require(…)`; a `require` of a computed
+  name, of a module outside the repository, or inside a larger expression (`require("a").b`,
+  `require("a") or {}`), whose local is then a plain value; `luajit` shebangs.

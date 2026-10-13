@@ -212,3 +212,45 @@ fn a_lua_file_is_read_by_its_extension_or_its_shebang() {
     }
     assert_eq!(detect("bin/luarocks", Some("#!/usr/bin/env luajit\n")), None, "LuaJIT is another interpreter's name");
 }
+
+#[test]
+fn a_receiver_reaches_only_what_the_required_file_returns_or_else_its_top_level_functions() {
+    let files = [
+        ("a.lua", "local m = require(\"x\")\nlocal n = require(\"y\")\nlocal function go()\n  m.deep()\n  m.parse()\n  m.helper()\n  m.run()\n  n.top()\n  n.inner()\nend\n"),
+        ("x.lua", "local X = {}\nlocal H = {}\nfunction H.parse() end\nfunction helper() end\nfunction X.sub.deep() end\nfunction X.run() end\nreturn X\n"),
+        ("y.lua", "local T = {}\nfunction T.inner() end\nfunction top() end\n"),
+    ];
+    assert_eq!(lines(&extract(&files, "a.lua"), EdgeKind::Calls), [
+        "sym:a.lua::go -> sym:x.lua::X.run []",
+        "sym:a.lua::go -> sym:y.lua::top []",
+    ], "`X.sub.deep` is no member of `X`, `H` is not returned, a global `helper` is not `X`'s, and a file \
+        that returns no table hands on its top-level functions alone");
+}
+
+#[test]
+fn a_call_through_the_file_s_own_table_or_self_reaches_its_member() {
+    let src = r#"local M = {}
+function M.h() end
+function M.g() return M.h() end
+function M:m() return self:g(), self.h() end
+function M.k(M) return M.h() end
+local function helper() return M.h(), self.h() end
+return M
+"#;
+    assert_eq!(lines(&extract(&[("m.lua", src)], "m.lua"), EdgeKind::Calls), [
+        "sym:m.lua::M.g -> sym:m.lua::M.h []",
+        "sym:m.lua::M.m -> sym:m.lua::M.g []",
+        "sym:m.lua::M.m -> sym:m.lua::M.h []",
+        "sym:m.lua::helper -> sym:m.lua::M.h []",
+    ], "a parameter named `M` is another value, and `self` outside a member names no table");
+}
+
+#[test]
+fn a_local_holding_more_than_the_require_call_is_a_value_and_shadows_a_global() {
+    let files = [
+        ("a.lua", "require(\"g\")\nlocal cfg = require(\"x\").settings\nlocal m = require(\"x\") or {}\nlocal function go()\n  cfg()\n  m()\n  m.run()\nend\n"),
+        ("g.lua", "function cfg() end\nfunction m() end\n"),
+        ("x.lua", "local X = {}\nfunction X.run() end\nreturn X\n"),
+    ];
+    assert!(lines(&extract(&files, "a.lua"), EdgeKind::Calls).is_empty(), "`cfg` and `m` are locals, not the globals `g.lua` defines");
+}

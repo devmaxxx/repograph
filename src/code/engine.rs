@@ -102,6 +102,14 @@ impl Locals {
         let root = name.split_once('/').map_or(name, |(root, _)| root);
         self.0.get(root).is_some_and(|scopes| scopes.iter().any(|scope| scope.contains(&byte)))
     }
+
+    /// Whether a local binding of `name`'s first part encloses `byte` in a scope that does not also
+    /// hold `declared`, where the name's member is declared: the file's table `M` binds around its
+    /// own `M.f`, while a parameter named `M` is some other value.
+    fn shadows_apart(&self, name: &str, byte: usize, declared: usize) -> bool {
+        let root = name.split(['.', '/']).next().unwrap_or(name);
+        self.0.get(root).is_some_and(|scopes| scopes.iter().any(|scope| scope.contains(&byte) && !scope.contains(&declared)))
+    }
 }
 
 #[derive(Debug, Default, Clone)]
@@ -115,6 +123,9 @@ pub struct Facts {
     pub(crate) locals: Locals,
     /// Package and namespace lines, in file order.
     pub namespaces: Vec<String>,
+    /// What the file hands its importers, by name: a receiver naming the import reaches the members
+    /// of these and nothing else. Empty, it reaches the file's unowned top-level definitions.
+    pub(crate) roots: Vec<String>,
     /// Qualified names of `defs`, and of the exported ones, so a reference looks a name up instead of
     /// scanning every definition.
     declared: HashSet<String>,
@@ -331,6 +342,7 @@ fn declare(spec: &Spec, decl: &'static Compiled, file: &File) -> Facts {
             facts.imports.push(import);
         }
         exports.extend(caps.iter().filter(|(r, _)| *r == Role::ExportName).map(|(_, n)| fold(spec, text(*n, src))));
+        facts.roots.extend(caps.iter().filter(|(r, _)| *r == Role::ExportRoot).map(|(_, n)| fold(spec, text(*n, src))));
     });
     qualify(spec, decl, file, declared, &mut facts);
     // A later `export { a }` exports what the file declared plain, which the declaration's own
@@ -355,14 +367,19 @@ fn declare(spec: &Spec, decl: &'static Compiled, file: &File) -> Facts {
 fn refer(spec: &Spec, refs: &'static Compiled, file: &File, facts: &mut Facts) {
     let Some(tree) = file.tree else { return };
     let (root, src) = (tree.root_node(), file.src);
-    let (mut scopes, mut bound) = (Vec::new(), Vec::new());
+    let (mut scopes, mut bound, mut owned) = (Vec::new(), Vec::new(), Vec::new());
     matches_of(refs, root, src, file.rel, |pattern, caps| {
         // A definition whose own pattern captures a scope binds there and nowhere else: a loop
         // variable covers the loop's body, never the iterable it sits beside.
         let own: Vec<Range<usize>> = caps.iter().filter(|(r, _)| *r == Role::LocalScope).map(|(_, n)| n.byte_range()).collect();
         for (role, node) in &caps {
             match role {
-                Role::Reference(edge) => facts.refs.push(read_reference(spec, &caps, *edge, *node, &refs.metas[pattern], src)),
+                Role::Reference(edge) => {
+                    if refs.metas[pattern].owner_receiver {
+                        owned.push(facts.refs.len());
+                    }
+                    facts.refs.push(read_reference(spec, &caps, *edge, *node, &refs.metas[pattern], src));
+                }
                 Role::LocalScope => scopes.push(node.byte_range()),
                 Role::LocalDefinition => bound.push((node.start_byte(), fold(spec, text(*node, src)), own.clone())),
                 Role::CiteComment => facts.cites.push(Cite { source: None, context: "comment", range: node.byte_range() }),
@@ -394,6 +411,13 @@ fn refer(spec: &Spec, refs: &'static Compiled, file: &File, facts: &mut Facts) {
     }
     let owners: Vec<_> = facts.refs.iter().map(|r| facts.owner(r.range.start)).collect();
     facts.refs.iter_mut().zip(owners).for_each(|(r, o)| r.source = o);
+    // Outside a member, the word names no owner and stays as written, which nothing declares.
+    for i in owned {
+        let source = facts.refs[i].source.map(|s| facts.defs[s].qualified.as_str());
+        if let Some((owner, _)) = source.and_then(|q| q.rsplit_once(['.', '/'])) {
+            facts.refs[i].receiver = Some(owner.to_string());
+        }
+    }
     if !facts.cites.is_empty() {
         let decorators = syntax::Decorators::of(root);
         let owners: Vec<_> = facts.cites.iter().map(|c| facts.owner(decorators.said_at(c.range.start))).collect();
@@ -853,7 +877,7 @@ fn visible(resolver: &Resolver, spec: &Spec, file: &File, reach: &[(String, Arc<
 }
 
 /// Every reference of a kind no hook owns, resolved by name; one with a receiver only where the spec
-/// reads receivers through imports.
+/// reads receivers itself (`Receivers::Imports`).
 pub fn resolve(resolver: &Resolver, spec: &Spec, file: &File, facts: &Facts, ex: &mut Extraction) {
     let rel = file.rel;
     let reach = reach(resolver, spec, file, facts);
@@ -877,13 +901,21 @@ pub fn resolve(resolver: &Resolver, spec: &Spec, file: &File, facts: &Facts, ex:
             Ambiguity::All => own.then(|| rel.to_string()).into_iter().chain(others).collect(),
         }
     };
+    let mut receiving: Option<Receiving> = None;
     for r in &facts.refs {
         if spec.hooks.owns.contains(&r.edge) {
             continue;
         }
         if let Some(receiver) = &r.receiver {
             if let Receivers::Imports = spec.receivers {
-                through_import(resolver, spec, file, facts, r, receiver, ex);
+                let receiving = receiving.get_or_insert_with(|| Receiving::of(resolver, spec, rel, facts));
+                if let Some(to) = receiving.target(facts, r, receiver) {
+                    let from = facts.source_id(rel, r.source);
+                    let container = r.source.and_then(|i| facts.defs[i].parent).map(|p| facts.defs[p].id.as_str());
+                    if to != from && Some(to) != container {
+                        ex.edge(&from, to, r.edge, &r.context, rel);
+                    }
+                }
             }
             continue;
         }
@@ -913,27 +945,67 @@ pub fn resolve(resolver: &Resolver, spec: &Spec, file: &File, facts: &Facts, ex:
     }
 }
 
-/// `receiver.name` where `receiver` is an import's alias: the one visible definition of the files that
-/// import reaches whose last name part is `name`. A binding the reference sits inside shadows the alias.
-fn through_import(resolver: &Resolver, spec: &Spec, file: &File, facts: &Facts, r: &Ref, receiver: &str, ex: &mut Extraction) {
-    let rel = file.rel;
-    if facts.locals.shadows(receiver, r.range.start) {
-        return;
+/// What a receiver names from one file, built at its first reference with a receiver: the file's
+/// own definitions by the receiver and member they spell, and the members each import alias
+/// exposes, with every definition of each.
+struct Receiving<'f> {
+    own: HashMap<(&'f str, &'f str), usize>,
+    imported: HashMap<&'f str, HashMap<String, BTreeSet<String>>>,
+}
+
+impl<'f> Receiving<'f> {
+    fn of(resolver: &Resolver, spec: &Spec, rel: &str, facts: &'f Facts) -> Self {
+        let own = facts.defs.iter().enumerate().filter_map(|(i, d)| d.qualified.rsplit_once(['.', '/']).map(|q| (q, i))).collect();
+        let mut files: HashMap<&str, BTreeSet<&str>> = HashMap::new();
+        for i in &facts.imports {
+            if let Some(alias) = &i.alias {
+                files.entry(alias).or_default().extend(i.targets(resolver, spec, rel).iter().map(String::as_str));
+            }
+        }
+        let imported = files.into_iter().map(|(alias, files)| {
+            let mut members: HashMap<String, BTreeSet<String>> = HashMap::new();
+            for theirs in files.into_iter().filter_map(|f| resolver.facts(f)) {
+                for (member, id) in exposed(&theirs) {
+                    members.entry(member.to_string()).or_default().insert(id.to_string());
+                }
+            }
+            (alias, members)
+        }).collect();
+        Receiving { own, imported }
     }
-    let files: BTreeSet<&String> =
-        facts.imports.iter().filter(|i| i.alias.as_deref() == Some(receiver)).flat_map(|i| i.targets(resolver, spec, rel)).collect();
-    let mut found = files.into_iter().filter_map(|f| resolver.facts(f)).flat_map(|theirs| {
-        theirs.defs.iter()
-            .filter(|d| d.export && d.qualified.rsplit(['.', '/']).next() == Some(r.name.as_str()))
-            .map(|d| d.id.clone())
-            .collect::<Vec<_>>()
-    });
-    let (Some(to), None) = (found.next(), found.next()) else { return };
-    let from = facts.source_id(rel, r.source);
-    let container = r.source.and_then(|i| facts.defs[i].parent).map(|p| &facts.defs[p].id);
-    if to != from && Some(&to) != container {
-        ex.edge(&from, &to, r.edge, &r.context, rel);
+
+    /// The one definition `receiver.name` names. A table the file declares members of is the file's
+    /// own, unless a binding around the site and not around the member names another value; an
+    /// import's alias reaches the one member of that name its files expose, unless a binding around
+    /// the site shadows the alias.
+    fn target<'a>(&'a self, facts: &'a Facts, r: &Ref, receiver: &str) -> Option<&'a str> {
+        if let Some(&i) = self.own.get(&(receiver, r.name.as_str())) {
+            let def = &facts.defs[i];
+            return (!facts.locals.shadows_apart(receiver, r.range.start, def.range.start)).then_some(def.id.as_str());
+        }
+        if facts.locals.shadows(receiver, r.range.start) {
+            return None;
+        }
+        let ids = self.imported.get(receiver)?.get(r.name.as_str())?;
+        let mut ids = ids.iter();
+        match (ids.next(), ids.next()) {
+            (Some(id), None) => Some(id.as_str()),
+            _ => None,
+        }
     }
+}
+
+/// What a module hands a receiver that names it, by member name: the members of its export roots
+/// (`return M` hands `M.f` as `f`), or with no root its unowned top-level definitions, as a package
+/// hands its package-level names. Hidden definitions and deeper members stay out.
+fn exposed(facts: &Facts) -> impl Iterator<Item = (&str, &str)> {
+    facts.defs.iter().filter(|d| d.export).filter_map(|d| {
+        let member = match facts.roots.is_empty() {
+            true => Some(d.qualified.as_str()),
+            false => facts.roots.iter().find_map(|root| d.qualified.strip_prefix(root.as_str())?.strip_prefix('.')),
+        }?;
+        (!member.contains(['.', '/'])).then_some((member, d.id.as_str()))
+    })
 }
 
 /// `apply_diff`'s widening for the languages that resolve across files with no header to compare.

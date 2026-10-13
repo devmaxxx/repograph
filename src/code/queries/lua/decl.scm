@@ -45,6 +45,10 @@
       ])))
   ])
 
+; `return M` hands the table `M` to every file that requires this one, so a receiver naming the
+; import reaches `M`'s members and no other function of the file.
+(chunk (return_statement (expression_list . (identifier) @export.root .)))
+
 ; `local m = require("a.b")` binds `m`, and so does `m = require("a.b")` on a local declared before.
 ; A bare `require "a.b"` loads the module for its effects, and `return require("a.b")` hands it on.
 ; Each shape sits under a different parent, so no site is read twice.
