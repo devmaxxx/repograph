@@ -1369,3 +1369,89 @@ tokenizer cases of the attribute-macro view. Plan, step 18 as built, has each fi
   continuation.
 - **Gate:** `cargo test --all-targets` 1,469 passed, 0 failed; `cargo clippy --all-targets -- -D
   warnings` clean. No release build; fixture, bench and platforms not run.
+
+## Step 20 · PHP
+
+New: `bin/repograph-php`, built at the tree committed on `feat/engine-php`. Parent:
+`bin/repograph-step17`. PHP is read only when a config or `REPOGRAPH_CODE_GLOBS` names `**/*.php`.
+
+- **Corpus:** `slimphp/Slim` at `4.15.3`, `3675bf6baac66b07032575b7bef4200b60b7974b`, 125 `.php`,
+  MIT. It is read as data only: no script of it was run. One root `composer.json`: `Slim\` →
+  `Slim`, `Slim\Tests\` → `tests`.
+- **Parse census:** 0 of 125 files hold an ERROR or a MISSING node under `LANGUAGE_PHP`, and 0
+  under `LANGUAGE_PHP_ONLY`.
+- **Cases:** 11 in `src/code/cases/php.rs`: types with members, functions, promoted properties and
+  export; PSR-4 by the longest prefix, a prefix with a list of directories, an `autoload-dev` prefix
+  and the empty prefix; the nearest `composer.json` deciding even when it maps nothing; resolution
+  through `use`, `as`, the namespace's directory and the own class (`$this->`, `self::`,
+  `static::`), with `parent::`, a private member and a fully qualified name missing; two classes of
+  one name in reach resolving to neither; text before `<?php`; citations; the extension; `widen`
+  over the directory and the importers.
+- **What PHP writes** (`--no-dense`, the defaults plus `**/*.php`): 1,214 nodes (125 files, 1,089
+  symbols: 106 classes, 18 interfaces, 736 methods, 214 properties, 15 constants), Declares 1,089
+  (830 exported), Imports 306, Calls 212, References 863 (779 `type`, 84 plain and `impl`), Extends
+  53, Implements 22. No edge dangles. The pending count rises by 1, a `PSR-15` citation.
+- **Regressions** (`log/langdiff-step20-slim.txt`), Slim without against with the PHP globs: php R1
+  1,214 (every new node), R4 1,395 (Declares and Imports), Calls +212, References +863, Extends
+  +53, Implements +22, R2 0, R3 0, R5 0, R6 0, R7 0, R9 0. R8 is 1, the pending count above.
+- **Census.** A text census over comment- and string-blanked source, independent of the grammar
+  (`s20/census.py` in the scratchpad, `log/census-step20-slim.txt`), resolving a short name by
+  PHP's rule (the `use` alias, then the own file, then the namespace) and a `use` by the PSR-4
+  map, every miss hand-read:
+  - Declarations: 1,089 of 1,089 with a symbol, none outside the census, no export disagreement.
+  - Imports: 306 of 306, none extra. Six `use Slim\…` lines name classes of other packages
+    (`Slim\Http\…`, `Slim\Psr7\…`) with no file here, and write nothing.
+  - Calls: 212 of 212, none extra: `$this->m()`, `self::`, `static::` to the own class's method,
+    `X::m()` through the class's `use` or namespace, and bare function calls.
+  - References: 863 of 863, none extra: type hints, `new X`, `instanceof`, `X::class`, `X::NAME`,
+    `self::NAME` and trait uses.
+  - Implements: 22 of 22. Extends: 53 of 54, none extra; the miss is `RouteTest extends TestCase`,
+    whose file declares `namespace Slim\Tests` from `tests/Routing`, so its directory does not hold
+    `tests/TestCase.php`. Composer would not autoload that class by PSR-4 either.
+  - Sites no rule claims: 1,375 `$this->m()` of an inherited or PHPUnit method (`prophesize` 451,
+    `assertSame` 282), 2,083 `$value->m()`, 509 `X::class` of another package, 179 `X::m()` of
+    another package (`Argument::` 177), 247 calls through `use function`, 49 static properties, 4
+    `parent::`, 16 `self::` and 5 `X::` sites of an inherited member, 18 `implements`, 6 `extends`
+    and 7 trait uses of another package.
+- **P and R per kind** (§3.3; P from the hand read and the census, R from the census):
+
+  | kind | edges | sample | P | R |
+  |---|---|---|---|---|
+  | Declares | 1,089 | 50/50 | 1.000 | 1.000 (1,089 of 1,089) |
+  | Imports | 306 | 50/50 | 1.000 | 1.000 (306 of 306) |
+  | Calls | 212 | 50/50 | 1.000 | 1.000 (212 of 212) |
+  | References | 863 | 50/50 | 1.000 | 1.000 (863 of 863) |
+  | Extends | 53 | 50/50 | 1.000 | 0.9815 (53 of 54) |
+  | Implements | 22 | 22/22 | 1.000 | 1.000 (22 of 22) |
+
+- **Hand read** (seed 20, `log/samples-step20-slim.txt`):
+  - Symbols: 50 of 50 right in id, line and end; every one of the 1,089 ends on a line that closes
+    it (`}` or `;`).
+  - Five seeded files, counted by hand against the source: `tests/Middleware/ErrorMiddlewareTest.php`
+    11/11 symbols and 7/7 imports, `tests/Mocks/CallableTest.php` 5/5 and 1/1,
+    `tests/Mocks/MockCustomRequestHandlerInvocationStrategy.php` 3/3 and 1/1,
+    `tests/Mocks/MockMiddlewareWithConstructor.php` 4/4 and 0/0 (its six uses are PSR packages),
+    `tests/Routing/FastRouteDispatcherTest.php` 17/17 and 2/2.
+  - Declares 50 of 50, with export matching the modifier; Imports 50 of 50, each `use` path equal to
+    the target's namespace and file name; Calls 50 of 50; References 50 of 50; Extends 50 of 50;
+    Implements 22 of 22.
+- **Byte-identity** (`log/ident-step20.txt`), `step17` against `php` on copies:
+  - Kit corpus and scratchpad corpus, with the default globs and with `**/*.php`, `**/*.lua`,
+    `**/*.go` and `**/*.c **/*.h`: `graph.json` and `headers.json` identical in all ten pairs
+    (`dff8b36a53bb0548`), and the scratchpad's graph equals `store-14`'s. Neither corpus holds a
+    `.php` file.
+  - luarocks with `**/*.lua` (`368f10ad0de3ba07`), gin with `**/*.go` (`119169be4bd8aa62`) and
+    hiredis with `**/*.c **/*.h` (`1396190e7661e0c7`): identical, and again with `**/*.php` added.
+    gin proves the reshaped `ModulePrefix` and `module_of` on Go.
+- **Fixture and bench:** not run. PHP is not in the fixture's globs.
+- **Size and build time:** not measured, per the wave's rule; the session measures them at merge.
+- **Licence reading:** `tree-sitter-php 0.24.2 MIT ok`. Its `LICENSE`: "The MIT License (MIT)
+  Copyright (c) 2017 Josh Vera, GitHub". The queries are written to the engine's
+  contract, not adapted from the crate's `tags.scm`, so they carry no notice.
+- **Edited tests:** `lang.rs`'s `all_lists_every_language_once` gains PHP's slot. No assertion
+  changed.
+- **Platforms:** not verified. The branch was not pushed, so `ci` has not run on it.
+- **Gate:**
+  - `cargo test --all-targets`: 1,461 passed, 0 failed;
+  - `cargo clippy --all-targets -- -D warnings`: clean;
+  - `cargo tree --duplicates --depth 0`: no tree-sitter crate.

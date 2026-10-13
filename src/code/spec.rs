@@ -144,6 +144,10 @@ pub enum Visibility {
     Directory,
     /// The own file and the family's index by name, hidden names excluded.
     Family,
+    /// The own file, the sibling files of the same language that declare its first namespace, and
+    /// the files its resolved imports reach, hidden names excluded: PHP's namespace is a directory
+    /// under PSR-4, and a `use` names one file of another.
+    Namespace,
 }
 
 #[derive(Clone, Copy)]
@@ -170,11 +174,31 @@ pub enum ImportPaths {
     /// A module name whose dots are directories, under each of `roots` of the repository and never the
     /// importer's directory: Lua's `require("a.b")` searches a package path, not the file's place.
     Dotted { roots: &'static [&'static str], suffixes: &'static [&'static str] },
-    /// A path under the module that the `manifest` nearest the importer names on its `directive`
-    /// line, which is a directory under the manifest's: Go's `github.com/a/b/render` in a module
-    /// `github.com/a/b` names `render/`. A directory names its files of the importer's language, less
-    /// those ending in one of `skip`; a path outside the module names nothing.
-    ModulePrefix { manifest: &'static str, directive: &'static str, skip: &'static [&'static str] },
+    /// A path under a prefix that the `manifest` nearest the importer maps to a directory: Go's
+    /// `github.com/a/b/render` in a module `github.com/a/b` names `render/`, and PHP's
+    /// `App\Http\Kernel` under composer's `"App\\": "src/"` names `src/Http/Kernel.php`. The rest of
+    /// the path after the prefix is directories split by `sep`. With `suffixes`, it names the first
+    /// file one of them completes; with none, the directory's files of the importer's language, less
+    /// those ending in one of `skip`. The longest prefix that names something wins, and a path under
+    /// no prefix names nothing.
+    ModulePrefix {
+        manifest: &'static str,
+        prefixes: Prefixes,
+        sep: char,
+        suffixes: &'static [&'static str],
+        skip: &'static [&'static str],
+    },
+}
+
+/// Where a manifest states its prefixes.
+#[derive(Clone, Copy)]
+pub enum Prefixes {
+    /// The word after this directive on the first line that starts with it, mapped to the
+    /// manifest's directory: `go.mod`'s `module github.com/a/b`.
+    Directive(&'static str),
+    /// The objects at these key paths of a JSON manifest, each mapping a prefix to a directory or a
+    /// list of them under the manifest's: composer's `autoload.psr-4`.
+    Json(&'static [&'static [&'static str]]),
 }
 
 /// Who resolves a reference written through a `@receiver`.
@@ -648,7 +672,13 @@ mod table {
         ambiguity: Ambiguity::OwnFirst,
         cross_file: true,
         // A test file is no part of the package another package imports.
-        imports: ImportPaths::ModulePrefix { manifest: "go.mod", directive: "module", skip: &["_test.go"] },
+        imports: ImportPaths::ModulePrefix {
+            manifest: "go.mod",
+            prefixes: Prefixes::Directive("module"),
+            sep: '/',
+            suffixes: &[],
+            skip: &["_test.go"],
+        },
         receivers: Receivers::Imports,
         dotted_dirs: false,
         hooks: NONE,
@@ -673,6 +703,31 @@ mod table {
     };
     // C's linking and includes; the queries differ, and the file is read past its attribute macros.
     pub(super) const CPP: Spec = Spec { queries: crate::code::queries::sources::CPP, hooks: attribute_macros::HOOKS, ..C_LANG };
+    pub(super) const PHP: Spec = Spec {
+        queries: crate::code::queries::sources::PHP,
+        view: None,
+        comments: Some(CommentSyntax { lines: &["//", "#"], blocks: true }),
+        // A signature over several lines, as a constructor's promoted parameters are, reads as one.
+        body: Body { line: Line::Header, ..PROSE },
+        label: Label::Qualified,
+        export: Export::Hide(&["private", "protected"]),
+        // A class sees its namespace's classes without a `use`, and an imported one by its `use`.
+        visibility: Visibility::Namespace,
+        // Two test doubles of one name in two namespaces are two classes.
+        ambiguity: Ambiguity::OwnThenUnique,
+        cross_file: true,
+        // PSR-4: composer maps a namespace prefix to a directory, and a class to its own file.
+        imports: ImportPaths::ModulePrefix {
+            manifest: "composer.json",
+            prefixes: Prefixes::Json(&[&["autoload", "psr-4"], &["autoload-dev", "psr-4"]]),
+            sep: '\\',
+            suffixes: &[".php"],
+            skip: &[],
+        },
+        receivers: Receivers::Imports,
+        dotted_dirs: false,
+        hooks: NONE,
+    };
 }
 
 pub(crate) fn spec(lang: Lang) -> &'static Spec {
@@ -697,6 +752,7 @@ pub(crate) fn spec(lang: Lang) -> &'static Spec {
         Lang::Go => &table::GO,
         Lang::C => &table::C_LANG,
         Lang::Cpp => &table::CPP,
+        Lang::Php => &table::PHP,
     }
 }
 
