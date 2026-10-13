@@ -770,7 +770,8 @@ pub fn write(file: &File, facts: &Facts, ex: &mut Extraction) {
 /// directory, then to the root when the spec says so, each with the spec's suffixes, kept only when
 /// the walk globbed the result. A path naming a directory names every file of the importer's
 /// language directly in it, as a Terraform module source does. The importer's own file and own
-/// directory add nothing it does not already hold, so they name nothing.
+/// directory add nothing it does not already hold, so they name nothing. A `Dotted` spec reads none of
+/// this: see `dotted`.
 pub fn import_targets(resolver: &Resolver, spec: &Spec, rel: &str, import: &Import) -> Vec<String> {
     let Some(path) = &import.path else { return Vec::new() };
     let (root, suffixes) = match spec.imports {
@@ -851,7 +852,8 @@ fn visible(resolver: &Resolver, spec: &Spec, file: &File, reach: &[(String, Arc<
     reach.iter().filter(|(_, facts)| seen(facts)).map(|(f, _)| f.clone()).collect()
 }
 
-/// Every reference with no receiver and of a kind no hook owns, resolved by name.
+/// Every reference of a kind no hook owns, resolved by name; one with a receiver only where the spec
+/// reads receivers through imports.
 pub fn resolve(resolver: &Resolver, spec: &Spec, file: &File, facts: &Facts, ex: &mut Extraction) {
     let rel = file.rel;
     let reach = reach(resolver, spec, file, facts);
