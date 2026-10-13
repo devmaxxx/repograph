@@ -421,7 +421,7 @@ impl Reader<'_> {
 
     fn type_decl(&self, n: Node, at: &At, ex: &mut Sink) {
         let written = n.child_by_field_name("name").map(|x| text(x, self.src).to_string()).unwrap_or_default();
-        let (_, name) = wrapper_name(at.class.is_none(), self.host, written);
+        let name = wrapper_name(at.class.is_none(), self.host, written);
         let local = at.class.as_ref().map_or_else(|| name.clone(), |c| format!("{c}.{name}"));
         let id = format!("sym:{}::{local}", self.rel);
         // A nested type reads the enclosing type's own parameters as well as its own, as C# does.

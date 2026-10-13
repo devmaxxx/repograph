@@ -123,35 +123,52 @@ pub(crate) fn read(facts: &Facts, root: Node, src: &[u8], host: &Host) -> Declar
     usings(root, src, &mut d);
     let scoped = file_scoped(root, src);
     let mut types: HashMap<usize, usize> = HashMap::new();
-    // Definitions come first and then the repeats of their ids, so a part is known before the
-    // members and the second part that join it.
-    for (range, i) in facts.sites() {
+    // Each part of a type by the definition it repeats, its node's range and its entry in `d.types`:
+    // parts of one id in different namespaces share the definition, and a member joins the part
+    // whose body holds it.
+    let mut parts: Vec<(usize, std::ops::Range<usize>, usize)> = Vec::new();
+    // In source order, so a part is known before the members and the nested types in its body, and
+    // a repeat of an id comes after the definition it repeats.
+    let mut sites: Vec<_> = facts.sites().collect();
+    sites.sort_by_key(|(range, _)| (range.start, std::cmp::Reverse(range.end)));
+    for (range, i) in sites {
         let def = &facts.defs[i];
         let Some(n) = package_scope::declared::node_at(root, range, &DECLARATIONS) else { continue };
+        let owner = def.parent.and_then(|o| {
+            let within = parts.iter().find(|(p, r, _)| *p == o && r.start <= range.start && range.end <= r.end);
+            within.map(|(_, _, t)| *t).or_else(|| types.get(&o).copied())
+        });
         if def.kind.join().is_none() {
-            if let Some(t) = def.parent.and_then(|o| types.get(&o)) {
-                member(n, &def.name, src, &mut d.types[*t]);
+            if let Some(t) = owner {
+                member(n, &def.name, src, &mut d.types[t]);
             }
             continue;
         }
         let namespace = match def.parent {
             None => namespace(n, &scoped, host.namespace, src),
-            Some(owner) => types.get(&owner).map(|t| d.types[*t].namespace.clone()).unwrap_or_default(),
+            Some(_) => owner.map(|t| d.types[t].namespace.clone()).unwrap_or_default(),
         };
         let part = declare_type(n, &def.qualified, namespace, def.parent.is_none() && host.component.is_some(), host, src);
-        match types.get(&i).map(|t| &mut d.types[*t]) {
+        let at = match types.get(&i).copied() {
             // A second part in the file and namespace of the first shares its id, and so its entry.
-            Some(first) if first.namespace == part.namespace => {
+            Some(t) if d.types[t].namespace == part.namespace => {
+                let first = &mut d.types[t];
                 first.partial |= part.partial;
                 first.bases.extend(part.bases);
                 first.generic_bases.extend(part.generic_bases);
+                t
             }
-            Some(_) => d.types.push(part),
+            Some(_) => {
+                d.types.push(part);
+                d.types.len() - 1
+            }
             None => {
                 types.insert(i, d.types.len());
                 d.types.push(part);
+                d.types.len() - 1
             }
-        }
+        };
+        parts.push((i, range.clone(), at));
     }
     d
 }

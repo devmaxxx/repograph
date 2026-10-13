@@ -1116,3 +1116,11 @@ fn a_tuple_type_names_each_of_its_element_types() {
     let imports = edges(&ex, EdgeKind::Imports);
     assert!(imports.iter().any(|(s, t, _)| *s == "file:Shop/Repo.cs" && *t == "file:Shop/Order.cs"), "{imports:?}");
 }
+
+#[test]
+fn same_named_types_in_two_namespaces_of_one_file_keep_their_own_members() {
+    let d = project::facts("Shop/Q.cs", "namespace A { public partial class X { public void P() {} } }\nnamespace B { public class X { public void Q() {} } }\n");
+    let members = |ns: &str| d.types.iter().find(|t| t.namespace == ns).map(|t| t.members.keys().cloned().collect::<Vec<_>>());
+    assert_eq!(members("A"), Some(vec!["P".to_string()]));
+    assert_eq!(members("B"), Some(vec!["Q".to_string()]));
+}

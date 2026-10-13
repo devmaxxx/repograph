@@ -57,12 +57,11 @@ pub(crate) fn resolve(resolver: &Resolver, file: &File, facts: &Facts, sink: &mu
 }
 
 /// The Razor wrapper is the blanked copy's only top-level type, and it stands for the component
-/// rather than for what it's written as. Returns the name both passes use, and whether this is
-/// that wrapper.
-pub(crate) fn wrapper_name(top_level: bool, host: &Host, written: String) -> (bool, String) {
+/// rather than for what it's written as.
+pub(crate) fn wrapper_name(top_level: bool, host: &Host, written: String) -> String {
     match (top_level, host.component) {
-        (true, Some(c)) => (true, c.to_string()),
-        _ => (false, written),
+        (true, Some(c)) => c.to_string(),
+        _ => written,
     }
 }
 
