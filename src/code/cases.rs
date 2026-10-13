@@ -12,6 +12,7 @@ mod java;
 mod jvm;
 mod kotlin;
 mod lua;
+mod php;
 mod python;
 mod razor;
 mod rust;

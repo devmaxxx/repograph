@@ -287,6 +287,9 @@ pub(crate) mod sources {
     pub(crate) const LUA: Sources =
         Sources { decl: &[include_str!("queries/lua/decl.scm")], refs: &[include_str!("queries/lua/refs.scm")] };
 
+    pub(crate) const PHP: Sources =
+        Sources { decl: &[include_str!("queries/php/decl.scm")], refs: &[include_str!("queries/php/refs.scm")] };
+
     pub(crate) const PYTHON: Sources =
         Sources { decl: &[include_str!("queries/python/decl.scm")], refs: &[include_str!("queries/python/refs.scm")] };
 

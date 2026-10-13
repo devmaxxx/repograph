@@ -8,7 +8,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 use crate::code::engine::{self, Facts};
 use crate::code::index::{Header, QualifiedIndex};
 use crate::code::lang::{detect, detect_path, Family, Lang};
-use crate::code::spec::{spec, Manifest, States, Visibility};
+use crate::code::spec::{spec, Manifest, Prefixes, States, Visibility};
 use crate::code::exceptions::single_file_components as vue;
 
 /// (directory the tsconfig lives in, directory its targets are relative to — `baseUrl` —
@@ -28,13 +28,13 @@ pub struct Resolver {
     files: BTreeSet<String>,
     /// The declarations of each file another file has resolved into, read once per build.
     facts: Mutex<HashMap<String, Option<Arc<Facts>>>>,
-    /// The module a directory's nearest manifest names, with the manifest's directory, by the
-    /// manifest's file name and the directory: see `module_of`.
+    /// The prefixes a directory's nearest manifest maps, each with its directory, by the manifest's
+    /// file name and the directory: see `module_of`.
     modules: Mutex<Modules>,
 }
 
-/// By manifest file name and directory: the nearest manifest's directory and the module it names.
-type Modules = HashMap<(&'static str, String), Option<(String, String)>>;
+/// By manifest file name and directory: each prefix the nearest manifest maps, and its directory.
+type Modules = HashMap<(&'static str, String), Arc<Vec<(String, String)>>>;
 
 #[derive(Deserialize, Default)]
 struct TsConfig {
@@ -330,26 +330,29 @@ impl Resolver {
             .collect()
     }
 
-    /// The directory of the `manifest` nearest at or above `dir`, and the word after `directive` on
-    /// its first line that starts with it: `go.mod`'s `module github.com/a/b`. The manifest is no
-    /// code file, so it is read from disk whether or not a glob reaches it, once per directory.
-    pub(crate) fn module_of(&self, dir: &str, manifest: &'static str, directive: &str) -> Option<(String, String)> {
+    /// Each prefix the `manifest` nearest at or above `dir` maps, with the directory it maps it to,
+    /// by `prefixes`. The manifest is no code file, so it is read from disk whether or not a glob
+    /// reaches it, once per directory. The nearest manifest decides, even when it maps nothing.
+    pub(crate) fn module_of(&self, dir: &str, manifest: &'static str, prefixes: Prefixes) -> Arc<Vec<(String, String)>> {
         let key = (manifest, dir.to_string());
         if let Some(known) = self.modules.lock().unwrap_or_else(|e| e.into_inner()).get(&key) {
             return known.clone();
         }
-        let read = std::fs::read_to_string(self.repo.join(dir).join(manifest)).ok().map(|text| {
-            let value = text.lines().find_map(|line| {
-                let rest = line.trim().strip_prefix(directive)?;
-                let word = rest.split("//").next()?.trim();
-                (rest.starts_with(char::is_whitespace) && !word.is_empty()).then(|| word.trim_matches('"').to_string())
-            });
-            value.map(|v| (dir.to_string(), v))
+        let read = std::fs::read_to_string(self.repo.join(dir).join(manifest)).ok().map(|text| match prefixes {
+            Prefixes::Directive(directive) => {
+                let value = text.lines().find_map(|line| {
+                    let rest = line.trim().strip_prefix(directive)?;
+                    let word = rest.split("//").next()?.trim();
+                    (rest.starts_with(char::is_whitespace) && !word.is_empty()).then(|| word.trim_matches('"').to_string())
+                });
+                value.map(|v| (v, dir.to_string())).into_iter().collect()
+            }
+            Prefixes::Json(paths) => json_prefixes(&text, paths, dir),
         });
         let found = match read {
-            Some(found) => found,
-            None if dir.is_empty() => None,
-            None => self.module_of(dir.rsplit_once('/').map_or("", |(up, _)| up), manifest, directive),
+            Some(found) => Arc::new(found),
+            None if dir.is_empty() => Arc::default(),
+            None => self.module_of(dir.rsplit_once('/').map_or("", |(up, _)| up), manifest, prefixes),
         };
         self.modules.lock().unwrap_or_else(|e| e.into_inner()).insert(key, found.clone());
         found
@@ -491,6 +494,26 @@ impl Resolver {
         }
         None
     }
+}
+
+
+/// The `(prefix, directory)` pairs of the objects at `paths` in a JSON manifest at `dir`, each value
+/// a directory or a list of them under `dir`. A manifest that does not parse maps nothing.
+fn json_prefixes(text: &str, paths: &[&[&str]], dir: &str) -> Vec<(String, String)> {
+    let Ok(root) = serde_json::from_str::<serde_json::Value>(text) else { return Vec::new() };
+    let mut pairs = Vec::new();
+    for path in paths {
+        let Some(map) = path.iter().try_fold(&root, |v, key| v.get(key)).and_then(|v| v.as_object()) else { continue };
+        for (prefix, value) in map {
+            let dirs = match value {
+                serde_json::Value::String(d) => vec![d.as_str()],
+                serde_json::Value::Array(ds) => ds.iter().filter_map(|d| d.as_str()).collect(),
+                _ => Vec::new(),
+            };
+            pairs.extend(dirs.into_iter().filter_map(|d| crate::code::prose::join_under(dir, d)).map(|d| (prefix.clone(), d)));
+        }
+    }
+    pairs
 }
 
 #[cfg(test)]

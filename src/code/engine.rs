@@ -20,7 +20,7 @@ use crate::model::{Graph, NodeKind};
 pub use crate::code::imports::Resolver;
 pub use crate::code::lang::Lang;
 pub use crate::code::queries::{compile, Compiled};
-pub use crate::code::spec::{Ambiguity, Body, Cap, Doc, Export, Form, ImportPaths, Label, Line, Receivers, Sources, Spec, Visibility, NONE};
+pub use crate::code::spec::{Ambiguity, Body, Cap, Doc, Export, Form, ImportPaths, Label, Line, Prefixes, Receivers, Sources, Spec, Visibility, NONE};
 pub use crate::model::{EdgeKind, Extraction};
 
 /// One file as the front read it.
@@ -837,7 +837,9 @@ pub fn import_targets(resolver: &Resolver, spec: &Spec, rel: &str, import: &Impo
     let (roots, suffixes) = match spec.imports {
         ImportPaths::Relative { roots, suffixes } => (roots, suffixes),
         ImportPaths::Dotted { roots, suffixes } => return dotted(resolver, rel, &path.replace('.', "/"), roots, suffixes),
-        ImportPaths::ModulePrefix { manifest, directive, skip } => return under_module(resolver, rel, path, manifest, directive, skip),
+        ImportPaths::ModulePrefix { manifest, prefixes, sep, suffixes, skip } => {
+            return under_module(resolver, rel, path, (manifest, prefixes), sep, suffixes, skip)
+        }
     };
     let dir = rel.rsplit_once('/').map_or("", |(d, _)| d);
     let bases = std::iter::once(dir).chain(roots.iter().copied());
@@ -870,18 +872,44 @@ fn dotted(resolver: &Resolver, rel: &str, path: &str, roots: &[&str], suffixes: 
         .collect()
 }
 
-/// The files of the directory `path` names under the importer's module, by `ImportPaths::ModulePrefix`.
-fn under_module(resolver: &Resolver, rel: &str, path: &str, manifest: &'static str, directive: &str, skip: &[&str]) -> Vec<String> {
+/// The file or the directory's files `path` names under a prefix of the importer's manifest, by
+/// `ImportPaths::ModulePrefix`.
+fn under_module(
+    resolver: &Resolver,
+    rel: &str,
+    path: &str,
+    (manifest, prefixes): (&'static str, Prefixes),
+    sep: char,
+    suffixes: &[&str],
+    skip: &[&str],
+) -> Vec<String> {
     let dir = rel.rsplit_once('/').map_or("", |(d, _)| d);
-    let Some((base, module)) = resolver.module_of(dir, manifest, directive) else { return Vec::new() };
-    // `import_path` unquotes the two quotes Go shares with other languages, not a raw string's backticks.
-    let path = path.trim_matches('`');
-    let Some(sub) = path.strip_prefix(module.as_str()).filter(|sub| sub.is_empty() || sub.starts_with('/')) else { return Vec::new() };
-    let target = crate::code::prose::join_under(&base, sub.trim_start_matches('/'));
-    let Some((target, lang)) = target.zip(Lang::of(rel)) else { return Vec::new() };
-    let mut files = resolver.in_dir(&target, lang);
-    files.retain(|f| f != rel && !skip.iter().any(|s| f.ends_with(s)));
-    files
+    let Some(lang) = Lang::of(rel) else { return Vec::new() };
+    // `import_path` unquotes the two quotes Go shares with other languages, not a raw string's
+    // backticks; a leading separator is PHP's fully qualified `\App\Kernel`.
+    let path = path.trim_matches('`').trim_start_matches(sep);
+    let module = resolver.module_of(dir, manifest, prefixes);
+    let mut pairs: Vec<&(String, String)> = module.iter().collect();
+    pairs.sort_by_key(|(prefix, _)| std::cmp::Reverse(prefix.len()));
+    for (prefix, base) in pairs {
+        // A prefix ends at a separator, its own or the path's: `Slim\` holds `Slim\App`, and so does
+        // the module `a/b` hold `a/b/c`, but not `a/bc`. Composer's empty prefix holds every class.
+        let Some(sub) = path.strip_prefix(prefix.as_str()) else { continue };
+        if !(prefix.is_empty() || sub.is_empty() || sub.starts_with(sep) || prefix.ends_with(sep)) {
+            continue;
+        }
+        let Some(target) = crate::code::prose::join_under(base, &sub.trim_start_matches(sep).replace(sep, "/")) else { continue };
+        if suffixes.is_empty() {
+            let mut files = resolver.in_dir(&target, lang);
+            files.retain(|f| f != rel && !skip.iter().any(|s| f.ends_with(s)));
+            return files;
+        }
+        let named = suffixes.iter().map(|suffix| format!("{target}{suffix}")).find(|f| f != rel && resolver.globbed(f));
+        if let Some(file) = named {
+            return vec![file];
+        }
+    }
+    Vec::new()
 }
 
 /// The files a reference may resolve into besides its own, by the spec's visibility, with what each
@@ -908,6 +936,15 @@ fn reach(resolver: &Resolver, spec: &Spec, file: &File, facts: &Facts) -> Vec<(S
             seen.into_iter().collect()
         }
         Visibility::Directory => resolver.siblings(rel, file.lang),
+        Visibility::Namespace => {
+            let own = facts.namespaces.first();
+            let mut files: BTreeSet<String> = resolver.siblings(rel, file.lang).into_iter()
+                .filter(|f| resolver.facts(f).is_some_and(|theirs| theirs.namespaces.first() == own))
+                .collect();
+            files.extend(facts.imports.iter().flat_map(|i| i.targets(resolver, spec, rel).iter().cloned()));
+            files.remove(rel);
+            files.into_iter().collect()
+        }
     };
     files.into_iter().filter_map(|f| resolver.facts(&f).map(|facts| (f, facts))).collect()
 }
@@ -960,9 +997,12 @@ pub fn resolve(resolver: &Resolver, spec: &Spec, file: &File, facts: &Facts, ex:
         if let Some(receiver) = &r.receiver {
             if let Receivers::Imports = spec.receivers {
                 let receiving = receiving.get_or_insert_with(|| Receiving::of(facts));
-                // A directory that is the module declares its members across its files.
+                // A directory that is the module declares its members across its files, and a
+                // namespace declares the classes its files hold, as a `use` brings one in by name.
                 let module = |member: &str| match spec.visibility {
-                    Visibility::Directory => declaring(member).into_iter().map(|f| format!("sym:{f}::{member}")).collect(),
+                    Visibility::Directory | Visibility::Namespace => {
+                        declaring(member).into_iter().map(|f| format!("sym:{f}::{member}")).collect()
+                    }
                     _ => Vec::new(),
                 };
                 let all = matches!(spec.ambiguity, Ambiguity::All | Ambiguity::OwnFirst);
@@ -1114,8 +1154,8 @@ fn exposed(facts: &Facts) -> impl Iterator<Item = (&str, &str)> {
 /// Where names are seen through imports, a changed or removed file can add or drop a name a file
 /// importing it calls, so every importer is read again, through the whole chain where the
 /// visibility is transitive. A file whose import named a file that did not exist yet has no
-/// `Imports` edge to follow, and waits for its own next edit. Where a directory is the module, a
-/// changed or removed file can add, move or drop a name every file beside it reads, and a call of
+/// `Imports` edge to follow, and waits for its own next edit. Where a directory is the module or a
+/// namespace, a changed or removed file can add, move or drop a name every file beside it reads, and a call of
 /// the module reads what it declares: the files of that directory and their importers are read
 /// again.
 pub(crate) fn widen(stale: &[String], removed: &[String], graph: &Graph, all_rels: &[String]) -> Vec<String> {
@@ -1123,10 +1163,11 @@ pub(crate) fn widen(stale: &[String], removed: &[String], graph: &Graph, all_rel
     // declaration moved.
     let chain = |rel: &str| match Lang::of(rel).map(crate::code::spec::spec) {
         Some(Spec { visibility: Visibility::Imported { transitive }, hooks, .. }) if hooks.header.is_none() => Some(*transitive),
+        Some(Spec { visibility: Visibility::Namespace, .. }) => Some(false),
         _ => None,
     };
     fn module(rel: &str) -> Option<(&str, Lang)> {
-        let lang = Lang::of(rel).filter(|l| matches!(crate::code::spec::spec(*l).visibility, Visibility::Directory))?;
+        let lang = Lang::of(rel).filter(|l| matches!(crate::code::spec::spec(*l).visibility, Visibility::Directory | Visibility::Namespace))?;
         Some((rel.rsplit_once('/').map_or("", |(d, _)| d), lang))
     }
     let mut reached: BTreeSet<String> = BTreeSet::new();
