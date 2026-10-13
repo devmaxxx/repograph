@@ -394,9 +394,11 @@ fn refer(spec: &Spec, refs: &'static Compiled, file: &File, facts: &mut Facts) {
     }
     let owners: Vec<_> = facts.refs.iter().map(|r| facts.owner(r.range.start)).collect();
     facts.refs.iter_mut().zip(owners).for_each(|(r, o)| r.source = o);
-    let decorators = syntax::Decorators::of(root);
-    let owners: Vec<_> = facts.cites.iter().map(|c| facts.owner(decorators.said_at(c.range.start))).collect();
-    facts.cites.iter_mut().zip(owners).for_each(|(c, o)| c.source = o);
+    if !facts.cites.is_empty() {
+        let decorators = syntax::Decorators::of(root);
+        let owners: Vec<_> = facts.cites.iter().map(|c| facts.owner(decorators.said_at(c.range.start))).collect();
+        facts.cites.iter_mut().zip(owners).for_each(|(c, o)| c.source = o);
+    }
 }
 
 fn read_declaration<'t>(caps: &[(Role, Node<'t>)], pattern: usize, src: &str, out: &mut Vec<Declared<'t>>) {
