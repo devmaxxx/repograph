@@ -1,10 +1,6 @@
 //! The shared reader: a language's two queries run over the tree the front parsed, their captures
 //! turned into `Facts`, and the facts written as nodes and edges by the language's `Spec`. Hooks read
 //! the same facts instead of walking the tree a second time.
-//!
-//! No language reads through it yet: each keeps its `legacy` reader until its port, so until the
-//! first one the engine is reached only by its tests and by a spec that names queries.
-#![allow(dead_code)]
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
 use std::ops::Range;

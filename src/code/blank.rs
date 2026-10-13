@@ -2,9 +2,6 @@
 //! keeps its bytes, so every row and column a grammar reports in the copy is the file's own, and
 //! no offset table exists anywhere.
 
-// Every caller is a family plan's (Razor, Vue); until one lands, the tests are the only reader.
-#![allow(dead_code)]
-
 use std::ops::Range;
 
 /// Same length as `src`; every byte outside `keep` becomes b' ' except b'\n'.

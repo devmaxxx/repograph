@@ -67,7 +67,6 @@ fn spec(body: Body, export: Export) -> Spec {
         cross_file: false,
         dotted_dirs: false,
         hooks: NONE,
-        legacy: None,
     }
 }
 

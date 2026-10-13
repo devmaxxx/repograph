@@ -10,13 +10,10 @@ use ast_grep_language::{Language as _, LanguageExt as _, SupportLang};
 use tree_sitter::{Language, Parser, Tree};
 
 /// One variant per grammar the 0.6.0 design reads, plus the two languages read by blanking.
-// Declared ahead of the family plans that construct them, so that no plan edits the declaration.
-#[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Lang { TypeScript, Tsx, Kotlin, Java, CSharp, Razor, Rust, Python, Dart, Swift, GraphQl, Sql, Bicep, Hcl, Terraform, Shell, Vue }
 
 /// The unit a resolver works over: languages that compile together share one.
-#[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Family { TypeScript, Jvm, DotNet, Rust, Python, Dart, Swift, GraphQl, Sql, Bicep, Hcl, Shell }
 

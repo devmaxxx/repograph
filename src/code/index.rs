@@ -242,7 +242,6 @@ impl QualifiedIndex {
     }
 
     /// Names directly under `scope.` with their files — for `import a.b.*`, `using A.B;`.
-    #[allow(dead_code)]
     pub fn under(&self, scope: &str) -> Vec<(&str, Vec<&str>)> {
         let prefix = format!("{scope}.");
         self.by_name

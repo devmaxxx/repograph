@@ -2,9 +2,6 @@
 //! engine reads them by, and the hooks for what the data cannot say. `spec` is the only place that
 //! names every language: the front, the resolver, the header index, `changes` and the update's
 //! widening read this table instead of matching on `Lang` each in its own way.
-//!
-//! Every language is ported: no entry reads through `legacy` any more.
-#![allow(dead_code)]
 
 use std::any::{Any, TypeId};
 use std::borrow::Cow;
@@ -14,7 +11,7 @@ use crate::code::engine::{Def, Facts, File, Import, Sink};
 use crate::code::imports::Resolver;
 use crate::code::index::Header;
 use crate::code::lang::Lang;
-use crate::model::{EdgeKind, Extraction};
+use crate::model::EdgeKind;
 
 pub struct Spec {
     pub queries: Sources,
@@ -36,9 +33,6 @@ pub struct Spec {
     /// while a tsconfig or a manifest there stays out.
     pub dotted_dirs: bool,
     pub hooks: Hooks,
-    /// The language's own reader, which the front calls after it has parsed the file, until the
-    /// language is ported to queries.
-    pub legacy: Option<Legacy>,
 }
 
 /// `.scm` sources, concatenated in order into the two compiled queries (`queries.rs`).
@@ -166,10 +160,6 @@ pub struct ImportPaths {
     pub suffixes: &'static [&'static str],
 }
 
-/// A language's own reader, over the tree the front parsed. It appends to an extraction that
-/// already holds the file node.
-pub(crate) type Legacy = fn(&Resolver, &File, &mut Extraction);
-
 pub(crate) type Collect = fn(&mut Resolver, &str, &str) -> Option<Header>;
 
 /// `(resolver, importer, site)`: the importer by path alone, because the transitive walk asks it of
@@ -248,9 +238,9 @@ const C: Option<CommentSyntax> = Some(CommentSyntax { lines: &["//"], blocks: tr
 const HASH: Option<CommentSyntax> = Some(CommentSyntax { lines: &["#"], blocks: false });
 const HCL_COMMENTS: Option<CommentSyntax> = Some(CommentSyntax { lines: &["#", "//"], blocks: true });
 
-/// The fields a language's port has yet to write down, and that a language read through its hooks
-/// alone never reads: nothing reads them while `legacy` is set or the language has no queries.
-const UNPORTED: Spec = Spec {
+/// The fields a language read through its hooks alone leaves as they are: with no queries, the engine
+/// never reads them.
+const HOOKS_ONLY: Spec = Spec {
     queries: Sources { decl: &[], refs: &[] },
     view: None,
     comments: None,
@@ -263,7 +253,6 @@ const UNPORTED: Spec = Spec {
     cross_file: false,
     dotted_dirs: false,
     hooks: NONE,
-    legacy: None,
 };
 
 /// The comment lines directly above a declaration, markers kept, and its first line.
@@ -302,9 +291,8 @@ mod table {
             owns: &[EdgeKind::Calls, EdgeKind::Extends, EdgeKind::Implements, EdgeKind::DecoratedBy],
             ..NONE
         },
-        legacy: None,
     };
-    pub(super) const VUE: Spec = Spec { view: Some(Lang::TypeScript), hooks: single_file_components::HOOKS, ..UNPORTED };
+    pub(super) const VUE: Spec = Spec { view: Some(Lang::TypeScript), hooks: single_file_components::HOOKS, ..HOOKS_ONLY };
     pub(super) const CSHARP: Spec = Spec {
         queries: crate::code::queries::sources::CSHARP,
         view: None,
@@ -324,9 +312,8 @@ mod table {
         imports: ImportPaths { root: false, suffixes: &[] },
         dotted_dirs: false,
         hooks: namespace_scope::HOOKS,
-        legacy: None,
     };
-    pub(super) const RAZOR: Spec = Spec { view: Some(Lang::CSharp), hooks: rendered_components::HOOKS, ..UNPORTED };
+    pub(super) const RAZOR: Spec = Spec { view: Some(Lang::CSharp), hooks: rendered_components::HOOKS, ..HOOKS_ONLY };
     pub(super) const KOTLIN: Spec = Spec {
         queries: crate::code::queries::sources::KOTLIN,
         view: None,
@@ -349,7 +336,6 @@ mod table {
         // The JVM index needs each file's arities and supertypes, and a call binds through
         // receivers, supertypes and overloads no query reads.
         hooks: Hooks { header: Some(package_scope::declared::header), resolve: Some(package_scope::receivers::resolve), ..NONE },
-        legacy: None,
     };
     pub(super) const JAVA: Spec = Spec {
         queries: crate::code::queries::sources::JAVA,
@@ -373,7 +359,6 @@ mod table {
         // As Kotlin's: the JVM index needs arities and supertypes, and a call binds through
         // receivers, supertypes and overloads no query reads.
         hooks: Hooks { header: Some(package_scope::java::header), resolve: Some(package_scope::java::resolve), ..NONE },
-        legacy: None,
     };
     pub(super) const RUST: Spec = Spec {
         queries: crate::code::queries::sources::RUST,
@@ -401,7 +386,6 @@ mod table {
             resolve: Some(crate_paths::resolve),
             ..NONE
         },
-        legacy: None,
     };
     pub(super) const PYTHON: Spec = Spec {
         queries: crate::code::queries::sources::PYTHON,
@@ -427,7 +411,6 @@ mod table {
             owns: &[EdgeKind::Calls, EdgeKind::Extends, EdgeKind::DecoratedBy],
             ..NONE
         },
-        legacy: None,
     };
     pub(super) const DART: Spec = Spec {
         queries: crate::code::queries::sources::DART,
@@ -452,7 +435,6 @@ mod table {
             owns: &[EdgeKind::Calls, EdgeKind::Extends],
             ..NONE
         },
-        legacy: None,
     };
     pub(super) const SQL: Spec = Spec {
         queries: crate::code::queries::sources::SQL,
@@ -476,7 +458,6 @@ mod table {
             resolve: Some(attachments::alters),
             ..NONE
         },
-        legacy: None,
     };
     pub(super) const BICEP: Spec = Spec {
         queries: crate::code::queries::sources::BICEP,
@@ -493,7 +474,6 @@ mod table {
         imports: ImportPaths { root: false, suffixes: &[""] },
         dotted_dirs: false,
         hooks: Hooks { resolve: Some(module_reach::reach), ..NONE },
-        legacy: None,
     };
     pub(super) const HCL: Spec = Spec {
         queries: crate::code::queries::sources::HCL,
@@ -509,7 +489,6 @@ mod table {
         imports: ImportPaths { root: false, suffixes: &[""] },
         dotted_dirs: false,
         hooks: NONE,
-        legacy: None,
     };
     pub(super) const TERRAFORM: Spec = Spec {
         queries: crate::code::queries::sources::TERRAFORM,
@@ -526,7 +505,6 @@ mod table {
         imports: ImportPaths { root: false, suffixes: &[""] },
         dotted_dirs: false,
         hooks: Hooks { resolve: Some(module_reach::reach), ..NONE },
-        legacy: None,
     };
     pub(super) const SWIFT: Spec = Spec {
         queries: crate::code::queries::sources::SWIFT,
@@ -543,7 +521,6 @@ mod table {
         imports: ImportPaths { root: false, suffixes: &[""] },
         dotted_dirs: false,
         hooks: NONE,
-        legacy: None,
     };
     pub(super) const GRAPHQL: Spec = Spec {
         queries: crate::code::queries::sources::GRAPHQL,
@@ -564,7 +541,6 @@ mod table {
         // The default header, kept in `headers.json` so a document that starts or stops declaring a
         // name re-reads the documents that use it.
         hooks: Hooks { header: Some(|rel, source| crate::code::engine::default_header(Lang::GraphQl, rel, source)), ..NONE },
-        legacy: None,
     };
     pub(super) const SHELL: Spec = Spec {
         queries: crate::code::queries::sources::SHELL,
@@ -589,7 +565,6 @@ mod table {
             resolve: Some(computed_paths::runs),
             ..NONE
         },
-        legacy: None,
     };
 }
 
