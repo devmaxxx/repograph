@@ -677,3 +677,61 @@ Kotlin's, as `java.rs` and `java/calls.rs`.
   - `cargo clippy --all-targets -- -D warnings`: clean;
   - `cargo tree --duplicates --depth 0`: no tree-sitter crate;
   - `src/code/jvm/` is gone.
+
+## Step 12 · C#, Razor
+
+New: `bin/repograph-step12c`. `bin/repograph-step12` holds the first, slower query, and the two
+write identical stores on the kit, the Razor-globbed kit and the scratchpad corpus. C#'s and Razor's
+old readers and `src/code/dotnet/` are deleted.
+C#'s lookup lives in `src/code/exceptions/namespace_scope/`, and Razor's components in
+`src/code/exceptions/rendered_components/`. Neither is `package_scope`: a C# name resolves through
+every namespace around it and a type is the sum of its `partial` parts, where a JVM file names one
+package and imports types.
+
+- **Regressions:** from `langdiff.py` on four inputs. The readings are in
+  `log/langdiff-12-{kit,razor,scratch}.txt`, `log/langdiff-step12-fixture.txt` and
+  `log/langdiff-step12-kit-jvm.txt`.
+  - Kit corpus (`old-12` → `new-12`, `--lang cs,csproj`): R3 = 1 and body-above 1, both accepted.
+    Every other class is 0, and the 19,757 edges are identical. `old-12` is the old reader under
+    `REPOGRAPH_LEGACY=csharp`, identical to `new-11`.
+  - Kit corpus with `.razor` and `.cshtml` globbed (step 11 → step 12): razor R3 = 18, accepted. The
+    1,242 edges are identical.
+  - Scratchpad corpus (vs `store-base`): cs R3 = 1 and body-above 1, the kit's two nodes. The rest
+    is the accepted py R3 = 12, rs R3 = 3 and body-above 7, SQL body-above 11 and Swift R3 = 1.
+  - Fixture: byte-identical to `fixture-8p`. Against `fixture-base` only step 6's SQL 21 and
+    R7 = 1 read.
+  - `--lang java,kt` on the kit (`new-11` → `new-12`): 0.
+- **Accepted, hand-read:**
+  - R3 `TimereportController.CreateTimereport`: the old body was the last line of a multi-line
+    attribute, and the new one is the signature line.
+  - Body-above `TimereportDayAttachmentPathTests`: a blank line inside the doc is dropped by the
+    shared `Stripped` form.
+  - Razor R3 = 18: members written on one line with their attribute, such as
+    `[Inject] public PayFormPageState PageService { get; set; }`. The old body was empty.
+- **Bounded and strict kinds:** P = R = 1.000 for each, as no edge moved.
+
+  | kind | kit (cs) | kit, Razor globbed (razor) |
+  |---|---|---|
+  | Declares (`export`) | 498 (282) | 380 (255) |
+  | Imports | 20 | 1 |
+  | Calls | 324 | 19 |
+  | References, Extends, DecoratedBy | 0 | 0 |
+
+- **Exceptions:** `namespace_scope` (C#) and `rendered_components` (Razor). Without their `resolve`
+  hooks, 37 of the 74 C# cases and 23 of the 60 Razor cases fail. On the kit C# keeps 0 of 324
+  Calls and 0 of 20 Imports. Both hooks stay.
+- **Outside the inputs:** not measured. No other C# is on this machine outside a Bonliva
+  repository, and a copy of its sources was refused by the session's permissions.
+- **Bench:** not run. The fixture holds no C# or Razor.
+- **Build time:** interleaved with step 0, on the corpus, at load 15–25.
+  - Medians of five: 1.175× and 1.226× (`log/buildtime-step12-{8,7}.txt`).
+  - Median of nine, three-way: step 0 1.292 s, step 11 1.558 s (1.206×), step 12 1.542 s (1.194×)
+    (`log/buildtime-step12-6.txt`).
+  - The first query compiled in 138 ms and read 1.239× against step 11's 1.168× in the same run
+    (`-4`). Dropping its `#if` contexts and its wildcard parent brought the compile to 37 ms, with
+    no change on any input.
+- **Gate:**
+  - `cargo test --all-targets`: 1,398 passed, 0 failed;
+  - `cargo clippy --all-targets -- -D warnings`: clean;
+  - `cargo tree --duplicates --depth 0`: no tree-sitter crate;
+  - `src/code/dotnet/` is gone.

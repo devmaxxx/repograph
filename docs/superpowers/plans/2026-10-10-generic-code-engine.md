@@ -1485,6 +1485,67 @@ This step alone closes the three reviewer defects. About 1,200 lines of Rust are
 - **Hooks:** `collect`, `header` and `manifest` for the DotNet state; `resolve` owning Calls (compiler lookup order, partial types).
 - **Razor:** `embed` (`blank.rs`), `view: CSharp`, its own `collect` and `header`. There are no corpus files, so the cases decide.
 
+**Step 12 as built.** Where the code differs from the text above, the code is the record:
+
+- **Engine:** two small changes.
+  - `extract` runs a language's `resolve` hook over empty `Facts` when the language has no declaration query of its own. Razor reads its view through its hook alone.
+  - `Sink::facts` writes a view's facts as `extract` writes its own.
+- **Queries** (92 + 8 lines):
+  - Block and file-scoped namespaces as `@scope.namespace`.
+  - Classes, structs, records, interfaces, enums and delegates, at the file and nested.
+  - Methods, constructors, properties, events, and fields and event fields one per declarator.
+  - A record's primary-constructor parameters are exported properties. A class's or struct's are unexported properties.
+  - Export, where C#'s defaults decide it, is set by the query:
+    - an interface member is public unless written `private` or `protected`, and an interface's type unless `private`;
+    - a type in a block namespace, at the file or in a file-scoped namespace is exported unless written `private` or `file`;
+    - a type in any other body is nested, and is exported only when written `public` or `internal`.
+
+    Elsewhere only the `public` or `internal` word decides.
+  - Citations from comments, string literals of every form, and an interpolated string's text. No call, supertype or reference site: the exception walks those.
+  - Compile time decided the shape. The first query read each default again under an `#if` in an interface or a type body, and found nested types through `(_ ["class" "struct" "record"] body: …)`. It took 138 ms to compile, and put step 12 at 1.239× step 0 (median of nine, three-way; step 11 read 1.168× in the same run). Dropping the `#if` contexts and finding nested types as "in a `declaration_list` that is not a namespace's" brought it to 37 ms, with no change on any input. Under an `#if` in a body the word alone now decides, as it does for an interface's `protected` type.
+- **Spec:**
+  - `Label::Qualified`, `Visibility::Family`, `OwnFirst` and `ImportPaths { root: false }`, as Java.
+  - `Export::Show(["public", "internal"])`.
+  - The body is `Adjacent { kinds: ["comment"] }`, `Stripped`, `Head` and `Line::Name`.
+  - Hooks: `header`, `collect`, `state`, `manifest` (`.csproj`), and `resolve` owning Calls, Imports, Extends and DecoratedBy.
+  - Razor: `view: CSharp` and hooks `header`, `collect`, `embed` and `resolve`. It has no queries of its own and no legacy reader.
+- **Exceptions:** `namespace_scope` for C# and `rendered_components` for Razor. `src/code/dotnet/` is gone.
+  - It is not `package_scope`. A Java or Kotlin file names one package and imports types. A C# name resolves through every namespace around it, then the usings, aliases, `using static`s, the host's usings and the project's `global using`s. A type is the sum of its `partial` parts across files, and an extension method is reached through its namespace. Only `package_scope::declared::{facts_of, node_at}` are shared, now `pub(crate)`.
+  - `namespace_scope/declared.rs` (268 lines) reads the engine's `Facts` and the tree back into what the .NET index keeps: types with their namespace, `partial`, bases and members with their declared types, extension methods and usings. It writes nothing. The old `declarations.rs` (322 lines) walked the tree and wrote the nodes.
+  - `namespace_scope/walk.rs` is the old references walk. It writes through the sink, and its citation arms are gone.
+  - `namespace_scope/project.rs` (the .NET state) reads each file's facts by the query.
+  - `namespace_scope/lookup.rs` is unchanged apart from paths.
+  - `rendered_components` reads the blanked view by C#'s queries. The wrapper class and every name under it take the component's name. The wrapper's node becomes the component's: the whole file, its first line, exported. The rest is the old Razor logic, through the sink.
+  - Without the `resolve` hooks, 37 of the 74 C# cases fail and 23 of the 60 Razor cases fail. On the kit, C# keeps 0 of 324 Calls and 0 of 20 Imports. Both hooks stay.
+- **Gate:** langdiff on four inputs, read with `bin/repograph-step12` (the first query). The final binary, `bin/repograph-step12c`, writes stores identical to it on the kit, the Razor-globbed kit and the scratchpad corpus.
+  - Kit corpus (`old-12` → `new-12`, `--lang cs,csproj`): R3 = 1 and body-above 1, both accepted below. Every other class is 0. The 19,757 edges are identical. C# holds Declares 498 (282 `export`), Imports 20 and Calls 324. `old-12` is step 12a's binary under `REPOGRAPH_LEGACY=csharp`, and is identical to `new-11`.
+  - Kit corpus with `.razor` and `.cshtml` globbed (step 11's binary → step 12's): cs as above, and razor R3 = 18, accepted below. The 1,242 edges are identical. Razor holds Declares 380 (255 `export`), Imports 1 and Calls 19.
+  - Scratchpad corpus (vs `store-base`): cs R3 = 1 and body-above 1, the same two nodes as the kit. The rest is the accepted py R3 = 12, rs R3 = 3 and body-above 7, SQL body-above 11 and Swift R3 = 1. Against step 11's store only the two cs bodies differ.
+  - Fixture: byte-identical to `fixture-8p` (13,002 nodes, 41,116 edges). Against `fixture-base` only step 6's accepted SQL diffs and R7 = 1 read. The fixture holds no C# or Razor, so there is no bench.
+  - `--lang java,kt` reads 0 on the kit (`new-11` → `new-12`), as `package_scope` changed only in visibility.
+  - Accepted, each hand-read:
+    - R3 `TimereportController.CreateTimereport`. The old body was the last line of a multi-line attribute, `Description = "…")]`. The new one is the signature line, `Line::Name`.
+    - Body-above `TimereportDayAttachmentPathTests`. A blank line inside the doc is dropped, by the engine's shared `Stripped` form. This is the class step 11 lists as 14.
+    - Razor R3 = 18. Each is a member written on one line with its attribute, as `[Inject] public PayFormPageState PageService { get; set; }` at `PayFormPage.razor:1186`. The old body was empty, and the new one is that line.
+- **Divergence outside the inputs:** not measured. A copy of a Bonliva .NET repository's sources was refused by the session's permissions, and no other C# is on this machine.
+- **Cases** moved to `src/code/cases/{csharp,razor}.rs`. No assertion was rewritten. Three harness calls changed:
+  - `declared::scan(…)` became `project::facts(rel, src)`, in `own` and in the usings case;
+  - the interpolation-hole case reads through `front::read`, since its citation now comes from the query and not the walk;
+  - the Razor cases name `rendered_components::` and `cases::csharp` instead of `super::`.
+- **Timing:** the final binary against step 0, interleaved, at load 15–25.
+  - Medians of five: 1.175× and 1.226× (`log/buildtime-step12-{8,7}.txt`).
+  - Median of nine, three-way: step 0 1.292 s, step 11 1.558 s (1.206×), step 12 1.542 s (1.194×) (`-6`).
+
+  Step 12 reads at step 11's level in the same runs, so the bar holds within the noise at this load. Lead (a) was not needed. The one cost that moved was the query's compile, above.
+- **Size:**
+  - `src/code/dotnet/` held 2,704 lines. `namespace_scope` and `rendered_components` hold 2,650: `walk.rs` 733, `rendered_components.rs` 503, `blank.rs` 345, `project.rs` 339, `lookup.rs` 324, `declared.rs` 268 and `namespace_scope.rs` 138.
+  - Net Rust outside the cases is −24 against the estimate's −800, and the queries add 100 lines. The kept hook is 2,650 lines against the estimate's 1,100. The walk, the lookup and Razor's directives are what no query replaces, as in steps 10 and 11.
+- **Step 11's open items**, carried and not fixed:
+  - Members of a type nested four deep are not declared, and `java/calls.rs::is_declared` then masks them as local classes.
+  - In a field with several declarators, a citation is owned by the first declarator.
+  - `package_scope`'s `header` builds a file's facts apart from the extraction, so each file passes through the engine twice. C# does the same: `collect` builds the facts for the index, and `extract` builds them again.
+  - `f112ba4` (members of a type nested in an enum). The kit and the fixture ran over it with step 12's binary, and `--lang java,kt` reads 0 against step 11. Neither input holds such a type, so this is not a re-verification of the fix. The outside run was not repeated.
+
 **Step 13 · TypeScript, TSX, then Vue.** L. Query ~220, Rust −700, hook ~600 kept.
 
 - **Queries:** functions, classes and members; interface members; object-literal members declared by their `const`; enums and type aliases; `export`; decorators; `idrefs` as citations. TSX inherits TypeScript's queries.
