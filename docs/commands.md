@@ -3,7 +3,8 @@
 ## Status
 
 0.6.0 is the version `main` carries. Its default globs read TypeScript and JavaScript, Kotlin, Java,
-C#, Rust, Python, Dart, Swift, GraphQL, SQL, Bicep, HCL, Shell and Vue; every command below is
+C#, Rust, Python, Dart, Swift, GraphQL, SQL, Bicep, HCL, Shell, Vue, Lua, Go, C, C++, PHP, Ruby,
+Scala, Elixir and OCaml; every command below is
 implemented rather than planned:
 `build` (a full re-read that replaces the stored graph only when it saves, so one interrupted
 leaves the previous store answering) and `update` (incremental; a no-op `update` is a fixed point), `families`, `ask`, `explain`,
@@ -115,7 +116,10 @@ difference from the text forms is deliberate: a `trace` that finds no path withi
 answer to the question that was asked, so the JSON form prints `"path": null` and exits 0 where the
 text form exits **3**. The two are the same answer in two shapes: a caller parsing an object should
 not have to read an exit code to learn what the object already says, and a shell script reading the
-text form should not have to tell that answer from the `1` an unknown symbol exits with.
+text form should not have to tell that answer from the `1` an unknown symbol exits with. A command
+given `--json` that fails once it is running prints `{"error": "…", "code": 1}` on stdout instead of text on stderr,
+with the same exit status, so a caller parsing stdout learns why it got no answer. A usage error is still clap's text on
+stderr with exit 2: it fails before any command runs.
 
 Inspect one node and everything attached to it:
 

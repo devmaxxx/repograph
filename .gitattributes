@@ -2,3 +2,6 @@
 # Taking the union keeps both sets; the default merge would ask a human to choose, and the
 # only correct answer is always "both".
 bench/history/runs.jsonl merge=union
+
+# A query is text the binary embeds; a Windows checkout must not change its line endings.
+*.scm text eol=lf

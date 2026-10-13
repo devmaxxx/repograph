@@ -1,13 +1,15 @@
 use anyhow::{Context, Result};
 use serde::Deserialize;
 use std::collections::{BTreeMap, BTreeSet};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::OnceLock;
+use std::sync::{Arc, Mutex, OnceLock};
 
+use crate::code::engine::{self, Facts};
 use crate::code::index::{Header, QualifiedIndex};
-use crate::code::lang::{Family, Lang};
-use crate::code::reader::{reader, Manifest, States};
-use crate::code::typescript::vue;
+use crate::code::lang::{detect, detect_path, Family, Lang};
+use crate::code::spec::{spec, Manifest, Prefixes, States, Visibility};
+use crate::code::exceptions::single_file_components as vue;
 
 /// (directory the tsconfig lives in, directory its targets are relative to — `baseUrl` —
 /// and pattern -> targets), sorted nearest-first.
@@ -20,9 +22,21 @@ pub struct Resolver {
     packages: BTreeMap<String, (String, BTreeMap<String, String>)>,
     /// Qualified name -> declaring files, one index per name-indexed family the globs reach.
     indexes: BTreeMap<Family, QualifiedIndex>,
-    /// What each language keeps across files, keyed by type: see `Reader::state`.
+    /// What each language keeps across files, keyed by type: see `Hooks::state`.
     states: States,
+    /// Every file the code globs reach, read or not: an import resolves only to one of them.
+    files: BTreeSet<String>,
+    /// The declarations of each file another file has resolved into, read once per build.
+    facts: Mutex<HashMap<String, Option<Arc<Facts>>>>,
+    /// The prefixes a directory's nearest manifest maps, each with its directory, by the manifest's
+    /// file name and the directory: see `module_of`.
+    modules: Mutex<Modules>,
+    /// Every globbed file by its file name, built on the first lookup: see `named`.
+    by_name: std::sync::OnceLock<HashMap<String, Vec<String>>>,
 }
+
+/// By manifest file name and directory: each prefix the nearest manifest maps, and its directory.
+type Modules = HashMap<(&'static str, String), Arc<Vec<(String, String)>>>;
 
 #[derive(Deserialize, Default)]
 struct TsConfig {
@@ -116,6 +130,18 @@ fn index_header(indexes: &mut BTreeMap<Family, QualifiedIndex>, family: Family, 
     if header.nested != Default::default() {
         index.insert_nested(rel, header.nested.clone());
     }
+    index.insert_open(&header.open);
+}
+
+/// The directory holding a repository-relative path, empty at the root.
+pub(crate) fn parent(rel: &str) -> &str {
+    rel.rsplit_once('/').map_or("", |(d, _)| d)
+}
+
+/// `rest` under the repository-relative `dir`; a manifest's `./x` means `x`.
+pub(crate) fn join(dir: &str, rest: &str) -> String {
+    let rest = rest.trim_start_matches("./");
+    if dir.is_empty() { rest.to_string() } else { format!("{dir}/{rest}") }
 }
 
 /// The language whose reader reads a build manifest, by its file name, among `readers`: the
@@ -132,11 +158,13 @@ impl Resolver {
         let mut paths: PathsTier = Vec::new();
         let mut packages = BTreeMap::new();
         let mut sources: Vec<(Lang, String, PathBuf)> = Vec::new();
+        let mut registered: Vec<(Lang, String)> = Vec::new();
+        let mut files: BTreeSet<String> = BTreeSet::new();
         let mut manifests: Vec<(Lang, String, PathBuf)> = Vec::new();
         let manifest_readers: Vec<(Lang, &Manifest)> =
-            Lang::ALL.into_iter().filter_map(|l| reader(l).manifest.as_ref().map(|m| (l, m))).collect();
+            Lang::ALL.into_iter().filter_map(|l| spec(l).hooks.manifest.as_ref().map(|m| (l, m))).collect();
         let mut reached: BTreeSet<Family> = BTreeSet::new();
-        // `walk` reads dotted directories, so this one does too, and admits from them only what a reader
+        // `walk` reads dotted directories, so this one does too, and admits from them only what a language
         // with `dotted_dirs` collects: CI keeps its scripts under `.github/`, while a tsconfig, a package.json or a manifest
         // under a dotted directory stays out, as it was before this walk opened.
         // A directory `skip` covers is not entered: `node_modules/**` is a pattern for files, so the
@@ -157,24 +185,28 @@ impl Resolver {
             let p = dent.path();
             let Some(name) = p.file_name().and_then(|n| n.to_str()) else { continue };
             let rel = p.strip_prefix(repo).unwrap_or(p).to_string_lossy().replace('\\', "/");
+            let is_file = dent.file_type().is_some_and(|t| t.is_file());
+            let globbed = is_file && !skip.is_match(&rel) && code.is_match(&rel) && include.as_ref().is_none_or(|i| i.is_match(&rel));
             if rel.split('/').any(|part| part.starts_with('.')) {
-                let is_file = dent.file_type().is_some_and(|t| t.is_file());
-                if let Some(lang) = Lang::of(&rel).filter(|l| reader(*l).dotted_dirs) {
-                    if is_file && !skip.is_match(&rel) && code.is_match(&rel) && include.as_ref().is_none_or(|i| i.is_match(&rel)) {
-                        reached.insert(lang.family());
-                        sources.push((lang, rel, p.to_path_buf()));
-                    }
+                // A name neither table knows is read for its shebang, as the extractor reads it.
+                if let Some(lang) = globbed.then(|| detect_path(&rel, p)).flatten().filter(|l| spec(*l).dotted_dirs) {
+                    reached.insert(lang.family());
+                    files.insert(rel.clone());
+                    sources.push((lang, rel, p.to_path_buf()));
                 }
                 continue;
             }
-            if dent.file_type().is_some_and(|t| t.is_file()) && !skip.is_match(&rel) {
-                if code.is_match(&rel) && include.as_ref().is_none_or(|i| i.is_match(&rel)) {
-                    if let Some(lang) = Lang::of(&rel) {
+            if is_file && !skip.is_match(&rel) {
+                if globbed {
+                    files.insert(rel.clone());
+                    if let Some(lang) = detect_path(&rel, p) {
                         reached.insert(lang.family());
                         // TypeScript's state is the tsconfig and package.json read below; its sources
                         // are the extractor's alone, so a TypeScript repository opens nothing more here.
-                        if reader(lang).collects() {
+                        if spec(lang).collects() {
                             sources.push((lang, rel.clone(), p.to_path_buf()));
+                        } else if spec(lang).hooks.register.is_some() {
+                            registered.push((lang, rel.clone()));
                         }
                     }
                 }
@@ -231,17 +263,32 @@ impl Resolver {
         }
         // Nearest tsconfig to the importing file wins: sort deepest directory first.
         paths.sort_by_key(|a| std::cmp::Reverse(a.0.len()));
-        let mut resolver = Resolver { repo: repo.to_path_buf(), paths, packages, indexes: BTreeMap::new(), states: States::new() };
+        let mut resolver = Resolver {
+            repo: repo.to_path_buf(),
+            paths,
+            packages,
+            indexes: BTreeMap::new(),
+            states: States::new(),
+            files,
+            facts: Mutex::default(),
+            modules: Mutex::default(),
+            by_name: std::sync::OnceLock::new(),
+        };
         // Manifests before sources: a path family's roots decide how its sources' paths read.
         for (lang, rel, path) in manifests.iter().filter(|(l, _, _)| reached.contains(&l.family())) {
-            if let (Some(m), Ok(text)) = (&reader(*lang).manifest, std::fs::read_to_string(path)) {
+            if let (Some(m), Ok(text)) = (&spec(*lang).hooks.manifest, std::fs::read_to_string(path)) {
                 (m.read)(&mut resolver, rel, &text);
             }
         }
-        for (lang, rel, path) in &sources {
+        for (lang, rel) in &registered {
+            if let Some(register) = spec(*lang).hooks.register {
+                register(&mut resolver, rel);
+            }
+        }
+        for (lang, rel, path) in sources {
             // Not UTF-8 is a binary, which the extractor skips as well.
             if let Ok(text) = std::fs::read_to_string(path) {
-                resolver.collect(*lang, rel, &text);
+                resolver.collect(lang, &rel, &text);
             }
         }
         Ok(resolver)
@@ -265,14 +312,118 @@ impl Resolver {
         index_header(&mut self.indexes, family, rel, header);
     }
 
+    /// Whether the code globs reach `rel`.
+    pub(crate) fn globbed(&self, rel: &str) -> bool {
+        self.files.contains(rel)
+    }
+
+    /// The globbed files whose file name is `name`, in path order. Indexed once, because a language
+    /// that names modules by file asks it for every module path in the build.
+    pub(crate) fn named(&self, name: &str) -> &[String] {
+        let index = self.by_name.get_or_init(|| {
+            let mut index: HashMap<String, Vec<String>> = HashMap::new();
+            for f in &self.files {
+                index.entry(f.rsplit('/').next().unwrap_or(f).to_string()).or_default().push(f.clone());
+            }
+            index
+        });
+        index.get(name).map_or(&[], Vec::as_slice)
+    }
+
+    /// The globbed files beside `rel` in its directory that its language reads, `rel` excluded.
+    pub(crate) fn siblings(&self, rel: &str, lang: Lang) -> Vec<String> {
+        let mut files = self.in_dir(rel.rsplit_once('/').map_or("", |(d, _)| d), lang);
+        files.retain(|f| f != rel);
+        files
+    }
+
+    /// The globbed files of `lang` directly in `dir`, `""` being the root.
+    pub(crate) fn in_dir(&self, dir: &str, lang: Lang) -> Vec<String> {
+        let prefix = if dir.is_empty() { String::new() } else { format!("{dir}/") };
+        self.files.range(prefix.clone()..)
+            .take_while(|f| f.starts_with(&prefix))
+            .filter(|f| !f[prefix.len()..].contains('/') && Lang::of(f) == Some(lang))
+            .cloned()
+            .collect()
+    }
+
+    /// Each prefix the `manifest` nearest at or above `dir` maps, with the directory it maps it to,
+    /// by `prefixes`. The manifest is no code file, so it is read from disk whether or not a glob
+    /// reaches it, once per directory. The nearest manifest decides, even when it maps nothing.
+    pub(crate) fn module_of(&self, dir: &str, manifest: &'static str, prefixes: Prefixes) -> Arc<Vec<(String, String)>> {
+        let key = (manifest, dir.to_string());
+        if let Some(known) = self.modules.lock().unwrap_or_else(|e| e.into_inner()).get(&key) {
+            return known.clone();
+        }
+        let read = std::fs::read_to_string(self.repo.join(dir).join(manifest)).ok().map(|text| match prefixes {
+            Prefixes::Directive(directive) => {
+                let value = text.lines().find_map(|line| {
+                    let rest = line.trim().strip_prefix(directive)?;
+                    let word = rest.split("//").next()?.trim();
+                    (rest.starts_with(char::is_whitespace) && !word.is_empty()).then(|| word.trim_matches('"').to_string())
+                });
+                value.map(|v| (v, dir.to_string())).into_iter().collect()
+            }
+            Prefixes::Json(paths) => json_prefixes(&text, paths, dir),
+        });
+        let found = match read {
+            // Longest first, so the importer's lookup takes the most specific prefix that names a file.
+            Some(mut found) => {
+                found.sort_by_key(|(prefix, _): &(String, String)| std::cmp::Reverse(prefix.len()));
+                Arc::new(found)
+            }
+            None if dir.is_empty() => Arc::default(),
+            None => self.module_of(dir.rsplit_once('/').map_or("", |(up, _)| up), manifest, prefixes),
+        };
+        self.modules.lock().unwrap_or_else(|e| e.into_inner()).insert(key, found.clone());
+        found
+    }
+
+    /// What a globbed file declares, by its language's queries; `None` for a file out of the globs,
+    /// unreadable, or in a language with no queries.
+    pub(crate) fn facts(&self, rel: &str) -> Option<Arc<Facts>> {
+        if !self.globbed(rel) {
+            return None;
+        }
+        if let Some(known) = self.facts.lock().unwrap_or_else(|e| e.into_inner()).get(rel) {
+            return known.clone();
+        }
+        // Read outside the lock: two threads may read one file, and both find the same facts.
+        let read = std::fs::read_to_string(self.repo.join(rel)).ok().and_then(|text| {
+            let lang = detect(rel, Some(&text))?;
+            engine::declarations(lang, rel, &text)
+        });
+        self.facts.lock().unwrap_or_else(|e| e.into_inner()).insert(rel.to_string(), read.clone());
+        read
+    }
+
+    /// Drops what `facts` read of `rels`, so a resolver kept across an edit reads them again.
+    pub(crate) fn forget(&self, rels: &[String]) {
+        let mut facts = self.facts.lock().unwrap_or_else(|e| e.into_inner());
+        for rel in rels {
+            facts.remove(rel);
+        }
+    }
+
     /// What one globbed source contributes before any file is extracted.
     fn collect(&mut self, lang: Lang, rel: &str, source: &str) {
-        let r = reader(lang);
-        let header = match r.collect {
-            Some(add) => add(self, rel, source),
-            None => r.header.map(|header| header(rel, source)),
+        let hooks = &spec(lang).hooks;
+        let header = match (hooks.collect, hooks.header) {
+            (Some(add), _) => add(self, rel, source),
+            (None, Some(header)) => Some(header(rel, source)),
+            (None, None) if matches!(spec(lang).visibility, Visibility::Family | Visibility::Lexical | Visibility::Package) => {
+                engine::declarations(lang, rel, source).map(|facts| match spec(lang).visibility {
+                    Visibility::Lexical => engine::paths(&facts),
+                    Visibility::Package => engine::package_paths(&facts),
+                    _ => engine::header(&facts),
+                })
+            }
+            (None, None) => None,
         };
         if let Some(header) = header {
+            if hooks.header.is_some() {
+                crate::code::index::collected(lang, rel, source, &header);
+            }
             self.add_header(lang.family(), rel, &header);
         }
     }
@@ -368,6 +519,25 @@ impl Resolver {
         }
         None
     }
+}
+
+/// The `(prefix, directory)` pairs of the objects at `paths` in a JSON manifest at `dir`, each value
+/// a directory or a list of them under `dir`. A manifest that does not parse maps nothing.
+fn json_prefixes(text: &str, paths: &[&[&str]], dir: &str) -> Vec<(String, String)> {
+    let Ok(root) = serde_json::from_str::<serde_json::Value>(text) else { return Vec::new() };
+    let mut pairs = Vec::new();
+    for path in paths {
+        let Some(map) = path.iter().try_fold(&root, |v, key| v.get(key)).and_then(|v| v.as_object()) else { continue };
+        for (prefix, value) in map {
+            let dirs = match value {
+                serde_json::Value::String(d) => vec![d.as_str()],
+                serde_json::Value::Array(ds) => ds.iter().filter_map(|d| d.as_str()).collect(),
+                _ => Vec::new(),
+            };
+            pairs.extend(dirs.into_iter().filter_map(|d| crate::code::prose::join_under(dir, d)).map(|d| (prefix.clone(), d)));
+        }
+    }
+    pairs
 }
 
 #[cfg(test)]

@@ -1,10 +1,13 @@
 name: ci
 # A push to a branch with an open PR fires both events on the same commit, so branches are tested
 # through the PR and main after the merge; workflow_dispatch runs a branch that has no PR yet.
+# A draft PR is not tested: its runs are spent on commits nobody is reviewing yet, and marking it
+# ready for review starts the run.
 on:
   push:
     branches: [main]
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
   workflow_dispatch:
 jobs:
   # One job definition, three platforms. Everything a user does around the binary — install it,
@@ -13,6 +16,7 @@ jobs:
   # unknown until a Windows job existed. What is genuinely per-platform is gated by `if` and
   # named for what only that platform can be asked.
   test:
+    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
     strategy:
       # A red on one platform must not cancel the other two: which platforms a change breaks is
       # the whole answer, and a cancelled job reports nothing.
@@ -297,6 +301,7 @@ jobs:
           git checkout -- npm/
 
   bench:
+    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

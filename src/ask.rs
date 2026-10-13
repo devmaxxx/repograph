@@ -124,8 +124,8 @@ pub(crate) fn graph_for_ask(repo: &Path, cfg: &config::Config, store: &store::St
         crate::record_stamps(store, &manifest, &entries)?;
         // A store another release or a bare `graph.json` left without a mirror pays the JSON
         // parse once; a refresh below writes the mirror on its own.
-        if source == store::Source::Json {
-            store.write_mirror("graph.json", &graph)?;
+        if let store::Source::Json(read) = source {
+            store.write_mirror("graph.json", read, &graph)?;
             timing.stage("mirror written");
         }
         return Ok(Read { graph, refreshed: None, behind: None, writer });

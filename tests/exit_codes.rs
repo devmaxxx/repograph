@@ -125,6 +125,15 @@ fn a_bare_name_two_languages_share_lists_both_and_is_a_failure() {
         let r = run(dir.path(), &args);
         assert_eq!(code(&r), Some(1), "{args:?}: {}", err(&r));
     }
+
+    // Under `--json` the same failure is an object on stdout, so a caller that parses stdout
+    // learns why instead of reading nothing.
+    let json = run(dir.path(), &["impact", "Foo", "--json"]);
+    assert_eq!(code(&json), Some(1), "{}", err(&json));
+    let v: serde_json::Value = serde_json::from_str(&out(&json)).expect("stdout is one JSON object");
+    assert_eq!(v["code"], 1);
+    assert!(v["error"].as_str().unwrap().contains("sym:Shop/Foo.cs::Foo"), "{v}");
+    assert!(err(&json).is_empty(), "nothing on stderr: {}", err(&json));
 }
 
 #[test]
@@ -159,6 +168,12 @@ fn a_bench_that_missed_its_floors_is_a_verdict_and_an_empty_store_is_a_failure()
     let empty = run(unbuilt.path(), &["bench", "--cases", cases]);
     assert_eq!(code(&empty), Some(1), "nothing was measured: {}", err(&empty));
     assert!(err(&empty).contains("graph is empty"), "{}", err(&empty));
+
+    // Under `--json` an empty store is the one error object on stdout, not an answer followed by it.
+    let json = run(unbuilt.path(), &["verify", "--json"]);
+    assert_eq!(code(&json), Some(1), "{}", err(&json));
+    let v: serde_json::Value = serde_json::from_str(&out(&json)).expect("stdout is one JSON object");
+    assert_eq!(v["code"], 1);
 }
 
 /// A case file of another shape is measured and reported, and its exit code claims nothing: the
