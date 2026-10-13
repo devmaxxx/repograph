@@ -117,8 +117,9 @@ answer to the question that was asked, so the JSON form prints `"path": null` an
 text form exits **3**. The two are the same answer in two shapes: a caller parsing an object should
 not have to read an exit code to learn what the object already says, and a shell script reading the
 text form should not have to tell that answer from the `1` an unknown symbol exits with. A command
-given `--json` that fails prints `{"error": "…", "code": 1}` on stdout instead of text on stderr,
-with the same exit status, so a caller parsing stdout learns why it got no answer.
+given `--json` that fails once it is running prints `{"error": "…", "code": 1}` on stdout instead of text on stderr,
+with the same exit status, so a caller parsing stdout learns why it got no answer. A usage error is still clap's text on
+stderr with exit 2: it fails before any command runs.
 
 Inspect one node and everything attached to it:
 

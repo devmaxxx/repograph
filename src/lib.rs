@@ -202,7 +202,11 @@ impl Cmd {
             Cmd::Ask { json, .. } | Cmd::Explain { json, .. } | Cmd::Impact { json, .. }
             | Cmd::Trace { json, .. } | Cmd::Changes { json, .. } | Cmd::Verify { json, .. }
             | Cmd::Prime { json, .. } | Cmd::Families { json, .. } | Cmd::Model { json, .. } => *json,
-            _ => false,
+            // Listed rather than `_`, so a command that gains `--json` fails to compile here
+            // until its errors are given the JSON form too.
+            Cmd::Build | Cmd::Update { .. } | Cmd::Serve { .. } | Cmd::Watch { .. }
+            | Cmd::InstallAgent { .. } | Cmd::Embed | Cmd::Bench { .. } | Cmd::Dump { .. }
+            | Cmd::ImportLegacy { .. } | Cmd::Mcp => false,
         }
     }
 }
@@ -1049,6 +1053,9 @@ fn run(cli: Cli) -> anyhow::Result<()> {
         }
         Cmd::Verify { json } => {
             let (graph, _) = store::Store::new(&repo).load()?;
+            // Before the JSON answer: a failure under `--json` prints its own object, and two
+            // objects on stdout parse as neither.
+            if json && graph.nodes.is_empty() { anyhow::bail!("graph is empty — run `repograph build`"); }
             match json {
                 true => emit(&format!("{}\n", query::verify_json(&graph))),
                 false => emit(&query::verify(&graph)),
