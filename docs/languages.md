@@ -162,3 +162,26 @@ the default globs yet.
   (`\A\B\C`); a type named only by its `use … as` alias; group uses (`use A\{B, C}`), `use function`
   and `use const`; `require` and `include`; classes of other packages under `vendor/`; a
   `composer.json` edit, which widens nothing until the next `build`.
+
+OCaml (`.ml`, read by the implementation grammar, and `.mli`, read by the interface grammar) is read
+only where `code_globs` or `REPOGRAPH_CODE_GLOBS` names `**/*.ml` and `**/*.mli`; it stays opt-in
+until step 24 of the engine plan puts it in the default globs.
+
+- **Read:** top-level `let` bindings (each of a `let rec … and …`), `external`, `val` in an
+  interface, exceptions, classes and methods; types, with their constructors and record fields as
+  `t.Field`; modules and module types, a module joining what it holds with `/`, so
+  `module Export = struct let f` is `Export/f`. Every top-level definition is exported, an `.mli`
+  beside it notwithstanding. A module is its file: `Foo` is `foo.ml` (else `foo.mli`) beside the
+  user, else the one file of that name in the repository. Every module path a file names is an
+  import of that file, as ocamldep reads it, unless the file binds the name itself first
+  (`module Re = Core`); `include M` and `module A = M` hand `M` on. A name is read in its own file
+  under each module around it, then in the module a `let open M in` or `M.(…)` around it opens,
+  then in the one module the file's `open`s hold it in, then through the module its first segment
+  names, with what that module includes and aliases. A type's name reaches a type, any other name
+  a value. Requirement ids are read in comments and strings.
+- **Not read:** a `let` inside a function, a `let … in`, and pattern names, which are locals;
+  `.mli` exports, so a value an interface hides is still exported; functors, functor applications
+  (`module S = Set.Make (…)`) and first-class modules; dune's library wrapping, so `Lib.M` from
+  outside the library names nothing, and a standard-library module a repository file spells
+  (`Str`, `Domain`) reads that file; the standard library and other packages; a file added later
+  that makes a module's name ambiguous, which widens nothing until the next `build`.

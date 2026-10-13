@@ -2128,6 +2128,31 @@ No new definition kind is needed:
 - **Size first:** the crate's parser sources are 62 MB, the most after Postgres. The size bar below is read before any query is written.
 - **Corpus:** `ocaml/ocaml-re` at `1.14.0`, 71 `.ml` and 26 `.mli`. Its licence is LGPL-2.1 or later with a static-linking exception. The corpus is read, never redistributed or linked.
 
+**Step 23 as built.** Where the code differs from the text above, the code is the record. The work is in `602e141`.
+
+- **Data:** the `OCAML` spec row, one for both grammars (`Label::Qualified`, `Export::All`, `Visibility::Opened`, `OwnThenUnique`, `ImportPaths::ModuleFile { suffixes: [".ml", ".mli"] }`, `Receivers::Modules`, `hooks: NONE`), `queries/ocaml/decl.scm` (74 lines) and `refs.scm` (92 lines). The cases are in `src/code/cases/ocaml.rs` (9 tests). The crate is `tree-sitter-ocaml 0.26.0`, its own dependency, MIT, ABI 15; `LANGUAGE_OCAML` reads `.ml` and `LANGUAGE_OCAML_INTERFACE` reads `.mli`, and the type grammar is never referenced. `.ml` and `.mli` are extension overrides, and `#!` naming `ocaml` reads as `.ml`. No exception.
+- **Differs from the text above:**
+  - **Resolution is `Visibility::Opened` with `Receivers::Modules`,** not `Imported` with `receivers: Imports`. Every name is a module path, `f` a path of one and `A.B.f` the path `A/B/f`. It is read in the own file under each container around the site, then in the one module an open around the site holds it in, innermost first, then in the one module the file's own opens hold it in, then through the module its first segment is bound to: one the file defines (`module R = Core`) before one the name only spells. A module is read with its definitions, the aliases it defines and what it `include`s, transitively. `Imported` would reach every name of every file a mention names, which is not what OCaml sees.
+  - **Imports are mentions,** as ocamldep reads them: every module path's first segment is an import of the file it names, with `open`, `include`, `M.(…)` and `module A = M`. `include M` and `module A = M` are ReExports. A name the file binds itself, after the binding and in the module around it, is no mention: `module Re = Core` makes a later `Re.x` name `Core`, not `re.ml`. A name bound to a module no file holds, as dune's wrapper `Re_private.Cset` is, is read as its own name, the one guess left.
+  - **A local open** (`let open M in e`, `M.(e)`) opens `M` for its expression alone, through `#set! visibility "node"` on the import, and shadows the file's opens there.
+  - **Types and values are apart:** a reference in a type's context names a type, any other a value or a module. `type t` and `let t` share the id `t`, one node with two Declares, so such a name is read in either.
+  - **`.mli` exports, weighed and not read.** Every top-level definition is exported, as with no interface: a file's declarations are read from the file alone, so `foo.ml`'s cannot depend on `foo.mli`. `Foo.x` reaches `foo.ml` first and `foo.mli` only when no `foo.ml` exists.
+  - A `let` inside a function, a `let … in` and a pattern's names (`{ idx; hash }` among them) are locals and declare nothing. `let rec … and …` declares each binding. `let%expect_test` and other extension lets declare nothing.
+  - **Size:** the two parsers compile to 4.84 MB and 4.10 MB of object code (`parser.o`, unstripped, debug profile). The stripped binary and the archive were not measured, per the wave's rule.
+- **Engine additions, inert for every earlier language** (byte-identity in the results doc):
+  - **`Visibility::Opened`:** `reach` gives it no files, since `module_path` reads opened modules, and `widen` chains it like `Namespace` and re-reads a file that hands a changed module on (`include`, `module A = M`). No other row has it.
+  - **`ImportPaths::ModuleFile`** and `module_file`: `Foo` is `foo.ml`, `foo.mli`, `Foo.ml` or `Foo.mli` beside the importer, in that order, else the one file of that name in the repository; two name neither, and a module never names its own file. `Resolver::named` indexes globbed files by file name on first use; only `module_file` asks it.
+  - **`Receivers::Modules`,** `module_path`, `module_lookup` and `Facts::declares_in`: the branch in `resolve` is taken only when the row's receivers are `Modules`.
+  - **`#set! visibility "node"`** (`Meta.local`, `Import.local`): only OCaml's queries set it, and only `module_path` reads it; every other import has it false.
+  - **`own_binding`:** read only where the row's imports are `ModuleFile`.
+  - **`above()`** climbs out of a `value_definition` or `module_definition` to find a doc comment; no other grammar the build carries has either kind (every `node-types.json` in the registry was read).
+  - **`scopes()`** is split out of `lexical()`, which returns what it did.
+- **Known misses on ocaml-re:** functor applications (`Pmark.Set`, `Cset.CSetMap`, `State.Table`: 18 sites), first-class modules, names of the standard library or of other packages, and a stdlib module a repository file spells (`Str`, `Domain`, `Mutex` read `lib/str.ml`, `lib/fake/domain.ml` and `lib/fake/mutex.ml`). Dune's library wrapping is not read.
+- **For step 24:**
+  - OCaml passes the criterion and is a candidate for the default globs; the size bar is the open question, and the session measures it at merge.
+  - A file added later that makes a module's file name ambiguous does not re-read the files that named the first one: `widen` reads Imports and ReExports edges, and an ambiguous name writes none.
+  - A census for a language that binds module names in the file needs ocamldep's scoping (after the binding, in the module around it), or it counts the file's own modules as mentions.
+
 **Step 24 · Defaults and GRAMMAR.** S.
 
 - **Defaults:** every language whose step passed joins the default `code_globs` (Q8). A language whose step was held stays opt-in.
