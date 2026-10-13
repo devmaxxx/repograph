@@ -234,9 +234,9 @@ fn an_open_reads_the_module_its_path_names_a_local_open_its_expression_alone_and
             "let b = Shapes.mine\n",
             "let c (t : Shapes.t) = Shapes.t\n",
             "let d { pair; _ } = pair\n",
+            "open Fmt\n",
             "let e = let open Dyn in list\n",
             "let f = list\n",
-            "open Fmt\n",
             "let g = Dyn.(list)\n",
             "module M = struct let x = 1 end\n",
             "open M\n",
@@ -277,4 +277,46 @@ fn a_name_the_file_binds_to_a_module_is_no_mention_of_the_file_it_spells() {
         "sym:lib/use.ml::b -> sym:lib/ext.ml::v []",
         "sym:lib/use.ml::c -> sym:lib/use.ml::Own/w []",
     ]);
+}
+
+#[test]
+fn an_open_or_include_shows_its_names_from_where_it_is_written_to_the_end_of_its_module() {
+    let files = [
+        ("lib/bar.ml", "let early = 1\nlet inside = 2\nlet late = 3\n"),
+        ("lib/wrap.ml", "module M = struct\n  include Bar\nend\n"),
+        ("lib/use.ml", concat!(
+            "let a = early\n",
+            "module M = struct\n  open Bar\n  let b = inside\nend\n",
+            "let c = inside\n",
+            "open Bar\n",
+            "let d = late\n",
+            "let e = Wrap.M.late\n",
+            "let f = Wrap.late\n",
+        )),
+    ];
+    assert_eq!(lines(&extract(&files, "lib/use.ml"), EdgeKind::References), [
+        "sym:lib/use.ml::M/b -> sym:lib/bar.ml::inside []",
+        "sym:lib/use.ml::d -> sym:lib/bar.ml::late []",
+        "sym:lib/use.ml::e -> sym:lib/bar.ml::late []",
+    ], "`early` before the open and `inside` outside the module opening it name nothing, and an include in `M` is `M`'s alone");
+}
+
+#[test]
+fn a_module_bound_to_one_the_file_defines_is_read_in_that_module_and_not_in_a_file_of_its_name() {
+    let files = [
+        ("lib/foo.ml", "let x = 5\n"),
+        ("lib/a.ml", "module Foo = struct let x = 1 end\nmodule Bar = Foo\nlet y = Bar.x\n"),
+        ("lib/b.ml", "let z = A.Bar.x\n"),
+    ];
+    assert_eq!(lines(&extract(&files, "lib/a.ml"), EdgeKind::References), ["sym:lib/a.ml::y -> sym:lib/a.ml::Foo/x []"]);
+    assert_eq!(lines(&extract(&files, "lib/b.ml"), EdgeKind::References), ["sym:lib/b.ml::z -> sym:lib/a.ml::Foo/x []"]);
+}
+
+#[test]
+fn a_comment_above_a_type_an_exception_or_a_class_documents_it() {
+    let ex = extract(&[("a.ml", "(** T. *)\ntype t = int\n(** E. *)\nexception Oops\n(** C. *)\nclass cls = object end\n")], "a.ml");
+    let body = |id: &str| ex.nodes.iter().find(|n| n.id == id).unwrap().body.clone();
+    assert_eq!(body("sym:a.ml::t"), "(** T. *)\ntype t = int");
+    assert_eq!(body("sym:a.ml::Oops"), "(** E. *)\nexception Oops");
+    assert_eq!(body("sym:a.ml::cls"), "(** C. *)\nclass cls = object end");
 }

@@ -1875,3 +1875,18 @@ and `**/*.mli`.
   - `cargo test --all-targets`: 1,499 passed, 0 failed;
   - `cargo clippy --all-targets -- -D warnings`: clean;
   - `cargo tree --duplicates --depth 0`: no tree-sitter crate.
+
+## Step 23 · review fix
+
+New: `bin/repograph-ocaml-rev`. An `open` or `include` now reaches only the sites after it inside
+the module holding it, an alias to a module the file defines (`module Id = Ids.Id`) reads that
+module rather than a file its name spells, and `above()` keeps the doc above a `type`, `exception`
+and `class`.
+
+- **ocaml-re:** nodes unchanged (1,857); 13 edges added, none removed, all in `lib/automata.ml`
+  through `module Id = Ids.Id` and `module E = Desc.E`: Calls 1,216 → 1,222, value References
+  429 → 432, type References 858 → 862. Each is right by hand.
+- **Every other store** byte-identical to `repograph-merge23`.
+- **Not fixed:** a `struct` passed to a functor declares its members under the module the
+  application names; an alias of an alias (`module Re2 = Re`) is not chased.
+- **Gate:** `cargo test --all-targets` 1,526 passed, 0 failed; clippy clean.

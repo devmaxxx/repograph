@@ -836,8 +836,17 @@ fn is_kind(n: Node, kind: &str) -> bool {
 /// `body`, and Ruby's those above a class's or module's first statement outside its `body_statement`,
 /// so a first child of either looks past it.
 fn above(n: Node) -> Option<Node> {
-    // OCaml's `let` and `module` keywords stand on the item around the first binding, not on it.
-    let wraps = |p: &Node| matches!(p.kind(), "body" | "body_statement" | "value_definition" | "module_definition");
+    // OCaml's `let`, `module`, `type`, `exception` and `class` keywords stand on the item around the
+    // first binding, not on it.
+    let wraps = |p: &Node| {
+        matches!(
+            (n.kind(), p.kind()),
+            (_, "body" | "body_statement" | "value_definition" | "module_definition")
+                | ("type_binding", "type_definition")
+                | ("constructor_declaration", "exception_definition")
+                | ("class_binding", "class_definition")
+        )
+    };
     n.prev_named_sibling().or_else(|| n.parent().filter(wraps).and_then(|p| p.prev_named_sibling()))
 }
 
@@ -1342,7 +1351,7 @@ pub fn resolve(resolver: &Resolver, spec: &Spec, file: &File, facts: &Facts, ex:
         // it means. A constant never names a method, though Ruby lets a method be spelled `POST`.
         let method_only = |name: &str| methods.get(name).copied().unwrap_or(false);
         let targets: Vec<(String, String)> = match spec.visibility {
-            Visibility::Lexical | Visibility::Opened => {
+            Visibility::Lexical => {
                 let (name, files) = lexical(facts, r)
                     .into_iter()
                     .filter(|name| r.edge != EdgeKind::References || !method_only(name))
@@ -1472,14 +1481,15 @@ fn module_path(resolver: &Resolver, spec: &Spec, file: &File, facts: &Facts, r: 
         return Vec::new();
     }
     let joined = path.join("/");
-    if let Some(own) = scopes(facts, r).into_iter().map(|scope| format!("{scope}{joined}")).find(|q| facts.declares_in(q, ty, false)) {
+    let around_site = scopes(facts, r);
+    if let Some(own) = around_site.iter().map(|scope| format!("{scope}{joined}")).find(|q| facts.declares_in(q, ty, false)) {
         return vec![format!("sym:{}::{own}", file.rel)];
     }
     // `open A.B` opens the module `B` inside the file `A` is, not the file's top level, and a module
     // the file defines itself is opened there.
     let opened = |i: &Import| -> BTreeSet<String> {
         let module = i.path.as_deref().unwrap_or("").replace('.', "/");
-        if let Some(own) = scopes(facts, r).into_iter().map(|scope| format!("{scope}{module}")).find(|q| facts.declares(q)) {
+        if let Some(own) = around_site.iter().map(|scope| format!("{scope}{module}")).find(|q| facts.declares(q)) {
             let q = format!("{own}/{joined}");
             return if facts.declares_in(&q, ty, false) { BTreeSet::from([format!("sym:{}::{q}", file.rel)]) } else { BTreeSet::new() };
         }
@@ -1502,7 +1512,8 @@ fn module_path(resolver: &Resolver, spec: &Spec, file: &File, facts: &Facts, r: 
             return if found.len() == 1 { found.into_iter().collect() } else { Vec::new() };
         }
     }
-    let found: BTreeSet<String> = facts.imports.iter().filter(|i| i.alias.is_none() && !i.local).flat_map(opened).collect();
+    // An open or include shows its names from where it is written to the end of the module holding it.
+    let found: BTreeSet<String> = facts.imports.iter().filter(|i| i.alias.is_none() && !i.local && in_force(facts, i, &r.range)).flat_map(opened).collect();
     if !found.is_empty() {
         return if found.len() == 1 { found.into_iter().collect() } else { Vec::new() };
     }
@@ -1513,6 +1524,15 @@ fn module_path(resolver: &Resolver, spec: &Spec, file: &File, facts: &Facts, r: 
     for imports in [defined, named] {
         let mut found = BTreeSet::new();
         for i in imports {
+            // `module Bar = Foo` of a module the file defines reads the names of that `Foo`, not of a
+            // file the name spells.
+            if matches!(own_binding(facts, i), Some(None)) {
+                let module = i.path.as_deref().unwrap_or("").replace('.', "/");
+                let tail = path[1..].join("/");
+                let hit = around_site.iter().map(|scope| format!("{scope}{module}/{tail}")).find(|q| facts.declares_in(q, ty, false));
+                found.extend(hit.map(|q| format!("sym:{}::{q}", file.rel)));
+                continue;
+            }
             let inner: Vec<&str> = i.path.as_deref().unwrap_or("").split('.').skip(1).chain(path[1..].iter().copied()).collect();
             for target in i.targets(resolver, spec, file.rel) {
                 found.extend(module_lookup(resolver, target, &inner, ty, &mut BTreeSet::new()));
@@ -1523,6 +1543,12 @@ fn module_path(resolver: &Resolver, spec: &Spec, file: &File, facts: &Facts, r: 
         }
     }
     Vec::new()
+}
+
+/// Whether the open or include `i` shows its names at `site`: it is written before it, and the module
+/// holding it, if any, holds the site too.
+fn in_force(facts: &Facts, i: &Import, site: &Range<usize>) -> bool {
+    i.range.end <= site.start && facts.defs.iter().filter(|d| d.kind == Kind::Module && d.range.contains(&i.range.start)).all(|d| d.range.contains(&site.start))
 }
 
 /// The ids `path` names inside the module `rel` is: a definition the file holds, or one reached
@@ -1538,9 +1564,30 @@ fn module_lookup(resolver: &Resolver, rel: &str, path: &[&str], ty: bool, seen: 
     }
     let spec = facts.lang.map(crate::code::spec::spec);
     let mut found = BTreeSet::new();
+    let whole = path;
     for i in facts.imports.iter().filter(|i| i.reexport) {
+        // An `include` in a module hands its names on as that module's, so only a path through the
+        // module reaches them, by what follows it.
+        let held = if i.alias.is_none() {
+            facts.defs.iter().filter(|d| d.kind == Kind::Module && d.range.contains(&i.range.start)).min_by_key(|d| d.range.len())
+        } else {
+            None
+        };
+        let path: &[&str] = match held {
+            Some(module) => match whole.strip_prefix(module.qualified.split('/').collect::<Vec<_>>().as_slice()) {
+                Some(rest) if !rest.is_empty() => rest,
+                _ => continue,
+            },
+            None => whole,
+        };
         let tail = i.path.as_deref().unwrap_or("").split('.').skip(1);
         let inner: Vec<&str> = match i.alias.as_deref() {
+            Some(alias) if alias == path[0] && matches!(own_binding(&facts, i), Some(None)) => {
+                // `module Bar = Foo` of a module the file defines: `Foo`'s names, in this file.
+                let own: Vec<&str> = i.path.as_deref().unwrap_or("").split('.').chain(path[1..].iter().copied()).collect();
+                found.extend(module_lookup(resolver, rel, &own, ty, seen));
+                continue;
+            }
             Some(alias) if alias == path[0] => tail.chain(path[1..].iter().copied()).collect(),
             Some(_) => continue,
             None => tail.chain(path.iter().copied()).collect(),

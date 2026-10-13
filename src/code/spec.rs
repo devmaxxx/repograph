@@ -150,8 +150,10 @@ pub enum Visibility {
     Namespace,
     /// As `Lexical` in the own file, a name read under each container around the site first; then the
     /// modules its imports with no alias name, each with what it hands on through its own, transitively:
-    /// OCaml's `open M` sees what `M` itself `include`s. An import with an alias binds that name alone
-    /// and opens nothing, and one marked local opens its module for the sites its node holds alone. `Receivers::Modules` reads it, so no file is reached by a bare name.
+    /// OCaml's `open M` sees what `M` itself `include`s. An open or include shows its names from where it
+    /// is written to the end of the module holding it. An import with an alias binds that name alone
+    /// and opens nothing, and one marked local opens its module for the sites its node holds alone.
+    /// `Receivers::Modules` reads it, so no file is reached by a bare name.
     Opened,
     /// As `Family`, with a nested name indexed by its full path, and a reference read under each
     /// container around it, innermost first, before it is read as written: Ruby's `Utils` inside
