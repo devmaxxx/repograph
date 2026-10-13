@@ -2,7 +2,7 @@
 
 A project knowledge graph that costs **zero API tokens** to build, keep fresh, and query.
 
-`repograph` reads a repository's markdown and code in 15 languages, extracts the structure the authors
+`repograph` reads a repository's markdown and code in 24 languages, extracts the structure the authors
 already wrote by hand (requirement ids, cross-references, exports, imports, calls, decorators, ids
 quoted in comments) and answers questions about it in a few lines of text.
 
