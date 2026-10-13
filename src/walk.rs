@@ -34,7 +34,10 @@ pub struct Entry { pub rel: String, pub kind: FileKind, pub hash: String, pub st
 /// both makes a 0.5.4 store (2) and a 0.5.5 store (3) re-read once on the first writer.
 /// 5: 0.6.0 — every language ships, read by default, and text files are a node kind; a store any
 /// 0.5.x or the forward-ported `main` wrote is re-read once.
-pub const GRAMMAR: u32 = 5;
+/// 6: every language read by one query engine. Some nodes' spans and bodies differ from what 5's
+/// per-language readers wrote, such as a decorated field's line or the comment kept above a
+/// declaration, so a store stamped 5 is re-read once.
+pub const GRAMMAR: u32 = 6;
 
 /// Refused as text whatever `text_globs` says: machine output nobody asks a question of, any one of
 /// which would outweigh the hand-written files in the lexical index. Text entries only — `skip`
@@ -604,10 +607,10 @@ mod tests {
     fn a_file_a_glob_moves_to_another_reader_diffs_as_changed() {
         let d = repo();
         std::fs::write(d.path().join("tool.lua"), "print(1)\n").unwrap();
-        let manifest = Manifest::from_entries(&walk(d.path(), &text_cfg(), &Manifest::default()).unwrap());
-        let mut code = text_cfg();
-        code.code_globs.push("**/*.lua".into());
-        let after = walk(d.path(), &code, &manifest).unwrap();
+        let mut text = text_cfg();
+        text.code_globs.retain(|g| g != "**/*.lua");
+        let manifest = Manifest::from_entries(&walk(d.path(), &text, &Manifest::default()).unwrap());
+        let after = walk(d.path(), &text_cfg(), &manifest).unwrap();
         let changed: Vec<_> = manifest.diff(&after).changed.into_iter().map(|e| (e.rel, e.kind)).collect();
         assert_eq!(changed, [("tool.lua".to_string(), FileKind::Code)]);
     }

@@ -2,7 +2,7 @@
 
 A project knowledge graph that costs **zero API tokens** to build, keep fresh, and query.
 
-`repograph` reads a repository's markdown and code in 15 languages, extracts the structure the authors
+`repograph` reads a repository's markdown and code in 24 languages, extracts the structure the authors
 already wrote by hand (requirement ids, cross-references, exports, imports, calls, decorators, ids
 quoted in comments) and answers questions about it in a few lines of text.
 
@@ -55,7 +55,7 @@ repograph explain FR-PAY-22                # one node and everything attached to
 | Ask | `ask`, `explain`, `impact`, `trace`, `changes`, `verify`, `families`, all with `--json` ([commands](docs/commands.md)) |
 | Resident process | `serve` answers a fused question in 66 ms instead of 326 ms ([serve](docs/serve.md)) |
 | Agents | `repograph mcp`, `install-agent`, `prime` ([MCP](docs/mcp.md)) |
-| Languages | TypeScript and JavaScript, Kotlin, Java, C#, Rust, Python, Dart, Swift, GraphQL, SQL, Bicep, HCL, Shell, Vue ([languages](docs/languages.md)) |
+| Languages | TypeScript and JavaScript, Kotlin, Java, C#, Rust, Python, Dart, Swift, GraphQL, SQL, Bicep, HCL, Shell, Vue, Lua, Go, C, C++, PHP, Ruby, Scala, Elixir, OCaml ([languages](docs/languages.md)) |
 | Optional spend | `ask --rerank`, a model picking seeds from a 200-deep pool per question ([rerank](docs/rerank.md)) |
 | Bench | `repograph bench` fails the process when a recall floor is missed ([benchmarks](docs/benchmarks.md)) |
 

@@ -1,0 +1,911 @@
+//! Everything the pipeline asks of a language, as one record per language: its queries, the data the
+//! engine reads them by, and the hooks for what the data cannot say. `spec` is the only place that
+//! names every language: the front, the resolver, the header index, `changes` and the update's
+//! widening read this table instead of matching on `Lang` each in its own way.
+
+use std::any::{Any, TypeId};
+use std::borrow::Cow;
+use std::collections::HashMap;
+
+use crate::code::engine::{Def, Facts, File, Import, Sink};
+use crate::code::imports::Resolver;
+use crate::code::index::Header;
+use crate::code::lang::Lang;
+use crate::model::EdgeKind;
+
+pub struct Spec {
+    pub queries: Sources,
+    /// Whose grammar and queries read an embedded view. Vue's script picks TypeScript or TSX per file,
+    /// so its `embed` names the grammar and this is the default.
+    pub view: Option<Lang>,
+    /// What `changes` tells a comment-only hunk by; `None` where markup decides what a line is.
+    pub comments: Option<CommentSyntax>,
+    pub body: Body,
+    pub label: Label,
+    pub export: Export,
+    pub visibility: Visibility,
+    pub ambiguity: Ambiguity,
+    pub imports: ImportPaths,
+    pub receivers: Receivers,
+    /// An edit of one file can change what another resolves to without moving a path or a header,
+    /// so `serve` rebuilds the resolver when such a file changes.
+    pub cross_file: bool,
+    /// Whether files under a dotted directory are read. CI keeps its scripts under `.github/`,
+    /// while a tsconfig or a manifest there stays out.
+    pub dotted_dirs: bool,
+    pub hooks: Hooks,
+}
+
+/// `.scm` sources, concatenated in order into the two compiled queries (`queries.rs`).
+#[derive(Clone, Copy)]
+pub struct Sources {
+    /// Definitions, scopes, docs and imports: the collect pass and extract both run it.
+    pub decl: &'static [&'static str],
+    /// References, locals and citations: extract alone runs it.
+    pub refs: &'static [&'static str],
+}
+
+#[derive(Clone, Copy)]
+pub struct CommentSyntax {
+    pub lines: &'static [&'static str],
+    pub blocks: bool,
+}
+
+/// A body is doc lines and then one signature line; only the last line reaches the indexes.
+#[derive(Clone, Copy)]
+pub struct Body {
+    pub doc: Doc,
+    pub form: Form,
+    pub cap: Cap,
+    pub line: Line,
+}
+
+#[derive(Clone, Copy)]
+pub enum Doc {
+    /// Comment nodes of `kinds` directly above the definition; `between` are kinds that may stand
+    /// between the two, as Bicep's decorators do. A shebang and a trailing comment are never doc.
+    /// `line_comment.outer` is a kind with a field: Rust's `///`, where a plain `//` is no doc.
+    Adjacent { kinds: &'static [&'static str], between: &'static [&'static str] },
+    /// The `@doc` capture: a Python docstring, a GraphQL description.
+    Capture,
+    None,
+}
+
+#[derive(Clone, Copy)]
+pub enum Form {
+    /// Markers kept, as Shell, Bicep and HCL write them.
+    Raw,
+    /// `//`, `///`, `/** */`, `#` and the language's own line markers removed.
+    Stripped,
+}
+
+#[derive(Clone, Copy)]
+pub enum Cap {
+    /// The last `DOC_CHARS` bytes, the lines nearest the declaration.
+    Tail,
+    /// The first `DOC_CHARS` characters.
+    Head,
+}
+
+#[derive(Clone, Copy)]
+pub enum Line {
+    /// The definition node's first line.
+    First,
+    /// The line holding `@name`, past any annotation lines.
+    Name,
+    /// The whole line holding `@name`, past its definition's span: a member written on its
+    /// container's line reads with that line, as a `val` parameter does on its `class` line.
+    Whole,
+    /// The whole row the definition starts on: a migration's statement reads with the marker a tool
+    /// wrote after it, as the line a reader greps for.
+    Row,
+    /// Up to the definition's `body` field, whitespace collapsed: a signature over several lines
+    /// reads as one. A definition with no body reads as its first line.
+    Header,
+    /// As `Header`, but a definition with no body reads whole, whitespace collapsed: a Rust `const`
+    /// reads with its value and a `macro_rules!` with its rules, so doc and signature share one
+    /// `DOC_CHARS` cap.
+    Signature,
+}
+
+#[derive(Clone, Copy)]
+pub enum Label {
+    /// The qualified name, as the id ends.
+    Qualified,
+    /// The last `@name` part without its prefix, under its container's label: the id says
+    /// `query/GetShelf` so a query and a mutation of one name stay apart, and a reader asks for
+    /// `GetShelf`, and a column of `app/clients` reads `clients.id`.
+    Name,
+    /// The qualified name with each `/` between modules spelled as the language writes a path:
+    /// Rust's `tests/helper` reads `tests::helper`.
+    Spelled(&'static str),
+}
+
+#[derive(Clone, Copy)]
+pub enum Export {
+    /// Exported only with one of these `@modifier` words.
+    Show(&'static [&'static str]),
+    /// Exported unless one of these `@modifier` words is present.
+    Hide(&'static [&'static str]),
+    /// A name starting with this character is hidden.
+    Prefix(char),
+    /// Exported only when the name starts with an upper-case letter, as Go's rule is.
+    Capitalized,
+    All,
+}
+
+#[derive(Clone, Copy)]
+pub enum Visibility {
+    /// The reference's own file.
+    File,
+    /// The own file and the files its resolved imports reach, transitively when asked.
+    Imported { transitive: bool },
+    /// The own file and the sibling files of the same language.
+    Directory,
+    /// The own file and the family's index by name, hidden names excluded.
+    Family,
+    /// The own file, the sibling files of the same language that declare its first namespace, and
+    /// the files its resolved imports reach, hidden names excluded: PHP's namespace is a directory
+    /// under PSR-4, and a `use` names one file of another.
+    Namespace,
+    /// As `Lexical` in the own file, a name read under each container around the site first; then the
+    /// modules its imports with no alias name, each with what it hands on through its own, transitively:
+    /// OCaml's `open M` sees what `M` itself `include`s. An open or include shows its names from where it
+    /// is written to the end of the module holding it. An import with an alias binds that name alone
+    /// and opens nothing, and one marked local opens its module for the sites its node holds alone.
+    /// `Receivers::Modules` reads it, so no file is reached by a bare name.
+    Opened,
+    /// As `Family`, with a nested name indexed by its full path, and a reference read under each
+    /// container around it, innermost first, before it is read as written: Ruby's `Utils` inside
+    /// `module Rack` is `Rack::Utils` wherever that is declared.
+    Lexical,
+    /// As `Family`, where a namespace spans directories and nests: a file's names live in the
+    /// namespace its `@scope.namespace` captures spell together, joined by `.`, and the index keys
+    /// them by that full path at any depth. A name is read through the file's imports, then under
+    /// its own namespaces, innermost first, then as written: Scala's `package os` holds `os.Path`
+    /// in every directory, and `import os._` opens it.
+    Package,
+}
+
+#[derive(Clone, Copy)]
+pub enum Ambiguity {
+    /// A match in the own file shadows the others; otherwise every candidate.
+    OwnFirst,
+    /// Exactly one candidate across the own file and the visible ones, otherwise nothing.
+    Unique,
+    /// A match in the own file shadows the others; otherwise exactly one candidate, or nothing. A
+    /// function two programs of one repository both define is more often two things than one.
+    OwnThenUnique,
+    All,
+}
+
+#[derive(Clone, Copy)]
+pub enum ImportPaths {
+    Relative {
+        /// Directories of the repository tried in order after the importer's own: `""` is the root, as
+        /// C's include path lists `include` and `src` after the includer's directory. A query may
+        /// keep a site to one or the other (`#set! import "rooted"` or `"relative"`).
+        roots: &'static [&'static str],
+        /// Appended to the path as written, in order, unless it already ends in one; `""` tries it
+        /// as written.
+        suffixes: &'static [&'static str],
+    },
+    /// A module name whose dots are directories, under each of `roots` of the repository and never the
+    /// importer's directory: Lua's `require("a.b")` searches a package path, not the file's place.
+    Dotted { roots: &'static [&'static str], suffixes: &'static [&'static str] },
+    /// A path under a prefix that the `manifest` nearest the importer maps to a directory: Go's
+    /// `github.com/a/b/render` in a module `github.com/a/b` names `render/`, and PHP's
+    /// `App\Http\Kernel` under composer's `"App\\": "src/"` names `src/Http/Kernel.php`. The rest of
+    /// the path after the prefix is directories split by `sep`. With `suffixes`, it names the first
+    /// file one of them completes; with none, the directory's files of the importer's language, less
+    /// those ending in one of `skip`. The longest prefix that names something wins, and a path under
+    /// no prefix names nothing.
+    ModulePrefix {
+        manifest: &'static str,
+        prefixes: Prefixes,
+        sep: char,
+        suffixes: &'static [&'static str],
+        skip: &'static [&'static str],
+    },
+    /// A declared name's full path, its namespace's parts and its own split by `sep`, found through
+    /// the family's index (`Visibility::Package`): `os.Path` names the files declaring `Path` in
+    /// `package os`. A path is read under the importer's own namespaces first, so a relative
+    /// `import TestUtil._` finds its package's `TestUtil`. An `@import.name` `_` opens the whole
+    /// scope, and names every file declaring a name directly in it.
+    Scoped { sep: char },
+    /// A module named by its file, with no import to say so: OCaml's `Foo` is `foo.ml`. The path's
+    /// first dotted segment, its first letter lowered and then as written, with each of `suffixes`,
+    /// names the file beside the importer, or else the one file of that name in the repository. The
+    /// rest of the path is a module inside that file. A module never names its own file.
+    ModuleFile { suffixes: &'static [&'static str] },
+}
+
+/// Where a manifest states its prefixes.
+#[derive(Clone, Copy)]
+pub enum Prefixes {
+    /// The word after this directive on the first line that starts with it, mapped to the
+    /// manifest's directory: `go.mod`'s `module github.com/a/b`.
+    Directive(&'static str),
+    /// The objects at these key paths of a JSON manifest, each mapping a prefix to a directory or a
+    /// list of them under the manifest's: composer's `autoload.psr-4`.
+    Json(&'static [&'static [&'static str]]),
+}
+
+/// Who resolves a reference written through a `@receiver`.
+#[derive(Clone, Copy)]
+pub enum Receivers {
+    /// A hook, or nobody.
+    Hook,
+    /// The engine resolves `receiver.name`, first in the own file: a receiver the file declares
+    /// members of, as Lua's `M` in `M.f()`, names the member `receiver.name` there. Otherwise a
+    /// receiver that is an import's alias names the one member of that name the import's files
+    /// expose: the members of their `@export.root` (`return M`), or with no root their unowned
+    /// top-level definitions. A receiver a local binding shadows is a value, and stays missing.
+    /// Where the directory is the module (`Visibility::Directory`), a member a sibling declares is
+    /// the module's own too. An import with no alias is named by the namespace its files declare,
+    /// as Go's package clause names an import.
+    Imports,
+    /// Every name is a module path whose dots join modules, as OCaml's `A.B.f` is `A/B/f` and a bare
+    /// `f` a path of one. The path is read in the own file under each container around the site, then
+    /// in the one module an open around the site holds it in, innermost first, then in the one module
+    /// the file's own opens hold it in (`open A.B` opens `B` inside `A`'s file), then
+    /// through the alias its first segment is bound to: one the file defines (a re-exporting import
+    /// with an alias, `module A = M`) before one that only names a module. A module is read with its
+    /// own definitions, the aliases it defines and what it re-exports. Types and values are apart: a
+    /// reference in a type's context names a type, any other what is no type. A path whose first
+    /// segment a local binding shadows, as a functor's parameter does, stays missing.
+    Modules,
+}
+
+pub(crate) type Collect = fn(&mut Resolver, &str, &str) -> Option<Header>;
+
+/// `(resolver, importer, site)`: the importer by path alone, because the transitive walk asks it of
+/// files it has only the declarations of.
+pub(crate) type ImportHook = fn(&Resolver, &str, &Import) -> Vec<String>;
+
+/// What a blanking reader keeps of a file for its view's grammar.
+pub(crate) enum Embedded<'a> {
+    /// The markup could not be read; the file keeps its file node alone.
+    Unread,
+    /// No embedded code: the reader still runs, with no tree.
+    Empty,
+    /// The view, at the file's own rows and columns, and the grammar that reads it: the file itself,
+    /// borrowed, when the reader blanks nothing.
+    View(Cow<'a, str>, Lang),
+}
+
+pub struct Hooks {
+    /// The collect pass, for a file it does not read: Vue's bookkeeping needs the path alone.
+    pub(crate) register: Option<fn(&mut Resolver, &str)>,
+    /// What one globbed file adds to the resolver before any file is extracted, and the header it
+    /// read, if any, which goes into the family's index. `None` reads `header` alone, and a language
+    /// with neither never has its files opened.
+    pub(crate) collect: Option<Collect>,
+    /// What a name-indexed family records of a file, from `(rel, source)`. A file whose header moves
+    /// re-reads every other file of its family.
+    pub(crate) header: Option<fn(&str, &str) -> Header>,
+    pub(crate) manifest: Option<Manifest>,
+    /// The resolver's state for this language, created empty for every language that has one.
+    pub(crate) state: Option<fn() -> Box<dyn Any + Send + Sync>>,
+    pub(crate) embed: Option<fn(&str) -> Embedded<'_>>,
+    /// The file node's body; every other file node's is empty.
+    pub(crate) head: Option<fn(&File) -> String>,
+    /// Definition and reference names as the language compares them.
+    pub(crate) fold: Option<fn(&str) -> Cow<str>>,
+    /// A body's last line that no `Line` gives.
+    pub(crate) signature: Option<fn(&File, &Def) -> String>,
+    /// The files an import site names, for the paths the default cannot compute.
+    pub(crate) import: Option<ImportHook>,
+    pub(crate) resolve: Option<fn(&Resolver, &File, &Facts, &mut Sink)>,
+    /// Edge kinds the default resolution leaves to `resolve`.
+    pub(crate) owns: &'static [EdgeKind],
+}
+
+impl Spec {
+    /// Whether the resolver's walk opens this language's files before extraction: a hook reads them,
+    /// or a family that sees its files without an import is indexed by its queries.
+    pub fn collects(&self) -> bool {
+        self.hooks.header.is_some() || self.hooks.collect.is_some() || matches!(self.visibility, Visibility::Family | Visibility::Lexical | Visibility::Package)
+    }
+}
+
+/// A build manifest the language reads, matched by file name; read only when the globs reach the
+/// language's family.
+pub(crate) struct Manifest {
+    pub matches: fn(&str) -> bool,
+    pub read: fn(&mut Resolver, &str, &str),
+}
+
+/// The hooks a language leaves at their defaults, for `..NONE`.
+pub const NONE: Hooks = Hooks {
+    register: None,
+    collect: None,
+    header: None,
+    manifest: None,
+    state: None,
+    embed: None,
+    head: None,
+    fold: None,
+    signature: None,
+    import: None,
+    resolve: None,
+    owns: &[],
+};
+
+const C: Option<CommentSyntax> = Some(CommentSyntax { lines: &["//"], blocks: true });
+const HASH: Option<CommentSyntax> = Some(CommentSyntax { lines: &["#"], blocks: false });
+const HCL_COMMENTS: Option<CommentSyntax> = Some(CommentSyntax { lines: &["#", "//"], blocks: true });
+
+/// The fields a language read through its hooks alone leaves as they are: with no queries, the engine
+/// never reads them.
+const HOOKS_ONLY: Spec = Spec {
+    queries: Sources { decl: &[], refs: &[] },
+    view: None,
+    comments: None,
+    body: Body { doc: Doc::None, form: Form::Raw, cap: Cap::Tail, line: Line::First },
+    label: Label::Qualified,
+    export: Export::All,
+    visibility: Visibility::File,
+    ambiguity: Ambiguity::Unique,
+    imports: ImportPaths::Relative { roots: &[], suffixes: &[""] },
+    receivers: Receivers::Hook,
+    cross_file: false,
+    dotted_dirs: false,
+    hooks: NONE,
+};
+
+/// The comment lines directly above a declaration, markers kept, and its first line.
+const PROSE: Body = Body { doc: Doc::Adjacent { kinds: &["comment"], between: &[] }, form: Form::Raw, cap: Cap::Tail, line: Line::First };
+
+mod table {
+    use super::*;
+    use crate::code::exceptions::{
+        attachments, attribute_macros, computed_paths, crate_paths, identifier_case, import_bindings, library_scope, module_paths, module_reach, namespace_scope,
+        package_scope, rendered_components, single_file_components, statement_prose,
+    };
+
+    pub(super) const TYPESCRIPT: Spec = Spec {
+        queries: crate::code::queries::sources::TYPESCRIPT,
+        view: None,
+        comments: C,
+        // `statement_prose` writes the whole body.
+        body: Body { doc: Doc::None, form: Form::Raw, cap: Cap::Head, line: Line::First },
+        label: Label::Qualified,
+        export: Export::Show(&["export"]),
+        // Unread: `import_bindings` resolves every name the file uses through its own imports.
+        visibility: Visibility::File,
+        ambiguity: Ambiguity::Unique,
+        // Unread: `Resolver::resolve` places every specifier, through the tsconfig and package exports.
+        imports: ImportPaths::Relative { roots: &[], suffixes: &[] },
+        receivers: Receivers::Hook,
+        cross_file: false,
+        dotted_dirs: false,
+        hooks: Hooks {
+            head: Some(statement_prose::head),
+            fold: Some(|name| match name.strip_prefix('[').and_then(|n| n.strip_suffix(']')).unwrap_or(name) {
+                quoted if quoted.starts_with(['\'', '"', '`']) => Cow::Owned(quoted.trim_matches(['\'', '"', '`']).to_string()),
+                _ => Cow::Borrowed(name),
+            }),
+            signature: Some(statement_prose::body),
+            resolve: Some(import_bindings::resolve),
+            owns: &[EdgeKind::Calls, EdgeKind::Extends, EdgeKind::Implements, EdgeKind::DecoratedBy],
+            ..NONE
+        },
+    };
+    pub(super) const VUE: Spec = Spec { view: Some(Lang::TypeScript), hooks: single_file_components::HOOKS, ..HOOKS_ONLY };
+    pub(super) const CSHARP: Spec = Spec {
+        queries: crate::code::queries::sources::CSHARP,
+        view: None,
+        comments: C,
+        body: Body {
+            doc: Doc::Adjacent { kinds: &["comment"], between: &[] },
+            form: Form::Stripped,
+            cap: Cap::Head,
+            line: Line::Name,
+        },
+        label: Label::Qualified,
+        // The query sets `export` where C#'s defaults decide it; elsewhere only the word does.
+        export: Export::Show(&["public", "internal"]),
+        visibility: Visibility::Family,
+        ambiguity: Ambiguity::OwnFirst,
+        cross_file: false,
+        imports: ImportPaths::Relative { roots: &[], suffixes: &[] },
+        receivers: Receivers::Hook,
+        dotted_dirs: false,
+        hooks: namespace_scope::HOOKS,
+    };
+    pub(super) const RAZOR: Spec = Spec { view: Some(Lang::CSharp), hooks: rendered_components::HOOKS, ..HOOKS_ONLY };
+    pub(super) const KOTLIN: Spec = Spec {
+        queries: crate::code::queries::sources::KOTLIN,
+        view: None,
+        comments: C,
+        body: Body {
+            doc: Doc::Adjacent { kinds: &["line_comment", "multiline_comment"], between: &[] },
+            form: Form::Stripped,
+            cap: Cap::Head,
+            line: Line::Whole,
+        },
+        label: Label::Qualified,
+        // Kotlin is public by default, and `internal` crosses files inside a module.
+        export: Export::Hide(&["private", "protected"]),
+        // A package sees every file in it without an import.
+        visibility: Visibility::Family,
+        ambiguity: Ambiguity::OwnFirst,
+        cross_file: false,
+        imports: ImportPaths::Relative { roots: &[], suffixes: &[] },
+        receivers: Receivers::Hook,
+        dotted_dirs: false,
+        // The JVM index needs each file's arities and supertypes, and a call binds through
+        // receivers, supertypes and overloads no query reads.
+        hooks: Hooks { header: Some(package_scope::declared::header), resolve: Some(package_scope::receivers::resolve), ..NONE },
+    };
+    pub(super) const JAVA: Spec = Spec {
+        queries: crate::code::queries::sources::JAVA,
+        view: None,
+        comments: C,
+        body: Body {
+            doc: Doc::Adjacent { kinds: &["line_comment", "block_comment"], between: &[] },
+            form: Form::Stripped,
+            cap: Cap::Head,
+            line: Line::Whole,
+        },
+        label: Label::Qualified,
+        // Only `public` crosses a package; the query writes an interface's and an annotation
+        // type's keyword as its members' modifier, since they are public without the word.
+        export: Export::Show(&["public", "interface", "@interface"]),
+        visibility: Visibility::Family,
+        ambiguity: Ambiguity::OwnFirst,
+        cross_file: false,
+        imports: ImportPaths::Relative { roots: &[], suffixes: &[] },
+        receivers: Receivers::Hook,
+        dotted_dirs: false,
+        // As Kotlin's: the JVM index needs arities and supertypes, and a call binds through
+        // receivers, supertypes and overloads no query reads.
+        hooks: Hooks { header: Some(package_scope::java::header), resolve: Some(package_scope::java::resolve), ..NONE },
+    };
+    pub(super) const RUST: Spec = Spec {
+        queries: crate::code::queries::sources::RUST,
+        view: None,
+        comments: C,
+        // The `///` lines, read through attributes, and the signature, or a whole `const`.
+        body: Body {
+            doc: Doc::Adjacent { kinds: &["line_comment.outer"], between: &["attribute_item"] },
+            form: Form::Stripped,
+            cap: Cap::Head,
+            line: Line::Signature,
+        },
+        label: Label::Spelled("::"),
+        export: Export::Show(&["pub"]),
+        visibility: Visibility::File,
+        ambiguity: Ambiguity::OwnFirst,
+        cross_file: false,
+        // Unread: `crate_paths` places every `use` and writes its edge with the name it binds.
+        imports: ImportPaths::Relative { roots: &[], suffixes: &[] },
+        receivers: Receivers::Hook,
+        dotted_dirs: false,
+        hooks: Hooks {
+            collect: Some(crate_paths::collect),
+            state: Some(state::<crate_paths::Crates>),
+            manifest: Some(Manifest { matches: |name| name == "Cargo.toml", read: crate_paths::manifest }),
+            resolve: Some(crate_paths::resolve),
+            ..NONE
+        },
+    };
+    pub(super) const PYTHON: Spec = Spec {
+        queries: crate::code::queries::sources::PYTHON,
+        view: None,
+        comments: HASH,
+        // The docstring and the signature up to its colon.
+        body: Body { doc: Doc::Capture, form: Form::Stripped, cap: Cap::Head, line: Line::Header },
+        label: Label::Qualified,
+        export: Export::Prefix('_'),
+        visibility: Visibility::File,
+        ambiguity: Ambiguity::OwnFirst,
+        cross_file: false,
+        // Unread: `module_paths` places every import and writes its edge with the names it binds.
+        imports: ImportPaths::Relative { roots: &[], suffixes: &[] },
+        receivers: Receivers::Hook,
+        dotted_dirs: false,
+        hooks: Hooks {
+            state: Some(state::<module_paths::Roots>),
+            manifest: Some(Manifest {
+                matches: |name| matches!(name, "pyproject.toml" | "setup.py" | "setup.cfg"),
+                read: module_paths::manifest,
+            }),
+            resolve: Some(module_paths::resolve),
+            owns: &[EdgeKind::Calls, EdgeKind::Extends, EdgeKind::DecoratedBy],
+            ..NONE
+        },
+    };
+    pub(super) const DART: Spec = Spec {
+        queries: crate::code::queries::sources::DART,
+        view: None,
+        comments: C,
+        // No doc. A declaration starts at its annotations, as the old reader's line did.
+        body: Body { doc: Doc::None, form: Form::Raw, cap: Cap::Tail, line: Line::First },
+        label: Label::Qualified,
+        export: Export::Prefix('_'),
+        visibility: Visibility::File,
+        ambiguity: Ambiguity::OwnFirst,
+        // What a file's names resolve to moves with the directives and declarations of every library
+        // it imports.
+        cross_file: true,
+        imports: ImportPaths::Relative { roots: &[], suffixes: &[""] },
+        receivers: Receivers::Hook,
+        dotted_dirs: false,
+        hooks: Hooks {
+            collect: Some(library_scope::collect),
+            state: Some(state::<library_scope::Libraries>),
+            manifest: Some(Manifest { matches: |name| name == "pubspec.yaml", read: library_scope::pubspec }),
+            resolve: Some(library_scope::resolve),
+            owns: &[EdgeKind::Calls, EdgeKind::Extends],
+            ..NONE
+        },
+    };
+    pub(super) const SQL: Spec = Spec {
+        queries: crate::code::queries::sources::SQL,
+        view: None,
+        comments: Some(CommentSyntax { lines: &["--"], blocks: true }),
+        body: Body { form: Form::Stripped, cap: Cap::Head, line: Line::Row, ..PROSE },
+        label: Label::Name,
+        export: Export::All,
+        // `search_path` is session state no file records, so a name is looked up as written.
+        visibility: Visibility::Family,
+        // Every migration that creates or alters a table is one of its declarations.
+        ambiguity: Ambiguity::All,
+        cross_file: false,
+        imports: ImportPaths::Relative { roots: &[], suffixes: &[""] },
+        receivers: Receivers::Hook,
+        dotted_dirs: false,
+        // The objects alone, in `headers.json`, so a migration that starts or stops creating or
+        // altering a table re-reads the ones that name it.
+        hooks: Hooks {
+            header: Some(|rel, source| Header { top: crate::code::engine::default_header(Lang::Sql, rel, source).top, ..Header::default() }),
+            fold: Some(identifier_case::fold),
+            resolve: Some(attachments::alters),
+            ..NONE
+        },
+    };
+    pub(super) const BICEP: Spec = Spec {
+        queries: crate::code::queries::sources::BICEP,
+        view: None,
+        comments: C,
+        body: Body { doc: Doc::Adjacent { kinds: &["comment"], between: &["decorators"] }, ..PROSE },
+        label: Label::Qualified,
+        // The query's `#set! export` decides: a parameter, an output, or what `@export()` decorates.
+        export: Export::Show(&[]),
+        visibility: Visibility::File,
+        ambiguity: Ambiguity::OwnFirst,
+        // A module reaches what its file declares, which an edit there moves.
+        cross_file: true,
+        imports: ImportPaths::Relative { roots: &[], suffixes: &[""] },
+        receivers: Receivers::Hook,
+        dotted_dirs: false,
+        hooks: Hooks { resolve: Some(module_reach::reach), ..NONE },
+    };
+    pub(super) const HCL: Spec = Spec {
+        queries: crate::code::queries::sources::HCL,
+        view: None,
+        comments: HCL_COMMENTS,
+        body: PROSE,
+        label: Label::Qualified,
+        // A bake file's every block is invoked by name from outside it.
+        export: Export::All,
+        visibility: Visibility::File,
+        ambiguity: Ambiguity::OwnFirst,
+        cross_file: false,
+        imports: ImportPaths::Relative { roots: &[], suffixes: &[""] },
+        receivers: Receivers::Hook,
+        dotted_dirs: false,
+        hooks: NONE,
+    };
+    pub(super) const TERRAFORM: Spec = Spec {
+        queries: crate::code::queries::sources::TERRAFORM,
+        view: None,
+        comments: HCL_COMMENTS,
+        body: PROSE,
+        label: Label::Qualified,
+        // The query's `#set! export` decides: a variable and an output are the module's interface.
+        export: Export::Show(&[]),
+        // A module is a directory: what one file declares, every file beside it reads.
+        visibility: Visibility::Directory,
+        ambiguity: Ambiguity::OwnFirst,
+        cross_file: true,
+        imports: ImportPaths::Relative { roots: &[], suffixes: &[""] },
+        receivers: Receivers::Hook,
+        dotted_dirs: false,
+        hooks: Hooks { resolve: Some(module_reach::reach), ..NONE },
+    };
+    pub(super) const SWIFT: Spec = Spec {
+        queries: crate::code::queries::sources::SWIFT,
+        view: None,
+        comments: C,
+        // No doc. A declaration starts at its attributes, so the line is the one holding its name.
+        body: Body { doc: Doc::None, form: Form::Raw, cap: Cap::Tail, line: Line::Name },
+        label: Label::Qualified,
+        export: Export::Hide(&["private", "fileprivate"]),
+        // A module sees every file in it without an import.
+        visibility: Visibility::Family,
+        ambiguity: Ambiguity::OwnFirst,
+        cross_file: false,
+        imports: ImportPaths::Relative { roots: &[], suffixes: &[""] },
+        receivers: Receivers::Hook,
+        dotted_dirs: false,
+        hooks: NONE,
+    };
+    pub(super) const GRAPHQL: Spec = Spec {
+        queries: crate::code::queries::sources::GRAPHQL,
+        view: None,
+        comments: HASH,
+        // A description sits inside its definition, above the name.
+        body: Body { doc: Doc::Capture, form: Form::Stripped, cap: Cap::Head, line: Line::Name },
+        label: Label::Name,
+        export: Export::All,
+        // Codegen treats a fragment's name as global, as the schema does a type's.
+        visibility: Visibility::Family,
+        // A fragment two documents declare is spread from both, and `extend type` adds to every
+        // definition of its type.
+        ambiguity: Ambiguity::All,
+        cross_file: false,
+        imports: ImportPaths::Relative { roots: &[], suffixes: &[""] },
+        receivers: Receivers::Hook,
+        dotted_dirs: false,
+        // The default header, kept in `headers.json` so a document that starts or stops declaring a
+        // name re-reads the documents that use it.
+        hooks: Hooks { header: Some(|rel, source| crate::code::engine::default_header(Lang::GraphQl, rel, source)), ..NONE },
+    };
+    pub(super) const SHELL: Spec = Spec {
+        queries: crate::code::queries::sources::SHELL,
+        view: None,
+        comments: HASH,
+        body: PROSE,
+        label: Label::Qualified,
+        // Any script that sources the file can call its functions.
+        export: Export::All,
+        visibility: Visibility::Imported { transitive: true },
+        // Which of two definitions a call reaches is whichever `source` ran last, which the graph
+        // does not model, so a name defined twice resolves to neither.
+        ambiguity: Ambiguity::Unique,
+        cross_file: true,
+        // Unread: the `import` hook resolves every `source`, and a path it cannot place imports nothing.
+        imports: ImportPaths::Relative { roots: &[], suffixes: &[] },
+        receivers: Receivers::Hook,
+        dotted_dirs: true,
+        hooks: Hooks {
+            collect: Some(computed_paths::collect),
+            state: Some(state::<computed_paths::Scripts>),
+            import: Some(computed_paths::import),
+            resolve: Some(computed_paths::runs),
+            ..NONE
+        },
+    };
+    pub(super) const LUA: Spec = Spec {
+        queries: crate::code::queries::sources::LUA,
+        view: None,
+        // `--[[` opens a block whose inner lines carry no marker, so they read as code.
+        comments: Some(CommentSyntax { lines: &["--"], blocks: false }),
+        body: PROSE,
+        label: Label::Qualified,
+        // The query hides a `local function`; every other function is reachable from outside.
+        export: Export::All,
+        // A global function exists once its file is required.
+        visibility: Visibility::Imported { transitive: false },
+        ambiguity: Ambiguity::OwnThenUnique,
+        cross_file: true,
+        imports: ImportPaths::Dotted { roots: &["", "src", "lua"], suffixes: &[".lua", "/init.lua"] },
+        receivers: Receivers::Imports,
+        dotted_dirs: false,
+        hooks: NONE,
+    };
+    pub(super) const GO: Spec = Spec {
+        queries: crate::code::queries::sources::GO,
+        view: None,
+        comments: C,
+        body: PROSE,
+        label: Label::Qualified,
+        export: Export::Capitalized,
+        // A package is a directory: every file of it sees every other's names, exported or not.
+        visibility: Visibility::Directory,
+        // Build-tagged files (`x_linux.go`, `x_windows.go`) declare one name once each, and a call
+        // reaches whichever the build picks. A variant that declares the name itself only ever
+        // builds with its own.
+        ambiguity: Ambiguity::OwnFirst,
+        cross_file: true,
+        // A test file is no part of the package another package imports.
+        imports: ImportPaths::ModulePrefix {
+            manifest: "go.mod",
+            prefixes: Prefixes::Directive("module"),
+            sep: '/',
+            suffixes: &[],
+            skip: &["_test.go"],
+        },
+        receivers: Receivers::Imports,
+        dotted_dirs: false,
+        hooks: NONE,
+    };
+    pub(super) const C_LANG: Spec = Spec {
+        queries: crate::code::queries::sources::C,
+        view: None,
+        comments: C,
+        // A signature over several lines, as C writes a long parameter list, reads as one.
+        body: Body { line: Line::Header, ..PROSE },
+        label: Label::Qualified,
+        // `static` keeps a name in its translation unit; anything else links across the build.
+        export: Export::Hide(&["static"]),
+        // The linker sees every object file without an include.
+        visibility: Visibility::Family,
+        ambiguity: Ambiguity::OwnThenUnique,
+        cross_file: true,
+        imports: ImportPaths::Relative { roots: &["", "include", "src"], suffixes: &[""] },
+        receivers: Receivers::Hook,
+        dotted_dirs: false,
+        hooks: NONE,
+    };
+    // C's linking and includes; the queries differ, and the file is read past its attribute macros.
+    pub(super) const CPP: Spec = Spec { queries: crate::code::queries::sources::CPP, hooks: attribute_macros::HOOKS, ..C_LANG };
+    pub(super) const PHP: Spec = Spec {
+        queries: crate::code::queries::sources::PHP,
+        view: None,
+        comments: Some(CommentSyntax { lines: &["//", "#"], blocks: true }),
+        // A signature over several lines, as a constructor's promoted parameters are, reads as one.
+        body: Body { line: Line::Header, ..PROSE },
+        label: Label::Qualified,
+        export: Export::Hide(&["private", "protected"]),
+        // A class sees its namespace's classes without a `use`, and an imported one by its `use`.
+        visibility: Visibility::Namespace,
+        // Two test doubles of one name in two namespaces are two classes.
+        ambiguity: Ambiguity::OwnThenUnique,
+        cross_file: true,
+        // PSR-4: composer maps a namespace prefix to a directory, and a class to its own file.
+        imports: ImportPaths::ModulePrefix {
+            manifest: "composer.json",
+            prefixes: Prefixes::Json(&[&["autoload", "psr-4"], &["autoload-dev", "psr-4"]]),
+            sep: '\\',
+            suffixes: &[".php"],
+            skip: &[],
+        },
+        receivers: Receivers::Imports,
+        dotted_dirs: false,
+        hooks: NONE,
+    };
+    pub(super) const RUBY: Spec = Spec {
+        queries: crate::code::queries::sources::RUBY,
+        view: None,
+        comments: HASH,
+        body: PROSE,
+        label: Label::Qualified,
+        // The query hides a method under `private` or `protected`; Ruby has no export keyword.
+        export: Export::All,
+        // A constant is global by its full path, and autoloading reaches it without a require.
+        visibility: Visibility::Lexical,
+        ambiguity: Ambiguity::OwnFirst,
+        cross_file: true,
+        // The query says which base a site reads: `require` names a file under `lib/`, and
+        // `require_relative` one beside the requirer. A suffix of `.rb` alone, so that
+        // `require "rack"` never names the directory `rack/`.
+        imports: ImportPaths::Relative { roots: &["lib"], suffixes: &[".rb"] },
+        // `self.f` is the owner's.
+        receivers: Receivers::Imports,
+        dotted_dirs: false,
+        hooks: NONE,
+    };
+    pub(super) const ELIXIR: Spec = Spec {
+        queries: crate::code::queries::sources::ELIXIR,
+        view: None,
+        comments: HASH,
+        // `@doc`, `@spec` and `@impl` above a function are what documents it, as comments are.
+        body: Body { doc: Doc::Adjacent { kinds: &["comment", "unary_operator"], between: &[] }, ..PROSE },
+        // A protocol implementation is named by its protocol and its type, `Inspect.Plug.Conn`.
+        label: Label::Spelled("."),
+        // The query hides `defp`, `defmacrop` and `defguardp`.
+        export: Export::All,
+        // A module is global by its full dotted name, wherever it is declared.
+        visibility: Visibility::Lexical,
+        ambiguity: Ambiguity::OwnFirst,
+        cross_file: true,
+        // `alias`, `import`, `require` and `use` name a module, never a file: no suffix names one.
+        imports: ImportPaths::Relative { roots: &[], suffixes: &[] },
+        receivers: Receivers::Hook,
+        dotted_dirs: false,
+        hooks: NONE,
+    };
+    pub(super) const SCALA: Spec = Spec {
+        queries: crate::code::queries::sources::SCALA,
+        view: None,
+        comments: C,
+        body: Body { line: Line::Header, ..PROSE },
+        label: Label::Qualified,
+        export: Export::Hide(&["private", "protected"]),
+        visibility: Visibility::Package,
+        ambiguity: Ambiguity::OwnFirst,
+        cross_file: true,
+        imports: ImportPaths::Scoped { sep: '.' },
+        receivers: Receivers::Imports,
+        dotted_dirs: false,
+        hooks: NONE,
+    };
+
+    /// One row for both grammars: an interface declares what its implementation does, with `val`
+    /// for `let`, so the queries read either.
+    pub(super) const OCAML: Spec = Spec {
+        queries: crate::code::queries::sources::OCAML,
+        view: None,
+        // `(* *)` is no C block, so only a blank line is sure to be no code.
+        comments: Some(CommentSyntax { lines: &[], blocks: false }),
+        // `let rec f x =` is the line a reader greps for, though the binding starts at `f`.
+        body: Body { line: Line::Row, ..PROSE },
+        label: Label::Qualified,
+        // An `.mli` beside the `.ml` hides what it leaves out, but a file's declarations are read from
+        // the file alone, so every top-level definition is exported, as with no interface.
+        export: Export::All,
+        visibility: Visibility::Opened,
+        ambiguity: Ambiguity::OwnThenUnique,
+        cross_file: true,
+        imports: ImportPaths::ModuleFile { suffixes: &[".ml", ".mli"] },
+        receivers: Receivers::Modules,
+        dotted_dirs: false,
+        hooks: NONE,
+    };
+}
+
+pub(crate) fn spec(lang: Lang) -> &'static Spec {
+    match lang {
+        Lang::TypeScript | Lang::Tsx => &table::TYPESCRIPT,
+        Lang::Vue => &table::VUE,
+        Lang::CSharp => &table::CSHARP,
+        Lang::Razor => &table::RAZOR,
+        Lang::Kotlin => &table::KOTLIN,
+        Lang::Java => &table::JAVA,
+        Lang::Rust => &table::RUST,
+        Lang::Python => &table::PYTHON,
+        Lang::Dart => &table::DART,
+        Lang::Swift => &table::SWIFT,
+        Lang::GraphQl => &table::GRAPHQL,
+        Lang::Sql => &table::SQL,
+        Lang::Bicep => &table::BICEP,
+        Lang::Hcl => &table::HCL,
+        Lang::Terraform => &table::TERRAFORM,
+        Lang::Shell => &table::SHELL,
+        Lang::Lua => &table::LUA,
+        Lang::Go => &table::GO,
+        Lang::C => &table::C_LANG,
+        Lang::Cpp => &table::CPP,
+        Lang::Php => &table::PHP,
+        Lang::Ruby => &table::RUBY,
+        Lang::Elixir => &table::ELIXIR,
+        Lang::Scala => &table::SCALA,
+        Lang::OCaml | Lang::OCamlInterface => &table::OCAML,
+    }
+}
+
+/// The resolver's per-language state, one value per type.
+#[derive(Default)]
+pub(crate) struct States(HashMap<TypeId, Box<dyn Any + Send + Sync>>);
+
+impl States {
+    /// Every language's state, empty.
+    pub fn new() -> States {
+        let mut s = States::default();
+        for lang in Lang::ALL {
+            if let Some(make) = spec(lang).hooks.state {
+                let v = make();
+                let first = s.0.insert((*v).type_id(), v).is_none();
+                assert!(first, "two languages register one state type; a state is keyed by its type, so give each its own");
+            }
+        }
+        s
+    }
+
+    pub fn get<T: Any>(&self) -> &T {
+        self.0.get(&TypeId::of::<T>()).and_then(|v| v.downcast_ref()).expect("a state no language registers")
+    }
+
+    pub fn get_mut<T: Any>(&mut self) -> &mut T {
+        self.0.get_mut(&TypeId::of::<T>()).and_then(|v| v.downcast_mut()).expect("a state no language registers")
+    }
+}
+
+/// `state` for a language whose state is `T`.
+pub(crate) fn state<T: Any + Default + Send + Sync>() -> Box<dyn Any + Send + Sync> {
+    Box::<T>::default()
+}

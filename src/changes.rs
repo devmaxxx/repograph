@@ -1,6 +1,7 @@
 //! The working tree's diff, read onto the graph: which symbols the hunks sit in, and who reaches
 //! those. Line numbers come from the new side of `git diff -U0`, so the graph must have been
 //! refreshed against the working tree first — `main` does that before calling in.
+use crate::code::spec::CommentSyntax;
 use crate::impact::{self, Dependent};
 use crate::model::{Graph, NodeKind};
 use std::collections::{BTreeMap, BTreeSet};
@@ -57,23 +58,10 @@ pub fn parse(diff: &str) -> Vec<Hunk> {
     out
 }
 
-#[derive(Clone, Copy)]
-struct CommentSyntax { lines: &'static [&'static str], blocks: bool }
-
+/// `None` for markup around a host language, where whether `//` opens a comment depends on where the
+/// line sits, and for a file with no grammar, which has no symbol nodes for its judgement to spare.
 fn comment_syntax(file: &str) -> Option<CommentSyntax> {
-    use crate::code::lang::Lang;
-    const C: CommentSyntax = CommentSyntax { lines: &["//"], blocks: true };
-    const HASH: CommentSyntax = CommentSyntax { lines: &["#"], blocks: false };
-    match Lang::of(file) {
-        Some(Lang::TypeScript | Lang::Tsx | Lang::Kotlin | Lang::Java | Lang::CSharp | Lang::Rust | Lang::Dart | Lang::Swift | Lang::Bicep) => Some(C),
-        Some(Lang::Python | Lang::Shell | Lang::GraphQl) => Some(HASH),
-        Some(Lang::Hcl) => Some(CommentSyntax { lines: &["#", "//"], blocks: true }),
-        Some(Lang::Sql) => Some(CommentSyntax { lines: &["--"], blocks: true }),
-        // Markup around a host language: whether `//` opens a comment depends on where the line sits.
-        Some(Lang::Razor | Lang::Vue) => None,
-        // A file with no grammar has no symbol nodes, so there is nothing for its judgement to spare.
-        None => None,
-    }
+    crate::code::lang::Lang::of(file).and_then(|lang| crate::code::spec::spec(lang).comments)
 }
 
 // A comment that steers a tool changes what the file does even though it declares nothing.

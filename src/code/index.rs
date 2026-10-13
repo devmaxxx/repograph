@@ -30,6 +30,10 @@ pub struct Header {
     /// every family without file-private top-level names.
     #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
     pub private: BTreeSet<String>,
+    /// Open namespaces the file writes, as C++'s are: a qualifier naming one names a free name of the
+    /// family, and one naming none of them nor a type names nothing the family declares.
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub open: BTreeSet<String>,
 }
 
 /// Every type path (`Outer`, `Outer.Inner`, top-level ones included) and every member path
@@ -185,6 +189,8 @@ pub struct QualifiedIndex {
     /// whose names nest. The qualified names stop at the top level, so without these a name like
     /// `a.b.Outer.Inner` could only be guessed to live in `Outer`'s file.
     nested: BTreeMap<String, Nested>,
+    /// Every open namespace a file of the family writes.
+    open: BTreeSet<String>,
 }
 
 impl QualifiedIndex {
@@ -194,6 +200,15 @@ impl QualifiedIndex {
 
     pub fn insert_nested(&mut self, rel: &str, nested: Nested) {
         self.nested.insert(rel.to_string(), nested);
+    }
+
+    pub fn insert_open(&mut self, names: &BTreeSet<String>) {
+        self.open.extend(names.iter().cloned());
+    }
+
+    /// Whether some file of the family opens a namespace named `name`.
+    pub fn is_open(&self, name: &str) -> bool {
+        self.open.contains(name)
     }
 
     /// Whether `rel` declares a type at `path`.
@@ -242,7 +257,6 @@ impl QualifiedIndex {
     }
 
     /// Names directly under `scope.` with their files — for `import a.b.*`, `using A.B;`.
-    #[allow(dead_code)]
     pub fn under(&self, scope: &str) -> Vec<(&str, Vec<&str>)> {
         let prefix = format!("{scope}.");
         self.by_name
@@ -258,7 +272,39 @@ impl QualifiedIndex {
 
 /// Header for a name-indexed family's file; None for every other language.
 pub fn header_for(lang: Lang, rel: &str, source: &str) -> Option<Header> {
-    crate::code::reader::reader(lang).header.map(|header| header(rel, source))
+    let header = crate::code::spec::spec(lang).hooks.header?;
+    let known = COLLECTED.lock().unwrap_or_else(|e| e.into_inner()).remove(rel);
+    Some(match known {
+        Some((key, known)) if key == fingerprint(lang, source) => known,
+        _ => header(rel, source),
+    })
+}
+
+/// The headers `Resolver::new` read, each under the fingerprint of its source, until `widen` asks for
+/// the same file. On a build that is every name-indexed file, and the second read parsed the file
+/// and walked its declarations again.
+static COLLECTED: std::sync::Mutex<BTreeMap<String, (u64, Header)>> = std::sync::Mutex::new(BTreeMap::new());
+
+fn fingerprint(lang: Lang, source: &str) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    (lang, source).hash(&mut h);
+    h.finish()
+}
+
+/// Keeps the header the collect pass read for `header_for`, which a `header` hook would read alike.
+pub(crate) fn collected(lang: Lang, rel: &str, source: &str, header: &Header) {
+    COLLECTED.lock().unwrap_or_else(|e| e.into_inner()).insert(rel.to_string(), (fingerprint(lang, source), header.clone()));
+}
+
+/// Drops every header the collect pass kept, which only the pass that read it can use.
+pub(crate) fn forget_read_ahead() {
+    COLLECTED.lock().unwrap_or_else(|e| e.into_inner()).clear();
+}
+
+#[cfg(test)]
+pub(crate) fn read_ahead(rel: &str) -> bool {
+    COLLECTED.lock().unwrap_or_else(|e| e.into_inner()).contains_key(rel)
 }
 
 /// Every name-indexed file's header as it was last read, kept in `.repograph/headers.json`.

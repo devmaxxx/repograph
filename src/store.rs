@@ -8,8 +8,13 @@ pub struct Store { dir: PathBuf }
 /// Where a load got its value. The JSON is what a store is defined by and what any other
 /// binary reads; the mirror is a postcard copy of the same value written beside it, because
 /// parsing 10 MB of graph JSON costs every `ask` 18 ms and decoding the same graph a few.
+/// `Json` carries the stamp of the bytes that were parsed, so a mirror written from that value
+/// later is labelled with them even if another writer has renamed a new graph in since.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Source { Absent, Json, Mirror }
+pub enum Source { Absent, Json(MirrorStamp), Mirror }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MirrorStamp(Option<(u128, u64)>);
 
 /// A `Graph` that gained a field is a new mirror shape, and a magic that says so is one fewer
 /// thing that depends on postcard failing at the right byte: `RGM1` mirrors hold the struct from
@@ -17,8 +22,9 @@ pub enum Source { Absent, Json, Mirror }
 const MIRROR_MAGIC: &[u8; 4] = b"RGM2";
 const MIRROR_HEADER: usize = 4 + 12 + 16 + 8;
 
-fn stamp(p: &Path) -> Option<(u128, u64)> {
-    let m = std::fs::metadata(p).ok()?;
+fn stamp(p: &Path) -> Option<(u128, u64)> { stamp_of(&std::fs::metadata(p).ok()?) }
+
+fn stamp_of(m: &std::fs::Metadata) -> Option<(u128, u64)> {
     let mtime = m.modified().ok()?.duration_since(std::time::UNIX_EPOCH).ok()?.as_nanos();
     Some((mtime, m.len()))
 }
@@ -92,15 +98,23 @@ impl Store {
                 if let Ok(v) = postcard::from_bytes::<T>(&bytes[MIRROR_HEADER..]) { return Ok((Some(v), Source::Mirror)); }
             }
         }
-        let bytes = std::fs::read(&p).with_context(|| format!("read {}", p.display()))?;
-        Ok((Some(serde_json::from_slice(&bytes).context(json.to_string())?), Source::Json))
+        // Stamped from the open handle, not the path: a rename after the open replaces the
+        // path's file, never the one being read.
+        use std::io::Read;
+        let mut f = std::fs::File::open(&p).with_context(|| format!("read {}", p.display()))?;
+        let read = f.metadata().ok().as_ref().and_then(stamp_of);
+        let mut bytes = Vec::new();
+        f.read_to_end(&mut bytes).with_context(|| format!("read {}", p.display()))?;
+        let v = serde_json::from_slice(&bytes).context(json.to_string())?;
+        Ok((Some(v), Source::Json(MirrorStamp(read))))
     }
 
-    /// The mirror of a JSON file as it stands on disk now. Nothing reads a mirror whose stamp
-    /// disagrees with its JSON, so writing it after the JSON can never leave a reader misled.
-    pub fn write_mirror<T: serde::Serialize>(&self, json: &str, value: &T) -> Result<()> {
-        let Some(now) = stamp(&self.dir.join(json)) else { return Ok(()) };
-        let mut bytes = mirror_header(now).to_vec();
+    /// The mirror of a JSON file, labelled with the stamp of the bytes `value` came from. A
+    /// stamp taken from the path now could be another writer's, and a reader would then decode
+    /// this value as that writer's graph.
+    pub fn write_mirror<T: serde::Serialize>(&self, json: &str, from: MirrorStamp, value: &T) -> Result<()> {
+        let Some(from) = from.0 else { return Ok(()) };
+        let mut bytes = mirror_header(from).to_vec();
         bytes.extend(postcard::to_stdvec(value)?);
         self.write_atomic(&mirror_name(json), &bytes)
     }
@@ -119,9 +133,9 @@ impl Store {
     pub fn save(&self, g: &Graph, m: &Manifest) -> Result<Option<crate::walk::Stamp>> {
         self.ensure_dir()?;
         let written = self.write_atomic_stamped("graph.json", &serde_json::to_vec(g)?)?;
-        self.write_mirror("graph.json", g)?;
+        self.write_mirror("graph.json", MirrorStamp(written.as_ref().and_then(stamp_of)), g)?;
         self.save_manifest(m)?;
-        Ok(written)
+        Ok(written.as_ref().and_then(crate::walk::stamp_of))
     }
 
     /// The manifest alone: a walk that found no change can still have learned the stat stamps
@@ -137,7 +151,7 @@ impl Store {
     /// `write_atomic`, with the stamp of these bytes taken from the temporary file before the
     /// rename, which keeps its mtime and length: a writer renaming over the file a moment later
     /// cannot lend its stamp to them.
-    fn write_atomic_stamped(&self, name: &str, bytes: &[u8]) -> Result<Option<crate::walk::Stamp>> {
+    fn write_atomic_stamped(&self, name: &str, bytes: &[u8]) -> Result<Option<std::fs::Metadata>> {
         static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         self.ensure_dir()?;
         // One name per writer: readers that refresh at once each write a whole graph, and a
@@ -146,7 +160,7 @@ impl Store {
         let tmp = self.dir.join(format!("{name}.{}.{n}.tmp", std::process::id()));
         let written = std::fs::write(&tmp, bytes).with_context(|| format!("write {}", tmp.display()))
             .and_then(|()| {
-                let stamp = std::fs::metadata(&tmp).ok().as_ref().and_then(crate::walk::stamp_of);
+                let stamp = std::fs::metadata(&tmp).ok();
                 rename_over(&tmp, &self.dir.join(name)).with_context(|| format!("rename {name}"))?;
                 Ok(stamp)
             });
@@ -314,7 +328,7 @@ mod tests {
         store.save(&graph("old"), &Manifest::default()).unwrap();
         store.write_atomic("graph.json", &serde_json::to_vec(&graph("a much longer new label")).unwrap()).unwrap();
         let (g, _, source) = store.load_traced().unwrap();
-        assert_eq!(source, Source::Json);
+        assert!(matches!(source, Source::Json(_)));
         assert_eq!(g.nodes["FR-WEB-01"].label, "a much longer new label");
     }
 
@@ -328,7 +342,7 @@ mod tests {
         bytes.truncate(MIRROR_HEADER + 3);
         std::fs::write(&p, bytes).unwrap();
         let (g, _, source) = store.load_traced().unwrap();
-        assert_eq!(source, Source::Json);
+        assert!(matches!(source, Source::Json(_)));
         assert_eq!(g.nodes.len(), 1);
     }
 
@@ -342,7 +356,7 @@ mod tests {
         bytes[4..10].copy_from_slice(b"9.9.9\0");
         std::fs::write(&p, bytes).unwrap();
         let (_, _, source) = store.load_traced().unwrap();
-        assert_eq!(source, Source::Json);
+        assert!(matches!(source, Source::Json(_)));
     }
 
     /// A store written by a release whose `Graph` had no `pending`: its JSON reads with none
@@ -371,7 +385,7 @@ mod tests {
         store.write_atomic("graph.bin", &bytes).unwrap();
 
         let (read, _, source) = store.load_traced().unwrap();
-        assert_eq!(source, Source::Json, "the old mirror is passed over, not misread");
+        assert!(matches!(source, Source::Json(_)), "the old mirror is passed over, not misread");
         assert_eq!((read.nodes, read.edges), (g.nodes, g.edges));
         assert!(read.pending.is_empty());
     }
@@ -384,8 +398,8 @@ mod tests {
         store.save(&g, &Manifest::default()).unwrap();
         std::fs::remove_file(d.path().join(".repograph/graph.bin")).unwrap();
         let (_, _, source) = store.load_traced().unwrap();
-        assert_eq!(source, Source::Json);
-        store.write_mirror("graph.json", &g).unwrap();
+        let Source::Json(read) = source else { panic!("{source:?}") };
+        store.write_mirror("graph.json", read, &g).unwrap();
         let (g2, _, source) = store.load_traced().unwrap();
         assert_eq!(source, Source::Mirror);
         assert_eq!(g2.nodes, g.nodes);
@@ -490,6 +504,43 @@ mod tests {
         assert_eq!(got.len(), 256 * 1024);
         assert!(got.iter().all(|&b| b == got[0]), "a file of two writers' bytes");
         assert_eq!(tmps(d.path()), Vec::<String>::new());
+    }
+
+    // The interleaving `ask` can hit: it parsed the JSON, another writer saved, and only then is
+    // the mirror written. Labelled with what is on disk now, it would answer every later read
+    // with the stale graph.
+    #[test]
+    fn a_mirror_written_after_another_save_is_passed_over() {
+        let d = tempfile::tempdir().unwrap();
+        let store = Store::new(d.path());
+        store.save(&graph("first"), &Manifest::default()).unwrap();
+        std::fs::remove_file(d.path().join(".repograph/graph.bin")).unwrap();
+        let (stale, _, source) = store.load_traced().unwrap();
+        let Source::Json(read) = source else { panic!("{source:?}") };
+        store.save(&graph("a second, longer label"), &Manifest::default()).unwrap();
+        store.write_mirror("graph.json", read, &stale).unwrap();
+        let (g, _, source) = store.load_traced().unwrap();
+        assert!(matches!(source, Source::Json(_)));
+        assert_eq!(g.nodes["FR-WEB-01"].label, "a second, longer label");
+    }
+
+    #[test]
+    fn concurrent_saves_never_leave_a_mirror_of_another_writers_json() {
+        let d = tempfile::tempdir().unwrap();
+        for _ in 0..20 {
+            let writers: Vec<_> = ["one", "a much longer two"].into_iter().map(|label| {
+                let repo = d.path().to_path_buf();
+                std::thread::spawn(move || {
+                    let store = Store::new(&repo);
+                    for _ in 0..10 { store.save(&graph(label), &Manifest::default()).unwrap(); }
+                })
+            }).collect();
+            for w in writers { w.join().unwrap(); }
+            let store = Store::new(d.path());
+            let json: Graph = serde_json::from_slice(&store.read_bytes("graph.json").unwrap().unwrap()).unwrap();
+            let (g, _, _) = store.load_traced().unwrap();
+            assert_eq!(g.nodes["FR-WEB-01"].label, json.nodes["FR-WEB-01"].label);
+        }
     }
 
     #[test]

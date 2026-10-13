@@ -104,7 +104,10 @@ impl Default for Config {
                 "**/*.ts", "**/*.tsx", "**/*.js", "**/*.jsx", "**/*.mjs", "**/*.cjs",
                 "**/*.kt", "**/*.java", "**/*.cs", "**/*.rs", "**/*.py", "**/*.dart", "**/*.swift",
                 "**/*.gql", "**/*.graphql", "**/*.sql", "**/*.bicep", "**/*.tf", "**/*.hcl",
-                "**/*.sh", "**/*.bash", "**/*.vue",
+                "**/*.sh", "**/*.bash", "**/*.vue", "**/*.lua", "**/*.go", "**/*.c", "**/*.h",
+                "**/*.cc", "**/*.cpp", "**/*.cxx", "**/*.c++", "**/*.ino", "**/*.hh", "**/*.hpp",
+                "**/*.hxx", "**/*.h++", "**/*.php", "**/*.rb", "**/*.rbw", "**/*.gemspec",
+                "**/*.rake", "**/*.ex", "**/*.exs", "**/*.scala", "**/*.sc", "**/*.ml", "**/*.mli",
             ]),
             text_globs: Vec::new(),
             include: Vec::new(),
@@ -116,7 +119,9 @@ impl Default for Config {
             // by a reader asking what this repository's authors wrote by hand. The other
             // languages' toolchains leave the same kind of tree beside the sources: a build
             // directory, a virtualenv, a provider or pod cache. `.gitignore` keeps them out only
-            // inside a git checkout, and a virtualenv checked in is not rare.
+            // inside a git checkout, and a virtualenv checked in is not rare. Go commits its
+            // `vendor/` as often as not, and Composer and Bundler install theirs there; Mix and dune
+            // build into `_build/`, which dune fills with copies of the sources.
             skip: s(&[
                 "**/node_modules/**",
                 "**/dist/**",
@@ -130,6 +135,8 @@ impl Default for Config {
                 "**/.terraform/**",
                 "**/.dart_tool/**",
                 "**/Pods/**",
+                "**/vendor/**",
+                "**/_build/**",
                 "**/TRACKER.md",
                 "graphify-out/**",
                 ".repograph/**",
@@ -1194,12 +1201,15 @@ mod tests {
     }
 
     #[test]
-    fn every_language_0_6_0_ships_is_globbed_by_default_and_razor_is_not() {
+    fn every_language_0_6_0_reads_is_globbed_by_default_and_razor_is_not() {
         assert_eq!(Config::default().code_globs, [
             "**/*.ts", "**/*.tsx", "**/*.js", "**/*.jsx", "**/*.mjs", "**/*.cjs",
             "**/*.kt", "**/*.java", "**/*.cs", "**/*.rs", "**/*.py", "**/*.dart", "**/*.swift",
             "**/*.gql", "**/*.graphql", "**/*.sql", "**/*.bicep", "**/*.tf", "**/*.hcl",
-            "**/*.sh", "**/*.bash", "**/*.vue",
+            "**/*.sh", "**/*.bash", "**/*.vue", "**/*.lua", "**/*.go", "**/*.c", "**/*.h",
+            "**/*.cc", "**/*.cpp", "**/*.cxx", "**/*.c++", "**/*.ino", "**/*.hh", "**/*.hpp",
+            "**/*.hxx", "**/*.h++", "**/*.php", "**/*.rb", "**/*.rbw", "**/*.gemspec",
+            "**/*.rake", "**/*.ex", "**/*.exs", "**/*.scala", "**/*.sc", "**/*.ml", "**/*.mli",
         ]);
     }
 }
