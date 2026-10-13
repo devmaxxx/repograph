@@ -253,11 +253,15 @@ fn matches_of<'t>(c: &'static Compiled, root: Node<'t>, src: &str, rel: &str, mu
     cursor.set_max_start_depth(c.depth);
     let mut it = cursor.matches(&c.query, root, src.as_bytes());
     while let Some(m) = it.next() {
-        if let Some(kind) = c.metas[m.pattern_index].within {
+        let meta = &c.metas[m.pattern_index];
+        if meta.within.is_some() || !meta.outside.is_empty() {
             // The outermost capture stands for the match, in whatever order the pattern lists them: a
             // name inside the construct may sit under a node the construct itself is not under.
             let outer = m.captures().iter().map(|cap| cap.node).min_by_key(|n| (n.start_byte(), std::cmp::Reverse(n.end_byte())));
-            if !outer.is_some_and(|n| inside(root, n, kind)) {
+            if meta.within.is_some_and(|kind| !outer.is_some_and(|n| inside(root, n, kind))) {
+                continue;
+            }
+            if meta.outside.iter().any(|kind| outer.is_some_and(|n| inside(root, n, *kind))) {
                 continue;
             }
         }
@@ -823,20 +827,20 @@ pub fn write(file: &File, facts: &Facts, ex: &mut Extraction) {
 }
 
 /// The repository files an import site names, by the default rule: relative to the importer's
-/// directory, then to the root when the spec says so, each with the spec's suffixes, kept only when
+/// directory, then under each of the spec's roots in order, each with its suffixes, kept only when
 /// the walk globbed the result. A path naming a directory names every file of the importer's
 /// language directly in it, as a Terraform module source does. The importer's own file and own
 /// directory add nothing it does not already hold, so they name nothing. A `Dotted` spec reads none of
 /// this: see `dotted`.
 pub fn import_targets(resolver: &Resolver, spec: &Spec, rel: &str, import: &Import) -> Vec<String> {
     let Some(path) = &import.path else { return Vec::new() };
-    let (root, suffixes) = match spec.imports {
-        ImportPaths::Relative { root, suffixes } => (root, suffixes),
+    let (roots, suffixes) = match spec.imports {
+        ImportPaths::Relative { roots, suffixes } => (roots, suffixes),
         ImportPaths::Dotted { roots, suffixes } => return dotted(resolver, rel, &path.replace('.', "/"), roots, suffixes),
         ImportPaths::ModulePrefix { manifest, directive, skip } => return under_module(resolver, rel, path, manifest, directive, skip),
     };
     let dir = rel.rsplit_once('/').map_or("", |(d, _)| d);
-    let bases = std::iter::once(dir).chain(root.then_some(""));
+    let bases = std::iter::once(dir).chain(roots.iter().copied());
     for base in bases {
         for suffix in suffixes {
             let Some(target) = crate::code::prose::join_under(base, &format!("{path}{suffix}")) else { continue };

@@ -2,6 +2,7 @@
 //! construct is pinned by the assertion rather than by a shared fixture.
 
 mod bicep;
+mod c;
 mod csharp;
 mod dart;
 mod go;

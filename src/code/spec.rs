@@ -161,8 +161,9 @@ pub enum Ambiguity {
 #[derive(Clone, Copy)]
 pub enum ImportPaths {
     Relative {
-        /// Tried after the importer's directory: the path as written relative to the repository root.
-        root: bool,
+        /// Directories of the repository tried in order after the importer's own: `""` is the root, as
+        /// C's include path lists `include` and `src` after the includer's directory.
+        roots: &'static [&'static str],
         /// Appended to the path as written, in order; `""` tries it as written.
         suffixes: &'static [&'static str],
     },
@@ -281,7 +282,7 @@ const HOOKS_ONLY: Spec = Spec {
     export: Export::All,
     visibility: Visibility::File,
     ambiguity: Ambiguity::Unique,
-    imports: ImportPaths::Relative { root: false, suffixes: &[""] },
+    imports: ImportPaths::Relative { roots: &[], suffixes: &[""] },
     receivers: Receivers::Hook,
     cross_file: false,
     dotted_dirs: false,
@@ -310,7 +311,7 @@ mod table {
         visibility: Visibility::File,
         ambiguity: Ambiguity::Unique,
         // Unread: `Resolver::resolve` places every specifier, through the tsconfig and package exports.
-        imports: ImportPaths::Relative { root: false, suffixes: &[] },
+        imports: ImportPaths::Relative { roots: &[], suffixes: &[] },
         receivers: Receivers::Hook,
         cross_file: false,
         dotted_dirs: false,
@@ -343,7 +344,7 @@ mod table {
         visibility: Visibility::Family,
         ambiguity: Ambiguity::OwnFirst,
         cross_file: false,
-        imports: ImportPaths::Relative { root: false, suffixes: &[] },
+        imports: ImportPaths::Relative { roots: &[], suffixes: &[] },
         receivers: Receivers::Hook,
         dotted_dirs: false,
         hooks: namespace_scope::HOOKS,
@@ -366,7 +367,7 @@ mod table {
         visibility: Visibility::Family,
         ambiguity: Ambiguity::OwnFirst,
         cross_file: false,
-        imports: ImportPaths::Relative { root: false, suffixes: &[] },
+        imports: ImportPaths::Relative { roots: &[], suffixes: &[] },
         receivers: Receivers::Hook,
         dotted_dirs: false,
         // The JVM index needs each file's arities and supertypes, and a call binds through
@@ -390,7 +391,7 @@ mod table {
         visibility: Visibility::Family,
         ambiguity: Ambiguity::OwnFirst,
         cross_file: false,
-        imports: ImportPaths::Relative { root: false, suffixes: &[] },
+        imports: ImportPaths::Relative { roots: &[], suffixes: &[] },
         receivers: Receivers::Hook,
         dotted_dirs: false,
         // As Kotlin's: the JVM index needs arities and supertypes, and a call binds through
@@ -414,7 +415,7 @@ mod table {
         ambiguity: Ambiguity::OwnFirst,
         cross_file: false,
         // Unread: `crate_paths` places every `use` and writes its edge with the name it binds.
-        imports: ImportPaths::Relative { root: false, suffixes: &[] },
+        imports: ImportPaths::Relative { roots: &[], suffixes: &[] },
         receivers: Receivers::Hook,
         dotted_dirs: false,
         hooks: Hooks {
@@ -437,7 +438,7 @@ mod table {
         ambiguity: Ambiguity::OwnFirst,
         cross_file: false,
         // Unread: `module_paths` places every import and writes its edge with the names it binds.
-        imports: ImportPaths::Relative { root: false, suffixes: &[] },
+        imports: ImportPaths::Relative { roots: &[], suffixes: &[] },
         receivers: Receivers::Hook,
         dotted_dirs: false,
         hooks: Hooks {
@@ -464,7 +465,7 @@ mod table {
         // What a file's names resolve to moves with the directives and declarations of every library
         // it imports.
         cross_file: true,
-        imports: ImportPaths::Relative { root: false, suffixes: &[""] },
+        imports: ImportPaths::Relative { roots: &[], suffixes: &[""] },
         receivers: Receivers::Hook,
         dotted_dirs: false,
         hooks: Hooks {
@@ -488,7 +489,7 @@ mod table {
         // Every migration that creates or alters a table is one of its declarations.
         ambiguity: Ambiguity::All,
         cross_file: false,
-        imports: ImportPaths::Relative { root: false, suffixes: &[""] },
+        imports: ImportPaths::Relative { roots: &[], suffixes: &[""] },
         receivers: Receivers::Hook,
         dotted_dirs: false,
         // The objects alone, in `headers.json`, so a migration that starts or stops creating or
@@ -512,7 +513,7 @@ mod table {
         ambiguity: Ambiguity::OwnFirst,
         // A module reaches what its file declares, which an edit there moves.
         cross_file: true,
-        imports: ImportPaths::Relative { root: false, suffixes: &[""] },
+        imports: ImportPaths::Relative { roots: &[], suffixes: &[""] },
         receivers: Receivers::Hook,
         dotted_dirs: false,
         hooks: Hooks { resolve: Some(module_reach::reach), ..NONE },
@@ -528,7 +529,7 @@ mod table {
         visibility: Visibility::File,
         ambiguity: Ambiguity::OwnFirst,
         cross_file: false,
-        imports: ImportPaths::Relative { root: false, suffixes: &[""] },
+        imports: ImportPaths::Relative { roots: &[], suffixes: &[""] },
         receivers: Receivers::Hook,
         dotted_dirs: false,
         hooks: NONE,
@@ -545,7 +546,7 @@ mod table {
         visibility: Visibility::Directory,
         ambiguity: Ambiguity::OwnFirst,
         cross_file: true,
-        imports: ImportPaths::Relative { root: false, suffixes: &[""] },
+        imports: ImportPaths::Relative { roots: &[], suffixes: &[""] },
         receivers: Receivers::Hook,
         dotted_dirs: false,
         hooks: Hooks { resolve: Some(module_reach::reach), ..NONE },
@@ -562,7 +563,7 @@ mod table {
         visibility: Visibility::Family,
         ambiguity: Ambiguity::OwnFirst,
         cross_file: false,
-        imports: ImportPaths::Relative { root: false, suffixes: &[""] },
+        imports: ImportPaths::Relative { roots: &[], suffixes: &[""] },
         receivers: Receivers::Hook,
         dotted_dirs: false,
         hooks: NONE,
@@ -581,7 +582,7 @@ mod table {
         // definition of its type.
         ambiguity: Ambiguity::All,
         cross_file: false,
-        imports: ImportPaths::Relative { root: false, suffixes: &[""] },
+        imports: ImportPaths::Relative { roots: &[], suffixes: &[""] },
         receivers: Receivers::Hook,
         dotted_dirs: false,
         // The default header, kept in `headers.json` so a document that starts or stops declaring a
@@ -602,7 +603,7 @@ mod table {
         ambiguity: Ambiguity::Unique,
         cross_file: true,
         // Unread: the `import` hook resolves every `source`, and a path it cannot place imports nothing.
-        imports: ImportPaths::Relative { root: false, suffixes: &[] },
+        imports: ImportPaths::Relative { roots: &[], suffixes: &[] },
         receivers: Receivers::Hook,
         dotted_dirs: true,
         hooks: Hooks {
@@ -651,6 +652,24 @@ mod table {
         dotted_dirs: false,
         hooks: NONE,
     };
+    pub(super) const C_LANG: Spec = Spec {
+        queries: crate::code::queries::sources::C,
+        view: None,
+        comments: C,
+        // A signature over several lines, as C writes a long parameter list, reads as one.
+        body: Body { line: Line::Header, ..PROSE },
+        label: Label::Qualified,
+        // `static` keeps a name in its translation unit; anything else links across the build.
+        export: Export::Hide(&["static"]),
+        // The linker sees every object file without an include.
+        visibility: Visibility::Family,
+        ambiguity: Ambiguity::OwnThenUnique,
+        cross_file: true,
+        imports: ImportPaths::Relative { roots: &["", "include", "src"], suffixes: &[""] },
+        receivers: Receivers::Hook,
+        dotted_dirs: false,
+        hooks: NONE,
+    };
 }
 
 pub(crate) fn spec(lang: Lang) -> &'static Spec {
@@ -673,6 +692,7 @@ pub(crate) fn spec(lang: Lang) -> &'static Spec {
         Lang::Shell => &table::SHELL,
         Lang::Lua => &table::LUA,
         Lang::Go => &table::GO,
+        Lang::C => &table::C_LANG,
     }
 }
 

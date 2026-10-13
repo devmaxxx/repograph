@@ -63,7 +63,7 @@ fn spec(body: Body, export: Export) -> Spec {
         export,
         visibility: Visibility::File,
         ambiguity: Ambiguity::Unique,
-        imports: ImportPaths::Relative { root: false, suffixes: &[""] },
+        imports: ImportPaths::Relative { roots: &[], suffixes: &[""] },
         receivers: Receivers::Hook,
         cross_file: false,
         dotted_dirs: false,
@@ -151,11 +151,11 @@ fn an_import_path_resolves_beside_the_importer_then_at_the_root_and_only_to_a_gl
     let (_dir, resolver) = repo(&["**/*.py"], &[("pkg/a.py", ""), ("pkg/util.py", ""), ("lib/x.py", ""), ("pkg/notes.txt", "")]);
     let import = |path: &str| Import { path: Some(path.to_string()), names: Vec::new(), alias: None, reexport: false, range: 0..0, targets: OnceLock::new() };
     let mut s = spec(STRIPPED, Export::All);
-    s.imports = ImportPaths::Relative { root: false, suffixes: &["", ".py"] };
+    s.imports = ImportPaths::Relative { roots: &[], suffixes: &["", ".py"] };
     assert_eq!(import_targets(&resolver, &s, "pkg/a.py", &import("util")), ["pkg/util.py"]);
     assert!(import_targets(&resolver, &s, "pkg/a.py", &import("lib/x")).is_empty());
     assert!(import_targets(&resolver, &s, "pkg/a.py", &import("notes.txt")).is_empty());
-    s.imports = ImportPaths::Relative { root: true, suffixes: &["", ".py"] };
+    s.imports = ImportPaths::Relative { roots: &[""], suffixes: &["", ".py"] };
     assert_eq!(import_targets(&resolver, &s, "pkg/a.py", &import("lib/x")), ["lib/x.py"]);
 }
 

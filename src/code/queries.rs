@@ -148,6 +148,9 @@ pub(crate) struct Meta {
     /// A node kind the match must sit inside: a construct nests what it reads at any depth, which a
     /// pattern can only spell as one alternative per depth.
     pub within: Option<u16>,
+    /// Node kinds the match must sit outside of, at any depth: a C struct a function body declares is
+    /// a local, wherever in the body it stands.
+    pub outside: Vec<u16>,
     /// On a scope owner: when the file declares the type it stands for, it is that type. Its
     /// members hang off the type and are reached through it, so none is the file's export, and a
     /// site between them is the type's. Rust's `impl` is its type's; Swift's `extension` is not.
@@ -220,6 +223,10 @@ pub fn compile(grammar: &Language, sources: &[&str]) -> Result<Compiled, String>
                     0 => return Err(format!("pattern at byte {at} sets within {value:?}, which the grammar has no node for")),
                     kind => meta.within = Some(kind),
                 },
+                "outside" => match grammar.id_for_node_kind(value, true) {
+                    0 => return Err(format!("pattern at byte {at} sets outside {value:?}, which the grammar has no node for")),
+                    kind => meta.outside.push(kind),
+                },
                 key => return Err(format!("pattern at byte {at} sets {key} {value:?}, outside the closed set")),
             }
         }
@@ -252,6 +259,9 @@ pub(crate) mod sources {
 
     pub(crate) const BICEP: Sources =
         Sources { decl: &[include_str!("queries/bicep/decl.scm")], refs: &[include_str!("queries/bicep/refs.scm")] };
+
+    pub(crate) const C: Sources =
+        Sources { decl: &[include_str!("queries/c/decl.scm")], refs: &[include_str!("queries/c/refs.scm")] };
 
     pub(crate) const CSHARP: Sources =
         Sources { decl: &[include_str!("queries/csharp/decl.scm")], refs: &[include_str!("queries/csharp/refs.scm")] };
@@ -407,6 +417,11 @@ mod contract {
     fn a_pattern_with_nothing_to_place_is_refused() {
         assert!(rejects("(function_definition name: (identifier))").contains("captures nothing"));
         assert!(rejects(r#"((call arguments: (argument_list (identifier)? @name)) (#set! within "class_definition"))"#).contains("within"));
+    }
+
+    #[test]
+    fn a_kind_to_stay_outside_of_must_be_one_the_grammar_has() {
+        assert!(rejects(r#"((function_definition name: (identifier) @name) @definition.function (#set! outside "no_such_node"))"#).contains("outside"));
     }
 
     #[test]
