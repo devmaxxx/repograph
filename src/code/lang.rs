@@ -11,11 +11,11 @@ use tree_sitter::{Language, Parser, Tree};
 
 /// One variant per grammar the 0.6.0 design reads, plus the two languages read by blanking.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum Lang { TypeScript, Tsx, Kotlin, Java, CSharp, Razor, Rust, Python, Dart, Swift, GraphQl, Sql, Bicep, Hcl, Terraform, Shell, Vue, Lua, Go, C, Cpp, Php, Ruby }
+pub enum Lang { TypeScript, Tsx, Kotlin, Java, CSharp, Razor, Rust, Python, Dart, Swift, GraphQl, Sql, Bicep, Hcl, Terraform, Shell, Vue, Lua, Go, C, Cpp, Php, Ruby, OCaml, OCamlInterface }
 
 /// The unit a resolver works over: languages that compile together share one.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum Family { TypeScript, Jvm, DotNet, Rust, Python, Dart, Swift, GraphQl, Sql, Bicep, Hcl, Shell, Lua, Go, C, Php, Ruby }
+pub enum Family { TypeScript, Jvm, DotNet, Rust, Python, Dart, Swift, GraphQl, Sql, Bicep, Hcl, Shell, Lua, Go, C, Php, Ruby, OCaml }
 
 /// The extension a grammar or the files-only note keys off, lowercase-sensitive like the
 /// filesystem: `Path::extension` alone, shared so the two readings of it cannot drift apart.
@@ -67,6 +67,9 @@ fn overridden(ext: Option<&str>) -> Option<Named> {
         "cu" => Named::Unread,
         // A Rake task file is Ruby, which ast-grep's table does not name.
         "rake" => Named::Read(Lang::Ruby),
+        // ast-grep carries no OCaml. An interface reads signature items an implementation cannot hold.
+        "ml" => Named::Read(Lang::OCaml),
+        "mli" => Named::Read(Lang::OCamlInterface),
         // Names ast-grep gives a language we read, which we do not read as it: Gradle scripts, variable
         // files that declare nothing, and extensions that are often another language. Reading any is a
         // widening with its own case.
@@ -150,16 +153,17 @@ fn shebang(text: &str) -> Option<Lang> {
         p if versioned(p, "python") => Some(Lang::Python),
         p if versioned(p, "lua") => Some(Lang::Lua),
         p if versioned(p, "php") => Some(Lang::Php),
+        "ocaml" => Some(Lang::OCaml),
         "node" | "deno" | "bun" | "ts-node" => Some(Lang::TypeScript),
         _ => None,
     }
 }
 
 impl Lang {
-    pub const ALL: [Lang; 23] = [
+    pub const ALL: [Lang; 25] = [
         Lang::TypeScript, Lang::Tsx, Lang::Kotlin, Lang::Java, Lang::CSharp, Lang::Razor, Lang::Rust, Lang::Python,
         Lang::Dart, Lang::Swift, Lang::GraphQl, Lang::Sql, Lang::Bicep, Lang::Hcl, Lang::Terraform, Lang::Shell,
-        Lang::Vue, Lang::Lua, Lang::Go, Lang::C, Lang::Cpp, Lang::Php, Lang::Ruby,
+        Lang::Vue, Lang::Lua, Lang::Go, Lang::C, Lang::Cpp, Lang::Php, Lang::Ruby, Lang::OCaml, Lang::OCamlInterface,
     ];
 
     /// `None`: no grammar and no embedding reads this extension (L1). Such a file is indexed as a
@@ -199,6 +203,8 @@ impl Lang {
             // The crate ast-grep carries, but not ast-grep's `Php`, which is `LANGUAGE_PHP_ONLY`: that
             // grammar cannot read the HTML a template holds before its `<?php`.
             Lang::Php => return Some(Language::new(tree_sitter_php::LANGUAGE_PHP)),
+            Lang::OCaml => return Some(Language::new(tree_sitter_ocaml::LANGUAGE_OCAML)),
+            Lang::OCamlInterface => return Some(Language::new(tree_sitter_ocaml::LANGUAGE_OCAML_INTERFACE)),
             Lang::Razor | Lang::Vue => return None,
         };
         Some(carried.get_ts_language())
@@ -229,6 +235,7 @@ impl Lang {
             Lang::C | Lang::Cpp => Family::C,
             Lang::Php => Family::Php,
             Lang::Ruby => Family::Ruby,
+            Lang::OCaml | Lang::OCamlInterface => Family::OCaml,
             // A Vue script resolves names through the TypeScript resolver, and L10 puts no edge between families.
             Lang::Vue => Family::TypeScript,
             // Reached only by a variant `of` cannot return yet; see `grammar`.
@@ -277,8 +284,9 @@ mod all_tests {
             Lang::Rust => 6, Lang::Python => 7, Lang::Dart => 8, Lang::Swift => 9, Lang::GraphQl => 10, Lang::Sql => 11,
             Lang::Bicep => 12, Lang::Hcl => 13, Lang::Terraform => 14, Lang::Shell => 15, Lang::Vue => 16, Lang::Lua => 17,
             Lang::Go => 18, Lang::C => 19, Lang::Cpp => 20, Lang::Php => 21, Lang::Ruby => 22,
+            Lang::OCaml => 23, Lang::OCamlInterface => 24,
         };
-        let mut seen = [false; 23];
+        let mut seen = [false; 25];
         for l in Lang::ALL {
             assert!(!std::mem::replace(&mut seen[slot(l)], true), "{l:?} listed twice");
         }

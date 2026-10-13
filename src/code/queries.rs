@@ -181,6 +181,9 @@ pub(crate) struct Meta {
     /// A Ruby method called without a receiver is the caller's class's, which another file
     /// reopening that class is no witness to.
     pub own_file: bool,
+    /// On an import: it reaches the sites its node holds alone, as OCaml's `let open M in e` and
+    /// `M.(e)` open `M` for `e` only.
+    pub local: bool,
 }
 
 pub struct Compiled {
@@ -233,6 +236,7 @@ pub fn compile(grammar: &Language, sources: &[&str]) -> Result<Compiled, String>
                 "receiver" if value == "scope" => meta.scoped = true,
                 "parent" if value == "none" => meta.detached = true,
                 "visibility" if value == "file" => meta.own_file = true,
+                "visibility" if value == "node" => meta.local = true,
                 "depth" => match value.parse() {
                     Ok(n) => meta.depth = Some(n),
                     Err(_) => return Err(format!("pattern at byte {at} sets depth {value:?}, which is no count")),
@@ -316,6 +320,9 @@ pub(crate) mod sources {
 
     pub(crate) const RUBY: Sources =
         Sources { decl: &[include_str!("queries/ruby/decl.scm")], refs: &[include_str!("queries/ruby/refs.scm")] };
+
+    pub(crate) const OCAML: Sources =
+        Sources { decl: &[include_str!("queries/ocaml/decl.scm")], refs: &[include_str!("queries/ocaml/refs.scm")] };
 
     pub(crate) const RUST: Sources =
         Sources { decl: &[include_str!("queries/rust/decl.scm")], refs: &[include_str!("queries/rust/refs.scm")] };

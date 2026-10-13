@@ -148,6 +148,11 @@ pub enum Visibility {
     /// the files its resolved imports reach, hidden names excluded: PHP's namespace is a directory
     /// under PSR-4, and a `use` names one file of another.
     Namespace,
+    /// As `Lexical` in the own file, a name read under each container around the site first; then the
+    /// modules its imports with no alias name, each with what it hands on through its own, transitively:
+    /// OCaml's `open M` sees what `M` itself `include`s. An import with an alias binds that name alone
+    /// and opens nothing, and one marked local opens its module for the sites its node holds alone. `Receivers::Modules` reads it, so no file is reached by a bare name.
+    Opened,
     /// As `Family`, with a nested name indexed by its full path, and a reference read under each
     /// container around it, innermost first, before it is read as written: Ruby's `Utils` inside
     /// `module Rack` is `Rack::Utils` wherever that is declared.
@@ -192,6 +197,11 @@ pub enum ImportPaths {
         suffixes: &'static [&'static str],
         skip: &'static [&'static str],
     },
+    /// A module named by its file, with no import to say so: OCaml's `Foo` is `foo.ml`. The path's
+    /// first dotted segment, its first letter lowered and then as written, with each of `suffixes`,
+    /// names the file beside the importer, or else the one file of that name in the repository. The
+    /// rest of the path is a module inside that file. A module never names its own file.
+    ModuleFile { suffixes: &'static [&'static str] },
 }
 
 /// Where a manifest states its prefixes.
@@ -219,6 +229,16 @@ pub enum Receivers {
     /// the module's own too. An import with no alias is named by the namespace its files declare,
     /// as Go's package clause names an import.
     Imports,
+    /// Every name is a module path whose dots join modules, as OCaml's `A.B.f` is `A/B/f` and a bare
+    /// `f` a path of one. The path is read in the own file under each container around the site, then
+    /// in the one module an open around the site holds it in, innermost first, then in the one module
+    /// the file's own opens hold it in (`open A.B` opens `B` inside `A`'s file), then
+    /// through the alias its first segment is bound to: one the file defines (a re-exporting import
+    /// with an alias, `module A = M`) before one that only names a module. A module is read with its
+    /// own definitions, the aliases it defines and what it re-exports. Types and values are apart: a
+    /// reference in a type's context names a type, any other what is no type. A path whose first
+    /// segment a local binding shadows, as a functor's parameter does, stays missing.
+    Modules,
 }
 
 pub(crate) type Collect = fn(&mut Resolver, &str, &str) -> Option<Header>;
@@ -752,6 +772,28 @@ mod table {
         dotted_dirs: false,
         hooks: NONE,
     };
+
+    /// One row for both grammars: an interface declares what its implementation does, with `val`
+    /// for `let`, so the queries read either.
+    pub(super) const OCAML: Spec = Spec {
+        queries: crate::code::queries::sources::OCAML,
+        view: None,
+        // `(* *)` is no C block, so only a blank line is sure to be no code.
+        comments: Some(CommentSyntax { lines: &[], blocks: false }),
+        // `let rec f x =` is the line a reader greps for, though the binding starts at `f`.
+        body: Body { line: Line::Row, ..PROSE },
+        label: Label::Qualified,
+        // An `.mli` beside the `.ml` hides what it leaves out, but a file's declarations are read from
+        // the file alone, so every top-level definition is exported, as with no interface.
+        export: Export::All,
+        visibility: Visibility::Opened,
+        ambiguity: Ambiguity::OwnThenUnique,
+        cross_file: true,
+        imports: ImportPaths::ModuleFile { suffixes: &[".ml", ".mli"] },
+        receivers: Receivers::Modules,
+        dotted_dirs: false,
+        hooks: NONE,
+    };
 }
 
 pub(crate) fn spec(lang: Lang) -> &'static Spec {
@@ -778,6 +820,7 @@ pub(crate) fn spec(lang: Lang) -> &'static Spec {
         Lang::Cpp => &table::CPP,
         Lang::Php => &table::PHP,
         Lang::Ruby => &table::RUBY,
+        Lang::OCaml | Lang::OCamlInterface => &table::OCAML,
     }
 }
 

@@ -31,6 +31,8 @@ pub struct Resolver {
     /// The prefixes a directory's nearest manifest maps, each with its directory, by the manifest's
     /// file name and the directory: see `module_of`.
     modules: Mutex<Modules>,
+    /// Every globbed file by its file name, built on the first lookup: see `named`.
+    by_name: std::sync::OnceLock<HashMap<String, Vec<String>>>,
 }
 
 /// By manifest file name and directory: each prefix the nearest manifest maps, and its directory.
@@ -270,6 +272,7 @@ impl Resolver {
             files,
             facts: Mutex::default(),
             modules: Mutex::default(),
+            by_name: std::sync::OnceLock::new(),
         };
         // Manifests before sources: a path family's roots decide how its sources' paths read.
         for (lang, rel, path) in manifests.iter().filter(|(l, _, _)| reached.contains(&l.family())) {
@@ -312,6 +315,19 @@ impl Resolver {
     /// Whether the code globs reach `rel`.
     pub(crate) fn globbed(&self, rel: &str) -> bool {
         self.files.contains(rel)
+    }
+
+    /// The globbed files whose file name is `name`, in path order. Indexed once, because a language
+    /// that names modules by file asks it for every module path in the build.
+    pub(crate) fn named(&self, name: &str) -> &[String] {
+        let index = self.by_name.get_or_init(|| {
+            let mut index: HashMap<String, Vec<String>> = HashMap::new();
+            for f in &self.files {
+                index.entry(f.rsplit('/').next().unwrap_or(f).to_string()).or_default().push(f.clone());
+            }
+            index
+        });
+        index.get(name).map_or(&[], Vec::as_slice)
     }
 
     /// The globbed files beside `rel` in its directory that its language reads, `rel` excluded.
