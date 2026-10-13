@@ -96,8 +96,15 @@ imports resolved through relative paths, `tsconfig` `paths` (with `baseUrl`) and
 `import()` and `require()` calls; decorators with their first string argument as context; and
 every id quoted in a comment or string literal, attributed to the top-level function, class
 member, `const`, interface or enum that contains it. That last layer is the doc↔code bridge an
-AST-only indexer misses entirely. Each construct is pinned by one inline case in
-`src/code/cases.rs`; `.claude/skills/extractor-case/` is the loop for adding the next one.
+AST-only indexer misses entirely.
+
+Every code language is read the same way, by one engine (`src/code/engine.rs`) over the tree the
+file parsed to: `src/code/queries/<language>/decl.scm` captures what a file declares and `refs.scm`
+what it names, and the language's row in `src/code/spec.rs` says how the captures become nodes and
+edges. What no query can say, such as an import only a resolver can place or a call proven through
+a receiver's declared type, is a hook under `src/code/exceptions/` that reads the same facts instead
+of walking the tree again. Each construct is pinned by one inline case in
+`src/code/cases/<language>.rs`; `.claude/skills/extractor-case/` is the loop for adding the next one.
 
 ## Blast radius
 

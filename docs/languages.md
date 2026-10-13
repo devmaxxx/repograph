@@ -6,7 +6,9 @@ such a file, names those extensions once on stderr — `code: no grammar reads 2
 only` — so a glob that reaches past the
 grammars says so instead of producing a graph silently thinner than the tree.
 
-Every language in the table below is read by default. The first `build`, `update` or refreshing
+Every language is read the same way: two tree-sitter queries and its row of data, with hooks for
+what the data cannot say ([graph-model.md](graph-model.md) says how). Every language in the table
+below is read by default. The first `build`, `update` or refreshing
 `ask` after upgrading from 0.5.x re-reads the whole tree once, because this release reads files by
 a new grammar generation; the next reads only what changed. `REPOGRAPH_CODE_GLOBS` withdraws a
 language for one run without writing config into the tree. A `repograph.toml` that names `code_globs`
