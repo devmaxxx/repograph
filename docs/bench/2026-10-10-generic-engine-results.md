@@ -1890,3 +1890,41 @@ and `class`.
 - **Not fixed:** a `struct` passed to a functor declares its members under the module the
   application names; an alias of an alias (`module Re2 = Re`) is not chased.
 - **Gate:** `cargo test --all-targets` 1,526 passed, 0 failed; clippy clean.
+
+## Step 24 · Defaults
+
+Lua, Go, C, C++, PHP, Ruby, Scala, Elixir and OCaml join the default `code_globs` (`8b3aa69`), every
+extension `lang.rs` reads for them. `**/vendor/**` and `**/_build/**` join the default `skip`
+(`1c1e37c`): Go commits its vendor tree, Composer and Bundler install there, and dune copies the
+sources into `_build/`. Razor stays opt-in. `walk::GRAMMAR` stays at 6, which step 14 set in the
+same unreleased 0.6.0.
+
+- **Fixture:** built with `repograph-step14` and with the step 24 release binary, `graph.json` and
+  `headers.json` are byte-identical. The fixture holds no file of the nine languages and no
+  `vendor/` or `_build/`.
+- **Bench** on `1c1e37c`, in `~/bench/beauty-crm-test` after a reset from the fixture's store:
+  `--no-dense` `keyword 39/40 paraphrase 7/30 code 12/12 p90 238 tok`; dense
+  `keyword 40/40 paraphrase 9/30 code 12/12 p90 237 tok` (e5-small). Both match step 14 case for
+  case: zero flips (`log/bench-step24-1c1e37c{,-dense}.txt`).
+- **Build time:** corpus, median of five, interleaved with step 0, release binaries, at load 5–13
+  (`log/buildtime-step24.txt`). Step 0 1.220 s; step 17 1.145×, C++ 1.133×, PHP 1.144×, Ruby
+  1.166×, Elixir 1.129×, Scala 1.145×, OCaml 1.143×, step 24 1.129×. Every step is under 1.20×.
+- **Size,** release build on macOS arm64; the archive is `release.yml`'s, a gzipped tar of the
+  unstripped binary. Each step against the one merged before it:
+
+  | step | stripped | Δ stripped | archive | Δ archive |
+  |---|---|---|---|---|
+  | 17 (before) | 67.94 MB | | 16.32 MB | |
+  | 18 C++ | 71.69 MB | +3.75 | 16.66 MB | +0.34 |
+  | 20 PHP | 72.81 MB | +1.12 | 16.79 MB | +0.13 |
+  | 19 Ruby | 75.01 MB | +2.20 | 17.00 MB | +0.21 |
+  | 22 Elixir | 76.51 MB | +1.50 | 17.17 MB | +0.17 |
+  | 21 Scala | 80.34 MB | +3.83 | 17.62 MB | +0.45 |
+  | 23 OCaml | 89.39 MB | **+9.05** | 18.47 MB | +0.85 |
+  | 24 | 89.62 MB | +0.23 | 18.51 MB | +0.04 |
+
+  OCaml's +9.05 MB stripped is over the per-step bar of 8 MB, so the step is held for Max; its
+  archive cost is under the 1 MB bar. The 0.6.0 archive bar, `v0.5.3`'s aarch64 asset
+  (12.57 MB) + 3.5 MB = 16.07 MB, is already passed before step 18 (16.32 MB) and reads 18.51 MB
+  at step 24.
+- **Gate:** `cargo test --all-targets` 1,526 passed, 0 failed; clippy clean.
