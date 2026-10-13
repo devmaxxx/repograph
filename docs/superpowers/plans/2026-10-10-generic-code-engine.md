@@ -1642,6 +1642,12 @@ This step alone closes the three reviewer defects. About 1,200 lines of Rust are
   - The exceptions now hold 889: `import_bindings` 634, `single_file_components` 186 and `statement_prose` 69. The engine, `syntax`, the spec and the module lists add 88, and the queries 165.
   - Net Rust outside the case files is −527 against the estimate's −700. Part of that is the inline tests, which moved into the cases.
   - The kept hook is 889 lines against the estimate's 600. What no query replaces is the import-bound lookup and the statement's prose.
+- **Review fix re-verified.** `082861f` reads a decorated class member's line from its first child that is not a decorator. Before, the line was the first one not opening with `@`, so `@Input() name: string;` read as empty and a decorator spread over lines read as its own inner line. The same commit assigns cite owners after the nested cites are dropped, and hashes a file's text into its fingerprint only when it differs from the source. Its binary is `bin/repograph-step13b`.
+  - Kit (`new-13` → `new-13b`, `--lang ts,tsx,vue`): ts R3 = 121 and vue R3 = 2. Every other class is 0 in every language. All 19,757 edges are identical (`log/langdiff-step13b-kit.txt`).
+  - Scratchpad corpus (vs `store-base`): the same ts R3 = 121 and vue R3 = 2 on top of step 13's readings (`-scratch.txt`).
+  - Fixture (vs `fixture-13`, step 13's own store rebuilt for this reading): `graph.json` and `headers.json` are byte-identical. No fixture class member is decorated on a line of its own.
+  - Hand read, all 123 accepted. In 121 the old line was a decorator's inner line (`type: Number,`, `description: '…'`, `default: 1,`) and the new one is the field (`notDistributed!: number`, `limit?: number = 20`). In 2, Vue's `@Prop() mode: string` read as empty and now reads `mode: string`. None of the new lines is a comment, a decorator or empty. The 123 sit in 13 files, nearly all NestJS DTOs.
+  - Bench on `082861f`, from a store built by `repograph-step13b`: `--no-dense` `keyword 39/40 paraphrase 7/30 code 12/12 p90 238 tok`; dense `keyword 40/40 paraphrase 9/30 code 12/12 p90 237 tok` under e5-small, with 50 rows re-embedded after the reset. Both transcripts match step 13's case for case, so zero flips. Both rows are in `bench/history/runs.jsonl`.
 
 **Step 14 · Remove the old paths.** M, net negative. Remove:
 

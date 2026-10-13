@@ -794,3 +794,20 @@ what no query says: `import_bindings`, `statement_prose` and `single_file_compon
   - `cargo clippy --all-targets -- -D warnings`: clean;
   - `cargo tree --duplicates --depth 0`: no tree-sitter crate;
   - `src/code/typescript/` is gone.
+
+### Step 13 · review fix `082861f`
+
+New: `bin/repograph-step13b`. A decorated class member reads its line from its first child that is
+not a decorator, where it read the first line not opening with `@`.
+
+- **Regressions:** from `langdiff.py --lang ts,tsx,vue`, in `log/langdiff-step13b-{kit,scratch,fixture}.txt`.
+  - Kit (`new-13` → `new-13b`): ts R3 = 121, vue R3 = 2. Every other class is 0, and the 19,757
+    edges are identical.
+  - Scratchpad corpus (vs `store-base`): the same 123 on top of step 13's readings.
+  - Fixture (vs `fixture-13`, step 13's store rebuilt for this reading): byte-identical.
+- **Accepted, all 123 hand-read:** 121 old lines were a decorator's inner line (`type: Number,`)
+  and now read the field (`notDistributed!: number`). Two Vue `@Prop()` fields read empty and now
+  read `mode: string` and `show: boolean`.
+- **Bench** on `082861f`: `--no-dense` `keyword 39/40 paraphrase 7/30 code 12/12 p90 238 tok`; dense
+  `keyword 40/40 paraphrase 9/30 code 12/12 p90 237 tok` (e5-small). Both match step 13 case for
+  case: zero flips.
