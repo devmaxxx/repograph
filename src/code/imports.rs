@@ -387,8 +387,11 @@ impl Resolver {
         let header = match (hooks.collect, hooks.header) {
             (Some(add), _) => add(self, rel, source),
             (None, Some(header)) => Some(header(rel, source)),
-            (None, None) if matches!(spec(lang).visibility, Visibility::Family) => {
-                engine::declarations(lang, rel, source).map(|facts| engine::header(&facts))
+            (None, None) if matches!(spec(lang).visibility, Visibility::Family | Visibility::Lexical) => {
+                engine::declarations(lang, rel, source).map(|facts| match spec(lang).visibility {
+                    Visibility::Lexical => engine::paths(&facts),
+                    _ => engine::header(&facts),
+                })
             }
             (None, None) => None,
         };

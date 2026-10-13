@@ -60,6 +60,8 @@ pub(crate) struct Ref {
     pub edge: EdgeKind,
     pub context: String,
     pub range: Range<usize>,
+    /// Set by `#set! visibility "file"`: the reference reaches its own file's definitions alone.
+    pub own_file: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -521,6 +523,7 @@ fn read_reference(spec: &Spec, caps: &[(Role, Node)], edge: EdgeKind, site: Node
         edge,
         context: meta.context.clone(),
         range: site.byte_range(),
+        own_file: meta.own_file,
     }
 }
 
@@ -741,9 +744,10 @@ fn is_kind(n: Node, kind: &str) -> bool {
 }
 
 /// The named sibling before `n`. HCL's grammar puts the comments above a file's first block outside its
-/// `body`, so a first child of a `body` looks past it.
+/// `body`, and Ruby's those above a class's or module's first statement outside its `body_statement`,
+/// so a first child of either looks past it.
 fn above(n: Node) -> Option<Node> {
-    n.prev_named_sibling().or_else(|| n.parent().filter(|p| p.kind() == "body").and_then(|p| p.prev_named_sibling()))
+    n.prev_named_sibling().or_else(|| n.parent().filter(|p| matches!(p.kind(), "body" | "body_statement")).and_then(|p| p.prev_named_sibling()))
 }
 
 /// `comment_text`, and `#` and the language's own line markers too: `comment_text` serves the C
@@ -889,7 +893,7 @@ fn under_module(resolver: &Resolver, rel: &str, path: &str, manifest: &'static s
 fn reach(resolver: &Resolver, spec: &Spec, file: &File, facts: &Facts) -> Vec<(String, Arc<Facts>)> {
     let rel = file.rel;
     let files: Vec<String> = match spec.visibility {
-        Visibility::File | Visibility::Family => Vec::new(),
+        Visibility::File | Visibility::Family | Visibility::Lexical => Vec::new(),
         Visibility::Imported { transitive } => {
             let mut seen = BTreeSet::from([rel.to_string()]);
             let mut queue: VecDeque<String> = facts.imports.iter().flat_map(|i| i.targets(resolver, spec, rel).iter().cloned()).collect();
@@ -914,7 +918,7 @@ fn reach(resolver: &Resolver, spec: &Spec, file: &File, facts: &Facts) -> Vec<(S
 
 /// The files `reach` or the family's index holds a visible `name` in.
 fn visible(resolver: &Resolver, spec: &Spec, file: &File, reach: &[(String, Arc<Facts>)], name: &str) -> Vec<String> {
-    if let Visibility::Family = spec.visibility {
+    if let Visibility::Family | Visibility::Lexical = spec.visibility {
         return resolver.index(file.lang.family())
             .map(|index| index.files(name).into_iter().filter(|f| *f != file.rel).map(str::to_string).collect())
             .unwrap_or_default();
@@ -933,9 +937,9 @@ pub fn resolve(resolver: &Resolver, spec: &Spec, file: &File, facts: &Facts, ex:
     let rel = file.rel;
     let reach = reach(resolver, spec, file, facts);
     // The files whose declaration of `name` a reference reaches, by the spec's ambiguity rule.
-    let declaring = |name: &str| -> Vec<String> {
+    let declaring = |name: &str, own_file: bool| -> Vec<String> {
         let own = facts.declares(name);
-        let others = visible(resolver, spec, file, &reach, name);
+        let others = if own_file { Vec::new() } else { visible(resolver, spec, file, &reach, name) };
         match spec.ambiguity {
             Ambiguity::OwnFirst if own => vec![rel.to_string()],
             Ambiguity::OwnFirst => others,
@@ -962,7 +966,7 @@ pub fn resolve(resolver: &Resolver, spec: &Spec, file: &File, facts: &Facts, ex:
                 let receiving = receiving.get_or_insert_with(|| Receiving::of(facts));
                 // A directory that is the module declares its members across its files.
                 let module = |member: &str| match spec.visibility {
-                    Visibility::Directory => declaring(member).into_iter().map(|f| format!("sym:{f}::{member}")).collect(),
+                    Visibility::Directory => declaring(member, false).into_iter().map(|f| format!("sym:{f}::{member}")).collect(),
                     _ => Vec::new(),
                 };
                 let all = matches!(spec.ambiguity, Ambiguity::All | Ambiguity::OwnFirst);
@@ -978,7 +982,24 @@ pub fn resolve(resolver: &Resolver, spec: &Spec, file: &File, facts: &Facts, ex:
         if facts.locals.shadows(&r.name, r.range.start, None) {
             continue;
         }
-        let targets = declaring(&r.name);
+        // The first of the names a lexical reference may mean that something declares is the one
+        // it means. A constant never names a method, though Ruby lets a method be spelled `POST`.
+        let method_only = |name: &str| {
+            let mut kinds = facts.defs.iter().filter(|d| d.qualified == name).map(|d| d.kind);
+            kinds.next().is_some_and(|k| k == Kind::Method) && kinds.all(|k| k == Kind::Method)
+        };
+        let (name, targets) = match spec.visibility {
+            Visibility::Lexical => lexical(facts, r)
+                .into_iter()
+                .filter(|name| r.edge != EdgeKind::References || !method_only(name))
+                .map(|name| {
+                    let targets = declaring(&name, r.own_file);
+                    (name, targets)
+                })
+                .find(|(_, targets)| !targets.is_empty())
+                .unwrap_or_default(),
+            _ => (r.name.clone(), declaring(&r.name, r.own_file)),
+        };
         // Only a type inherits. A clause a scope owner holds is the type the owner stands for, found
         // by its outermost name as any other name is; one a file or a function holds names no subtype.
         let froms = if !matches!(r.edge, EdgeKind::Extends | EdgeKind::Implements)
@@ -987,18 +1008,43 @@ pub fn resolve(resolver: &Resolver, spec: &Spec, file: &File, facts: &Facts, ex:
             vec![facts.source_id(rel, r.source)]
         } else if let Some(owner) = r.source.is_none().then(|| facts.stands_for(r.range.start)).flatten() {
             let outer = owner.split('.').next().unwrap_or(owner);
-            declaring(outer).into_iter().map(|f| format!("sym:{f}::{owner}")).collect()
+            declaring(outer, false).into_iter().map(|f| format!("sym:{f}::{owner}")).collect()
         } else {
             continue;
         };
         let container = r.source.and_then(|i| facts.defs[i].parent).map(|p| facts.defs[p].id.clone());
         for (from, target) in froms.iter().flat_map(|from| targets.iter().map(move |t| (from, t))) {
-            let to = format!("sym:{target}::{}", r.name);
+            let to = format!("sym:{target}::{name}");
             if to != *from && Some(&to) != container.as_ref() {
                 ex.edge(from, &to, r.edge, &r.context, rel);
             }
         }
     }
+}
+
+/// The names `r` may mean where names are lexical: under each container around the site, innermost
+/// first, then as written. A base clause is read where its type is declared, outside the type. A
+/// path does not say which of its parts are types, whose members join with `.`, so each joint is
+/// tried both ways, as written first: `Request::Helpers::TOKEN` may be `Request.Helpers/TOKEN`.
+fn lexical(facts: &Facts, r: &Ref) -> Vec<String> {
+    let base = matches!(r.edge, EdgeKind::Extends | EdgeKind::Implements);
+    let mut at = r.source.and_then(|i| if base { facts.defs[i].parent } else { Some(i) });
+    let mut scopes = Vec::new();
+    while let Some(i) = at {
+        let d = &facts.defs[i];
+        if let Some(join) = d.kind.join() {
+            scopes.push(format!("{}{join}", d.qualified));
+        }
+        at = d.parent;
+    }
+    scopes.push(String::new());
+    let joints: Vec<usize> = r.name.match_indices('/').map(|(i, _)| i).take(4).collect();
+    let spellings: Vec<String> = (0..1usize << joints.len()).map(|mask| {
+        let mut name = r.name.clone().into_bytes();
+        joints.iter().enumerate().filter(|(bit, _)| mask >> bit & 1 == 1).for_each(|(_, &i)| name[i] = b'.');
+        String::from_utf8(name).unwrap_or_default()
+    }).collect();
+    scopes.iter().flat_map(|scope| spellings.iter().map(move |name| format!("{scope}{name}"))).collect()
 }
 
 /// The name most of `files` declare themselves under. A directory can hold a file of another package,
@@ -1201,6 +1247,14 @@ pub fn header(facts: &Facts) -> Header {
             h.nested.types.insert(d.qualified.clone());
         }
     }
+    h
+}
+
+/// `header` with every visible name at any depth among the top ones, for a family whose index finds
+/// a nested name by its full path (`Visibility::Lexical`).
+pub fn paths(facts: &Facts) -> Header {
+    let mut h = header(facts);
+    h.top.extend(facts.defs.iter().filter(|d| d.export).map(|d| d.qualified.clone()));
     h
 }
 

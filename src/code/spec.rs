@@ -144,6 +144,10 @@ pub enum Visibility {
     Directory,
     /// The own file and the family's index by name, hidden names excluded.
     Family,
+    /// As `Family`, with a nested name indexed by its full path, and a reference read under each
+    /// container around it, innermost first, before it is read as written: Ruby's `Utils` inside
+    /// `module Rack` is `Rack::Utils` wherever that is declared.
+    Lexical,
 }
 
 #[derive(Clone, Copy)]
@@ -240,7 +244,7 @@ impl Spec {
     /// Whether the resolver's walk opens this language's files before extraction: a hook reads them,
     /// or a family that sees its files without an import is indexed by its queries.
     pub fn collects(&self) -> bool {
-        self.hooks.header.is_some() || self.hooks.collect.is_some() || matches!(self.visibility, Visibility::Family)
+        self.hooks.header.is_some() || self.hooks.collect.is_some() || matches!(self.visibility, Visibility::Family | Visibility::Lexical)
     }
 }
 
@@ -670,6 +674,26 @@ mod table {
         dotted_dirs: false,
         hooks: NONE,
     };
+    pub(super) const RUBY: Spec = Spec {
+        queries: crate::code::queries::sources::RUBY,
+        view: None,
+        comments: HASH,
+        body: PROSE,
+        label: Label::Qualified,
+        // The query hides a method under `private` or `protected`; Ruby has no export keyword.
+        export: Export::All,
+        // A constant is global by its full path, and autoloading reaches it without a require.
+        visibility: Visibility::Lexical,
+        ambiguity: Ambiguity::OwnFirst,
+        cross_file: true,
+        // `require` and `require_relative` name a file beside the requirer, else under `lib/`. A
+        // suffix of `.rb` alone, so that `require "rack"` never names the directory `rack/`.
+        imports: ImportPaths::Relative { roots: &["lib"], suffixes: &[".rb"] },
+        // `self.f` is the owner's.
+        receivers: Receivers::Imports,
+        dotted_dirs: false,
+        hooks: NONE,
+    };
 }
 
 pub(crate) fn spec(lang: Lang) -> &'static Spec {
@@ -693,6 +717,7 @@ pub(crate) fn spec(lang: Lang) -> &'static Spec {
         Lang::Lua => &table::LUA,
         Lang::Go => &table::GO,
         Lang::C => &table::C_LANG,
+        Lang::Ruby => &table::RUBY,
     }
 }
 

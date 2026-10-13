@@ -58,6 +58,8 @@ tree-sitter-lua = "=0.5.0"
 tree-sitter-go = "=0.25.0"
 # C: the tree-sitter org's grammar, the one ast-grep carries. MIT, ABI 15, 3.7 MB of parser source.
 tree-sitter-c = "=0.24.2"
+# Ruby: the tree-sitter org's grammar, the one ast-grep carries. MIT, ABI 14, 15 MB of parser source.
+tree-sitter-ruby = "=0.23.1"
 # Detection and grammars behind `lang::detect` and `Lang::grammar`: its extension table and the grammars
 # it carries. Default features off, because the default compiles 27 grammars and nine of them we never
 # read. Each feature is a grammar pinned above; Cargo unifies the two into one copy, and the `=` pins keep
@@ -65,6 +67,7 @@ tree-sitter-c = "=0.24.2"
 ast-grep-language = { version = "=0.45.3", default-features = false, features = [
     "tree-sitter-bash", "tree-sitter-c", "tree-sitter-c-sharp", "tree-sitter-dart", "tree-sitter-go", "tree-sitter-hcl", "tree-sitter-java",
     "tree-sitter-kotlin", "tree-sitter-lua", "tree-sitter-python", "tree-sitter-rust", "tree-sitter-swift", "tree-sitter-typescript",
+    "tree-sitter-ruby",
 ] }
 postcard = { version = "=1.1.3", features = ["use-std"] }
 

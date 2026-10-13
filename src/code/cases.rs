@@ -14,6 +14,7 @@ mod kotlin;
 mod lua;
 mod python;
 mod razor;
+mod ruby;
 mod rust;
 mod shell;
 mod sql;
@@ -401,7 +402,7 @@ fn a_name_either_table_knows_decides_whatever_the_shebang_says() {
     assert_eq!(detect("tools/x.py", Some("#!/bin/bash\n")), Some(Lang::Python));
     assert_eq!(detect("tools/x.sh", Some("#!/usr/bin/env python3\n")), Some(Lang::Shell));
     // ast-grep reads these as languages we leave as files, and that answer is final.
-    for rel in ["ci.yaml", "README.md", "a.rb", "page.html"] {
+    for rel in ["ci.yaml", "README.md", "a.hs", "page.html"] {
         assert_eq!(detect(rel, Some("#!/bin/bash\n")), None, "{rel}");
     }
 }

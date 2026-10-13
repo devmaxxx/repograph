@@ -166,6 +166,10 @@ pub(crate) struct Meta {
     /// as a Go method's receiver is. On a reference: an unbound receiver stands for the owner of the
     /// method holding the site, as Lua's implicit `self` inside `function M:g()` stands for `M`.
     pub owner_receiver: bool,
+    /// On a reference: it reaches its own file's definitions alone, whatever the spec's visibility.
+    /// A Ruby method called without a receiver is the caller's class's, which another file
+    /// reopening that class is no witness to.
+    pub own_file: bool,
 }
 
 pub struct Compiled {
@@ -215,6 +219,7 @@ pub fn compile(grammar: &Language, sources: &[&str]) -> Result<Compiled, String>
                 "adopt" => meta.adopt = true,
                 "variant" => meta.variant = true,
                 "receiver" if value == "owner" => meta.owner_receiver = true,
+                "visibility" if value == "file" => meta.own_file = true,
                 "depth" => match value.parse() {
                     Ok(n) => meta.depth = Some(n),
                     Err(_) => return Err(format!("pattern at byte {at} sets depth {value:?}, which is no count")),
@@ -289,6 +294,9 @@ pub(crate) mod sources {
 
     pub(crate) const PYTHON: Sources =
         Sources { decl: &[include_str!("queries/python/decl.scm")], refs: &[include_str!("queries/python/refs.scm")] };
+
+    pub(crate) const RUBY: Sources =
+        Sources { decl: &[include_str!("queries/ruby/decl.scm")], refs: &[include_str!("queries/ruby/refs.scm")] };
 
     pub(crate) const RUST: Sources =
         Sources { decl: &[include_str!("queries/rust/decl.scm")], refs: &[include_str!("queries/rust/refs.scm")] };
