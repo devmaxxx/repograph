@@ -76,8 +76,8 @@ the default globs yet.
   `go.mod` edit, which widens nothing until the next `build`; a one-argument generic call
   (`f[T](x)`), which the grammar reads as a conversion, so it is a type use and not a call; the type in `node := &node{}`, which reads as the new local.
 
-C (`.c` and `.h`) is read only where `code_globs` or `REPOGRAPH_CODE_GLOBS` names `**/*.c` and
-`**/*.h`; it is not in the default globs yet.
+C (`.c`) is read only where `code_globs` or `REPOGRAPH_CODE_GLOBS` names `**/*.c`; it is not in
+the default globs yet. Its headers are read as C++, below.
 
 - **Read:** function definitions, wherever a prototype stands, so the header's prototype and the
   source's definition are one symbol, the definition; function-like `#define`s as functions;
@@ -94,5 +94,27 @@ C (`.c` and `.h`) is read only where `code_globs` or `REPOGRAPH_CODE_GLOBS` name
   its includers call (`static inline` helpers), since only the file that defines it reaches it;
   `#include <…>`, including one of the repository's own headers; a type or member a function body
   declares, and a type written in a variable's declaration (`static struct { … } config;`); a
-  definition the grammar cannot parse, as when a branch of `#if` repeats a function's header; C++
-  written in a `.h`.
+  definition the grammar cannot parse, as when a branch of `#if` repeats a function's header.
+
+C++ (`.cc`, `.cpp`, `.cxx`, `.c++`, `.ino`, and the headers `.h`, `.hh`, `.hpp`, `.hxx`, `.h++`) is read
+only where `code_globs` or `REPOGRAPH_CODE_GLOBS` names its extensions; it is not in the default
+globs yet. `.cu` is not read. A `.h` is read as C++ whether a C or a C++ file includes it: the C++
+grammar parses C's headers no worse, and reads a class. C and C++ link as one build.
+
+- **Read:** everything C reads; classes, structs and unions as `T.member`, with their methods,
+  constructors, destructors, operators, pure virtual methods and data members, nested types as
+  `Outer.Inner`, and members under `#if` inside the class; a method defined outside its class
+  (`Status DB::Get(…) { … }`) as the member of the class nearest its name, a template around that
+  class being a class too (`List<K>::Iterator::Next` is `List.Iterator.Next`); `using` aliases.
+  Namespaces qualify nothing, so `leveldb::DBImpl` is `DBImpl`. A friend defined in its class, and
+  a function of an unnamed namespace, are functions of the file; the latter stays in it, as a
+  `static` one does. Export macros and thread-safety annotations (`class LIB_EXPORT Status`,
+  `int n_ GUARDED_BY(mu_);`) and a macro standing alone as a member (`Q_OBJECT`) are read past. A
+  bare call inside a method reaches its class's member first, wherever the class is declared, then
+  what a C call reaches; `ns::f()` reaches `f` as a bare call does.
+- **Not read:** a prototype, a deleted or defaulted method, or a method declared in the class and
+  never defined; a call on a value (`o.f()`, `p->f()`) or a class's static member (`A::f()`),
+  since types are not inferred; `new T(…)`, a base or member initialiser, and `T x(f());`, which the
+  grammar reads as a declaration; overloads, which are one symbol; template instantiations; a
+  function a test macro defines (`TEST(…) { … }` is a function named `TEST`); a class a function
+  body declares.

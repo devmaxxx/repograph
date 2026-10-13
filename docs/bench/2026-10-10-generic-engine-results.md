@@ -1190,3 +1190,112 @@ changed no store. C is read only when a config or `REPOGRAPH_CODE_GLOBS` names `
   - `cargo test --all-targets`: 1,448 passed, 0 failed;
   - `cargo clippy --all-targets -- -D warnings`: clean;
   - `cargo tree --duplicates --depth 0`: no tree-sitter crate.
+
+## Step 18 · C++
+
+New: `bin/repograph-cpp12`, built at the non-test source committed as `67c09fa`. Parent:
+`bin/repograph-cpp-base`, built at `4d262b1`. C++ is read only when a config or
+`REPOGRAPH_CODE_GLOBS` names its extensions; the store below names `**/*.cc **/*.h`.
+
+- **Corpus:** `google/leveldb` at `1.23`, `99b3c03b3284f5886f9ef9a4ef703d57373e61be`, 75 `.cc` and
+  56 `.h`, BSD-3-Clause. It is read as data only: no script of it was run.
+- **`.h` census,** each corpus's headers alone under each grammar (`tests/parse_census.rs`):
+
+  | headers | grammar | files with ERROR or MISSING | ERROR | MISSING |
+  |---|---|---|---|---|
+  | hiredis, 27 | C | 12 | 60 | 122 |
+  | hiredis, 27 | C++ | 12 | 146 | 16 |
+  | leveldb, 56 | C | 47 | 1,085 | 60 |
+  | leveldb, 56 | C++ | 20 | 111 | 54 |
+
+  C++ parses hiredis's headers with no more ERROR files than C, so `.h` is `Lang::Cpp`.
+- **Parse census, gated on losses:** 0 of 131 leveldb files lose a definition. Raw: 32 of 131 hold
+  an ERROR or MISSING node (140 and 75). On hiredis after the move: C 25 files, 6 bad; C++ 28 files
+  (27 headers and `example-qt.cpp`), 12 bad.
+- **Exception, no-hook numbers** (`bin/repograph-cpp-nohook`, the same tree with `hooks: NONE`): 25
+  of 131 files lose a definition (19.1%); recall function 1.000, member 0.9054 (651 of 719), method
+  0.8917 (1,021 of 1,145), type 0.8810 (222 of 252), Calls 0.8335 (986 of 1,183, 1,000 edges). With
+  the hook every kind reads 1.000. On hiredis the hook changes only `qt.h` and `example-qt.h`.
+- **Cases:** 8 in `src/code/cases/cpp.rs`: every capture role (in-class method, constructor,
+  destructor, operator, pure virtual, deleted method declaring nothing, out-of-line method under a
+  namespace and under a template with a nested class, the recovered `MISSING "::"` function, friend
+  as the file's, unnamed namespace kept in the file, qualified and nested types, fields under `#if`
+  and through every declarator, typedefs, `using`, enumerators), the attribute-macro hook,
+  includes, the implicit owner in the own file and in the class's header, recursion not falling
+  through, `ns::f`, and `o.f()`, `p->f()` and `A::f()` unresolved.
+- **What C++ writes** (`--no-dense`, the defaults plus `**/*.cc **/*.h`): 2,602 nodes (138 files,
+  131 of them C++, 2,464 symbols), Declares 2,465 (2,361 exported; `status.h`'s `Status.Status` is
+  defined in the class and outside it, one node with two Declares), Imports 487, Calls 1,176. The
+  pending count is 6, five of them citations C++ comments and strings add.
+- **Census recall.** A text census over comment- and string-blanked source, independent of the
+  grammar (`s18/census.py` in the scratchpad), every miss hand-read:
+  - function 338 of 338, method 1,145 of 1,145, member 719 of 719, type 252 of 252. Ten symbols
+    lie outside the census, all right: a brace-initialised field (`count_`), a test fixture's
+    constructor, four `operator()` methods, two `BackgroundWorkItem.function` members, `State.cvar`,
+    and a test helper function the census misreads.
+  - Calls, under the linker rule with a method's implicit owner first: 1,183 pairs, 1,163 with an
+    edge. The 20 misses: the most vexing parse (8: `BytewiseComparator` 5, `RandomSeed` 3), base
+    initialisers (9: `EnvWrapper` 5, `Constructor` 4), `ModelDB`'s local class's `Put` and `Delete`
+    (2, the census's false pairs), and placement `new Node` (1, the census's).
+  - Unclaimed by the rule: 98 `new` expressions, 285 class-qualified calls (`Env::Default()`), 4
+    names hidden in another file. No member call collides with a free function of its name.
+  - Includes: 523 quoted, 487 resolving to a file of the repository, 487 edges, none missing, none
+    extra; the other 36 name files outside it (`port_config.h`, gtest, benchmark).
+- **Hand read** (seed 18):
+  - Symbols: 50 of 50 right in id, line and end.
+  - Five seeded files, counted by hand against the source: `db/repair.cc` 31/31 (its function
+    body's `LogReporter` is a local), `helpers/memenv/memenv.cc` 60/60, `include/leveldb/table.h`
+    3/3 (the class, its private constructor with a body, `rep_`; its prototypes declare nothing),
+    `table/table_builder.cc` 28/28, `util/hash_test.cc` 2/2 (`TEST` and `main`).
+  - Declares: 50 of 50. Imports: 50 of 50, each against its `#include` line. Calls: 50 of 50, the
+    20 whose site the sampler did not find each found by hand (bare member calls and `TEST`
+    bodies after the first).
+- **P and R per kind** (§3.3; P from the hand read and the census, R from the census):
+
+  | kind | edges | sample | P | R |
+  |---|---|---|---|---|
+  | Calls | 1,176 | 50/50 | 0.9983 (1,174 of 1,176) | 0.9831 (1,163 of 1,183) |
+  | Declares, functions | 338 | 50/50 | 1.000 | 1.000 (338 of 338) |
+  | Declares, methods | 1,145 | | 1.000 | 1.000 (1,145 of 1,145) |
+  | Declares, members | 719 | | 1.000 | 1.000 (719 of 719) |
+  | Declares, types | 252 | | 1.000 | 1.000 (252 of 252) |
+  | Imports | 487 | 50/50 | 1.000 | 1.000 (487 of 487) |
+
+  Of the 13 Calls edges no census pair explains, 11 are right (the fixture constructor's 3 calls,
+  `SkipList`'s `compare_` functor member 3, `logging_test.cc`'s helper and its 2 calls, a `Slice(…)`
+  construction, `GetLengthPrefixedSlice`), one
+  is debatable (`WriteBatchInternal::Sequence` → the `SequenceNumber` typedef, a functional cast)
+  and counted wrong, and one is wrong: `corruption_test.cc::TEST_F → skiplist_test.cc::Key`, a
+  fixture's member called in a gtest body read as a free function. Counting all 13 as wrong, P is
+  0.9889. The Declares sample of 50 spans all four rows.
+- **Hiredis before and after** (`**/*.c **/*.h`, `cpp-base` against `cpp12`, step 17's census):
+  definitions 679 → 672 of 692, calls 1,185 → 1,178 of 1,197, edges no site explains 7 → 9,
+  Imports 78 of 78 both. By file, nodes: `qt.h` −11 +18, `example-qt.h` +6, and 103 of `ffc.h`'s
+  changed in body or line only (88 move `line` up one: C++ reads the `ffc_internal ffc_inline`
+  line before a signature as part of the definition); edges: `qt.h` −15 +18, `example-qt.h` +6,
+  `ffc.h` −1. Every new definition miss is a `qt.h` or `example-qt.h` method now under its class,
+  which the C census reads as a function; the call miss is `ffc.h`'s
+  `FFC_SIMD_DISABLE_WARNINGS return h(…)`, read as a declaration. Step 17's wrong
+  `qt.h → sockcompat.h::connect` is gone, and the new unexplained edges are right method edges.
+  `libuv.h` is unchanged. Graph `1396190e7661e0c7` → `ee379ffbd70010d6`.
+- **Regressions** (`log/langdiff-step18-leveldb.txt`), leveldb without against with the C++ globs:
+  cc R1 1,900, h R1 695 (every new node), R4 2,215 and 737, Calls +1,104 and +72, R2 0, R3 0,
+  R5 0, R6 0, R7 0, R9 0. R8 is 1, the pending count above. No edge dangles.
+- **Byte-identity,** `cpp-base` against `cpp12`:
+  - Kit corpus and scratchpad corpus with every C and C++ extension named: `graph.json` and
+    `headers.json` identical (`dff8b36a53bb0548`), and the scratchpad's graph equals `store-14`'s.
+  - gin with `**/*.go`: identical (`119169be4bd8aa62`).
+  - luarocks with `**/*.lua`: identical (`368f10ad0de3ba07`); with `**/*.c **/*.h` added:
+    identical (`58bfff811cf5cb80`); with `.hpp` added it differs by `lua.hpp` alone, a new C++ file.
+- **Fixture and bench:** not run. C++ is not in the fixture's globs.
+- **Size and build time:** not measured; this step ran no release build.
+- **Licence reading:** `tree-sitter-cpp 0.23.4`, `license = "MIT"` in its `Cargo.toml` and
+  `tree-sitter.json` (the crate ships no `LICENSE` file), ABI 14. The queries are written to the
+  engine's contract, not adapted from the crate's `tags.scm`.
+- **Edited tests:** `cases/c.rs`'s `a_c_source_and_a_header_are_read_by_their_extension` expects
+  `Lang::Cpp` for a `.h`, and checks C++'s family. No other assertion changed.
+- **Platforms:** not verified. The branch was not pushed, so `ci` has not run on it.
+- **Gate:**
+  - `cargo test --all-targets`: 1,463 passed, 0 failed;
+  - `cargo clippy --all-targets -- -D warnings`: clean;
+  - `cargo tree --duplicates --depth 0`: no tree-sitter crate.
