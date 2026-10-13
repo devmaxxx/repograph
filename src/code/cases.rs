@@ -6,6 +6,7 @@ mod c;
 mod cpp;
 mod csharp;
 mod dart;
+mod elixir;
 mod go;
 mod graphql;
 mod hcl;

@@ -149,8 +149,10 @@ pub(crate) struct Meta {
     /// pattern can only spell as one alternative per depth.
     pub within: Option<u16>,
     /// Node kinds the match must sit outside of, at any depth: a C struct a function body declares is
-    /// a local, wherever in the body it stands.
-    pub outside: Vec<u16>,
+    /// a local, wherever in the body it stands. A kind with a word, `"call quote"`, is only a node of
+    /// that kind whose first child spells the word: where every construct is a `call`, the word is
+    /// what tells Elixir's `quote` from the code around it.
+    pub outside: Vec<(u16, Option<String>)>,
     /// On a scope owner: when the file declares the type it stands for, it is that type. Its
     /// members hang off the type and are reached through it, so none is the file's export, and a
     /// site between them is the type's. Rust's `impl` is its type's; Swift's `extension` is not.
@@ -181,6 +183,18 @@ pub(crate) struct Meta {
     /// A Ruby method called without a receiver is the caller's class's, which another file
     /// reopening that class is no witness to.
     pub own_file: bool,
+    /// On an import, under `Visibility::Lexical`: what the site binds for the names read after it in
+    /// the definition holding it.
+    pub binds: Option<Binds>,
+}
+
+/// What a lexical import binds.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Binds {
+    /// Its alias, or else its path's last `.` segment, stands for its path: Elixir's `alias`.
+    Alias,
+    /// Its path's members are named bare: Elixir's `import`.
+    Open,
 }
 
 pub struct Compiled {
@@ -241,10 +255,15 @@ pub fn compile(grammar: &Language, sources: &[&str]) -> Result<Compiled, String>
                     0 => return Err(format!("pattern at byte {at} sets within {value:?}, which the grammar has no node for")),
                     kind => meta.within = Some(kind),
                 },
-                "outside" => match grammar.id_for_node_kind(value, true) {
-                    0 => return Err(format!("pattern at byte {at} sets outside {value:?}, which the grammar has no node for")),
-                    kind => meta.outside.push(kind),
-                },
+                "outside" => {
+                    let (kind, word) = value.split_once(' ').map_or((value, None), |(k, w)| (k, Some(w.to_string())));
+                    match grammar.id_for_node_kind(kind, true) {
+                        0 => return Err(format!("pattern at byte {at} sets outside {value:?}, which the grammar has no node for")),
+                        kind => meta.outside.push((kind, word)),
+                    }
+                }
+                "binds" if value == "alias" => meta.binds = Some(Binds::Alias),
+                "binds" if value == "open" => meta.binds = Some(Binds::Open),
                 key => return Err(format!("pattern at byte {at} sets {key} {value:?}, outside the closed set")),
             }
         }
@@ -289,6 +308,9 @@ pub(crate) mod sources {
 
     pub(crate) const DART: Sources =
         Sources { decl: &[include_str!("queries/dart/decl.scm")], refs: &[include_str!("queries/dart/refs.scm")] };
+
+    pub(crate) const ELIXIR: Sources =
+        Sources { decl: &[include_str!("queries/elixir/decl.scm")], refs: &[include_str!("queries/elixir/refs.scm")] };
 
     pub(crate) const GRAPHQL: Sources =
         Sources { decl: &[include_str!("queries/graphql/decl.scm")], refs: &[include_str!("queries/graphql/refs.scm")] };

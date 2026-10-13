@@ -149,7 +149,7 @@ fn an_import_site_keeps_its_path_and_names() {
 #[test]
 fn an_import_path_resolves_beside_the_importer_then_at_the_root_and_only_to_a_globbed_file() {
     let (_dir, resolver) = repo(&["**/*.py"], &[("pkg/a.py", ""), ("pkg/util.py", ""), ("lib/x.py", ""), ("pkg/notes.txt", "")]);
-    let import = |path: &str| Import { path: Some(path.to_string()), names: Vec::new(), alias: None, reexport: false, range: 0..0, targets: OnceLock::new() };
+    let import = |path: &str| Import { path: Some(path.to_string()), names: Vec::new(), alias: None, reexport: false, binds: None, range: 0..0, targets: OnceLock::new() };
     let mut s = spec(STRIPPED, Export::All);
     s.imports = ImportPaths::Relative { roots: &[], suffixes: &["", ".py"] };
     assert_eq!(import_targets(&resolver, &s, "pkg/a.py", &import("util")), ["pkg/util.py"]);
