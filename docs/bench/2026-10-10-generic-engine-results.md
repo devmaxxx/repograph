@@ -1928,3 +1928,8 @@ same unreleased 0.6.0.
   (12.57 MB) + 3.5 MB = 16.07 MB, is already passed before step 18 (16.32 MB) and reads 18.51 MB
   at step 24.
 - **Gate:** `cargo test --all-targets` 1,526 passed, 0 failed; clippy clean.
+
+## Step 24 · Size accepted
+
+Max, 2026-10-13: OCaml stays in the default globs, and its size is accepted: 9.05 MB stripped
+against the 8 MB per-step bar, and a release archive of 18.51 MB against the 0.6.0 bar of 16.07 MB.
