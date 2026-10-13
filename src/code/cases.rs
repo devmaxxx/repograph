@@ -2,6 +2,7 @@
 //! construct is pinned by the assertion rather than by a shared fixture.
 
 mod bicep;
+mod csharp;
 mod dart;
 mod graphql;
 mod hcl;
@@ -9,6 +10,7 @@ mod java;
 mod jvm;
 mod kotlin;
 mod python;
+mod razor;
 mod rust;
 mod shell;
 mod sql;

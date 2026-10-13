@@ -6,13 +6,14 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use tree_sitter::Node;
 
-use super::declarations::{join, unbranched, Declared};
-use super::index::{DotNet, Part};
-use super::resolve::Scope;
+use super::declared::{join, unbranched, Declared};
+use super::project::{DotNet, Part};
+use super::lookup::Scope;
 use super::{dotted, head, type_names, wrapper_name, Host};
 use crate::code::imports::Resolver;
 use crate::code::syntax::{named, text};
-use crate::model::{EdgeKind, Extraction};
+use crate::code::engine::Sink;
+use crate::model::EdgeKind;
 
 /// Where the walk is: the namespace, the innermost type's local name, the type parameters in
 /// scope (the enclosing types' and the current member's own), and the id edges leave from.
@@ -55,7 +56,7 @@ pub(crate) fn first_segment(local: &str) -> &str {
     local.split('.').next().unwrap_or(local)
 }
 
-pub fn scan(root: Node, rel: &str, src: &[u8], host: &Host, own: &Declared, resolver: &Resolver, ex: &mut Extraction) {
+pub fn scan(root: Node, rel: &str, src: &[u8], host: &Host, own: &Declared, resolver: &Resolver, ex: &mut Sink) {
     let reader = Reader { rel, src, host, scope: Scope::new(rel, resolver.state::<DotNet>(), own, host), file: format!("file:{rel}") };
     let at = At { namespace: host.namespace.to_string(), class: None, owner: reader.file.clone(), type_params: BTreeSet::new() };
     reader.walk(root, &at, &mut Locals::new(), ex);
@@ -70,7 +71,7 @@ struct Reader<'a> {
 }
 
 impl Reader<'_> {
-    fn walk(&self, n: Node, at: &At, locals: &mut Locals, ex: &mut Extraction) {
+    fn walk(&self, n: Node, at: &At, locals: &mut Locals, ex: &mut Sink) {
         match n.kind() {
             "compilation_unit" => {
                 let mut at = at.clone();
@@ -104,11 +105,8 @@ impl Reader<'_> {
             "global_attribute" => return self.attributes(n, at, &self.file, ex),
             k if TYPES.contains(&k) => return self.type_decl(n, at, ex),
             k if MEMBERS.contains(&k) && at.class.is_some() => return self.member(n, at, ex),
-            "comment" | "string_literal" | "verbatim_string_literal" | "raw_string_literal" => return self.ids(n, at, ex),
-            // An interpolated string's holes are code, so the walk goes on into them; a hole is
-            // scanned by whatever it recurses into, and never as raw text here, so a literal
-            // inside a hole is not read twice.
-            "interpolated_string_expression" => self.literal_content_ids(n, at, ex),
+            // Comments and strings are cited by the query, and hold no code.
+            "comment" | "string_literal" | "verbatim_string_literal" | "raw_string_literal" => return,
             "parameter" => {
                 if let Some(name) = n.child_by_field_name("name") {
                     locals.insert(text(name, self.src).to_string(), head(n.child_by_field_name("type"), self.src));
@@ -216,7 +214,7 @@ impl Reader<'_> {
     }
 
     /// The type a node's `type`, `returns` or `right` field names, for `Imports`.
-    fn type_uses(&self, n: Node, at: &At, ex: &mut Extraction) {
+    fn type_uses(&self, n: Node, at: &At, ex: &mut Sink) {
         let fields: &[&str] = match n.kind() {
             "is_expression" | "as_expression" => &["right"],
             _ => &["type", "returns"],
@@ -234,7 +232,7 @@ impl Reader<'_> {
     /// `AddScoped<IGateway, Gateway>()` and `Get<Order>()`: the grammar reads what sits between
     /// the angle brackets of a generic name as type arguments, so each is a type use wherever the
     /// generic name stands. A generic name in a type position is read by `type_uses` instead.
-    fn type_args(&self, g: Node, at: &At, ex: &mut Extraction) {
+    fn type_args(&self, g: Node, at: &At, ex: &mut Sink) {
         if g.kind() != "generic_name" {
             return;
         }
@@ -256,7 +254,7 @@ impl Reader<'_> {
     /// `Status.Open` and `Shop.Orders.Status.Open`: a chain of plain names used as a value names
     /// the longest prefix that resolves to a type. Only the outermost access of a chain is read,
     /// so an inner prefix is never taken for the chain's type.
-    fn static_access(&self, n: Node, at: &At, locals: &Locals, ex: &mut Extraction) {
+    fn static_access(&self, n: Node, at: &At, locals: &Locals, ex: &mut Sink) {
         let inner = n.parent().is_some_and(|p| p.kind() == "member_access_expression" && p.child_by_field_name("expression") == Some(n));
         if inner {
             return;
@@ -319,7 +317,7 @@ impl Reader<'_> {
         !self.scope.static_import_could_name(first)
     }
 
-    fn use_type(&self, name: &str, at: &At, ex: &mut Extraction) -> Vec<Part> {
+    fn use_type(&self, name: &str, at: &At, ex: &mut Sink) -> Vec<Part> {
         // `T` in scope names a type parameter, not a declaration; resolving it would let a
         // same-named type elsewhere in the repository stand in for it.
         if at.type_params.contains(name) {
@@ -400,7 +398,7 @@ impl Reader<'_> {
     /// A lambda's, anonymous method's or local function's own parameters, scoped to its body: locals
     /// are cloned before the parameters are read, so a parameter never leaks into the surrounding
     /// member's shared map, and never shadows a same-named field or outer local outside its own body.
-    fn scoped_body(&self, n: Node, params: Option<Node>, body: Option<Node>, at: &At, locals: &mut Locals, ex: &mut Extraction) {
+    fn scoped_body(&self, n: Node, params: Option<Node>, body: Option<Node>, at: &At, locals: &mut Locals, ex: &mut Sink) {
         let mut inner = locals.clone();
         match params {
             Some(p) if p.kind() == "implicit_parameter" => {
@@ -421,7 +419,7 @@ impl Reader<'_> {
         }
     }
 
-    fn type_decl(&self, n: Node, at: &At, ex: &mut Extraction) {
+    fn type_decl(&self, n: Node, at: &At, ex: &mut Sink) {
         let written = n.child_by_field_name("name").map(|x| text(x, self.src).to_string()).unwrap_or_default();
         let (_, name) = wrapper_name(at.class.is_none(), self.host, written);
         let local = at.class.as_ref().map_or_else(|| name.clone(), |c| format!("{c}.{name}"));
@@ -472,7 +470,7 @@ impl Reader<'_> {
         }
     }
 
-    fn member(&self, n: Node, at: &At, ex: &mut Extraction) {
+    fn member(&self, n: Node, at: &At, ex: &mut Sink) {
         let class = at.class.as_deref().unwrap_or_default();
         let owner_of = |name: Option<Node>| name.map_or_else(|| at.owner.clone(), |m| format!("sym:{}::{class}.{}", self.rel, text(m, self.src)));
         let declarators: Vec<Node> = match n.kind() {
@@ -513,7 +511,7 @@ impl Reader<'_> {
 
     /// L8: `[Tracked]` is `TrackedAttribute` or `Tracked`, suffix first, as the compiler looks it up. An
     /// attribute the repository does not declare writes nothing, and no shared node stands for it.
-    fn attributes(&self, list: Node, at: &At, id: &str, ex: &mut Extraction) {
+    fn attributes(&self, list: Node, at: &At, id: &str, ex: &mut Sink) {
         for a in named(list).into_iter().filter(|a| a.kind() == "attribute") {
             let Some(name) = a.child_by_field_name("name").map(|x| dotted(x, self.src)) else { continue };
             let mut parts = Vec::new();
@@ -533,24 +531,7 @@ impl Reader<'_> {
         }
     }
 
-    fn ids(&self, n: Node, at: &At, ex: &mut Extraction) {
-        let ctx = if n.kind() == "comment" { "comment" } else { "string" };
-        for hit in crate::ids::generic().find_all(text(n, self.src)) {
-            ex.edge(&at.owner, &hit.id, EdgeKind::References, ctx, self.rel);
-        }
-    }
-
-    /// An interpolated string's own text, its holes excluded: `string_content` and the escape
-    /// sequences between them. A hole's own literals are found once, by the walk's recursion into it.
-    fn literal_content_ids(&self, n: Node, at: &At, ex: &mut Extraction) {
-        for c in named(n).into_iter().filter(|c| c.kind() == "string_content" || c.kind() == "escape_sequence") {
-            for hit in crate::ids::generic().find_all(text(c, self.src)) {
-                ex.edge(&at.owner, &hit.id, EdgeKind::References, "string", self.rel);
-            }
-        }
-    }
-
-    fn call(&self, at: &At, to: &str, ex: &mut Extraction) {
+    fn call(&self, at: &At, to: &str, ex: &mut Sink) {
         // A recursive call is not a dependency.
         if at.owner != to {
             ex.edge(&at.owner, to, EdgeKind::Calls, "", self.rel);

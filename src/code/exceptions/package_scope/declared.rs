@@ -193,7 +193,7 @@ pub(super) fn members_of(body: Node) -> Vec<Node> {
 }
 
 /// The declaration node a site's range spans: a node with a single child spans its range too.
-fn node_at<'t>(root: Node<'t>, range: &std::ops::Range<usize>, kinds: &[&str]) -> Option<Node<'t>> {
+pub(crate) fn node_at<'t>(root: Node<'t>, range: &std::ops::Range<usize>, kinds: &[&str]) -> Option<Node<'t>> {
     let mut n = root.descendant_for_byte_range(range.start, range.end)?;
     while !kinds.contains(&n.kind()) {
         n = n.parent().filter(|p| p.byte_range() == *range)?;
@@ -210,7 +210,7 @@ pub(super) fn sites<'t>(facts: &Facts, root: Node<'t>, kinds: &[&str]) -> Vec<(N
 }
 
 /// A file's declarations alone, read by the language's own query, for its header.
-pub(super) fn facts_of(lang: Lang, rel: &str, source: &str) -> Option<(Facts, Tree)> {
+pub(crate) fn facts_of(lang: Lang, rel: &str, source: &str) -> Option<(Facts, Tree)> {
     let (decl, tree) = (queries::decl(lang)?, lang.parse(source.as_bytes())?);
     let file = File { lang, rel, text: source, src: source, tree: Some(&tree) };
     let facts = engine::facts(spec(lang), decl, None, &file);

@@ -51,13 +51,6 @@ pub(crate) fn descend<'t>(n: Node<'t>, visit: &mut impl FnMut(Node<'t>) -> bool)
     }
 }
 
-/// 1-based first and last line of the node's extent. A declaration's extent includes its
-/// annotations and attribute lists, so a hunk that edits only `[HttpGet("x")]` still lands inside
-/// the member it changes.
-pub(crate) fn span(n: Node) -> (u32, u32) {
-    (n.start_position().row as u32 + 1, n.end_position().row as u32 + 1)
-}
-
 /// The last row holding the node's text. A comment that swallows its newline ends at column 0 of the
 /// next row, and counting that row would join the comment to a declaration a blank line below it.
 pub(crate) fn last_row(n: Node) -> usize {

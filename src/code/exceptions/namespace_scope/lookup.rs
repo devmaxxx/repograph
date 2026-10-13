@@ -9,8 +9,8 @@
 
 use std::collections::BTreeMap;
 
-use super::declarations::{join, Declared, Using};
-use super::index::{DotNet, Part};
+use super::declared::{join, Declared, Using};
+use super::project::{DotNet, Part};
 use super::Host;
 
 pub struct Scope<'a> {

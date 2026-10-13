@@ -6,26 +6,24 @@
 //! class after its path and nothing names it — so each writes its file node and the `Imports` its
 //! directives prove. A file whose blocks cannot be read writes its file node alone.
 
-pub mod blank;
-
-#[cfg(test)]
-mod cases;
+pub(crate) mod blank;
 
 use std::collections::BTreeMap;
 use std::sync::OnceLock;
 
-use crate::code::dotnet::csharp::declarations::{self, join, Declared, TypeDecl, Using};
-use crate::code::dotnet::csharp::index::DotNet;
-use crate::code::dotnet::csharp::index::Part;
-use crate::code::dotnet::csharp::refs::first_segment;
-use crate::code::dotnet::csharp::resolve::Scope;
-use crate::code::dotnet::csharp::{self, Host};
+use crate::code::engine::{self, Facts, File, Sink};
+use crate::code::exceptions::namespace_scope::declared::{self, join, Declared, TypeDecl, Using};
+use crate::code::exceptions::namespace_scope::lookup::Scope;
+use crate::code::exceptions::namespace_scope::project::{DotNet, Part};
+use crate::code::exceptions::namespace_scope::walk::{self, first_segment};
+use crate::code::exceptions::namespace_scope::Host;
+use crate::code::exceptions::package_scope;
 use crate::code::imports::Resolver;
 use crate::code::index::Header;
 use crate::code::lang::Lang;
-use crate::code::engine::File;
+use crate::code::queries;
 use crate::code::spec::{self, Embedded, Hooks};
-use crate::model::{EdgeKind, Extraction, NodeKind};
+use crate::model::{EdgeKind, NodeKind};
 use blank::View;
 
 /// Razor's directives in components and views: each is one line of C#, never markup.
@@ -239,7 +237,7 @@ pub fn header_of(rel: &str, d: &Directives) -> Header {
 }
 
 /// `Imports` for every name a directive's type writes.
-fn imports(scope: &Scope, rel: &str, written: &str, namespace: &str, class: Option<&str>, ex: &mut Extraction) {
+fn imports(scope: &Scope, rel: &str, written: &str, namespace: &str, class: Option<&str>, ex: &mut Sink) {
     let file = format!("file:{rel}");
     for word in type_words(written) {
         for p in scope.types(&word, namespace, class).iter().filter(|p| p.rel != rel) {
@@ -261,9 +259,10 @@ pub fn members(rel: &str, source: &str, d: &Directives) -> BTreeMap<String, Opti
     let injected = injected(d);
     let mut members: BTreeMap<String, Option<String>> = injected.iter().map(|(n, t)| (n.clone(), Some(t.clone()))).collect();
     if let View::Read(text) = blank::view(source) {
-        if let Some(tree) = Lang::CSharp.parse(text.as_bytes()) {
+        if let Some((mut facts, tree)) = package_scope::declared::facts_of(Lang::CSharp, rel, &text) {
+            stand_for(&mut facts, rel, &name);
             let host = Host { component: Some(&name), injected: &injected, ..Host::default() };
-            let own = declarations::scan(tree.root_node(), rel, text.as_bytes(), &host, &mut Extraction::default());
+            let own = declared::read(&facts, tree.root_node(), text.as_bytes(), &host);
             members.extend(own.types.into_iter().filter(|t| t.local == name).flat_map(|t| t.members));
         }
     }
@@ -284,12 +283,25 @@ pub(crate) const HOOKS: Hooks = Hooks {
         View::Read(text) => Embedded::View(text, Lang::CSharp),
         View::None => Embedded::Empty,
     }),
+    resolve: Some(resolve),
     ..spec::NONE
 };
 
+/// The blanking's wrapper class stands for the component: it, and every name under it, takes the
+/// component's name.
+fn stand_for(facts: &mut Facts, rel: &str, name: &str) {
+    let Some(wrapper) = facts.defs.iter().find(|d| d.parent.is_none()).map(|d| d.qualified.clone()) else { return };
+    for d in &mut facts.defs {
+        let Some(rest) = d.qualified.strip_prefix(&wrapper).filter(|r| r.is_empty() || r.starts_with('.')) else { continue };
+        d.qualified = format!("{name}{rest}");
+        d.label = d.qualified.clone();
+        d.id = format!("sym:{rel}::{}", d.qualified);
+    }
+}
+
 /// The front parsed the blanked view, and has left an unread file at its file node; a file with no
 /// block comes with no tree. A tree is `None` for no other reason, as the C# grammar always parses.
-pub(crate) fn extract(resolver: &Resolver, file: &File, ex: &mut Extraction) {
+pub(crate) fn resolve(resolver: &Resolver, file: &File, _: &Facts, ex: &mut Sink) {
     let (rel, source, tree, blanked) = (file.rel, file.text, file.tree, file.src);
     let d = directives(source);
     let dotnet = resolver.state::<DotNet>();
@@ -300,23 +312,40 @@ pub(crate) fn extract(resolver: &Resolver, file: &File, ex: &mut Extraction) {
         view(resolver, rel, &d, &namespace, &usings, ex);
         return;
     };
-    let file = format!("file:{rel}");
+    let file_id = format!("file:{rel}");
     let id = format!("sym:{rel}::{name}");
     let last = source.lines().count().max(1) as u32;
     let signature = source.lines().map(str::trim).find(|l| !l.is_empty()).unwrap_or("");
-    ex.node_span(NodeKind::Symbol, &id, &name, signature, rel, (1, last));
-    ex.edge(&file, &id, EdgeKind::Declares, "export", rel);
+    // The component spans the file and reads as its first line, whatever its blocks hold.
+    let view = File { lang: Lang::CSharp, rel, text: source, src: blanked, tree };
+    let mut facts = tree.and_then(|_| Some(engine::facts(spec::spec(Lang::CSharp), queries::decl(Lang::CSharp)?, queries::refs(Lang::CSharp), &view)));
+    let wrapper = facts.as_mut().and_then(|facts| {
+        stand_for(facts, rel, &name);
+        facts.defs.iter_mut().find(|d| d.parent.is_none())
+    });
+    match wrapper {
+        Some(w) => (w.body, w.line, w.end, w.export) = (signature.to_string(), 1, last, true),
+        None => {
+            ex.node(NodeKind::Symbol, &id, &name, signature, rel, (1, last));
+            ex.edge(&file_id, &id, EdgeKind::Declares, "export", rel);
+        }
+    }
     let injected = injected(&d);
     for (t, n, line) in &d.injects {
         let member = format!("{id}.{n}");
-        ex.node_span(NodeKind::Symbol, &member, &format!("{name}.{n}"), &format!("@inject {t} {n}"), rel, (*line, *line));
+        ex.node(NodeKind::Symbol, &member, &format!("{name}.{n}"), &format!("@inject {t} {n}"), rel, (*line, *line));
         ex.edge(&id, &member, EdgeKind::Declares, "", rel);
     }
     let host = Host { component: Some(&name), namespace: &namespace, usings: &usings, injected: &injected };
-    let mut own = match tree {
-        Some(tree) => csharp::read(resolver, rel, tree, blanked, &host, ex),
+    let mut own = match (tree, &facts) {
+        (Some(tree), Some(facts)) => {
+            ex.facts(&view, facts);
+            let own = declared::read(facts, tree.root_node(), blanked.as_bytes(), &host);
+            walk::scan(tree.root_node(), rel, blanked.as_bytes(), &host, &own, resolver, ex);
+            own
+        }
         // Without a block the component still has injected members to resolve through.
-        None => Declared {
+        _ => Declared {
             types: vec![TypeDecl {
                 namespace: namespace.clone(),
                 local: name.clone(),
@@ -379,12 +408,12 @@ pub(crate) fn extract(resolver: &Resolver, file: &File, ex: &mut Extraction) {
         }
         for p in rendered(tag).into_iter().filter(|p| p.rel != rel) {
             ex.edge(&id, &format!("sym:{}::{}", p.rel, p.local), EdgeKind::Calls, "", rel);
-            ex.edge(&file, &format!("file:{}", p.rel), EdgeKind::Imports, first_segment(&p.local), rel);
+            ex.edge(&file_id, &format!("file:{}", p.rel), EdgeKind::Imports, first_segment(&p.local), rel);
         }
     }
     // A code-behind `partial class` is part of the component, so each names the other.
     for p in scope.full(&join(&namespace, &name)).into_iter().filter(|p| p.rel != rel) {
-        ex.edge(&file, &format!("file:{}", p.rel), EdgeKind::Imports, first_segment(&p.local), rel);
+        ex.edge(&file_id, &format!("file:{}", p.rel), EdgeKind::Imports, first_segment(&p.local), rel);
     }
 }
 
@@ -408,7 +437,7 @@ fn framework_parameters(base: &str, generic: bool) -> Option<&'static [&'static 
 /// A written type as a C# base list keeps it: dots, without `global::` or any segment's type
 /// arguments, so `Outer<int>.InnerBase` is `Outer.InnerBase`. Two words left side by side
 /// (`A B`) name no type, and joining them would name one the text never wrote, so that is empty.
-fn base_name(written: &str) -> String {
+pub(crate) fn base_name(written: &str) -> String {
     let t = written.trim();
     let t = t.strip_prefix("global::").unwrap_or(t);
     let mut depth = 0usize;
@@ -464,7 +493,7 @@ fn without_comments(line: &str) -> String {
 
 /// A view or an imports file: the `Imports` its directives' types prove, read under its imports
 /// files' usings and the namespace the Razor compiler gives its class.
-fn view(resolver: &Resolver, rel: &str, d: &Directives, namespace: &str, usings: &[Using], ex: &mut Extraction) {
+fn view(resolver: &Resolver, rel: &str, d: &Directives, namespace: &str, usings: &[Using], ex: &mut Sink) {
     let own = Declared::default();
     let host = Host { namespace, usings, ..Host::default() };
     let scope = Scope::new(rel, resolver.state::<DotNet>(), &own, &host);

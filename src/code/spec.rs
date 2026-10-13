@@ -3,7 +3,7 @@
 //! names every language: the front, the resolver, the header index, `changes` and the update's
 //! widening read this table instead of matching on `Lang` each in its own way.
 //!
-//! Most of the vocabulary below describes ported languages, and only Shell, Bicep, HCL, Terraform, Swift, GraphQL, SQL, Dart, Python, Rust, Kotlin and Java are ported yet.
+//! Most of the vocabulary below describes ported languages, and only Shell, Bicep, HCL, Terraform, Swift, GraphQL, SQL, Dart, Python, Rust, Kotlin, Java, C# and Razor are ported yet.
 #![allow(dead_code)]
 
 use std::any::{Any, TypeId};
@@ -248,7 +248,8 @@ const C: Option<CommentSyntax> = Some(CommentSyntax { lines: &["//"], blocks: tr
 const HASH: Option<CommentSyntax> = Some(CommentSyntax { lines: &["#"], blocks: false });
 const HCL_COMMENTS: Option<CommentSyntax> = Some(CommentSyntax { lines: &["#", "//"], blocks: true });
 
-/// The fields a language's port has yet to write down; nothing reads them while `legacy` is set.
+/// The fields a language's port has yet to write down, and that a language read through its hooks
+/// alone never reads: nothing reads them while `legacy` is set or the language has no queries.
 const UNPORTED: Spec = Spec {
     queries: Sources { decl: &[], refs: &[] },
     view: None,
@@ -270,13 +271,33 @@ const PROSE: Body = Body { doc: Doc::Adjacent { kinds: &["comment"], between: &[
 
 mod table {
     use super::*;
-    use crate::code::exceptions::{attachments, computed_paths, crate_paths, identifier_case, library_scope, module_paths, module_reach, package_scope};
+    use crate::code::exceptions::{attachments, computed_paths, crate_paths, identifier_case, library_scope, module_paths, module_reach, namespace_scope, package_scope, rendered_components};
     use crate::code::*;
 
     pub(super) const TYPESCRIPT: Spec = Spec { comments: C, hooks: typescript::HOOKS, legacy: Some(typescript::extract), ..UNPORTED };
     pub(super) const VUE: Spec = Spec { view: Some(Lang::TypeScript), hooks: typescript::vue::HOOKS, legacy: Some(typescript::vue::extract), ..UNPORTED };
-    pub(super) const CSHARP: Spec = Spec { comments: C, hooks: dotnet::csharp::HOOKS, legacy: Some(dotnet::csharp::extract), ..UNPORTED };
-    pub(super) const RAZOR: Spec = Spec { view: Some(Lang::CSharp), hooks: dotnet::razor::HOOKS, legacy: Some(dotnet::razor::extract), ..UNPORTED };
+    pub(super) const CSHARP: Spec = Spec {
+        queries: crate::code::queries::sources::CSHARP,
+        view: None,
+        comments: C,
+        body: Body {
+            doc: Doc::Adjacent { kinds: &["comment"], between: &[] },
+            form: Form::Stripped,
+            cap: Cap::Head,
+            line: Line::Name,
+        },
+        label: Label::Qualified,
+        // The query sets `export` where C#'s defaults decide it; elsewhere only the word does.
+        export: Export::Show(&["public", "internal"]),
+        visibility: Visibility::Family,
+        ambiguity: Ambiguity::OwnFirst,
+        cross_file: false,
+        imports: ImportPaths { root: false, suffixes: &[] },
+        dotted_dirs: false,
+        hooks: namespace_scope::HOOKS,
+        legacy: None,
+    };
+    pub(super) const RAZOR: Spec = Spec { view: Some(Lang::CSharp), hooks: rendered_components::HOOKS, ..UNPORTED };
     pub(super) const KOTLIN: Spec = Spec {
         queries: crate::code::queries::sources::KOTLIN,
         view: None,

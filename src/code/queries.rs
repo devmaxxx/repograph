@@ -241,6 +241,9 @@ pub(crate) mod sources {
     pub(crate) const BICEP: Sources =
         Sources { decl: &[include_str!("queries/bicep/decl.scm")], refs: &[include_str!("queries/bicep/refs.scm")] };
 
+    pub(crate) const CSHARP: Sources =
+        Sources { decl: &[include_str!("queries/csharp/decl.scm")], refs: &[include_str!("queries/csharp/refs.scm")] };
+
     pub(crate) const DART: Sources =
         Sources { decl: &[include_str!("queries/dart/decl.scm")], refs: &[include_str!("queries/dart/refs.scm")] };
 

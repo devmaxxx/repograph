@@ -176,10 +176,8 @@ fn each_file_declaring_part_of_a_partial_type_keeps_its_own_id() {
 #[test]
 fn usings_of_every_form_are_read_and_a_global_one_is_kept_apart() {
     let src = "global using Shop.Basics;\nusing System;\nusing static Shop.Checks.Guard;\nusing Pay = global::Shop.Payments.IPaymentGateway;\nnamespace Shop.Orders { using Shop.Billing; class A {} }\n";
-    let tree = crate::code::lang::Lang::CSharp.parse(src.as_bytes()).unwrap();
-    let mut ex = Extraction::default();
-    let d = super::declarations::scan(tree.root_node(), "Shop/A.cs", src.as_bytes(), &super::Host::default(), &mut ex);
-    use super::declarations::Using;
+    let d = project::facts("Shop/A.cs", src);
+    use declared::Using;
     assert_eq!(d.global_usings, vec![Using::Namespace("Shop.Basics".into())]);
     assert_eq!(d.usings, vec![
         Using::Namespace("System".into()),
@@ -218,14 +216,13 @@ fn a_delegate_parameter_is_not_a_member() {
     assert!(!ids.iter().any(|i| i.starts_with("sym:Shop/H.cs::PlacedHandler.")), "{ids:?}");
 }
 
-use super::declarations::{self, Declared};
-use super::index::DotNet;
-use super::resolve::Scope;
-use super::Host;
+use crate::code::exceptions::namespace_scope::declared::{self, Declared};
+use crate::code::exceptions::namespace_scope::lookup::Scope;
+use crate::code::exceptions::namespace_scope::project::{self, DotNet};
+use crate::code::exceptions::namespace_scope::Host;
 
 fn own(rel: &str, src: &str) -> Declared {
-    let tree = crate::code::lang::Lang::CSharp.parse(src.as_bytes()).unwrap();
-    declarations::scan(tree.root_node(), rel, src.as_bytes(), &Host::default(), &mut Extraction::default())
+    project::facts(rel, src)
 }
 
 /// The ids `name` resolves to from `rel`, at `namespace` inside `class`.
@@ -912,15 +909,11 @@ fn a_partial_base_s_list_on_a_later_part_is_still_walked() {
 #[test]
 fn a_string_literal_inside_an_interpolation_hole_is_referenced_once() {
     // `CodeExtractor::extract` sorts and dedups edges afterwards, which would hide a duplicate
-    // push here; scanning directly is the only way this case pins the write itself.
-    use super::refs;
+    // push here; the front's own read is the only way this case pins the write itself.
     let rel = "Shop/Jcs.cs";
     let src = "namespace Shop;\npublic class Jcs\n{\n    public string Name() => $\"{Foo(\"ADR-022\")}\";\n}\n";
-    let tree = crate::code::lang::Lang::CSharp.parse(src.as_bytes()).unwrap();
-    let mut ex = Extraction::default();
-    let own = declarations::scan(tree.root_node(), rel, src.as_bytes(), &Host::default(), &mut ex);
     let resolver = Repo::new(&[(rel, src)]).resolver();
-    refs::scan(tree.root_node(), rel, src.as_bytes(), &Host::default(), &own, &resolver, &mut ex);
+    let ex = crate::code::front::read(&resolver, rel, src);
     let refs = edges(&ex, EdgeKind::References);
     assert_eq!(refs.iter().filter(|(_, id, _)| *id == "ADR-022").count(), 1, "{refs:?}");
 }

@@ -193,6 +193,12 @@ impl Sink<'_> {
     pub(crate) fn edge(&mut self, source: &str, target: &str, kind: EdgeKind, context: &str, file: &str) {
         self.0.edge(source, target, kind, context, file);
     }
+
+    /// What `facts` define and cite, as `extract` writes its own: for a hook that reads a view by
+    /// its view language's queries.
+    pub(crate) fn facts(&mut self, file: &File, facts: &Facts) {
+        write(file, facts, self.0);
+    }
 }
 
 /// Bounds runaway matching; a file that reaches it keeps what it matched.
@@ -912,7 +918,13 @@ pub(crate) fn declarations(lang: Lang, rel: &str, source: &str) -> Option<Facts>
 
 /// The engine's whole read of a file whose node the front has written.
 pub(crate) fn extract(resolver: &Resolver, spec: &Spec, file: &File, ex: &mut Extraction) {
-    let Some(decl) = queries::decl(file.lang) else { return };
+    let Some(decl) = queries::decl(file.lang) else {
+        // A language with no queries of its own reads its view through its hook alone.
+        if let Some(hook) = spec.hooks.resolve {
+            hook(resolver, file, &Facts::default(), &mut Sink(ex));
+        }
+        return;
+    };
     let facts = facts(spec, decl, queries::refs(file.lang), file);
     write(file, &facts, ex);
     let kind = |i: &Import| if i.reexport { EdgeKind::ReExports } else { EdgeKind::Imports };

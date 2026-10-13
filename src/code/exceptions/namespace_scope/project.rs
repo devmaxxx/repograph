@@ -5,11 +5,11 @@ use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::OnceLock;
 
-use super::declarations::{self, join, Declared, Using};
+use super::declared::{self, join, Declared, Using};
 use super::Host;
 use crate::code::imports::parent;
+use crate::code::exceptions::package_scope;
 use crate::code::lang::Lang;
-use crate::model::Extraction;
 
 /// One declaration of a type: its file, the name after `sym:<rel>::`, and its qualified name.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -45,16 +45,15 @@ fn fingerprint(source: &str) -> u64 {
     h.finish()
 }
 
-/// What a `.cs` file declares, read for the index; the graph nodes the walk writes are discarded.
+/// What a `.cs` file declares, read for the index by the language's own query.
 pub fn facts(rel: &str, source: &str) -> Declared {
     let key = fingerprint(source);
     let hit = LAST.with(|l| l.borrow().as_ref().filter(|(r, k, _)| r == rel && *k == key).map(|(_, _, d)| d.clone()));
     if let Some(d) = hit {
         return d;
     }
-    let mut scratch = Extraction::default();
-    let d = Lang::CSharp.parse(source.as_bytes())
-        .map(|t| declarations::scan(t.root_node(), rel, source.as_bytes(), &Host::default(), &mut scratch))
+    let d = package_scope::declared::facts_of(Lang::CSharp, rel, source)
+        .map(|(facts, tree)| declared::read(&facts, tree.root_node(), source.as_bytes(), &Host::default()))
         .unwrap_or_default();
     LAST.with(|l| *l.borrow_mut() = Some((rel.to_string(), key, d.clone())));
     d
@@ -260,14 +259,14 @@ impl DotNet {
     }
 
     /// `members` are what `razor::members` reads from the component's blocks and injects.
-    pub(crate) fn add_razor(&mut self, rel: &str, d: &crate::code::dotnet::razor::Directives, members: Members) {
+    pub(crate) fn add_razor(&mut self, rel: &str, d: &crate::code::exceptions::rendered_components::Directives, members: Members) {
         if d.unread {
             return;
         }
-        if crate::code::dotnet::razor::is_imports(rel) {
+        if crate::code::exceptions::rendered_components::is_imports(rel) {
             let map = if is_view(rel) { &mut self.view_imports } else { &mut self.razor_imports };
             map.insert(parent(rel).to_string(), (d.usings.clone(), d.namespace.clone()));
-        } else if crate::code::dotnet::razor::component_name(rel).is_some() {
+        } else if crate::code::exceptions::rendered_components::component_name(rel).is_some() {
             self.instance_members.extend(members.keys().cloned());
             let generic_bases = d.inherits.iter().filter(|_| d.inherits_generic).cloned().collect();
             let component = Component { namespace: d.namespace.clone(), members, bases: d.inherits.iter().cloned().collect(), generic_bases, usings: d.usings.clone() };
@@ -329,7 +328,7 @@ impl DotNet {
         let by = self.components_by_full.get_or_init(|| {
             let mut m: BTreeMap<String, Vec<Part>> = BTreeMap::new();
             for (rel, Component { namespace: own, .. }) in &self.components {
-                let Some(stem) = crate::code::dotnet::razor::component_name(rel) else { continue };
+                let Some(stem) = crate::code::exceptions::rendered_components::component_name(rel) else { continue };
                 let full = join(&self.razor_namespace(rel, own.as_deref()), &stem);
                 m.entry(full.clone()).or_default().push(Part { rel: rel.clone(), local: stem, full });
             }
