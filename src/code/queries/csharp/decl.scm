@@ -12,7 +12,9 @@
 ; Each pattern that reads a default from the body around a declaration costs the compile 2 to 15 ms,
 ; a tenth of a second for the lot when an `#if` inside a body had patterns of its own. So under an
 ; `#if` in an interface or a type body the word alone decides, as it does for an interface's
-; `protected` type: no input writes either.
+; `protected` type: no input writes either. A type in the first branch of an `#if` gets the two
+; patterns it needs, 7 ms, since the catch-all exported a nested `private` one; under `#else` or
+; `#elif` it still falls to the catch-all.
 
 (namespace_declaration name: (_) @name) @scope.namespace
 (file_scoped_namespace_declaration name: (_) @name) @scope.namespace
@@ -60,6 +62,14 @@
     (enum_declaration name: (identifier) @name) @definition.enum
     (delegate_declaration name: (identifier) @name) @definition.type
   ])) (#set! export "always"))
+((namespace_declaration body: (declaration_list (preproc_if [
+    (class_declaration name: (identifier) @name) @definition.class
+    (struct_declaration name: (identifier) @name) @definition.struct
+    (record_declaration name: (identifier) @name) @definition.record
+    (interface_declaration name: (identifier) @name) @definition.interface
+    (enum_declaration name: (identifier) @name) @definition.enum
+    (delegate_declaration name: (identifier) @name) @definition.type
+  ]))) (#set! export "always"))
 (declaration_list [
     (class_declaration (modifier ["public" "internal"] @modifier)? name: (identifier) @name) @definition.class
     (struct_declaration (modifier ["public" "internal"] @modifier)? name: (identifier) @name) @definition.struct
@@ -68,6 +78,14 @@
     (enum_declaration (modifier ["public" "internal"] @modifier)? name: (identifier) @name) @definition.enum
     (delegate_declaration (modifier ["public" "internal"] @modifier)? name: (identifier) @name) @definition.type
   ])
+(declaration_list (preproc_if [
+    (class_declaration (modifier ["public" "internal"] @modifier)? name: (identifier) @name) @definition.class
+    (struct_declaration (modifier ["public" "internal"] @modifier)? name: (identifier) @name) @definition.struct
+    (record_declaration (modifier ["public" "internal"] @modifier)? name: (identifier) @name) @definition.record
+    (interface_declaration (modifier ["public" "internal"] @modifier)? name: (identifier) @name) @definition.interface
+    (enum_declaration (modifier ["public" "internal"] @modifier)? name: (identifier) @name) @definition.enum
+    (delegate_declaration (modifier ["public" "internal"] @modifier)? name: (identifier) @name) @definition.type
+  ]))
 
 ; Positional parameters: a record's are public properties, a class's or a struct's private captures.
 (record_declaration (parameter_list (parameter name: (identifier) @name) @definition.property) (#set! export "always"))

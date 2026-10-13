@@ -209,6 +209,21 @@ fn declarations_under_a_preprocessor_branch_are_declared() {
 }
 
 #[test]
+fn a_nested_type_under_an_if_reads_its_word_and_a_namespace_type_stays_internal() {
+    let src = "namespace Shop {\n#if NET8_0\n    class Kept {}\n#endif\n    public class Outer\n    {\n#if DEBUG\n        class Hidden {}\n        protected class Narrow {}\n        public class Shown {}\n#endif\n    }\n}\n";
+    let ex = one("Shop/A.cs", src);
+    let declares = edges(&ex, EdgeKind::Declares);
+    let ctx = |id: &str| {
+        let want = format!("sym:Shop/A.cs::{id}");
+        declares.iter().find(|(_, t, _)| *t == want).map(|(_, _, c)| c.to_string()).unwrap_or_else(|| panic!("{id} not declared"))
+    };
+    assert_eq!(ctx("Kept"), "export", "a namespace's type with no word is internal");
+    assert_eq!(ctx("Outer.Hidden"), "", "a nested type with no word is private");
+    assert_eq!(ctx("Outer.Narrow"), "");
+    assert_eq!(ctx("Outer.Shown"), "export");
+}
+
+#[test]
 fn a_delegate_parameter_is_not_a_member() {
     let ex = one("Shop/H.cs", "namespace Shop;\npublic delegate void PlacedHandler(int x);\n");
     let ids = ids(&ex);
