@@ -196,6 +196,17 @@ enum Cmd {
     Mcp,
 }
 
+impl Cmd {
+    fn json(&self) -> bool {
+        match self {
+            Cmd::Ask { json, .. } | Cmd::Explain { json, .. } | Cmd::Impact { json, .. }
+            | Cmd::Trace { json, .. } | Cmd::Changes { json, .. } | Cmd::Verify { json, .. }
+            | Cmd::Prime { json, .. } | Cmd::Families { json, .. } | Cmd::Model { json, .. } => *json,
+            _ => false,
+        }
+    }
+}
+
 pub(crate) struct Extractors {
     pub doc: Box<dyn Extractor>,
     pub code: Box<dyn Extractor>,
@@ -871,19 +882,25 @@ impl std::error::Error for Verdict {}
 /// The `repograph` command line: parses the arguments, runs the command and maps its outcome to an
 /// exit status: 0, 1 for a failure, 3 for a verdict.
 pub fn main() -> std::process::ExitCode {
-    match run() {
-        Ok(()) => std::process::ExitCode::SUCCESS,
+    let cli = Cli::parse();
+    let json = cli.cmd.json();
+    let Err(e) = run(cli) else { return std::process::ExitCode::SUCCESS };
+    let verdict = e.downcast_ref::<Verdict>();
+    let code: u8 = if verdict.is_some() { 3 } else { 1 };
+    // A caller that asked for JSON parses stdout, and an empty stdout told it nothing.
+    if json {
+        println!("{}", serde_json::json!({ "error": format!("{e:#}"), "code": code }));
+    } else if let Some(v) = verdict {
+        eprintln!("{}", terminal_safe(&v.to_string()));
+    } else {
         // `{e:?}` is what `Termination for Result` printed before this function existed: an
         // anyhow report with its context chain, which several transcripts are read for.
-        Err(e) => match e.downcast_ref::<Verdict>() {
-            Some(v) => { eprintln!("{}", terminal_safe(&v.to_string())); std::process::ExitCode::from(3) }
-            None => { eprintln!("{}", terminal_safe(&format!("Error: {e:?}"))); std::process::ExitCode::FAILURE }
-        },
+        eprintln!("{}", terminal_safe(&format!("Error: {e:?}")));
     }
+    std::process::ExitCode::from(code)
 }
 
-fn run() -> anyhow::Result<()> {
-    let cli = Cli::parse();
+fn run(cli: Cli) -> anyhow::Result<()> {
     let repo = plain(cli.repo.canonicalize()?);
     // Loaded per command: `bench` reads its own from `REPOGRAPH_BENCH_REPO`, and `explain`/`verify`
     // must not fail on a broken `repograph.toml` they never read. `embed` does read it — the model

@@ -125,6 +125,15 @@ fn a_bare_name_two_languages_share_lists_both_and_is_a_failure() {
         let r = run(dir.path(), &args);
         assert_eq!(code(&r), Some(1), "{args:?}: {}", err(&r));
     }
+
+    // Under `--json` the same failure is an object on stdout, so a caller that parses stdout
+    // learns why instead of reading nothing.
+    let json = run(dir.path(), &["impact", "Foo", "--json"]);
+    assert_eq!(code(&json), Some(1), "{}", err(&json));
+    let v: serde_json::Value = serde_json::from_str(&out(&json)).expect("stdout is one JSON object");
+    assert_eq!(v["code"], 1);
+    assert!(v["error"].as_str().unwrap().contains("sym:Shop/Foo.cs::Foo"), "{v}");
+    assert!(err(&json).is_empty(), "nothing on stderr: {}", err(&json));
 }
 
 #[test]
