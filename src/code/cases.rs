@@ -9,6 +9,7 @@ mod hcl;
 mod java;
 mod jvm;
 mod kotlin;
+mod lua;
 mod python;
 mod razor;
 mod rust;

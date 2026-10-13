@@ -19,7 +19,7 @@ use crate::model::{Graph, NodeKind};
 pub use crate::code::imports::Resolver;
 pub use crate::code::lang::Lang;
 pub use crate::code::queries::{compile, Compiled};
-pub use crate::code::spec::{Ambiguity, Body, Cap, Doc, Export, Form, ImportPaths, Label, Line, Sources, Spec, Visibility, NONE};
+pub use crate::code::spec::{Ambiguity, Body, Cap, Doc, Export, Form, ImportPaths, Label, Line, Receivers, Sources, Spec, Visibility, NONE};
 pub use crate::model::{EdgeKind, Extraction};
 
 /// One file as the front read it.
@@ -773,10 +773,14 @@ pub fn write(file: &File, facts: &Facts, ex: &mut Extraction) {
 /// directory add nothing it does not already hold, so they name nothing.
 pub fn import_targets(resolver: &Resolver, spec: &Spec, rel: &str, import: &Import) -> Vec<String> {
     let Some(path) = &import.path else { return Vec::new() };
+    let (root, suffixes) = match spec.imports {
+        ImportPaths::Relative { root, suffixes } => (root, suffixes),
+        ImportPaths::Dotted { roots, suffixes } => return dotted(resolver, rel, &path.replace('.', "/"), roots, suffixes),
+    };
     let dir = rel.rsplit_once('/').map_or("", |(d, _)| d);
-    let bases = std::iter::once(dir).chain(spec.imports.root.then_some(""));
+    let bases = std::iter::once(dir).chain(root.then_some(""));
     for base in bases {
-        for suffix in spec.imports.suffixes {
+        for suffix in suffixes {
             let Some(target) = crate::code::prose::join_under(base, &format!("{path}{suffix}")) else { continue };
             if target == rel || target == dir {
                 continue;
@@ -791,6 +795,17 @@ pub fn import_targets(resolver: &Resolver, spec: &Spec, rel: &str, import: &Impo
         }
     }
     Vec::new()
+}
+
+/// The first globbed file `path` names under one of `roots`, by the first suffix that names one. A
+/// module names a file, never a directory's every file.
+fn dotted(resolver: &Resolver, rel: &str, path: &str, roots: &[&str], suffixes: &[&str]) -> Vec<String> {
+    let candidates = roots.iter().flat_map(|root| suffixes.iter().map(move |suffix| (root, suffix)));
+    candidates
+        .filter_map(|(root, suffix)| crate::code::prose::join_under(root, &format!("{path}{suffix}")))
+        .find(|target| target != rel && resolver.globbed(target))
+        .into_iter()
+        .collect()
 }
 
 /// The files a reference may resolve into besides its own, by the spec's visibility, with what each
@@ -852,11 +867,25 @@ pub fn resolve(resolver: &Resolver, spec: &Spec, file: &File, facts: &Facts, ex:
                 (false, [_]) => others,
                 _ => Vec::new(),
             },
+            Ambiguity::OwnThenUnique if own => vec![rel.to_string()],
+            Ambiguity::OwnThenUnique => match others.as_slice() {
+                [_] => others,
+                _ => Vec::new(),
+            },
             Ambiguity::All => own.then(|| rel.to_string()).into_iter().chain(others).collect(),
         }
     };
     for r in &facts.refs {
-        if r.receiver.is_some() || spec.hooks.owns.contains(&r.edge) || facts.locals.shadows(&r.name, r.range.start) {
+        if spec.hooks.owns.contains(&r.edge) {
+            continue;
+        }
+        if let Some(receiver) = &r.receiver {
+            if let Receivers::Imports = spec.receivers {
+                through_import(resolver, spec, file, facts, r, receiver, ex);
+            }
+            continue;
+        }
+        if facts.locals.shadows(&r.name, r.range.start) {
             continue;
         }
         let targets = declaring(&r.name);
@@ -879,6 +908,29 @@ pub fn resolve(resolver: &Resolver, spec: &Spec, file: &File, facts: &Facts, ex:
                 ex.edge(from, &to, r.edge, &r.context, rel);
             }
         }
+    }
+}
+
+/// `receiver.name` where `receiver` is an import's alias: the one visible definition of the files that
+/// import reaches whose last name part is `name`. A binding the reference sits inside shadows the alias.
+fn through_import(resolver: &Resolver, spec: &Spec, file: &File, facts: &Facts, r: &Ref, receiver: &str, ex: &mut Extraction) {
+    let rel = file.rel;
+    if facts.locals.shadows(receiver, r.range.start) {
+        return;
+    }
+    let files: BTreeSet<&String> =
+        facts.imports.iter().filter(|i| i.alias.as_deref() == Some(receiver)).flat_map(|i| i.targets(resolver, spec, rel)).collect();
+    let mut found = files.into_iter().filter_map(|f| resolver.facts(f)).flat_map(|theirs| {
+        theirs.defs.iter()
+            .filter(|d| d.export && d.qualified.rsplit(['.', '/']).next() == Some(r.name.as_str()))
+            .map(|d| d.id.clone())
+            .collect::<Vec<_>>()
+    });
+    let (Some(to), None) = (found.next(), found.next()) else { return };
+    let from = facts.source_id(rel, r.source);
+    let container = r.source.and_then(|i| facts.defs[i].parent).map(|p| &facts.defs[p].id);
+    if to != from && Some(&to) != container {
+        ex.edge(&from, &to, r.edge, &r.context, rel);
     }
 }
 

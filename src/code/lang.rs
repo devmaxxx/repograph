@@ -11,11 +11,11 @@ use tree_sitter::{Language, Parser, Tree};
 
 /// One variant per grammar the 0.6.0 design reads, plus the two languages read by blanking.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum Lang { TypeScript, Tsx, Kotlin, Java, CSharp, Razor, Rust, Python, Dart, Swift, GraphQl, Sql, Bicep, Hcl, Terraform, Shell, Vue }
+pub enum Lang { TypeScript, Tsx, Kotlin, Java, CSharp, Razor, Rust, Python, Dart, Swift, GraphQl, Sql, Bicep, Hcl, Terraform, Shell, Vue, Lua }
 
 /// The unit a resolver works over: languages that compile together share one.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum Family { TypeScript, Jvm, DotNet, Rust, Python, Dart, Swift, GraphQl, Sql, Bicep, Hcl, Shell }
+pub enum Family { TypeScript, Jvm, DotNet, Rust, Python, Dart, Swift, GraphQl, Sql, Bicep, Hcl, Shell, Lua }
 
 /// The extension a grammar or the files-only note keys off, lowercase-sensitive like the
 /// filesystem: `Path::extension` alone, shared so the two readings of it cannot drift apart.
@@ -83,8 +83,9 @@ fn carried_lang(carried: SupportLang) -> Option<Lang> {
         SupportLang::Swift => Some(Lang::Swift),
         SupportLang::Tsx => Some(Lang::Tsx),
         SupportLang::TypeScript => Some(Lang::TypeScript),
-        SupportLang::C | SupportLang::Cpp | SupportLang::Elixir | SupportLang::Go | SupportLang::Lua | SupportLang::Php
-        | SupportLang::Ruby | SupportLang::Scala => None,
+        SupportLang::Lua => Some(Lang::Lua),
+        SupportLang::C | SupportLang::Cpp | SupportLang::Elixir | SupportLang::Go | SupportLang::Php | SupportLang::Ruby
+        | SupportLang::Scala => None,
         SupportLang::Css | SupportLang::Haskell | SupportLang::Html | SupportLang::JavaScript | SupportLang::Json
         | SupportLang::Markdown | SupportLang::Nix | SupportLang::Solidity | SupportLang::Yaml => None,
     }
@@ -118,6 +119,11 @@ pub fn detect_path(rel: &str, path: &std::path::Path) -> Option<Lang> {
     }
 }
 
+/// `python3.11` is as common as `python3`, and `lua5.4` as `lua`: the version is digits and dots after the name.
+fn versioned(program: &str, name: &str) -> bool {
+    program.strip_prefix(name).is_some_and(|v| v.chars().all(|c| c.is_ascii_digit() || c == '.'))
+}
+
 /// `#!/bin/bash` and `#!/usr/bin/env -S python3` alike: the interpreter's file name, after `env`
 /// and its flags when the line goes through `env`.
 fn shebang(text: &str) -> Option<Lang> {
@@ -129,18 +135,18 @@ fn shebang(text: &str) -> Option<Lang> {
     }
     match program {
         "sh" | "bash" | "dash" | "zsh" => Some(Lang::Shell),
-        // `python3.11` is as common as `python3`: the version is digits and dots after the name.
-        p if p.strip_prefix("python").is_some_and(|v| v.chars().all(|c| c.is_ascii_digit() || c == '.')) => Some(Lang::Python),
+        p if versioned(p, "python") => Some(Lang::Python),
+        p if versioned(p, "lua") => Some(Lang::Lua),
         "node" | "deno" | "bun" | "ts-node" => Some(Lang::TypeScript),
         _ => None,
     }
 }
 
 impl Lang {
-    pub const ALL: [Lang; 17] = [
+    pub const ALL: [Lang; 18] = [
         Lang::TypeScript, Lang::Tsx, Lang::Kotlin, Lang::Java, Lang::CSharp, Lang::Razor, Lang::Rust, Lang::Python,
         Lang::Dart, Lang::Swift, Lang::GraphQl, Lang::Sql, Lang::Bicep, Lang::Hcl, Lang::Terraform, Lang::Shell,
-        Lang::Vue,
+        Lang::Vue, Lang::Lua,
     ];
 
     /// `None`: no grammar and no embedding reads this extension (L1). Such a file is indexed as a
@@ -168,6 +174,7 @@ impl Lang {
             Lang::Shell => SupportLang::Bash,
             Lang::Dart => SupportLang::Dart,
             Lang::Swift => SupportLang::Swift,
+            Lang::Lua => SupportLang::Lua,
             // ast-grep carries none of these three; each keeps its own pinned crate.
             Lang::Sql => return Some(Language::new(tree_sitter_postgres::LANGUAGE)),
             Lang::GraphQl => return Some(Language::new(tree_sitter_graphql::LANGUAGE)),
@@ -197,6 +204,7 @@ impl Lang {
             Lang::Shell => Family::Shell,
             Lang::Dart => Family::Dart,
             Lang::Swift => Family::Swift,
+            Lang::Lua => Family::Lua,
             // A Vue script resolves names through the TypeScript resolver, and L10 puts no edge between families.
             Lang::Vue => Family::TypeScript,
             // Reached only by a variant `of` cannot return yet; see `grammar`.
@@ -243,9 +251,9 @@ mod all_tests {
         let slot = |l: Lang| match l {
             Lang::TypeScript => 0, Lang::Tsx => 1, Lang::Kotlin => 2, Lang::Java => 3, Lang::CSharp => 4, Lang::Razor => 5,
             Lang::Rust => 6, Lang::Python => 7, Lang::Dart => 8, Lang::Swift => 9, Lang::GraphQl => 10, Lang::Sql => 11,
-            Lang::Bicep => 12, Lang::Hcl => 13, Lang::Terraform => 14, Lang::Shell => 15, Lang::Vue => 16,
+            Lang::Bicep => 12, Lang::Hcl => 13, Lang::Terraform => 14, Lang::Shell => 15, Lang::Vue => 16, Lang::Lua => 17,
         };
-        let mut seen = [false; 17];
+        let mut seen = [false; 18];
         for l in Lang::ALL {
             assert!(!std::mem::replace(&mut seen[slot(l)], true), "{l:?} listed twice");
         }

@@ -8,7 +8,7 @@ use std::sync::OnceLock;
 use common::code::{lines, repo};
 use repograph::code::engine::{
     compile, facts, header, import_targets, resolve, write, Ambiguity, Body, Cap, Compiled, Doc, EdgeKind, Export, Extraction,
-    Facts, File, Form, Import, ImportPaths, Label, Lang, Line, Sources, Spec, Visibility, NONE,
+    Facts, File, Form, Import, ImportPaths, Label, Lang, Line, Receivers, Sources, Spec, Visibility, NONE,
 };
 
 const DECL: &[&str] = &[
@@ -63,7 +63,8 @@ fn spec(body: Body, export: Export) -> Spec {
         export,
         visibility: Visibility::File,
         ambiguity: Ambiguity::Unique,
-        imports: ImportPaths { root: false, suffixes: &[""] },
+        imports: ImportPaths::Relative { root: false, suffixes: &[""] },
+        receivers: Receivers::Hook,
         cross_file: false,
         dotted_dirs: false,
         hooks: NONE,
@@ -150,11 +151,11 @@ fn an_import_path_resolves_beside_the_importer_then_at_the_root_and_only_to_a_gl
     let (_dir, resolver) = repo(&["**/*.py"], &[("pkg/a.py", ""), ("pkg/util.py", ""), ("lib/x.py", ""), ("pkg/notes.txt", "")]);
     let import = |path: &str| Import { path: Some(path.to_string()), names: Vec::new(), alias: None, reexport: false, range: 0..0, targets: OnceLock::new() };
     let mut s = spec(STRIPPED, Export::All);
-    s.imports = ImportPaths { root: false, suffixes: &["", ".py"] };
+    s.imports = ImportPaths::Relative { root: false, suffixes: &["", ".py"] };
     assert_eq!(import_targets(&resolver, &s, "pkg/a.py", &import("util")), ["pkg/util.py"]);
     assert!(import_targets(&resolver, &s, "pkg/a.py", &import("lib/x")).is_empty());
     assert!(import_targets(&resolver, &s, "pkg/a.py", &import("notes.txt")).is_empty());
-    s.imports.root = true;
+    s.imports = ImportPaths::Relative { root: true, suffixes: &["", ".py"] };
     assert_eq!(import_targets(&resolver, &s, "pkg/a.py", &import("lib/x")), ["lib/x.py"]);
 }
 
