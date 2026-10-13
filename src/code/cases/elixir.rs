@@ -177,3 +177,29 @@ fn an_elixir_file_is_read_by_its_extension_and_a_script_too() {
     }
     assert_eq!(Lang::Elixir.family(), Family::Elixir);
 }
+
+#[test]
+fn an_alias_reaches_through_an_earlier_one_and_an_option_that_renames_nothing_keeps_it() {
+    let sub = "defmodule Plug.Conn.Sub do\n  def x, do: 1\n  def y, do: 1\nend\n";
+    let source = "defmodule A do\n  alias Plug.Conn, warn: false\n  alias Conn.Sub\n  import Sub\n  def f, do: Sub.x()\n  def g, do: y()\nend\n";
+    let files = [("lib/a.ex", source), ("lib/plug/conn.ex", CONN_SEND), ("lib/plug/conn/sub.ex", sub)];
+    assert_eq!(lines(&extract(&files, "lib/a.ex"), EdgeKind::Calls), [
+        "sym:lib/a.ex::A.f -> sym:lib/plug/conn/sub.ex::Plug.Conn.Sub.x []",
+        "sym:lib/a.ex::A.g -> sym:lib/plug/conn/sub.ex::Plug.Conn.Sub.y []",
+    ]);
+}
+
+#[test]
+fn an_impl_for_no_one_alias_keeps_its_functions_out_of_the_file_s_top_level() {
+    let files = [
+        ("lib/a.ex", "defimpl Inspect, for: [A, B] do\n  def inspect(a, _), do: a\nend\n"),
+        ("lib/b.ex", "defmodule B do\n  def run(x), do: inspect(x)\nend\n"),
+    ];
+    assert!(lines(&extract(&files, "lib/b.ex"), EdgeKind::Calls).is_empty());
+}
+
+#[test]
+fn a_module_call_in_a_quote_is_the_caller_s_like_a_bare_one() {
+    let source = "defmodule A do\n  def f, do: 1\n  defmacro __using__(_) do\n    quote do\n      __MODULE__.f()\n    end\n  end\nend\n";
+    assert!(lines(&extract(&[("lib/a.ex", source)], "lib/a.ex"), EdgeKind::Calls).is_empty());
+}

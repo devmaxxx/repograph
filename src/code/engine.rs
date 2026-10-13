@@ -1195,9 +1195,10 @@ fn lexical(facts: &Facts, r: &Ref) -> Vec<String> {
     let binding = facts.imports.iter().any(|i| i.binds.is_some());
     let first = r.name.split(['.', '/']).next().unwrap_or(&r.name);
     // Of two aliases of one name, the later one written is the one in force.
-    let aliased = binding.then(|| bound(facts, r.range.start, Binds::Alias).filter(|(_, _, alias)| *alias == first).max_by_key(|(at, _, _)| *at));
-    if let Some((_, path, _)) = aliased.flatten() {
-        return spell(&format!("{path}{}", &r.name[first.len()..]));
+    if binding {
+        if let Some((at, path, _)) = bound(facts, r.range.start, Binds::Alias, Some(first)).max_by_key(|(at, _, _)| *at) {
+            return spell(&format!("{}{}", expanded(facts, at, path), &r.name[first.len()..]));
+        }
     }
     let base = matches!(r.edge, EdgeKind::Extends | EdgeKind::Implements);
     let mut at = r.source.and_then(|i| if base { facts.defs[i].parent } else { Some(i) });
@@ -1213,23 +1214,37 @@ fn lexical(facts: &Facts, r: &Ref) -> Vec<String> {
     let spellings = spell(&r.name);
     let mut names: Vec<String> = scopes.iter().flat_map(|scope| spellings.iter().map(move |name| format!("{scope}{name}"))).collect();
     if binding && first.len() == r.name.len() {
-        names.extend(bound(facts, r.range.start, Binds::Open).flat_map(|(_, path, _)| spell(&format!("{path}/{}", r.name))));
+        names.extend(bound(facts, r.range.start, Binds::Open, None).flat_map(|(at, path, _)| spell(&format!("{}/{}", expanded(facts, at, path), r.name))));
     }
     names
 }
 
-/// The imports binding `binds` in scope at `byte`, each by its site, its path and its alias: one
-/// written before `byte`, in the innermost definition holding the import, or anywhere after it in the
-/// file when no definition holds it.
-fn bound(facts: &Facts, byte: usize, binds: Binds) -> impl Iterator<Item = (usize, &str, &str)> {
+/// `path` with its first segment taken through the alias that stands for it at `byte`, which is itself
+/// taken through the aliases before it: `alias Plug.Conn` then `alias Conn.Sub` names `Plug.Conn.Sub`.
+fn expanded(facts: &Facts, byte: usize, path: &str) -> String {
+    let first = path.split(['.', '/']).next().unwrap_or(path);
+    match bound(facts, byte, Binds::Alias, Some(first)).max_by_key(|(at, _, _)| *at) {
+        Some((at, target, _)) => format!("{}{}", expanded(facts, at, target), &path[first.len()..]),
+        None => path.to_string(),
+    }
+}
+
+/// The imports binding `binds` in scope at `byte`, each by its site, its path and its alias, only
+/// those of the alias `named` when given: one written before `byte`, in the innermost definition
+/// holding the import, or anywhere after it in the file when no definition holds it. The alias is
+/// compared before the scope is found, which walks every definition.
+fn bound<'f>(facts: &'f Facts, byte: usize, binds: Binds, named: Option<&'f str>) -> impl Iterator<Item = (usize, &'f str, &'f str)> {
     facts.imports.iter().filter(move |i| i.binds == Some(binds) && i.range.end <= byte).filter_map(move |i| {
+        let path = i.path.as_deref()?;
+        let alias = i.alias.as_deref().unwrap_or_else(|| path.rsplit('.').next().unwrap_or(path).trim());
+        if named.is_some_and(|name| name != alias) {
+            return None;
+        }
         let at = i.range.start;
         let scope = facts.sites().filter(|(range, _)| range.contains(&at)).min_by_key(|(range, _)| range.len());
         if scope.is_some_and(|(range, _)| !range.contains(&byte)) {
             return None;
         }
-        let path = i.path.as_deref()?;
-        let alias = i.alias.as_deref().unwrap_or_else(|| path.rsplit('.').next().unwrap_or(path).trim());
         Some((at, path, alias))
     })
 }

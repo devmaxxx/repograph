@@ -29,7 +29,8 @@
 ((call target: (dot left: (identifier) @_module right: (identifier) @reference.calls))
   (#eq? @_module "__MODULE__")
   (#set! receiver "owner")
-  (#set! outside "unary_operator @"))
+  (#set! outside "unary_operator @")
+  (#set! outside "call quote"))
 
 ; `Plug.Conn.f()` is the path `Plug.Conn/f`, through an alias when its first segment is one.
 ((call target: (dot left: (alias) @name right: (identifier) @name)) @reference.calls

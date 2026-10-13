@@ -14,6 +14,14 @@
   (#eq? @_def "defimpl")
   (#match? @_for "^for:"))
 
+; A type that is no one alias, `for: [A, B]` or `for: __MODULE__`, is named as it is spelled, so that
+; the functions inside are the implementation's and no top-level name of the file.
+((call
+  target: (identifier) @_def
+  (arguments . (alias) @name (keywords (pair key: (keyword) @_for value: [(list) (identifier)] @name)))) @definition.class
+  (#eq? @_def "defimpl")
+  (#match? @_for "^for:"))
+
 ((call target: (identifier) @_def (arguments . (alias) @name .)) @definition.class
   (#eq? @_def "defimpl"))
 
@@ -56,6 +64,14 @@
   (arguments . (alias) @import.path . (keywords (pair key: (keyword) @_as value: (alias) @import.alias)))) @import
   (#eq? @_alias "alias")
   (#match? @_as "^as:")
+  (#set! binds "alias"))
+
+; Options that rename nothing, `warn: false`, leave the alias its last segment.
+((call
+  target: (identifier) @_alias
+  (arguments . (alias) @import.path . (keywords) @_options)) @import
+  (#eq? @_alias "alias")
+  (#not-match? @_options "\\bas:")
   (#set! binds "alias"))
 
 ((call target: (identifier) @_import (arguments . (alias) @import.path)) @import
