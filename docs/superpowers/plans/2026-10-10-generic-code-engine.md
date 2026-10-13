@@ -2216,7 +2216,7 @@ No new definition kind is needed:
 
 **Step 24 as built.**
 
-- **Defaults:** all nine languages passed and joined the default `code_globs`; `vendor/` and `_build/` joined `skip`. GRAMMAR stays 6 (step 14's bump, same release).
+- **Defaults:** all nine languages passed; eight joined the default `code_globs`, and OCaml stays opt-in for its size (Max, 2026-10-13); `vendor/` and `_build/` joined `skip`. GRAMMAR stays 6 (step 14's bump, same release).
 - **Bench:** equal to step 14 case for case in both arms; the fixture's graph and headers are byte-identical to step 14's.
 - **Build time:** every step 1.13–1.17× step 0.
 - **Held for Max:** OCaml adds 9.05 MB stripped against the 8 MB per-step bar (0.85 MB compressed, under 1 MB), and the release archive reads 18.51 MB against the 0.6.0 bar of 16.07 MB, which step 17 already passed at 16.32 MB.
