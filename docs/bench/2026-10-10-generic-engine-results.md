@@ -735,3 +735,62 @@ package and imports types.
   - `cargo clippy --all-targets -- -D warnings`: clean;
   - `cargo tree --duplicates --depth 0`: no tree-sitter crate;
   - `src/code/dotnet/` is gone.
+
+## Step 13 · TypeScript, TSX, Vue
+
+New: `bin/repograph-step13`, built at `241b838`. The old reader is `bin/repograph-step13d`, and
+`src/code/typescript/` is deleted. TypeScript and TSX declare through
+`queries/typescript/decl.scm`: 14 patterns, about 52 ms to compile per grammar. Three exceptions keep
+what no query says: `import_bindings`, `statement_prose` and `single_file_components`.
+
+- **Regressions:** from `langdiff.py` on three inputs. The readings are in
+  `log/langdiff-step13-{kit,scratch,fixture}.txt`.
+  - Kit (`new-12c` → `new-13`): tsx R2 = 2. Every other class is 0 in every language.
+  - Scratchpad corpus (vs `store-base`): the same tsx R2 = 2, and step 12's accepted diffs.
+  - Fixture (old-reader store → `fixture-13`, and the same against `fixture-8p`): ts R2 = 10,
+    and References −7 / +7.
+  - R7 = R8 = R9 = 0 on all three.
+- **Accepted, hand-read:**
+  - R2: a decorated class not written `export` starts at its decorator's row, since the grammar
+    folds the decorator into the class node (`App.tsx::App` 55 → 54).
+  - References ±7: comment cites inside `@Module({…})` above `export class` belong to the class,
+    not the file. That is BE-M02, FR-DM-06 and FR-SEC-30 in `app.module.ts`, BE-M02, FR-SEC-30 and
+    FR-VIS-47 in `identity.module.ts`, and N-104 in `database.module.ts`.
+- **Exceptions without their hook:**
+
+  | hook | kit | fixture |
+  |---|---|---|
+  | `import_bindings`: Calls P / R | 0.997 / 0.325 | 0.983 / 0.431 |
+  | DecoratedBy R | 0 | 0 |
+  | Extends P / R | 0.900 / 0.188 | 0 / 0 |
+  | Implements R | 0.111 | 0.488 |
+  | ReExports R | 0 | 0 |
+  | Imports R, ignoring context | 0.997 | 0.999 |
+  | `statement_prose`: R3 + body-above | 1,115 | 4,578 |
+  | `single_file_components` | no `.vue` declares | no `.vue` files |
+
+  The readings are in `log/pr-step13-nohook-{kit,scratch,fixture}.txt`. Every hook stays.
+- **Outside the inputs:** `beauty-crm` main and two worktrees, exported to the scratchpad. The
+  reading is in `log/langdiff-step13-outside.txt`.
+  - On main: R1 17, R2 31, R4 17 and R5 6, with Calls −20 / +23 and References −48 / +51. The two
+    worktrees read the same classes, at R1 22 and 18.
+  - R1, R4 and R5 are object literals behind `as unknown as`, which the query does not read. That
+    is 17 of 927 literal members (R 0.982), all in test doubles. Reading a nested `as` costs the
+    compile 52 → 66 ms per grammar.
+  - R2 and the moved References are the two accepted classes above.
+  - The rest moves Calls and cites from the class to the method. A member decorator was separated
+    from its method by a comment, and the old reader gave it to the class.
+- **Bench,** on the fixture, store built by `repograph-step13`:
+  - `--no-dense`: `keyword 39/40 paraphrase 7/30 code 12/12 p90 238 tok`. The transcript is
+    identical to step 10's.
+  - Dense, full build in 2 min 44 s: `keyword 40/40 paraphrase 9/30 code 12/12 p90 237 tok`,
+    under e5-small. There are zero flips against the last dense raw row, and §5.4's small-model
+    floors hold.
+- **Build time:** median of five, interleaved, at load 19–26 (`log/buildtime-step13-final.txt`).
+  Step 0 ran 1.265 s, step 12's final binary 1.525 s (1.205×) and step 13 1.432 s (1.132×). The
+  double-pass fix (`478282f`) is most of the gap to step 12.
+- **Gate:**
+  - `cargo test --all-targets`: 1,401 passed, 0 failed;
+  - `cargo clippy --all-targets -- -D warnings`: clean;
+  - `cargo tree --duplicates --depth 0`: no tree-sitter crate;
+  - `src/code/typescript/` is gone.

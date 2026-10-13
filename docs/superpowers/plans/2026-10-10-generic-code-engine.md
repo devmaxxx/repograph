@@ -1545,6 +1545,12 @@ This step alone closes the three reviewer defects. About 1,200 lines of Rust are
   - In a field with several declarators, a citation is owned by the first declarator.
   - `package_scope`'s `header` builds a file's facts apart from the extraction, so each file passes through the engine twice. C# does the same: `collect` builds the facts for the index, and `extract` builds them again.
   - `f112ba4` (members of a type nested in an enum). The kit and the fixture ran over it with step 12's binary, and `--lang java,kt` reads 0 against step 11. Neither input holds such a type, so this is not a re-verification of the fix. The outside run was not repeated.
+- **Step 12's open items, after the step:**
+  - The double pass is gone (`478282f`). The collect pass leaves the header it read for `header_for`, and the engine keeps the decl facts a header or a cross-file reader took until the file's own extraction takes them, both keyed by path and fingerprint. Kotlin, Java and C# read their declaration query once per build where they read it three times. The kit and the scratchpad corpus are byte-identical, and `--lang kt,java,cs` reads 0 on both. Corpus build, median of five at load 21–39: 1.229× → 1.141× step 0. At step 13's gate, with step 13 on top, step 12's final binary reads 1.205× and step 13's 1.132× in the same run.
+  - `#if` (`a32af72`). A type under an `#if` in a type body fell to the top-level catch-all and was exported. Two patterns now read its word as a nested type's, and keep a block namespace's `#if` types exported, as before. The compile goes from 37 to 44 ms. Under `#else` or `#elif` a type still falls to the catch-all. The kit and the scratchpad corpus are byte-identical, since neither holds the shape.
+  - `protected internal` on an interface member still reads as `protected`. The query's header now says why (`241b838`): a pattern telling the two apart cost the compile 27 to 60 ms, and no input writes one.
+  - A member of a C# `partial` type attaches to the part whose body holds it (`f67e366`). Before, two same-named types in different namespaces shared one id, and every member went to the first.
+  - The C# run outside the inputs is still not done. No C# outside a Bonliva repository is on this machine.
 
 **Step 13 · TypeScript, TSX, then Vue.** L. Query ~220, Rust −700, hook ~600 kept.
 
@@ -1552,6 +1558,90 @@ This step alone closes the three reviewer defects. About 1,200 lines of Rust are
 - **Hooks:** `head`; `import` (tsconfig tiers, package exports, the existing `Resolver::resolve`); `resolve` owning Calls and DecoratedBy. DecoratedBy stays with the hook because of the shared `deco:<Name>` nodes (the L8 exception).
 - **Vue:** `embed`, `register`, `view: TypeScript | Tsx`, and the component symbol in `resolve`.
 - **Gate:** the full bench, `--no-dense` and dense.
+
+**Step 13 as built.** Where the code differs from the text above, the code is the record. The work is in `26faa4e`.
+
+- **Queries** (159 + 6 lines). `queries/typescript/decl.scm` has 14 patterns and compiles in about 52 ms per grammar. TSX reads the same files.
+  - Functions, generators, classes, abstract classes, interfaces, enums, type aliases and namespaces. Each comes plain, `export`ed or `declare`d, at the file or in a namespace.
+  - A class's methods, abstract methods and fields; an interface's methods and function-typed properties. Each is read in an ambient class or interface too.
+  - An object literal's methods and function-valued pairs, under the `const` that binds it. The literal can sit bare or behind one `as`, `satisfies` or parentheses.
+  - A later `export { a }` or `export default a` marks the top-level declaration exported, through the new `export.name` capture.
+  - `refs.scm` cites comments and strings.
+  - A literal behind two wrappers is not read, whether `({…}) satisfies T` or `{…} as unknown as T`. A nested `as` costs the compile 52 → 66 ms per grammar. Outside the inputs, 17 of 927 literal members on `beauty-crm` main (R 0.982) sit behind `as unknown as`. All of them are test doubles.
+- **Spec:**
+  - `Label::Qualified`, `Export::Show(["export"])`, `Visibility::File`, `Ambiguity::Unique`, and `ImportPaths { root: false }`.
+  - The body is `Doc::None`, `Raw`, `Cap::Head` and `Line::First`, all unread, since the hook writes it whole.
+  - A `fold` hook strips the brackets and quotes of a computed or quoted name.
+  - Hooks: `head` and `signature` (`statement_prose`), and `resolve` (`import_bindings`) owning Calls, Extends, Implements and DecoratedBy.
+  - Vue is `view: TypeScript` with `single_file_components::HOOKS`. The hook picks TypeScript or TSX per file.
+- **Engine:** two rules.
+  - An `export.name` capture marks the top-level declaration of that name exported.
+  - A cite inside a decorator belongs to the declaration beside it, though the decorator sits outside that declaration's node. `syntax::decorated` finds the declaration by a cursor descent. A first version called `Node::parent`, which walks down from the root on every call, and put the build at 1.299× step 0.
+  - Cites now take their owner when pushed. The post-pass over them is gone.
+- **Exceptions**, each measured without its hook:
+  - `import_bindings` (634 lines) resolves calls, heritage, decorators, imports and re-exports through the file's import bindings and `Resolver::resolve`. The variant without it uses the default calls, heritage and decorator captures, an import hook on `Resolver::resolve`, and `Visibility::Imported`. It reads:
+
+    | kind | kit P / R | fixture P / R |
+    |---|---|---|
+    | Calls | 0.997 / 0.325 (1,201 → 391) | 0.983 / 0.431 (4,887 → 2,141) |
+    | DecoratedBy | 0 / 0 (1,105 → 3) | 0 / 0 (340 → 4) |
+    | Extends | 0.900 / 0.188 | 0 / 0 |
+    | Implements | 1.000 / 0.111 | 1.000 / 0.488 |
+    | ReExports | R 0 (26) | R 0 (250) |
+    | Imports | 1.000 / 0.997 (ignoring context) | 1.000 / 0.999 (ignoring context) |
+
+    With its context, Imports reads P 0.006 on the kit and 0.016 on the fixture, since the default writes no imported names. Declares moves as well, to P 0.972 and 0.953, through the visibility. The hook stays.
+
+    Two rules inside it carry their own numbers:
+    - A member decorator's call belongs to the member, not the class. Without the rule, the kit's Calls read −74 / +40.
+    - A call that computes a destructured value belongs to the file, not to the first name the destructure binds. The rule is found by the declarator's opening bracket.
+  - `statement_prose` (69 lines) writes the body as the statement is written: its comments, its `export` word and its first line, and a function whole. It also writes the file's head. The variant uses `Doc::Adjacent`, `Line::Name` and no head. Its R3:
+    - kit: ts 728, tsx 385 and vue 2, plus body-above ts 98 and tsx 8 (1,115 in all);
+    - fixture: js 25, mjs 364, ts 3,925 and tsx 264, plus body-above ts 189 and tsx 2 (4,578);
+    - heads: 55 files on the kit and 586 on the fixture.
+
+    No `Doc` reads a comment above a wrapper, and no `Line` reads a whole function. The hook stays.
+  - `single_file_components` (186 lines) is the old Vue reader's script extraction and component symbol, through the sink. Without it no `.vue` file declares anything. On the kit its 8 files hold Declares 46, Imports 2, Extends 4 and Calls 7. The hook stays.
+- **Gate:** langdiff with `bin/repograph-step13` on three inputs. The readings are in `log/langdiff-step13-{kit,scratch,fixture}.txt`.
+  - Kit (`new-12c` → `new-13`): tsx R2 = 2. Every other class is 0 in every language.
+  - Scratchpad corpus (vs `store-base`): the same tsx R2 = 2, plus the accepted cs R3 1 and body-above 1, py R3 12, rs R3 3 and body-above 7, SQL body-above 11, and Swift R3 1.
+  - Fixture (old-reader store → `fixture-13`, and the same against `fixture-8p`): ts R2 = 10, and References −7 / +7. R7 = R8 = R9 = 0 on all three.
+  - Accepted, each hand-read:
+    - R2 = 2 on the kit and 10 on the fixture: a decorated class not written `export` now starts at its decorator's row, one line up (`App.tsx::App` 55 → 54). The grammar folds the decorator into the class node. An exported class's decorator sits outside it in `export_statement`, and keeps its line. A line that skips the decorators was tried in the engine and moved 403 field members' lines, so it was reverted.
+    - References ±7: comment cites inside `@Module({…})` above `export class` now belong to the class, not the file. They are BE-M02, FR-DM-06 and FR-SEC-30 in `app.module.ts`, BE-M02, FR-SEC-30 and FR-VIS-47 in `identity.module.ts`, and N-104 in `database.module.ts`.
+- **Outside the inputs.** `beauty-crm` main (`b71459e9b`) and its two worktrees (`5cdd0d15e`, `546dfa96a`) were exported by `git archive` to the scratchpad. Each was built with the old reader (`repograph-step13d`) and the new one, `--no-dense`, and read with `--lang ts,tsx,js,mjs,cjs,jsx,vue` (`log/langdiff-step13-outside.txt`):
+
+  | revision | R1 | R2 | R4 | R5 | Calls − / + | References − / + |
+  |---|---|---|---|---|---|---|
+  | main | 17 | 31 | 17 | 6 | 20 / 23 | 48 / 51 |
+  | `5cdd0d15e` | 22 | 40 | 22 | 7 | 23 / 26 | 51 / 54 |
+  | `546dfa96a` | 18 | 38 | 18 | 6 | 20 / 23 | 49 / 52 |
+
+  Every entry falls into four classes, hand-read on main:
+  - R1, R4 and R5, plus the edges to and from them: literals behind `as unknown as`, above. Their 17 members and their Declares go. Their calls fall to the `const`, and 6 of those targets dangle.
+  - R2: the decorated non-exported classes, as on the fixture. All 31 move one line.
+  - References from the file to the class: the decorator rule, as on the fixture. Main has 43: comments inside `@Module` and strings in a controller's decorators.
+  - Calls and cites from the class to the method, 22 on main: a member decorator separated from the method by a comment. An example is `@RequireAction` above a comment above `@Header` in `appointment.controller.ts`. The old reader stopped at the comment and gave the decorator to the class. The new one skips comments and gives it to the method, as it does when no comment stands between.
+- **Bench**, on the fixture at `241b838`, from a store built by `repograph-step13`:
+  - `--no-dense`: `keyword 39/40 paraphrase 7/30 code 12/12 p90 238 tok`. The transcript is identical to step 10's, so zero flips.
+  - Dense: a full build of 2 min 44 s, 11,593 rows embedded in 162 s. Then `keyword 40/40 paraphrase 9/30 code 12/12 p90 237 tok`, under e5-small, with zero flips against the last dense raw row. §5.4's floors under the small model are 40/40, ≥ 9/30, 12/12 and ≤ 250, and all hold.
+  - Both rows are in `bench/history/runs.jsonl`.
+- **Checks:**
+  - `cargo test --all-targets`: 1,401 passed, 0 failed.
+  - clippy `-D warnings` is clean.
+  - `cargo tree --duplicates --depth 0` shows no tree-sitter crate.
+  - `src/code/typescript/` is gone.
+- **Cases** moved to `src/code/cases/{typescript,vue}.rs`, together with the inline tests of `symbols.rs` and `idrefs.rs`. Two new cases pin the engine's decorator rule and the destructure rule. Three assertions changed, and one test was deleted:
+  - A plain decorated class starts at its decorator's row (`Local` line 5). An exported one starts at `export` (`Svc` line 3). This follows from the grammar, above.
+  - A literal behind two nested wrappers, `({…}) satisfies T`, names no member. Single `satisfies`, `as` and parentheses still do. The reason is the compile cost, above.
+  - In the CRLF twin, `deco:Injectable` now follows `sym:a.ts::total` in the edge order.
+  - The test that compared the old walk with the old scan is deleted, since both are gone.
+- **Timing:** median of five, interleaved with step 0 on the corpus, at load 19–26 (`log/buildtime-step13-final.txt`). Step 0 ran 1.265 s, step 12's final binary 1.525 s (1.205×) and step 13 1.432 s (1.132×). Most of the gain over step 12 is the double pass, above. The TypeScript port itself reads within the noise.
+- **Size:**
+  - The old `src/code/typescript/` held 1,266 lines with its inline tests, and Vue's reader 238.
+  - The exceptions now hold 889: `import_bindings` 634, `single_file_components` 186 and `statement_prose` 69. The engine, `syntax`, the spec and the module lists add 88, and the queries 165.
+  - Net Rust outside the case files is −527 against the estimate's −700. Part of that is the inline tests, which moved into the cases.
+  - The kept hook is 889 lines against the estimate's 600. What no query replaces is the import-bound lookup and the statement's prose.
 
 **Step 14 · Remove the old paths.** M, net negative. Remove:
 
