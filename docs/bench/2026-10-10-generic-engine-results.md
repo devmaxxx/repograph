@@ -1299,3 +1299,73 @@ New: `bin/repograph-cpp12`, built at the non-test source committed as `67c09fa`.
   - `cargo test --all-targets`: 1,463 passed, 0 failed;
   - `cargo clippy --all-targets -- -D warnings`: clean;
   - `cargo tree --duplicates --depth 0`: no tree-sitter crate.
+
+### Step 18 · review fix `829623c`
+
+New: `bin/repograph-cpp-fix`, built at `829623c`'s source. Parent: `bin/repograph-cpp12`. `b93426c`
+between them changes only an operator spelled with `/`, which neither leveldb nor hiredis writes.
+The fix resolves qualified calls through their whole qualifier, names a nested out-of-line method by
+every class around it, drops a namespace its own file opens from a definition, and repairs two
+tokenizer cases of the attribute-macro view. Plan, step 18 as built, has each finding.
+
+- **leveldb, step 18's criterion re-run** (`**/*.cc **/*.h`). The census (`s18f/py/census.py` in the
+  scratchpad) gains the fix's rules: an out-of-line definition joins every scope past a leading run
+  of namespaces its file opens, and a qualified call drops a leading run of namespaces any file
+  opens, then names `path.name` or nothing. Step 18's census left class-qualified calls unclaimed,
+  so its Calls row is not comparable; both binaries are counted below under the new census.
+
+  | kind | edges before → after | P before → after | R before → after |
+  |---|---|---|---|
+  | Calls | 1,176 → 1,388 | 0.9974 → 0.9978 (1,173 → 1,385) | 0.8348 → 0.9856 (1,162 → 1,372 of 1,392) |
+  | Declares, functions | 338 | 1.000 | 1.000 (338 of 338) |
+  | Declares, methods | 1,145 | 1.000 | 1.000 (1,145 of 1,145) |
+  | Declares, members | 719 | 1.000 | 1.000 (719 of 719) |
+  | Declares, types | 252 | 1.000 | 1.000 (252 of 252) |
+  | Imports | 487 | 1.000 | 1.000 (487 of 487) |
+
+  - Graph diff: Calls +213 −1, Declares +1 −1, one node renamed, nothing else. The renamed node is
+    `memtable.cc`'s `MemTable::KeyComparator::operator()`, `KeyComparator.operator()` →
+    `MemTable.KeyComparator.operator()`; its one Calls edge and one Declares edge follow it.
+  - The 20 Calls misses are step 18's 20, unchanged. Unclaimed by the rule: 435 sites whose
+    qualifier names nothing in the repository (`std::` 373, `testing::` 43, `snappy::` 4,
+    `benchmark::` 1, and the rest the census's `return ::f()`), 36 whose member two files define
+    (`Env::Default()` 34, in `env_posix.cc` and `env_windows.cc`; `DB::Put` and `DB::Delete`, a
+    pure virtual in `db.h` and the body in `db_impl.cc`, where the linker rule takes the body), 3
+    through the alias `PosixDefaultEnv` or `WindowsDefaultEnv`, 98 `new` expressions, 4 hidden.
+  - P: 16 Calls edges no census pair explains: step 18's 13, the `::crc32c::Extend` edge step 18's
+    census explained, and 2 new ones, which are right:
+    `ModelDB::Put` and `Delete` call `DB::Put` and `DB::Delete` by name, and the body in
+    `db_impl.cc` is the one reached. The renamed `operator()`'s edge to `GetLengthPrefixedSlice` is
+    right, as before. Wrong in both binaries: `corruption_test.cc::TEST_F → skiplist_test.cc::Key`,
+    the `SequenceNumber` functional cast, and `port_stdcxx.h`'s `::crc32c::Extend`, which names the
+    external crc32c library's function, not `leveldb::crc32c::Extend` (step 18 counted it right). So
+    P before is 1,173 of 1,176, not step 18's 1,174.
+- **Hand read** (`log/handread-step18r-leveldb.txt`, seed 18): the one removed Calls edge is the
+  rename. The 213 added are sampled to 50, all right, each against its site and the definition it
+  reaches: 36 `Status::OK()`, `Corruption`, `NotFound` or `IOError`, 7 `WriteBatchInternal::…`, 3
+  `DB::Open`, and one each of `Table::Open`, `EnvWrapper::RemoveFile`, `DB::Put` and
+  `EnvWindowsTestHelper::SetReadOnlyMMapLimit`. The sampler found no site for one,
+  `memenv_test.cc::TEST_F → DB.Open`: the site is line 225, in the sixth `TEST_F` body, which the
+  `TEST_F` node's span does not cover.
+- **hiredis, step 17's criterion** (`**/*.c **/*.h`, `.h` as C++), `cpp12` against `cpp-fix`:
+  `graph.json` byte-identical (`ee379ffbd70010d6`); definitions 672 of 692, calls 1,178 of 1,197,
+  edges no site explains 9, Imports 78 of 78, as step 18.
+- **`.h` probe:** a C header using C++ keywords as identifiers, read as C++, keeps 23 of 25
+  definitions; it loses functions named `operator` and `template`, and a call `new(3)` reads as a
+  `new` expression. Recorded, no fallback.
+- **`view()` timing** (debug build, leveldb, 131 files, 880,038 bytes): 47 ms a pass against 255 ms
+  of parsing; 104 files borrow the source, 27 need a copy. The second pass is recorded, not removed.
+- **Byte-identity,** `cpp12` against `cpp-fix`:
+  - kit corpus and scratchpad corpus with every C and C++ extension named: `graph.json` and
+    `headers.json` identical (`dff8b36a53bb0548`), and the scratchpad's graph equals `store-14`'s;
+  - gin with `**/*.go`: identical (`119169be4bd8aa62`);
+  - luarocks with `**/*.lua`: identical (`368f10ad0de3ba07`); with `**/*.c **/*.h` added: identical
+    (`58bfff811cf5cb80`).
+- **Cases:** `src/code/cases/cpp.rs` 10 tests (one replaced, two added): qualified calls through a
+  namespace, a class, a nested class and `::`, with `std::swap`, `testing::Of` and `Missing::OK`
+  naming nothing though the repository defines `swap`, `Of` and `OK`; the nested out-of-line method
+  and its implicit owner; a namespace-qualified definition in a file opening the namespace.
+  `exceptions/attribute_macros.rs` adds three: the borrowed view, the digit separator, and the CRLF
+  continuation.
+- **Gate:** `cargo test --all-targets` 1,469 passed, 0 failed; `cargo clippy --all-targets -- -D
+  warnings` clean. No release build; fixture, bench and platforms not run.
