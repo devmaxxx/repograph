@@ -1,7 +1,6 @@
 //! The .NET index: every C# type's declaring files and members, extension methods by name, each
 //! project's root namespace and `global using`s — what `Scope` resolves a name against.
 
-use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::OnceLock;
 
@@ -32,31 +31,11 @@ struct Entry {
     generic_bases: BTreeSet<String>,
 }
 
-thread_local! {
-    /// `Resolver::new` asks `header_for` and then `collect` about the same file back to back; a parse
-    /// of the corpus's 1,176 C# files costs about 0.4 s, and one parse serves both calls.
-    static LAST: RefCell<Option<(String, u64, Declared)>> = const { RefCell::new(None) };
-}
-
-fn fingerprint(source: &str) -> u64 {
-    use std::hash::{Hash, Hasher};
-    let mut h = std::collections::hash_map::DefaultHasher::new();
-    source.hash(&mut h);
-    h.finish()
-}
-
 /// What a `.cs` file declares, read for the index by the language's own query.
 pub fn facts(rel: &str, source: &str) -> Declared {
-    let key = fingerprint(source);
-    let hit = LAST.with(|l| l.borrow().as_ref().filter(|(r, k, _)| r == rel && *k == key).map(|(_, _, d)| d.clone()));
-    if let Some(d) = hit {
-        return d;
-    }
-    let d = package_scope::declared::facts_of(Lang::CSharp, rel, source)
+    package_scope::declared::facts_of(Lang::CSharp, rel, source)
         .map(|(facts, tree)| declared::read(&facts, tree.root_node(), source.as_bytes(), &Host::default()))
-        .unwrap_or_default();
-    LAST.with(|l| *l.borrow_mut() = Some((rel.to_string(), key, d.clone())));
-    d
+        .unwrap_or_default()
 }
 
 /// One namespace segment as the Razor compiler writes it (`CSharpIdentifier.AppendSanitized`):

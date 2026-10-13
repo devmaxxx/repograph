@@ -3,6 +3,7 @@
 //! JVM index comes from the same read, so the index never names a symbol the graph lacks.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::Arc;
 
 use tree_sitter::{Node, Tree};
 
@@ -210,10 +211,10 @@ pub(super) fn sites<'t>(facts: &Facts, root: Node<'t>, kinds: &[&str]) -> Vec<(N
 }
 
 /// A file's declarations alone, read by the language's own query, for its header.
-pub(crate) fn facts_of(lang: Lang, rel: &str, source: &str) -> Option<(Facts, Tree)> {
+pub(crate) fn facts_of(lang: Lang, rel: &str, source: &str) -> Option<(Arc<Facts>, Tree)> {
     let (decl, tree) = (queries::decl(lang)?, lang.parse(source.as_bytes())?);
     let file = File { lang, rel, text: source, src: source, tree: Some(&tree) };
-    let facts = engine::facts(spec(lang), decl, None, &file);
+    let facts = engine::declared(spec(lang), decl, &file);
     Some((facts, tree))
 }
 

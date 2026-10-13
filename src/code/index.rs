@@ -258,7 +258,29 @@ impl QualifiedIndex {
 
 /// Header for a name-indexed family's file; None for every other language.
 pub fn header_for(lang: Lang, rel: &str, source: &str) -> Option<Header> {
-    crate::code::spec::spec(lang).hooks.header.map(|header| header(rel, source))
+    let header = crate::code::spec::spec(lang).hooks.header?;
+    let known = COLLECTED.lock().unwrap_or_else(|e| e.into_inner()).remove(rel);
+    Some(match known {
+        Some((key, known)) if key == fingerprint(lang, source) => known,
+        _ => header(rel, source),
+    })
+}
+
+/// The headers `Resolver::new` read, each under the fingerprint of its source, until `widen` asks for
+/// the same file. On a build that is every name-indexed file, and the second read parsed the file
+/// and walked its declarations again.
+static COLLECTED: std::sync::Mutex<BTreeMap<String, (u64, Header)>> = std::sync::Mutex::new(BTreeMap::new());
+
+fn fingerprint(lang: Lang, source: &str) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    (lang, source).hash(&mut h);
+    h.finish()
+}
+
+/// Keeps the header the collect pass read for `header_for`, which a `header` hook would read alike.
+pub(crate) fn collected(lang: Lang, rel: &str, source: &str, header: &Header) {
+    COLLECTED.lock().unwrap_or_else(|e| e.into_inner()).insert(rel.to_string(), (fingerprint(lang, source), header.clone()));
 }
 
 /// Every name-indexed file's header as it was last read, kept in `.repograph/headers.json`.

@@ -335,7 +335,7 @@ impl Resolver {
         // Read outside the lock: two threads may read one file, and both find the same facts.
         let read = std::fs::read_to_string(self.repo.join(rel)).ok().and_then(|text| {
             let lang = detect(rel, Some(&text))?;
-            engine::declarations(lang, rel, &text).map(Arc::new)
+            engine::declarations(lang, rel, &text)
         });
         self.facts.lock().unwrap_or_else(|e| e.into_inner()).insert(rel.to_string(), read.clone());
         read
@@ -361,6 +361,9 @@ impl Resolver {
             (None, None) => None,
         };
         if let Some(header) = header {
+            if hooks.header.is_some() {
+                crate::code::index::collected(lang, rel, source, &header);
+            }
             self.add_header(lang.family(), rel, &header);
         }
     }

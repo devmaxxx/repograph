@@ -6,9 +6,9 @@
 //! first one the engine is reached only by its tests and by a spec that names queries.
 #![allow(dead_code)]
 
-use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
 use std::ops::Range;
-use std::sync::{Arc, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 
 use streaming_iterator::StreamingIterator;
 use tree_sitter::{Node, QueryCursor, Tree};
@@ -263,6 +263,53 @@ fn inside(root: Node, node: Node, kind: u16) -> bool {
 
 /// The facts `decl` and, when given, `refs` read from `file`. An import site's targets wait for a reader.
 pub fn facts(spec: &Spec, decl: &'static Compiled, refs: Option<&'static Compiled>, file: &File) -> Facts {
+    let mut facts = declare(spec, decl, file);
+    if let Some(refs) = refs {
+        refer(spec, refs, file, &mut facts);
+    }
+    facts
+}
+
+/// What `decl` read of files not yet extracted, each under the fingerprint of what it read. A
+/// name-indexed family reads every file's declarations for the index before extracting any, and the
+/// extraction reading them again cost the query twice; it takes its file's entry, so a build holds
+/// only the files it has yet to reach.
+static DECLARED: Mutex<BTreeMap<String, (u64, Arc<Facts>)>> = Mutex::new(BTreeMap::new());
+
+fn fingerprint(spec: &Spec, file: &File) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    (std::ptr::from_ref(spec) as usize, file.lang, file.text, file.src).hash(&mut h);
+    h.finish()
+}
+
+/// `decl`'s facts of `file`, read once for every header and cross-file reader that asks before the
+/// file's own extraction.
+pub(crate) fn declared(spec: &Spec, decl: &'static Compiled, file: &File) -> Arc<Facts> {
+    let key = fingerprint(spec, file);
+    let known = DECLARED.lock().unwrap_or_else(|e| e.into_inner()).get(file.rel).filter(|(k, _)| *k == key).map(|(_, f)| f.clone());
+    if let Some(facts) = known {
+        return facts;
+    }
+    let facts = Arc::new(declare(spec, decl, file));
+    DECLARED.lock().unwrap_or_else(|e| e.into_inner()).insert(file.rel.to_string(), (key, facts.clone()));
+    facts
+}
+
+/// `facts`, taking what a header already read of the file.
+fn extracted(spec: &Spec, decl: &'static Compiled, refs: Option<&'static Compiled>, file: &File) -> Facts {
+    let known = DECLARED.lock().unwrap_or_else(|e| e.into_inner()).remove(file.rel);
+    let mut facts = match known {
+        Some((key, facts)) if key == fingerprint(spec, file) => Arc::try_unwrap(facts).unwrap_or_else(|shared| (*shared).clone()),
+        _ => declare(spec, decl, file),
+    };
+    if let Some(refs) = refs {
+        refer(spec, refs, file, &mut facts);
+    }
+    facts
+}
+
+fn declare(spec: &Spec, decl: &'static Compiled, file: &File) -> Facts {
     let mut facts = Facts { lang: Some(file.lang), ..Facts::default() };
     let Some(tree) = file.tree else { return facts };
     let (root, src) = (tree.root_node(), file.src);
@@ -280,50 +327,53 @@ pub fn facts(spec: &Spec, decl: &'static Compiled, refs: Option<&'static Compile
     for (r, i) in ranges {
         facts.at.entry((r.start, r.end)).or_insert(i);
     }
-    if let Some(refs) = refs {
-        let (mut scopes, mut bound) = (Vec::new(), Vec::new());
-        matches_of(refs, root, src, file.rel, |pattern, caps| {
-            // A definition whose own pattern captures a scope binds there and nowhere else: a loop
-            // variable covers the loop's body, never the iterable it sits beside.
-            let own: Vec<Range<usize>> = caps.iter().filter(|(r, _)| *r == Role::LocalScope).map(|(_, n)| n.byte_range()).collect();
-            for (role, node) in &caps {
-                match role {
-                    Role::Reference(edge) => facts.refs.push(read_reference(spec, &caps, *edge, *node, &refs.metas[pattern], src)),
-                    Role::LocalScope => scopes.push(node.byte_range()),
-                    Role::LocalDefinition => bound.push((node.start_byte(), fold(spec, text(*node, src)), own.clone())),
-                    Role::CiteComment => facts.cites.push(Cite { source: None, context: "comment", range: node.byte_range() }),
-                    Role::CiteString => facts.cites.push(Cite { source: None, context: "string", range: node.byte_range() }),
-                    _ => {}
-                }
-            }
-        });
-        // A citation inside another is read as part of the outer one, as a comment or string
-        // walk that stops at the first it meets reads it.
-        facts.cites.sort_by_key(|c| (c.range.start, std::cmp::Reverse(c.range.end)));
-        let mut end = 0;
-        facts.cites.retain(|c| {
-            let outer = c.range.start >= end;
-            end = end.max(c.range.end);
-            outer
-        });
-        // A plain definition binds in the innermost scope holding it, whichever pattern captured that
-        // scope: a method's body local stays in the method whose pattern captures it with the
-        // parameters, never in the class around it. A binding that outlives its construct, as
-        // Python's walrus outlives a comprehension, is a pattern that captures its own scope.
-        let innermost = |at: usize| scopes.iter().filter(|s: &&Range<usize>| s.contains(&at)).min_by_key(|s| s.len()).cloned();
-        for (at, name, own) in bound {
-            let scopes = match own.is_empty() {
-                true => vec![innermost(at).unwrap_or(0..src.len() + 1)],
-                false => own,
-            };
-            facts.locals.0.entry(name).or_default().extend(scopes);
-        }
-        let owners: Vec<_> = facts.refs.iter().map(|r| facts.owner(r.range.start)).collect();
-        facts.refs.iter_mut().zip(owners).for_each(|(r, o)| r.source = o);
-        let owners: Vec<_> = facts.cites.iter().map(|c| facts.owner(c.range.start)).collect();
-        facts.cites.iter_mut().zip(owners).for_each(|(c, o)| c.source = o);
-    }
     facts
+}
+
+fn refer(spec: &Spec, refs: &'static Compiled, file: &File, facts: &mut Facts) {
+    let Some(tree) = file.tree else { return };
+    let (root, src) = (tree.root_node(), file.src);
+    let (mut scopes, mut bound) = (Vec::new(), Vec::new());
+    matches_of(refs, root, src, file.rel, |pattern, caps| {
+        // A definition whose own pattern captures a scope binds there and nowhere else: a loop
+        // variable covers the loop's body, never the iterable it sits beside.
+        let own: Vec<Range<usize>> = caps.iter().filter(|(r, _)| *r == Role::LocalScope).map(|(_, n)| n.byte_range()).collect();
+        for (role, node) in &caps {
+            match role {
+                Role::Reference(edge) => facts.refs.push(read_reference(spec, &caps, *edge, *node, &refs.metas[pattern], src)),
+                Role::LocalScope => scopes.push(node.byte_range()),
+                Role::LocalDefinition => bound.push((node.start_byte(), fold(spec, text(*node, src)), own.clone())),
+                Role::CiteComment => facts.cites.push(Cite { source: None, context: "comment", range: node.byte_range() }),
+                Role::CiteString => facts.cites.push(Cite { source: None, context: "string", range: node.byte_range() }),
+                _ => {}
+            }
+        }
+    });
+    // A citation inside another is read as part of the outer one, as a comment or string
+    // walk that stops at the first it meets reads it.
+    facts.cites.sort_by_key(|c| (c.range.start, std::cmp::Reverse(c.range.end)));
+    let mut end = 0;
+    facts.cites.retain(|c| {
+        let outer = c.range.start >= end;
+        end = end.max(c.range.end);
+        outer
+    });
+    // A plain definition binds in the innermost scope holding it, whichever pattern captured that
+    // scope: a method's body local stays in the method whose pattern captures it with the
+    // parameters, never in the class around it. A binding that outlives its construct, as
+    // Python's walrus outlives a comprehension, is a pattern that captures its own scope.
+    let innermost = |at: usize| scopes.iter().filter(|s: &&Range<usize>| s.contains(&at)).min_by_key(|s| s.len()).cloned();
+    for (at, name, own) in bound {
+        let scopes = match own.is_empty() {
+            true => vec![innermost(at).unwrap_or(0..src.len() + 1)],
+            false => own,
+        };
+        facts.locals.0.entry(name).or_default().extend(scopes);
+    }
+    let owners: Vec<_> = facts.refs.iter().map(|r| facts.owner(r.range.start)).collect();
+    facts.refs.iter_mut().zip(owners).for_each(|(r, o)| r.source = o);
+    let owners: Vec<_> = facts.cites.iter().map(|c| facts.owner(c.range.start)).collect();
+    facts.cites.iter_mut().zip(owners).for_each(|(c, o)| c.source = o);
 }
 
 fn read_declaration<'t>(caps: &[(Role, Node<'t>)], pattern: usize, src: &str, out: &mut Vec<Declared<'t>>) {
@@ -908,12 +958,12 @@ pub(crate) fn default_header(lang: Lang, rel: &str, source: &str) -> Header {
 }
 
 /// `decl` facts alone, for a file another file reads across through `Resolver::facts`.
-pub(crate) fn declarations(lang: Lang, rel: &str, source: &str) -> Option<Facts> {
+pub(crate) fn declarations(lang: Lang, rel: &str, source: &str) -> Option<Arc<Facts>> {
     let spec = crate::code::spec::spec(lang);
     let decl = queries::decl(lang)?;
     let tree = lang.parse(source.as_bytes())?;
     let file = File { lang, rel, text: source, src: source, tree: Some(&tree) };
-    Some(facts(spec, decl, None, &file))
+    Some(declared(spec, decl, &file))
 }
 
 /// The engine's whole read of a file whose node the front has written.
@@ -925,7 +975,7 @@ pub(crate) fn extract(resolver: &Resolver, spec: &Spec, file: &File, ex: &mut Ex
         }
         return;
     };
-    let facts = facts(spec, decl, queries::refs(file.lang), file);
+    let facts = extracted(spec, decl, queries::refs(file.lang), file);
     write(file, &facts, ex);
     let kind = |i: &Import| if i.reexport { EdgeKind::ReExports } else { EdgeKind::Imports };
     for i in &facts.imports {

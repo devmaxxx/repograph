@@ -9,7 +9,7 @@
 pub(crate) mod blank;
 
 use std::collections::BTreeMap;
-use std::sync::OnceLock;
+use std::sync::{Arc, OnceLock};
 
 use crate::code::engine::{self, Facts, File, Sink};
 use crate::code::exceptions::namespace_scope::declared::{self, join, Declared, TypeDecl, Using};
@@ -259,7 +259,8 @@ pub fn members(rel: &str, source: &str, d: &Directives) -> BTreeMap<String, Opti
     let injected = injected(d);
     let mut members: BTreeMap<String, Option<String>> = injected.iter().map(|(n, t)| (n.clone(), Some(t.clone()))).collect();
     if let View::Read(text) = blank::view(source) {
-        if let Some((mut facts, tree)) = package_scope::declared::facts_of(Lang::CSharp, rel, &text) {
+        if let Some((facts, tree)) = package_scope::declared::facts_of(Lang::CSharp, rel, &text) {
+            let mut facts = Arc::unwrap_or_clone(facts);
             stand_for(&mut facts, rel, &name);
             let host = Host { component: Some(&name), injected: &injected, ..Host::default() };
             let own = declared::read(&facts, tree.root_node(), text.as_bytes(), &host);
