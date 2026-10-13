@@ -56,3 +56,22 @@ Lua (`.lua`, and a script whose shebang names `lua` or `lua5.x`) is read only wh
   returns as a constructor (`return { f = f }`); a `require` of a computed name, of a module outside
   the repository, or inside a larger expression (`require("a").b`, `require("a") or {}`), whose local
   is then a plain value; `luajit` shebangs.
+
+Go (`.go`) is read only where `code_globs` or `REPOGRAPH_CODE_GLOBS` names `**/*.go`; it is not in
+the default globs yet.
+
+- **Read:** functions; methods as `T.m` on their receiver's type, pointer or generic; structs,
+  interfaces and other named types, with a struct's named fields and an interface's methods as
+  `T.member`; package-level `const` and `var`. A name that starts with an upper-case letter is
+  exported. A package is its directory: a bare name reaches the declaration in any file of it, and
+  every one of build-tagged variants (`x_linux.go`, `x_windows.go`) unless the calling file declares
+  the name itself. An import path under the module that the nearest `go.mod` names reaches the
+  package directory's files, less `_test.go`. `pkg.F()` and `pkg.T` through an import's name, or the
+  package's own name when the import has none, reach the exported member. `s.m()` on a method's
+  receiver reaches the receiver type's method in any file of the package. Type uses are references:
+  parameters, results, fields, composite literals, conversions, assertions, generic arguments and
+  `var _ I = (*T)(nil)`. Requirement ids are read in comments and strings.
+- **Not read:** a method called on any other value (`x.m()`), since its type is not inferred; a
+  method promoted from an embedded field; dot imports; the standard library, other modules, and a
+  `go.mod` edit, which widens nothing until the next `build`; a one-argument generic call
+  (`f[T](x)`), which the grammar reads as a conversion, so it is a type use and not a call; the type in `node := &node{}`, which reads as the new local.

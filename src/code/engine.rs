@@ -692,6 +692,7 @@ fn exported(rule: Export, modifiers: &[String], name: &str) -> bool {
         Export::Show(words) => modifiers.iter().any(|m| words.contains(&m.as_str())),
         Export::Hide(words) => !modifiers.iter().any(|m| words.contains(&m.as_str())),
         Export::Prefix(c) => !name.starts_with(c),
+        Export::Capitalized => name.starts_with(char::is_uppercase),
         Export::All => true,
     }
 }
@@ -832,6 +833,7 @@ pub fn import_targets(resolver: &Resolver, spec: &Spec, rel: &str, import: &Impo
     let (root, suffixes) = match spec.imports {
         ImportPaths::Relative { root, suffixes } => (root, suffixes),
         ImportPaths::Dotted { roots, suffixes } => return dotted(resolver, rel, &path.replace('.', "/"), roots, suffixes),
+        ImportPaths::ModulePrefix { manifest, directive, skip } => return under_module(resolver, rel, path, manifest, directive, skip),
     };
     let dir = rel.rsplit_once('/').map_or("", |(d, _)| d);
     let bases = std::iter::once(dir).chain(root.then_some(""));
@@ -862,6 +864,18 @@ fn dotted(resolver: &Resolver, rel: &str, path: &str, roots: &[&str], suffixes: 
         .find(|target| target != rel && resolver.globbed(target))
         .into_iter()
         .collect()
+}
+
+/// The files of the directory `path` names under the importer's module, by `ImportPaths::ModulePrefix`.
+fn under_module(resolver: &Resolver, rel: &str, path: &str, manifest: &'static str, directive: &str, skip: &[&str]) -> Vec<String> {
+    let dir = rel.rsplit_once('/').map_or("", |(d, _)| d);
+    let Some((base, module)) = resolver.module_of(dir, manifest, directive) else { return Vec::new() };
+    let Some(sub) = path.strip_prefix(module.as_str()).filter(|sub| sub.is_empty() || sub.starts_with('/')) else { return Vec::new() };
+    let target = crate::code::prose::join_under(&base, sub.trim_start_matches('/'));
+    let Some((target, lang)) = target.zip(Lang::of(rel)) else { return Vec::new() };
+    let mut files = resolver.in_dir(&target, lang);
+    files.retain(|f| f != rel && !skip.iter().any(|s| f.ends_with(s)));
+    files
 }
 
 /// The files a reference may resolve into besides its own, by the spec's visibility, with what each
@@ -940,12 +954,17 @@ pub fn resolve(resolver: &Resolver, spec: &Spec, file: &File, facts: &Facts, ex:
         if let Some(receiver) = &r.receiver {
             if let Receivers::Imports = spec.receivers {
                 let receiving = receiving.get_or_insert_with(|| Receiving::of(facts));
-                if let Some(to) = receiving.target(facts, r, receiver, || Receiving::imports(resolver, spec, rel, facts)) {
-                    let from = facts.source_id(rel, r.source);
-                    let container = r.source.and_then(|i| facts.defs[i].parent).map(|p| facts.defs[p].id.as_str());
-                    if to != from && Some(to) != container {
-                        ex.edge(&from, to, r.edge, &r.context, rel);
-                    }
+                // A directory that is the module declares its members across its files.
+                let module = |member: &str| match spec.visibility {
+                    Visibility::Directory => declaring(member).into_iter().map(|f| format!("sym:{f}::{member}")).collect(),
+                    _ => Vec::new(),
+                };
+                let all = matches!(spec.ambiguity, Ambiguity::All | Ambiguity::OwnFirst);
+                let tos = receiving.target(facts, r, receiver, all, module, || Receiving::imports(resolver, spec, rel, facts));
+                let from = facts.source_id(rel, r.source);
+                let container = r.source.and_then(|i| facts.defs[i].parent).map(|p| facts.defs[p].id.as_str());
+                for to in tos.iter().filter(|to| **to != from && Some(to.as_str()) != container) {
+                    ex.edge(&from, to, r.edge, &r.context, rel);
                 }
             }
             continue;
@@ -977,7 +996,7 @@ pub fn resolve(resolver: &Resolver, spec: &Spec, file: &File, facts: &Facts, ex:
 }
 
 /// The members each import alias exposes, with every definition of each.
-type Imported<'f> = HashMap<&'f str, HashMap<String, BTreeSet<String>>>;
+type Imported = HashMap<String, HashMap<String, BTreeSet<String>>>;
 
 /// What a receiver names from one file, built at its first reference with a receiver: the file's
 /// own definitions by the receiver and member they spell, and, only once a receiver is no member of
@@ -985,7 +1004,7 @@ type Imported<'f> = HashMap<&'f str, HashMap<String, BTreeSet<String>>>;
 /// never reads the files it requires.
 struct Receiving<'f> {
     own: HashMap<(&'f str, &'f str), usize>,
-    imported: OnceCell<Imported<'f>>,
+    imported: OnceCell<Imported>,
 }
 
 impl<'f> Receiving<'f> {
@@ -994,11 +1013,15 @@ impl<'f> Receiving<'f> {
         Receiving { own, imported: OnceCell::new() }
     }
 
-    fn imports(resolver: &Resolver, spec: &Spec, rel: &str, facts: &'f Facts) -> Imported<'f> {
-        let mut files: HashMap<&str, BTreeSet<&str>> = HashMap::new();
+    fn imports(resolver: &Resolver, spec: &Spec, rel: &str, facts: &Facts) -> Imported {
+        let mut files: HashMap<String, BTreeSet<&str>> = HashMap::new();
         for i in &facts.imports {
-            if let Some(alias) = &i.alias {
-                files.entry(alias).or_default().extend(i.targets(resolver, spec, rel).iter().map(String::as_str));
+            let targets = i.targets(resolver, spec, rel);
+            // An import with no alias is named by what its files call themselves: Go's
+            // `import "a/render"` binds `render` by `package render`.
+            let named = || targets.iter().find_map(|f| resolver.facts(f)?.namespaces.first().cloned());
+            if let Some(alias) = i.alias.clone().or_else(named) {
+                files.entry(alias).or_default().extend(targets.iter().map(String::as_str));
             }
         }
         files.into_iter().map(|(alias, files)| {
@@ -1021,23 +1044,36 @@ impl<'f> Receiving<'f> {
         }).collect()
     }
 
-    /// The one definition `receiver.name` names. A table the file declares members of is the file's
-    /// own, unless a binding around the site and not around the member names another value; an
-    /// import's alias reaches the one member of that name its files expose, unless a binding around
-    /// the site shadows the alias.
-    fn target<'a>(&'a self, facts: &'a Facts, r: &Ref, receiver: &str, imports: impl FnOnce() -> Imported<'f>) -> Option<&'a str> {
+    /// The definitions `receiver.name` names. A table the file declares members of is the file's
+    /// own, unless a binding around the site and not around the member names another value; next,
+    /// `module` names what the rest of the module declares as `receiver.name`; last, an import's
+    /// alias reaches the member of that name its files expose, the one member unless `all` takes
+    /// every definition of it. A binding around the site shadows both of those.
+    fn target(
+        &self,
+        facts: &Facts,
+        r: &Ref,
+        receiver: &str,
+        all: bool,
+        module: impl FnOnce(&str) -> Vec<String>,
+        imports: impl FnOnce() -> Imported,
+    ) -> Vec<String> {
         if let Some(&i) = self.own.get(&(receiver, r.name.as_str())) {
             let def = &facts.defs[i];
-            return (!facts.locals.shadows(receiver, r.range.start, Some(def.range.start))).then_some(def.id.as_str());
+            let shadowed = facts.locals.shadows(receiver, r.range.start, Some(def.range.start));
+            return if shadowed { Vec::new() } else { vec![def.id.clone()] };
         }
         if facts.locals.shadows(receiver, r.range.start, None) {
-            return None;
+            return Vec::new();
         }
-        let ids = self.imported.get_or_init(imports).get(receiver)?.get(r.name.as_str())?;
-        let mut ids = ids.iter();
-        match (ids.next(), ids.next()) {
-            (Some(id), None) => Some(id.as_str()),
-            _ => None,
+        let declared = module(&format!("{receiver}.{}", r.name));
+        if !declared.is_empty() {
+            return declared;
+        }
+        let Some(ids) = self.imported.get_or_init(imports).get(receiver).and_then(|m| m.get(r.name.as_str())) else { return Vec::new() };
+        match (all, ids.len()) {
+            (true, _) | (false, 1) => ids.iter().cloned().collect(),
+            _ => Vec::new(),
         }
     }
 }

@@ -129,6 +129,8 @@ pub enum Export {
     Hide(&'static [&'static str]),
     /// A name starting with this character is hidden.
     Prefix(char),
+    /// Exported only when the name starts with an upper-case letter, as Go's rule is.
+    Capitalized,
     All,
 }
 
@@ -167,6 +169,11 @@ pub enum ImportPaths {
     /// A module name whose dots are directories, under each of `roots` of the repository and never the
     /// importer's directory: Lua's `require("a.b")` searches a package path, not the file's place.
     Dotted { roots: &'static [&'static str], suffixes: &'static [&'static str] },
+    /// A path under the module that the `manifest` nearest the importer names on its `directive`
+    /// line, which is a directory under the manifest's: Go's `github.com/a/b/render` in a module
+    /// `github.com/a/b` names `render/`. A directory names its files of the importer's language, less
+    /// those ending in one of `skip`; a path outside the module names nothing.
+    ModulePrefix { manifest: &'static str, directive: &'static str, skip: &'static [&'static str] },
 }
 
 /// Who resolves a reference written through a `@receiver`.
@@ -179,6 +186,9 @@ pub enum Receivers {
     /// receiver that is an import's alias names the one member of that name the import's files
     /// expose: the members of their `@export.root` (`return M`), or with no root their unowned
     /// top-level definitions. A receiver a local binding shadows is a value, and stays missing.
+    /// Where the directory is the module (`Visibility::Directory`), a member a sibling declares is
+    /// the module's own too. An import with no alias is named by the namespace its files declare,
+    /// as Go's package clause names an import.
     Imports,
 }
 
@@ -621,6 +631,26 @@ mod table {
         dotted_dirs: false,
         hooks: NONE,
     };
+    pub(super) const GO: Spec = Spec {
+        queries: crate::code::queries::sources::GO,
+        view: None,
+        comments: C,
+        body: PROSE,
+        label: Label::Qualified,
+        export: Export::Capitalized,
+        // A package is a directory: every file of it sees every other's names, exported or not.
+        visibility: Visibility::Directory,
+        // Build-tagged files (`x_linux.go`, `x_windows.go`) declare one name once each, and a call
+        // reaches whichever the build picks. A variant that declares the name itself only ever
+        // builds with its own.
+        ambiguity: Ambiguity::OwnFirst,
+        cross_file: true,
+        // A test file is no part of the package another package imports.
+        imports: ImportPaths::ModulePrefix { manifest: "go.mod", directive: "module", skip: &["_test.go"] },
+        receivers: Receivers::Imports,
+        dotted_dirs: false,
+        hooks: NONE,
+    };
 }
 
 pub(crate) fn spec(lang: Lang) -> &'static Spec {
@@ -642,6 +672,7 @@ pub(crate) fn spec(lang: Lang) -> &'static Spec {
         Lang::Terraform => &table::TERRAFORM,
         Lang::Shell => &table::SHELL,
         Lang::Lua => &table::LUA,
+        Lang::Go => &table::GO,
     }
 }
 

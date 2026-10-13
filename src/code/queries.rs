@@ -262,6 +262,9 @@ pub(crate) mod sources {
     pub(crate) const GRAPHQL: Sources =
         Sources { decl: &[include_str!("queries/graphql/decl.scm")], refs: &[include_str!("queries/graphql/refs.scm")] };
 
+    pub(crate) const GO: Sources =
+        Sources { decl: &[include_str!("queries/go/decl.scm")], refs: &[include_str!("queries/go/refs.scm")] };
+
     pub(crate) const HCL: Sources =
         Sources { decl: &[include_str!("queries/hcl/decl.scm")], refs: &[include_str!("queries/hcl/refs.scm")] };
 

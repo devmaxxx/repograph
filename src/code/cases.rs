@@ -4,6 +4,7 @@
 mod bicep;
 mod csharp;
 mod dart;
+mod go;
 mod graphql;
 mod hcl;
 mod java;
@@ -271,7 +272,7 @@ fn the_typescript_family_is_read_by_its_two_grammars_and_an_unknown_extension_by
     for rel in ["ui/App.tsx", "ui/App.jsx"] {
         assert_eq!(Lang::of(rel), Some(Lang::Tsx), "{rel}");
     }
-    for rel in ["Makefile", "docs/a.md", "ci.yaml", "main.go", "ts"] {
+    for rel in ["Makefile", "docs/a.md", "ci.yaml", "ts"] {
         assert_eq!(Lang::of(rel), None, "{rel}");
     }
     assert_eq!((Lang::TypeScript.family(), Lang::Tsx.family()), (Family::TypeScript, Family::TypeScript));
@@ -399,7 +400,7 @@ fn a_name_either_table_knows_decides_whatever_the_shebang_says() {
     assert_eq!(detect("tools/x.py", Some("#!/bin/bash\n")), Some(Lang::Python));
     assert_eq!(detect("tools/x.sh", Some("#!/usr/bin/env python3\n")), Some(Lang::Shell));
     // ast-grep reads these as languages we leave as files, and that answer is final.
-    for rel in ["ci.yaml", "README.md", "main.go", "a.rb", "page.html"] {
+    for rel in ["ci.yaml", "README.md", "a.rb", "page.html"] {
         assert_eq!(detect(rel, Some("#!/bin/bash\n")), None, "{rel}");
     }
 }

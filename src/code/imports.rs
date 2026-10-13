@@ -28,7 +28,13 @@ pub struct Resolver {
     files: BTreeSet<String>,
     /// The declarations of each file another file has resolved into, read once per build.
     facts: Mutex<HashMap<String, Option<Arc<Facts>>>>,
+    /// The module a directory's nearest manifest names, with the manifest's directory, by the
+    /// manifest's file name and the directory: see `module_of`.
+    modules: Mutex<Modules>,
 }
+
+/// By manifest file name and directory: the nearest manifest's directory and the module it names.
+type Modules = HashMap<(&'static str, String), Option<(String, String)>>;
 
 #[derive(Deserialize, Default)]
 struct TsConfig {
@@ -262,6 +268,7 @@ impl Resolver {
             states: States::new(),
             files,
             facts: Mutex::default(),
+            modules: Mutex::default(),
         };
         // Manifests before sources: a path family's roots decide how its sources' paths read.
         for (lang, rel, path) in manifests.iter().filter(|(l, _, _)| reached.contains(&l.family())) {
@@ -321,6 +328,31 @@ impl Resolver {
             .filter(|f| !f[prefix.len()..].contains('/') && Lang::of(f) == Some(lang))
             .cloned()
             .collect()
+    }
+
+    /// The directory of the `manifest` nearest at or above `dir`, and the word after `directive` on
+    /// its first line that starts with it: `go.mod`'s `module github.com/a/b`. The manifest is no
+    /// code file, so it is read from disk whether or not a glob reaches it, once per directory.
+    pub(crate) fn module_of(&self, dir: &str, manifest: &'static str, directive: &str) -> Option<(String, String)> {
+        let key = (manifest, dir.to_string());
+        if let Some(known) = self.modules.lock().unwrap_or_else(|e| e.into_inner()).get(&key) {
+            return known.clone();
+        }
+        let read = std::fs::read_to_string(self.repo.join(dir).join(manifest)).ok().map(|text| {
+            let value = text.lines().find_map(|line| {
+                let rest = line.trim().strip_prefix(directive)?;
+                let word = rest.split("//").next()?.trim();
+                (rest.starts_with(char::is_whitespace) && !word.is_empty()).then(|| word.trim_matches('"').to_string())
+            });
+            value.map(|v| (dir.to_string(), v))
+        });
+        let found = match read {
+            Some(found) => found,
+            None if dir.is_empty() => None,
+            None => self.module_of(dir.rsplit_once('/').map_or("", |(up, _)| up), manifest, directive),
+        };
+        self.modules.lock().unwrap_or_else(|e| e.into_inner()).insert(key, found.clone());
+        found
     }
 
     /// What a globbed file declares, by its language's queries; `None` for a file out of the globs,
