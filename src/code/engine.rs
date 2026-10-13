@@ -526,7 +526,10 @@ fn read_import(caps: &[(Role, Node)], meta: &Meta, src: &str) -> Option<Import> 
     // A path the grammar writes as several nodes, as Scala's `a.b.C` is, reads as the text they span.
     let parts: Vec<Node> = caps.iter().filter(|(r, _)| *r == Role::ImportPath).map(|(_, n)| *n).collect();
     let path = match parts.as_slice() {
-        [_, .., last] => src.get(parts[0].start_byte()..last.end_byte()).map(str::to_string),
+        // `import a.B, c.D` is one declaration, so the span runs on past the first path: it ends at the
+        // first comma, and a path broken across lines is joined.
+        [_, .., last] => src.get(parts[0].start_byte()..last.end_byte())
+            .map(|span| span.split(',').next().unwrap_or(span).chars().filter(|c| !c.is_whitespace()).collect()),
         _ => first(Role::ImportPath),
     };
     Some(Import {

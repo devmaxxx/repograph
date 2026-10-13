@@ -294,3 +294,28 @@ fn a_definition_with_an_indented_body_ends_on_its_last_line_not_the_next_ones() 
     assert_eq!(span("sym:os/src/Ord.scala::Ord.zero"), (7, 7));
     assert_eq!(span("sym:os/src/Ord.scala::Ord"), (3, 9));
 }
+
+#[test]
+fn an_import_of_several_paths_or_one_across_lines_reads_its_first_path() {
+    let files = [
+        ("a/Path.scala", "package os\n\nclass Path\nclass Rel\n"),
+        ("b/Imp.scala", "package other\n\nimport os.Path, os.Rel\n\nobject Imp { def f(p: Path): Unit = () }\n"),
+        ("b/Imp4.scala", "package other\n\nimport os.\n  Path\n\nobject Imp4 { def f(p: Path): Unit = () }\n"),
+    ];
+    for rel in ["b/Imp.scala", "b/Imp4.scala"] {
+        let ex = extract(&files, rel);
+        assert_eq!(lines(&ex, EdgeKind::Imports), [format!("file:{rel} -> file:a/Path.scala [*]")], "{rel}");
+        assert_eq!(lines(&ex, EdgeKind::References).len(), 1, "{rel}");
+    }
+}
+
+#[test]
+fn a_type_or_curried_parameter_hides_the_name_it_shares_with_a_declaration() {
+    let files = [
+        ("a/Path.scala", "package os\n\nclass Rel\nobject list { def map(): Int = 1 }\n"),
+        ("a/Use.scala", "package os\n\nobject Use {\n  def f(a: Int)(list: List[Int]) = list.map(x => x)\n  def h[Rel](r: Rel): Rel = r\n}\nclass Cell[Rel](b: Rel)\n"),
+    ];
+    let ex = extract(&files, "a/Use.scala");
+    assert_eq!(lines(&ex, EdgeKind::Calls), Vec::<String>::new());
+    assert_eq!(lines(&ex, EdgeKind::References), Vec::<String>::new());
+}

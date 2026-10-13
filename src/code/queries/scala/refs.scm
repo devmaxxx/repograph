@@ -1,9 +1,18 @@
 ; A parameter binds in its function's body, a class parameter in the class's, and a lambda's, a case's
 ; and a `for`'s bindings in what they hold, a case's down to a pattern nested in its pattern. A `val`,
 ; a `var` or a `def` a block declares is local.
-(function_definition parameters: (parameters (parameter name: (identifier) @local.definition)) body: (_) @local.scope)
+; No field name on the lists: a curried `def f(a: A)(b: B)` writes `parameters` once per list, and a
+; field pattern matches only the first.
+(function_definition (parameters (parameter name: (identifier) @local.definition)) body: (_) @local.scope)
 
-(class_definition class_parameters: (class_parameters (class_parameter name: (identifier) @local.definition)) body: (template_body) @local.scope)
+(class_definition (class_parameters (class_parameter name: (identifier) @local.definition)) body: (template_body) @local.scope)
+
+; A type parameter binds across the whole definition, its signature included, and hides a type of its name.
+(function_definition (type_parameters (identifier) @local.definition)) @local.scope
+
+(class_definition type_parameters: (type_parameters (identifier) @local.definition)) @local.scope
+
+(trait_definition type_parameters: (type_parameters (identifier) @local.definition)) @local.scope
 
 (lambda_expression parameters: [
   (identifier) @local.definition
