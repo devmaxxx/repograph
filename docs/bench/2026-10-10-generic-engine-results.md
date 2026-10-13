@@ -898,3 +898,52 @@ New: `bin/repograph-step15`, built at `c9415d7`. Parent: `bin/repograph-step14b`
   - `cargo test --all-targets`: 1,413 passed, 0 failed;
   - `cargo clippy --all-targets -- -D warnings`: clean;
   - `cargo tree --duplicates --depth 0`: no tree-sitter crate.
+
+### Step 15 · review fix `03f3c21`
+
+New: `bin/repograph-step15r`, built at `03f3c21`. Parent: `bin/repograph-step15`. The fix reads a
+receiver by what the required file exposes (`@export.root`, or its unowned top-level definitions),
+resolves `M.f()` on the file's own table and `self` in a member (`#set! receiver "owner"`), and tells a
+`require` alias from a value by node type.
+
+- **Cases:** 11 in `src/code/cases/lua.rs`, 3 new, one per finding. Each fails on `a806536`.
+- **luarocks** (`--no-dense`, the defaults plus `**/*.lua`), `step15` against `step15r`:
+  - langdiff `--lang lua`: R1–R9 all 0, `lua Calls: +201`.
+  - Calls 1,283 → 1,484: 201 added, 0 removed. Every added edge stays inside one file, across 39
+    files: 132 through the file's own table (`dir.normalize`, `fetch.fetch_url`) and 69 through
+    `self`: 66 in `vendor/argparse.lua`'s classes and 3 in `upload/api.lua`.
+  - Declares 898, Imports 556 and References 0 are the same sets as step 15's.
+  - No edge was removed: every edge step 15 wrote through an alias names a member of the table its
+    target file returns. The false shapes the review found do not occur here; the cases pin them.
+  - The finding-3 shape occurs once, `local debmeta = require "debug".getmetatable` in
+    `vendor/dkjson.lua`, and `debug` is not a corpus file, so no edge moves.
+- **Hand read:**
+  - 50 of the 201 added Calls (seed 15): 50 right. Fifteen are `self:m()`, fourteen in
+    `argparse.lua` and one in `upload/api.lua`, each to the method its own class declares. Three
+    reach `os.remove`, which `spec/util/test_env.lua` reassigns at its top level, as it does
+    `os.tmpname`, `lfs.chdir` and `lfs.attributes`, the other such targets of the 201. Two come from the
+    file, because the calling function sits two blocks deep and is no symbol (`fs/lua.lua` line 1070,
+    `util.lua` line 494), as step 15 already counted for a call from a function value.
+  - Removed: none to read.
+  - 50 of all 1,484 Calls (seed 15): 50 right.
+- **P and R against step 15** (O = step 15's graph):
+
+  | kind | step 15 | review fix |
+  |---|---|---|
+  | Calls | 1,283, 50/50 | 1,484; P 1.000, R 1.000 (1,283 of 1,283) |
+  | Declares | 898, 50/50 | same set; P 1.000, R 1.000 |
+  | Imports | 556, 50/50 | same set; P 1.000, R 1.000 |
+  | References | 0 | 0 |
+
+- **Byte-identity:**
+  - Kit corpus, `step15` against `step15r` with the Lua globs, and `step15r` without them:
+    `graph.json` and `headers.json` identical.
+  - Scratchpad corpus, `store-14` against `step15r`, with and without the Lua globs: identical. All
+    four `graph.json` files hash `566f40d972ba1d21…`.
+- **Build time:** median of five, interleaved with step 0, at load 2.96 (`log/buildtime-step15r.txt`).
+  Step 0 ran 1.219 s and `step15r` 1.391 s, which is 1.140×. The kit holds no `.lua` file, so this
+  is noise around step 15's 1.117×. On luarocks itself, interleaved five times at load 4.0, `step15`
+  took 0.333 s and `step15r` 0.342 s.
+- **Gate:**
+  - `cargo test --all-targets`: 1,416 passed, 0 failed;
+  - `cargo clippy --all-targets -- -D warnings`: clean.

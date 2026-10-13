@@ -149,7 +149,8 @@ Queries live in `src/code/queries/<lang>/{definitions,references,imports,locals}
 | `@modifier` | a modifier or keyword token | text compared with `spec.export` |
 | `@doc` | a doc node | the doc part of the body when `body.doc` is `Capture` |
 | `@reference.<edge>` | a reference site | `<edge>` is `calls`, `references`, `extends`, `implements` or `decorated_by`; the edge context comes from `#set! context` |
-| `@receiver` | inside a reference | marks a member access; default resolution leaves it to a hook |
+| `@receiver` | inside a reference | marks a member access; default resolution leaves it to a hook, or reads it under `receivers: Imports` |
+| `@export.root` | a name the file hands its importers | what a receiver naming the import reaches: the members of this name (Lua `return M`), or with no root the file's unowned top-level definitions |
 | `@import` with `@import.path`, `@import.name`, `@import.alias` | an import site | `#set! reexport` makes it a ReExports edge |
 | `@local.scope`, `@local.definition` | | shadowing, in the nvim locals convention |
 | `@cite.comment`, `@cite.string` | comment and string nodes | text scanned with `ids::generic().find_all`, written as References `comment` / `string` |
@@ -171,6 +172,7 @@ A function nested in a function is qualified by its nearest container, if it has
 - `reexport` marks an import as a re-export.
 - `within` names a node kind the match must sit inside, at any depth. The engine drops a match whose outermost capture has no such ancestor, and refuses at compile a pattern that captures nothing, or that may match with no capture while it sets `within`. A construct that nests what it reads at any depth, such as a view's relations, needs it, because a pattern can only spell depth as one alternative per level. Step 7 adds it, before the Dart port.
 - `visibility` overrides `spec.visibility` for one reference pattern. Step 19 adds it (§6.2).
+- `receiver` is `owner`: the pattern's `@receiver` stands for the owner of the definition holding the site, as Lua's `self` inside `function M:g()` stands for `M`. The step 15 review fix adds it.
 
 Contexts form a closed list, which is the list in use today: `""`, `export`, `arg`, `get`, `*`, `comment`, `string`, `alter`, `impl`, `extend`, `on`, `type`, `variable`, `argument`, `member`.
 
@@ -1804,11 +1806,21 @@ No new definition kind is needed:
   A `local` whose value is a `require` is not a local binding, so its alias reaches the receiver rule. A `local x` with no value binds nothing: tests declare their modules that way and assign them in setup.
 - **Engine additions:**
   - `ImportPaths` becomes an enum. The old struct is `Relative { root, suffixes }`, and every existing row was rewritten to it. `Dotted { roots, suffixes }` takes the first globbed file under the first root and suffix that names one, and never reads the importer's directory.
-  - `Receivers { Hook, Imports }`. Every existing row is `Hook`, and `resolve` checks the hook's `owns` before the receiver, then locals, so `Hook` reads as before. Under `Imports`, the receiver must be an import's alias that no binding around the call shadows. The member resolves only when exactly one exported definition in the imported files has it as its last name part. The plan's other half, a declared module's qualified name as a receiver, has no user in Lua and is not built.
+  - `Receivers { Hook, Imports }`. Every existing row is `Hook`, and `resolve` checks the hook's `owns` before the receiver, then locals, so `Hook` reads as before. Under `Imports`, as the review fix below left it, `receiver.name` resolves in two places, in order:
+    - **the own file:** a receiver the file declares members of names its `receiver.name` (or `receiver/name`). A binding around the call that is not also around the member is another value and shadows it: a parameter named `M` does, the file's `local M = {}` does not. This is the plan's other half, a declared module's qualified name as a receiver, which the first build left out.
+    - **an import's alias** that no binding around the call shadows: the member resolves only when exactly one definition the alias's files expose has that name. A file exposes the members of its `@export.root` (`return M` exposes `M.f` as `f`, never `M.sub.f` or another table's `H.f`), or, with no root, its unowned top-level definitions. The second shape is Go's package-level rule.
   - `Ambiguity::OwnThenUnique` as the plan states it.
 - **Citations:** `@cite.comment` and `@cite.string` are on. Five citations in luarocks (`UTF-8`, `UTF-16` twice, `CWORD-1`, `A-Z0-9`) name ids nothing declares, so they wait as pending, and the pending count is the one store class that moves (R8).
 - **Shebang:** `lua` and `lua5.4` read as Lua, and `luajit` does not. `python3.11`'s rule became a shared `versioned` helper.
 - **Edited tests, construction only:** `lang.rs`'s `all_lists_every_language_once` gains the Lua slot, because its match is exhaustive. `tests/engine.rs` builds `ImportPaths::Relative` and `receivers: Receivers::Hook` where it built the struct. No assertion changed.
+- **Review fix** (`03f3c21`). A review found three wrong readings, each confirmed by a probe, and one cost:
+  - **The member was matched by its last name part.** With `local m = require("x")`, `m.deep()` bound to `X.sub.deep`, and `m.parse()` to a helper table `H.parse` that `x.lua` never returns, or to a global `parse`. The rule above replaces it, and §6.2's "member lookup through a receiver matches the member's last name part" no longer holds.
+  - **`M.f()` on the file's own table never resolved,** nor did `self:f()` inside `function M:g()`, though it is Lua's most common call. The own-file rule above reads the first. For the second, `#set! receiver "owner"` on a reference pattern makes its `@receiver` the owner of the definition holding the site, so `self` in `M.g` reads `M`. Outside a member, `self` stays as written and resolves to nothing.
+  - **`refs.scm` told an import's alias by a text prefix.** `#not-match? @_value "^require…"` left `local cfg = require("x").settings` and `local m = require("x") or {}` neither a local nor an import, so a bare `cfg()` could bind to an unrelated global. The `local` pattern now lists the value's node types, and a call value is a local unless its callee is `require`.
+  - **Cost:** the receiver rule rebuilt the alias's file set and scanned every definition of each target per reference. `Receiving` now builds the own file's `(receiver, member)` map and each alias's `member → ids` map once per file, at its first reference with a receiver.
+  - **What Go reuses:** the no-root rule gives `pkg.F` the package's unowned top-level definitions with no query change; `Export::Capitalized` (step 16) hides the rest. A method's receiver variable (`func (s *T) M()`) can use `#set! receiver "owner"` where a pattern can tie the call's operand to the receiver parameter with `#eq? @receiver @_param`, at the depth that pattern spells.
+  - **Still missing:** a module that returns its table any other way (`return setmetatable(M, …)`, `return { … }`) exposes only its top-level definitions; `return require(…)` hands nothing on; a `require` inside a larger expression imports nothing; and `local m = require(name)` with a computed name is neither a local nor an import.
+  - **Two new engine words:** the `@export.root` capture and the `receiver` property key (§2.2). Every existing language is byte-identical on the kit and scratchpad corpora.
 
 **Step 16 · Go.** M. Query ~90, cases ~250, engine ~150 (`Capitalized`, `ModulePrefix`, directory targets).
 
