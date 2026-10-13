@@ -63,6 +63,14 @@
 ; A type parameter binds in its function, and a generic type's in the type alone.
 (function_declaration type_parameters: (type_parameter_list (type_parameter_declaration name: (identifier) @local.definition)))
 
+; A generic receiver's type parameters, `func (b *Box[T]) Get() T`, bind in the whole method.
+(method_declaration
+  receiver: (parameter_list
+    (parameter_declaration type: [
+      (generic_type type_arguments: (type_arguments (type_elem (type_identifier) @local.definition)))
+      (pointer_type (generic_type type_arguments: (type_arguments (type_elem (type_identifier) @local.definition))))
+    ])))
+
 ((type_spec type_parameters: (type_parameter_list (type_parameter_declaration name: (identifier) @local.definition))) @local.scope)
 
 ((type_alias type_parameters: (type_parameter_list (type_parameter_declaration name: (identifier) @local.definition))) @local.scope)

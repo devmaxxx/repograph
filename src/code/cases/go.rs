@@ -288,3 +288,31 @@ fn a_go_file_is_read_by_its_extension() {
     assert_eq!(Lang::of("cmd/main.go"), Some(Lang::Go));
     assert_eq!(Lang::Go.family(), Family::Go);
 }
+
+#[test]
+fn a_generic_receiver_s_type_parameter_is_no_package_type() {
+    let files = [
+        ("go.mod", MOD),
+        ("a.go", "package shop\n\ntype T struct{}\n\ntype Box[T any] struct{ v T }\n\nfunc (b *Box[T]) Get() T { var z T; return z }\n\nfunc (b Box[T]) Put(v T) {}\n"),
+    ];
+    assert_eq!(lines(&extract(&files, "a.go"), EdgeKind::References), [
+        "sym:a.go::Box.Get -> sym:a.go::Box [type]",
+        "sym:a.go::Box.Put -> sym:a.go::Box [type]",
+    ]);
+}
+
+#[test]
+fn an_import_without_a_name_is_named_by_the_package_most_of_its_files_declare_and_a_raw_path_is_read() {
+    let files = [
+        ("go.mod", MOD),
+        ("a.go", "package shop\n\nimport (\n\t\"example.com/shop/render/v2\"\n\tr `example.com/shop/render`\n)\n\nfunc f() { render.JSON(1); r.JSON(2) }\n"),
+        ("render/v2/a_gen.go", "//go:build ignore\n\npackage main\n\nfunc main() {}\n"),
+        ("render/v2/render.go", RENDER),
+        ("render/v2/text.go", "package render\n\nfunc Text() {}\n"),
+        ("render/render.go", RENDER),
+    ];
+    assert_eq!(lines(&extract(&files, "a.go"), EdgeKind::Calls), [
+        "sym:a.go::f -> sym:render/render.go::JSON []",
+        "sym:a.go::f -> sym:render/v2/render.go::JSON []",
+    ]);
+}

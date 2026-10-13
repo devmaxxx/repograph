@@ -870,6 +870,8 @@ fn dotted(resolver: &Resolver, rel: &str, path: &str, roots: &[&str], suffixes: 
 fn under_module(resolver: &Resolver, rel: &str, path: &str, manifest: &'static str, directive: &str, skip: &[&str]) -> Vec<String> {
     let dir = rel.rsplit_once('/').map_or("", |(d, _)| d);
     let Some((base, module)) = resolver.module_of(dir, manifest, directive) else { return Vec::new() };
+    // `import_path` unquotes the two quotes Go shares with other languages, not a raw string's backticks.
+    let path = path.trim_matches('`');
     let Some(sub) = path.strip_prefix(module.as_str()).filter(|sub| sub.is_empty() || sub.starts_with('/')) else { return Vec::new() };
     let target = crate::code::prose::join_under(&base, sub.trim_start_matches('/'));
     let Some((target, lang)) = target.zip(Lang::of(rel)) else { return Vec::new() };
@@ -995,6 +997,19 @@ pub fn resolve(resolver: &Resolver, spec: &Spec, file: &File, facts: &Facts, ex:
     }
 }
 
+/// The name most of `files` declare themselves under. A directory can hold a file of another package,
+/// as a `//go:build ignore` generator in `package main` is, and that file sorting first names nothing.
+fn package_name(resolver: &Resolver, files: &[String]) -> Option<String> {
+    let mut counts: Vec<(String, usize)> = Vec::new();
+    for name in files.iter().filter_map(|f| resolver.facts(f)?.namespaces.first().cloned()) {
+        match counts.iter_mut().find(|(n, _)| *n == name) {
+            Some((_, count)) => *count += 1,
+            None => counts.push((name, 1)),
+        }
+    }
+    counts.into_iter().rev().max_by_key(|(_, count)| *count).map(|(name, _)| name)
+}
+
 /// The members each import alias exposes, with every definition of each.
 type Imported = HashMap<String, HashMap<String, BTreeSet<String>>>;
 
@@ -1019,7 +1034,7 @@ impl<'f> Receiving<'f> {
             let targets = i.targets(resolver, spec, rel);
             // An import with no alias is named by what its files call themselves: Go's
             // `import "a/render"` binds `render` by `package render`.
-            let named = || targets.iter().find_map(|f| resolver.facts(f)?.namespaces.first().cloned());
+            let named = || package_name(resolver, targets);
             if let Some(alias) = i.alias.clone().or_else(named) {
                 files.entry(alias).or_default().extend(targets.iter().map(String::as_str));
             }
