@@ -9,7 +9,7 @@ is pyke's DirectML build, which imports DirectML and DirectX 12 at load; those l
 from 1903 on, and an older system fails at load rather than at a query. No GPU is used: no execution
 provider is registered, so inference runs on the CPU — a GPU-less runner builds a store with
 vectors and answers a fused question through a resident `serve`
-([run](https://github.com/devmaxxx/repograph/actions/runs/34064881516)).
+([run](https://github.com/devmaxxx/zerograph/actions/runs/34064881516)).
 
 The binary is not signed. A zip fetched with a browser carries the mark of the web, Explorer's
 "Extract All" passes it to the exe, and double-clicking such a copy shows SmartScreen; running it
