@@ -25,18 +25,38 @@ pub const DEFAULT_MODEL: &str = "onnx-community/embeddinggemma-300m-ONNX";
 /// store is today's default, and re-embed it whole to find out otherwise.
 pub const UNNAMED_MODEL: &str = "intfloat/multilingual-e5-small";
 
-/// The model a command opens: `REPOGRAPH_EMBED_MODEL` when set — a measurement's switch that
-/// outranks both files — else what the store's vectors were written with, else the configured
-/// one. A reader passes the recorded model so a store answers with what wrote it; a writer
-/// passes `None` and takes the configuration, and `DenseIndex::written_by` drops rows another
-/// model wrote before the sync.
-pub fn resolve(recorded: Option<&str>, configured: &str) -> String {
-    resolve_from(std::env::var("REPOGRAPH_EMBED_MODEL").ok().as_deref(), recorded, configured)
+/// The model a writer opens: `REPOGRAPH_EMBED_MODEL` when set — a measurement's switch that
+/// outranks the file — else the configured one. `DenseIndex::written_by` drops rows another model
+/// wrote before the sync.
+pub fn writer_model(configured: &str) -> String {
+    named(std::env::var("REPOGRAPH_EMBED_MODEL").ok().as_deref()).unwrap_or(configured).to_string()
 }
 
-fn resolve_from(override_: Option<&str>, recorded: Option<&str>, configured: &str) -> String {
-    let named = |m: Option<&str>| m.map(str::trim).filter(|m| !m.is_empty()).map(str::to_string);
-    named(override_).or_else(|| named(recorded)).unwrap_or_else(|| configured.to_string())
+/// The model a reader opens: the override when set, else what the store's vectors were written
+/// with, so a store answers with what wrote it, else the configured one.
+///
+/// The recorded model is read out of `.repograph/vectors.json`, which a cloned repository can
+/// commit, so it passes the same trust gate as a model `repograph.toml` names: otherwise a clone
+/// would choose the model this machine downloads and parses, the gate's whole exposure. A model
+/// turned away is `Err` with the notice, and the reader goes lexical-only: opening the configured
+/// model instead would search the store's rows with another model's queries, and a refreshing
+/// reader would re-embed the whole store under it.
+pub fn reader_model(recorded: Option<&str>, configured: &str) -> Result<String, String> {
+    resolve_from(std::env::var("REPOGRAPH_EMBED_MODEL").ok().as_deref(), recorded, configured, crate::config::model_is_trusted)
+}
+
+fn named(m: Option<&str>) -> Option<&str> { m.map(str::trim).filter(|m| !m.is_empty()) }
+
+fn resolve_from(override_: Option<&str>, recorded: Option<&str>, configured: &str, trusted: impl Fn(&str) -> bool) -> Result<String, String> {
+    // The override is this machine's own word and outranks the store's, so the store's name is
+    // never weighed against the trust list when it is set.
+    if let Some(m) = named(override_) { return Ok(m.to_string()); }
+    match named(recorded) {
+        Some(m) if trusted(m) => Ok(m.to_string()),
+        // The name is the store's text: echoed escaped, and offered as a command only when it is a token.
+        Some(m) => Err(format!("dense: the store's vectors name {m:?}, a model this machine has not trusted; continuing lexical-only — {}", crate::config::trust_hint(m))),
+        None => Ok(configured.to_string()),
+    }
 }
 
 /// Whether the store should be moved to the model `repograph.toml` names: only a model the
@@ -731,10 +751,34 @@ mod tests {
 
     #[test]
     fn the_override_outranks_the_store_which_outranks_the_config() {
-        assert_eq!(resolve_from(Some(" x/y "), Some("a/b"), "c/d"), "x/y");
-        assert_eq!(resolve_from(Some(""), Some("a/b"), "c/d"), "a/b");
-        assert_eq!(resolve_from(None, None, "c/d"), "c/d");
-        assert_eq!(resolve_from(None, Some("  "), "c/d"), "c/d");
+        let any = |_: &str| true;
+        assert_eq!(resolve_from(Some(" x/y "), Some("a/b"), "c/d", any).unwrap(), "x/y");
+        assert_eq!(resolve_from(Some(""), Some("a/b"), "c/d", any).unwrap(), "a/b");
+        assert_eq!(resolve_from(None, None, "c/d", any).unwrap(), "c/d");
+        assert_eq!(resolve_from(None, Some("  "), "c/d", any).unwrap(), "c/d");
+    }
+
+    #[test]
+    fn a_store_cannot_name_a_model_this_machine_has_not_trusted() {
+        let trusted = |m: &str| m == "a/b";
+        let notice = resolve_from(None, Some("evil/model"), "c/d", trusted).expect_err("no model is opened for it");
+        assert!(notice.contains("\"evil/model\"") && notice.contains("lexical-only") && notice.contains("`repograph model evil/model`"), "{notice}");
+        assert_eq!(resolve_from(None, Some("a/b"), "c/d", trusted), Ok("a/b".to_string()));
+    }
+
+    #[test]
+    fn the_override_is_this_machines_own_so_the_stores_name_is_never_weighed_against_it() {
+        let weighed = std::cell::Cell::new(false);
+        let spy = |_: &str| { weighed.set(true); false };
+        assert_eq!(resolve_from(Some("evil/model"), Some("evil/model"), "c/d", spy), Ok("evil/model".to_string()));
+        assert!(!weighed.get(), "a notice that the store's model was turned away would be false: the override won");
+    }
+
+    #[test]
+    fn a_name_a_clone_wrote_is_echoed_escaped_and_never_offered_as_a_command() {
+        let notice = resolve_from(None, Some("x\n`repograph model y; rm -rf ~`\u{1b}[31m"), "c/d", |_| false).unwrap_err();
+        assert!(!notice.contains(['\n', '\u{1b}']), "{notice:?}");
+        assert!(notice.contains("not a plain hub id") && !notice.contains("trusts it"), "{notice}");
     }
 
     #[test]

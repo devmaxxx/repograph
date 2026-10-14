@@ -304,11 +304,11 @@ pub(crate) fn apply_diff(repo: &std::path::Path, store: &store::Store, graph: &m
             // NUL is legal inside a TypeScript string literal; only invalid UTF-8 marks a binary.
             Ok(b) => match String::from_utf8(b) {
                 Ok(s) => s,
-                Err(_) => { eprintln!("{}", terminal_safe(&format!("skipping {}: not UTF-8", e.rel))); continue; }
+                Err(_) => { eprintln!("{}", log_line(&format!("skipping {}: not UTF-8", e.rel))); continue; }
             },
             // Not the arm above: a binary yields nothing however often it is read, where a file
             // that would not open is one this pass has no reading of at all.
-            Err(err) => { eprintln!("{}", terminal_safe(&format!("read {}: {err}", e.rel))); unread = true; continue; }
+            Err(err) => { eprintln!("{}", log_line(&format!("read {}: {err}", e.rel))); unread = true; continue; }
         };
         let extractor = match e.kind {
             walk::FileKind::Doc => &ex.doc,
@@ -522,7 +522,7 @@ impl<'a> Watcher<'a> {
 /// Keeps the store in step with the tree for readers that do not refresh themselves.
 fn run_watch(repo: &std::path::Path, cfg: &config::Config, every: u64, batch: usize, no_dense: bool) -> anyhow::Result<()> {
     let mut w = Watcher::open(repo, cfg)?;
-    let model = index::embed::resolve(None, &cfg.embed_model);
+    let model = index::embed::writer_model(&cfg.embed_model);
     let threads = index::embed::threads(cfg.resources);
     let verbose = ask::timing_on();
     eprintln!("watch: {} every {every}s, batch {batch}; Ctrl-C to stop", repo.display());
@@ -590,7 +590,7 @@ pub(crate) fn cap_pools(threads: usize) {
 const SYNC_CHUNK: index::dense::ChunkBudget = index::dense::ChunkBudget { chars: 600_000, max_rows: 1024, ramp: 16 };
 
 fn embed_all(repo: &std::path::Path, no_dense: bool, cfg: &config::Config) -> anyhow::Result<()> {
-    let model = index::embed::resolve(None, &cfg.embed_model);
+    let model = index::embed::writer_model(&cfg.embed_model);
     let open = std::time::Instant::now();
     let Some(mut emb) = ask::open_embedder(no_dense, &model, index::embed::threads(cfg.resources), index::embed::Weights::Mapped) else { return Ok(()) };
     // The probe belongs to opening: a session with its weights loaded still has to run one forward
@@ -654,6 +654,9 @@ impl Meter {
 fn model_report(repo: &std::path::Path, cfg: &config::Config) -> anyhow::Result<String> {
     let store = store::Store::new(repo);
     let recorded = index::dense::DenseIndex::recorded_model(&store)?;
+    // A store whose model this machine has not trusted is read lexical-only (`embed::reader_model`).
+    let untrusted = recorded.as_deref().filter(|m| !config::model_is_trusted(m));
+    let opened = recorded.as_deref().filter(|_| untrusted.is_none()).unwrap_or(&cfg.embed_model);
     let mut out = String::new();
     let mut say = |key: &str, value: String| out.push_str(&format!("{key:<12}{value}\n"));
     match &recorded {
@@ -665,14 +668,16 @@ fn model_report(repo: &std::path::Path, cfg: &config::Config) -> anyhow::Result<
     if let Some(o) = std::env::var("REPOGRAPH_EMBED_MODEL").ok().filter(|v| !v.trim().is_empty()) {
         say("this run", format!("{o} (REPOGRAPH_EMBED_MODEL)"));
     }
-    if recorded.as_deref().is_some_and(|m| m != cfg.embed_model) {
+    if let Some(m) = untrusted {
+        out.push_str(&format!("\nThe store names a model this machine has not trusted, so readers answer lexical-only\nuntil it is trusted or the store is re-embedded with {} — {}.\n", cfg.embed_model, config::trust_hint(m)));
+    } else if recorded.as_deref().is_some_and(|m| m != cfg.embed_model) {
         out.push_str("\nThe two disagree. The store keeps answering with the model that wrote it; the\n\
             configured one takes effect at the next `build`, `update`, `embed` or\n\
             `watch` (an `ask` starts one when repograph.toml names the model), which drops\n\
             every row the other model wrote and rewrites the index whole.\n");
     }
     out.push('\n');
-    out.push_str(&index::embed::catalogue(recorded.as_deref().or(Some(&cfg.embed_model))));
+    out.push_str(&index::embed::catalogue(Some(opened)));
     out.push_str("\n`repograph model <hub id>` downloads one, writes the key and re-embeds.\n");
     Ok(out)
 }
@@ -835,6 +840,11 @@ pub(crate) fn terminal_safe(text: &str) -> std::borrow::Cow<'_, str> {
     if !text.contains(bad) { return std::borrow::Cow::Borrowed(text); }
     std::borrow::Cow::Owned(text.chars().filter(|c| !bad(*c)).collect())
 }
+
+/// `terminal_safe` for one line of stderr, which a detached refresh appends to
+/// `.repograph/background.log` and `progress` reads back a line at a time: a newline kept from a
+/// file name or a parse error would start a line of its own, taken for a record the refresh wrote.
+pub(crate) fn log_line(text: &str) -> String { terminal_safe(text).replace('\n', "\\n") }
 
 /// Where every answer built from a repository's text reaches stdout, so that none skips
 /// `terminal_safe`.
@@ -1169,6 +1179,13 @@ mod tests {
     }
 
     #[test]
+    fn a_name_cannot_start_a_line_of_the_log_it_is_printed_into() {
+        let line = log_line("skipping a\nembedded 40 of 40 (forged)\u{1b}[2J.md: not UTF-8");
+        assert_eq!(line, "skipping a\\nembedded 40 of 40 (forged)[2J.md: not UTF-8");
+        assert!(!line.contains('\n'));
+    }
+
+    #[test]
     fn cap_pools_tolerates_a_pool_already_built() {
         cap_pools(2);
         cap_pools(2);
@@ -1203,6 +1220,21 @@ mod tests {
         assert!(split.contains(index::embed::DEFAULT_MODEL), "the store's own model: {split}");
         assert!(split.contains(&format!("{} ({})", index::embed::RECOMMENDED, config::PROJECT_FILE)), "{split}");
         assert!(split.contains("The two disagree"), "{split}");
+    }
+
+    #[test]
+    fn the_report_does_not_say_a_store_answers_with_a_model_this_machine_has_not_trusted() {
+        let dir = doc_repo(ONE);
+        let repo = dir.path();
+        let store = store::Store::new(repo);
+        let mut dense = index::dense::DenseIndex::load(&store).unwrap();
+        dense.written_by("a-clone/chose-this", 384);
+        dense.save(&store).unwrap();
+        let report = model_report(repo, &config::Config::default()).unwrap();
+        assert!(report.contains("a-clone/chose-this"), "the store's own name is still shown: {report}");
+        assert!(report.contains("has not trusted"), "{report}");
+        assert!(report.contains("`repograph model a-clone/chose-this` trusts it"), "{report}");
+        assert!(!report.contains("keeps answering"), "{report}");
     }
 
     #[test]

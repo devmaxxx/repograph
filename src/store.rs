@@ -71,6 +71,30 @@ pub(crate) fn rename_over(from: &Path, to: &Path) -> std::io::Result<()> {
     }
 }
 
+fn is_link(p: &Path) -> bool { std::fs::symlink_metadata(p).is_ok_and(|m| m.file_type().is_symlink()) }
+
+/// Opens a store file, never through a symlink. A cloned repository controls every entry under
+/// `.repograph/`, so a committed link there would carry this process's write — a log line, a
+/// vector row, a truncation — to a file outside the repository. The check names the refusal; the
+/// open flag closes the gap between the check and the open.
+pub(crate) fn open_unlinked(o: &mut std::fs::OpenOptions, p: &Path) -> std::io::Result<std::fs::File> {
+    if is_link(p) { return Err(std::io::Error::other("refusing to write through a symlink")); }
+    open_nofollow(o, p)
+}
+
+/// Apart from the check so that the flag can be tested on its own: with the check in front, a
+/// planted link never reaches it.
+fn open_nofollow(o: &mut std::fs::OpenOptions, p: &Path) -> std::io::Result<std::fs::File> {
+    #[cfg(unix)]
+    { use std::os::unix::fs::OpenOptionsExt; o.custom_flags(libc::O_NOFOLLOW); }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        o.custom_flags(windows_sys::Win32::Storage::FileSystem::FILE_FLAG_OPEN_REPARSE_POINT);
+    }
+    o.open(p)
+}
+
 impl Store {
     pub fn new(repo: &Path) -> Store { Store { dir: repo.join(".repograph") } }
 
@@ -119,12 +143,40 @@ impl Store {
         self.write_atomic(&mirror_name(json), &bytes)
     }
 
+    /// Whether the store or its lock is a link, which every writer refuses: a reader that finds the
+    /// lock refused for this reason writes nothing, where a read-only checkout writes unlocked.
+    pub(crate) fn has_link(&self) -> bool { is_link(&self.dir) || is_link(&self.dir.join("writer.lock")) }
+
+    /// A `.repograph` that is itself a link is refused for the same reason a link inside it is:
+    /// every write and every unlink under it would land wherever the clone pointed it. For a
+    /// process that touches the directory without going through `ensure_dir` first.
+    pub(crate) fn refuse_linked_dir(&self) -> Result<()> {
+        if is_link(&self.dir) {
+            anyhow::bail!("{} is a symlink; refusing to write through it — remove it and run again", self.dir.display());
+        }
+        Ok(())
+    }
+
     /// The store holds passages of the repository's documents and code, so it carries its own `.gitignore`: a `git add -A` in a repository that
     /// never listed `.repograph/` would otherwise commit it.
     pub(crate) fn ensure_dir(&self) -> Result<()> {
+        self.refuse_linked_dir()?;
         std::fs::create_dir_all(&self.dir)?;
         let ignore = self.dir.join(".gitignore");
-        if !ignore.exists() { std::fs::write(&ignore, "*\n")?; }
+        match open_unlinked(std::fs::OpenOptions::new().write(true).create_new(true), &ignore) {
+            Ok(mut f) => {
+                use std::io::Write;
+                // An empty file left by a failed write would read as present from then on, and
+                // nothing would ever fill it in.
+                if let Err(e) = f.write_all(b"*\n") {
+                    drop(f);
+                    let _ = std::fs::remove_file(&ignore);
+                    return Err(e).with_context(|| format!("write {}", ignore.display()));
+                }
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
+            Err(e) => return Err(e).with_context(|| format!("write {}", ignore.display())),
+        }
         Ok(())
     }
 
@@ -154,18 +206,40 @@ impl Store {
     fn write_atomic_stamped(&self, name: &str, bytes: &[u8]) -> Result<Option<std::fs::Metadata>> {
         static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         self.ensure_dir()?;
-        // One name per writer: readers that refresh at once each write a whole graph, and a
-        // shared name let one rename away, or truncate, the file another was still writing.
-        let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        let tmp = self.dir.join(format!("{name}.{}.{n}.tmp", std::process::id()));
-        let written = std::fs::write(&tmp, bytes).with_context(|| format!("write {}", tmp.display()))
+        let (tmp, mut f) = self.create_tmp(name, &NEXT)?;
+        let written = { use std::io::Write; f.write_all(bytes) }
+            .with_context(|| format!("write {}", tmp.display()))
             .and_then(|()| {
+                // Closed before the stamp: a platform that settles a file's mtime on close would
+                // otherwise stamp bytes the rename then carries under another one.
+                drop(f);
                 let stamp = std::fs::metadata(&tmp).ok();
                 rename_over(&tmp, &self.dir.join(name)).with_context(|| format!("rename {name}"))?;
                 Ok(stamp)
             });
+        // Only a file this call created: a name that was taken is skipped in `create_tmp`.
         if written.is_err() { let _ = std::fs::remove_file(&tmp); }
         written
+    }
+
+    /// A new temporary file beside `name`, with one name per writer: readers that refresh at once
+    /// each write a whole graph, and a shared name let one rename away, or truncate, the file
+    /// another was still writing. A name already taken — by what a killed run left under a
+    /// recycled pid, or by an entry a clone committed in advance — is skipped, never written
+    /// through and never removed: it is not this call's file.
+    fn create_tmp(&self, name: &str, next: &std::sync::atomic::AtomicU64) -> Result<(PathBuf, std::fs::File)> {
+        let mut create = std::fs::OpenOptions::new();
+        create.write(true).create_new(true);
+        for _ in 0..TMP_TRIES {
+            let n = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            let tmp = self.dir.join(format!("{name}.{}.{n}.tmp", std::process::id()));
+            match open_unlinked(&mut create, &tmp) {
+                Ok(f) => return Ok((tmp, f)),
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists || is_link(&tmp) => continue,
+                Err(e) => return Err(e).with_context(|| format!("write {}", tmp.display())),
+            }
+        }
+        anyhow::bail!("write {}: {TMP_TRIES} temporary names in a row are taken", self.dir.join(name).display())
     }
 
     /// Extends a store file whose first `keep` bytes the caller still stands behind, dropping
@@ -176,7 +250,7 @@ impl Store {
         use std::io::{Seek, SeekFrom, Write};
         self.ensure_dir()?;
         let p = self.dir.join(name);
-        let mut f = std::fs::OpenOptions::new().write(true).create(true).truncate(false).open(&p)
+        let mut f = open_unlinked(std::fs::OpenOptions::new().write(true).create(true).truncate(false), &p)
             .with_context(|| format!("open {}", p.display()))?;
         f.set_len(keep).with_context(|| format!("truncate {}", p.display()))?;
         f.seek(SeekFrom::Start(keep))?;
@@ -252,7 +326,7 @@ impl Store {
     fn lock_file(&self) -> Result<std::fs::File> {
         self.ensure_dir()?;
         let p = self.dir.join("writer.lock");
-        std::fs::OpenOptions::new().create(true).truncate(false).write(true).open(&p)
+        open_unlinked(std::fs::OpenOptions::new().create(true).truncate(false).write(true), &p)
             .with_context(|| format!("open {}", p.display()))
     }
 }
@@ -260,6 +334,11 @@ impl Store {
 /// Held for as long as this value lives. The operating system releases it with the handle, so a
 /// writer that is killed leaves no lock behind.
 pub struct WriterLock(#[allow(dead_code)] std::fs::File);
+
+/// How many temporary names a save tries before it gives up. A name is taken only by a leftover
+/// or an entry planted in advance, so the second try is the usual cost and a long run of them is
+/// no accident.
+const TMP_TRIES: u32 = 64;
 
 /// Far longer than any save takes: a temp file this old has no writer left.
 const LEFTOVER_AGE: std::time::Duration = std::time::Duration::from_secs(600);
@@ -575,6 +654,98 @@ mod tests {
         store.write_atomic("vectors.f32", b"keepGARBAGE").unwrap();
         store.append_after("vectors.f32", 4, b"more").unwrap();
         assert_eq!(store.read_bytes("vectors.f32").unwrap().as_deref(), Some(&b"keepmore"[..]));
+    }
+
+    // A cloned repository commits `.repograph/` whole, links included. Each write a reader or
+    // writer makes there must stay inside it: the file outside is left exactly as it was.
+    #[cfg(unix)]
+    #[test]
+    fn a_link_a_clone_committed_in_the_store_is_never_written_through() {
+        let d = tempfile::tempdir().unwrap();
+        let outside = d.path().join("outside");
+        std::fs::write(&outside, "victim\n").unwrap();
+        let repo = d.path().join("repo");
+        std::fs::create_dir_all(repo.join(".repograph")).unwrap();
+        let store = Store::new(&repo);
+        let plant = |name: &str, to: &Path| {
+            let link = repo.join(".repograph").join(name);
+            let _ = std::fs::remove_file(&link);
+            std::os::unix::fs::symlink(to, &link).unwrap();
+            link
+        };
+        let link = plant("vectors.f32", &outside);
+        assert!(store.append_after("vectors.f32", 0, b"rows").is_err());
+        std::fs::remove_file(link).unwrap();
+        let link = plant("writer.lock", &outside);
+        assert!(store.lock_writer().is_err());
+        std::fs::remove_file(link).unwrap();
+        // A dangling link reads as absent to `exists`, the case a plain write would have followed.
+        let unborn = d.path().join("unborn");
+        plant(".gitignore", &unborn);
+        assert!(store.ensure_dir().is_err());
+        assert!(!unborn.exists());
+        assert_eq!(std::fs::read_to_string(&outside).unwrap(), "victim\n");
+    }
+
+    // The check in front of the open refuses a planted link first, so the flag is held to its own
+    // test: it is what still stops a link that appears after the check.
+    #[cfg(unix)]
+    #[test]
+    fn the_open_itself_refuses_a_link_when_the_check_before_it_was_beaten() {
+        let d = tempfile::tempdir().unwrap();
+        let outside = d.path().join("outside");
+        std::fs::write(&outside, "victim\n").unwrap();
+        let link = d.path().join("link");
+        std::os::unix::fs::symlink(&outside, &link).unwrap();
+        assert!(open_nofollow(std::fs::OpenOptions::new().append(true), &link).is_err());
+        assert_eq!(std::fs::read_to_string(&outside).unwrap(), "victim\n");
+    }
+
+    // The counter is the test's own: the process-wide one is advanced by every other test that
+    // saves, so a name planted ahead of it would never be reached.
+    #[cfg(unix)]
+    #[test]
+    fn a_temporary_name_a_clone_or_a_killed_run_took_is_skipped_and_left_alone() {
+        let d = tempfile::tempdir().unwrap();
+        let outside = d.path().join("outside");
+        std::fs::write(&outside, "victim\n").unwrap();
+        let repo = d.path().join("repo");
+        let store = Store::new(&repo);
+        store.ensure_dir().unwrap();
+        let tmp = |n: u32| repo.join(".repograph").join(format!("graph.json.{}.{n}.tmp", std::process::id()));
+        std::os::unix::fs::symlink(&outside, tmp(0)).unwrap();
+        std::fs::write(tmp(1), "left by a killed run").unwrap();
+        let (got, file) = store.create_tmp("graph.json", &std::sync::atomic::AtomicU64::new(0)).unwrap();
+        drop(file);
+        assert_eq!(got, tmp(2));
+        assert_eq!(std::fs::read_to_string(&outside).unwrap(), "victim\n");
+        assert_eq!(std::fs::read_to_string(tmp(1)).unwrap(), "left by a killed run");
+        assert!(tmp(0).symlink_metadata().is_ok(), "the link is the clone's to explain, not this call's to remove");
+    }
+
+    #[test]
+    fn a_save_gives_up_when_every_temporary_name_it_tries_is_taken() {
+        let d = tempfile::tempdir().unwrap();
+        let store = Store::new(d.path());
+        store.ensure_dir().unwrap();
+        for n in 0..TMP_TRIES {
+            std::fs::write(d.path().join(".repograph").join(format!("graph.json.{}.{n}.tmp", std::process::id())), "x").unwrap();
+        }
+        let err = store.create_tmp("graph.json", &std::sync::atomic::AtomicU64::new(0)).unwrap_err();
+        assert!(format!("{err:#}").contains("temporary names"), "{err:#}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_store_directory_that_is_a_link_is_refused() {
+        let d = tempfile::tempdir().unwrap();
+        let elsewhere = d.path().join("elsewhere");
+        std::fs::create_dir_all(&elsewhere).unwrap();
+        let repo = d.path().join("repo");
+        std::fs::create_dir_all(&repo).unwrap();
+        std::os::unix::fs::symlink(&elsewhere, repo.join(".repograph")).unwrap();
+        assert!(Store::new(&repo).save(&Graph::default(), &Manifest::default()).is_err());
+        assert_eq!(std::fs::read_dir(&elsewhere).unwrap().count(), 0);
     }
 
     #[test]

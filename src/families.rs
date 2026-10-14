@@ -249,12 +249,12 @@ pub fn survey(repo: &Path, entries: &[Entry]) -> Result<Vec<Mention>> {
             // instead of quietly shortening it.
             (Err(err), FileKind::Doc | FileKind::Registry) =>
                 return Err(err).with_context(|| format!("families: read {}", e.rel)),
-            (Err(err), FileKind::Code | FileKind::Text) => { eprintln!("families: skipping {}: {err}", e.rel); continue; }
+            (Err(err), FileKind::Code | FileKind::Text) => { eprintln!("{}", crate::terminal_safe(&format!("families: skipping {:?}: {err}", e.rel))); continue; }
         };
         // A file the extractor refuses for the same reason cites nothing in the graph either, so
         // leaving it out of the tally cannot hide a prefix a reader could have followed.
         let Ok(text) = String::from_utf8(bytes) else {
-            eprintln!("families: skipping {}: not UTF-8", e.rel);
+            eprintln!("families: skipping {:?}: not UTF-8", e.rel);
             continue;
         };
         match e.kind {
