@@ -57,6 +57,13 @@ pub(crate) fn open_embedder(no_dense: bool, model: &str, threads: usize, weights
     embedder_or_notice(no_dense, model, threads, weights).unwrap_or_else(|notice| { eprintln!("{notice}"); None })
 }
 
+/// A notice for the client of this answer, said once: the model is resolved when it is warmed and
+/// again when the open finds no warm handle, and both would tell the same story.
+fn say_once(notices: &RefCell<Vec<String>>, line: String) {
+    let mut n = notices.borrow_mut();
+    if !n.contains(&line) { n.push(line); }
+}
+
 /// The model opens on a thread this spawns, while `Context::answer` builds its BM25 indexes on
 /// the caller's own thread — `Lexical::build` runs between this spawn and the `query::ask` call,
 /// so the two overlap there rather than by anything ordered inside `ask` itself. Ids are read
@@ -108,8 +115,10 @@ pub(crate) fn graph_for_ask(repo: &Path, cfg: &config::Config, store: &store::St
     let writer = match store.try_lock_writer() {
         Ok(Some(lock)) => Writer::Held(lock),
         Ok(None) => Writer::Barred,
+        Err(_) if store.has_link() => Writer::Barred,
         Err(_) => Writer::Unlocked,
     };
+    let linked = matches!(writer, Writer::Barred) && store.has_link();
     let entries = walk::walk(repo, cfg, &manifest)?;
     let diff = manifest.diff(&entries);
     timing.stage("tree walked");
@@ -137,9 +146,10 @@ pub(crate) fn graph_for_ask(repo: &Path, cfg: &config::Config, store: &store::St
         drop(writer);
         let what = refresh::files_line(work);
         // A store that cannot be locked cannot be written by a detached `update` either.
-        let line = match unlocked {
-            true => format!("{what}; the store cannot be locked for a background refresh — run `repograph update`"),
-            false => refresh::left_behind(repo, budget.no_dense, &what, busy),
+        let line = match (unlocked, linked) {
+            (true, _) => format!("{what}; the store cannot be locked for a background refresh — run `repograph update`"),
+            (_, true) => format!("{what}; the store holds a symlink no writer follows — run `repograph update` for which"),
+            _ => refresh::left_behind(repo, budget.no_dense, &what, busy),
         };
         // A grammar-stale store re-reads every file, so every file is what it is behind by.
         let files = match manifest.stale_grammar() {
@@ -294,9 +304,7 @@ impl Context {
             if !req.stale && index::embed::switch_owed(config::names_embed_model(repo), idx.model_of_rows().as_deref(), &cfg.embed_model) {
                 let what = format!("dense: {} names {}, the vectors are {}'s", config::PROJECT_FILE, cfg.embed_model, idx.model_of_rows().unwrap_or_default());
                 let busy = match writer { Writer::Barred => true, Writer::PerAnswer => matches!(store.try_lock_writer(), Ok(None)), _ => false };
-                let line = refresh::left_behind_as(repo, no_dense, &what, busy, "switching");
-                let mut n = notices.borrow_mut();
-                if !n.contains(&line) { n.push(line); }
+                say_once(notices, refresh::left_behind_as(repo, no_dense, &what, busy, "switching"));
             }
             let mut slot = embedder.borrow_mut();
             let e = slot.get_or_insert_with(|| {
@@ -306,8 +314,8 @@ impl Context {
                 let opened = match warm.borrow_mut().take() {
                     Some(handle) => handle.join().unwrap_or_else(|_| Err("dense: model thread panicked, continuing lexical-only".to_string())),
                     None => {
-                        let model = index::embed::resolve(idx.model_of_rows().as_deref(), &cfg.embed_model);
-                        embedder_or_notice(no_dense, &model, index::embed::threads(cfg.resources), index::embed::Weights::Packed)
+                        index::embed::reader_model(idx.model_of_rows().as_deref(), &cfg.embed_model).and_then(|model|
+                            embedder_or_notice(no_dense, &model, index::embed::threads(cfg.resources), index::embed::Weights::Packed))
                     }
                 };
                 timing.stage("model opened");
@@ -347,7 +355,7 @@ impl Context {
                     // A resident context takes the lock for this sync alone, and finding it held
                     // is a refresh another process is running — the same as a one-shot's.
                     let per_answer = matches!(writer, Writer::PerAnswer).then(|| store.try_lock_writer());
-                    if matches!(writer, Writer::Barred) || matches!(per_answer, Some(Ok(None))) {
+                    if matches!(writer, Writer::Barred) || matches!(per_answer, Some(Ok(None))) || (matches!(per_answer, Some(Err(_))) && store.has_link()) {
                         let left = idx.owed(graph);
                         if left > 0 { owe(left, false); }
                     } else {
@@ -437,8 +445,10 @@ impl Context {
             // that has already opened the model keeps it rather than starting a second one.
             let mut handle = warm.borrow_mut();
             if handle.is_none() && embedder.borrow().is_none() {
-                let model = index::embed::resolve(idx.model_of_rows().as_deref(), &cfg.embed_model);
-                *handle = warm_model(true, whole, &model, index::embed::threads(cfg.resources), index::embed::Weights::Packed);
+                // A model turned away is not warmed; the open below says why, once.
+                if let Ok(model) = index::embed::reader_model(idx.model_of_rows().as_deref(), &cfg.embed_model) {
+                    *handle = warm_model(true, whole, &model, index::embed::threads(cfg.resources), index::embed::Weights::Packed);
+                }
             }
         }
         let local_fn = |q: &str, c: &[(String, String)]| -> Vec<String> {
@@ -541,6 +551,29 @@ mod tests {
         assert_eq!(ctx.answer(&req).unwrap(), before, "the answer a dropped model leaves behind is the same answer");
     }
 
+    // A lock that is a link refuses every writer; a reader that took the refusal for a read-only
+    // checkout would refresh and save with no lock at all.
+    #[cfg(unix)]
+    #[test]
+    fn a_reader_whose_lock_is_a_link_writes_nothing() {
+        let dir = repo_with_two_docs();
+        let cfg = crate::config::Config::load(dir.path()).unwrap();
+        crate::run_update(dir.path(), &cfg, true).unwrap();
+        let store = store::Store::new(dir.path());
+        let target = dir.path().join("elsewhere");
+        std::fs::write(&target, "").unwrap();
+        let lock = dir.path().join(".repograph/writer.lock");
+        let _ = std::fs::remove_file(&lock);
+        std::os::unix::fs::symlink(&target, &lock).unwrap();
+        std::fs::write(dir.path().join("docs/pay.md"), "# Оплата\n\n**FR-PAY-2 · MUST · Новое**\n\nтекст\n").unwrap();
+        let manifest = std::fs::read(dir.path().join(".repograph/manifest.json")).unwrap();
+        let read = graph_for_ask(dir.path(), &cfg, &store, false, &Timing::new(), &refresh::Budget::seconds(cfg.reader_budget, true)).unwrap();
+        assert!(matches!(read.writer, Writer::Barred));
+        assert!(read.refreshed.is_none());
+        assert!(read.behind.is_some_and(|(_, line)| line.contains("symlink")), "no detached refresh is promised");
+        assert_eq!(std::fs::read(dir.path().join(".repograph/manifest.json")).unwrap(), manifest, "nothing was saved");
+    }
+
     #[test]
     fn a_context_answers_the_same_text_twice_and_for_an_exact_id() {
         let dir = repo_with_two_docs();
@@ -568,7 +601,7 @@ mod tests {
         static CACHE: std::sync::OnceLock<tempfile::TempDir> = std::sync::OnceLock::new();
         CACHE.get_or_init(|| {
             let dir = tempfile::tempdir().unwrap();
-            let model = index::embed::resolve(None, index::embed::DEFAULT_MODEL);
+            let model = index::embed::writer_model(index::embed::DEFAULT_MODEL);
             let root = dir.path().join(format!("models--{model}").replace('/', "--"));
             let snap = root.join("snapshots/abc");
             std::fs::create_dir_all(root.join("refs")).unwrap();

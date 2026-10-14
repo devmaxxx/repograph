@@ -344,6 +344,9 @@ pub fn run(repo: &Path, cfg: &config::Config, every: u64, batch: usize, idle: u6
     // Read here and carried, for the reason `build_stamp` gives: this process runs the build that
     // was at its path when it started, and nothing it stats later can still say so.
     let build = build_stamp();
+    // Before the socket is touched: the unlink and the bind below would otherwise act inside
+    // whatever directory a clone pointed `.repograph` at.
+    crate::store::Store::new(repo).refuse_linked_dir()?;
     let path = socket_path(repo);
     prepare_socket_dir(&path)?;
     if sys::present(&path) && sys::connect(&path).is_ok() { anyhow::bail!("another serve answers at {}", path.display()); }
@@ -470,7 +473,7 @@ fn catch_termination() {}
 
 /// Notices no client asked for, on the server's stderr.
 fn log(ctx: &mut ask::Context) {
-    for n in ctx.notices() { eprintln!("serve: {n}"); }
+    for n in ctx.notices() { eprintln!("{}", crate::terminal_safe(&format!("serve: {n}"))); }
 }
 
 /// The poll `ask` does before it answers, and the one case the poll's own answer does not
@@ -634,6 +637,24 @@ mod tests {
         assert!(p.parent().unwrap().ends_with(format!("repograph-{}", unsafe { libc::geteuid() })), "the fallback is a directory of the user's own: {}", p.display());
         assert_eq!(socket_path(&deep), p, "a client that computes it again finds the same name");
         assert_ne!(socket_path(&deep.join("x")), p, "another repository is another socket");
+    }
+
+    /// `serve` unlinks a stale socket and binds a new one before anything else touches the store,
+    /// so a `.repograph` that is a link was acted on before `ensure_dir` could refuse it.
+    #[cfg(unix)]
+    #[test]
+    fn a_store_directory_that_is_a_link_is_refused_before_its_socket_is_unlinked() {
+        let d = tempfile::Builder::new().tempdir_in("/tmp").unwrap();
+        let outside = d.path().join("outside");
+        std::fs::create_dir_all(&outside).unwrap();
+        std::fs::write(outside.join("serve.sock"), "victim\n").unwrap();
+        let repo = d.path().join("repo");
+        std::fs::create_dir_all(&repo).unwrap();
+        std::os::unix::fs::symlink(&outside, repo.join(".repograph")).unwrap();
+        assert_eq!(socket_path(&repo), repo.join(".repograph/serve.sock"), "the socket is where the link leads");
+        let err = super::run(&repo, &crate::config::Config::default(), 1, 1, 1, 0, true).unwrap_err();
+        assert!(format!("{err:#}").contains("symlink"), "{err:#}");
+        assert_eq!(std::fs::read_to_string(outside.join("serve.sock")).unwrap(), "victim\n");
     }
 
     #[test]
