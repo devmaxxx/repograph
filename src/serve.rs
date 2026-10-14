@@ -418,7 +418,7 @@ pub fn run(repo: &Path, cfg: &config::Config, every: u64, batch: usize, idle: u6
             // for as long as it ran. Leaving is the whole of the fix — the next `ask` answers
             // in its own process under the new file, and the next `serve` starts under it too.
             if config_stamp(repo) != cfg_stamp {
-                eprintln!("serve: zerograph.toml changed, exiting — start serve again to answer under it");
+                eprintln!("serve: {} changed, exiting — start serve again to answer under it", config::project_file_name(repo));
                 return Ok(());
             }
             adopt_if_moved(&mut watcher, &mut ctx, batch)?;

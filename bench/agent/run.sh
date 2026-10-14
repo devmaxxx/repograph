@@ -8,7 +8,7 @@ M=${M:-/Users/max/bench/agent-surface-2026-09-07}; WT="$M/wt"
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # C-rem is C with the interceptor off: the overlay directory is C's, the switch is the environment.
 OVERLAY_NAME=$CONFIG
-if [ "$CONFIG" = "C-rem" ]; then OVERLAY_NAME=C; export REPOGRAPH_HOOK_INTERCEPT=0; fi
+if [ "$CONFIG" = "C-rem" ]; then OVERLAY_NAME=C; export ZEROGRAPH_HOOK_INTERCEPT=0; fi
 OVERLAY="$HERE/overlays/$OVERLAY_NAME"; [ -d "$OVERLAY" ] || { echo "no overlay $OVERLAY_NAME" >&2; exit 2; }
 # A has no binary on PATH; every other configuration has the one this branch built.
 case "$CONFIG" in A) BINPATH="" ;; *) BINPATH="$M/bin:" ;; esac

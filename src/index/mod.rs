@@ -6,9 +6,10 @@ pub mod lexical;
 
 use anyhow::Context as _;
 
-/// `~/.cache/zerograph/<leaf>`, one of the caches this process keeps: the embedder's files and the
-/// exported reranker. Read through the platform's idea of home rather than `$HOME`, which a
-/// Windows console never sets; there it is the profile directory.
+/// `~/.cache/zerograph/<leaf>`, or `~/.cache/repograph/<leaf>` while that is the only one there:
+/// one of the caches this process keeps, the embedder's files and the exported reranker. Read
+/// through the platform's idea of home rather than `$HOME`, which a Windows console never sets;
+/// there it is the profile directory.
 pub fn cache_dir(leaf: &str) -> anyhow::Result<std::path::PathBuf> {
     let home = std::env::home_dir().context("no home directory to keep the model cache under")?;
     Ok(cache_under(&home.join(".cache"), leaf))

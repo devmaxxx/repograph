@@ -337,8 +337,9 @@ impl Server {
         // The CLI's own switch, detached: it opens the model before it writes anything, so an id
         // the hub cannot serve leaves the project as it was and says why in the log.
         self.remember(refresh::spawn_detached(&self.repo, false, &["model", id])?);
-        Ok(format!("switching to {id} in the background: the model is fetched and opened, then `zerograph.toml` is written and the vectors rewritten. \
-                    `status` follows it; `.zerograph/background.log` has the reason if it fails."))
+        Ok(format!("switching to {id} in the background: the model is fetched and opened, then `{}` is written and the vectors rewritten. \
+                    `status` follows it; `{}/background.log` has the reason if it fails.",
+                   config::project_file_name(&self.repo), store::dir_name_of(&self.repo)))
     }
 }
 

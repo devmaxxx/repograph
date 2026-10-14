@@ -136,8 +136,13 @@ function run(root, args) {
   return r.status === 0 ? r.stdout.replace(/[\x00-\x08\x0b-\x1f\x7f-\x9f]/g, '') : '';
 }
 
-// The old name too: a store built before the rename is read where it stands until a write moves it.
-function built(root) { return ['.zerograph', '.repograph'].some((d) => existsSync(join(root, d, 'manifest.json'))); }
+// The directory the binary reads: `.zerograph` whenever anything stands at that name, else a
+// `.repograph` no write has moved yet. A manifest under the other name is no index it answers from.
+function built(root) {
+  const standing = (p) => { try { lstatSync(p); return true; } catch { return false; } };
+  const dir = standing(join(root, '.zerograph')) ? '.zerograph' : '.repograph';
+  return existsSync(join(root, dir, 'manifest.json'));
+}
 
 /**
  * The nearest directory at or above `start` that carries an index. The harness's `cwd` follows a

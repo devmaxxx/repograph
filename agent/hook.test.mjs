@@ -306,6 +306,15 @@ test('a store built before the rename, still under .repograph, counts as built',
   assert.ok(c.startsWith('zerograph:'), c);
 });
 
+test('a .zerograph without a manifest outranks a built .repograph, as it does for the binary', () => {
+  const w = world({ store: false, answer: 'zerograph: 3 doc nodes' });
+  mkdirSync(join(w.root, '.repograph'), { recursive: true });
+  writeFileSync(join(w.root, '.repograph', 'manifest.json'), '{}');
+  mkdirSync(join(w.root, '.zerograph'), { recursive: true });
+  assert.equal(fire(w, { hook_event_name: 'SessionStart', source: 'startup' }), null);
+  assert.deepEqual(argv(w), [], 'the binary would read the empty .zerograph, so it is not asked');
+});
+
 test('a session started in a subdirectory finds the index above it, and a nested checkout does not borrow it', () => {
   const w = world({ answer: 'zerograph: 3076 doc nodes, 5240 code nodes' });
   const env = { ZEROGRAPH_HOOK_SERVE: '0' };

@@ -39,6 +39,14 @@ pub fn env_os(suffix: &str) -> Option<std::ffi::OsString> {
 /// [`env_os`] as text; a value that is not Unicode reads as unset, as `std::env::var` has it.
 pub fn env(suffix: &str) -> Option<String> { env_os(suffix).and_then(|v| v.into_string().ok()) }
 
+/// The variable [`env_os`] reads for `suffix`, for an error that tells the reader where a value
+/// came from: `REPOGRAPH_<suffix>` only when that is the one set.
+pub fn env_name(suffix: &str) -> String {
+    ["ZEROGRAPH_", "REPOGRAPH_"].iter().map(|p| format!("{p}{suffix}"))
+        .find(|name| std::env::var_os(name).is_some())
+        .unwrap_or_else(|| format!("ZEROGRAPH_{suffix}"))
+}
+
 #[derive(Parser)]
 #[command(name = "zerograph", version)]
 struct Cli {
@@ -675,15 +683,15 @@ fn model_report(repo: &std::path::Path, cfg: &config::Config) -> anyhow::Result<
     let from = match config::names_embed_model(repo) { true => config::project_file_name(repo), false => "the built-in default" };
     say("configured", format!("{} ({from})", cfg.embed_model));
     if let Some(o) = crate::env("EMBED_MODEL").filter(|v| !v.trim().is_empty()) {
-        say("this run", format!("{o} (ZEROGRAPH_EMBED_MODEL)"));
+        say("this run", format!("{o} ({})", crate::env_name("EMBED_MODEL")));
     }
     if let Some(m) = untrusted {
         out.push_str(&format!("\nThe store names a model this machine has not trusted, so readers answer lexical-only\nuntil it is trusted or the store is re-embedded with {} — {}.\n", cfg.embed_model, config::trust_hint(m)));
     } else if recorded.as_deref().is_some_and(|m| m != cfg.embed_model) {
-        out.push_str("\nThe two disagree. The store keeps answering with the model that wrote it; the\n\
+        out.push_str(&format!("\nThe two disagree. The store keeps answering with the model that wrote it; the\n\
             configured one takes effect at the next `build`, `update`, `embed` or\n\
-            `watch` (an `ask` starts one when zerograph.toml names the model), which drops\n\
-            every row the other model wrote and rewrites the index whole.\n");
+            `watch` (an `ask` starts one when {} names the model), which drops\n\
+            every row the other model wrote and rewrites the index whole.\n", config::project_file_name(repo)));
     }
     out.push('\n');
     out.push_str(&index::embed::catalogue(Some(opened)));
@@ -933,7 +941,7 @@ fn run(cli: Cli) -> anyhow::Result<()> {
     match cli.cmd {
         Cmd::Update { detach: true } => {
             refresh::spawn_update(&repo, cli.no_dense)?;
-            eprintln!("update: started in the background; .zerograph/background.log has its output");
+            eprintln!("update: started in the background; {}/background.log has its output", store::dir_name_of(&repo));
             Ok(())
         }
         Cmd::Build | Cmd::Update { detach: false } => {
@@ -953,7 +961,7 @@ fn run(cli: Cli) -> anyhow::Result<()> {
             let r = run_update(&repo, &cfg, wipe)?;
             println!("changed {} removed {} nodes {} edges {}", r.changed, r.removed, r.nodes, r.edges);
             if r.orphan_questions {
-                eprintln!("zerograph: .zerograph/questions.json and questions.bin are no longer read (enrich was removed in 0.6.0); delete them");
+                eprintln!("zerograph: {}/questions.json and questions.bin are no longer read (enrich was removed in 0.6.0); delete them", store::dir_name_of(&repo));
             }
             embed_all(&repo, cli.no_dense, &cfg)
         }
@@ -1085,7 +1093,9 @@ fn run(cli: Cli) -> anyhow::Result<()> {
         Cmd::InstallAgent { claude, codex, command } => {
             let targets: Vec<install_agent::Target> = match (claude, codex) {
                 (false, false) => anyhow::bail!("name a harness: --claude, --codex, or both"),
-                (c, x) => [(c, install_agent::Target::Claude), (x, install_agent::Target::Codex)]
+                // Codex first: its stanza goes into the root `AGENTS.md`, which a `CLAUDE.md` link
+                // usually points at, so the Claude pass finds nothing left to write through the link.
+                (c, x) => [(x, install_agent::Target::Codex), (c, install_agent::Target::Claude)]
                     .into_iter().filter(|(on, _)| *on).map(|(_, t)| t).collect(),
             };
             for target in targets {

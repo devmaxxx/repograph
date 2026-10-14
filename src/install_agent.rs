@@ -72,6 +72,10 @@ fn marked(text: &str, begin: &str, end: &str) -> Option<(usize, usize)> {
     Some((a, b + end.len()))
 }
 
+fn skip_break(text: &str) -> &str {
+    text.strip_prefix("\r\n").or_else(|| text.strip_prefix('\n')).unwrap_or(text)
+}
+
 /// The instructions file with our stanza in it: replacing what is between the markers when they are
 /// there, appending when they are not. Everything outside the markers is the repository's own and
 /// is never touched — an installer that rewrote CLAUDE.md would be a worse citizen than no
@@ -81,17 +85,23 @@ pub fn merged_instructions(existing: &str, command: &str) -> String {
     let ours = marked(existing, BEGIN, END);
     let legacy = marked(existing, LEGACY_BEGIN, LEGACY_END);
     match (ours, legacy) {
-        // Both: the old one goes with the line it ended, and the new one is replaced as usual.
+        // Both: the old one goes with the line it ended, and with one blank line when the text
+        // before it ends in one, or the gap it leaves would be two. The new one is replaced as usual.
         (Some(_), Some((a, b))) => {
-            let rest = existing[b..].strip_prefix('\n').unwrap_or(&existing[b..]);
-            merged_instructions(&format!("{}{rest}", &existing[..a]), command)
+            let before = &existing[..a];
+            let after = skip_break(&existing[b..]);
+            let blank_before = before.is_empty() || before.ends_with("\n\n") || before.ends_with("\n\r\n");
+            let after = if blank_before { skip_break(after) } else { after };
+            merged_instructions(&format!("{before}{after}"), command)
         }
         (Some((a, b)), None) | (None, Some((a, b))) => {
             let mut out = String::with_capacity(existing.len() + block.len());
             out.push_str(&existing[..a]);
             out.push_str(block.trim_end());
             out.push_str(&existing[b..]);
-            out
+            // Replacing the first old stanza leaves a second one beside ours, and the arm above
+            // removes it; stopping here would leave the file to change again on the next run.
+            if marked(&out, LEGACY_BEGIN, LEGACY_END).is_some() { merged_instructions(&out, command) } else { out }
         }
         (None, None) => {
             let mut out = existing.to_string();
@@ -147,10 +157,14 @@ pub fn merged_settings(existing: &str, hook_path: &str) -> Result<(String, Vec<S
     Ok((serde_json::to_string_pretty(&root)? + "\n", retired))
 }
 
+fn is_symlink(path: &Path) -> bool {
+    std::fs::symlink_metadata(path).is_ok_and(|m| m.file_type().is_symlink())
+}
+
 /// A repository can ship `.claude/settings.json` or `zerograph.toml` as a link to a file elsewhere
 /// on the machine, and a write through it would overwrite that file with ours.
 fn refuse_symlink(path: &Path) -> Result<()> {
-    if std::fs::symlink_metadata(path).is_ok_and(|m| m.file_type().is_symlink()) {
+    if is_symlink(path) {
         anyhow::bail!("{} is a symlink; refusing to write through it — replace it with a regular file and run again", path.display());
     }
     Ok(())
@@ -190,18 +204,27 @@ pub fn codex_hooks_block(hook_abs: &str) -> String {
 /// Removes the script an install made before the rename, which nothing runs once the settings
 /// name the new one. Only a regular file that still carries the hook's debug tag, which every
 /// release of it printed, is ours to remove: a link, or a file someone rewrote into something
-/// else, is left and named.
-fn retire_legacy_hook(path: &Path, report: &mut Report) -> Result<()> {
-    let Ok(meta) = std::fs::symlink_metadata(path) else { return Ok(()) };
+/// else, is left and named. So is one that `local_settings`, a file this install does not merge,
+/// still runs, and one the filesystem will not let go of: the settings already name the new
+/// script by now, and an error here would take the rest of the install's report with it.
+fn retire_legacy_hook(path: &Path, local_settings: &Path, report: &mut Report) {
+    let Ok(meta) = std::fs::symlink_metadata(path) else { return };
+    if std::fs::read_to_string(local_settings).is_ok_and(|t| t.contains("repograph-hook")) {
+        report.notes.push(format!("{} is still run from {}, which is not edited here, so it was left; point that entry at zerograph-hook.mjs, then remove it",
+            path.display(), local_settings.display()));
+        return;
+    }
     let ours = meta.is_file() && std::fs::read_to_string(path).is_ok_and(|t| t.contains("[repograph-hook]"));
     if !ours {
         report.notes.push(format!("{} is not the hook this tool wrote, so it was left; nothing runs it now", path.display()));
-        return Ok(());
+        return;
     }
-    std::fs::remove_file(path).with_context(|| format!("remove {}", path.display()))?;
+    if let Err(e) = std::fs::remove_file(path) {
+        report.notes.push(format!("{} could not be removed ({e}); nothing runs it now, so remove it by hand", path.display()));
+        return;
+    }
     report.written += 1;
     report.notes.push(format!("removed {}, the hook from before the rename; zerograph-hook.mjs replaces it", path.display()));
-    Ok(())
 }
 
 /// Installs the surface for one harness under `root`. Returns what it actually wrote: a second run
@@ -238,7 +261,7 @@ pub fn install(root: &Path, target: Target, command: &str) -> Result<Report> {
     let legacy_hook = base.join("hooks").join("repograph-hook.mjs");
     match target.hooks_are_repository_scoped() {
         // Only once the settings name the new script, so a failed merge leaves a working install.
-        true => retire_legacy_hook(&legacy_hook, &mut report)?,
+        true => retire_legacy_hook(&legacy_hook, &base.join("settings.local.json"), &mut report),
         // The machine's hooks file may still run it, and an install from here cannot see that file.
         false if std::fs::symlink_metadata(&legacy_hook).is_ok() => report.notes.push(format!(
             "{} is the hook from before the rename; point ~/.codex/hooks.json at zerograph-hook.mjs, then remove it",
@@ -247,15 +270,34 @@ pub fn install(root: &Path, target: Target, command: &str) -> Result<Report> {
     }
 
     // Codex's is the repository root or nowhere; Claude Code reads either, and a repository that
-    // already keeps a root `CLAUDE.md` should not grow a second file beside it.
+    // already keeps a root `CLAUDE.md` should not grow a second file beside it. A stanza already in
+    // `.claude/CLAUDE.md` stays the one to update, though, or a root file made since would hold a
+    // second stanza beside the first.
     let root_instructions = root.join(target.instructions());
-    let instructions = match target == Target::Codex || root_instructions.exists() {
+    let inner_instructions = base.join(target.instructions());
+    let instructions = match target == Target::Codex || holds_stanza(&root_instructions)
+        || (root_instructions.exists() && !holds_stanza(&inner_instructions))
+    {
         true => root_instructions,
-        false => base.join(target.instructions()),
+        false => inner_instructions,
     };
     let existing = std::fs::read_to_string(&instructions).unwrap_or_default();
-    write_if_changed(&instructions, &merged_instructions(&existing, command), &mut report)?;
+    let merged = merged_instructions(&existing, command);
+    // Never written through a link, and not an error either: `CLAUDE.md` linked to `AGENTS.md` is
+    // common, and failing here would abort an install that has already rewritten the settings and
+    // removed the old hook, before the MCP server and the git hooks are reached.
+    match merged != existing && is_symlink(&instructions) {
+        true => report.notes.push(format!(
+            "{} is a symlink, so the stanza was not written through it; `install-agent --codex` writes it \
+             when it points at AGENTS.md, and otherwise the file it points to needs the update by hand",
+            instructions.display())),
+        false => write_if_changed(&instructions, &merged, &mut report)?,
+    }
     Ok(report)
+}
+
+fn holds_stanza(path: &Path) -> bool {
+    std::fs::read_to_string(path).is_ok_and(|t| t.contains(BEGIN) || t.contains(LEGACY_BEGIN))
 }
 
 const MCP_NAME: &str = "zerograph";
@@ -301,17 +343,11 @@ pub fn register_mcp(root: &Path, command: &str, run: &dyn Fn(&Path, &[&str]) -> 
         report.notes.push(format!("`claude` is not on PATH, so the MCP server was not registered; run `{by_hand}` where it is"));
         return report;
     };
-    // The server an install made before the rename would answer beside this one, every tool twice.
-    if run(root, &["mcp", "get", LEGACY_MCP_NAME]).is_some_and(|o| o.status.success()) {
-        match run(root, &["mcp", "remove", LEGACY_MCP_NAME]) {
-            Some(o) if o.status.success() => report.notes.push(format!("removed the MCP server registered as `{LEGACY_MCP_NAME}`; `{MCP_NAME}` replaces it")),
-            _ => report.notes.push(format!("an MCP server is still registered as `{LEGACY_MCP_NAME}`; run `claude mcp remove {LEGACY_MCP_NAME}`")),
-        }
-    }
     if existing.status.success() {
         let shown = String::from_utf8_lossy(&existing.stdout);
         if said_in_order(&shown, program.as_str(), &tail) {
             report.notes.push("MCP server already registered, left alone".to_string());
+            retire_legacy_mcp(root, run, &mut report);
             return report;
         }
         if !run(root, &["mcp", "remove", MCP_NAME]).is_some_and(|o| o.status.success()) {
@@ -325,11 +361,27 @@ pub fn register_mcp(root: &Path, command: &str, run: &dyn Fn(&Path, &[&str]) -> 
         Some(added) if added.status.success() => {
             report.written = 1;
             report.paths.push(by_hand);
+            retire_legacy_mcp(root, run, &mut report);
         }
         Some(failed) => report.notes.push(format!("`claude mcp add` failed, the MCP server was not registered: {}", String::from_utf8_lossy(&failed.stderr).trim())),
         None => report.notes.push("`claude` went away between two calls; the MCP server was not registered".to_string()),
     }
     report
+}
+
+/// The server an install made before the rename registered would answer beside `zerograph`, every
+/// tool twice. It goes only once `zerograph` is registered, so a failed `add` leaves the old one
+/// answering and not nothing, and only from the local scope, where `claude mcp add` put it:
+/// without a scope the CLI removes whichever single scope holds the name, a user-level or a
+/// tracked `.mcp.json` entry included, and refuses when several do.
+fn retire_legacy_mcp(root: &Path, run: &dyn Fn(&Path, &[&str]) -> Option<std::process::Output>, report: &mut Report) {
+    if !run(root, &["mcp", "get", LEGACY_MCP_NAME]).is_some_and(|o| o.status.success()) { return; }
+    match run(root, &["mcp", "remove", LEGACY_MCP_NAME, "-s", "local"]) {
+        Some(o) if o.status.success() => report.notes.push(format!("removed the MCP server registered as `{LEGACY_MCP_NAME}`; `{MCP_NAME}` replaces it")),
+        _ => report.notes.push(format!(
+            "an MCP server is still registered as `{LEGACY_MCP_NAME}` and was not removed; `claude mcp get {LEGACY_MCP_NAME}` shows its scope, \
+             and `claude mcp remove {LEGACY_MCP_NAME} -s <scope>` removes it")),
+    }
 }
 
 /// `word` as one shell word: bare when it has nothing the shell would split or expand, and
@@ -536,7 +588,7 @@ mod tests {
         calls.borrow_mut().push(args.iter().map(|a| a.to_string()).collect());
         Some(match args {
             ["mcp", "get", name] => match registry.borrow().get(*name) { Some(shown) => exited(0, shown), None => exited(1, "") },
-            ["mcp", "remove", name] => { registry.borrow_mut().remove(*name); exited(0, "") }
+            ["mcp", "remove", name, ..] => { registry.borrow_mut().remove(*name); exited(0, "") }
             ["mcp", "add", name, "--", program, rest @ ..] => {
                 registry.borrow_mut().insert(name.to_string(), format!("{name}:\n  Command: {program}\n  Args: {}\n", rest.join(" ")));
                 exited(0, "")
@@ -554,7 +606,7 @@ mod tests {
         let root = Path::new("/work/proj");
         let first = register_mcp(root, "pnpm exec zerograph", &claude);
         assert_eq!(first.written, 1);
-        assert_eq!(calls.borrow().last().unwrap(), &["mcp", "add", "zerograph", "--", "pnpm", "exec", "zerograph", "--repo", "/work/proj", "mcp"]);
+        assert!(calls.borrow().iter().any(|c| c == &["mcp", "add", "zerograph", "--", "pnpm", "exec", "zerograph", "--repo", "/work/proj", "mcp"]), "{:?}", calls.borrow());
         let asked = calls.borrow().len();
         let second = register_mcp(root, "pnpm exec zerograph", &claude);
         assert_eq!(second.written, 0);
@@ -577,9 +629,28 @@ mod tests {
         assert_eq!(r.written, 1);
         assert_eq!(registry.borrow().keys().collect::<Vec<_>>(), ["zerograph"]);
         assert!(r.notes.iter().any(|n| n.contains("`repograph`")), "{:?}", r.notes);
+        let removals: Vec<_> = calls.borrow().iter().filter(|c| c[1] == "remove").cloned().collect();
+        assert_eq!(removals, [["mcp", "remove", "repograph", "-s", "local"]], "only the local scope, where the old install put it");
         let again = register_mcp(Path::new("/work/proj"), "zerograph", &claude);
         assert_eq!(again.written, 0);
         assert!(!again.notes.iter().any(|n| n.contains("`repograph`")), "nothing left to remove: {:?}", again.notes);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_server_registered_before_the_rename_stays_when_the_new_one_cannot_be_added() {
+        let calls = std::cell::RefCell::new(Vec::<Vec<String>>::new());
+        let registry = std::cell::RefCell::new(std::collections::BTreeMap::new());
+        registry.borrow_mut().insert("repograph".to_string(), "repograph:\n  Command: repograph\n  Args: --repo /work/proj mcp\n".to_string());
+        let claude = |_: &Path, args: &[&str]| match args {
+            ["mcp", "add", ..] => Some(exited(1, "")),
+            _ => fake_claude(&calls, &registry, args),
+        };
+        let r = register_mcp(Path::new("/work/proj"), "zerograph", &claude);
+        assert_eq!(r.written, 0);
+        assert!(registry.borrow().contains_key("repograph"), "the old server is the only one there is");
+        assert!(calls.borrow().iter().all(|c| c[1] != "remove"), "{:?}", calls.borrow());
+        assert!(!r.notes.iter().any(|n| n.contains("replaces it")), "{:?}", r.notes);
     }
 
     #[test]
@@ -590,9 +661,18 @@ mod tests {
         assert_eq!(merged.matches(BEGIN).count(), 1, "{merged}");
         assert!(merged.starts_with("# House rules\n\n") && merged.ends_with("\n\nMore rules.\n"), "{merged}");
         assert_eq!(merged_instructions(&merged, "zerograph"), merged, "re-merging is a no-op");
-        let both = format!("{legacy}\n{}", with_command(STANZA, "zerograph"));
+        let block = with_command(STANZA, "zerograph");
+        let both = format!("{legacy}\n{block}");
         let merged = merged_instructions(&both, "zerograph");
+        assert_eq!(merged, format!("# House rules\n\nMore rules.\n\n{block}"), "the old stanza goes with one of its two blank lines");
+        assert_eq!(merged_instructions(&merged, "zerograph"), merged);
+        let crlf = merged_instructions(&both.replace('\n', "\r\n"), "zerograph");
+        assert!(crlf.starts_with("# House rules\r\n\r\nMore rules.\r\n\r\n") && !crlf.contains("repograph"), "{crlf:?}");
+
+        let twice = "# A\n\n<!-- repograph:begin -->\nold\n<!-- repograph:end -->\n\nmid\n\n<!-- repograph:begin -->\nolder\n<!-- repograph:end -->\n";
+        let merged = merged_instructions(twice, "zerograph");
         assert!(!merged.contains("repograph") && merged.matches(BEGIN).count() == 1, "{merged}");
+        assert_eq!(merged_instructions(&merged, "zerograph"), merged, "one run reaches the fixed point");
 
         let hook = "#!/bin/sh\n# repograph:begin\nif [ \"$3\" != \"0\" ]; then repograph update --detach >/dev/null 2>&1 || true; fi\n# repograph:end\nnpx lefthook run post-merge\n";
         let merged = merged_git_hook(hook, "zerograph");
@@ -618,7 +698,6 @@ mod tests {
         let v: serde_json::Value = serde_json::from_str(&settings).unwrap();
         assert_eq!(v["hooks"]["SessionStart"].as_array().unwrap().len(), 1);
 
-        // A file under the old name that is not ours stays, and is named.
         std::fs::write(hooks.join("repograph-hook.mjs"), "// the team's own script\n").unwrap();
         let r = install(dir.path(), Target::Claude, "zerograph").unwrap();
         assert!(hooks.join("repograph-hook.mjs").exists());
@@ -631,6 +710,73 @@ mod tests {
         let r = install(dir.path(), Target::Codex, "zerograph").unwrap();
         assert!(codex.join("repograph-hook.mjs").exists());
         assert!(r.notes.iter().any(|n| n.contains("~/.codex/hooks.json")), "{:?}", r.notes);
+    }
+
+    #[test]
+    fn the_old_hook_stays_while_the_local_settings_still_run_it() {
+        let dir = root();
+        let hooks = dir.path().join(".claude/hooks");
+        std::fs::create_dir_all(&hooks).unwrap();
+        std::fs::write(hooks.join("repograph-hook.mjs"), "console.error('[repograph-hook]');\n").unwrap();
+        std::fs::write(dir.path().join(".claude/settings.local.json"),
+            r#"{"hooks":{"SessionStart":[{"hooks":[{"type":"command","command":"node \"$CLAUDE_PROJECT_DIR/.claude/hooks/repograph-hook.mjs\""}]}]}}"#).unwrap();
+        let r = install(dir.path(), Target::Claude, "zerograph").unwrap();
+        assert!(hooks.join("repograph-hook.mjs").exists(), "a dangling entry would fail on every session start");
+        assert!(r.notes.iter().any(|n| n.contains("settings.local.json")), "{:?}", r.notes);
+    }
+
+    /// The settings name the new script before the old one is removed, so a script the filesystem
+    /// will not let go of is a note and the rest of the install still runs.
+    #[cfg(unix)]
+    #[test]
+    fn an_old_hook_that_cannot_be_removed_is_a_note_and_not_the_end_of_the_install() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = root();
+        install(dir.path(), Target::Claude, "zerograph").unwrap();
+        let hooks = dir.path().join(".claude/hooks");
+        std::fs::write(hooks.join("repograph-hook.mjs"), "console.error('[repograph-hook]');\n").unwrap();
+        std::fs::set_permissions(&hooks, std::fs::Permissions::from_mode(0o555)).unwrap();
+        // Root, and a filesystem that ignores the mode, can remove it anyway.
+        let can_write = std::fs::write(hooks.join("probe"), "").is_ok();
+        let r = install(dir.path(), Target::Claude, "zerograph");
+        std::fs::set_permissions(&hooks, std::fs::Permissions::from_mode(0o755)).unwrap();
+        if can_write { return; }
+        let r = r.expect("a hook that stays is not an error");
+        assert!(hooks.join("repograph-hook.mjs").exists());
+        assert!(r.notes.iter().any(|n| n.contains("could not be removed")), "{:?}", r.notes);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_claude_md_linked_to_agents_md_is_not_written_through_and_does_not_end_the_install() {
+        let dir = root();
+        let legacy = "# Rules\n\n<!-- repograph:begin -->\nrun `repograph ask`\n<!-- repograph:end -->\n";
+        std::fs::write(dir.path().join("AGENTS.md"), legacy).unwrap();
+        std::os::unix::fs::symlink("AGENTS.md", dir.path().join("CLAUDE.md")).unwrap();
+        let r = install(dir.path(), Target::Claude, "zerograph").unwrap();
+        assert!(r.notes.iter().any(|n| n.contains("symlink")), "{:?}", r.notes);
+        assert_eq!(std::fs::read_to_string(dir.path().join("AGENTS.md")).unwrap(), legacy, "what the link points at is left alone");
+        assert!(dir.path().join(".claude/settings.json").exists(), "the rest of the install ran");
+
+        // `install-agent --claude --codex` runs Codex first, which writes the file the link points at.
+        install(dir.path(), Target::Codex, "zerograph").unwrap();
+        let r = install(dir.path(), Target::Claude, "zerograph").unwrap();
+        assert!(!r.notes.iter().any(|n| n.contains("symlink")), "nothing left to write: {:?}", r.notes);
+        let text = std::fs::read_to_string(dir.path().join("AGENTS.md")).unwrap();
+        assert_eq!(text.matches(BEGIN).count(), 1, "{text}");
+        assert!(!text.contains("repograph"), "{text}");
+    }
+
+    #[test]
+    fn a_stanza_in_the_inner_claude_md_stays_the_one_updated_when_a_root_file_appears_later() {
+        let dir = root();
+        std::fs::create_dir_all(dir.path().join(".claude")).unwrap();
+        std::fs::write(dir.path().join(".claude/CLAUDE.md"), "<!-- repograph:begin -->\nrun `repograph ask`\n<!-- repograph:end -->\n").unwrap();
+        std::fs::write(dir.path().join("CLAUDE.md"), "# House rules\n").unwrap();
+        install(dir.path(), Target::Claude, "zerograph").unwrap();
+        let inner = std::fs::read_to_string(dir.path().join(".claude/CLAUDE.md")).unwrap();
+        assert!(inner.contains(BEGIN) && !inner.contains("repograph"), "{inner}");
+        assert_eq!(std::fs::read_to_string(dir.path().join("CLAUDE.md")).unwrap(), "# House rules\n", "no second stanza beside the first");
     }
 
     #[test]

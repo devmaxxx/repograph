@@ -10,7 +10,7 @@ fixture's `.repograph/` copied beside it; the fixture itself is read once and ne
 | `B` | today's surface, verbatim from the fixture: `CLAUDE.md`, `settings.json`, the notice/precompact/compact hooks, the `repo-query` skill | **29,543 B** |
 | `C` | the planned surface, produced by `repograph install-agent --claude` and never hand-edited: the stanza between its markers, the skill, the scout, the four-event hook | **1,295 B** |
 
-`C-rem` is not a directory. It is `C` with `REPOGRAPH_HOOK_INTERCEPT=0` in the environment — the
+`C-rem` is not a directory. It is `C` with `ZEROGRAPH_HOOK_INTERCEPT=0` in the environment — the
 reminder without the Bash interceptor — because the two configurations differ by a switch and a
 copied directory would let them drift apart.
 

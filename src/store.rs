@@ -22,6 +22,13 @@ pub(crate) fn dir_of(repo: &Path) -> PathBuf {
     if present(&legacy) { legacy } else { dir }
 }
 
+/// [`dir_of`]'s name, for a line that tells the reader which directory to open: a store the move
+/// could not reach stays under the old name, and a line that said `.zerograph` would send them to
+/// a directory that is not there.
+pub(crate) fn dir_name_of(repo: &Path) -> &'static str {
+    if dir_of(repo).ends_with(LEGACY_DIR) { LEGACY_DIR } else { DIR }
+}
+
 /// Where a load got its value. The JSON is what a store is defined by and what any other
 /// binary reads; the mirror is a postcard copy of the same value written beside it, because
 /// parsing 10 MB of graph JSON costs every `ask` 18 ms and decoding the same graph a few.
@@ -236,7 +243,11 @@ impl Store {
     /// never listed `.zerograph/` would otherwise commit it. Returns the directory to write in.
     pub(crate) fn ensure_dir(&self) -> Result<PathBuf> {
         let dir = self.settle()?;
-        std::fs::create_dir_all(&dir)?;
+        // The old name comes back only as a directory that stands. Making it again here would put
+        // an empty one where another process has just moved the store from, and split it in two.
+        if dir != self.repo.join(LEGACY_DIR) {
+            std::fs::create_dir_all(&dir).with_context(|| format!("create {}", dir.display()))?;
+        }
         let ignore = dir.join(".gitignore");
         match open_unlinked(std::fs::OpenOptions::new().write(true).create_new(true), &ignore) {
             Ok(mut f) => {
@@ -382,7 +393,7 @@ impl Store {
         match f.try_lock() {
             Ok(()) => Ok(Some(WriterLock(f))),
             Err(std::fs::TryLockError::WouldBlock) => Ok(None),
-            Err(std::fs::TryLockError::Error(e)) => Err(e).context("lock .zerograph/writer.lock"),
+            Err(std::fs::TryLockError::Error(e)) => Err(e).with_context(|| self.lock_label()),
         }
     }
 
@@ -390,9 +401,11 @@ impl Store {
     /// the store to be brought in line and would rather wait for a running refresh than skip it.
     pub fn lock_writer(&self) -> Result<WriterLock> {
         let f = self.lock_file()?;
-        f.lock().context("lock .zerograph/writer.lock")?;
+        f.lock().with_context(|| self.lock_label())?;
         Ok(WriterLock(f))
     }
+
+    fn lock_label(&self) -> String { format!("lock {}/writer.lock", dir_name_of(&self.repo)) }
 
     /// Never removed: a lock file deleted while one process holds it lets the next process lock
     /// a new file of the same name, and both believe they are the only writer.
@@ -849,7 +862,9 @@ mod tests {
         #[cfg(unix)]
         let inode = { use std::os::unix::fs::MetadataExt; std::fs::metadata(d.path().join(LEGACY_DIR)).unwrap().ino() };
         let store = Store::new(d.path());
+        assert_eq!(dir_name_of(d.path()), LEGACY_DIR);
         let _lock = store.lock_writer().unwrap();
+        assert_eq!(dir_name_of(d.path()), DIR);
         assert!(!d.path().join(LEGACY_DIR).exists(), "moved, not copied");
         let dir = d.path().join(DIR);
         #[cfg(unix)]
@@ -895,7 +910,6 @@ mod tests {
         assert!(repo.join(LEGACY_DIR).symlink_metadata().unwrap().file_type().is_symlink());
         assert_eq!(std::fs::read_dir(&elsewhere).unwrap().count(), 1);
 
-        // The other way round: a real old store beside a new name that is a link.
         std::fs::remove_file(repo.join(LEGACY_DIR)).unwrap();
         legacy_store(&repo);
         std::os::unix::fs::symlink(&elsewhere, repo.join(DIR)).unwrap();

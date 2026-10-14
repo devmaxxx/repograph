@@ -125,7 +125,7 @@ store under another embedder — on a copy of the store, never on the fixture.
 cd ~/Documents/projects/repograph/bench/compare
 python3 run.py \
   --repo /tmp/bench-corpus \
-  --repograph ~/Documents/projects/repograph/target/release/repograph \
+  --repograph ~/Documents/projects/repograph/target/release/zerograph \
   --graphify-graph /tmp/bench-corpus/graphify-out/graph.json \
   --truth /tmp/truth.json \
   --out ../results/$(date +%F)-beauty-crm.json

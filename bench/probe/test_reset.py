@@ -59,6 +59,7 @@ class Reset(unittest.TestCase):
         # second copy of it among the `**env` overrides would be shadowed by this one and a case
         # that meant to run under another model would silently run under the small one.
         e = {**os.environ, "FIX": str(self.fix), "WT": str(self.wt), "PIN": self.sha[:8], "BIN": str(self.bin), **env}
+        e.pop("ZEROGRAPH_EMBED_MODEL", None)
         if model is None:
             e.pop("REPOGRAPH_EMBED_MODEL", None)
         else:
@@ -89,10 +90,34 @@ class Reset(unittest.TestCase):
         self.dirty()
         (self.wt / ".zerograph").mkdir()
         (self.wt / ".zerograph/graph.json").write_text("{}")
+        # What a moved store carries: `git clean` honours it and would spare the directory.
+        (self.wt / ".zerograph/.gitignore").write_text("*\n")
         r = self.run_reset()
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
         self.assertFalse((self.wt / ".zerograph").exists())
         self.assertEqual((self.wt / ".repograph/graph.json").read_text(), FIXTURE_GRAPH)
+
+    def test_a_fixture_a_renamed_binary_moved_is_restored_under_the_name_it_holds(self):
+        # A reader's inline refresh is a write, so reading the fixture with a renamed binary moves
+        # its store; the next reset has to restore from where it went and not refuse.
+        shutil.move(self.fix / ".repograph", self.fix / ".zerograph")
+        (self.fix / ".zerograph/.gitignore").write_text("*\n")
+        self.dirty()
+        r = self.run_reset()
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertEqual((self.wt / ".zerograph/graph.json").read_text(), FIXTURE_GRAPH)
+        self.assertEqual((self.wt / ".zerograph/vectors.f32").read_bytes(), b"v")
+        self.assertFalse((self.wt / ".repograph").exists(), "the old name would be outranked: it goes")
+        self.assertEqual(git("status", "--porcelain", cwd=self.wt), "")
+
+    def test_a_fixture_holding_both_names_is_restored_from_the_one_the_binary_reads(self):
+        (self.fix / ".zerograph").mkdir()
+        (self.fix / ".zerograph/graph.json").write_text('{"nodes": {"FR-9": {}}, "edges": []}')
+        self.dirty()
+        r = self.run_reset()
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertEqual((self.wt / ".zerograph/graph.json").read_text(), '{"nodes": {"FR-9": {}}, "edges": []}')
+        self.assertFalse((self.wt / ".repograph").exists())
 
     def test_the_config_an_earlier_reset_wrote_is_gone_and_the_tree_is_clean(self):
         # The whole of the reason `changes` rows are read here: an untracked `repograph.toml` is a
@@ -150,6 +175,13 @@ class Reset(unittest.TestCase):
         r = self.run_reset()
         self.assertEqual(r.returncode, 2, r.stderr)
         self.assertIn("not a store to restore from", r.stderr)
+
+    def test_a_fixture_whose_new_name_is_an_empty_directory_is_refused_not_restored_from_the_old(self):
+        # The binary reads the empty `.zerograph` too, so a store beside it is not the one in use.
+        (self.fix / ".zerograph").mkdir()
+        r = self.run_reset()
+        self.assertEqual(r.returncode, 2, r.stderr)
+        self.assertIn(".zerograph/graph.json is missing", r.stderr)
 
     def test_a_settle_that_changes_anything_or_miscounts_fails(self):
         self.stub("changed 1 removed 0 nodes 1 edges 0")

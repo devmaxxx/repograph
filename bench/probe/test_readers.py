@@ -67,7 +67,8 @@ class Suite(unittest.TestCase):
     def run_suite(self, worktree="wt", **env):
         return subprocess.run(["bash", "probe/readers.sh", "./bin/repograph", worktree, "log", "1"],
                               cwd=self.tmp, capture_output=True, text=True,
-                              env={**os.environ, "REPOGRAPH_EMBED_MODEL": SMALL, **env})
+                              env={**{k: v for k, v in os.environ.items() if k != "ZEROGRAPH_EMBED_MODEL"},
+                                   "REPOGRAPH_EMBED_MODEL": SMALL, **env})
 
     def test_a_medians_step_that_refused_is_not_reported_as_a_suite_that_passed(self):
         self.judge.write_text(JUDGE_REFUSES)

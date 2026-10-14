@@ -1,6 +1,6 @@
 //! A repository built before the rename keeps its store under `.repograph/`. Upgrading the binary
-//! must neither rebuild nor re-embed it, so a reader answers from the old directory where it
-//! stands and the first write moves it.
+//! must not rebuild it, so a reader answers from the old directory where it stands and the first
+//! write moves it.
 
 mod common;
 
@@ -30,7 +30,8 @@ fn a_store_built_before_the_rename_answers_in_place_and_moves_on_the_next_write(
     assert!(answer.contains("Отмена визита"), "{answer}");
     assert!(!d.path().join(".zerograph").exists(), "a read moved the store");
 
-    ok(&run(d.path(), &["update"]));
+    let out = ok(&run(d.path(), &["update"]));
+    assert!(out.starts_with("changed 0 removed 0 "), "the move re-read something: {out}");
     assert!(!d.path().join(".repograph").exists());
     assert!(d.path().join(".zerograph/graph.json").exists());
     let answer = ok(&run(d.path(), &["explain", "FR-PAY-22", "--stale"]));

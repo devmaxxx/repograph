@@ -53,8 +53,11 @@ class Rules(unittest.TestCase):
         self.assertEqual(decided(row + "\n", "project"), row)
 
     def test_a_repograph_at_zero_percent_refuses_under_any_name_it_is_built_as(self):
-        row = f"{self.other} 0.0 /Users/max/bench/bin/repograph-main"
-        self.assertEqual(decided(row + "\n", "project"), row)
+        for path in ("/Users/max/bench/bin/repograph-main", "/Users/max/bench/bin/zerograph-main",
+                     "/Users/max/src/target/release/zerograph", "/Users/max/src/target/release/repograph"):
+            with self.subTest(path=path):
+                row = f"{self.other} 0.0 {path}"
+                self.assertEqual(decided(row + "\n", "project"), row)
 
     def test_a_path_with_a_space_in_it_is_still_read_as_its_own_name(self):
         row = f"{self.other} 12.0 /Applications/Some App/Contents/MacOS/node"

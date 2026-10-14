@@ -357,8 +357,9 @@ pub enum Resources {
 }
 
 /// The configured level unless `ZEROGRAPH_RESOURCES` names another, in the shape the other run
-/// variables use: unset or empty keeps what the files said.
-pub fn resources_from_env(configured: Resources, var: Option<&str>) -> Result<Resources> {
+/// variables use: unset or empty keeps what the files said. `name` is the variable `var` was read
+/// from, which is `REPOGRAPH_RESOURCES` for a profile written before the rename.
+pub fn resources_from_env(configured: Resources, var: Option<&str>, name: &str) -> Result<Resources> {
     let Some(raw) = var else { return Ok(configured) };
     let word = raw.trim();
     if word.is_empty() {
@@ -368,7 +369,7 @@ pub fn resources_from_env(configured: Resources, var: Option<&str>) -> Result<Re
         "low" => Ok(Resources::Low),
         "balanced" => Ok(Resources::Balanced),
         "full" => Ok(Resources::Full),
-        other => bail!("ZEROGRAPH_RESOURCES is {other:?}, which is none of \"low\", \"balanced\" or \"full\""),
+        other => bail!("{name} is {other:?}, which is none of \"low\", \"balanced\" or \"full\""),
     }
 }
 
@@ -886,11 +887,14 @@ mod tests {
 
     #[test]
     fn an_unknown_level_in_the_environment_is_an_error_naming_the_variable() {
-        assert_eq!(resources_from_env(Resources::Balanced, None).unwrap(), Resources::Balanced);
-        assert_eq!(resources_from_env(Resources::Balanced, Some("")).unwrap(), Resources::Balanced);
-        assert_eq!(resources_from_env(Resources::Balanced, Some(" LOW ")).unwrap(), Resources::Low);
-        let err = resources_from_env(Resources::Balanced, Some("half")).unwrap_err().to_string();
-        assert!(err.contains("ZEROGRAPH_RESOURCES"), "{err}");
+        let name = "ZEROGRAPH_RESOURCES";
+        assert_eq!(resources_from_env(Resources::Balanced, None, name).unwrap(), Resources::Balanced);
+        assert_eq!(resources_from_env(Resources::Balanced, Some(""), name).unwrap(), Resources::Balanced);
+        assert_eq!(resources_from_env(Resources::Balanced, Some(" LOW "), name).unwrap(), Resources::Low);
+        let err = resources_from_env(Resources::Balanced, Some("half"), name).unwrap_err().to_string();
+        assert!(err.contains(name), "{err}");
+        let err = resources_from_env(Resources::Balanced, Some("half"), "REPOGRAPH_RESOURCES").unwrap_err().to_string();
+        assert!(err.contains("REPOGRAPH_RESOURCES"), "the variable the value was read from: {err}");
     }
 
     #[test]
