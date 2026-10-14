@@ -162,8 +162,10 @@ pub(crate) fn open_for_read(p: &Path) -> Result<Option<std::fs::File>> {
 pub(crate) fn read_capped(f: std::fs::File, p: &Path) -> Result<Vec<u8>> {
     use std::io::Read;
     let too_big = || anyhow::anyhow!("{} is larger than {MAX_STORE_FILE} bytes; refusing to read it", p.display());
-    if f.metadata().with_context(|| format!("read {}", p.display()))?.len() > MAX_STORE_FILE { return Err(too_big()); }
-    let mut bytes = Vec::new();
+    let len = f.metadata().with_context(|| format!("read {}", p.display()))?.len();
+    if len > MAX_STORE_FILE { return Err(too_big()); }
+    // Sized up front: a buffer grown by doubling would hold twice the file at its last step.
+    let mut bytes = Vec::with_capacity(len as usize);
     // Bounded again while reading: the file may grow past the cap after its length was taken.
     f.take(MAX_STORE_FILE + 1).read_to_end(&mut bytes).with_context(|| format!("read {}", p.display()))?;
     if bytes.len() as u64 > MAX_STORE_FILE { return Err(too_big()); }
@@ -212,9 +214,10 @@ impl Store {
     fn load_mirrored_in<T: serde::de::DeserializeOwned>(dir: &Path, json: &str) -> Result<(Option<T>, Source)> {
         let p = dir.join(json);
         let Some(now) = stamp(&p) else { return Ok((None, Source::Absent)) };
-        if let Some(bytes) = read_in(dir, &mirror_name(json))? {
-            // A mirror that does not decode is one a crash or another release left behind; the
-            // JSON it mirrors is still there to answer from, so it is passed over, not reported.
+        if let Ok(Some(bytes)) = read_in(dir, &mirror_name(json)) {
+            // A mirror that does not decode, or that the read refuses, is one a crash, another
+            // release or a clone left behind; the JSON it mirrors is still there to answer from,
+            // so it is passed over, not reported.
             if bytes.starts_with(&mirror_header(now)) {
                 if let Ok(v) = postcard::from_bytes::<T>(&bytes[MIRROR_HEADER..]) { return Ok((Some(v), Source::Mirror)); }
             }
@@ -900,6 +903,21 @@ mod tests {
         }
         std::os::unix::fs::symlink("/dev/zero", d.path().join(DIR).join("graph.json")).unwrap();
         assert!(store.load().is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_mirror_a_clone_linked_away_is_passed_over_and_the_json_answers() {
+        let d = tempfile::tempdir().unwrap();
+        let store = Store::new(d.path());
+        let g = graph("через зеркало");
+        store.save(&g, &Manifest::default()).unwrap();
+        let mirror = d.path().join(DIR).join(mirror_name("graph.json"));
+        std::fs::remove_file(&mirror).unwrap();
+        std::os::unix::fs::symlink("/dev/zero", &mirror).unwrap();
+        let (got, source) = store.load_mirrored::<Graph>("graph.json").unwrap();
+        assert_eq!(serde_json::to_string(&got.unwrap()).unwrap(), serde_json::to_string(&g).unwrap());
+        assert!(matches!(source, Source::Json(_)));
     }
 
     #[cfg(unix)]
