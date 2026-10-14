@@ -7,7 +7,7 @@ set -euo pipefail
 F=${FIXTURE:-/Users/max/bench/beauty-crm-502e8a6d}
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="$(cd "$HERE/../../.." && pwd)"
-BIN=${BIN:-$REPO/target/release/repograph}
+BIN=${BIN:-$REPO/target/release/zerograph}
 
 mkdir -p "$HERE/A" "$HERE/B/hooks" "$HERE/B/skills"
 # A: the consuming project's instructions with the repograph sections removed — everything from

@@ -85,6 +85,15 @@ class Reset(unittest.TestCase):
         self.assertEqual(self.calls.read_text(), f"--repo {self.wt} --no-dense update\n")
         self.assertIn("settle  changed 0 removed 0 nodes 1 edges 0", r.stdout)
 
+    def test_a_store_a_renamed_binary_moved_is_not_left_to_outrank_the_restore(self):
+        self.dirty()
+        (self.wt / ".zerograph").mkdir()
+        (self.wt / ".zerograph/graph.json").write_text("{}")
+        r = self.run_reset()
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertFalse((self.wt / ".zerograph").exists())
+        self.assertEqual((self.wt / ".repograph/graph.json").read_text(), FIXTURE_GRAPH)
+
     def test_the_config_an_earlier_reset_wrote_is_gone_and_the_tree_is_clean(self):
         # The whole of the reason `changes` rows are read here: an untracked `repograph.toml` is a
         # changed path like any other, so a row that touched one file would map two.

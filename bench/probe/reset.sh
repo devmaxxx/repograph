@@ -48,6 +48,10 @@ printf '%s\n' "$block" | grep -q '^locked' || refuse "$wt is not locked — lock
 
 # `reset --hard` rather than `checkout -- .`: a staged edit survives the latter.
 git -C "$wt" reset -q --hard HEAD || exit 1
+# A renamed binary's first write moves the store to `.zerograph`, which then outranks the
+# `.repograph` restored below for every binary that knows both names: it goes, so the restore is
+# the store that is read. The fixture was built under the old name and is only ever read.
+rm -rf "$wt/.zerograph" || exit 1
 git -C "$wt" clean -fdq -e .repograph || exit 1
 # The store is the one path `clean` is told to keep, and the one the filter below excuses: it is
 # rewritten from the fixture two lines down, so removing it here would only cost an rsync. In this
