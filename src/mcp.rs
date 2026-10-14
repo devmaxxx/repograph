@@ -264,7 +264,7 @@ impl Server {
         }
         let recorded = index::dense::DenseIndex::recorded_model(&store)?;
         match (&recorded, &cfg) {
-            (Some(m), Ok(cfg)) if *m == cfg.embed_model => say(format!("model: {m} wrote the vectors and is the configured one")),
+            (Some(m), Ok(cfg)) if m.eq_ignore_ascii_case(&cfg.embed_model) => say(format!("model: {m} wrote the vectors and is the configured one")),
             (Some(m), Ok(cfg)) => say(format!("model: {m} wrote the vectors; {} is configured, and takes effect when `reindex` or `switch_model` rewrites them", cfg.embed_model)),
             (Some(m), Err(_)) => say(format!("model: {m} wrote the vectors")),
             (None, Ok(cfg)) => say(format!("model: no vectors yet; {} is configured", cfg.embed_model)),

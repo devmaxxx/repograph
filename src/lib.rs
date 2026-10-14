@@ -688,7 +688,7 @@ fn model_report(repo: &std::path::Path, cfg: &config::Config) -> anyhow::Result<
     }
     if let Some(m) = untrusted {
         out.push_str(&format!("\nThe store names a model this machine has not trusted, so readers answer lexical-only\nuntil it is trusted or the store is re-embedded with {} — {}.\n", cfg.embed_model, config::trust_hint(m)));
-    } else if recorded.as_deref().is_some_and(|m| m != cfg.embed_model) {
+    } else if recorded.as_deref().is_some_and(|m| !m.eq_ignore_ascii_case(&cfg.embed_model)) {
         out.push_str(&format!("\nThe two disagree. The store keeps answering with the model that wrote it; the\n\
             configured one takes effect at the next `build`, `update`, `embed` or\n\
             `watch` (an `ask` starts one when {} names the model), which drops\n\
