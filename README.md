@@ -25,7 +25,9 @@ zerograph build                            # full build into .zerograph/ (add it
 zerograph ask cancellation policy          # answer in a few lines
 ```
 
-Windows needs a few extra steps: [running on Windows](docs/windows.md).
+Windows needs a few extra steps: [running on Windows](docs/windows.md). Upgrading from repograph:
+the old store, config and variables are read where they are, see
+[coming from repograph](docs/install.md#coming-from-repograph).
 
 ## See it in action
 

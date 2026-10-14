@@ -77,6 +77,10 @@ beating the one below it:
 rerank_model = "sonnet"
 ```
 
+Each layer still answers to its name from before the rename — `REPOGRAPH_*`, `repograph.toml`,
+`~/.config/repograph/` — until the new name is there; [coming from repograph](install.md#coming-from-repograph)
+has the exact rules.
+
 A key the repository names wins even when it names the built-in value — with one exception, and it
 runs the other way. **`rerank_command` is read from the machine file and never from a
 repository.** A repository you cloned is untrusted input, and that key is a shell command that
