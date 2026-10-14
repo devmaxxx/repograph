@@ -334,11 +334,16 @@ impl Config {
             cfg.reader_budget = v.trim().parse().with_context(|| format!("{}={v:?} is not a whole number of seconds", crate::env_name("READER_BUDGET")))?;
         }
         cfg.rerank_command = rerank_template.replace(MODEL_SLOT, &cfg.rerank_model);
-        if names_model && !model_is_trusted(&cfg.embed_model) {
-            // The name is a repository's text, so it is echoed escaped.
-            let how = trust_hint(&cfg.embed_model);
-            let _ = writeln!(std::io::stderr(), "{file}: embed_model {:?} is not a catalogued model, so it is not downloaded on a repository's word — {how}; using {}", cfg.embed_model, crate::index::embed::DEFAULT_MODEL);
-            cfg.embed_model = crate::index::embed::DEFAULT_MODEL.into();
+        if names_model {
+            match trusted_spelling(&cfg.embed_model) {
+                Some(spelling) => cfg.embed_model = spelling,
+                None => {
+                    // The name is a repository's text, so it is echoed escaped.
+                    let how = trust_hint(&cfg.embed_model);
+                    let _ = writeln!(std::io::stderr(), "{file}: embed_model {:?} is not a catalogued model, so it is not downloaded on a repository's word — {how}; using {}", cfg.embed_model, crate::index::embed::DEFAULT_MODEL);
+                    cfg.embed_model = crate::index::embed::DEFAULT_MODEL.into();
+                }
+            }
         }
         Ok(cfg)
     }
@@ -457,12 +462,19 @@ fn trust_path() -> Option<std::path::PathBuf> {
 /// models are the ones `bench` measured, and any other is one the reader named with
 /// `zerograph model` on this machine — under either name, since a trust given before the rename
 /// is still the reader's.
-pub fn model_is_trusted(model: &str) -> bool {
+pub fn model_is_trusted(model: &str) -> bool { trusted_spelling(model).is_some() }
+
+/// The spelling `model_is_trusted` accepted it under: the catalogue's, else the line the reader
+/// wrote. The match ignores case, and the spelling opened is the hub cache key and the fetch name,
+/// so a store or a file naming a trusted model in another case would otherwise fetch a second copy
+/// of it beside the cached one.
+pub fn trusted_spelling(model: &str) -> Option<String> {
+    let model = model.trim();
     let listed = |p: std::path::PathBuf| std::fs::read_to_string(p).ok()
-        .is_some_and(|t| t.lines().any(|l| !l.trim().is_empty() && l.trim().eq_ignore_ascii_case(model.trim())));
-    crate::index::embed::measured(model).is_some()
-        || trust_path().is_some_and(listed)
-        || legacy_machine_path().map(|p| p.with_file_name("trusted-models")).is_some_and(listed)
+        .and_then(|t| t.lines().map(str::trim).find(|l| !l.is_empty() && l.eq_ignore_ascii_case(model)).map(str::to_string));
+    crate::index::embed::measured(model).map(|m| m.model.to_string())
+        .or_else(|| trust_path().and_then(listed))
+        .or_else(|| legacy_machine_path().map(|p| p.with_file_name("trusted-models")).and_then(listed))
 }
 
 /// Records `model` as one this machine's reader chose; `None` when nothing needed writing.
@@ -1083,6 +1095,12 @@ mod tests {
     }
 
     #[test]
+    fn a_catalogued_model_in_another_case_is_trusted_under_the_catalogues_spelling() {
+        let shouted = crate::index::embed::DEFAULT_MODEL.to_ascii_uppercase();
+        assert_eq!(trusted_spelling(&shouted).as_deref(), Some(crate::index::embed::DEFAULT_MODEL));
+    }
+
+    #[test]
     fn a_machine_file_and_trust_list_from_before_the_rename_are_read_until_new_ones_exist() {
         with_machine(None, || {
             let home = tempfile::tempdir().unwrap();
@@ -1097,6 +1115,7 @@ mod tests {
             std::fs::write(old.join("trusted-models"), "acme/old-trust\n").unwrap();
             let read_old = Config::load(home.path()).map(|c| c.rerank_model);
             let trusted_old = model_is_trusted("acme/old-trust");
+            let spelled_old = trusted_spelling("ACME/Old-Trust");
             let wrote = trust_model("acme/new-trust");
             let new = home.path().join("zerograph/config.toml");
             let beside_old = legacy_machine_file_beside(&old.join("config.toml"));
@@ -1110,6 +1129,7 @@ mod tests {
             assert_eq!(beside_new, Some(old.join("config.toml")), "a new file beside the old one is the notice's cue");
             assert_eq!(read_old.unwrap(), "from-old-machine");
             assert!(trusted_old, "a trust given before the rename still stands");
+            assert_eq!(spelled_old.as_deref(), Some("acme/old-trust"), "opened under the spelling the reader trusted");
             assert_eq!(wrote.unwrap(), Some(home.path().join("zerograph/trusted-models")), "a new trust goes to the new directory");
             assert_eq!(std::fs::read_to_string(old.join("trusted-models")).unwrap(), "acme/old-trust\n", "the old list is not written");
             assert_eq!(read_new.unwrap(), "from-new-machine");
