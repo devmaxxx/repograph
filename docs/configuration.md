@@ -1,7 +1,7 @@
 # Configuration
 
-`repograph.toml` at the repository root — this file also doubles as the worked example, set to its
-own defaults. Every key is optional; a repository with no `repograph.toml` gets `Config::default()`
+`zerograph.toml` at the repository root — this file also doubles as the worked example, set to its
+own defaults. Every key is optional; a repository with no `zerograph.toml` gets `Config::default()`
 in full, not an empty config:
 
 | Key                  | Default                                                                                     |
@@ -9,19 +9,19 @@ in full, not an empty config:
 | `doc_globs`          | `["**/*.md"]`                                                                               |
 | `code_globs`         | `["**/*.ts", "**/*.tsx", "**/*.js", "**/*.jsx", "**/*.mjs", "**/*.cjs", "**/*.kt", "**/*.java", "**/*.cs", "**/*.rs", "**/*.py", "**/*.dart", "**/*.swift", "**/*.gql", "**/*.graphql", "**/*.sql", "**/*.bicep", "**/*.tf", "**/*.hcl", "**/*.sh", "**/*.bash", "**/*.vue", "**/*.lua", "**/*.go", "**/*.c", "**/*.h", "**/*.cc", "**/*.cpp", "**/*.cxx", "**/*.c++", "**/*.ino", "**/*.hh", "**/*.hpp", "**/*.hxx", "**/*.h++", "**/*.php", "**/*.rb", "**/*.rbw", "**/*.gemspec", "**/*.rake", "**/*.ex", "**/*.exs", "**/*.scala", "**/*.sc", "**/*.ml", "**/*.mli"]` — every language in [Languages](languages.md) |
 | `text_globs`         | `[]` — files no doc or code glob claims, each read as one text node when its content is text  |
-| `skip`               | `["**/node_modules/**", "**/dist/**", "**/*.min.js", "**/.yarn/**", "**/.pnp.*", "**/target/**", "**/.venv/**", "**/venv/**", "**/__pycache__/**", "**/.terraform/**", "**/.dart_tool/**", "**/Pods/**", "**/vendor/**", "**/_build/**", "**/TRACKER.md", "graphify-out/**", ".repograph/**"]` |
+| `skip`               | `["**/node_modules/**", "**/dist/**", "**/*.min.js", "**/.yarn/**", "**/.pnp.*", "**/target/**", "**/.venv/**", "**/venv/**", "**/__pycache__/**", "**/.terraform/**", "**/.dart_tool/**", "**/Pods/**", "**/vendor/**", "**/_build/**", "**/TRACKER.md", "graphify-out/**", ".zerograph/**", ".repograph/**"]` |
 | `include`            | `[]` — the whole repository; set, only these directories (`src`, `docs/specs`) or globs are read |
 | `registries`         | `["docs/constitution.yaml"]`                                                                |
 | `rerank_command`     | **machine file only** — headless `claude -p --model {model}` with thinking off, see [Spending tokens on purpose](rerank.md) |
 | `rerank_model`       | `haiku` — whatever goes in `rerank_command`'s `{model}`                                     |
-| `reranker_dir`       | directory of the exported cross-encoder for `--rerank-local`; empty = `~/.cache/repograph/reranker`. Machine file only: a repository's is ignored, like the commands |
-| `embed_model`        | `onnx-community/embeddinggemma-300m-ONNX`; the model the vectors are written with — nine were measured and `repograph model` switches it, see [Embeddings](embeddings.md) |
-| `reader_budget`      | `10` — seconds a reader may spend refreshing before it answers from the store as it stands and leaves the rest to a detached `update`; `0` never refreshes inline. The machine file may set it; `REPOGRAPH_READER_BUDGET` overrides, see [Keeping it fresh](keeping-fresh.md#keeping-it-fresh) |
+| `reranker_dir`       | directory of the exported cross-encoder for `--rerank-local`; empty = `~/.cache/zerograph/reranker`. Machine file only: a repository's is ignored, like the commands |
+| `embed_model`        | `onnx-community/embeddinggemma-300m-ONNX`; the model the vectors are written with — nine were measured and `zerograph model` switches it, see [Embeddings](embeddings.md) |
+| `reader_budget`      | `10` — seconds a reader may spend refreshing before it answers from the store as it stands and leaves the rest to a detached `update`; `0` never refreshes inline. The machine file may set it; `ZEROGRAPH_READER_BUDGET` overrides, see [Keeping it fresh](keeping-fresh.md#keeping-it-fresh) |
 | `resources`          | `"balanced"` = 30% of the logical cores; `"low"` a sixth, `"full"` a half — how much of the machine a run may take, see [Resources](configuration.md#resources) |
 
-`REPOGRAPH_CODE_GLOBS`, whitespace-separated, replaces `code_globs` for one run. It is a measurement's
-switch, as `REPOGRAPH_EMBED_MODEL` is, so a reading can name other globs without writing a
-`repograph.toml` into the tree it measures.
+`ZEROGRAPH_CODE_GLOBS`, whitespace-separated, replaces `code_globs` for one run. It is a measurement's
+switch, as `ZEROGRAPH_EMBED_MODEL` is, so a reading can name other globs without writing a
+`zerograph.toml` into the tree it measures.
 
 `include` narrows the walk to what a project lets a reader see: `include = ["src", "docs"]` reads
 nothing outside those two directories, whatever the other globs claim, and the next `update` drops
@@ -31,15 +31,15 @@ keys and keystores, `.npmrc`, `.pypirc`, `.netrc`, `.git-credentials`, cloud cre
 `*.tfvars`, `*.tfstate` and `secrets.{yaml,json,toml,…}` — their content would otherwise reach the store, a
 `--rerank` prompt sent to a model, and the answers.
 
-The store writes its own `.gitignore` holding `*`, so `.repograph/` stays out of a commit in a
+The store writes its own `.gitignore` holding `*`, so `.zerograph/` stays out of a commit in a
 repository that never listed it.
 
 `text_globs` (empty by default) takes in every file no doc or code glob claims whose content is
 text — configuration, YAML, JSON, data — as one node each, searchable by `ask` and named by
 `changes`, with nothing parsed below it. A file is binary when its first 8,000 bytes hold a NUL.
 Lockfiles, `*.min.*`, `*.map`, `vendor/` and text over 1 MiB are left out; the build says how
-many were over the size. `REPOGRAPH_TEXT_GLOBS`, whitespace-separated, replaces the list for one run,
-and `REPOGRAPH_TEXT_GLOBS=-` turns it off for one (`-` does the same for `REPOGRAPH_CODE_GLOBS`).
+many were over the size. `ZEROGRAPH_TEXT_GLOBS`, whitespace-separated, replaces the list for one run,
+and `ZEROGRAPH_TEXT_GLOBS=-` turns it off for one (`-` does the same for `ZEROGRAPH_CODE_GLOBS`).
 `ask` points a text file's line at the one holding most of the question's words, and `--bodies`
 prints the twelve lines around it rather than the whole file. A store holding text nodes is read by
 0.6.0 and later only: 0.5.x stops on `graph.json: unknown variant Text`, and `build` with that
@@ -68,19 +68,23 @@ beating the one below it:
 
 | Layer | Where |
 | --- | --- |
-| the run | `REPOGRAPH_RERANK_MODEL`, `REPOGRAPH_RESOURCES` |
-| the repository | `repograph.toml` |
-| the machine | `$REPOGRAPH_CONFIG`, else `$XDG_CONFIG_HOME/repograph/config.toml`, else `~/.config/repograph/config.toml` (`%USERPROFILE%\.config\repograph\config.toml` on Windows) |
+| the run | `ZEROGRAPH_RERANK_MODEL`, `ZEROGRAPH_RESOURCES` |
+| the repository | `zerograph.toml` |
+| the machine | `$ZEROGRAPH_CONFIG`, else `$XDG_CONFIG_HOME/zerograph/config.toml`, else `~/.config/zerograph/config.toml` (`%USERPROFILE%\.config\zerograph\config.toml` on Windows) |
 
 ```toml
-# ~/.config/repograph/config.toml — every repository on this machine, unless it says otherwise
+# ~/.config/zerograph/config.toml — every repository on this machine, unless it says otherwise
 rerank_model = "sonnet"
 ```
+
+Each layer still answers to its name from before the rename — `REPOGRAPH_*`, `repograph.toml`,
+`~/.config/repograph/` — until the new name is there; [coming from repograph](install.md#coming-from-repograph)
+has the exact rules.
 
 A key the repository names wins even when it names the built-in value — with one exception, and it
 runs the other way. **`rerank_command` is read from the machine file and never from a
 repository.** A repository you cloned is untrusted input, and that key is a shell command that
-would run on your machine the first time you ran `ask --rerank` in it; a `repograph.toml` that
+would run on your machine the first time you ran `ask --rerank` in it; a `zerograph.toml` that
 names one gets a line on stderr saying where the key belongs. If the machine file names its own
 command, that one runs. If not, `bench --rerank` stops
 instead of falling through to the built-in paid model, and `ask --rerank` answers from the fused
@@ -100,7 +104,7 @@ key, not a setting quietly ignored — both structs are `deny_unknown_fields`, a
 and did nothing would leave you believing a number you wrote is still read.
 
 `enrich_command`, `enrich_model` and `enrich_languages` went with `enrich` in 0.6.0. They still
-parse, so a config written for 0.5.x keeps working, and each one present prints `repograph.toml:
+parse, so a config written for 0.5.x keeps working, and each one present prints `zerograph.toml:
 <key> is no longer read — enrich was removed in 0.6.0` (`config.toml:` from the machine file);
 delete them.
 
@@ -122,13 +126,13 @@ command that answers without reading its prompt to the end is fine too: the brok
 hits is ignored on purpose. The default runs headless Claude Code with thinking off: the same
 answers, 4–5× faster.
 
-**Another vendor is a different command line, not a different repograph.** Only the first of these
+**Another vendor is a different command line, not a different zerograph.** Only the first of these
 is what this repository runs; the second is verified against that CLI's `--help` on this machine and
-the rest are shapes. All of them go in the **machine** file — `~/.config/repograph/config.toml` —
+the rest are shapes. All of them go in the **machine** file — `~/.config/zerograph/config.toml` —
 because a command a cloned repository names is a command it runs on your machine:
 
 ```toml
-# ~/.config/repograph/config.toml
+# ~/.config/zerograph/config.toml
 # The shipped default: headless Claude Code, thinking off.
 rerank_command = "MAX_THINKING_TOKENS=0 claude -p --model {model} --output-format text --tools \"\" --system-prompt \"You write plain text. You have no tools, no files and no memory: the only thing you can do is print your answer. Do all of the task at once: never ask a question, never ask to confirm, never comment — print only the answer.\" --setting-sources \"\" --strict-mcp-config --no-session-persistence"
 rerank_model = "haiku"
@@ -182,10 +186,10 @@ milestone, whatever the prefix; hyphenless labels such as `B1` or `S3` are not i
 and cannot become families. A citation of a prefix no line defines — `ISO-8601`, a ticket number, a
 year — is found like any other and then held aside: no reader follows it, no count reports it, and
 `verify` says how many are waiting and under which prefixes. Writing a line that defines the prefix
-is how it crosses that line, and the next `repograph update` releases what was held into the graph.
+is how it crosses that line, and the next `zerograph update` releases what was held into the graph.
 
 ```bash
-repograph families                          # families, milestones, and everything left as text
+zerograph families                          # families, milestones, and everything left as text
 ```
 
 Run after a build, it prints every family with its node count, how many definitions stand behind it
@@ -205,7 +209,7 @@ An `update` whose documents gained or lost a family says so — `families: +REQ`
 and re-reads nothing else: the one file that changed is read, and the citations the graph was
 holding for the new family are released where they lie. A resident `serve` or `watch` says the same
 on the poll that applies it, and `ask`'s own refresh never costs a pass over the whole corpus. A
-`repograph.toml` still naming `id_families` parses, gets one line on stderr, and is otherwise
+`zerograph.toml` still naming `id_families` parses, gets one line on stderr, and is otherwise
 unaffected.
 
 ## Resources
@@ -233,8 +237,8 @@ quota rather than of the host. A level's threads are all a run computes on: `n` 
 over the 30% it is meant to hold, and three threads cost **about 30% more wall** (521.1 s → 674.3 s
 on `build`, 107.2 s → 139.2 s on `update`) for a peak of 301%. Memory is not per thread: peak RSS is
 the model's memory-mapped weights, which the system may drop and re-read, plus about 0.35 GB of
-the graph and the rows being written, whatever the level. Set it in `repograph.toml`, once for the
-machine in `~/.config/repograph/config.toml`, or `REPOGRAPH_RESOURCES=full` for one run. A build
+the graph and the rows being written, whatever the level. Set it in `zerograph.toml`, once for the
+machine in `~/.config/zerograph/config.toml`, or `ZEROGRAPH_RESOURCES=full` for one run. A build
 server wants `full`; a laptop you are working on wants `low`.
 
 `resources` is the only resource lever there is: `threads` and `priority` were removed on

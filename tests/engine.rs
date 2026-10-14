@@ -6,7 +6,7 @@ mod common;
 use std::sync::OnceLock;
 
 use common::code::{lines, repo};
-use repograph::code::engine::{
+use zerograph::code::engine::{
     compile, facts, header, import_targets, resolve, write, Ambiguity, Body, Cap, Compiled, Doc, EdgeKind, Export, Extraction,
     Facts, File, Form, Import, ImportBase, ImportPaths, Label, Lang, Line, Receivers, Sources, Spec, Visibility, NONE,
 };

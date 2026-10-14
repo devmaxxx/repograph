@@ -1,4 +1,4 @@
-//! `repograph install-agent`: writes the agent-facing surface into a consuming repository, for
+//! `zerograph install-agent`: writes the agent-facing surface into a consuming repository, for
 //! Claude Code or for Codex. The texts are embedded with `include_str!` rather than copied from a
 //! checkout, so a binary and the surface it installs cannot disagree about what the tool can do.
 //!
@@ -42,8 +42,8 @@ impl Target {
 #[derive(Debug, Default)]
 pub struct Report { pub written: usize, pub paths: Vec<String>, pub notes: Vec<String> }
 
-/// A text with `{{command}}` resolved to how this repository invokes the binary — `repograph`
-/// unless a caller says otherwise, `pnpm exec repograph` in a workspace that installs it as a
+/// A text with `{{command}}` resolved to how this repository invokes the binary — `zerograph`
+/// unless a caller says otherwise, `pnpm exec zerograph` in a workspace that installs it as a
 /// dependency. Every text that names a command carries it: a line naming the bare binary where
 /// PATH has none tells an agent to run something that is not there.
 fn with_command(template: &str, command: &str) -> String { template.replace("{{command}}", command) }
@@ -52,14 +52,29 @@ fn with_command(template: &str, command: &str) -> String { template.replace("{{c
 /// `{{command}}`, because this text lands in JavaScript: a JSON string is a JavaScript string
 /// literal, so no quote, backslash or `${` in a command can end the literal or open an expression.
 /// The template declares the default, which is what lets the hook's own tests run it as it ships.
-const HOOK_COMMAND: &str = "const COMMAND = \"repograph\";";
+const HOOK_COMMAND: &str = "const COMMAND = \"zerograph\";";
 
 fn hook(command: &str) -> String {
     HOOK.replacen(HOOK_COMMAND, &format!("const COMMAND = {};", serde_json::Value::from(command)), 1)
 }
 
-const BEGIN: &str = "<!-- repograph:begin -->";
-const END: &str = "<!-- repograph:end -->";
+const BEGIN: &str = "<!-- zerograph:begin -->";
+const END: &str = "<!-- zerograph:end -->";
+/// The markers an install made before the rename wrote: its stanza is ours to replace, so an
+/// upgrade leaves one stanza and not two naming different binaries.
+const LEGACY_BEGIN: &str = "<!-- repograph:begin -->";
+const LEGACY_END: &str = "<!-- repograph:end -->";
+
+/// Where a marked block starts, and where its end marker ends.
+fn marked(text: &str, begin: &str, end: &str) -> Option<(usize, usize)> {
+    let a = text.find(begin)?;
+    let b = a + text[a..].find(end)?;
+    Some((a, b + end.len()))
+}
+
+fn skip_break(text: &str) -> &str {
+    text.strip_prefix("\r\n").or_else(|| text.strip_prefix('\n')).unwrap_or(text)
+}
 
 /// The instructions file with our stanza in it: replacing what is between the markers when they are
 /// there, appending when they are not. Everything outside the markers is the repository's own and
@@ -67,15 +82,28 @@ const END: &str = "<!-- repograph:end -->";
 /// installer at all.
 pub fn merged_instructions(existing: &str, command: &str) -> String {
     let block = with_command(STANZA, command);
-    match (existing.find(BEGIN), existing.find(END)) {
-        (Some(a), Some(b)) if b > a => {
+    let ours = marked(existing, BEGIN, END);
+    let legacy = marked(existing, LEGACY_BEGIN, LEGACY_END);
+    match (ours, legacy) {
+        // Both: the old one goes with the line it ended, and with one blank line when the text
+        // before it ends in one, or the gap it leaves would be two. The new one is replaced as usual.
+        (Some(_), Some((a, b))) => {
+            let before = &existing[..a];
+            let after = skip_break(&existing[b..]);
+            let blank_before = before.is_empty() || before.ends_with("\n\n") || before.ends_with("\n\r\n");
+            let after = if blank_before { skip_break(after) } else { after };
+            merged_instructions(&format!("{before}{after}"), command)
+        }
+        (Some((a, b)), None) | (None, Some((a, b))) => {
             let mut out = String::with_capacity(existing.len() + block.len());
             out.push_str(&existing[..a]);
             out.push_str(block.trim_end());
-            out.push_str(&existing[b + END.len()..]);
-            out
+            out.push_str(&existing[b..]);
+            // Replacing the first old stanza leaves a second one beside ours, and the arm above
+            // removes it; stopping here would leave the file to change again on the next run.
+            if marked(&out, LEGACY_BEGIN, LEGACY_END).is_some() { merged_instructions(&out, command) } else { out }
         }
-        _ => {
+        (None, None) => {
             let mut out = existing.to_string();
             if !out.is_empty() && !out.ends_with('\n') { out.push('\n'); }
             if !out.is_empty() { out.push('\n'); }
@@ -122,16 +150,21 @@ pub fn merged_settings(existing: &str, hook_path: &str) -> Result<(String, Vec<S
         let Some(arr) = list.as_array_mut() else { anyhow::bail!("`hooks.{event}` is not an array") };
         if arr.iter().any(|e| e.to_string().contains("repograph-notice")) { retired.push(event.to_string()); }
         // Ours by the script it runs, never by position: a repository's own entries keep theirs.
-        arr.retain(|e| !e.to_string().contains("repograph-hook") && !e.to_string().contains("repograph-notice"));
+        // `repograph-hook` is this hook under the name it had before the rename.
+        arr.retain(|e| !["zerograph-hook", "repograph-hook", "repograph-notice"].iter().any(|s| e.to_string().contains(s)));
         arr.push(ours);
     }
     Ok((serde_json::to_string_pretty(&root)? + "\n", retired))
 }
 
-/// A repository can ship `.claude/settings.json` or `repograph.toml` as a link to a file elsewhere
+fn is_symlink(path: &Path) -> bool {
+    std::fs::symlink_metadata(path).is_ok_and(|m| m.file_type().is_symlink())
+}
+
+/// A repository can ship `.claude/settings.json` or `zerograph.toml` as a link to a file elsewhere
 /// on the machine, and a write through it would overwrite that file with ours.
 fn refuse_symlink(path: &Path) -> Result<()> {
-    if std::fs::symlink_metadata(path).is_ok_and(|m| m.file_type().is_symlink()) {
+    if is_symlink(path) {
         anyhow::bail!("{} is a symlink; refusing to write through it — replace it with a regular file and run again", path.display());
     }
     Ok(())
@@ -168,12 +201,38 @@ pub fn codex_hooks_block(hook_abs: &str) -> String {
     })).unwrap_or_default()
 }
 
+/// Removes the script an install made before the rename, which nothing runs once the settings
+/// name the new one. Only a regular file that still carries the hook's debug tag, which every
+/// release of it printed, is ours to remove: a link, or a file someone rewrote into something
+/// else, is left and named. So is one that `local_settings`, a file this install does not merge,
+/// still runs, and one the filesystem will not let go of: the settings already name the new
+/// script by now, and an error here would take the rest of the install's report with it.
+fn retire_legacy_hook(path: &Path, local_settings: &Path, report: &mut Report) {
+    let Ok(meta) = std::fs::symlink_metadata(path) else { return };
+    if std::fs::read_to_string(local_settings).is_ok_and(|t| t.contains("repograph-hook")) {
+        report.notes.push(format!("{} is still run from {}, which is not edited here, so it was left; point that entry at zerograph-hook.mjs, then remove it",
+            path.display(), local_settings.display()));
+        return;
+    }
+    let ours = meta.is_file() && std::fs::read_to_string(path).is_ok_and(|t| t.contains("[repograph-hook]"));
+    if !ours {
+        report.notes.push(format!("{} is not the hook this tool wrote, so it was left; nothing runs it now", path.display()));
+        return;
+    }
+    if let Err(e) = std::fs::remove_file(path) {
+        report.notes.push(format!("{} could not be removed ({e}); nothing runs it now, so remove it by hand", path.display()));
+        return;
+    }
+    report.written += 1;
+    report.notes.push(format!("removed {}, the hook from before the rename; zerograph-hook.mjs replaces it", path.display()));
+}
+
 /// Installs the surface for one harness under `root`. Returns what it actually wrote: a second run
 /// writes nothing, which is how a caller can tell an upgrade from a no-op.
 pub fn install(root: &Path, target: Target, command: &str) -> Result<Report> {
     let mut report = Report::default();
     let base: PathBuf = root.join(target.dir());
-    let hook_file = base.join("hooks").join("repograph-hook.mjs");
+    let hook_file = base.join("hooks").join("zerograph-hook.mjs");
     write_if_changed(&hook_file, &hook(command), &mut report)?;
     write_if_changed(&base.join("hooks").join("rule.txt"), &with_command(RULE, command), &mut report)?;
     write_if_changed(&base.join("skills").join("repo-query").join("SKILL.md"), &with_command(SKILL, command), &mut report)?;
@@ -185,8 +244,8 @@ pub fn install(root: &Path, target: Target, command: &str) -> Result<Report> {
     // project directory; Codex runs with the repository as its working directory and exports
     // nothing, so the path is relative there.
     let hook_path = match target {
-        Target::Claude => "$CLAUDE_PROJECT_DIR/.claude/hooks/repograph-hook.mjs".to_string(),
-        Target::Codex => ".codex/hooks/repograph-hook.mjs".to_string(),
+        Target::Claude => "$CLAUDE_PROJECT_DIR/.claude/hooks/zerograph-hook.mjs".to_string(),
+        Target::Codex => ".codex/hooks/zerograph-hook.mjs".to_string(),
     };
     if target.hooks_are_repository_scoped() {
         let settings = base.join("settings.json");
@@ -199,23 +258,53 @@ pub fn install(root: &Path, target: Target, command: &str) -> Result<Report> {
         }
         write_if_changed(&settings, &merged, &mut report)?;
     }
+    let legacy_hook = base.join("hooks").join("repograph-hook.mjs");
+    match target.hooks_are_repository_scoped() {
+        // Only once the settings name the new script, so a failed merge leaves a working install.
+        true => retire_legacy_hook(&legacy_hook, &base.join("settings.local.json"), &mut report),
+        // The machine's hooks file may still run it, and an install from here cannot see that file.
+        false if std::fs::symlink_metadata(&legacy_hook).is_ok() => report.notes.push(format!(
+            "{} is the hook from before the rename; point ~/.codex/hooks.json at zerograph-hook.mjs, then remove it",
+            legacy_hook.display())),
+        false => {}
+    }
 
     // Codex's is the repository root or nowhere; Claude Code reads either, and a repository that
-    // already keeps a root `CLAUDE.md` should not grow a second file beside it.
+    // already keeps a root `CLAUDE.md` should not grow a second file beside it. A stanza already in
+    // `.claude/CLAUDE.md` stays the one to update, though, or a root file made since would hold a
+    // second stanza beside the first.
     let root_instructions = root.join(target.instructions());
-    let instructions = match target == Target::Codex || root_instructions.exists() {
+    let inner_instructions = base.join(target.instructions());
+    let instructions = match target == Target::Codex || holds_stanza(&root_instructions)
+        || (root_instructions.exists() && !holds_stanza(&inner_instructions))
+    {
         true => root_instructions,
-        false => base.join(target.instructions()),
+        false => inner_instructions,
     };
     let existing = std::fs::read_to_string(&instructions).unwrap_or_default();
-    write_if_changed(&instructions, &merged_instructions(&existing, command), &mut report)?;
+    let merged = merged_instructions(&existing, command);
+    // Never written through a link, and not an error either: `CLAUDE.md` linked to `AGENTS.md` is
+    // common, and failing here would abort an install that has already rewritten the settings and
+    // removed the old hook, before the MCP server and the git hooks are reached.
+    match merged != existing && is_symlink(&instructions) {
+        true => report.notes.push(format!(
+            "{} is a symlink, so the stanza was not written through it; `install-agent --codex` writes it \
+             when it points at AGENTS.md, and otherwise the file it points to needs the update by hand",
+            instructions.display())),
+        false => write_if_changed(&instructions, &merged, &mut report)?,
+    }
     Ok(report)
 }
 
-const MCP_NAME: &str = "repograph";
+fn holds_stanza(path: &Path) -> bool {
+    std::fs::read_to_string(path).is_ok_and(|t| t.contains(BEGIN) || t.contains(LEGACY_BEGIN))
+}
+
+const MCP_NAME: &str = "zerograph";
+const LEGACY_MCP_NAME: &str = "repograph";
 
 /// The words of a command line the way a shell would split it, for the quotes and backslashes a
-/// `--command` like `pnpm exec "my repograph"` needs: the registered argv has to be the one the
+/// `--command` like `pnpm exec "my zerograph"` needs: the registered argv has to be the one the
 /// person meant, not whatever whitespace splitting makes of it.
 fn split_words(command: &str) -> Vec<String> {
     let (mut words, mut word, mut quote, mut started) = (Vec::new(), String::new(), None::<char>, false);
@@ -233,7 +322,7 @@ fn split_words(command: &str) -> Vec<String> {
     words
 }
 
-/// Registers `repograph --repo <root> mcp` with Claude Code for the project at `root`, through
+/// Registers `zerograph --repo <root> mcp` with Claude Code for the project at `root`, through
 /// `claude mcp add` so the harness keeps its own registry's format. `--repo` is explicit because
 /// the server's working directory is the harness's choice. `run` is how `claude` is invoked: a
 /// test passes its own, and `None` from it means the binary is not on PATH. A registration that
@@ -258,6 +347,7 @@ pub fn register_mcp(root: &Path, command: &str, run: &dyn Fn(&Path, &[&str]) -> 
         let shown = String::from_utf8_lossy(&existing.stdout);
         if said_in_order(&shown, program.as_str(), &tail) {
             report.notes.push("MCP server already registered, left alone".to_string());
+            retire_legacy_mcp(root, run, &mut report);
             return report;
         }
         if !run(root, &["mcp", "remove", MCP_NAME]).is_some_and(|o| o.status.success()) {
@@ -271,11 +361,27 @@ pub fn register_mcp(root: &Path, command: &str, run: &dyn Fn(&Path, &[&str]) -> 
         Some(added) if added.status.success() => {
             report.written = 1;
             report.paths.push(by_hand);
+            retire_legacy_mcp(root, run, &mut report);
         }
         Some(failed) => report.notes.push(format!("`claude mcp add` failed, the MCP server was not registered: {}", String::from_utf8_lossy(&failed.stderr).trim())),
         None => report.notes.push("`claude` went away between two calls; the MCP server was not registered".to_string()),
     }
     report
+}
+
+/// The server an install made before the rename registered would answer beside `zerograph`, every
+/// tool twice. It goes only once `zerograph` is registered, so a failed `add` leaves the old one
+/// answering and not nothing, and only from the local scope, where `claude mcp add` put it:
+/// without a scope the CLI removes whichever single scope holds the name, a user-level or a
+/// tracked `.mcp.json` entry included, and refuses when several do.
+fn retire_legacy_mcp(root: &Path, run: &dyn Fn(&Path, &[&str]) -> Option<std::process::Output>, report: &mut Report) {
+    if !run(root, &["mcp", "get", LEGACY_MCP_NAME]).is_some_and(|o| o.status.success()) { return; }
+    match run(root, &["mcp", "remove", LEGACY_MCP_NAME, "-s", "local"]) {
+        Some(o) if o.status.success() => report.notes.push(format!("removed the MCP server registered as `{LEGACY_MCP_NAME}`; `{MCP_NAME}` replaces it")),
+        _ => report.notes.push(format!(
+            "an MCP server is still registered as `{LEGACY_MCP_NAME}` and was not removed; `claude mcp get {LEGACY_MCP_NAME}` shows its scope, \
+             and `claude mcp remove {LEGACY_MCP_NAME} -s <scope>` removes it")),
+    }
 }
 
 /// `word` as one shell word: bare when it has nothing the shell would split or expand, and
@@ -309,8 +415,10 @@ pub fn run_claude(root: &Path, args: &[&str]) -> Option<std::process::Output> {
 
 /// The git events after which the tree can have moved by a pull's worth of files.
 const GIT_HOOKS: [&str; 2] = ["post-merge", "post-checkout"];
-const GIT_BEGIN: &str = "# repograph:begin";
-const GIT_END: &str = "# repograph:end";
+const GIT_BEGIN: &str = "# zerograph:begin";
+const GIT_END: &str = "# zerograph:end";
+const LEGACY_GIT_BEGIN: &str = "# repograph:begin";
+const LEGACY_GIT_END: &str = "# repograph:end";
 
 /// The block each git hook runs. `update --detach` starts the refresh and returns, so neither a
 /// pull nor a checkout waits for it, and a binary missing from PATH costs the hook nothing.
@@ -318,7 +426,7 @@ const GIT_END: &str = "# repograph:end";
 /// post-merge passes no third argument.
 fn git_block(command: &str) -> String {
     format!("{GIT_BEGIN}\n\
-        # Brings repograph's index in line with what this pull or checkout moved, in the background.\n\
+        # Brings zerograph's index in line with what this pull or checkout moved, in the background.\n\
         if [ \"$3\" != \"0\" ]; then {command} update --detach >/dev/null 2>&1 || true; fi\n\
         {GIT_END}\n")
 }
@@ -331,9 +439,11 @@ fn git_block(command: &str) -> String {
 /// script, which Git for Windows runs as well.
 pub fn merged_git_hook(existing: &str, command: &str) -> String {
     let block = git_block(command);
-    match (existing.find(GIT_BEGIN), existing.find(GIT_END)) {
-        (Some(a), Some(b)) if b > a => {
-            let tail = existing[b + GIT_END.len()..].strip_prefix('\n').unwrap_or(&existing[b + GIT_END.len()..]);
+    // A block from before the rename goes the same way, or the hook would refresh twice.
+    let found = marked(existing, GIT_BEGIN, GIT_END).or_else(|| marked(existing, LEGACY_GIT_BEGIN, LEGACY_GIT_END));
+    match found {
+        Some((a, b)) => {
+            let tail = existing[b..].strip_prefix('\n').unwrap_or(&existing[b..]);
             merged_git_hook(&format!("{}{tail}", &existing[..a]), command)
         }
         _ if existing.trim().is_empty() => format!("#!/bin/sh\n{block}"),
@@ -380,7 +490,7 @@ pub fn install_git_hooks(root: &Path, command: &str) -> Result<Report> {
         write_if_changed(&path, &merged_git_hook(&existing, command), &mut report)?;
         if report.written > before {
             make_executable(&path)?;
-            if !existing.trim().is_empty() && !existing.contains(GIT_BEGIN) {
+            if !existing.trim().is_empty() && !existing.contains(GIT_BEGIN) && !existing.contains(LEGACY_GIT_BEGIN) {
                 report.notes.push(format!("{name}: inserted into the hook already there, which runs after it"));
             }
         }
@@ -452,7 +562,7 @@ mod tests {
         std::fs::write(&victim, "{}").unwrap();
         std::fs::create_dir_all(dir.path().join(".claude")).unwrap();
         std::os::unix::fs::symlink(&victim, dir.path().join(".claude/settings.json")).unwrap();
-        let err = install(dir.path(), Target::Claude, "repograph").unwrap_err().to_string();
+        let err = install(dir.path(), Target::Claude, "zerograph").unwrap_err().to_string();
         assert!(err.contains("symlink"), "{err}");
         assert_eq!(std::fs::read_to_string(&victim).unwrap(), "{}");
     }
@@ -465,47 +575,215 @@ mod tests {
 
     #[test]
     fn a_command_is_split_the_way_a_shell_would() {
-        assert_eq!(split_words("repograph"), ["repograph"]);
-        assert_eq!(split_words("pnpm exec  repograph"), ["pnpm", "exec", "repograph"]);
+        assert_eq!(split_words("zerograph"), ["zerograph"]);
+        assert_eq!(split_words("pnpm exec  zerograph"), ["pnpm", "exec", "zerograph"]);
         assert_eq!(split_words(r#"pnpm exec "my repo graph" 'a b' c\ d"#), ["pnpm", "exec", "my repo graph", "a b", "c d"]);
         assert_eq!(split_words(r#"x "" y"#), ["x", "", "y"]);
         assert!(split_words("   ").is_empty());
     }
 
-    /// A `claude` whose registry holds at most one entry, shown the way `mcp get` prints it.
+    /// A `claude` whose registry holds one entry per name, shown the way `mcp get` prints it.
+    #[cfg(unix)]
+    fn fake_claude(calls: &std::cell::RefCell<Vec<Vec<String>>>, registry: &std::cell::RefCell<std::collections::BTreeMap<String, String>>, args: &[&str]) -> Option<std::process::Output> {
+        calls.borrow_mut().push(args.iter().map(|a| a.to_string()).collect());
+        Some(match args {
+            ["mcp", "get", name] => match registry.borrow().get(*name) { Some(shown) => exited(0, shown), None => exited(1, "") },
+            ["mcp", "remove", name, ..] => { registry.borrow_mut().remove(*name); exited(0, "") }
+            ["mcp", "add", name, "--", program, rest @ ..] => {
+                registry.borrow_mut().insert(name.to_string(), format!("{name}:\n  Command: {program}\n  Args: {}\n", rest.join(" ")));
+                exited(0, "")
+            }
+            _ => exited(1, ""),
+        })
+    }
+
     #[cfg(unix)]
     #[test]
     fn the_mcp_server_is_registered_once_a_second_run_leaves_it_and_a_different_one_is_replaced() {
         let calls = std::cell::RefCell::new(Vec::<Vec<String>>::new());
-        let entry = std::cell::RefCell::new(None::<String>);
-        let claude = |_: &Path, args: &[&str]| {
-            calls.borrow_mut().push(args.iter().map(|a| a.to_string()).collect());
-            Some(match args {
-                ["mcp", "get", _] => match &*entry.borrow() { Some(shown) => exited(0, shown), None => exited(1, "") },
-                ["mcp", "remove", _] => { *entry.borrow_mut() = None; exited(0, "") }
-                ["mcp", "add", _, "--", program, rest @ ..] => { *entry.borrow_mut() = Some(format!("repograph:\n  Command: {program}\n  Args: {}\n", rest.join(" "))); exited(0, "") }
-                _ => exited(1, ""),
-            })
-        };
+        let registry = std::cell::RefCell::new(std::collections::BTreeMap::new());
+        let claude = |_: &Path, args: &[&str]| fake_claude(&calls, &registry, args);
         let root = Path::new("/work/proj");
-        let first = register_mcp(root, "pnpm exec repograph", &claude);
+        let first = register_mcp(root, "pnpm exec zerograph", &claude);
         assert_eq!(first.written, 1);
-        assert_eq!(calls.borrow()[1], ["mcp", "add", "repograph", "--", "pnpm", "exec", "repograph", "--repo", "/work/proj", "mcp"]);
-        let second = register_mcp(root, "pnpm exec repograph", &claude);
+        assert!(calls.borrow().iter().any(|c| c == &["mcp", "add", "zerograph", "--", "pnpm", "exec", "zerograph", "--repo", "/work/proj", "mcp"]), "{:?}", calls.borrow());
+        let asked = calls.borrow().len();
+        let second = register_mcp(root, "pnpm exec zerograph", &claude);
         assert_eq!(second.written, 0);
-        assert_eq!(calls.borrow().len(), 3, "the second run only asked");
+        assert!(calls.borrow()[asked..].iter().all(|c| c[1] == "get"), "the second run only asked: {:?}", calls.borrow());
         assert!(second.notes[0].contains("already registered"));
-        let moved = register_mcp(Path::new("/work/other"), "pnpm exec repograph", &claude);
+        let moved = register_mcp(Path::new("/work/other"), "pnpm exec zerograph", &claude);
         assert_eq!(moved.written, 1, "another repository replaces the entry");
         assert!(calls.borrow().iter().any(|c| c[..2] == ["mcp", "remove"]));
-        assert!(entry.borrow().as_deref().unwrap().contains("/work/other"));
+        assert!(registry.borrow()["zerograph"].contains("/work/other"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_server_registered_before_the_rename_is_removed_so_it_does_not_answer_twice() {
+        let calls = std::cell::RefCell::new(Vec::<Vec<String>>::new());
+        let registry = std::cell::RefCell::new(std::collections::BTreeMap::new());
+        registry.borrow_mut().insert("repograph".to_string(), "repograph:\n  Command: repograph\n  Args: --repo /work/proj mcp\n".to_string());
+        let claude = |_: &Path, args: &[&str]| fake_claude(&calls, &registry, args);
+        let r = register_mcp(Path::new("/work/proj"), "zerograph", &claude);
+        assert_eq!(r.written, 1);
+        assert_eq!(registry.borrow().keys().collect::<Vec<_>>(), ["zerograph"]);
+        assert!(r.notes.iter().any(|n| n.contains("`repograph`")), "{:?}", r.notes);
+        let removals: Vec<_> = calls.borrow().iter().filter(|c| c[1] == "remove").cloned().collect();
+        assert_eq!(removals, [["mcp", "remove", "repograph", "-s", "local"]], "only the local scope, where the old install put it");
+        let again = register_mcp(Path::new("/work/proj"), "zerograph", &claude);
+        assert_eq!(again.written, 0);
+        assert!(!again.notes.iter().any(|n| n.contains("`repograph`")), "nothing left to remove: {:?}", again.notes);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_server_registered_before_the_rename_stays_when_the_new_one_cannot_be_added() {
+        let calls = std::cell::RefCell::new(Vec::<Vec<String>>::new());
+        let registry = std::cell::RefCell::new(std::collections::BTreeMap::new());
+        registry.borrow_mut().insert("repograph".to_string(), "repograph:\n  Command: repograph\n  Args: --repo /work/proj mcp\n".to_string());
+        let claude = |_: &Path, args: &[&str]| match args {
+            ["mcp", "add", ..] => Some(exited(1, "")),
+            _ => fake_claude(&calls, &registry, args),
+        };
+        let r = register_mcp(Path::new("/work/proj"), "zerograph", &claude);
+        assert_eq!(r.written, 0);
+        assert!(registry.borrow().contains_key("repograph"), "the old server is the only one there is");
+        assert!(calls.borrow().iter().all(|c| c[1] != "remove"), "{:?}", calls.borrow());
+        assert!(!r.notes.iter().any(|n| n.contains("replaces it")), "{:?}", r.notes);
+    }
+
+    #[test]
+    fn a_stanza_and_git_block_from_before_the_rename_are_replaced_not_doubled() {
+        let legacy = "# House rules\n\n<!-- repograph:begin -->\nrun `repograph ask`\n<!-- repograph:end -->\n\nMore rules.\n";
+        let merged = merged_instructions(legacy, "zerograph");
+        assert!(!merged.contains("repograph"), "{merged}");
+        assert_eq!(merged.matches(BEGIN).count(), 1, "{merged}");
+        assert!(merged.starts_with("# House rules\n\n") && merged.ends_with("\n\nMore rules.\n"), "{merged}");
+        assert_eq!(merged_instructions(&merged, "zerograph"), merged, "re-merging is a no-op");
+        let block = with_command(STANZA, "zerograph");
+        let both = format!("{legacy}\n{block}");
+        let merged = merged_instructions(&both, "zerograph");
+        assert_eq!(merged, format!("# House rules\n\nMore rules.\n\n{block}"), "the old stanza goes with one of its two blank lines");
+        assert_eq!(merged_instructions(&merged, "zerograph"), merged);
+        let crlf = merged_instructions(&both.replace('\n', "\r\n"), "zerograph");
+        assert!(crlf.starts_with("# House rules\r\n\r\nMore rules.\r\n\r\n") && !crlf.contains("repograph"), "{crlf:?}");
+
+        let twice = "# A\n\n<!-- repograph:begin -->\nold\n<!-- repograph:end -->\n\nmid\n\n<!-- repograph:begin -->\nolder\n<!-- repograph:end -->\n";
+        let merged = merged_instructions(twice, "zerograph");
+        assert!(!merged.contains("repograph") && merged.matches(BEGIN).count() == 1, "{merged}");
+        assert_eq!(merged_instructions(&merged, "zerograph"), merged, "one run reaches the fixed point");
+
+        let hook = "#!/bin/sh\n# repograph:begin\nif [ \"$3\" != \"0\" ]; then repograph update --detach >/dev/null 2>&1 || true; fi\n# repograph:end\nnpx lefthook run post-merge\n";
+        let merged = merged_git_hook(hook, "zerograph");
+        assert!(!merged.contains("repograph"), "{merged}");
+        assert_eq!(merged.matches(GIT_BEGIN).count(), 1);
+        assert!(merged.starts_with("#!/bin/sh\n# zerograph:begin") && merged.ends_with("npx lefthook run post-merge\n"), "{merged}");
+    }
+
+    #[test]
+    fn an_install_from_before_the_rename_is_upgraded_in_place() {
+        let dir = root();
+        let hooks = dir.path().join(".claude/hooks");
+        std::fs::create_dir_all(&hooks).unwrap();
+        std::fs::write(hooks.join("repograph-hook.mjs"), "function debug() { console.error('[repograph-hook]'); }\n").unwrap();
+        std::fs::write(dir.path().join(".claude/settings.json"), r#"{"hooks":{"SessionStart":[
+            {"matcher":"startup","hooks":[{"type":"command","command":"node \"$CLAUDE_PROJECT_DIR/.claude/hooks/repograph-hook.mjs\""}]}
+        ]}}"#).unwrap();
+        let r = install(dir.path(), Target::Claude, "zerograph").unwrap();
+        assert!(!hooks.join("repograph-hook.mjs").exists(), "{r:?}");
+        assert!(r.notes.iter().any(|n| n.contains("repograph-hook.mjs")), "{:?}", r.notes);
+        let settings = std::fs::read_to_string(dir.path().join(".claude/settings.json")).unwrap();
+        assert!(!settings.contains("repograph-hook"), "{settings}");
+        let v: serde_json::Value = serde_json::from_str(&settings).unwrap();
+        assert_eq!(v["hooks"]["SessionStart"].as_array().unwrap().len(), 1);
+
+        std::fs::write(hooks.join("repograph-hook.mjs"), "// the team's own script\n").unwrap();
+        let r = install(dir.path(), Target::Claude, "zerograph").unwrap();
+        assert!(hooks.join("repograph-hook.mjs").exists());
+        assert!(r.notes.iter().any(|n| n.contains("not the hook this tool wrote")), "{:?}", r.notes);
+
+        // Codex's machine hooks file may still run the old script, so it stays until a person moves it.
+        let codex = dir.path().join(".codex/hooks");
+        std::fs::create_dir_all(&codex).unwrap();
+        std::fs::write(codex.join("repograph-hook.mjs"), "console.error('[repograph-hook]');\n").unwrap();
+        let r = install(dir.path(), Target::Codex, "zerograph").unwrap();
+        assert!(codex.join("repograph-hook.mjs").exists());
+        assert!(r.notes.iter().any(|n| n.contains("~/.codex/hooks.json")), "{:?}", r.notes);
+    }
+
+    #[test]
+    fn the_old_hook_stays_while_the_local_settings_still_run_it() {
+        let dir = root();
+        let hooks = dir.path().join(".claude/hooks");
+        std::fs::create_dir_all(&hooks).unwrap();
+        std::fs::write(hooks.join("repograph-hook.mjs"), "console.error('[repograph-hook]');\n").unwrap();
+        std::fs::write(dir.path().join(".claude/settings.local.json"),
+            r#"{"hooks":{"SessionStart":[{"hooks":[{"type":"command","command":"node \"$CLAUDE_PROJECT_DIR/.claude/hooks/repograph-hook.mjs\""}]}]}}"#).unwrap();
+        let r = install(dir.path(), Target::Claude, "zerograph").unwrap();
+        assert!(hooks.join("repograph-hook.mjs").exists(), "a dangling entry would fail on every session start");
+        assert!(r.notes.iter().any(|n| n.contains("settings.local.json")), "{:?}", r.notes);
+    }
+
+    /// The settings name the new script before the old one is removed, so a script the filesystem
+    /// will not let go of is a note and the rest of the install still runs.
+    #[cfg(unix)]
+    #[test]
+    fn an_old_hook_that_cannot_be_removed_is_a_note_and_not_the_end_of_the_install() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = root();
+        install(dir.path(), Target::Claude, "zerograph").unwrap();
+        let hooks = dir.path().join(".claude/hooks");
+        std::fs::write(hooks.join("repograph-hook.mjs"), "console.error('[repograph-hook]');\n").unwrap();
+        std::fs::set_permissions(&hooks, std::fs::Permissions::from_mode(0o555)).unwrap();
+        // Root, and a filesystem that ignores the mode, can remove it anyway.
+        let can_write = std::fs::write(hooks.join("probe"), "").is_ok();
+        let r = install(dir.path(), Target::Claude, "zerograph");
+        std::fs::set_permissions(&hooks, std::fs::Permissions::from_mode(0o755)).unwrap();
+        if can_write { return; }
+        let r = r.expect("a hook that stays is not an error");
+        assert!(hooks.join("repograph-hook.mjs").exists());
+        assert!(r.notes.iter().any(|n| n.contains("could not be removed")), "{:?}", r.notes);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_claude_md_linked_to_agents_md_is_not_written_through_and_does_not_end_the_install() {
+        let dir = root();
+        let legacy = "# Rules\n\n<!-- repograph:begin -->\nrun `repograph ask`\n<!-- repograph:end -->\n";
+        std::fs::write(dir.path().join("AGENTS.md"), legacy).unwrap();
+        std::os::unix::fs::symlink("AGENTS.md", dir.path().join("CLAUDE.md")).unwrap();
+        let r = install(dir.path(), Target::Claude, "zerograph").unwrap();
+        assert!(r.notes.iter().any(|n| n.contains("symlink")), "{:?}", r.notes);
+        assert_eq!(std::fs::read_to_string(dir.path().join("AGENTS.md")).unwrap(), legacy, "what the link points at is left alone");
+        assert!(dir.path().join(".claude/settings.json").exists(), "the rest of the install ran");
+
+        // `install-agent --claude --codex` runs Codex first, which writes the file the link points at.
+        install(dir.path(), Target::Codex, "zerograph").unwrap();
+        let r = install(dir.path(), Target::Claude, "zerograph").unwrap();
+        assert!(!r.notes.iter().any(|n| n.contains("symlink")), "nothing left to write: {:?}", r.notes);
+        let text = std::fs::read_to_string(dir.path().join("AGENTS.md")).unwrap();
+        assert_eq!(text.matches(BEGIN).count(), 1, "{text}");
+        assert!(!text.contains("repograph"), "{text}");
+    }
+
+    #[test]
+    fn a_stanza_in_the_inner_claude_md_stays_the_one_updated_when_a_root_file_appears_later() {
+        let dir = root();
+        std::fs::create_dir_all(dir.path().join(".claude")).unwrap();
+        std::fs::write(dir.path().join(".claude/CLAUDE.md"), "<!-- repograph:begin -->\nrun `repograph ask`\n<!-- repograph:end -->\n").unwrap();
+        std::fs::write(dir.path().join("CLAUDE.md"), "# House rules\n").unwrap();
+        install(dir.path(), Target::Claude, "zerograph").unwrap();
+        let inner = std::fs::read_to_string(dir.path().join(".claude/CLAUDE.md")).unwrap();
+        assert!(inner.contains(BEGIN) && !inner.contains("repograph"), "{inner}");
+        assert_eq!(std::fs::read_to_string(dir.path().join("CLAUDE.md")).unwrap(), "# House rules\n", "no second stanza beside the first");
     }
 
     #[test]
     fn a_machine_without_claude_gets_a_note_and_the_command_to_run() {
-        let r = register_mcp(Path::new("."), "repograph", &|_, _| None);
+        let r = register_mcp(Path::new("."), "zerograph", &|_, _| None);
         assert_eq!(r.written, 0);
-        assert!(r.notes[0].contains("claude mcp add repograph -- repograph --repo . mcp"), "{:?}", r.notes);
+        assert!(r.notes[0].contains("claude mcp add zerograph -- zerograph --repo . mcp"), "{:?}", r.notes);
     }
 
     fn git_repo() -> tempfile::TempDir {
@@ -519,12 +797,12 @@ mod tests {
     #[test]
     fn the_git_hooks_are_written_once_and_start_a_detached_update() {
         let dir = git_repo();
-        let first = install_git_hooks(dir.path(), "repograph").unwrap();
+        let first = install_git_hooks(dir.path(), "zerograph").unwrap();
         assert_eq!(first.written, 2, "{first:?}");
         for name in GIT_HOOKS {
             let text = std::fs::read_to_string(dir.path().join(".git/hooks").join(name)).unwrap();
             assert!(text.starts_with("#!/bin/sh\n"), "{text}");
-            assert!(text.contains("repograph update --detach"), "{text}");
+            assert!(text.contains("zerograph update --detach"), "{text}");
             #[cfg(unix)]
             {
                 use std::os::unix::fs::PermissionsExt;
@@ -532,30 +810,30 @@ mod tests {
                 assert!(mode & 0o111 != 0, "{name} is executable");
             }
         }
-        assert_eq!(install_git_hooks(dir.path(), "repograph").unwrap().written, 0, "a second install is a no-op");
+        assert_eq!(install_git_hooks(dir.path(), "zerograph").unwrap().written, 0, "a second install is a no-op");
     }
 
     #[test]
     fn a_hook_already_there_keeps_its_own_lines_and_gets_the_block_once() {
         let mine = "#!/bin/sh\nnpx lefthook run post-merge\n";
-        let once = merged_git_hook(mine, "repograph");
+        let once = merged_git_hook(mine, "zerograph");
         assert!(once.starts_with("#!/bin/sh\n") && once.ends_with("npx lefthook run post-merge\n"), "{once}");
-        assert_eq!(merged_git_hook(&once, "repograph"), once, "re-merging is a no-op");
-        let upgraded = merged_git_hook(&once, "pnpm exec repograph");
-        assert!(upgraded.ends_with("npx lefthook run post-merge\n") && upgraded.contains("pnpm exec repograph update --detach"), "{upgraded}");
+        assert_eq!(merged_git_hook(&once, "zerograph"), once, "re-merging is a no-op");
+        let upgraded = merged_git_hook(&once, "pnpm exec zerograph");
+        assert!(upgraded.ends_with("npx lefthook run post-merge\n") && upgraded.contains("pnpm exec zerograph update --detach"), "{upgraded}");
         assert_eq!(upgraded.matches(GIT_BEGIN).count(), 1);
-        let appended = format!("#!/bin/sh\nexec npx lefthook run post-merge\n{}", git_block("repograph"));
-        let moved = merged_git_hook(&appended, "repograph");
+        let appended = format!("#!/bin/sh\nexec npx lefthook run post-merge\n{}", git_block("zerograph"));
+        let moved = merged_git_hook(&appended, "zerograph");
         assert!(moved.ends_with("exec npx lefthook run post-merge\n") && moved.find(GIT_BEGIN) < moved.find("exec"), "an older install's block moves ahead of exec: {moved}");
     }
 
     #[test]
     fn the_block_runs_before_a_hook_that_ends_in_exit_or_exec() {
         let husky = "#!/usr/bin/env sh\n. husky.sh\nexec npx lefthook run post-merge\n";
-        let merged = merged_git_hook(husky, "repograph");
+        let merged = merged_git_hook(husky, "zerograph");
         assert!(merged.find(GIT_BEGIN).unwrap() < merged.find("exec npx").unwrap(), "{merged}");
         assert!(merged.starts_with("#!/usr/bin/env sh\n"), "{merged}");
-        let bare = merged_git_hook("echo hi\n", "repograph");
+        let bare = merged_git_hook("echo hi\n", "zerograph");
         assert!(bare.starts_with(GIT_BEGIN) && bare.ends_with("echo hi\n"), "{bare}");
     }
 
@@ -573,9 +851,9 @@ mod tests {
     fn a_path_with_a_space_is_quoted_for_hand_use_and_matches_what_claude_printed() {
         assert_eq!(shell_word("/a b/it's"), "'/a b/it'\\''s'");
         assert_eq!(shell_word("--repo"), "--repo");
-        assert!(said_in_order("Command: repograph\nArgs: --repo /a b mcp", "repograph", &["--repo", "/a b", "mcp"]));
-        assert!(!said_in_order("Args: mcp --repo /a b", "repograph", &["--repo", "/a b", "mcp"]));
-        assert!(!said_in_order("Command: repograph\nArgs: --repo /a b2 mcp", "repograph", &["--repo", "/a b", "mcp"]), "another root");
+        assert!(said_in_order("Command: zerograph\nArgs: --repo /a b mcp", "zerograph", &["--repo", "/a b", "mcp"]));
+        assert!(!said_in_order("Args: mcp --repo /a b", "zerograph", &["--repo", "/a b", "mcp"]));
+        assert!(!said_in_order("Command: zerograph\nArgs: --repo /a b2 mcp", "zerograph", &["--repo", "/a b", "mcp"]), "another root");
     }
 
     #[test]
@@ -583,7 +861,7 @@ mod tests {
         let dir = git_repo();
         let hook = dir.path().join(".git/hooks/post-merge");
         std::fs::write(&hook, "#!/usr/bin/env node\nconsole.log(1)\n").unwrap();
-        let r = install_git_hooks(dir.path(), "repograph").unwrap();
+        let r = install_git_hooks(dir.path(), "zerograph").unwrap();
         assert_eq!(r.written, 1, "only post-checkout: {r:?}");
         assert_eq!(std::fs::read_to_string(&hook).unwrap(), "#!/usr/bin/env node\nconsole.log(1)\n");
     }
@@ -594,18 +872,18 @@ mod tests {
         let set = |value: &str| assert!(std::process::Command::new("git").arg("-C").arg(dir.path()).args(["config", "core.hooksPath", value])
             .env_remove("GIT_DIR").status().unwrap().success());
         set(".husky");
-        let r = install_git_hooks(dir.path(), "repograph").unwrap();
+        let r = install_git_hooks(dir.path(), "zerograph").unwrap();
         assert_eq!(r.written, 0, "{r:?}");
         assert!(!dir.path().join(".husky/post-merge").exists());
         set(".git/my-hooks");
-        install_git_hooks(dir.path(), "repograph").unwrap();
+        install_git_hooks(dir.path(), "zerograph").unwrap();
         assert!(dir.path().join(".git/my-hooks/post-merge").exists(), "a directory not made yet is still inside");
     }
 
     #[test]
     fn outside_a_git_repository_nothing_is_written_and_it_says_so() {
         let dir = root();
-        let r = install_git_hooks(dir.path(), "repograph").unwrap();
+        let r = install_git_hooks(dir.path(), "zerograph").unwrap();
         assert_eq!(r.written, 0);
         assert_eq!(r.notes.len(), 1, "{r:?}");
     }
@@ -613,13 +891,13 @@ mod tests {
     #[test]
     fn installing_twice_writes_the_same_tree_and_says_it_changed_nothing() {
         let dir = root();
-        let first = install(dir.path(), Target::Claude, "repograph").unwrap();
+        let first = install(dir.path(), Target::Claude, "zerograph").unwrap();
         assert!(first.written > 0, "{first:?}");
-        for rel in [".claude/hooks/repograph-hook.mjs", ".claude/skills/repo-query/SKILL.md",
+        for rel in [".claude/hooks/zerograph-hook.mjs", ".claude/skills/repo-query/SKILL.md",
                     ".claude/agents/repo-scout.md", ".claude/settings.json", ".claude/CLAUDE.md"] {
             assert!(dir.path().join(rel).exists(), "{rel} was not written");
         }
-        let second = install(dir.path(), Target::Claude, "repograph").unwrap();
+        let second = install(dir.path(), Target::Claude, "zerograph").unwrap();
         assert_eq!(second.written, 0, "a second install is a no-op: {second:?}");
     }
 
@@ -631,7 +909,7 @@ mod tests {
         std::fs::create_dir_all(dir.path().join(".claude")).unwrap();
         std::fs::write(dir.path().join(".claude/settings.json"),
             r#"{"model":"opus","hooks":{"Stop":[{"hooks":[{"type":"command","command":"echo mine"}]}]}}"#).unwrap();
-        install(dir.path(), Target::Claude, "repograph").unwrap();
+        install(dir.path(), Target::Claude, "zerograph").unwrap();
         let v: serde_json::Value = serde_json::from_str(
             &std::fs::read_to_string(dir.path().join(".claude/settings.json")).unwrap()).unwrap();
         assert_eq!(v["model"], "opus", "a key that is not ours is untouched");
@@ -647,10 +925,10 @@ mod tests {
         let dir = root();
         std::fs::create_dir_all(dir.path().join(".claude")).unwrap();
         std::fs::write(dir.path().join(".claude/settings.json"), r#"{"hooks":{"SessionStart":[
-            {"matcher":"startup","hooks":[{"type":"command","command":"node /old/path/repograph-hook.mjs"}]},
+            {"matcher":"startup","hooks":[{"type":"command","command":"node /old/path/zerograph-hook.mjs"}]},
             {"matcher":"startup","hooks":[{"type":"command","command":"node .claude/hooks/repograph-notice.mjs"}]}
         ]}}"#).unwrap();
-        let r = install(dir.path(), Target::Claude, "repograph").unwrap();
+        let r = install(dir.path(), Target::Claude, "zerograph").unwrap();
         let v: serde_json::Value = serde_json::from_str(
             &std::fs::read_to_string(dir.path().join(".claude/settings.json")).unwrap()).unwrap();
         let arr = v["hooks"]["SessionStart"].as_array().unwrap();
@@ -666,14 +944,14 @@ mod tests {
     fn the_stanza_lands_in_a_root_instructions_file_when_there_is_one_and_replaces_only_itself() {
         let dir = root();
         std::fs::write(dir.path().join("CLAUDE.md"), "# House rules\n\nRun the tests.\n").unwrap();
-        install(dir.path(), Target::Claude, "pnpm exec repograph").unwrap();
+        install(dir.path(), Target::Claude, "pnpm exec zerograph").unwrap();
         let text = std::fs::read_to_string(dir.path().join("CLAUDE.md")).unwrap();
         assert!(text.starts_with("# House rules\n\nRun the tests.\n"), "{text}");
-        assert!(text.contains("pnpm exec repograph ask <words>"), "{text}");
+        assert!(text.contains("pnpm exec zerograph ask <words>"), "{text}");
         assert!(!dir.path().join(".claude/CLAUDE.md").exists(), "the root file was the one to use");
 
         // A re-install under a different invocation name replaces the block and nothing else.
-        install(dir.path(), Target::Claude, "repograph").unwrap();
+        install(dir.path(), Target::Claude, "zerograph").unwrap();
         let text = std::fs::read_to_string(dir.path().join("CLAUDE.md")).unwrap();
         assert!(text.starts_with("# House rules\n\nRun the tests.\n"), "{text}");
         assert!(!text.contains("pnpm exec"), "the old block went: {text}");
@@ -686,11 +964,11 @@ mod tests {
     #[test]
     fn codex_gets_its_stanza_at_the_root_and_no_repository_hooks_file() {
         let dir = root();
-        install(dir.path(), Target::Codex, "repograph").unwrap();
-        assert!(dir.path().join(".codex/hooks/repograph-hook.mjs").exists(), "something to point at");
+        install(dir.path(), Target::Codex, "zerograph").unwrap();
+        assert!(dir.path().join(".codex/hooks/zerograph-hook.mjs").exists(), "something to point at");
         assert!(dir.path().join(".codex/skills/repo-query/SKILL.md").exists());
         let stanza = std::fs::read_to_string(dir.path().join("AGENTS.md")).unwrap();
-        assert!(stanza.contains("repograph ask <words>"), "{stanza}");
+        assert!(stanza.contains("zerograph ask <words>"), "{stanza}");
         assert!(!dir.path().join(".codex/AGENTS.md").exists(), "nothing reads that path");
         assert!(!dir.path().join(".codex/hooks.json").exists(), "hooks are CODEX_HOME-relative");
         assert!(!dir.path().join(".codex/agents").exists(), "the scout is a Claude Code definition");
@@ -710,13 +988,13 @@ mod tests {
         let dir = root();
         std::fs::create_dir_all(dir.path().join(".claude")).unwrap();
         std::fs::write(dir.path().join(".claude/settings.json"), "not json").unwrap();
-        let err = install(dir.path(), Target::Claude, "repograph").unwrap_err().to_string();
+        let err = install(dir.path(), Target::Claude, "zerograph").unwrap_err().to_string();
         assert!(err.contains("not JSON"), "{err}");
         assert_eq!(std::fs::read_to_string(dir.path().join(".claude/settings.json")).unwrap(), "not json");
     }
 
     /// `--command` is how this repository runs the binary, and a pnpm workspace has no bare
-    /// `repograph` on PATH: a file that still says the bare name tells an agent to run nothing.
+    /// `zerograph` on PATH: a file that still says the bare name tells an agent to run nothing.
     /// So every text either harness installs carries it, and not only the stanza.
     #[test]
     fn the_command_reaches_every_file_either_harness_installs() {
@@ -726,14 +1004,14 @@ mod tests {
             (Target::Codex, &[".codex/hooks/rule.txt", ".codex/skills/repo-query/SKILL.md", "AGENTS.md"][..]),
         ] {
             let dir = root();
-            install(dir.path(), target, "pnpm exec repograph").unwrap();
+            install(dir.path(), target, "pnpm exec zerograph").unwrap();
             for rel in texts {
                 let text = std::fs::read_to_string(dir.path().join(rel)).unwrap();
-                assert!(text.contains("`pnpm exec repograph "), "{rel} names the command: {text}");
-                assert!(!text.contains("`repograph ") && !text.contains("{{command}}"), "{rel} still names the bare binary: {text}");
+                assert!(text.contains("`pnpm exec zerograph "), "{rel} names the command: {text}");
+                assert!(!text.contains("`zerograph ") && !text.contains("{{command}}"), "{rel} still names the bare binary: {text}");
             }
-            let script = std::fs::read_to_string(dir.path().join(target.dir()).join("hooks/repograph-hook.mjs")).unwrap();
-            assert!(script.contains("\nconst COMMAND = \"pnpm exec repograph\";\n"), "{target:?}: the hook's hints read one declaration");
+            let script = std::fs::read_to_string(dir.path().join(target.dir()).join("hooks/zerograph-hook.mjs")).unwrap();
+            assert!(script.contains("\nconst COMMAND = \"pnpm exec zerograph\";\n"), "{target:?}: the hook's hints read one declaration");
         }
     }
 
@@ -742,7 +1020,7 @@ mod tests {
     #[test]
     fn the_hook_takes_the_command_as_one_json_string_and_the_default_as_it_ships() {
         assert_eq!(HOOK.matches(HOOK_COMMAND).count(), 1, "the declaration the installer replaces is in the hook once");
-        assert_eq!(hook("repograph"), HOOK, "the default installs the template byte for byte");
+        assert_eq!(hook("zerograph"), HOOK, "the default installs the template byte for byte");
         let script = hook(r#"pnpm exec "re'po\graph" `x` ${y}"#);
         assert!(script.contains(r#"const COMMAND = "pnpm exec \"re'po\\graph\" `x` ${y}";"#), "the command is one string literal");
         assert_eq!(script.matches("const COMMAND = ").count(), 1);
@@ -755,8 +1033,8 @@ mod tests {
         for target in [Target::Claude, Target::Codex] {
             let dir = root();
             std::fs::write(dir.path().join(target.instructions()), "# House rules\n").unwrap();
-            assert!(install(dir.path(), target, "pnpm exec repograph").unwrap().written > 0);
-            let again = install(dir.path(), target, "pnpm exec repograph").unwrap();
+            assert!(install(dir.path(), target, "pnpm exec zerograph").unwrap().written > 0);
+            let again = install(dir.path(), target, "pnpm exec zerograph").unwrap();
             assert_eq!(again.written, 0, "{target:?}: {again:?}");
         }
     }
@@ -766,17 +1044,17 @@ mod tests {
     /// its own. A stanza carrying that line is left alone by the formatter and by a re-run of this.
     #[test]
     fn the_stanza_is_what_prettier_writes_and_a_rerun_keeps_it() {
-        let block = with_command(STANZA, "repograph");
-        assert!(block.starts_with("<!-- repograph:begin -->\n\n## repograph\n"), "{block}");
+        let block = with_command(STANZA, "zerograph");
+        assert!(block.starts_with("<!-- zerograph:begin -->\n\n## zerograph\n"), "{block}");
 
-        let fresh = merged_instructions("# House rules\n", "repograph");
+        let fresh = merged_instructions("# House rules\n", "zerograph");
         assert_eq!(fresh, format!("# House rules\n\n{block}"));
-        assert_eq!(merged_instructions(&fresh, "repograph"), fresh, "a re-run is a fixed point");
+        assert_eq!(merged_instructions(&fresh, "zerograph"), fresh, "a re-run is a fixed point");
 
         // A block 0.5.0 wrote gains the line; the text after the end marker stays the repository's.
-        let old = "# House rules\n\n<!-- repograph:begin -->\n## repograph\nold\n<!-- repograph:end -->\n\n## After\n";
-        let upgraded = merged_instructions(old, "repograph");
+        let old = "# House rules\n\n<!-- zerograph:begin -->\n## zerograph\nold\n<!-- zerograph:end -->\n\n## After\n";
+        let upgraded = merged_instructions(old, "zerograph");
         assert_eq!(upgraded, format!("# House rules\n\n{}\n\n## After\n", block.trim_end()));
-        assert_eq!(merged_instructions(&upgraded, "repograph"), upgraded);
+        assert_eq!(merged_instructions(&upgraded, "zerograph"), upgraded);
     }
 }

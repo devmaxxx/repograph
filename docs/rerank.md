@@ -37,7 +37,7 @@ and 55/60 on the dev suite ([ADR-004](adr/ADR-004-haiku-reranks-by-default.md)).
 
 **`--rerank-local`** is the same pool and the same pick, scored by a local cross-encoder
 (`BAAI/bge-reranker-v2-m3`, exported once with `optimum-cli export onnx --model
-BAAI/bge-reranker-v2-m3 --task text-classification ~/.cache/repograph/reranker`, ~2.2 GB) at
+BAAI/bge-reranker-v2-m3 --task text-classification ~/.cache/zerograph/reranker`, ~2.2 GB) at
 zero tokens — and **measured and rejected** as a floor candidate on 2026-09-04: 17.9 seconds a
 question against a bar of one, and keyword 39/40 on the same 82 cases. Like `--rerank`, it is
 answered by a resident [`serve`](serve.md) where there is one, which holds the

@@ -1784,57 +1784,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4"
 
 [[package]]
-name = "repograph"
-version = "0.6.0"
-dependencies = [
- "anyhow",
- "ast-grep-language",
- "blake3",
- "clap",
- "globset",
- "hf-hub",
- "ignore",
- "libc",
- "ort",
- "postcard",
- "rayon",
- "regex",
- "rust-stemmers",
- "serde",
- "serde_json",
- "serde_yaml",
- "socket2",
- "streaming-iterator",
- "tempfile",
- "tokenizers",
- "toml",
- "tree-sitter",
- "tree-sitter-bash",
- "tree-sitter-bicep",
- "tree-sitter-c",
- "tree-sitter-c-sharp",
- "tree-sitter-cpp",
- "tree-sitter-dart",
- "tree-sitter-elixir",
- "tree-sitter-go",
- "tree-sitter-graphql",
- "tree-sitter-hcl",
- "tree-sitter-java",
- "tree-sitter-kotlin-sg",
- "tree-sitter-lua",
- "tree-sitter-ocaml",
- "tree-sitter-php",
- "tree-sitter-postgres",
- "tree-sitter-python",
- "tree-sitter-ruby",
- "tree-sitter-rust",
- "tree-sitter-scala",
- "tree-sitter-swift",
- "tree-sitter-typescript",
- "windows-sys 0.61.2",
-]
-
-[[package]]
 name = "reqwest"
 version = "0.12.28"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3274,6 +3223,57 @@ dependencies = [
  "quote",
  "syn 2.0.119",
  "synstructure",
+]
+
+[[package]]
+name = "zerograph"
+version = "0.6.0"
+dependencies = [
+ "anyhow",
+ "ast-grep-language",
+ "blake3",
+ "clap",
+ "globset",
+ "hf-hub",
+ "ignore",
+ "libc",
+ "ort",
+ "postcard",
+ "rayon",
+ "regex",
+ "rust-stemmers",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "socket2",
+ "streaming-iterator",
+ "tempfile",
+ "tokenizers",
+ "toml",
+ "tree-sitter",
+ "tree-sitter-bash",
+ "tree-sitter-bicep",
+ "tree-sitter-c",
+ "tree-sitter-c-sharp",
+ "tree-sitter-cpp",
+ "tree-sitter-dart",
+ "tree-sitter-elixir",
+ "tree-sitter-go",
+ "tree-sitter-graphql",
+ "tree-sitter-hcl",
+ "tree-sitter-java",
+ "tree-sitter-kotlin-sg",
+ "tree-sitter-lua",
+ "tree-sitter-ocaml",
+ "tree-sitter-php",
+ "tree-sitter-postgres",
+ "tree-sitter-python",
+ "tree-sitter-ruby",
+ "tree-sitter-rust",
+ "tree-sitter-scala",
+ "tree-sitter-swift",
+ "tree-sitter-typescript",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

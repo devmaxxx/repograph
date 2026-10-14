@@ -268,12 +268,12 @@ fn a_comment_right_after_a_block_s_close_on_the_same_line_hides_its_ghost() {
     assert!(!text.contains("Ghost"), "{text:?}");
 }
 
-/// Not a test: reads every `.razor` and `.cshtml` under `REPOGRAPH_CENSUS_ROOTS` (`:`-separated)
+/// Not a test: reads every `.razor` and `.cshtml` under `ZEROGRAPH_CENSUS_ROOTS` (`:`-separated)
 /// through `view` and counts what the C# grammar makes of each copy — the spec's Razor parse clause.
 #[test]
 #[ignore]
 fn razor_block_census() {
-    let roots = std::env::var("REPOGRAPH_CENSUS_ROOTS").expect("set REPOGRAPH_CENSUS_ROOTS");
+    let roots = crate::env("CENSUS_ROOTS").expect("set ZEROGRAPH_CENSUS_ROOTS");
     let (mut files, mut with, mut count, mut unread, mut unclean) = (0, 0, 0, 0, 0);
     for root in roots.split(':') {
         // Dotted directories are walked and `.git` is not, as `walk::walk` does since 0.5.3.

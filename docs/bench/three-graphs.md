@@ -85,7 +85,7 @@ gitnexus analyze -f --embeddings --skip-agents-md
 cd ~/Documents/projects/repograph/bench/compare
 python3 run.py \
   --repo ~/Documents/projects/beauty-crm \
-  --repograph ~/Documents/projects/repograph/target/release/repograph \
+  --repograph ~/Documents/projects/repograph/target/release/zerograph \
   --graphify-graph <path>/graphify-out/graph.json \
   --truth /tmp/truth.json \
   --out ../results/$(date +%F)-beauty-crm.json

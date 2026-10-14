@@ -1,20 +1,20 @@
 {
-  "name": "@devmaxxx/repograph-darwin-arm64",
+  "name": "@devmaxxx/zerograph-win32-x64",
   "version": "0.6.0",
-  "description": "repograph binary for macOS on Apple silicon; installed through @devmaxxx/repograph",
+  "description": "zerograph binary for Windows on x86-64 (MSVC); installed through @devmaxxx/zerograph",
   "license": "MIT",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/devmaxxx/repograph.git"
   },
   "os": [
-    "darwin"
+    "win32"
   ],
   "cpu": [
-    "arm64"
+    "x64"
   ],
   "files": [
-    "bin/repograph"
+    "bin/zerograph.exe"
   ],
   "publishConfig": {
     "registry": "https://npm.pkg.github.com"

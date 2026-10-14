@@ -2,7 +2,7 @@
 
 ## Bench
 
-`repograph bench [--cases file]` runs the recorded 82 cases (40 keyword + 30 paraphrase + 12 code)
+`zerograph bench [--cases file]` runs the recorded 82 cases (40 keyword + 30 paraphrase + 12 code)
 against a built graph and fails the process if any floor is missed. The recorded `bench/cases.jsonl`
 is compiled into the binary, so a release build benches from any directory; `--cases` substitutes
 any other file — one of the recorded 40/30/12 shape is graded against the floors below, any other
@@ -16,7 +16,7 @@ prints it above the cases (`suite: built-in bench/cases.jsonl, recorded against 
 at any other commit is measured, printed and not graded (`suite: checkout a3bf96ff is not the pin,
 so this run is measured and not graded`, `gated=false`, exit 0), because beauty-crm `a3bf96ff`
 reads paraphrase 12/30 against the pin's 15 after 203 documents changed, and that is the corpus
-growing, not repograph failing. A tree whose commit git cannot read is graded as before. An anchor the graph does not hold stops the
+growing, not zerograph failing. A tree whose commit git cannot read is graded as before. An anchor the graph does not hold stops the
 run and the refusal quotes the pin, because editing the case to a newer path is what silently
 moves the suite off the tree its floors were counted on; `bench/missing-anchors.py <checkout>`
 lists every path anchor a tree is missing, without a build and without CI. The one exception is a

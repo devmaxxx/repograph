@@ -32,7 +32,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 FAMILIES_CACHE = Path(__file__).resolve().parent / "id-families.json"
 
 
-def load_id_families(repo: Path, repograph: str = "repograph") -> list[str]:
+def load_id_families(repo: Path, repograph: str = "zerograph") -> list[str]:
     """The corpus's own list of requirement-id families, e.g. `FR-AI`, `INV`, `N`.
 
     A pattern built from anything looser also matches `UTF-8`, `SHA-256`, `RFC-7807` — tokens
@@ -445,7 +445,7 @@ def main() -> None:
     ap.add_argument("--blast", default="", help="blast cases; default bench/blast.jsonl")
     ap.add_argument("--tools", default="repograph,graphify,gitnexus")
     ap.add_argument("--suites", default="retrieval,blast")
-    ap.add_argument("--repograph", default="repograph", help="repograph binary")
+    ap.add_argument("--repograph", default="zerograph", help="zerograph binary")
     ap.add_argument("--graphify-graph", default="graphify-out/graph.json")
     ap.add_argument("--gitnexus-repo", default="")
     ap.add_argument("--strip-prefix", action="append", default=[])

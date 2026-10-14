@@ -1,4 +1,4 @@
-# repograph documentation
+# zerograph documentation
 
 | page | what is in it |
 | --- | --- |
@@ -6,10 +6,10 @@
 | [commands](commands.md) | every command with examples, `--json` shapes, exit codes, `explain`, `verify`, `import-legacy`, `bench` |
 | [keeping fresh](keeping-fresh.md) | the self-healing `ask`, `reader_budget`, detached refreshes, `watch`, git hooks |
 | [serve](serve.md) | the resident process, its idles, socket path and measured latency |
-| [MCP server](mcp.md) | `repograph mcp`, the tools it exposes, `install-agent --claude` |
+| [MCP server](mcp.md) | `zerograph mcp`, the tools it exposes, `install-agent --claude` |
 | [how it works](how-it-works.md) | how a question becomes an answer, what the graph records, the design notes |
 | [languages](languages.md) | what each grammar reads and does not read |
-| [configuration](configuration.md) | `repograph.toml`, the machine file, environment variables, id families, `resources` |
+| [configuration](configuration.md) | `zerograph.toml`, the machine file, environment variables, id families, `resources` |
 | [embeddings](embeddings.md) | the default model, the cache, choosing and switching models |
 | [rerank](rerank.md) | the opt-in stage that spends model tokens |
 | [benchmarks](benchmarks.md) | `bench`, the floors, exit codes, measured numbers |

@@ -307,7 +307,7 @@ pub(crate) fn read_ahead(rel: &str) -> bool {
     COLLECTED.lock().unwrap_or_else(|e| e.into_inner()).contains_key(rel)
 }
 
-/// Every name-indexed file's header as it was last read, kept in `.repograph/headers.json`.
+/// Every name-indexed file's header as it was last read, kept in `.zerograph/headers.json`.
 ///
 /// Not the graph: a `Declares` edge names what a file declares but not the package or namespace it
 /// declares it in. Not the manifest: every quiet `ask` rewrites that from the walk's entries.
@@ -550,22 +550,22 @@ mod tests {
     #[test]
     fn a_store_with_no_header_file_reads_as_empty_and_a_saved_one_reads_back() {
         let dir = tempfile::tempdir().unwrap();
-        std::fs::create_dir_all(dir.path().join(".repograph")).unwrap();
+        std::fs::create_dir_all(dir.path().join(".zerograph")).unwrap();
         let store = crate::store::Store::new(dir.path());
         assert_eq!(Headers::load(&store).unwrap(), Headers::default());
         let k = known(&[("a.jv", h(&["p"], &["A"]))]);
         k.save(&store).unwrap();
         assert_eq!(Headers::load(&store).unwrap(), k);
-        std::fs::write(dir.path().join(".repograph/headers.json"), "{ not json").unwrap();
+        std::fs::write(dir.path().join(".zerograph/headers.json"), "{ not json").unwrap();
         assert_eq!(Headers::load(&store).unwrap(), Headers::default());
     }
 
     #[test]
     fn a_record_left_empty_removes_the_file_and_leftover_cleanup_keeps_a_full_one() {
         let dir = tempfile::tempdir().unwrap();
-        std::fs::create_dir_all(dir.path().join(".repograph")).unwrap();
+        std::fs::create_dir_all(dir.path().join(".zerograph")).unwrap();
         let store = crate::store::Store::new(dir.path());
-        let path = dir.path().join(".repograph").join("headers.json");
+        let path = dir.path().join(".zerograph").join("headers.json");
         known(&[("a.jv", h(&["p"], &["A"]))]).save(&store).unwrap();
         let mut k = Headers::load(&store).unwrap();
         assert!(run(&[], &["a.jv"], &mut k, &[], &BTreeMap::new()).is_empty());

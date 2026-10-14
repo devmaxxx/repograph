@@ -7,7 +7,7 @@
 # whether the machine spoiled a row is the control G23 prescribes, the same binary through the
 # suite twice; this precondition exists to catch the obvious cases cheaply, not to certify silence.
 #
-# The two rules that follow. `cargo`, `rustc` and any other `repograph` refuse on presence at any
+# The two rules that follow. `cargo`, `rustc` and any `zerograph` or `repograph` refuse on presence at any
 # CPU: they are this project's own work and they are bursty, so one at 0% now is compiling or
 # embedding a second later. Any other `node` refuses only at or above NODE_CPU_MIN percent — a
 # sibling harness burning a core is pollution a row would swallow, one asleep in a poll loop is
@@ -52,7 +52,7 @@ busy_rows() {
       name = $0
       sub(/^[ \t]*[^ \t]+[ \t]+[^ \t]+[ \t]+/, "", name)
       sub(/.*\//, "", name)
-      if (kind == "project" && name ~ /cargo|rustc|repograph/) print
+      if (kind == "project" && name ~ /cargo|rustc|zerograph|repograph/) print
       if (kind == "node" && name ~ /node/ && $2 + 0 >= bar) print
     }'
 }

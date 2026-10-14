@@ -26,16 +26,18 @@ SCRIPTS = {
 }
 
 
-def sourced(snippet, model=None):
+def sourced(snippet, model=None, **env):
     """embedder.sh's calls without a script around them: sourcing it defines them and runs nothing."""
-    return run(["bash", "-c", f"source '{EMBEDDER}'; {snippet}"], None, model)
+    return run(["bash", "-c", f"source '{EMBEDDER}'; {snippet}"], None, model, **env)
 
 
 def run(argv, cwd, model, **env):
     """One environment for both callers here. `model` is the whole of the declaration — `None` means
     it is absent, and this machine's own value never leaks in behind it — and whatever else a script
-    reads off the environment rides on `env`."""
-    e = {**os.environ, **env}
+    reads off the environment rides on `env`. The renamed variable is absent the same way, unless
+    a case passes it."""
+    e = {k: v for k, v in os.environ.items() if k != "ZEROGRAPH_EMBED_MODEL"}
+    e.update(env)
     if model is None:
         e.pop("REPOGRAPH_EMBED_MODEL", None)
     else:
@@ -51,12 +53,12 @@ class Declaration(unittest.TestCase):
         self.tmp = Path(tempfile.mkdtemp()).resolve()
         self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
 
-    def script(self, name, model):
+    def script(self, name, model, **env):
         # `reset.sh`'s three directories are named away from this machine's real ones on purpose: a
         # check that ran after them would reset the corpus worktree instead of refusing, and this
         # case would notice by the wording rather than by the damage.
         return run(["bash", str(HERE / name), *SCRIPTS[name]], self.tmp, model,
-                   FIX=str(self.tmp / "fix"), WT=str(self.tmp / "wt"), BIN=str(self.tmp / "bin"))
+                   FIX=str(self.tmp / "fix"), WT=str(self.tmp / "wt"), BIN=str(self.tmp / "bin"), **env)
 
     def test_the_declared_model_reaches_the_binary_a_script_runs(self):
         # Declared as a plain shell variable and not in the environment, which is what makes the
@@ -92,6 +94,28 @@ class Declaration(unittest.TestCase):
                 r = self.script(name, OTHER)
                 self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
                 self.assertIn(OTHER, r.stderr)
+
+    def test_the_renamed_variable_naming_another_model_outranks_the_declaration_and_is_refused(self):
+        r = sourced("embedder_declared", SMALL, ZEROGRAPH_EMBED_MODEL=OTHER)
+        self.assertEqual(r.returncode, 2, r.stdout)
+        self.assertIn("ZEROGRAPH_EMBED_MODEL", r.stderr)
+        self.assertIn(OTHER, r.stderr)
+
+    def test_the_renamed_variable_set_to_nothing_still_outranks_the_declaration(self):
+        r = sourced("embedder_declared", SMALL, ZEROGRAPH_EMBED_MODEL="")
+        self.assertEqual(r.returncode, 2, r.stdout)
+        self.assertIn("ZEROGRAPH_EMBED_MODEL", r.stderr)
+
+    def test_the_renamed_variable_agreeing_with_the_declaration_passes(self):
+        r = sourced("embedder_declared", SMALL, ZEROGRAPH_EMBED_MODEL=SMALL)
+        self.assertEqual(r.returncode, 0, r.stderr)
+
+    def test_every_script_refuses_when_the_renamed_variable_disagrees(self):
+        for name in SCRIPTS:
+            with self.subTest(script=name):
+                r = self.script(name, SMALL, ZEROGRAPH_EMBED_MODEL=OTHER)
+                self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
+                self.assertIn("ZEROGRAPH_EMBED_MODEL", r.stderr)
 
     def test_the_line_a_transcript_carries_is_not_read_back_as_a_row(self):
         # It sits in `summary.txt` beside the rows `judge.py medians` takes its medians over, the

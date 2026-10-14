@@ -1,9 +1,9 @@
 use std::io::{BufRead, BufReader, Write};
 use std::process::{Command, Stdio};
 
-fn repograph() -> Command {
-    let mut c = Command::new(env!("CARGO_BIN_EXE_repograph"));
-    c.env_remove("REPOGRAPH_BENCH_REPO").env_remove("REPOGRAPH_EMBED_MODEL").env_remove("REPOGRAPH_CODE_GLOBS");
+fn zerograph() -> Command {
+    let mut c = Command::new(env!("CARGO_BIN_EXE_zerograph"));
+    c.env_remove("ZEROGRAPH_BENCH_REPO").env_remove("REPOGRAPH_BENCH_REPO").env_remove("ZEROGRAPH_EMBED_MODEL").env_remove("REPOGRAPH_EMBED_MODEL").env_remove("ZEROGRAPH_CODE_GLOBS").env_remove("REPOGRAPH_CODE_GLOBS");
     c
 }
 
@@ -11,7 +11,7 @@ fn repo() -> tempfile::TempDir {
     let dir = tempfile::tempdir().unwrap();
     std::fs::create_dir_all(dir.path().join("docs")).unwrap();
     std::fs::write(dir.path().join("docs/pay.md"), "**FR-PAY-1 · MUST · cancellation fee**\n\nThe fee is charged on a late cancellation.\n").unwrap();
-    let built = repograph().arg("--repo").arg(dir.path()).args(["--no-dense", "build"]).output().unwrap();
+    let built = zerograph().arg("--repo").arg(dir.path()).args(["--no-dense", "build"]).output().unwrap();
     assert!(built.status.success(), "{}", String::from_utf8_lossy(&built.stderr));
     dir
 }
@@ -22,7 +22,7 @@ fn repo() -> tempfile::TempDir {
 #[test]
 fn a_session_over_stdio_reaches_the_read_tools_and_stdout_is_only_protocol() {
     let dir = repo();
-    let mut server = repograph().arg("--repo").arg(dir.path()).args(["--no-dense", "mcp"])
+    let mut server = zerograph().arg("--repo").arg(dir.path()).args(["--no-dense", "mcp"])
         .stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null()).spawn().unwrap();
     let mut stdin = server.stdin.take().unwrap();
     let call = |id: u32, name: &str, args: serde_json::Value| serde_json::json!({ "jsonrpc": "2.0", "id": id, "method": "tools/call", "params": { "name": name, "arguments": args } });

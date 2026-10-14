@@ -10,8 +10,8 @@ Every language is read the same way: two tree-sitter queries and its row of data
 what the data cannot say ([graph-model.md](graph-model.md) says how). Every language in the table
 below, and every one after it but Razor, is read by default. The first `build`, `update` or refreshing
 `ask` after upgrading from 0.5.x re-reads the whole tree once, because this release reads files by
-a new grammar generation; the next reads only what changed. `REPOGRAPH_CODE_GLOBS` withdraws a
-language for one run without writing config into the tree. A `repograph.toml` that names `code_globs`
+a new grammar generation; the next reads only what changed. `ZEROGRAPH_CODE_GLOBS` withdraws a
+language for one run without writing config into the tree. A `zerograph.toml` that names `code_globs`
 keeps exactly the list it names, so a 0.5.x config that wrote the old default out reads no new
 language until the line is removed or widened.
 
@@ -33,7 +33,7 @@ language until the line is removed or widened.
 | Swift | `.swift` | classes, structs, enums, protocols, functions and top-level `let` constants; members as `Type.member`, with an extension's members named on the extended type; inheritance as `Extends` when a globbed Swift file declares the name | imports, calls and cited ids; properties, top-level `var`, `init`, enum cases, `typealias` and `actor`; `private` and `fileprivate` names are not exported |
 | Vue | `.vue` | each `<script>` block, `setup` or not, through the TypeScript reading (`lang="tsx"` through TSX); the component as `<FileStem>`, exported and spanning its file, so a template edit changes it; decorators as `DecoratedBy` to a declaration the file declares or imports | the template, styles and custom blocks; a component used only as a template tag is not a reference |
 
-Razor (`.razor`, `.cshtml`) is read only where `code_globs` or `REPOGRAPH_CODE_GLOBS` names it: its
+Razor (`.razor`, `.cshtml`) is read only where `code_globs` or `ZEROGRAPH_CODE_GLOBS` names it: its
 `@code` blocks are read as C#, but its readings did not pass `impact` and `trace` in 0.6.0.
 
 Lua (`.lua`, and a script whose shebang names `lua` or `lua5.x`) is read by default.

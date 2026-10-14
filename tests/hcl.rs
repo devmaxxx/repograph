@@ -14,7 +14,7 @@ fn repo() -> tempfile::TempDir {
     let dir = tempfile::tempdir().unwrap();
     let r = dir.path();
     // HCL is read behind an explicit glob until its readings pass (spec §6).
-    write(r, "repograph.toml", "doc_globs = []\ncode_globs = [\"**/*.tf\", \"**/*.hcl\"]\n");
+    write(r, "zerograph.toml", "doc_globs = []\ncode_globs = [\"**/*.tf\", \"**/*.hcl\"]\n");
     write(r, "infra/staging/variables.tf", VARIABLES);
     write(r, "infra/staging/server.tf", SERVER);
     write(r, "infra/staging/dns.tf", DNS);

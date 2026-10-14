@@ -1,8 +1,13 @@
 /target
+/.zerograph
+# A store built under the old name, which stays until a write moves it to .zerograph.
 /.repograph
 /.superpowers
 /.fastembed_cache
 /dist
+/npm/*/bin/zerograph
+/npm/*/bin/zerograph.exe
+# What a pack run from before the rename left in the same folders.
 /npm/*/bin/repograph
 /npm/*/bin/repograph.exe
 /npm/*/node_modules

@@ -38,19 +38,19 @@ mod transport {
 /// shell left over from a measurement would answer them under other weights all the same.
 fn child(path: &std::path::Path) -> Command {
     let mut c = Command::new(path);
-    c.env_remove("REPOGRAPH_BENCH_REPO").env_remove("REPOGRAPH_EMBED_MODEL").env_remove("REPOGRAPH_CODE_GLOBS");
+    c.env_remove("ZEROGRAPH_BENCH_REPO").env_remove("REPOGRAPH_BENCH_REPO").env_remove("ZEROGRAPH_EMBED_MODEL").env_remove("REPOGRAPH_EMBED_MODEL").env_remove("ZEROGRAPH_CODE_GLOBS").env_remove("REPOGRAPH_CODE_GLOBS");
     c
 }
 
-fn repograph() -> Command { child(std::path::Path::new(env!("CARGO_BIN_EXE_repograph"))) }
+fn zerograph() -> Command { child(std::path::Path::new(env!("CARGO_BIN_EXE_zerograph"))) }
 
 fn repo_with_docs() -> tempfile::TempDir {
     let dir = tempfile::tempdir().unwrap();
     std::fs::create_dir_all(dir.path().join("docs")).unwrap();
     std::fs::write(dir.path().join("docs/pay.md"), "**FR-PAY-1 · MUST · Штраф за отмену**\n\nШтраф списывается сам (INV-1).\n\n**INV-1 · MUST · Деньги не сгорают**\n\nОтмена не сжигает деньги.\n").unwrap();
     std::fs::write(dir.path().join("docs/cal.md"), "**FR-CAL-1 · MUST · Перенос визита**\n\nПеренос не считается отменой.\n").unwrap();
-    std::fs::write(dir.path().join("repograph.toml"), "id_families = [\"FR-PAY\", \"FR-CAL\", \"INV\"]\n").unwrap();
-    let out = repograph().args(["--no-dense", "--repo"]).arg(dir.path()).arg("build").output().unwrap();
+    std::fs::write(dir.path().join("zerograph.toml"), "id_families = [\"FR-PAY\", \"FR-CAL\", \"INV\"]\n").unwrap();
+    let out = zerograph().args(["--no-dense", "--repo"]).arg(dir.path()).arg("build").output().unwrap();
     assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
     dir
 }
@@ -61,7 +61,7 @@ const LEXICAL: &[&str] = &["--no-dense"];
 const FUSED: &[&str] = &[];
 
 fn ask_in(arm: &[&str], dir: &std::path::Path, extra: &[&str], words: &[&str]) -> (String, String) {
-    let out = repograph().args(arm).arg("--repo").arg(dir).arg("ask").args(extra).args(words).output().unwrap();
+    let out = zerograph().args(arm).arg("--repo").arg(dir).arg("ask").args(extra).args(words).output().unwrap();
     assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
     (String::from_utf8(out.stdout).unwrap(), String::from_utf8(out.stderr).unwrap())
 }
@@ -103,7 +103,7 @@ fn hello_with_no_build() -> String {
 /// connection carries one.
 fn reply_to(dir: &std::path::Path, hello: &str) -> String {
     use std::io::{BufRead, Write};
-    let sock = dir.join(".repograph/serve.sock");
+    let sock = dir.join(".zerograph/serve.sock");
     let start = Instant::now();
     loop {
         if let Ok(mut s) = transport::connect(&sock) {
@@ -123,7 +123,7 @@ fn reply_to(dir: &std::path::Path, hello: &str) -> String {
 }
 
 fn serve_in(arm: &[&str], dir: &std::path::Path, extra: &[&str]) -> std::process::Child {
-    repograph().args(arm).arg("--repo").arg(dir).arg("serve").args(extra)
+    zerograph().args(arm).arg("--repo").arg(dir).arg("serve").args(extra)
         .stdout(Stdio::null()).stderr(Stdio::piped()).spawn().unwrap()
 }
 
@@ -144,7 +144,7 @@ fn ask_until_resident(dir: &std::path::Path, words: &[&str]) -> (String, String)
 }
 
 fn wait_for_socket(dir: &std::path::Path) {
-    let sock = dir.join(".repograph/serve.sock");
+    let sock = dir.join(".zerograph/serve.sock");
     let start = Instant::now();
     // A socket file is a reparse point on Windows, and `exists` would follow it to nowhere; its
     // own metadata is what says it is there, on every platform.
@@ -200,7 +200,7 @@ fn a_server_catches_up_with_the_tree_at_start_rather_than_at_its_first_poll() {
 #[test]
 fn a_socket_nobody_listens_on_is_answered_here_and_left_for_the_next_serve() {
     let dir = repo_with_docs();
-    let sock = dir.path().join(".repograph/serve.sock");
+    let sock = dir.path().join(".zerograph/serve.sock");
     transport::bind(&sock);
     // The listener is dropped at once: the file stays, nothing accepts.
     let started = Instant::now();
@@ -229,7 +229,7 @@ fn an_edited_config_stops_the_server_rather_than_answering_under_the_old_one() {
     let dir = repo_with_docs();
     let mut server = serve(dir.path(), &["--every", "1", "--idle", "60"]);
     wait_for_socket(dir.path());
-    std::fs::write(dir.path().join("repograph.toml"), "id_families = [\"FR-PAY\", \"FR-CAL\", \"INV\", \"NFR\"]\n").unwrap();
+    std::fs::write(dir.path().join("zerograph.toml"), "id_families = [\"FR-PAY\", \"FR-CAL\", \"INV\", \"NFR\"]\n").unwrap();
     let start = Instant::now();
     loop {
         if let Some(status) = server.try_wait().unwrap() {
@@ -290,12 +290,12 @@ fn a_stale_socket_answer_is_no_older_than_the_store_on_disk() {
 #[test]
 fn a_reply_from_another_version_is_ignored() {
     let dir = repo_with_docs();
-    let sock = dir.path().join(".repograph/serve.sock");
+    let sock = dir.path().join(".zerograph/serve.sock");
     let listener = transport::bind(&sock);
     // Stamped as the asking binary is, so the version is the only field left to refuse it on —
     // the client reads the build and the arm first, and a reply that failed those would prove
     // nothing about the check this test is named for.
-    let (mtime_ns, len) = stamp_of(std::path::Path::new(env!("CARGO_BIN_EXE_repograph")));
+    let (mtime_ns, len) = stamp_of(std::path::Path::new(env!("CARGO_BIN_EXE_zerograph")));
     let fake = std::thread::spawn(move || {
         use std::io::{BufRead, Write};
         let mut s = transport::accept(&listener);
@@ -350,7 +350,7 @@ fn a_lexical_question_is_still_answered_by_a_server_holding_the_dense_arm() {
 #[test]
 fn a_reply_from_another_build_of_this_version_is_ignored() {
     let dir = repo_with_docs();
-    let sock = dir.path().join(".repograph/serve.sock");
+    let sock = dir.path().join(".zerograph/serve.sock");
     let listener = transport::bind(&sock);
     let fake = std::thread::spawn(move || {
         use std::io::{BufRead, Write};
@@ -377,8 +377,8 @@ fn a_reply_from_another_build_of_this_version_is_ignored() {
 fn a_binary_replaced_under_a_live_server_is_another_build_and_the_client_answers_here() {
     let dir = repo_with_docs();
     let bin = tempfile::tempdir().unwrap();
-    let path = bin.path().join("repograph");
-    std::fs::copy(env!("CARGO_BIN_EXE_repograph"), &path).unwrap();
+    let path = bin.path().join("zerograph");
+    std::fs::copy(env!("CARGO_BIN_EXE_zerograph"), &path).unwrap();
     let started_as = stamp_of(&path);
     let want = ask(dir.path(), &["--no-serve"], &["штраф"]).0;
     let mut server = child(&path).args(LEXICAL).arg("--repo").arg(dir.path())
@@ -396,7 +396,7 @@ fn a_binary_replaced_under_a_live_server_is_another_build_and_the_client_answers
     // A rebuild in place, as far as a stat can tell: the path now holds a file the running server
     // did not start from. Renamed rather than written over — the running one keeps its inode.
     let replacement = bin.path().join("replacement");
-    std::fs::copy(env!("CARGO_BIN_EXE_repograph"), &replacement).unwrap();
+    std::fs::copy(env!("CARGO_BIN_EXE_zerograph"), &replacement).unwrap();
     // `fs::copy` carries the source's mtime over on macOS, so the copy would stamp as the file it
     // came from. A build writes its output now, and that is the stamp under test.
     std::fs::File::options().write(true).open(&replacement).unwrap()
@@ -457,7 +457,7 @@ fn several_asks_at_once_are_all_answered_by_the_one_resident_process() {
     let mut server = serve(dir.path(), &["--every", "3600", "--idle", "60"]);
     let (want, _) = ask_until_resident(dir.path(), &["штраф"]);
     let asks: Vec<_> = (0..8).map(|_| {
-        repograph().args(LEXICAL).arg("--repo").arg(dir.path()).args(["ask", "штраф"])
+        zerograph().args(LEXICAL).arg("--repo").arg(dir.path()).args(["ask", "штраф"])
             .stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().unwrap()
     }).collect();
     for (i, child) in asks.into_iter().enumerate() {
@@ -482,7 +482,7 @@ fn a_second_serve_on_the_same_repository_bails_and_leaves_the_first_answering() 
     let (want, _) = ask_until_resident(dir.path(), &["штраф"]);
     // Idle seconds rather than minutes: this call is waited on, and a second server that wrongly
     // bound would otherwise hold the test for as long as the first one's own `--idle`.
-    let second = repograph().args(LEXICAL).arg("--repo").arg(dir.path())
+    let second = zerograph().args(LEXICAL).arg("--repo").arg(dir.path())
         .args(["serve", "--every", "3600", "--idle", "2"]).output().unwrap();
     let err = String::from_utf8_lossy(&second.stderr).into_owned();
     assert!(!second.status.success(), "a second serve bound over a live one: {err}");
@@ -516,11 +516,11 @@ fn an_idle_server_exits_clean_and_takes_its_socket_with_it() {
     // a server that never bound would leave no socket either, and prove nothing by it.
     assert!(err.contains("idle 1s, model idle 300s; Ctrl-C stops"), "the server never bound: {err}");
     assert!(err.contains("idle for 1s"), "it left for some other reason: {err}");
-    assert!(std::fs::symlink_metadata(dir.path().join(".repograph/serve.sock")).is_err(), "the socket file outlived its server: {err}");
+    assert!(std::fs::symlink_metadata(dir.path().join(".zerograph/serve.sock")).is_err(), "the socket file outlived its server: {err}");
 }
 
 /// The two ways to ask for a cold answer while a server is up. `--no-serve` is a flag on the
-/// command line; `REPOGRAPH_NO_SERVE` is what a benchmark or a wrapper sets, and nothing tested
+/// command line; `ZEROGRAPH_NO_SERVE` is what a benchmark or a wrapper sets, and nothing tested
 /// it anywhere. Both have to reach the same answer without the socket — set on the child rather
 /// than on this process, which the tests share and run in at once.
 #[test]
@@ -531,11 +531,11 @@ fn no_serve_and_its_environment_variable_both_answer_here_under_a_live_server() 
     let (flagged, err) = ask(dir.path(), &["--no-serve"], &["штраф"]);
     assert!(!err.contains("serve:"), "--no-serve went to the socket anyway: {err}");
     assert_eq!(flagged, want);
-    let out = repograph().env("REPOGRAPH_NO_SERVE", "1").args(LEXICAL).arg("--repo").arg(dir.path())
+    let out = zerograph().env("ZEROGRAPH_NO_SERVE", "1").args(LEXICAL).arg("--repo").arg(dir.path())
         .args(["ask", "штраф"]).output().unwrap();
     let err = String::from_utf8_lossy(&out.stderr).into_owned();
     assert!(out.status.success(), "{err}");
-    assert!(!err.contains("serve:"), "REPOGRAPH_NO_SERVE went to the socket anyway: {err}");
+    assert!(!err.contains("serve:"), "ZEROGRAPH_NO_SERVE went to the socket anyway: {err}");
     assert_eq!(String::from_utf8(out.stdout).unwrap(), want);
     server.kill().unwrap();
     let _ = server.wait();
@@ -547,18 +547,18 @@ fn no_serve_and_its_environment_variable_both_answer_here_under_a_live_server() 
 /// cache restored between runs, and it is the one place the ONNX Runtime build the Windows
 /// binary links opens a session and embeds.
 #[test]
-#[ignore = "needs the small model in FASTEMBED_CACHE_DIR or ~/.cache/repograph/fastembed; the Windows CI job runs it"]
+#[ignore = "needs the small model in FASTEMBED_CACHE_DIR or ~/.cache/zerograph/fastembed; the Windows CI job runs it"]
 fn a_fused_answer_is_resident_on_the_small_model() {
     let dir = tempfile::tempdir().unwrap();
     std::fs::create_dir_all(dir.path().join("docs")).unwrap();
     std::fs::write(dir.path().join("docs/pay.md"), "**FR-PAY-1 · MUST · Штраф за отмену**\n\nШтраф списывается сам (INV-1).\n\n**INV-1 · MUST · Деньги не сгорают**\n\nОтмена не сжигает деньги.\n").unwrap();
     std::fs::write(dir.path().join("docs/cal.md"), "**FR-CAL-1 · MUST · Перенос визита**\n\nПеренос не считается отменой.\n").unwrap();
-    std::fs::write(dir.path().join("repograph.toml"), "id_families = [\"FR-PAY\", \"FR-CAL\", \"INV\"]\nembed_model = \"intfloat/multilingual-e5-small\"\n").unwrap();
-    let out = repograph().arg("--repo").arg(dir.path()).arg("build").output().unwrap();
+    std::fs::write(dir.path().join("zerograph.toml"), "id_families = [\"FR-PAY\", \"FR-CAL\", \"INV\"]\nembed_model = \"intfloat/multilingual-e5-small\"\n").unwrap();
+    let out = zerograph().arg("--repo").arg(dir.path()).arg("build").output().unwrap();
     let err = String::from_utf8_lossy(&out.stderr);
     assert!(out.status.success(), "{err}");
     assert!(!err.contains("dense: model unavailable"), "the model did not open: {err}");
-    assert!(std::fs::metadata(dir.path().join(".repograph/vectors.f32")).map(|m| m.len() > 0).unwrap_or(false), "no vectors were written");
+    assert!(std::fs::metadata(dir.path().join(".zerograph/vectors.f32")).map(|m| m.len() > 0).unwrap_or(false), "no vectors were written");
     let (want, err) = ask_in(FUSED, dir.path(), &["--no-serve"], &["штраф"]);
     assert!(want.contains("FR-PAY-1"), "{want}");
     assert!(!err.contains("dense: model unavailable"), "{err}");

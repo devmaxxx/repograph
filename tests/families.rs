@@ -1,12 +1,12 @@
 //! Families as the documents write them. Nothing is configured and nothing is stored: a build
 //! reads the definitions its documents carry, an update says so when that set moves, and
-//! `repograph families` shows what was derived beside what was left as text.
+//! `zerograph families` shows what was derived beside what was left as text.
 
 mod common;
 
 const FIXTURES: &[&str] = &["03-calendar.md", "06-payments.md", "BE-M01-foundation.md", "constitution.yaml"];
 
-fn repograph(repo: &std::path::Path, args: &[&str]) -> (bool, String, String) {
+fn zerograph(repo: &std::path::Path, args: &[&str]) -> (bool, String, String) {
     let out = common::run(repo, args);
     (out.status.success(), String::from_utf8_lossy(&out.stdout).into_owned(), String::from_utf8_lossy(&out.stderr).into_owned())
 }
@@ -42,17 +42,17 @@ fn a_repository_gets_its_families_from_the_documents_and_says_when_they_move() {
     std::fs::create_dir_all(repo.join("docs")).unwrap();
     std::fs::write(repo.join("docs/req.md"), REQ).unwrap();
 
-    let (ok, out, err) = repograph(repo, &["build"]);
+    let (ok, out, err) = zerograph(repo, &["build"]);
     assert!(ok, "{out}{err}");
     assert!(err.contains("families: REQ · milestones: (none)"), "the build says what it read: {err}");
     assert!(!err.contains("ISO"), "a prefix only ever mentioned is not a family: {err}");
 
     // The point of all of it: a family nobody configured answers exactly.
-    let (ok, out, err) = repograph(repo, &["ask", "REQ-7"]);
+    let (ok, out, err) = zerograph(repo, &["ask", "REQ-7"]);
     assert!(ok, "{out}{err}");
     assert!(out.lines().next().unwrap().starts_with("REQ-7"), "{out}");
 
-    let (ok, out, err) = repograph(repo, &["families"]);
+    let (ok, out, err) = zerograph(repo, &["families"]);
     assert!(ok, "{out}{err}");
     let req: Vec<&str> = families(&out, "REQ").split_whitespace().collect();
     assert_eq!((req[1], req[2], req[3]), ("1", "1", "docs/req.md:3"), "the family, its nodes, its definitions and the line that defines it: {out}");
@@ -61,37 +61,37 @@ fn a_repository_gets_its_families_from_the_documents_and_says_when_they_move() {
     assert!(out.contains("Not families"), "said in words, not left as a column to read: {out}");
 
     // A no-op update is a fixed point, families included: nothing is re-read and nothing is said.
-    let (ok, out, err) = repograph(repo, &["update"]);
+    let (ok, out, err) = zerograph(repo, &["update"]);
     assert!(ok, "{out}{err}");
     assert!(out.starts_with("changed 0 removed 0"), "{out}");
     assert!(!err.contains("families"), "{err}");
 
     // Before any line defines `NEW`, the citation is held aside: `verify` counts it and nothing
     // a reader follows reaches it.
-    let (ok, out, err) = repograph(repo, &["verify"]);
+    let (ok, out, err) = zerograph(repo, &["verify"]);
     assert!(ok, "{out}{err}");
     assert!(out.contains("held aside: 2 edges to ids in 2 prefixes no line defines  ISO NEW"), "{out}");
-    let (ok, out, _) = repograph(repo, &["explain", "REQ-7"]);
+    let (ok, out, _) = zerograph(repo, &["explain", "REQ-7"]);
     assert!(ok && !out.contains("NEW-5"), "a held-aside citation is not an answer: {out}");
 
     // A family the corpus grows: the one file that defines it is read, and the citations the
     // graph was holding are released — `req.md` is not touched and not re-read.
     std::fs::write(repo.join("docs/new.md"), "**NEW-1 · MUST · Новое правило**\n\nтело\n").unwrap();
-    let (ok, out, err) = repograph(repo, &["update"]);
+    let (ok, out, err) = zerograph(repo, &["update"]);
     assert!(ok, "{out}{err}");
     assert!(out.starts_with("changed 1 removed 0"), "{out}");
     assert!(err.contains("families: +NEW"), "{err}");
-    let (ok, out, _) = repograph(repo, &["explain", "REQ-7"]);
+    let (ok, out, _) = zerograph(repo, &["explain", "REQ-7"]);
     assert!(ok && out.contains("NEW-5"), "released without a re-read: {out}");
-    let (ok, out, _) = repograph(repo, &["verify"]);
+    let (ok, out, _) = zerograph(repo, &["verify"]);
     assert!(ok && out.contains("held aside: 1 edges to ids in 1 prefixes no line defines  ISO"), "{out}");
-    let (ok, out, err) = repograph(repo, &["ask", "NEW-1"]);
+    let (ok, out, err) = zerograph(repo, &["ask", "NEW-1"]);
     assert!(ok, "{out}{err}");
     assert!(out.lines().next().unwrap().starts_with("NEW-1"), "{out}");
 
     // And a file that still names the old keys: one line, and not one family different.
-    std::fs::write(repo.join("repograph.toml"), "id_families = [\"FR-PAY\"]\n").unwrap();
-    let (ok, out, err) = repograph(repo, &["families"]);
+    std::fs::write(repo.join("zerograph.toml"), "id_families = [\"FR-PAY\"]\n").unwrap();
+    let (ok, out, err) = zerograph(repo, &["families"]);
     assert!(ok, "{out}{err}");
     assert!(err.contains("id_families is no longer read"), "{err}");
     assert!(families(&out, "REQ").contains("docs/req.md:3") && families(&out, "NEW").contains("docs/new.md:1"), "{out}");
@@ -101,19 +101,19 @@ fn a_repository_gets_its_families_from_the_documents_and_says_when_they_move() {
     // family is still there with its node; what the report can say is that the store is behind
     // the tree, which is the one state it exists to expose.
     std::fs::write(repo.join("docs/new.md"), "тело без определения\n").unwrap();
-    let (ok, out, err) = repograph(repo, &["families"]);
+    let (ok, out, err) = zerograph(repo, &["families"]);
     assert!(ok, "{out}{err}");
     assert!(families(&out, "NEW").contains("docs/new.md:1"), "{out}");
-    assert!(err.contains("families: the store is 1 file behind the tree — run `repograph update`"), "{err}");
-    let (ok, json, err) = repograph(repo, &["families", "--json"]);
+    assert!(err.contains("families: the store is 1 file behind the tree — run `zerograph update`"), "{err}");
+    let (ok, json, err) = zerograph(repo, &["families", "--json"]);
     assert!(ok, "{json}{err}");
     let v: serde_json::Value = serde_json::from_str(&json).unwrap();
     let new = v["families"].as_array().unwrap().iter().find(|f| f["family"] == "NEW").unwrap();
     assert!(new["defined"]["file"] == "docs/new.md" && new["nodes"] == 1, "{new}");
     // And after the update the family is gone with its definition, and its citation is held again.
-    let (ok, out, err) = repograph(repo, &["update"]);
+    let (ok, out, err) = zerograph(repo, &["update"]);
     assert!(ok && err.contains("families: -NEW"), "{out}{err}");
-    let (ok, out, _) = repograph(repo, &["verify"]);
+    let (ok, out, _) = zerograph(repo, &["verify"]);
     assert!(ok && out.contains("held aside: 2 edges"), "{out}");
 }
 
@@ -128,17 +128,17 @@ fn a_corpus_that_defines_no_ids_reads_as_one() {
     std::fs::create_dir_all(repo.join("docs")).unwrap();
     std::fs::write(repo.join("docs/notes.md"), "# Заметки\n\nдаты по ISO-8601, см. RFC-7231 и -M01\n").unwrap();
 
-    let (ok, out, err) = repograph(repo, &["build"]);
+    let (ok, out, err) = zerograph(repo, &["build"]);
     assert!(ok, "{out}{err}");
     assert!(err.contains("families: (none) · milestones: (none)"), "{err}");
     assert!(out.starts_with("changed 1 removed 0 nodes 1 edges 0"), "one file node and nothing a reader follows: {out}");
 
-    let (ok, out, err) = repograph(repo, &["verify"]);
+    let (ok, out, err) = zerograph(repo, &["verify"]);
     assert!(ok, "{out}{err}");
     assert!(out.contains("held aside: 2 edges to ids in 2 prefixes no line defines  ISO RFC"), "{out}");
     assert!(out.contains("dangling edges: 0\n"), "{out}");
 
-    let (ok, out, err) = repograph(repo, &["families"]);
+    let (ok, out, err) = zerograph(repo, &["families"]);
     assert!(ok, "{out}{err}");
     assert!(out.contains("families                              nodes  defs  defined\n  (none)"), "{out}");
     assert!(mention(&out, "ISO").contains("docs/notes.md:3"), "{out}");
@@ -147,7 +147,7 @@ fn a_corpus_that_defines_no_ids_reads_as_one() {
     // whose only node is the file itself there is nothing for the term to seat, so the answer is
     // empty rather than an answer about `ISO-8601`. The contract is both halves of that: the
     // command succeeds, and it prints nothing.
-    let (ok, out, err) = repograph(repo, &["ask", "ISO-8601"]);
+    let (ok, out, err) = zerograph(repo, &["ask", "ISO-8601"]);
     assert!(ok, "{out}{err}");
     assert_eq!(out.trim(), "", "nothing to seat on a corpus of file nodes: {out}");
 }
@@ -163,9 +163,9 @@ fn a_family_defined_in_two_files_counts_its_nodes_apart_from_its_definitions() {
     std::fs::write(repo.join("docs/req.md"), REQ).unwrap();
     std::fs::write(repo.join("docs/req2.md"),
                    "**REQ-7 · MUST · Отмена визита за сутки**\n\nто же требование, другой документ\n").unwrap();
-    assert!(repograph(repo, &["build"]).0);
+    assert!(zerograph(repo, &["build"]).0);
 
-    let (ok, out, err) = repograph(repo, &["families"]);
+    let (ok, out, err) = zerograph(repo, &["families"]);
     assert!(ok, "{out}{err}");
     let req: Vec<&str> = families(&out, "REQ").split_whitespace().collect();
     assert_eq!((req[1], req[2]), ("1", "2"), "one node, defined in two files: {out}");
@@ -183,11 +183,11 @@ fn every_shape_the_extractor_defines_a_node_with_defines_a_family() {
         std::fs::copy(fixtures.join(name), repo.join("docs").join(name)).unwrap();
     }
 
-    let (ok, _, err) = repograph(repo, &["families"]);
-    assert!(!ok && err.contains("repograph build"), "before a build it should say so: {err}");
-    assert!(repograph(repo, &["build"]).0);
+    let (ok, _, err) = zerograph(repo, &["families"]);
+    assert!(!ok && err.contains("zerograph build"), "before a build it should say so: {err}");
+    assert!(zerograph(repo, &["build"]).0);
 
-    let (ok, out, err) = repograph(repo, &["families"]);
+    let (ok, out, err) = zerograph(repo, &["families"]);
     assert!(ok, "{out}{err}");
     let nodes = |name: &str| families(&out, name).split_whitespace().nth(1).unwrap().parse::<usize>().unwrap();
     assert!(nodes("FR-PAY") > 0 && families(&out, "FR-PAY").contains("docs/06-payments.md:"), "a bold head: {out}");
@@ -197,7 +197,7 @@ fn every_shape_the_extractor_defines_a_node_with_defines_a_family() {
     // Written in a requirement's body and defined nowhere — the line the rule draws.
     assert!(mention(&out, "OQ").contains("docs/"), "a prefix only written is text: {out}");
 
-    let (ok, json, err) = repograph(repo, &["families", "--json"]);
+    let (ok, json, err) = zerograph(repo, &["families", "--json"]);
     assert!(ok, "{json}{err}");
     let v: serde_json::Value = serde_json::from_str(&json).unwrap();
     let cal = v["families"].as_array().unwrap().iter().find(|f| f["family"] == "FR-CAL").unwrap();

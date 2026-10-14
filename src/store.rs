@@ -3,7 +3,31 @@ use crate::walk::Manifest;
 use anyhow::{Context, Result};
 use std::path::{Path, PathBuf};
 
-pub struct Store { dir: PathBuf }
+pub struct Store { repo: PathBuf }
+
+/// The store's directory, and the name it had before the rename. A store under the old name is
+/// read where it stands and moved by the first write, so an upgrade neither rebuilds nor re-embeds.
+pub(crate) const DIR: &str = ".zerograph";
+pub(crate) const LEGACY_DIR: &str = ".repograph";
+
+fn present(p: &Path) -> bool { std::fs::symlink_metadata(p).is_ok() }
+
+/// Where the store is right now: `.zerograph` whenever anything stands at that name, else a
+/// `.repograph` no write has moved yet, else `.zerograph` for a store not built. Resolved on each
+/// call and never kept, so a server or an MCP process that outlives the move follows it.
+pub(crate) fn dir_of(repo: &Path) -> PathBuf {
+    let dir = repo.join(DIR);
+    if present(&dir) { return dir; }
+    let legacy = repo.join(LEGACY_DIR);
+    if present(&legacy) { legacy } else { dir }
+}
+
+/// [`dir_of`]'s name, for a line that tells the reader which directory to open: a store the move
+/// could not reach stays under the old name, and a line that said `.zerograph` would send them to
+/// a directory that is not there.
+pub(crate) fn dir_name_of(repo: &Path) -> &'static str {
+    if dir_of(repo).ends_with(LEGACY_DIR) { LEGACY_DIR } else { DIR }
+}
 
 /// Where a load got its value. The JSON is what a store is defined by and what any other
 /// binary reads; the mirror is a postcard copy of the same value written beside it, because
@@ -74,7 +98,7 @@ pub(crate) fn rename_over(from: &Path, to: &Path) -> std::io::Result<()> {
 fn is_link(p: &Path) -> bool { std::fs::symlink_metadata(p).is_ok_and(|m| m.file_type().is_symlink()) }
 
 /// Opens a store file, never through a symlink. A cloned repository controls every entry under
-/// `.repograph/`, so a committed link there would carry this process's write — a log line, a
+/// `.zerograph/`, so a committed link there would carry this process's write — a log line, a
 /// vector row, a truncation — to a file outside the repository. The check names the refusal; the
 /// open flag closes the gap between the check and the open.
 pub(crate) fn open_unlinked(o: &mut std::fs::OpenOptions, p: &Path) -> std::io::Result<std::fs::File> {
@@ -95,8 +119,26 @@ fn open_nofollow(o: &mut std::fs::OpenOptions, p: &Path) -> std::io::Result<std:
     o.open(p)
 }
 
+fn read_in(dir: &Path, name: &str) -> Result<Option<Vec<u8>>> {
+    let p = dir.join(name);
+    if !p.exists() { return Ok(None); }
+    Ok(Some(std::fs::read(&p)?))
+}
+
 impl Store {
-    pub fn new(repo: &Path) -> Store { Store { dir: repo.join(".repograph") } }
+    pub fn new(repo: &Path) -> Store { Store { repo: repo.to_path_buf() } }
+
+    pub(crate) fn dir(&self) -> PathBuf { dir_of(&self.repo) }
+
+    /// Runs `read` against the store where it stands, and once more against `.zerograph` when it
+    /// `missed` in a `.repograph` that a writer moved away meanwhile: that is the same store under
+    /// its new name, not an absent one.
+    fn reading<T>(&self, read: impl Fn(&Path) -> Result<T>, missed: impl Fn(&Result<T>) -> bool) -> Result<T> {
+        let dir = self.dir();
+        let got = read(&dir);
+        let new = self.repo.join(DIR);
+        if dir != new && missed(&got) && present(&new) { read(&new) } else { got }
+    }
 
     pub fn load(&self) -> Result<(Graph, Manifest)> { self.load_traced().map(|(g, m, _)| (g, m)) }
 
@@ -113,9 +155,13 @@ impl Store {
 
     /// A JSON store file, read through its mirror when the mirror still describes these bytes.
     pub fn load_mirrored<T: serde::de::DeserializeOwned>(&self, json: &str) -> Result<(Option<T>, Source)> {
-        let p = self.dir.join(json);
+        self.reading(|dir| Self::load_mirrored_in(dir, json), |got| !matches!(got, Ok((Some(_), _))))
+    }
+
+    fn load_mirrored_in<T: serde::de::DeserializeOwned>(dir: &Path, json: &str) -> Result<(Option<T>, Source)> {
+        let p = dir.join(json);
         let Some(now) = stamp(&p) else { return Ok((None, Source::Absent)) };
-        if let Some(bytes) = self.read_bytes(&mirror_name(json))? {
+        if let Some(bytes) = read_in(dir, &mirror_name(json))? {
             // A mirror that does not decode is one a crash or another release left behind; the
             // JSON it mirrors is still there to answer from, so it is passed over, not reported.
             if bytes.starts_with(&mirror_header(now)) {
@@ -145,24 +191,64 @@ impl Store {
 
     /// Whether the store or its lock is a link, which every writer refuses: a reader that finds the
     /// lock refused for this reason writes nothing, where a read-only checkout writes unlocked.
-    pub(crate) fn has_link(&self) -> bool { is_link(&self.dir) || is_link(&self.dir.join("writer.lock")) }
+    pub(crate) fn has_link(&self) -> bool {
+        is_link(&self.repo.join(DIR)) || is_link(&self.repo.join(LEGACY_DIR)) || is_link(&self.dir().join("writer.lock"))
+    }
 
-    /// A `.repograph` that is itself a link is refused for the same reason a link inside it is:
-    /// every write and every unlink under it would land wherever the clone pointed it. For a
-    /// process that touches the directory without going through `ensure_dir` first.
-    pub(crate) fn refuse_linked_dir(&self) -> Result<()> {
-        if is_link(&self.dir) {
-            anyhow::bail!("{} is a symlink; refusing to write through it — remove it and run again", self.dir.display());
+    /// A store directory that is itself a link is refused for the same reason a link inside it
+    /// is: every write and every unlink under it would land wherever the clone pointed it. Both
+    /// names, because a write may move the old one onto the new.
+    fn refuse_linked_dir(&self) -> Result<()> {
+        for dir in [self.repo.join(DIR), self.repo.join(LEGACY_DIR)] {
+            if is_link(&dir) {
+                anyhow::bail!("{} is a symlink; refusing to write through it — remove it and run again", dir.display());
+            }
         }
         Ok(())
     }
 
-    /// The store holds passages of the repository's documents and code, so it carries its own `.gitignore`: a `git add -A` in a repository that
-    /// never listed `.repograph/` would otherwise commit it.
-    pub(crate) fn ensure_dir(&self) -> Result<()> {
+    /// The store ready for a write in place, for a process that touches the directory without
+    /// going through `ensure_dir` first: neither name a link, and a store under the old name
+    /// moved to the new one. Returns where the store is, which is `.zerograph` unless the move
+    /// could not be made.
+    pub(crate) fn settle(&self) -> Result<PathBuf> {
         self.refuse_linked_dir()?;
-        std::fs::create_dir_all(&self.dir)?;
-        let ignore = self.dir.join(".gitignore");
+        let dir = self.migrate()?;
+        // Again after the move: a rename moves a link as readily as a directory.
+        self.refuse_linked_dir()?;
+        Ok(dir)
+    }
+
+    /// Moves a `.repograph` built before the rename to `.zerograph` by one rename in the same
+    /// parent — never a copy, never a delete — so whatever stops it, the store is whole under one
+    /// name or the other.
+    fn migrate(&self) -> Result<PathBuf> {
+        let dir = self.repo.join(DIR);
+        let legacy = self.repo.join(LEGACY_DIR);
+        let legacy_is_dir = || std::fs::symlink_metadata(&legacy).is_ok_and(|m| m.is_dir());
+        if present(&dir) || !legacy_is_dir() { return Ok(dir); }
+        match std::fs::rename(&legacy, &dir) {
+            Ok(()) => Ok(dir),
+            // Another process moved it first, or built a new store there: either way it is the one.
+            Err(_) if present(&dir) => Ok(dir),
+            // Windows refuses to rename a directory while a file inside it is open, which a
+            // resident server can keep so for hours. Writing in place keeps the store working,
+            // and a later write tries the move again.
+            Err(_) if legacy_is_dir() => Ok(legacy),
+            Err(e) => Err(e).with_context(|| format!("move {} to {}", legacy.display(), dir.display())),
+        }
+    }
+
+    /// The store holds passages of the repository's documents and code, so it carries its own `.gitignore`: a `git add -A` in a repository that
+    /// never listed `.zerograph/` would otherwise commit it. Returns the directory to write in.
+    pub(crate) fn ensure_dir(&self) -> Result<PathBuf> {
+        let dir = self.settle()?;
+        // The old name comes back only as a directory that stands. Making it again here would put
+        // an empty one where another process has just moved the store from, and split it in two.
+        if dir != self.repo.join(LEGACY_DIR) {
+            std::fs::create_dir_all(&dir).with_context(|| format!("create {}", dir.display()))?;
+        }
+        let ignore = dir.join(".gitignore");
         match open_unlinked(std::fs::OpenOptions::new().write(true).create_new(true), &ignore) {
             Ok(mut f) => {
                 use std::io::Write;
@@ -177,7 +263,7 @@ impl Store {
             Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
             Err(e) => return Err(e).with_context(|| format!("write {}", ignore.display())),
         }
-        Ok(())
+        Ok(dir)
     }
 
     /// Returns the stamp of the `graph.json` this call wrote, for a writer that claims vectors
@@ -205,8 +291,8 @@ impl Store {
     /// cannot lend its stamp to them.
     fn write_atomic_stamped(&self, name: &str, bytes: &[u8]) -> Result<Option<std::fs::Metadata>> {
         static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-        self.ensure_dir()?;
-        let (tmp, mut f) = self.create_tmp(name, &NEXT)?;
+        let dir = self.ensure_dir()?;
+        let (tmp, mut f) = Self::create_tmp(&dir, name, &NEXT)?;
         let written = { use std::io::Write; f.write_all(bytes) }
             .with_context(|| format!("write {}", tmp.display()))
             .and_then(|()| {
@@ -214,7 +300,7 @@ impl Store {
                 // otherwise stamp bytes the rename then carries under another one.
                 drop(f);
                 let stamp = std::fs::metadata(&tmp).ok();
-                rename_over(&tmp, &self.dir.join(name)).with_context(|| format!("rename {name}"))?;
+                rename_over(&tmp, &dir.join(name)).with_context(|| format!("rename {name}"))?;
                 Ok(stamp)
             });
         // Only a file this call created: a name that was taken is skipped in `create_tmp`.
@@ -227,19 +313,19 @@ impl Store {
     /// another was still writing. A name already taken — by what a killed run left under a
     /// recycled pid, or by an entry a clone committed in advance — is skipped, never written
     /// through and never removed: it is not this call's file.
-    fn create_tmp(&self, name: &str, next: &std::sync::atomic::AtomicU64) -> Result<(PathBuf, std::fs::File)> {
+    fn create_tmp(dir: &Path, name: &str, next: &std::sync::atomic::AtomicU64) -> Result<(PathBuf, std::fs::File)> {
         let mut create = std::fs::OpenOptions::new();
         create.write(true).create_new(true);
         for _ in 0..TMP_TRIES {
             let n = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            let tmp = self.dir.join(format!("{name}.{}.{n}.tmp", std::process::id()));
+            let tmp = dir.join(format!("{name}.{}.{n}.tmp", std::process::id()));
             match open_unlinked(&mut create, &tmp) {
                 Ok(f) => return Ok((tmp, f)),
                 Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists || is_link(&tmp) => continue,
                 Err(e) => return Err(e).with_context(|| format!("write {}", tmp.display())),
             }
         }
-        anyhow::bail!("write {}: {TMP_TRIES} temporary names in a row are taken", self.dir.join(name).display())
+        anyhow::bail!("write {}: {TMP_TRIES} temporary names in a row are taken", dir.join(name).display())
     }
 
     /// Extends a store file whose first `keep` bytes the caller still stands behind, dropping
@@ -248,8 +334,7 @@ impl Store {
     /// points at rows a crash could still lose.
     pub fn append_after(&self, name: &str, keep: u64, bytes: &[u8]) -> Result<()> {
         use std::io::{Seek, SeekFrom, Write};
-        self.ensure_dir()?;
-        let p = self.dir.join(name);
+        let p = self.ensure_dir()?.join(name);
         let mut f = open_unlinked(std::fs::OpenOptions::new().write(true).create(true).truncate(false), &p)
             .with_context(|| format!("open {}", p.display()))?;
         f.set_len(keep).with_context(|| format!("truncate {}", p.display()))?;
@@ -262,24 +347,23 @@ impl Store {
     /// Whether a store file is there with something in it — a metadata read, so a caller can
     /// decide about a 50 MB file without loading it.
     pub fn has(&self, name: &str) -> bool {
-        std::fs::metadata(self.dir.join(name)).map(|m| m.len() > 0).unwrap_or(false)
+        self.reading(|dir| Ok(std::fs::metadata(dir.join(name)).is_ok_and(|m| m.len() > 0)), |got| matches!(got, Ok(false))).unwrap_or(false)
     }
 
     /// What a `stat` says about a store file, for a poller that wants to know whether someone
     /// else has written it without reading megabytes to find out.
     pub fn stamp(&self, name: &str) -> Option<crate::walk::Stamp> {
-        crate::walk::stamp_of(&std::fs::metadata(self.dir.join(name)).ok()?)
+        let at = |dir: &Path| Ok(std::fs::metadata(dir.join(name)).ok().and_then(|m| crate::walk::stamp_of(&m)));
+        self.reading(at, |got| matches!(got, Ok(None))).ok().flatten()
     }
 
     pub fn read_bytes(&self, name: &str) -> Result<Option<Vec<u8>>> {
-        let p = self.dir.join(name);
-        if !p.exists() { return Ok(None); }
-        Ok(Some(std::fs::read(&p)?))
+        self.reading(|dir| read_in(dir, name), |got| !matches!(got, Ok(Some(_))))
     }
 
     /// A record that has emptied leaves no file behind, so a store never holds one it would not write.
     pub fn remove(&self, name: &str) -> Result<()> {
-        let p = self.dir.join(name);
+        let p = self.dir().join(name);
         if p.exists() { std::fs::remove_file(&p).with_context(|| format!("remove {}", p.display()))?; }
         Ok(())
     }
@@ -290,7 +374,7 @@ impl Store {
     /// written in the last few minutes may be another process's save in flight, so only an older
     /// one goes. The headers stay with the graph they were read beside, for the same reason.
     pub fn drop_leftovers(&self) -> Result<()> {
-        for e in std::fs::read_dir(&self.dir).into_iter().flatten().flatten() {
+        for e in std::fs::read_dir(self.dir()).into_iter().flatten().flatten() {
             let name = e.file_name().to_string_lossy().into_owned();
             let stale = e.metadata().and_then(|m| m.modified()).ok()
                 .and_then(|t| t.elapsed().ok()).is_some_and(|age| age > LEFTOVER_AGE);
@@ -309,7 +393,7 @@ impl Store {
         match f.try_lock() {
             Ok(()) => Ok(Some(WriterLock(f))),
             Err(std::fs::TryLockError::WouldBlock) => Ok(None),
-            Err(std::fs::TryLockError::Error(e)) => Err(e).context("lock .repograph/writer.lock"),
+            Err(std::fs::TryLockError::Error(e)) => Err(e).with_context(|| self.lock_label()),
         }
     }
 
@@ -317,15 +401,16 @@ impl Store {
     /// the store to be brought in line and would rather wait for a running refresh than skip it.
     pub fn lock_writer(&self) -> Result<WriterLock> {
         let f = self.lock_file()?;
-        f.lock().context("lock .repograph/writer.lock")?;
+        f.lock().with_context(|| self.lock_label())?;
         Ok(WriterLock(f))
     }
+
+    fn lock_label(&self) -> String { format!("lock {}/writer.lock", dir_name_of(&self.repo)) }
 
     /// Never removed: a lock file deleted while one process holds it lets the next process lock
     /// a new file of the same name, and both believe they are the only writer.
     fn lock_file(&self) -> Result<std::fs::File> {
-        self.ensure_dir()?;
-        let p = self.dir.join("writer.lock");
+        let p = self.ensure_dir()?.join("writer.lock");
         open_unlinked(std::fs::OpenOptions::new().create(true).truncate(false).write(true), &p)
             .with_context(|| format!("open {}", p.display()))
     }
@@ -353,7 +438,7 @@ mod tests {
         let d = tempfile::tempdir().unwrap();
         let store = Store::new(d.path());
         drop(store.try_lock_writer().unwrap());
-        let dir = d.path().join(".repograph");
+        let dir = d.path().join(".zerograph");
         assert_eq!(std::fs::read_to_string(dir.join(".gitignore")).unwrap(), "*\n");
     }
 
@@ -391,7 +476,7 @@ mod tests {
         let store = Store::new(d.path());
         let g = graph("Заголовок");
         store.save(&g, &Manifest::default()).unwrap();
-        assert!(d.path().join(".repograph/graph.bin").exists());
+        assert!(d.path().join(".zerograph/graph.bin").exists());
         let (g2, _, source) = store.load_traced().unwrap();
         assert_eq!(source, Source::Mirror);
         assert_eq!(g2.nodes, g.nodes);
@@ -416,7 +501,7 @@ mod tests {
         let d = tempfile::tempdir().unwrap();
         let store = Store::new(d.path());
         store.save(&graph("x"), &Manifest::default()).unwrap();
-        let p = d.path().join(".repograph/graph.bin");
+        let p = d.path().join(".zerograph/graph.bin");
         let mut bytes = std::fs::read(&p).unwrap();
         bytes.truncate(MIRROR_HEADER + 3);
         std::fs::write(&p, bytes).unwrap();
@@ -430,7 +515,7 @@ mod tests {
         let d = tempfile::tempdir().unwrap();
         let store = Store::new(d.path());
         store.save(&graph("x"), &Manifest::default()).unwrap();
-        let p = d.path().join(".repograph/graph.bin");
+        let p = d.path().join(".zerograph/graph.bin");
         let mut bytes = std::fs::read(&p).unwrap();
         bytes[4..10].copy_from_slice(b"9.9.9\0");
         std::fs::write(&p, bytes).unwrap();
@@ -453,11 +538,11 @@ mod tests {
         e.edge("FR-1", "FR-2", crate::model::EdgeKind::References, "body", "docs/a.md");
         g.apply(e);
         let old = OldGraph { nodes: g.nodes.clone(), edges: g.edges.clone() };
-        std::fs::create_dir_all(dir.path().join(".repograph")).unwrap();
+        std::fs::create_dir_all(dir.path().join(".zerograph")).unwrap();
         store.write_atomic("graph.json", &serde_json::to_vec(&old).unwrap()).unwrap();
         store.write_atomic("manifest.json", b"{\"files\":{}}").unwrap();
         // The older release's mirror: its magic, its stamp, its struct.
-        let now = stamp(&dir.path().join(".repograph/graph.json")).unwrap();
+        let now = stamp(&dir.path().join(".zerograph/graph.json")).unwrap();
         let mut bytes = mirror_header(now).to_vec();
         bytes[..4].copy_from_slice(b"RGM1");
         bytes.extend(postcard::to_stdvec(&old).unwrap());
@@ -475,7 +560,7 @@ mod tests {
         let store = Store::new(d.path());
         let g = graph("x");
         store.save(&g, &Manifest::default()).unwrap();
-        std::fs::remove_file(d.path().join(".repograph/graph.bin")).unwrap();
+        std::fs::remove_file(d.path().join(".zerograph/graph.bin")).unwrap();
         let (_, _, source) = store.load_traced().unwrap();
         let Source::Json(read) = source else { panic!("{source:?}") };
         store.write_mirror("graph.json", read, &g).unwrap();
@@ -495,7 +580,7 @@ mod tests {
         g.apply(e);
         let m = Manifest::default();
         store.save(&g, &m).unwrap();
-        assert!(d.path().join(".repograph/graph.json").exists());
+        assert!(d.path().join(".zerograph/graph.json").exists());
         assert_eq!(tmps(d.path()), Vec::<String>::new());
         let (g2, _) = store.load().unwrap();
         assert_eq!(g2.nodes.len(), 1);
@@ -507,13 +592,13 @@ mod tests {
         let d = tempfile::tempdir().unwrap();
         let store = Store::new(d.path());
         store.save(&Graph::default(), &Manifest::default()).unwrap();
-        std::fs::write(d.path().join(".repograph/graph.json"), "{ not json").unwrap();
+        std::fs::write(d.path().join(".zerograph/graph.json"), "{ not json").unwrap();
         let err = store.load().unwrap_err().to_string();
         assert!(err.contains("graph.json"), "{err}");
     }
 
     fn tmps(repo: &Path) -> Vec<String> {
-        std::fs::read_dir(repo.join(".repograph")).unwrap().flatten()
+        std::fs::read_dir(repo.join(".zerograph")).unwrap().flatten()
             .map(|e| e.file_name().to_string_lossy().into_owned())
             .filter(|n| n.ends_with(".tmp")).collect()
     }
@@ -522,8 +607,8 @@ mod tests {
     fn a_leftover_tmp_from_a_crashed_write_is_not_read_and_is_dropped() {
         let d = tempfile::tempdir().unwrap();
         let store = Store::new(d.path());
-        std::fs::create_dir_all(d.path().join(".repograph")).unwrap();
-        let old = d.path().join(".repograph/graph.json.1.0.tmp");
+        std::fs::create_dir_all(d.path().join(".zerograph")).unwrap();
+        let old = d.path().join(".zerograph/graph.json.1.0.tmp");
         std::fs::write(&old, "garbage").unwrap();
         let hour_ago = std::time::SystemTime::now() - std::time::Duration::from_secs(3600);
         std::fs::File::options().write(true).open(&old).unwrap().set_modified(hour_ago).unwrap();
@@ -538,8 +623,8 @@ mod tests {
     fn a_temp_file_another_writer_is_saving_right_now_is_kept() {
         let d = tempfile::tempdir().unwrap();
         let store = Store::new(d.path());
-        std::fs::create_dir_all(d.path().join(".repograph")).unwrap();
-        std::fs::write(d.path().join(".repograph/graph.json.2.0.tmp"), "half a graph").unwrap();
+        std::fs::create_dir_all(d.path().join(".zerograph")).unwrap();
+        std::fs::write(d.path().join(".zerograph/graph.json.2.0.tmp"), "half a graph").unwrap();
         store.drop_leftovers().unwrap();
         assert_eq!(tmps(d.path()), vec!["graph.json.2.0.tmp".to_string()]);
     }
@@ -557,7 +642,7 @@ mod tests {
         e.node(NodeKind::File, "file:a.md", "a.md", "", "a.md", 1);
         g.apply(e);
         store.save(&g, &Manifest::default()).unwrap();
-        let dir = d.path().join(".repograph");
+        let dir = d.path().join(".zerograph");
         std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o555)).unwrap();
         let failed = store.save(&Graph::default(), &Manifest::default()).is_err();
         std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).unwrap();
@@ -593,7 +678,7 @@ mod tests {
         let d = tempfile::tempdir().unwrap();
         let store = Store::new(d.path());
         store.save(&graph("first"), &Manifest::default()).unwrap();
-        std::fs::remove_file(d.path().join(".repograph/graph.bin")).unwrap();
+        std::fs::remove_file(d.path().join(".zerograph/graph.bin")).unwrap();
         let (stale, _, source) = store.load_traced().unwrap();
         let Source::Json(read) = source else { panic!("{source:?}") };
         store.save(&graph("a second, longer label"), &Manifest::default()).unwrap();
@@ -641,8 +726,8 @@ mod tests {
         s.write_atomic("vectors.f32", b"v").unwrap();
         s.write_atomic("headers.json", b"{}").unwrap();
         s.drop_leftovers().unwrap();
-        assert!(d.path().join(".repograph/graph.json").exists());
-        assert!(d.path().join(".repograph/manifest.json").exists());
+        assert!(d.path().join(".zerograph/graph.json").exists());
+        assert!(d.path().join(".zerograph/manifest.json").exists());
         assert_eq!(s.read_bytes("vectors.f32").unwrap().as_deref(), Some(&b"v"[..]));
         assert_eq!(s.read_bytes("headers.json").unwrap().as_deref(), Some(&b"{}"[..]));
     }
@@ -656,7 +741,7 @@ mod tests {
         assert_eq!(store.read_bytes("vectors.f32").unwrap().as_deref(), Some(&b"keepmore"[..]));
     }
 
-    // A cloned repository commits `.repograph/` whole, links included. Each write a reader or
+    // A cloned repository commits `.zerograph/` whole, links included. Each write a reader or
     // writer makes there must stay inside it: the file outside is left exactly as it was.
     #[cfg(unix)]
     #[test]
@@ -665,10 +750,10 @@ mod tests {
         let outside = d.path().join("outside");
         std::fs::write(&outside, "victim\n").unwrap();
         let repo = d.path().join("repo");
-        std::fs::create_dir_all(repo.join(".repograph")).unwrap();
+        std::fs::create_dir_all(repo.join(".zerograph")).unwrap();
         let store = Store::new(&repo);
         let plant = |name: &str, to: &Path| {
-            let link = repo.join(".repograph").join(name);
+            let link = repo.join(".zerograph").join(name);
             let _ = std::fs::remove_file(&link);
             std::os::unix::fs::symlink(to, &link).unwrap();
             link
@@ -711,11 +796,11 @@ mod tests {
         std::fs::write(&outside, "victim\n").unwrap();
         let repo = d.path().join("repo");
         let store = Store::new(&repo);
-        store.ensure_dir().unwrap();
-        let tmp = |n: u32| repo.join(".repograph").join(format!("graph.json.{}.{n}.tmp", std::process::id()));
+        let dir = store.ensure_dir().unwrap();
+        let tmp = |n: u32| repo.join(".zerograph").join(format!("graph.json.{}.{n}.tmp", std::process::id()));
         std::os::unix::fs::symlink(&outside, tmp(0)).unwrap();
         std::fs::write(tmp(1), "left by a killed run").unwrap();
-        let (got, file) = store.create_tmp("graph.json", &std::sync::atomic::AtomicU64::new(0)).unwrap();
+        let (got, file) = Store::create_tmp(&dir, "graph.json",&std::sync::atomic::AtomicU64::new(0)).unwrap();
         drop(file);
         assert_eq!(got, tmp(2));
         assert_eq!(std::fs::read_to_string(&outside).unwrap(), "victim\n");
@@ -727,11 +812,11 @@ mod tests {
     fn a_save_gives_up_when_every_temporary_name_it_tries_is_taken() {
         let d = tempfile::tempdir().unwrap();
         let store = Store::new(d.path());
-        store.ensure_dir().unwrap();
+        let dir = store.ensure_dir().unwrap();
         for n in 0..TMP_TRIES {
-            std::fs::write(d.path().join(".repograph").join(format!("graph.json.{}.{n}.tmp", std::process::id())), "x").unwrap();
+            std::fs::write(d.path().join(".zerograph").join(format!("graph.json.{}.{n}.tmp", std::process::id())), "x").unwrap();
         }
-        let err = store.create_tmp("graph.json", &std::sync::atomic::AtomicU64::new(0)).unwrap_err();
+        let err = Store::create_tmp(&dir, "graph.json", &std::sync::atomic::AtomicU64::new(0)).unwrap_err();
         assert!(format!("{err:#}").contains("temporary names"), "{err:#}");
     }
 
@@ -743,9 +828,128 @@ mod tests {
         std::fs::create_dir_all(&elsewhere).unwrap();
         let repo = d.path().join("repo");
         std::fs::create_dir_all(&repo).unwrap();
-        std::os::unix::fs::symlink(&elsewhere, repo.join(".repograph")).unwrap();
+        std::os::unix::fs::symlink(&elsewhere, repo.join(".zerograph")).unwrap();
         assert!(Store::new(&repo).save(&Graph::default(), &Manifest::default()).is_err());
         assert_eq!(std::fs::read_dir(&elsewhere).unwrap().count(), 0);
+    }
+
+    /// A store saved as this release saves it, then put under the name it had before the rename.
+    fn legacy_store(repo: &Path) -> Graph {
+        let g = graph("до переименования");
+        Store::new(repo).save(&g, &Manifest::default()).unwrap();
+        Store::new(repo).write_atomic("vectors.f32", b"rows").unwrap();
+        std::fs::rename(repo.join(DIR), repo.join(LEGACY_DIR)).unwrap();
+        g
+    }
+
+    #[test]
+    fn a_store_under_the_old_name_is_read_where_it_stands() {
+        let d = tempfile::tempdir().unwrap();
+        let g = legacy_store(d.path());
+        let store = Store::new(d.path());
+        let (read, _, source) = store.load_traced().unwrap();
+        assert_eq!(read.nodes, g.nodes);
+        assert_eq!(source, Source::Mirror);
+        assert!(store.has("vectors.f32") && store.stamp("vectors.f32").is_some());
+        assert_eq!(store.read_bytes("vectors.f32").unwrap().as_deref(), Some(&b"rows"[..]));
+        assert!(!d.path().join(DIR).exists(), "a read moves nothing");
+    }
+
+    #[test]
+    fn the_first_write_moves_the_old_store_to_the_new_name_whole() {
+        let d = tempfile::tempdir().unwrap();
+        let g = legacy_store(d.path());
+        #[cfg(unix)]
+        let inode = { use std::os::unix::fs::MetadataExt; std::fs::metadata(d.path().join(LEGACY_DIR)).unwrap().ino() };
+        let store = Store::new(d.path());
+        assert_eq!(dir_name_of(d.path()), LEGACY_DIR);
+        let _lock = store.lock_writer().unwrap();
+        assert_eq!(dir_name_of(d.path()), DIR);
+        assert!(!d.path().join(LEGACY_DIR).exists(), "moved, not copied");
+        let dir = d.path().join(DIR);
+        #[cfg(unix)]
+        { use std::os::unix::fs::MetadataExt; assert_eq!(std::fs::metadata(&dir).unwrap().ino(), inode, "the same directory, renamed"); }
+        assert_eq!(std::fs::read(dir.join("vectors.f32")).unwrap(), b"rows");
+        assert!(dir.join("writer.lock").exists() && dir.join(".gitignore").exists());
+        assert_eq!(store.load().unwrap().0.nodes, g.nodes);
+    }
+
+    #[test]
+    fn with_both_names_present_the_new_one_is_used_and_the_old_one_left_alone() {
+        let d = tempfile::tempdir().unwrap();
+        let old = legacy_store(d.path());
+        let built = tempfile::tempdir().unwrap();
+        let g = graph("после");
+        Store::new(built.path()).save(&g, &Manifest::default()).unwrap();
+        std::fs::rename(built.path().join(DIR), d.path().join(DIR)).unwrap();
+        let store = Store::new(d.path());
+        assert_eq!(store.load().unwrap().0.nodes, g.nodes);
+        store.write_atomic("vectors.f32", b"new rows").unwrap();
+        assert_eq!(store.read_bytes("vectors.f32").unwrap().as_deref(), Some(&b"new rows"[..]));
+        let legacy = d.path().join(LEGACY_DIR);
+        let left: Graph = serde_json::from_slice(&std::fs::read(legacy.join("graph.json")).unwrap()).unwrap();
+        assert_eq!(left.nodes, old.nodes, "the old store is never written, moved over or removed");
+        assert_eq!(std::fs::read(legacy.join("vectors.f32")).unwrap(), b"rows");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_link_at_either_name_is_refused_and_nothing_is_moved() {
+        let d = tempfile::tempdir().unwrap();
+        let elsewhere = d.path().join("elsewhere");
+        std::fs::create_dir_all(&elsewhere).unwrap();
+        std::fs::write(elsewhere.join("manifest.json"), "{}").unwrap();
+        let repo = d.path().join("repo");
+        std::fs::create_dir_all(&repo).unwrap();
+        std::os::unix::fs::symlink(&elsewhere, repo.join(LEGACY_DIR)).unwrap();
+        let store = Store::new(&repo);
+        assert!(store.has_link());
+        assert!(store.ensure_dir().is_err());
+        assert!(store.lock_writer().is_err());
+        assert!(!repo.join(DIR).exists(), "the link was not moved to the new name");
+        assert!(repo.join(LEGACY_DIR).symlink_metadata().unwrap().file_type().is_symlink());
+        assert_eq!(std::fs::read_dir(&elsewhere).unwrap().count(), 1);
+
+        std::fs::remove_file(repo.join(LEGACY_DIR)).unwrap();
+        legacy_store(&repo);
+        std::os::unix::fs::symlink(&elsewhere, repo.join(DIR)).unwrap();
+        assert!(store.has_link());
+        assert!(store.save(&Graph::default(), &Manifest::default()).is_err());
+        assert!(repo.join(LEGACY_DIR).join("graph.json").exists(), "the old store stays where it was");
+        assert_eq!(std::fs::read_dir(&elsewhere).unwrap().count(), 1);
+    }
+
+    #[test]
+    fn a_read_that_finds_the_old_store_moved_away_reads_it_under_the_new_name() {
+        let d = tempfile::tempdir().unwrap();
+        legacy_store(d.path());
+        let store = Store::new(d.path());
+        let first = std::cell::Cell::new(true);
+        // Another process's first write lands between this read resolving the directory and
+        // opening the file in it.
+        let got = store.reading(|dir| {
+            if first.replace(false) {
+                assert!(dir.ends_with(LEGACY_DIR));
+                std::fs::rename(d.path().join(LEGACY_DIR), d.path().join(DIR)).unwrap();
+            }
+            read_in(dir, "vectors.f32")
+        }, |got| !matches!(got, Ok(Some(_)))).unwrap();
+        assert_eq!(got.as_deref(), Some(&b"rows"[..]));
+    }
+
+    #[test]
+    fn writers_racing_to_move_the_old_store_all_land_in_the_new_one() {
+        let d = tempfile::tempdir().unwrap();
+        legacy_store(d.path());
+        let repo = d.path().to_path_buf();
+        let writers: Vec<_> = (0..8).map(|i| {
+            let repo = repo.clone();
+            std::thread::spawn(move || Store::new(&repo).write_atomic(&format!("w{i}"), b"x"))
+        }).collect();
+        for w in writers { w.join().unwrap().unwrap(); }
+        assert!(!repo.join(LEGACY_DIR).exists());
+        for i in 0..8 { assert!(repo.join(DIR).join(format!("w{i}")).exists(), "w{i}"); }
+        assert_eq!(std::fs::read(repo.join(DIR).join("vectors.f32")).unwrap(), b"rows");
     }
 
     #[test]
@@ -771,7 +975,7 @@ mod tests {
         let d = tempfile::tempdir().unwrap();
         let store = Store::new(d.path());
         store.write_atomic("graph.json", b"old").unwrap();
-        let holder = hold_open_for(&d.path().join(".repograph/graph.json"), 100);
+        let holder = hold_open_for(&d.path().join(".zerograph/graph.json"), 100);
         store.write_atomic("graph.json", b"new").unwrap();
         holder.join().unwrap();
         assert_eq!(store.read_bytes("graph.json").unwrap().as_deref(), Some(&b"new"[..]));
@@ -786,7 +990,7 @@ mod tests {
         let d = tempfile::tempdir().unwrap();
         let store = Store::new(d.path());
         store.write_atomic("graph.json", b"old").unwrap();
-        let holder = hold_open_for(&d.path().join(".repograph/graph.json"), 1500);
+        let holder = hold_open_for(&d.path().join(".zerograph/graph.json"), 1500);
         let err = store.write_atomic("graph.json", b"new").unwrap_err();
         assert!(format!("{err:#}").contains("os error 5"), "{err:#}");
         holder.join().unwrap();

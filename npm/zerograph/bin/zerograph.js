@@ -6,14 +6,14 @@
 const { spawnSync } = require("node:child_process");
 
 const PACKAGES = {
-  "darwin-arm64": "@devmaxxx/repograph-darwin-arm64",
-  "linux-x64": "@devmaxxx/repograph-linux-x64",
-  "win32-x64": "@devmaxxx/repograph-win32-x64",
+  "darwin-arm64": "@devmaxxx/zerograph-darwin-arm64",
+  "linux-x64": "@devmaxxx/zerograph-linux-x64",
+  "win32-x64": "@devmaxxx/zerograph-win32-x64",
 };
 
 // Cargo names the Windows binary with its extension, and `require.resolve` tries none of its own
 // for a file that is not a module.
-const BINARY = process.platform === "win32" ? "bin/repograph.exe" : "bin/repograph";
+const BINARY = process.platform === "win32" ? "bin/zerograph.exe" : "bin/zerograph";
 
 const FALLBACK =
   "cargo install --git https://github.com/devmaxxx/repograph --locked";
@@ -23,7 +23,7 @@ function binaryPath() {
   const pkg = PACKAGES[key];
   if (!pkg) {
     return {
-      error: `repograph: no prebuilt binary for ${key}; build one with \`${FALLBACK}\``,
+      error: `zerograph: no prebuilt binary for ${key}; build one with \`${FALLBACK}\``,
     };
   }
   try {
@@ -31,7 +31,7 @@ function binaryPath() {
   } catch {
     return {
       error:
-        `repograph: ${pkg} is not installed. Optional dependencies were skipped (\`--no-optional\`, ` +
+        `zerograph: ${pkg} is not installed. Optional dependencies were skipped (\`--no-optional\`, ` +
         `or a lockfile written on another platform); reinstall with them enabled, or \`${FALLBACK}\``,
     };
   }
@@ -45,7 +45,7 @@ if (found.error) {
 
 const run = spawnSync(found.path, process.argv.slice(2), { stdio: "inherit" });
 if (run.error) {
-  console.error(`repograph: ${run.error.message}`);
+  console.error(`zerograph: ${run.error.message}`);
   process.exit(2);
 }
 // A signal death has no status; report it the way a shell would.

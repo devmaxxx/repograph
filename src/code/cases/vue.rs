@@ -163,7 +163,7 @@ fn a_call_in_an_options_api_or_setup_script_is_reachable_from_the_component() {
 fn a_component_added_while_watching_is_imported_on_the_next_poll() {
     let dir = tempfile::tempdir().unwrap();
     let r = dir.path();
-    std::fs::write(r.join("repograph.toml"), "doc_globs = []\ncode_globs = [\"**/*.ts\", \"**/*.vue\"]\n").unwrap();
+    std::fs::write(r.join("zerograph.toml"), "doc_globs = []\ncode_globs = [\"**/*.ts\", \"**/*.vue\"]\n").unwrap();
     std::fs::write(r.join("main.ts"), "import Cart from './Cart.vue';\nexport const app = Cart;\n").unwrap();
     let cfg = crate::config::Config::load(r).unwrap();
     crate::run_update(r, &cfg, true).unwrap();
@@ -184,11 +184,11 @@ fn a_tsx_script_is_read_by_the_tsx_grammar() {
     assert!(ids(&ex).contains(&"sym:Table.vue::Row"), "{:?}", ids(&ex));
 }
 
-/// Not a test: blanks every `.vue` file under `REPOGRAPH_CENSUS_ROOTS` and parses its scripts, as §0 did.
+/// Not a test: blanks every `.vue` file under `ZEROGRAPH_CENSUS_ROOTS` and parses its scripts, as §0 did.
 #[test]
 #[ignore]
 fn vue_census() {
-    let roots = std::env::var("REPOGRAPH_CENSUS_ROOTS").expect("REPOGRAPH_CENSUS_ROOTS");
+    let roots = crate::env("CENSUS_ROOTS").expect("ZEROGRAPH_CENSUS_ROOTS");
     let (mut files, mut scripts, mut bad) = (0, 0, 0);
     for root in roots.split(':') {
         // As `walk.rs` since 0.5.3 (#64): dotted paths read, `.git` pruned by name.

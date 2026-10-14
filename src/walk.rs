@@ -150,6 +150,12 @@ pub fn walk_counted(repo: &Path, cfg: &Config, prev: &Manifest) -> Result<(Vec<E
     walk_inner(repo, cfg, prev, true)
 }
 
+/// The store at the repository root, under either name. Root only, as the default `skip` is: a
+/// `.repograph` deeper in the tree belongs to some other project and is content like the rest.
+fn is_store(e: &ignore::DirEntry) -> bool {
+    e.depth() == 1 && (e.file_name() == crate::store::DIR || e.file_name() == crate::store::LEGACY_DIR)
+}
+
 fn walk_inner(repo: &Path, cfg: &Config, prev: &Manifest, count: bool) -> Result<(Vec<Entry>, usize)> {
     let docs = globs(&cfg.doc_globs)?;
     let code = globs(&cfg.code_globs)?;
@@ -163,13 +169,16 @@ fn walk_inner(repo: &Path, cfg: &Config, prev: &Manifest, count: bool) -> Result
     let mut oversized = 0usize;
     let mut out = Vec::new();
     // A repository keeps its agent rules, its hooks and its CI in dotted directories, so the
-    // walk reads them and `skip` decides, as it does for every other path. `.git` is the one
-    // directory that has to go: `ignore` gives it no special treatment once `hidden` is off
-    // (0.4.33), and its thousands of objects would be walked like source. `.gitignore` keeps
-    // working either way — the hidden filter and the git-ignore matcher are independent.
+    // walk reads them and `skip` decides, as it does for every other path. `.git` has to go:
+    // `ignore` gives it no special treatment once `hidden` is off (0.4.33), and its thousands of
+    // objects would be walked like source. `.gitignore` keeps working either way — the hidden
+    // filter and the git-ignore matcher are independent. The store goes too, under either name,
+    // and not through `skip`: a project's `skip` replaces the default that names it, often with a
+    // list that still names only the old one, and the store's own `.gitignore` is read inside a
+    // git checkout alone.
     let walker = ignore::WalkBuilder::new(repo)
         .hidden(false)
-        .filter_entry(|e| e.file_name() != ".git")
+        .filter_entry(|e| e.file_name() != ".git" && !is_store(e))
         .git_ignore(true)
         .build();
     for dent in walker {
@@ -515,6 +524,26 @@ mod tests {
     }
 
     fn text_cfg() -> Config { Config { text_globs: vec!["**/*".into()], ..Config::default() } }
+
+    #[test]
+    fn the_store_is_not_walked_under_either_name_whatever_skip_says() {
+        // No `.git` here: outside a checkout the store's own `.gitignore` is not read, so only the
+        // walk itself keeps it out.
+        let d = tempfile::tempdir().unwrap();
+        let p = d.path();
+        std::fs::write(p.join("ops.yaml"), "deploy: blue\n").unwrap();
+        for store in [crate::store::DIR, crate::store::LEGACY_DIR] {
+            std::fs::create_dir_all(p.join(store)).unwrap();
+            for (f, body) in [(".gitignore", "*\n"), ("manifest.json", "{}"), ("background.log", "changed 1\n")] {
+                std::fs::write(p.join(store).join(f), body).unwrap();
+            }
+        }
+        for skip in [vec![".repograph/**".to_string()], Vec::new()] {
+            let cfg = Config { skip, ..text_cfg() };
+            let rels: Vec<String> = walk(p, &cfg, &Manifest::default()).unwrap().into_iter().map(|e| e.rel).collect();
+            assert_eq!(rels, ["ops.yaml"]);
+        }
+    }
 
     #[test]
     fn a_file_no_glob_claims_is_text_by_its_content_and_nothing_else_decides() {

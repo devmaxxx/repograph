@@ -127,7 +127,7 @@ now reads `MEDIUM`: the counts beside the label are what say whether that is a r
 or a re-export chain.
 
 ```
-$ repograph --repo beauty-crm impact StaffService
+$ zerograph --repo beauty-crm impact StaffService
 sym:apps/api/src/modules/staff/staff.service.ts::StaffService  apps/api/src/modules/staff/staff.service.ts:19
 d=1  will break (3)
   file:apps/api/test/staffMembership.spec.ts  apps/api/test/staffMembership.spec.ts:1  Calls → sym:apps/api/src/modules/staff/staff.service.ts::StaffService
@@ -166,7 +166,7 @@ affected by itself. Deleted files do not appear: their symbols are gone from the
 edges in `verify`.
 
 ```
-$ repograph --repo beauty-crm changes
+$ zerograph --repo beauty-crm changes
 changed: 2 symbols in 1 file
   file:apps/api/src/modules/staff/staff.service.ts  apps/api/src/modules/staff/staff.service.ts:1
   sym:apps/api/src/modules/staff/staff.service.ts::StaffService.create  apps/api/src/modules/staff/staff.service.ts:31-43

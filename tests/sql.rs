@@ -46,8 +46,8 @@ fn write(repo: &Path, rel: &str, text: &str) {
 /// ignored so that `changes` diffs the migrations and nothing else.
 fn repo(files: &[(&str, &str)]) -> tempfile::TempDir {
     let dir = tempfile::tempdir().unwrap();
-    write(dir.path(), "repograph.toml", "code_globs = [\"**/*.sql\"]\n");
-    write(dir.path(), ".gitignore", ".repograph/\n");
+    write(dir.path(), "zerograph.toml", "code_globs = [\"**/*.sql\"]\n");
+    write(dir.path(), ".gitignore", ".zerograph/\n");
     for (rel, text) in files {
         write(dir.path(), rel, text);
     }
@@ -66,7 +66,7 @@ fn git(repo: &Path, args: &[&str]) {
         .env_remove("GIT_DIR").env_remove("GIT_WORK_TREE").env_remove("GIT_INDEX_FILE")
         .env_remove("GIT_COMMON_DIR").env_remove("GIT_OBJECT_DIRECTORY")
         .env_remove("GIT_ALTERNATE_OBJECT_DIRECTORIES")
-        .args(["-c", "user.name=repograph tests", "-c", "user.email=tests@example.invalid", "-c", "commit.gpgsign=false"])
+        .args(["-c", "user.name=zerograph tests", "-c", "user.email=tests@example.invalid", "-c", "commit.gpgsign=false"])
         .args(args).output().unwrap_or_else(|e| panic!("git {args:?}: {e}"));
     assert!(out.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&out.stderr));
 }

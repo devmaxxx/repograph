@@ -15,7 +15,16 @@ EMBEDDER=intfloat/multilingual-e5-small
 # ADR-002 — and the reading could not say which weights answered. Naming another model, the row
 # would be read under weights this machine does not hold cached, and quietly replacing the value
 # would hide from an operator that they had asked for something else.
+#
+# The declaration keeps the old variable name, which every binary this kit runs reads. A renamed
+# binary reads `ZEROGRAPH_EMBED_MODEL` first, and the old name only while the new one is unset — an
+# empty value counts as set — so one left in the environment answers for the weights whatever the
+# declaration says, and is refused the same way.
 embedder_declared() {
+  if [ -n "${ZEROGRAPH_EMBED_MODEL+set}" ] && [ "$ZEROGRAPH_EMBED_MODEL" != "$EMBEDDER" ]; then
+    echo "refusing: ZEROGRAPH_EMBED_MODEL is set to '$ZEROGRAPH_EMBED_MODEL' and outranks REPOGRAPH_EMBED_MODEL in a renamed binary — every row of this kit is read under $EMBEDDER; unset it, or set it to $EMBEDDER" >&2
+    return 2
+  fi
   case ${REPOGRAPH_EMBED_MODEL-} in
     "$EMBEDDER")
       # Exported and not only checked: a row is read under what the binary's own process sees, and

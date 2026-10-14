@@ -207,7 +207,7 @@ impl DenseIndex {
 
     /// Claims the index for `model`, whose vectors are `dim` wide, before a sync. Rows another
     /// model wrote cannot be appended to or compared against, and neither can rows of another
-    /// width: the name alone would miss a store the `REPOGRAPH_EMBED_MODEL` recipe left holding
+    /// width: the name alone would miss a store the `ZEROGRAPH_EMBED_MODEL` recipe left holding
     /// wide rows under no name, where a claim by the small model's name matches, `sync` then
     /// matches every row by hash and embeds nothing, and the store is recorded as the small
     /// model's over rows it never wrote — a state no later `embed` could reach. Either mismatch
@@ -623,7 +623,7 @@ mod tests {
 
     #[test]
     fn an_unnamed_store_of_another_width_is_emptied_though_the_name_matches() {
-        // What `REPOGRAPH_EMBED_MODEL=<hub id>` + `embed` left behind: another model's rows under
+        // What `ZEROGRAPH_EMBED_MODEL=<hub id>` + `embed` left behind: another model's rows under
         // no name at all. Claimed by name alone it would keep them, `sync` would match every row
         // by hash and embed nothing, and the store would be recorded as the small model's over
         // rows the small model never wrote — with no later `embed` able to reach it.
@@ -758,7 +758,7 @@ mod tests {
         let store = Store::new(d.path());
         let mut idx = synced(&wide(0));
         idx.save(&store).unwrap();
-        let rows = d.path().join(".repograph/vectors.f32");
+        let rows = d.path().join(".zerograph/vectors.f32");
         let before = std::fs::read(&rows).unwrap();
         idx.sync(&wide(1), &mut fake).unwrap();
         idx.save(&store).unwrap();
@@ -799,7 +799,7 @@ mod tests {
         let store = Store::new(d.path());
         let mut idx = synced(&wide(0));
         idx.save(&store).unwrap();
-        let rows = d.path().join(".repograph/vectors.f32");
+        let rows = d.path().join(".zerograph/vectors.f32");
         let good = std::fs::read(&rows).unwrap();
         // What an append interrupted before its metadata reached disk leaves behind.
         std::fs::write(&rows, [good.clone(), le_bytes(&[9.0, 9.0, 9.0])].concat()).unwrap();

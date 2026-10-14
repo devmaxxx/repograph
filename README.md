@@ -1,8 +1,8 @@
-# repograph
+# zerograph
 
 A project knowledge graph that costs **zero API tokens** to build, keep fresh, and query.
 
-`repograph` reads a repository's markdown and code in 24 languages, extracts the structure the authors
+`zerograph` reads a repository's markdown and code in 24 languages, extracts the structure the authors
 already wrote by hand (requirement ids, cross-references, exports, imports, calls, decorators, ids
 quoted in comments) and answers questions about it in a few lines of text.
 
@@ -18,19 +18,21 @@ build ([the head-to-head](docs/history.md#the-head-to-head-against-the-graph-it-
 
 ```bash
 # ~/.npmrc, once per machine (a classic PAT with read:packages): see docs/install.md
-pnpm add -D @devmaxxx/repograph            # prebuilt: macOS arm64, Linux x64, Windows x64
+pnpm add -D @devmaxxx/zerograph            # prebuilt: macOS arm64, Linux x64, Windows x64
 cargo install --path .                     # or from source
 
-repograph build                            # full build into .repograph/ (add it to .gitignore)
-repograph ask cancellation policy          # answer in a few lines
+zerograph build                            # full build into .zerograph/ (add it to .gitignore)
+zerograph ask cancellation policy          # answer in a few lines
 ```
 
-Windows needs a few extra steps: [running on Windows](docs/windows.md).
+Windows needs a few extra steps: [running on Windows](docs/windows.md). Upgrading from repograph:
+the old store, config and variables are read where they are, see
+[coming from repograph](docs/install.md#coming-from-repograph).
 
 ## See it in action
 
 ```
-$ repograph ask cancellation
+$ zerograph ask cancellation
 sym:packages/db/src/schema/salon/scheduling.ts::CANCELLATION_CONSEQUENCES  packages/db/src/schema/salon/scheduling.ts:110  CANCELLATION_CONSEQUENCES
 BE-M10/T05  docs/.../BE-M10-payments-provider-stripe-connect-….md:80  Cancellation policy engine (`packages/domain/policy.ts`): inputs policy + appoin…
   BE-M10  docs/.../BE-M10-payments-provider-stripe-connect-….md:1  BE-M10 Payments provider: Stripe Connect implementation…  ← BE-M10/T05
@@ -40,11 +42,11 @@ Each line is `ID  path:line  headline`. Top-level lines are the seeds the questi
 line is a neighbour one hop away, and `←` names the seed it came from.
 
 ```bash
-repograph ask FR-PAY-22                    # an exact id or symbol goes straight to the node
-repograph impact StaffService              # callers by depth, importing files, a risk line
-repograph trace StaffController StaffService   # shortest call chain between two symbols
-repograph changes --base main              # what the diff touches, and who reaches it
-repograph explain FR-PAY-22                # one node and everything attached to it
+zerograph ask FR-PAY-22                    # an exact id or symbol goes straight to the node
+zerograph impact StaffService              # callers by depth, importing files, a risk line
+zerograph trace StaffController StaffService   # shortest call chain between two symbols
+zerograph changes --base main              # what the diff touches, and who reaches it
+zerograph explain FR-PAY-22                # one node and everything attached to it
 ```
 
 ## What it does
@@ -54,10 +56,10 @@ repograph explain FR-PAY-22                # one node and everything attached to
 | Build and refresh | `build`, `update`, `watch`, and a self-healing `ask` that re-reads what changed ([keeping fresh](docs/keeping-fresh.md)) |
 | Ask | `ask`, `explain`, `impact`, `trace`, `changes`, `verify`, `families`, all with `--json` ([commands](docs/commands.md)) |
 | Resident process | `serve` answers a fused question in 66 ms instead of 326 ms ([serve](docs/serve.md)) |
-| Agents | `repograph mcp`, `install-agent`, `prime` ([MCP](docs/mcp.md)) |
+| Agents | `zerograph mcp`, `install-agent`, `prime` ([MCP](docs/mcp.md)) |
 | Languages | TypeScript and JavaScript, Kotlin, Java, C#, Rust, Python, Dart, Swift, GraphQL, SQL, Bicep, HCL, Shell, Vue, Lua, Go, C, C++, PHP, Ruby, Scala, Elixir, OCaml ([languages](docs/languages.md)) |
 | Optional spend | `ask --rerank`, a model picking seeds from a 200-deep pool per question ([rerank](docs/rerank.md)) |
-| Bench | `repograph bench` fails the process when a recall floor is missed ([benchmarks](docs/benchmarks.md)) |
+| Bench | `zerograph bench` fails the process when a recall floor is missed ([benchmarks](docs/benchmarks.md)) |
 
 ## Benchmarks
 
@@ -67,9 +69,9 @@ paraphrase 19/30, code 12/12 at 244 p90 tokens; with `--no-dense` 39/40, 7/30, 1
 
 ## Configuration
 
-`repograph.toml` at the repository root, plus an optional machine file at
-`~/.config/repograph/config.toml`. Every key is optional. The globs, `include`, `text_globs`, model
-and `resources` keys, and the `REPOGRAPH_*` environment variables are in
+`zerograph.toml` at the repository root, plus an optional machine file at
+`~/.config/zerograph/config.toml`. Every key is optional. The globs, `include`, `text_globs`, model
+and `resources` keys, and the `ZEROGRAPH_*` environment variables are in
 [configuration](docs/configuration.md); embedder choice is in [embeddings](docs/embeddings.md).
 
 ## How it works

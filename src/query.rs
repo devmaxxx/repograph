@@ -54,12 +54,12 @@ const PINNED: usize = 0;
 /// `docs/superpowers/specs/2026-09-06-residue-seat-register-design.md`.
 const QUESTIONS_GATE: f64 = 0.761;
 
-/// `REPOGRAPH_QUESTIONS_GATE` overrides the constant for a measurement and for nothing else:
+/// `ZEROGRAPH_QUESTIONS_GATE` overrides the constant for a measurement and for nothing else:
 /// `0` reproduces the ungated fusion that ADR-001 Amendment 6's before-column was read against,
 /// which no commit's binary otherwise produces, and any other value re-reads the coverage
 /// crossover above — no longer the ratio of two raw bests that the name once meant.
 fn questions_gate() -> f64 {
-    gate_from(std::env::var("REPOGRAPH_QUESTIONS_GATE").ok().as_deref())
+    gate_from(crate::env("QUESTIONS_GATE").as_deref())
 }
 
 fn gate_from(override_: Option<&str>) -> f64 {
@@ -606,7 +606,7 @@ pub fn verify(graph: &Graph) -> String {
     out
 }
 
-/// The family an id is written in, the way `repograph families` and the read matcher both read
+/// The family an id is written in, the way `zerograph families` and the read matcher both read
 /// it — two groupings over one store would have `verify` contradict the command that reports on
 /// the same thing. An id in no family at all is its own group: the second half of the partition
 /// is for citations of prefixes nothing declares, and a shape the dialect does not recognise is
