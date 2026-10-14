@@ -1,4 +1,4 @@
-//! `repograph dump`: every retriever's ranked list for a set of questions, written once so the
+//! `zerograph dump`: every retriever's ranked list for a set of questions, written once so the
 //! retrieval mathematics can be done offline, without the model and without this code.
 
 use crate::bench::Expect;
@@ -55,7 +55,7 @@ pub fn run(repo: &Path, queries: &Path, out: &Path, depth: usize, no_dense: bool
     let (graph, _) = store.load()?;
     if graph.nodes.is_empty() { anyhow::bail!("graph is empty at {} — run build first", repo.display()); }
     let dense_idx = DenseIndex::load(&store)?;
-    if !no_dense && dense_idx.ids.is_empty() { anyhow::bail!("dense index is empty at {} — run `repograph update` first", repo.display()); }
+    if !no_dense && dense_idx.ids.is_empty() { anyhow::bail!("dense index is empty at {} — run `zerograph update` first", repo.display()); }
     let text = std::fs::read_to_string(queries).with_context(|| queries.display().to_string())?;
     let queries: Vec<Query> = text.lines().filter(|l| !l.trim().is_empty())
         .map(|l| serde_json::from_str::<Query>(l).map_err(anyhow::Error::from))
@@ -114,7 +114,7 @@ pub fn run(repo: &Path, queries: &Path, out: &Path, depth: usize, no_dense: bool
         eprintln!("dump: {:<10} {:<14} {}", q.kind, q.expect.key(), q.q);
     }
     let dump = Dump {
-        meta: Meta { store: repo.join(".repograph").display().to_string(), depth, rows: dense_idx.ids.len(), dim: dense_idx.dim, queries: records.len(), dense: !no_dense },
+        meta: Meta { store: store.dir().display().to_string(), depth, rows: dense_idx.ids.len(), dim: dense_idx.dim, queries: records.len(), dense: !no_dense },
         queries: records,
     };
     std::fs::write(out, serde_json::to_vec(&dump)?).with_context(|| out.display().to_string())?;

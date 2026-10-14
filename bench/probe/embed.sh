@@ -39,9 +39,13 @@ kill_tree() {
 # The refusal that has to be read before the store is: this script removes `vectors.f32` before it
 # starts, so an embed killed partway through leaves neither the old vectors nor a whole set of new
 # ones — and the next thing anyone does with a store is trust it.
+# The store a binary reads in a tree: `.zerograph` once a renamed binary has written there, else the
+# `.repograph` every fixture was built with.
+store_of() { if [ -e "$1/.zerograph" ]; then echo "$1/.zerograph"; else echo "$1/.repograph"; fi; }
+
 refuse_partial_store() {
   echo "refusing: $1" >&2
-  echo "  the embed was killed mid-run, so $2/.repograph/ holds a partial set of vectors and no whole one — reset.sh before anything reads this store" >&2
+  echo "  the embed was killed mid-run, so $(store_of "$2")/ holds a partial set of vectors and no whole one — reset.sh before anything reads this store" >&2
   return 4
 }
 
@@ -100,7 +104,8 @@ cat "$L/$NAME.quiet" | tee -a "$L/summary.txt"
 # One row a call, so this row's own line: §9's three runs pool into one summary and a reader of it
 # should not have to assume the three were embedded by the same model.
 embedder_line | tee -a "$L/summary.txt"
-rm -f "$F/.repograph/vectors.f32" "$F/.repograph/vectors.json"
+S=$(store_of "$F")
+rm -f "$S/vectors.f32" "$S/vectors.json"
 # `$| = 1`: the stamper's own stdout is a file, so perl block-buffers it, and nobody waits for the
 # stamper — it is a process substitution, and `wait` below waits on the wrapper. A 4 KB boundary
 # falling inside `time`'s report then leaves the last lines of the transcript unwritten when the
@@ -170,7 +175,7 @@ ROW=$(summary_row "$NAME" "$WALL" "$USR" "$SYS" "$RSS" "$RC" "$L/$NAME.samples")
   # so nothing whole is left in their place; refusing at 2 would tell an operator otherwise, and the
   # next `ask` on that store answers lexical-only without saying so.
   [ "$RC" = "0" ] && exit 2
-  echo "  the vectors were removed before the embed started and it exited $RC, so $F/.repograph/ holds no whole set of them — reset.sh before anything reads this store" >&2
+  echo "  the vectors were removed before the embed started and it exited $RC, so $(store_of "$F")/ holds no whole set of them — reset.sh before anything reads this store" >&2
   exit 4
 }
 printf '%s\n' "$ROW" | tee -a "$L/summary.txt"
@@ -187,7 +192,7 @@ cat "$L/$NAME.cadence" | tee -a "$L/summary.txt"
 # no vectors and every `ask` answers lexical-only without saying so. The row is still printed and
 # still carries `rc=`, which is what `judge.py medians` refuses it on.
 [ "$RC" = "0" ] || {
-  echo "  the vectors were removed before the embed started and it exited $RC, so $F/.repograph/ holds no whole set of them — reset.sh before anything reads this store" >&2
+  echo "  the vectors were removed before the embed started and it exited $RC, so $(store_of "$F")/ holds no whole set of them — reset.sh before anything reads this store" >&2
   exit 4
 }
 exit "$CAD"

@@ -9,20 +9,20 @@ Two directories, both locked: `~/bench/beauty-crm-502e8a6d`, the pinned fixture,
 `~/bench/beauty-crm-test`, the one writable worktree, where every writer and every reader row runs.
 
 - `quiet.sh` — the precondition every row is read under: ≥ 85% idle, 1-minute load < 3.0, AC power,
-  no `cargo`/`rustc`/other `repograph` at all, and no other `node` at or above 5.0% CPU. The two
+  no `cargo`/`rustc`/`zerograph`/`repograph` at all, and no other `node` at or above 5.0% CPU. The two
   rules differ because the two kinds of noise do. This project's own tools are bursty, so presence
-  is the whole rule for them: a `cargo` at 0% is between two crates and a `repograph` at 0% is
+  is the whole rule for them: a `cargo` at 0% is between two crates and a `zerograph` at 0% is
   about to embed. A `node` at 0% is a sibling harness or an MCP server asleep, and a process
   consuming no CPU moves no wall clock — counting those refused this machine on 66 of them, which
   measured the session and not the noise. The one exemption is this script's own ancestor chain
   (`$$` upwards through `PPID`), at any CPU: the harness that launched the probe is unavoidable and
   the `load1` clause refuses it on its own when it is busy. The printed line names what each rule
-  counted — `busy=0 (cargo/rustc/repograph: 0, node ≥5.0%: 0)` — and each refusal lists the
-  `pid pcpu comm` rows behind its count. What says whether the machine spoiled a row is not this
-  clause but G23's control, the same binary through the suite twice; the precondition is here to
-  catch the obvious cases cheaply. Sourcing the script defines `ancestor_pids`, `busy_lines` and
-  `busy_rows` and runs nothing, which is how `test_quiet.py` reads the walk and both rules on a
-  machine that is not quiet. `readers.sh` and `embed.sh`, the two that time anything, run it first
+  counted — `busy=0 (cargo/rustc/repograph: 0, node ≥5.0%: 0)`, a label that keeps the old name —
+  and each refusal lists the `pid pcpu comm` rows behind its count. What says whether the machine
+  spoiled a row is not this clause but G23's control, the same binary through the suite twice; the
+  precondition is here to catch the obvious cases cheaply. Sourcing the script defines
+  `ancestor_pids`, `busy_lines` and `busy_rows` and runs nothing, which is how `test_quiet.py`
+  reads the walk and both rules on a machine that is not quiet. `readers.sh` and `embed.sh`, the two that time anything, run it first
   and refuse; `reset.sh` and `arms.sh` measure no wall clock and do not.
 - `embedder.sh` — sourced, never run: the one place that names which weights every row here is read
   under, and the refusal when the environment does not say so. `reset.sh`, `readers.sh`, `embed.sh`
@@ -37,7 +37,8 @@ Two directories, both locked: `~/bench/beauty-crm-502e8a6d`, the pinned fixture,
   changed path `changes` reads and every `changes` row would map two paths instead of the one it
   touched. Unset is refused rather than defaulted, so a row can never be read under whatever the
   built-in default happens to be that month, and a value naming another model is refused rather than
-  replaced. The declaration travels onto each row's transcript — a line in `summary.txt` beside the
+  replaced. So is a `ZEROGRAPH_EMBED_MODEL` set to anything else, even to nothing: a renamed binary
+  reads it before the old name. The declaration travels onto each row's transcript — a line in `summary.txt` beside the
   quiet line for `readers.sh` and `embed.sh`, the head of each arm's own output for `arms.sh` — and
   onto `readers.sh`'s `medians.txt`, which is the file copied out as the reference every later
   reading is judged against, so a reference cannot be compared against a suite read under other

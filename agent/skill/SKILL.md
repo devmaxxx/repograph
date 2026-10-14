@@ -1,6 +1,6 @@
 ---
 name: repo-query
-description: Use when you need to find where something lives, what calls it, or what a change would break in a repository that carries a repograph index — before grepping for a concept or reading files to orient yourself.
+description: Use when you need to find where something lives, what calls it, or what a change would break in a repository that carries a zerograph index — before grepping for a concept or reading files to orient yourself.
 ---
 
 # Asking the graph

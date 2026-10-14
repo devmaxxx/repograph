@@ -4,8 +4,8 @@ Dense retrieval embeds by default with `onnx-community/embeddinggemma-300m-ONNX`
 ≈1.2 GB on disk, downloaded on first use) run through `ort` directly: the tokenizer and the session open concurrently at optimisation
 level 1,
 which halves model-open time against the library default. The files are a one-time Hugging Face
-download cached under `FASTEMBED_CACHE_DIR` if that is set, else `~/.cache/repograph/fastembed`
-(`%USERPROFILE%\.cache\repograph\fastembed` on Windows; the layout is the hub client's, so a
+download cached under `FASTEMBED_CACHE_DIR` if that is set, else `~/.cache/zerograph/fastembed`
+(`%USERPROFILE%\.cache\zerograph\fastembed` on Windows; the layout is the hub client's, so a
 cache populated by an earlier release is reused as is — where the client links each file into its
 snapshot, or on a Windows account without symlink rights moves it there). Every
 command that touches the dense stage — `build`, `update`, `embed`, `watch`, `ask`,
@@ -17,18 +17,18 @@ and `watch` write vectors with; `vectors.json` records it, and `ask`, `bench` an
 recorded one — so a store keeps answering with the model that wrote it whatever the configuration
 says today, and a new default never silently reinterprets an index nobody re-embedded. The
 recorded name is a clone's text like any other, so it passes the same gate as a model
-`repograph.toml` names (below): one that is neither catalogued nor trusted on this machine is not
+`zerograph.toml` names (below): one that is neither catalogued nor trusted on this machine is not
 opened: readers answer lexical-only and say why, `dump` and a dense `bench` fail, and no reader
 re-embeds the store under another model. A store written before the field existed is
-the small model's. `repograph model <hub id>` switches it —
+the small model's. `zerograph model <hub id>` switches it —
 [below](#choosing-the-model) — and rows another model wrote are dropped and the file rewritten, on
-width as well as on name. Naming a model in `repograph.toml` by hand is enough: the first `ask`
+width as well as on name. Naming a model in `zerograph.toml` by hand is enough: the first `ask`
 after it says so on stderr, answers from the stored vectors, and starts a background `update` that
 downloads the model and re-embeds. That holds for the catalogue's models; any other hub id is a
 model a cloned repository would have this machine download and load, so the file's word is not
-enough for it: `repograph model <hub id>` trusts it on this machine (in `trusted-models` beside the
+enough for it: `zerograph model <hub id>` trusts it on this machine (in `trusted-models` beside the
 machine config), and until then the default stands and stderr says why.
-`REPOGRAPH_EMBED_MODEL=<hub id>` outranks both for one command, which is how a copy of a store is
+`ZEROGRAPH_EMBED_MODEL=<hub id>` outranks both for one command, which is how a copy of a store is
 measured under a second model — query that copy with `ask --stale`, or with `bench` and `dump`,
 which read the store as it stands; a refreshing `ask` would claim the index for the overriding
 model. It is trap 7 of the [runbook](bench/runbook.md).
@@ -40,7 +40,7 @@ eighty-two ([the arithmetic](history.md#what-turning-the-dense-stage-off-costs))
 answer costs: ~0.30 s and ~1.7 GB on the default — the model, not
 the graph. An exact-id lookup answers in ~50 ms and ~50 MB, a `--no-dense` question in ~0.1 s, since
 neither opens the model or reads the vectors. What is left is paid once per process, which is what
-[`serve`](serve.md) is for. `REPOGRAPH_TIMING=1` prints the stages.
+[`serve`](serve.md) is for. `ZEROGRAPH_TIMING=1` prints the stages.
 
 Five other embedding-side levers were measured on the fourteen-case set, before the generated
 questions were in the index, and none moved recall — a larger base model, BGE-M3, a quantized
@@ -80,24 +80,24 @@ widened arm of 60 paraphrase cases separated the four, and it took 39/60 against
 35/60, for 2.7× the embed and 137 MB of vectors where the default writes 103 MB. The conditions, the other seven candidates, the flips and
 the caveats are in [the readings](bench/2026-09-22-embedders-results.md).
 
-`repograph model` prints that table with the store's own model marked, and
-`repograph model <hub id>` changes it:
+`zerograph model` prints that table with the store's own model marked, and
+`zerograph model <hub id>` changes it:
 
 ```console
-$ repograph model Snowflake/snowflake-arctic-embed-l-v2.0
+$ zerograph model Snowflake/snowflake-arctic-embed-l-v2.0
 model: intfloat/multilingual-e5-small → Snowflake/snowflake-arctic-embed-l-v2.0
 model: 2.1G of files in the hub cache, fetched once
 model: 2.7× the default's embed — 1944 s for the bench fixture's 33,525 rows
 model: 137 MB of vectors for that corpus, against the other model's 51 MB on it
 model: 384-d → 1024-d, so every row is re-embedded and the whole index rewritten, not extended
 model: opened in 5.2s, 1024-d vectors
-model: embed_model = "Snowflake/snowflake-arctic-embed-l-v2.0" in /repo/repograph.toml
+model: embed_model = "Snowflake/snowflake-arctic-embed-l-v2.0" in /repo/zerograph.toml
 embedded 33525/33525 (14.5 rows/s, ~0 s left)
 dense: embedded 33525 rows in 2317.4s
 ```
 
 The model is opened before anything is written, so an id with no ONNX export fails with the hub's
-own error and leaves the repository exactly as it was. `repograph.toml` is then rewritten in place —
+own error and leaves the repository exactly as it was. `zerograph.toml` is then rewritten in place —
 only that one value, comments and everything else kept — and the store re-embedded, which
 `--no-embed` stops if you would rather pay for it later.
 
@@ -105,11 +105,11 @@ only that one value, comments and everything else kept — and the store re-embe
 
 The default's weights are published under the [Gemma Terms of Use](https://ai.google.dev/gemma/terms),
 not an OSI licence: they carry a prohibited-use policy that Google may update, and anyone who
-redistributes the weights passes those terms on. repograph does not redistribute them — the files
-are fetched from the Hugging Face hub onto the machine that runs it, so whoever runs repograph is
+redistributes the weights passes those terms on. zerograph does not redistribute them — the files
+are fetched from the Hugging Face hub onto the machine that runs it, so whoever runs zerograph is
 the one taking the terms. The default stays on gemma because it reads arctic's recall on the
 recorded arm for under two fifths of its embed, at 1.3 GB peak RSS ([ADR-003](adr/ADR-003-gemma-is-the-default.md)).
 
-A project whose policy admits only OSI licences pins another model in `repograph.toml`:
+A project whose policy admits only OSI licences pins another model in `zerograph.toml`:
 `Snowflake/snowflake-arctic-embed-l-v2.0` (Apache-2.0) for the same or better recall, or
 `intfloat/multilingual-e5-small` (MIT) for the cheapest embed.

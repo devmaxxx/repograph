@@ -1,8 +1,8 @@
-<!-- repograph:begin -->
+<!-- zerograph:begin -->
 
-## repograph
+## zerograph
 
-This repository carries a `repograph` index of its documents and its TypeScript. It answers by
+This repository carries a `zerograph` index of its documents and its TypeScript. It answers by
 meaning, at no model tokens, and it is faster than reading files to find out where something is.
 
 - `{{command}} ask <words>` — what the docs and the code say about a concept. Seeds first, then
@@ -19,4 +19,4 @@ freshness is not your problem; `--stale` skips that when you want the answer now
 still right for a literal — an env var, a string in a test, a config key. One stage costs model
 tokens and is opt-in: `ask --rerank` picks seeds from a deep pool per question. Everything above is
 free.
-<!-- repograph:end -->
+<!-- zerograph:end -->

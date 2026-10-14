@@ -20,7 +20,7 @@ from typing import Callable
 # The stores of the three tools sit inside the corpus; a hit there is a hit on a
 # tool's own index, not on the repository. The rest is the tree 0.5.3's store reads: dot-paths
 # but `.git`, less the default `skip`'s bundles.
-EXCLUDE = ("--hidden", "-g", "!.git", "-g", "!.repograph/**", "-g", "!graphify-out/**", "-g", "!.gitnexus/**",
+EXCLUDE = ("--hidden", "-g", "!.git", "-g", "!.repograph/**", "-g", "!.zerograph/**", "-g", "!graphify-out/**", "-g", "!.gitnexus/**",
            "-g", "!*.min.js", "-g", "!.yarn/**", "-g", "!.pnp.*")
 
 CLASS = re.compile(r"^export (?:abstract )?class (\w+)", re.M)

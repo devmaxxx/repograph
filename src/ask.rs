@@ -1,4 +1,4 @@
-//! The work behind `repograph ask`, shaped so it can be done more than once against one open
+//! The work behind `zerograph ask`, shaped so it can be done more than once against one open
 //! store: `Context::open` reads the graph and the ids, and `Context::answer`
 //! turns a `Request` into the text the command prints. A one-shot `ask` opens a context, answers
 //! once and leaves; a resident process opens one and answers many times, over the same code.
@@ -8,10 +8,10 @@ use anyhow::Context as _;
 use std::cell::{Cell, RefCell};
 use std::path::{Path, PathBuf};
 
-/// `REPOGRAPH_TIMING=1` prints where an `ask` spends its time, one line per stage on stderr.
+/// `ZEROGRAPH_TIMING=1` prints where an `ask` spends its time, one line per stage on stderr.
 pub(crate) struct Timing { on: bool, start: std::time::Instant, last: Cell<std::time::Instant> }
 
-pub(crate) fn timing_on() -> bool { std::env::var_os("REPOGRAPH_TIMING").is_some() }
+pub(crate) fn timing_on() -> bool { crate::env_os("TIMING").is_some() }
 
 impl Timing {
     pub(crate) fn new() -> Timing {
@@ -27,7 +27,7 @@ impl Timing {
     }
 }
 
-/// One line per writer phase under `REPOGRAPH_TIMING`, in milliseconds since the first mark. A
+/// One line per writer phase under `ZEROGRAPH_TIMING`, in milliseconds since the first mark. A
 /// writer has no `Timing` to carry: `apply_diff` is shared by every refresh path, and threading
 /// one through each of them would be a signature change for a diagnostic. The clock starts at the
 /// first mark of the process, so the offsets read as phases only in a one-shot `build` or
@@ -147,8 +147,8 @@ pub(crate) fn graph_for_ask(repo: &Path, cfg: &config::Config, store: &store::St
         let what = refresh::files_line(work);
         // A store that cannot be locked cannot be written by a detached `update` either.
         let line = match (unlocked, linked) {
-            (true, _) => format!("{what}; the store cannot be locked for a background refresh — run `repograph update`"),
-            (_, true) => format!("{what}; the store holds a symlink no writer follows — run `repograph update` for which"),
+            (true, _) => format!("{what}; the store cannot be locked for a background refresh — run `zerograph update`"),
+            (_, true) => format!("{what}; the store holds a symlink no writer follows — run `zerograph update` for which"),
             _ => refresh::left_behind(repo, budget.no_dense, &what, busy),
         };
         // A grammar-stale store re-reads every file, so every file is what it is behind by.
@@ -298,11 +298,11 @@ impl Context {
                 let i = index::dense::DenseIndex::load(store).unwrap_or_else(|err| { notices.borrow_mut().push(format!("dense: index unreadable, continuing lexical-only ({err:#})")); Default::default() });
                 timing.stage("vectors loaded"); i
             });
-            // A model named in `repograph.toml` after the store was embedded takes effect at the
+            // A model named in `zerograph.toml` after the store was embedded takes effect at the
             // next `update`; a reader that only asks would otherwise keep the old one forever.
             // This answer still comes from the stored vectors — the rewrite is a whole re-embed.
             if !req.stale && index::embed::switch_owed(config::names_embed_model(repo), idx.model_of_rows().as_deref(), &cfg.embed_model) {
-                let what = format!("dense: {} names {}, the vectors are {}'s", config::PROJECT_FILE, cfg.embed_model, idx.model_of_rows().unwrap_or_default());
+                let what = format!("dense: {} names {}, the vectors are {}'s", config::project_file_name(repo), cfg.embed_model, idx.model_of_rows().unwrap_or_default());
                 let busy = match writer { Writer::Barred => true, Writer::PerAnswer => matches!(store.try_lock_writer(), Ok(None)), _ => false };
                 say_once(notices, refresh::left_behind_as(repo, no_dense, &what, busy, "switching"));
             }
@@ -530,7 +530,7 @@ mod tests {
         std::fs::create_dir_all(dir.path().join("docs")).unwrap();
         std::fs::write(dir.path().join("docs/pay.md"), "# Оплата\n\n**FR-PAY-1 · MUST · Штраф за отмену**\n\nШтраф списывается сам.\n").unwrap();
         std::fs::write(dir.path().join("docs/cal.md"), "# Календарь\n\n**FR-CAL-1 · MUST · Перенос визита**\n\nПеренос не считается отменой.\n").unwrap();
-        std::fs::write(dir.path().join("repograph.toml"), "id_families = [\"FR-PAY\", \"FR-CAL\"]\n").unwrap();
+        std::fs::write(dir.path().join("zerograph.toml"), "id_families = [\"FR-PAY\", \"FR-CAL\"]\n").unwrap();
         dir
     }
 
@@ -562,16 +562,16 @@ mod tests {
         let store = store::Store::new(dir.path());
         let target = dir.path().join("elsewhere");
         std::fs::write(&target, "").unwrap();
-        let lock = dir.path().join(".repograph/writer.lock");
+        let lock = dir.path().join(".zerograph/writer.lock");
         let _ = std::fs::remove_file(&lock);
         std::os::unix::fs::symlink(&target, &lock).unwrap();
         std::fs::write(dir.path().join("docs/pay.md"), "# Оплата\n\n**FR-PAY-2 · MUST · Новое**\n\nтекст\n").unwrap();
-        let manifest = std::fs::read(dir.path().join(".repograph/manifest.json")).unwrap();
+        let manifest = std::fs::read(dir.path().join(".zerograph/manifest.json")).unwrap();
         let read = graph_for_ask(dir.path(), &cfg, &store, false, &Timing::new(), &refresh::Budget::seconds(cfg.reader_budget, true)).unwrap();
         assert!(matches!(read.writer, Writer::Barred));
         assert!(read.refreshed.is_none());
         assert!(read.behind.is_some_and(|(_, line)| line.contains("symlink")), "no detached refresh is promised");
-        assert_eq!(std::fs::read(dir.path().join(".repograph/manifest.json")).unwrap(), manifest, "nothing was saved");
+        assert_eq!(std::fs::read(dir.path().join(".zerograph/manifest.json")).unwrap(), manifest, "nothing was saved");
     }
 
     #[test]
@@ -595,7 +595,7 @@ mod tests {
     /// up over the network — and the session then refuses to open it. Without this the two tests
     /// below would download 470 MB, or open the model already on the machine and embed with it.
     /// It is laid out under the name `resolve` returns rather than under the default one, so
-    /// `REPOGRAPH_EMBED_MODEL` in the environment moves the fixture with it instead of missing
+    /// `ZEROGRAPH_EMBED_MODEL` in the environment moves the fixture with it instead of missing
     /// it and sending `repo.get` to the network.
     fn an_unopenable_model() {
         static CACHE: std::sync::OnceLock<tempfile::TempDir> = std::sync::OnceLock::new();
@@ -630,7 +630,7 @@ mod tests {
     /// send this test looking for a model the fixture never cached, and out to the network to
     /// find it.
     fn vectors_beside_the_graph(repo: &Path) -> (PathBuf, PathBuf) {
-        let (json, raw) = (repo.join(".repograph/vectors.json"), repo.join(".repograph/vectors.f32"));
+        let (json, raw) = (repo.join(".zerograph/vectors.json"), repo.join(".zerograph/vectors.f32"));
         let model = index::embed::DEFAULT_MODEL;
         let graph = serde_json::to_string(&store::Store::new(repo).stamp("graph.json")).unwrap();
         std::fs::write(&json, format!(r#"{{"ids":["FR-PAY-1"],"hashes":["h"],"kinds":[false],"dim":4,"model":"{model}","graph":{graph}}}"#)).unwrap();

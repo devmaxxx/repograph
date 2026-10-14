@@ -10,7 +10,7 @@ mod common;
 
 use common::run;
 
-fn repograph(repo: &std::path::Path, args: &[&str]) -> (bool, String) {
+fn zerograph(repo: &std::path::Path, args: &[&str]) -> (bool, String) {
     let out = run(repo, args);
     (out.status.success(), String::from_utf8_lossy(&out.stdout).into_owned())
 }
@@ -48,7 +48,7 @@ fn explain_verify_and_trace_answer_in_json_like_the_rest() {
     let dir = built();
     let repo = dir.path();
 
-    let (ok, out) = repograph(repo, &["explain", "FR-PAY-22", "--json"]);
+    let (ok, out) = zerograph(repo, &["explain", "FR-PAY-22", "--json"]);
     assert!(ok, "{out}");
     let v = parsed(&out);
     assert!(v.is_object(), "{out}");
@@ -65,7 +65,7 @@ fn explain_verify_and_trace_answer_in_json_like_the_rest() {
     assert_eq!(cite["file"], "docs/req.md", "{out}");
     assert!(cite["line"].is_u64(), "{out}");
 
-    let (ok, out) = repograph(repo, &["verify", "--json"]);
+    let (ok, out) = zerograph(repo, &["verify", "--json"]);
     assert!(ok, "{out}");
     let v = parsed(&out);
     assert!(v["nodes"].as_u64().unwrap() > 0, "{out}");
@@ -74,7 +74,7 @@ fn explain_verify_and_trace_answer_in_json_like_the_rest() {
         assert!(v[key].is_array(), "{key} is an array: {out}");
     }
 
-    let (ok, out) = repograph(repo, &["trace", "refund", "write", "--json"]);
+    let (ok, out) = zerograph(repo, &["trace", "refund", "write", "--json"]);
     assert!(ok, "{out}");
     let v = parsed(&out);
     assert_eq!(v["depth"], 6);
@@ -90,7 +90,7 @@ fn explain_verify_and_trace_answer_in_json_like_the_rest() {
 #[test]
 fn a_trace_that_finds_nothing_is_a_null_path_and_not_a_failure() {
     let dir = built();
-    let (ok, out) = repograph(dir.path(), &["trace", "write", "refund", "--json"]);
+    let (ok, out) = zerograph(dir.path(), &["trace", "write", "refund", "--json"]);
     assert!(ok, "the JSON form exits 0: {out}");
     let v = parsed(&out);
     assert!(v["path"].is_null(), "{out}");
@@ -103,7 +103,7 @@ fn a_trace_that_finds_nothing_is_a_null_path_and_not_a_failure() {
 fn explaining_a_node_that_is_not_there_fails_in_both_forms() {
     let dir = built();
     for args in [vec!["explain", "FR-NOPE-1"], vec!["explain", "FR-NOPE-1", "--json"]] {
-        let (ok, out) = repograph(dir.path(), &args);
+        let (ok, out) = zerograph(dir.path(), &args);
         assert!(!ok, "{args:?} should fail: {out}");
     }
 }
@@ -113,8 +113,8 @@ fn explain_refreshes_like_the_other_readers_and_takes_stale_like_them() {
     let dir = built();
     let repo = dir.path();
     std::fs::write(repo.join("docs/more.md"), "**FR-PAY-30 · MUST · Чаевые**\n\nЧаевые идут мастеру.\n").unwrap();
-    let (ok, out) = repograph(repo, &["explain", "FR-PAY-30", "--stale"]);
+    let (ok, out) = zerograph(repo, &["explain", "FR-PAY-30", "--stale"]);
     assert!(!ok, "the store as it stands has not read the new document: {out}");
-    let (ok, out) = repograph(repo, &["explain", "FR-PAY-30"]);
+    let (ok, out) = zerograph(repo, &["explain", "FR-PAY-30"]);
     assert!(ok && out.starts_with("FR-PAY-30"), "explain brought the store in line first: {out}");
 }

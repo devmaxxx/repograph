@@ -1,20 +1,20 @@
 {
-  "name": "@devmaxxx/repograph-win32-x64",
+  "name": "@devmaxxx/zerograph-linux-x64",
   "version": "0.6.0",
-  "description": "repograph binary for Windows on x86-64 (MSVC); installed through @devmaxxx/repograph",
+  "description": "zerograph binary for Linux on x86-64 (glibc); installed through @devmaxxx/zerograph",
   "license": "MIT",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/devmaxxx/repograph.git"
   },
   "os": [
-    "win32"
+    "linux"
   ],
   "cpu": [
     "x64"
   ],
   "files": [
-    "bin/repograph.exe"
+    "bin/zerograph"
   ],
   "publishConfig": {
     "registry": "https://npm.pkg.github.com"

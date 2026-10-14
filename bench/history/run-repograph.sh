@@ -26,7 +26,7 @@ trap 'rm -rf "$OUT"' EXIT
 
 # A worktree's `.git` is a file pointing at the real one, never a directory.
 [ -e "$FIXTURE/.git" ] || { echo "no fixture at $FIXTURE — see bench/history/README.md" >&2; exit 1; }
-[ -f "$FIXTURE/.repograph/graph.json" ] || { echo "fixture has no repograph store — see bench/history/README.md" >&2; exit 1; }
+[ -f "$FIXTURE/.zerograph/graph.json" ] || [ -f "$FIXTURE/.repograph/graph.json" ] || { echo "fixture has no store — see bench/history/README.md" >&2; exit 1; }
 
 # A run recorded against a fixture that moved is a run whose history rows cannot be compared,
 # and the comparison would silently look like a regression in repograph.
@@ -37,9 +37,9 @@ PINNED=$(git -C "$FIXTURE" rev-parse --short HEAD)
 DIRTY=$(git -C "$FIXTURE" status --porcelain -- ':(exclude)graphify-out')
 [ -z "$DIRTY" ] || { echo "fixture has edited sources — not comparable to earlier runs:" >&2; echo "$DIRTY" >&2; exit 1; }
 
-echo "building repograph at $(git -C "$REPO" rev-parse --short HEAD)"
+echo "building zerograph at $(git -C "$REPO" rev-parse --short HEAD)"
 cargo build --release --manifest-path "$REPO/Cargo.toml" >/dev/null
-BIN="$REPO/target/release/repograph"
+BIN="$REPO/target/release/zerograph"
 
 status=0
 for arm in $ARMS; do

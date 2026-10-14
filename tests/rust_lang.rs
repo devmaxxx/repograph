@@ -10,8 +10,8 @@ use std::path::Path;
 
 // Rust is not in the default globs, so the repository names it.
 const TREE: &[(&str, &str)] = &[
-    ("repograph.toml", "code_globs = [\"**/*.rs\"]\n"),
-    (".gitignore", ".repograph/\ntarget/\n"),
+    ("zerograph.toml", "code_globs = [\"**/*.rs\"]\n"),
+    (".gitignore", ".zerograph/\ntarget/\n"),
     ("Cargo.toml", "[workspace]\nmembers = [\"crates/*\"]\n"),
     ("crates/shop-core/Cargo.toml", "[package]\nname = \"shop-core\"\nversion = \"0.1.0\"\n"),
     ("crates/shop-core/src/lib.rs", "pub mod exec;\npub mod store;\n"),
@@ -26,7 +26,7 @@ const TREE: &[(&str, &str)] = &[
     ),
 ];
 
-fn repograph(repo: &Path, args: &[&str]) -> (Option<i32>, String, String) {
+fn zerograph(repo: &Path, args: &[&str]) -> (Option<i32>, String, String) {
     let out = common::run(repo, args);
     (out.status.code(), String::from_utf8_lossy(&out.stdout).into_owned(), String::from_utf8_lossy(&out.stderr).into_owned())
 }
@@ -44,12 +44,12 @@ fn a_rust_workspace_answers_impact_trace_and_changes_and_survives_an_update() {
     git(repo, &["add", "-A"]);
     git(repo, &["commit", "-q", "-m", "init"]);
 
-    let (code, out, err) = repograph(repo, &["build"]);
+    let (code, out, err) = zerograph(repo, &["build"]);
     assert_eq!(code, Some(0), "{out}{err}");
 
     // `Store` is declared in one crate; its callers reach it through a `use` of the crate's name,
     // and through an `impl Store` in the other crate that only a `References` edge ties back.
-    let (code, out, err) = repograph(repo, &["impact", "sym:crates/shop-core/src/store.rs::Store"]);
+    let (code, out, err) = zerograph(repo, &["impact", "sym:crates/shop-core/src/store.rs::Store"]);
     assert_eq!(code, Some(0), "{out}{err}");
     for want in ["crates/shopd/src/main.rs", "crates/shopd/src/ops.rs", "sym:crates/shopd/src/ops.rs::Store.sync_all"] {
         assert!(out.contains(want), "impact Store names {want}: {out}");
@@ -57,15 +57,15 @@ fn a_rust_workspace_answers_impact_trace_and_changes_and_survives_an_update() {
 
     // The call resolves to the member this file's own `impl Store` writes, so the store id names
     // `ops.rs`, not the crate that declares `Store`.
-    let (code, out, err) = repograph(repo, &["impact", "sym:crates/shopd/src/ops.rs::Store.sync_all"]);
+    let (code, out, err) = zerograph(repo, &["impact", "sym:crates/shopd/src/ops.rs::Store.sync_all"]);
     assert_eq!(code, Some(0), "{out}{err}");
     assert!(out.contains("sym:crates/shopd/src/ops.rs::sync"), "sync reaches its own file's Store.sync_all: {out}");
 
     // A trait held in a field typed by the struct's parameter is reached through the bound.
-    let (code, out, err) = repograph(repo, &["trace", "Handler.handle", "Exec"]);
+    let (code, out, err) = zerograph(repo, &["trace", "Handler.handle", "Exec"]);
     assert_eq!(code, Some(0), "{out}{err}");
     assert!(out.contains("Handler.handle") && out.contains("Exec.run"), "{out}");
-    let (code, out, _) = repograph(repo, &["trace", "Exec", "Handler"]);
+    let (code, out, _) = zerograph(repo, &["trace", "Exec", "Handler"]);
     assert_eq!(code, Some(3), "no path is a verdict: {out}");
 
     // A body-only edit, applied to the store by `update` before any reader can: `changes`, like
@@ -75,14 +75,14 @@ fn a_rust_workspace_answers_impact_trace_and_changes_and_survives_an_update() {
     std::fs::write(&ops, edited).unwrap();
 
     // One file re-read, and the foreign impl's tie to `Store` is written again with it.
-    let (code, out, err) = repograph(repo, &["update"]);
+    let (code, out, err) = zerograph(repo, &["update"]);
     assert_eq!(code, Some(0), "{out}{err}");
     assert!(out.starts_with("changed 1 removed 0"), "{out}");
-    let (_, out, _) = repograph(repo, &["impact", "sym:crates/shop-core/src/store.rs::Store"]);
+    let (_, out, _) = zerograph(repo, &["impact", "sym:crates/shop-core/src/store.rs::Store"]);
     assert!(out.contains("crates/shopd/src/ops.rs"), "the update kept the impl's reference: {out}");
 
     // `changes` names the Rust symbol the hunk is in.
-    let (code, out, err) = repograph(repo, &["changes", "--base", "HEAD"]);
+    let (code, out, err) = zerograph(repo, &["changes", "--base", "HEAD"]);
     assert_eq!(code, Some(0), "{out}{err}");
     assert!(out.contains("crates/shopd/src/ops.rs") && out.contains("sym:crates/shopd/src/ops.rs::sync"), "{out}");
 }

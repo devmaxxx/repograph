@@ -28,7 +28,7 @@ static ENV: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 /// Taken at the top of every test in this crate, not only by the one that writes. A reader of the
 /// environment is as exposed to a concurrent write as a writer is: a test that spawns while
-/// another holds `REPOGRAPH_BENCH_REPO` set reads a repository it was never given, and would fail
+/// another holds `ZEROGRAPH_BENCH_REPO` set reads a repository it was never given, and would fail
 /// for a reason nothing in its own body names. Poisoned means a test panicked holding the lock,
 /// which says nothing about the environment — so the guard is taken anyway.
 fn env_lock() -> std::sync::MutexGuard<'static, ()> {
@@ -104,7 +104,7 @@ fn a_trace_with_no_path_is_a_verdict_and_an_unknown_symbol_is_a_failure() {
 fn a_bare_name_two_languages_share_lists_both_and_is_a_failure() {
     let _g = env_lock();
     let dir = tempfile::tempdir().unwrap();
-    std::fs::write(dir.path().join("repograph.toml"), "code_globs = [\"**/*.cs\", \"**/*.ts\"]\n").unwrap();
+    std::fs::write(dir.path().join("zerograph.toml"), "code_globs = [\"**/*.cs\", \"**/*.ts\"]\n").unwrap();
     std::fs::create_dir_all(dir.path().join("Shop")).unwrap();
     std::fs::create_dir_all(dir.path().join("web")).unwrap();
     std::fs::write(dir.path().join("Shop/Foo.cs"), "namespace Shop;\npublic class Foo\n{\n}\n").unwrap();
@@ -228,7 +228,7 @@ fn a_depth_of_zero_is_a_usage_error_for_every_command_that_takes_one() {
 }
 
 /// What a shell that has been running the bench kit exports, and what a test may not inherit from
-/// it. `REPOGRAPH_BENCH_REPO` sends `bench` to another repository: the case below would read an
+/// it. `ZEROGRAPH_BENCH_REPO` sends `bench` to another repository: the case below would read an
 /// empty directory, fail on the missing graph and exit 1 — a verdict test failing as though the
 /// verdict had gone, for a reason nothing in the run names.
 #[test]
@@ -241,13 +241,13 @@ fn the_bench_kits_variables_do_not_reach_the_child() {
     // `common::run` does is make the strip observable: it removes both from the child whatever
     // the parent holds, which is the behaviour the assertion below reads.
     unsafe {
-        std::env::set_var("REPOGRAPH_BENCH_REPO", elsewhere.path());
-        std::env::set_var("REPOGRAPH_EMBED_MODEL", "BAAI/bge-m3");
+        std::env::set_var("ZEROGRAPH_BENCH_REPO", elsewhere.path());
+        std::env::set_var("ZEROGRAPH_EMBED_MODEL", "BAAI/bge-m3");
     }
     let missed = run(dir.path(), &["bench", "--cases", cases().to_str().unwrap()]);
     unsafe {
-        std::env::remove_var("REPOGRAPH_BENCH_REPO");
-        std::env::remove_var("REPOGRAPH_EMBED_MODEL");
+        std::env::remove_var("ZEROGRAPH_BENCH_REPO");
+        std::env::remove_var("ZEROGRAPH_EMBED_MODEL");
     }
     assert_eq!(code(&missed), Some(3), "the child read the repository it was given: {}", err(&missed));
 }

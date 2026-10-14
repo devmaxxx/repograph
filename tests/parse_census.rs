@@ -43,7 +43,7 @@ fn skipped(rel: &str) -> bool {
     let base = rel.rsplit('/').next().unwrap_or(rel);
     rel.split('/').any(|s| s == "node_modules" || s == "dist" || s == ".yarn")
         || base.ends_with(".min.js") || base.starts_with(".pnp.")
-        || rel.starts_with("graphify-out/") || rel.starts_with(".repograph/")
+        || rel.starts_with("graphify-out/") || rel.starts_with(".zerograph/")
 }
 
 fn census(roots: &[PathBuf]) -> BTreeMap<Lang, Row> {
@@ -95,8 +95,8 @@ fn census(roots: &[PathBuf]) -> BTreeMap<Lang, Row> {
 #[test]
 #[ignore]
 fn parse_census() {
-    let roots: Vec<PathBuf> = std::env::var("REPOGRAPH_CENSUS_ROOTS")
-        .expect("set REPOGRAPH_CENSUS_ROOTS to one or more `:`-separated roots")
+    let roots: Vec<PathBuf> = zerograph::env("CENSUS_ROOTS")
+        .expect("set ZEROGRAPH_CENSUS_ROOTS to one or more `:`-separated roots")
         .split(':')
         .filter(|r| !r.is_empty())
         .map(PathBuf::from)

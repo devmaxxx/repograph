@@ -85,7 +85,7 @@ pub(crate) fn left_behind_as(repo: &Path, no_dense: bool, what: &str, busy: bool
     if busy { return format!("{what}, a refresh is already running"); }
     match spawn_update(repo, no_dense) {
         Ok(()) => format!("{what}, {doing} in background"),
-        Err(err) => format!("{what}; the background refresh did not start ({err:#}) — run `repograph update`"),
+        Err(err) => format!("{what}; the background refresh did not start ({err:#}) — run `zerograph update`"),
     }
 }
 
@@ -120,7 +120,7 @@ pub(crate) fn with_stale(json: String, stale: &Stale) -> String {
 /// writing them, where a renamed file keeps taking them under its new name.
 const LOG_CAP: u64 = 1 << 20;
 
-/// Starts `repograph update` in a process of its own and returns without waiting.
+/// Starts `zerograph update` in a process of its own and returns without waiting.
 pub(crate) fn spawn_update(repo: &Path, no_dense: bool) -> anyhow::Result<()> {
     spawn_detached(repo, no_dense, &["update"]).map(drop)
 }
@@ -144,7 +144,7 @@ pub(crate) fn reap(mut child: std::process::Child) -> Alive {
 /// this run's lines from those a killed run left.
 pub(crate) const RUN_MARKER: &str = "refresh: started";
 
-/// Starts `repograph <args>` in a process of its own and returns without waiting. It inherits
+/// Starts `zerograph <args>` in a process of its own and returns without waiting. It inherits
 /// none of this process's standard streams: a caller reading this reader's output through a pipe
 /// would otherwise wait for the refresh to close it too, which is the wait this exists to remove.
 pub(crate) fn spawn_detached(repo: &Path, no_dense: bool, args: &[&str]) -> anyhow::Result<Alive> {
@@ -162,9 +162,7 @@ pub(crate) fn spawn_detached(repo: &Path, no_dense: bool, args: &[&str]) -> anyh
 }
 
 fn log_file(repo: &Path) -> anyhow::Result<std::fs::File> {
-    let store = crate::store::Store::new(repo);
-    store.ensure_dir()?;
-    let p = repo.join(".repograph").join("background.log");
+    let p = crate::store::Store::new(repo).ensure_dir()?.join("background.log");
     let long = std::fs::metadata(&p).is_ok_and(|m| m.len() > LOG_CAP);
     // Windows refuses to rename a file another process holds open; that run keeps truncating.
     let rotated = long && std::fs::rename(&p, p.with_extension("log.1")).is_ok();
@@ -235,7 +233,7 @@ mod tests {
     #[test]
     fn a_log_over_the_cap_is_rotated_and_not_truncated() {
         let dir = tempfile::tempdir().unwrap();
-        let log = dir.path().join(".repograph/background.log");
+        let log = dir.path().join(".zerograph/background.log");
         std::fs::create_dir_all(log.parent().unwrap()).unwrap();
         std::fs::write(&log, vec![b'x'; LOG_CAP as usize + 1]).unwrap();
         drop(log_file(dir.path()).unwrap());
@@ -251,7 +249,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let outside = dir.path().join("outside");
         std::fs::write(&outside, "victim\n").unwrap();
-        let log = dir.path().join(".repograph/background.log");
+        let log = dir.path().join(".zerograph/background.log");
         std::fs::create_dir_all(log.parent().unwrap()).unwrap();
         std::os::unix::fs::symlink(&outside, &log).unwrap();
         assert!(log_file(dir.path()).is_err());

@@ -1,5 +1,5 @@
 {
-  "name": "@devmaxxx/repograph",
+  "name": "@devmaxxx/zerograph",
   "version": "0.6.0",
   "description": "Knowledge graph of a repository's requirement docs and code in 24 languages, built and refreshed at zero model tokens, asked by id, keyword or paraphrase",
   "license": "MIT",
@@ -19,19 +19,20 @@
     "claude-code"
   ],
   "bin": {
-    "repograph": "bin/repograph.js"
+    "zerograph": "bin/zerograph.js",
+    "repograph": "bin/zerograph.js"
   },
   "files": [
-    "bin/repograph.js",
+    "bin/zerograph.js",
     "README.md"
   ],
   "engines": {
     "node": ">=18"
   },
   "optionalDependencies": {
-    "@devmaxxx/repograph-darwin-arm64": "0.6.0",
-    "@devmaxxx/repograph-linux-x64": "0.6.0",
-    "@devmaxxx/repograph-win32-x64": "0.6.0"
+    "@devmaxxx/zerograph-darwin-arm64": "0.6.0",
+    "@devmaxxx/zerograph-linux-x64": "0.6.0",
+    "@devmaxxx/zerograph-win32-x64": "0.6.0"
   },
   "publishConfig": {
     "registry": "https://npm.pkg.github.com"

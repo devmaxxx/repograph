@@ -8,7 +8,7 @@ M=${M:-/Users/max/bench/agent-surface-2026-09-07}; WT="$M/wt"
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # C-rem is C with the interceptor off: the overlay directory is C's, the switch is the environment.
 OVERLAY_NAME=$CONFIG
-if [ "$CONFIG" = "C-rem" ]; then OVERLAY_NAME=C; export REPOGRAPH_HOOK_INTERCEPT=0; fi
+if [ "$CONFIG" = "C-rem" ]; then OVERLAY_NAME=C; export ZEROGRAPH_HOOK_INTERCEPT=0; fi
 OVERLAY="$HERE/overlays/$OVERLAY_NAME"; [ -d "$OVERLAY" ] || { echo "no overlay $OVERLAY_NAME" >&2; exit 2; }
 # A has no binary on PATH; every other configuration has the one this branch built.
 case "$CONFIG" in A) BINPATH="" ;; *) BINPATH="$M/bin:" ;; esac
@@ -30,7 +30,7 @@ for l in open(sys.argv[1]):
 for r in $(seq "$REPEAT"); do
   while IFS=$'\t' read -r id prompt setup; do
     git -C "$WT" checkout -- . >/dev/null 2>&1 || true
-    git -C "$WT" clean -fdq -e .repograph
+    git -C "$WT" clean -fdq -e .repograph -e .zerograph
     rm -rf "$WT/.claude"; cp -R "$OVERLAY" "$WT/.claude"
     cmp -s "$WT/.claude/CLAUDE.md" "$OVERLAY/CLAUDE.md" \
       || { echo "the overlay did not survive the reset: $WT/.claude is not $OVERLAY" >&2; exit 3; }
@@ -44,7 +44,7 @@ for r in $(seq "$REPEAT"); do
   done < "$OUT/tasks.tsv"
 done
 git -C "$WT" checkout -- . >/dev/null 2>&1 || true
-git -C "$WT" clean -fdq -e .repograph
+git -C "$WT" clean -fdq -e .repograph -e .zerograph
 python3 "$HERE/score.py" "$OUT" --tasks "$HERE/tasks.jsonl" --config "$CONFIG" --model "$MODEL" > "$OUT/summary.json"
 python3 -c "import json;s=json.load(open('$OUT/summary.json'));print(s['config'],s['model'],'hits',s['hits'],'/',s['tasks'],'tokens',s['tokens'],'cost',round(s['cost'],4),'asked',s['asked'],'grepped',s['grepped'])"
 echo "$OUT"
