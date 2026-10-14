@@ -1,6 +1,6 @@
-//! A repository set up before the rename: its store under `.repograph/` and its settings in
-//! `repograph.toml`. Upgrading the binary must neither rebuild nor re-embed it, so a reader
-//! answers from the old directory where it stands and the first write moves it.
+//! A repository built before the rename keeps its store under `.repograph/`. Upgrading the binary
+//! must neither rebuild nor re-embed it, so a reader answers from the old directory where it
+//! stands and the first write moves it.
 
 mod common;
 
