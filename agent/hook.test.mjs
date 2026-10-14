@@ -222,8 +222,10 @@ test('the local shim the hook picks is one this platform can start', () => {
   const bin = join(w.root, 'node_modules', '.bin');
   mkdirSync(bin, { recursive: true });
   const named = process.env.ZEROGRAPH_BIN;
+  const old = process.env.REPOGRAPH_BIN;
   const path = process.env.PATH;
   delete process.env.ZEROGRAPH_BIN;                 // this is the resolution when nothing names it
+  delete process.env.REPOGRAPH_BIN;
   process.env.PATH = join(w.root, 'empty-path');    // a machine with no zerograph of its own
   try {
     assert.equal(binary(w.root), 'zerograph', 'nothing installed locally: PATH answers');
@@ -237,11 +239,12 @@ test('the local shim the hook picks is one this platform can start', () => {
     assert.equal(binary(w.root), join(bin, WIN ? 'zerograph.cmd' : 'zerograph'));
   } finally {
     if (named !== undefined) process.env.ZEROGRAPH_BIN = named;
+    if (old !== undefined) process.env.REPOGRAPH_BIN = old;
     process.env.PATH = path;
   }
 });
 
-test('a zerograph on PATH wins over the repository\'s own node_modules shim, and ZEROGRAPH_BIN over both', () => {
+test('a zerograph on PATH wins over the repository\'s own node_modules shim, and ZEROGRAPH_BIN (or the old REPOGRAPH_BIN) over both', () => {
   const w = world();
   const local = join(w.root, 'node_modules', '.bin');
   mkdirSync(local, { recursive: true });
@@ -250,15 +253,20 @@ test('a zerograph on PATH wins over the repository\'s own node_modules shim, and
   mkdirSync(onPath, { recursive: true });
   writeFileSync(join(onPath, WIN ? 'zerograph.exe' : 'zerograph'), '');
   const named = process.env.ZEROGRAPH_BIN;
+  const old = process.env.REPOGRAPH_BIN;
   const path = process.env.PATH;
   delete process.env.ZEROGRAPH_BIN;
+  delete process.env.REPOGRAPH_BIN;
   process.env.PATH = `${onPath}${delimiter}${path}`;
   try {
     assert.equal(binary(w.root), 'zerograph', 'the clone ships a shim; the machine\'s binary is the one that runs');
+    process.env.REPOGRAPH_BIN = '/opt/repograph';
+    assert.equal(binary(w.root), '/opt/repograph', 'a profile written before the rename still names the binary');
     process.env.ZEROGRAPH_BIN = '/opt/zerograph';
-    assert.equal(binary(w.root), '/opt/zerograph');
+    assert.equal(binary(w.root), '/opt/zerograph', 'and the new name wins once it is set');
   } finally {
     if (named === undefined) delete process.env.ZEROGRAPH_BIN; else process.env.ZEROGRAPH_BIN = named;
+    if (old === undefined) delete process.env.REPOGRAPH_BIN; else process.env.REPOGRAPH_BIN = old;
     process.env.PATH = path;
   }
 });

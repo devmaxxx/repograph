@@ -38,7 +38,7 @@ mod transport {
 /// shell left over from a measurement would answer them under other weights all the same.
 fn child(path: &std::path::Path) -> Command {
     let mut c = Command::new(path);
-    c.env_remove("ZEROGRAPH_BENCH_REPO").env_remove("ZEROGRAPH_EMBED_MODEL").env_remove("ZEROGRAPH_CODE_GLOBS");
+    c.env_remove("ZEROGRAPH_BENCH_REPO").env_remove("REPOGRAPH_BENCH_REPO").env_remove("ZEROGRAPH_EMBED_MODEL").env_remove("REPOGRAPH_EMBED_MODEL").env_remove("ZEROGRAPH_CODE_GLOBS").env_remove("REPOGRAPH_CODE_GLOBS");
     c
 }
 

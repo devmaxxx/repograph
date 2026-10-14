@@ -186,7 +186,7 @@ impl Server {
         };
         if req.words.is_empty() { bail!("the question is empty"); }
         let cfg = self.config()?;
-        let resident = if std::env::var_os("ZEROGRAPH_NO_SERVE").is_some() { None } else { serve::try_ask(&self.repo, &req) };
+        let resident = if crate::env_os("NO_SERVE").is_some() { None } else { serve::try_ask(&self.repo, &req) };
         if let Some(reply) = resident {
             return Ok(with_notices(reply.stdout, reply.stderr));
         }

@@ -186,7 +186,7 @@ struct Machine {
 /// is a machine with no global settings rather than an error.
 fn machine_path() -> Option<std::path::PathBuf> {
     let named = |k: &str| std::env::var(k).ok().filter(|v| !v.is_empty());
-    if let Some(p) = named("ZEROGRAPH_CONFIG") {
+    if let Some(p) = crate::env("CONFIG").filter(|v| !v.is_empty()) {
         return Some(std::path::PathBuf::from(p));
     }
     let base = match named("XDG_CONFIG_HOME") {
@@ -272,7 +272,7 @@ impl Config {
         // its model into the built-in command.
         let rerank_template = machine.rerank_command.unwrap_or_else(|| RERANK_COMMAND.to_string());
 
-        if let Ok(m) = std::env::var("ZEROGRAPH_RERANK_MODEL") {
+        if let Some(m) = crate::env("RERANK_MODEL") {
             if !m.is_empty() { cfg.rerank_model = m; }
         }
         // The name is about to be substituted into a shell command, so it is checked wherever it
@@ -286,10 +286,10 @@ impl Config {
         // globs without a `zerograph.toml` written into the tree it measures. Whitespace-separated,
         // because a glob may hold a comma inside braces; a comma outside them is refused, since it
         // would join two globs into one that matches nothing and the build would say nothing.
-        if let Some(g) = globs_from_env("ZEROGRAPH_CODE_GLOBS")? { cfg.code_globs = g; }
-        if let Some(g) = globs_from_env("ZEROGRAPH_TEXT_GLOBS")? { cfg.text_globs = g; }
-        cfg.resources = crate::index::embed::resources_from_env(cfg.resources, std::env::var("ZEROGRAPH_RESOURCES").ok().as_deref())?;
-        if let Some(v) = std::env::var("ZEROGRAPH_READER_BUDGET").ok().filter(|v| !v.trim().is_empty()) {
+        if let Some(g) = globs_from_env("CODE_GLOBS")? { cfg.code_globs = g; }
+        if let Some(g) = globs_from_env("TEXT_GLOBS")? { cfg.text_globs = g; }
+        cfg.resources = crate::index::embed::resources_from_env(cfg.resources, crate::env("RESOURCES").as_deref())?;
+        if let Some(v) = crate::env("READER_BUDGET").filter(|v| !v.trim().is_empty()) {
             cfg.reader_budget = v.trim().parse().with_context(|| format!("ZEROGRAPH_READER_BUDGET={v:?} is not a whole number of seconds"))?;
         }
         cfg.rerank_command = rerank_template.replace(MODEL_SLOT, &cfg.rerank_model);
@@ -345,12 +345,12 @@ impl Config {
 /// A blank value names no globs, so it leaves the configured list rather than emptying it; `-`
 /// alone empties it, so a measurement can turn a list off for one run without writing a
 /// `zerograph.toml` into the tree it measures.
-fn globs_from_env(var: &str) -> anyhow::Result<Option<Vec<String>>> {
-    let Ok(g) = std::env::var(var) else { return Ok(None) };
+fn globs_from_env(suffix: &str) -> anyhow::Result<Option<Vec<String>>> {
+    let Some(g) = crate::env(suffix) else { return Ok(None) };
     if g.trim() == "-" { return Ok(Some(Vec::new())); }
     let globs: Vec<String> = g.split_whitespace().map(str::to_string).collect();
     if let Some(bad) = globs.iter().find(|g| comma_outside_braces(g)) {
-        anyhow::bail!("{var}: `{bad}` holds a comma outside braces; separate globs with whitespace");
+        anyhow::bail!("ZEROGRAPH_{suffix}: `{bad}` holds a comma outside braces; separate globs with whitespace");
     }
     Ok((!globs.is_empty()).then_some(globs))
 }
@@ -877,12 +877,14 @@ mod tests {
         }
         // Safety: the lock above makes this the only thread touching the environment.
         unsafe {
+            // The old names too: a developer's shell may still export them, and they are read
+            // whenever the new name is unset.
+            for prefix in ["ZEROGRAPH_", "REPOGRAPH_"] {
+                for k in ["CONFIG", "RERANK_MODEL", "RESOURCES", "READER_BUDGET", "CODE_GLOBS", "TEXT_GLOBS"] {
+                    std::env::remove_var(format!("{prefix}{k}"));
+                }
+            }
             std::env::set_var("ZEROGRAPH_CONFIG", &path);
-            std::env::remove_var("ZEROGRAPH_RERANK_MODEL");
-            std::env::remove_var("ZEROGRAPH_RESOURCES");
-            std::env::remove_var("ZEROGRAPH_READER_BUDGET");
-            std::env::remove_var("ZEROGRAPH_CODE_GLOBS");
-            std::env::remove_var("ZEROGRAPH_TEXT_GLOBS");
         }
         let out = f();
         unsafe { std::env::remove_var("ZEROGRAPH_CONFIG") };
@@ -940,6 +942,29 @@ mod tests {
             unsafe { std::env::remove_var("ZEROGRAPH_RERANK_MODEL") };
             assert_eq!(cfg.rerank_model, "from-env");
             assert!(cfg.rerank_command.contains("--model from-env"), "{}", cfg.rerank_command);
+        });
+    }
+
+    #[test]
+    fn a_variable_under_the_old_name_is_read_until_the_new_name_is_set() {
+        with_machine(None, || {
+            let dir = tempfile::tempdir().unwrap();
+            unsafe { std::env::set_var("REPOGRAPH_RERANK_MODEL", "from-old-name") };
+            let old = Config::load(dir.path()).unwrap().rerank_model;
+            unsafe { std::env::set_var("ZEROGRAPH_RERANK_MODEL", "from-new-name") };
+            let both = Config::load(dir.path()).unwrap().rerank_model;
+            unsafe { std::env::set_var("ZEROGRAPH_CODE_GLOBS", "") };
+            unsafe { std::env::set_var("REPOGRAPH_CODE_GLOBS", "**/*.kt") };
+            let empty_new = Config::load(dir.path()).unwrap().code_globs;
+            unsafe {
+                for k in ["ZEROGRAPH_RERANK_MODEL", "REPOGRAPH_RERANK_MODEL", "ZEROGRAPH_CODE_GLOBS", "REPOGRAPH_CODE_GLOBS"] {
+                    std::env::remove_var(k);
+                }
+            }
+            assert_eq!(old, "from-old-name");
+            assert_eq!(both, "from-new-name");
+            // Set at all, the new name wins; an empty value there is not a reason to read the old.
+            assert_eq!(empty_new, Config::default().code_globs);
         });
     }
 

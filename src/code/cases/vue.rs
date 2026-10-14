@@ -188,7 +188,7 @@ fn a_tsx_script_is_read_by_the_tsx_grammar() {
 #[test]
 #[ignore]
 fn vue_census() {
-    let roots = std::env::var("ZEROGRAPH_CENSUS_ROOTS").expect("ZEROGRAPH_CENSUS_ROOTS");
+    let roots = crate::env("CENSUS_ROOTS").expect("ZEROGRAPH_CENSUS_ROOTS");
     let (mut files, mut scripts, mut bad) = (0, 0, 0);
     for root in roots.split(':') {
         // As `walk.rs` since 0.5.3 (#64): dotted paths read, `.git` pruned by name.

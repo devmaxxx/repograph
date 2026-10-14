@@ -95,7 +95,7 @@ fn census(roots: &[PathBuf]) -> BTreeMap<Lang, Row> {
 #[test]
 #[ignore]
 fn parse_census() {
-    let roots: Vec<PathBuf> = std::env::var("ZEROGRAPH_CENSUS_ROOTS")
+    let roots: Vec<PathBuf> = zerograph::env("CENSUS_ROOTS")
         .expect("set ZEROGRAPH_CENSUS_ROOTS to one or more `:`-separated roots")
         .split(':')
         .filter(|r| !r.is_empty())

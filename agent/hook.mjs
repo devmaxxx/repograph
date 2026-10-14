@@ -63,8 +63,14 @@ function rule() {
   try { return existsSync(beside) ? readFileSync(beside, 'utf8') : RULE_FALLBACK; } catch { return RULE_FALLBACK; }
 }
 
+// The name a setting had before the rename is read while the new one is unset, so a shell profile
+// written then keeps working.
+function env(suffix) {
+  return process.env[`ZEROGRAPH_${suffix}`] ?? process.env[`REPOGRAPH_${suffix}`];
+}
+
 function debug(...args) {
-  if (process.env.ZEROGRAPH_HOOK_DEBUG) console.error('[zerograph-hook]', ...args);
+  if (env('HOOK_DEBUG')) console.error('[zerograph-hook]', ...args);
 }
 
 /**
@@ -88,7 +94,8 @@ function onPath() {
  * put on PATH.
  */
 function binary(root) {
-  if (process.env.ZEROGRAPH_BIN) return process.env.ZEROGRAPH_BIN;
+  const named = env('BIN');
+  if (named) return named;
   if (onPath()) return 'zerograph';
   const local = join(root, 'node_modules', '.bin', 'zerograph');
   const shim = process.platform === 'win32' ? `${local}.cmd` : local;
@@ -304,7 +311,7 @@ function isWatchedCall(tool, input) {
  * `docs/bench/2026-09-09-agent-surface-results.md` has all four runs and what they are worth.
  */
 function intercept(payload, root, sessionKey) {
-  if (process.env.ZEROGRAPH_HOOK_INTERCEPT === '0') return null;
+  if (env('HOOK_INTERCEPT') === '0') return null;
   const input = payload.tool_input || {};
   // A search the agent runs *with* zerograph is not one to answer beside.
   if (payload.tool_name === 'Bash' && /\bzerograph\b/.test(String(input.command || ''))) return null;
@@ -371,7 +378,7 @@ function brief(root) {
  * machine that is also running a build. `--idle-model` is what keeps that cheap between questions.
  */
 function autostartServe(root) {
-  if (process.env.ZEROGRAPH_HOOK_SERVE === '0') return;
+  if (env('HOOK_SERVE') === '0') return;
   try {
     const { file, args, opts } = spawnable(binary(root),
       ['--repo', root, 'serve', '--idle', String(SERVE_IDLE), '--idle-model', String(SERVE_IDLE_MODEL)]);
@@ -393,7 +400,7 @@ const handlers = {
   SubagentStart: (p, root) => (built(root) ? rule() : null),
   PreToolUse: (p, root, key) => {
     if (p.tool_name === 'Agent') {
-      if (process.env.ZEROGRAPH_HOOK_AGENT_INPUT !== '1') return null;
+      if (env('HOOK_AGENT_INPUT') !== '1') return null;
       const prompt = String((p.tool_input || {}).prompt || '');
       return { updatedInput: { ...(p.tool_input || {}), prompt: `${prompt}\n\n${rule()}` } };
     }

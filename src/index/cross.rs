@@ -172,7 +172,7 @@ mod tests {
     #[test]
     #[ignore = "needs the exported model: set ZEROGRAPH_RERANKER_DIR"]
     fn the_model_prefers_the_passage_that_answers_the_question() {
-        let dir = std::env::var("ZEROGRAPH_RERANKER_DIR").expect("ZEROGRAPH_RERANKER_DIR");
+        let dir = crate::env("RERANKER_DIR").expect("ZEROGRAPH_RERANKER_DIR");
         let mut m = CrossEncoder::open(Path::new(&dir), crate::index::embed::threads(crate::index::embed::Resources::default())).unwrap();
         let s = m.score("how is a client's phone number stored", &[
             "Phone numbers are normalised to E.164 before they are stored.".into(),

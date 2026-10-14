@@ -347,7 +347,7 @@ fn prompt_line(bytes: &[usize]) -> Option<String> {
 pub fn run(repo: &Path, cases: Option<&Path>, no_dense: bool, rerank: bool, rerank_local: bool, depth: usize) -> Result<(bool, Summary)> {
     // Resolved before `Config::load` so the override repo's own `zerograph.toml` — not the
     // `--repo` one — is the file this run reads.
-    let repo = std::env::var("ZEROGRAPH_BENCH_REPO").map(std::path::PathBuf::from).unwrap_or(repo.to_path_buf());
+    let repo = crate::env_os("BENCH_REPO").map(std::path::PathBuf::from).unwrap_or(repo.to_path_buf());
     let cfg = Config::load(&repo)?;
     if rerank { if let Some(why) = cfg.refusal("rerank_command") { anyhow::bail!(why); } }
     // `bench` does not come through `main`'s arms, so the pools it owns are capped here.
@@ -818,7 +818,7 @@ mod tests {
     #[test]
     #[ignore = "needs a built corpus: set ZEROGRAPH_BENCH_REPO to the beauty-crm checkout to check"]
     fn every_built_in_anchor_is_in_the_corpus() {
-        let repo = std::env::var("ZEROGRAPH_BENCH_REPO").expect("ZEROGRAPH_BENCH_REPO");
+        let repo = crate::env("BENCH_REPO").expect("ZEROGRAPH_BENCH_REPO");
         let (graph, _): (Graph, _) = Store::new(Path::new(&repo)).load().unwrap();
         assert!(!graph.nodes.is_empty(), "no graph at {repo}: run `zerograph build` there first");
         check_anchors("built-in bench/cases.jsonl", Some(BUILT_IN_PIN.trim()), &parse_cases(BUILT_IN_CASES).unwrap(), &graph, &files_of(&graph)).unwrap();

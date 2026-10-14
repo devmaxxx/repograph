@@ -59,7 +59,7 @@ const QUESTIONS_GATE: f64 = 0.761;
 /// which no commit's binary otherwise produces, and any other value re-reads the coverage
 /// crossover above — no longer the ratio of two raw bests that the name once meant.
 fn questions_gate() -> f64 {
-    gate_from(std::env::var("ZEROGRAPH_QUESTIONS_GATE").ok().as_deref())
+    gate_from(crate::env("QUESTIONS_GATE").as_deref())
 }
 
 fn gate_from(override_: Option<&str>) -> f64 {

@@ -29,7 +29,7 @@ pub const UNNAMED_MODEL: &str = "intfloat/multilingual-e5-small";
 /// outranks the file — else the configured one. `DenseIndex::written_by` drops rows another model
 /// wrote before the sync.
 pub fn writer_model(configured: &str) -> String {
-    named(std::env::var("ZEROGRAPH_EMBED_MODEL").ok().as_deref()).unwrap_or(configured).to_string()
+    named(crate::env("EMBED_MODEL").as_deref()).unwrap_or(configured).to_string()
 }
 
 /// The model a reader opens: the override when set, else what the store's vectors were written
@@ -42,7 +42,7 @@ pub fn writer_model(configured: &str) -> String {
 /// model instead would search the store's rows with another model's queries, and a refreshing
 /// reader would re-embed the whole store under it.
 pub fn reader_model(recorded: Option<&str>, configured: &str) -> Result<String, String> {
-    resolve_from(std::env::var("ZEROGRAPH_EMBED_MODEL").ok().as_deref(), recorded, configured, crate::config::model_is_trusted)
+    resolve_from(crate::env("EMBED_MODEL").as_deref(), recorded, configured, crate::config::model_is_trusted)
 }
 
 fn named(m: Option<&str>) -> Option<&str> { m.map(str::trim).filter(|m| !m.is_empty()) }
@@ -63,7 +63,7 @@ fn resolve_from(override_: Option<&str>, recorded: Option<&str>, configured: &st
 /// project file itself names, so a store embedded under `ZEROGRAPH_EMBED_MODEL` to be measured is
 /// never pulled back to the built-in default, and never while that override is set.
 pub fn switch_owed(named: bool, recorded: Option<&str>, configured: &str) -> bool {
-    switch_owed_from(std::env::var("ZEROGRAPH_EMBED_MODEL").ok().as_deref(), named, recorded, configured)
+    switch_owed_from(crate::env("EMBED_MODEL").as_deref(), named, recorded, configured)
 }
 
 fn switch_owed_from(override_: Option<&str>, named: bool, recorded: Option<&str>, configured: &str) -> bool {

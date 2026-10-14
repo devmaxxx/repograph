@@ -30,6 +30,15 @@ use clap::{Parser, Subcommand};
 use model::Extractor;
 use std::path::PathBuf;
 
+/// `ZEROGRAPH_<suffix>`, else `REPOGRAPH_<suffix>`: a shell profile or CI file written before the
+/// rename keeps working, and the new name, once set at all, wins even when it is empty.
+pub fn env_os(suffix: &str) -> Option<std::ffi::OsString> {
+    ["ZEROGRAPH_", "REPOGRAPH_"].iter().find_map(|p| std::env::var_os(format!("{p}{suffix}")))
+}
+
+/// [`env_os`] as text; a value that is not Unicode reads as unset, as `std::env::var` has it.
+pub fn env(suffix: &str) -> Option<String> { env_os(suffix).and_then(|v| v.into_string().ok()) }
+
 #[derive(Parser)]
 #[command(name = "zerograph", version)]
 struct Cli {
@@ -665,7 +674,7 @@ fn model_report(repo: &std::path::Path, cfg: &config::Config) -> anyhow::Result<
     }
     let from = match config::names_embed_model(repo) { true => config::PROJECT_FILE, false => "the built-in default" };
     say("configured", format!("{} ({from})", cfg.embed_model));
-    if let Some(o) = std::env::var("ZEROGRAPH_EMBED_MODEL").ok().filter(|v| !v.trim().is_empty()) {
+    if let Some(o) = crate::env("EMBED_MODEL").filter(|v| !v.trim().is_empty()) {
         say("this run", format!("{o} (ZEROGRAPH_EMBED_MODEL)"));
     }
     if let Some(m) = untrusted {
@@ -693,7 +702,7 @@ fn model_json(repo: &std::path::Path, cfg: &config::Config) -> anyhow::Result<St
         "store": recorded,
         "configured": cfg.embed_model,
         "configured_from": match config::names_embed_model(repo) { true => config::PROJECT_FILE, false => "default" },
-        "this_run": std::env::var("ZEROGRAPH_EMBED_MODEL").ok().filter(|v| !v.trim().is_empty()),
+        "this_run": crate::env("EMBED_MODEL").filter(|v| !v.trim().is_empty()),
         "agrees": agrees,
         "recommended": index::embed::RECOMMENDED,
     }).to_string() + "\n")
@@ -985,7 +994,7 @@ fn run(cli: Cli) -> anyhow::Result<()> {
             let req = ask::Request { words, json, seeds, bodies, rerank, rerank_local, depth, stale, no_dense: cli.no_dense };
             // `bench` and `dump` build their own contexts and never reach this; the environment
             // variable is for everything else that must be measured against a cold process.
-            let resident = if no_serve || std::env::var_os("ZEROGRAPH_NO_SERVE").is_some() { None } else { serve::try_ask(&repo, &req) };
+            let resident = if no_serve || crate::env_os("NO_SERVE").is_some() { None } else { serve::try_ask(&repo, &req) };
             if let Some(reply) = resident {
                 for n in reply.stderr { eprintln!("{}", terminal_safe(&n)); }
                 eprintln!("serve: answered by the resident process");

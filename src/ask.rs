@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 /// `ZEROGRAPH_TIMING=1` prints where an `ask` spends its time, one line per stage on stderr.
 pub(crate) struct Timing { on: bool, start: std::time::Instant, last: Cell<std::time::Instant> }
 
-pub(crate) fn timing_on() -> bool { std::env::var_os("ZEROGRAPH_TIMING").is_some() }
+pub(crate) fn timing_on() -> bool { crate::env_os("TIMING").is_some() }
 
 impl Timing {
     pub(crate) fn new() -> Timing {
