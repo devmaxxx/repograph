@@ -371,7 +371,12 @@ pub fn run(repo: &Path, cases: Option<&Path>, no_dense: bool, rerank: bool, rera
     // recorded rows here exactly as it does when `Embedder::open` reads it below. A store's own
     // width says nothing about which model wrote it: an override of that width is still a
     // foreign model, and must be graded (and reported) as itself, not borrow the store's floors.
-    let resolved = (!no_dense).then(|| crate::index::embed::resolve(recorded.as_deref(), &cfg.embed_model));
+    // A dense bench grades the dense arm, so a store whose model is turned away fails it rather
+    // than grade the lexical arm against dense floors.
+    let resolved = match no_dense {
+        true => None,
+        false => Some(crate::index::embed::reader_model(recorded.as_deref(), &cfg.embed_model).map_err(|notice| anyhow::anyhow!("{notice}"))?),
+    };
     let (floors, model_field) = dense_grading(no_dense, recorded.as_deref(), resolved.as_deref());
     let mut embedder = match &resolved {
         None => None,

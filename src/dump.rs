@@ -66,7 +66,9 @@ pub fn run(repo: &Path, queries: &Path, out: &Path, depth: usize, no_dense: bool
     let mut embedder = if no_dense {
         None
     } else {
-        match Embedder::open(&crate::index::embed::resolve(DenseIndex::recorded_model(&store)?.as_deref(), &cfg.embed_model), threads, crate::index::embed::Weights::Packed) {
+        let model = crate::index::embed::reader_model(DenseIndex::recorded_model(&store)?.as_deref(), &cfg.embed_model)
+            .map_err(|notice| anyhow::anyhow!("{notice}"))?;
+        match Embedder::open(&model, threads, crate::index::embed::Weights::Packed) {
             Ok(e) => Some(e),
             Err(err) => anyhow::bail!("dense: model unavailable ({err:#})"),
         }

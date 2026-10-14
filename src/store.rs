@@ -143,6 +143,10 @@ impl Store {
         self.write_atomic(&mirror_name(json), &bytes)
     }
 
+    /// Whether the store or its lock is a link, which every writer refuses: a reader that finds the
+    /// lock refused for this reason writes nothing, where a read-only checkout writes unlocked.
+    pub(crate) fn has_link(&self) -> bool { is_link(&self.dir) || is_link(&self.dir.join("writer.lock")) }
+
     /// A `.repograph` that is itself a link is refused for the same reason a link inside it is:
     /// every write and every unlink under it would land wherever the clone pointed it. For a
     /// process that touches the directory without going through `ensure_dir` first.

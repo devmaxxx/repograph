@@ -18,7 +18,8 @@ recorded one — so a store keeps answering with the model that wrote it whateve
 says today, and a new default never silently reinterprets an index nobody re-embedded. The
 recorded name is a clone's text like any other, so it passes the same gate as a model
 `repograph.toml` names (below): one that is neither catalogued nor trusted on this machine is not
-opened, the configured model is, and stderr says why. A store written before the field existed is
+opened: readers answer lexical-only and say why, `dump` and a dense `bench` fail, and no reader
+re-embeds the store under another model. A store written before the field existed is
 the small model's. `repograph model <hub id>` switches it —
 [below](#choosing-the-model) — and rows another model wrote are dropped and the file rewritten, on
 width as well as on name. Naming a model in `repograph.toml` by hand is enough: the first `ask`

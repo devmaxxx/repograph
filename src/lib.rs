@@ -522,7 +522,7 @@ impl<'a> Watcher<'a> {
 /// Keeps the store in step with the tree for readers that do not refresh themselves.
 fn run_watch(repo: &std::path::Path, cfg: &config::Config, every: u64, batch: usize, no_dense: bool) -> anyhow::Result<()> {
     let mut w = Watcher::open(repo, cfg)?;
-    let model = index::embed::resolve(None, &cfg.embed_model);
+    let model = index::embed::writer_model(&cfg.embed_model);
     let threads = index::embed::threads(cfg.resources);
     let verbose = ask::timing_on();
     eprintln!("watch: {} every {every}s, batch {batch}; Ctrl-C to stop", repo.display());
@@ -590,7 +590,7 @@ pub(crate) fn cap_pools(threads: usize) {
 const SYNC_CHUNK: index::dense::ChunkBudget = index::dense::ChunkBudget { chars: 600_000, max_rows: 1024, ramp: 16 };
 
 fn embed_all(repo: &std::path::Path, no_dense: bool, cfg: &config::Config) -> anyhow::Result<()> {
-    let model = index::embed::resolve(None, &cfg.embed_model);
+    let model = index::embed::writer_model(&cfg.embed_model);
     let open = std::time::Instant::now();
     let Some(mut emb) = ask::open_embedder(no_dense, &model, index::embed::threads(cfg.resources), index::embed::Weights::Mapped) else { return Ok(()) };
     // The probe belongs to opening: a session with its weights loaded still has to run one forward
@@ -654,8 +654,7 @@ impl Meter {
 fn model_report(repo: &std::path::Path, cfg: &config::Config) -> anyhow::Result<String> {
     let store = store::Store::new(repo);
     let recorded = index::dense::DenseIndex::recorded_model(&store)?;
-    // What a reader opens: the store's own model unless this machine has not trusted it, which
-    // `embed::resolve` treats as the configured one.
+    // A store whose model this machine has not trusted is read lexical-only (`embed::reader_model`).
     let untrusted = recorded.as_deref().filter(|m| !config::model_is_trusted(m));
     let opened = recorded.as_deref().filter(|_| untrusted.is_none()).unwrap_or(&cfg.embed_model);
     let mut out = String::new();
@@ -670,7 +669,7 @@ fn model_report(repo: &std::path::Path, cfg: &config::Config) -> anyhow::Result<
         say("this run", format!("{o} (REPOGRAPH_EMBED_MODEL)"));
     }
     if let Some(m) = untrusted {
-        out.push_str(&format!("\nThe store names a model this machine has not trusted, so every command opens\n{} instead — {}.\n", cfg.embed_model, config::trust_hint(m)));
+        out.push_str(&format!("\nThe store names a model this machine has not trusted, so readers answer lexical-only\nuntil it is trusted or the store is re-embedded with {} — {}.\n", cfg.embed_model, config::trust_hint(m)));
     } else if recorded.as_deref().is_some_and(|m| m != cfg.embed_model) {
         out.push_str("\nThe two disagree. The store keeps answering with the model that wrote it; the\n\
             configured one takes effect at the next `build`, `update`, `embed` or\n\
