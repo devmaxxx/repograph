@@ -119,10 +119,61 @@ fn open_nofollow(o: &mut std::fs::OpenOptions, p: &Path) -> std::io::Result<std:
     o.open(p)
 }
 
+/// Far above any file a store holds — the vectors of a large monorepo run to hundreds of
+/// megabytes — and far below what a planted file could make every reader try to hold.
+const MAX_STORE_FILE: u64 = 4 << 30;
+
+/// Opens a store file for reading, or `None` when nothing is there. A cloned repository controls
+/// every entry under the store, and a link to `/dev/zero` or a FIFO committed there would make
+/// every reader read without end, or block on the open; a link at the directory or the file and
+/// anything that is not a regular file are refused instead.
+pub(crate) fn open_for_read(p: &Path) -> Result<Option<std::fs::File>> {
+    if let Some(dir) = p.parent().filter(|d| is_link(d)) {
+        anyhow::bail!("{} is a symlink; refusing to read through it — remove it and run again", dir.display());
+    }
+    match std::fs::symlink_metadata(p) {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(e).with_context(|| format!("read {}", p.display())),
+        Ok(m) if m.file_type().is_symlink() => {
+            anyhow::bail!("{} is a symlink; refusing to read through it — remove it and run again", p.display())
+        }
+        Ok(m) if !m.is_file() => anyhow::bail!("{} is not a regular file; refusing to read it", p.display()),
+        Ok(_) => {}
+    }
+    let mut o = std::fs::OpenOptions::new();
+    o.read(true);
+    // The checks above name the refusal; the flags close the gap between them and the open, where
+    // a swapped-in FIFO would otherwise block the open itself.
+    #[cfg(unix)]
+    { use std::os::unix::fs::OpenOptionsExt; o.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK); }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        o.custom_flags(windows_sys::Win32::Storage::FileSystem::FILE_FLAG_OPEN_REPARSE_POINT);
+    }
+    let f = o.open(p).with_context(|| format!("read {}", p.display()))?;
+    if !f.metadata().with_context(|| format!("read {}", p.display()))?.is_file() {
+        anyhow::bail!("{} is not a regular file; refusing to read it", p.display());
+    }
+    Ok(Some(f))
+}
+
+/// The whole of a file `open_for_read` opened, refused past `MAX_STORE_FILE` rather than read.
+pub(crate) fn read_capped(f: std::fs::File, p: &Path) -> Result<Vec<u8>> {
+    use std::io::Read;
+    let too_big = || anyhow::anyhow!("{} is larger than {MAX_STORE_FILE} bytes; refusing to read it", p.display());
+    if f.metadata().with_context(|| format!("read {}", p.display()))?.len() > MAX_STORE_FILE { return Err(too_big()); }
+    let mut bytes = Vec::new();
+    // Bounded again while reading: the file may grow past the cap after its length was taken.
+    f.take(MAX_STORE_FILE + 1).read_to_end(&mut bytes).with_context(|| format!("read {}", p.display()))?;
+    if bytes.len() as u64 > MAX_STORE_FILE { return Err(too_big()); }
+    Ok(bytes)
+}
+
 fn read_in(dir: &Path, name: &str) -> Result<Option<Vec<u8>>> {
     let p = dir.join(name);
-    if !p.exists() { return Ok(None); }
-    Ok(Some(std::fs::read(&p)?))
+    let Some(f) = open_for_read(&p)? else { return Ok(None) };
+    read_capped(f, &p).map(Some)
 }
 
 impl Store {
@@ -170,11 +221,9 @@ impl Store {
         }
         // Stamped from the open handle, not the path: a rename after the open replaces the
         // path's file, never the one being read.
-        use std::io::Read;
-        let mut f = std::fs::File::open(&p).with_context(|| format!("read {}", p.display()))?;
+        let Some(f) = open_for_read(&p)? else { return Ok((None, Source::Absent)) };
         let read = f.metadata().ok().as_ref().and_then(stamp_of);
-        let mut bytes = Vec::new();
-        f.read_to_end(&mut bytes).with_context(|| format!("read {}", p.display()))?;
+        let bytes = read_capped(f, &p)?;
         let v = serde_json::from_slice(&bytes).context(json.to_string())?;
         Ok((Some(v), Source::Json(MirrorStamp(read))))
     }
@@ -831,6 +880,79 @@ mod tests {
         std::os::unix::fs::symlink(&elsewhere, repo.join(".zerograph")).unwrap();
         assert!(Store::new(&repo).save(&Graph::default(), &Manifest::default()).is_err());
         assert_eq!(std::fs::read_dir(&elsewhere).unwrap().count(), 0);
+    }
+
+    /// Every name a reader opens, the mirrors included.
+    const STORE_FILES: [&str; 7] =
+        ["graph.json", "graph.bin", "manifest.json", "vectors.json", "vectors.f32", "headers.json", "background.log"];
+
+    #[cfg(unix)]
+    #[test]
+    fn a_device_a_clone_linked_into_the_store_is_refused_rather_than_read_to_its_end() {
+        let d = tempfile::tempdir().unwrap();
+        let store = Store::new(d.path());
+        store.ensure_dir().unwrap();
+        for name in STORE_FILES {
+            let link = d.path().join(DIR).join(name);
+            std::os::unix::fs::symlink("/dev/zero", &link).unwrap();
+            assert!(store.read_bytes(name).is_err(), "{name}");
+            std::fs::remove_file(link).unwrap();
+        }
+        std::os::unix::fs::symlink("/dev/zero", d.path().join(DIR).join("graph.json")).unwrap();
+        assert!(store.load().is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_fifo_in_the_store_is_refused_without_waiting_for_a_writer() {
+        let d = tempfile::tempdir().unwrap();
+        let store = Store::new(d.path());
+        store.ensure_dir().unwrap();
+        for name in STORE_FILES {
+            let fifo = d.path().join(DIR).join(name);
+            let c = std::ffi::CString::new(fifo.to_str().unwrap()).unwrap();
+            assert_eq!(unsafe { libc::mkfifo(c.as_ptr(), 0o600) }, 0);
+            assert!(store.read_bytes(name).is_err(), "{name}");
+            std::fs::remove_file(fifo).unwrap();
+        }
+    }
+
+    // The type check in front of the open refuses a FIFO first, so the flag is held to its own
+    // test: without it, a FIFO swapped in after the check blocks the open until a writer comes.
+    #[cfg(unix)]
+    #[test]
+    fn the_open_itself_does_not_wait_on_a_fifo_when_the_check_before_it_was_beaten() {
+        let d = tempfile::tempdir().unwrap();
+        let fifo = d.path().join("fifo");
+        let c = std::ffi::CString::new(fifo.to_str().unwrap()).unwrap();
+        assert_eq!(unsafe { libc::mkfifo(c.as_ptr(), 0o600) }, 0);
+        use std::os::unix::fs::OpenOptionsExt;
+        let opened = std::fs::OpenOptions::new().read(true).custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK).open(&fifo).unwrap();
+        assert!(!opened.metadata().unwrap().is_file());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_store_directory_that_is_a_link_is_not_read_through() {
+        let d = tempfile::tempdir().unwrap();
+        let elsewhere = d.path().join("elsewhere");
+        std::fs::create_dir_all(&elsewhere).unwrap();
+        std::fs::write(elsewhere.join("manifest.json"), "{}").unwrap();
+        let repo = d.path().join("repo");
+        std::fs::create_dir_all(&repo).unwrap();
+        std::os::unix::fs::symlink(&elsewhere, repo.join(DIR)).unwrap();
+        assert!(Store::new(&repo).read_bytes("manifest.json").is_err());
+    }
+
+    // Sparse only where the filesystem makes it so; elsewhere the length is written out in full.
+    #[cfg(unix)]
+    #[test]
+    fn a_file_past_the_cap_is_refused_rather_than_held() {
+        let d = tempfile::tempdir().unwrap();
+        let p = d.path().join("vectors.f32");
+        let f = std::fs::File::create(&p).unwrap();
+        f.set_len(MAX_STORE_FILE + 1).unwrap();
+        assert!(read_capped(open_for_read(&p).unwrap().unwrap(), &p).is_err());
     }
 
     /// A store saved as this release saves it, then put under the name it had before the rename.

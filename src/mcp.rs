@@ -378,12 +378,12 @@ fn progress(repo: &Path) -> String {
 }
 
 fn log_tail(repo: &Path) -> Vec<String> {
-    let read = || -> std::io::Result<String> {
-        let mut f = std::fs::File::open(crate::store::dir_of(repo).join("background.log"))?;
+    let read = || -> Result<String> {
+        let Some(mut f) = store::open_for_read(&store::dir_of(repo).join("background.log"))? else { return Ok(String::new()) };
         let len = f.metadata()?.len();
         f.seek(std::io::SeekFrom::Start(len.saturating_sub(LOG_TAIL)))?;
         let mut bytes = Vec::new();
-        f.read_to_end(&mut bytes)?;
+        f.take(LOG_TAIL).read_to_end(&mut bytes)?;
         Ok(String::from_utf8_lossy(&bytes).into_owned())
     };
     read().unwrap_or_default().split(['\n', '\r']).map(str::trim).filter(|l| !l.is_empty()).map(str::to_string).collect()
@@ -466,6 +466,15 @@ mod tests {
 
     const DOC: &str = "# A\n\n**FR-PAY-22 · MUST · cancellation window**\n\nA booking may be cancelled up to a day before.\n";
     const CODE: &str = "export function caller() { callee(); }\nexport function callee() { return 1; }\n";
+
+    #[cfg(unix)]
+    #[test]
+    fn a_log_a_clone_linked_to_a_device_reads_as_no_output() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join(".zerograph")).unwrap();
+        std::os::unix::fs::symlink("/dev/zero", dir.path().join(".zerograph/background.log")).unwrap();
+        assert_eq!(progress(dir.path()), "no output yet");
+    }
 
     /// A built store over one document and one source file, and a server that answers lexically.
     fn served() -> (tempfile::TempDir, Server) {
