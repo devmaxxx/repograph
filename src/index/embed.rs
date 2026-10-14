@@ -35,17 +35,31 @@ pub const UNNAMED_MODEL: &str = "intfloat/multilingual-e5-small";
 /// commit, so it passes the same trust gate as a model `repograph.toml` names: otherwise a clone
 /// would choose the model this machine downloads and parses, the gate's whole exposure.
 pub fn resolve(recorded: Option<&str>, configured: &str) -> String {
+    let (model, notice) = resolve_noted(recorded, configured);
+    if let Some(n) = notice { eprintln!("{n}"); }
+    model
+}
+
+/// `resolve`, handing the notice back instead of printing it. A reader answering over a socket or
+/// through MCP has a client to tell, and its own stderr is not where that client looks.
+pub fn resolve_noted(recorded: Option<&str>, configured: &str) -> (String, Option<String>) {
     resolve_from(std::env::var("REPOGRAPH_EMBED_MODEL").ok().as_deref(), recorded, configured, crate::config::model_is_trusted)
 }
 
-fn resolve_from(override_: Option<&str>, recorded: Option<&str>, configured: &str, trusted: impl Fn(&str) -> bool) -> String {
-    let named = |m: Option<&str>| m.map(str::trim).filter(|m| !m.is_empty()).map(str::to_string);
-    let recorded = named(recorded).filter(|m| {
-        let ok = trusted(m);
-        if !ok { eprintln!("dense: the store's vectors name {m:?}, a model this machine has not trusted; opening {configured} instead (`repograph model {m}` trusts it)"); }
-        ok
-    });
-    named(override_).or(recorded).unwrap_or_else(|| configured.to_string())
+fn resolve_from(override_: Option<&str>, recorded: Option<&str>, configured: &str, trusted: impl Fn(&str) -> bool) -> (String, Option<String>) {
+    fn named(m: Option<&str>) -> Option<&str> { m.map(str::trim).filter(|m| !m.is_empty()) }
+    // The override is this machine's own word and outranks the store's, so the store's name is
+    // never weighed against the trust list when it is set.
+    if let Some(m) = named(override_) { return (m.to_string(), None); }
+    match named(recorded) {
+        Some(m) if trusted(m) => (m.to_string(), None),
+        Some(m) => {
+            // The name is the store's text: echoed escaped, and offered as a command only when it is a token.
+            let notice = format!("dense: the store's vectors name {m:?}, a model this machine has not trusted; opening {configured} instead — {}", crate::config::trust_hint(m));
+            (configured.to_string(), Some(notice))
+        }
+        None => (configured.to_string(), None),
+    }
 }
 
 /// Whether the store should be moved to the model `repograph.toml` names: only a model the
@@ -741,18 +755,36 @@ mod tests {
     #[test]
     fn the_override_outranks_the_store_which_outranks_the_config() {
         let any = |_: &str| true;
-        assert_eq!(resolve_from(Some(" x/y "), Some("a/b"), "c/d", any), "x/y");
-        assert_eq!(resolve_from(Some(""), Some("a/b"), "c/d", any), "a/b");
-        assert_eq!(resolve_from(None, None, "c/d", any), "c/d");
-        assert_eq!(resolve_from(None, Some("  "), "c/d", any), "c/d");
+        assert_eq!(resolve_from(Some(" x/y "), Some("a/b"), "c/d", any).0, "x/y");
+        assert_eq!(resolve_from(Some(""), Some("a/b"), "c/d", any).0, "a/b");
+        assert_eq!(resolve_from(None, None, "c/d", any).0, "c/d");
+        assert_eq!(resolve_from(None, Some("  "), "c/d", any).0, "c/d");
     }
 
     #[test]
     fn a_store_cannot_name_a_model_this_machine_has_not_trusted() {
         let trusted = |m: &str| m == "a/b";
-        assert_eq!(resolve_from(None, Some("evil/model"), "c/d", trusted), "c/d");
-        assert_eq!(resolve_from(None, Some("a/b"), "c/d", trusted), "a/b");
-        assert_eq!(resolve_from(Some("evil/model"), Some("evil/model"), "c/d", trusted), "evil/model", "the override is this machine's own");
+        let (model, notice) = resolve_from(None, Some("evil/model"), "c/d", trusted);
+        assert_eq!(model, "c/d");
+        let notice = notice.expect("a name that is turned away is said");
+        assert!(notice.contains("\"evil/model\"") && notice.contains("c/d") && notice.contains("`repograph model evil/model`"), "{notice}");
+        assert_eq!(resolve_from(None, Some("a/b"), "c/d", trusted), ("a/b".to_string(), None));
+    }
+
+    #[test]
+    fn the_override_is_this_machines_own_so_the_stores_name_is_never_weighed_against_it() {
+        let weighed = std::cell::Cell::new(false);
+        let spy = |_: &str| { weighed.set(true); false };
+        assert_eq!(resolve_from(Some("evil/model"), Some("evil/model"), "c/d", spy), ("evil/model".to_string(), None));
+        assert!(!weighed.get(), "a notice that the store's model was turned away would be false: the override won");
+    }
+
+    #[test]
+    fn a_name_a_clone_wrote_is_echoed_escaped_and_never_offered_as_a_command() {
+        let (_, notice) = resolve_from(None, Some("x\n`repograph model y; rm -rf ~`\u{1b}[31m"), "c/d", |_| false);
+        let notice = notice.unwrap();
+        assert!(!notice.contains(['\n', '\u{1b}']), "{notice:?}");
+        assert!(notice.contains("not a plain hub id") && !notice.contains("trusts it"), "{notice}");
     }
 
     #[test]

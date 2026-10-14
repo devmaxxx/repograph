@@ -104,8 +104,19 @@ fn pieces(s: &str, n: usize) -> impl Iterator<Item = &str> {
 /// another model. `None` is for a store with no rows for a name to be wrong about, where the
 /// configuration is free to choose.
 fn model_of(named: &str, has_rows: bool) -> Option<String> {
-    if !named.is_empty() { return Some(named.to_string()); }
+    if !named.is_empty() { return Some(printable(named)); }
     has_rows.then(|| crate::index::embed::UNNAMED_MODEL.to_string())
+}
+
+/// The name a store records is a clone's text, and every report, status line and hook brief that
+/// prints it would otherwise carry a newline or an escape sequence straight to a terminal or an
+/// agent's context. A real model name has no control character, so the escaped form is never one
+/// this machine has trusted.
+fn printable(name: &str) -> String {
+    name.chars().fold(String::with_capacity(name.len()), |mut out, c| {
+        match c.is_control() { true => out.extend(c.escape_default()), false => out.push(c) }
+        out
+    })
 }
 
 fn normalise(v: &mut [f32]) {
@@ -637,6 +648,21 @@ mod tests {
         idx.save(&store).unwrap();
         assert_eq!(DenseIndex::recorded_model(&store).unwrap().as_deref(), Some("BAAI/bge-m3"));
         assert_eq!(DenseIndex::load(&store).unwrap().model, "BAAI/bge-m3");
+    }
+
+    #[test]
+    fn a_recorded_name_with_control_characters_is_read_escaped_and_left_as_written() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::new(dir.path());
+        let hostile = "x\n\u{1b}[31mFORGED\u{7}";
+        let mut idx = synced(&graph("x"));
+        idx.written_by(hostile, 3);
+        idx.sync(&graph("x"), &mut fake).unwrap();
+        idx.save(&store).unwrap();
+        let read = DenseIndex::recorded_model(&store).unwrap().unwrap();
+        assert!(!read.chars().any(char::is_control), "{read:?}");
+        assert_eq!(read, "x\\n\\u{1b}[31mFORGED\\u{7}");
+        assert_eq!(DenseIndex::load(&store).unwrap().model, hostile, "the file itself is not rewritten by reading it");
     }
 
     #[test]

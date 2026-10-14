@@ -175,7 +175,7 @@ fn walk_inner(repo: &Path, cfg: &Config, prev: &Manifest, count: bool) -> Result
     for dent in walker {
         let dent = match dent {
             Ok(d) => d,
-            Err(e) => { eprintln!("{}", crate::terminal_safe(&format!("walk: {e}"))); continue; }
+            Err(e) => { eprintln!("{}", crate::log_line(&format!("walk: {e}"))); continue; }
         };
         if !dent.file_type().map(|t| t.is_file()).unwrap_or(false) {
             continue;

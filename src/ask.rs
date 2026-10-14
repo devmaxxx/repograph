@@ -57,6 +57,13 @@ pub(crate) fn open_embedder(no_dense: bool, model: &str, threads: usize, weights
     embedder_or_notice(no_dense, model, threads, weights).unwrap_or_else(|notice| { eprintln!("{notice}"); None })
 }
 
+/// A notice for the client of this answer, said once: the model is resolved when it is warmed and
+/// again when the open finds no warm handle, and both would tell the same story.
+fn say_once(notices: &RefCell<Vec<String>>, line: String) {
+    let mut n = notices.borrow_mut();
+    if !n.contains(&line) { n.push(line); }
+}
+
 /// The model opens on a thread this spawns, while `Context::answer` builds its BM25 indexes on
 /// the caller's own thread — `Lexical::build` runs between this spawn and the `query::ask` call,
 /// so the two overlap there rather than by anything ordered inside `ask` itself. Ids are read
@@ -294,9 +301,7 @@ impl Context {
             if !req.stale && index::embed::switch_owed(config::names_embed_model(repo), idx.model_of_rows().as_deref(), &cfg.embed_model) {
                 let what = format!("dense: {} names {}, the vectors are {}'s", config::PROJECT_FILE, cfg.embed_model, idx.model_of_rows().unwrap_or_default());
                 let busy = match writer { Writer::Barred => true, Writer::PerAnswer => matches!(store.try_lock_writer(), Ok(None)), _ => false };
-                let line = refresh::left_behind_as(repo, no_dense, &what, busy, "switching");
-                let mut n = notices.borrow_mut();
-                if !n.contains(&line) { n.push(line); }
+                say_once(notices, refresh::left_behind_as(repo, no_dense, &what, busy, "switching"));
             }
             let mut slot = embedder.borrow_mut();
             let e = slot.get_or_insert_with(|| {
@@ -306,7 +311,8 @@ impl Context {
                 let opened = match warm.borrow_mut().take() {
                     Some(handle) => handle.join().unwrap_or_else(|_| Err("dense: model thread panicked, continuing lexical-only".to_string())),
                     None => {
-                        let model = index::embed::resolve(idx.model_of_rows().as_deref(), &cfg.embed_model);
+                        let (model, notice) = index::embed::resolve_noted(idx.model_of_rows().as_deref(), &cfg.embed_model);
+                        if let Some(n) = notice { say_once(notices, n); }
                         embedder_or_notice(no_dense, &model, index::embed::threads(cfg.resources), index::embed::Weights::Packed)
                     }
                 };
@@ -437,7 +443,8 @@ impl Context {
             // that has already opened the model keeps it rather than starting a second one.
             let mut handle = warm.borrow_mut();
             if handle.is_none() && embedder.borrow().is_none() {
-                let model = index::embed::resolve(idx.model_of_rows().as_deref(), &cfg.embed_model);
+                let (model, notice) = index::embed::resolve_noted(idx.model_of_rows().as_deref(), &cfg.embed_model);
+                if let Some(n) = notice { say_once(notices, n); }
                 *handle = warm_model(true, whole, &model, index::embed::threads(cfg.resources), index::embed::Weights::Packed);
             }
         }

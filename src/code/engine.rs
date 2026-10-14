@@ -291,7 +291,7 @@ fn matches_of<'t>(c: &'static Compiled, root: Node<'t>, src: &str, rel: &str, mu
         each(m.pattern_index, m.captures().iter().map(|cap| (c.roles[cap.index as usize], cap.node)).collect());
     }
     if cursor.did_exceed_match_limit() {
-        eprintln!("code: {rel} reached the query match limit; it keeps what matched before it");
+        eprintln!("{}", crate::log_line(&format!("code: {rel} reached the query match limit; it keeps what matched before it")));
     }
 }
 

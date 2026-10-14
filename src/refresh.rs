@@ -5,6 +5,7 @@
 //! work to one detached `update` that takes the store's writer lock.
 
 use crate::walk;
+use anyhow::Context as _;
 use std::path::Path;
 use std::time::{Duration, Instant};
 
@@ -160,7 +161,7 @@ pub(crate) fn spawn_detached(repo: &Path, no_dense: bool, args: &[&str]) -> anyh
     Ok(reap(detach(&mut cmd)?))
 }
 
-pub(crate) fn log_file(repo: &Path) -> anyhow::Result<std::fs::File> {
+fn log_file(repo: &Path) -> anyhow::Result<std::fs::File> {
     let store = crate::store::Store::new(repo);
     store.ensure_dir()?;
     let p = repo.join(".repograph").join("background.log");
@@ -172,7 +173,7 @@ pub(crate) fn log_file(repo: &Path) -> anyhow::Result<std::fs::File> {
         true => o.write(true).create(true).truncate(true),
         false => o.append(true).create(true),
     };
-    Ok(crate::store::open_unlinked(&mut o, &p)?)
+    crate::store::open_unlinked(&mut o, &p).with_context(|| format!("open {}", p.display()))
 }
 
 /// Its own process group, so the Ctrl-C a terminal sends the reader's group does not reach a
@@ -240,6 +241,21 @@ mod tests {
         drop(log_file(dir.path()).unwrap());
         assert_eq!(std::fs::metadata(log.with_extension("log.1")).unwrap().len(), LOG_CAP + 1, "the old lines are kept");
         assert_eq!(std::fs::metadata(&log).unwrap().len(), 0);
+    }
+
+    // The log is the one store file written by a process of its own, and a clone chooses what
+    // sits at its name: a link there must not carry a refresh's output outside the repository.
+    #[cfg(unix)]
+    #[test]
+    fn a_log_that_is_a_link_is_refused_and_its_target_left_alone() {
+        let dir = tempfile::tempdir().unwrap();
+        let outside = dir.path().join("outside");
+        std::fs::write(&outside, "victim\n").unwrap();
+        let log = dir.path().join(".repograph/background.log");
+        std::fs::create_dir_all(log.parent().unwrap()).unwrap();
+        std::os::unix::fs::symlink(&outside, &log).unwrap();
+        assert!(log_file(dir.path()).is_err());
+        assert_eq!(std::fs::read_to_string(&outside).unwrap(), "victim\n");
     }
 
     #[test]
