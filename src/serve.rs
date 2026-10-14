@@ -226,7 +226,7 @@ fn prepare_socket_dir(_path: &Path) -> Result<()> { Ok(()) }
 /// What a `stat` says about `zerograph.toml`, or None where there is none — the configuration a
 /// one-shot `ask` would read, watched so a resident process cannot answer under an older one.
 fn config_stamp(repo: &Path) -> Option<crate::walk::Stamp> {
-    crate::walk::stamp_of(&std::fs::metadata(repo.join("zerograph.toml")).ok()?)
+    crate::walk::stamp_of(&std::fs::metadata(crate::config::project_file(repo)).ok()?)
 }
 
 /// What a `stat` says about the executable at this process's own path, or None where it cannot be

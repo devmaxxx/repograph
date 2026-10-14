@@ -21,7 +21,7 @@ pub struct CrossEncoder { session: Session, tokenizer: Tokenizer, wants_type_ids
 /// Where `optimum-cli export onnx` was told to write: `~/.cache/zerograph/reranker`, beside
 /// the embedder's own cache, unless the config names another directory.
 pub fn default_dir() -> Result<PathBuf> {
-    Ok(crate::index::cache_root()?.join("reranker"))
+    crate::index::cache_dir("reranker")
 }
 
 /// The pad token and its id as the model's own files declare them, the way the embedder reads

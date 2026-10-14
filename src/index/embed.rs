@@ -127,7 +127,7 @@ fn cache_dir() -> Result<PathBuf> {
     if let Some(dir) = std::env::var_os("FASTEMBED_CACHE_DIR") {
         return Ok(PathBuf::from(dir));
     }
-    Ok(crate::index::cache_root()?.join("fastembed"))
+    crate::index::cache_dir("fastembed")
 }
 
 /// How a model turns a padded batch's hidden states into one vector per text.

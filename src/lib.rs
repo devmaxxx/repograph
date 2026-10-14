@@ -672,7 +672,7 @@ fn model_report(repo: &std::path::Path, cfg: &config::Config) -> anyhow::Result<
         Some(m) => say("store", m.clone()),
         None => say("store", "no vectors yet — `zerograph build` writes them".to_string()),
     }
-    let from = match config::names_embed_model(repo) { true => config::PROJECT_FILE, false => "the built-in default" };
+    let from = match config::names_embed_model(repo) { true => config::project_file_name(repo), false => "the built-in default" };
     say("configured", format!("{} ({from})", cfg.embed_model));
     if let Some(o) = crate::env("EMBED_MODEL").filter(|v| !v.trim().is_empty()) {
         say("this run", format!("{o} (ZEROGRAPH_EMBED_MODEL)"));
@@ -701,7 +701,7 @@ fn model_json(repo: &std::path::Path, cfg: &config::Config) -> anyhow::Result<St
     Ok(serde_json::json!({
         "store": recorded,
         "configured": cfg.embed_model,
-        "configured_from": match config::names_embed_model(repo) { true => config::PROJECT_FILE, false => "default" },
+        "configured_from": match config::names_embed_model(repo) { true => config::project_file_name(repo), false => "default" },
         "this_run": crate::env("EMBED_MODEL").filter(|v| !v.trim().is_empty()),
         "agrees": agrees,
         "recommended": index::embed::RECOMMENDED,
