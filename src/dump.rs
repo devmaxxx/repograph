@@ -114,7 +114,7 @@ pub fn run(repo: &Path, queries: &Path, out: &Path, depth: usize, no_dense: bool
         eprintln!("dump: {:<10} {:<14} {}", q.kind, q.expect.key(), q.q);
     }
     let dump = Dump {
-        meta: Meta { store: repo.join(".zerograph").display().to_string(), depth, rows: dense_idx.ids.len(), dim: dense_idx.dim, queries: records.len(), dense: !no_dense },
+        meta: Meta { store: store.dir().display().to_string(), depth, rows: dense_idx.ids.len(), dim: dense_idx.dim, queries: records.len(), dense: !no_dense },
         queries: records,
     };
     std::fs::write(out, serde_json::to_vec(&dump)?).with_context(|| out.display().to_string())?;

@@ -140,6 +140,7 @@ impl Default for Config {
                 "**/TRACKER.md",
                 "graphify-out/**",
                 ".zerograph/**",
+                ".repograph/**",
             ]),
             id_families: None,
             milestone_families: None,

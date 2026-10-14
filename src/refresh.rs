@@ -162,9 +162,7 @@ pub(crate) fn spawn_detached(repo: &Path, no_dense: bool, args: &[&str]) -> anyh
 }
 
 fn log_file(repo: &Path) -> anyhow::Result<std::fs::File> {
-    let store = crate::store::Store::new(repo);
-    store.ensure_dir()?;
-    let p = repo.join(".zerograph").join("background.log");
+    let p = crate::store::Store::new(repo).ensure_dir()?.join("background.log");
     let long = std::fs::metadata(&p).is_ok_and(|m| m.len() > LOG_CAP);
     // Windows refuses to rename a file another process holds open; that run keeps truncating.
     let rotated = long && std::fs::rename(&p, p.with_extension("log.1")).is_ok();

@@ -378,7 +378,7 @@ fn progress(repo: &Path) -> String {
 
 fn log_tail(repo: &Path) -> Vec<String> {
     let read = || -> std::io::Result<String> {
-        let mut f = std::fs::File::open(repo.join(".zerograph").join("background.log"))?;
+        let mut f = std::fs::File::open(crate::store::dir_of(repo).join("background.log"))?;
         let len = f.metadata()?.len();
         f.seek(std::io::SeekFrom::Start(len.saturating_sub(LOG_TAIL)))?;
         let mut bytes = Vec::new();

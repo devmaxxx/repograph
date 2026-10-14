@@ -136,7 +136,8 @@ function run(root, args) {
   return r.status === 0 ? r.stdout.replace(/[\x00-\x08\x0b-\x1f\x7f-\x9f]/g, '') : '';
 }
 
-function built(root) { return existsSync(join(root, '.zerograph', 'manifest.json')); }
+// The old name too: a store built before the rename is read where it stands until a write moves it.
+function built(root) { return ['.zerograph', '.repograph'].some((d) => existsSync(join(root, d, 'manifest.json'))); }
 
 /**
  * The nearest directory at or above `start` that carries an index. The harness's `cwd` follows a
@@ -314,8 +315,8 @@ function intercept(payload, root, sessionKey) {
   if (env('HOOK_INTERCEPT') === '0') return null;
   const input = payload.tool_input || {};
   // A search the agent runs *with* zerograph is not one to answer beside.
-  if (payload.tool_name === 'Bash' && /\bzerograph\b/.test(String(input.command || ''))) return null;
-  if (JSON.stringify(input).includes('.zerograph/')) return null;
+  if (payload.tool_name === 'Bash' && /\b(?:zerograph|repograph)\b/.test(String(input.command || ''))) return null;
+  if (/\.(?:zerograph|repograph)\//.test(JSON.stringify(input))) return null;
   const words = queryWords(searchPattern(payload.tool_name, input));
   if (!words) return null;
   if (!once(sessionKey, 'ask', words.join(' ').toLowerCase())) return null;

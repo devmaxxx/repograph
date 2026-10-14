@@ -174,7 +174,7 @@ const WAKE: Duration = Duration::from_millis(250);
 /// never half-taken. The hash names a file; it defends nothing, which is why it is four lines of
 /// FNV rather than a dependency.
 pub fn socket_path(repo: &Path) -> PathBuf {
-    let in_repo = repo.join(".zerograph").join("serve.sock");
+    let in_repo = crate::store::dir_of(repo).join("serve.sock");
     if in_repo.as_os_str().len() <= 100 { return in_repo; }
     let canonical = std::fs::canonicalize(repo).unwrap_or_else(|_| repo.to_path_buf());
     let mut h: u64 = 0xcbf2_9ce4_8422_2325;
@@ -346,7 +346,7 @@ pub fn run(repo: &Path, cfg: &config::Config, every: u64, batch: usize, idle: u6
     let build = build_stamp();
     // Before the socket is touched: the unlink and the bind below would otherwise act inside
     // whatever directory a clone pointed `.zerograph` at.
-    crate::store::Store::new(repo).refuse_linked_dir()?;
+    crate::store::Store::new(repo).settle()?;
     let path = socket_path(repo);
     prepare_socket_dir(&path)?;
     if sys::present(&path) && sys::connect(&path).is_ok() { anyhow::bail!("another serve answers at {}", path.display()); }
