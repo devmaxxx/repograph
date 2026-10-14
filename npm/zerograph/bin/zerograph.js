@@ -16,7 +16,7 @@ const PACKAGES = {
 const BINARY = process.platform === "win32" ? "bin/zerograph.exe" : "bin/zerograph";
 
 const FALLBACK =
-  "cargo install --git https://github.com/devmaxxx/repograph --locked";
+  "cargo install --git https://github.com/devmaxxx/zerograph --locked";
 
 function binaryPath() {
   const key = `${process.platform}-${process.arch}`;

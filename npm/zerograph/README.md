@@ -37,4 +37,4 @@ remove the old package first (`npm uninstall -g @devmaxxx/repograph` or `pnpm re
 are in `docs/install.md`, under "Coming from repograph".
 
 Full documentation, the measured comparison against graphify and GitNexus, and the bench live in
-the repository: https://github.com/devmaxxx/repograph
+the repository: https://github.com/devmaxxx/zerograph

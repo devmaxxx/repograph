@@ -5,9 +5,9 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/devmaxxx/repograph.git"
+    "url": "git+https://github.com/devmaxxx/zerograph.git"
   },
-  "homepage": "https://github.com/devmaxxx/repograph#readme",
+  "homepage": "https://github.com/devmaxxx/zerograph#readme",
   "keywords": [
     "knowledge-graph",
     "requirements",

@@ -383,8 +383,8 @@ Seven steps, in order. Each one exists because skipping it once cost a release r
 
 7. **Verify.**
    ```bash
-   gh api repos/devmaxxx/repograph/releases/latest --jq .tag_name
-   npm view @devmaxxx/repograph@<version> version --registry=https://npm.pkg.github.com
+   gh api repos/devmaxxx/zerograph/releases/latest --jq .tag_name
+   npm view @devmaxxx/zerograph@<version> version --registry=https://npm.pkg.github.com
    ```
    The first prints the tag, the release carries three assets, and the second prints the version: a
    release is done when someone else can install it, not when the tag exists.
