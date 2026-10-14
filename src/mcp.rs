@@ -1,4 +1,4 @@
-//! `repograph mcp`: the commands an agent shells out to, and the state of the index they read,
+//! `zerograph mcp`: the commands an agent shells out to, and the state of the index they read,
 //! as tools of a stdio MCP server. The agent's problem today is not the answers but not knowing
 //! whether they can be trusted: whether the index is behind the tree, whether a refresh is
 //! running and how far it has got, which model wrote the vectors. `status` says all three.
@@ -124,7 +124,7 @@ impl Server {
         json!({
             "protocolVersion": version,
             "capabilities": { "tools": { "listChanged": false } },
-            "serverInfo": { "name": "repograph", "version": env!("CARGO_PKG_VERSION") },
+            "serverInfo": { "name": "zerograph", "version": env!("CARGO_PKG_VERSION") },
             "instructions": INSTRUCTIONS,
         })
     }
@@ -160,7 +160,7 @@ impl Server {
         }
     }
 
-    /// Read per call, so an edit to `repograph.toml` is the next answer's and a broken one is an
+    /// Read per call, so an edit to `zerograph.toml` is the next answer's and a broken one is an
     /// error the agent can pass on rather than a server that never started.
     fn config(&self) -> Result<config::Config> {
         let cfg = config::Config::load(&self.repo)?;
@@ -186,7 +186,7 @@ impl Server {
         };
         if req.words.is_empty() { bail!("the question is empty"); }
         let cfg = self.config()?;
-        let resident = if std::env::var_os("REPOGRAPH_NO_SERVE").is_some() { None } else { serve::try_ask(&self.repo, &req) };
+        let resident = if std::env::var_os("ZEROGRAPH_NO_SERVE").is_some() { None } else { serve::try_ask(&self.repo, &req) };
         if let Some(reply) = resident {
             return Ok(with_notices(reply.stdout, reply.stderr));
         }
@@ -317,10 +317,10 @@ impl Server {
         if id.is_empty() { bail!("name a hub id, e.g. {}", index::embed::RECOMMENDED); }
         // The caller is an agent, and the agent may have read the id out of a repository. A model
         // is code this machine downloads and hands to a parser, so only a person trusts a new one
-        // (`repograph model <id>`, which records it); the catalogue's are measured and need none.
+        // (`zerograph model <id>`, which records it); the catalogue's are measured and need none.
         if !config::model_is_trusted(id) {
             bail!("{id} is not a catalogued model and this machine has not trusted it, so it is not downloaded on an agent's word. \
-                   Ask the user to run `repograph model {id}` once in a terminal; after that this tool accepts it. Catalogued: {}.",
+                   Ask the user to run `zerograph model {id}` once in a terminal; after that this tool accepts it. Catalogued: {}.",
                   index::embed::RECOMMENDED);
         }
         if self.no_dense { bail!("this server runs with --no-dense, and a model switch is the dense index"); }
@@ -337,8 +337,8 @@ impl Server {
         // The CLI's own switch, detached: it opens the model before it writes anything, so an id
         // the hub cannot serve leaves the project as it was and says why in the log.
         self.remember(refresh::spawn_detached(&self.repo, false, &["model", id])?);
-        Ok(format!("switching to {id} in the background: the model is fetched and opened, then `repograph.toml` is written and the vectors rewritten. \
-                    `status` follows it; `.repograph/background.log` has the reason if it fails."))
+        Ok(format!("switching to {id} in the background: the model is fetched and opened, then `zerograph.toml` is written and the vectors rewritten. \
+                    `status` follows it; `.zerograph/background.log` has the reason if it fails."))
     }
 }
 
@@ -378,7 +378,7 @@ fn progress(repo: &Path) -> String {
 
 fn log_tail(repo: &Path) -> Vec<String> {
     let read = || -> std::io::Result<String> {
-        let mut f = std::fs::File::open(repo.join(".repograph").join("background.log"))?;
+        let mut f = std::fs::File::open(repo.join(".zerograph").join("background.log"))?;
         let len = f.metadata()?.len();
         f.seek(std::io::SeekFrom::Start(len.saturating_sub(LOG_TAIL)))?;
         let mut bytes = Vec::new();
@@ -453,7 +453,7 @@ fn tools() -> Vec<Value> {
         }), &[]),
         tool("status", "The index's state: size, files behind the tree, the model that wrote the vectors against the configured one, and whether a background refresh is running and how far it has got.", json!({}), &[]),
         tool("reindex", "Starts a background refresh of the index and returns at once; says so when one is already running. Follow it with `status`.", json!({}), &[]),
-        tool("switch_model", "Re-embeds the index under another embedding model, in the background. Only catalogued models and ones the user has trusted with `repograph model <id>`; any other id is refused.", json!({
+        tool("switch_model", "Re-embeds the index under another embedding model, in the background. Only catalogued models and ones the user has trusted with `zerograph model <id>`; any other id is refused.", json!({
             "model": { "type": "string", "description": "A hub id." },
         }), &["model"]),
     ]
@@ -494,7 +494,7 @@ mod tests {
         let reply = send(&server, json!({ "jsonrpc": "2.0", "id": 1, "method": "initialize", "params": { "protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": { "name": "t", "version": "0" } } }));
         assert_eq!(reply["id"], 1);
         assert_eq!(reply["result"]["protocolVersion"], "2025-06-18");
-        assert_eq!(reply["result"]["serverInfo"]["name"], "repograph");
+        assert_eq!(reply["result"]["serverInfo"]["name"], "zerograph");
         assert!(reply["result"]["capabilities"]["tools"].is_object());
         let other = send(&server, json!({ "jsonrpc": "2.0", "id": 2, "method": "initialize", "params": { "protocolVersion": "1999-01-01" } }));
         assert_eq!(other["result"]["protocolVersion"], "2025-06-18", "a revision it does not speak is answered with the one it does");
@@ -588,7 +588,7 @@ mod tests {
         let (_, text) = call(&server, "status", json!({}));
         assert!(text.contains("1 file behind") && text.contains("docs/b.md"), "{text}");
 
-        let log = dir.path().join(".repograph/background.log");
+        let log = dir.path().join(".zerograph/background.log");
         std::fs::write(&log, "embedded 99/100 (1.0 rows/s, ~1 s left)\nrefresh: started\nembedded 16/40 (8.0 rows/s, ~3 s left)\nembedded 32/40 (8.0 rows/s, ~1 s left)\n").unwrap();
         let held = store::Store::new(dir.path()).try_lock_writer().unwrap().unwrap();
         let (_, text) = call(&server, "status", json!({}));
@@ -610,7 +610,7 @@ mod tests {
         assert!(!is_error && text.contains("already running"), "{text}");
         let (is_error, text) = call(&server, "switch_model", json!({ "model": index::embed::RECOMMENDED }));
         assert!(is_error || text.contains("already on"), "{text}");
-        assert!(!dir.path().join(".repograph/background.log").exists(), "a second spawn did not happen");
+        assert!(!dir.path().join(".zerograph/background.log").exists(), "a second spawn did not happen");
         let until = std::time::Instant::now() + std::time::Duration::from_secs(10);
         while server.spawn_in_flight() && std::time::Instant::now() < until { std::thread::sleep(std::time::Duration::from_millis(50)); }
         let (_, text) = call(&server, "status", json!({}));
@@ -621,7 +621,7 @@ mod tests {
     fn an_answer_carries_the_refresh_notes_the_terminal_would_have_seen() {
         let (dir, server) = served();
         std::fs::write(dir.path().join("docs/b.md"), DOC).unwrap();
-        std::fs::write(dir.path().join("repograph.toml"), "reader_budget = 0\n").unwrap();
+        std::fs::write(dir.path().join("zerograph.toml"), "reader_budget = 0\n").unwrap();
         let _held = store::Store::new(dir.path()).try_lock_writer().unwrap().unwrap();
         let (is_error, text) = call(&server, "explain", json!({ "node": "FR-PAY-22" }));
         assert!(!is_error && text.contains("index: 1 file behind, a refresh is already running"), "{text}");
@@ -630,7 +630,7 @@ mod tests {
     #[test]
     fn a_meter_from_before_the_current_run_started_is_not_shown() {
         let (dir, server) = served();
-        std::fs::write(dir.path().join(".repograph/background.log"), "embedded 99/100 (1.0 rows/s, ~1 s left)\n").unwrap();
+        std::fs::write(dir.path().join(".zerograph/background.log"), "embedded 99/100 (1.0 rows/s, ~1 s left)\n").unwrap();
         let _held = store::Store::new(dir.path()).try_lock_writer().unwrap().unwrap();
         let (_, text) = call(&server, "status", json!({}));
         assert!(text.contains("refresh: running (no output yet)"), "{text}");
@@ -642,7 +642,7 @@ mod tests {
         let _held = store::Store::new(dir.path()).try_lock_writer().unwrap().unwrap();
         let (is_error, text) = call(&server, "reindex", json!({}));
         assert!(!is_error && text.contains("already running"), "{text}");
-        assert!(!dir.path().join(".repograph/background.log").exists(), "nothing was spawned to write a log");
+        assert!(!dir.path().join(".zerograph/background.log").exists(), "nothing was spawned to write a log");
     }
 
     #[test]
@@ -650,7 +650,7 @@ mod tests {
         let (dir, server) = served();
         let (is_error, text) = call(&server, "switch_model", json!({ "model": "attacker/never-heard-of-this-model" }));
         assert!(is_error, "{text}");
-        assert!(text.contains("repograph model attacker/never-heard-of-this-model"), "the refusal says how a person trusts it: {text}");
+        assert!(text.contains("zerograph model attacker/never-heard-of-this-model"), "the refusal says how a person trusts it: {text}");
         assert!(!dir.path().join(config::PROJECT_FILE).exists(), "nothing was written");
         let (is_error, _) = call(&server, "switch_model", json!({ "model": "  " }));
         assert!(is_error, "a blank id is not trusted by a blank line in the trust file");

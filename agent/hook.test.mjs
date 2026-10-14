@@ -1,4 +1,4 @@
-// The hook, exercised the way a harness runs it: a payload on stdin, a fake `repograph` the hook
+// The hook, exercised the way a harness runs it: a payload on stdin, a fake `zerograph` the hook
 // resolves the way it resolves the real one, and a temporary root that has or lacks a store.
 // Run: `node --test agent/hook.test.mjs`, on every platform the hook is installed on.
 import { test } from 'node:test';
@@ -16,7 +16,7 @@ const HOOK = join(dirname(fileURLToPath(import.meta.url)), 'hook.mjs');
 const WIN = process.platform === 'win32';
 
 /**
- * A root with a fake `repograph`; `answer` is what that fake prints on stdout.
+ * A root with a fake `zerograph`; `answer` is what that fake prints on stdout.
  *
  * The fake is a Node script behind a launcher rather than a shell script, because Windows cannot
  * execute an extensionless `#!/bin/sh` file at all — the five tests that need the binary to answer
@@ -25,10 +25,10 @@ const WIN = process.platform === 'win32';
  * quoting the launcher needed.
  */
 function world({ store = true, answer = '', status = 0 } = {}) {
-  const root = mkdtempSync(join(tmpdir(), 'repograph-hook-test-'));
+  const root = mkdtempSync(join(tmpdir(), 'zerograph-hook-test-'));
   if (store) {
-    mkdirSync(join(root, '.repograph'), { recursive: true });
-    writeFileSync(join(root, '.repograph', 'manifest.json'), '{}');
+    mkdirSync(join(root, '.zerograph'), { recursive: true });
+    writeFileSync(join(root, '.zerograph', 'manifest.json'), '{}');
   }
   const bin = join(root, 'bin');
   mkdirSync(bin, { recursive: true });
@@ -43,7 +43,7 @@ function world({ store = true, answer = '', status = 0 } = {}) {
 
   // The launcher is what the hook actually spawns: a `.cmd` on Windows, which is why the hook has
   // to know how to spawn one, and a shell script everywhere else, which is what `PATH` finds.
-  const launcher = join(bin, WIN ? 'repograph.cmd' : 'repograph');
+  const launcher = join(bin, WIN ? 'zerograph.cmd' : 'zerograph');
   writeFileSync(launcher, WIN
     ? `@echo off\r\n"${process.execPath}" "${fake}" %*\r\n`
     : `#!/bin/sh\nexec "${process.execPath}" "${fake}" "$@"\n`);
@@ -59,8 +59,8 @@ function fire(w, payload, env = {}, hook = HOOK) {
       ...process.env,
       PATH: `${w.bin}${delimiter}${process.env.PATH}`,
       // Windows resolves a bare name through `PATHEXT` only inside a shell, so `PATH` alone would
-      // never find `repograph.cmd`; the variable the hook already honours names it instead.
-      ...(WIN ? { REPOGRAPH_BIN: w.launcher } : {}),
+      // never find `zerograph.cmd`; the variable the hook already honours names it instead.
+      ...(WIN ? { ZEROGRAPH_BIN: w.launcher } : {}),
       // `tmpdir()` reads TMPDIR on POSIX and TEMP/TMP on Windows. All three, or the per-session
       // state the once-and-cadence gates keep would be shared between tests on one platform.
       TMPDIR: join(w.root, 'tmp'), TEMP: join(w.root, 'tmp'), TMP: join(w.root, 'tmp'),
@@ -91,12 +91,12 @@ async function waitFor(w, re, ms = 3000) {
  * function replacement, because a replacement string would read a `$'` in the command as a pattern.
  */
 function installed(w, command) {
-  const declaration = 'const COMMAND = "repograph";';
+  const declaration = 'const COMMAND = "zerograph";';
   const source = readFileSync(HOOK, 'utf8');
   assert.equal(source.split(declaration).length, 2, 'the declaration the installer replaces is in the hook once');
   const dir = join(w.root, 'installed');
   mkdirSync(dir, { recursive: true });
-  const file = join(dir, 'repograph-hook.mjs');
+  const file = join(dir, 'zerograph-hook.mjs');
   writeFileSync(file, source.replace(declaration, () => `const COMMAND = ${JSON.stringify(command)};`));
   return file;
 }
@@ -221,44 +221,44 @@ test('the local shim the hook picks is one this platform can start', () => {
   const w = world();
   const bin = join(w.root, 'node_modules', '.bin');
   mkdirSync(bin, { recursive: true });
-  const named = process.env.REPOGRAPH_BIN;
+  const named = process.env.ZEROGRAPH_BIN;
   const path = process.env.PATH;
-  delete process.env.REPOGRAPH_BIN;                 // this is the resolution when nothing names it
-  process.env.PATH = join(w.root, 'empty-path');    // a machine with no repograph of its own
+  delete process.env.ZEROGRAPH_BIN;                 // this is the resolution when nothing names it
+  process.env.PATH = join(w.root, 'empty-path');    // a machine with no zerograph of its own
   try {
-    assert.equal(binary(w.root), 'repograph', 'nothing installed locally: PATH answers');
+    assert.equal(binary(w.root), 'zerograph', 'nothing installed locally: PATH answers');
 
     // The trio npm, pnpm and yarn write, in the order they appear: the shell script first.
-    writeFileSync(join(bin, 'repograph'), '#!/bin/sh\n');
-    assert.equal(binary(w.root), WIN ? 'repograph' : join(bin, 'repograph'),
+    writeFileSync(join(bin, 'zerograph'), '#!/bin/sh\n');
+    assert.equal(binary(w.root), WIN ? 'zerograph' : join(bin, 'zerograph'),
       'the extensionless shim is not a fallback on Windows: CreateProcess cannot read it, and PATH can');
 
-    writeFileSync(join(bin, 'repograph.cmd'), '@echo off\r\n');
-    assert.equal(binary(w.root), join(bin, WIN ? 'repograph.cmd' : 'repograph'));
+    writeFileSync(join(bin, 'zerograph.cmd'), '@echo off\r\n');
+    assert.equal(binary(w.root), join(bin, WIN ? 'zerograph.cmd' : 'zerograph'));
   } finally {
-    if (named !== undefined) process.env.REPOGRAPH_BIN = named;
+    if (named !== undefined) process.env.ZEROGRAPH_BIN = named;
     process.env.PATH = path;
   }
 });
 
-test('a repograph on PATH wins over the repository\'s own node_modules shim, and REPOGRAPH_BIN over both', () => {
+test('a zerograph on PATH wins over the repository\'s own node_modules shim, and ZEROGRAPH_BIN over both', () => {
   const w = world();
   const local = join(w.root, 'node_modules', '.bin');
   mkdirSync(local, { recursive: true });
-  writeFileSync(join(local, WIN ? 'repograph.cmd' : 'repograph'), '#!/bin/sh\n');
+  writeFileSync(join(local, WIN ? 'zerograph.cmd' : 'zerograph'), '#!/bin/sh\n');
   const onPath = join(w.root, 'on-path');
   mkdirSync(onPath, { recursive: true });
-  writeFileSync(join(onPath, WIN ? 'repograph.exe' : 'repograph'), '');
-  const named = process.env.REPOGRAPH_BIN;
+  writeFileSync(join(onPath, WIN ? 'zerograph.exe' : 'zerograph'), '');
+  const named = process.env.ZEROGRAPH_BIN;
   const path = process.env.PATH;
-  delete process.env.REPOGRAPH_BIN;
+  delete process.env.ZEROGRAPH_BIN;
   process.env.PATH = `${onPath}${delimiter}${path}`;
   try {
-    assert.equal(binary(w.root), 'repograph', 'the clone ships a shim; the machine\'s binary is the one that runs');
-    process.env.REPOGRAPH_BIN = '/opt/repograph';
-    assert.equal(binary(w.root), '/opt/repograph');
+    assert.equal(binary(w.root), 'zerograph', 'the clone ships a shim; the machine\'s binary is the one that runs');
+    process.env.ZEROGRAPH_BIN = '/opt/zerograph';
+    assert.equal(binary(w.root), '/opt/zerograph');
   } finally {
-    if (named === undefined) delete process.env.REPOGRAPH_BIN; else process.env.REPOGRAPH_BIN = named;
+    if (named === undefined) delete process.env.ZEROGRAPH_BIN; else process.env.ZEROGRAPH_BIN = named;
     process.env.PATH = path;
   }
 });
@@ -267,9 +267,9 @@ test('the hook keeps its session state in a directory private to the user', { sk
   const w = world();
   const payload = { hook_event_name: 'PreToolUse', tool_name: 'Grep', tool_input: { pattern: 'cancellation window' } };
   fire(w, payload);
-  const root = join(w.root, 'tmp', `repograph-hook-${process.getuid()}`);
+  const root = join(w.root, 'tmp', `zerograph-hook-${process.getuid()}`);
   assert.equal(statSync(root).mode & 0o777, 0o700);
-  assert.ok(!existsSync(join(w.root, 'tmp', 'repograph-hook')), 'the predictable shared name is gone');
+  assert.ok(!existsSync(join(w.root, 'tmp', 'zerograph-hook')), 'the predictable shared name is gone');
 });
 
 test('the rule the hook hands a subagent is the file the installer ships', () => {
@@ -280,9 +280,9 @@ test('the rule the hook hands a subagent is the file the installer ships', () =>
 });
 
 test('SessionStart prints the brief, and nothing where there is no store', () => {
-  const w = world({ answer: 'repograph: 3076 doc nodes, 5240 code nodes\nmodel=onnx-community/embeddinggemma-300m-ONNX' });
+  const w = world({ answer: 'zerograph: 3076 doc nodes, 5240 code nodes\nmodel=onnx-community/embeddinggemma-300m-ONNX' });
   const c = context(fire(w, { hook_event_name: 'SessionStart', source: 'startup' }));
-  assert.ok(c.startsWith('repograph:'), c);
+  assert.ok(c.startsWith('zerograph:'), c);
   assert.ok(Buffer.byteLength(c) <= 700, `${Buffer.byteLength(c)} B`);
   assert.ok(argv(w).some((l) => /--no-dense prime/.test(l)), argv(w).join(' | '));
 
@@ -291,12 +291,12 @@ test('SessionStart prints the brief, and nothing where there is no store', () =>
 });
 
 test('a session started in a subdirectory finds the index above it, and a nested checkout does not borrow it', () => {
-  const w = world({ answer: 'repograph: 3076 doc nodes, 5240 code nodes' });
-  const env = { REPOGRAPH_HOOK_SERVE: '0' };
+  const w = world({ answer: 'zerograph: 3076 doc nodes, 5240 code nodes' });
+  const env = { ZEROGRAPH_HOOK_SERVE: '0' };
   const sub = join(w.root, 'packages', 'db');
   mkdirSync(sub, { recursive: true });
   const c = context(fire(w, { hook_event_name: 'SessionStart', source: 'startup', cwd: sub }, env));
-  assert.ok(c?.startsWith('repograph:'), `a cd into a subdirectory lost the index: ${c}`);
+  assert.ok(c?.startsWith('zerograph:'), `a cd into a subdirectory lost the index: ${c}`);
   assert.ok(argv(w).some((l) => l.startsWith(`--repo ${w.root} --no-dense prime`)), argv(w).join(' | '));
 
   const nested = join(w.root, 'worktree');
@@ -307,27 +307,27 @@ test('a session started in a subdirectory finds the index above it, and a nested
 });
 
 test('a hook run through a symlinked path still answers', () => {
-  const w = world({ answer: 'repograph: 3076 doc nodes, 5240 code nodes' });
+  const w = world({ answer: 'zerograph: 3076 doc nodes, 5240 code nodes' });
   const real = join(w.root, 'real');
   mkdirSync(real);
   copyFileSync(HOOK, join(real, 'hook.mjs'));
   const link = join(w.root, 'link');
   // A junction on Windows, which needs no symlink privilege; the type is ignored everywhere else.
   symlinkSync(real, link, 'junction');
-  const c = context(fire(w, { hook_event_name: 'SessionStart', source: 'startup' }, { REPOGRAPH_HOOK_SERVE: '0' }, join(link, 'hook.mjs')));
-  assert.ok(c?.startsWith('repograph:'), `argv[1] keeps the link and import.meta.url resolves it: ${c}`);
+  const c = context(fire(w, { hook_event_name: 'SessionStart', source: 'startup' }, { ZEROGRAPH_HOOK_SERVE: '0' }, join(link, 'hook.mjs')));
+  assert.ok(c?.startsWith('zerograph:'), `argv[1] keeps the link and import.meta.url resolves it: ${c}`);
 });
 
 test('SessionStart starts a resident serve, and the switch turns it off', async () => {
-  const w = world({ answer: 'repograph: 3076 doc nodes, 5240 code nodes' });
+  const w = world({ answer: 'zerograph: 3076 doc nodes, 5240 code nodes' });
   fire(w, { hook_event_name: 'SessionStart', source: 'startup' });
   // Detached and never waited on, so the fake's line lands after the hook has already exited.
   const line = await waitFor(w, /serve --idle 1800 --idle-model 300/);
   assert.ok(line, `no serve was started: ${argv(w).join(' | ')}`);
   assert.ok(!line.includes('--no-dense'), `the resident answer is the fused one: ${line}`);
 
-  const off = world({ answer: 'repograph: 1 doc node' });
-  fire(off, { hook_event_name: 'SessionStart', source: 'startup' }, { REPOGRAPH_HOOK_SERVE: '0' });
+  const off = world({ answer: 'zerograph: 1 doc node' });
+  fire(off, { hook_event_name: 'SessionStart', source: 'startup' }, { ZEROGRAPH_HOOK_SERVE: '0' });
   await new Promise((r) => setTimeout(r, 300));
   assert.equal(argv(off).filter((l) => l.includes('serve')).length, 0, argv(off).join(' | '));
 });
@@ -349,9 +349,9 @@ test('a Bash rg with a word asks once, with three seeds, and keeps only the seed
   assert.equal(fire(w, payload), null, 'the same query is asked once a session');
 });
 
-test('a search that touches repograph itself, or the store, is left alone', () => {
+test('a search that touches zerograph itself, or the store, is left alone', () => {
   const w = world({ answer: 'FR-PAY-22  docs/a.md:1  отмена' });
-  for (const command of ['repograph ask отмена | rg FR', 'rg -l TODO .repograph/']) {
+  for (const command of ['zerograph ask отмена | rg FR', 'rg -l TODO .zerograph/']) {
     assert.equal(fire(w, { hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: { command } }), null, command);
   }
   assert.deepEqual(argv(w), [], 'the fake never ran');
@@ -376,7 +376,7 @@ test('the twelfth injection is the last', () => {
 
 test('with the interceptor off, the reminder still keeps its cadence, per agent', () => {
   const w = world({ answer: 'FR-PAY-22  docs/a.md:1  отмена' });
-  const env = { REPOGRAPH_HOOK_INTERCEPT: '0' };
+  const env = { ZEROGRAPH_HOOK_INTERCEPT: '0' };
   let reminders = 0;
   for (let i = 0; i < 40; i += 1) {
     const out = fire(w, { hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: { command: `rg "thing${i}"` } }, env);
@@ -444,7 +444,7 @@ test('the Agent prompt is extended only when the fallback is asked for', () => {
   const w = world();
   const payload = { hook_event_name: 'PreToolUse', tool_name: 'Agent', tool_input: { prompt: 'find the tenant guard' } };
   assert.equal(fire(w, payload), null, 'off by default: SubagentStart is the primary and this would double it');
-  const out = fire(w, payload, { REPOGRAPH_HOOK_AGENT_INPUT: '1' });
+  const out = fire(w, payload, { ZEROGRAPH_HOOK_AGENT_INPUT: '1' });
   assert.ok(out.hookSpecificOutput.updatedInput.prompt.startsWith('find the tenant guard'), JSON.stringify(out));
   assert.ok(out.hookSpecificOutput.updatedInput.prompt.endsWith(rule()), JSON.stringify(out));
   assert.equal(out.hookSpecificOutput.permissionDecision, undefined, 'no decision: the call proceeds as it would have');
@@ -453,35 +453,35 @@ test('the Agent prompt is extended only when the fallback is asked for', () => {
 test('a repository with no store gets one build notice and then silence', () => {
   const w = world({ store: false });
   const payload = { hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: { command: 'rg "cancellation policy"' } };
-  assert.match(context(fire(w, payload)), /repograph build/);
+  assert.match(context(fire(w, payload)), /zerograph build/);
   assert.equal(fire(w, { ...payload, tool_input: { command: 'rg "another question here"' } }), null, 'once a session');
 });
 
 test('every hint names the command install-agent was given, and no command can break the script', () => {
-  const env = { REPOGRAPH_HOOK_SERVE: '0' };
-  const command = 'pnpm exec repograph';
+  const env = { ZEROGRAPH_HOOK_SERVE: '0' };
+  const command = 'pnpm exec zerograph';
   const search = { hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: { command: 'rg "cancellation policy"' } };
 
   const bare = world({ store: false });
-  assert.match(context(fire(bare, search, env, installed(bare, command))), /`pnpm exec repograph build`/);
+  assert.match(context(fire(bare, search, env, installed(bare, command))), /`pnpm exec zerograph build`/);
 
   const w = world({ answer: 'FR-PAY-22  docs/a.md:1  отмена' });
   const hook = installed(w, command);
   const given = context(fire(w, { hook_event_name: 'SubagentStart', agent_id: 'a1' }, env, hook));
-  assert.match(given, /`pnpm exec repograph ask <words>`/, 'no rule.txt beside it: the built-in copy answers');
-  assert.ok(!given.includes('`repograph '), given);
+  assert.match(given, /`pnpm exec zerograph ask <words>`/, 'no rule.txt beside it: the built-in copy answers');
+  assert.ok(!given.includes('`zerograph '), given);
   const injected = context(fire(w, search, env, hook));
-  assert.match(injected, /^pnpm exec repograph ask cancellation policy →/, 'the header is a command an agent re-runs');
-  assert.match(injected, /`pnpm exec repograph ask` for more\)$/);
+  assert.match(injected, /^pnpm exec zerograph ask cancellation policy →/, 'the header is a command an agent re-runs');
+  assert.match(injected, /`pnpm exec zerograph ask` for more\)$/);
   let reminder = null;
   for (let i = 0; i < 40; i += 1) {
     const payload = { hook_event_name: 'PreToolUse', agent_id: 'r', tool_name: 'Bash', tool_input: { command: `rg "thing${i}"` } };
-    reminder = context(fire(w, payload, { ...env, REPOGRAPH_HOOK_INTERCEPT: '0' }, hook)) ?? reminder;
+    reminder = context(fire(w, payload, { ...env, ZEROGRAPH_HOOK_INTERCEPT: '0' }, hook)) ?? reminder;
   }
-  assert.match(reminder, /`pnpm exec repograph ask <words>`/);
+  assert.match(reminder, /`pnpm exec zerograph ask <words>`/);
 
   const hub = world({ answer: diff([{ file: 'src/db.ts', symbol: 'withTenant', callers: 18 }], 'HIGH') });
-  assert.match(context(fire(hub, edit(hub, 'src', 'db.ts'), env, installed(hub, command))), /`pnpm exec repograph changes --depth 1`/);
+  assert.match(context(fire(hub, edit(hub, 'src', 'db.ts'), env, installed(hub, command))), /`pnpm exec zerograph changes --depth 1`/);
 
   const hostile = 'pnpm exec "re\'po\\graph" `x` ${y} $\'';
   const odd = world();

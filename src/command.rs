@@ -5,7 +5,7 @@ use std::io::Write;
 use std::path::PathBuf;
 
 /// The shell the configured command runs under: `sh`, on every platform. The commands in
-/// `repograph.toml` are written in its syntax — a `VAR=value` prefix, `""` for an empty argument —
+/// `zerograph.toml` are written in its syntax — a `VAR=value` prefix, `""` for an empty argument —
 /// and a `cmd /C` or PowerShell rendering on Windows would make one key mean two things.
 #[cfg(unix)]
 fn shell() -> Result<std::process::Command> { Ok(std::process::Command::new("sh")) }
@@ -62,7 +62,7 @@ fn pipefail_prefix() -> &'static str {
 
 /// An empty directory of the command's own to run in. The generator is a tool like `claude -p`
 /// that reads project files from its working directory — a `CLAUDE.md`, a settings file — and the
-/// directory repograph was started in is a cloned repository's, whose files steer the tool
+/// directory zerograph was started in is a cloned repository's, whose files steer the tool
 /// instead of the person who configured the command.
 struct EmptyCwd(PathBuf);
 
@@ -79,7 +79,7 @@ impl EmptyCwd {
         let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_nanos());
         for _ in 0..16 {
             let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            let dir = std::env::temp_dir().join(format!("repograph-cwd-{}-{nanos}-{n}", std::process::id()));
+            let dir = std::env::temp_dir().join(format!("zerograph-cwd-{}-{nanos}-{n}", std::process::id()));
             match builder.create(&dir) {
                 Ok(()) => return Ok(Self(dir)),
                 Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,

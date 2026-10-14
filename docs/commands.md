@@ -24,42 +24,42 @@ once the model is cached (see [Embeddings](embeddings.md)).
 Build the graph once, then keep it fresh incrementally:
 
 ```bash
-repograph --repo /path/to/project build     # full build
-repograph --repo /path/to/project update    # re-extract only changed files
+zerograph --repo /path/to/project build     # full build
+zerograph --repo /path/to/project update    # re-extract only changed files
 ```
 
-`--repo` defaults to the current directory. State lives in `<repo>/.repograph/`; add it to
+`--repo` defaults to the current directory. State lives in `<repo>/.zerograph/`; add it to
 `.gitignore`.
 
 After a first build, read which id families the documents defined and what was left as text:
 
 ```bash
-repograph families                          # every family, its nodes, and the line that defines it
-repograph families --json                   # the same numbers for a script
+zerograph families                          # every family, its nodes, and the line that defines it
+zerograph families --json                   # the same numbers for a script
 ```
 
 Ask it something:
 
 ```bash
-repograph ask cancellation policy
-repograph ask FR-PAY-22                     # an exact id short-circuits straight to the node
-repograph ask asGrosze                      # so does an exact symbol name (a plain lowercase word does so only alone)
-repograph ask "FR-PAY-22 refund"            # quoted or not, the same words find the same ids and names
-repograph ask --bodies отмена записи        # print full requirement bodies, not just headlines
-repograph ask --json отмена записи          # machine-readable
-repograph ask --seeds 8 отмена записи       # widen the search beyond the default of 5; costs more tokens
-repograph ask --no-dense отмена записи      # lexical only, no embedding query
+zerograph ask cancellation policy
+zerograph ask FR-PAY-22                     # an exact id short-circuits straight to the node
+zerograph ask asGrosze                      # so does an exact symbol name (a plain lowercase word does so only alone)
+zerograph ask "FR-PAY-22 refund"            # quoted or not, the same words find the same ids and names
+zerograph ask --bodies отмена записи        # print full requirement bodies, not just headlines
+zerograph ask --json отмена записи          # machine-readable
+zerograph ask --seeds 8 отмена записи       # widen the search beyond the default of 5; costs more tokens
+zerograph ask --no-dense отмена записи      # lexical only, no embedding query
 ```
 
 Ask it what depends on a symbol, what a symbol reaches, and how one reaches another:
 
 ```bash
-repograph impact StaffService               # callers by depth, importing files, a risk line
-repograph impact --down StaffController     # what it calls, through injected services and barrels
-repograph impact --json --depth 1 asGrosze  # machine-readable; depth 1 is the "will break" list alone
-repograph trace StaffController StaffService  # shortest chain of calls between two symbols
-repograph changes                           # what the uncommitted diff touches, and who reaches it
-repograph changes --base main --depth 1     # the whole branch; depth 1 is the direct callers alone
+zerograph impact StaffService               # callers by depth, importing files, a risk line
+zerograph impact --down StaffController     # what it calls, through injected services and barrels
+zerograph impact --json --depth 1 asGrosze  # machine-readable; depth 1 is the "will break" list alone
+zerograph trace StaffController StaffService  # shortest chain of calls between two symbols
+zerograph changes                           # what the uncommitted diff touches, and who reaches it
+zerograph changes --base main --depth 1     # the whole branch; depth 1 is the direct callers alone
 ```
 
 `impact` and `trace` resolve a name the way `explain` does, except that when a document node and
@@ -78,7 +78,7 @@ Top-level lines are the seeds the query matched. An indented line is a neighbour
 over the id graph, and the `←` names the seed it came from. A real run, against `beauty-crm`:
 
 ```
-$ repograph --repo beauty-crm ask cancellation
+$ zerograph --repo beauty-crm ask cancellation
 sym:packages/db/src/schema/salon/scheduling.ts::CANCELLATION_CONSEQUENCES  packages/db/src/schema/salon/scheduling.ts:110  CANCELLATION_CONSEQUENCES
 BE-M10/T05  docs/prd-2026-08-16/plans/milestones/backend/BE-M10-payments-provider-stripe-connect-implementation-deposits-car.md:80  Cancellation policy engine (`packages/domain/policy.ts`): inputs policy + appoin…
 PLAT-M12/T09  docs/prd-2026-08-16/plans/milestones/platform/PLAT-M12-billing.md:48  Cancel semantics N-141: immediate stop of future charges, accrued usage as dated…
@@ -124,9 +124,9 @@ stderr with exit 2: it fails before any command runs.
 Inspect one node and everything attached to it:
 
 ```bash
-repograph explain <id|symbol|label>         # tries an exact id, then a symbol name, then a label
-repograph explain FR-PAY-22
-repograph explain asGrosze
+zerograph explain <id|symbol|label>         # tries an exact id, then a symbol name, then a label
+zerograph explain FR-PAY-22
+zerograph explain asGrosze
 ```
 
 `explain` resolves its argument as an id — as typed, then without the punctuation around it, then
@@ -139,13 +139,13 @@ no line defines their prefix, and ids that are referenced but never declared, sp
 a declared family (worth chasing) and shapes the dialect does not read as ids at all:
 
 ```bash
-repograph verify
+zerograph verify
 ```
 
 Fold in a graphify graph's model-only edges as a frozen legacy layer:
 
 ```bash
-repograph import-legacy path/to/graphify/graph.json
+zerograph import-legacy path/to/graphify/graph.json
 ```
 
 This prints how many of the source graph's edges resolved to real nodes on both ends, on one end, or
@@ -155,7 +155,7 @@ needed a new `LegacyConcept`. It is opt-in and lossy by construction — see its
 Run the recorded benchmark:
 
 ```bash
-repograph bench                      # bench/cases.jsonl: 40 keyword + 30 paraphrase + 12 code
-repograph bench --cases other.jsonl  # any shape: the 40/30/12 shape is graded, any other is measured ungated
-repograph dump --queries qs.jsonl --out lists.json   # every retriever's ranked list per question, 300 deep
+zerograph bench                      # bench/cases.jsonl: 40 keyword + 30 paraphrase + 12 code
+zerograph bench --cases other.jsonl  # any shape: the 40/30/12 shape is graded, any other is measured ungated
+zerograph dump --queries qs.jsonl --out lists.json   # every retriever's ranked list per question, 300 deep
 ```

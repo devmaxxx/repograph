@@ -31,7 +31,7 @@ use model::Extractor;
 use std::path::PathBuf;
 
 #[derive(Parser)]
-#[command(name = "repograph", version)]
+#[command(name = "zerograph", version)]
 struct Cli {
     /// Repository root; defaults to the current directory.
     #[arg(long, global = true, default_value = ".")]
@@ -56,7 +56,7 @@ enum Cmd {
     Build,
     Update {
         /// Starts the update in a process of its own and returns at once; its output goes to
-        /// `.repograph/background.log`. What the git hooks `install-agent` writes run.
+        /// `.zerograph/background.log`. What the git hooks `install-agent` writes run.
         #[arg(long)] detach: bool,
     },
     Ask {
@@ -77,7 +77,7 @@ enum Cmd {
         /// Answers in this process even when a `serve` is listening.
         #[arg(long)] no_serve: bool,
     },
-    /// Answers `ask` from a resident process over `.repograph/serve.sock`: the model, the
+    /// Answers `ask` from a resident process over `.zerograph/serve.sock`: the model, the
     /// vectors and the indexes open once. Refreshes before every answer the way `ask` does,
     /// polls between them like `watch`, exits after `--idle` seconds without a question.
     Serve {
@@ -142,7 +142,7 @@ enum Cmd {
         /// Codex's `.codex/`.
         #[arg(long)] codex: bool,
         /// How this repository invokes the binary, in every file the install writes.
-        #[arg(long, default_value = "repograph")] command: String,
+        #[arg(long, default_value = "zerograph")] command: String,
     },
     /// What a coding agent should be told about this repository at the start of a session: node
     /// counts, which embedder the vectors belong to, how many families the documents define, and the five commands. Reads the store; never refreshes.
@@ -157,11 +157,11 @@ enum Cmd {
     },
     /// Embeds every row the dense index lacks, without re-reading the tree: a store copied
     /// without its vectors is re-embedded from its graph alone, which is how a
-    /// store is measured under another `REPOGRAPH_EMBED_MODEL`.
+    /// store is measured under another `ZEROGRAPH_EMBED_MODEL`.
     Embed,
     /// Which embedder this store's vectors belong to, and what else has been measured. With a hub
     /// id, the switch: the model is downloaded and opened, `embed_model` is written into
-    /// `repograph.toml`, and the index is rewritten under it — one command, and a working state
+    /// `zerograph.toml`, and the index is rewritten under it — one command, and a working state
     /// at the end of it.
     Model {
         /// The model to switch to. Without one nothing is written and the table is printed.
@@ -661,24 +661,24 @@ fn model_report(repo: &std::path::Path, cfg: &config::Config) -> anyhow::Result<
     let mut say = |key: &str, value: String| out.push_str(&format!("{key:<12}{value}\n"));
     match &recorded {
         Some(m) => say("store", m.clone()),
-        None => say("store", "no vectors yet — `repograph build` writes them".to_string()),
+        None => say("store", "no vectors yet — `zerograph build` writes them".to_string()),
     }
     let from = match config::names_embed_model(repo) { true => config::PROJECT_FILE, false => "the built-in default" };
     say("configured", format!("{} ({from})", cfg.embed_model));
-    if let Some(o) = std::env::var("REPOGRAPH_EMBED_MODEL").ok().filter(|v| !v.trim().is_empty()) {
-        say("this run", format!("{o} (REPOGRAPH_EMBED_MODEL)"));
+    if let Some(o) = std::env::var("ZEROGRAPH_EMBED_MODEL").ok().filter(|v| !v.trim().is_empty()) {
+        say("this run", format!("{o} (ZEROGRAPH_EMBED_MODEL)"));
     }
     if let Some(m) = untrusted {
         out.push_str(&format!("\nThe store names a model this machine has not trusted, so readers answer lexical-only\nuntil it is trusted or the store is re-embedded with {} — {}.\n", cfg.embed_model, config::trust_hint(m)));
     } else if recorded.as_deref().is_some_and(|m| m != cfg.embed_model) {
         out.push_str("\nThe two disagree. The store keeps answering with the model that wrote it; the\n\
             configured one takes effect at the next `build`, `update`, `embed` or\n\
-            `watch` (an `ask` starts one when repograph.toml names the model), which drops\n\
+            `watch` (an `ask` starts one when zerograph.toml names the model), which drops\n\
             every row the other model wrote and rewrites the index whole.\n");
     }
     out.push('\n');
     out.push_str(&index::embed::catalogue(Some(opened)));
-    out.push_str("\n`repograph model <hub id>` downloads one, writes the key and re-embeds.\n");
+    out.push_str("\n`zerograph model <hub id>` downloads one, writes the key and re-embeds.\n");
     Ok(out)
 }
 
@@ -693,7 +693,7 @@ fn model_json(repo: &std::path::Path, cfg: &config::Config) -> anyhow::Result<St
         "store": recorded,
         "configured": cfg.embed_model,
         "configured_from": match config::names_embed_model(repo) { true => config::PROJECT_FILE, false => "default" },
-        "this_run": std::env::var("REPOGRAPH_EMBED_MODEL").ok().filter(|v| !v.trim().is_empty()),
+        "this_run": std::env::var("ZEROGRAPH_EMBED_MODEL").ok().filter(|v| !v.trim().is_empty()),
         "agrees": agrees,
         "recommended": index::embed::RECOMMENDED,
     }).to_string() + "\n")
@@ -718,7 +718,7 @@ fn spelling<'a>(id: &'a str, recorded: Option<&'a str>) -> &'a str {
 /// with no network — each has to leave the project exactly as it was, and the only thing that can
 /// say a model is really there is opening it and asking it for a vector. So the fetch, the session
 /// and one probe come first and the hub's own error is what a reader sees; only then is
-/// `repograph.toml` touched, and only then are the rows rewritten. There is no rollback for a
+/// `zerograph.toml` touched, and only then are the rows rewritten. There is no rollback for a
 /// configuration file, so nothing is written that might have to be taken back.
 fn switch_model(repo: &std::path::Path, cfg: &config::Config, id: &str, no_embed: bool, no_dense: bool) -> anyhow::Result<()> {
     if no_dense {
@@ -774,14 +774,14 @@ fn switch_model(repo: &std::path::Path, cfg: &config::Config, id: &str, no_embed
     let path = config::set_embed_model(repo, id)?;
     println!("model: embed_model = \"{id}\" in {}", path.display());
     if no_embed {
-        eprintln!("model: --no-embed, so the store still holds the old rows — `repograph embed` rewrites them");
+        eprintln!("model: --no-embed, so the store still holds the old rows — `zerograph embed` rewrites them");
         return Ok(());
     }
     // The same check `embed` makes, and for the same reason: a sync against an empty graph marks
     // every row dead and writes an index of nothing. The key is already set, which is the part
     // that had to survive, so this is a next step rather than a failure.
     if store.load()?.0.nodes.is_empty() {
-        eprintln!("model: the graph is empty, so there is nothing to re-embed — run `repograph build`");
+        eprintln!("model: the graph is empty, so there is nothing to re-embed — run `zerograph build`");
         return Ok(());
     }
     embed_opened(repo, id, &mut emb)
@@ -842,7 +842,7 @@ pub(crate) fn terminal_safe(text: &str) -> std::borrow::Cow<'_, str> {
 }
 
 /// `terminal_safe` for one line of stderr, which a detached refresh appends to
-/// `.repograph/background.log` and `progress` reads back a line at a time: a newline kept from a
+/// `.zerograph/background.log` and `progress` reads back a line at a time: a newline kept from a
 /// file name or a parse error would start a line of its own, taken for a record the refresh wrote.
 pub(crate) fn log_line(text: &str) -> String { terminal_safe(text).replace('\n', "\\n") }
 
@@ -880,9 +880,9 @@ fn plain(p: PathBuf) -> PathBuf { p }
 /// a failure to make a determination at all: no such symbol, no store to read.
 ///
 /// 3 and not 2, which is the code the ledger's lever named first: 2 is already taken twice on the
-/// way to this binary. `clap` exits 2 on a usage error, so `repograph bench --nosuchflag` — a
+/// way to this binary. `clap` exits 2 on a usage error, so `zerograph bench --nosuchflag` — a
 /// command that never ran — is indistinguishable from a suite that ran and missed a floor; and
-/// `npm/repograph/bin/repograph.js` exits 2 when no platform binary is installed, which CI pins.
+/// `npm/zerograph/bin/zerograph.js` exits 2 when no platform binary is installed, which CI pins.
 /// A verdict has to be a status no other layer writes, or a harness reading it learns nothing.
 #[derive(Debug)]
 struct Verdict(String);
@@ -893,7 +893,7 @@ impl std::fmt::Display for Verdict {
 
 impl std::error::Error for Verdict {}
 
-/// The `repograph` command line: parses the arguments, runs the command and maps its outcome to an
+/// The `zerograph` command line: parses the arguments, runs the command and maps its outcome to an
 /// exit status: 0, 1 for a failure, 3 for a verdict.
 pub fn main() -> std::process::ExitCode {
     let cli = Cli::parse();
@@ -916,15 +916,15 @@ pub fn main() -> std::process::ExitCode {
 
 fn run(cli: Cli) -> anyhow::Result<()> {
     let repo = plain(cli.repo.canonicalize()?);
-    // Loaded per command: `bench` reads its own from `REPOGRAPH_BENCH_REPO`, and `explain`/`verify`
-    // must not fail on a broken `repograph.toml` they never read. `embed` does read it — the model
+    // Loaded per command: `bench` reads its own from `ZEROGRAPH_BENCH_REPO`, and `explain`/`verify`
+    // must not fail on a broken `zerograph.toml` they never read. `embed` does read it — the model
     // the vectors are written with lives there — so it fails on a broken one like the other writers.
     let load_cfg = || config::Config::load(&repo);
     let wipe = matches!(cli.cmd, Cmd::Build);
     match cli.cmd {
         Cmd::Update { detach: true } => {
             refresh::spawn_update(&repo, cli.no_dense)?;
-            eprintln!("update: started in the background; .repograph/background.log has its output");
+            eprintln!("update: started in the background; .zerograph/background.log has its output");
             Ok(())
         }
         Cmd::Build | Cmd::Update { detach: false } => {
@@ -944,7 +944,7 @@ fn run(cli: Cli) -> anyhow::Result<()> {
             let r = run_update(&repo, &cfg, wipe)?;
             println!("changed {} removed {} nodes {} edges {}", r.changed, r.removed, r.nodes, r.edges);
             if r.orphan_questions {
-                eprintln!("repograph: .repograph/questions.json and questions.bin are no longer read (enrich was removed in 0.6.0); delete them");
+                eprintln!("zerograph: .zerograph/questions.json and questions.bin are no longer read (enrich was removed in 0.6.0); delete them");
             }
             embed_all(&repo, cli.no_dense, &cfg)
         }
@@ -958,7 +958,7 @@ fn run(cli: Cli) -> anyhow::Result<()> {
             // no rows. `build` and `update` over a tree that yields nothing keep
             // writing their empty graph and exiting 0.
             let (graph, _) = store::Store::new(&repo).load()?;
-            if graph.nodes.is_empty() { anyhow::bail!("graph is empty — run `repograph build`"); }
+            if graph.nodes.is_empty() { anyhow::bail!("graph is empty — run `zerograph build`"); }
             if cli.no_dense {
                 // Otherwise this exits 0 having printed nothing at all, which reads exactly
                 // like an embed that found every row already in place.
@@ -978,14 +978,14 @@ fn run(cli: Cli) -> anyhow::Result<()> {
             }
         }
         Cmd::Ask { words, json, seeds, bodies, rerank, rerank_local, depth, stale, no_serve } => {
-            // Before the socket, not after it: a broken `repograph.toml` is the one thing a
+            // Before the socket, not after it: a broken `zerograph.toml` is the one thing a
             // resident process would hide, and a TOML parse is nothing against a process start.
             let cfg = load_cfg()?;
             cap_pools(index::embed::threads(cfg.resources));
             let req = ask::Request { words, json, seeds, bodies, rerank, rerank_local, depth, stale, no_dense: cli.no_dense };
             // `bench` and `dump` build their own contexts and never reach this; the environment
             // variable is for everything else that must be measured against a cold process.
-            let resident = if no_serve || std::env::var_os("REPOGRAPH_NO_SERVE").is_some() { None } else { serve::try_ask(&repo, &req) };
+            let resident = if no_serve || std::env::var_os("ZEROGRAPH_NO_SERVE").is_some() { None } else { serve::try_ask(&repo, &req) };
             if let Some(reply) = resident {
                 for n in reply.stderr { eprintln!("{}", terminal_safe(&n)); }
                 eprintln!("serve: answered by the resident process");
@@ -1065,12 +1065,12 @@ fn run(cli: Cli) -> anyhow::Result<()> {
             let (graph, _) = store::Store::new(&repo).load()?;
             // Before the JSON answer: a failure under `--json` prints its own object, and two
             // objects on stdout parse as neither.
-            if json && graph.nodes.is_empty() { anyhow::bail!("graph is empty — run `repograph build`"); }
+            if json && graph.nodes.is_empty() { anyhow::bail!("graph is empty — run `zerograph build`"); }
             match json {
                 true => emit(&format!("{}\n", query::verify_json(&graph))),
                 false => emit(&query::verify(&graph)),
             }
-            if graph.nodes.is_empty() { anyhow::bail!("graph is empty — run `repograph build`"); }
+            if graph.nodes.is_empty() { anyhow::bail!("graph is empty — run `zerograph build`"); }
             Ok(())
         }
         Cmd::InstallAgent { claude, codex, command } => {
@@ -1094,7 +1094,7 @@ fn run(cli: Cli) -> anyhow::Result<()> {
                 // Codex reads its hooks from `~/.codex/hooks.json`, which is the machine's and not
                 // this repository's. Printed for a person to paste; see `agent/codex.md`.
                 if target == install_agent::Target::Codex {
-                    let hook = repo.join(".codex/hooks/repograph-hook.mjs");
+                    let hook = repo.join(".codex/hooks/zerograph-hook.mjs");
                     let abs = hook.canonicalize().unwrap_or(hook);
                     println!("\nTo run the hook on this machine, add to ~/.codex/hooks.json \
                               (merging with what is already there):\n{}\n\
@@ -1115,7 +1115,7 @@ fn run(cli: Cli) -> anyhow::Result<()> {
         Cmd::Prime { json } => {
             let store = store::Store::new(&repo);
             let (graph, _) = store.load()?;
-            if graph.nodes.is_empty() { anyhow::bail!("graph is empty — run `repograph build`"); }
+            if graph.nodes.is_empty() { anyhow::bail!("graph is empty — run `zerograph build`"); }
             let families = families::of_graph(&graph).0.len();
             let model = index::dense::DenseIndex::recorded_model(&store)?;
             let b = prime::brief(&graph, families, model.as_deref());
@@ -1233,7 +1233,7 @@ mod tests {
         let report = model_report(repo, &config::Config::default()).unwrap();
         assert!(report.contains("a-clone/chose-this"), "the store's own name is still shown: {report}");
         assert!(report.contains("has not trusted"), "{report}");
-        assert!(report.contains("`repograph model a-clone/chose-this` trusts it"), "{report}");
+        assert!(report.contains("`zerograph model a-clone/chose-this` trusts it"), "{report}");
         assert!(!report.contains("keeps answering"), "{report}");
     }
 
@@ -1274,7 +1274,7 @@ mod tests {
         let dir = doc_repo(ONE);
         let (repo, cfg) = (dir.path(), config::Config::default());
         built(repo, &cfg);
-        let saved = |name: &str| std::fs::metadata(repo.join(".repograph").join(name)).unwrap().modified().unwrap();
+        let saved = |name: &str| std::fs::metadata(repo.join(".zerograph").join(name)).unwrap().modified().unwrap();
         let (before_graph, before_manifest) = (saved("graph.json"), saved("manifest.json"));
         let (graph, refreshed) = ask::graph_for_ask(repo, &cfg, &store::Store::new(repo), false, &ask::Timing::new(), &refresh::Budget::unlimited()).map(|r| (r.graph, r.refreshed)).unwrap();
         assert!(refreshed.is_none());
@@ -1294,11 +1294,11 @@ mod tests {
         // The grammar is this build's: what is missing here is the stamps, and a store behind on
         // both would be re-read for the other reason.
         store.save_manifest(&walk::Manifest { files, stamps: Default::default(), grammar: walk::GRAMMAR, kinds: Default::default() }).unwrap();
-        let graph_before = std::fs::read(repo.join(".repograph/graph.json")).unwrap();
+        let graph_before = std::fs::read(repo.join(".zerograph/graph.json")).unwrap();
         assert!(ask::graph_for_ask(repo, &cfg, &store, false, &ask::Timing::new(), &refresh::Budget::unlimited()).map(|r| (r.graph, r.refreshed)).unwrap().1.is_none());
         let manifest = store.load().unwrap().1;
         assert_eq!(manifest.stamps.len(), manifest.files.len());
-        assert_eq!(std::fs::read(repo.join(".repograph/graph.json")).unwrap(), graph_before);
+        assert_eq!(std::fs::read(repo.join(".zerograph/graph.json")).unwrap(), graph_before);
     }
 
     /// The resolver reads every Java file's header and declarations ahead of extraction, and an
@@ -1335,7 +1335,7 @@ mod tests {
         built(repo, &cfg);
         let store = store::Store::new(repo);
         // Read as text, not bytes: a failure here is a diff a person has to read.
-        let saved = |name: &str| std::fs::read_to_string(repo.join(".repograph").join(name)).unwrap();
+        let saved = |name: &str| std::fs::read_to_string(repo.join(".zerograph").join(name)).unwrap();
         let fresh = (saved("graph.json"), saved("manifest.json"));
 
         // What such a release leaves: one file's nodes missing from the graph, beside a manifest
@@ -1438,12 +1438,12 @@ mod tests {
         let dir = doc_repo(ONE);
         let (repo, cfg) = (dir.path(), config::Config::default());
         built(repo, &cfg);
-        let before = std::fs::read(repo.join(".repograph/graph.json")).unwrap();
+        let before = std::fs::read(repo.join(".zerograph/graph.json")).unwrap();
         std::fs::write(repo.join("docs/a.md"), TWO).unwrap();
         let (graph, refreshed) = ask::graph_for_ask(repo, &cfg, &store::Store::new(repo), true, &ask::Timing::new(), &refresh::Budget::unlimited()).map(|r| (r.graph, r.refreshed)).unwrap();
         assert!(refreshed.is_none());
         assert!(!graph.nodes.contains_key("FR-PAY-23"));
-        assert_eq!(std::fs::read(repo.join(".repograph/graph.json")).unwrap(), before);
+        assert_eq!(std::fs::read(repo.join(".zerograph/graph.json")).unwrap(), before);
     }
 
     #[test]

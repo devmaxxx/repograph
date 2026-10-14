@@ -13,7 +13,7 @@ fn repo() -> tempfile::TempDir {
     let dir = tempfile::tempdir().unwrap();
     let r = dir.path();
     // Shell is read only behind an explicit glob until its readings pass.
-    write(r, "repograph.toml", "doc_globs = []\ncode_globs = [\"**/*.sh\"]\n");
+    write(r, "zerograph.toml", "doc_globs = []\ncode_globs = [\"**/*.sh\"]\n");
     write(r, "probe/lib.sh", "lib_line() {\n  printf '%s\\n' \"$1\"\n}\n");
     write(r, "probe/quiet.sh", QUIET);
     write(r, "probe/run.sh", RUN);
@@ -61,7 +61,7 @@ fn a_function_added_to_a_sourced_script_is_called_after_an_update_of_that_script
 fn a_package_style_function_is_impacted_without_a_phantom_importer() {
     let dir = tempfile::tempdir().unwrap();
     let r = dir.path();
-    write(r, "repograph.toml", "doc_globs = []\ncode_globs = [\"**/*.sh\"]\n");
+    write(r, "zerograph.toml", "doc_globs = []\ncode_globs = [\"**/*.sh\"]\n");
     // Google's shell style names a library's functions `package::function`, one `word` to bash.
     write(r, "lib.sh", "log::info() {\n  :\n}\n");
     write(r, "run.sh", ". ./lib.sh\nlog::info start\n");

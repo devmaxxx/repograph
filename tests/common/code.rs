@@ -1,8 +1,8 @@
 //! The two helpers the crate's own code cases read through, copied: `#[cfg(test)]` items in the
 //! library are not compiled into the crate an integration test links.
 
-use repograph::code::engine::{EdgeKind, Extraction, Resolver};
-use repograph::Config;
+use zerograph::code::engine::{EdgeKind, Extraction, Resolver};
+use zerograph::Config;
 
 /// `files` on disk and a resolver over them with `globs` as the only code globs, so a case reads
 /// the one language it names and nothing the defaults would add.

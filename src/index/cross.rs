@@ -18,7 +18,7 @@ pub const PICK: usize = 5;
 
 pub struct CrossEncoder { session: Session, tokenizer: Tokenizer, wants_type_ids: bool }
 
-/// Where `optimum-cli export onnx` was told to write: `~/.cache/repograph/reranker`, beside
+/// Where `optimum-cli export onnx` was told to write: `~/.cache/zerograph/reranker`, beside
 /// the embedder's own cache, unless the config names another directory.
 pub fn default_dir() -> Result<PathBuf> {
     Ok(crate::index::cache_root()?.join("reranker"))
@@ -170,9 +170,9 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs the exported model: set REPOGRAPH_RERANKER_DIR"]
+    #[ignore = "needs the exported model: set ZEROGRAPH_RERANKER_DIR"]
     fn the_model_prefers_the_passage_that_answers_the_question() {
-        let dir = std::env::var("REPOGRAPH_RERANKER_DIR").expect("REPOGRAPH_RERANKER_DIR");
+        let dir = std::env::var("ZEROGRAPH_RERANKER_DIR").expect("ZEROGRAPH_RERANKER_DIR");
         let mut m = CrossEncoder::open(Path::new(&dir), crate::index::embed::threads(crate::index::embed::Resources::default())).unwrap();
         let s = m.score("how is a client's phone number stored", &[
             "Phone numbers are normalised to E.164 before they are stored.".into(),

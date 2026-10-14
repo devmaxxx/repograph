@@ -10,12 +10,12 @@ use std::path::Path;
 use std::process::Command;
 
 /// Kotlin and Java are read behind an explicit glob until L7 puts them in the defaults. The globs go
-/// in the child's environment so no `repograph.toml` is written.
+/// in the child's environment so no `zerograph.toml` is written.
 fn ok(repo: &Path, args: &[&str]) {
-    let out = Command::new(env!("CARGO_BIN_EXE_repograph"))
-        .env_remove("REPOGRAPH_BENCH_REPO")
-        .env_remove("REPOGRAPH_EMBED_MODEL")
-        .env("REPOGRAPH_CODE_GLOBS", "**/*.kt **/*.java")
+    let out = Command::new(env!("CARGO_BIN_EXE_zerograph"))
+        .env_remove("ZEROGRAPH_BENCH_REPO")
+        .env_remove("ZEROGRAPH_EMBED_MODEL")
+        .env("ZEROGRAPH_CODE_GLOBS", "**/*.kt **/*.java")
         .arg("--no-dense")
         .arg("--repo")
         .arg(repo)
@@ -32,7 +32,7 @@ fn write(repo: &Path, rel: &str, contents: impl AsRef<[u8]>) {
 }
 
 /// `run`, decoded: whether the binary exited 0, and its stdout and stderr as text.
-fn repograph(repo: &Path, args: &[&str]) -> (bool, String, String) {
+fn zerograph(repo: &Path, args: &[&str]) -> (bool, String, String) {
     let out = common::run(repo, args);
     (out.status.success(), String::from_utf8_lossy(&out.stdout).into_owned(), String::from_utf8_lossy(&out.stderr).into_owned())
 }
@@ -41,7 +41,7 @@ fn repograph(repo: &Path, args: &[&str]) -> (bool, String, String) {
 type Edges = BTreeSet<(String, String, String, String)>;
 
 fn edges(repo: &Path) -> Edges {
-    let text = std::fs::read_to_string(repo.join(".repograph/graph.json")).unwrap();
+    let text = std::fs::read_to_string(repo.join(".zerograph/graph.json")).unwrap();
     let graph: serde_json::Value = serde_json::from_str(&text).unwrap();
     let field = |e: &serde_json::Value, k: &str| e[k].as_str().unwrap_or_default().to_string();
     graph["edges"].as_array().unwrap().iter().map(|e| (field(e, "source"), field(e, "target"), field(e, "kind"), field(e, "context"))).collect()
@@ -203,7 +203,7 @@ const PROBE_BYTES: &[u8] = b"package a\n\n// \xff\n";
 fn jvm_repo() -> tempfile::TempDir {
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path();
-    write(repo, "repograph.toml", b"code_globs = [\"**/*.kt\", \"**/*.java\"]\n");
+    write(repo, "zerograph.toml", b"code_globs = [\"**/*.kt\", \"**/*.java\"]\n");
     write(repo, "a/A.kt", b"package a\n\nimport shop.Fresh\n\nclass A(private val x: Fresh) {\n    fun f() { x.go() }\n}\n");
     write(repo, "a/B.kt", b"package a\n\nclass B {\n    fun g() = 1\n}\n");
     write(repo, PROBE, PROBE_BYTES);
@@ -214,15 +214,15 @@ fn jvm_repo() -> tempfile::TempDir {
 fn a_declaration_added_in_java_reaches_the_unchanged_kotlin_file_that_uses_it() {
     let dir = jvm_repo();
     let repo = dir.path();
-    let (ok, _, err) = repograph(repo, &["build"]);
+    let (ok, _, err) = zerograph(repo, &["build"]);
     // A binary under a JVM glob must not stop the index walk, or the probe could not exist.
     assert!(ok, "{err}");
     write(repo, "shop/Fresh.java", b"package shop;\n\npublic class Fresh {\n    public void go() {}\n}\n");
-    let (ok, out, err) = repograph(repo, &["update"]);
+    let (ok, out, err) = zerograph(repo, &["update"]);
     assert!(ok, "{err}");
     assert!(out.starts_with("changed 1 removed 0"), "only the new file is in the diff: {out}");
     assert!(err.contains(&format!("skipping {PROBE}: not UTF-8")), "an added declaration re-reads the family: {err}");
-    let (ok, out, err) = repograph(repo, &["impact", "Fresh"]);
+    let (ok, out, err) = zerograph(repo, &["impact", "Fresh"]);
     assert!(ok, "{err}");
     assert!(out.contains("a/A.kt"), "A.kt was re-read, so it now calls Fresh.go and imports Fresh: {out}");
 }
@@ -231,10 +231,10 @@ fn a_declaration_added_in_java_reaches_the_unchanged_kotlin_file_that_uses_it() 
 fn a_file_removed_from_the_family_widens_too() {
     let dir = jvm_repo();
     let repo = dir.path();
-    let (ok, _, err) = repograph(repo, &["build"]);
+    let (ok, _, err) = zerograph(repo, &["build"]);
     assert!(ok, "{err}");
     std::fs::remove_file(repo.join("a/B.kt")).unwrap();
-    let (ok, out, err) = repograph(repo, &["update"]);
+    let (ok, out, err) = zerograph(repo, &["update"]);
     assert!(ok, "{err}");
     assert!(out.starts_with("changed 0 removed 1"), "{out}");
     assert!(err.contains(&format!("skipping {PROBE}: not UTF-8")), "a removed file re-reads the family: {err}");
@@ -244,10 +244,10 @@ fn a_file_removed_from_the_family_widens_too() {
 fn a_body_only_edit_re_reads_that_file_alone() {
     let dir = jvm_repo();
     let repo = dir.path();
-    let (ok, _, err) = repograph(repo, &["build"]);
+    let (ok, _, err) = zerograph(repo, &["build"]);
     assert!(ok, "{err}");
     write(repo, "a/B.kt", b"package a\n\nclass B {\n    fun g() = 2\n}\n");
-    let (ok, out, err) = repograph(repo, &["update"]);
+    let (ok, out, err) = zerograph(repo, &["update"]);
     assert!(ok, "{err}");
     assert!(out.starts_with("changed 1 removed 0"), "{out}");
     assert!(!err.contains(PROBE), "a body-only edit does not widen: {err}");
@@ -257,13 +257,13 @@ fn a_body_only_edit_re_reads_that_file_alone() {
 fn a_call_path_crosses_from_kotlin_to_java_and_back() {
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path();
-    write(repo, "repograph.toml", b"code_globs = [\"**/*.kt\", \"**/*.java\"]\n");
+    write(repo, "zerograph.toml", b"code_globs = [\"**/*.kt\", \"**/*.java\"]\n");
     write(repo, "app/Start.kt", b"package app\n\nimport shop.Middle\n\nclass Start(private val mid: Middle) {\n    fun run() { mid.pass() }\n}\n");
     write(repo, "shop/Middle.java", b"package shop;\n\nimport app.End;\n\npublic class Middle {\n    private final End end = new End();\n    public void pass() { end.finish(); }\n}\n");
     write(repo, "app/End.kt", b"package app\n\nclass End {\n    fun finish() {}\n}\n");
-    let (ok, _, err) = repograph(repo, &["build"]);
+    let (ok, _, err) = zerograph(repo, &["build"]);
     assert!(ok, "{err}");
-    let (ok, out, err) = repograph(repo, &["trace", "Start", "End"]);
+    let (ok, out, err) = zerograph(repo, &["trace", "Start", "End"]);
     assert!(ok, "{out}{err}");
     assert!(out.contains("shop/Middle.java"), "the path runs through the Java class: {out}");
     assert!(out.contains("app/End.kt"), "{out}");

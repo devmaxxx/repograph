@@ -1,6 +1,6 @@
 ---
 name: extractor-case
-description: Add or fix a TypeScript/markdown extraction case in repograph — pin the grammar shape, write the failing inline case, fix, then prove the corpus and the bench floors did not move.
+description: Add or fix a TypeScript/markdown extraction case in zerograph — pin the grammar shape, write the failing inline case, fix, then prove the corpus and the bench floors did not move.
 ---
 
 # extractor-case
@@ -18,10 +18,10 @@ the construct and its expected shape together.
    `ambient_declaration`). Print the S-expression:
 
    ```bash
-   REPOGRAPH_DUMP='export * as ns from "./lib";' cargo test dump_tree -- --ignored --nocapture
+   ZEROGRAPH_DUMP='export * as ns from "./lib";' cargo test dump_tree -- --ignored --nocapture
    ```
 
-   A `.tsx` shape needs `REPOGRAPH_DUMP_TSX=1`.
+   A `.tsx` shape needs `ZEROGRAPH_DUMP_TSX=1`.
 
 2. **Write the case first and watch it fail.** Helpers in `cases.rs`: `extract(rel, src)` for
    a file with no neighbours, `Repo::new(&[(path, contents)])` when an import must resolve,
@@ -42,10 +42,10 @@ the construct and its expected shape together.
    ```bash
    cargo test && cargo clippy --all-targets
    cargo build --release
-   target/release/repograph --repo <corpus> --no-dense build   # vectors survive a build
-   target/release/repograph --repo <corpus> verify | head -3   # node and edge counts by kind
-   target/release/repograph --repo <corpus> bench              # floors: 24/24, 7/14, 3/3
-   target/release/repograph --repo <corpus> --no-dense bench   # floors: 24/24, 3/14, 3/3
+   target/release/zerograph --repo <corpus> --no-dense build   # vectors survive a build
+   target/release/zerograph --repo <corpus> verify | head -3   # node and edge counts by kind
+   target/release/zerograph --repo <corpus> bench              # floors: 24/24, 7/14, 3/3
+   target/release/zerograph --repo <corpus> --no-dense bench   # floors: 24/24, 3/14, 3/3
    ```
 
    Compare the `verify` counts with the previous build's: a fix that names more symbols moves

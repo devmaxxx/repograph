@@ -1,10 +1,12 @@
 /target
+/.zerograph
+# A store built under the old name, which stays until a write moves it to .zerograph.
 /.repograph
 /.superpowers
 /.fastembed_cache
 /dist
-/npm/*/bin/repograph
-/npm/*/bin/repograph.exe
+/npm/*/bin/zerograph
+/npm/*/bin/zerograph.exe
 /npm/*/node_modules
 /bench/compare/__pycache__
 

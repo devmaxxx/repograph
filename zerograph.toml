@@ -1,19 +1,19 @@
-# repograph's own config for indexing itself. It sets every key to the shipped
+# zerograph's own config for indexing itself. It sets every key to the shipped
 # default (see src/config.rs), so it also serves as the worked example the
 # README's Configure section walks through.
 doc_globs = ["**/*.md"]
 code_globs = ["**/*.ts", "**/*.tsx", "**/*.js", "**/*.jsx", "**/*.mjs", "**/*.cjs", "**/*.kt", "**/*.java", "**/*.cs", "**/*.rs", "**/*.py", "**/*.dart", "**/*.swift", "**/*.gql", "**/*.graphql", "**/*.sql", "**/*.bicep", "**/*.tf", "**/*.hcl", "**/*.sh", "**/*.bash", "**/*.vue"]
-skip = ["**/node_modules/**", "**/dist/**", "**/*.min.js", "**/.yarn/**", "**/.pnp.*", "**/target/**", "**/.venv/**", "**/venv/**", "**/__pycache__/**", "**/.terraform/**", "**/.dart_tool/**", "**/Pods/**", "**/TRACKER.md", "graphify-out/**", ".repograph/**"]
+skip = ["**/node_modules/**", "**/dist/**", "**/*.min.js", "**/.yarn/**", "**/.pnp.*", "**/target/**", "**/.venv/**", "**/venv/**", "**/__pycache__/**", "**/.terraform/**", "**/.dart_tool/**", "**/Pods/**", "**/TRACKER.md", "graphify-out/**", ".zerograph/**"]
 registries = ["docs/constitution.yaml"]
 
 # There is no key for id families: they are the prefixes the documents define —
 # `**FR-PAY-22 · MUST · …**`, `## FR-CAL-40 · …`, a `BE-M01-….md`, a registry row.
-# `repograph families` prints what was derived and what was left as text.
+# `zerograph families` prints what was derived and what was left as text.
 
 # The one stage that spends model tokens, opt-in (`ask --rerank`), is a shell command reading its
 # prompt on stdin — and not a key this file may set. A repository is something a reader clones,
 # and `rerank_command` is a command that would then run on their machine. It lives in
-# ~/.config/repograph/config.toml, whose default is the headless Claude Code line, and any
+# ~/.config/zerograph/config.toml, whose default is the headless Claude Code line, and any
 # vendor's CLI goes there in its place:
 #   rerank_command = "codex exec --skip-git-repo-check -m {model} -o /dev/stdout"
 #   rerank_command = "ollama run {model} --hidethinking"
@@ -22,11 +22,11 @@ registries = ["docs/constitution.yaml"]
 # `--rerank` reads 200 near-duplicate candidates in ~14-19k mostly Cyrillic tokens. Shown the
 # sentence of each that matches the question, haiku and sonnet both read 40/30/12 and 55/60 on the
 # dev suite, and haiku's tokens are the cheaper ones (ADR-004). Set once for the machine instead in
-# ~/.config/repograph/config.toml, or for one run with REPOGRAPH_RERANK_MODEL.
+# ~/.config/zerograph/config.toml, or for one run with ZEROGRAPH_RERANK_MODEL.
 rerank_model = "haiku"
 
 # `ask --rerank-local`: a local cross-encoder over the same 200-deep pool, zero tokens. Empty
-# means ~/.cache/repograph/reranker, where `optimum-cli export onnx` was pointed. Measured and
+# means ~/.cache/zerograph/reranker, where `optimum-cli export onnx` was pointed. Measured and
 # rejected against a bar of one second: 17.9 s a question, and keyword 39/40 — for tokens being
 # impossible, not for tokens being expensive.
 reranker_dir = ""
@@ -34,7 +34,7 @@ reranker_dir = ""
 # A store records the model its vectors were written with and `ask` opens that one, so this key
 # decides only what new rows are written with, not what an existing store answers by. The small
 # model is the default because a first build pays for the model before anyone knows whether they
-# need its recall (docs/adr/ADR-002-two-defaults-multiplied.md). `repograph model` prints the nine
+# need its recall (docs/adr/ADR-002-two-defaults-multiplied.md). `zerograph model` prints the nine
 # that were measured against it and rewrites this line; the readings point at
 # "onnx-community/embeddinggemma-300m-ONNX" — paraphrase 21/30 against 15/30 at five times the
 # embed, and a licence that is not an OSI one (docs/bench/2026-09-22-embedders-results.md).

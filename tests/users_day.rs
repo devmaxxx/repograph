@@ -1,5 +1,5 @@
 //! A day with the binary, on the path a person keeps a project under: a repository directory that
-//! is Cyrillic and holds a space, a `repograph.toml` written the way an editor on Windows writes
+//! is Cyrillic and holds a space, a `zerograph.toml` written the way an editor on Windows writes
 //! one, a build, a resident `serve` and a question answered through its socket, `ask --rerank` through
 //! the configured shell against a stand-in for `claude`, an edit, `update`, `changes`, and finally
 //! the server killed the way a person kills one — leaving a socket file for the next `serve` to
@@ -38,11 +38,11 @@ const SHORTER_ROOTS: &[&str] = &["/tmp"];
 #[cfg(not(unix))]
 const SHORTER_ROOTS: &[&str] = &[];
 
-fn repograph() -> Command { let mut c = Command::new(env!("CARGO_BIN_EXE_repograph")); c.env_remove("REPOGRAPH_CODE_GLOBS"); c }
+fn zerograph() -> Command { let mut c = Command::new(env!("CARGO_BIN_EXE_zerograph")); c.env_remove("ZEROGRAPH_CODE_GLOBS"); c }
 
 /// A temp directory whose repository's socket path still fits `sun_path`. macOS hands out
 /// `/private/var/folders/…/T/` — around 57 bytes before anything of ours — and the name above
-/// plus `.repograph/serve.sock` wants 46 more, which is over that platform's 104. So the root is
+/// plus `.zerograph/serve.sock` wants 46 more, which is over that platform's 104. So the root is
 /// chosen by the length it leaves rather than taken as given, and if none is short enough the
 /// test says the number instead of failing inside a bind.
 fn short_root() -> tempfile::TempDir {
@@ -51,7 +51,7 @@ fn short_root() -> tempfile::TempDir {
     for root in roots {
         let Ok(dir) = tempfile::Builder::new().prefix("rg").tempdir_in(&root) else { continue };
         let real = dir.path().canonicalize().unwrap_or_else(|_| dir.path().to_path_buf());
-        let sock = real.join(REPO_DIR).join(".repograph").join("serve.sock");
+        let sock = real.join(REPO_DIR).join(".zerograph").join("serve.sock");
         let len = sock.to_string_lossy().len();
         if len < SUN_LEN { return dir; }
         longest = format!("{len} bytes at {}", sock.display());
@@ -67,7 +67,7 @@ fn git(repo: &Path, args: &[&str]) {
         .env_remove("GIT_DIR").env_remove("GIT_WORK_TREE").env_remove("GIT_INDEX_FILE")
         .env_remove("GIT_COMMON_DIR").env_remove("GIT_OBJECT_DIRECTORY")
         .env_remove("GIT_ALTERNATE_OBJECT_DIRECTORIES")
-        .args(["-c", "user.name=repograph tests", "-c", "user.email=tests@example.invalid", "-c", "commit.gpgsign=false"])
+        .args(["-c", "user.name=zerograph tests", "-c", "user.email=tests@example.invalid", "-c", "commit.gpgsign=false"])
         .args(args).output().unwrap_or_else(|e| panic!("git {args:?}: {e}"));
     assert!(out.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&out.stderr));
 }
@@ -75,7 +75,7 @@ fn git(repo: &Path, args: &[&str]) {
 struct Run { out: String, err: String }
 
 fn run(repo: &Path, args: &[&str], shell_path: Option<&Path>) -> Run {
-    let mut cmd = repograph();
+    let mut cmd = zerograph();
     cmd.arg("--no-dense").arg("--repo").arg(repo).args(args);
     // On the child, never on this process: tests share one environment and run at once.
     if let Some(dir) = shell_path { cmd.env("PATH", stand_in_path(dir)); }
@@ -84,7 +84,7 @@ fn run(repo: &Path, args: &[&str], shell_path: Option<&Path>) -> Run {
         out: String::from_utf8_lossy(&out.stdout).into_owned(),
         err: String::from_utf8_lossy(&out.stderr).into_owned(),
     };
-    assert!(out.status.success(), "repograph {args:?} exited {}: {}{}", out.status, r.out, r.err);
+    assert!(out.status.success(), "zerograph {args:?} exited {}: {}{}", out.status, r.out, r.err);
     r
 }
 
@@ -131,11 +131,11 @@ fn a_repository_under_a_cyrillic_directory_with_a_space_is_built_served_asked_re
     std::fs::write(repo.join("README.md"), "# Проект\n\nЗаписи и оплаты.\n").unwrap();
     // What the README tells a user to write, so the store this test makes is not also a file the
     // diff below has to explain.
-    std::fs::write(repo.join(".gitignore"), ".repograph/\n").unwrap();
+    std::fs::write(repo.join(".gitignore"), ".zerograph/\n").unwrap();
     // A byte-order mark and CRLF endings: the bytes Notepad and Visual Studio write, and the
     // bytes a file authored on Windows still has when a colleague reads it on Linux. toml_parser
     // drops the mark in its lexer, which is why this is expected to parse rather than to fail.
-    std::fs::write(repo.join("repograph.toml"), "\u{feff}id_families = [\"FR-PAY\", \"FR-CAL\", \"INV\"]\r\n").unwrap();
+    std::fs::write(repo.join("zerograph.toml"), "\u{feff}id_families = [\"FR-PAY\", \"FR-CAL\", \"INV\"]\r\n").unwrap();
     git(&repo, &["-c", "init.defaultBranch=main", "init", "-q"]);
     git(&repo, &["add", "-A"]);
     git(&repo, &["commit", "-q", "--no-verify", "-m", "the project as it stands"]);
@@ -144,7 +144,7 @@ fn a_repository_under_a_cyrillic_directory_with_a_space_is_built_served_asked_re
     let nodes = built.out.split_whitespace().skip_while(|w| *w != "nodes").nth(1).unwrap_or("0");
     assert!(nodes.parse::<u32>().unwrap_or(0) > 0, "the walk found nothing under this path: {}{}", built.out, built.err);
 
-    let mut server = repograph().arg("--no-dense").arg("--repo").arg(&repo)
+    let mut server = zerograph().arg("--no-dense").arg("--repo").arg(&repo)
         .args(["serve", "--every", "3600", "--idle", "120"])
         .stdout(Stdio::null()).stderr(Stdio::piped()).spawn().unwrap();
     let direct = run(&repo, &["ask", "--no-serve", "штраф"], None).out;
@@ -180,11 +180,11 @@ fn a_repository_under_a_cyrillic_directory_with_a_space_is_built_served_asked_re
 
     // Killed, which is what `Stop-Process` and a closed terminal both are: no exit runs, so the
     // socket file stays. The README says so, and the next `serve` is what sweeps it.
-    let sock = repo.join(".repograph/serve.sock");
+    let sock = repo.join(".zerograph/serve.sock");
     server.kill().unwrap();
     let _ = server.wait();
     assert!(std::fs::symlink_metadata(&sock).is_ok(), "a killed server left no socket to sweep");
-    let swept = repograph().arg("--no-dense").arg("--repo").arg(&repo).args(["serve", "--idle", "1"]).output().unwrap();
+    let swept = zerograph().arg("--no-dense").arg("--repo").arg(&repo).args(["serve", "--idle", "1"]).output().unwrap();
     let err = String::from_utf8_lossy(&swept.stderr).into_owned();
     assert!(swept.status.success(), "the next serve would not bind over the dead socket: {err}");
     assert!(err.contains("idle for 1s"), "{err}");

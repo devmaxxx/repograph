@@ -9,12 +9,12 @@ use std::process::{Command, Output};
 use std::time::{Duration, Instant};
 
 fn reader(repo: &Path, budget: &str, args: &[&str]) -> Output {
-    Command::new(env!("CARGO_BIN_EXE_repograph"))
-        .env_remove("REPOGRAPH_BENCH_REPO")
-        .env_remove("REPOGRAPH_EMBED_MODEL")
-        .env_remove("REPOGRAPH_CODE_GLOBS")
-        .env_remove("REPOGRAPH_TEXT_GLOBS")
-        .env("REPOGRAPH_READER_BUDGET", budget)
+    Command::new(env!("CARGO_BIN_EXE_zerograph"))
+        .env_remove("ZEROGRAPH_BENCH_REPO")
+        .env_remove("ZEROGRAPH_EMBED_MODEL")
+        .env_remove("ZEROGRAPH_CODE_GLOBS")
+        .env_remove("ZEROGRAPH_TEXT_GLOBS")
+        .env("ZEROGRAPH_READER_BUDGET", budget)
         .arg("--no-dense")
         .arg("--repo")
         .arg(repo)
@@ -42,7 +42,7 @@ fn built() -> tempfile::TempDir {
 }
 
 fn lock_file(repo: &Path) -> std::fs::File {
-    std::fs::OpenOptions::new().create(true).truncate(false).write(true).open(repo.join(".repograph/writer.lock")).unwrap()
+    std::fs::OpenOptions::new().create(true).truncate(false).write(true).open(repo.join(".zerograph/writer.lock")).unwrap()
 }
 
 /// Waits until no writer holds the store's lock, so the temporary directory is not removed from
@@ -84,7 +84,7 @@ fn over_budget_the_stored_graph_answers_and_a_detached_update_catches_it_up() {
     };
     assert!(fresh.get("stale").is_none(), "an answer that is not behind carries no `stale`: {fresh}");
     settle(repo);
-    let log = std::fs::read_to_string(repo.join(".repograph/background.log")).unwrap();
+    let log = std::fs::read_to_string(repo.join(".zerograph/background.log")).unwrap();
     assert!(log.contains("changed 1 removed 0"), "the detached update wrote its report to the log: {log}");
 }
 
@@ -101,7 +101,7 @@ fn a_reader_that_finds_the_lock_held_answers_stale_and_starts_nothing() {
     assert_eq!(v["stale"]["files"], serde_json::json!(["audit.ts"]), "{v}");
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(stderr.contains("index: 1 file behind, a refresh is already running"), "{stderr}");
-    assert!(!repo.join(".repograph/background.log").exists(), "no refresh was started");
+    assert!(!repo.join(".zerograph/background.log").exists(), "no refresh was started");
 
     drop(held);
     let v = json(&reader(repo, "10", &["impact", "write", "--json"]));

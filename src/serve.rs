@@ -1,4 +1,4 @@
-//! `repograph serve`: the store, the vectors, the model and the indexes held by one process
+//! `zerograph serve`: the store, the vectors, the model and the indexes held by one process
 //! that answers `ask` over a Unix socket. A fused answer costs a process ~220 ms to open the
 //! model (measured on the bench corpus) and 5 ms to use it; a resident one pays the open once.
 use crate::{ask, config};
@@ -166,7 +166,7 @@ fn ack_line() -> String { serde_json::to_string(&Ack { ack: VERSION.into() }).un
 /// cost every question half that timer: at 50 ms, measured, half a lexical answer.
 const WAKE: Duration = Duration::from_millis(250);
 
-/// The socket a repository's server binds and its clients connect to: `.repograph/serve.sock`,
+/// The socket a repository's server binds and its clients connect to: `.zerograph/serve.sock`,
 /// which is where a person looks for it — unless that name will not fit in `sun_path`, 104 bytes
 /// on macOS including the NUL, in which case a name derived from the canonical repository path
 /// goes in `fallback_dir`. 100 rather than 104 is one margin for every platform, and
@@ -174,7 +174,7 @@ const WAKE: Duration = Duration::from_millis(250);
 /// never half-taken. The hash names a file; it defends nothing, which is why it is four lines of
 /// FNV rather than a dependency.
 pub fn socket_path(repo: &Path) -> PathBuf {
-    let in_repo = repo.join(".repograph").join("serve.sock");
+    let in_repo = repo.join(".zerograph").join("serve.sock");
     if in_repo.as_os_str().len() <= 100 { return in_repo; }
     let canonical = std::fs::canonicalize(repo).unwrap_or_else(|_| repo.to_path_buf());
     let mut h: u64 = 0xcbf2_9ce4_8422_2325;
@@ -182,7 +182,7 @@ pub fn socket_path(repo: &Path) -> PathBuf {
         h ^= u64::from(*b);
         h = h.wrapping_mul(0x0000_0100_0000_01b3);
     }
-    fallback_dir().join(format!("repograph-{h:016x}.sock"))
+    fallback_dir().join(format!("zerograph-{h:016x}.sock"))
 }
 
 /// Where a socket goes when the repository's own path is too long. `/tmp` is shared, and a name
@@ -192,7 +192,7 @@ pub fn socket_path(repo: &Path) -> PathBuf {
 #[cfg(unix)]
 fn fallback_dir() -> PathBuf {
     // SAFETY: geteuid has no preconditions and cannot fail.
-    std::env::temp_dir().join(format!("repograph-{}", unsafe { libc::geteuid() }))
+    std::env::temp_dir().join(format!("zerograph-{}", unsafe { libc::geteuid() }))
 }
 
 #[cfg(not(unix))]
@@ -201,7 +201,7 @@ fn fallback_dir() -> PathBuf { std::env::temp_dir() }
 /// Makes the directory a socket will be bound in, refusing one that is not ours alone: another
 /// user may have created the name first, or planted a symlink at it, and a socket bound there is
 /// theirs to read and replace. Only the fallback directory is checked; the repository's own
-/// `.repograph` is the repository owner's to protect.
+/// `.zerograph` is the repository owner's to protect.
 #[cfg(unix)]
 fn prepare_socket_dir(path: &Path) -> Result<()> {
     use std::os::unix::fs::{DirBuilderExt, MetadataExt, PermissionsExt};
@@ -223,10 +223,10 @@ fn prepare_socket_dir(path: &Path) -> Result<()> {
 #[cfg(not(unix))]
 fn prepare_socket_dir(_path: &Path) -> Result<()> { Ok(()) }
 
-/// What a `stat` says about `repograph.toml`, or None where there is none — the configuration a
+/// What a `stat` says about `zerograph.toml`, or None where there is none — the configuration a
 /// one-shot `ask` would read, watched so a resident process cannot answer under an older one.
 fn config_stamp(repo: &Path) -> Option<crate::walk::Stamp> {
-    crate::walk::stamp_of(&std::fs::metadata(repo.join("repograph.toml")).ok()?)
+    crate::walk::stamp_of(&std::fs::metadata(repo.join("zerograph.toml")).ok()?)
 }
 
 /// What a `stat` says about the executable at this process's own path, or None where it cannot be
@@ -345,7 +345,7 @@ pub fn run(repo: &Path, cfg: &config::Config, every: u64, batch: usize, idle: u6
     // was at its path when it started, and nothing it stats later can still say so.
     let build = build_stamp();
     // Before the socket is touched: the unlink and the bind below would otherwise act inside
-    // whatever directory a clone pointed `.repograph` at.
+    // whatever directory a clone pointed `.zerograph` at.
     crate::store::Store::new(repo).refuse_linked_dir()?;
     let path = socket_path(repo);
     prepare_socket_dir(&path)?;
@@ -418,7 +418,7 @@ pub fn run(repo: &Path, cfg: &config::Config, every: u64, batch: usize, idle: u6
             // for as long as it ran. Leaving is the whole of the fix — the next `ask` answers
             // in its own process under the new file, and the next `serve` starts under it too.
             if config_stamp(repo) != cfg_stamp {
-                eprintln!("serve: repograph.toml changed, exiting — start serve again to answer under it");
+                eprintln!("serve: zerograph.toml changed, exiting — start serve again to answer under it");
                 return Ok(());
             }
             adopt_if_moved(&mut watcher, &mut ctx, batch)?;
@@ -632,15 +632,15 @@ mod tests {
         let deep = std::path::PathBuf::from("/private/tmp").join("a".repeat(120));
         let p = socket_path(&deep);
         assert!(p.as_os_str().len() <= 100, "{}", p.display());
-        assert!(p.file_name().unwrap().to_string_lossy().starts_with("repograph-"), "{}", p.display());
+        assert!(p.file_name().unwrap().to_string_lossy().starts_with("zerograph-"), "{}", p.display());
         #[cfg(unix)]
-        assert!(p.parent().unwrap().ends_with(format!("repograph-{}", unsafe { libc::geteuid() })), "the fallback is a directory of the user's own: {}", p.display());
+        assert!(p.parent().unwrap().ends_with(format!("zerograph-{}", unsafe { libc::geteuid() })), "the fallback is a directory of the user's own: {}", p.display());
         assert_eq!(socket_path(&deep), p, "a client that computes it again finds the same name");
         assert_ne!(socket_path(&deep.join("x")), p, "another repository is another socket");
     }
 
     /// `serve` unlinks a stale socket and binds a new one before anything else touches the store,
-    /// so a `.repograph` that is a link was acted on before `ensure_dir` could refuse it.
+    /// so a `.zerograph` that is a link was acted on before `ensure_dir` could refuse it.
     #[cfg(unix)]
     #[test]
     fn a_store_directory_that_is_a_link_is_refused_before_its_socket_is_unlinked() {
@@ -650,8 +650,8 @@ mod tests {
         std::fs::write(outside.join("serve.sock"), "victim\n").unwrap();
         let repo = d.path().join("repo");
         std::fs::create_dir_all(&repo).unwrap();
-        std::os::unix::fs::symlink(&outside, repo.join(".repograph")).unwrap();
-        assert_eq!(socket_path(&repo), repo.join(".repograph/serve.sock"), "the socket is where the link leads");
+        std::os::unix::fs::symlink(&outside, repo.join(".zerograph")).unwrap();
+        assert_eq!(socket_path(&repo), repo.join(".zerograph/serve.sock"), "the socket is where the link leads");
         let err = super::run(&repo, &crate::config::Config::default(), 1, 1, 1, 0, true).unwrap_err();
         assert!(format!("{err:#}").contains("symlink"), "{err:#}");
         assert_eq!(std::fs::read_to_string(outside.join("serve.sock")).unwrap(), "victim\n");
@@ -660,7 +660,7 @@ mod tests {
     #[test]
     fn a_shallow_repository_keeps_the_socket_it_has_always_had() {
         let p = socket_path(std::path::Path::new("/tmp/r"));
-        assert!(p.ends_with(".repograph/serve.sock"), "{}", p.display());
+        assert!(p.ends_with(".zerograph/serve.sock"), "{}", p.display());
     }
 
     /// The two facts `try_ask` and `Unlink` read off the socket file, through the platform's own
@@ -690,7 +690,7 @@ mod tests {
     #[test]
     fn a_server_that_never_answers_hands_a_reranked_question_back_on_the_first_line() {
         let dir = tempfile::tempdir().unwrap();
-        std::fs::create_dir_all(dir.path().join(".repograph")).unwrap();
+        std::fs::create_dir_all(dir.path().join(".zerograph")).unwrap();
         let listener = sys::bind(&socket_path(dir.path())).unwrap();
         // Accepts, reads nothing, replies nothing -- a wedged worker, a process under a debugger,
         // a reranker child that hung.
@@ -712,7 +712,7 @@ mod tests {
     #[test]
     fn a_connection_acknowledged_before_its_hello_is_read_keeps_the_long_wait() {
         let dir = tempfile::tempdir().unwrap();
-        std::fs::create_dir_all(dir.path().join(".repograph")).unwrap();
+        std::fs::create_dir_all(dir.path().join(".zerograph")).unwrap();
         let listener = sys::bind(&socket_path(dir.path())).unwrap();
         let build = build_stamp();
         let held = std::thread::spawn(move || {
@@ -736,7 +736,7 @@ mod tests {
     #[test]
     fn a_reply_that_arrives_after_the_ack_still_extends_the_wait_to_find_it() {
         let dir = tempfile::tempdir().unwrap();
-        std::fs::create_dir_all(dir.path().join(".repograph")).unwrap();
+        std::fs::create_dir_all(dir.path().join(".zerograph")).unwrap();
         let listener = sys::bind(&socket_path(dir.path())).unwrap();
         let build = build_stamp();
         let held = std::thread::spawn(move || {
@@ -764,7 +764,7 @@ mod tests {
     #[test]
     fn a_reply_already_behind_a_closed_peer_is_read_even_when_extending_the_timeout_fails() {
         let dir = tempfile::tempdir().unwrap();
-        std::fs::create_dir_all(dir.path().join(".repograph")).unwrap();
+        std::fs::create_dir_all(dir.path().join(".zerograph")).unwrap();
         let listener = sys::bind(&socket_path(dir.path())).unwrap();
         let build = build_stamp();
         let held = std::thread::spawn(move || {

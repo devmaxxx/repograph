@@ -25,24 +25,24 @@ pub const DEFAULT_MODEL: &str = "onnx-community/embeddinggemma-300m-ONNX";
 /// store is today's default, and re-embed it whole to find out otherwise.
 pub const UNNAMED_MODEL: &str = "intfloat/multilingual-e5-small";
 
-/// The model a writer opens: `REPOGRAPH_EMBED_MODEL` when set — a measurement's switch that
+/// The model a writer opens: `ZEROGRAPH_EMBED_MODEL` when set — a measurement's switch that
 /// outranks the file — else the configured one. `DenseIndex::written_by` drops rows another model
 /// wrote before the sync.
 pub fn writer_model(configured: &str) -> String {
-    named(std::env::var("REPOGRAPH_EMBED_MODEL").ok().as_deref()).unwrap_or(configured).to_string()
+    named(std::env::var("ZEROGRAPH_EMBED_MODEL").ok().as_deref()).unwrap_or(configured).to_string()
 }
 
 /// The model a reader opens: the override when set, else what the store's vectors were written
 /// with, so a store answers with what wrote it, else the configured one.
 ///
-/// The recorded model is read out of `.repograph/vectors.json`, which a cloned repository can
-/// commit, so it passes the same trust gate as a model `repograph.toml` names: otherwise a clone
+/// The recorded model is read out of `.zerograph/vectors.json`, which a cloned repository can
+/// commit, so it passes the same trust gate as a model `zerograph.toml` names: otherwise a clone
 /// would choose the model this machine downloads and parses, the gate's whole exposure. A model
 /// turned away is `Err` with the notice, and the reader goes lexical-only: opening the configured
 /// model instead would search the store's rows with another model's queries, and a refreshing
 /// reader would re-embed the whole store under it.
 pub fn reader_model(recorded: Option<&str>, configured: &str) -> Result<String, String> {
-    resolve_from(std::env::var("REPOGRAPH_EMBED_MODEL").ok().as_deref(), recorded, configured, crate::config::model_is_trusted)
+    resolve_from(std::env::var("ZEROGRAPH_EMBED_MODEL").ok().as_deref(), recorded, configured, crate::config::model_is_trusted)
 }
 
 fn named(m: Option<&str>) -> Option<&str> { m.map(str::trim).filter(|m| !m.is_empty()) }
@@ -59,11 +59,11 @@ fn resolve_from(override_: Option<&str>, recorded: Option<&str>, configured: &st
     }
 }
 
-/// Whether the store should be moved to the model `repograph.toml` names: only a model the
-/// project file itself names, so a store embedded under `REPOGRAPH_EMBED_MODEL` to be measured is
+/// Whether the store should be moved to the model `zerograph.toml` names: only a model the
+/// project file itself names, so a store embedded under `ZEROGRAPH_EMBED_MODEL` to be measured is
 /// never pulled back to the built-in default, and never while that override is set.
 pub fn switch_owed(named: bool, recorded: Option<&str>, configured: &str) -> bool {
-    switch_owed_from(std::env::var("REPOGRAPH_EMBED_MODEL").ok().as_deref(), named, recorded, configured)
+    switch_owed_from(std::env::var("ZEROGRAPH_EMBED_MODEL").ok().as_deref(), named, recorded, configured)
 }
 
 fn switch_owed_from(override_: Option<&str>, named: bool, recorded: Option<&str>, configured: &str) -> bool {
@@ -75,7 +75,7 @@ fn switch_owed_from(override_: Option<&str>, named: bool, recorded: Option<&str>
 /// lexical-only answer, or a refused run — but a caller wording the width differently from the
 /// others would send a reader looking for three separate faults.
 pub fn width_mismatch(dim: usize, model: &str, got: usize) -> String {
-    format!("the store's vectors are {dim}-d and {model} gives {got}-d — run `repograph embed`")
+    format!("the store's vectors are {dim}-d and {model} gives {got}-d — run `zerograph embed`")
 }
 const MAX_TOKENS: usize = 256;
 /// Texts per forward. Kept beside the token budget rather than replaced by it: sixty-four
@@ -118,7 +118,7 @@ pub(crate) fn set_cache_dir(dir: PathBuf) {
 }
 
 /// The `.fastembed_cache`-under-cwd default of the hub client re-downloads the model per
-/// directory `repograph` is run from — 2.1 GB for the default one — and fails outright on a
+/// directory `zerograph` is run from — 2.1 GB for the default one — and fails outright on a
 /// read-only one.
 fn cache_dir() -> Result<PathBuf> {
     if let Some(dir) = CACHE_OVERRIDE.get() {
@@ -202,7 +202,7 @@ pub const PARAPHRASE_CASES: u32 = 30;
 
 /// A model this project has measured end to end — one run each, on the pinned beauty-crm fixture's
 /// 33,525 rows, enriched store, no rerank, fp32 ONNX on CPU
-/// (docs/bench/2026-09-22-embedders-results.md). One list, so that `repograph model`, docs/embeddings.md's
+/// (docs/bench/2026-09-22-embedders-results.md). One list, so that `zerograph model`, docs/embeddings.md's
 /// table and the prose quote the same figures; every id in it resolves to a profile `profile`
 /// recognises, which a test holds.
 pub struct Measured {
@@ -356,7 +356,7 @@ pub enum Resources {
     Full,
 }
 
-/// The configured level unless `REPOGRAPH_RESOURCES` names another, in the shape the other run
+/// The configured level unless `ZEROGRAPH_RESOURCES` names another, in the shape the other run
 /// variables use: unset or empty keeps what the files said.
 pub fn resources_from_env(configured: Resources, var: Option<&str>) -> Result<Resources> {
     let Some(raw) = var else { return Ok(configured) };
@@ -368,7 +368,7 @@ pub fn resources_from_env(configured: Resources, var: Option<&str>) -> Result<Re
         "low" => Ok(Resources::Low),
         "balanced" => Ok(Resources::Balanced),
         "full" => Ok(Resources::Full),
-        other => bail!("REPOGRAPH_RESOURCES is {other:?}, which is none of \"low\", \"balanced\" or \"full\""),
+        other => bail!("ZEROGRAPH_RESOURCES is {other:?}, which is none of \"low\", \"balanced\" or \"full\""),
     }
 }
 
@@ -762,7 +762,7 @@ mod tests {
     fn a_store_cannot_name_a_model_this_machine_has_not_trusted() {
         let trusted = |m: &str| m == "a/b";
         let notice = resolve_from(None, Some("evil/model"), "c/d", trusted).expect_err("no model is opened for it");
-        assert!(notice.contains("\"evil/model\"") && notice.contains("lexical-only") && notice.contains("`repograph model evil/model`"), "{notice}");
+        assert!(notice.contains("\"evil/model\"") && notice.contains("lexical-only") && notice.contains("`zerograph model evil/model`"), "{notice}");
         assert_eq!(resolve_from(None, Some("a/b"), "c/d", trusted), Ok("a/b".to_string()));
     }
 
@@ -776,7 +776,7 @@ mod tests {
 
     #[test]
     fn a_name_a_clone_wrote_is_echoed_escaped_and_never_offered_as_a_command() {
-        let notice = resolve_from(None, Some("x\n`repograph model y; rm -rf ~`\u{1b}[31m"), "c/d", |_| false).unwrap_err();
+        let notice = resolve_from(None, Some("x\n`zerograph model y; rm -rf ~`\u{1b}[31m"), "c/d", |_| false).unwrap_err();
         assert!(!notice.contains(['\n', '\u{1b}']), "{notice:?}");
         assert!(notice.contains("not a plain hub id") && !notice.contains("trusts it"), "{notice}");
     }
@@ -890,7 +890,7 @@ mod tests {
         assert_eq!(resources_from_env(Resources::Balanced, Some("")).unwrap(), Resources::Balanced);
         assert_eq!(resources_from_env(Resources::Balanced, Some(" LOW ")).unwrap(), Resources::Low);
         let err = resources_from_env(Resources::Balanced, Some("half")).unwrap_err().to_string();
-        assert!(err.contains("REPOGRAPH_RESOURCES"), "{err}");
+        assert!(err.contains("ZEROGRAPH_RESOURCES"), "{err}");
     }
 
     #[test]

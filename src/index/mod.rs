@@ -6,12 +6,12 @@ pub mod lexical;
 
 use anyhow::Context as _;
 
-/// `~/.cache/repograph`, the root of every cache this process keeps: the embedder's files and the
+/// `~/.cache/zerograph`, the root of every cache this process keeps: the embedder's files and the
 /// exported reranker. Read through the platform's idea of home rather than `$HOME`, which a
 /// Windows console never sets; there it is the profile directory.
 pub fn cache_root() -> anyhow::Result<std::path::PathBuf> {
     let home = std::env::home_dir().context("no home directory to keep the model cache under")?;
-    Ok(home.join(".cache").join("repograph"))
+    Ok(home.join(".cache").join("zerograph"))
 }
 
 #[cfg(test)]
@@ -22,6 +22,6 @@ mod tests {
     #[test]
     fn the_cache_root_is_under_the_home_the_platform_names() {
         let home = std::env::home_dir().expect("a home directory");
-        assert_eq!(super::cache_root().unwrap(), home.join(".cache").join("repograph"));
+        assert_eq!(super::cache_root().unwrap(), home.join(".cache").join("zerograph"));
     }
 }

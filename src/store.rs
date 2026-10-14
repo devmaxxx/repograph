@@ -74,7 +74,7 @@ pub(crate) fn rename_over(from: &Path, to: &Path) -> std::io::Result<()> {
 fn is_link(p: &Path) -> bool { std::fs::symlink_metadata(p).is_ok_and(|m| m.file_type().is_symlink()) }
 
 /// Opens a store file, never through a symlink. A cloned repository controls every entry under
-/// `.repograph/`, so a committed link there would carry this process's write — a log line, a
+/// `.zerograph/`, so a committed link there would carry this process's write — a log line, a
 /// vector row, a truncation — to a file outside the repository. The check names the refusal; the
 /// open flag closes the gap between the check and the open.
 pub(crate) fn open_unlinked(o: &mut std::fs::OpenOptions, p: &Path) -> std::io::Result<std::fs::File> {
@@ -96,7 +96,7 @@ fn open_nofollow(o: &mut std::fs::OpenOptions, p: &Path) -> std::io::Result<std:
 }
 
 impl Store {
-    pub fn new(repo: &Path) -> Store { Store { dir: repo.join(".repograph") } }
+    pub fn new(repo: &Path) -> Store { Store { dir: repo.join(".zerograph") } }
 
     pub fn load(&self) -> Result<(Graph, Manifest)> { self.load_traced().map(|(g, m, _)| (g, m)) }
 
@@ -147,7 +147,7 @@ impl Store {
     /// lock refused for this reason writes nothing, where a read-only checkout writes unlocked.
     pub(crate) fn has_link(&self) -> bool { is_link(&self.dir) || is_link(&self.dir.join("writer.lock")) }
 
-    /// A `.repograph` that is itself a link is refused for the same reason a link inside it is:
+    /// A `.zerograph` that is itself a link is refused for the same reason a link inside it is:
     /// every write and every unlink under it would land wherever the clone pointed it. For a
     /// process that touches the directory without going through `ensure_dir` first.
     pub(crate) fn refuse_linked_dir(&self) -> Result<()> {
@@ -158,7 +158,7 @@ impl Store {
     }
 
     /// The store holds passages of the repository's documents and code, so it carries its own `.gitignore`: a `git add -A` in a repository that
-    /// never listed `.repograph/` would otherwise commit it.
+    /// never listed `.zerograph/` would otherwise commit it.
     pub(crate) fn ensure_dir(&self) -> Result<()> {
         self.refuse_linked_dir()?;
         std::fs::create_dir_all(&self.dir)?;
@@ -309,7 +309,7 @@ impl Store {
         match f.try_lock() {
             Ok(()) => Ok(Some(WriterLock(f))),
             Err(std::fs::TryLockError::WouldBlock) => Ok(None),
-            Err(std::fs::TryLockError::Error(e)) => Err(e).context("lock .repograph/writer.lock"),
+            Err(std::fs::TryLockError::Error(e)) => Err(e).context("lock .zerograph/writer.lock"),
         }
     }
 
@@ -317,7 +317,7 @@ impl Store {
     /// the store to be brought in line and would rather wait for a running refresh than skip it.
     pub fn lock_writer(&self) -> Result<WriterLock> {
         let f = self.lock_file()?;
-        f.lock().context("lock .repograph/writer.lock")?;
+        f.lock().context("lock .zerograph/writer.lock")?;
         Ok(WriterLock(f))
     }
 
@@ -353,7 +353,7 @@ mod tests {
         let d = tempfile::tempdir().unwrap();
         let store = Store::new(d.path());
         drop(store.try_lock_writer().unwrap());
-        let dir = d.path().join(".repograph");
+        let dir = d.path().join(".zerograph");
         assert_eq!(std::fs::read_to_string(dir.join(".gitignore")).unwrap(), "*\n");
     }
 
@@ -391,7 +391,7 @@ mod tests {
         let store = Store::new(d.path());
         let g = graph("Заголовок");
         store.save(&g, &Manifest::default()).unwrap();
-        assert!(d.path().join(".repograph/graph.bin").exists());
+        assert!(d.path().join(".zerograph/graph.bin").exists());
         let (g2, _, source) = store.load_traced().unwrap();
         assert_eq!(source, Source::Mirror);
         assert_eq!(g2.nodes, g.nodes);
@@ -416,7 +416,7 @@ mod tests {
         let d = tempfile::tempdir().unwrap();
         let store = Store::new(d.path());
         store.save(&graph("x"), &Manifest::default()).unwrap();
-        let p = d.path().join(".repograph/graph.bin");
+        let p = d.path().join(".zerograph/graph.bin");
         let mut bytes = std::fs::read(&p).unwrap();
         bytes.truncate(MIRROR_HEADER + 3);
         std::fs::write(&p, bytes).unwrap();
@@ -430,7 +430,7 @@ mod tests {
         let d = tempfile::tempdir().unwrap();
         let store = Store::new(d.path());
         store.save(&graph("x"), &Manifest::default()).unwrap();
-        let p = d.path().join(".repograph/graph.bin");
+        let p = d.path().join(".zerograph/graph.bin");
         let mut bytes = std::fs::read(&p).unwrap();
         bytes[4..10].copy_from_slice(b"9.9.9\0");
         std::fs::write(&p, bytes).unwrap();
@@ -453,11 +453,11 @@ mod tests {
         e.edge("FR-1", "FR-2", crate::model::EdgeKind::References, "body", "docs/a.md");
         g.apply(e);
         let old = OldGraph { nodes: g.nodes.clone(), edges: g.edges.clone() };
-        std::fs::create_dir_all(dir.path().join(".repograph")).unwrap();
+        std::fs::create_dir_all(dir.path().join(".zerograph")).unwrap();
         store.write_atomic("graph.json", &serde_json::to_vec(&old).unwrap()).unwrap();
         store.write_atomic("manifest.json", b"{\"files\":{}}").unwrap();
         // The older release's mirror: its magic, its stamp, its struct.
-        let now = stamp(&dir.path().join(".repograph/graph.json")).unwrap();
+        let now = stamp(&dir.path().join(".zerograph/graph.json")).unwrap();
         let mut bytes = mirror_header(now).to_vec();
         bytes[..4].copy_from_slice(b"RGM1");
         bytes.extend(postcard::to_stdvec(&old).unwrap());
@@ -475,7 +475,7 @@ mod tests {
         let store = Store::new(d.path());
         let g = graph("x");
         store.save(&g, &Manifest::default()).unwrap();
-        std::fs::remove_file(d.path().join(".repograph/graph.bin")).unwrap();
+        std::fs::remove_file(d.path().join(".zerograph/graph.bin")).unwrap();
         let (_, _, source) = store.load_traced().unwrap();
         let Source::Json(read) = source else { panic!("{source:?}") };
         store.write_mirror("graph.json", read, &g).unwrap();
@@ -495,7 +495,7 @@ mod tests {
         g.apply(e);
         let m = Manifest::default();
         store.save(&g, &m).unwrap();
-        assert!(d.path().join(".repograph/graph.json").exists());
+        assert!(d.path().join(".zerograph/graph.json").exists());
         assert_eq!(tmps(d.path()), Vec::<String>::new());
         let (g2, _) = store.load().unwrap();
         assert_eq!(g2.nodes.len(), 1);
@@ -507,13 +507,13 @@ mod tests {
         let d = tempfile::tempdir().unwrap();
         let store = Store::new(d.path());
         store.save(&Graph::default(), &Manifest::default()).unwrap();
-        std::fs::write(d.path().join(".repograph/graph.json"), "{ not json").unwrap();
+        std::fs::write(d.path().join(".zerograph/graph.json"), "{ not json").unwrap();
         let err = store.load().unwrap_err().to_string();
         assert!(err.contains("graph.json"), "{err}");
     }
 
     fn tmps(repo: &Path) -> Vec<String> {
-        std::fs::read_dir(repo.join(".repograph")).unwrap().flatten()
+        std::fs::read_dir(repo.join(".zerograph")).unwrap().flatten()
             .map(|e| e.file_name().to_string_lossy().into_owned())
             .filter(|n| n.ends_with(".tmp")).collect()
     }
@@ -522,8 +522,8 @@ mod tests {
     fn a_leftover_tmp_from_a_crashed_write_is_not_read_and_is_dropped() {
         let d = tempfile::tempdir().unwrap();
         let store = Store::new(d.path());
-        std::fs::create_dir_all(d.path().join(".repograph")).unwrap();
-        let old = d.path().join(".repograph/graph.json.1.0.tmp");
+        std::fs::create_dir_all(d.path().join(".zerograph")).unwrap();
+        let old = d.path().join(".zerograph/graph.json.1.0.tmp");
         std::fs::write(&old, "garbage").unwrap();
         let hour_ago = std::time::SystemTime::now() - std::time::Duration::from_secs(3600);
         std::fs::File::options().write(true).open(&old).unwrap().set_modified(hour_ago).unwrap();
@@ -538,8 +538,8 @@ mod tests {
     fn a_temp_file_another_writer_is_saving_right_now_is_kept() {
         let d = tempfile::tempdir().unwrap();
         let store = Store::new(d.path());
-        std::fs::create_dir_all(d.path().join(".repograph")).unwrap();
-        std::fs::write(d.path().join(".repograph/graph.json.2.0.tmp"), "half a graph").unwrap();
+        std::fs::create_dir_all(d.path().join(".zerograph")).unwrap();
+        std::fs::write(d.path().join(".zerograph/graph.json.2.0.tmp"), "half a graph").unwrap();
         store.drop_leftovers().unwrap();
         assert_eq!(tmps(d.path()), vec!["graph.json.2.0.tmp".to_string()]);
     }
@@ -557,7 +557,7 @@ mod tests {
         e.node(NodeKind::File, "file:a.md", "a.md", "", "a.md", 1);
         g.apply(e);
         store.save(&g, &Manifest::default()).unwrap();
-        let dir = d.path().join(".repograph");
+        let dir = d.path().join(".zerograph");
         std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o555)).unwrap();
         let failed = store.save(&Graph::default(), &Manifest::default()).is_err();
         std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).unwrap();
@@ -593,7 +593,7 @@ mod tests {
         let d = tempfile::tempdir().unwrap();
         let store = Store::new(d.path());
         store.save(&graph("first"), &Manifest::default()).unwrap();
-        std::fs::remove_file(d.path().join(".repograph/graph.bin")).unwrap();
+        std::fs::remove_file(d.path().join(".zerograph/graph.bin")).unwrap();
         let (stale, _, source) = store.load_traced().unwrap();
         let Source::Json(read) = source else { panic!("{source:?}") };
         store.save(&graph("a second, longer label"), &Manifest::default()).unwrap();
@@ -641,8 +641,8 @@ mod tests {
         s.write_atomic("vectors.f32", b"v").unwrap();
         s.write_atomic("headers.json", b"{}").unwrap();
         s.drop_leftovers().unwrap();
-        assert!(d.path().join(".repograph/graph.json").exists());
-        assert!(d.path().join(".repograph/manifest.json").exists());
+        assert!(d.path().join(".zerograph/graph.json").exists());
+        assert!(d.path().join(".zerograph/manifest.json").exists());
         assert_eq!(s.read_bytes("vectors.f32").unwrap().as_deref(), Some(&b"v"[..]));
         assert_eq!(s.read_bytes("headers.json").unwrap().as_deref(), Some(&b"{}"[..]));
     }
@@ -656,7 +656,7 @@ mod tests {
         assert_eq!(store.read_bytes("vectors.f32").unwrap().as_deref(), Some(&b"keepmore"[..]));
     }
 
-    // A cloned repository commits `.repograph/` whole, links included. Each write a reader or
+    // A cloned repository commits `.zerograph/` whole, links included. Each write a reader or
     // writer makes there must stay inside it: the file outside is left exactly as it was.
     #[cfg(unix)]
     #[test]
@@ -665,10 +665,10 @@ mod tests {
         let outside = d.path().join("outside");
         std::fs::write(&outside, "victim\n").unwrap();
         let repo = d.path().join("repo");
-        std::fs::create_dir_all(repo.join(".repograph")).unwrap();
+        std::fs::create_dir_all(repo.join(".zerograph")).unwrap();
         let store = Store::new(&repo);
         let plant = |name: &str, to: &Path| {
-            let link = repo.join(".repograph").join(name);
+            let link = repo.join(".zerograph").join(name);
             let _ = std::fs::remove_file(&link);
             std::os::unix::fs::symlink(to, &link).unwrap();
             link
@@ -712,7 +712,7 @@ mod tests {
         let repo = d.path().join("repo");
         let store = Store::new(&repo);
         store.ensure_dir().unwrap();
-        let tmp = |n: u32| repo.join(".repograph").join(format!("graph.json.{}.{n}.tmp", std::process::id()));
+        let tmp = |n: u32| repo.join(".zerograph").join(format!("graph.json.{}.{n}.tmp", std::process::id()));
         std::os::unix::fs::symlink(&outside, tmp(0)).unwrap();
         std::fs::write(tmp(1), "left by a killed run").unwrap();
         let (got, file) = store.create_tmp("graph.json", &std::sync::atomic::AtomicU64::new(0)).unwrap();
@@ -729,7 +729,7 @@ mod tests {
         let store = Store::new(d.path());
         store.ensure_dir().unwrap();
         for n in 0..TMP_TRIES {
-            std::fs::write(d.path().join(".repograph").join(format!("graph.json.{}.{n}.tmp", std::process::id())), "x").unwrap();
+            std::fs::write(d.path().join(".zerograph").join(format!("graph.json.{}.{n}.tmp", std::process::id())), "x").unwrap();
         }
         let err = store.create_tmp("graph.json", &std::sync::atomic::AtomicU64::new(0)).unwrap_err();
         assert!(format!("{err:#}").contains("temporary names"), "{err:#}");
@@ -743,7 +743,7 @@ mod tests {
         std::fs::create_dir_all(&elsewhere).unwrap();
         let repo = d.path().join("repo");
         std::fs::create_dir_all(&repo).unwrap();
-        std::os::unix::fs::symlink(&elsewhere, repo.join(".repograph")).unwrap();
+        std::os::unix::fs::symlink(&elsewhere, repo.join(".zerograph")).unwrap();
         assert!(Store::new(&repo).save(&Graph::default(), &Manifest::default()).is_err());
         assert_eq!(std::fs::read_dir(&elsewhere).unwrap().count(), 0);
     }
@@ -771,7 +771,7 @@ mod tests {
         let d = tempfile::tempdir().unwrap();
         let store = Store::new(d.path());
         store.write_atomic("graph.json", b"old").unwrap();
-        let holder = hold_open_for(&d.path().join(".repograph/graph.json"), 100);
+        let holder = hold_open_for(&d.path().join(".zerograph/graph.json"), 100);
         store.write_atomic("graph.json", b"new").unwrap();
         holder.join().unwrap();
         assert_eq!(store.read_bytes("graph.json").unwrap().as_deref(), Some(&b"new"[..]));
@@ -786,7 +786,7 @@ mod tests {
         let d = tempfile::tempdir().unwrap();
         let store = Store::new(d.path());
         store.write_atomic("graph.json", b"old").unwrap();
-        let holder = hold_open_for(&d.path().join(".repograph/graph.json"), 1500);
+        let holder = hold_open_for(&d.path().join(".zerograph/graph.json"), 1500);
         let err = store.write_atomic("graph.json", b"new").unwrap_err();
         assert!(format!("{err:#}").contains("os error 5"), "{err:#}");
         holder.join().unwrap();

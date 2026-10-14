@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * The one repograph hook, dispatched on the event the harness names in its payload.
+ * The one zerograph hook, dispatched on the event the harness names in its payload.
  *
  *  SessionStart   → a repository brief, so the graph's state and its five commands are in context
  *                   at start and again after a compaction, without a 7k-token CLAUDE.md.
@@ -14,7 +14,7 @@
  *                   carry it ever ran the tool.
  *
  * Contract: exit 0 always, stdout only when there is something to say, stderr only under
- * REPOGRAPH_HOOK_DEBUG. Every call is --no-dense; every call but `changes` is --stale.
+ * ZEROGRAPH_HOOK_DEBUG. Every call is --no-dense; every call but `changes` is --stale.
  */
 import { existsSync, readFileSync, writeFileSync, mkdirSync, realpathSync, lstatSync } from 'node:fs';
 import { spawn, spawnSync } from 'node:child_process';
@@ -35,10 +35,10 @@ const SERVE_IDLE_MODEL = 300;   // measured on the 33.5k-row copy: 0.08 s reside
 /**
  * How this repository runs the binary, in every hint the hook prints. `install-agent --command`
  * rewrites this one line with the command JSON-encoded, so nothing in it reaches the script as code.
- * A workspace that installs repograph as a dependency has no bare `repograph` on PATH, and a hint
+ * A workspace that installs zerograph as a dependency has no bare `zerograph` on PATH, and a hint
  * naming a program the shell cannot find is one the agent runs, fails, and pays for twice.
  */
-const COMMAND = "repograph";
+const COMMAND = "zerograph";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 
@@ -47,7 +47,7 @@ const HERE = dirname(fileURLToPath(import.meta.url));
  * one there, and otherwise the copy below — the two are compared by a test, so a hook installed
  * without its text still says the same thing.
  */
-const RULE_FALLBACK = `This repository has a repograph index. Ask it before grepping for a concept: \`${COMMAND} ask <words>\`
+const RULE_FALLBACK = `This repository has a zerograph index. Ask it before grepping for a concept: \`${COMMAND} ask <words>\`
 answers by meaning, \`${COMMAND} impact <Symbol>\` names who calls a symbol, \`${COMMAND} changes\` maps
 your diff onto the callers it reaches. Read only the \`path:line\` those answers print, and cite one
 for every claim; when nothing printed holds it, say so.
@@ -55,7 +55,7 @@ Grep is still the right tool for a literal — an env var name, a string in a te
 `;
 
 const BUILD_NOTICE =
-  `repograph: this repository has no index yet. \`${COMMAND} build\` writes one in a couple of minutes ` +
+  `zerograph: this repository has no index yet. \`${COMMAND} build\` writes one in a couple of minutes ` +
   'and answers by meaning afterwards; until then this notice is all it can say.';
 
 function rule() {
@@ -64,35 +64,35 @@ function rule() {
 }
 
 function debug(...args) {
-  if (process.env.REPOGRAPH_HOOK_DEBUG) console.error('[repograph-hook]', ...args);
+  if (process.env.ZEROGRAPH_HOOK_DEBUG) console.error('[zerograph-hook]', ...args);
 }
 
 /**
- * Whether a `repograph` the machine's own PATH resolves exists, so that it can win over the
+ * Whether a `zerograph` the machine's own PATH resolves exists, so that it can win over the
  * repository's. A relative entry (`.`, `node_modules/.bin`) resolves against the repository the
  * hook runs in, so it is the repository's file and not the machine's.
  */
 function onPath() {
-  const names = process.platform === 'win32' ? ['repograph.exe', 'repograph.cmd'] : ['repograph'];
+  const names = process.platform === 'win32' ? ['zerograph.exe', 'zerograph.cmd'] : ['zerograph'];
   return (process.env.PATH || '').split(delimiter).some((d) => d && isAbsolute(d) && names.some((n) => existsSync(join(d, n))));
 }
 
 /**
- * `REPOGRAPH_BIN`, then PATH, then the package's own bin, and nothing else: a hook that installed
+ * `ZEROGRAPH_BIN`, then PATH, then the package's own bin, and nothing else: a hook that installed
  * things would not be a hook. The repository's `node_modules/.bin` comes after PATH because it is
  * the repository's own file, and a cloned repository that ships one would otherwise run its
  * binary the moment a session starts in it. npm, pnpm and yarn all write the same trio under `node_modules/.bin` — an
  * extensionless shell script, a `.cmd` and a `.ps1` — and on Windows the `.cmd` is the one that
  * starts. The extensionless shim is worse than nothing there: returning it spawns a file
- * `CreateProcess` cannot read, where falling through finds whatever `repograph.exe` an installer
+ * `CreateProcess` cannot read, where falling through finds whatever `zerograph.exe` an installer
  * put on PATH.
  */
 function binary(root) {
-  if (process.env.REPOGRAPH_BIN) return process.env.REPOGRAPH_BIN;
-  if (onPath()) return 'repograph';
-  const local = join(root, 'node_modules', '.bin', 'repograph');
+  if (process.env.ZEROGRAPH_BIN) return process.env.ZEROGRAPH_BIN;
+  if (onPath()) return 'zerograph';
+  const local = join(root, 'node_modules', '.bin', 'zerograph');
   const shim = process.platform === 'win32' ? `${local}.cmd` : local;
-  return existsSync(shim) ? shim : 'repograph';
+  return existsSync(shim) ? shim : 'zerograph';
 }
 
 /**
@@ -107,12 +107,12 @@ function binary(root) {
  * quotes and the command line has no escape for it — only a batch file's own `%%` — so a repository
  * under a directory that pairs two `%` around an environment variable's name is asked about by the
  * expanded path. And `spawnSync`'s timeout kills the interpreter rather than its child, so a wedged
- * `repograph` outlives the five seconds this hook waits. Both need a local install on Windows to
+ * `zerograph` outlives the five seconds this hook waits. Both need a local install on Windows to
  * reach at all; neither is worth the shell it would take to avoid, and neither is silent about it.
  */
 function spawnable(bin, args) {
   // Windows and a batch file, both: the extension alone would open the shell on a POSIX machine
-  // whose `REPOGRAPH_BIN` happens to end in `.cmd`, where a repository path may contain a quote
+  // whose `ZEROGRAPH_BIN` happens to end in `.cmd`, where a repository path may contain a quote
   // and the sentence above stops being true.
   if (process.platform !== 'win32' || !/\.(cmd|bat)$/i.test(bin)) return { file: bin, args, opts: {} };
   return { file: `"${bin}"`, args: args.map((a) => `"${a}"`), opts: { shell: true } };
@@ -129,11 +129,11 @@ function run(root, args) {
   return r.status === 0 ? r.stdout.replace(/[\x00-\x08\x0b-\x1f\x7f-\x9f]/g, '') : '';
 }
 
-function built(root) { return existsSync(join(root, '.repograph', 'manifest.json')); }
+function built(root) { return existsSync(join(root, '.zerograph', 'manifest.json')); }
 
 /**
  * The nearest directory at or above `start` that carries an index. The harness's `cwd` follows a
- * `cd`, and a subdirectory has no `.repograph/` of its own; the walk stops at a `.git`, file or
+ * `cd`, and a subdirectory has no `.zerograph/` of its own; the walk stops at a `.git`, file or
  * directory, so a worktree nested inside a checkout never borrows the checkout's index.
  */
 function indexRoot(start) {
@@ -248,7 +248,7 @@ export function searchPattern(tool, input) {
  */
 function stateRoot() {
   const uid = process.getuid?.();
-  const root = join(tmpdir(), uid === undefined ? 'repograph-hook' : `repograph-hook-${uid}`);
+  const root = join(tmpdir(), uid === undefined ? 'zerograph-hook' : `zerograph-hook-${uid}`);
   if (uid === undefined) return root;
   try {
     mkdirSync(root, { recursive: true, mode: 0o700 });
@@ -300,15 +300,15 @@ function isWatchedCall(tool, input) {
  * On by default because the harness said so, under a rule committed before the number was read:
  * interception ships when its tokens per hit are lower than reminder-only's. Sonnet, twice over the
  * twelve tasks — 137,991 and 129,243 tokens per hit with it, 194,011 and 169,036 without, the two
- * ranges not overlapping — and 11/11 hits against 11/9. `REPOGRAPH_HOOK_INTERCEPT=0` turns it off.
+ * ranges not overlapping — and 11/11 hits against 11/9. `ZEROGRAPH_HOOK_INTERCEPT=0` turns it off.
  * `docs/bench/2026-09-09-agent-surface-results.md` has all four runs and what they are worth.
  */
 function intercept(payload, root, sessionKey) {
-  if (process.env.REPOGRAPH_HOOK_INTERCEPT === '0') return null;
+  if (process.env.ZEROGRAPH_HOOK_INTERCEPT === '0') return null;
   const input = payload.tool_input || {};
-  // A search the agent runs *with* repograph is not one to answer beside.
-  if (payload.tool_name === 'Bash' && /\brepograph\b/.test(String(input.command || ''))) return null;
-  if (JSON.stringify(input).includes('.repograph/')) return null;
+  // A search the agent runs *with* zerograph is not one to answer beside.
+  if (payload.tool_name === 'Bash' && /\bzerograph\b/.test(String(input.command || ''))) return null;
+  if (JSON.stringify(input).includes('.zerograph/')) return null;
   const words = queryWords(searchPattern(payload.tool_name, input));
   if (!words) return null;
   if (!once(sessionKey, 'ask', words.join(' ').toLowerCase())) return null;
@@ -324,7 +324,7 @@ function reminder(payload, sessionKey) {
   if (!isWatchedCall(payload.tool_name, payload.tool_input)) return null;
   const n = bump(sessionKey, 'watched');
   return n % REMINDER_EVERY === 0
-    ? `repograph: this repository has an index — \`${COMMAND} ask <words>\` answers by meaning, no tokens.`
+    ? `zerograph: this repository has an index — \`${COMMAND} ask <words>\` answers by meaning, no tokens.`
     : null;
 }
 
@@ -355,7 +355,7 @@ function riskLine(payload, root, sessionKey) {
   if (!risk) return null;
   if (!once(sessionKey, 'risk', `${file}:${risk}`)) return null;
   const called = [...new Set(direct.map((d) => name(d.via)))].slice(0, 3).join(', ');
-  return `repograph changes: risk ${risk} — ${n} direct callers of ${called} in ${files} files; \`${COMMAND} changes --depth 1\` lists them.`;
+  return `zerograph changes: risk ${risk} — ${n} direct callers of ${called} in ${files} files; \`${COMMAND} changes --depth 1\` lists them.`;
 }
 
 function brief(root) {
@@ -371,7 +371,7 @@ function brief(root) {
  * machine that is also running a build. `--idle-model` is what keeps that cheap between questions.
  */
 function autostartServe(root) {
-  if (process.env.REPOGRAPH_HOOK_SERVE === '0') return;
+  if (process.env.ZEROGRAPH_HOOK_SERVE === '0') return;
   try {
     const { file, args, opts } = spawnable(binary(root),
       ['--repo', root, 'serve', '--idle', String(SERVE_IDLE), '--idle-model', String(SERVE_IDLE_MODEL)]);
@@ -393,7 +393,7 @@ const handlers = {
   SubagentStart: (p, root) => (built(root) ? rule() : null),
   PreToolUse: (p, root, key) => {
     if (p.tool_name === 'Agent') {
-      if (process.env.REPOGRAPH_HOOK_AGENT_INPUT !== '1') return null;
+      if (process.env.ZEROGRAPH_HOOK_AGENT_INPUT !== '1') return null;
       const prompt = String((p.tool_input || {}).prompt || '');
       return { updatedInput: { ...(p.tool_input || {}), prompt: `${prompt}\n\n${rule()}` } };
     }
@@ -417,7 +417,7 @@ async function main() {
   const event = payload.hook_event_name;
   const handler = handlers[event];
   if (!handler) return;
-  // The harness's cwd follows a `cd` into a subdirectory, which has no `.repograph/` of its own.
+  // The harness's cwd follows a `cd` into a subdirectory, which has no `.zerograph/` of its own.
   const root = (payload.cwd && indexRoot(payload.cwd)) || payload.cwd || process.env.CLAUDE_PROJECT_DIR || process.cwd();
   // The subagent's own id is in the key: a subagent shares its parent's session_id, so a counter
   // keyed by session alone finds the count already past zero on a subagent's first call and says

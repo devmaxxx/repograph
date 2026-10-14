@@ -234,7 +234,7 @@ pub fn hunks_from_git(repo: &Path, base: &str) -> anyhow::Result<Vec<Hunk>> {
     anyhow::ensure!(!base.starts_with('-'), "changes: base `{base}` is not a revision");
     // The store is written by every refresh, so in a repository that does not ignore it, it would
     // be reported as changed by the command that just wrote it.
-    const NOT_STORE: &str = ":(exclude).repograph";
+    const NOT_STORE: &str = ":(exclude).zerograph";
     let mut hunks = parse(&git(repo, &["diff", "-U0", "--no-color", "--no-ext-diff", base, "--", ".", NOT_STORE])?);
     // NUL rather than lines: turning the quoting off reaches the bytes above ASCII and no
     // further, so a name holding a newline still arrived quoted and matched nothing. Separated
@@ -586,8 +586,8 @@ mod tests {
     #[test]
     fn the_store_is_not_a_change_even_when_nothing_ignores_it() {
         let dir = quoting_repo();
-        std::fs::create_dir_all(dir.path().join(".repograph")).unwrap();
-        std::fs::write(dir.path().join(".repograph/graph.bin"), "x").unwrap();
+        std::fs::create_dir_all(dir.path().join(".zerograph")).unwrap();
+        std::fs::write(dir.path().join(".zerograph/graph.bin"), "x").unwrap();
         std::fs::write(dir.path().join("docs/new.ts"), "one\n").unwrap();
         assert_eq!(
             hunks_from_git(dir.path(), "HEAD").unwrap(),

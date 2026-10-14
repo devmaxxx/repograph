@@ -16,15 +16,15 @@ either be a literal secret or silently ignored.
 Then:
 
 ```bash
-pnpm add -D @devmaxxx/repograph    # npm: prebuilt binary for macOS arm64, Linux x64 and Windows x64
+pnpm add -D @devmaxxx/zerograph    # npm: prebuilt binary for macOS arm64, Linux x64 and Windows x64
 cargo install --path .             # from source; Rust 1.98, pinned in rust-toolchain.toml
 ```
 
-The npm package is a launcher: the binary comes from `@devmaxxx/repograph-darwin-arm64`,
-`@devmaxxx/repograph-linux-x64` or `@devmaxxx/repograph-win32-x64`, pulled in as an optional
+The npm package is a launcher: the binary comes from `@devmaxxx/zerograph-darwin-arm64`,
+`@devmaxxx/zerograph-linux-x64` or `@devmaxxx/zerograph-win32-x64`, pulled in as an optional
 dependency, so a lockfile written on one platform installs on the others. All three are under the
 same scope, so the one registry line above covers them. Tagged releases (`v*`) build all three
-binaries as GitHub release assets (a tarball for the unix ones, a zip holding `repograph.exe` for
+binaries as GitHub release assets (a tarball for the unix ones, a zip holding `zerograph.exe` for
 Windows) and cut the npm packages from those same files (`.github/workflows/release.yml`,
 publishing with the repository's own `GITHUB_TOKEN`; `scripts/npm-pack.sh` does the same by
 hand).

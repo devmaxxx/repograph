@@ -19,7 +19,7 @@ corpus (825 files, 7.5k nodes): the no-change check costs ~10 ms, and a one-file
 lexical, ~40 ms with the re-embedding — the new rows are appended to `vectors.f32` and the rows
 they replace are left as holes, so nothing rewrites 50 MB to store a row of 1.5 kB. Holes past a
 quarter of the live rows are compacted away by the next refresh, which does rewrite both files.
-`REPOGRAPH_TIMING=1` prints the stages.
+`ZEROGRAPH_TIMING=1` prints the stages.
 
 An upgrade is the one refresh that reads everything. The manifest records which generation of the
 extractor's grammar the graph beside it was read by, and where a newer generation is reading, a hash
@@ -29,7 +29,7 @@ is re-reading the whole tree and why, writes the new generation forward, and lea
 after it incremental again. A release that does not change the grammar costs no walk at all.
 
 ```bash
-repograph ask --stale отмена записи         # answer from the store as it stands, no check
+zerograph ask --stale отмена записи         # answer from the store as it stands, no check
 ```
 
 `--stale` never pays for that walk and never repairs it: it answers from the store as it stands,
@@ -38,7 +38,7 @@ which is the whole of what it promises.
 A reader never waits on a refresh longer than `reader_budget` (10 s by default). `ask`, `impact`,
 `trace`, `changes` and `explain` estimate the refresh first — about 40 ms a changed file, 5 ms a
 vector row, and then the rate the rows actually embed at — and when it does not fit, answer from the
-store as it stands, say so in one stderr line, and start one detached `repograph update` that waits
+store as it stands, say so in one stderr line, and start one detached `zerograph update` that waits
 for the store's writer lock and catches it up for the next reader:
 
 ```
@@ -54,11 +54,11 @@ as a first field, present only when it is behind, so an agent can read those fil
 {"stale":{"files":["src/billing.ts","src/refund.ts"],"vectors":0},"root":"sym:…", …}
 ```
 
-The detached refresh writes its output to `.repograph/background.log`. `repograph update --detach`
+The detached refresh writes its output to `.zerograph/background.log`. `zerograph update --detach`
 starts the same refresh by hand, and `install-agent` writes `post-merge` and `post-checkout` git
 hooks that run it, so a pull or a branch switch starts catching the store up before anyone asks. An
-existing hook keeps its own lines and gets the block appended between `# repograph:begin` and
-`# repograph:end`; `core.hooksPath` is honoured. A foreground `update` or `build` prints where its
+existing hook keeps its own lines and gets the block appended between `# zerograph:begin` and
+`# zerograph:end`; `core.hooksPath` is honoured. A foreground `update` or `build` prints where its
 embed is every two seconds:
 
 ```
@@ -69,16 +69,16 @@ Readers that do not refresh themselves — an editor plugin, an MCP server — c
 a poller instead:
 
 ```bash
-repograph watch                  # poll every 30 s, apply what changed, embed it
-repograph watch --every 15       # a tighter cadence
-repograph watch --batch 5        # save once five files are waiting, not on every one
-repograph watch --no-dense       # lexical only, leaves the 1.4 GB model unopened
+zerograph watch                  # poll every 30 s, apply what changed, embed it
+zerograph watch --every 15       # a tighter cadence
+zerograph watch --batch 5        # save once five files are waiting, not on every one
+zerograph watch --no-dense       # lexical only, leaves the 1.4 GB model unopened
 ```
 
 A refresh rewrites the whole graph, so `--batch` is there to spend that once on a burst of edits
 rather than once per file. Fewer than `--batch` files waiting are carried to the next poll, at most
 three times in a row, so a lone edit lands within four polls whatever the batch says;
-`REPOGRAPH_TIMING=1` reports each deferral.
+`ZEROGRAPH_TIMING=1` reports each deferral.
 
 It prints one line per refresh and exits on Ctrl-C; every store write is a temp file and a rename,
 so interrupting it cannot leave half a graph behind. An idle poll is the walk and nothing else —
@@ -90,7 +90,7 @@ Git hooks are the free alternative to a poller or a resident process, for a repo
 ```sh
 # .git/hooks/post-merge, .git/hooks/post-checkout, .git/hooks/post-commit
 #!/bin/sh
-exec repograph --repo "$(git rev-parse --show-toplevel)" update
+exec zerograph --repo "$(git rev-parse --show-toplevel)" update
 ```
 
 `chmod +x` each of them. `post-checkout` and `post-merge` cover a branch switch and a pull;

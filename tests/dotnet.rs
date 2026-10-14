@@ -5,7 +5,7 @@ mod common;
 
 use std::path::Path;
 
-fn repograph(repo: &Path, args: &[&str]) -> (bool, String, String) {
+fn zerograph(repo: &Path, args: &[&str]) -> (bool, String, String) {
     let out = common::run(repo, args);
     (out.status.success(), String::from_utf8_lossy(&out.stdout).into_owned(), String::from_utf8_lossy(&out.stderr).into_owned())
 }
@@ -20,7 +20,7 @@ fn write(repo: &Path, rel: &str, text: &str) {
 const TOML: &str = "code_globs = [\"**/*.cs\", \"**/*.razor\", \"**/*.cshtml\"]\n";
 
 fn ok(repo: &Path, args: &[&str]) -> String {
-    let (ok, out, err) = repograph(repo, args);
+    let (ok, out, err) = zerograph(repo, args);
     assert!(ok, "{args:?} failed: {err}");
     out
 }
@@ -29,7 +29,7 @@ fn ok(repo: &Path, args: &[&str]) -> String {
 fn a_type_added_in_an_enclosing_namespace_reaches_the_unchanged_file_that_uses_it() {
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path();
-    write(repo, "repograph.toml", TOML);
+    write(repo, "zerograph.toml", TOML);
     write(repo, "Orders/Checkout.cs", "namespace Shop.Orders;\npublic class Checkout\n{\n    private readonly Fresh _fresh;\n    public void Pay() { _fresh.Go(); }\n}\n");
     write(repo, "Orders/Old.cs", "namespace Shop.Orders;\npublic class Old {}\n");
     ok(repo, &["build"]);
@@ -43,7 +43,7 @@ fn a_type_added_in_an_enclosing_namespace_reaches_the_unchanged_file_that_uses_i
 fn a_member_renamed_without_touching_the_header_re_reads_that_file_alone() {
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path();
-    write(repo, "repograph.toml", TOML);
+    write(repo, "zerograph.toml", TOML);
     write(repo, "Orders/Checkout.cs", "namespace Shop.Orders;\npublic class Checkout\n{\n    private readonly Shop.Payments.Gateway _gateway;\n    public void Pay() { _gateway.Charge(); }\n}\n");
     write(repo, "Payments/Gateway.cs", "namespace Shop.Payments;\npublic class Gateway\n{\n    public void Charge() {}\n}\n");
     ok(repo, &["build"]);
@@ -60,7 +60,7 @@ fn a_member_renamed_without_touching_the_header_re_reads_that_file_alone() {
 fn a_partial_type_is_one_type_across_its_files() {
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path();
-    write(repo, "repograph.toml", TOML);
+    write(repo, "zerograph.toml", TOML);
     write(repo, "Shop/OrderService.Bedrock.cs", "namespace Shop;\npublic partial class OrderService\n{\n    public void Place() {}\n}\n");
     write(repo, "Shop/OrderService.Billing.cs", "namespace Shop;\npartial class OrderService\n{\n    public void Bill() { Place(); }\n}\n");
     write(repo, "Shop/Checkout.cs", "namespace Shop;\npublic class Checkout\n{\n    private readonly OrderService _orders;\n    public void Pay() { _orders.Bill(); }\n}\n");
@@ -70,7 +70,7 @@ fn a_partial_type_is_one_type_across_its_files() {
     let trace = ok(repo, &["trace", "Checkout.Pay", "OrderService.Place"]);
     assert!(trace.contains("OrderService.Bill"), "{trace}");
     // Each part declares the type in its own file, so the bare name is two nodes and names neither.
-    let (named, _, err) = repograph(repo, &["impact", "OrderService"]);
+    let (named, _, err) = zerograph(repo, &["impact", "OrderService"]);
     assert!(!named && err.contains("sym:Shop/OrderService.Billing.cs::OrderService"), "{err}");
     let importers = ok(repo, &["impact", "sym:Shop/OrderService.Bedrock.cs::OrderService"]);
     assert!(importers.contains("Shop/OrderService.Bedrock.cs") && importers.contains("Shop/Checkout.cs"), "{importers}");
@@ -80,7 +80,7 @@ fn a_partial_type_is_one_type_across_its_files() {
 fn a_component_is_rendered_by_the_tag_that_names_it_and_a_new_one_reaches_its_users() {
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path();
-    write(repo, "repograph.toml", TOML);
+    write(repo, "zerograph.toml", TOML);
     write(repo, "Web/Shop.Web.csproj", "<Project Sdk=\"Microsoft.NET.Sdk.Web\"><PropertyGroup><RootNamespace>Shop.Web</RootNamespace></PropertyGroup></Project>\n");
     write(repo, "Web/_Imports.razor", "@using Shop.Payments\n@using Shop.Web.Shared\n");
     write(repo, "Payments/IPaymentGateway.cs", "namespace Shop.Payments;\npublic interface IPaymentGateway { void Charge(int amount); }\n");
@@ -101,7 +101,7 @@ fn a_component_is_rendered_by_the_tag_that_names_it_and_a_new_one_reaches_its_us
 fn an_imports_file_that_gains_a_using_reaches_the_components_below_it() {
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path();
-    write(repo, "repograph.toml", TOML);
+    write(repo, "zerograph.toml", TOML);
     write(repo, "Web/_Imports.razor", "@using Shop.Payments\n");
     write(repo, "Badges/Badge.razor", "@namespace Shop.Badges\n<span>badge</span>\n");
     write(repo, "Web/Pages/Checkout.razor", "<Badge />\n");

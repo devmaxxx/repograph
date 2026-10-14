@@ -288,7 +288,7 @@ mod tests {
         assert_eq!(r2.concepts_created, 0);
 
         // "99-x.md" is `ghost`'s graphify source_file, now stored in `body`, not `file`.
-        // Removing it as a repograph-tracked path must not touch the concept at all.
+        // Removing it as a zerograph-tracked path must not touch the concept at all.
         g.remove_file("99-x.md");
         g.remove_file("docs/prd/06-payments.md");
         assert!(g.nodes.contains_key("legacy:ghost"));

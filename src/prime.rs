@@ -1,4 +1,4 @@
-//! `repograph prime`: what a coding agent should be told about this repository at the start of a
+//! `zerograph prime`: what a coding agent should be told about this repository at the start of a
 //! session, in a few hundred tokens rather than a few thousand. Every number is read off the store
 //! rather than claimed by prose — which embedder the vectors belong to, how many families the documents define — because a brief that is wrong about the
 //! store sends an agent to a command that will answer badly, which is worse than saying nothing.
@@ -31,7 +31,7 @@ impl Brief {
     /// an agent that reads only the first line still learns whether this store can answer it.
     pub fn text(&self) -> String {
         format!(
-            "repograph: {} doc nodes, {} code nodes, {} edges, {} id families\n\
+            "zerograph: {} doc nodes, {} code nodes, {} edges, {} id families\n\
              model={}\n\
              ask <words> — what the docs and code say about it, by meaning not by grep\n\
              impact <symbol> — who calls it, how far, how risky a change is\n\

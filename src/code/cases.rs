@@ -181,30 +181,30 @@ fn a_malformed_package_json_or_tsconfig_does_not_abort_the_walk() {
     assert_eq!(r.resolve("apps/a.ts", "@x/ok").as_deref(), Some("packages/ok/src/index.ts"));
 }
 
-/// A development aid, not a test: prints the tree-sitter S-expression of `REPOGRAPH_DUMP`, so a
-/// case can be written against a grammar's real shape. `REPOGRAPH_DUMP` is a path to a file, whose
-/// extension picks the grammar; or inline source, named by `REPOGRAPH_DUMP_AS` (`dump.ts` unless
-/// set, `dump.tsx` under `REPOGRAPH_DUMP_TSX`).
-/// `REPOGRAPH_DUMP='export * as ns from "./lib";' cargo test dump_tree -- --ignored --nocapture`
-/// `REPOGRAPH_DUMP=path/to/Order.cs cargo test dump_tree -- --ignored --nocapture`
-/// With `REPOGRAPH_DUMP_CAPTURES` set it also prints each capture of the language's two queries, so a
+/// A development aid, not a test: prints the tree-sitter S-expression of `ZEROGRAPH_DUMP`, so a
+/// case can be written against a grammar's real shape. `ZEROGRAPH_DUMP` is a path to a file, whose
+/// extension picks the grammar; or inline source, named by `ZEROGRAPH_DUMP_AS` (`dump.ts` unless
+/// set, `dump.tsx` under `ZEROGRAPH_DUMP_TSX`).
+/// `ZEROGRAPH_DUMP='export * as ns from "./lib";' cargo test dump_tree -- --ignored --nocapture`
+/// `ZEROGRAPH_DUMP=path/to/Order.cs cargo test dump_tree -- --ignored --nocapture`
+/// With `ZEROGRAPH_DUMP_CAPTURES` set it also prints each capture of the language's two queries, so a
 /// query is written against what it matches rather than against what it was meant to.
 #[test]
 #[ignore]
 fn dump_tree() {
-    let arg = std::env::var("REPOGRAPH_DUMP").expect("set REPOGRAPH_DUMP to a file, or to the source to parse");
+    let arg = std::env::var("ZEROGRAPH_DUMP").expect("set ZEROGRAPH_DUMP to a file, or to the source to parse");
     let (rel, src) = match std::fs::read(&arg) {
         Ok(bytes) => (arg, bytes),
         Err(_) => {
-            let named = std::env::var("REPOGRAPH_DUMP_AS").ok();
-            let rel = named.unwrap_or_else(|| if std::env::var_os("REPOGRAPH_DUMP_TSX").is_some() { "dump.tsx".into() } else { "dump.ts".into() });
+            let named = std::env::var("ZEROGRAPH_DUMP_AS").ok();
+            let rel = named.unwrap_or_else(|| if std::env::var_os("ZEROGRAPH_DUMP_TSX").is_some() { "dump.tsx".into() } else { "dump.ts".into() });
             (rel, arg.into_bytes())
         }
     };
     let lang = crate::code::lang::Lang::of(&rel).unwrap_or_else(|| panic!("no grammar reads {rel}"));
     let tree = lang.parse(&src).unwrap_or_else(|| panic!("{lang:?} is read by blanking, not by a grammar of its own"));
     println!("{}", tree.root_node().to_sexp());
-    if std::env::var_os("REPOGRAPH_DUMP_CAPTURES").is_some() {
+    if std::env::var_os("ZEROGRAPH_DUMP_CAPTURES").is_some() {
         use streaming_iterator::StreamingIterator;
         for (part, compiled) in [("decl", crate::code::queries::decl(lang)), ("refs", crate::code::queries::refs(lang))] {
             let Some(c) = compiled else {

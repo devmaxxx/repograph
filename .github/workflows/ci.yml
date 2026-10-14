@@ -23,9 +23,9 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { os: ubuntu-latest, exe: target/debug/repograph, pack: linux-x64 }
-          - { os: macos-14, exe: target/debug/repograph, pack: darwin-arm64 }
-          - { os: windows-latest, exe: target/debug/repograph.exe, pack: win32-x64 }
+          - { os: ubuntu-latest, exe: target/debug/zerograph, pack: linux-x64 }
+          - { os: macos-14, exe: target/debug/zerograph, pack: darwin-arm64 }
+          - { os: windows-latest, exe: target/debug/zerograph.exe, pack: win32-x64 }
     runs-on: ${{ matrix.os }}
     steps:
       # The repository is LF throughout and the tests compare bytes; a checkout the runner's
@@ -183,7 +183,7 @@ jobs:
           git checkout -- README.md
 
       # The `### On Windows` section of the README, verbatim, on a runner: a repository under a
-      # Cyrillic path with a space, a `repograph.toml` as Windows PowerShell 5.1 writes one
+      # Cyrillic path with a space, a `zerograph.toml` as Windows PowerShell 5.1 writes one
       # (byte-order mark, CRLF), the background server started the way the README says to start
       # one, and the socket a `Stop-Process` leaves for the next `serve` to sweep. The same day
       # in Rust is `tests/users_day.rs`, which runs on all three; what only this can judge is the
@@ -202,11 +202,11 @@ jobs:
           # mark and CRLF, which is what an editor on this platform leaves in the file. Re-encoded
           # from a plain copy so the command line carries no quoting of its own to get wrong.
           Set-Content -Encoding utf8 "$R\toml.src" @('id_families = ["FR-PAY"]', 'embed_model = "intfloat/multilingual-e5-small"')
-          powershell.exe -NoProfile -Command "Get-Content '$R\toml.src' | Out-File -Encoding utf8 '$R\repograph.toml'"
+          powershell.exe -NoProfile -Command "Get-Content '$R\toml.src' | Out-File -Encoding utf8 '$R\zerograph.toml'"
           Remove-Item "$R\toml.src"
-          $head = [System.IO.File]::ReadAllBytes("$R\repograph.toml")[0..2] -join ','
+          $head = [System.IO.File]::ReadAllBytes("$R\zerograph.toml")[0..2] -join ','
           if ($head -ne '239,187,191') { Fail "PowerShell 5.1 stopped writing a byte-order mark; this step no longer tests one: $head" }
-          $exe = "$env:GITHUB_WORKSPACE\target\debug\repograph.exe"
+          $exe = "$env:GITHUB_WORKSPACE\target\debug\zerograph.exe"
           $built = (& $exe --repo $R build) | Out-String
           if ($built -notmatch 'nodes [1-9]') { Fail "the build under a Cyrillic path wrote no nodes: $built" }
           # The README's own line, and its working directory rather than a `--repo` of its own:
@@ -227,7 +227,7 @@ jobs:
           }
           if ($answer -notmatch 'Штраф за отмену') { Fail "the resident process answered something else: $answer" }
           Stop-Process -Id $serve.Id
-          $sock = "$R\.repograph\serve.sock"
+          $sock = "$R\.zerograph\serve.sock"
           if (-not (Get-Item -Force $sock -ErrorAction SilentlyContinue)) { Fail "a killed server left no socket for the next serve to sweep" }
           & $exe --repo $R --no-dense serve --idle 1
           if ($LASTEXITCODE -ne 0) { Fail "the next serve would not bind over the dead socket: $LASTEXITCODE" }
@@ -235,7 +235,7 @@ jobs:
           exit 0
 
       # What a user installs, on the platform they install it on: the pack script, npm's own
-      # shim, `bin/repograph.js` resolving the per-platform package, the `files` whitelist, a
+      # shim, `bin/zerograph.js` resolving the per-platform package, the `files` whitelist, a
       # Cyrillic argument through the shim, and the exit code coming back. Last in the job,
       # because packing rewrites the version in `npm/*/package.json`.
       - shell: pwsh
@@ -245,8 +245,8 @@ jobs:
           [Console]::OutputEncoding = [Text.Encoding]::UTF8
           bash scripts/npm-pack.sh 0.0.0-ci ${{ matrix.pack }}=${{ matrix.exe }}
           if ($LASTEXITCODE -ne 0) { throw "the pack script failed: $LASTEXITCODE" }
-          $platform = (Get-Item "dist/npm/devmaxxx-repograph-${{ matrix.pack }}-0.0.0-ci.tgz").FullName
-          $launcher = (Get-Item "dist/npm/devmaxxx-repograph-0.0.0-ci.tgz").FullName
+          $platform = (Get-Item "dist/npm/devmaxxx-zerograph-${{ matrix.pack }}-0.0.0-ci.tgz").FullName
+          $launcher = (Get-Item "dist/npm/devmaxxx-zerograph-0.0.0-ci.tgz").FullName
           $version = (Select-String -Path Cargo.toml -Pattern '^version = "(.*)"').Matches[0].Groups[1].Value
 
           # A project directory with a space and a letter that is not ASCII, and a package.json
@@ -260,18 +260,22 @@ jobs:
           # name, through the same `require.resolve` walk a published install ends at.
           npm i --omit=optional --no-audit --no-fund $platform $launcher
           if ($LASTEXITCODE -ne 0) { throw "the install failed: $LASTEXITCODE" }
-          $reported = ((npx repograph --version) | Out-String).Trim()
-          if ($reported -ne "repograph $version") { throw "the launcher ran something else: $reported" }
+          $reported = ((npx zerograph --version) | Out-String).Trim()
+          if ($reported -ne "zerograph $version") { throw "the launcher ran something else: $reported" }
+          # The old name stays a bin of the same launcher, so a script written before the rename
+          # still runs.
+          $aliased = ((npx repograph --version) | Out-String).Trim()
+          if ($aliased -ne "zerograph $version") { throw "the repograph alias ran something else: $aliased" }
 
           $R = Join-Path $proj 'корпус'
           New-Item -ItemType Directory -Force -Path (Join-Path $R 'docs') | Out-Null
           Set-Content -Encoding utf8 (Join-Path $R 'docs/pay.md') "**FR-PAY-1 · MUST · Штраф за отмену**`n`nШтраф списывается сам.`n"
-          Set-Content -Encoding utf8 (Join-Path $R 'repograph.toml') 'id_families = ["FR-PAY"]'
-          npx repograph --repo $R --no-dense build | Out-Null
+          Set-Content -Encoding utf8 (Join-Path $R 'zerograph.toml') 'id_families = ["FR-PAY"]'
+          npx zerograph --repo $R --no-dense build | Out-Null
           if ($LASTEXITCODE -ne 0) { throw "a build through the launcher failed: $LASTEXITCODE" }
-          $answer = ((npx repograph --repo $R --no-dense ask штраф) | Out-String)
+          $answer = ((npx zerograph --repo $R --no-dense ask штраф) | Out-String)
           if ($answer -notmatch 'Штраф за отмену') { throw "the question or the answer did not survive the shim: $answer" }
-          npx repograph --repo $R explain nope
+          npx zerograph --repo $R explain nope
           if ($LASTEXITCODE -ne 1) { throw "the launcher swallowed the exit code: $LASTEXITCODE" }
 
           # The third status, through the same shim: a question that was answered "no" exits 3,
@@ -280,9 +284,9 @@ jobs:
           # through npm's shim. Two top-level functions, one calling the other, so a call path
           # exists one way round and not the other.
           Set-Content -Encoding utf8 (Join-Path $R 'billing.ts') "export function refund(id: string) {`n  return write(id);`n}`n`nexport function write(id: string) {`n  return id;`n}`n"
-          npx repograph --repo $R --no-dense build | Out-Null
+          npx zerograph --repo $R --no-dense build | Out-Null
           if ($LASTEXITCODE -ne 0) { throw "the rebuild through the launcher failed: $LASTEXITCODE" }
-          npx repograph --repo $R --no-dense trace write refund
+          npx zerograph --repo $R --no-dense trace write refund
           if ($LASTEXITCODE -ne 3) { throw "a verdict through the shim should exit 3, not $LASTEXITCODE" }
           Pop-Location
 
@@ -294,7 +298,7 @@ jobs:
           Push-Location $alone
           npm i --omit=optional --no-audit --no-fund $launcher
           if ($LASTEXITCODE -ne 0) { throw "installing the launcher alone failed: $LASTEXITCODE" }
-          $said = ((npx repograph --version 2>&1) | Out-String)
+          $said = ((npx zerograph --version 2>&1) | Out-String)
           if ($LASTEXITCODE -ne 2) { throw "a launcher with no binary behind it should exit 2, not $LASTEXITCODE" }
           if ($said -notmatch 'is not installed') { throw "and name the package that is missing: $said" }
           Pop-Location
@@ -319,9 +323,9 @@ jobs:
       - if: steps.token.outputs.present == 'true'
         run: cargo build --release
       - if: steps.token.outputs.present == 'true'
-        run: ./target/release/repograph --repo corpus --no-dense build
+        run: ./target/release/zerograph --repo corpus --no-dense build
       - if: steps.token.outputs.present == 'true'
-        run: ./target/release/repograph --repo corpus --no-dense bench
+        run: ./target/release/zerograph --repo corpus --no-dense bench
       # A green job that ran nothing would read as a passed bench.
       - if: steps.token.outputs.present != 'true'
         run: echo "::warning::BENCH_REPO_TOKEN is not set; the bench did not run"

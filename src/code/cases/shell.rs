@@ -204,7 +204,7 @@ fn an_interpreter_run_skips_options_and_a_command_string() {
 fn a_function_added_to_a_script_while_watching_is_called_on_the_next_poll() {
     let dir = tempfile::tempdir().unwrap();
     let r = dir.path();
-    std::fs::write(r.join("repograph.toml"), "doc_globs = []\ncode_globs = [\"**/*.sh\"]\n").unwrap();
+    std::fs::write(r.join("zerograph.toml"), "doc_globs = []\ncode_globs = [\"**/*.sh\"]\n").unwrap();
     std::fs::write(r.join("lib.sh"), "lib_other() {\n  :\n}\n").unwrap();
     std::fs::write(r.join("run.sh"), ". ./lib.sh\nlib_line start\n").unwrap();
     let cfg = crate::config::Config::load(r).unwrap();

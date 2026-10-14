@@ -6,11 +6,11 @@ them once and answers over a Unix socket — on Windows too, where the same sock
 since Windows 10 1803 and is protected the way the repository directory is:
 
 ```bash
-repograph serve                  # .repograph/serve.sock, poll every 30 s, exit after 30 min idle
-repograph serve --idle 86400     # a day rather than half an hour before it gives up
-repograph serve --idle-model 60  # forget the model after a minute unasked; the process stays
-repograph serve --no-dense       # lexical only; a fused `ask` is told so and answers in its own process
-repograph ask --no-serve отмена  # answer here even while one is listening
+zerograph serve                  # .zerograph/serve.sock, poll every 30 s, exit after 30 min idle
+zerograph serve --idle 86400     # a day rather than half an hour before it gives up
+zerograph serve --idle-model 60  # forget the model after a minute unasked; the process stays
+zerograph serve --no-dense       # lexical only; a fused `ask` is told so and answers in its own process
+zerograph ask --no-serve отмена  # answer here even while one is listening
 ```
 
 Two idles, one clock. `--idle` ends the process; `--idle-model` (default 300 s) drops only the
@@ -33,9 +33,9 @@ a 70-80 s rerank keeps its five minutes. A server that accepted the connection a
 answer — a wedged worker, a process stopped under a debugger — hands the question back as
 promptly as it does for every other request.
 
-The socket lives at `.repograph/serve.sock` — unless that path would be longer than a Unix socket
+The socket lives at `.zerograph/serve.sock` — unless that path would be longer than a Unix socket
 name may be (104 bytes on macOS, including the terminating NUL), in which case it goes in the
-temporary directory as `repograph-<hash of the repository path>.sock`. A repository under a deep
+temporary directory as `zerograph-<hash of the repository path>.sock`. A repository under a deep
 enough path could not run `serve` at all before that fallback, and both the server and every client
 compute the name the same way, so nothing has to be told which one is in use — the startup line
 prints it. A `serve` that is killed with `SIGTERM` or `SIGINT` takes its socket file with it,
@@ -44,7 +44,7 @@ signal and the file is left for the next `serve`, which removes a dead socket be
 
 `ask` uses it without being told to and answers in this process whenever it cannot — no socket, a
 socket nobody listens on, a server of another version or another build of the same version, a
-`--no-dense` server asked a fused question, a timeout, `--no-serve`, or `REPOGRAPH_NO_SERVE`. Each
+`--no-dense` server asked a fused question, a timeout, `--no-serve`, or `ZEROGRAPH_NO_SERVE`. Each
 of those prints a line: a question that quietly costs a cold process, or quietly gets a lexical
 answer, looks like nothing at all. A client never deletes the socket file, since a refused connect
 is also what a live server with a full backlog gives; only `serve` removes one, and only the one it
@@ -63,7 +63,7 @@ second client waits rather than being turned away. Both reads are decided by `ma
 running server does not see `embed` writing `vectors.*` — stop
 it, or ask with `--no-serve`, to answer from the new ones.
 
-The configuration is read once, at start-up. Editing `repograph.toml` stops the server after its
+The configuration is read once, at start-up. Editing `zerograph.toml` stops the server after its
 next poll — the next `ask` answers in its own process under the new file, and a new `serve` starts
 under it too.
 

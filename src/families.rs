@@ -3,14 +3,14 @@
 //! that already say it are the only place it is written down. Nothing here reads them a second
 //! time to find out which they are: a definition is already a node, so the set is a view over
 //! the graph (`of_graph`), and the only pass over the tree left is the mention tally that
-//! `repograph families` prints beside it.
+//! `zerograph families` prints beside it.
 //!
 //! Nothing configures this and nothing stores it. A default is the answer for a repository about
 //! which nothing is known, and one corpus's list of families was never that answer for anybody
 //! else's; a pin beside the graph would have been a second thing to keep in step with the
 //! documents. The two losses are worth naming: a prefix a document only ever mentions —
 //! `ISO-8601`, a ticket number, a year — is cited and then held aside rather than linked, and
-//! there is no way to take a family away by hand. `repograph families` prints both halves so a
+//! there is no way to take a family away by hand. `zerograph families` prints both halves so a
 //! prefix on the wrong side of that line is something a reader can see.
 
 use crate::model::Graph;
@@ -234,7 +234,7 @@ impl Scan {
 }
 
 /// The id-like prefixes the walked tree writes, with where each was first written. The only pass
-/// over the tree this module still makes, and `repograph families` is its one caller.
+/// over the tree this module still makes, and `zerograph families` is its one caller.
 pub fn survey(repo: &Path, entries: &[Entry]) -> Result<Vec<Mention>> {
     let mut scan = Scan::default();
     for e in entries {
@@ -351,7 +351,7 @@ pub fn render(r: &Report) -> String {
 
 pub fn run(repo: &Path, cfg: &crate::config::Config, json: bool) -> Result<()> {
     let (graph, manifest) = Store::new(repo).load()?;
-    if graph.nodes.is_empty() { anyhow::bail!("graph is empty — run `repograph build`"); }
+    if graph.nodes.is_empty() { anyhow::bail!("graph is empty — run `zerograph build`"); }
     let entries = crate::walk::walk(repo, cfg, &manifest)?;
     // The graph is the report's source, so a definition edited since the last update is not in
     // it; the tree being ahead of the store is said once, in words, rather than left for a reader
@@ -359,7 +359,7 @@ pub fn run(repo: &Path, cfg: &crate::config::Config, json: bool) -> Result<()> {
     let diff = manifest.diff(&entries);
     let behind = diff.changed.len() + diff.removed.len();
     if behind > 0 {
-        eprintln!("families: the store is {behind} file{} behind the tree — run `repograph update`",
+        eprintln!("families: the store is {behind} file{} behind the tree — run `zerograph update`",
             if behind == 1 { "" } else { "s" });
     }
     let r = report(&graph, survey(repo, &entries)?);

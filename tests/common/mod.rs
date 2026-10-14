@@ -2,13 +2,13 @@
 //! `users_day.rs` spawn their own, because what they measure is a binary at a path of their own.
 //!
 //! The child's environment is the parent's less the two variables the bench kit exports, because
-//! each of them redirects what a command reads. `REPOGRAPH_BENCH_REPO` moves `bench` off the
+//! each of them redirects what a command reads. `ZEROGRAPH_BENCH_REPO` moves `bench` off the
 //! `--repo` it was given — with it exported, the floors-missed case reads another corpus, finds no
-//! graph and exits 1 where the suite is pinning a 3 — and `REPOGRAPH_EMBED_MODEL` outranks the
+//! graph and exits 1 where the suite is pinning a 3 — and `ZEROGRAPH_EMBED_MODEL` outranks the
 //! model a store records, so a shell left over from a measurement answers these tests under other
 //! weights. Both are invisible in the failure they cause, which is why they are stripped here
-//! rather than documented somewhere a reader would have to find. `REPOGRAPH_CODE_GLOBS` and
-//! `REPOGRAPH_TEXT_GLOBS` replace the globs a test's own `repograph.toml` names.
+//! rather than documented somewhere a reader would have to find. `ZEROGRAPH_CODE_GLOBS` and
+//! `ZEROGRAPH_TEXT_GLOBS` replace the globs a test's own `zerograph.toml` names.
 
 // Compiled into a test crate per file that declares `mod common`, each of which uses the part of
 // it that it needs; anything the others use is dead code from where that one stands.
@@ -20,12 +20,12 @@ use std::path::Path;
 use std::process::{Command, Output};
 
 pub fn run(repo: &Path, args: &[&str]) -> Output {
-    Command::new(env!("CARGO_BIN_EXE_repograph"))
-        .env_remove("REPOGRAPH_BENCH_REPO")
-        .env_remove("REPOGRAPH_EMBED_MODEL")
-        .env_remove("REPOGRAPH_CODE_GLOBS")
-        .env_remove("REPOGRAPH_TEXT_GLOBS")
-        .env_remove("REPOGRAPH_READER_BUDGET")
+    Command::new(env!("CARGO_BIN_EXE_zerograph"))
+        .env_remove("ZEROGRAPH_BENCH_REPO")
+        .env_remove("ZEROGRAPH_EMBED_MODEL")
+        .env_remove("ZEROGRAPH_CODE_GLOBS")
+        .env_remove("ZEROGRAPH_TEXT_GLOBS")
+        .env_remove("ZEROGRAPH_READER_BUDGET")
         .arg("--no-dense")
         .arg("--repo")
         .arg(repo)

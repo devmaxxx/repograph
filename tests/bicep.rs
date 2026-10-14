@@ -12,8 +12,8 @@ fn repo() -> tempfile::TempDir {
     let r = dir.path();
     // Bicep is read behind an explicit glob until its readings pass (spec §6). No documents, so the
     // graph holds only what these tests pin.
-    write(r, "repograph.toml", "doc_globs = []\ncode_globs = [\"**/*.bicep\"]\n");
-    write(r, ".gitignore", "/.repograph\n");
+    write(r, "zerograph.toml", "doc_globs = []\ncode_globs = [\"**/*.bicep\"]\n");
+    write(r, ".gitignore", "/.zerograph\n");
     write(r, "stack.bicep", "param env string\nmodule app './parts/web.bicep' = {\n  name: 'app-${env}'\n}\nmodule store 'parts/pg.bicep' = {\n  name: 'store'\n}\n");
     write(r, "parts/web.bicep", "module db './pg.bicep' = {\n  name: 'db'\n}\n");
     write(r, "parts/pg.bicep", DB);

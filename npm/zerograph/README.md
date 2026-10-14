@@ -1,4 +1,4 @@
-# @devmaxxx/repograph
+# @devmaxxx/zerograph
 
 One binary that builds a knowledge graph of a repository's markdown requirement docs and
 TypeScript code at zero model tokens, keeps it fresh while you work, and answers questions about
@@ -13,20 +13,20 @@ It is published to GitHub Packages, which serves no anonymous reads, so once per
 ```
 
 ```bash
-npm install --save-dev @devmaxxx/repograph     # or: pnpm add -D @devmaxxx/repograph
-npx repograph build                             # once per clone, ~1 s per 800 files
-npx repograph ask отмена записи                 # refreshes the graph first if files changed
-npx repograph explain FR-PAY-22
+npm install --save-dev @devmaxxx/zerograph     # or: pnpm add -D @devmaxxx/zerograph
+npx zerograph build                             # once per clone, ~1 s per 800 files
+npx zerograph ask отмена записи                 # refreshes the graph first if files changed
+npx zerograph explain FR-PAY-22
 ```
 
 This package is a launcher: the binary itself comes from a per-platform package pulled in as an
-optional dependency (`@devmaxxx/repograph-darwin-arm64`, `@devmaxxx/repograph-linux-x64`,
-`@devmaxxx/repograph-win32-x64`). On any other platform the launcher explains how to build from
+optional dependency (`@devmaxxx/zerograph-darwin-arm64`, `@devmaxxx/zerograph-linux-x64`,
+`@devmaxxx/zerograph-win32-x64`). On any other platform the launcher explains how to build from
 source with `cargo install`.
 
-The dense retriever downloads a 470 MB embedding model into `~/.cache/repograph/fastembed`
-(`%USERPROFILE%\.cache\repograph\fastembed` on Windows) on its first fused query; `--no-dense`
-never touches it, and `embed_model = "intfloat/multilingual-e5-large"` in `repograph.toml` swaps it
+The dense retriever downloads a 470 MB embedding model into `~/.cache/zerograph/fastembed`
+(`%USERPROFILE%\.cache\zerograph\fastembed` on Windows) on its first fused query; `--no-dense`
+never touches it, and `embed_model = "intfloat/multilingual-e5-large"` in `zerograph.toml` swaps it
 for a 2.1 GB one that reads paraphrase 22/30 against the default's 15/30.
 
 Full documentation, the measured comparison against graphify and GitNexus, and the bench live in
