@@ -42,20 +42,20 @@ pub fn writer_model(configured: &str) -> String {
 /// model instead would search the store's rows with another model's queries, and a refreshing
 /// reader would re-embed the whole store under it.
 pub fn reader_model(recorded: Option<&str>, configured: &str) -> Result<String, String> {
-    resolve_from(crate::env("EMBED_MODEL").as_deref(), recorded, configured, crate::config::model_is_trusted)
+    resolve_from(crate::env("EMBED_MODEL").as_deref(), recorded, configured, crate::config::trusted_spelling)
 }
 
 fn named(m: Option<&str>) -> Option<&str> { m.map(str::trim).filter(|m| !m.is_empty()) }
 
-fn resolve_from(override_: Option<&str>, recorded: Option<&str>, configured: &str, trusted: impl Fn(&str) -> bool) -> Result<String, String> {
+fn resolve_from(override_: Option<&str>, recorded: Option<&str>, configured: &str, trusted: impl Fn(&str) -> Option<String>) -> Result<String, String> {
     // The override is this machine's own word and outranks the store's, so the store's name is
     // never weighed against the trust list when it is set.
     if let Some(m) = named(override_) { return Ok(m.to_string()); }
-    match named(recorded) {
-        Some(m) if trusted(m) => Ok(m.to_string()),
+    let Some(m) = named(recorded) else { return Ok(configured.to_string()) };
+    match trusted(m) {
+        Some(spelling) => Ok(spelling),
         // The name is the store's text: echoed escaped, and offered as a command only when it is a token.
-        Some(m) => Err(format!("dense: the store's vectors name {m:?}, a model this machine has not trusted; continuing lexical-only — {}", crate::config::trust_hint(m))),
-        None => Ok(configured.to_string()),
+        None => Err(format!("dense: the store's vectors name {m:?}, a model this machine has not trusted; continuing lexical-only — {}", crate::config::trust_hint(m))),
     }
 }
 
@@ -752,7 +752,7 @@ mod tests {
 
     #[test]
     fn the_override_outranks_the_store_which_outranks_the_config() {
-        let any = |_: &str| true;
+        let any = |m: &str| Some(m.to_string());
         assert_eq!(resolve_from(Some(" x/y "), Some("a/b"), "c/d", any).unwrap(), "x/y");
         assert_eq!(resolve_from(Some(""), Some("a/b"), "c/d", any).unwrap(), "a/b");
         assert_eq!(resolve_from(None, None, "c/d", any).unwrap(), "c/d");
@@ -761,23 +761,29 @@ mod tests {
 
     #[test]
     fn a_store_cannot_name_a_model_this_machine_has_not_trusted() {
-        let trusted = |m: &str| m == "a/b";
+        let trusted = |m: &str| (m == "a/b").then(|| m.to_string());
         let notice = resolve_from(None, Some("evil/model"), "c/d", trusted).expect_err("no model is opened for it");
         assert!(notice.contains("\"evil/model\"") && notice.contains("lexical-only") && notice.contains("`zerograph model evil/model`"), "{notice}");
         assert_eq!(resolve_from(None, Some("a/b"), "c/d", trusted), Ok("a/b".to_string()));
     }
 
     #[test]
+    fn a_store_naming_a_trusted_model_in_another_case_opens_it_under_the_trusted_spelling() {
+        let trusted = |m: &str| m.eq_ignore_ascii_case("Org/Model").then(|| "Org/Model".to_string());
+        assert_eq!(resolve_from(None, Some("ORG/MODEL"), "c/d", trusted), Ok("Org/Model".to_string()));
+    }
+
+    #[test]
     fn the_override_is_this_machines_own_so_the_stores_name_is_never_weighed_against_it() {
         let weighed = std::cell::Cell::new(false);
-        let spy = |_: &str| { weighed.set(true); false };
+        let spy = |_: &str| { weighed.set(true); None };
         assert_eq!(resolve_from(Some("evil/model"), Some("evil/model"), "c/d", spy), Ok("evil/model".to_string()));
         assert!(!weighed.get(), "a notice that the store's model was turned away would be false: the override won");
     }
 
     #[test]
     fn a_name_a_clone_wrote_is_echoed_escaped_and_never_offered_as_a_command() {
-        let notice = resolve_from(None, Some("x\n`zerograph model y; rm -rf ~`\u{1b}[31m"), "c/d", |_| false).unwrap_err();
+        let notice = resolve_from(None, Some("x\n`zerograph model y; rm -rf ~`\u{1b}[31m"), "c/d", |_| None).unwrap_err();
         assert!(!notice.contains(['\n', '\u{1b}']), "{notice:?}");
         assert!(notice.contains("not a plain hub id") && !notice.contains("trusts it"), "{notice}");
     }
