@@ -9,9 +9,10 @@ use crate::command::run_command;
 pub const DEPTH: usize = 200;
 
 /// How long the model command may take before it is stopped and the question answered from the
-/// fused order. Four seconds is the usual round trip; this is for the one that never ends. Under
-/// `serve`'s reply window, so a resident answer still arrives before its client gives up on it.
-pub const DEADLINE: std::time::Duration = std::time::Duration::from_secs(240);
+/// fused order. Four seconds is the usual round trip; this is for the one that never ends. Two
+/// minutes under `serve`'s reply window, which also has to hold a cold model open and the fused
+/// arms, so a resident answer still arrives before its client gives up on it.
+pub const DEADLINE: std::time::Duration = std::time::Duration::from_secs(180);
 
 /// Characters of a candidate's body shown after its title.
 const SNIPPET: usize = 120;

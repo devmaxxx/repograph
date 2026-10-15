@@ -4,6 +4,7 @@ use anyhow::{Context, Result};
 use std::io::{Read, Write};
 use std::path::PathBuf;
 use std::process::Stdio;
+use std::sync::mpsc::{Receiver, RecvTimeoutError};
 use std::time::{Duration, Instant};
 
 /// The shell the configured command runs under: `sh`, on every platform. The commands in
@@ -113,6 +114,7 @@ fn clip_stderr(stderr: &[u8]) -> String {
 /// The command is stopped at the deadline rather than waited on: offline, or at an auth prompt,
 /// `claude -p` never exits on its own, and the resident `serve` answers one question at a time.
 pub fn run_command(command: &str, input: &str, deadline: Duration) -> Result<String> {
+    let until = Instant::now() + deadline;
     let cwd = EmptyCwd::new()?;
     let mut cmd = shell()?;
     cmd.arg("-c").arg(format!("{}{command}", pipefail_prefix())).current_dir(&cwd.0)
@@ -122,6 +124,9 @@ pub fn run_command(command: &str, input: &str, deadline: Duration) -> Result<Str
     #[cfg(unix)]
     std::os::unix::process::CommandExt::process_group(&mut cmd, 0);
     let mut child = cmd.spawn().with_context(|| format!("spawn `{command}`"))?;
+    // Out of the terminal's group, the command no longer hears a Ctrl-C meant for both of us.
+    #[cfg(unix)]
+    let _forwarding = interrupt::forward_to(child.id());
     let mut stdin = child.stdin.take().context("stdin")?;
     let input = input.to_owned();
     // A command that answers without reading its whole prompt closes the pipe early — `claude -p`
@@ -133,41 +138,108 @@ pub fn run_command(command: &str, input: &str, deadline: Duration) -> Result<Str
     });
     let stdout = drain(child.stdout.take().context("stdout")?);
     let stderr = drain(child.stderr.take().context("stderr")?);
-    let started = Instant::now();
+    let stopped = || anyhow::anyhow!("`{command}` gave no answer within {} s and was stopped", deadline.as_secs());
     let mut pause = Duration::from_millis(1);
     let status = loop {
         if let Some(status) = child.try_wait()? { break status; }
-        if started.elapsed() >= deadline {
+        if Instant::now() >= until {
             stop(&mut child);
-            anyhow::bail!("`{command}` gave no answer within {} s and was stopped", deadline.as_secs());
+            return Err(stopped());
         }
         std::thread::sleep(pause);
         pause = (pause * 2).min(Duration::from_millis(50));
     };
+    // `sh` exiting is not the end of the output: something it started can hold the pipes open past
+    // it, so the deadline covers the reads too.
+    let collect = |rx: &Receiver<std::io::Result<Vec<u8>>>, pipe: &str| match rx.recv_timeout(until.saturating_duration_since(Instant::now())) {
+        Ok(read) => read.with_context(|| format!("read the command's {pipe}")),
+        Err(RecvTimeoutError::Timeout) => {
+            #[cfg(unix)]
+            kill_group(child.id());
+            Err(stopped())
+        }
+        Err(RecvTimeoutError::Disconnected) => anyhow::bail!("the {pipe} reader panicked"),
+    };
+    let stdout = collect(&stdout, "stdout")?;
+    let stderr = collect(&stderr, "stderr")?;
     writer.join().map_err(|_| anyhow::anyhow!("the prompt writer panicked"))?
         .with_context(|| format!("write the prompt to `{command}`"))?;
-    let stdout = stdout.join().map_err(|_| anyhow::anyhow!("the stdout reader panicked"))??;
-    let stderr = stderr.join().map_err(|_| anyhow::anyhow!("the stderr reader panicked"))??;
     if !status.success() {
         anyhow::bail!("`{command}` exited {status}: {}", clip_stderr(&stderr));
     }
     Ok(String::from_utf8_lossy(&stdout).into_owned())
 }
 
-fn drain(mut pipe: impl Read + Send + 'static) -> std::thread::JoinHandle<std::io::Result<Vec<u8>>> {
-    std::thread::spawn(move || { let mut buf = Vec::new(); pipe.read_to_end(&mut buf).map(|_| buf) })
+fn drain(mut pipe: impl Read + Send + 'static) -> Receiver<std::io::Result<Vec<u8>>> {
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || { let mut buf = Vec::new(); let _ = tx.send(pipe.read_to_end(&mut buf).map(|_| buf)); });
+    rx
 }
 
 /// The readers are left to finish on their own: on unix the group is gone and the pipes close
 /// with it, and on Windows a grandchild may keep them open, which must not hold the answer.
+/// Windows has no group to signal, so there the model `sh` started outlives the stop.
 fn stop(child: &mut std::process::Child) {
     #[cfg(unix)]
-    if let Ok(pid) = i32::try_from(child.id()) {
+    kill_group(child.id());
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
+#[cfg(unix)]
+fn kill_group(leader: u32) {
+    if let Ok(pid) = i32::try_from(leader) {
         // SAFETY: a signal to the group this child leads; no memory is shared with the call.
         unsafe { libc::kill(-pid, libc::SIGKILL); }
     }
-    let _ = child.kill();
-    let _ = child.wait();
+}
+
+/// Passes an interrupt on to the running command's group, then to whatever handled it before —
+/// `serve`'s flag, or the default that ends the process.
+#[cfg(unix)]
+mod interrupt {
+    use std::sync::atomic::{AtomicI32, AtomicUsize, Ordering};
+
+    const SIGNALS: [libc::c_int; 3] = [libc::SIGINT, libc::SIGTERM, libc::SIGHUP];
+    /// The group of the command running now. One slot: the commands a process runs follow each
+    /// other, and a second at once would only miss the forward, not misdirect it.
+    static GROUP: AtomicI32 = AtomicI32::new(0);
+    static PREVIOUS: [AtomicUsize; 3] = [const { AtomicUsize::new(libc::SIG_DFL) }; 3];
+
+    extern "C" fn forward(sig: libc::c_int) {
+        let group = GROUP.load(Ordering::SeqCst);
+        // SAFETY: `kill`, `signal` and `raise` are async-signal-safe, and so is an atomic load.
+        if group > 0 { unsafe { libc::kill(-group, sig); } }
+        let Some(i) = SIGNALS.iter().position(|&s| s == sig) else { return };
+        match PREVIOUS[i].load(Ordering::SeqCst) {
+            libc::SIG_DFL => unsafe { libc::signal(sig, libc::SIG_DFL); libc::raise(sig); },
+            libc::SIG_IGN => {}
+            // SAFETY: a value `signal` returned for this signal, so a one-argument handler: the
+            // only ones this binary installs are `signal`'s too.
+            handler => unsafe { std::mem::transmute::<libc::sighandler_t, extern "C" fn(libc::c_int)>(handler)(sig) },
+        }
+    }
+
+    pub struct Forwarding;
+
+    impl Drop for Forwarding {
+        fn drop(&mut self) { GROUP.store(0, Ordering::SeqCst); }
+    }
+
+    pub fn forward_to(leader: u32) -> Forwarding {
+        static INSTALL: std::sync::Once = std::sync::Once::new();
+        INSTALL.call_once(|| {
+            for (i, &sig) in SIGNALS.iter().enumerate() {
+                // SAFETY: installs a handler that does only async-signal-safe work.
+                let previous = unsafe { libc::signal(sig, forward as *const () as libc::sighandler_t) };
+                PREVIOUS[i].store(previous, Ordering::SeqCst);
+                // An ignored signal stays ignored: under `nohup`, a hangup must not start ending the run.
+                if previous == libc::SIG_IGN { unsafe { libc::signal(sig, libc::SIG_IGN); } }
+            }
+        });
+        GROUP.store(i32::try_from(leader).unwrap_or(0), Ordering::SeqCst);
+        Forwarding
+    }
 }
 
 #[cfg(test)]
@@ -175,6 +247,14 @@ mod tests {
     use super::*;
 
     const LONG: Duration = Duration::from_secs(60);
+
+    #[test]
+    fn a_command_whose_child_holds_the_output_open_is_stopped_at_the_deadline() {
+        let started = Instant::now();
+        let err = run_command("(sleep 30) & echo early", "", Duration::from_millis(300)).unwrap_err().to_string();
+        assert!(err.contains("no answer within"), "{err}");
+        assert!(started.elapsed() < Duration::from_secs(10), "took {:?}", started.elapsed());
+    }
 
     #[test]
     fn a_command_that_never_answers_is_stopped_at_its_deadline() {

@@ -13,9 +13,9 @@ once, naming it and its `questions.bin` mirror. The measurements that shaped it 
 files, interleaved — and hands the model each candidate's id, title and the first 120 characters of its text to pick five
 from; `--depth` changes how deep, and tokens per question scale with it. `rerank_command` reads the
 prompt on stdin and writes the chosen ids one per line; a failing command is reported on stderr and
-the answer falls back to the fused order. So is one still running after 240 seconds — offline, or
-waiting at a login prompt, `claude -p` never exits — which is stopped along with everything it
-started, before `serve`'s clients give up on their reply at 300.
+the answer falls back to the fused order. So is one still running after 180 seconds — offline, or
+waiting at a login prompt, `claude -p` never exits — which is stopped, along with everything it
+started except on Windows, before `serve`'s clients give up on their reply at 300.
 
 What the model is shown decides more than which model it is, and every model read in that seat is
 [recorded](history.md#what-the-reranker-is-shown-and-every-model-read-in-that-seat). Where the

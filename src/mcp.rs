@@ -190,13 +190,21 @@ impl Server {
         let cfg = self.config()?;
         let mut spent = Vec::new();
         req.rerank = req.rerank && self.may_rerank(cfg.mcp_reranks, &mut spent);
-        let resident = if crate::env_os("NO_SERVE").is_some() { None } else { serve::try_ask(&self.repo, &req) };
-        if let Some(reply) = resident {
-            return Ok(with_notices(reply.stdout, spent.into_iter().chain(reply.stderr).collect()));
-        }
-        let mut ctx = ask::Context::open(&self.repo, &cfg, req.stale, self.no_dense)?;
-        let text = ctx.answer(&req)?;
-        Ok(with_notices(text, spent.into_iter().chain(ctx.notices()).collect()))
+        let answered = self.answer(&req, &cfg);
+        // Only a rerank that ran is one spent: a refused command, one that failed or timed out,
+        // and an error before the model was asked each leave the allowance as it was.
+        let ran = answered.as_ref().is_ok_and(|(_, notices)| !notices.iter().any(|n| n.starts_with("rerank:")));
+        if req.rerank && !ran { self.reranks.fetch_sub(1, std::sync::atomic::Ordering::SeqCst); }
+        let (text, notices) = answered?;
+        Ok(with_notices(text, spent.into_iter().chain(notices).collect()))
+    }
+
+    fn answer(&self, req: &ask::Request, cfg: &config::Config) -> Result<(String, Vec<String>)> {
+        let resident = if crate::env_os("NO_SERVE").is_some() { None } else { serve::try_ask(&self.repo, req) };
+        if let Some(reply) = resident { return Ok((reply.stdout, reply.stderr)); }
+        let mut ctx = ask::Context::open(&self.repo, cfg, req.stale, self.no_dense)?;
+        let text = ctx.answer(req)?;
+        Ok((text, ctx.notices()))
     }
 
     /// Takes one paid rerank from this process's allowance, or says why there is none left.
@@ -581,6 +589,17 @@ mod tests {
         assert!(!server.may_rerank(2, &mut notices), "the third is past an allowance of two");
         assert!(notices[0].contains("mcp_reranks") && notices[0].contains("fused order"), "{notices:?}");
         assert!(!Server::new(Path::new("."), true).may_rerank(0, &mut Vec::new()), "0 turns rerank over MCP off");
+    }
+
+    /// The default command is refused when the project file names its own, so the rerank never
+    /// runs — and a rerank that never ran is not one of the allowance's.
+    #[test]
+    fn a_rerank_that_did_not_run_is_not_counted() {
+        let (dir, server) = served();
+        std::fs::write(dir.path().join("zerograph.toml"), "rerank_command = \"cat\"\n").unwrap();
+        let (is_error, text) = call(&server, "ask", json!({ "question": "FR-PAY-22 cancellation window", "stale": true, "rerank": true }));
+        assert!(!is_error && text.contains("rerank:"), "{text}");
+        assert_eq!(server.reranks.load(std::sync::atomic::Ordering::SeqCst), 0);
     }
 
     #[test]

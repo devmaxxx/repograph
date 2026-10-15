@@ -87,8 +87,15 @@ jobs:
           unzip -q zerograph-x86_64-pc-windows-msvc.zip -d bin/win32-x64
           scripts/npm-pack.sh "${GITHUB_REF_NAME#v}" darwin-arm64=bin/darwin-arm64/zerograph linux-x64=bin/linux-x64/zerograph win32-x64=bin/win32-x64/zerograph.exe
       # The launcher goes after its platform packages: until they exist, an install of it resolves
-      # nothing. The old name goes after the launcher it depends on.
+      # nothing. The old name goes after the launcher it depends on. A version already on the
+      # registry is skipped, so a rerun after a failure part-way through publishes what is missing
+      # instead of stopping at the first 403 for what is there. `npm view` of a version a package
+      # lacks exits 0 with nothing printed, hence the test on its output.
       - run: |
-          for t in dist/npm/*-arm64-*.tgz dist/npm/*-x64-*.tgz; do npm publish "$t"; done
-          npm publish dist/npm/devmaxxx-zerograph-"${GITHUB_REF_NAME#v}".tgz
-          npm publish dist/npm/devmaxxx-repograph-"${GITHUB_REF_NAME#v}".tgz
+          publish() {
+            name=$(tar -xOzf "$1" package/package.json | node -p 'const p = JSON.parse(require("fs").readFileSync(0)); `${p.name}@${p.version}`')
+            if [ -n "$(npm view "$name" version 2>/dev/null)" ]; then echo "$name is published already"; else npm publish "$1"; fi
+          }
+          for t in dist/npm/*-arm64-*.tgz dist/npm/*-x64-*.tgz; do publish "$t"; done
+          publish dist/npm/devmaxxx-zerograph-"${GITHUB_REF_NAME#v}".tgz
+          publish dist/npm/devmaxxx-repograph-"${GITHUB_REF_NAME#v}".tgz
