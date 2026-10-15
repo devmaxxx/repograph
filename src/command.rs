@@ -1,8 +1,10 @@
 //! Runs a configured model command: the prompt on stdin, the answer on stdout, under `sh` in an
 //! empty directory of its own. `ask --rerank` is the one caller.
 use anyhow::{Context, Result};
-use std::io::Write;
+use std::io::{Read, Write};
 use std::path::PathBuf;
+use std::process::Stdio;
+use std::time::{Duration, Instant};
 
 /// The shell the configured command runs under: `sh`, on every platform. The commands in
 /// `zerograph.toml` are written in its syntax — a `VAR=value` prefix, `""` for an empty argument —
@@ -24,7 +26,7 @@ fn shell() -> Result<std::process::Command> {
     let program_dirs: Vec<PathBuf> = [("ProgramFiles", ""), ("ProgramW6432", ""), ("LOCALAPPDATA", "Programs")].iter()
         .filter_map(|(k, sub)| std::env::var_os(k).map(|v| PathBuf::from(v).join(sub))).collect();
     let sh = git_sh(&path_dirs, bash.as_deref(), &program_dirs)
-        .context("`sh` is not on PATH and no Git for Windows was found beside `git` or under Program Files: enrich and rerank run their command under sh, which Git for Windows provides")?;
+        .context("`sh` is not on PATH and no Git for Windows was found beside `git` or under Program Files: rerank runs its command under sh, which Git for Windows provides")?;
     let mut cmd = std::process::Command::new(&sh);
     let root = sh.parent().and_then(std::path::Path::parent).map(std::path::Path::to_path_buf).unwrap_or_default();
     cmd.env("PATH", std::env::join_paths(std::iter::once(root.join("usr").join("bin")).chain(path_dirs))?);
@@ -107,38 +109,106 @@ fn clip_stderr(stderr: &[u8]) -> String {
     format!("{}… [{} more bytes]", &text[..end], text.len() - end)
 }
 
-pub fn run_command(command: &str, input: &str) -> Result<String> {
+/// Runs `command` with `input` on stdin and returns its stdout, or fails once `deadline` passes.
+/// The command is stopped at the deadline rather than waited on: offline, or at an auth prompt,
+/// `claude -p` never exits on its own, and the resident `serve` answers one question at a time.
+pub fn run_command(command: &str, input: &str, deadline: Duration) -> Result<String> {
     let cwd = EmptyCwd::new()?;
-    let mut child = shell()?.arg("-c").arg(format!("{}{command}", pipefail_prefix())).current_dir(&cwd.0)
-        .stdin(std::process::Stdio::piped()).stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::piped())
-        .spawn().with_context(|| format!("spawn `{command}`"))?;
+    let mut cmd = shell()?;
+    cmd.arg("-c").arg(format!("{}{command}", pipefail_prefix())).current_dir(&cwd.0)
+        .stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
+    // Its own process group, so the stop reaches what `sh` started too: the model runs as `sh`'s
+    // child, and killing `sh` alone leaves it spending and holding the output pipe open.
+    #[cfg(unix)]
+    std::os::unix::process::CommandExt::process_group(&mut cmd, 0);
+    let mut child = cmd.spawn().with_context(|| format!("spawn `{command}`"))?;
+    let mut stdin = child.stdin.take().context("stdin")?;
+    let input = input.to_owned();
     // A command that answers without reading its whole prompt closes the pipe early — `claude -p`
     // never does, a wrapper or a stub may — and the write then fails with EPIPE while the answer is
     // already on stdout. The exit status and the output judge the run, not the write.
-    let mut stdin = child.stdin.take().context("stdin")?;
-    match stdin.write_all(input.as_bytes()) {
-        Ok(()) => {}
-        Err(e) if e.kind() == std::io::ErrorKind::BrokenPipe => {}
-        Err(e) => return Err(e).with_context(|| format!("write the prompt to `{command}`")),
+    let writer = std::thread::spawn(move || match stdin.write_all(input.as_bytes()) {
+        Err(e) if e.kind() != std::io::ErrorKind::BrokenPipe => Err(e),
+        _ => Ok(()),
+    });
+    let stdout = drain(child.stdout.take().context("stdout")?);
+    let stderr = drain(child.stderr.take().context("stderr")?);
+    let started = Instant::now();
+    let mut pause = Duration::from_millis(1);
+    let status = loop {
+        if let Some(status) = child.try_wait()? { break status; }
+        if started.elapsed() >= deadline {
+            stop(&mut child);
+            anyhow::bail!("`{command}` gave no answer within {} s and was stopped", deadline.as_secs());
+        }
+        std::thread::sleep(pause);
+        pause = (pause * 2).min(Duration::from_millis(50));
+    };
+    writer.join().map_err(|_| anyhow::anyhow!("the prompt writer panicked"))?
+        .with_context(|| format!("write the prompt to `{command}`"))?;
+    let stdout = stdout.join().map_err(|_| anyhow::anyhow!("the stdout reader panicked"))??;
+    let stderr = stderr.join().map_err(|_| anyhow::anyhow!("the stderr reader panicked"))??;
+    if !status.success() {
+        anyhow::bail!("`{command}` exited {status}: {}", clip_stderr(&stderr));
     }
-    drop(stdin);
-    let out = child.wait_with_output()?;
-    if !out.status.success() {
-        anyhow::bail!("`{command}` exited {}: {}", out.status, clip_stderr(&out.stderr));
+    Ok(String::from_utf8_lossy(&stdout).into_owned())
+}
+
+fn drain(mut pipe: impl Read + Send + 'static) -> std::thread::JoinHandle<std::io::Result<Vec<u8>>> {
+    std::thread::spawn(move || { let mut buf = Vec::new(); pipe.read_to_end(&mut buf).map(|_| buf) })
+}
+
+/// The readers are left to finish on their own: on unix the group is gone and the pipes close
+/// with it, and on Windows a grandchild may keep them open, which must not hold the answer.
+fn stop(child: &mut std::process::Child) {
+    #[cfg(unix)]
+    if let Ok(pid) = i32::try_from(child.id()) {
+        // SAFETY: a signal to the group this child leads; no memory is shared with the call.
+        unsafe { libc::kill(-pid, libc::SIGKILL); }
     }
-    Ok(String::from_utf8_lossy(&out.stdout).into_owned())
+    let _ = child.kill();
+    let _ = child.wait();
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    const LONG: Duration = Duration::from_secs(60);
+
+    #[test]
+    fn a_command_that_never_answers_is_stopped_at_its_deadline() {
+        let started = Instant::now();
+        let err = run_command("sleep 30", "", Duration::from_millis(300)).unwrap_err().to_string();
+        assert!(err.contains("no answer within"), "{err}");
+        assert!(started.elapsed() < Duration::from_secs(10), "took {:?}", started.elapsed());
+    }
+
+    /// The model is `sh`'s child, not the process spawned: stopping `sh` alone would leave it
+    /// running, spending, after the question was answered without it.
+    #[cfg(unix)]
+    #[test]
+    fn the_stop_reaches_what_the_shell_started() {
+        let dir = tempfile::tempdir().unwrap();
+        let pidfile = dir.path().join("pid");
+        let command = format!("sleep 30 & echo $! > '{}'; wait", pidfile.display());
+        assert!(run_command(&command, "", Duration::from_millis(300)).is_err());
+        let pid: i32 = std::fs::read_to_string(&pidfile).unwrap().trim().parse().unwrap();
+        let gone = (0..200).any(|_| {
+            // SAFETY: signal 0 only asks whether the pid exists.
+            let alive = unsafe { libc::kill(pid, 0) } == 0;
+            if alive { std::thread::sleep(Duration::from_millis(10)); }
+            !alive
+        });
+        assert!(gone, "sleep {pid} outlived the stop");
+    }
+
     #[test]
     fn a_command_that_answers_without_reading_its_prompt_still_answers() {
         // Larger than any pipe buffer, so the write blocks until the child closes its end of the
         // pipe — the race the CI runner lost on the reranker's stub command, made deterministic.
         let prompt = "x".repeat(1 << 20);
-        let out = run_command("exec 0<&-; printf 'answered\\n'", &prompt).unwrap();
+        let out = run_command("exec 0<&-; printf 'answered\\n'", &prompt, LONG).unwrap();
         assert_eq!(out, "answered\n");
     }
 
@@ -159,7 +229,7 @@ mod tests {
 
     #[test]
     fn a_command_runs_in_an_empty_directory_that_is_not_the_callers() {
-        let out = run_command("ls -A | wc -l; pwd", "").unwrap();
+        let out = run_command("ls -A | wc -l; pwd", "", LONG).unwrap();
         let mut lines = out.lines();
         assert_eq!(lines.next().unwrap().trim(), "0");
         let pwd = lines.next().unwrap();
@@ -169,7 +239,7 @@ mod tests {
 
     #[test]
     fn a_failing_commands_stderr_is_clipped_in_the_error() {
-        let err = run_command("head -c 100000 /dev/zero | tr '\\0' 'e' >&2; exit 1", "").unwrap_err().to_string();
+        let err = run_command("head -c 100000 /dev/zero | tr '\\0' 'e' >&2; exit 1", "", LONG).unwrap_err().to_string();
         assert!(err.len() < 4096, "{} bytes", err.len());
         assert!(err.contains("more bytes"), "{err}");
     }

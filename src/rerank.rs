@@ -8,6 +8,11 @@ use crate::command::run_command;
 /// reach (13/14), 200 deep reaches it (14/14, three runs); tokens per question scale with it.
 pub const DEPTH: usize = 200;
 
+/// How long the model command may take before it is stopped and the question answered from the
+/// fused order. Four seconds is the usual round trip; this is for the one that never ends. Under
+/// `serve`'s reply window, so a resident answer still arrives before its client gives up on it.
+pub const DEADLINE: std::time::Duration = std::time::Duration::from_secs(240);
+
 /// Characters of a candidate's body shown after its title.
 const SNIPPET: usize = 120;
 
@@ -78,7 +83,7 @@ pub fn parse(output: &str, candidates: &[(String, String)]) -> Vec<String> {
 /// printed: a resident process's stderr is a socket reply, and a client that quietly loses this
 /// warning cannot tell a reranked answer from an unreranked one.
 pub fn run_or_notice(command: &str, question: &str, candidates: &[(String, String)]) -> (Vec<String>, Option<String>) {
-    match run_command(command, &prompt(question, candidates)) {
+    match run_command(command, &prompt(question, candidates), DEADLINE) {
         Ok(out) => (parse(&out, candidates), None),
         Err(e) => (Vec::new(), Some(format!("rerank: {e:#}; answering from the fused order"))),
     }

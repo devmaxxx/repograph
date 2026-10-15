@@ -610,6 +610,7 @@ mod tests {
         assert_eq!(reply_timeout(&plain), IO_TIMEOUT);
         assert_eq!(reply_timeout(&Request { rerank_local: true, ..plain.clone() }), RERANK_TIMEOUT);
         assert_eq!(reply_timeout(&Request { rerank: true, ..plain.clone() }), RERANK_TIMEOUT);
+        assert!(crate::rerank::DEADLINE < RERANK_TIMEOUT, "a stopped model command answers before the client stops waiting");
     }
 
     /// `--idle` exits, `--idle-model` forgets — two thresholds off the one clock, so a server
