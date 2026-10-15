@@ -36,6 +36,8 @@ struct Server {
     /// lock only once it is running, so for that moment the lock says "none" of a refresh that
     /// is on its way.
     spawned: std::sync::Mutex<Option<refresh::Alive>>,
+    /// Paid reranks this process has run, against the config's `mcp_reranks`.
+    reranks: std::sync::atomic::AtomicU32,
 }
 
 pub fn run(repo: &Path, no_dense: bool) -> Result<()> {
@@ -70,7 +72,7 @@ fn text_result(text: String, is_error: bool) -> Value {
 
 impl Server {
     fn new(repo: &Path, no_dense: bool) -> Server {
-        Server { repo: repo.to_path_buf(), no_dense, spawned: std::sync::Mutex::new(None) }
+        Server { repo: repo.to_path_buf(), no_dense, spawned: std::sync::Mutex::new(None), reranks: std::sync::atomic::AtomicU32::new(0) }
     }
 
     fn spawn_in_flight(&self) -> bool {
@@ -173,7 +175,7 @@ impl Server {
         if question.len() > serve::HELLO_MAX { bail!("the question is {} bytes; the most one can be is {}", question.len(), serve::HELLO_MAX); }
         let (rerank, rerank_local) = (args.flag("rerank"), args.flag("rerank_local"));
         if rerank && rerank_local { bail!("rerank and rerank_local are two ways to pick the seeds; name one"); }
-        let req = ask::Request {
+        let mut req = ask::Request {
             words: question.split_whitespace().map(str::to_string).collect(),
             json: false,
             seeds: args.number("seeds", 5)?,
@@ -186,13 +188,25 @@ impl Server {
         };
         if req.words.is_empty() { bail!("the question is empty"); }
         let cfg = self.config()?;
+        let mut spent = Vec::new();
+        req.rerank = req.rerank && self.may_rerank(cfg.mcp_reranks, &mut spent);
         let resident = if crate::env_os("NO_SERVE").is_some() { None } else { serve::try_ask(&self.repo, &req) };
         if let Some(reply) = resident {
-            return Ok(with_notices(reply.stdout, reply.stderr));
+            return Ok(with_notices(reply.stdout, spent.into_iter().chain(reply.stderr).collect()));
         }
         let mut ctx = ask::Context::open(&self.repo, &cfg, req.stale, self.no_dense)?;
         let text = ctx.answer(&req)?;
-        Ok(with_notices(text, ctx.notices()))
+        Ok(with_notices(text, spent.into_iter().chain(ctx.notices()).collect()))
+    }
+
+    /// Takes one paid rerank from this process's allowance, or says why there is none left.
+    fn may_rerank(&self, limit: u32, notices: &mut Vec<String>) -> bool {
+        use std::sync::atomic::Ordering;
+        let taken = self.reranks.fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| (n < limit).then_some(n + 1));
+        if taken.is_err() {
+            notices.push(format!("rerank: this server has run its {limit} paid reranks (mcp_reranks in the machine config); answering from the fused order"));
+        }
+        taken.is_ok()
     }
 
     fn explain(&self, args: &Args) -> Result<String> {
@@ -556,6 +570,17 @@ mod tests {
         assert!(is_error && text.contains("the most one can be"), "{text}");
         let (is_error, _) = call(&server, "impact", json!({ "symbol": "callee", "depth": 0 }));
         assert!(is_error, "a depth of 0 reaches nothing");
+    }
+
+    #[test]
+    fn paid_reranks_stop_at_the_allowance_and_say_so() {
+        let (_dir, server) = served();
+        let mut notices = Vec::new();
+        assert!(server.may_rerank(2, &mut notices) && server.may_rerank(2, &mut notices));
+        assert!(notices.is_empty());
+        assert!(!server.may_rerank(2, &mut notices), "the third is past an allowance of two");
+        assert!(notices[0].contains("mcp_reranks") && notices[0].contains("fused order"), "{notices:?}");
+        assert!(!Server::new(Path::new("."), true).may_rerank(0, &mut Vec::new()), "0 turns rerank over MCP off");
     }
 
     #[test]

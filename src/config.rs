@@ -71,6 +71,10 @@ pub struct Config {
     /// describes the reader's patience rather than the corpus, so the global file may set it too;
     /// `ZEROGRAPH_READER_BUDGET` overrides it for one run. `0` never refreshes inline.
     pub reader_budget: u64,
+    /// Paid reranks one MCP server process runs before it answers `rerank: true` from the fused
+    /// order. The agent, not the reader, decides each call, and every one spends tokens; `0` turns
+    /// rerank over MCP off. Read from the machine file only: the tokens are the reader's.
+    pub mcp_reranks: u32,
 }
 
 // Headless Claude Code with thinking off: the same answers, 4-5× faster and cheaper. `{model}`
@@ -162,9 +166,13 @@ impl Default for Config {
             embed_model: crate::index::embed::DEFAULT_MODEL.into(),
             resources: crate::index::embed::Resources::default(),
             reader_budget: READER_BUDGET,
+            mcp_reranks: MCP_RERANKS,
         }
     }
 }
+
+/// About a dollar of haiku: enough for an agent's session of questions, short of a loop's.
+const MCP_RERANKS: u32 = 25;
 
 /// The agreed ceiling on a reader's wait: an agent hook or a person cannot tell a longer silence
 /// from a hang.
@@ -187,6 +195,7 @@ struct Machine {
     reranker_dir: Option<String>,
     resources: Option<crate::index::embed::Resources>,
     reader_budget: Option<u64>,
+    mcp_reranks: Option<u32>,
 }
 
 /// `$ZEROGRAPH_CONFIG`, else `$XDG_CONFIG_HOME/zerograph/config.toml`, else
@@ -293,6 +302,10 @@ impl Config {
         cfg.reranker_dir = machine.reranker_dir.unwrap_or_default();
         if named.contains_key("reranker_dir") {
             let _ = writeln!(std::io::stderr(), "{file}: reranker_dir is not read from a repository — set it in the machine config if this is a model you chose");
+        }
+        cfg.mcp_reranks = machine.mcp_reranks.unwrap_or(MCP_RERANKS);
+        if named.contains_key("mcp_reranks") {
+            let _ = writeln!(std::io::stderr(), "{file}: mcp_reranks is not read from a repository — set it in {} to change what an agent may spend", machine_display());
         }
         layer(&named, "rerank_model", machine.rerank_model, &mut cfg.rerank_model);
         layer(&named, "resources", machine.resources, &mut cfg.resources);
@@ -729,6 +742,20 @@ mod tests {
             let dir = tempfile::tempdir().unwrap();
             std::fs::write(dir.path().join("zerograph.toml"), "reranker_dir = \"./m\"\n").unwrap();
             assert_eq!(Config::load(dir.path()).unwrap().reranker_dir, "");
+        });
+    }
+
+    #[test]
+    fn what_an_agent_may_spend_is_the_machines_to_say() {
+        with_machine(Some("mcp_reranks = 3\n"), || {
+            let dir = tempfile::tempdir().unwrap();
+            std::fs::write(dir.path().join("zerograph.toml"), "mcp_reranks = 100000\n").unwrap();
+            assert_eq!(Config::load(dir.path()).unwrap().mcp_reranks, 3);
+        });
+        with_machine(None, || {
+            let dir = tempfile::tempdir().unwrap();
+            std::fs::write(dir.path().join("zerograph.toml"), "mcp_reranks = 100000\n").unwrap();
+            assert_eq!(Config::load(dir.path()).unwrap().mcp_reranks, MCP_RERANKS);
         });
     }
 
