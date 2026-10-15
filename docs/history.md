@@ -445,6 +445,10 @@ Three of those keys name a model and one names a directory, and they are four di
 rather than one preference. What each stage asks of a model, and what the answer was measured to
 be:
 
+As measured before 0.6.0, which removed `enrich` and made `haiku` the reranker's default on each
+candidate's matching sentence ([ADR-004](adr/ADR-004-haiku-reranks-by-default.md)); the current keys
+are in [Configuration](configuration.md).
+
 | key | stage | what the model does there | what it has to be good at | measured | pick |
 | --- | --- | --- | --- | --- | --- |
 | `embed_model` | the dense index — `build`, `update`, `enrich`, `embed`, `watch` write with it, `ask` reads with what the store records | embeds every passage and every query. A sentence embedder named by its Hugging Face id, downloaded once and opened in-process through `ort`: not a command and not an LLM, so no Claude, GPT or local chat model can sit here, and an API embedder would need a transport this key does not have | putting a question and the sentence that answers it near each other, in Russian and English at once, over a 256-token passage | the default `intfloat/multilingual-e5-small` reads paraphrase 15/30 on the enriched fixture, ~0.30 s an `ask`, 470 MB on disk; `intfloat/multilingual-e5-large` reads 22/30 for ~0.8 s, 2.1 GB, and a first build measured in hours rather than minutes once the background band multiplies the embed | the small one, unless paraphrase recall is the job — [ADR-002](adr/ADR-002-two-defaults-multiplied.md) weighs the two |

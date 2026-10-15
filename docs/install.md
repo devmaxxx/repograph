@@ -44,7 +44,9 @@ write by zerograph moves the store (below) out from under it.
    running. Installed globally, remove the old package first (`npm uninstall -g
    @devmaxxx/repograph` or `pnpm remove -g @devmaxxx/repograph`): npm and pnpm 11 refuse to install
    over its `repograph` command. Installed from source, run `cargo uninstall repograph`, or the old
-   binary stays on `PATH` and goes on writing a `.repograph/` of its own.
+   binary stays on `PATH` and goes on writing a `.repograph/` of its own. An upgrade that keeps the
+   old name lands on zerograph too: from 0.6.0, `@devmaxxx/repograph` is released as a stub that
+   depends on `@devmaxxx/zerograph` at the same version and runs it as `repograph`.
 3. **Re-run `zerograph install-agent`** with the flags you used before, straight away. The old hook
    script looks for `.repograph/` only, so once the store has moved it says nothing, and the
    install is what replaces it.
