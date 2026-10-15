@@ -672,8 +672,9 @@ fn model_report(repo: &std::path::Path, cfg: &config::Config) -> anyhow::Result<
     let store = store::Store::new(repo);
     let recorded = index::dense::DenseIndex::recorded_model(&store)?;
     // A store whose model this machine has not trusted is read lexical-only (`embed::reader_model`).
-    let untrusted = recorded.as_deref().filter(|m| !config::model_is_trusted(m));
-    let opened = recorded.as_deref().filter(|_| untrusted.is_none()).unwrap_or(&cfg.embed_model);
+    let trusted = recorded.as_deref().and_then(config::trusted_spelling);
+    let untrusted = recorded.as_deref().filter(|_| trusted.is_none());
+    let opened = trusted.as_deref().unwrap_or(&cfg.embed_model);
     let mut out = String::new();
     let mut say = |key: &str, value: String| out.push_str(&format!("{key:<12}{value}\n"));
     match &recorded {
@@ -687,7 +688,7 @@ fn model_report(repo: &std::path::Path, cfg: &config::Config) -> anyhow::Result<
     }
     if let Some(m) = untrusted {
         out.push_str(&format!("\nThe store names a model this machine has not trusted, so readers answer lexical-only\nuntil it is trusted or the store is re-embedded with {} — {}.\n", cfg.embed_model, config::trust_hint(m)));
-    } else if recorded.as_deref().is_some_and(|m| m != cfg.embed_model) {
+    } else if recorded.as_deref().is_some_and(|m| !m.eq_ignore_ascii_case(&cfg.embed_model)) {
         out.push_str(&format!("\nThe two disagree. The store keeps answering with the model that wrote it; the\n\
             configured one takes effect at the next `build`, `update`, `embed` or\n\
             `watch` (an `ask` starts one when {} names the model), which drops\n\
@@ -705,7 +706,7 @@ fn model_report(repo: &std::path::Path, cfg: &config::Config) -> anyhow::Result<
 fn model_json(repo: &std::path::Path, cfg: &config::Config) -> anyhow::Result<String> {
     let store = store::Store::new(repo);
     let recorded = index::dense::DenseIndex::recorded_model(&store)?;
-    let agrees = recorded.as_deref().is_none_or(|m| m == cfg.embed_model);
+    let agrees = recorded.as_deref().is_none_or(|m| m.eq_ignore_ascii_case(&cfg.embed_model));
     Ok(serde_json::json!({
         "store": recorded,
         "configured": cfg.embed_model,
@@ -717,10 +718,8 @@ fn model_json(repo: &std::path::Path, cfg: &config::Config) -> anyhow::Result<St
 }
 
 /// The spelling of a hub id to write down: the catalogue's where it holds a row, else the store's
-/// own where the store already stands on this model. `written_by` compares model names byte for
-/// byte, so `BAAI/BGE-M3` and `BAAI/bge-m3` are two models to every later `update` and the
-/// difference costs a whole re-embed nobody asked for — a case the catalogue cannot canonicalise
-/// for a model it does not list.
+/// own where the store already stands on this model, so the file and the store name a model the
+/// catalogue does not list one way, and the reader opens it under one hub cache key.
 fn spelling<'a>(id: &'a str, recorded: Option<&'a str>) -> &'a str {
     let id = index::embed::measured(id).map_or(id, |m| m.model);
     match recorded {

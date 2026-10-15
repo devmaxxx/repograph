@@ -211,10 +211,11 @@ impl DenseIndex {
     /// wide rows under no name, where a claim by the small model's name matches, `sync` then
     /// matches every row by hash and embeds nothing, and the store is recorded as the small
     /// model's over rows it never wrote — a state no later `embed` could reach. Either mismatch
-    /// drops the rows and the file is rewritten from the new ones alone.
+    /// drops the rows and the file is rewritten from the new ones alone. A hub id names one model
+    /// in any case, so a claim that differs only in case keeps the rows and records its spelling.
     pub fn written_by(&mut self, model: &str, dim: usize) {
         let held = if self.model.is_empty() { crate::index::embed::UNNAMED_MODEL } else { self.model.as_str() };
-        if !self.ids.is_empty() && (held != model || (self.dim > 0 && self.dim != dim)) {
+        if !self.ids.is_empty() && (!held.eq_ignore_ascii_case(model) || (self.dim > 0 && self.dim != dim)) {
             self.ids.clear(); self.hashes.clear(); self.kinds.clear(); self.vectors.clear();
             self.free.clear(); self.live.clear();
             self.persisted = 0; self.dim = 0;
@@ -619,6 +620,16 @@ mod tests {
         assert_eq!(idx.sync(&graph("x"), &mut fake).unwrap(), 2);
         idx.written_by("BAAI/bge-m3", 3);
         assert_eq!(idx.ids.len(), 2, "the same model keeps its rows");
+    }
+
+    #[test]
+    fn a_claim_in_another_case_keeps_the_rows_and_records_its_spelling() {
+        let mut idx = synced(&graph("x"));
+        idx.written_by("BAAI/BGE-M3", 3);
+        assert_eq!(idx.sync(&graph("x"), &mut fake).unwrap(), 2);
+        idx.written_by("BAAI/bge-m3", 3);
+        assert_eq!(idx.ids.len(), 2, "one model in two cases is not a re-embed");
+        assert_eq!(idx.model, "BAAI/bge-m3");
     }
 
     #[test]
