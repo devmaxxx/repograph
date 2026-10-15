@@ -886,6 +886,7 @@ mod tests {
     }
 
     /// Every name a reader opens, the mirrors included.
+    #[cfg(unix)]
     const STORE_FILES: [&str; 7] =
         ["graph.json", "graph.bin", "manifest.json", "vectors.json", "vectors.f32", "headers.json", "background.log"];
 
