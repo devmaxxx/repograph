@@ -60,11 +60,18 @@ pack_platform() {
   npm pack --silent --pack-destination "$root/$out"
 )
 
+# The old name, last of all: it depends on the launcher at this version and only runs it.
+(
+  cd npm/repograph
+  npm pkg set version="$version" "dependencies.@devmaxxx/zerograph=$version"
+  npm pack --silent --pack-destination "$root/$out"
+)
+
 echo "packed $version into $out:"
 ls -1 "$out"
 echo
-echo "publish the platform packages first, the launcher last:"
-for t in "$out"/*-arm64-*.tgz "$out"/*-x64-*.tgz "$out"/devmaxxx-zerograph-"$version".tgz; do
+echo "publish the platform packages first, then the launcher, then the old name:"
+for t in "$out"/*-arm64-*.tgz "$out"/*-x64-*.tgz "$out"/devmaxxx-zerograph-"$version".tgz "$out"/devmaxxx-repograph-"$version".tgz; do
   [ -e "$t" ] && echo "  npm publish $t"
 done
 true

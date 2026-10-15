@@ -6,7 +6,19 @@ on:
   # platform new to the matrix is proven on a runner before a version number is spent on it.
   workflow_dispatch:
 jobs:
+  # npm-pack.sh versions the packages from the tag and the binary reports Cargo.toml's, so a tag
+  # that names another version would publish one under the other's number, and a number spent on
+  # GitHub Packages is never given back.
+  version:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          crate=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
+          [ "${GITHUB_REF_NAME#v}" = "$crate" ] || { echo "::error::tag $GITHUB_REF_NAME does not match Cargo.toml's $crate"; exit 1; }
   build:
+    needs: version
     strategy:
       matrix:
         include:
@@ -74,7 +86,9 @@ jobs:
           tar -C bin/linux-x64 -xzf zerograph-x86_64-unknown-linux-gnu.tar.gz
           unzip -q zerograph-x86_64-pc-windows-msvc.zip -d bin/win32-x64
           scripts/npm-pack.sh "${GITHUB_REF_NAME#v}" darwin-arm64=bin/darwin-arm64/zerograph linux-x64=bin/linux-x64/zerograph win32-x64=bin/win32-x64/zerograph.exe
-      # The launcher goes last: until its platform packages exist, an install of it resolves nothing.
+      # The launcher goes after its platform packages: until they exist, an install of it resolves
+      # nothing. The old name goes after the launcher it depends on.
       - run: |
           for t in dist/npm/*-arm64-*.tgz dist/npm/*-x64-*.tgz; do npm publish "$t"; done
           npm publish dist/npm/devmaxxx-zerograph-"${GITHUB_REF_NAME#v}".tgz
+          npm publish dist/npm/devmaxxx-repograph-"${GITHUB_REF_NAME#v}".tgz

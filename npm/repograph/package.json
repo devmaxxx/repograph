@@ -1,0 +1,27 @@
+{
+  "name": "@devmaxxx/repograph",
+  "version": "0.6.0",
+  "description": "Renamed to @devmaxxx/zerograph. This package installs it and runs it under the old name.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/devmaxxx/zerograph.git"
+  },
+  "homepage": "https://github.com/devmaxxx/zerograph#readme",
+  "bin": {
+    "repograph": "bin/repograph.js"
+  },
+  "files": [
+    "bin/repograph.js",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "@devmaxxx/zerograph": "0.6.0"
+  },
+  "publishConfig": {
+    "registry": "https://npm.pkg.github.com"
+  }
+}
