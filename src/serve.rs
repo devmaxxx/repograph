@@ -269,6 +269,9 @@ pub struct Reply {
     pub stderr: Vec<String>,
     /// The rerank commands this answer started; a server before 0.6.0 sends none.
     #[serde(default)] pub reranked: u32,
+    /// Why the answer failed, in which case the client answers in its own process, as it does
+    /// when the connection closes unanswered, and `reranked` is what the failure already started.
+    #[serde(default)] pub error: Option<String>,
 }
 
 /// The resident answer, or None when this process has to answer: no socket, one nobody
@@ -282,7 +285,19 @@ pub struct Reply {
 /// itself, and removes a dead one before it binds. All a client owes the question is an answer,
 /// and it has one either way.
 pub fn try_ask(repo: &Path, req: &ask::Request) -> Option<Reply> {
-    try_ask_within(repo, req, IO_TIMEOUT)
+    try_ask_spending(repo, req).0
+}
+
+/// `try_ask`, and the rerank commands a resident answer started before it failed: a model that
+/// ran was paid for whether or not an answer came of it, and an allowance has to count it.
+pub fn try_ask_spending(repo: &Path, req: &ask::Request) -> (Option<Reply>, u32) {
+    match try_ask_within(repo, req, IO_TIMEOUT) {
+        Some(Reply { error: Some(e), reranked, .. }) => {
+            eprintln!("serve: the resident answer failed: {}; answering here", crate::terminal_safe(&e));
+            (None, reranked)
+        }
+        reply => (reply, 0),
+    }
 }
 
 /// `try_ask` with the wait for the server's first line named, which is the only thing a test can
@@ -570,7 +585,14 @@ fn answer(mut stream: sys::Stream, watcher: &mut crate::Watcher, ctx: &mut ask::
     // Taken before the `?`: a model command started by an answer that then failed was still paid
     // for, and its count must not ride out on the next client's reply.
     let reranked = ctx.take_reranked();
-    let stdout = answered?;
+    let stdout = match answered {
+        Ok(stdout) => stdout,
+        Err(e) => {
+            let reply = Reply { reranked, error: Some(format!("{e:#}")), ..header(ctx, build) };
+            let _ = writeln!(stream, "{}", serde_json::to_string(&reply)?);
+            return Err(e);
+        }
+    };
     let stderr = ctx.notices();
     let reply = Reply { stdout, stderr, reranked, ..header(ctx, build) };
     writeln!(stream, "{}", serde_json::to_string(&reply)?)?;
@@ -579,7 +601,7 @@ fn answer(mut stream: sys::Stream, watcher: &mut crate::Watcher, ctx: &mut ask::
 
 /// What this process is, with no answer in it: the three fields a client decides on.
 fn header(ctx: &ask::Context, build: Option<crate::walk::Stamp>) -> Reply {
-    Reply { v: VERSION.into(), build, no_dense: ctx.no_dense(), stdout: String::new(), stderr: vec![], reranked: 0 }
+    Reply { v: VERSION.into(), build, no_dense: ctx.no_dense(), stdout: String::new(), stderr: vec![], reranked: 0, error: None }
 }
 
 /// The same header under a version no build carries. An empty `stdout` is a refusal here and a
@@ -601,7 +623,7 @@ impl Drop for Unlink {
 
 #[cfg(test)]
 mod tests {
-    use super::{ack_line, build_stamp, drop_model_now, reply_timeout, socket_path, sys, try_ask, try_ask_within, Ack, Reply, IO_TIMEOUT, RERANK_TIMEOUT, VERSION};
+    use super::{ack_line, build_stamp, drop_model_now, reply_timeout, socket_path, sys, try_ask, try_ask_spending, try_ask_within, Ack, Reply, IO_TIMEOUT, RERANK_TIMEOUT, VERSION};
     use crate::ask::Request;
     use std::io::{BufRead, BufReader, Write};
     use std::time::Duration;
@@ -729,7 +751,7 @@ mod tests {
             std::thread::sleep(Duration::from_millis(700));
             let mut line = String::new();
             BufReader::new(s.try_clone().unwrap()).read_line(&mut line).unwrap();
-            let reply = Reply { v: VERSION.into(), build, no_dense: false, stdout: "queued".into(), stderr: vec![], reranked: 0 };
+            let reply = Reply { v: VERSION.into(), build, no_dense: false, stdout: "queued".into(), stderr: vec![], reranked: 0, error: None };
             writeln!(s, "{}", serde_json::to_string(&reply).unwrap()).unwrap();
         });
         let req = Request { words: vec!["чаевые".into()], json: false, seeds: 5, bodies: false, rerank: true, rerank_local: false, depth: crate::rerank::DEPTH, stale: false, no_dense: false };
@@ -754,13 +776,36 @@ mod tests {
             // Later than the shortened first-line wait below, so the read that finds it only
             // succeeds if the ack actually moved the deadline out to `reply_timeout`.
             std::thread::sleep(Duration::from_millis(700));
-            let reply = Reply { v: VERSION.into(), build, no_dense: false, stdout: "hi".into(), stderr: vec![], reranked: 0 };
+            let reply = Reply { v: VERSION.into(), build, no_dense: false, stdout: "hi".into(), stderr: vec![], reranked: 0, error: None };
             writeln!(s, "{}", serde_json::to_string(&reply).unwrap()).unwrap();
         });
         let req = Request { words: vec!["чаевые".into()], json: false, seeds: 5, bodies: false, rerank: true, rerank_local: false, depth: crate::rerank::DEPTH, stale: false, no_dense: false };
         let got = try_ask_within(dir.path(), &req, Duration::from_millis(300));
         held.join().unwrap();
         assert_eq!(got.map(|r| r.stdout), Some("hi".into()), "the late reply should still have been read after the ack extended the timeout");
+    }
+
+    /// A failed answer is no answer, but the model it started was paid for: the client answers
+    /// itself and is told the count, so an allowance charges it.
+    #[test]
+    fn a_failed_resident_answer_is_handed_back_with_what_it_spent() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join(".zerograph")).unwrap();
+        let listener = sys::bind(&socket_path(dir.path())).unwrap();
+        let build = build_stamp();
+        let held = std::thread::spawn(move || {
+            let mut s = sys::accept(&listener).unwrap();
+            let mut line = String::new();
+            BufReader::new(s.try_clone().unwrap()).read_line(&mut line).unwrap();
+            writeln!(s, "{}", ack_line()).unwrap();
+            let reply = Reply { v: VERSION.into(), build, no_dense: false, stdout: String::new(), stderr: vec![], reranked: 1, error: Some("the store went away".into()) };
+            writeln!(s, "{}", serde_json::to_string(&reply).unwrap()).unwrap();
+        });
+        let req = Request { words: vec!["чаевые".into()], json: false, seeds: 5, bodies: false, rerank: true, rerank_local: false, depth: crate::rerank::DEPTH, stale: false, no_dense: false };
+        let (got, spent) = try_ask_spending(dir.path(), &req);
+        held.join().unwrap();
+        assert!(got.is_none(), "a failed answer is answered here instead");
+        assert_eq!(spent, 1);
     }
 
     /// On macOS, `setsockopt` for a read timeout fails with EINVAL once the peer has already
@@ -781,7 +826,7 @@ mod tests {
             writeln!(s, "{}", ack_line()).unwrap();
             // No delay: the reply and the drop of `s` below race the client's own extension of
             // its read timeout, and on macOS this side wins often enough to pin the bug on.
-            let reply = Reply { v: VERSION.into(), build, no_dense: false, stdout: "hi2".into(), stderr: vec![], reranked: 0 };
+            let reply = Reply { v: VERSION.into(), build, no_dense: false, stdout: "hi2".into(), stderr: vec![], reranked: 0, error: None };
             writeln!(s, "{}", serde_json::to_string(&reply).unwrap()).unwrap();
         });
         let req = Request { words: vec!["чаевые".into()], json: false, seeds: 5, bodies: false, rerank: true, rerank_local: false, depth: crate::rerank::DEPTH, stale: false, no_dense: false };
@@ -796,7 +841,7 @@ mod tests {
     fn an_acknowledgement_and_a_reply_are_never_read_as_each_other() {
         let ack = serde_json::to_string(&Ack { ack: "0.5.3".into() }).unwrap();
         let reply = serde_json::to_string(&Reply {
-            v: "0.5.3".into(), build: None, no_dense: false, stdout: String::new(), stderr: vec![], reranked: 0,
+            v: "0.5.3".into(), build: None, no_dense: false, stdout: String::new(), stderr: vec![], reranked: 0, error: None,
         }).unwrap();
         assert!(serde_json::from_str::<Reply>(&ack).is_err(), "{ack}");
         assert!(serde_json::from_str::<Ack>(&reply).is_err(), "{reply}");

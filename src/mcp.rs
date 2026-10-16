@@ -190,20 +190,27 @@ impl Server {
         let cfg = self.config()?;
         let mut spent = Vec::new();
         req.rerank = req.rerank && self.may_rerank(cfg.mcp_reranks, &mut spent);
-        let (text, notices, reranked) = self.answer(&req, &cfg)?;
-        // Charged by the commands the answer started, whether or not they answered: a model that
-        // timed out or failed may still have billed, and an exact id or a refused command never
-        // reached one.
-        self.reranks.fetch_add(reranked, std::sync::atomic::Ordering::SeqCst);
+        let (text, notices) = self.answer(&req, &cfg)?;
         Ok(with_notices(text, spent.into_iter().chain(notices).collect()))
     }
 
-    fn answer(&self, req: &ask::Request, cfg: &config::Config) -> Result<(String, Vec<String>, u32)> {
-        let resident = if crate::env_os("NO_SERVE").is_some() { None } else { serve::try_ask(&self.repo, req) };
-        if let Some(reply) = resident { return Ok((reply.stdout, reply.stderr, reply.reranked)); }
+    /// Charges the allowance by the commands each attempt started, whether or not they answered
+    /// and whether or not the answer itself failed: a model that timed out or failed may still
+    /// have billed, and an exact id or a refused command never reached one.
+    fn answer(&self, req: &ask::Request, cfg: &config::Config) -> Result<(String, Vec<String>)> {
+        let charge = |n: u32| self.reranks.fetch_add(n, std::sync::atomic::Ordering::SeqCst);
+        if crate::env_os("NO_SERVE").is_none() {
+            let (resident, failed) = serve::try_ask_spending(&self.repo, req);
+            charge(failed);
+            if let Some(reply) = resident {
+                charge(reply.reranked);
+                return Ok((reply.stdout, reply.stderr));
+            }
+        }
         let mut ctx = ask::Context::open(&self.repo, cfg, req.stale, self.no_dense)?;
-        let text = ctx.answer(req)?;
-        Ok((text, ctx.notices(), ctx.take_reranked()))
+        let answered = ctx.answer(req);
+        charge(ctx.take_reranked());
+        Ok((answered?, ctx.notices()))
     }
 
     /// Whether this process's allowance has a paid rerank left, or why there is none.

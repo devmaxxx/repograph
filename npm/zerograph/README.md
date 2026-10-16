@@ -1,7 +1,7 @@
 # zerograph
 
-One binary that builds a knowledge graph of a repository's markdown requirement docs and
-TypeScript code at zero model tokens, keeps it fresh while you work, and answers questions about
+One binary that builds a knowledge graph of a repository's markdown and code in 24 languages at
+zero model tokens, keeps it fresh while you work, and answers questions about
 it by exact id, keyword or paraphrase.
 
 ```bash
@@ -15,10 +15,11 @@ This package is a launcher: the binary itself comes from a per-platform package 
 optional dependency (`zerograph-darwin-arm64`, `zerograph-linux-x64`, `zerograph-win32-x64`). On any other platform the launcher explains how to build from
 source with `cargo install`.
 
-The dense retriever downloads a 470 MB embedding model into `~/.cache/zerograph/fastembed`
-(`%USERPROFILE%\.cache\zerograph\fastembed` on Windows) on its first fused query; `--no-dense`
-never touches it, and `embed_model = "intfloat/multilingual-e5-large"` in `zerograph.toml` swaps it
-for a 2.1 GB one that reads paraphrase 22/30 against the default's 15/30.
+The dense retriever downloads its embedding model, `embeddinggemma-300m` (about 1.2 GB in the
+cache), into `~/.cache/zerograph/fastembed` (`%USERPROFILE%\.cache\zerograph\fastembed` on
+Windows) on its first fused query; `--no-dense` never touches it. On the recorded 82 cases it reads
+keyword 40/40, paraphrase 19/30 and code 12/12, against 39/40, 7/30 and 12/12 with `--no-dense`.
+`embed_model` in `zerograph.toml` picks another model; the measured ones are in `docs/embeddings.md`.
 
 This package was `@devmaxxx/repograph` until 0.6.0. It installs only the `zerograph` command, and
 reads a `.repograph/` store, `repograph.toml`, `REPOGRAPH_*` variables and the old model cache

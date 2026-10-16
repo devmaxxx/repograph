@@ -139,6 +139,14 @@ pub fn run_command(command: &str, input: &str, deadline: Duration) -> Result<Str
     let stdout = drain(child.stdout.take().context("stdout")?);
     let stderr = drain(child.stderr.take().context("stderr")?);
     let stopped = || anyhow::anyhow!("`{command}` gave no answer within {} s and was stopped", deadline.as_secs());
+    // Woken by the answer itself: a command closes its output when it exits, so waiting on the
+    // stdout reader first leaves the exit poll below a millisecond's work rather than up to a
+    // 50 ms sleep after the model is done.
+    let early = match stdout.recv_timeout(until.saturating_duration_since(Instant::now())) {
+        Ok(read) => Some(read),
+        Err(RecvTimeoutError::Timeout) => None,
+        Err(RecvTimeoutError::Disconnected) => anyhow::bail!("the stdout reader panicked"),
+    };
     let mut pause = Duration::from_millis(1);
     let status = loop {
         if let Some(status) = child.try_wait()? { break status; }
@@ -161,7 +169,10 @@ pub fn run_command(command: &str, input: &str, deadline: Duration) -> Result<Str
         }
         Err(RecvTimeoutError::Disconnected) => anyhow::bail!("the {pipe} reader panicked"),
     };
-    let stdout = collect(&stdout, "stdout")?;
+    let stdout = match early {
+        Some(read) => read.context("read the command's stdout")?,
+        None => collect(&stdout, "stdout")?,
+    };
     let stderr = collect(&stderr, "stderr")?;
     writer.join().map_err(|_| anyhow::anyhow!("the prompt writer panicked"))?
         .with_context(|| format!("write the prompt to `{command}`"))?;
@@ -221,15 +232,18 @@ mod interrupt {
     use std::sync::atomic::{AtomicI32, AtomicUsize, Ordering};
 
     const SIGNALS: [libc::c_int; 3] = [libc::SIGINT, libc::SIGTERM, libc::SIGHUP];
-    /// The group of the command running now. One slot: the commands a process runs follow each
-    /// other, and a second at once would only miss the forward, not misdirect it.
-    static GROUP: AtomicI32 = AtomicI32::new(0);
+    /// The groups of the commands running now, one slot each, so a command that finishes first
+    /// does not take the forward away from one still running. A command past the last slot only
+    /// misses the forward; it is never sent another's signal.
+    static GROUPS: [AtomicI32; 8] = [const { AtomicI32::new(0) }; 8];
     static PREVIOUS: [AtomicUsize; 3] = [const { AtomicUsize::new(libc::SIG_DFL) }; 3];
 
     extern "C" fn forward(sig: libc::c_int) {
-        let group = GROUP.load(Ordering::SeqCst);
-        // SAFETY: `kill`, `signal` and `raise` are async-signal-safe, and so is an atomic load.
-        if group > 0 { unsafe { libc::kill(-group, sig); } }
+        for slot in &GROUPS {
+            let group = slot.load(Ordering::SeqCst);
+            // SAFETY: `kill`, `signal` and `raise` are async-signal-safe, and so is an atomic load.
+            if group > 0 { unsafe { libc::kill(-group, sig); } }
+        }
         let Some(i) = SIGNALS.iter().position(|&s| s == sig) else { return };
         match PREVIOUS[i].load(Ordering::SeqCst) {
             libc::SIG_DFL => unsafe { libc::signal(sig, libc::SIG_DFL); libc::raise(sig); },
@@ -240,10 +254,12 @@ mod interrupt {
         }
     }
 
-    pub struct Forwarding;
+    pub struct Forwarding(Option<usize>);
 
     impl Drop for Forwarding {
-        fn drop(&mut self) { GROUP.store(0, Ordering::SeqCst); }
+        fn drop(&mut self) {
+            if let Some(i) = self.0 { GROUPS[i].store(0, Ordering::SeqCst); }
+        }
     }
 
     pub fn forward_to(leader: u32) -> Forwarding {
@@ -260,8 +276,8 @@ mod interrupt {
                 if previous == libc::SIG_IGN { unsafe { libc::signal(sig, libc::SIG_IGN); } }
             }
         });
-        GROUP.store(i32::try_from(leader).unwrap_or(0), Ordering::SeqCst);
-        Forwarding
+        let leader = i32::try_from(leader).unwrap_or(0);
+        Forwarding(GROUPS.iter().position(|g| g.compare_exchange(0, leader, Ordering::SeqCst, Ordering::SeqCst).is_ok()))
     }
 }
 
