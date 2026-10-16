@@ -190,31 +190,29 @@ impl Server {
         let cfg = self.config()?;
         let mut spent = Vec::new();
         req.rerank = req.rerank && self.may_rerank(cfg.mcp_reranks, &mut spent);
-        let answered = self.answer(&req, &cfg);
-        // Only a rerank that ran is one spent: a refused command, one that failed or timed out,
-        // and an error before the model was asked each leave the allowance as it was.
-        let ran = answered.as_ref().is_ok_and(|(_, notices)| !notices.iter().any(|n| n.starts_with("rerank:")));
-        if req.rerank && !ran { self.reranks.fetch_sub(1, std::sync::atomic::Ordering::SeqCst); }
-        let (text, notices) = answered?;
+        let (text, notices, reranked) = self.answer(&req, &cfg)?;
+        // Charged by the commands the answer started, whether or not they answered: a model that
+        // timed out or failed may still have billed, and an exact id or a refused command never
+        // reached one.
+        self.reranks.fetch_add(reranked, std::sync::atomic::Ordering::SeqCst);
         Ok(with_notices(text, spent.into_iter().chain(notices).collect()))
     }
 
-    fn answer(&self, req: &ask::Request, cfg: &config::Config) -> Result<(String, Vec<String>)> {
+    fn answer(&self, req: &ask::Request, cfg: &config::Config) -> Result<(String, Vec<String>, u32)> {
         let resident = if crate::env_os("NO_SERVE").is_some() { None } else { serve::try_ask(&self.repo, req) };
-        if let Some(reply) = resident { return Ok((reply.stdout, reply.stderr)); }
+        if let Some(reply) = resident { return Ok((reply.stdout, reply.stderr, reply.reranked)); }
         let mut ctx = ask::Context::open(&self.repo, cfg, req.stale, self.no_dense)?;
         let text = ctx.answer(req)?;
-        Ok((text, ctx.notices()))
+        Ok((text, ctx.notices(), ctx.take_reranked()))
     }
 
-    /// Takes one paid rerank from this process's allowance, or says why there is none left.
+    /// Whether this process's allowance has a paid rerank left, or why there is none.
     fn may_rerank(&self, limit: u32, notices: &mut Vec<String>) -> bool {
-        use std::sync::atomic::Ordering;
-        let taken = self.reranks.fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| (n < limit).then_some(n + 1));
-        if taken.is_err() {
+        let left = self.reranks.load(std::sync::atomic::Ordering::SeqCst) < limit;
+        if !left {
             notices.push(format!("rerank: this server has run its {limit} paid reranks (mcp_reranks in the machine config); answering from the fused order"));
         }
-        taken.is_ok()
+        left
     }
 
     fn explain(&self, args: &Args) -> Result<String> {
@@ -584,9 +582,10 @@ mod tests {
     fn paid_reranks_stop_at_the_allowance_and_say_so() {
         let (_dir, server) = served();
         let mut notices = Vec::new();
-        assert!(server.may_rerank(2, &mut notices) && server.may_rerank(2, &mut notices));
+        assert!(server.may_rerank(2, &mut notices));
+        server.reranks.fetch_add(2, std::sync::atomic::Ordering::SeqCst);
         assert!(notices.is_empty());
-        assert!(!server.may_rerank(2, &mut notices), "the third is past an allowance of two");
+        assert!(!server.may_rerank(2, &mut notices), "two run is the whole of an allowance of two");
         assert!(notices[0].contains("mcp_reranks") && notices[0].contains("fused order"), "{notices:?}");
         assert!(!Server::new(Path::new("."), true).may_rerank(0, &mut Vec::new()), "0 turns rerank over MCP off");
     }

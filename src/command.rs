@@ -150,8 +150,9 @@ pub fn run_command(command: &str, input: &str, deadline: Duration) -> Result<Str
         pause = (pause * 2).min(Duration::from_millis(50));
     };
     // `sh` exiting is not the end of the output: something it started can hold the pipes open past
-    // it, so the deadline covers the reads too.
-    let collect = |rx: &Receiver<std::io::Result<Vec<u8>>>, pipe: &str| match rx.recv_timeout(until.saturating_duration_since(Instant::now())) {
+    // it, so the deadline covers the reads too — with a grace, so an answer that arrived just
+    // before the deadline is not lost to its reader thread being a moment behind.
+    let collect = |rx: &Receiver<std::io::Result<Vec<u8>>>, pipe: &str| match rx.recv_timeout(until.saturating_duration_since(Instant::now()).max(READ_GRACE)) {
         Ok(read) => read.with_context(|| format!("read the command's {pipe}")),
         Err(RecvTimeoutError::Timeout) => {
             #[cfg(unix)]
@@ -170,9 +171,28 @@ pub fn run_command(command: &str, input: &str, deadline: Duration) -> Result<Str
     Ok(String::from_utf8_lossy(&stdout).into_owned())
 }
 
+const READ_GRACE: Duration = Duration::from_secs(2);
+
+/// Most bytes kept of one pipe. A model's answer is a few KB; a command that streams for the whole
+/// deadline must not grow the process by what it writes, so the rest is read and dropped — left
+/// unread, the command would block on a full pipe instead of being judged by its exit.
+const KEPT: usize = 8 << 20;
+
 fn drain(mut pipe: impl Read + Send + 'static) -> Receiver<std::io::Result<Vec<u8>>> {
     let (tx, rx) = std::sync::mpsc::channel();
-    std::thread::spawn(move || { let mut buf = Vec::new(); let _ = tx.send(pipe.read_to_end(&mut buf).map(|_| buf)); });
+    std::thread::spawn(move || {
+        let mut kept = Vec::new();
+        let mut chunk = [0u8; 16 << 10];
+        let read = loop {
+            match pipe.read(&mut chunk) {
+                Ok(0) => break Ok(()),
+                Ok(n) => kept.extend_from_slice(&chunk[..n.min(KEPT.saturating_sub(kept.len()))]),
+                Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {}
+                Err(e) => break Err(e),
+            }
+        };
+        let _ = tx.send(read.map(|()| kept));
+    });
     rx
 }
 
@@ -232,6 +252,9 @@ mod interrupt {
             for (i, &sig) in SIGNALS.iter().enumerate() {
                 // SAFETY: installs a handler that does only async-signal-safe work.
                 let previous = unsafe { libc::signal(sig, forward as *const () as libc::sighandler_t) };
+                // A failed install leaves nothing to chain to, and SIG_ERR called as a handler
+                // would jump to address -1.
+                if previous == libc::SIG_ERR { continue; }
                 PREVIOUS[i].store(previous, Ordering::SeqCst);
                 // An ignored signal stays ignored: under `nohup`, a hangup must not start ending the run.
                 if previous == libc::SIG_IGN { unsafe { libc::signal(sig, libc::SIG_IGN); } }
