@@ -352,6 +352,67 @@ fn try_ask_within(repo: &Path, req: &ask::Request, first_line: Duration) -> Opti
     Some(reply)
 }
 
+/// What `zerograph stop` sends in place of a hello. It carries no version: a server of any build
+/// that knows the line leaves, and one that predates it closes the connection unanswered.
+#[derive(serde::Serialize, serde::Deserialize)]
+pub struct Stop { pub stop: bool }
+
+/// The server's answer to a `Stop`, written before it leaves.
+#[derive(serde::Serialize, serde::Deserialize)]
+pub struct Stopped { pub stopped: String }
+
+/// How long `stop` waits for the socket file to go once the server has said it is leaving: the
+/// loop notices within `WAKE`, and a model being dropped is what takes the rest.
+const STOP_WAIT: Duration = Duration::from_secs(10);
+
+/// Ends the server answering for this repository through its own exit — the one that removes the
+/// socket file — which a kill does not run on Windows. False when nothing answers here.
+pub fn stop(repo: &Path) -> Result<bool> {
+    let path = socket_path(repo);
+    if !sys::present(&path) || !sys::ours(&path) { return Ok(false); }
+    let Ok(mut stream) = sys::connect(&path) else { return Ok(false) };
+    // A server busy with a rerank reads this line when it is done, so the wait is a rerank's.
+    stream.set_read_timeout(Some(RERANK_TIMEOUT))?;
+    stream.set_write_timeout(Some(IO_TIMEOUT))?;
+    writeln!(stream, "{}", serde_json::to_string(&Stop { stop: true })?)?;
+    let mut reader = BufReader::new(stream.try_clone()?);
+    let mut line = String::new();
+    loop {
+        line.clear();
+        if reader.read_line(&mut line).context("waiting for serve to confirm")? == 0 {
+            anyhow::bail!("the server at {} closed without leaving; it predates `stop`, so end the process itself", path.display());
+        }
+        if serde_json::from_str::<Stopped>(&line).is_ok() { break; }
+    }
+    let start = Instant::now();
+    while sys::present(&path) && start.elapsed() < STOP_WAIT { std::thread::sleep(Duration::from_millis(50)); }
+    Ok(true)
+}
+
+/// `serve --detach`: the same server in a process of its own, with no console and its output in
+/// `serve.log`, and this one gone once the socket answers. Waiting for the bind is what lets the
+/// next command be a question rather than a race with the start.
+pub fn detach(repo: &Path, no_dense: bool, args: &[String]) -> Result<()> {
+    let path = socket_path(repo);
+    if sys::present(&path) && sys::connect(&path).is_ok() { anyhow::bail!("another serve answers at {}", path.display()); }
+    let args: Vec<&str> = args.iter().map(String::as_str).collect();
+    let alive = crate::refresh::spawn_detached_logging(repo, no_dense, &args, "serve.log")?;
+    let log = format!("{}/serve.log", crate::store::dir_name_of(repo));
+    let start = Instant::now();
+    loop {
+        if sys::present(&path) && sys::connect(&path).is_ok() {
+            eprintln!("serve: started in the background; {log} has its output, `zerograph stop` ends it");
+            return Ok(());
+        }
+        if !alive.load(std::sync::atomic::Ordering::SeqCst) { anyhow::bail!("serve exited before it listened; {log} says why"); }
+        if start.elapsed() > DETACH_WAIT { anyhow::bail!("serve did not listen within {}s; {log} says why", DETACH_WAIT.as_secs()); }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
+/// The bind comes before the model and the vectors open, so this covers a settle and a socket.
+const DETACH_WAIT: Duration = Duration::from_secs(60);
+
 pub fn run(repo: &Path, cfg: &config::Config, every: u64, batch: usize, idle: u64, idle_model: u64, no_dense: bool) -> Result<()> {
     // Stamped first of all, because `cfg` was read before this call and the two opens below take
     // seconds on a large store: a file edited inside that window would be stamped as the baseline
@@ -477,7 +538,7 @@ extern "C" fn note_term(_sig: libc::c_int) {
 
 /// Asks for `SIGTERM` and `SIGINT` to reach `terminated()` instead of killing the process where
 /// its `Drop`s cannot run. On Windows there is no equivalent and the socket file is left for the
-/// next `serve` to remove, which the README says.
+/// next `serve` to remove; `zerograph stop` is the exit that removes it there.
 #[cfg(unix)]
 fn catch_termination() {
     for sig in [libc::SIGTERM, libc::SIGINT] {
@@ -559,6 +620,12 @@ fn hello_line_within(stream: &sys::Stream, total: Duration) -> Option<String> {
 /// its hello asked nothing.
 fn answer(mut stream: sys::Stream, watcher: &mut crate::Watcher, ctx: &mut ask::Context, build: Option<crate::walk::Stamp>) -> Result<bool> {
     let Some(line) = hello_line(&stream) else { return Ok(false) };
+    // Through the same flag a SIGTERM sets, so the exit is the one every other path takes.
+    if serde_json::from_str::<Stop>(&line).is_ok_and(|s| s.stop) {
+        TERMINATED.store(true, std::sync::atomic::Ordering::Relaxed);
+        writeln!(stream, "{}", serde_json::to_string(&Stopped { stopped: VERSION.into() })?)?;
+        return Ok(true);
+    }
     let hello: Hello = serde_json::from_str(&line).context("hello")?;
     // The refusals, all three under one reply: the build and the arm on it name which of them
     // sent the question back, and the version on it matches no client, present or past, so none
