@@ -280,6 +280,22 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "the rebuild through the launcher failed: $LASTEXITCODE" }
           npx zerograph --repo $R --no-dense trace write refund
           if ($LASTEXITCODE -ne 3) { throw "a verdict through the shim should exit 3, not $LASTEXITCODE" }
+
+          # An upgrade under a live server: the launcher runs a per-version copy, so the package's
+          # own binary can be overwritten while a detached `serve` answers, and `stop` ends it.
+          if ($IsWindows) {
+            npx zerograph --repo $R --no-dense serve --detach --idle 600
+            if ($LASTEXITCODE -ne 0) { throw "serve --detach through the launcher failed: $LASTEXITCODE" }
+            $copy = Join-Path $env:LOCALAPPDATA 'zerograph\bin\0.0.0-ci\zerograph.exe'
+            if (-not (Test-Path $copy)) { throw "the launcher kept no copy at $copy" }
+            $pkg = Join-Path $proj 'node_modules\zerograph\bin\win32-x64\zerograph.exe'
+            Copy-Item -Force $pkg "$pkg.new"
+            Move-Item -Force "$pkg.new" $pkg
+            if (-not $?) { throw "the package's binary was locked by the running server" }
+            npx zerograph --repo $R stop
+            if ($LASTEXITCODE -ne 0) { throw "stop through the launcher failed: $LASTEXITCODE" }
+            if (Get-Item -Force "$R\.zerograph\serve.sock" -ErrorAction SilentlyContinue) { throw "stop left the socket behind" }
+          }
           Pop-Location
 
           # And a pack run given no binary for this platform: a named platform and an exit code, not
