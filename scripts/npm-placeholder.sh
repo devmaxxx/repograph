@@ -25,6 +25,8 @@ else
 fi
 
 echo
-echo "on npm: zerograph@$(npm view zerograph version)"
+# npm processes a new package for a few minutes before `npm view` lists it.
+listed=$(npm view zerograph version 2>/dev/null || true)
+echo "on npm: ${listed:-not listed yet; a new package can take a few minutes}"
 echo "next: https://www.npmjs.com/package/zerograph/access → Trusted publishing → GitHub Actions,"
 echo "      user devmaxxx, repository zerograph, workflow release.yml"
