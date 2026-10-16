@@ -5,8 +5,9 @@
 # Run once, by the package owner, before the first tag (docs/bench/runbook.md, step 5).
 set -euo pipefail
 
-if [ -n "$(npm view zerograph version 2>/dev/null)" ]; then
-  echo "zerograph is on npm already ($(npm view zerograph version)); nothing to do"
+existing=$(npm view zerograph version 2>/dev/null || true)
+if [ -n "$existing" ]; then
+  echo "zerograph is on npm already ($existing); nothing to do"
   exit 0
 fi
 echo "publishing as: $(npm whoami)"
