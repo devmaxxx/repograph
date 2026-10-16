@@ -174,8 +174,13 @@ pub fn run_command(command: &str, input: &str, deadline: Duration) -> Result<Str
         None => collect(&stdout, "stdout")?,
     };
     let stderr = collect(&stderr, "stderr")?;
-    writer.join().map_err(|_| anyhow::anyhow!("the prompt writer panicked"))?
-        .with_context(|| format!("write the prompt to `{command}`"))?;
+    // Not joined while it still writes: something the command started can hold the read end of
+    // its stdin open past the command's exit, and a prompt larger than the pipe then blocks the
+    // writer for good — a wait with no deadline on a run that has already answered.
+    if writer.is_finished() {
+        writer.join().map_err(|_| anyhow::anyhow!("the prompt writer panicked"))?
+            .with_context(|| format!("write the prompt to `{command}`"))?;
+    }
     if !status.success() {
         anyhow::bail!("`{command}` exited {status}: {}", clip_stderr(&stderr));
     }
@@ -292,6 +297,17 @@ mod tests {
         let started = Instant::now();
         let err = run_command("(sleep 30) & echo early", "", Duration::from_millis(300)).unwrap_err().to_string();
         assert!(err.contains("no answer within"), "{err}");
+        assert!(started.elapsed() < Duration::from_secs(10), "took {:?}", started.elapsed());
+    }
+
+    /// The command has answered and gone; what it started holds only the prompt's pipe open, and
+    /// a prompt past the pipe buffer must not make the run wait for that.
+    #[cfg(unix)]
+    #[test]
+    fn a_child_holding_only_stdin_open_does_not_hold_up_an_answer() {
+        let started = Instant::now();
+        let out = run_command("(sleep 20 <&0 >/dev/null 2>&1 &); echo answered", &"x".repeat(1 << 20), LONG).unwrap();
+        assert_eq!(out, "answered\n");
         assert!(started.elapsed() < Duration::from_secs(10), "took {:?}", started.elapsed());
     }
 
