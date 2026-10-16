@@ -7,7 +7,7 @@ cargo install --path .             # from source; Rust 1.98, pinned in rust-tool
 
 The npm package carries all three binaries and a launcher that runs the one for this platform,
 so a lockfile written on one platform installs on the others, nothing runs at install time, and
-nothing is fetched beyond the package itself (about 40 MB). It is on the public npm registry and
+nothing is fetched beyond the package itself (a 56 MB download, about 300 MB installed). It is on the public npm registry and
 needs no `.npmrc`. Tagged releases (`v*`) build all three binaries as GitHub release assets (a tarball
 for the unix ones, a zip holding `zerograph.exe` for Windows) and cut the npm package from those
 same files (`.github/workflows/release.yml`, publishing through npm's trusted publishing, so each
