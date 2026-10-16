@@ -130,7 +130,7 @@ fn a_text_file_is_found_by_what_it_says_and_named_when_it_changes() {
     with_text(repo, &["build"]);
     let (asked, _) = with_text(repo, &["ask", "saturday night window"]);
     let top: Vec<&str> = asked.lines().filter(|l| !l.starts_with(' ')).take(5).collect();
-    assert!(top.iter().any(|l| l.starts_with("file:ops/deploy.yaml ")), "{asked}");
+    assert!(top.iter().any(|l| l.starts_with("ops/deploy.yaml:")), "{asked}");
     write(repo, "ops/deploy.yaml", "strategy: canary\nwindow: saturday-night\n");
     let (changed, _) = with_text(repo, &["changes", "--base", "HEAD"]);
     assert!(changed.contains("ops/deploy.yaml"), "{changed}");

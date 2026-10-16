@@ -87,7 +87,7 @@ fn a_repository_gets_its_families_from_the_documents_and_says_when_they_move() {
     assert!(ok && out.contains("held aside: 1 edges to ids in 1 prefixes no line defines  ISO"), "{out}");
     let (ok, out, err) = zerograph(repo, &["ask", "NEW-1"]);
     assert!(ok, "{out}{err}");
-    assert!(out.lines().next().unwrap().starts_with("NEW-1"), "{out}");
+    assert!(out.lines().next().unwrap().starts_with("docs/new.md:1  NEW-1  "), "{out}");
 
     // And a file that still names the old keys: one line, and not one family different.
     std::fs::write(repo.join("zerograph.toml"), "id_families = [\"FR-PAY\"]\n").unwrap();
