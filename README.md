@@ -37,6 +37,10 @@ Measured against `graphify`, the LLM-extracted graph it replaces:
 
 Details: [the head-to-head](docs/history.md#the-head-to-head-against-the-graph-it-replaces).
 
+[![zerograph against graphify and GitNexus: retrieval, blast radius, build cost, embedders with and without rerank, and token use](docs/assets/comparison.png)](docs/assets/comparison.png)
+
+The image is rendered from [comparison.html](docs/assets/comparison.html); its sources are listed at its foot.
+
 ## Get started
 
 ```bash
