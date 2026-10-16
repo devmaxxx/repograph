@@ -202,6 +202,17 @@ fn detach(cmd: &mut std::process::Command) -> std::io::Result<std::process::Chil
     const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
     const CREATE_BREAKAWAY_FROM_JOB: u32 = 0x0100_0000;
     let flags = DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP;
+    // CreateProcess passes every inheritable handle, and this process's own standard handles are
+    // inheritable when its parent made them so: the child kept a caller's pipe open, and a caller
+    // reading this command's output waited for the server to exit. std duplicates whatever a later
+    // child is given, so clearing the flag on the originals costs no other spawn anything.
+    {
+        use std::os::windows::io::AsRawHandle;
+        use windows_sys::Win32::Foundation::{SetHandleInformation, HANDLE_FLAG_INHERIT};
+        for h in [std::io::stdin().as_raw_handle(), std::io::stdout().as_raw_handle(), std::io::stderr().as_raw_handle()] {
+            if !h.is_null() { unsafe { SetHandleInformation(h as _, HANDLE_FLAG_INHERIT, 0) }; }
+        }
+    }
     match cmd.creation_flags(flags | CREATE_BREAKAWAY_FROM_JOB).spawn() {
         Ok(child) => Ok(child),
         Err(_) => cmd.creation_flags(flags).spawn(),
