@@ -50,13 +50,14 @@ zerograph ask cancellation policy          # answer in a few lines
 
 ```
 $ zerograph ask cancellation
-sym:packages/db/src/schema/salon/scheduling.ts::CANCELLATION_CONSEQUENCES  packages/db/src/schema/salon/scheduling.ts:110  CANCELLATION_CONSEQUENCES
-BE-M10/T05  docs/.../BE-M10-payments-provider-stripe-connect-….md:80  Cancellation policy engine (`packages/domain/policy.ts`): inputs policy + appoin…
-  BE-M10  docs/.../BE-M10-payments-provider-stripe-connect-….md:1  BE-M10 Payments provider: Stripe Connect implementation…  ← BE-M10/T05
+packages/db/src/schema/salon/scheduling.ts:110  CANCELLATION_CONSEQUENCES
+docs/.../BE-M10-payments-provider-stripe-connect-….md:80  BE-M10/T05  Cancellation policy engine (`packages/domain/policy.ts`): inputs policy + appoin…
+  └ docs/.../BE-M10-payments-provider-stripe-connect-….md:1  BE-M10  BE-M10 Payments provider: Stripe Connect implementation…
 ```
 
-Each line is `ID  path:line  headline`. Top-level lines are the seeds the question matched; an indented
-line is a neighbour one hop away, and `←` names the seed it came from.
+Each line is `path:line  [ID]  headline`. A document id is printed; a code id is not, because the
+location and the name already say it. Top-level lines are the seeds the question matched; a `└` line
+is a neighbour one hop away, printed under the seed it came from.
 
 ```bash
 zerograph ask FR-PAY-22                    # an exact id or symbol goes straight to the node
