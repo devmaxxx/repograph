@@ -15,8 +15,8 @@ fixture's store in). What each arm wrote, copied out before the next arm ran:
 ## 1 · G23 — the reader bars, read through their own control
 
 **Gate.** `bench/probe/quiet.sh` passes (idle ≥ 85%, 1-minute load < 3.0, AC power, no `cargo`,
-`rustc`, `node` or another `repograph` running); `bench/probe/readers.sh` at n = 5 per row, twice
-through the same binary (`repograph-main`), in `~/bench/beauty-crm-test` straight after one
+`rustc`, `node` or another `zerograph` running); `bench/probe/readers.sh` at n = 5 per row, twice
+through the same binary (`zerograph-main`), in `~/bench/beauty-crm-test` straight after one
 `bench/probe/reset.sh`, every row `--stale`, with `shasum` over the store's files identical before
 the first suite and after the second (nothing wrote under them); for every row
 |median wall A − median wall B| ≤ 10% of A and |median max RSS A − B| ≤ 5% of A. A row outside
@@ -44,8 +44,8 @@ cause this replaces is the fixture's own index growing 33,526 → 33,554 rows mi
 locked, and the rule allows it readers only — and no row of the suite can write anywhere.
 
 **Correction, 2026-09-10 — the script, before any number.** The Gate above states the precondition
-as no `cargo`, `rustc`, `node` or another `repograph` running. `bench/probe/quiet.sh` as first
-committed (`a53e50c`) greps `cargo|rustc|repograph` and leaves `node` out deliberately, its comment
+as no `cargo`, `rustc`, `node` or another `zerograph` running. `bench/probe/quiet.sh` as first
+committed (`a53e50c`) greps `cargo|rustc|zerograph` and leaves `node` out deliberately, its comment
 reasoning that the agent harness which launched it is itself a `node` process. The gate is right
 and the script was wrong: a `node` burning a core is exactly the pollution this row excludes, and a
 harness that exempts its own noise measures its own convenience. So the script was fixed and the
@@ -62,10 +62,10 @@ section nor §9 has one of those.
 
 **Correction, 2026-09-10 — the third revision of the busy clause, and the last.** Recorded in full
 because three revisions of one precondition is the shape of a moving gate, even where no number has
-moved behind it. Stage one (`a53e50c`): `pgrep -l 'cargo|rustc|repograph'`, `node` deliberately out
+moved behind it. Stage one (`a53e50c`): `pgrep -l 'cargo|rustc|zerograph'`, `node` deliberately out
 of the pattern because the harness that launched the script is itself a `node` process. Stage two
 (`8b642d8`): `node` counted like the other three, on presence, with only this script's own ancestor
-chain exempt. Stage three (this commit): `cargo`, `rustc` and any other `repograph` still refuse on
+chain exempt. Stage three (this commit): `cargo`, `rustc` and any other `zerograph` still refuse on
 presence at any CPU — they are this project's own work and they are bursty, and one at 0% now is
 compiling or embedding a second later — while any other `node` refuses only at or above 5.0% CPU,
 and both the printed line and the refusal rows now name which rule counted what. No reading has
@@ -151,7 +151,7 @@ day; they are recorded there, under G32's gate, and are not a reading of this cl
 
 ## 3 · G35 — what `derive` costs on an update that changes a file
 
-**Gate.** Median of five `families derived` steps under `REPOGRAPH_TIMING=1` on a one-file
+**Gate.** Median of five `families derived` steps under `ZEROGRAPH_TIMING=1` on a one-file
 `--no-dense update` in `~/bench/beauty-crm-test` after `reset.sh`, recorded beside `tree walked`
 from the same runs. The ledger expects it under the walk's own number; it is recorded whichever
 side it lands.
@@ -162,7 +162,7 @@ side it lands.
 
 **Gate.** In `~/bench/beauty-crm-test`, each build from an empty store after `reset.sh`, each
 build's `graph.json` copied to `log/g39/<main|branch>/` before the next build runs: (a) `graph.json`
-written by `repograph-main build` and by the branch's `build` are the same visible graph —
+written by `zerograph-main build` and by the branch's `build` are the same visible graph —
 `bench/probe/graphdiff.py` over the two copies reports `nodes: same` and `edges: same`; (b) the
 branch's `graph.json` is at most 110% of `main`'s in bytes, and the number of edges held aside
 (`pending`) is recorded; (c) an `update` after adding `docs/oq.md` defining `OQ-1` prints
@@ -232,17 +232,17 @@ definition line — and the same four assertions ride in
 `tests/families.rs::a_corpus_that_defines_no_ids_reads_as_one`.
 
 ```
-$ repograph --no-dense build
+$ zerograph --no-dense build
 families: (none) · milestones: (none)          # stderr
 changed 1 removed 0 nodes 1 edges 0
 
-$ repograph --no-dense verify
+$ zerograph --no-dense verify
 nodes: 1  {"File": 1}
 edges: 0  {}
 dangling edges: 0
 held aside: 2 edges to ids in 2 prefixes no line defines  ISO RFC
 
-$ repograph --no-dense families
+$ zerograph --no-dense families
 families                              nodes  defs  defined
   (none)
 milestones                            nodes  defs  defined
@@ -251,7 +251,7 @@ mention-only prefixes               written   ids  files  e.g.
   ISO                                     1     1      1  docs/notes.md:3  даты по ISO-8601, см. RFC-7231 и -M01
   RFC                                     1     1      1  docs/notes.md:3  даты по ISO-8601, см. RFC-7231 и -M01
 
-$ repograph --no-dense ask ISO-8601
+$ zerograph --no-dense ask ISO-8601
                                                # nothing: no node, so no exact seat and no passage
 ```
 
@@ -274,7 +274,7 @@ gone from the bench summary line and `track.py` still reads every transcript in
 
 **The corpus half, read 2026-09-23 (0.6.0 plan, Task 3 Step 3).** G34's task and G39's both landed
 inside #27's squash, and no binary of the commit between them exists, so the pair read here is
-G39's (a): `repograph-main` against `v0.5.0` (`b21fb0f`), each from an empty store in
+G39's (a): `zerograph-main` against `v0.5.0` (`b21fb0f`), each from an empty store in
 `~/bench/beauty-crm-test`.
 
 - node and edge counts: 8475 and 30363 on both — the same;
@@ -286,7 +286,7 @@ sitting. Observed, not read as a verdict: `v0.5.0`'s bench summary line still pr
 
 ## 7 · G38 — the report's own edge
 
-**Gate.** `repograph families` in `~/bench/beauty-crm-test` as Task 8's build left it puts `OQ`
+**Gate.** `zerograph families` in `~/bench/beauty-crm-test` as Task 8's build left it puts `OQ`
 first in the mention-only section and every family with exactly one definition carries
 `defined once`; `bench/compare` still reads the JSON.
 
@@ -318,7 +318,7 @@ the `defined once` clause green, the JSON clause green.**
 
 **Gate.** *Before* — the four arms on the pinned fixture `~/bench/beauty-crm-502e8a6d` read the
 baseline table of §2 exactly; *rebuilt* — in `~/bench/beauty-crm-test` after `reset.sh`, `build`
-prints the family line and ``N requirement-like nodes have no questions — run `repograph enrich` ``
+prints the family line and ``N requirement-like nodes have no questions — run `zerograph enrich` ``
 with N = eligible − covered from the bench line, and both recorded arms print `enriched=false`;
 *after* — one `enrich` (≈ $0.20 of haiku) brings coverage to ≥ 99%, both recorded arms print
 `enriched=true gated=true` and exit 0, the developer arms are recorded, and the enriched store is
@@ -329,7 +329,7 @@ copied to `log/g32/after/store/` before anything else runs in the directory. Cov
 
 **Read 2026-09-23 on `v0.5.0` (`b21fb0f`), 0.6.0 plan Task 4.** `v0.5.0` has no
 `enrich_languages`, so this is one language's enrichment and the one-language cost; no
-`repograph.toml` was written. Transcripts: `~/bench/0.6.0-2026-09-11/log/master-t4/`.
+`zerograph.toml` was written. Transcripts: `~/bench/0.6.0-2026-09-11/log/master-t4/`.
 
 *Before* — the four arms on the pinned fixture:
 
@@ -346,7 +346,7 @@ The baseline table of §2 exactly, counts, p90 and anchors.
 
 ```
 changed 908 removed 0 nodes 8475 edges 30363
-repograph: 150 requirement-like nodes have no questions — run `repograph enrich` to search them
+zerograph: 150 requirement-like nodes have no questions — run `zerograph enrich` to search them
 keyword 40/40  paraphrase 15/30  code 12/12  p90 226 tok  dense=true   enriched=false (1996/2146 nodes)  green
 keyword 39/40  paraphrase 16/30  code 12/12  p90 218 tok  dense=false  enriched=false (1996/2146 nodes)  green
 long 10/15  cross 12/15  multi 10/12  where 0/9  rule 5/9  p90 240 tok  dense=true   enriched=false
@@ -381,7 +381,7 @@ developer arms recorded. The enriched store (85 MB) was copied to
 
 ## 9 · G19 — a chunk budgeted in tokens
 
-**Gate.** Control: `repograph-main embed` in `~/bench/beauty-crm-test` after `reset.sh`, the
+**Gate.** Control: `zerograph-main embed` in `~/bench/beauty-crm-test` after `reset.sh`, the
 vectors removed before each run by `bench/probe/embed.sh`, three runs under it and `caffeinate -di`,
 wall / user / max RSS / peak CPU and the stamped cadence. Candidate: the branch binary, three runs
 in the same directory after a second reset and one warm `--no-dense ask` for the branch's own
@@ -449,7 +449,7 @@ it is recorded as a refusal: an unread gate is unread.
   four arms on the pinned fixture were not run and the anchor line was not recorded through
   `track.py`. Nothing to compare, and nothing claimed.
 - **§3, G35 — moot, not measured.** No writer derives a family set since #27, so there is no
-  `derive` stage to put on the `REPOGRAPH_TIMING` line and the gate's median of five has no subject.
+  `derive` stage to put on the `ZEROGRAPH_TIMING` line and the gate's median of five has no subject.
   Recorded in the ledger as moot.
 - **§6 / §4, G39 — Task 6 was not run.** The design landed in #27; the price the gap calls the whole
   question — the store's growth under a generic grammar, the one-file `update`'s wall, the

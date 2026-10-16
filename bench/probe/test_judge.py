@@ -190,7 +190,7 @@ class Medians(unittest.TestCase):
         # of it should look like.
         with tempfile.TemporaryDirectory() as d:
             p = Path(d, "medians.txt")
-            p.write_text("quiet: idle=96%\nrepograph: embedder intfloat/multilingual-e5-small\n")
+            p.write_text("quiet: idle=96%\nzerograph: embedder intfloat/multilingual-e5-small\n")
             with self.assertRaises(SystemExit) as e:
                 judge.read_medians(str(p))
             self.assertIn(str(p), str(e.exception))
@@ -255,7 +255,7 @@ Error: graph is empty at /Users/max/bench/beauty-crm-test — run build first
 
 
 class FloorVerdicts(unittest.TestCase):
-    """An answered question is a reading; a store that was never there is not. `repograph` exits 3
+    """An answered question is a reading; a store that was never there is not. `zerograph` exits 3
     for the first and 1 for the second, so a verdict status is what admits the row — for any
     command, because `trace` answers "no path" the same way and spends the same wall clock doing
     it. What the `floors_missed` field additionally takes is a row that runs `bench`: no other

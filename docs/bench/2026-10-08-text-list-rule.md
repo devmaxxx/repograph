@@ -52,7 +52,7 @@ seeds.
 
 Read 2026-10-08 on a copy of the fixture under embeddinggemma-300m (2144/2146 nodes enriched).
 The text-on store holds 442 text nodes; the text-off store is the same store after
-`REPOGRAPH_TEXT_GLOBS=- update`, which removed exactly those 442 and embedded nothing. Two binaries:
+`ZEROGRAPH_TEXT_GLOBS=- update`, which removed exactly those 442 and embedded nothing. Two binaries:
 the base, `88f66d2` (one fused list, text inside the passage lists), and this branch.
 
 | suite, arm | text off | on, one list (base) | on, text list (this branch) |

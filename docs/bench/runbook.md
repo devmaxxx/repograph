@@ -22,9 +22,9 @@ all three:
 | corpus at `502e8a6d` | the worktree itself | — | 856 MB |
 | gitnexus index | `.gitnexus/` | gitnexus 1.6.9 | 218 s, 598 MB |
 | graphify graph | `graphify-out/graph.json` | graphify 0.9.48 | 24 s, 123 MB |
-| repograph store | `.repograph/` | see below | 78 MB |
+| zerograph store | `.repograph/` | see below | 78 MB |
 
-The repograph store carries the graph, the dense vectors and the enrichment questions, so the
+The zerograph store carries the graph, the dense vectors and the enrichment questions, so the
 fixture answers in the enriched arm without anyone paying for `enrich` again. The vectors and
 `questions.json` were copied from the working clone's store at the same corpus commit rather
 than recomputed. That transfer is only valid because both stores were built from the same
@@ -40,7 +40,7 @@ The 2026-09-04 column predates the questions-list gate; `current` is the same fi
 it (`bench/history/runs.jsonl`). What the transfer check established is that the two stores answer
 case by case alike, which the gate does not touch.
 
-**For a repograph-only run, use `bench/history/run-repograph.sh` and stop reading here.** It
+**For a zerograph-only run, use `bench/history/run-zerograph.sh` and stop reading here.** It
 builds the binary, runs both arms against the fixture, records them into the run history and
 prints what improved, what regressed and what is chronically weak. Two minutes, no tokens.
 
@@ -83,7 +83,7 @@ checklist at the bottom is not optional.
       `git rev-parse --short HEAD && git status --porcelain`
 - [ ] **`--strip-prefix` is needed if a graph was built in a worktree.** graphify
       writes absolute paths; the runner needs to know which directory to remove.
-- [ ] **Each tool's version is recorded**, not assumed: `repograph --version`,
+- [ ] **Each tool's version is recorded**, not assumed: `zerograph --version`,
       `gitnexus --version`, graphify's own. The result header carries them and two
       result files are comparable only when those agree or the difference is the
       point of the run.
@@ -96,8 +96,8 @@ How each index got fresh is part of the result, so write it into the `notes` blo
 of the result file exactly as it was run.
 
 ```bash
-# repograph — ~1 s lexical, ~100 s for the vectors on first build
-repograph --repo . build
+# zerograph — ~1 s lexical, ~100 s for the vectors on first build
+zerograph --repo . build
 
 # graphify — AST layer off the semantic cache, 0 tokens
 graphify update <path> --force
@@ -106,7 +106,7 @@ graphify update <path> --force
 gitnexus analyze -f --embeddings --skip-agents-md .
 ```
 
-`repograph enrich` (≈$2.50 on haiku, once) and `ask --rerank` (≈19k input tokens per
+`zerograph enrich` (≈$2.50 on haiku, once) and `ask --rerank` (≈19k input tokens per
 question on sonnet) are opt-in and change the numbers. If either is on, say so in
 the notes — the 2026-09-03 run read paraphrase 16/30 with an opus `enrich` where the
 shipped floor for an enriched store is 14/30, and a reader who does not know that
@@ -116,22 +116,22 @@ and `bench`'s summary line prints which of the two it used.
 
 Two more switches change the numbers and belong in the notes the same way: `enrich --code`
 adds questions about code (290 batches more on this corpus; the summary line then carries
-`code_questions=`), and `REPOGRAPH_EMBED_MODEL=<hub id>` with `repograph embed` measures a
+`code_questions=`), and `ZEROGRAPH_EMBED_MODEL=<hub id>` with `zerograph embed` measures a
 store under another embedder — on a copy of the store, never on the fixture.
 
 ## Run both suites
 
 ```bash
-cd ~/Documents/projects/repograph/bench/compare
+cd ~/Documents/projects/zerograph/bench/compare
 python3 run.py \
   --repo /tmp/bench-corpus \
-  --repograph ~/Documents/projects/repograph/target/release/zerograph \
+  --zerograph ~/Documents/projects/zerograph/target/release/zerograph \
   --graphify-graph /tmp/bench-corpus/graphify-out/graph.json \
   --truth /tmp/truth.json \
   --out ../results/$(date +%F)-beauty-crm.json
 ```
 
-Useful flags: `--tools repograph` for one tool, `--suites blast` to skip the slow
+Useful flags: `--tools zerograph` for one tool, `--suites blast` to skip the slow
 retrieval pass, `--strip-prefix <dir>` for a worktree-built graphify graph,
 `--truth <path>` to reuse a truth file rather than rebuild it.
 
@@ -230,8 +230,8 @@ edit, on the same fixture, and keep the four files:
 S=~/bench/<scratch>                       # transcripts live outside the repo
 for arm in dense lexical; do
   nd=""; [ $arm = lexical ] && nd="--no-dense"
-  repograph --repo ~/bench/beauty-crm-502e8a6d $nd dump --queries bench/cases.jsonl     --out $S/base-rec-$arm.json
-  repograph --repo ~/bench/beauty-crm-502e8a6d $nd dump --queries bench/dev-cases.jsonl --out $S/base-dev-$arm.json
+  zerograph --repo ~/bench/beauty-crm-502e8a6d $nd dump --queries bench/cases.jsonl     --out $S/base-rec-$arm.json
+  zerograph --repo ~/bench/beauty-crm-502e8a6d $nd dump --queries bench/dev-cases.jsonl --out $S/base-dev-$arm.json
 done
 shasum $S/base-*.json > $S/base-shasums.txt
 ```
@@ -245,17 +245,17 @@ directly, so **the `ask` command's own arm is never executed by Rule 1**. A chan
 compared by running the ask shapes themselves against a binary built before the change, stdout and
 stderr separately — see [the perf results](2026-09-06-perf-results.md).
 
-Only then, the clock. `perf-time.sh` — five `REPOGRAPH_TIMING=1` runs per arm, medians per stage:
+Only then, the clock. `perf-time.sh` — five `ZEROGRAPH_TIMING=1` runs per arm, medians per stage:
 
 ```bash
 #!/bin/bash
-# usage: perf-time.sh <binary> <repo> <label>   — five REPOGRAPH_TIMING runs per arm, medians printed
+# usage: perf-time.sh <binary> <repo> <label>   — five ZEROGRAPH_TIMING runs per arm, medians printed
 B=$1; R=$2; L=$3; S=~/bench/<scratch>
 for arm in dense lexical; do
   nd=""; [ $arm = lexical ] && nd="--no-dense"
   : > $S/$L-$arm.txt
   for i in 1 2 3 4 5; do
-    (cd $R && REPOGRAPH_TIMING=1 $B ask --stale $nd 'штраф за отмену записи' 2>&1 >/dev/null | grep '^timing' >> $S/$L-$arm.txt)
+    (cd $R && ZEROGRAPH_TIMING=1 $B ask --stale $nd 'штраф за отмену записи' 2>&1 >/dev/null | grep '^timing' >> $S/$L-$arm.txt)
   done
   echo "== $arm =="
   python3 -P - "$S/$L-$arm.txt" <<'PY'
@@ -286,8 +286,8 @@ Three things the 2026-09-06 run learned the hard way:
   been measured four times and published as a before/after table with nothing in it. `touch` the
   extracted tree before building (`find $SRC -type f -exec touch {} +`), then `shasum` every binary
   and check the four differ: that comparison is the only thing that catches it.
-- **`pkill -f 'repograph serve'` matches nothing**, because the command line reads
-  `repograph --repo <path> serve`. Match on the repo instead (`pkill -f '<repo-dir> serve'`). A
+- **`pkill -f 'zerograph serve'` matches nothing**, because the command line reads
+  `zerograph --repo <path> serve`. Match on the repo instead (`pkill -f '<repo-dir> serve'`). A
   whole timing pair was lost to orphan servers that a `pkill` was believed to have killed: every
   later `serve` refused to bind with `another serve answers`, and the "before" client was measured
   against an "after" server. Before measuring a socket, start the server yourself, wait for its own
@@ -322,7 +322,7 @@ is what admitted them, and `out/` holds the six cells. Run it with `--cases`, ag
 the writable store and never the pinned fixture:
 
 ```bash
-repograph --repo ~/bench/beauty-crm-test bench --cases ~/bench/paraphrase-arm-2026-09-22/cases-wide-112.jsonl
+zerograph --repo ~/bench/beauty-crm-test bench --cases ~/bench/paraphrase-arm-2026-09-22/cases-wide-112.jsonl
 ```
 
 Two things to know before quoting a number off it. `RECORDED_SHAPE` in `src/bench.rs`
@@ -338,7 +338,7 @@ so the suite is obvious (`paraphrase60:<model>[+rerank]`).
 
 ## Cutting a release
 
-Seven steps, in order. Each one exists because skipping it once cost a release run.
+Eight steps, in order. Each one exists because skipping it once cost a release run.
 
 1. **Prove the binaries first.**
    ```bash
@@ -365,15 +365,26 @@ Seven steps, in order. Each one exists because skipping it once cost a release r
    ```bash
    git fetch origin main && SHA=$(git rev-parse origin/main) && git log -1 --format=%B $SHA | grep -iE '\[(skip ci|ci skip|no ci|skip actions|actions skip)\]'
    ```
-   A match means the tag's push will start no run, and step 6 has to dispatch one.
+   A match means the tag's push will start no run, and step 7 has to dispatch one.
 
-5. **Tag and push.**
+5. **Once: the first npm version by hand.** npm's trusted publishing, which the release job uses,
+   can only be set up on a package that exists. Before the first tag, `npm login` as the owner and
+   publish an empty `zerograph@0.0.0` from a temporary directory:
+   ```bash
+   scripts/npm-placeholder.sh <code>   # the authenticator's current code; omit it in a terminal and npm asks
+   ```
+   Never `npm publish` inside `npm/zerograph/`: until the release job fills `bin/`, that publishes
+   the real version number with no binary in it, and a version is never given back.
+   Then on npmjs.com, the package's Settings → Trusted publishing: GitHub Actions, repository
+   `devmaxxx/zerograph`, workflow `release.yml`. Once set up, this step is skipped.
+
+6. **Tag and push.**
    ```bash
    git tag v<version> $SHA && gh auth switch --hostname github.com --user devmaxxx && git push origin v<version>
    ```
    The tag goes on the commit step 4 read, and it is pushed from the account that owns the repository.
 
-6. **Exactly one publishing run.** If step 4 matched, dispatch at once:
+7. **Exactly one publishing run.** If step 4 matched, dispatch at once:
    ```bash
    gh workflow run release.yml --ref v<version>
    ```
@@ -381,10 +392,10 @@ Seven steps, in order. Each one exists because skipping it once cost a release r
    minutes, or dispatch then. A dispatch from the tag publishes because the publish steps test
    `startsWith(github.ref, 'refs/tags/')`. Two runs would race to publish the same assets.
 
-7. **Verify.**
+8. **Verify.**
    ```bash
    gh api repos/devmaxxx/zerograph/releases/latest --jq .tag_name
-   npm view @devmaxxx/zerograph@<version> version --registry=https://npm.pkg.github.com
+   npm view zerograph@<version> version
    ```
    The first prints the tag, the release carries three assets, and the second prints the version: a
    release is done when someone else can install it, not when the tag exists.

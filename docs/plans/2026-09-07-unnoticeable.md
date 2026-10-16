@@ -1,7 +1,7 @@
 # A rebuild nobody at the keyboard notices — the definition, the measurements, the plan
 
 > **Superseded 2026-09-09.** The band this plan designed and shipped was removed; `libc`,
-> `src/priority.rs`, the `priority` key and `REPOGRAPH_PRIORITY` are gone with it, and so is
+> `src/priority.rs`, the `priority` key and `ZEROGRAPH_PRIORITY` are gone with it, and so is
 > `threads`, replaced by `resources`. The measurement method here still stands and is reused by
 > [the removal plan](2026-09-09-normal-band-only.md).
 
@@ -9,20 +9,20 @@
 
 **Goal:** a `build`, `update`, `enrich`, `embed` or `watch` that re-embeds a store is something the person using the machine cannot feel — not in their own compile, not in the pointer, not in the fan, not in swap. Wall time is reported and no longer a bar: the person is not waiting for it.
 
-**Request being answered (translated):** "reduce resource usage further, as much as possible, so that the user does not notice when repograph is working."
+**Request being answered (translated):** "reduce resource usage further, as much as possible, so that the user does not notice when zerograph is working."
 
 **Before:** the shipped state at `786b994` — `threads` = cores / 3 (4 here), token-budgeted batches, checkpoints every 1,024 rows. A full e5-large re-embed of 33,525 rows: 1,930 s wall, 7,641 s user, 2.15 GB max RSS, 293% CPU peak on 8 threads (4 running), every one of them on a performance core (`docs/bench/2026-09-07-resource-usage-results.md`).
 
 **Architecture:** unchanged from the previous plan (`docs/plans/2026-09-06-resource-usage.md`): the writers reach `embed_all` → `DenseIndex::sync_chunked` → `Embedder::embed`; the embedder is an `ort` 2.0.0-rc.13 session whose intra-op pool is capped by `session_builder(threads)`; `tokenizers` fans batches over rayon's global pool, capped by `cap_pools`. The readers (`ask`, `serve`, `bench`, `dump`) open the same session for one query at a time and answer a person.
 
-**Tech stack:** Rust 1.98 (`rust-toolchain.toml`), `cargo build --release`, `cargo test --release` with no `REPOGRAPH_*` variable set, `cargo clippy --release --all-targets -- -D warnings`. One new direct dependency, `libc = "=0.2.189"` — already in `Cargo.lock` as a transitive one, pinned like every other line.
+**Tech stack:** Rust 1.98 (`rust-toolchain.toml`), `cargo build --release`, `cargo test --release` with no `ZEROGRAPH_*` variable set, `cargo clippy --release --all-targets -- -D warnings`. One new direct dependency, `libc = "=0.2.189"` — already in `Cargo.lock` as a transitive one, pinned like every other line.
 
 ## Global constraints
 
-- Worktree `W=/Users/max/Documents/projects/repograph/.claude/worktrees/graph-build-resource-usage-b554bc`, branch `claude/graph-build-resource-usage-b554bc`; never `cd` into the main checkout. `B="$W/target/release/repograph"`, rebuilt before any measurement.
-- Bench dir `G=/Users/max/bench/resources-2026-09-07`: `store-B` (320 longest rows, no `repograph.toml`, so the default large model), `store-pristine` (the full store), `fixture` (read-only for writers), `measure.sh`, `harness/`, `log-before/`, `log/`. Scratch for this plan phase: `S=/private/tmp/claude-502/-Users-max-Documents-projects-repograph--claude-worktrees-graph-build-resource-usage-b554bc/d854dd4b-1b8c-403b-a458-5463278607fa/scratchpad` — `S/probe/{probe,qos,rusage}.c` and their binaries, `S/run2.sh`, `S/chain{1,2}.sh`, `S/log/<run>.{time,samples,probe6,probe1,psM,rusage,out}` and `S/log/summary.txt`. A reboot removes `S`; Task 0 copies it to `$G/unnoticeable/` first.
+- Worktree `W=/Users/max/Documents/projects/zerograph/.claude/worktrees/graph-build-resource-usage-b554bc`, branch `claude/graph-build-resource-usage-b554bc`; never `cd` into the main checkout. `B="$W/target/release/zerograph"`, rebuilt before any measurement.
+- Bench dir `G=/Users/max/bench/resources-2026-09-07`: `store-B` (320 longest rows, no `zerograph.toml`, so the default large model), `store-pristine` (the full store), `fixture` (read-only for writers), `measure.sh`, `harness/`, `log-before/`, `log/`. Scratch for this plan phase: `S=/private/tmp/claude-502/-Users-max-Documents-projects-zerograph--claude-worktrees-graph-build-resource-usage-b554bc/d854dd4b-1b8c-403b-a458-5463278607fa/scratchpad` — `S/probe/{probe,qos,rusage}.c` and their binaries, `S/run2.sh`, `S/chain{1,2}.sh`, `S/log/<run>.{time,samples,probe6,probe1,psM,rusage,out}` and `S/log/summary.txt`. A reboot removes `S`; Task 0 copies it to `$G/unnoticeable/` first.
 - The pinned fixture `/Users/max/bench/beauty-crm-502e8a6d` is read-only: `ask --stale`, `bench`, `dump` only. Writers run on copies; a copy pins `embed_model = "intfloat/multilingual-e5-small"` unless the large model is what is measured.
-- Measurements export `REPOGRAPH_NO_SERVE=1`; `cargo test` runs in a shell where no `REPOGRAPH_*` is set.
+- Measurements export `ZEROGRAPH_NO_SERVE=1`; `cargo test` runs in a shell where no `ZEROGRAPH_*` is set.
 - No model tokens are spent. No file is downloaded: the int8 model on the hub (§2.5) is named, not fetched.
 - Comments say why, never what; no ticket ids; tool directives stay. Test names are `snake_case` sentences. Commit subjects are Conventional; no AI trailers; a heredoc and a `git commit` go in two shell commands.
 
@@ -95,8 +95,8 @@ So the per-thread route needs `SessionBuilder::with_thread_manager` (ort rc.13 h
 | R2-darwinbg-t4 | `taskpolicy -b` | 4 | 626.3 s (4.1×) | 2,255 / 42.8 s | 1.82 / 1.64 GB | 280% (259%) | **1.70 GHz** | **background 100%** (4) | **2,630 ms (+1.7%)** | 2,481 (−0.5%) | 504 / **603 µs** | **passes 1–4**; wall ×4.1 |
 | R3-clampbg-t4 | `taskpolicy -c background` | 4 | 624.6 s (4.1×) | 2,254 / 41.5 s | 1.82 / 1.64 GB | 280% (259%) | 1.70 GHz | background 100% (4) | 2,631 (+1.8%) | 2,489 (−0.2%) | 514 / 569 µs | = R2 in every column: the clamp and the task policy land in the same band |
 | R4-clamputil-t4 | `taskpolicy -c utility` | 4 | 158.9 s (1.0×) | 600.5 / 5.8 s | 1.83 / 1.63 GB | 277% (264%) | **3.38 GHz** | utility 100% (20) | **2,767 (+7.0%)** | 2,526 (+1.3%) | 509 / 849 µs | the compromise: performance cores at a lower priority, no wall cost, the pointer fixed (bar 2), the compile still 7% slower — **fails bar 1** |
-| R5-darwinbg-t6 | `taskpolicy -b`, `REPOGRAPH_THREADS=6` | 6 | 594.1 s (−5% on R2) | 2,602 / 66.5 s (+15%) | 1.80 / 1.64 GB | 378% (313%) | 1.50 GHz | background 100% (4) | 2,678 (+3.6%) | 2,507 (+0.6%) | 511 / 731 µs | six efficiency cores share one clock: all of them busy runs each slower, so a third more CPU-seconds buys 5% of wall and costs the probe two points — **four stays** |
-| R6-fg-t2 | `REPOGRAPH_THREADS=2` | 2 | 288.1 s (1.9×) | 555.7 / 4.0 s | 1.77 / 1.64 GB | 150% (138%) | 3.52 GHz | default 100% (31) | **2,820 (+9.1%)** | 2,529 (+1.4%) | 259 / 812 µs | half the threads on the performance cores: twice the wall and the compile still 9% slower — **fails bar 1**; the count is the wrong lever |
+| R5-darwinbg-t6 | `taskpolicy -b`, `ZEROGRAPH_THREADS=6` | 6 | 594.1 s (−5% on R2) | 2,602 / 66.5 s (+15%) | 1.80 / 1.64 GB | 378% (313%) | 1.50 GHz | background 100% (4) | 2,678 (+3.6%) | 2,507 (+0.6%) | 511 / 731 µs | six efficiency cores share one clock: all of them busy runs each slower, so a third more CPU-seconds buys 5% of wall and costs the probe two points — **four stays** |
+| R6-fg-t2 | `ZEROGRAPH_THREADS=2` | 2 | 288.1 s (1.9×) | 555.7 / 4.0 s | 1.77 / 1.64 GB | 150% (138%) | 3.52 GHz | default 100% (31) | **2,820 (+9.1%)** | 2,529 (+1.4%) | 259 / 812 µs | half the threads on the performance cores: twice the wall and the compile still 9% slower — **fails bar 1**; the count is the wrong lever |
 
 ¹ R1's sampler followed the wrong pid (the `time` wrapper; fixed in `run2.sh`); its 262% is read from `ps -M` at t = 20 s (`S/log/R1-shipped-t4-fg.psM2`: three workers at 61–64% and the main thread at 70%), its band and clock from a rusage poller started late on the right pid (`S/log/R1-shipped-t4-fg.rusage2`, `legacy 575 s`) and from `/usr/bin/time -l`'s cycles.
 
@@ -104,7 +104,7 @@ Reading R1 against R2: the same 8.43 × 10¹² instructions retired in both (`.t
 
 ### 2.3 Memory and pacing levers (lever 2's pacing, lever 3) — the harness
 
-`$G/harness` (repograph's tokenize → forward → pool loop with the levers as arguments, built with `CARGO_TARGET_DIR=$W/target`), extended in this phase with three switches: `SHRINK` (`memory.enable_memory_arena_shrinkage = cpu:0` on every `run_with_options`), `DUTY` (sleep `(1/d − 1) ×` the forward's own time after each forward) and `PREPACK` (`session.disable_prepacking`). Same 320 texts, four threads, foreground, against the previous plan's H9 (134.1 s, 1.93 GB):
+`$G/harness` (zerograph's tokenize → forward → pool loop with the levers as arguments, built with `CARGO_TARGET_DIR=$W/target`), extended in this phase with three switches: `SHRINK` (`memory.enable_memory_arena_shrinkage = cpu:0` on every `run_with_options`), `DUTY` (sleep `(1/d − 1) ×` the forward's own time after each forward) and `PREPACK` (`session.disable_prepacking`). Same 320 texts, four threads, foreground, against the previous plan's H9 (134.1 s, 1.93 GB):
 
 | run | switch | forwards | wall | user | max RSS | footprint | session open | verdict |
 |---|---|---|---|---|---|---|---|---|
@@ -117,7 +117,7 @@ Reading R1 against R2: the same 8.43 × 10¹² instructions retired in both (`.t
 | H14-t4-b2048-noprepack | `session.disable_prepacking` | 40 | 150.2 s (+12%) | 584.9 s | 1.92 GB | **0.61 GB** | **0.27 s** | **accept for the writers** (§3.3): the anonymous 1.13 GB was MLAS's packed copies of the 24 layers' GEMM weights (12.6 M parameters × 4 B × 24 = 1.2 GB), made at session open; without them the GEMMs read the memory-mapped `model.onnx_data` pages, which are clean, reclaimable and shared between processes. Max RSS is unchanged because the same pages are touched; what memory pressure counts is a third of what it was |
 | H15-t4-b2048-duty0.5 | duty cycle 50% (sleep a forward's length after each) | 40 | 288.1 s (2.15×) | 556.7 s | 1.93 GB | 1.74 GB | 0.68 s | **reject** as a default: CPU average 240% → 120% for twice the wall and the same CPU-seconds — a linear trade with nothing free in it. Under the band the pointer and the compile are already at idle (R2), so pacing could only lower the efficiency cluster's load, which nobody at the keyboard shares. Not shipped, not configured; the band is the lever |
 
-`footprint` is `/usr/bin/time -l`'s `peak memory footprint`: anonymous plus compressed, the number `memory_pressure` and jetsam act on; file-backed pages are outside it. The shipped repograph reads 1.63 GB footprint on this store (`$G/log/t2-embed-320.time`) and 1.84 GB on the full one (`$G/log/embed-D2-large-full-after.time`).
+`footprint` is `/usr/bin/time -l`'s `peak memory footprint`: anonymous plus compressed, the number `memory_pressure` and jetsam act on; file-backed pages are outside it. The shipped zerograph reads 1.63 GB footprint on this store (`$G/log/t2-embed-320.time`) and 1.84 GB on the full one (`$G/log/embed-D2-large-full-after.time`).
 
 ### 2.4 Disk (lever 4)
 
@@ -156,7 +156,7 @@ Two calls and one deletion. The writers put the whole process in the background 
 | `setpriority(PRIO_DARWIN_PROCESS, 0, PRIO_DARWIN_BG)` in the writers | **accept** | R2: every bar 1–4 met from a single call; reaches ORT's and rayon's threads because it is a task policy, not a thread one (§2.1); `taskpolicy -b` measured it before it was written |
 | per-thread `QOS_CLASS_BACKGROUND` via `with_thread_manager` + rayon `spawn_handler` | reject | not inherited (§2.1): two thread factories to reach what one call reaches |
 | `taskpolicy -c background` clamp | reject | no self-set API; R3 reads the same as R2 in every column anyway |
-| the utility band (`-c utility`, or `QOS_CLASS_UTILITY` per thread) | reject | R4: wall unchanged and the pointer fixed, but the work stays on the performance cores at a lower priority and the person's compile still loses 7%; "as much as possible" is the background band, and `REPOGRAPH_PRIORITY=normal` is the whole of the other direction |
+| the utility band (`-c utility`, or `QOS_CLASS_UTILITY` per thread) | reject | R4: wall unchanged and the pointer fixed, but the work stays on the performance cores at a lower priority and the person's compile still loses 7%; "as much as possible" is the background band, and `ZEROGRAPH_PRIORITY=normal` is the whole of the other direction |
 | `threads = 6` (every efficiency core) as the default under the band | reject | R5: −5% wall for +15% CPU-seconds, P6 +3.6% against +1.7%; the six cores share a clock. `threads` keeps its rule and its overrides |
 | a lower default `threads` without the band (2, 1) | reject | R6: two performance-core threads are 1.9× the wall and still +9% on the compile; the person feels priority, not count. One thread would be ~4× the wall (H3 of the previous plan: +173% at two) for the same band |
 | pacing / duty cycle between forwards | reject | H15: 2.15× the wall for half the CPU average and the same CPU-seconds; under the band there is no one left to pace for |
@@ -169,8 +169,8 @@ Two calls and one deletion. The writers put the whole process in the background 
 
 ### 3.2 Defaults and overrides
 
-- `priority`: `"background"` (default) or `"normal"`, in `repograph.toml` **and** the machine file (a machine-shaped setting, like `threads`); `REPOGRAPH_PRIORITY` outranks both for one run. Applies to `build`, `update`, `enrich`, `embed`, `watch`. Readers ignore it.
-- `threads`: unchanged — cores / 3 (4 here), `REPOGRAPH_THREADS` and the two files as before. Under the band the count no longer decides what the person feels (R2 and R5 both pass bars 1–3); it decides the wall, and R5 says the fifth and sixth efficiency cores are not worth their CPU-seconds.
+- `priority`: `"background"` (default) or `"normal"`, in `zerograph.toml` **and** the machine file (a machine-shaped setting, like `threads`); `ZEROGRAPH_PRIORITY` outranks both for one run. Applies to `build`, `update`, `enrich`, `embed`, `watch`. Readers ignore it.
+- `threads`: unchanged — cores / 3 (4 here), `ZEROGRAPH_THREADS` and the two files as before. Under the band the count no longer decides what the person feels (R2 and R5 both pass bars 1–3); it decides the wall, and R5 says the fifth and sixth efficiency cores are not worth their CPU-seconds.
 
 ### 3.3 Edits, file by file
 
@@ -178,21 +178,21 @@ Two calls and one deletion. The writers put the whole process in the background 
 
 **`src/priority.rs`** (new):
 - `#[derive(Clone, Copy, Debug, Default, PartialEq, Deserialize)] #[serde(rename_all = "lowercase")] pub enum Priority { #[default] Background, Normal }`.
-- `pub fn from_env(configured: Priority, var: Option<&str>) -> Result<Priority>`: empty or unset keeps `configured`; `background` / `normal` (case-insensitive) parse; anything else is an error naming `REPOGRAPH_PRIORITY`.
+- `pub fn from_env(configured: Priority, var: Option<&str>) -> Result<Priority>`: empty or unset keeps `configured`; `background` / `normal` (case-insensitive) parse; anything else is an error naming `ZEROGRAPH_PRIORITY`.
 - `pub fn apply(p: Priority)`: `Normal` does nothing. `Background`: macOS `libc::setpriority(libc::PRIO_DARWIN_PROCESS, 0, libc::PRIO_DARWIN_BG)`; Linux `libc::setpriority(libc::PRIO_PROCESS, 0, 19)`, then `libc::sched_setscheduler(0, SCHED_IDLE, &zeroed sched_param)`, then `libc::syscall(libc::SYS_ioprio_set, IOPRIO_WHO_PROCESS, 0, IOPRIO_CLASS_IDLE << IOPRIO_CLASS_SHIFT)` for the disk side macOS gets free from the same one call; on every other target a single line on stderr naming the setting, so a Windows user reads that it had no effect rather than believing it did. The constants `libc` does not carry for these targets (`SCHED_IDLE`, the three `IOPRIO_*`) are local, with their kernel header named — §3.5.2 lists which and why. A failing call is a warning on stderr, never an error: the rebuild still runs, only louder. One-way on purpose — every caller either exits after its embed or (`watch`) never answers a person — and Linux cannot raise a nice value back without `CAP_SYS_NICE`, so a guard would promise what one platform cannot keep.
 - Doc comment carries R1 → R2 (P6 +15.7% → +1.7%, W p99 2.5 ms → 0.6 ms, wall ×4.1) and why the call is process-wide (§2.1).
 
-**`src/config.rs`**: `pub priority: Priority` on `Config` (serde default), `priority: Option<Priority>` on `Machine`, `layer(&named, "priority", machine.priority, &mut cfg.priority)` beside `threads`, then `cfg.priority = priority::from_env(cfg.priority, std::env::var("REPOGRAPH_PRIORITY").ok().as_deref())?`. The doc comment on `Machine` gains the key.
+**`src/config.rs`**: `pub priority: Priority` on `Config` (serde default), `priority: Option<Priority>` on `Machine`, `layer(&named, "priority", machine.priority, &mut cfg.priority)` beside `threads`, then `cfg.priority = priority::from_env(cfg.priority, std::env::var("ZEROGRAPH_PRIORITY").ok().as_deref())?`. The doc comment on `Machine` gains the key.
 
-**`src/main.rs`**: `priority::apply(cfg.priority)` in the `Build | Update`, `Enrich`, `Embed` and `Watch` arms, right after `load_cfg()` and **before** `cap_pools` — on Linux nice and SCHED_IDLE are per-thread and inherited at creation, so the rayon pool has to be built after the call; on macOS the order is free. `enrich`'s `claude` children inherit the band too (their network traffic takes the background class); `REPOGRAPH_PRIORITY=normal` is the word back. One comment at the first call site says why the readers have none.
+**`src/main.rs`**: `priority::apply(cfg.priority)` in the `Build | Update`, `Enrich`, `Embed` and `Watch` arms, right after `load_cfg()` and **before** `cap_pools` — on Linux nice and SCHED_IDLE are per-thread and inherited at creation, so the rayon pool has to be built after the call; on macOS the order is free. `enrich`'s `claude` children inherit the band too (their network traffic takes the background class); `ZEROGRAPH_PRIORITY=normal` is the word back. One comment at the first call site says why the readers have none.
 
 **`src/index/embed.rs`** (Task 2): `session_builder(threads: usize, weights: Weights)` where `pub enum Weights { Packed, Mapped }` lives beside it — `Mapped` adds `.with_prepacking(false)`. `Embedder::open(model, threads, weights)`; `load_session(model, threads, weights)`. The doc comment on `Weights` carries H14 (1.74 → 0.61 GB anonymous, +12% wall) and why a reader keeps `Packed`. `CrossEncoder::open` passes `Weights::Packed` (a reranker answers a person).
 
 **`src/ask.rs`** (Task 2): `embedder_or_notice`, `open_embedder`, `warm_model` take `weights: Weights` and pass it on; the reader call sites in `ask.rs`, `bench.rs`, `dump.rs` and `serve` pass `Packed`; `embed_all` and `run_watch` in `main.rs` pass `Mapped`. The test `the_model_is_not_warmed_for_an_exact_answer_or_a_lexical_arm` gains the argument; no behaviour change.
 
-**`README.md`**: the settings table gains `priority`; the layer row gains `REPOGRAPH_PRIORITY`; the machine-file "may set only" list gains `priority`; the Resources paragraph gains a "what the person sees" table with the R1/R2/full numbers and the sentence that wall time is now the price.
+**`README.md`**: the settings table gains `priority`; the layer row gains `ZEROGRAPH_PRIORITY`; the machine-file "may set only" list gains `priority`; the Resources paragraph gains a "what the person sees" table with the R1/R2/full numbers and the sentence that wall time is now the price.
 
-Nothing changes in the store format, the CLI flags or the socket protocol. A `repograph.toml` or machine file without `priority` loads as before (serde default); a file naming it is refused by an older binary (`deny_unknown_fields`), exactly as `threads` was when it arrived. Platforms are §3.5: macOS on Apple Silicon is the measured one, the Intel Mac and Linux rows are reasoned from the API contracts and labelled as such, and Windows and the rest compile to a warning rather than to a silent no-op.
+Nothing changes in the store format, the CLI flags or the socket protocol. A `zerograph.toml` or machine file without `priority` loads as before (serde default); a file naming it is refused by an older binary (`deny_unknown_fields`), exactly as `threads` was when it arrived. Platforms are §3.5: macOS on Apple Silicon is the measured one, the Intel Mac and Linux rows are reasoned from the API contracts and labelled as such, and Windows and the rest compile to a warning rather than to a silent no-op.
 
 ### 3.4 `watch` holds nothing between refreshes
 
@@ -209,7 +209,7 @@ Everything in §2 was measured on one machine: `Mac15,7`, macOS 26.6.2, arm64, 6
 | **macOS, Apple Silicon** | `setpriority(PRIO_DARWIN_PROCESS, 0, PRIO_DARWIN_BG)` | Mach PRI 4 on every thread, 100% of the process's CPU time in the background QoS band, and on Apple Silicon that band is the efficiency cluster: 1.70 GHz against 3.49, the person's compile back from +15.7% to +1.7%, wake p99 from 2.5 ms to 0.6 ms, disk I/O throttled by the same call. Wall ×4.1 | **measured here** — R1 vs R2, §2.2 |
 | **macOS, Intel** | the same call, the same task policy | `setpriority(2)` promises exactly three things and no more: "the scheduling priority is set to the lowest value, disk IO is throttled (with behavior similar to using `setiopolicy_np(3)` to set a throttleable policy), and network IO is throttled for any sockets opened after going into background state". None of that names a core type, because on Intel there is only one. So bars 1, 2 and 5 hold by preemption — anything the person runs at default priority takes the core the moment it is runnable — and **bar 3 does not**: with the machine otherwise idle the GEMMs run on the same cores at the same turbo clock, so the fan curve is a foreground run's fan curve and the wall is near the foreground wall rather than 4.1× it | **reasoned from `setpriority(2)` and `getiopolicy_np(3)`**; this session has no Intel Mac and no Intel number is claimed |
 | **Linux** | `setpriority(PRIO_PROCESS, 0, 19)`, then `sched_setscheduler(0, SCHED_IDLE, {0})`, then `ioprio_set(IOPRIO_WHO_PROCESS, 0, IOPRIO_CLASS_IDLE << 13)` | SCHED_IDLE runs only when nothing in SCHED_OTHER is runnable, which is bars 1 and 2 by the same preemption argument as Intel; the third call is bar 5, because Linux's nice value does not reach the block layer under `none`/`mq-deadline` and only shades a weight under BFQ, where macOS throttles the disk as part of the one call. No cluster claim: a big.LITTLE arm64 Linux box has an EAS scheduler that may or may not place an idle-class task on a little core, and this plan does not say which | **reasoned from the syscall contracts**, with the libc bindings verified against `libc-0.2.189`'s source in this phase (below); no Linux box in this session |
-| **Windows, and every other target** | nothing, plus one line on stderr | a Windows user is told the setting had no effect instead of believing it did. Windows has `SetPriorityClass(PROCESS_MODE_BACKGROUND_BEGIN)`, the near-exact analogue — lowest scheduling priority plus throttled I/O — and it is **named, not implemented**: repograph has no Windows dependency, no Windows CI and no Windows measurement, and a lever nobody here can check is worse than a warning that says so | a no-op is a no-op |
+| **Windows, and every other target** | nothing, plus one line on stderr | a Windows user is told the setting had no effect instead of believing it did. Windows has `SetPriorityClass(PROCESS_MODE_BACKGROUND_BEGIN)`, the near-exact analogue — lowest scheduling priority plus throttled I/O — and it is **named, not implemented**: zerograph has no Windows dependency, no Windows CI and no Windows measurement, and a lever nobody here can check is worse than a warning that says so | a no-op is a no-op |
 
 Two consequences worth writing down rather than discovering:
 
@@ -243,21 +243,21 @@ Every one of the three Linux calls is best-effort: a failure is one line on stde
 | 16 | 5 | an M-series Max |
 | 24 | 8 | a workstation or a build server |
 
-**Small machines: the floor of 1 stays, and one thread in the background band is the right default.** Bar 1 is what the person feels, and one throttled thread is the least any configuration can take; a floor of 2 on a 2-core box would put half the machine in the band, and R5 already read that extra threads on a shared clock cost the probe more than they buy in wall (+3.6% P6 against +1.7%, for 5% of the wall). What one thread costs is wall, and this plan measures it rather than projecting: **R7-darwinbg-t1**, `taskpolicy -b` with `REPOGRAPH_THREADS=1` on the same 320-row store as R2, run in §5 and reported beside R2's 626 s and R5's 594 s. Its number is the answer to "is a 4-core laptop still usable" — and the honest framing is that the person on a 4-core box is not waiting for the rebuild either (bar 6), so a long wall is the price the band charges everywhere, larger there.
+**Small machines: the floor of 1 stays, and one thread in the background band is the right default.** Bar 1 is what the person feels, and one throttled thread is the least any configuration can take; a floor of 2 on a 2-core box would put half the machine in the band, and R5 already read that extra threads on a shared clock cost the probe more than they buy in wall (+3.6% P6 against +1.7%, for 5% of the wall). What one thread costs is wall, and this plan measures it rather than projecting: **R7-darwinbg-t1**, `taskpolicy -b` with `ZEROGRAPH_THREADS=1` on the same 320-row store as R2, run in §5 and reported beside R2's 626 s and R5's 594 s. Its number is the answer to "is a 4-core laptop still usable" — and the honest framing is that the person on a 4-core box is not waiting for the rebuild either (bar 6), so a long wall is the price the band charges everywhere, larger there.
 
-**Big machines: `cores / 3` stays, and the thing to change on a build server is `priority`, not `threads`.** R5's six threads were the *whole efficiency cluster sharing one clock*, so its diminishing return is a property of this machine's asymmetry, not of thread counts in general: a 24-core server has 24 equal cores and the trade there is nearer linear. But a build server has nobody at the keyboard, so the setting it wants is `priority = "normal"` (and then `threads` as high as it likes) in `~/.config/repograph/config.toml` — one line, and the machine file is exactly the layer for it, because both keys describe the machine and not the corpus. **A second, band-specific `threads` rule is rejected**: once the band answers bar 1, the count only trades wall against CPU-seconds, and a number with nothing behind it is worse than the one rule already there.
+**Big machines: `cores / 3` stays, and the thing to change on a build server is `priority`, not `threads`.** R5's six threads were the *whole efficiency cluster sharing one clock*, so its diminishing return is a property of this machine's asymmetry, not of thread counts in general: a 24-core server has 24 equal cores and the trade there is nearer linear. But a build server has nobody at the keyboard, so the setting it wants is `priority = "normal"` (and then `threads` as high as it likes) in `~/.config/zerograph/config.toml` — one line, and the machine file is exactly the layer for it, because both keys describe the machine and not the corpus. **A second, band-specific `threads` rule is rejected**: once the band answers bar 1, the count only trades wall against CPU-seconds, and a number with nothing behind it is worse than the one rule already there.
 
 #### 3.5.4 Containers and cgroup limits
 
 `threads` is `available_parallelism() / 3`, and on Linux `available_parallelism` is documented to honour both the process's CPU affinity mask and the cgroup v1/v2 CPU quota. So inside a devcontainer started with `--cpus=2` it reads 2 and the default is one thread — not a third of the *host's* cores, which is the case where "all the cores" is never the machine's cores and the one most likely to be met in practice. **Label: read from the standard library's documented contract for `available_parallelism`; not measured here — this session has no Linux container.** What the call cannot see, and what the README should not promise it does: a `cpu.weight`/`cpu.shares` share (a weight, not a count), and a CPU-set narrowed after the process started. On macOS it reads `hw.logicalcpu` (12 here), which is why the default on this machine is 4 — two thirds of the efficiency cluster.
 
-The band composes with the cgroup rather than replacing it: SCHED_IDLE inside a container is idle *within that container's share*, so a CI box that already bounds repograph with `--cpus` gets both bounds and neither is wasted.
+The band composes with the cgroup rather than replacing it: SCHED_IDLE inside a container is idle *within that container's share*, so a CI box that already bounds zerograph with `--cpus` gets both bounds and neither is wasted.
 
 #### 3.5.5 Memory-poor machines: the model, not a flag
 
 The floor is honest and it is not configurable. A full embed under the default model touches 1.63 GB of fp32 weights (R1's `disk read 1627 MB` is exactly the pages of `model.onnx_data` it faulted in), and Task 2 changes *what kind* of memory those are — anonymous packed copies become the mapped file's own clean, reclaimable, shareable pages, footprint 1.74 → 0.61 GB — without changing that max RSS stays around 1.8 GB, because the same pages are still touched. On an 8 GB machine that is a quarter of the machine for the length of the rebuild.
 
-The answer there is a smaller model, and it is a line in `repograph.toml` rather than a flag:
+The answer there is a smaller model, and it is a line in `zerograph.toml` rather than a flag:
 
 ```toml
 embed_model = "intfloat/multilingual-e5-small"
@@ -274,19 +274,19 @@ Nothing to do, and one thing not to break. `--no-dense` opens no model at all �
 
 ## 4. Tests
 
-All inline `#[cfg(test)]`, no model download, run by `cargo test --release` with no `REPOGRAPH_*` set. The pure parts — the priority's resolution and layering, the platform fallback — are unit-tested; the kernel's side of the call and the memory shape are checked by hand (§5), because no test can assert where the scheduler ran a thread without becoming a measurement.
+All inline `#[cfg(test)]`, no model download, run by `cargo test --release` with no `ZEROGRAPH_*` set. The pure parts — the priority's resolution and layering, the platform fallback — are unit-tested; the kernel's side of the call and the memory shape are checked by hand (§5), because no test can assert where the scheduler ran a thread without becoming a measurement.
 
 **`src/priority.rs`** (module `tests`, no model, no threads):
 - `the_run_variable_outranks_the_file_and_an_empty_one_keeps_it` — `from_env(Background, None) == Background`; `from_env(Background, Some("normal")) == Normal`; `from_env(Normal, Some("")) == Normal`; `from_env(Normal, Some(" BACKGROUND ")) == Background`.
-- `a_priority_the_run_variable_misspells_is_an_error_naming_it` — `from_env(Background, Some("fast"))` errs with `REPOGRAPH_PRIORITY` in the message.
+- `a_priority_the_run_variable_misspells_is_an_error_naming_it` — `from_env(Background, Some("fast"))` errs with `ZEROGRAPH_PRIORITY` in the message.
 - `applying_normal_touches_nothing` — `getpriority(PRIO_DARWIN_PROCESS, 0)` before and after `apply(Normal)` are equal (macOS only; a no-op assertion elsewhere).
 - `lowering_the_process_is_visible_to_the_kernel_and_undone_after_the_test` (`#[cfg(target_os = "macos")]`) — `apply(Background)` makes `getpriority(PRIO_DARWIN_PROCESS, 0)` read 1; the test restores 0 with `setpriority(PRIO_DARWIN_PROCESS, 0, 0)` in a guard so the rest of the test binary does not run in the background band. The one test that touches the process; it is fast and it is the only automated proof the call reaches the kernel.
 
-**`src/config.rs`** (inside `with_machine`, which also clears `REPOGRAPH_PRIORITY`):
+**`src/config.rs`** (inside `with_machine`, which also clears `ZEROGRAPH_PRIORITY`):
 - `priority_defaults_to_background_and_reads_from_the_project_file`.
 - `the_machine_file_may_set_priority_and_the_project_still_wins`.
 - `the_environment_beats_the_project_for_priority`.
-- `a_priority_that_is_not_a_word_it_knows_is_an_error_naming_the_file` — `priority = "fast"` errs naming `repograph.toml`.
+- `a_priority_that_is_not_a_word_it_knows_is_an_error_naming_the_file` — `priority = "fast"` errs naming `zerograph.toml`.
 
 **`src/index/embed.rs`, `src/ask.rs`** (Task 2): nothing new — `Weights` is one builder entry with no pure part; `the_model_is_not_warmed_for_an_exact_answer_or_a_lexical_arm` gains the argument and asserts what it asserted.
 
@@ -301,31 +301,31 @@ All inline `#[cfg(test)]`, no model download, run by `cargo test --release` with
 Run from `$W` after every task, in this order.
 
 ```bash
-W=/Users/max/Documents/projects/repograph/.claude/worktrees/graph-build-resource-usage-b554bc; B="$W/target/release/repograph"
+W=/Users/max/Documents/projects/zerograph/.claude/worktrees/graph-build-resource-usage-b554bc; B="$W/target/release/zerograph"
 G=/Users/max/bench/resources-2026-09-07; U="$G/unnoticeable"; L="$U/log"
 cargo build --release --manifest-path "$W/Cargo.toml" 2>&1 | tail -1
 cargo test --release --manifest-path "$W/Cargo.toml" 2>&1 | grep -E "^test result|FAILED|panicked"
 cargo clippy --release --all-targets --manifest-path "$W/Cargo.toml" -- -D warnings 2>&1 | tail -3
 ```
-Expected: every `test result: ok`; the unit count is the shipped **458** (measured at `786b994` in this phase with no `REPOGRAPH_*` set, `S/log/cargo-test-786b994.txt`: `458 passed; 0 failed; 2 ignored`, then `12 passed` for `tests/serve.rs`) plus §4's eight = 466; 2 ignored; 12 in `tests/serve.rs`; clippy silent.
+Expected: every `test result: ok`; the unit count is the shipped **458** (measured at `786b994` in this phase with no `ZEROGRAPH_*` set, `S/log/cargo-test-786b994.txt`: `458 passed; 0 failed; 2 ignored`, then `12 passed` for `tests/serve.rs`) plus §4's eight = 466; 2 ignored; 12 in `tests/serve.rs`; clippy silent.
 
 **The band, without `taskpolicy`** — the same 320-row run as R2 through the built binary and no wrapper:
 ```bash
 STORE="$G/store-B" "$U/run2.sh" V1-built-default          # priority from the default
-STORE="$G/store-B" "$U/run2.sh" V2-built-normal -- env REPOGRAPH_PRIORITY=normal
+STORE="$G/store-B" "$U/run2.sh" V2-built-normal -- env ZEROGRAPH_PRIORITY=normal
 ```
-V1 passes when its line in `$L/summary.txt` reads like R2: `qos: … background <all of it> …` with every other band `0.0`, every thread in `V1-built-default.psM` at PRI 4, `ghz` ≤ 2.0, `probe6_median` ≤ 2,714 ms, `probe1_median` ≤ 2,618 ms, `wake_p99` ≤ 1,000 µs, `maxrss` ≤ 2.0 GB. V2 passes when it reads like R1: band `default`/`legacy`, PRI 31, `ghz` ≥ 3.0 — the opt-out is real. Then `priority = "normal"` in `$G/store-B/repograph.toml` (removed afterwards) reads as V2, and `priority = "normal"` in a temporary `REPOGRAPH_CONFIG` file with the project file silent reads as V2 too.
+V1 passes when its line in `$L/summary.txt` reads like R2: `qos: … background <all of it> …` with every other band `0.0`, every thread in `V1-built-default.psM` at PRI 4, `ghz` ≤ 2.0, `probe6_median` ≤ 2,714 ms, `probe1_median` ≤ 2,618 ms, `wake_p99` ≤ 1,000 µs, `maxrss` ≤ 2.0 GB. V2 passes when it reads like R1: band `default`/`legacy`, PRI 31, `ghz` ≥ 3.0 — the opt-out is real. Then `priority = "normal"` in `$G/store-B/zerograph.toml` (removed afterwards) reads as V2, and `priority = "normal"` in a temporary `ZEROGRAPH_CONFIG` file with the project file silent reads as V2 too.
 
 **The weights, mapped (Task 2)** — V1 again after Task 2 lands, as `V3-built-mapped`: pass when `footprint` (the `peak memory footprint` line of `$L/V3-built-mapped.time`) ≤ 0.8 GB against V1's ≈ 1.64 GB, `maxrss` within 0.1 GB of V1, and `wall` ≤ 1.25 × V1's — H14 read +12% on the performance cores and the efficiency cores have not been asked; more than a quarter and the writers keep `Packed` (Task 2, Step 2).
 
-**The vectors are bit-identical** — nothing in this plan changes an arithmetic: `cmp "$G/store-B/.repograph/vectors.f32" "$L/V0-vectors.f32"` where `V0-vectors.f32` was copied from a run of the `786b994` binary on the same store, exit 0 after Task 1 and again after Task 2 (packing is a layout, not a rounding). That is the proof the bench floors cannot move through either.
+**The vectors are bit-identical** — nothing in this plan changes an arithmetic: `cmp "$G/store-B/.zerograph/vectors.f32" "$L/V0-vectors.f32"` where `V0-vectors.f32` was copied from a run of the `786b994` binary on the same store, exit 0 after Task 1 and again after Task 2 (packing is a layout, not a rounding). That is the proof the bench floors cannot move through either.
 
 **The other machines** (§3.5) — what can be checked here, checked here; nothing else claimed:
 ```bash
 rustup target add x86_64-unknown-linux-gnu x86_64-pc-windows-msvc
 cargo check --target x86_64-unknown-linux-gnu   # the Linux branch: nice, SCHED_IDLE, ioprio_set
 cargo check --target x86_64-pc-windows-msvc     # the warn-once branch
-STORE="$G/store-B" REPOGRAPH_THREADS=1 "$U/run2.sh" R7-darwinbg-t1 -- taskpolicy -b
+STORE="$G/store-B" ZEROGRAPH_THREADS=1 "$U/run2.sh" R7-darwinbg-t1 -- taskpolicy -b
 ```
 The two `cargo check`s are the whole of what a single-platform session can prove about the other platforms: that the code compiles for them and names no constant they do not have. If either target's dependency graph will not check on this machine, the fallback is a scratch crate holding `src/priority.rs` and `libc` alone, checked for the same target — the branch code is what is being compiled, not `ort`. R7 is §3.5.3's small-machine number: one thread under the band on the 320-row store, read beside R2's 626 s (four threads) and R5's 594 s (six). No bar is attached to it — bar 6 says the wall is not one — and it is reported so the rule for a 2- or 4-core box is a number rather than an assumption.
 
@@ -333,7 +333,7 @@ The two `cargo check`s are the whole of what a single-platform session can prove
 
 **The floors** — run because `Lexical::build` and the walk now run in the background band on the writers, and nothing else:
 ```bash
-cd "$W" && ARMS="dense lexical" NOTE="unnoticeable after" bash bench/history/run-repograph.sh
+cd "$W" && ARMS="dense lexical" NOTE="unnoticeable after" bash bench/history/run-zerograph.sh
 ```
 Expected: exit 0 and both lines identical to the `502e8a6d` rows in `bench/history/runs.jsonl` (`keyword 40/40 paraphrase 15/30 code 12/12 p90 221 … dense=true`, `39/40 15/30 12/12 p90 215 … dense=false`).
 
@@ -363,7 +363,7 @@ Every comment this plan adds says a why the code cannot: why the call is process
 **Files:** `Cargo.toml`, `src/priority.rs` (new), `src/config.rs`, `src/main.rs`, `README.md`.
 
 - [x] **Step 1 — failing tests first**: the `priority.rs` and `config.rs` tests of §4. `cargo test --release … priority` fails to compile.
-- [x] **Step 2**: `libc` in `Cargo.toml`; `priority::{Priority, from_env, apply}` with the platform branches (§3.3); `Config.priority`, `Machine.priority`, the layering and `REPOGRAPH_PRIORITY`; `mod priority;` and the four call sites in `main.rs` before `cap_pools`. Tests green, clippy silent.
+- [x] **Step 2**: `libc` in `Cargo.toml`; `priority::{Priority, from_env, apply}` with the platform branches (§3.3); `Config.priority`, `Machine.priority`, the layering and `ZEROGRAPH_PRIORITY`; `mod priority;` and the four call sites in `main.rs` before `cap_pools`. Tests green, clippy silent.
 - [x] **Step 3**: §5's V1 and V2 runs, the two project/machine-file `normal` reads, the two cross-target `cargo check`s (§3.5), R7, and the `cmp` of the vectors, recorded under `$L`.
 - [x] **Step 4**: README edits of §3.3.
 - [x] **Step 5**: commit `feat(config): priority puts the writers in the background band` with R1 → R2 → V1 in the body.
@@ -391,4 +391,4 @@ Every comment this plan adds says a why the code cannot: why the call is process
 - [x] **Step 1**: §5's floors run and the readers' re-run, outputs under `$L`; the full-store line (§2.6, or its repeat).
 - [x] **Step 2**: the results doc in the style of `docs/bench/2026-09-07-resource-usage-results.md`: §1's definition and bars, §2's tables verbatim with their verdicts, the after rows (V1, V2, V3, R7, the full store, `watch`), a **different machines** section carrying §3.5's table with every row labelled measured-here or reasoned-from-the-contract, and what was deferred (§2.5) and why. The README's Resources section gains the same hardware paragraph in three sentences: the band on Apple Silicon, what it does and does not buy elsewhere, and `embed_model = small` as the answer on an 8 GB machine.
 - [x] **Step 3**: commit `docs: a rebuild measured against the person at the keyboard`.
-- [ ] **Step 4**: open the PR to `devmaxxx/repograph`, base `main`, body = the results doc's summary; do not merge. *(not done: the person opens their own pull requests.)*
+- [ ] **Step 4**: open the PR to `devmaxxx/zerograph`, base `main`, body = the results doc's summary; do not merge. *(not done: the person opens their own pull requests.)*

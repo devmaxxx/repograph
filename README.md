@@ -17,8 +17,7 @@ build ([the head-to-head](docs/history.md#the-head-to-head-against-the-graph-it-
 ## Get started
 
 ```bash
-# ~/.npmrc, once per machine (a classic PAT with read:packages): see docs/install.md
-pnpm add -D @devmaxxx/zerograph            # prebuilt: macOS arm64, Linux x64, Windows x64
+pnpm add -D zerograph                      # prebuilt: macOS arm64, Linux x64, Windows x64
 cargo install --path .                     # or from source
 
 zerograph build                            # full build into .zerograph/ (add it to .gitignore)

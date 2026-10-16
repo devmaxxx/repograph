@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** GitNexus becomes unnecessary in three releases: 0.4.0 answers "who calls this, what breaks if I change it, what does my diff touch, how does A reach B" from repograph's own graph so `beauty-crm` drops its escape hatch now; 0.5.0 adds a self-maintaining registry so any checkout — clone or worktree — is addressed by name, listed with its freshness, and built by seeding from a sibling store; 0.6.0 (own spec, later) adds the languages the other registered repositories need.
+**Goal:** GitNexus becomes unnecessary in three releases: 0.4.0 answers "who calls this, what breaks if I change it, what does my diff touch, how does A reach B" from zerograph's own graph so `beauty-crm` drops its escape hatch now; 0.5.0 adds a self-maintaining registry so any checkout — clone or worktree — is addressed by name, listed with its freshness, and built by seeding from a sibling store; 0.6.0 (own spec, later) adds the languages the other registered repositories need.
 
-**Architecture:** 0.4.0 — a new per-file walk (`src/code/calls.rs`) emits the already-declared `EdgeKind::Calls` from call sites to the symbol an import, a local declaration, or a typed class field proves they reach; symbols gain an end line; `src/impact.rs` walks `Calls`/`Extends` up and down through barrel aliases and labels risk; `src/changes.rs` maps `git diff -U0` hunks onto symbol spans and reuses the upstream walk. 0.5.0 — `src/registry.rs` keeps `~/.config/repograph/registry.json` as a cache of git facts: project key = root commits, rows written on use and pruned on write, identity cached per store so the hot path never spawns git.
+**Architecture:** 0.4.0 — a new per-file walk (`src/code/calls.rs`) emits the already-declared `EdgeKind::Calls` from call sites to the symbol an import, a local declaration, or a typed class field proves they reach; symbols gain an end line; `src/impact.rs` walks `Calls`/`Extends` up and down through barrel aliases and labels risk; `src/changes.rs` maps `git diff -U0` hunks onto symbol spans and reuses the upstream walk. 0.5.0 — `src/registry.rs` keeps `~/.config/zerograph/registry.json` as a cache of git facts: project key = root commits, rows written on use and pruned on write, identity cached per store so the hot path never spawns git.
 
 **Tech Stack:** Rust 1.98, tree-sitter 0.27.0 / tree-sitter-typescript 0.23.2, clap 4.6.6, serde 1.0.229 / serde_json 1.0.151, postcard 1.1.3 (all pinned already; no new crates — `git` is shelled out).
 
@@ -14,7 +14,7 @@
 
 | Release | Ships | Unblocks | Tasks |
 |---|---|---|---|
-| **0.4.0** | `Calls` edges, symbol spans, `impact`, `trace`, `changes` | `beauty-crm` drops the GitNexus escape hatch; its pre-edit and pre-commit rules run on repograph | 1–7 |
+| **0.4.0** | `Calls` edges, symbol spans, `impact`, `trace`, `changes` | `beauty-crm` drops the GitNexus escape hatch; its pre-edit and pre-commit rules run on zerograph | 1–7 |
 | **0.5.0** | nested-checkout guard, registry, `--repo <name>`, seeding, `repos`, global notice hook | worktrees and second clones build in seconds; one hook for every indexed repository | 8–13 |
 | **0.6.0** | C#, Kotlin, Python extractors (roadmap — separate spec) | `bonliva-crm-nx`, `beauty-crm/mobile`; then the user-level GitNexus hooks and MCP server go | — |
 
@@ -23,7 +23,7 @@
 ## Global Constraints
 
 - No new crates. `git` is invoked as a subprocess (`std::process::Command`), like `enrich` invokes its model command.
-- `beauty-crm` (`/Users/max/Documents/projects/beauty-crm`) is the corpus and the consumer. Tasks 1–6 write there only into `.repograph/`; Task 7 edits its tracked files on purpose.
+- `beauty-crm` (`/Users/max/Documents/projects/beauty-crm`) is the corpus and the consumer. Tasks 1–6 write there only into `.zerograph/`; Task 7 edits its tracked files on purpose.
 - Every extractor change follows `.claude/skills/extractor-case/SKILL.md`: dump the tree before writing an arm, one inline case per construct in `src/code/cases.rs`, then `verify` counts and `bench` floors on the corpus (`--no-dense build` for counts).
 - Bench floors must not move: keyword 40/40, paraphrase ≥14/30 dense / ≥11/30 no-dense, code 12/12, p90 ≤ 230 tokens. `Calls` is not in `query::EXPAND`, so `ask` output must be byte-identical before and after Task 2.
 - Comments explain *why*, never *what*; no ticket ids. Code, docs, commits in English. Conventional Commits; the repo hook rejects AI trailers — do not add `Co-Authored-By` or session links. Never combine a heredoc and `git commit` in one shell call: the commit hook rejects the whole compound command and the `git add` in front of it is lost too.
@@ -52,7 +52,7 @@ src/main.rs             Impact, Trace, Changes subcommands                    (T
 README.md               Use / edge table / new "Blast radius" section         (Task 4, 5)
 Cargo.toml, Cargo.lock, npm/*/package.json   0.4.0                            (Task 1, 6)
 beauty-crm: package.json, .claude/CLAUDE.md, .claude/skills/repo-query/SKILL.md,
-            .claude/hooks/repograph-notice.mjs, .gitignore, .ignore           (Task 7)
+            .claude/hooks/zerograph-notice.mjs, .gitignore, .ignore           (Task 7)
 ```
 
 ---
@@ -173,8 +173,8 @@ Expected: all pass (327 + 4), clippy clean.
 
 ```bash
 cargo build --release --quiet
-target/release/repograph --repo /Users/max/Documents/projects/beauty-crm --no-dense build
-target/release/repograph --repo /Users/max/Documents/projects/beauty-crm verify | head -2
+target/release/zerograph --repo /Users/max/Documents/projects/beauty-crm --no-dense build
+target/release/zerograph --repo /Users/max/Documents/projects/beauty-crm verify | head -2
 ```
 Expected: `nodes: 8306 {… "Symbol": 4322 …}` and `edges: 29610 {…}` — identical to 0.3.0 (spans add no node and no edge). The `--no-dense build` is what rewrites the mirror under the new header.
 
@@ -202,7 +202,7 @@ git commit -m "feat(model): record where a symbol ends" -m "A git hunk can only 
 - [ ] **Step 1: Pin the grammar shapes**
 
 ```bash
-REPOGRAPH_DUMP='import { S } from "./s.js"; import * as ns from "./n.js";
+ZEROGRAPH_DUMP='import { S } from "./s.js"; import * as ns from "./n.js";
 export class C { private readonly repo: Repo; constructor(private readonly service: S) {}
   run(dto: D) { helper(); const x = new Foo(); Util.go(); ns.fn(); this.other(); return this.service.create(dto); } }
 export const handler = () => { helper(); };' cargo test dump_tree -- --ignored --nocapture
@@ -564,14 +564,14 @@ Expected: all pass. If `a_chained_call_and_super_yield_nothing` fails on `super.
 ```bash
 cargo build --release --quiet
 B=/Users/max/Documents/projects/beauty-crm
-target/release/repograph --repo $B --no-dense build
-target/release/repograph --repo $B verify | head -2
-target/release/repograph --repo $B explain StaffService
-target/release/repograph --repo $B ask --stale StaffService > /tmp/ask-after.txt
-git stash -q && cargo build --release --quiet && target/release/repograph --repo $B ask --stale StaffService > /tmp/ask-before.txt; git stash pop -q && cargo build --release --quiet
+target/release/zerograph --repo $B --no-dense build
+target/release/zerograph --repo $B verify | head -2
+target/release/zerograph --repo $B explain StaffService
+target/release/zerograph --repo $B ask --stale StaffService > /tmp/ask-after.txt
+git stash -q && cargo build --release --quiet && target/release/zerograph --repo $B ask --stale StaffService > /tmp/ask-before.txt; git stash pop -q && cargo build --release --quiet
 diff /tmp/ask-before.txt /tmp/ask-after.txt && echo "ask unchanged"
-target/release/repograph --repo $B bench
-target/release/repograph --repo $B --no-dense bench
+target/release/zerograph --repo $B bench
+target/release/zerograph --repo $B --no-dense bench
 ```
 Expected: `verify` shows a new `"Calls": N` with N > 0 and every other edge count and every node count identical to Task 1's; `explain StaffService` now has `Calls ← sym:apps/api/src/modules/staff/staff.controller.ts::StaffController.create` lines (and the same for `staff.module.ts` if it constructs it); `ask unchanged`; both bench runs pass their floors. Record N in the commit body.
 
@@ -1099,11 +1099,11 @@ Arms, after `Cmd::Explain`:
 ```bash
 cargo build --release --quiet
 B=/Users/max/Documents/projects/beauty-crm
-target/release/repograph --repo $B impact StaffService
-target/release/repograph --repo $B impact --json StaffService.create | head -c 400; echo
-target/release/repograph --repo $B impact --down StaffController
-target/release/repograph --repo $B trace StaffController StaffService
-target/release/repograph --repo $B impact NoSuchSymbol; echo "exit $?"
+target/release/zerograph --repo $B impact StaffService
+target/release/zerograph --repo $B impact --json StaffService.create | head -c 400; echo
+target/release/zerograph --repo $B impact --down StaffController
+target/release/zerograph --repo $B trace StaffController StaffService
+target/release/zerograph --repo $B impact NoSuchSymbol; echo "exit $?"
 ```
 Expected: `impact StaffService` prints the root line, `d=1  will break (n)` with `sym:apps/api/src/modules/staff/staff.controller.ts::StaffController.create  apps/api/src/modules/staff/staff.controller.ts:<line>  Calls → sym:…::StaffService.create`, an `importers (…)` line containing `apps/api/src/modules/staff/staff.module.ts`, and a `risk:` line. `trace` prints a two- or three-line chain. The unknown symbol exits 1 with `no node matches`.
 
@@ -1115,10 +1115,10 @@ Expected: `impact StaffService` prints the root line, `d=1  will break (n)` with
 Ask it what depends on a symbol, what a symbol reaches, and how one reaches another:
 
 ```bash
-repograph impact StaffService               # callers by depth, importing files, a risk line
-repograph impact --down StaffController     # what it calls, through injected services and barrels
-repograph impact --json --depth 1 asGrosze  # machine-readable; depth 1 is the "will break" list alone
-repograph trace StaffController StaffService  # shortest chain of calls between two symbols
+zerograph impact StaffService               # callers by depth, importing files, a risk line
+zerograph impact --down StaffController     # what it calls, through injected services and barrels
+zerograph impact --json --depth 1 asGrosze  # machine-readable; depth 1 is the "will break" list alone
+zerograph trace StaffController StaffService  # shortest chain of calls between two symbols
 ```
 ````
 
@@ -1142,7 +1142,7 @@ on the direct count and the file count — `MEDIUM` from 5 direct or 3 files, `H
 10, `CRITICAL` from 30 or 25 — printed with the counts, so the label can be argued with.
 
 ```
-$ repograph --repo beauty-crm impact StaffService
+$ zerograph --repo beauty-crm impact StaffService
 sym:apps/api/src/modules/staff/staff.service.ts::StaffService  apps/api/src/modules/staff/staff.service.ts:19
 d=1  will break (2)
   file:apps/api/src/modules/staff/staff.module.ts  apps/api/src/modules/staff/staff.module.ts:1  Calls → sym:…::StaffService
@@ -1461,16 +1461,16 @@ Arm after `Cmd::Trace`:
 ```bash
 cargo build --release --quiet
 B=/Users/max/Documents/projects/beauty-crm
-target/release/repograph --repo $B changes            # clean tree
+target/release/zerograph --repo $B changes            # clean tree
 F=$B/apps/api/src/modules/staff/staff.service.ts
 cp $F /tmp/staff.service.bak
 printf '\n// probe\n' >> $F
 sed -i '' 's/^\(\s*async create(\)/\1\/* probe *\/ /' $F
-target/release/repograph --repo $B changes
-target/release/repograph --repo $B changes --json | head -c 300; echo
-target/release/repograph --repo $B changes --base main | head -5
+target/release/zerograph --repo $B changes
+target/release/zerograph --repo $B changes --json | head -c 300; echo
+target/release/zerograph --repo $B changes --base main | head -5
 cp /tmp/staff.service.bak $F && rm /tmp/staff.service.bak
-target/release/repograph --repo $B changes
+target/release/zerograph --repo $B changes
 ```
 Expected: first and last runs print `changed: 0 symbols` (the tree is at `main` with no local edits; if `--base main` on a branch lists commits' hunks that is correct). The middle run lists `sym:…::StaffService.create` and `file:apps/api/src/modules/staff/staff.service.ts` (the trailing comment sits outside every symbol), then `d=1  sym:…::StaffController.create …`. The `refresh:` line on stderr proves the graph was brought up to date before mapping. If the `sed` expression does not match the method's first line, edit any line inside `create` by hand instead — the point is one hunk inside one member.
 
@@ -1479,8 +1479,8 @@ Expected: first and last runs print `changed: 0 symbols` (the tree is at `main` 
 `README.md` — in the **Use** block from Task 4, add:
 
 ```bash
-repograph changes                           # what the uncommitted diff touches, and who reaches it
-repograph changes --base main --depth 1     # the whole branch; depth 1 is the direct callers alone
+zerograph changes                           # what the uncommitted diff touches, and who reaches it
+zerograph changes --base main --depth 1     # the whole branch; depth 1 is the direct callers alone
 ```
 
 In **Blast radius**, after the `trace` paragraph:
@@ -1509,14 +1509,14 @@ git commit -m "feat(cli): changes maps the diff onto symbol spans and their call
 ### Task 6: Release 0.4.0
 
 **Files:**
-- Modify: `README.md:35` (status line), `npm/repograph/package.json:3,32-33`, `npm/repograph-darwin-arm64/package.json:3`, `npm/repograph-linux-x64/package.json:3`
+- Modify: `README.md:35` (status line), `npm/zerograph/package.json:3,32-33`, `npm/zerograph-darwin-arm64/package.json:3`, `npm/zerograph-linux-x64/package.json:3`
 
 - [ ] **Step 1: Bump what the release reads**
 
 ```bash
 sed -i '' '35s/Version 0\.3\.0\./Version 0.4.0./' README.md
-sed -i '' '3s/0\.3\.0/0.4.0/' npm/repograph-darwin-arm64/package.json npm/repograph-linux-x64/package.json npm/repograph/package.json
-sed -i '' '32,33s/0\.3\.0/0.4.0/' npm/repograph/package.json
+sed -i '' '3s/0\.3\.0/0.4.0/' npm/zerograph-darwin-arm64/package.json npm/zerograph-linux-x64/package.json npm/zerograph/package.json
+sed -i '' '32,33s/0\.3\.0/0.4.0/' npm/zerograph/package.json
 grep -rn "0\.[34]\.0" Cargo.toml README.md npm/*/package.json
 ```
 Expected: every line reads `0.4.0`; `Cargo.toml` already does from Task 1.
@@ -1526,23 +1526,23 @@ Expected: every line reads `0.4.0`; `Cargo.toml` already does from Task 1.
 ```bash
 cargo test --quiet && cargo clippy --all-targets --quiet && cargo build --release --quiet
 B=/Users/max/Documents/projects/beauty-crm
-target/release/repograph --repo $B --no-dense build
-target/release/repograph --repo $B verify | head -2
-target/release/repograph --repo $B bench
-target/release/repograph --repo $B --no-dense bench
+target/release/zerograph --repo $B --no-dense build
+target/release/zerograph --repo $B verify | head -2
+target/release/zerograph --repo $B bench
+target/release/zerograph --repo $B --no-dense bench
 ```
 Expected: node counts as in 0.3.0, `Calls` present, floors met.
 
 - [ ] **Step 3: Commit, tag, push**
 
 ```bash
-git add README.md npm/repograph/package.json npm/repograph-darwin-arm64/package.json npm/repograph-linux-x64/package.json
+git add README.md npm/zerograph/package.json npm/zerograph-darwin-arm64/package.json npm/zerograph-linux-x64/package.json
 git commit -m "chore: release 0.4.0"
-git tag -a v0.4.0 -m "repograph 0.4.0"
+git tag -a v0.4.0 -m "zerograph 0.4.0"
 git push origin main && git push origin v0.4.0
-GH_TOKEN="$(gh auth token -u devmaxxx)" gh run watch --repo devmaxxx/repograph --exit-status "$(GH_TOKEN="$(gh auth token -u devmaxxx)" gh run list --repo devmaxxx/repograph --workflow release --limit 1 --json databaseId --jq '.[0].databaseId')"
+GH_TOKEN="$(gh auth token -u devmaxxx)" gh run watch --repo devmaxxx/zerograph --exit-status "$(GH_TOKEN="$(gh auth token -u devmaxxx)" gh run list --repo devmaxxx/zerograph --workflow release --limit 1 --json databaseId --jq '.[0].databaseId')"
 ```
-Expected: the release workflow goes green; `gh api /user/packages/npm/repograph/versions` lists `0.4.0`. The active `gh` account cannot see the repository — the `devmaxxx` token is required, as above.
+Expected: the release workflow goes green; `gh api /user/packages/npm/zerograph/versions` lists `0.4.0`. The active `gh` account cannot see the repository — the `devmaxxx` token is required, as above.
 
 ---
 
@@ -1552,19 +1552,19 @@ Expected: the release workflow goes green; `gh api /user/packages/npm/repograph/
 - Modify: `package.json:44`, `pnpm-lock.yaml` (via `pnpm install`)
 - Modify: `.claude/CLAUDE.md:47-53` (paragraph), `.claude/CLAUDE.md:55-70` (list + new section)
 - Modify: `.claude/skills/repo-query/SKILL.md:9-10`, `:36`, `:117-125`
-- Modify: `.claude/hooks/repograph-notice.mjs:33-51` (`FULL_NOTICE`)
+- Modify: `.claude/hooks/zerograph-notice.mjs:33-51` (`FULL_NOTICE`)
 - Modify: `.gitignore:122-123`, `.ignore:4`
 
 - [ ] **Step 1: Take the release**
 
 ```bash
 cd /Users/max/Documents/projects/beauty-crm
-sed -i '' 's/"@devmaxxx\/repograph": "0\.3\.0"/"@devmaxxx\/repograph": "0.4.0"/' package.json
+sed -i '' 's/"@devmaxxx\/zerograph": "0\.3\.0"/"@devmaxxx\/zerograph": "0.4.0"/' package.json
 pnpm install
-pnpm exec repograph --version
-pnpm exec repograph impact StaffService | tail -1
+pnpm exec zerograph --version
+pnpm exec zerograph impact StaffService | tail -1
 ```
-Expected: `repograph 0.4.0`; a `risk:` line.
+Expected: `zerograph 0.4.0`; a `risk:` line.
 
 - [ ] **Step 2: Commit the dependency alone**
 
@@ -1572,7 +1572,7 @@ Touches the lockfile, so the pipeline must run — no `[skip ci]`.
 
 ```bash
 git add package.json pnpm-lock.yaml
-git commit -m "build(deps): take repograph 0.4.0 for impact, trace and changes"
+git commit -m "build(deps): take zerograph 0.4.0 for impact, trace and changes"
 ```
 
 - [ ] **Step 3: Rewrite the GitNexus paragraph in `.claude/CLAUDE.md`**
@@ -1582,18 +1582,18 @@ Replace lines 47–53 (the `**GitNexus в этом репозитории вык
 ```markdown
 **GitNexus здесь больше не нужен** (снят 2026-09-03, индекс и скиллы удалены). Единственное,
 ради чего его держали рядом — граф вызовов и радиус поражения — с 0.4.0 отвечает сам
-`repograph`: `impact`, `trace`, `changes` ниже. Глобальный MCP-сервер и два хука в
+`zerograph`: `impact`, `trace`, `changes` ниже. Глобальный MCP-сервер и два хука в
 `~/.claude/settings.json` остаются ради других репозиториев и здесь молчат, не найдя `.gitnexus/`.
 ```
 
 Extend the list under `## Спрашивать граф до чтения файлов` (after the `--rerank` bullet):
 
 ```markdown
-- `repograph impact <символ>` — кто вызывает, по глубине, с `путь:строка`; файлы-импортёры;
+- `zerograph impact <символ>` — кто вызывает, по глубине, с `путь:строка`; файлы-импортёры;
   строка риска. `--down` — что вызывает сам символ. Класс обходится через его методы, вызов
   через barrel находится;
-- `repograph trace <от> <до>` — кратчайшая цепочка вызовов между двумя символами;
-- `repograph changes` — что задевает текущий diff (staged, unstaged, новые файлы) и кто до
+- `zerograph trace <от> <до>` — кратчайшая цепочка вызовов между двумя символами;
+- `zerograph changes` — что задевает текущий diff (staged, unstaged, новые файлы) и кто до
   этого дотягивается; `--base main` — вся ветка.
 ```
 
@@ -1602,13 +1602,13 @@ Add a new section right after that list, before `## Свежесть: граф �
 ```markdown
 ## Перед правкой символа и перед коммитом
 
-- **Перед правкой функции, класса или метода** — `repograph impact <символ>` и сообщи
+- **Перед правкой функции, класса или метода** — `zerograph impact <символ>` и сообщи
   пользователю радиус: прямые вызывающие (`d=1`), число файлов, риск. `HIGH` и `CRITICAL` —
   предупреди до правки.
-- **Перед коммитом** — `repograph changes`: список задетых символов и их вызывающих обязан
-  совпадать с тем, что ты собирался менять. Перед PR — `repograph changes --base main`.
-- **Переименование** — не поиском-заменой: `repograph impact <старое>` даёт файлы, правка
-  идёт через рефакторинг редактора или `ast-grep`, `repograph changes` подтверждает объём.
+- **Перед коммитом** — `zerograph changes`: список задетых символов и их вызывающих обязан
+  совпадать с тем, что ты собирался менять. Перед PR — `zerograph changes --base main`.
+- **Переименование** — не поиском-заменой: `zerograph impact <старое>` даёт файлы, правка
+  идёт через рефакторинг редактора или `ast-grep`, `zerograph changes` подтверждает объём.
 - Граф записывает только доказуемые вызовы (импорт, объявление в том же файле, типизированное
   поле `this.service.x()`); «никто не использует» проверяй `rg -l` перед удалением.
 ```
@@ -1620,16 +1620,16 @@ Line 9–10, replace `GitNexus is off in this repository and graphify is frozen 
 Replace the route row at line 36:
 
 ```markdown
-| Who calls it? What breaks if it changes? | `repograph impact <Symbol>` — callers by depth, importers, risk; `--down` for callees | ~150–400 tok, ~60 ms |
-| How does A reach B? | `repograph trace <A> <B>` | ~80 tok |
-| What does my diff touch, and who reaches that? | `repograph changes` (`--base main` for the branch) | ~200 tok |
+| Who calls it? What breaks if it changes? | `zerograph impact <Symbol>` — callers by depth, importers, risk; `--down` for callees | ~150–400 tok, ~60 ms |
+| How does A reach B? | `zerograph trace <A> <B>` | ~80 tok |
+| What does my diff touch, and who reaches that? | `zerograph changes` (`--base main` for the branch) | ~200 tok |
 ```
 
 Replace the `**GitNexus is switched off here**` paragraph (lines 117–125) with:
 
 ```markdown
 **GitNexus is gone.** Its index, skills and `AGENTS.md` block were removed on 2026-09-03; what
-it was kept beside repograph for — blast radius and call chains — is `repograph impact`,
+it was kept beside zerograph for — blast radius and call chains — is `zerograph impact`,
 `trace` and `changes` since 0.4.0. The user-level MCP server and hooks in `~/.claude/settings.json`
 serve other repositories and exit here on the missing `.gitnexus/`.
 ```
@@ -1638,16 +1638,16 @@ Keep the graphify paragraph as it is.
 
 - [ ] **Step 5: Extend the notice hook**
 
-`.claude/hooks/repograph-notice.mjs`, in `FULL_NOTICE` after the `repograph ask --json …` line:
+`.claude/hooks/zerograph-notice.mjs`, in `FULL_NOTICE` after the `zerograph ask --json …` line:
 
 ```js
-  '  repograph impact <symbol>     — callers by depth, importing files, a risk line; run it',
+  '  zerograph impact <symbol>     — callers by depth, importing files, a risk line; run it',
   '                                  before editing a symbol; --down for what it calls',
-  '  repograph changes             — what the uncommitted diff touches and who reaches it;',
+  '  zerograph changes             — what the uncommitted diff touches and who reaches it;',
   '                                  run it before committing (--base main before a PR)',
 ```
 
-Check it still parses: `node .claude/hooks/repograph-notice.mjs < /dev/null; echo $?` → `0`.
+Check it still parses: `node .claude/hooks/zerograph-notice.mjs < /dev/null; echo $?` → `0`.
 
 - [ ] **Step 6: Drop the ignore lines**
 
@@ -1656,7 +1656,7 @@ Remove `.gitignore` lines 122–123 (`# gitnexus: …` and `.gitnexus/`) and `.i
 - [ ] **Step 7: Verify no reference is left**
 
 ```bash
-grep -rIn -i gitnexus . --exclude-dir=node_modules --exclude-dir=.git --exclude-dir=graphify-out --exclude-dir=.repograph --exclude-dir=.turbo
+grep -rIn -i gitnexus . --exclude-dir=node_modules --exclude-dir=.git --exclude-dir=graphify-out --exclude-dir=.zerograph --exclude-dir=.turbo
 ```
 Expected: only the two "GitNexus is gone / больше не нужен" sentences from Steps 3–4. (`graphify-out/` is the frozen layer and keeps its history.)
 
@@ -1665,8 +1665,8 @@ Expected: only the two "GitNexus is gone / больше не нужен" sentenc
 Prose and a hook only — the pipeline reads none of it.
 
 ```bash
-git add .claude/CLAUDE.md .claude/skills/repo-query/SKILL.md .claude/hooks/repograph-notice.mjs .gitignore .ignore
-git commit -m "docs(claude): put the pre-edit and pre-commit rules on repograph impact and changes [skip ci]"
+git add .claude/CLAUDE.md .claude/skills/repo-query/SKILL.md .claude/hooks/zerograph-notice.mjs .gitignore .ignore
+git commit -m "docs(claude): put the pre-edit and pre-commit rules on zerograph impact and changes [skip ci]"
 ```
 
 ---
@@ -1684,7 +1684,7 @@ src/registry.rs         NEW — Identity, Checkout, Project, Registry; detect, b
 src/store.rs            identity(), write_identity(), seed_from(), SEEDED       (Task 10)
 src/main.rs             --repo <name>, note_use, seeding in build/update, repos  (Task 10, 11)
 README.md               Use / new "Many repositories" section                   (Task 12)
-~/.claude/hooks/repograph-notice.mjs, ~/.claude/settings.json                   (Task 13)
+~/.claude/hooks/zerograph-notice.mjs, ~/.claude/settings.json                   (Task 13)
 ```
 
 ---
@@ -1737,7 +1737,7 @@ Expected: FAIL — `vendor/inner/y.ts` is walked.
 
 - [ ] **Step 4: Run the walk tests and the corpus**
 
-Run: `cargo test walk:: && cargo build --release --quiet && target/release/repograph --repo /Users/max/Documents/projects/beauty-crm --no-dense build && target/release/repograph --repo /Users/max/Documents/projects/beauty-crm verify | head -2`
+Run: `cargo test walk:: && cargo build --release --quiet && target/release/zerograph --repo /Users/max/Documents/projects/beauty-crm --no-dense build && target/release/zerograph --repo /Users/max/Documents/projects/beauty-crm verify | head -2`
 Expected: tests pass; `verify` counts unchanged from 0.4.0 (the nested worktree there is under hidden `.claude/`, already skipped).
 
 - [ ] **Step 5: Commit**
@@ -1910,14 +1910,14 @@ mod tests {
         assert!(e.contains("fix") && e.contains("main"), "{e}");
         let e = r.resolve("zeta", Path::new("/")).unwrap_err().to_string();
         assert!(e.contains("alpha"), "{e}");
-        assert!(Registry::default().resolve("zeta", Path::new("/")).unwrap_err().to_string().contains("repograph build"));
+        assert!(Registry::default().resolve("zeta", Path::new("/")).unwrap_err().to_string().contains("zerograph build"));
     }
 
     #[test]
     fn freshest_store_is_the_sibling_with_the_newest_manifest_never_self() {
         let (r, main, wt, clone) = three_checkouts();
         for (d, secs) in [(&main, 100u64), (&wt, 300), (&clone, 200)] {
-            let dir = d.path().join(".repograph");
+            let dir = d.path().join(".zerograph");
             std::fs::create_dir_all(&dir).unwrap();
             let f = dir.join("manifest.json");
             std::fs::write(&f, "{}").unwrap();
@@ -1969,9 +1969,9 @@ pub const IDENTITY: &str = "identity.json";
 const TOUCH_EVERY: u64 = 600;
 
 pub fn path() -> Result<PathBuf> {
-    if let Some(p) = std::env::var_os("REPOGRAPH_REGISTRY") { return Ok(PathBuf::from(p)) }
-    let home = std::env::var_os("HOME").context("neither REPOGRAPH_REGISTRY nor HOME is set")?;
-    Ok(PathBuf::from(home).join(".config").join("repograph").join("registry.json"))
+    if let Some(p) = std::env::var_os("ZEROGRAPH_REGISTRY") { return Ok(PathBuf::from(p)) }
+    let home = std::env::var_os("HOME").context("neither ZEROGRAPH_REGISTRY nor HOME is set")?;
+    Ok(PathBuf::from(home).join(".config").join("zerograph").join("registry.json"))
 }
 
 fn now() -> u64 {
@@ -2078,7 +2078,7 @@ impl Registry {
         let (name, branch) = match needle.split_once('@') { Some((n, b)) => (n, Some(b)), None => (needle, None) };
         let Some(project) = self.projects.values().find(|p| p.name == name) else {
             let names: Vec<&str> = self.projects.values().map(|p| p.name.as_str()).collect();
-            let known = if names.is_empty() { "none — run `repograph build` in one".to_string() } else { names.join(", ") };
+            let known = if names.is_empty() { "none — run `zerograph build` in one".to_string() } else { names.join(", ") };
             anyhow::bail!("no repository named {name}; registered: {known}");
         };
         let pick = match branch {
@@ -2100,7 +2100,7 @@ impl Registry {
         self.projects.get(key)?.checkouts.iter()
             .map(|c| PathBuf::from(&c.path))
             .filter(|p| p != except)
-            .filter_map(|p| std::fs::metadata(p.join(".repograph").join("manifest.json")).and_then(|m| m.modified()).ok().map(|t| (t, p)))
+            .filter_map(|p| std::fs::metadata(p.join(".zerograph").join("manifest.json")).and_then(|m| m.modified()).ok().map(|t| (t, p)))
             .max_by_key(|(t, _)| *t)
             .map(|(_, p)| p)
     }
@@ -2197,7 +2197,7 @@ In `impl Store`, after `wipe`:
         std::fs::create_dir_all(&self.dir)?;
         let mut copied = Vec::new();
         for name in SEEDED {
-            let src = other.join(".repograph").join(name);
+            let src = other.join(".zerograph").join(name);
             if !src.exists() { continue }
             let tmp = self.dir.join(format!("{name}.tmp"));
             std::fs::copy(&src, &tmp).with_context(|| format!("copy {}", src.display()))?;
@@ -2274,9 +2274,9 @@ Run: `cargo test --quiet && cargo clippy --all-targets --quiet && cargo build --
 
 ```bash
 B=/Users/max/Documents/projects/beauty-crm
-target/release/repograph --repo $B --no-dense update            # writes identity.json, registers
-cat ~/.config/repograph/registry.json
-REPOGRAPH_TIMING=1 target/release/repograph --repo $B ask FR-PAY-22 2>&1 | tail -3
+target/release/zerograph --repo $B --no-dense update            # writes identity.json, registers
+cat ~/.config/zerograph/registry.json
+ZEROGRAPH_TIMING=1 target/release/zerograph --repo $B ask FR-PAY-22 2>&1 | tail -3
 ```
 Expected: the registry holds one project `beauty-crm` with one checkout on the current branch; the `ask` timing lines are within 1 ms of a 0.4.0 run (`printed` stage total).
 
@@ -2285,12 +2285,12 @@ Expected: the registry holds one project `beauty-crm` with one checkout on the c
 ```bash
 B=/Users/max/Documents/projects/beauty-crm
 git -C $B worktree add -q /tmp/bc-seed -b tmp/seed-probe
-time target/release/repograph --repo /tmp/bc-seed build
-target/release/repograph --repo /tmp/bc-seed verify | head -2
-target/release/repograph repos 2>/dev/null || cat ~/.config/repograph/registry.json
+time target/release/zerograph --repo /tmp/bc-seed build
+target/release/zerograph --repo /tmp/bc-seed verify | head -2
+target/release/zerograph repos 2>/dev/null || cat ~/.config/zerograph/registry.json
 git -C $B worktree remove --force /tmp/bc-seed && git -C $B branch -D tmp/seed-probe
 ```
-Expected: stderr shows `seeded from /Users/max/Documents/projects/beauty-crm`; `changed 0 removed 0` (same tree) or the few files the branch differs by; `dense: embedded 0 rows`; wall time well under 10 s; `verify` counts equal the parent's. After removal the next `repograph` command's registry save drops the worktree row.
+Expected: stderr shows `seeded from /Users/max/Documents/projects/beauty-crm`; `changed 0 removed 0` (same tree) or the few files the branch differs by; `dense: embedded 0 rows`; wall time well under 10 s; `verify` counts equal the parent's. After removal the next `zerograph` command's registry save drops the worktree row.
 
 - [ ] **Step 7: Commit**
 
@@ -2337,7 +2337,7 @@ In `src/registry.rs` tests:
 
     #[test]
     fn render_of_an_empty_registry_says_so() {
-        assert_eq!(Registry::default().render(&|_| Status::default()), "no repositories yet — run `repograph build` in one\n");
+        assert_eq!(Registry::default().render(&|_| Status::default()), "no repositories yet — run `zerograph build` in one\n");
     }
 ```
 
@@ -2375,7 +2375,7 @@ impl Registry {
     }
 
     pub fn render(&self, probe: &dyn Fn(&Path) -> Status) -> String {
-        if self.projects.is_empty() { return "no repositories yet — run `repograph build` in one\n".into() }
+        if self.projects.is_empty() { return "no repositories yet — run `zerograph build` in one\n".into() }
         let mut out = String::new();
         for (key, p, cs) in self.ordered() {
             out.push_str(&format!("{}  {}\n", p.name, &key[..key.len().min(8)]));
@@ -2456,10 +2456,10 @@ Run: `cargo test --quiet && cargo clippy --all-targets --quiet && cargo build --
 
 ```bash
 cd /tmp
-/Users/max/Documents/projects/repograph/target/release/repograph repos
-/Users/max/Documents/projects/repograph/target/release/repograph --repo beauty-crm ask FR-PAY-22 | head -2
-/Users/max/Documents/projects/repograph/target/release/repograph --repo beauty-crm@nope verify; echo "exit $?"
-/Users/max/Documents/projects/repograph/target/release/repograph --repo nothing verify; echo "exit $?"
+/Users/max/Documents/projects/zerograph/target/release/zerograph repos
+/Users/max/Documents/projects/zerograph/target/release/zerograph --repo beauty-crm ask FR-PAY-22 | head -2
+/Users/max/Documents/projects/zerograph/target/release/zerograph --repo beauty-crm@nope verify; echo "exit $?"
+/Users/max/Documents/projects/zerograph/target/release/zerograph --repo nothing verify; echo "exit $?"
 cd - >/dev/null
 ```
 Expected: `repos` prints `beauty-crm  bc97b44e` and its checkout line ending `fresh`; the `ask` answers from `/tmp`; the two bad names exit 1 naming the branches / the names that exist.
@@ -2484,8 +2484,8 @@ git commit -m "feat(cli): address a checkout by name and list every one with its
 In **Use**, after the `changes` lines:
 
 ```bash
-repograph repos                             # every checkout built on this machine, grouped by project, with freshness
-repograph --repo beauty-crm ask FR-PAY-22   # a registered name works from any directory; name@branch picks a worktree
+zerograph repos                             # every checkout built on this machine, grouped by project, with freshness
+zerograph --repo beauty-crm ask FR-PAY-22   # a registered name works from any directory; name@branch picks a worktree
 ```
 
 New section before `## Configure`:
@@ -2495,12 +2495,12 @@ New section before `## Configure`:
 
 Every `build` or `update` records the checkout it ran in — path, branch, whether it is the main
 checkout — under the project's identity, the root commits of its history, in
-`~/.config/repograph/registry.json` (`REPOGRAPH_REGISTRY` overrides the path). Nothing is
+`~/.config/zerograph/registry.json` (`ZEROGRAPH_REGISTRY` overrides the path). Nothing is
 registered by hand: every command that opens a store refreshes the row, and every write drops
 rows whose directory is gone. `repos` lists what is there:
 
 ```
-$ repograph repos
+$ zerograph repos
 beauty-crm  bc97b44e
   /Users/max/Documents/projects/beauty-crm  main  main  8306 nodes / 29610 edges  fresh
   /Users/max/Documents/projects/beauty-crm/.claude/worktrees/tasks-coordination  worktree-tasks-coordination  8291 nodes / 29540 edges  stale: 3 changed, 1 removed
@@ -2523,14 +2523,14 @@ Replace the example with the real `repos` output from Task 11 Step 5.
 ```bash
 sed -i '' '3s/0\.4\.0/0.5.0/' Cargo.toml && cargo check --quiet
 sed -i '' '35s/Version 0\.4\.0\./Version 0.5.0./' README.md
-sed -i '' '3s/0\.4\.0/0.5.0/' npm/repograph-darwin-arm64/package.json npm/repograph-linux-x64/package.json npm/repograph/package.json
-sed -i '' '32,33s/0\.4\.0/0.5.0/' npm/repograph/package.json
+sed -i '' '3s/0\.4\.0/0.5.0/' npm/zerograph-darwin-arm64/package.json npm/zerograph-linux-x64/package.json npm/zerograph/package.json
+sed -i '' '32,33s/0\.4\.0/0.5.0/' npm/zerograph/package.json
 cargo test --quiet && cargo clippy --all-targets --quiet && cargo build --release --quiet
 B=/Users/max/Documents/projects/beauty-crm
-target/release/repograph --repo $B --no-dense build && target/release/repograph --repo $B bench && target/release/repograph --repo $B --no-dense bench
-git add Cargo.toml Cargo.lock README.md npm/repograph/package.json npm/repograph-darwin-arm64/package.json npm/repograph-linux-x64/package.json
+target/release/zerograph --repo $B --no-dense build && target/release/zerograph --repo $B bench && target/release/zerograph --repo $B --no-dense bench
+git add Cargo.toml Cargo.lock README.md npm/zerograph/package.json npm/zerograph-darwin-arm64/package.json npm/zerograph-linux-x64/package.json
 git commit -m "chore: release 0.5.0"
-git tag -a v0.5.0 -m "repograph 0.5.0"
+git tag -a v0.5.0 -m "zerograph 0.5.0"
 git push origin main && git push origin v0.5.0
 ```
 Expected: floors met; the release workflow green under the `devmaxxx` token as in Task 6.
@@ -2540,13 +2540,13 @@ Expected: floors met; the release workflow green under the `devmaxxx` token as i
 ### Task 13: One notice hook for every indexed repository (host setup)
 
 **Files (outside the repository):**
-- Create: `~/.claude/hooks/repograph-notice.mjs` (from `beauty-crm/.claude/hooks/repograph-notice.mjs`)
+- Create: `~/.claude/hooks/zerograph-notice.mjs` (from `beauty-crm/.claude/hooks/zerograph-notice.mjs`)
 - Modify: `~/.claude/settings.json` (`hooks.PreToolUse`)
 
 - [ ] **Step 1: Copy the hook and make it silent where there is no store**
 
 ```bash
-cp /Users/max/Documents/projects/beauty-crm/.claude/hooks/repograph-notice.mjs ~/.claude/hooks/repograph-notice.mjs
+cp /Users/max/Documents/projects/beauty-crm/.claude/hooks/zerograph-notice.mjs ~/.claude/hooks/zerograph-notice.mjs
 ```
 
 In the copy, replace the line `if (seen === 0) return built ? FULL_NOTICE : BUILD_NOTICE;` with:
@@ -2557,7 +2557,7 @@ In the copy, replace the line `if (seen === 0) return built ? FULL_NOTICE : BUIL
   if (seen === 0) return FULL_NOTICE;
 ```
 
-and delete the now-unused `BUILD_NOTICE` constant. Check: `echo '{"tool_input":{"file_path":"/x/y.ts"},"cwd":"/tmp","session_id":"t"}' | node ~/.claude/hooks/repograph-notice.mjs; echo "exit $?"` → no output, exit 0.
+and delete the now-unused `BUILD_NOTICE` constant. Check: `echo '{"tool_input":{"file_path":"/x/y.ts"},"cwd":"/tmp","session_id":"t"}' | node ~/.claude/hooks/zerograph-notice.mjs; echo "exit $?"` → no output, exit 0.
 
 - [ ] **Step 2: Register it beside the GitNexus hooks**
 
@@ -2567,7 +2567,7 @@ In `~/.claude/settings.json`, add to `hooks.PreToolUse` (keep the GitNexus entri
 {
   "matcher": "Read|Grep|Glob",
   "hooks": [
-    { "type": "command", "command": "node '/Users/max/.claude/hooks/repograph-notice.mjs'", "timeout": 10 }
+    { "type": "command", "command": "node '/Users/max/.claude/hooks/zerograph-notice.mjs'", "timeout": 10 }
   ]
 }
 ```
@@ -2586,7 +2586,7 @@ Not planned here; brainstormed and specified on its own when 0.5.0 is out. What 
 
 - **Corpora:** `bonliva-crm-nx` — C# ~700 files (`packages/crm-api-client-dotnet`, `libs-dotnet/*`); `beauty-crm/mobile/shared` — Kotlin 122 files; `bonliva-erp` — a handful of Python files. Order: C#, Kotlin, Python.
 - **Shape:** `FileKind::Code` dispatched by extension to a per-language `symbols`/`calls`/`imports` trio; `idrefs` is grammar-agnostic (it walks `comment` and `string` nodes) and is reused as is; `impact`, `changes`, `repos` need nothing. Grammars: `tree-sitter-c-sharp`, `tree-sitter-kotlin`, `tree-sitter-python`, pinned.
-- **Config:** `id_families` are `beauty-crm`'s census; the Bonliva repositories get a `repograph.toml` with `ERP`, `CRMDEV`, `BON`. No code.
+- **Config:** `id_families` are `beauty-crm`'s census; the Bonliva repositories get a `zerograph.toml` with `ERP`, `CRMDEV`, `BON`. No code.
 - **Then, and only then:** the two GitNexus hooks and the `gitnexus` MCP server leave `~/.claude/settings.json` and `~/.claude.json`, and `~/.gitnexus/` is deleted.
 
 ---

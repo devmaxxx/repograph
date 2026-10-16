@@ -1,8 +1,11 @@
 //! Runs a configured model command: the prompt on stdin, the answer on stdout, under `sh` in an
 //! empty directory of its own. `ask --rerank` is the one caller.
 use anyhow::{Context, Result};
-use std::io::Write;
+use std::io::{Read, Write};
 use std::path::PathBuf;
+use std::process::Stdio;
+use std::sync::mpsc::{Receiver, RecvTimeoutError};
+use std::time::{Duration, Instant};
 
 /// The shell the configured command runs under: `sh`, on every platform. The commands in
 /// `zerograph.toml` are written in its syntax — a `VAR=value` prefix, `""` for an empty argument —
@@ -24,7 +27,7 @@ fn shell() -> Result<std::process::Command> {
     let program_dirs: Vec<PathBuf> = [("ProgramFiles", ""), ("ProgramW6432", ""), ("LOCALAPPDATA", "Programs")].iter()
         .filter_map(|(k, sub)| std::env::var_os(k).map(|v| PathBuf::from(v).join(sub))).collect();
     let sh = git_sh(&path_dirs, bash.as_deref(), &program_dirs)
-        .context("`sh` is not on PATH and no Git for Windows was found beside `git` or under Program Files: enrich and rerank run their command under sh, which Git for Windows provides")?;
+        .context("`sh` is not on PATH and no Git for Windows was found beside `git` or under Program Files: rerank runs its command under sh, which Git for Windows provides")?;
     let mut cmd = std::process::Command::new(&sh);
     let root = sh.parent().and_then(std::path::Path::parent).map(std::path::Path::to_path_buf).unwrap_or_default();
     cmd.env("PATH", std::env::join_paths(std::iter::once(root.join("usr").join("bin")).chain(path_dirs))?);
@@ -107,38 +110,240 @@ fn clip_stderr(stderr: &[u8]) -> String {
     format!("{}… [{} more bytes]", &text[..end], text.len() - end)
 }
 
-pub fn run_command(command: &str, input: &str) -> Result<String> {
+/// Runs `command` with `input` on stdin and returns its stdout, or fails once `deadline` passes.
+/// The command is stopped at the deadline rather than waited on: offline, or at an auth prompt,
+/// `claude -p` never exits on its own, and the resident `serve` answers one question at a time.
+pub fn run_command(command: &str, input: &str, deadline: Duration) -> Result<String> {
+    let until = Instant::now() + deadline;
     let cwd = EmptyCwd::new()?;
-    let mut child = shell()?.arg("-c").arg(format!("{}{command}", pipefail_prefix())).current_dir(&cwd.0)
-        .stdin(std::process::Stdio::piped()).stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::piped())
-        .spawn().with_context(|| format!("spawn `{command}`"))?;
+    let mut cmd = shell()?;
+    cmd.arg("-c").arg(format!("{}{command}", pipefail_prefix())).current_dir(&cwd.0)
+        .stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
+    // Its own process group, so the stop reaches what `sh` started too: the model runs as `sh`'s
+    // child, and killing `sh` alone leaves it spending and holding the output pipe open.
+    #[cfg(unix)]
+    std::os::unix::process::CommandExt::process_group(&mut cmd, 0);
+    let mut child = cmd.spawn().with_context(|| format!("spawn `{command}`"))?;
+    // Out of the terminal's group, the command no longer hears a Ctrl-C meant for both of us.
+    #[cfg(unix)]
+    let _forwarding = interrupt::forward_to(child.id());
+    let mut stdin = child.stdin.take().context("stdin")?;
+    let input = input.to_owned();
     // A command that answers without reading its whole prompt closes the pipe early — `claude -p`
     // never does, a wrapper or a stub may — and the write then fails with EPIPE while the answer is
     // already on stdout. The exit status and the output judge the run, not the write.
-    let mut stdin = child.stdin.take().context("stdin")?;
-    match stdin.write_all(input.as_bytes()) {
-        Ok(()) => {}
-        Err(e) if e.kind() == std::io::ErrorKind::BrokenPipe => {}
-        Err(e) => return Err(e).with_context(|| format!("write the prompt to `{command}`")),
+    let writer = std::thread::spawn(move || match stdin.write_all(input.as_bytes()) {
+        Err(e) if e.kind() != std::io::ErrorKind::BrokenPipe => Err(e),
+        _ => Ok(()),
+    });
+    let stdout = drain(child.stdout.take().context("stdout")?);
+    let stderr = drain(child.stderr.take().context("stderr")?);
+    let stopped = || anyhow::anyhow!("`{command}` gave no answer within {} s and was stopped", deadline.as_secs());
+    // Woken by the answer itself: a command closes its output when it exits, so waiting on the
+    // stdout reader first leaves the exit poll below a millisecond's work rather than up to a
+    // 50 ms sleep after the model is done.
+    let early = match stdout.recv_timeout(until.saturating_duration_since(Instant::now())) {
+        Ok(read) => Some(read),
+        Err(RecvTimeoutError::Timeout) => None,
+        Err(RecvTimeoutError::Disconnected) => anyhow::bail!("the stdout reader panicked"),
+    };
+    let mut pause = Duration::from_millis(1);
+    let status = loop {
+        if let Some(status) = child.try_wait()? { break status; }
+        if Instant::now() >= until {
+            stop(&mut child);
+            return Err(stopped());
+        }
+        std::thread::sleep(pause);
+        pause = (pause * 2).min(Duration::from_millis(50));
+    };
+    // `sh` exiting is not the end of the output: something it started can hold the pipes open past
+    // it, so the deadline covers the reads too — with a grace, so an answer that arrived just
+    // before the deadline is not lost to its reader thread being a moment behind.
+    let collect = |rx: &Receiver<std::io::Result<Vec<u8>>>, pipe: &str| match rx.recv_timeout(until.saturating_duration_since(Instant::now()).max(READ_GRACE)) {
+        Ok(read) => read.with_context(|| format!("read the command's {pipe}")),
+        Err(RecvTimeoutError::Timeout) => {
+            #[cfg(unix)]
+            kill_group(child.id());
+            Err(stopped())
+        }
+        Err(RecvTimeoutError::Disconnected) => anyhow::bail!("the {pipe} reader panicked"),
+    };
+    let stdout = match early {
+        Some(read) => read.context("read the command's stdout")?,
+        None => collect(&stdout, "stdout")?,
+    };
+    let stderr = collect(&stderr, "stderr")?;
+    // Not joined while it still writes: something the command started can hold the read end of
+    // its stdin open past the command's exit, and a prompt larger than the pipe then blocks the
+    // writer for good — a wait with no deadline on a run that has already answered.
+    if writer.is_finished() {
+        writer.join().map_err(|_| anyhow::anyhow!("the prompt writer panicked"))?
+            .with_context(|| format!("write the prompt to `{command}`"))?;
     }
-    drop(stdin);
-    let out = child.wait_with_output()?;
-    if !out.status.success() {
-        anyhow::bail!("`{command}` exited {}: {}", out.status, clip_stderr(&out.stderr));
+    if !status.success() {
+        anyhow::bail!("`{command}` exited {status}: {}", clip_stderr(&stderr));
     }
-    Ok(String::from_utf8_lossy(&out.stdout).into_owned())
+    Ok(String::from_utf8_lossy(&stdout).into_owned())
+}
+
+const READ_GRACE: Duration = Duration::from_secs(2);
+
+/// Most bytes kept of one pipe. A model's answer is a few KB; a command that streams for the whole
+/// deadline must not grow the process by what it writes, so the rest is read and dropped — left
+/// unread, the command would block on a full pipe instead of being judged by its exit.
+const KEPT: usize = 8 << 20;
+
+fn drain(mut pipe: impl Read + Send + 'static) -> Receiver<std::io::Result<Vec<u8>>> {
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let mut kept = Vec::new();
+        let mut chunk = [0u8; 16 << 10];
+        let read = loop {
+            match pipe.read(&mut chunk) {
+                Ok(0) => break Ok(()),
+                Ok(n) => kept.extend_from_slice(&chunk[..n.min(KEPT.saturating_sub(kept.len()))]),
+                Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {}
+                Err(e) => break Err(e),
+            }
+        };
+        let _ = tx.send(read.map(|()| kept));
+    });
+    rx
+}
+
+/// The readers are left to finish on their own: on unix the group is gone and the pipes close
+/// with it, and on Windows a grandchild may keep them open, which must not hold the answer.
+/// Windows has no group to signal, so there the model `sh` started outlives the stop.
+fn stop(child: &mut std::process::Child) {
+    #[cfg(unix)]
+    kill_group(child.id());
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
+#[cfg(unix)]
+fn kill_group(leader: u32) {
+    if let Ok(pid) = i32::try_from(leader) {
+        // SAFETY: a signal to the group this child leads; no memory is shared with the call.
+        unsafe { libc::kill(-pid, libc::SIGKILL); }
+    }
+}
+
+/// Passes an interrupt on to the running command's group, then to whatever handled it before —
+/// `serve`'s flag, or the default that ends the process.
+#[cfg(unix)]
+mod interrupt {
+    use std::sync::atomic::{AtomicI32, AtomicUsize, Ordering};
+
+    const SIGNALS: [libc::c_int; 3] = [libc::SIGINT, libc::SIGTERM, libc::SIGHUP];
+    /// The groups of the commands running now, one slot each, so a command that finishes first
+    /// does not take the forward away from one still running. A command past the last slot only
+    /// misses the forward; it is never sent another's signal.
+    static GROUPS: [AtomicI32; 8] = [const { AtomicI32::new(0) }; 8];
+    static PREVIOUS: [AtomicUsize; 3] = [const { AtomicUsize::new(libc::SIG_DFL) }; 3];
+
+    extern "C" fn forward(sig: libc::c_int) {
+        for slot in &GROUPS {
+            let group = slot.load(Ordering::SeqCst);
+            // SAFETY: `kill`, `signal` and `raise` are async-signal-safe, and so is an atomic load.
+            if group > 0 { unsafe { libc::kill(-group, sig); } }
+        }
+        let Some(i) = SIGNALS.iter().position(|&s| s == sig) else { return };
+        match PREVIOUS[i].load(Ordering::SeqCst) {
+            libc::SIG_DFL => unsafe { libc::signal(sig, libc::SIG_DFL); libc::raise(sig); },
+            libc::SIG_IGN => {}
+            // SAFETY: a value `signal` returned for this signal, so a one-argument handler: the
+            // only ones this binary installs are `signal`'s too.
+            handler => unsafe { std::mem::transmute::<libc::sighandler_t, extern "C" fn(libc::c_int)>(handler)(sig) },
+        }
+    }
+
+    pub struct Forwarding(Option<usize>);
+
+    impl Drop for Forwarding {
+        fn drop(&mut self) {
+            if let Some(i) = self.0 { GROUPS[i].store(0, Ordering::SeqCst); }
+        }
+    }
+
+    pub fn forward_to(leader: u32) -> Forwarding {
+        static INSTALL: std::sync::Once = std::sync::Once::new();
+        INSTALL.call_once(|| {
+            for (i, &sig) in SIGNALS.iter().enumerate() {
+                // SAFETY: installs a handler that does only async-signal-safe work.
+                let previous = unsafe { libc::signal(sig, forward as *const () as libc::sighandler_t) };
+                // A failed install leaves nothing to chain to, and SIG_ERR called as a handler
+                // would jump to address -1.
+                if previous == libc::SIG_ERR { continue; }
+                PREVIOUS[i].store(previous, Ordering::SeqCst);
+                // An ignored signal stays ignored: under `nohup`, a hangup must not start ending the run.
+                if previous == libc::SIG_IGN { unsafe { libc::signal(sig, libc::SIG_IGN); } }
+            }
+        });
+        let leader = i32::try_from(leader).unwrap_or(0);
+        Forwarding(GROUPS.iter().position(|g| g.compare_exchange(0, leader, Ordering::SeqCst, Ordering::SeqCst).is_ok()))
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    const LONG: Duration = Duration::from_secs(60);
+
+    #[test]
+    fn a_command_whose_child_holds_the_output_open_is_stopped_at_the_deadline() {
+        let started = Instant::now();
+        let err = run_command("(sleep 30) & echo early", "", Duration::from_millis(300)).unwrap_err().to_string();
+        assert!(err.contains("no answer within"), "{err}");
+        assert!(started.elapsed() < Duration::from_secs(10), "took {:?}", started.elapsed());
+    }
+
+    /// The command has answered and gone; what it started holds only the prompt's pipe open, and
+    /// a prompt past the pipe buffer must not make the run wait for that.
+    #[cfg(unix)]
+    #[test]
+    fn a_child_holding_only_stdin_open_does_not_hold_up_an_answer() {
+        let started = Instant::now();
+        let out = run_command("(sleep 20 <&0 >/dev/null 2>&1 &); echo answered", &"x".repeat(1 << 20), LONG).unwrap();
+        assert_eq!(out, "answered\n");
+        assert!(started.elapsed() < Duration::from_secs(10), "took {:?}", started.elapsed());
+    }
+
+    #[test]
+    fn a_command_that_never_answers_is_stopped_at_its_deadline() {
+        let started = Instant::now();
+        let err = run_command("sleep 30", "", Duration::from_millis(300)).unwrap_err().to_string();
+        assert!(err.contains("no answer within"), "{err}");
+        assert!(started.elapsed() < Duration::from_secs(10), "took {:?}", started.elapsed());
+    }
+
+    /// The model is `sh`'s child, not the process spawned: stopping `sh` alone would leave it
+    /// running, spending, after the question was answered without it.
+    #[cfg(unix)]
+    #[test]
+    fn the_stop_reaches_what_the_shell_started() {
+        let dir = tempfile::tempdir().unwrap();
+        let pidfile = dir.path().join("pid");
+        let command = format!("sleep 30 & echo $! > '{}'; wait", pidfile.display());
+        assert!(run_command(&command, "", Duration::from_millis(300)).is_err());
+        let pid: i32 = std::fs::read_to_string(&pidfile).unwrap().trim().parse().unwrap();
+        let gone = (0..200).any(|_| {
+            // SAFETY: signal 0 only asks whether the pid exists.
+            let alive = unsafe { libc::kill(pid, 0) } == 0;
+            if alive { std::thread::sleep(Duration::from_millis(10)); }
+            !alive
+        });
+        assert!(gone, "sleep {pid} outlived the stop");
+    }
+
     #[test]
     fn a_command_that_answers_without_reading_its_prompt_still_answers() {
         // Larger than any pipe buffer, so the write blocks until the child closes its end of the
         // pipe — the race the CI runner lost on the reranker's stub command, made deterministic.
         let prompt = "x".repeat(1 << 20);
-        let out = run_command("exec 0<&-; printf 'answered\\n'", &prompt).unwrap();
+        let out = run_command("exec 0<&-; printf 'answered\\n'", &prompt, LONG).unwrap();
         assert_eq!(out, "answered\n");
     }
 
@@ -159,7 +364,7 @@ mod tests {
 
     #[test]
     fn a_command_runs_in_an_empty_directory_that_is_not_the_callers() {
-        let out = run_command("ls -A | wc -l; pwd", "").unwrap();
+        let out = run_command("ls -A | wc -l; pwd", "", LONG).unwrap();
         let mut lines = out.lines();
         assert_eq!(lines.next().unwrap().trim(), "0");
         let pwd = lines.next().unwrap();
@@ -169,7 +374,7 @@ mod tests {
 
     #[test]
     fn a_failing_commands_stderr_is_clipped_in_the_error() {
-        let err = run_command("head -c 100000 /dev/zero | tr '\\0' 'e' >&2; exit 1", "").unwrap_err().to_string();
+        let err = run_command("head -c 100000 /dev/zero | tr '\\0' 'e' >&2; exit 1", "", LONG).unwrap_err().to_string();
         assert!(err.len() < 4096, "{} bytes", err.len());
         assert!(err.contains("more bytes"), "{err}");
     }

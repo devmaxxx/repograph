@@ -17,7 +17,7 @@ Two directories, both locked: `~/bench/beauty-crm-502e8a6d`, the pinned fixture,
   measured the session and not the noise. The one exemption is this script's own ancestor chain
   (`$$` upwards through `PPID`), at any CPU: the harness that launched the probe is unavoidable and
   the `load1` clause refuses it on its own when it is busy. The printed line names what each rule
-  counted — `busy=0 (cargo/rustc/repograph: 0, node ≥5.0%: 0)`, a label that keeps the old name —
+  counted — `busy=0 (cargo/rustc/zerograph: 0, node ≥5.0%: 0)`, a label that keeps the old name —
   and each refusal lists the `pid pcpu comm` rows behind its count. What says whether the machine
   spoiled a row is not this clause but G23's control, the same binary through the suite twice; the
   precondition is here to catch the obvious cases cheaply. Sourcing the script defines
@@ -85,7 +85,7 @@ when any row exited non-zero, because a command that failed still gets a full `t
 row would enter the median as an honestly-measured fast run. One non-zero exit is not that: a
 `bench` row that answered every case and then missed a floor spent its wall clock reading, and its
 wall, max RSS and both CPU columns are readings of that reader — while a `bench` row that found no store
-never did the work at all. **As of 0.5.0 the status says which:** `repograph` exits 3 for a
+never did the work at all. **As of 0.5.0 the status says which:** `zerograph` exits 3 for a
 question it answered — a suite that ran every case and missed a floor — and 1 where there was
 nothing to measure. 3 and not 2, because 2 is written above the command: `clap` answers a mistyped
 flag with it and the npm launcher answers a missing platform binary with it, so a 2 never reached

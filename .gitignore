@@ -5,11 +5,7 @@
 /.superpowers
 /.fastembed_cache
 /dist
-/npm/*/bin/zerograph
-/npm/*/bin/zerograph.exe
-# What a pack run from before the rename left in the same folders.
-/npm/*/bin/repograph
-/npm/*/bin/repograph.exe
+/npm/zerograph/bin/*/
 /npm/*/node_modules
 /bench/compare/__pycache__
 

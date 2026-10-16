@@ -10,7 +10,7 @@ HERE = Path(__file__).resolve().parent
 QUIET = HERE / "quiet.sh"
 
 HEAD = re.compile(r"^quiet: idle=\S+ load1=\S+ ac=\d+ avail=\S+GB swap=\S+GB busy=(\d+) "
-                  r"\(cargo/rustc/repograph: (\d+), node ≥5\.0%: (\d+)\)$")
+                  r"\(cargo/rustc/zerograph: (\d+), node ≥5\.0%: (\d+)\)$")
 
 
 def sourced(snippet, stdin=""):
@@ -52,8 +52,8 @@ class Rules(unittest.TestCase):
         row = f"{self.other} 0.0 /Users/max/.cargo/bin/cargo"
         self.assertEqual(decided(row + "\n", "project"), row)
 
-    def test_a_repograph_at_zero_percent_refuses_under_any_name_it_is_built_as(self):
-        for path in ("/Users/max/bench/bin/repograph-main", "/Users/max/bench/bin/zerograph-main",
+    def test_a_zerograph_at_zero_percent_refuses_under_any_name_it_is_built_as(self):
+        for path in ("/Users/max/bench/bin/repograph-main", "/Users/max/bench/bin/repograph-main",
                      "/Users/max/src/target/release/zerograph", "/Users/max/src/target/release/repograph"):
             with self.subTest(path=path):
                 row = f"{self.other} 0.0 {path}"

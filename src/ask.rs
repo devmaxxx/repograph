@@ -193,6 +193,9 @@ pub struct Context {
     /// vectors are answered from as they stand.
     graph_at: Option<walk::Stamp>,
     notices: RefCell<Vec<String>>,
+    /// The rerank commands started since the last `take_reranked`: what a paid allowance counts,
+    /// which neither a refused command nor an exact-id answer that never asks the model adds to.
+    reranked: Cell<u32>,
     timing: Timing,
     repo: PathBuf,
     writer: Writer,
@@ -233,6 +236,7 @@ impl Context {
             cross: RefCell::new(None),
             graph_at,
             notices: RefCell::new(notices),
+            reranked: Cell::new(0),
             timing,
             repo: repo.to_path_buf(),
             writer,
@@ -284,7 +288,7 @@ impl Context {
         // so it narrows a fused request and never the other way; `serve` refuses that pairing.
         let no_dense = self.no_dense || req.no_dense;
         let opts = query::Options { seeds: req.seeds, bodies: req.bodies, dense: !no_dense && index::dense::DenseIndex::present(&self.store), json: req.json, depth: req.depth };
-        let Context { cfg, store, graph, lexical, dense_idx, warm, embedder, cross, graph_at, notices, timing, repo, writer, budget, stale, .. } = &*self;
+        let Context { cfg, store, graph, lexical, dense_idx, warm, embedder, cross, graph_at, notices, reranked, timing, repo, writer, budget, stale, .. } = &*self;
         // Opening the ONNX model costs ~220 ms and 1.3 GB, the vectors 50 MB; an exact id or
         // symbol match never asks for either, so on that path both still open lazily, on the
         // first fused query that never comes. A fused question starts both below, once the
@@ -415,6 +419,7 @@ impl Context {
                 notices.borrow_mut().push(format!("rerank: {why}; answering from the fused order"));
                 return Vec::new();
             }
+            reranked.set(reranked.get() + 1);
             let (picked, notice) = rerank::run_or_notice(&cfg.rerank_command, q, c);
             if let Some(n) = notice { notices.borrow_mut().push(n); }
             picked
@@ -510,6 +515,8 @@ impl Context {
     /// Notices `ask` used to print on stderr for this answer (refresh lines, dense fallbacks), drained.
     pub fn notices(&mut self) -> Vec<String> { std::mem::take(&mut self.notices.borrow_mut()) }
 
+    pub fn take_reranked(&self) -> u32 { self.reranked.replace(0) }
+
     pub(crate) fn timing(&self) -> &Timing { &self.timing }
 }
 
@@ -549,6 +556,23 @@ mod tests {
         let before = ctx.answer(&req).unwrap();
         ctx.drop_model();
         assert_eq!(ctx.answer(&req).unwrap(), before, "the answer a dropped model leaves behind is the same answer");
+    }
+
+    /// A paid allowance is charged by the model calls an answer starts: an exact id is answered
+    /// without one, a fused question starts one even when the command then fails.
+    #[test]
+    fn only_a_started_rerank_command_is_counted() {
+        let dir = repo_with_two_docs();
+        let mut cfg = crate::config::Config::load(dir.path()).unwrap();
+        cfg.rerank_command = "exit 1".into();
+        crate::run_update(dir.path(), &cfg, true).unwrap();
+        let mut ctx = Context::open(dir.path(), &cfg, true, true).unwrap();
+        let ask = |words: &[&str]| Request { words: words.iter().map(|w| w.to_string()).collect(), json: false, seeds: 5, bodies: false, rerank: true, rerank_local: false, depth: crate::rerank::DEPTH, stale: true, no_dense: true };
+        ctx.answer(&ask(&["FR-PAY-1"])).unwrap();
+        assert_eq!(ctx.take_reranked(), 0, "an exact id never reached the model");
+        ctx.answer(&ask(&["штраф", "отмена"])).unwrap();
+        assert_eq!(ctx.take_reranked(), 1, "{:?}", ctx.notices());
+        assert_eq!(ctx.take_reranked(), 0, "taking the count resets it");
     }
 
     // A lock that is a link refuses every writer; a reader that took the refusal for a read-only
@@ -603,10 +627,11 @@ mod tests {
             let dir = tempfile::tempdir().unwrap();
             let model = index::embed::writer_model(index::embed::DEFAULT_MODEL);
             let root = dir.path().join(format!("models--{model}").replace('/', "--"));
-            let snap = root.join("snapshots/abc");
+            let rev = index::embed::revision(&model).unwrap_or("abc");
+            let snap = root.join("snapshots").join(rev);
             std::fs::create_dir_all(root.join("refs")).unwrap();
             std::fs::create_dir_all(snap.join("onnx")).unwrap();
-            std::fs::write(root.join("refs/main"), "abc").unwrap();
+            std::fs::write(root.join("refs/main"), rev).unwrap();
             std::fs::File::create(snap.join("onnx/model.onnx")).unwrap().set_len(64 << 20).unwrap();
             std::fs::write(snap.join("tokenizer.json"), "{}").unwrap();
             std::fs::write(snap.join("config.json"), r#"{"pad_token_id": 1}"#).unwrap();

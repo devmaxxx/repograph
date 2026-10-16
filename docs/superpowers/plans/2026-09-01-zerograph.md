@@ -1,14 +1,14 @@
-# repograph Implementation Plan
+# zerograph Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** One Rust binary, `repograph`, that builds and incrementally updates a project knowledge graph at 0 API tokens forever and answers repository questions at ≤130 tokens p90, benchmarked against `beauty-crm`.
+**Goal:** One Rust binary, `zerograph`, that builds and incrementally updates a project knowledge graph at 0 API tokens forever and answers repository questions at ≤130 tokens p90, benchmarked against `beauty-crm`.
 
-**Architecture:** Two tree-sitter extractors (markdown, TypeScript) turn a repository into nodes and typed edges keyed by the identifiers its authors already write by hand (`FR-PAY-22`, `INV-01`, symbol names). Retrieval is a "door" onto that graph: exact-id short-circuit → in-memory BM25 with Russian+English stemming → local ONNX embeddings, fused by reciprocal rank, then one hop over the hand-written edges. Everything persists as JSON under `<repo>/.repograph/`; `update` re-extracts only files whose blake3 changed.
+**Architecture:** Two tree-sitter extractors (markdown, TypeScript) turn a repository into nodes and typed edges keyed by the identifiers its authors already write by hand (`FR-PAY-22`, `INV-01`, symbol names). Retrieval is a "door" onto that graph: exact-id short-circuit → in-memory BM25 with Russian+English stemming → local ONNX embeddings, fused by reciprocal rank, then one hop over the hand-written edges. Everything persists as JSON under `<repo>/.zerograph/`; `update` re-extracts only files whose blake3 changed.
 
 **Tech Stack:** Rust 1.86 (edition 2021), tree-sitter 0.27.0, tree-sitter-typescript 0.23.2, rust-stemmers 1.2.0, fastembed 6.0.2 (`MultilingualE5Small`), ignore 0.4.33, blake3 1.8.7, clap 4.6.6, serde 1.0.229 / serde_json 1.0.151 / toml 1.1.4 / serde_yaml 0.9.34, regex 1.13.1, rayon 1.12.0, anyhow 1.0.104, streaming-iterator 0.1.9.
 
-**Spec:** `docs/superpowers/specs/2026-09-01-repograph-design.md`
+**Spec:** `docs/superpowers/specs/2026-09-01-zerograph-design.md`
 
 ## Deviations from the approved spec (simplifications — flag to Max before Task 1)
 
@@ -24,7 +24,7 @@
 ## Global Constraints
 
 - Build/update makes **zero network calls** except the one-time fastembed model download (`MultilingualE5Small`, ≈450 MB, cached under `FASTEMBED_CACHE_DIR` or the default fastembed cache dir).
-- `beauty-crm` (`/Users/max/Documents/projects/beauty-crm`) is read-only corpus; the tool never writes there except into `<repo>/.repograph/`, and the bench uses `REPOGRAPH_BENCH_REPO` to find it.
+- `beauty-crm` (`/Users/max/Documents/projects/beauty-crm`) is read-only corpus; the tool never writes there except into `<repo>/.zerograph/`, and the bench uses `ZEROGRAPH_BENCH_REPO` to find it.
 - Every crate is pinned with `=` in `Cargo.toml`; APIs below were verified from registry sources on 2026-09-01. Never write a third-party API from memory — open `~/.cargo/registry/src/*/<crate>-<ver>/` when unsure.
 - **No TypeScript/JavaScript in this repository.** Rust only: extractors, bench runner, CI scripts are Rust or plain shell. TypeScript appears solely as *corpus* (`beauty-crm` files being parsed) and as test fixtures under `tests/fixtures/`. The npm wrapper (later plan) is a `bin` shim of a few lines and lives in its own package, not here.
 - Code, comments, commit messages, docs: English. Comments explain _why_, never _what_; no ticket ids in comments.
@@ -39,18 +39,18 @@
 ## File structure
 
 ```
-repograph/
+zerograph/
   Cargo.toml                 pinned deps, one binary crate
-  .gitignore                 target/, .repograph/
+  .gitignore                 target/, .zerograph/
   README.md                  Task 15
-  repograph.toml             the tool's own config, doubles as the worked example
+  zerograph.toml             the tool's own config, doubles as the worked example
   src/
     main.rs                  clap dispatch only
     config.rs                Config: globs, id families, skip list, requirement dialect
     ids.rs                   IdMatcher: strict regex, range + slash-list expansion
     walk.rs                  file list + blake3 manifest + diff
     model.rs                 Node, Edge, Graph (adjacency, replace_file)
-    store.rs                 .repograph/{graph.json,manifest.json,vectors.bin}, atomic write
+    store.rs                 .zerograph/{graph.json,manifest.json,vectors.bin}, atomic write
     doc/mod.rs               DocExtractor entry: markdown + yaml registries
     doc/requirements.rs      requirement heads (both dialects), bodies, id refs, entities
     doc/links.rs             markdown links → `links` edges
@@ -78,19 +78,19 @@ Module tree in `main.rs`: `mod config; mod ids; mod walk; mod model; mod store; 
 
 **Files:**
 
-- Create: `Cargo.toml`, `.gitignore`, `src/main.rs`, `src/config.rs`, `repograph.toml`
+- Create: `Cargo.toml`, `.gitignore`, `src/main.rs`, `src/config.rs`, `zerograph.toml`
 - Test: `src/config.rs` (`#[cfg(test)]`)
 
 **Interfaces:**
 
-- Produces: `Config { doc_globs: Vec<String>, code_globs: Vec<String>, skip: Vec<String>, id_families: Vec<String>, milestone_families: Vec<String>, registries: Vec<String> }`, `Config::load(repo: &Path) -> anyhow::Result<Config>` (reads `<repo>/repograph.toml`, falls back to `Config::default()`), `Cli` enum with subcommands `Build`, `Update`, `Ask`, `Explain`, `Verify`, `Bench`, `ImportLegacy`.
+- Produces: `Config { doc_globs: Vec<String>, code_globs: Vec<String>, skip: Vec<String>, id_families: Vec<String>, milestone_families: Vec<String>, registries: Vec<String> }`, `Config::load(repo: &Path) -> anyhow::Result<Config>` (reads `<repo>/zerograph.toml`, falls back to `Config::default()`), `Cli` enum with subcommands `Build`, `Update`, `Ask`, `Explain`, `Verify`, `Bench`, `ImportLegacy`.
 
 - [ ] **Step 1: Create the crate and pin dependencies**
 
 ```toml
 # Cargo.toml
 [package]
-name = "repograph"
+name = "zerograph"
 version = "0.1.0"
 edition = "2021"
 rust-version = "1.86"
@@ -123,7 +123,7 @@ lto = "thin"
 
 ```
 /target
-/.repograph
+/.zerograph
 ```
 
 - [ ] **Step 2: Write the failing config test**
@@ -160,7 +160,7 @@ mod tests {
     #[test]
     fn partial_file_overrides_only_named_keys() {
         let dir = tempfile::tempdir().unwrap();
-        std::fs::write(dir.path().join("repograph.toml"), "skip = [\"docs/**/TRACKER.md\"]\n").unwrap();
+        std::fs::write(dir.path().join("zerograph.toml"), "skip = [\"docs/**/TRACKER.md\"]\n").unwrap();
         let cfg = Config::load(dir.path()).unwrap();
         assert_eq!(cfg.skip, vec!["docs/**/TRACKER.md".to_string()]);
         assert!(cfg.id_families.contains(&"INV".to_string()));
@@ -182,7 +182,7 @@ impl Default for Config {
         Config {
             doc_globs: s(&["**/*.md"]),
             code_globs: s(&["**/*.ts", "**/*.tsx"]),
-            skip: s(&["**/node_modules/**", "**/dist/**", "**/TRACKER.md", "graphify-out/**", ".repograph/**"]),
+            skip: s(&["**/node_modules/**", "**/dist/**", "**/TRACKER.md", "graphify-out/**", ".zerograph/**"]),
             // The strict families measured in beauty-crm's census; ambiguous
             // one-letter families (B1, C11, S3) collide with prose and are left out.
             id_families: s(&[
@@ -199,7 +199,7 @@ impl Default for Config {
 
 impl Config {
     pub fn load(repo: &Path) -> Result<Config> {
-        let path = repo.join("repograph.toml");
+        let path = repo.join("zerograph.toml");
         if !path.exists() {
             return Ok(Config::default());
         }
@@ -219,7 +219,7 @@ use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 
 #[derive(Parser)]
-#[command(name = "repograph", version)]
+#[command(name = "zerograph", version)]
 struct Cli {
     /// Repository root; defaults to the current directory.
     #[arg(long, global = true, default_value = ".")]
@@ -251,31 +251,31 @@ fn main() -> anyhow::Result<()> {
     let cfg = config::Config::load(&repo)?;
     match cli.cmd {
         _ => {
-            println!("repograph: {} families configured at {}", cfg.id_families.len(), repo.display());
+            println!("zerograph: {} families configured at {}", cfg.id_families.len(), repo.display());
             Ok(())
         }
     }
 }
 ```
 
-`repograph.toml` at the repo root (the tool indexes itself; also the worked example):
+`zerograph.toml` at the repo root (the tool indexes itself; also the worked example):
 
 ```toml
 doc_globs = ["**/*.md"]
 code_globs = ["**/*.ts", "**/*.tsx"]
-skip = ["**/node_modules/**", "**/dist/**", "**/TRACKER.md", "graphify-out/**", ".repograph/**"]
+skip = ["**/node_modules/**", "**/dist/**", "**/TRACKER.md", "graphify-out/**", ".zerograph/**"]
 registries = ["docs/constitution.yaml"]
 ```
 
 - [ ] **Step 6: Run tests and build**
 
-Run: `cargo test config:: && cargo run -- --repo . build` — Expected: 2 passed; prints `repograph: 35 families configured at …`.
+Run: `cargo test config:: && cargo run -- --repo . build` — Expected: 2 passed; prints `zerograph: 35 families configured at …`.
 
 - [ ] **Step 7: Commit**
 
 ```bash
-git add Cargo.toml Cargo.lock .gitignore repograph.toml src/main.rs src/config.rs docs/
-git commit -m "feat: scaffold repograph with config and CLI skeleton"
+git add Cargo.toml Cargo.lock .gitignore zerograph.toml src/main.rs src/config.rs docs/
+git commit -m "feat: scaffold zerograph with config and CLI skeleton"
 ```
 
 ---
@@ -780,8 +780,8 @@ mod tests {
         g.apply(e);
         let m = Manifest::default();
         store.save(&g, &m).unwrap();
-        assert!(d.path().join(".repograph/graph.json").exists());
-        assert!(!d.path().join(".repograph/graph.json.tmp").exists());
+        assert!(d.path().join(".zerograph/graph.json").exists());
+        assert!(!d.path().join(".zerograph/graph.json.tmp").exists());
         let (g2, _) = store.load().unwrap();
         assert_eq!(g2.nodes.len(), 1);
         assert_eq!(g2.edges.len(), 1);
@@ -866,7 +866,7 @@ impl Graph {
 ```rust
 // src/store.rs (above tests)
 impl Store {
-    pub fn new(repo: &Path) -> Store { Store { dir: repo.join(".repograph") } }
+    pub fn new(repo: &Path) -> Store { Store { dir: repo.join(".zerograph") } }
 
     pub fn dir(&self) -> &Path { &self.dir }
 
@@ -970,7 +970,7 @@ fn extractors(_cfg: &config::Config) -> Extractors {
 Run: `cargo test` — Expected: all green.
 
 Run: `cargo run --release -- --repo /Users/max/Documents/projects/beauty-crm build && cargo run --release -- --repo /Users/max/Documents/projects/beauty-crm update`
-Expected: first prints `changed ~1300 removed 0 nodes 0 edges 0`; second prints `changed 0 removed 0 …`. `git -C /Users/max/Documents/projects/beauty-crm status --short` shows only `?? .repograph/` (add `.repograph/` to beauty-crm's `.gitignore` in the later integration plan, not now).
+Expected: first prints `changed ~1300 removed 0 nodes 0 edges 0`; second prints `changed 0 removed 0 …`. `git -C /Users/max/Documents/projects/beauty-crm status --short` shows only `?? .zerograph/` (add `.zerograph/` to beauty-crm's `.gitignore` in the later integration plan, not now).
 
 - [ ] **Step 7: Commit**
 
@@ -1324,7 +1324,7 @@ Expected: `nodes ≥ 1935`, `edges ≥ 11447` (the `rq.sh index` floor from the 
 
 ```bash
 python3 -c "
-import json; g=json.load(open('/Users/max/Documents/projects/beauty-crm/.repograph/graph.json'))
+import json; g=json.load(open('/Users/max/Documents/projects/beauty-crm/.zerograph/graph.json'))
 req=[n for n in g['nodes'].values() if n['kind']=='Requirement']
 print('requirements', len(req))
 ids={n['id'] for n in g['nodes'].values()}
@@ -2260,7 +2260,7 @@ Run: `cargo run --release -- --repo /Users/max/Documents/projects/beauty-crm bui
 
 ```bash
 python3 -c "
-import json; g=json.load(open('/Users/max/Documents/projects/beauty-crm/.repograph/graph.json'))
+import json; g=json.load(open('/Users/max/Documents/projects/beauty-crm/.zerograph/graph.json'))
 for s in ['asGrosze','problemDetailsOf','vitestBase']:
     print(s, [n['file'] for n in g['nodes'].values() if n['id'].endswith('::'+s)])
 print('symbols', sum(1 for n in g['nodes'].values() if n['kind']=='Symbol'))
@@ -2917,7 +2917,7 @@ Cmd::Explain { node } => {
 Cmd::Verify => {
     let (graph, _) = store::Store::new(&repo).load()?;
     print!("{}", query::verify(&graph));
-    if graph.nodes.is_empty() { anyhow::bail!("graph is empty — run `repograph build`"); }
+    if graph.nodes.is_empty() { anyhow::bail!("graph is empty — run `zerograph build`"); }
     Ok(())
 }
 ```
@@ -3456,7 +3456,7 @@ git commit -m "feat: import a graphify graph's model-only edges as a frozen lega
 **Interfaces:**
 
 - Consumes: `query::ask`/`render` (Task 11), `DenseIndex`/`Embedder` (Task 12), `Store`, `IdMatcher`.
-- Produces: `bench::run(repo: &Path, cfg: &Config, cases: &Path, no_dense: bool) -> Result<bool>` — prints one line per case (`HIT`/`miss`, tokens), then a summary and returns `true` only when every floor holds: keyword 24/24; paraphrase ≥7 (`no_dense`) or ≥12 (dense); code 3/3; p90 tokens ≤130. A case hits when `expect` equals the id of any seed or expanded hit, or — for `code` cases — when a seed's `file` equals `expect`. Tokens = rendered text length / 4. `REPOGRAPH_BENCH_REPO` overrides `--repo` for the bench so CI can point at a checkout.
+- Produces: `bench::run(repo: &Path, cfg: &Config, cases: &Path, no_dense: bool) -> Result<bool>` — prints one line per case (`HIT`/`miss`, tokens), then a summary and returns `true` only when every floor holds: keyword 24/24; paraphrase ≥7 (`no_dense`) or ≥12 (dense); code 3/3; p90 tokens ≤130. A case hits when `expect` equals the id of any seed or expanded hit, or — for `code` cases — when a seed's `file` equals `expect`. Tokens = rendered text length / 4. `ZEROGRAPH_BENCH_REPO` overrides `--repo` for the bench so CI can point at a checkout.
 
 - [ ] **Step 1: The cases file**
 
@@ -3582,7 +3582,7 @@ Run: `cargo test bench::` — Expected: `cases_file_parses…` fails until the f
 ```rust
 // src/bench.rs (above tests)
 pub fn run(repo: &Path, cfg: &Config, cases: &Path, no_dense: bool) -> Result<bool> {
-    let repo = std::env::var("REPOGRAPH_BENCH_REPO").map(std::path::PathBuf::from).unwrap_or(repo.to_path_buf());
+    let repo = std::env::var("ZEROGRAPH_BENCH_REPO").map(std::path::PathBuf::from).unwrap_or(repo.to_path_buf());
     let store = Store::new(&repo);
     let (graph, _): (Graph, _) = store.load()?;
     if graph.nodes.is_empty() { anyhow::bail!("graph is empty at {} — run build first", repo.display()); }
@@ -3652,7 +3652,7 @@ git commit -m "feat: bench the recorded keyword, paraphrase and code cases again
 **Files:**
 
 - Create: `README.md`, `.github/workflows/ci.yml`, `.github/workflows/release.yml`, `LICENSE` (MIT, copyright Max Syn 2026)
-- Modify: `repograph.toml` (already the worked example)
+- Modify: `zerograph.toml` (already the worked example)
 
 **Interfaces:**
 
@@ -3662,14 +3662,14 @@ git commit -m "feat: bench the recorded keyword, paraphrase and code cases again
 
 `README.md` sections, each written out (no headings without text):
 
-1. **What it is** — one paragraph: a 0-token project graph and a ≤130-token door onto it; the measured comparison table from the spec (graphify 0/14 paraphrase @1555 tok vs repograph target ≥12/14 @≤130).
+1. **What it is** — one paragraph: a 0-token project graph and a ≤130-token door onto it; the measured comparison table from the spec (graphify 0/14 paraphrase @1555 tok vs zerograph target ≥12/14 @≤130).
 2. **Install** — `cargo install --path .`; release binaries per tag for `aarch64-apple-darwin` and `x86_64-unknown-linux-gnu`.
-3. **Use** — `repograph build`, `repograph update`, `repograph ask <words…> [--json] [--bodies] [--seeds N] [--no-dense]`, `repograph explain <id|symbol|label>`, `repograph verify`, `repograph import-legacy <graph.json>`, `repograph bench [--cases file]`. One example output block copied from a real `ask cancellation` run.
-4. **Configure** — every `repograph.toml` key with its default, and the rule that requirement lines are `<ID> · MUST|SHOULD|LATER · title` in either `**…**` or `#` heading form.
+3. **Use** — `zerograph build`, `zerograph update`, `zerograph ask <words…> [--json] [--bodies] [--seeds N] [--no-dense]`, `zerograph explain <id|symbol|label>`, `zerograph verify`, `zerograph import-legacy <graph.json>`, `zerograph bench [--cases file]`. One example output block copied from a real `ask cancellation` run.
+4. **Configure** — every `zerograph.toml` key with its default, and the rule that requirement lines are `<ID> · MUST|SHOULD|LATER · title` in either `**…**` or `#` heading form.
 5. **What is in the graph** — the node and edge kinds tables from the spec's Model section.
 6. **Embeddings** — the model, its size, where it caches (`FASTEMBED_CACHE_DIR`), that the download happens once and that `--no-dense` skips it everywhere.
 7. **Bench** — how the 41 cases were recorded and what the floors are.
-8. **Design** — link to `docs/superpowers/specs/2026-09-01-repograph-design.md` and the three deviations from it.
+8. **Design** — link to `docs/superpowers/specs/2026-09-01-zerograph-design.md` and the three deviations from it.
 
 - [ ] **Step 2: CI**
 
@@ -3704,9 +3704,9 @@ jobs:
       - if: steps.token.outputs.present == 'true'
         run: cargo build --release
       - if: steps.token.outputs.present == 'true'
-        run: ./target/release/repograph --repo corpus --no-dense build
+        run: ./target/release/zerograph --repo corpus --no-dense build
       - if: steps.token.outputs.present == 'true'
-        run: ./target/release/repograph --repo corpus --no-dense bench
+        run: ./target/release/zerograph --repo corpus --no-dense bench
 ```
 
 The dense floor is checked locally (the model download does not belong in CI); the lexical floors are what CI guards.
@@ -3730,9 +3730,9 @@ jobs:
       - uses: dtolnay/rust-toolchain@1.86.0
         with: { targets: "${{ matrix.target }}" }
       - run: cargo build --release --target ${{ matrix.target }}
-      - run: tar -C target/${{ matrix.target }}/release -czf repograph-${{ matrix.target }}.tar.gz repograph
+      - run: tar -C target/${{ matrix.target }}/release -czf zerograph-${{ matrix.target }}.tar.gz zerograph
       - uses: softprops/action-gh-release@v2
-        with: { files: repograph-${{ matrix.target }}.tar.gz }
+        with: { files: zerograph-${{ matrix.target }}.tar.gz }
 ```
 
 - [ ] **Step 3: Clippy, self-index, final bench**

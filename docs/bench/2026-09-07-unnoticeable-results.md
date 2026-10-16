@@ -7,7 +7,7 @@
 > it was worth trying. The mapped-weights half of this document is unaffected and shipped.
 
 The request was one sentence: reduce resource usage further, as much as possible, so that the
-person does not notice when repograph is working. "Does not notice" is not a number, so the first
+person does not notice when zerograph is working. "Does not notice" is not a number, so the first
 job was to make it one — and then to find the lever that moves it, which turned out to be a single
 system call and not any of the six things that looked more promising.
 
@@ -15,7 +15,7 @@ Machine: `Mac15,7`, macOS 26.6.2, arm64, 12 logical cores = 6 performance + 6 ef
 (`hw.perflevel0.physicalcpu` = 6, `hw.perflevel1.physicalcpu` = 6), 36 GB. Corpus: the pinned
 `beauty-crm` fixture at `502e8a6d` — 908 files, 8,316 nodes, 32,601 edges, 33,525 live dense rows.
 Two stores are used throughout: **store-B**, the 320 longest passages (all ≥ 256 tokens, no
-`repograph.toml`, so the default e5-large model), and the whole store under the same model.
+`zerograph.toml`, so the default e5-large model), and the whole store under the same model.
 
 Every row names a transcript under `$U = ~/bench/resources-2026-09-07/unnoticeable`: `log-plan/`
 holds the rows measured while the plan was being written, `log/` the rows measured from the built
@@ -139,7 +139,7 @@ band's scheduling overhead, and it is charged to the background band too.
 
 ### 2.3 Memory and pacing levers — the harness
 
-`$U/harness` (repograph's tokenize → forward → pool loop with the levers as arguments), same 320
+`$U/harness` (zerograph's tokenize → forward → pool loop with the levers as arguments), same 320
 texts, four threads, foreground:
 
 | run | switch | wall | user | max RSS | footprint | verdict |
@@ -178,7 +178,7 @@ for the person, and the scheduling lever already leaves memory the one bar this 
 | lever | verdict |
 |---|---|
 | `setpriority(PRIO_DARWIN_PROCESS, 0, PRIO_DARWIN_BG)` in the writers | **shipped** — every bar 1–4 met from a single call; reaches ORT's and rayon's threads because it is a task policy, not a thread one |
-| `priority` in `repograph.toml`, the machine file and `REPOGRAPH_PRIORITY` | **shipped** — `"background"` (default) or `"normal"` |
+| `priority` in `zerograph.toml`, the machine file and `ZEROGRAPH_PRIORITY` | **shipped** — `"background"` (default) or `"normal"` |
 | `session.disable_prepacking` for the writers | **shipped** — footprint 1.63 → 0.50 GB for 1.006× the wall (§4.2) |
 | `watch` drops the model between refreshes | **shipped** — idle footprint 932 → 130 MB (§4.3) |
 | per-thread `QOS_CLASS_BACKGROUND` via `with_thread_manager` + rayon `spawn_handler` | rejected: not inherited (§2.1) — two thread factories to reach what one call reaches |
@@ -197,28 +197,28 @@ for the person, and the scheduling lever already leaves memory the one bar this 
 ### 4.1 The band, through the code
 
 The same store-B run as R2, through the built binary with no wrapper: V1 takes the band from the
-code's own default, V2 opts out with `REPOGRAPH_PRIORITY=normal`.
+code's own default, V2 opts out with `ZEROGRAPH_PRIORITY=normal`.
 
 | run | wall | user / sys | max RSS / footprint | clock | band | PRI | P6 | P1 | W p99 | disk written |
 |---|---|---|---|---|---|---|---|---|---|---|
 | R1 shipped, before | 152.3 s | 571.9 / 4.5 s | 1.83 / 1.63 GB | 3.49 GHz | default 100% | 31 | 2,991 ms (+15.7%) | 2,585 (+3.7%) | 2,469 µs | — |
 | **V1 built, default** | 658.0 s | 2,264.7 / 50.5 s | **1.82 / 1.63 GB** | **1.71 GHz** | **background 2,315 s of 2,315** | **4 on all 8** | **2,657 ms (+2.8%)** | **2,419 (−3.0%)** | **564 µs** | 1.3 MB |
-| **V2 built, `REPOGRAPH_PRIORITY=normal`** | 148.0 s | 567.1 / 3.1 s | 1.83 / 1.63 GB | 3.49 GHz | legacy 570 s | 31 on all 8 | 2,974 ms (+15.0%) | 2,568 (+3.0%) | 2,897 µs | 1.3 MB |
+| **V2 built, `ZEROGRAPH_PRIORITY=normal`** | 148.0 s | 567.1 / 3.1 s | 1.83 / 1.63 GB | 3.49 GHz | legacy 570 s | 31 on all 8 | 2,974 ms (+15.0%) | 2,568 (+3.0%) | 2,897 µs | 1.3 MB |
 | the bars | not a bar | — | ≤ 2.0 / ≤ 1.8 GB | ≤ 2.0 GHz | 100% background | 4 | ≤ 2,714 ms | ≤ 2,618 ms | ≤ 1,000 µs | ≤ 300 MB |
 
 **Every bar is met.** V1 lands 57 ms under the P6 bar rather than R2's 84 — the difference between
 2,630 and 2,657 is within the probe's own spread — and its P1 comes in *faster than idle*, which is
 what a probe that has the performance cores to itself looks like. V2 reads the band, the Mach
 priority and the clock of the shipped state, so the opt-out is real and not a spelling. The same
-two readings come from `priority = "normal"` in `repograph.toml` and from `priority = "normal"` in
+two readings come from `priority = "normal"` in `zerograph.toml` and from `priority = "normal"` in
 a machine file with the project file silent, and a project file saying `background` still beats a
 machine file saying `normal` — six arms, each read as the Mach priority of every thread 25 s in
 (`$U/log/t1-layers.txt`):
 
 ```
 built-in default (nothing set)                 4 threads at PRI 46   4 threads at PRI 4
-REPOGRAPH_PRIORITY=normal                      8 threads at PRI 31
-priority = normal in repograph.toml            8 threads at PRI 31
+ZEROGRAPH_PRIORITY=normal                      8 threads at PRI 31
+priority = normal in zerograph.toml            8 threads at PRI 31
 priority = normal in the machine file          8 threads at PRI 31
 project background beats machine normal        8 threads at PRI 4
 back to the default                            4 threads at PRI 46   4 threads at PRI 4
@@ -365,7 +365,7 @@ with the 1.3 MB that V1's single checkpoint of 320 rows actually wrote.
 
 ### 4.5 The floors did not move
 
-`ARMS="dense lexical" bench/history/run-repograph.sh` against the pinned fixture, built at
+`ARMS="dense lexical" bench/history/run-zerograph.sh` against the pinned fixture, built at
 `766ae26`, exit 0, both arms green and gated, both lines identical to the `502e8a6d` rows already
 in `bench/history/runs.jsonl`:
 
@@ -494,7 +494,7 @@ to decide less than it used to:
 is the least any configuration can take; a floor of 2 on a 2-core box would put half the machine in
 the band, and R5 already read that extra threads on a shared clock cost the probe more than they
 buy in wall. What one thread costs is wall, and it was measured rather than projected —
-**R7-built-t1**, the shipped binary with `REPOGRAPH_THREADS=1` and the band from its own default,
+**R7-built-t1**, the shipped binary with `ZEROGRAPH_THREADS=1` and the band from its own default,
 on the same store-B as R2.
 
 **It was attempted and it could not be finished, for the same reason §4.4's run could not.** R7 ran
@@ -529,7 +529,7 @@ R5's six threads were the *whole efficiency cluster sharing one clock*, so its d
 is a property of this machine's asymmetry rather than of thread counts in general: a 24-core server
 has 24 equal cores and the trade there is nearer linear. But a build server has nobody at the
 keyboard, so what it wants is `priority = "normal"` — and then `threads` as high as it likes — in
-`~/.config/repograph/config.toml`. One line, and the machine file is exactly the layer for it,
+`~/.config/zerograph/config.toml`. One line, and the machine file is exactly the layer for it,
 because both keys describe the machine and not the corpus. **A second, band-specific `threads` rule
 is rejected**: once the band answers bar 1 the count only trades wall against CPU-seconds, and a
 number with nothing behind it is worse than the one rule already there.
@@ -547,7 +547,7 @@ weight, not a count), and a CPU set narrowed after the process started. On macOS
 `hw.logicalcpu` — 12 here, which is why the default is 4, two thirds of the efficiency cluster.
 
 The band composes with the cgroup rather than replacing it: SCHED_IDLE inside a container is idle
-*within that container's share*, so a CI box that already bounds repograph with `--cpus` gets both
+*within that container's share*, so a CI box that already bounds zerograph with `--cpus` gets both
 bounds and neither is wasted.
 
 ### 5.5 Memory-poor machines: the model, not a flag
@@ -584,7 +584,7 @@ system kills, more likely to wait on the disk it kept nothing in.** It is still 
 for a writer, because a rebuild is not waiting on anything and a jetsam kill loses the run — but a
 person on 8 GB should take the model below, not the mapping, as their lever.
 
-The answer there is a smaller model, and it is a line in `repograph.toml` rather than a flag:
+The answer there is a smaller model, and it is a line in `zerograph.toml` rather than a flag:
 
 ```toml
 embed_model = "intfloat/multilingual-e5-small"

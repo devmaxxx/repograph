@@ -17,16 +17,16 @@ the ones that decide what to work on next.
 ## The routine run
 
 ```
-bench/history/run-repograph.sh
+bench/history/run-zerograph.sh
 ```
 
 Builds the release binary, runs `bench` in the dense and lexical arms against the pinned
 fixture, records both, and prints the report. Roughly two minutes and no model tokens.
 
 The fixture is a corpus checkout at a commit that never moves, so two runs of this script
-differ only by repograph's own code. The script refuses to run if the fixture has moved or is
+differ only by zerograph's own code. The script refuses to run if the fixture has moved or is
 dirty, because a run against a changed corpus produces history rows that cannot be compared to
-the rows before them — and the difference would read as a regression in repograph.
+the rows before them — and the difference would read as a regression in zerograph.
 
 The fixture was lost and rebuilt on 2026-10-08 at the same commit, with its questions copied
 from another enrich run of the corpus (2144 of 2146 requirement nodes). Questions are part of
@@ -48,7 +48,7 @@ bench/history/track.py import bench/results/<file>.json --note "what this run wa
 ## A second suite
 
 ```
-CASES=bench/dev-cases.jsonl bench/history/run-repograph.sh
+CASES=bench/dev-cases.jsonl bench/history/run-zerograph.sh
 ```
 
 `bench/dev-cases.jsonl` holds sixty questions written the way a developer asks them while
@@ -90,7 +90,7 @@ overlay is.
 
 The row is `agent:<config>+<model>`, `suite: "agent"`, `gated: false` — measured and never graded,
 like the dev suite, and in a comparability window of its own. Its metrics are `hits`, `tokens`,
-`cost`, `asked` (Bash calls naming `repograph`) and `grepped` (`rg`, `grep`, `Grep`, `Glob`); its
+`cost`, `asked` (Bash calls naming `zerograph`) and `grepped` (`rg`, `grep`, `Grep`, `Glob`); its
 cases are `<kind>/<task id>`, so a task missed in run after run reads as chronic exactly the way a
 bench case does. `tokens` sums input, output and both cache buckets over every model the run
 touched, because what this harness compares is what a transcript costs to *carry*.

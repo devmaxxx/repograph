@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Close the six gaps the 2026-09-03 three-graph run measured on repograph 0.4.0, in the order that removes the most missing answer first: the scoring records rank; `changes` stops silently dropping files it cannot parse; the two false impact misses leave the truth file and the one real miss (a re-exporting barrel) leaves `impact`; the blast suite grows to a size a delta can be judged on; the one unmeasured paraphrase lever — a local cross-encoder — is measured; and a second corpus gets a case file before 0.6.0 ships a language for it.
+**Goal:** Close the six gaps the 2026-09-03 three-graph run measured on zerograph 0.4.0, in the order that removes the most missing answer first: the scoring records rank; `changes` stops silently dropping files it cannot parse; the two false impact misses leave the truth file and the one real miss (a re-exporting barrel) leaves `impact`; the blast suite grows to a size a delta can be judged on; the one unmeasured paraphrase lever — a local cross-encoder — is measured; and a second corpus gets a case file before 0.6.0 ships a language for it.
 
 **Architecture:** Two halves that never touch each other's floors. The harness half is Python in `bench/compare/` (a `rank_of` scorer and MRR, string literals stripped from the truth, `--cases`/`--blast` flags, a 32-case blast set, a per-corpus case directory). The binary half is three small Rust changes — `changes::touched` reports an unknown file as `file:<rel>`, `impact::importers` adds the barrels `aliases` already finds, and `src/index/cross.rs` runs `BAAI/bge-reranker-v2-m3` through the same `ort` + `tokenizers` path `embed.rs` uses, behind `ask --rerank-local` — plus a measurement of that last one that decides nothing by itself.
 
@@ -16,7 +16,7 @@
 - **No new crates.** The cross-encoder rides `ort`, `tokenizers`, `hf-hub` exactly as `src/index/embed.rs` does. The ONNX export is a Python tool run once outside the build.
 - **No version bump here.** 0.5.0's bump belongs to `docs/superpowers/plans/2026-09-03-replace-gitnexus.md` Task 8 (the registry). This plan rides the same tag; whichever lands second does not bump again.
 - **The corpus is `beauty-crm` at `/Users/max/Documents/projects/beauty-crm`.** Every measurement in this plan pins the commit it ran at; the plan was written against `2483d932`. A bench run at a different commit is a different number, not a regression — say the commit.
-- **`beauty-crm` keeps `graphify-out/` and `.gitnexus/` on disk and runs neither tool.** Every comparison in this plan is `--tools repograph`; a three-tool re-run follows `docs/bench/runbook.md` in a scratch worktree and is not part of this plan.
+- **`beauty-crm` keeps `graphify-out/` and `.gitnexus/` on disk and runs neither tool.** Every comparison in this plan is `--tools zerograph`; a three-tool re-run follows `docs/bench/runbook.md` in a scratch worktree and is not part of this plan.
 - Comments explain *why*, never *what*; no ticket ids. Code, docs, commits in English. Conventional Commits. **The repo's commit hook rejects AI trailers and session links** — do not add `Co-Authored-By` or `Claude-Session` lines, whatever the session's attribution reminder says; the hook wins. Never combine a heredoc and `git commit` in one shell call: the hook rejects the whole compound command and the `git add` in front of it is lost too.
 - Python in `bench/compare/` is tested with `python3 -m unittest` from that directory; Rust with `cargo test`. Every step that changes a number ends with the command that printed it.
 
@@ -40,12 +40,12 @@ src/index/mod.rs                pub mod cross                                   
 src/config.rs                   reranker_dir                                                      (Task 6)
 src/main.rs                     Ask/Bench --rerank-local                                          (Task 6)
 src/bench.rs                    run() takes rerank_local                                          (Task 6)
-repograph.toml                  reranker_dir = ""                                                 (Task 6)
+zerograph.toml                  reranker_dir = ""                                                 (Task 6)
 README.md                       Blast radius, Configure, Spending tokens on purpose               (Task 2, 4, 6)
 docs/bench/three-graphs.md      rank/MRR, decision rule, 32-case table, adding a corpus            (Task 1, 3, 5, 7)
 docs/adr/ADR-001-…md            Amendment 4: the cross-encoder, measured                            (Task 6)
 docs/bench/next-version-gaps.md status per gap                                                     (Task 8)
-docs/bench/<date>-repograph-0.5.0-results.md   NEW — before/after                                  (Task 8)
+docs/bench/<date>-zerograph-0.5.0-results.md   NEW — before/after                                  (Task 8)
 ```
 
 ---
@@ -73,14 +73,14 @@ import unittest
 
 from run import rank_of
 
-# `repograph ask "расход виден салону"` on beauty-crm at 2483d932, verbatim.
+# `zerograph ask "расход виден салону"` on beauty-crm at 2483d932, verbatim.
 ANSWER = (
     "FR-AI-138  docs/prd-2026-08-16/prd/07-ai-layer.md:1163  Расход виден салону.\n"
     "NFR-PH-7  docs/prd-2026-08-16/prd/13-phasing.md:1470  Стоимость\n"
     "FR-SEC-92  docs/prd-2026-08-16/prd/12-security-prereqs.md:1144  Внутренний экран\n"
     "  FR-WH-30  docs/prd-2026-08-16/prd/08-marketing-inventory.md:981  Норматив  ← N-137\n"
 )
-# `repograph ask asGrosze`, verbatim.
+# `zerograph ask asGrosze`, verbatim.
 CODE = (
     "sym:packages/contracts/src/money.ts::asGrosze  packages/contracts/src/money.ts:31  asGrosze\n"
     "sym:packages/domain/src/money/index.ts::asGrosze  packages/domain/src/money/index.ts:115  asGrosze\n"
@@ -203,7 +203,7 @@ Verify from a heredoc, which is the failing shape:
 
 ```bash
 cd /Users/max/Documents/projects/beauty-crm && python3 - <<'EOF'
-import sys; sys.path.insert(0, "/Users/max/Documents/projects/repograph/bench/compare")
+import sys; sys.path.insert(0, "/Users/max/Documents/projects/zerograph/bench/compare")
 import truth as T; from pathlib import Path
 print(len(T.code_files_naming(Path(".").resolve(), "AuthService")))
 EOF
@@ -332,14 +332,14 @@ Expected: `test result: ok` — including `render_says_what_changed_and_what_it_
 ```bash
 cargo build --release
 cd /Users/max/Documents/projects/beauty-crm && git rev-parse --short HEAD
-cd /Users/max/Documents/projects/repograph/bench/compare
+cd /Users/max/Documents/projects/zerograph/bench/compare
 python3 run.py --repo /Users/max/Documents/projects/beauty-crm \
-  --repograph ../../target/release/repograph --tools repograph --suites blast \
+  --zerograph ../../target/release/zerograph --tools zerograph --suites blast \
   --truth /tmp/truth-$(date +%F).json --out ../results/$(date +%F)-beauty-crm-task2.json
 python3 - <<'EOF'
 import json, glob
 r = json.load(open(sorted(glob.glob("../results/*-task2.json"))[-1]))
-for row in r["tools"]["repograph"]["rows"]:
+for row in r["tools"]["zerograph"]["rows"]:
     if row["kind"] == "changes":
         print(row["base"], f"symbols {row['found_symbols']}/{row['want_symbols']}", f"files {row['found_files']}/{row['want_files']}")
 EOF
@@ -461,9 +461,9 @@ Expected: `Ran 11 tests … OK`
 - [ ] **Step 5: Rebuild the truth and measure**
 
 ```bash
-cd /Users/max/Documents/projects/repograph/bench/compare
+cd /Users/max/Documents/projects/zerograph/bench/compare
 python3 run.py --repo /Users/max/Documents/projects/beauty-crm \
-  --repograph ../../target/release/repograph --tools repograph --suites blast \
+  --zerograph ../../target/release/zerograph --tools zerograph --suites blast \
   --truth /tmp/truth-task3.json --out ../results/$(date +%F)-beauty-crm-task3.json
 python3 report.py ../results/$(date +%F)-beauty-crm-task3.json | sed -n '/impact, case by case/,$p'
 ```
@@ -562,9 +562,9 @@ Expected: `test result: ok`. `changes::report_unions_the_callers_of_every_touche
 
 ```bash
 cargo build --release
-cd /Users/max/Documents/projects/repograph/bench/compare
+cd /Users/max/Documents/projects/zerograph/bench/compare
 python3 run.py --repo /Users/max/Documents/projects/beauty-crm \
-  --repograph ../../target/release/repograph --tools repograph --suites blast \
+  --zerograph ../../target/release/zerograph --tools zerograph --suites blast \
   --truth /tmp/truth-task3.json --out ../results/$(date +%F)-beauty-crm-task4.json
 python3 report.py ../results/$(date +%F)-beauty-crm-task4.json | grep -E "impact, (mean|files)|AuthService"
 ```
@@ -681,9 +681,9 @@ and in the `report` dict, after `"cases": {…}`:
 - [ ] **Step 4: Measure the 32**
 
 ```bash
-cd /Users/max/Documents/projects/repograph/bench/compare
+cd /Users/max/Documents/projects/zerograph/bench/compare
 python3 run.py --repo /Users/max/Documents/projects/beauty-crm \
-  --repograph ../../target/release/repograph --tools repograph --suites blast \
+  --zerograph ../../target/release/zerograph --tools zerograph --suites blast \
   --truth /tmp/truth-task5.json --out ../results/$(date +%F)-beauty-crm-task5.json
 python3 report.py ../results/$(date +%F)-beauty-crm-task5.json
 ```
@@ -725,7 +725,7 @@ git commit -m "test(bench): six narrow impact targets, six more diffs, and a rul
 - Modify: `src/config.rs:7-18` (`Config`), `:26-45` (`Default`)
 - Modify: `src/main.rs:38-50` (`Cmd::Ask`), `:96` (`Cmd::Bench`), `:392-445` (Ask arm), `:498-499` (Bench arm)
 - Modify: `src/bench.rs:56` (`run` signature), `:98-99` (rerank closure)
-- Modify: `repograph.toml` (one key), `README.md` "Configure" and "Spending tokens on purpose"
+- Modify: `zerograph.toml` (one key), `README.md` "Configure" and "Spending tokens on purpose"
 - Modify: `docs/adr/ADR-001-paraphrase-recall-was-a-prediction.md` (Amendment 4)
 
 **Interfaces:**
@@ -740,9 +740,9 @@ The weights repo `BAAI/bge-reranker-v2-m3` carries no ONNX file (checked 2026-09
 
 ```bash
 python3 -m venv /tmp/optimum && /tmp/optimum/bin/pip install -q "optimum[exporters]" onnx onnxruntime
-mkdir -p ~/.cache/repograph/reranker
-/tmp/optimum/bin/optimum-cli export onnx --model BAAI/bge-reranker-v2-m3 --task text-classification ~/.cache/repograph/reranker
-ls -la ~/.cache/repograph/reranker
+mkdir -p ~/.cache/zerograph/reranker
+/tmp/optimum/bin/optimum-cli export onnx --model BAAI/bge-reranker-v2-m3 --task text-classification ~/.cache/zerograph/reranker
+ls -la ~/.cache/zerograph/reranker
 ```
 
 Expected: `model.onnx` (about 2.2 GB, fp32), `tokenizer.json`, `config.json`. Record the size and the export time in the ADR amendment.
@@ -771,11 +771,11 @@ pub const PICK: usize = 5;
 
 pub struct CrossEncoder { session: Session, tokenizer: Tokenizer, wants_type_ids: bool }
 
-/// Where `optimum-cli export onnx` was told to write: `$HOME/.cache/repograph/reranker`, beside
+/// Where `optimum-cli export onnx` was told to write: `$HOME/.cache/zerograph/reranker`, beside
 /// the embedder's own cache, unless the config names another directory.
 pub fn default_dir() -> Result<PathBuf> {
     let home = std::env::var_os("HOME").context("HOME is not set")?;
-    Ok(PathBuf::from(home).join(".cache").join("repograph").join("reranker"))
+    Ok(PathBuf::from(home).join(".cache").join("zerograph").join("reranker"))
 }
 
 impl CrossEncoder {
@@ -862,9 +862,9 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs the exported model: set REPOGRAPH_RERANKER_DIR"]
+    #[ignore = "needs the exported model: set ZEROGRAPH_RERANKER_DIR"]
     fn the_model_prefers_the_passage_that_answers_the_question() {
-        let dir = std::env::var("REPOGRAPH_RERANKER_DIR").expect("REPOGRAPH_RERANKER_DIR");
+        let dir = std::env::var("ZEROGRAPH_RERANKER_DIR").expect("ZEROGRAPH_RERANKER_DIR");
         let mut m = CrossEncoder::open(Path::new(&dir)).unwrap();
         let s = m.score("how is a client's phone number stored", &[
             "Phone numbers are normalised to E.164 before they are stored.".into(),
@@ -882,7 +882,7 @@ Add `pub mod cross;` to `src/index/mod.rs`.
 Run: `cargo test cross:: 2>&1 | tail -8`
 Expected: 3 passed, 1 ignored. Then the model test:
 
-Run: `REPOGRAPH_RERANKER_DIR=$HOME/.cache/repograph/reranker cargo test cross:: -- --ignored 2>&1 | tail -5`
+Run: `ZEROGRAPH_RERANKER_DIR=$HOME/.cache/zerograph/reranker cargo test cross:: -- --ignored 2>&1 | tail -5`
 Expected: `1 passed`. If it fails on `logits`, print `session.outputs()` names in the error and fix the lookup — the exporter's `text-classification` head is named `logits`; this step is where that assumption is checked.
 
 - [ ] **Step 4: Config key**
@@ -891,20 +891,20 @@ In `src/config.rs`, `Config` gains, after `rerank_command`:
 
 ```rust
     /// Directory holding `model.onnx` and `tokenizer.json` for `ask --rerank-local`; empty
-    /// means `$HOME/.cache/repograph/reranker`.
+    /// means `$HOME/.cache/zerograph/reranker`.
     pub reranker_dir: String,
 ```
 
-and `Default` gains `reranker_dir: String::new(),`. In `repograph.toml`, after `rerank_command`:
+and `Default` gains `reranker_dir: String::new(),`. In `zerograph.toml`, after `rerank_command`:
 
 ```toml
 # `ask --rerank-local`: a local cross-encoder over the same 200-deep pool, zero tokens. Empty
-# means ~/.cache/repograph/reranker, where `optimum-cli export onnx` was pointed.
+# means ~/.cache/zerograph/reranker, where `optimum-cli export onnx` was pointed.
 reranker_dir = ""
 ```
 
 Run: `cargo test config:: 2>&1 | tail -3`
-Expected: `ok` (the `deny_unknown_fields` round-trip tests still pass; `repograph.toml` parses).
+Expected: `ok` (the `deny_unknown_fields` round-trip tests still pass; `zerograph.toml` parses).
 
 - [ ] **Step 5: Wire the flag**
 
@@ -948,7 +948,7 @@ Expected: builds; `test result: ok`.
 
 ```bash
 cd /Users/max/Documents/projects/beauty-crm
-B=/Users/max/Documents/projects/repograph/target/release/repograph
+B=/Users/max/Documents/projects/zerograph/target/release/zerograph
 time $B --repo . ask --rerank-local "как отдаём освободившееся окно тому, кто ждёт"
 $B --repo . ask "как отдаём освободившееся окно тому, кто ждёт"
 ```
@@ -961,7 +961,7 @@ Write the rule first, in the ADR amendment (Step 9): **the zero-token floor move
 
 ```bash
 cd /Users/max/Documents/projects/beauty-crm
-B=/Users/max/Documents/projects/repograph/target/release/repograph
+B=/Users/max/Documents/projects/zerograph/target/release/zerograph
 $B --repo . bench                                    | tail -1     # the control, this store
 time $B --repo . bench --rerank-local                | tail -1     # depth 200
 time $B --repo . bench --rerank-local --depth 100    | tail -1
@@ -972,12 +972,12 @@ Record all four lines and the three `real` times (÷ 82 for a per-question media
 
 - [ ] **Step 8: Document the flag**
 
-`README.md` "Configure": add `reranker_dir` to the key table with "directory of the exported cross-encoder for `--rerank-local`; empty = `~/.cache/repograph/reranker`". "Spending tokens on purpose": add a paragraph:
+`README.md` "Configure": add `reranker_dir` to the key table with "directory of the exported cross-encoder for `--rerank-local`; empty = `~/.cache/zerograph/reranker`". "Spending tokens on purpose": add a paragraph:
 
 ```markdown
 **`--rerank-local`** is the same pool and the same pick, scored by a local cross-encoder
 (`BAAI/bge-reranker-v2-m3`, exported to ONNX once with `optimum-cli export onnx --model
-BAAI/bge-reranker-v2-m3 --task text-classification ~/.cache/repograph/reranker`, ~2.2 GB) at
+BAAI/bge-reranker-v2-m3 --task text-classification ~/.cache/zerograph/reranker`, ~2.2 GB) at
 zero tokens. Measured on the bench corpus on 2026-09-04 — see ADR-001, Amendment 4 — and not on
 any floor.
 ```
@@ -1012,7 +1012,7 @@ Fill every `<…>` from Step 7's output. If the rule is met, that is a second ch
 - [ ] **Step 10: Commit**
 
 ```bash
-git add src/index/cross.rs src/index/mod.rs src/config.rs src/main.rs src/bench.rs repograph.toml README.md docs/adr/ADR-001-paraphrase-recall-was-a-prediction.md
+git add src/index/cross.rs src/index/mod.rs src/config.rs src/main.rs src/bench.rs zerograph.toml README.md docs/adr/ADR-001-paraphrase-recall-was-a-prediction.md
 git commit -m "feat(ask): --rerank-local, a cross-encoder over the same pool at zero tokens, measured"
 ```
 
@@ -1070,9 +1070,9 @@ Expected: `OK`.
 - [ ] **Step 3: The baseline**
 
 ```bash
-cd /Users/max/Documents/projects/repograph/bench/compare
+cd /Users/max/Documents/projects/zerograph/bench/compare
 python3 run.py --repo /Users/max/Documents/projects/beauty-crm \
-  --repograph ../../target/release/repograph --tools repograph --suites blast \
+  --zerograph ../../target/release/zerograph --tools zerograph --suites blast \
   --blast ../corpora/beauty-crm-mobile/blast.jsonl \
   --truth /tmp/truth-mobile.json --out ../results/$(date +%F)-beauty-crm-mobile.json
 python3 report.py ../results/$(date +%F)-beauty-crm-mobile.json | sed -n '/impact, case by case/,$p'
@@ -1090,7 +1090,7 @@ In `docs/bench/three-graphs.md`, after "Adding a case":
 `bench/corpora/<name>/blast.jsonl` (and `cases.jsonl` where the corpus has its own ids and
 prose) are run with `--blast` / `--cases`; the result goes to `bench/results/<date>-<name>.json`.
 The first one is `beauty-crm-mobile`: eight Kotlin `impact` targets that score 0 on every
-repograph before 0.6.0, written down so that the Kotlin extractor is measured on the day it
+zerograph before 0.6.0, written down so that the Kotlin extractor is measured on the day it
 lands rather than predicted. No language ships without its file here and a result beside it.
 ```
 
@@ -1106,7 +1106,7 @@ git commit -m "test(bench): the Kotlin baseline — eight impact cases that read
 ### Task 8: Re-run, write the result, mark the gaps
 
 **Files:**
-- Create: `docs/bench/<date>-repograph-0.5.0-results.md`
+- Create: `docs/bench/<date>-zerograph-0.5.0-results.md`
 - Modify: `docs/bench/next-version-gaps.md` (a status line per gap)
 - Modify: `docs/bench/three-graphs.md` (the "three files" table gains the new result)
 - Create: `bench/results/<date>-beauty-crm.json` (the run this document reads)
@@ -1115,9 +1115,9 @@ git commit -m "test(bench): the Kotlin baseline — eight impact cases that read
 
 ```bash
 cd /Users/max/Documents/projects/beauty-crm && git status --porcelain && git rev-parse --short HEAD
-cd /Users/max/Documents/projects/repograph/bench/compare
+cd /Users/max/Documents/projects/zerograph/bench/compare
 python3 run.py --repo /Users/max/Documents/projects/beauty-crm \
-  --repograph ../../target/release/repograph --tools repograph \
+  --zerograph ../../target/release/zerograph --tools zerograph \
   --truth /tmp/truth-final.json --out ../results/$(date +%F)-beauty-crm.json
 python3 report.py ../results/$(date +%F)-beauty-crm.json
 ```
@@ -1126,7 +1126,7 @@ Expected: a clean tree and a commit to write down; 82 retrieval rows with `rank`
 
 - [ ] **Step 2: The write-up**
 
-`docs/bench/<date>-repograph-0.5.0-results.md`, same shape as the 2026-09-03 file, repograph only, with one before/after table:
+`docs/bench/<date>-zerograph-0.5.0-results.md`, same shape as the 2026-09-03 file, zerograph only, with one before/after table:
 
 ```markdown
 | | 2026-09-03 (0.4.0 @ 7733bd53) | <date> (0.5.0 @ <sha>) | what moved it |

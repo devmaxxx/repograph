@@ -4,7 +4,7 @@
 
 **Goal:** One agent-facing surface, installed identically for Claude Code and Codex, that costs a session a few hundred tokens instead of thousands; a uniform machine-readable output on every command an agent calls; an answer that arrives in milliseconds because a resident process holds the indexes; and the three accuracy levers the 82-case reranker run left unread, measured before any of them is sold as a default.
 
-**Architecture:** Three layers, and each is testable without the next. **The surface** is a directory `agent/` in this repository — one hook script dispatched by event, one skill, one subagent definition, one stanza, one installer — from which `repograph install-agent` writes a consuming repository's `.claude/` **or** `.codex/`, so the two harnesses are two installs of one source. **The contract** is Rust: `prime` for the session brief, `--json` on the four commands that lack it, and a stable JSON shape an agent can parse without reading prose. **The results** are bench work: the reranker's own p90 bar, the pool-rank histogram behind its fourteen gains, a metered token count, and rows for the models nobody has run.
+**Architecture:** Three layers, and each is testable without the next. **The surface** is a directory `agent/` in this repository — one hook script dispatched by event, one skill, one subagent definition, one stanza, one installer — from which `zerograph install-agent` writes a consuming repository's `.claude/` **or** `.codex/`, so the two harnesses are two installs of one source. **The contract** is Rust: `prime` for the session brief, `--json` on the four commands that lack it, and a stable JSON shape an agent can parse without reading prose. **The results** are bench work: the reranker's own p90 bar, the pool-rank histogram behind its fourteen gains, a metered token count, and rows for the models nobody has run.
 
 **Tech Stack:** Rust 2021 pinned at 1.98.0, dependencies `=`-pinned, no new crates. Node ≥ 18 for the hooks (already required by the npm launcher). Python 3 for scoring, in the `bench/` style. Claude Code 2.1.263, Codex CLI 0.147.0.
 
@@ -18,7 +18,7 @@
 - **No model token is spent by a task that does not name its ceiling first.** Each measuring task states the number of questions and the model before it runs, and caps the harness with `--max-budget-usd`.
 - **Token sizes** of command output are UTF-8 bytes ÷ 4, the README's proxy, which under-counts Cyrillic by roughly half; where a model reports its own count, that number wins and the method is named beside it.
 - **ADR-001 applies:** a floor is committed before its number is read.
-- **Task 1 of `2026-09-09-critical-defects.md` changes the config trust boundary** — a project's `repograph.toml` may no longer name `enrich_command`/`rerank_command`. Anything this plan installs that configures a transport writes the **machine** file. Land that plan first, or write the installer against the new rule and note the ordering in the PR.
+- **Task 1 of `2026-09-09-critical-defects.md` changes the config trust boundary** — a project's `zerograph.toml` may no longer name `enrich_command`/`rerank_command`. Anything this plan installs that configures a transport writes the **machine** file. Land that plan first, or write the installer against the new rule and note the ordering in the PR.
 - Comments say why, never what. No ticket ids. Conventional Commits subjects. The commit hook rejects AI attribution trailers, session links, and any single shell command carrying both a heredoc and `git commit` unless the heredoc's first line is the subject — so plan chunks and skill text are written with the Write tool, never appended by heredoc.
 - Any `gh` call runs `gh auth switch --user devmaxxx && gh …` in the same shell command.
 - Agent-facing text (stanza, brief, skill, hook lines) is English: one text serves both harnesses.
@@ -31,7 +31,7 @@ The 2026-09-06 plan was written against `868f4c1`. Five things landed since, and
 
 | Landed | Where the predecessor assumed otherwise | The delta |
 |---|---|---|
-| **PR #21 — families derived from definitions** (`9db1f0f`) | The stanza and brief describe `id_families` as a setting; `verify` reports "in families never declared" | The brief reports the **derived** family count and cites `repograph families`; no installed text tells an agent to configure families, and `repograph.toml` printing a notice for those two keys is expected output, not an error |
+| **PR #21 — families derived from definitions** (`9db1f0f`) | The stanza and brief describe `id_families` as a setting; `verify` reports "in families never declared" | The brief reports the **derived** family count and cites `zerograph families`; no installed text tells an agent to configure families, and `zerograph.toml` printing a notice for those two keys is expected output, not an error |
 | **PR #22 — `core.quotepath=false` on `changes`** (`1e185ed`) | The PostToolUse risk hook was drafted against a `changes` that silently dropped any file with a non-ASCII path | The risk hook is now correct on a Cyrillic-named file, which is most of the beauty-crm corpus's *content* and none of its paths; the harness gains one case with such a path so the hook is proved on it |
 | **PR #20 — `threads` became `resources`** (`6b78837`, breaking) | Any installed config or doc naming `threads` | The installer never writes `threads`; the skill's performance paragraph names `resources` |
 | **PR #13 + #21 — `enrich_model` / `rerank_model` are config, sonnet reranks** | The predecessor's scout task picks a model in prose | The scout reads the configured model; the stanza names no model at all |
@@ -46,7 +46,7 @@ The 2026-09-06 plan was written against `868f4c1`. Five things landed since, and
 - `agent/rule.txt` — the three lines a subagent is handed.
 - `agent/skill/SKILL.md` — routing only: which command answers which question.
 - `agent/subagent.md` — the scout definition.
-- `agent/install.rs` is **not** a file: `repograph install-agent` embeds the four texts above with `include_str!` and writes them, so a version of the binary and the surface it installs cannot disagree.
+- `agent/install.rs` is **not** a file: `zerograph install-agent` embeds the four texts above with `include_str!` and writes them, so a version of the binary and the surface it installs cannot disagree.
 - `src/prime.rs` — the session brief, text and JSON.
 - `bench/agent/` — the harness: tasks, runner, scorer (predecessor Task 1).
 
@@ -60,7 +60,7 @@ The 2026-09-06 plan was written against `868f4c1`. Five things landed since, and
 - [ ] **Step 1: Fast-forward and cut the branch**
 
 ```bash
-git -C /Users/max/Documents/projects/repograph fetch origin && git -C /Users/max/Documents/projects/repograph checkout main && git -C /Users/max/Documents/projects/repograph merge --ff-only origin/main && git checkout -b feat/agent-surface
+git -C /Users/max/Documents/projects/zerograph fetch origin && git -C /Users/max/Documents/projects/zerograph checkout main && git -C /Users/max/Documents/projects/zerograph merge --ff-only origin/main && git checkout -b feat/agent-surface
 ```
 
 - [ ] **Step 2: Write the delta into the predecessor plan**
@@ -79,7 +79,7 @@ git add docs/superpowers/plans/2026-09-06-agent-surface.md && git commit -m "doc
 
 ---
 
-### Task 1: `repograph prime` — the session brief, and its ceiling
+### Task 1: `zerograph prime` — the session brief, and its ceiling
 
 **Files:**
 - Create: `src/prime.rs`
@@ -88,7 +88,7 @@ git add docs/superpowers/plans/2026-09-06-agent-surface.md && git commit -m "doc
 
 **Interfaces:**
 - Produces: `pub fn brief(graph: &Graph, questions: &Questions, families: &Derived, model: Option<&str>) -> Brief` and `impl Brief { fn text(&self) -> String; fn json(&self) -> String }`.
-- Produces: CLI `repograph prime [--json]`, which reads the store and writes nothing. Never refreshes: a brief that rebuilds is a brief nobody can afford at `SessionStart`.
+- Produces: CLI `zerograph prime [--json]`, which reads the store and writes nothing. Never refreshes: a brief that rebuilds is a brief nobody can afford at `SessionStart`.
 
 **Why a ceiling is a test and not a wish.** The predecessor measured today's priming at ≈3,850–6,150 tokens a session and drafted the brief at 530 bytes. The README is 92,687 bytes on `1e185ed` — ≈23k tokens if an agent ever reads it whole. The only thing that keeps a brief from growing into that is a test that fails when it does.
 
@@ -139,7 +139,7 @@ Expected: PASS.
 - [ ] **Step 6: Read it on the fixture and record the byte count**
 
 ```bash
-/Users/max/Documents/projects/repograph/target/release/repograph --repo ~/bench/beauty-crm-502e8a6d --no-dense prime | tee /private/tmp/prime-fixture.txt | wc -c
+/Users/max/Documents/projects/zerograph/target/release/zerograph --repo ~/bench/beauty-crm-502e8a6d --no-dense prime | tee /private/tmp/prime-fixture.txt | wc -c
 ```
 
 Expected: ≤ 600. Record the number and the text in the PR body.
@@ -175,7 +175,7 @@ fn every_reader_answers_in_json() {
         vec!["trace", "AvailabilityService", "DatabaseService", "--json"],
         vec!["verify", "--json"],
     ] {
-        let out = repograph(&repo, &args);
+        let out = zerograph(&repo, &args);
         let v: serde_json::Value = serde_json::from_slice(&out.stdout)
             .unwrap_or_else(|e| panic!("{args:?} did not answer in JSON: {e}\n{}", String::from_utf8_lossy(&out.stdout)));
         assert!(v.is_object(), "{args:?} answered with a bare value");
@@ -183,7 +183,7 @@ fn every_reader_answers_in_json() {
 }
 ```
 
-Reuse the integration harness the repository already has for CLI tests; if none exists, add `tests/cli.rs` with a `repograph()` helper that runs `env!("CARGO_BIN_EXE_repograph")` against a temporary store built from `tests/fixtures/`.
+Reuse the integration harness the repository already has for CLI tests; if none exists, add `tests/cli.rs` with a `zerograph()` helper that runs `env!("CARGO_BIN_EXE_zerograph")` against a temporary store built from `tests/fixtures/`.
 
 - [ ] **Step 2: Run it to verify it fails**
 
@@ -220,8 +220,8 @@ git add src/main.rs src/impact.rs README.md tests/cli.rs && git commit -m "feat(
 - Test: `src/install_agent.rs`'s own `mod tests`; `agent/hook.test.mjs` run by `node --test`
 
 **Interfaces:**
-- Consumes: `prime` from Task 1 — the `SessionStart` branch of the hook runs `repograph prime` and prints its text.
-- Produces: `repograph install-agent --claude|--codex|--both [--dir <repo>]`, writing `.claude/settings.json` hook entries + `.claude/skills/repograph/SKILL.md` + the stanza appended to `CLAUDE.md`, or the Codex equivalents, and printing every path it wrote or left alone. Idempotent: a second run changes nothing and says so.
+- Consumes: `prime` from Task 1 — the `SessionStart` branch of the hook runs `zerograph prime` and prints its text.
+- Produces: `zerograph install-agent --claude|--codex|--both [--dir <repo>]`, writing `.claude/settings.json` hook entries + `.claude/skills/zerograph/SKILL.md` + the stanza appended to `CLAUDE.md`, or the Codex equivalents, and printing every path it wrote or left alone. Idempotent: a second run changes nothing and says so.
 
 **This task implements the predecessor's Decision §1–§3 as written.** The gates, the 12-injection bound, the `agent_id` keying and the Bash tokenizer are all argued there; do not re-derive them. What follows is only what the delta table changed and what the predecessor left as prose.
 
@@ -274,7 +274,7 @@ Expected: PASS.
         let dir = tempfile::tempdir().unwrap();
         let first = install(dir.path(), Target::Claude).unwrap();
         assert!(dir.path().join(".claude/settings.json").exists());
-        assert!(dir.path().join(".claude/skills/repograph/SKILL.md").exists());
+        assert!(dir.path().join(".claude/skills/zerograph/SKILL.md").exists());
         assert!(first.written > 0);
         let second = install(dir.path(), Target::Claude).unwrap();
         assert_eq!(second.written, 0, "a second install is a no-op");
@@ -337,7 +337,7 @@ and, for the hook and instruction-file contract, dispatch a `bond:DocsExplorer` 
         // AGENTS.md, this asserts the stanza landed there and nothing else was written.
         assert!(dir.path().join("AGENTS.md").exists());
         let stanza = std::fs::read_to_string(dir.path().join("AGENTS.md")).unwrap();
-        assert!(stanza.contains("repograph ask"), "{stanza}");
+        assert!(stanza.contains("zerograph ask"), "{stanza}");
         assert!(stanza.len() <= 1_400, "the stanza is {} bytes", stanza.len());
     }
 ```
@@ -349,7 +349,7 @@ Expected: PASS.
 
 - [ ] **Step 4: Prove it on a real Codex run**
 
-In the harness worktree (predecessor Task 0), install for Codex and run one task through `codex exec`, recording whether the stanza reached the model and whether it called `repograph`. One task, one model, the ceiling stated first.
+In the harness worktree (predecessor Task 0), install for Codex and run one task through `codex exec`, recording whether the stanza reached the model and whether it called `zerograph`. One task, one model, the ceiling stated first.
 
 - [ ] **Step 5: Commit**
 
@@ -401,14 +401,14 @@ Expected: FAIL — no such knob.
 - [ ] **Step 4: Run the test to verify it passes, then measure**
 
 ```bash
-cd /private/tmp/serve-copy && /Users/max/Documents/projects/repograph/target/release/repograph serve --idle 1800 --idle-model 60 & sleep 2; /Users/max/Documents/projects/repograph/target/release/repograph --repo /private/tmp/serve-copy ask отмена записи >/dev/null; sleep 5; ps -o rss= -p $(pgrep -f "repograph serve"); sleep 70; ps -o rss= -p $(pgrep -f "repograph serve")
+cd /private/tmp/serve-copy && /Users/max/Documents/projects/zerograph/target/release/zerograph serve --idle 1800 --idle-model 60 & sleep 2; /Users/max/Documents/projects/zerograph/target/release/zerograph --repo /private/tmp/serve-copy ask отмена записи >/dev/null; sleep 5; ps -o rss= -p $(pgrep -f "zerograph serve"); sleep 70; ps -o rss= -p $(pgrep -f "zerograph serve")
 ```
 
 Expected: the second reading under 0.1 GB, matching the 129.5 MB `watch` reads. Record both, and the first-ask latency after the drop.
 
 - [ ] **Step 5: Autostart from the hook**
 
-On `SessionStart`, when `socket_path` has no listener and the store exists, spawn `repograph serve --idle 1800 --idle-model 300` detached, stdout and stderr to `/dev/null`, and never wait on it. A failed spawn is silence.
+On `SessionStart`, when `socket_path` has no listener and the store exists, spawn `zerograph serve --idle 1800 --idle-model 300` detached, stdout and stderr to `/dev/null`, and never wait on it. A failed spawn is silence.
 
 - [ ] **Step 6: Commit**
 
@@ -458,7 +458,7 @@ Expected: FAIL, then PASS.
 30 paraphrase cases, one arm, sonnet at depth 200, ≈$0.03 a question ⇒ **≈$0.90, capped at $2**:
 
 ```bash
-cd ~/bench/beauty-crm-502e8a6d && /Users/max/Documents/projects/repograph/target/release/repograph bench --rerank --depth 200 2>&1 | tee /private/tmp/rerank-diag.txt | tail -3
+cd ~/bench/beauty-crm-502e8a6d && /Users/max/Documents/projects/zerograph/target/release/zerograph bench --rerank --depth 200 2>&1 | tee /private/tmp/rerank-diag.txt | tail -3
 ```
 
 - [ ] **Step 5: Write the histogram and the two verdicts**
@@ -487,7 +487,7 @@ git add src/bench.rs docs/bench/2026-09-09-rerank-diagnostics.md docs/bench/next
 - [ ] **Step 1: Prepare the copies**
 
 ```bash
-for tag in ollama codex e5large codeenriched; do cp -R ~/bench/beauty-crm-502e8a6d /private/tmp/xv-$tag; done && grep -n embed_model /private/tmp/xv-*/repograph.toml
+for tag in ollama codex e5large codeenriched; do cp -R ~/bench/beauty-crm-502e8a6d /private/tmp/xv-$tag; done && grep -n embed_model /private/tmp/xv-*/zerograph.toml
 ```
 
 Confirm each copy's `embed_model` before any writer runs on it: `xv-e5large` is the e5-large store's copy, the rest are the small model's.
@@ -554,7 +554,7 @@ Execute the predecessor's Task 1 and Task 3 as written: the same tasks through c
 
 - [ ] **Step 2: Apply the predecessor's committed rule**
 
-Interception ships when its **tokens per hit are lower than reminder-only's on both models**; otherwise reminder-only ships and the interceptor stays behind `REPOGRAPH_HOOK_INTERCEPT=0`. The rule was committed before the number was read; it is not renegotiated after.
+Interception ships when its **tokens per hit are lower than reminder-only's on both models**; otherwise reminder-only ships and the interceptor stays behind `ZEROGRAPH_HOOK_INTERCEPT=0`. The rule was committed before the number was read; it is not renegotiated after.
 
 - [ ] **Step 3: Write the results document**
 
@@ -563,7 +563,7 @@ Priming tokens before and after, per session; hit rate; tokens per hit for both 
 - [ ] **Step 4: Full suite, lint, review**
 
 ```bash
-cargo test --manifest-path /Users/max/Documents/projects/repograph/Cargo.toml && cargo clippy --manifest-path /Users/max/Documents/projects/repograph/Cargo.toml --all-targets -- -D warnings
+cargo test --manifest-path /Users/max/Documents/projects/zerograph/Cargo.toml && cargo clippy --manifest-path /Users/max/Documents/projects/zerograph/Cargo.toml --all-targets -- -D warnings
 ```
 
 Then `/code-review` with `--fix` at the level the router reads off the diff; apply, re-run, commit the applied findings separately.

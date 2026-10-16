@@ -28,7 +28,7 @@ wait $WRAP; RC=$?
 # median as an honestly-measured fast run — a mistyped flag reading as a reader that got 60×
 # quicker. The row carries its status and the script exits with it.
 #
-# One non-zero exit is not that, though. `repograph` exits 3 for a question it was asked and
+# One non-zero exit is not that, though. `zerograph` exits 3 for a question it was asked and
 # answered — a suite that ran every case and missed a floor, a `trace` that found no path within
 # the depth — and 1 for an empty graph, a missing case file or a dense width mismatch: a row that
 # answered spent its wall clock reading, and a row that never found a store spent it failing. The

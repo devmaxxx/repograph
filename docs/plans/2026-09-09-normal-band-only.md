@@ -5,7 +5,7 @@
 > (`- [ ]`) syntax. Every number in this file is either read from a run named beside it or is an
 > *expectation* labelled as one; a number you write comes from a run you name.
 
-**Goal.** After this change repograph runs in the normal scheduling band on every platform, with no
+**Goal.** After this change zerograph runs in the normal scheduling band on every platform, with no
 band call anywhere in the binary and no setting that names one; how much of the machine a rebuild
 takes is a word (`resources = "low" | "balanced" | "full"`) over the thread count it already had;
 and the published resource numbers for the **default** embedder (`intfloat/multilingual-e5-small`)
@@ -13,7 +13,7 @@ are today's, at all three levels, rather than the pre-cap ones from 2026-09-07.
 
 **Decided by Max on 2026-09-09, not open in this plan:**
 
-1. The background band goes **entirely** — `src/priority.rs`, the `priority` key, `REPOGRAPH_PRIORITY`,
+1. The background band goes **entirely** — `src/priority.rs`, the `priority` key, `ZEROGRAPH_PRIORITY`,
    every call site, the README subsection and its tables, and every test that covers it.
 2. ~~`threads` stays the only resource lever~~ **— superseded by Amendment 1 (Part F).** What still
    stands from this item: the default stays a third of the logical cores (4 on this machine), and
@@ -33,11 +33,11 @@ it. Nothing in Amendment 1 reopens the removal: the band still goes, entirely, f
 configure threads manually.** This is what was built, and it overrides Amendment 1 wherever the two
 disagree. Six changes, all now executed:
 
-1. **`threads` is removed too**, with `REPOGRAPH_THREADS`. `resources` is the only resource lever in
+1. **`threads` is removed too**, with `ZEROGRAPH_THREADS`. `resources` is the only resource lever in
    the tool. Part F's precedence rule (§F.4), its both-set warning, its `threads`-wins-across-keys
    corner and the README's "`threads = 6` is the escape hatch" line are struck — there is no second
    key for any of them to be about.
-2. **`REPOGRAPH_RESOURCES` is the one-run override**, layered where `REPOGRAPH_THREADS` was, and
+2. **`ZEROGRAPH_RESOURCES` is the one-run override**, layered where `ZEROGRAPH_THREADS` was, and
    `resources` sits in the machine-file allowlist where `threads` sat: it describes the machine, not
    the corpus.
 3. **`balanced` stays the default and stays byte-for-byte today's behaviour** — `(cores / 3).max(1)`,
@@ -66,23 +66,23 @@ two documented keys removed — and commit 3 `docs:`. Both code commits independ
 
 **Tech stack.** Rust 1.98 (`rust-toolchain.toml`), `cargo build --release`,
 `cargo test --release`, `cargo clippy --release --all-targets -- -D warnings`, all with no
-`REPOGRAPH_*` variable set. One dependency **leaves**: `libc`. `/usr/bin/time -l` and a one-second
+`ZEROGRAPH_*` variable set. One dependency **leaves**: `libc`. `/usr/bin/time -l` and a one-second
 `top -l 2 -s 1 -pid` sampler for the measurements; bash 3.2.
 
 ## Global constraints
 
-- Work in this worktree only: `W=/Users/max/Documents/projects/repograph/.claude/worktrees/routing-effort-model-skill-50259a`,
+- Work in this worktree only: `W=/Users/max/Documents/projects/zerograph/.claude/worktrees/routing-effort-model-skill-50259a`,
   branch `claude/resource-usage-modes-1c05e6`. Never `cd` into the main checkout; use
-  `cargo … --manifest-path "$W/Cargo.toml"` and absolute paths. `B="$W/target/release/repograph"`,
+  `cargo … --manifest-path "$W/Cargo.toml"` and absolute paths. `B="$W/target/release/zerograph"`,
   rebuilt before any measurement.
 - The pinned fixture `/Users/max/bench/beauty-crm-502e8a6d` is **read-only** and is never rebuilt:
   `ask --stale`, `bench`, `dump` only. Every writer runs on a copy.
 - New bench directory `G=/Users/max/bench/resources-2026-09-09`. The 2026-09-07 kit
   `P=/Users/max/bench/resources-2026-09-07` is read-only input: `measure.sh`, `quick.sh`,
   `queries10.jsonl`, `legacy-graph.json`, `store-L` are copied or read, never overwritten.
-- Measurements export `REPOGRAPH_NO_SERVE=1` (except the `serve` rows); `cargo test` runs in a shell
-  where no `REPOGRAPH_*` is set.
-- A copy pins `embed_model = "intfloat/multilingual-e5-small"` in its own `repograph.toml`. It is
+- Measurements export `ZEROGRAPH_NO_SERVE=1` (except the `serve` rows); `cargo test` runs in a shell
+  where no `ZEROGRAPH_*` is set.
+- A copy pins `embed_model = "intfloat/multilingual-e5-small"` in its own `zerograph.toml`. It is
   the default today, so this is belt and braces rather than necessity — and it is the trap that cost
   a run in the previous round.
 - Comments say why, never what; no ticket ids in code; tool directives stay. Test names are
@@ -100,11 +100,11 @@ two documented keys removed — and commit 3 `docs:`. Both code commits independ
 
 | # | bar |
 |---|---|
-| A1 | `rg -n "priority\|Priority\|REPOGRAPH_PRIORITY\|PRIO_\|SCHED_IDLE\|ioprio\|taskpolicy\|setpriority\|libc" src/ tests/ Cargo.toml` returns **nothing**. (`docs/` and `README.md` are excluded from A1: dated documents keep their historical mentions, and the README keeps exactly one sentence naming the removed key — B1.) |
+| A1 | `rg -n "priority\|Priority\|ZEROGRAPH_PRIORITY\|PRIO_\|SCHED_IDLE\|ioprio\|taskpolicy\|setpriority\|libc" src/ tests/ Cargo.toml` returns **nothing**. (`docs/` and `README.md` are excluded from A1: dated documents keep their historical mentions, and the README keeps exactly one sentence naming the removed key — B1.) |
 | A2 | `cargo test --release` green. **After commit 1 alone** the suite loses 8 tests (4 in `src/priority.rs`, 4 in `src/config.rs`) and gains 1 (A6), a net −7. After commit 2 it gains 5 more (§F.6), a net +5 on top: −7 then +5. |
 | A3 | `cargo clippy --release --all-targets -- -D warnings` silent. |
-| A4 | `Cargo.lock`'s `[[package]] name = "repograph"` dependency list no longer names `libc`; the `[[package]] name = "libc"` entry **stays** (27 other crates depend on it) and no other package's list changes. |
-| A5 | A `repograph.toml` holding `priority = "background"` makes every command that loads config exit non-zero with a message naming **both** the file and the key. Pinned by a test (§A.6). |
+| A4 | `Cargo.lock`'s `[[package]] name = "zerograph"` dependency list no longer names `libc`; the `[[package]] name = "libc"` entry **stays** (27 other crates depend on it) and no other package's list changes. |
+| A5 | A `zerograph.toml` holding `priority = "background"` makes every command that loads config exit non-zero with a message naming **both** the file and the key. Pinned by a test (§A.6). |
 
 **The retest** (e5-small, no configuration but the pinned `embed_model`, this branch's release
 binary, machine quiet — `uptime` recorded before and after every long row).
@@ -173,8 +173,8 @@ Every `cap_pools(index::embed::threads(cfg.threads));` line directly below each 
 | 106–107 | reword the `Machine` doc comment: strike `and which scheduling band it takes them in` so it reads `…which model it runs and how many threads it may take. A global file may set these and nothing else.` (also rewraps line 107, which is over-long today) |
 | 121 | delete `priority: Option<crate::priority::Priority>,` from `struct Machine` |
 | 166 | delete `layer(&named, "priority", machine.priority, &mut cfg.priority);` — note this line is indented four spaces where its neighbours are eight; deleting it removes the oddity |
-| 192 | delete `cfg.priority = crate::priority::from_env(cfg.priority, std::env::var("REPOGRAPH_PRIORITY").ok().as_deref())?;` |
-| 317 | delete `std::env::remove_var("REPOGRAPH_PRIORITY");` from `with_machine` |
+| 192 | delete `cfg.priority = crate::priority::from_env(cfg.priority, std::env::var("ZEROGRAPH_PRIORITY").ok().as_deref())?;` |
+| 317 | delete `std::env::remove_var("ZEROGRAPH_PRIORITY");` from `with_machine` |
 
 Tests to delete (lines 441–487), four of them:
 `priority_defaults_to_background_and_reads_from_the_project_file`,
@@ -186,7 +186,7 @@ Tests to delete (lines 441–487), four of them:
 > commit 2**, not a deletion outright: line 106–107's reword must also name the level, line 121's
 > `priority: Option<…>` field becomes `resources: Option<…>`, line 166's `layer(…, "priority", …)`
 > becomes `layer(…, "resources", …)` (at the correct eight-space indent), and line 317's
-> `remove_var("REPOGRAPH_PRIORITY")` becomes `remove_var("REPOGRAPH_RESOURCES")`. The exact text of
+> `remove_var("ZEROGRAPH_PRIORITY")` becomes `remove_var("ZEROGRAPH_RESOURCES")`. The exact text of
 > each is in §F.2. Lines 47–55, 101 and 192 are pure deletions and stay as written above.
 
 Leave alone: the `threads` doc comment at lines 38–46 (its citation of
@@ -201,7 +201,7 @@ the logical cores" and starts meaning "take `resources`' rule" (§F.2).
   `rg -n "libc" src/` returns only `src/priority.rs` (verified 2026-09-09). There is no
   target-specific `libc` table to remove; the only `[target.'cfg(windows)'.dependencies]` block
   (lines 39–41, `socket2` and `windows-sys`) belongs to `serve` and stays untouched.
-- `Cargo.lock` — the first `cargo build` drops `"libc"` from the `repograph` package's dependency
+- `Cargo.lock` — the first `cargo build` drops `"libc"` from the `zerograph` package's dependency
   list (line 1696 today). The `[[package]] name = "libc"` entry itself stays, because 27 other
   packages depend on it. Commit the lock with the code.
 
@@ -209,10 +209,10 @@ the logical cores" and starts meaning "take `resources`' rule" (§F.2).
 
 `tests/serve.rs`, `tests/users_day.rs`, `tests/fixtures/`, `bench/**`, `scripts/`, `npm/**` and
 `.github/workflows/**` contain no reference to the band —
-`rg -n "REPOGRAPH_PRIORITY|priority" tests/ bench/ scripts/ npm/ .github/` returns nothing
-(verified 2026-09-09). `repograph.toml` at the repository root never set `priority` or `threads`, so
+`rg -n "ZEROGRAPH_PRIORITY|priority" tests/ bench/ scripts/ npm/ .github/` returns nothing
+(verified 2026-09-09). `zerograph.toml` at the repository root never set `priority` or `threads`, so
 the worked example needs no edit. There is no machine file on this box
-(`~/.config/repograph/config.toml` absent, `REPOGRAPH_CONFIG` unset), so no local run breaks the
+(`~/.config/zerograph/config.toml` absent, `ZEROGRAPH_CONFIG` unset), so no local run breaks the
 moment the key goes.
 
 ### A.6 The compatibility question, answered from the code
@@ -225,7 +225,7 @@ The evidence, not a guess: `src/config.rs:5-6` puts `#[serde(default, deny_unkno
 with `.with_context(|| format!("parse {}", path.display()))`, so the failure reads
 
 ```
-Error: parse /path/to/repo/repograph.toml
+Error: parse /path/to/repo/zerograph.toml
 
 Caused by:
     TOML parse error at line 1, column 1
@@ -254,8 +254,8 @@ repository:
   instead leave someone believing their rebuild is still yielding the machine.
 
 **The environment variable is the deliberate asymmetry, and the README must say so.**
-`REPOGRAPH_PRIORITY=background repograph build` after the change runs normally and **silently**:
-`Config::load` reads only the variables it knows and there is no allowlist of `REPOGRAPH_*` names
+`ZEROGRAPH_PRIORITY=background zerograph build` after the change runs normally and **silently**:
+`Config::load` reads only the variables it knows and there is no allowlist of `ZEROGRAPH_*` names
 anywhere in the code, so an unknown one has never been an error and this one becomes unknown. Files
 are refused by name; environment variables are ignored.
 
@@ -270,7 +270,7 @@ fn a_priority_key_left_in_a_file_is_refused_by_name() { … }
 ```
 
 It asserts, under `with_machine(None, …)`, that a project file holding `priority = "background"`
-makes `Config::load` return `Err` whose message contains both `repograph.toml` and `priority`; and
+makes `Config::load` return `Err` whose message contains both `zerograph.toml` and `priority`; and
 under `with_machine(Some("priority = \"normal\"\n"), …)` that the machine file's own path and the
 key are both named. That is bar A5.
 
@@ -287,17 +287,17 @@ is kept intact with a dated header note; the README is the live surface and is r
 |---|---|
 | 523 | **Amendment 1** — the `threads` row is reworded, not left: §F.7 |
 | 524 | ~~**delete** the `\| \`priority\` \| …` row~~ — **Amendment 1: replaced**, not deleted. A `resources` row takes its place: §F.7 |
-| 545 | in the layer table's "the run" row, delete `, \`REPOGRAPH_PRIORITY\`` — **Amendment 1: and add `REPOGRAPH_RESOURCES`** |
+| 545 | in the layer table's "the run" row, delete `, \`ZEROGRAPH_PRIORITY\`` — **Amendment 1: and add `ZEROGRAPH_RESOURCES`** |
 | 556–558 | ~~the machine-file allowlist sentence loses one name~~ — **Amendment 1: it swaps one name**, `priority` out and `resources` in: "…`reranker_dir`, `threads` and `resources`, and refuses any other key by name." §F.7 |
-| after 561 | **add**, as a new paragraph closing that subsection, the one migration sentence, which is the whole of the README's memory of the key: "`priority` was a key until 2026-09-09 and is not one now — the writers run in the normal band on every platform. A file that still names it is refused by name like any other unknown key; delete the line. `REPOGRAPH_PRIORITY` is simply no longer read." |
+| after 561 | **add**, as a new paragraph closing that subsection, the one migration sentence, which is the whole of the README's memory of the key: "`priority` was a key until 2026-09-09 and is not one now — the writers run in the normal band on every platform. A file that still names it is refused by name like any other unknown key; delete the line. `ZEROGRAPH_PRIORITY` is simply no longer read." |
 | 617–621 | in Embeddings, the clause "…and 1,930 s to embed the fixture's 33,525 rows against 214 s, **which the background band a writer runs in multiplies by about four again: a first build is hours under the large model where the default's is minutes. That last step is a ratio and not a measured wall — no whole-store run in the band has finished on this machine, which is G20.**" — the bolded part **dies**. What replaces it: the two walls stand on their own, the default's re-measured (C1) and the large model's dated, with no multiplier and no G20 reference. |
 | 991–992 | keep the paragraph, replace `**214 s and 1.63 GB**` with C1's numbers and their date |
 | 986–989 | keep the e5-large before/after table, and add to the sentence under it that both rows were taken at `786b994` on 2026-09-07 in the normal band — which is the only band there is now, so they stand |
 | **994–1002** | **dies**: the "what the *person at the keyboard* feels … it is the one `priority` answers" paragraph and the whole `priority = "normal"` / `priority = "background"` compile-and-wake table |
-| **1004–1010** | **dies**: "The price is wall time … `REPOGRAPH_PRIORITY=normal` for one run, is the word back … Readers ignore the setting entirely" |
+| **1004–1010** | **dies**: "The price is wall time … `ZEROGRAPH_PRIORITY=normal` for one run, is the word back … Readers ignore the setting entirely" |
 | 1012–1017 | **keeps**: the mapped-weights paragraph is not the band |
 | **1019–1028** | **dies**: "That measurement is this machine's — Apple Silicon…" and the four-row `what \`priority = "background"\` does there` platform table (macOS Apple Silicon / macOS Intel / Linux / Windows) |
-| 1030–1034 | rewrite: keep the `threads` sentence and the container note; the closing sentence loses its band half, becoming "A build server with nobody at the keyboard wants `threads` as high as it likes, one line in `~/.config/repograph/config.toml`." |
+| 1030–1034 | rewrite: keep the `threads` sentence and the container note; the closing sentence loses its band half, becoming "A build server with nobody at the keyboard wants `threads` as high as it likes, one line in `~/.config/zerograph/config.toml`." |
 | 1036–1040 | edit: "On a machine with 8 GB the model is the lever ~~and the scheduler is not~~"; update `the whole store is 214 s` to C1 |
 | 1042–1057 | **keeps** unchanged (the two bounds, the progress line, "give the cores back") |
 | 1059–1064 | edit: `writes the whole store in 214 s and 1.6 GB` becomes C1's wall and RSS |
@@ -350,7 +350,7 @@ describe the shipped behaviour again.
 A plan is a record of what was decided on a date. Insert under the H1:
 
 > **Superseded 2026-09-09.** The band this plan designed and shipped was removed; `libc`,
-> `src/priority.rs`, the `priority` key and `REPOGRAPH_PRIORITY` are gone with it. The measurement
+> `src/priority.rs`, the `priority` key and `ZEROGRAPH_PRIORITY` are gone with it. The measurement
 > method here still stands and is reused by
 > [the removal plan](2026-09-09-normal-band-only.md).
 
@@ -412,8 +412,8 @@ a `summary.txt` carrying the line each table row was read from. That is `$P/meas
 Setup (one shell, ~1 minute, mostly the 864 MB copies):
 
 ```bash
-export W=/Users/max/Documents/projects/repograph/.claude/worktrees/routing-effort-model-skill-50259a
-export B=$W/target/release/repograph
+export W=/Users/max/Documents/projects/zerograph/.claude/worktrees/routing-effort-model-skill-50259a
+export B=$W/target/release/zerograph
 export P=/Users/max/bench/resources-2026-09-07
 export G=/Users/max/bench/resources-2026-09-09
 export F=/Users/max/bench/beauty-crm-502e8a6d          # pinned, read-only, never rebuilt
@@ -421,10 +421,10 @@ mkdir -p $G/log
 cp $P/measure.sh $P/queries10.jsonl $G/
 cp -a $F $G/fixture                                     # readers
 cp -a $F $G/writer                                      # build/update rows (they mutate the store)
-mkdir -p $G/store-E && cp -a $F/.repograph $G/store-E/.repograph   # the full-embed store
-rm -f $G/store-E/.repograph/vectors.*
+mkdir -p $G/store-E && cp -a $F/.zerograph $G/store-E/.zerograph   # the full-embed store
+rm -f $G/store-E/.zerograph/vectors.*
 for d in fixture writer store-E; do
-  printf 'embed_model = "intfloat/multilingual-e5-small"\n' > $G/$d/repograph.toml
+  printf 'embed_model = "intfloat/multilingual-e5-small"\n' > $G/$d/zerograph.toml
 done
 cargo build --release --manifest-path $W/Cargo.toml
 uptime | tee -a $G/log/summary.txt
@@ -432,7 +432,7 @@ uptime | tee -a $G/log/summary.txt
 
 The fixture's store is 33,533 rows at dim 384 with no recorded model — an e5-small store by history
 (verified 2026-09-09), 33,525 of them live, so a full re-embed writes 33,525. `embed` needs only
-`.repograph/`, which is why `store-E` carries no source tree.
+`.zerograph/`, which is why `store-E` carries no source tree.
 
 > **Amendment 1.** The single `store-E` becomes three, one per level — a level's row re-embeds the
 > whole store and cannot share a copy with another level's. §F.5 carries the replacement setup
@@ -441,7 +441,7 @@ The fixture's store is 33,533 rows at dim 384 with no recorded model — an e5-s
 ### C.1 The long rows (run first, one at a time, on a quiet machine)
 
 > **Amendment 1.** R1 is run **three times, once per level**; the block below is the `balanced` one
-> and stays exactly as written, with `store-E` renamed `store-E-balanced` and no `REPOGRAPH_RESOURCES`
+> and stays exactly as written, with `store-E` renamed `store-E-balanced` and no `ZEROGRAPH_RESOURCES`
 > in its environment at all — that absence is what proves the default is byte-for-byte today's
 > behaviour. §F.5 carries all three. R2 and everything in C.2 stay at one level.
 
@@ -449,7 +449,7 @@ The fixture's store is 33,533 rows at dim 384 with no recorded model — an e5-s
 214 s / 1.63 GB figure everywhere it is quoted:
 
 ```bash
-export REPOGRAPH_NO_SERVE=1
+export ZEROGRAPH_NO_SERVE=1
 uptime >> $G/log/summary.txt
 $G/measure.sh embed-small-full $G/log -- $B --repo $G/store-E embed
 uptime >> $G/log/summary.txt
@@ -463,9 +463,9 @@ line is free and the doc should carry it.
 above, `store-T3` → `$G/store-T3`), unchanged otherwise, including `kill -TERM` and its comment:
 
 ```bash
-mkdir -p $G/store-T3 && cp -a $F/.repograph $G/store-T3/.repograph
-rm -f $G/store-T3/.repograph/vectors.*
-printf 'embed_model = "intfloat/multilingual-e5-small"\n' > $G/store-T3/repograph.toml
+mkdir -p $G/store-T3 && cp -a $F/.zerograph $G/store-T3/.zerograph
+rm -f $G/store-T3/.zerograph/vectors.*
+printf 'embed_model = "intfloat/multilingual-e5-small"\n' > $G/store-T3/zerograph.toml
 # start `embed`, wait for two `rows,` lines on stderr, kill -TERM, read vectors.json's row count,
 # run `embed` again and read its total — bar C6 is that the second total is exactly the remainder.
 $B --repo $G/store-T3 ask "штраф за отмену записи"     # the five-id check, after the second run
@@ -504,9 +504,9 @@ above, `L=$G/log`) and nothing else touched. It runs, in order and serially:
 | serve | resident, two fused asks through the socket, then sampled idle | — | 1.38 GB |
 | watch | `--every 2`, quiet poll then one doc edit | — | 0.05 / 1.37 GB |
 
-`--rerank-local` needs `~/.cache/repograph/reranker` — present on this machine (verified
+`--rerank-local` needs `~/.cache/zerograph/reranker` — present on this machine (verified
 2026-09-09: `model.onnx`, `model.onnx_data`, `tokenizer.json`). `serve` needs the store under a
-short path so the socket clears macOS's 104-byte `SUN_LEN`; `$G/fixture/.repograph/serve.sock` is
+short path so the socket clears macOS's 104-byte `SUN_LEN`; `$G/fixture/.zerograph/serve.sock` is
 67 bytes and clears it (G27 is the gap where it does not).
 
 ### C.3 What is **not** re-measured, and why it is said out loud
@@ -525,7 +525,7 @@ it is one detached run of
 ## Part D — the floors
 
 ```bash
-ARMS="dense lexical" NOTE="levels only" bench/history/run-repograph.sh
+ARMS="dense lexical" NOTE="levels only" bench/history/run-zerograph.sh
 ```
 
 from `$W` (the script resolves `REPO` from its own path, builds `--release`, refuses a fixture that
@@ -558,7 +558,7 @@ binary and the retest has produced numbers:
 
 1. `perf: the background band is removed, and every writer runs in the normal one`
    — `src/priority.rs` (deleted), `src/main.rs`, `src/config.rs`, `Cargo.toml`, `Cargo.lock`.
-   Body: what a leftover `priority` key does now (refused by name), that `REPOGRAPH_PRIORITY` is
+   Body: what a leftover `priority` key does now (refused by name), that `ZEROGRAPH_PRIORITY` is
    ignored, that `threads` is unchanged, and that no released version ever carried the key.
 2. `docs: the band's documents keep their date, and the default model's numbers are today's`
    — `README.md`, the four header notes, ADR-002's amendment, `docs/bench/next-version-gaps.md`,
@@ -688,7 +688,7 @@ fn threads_from(configured: usize, level: Resources, cores: usize) -> usize {
 
 and `resources_from_env(configured, var) -> Result<Resources>` in the same file, the deleted
 `priority::from_env` one file over: unset or empty keeps what the files said, an unknown word is an
-error naming `REPOGRAPH_RESOURCES`.
+error naming `ZEROGRAPH_RESOURCES`.
 
 `index::embed::threads` gains the level as a second argument. **Twelve call sites**, all mechanical:
 
@@ -714,23 +714,23 @@ Before committing, `rg -n "embed::threads\(" src/` must return nothing with a si
 | the `Machine` doc comment (106–107) | commit 1's reword gains the level: "…which model it runs, how many threads it may take and how much of itself it offers." |
 | `struct Machine` | `resources: Option<crate::index::embed::Resources>,` where `priority:` was |
 | the `layer` block | `layer(&named, "resources", machine.resources, &mut cfg.resources);` at **eight** spaces, beside `threads` |
-| the env block | `cfg.resources = crate::index::embed::resources_from_env(cfg.resources, std::env::var("REPOGRAPH_RESOURCES").ok().as_deref())?;` |
-| `with_machine` | `remove_var("REPOGRAPH_RESOURCES")` where `REPOGRAPH_PRIORITY`'s was |
+| the env block | `cfg.resources = crate::index::embed::resources_from_env(cfg.resources, std::env::var("ZEROGRAPH_RESOURCES").ok().as_deref())?;` |
+| `with_machine` | `remove_var("ZEROGRAPH_RESOURCES")` where `ZEROGRAPH_PRIORITY`'s was |
 | after the env block | the same-place warning, §F.4 |
 
 ### F.4 Precedence, as a rule and as a test
 
 > **Struck by Amendment 2.** With `threads` removed there is no second key: no cross-key precedence,
 > no both-set warning, no `threads`-wins corner. What survives from this section and was built: the
-> layering itself (built-in default → machine file → `repograph.toml` → `REPOGRAPH_RESOURCES`), the
+> layering itself (built-in default → machine file → `zerograph.toml` → `ZEROGRAPH_RESOURCES`), the
 > machine-file allowlist argument — `resources` describes the machine and belongs in `Machine` where
 > `threads` was — and the compatibility asymmetry, which now runs in both directions at once:
 > `default` is why adding `resources` breaks nothing, `deny_unknown_fields` is why a file naming
 > either removed key is a hard error by name.
 
 **The rule, in two sentences.** Each key resolves through the layers it already has — built-in
-default, then the machine file, then `repograph.toml`, then the environment — with
-`REPOGRAPH_RESOURCES` sitting beside `REPOGRAPH_THREADS` exactly as the existing keys layer. The two
+default, then the machine file, then `zerograph.toml`, then the environment — with
+`ZEROGRAPH_RESOURCES` sitting beside `ZEROGRAPH_THREADS` exactly as the existing keys layer. The two
 are then combined at one point, `threads_from`: **a `threads` that is not `0` wins, and otherwise
 the level's rule applies.**
 
@@ -738,10 +738,10 @@ No new sentinel is invented for "I did not choose": `threads`'s built-in default
 already means it. So the order is **explicit `threads` (from any layer) > `resources` (from any
 layer) > the built-in `balanced`**.
 
-**The corner this creates, which the README must name.** `REPOGRAPH_RESOURCES=low` does *not*
+**The corner this creates, which the README must name.** `ZEROGRAPH_RESOURCES=low` does *not*
 override a project file's `threads = 6`: the environment beats the files *for its own key*, and
 `threads` beats `resources` *across keys*. The way to be gentle for one run on a repository that
-pins a count is `REPOGRAPH_THREADS=2`. This is deliberate — a rule that can be stated in one
+pins a count is `ZEROGRAPH_THREADS=2`. This is deliberate — a rule that can be stated in one
 sentence is a rule people can predict, and the alternative needs per-key provenance tracked across
 three layers to answer one uncommon question.
 
@@ -754,7 +754,7 @@ naming the place and both keys — not silence, and not an error.
 - Not an error, because the pair is redundant rather than dangerous, and a hard failure on a
   machine file would take out every repository on the box for a line that is merely superfluous.
 - **Only within one place**, never across layers: `resources = "low"` in
-  `~/.config/repograph/config.toml` with `threads = 6` in one repository's `repograph.toml` is the
+  `~/.config/zerograph/config.toml` with `threads = 6` in one repository's `zerograph.toml` is the
   design's best case — the machine sets a level, one repository buys the cores back — and a warning
   that fired there would fire on the thing the layering is for. Within one file the author wrote two
   answers to one question in one place and only one is read; that is a mistake and is said out loud.
@@ -782,8 +782,8 @@ opposite directions, and the README's migration paragraph says both in a sentenc
 ### F.5 The retest, three levels
 
 > **Amendment 2: four rows, not three.** `full` costs two — the no-cap candidate and the capped one —
-> and the level is passed only through `REPOGRAPH_RESOURCES`, never written into a copy's
-> `repograph.toml`. `balanced` was additionally run three times and its median published, because it
+> and the level is passed only through `ZEROGRAPH_RESOURCES`, never written into a copy's
+> `zerograph.toml`. `balanced` was additionally run three times and its median published, because it
 > missed its bar. What was measured is in
 > [the results](../bench/2026-09-09-normal-band-only-results.md).
 
@@ -792,34 +792,34 @@ replaces its single `store-E` with three:
 
 ```bash
 for lvl in balanced full low; do
-  mkdir -p $G/store-E-$lvl && cp -a $F/.repograph $G/store-E-$lvl/.repograph
-  rm -f $G/store-E-$lvl/.repograph/vectors.*
-  printf 'embed_model = "intfloat/multilingual-e5-small"\n' > $G/store-E-$lvl/repograph.toml
+  mkdir -p $G/store-E-$lvl && cp -a $F/.zerograph $G/store-E-$lvl/.zerograph
+  rm -f $G/store-E-$lvl/.zerograph/vectors.*
+  printf 'embed_model = "intfloat/multilingual-e5-small"\n' > $G/store-E-$lvl/zerograph.toml
 done
 ```
 
-The level is passed in the **environment**, never written into the copy's `repograph.toml`, so the
+The level is passed in the **environment**, never written into the copy's `zerograph.toml`, so the
 three files stay byte-identical and the runs differ by exactly one word. §4.2 already established
 that the variable and the file read the same to the second, so nothing is given up by choosing the
 one that is a better control.
 
 ```bash
-export REPOGRAPH_NO_SERVE=1
-unset REPOGRAPH_RESOURCES REPOGRAPH_THREADS
+export ZEROGRAPH_NO_SERVE=1
+unset ZEROGRAPH_RESOURCES ZEROGRAPH_THREADS
 
-# R1a — balanced. No REPOGRAPH_RESOURCES in the environment at all: the absence is the point.
+# R1a — balanced. No ZEROGRAPH_RESOURCES in the environment at all: the absence is the point.
 uptime >> $G/log/summary.txt
 $G/measure.sh embed-small-full-balanced $G/log -- $B --repo $G/store-E-balanced embed
 uptime >> $G/log/summary.txt
 
 # R1b — full
 uptime >> $G/log/summary.txt
-REPOGRAPH_RESOURCES=full $G/measure.sh embed-small-full-full $G/log -- $B --repo $G/store-E-full embed
+ZEROGRAPH_RESOURCES=full $G/measure.sh embed-small-full-full $G/log -- $B --repo $G/store-E-full embed
 uptime >> $G/log/summary.txt
 
 # R1c — low
 uptime >> $G/log/summary.txt
-REPOGRAPH_RESOURCES=low $G/measure.sh embed-small-full-low $G/log -- $B --repo $G/store-E-low embed
+ZEROGRAPH_RESOURCES=low $G/measure.sh embed-small-full-low $G/log -- $B --repo $G/store-E-low embed
 uptime >> $G/log/summary.txt
 ```
 
@@ -882,7 +882,7 @@ Plus, on the code:
 |---|---|
 | A6 | **Amendment 2:** `threads_from(level, cores)` takes no configured count. Pinned by table: `(Full, 12) == 6`, `(Balanced, 12) == 4`, `(Low, 12) == 2`, `(Balanced, 8) == 2`, `(Low, 8) == 1`, `(Full, 4) == 2`, `(Balanced, 4) == 1`, `(Low, 4) == 1`, `(Full, 0) == 1`, `(Balanced, 0) == 1` |
 | A7 | **Amendment 2:** five `src/config.rs` tests green, the fifth changed. Four as listed — `resources_defaults_to_balanced_and_reads_from_the_project_file`, `the_machine_file_may_set_resources_and_the_project_still_wins`, `the_environment_beats_the_project_for_resources`, `a_resources_level_that_is_not_a_word_it_knows_is_an_error_naming_the_file` — and, in place of the struck precedence test, `a_threads_key_left_in_a_file_is_refused_by_name`, the twin of commit 1's `priority` test over both the project file and the machine file. Plus `an_unknown_level_in_the_environment_is_an_error_naming_the_variable` in `src/index/embed.rs`. |
-| A8 | a `repograph.toml` with no `resources` key resolves to 4 threads on this machine, identical to `fec9496` — the byte-for-byte claim, asserted rather than assumed |
+| A8 | a `zerograph.toml` with no `resources` key resolves to 4 threads on this machine, identical to `fec9496` — the byte-for-byte claim, asserted rather than assumed |
 
 ### F.7 The README, named lines
 
@@ -892,7 +892,7 @@ On top of B.1's list, and replacing four of its rows:
 |---|---|
 | **523** | the `threads` row is reworded: "`0` = take `resources`' rule; any other count wins over the level" |
 | **524** | the `priority` row is **replaced**, not deleted: `` `resources` `` \| `"balanced"` (the default) = a third of the logical cores, `"low"` a sixth, `"full"` no cap at all — see [Resources](#resources) |
-| **545** | `REPOGRAPH_PRIORITY` out, **`REPOGRAPH_RESOURCES` in**, beside `REPOGRAPH_THREADS` |
+| **545** | `ZEROGRAPH_PRIORITY` out, **`ZEROGRAPH_RESOURCES` in**, beside `ZEROGRAPH_THREADS` |
 | **556–557** | the allowlist **swaps** a name: "…`reranker_dir`, `threads` and `resources`, and refuses any other key by name." |
 | **after 561** | B.1's migration paragraph gains §F.4's asymmetry, a sentence each: adding `resources` breaks no existing file because both structs are `#[serde(default)]`; removing `priority` fails every command that loads a file naming it because they are also `deny_unknown_fields` |
 | **994–1028** | B.1 kills these; what replaces them is B.1's paragraph **and the three-level table below it** |

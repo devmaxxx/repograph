@@ -15,7 +15,7 @@ from run import (
     FAMILIES_CACHE,
     Gitnexus,
     Graphify,
-    Repograph,
+    Zerograph,
     gitnexus_failure_reason,
     gitnexus_looks_like_a_result,
     load_id_families,
@@ -41,14 +41,14 @@ def setUpModule():
 # real `id_families`, not stand-ins, so this stays valid once ID_TOKEN stops over-matching.
 MIXED_COUNTS = "INV-1  docs/aaa.md docs/bbb.md docs/ccc.md\nOR-2  docs/ddd.md\n"
 
-# `repograph ask "расход виден салону"` on beauty-crm at 2483d932, verbatim.
+# `zerograph ask "расход виден салону"` on beauty-crm at 2483d932, verbatim.
 ANSWER = (
     "FR-AI-138  docs/prd-2026-08-16/prd/07-ai-layer.md:1163  Расход виден салону.\n"
     "NFR-PH-7  docs/prd-2026-08-16/prd/13-phasing.md:1470  Стоимость\n"
     "FR-SEC-92  docs/prd-2026-08-16/prd/12-security-prereqs.md:1144  Внутренний экран\n"
     "  FR-WH-30  docs/prd-2026-08-16/prd/08-marketing-inventory.md:981  Норматив  ← N-137\n"
 )
-# `repograph ask asGrosze`, verbatim.
+# `zerograph ask asGrosze`, verbatim.
 CODE = (
     "sym:packages/contracts/src/money.ts::asGrosze  packages/contracts/src/money.ts:31  asGrosze\n"
     "sym:packages/domain/src/money/index.ts::asGrosze  packages/domain/src/money/index.ts:115  asGrosze\n"
@@ -108,19 +108,19 @@ class IdFamilies(unittest.TestCase):
     def test_it_asks_the_tool_and_reads_the_families_out_of_the_answer(self):
         answer = json.dumps({"families": [{"family": "INV"}, {"family": "FR-AI"}], "milestones": [], "mention_only": []})
         with mock.patch("subprocess.run", return_value=subprocess.CompletedProcess([], 0, answer, "")) as ran:
-            self.assertEqual(load_id_families(Path("/corpus"), "repograph"), ["INV", "FR-AI"])
-        self.assertEqual(ran.call_args[0][0], ["repograph", "--repo", "/corpus", "families", "--json"])
+            self.assertEqual(load_id_families(Path("/corpus"), "zerograph"), ["INV", "FR-AI"])
+        self.assertEqual(ran.call_args[0][0], ["zerograph", "--repo", "/corpus", "families", "--json"])
 
     def test_a_tool_that_cannot_answer_raises_rather_than_falling_back(self):
         with mock.patch("subprocess.run", return_value=subprocess.CompletedProcess([], 1, "", "graph is empty")):
             with self.assertRaises(RuntimeError):
-                load_id_families(Path("/corpus"), "repograph")
+                load_id_families(Path("/corpus"), "zerograph")
 
     def test_a_corpus_with_no_families_raises_rather_than_falling_back(self):
         empty = json.dumps({"families": [], "milestones": [], "mention_only": []})
         with mock.patch("subprocess.run", return_value=subprocess.CompletedProcess([], 0, empty, "")):
             with self.assertRaises(RuntimeError):
-                load_id_families(Path("/corpus"), "repograph")
+                load_id_families(Path("/corpus"), "zerograph")
 
     def test_a_missing_or_empty_cache_raises_rather_than_falling_back(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -181,7 +181,7 @@ class BlastShape(unittest.TestCase):
         self.assertTrue(all(r["file"].endswith(".kt") for r in impact))
         self.assertEqual(collections.Counter(r["tier"] for r in impact), {"wide": 1, "narrow": 7})
         # Each trace endpoint carries its store id: `ReplicaFiles` has three `actual`s beside its
-        # `expect`, and repograph refuses a name that matches more than one symbol.
+        # `expect`, and zerograph refuses a name that matches more than one symbol.
         for r in rows:
             if r["kind"] == "trace":
                 self.assertTrue(r["from_id"].endswith(f"::{r['from']}") and r["to_id"].endswith(f"::{r['to']}"), r)
@@ -307,7 +307,7 @@ class GitnexusUnansweredCallsDoNotScoreAsHits(unittest.TestCase):
 
 
 class AskedByStoreId(unittest.TestCase):
-    """A case carrying repograph's store ids asks repograph by them, and every other tool by name."""
+    """A case carrying zerograph's store ids asks zerograph by them, and every other tool by name."""
 
     CASES = [
         {"kind": "impact", "target": "Foo", "id": "sym:Shop/Foo.cs::Foo", "tier": "narrow"},
@@ -322,9 +322,9 @@ class AskedByStoreId(unittest.TestCase):
             score_blast(tool, cases=self.CASES, truth=self.TRUTH)
         return [c.args[0] for c in call.call_args_list]
 
-    def test_repograph_is_asked_by_id_and_by_name_where_a_case_has_no_id(self):
-        opts = argparse.Namespace(repograph="repograph", timeout=180, strip_prefix=[])
-        argvs = self.argvs(Repograph(Path("/tmp"), opts))
+    def test_zerograph_is_asked_by_id_and_by_name_where_a_case_has_no_id(self):
+        opts = argparse.Namespace(zerograph="zerograph", timeout=180, strip_prefix=[])
+        argvs = self.argvs(Zerograph(Path("/tmp"), opts))
         self.assertIn("sym:Shop/Foo.cs::Foo", argvs[0])
         self.assertEqual(argvs[1][-2:], ["sym:Shop/Foo.cs::Foo", "sym:Shop/Bar.cs::Bar"])
         self.assertIn("Baz", argvs[2])
@@ -336,7 +336,7 @@ class AskedByStoreId(unittest.TestCase):
         self.assertFalse(any(a.startswith("sym:") for argv in argvs for a in argv), argvs)
 
 
-class RepographRefusalScoresNothing(unittest.TestCase):
+class ZerographRefusalScoresNothing(unittest.TestCase):
     """A refused call's namesake list names the declaring files; none of them count as found."""
 
     REFUSAL = (
@@ -346,8 +346,8 @@ class RepographRefusalScoresNothing(unittest.TestCase):
     )
     TRUTH = {"impact": {"staff_member": {"refs": ["db/0008.sql", "db/0009.sql"]}}}
 
-    def _tool(self) -> Repograph:
-        return Repograph(Path("/tmp"), argparse.Namespace(repograph="repograph", timeout=180, strip_prefix=[]))
+    def _tool(self) -> Zerograph:
+        return Zerograph(Path("/tmp"), argparse.Namespace(zerograph="zerograph", timeout=180, strip_prefix=[]))
 
     def test_a_refused_impact_names_no_file(self):
         tool = self._tool()

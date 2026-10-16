@@ -21,7 +21,7 @@ at the start of step 1 with the step-0 binary, `bin/repograph-step0`:
 ## Step 1 · Shell
 
 Old: `bin/repograph-step0`. New: `bin/repograph-step1`. Shell's old reader is deleted, so the old
-graph cannot come from `REPOGRAPH_LEGACY`.
+graph cannot come from `ZEROGRAPH_LEGACY`.
 
 - **Regressions:** R1–R9 = 0 on the kit corpus (`old-1` vs `new-1`), on the scratchpad corpus
   (`store-base` vs `store-step1`), and on the fixture (`fixture-base` vs the port's store). The
@@ -43,7 +43,7 @@ graph cannot come from `REPOGRAPH_LEGACY`.
 
 Old: `bin/repograph-step1c`, the step-1 binary rebuilt on the clean commit `00022dd` (below). New:
 `bin/repograph-step2`. Bicep's old reader is deleted, so the old graph cannot come from
-`REPOGRAPH_LEGACY`.
+`ZEROGRAPH_LEGACY`.
 
 - **Step 1 re-recorded.** The step-1 fixture row was taken from an uncommitted tree on `c7e8b68`
   (`tool_dirty: true`). It was re-run on `00022dd`, which is step 1 plus its two deferred review
@@ -70,7 +70,7 @@ Old: `bin/repograph-step1c`, the step-1 binary rebuilt on the clean commit `0002
 ## Step 3 · HCL and Terraform
 
 Old: `bin/repograph-step2`. New: `bin/repograph-step3`, built on the clean commit `23748b5`. HCL's
-old reader is deleted, so the old graph cannot come from `REPOGRAPH_LEGACY`.
+old reader is deleted, so the old graph cannot come from `ZEROGRAPH_LEGACY`.
 
 - **Step-2 review fixes** landed first (`e9caf84`). On both corpora, `graph.json` and
   `headers.json` are byte-identical to `new-2` and `store-step2`.
@@ -108,7 +108,7 @@ old reader is deleted, so the old graph cannot come from `REPOGRAPH_LEGACY`.
 ## Step 4 · Swift
 
 Old: `bin/repograph-step3`. New: `bin/repograph-step4`. Swift's old reader is deleted, so the old
-graph cannot come from `REPOGRAPH_LEGACY`.
+graph cannot come from `ZEROGRAPH_LEGACY`.
 
 - **Step-3 review fixes** landed first (`2d3be08`). On both corpora and the fixture, `graph.json` and
   `headers.json` are byte-identical to `new-3`, `store-step3` and `fixture-base`
@@ -179,7 +179,7 @@ table, the accepted diff and the rewritten assertions are in the plan's §3.5.
 Old: `bin/repograph-5`, with its stores (`new-5`, the scratchpad's step-5 store and `fixture-base`).
 New: `bin/repograph-step6`, built on `f7358e1`. `bin/repograph-step6a`, built on the clean commit
 `8c2e454` before the compile warm-up, ran the bench. Both write byte-identical graphs on both
-corpora. SQL's old reader is deleted, so the old graph cannot come from `REPOGRAPH_LEGACY`.
+corpora. SQL's old reader is deleted, so the old graph cannot come from `ZEROGRAPH_LEGACY`.
 
 - **Regressions:** from `langdiff.py --lang sql` on three inputs:
   - kit corpus (`new-5` → `new-6`): R1–R9 = 0;
@@ -693,7 +693,7 @@ package and imports types.
   `log/langdiff-step12-kit-jvm.txt`.
   - Kit corpus (`old-12` → `new-12`, `--lang cs,csproj`): R3 = 1 and body-above 1, both accepted.
     Every other class is 0, and the 19,757 edges are identical. `old-12` is the old reader under
-    `REPOGRAPH_LEGACY=csharp`, identical to `new-11`.
+    `ZEROGRAPH_LEGACY=csharp`, identical to `new-11`.
   - Kit corpus with `.razor` and `.cshtml` globbed (step 11 → step 12): razor R3 = 18, accepted. The
     1,242 edges are identical.
   - Scratchpad corpus (vs `store-base`): cs R3 = 1 and body-above 1, the kit's two nodes. The rest
@@ -780,7 +780,7 @@ what no query says: `import_bindings`, `statement_prose` and `single_file_compon
   - R2 and the moved References are the two accepted classes above.
   - The rest moves Calls and cites from the class to the method. A member decorator was separated
     from its method by a comment, and the old reader gave it to the class.
-- **Bench,** on the fixture, store built by `repograph-step13`:
+- **Bench,** on the fixture, store built by `zerograph-step13`:
   - `--no-dense`: `keyword 39/40 paraphrase 7/30 code 12/12 p90 238 tok`. The transcript is
     identical to step 10's.
   - Dense, full build in 2 min 44 s: `keyword 40/40 paraphrase 9/30 code 12/12 p90 237 tok`,
@@ -815,7 +815,7 @@ not a decorator, where it read the first line not opening with `@`.
 ## Step 14 · Remove the old paths
 
 New: `bin/repograph-step14`, built at `0fab918`. The front calls the engine alone, and
-`REPOGRAPH_LEGACY` is gone. `walk::GRAMMAR` moves from 5 to 6. Before that, two fixes from step 13's
+`ZEROGRAPH_LEGACY` is gone. `walk::GRAMMAR` moves from 5 to 6. Before that, two fixes from step 13's
 review: an update drops the read-ahead it did not use (`198dab5`), and a file's decorators are read
 in one walk (`f9479b6`, binary `bin/repograph-step14a`).
 
@@ -831,7 +831,7 @@ in one walk (`f9479b6`, binary `bin/repograph-step14a`).
   `step13b` 1.390 s wall and 1.852 s CPU, `step14a` 1.374 s and 1.816 s. That is within the noise.
 - **Bench** on `0fab918`: `--no-dense` `keyword 39/40 paraphrase 7/30 code 12/12 p90 238 tok`; dense
   `keyword 40/40 paraphrase 9/30 code 12/12 p90 237 tok` (e5-small). Both match `082861f` case for
-  case: zero flips. The reset settles with `repograph-step13b`, as a GRAMMAR 6 binary re-reads the
+  case: zero flips. The reset settles with `zerograph-step13b`, as a GRAMMAR 6 binary re-reads the
   fixture's store.
 - **Build time:** median of five, interleaved with step 0, at load 8.8 (`log/buildtime-step14.txt`).
   Step 0 ran 1.191 s and step 14 1.349 s, which is 1.132×.
@@ -843,7 +843,7 @@ in one walk (`f9479b6`, binary `bin/repograph-step14a`).
 ## Step 15 · Lua
 
 New: `bin/repograph-step15`, built at `c9415d7`. Parent: `bin/repograph-step14b`, built at
-`eb316a2`. Lua is read only when a config or `REPOGRAPH_CODE_GLOBS` names `**/*.lua`.
+`eb316a2`. Lua is read only when a config or `ZEROGRAPH_CODE_GLOBS` names `**/*.lua`.
 
 - **Corpus:** `luarocks/luarocks` at `v3.13.0`, `3421bedc2ce2b64e79530bb97497531b014899a8`, 162
   `.lua` files, MIT. It is read as data only: no script of it was run.
@@ -979,7 +979,7 @@ New: `bin/repograph-step16a`, built from the item 0 tree. Parent: `bin/repograph
 ## Step 16 · Go
 
 New: `bin/repograph-step16`, built at the tree committed as `e8510ae`. Parent: `bin/repograph-step16a`,
-built at `904039b`. Go is read only when a config or `REPOGRAPH_CODE_GLOBS` names `**/*.go`.
+built at `904039b`. Go is read only when a config or `ZEROGRAPH_CODE_GLOBS` names `**/*.go`.
 
 - **Corpus:** `gin-gonic/gin` at `v1.12.0`, `73726dc606796a025971fe451f0aa6f1b9b847f6`, 98 `.go`
   files (40 `_test.go`), one `go.mod` (`module github.com/gin-gonic/gin`), eight package
@@ -1086,7 +1086,7 @@ binds a generic receiver's type parameters in the method.
 
 New: `bin/repograph-step17`, built at the tree committed as `77b7d8f` (measured as `step17w`, the
 same tree). Parent: `bin/repograph-step16r`, built at `5cd204b`; item 0 is `f22c2a1`, which
-changed no store. C is read only when a config or `REPOGRAPH_CODE_GLOBS` names `**/*.c` and `**/*.h`.
+changed no store. C is read only when a config or `ZEROGRAPH_CODE_GLOBS` names `**/*.c` and `**/*.h`.
 
 - **Corpus:** `redis/hiredis` at `v1.4.1`, `616f2286ba5503f74ae96e720623fa11dbc690af`, 25 `.c` and
   27 `.h`, BSD-3-Clause. It is read as data only: no script of it was run.
@@ -1195,7 +1195,7 @@ changed no store. C is read only when a config or `REPOGRAPH_CODE_GLOBS` names `
 
 New: `bin/repograph-cpp12`, built at the non-test source committed as `67c09fa`. Parent:
 `bin/repograph-cpp-base`, built at `4d262b1`. C++ is read only when a config or
-`REPOGRAPH_CODE_GLOBS` names its extensions; the store below names `**/*.cc **/*.h`.
+`ZEROGRAPH_CODE_GLOBS` names its extensions; the store below names `**/*.cc **/*.h`.
 
 - **Corpus:** `google/leveldb` at `1.23`, `99b3c03b3284f5886f9ef9a4ef703d57373e61be`, 75 `.cc` and
   56 `.h`, BSD-3-Clause. It is read as data only: no script of it was run.
@@ -1373,7 +1373,7 @@ tokenizer cases of the attribute-macro view. Plan, step 18 as built, has each fi
 ## Step 19 · Ruby
 
 New: `bin/repograph-ruby`, built at the tree committed as `ffeaabf`. Parent: `bin/repograph-step17`,
-built at `77b7d8f`. Ruby is read only when a config or `REPOGRAPH_CODE_GLOBS` names `**/*.rb`,
+built at `77b7d8f`. Ruby is read only when a config or `ZEROGRAPH_CODE_GLOBS` names `**/*.rb`,
 `**/*.rbw`, `**/*.gemspec` and `**/*.rake`.
 
 - **Corpus:** `rack/rack` at `v3.2.7`, `70d2e1046789a70e240e01b9ac0b3ffc9b26d33f`, 93 `.rb` and one
@@ -1454,7 +1454,7 @@ built at `77b7d8f`. Ruby is read only when a config or `REPOGRAPH_CODE_GLOBS` na
   References +801 and +1, Extends +12, R2 0, R3 0, R5 0, R6 0, R7 0, R9 0. R8 is 1, the pending
   count above.
 - **Byte-identity**, `step17` against `ruby`, every build on a copy:
-  - Scratchpad corpus and kit corpus, each with its `repograph.toml`, with the default globs and
+  - Scratchpad corpus and kit corpus, each with its `zerograph.toml`, with the default globs and
     with the defaults plus the Ruby globs: `graph.json` identical in all six pairs
     (`dff8b36a53bb0548`, `store-14`'s), `headers.json` identical (`a5470b352b46ebc0`). Neither corpus
     holds a Ruby file.
@@ -1516,7 +1516,7 @@ built, has each finding.
   - luarocks with `**/*.lua **/*.c **/*.h`: `5d118eab6ba8aeb6`;
   - Slim with `**/*.php`: `06bfcd802019ae73`;
   - rack with the defaults plus the Ruby globs: `cf4ce541c06dd796`;
-  - scratchpad corpus with its `repograph.toml`: `566f40d972ba1d21`, equal to `store-14`'s, and
+  - scratchpad corpus with its `zerograph.toml`: `566f40d972ba1d21`, equal to `store-14`'s, and
     `headers.json` `7c73aee1e9db81f6` in both.
 - **Cases:** `src/code/cases/ruby.rs` 13 tests (two added): `require` searching `lib/` alone, a
   written `.rb` taken as written and `require_relative` never falling back to `lib/`; a value's
@@ -1530,7 +1530,7 @@ built, has each finding.
 ## Step 20 · PHP
 
 New: `bin/repograph-php`, built at the tree committed on `feat/engine-php`. Parent:
-`bin/repograph-step17`. PHP is read only when a config or `REPOGRAPH_CODE_GLOBS` names `**/*.php`.
+`bin/repograph-step17`. PHP is read only when a config or `ZEROGRAPH_CODE_GLOBS` names `**/*.php`.
 
 - **Corpus:** `slimphp/Slim` at `4.15.3`, `3675bf6baac66b07032575b7bef4200b60b7974b`, 125 `.php`,
   MIT. It is read as data only: no script of it was run. One root `composer.json`: `Slim\` →
@@ -1616,7 +1616,7 @@ New: `bin/repograph-php`, built at the tree committed on `feat/engine-php`. Pare
 ## Step 21 · Scala
 
 New: `bin/repograph-scala`, built at the tree committed on `feat/engine-scala`. Parent:
-`bin/repograph-merge19`. Scala is read only when a config or `REPOGRAPH_CODE_GLOBS` names
+`bin/repograph-merge19`. Scala is read only when a config or `ZEROGRAPH_CODE_GLOBS` names
 `**/*.scala` or `**/*.sc`.
 
 - **Corpus:** `com-lihaoyi/os-lib` at `0.11.8`, `b14ae532fbbf082b2c22d9f58f7f475be3e3fe79`, 59
@@ -1702,7 +1702,7 @@ New: `bin/repograph-scala`, built at the tree committed on `feat/engine-scala`. 
 ## Step 22 · Elixir
 
 New: `bin/repograph-elixir`, built at the tree committed as `7276359`. Parent:
-`bin/repograph-merge19`. Elixir is read only when a config or `REPOGRAPH_CODE_GLOBS` names
+`bin/repograph-merge19`. Elixir is read only when a config or `ZEROGRAPH_CODE_GLOBS` names
 `**/*.ex` and `**/*.exs`.
 
 - **Corpus:** `elixir-plug/plug` at `v1.20.3`, `9fa11c8ebedbe68531eba25d8f81b9282e0514da`, 42 `.ex`
@@ -1763,9 +1763,9 @@ New: `bin/repograph-elixir`, built at the tree committed as `7276359`. Parent:
   R1 588 and exs R1 225 (every new node), R4 551 and 189 (Declares), Calls +522 and +318,
   References +227 and +281, R2 0, R3 0, R5 0, R6 0, R7 0, R9 0. R8 is 1, the pending count above.
 - **Byte-identity** (`log/ident-step22.txt`), `merge19` against `elixir`, every build on a copy:
-  - Scratchpad corpus and kit corpus, each with its `repograph.toml`: `graph.json` identical in all
+  - Scratchpad corpus and kit corpus, each with its `zerograph.toml`: `graph.json` identical in all
     four builds (`566f40d972ba1d21`, `store-14`'s), `headers.json` identical (`7c73aee1e9db81f6`).
-    With `REPOGRAPH_CODE_GLOBS` set to the Elixir globs, which replaces the file's globs, all four
+    With `ZEROGRAPH_CODE_GLOBS` set to the Elixir globs, which replaces the file's globs, all four
     give `857c2920c237c69c`. Neither corpus holds an Elixir file.
   - luarocks (`**/*.lua **/*.c **/*.h`, `5d118eab6ba8aeb6`), gin (`**/*.go`, `03a6c87a79dd5bfe`),
     hiredis (`**/*.c **/*.h`, `c598315d5dbcc0d9`), leveldb (`**/*.cc **/*.h`, `4daa7236ae432db6`),
@@ -1785,7 +1785,7 @@ New: `bin/repograph-elixir`, built at the tree committed as `7276359`. Parent:
 ## Step 23 · OCaml
 
 New: `bin/repograph-ocaml`, built at the tree committed on `feat/engine-ocaml`. Parent:
-`bin/repograph-merge19`. OCaml is read only when a config or `REPOGRAPH_CODE_GLOBS` names `**/*.ml`
+`bin/repograph-merge19`. OCaml is read only when a config or `ZEROGRAPH_CODE_GLOBS` names `**/*.ml`
 and `**/*.mli`.
 
 - **Corpus:** `ocaml/ocaml-re` at `1.14.0`, `4367d9c785f9d8a59029bf2a1bea2e2060ac2c64`, 71 `.ml`
@@ -1886,7 +1886,7 @@ and `class`.
 - **ocaml-re:** nodes unchanged (1,857); 13 edges added, none removed, all in `lib/automata.ml`
   through `module Id = Ids.Id` and `module E = Desc.E`: Calls 1,216 → 1,222, value References
   429 → 432, type References 858 → 862. Each is right by hand.
-- **Every other store** byte-identical to `repograph-merge23`.
+- **Every other store** byte-identical to `zerograph-merge23`.
 - **Not fixed:** a `struct` passed to a functor declares its members under the module the
   application names; an alias of an alias (`module Re2 = Re`) is not chased.
 - **Gate:** `cargo test --all-targets` 1,526 passed, 0 failed; clippy clean.
@@ -1899,7 +1899,7 @@ extension `lang.rs` reads for them. `**/vendor/**` and `**/_build/**` join the d
 sources into `_build/`. Razor stays opt-in. `walk::GRAMMAR` stays at 6, which step 14 set in the
 same unreleased 0.6.0.
 
-- **Fixture:** built with `repograph-step14` and with the step 24 release binary, `graph.json` and
+- **Fixture:** built with `zerograph-step14` and with the step 24 release binary, `graph.json` and
   `headers.json` are byte-identical. The fixture holds no file of the nine languages and no
   `vendor/` or `_build/`.
 - **Bench** on `1c1e37c`, in `~/bench/beauty-crm-test` after a reset from the fixture's store:

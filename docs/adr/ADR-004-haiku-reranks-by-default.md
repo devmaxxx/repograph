@@ -39,6 +39,6 @@ suites, and it is the cheaper model per token.
   wall times point both ways — haiku faster on three of the four columns, slower on the last.
 - One run per cell. A model is only as good as the next run, and haiku's keyword case at fused
   rank 2 was a coin flip for both models before the snippet change. A project that sees haiku drop
-  a case sets `rerank_model = "sonnet"` in `repograph.toml`, or `REPOGRAPH_RERANK_MODEL=sonnet` for
+  a case sets `rerank_model = "sonnet"` in `zerograph.toml`, or `ZEROGRAPH_RERANK_MODEL=sonnet` for
   one run.
 - `--rerank` stays measured, not floored, as before.

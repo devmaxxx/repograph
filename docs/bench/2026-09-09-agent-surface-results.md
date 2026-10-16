@@ -11,7 +11,7 @@ a headless `claude -p --output-format stream-json`, scored on the result text an
 `modelUsage` the stream reports. `run.sh <config> <model>` swaps a `.claude/` overlay into a
 disposable worktree and keeps every byte the agent streams. Configurations: **B** today's surface
 verbatim, **C** the planned one (stanza + brief + interception), **C-rem** the same with
-`REPOGRAPH_HOOK_INTERCEPT=0`.
+`ZEROGRAPH_HOOK_INTERCEPT=0`.
 
 ## The verdict
 
@@ -32,7 +32,7 @@ that gap is B's install and not B's prose.
 are lower than reminder-only's; the rule was committed before the number was read and is not
 renegotiated after.* On sonnet, twice: 137,991 and 129,243 against 194,011 and 169,036 — the two
 ranges do not overlap, so the worse C run still beats the better C-rem run — with hits 11/11 against
-11/9. The default stays on and `REPOGRAPH_HOOK_INTERCEPT=0` remains the way out.
+11/9. The default stays on and `ZEROGRAPH_HOOK_INTERCEPT=0` remains the way out.
 
 The rule says *on both models*, and there is no opus half to read: Max's 2026-09-07 budget decision
 gives opus one configuration, not two, and the plan that records it says in the same breath that
@@ -52,7 +52,7 @@ The 2026-09-09 runs are labelled B, C and C-rem in nobody's memory but this para
 three configuration **B**.
 
 `run.sh` laid the overlay down once, before the task loop, and reset the worktree before every task
-with `git checkout -- .` followed by `git clean -fdq -e .repograph`. beauty-crm tracks its own
+with `git checkout -- .` followed by `git clean -fdq -e .zerograph`. beauty-crm tracks its own
 `.claude/` — 45 files — and its `.claude/CLAUDE.md` is byte-identical to what `overlays/build.sh`
 copies out as configuration B. The checkout restored B over the overlay and the clean removed what
 the overlay had added, before the first task ran:
@@ -60,7 +60,7 @@ the overlay had added, before the first task ran:
 ```
 $ rm -rf $WT/.claude && cp -R overlays/C $WT/.claude && wc -c $WT/.claude/CLAUDE.md
     1295
-$ git -C $WT checkout -- . && git -C $WT clean -fdq -e .repograph && wc -c $WT/.claude/CLAUDE.md
+$ git -C $WT checkout -- . && git -C $WT clean -fdq -e .zerograph && wc -c $WT/.claude/CLAUDE.md
    29543
 ```
 
@@ -69,7 +69,7 @@ Three corroborations, each independent of that one:
 - The median first-request input was **45,904 tokens** in the B run, **45,904** in the C run and
   **45,902** in the C-rem run. A 28 kB difference in instructions is about 10,000 tokens; it was not
   there because there was no difference. With the fix it is: C's median first request is **35,705**.
-- The `SessionStart` brief (`repograph: 3076 doc nodes …`) appeared in **0 of 36** transcripts. In
+- The `SessionStart` brief (`zerograph: 3076 doc nodes …`) appeared in **0 of 36** transcripts. In
   the four runs since the fix it is in every one.
 - Both `CLAUDE.md` locations are read. A scratch repository with a marker in `./CLAUDE.md` and
   another in `./.claude/CLAUDE.md`, asked which markers it could see, named both — so the restored
@@ -122,13 +122,13 @@ counts: a stanza tuned on sonnet's behaviour is not tuned on opus's.
 | C — stanza + brief | 7,322 B | 1,295 B | 8,617 B | 35,705 tokens |
 
 **10,199 tokens off the first request of every session**, and off every later request in it, because
-the prompt is carried forward. The root file is beauty-crm's own, names repograph zero times, and is
+the prompt is carried forward. The root file is beauty-crm's own, names zerograph zero times, and is
 constant across arms — which is what makes the comparison a comparison.
 
 The brief that replaces those bytes is **547 B**:
 
 ```
-$ repograph prime --repo <fixture> --no-dense | wc -c
+$ zerograph prime --repo <fixture> --no-dense | wc -c
      547
 ```
 
@@ -154,7 +154,7 @@ itself and the 10 s the settings file allows the hook.
 
 The resident `serve` buys the tail, not the median — 393 ms → 73 ms at p95 — and it buys nothing on
 the `SessionStart` path, because `prime` does not go through the socket. What it is for is the
-agent's *own* `repograph ask`: 0.08 s resident against 0.77 s after a model drop and ~0.4 s against
+agent's *own* `zerograph ask`: 0.08 s resident against 0.77 s after a model drop and ~0.4 s against
 a cold process.
 
 ## Every refusal
@@ -171,8 +171,8 @@ a cold process.
    taken. Nothing here says the graph beats grep; it says what one graph surface costs against
    another.
 4. **No scout arm (F3).** `repo-scout` ships uninvoked and unmeasured.
-5. **Overlay B's own instructions do not work in the worktree.** 14 of B's 23 repograph invocations
-   went through `pnpm exec repograph`, which fails in a bare `git worktree` under beauty-crm's
+5. **Overlay B's own instructions do not work in the worktree.** 14 of B's 23 zerograph invocations
+   went through `pnpm exec zerograph`, which fails in a bare `git worktree` under beauty-crm's
    `.npmrc`. B's rows are today's surface *minus a working install*, so F1's direction is sound and
    its magnitude is not attributable to prose alone.
 6. **`req-exact` is ambiguous.** It asks for the requirement governing one behaviour and expects

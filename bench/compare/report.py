@@ -6,7 +6,7 @@ import argparse
 import json
 from pathlib import Path
 
-ORDER = ["repograph", "graphify", "gitnexus"]
+ORDER = ["zerograph", "graphify", "gitnexus"]
 
 
 def cell(value) -> str:
@@ -18,6 +18,8 @@ def main() -> None:
     ap.add_argument("result")
     args = ap.parse_args()
     report = json.loads(Path(args.result).read_text(encoding="utf8"))
+    # Result files written before the rename key the tool by its old name.
+    report["tools"] = {("zerograph" if t == "repograph" else t): b for t, b in report["tools"].items()}
     tools = [t for t in ORDER if t in report["tools"]] + [
         t for t in report["tools"] if t not in ORDER
     ]

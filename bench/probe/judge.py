@@ -11,7 +11,7 @@ what a reader checks instead of the shell that produced a table.
 floor did all of its work and answered: its wall clock, max RSS and both CPU columns are readings
 of that reader, and only the verdict on the answers failed. A row that never found a store did not
 do the work at all and its clock measured a failing setup, which is no reading of anything.
-`repograph`
+`zerograph`
 exits 3 for the first and 1 for the second, so the status is what separates them: the status is
 the interface, and the wording is a message no script reads. The status is 3 and not 2 because 2
 is written above the command — `clap` for a usage error, the npm launcher for a missing platform
@@ -68,7 +68,7 @@ RUN = re.compile(r"^(\S+?)-(\d+)\s+(.*)$")
 FIELD = re.compile(r"(\w+)=([0-9.]+)")
 STAMP = re.compile(r"^(\d+\.\d+)\s+(.*)$")
 PROGRESS = re.compile(r"^dense: (\d+)/(\d+) rows")
-# The rows that run `repograph bench` — `bench-dense`, `bench-nodense` in `readers.sh`, `bench` on
+# The rows that run `zerograph bench` — `bench-dense`, `bench-nodense` in `readers.sh`, `bench` on
 # its own elsewhere. No other command can miss a floor, so no other row's `floors_missed` is
 # believed however its stderr happened to read. `measure.sh` scopes the field it writes by the same
 # expression, quoted there in these words, so the instrument and the judge name the same rows.

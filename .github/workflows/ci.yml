@@ -235,7 +235,7 @@ jobs:
           exit 0
 
       # What a user installs, on the platform they install it on: the pack script, npm's own
-      # shim, `bin/zerograph.js` resolving the per-platform package, the `files` whitelist, a
+      # shim, `bin/zerograph.js` finding this platform's binary, the `files` whitelist, a
       # Cyrillic argument through the shim, and the exit code coming back. Last in the job,
       # because packing rewrites the version in `npm/*/package.json`.
       - shell: pwsh
@@ -245,8 +245,7 @@ jobs:
           [Console]::OutputEncoding = [Text.Encoding]::UTF8
           bash scripts/npm-pack.sh 0.0.0-ci ${{ matrix.pack }}=${{ matrix.exe }}
           if ($LASTEXITCODE -ne 0) { throw "the pack script failed: $LASTEXITCODE" }
-          $platform = (Get-Item "dist/npm/devmaxxx-zerograph-${{ matrix.pack }}-0.0.0-ci.tgz").FullName
-          $launcher = (Get-Item "dist/npm/devmaxxx-zerograph-0.0.0-ci.tgz").FullName
+          $launcher = (Get-Item "dist/npm/zerograph-0.0.0-ci.tgz").FullName
           $version = (Select-String -Path Cargo.toml -Pattern '^version = "(.*)"').Matches[0].Groups[1].Value
 
           # A project directory with a space and a letter that is not ASCII, and a package.json
@@ -255,17 +254,10 @@ jobs:
           New-Item -ItemType Directory -Force -Path $proj | Out-Null
           Set-Content -Encoding utf8 (Join-Path $proj 'package.json') '{ "name": "consumer", "version": "1.0.0", "private": true }'
           Push-Location $proj
-          # `--omit=optional` keeps npm off GitHub Packages, which answers 401 to an anonymous
-          # request for the two platform packages this runner is not. The one it is comes in by
-          # name, through the same `require.resolve` walk a published install ends at.
-          npm i --omit=optional --no-audit --no-fund $platform $launcher
+          npm i --no-audit --no-fund $launcher
           if ($LASTEXITCODE -ne 0) { throw "the install failed: $LASTEXITCODE" }
           $reported = ((npx zerograph --version) | Out-String).Trim()
           if ($reported -ne "zerograph $version") { throw "the launcher ran something else: $reported" }
-          # The old name stays a bin of the same launcher, so a script written before the rename
-          # still runs.
-          $aliased = ((npx repograph --version) | Out-String).Trim()
-          if ($aliased -ne "zerograph $version") { throw "the repograph alias ran something else: $aliased" }
 
           $R = Join-Path $proj 'корпус'
           New-Item -ItemType Directory -Force -Path (Join-Path $R 'docs') | Out-Null
@@ -290,17 +282,19 @@ jobs:
           if ($LASTEXITCODE -ne 3) { throw "a verdict through the shim should exit 3, not $LASTEXITCODE" }
           Pop-Location
 
-          # And the platform package left out, which is what `--no-optional` or a lockfile from
-          # another platform gives a user: a named package and an exit code, not a stack trace.
+          # And a pack run given no binary for this platform: a named platform and an exit code, not
+          # a stack trace.
+          bash scripts/npm-pack.sh 0.0.0-ci
+          if ($LASTEXITCODE -ne 0) { throw "the pack script failed with no binary: $LASTEXITCODE" }
           $alone = Join-Path $env:RUNNER_TEMP 'launcher-alone'
           New-Item -ItemType Directory -Force -Path $alone | Out-Null
           Set-Content -Encoding utf8 (Join-Path $alone 'package.json') '{ "name": "alone", "version": "1.0.0", "private": true }'
           Push-Location $alone
-          npm i --omit=optional --no-audit --no-fund $launcher
+          npm i --no-audit --no-fund $launcher
           if ($LASTEXITCODE -ne 0) { throw "installing the launcher alone failed: $LASTEXITCODE" }
           $said = ((npx zerograph --version 2>&1) | Out-String)
           if ($LASTEXITCODE -ne 2) { throw "a launcher with no binary behind it should exit 2, not $LASTEXITCODE" }
-          if ($said -notmatch 'is not installed') { throw "and name the package that is missing: $said" }
+          if ($said -notmatch 'packed without the ${{ matrix.pack }} binary') { throw "and name the platform that is missing: $said" }
           Pop-Location
           git checkout -- npm/
 

@@ -79,7 +79,7 @@ main() {
   NODE_LINES=$(printf '%s\n' "$ROWS" | busy_rows node)
   PROJECT=$(count_rows "$PROJECT_LINES")
   NODE=$(count_rows "$NODE_LINES")
-  echo "quiet: idle=${IDLE}% load1=${LOAD1} ac=${AC} avail=${AVAIL}GB swap=${SWAP}GB busy=$((PROJECT + NODE)) (cargo/rustc/repograph: ${PROJECT}, node ≥${NODE_CPU_MIN}%: ${NODE})"
+  echo "quiet: idle=${IDLE}% load1=${LOAD1} ac=${AC} avail=${AVAIL}GB swap=${SWAP}GB busy=$((PROJECT + NODE)) (cargo/rustc/zerograph: ${PROJECT}, node ≥${NODE_CPU_MIN}%: ${NODE})"
   ok=1
   awk -v i="$IDLE" 'BEGIN{exit !(i+0 >= 85)}' || { echo "  not quiet: idle ${IDLE}% < 85%"; ok=0; }
   awk -v l="$LOAD1" 'BEGIN{exit !(l+0 < 3.0)}' || { echo "  not quiet: load1 ${LOAD1} >= 3.0"; ok=0; }
@@ -89,7 +89,7 @@ main() {
          echo "     holding it:"; ps -Ao rss,comm -r | sort -rn | awk 'NR<=4 {printf "     %6.1fGB  %s\n", $1/1048576, $2}'; ok=0; }
   awk -v w="$SWAP" -v m="$SWAP_MAX" 'BEGIN{exit !(w+0 <= m+0)}' \
     || { echo "  not quiet: ${SWAP}GB swapped out, over the ${SWAP_MAX}GB bar — a row's wall would include its page-ins"; ok=0; }
-  [ "$PROJECT" = "0" ] || { echo "  not quiet: $PROJECT cargo/rustc/repograph processes running"; printf '%s\n' "$PROJECT_LINES"; ok=0; }
+  [ "$PROJECT" = "0" ] || { echo "  not quiet: $PROJECT cargo/rustc/zerograph processes running"; printf '%s\n' "$PROJECT_LINES"; ok=0; }
   [ "$NODE" = "0" ] || { echo "  not quiet: $NODE node processes at ${NODE_CPU_MIN}% CPU or above"; printf '%s\n' "$NODE_LINES"; ok=0; }
   [ "$ok" = "1" ]
 }

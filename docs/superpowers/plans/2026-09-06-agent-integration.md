@@ -6,24 +6,24 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Make repograph a first-class tool for coding agents without moving a single measured retrieval number: a machine-readable CLI contract (`status`, `--json` on every reader), an MCP server in the binary (`repograph mcp`) exposing the five readers as five capped tools over the resident `ask::Context`, a Claude Code plugin that packages it with one skill, one setup command and one reminder hook, a Codex path through the same server — and an agent benchmark, with its rule written before its numbers, that decides which of the two surfaces is the default.
+**Goal:** Make zerograph a first-class tool for coding agents without moving a single measured retrieval number: a machine-readable CLI contract (`status`, `--json` on every reader), an MCP server in the binary (`zerograph mcp`) exposing the five readers as five capped tools over the resident `ask::Context`, a Claude Code plugin that packages it with one skill, one setup command and one reminder hook, a Codex path through the same server — and an agent benchmark, with its rule written before its numbers, that decides which of the two surfaces is the default.
 
-**Architecture:** repograph is a Rust CLI (`src/`) over a `.repograph/` store. `ask::Context` already holds everything an answer needs across requests and `serve.rs` already refreshes it per request and polls between them over a Unix socket; `mcp.rs` is the same loop with stdin/stdout JSON-RPC as the transport and the four other readers beside `ask`. Every tool answers the bytes its CLI twin prints, capped for hub symbols, notices first. The plugin under `plugin/` holds no logic. The agent bench under `bench/agent/` runs three headless-harness arms on a copy of the fixture and grades against the cases' own anchors.
+**Architecture:** zerograph is a Rust CLI (`src/`) over a `.zerograph/` store. `ask::Context` already holds everything an answer needs across requests and `serve.rs` already refreshes it per request and polls between them over a Unix socket; `mcp.rs` is the same loop with stdin/stdout JSON-RPC as the transport and the four other readers beside `ask`. Every tool answers the bytes its CLI twin prints, capped for hub symbols, notices first. The plugin under `plugin/` holds no logic. The agent bench under `bench/agent/` runs three headless-harness arms on a copy of the fixture and grades against the cases' own anchors.
 
-**Tech Stack:** Rust 2021 edition at `rust-version = "1.98"` (`cargo test --release`, `cargo clippy --release --all-targets -- -D warnings`), the existing dependency set — `serde_json` carries the protocol, no new crate; Python 3 stdlib only (`bench/agent/*.py`, `plugin/hooks/notice.py`); bash 3.2 (`plugin/bin/repograph-mcp`); `claude` 2.1.263 and `codex` 0.147.0 as the harnesses on this machine.
+**Tech Stack:** Rust 2021 edition at `rust-version = "1.98"` (`cargo test --release`, `cargo clippy --release --all-targets -- -D warnings`), the existing dependency set — `serde_json` carries the protocol, no new crate; Python 3 stdlib only (`bench/agent/*.py`, `plugin/hooks/notice.py`); bash 3.2 (`plugin/bin/zerograph-mcp`); `claude` 2.1.263 and `codex` 0.147.0 as the harnesses on this machine.
 
 **Spec:** `docs/superpowers/specs/2026-09-06-agent-integration-design.md` — the decision, the seven questions, the five rules. The spec outranks this plan where they disagree.
 
 ## Global Constraints
 
-- Work in a worktree of `devmaxxx/repograph` branched from `origin/main` at `32577e2` (0.5.0); name it `feat/agent-surface`. Never `cd` to `/Users/max/Documents/projects/repograph` (a dirty checkout of the same repository): use `git -C "$W"`, `cargo … --manifest-path "$W/Cargo.toml"`, absolute paths. `W` is the worktree path, `B="$W/target/release/repograph"`, rebuilt with `cargo build --release --manifest-path "$W/Cargo.toml"` after every code change and before any measurement.
+- Work in a worktree of `devmaxxx/zerograph` branched from `origin/main` at `32577e2` (0.5.0); name it `feat/agent-surface`. Never `cd` to `/Users/max/Documents/projects/zerograph` (a dirty checkout of the same repository): use `git -C "$W"`, `cargo … --manifest-path "$W/Cargo.toml"`, absolute paths. `W` is the worktree path, `B="$W/target/release/zerograph"`, rebuilt with `cargo build --release --manifest-path "$W/Cargo.toml"` after every code change and before any measurement.
 - Scratch is `A=/Users/max/bench/agent-2026-09-06` (created in Task 0). Every number written into a doc, a commit, a test comment or the README comes from a named file under `$A` or from a test run. A token cost is the one estimate allowed and says it is one.
 - The fixture `F=/Users/max/bench/beauty-crm-502e8a6d` is **read-only**: only `bench`, `dump`, `ask --stale`, `impact --stale`, `explain`, `trace --stale`. Never `build`, `update`, `enrich`, `embed`, `serve`, `watch`, `mcp` or a bare `ask` on it, never edit its files. The copy every writer, every `serve` and every agent arm runs on is `C=$A/bc`, made in Task 0 from `S=/Users/max/bench/perf-2026-09-06/bc-perf` (the corpus at `502e8a6d` with a small-model store beside it — a store with no tree beside it empties itself on the first refresh, runbook trap 7).
 - **Rules are written before numbers and never re-read to fit them.** They are the spec's "The rules, in one place" and are repeated in the task that applies each. A rule that fails is recorded with its numbers; no cap, ceiling or threshold is tuned after a suite has been read.
 - **Rule 1 after every code task:** `dump` of `bench/cases.jsonl` and `bench/dev-cases.jsonl` on the fixture in both arms, and `bench` in both arms, byte-identical to Task 0's baselines. This plan adds readers and caps; it changes no answer.
 - Model tokens are spent only in Task 7, only through the machine's configured harness, only on `$C`. Nothing in the tool surface names a model vendor: the plugin's command runs the binary, the bench runs whatever `--agent-command` names.
 - Commit hygiene: Conventional Commits (`feat(mcp): …`, `feat(cli): …`, `docs(agents): …`, `chore(bench): …`); prose bodies with the measured numbers and the files they came from. The hook rejects `Co-Authored-By`, `Claude-Session` and any `claude.ai` link — none in a commit or the PR body. It also rejects one shell command holding both a heredoc and a literal `git commit` unless the heredoc's first line is a Conventional subject: `git commit -F - <<'MSG'` with the subject first works; a `python3 - <<'PY'` edit and a `git commit` go in two commands. In zsh, quote `===` in `echo`.
-- Any `gh` call: `gh auth switch --user devmaxxx && gh …` in one command. The PR goes to `devmaxxx/repograph`, base `main`; the executor does not merge.
+- Any `gh` call: `gh auth switch --user devmaxxx && gh …` in one command. The PR goes to `devmaxxx/zerograph`, base `main`; the executor does not merge.
 - Comments say why, never what; no ticket ids in code comments; tool directives stay. Test names are `snake_case` sentences in the style of their neighbours. Python is stdlib only, run as `python3 …`; bash is 3.2 (no associative arrays, `${arr[@]+"${arr[@]}"}` for empty arrays under `set -u`).
 - Implementers never dispatch subagents.
 
@@ -43,7 +43,7 @@
 | `src/ask.rs` | `Context::graph`, `model_open`, `release_model`; later `inline_rows`, `embed_pending` | 2, 4 |
 | `src/mcp.rs` (new) | the protocol loop, `find_root`, the five tools, the ceilings | 3 |
 | `tests/mcp.rs` (new) | the server driven over stdio the way a harness drives it | 3 |
-| `plugin/` (new) | `.claude-plugin/plugin.json`, `.mcp.json`, `bin/repograph-mcp`, `skills/repograph/SKILL.md`, `commands/setup.md`, `hooks/hooks.json`, `hooks/notice.py`, `hooks/test_notice.py` | 5 |
+| `plugin/` (new) | `.claude-plugin/plugin.json`, `.mcp.json`, `bin/repograph-mcp`, `skills/zerograph/SKILL.md`, `commands/setup.md`, `hooks/hooks.json`, `hooks/notice.py`, `hooks/test_notice.py` | 5 |
 | `.claude-plugin/marketplace.json` (new, repository root) | the one-entry marketplace pointing at `./plugin` | 5 |
 | `README.md` | Status rows for `mcp` and `status`; a "For agents" section | 5, 7 |
 | `bench/agent/` (new) | `mcp_client.py`, `tasks.py`, `run.py`, `test_agent.py`, `tasks.jsonl`, `runs.jsonl` | 3, 6, 7 |
@@ -65,9 +65,9 @@ Task order: 0 → 1 → 2 → 3 → 4 → 5 → 6 → 7. After Task 3 an agent h
 - [ ] **Step 1: Worktree and scratch**
 
 ```bash
-cd /Users/max/Documents/projects/repograph/.worktrees/coverage && git fetch origin
-git -C /Users/max/Documents/projects/repograph/.worktrees/coverage worktree add -b feat/agent-surface /Users/max/Documents/projects/repograph/.worktrees/agent origin/main
-W=/Users/max/Documents/projects/repograph/.worktrees/agent; A=/Users/max/bench/agent-2026-09-06; mkdir -p "$A"
+cd /Users/max/Documents/projects/zerograph/.worktrees/coverage && git fetch origin
+git -C /Users/max/Documents/projects/zerograph/.worktrees/coverage worktree add -b feat/agent-surface /Users/max/Documents/projects/zerograph/.worktrees/agent origin/main
+W=/Users/max/Documents/projects/zerograph/.worktrees/agent; A=/Users/max/bench/agent-2026-09-06; mkdir -p "$A"
 git -C "$W" rev-parse --short HEAD | tee "$A/task0-head.txt"
 ```
 
@@ -77,10 +77,10 @@ Expected: `32577e2`. A different head means `main` moved; record it and continue
 
 ```bash
 S=/Users/max/bench/perf-2026-09-06/bc-perf; C=/Users/max/bench/agent-2026-09-06/bc
-[ -d "$S/.repograph" ] && git -C "$S" rev-parse --short HEAD
+[ -d "$S/.zerograph" ] && git -C "$S" rev-parse --short HEAD
 cp -R "$S" "$C"
-rm -f "$C/.repograph/serve.sock"
-ls -la "$C/.repograph" | tee "$A/task0-copy.txt"; git -C "$C" status --porcelain -- ':(exclude)graphify-out' | head
+rm -f "$C/.zerograph/serve.sock"
+ls -la "$C/.zerograph" | tee "$A/task0-copy.txt"; git -C "$C" status --porcelain -- ':(exclude)graphify-out' | head
 ```
 
 Expected: `502e8a6d`; seven store files (`graph.json`, `graph.bin`, `manifest.json`, `questions.json`, `questions.bin`, `vectors.f32`, `vectors.json`) and no socket; a clean status. If `$S` is gone, make the copy from the fixture instead — `cp -R "$F" "$C"` — and say so in `$A/task0.txt`; it is the same corpus and the same store.
@@ -88,7 +88,7 @@ Expected: `502e8a6d`; seven store files (`graph.json`, `graph.bin`, `manifest.js
 - [ ] **Step 3: Rule 1 baselines on the branch-point binary**
 
 ```bash
-F=/Users/max/bench/beauty-crm-502e8a6d; B="$W/target/release/repograph"
+F=/Users/max/bench/beauty-crm-502e8a6d; B="$W/target/release/zerograph"
 cargo build --release --manifest-path "$W/Cargo.toml" 2>&1 | tail -1; shasum "$B" | tee "$A/base-binary.txt"
 for arm in dense lexical; do
   nd=""; [ $arm = lexical ] && nd="--no-dense"
@@ -119,7 +119,7 @@ The caps in Task 1 rest on these; they were read once while this plan was writte
   out=$("$B" --repo "$F" changes --stale --base 'HEAD~30' 2>/dev/null)
   printf 'changes --base HEAD~30 lines=%d bytes=%d tok=%d  %s\n' "$(printf '%s\n' "$out" | wc -l)" "${#out}" "$(( ${#out} / 4 ))" "$(printf '%s\n' "$out" | tail -1)"
 } | tee "$A/yardstick.txt"
-ls -la --time-style=full-iso "$F/.repograph" 2>/dev/null || ls -la "$F/.repograph"
+ls -la --time-style=full-iso "$F/.zerograph" 2>/dev/null || ls -la "$F/.zerograph"
 ```
 
 Expected, as read on 2026-09-06 on the 0.5.0 binary: `impact DatabaseService lines= 156 bytes= 35443 tok= 8860 … risk: CRITICAL — 61 direct, 150 total, 69 files`, `ProblemException … tok= 4097`, `StaffService … tok= 225`, `TenantContextInterceptor … tok= 188`; `explain DatabaseService … tok= 251`, `FR-PAY-22 … tok= 194`, the file node `tok= 219`; `changes --base HEAD~30 lines=3190 bytes=379297 tok=94824 … risk: CRITICAL — 175 direct, 189 total, 103 files`. The store's file times must be unchanged by all of this — every command above is a read.
@@ -388,8 +388,8 @@ mod tests {
         assert_eq!((s.nodes, s.edges, s.changed), (0, 0, 0));
         let line = render(&s);
         assert!(line.starts_with("no store at "), "{line}");
-        assert!(line.contains("repograph build"), "{line}");
-        assert!(!dir.path().join(".repograph").exists(), "reading the status must not create the store directory");
+        assert!(line.contains("zerograph build"), "{line}");
+        assert!(!dir.path().join(".zerograph").exists(), "reading the status must not create the store directory");
     }
 
     #[test]
@@ -418,8 +418,8 @@ mod tests {
     fn the_json_carries_every_field_the_line_prints_and_names_the_model_when_rows_exist() {
         let dir = built_repo();
         let model = crate::index::embed::DEFAULT_MODEL;
-        std::fs::write(dir.path().join(".repograph/vectors.json"), format!(r#"{{"ids":["FR-PAY-22","x"],"hashes":["h","h"],"kinds":[false,true],"dim":4,"model":"{model}"}}"#)).unwrap();
-        std::fs::write(dir.path().join(".repograph/vectors.f32"), [0u8; 32]).unwrap();
+        std::fs::write(dir.path().join(".zerograph/vectors.json"), format!(r#"{{"ids":["FR-PAY-22","x"],"hashes":["h","h"],"kinds":[false,true],"dim":4,"model":"{model}"}}"#)).unwrap();
+        std::fs::write(dir.path().join(".zerograph/vectors.f32"), [0u8; 32]).unwrap();
         let s = read(dir.path(), &crate::config::Config::default()).unwrap();
         assert_eq!(s.model.as_deref(), Some(model));
         assert_eq!(s.rows, 2);
@@ -441,7 +441,7 @@ Add `mod status;` to `src/main.rs`. Run: `cargo test --release --manifest-path "
 Above the tests in `src/status.rs`:
 
 ```rust
-//! `repograph status`: what a store is, in one line, without opening a model. It is the line
+//! `zerograph status`: what a store is, in one line, without opening a model. It is the line
 //! the MCP server hands a harness at start and the first result of a session carries, so a
 //! reader that never sees stderr still knows whether the answers it gets are fused or lexical,
 //! whether `enrich` ever ran, and whether the store is behind the tree.
@@ -492,7 +492,7 @@ pub fn read(repo: &Path, cfg: &config::Config) -> Result<Status> {
 
 pub fn render(s: &Status) -> String {
     if !s.store {
-        return format!("no store at {}/.repograph — run `repograph build` (about 1 s per 800 files with --no-dense; the vectors take minutes on the small model and longer on the default)\n", s.root);
+        return format!("no store at {}/.zerograph — run `zerograph build` (about 1 s per 800 files with --no-dense; the vectors take minutes on the small model and longer on the default)\n", s.root);
     }
     let fresh = if s.changed + s.removed == 0 { "fresh".to_string() } else { format!("behind: {} changed, {} removed", s.changed, s.removed) };
     let vectors = match &s.model { Some(m) => format!("vectors {m} ({} rows)", s.rows), None => "no vectors".to_string() };
@@ -719,10 +719,10 @@ n=0; same=0; while IFS= read -r q; do
   a=$("$B" --repo "$C" --no-dense ask --stale $q 2>/dev/null); b=$("$B" --repo "$C" --no-dense ask --stale --no-serve $q 2>/dev/null)
   n=$((n+1)); [ "$a" = "$b" ] && same=$((same+1))
 done < "$A/questions.txt"; echo "socket == in-process on $same/$n" | tee "$A/t2-rule2-serve.txt"
-pkill -f "$C --no-dense serve" ; sleep 1; ls "$C/.repograph/serve.sock" 2>/dev/null || echo "socket removed"
+pkill -f "$C --no-dense serve" ; sleep 1; ls "$C/.zerograph/serve.sock" 2>/dev/null || echo "socket removed"
 ```
 
-Expected: `142` questions, `socket == in-process on 142/142`, the socket removed. (`pkill -f 'repograph serve'` matches nothing — the command line reads `repograph --repo <path> --no-dense serve`, runbook.)
+Expected: `142` questions, `socket == in-process on 142/142`, the socket removed. (`pkill -f 'zerograph serve'` matches nothing — the command line reads `zerograph --repo <path> --no-dense serve`, runbook.)
 
 - [ ] **Step 4: Commit**
 
@@ -730,7 +730,7 @@ Expected: `142` questions, `socket == in-process on 142/142`, the socket removed
 
 ---
 
-### Task 3: `repograph mcp` — the five tools over stdio
+### Task 3: `zerograph mcp` — the five tools over stdio
 
 **Files:**
 - Create: `src/mcp.rs`, `tests/mcp.rs`, `bench/agent/mcp_client.py`
@@ -742,7 +742,7 @@ Expected: `142` questions, `socket == in-process on 142/142`, the socket removed
 - Produces:
   - `mcp::run(repo: &Path, cfg: &Config, every: u64, idle_model: u64, no_dense: bool) -> Result<()>` — reads newline-delimited JSON-RPC 2.0 on stdin, writes replies on stdout, logs on stderr, returns when stdin closes.
   - `mcp::find_root(start: &Path) -> PathBuf`; `mcp::tools() -> Vec<serde_json::Value>`; `mcp::instructions(status_line: &str) -> String`; the constants `PROTOCOL`, `TOOLS_BYTES = 3_200`, `INSTRUCTIONS_BYTES = 800`, `LINES = 25`.
-  - The wire: `initialize` → `{protocolVersion, capabilities: {tools: {}}, serverInfo: {name: "repograph", version}, instructions}`; `notifications/initialized` → nothing; `ping` → `{}`; `tools/list` → `{tools: [...]}`; `tools/call {name, arguments}` → `{content: [{type: "text", text}], isError}`; anything else → `{error: {code: -32601}}`; a line that is not JSON → `{error: {code: -32700}}` with `id: null`; a message without an `id` is a notification and gets no reply.
+  - The wire: `initialize` → `{protocolVersion, capabilities: {tools: {}}, serverInfo: {name: "zerograph", version}, instructions}`; `notifications/initialized` → nothing; `ping` → `{}`; `tools/list` → `{tools: [...]}`; `tools/call {name, arguments}` → `{content: [{type: "text", text}], isError}`; anything else → `{error: {code: -32601}}`; a line that is not JSON → `{error: {code: -32700}}` with `id: null`; a message without an `id` is a notification and gets no reply.
   - Tool result text = the notices `ask` would print on stderr, one per line, then the CLI twin's bytes (capped where `limit` applies); the first result of a session is prefixed by the `status` line; `no match …` when `ask` prints nothing.
 - `tests/serve.rs` stays green untouched.
 
@@ -751,7 +751,7 @@ Expected: `142` questions, `socket == in-process on 142/142`, the socket removed
 Create `src/mcp.rs` with the module doc and the tests only:
 
 ```rust
-//! `repograph mcp`: the store answered over the Model Context Protocol on stdin and stdout, for
+//! `zerograph mcp`: the store answered over the Model Context Protocol on stdin and stdout, for
 //! a coding agent's harness. The five tools are the five readers — `ask`, `explain`, `impact`,
 //! `trace`, `changes` — and each answers the bytes its CLI twin prints, capped where a hub
 //! symbol would otherwise cost an agent thousands of tokens, the notices `ask` prints on stderr
@@ -790,7 +790,7 @@ mod tests {
         // A linked worktree's `.git` is a file; the walk must not ask for a directory.
         std::fs::write(repo.join(".git"), "gitdir: /elsewhere\n").unwrap();
         assert_eq!(find_root(&repo.join("apps/api/src")), repo);
-        std::fs::create_dir_all(repo.join("apps/api/.repograph")).unwrap();
+        std::fs::create_dir_all(repo.join("apps/api/.zerograph")).unwrap();
         assert_eq!(find_root(&repo.join("apps/api/src")), repo.join("apps/api"), "a store below the git root is the nearer answer");
     }
 
@@ -872,7 +872,7 @@ fn negotiate(asked: Option<&str>) -> &'static str {
 /// repository's store, and two worktrees of one repository each get their own.
 pub fn find_root(start: &Path) -> PathBuf {
     let ancestors: Vec<&Path> = start.ancestors().collect();
-    if let Some(p) = ancestors.iter().find(|p| p.join(".repograph").is_dir()) { return p.to_path_buf(); }
+    if let Some(p) = ancestors.iter().find(|p| p.join(".zerograph").is_dir()) { return p.to_path_buf(); }
     if let Some(p) = ancestors.iter().find(|p| p.join(".git").exists()) { return p.to_path_buf(); }
     start.to_path_buf()
 }
@@ -918,7 +918,7 @@ pub fn tools() -> Vec<Value> {
 /// lexical and whether `enrich` ever ran.
 pub fn instructions(status_line: &str) -> String {
     format!(concat!(
-        "repograph: a graph of this repository's requirement documents and TypeScript, built and refreshed at zero model tokens. ",
+        "zerograph: a graph of this repository's requirement documents and TypeScript, built and refreshed at zero model tokens. ",
         "Ask it before reading files. ask: a concept, an id or a symbol name — five `ID  path:line  headline` lines, ~200 tokens. ",
         "explain: one node and its edges. impact: before editing a symbol — callers by depth and a risk line. ",
         "trace: how A reaches B. changes: before committing. Every call refreshes the graph from the tree first. ",
@@ -991,7 +991,7 @@ impl<'a> Server<'a> {
         json!({
             "protocolVersion": negotiate(params.get("protocolVersion").and_then(Value::as_str)),
             "capabilities": { "tools": {} },
-            "serverInfo": { "name": "repograph", "version": serve::VERSION },
+            "serverInfo": { "name": "zerograph", "version": serve::VERSION },
             "instructions": instructions(&self.status_line()),
         })
     }
@@ -1213,13 +1213,13 @@ and the arm, beside `Serve`:
 Create `tests/mcp.rs`:
 
 ```rust
-//! `repograph mcp` driven over stdin and stdout the way a harness drives it: one JSON-RPC line
+//! `zerograph mcp` driven over stdin and stdout the way a harness drives it: one JSON-RPC line
 //! in, one line out. The repository these tests build has no vectors, so nothing here opens
 //! the 448 MB model; the fused arm is exercised for its handshake and its notices.
 use std::io::{BufRead, BufReader, Write};
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
 
-fn repograph() -> Command { Command::new(env!("CARGO_BIN_EXE_repograph")) }
+fn zerograph() -> Command { Command::new(env!("CARGO_BIN_EXE_zerograph")) }
 
 fn repo_with_docs_and_code() -> tempfile::TempDir {
     let dir = tempfile::tempdir().unwrap();
@@ -1229,8 +1229,8 @@ fn repo_with_docs_and_code() -> tempfile::TempDir {
     std::fs::write(dir.path().join("s.ts"), "export class S {\n  create() { return 1; }\n}\n").unwrap();
     // Three files that `new` the class: three callers at d=1, so a limit of one leaves two.
     for i in 0..3 { std::fs::write(dir.path().join(format!("c{i}.ts")), "import { S } from './s';\nexport const made = new S();\n").unwrap(); }
-    std::fs::write(dir.path().join("repograph.toml"), "id_families = [\"FR-PAY\", \"FR-CAL\", \"INV\"]\n").unwrap();
-    let out = repograph().args(["--no-dense", "--repo"]).arg(dir.path()).arg("build").output().unwrap();
+    std::fs::write(dir.path().join("zerograph.toml"), "id_families = [\"FR-PAY\", \"FR-CAL\", \"INV\"]\n").unwrap();
+    let out = zerograph().args(["--no-dense", "--repo"]).arg(dir.path()).arg("build").output().unwrap();
     assert!(out.status.success(), "{}", String::from_utf8_lossy(out.stderr.as_slice()));
     dir
 }
@@ -1239,7 +1239,7 @@ struct Mcp { child: Child, stdin: ChildStdin, stdout: BufReader<ChildStdout>, ne
 
 impl Mcp {
     fn start(dir: &std::path::Path, extra: &[&str]) -> Mcp {
-        let mut child = repograph().args(["--no-dense", "--repo"]).arg(dir).arg("mcp").args(extra)
+        let mut child = zerograph().args(["--no-dense", "--repo"]).arg(dir).arg("mcp").args(extra)
             .stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().unwrap();
         let stdin = child.stdin.take().unwrap();
         let stdout = BufReader::new(child.stdout.take().unwrap());
@@ -1280,7 +1280,7 @@ impl Mcp {
 }
 
 fn cli(dir: &std::path::Path, args: &[&str]) -> String {
-    let out = repograph().args(["--no-dense", "--repo"]).arg(dir).args(args).output().unwrap();
+    let out = zerograph().args(["--no-dense", "--repo"]).arg(dir).args(args).output().unwrap();
     assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
     String::from_utf8(out.stdout).unwrap()
 }
@@ -1291,7 +1291,7 @@ fn initialize_lists_five_tools_under_the_ceiling_and_the_first_answer_carries_th
     let mut m = Mcp::start(dir.path(), &[]);
     let init = m.request("initialize", serde_json::json!({ "protocolVersion": "2024-11-05", "capabilities": {}, "clientInfo": { "name": "test", "version": "0" } }));
     assert_eq!(init["result"]["protocolVersion"], "2024-11-05");
-    assert_eq!(init["result"]["serverInfo"]["name"], "repograph");
+    assert_eq!(init["result"]["serverInfo"]["name"], "zerograph");
     let instructions = init["result"]["instructions"].as_str().unwrap();
     assert!(instructions.contains("store: ") && instructions.contains("no vectors"), "{instructions}");
     m.notify("notifications/initialized");
@@ -1361,10 +1361,10 @@ fn a_repository_without_a_store_is_refused_by_every_tool_and_nothing_is_written(
     for (tool, args) in [("ask", serde_json::json!({ "query": "x" })), ("impact", serde_json::json!({ "symbol": "x" })), ("changes", serde_json::json!({}))] {
         let (text, err) = m.call(tool, args);
         assert!(err, "{tool} must refuse: {text}");
-        assert!(text.contains("repograph build") && text.contains("Nothing here builds it"), "{text}");
+        assert!(text.contains("zerograph build") && text.contains("Nothing here builds it"), "{text}");
     }
     m.close();
-    assert!(!dir.path().join(".repograph").exists(), "a refusal writes nothing");
+    assert!(!dir.path().join(".zerograph").exists(), "a refusal writes nothing");
 }
 
 #[test]
@@ -1372,7 +1372,7 @@ fn a_store_built_after_the_server_started_is_answered_without_a_restart() {
     let dir = tempfile::tempdir().unwrap();
     std::fs::create_dir_all(dir.path().join("docs")).unwrap();
     std::fs::write(dir.path().join("docs/a.md"), "**FR-PAY-1 · MUST · штраф**\n\nbody\n").unwrap();
-    std::fs::write(dir.path().join("repograph.toml"), "id_families = [\"FR-PAY\"]\n").unwrap();
+    std::fs::write(dir.path().join("zerograph.toml"), "id_families = [\"FR-PAY\"]\n").unwrap();
     let mut m = Mcp::start(dir.path(), &[]);
     assert!(m.call("ask", serde_json::json!({ "query": "штраф" })).1, "refused before the build");
     cli(dir.path(), &["build"]);
@@ -1401,9 +1401,9 @@ fn two_servers_on_one_store_both_see_an_edit_and_the_store_still_loads() {
 #[test]
 fn a_resident_serve_answers_the_ask_tool_with_the_same_bytes() {
     let dir = repo_with_docs_and_code();
-    let mut serve = repograph().args(["--no-dense", "--repo"]).arg(dir.path()).args(["serve", "--every", "3600", "--idle", "60"])
+    let mut serve = zerograph().args(["--no-dense", "--repo"]).arg(dir.path()).args(["serve", "--every", "3600", "--idle", "60"])
         .stdout(Stdio::null()).stderr(Stdio::piped()).spawn().unwrap();
-    let sock = dir.path().join(".repograph/serve.sock");
+    let sock = dir.path().join(".zerograph/serve.sock");
     let start = std::time::Instant::now();
     while !sock.exists() { assert!(start.elapsed().as_secs() < 20, "serve never bound"); std::thread::sleep(std::time::Duration::from_millis(50)); }
     let mut m = Mcp::start(dir.path(), &[]);
@@ -1442,11 +1442,11 @@ Create `bench/agent/mcp_client.py`:
 
 ```python
 #!/usr/bin/env python3
-"""A harness in fifty lines: starts `repograph mcp`, speaks JSON-RPC over its stdio, and
+"""A harness in fifty lines: starts `zerograph mcp`, speaks JSON-RPC over its stdio, and
 returns tool results as text. Used by the Rule 2 check (every recorded question answers the
 CLI's bytes through the server) and by anyone who wants to see what a harness sees.
 
-    python3 bench/agent/mcp_client.py --bin <repograph> --repo <dir> [--no-dense] ask "штраф за отмену"
+    python3 bench/agent/mcp_client.py --bin <zerograph> --repo <dir> [--no-dense] ask "штраф за отмену"
 """
 import argparse
 import json
@@ -1548,16 +1548,16 @@ Rule 1 as in Task 1 Step 6 with the `t3-` prefix; eight `identical` expected. Th
 
 ```bash
 cat > "$A/mcp.json" <<JSON
-{ "mcpServers": { "repograph": { "command": "$B", "args": ["mcp"] } } }
+{ "mcpServers": { "zerograph": { "command": "$B", "args": ["mcp"] } } }
 JSON
-cd "$C" && claude -p --output-format json --setting-sources "" --strict-mcp-config --mcp-config "$A/mcp.json" --allowedTools "mcp__repograph" --max-turns 6 \
-  "Use the repograph ask tool to find which requirement id covers cancellation fees (штраф за отмену). Reply with the id only." | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d["result"]); print("turns", d["num_turns"], "usage", d["usage"])' | tee "$A/t3-claude.txt"
-codex mcp add repograph -- "$B" mcp && codex mcp list | tee "$A/t3-codex-list.txt"
-cd "$C" && codex exec --skip-git-repo-check "Use the repograph MCP tool 'ask' with query 'штраф за отмену' and reply with the first id it returned." 2>&1 | tail -5 | tee "$A/t3-codex.txt"
-codex mcp remove repograph
+cd "$C" && claude -p --output-format json --setting-sources "" --strict-mcp-config --mcp-config "$A/mcp.json" --allowedTools "mcp__zerograph" --max-turns 6 \
+  "Use the zerograph ask tool to find which requirement id covers cancellation fees (штраф за отмену). Reply with the id only." | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d["result"]); print("turns", d["num_turns"], "usage", d["usage"])' | tee "$A/t3-claude.txt"
+codex mcp add zerograph -- "$B" mcp && codex mcp list | tee "$A/t3-codex-list.txt"
+cd "$C" && codex exec --skip-git-repo-check "Use the zerograph MCP tool 'ask' with query 'штраф за отмену' and reply with the first id it returned." 2>&1 | tail -5 | tee "$A/t3-codex.txt"
+codex mcp remove zerograph
 ```
 
-Expected: the Claude answer names `FR-PAY-22` or another `FR-PAY-*` id, with a `usage` object; `codex mcp list` shows `repograph`; the Codex tail carries an id. Either harness failing to connect is recorded with its message and is not a blocker for the Rust work — it is what Task 5's shim and README section then have to answer.
+Expected: the Claude answer names `FR-PAY-22` or another `FR-PAY-*` id, with a `usage` object; `codex mcp list` shows `zerograph`; the Codex tail carries an id. Either harness failing to connect is recorded with its message and is not a blocker for the Rust work — it is what Task 5's shim and README section then have to answer.
 
 - [ ] **Step 7: Commit**
 
@@ -1811,13 +1811,13 @@ Then Rule 1 with the `t4-` prefix, eight `identical` expected (`dump` and `bench
 ### Task 5: The plugin, the Codex path, and the README's "For agents"
 
 **Files:**
-- Create: `plugin/.claude-plugin/plugin.json`, `plugin/.mcp.json`, `plugin/bin/repograph-mcp`, `plugin/skills/repograph/SKILL.md`, `plugin/commands/setup.md`, `plugin/hooks/hooks.json`, `plugin/hooks/notice.py`, `plugin/hooks/test_notice.py`, `.claude-plugin/marketplace.json` (repository root), `plugin/README.md`
+- Create: `plugin/.claude-plugin/plugin.json`, `plugin/.mcp.json`, `plugin/bin/zerograph-mcp`, `plugin/skills/zerograph/SKILL.md`, `plugin/commands/setup.md`, `plugin/hooks/hooks.json`, `plugin/hooks/notice.py`, `plugin/hooks/test_notice.py`, `.claude-plugin/marketplace.json` (repository root), `plugin/README.md`
 - Modify: `README.md` (Status table: `mcp`, `status` rows; the new section "For agents"), `.gitignore` (nothing new unless `plugin/` needs an ignore, which it does not)
 - Create (scratch): `$A/t5-*.txt`
 
 **Interfaces:**
-- Consumes: `repograph mcp`, `repograph status --json`, the CLI.
-- Produces: a plugin installable with `claude plugin marketplace add devmaxxx/repograph` then `claude plugin install repograph@repograph`, or loaded for one session with `claude --plugin-dir <repo>/plugin`; a Codex configuration block; a hook that prints ≤ 400 bytes once per session and ≤ 120 bytes every fortieth `Read|Grep|Glob`.
+- Consumes: `zerograph mcp`, `zerograph status --json`, the CLI.
+- Produces: a plugin installable with `claude plugin marketplace add devmaxxx/zerograph` then `claude plugin install zerograph@zerograph`, or loaded for one session with `claude --plugin-dir <repo>/plugin`; a Codex configuration block; a hook that prints ≤ 400 bytes once per session and ≤ 120 bytes every fortieth `Read|Grep|Glob`.
 - The plugin holds no logic: every decision an agent could take is in the binary's answers.
 
 - [ ] **Step 1: The manifest, the marketplace, the MCP declaration, the shim**
@@ -1826,12 +1826,12 @@ Then Rule 1 with the `t4-` prefix, eight `identical` expected (`dump` and `bench
 
 ```json
 {
-  "name": "repograph",
+  "name": "zerograph",
   "version": "0.5.0",
   "description": "Ask a repository's requirement docs and TypeScript as a graph, at zero model tokens: an MCP server with ask, explain, impact, trace and changes; a routing skill; a setup command; a one-line reminder hook",
   "author": { "name": "Max Synenko" },
-  "homepage": "https://github.com/devmaxxx/repograph",
-  "repository": "https://github.com/devmaxxx/repograph",
+  "homepage": "https://github.com/devmaxxx/zerograph",
+  "repository": "https://github.com/devmaxxx/zerograph",
   "license": "MIT",
   "keywords": ["knowledge-graph", "requirements", "typescript", "mcp", "blast-radius"]
 }
@@ -1843,10 +1843,10 @@ The version tracks `Cargo.toml`; a release bump PR moves both, as PR #7 moved th
 
 ```json
 {
-  "name": "repograph",
+  "name": "zerograph",
   "owner": { "name": "Max Synenko" },
   "plugins": [
-    { "name": "repograph", "source": "./plugin", "description": "repograph's MCP server, skill, setup command and reminder hook", "version": "0.5.0" }
+    { "name": "zerograph", "source": "./plugin", "description": "zerograph's MCP server, skill, setup command and reminder hook", "version": "0.5.0" }
   ]
 }
 ```
@@ -1856,33 +1856,33 @@ The version tracks `Cargo.toml`; a release bump PR moves both, as PR #7 moved th
 ```json
 {
   "mcpServers": {
-    "repograph": { "command": "${CLAUDE_PLUGIN_ROOT}/bin/repograph-mcp", "args": [] }
+    "zerograph": { "command": "${CLAUDE_PLUGIN_ROOT}/bin/repograph-mcp", "args": [] }
   }
 }
 ```
 
-`plugin/bin/repograph-mcp`, `chmod +x`:
+`plugin/bin/zerograph-mcp`, `chmod +x`:
 
 ```bash
 #!/bin/bash
-# Finds the repograph binary for the harness that starts this MCP server: REPOGRAPH_BIN, then
-# PATH, then the project's own node_modules — what `pnpm exec repograph` would find — so a
+# Finds the zerograph binary for the harness that starts this MCP server: ZEROGRAPH_BIN, then
+# PATH, then the project's own node_modules — what `pnpm exec zerograph` would find — so a
 # repository that took the npm package needs nothing on PATH. `exec`, not a child: the harness
 # owns this process and must see the server exit when it closes stdin. bash 3.2, which is
 # what macOS ships.
 set -u
-if [ -n "${REPOGRAPH_BIN:-}" ] && [ -x "$REPOGRAPH_BIN" ]; then exec "$REPOGRAPH_BIN" mcp "$@"; fi
-if command -v repograph >/dev/null 2>&1; then exec repograph mcp "$@"; fi
+if [ -n "${ZEROGRAPH_BIN:-}" ] && [ -x "$ZEROGRAPH_BIN" ]; then exec "$ZEROGRAPH_BIN" mcp "$@"; fi
+if command -v zerograph >/dev/null 2>&1; then exec zerograph mcp "$@"; fi
 dir=$PWD
 while [ "$dir" != "/" ] && [ -n "$dir" ]; do
-  if [ -x "$dir/node_modules/.bin/repograph" ]; then exec "$dir/node_modules/.bin/repograph" mcp "$@"; fi
+  if [ -x "$dir/node_modules/.bin/zerograph" ]; then exec "$dir/node_modules/.bin/zerograph" mcp "$@"; fi
   dir=$(dirname "$dir")
 done
-echo "repograph-mcp: no repograph binary — set REPOGRAPH_BIN, put repograph on PATH (cargo install --path . / npm i -g @devmaxxx/repograph), or add @devmaxxx/repograph to this project" >&2
+echo "zerograph-mcp: no zerograph binary — set ZEROGRAPH_BIN, put zerograph on PATH (cargo install --path . / npm i -g @devmaxxx/zerograph), or add @devmaxxx/zerograph to this project" >&2
 exit 127
 ```
 
-Check: `REPOGRAPH_BIN="$B" "$W/plugin/bin/repograph-mcp" < /dev/null; echo "exit $?"` from inside `$C` — expected the `mcp: … exits when stdin closes` line on stderr and `exit 0`; `PATH=/usr/bin:/bin "$W/plugin/bin/repograph-mcp" < /dev/null; echo "exit $?"` from `/tmp` — expected the one-line message and `exit 127`.
+Check: `ZEROGRAPH_BIN="$B" "$W/plugin/bin/zerograph-mcp" < /dev/null; echo "exit $?"` from inside `$C` — expected the `mcp: … exits when stdin closes` line on stderr and `exit 0`; `PATH=/usr/bin:/bin "$W/plugin/bin/zerograph-mcp" < /dev/null; echo "exit $?"` from `/tmp` — expected the one-line message and `exit 127`.
 
 - [ ] **Step 2: The hook and its tests**
 
@@ -1921,7 +1921,7 @@ class Notice(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.repo = os.path.join(self.tmp.name, "repo")
-        os.makedirs(os.path.join(self.repo, ".repograph"))
+        os.makedirs(os.path.join(self.repo, ".zerograph"))
         os.makedirs(os.path.join(self.repo, "apps", "api"))
         self.state = os.path.join(self.tmp.name, "state")
         os.makedirs(self.state)
@@ -1935,7 +1935,7 @@ class Notice(unittest.TestCase):
 
     def test_the_first_matching_call_of_a_session_gets_the_full_notice_and_the_next_thirty_nine_nothing(self):
         out = notice.respond(self.payload(), self.state)
-        self.assertIn("repograph", out["hookSpecificOutput"]["additionalContext"])
+        self.assertIn("zerograph", out["hookSpecificOutput"]["additionalContext"])
         self.assertLessEqual(len(out["hookSpecificOutput"]["additionalContext"].encode()), 400)
         for _ in range(38):
             self.assertIsNone(notice.respond(self.payload(), self.state))
@@ -1945,7 +1945,7 @@ class Notice(unittest.TestCase):
         self.assertLessEqual(len(reminder["hookSpecificOutput"]["additionalContext"].encode()), 120)
 
     def test_a_read_of_the_store_itself_or_of_a_file_the_graph_does_not_index_is_ignored(self):
-        self.assertIsNone(notice.respond(self.payload(path=os.path.join(self.repo, ".repograph/graph.json")), self.state))
+        self.assertIsNone(notice.respond(self.payload(path=os.path.join(self.repo, ".zerograph/graph.json")), self.state))
         self.assertIsNone(notice.respond(self.payload(path=os.path.join(self.repo, "logo.png")), self.state))
         self.assertIsNotNone(notice.respond(self.payload(path=os.path.join(self.repo, "docs/a.md")), self.state))
 
@@ -1960,7 +1960,7 @@ class Notice(unittest.TestCase):
         self.assertIsNone(notice.respond(self.payload(cwd=bare, path=os.path.join(bare, "src/a.ts")), self.state))
         os.makedirs(os.path.join(bare, ".git"))
         out = notice.respond(self.payload(cwd=bare, path=os.path.join(bare, "src/a.ts"), session="s3"), self.state)
-        self.assertIn("repograph build", out["hookSpecificOutput"]["additionalContext"])
+        self.assertIn("zerograph build", out["hookSpecificOutput"]["additionalContext"])
         self.assertIsNone(notice.respond(self.payload(cwd=bare, path=os.path.join(bare, "src/a.ts"), session="s3"), self.state), "said once")
 
     def test_a_malformed_payload_is_silence_not_an_error(self):
@@ -1995,20 +1995,20 @@ import tempfile
 REMINDER_EVERY = 40
 INDEXED = {".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".md", ".mdx", ".yaml", ".yml", ".json", ".toml"}
 
-FULL = ("This repository has a repograph graph (.repograph/). Before reading or grepping for a requirement, "
-        "an id, a symbol, its callers or what a diff touches, ask it: the repograph MCP tools (ask, explain, "
-        "impact, trace, changes) or `repograph ask <words>` in the shell — ~200 tokens an answer, refreshed "
-        "from the tree on every call. Skill: repograph.")
-BUILD = ("This repository is a git checkout with no repograph store. `repograph build --no-dense` (about "
-         "1 s per 800 files) makes `repograph ask` and the repograph MCP tools answer; /repograph:setup walks through it.")
-REMIND = "Reminder: ask the repograph graph before grepping (MCP tools or `repograph ask`)."
+FULL = ("This repository has a zerograph graph (.zerograph/). Before reading or grepping for a requirement, "
+        "an id, a symbol, its callers or what a diff touches, ask it: the zerograph MCP tools (ask, explain, "
+        "impact, trace, changes) or `zerograph ask <words>` in the shell — ~200 tokens an answer, refreshed "
+        "from the tree on every call. Skill: zerograph.")
+BUILD = ("This repository is a git checkout with no zerograph store. `zerograph build --no-dense` (about "
+         "1 s per 800 files) makes `zerograph ask` and the zerograph MCP tools answer; /zerograph:setup walks through it.")
+REMIND = "Reminder: ask the zerograph graph before grepping (MCP tools or `zerograph ask`)."
 
 
 def root_of(start):
     """The nearest ancestor with a store, else with a `.git` entry (a worktree's is a file), else None."""
     d = os.path.abspath(start)
     while True:
-        if os.path.isdir(os.path.join(d, ".repograph")):
+        if os.path.isdir(os.path.join(d, ".zerograph")):
             return d, True
         if os.path.exists(os.path.join(d, ".git")):
             return d, False
@@ -2026,7 +2026,7 @@ def target_of(payload):
 
 
 def worth_it(target):
-    if not target or "/.repograph/" in target or target.endswith("/.repograph"):
+    if not target or "/.zerograph/" in target or target.endswith("/.zerograph"):
         return False
     ext = os.path.splitext(target)[1]
     # A glob pattern names an extension at its tail the same way a path does.
@@ -2049,7 +2049,7 @@ def respond(payload, state_dir):
     root, has_store = root_of(payload.get("cwd") or os.getcwd())
     if root is None:
         return None
-    counter = os.path.join(state_dir, "repograph-notice-" + "".join(c for c in session if c.isalnum() or c in "-_"))
+    counter = os.path.join(state_dir, "zerograph-notice-" + "".join(c for c in session if c.isalnum() or c in "-_"))
     try:
         n = int(open(counter).read().strip() or "0")
     except (OSError, ValueError):
@@ -2087,24 +2087,24 @@ Run: `cd "$W/plugin/hooks" && python3 -m unittest test_notice 2>&1 | tail -3` �
 
 - [ ] **Step 3: The skill**
 
-`plugin/skills/repograph/SKILL.md`:
+`plugin/skills/zerograph/SKILL.md`:
 
 ```markdown
 ---
-name: repograph
-description: Use when answering a question about this repository before opening a file — which requirement owns a concept, what an id means, where a symbol lives, who calls it, what a diff touches, how one symbol reaches another. Routes the question to the repograph graph, rg or ast-grep by what it costs, and says what the graph cannot prove.
+name: zerograph
+description: Use when answering a question about this repository before opening a file — which requirement owns a concept, what an id means, where a symbol lives, who calls it, what a diff touches, how one symbol reaches another. Routes the question to the zerograph graph, rg or ast-grep by what it costs, and says what the graph cannot prove.
 ---
 
-# repograph — ask the repository before reading it
+# zerograph — ask the repository before reading it
 
-The store in `.repograph/` holds every requirement, ADR, invariant, milestone task, entity and
+The store in `.zerograph/` holds every requirement, ADR, invariant, milestone task, entity and
 TypeScript symbol as a node, and every quoted id, import, call, decorator and markdown link as an
 edge. It is built and refreshed at zero model tokens, and every call refreshes it against the
 tree first, so it is never behind the working copy. Reading a file to find something costs
 tokens every time; an answer here is about 200.
 
-The tools are the `repograph` MCP server (`ask`, `explain`, `impact`, `trace`, `changes`) or the
-same five commands in the shell (`repograph ask …`; `pnpm exec repograph …` where the npm package
+The tools are the `zerograph` MCP server (`ask`, `explain`, `impact`, `trace`, `changes`) or the
+same five commands in the shell (`zerograph ask …`; `pnpm exec zerograph …` where the npm package
 is installed). Same bytes either way.
 
 ## The loop
@@ -2156,10 +2156,10 @@ is installed). Same bytes either way.
 
 ## What is not a tool, and why
 
-`repograph ask --rerank` spends ~19,000 model tokens a question and `--rerank-local` 18 s; both
+`zerograph ask --rerank` spends ~19,000 model tokens a question and `--rerank-local` 18 s; both
 are shell-only and for a person who has seen two misses in a row. `build`, `update`, `enrich`,
 `embed`, `serve`, `watch` are writers a person runs; no tool builds a store. If a tool answers
-`no store at …`, say so and stop — `/repograph:setup` is the person's next step.
+`no store at …`, say so and stop — `/zerograph:setup` is the person's next step.
 
 ## Pass this on
 
@@ -2173,38 +2173,38 @@ reading files, and read only the `path:line` it printed.
 
 ```markdown
 ---
-description: Build or check this repository's repograph store — the binary, the store, the model, the ignore line — with the person deciding what it costs
-allowed-tools: Bash(repograph *), Bash(pnpm exec repograph *), Bash(npx repograph *), Bash(cargo install *), Bash(git *), Read, Edit
+description: Build or check this repository's zerograph store — the binary, the store, the model, the ignore line — with the person deciding what it costs
+allowed-tools: Bash(zerograph *), Bash(pnpm exec zerograph *), Bash(npx zerograph *), Bash(cargo install *), Bash(git *), Read, Edit
 ---
 
-# /repograph:setup
+# /zerograph:setup
 
-Walk the person through making `repograph ask` and the repograph MCP tools answer in this
+Walk the person through making `zerograph ask` and the zerograph MCP tools answer in this
 repository. Every step that spends minutes or disk is theirs to confirm; none is run unasked.
 
 ## Steps
 
-1. **The binary.** Run `repograph --version`; if it fails, try `pnpm exec repograph --version`
-   and `npx repograph --version`. If none answers, say how to get one — `cargo install --path .`
-   from a checkout of `devmaxxx/repograph`, or `pnpm add -D @devmaxxx/repograph` with the
+1. **The binary.** Run `zerograph --version`; if it fails, try `pnpm exec zerograph --version`
+   and `npx zerograph --version`. If none answers, say how to get one — `cargo install --path .`
+   from a checkout of `devmaxxx/zerograph`, or `pnpm add -D @devmaxxx/zerograph` with the
    GitHub Packages line in `~/.npmrc` the README describes — and stop.
-2. **The store.** Run `repograph status --json`. If `"store": true`, print the status line,
+2. **The store.** Run `zerograph status --json`. If `"store": true`, print the status line,
    say whether it is `fresh` or `behind`, and go to step 5.
-3. **Build, lexical first.** Tell the person `repograph build --no-dense` takes about a second
+3. **Build, lexical first.** Tell the person `zerograph build --no-dense` takes about a second
    per 800 files and answers keywords, ids and symbols at once; ask, then run it. Show the
    `changed … nodes … edges …` line.
 4. **The vectors, their choice.** Explain the two models with the README's numbers: the default
    `intfloat/multilingual-e5-large` reads paraphrase 22/30 on the bench corpus at ~2,680 s to
    embed 33,525 rows and a 2.1 GB download; `intfloat/multilingual-e5-small` reads 15/30 at
    ~103 s and 470 MB. If they choose the small one, write `embed_model =
-   "intfloat/multilingual-e5-small"` into `repograph.toml`. Then, only if they say so, run
-   `repograph embed` and report the `dense: embedded … rows in …` line. If they decline, say
+   "intfloat/multilingual-e5-small"` into `zerograph.toml`. Then, only if they say so, run
+   `zerograph embed` and report the `dense: embedded … rows in …` line. If they decline, say
    the store answers lexically until they do.
-5. **The ignore line.** If `.gitignore` does not contain `.repograph/`, offer to add it.
-6. **Enrichment, mentioned once.** Say that `repograph enrich` writes reader questions beside
+5. **The ignore line.** If `.gitignore` does not contain `.zerograph/`, offer to add it.
+6. **Enrichment, mentioned once.** Say that `zerograph enrich` writes reader questions beside
    every requirement through the configured model command (~$2.5 of a small model on the
    bench corpus, once) and is what lifts paraphrase recall; do not run it.
-7. **Done.** Print `repograph status` and one sentence: the MCP tools and `repograph ask` now
+7. **Done.** Print `zerograph status` and one sentence: the MCP tools and `zerograph ask` now
    answer here.
 ```
 
@@ -2215,16 +2215,16 @@ repository. Every step that spends minutes or disk is theirs to confirm; none is
 `README.md`:
 
 - **Status table**: after the `serve` row, `| \`mcp\` | working; the five readers over stdio for a coding agent's harness — capped for hub symbols, notices ahead of the answer, refreshed per call, no store built — see [For agents](#for-agents) |` and `| \`status\` | working; the store in one line, \`--json\` for a hook or a harness |`.
-- **Use**: after the `changes` examples, three lines: `repograph explain --json FR-PAY-22`, `repograph trace --json A B`, `repograph status --json`.
-- **A new section "For agents"** before "Configure", in this order: (1) two sentences on what the surface is and why (the spec's decision paragraph, shortened); (2) *Claude Code*: `claude plugin marketplace add devmaxxx/repograph`, `claude plugin install repograph@repograph`, or `claude --plugin-dir path/to/repograph/plugin`, and the plain `.mcp.json` block for a project without the plugin; (3) *Codex*: the `[mcp_servers.repograph]` block with `command = "repograph"` and `args = ["mcp"]`, or `codex mcp add repograph -- repograph mcp`, and the `AGENTS.md` paragraph (the skill's "Before editing a symbol" list condensed to five lines); (4) *Any shell*: the five commands with `--json`, `status --json`, exit codes (0 answered — an empty `ask` included; 1 an error named on stderr; 2 a usage error); (5) *What a tool costs before a call*: the two ceilings as bytes and as tokens, and the sentence that Task 7 fills with the measured first-request cost; (6) *What the tools refuse*: no store, `--rerank`, the writers; (7) *Where the caps are*: `impact` and `changes` at 25 lines a list, `explain` at 40 edges, `limit: 0` for the whole, with the yardstick numbers from `$A/yardstick.txt`; (8) *Concurrency*: one process per session, the root walk, a `serve` used when present, `--idle-model`. Every number cites its file.
+- **Use**: after the `changes` examples, three lines: `zerograph explain --json FR-PAY-22`, `zerograph trace --json A B`, `zerograph status --json`.
+- **A new section "For agents"** before "Configure", in this order: (1) two sentences on what the surface is and why (the spec's decision paragraph, shortened); (2) *Claude Code*: `claude plugin marketplace add devmaxxx/zerograph`, `claude plugin install zerograph@zerograph`, or `claude --plugin-dir path/to/zerograph/plugin`, and the plain `.mcp.json` block for a project without the plugin; (3) *Codex*: the `[mcp_servers.zerograph]` block with `command = "zerograph"` and `args = ["mcp"]`, or `codex mcp add zerograph -- zerograph mcp`, and the `AGENTS.md` paragraph (the skill's "Before editing a symbol" list condensed to five lines); (4) *Any shell*: the five commands with `--json`, `status --json`, exit codes (0 answered — an empty `ask` included; 1 an error named on stderr; 2 a usage error); (5) *What a tool costs before a call*: the two ceilings as bytes and as tokens, and the sentence that Task 7 fills with the measured first-request cost; (6) *What the tools refuse*: no store, `--rerank`, the writers; (7) *Where the caps are*: `impact` and `changes` at 25 lines a list, `explain` at 40 edges, `limit: 0` for the whole, with the yardstick numbers from `$A/yardstick.txt`; (8) *Concurrency*: one process per session, the root walk, a `serve` used when present, `--idle-model`. Every number cites its file.
 
 - [ ] **Step 6: Load it, both harnesses**
 
 ```bash
-cd "$C" && REPOGRAPH_BIN="$B" claude -p --output-format json --setting-sources "" --strict-mcp-config --plugin-dir "$W/plugin" --allowedTools "mcp__plugin_repograph_repograph,mcp__repograph,Skill" --max-turns 6 \
-  "Which requirement id covers cancellation fees (штраф за отмену)? Use the repograph tools; reply with the id and path:line." \
+cd "$C" && ZEROGRAPH_BIN="$B" claude -p --output-format json --setting-sources "" --strict-mcp-config --plugin-dir "$W/plugin" --allowedTools "mcp__plugin_zerograph_zerograph,mcp__zerograph,Skill" --max-turns 6 \
+  "Which requirement id covers cancellation fees (штраф за отмену)? Use the zerograph tools; reply with the id and path:line." \
   | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d["result"]); print("turns", d["num_turns"], "usage", d["usage"])' | tee "$A/t5-claude-plugin.txt"
-cd "$C" && REPOGRAPH_BIN="$B" claude -p --output-format json --setting-sources "" --strict-mcp-config --plugin-dir "$W/plugin" --allowedTools "Read" --max-turns 3 \
+cd "$C" && ZEROGRAPH_BIN="$B" claude -p --output-format json --setting-sources "" --strict-mcp-config --plugin-dir "$W/plugin" --allowedTools "Read" --max-turns 3 \
   "Read apps/api/src/main.ts and reply with its first line." | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d["result"][:200])' | tee "$A/t5-hook.txt"
 ```
 
@@ -2233,14 +2233,14 @@ Expected: the first answer names an `FR-PAY-*` id with a path; if the MCP tool n
 Codex, with the shim:
 
 ```bash
-codex mcp add repograph -- env REPOGRAPH_BIN="$B" "$W/plugin/bin/repograph-mcp" && cd "$C" && codex exec --skip-git-repo-check "Use the repograph 'impact' tool on StaffService and reply with its risk line." 2>&1 | tail -3 | tee "$A/t5-codex.txt"; codex mcp remove repograph
+codex mcp add zerograph -- env ZEROGRAPH_BIN="$B" "$W/plugin/bin/zerograph-mcp" && cd "$C" && codex exec --skip-git-repo-check "Use the zerograph 'impact' tool on StaffService and reply with its risk line." 2>&1 | tail -3 | tee "$A/t5-codex.txt"; codex mcp remove zerograph
 ```
 
 Expected: a `risk: MEDIUM — 3 direct, 3 total, 3 files` line in the tail.
 
 - [ ] **Step 7: Commit**
 
-`git -C "$W" add plugin .claude-plugin README.md` — subject `feat(plugin): a Claude Code plugin around repograph mcp, and the Codex path`, body with the hook test count, the two harness transcripts and the README anchors added.
+`git -C "$W" add plugin .claude-plugin README.md` — subject `feat(plugin): a Claude Code plugin around zerograph mcp, and the Codex path`, body with the hook test count, the two harness transcripts and the README anchors added.
 
 ---
 
@@ -2347,7 +2347,7 @@ six narrow-tier impact targets and the first four trace pairs that have a path, 
     python3 bench/agent/tasks.py build --repo <corpus checkout> --out bench/agent/tasks.jsonl
 
 Truth is the case's own anchor, or what `truth.py` reads out of the checkout with rg — never a
-repograph answer.
+zerograph answer.
 """
 import argparse
 import json
@@ -2423,11 +2423,11 @@ if __name__ == "__main__":
 #!/usr/bin/env python3
 """Runs the agent tasks through a headless harness in three arms and reads what each cost.
 
-    A  bare: Read, Grep, Glob and rg — what an agent has without repograph
-    B  the plugin without its MCP declaration: the skill and the hook, repograph through Bash
+    A  bare: Read, Grep, Glob and rg — what an agent has without zerograph
+    B  the plugin without its MCP declaration: the skill and the hook, zerograph through Bash
     C  the plugin with the MCP server
 
-    python3 bench/agent/run.py run --copy <corpus copy> --bin <repograph> --plugin <repo>/plugin \
+    python3 bench/agent/run.py run --copy <corpus copy> --bin <zerograph> --plugin <repo>/plugin \
         --tasks bench/agent/tasks.jsonl --arms A,B,C --out bench/agent/runs.jsonl --note "…"
     python3 bench/agent/run.py report bench/agent/runs.jsonl [--when <prefix>]
 
@@ -2468,12 +2468,12 @@ def arm_setup(arm, plugin, binary, scratch):
         if not cli.exists():
             shutil.copytree(plugin, cli, ignore=shutil.ignore_patterns(".mcp.json"))
         flags += ["--plugin-dir", str(cli)]
-        allowed += ["Bash(repograph *)", "Skill"]
+        allowed += ["Bash(zerograph *)", "Skill"]
     if arm == "C":
         mcp = Path(scratch) / "mcp.json"
-        mcp.write_text(json.dumps({"mcpServers": {"repograph": {"command": binary, "args": ["mcp"]}}}))
+        mcp.write_text(json.dumps({"mcpServers": {"zerograph": {"command": binary, "args": ["mcp"]}}}))
         flags += ["--mcp-config", str(mcp)]
-        allowed += ["mcp__repograph"]
+        allowed += ["mcp__zerograph"]
     return " ".join(flags), ",".join(allowed)
 
 
@@ -2535,9 +2535,9 @@ def sign_p(wins, n):
 
 def cmd_run(a):
     tasks = [json.loads(l) for l in Path(a.tasks).read_text(encoding="utf-8").splitlines() if l.strip()]
-    scratch = Path(a.scratch or tempfile.mkdtemp(prefix="repograph-agent-"))
+    scratch = Path(a.scratch or tempfile.mkdtemp(prefix="zerograph-agent-"))
     scratch.mkdir(parents=True, exist_ok=True)
-    env = dict(os.environ, PATH=str(Path(a.bin).parent) + os.pathsep + os.environ.get("PATH", ""), REPOGRAPH_BIN=a.bin)
+    env = dict(os.environ, PATH=str(Path(a.bin).parent) + os.pathsep + os.environ.get("PATH", ""), ZEROGRAPH_BIN=a.bin)
     with open(a.out, "a", encoding="utf-8") as out:
         for arm in a.arms.split(","):
             arm_flags, allowed = arm_setup(arm, a.plugin, a.bin, scratch)
@@ -2644,12 +2644,12 @@ Two tasks, three arms, six runs — under a dollar, and the check that the harne
 head -1 "$W/bench/agent/tasks.jsonl" > "$A/t6-two.jsonl"; grep '"kind": "impact"' "$W/bench/agent/tasks.jsonl" | head -1 >> "$A/t6-two.jsonl"
 cd "$W" && python3 bench/agent/run.py run --copy "$C" --bin "$B" --plugin "$W/plugin" --tasks "$A/t6-two.jsonl" --arms A,B,C --out "$A/t6-dry.jsonl" --scratch "$A/t6-scratch" --note "dry run" 2>&1 | tee "$A/t6-dry.txt"
 python3 bench/agent/run.py report "$A/t6-dry.jsonl" | tee -a "$A/t6-dry.txt"
-grep -l '"name":"mcp__repograph' "$A"/t6-scratch/C-*.stream | wc -l
-grep -l 'repograph ask\|repograph impact' "$A"/t6-scratch/B-*.stream | wc -l
-grep -l 'This repository has a repograph graph' "$A"/t6-scratch/B-*.stream | wc -l
+grep -l '"name":"mcp__zerograph' "$A"/t6-scratch/C-*.stream | wc -l
+grep -l 'zerograph ask\|zerograph impact' "$A"/t6-scratch/B-*.stream | wc -l
+grep -l 'This repository has a zerograph graph' "$A"/t6-scratch/B-*.stream | wc -l
 ```
 
-Expected: six rows with `tokens` and no `failed`; in arm C at least one stream names an `mcp__repograph…` tool call; in arm B at least one stream shows a `repograph …` Bash call; the hook's notice appears in B's streams. Any of the three counts at `0` is a harness fact to settle before Task 7 — the tool's name under `--mcp-config` (read it from the stream and put it into `BARE_TOOLS`'s `allowed` list), the plugin loading under `--setting-sources ""` (drop that flag from `DEFAULT_COMMAND` for every arm if the skill did not load and say so in the README), the hook firing under `--plugin-dir`. Each is recorded in `$A/t6-dry.txt` with what was changed, and the change is to the runner and the README, never to a task or to the rule.
+Expected: six rows with `tokens` and no `failed`; in arm C at least one stream names an `mcp__zerograph…` tool call; in arm B at least one stream shows a `zerograph …` Bash call; the hook's notice appears in B's streams. Any of the three counts at `0` is a harness fact to settle before Task 7 — the tool's name under `--mcp-config` (read it from the stream and put it into `BARE_TOOLS`'s `allowed` list), the plugin loading under `--setting-sources ""` (drop that flag from `DEFAULT_COMMAND` for every arm if the skill did not load and say so in the README), the hook firing under `--plugin-dir`. Each is recorded in `$A/t6-dry.txt` with what was changed, and the change is to the runner and the README, never to a task or to the rule.
 
 - [ ] **Step 6: `bench/agent/README.md` and the commit**
 
@@ -2700,13 +2700,13 @@ Then the surface reading beside it: `median first request` for C minus A — the
 - [ ] **Step 4: Apply the verdict**
 
 - C the default: nothing moves; the README's "For agents" says the plugin's MCP server is on by default and quotes the ratio, the wins and the p.
-- B the default: `git -C "$W" mv plugin/.mcp.json plugin/mcp/mcp.json`; the setup command gains a step 8 that offers `claude mcp add repograph -- repograph mcp`; the README says the skill and the CLI are the default and the server is one command away, with the numbers.
+- B the default: `git -C "$W" mv plugin/.mcp.json plugin/mcp/mcp.json`; the setup command gains a step 8 that offers `claude mcp add zerograph -- zerograph mcp`; the README says the skill and the CLI are the default and the server is one command away, with the numbers.
 - Neither: the README's paragraph says what was measured and claims no default; both files stay where they are.
 
 Retrieval's smoke test, after the last code change on the branch:
 
 ```bash
-cd "$W" && NOTE="agent surface: status, --json, capped renderers, mcp, bounded embedding — no retrieval change" bench/history/run-repograph.sh 2>&1 | tee "$A/t7-history.txt"
+cd "$W" && NOTE="agent surface: status, --json, capped renderers, mcp, bounded embedding — no retrieval change" bench/history/run-zerograph.sh 2>&1 | tee "$A/t7-history.txt"
 ```
 
 Expected: two rows in `bench/history/runs.jsonl` with the same counts as Task 0's baselines, green.
@@ -2737,7 +2737,7 @@ Expected: two rows in `bench/history/runs.jsonl` with the same counts as Task 0'
 
 ```bash
 git -C "$W" push -u origin feat/agent-surface
-gh auth switch --user devmaxxx && gh pr create --repo devmaxxx/repograph --base main --head feat/agent-surface --title "feat: the agent surface — status, --json, repograph mcp, the plugin, the agent bench" --body-file "$A/t7-pr.md"
+gh auth switch --user devmaxxx && gh pr create --repo devmaxxx/zerograph --base main --head feat/agent-surface --title "feat: the agent surface — status, --json, zerograph mcp, the plugin, the agent bench" --body-file "$A/t7-pr.md"
 ```
 
 `$A/t7-pr.md` is the results document's "What ships and what stays open" with a table of the five rules (verdict, the deciding number, the file) and the test counts (unit, `tests/serve.rs`, `tests/mcp.rs`, the two Python suites); no AI trailers, no session links. The executor does not merge.

@@ -1,33 +1,17 @@
 # Install
 
-The packages live in GitHub Packages, which serves no anonymous reads — every consumer
-authenticates, public package or not. Once per machine, in `~/.npmrc`:
-
-```
-@devmaxxx:registry=https://npm.pkg.github.com
-//npm.pkg.github.com/:_authToken=<classic PAT with read:packages>
-```
-
-The token must be a **classic** personal access token; the npm registry does not accept
-fine-grained ones. A project-level `.npmrc` can carry the first line, but not the second: pnpm
-stopped expanding `${ENV_VAR}` in project files in 11.5.3, so a committed `_authToken` would
-either be a literal secret or silently ignored.
-
-Then:
-
 ```bash
-pnpm add -D @devmaxxx/zerograph    # npm: prebuilt binary for macOS arm64, Linux x64 and Windows x64
+pnpm add -D zerograph              # npm: prebuilt binary for macOS arm64, Linux x64 and Windows x64
 cargo install --path .             # from source; Rust 1.98, pinned in rust-toolchain.toml
 ```
 
-The npm package is a launcher: the binary comes from `@devmaxxx/zerograph-darwin-arm64`,
-`@devmaxxx/zerograph-linux-x64` or `@devmaxxx/zerograph-win32-x64`, pulled in as an optional
-dependency, so a lockfile written on one platform installs on the others. All three are under the
-same scope, so the one registry line above covers them. Tagged releases (`v*`) build all three
-binaries as GitHub release assets (a tarball for the unix ones, a zip holding `zerograph.exe` for
-Windows) and cut the npm packages from those same files (`.github/workflows/release.yml`,
-publishing with the repository's own `GITHUB_TOKEN`; `scripts/npm-pack.sh` does the same by
-hand).
+The npm package carries all three binaries and a launcher that runs the one for this platform,
+so a lockfile written on one platform installs on the others, nothing runs at install time, and
+nothing is fetched beyond the package itself (a 56 MB download, about 300 MB installed). It is on the public npm registry and
+needs no `.npmrc`. Tagged releases (`v*`) build all three binaries as GitHub release assets (a tarball
+for the unix ones, a zip holding `zerograph.exe` for Windows) and cut the npm package from those
+same files (`.github/workflows/release.yml`, publishing through npm's trusted publishing, so each
+version carries a provenance attestation; `scripts/npm-pack.sh` packs the same tarball by hand).
 
 ## Coming from repograph
 
@@ -39,12 +23,13 @@ write by zerograph moves the store (below) out from under it.
    background) or a `repograph watch` that outlives the move reads the store as empty and builds a
    second `.repograph/` of its own. `pkill -f 'repograph.* (serve|watch)'`, and end the agent
    sessions that use the old MCP server.
-2. **Swap the package.** `pnpm remove @devmaxxx/repograph`, then `pnpm add -D @devmaxxx/zerograph`;
-   the launcher still answers to `repograph` as well, so a script that calls the old name keeps
-   running. Installed globally, remove the old package first (`npm uninstall -g
-   @devmaxxx/repograph` or `pnpm remove -g @devmaxxx/repograph`): npm and pnpm 11 refuse to install
-   over its `repograph` command. Installed from source, run `cargo uninstall repograph`, or the old
-   binary stays on `PATH` and goes on writing a `.repograph/` of its own.
+2. **Swap the package.** `pnpm remove @devmaxxx/repograph`, then `pnpm add -D zerograph`, and
+   change scripts that call `repograph` to call `zerograph`: there is no command under the old name,
+   and `@devmaxxx/repograph` gets no release after 0.5. Installed globally, `npm uninstall -g
+   @devmaxxx/repograph` or `pnpm remove -g @devmaxxx/repograph`. Installed from source, run `cargo
+   uninstall repograph`, or the old binary stays on `PATH` and goes on writing a `.repograph/` of
+   its own. zerograph comes from the public npm registry, so the `@devmaxxx` lines in `~/.npmrc` can
+   go.
 3. **Re-run `zerograph install-agent`** with the flags you used before, straight away. The old hook
    script looks for `.repograph/` only, so once the store has moved it says nothing, and the
    install is what replaces it.

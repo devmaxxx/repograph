@@ -150,7 +150,7 @@ list ranks ten of the thirteen `where` anchors in its top ten; the admission was
 kept them out of the answer, a seat was.
 
 The ratio's history is kept: `QUESTIONS_GATE` is now 0.761 and a coverage constant, the window
-(0.802, 0.866] belonged to the number it replaced, and `REPOGRAPH_QUESTIONS_GATE` still overrides
+(0.802, 0.866] belonged to the number it replaced, and `ZEROGRAPH_QUESTIONS_GATE` still overrides
 it for a measurement, with `0` still the ungated fusion ADR-001 Amendment 6 read against.
 
 ## The weakest joint, restated

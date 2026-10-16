@@ -15,7 +15,7 @@
        the stored index with one stderr line (`index: 576 files behind, refreshing in background`),
        `--json` carries `stale: {files: [...], vectors: n}`; the budget is a config key, default
        10 s; `--stale` stays as it is;
-    2. the reader spawns one detached `repograph update`, which takes the store's writer lock; a
+    2. the reader spawns one detached `zerograph update`, which takes the store's writer lock; a
        second reader finding the lock held spawns nothing and answers the same way;
     3. `install-agent` installs `post-merge` and `post-checkout` git hooks starting a detached
        update;
@@ -26,7 +26,7 @@
 ## Files to change
 - `src/refresh.rs` (new) — the budget arithmetic, the `Stale` report and its JSON injection, the
   detached spawn (Unix process group, Windows `DETACHED_PROCESS`).
-- `src/store.rs` — the writer lock (`.repograph/writer.lock`, `File::try_lock`/`lock`).
+- `src/store.rs` — the writer lock (`.zerograph/writer.lock`, `File::try_lock`/`lock`).
 - `src/ask.rs` — `graph_for_ask` takes the lock and the deadline and returns what it left behind;
   `Context` carries the deadline, the lock and the stale report; the dense sync is chunked
   against the deadline and stops into a checkpoint.
@@ -37,9 +37,9 @@
   progress line, `graph_for` with the budget, `stale` in every reader's `--json`.
 - `src/serve.rs` — restart the answer clock per request.
 - `src/config.rs` — `reader_budget` (seconds, default 10; machine file may set it;
-  `REPOGRAPH_READER_BUDGET` overrides).
+  `ZEROGRAPH_READER_BUDGET` overrides).
 - `src/install_agent.rs` — the two git hooks.
-- `repograph.toml`, `README.md` — the key, the line, the hooks, the progress line.
+- `zerograph.toml`, `README.md` — the key, the line, the hooks, the progress line.
 - `tests/reader_budget.rs` (new) — end-to-end over a scratch repository.
 
 ## Implementation steps
@@ -49,7 +49,7 @@
 4. `graph_for_ask` budgeted; `graph_for` and the four graph readers print the line and inject
    `stale`.
 5. `Context`: deadline, lock, stale; dense sync chunked against the deadline; `ask --json` stale.
-6. `update --detach` (spawn and return, output to `.repograph/background.log`); every `update` and
+6. `update --detach` (spawn and return, output to `.zerograph/background.log`); every `update` and
    `build`, foreground or spawned, waits for the lock.
 7. Progress: `embed_with` + `embedded N/M` every ~2 s in `embed_opened`.
 8. `install-agent` git hooks.
@@ -84,7 +84,7 @@
   sync gets the budget like a one-shot's.
 - A reader that finds the lock held writes nothing at all — not even the stamp cache — so it
   cannot put an older manifest over the writer's.
-- The detached update logs to `.repograph/background.log` rather than to nothing, so a failure
+- The detached update logs to `.zerograph/background.log` rather than to nothing, so a failure
   there can be read after the fact.
 - Git hooks: one shared block for both events (`$3 = 0` is a file checkout, skipped), appended
   between markers to a hook that exists already, at the path `git rev-parse --git-path hooks`

@@ -56,7 +56,7 @@ def top_level_types(rel: str, src: str) -> list[str]:
 
 
 def store_id(rel: str, name: str) -> str:
-    """The id repograph's store gives a top-level JVM type. `select_dotnet.store_id` spells the same
+    """The id zerograph's store gives a top-level JVM type. `select_dotnet.store_id` spells the same
     form but finds the declaration with C#'s patterns, which miss `final class`, `data class` and a
     Java annotation on the declaring line; every JVM case here names a top-level type, whose local is
     its bare name."""
@@ -65,7 +65,7 @@ def store_id(rel: str, name: str) -> str:
 
 def impact_cases(repo: Path, files: list[str]) -> tuple[list[dict], int]:
     """A Java type named outside its file by JVM files only: a name a TypeScript file also spells is a
-    reference the truth would score and L10 forbids repograph to write."""
+    reference the truth would score and L10 forbids zerograph to write."""
     candidates = []
     for rel in (f for f in files if f.endswith(".java")):
         for name in top_level_types(rel, read(repo, rel)):

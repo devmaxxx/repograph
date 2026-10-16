@@ -10,19 +10,19 @@ Kit and transcripts: `/Users/max/bench/resources-2026-10-09` — `kit/sample.py`
 `.json` plus `.json.log` per run under `log/`.
 
 Method. A sampler (`ps` every 0.25 s) records the process's cumulative CPU time, RSS and thread
-count; every line the process prints is time-stamped, and `REPOGRAPH_TIMING=1` makes the writer
+count; every line the process prints is time-stamped, and `ZEROGRAPH_TIMING=1` makes the writer
 print one line per phase (`walked`, `extracted`, `settled`, `saved`), so one run is cut into walk,
 parse, graph, save, model open and embed. **Peak** CPU is the busiest one-second window inside a
 phase (100% = one core), **mean** is the phase's CPU time over its wall; a phase shorter than a
-second reports its mean. `REPOGRAPH_NO_SERVE=1` and the level in `REPOGRAPH_RESOURCES` on every
+second reports its mean. `ZEROGRAPH_NO_SERVE=1` and the level in `ZEROGRAPH_RESOURCES` on every
 row. Two scenarios:
 
-- **build** — `.repograph/` removed, so the run walks, parses and settles the whole tree and then
+- **build** — `.zerograph/` removed, so the run walks, parses and settles the whole tree and then
   embeds every one of the 11,590 rows;
 - **update** — a pristine copy of the store, then the declaring line of every third requirement
   and task node edited (1,011 nodes in 94 files), so the run re-reads those files and embeds
   1,011 rows; the tree is restored with hooks off afterwards, because the corpus's own
-  post-checkout hook runs a repograph of its own over the store.
+  post-checkout hook runs a zerograph of its own over the store.
 
 > **The machine was not quiet.** One-minute load averages ran 6–10 through the session against
 > about two cores of foreign work this session could not stop — FortiClient's `epctrl` and
@@ -108,7 +108,7 @@ with both binaries and agree within 2 s.
 ### 3.3 The BM25 build
 
 Not part of a writer: the first reader builds it (`Lexical::build`, rayon over the same capped
-global pool), in 0.14 s on this store. Three `--no-dense ask` runs a level, `REPOGRAPH_TIMING`'s stage and
+global pool), in 0.14 s on this store. Three `--no-dense ask` runs a level, `ZEROGRAPH_TIMING`'s stage and
 `/usr/bin/time`'s user over real for the whole process:
 
 | level | `lexical built` | whole process user / real |

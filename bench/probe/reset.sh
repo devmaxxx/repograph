@@ -7,7 +7,7 @@
 # pinned fixture's store copied in whole, and one --no-dense update to settle the stamps: the
 # copied manifest carries the fixture's mtimes, which match nothing here,
 # so that first walk hashes every file, finds every hash unchanged, records this tree's stamps,
-# and every later walk is stat-only. `repograph-main` takes the no-op path on an unchanged tree
+# and every later walk is stat-only. `zerograph-main` takes the no-op path on an unchanged tree
 # and derives nothing, which is why the settle reads `changed 0` and is not a re-read.
 #
 # Which embedder the arm runs under is declared in the environment and refused when absent, so no

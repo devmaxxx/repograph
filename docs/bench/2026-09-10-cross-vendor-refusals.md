@@ -6,7 +6,7 @@ This is the attempt, and it is four refusals. Each one carries the command that 
 the row and the exact reason it did not, because a blank is not a row: a reader who cannot tell an
 unrun arm from a bad one will assume whichever suits them.
 
-Machine, 2026-09-10: `codex-cli 0.147.0`, `ollama version is 0.33.3`, repograph at `6538c66`.
+Machine, 2026-09-10: `codex-cli 0.147.0`, `ollama version is 0.33.3`, zerograph at `6538c66`.
 
 ## What *was* established, for nothing
 
@@ -64,7 +64,7 @@ gigabyte download and a machine decision rather than a benchmark decision. Decli
 rather than taken quietly.
 
 **To fill this row:** `ollama pull <model>`, then `bench --rerank` with `rerank_command = "ollama
-run {model} --hidethinking"`. Expect the reading to be about the model and not about repograph: the
+run {model} --hidethinking"`. Expect the reading to be about the model and not about zerograph: the
 prompt is ~58 kB of mostly Cyrillic near-duplicate candidates, which is a hard shape for a small
 local model, and a bad row would be evidence about that model at that size — worth having, and
 worth labelling as such when it lands.
@@ -80,7 +80,7 @@ Every store on this machine is 384-dimensional:
 /private/tmp/g19-copy         intfloat/multilingual-e5-small, dim 384, 33,525 rows
 ```
 
-and `~/.cache/repograph/fastembed` holds 578 MB — the small model. `e5-large` is a 2.1 GB download
+and `~/.cache/zerograph/fastembed` holds 578 MB — the small model. `e5-large` is a 2.1 GB download
 followed by an embed of 33.5k rows, which the README records as a first build «measured in hours
 rather than minutes». That is not a cost this task was given, and it is not a cost worth paying to
 find out whether two levers add: the question can be asked far more cheaply on a subset.

@@ -39,7 +39,7 @@ class WhichRowsHaveFloors(unittest.TestCase):
 class FloorRow(unittest.TestCase):
     """Which non-zero exit `measure.sh` records as a reading, and which it leaves as a failure.
 
-    `repograph` exits 3 for a question it answered — a suite that ran every case and missed a
+    `zerograph` exits 3 for a question it answered — a suite that ran every case and missed a
     floor, a `trace` that found no path — and 1 when it could not answer at all. The row is built
     over a stub that exits with either status, which is the whole of what the instrument reads,
     without a store or a binary under it. The status is the interface and the wording is a message

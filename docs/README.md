@@ -2,7 +2,7 @@
 
 | page | what is in it |
 | --- | --- |
-| [install](install.md) | the GitHub Packages registry line, npm and cargo, the platform packages, and the release workflow |
+| [install](install.md) | npm and cargo, what the npm package carries, coming from repograph, and the release workflow |
 | [commands](commands.md) | every command with examples, `--json` shapes, exit codes, `explain`, `verify`, `import-legacy`, `bench` |
 | [keeping fresh](keeping-fresh.md) | the self-healing `ask`, `reader_budget`, detached refreshes, `watch`, git hooks |
 | [serve](serve.md) | the resident process, its idles, socket path and measured latency |
@@ -18,3 +18,4 @@
 | [running on Windows](windows.md) | the platform floor, SmartScreen, Defender, PowerShell |
 | [`bench/`](bench/) | the campaign documents, the runbook, and the open gap ledger |
 | [`adr/`](adr/) | the decisions that outlived their arguments |
+| [`releases/`](releases/) | the notes each release page carries: what changed, and what to do before upgrading |

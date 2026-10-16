@@ -10,7 +10,7 @@ REPO="$(cd "$HERE/../../.." && pwd)"
 BIN=${BIN:-$REPO/target/release/zerograph}
 
 mkdir -p "$HERE/A" "$HERE/B/hooks" "$HERE/B/skills"
-# A: the consuming project's instructions with the repograph sections removed — everything from
+# A: the consuming project's instructions with the zerograph sections removed — everything from
 # '## Скиллы' on, under the original H1.
 python3 - "$F/.claude/CLAUDE.md" "$HERE/A/CLAUDE.md" <<'PY'
 import sys
@@ -22,7 +22,7 @@ if i < 0:
 open(sys.argv[2], 'w').write(t.splitlines()[0] + '\n\n' + t[i:])
 PY
 
-# B: today's repograph surface, verbatim.
+# B: today's zerograph surface, verbatim.
 cp "$F/.claude/CLAUDE.md" "$F/.claude/settings.json" "$HERE/B/"
 cp "$F/.claude/hooks/repograph-notice.mjs" "$F/.claude/hooks/precompact-brief.mjs" \
    "$F/.claude/hooks/compact-state.mjs" "$HERE/B/hooks/"

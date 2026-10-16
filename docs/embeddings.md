@@ -12,6 +12,12 @@ command that touches the dense stage — `build`, `update`, `embed`, `watch`, `a
 `bench`, `dump`, `serve` — reuses the cache; there are no further network calls once it is
 populated. `--no-dense` skips the download and the embedding stage everywhere.
 
+The catalogue's models are fetched at the hub commit their numbers were measured on, not at
+whatever the model's `main` holds today: a model id is a branch its owner can push new weights to,
+and `ort` would parse them on the next cold cache. A cache filled by an earlier release at that
+commit is adopted without a download. A model trusted by name with `zerograph model <hub id>` has no
+measured commit and follows `main`.
+
 The model is a property of the store. `embed_model` names what `build`, `update`, `embed`
 and `watch` write vectors with; `vectors.json` records it, and `ask`, `bench` and `dump` open the
 recorded one — so a store keeps answering with the model that wrote it whatever the configuration

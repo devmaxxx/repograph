@@ -219,15 +219,19 @@ pub struct Measured {
     /// What the model's files take in the hub cache once fetched — the download a switch starts.
     pub cache: &'static str,
     pub licence: &'static str,
+    /// The hub commit the row was measured on and the files are fetched at. A model id is a
+    /// moving branch: its owner can push new weights under it, and ORT would parse them on the
+    /// next cold cache without anyone having chosen them.
+    pub revision: &'static str,
 }
 
 /// The default, the small model it replaced, and the one with the most recall. Six further
 /// candidates were measured the same way and are not listed here: the readings document holds
 /// them, and a catalogue is a thing to choose from rather than the record of what was tried.
 pub const MEASURED: &[Measured] = &[
-    Measured { model: DEFAULT_MODEL, dim: 768, paraphrase: 21, embed_s: 733, vectors_mb: 103, cache: "1.2G", licence: "Gemma" },
-    Measured { model: UNNAMED_MODEL, dim: 384, paraphrase: 15, embed_s: 144, vectors_mb: 51, cache: "578M", licence: "MIT" },
-    Measured { model: RECOMMENDED, dim: 1024, paraphrase: 21, embed_s: 1944, vectors_mb: 137, cache: "2.1G", licence: "Apache-2.0" },
+    Measured { model: DEFAULT_MODEL, dim: 768, paraphrase: 21, embed_s: 733, vectors_mb: 103, cache: "1.2G", licence: "Gemma", revision: "5090578d9565bb06545b4552f76e6bc2c93e4a66" },
+    Measured { model: UNNAMED_MODEL, dim: 384, paraphrase: 15, embed_s: 144, vectors_mb: 51, cache: "578M", licence: "MIT", revision: "614241f622f53c4eeff9890bdc4f31cfecc418b3" },
+    Measured { model: RECOMMENDED, dim: 1024, paraphrase: 21, embed_s: 1944, vectors_mb: 137, cache: "2.1G", licence: "Apache-2.0", revision: "ac6544c8a46e00af67e330e85a9028c66b8cfd9a" },
 ];
 
 /// The model the readings point at for a project that wants more recall than the default's. Not
@@ -251,6 +255,10 @@ impl Measured {
 pub fn measured(model: &str) -> Option<&'static Measured> {
     MEASURED.iter().find(|m| m.model.eq_ignore_ascii_case(model))
 }
+
+/// The commit a catalogued model is fetched at; `None` for a model the reader trusted by name,
+/// which follows the hub's `main` because nobody here has measured a commit of it.
+pub fn revision(model: &str) -> Option<&'static str> { measured(model).map(|m| m.revision) }
 
 /// The row every other row is quoted against. The default is in the list — a test holds it there —
 /// so the fallback is unreachable and is written only because an index is not a proof.
@@ -288,6 +296,14 @@ fn reword<'a>(text: &'a str, p: &Profile) -> std::borrow::Cow<'a, str> {
     swap(QUERY_TAG, p.query).or_else(|| swap(PASSAGE_TAG, p.passage)).map_or(Cow::Borrowed(text), Cow::Owned)
 }
 
+/// A cache filled before the pin holds the pinned commit's snapshot under `refs/main` only, and
+/// hf-hub looks a revision up by its own ref: without this every such cache would download the
+/// model again to land on the bytes it already has.
+fn adopt_snapshot(cache: &Path, repo: &hf_hub::Repo, rev: &str) {
+    let cached = hf_hub::Cache::new(cache.to_path_buf()).repo(repo.clone());
+    if cached.pointer_path(rev).is_dir() { let _ = cached.create_ref(rev); }
+}
+
 struct Files { model: PathBuf, tokenizer: PathBuf, pad_token: String, pad_id: u32 }
 
 /// A graph-only `model.onnx` keeps its weights in `model.onnx_data` beside it and is a few MB;
@@ -307,7 +323,14 @@ fn fetch_from(cache: &Path, endpoint: Option<&str>, model: &str) -> Result<Files
     if let Some(e) = endpoint { builder = builder.with_endpoint(e.to_string()); }
     let api = builder.build()?;
     let name = model.to_string();
-    let repo = api.model(name.clone());
+    let repo = match revision(&name) {
+        Some(rev) => {
+            let pinned = hf_hub::Repo::with_revision(name.clone(), hf_hub::RepoType::Model, rev.to_string());
+            adopt_snapshot(cache, &pinned, rev);
+            api.repo(pinned)
+        }
+        None => api.model(name.clone()),
+    };
     let get = |f: &str| repo.get(f).with_context(|| format!("fetch {name}/{f}"));
     let profile = profile(&name);
     let model = get(profile.onnx)?;
@@ -918,8 +941,11 @@ mod fetch_tests {
     fn cache_with_model_of(dir: &std::path::Path, model_len: u64) {
         let root = dir.join("models--intfloat--multilingual-e5-small");
         std::fs::create_dir_all(root.join("refs")).unwrap();
-        std::fs::write(root.join("refs/main"), "abc").unwrap();
-        let snap = root.join("snapshots/abc");
+        // As a cache written before the pin was: the pinned commit under `main` and no ref of
+        // its own, which `fetch` must adopt rather than download again.
+        let rev = revision(UNNAMED_MODEL).unwrap();
+        std::fs::write(root.join("refs/main"), rev).unwrap();
+        let snap = root.join("snapshots").join(rev);
         std::fs::create_dir_all(snap.join("onnx")).unwrap();
         let model = std::fs::File::create(snap.join("onnx/model.onnx")).unwrap();
         model.set_len(model_len).unwrap();
@@ -947,6 +973,24 @@ mod fetch_tests {
         // fetch still answers, as it did before, and the session open reports the missing file.
         let files = fetch_from(dir.path(), Some("http://127.0.0.1:9"), "intfloat/multilingual-e5-small").unwrap();
         assert!(files.model.ends_with("onnx/model.onnx"));
+    }
+
+    #[test]
+    fn a_catalogued_model_at_another_commit_is_not_read_from_the_cache() {
+        let dir = tempfile::tempdir().unwrap();
+        cache_with_model_of(dir.path(), EXTERNAL_DATA_STUB);
+        let root = dir.path().join("models--intfloat--multilingual-e5-small");
+        let rev = revision(UNNAMED_MODEL).unwrap();
+        std::fs::rename(root.join("snapshots").join(rev), root.join("snapshots/moved")).unwrap();
+        std::fs::write(root.join("refs/main"), "moved").unwrap();
+        assert!(fetch_from(dir.path(), Some("http://127.0.0.1:9"), UNNAMED_MODEL).is_err(), "main moved on; the pinned commit is fetched, not what main holds");
+    }
+
+    #[test]
+    fn every_catalogued_model_is_pinned_to_a_full_commit() {
+        for m in MEASURED {
+            assert!(m.revision.len() == 40 && m.revision.bytes().all(|b| b.is_ascii_hexdigit()), "{}: {:?}", m.model, m.revision);
+        }
     }
 
     #[test]

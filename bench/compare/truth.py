@@ -732,7 +732,7 @@ RAZOR_TAG = re.compile(r"<([A-Z][\w.]*)")
 RAZOR_TRANSITION = re.compile(r"(?<![\w@])@(?=(?:if|foreach|for|while|switch|do|try|lock|using)\b)")
 RAZOR_COMMENT_CLOSE = {"@*": "*@", "<!--": "-->"}
 # A markup expression (`@Formatter.Money(...)`), an `@{ }` block outside `@code`, and a tag's own
-# generic argument (`TItem="Order"`) each need an expression reader repograph does not have yet;
+# generic argument (`TItem="Order"`) each need an expression reader zerograph does not have yet;
 # they blank with the rest of the markup until one exists.
 
 

@@ -29,9 +29,9 @@ questions are current pays for this pass alone.
 | arm | checkout | store | asker pass | languages the pass writes in |
 |---|---|---|---|---|
 | **P0** | pin `502e8a6d` | `store-before` — the fixture's own store | none | — |
-| **P1** | pin `502e8a6d` | `store-before` | added | Russian, English (detected: the pin has no `repograph.toml`) |
+| **P1** | pin `502e8a6d` | `store-before` | added | Russian, English (detected: the pin has no `zerograph.toml`) |
 | **H0** | HEAD `a3bf96ff` | `store-head-copy` | none | — |
-| **H1** | HEAD `a3bf96ff` | `store-head-copy` | added | English, Russian (HEAD's `repograph.toml`) |
+| **H1** | HEAD `a3bf96ff` | `store-head-copy` | added | English, Russian (HEAD's `zerograph.toml`) |
 
 `store-head-copy` is the store HEAD had before #77's re-enrich — questions from 2026-09-12, in
 each entry's own language, the 12/30 reading. The re-enriched English-and-Russian store (11/30)
@@ -47,7 +47,7 @@ binary rather than quoted, so every comparison below is one binary against itsel
 the lists their checkouts resolve today (above) every one of their existing entries is stale, and
 a plain `enrich` would re-roll the whole main set along with adding the new one. A re-roll is the
 lottery #77 measured; mixed into this reading it would make the pass's effect unreadable. So the
-measured runs use `enrich_command` set, through `REPOGRAPH_CONFIG`, to a wrapper that answers the
+measured runs use `enrich_command` set, through `ZEROGRAPH_CONFIG`, to a wrapper that answers the
 main prompt with nothing — those batches fail, and their entries keep the questions they have —
 and sends the asker's prompt to the default generator unchanged: the same `claude -p --model
 haiku` line with the same flags, except `--output-format json`, which the wrapper unpacks to the
@@ -92,7 +92,7 @@ routine runs. Per-case flips are listed against P0, H0 and, for HEAD, the 11/30 
 
 ## Results
 
-**2026-09-23.** Every arm was read by one binary, `repograph-2f051a8`, built from this branch after
+**2026-09-23.** Every arm was read by one binary, `zerograph-2f051a8`, built from this branch after
 it was rebased onto `main` at `01ffbf8`. The pass is `71f8353`; `2f051a8` makes the lexical index
 read a store whose only questions are the asker's. Before any paid run, P0 and H0 were read by the
 first build, `6e125f9`, and the re-reads matched them case for case. The runs are in `runs.jsonl`
@@ -237,7 +237,7 @@ about the pass, but any paid enrich on this machine carries it while the connect
 
 `/Users/max/bench/issue77-2026-09-23/asker-pass/` holds:
 
-- **Binaries:** `repograph-6e125f9` and `repograph-2f051a8`.
+- **Binaries:** `zerograph-6e125f9` and `zerograph-2f051a8`.
 - **Transport:** `wrapper.sh` and `machine.toml`.
 - **Scripts:**
   - `bench-arm.sh <arm> [dev]`;

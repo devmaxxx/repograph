@@ -1,4 +1,4 @@
-"""Ask repograph, graphify and gitnexus the same questions and score the answers.
+"""Ask zerograph, graphify and gitnexus the same questions and score the answers.
 
 Two suites run against one corpus at one commit:
 
@@ -27,12 +27,12 @@ NO_PATH = re.compile(r"no call path|No directed path|\"status\":\s*\"no_path\"|n
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 
 
-# A cached answer, for a run with no repograph binary to hand. Written by `--save-id-families`,
+# A cached answer, for a run with no zerograph binary to hand. Written by `--save-id-families`,
 # which records the corpus and the commit it was taken from and the day it was taken.
 FAMILIES_CACHE = Path(__file__).resolve().parent / "id-families.json"
 
 
-def load_id_families(repo: Path, repograph: str = "zerograph") -> list[str]:
+def load_id_families(repo: Path, zerograph: str = "zerograph") -> list[str]:
     """The corpus's own list of requirement-id families, e.g. `FR-AI`, `INV`, `N`.
 
     A pattern built from anything looser also matches `UTF-8`, `SHA-256`, `RFC-7807` — tokens
@@ -43,7 +43,7 @@ def load_id_families(repo: Path, repograph: str = "zerograph") -> list[str]:
 
     Failing loudly beats falling back to the looser pattern, which was the original defect.
     """
-    argv = [repograph, "--repo", str(repo), "families", "--json"]
+    argv = [zerograph, "--repo", str(repo), "families", "--json"]
     proc = subprocess.run(argv, capture_output=True, text=True)
     if proc.returncode != 0:
         raise RuntimeError(f"cannot build the id pattern: `{' '.join(argv)}` exited {proc.returncode}: {proc.stderr.strip()}")
@@ -114,14 +114,14 @@ def rank_of(answer: str, want: str) -> int | None:
 class Tool:
     name = ""
     # Whether the tool is asked by a case's store id (`id`, `from_id`, `to_id`) when it carries one.
-    # Only repograph writes those ids; every other tool is asked by the bare name.
+    # Only zerograph writes those ids; every other tool is asked by the bare name.
     qualified = False
 
     def __init__(self, repo: Path, opts: argparse.Namespace):
         self.repo = repo
         self.opts = opts
         # Calls a tool refused to answer at all — distinct from a call it answered badly.
-        # Gitnexus and repograph increment this; it stays 0, and thus invisible in the report,
+        # Gitnexus and zerograph increment this; it stays 0, and thus invisible in the report,
         # for a tool whose failures don't need this filter.
         self.failed_calls = 0
 
@@ -152,13 +152,13 @@ class Tool:
     def changes(self, base: str): return None
 
 
-class Repograph(Tool):
-    name = "repograph"
-    # A bare name two languages share is ambiguous to repograph, which lists both and answers neither.
+class Zerograph(Tool):
+    name = "zerograph"
+    # A bare name two languages share is ambiguous to zerograph, which lists both and answers neither.
     qualified = True
 
     def bin(self) -> list[str]:
-        return [self.opts.repograph, "--repo", str(self.repo)]
+        return [self.opts.zerograph, "--repo", str(self.repo)]
 
     def answered(self, argv: list[str], verdict_ok: bool = False) -> tuple[str, float]:
         """A refusal is not an answer: its namesake list names the declaring files, which the
@@ -256,7 +256,7 @@ class Gitnexus(Tool):
         return self.run(["gitnexus", "detect-changes", "-s", "compare", "-b", base, "-l", "500", *self.r()])
 
 
-TOOLS = {"repograph": Repograph, "graphify": Graphify, "gitnexus": Gitnexus}
+TOOLS = {"zerograph": Zerograph, "graphify": Graphify, "gitnexus": Gitnexus}
 
 
 def named(answer: str, paths: list[str]) -> list[str]:
@@ -443,16 +443,16 @@ def main() -> None:
     ap.add_argument("--repo", required=True, help="corpus root")
     ap.add_argument("--cases", default="", help="retrieval cases; default bench/cases.jsonl")
     ap.add_argument("--blast", default="", help="blast cases; default bench/blast.jsonl")
-    ap.add_argument("--tools", default="repograph,graphify,gitnexus")
+    ap.add_argument("--tools", default="zerograph,graphify,gitnexus")
     ap.add_argument("--suites", default="retrieval,blast")
-    ap.add_argument("--repograph", default="zerograph", help="zerograph binary")
+    ap.add_argument("--zerograph", default="zerograph", help="zerograph binary")
     ap.add_argument("--graphify-graph", default="graphify-out/graph.json")
     ap.add_argument("--gitnexus-repo", default="")
     ap.add_argument("--strip-prefix", action="append", default=[])
     ap.add_argument("--timeout", type=int, default=180)
     ap.add_argument("--truth", default="", help="reuse a truth file instead of rebuilding it")
     ap.add_argument("--di-root", action="append", default=[], help="a source root the trace truth reads; repeatable; default: truth.DI_ROOTS")
-    ap.add_argument("--id-families", default="", help=f"read the scorer's families from this cached artefact instead of asking repograph; {FAMILIES_CACHE.name} is the one shipped here")
+    ap.add_argument("--id-families", default="", help=f"read the scorer's families from this cached artefact instead of asking zerograph; {FAMILIES_CACHE.name} is the one shipped here")
     ap.add_argument("--save-id-families", default="", help="write the families derived from the corpus to this file, for a later offline run")
     ap.add_argument("--out", required=True)
     args = ap.parse_args()
@@ -479,7 +479,7 @@ def main() -> None:
     head = subprocess.run(["git", "rev-parse", "--short", "HEAD"], cwd=repo,
                           capture_output=True, text=True).stdout.strip()
 
-    families = read_id_families(Path(args.id_families)) if args.id_families else load_id_families(repo, args.repograph)
+    families = read_id_families(Path(args.id_families)) if args.id_families else load_id_families(repo, args.zerograph)
     set_id_families(families)
     if args.save_id_families:
         Path(args.save_id_families).write_text(json.dumps(

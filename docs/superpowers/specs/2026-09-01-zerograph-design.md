@@ -1,6 +1,6 @@
-# repograph — a standalone Rust tool for tracking a project's knowledge graph
+# zerograph — a standalone Rust tool for tracking a project's knowledge graph
 
-New repository at `/Users/max/Documents/projects/repograph`. `beauty-crm` is its first consumer
+New repository at `/Users/max/Documents/projects/zerograph`. `beauty-crm` is its first consumer
 and its benchmark corpus, referenced by path — never vendored, never modified by this plan.
 
 ## Context
@@ -14,7 +14,7 @@ budget recovered **0**. Its 20,158 model-only cross-document edges are reachable
 custom git merge driver, a 380 MB GitNexus index covering only code, and `/graphify --update` —
 referenced by five files and existing as none.
 
-Goal: one Rust binary, `repograph`, that builds and incrementally updates a project graph at
+Goal: one Rust binary, `zerograph`, that builds and incrementally updates a project graph at
 **0 API tokens forever**, answers at ≤130 tokens p90, and beats graphify on every measured axis.
 
 Decisions taken by Max 2026-09-01: a one-time local embedding-model download is allowed;
@@ -52,7 +52,7 @@ U+00B7; 34,836 id occurrences / 2962 distinct / 20 families, of which **3457 sit
 | `rq.sh` (rg + awk) | 0/14 | 24/24 | 0 | 0.7 s rebuild | headlines only — no bodies, no symbols, no stemming |
 | tantivy alone | ~4/14 | 24/24 | 0 | incremental | no graph: cannot walk a hit to what it implements |
 | embeddings alone | est. 8–10/14 | weak on exact ids | 0 | incremental | fuzzy on exact `FR-PAY-22` asks; no structure |
-| **repograph — exact → BM25(ru) → dense, RRF-fused, then 1-hop expansion** | ≥12/14 | 24/24 | 0 | <1 s per save | — |
+| **zerograph — exact → BM25(ru) → dense, RRF-fused, then 1-hop expansion** | ≥12/14 | 24/24 | 0 | <1 s per save | — |
 
 The silver bullet is not a better graph; it is a better **door**. The hand-written id graph
 already *is* the structure — graphify re-derived it for 14.6M tokens and then could not enter it.
@@ -63,15 +63,15 @@ and fresh.
 ## Repository layout
 
 ```
-repograph/                        # git init, no remote yet (publishing is a separate ask)
+zerograph/                        # git init, no remote yet (publishing is a separate ask)
   Cargo.toml                      # workspace, one binary crate
   README.md  LICENSE  .gitignore
-  repograph.toml                  # the tool's own config, and the worked example
+  zerograph.toml                  # the tool's own config, and the worked example
   src/
     main.rs        clap: build | update | ask | explain | verify | bench | import-legacy
-    config.rs      repograph.toml: doc globs, code globs, id families, requirement dialects
+    config.rs      zerograph.toml: doc globs, code globs, id families, requirement dialects
     walk.rs        ignore::WalkBuilder, blake3 per file, manifest diff
-    store.rs       rkyv snapshot + manifest in <repo>/.repograph/
+    store.rs       rkyv snapshot + manifest in <repo>/.zerograph/
     doc/           tree-sitter-md: requirement blocks, id refs, links, tables, yaml registries
     code/          tree-sitter-typescript: exports, imports, classes, decorators, calls,
                    ids inside comments and string literals
@@ -84,10 +84,10 @@ repograph/                        # git init, no remote yet (publishing is a sep
   tests/           unit + golden-file tests
   bench/
     cases.jsonl    24 keyword + 14 paraphrase + code probes, each with a floor
-    run.rs         `repograph bench --repo <path>`; corpus path from REPOGRAPH_BENCH_REPO
+    run.rs         `zerograph bench --repo <path>`; corpus path from ZEROGRAPH_BENCH_REPO
 ```
 
-`repograph.toml` keeps the tool generic — id families, requirement-line dialects and doc/code
+`zerograph.toml` keeps the tool generic — id families, requirement-line dialects and doc/code
 globs are configuration, not code. Defaults match `beauty-crm`'s conventions; a repo without a
 config still gets code extraction plus markdown headings.
 
@@ -140,14 +140,14 @@ in comments and string literals produce `references` edges — that is the 3457-
 layer an AST-only indexer misses entirely. Paths are handled as bytes (Cyrillic filenames); a
 `\0` byte in a `.ts`-globbed file is skipped, not fatal.
 
-**Legacy.** `repograph import-legacy <graph.json>` takes edges whose endpoints are both
+**Legacy.** `zerograph import-legacy <graph.json>` takes edges whose endpoints are both
 non-`_origin:"ast"` and share no id, resolving each endpoint to a real node by id-in-label, then
 by `(basename, label)`, else creating a `LegacyConcept`. `community_name` is copied onto resolved
 nodes. Unresolved count is printed, so the loss is a number rather than a surprise.
 
 ## Retrieval
 
-`repograph ask <words…> [--json] [--budget N] [--bodies] [--no-dense]`
+`zerograph ask <words…> [--json] [--budget N] [--bodies] [--no-dense]`
 1. Exact — a token matching the id regex or an exact symbol name wins outright.
 2. Lexical — tantivy over `label + body`, Russian and English stemming, top 20.
 3. Dense — e5-small query embedding (with the `"query: "` prefix the model card specifies — to be
@@ -158,11 +158,11 @@ nodes. Unresolved count is printed, so the loss is a number rather than a surpri
 6. Print `ID  path:line  headline` — the shape measured at 57 tok median. `--bodies` prints full
    requirement bodies (261 tok median).
 
-`repograph explain <node>` — the node and its edges grouped by kind, legacy edges last.
+`zerograph explain <node>` — the node and its edges grouped by kind, legacy edges last.
 
 ## Incremental update
 
-`repograph update` walks, hashes, diffs the manifest, re-extracts only changed files and replaces
+`zerograph update` walks, hashes, diffs the manifest, re-extracts only changed files and replaces
 their nodes and edges wholesale — correct here because nothing in the graph is model-derived.
 Only changed nodes are re-embedded; tantivy does delete-by-file then re-add; the rkyv snapshot is
 written to a temp file and renamed (`merge-ast.py` writes non-atomically — a known gap not
@@ -173,13 +173,13 @@ M3 Pro (to be measured), incremental saves well under 1 s without dense.
 
 | # | deliverable | done when | effort |
 |---|---|---|---|
-| 0 | `cargo new`, git init, config, walk+hash+manifest, rkyv store, no-op extractors | `repograph update --repo ../beauty-crm` twice is a fixed point | 1 d |
+| 0 | `cargo new`, git init, config, walk+hash+manifest, rkyv store, no-op extractors | `zerograph update --repo ../beauty-crm` twice is a fixed point | 1 d |
 | 1 | doc extractor: requirements (both dialects), id graph, registries, milestones, links | nodes/edges ≥ `rq.sh index`'s 1935/11447; the 7 undeclared FR ids surface | 2 d |
 | 2 | code extractor: exports, imports+barrels+aliases, decorators, ids in comments | `asGrosze`, `problemDetailsOf`, `vitestBase` resolve to the files `rg` finds | 2.5 d |
 | 3 | tantivy + exact + expansion, `ask`/`explain` | keyword 24/24; paraphrase ≥7/14 with `--no-dense`; p90 ≤130 tok | 1.5 d |
 | 4 | fastembed dense + RRF | paraphrase ≥12/14 on `bench/cases.jsonl` | 1 d |
 | 5 | `import-legacy` | ≥90% of the 20,158 edges resolve to real nodes; `explain FR-PAY-22` shows them | 0.5 d |
-| 6 | README, `repograph.toml` docs, CI (`cargo test` + `bench`), release binaries on tag | a clean clone builds and benches on another machine | 1 d |
+| 6 | README, `zerograph.toml` docs, CI (`cargo test` + `bench`), release binaries on tag | a clean clone builds and benches on another machine | 1 d |
 
 Total ≈9 days. Phase 4 is the one gated on a measurement that does not exist yet, so it is
 sequenced late and its fallback (`MultilingualE5Base`, 768-d) is named in advance.
@@ -188,10 +188,10 @@ sequenced late and its fallback (`MultilingualE5Base`, 768-d) is named in advanc
 
 Not started here, listed so the boundary is explicit: npm wrapper with per-platform
 `optionalDependencies` (the esbuild/biome pattern, no postinstall — `beauty-crm`'s pnpm
-`allowBuilds` allowlist would otherwise fail the install); a `"repograph"` script in the root
+`allowBuilds` allowlist would otherwise fail the install); a `"zerograph"` script in the root
 `package.json` (a protected path — authorised, but deferred to that plan); replacing
 `graphify-autoupdate.mjs` and `graphify-notice.mjs`; folding `.claude/skills/repo-query/` into
-`repograph ask`; deleting `graphify-out/` (2005 files, 53 MB) and the git merge driver; an ADR.
+`zerograph ask`; deleting `graphify-out/` (2005 files, 53 MB) and the git merge driver; an ADR.
 
 ## Risks
 
@@ -208,8 +208,8 @@ Not started here, listed so the boundary is explicit: npm wrapper with per-platf
 
 `cargo test` covers the id regex (ranges, slash lists, the ambiguous families that must *not*
 match), both requirement dialects, barrel resolution, the Russian stemmer, RRF ordering and the
-atomic write. `repograph bench --repo ../beauty-crm` runs the 38 recorded cases against their
+atomic write. `zerograph bench --repo ../beauty-crm` runs the 38 recorded cases against their
 floors and fails the build if recall or token cost regresses. Parity spot-checks against today's
 answers: `ask cancellation` → FR-PAY-20, FR-PAY-22, N-151; a master's working hours → FR-DM-101.
-End to end: add an export to a `.ts` in `beauty-crm`, `repograph update`, `explain` finds it;
+End to end: add an export to a `.ts` in `beauty-crm`, `zerograph update`, `explain` finds it;
 revert, update, it is gone and `FR-PAY-22` still resolves.

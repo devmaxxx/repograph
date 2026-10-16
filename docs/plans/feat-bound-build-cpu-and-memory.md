@@ -14,7 +14,7 @@
 ## What the measurement has to answer first
 Per phase of `build` (empty store, every row embedded) and `update` (about a thousand rows owed)
 on `~/bench/beauty-crm-test`, at each level: wall, peak CPU over a 1 s window, mean CPU, peak RSS,
-threads. Phases are cut by `REPOGRAPH_TIMING` lines: walk, parse (extract), graph (settle), save,
+threads. Phases are cut by `ZEROGRAPH_TIMING` lines: walk, parse (extract), graph (settle), save,
 model open, embed. The BM25 build is not in a writer; it runs in the first reader, and is measured
 on `--no-dense ask`.
 
@@ -29,7 +29,7 @@ any `std::thread::spawn` on the writer path (the tokenizer load beside the sessi
   down, one thread as the floor; its doc comment carries the measurement; unit tests state the
   rule as a property over core counts (never above 30% of the machine, never above `full`, never
   below `low`) beside the 12-core worked values.
-- `src/ask.rs`, `src/main.rs` — `REPOGRAPH_TIMING` marks a writer's phases (walked, extracted,
+- `src/ask.rs`, `src/main.rs` — `ZEROGRAPH_TIMING` marks a writer's phases (walked, extracted,
   settled, saved), which is how the measurement cuts one run into phases.
 - `docs/configuration.md` — the `resources` row and the Resources section: the new rule, the
   table re-measured on today's fixture and default model, per phase, with the date and the
@@ -39,14 +39,14 @@ any `std::thread::spawn` on the writer path (the tokenizer load beside the sessi
   the threads found, the memory accounting.
 
 ## Steps
-1. Phase marks under `REPOGRAPH_TIMING`; a "before" binary built from them.
+1. Phase marks under `ZEROGRAPH_TIMING`; a "before" binary built from them.
 2. Before matrix: `update` and `build` at low / balanced / full, `--no-dense ask` for BM25.
 3. Experiments on the `update` scenario to choose the bound (see Decisions).
 4. The change in `threads_from`, its tests, an "after" binary.
 5. After matrix at the same three levels.
 6. Docs: configuration, history, the results file.
 7. `cargo test`, `cargo clippy`, `/code-review high --fix`, re-test.
-8. `bench/history/run-repograph.sh` to show retrieval did not move; commit, push, PR.
+8. `bench/history/run-zerograph.sh` to show retrieval did not move; commit, push, PR.
 
 ## Tests
 - `src/index/embed.rs` — `balanced` is the largest whole thread count within 30% of the logical

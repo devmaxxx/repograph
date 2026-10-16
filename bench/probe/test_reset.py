@@ -47,7 +47,7 @@ class Reset(unittest.TestCase):
         (self.fix / ".repograph/manifest.json").write_text('{"files": {}}')
         (self.fix / ".repograph/vectors.f32").write_bytes(b"v")
         self.calls = self.tmp / "calls"
-        self.bin = self.tmp / "repograph-stub"
+        self.bin = self.tmp / "zerograph-stub"
         self.stub("changed 0 removed 0 nodes 1 edges 0")
 
     def stub(self, line):

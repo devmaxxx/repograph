@@ -18,7 +18,7 @@ from pathlib import Path
 
 import truth as T
 
-# L10: a `.vue` file is in the TypeScript family, JavaScript included since 0.5.3 (#64), so only these files may hold a reference repograph writes.
+# L10: a `.vue` file is in the TypeScript family, JavaScript included since 0.5.3 (#64), so only these files may hold a reference zerograph writes.
 FAMILY = (".vue", ".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs")
 IMPACT_MAX = 8
 TRACE_MAX = 2
