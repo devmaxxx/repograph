@@ -3,67 +3,127 @@
 <style>
 :root{--bg:#0d1117;--card:#161b22;--line:#30363d;--fg:#e6edf3;--mut:#8b949e;--z:#3fb950;--g:#d29922;--n:#a371f7;--r:#58a6ff}
 *{box-sizing:border-box;margin:0}
-body{background:var(--bg);color:var(--fg);font:15px/1.35 -apple-system,"SF Pro Text","Segoe UI",Inter,sans-serif;width:1600px;padding:40px 44px}
-h1{font-size:32px;letter-spacing:-.5px}
+body{background:var(--bg);color:var(--fg);font:17px/1.4 -apple-system,"SF Pro Text","Segoe UI",Inter,sans-serif;width:1000px;padding:36px 36px}
+h1{font-size:38px;letter-spacing:-.5px}
 h1 b{color:var(--z)}
-.sub{color:var(--mut);margin:6px 0 16px;font-size:15px}
-.legend{display:flex;gap:22px;font-size:14px;color:var(--mut);margin-bottom:18px}
-.legend i{display:inline-block;width:12px;height:12px;border-radius:3px;margin-right:7px;vertical-align:-1px}
-.grid{display:grid;grid-template-columns:repeat(3,1fr);gap:20px}
-.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:20px 22px}
-h2{font-size:17px;margin-bottom:2px}
-.note{color:var(--mut);font-size:13px;margin-bottom:14px}
-.row{display:grid;grid-template-columns:84px 1fr 72px;align-items:center;gap:10px;margin:7px 0}
-.who{font-size:13px;color:var(--mut)}
-.track{height:18px;background:#21262d;border-radius:4px;overflow:hidden;position:relative}
-.bar{height:100%;border-radius:4px;position:absolute;inset:0 auto 0 0}
-.val{font-size:15px;font-variant-numeric:tabular-nums;text-align:right}
-.best{color:var(--z);font-weight:600}
-.foot{color:var(--mut);font-size:12.5px;margin-top:18px}
+.sub{color:var(--mut);margin:8px 0 26px;font-size:17px}
+.grid{display:grid;grid-template-columns:1fr;gap:22px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:22px 24px}
+h2{font-size:23px;margin-bottom:4px}
+.note{color:var(--mut);font-size:15px;margin-bottom:16px}
+.legend{display:flex;gap:22px;font-size:15px;color:var(--mut);margin-bottom:14px}
+.legend i{display:inline-block;width:11px;height:11px;border-radius:3px;margin-right:6px;vertical-align:-1px}
+.metric{margin:10px 0 14px}
+.metric .lbl{font-size:15px;color:var(--mut);margin-bottom:5px}
+.row{display:grid;grid-template-columns:110px 1fr 120px;align-items:center;gap:10px;margin:3px 0}
+.row .who{font-size:15px;color:var(--mut)}
+.track{height:20px;background:#21262d;border-radius:4px;overflow:hidden}
+.bar{height:100%;border-radius:4px}
+.val{font-size:17px;font-variant-numeric:tabular-nums;text-align:right}
+.val.best{color:var(--z);font-weight:600}
+table{width:100%;border-collapse:collapse;font-variant-numeric:tabular-nums}
+th,td{padding:11px 8px;border-bottom:1px solid var(--line);text-align:right;font-size:17px}
+th{color:var(--mut);font-weight:500;font-size:14.5px}
+th:first-child,td:first-child{text-align:left}
+td.best{color:var(--z);font-weight:600}
+tr:last-child td{border-bottom:0}
+.tag{font-size:13px;color:var(--bg);background:var(--z);border-radius:10px;padding:1px 7px;margin-left:6px;vertical-align:1px}
+.tag.alt{background:var(--r)}
+.big{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:14px}
+.kpi{border:1px solid var(--line);border-radius:10px;padding:12px 14px}
+.kpi .k{font-size:14.5px;color:var(--mut)}
+.kpi .v{font-size:32px;font-weight:650;margin-top:2px}
+.kpi .v small{font-size:13px;color:var(--mut);font-weight:400}
+.foot{color:var(--mut);font-size:14px;margin-top:22px;line-height:1.5}
+.span2{grid-column:span 2}
 </style></head><body>
 
 <h1><b>zerograph</b> vs graphify vs GitNexus</h1>
-<div class="sub">Same repository, same questions, every number measured. Lower is better where marked ↓.</div>
-<div class="legend"><span><i style="background:var(--z)"></i>zerograph</span><span><i style="background:var(--g)"></i>graphify</span><span><i style="background:var(--n)"></i>GitNexus</span></div>
+<div class="sub">Same corpus: beauty-crm at 502e8a6d (Russian requirement docs + TypeScript monorepo, ~8.3k nodes). Apple M3 Pro, CPU only. Every number measured, one run per cell.</div>
 
 <div class="grid">
 
-<div class="card"><h2>Questions answered</h2><div class="note">out of 82</div>
-<div class="row"><span class="who">zerograph</span><div class="track"><div class="bar" style="width:74.4%;background:var(--z)"></div></div><span class="val best">61</span></div>
-<div class="row"><span class="who">graphify</span><div class="track"><div class="bar" style="width:39%;background:var(--g)"></div></div><span class="val">32</span></div>
-<div class="row"><span class="who">GitNexus</span><div class="track"><div class="bar" style="width:14.6%;background:var(--n)"></div></div><span class="val">12</span></div>
-</div>
+<!-- 1: retrieval -->
+<div class="card">
+<h2>Finding the right node — 82 questions</h2>
+<div class="note">Strict hit in top results · 2026-09-04 · zerograph without enrich, small embedder</div>
+<div class="legend"><span><i style="background:var(--z)"></i>zerograph</span><span><i style="background:var(--g)"></i>graphify 0.9.48</span><span><i style="background:var(--n)"></i>GitNexus 1.6.9</span></div>
 
-<div class="card"><h2>Answer size ↓</h2><div class="note">median characters handed to the agent</div>
+<div class="metric"><div class="lbl">Keyword (40)</div>
+<div class="row"><span class="who">zerograph</span><div class="track"><div class="bar" style="width:100%;background:var(--z)"></div></div><span class="val best">40/40</span></div>
+<div class="row"><span class="who">graphify</span><div class="track"><div class="bar" style="width:55%;background:var(--g)"></div></div><span class="val">22/40</span></div>
+<div class="row"><span class="who">GitNexus</span><div class="track"><div class="bar" style="width:0%;background:var(--n)"></div></div><span class="val">0/40</span></div>
+</div>
+<div class="metric"><div class="lbl">Paraphrase (30)</div>
+<div class="row"><span class="who">zerograph</span><div class="track"><div class="bar" style="width:30%;background:var(--z)"></div></div><span class="val best">9/30</span></div>
+<div class="row"><span class="who">graphify</span><div class="track"><div class="bar" style="width:3.3%;background:var(--g)"></div></div><span class="val">1/30</span></div>
+<div class="row"><span class="who">GitNexus</span><div class="track"><div class="bar" style="width:0%;background:var(--n)"></div></div><span class="val">0/30</span></div>
+</div>
+<div class="metric"><div class="lbl">Code (12)</div>
+<div class="row"><span class="who">zerograph</span><div class="track"><div class="bar" style="width:100%;background:var(--z)"></div></div><span class="val best">12/12</span></div>
+<div class="row"><span class="who">graphify</span><div class="track"><div class="bar" style="width:75%;background:var(--g)"></div></div><span class="val">9/12</span></div>
+<div class="row"><span class="who">GitNexus</span><div class="track"><div class="bar" style="width:100%;background:var(--n)"></div></div><span class="val best">12/12</span></div>
+</div>
+<div class="metric"><div class="lbl">Answer size, median characters (smaller is cheaper for an agent)</div>
 <div class="row"><span class="who">zerograph</span><div class="track"><div class="bar" style="width:8.9%;background:var(--z)"></div></div><span class="val best">593</span></div>
 <div class="row"><span class="who">graphify</span><div class="track"><div class="bar" style="width:100%;background:var(--g)"></div></div><span class="val">6,688</span></div>
 <div class="row"><span class="who">GitNexus</span><div class="track"><div class="bar" style="width:93.4%;background:var(--n)"></div></div><span class="val">6,246</span></div>
 </div>
-
-<div class="card"><h2>LLM tokens to build ↓</h2><div class="note">graphify extracts its graph with a model</div>
-<div class="row"><span class="who">zerograph</span><div class="track"></div><span class="val best">0</span></div>
-<div class="row"><span class="who">graphify</span><div class="track"><div class="bar" style="width:100%;background:var(--g)"></div></div><span class="val">14.6 M</span></div>
-<div class="row"><span class="who">GitNexus</span><div class="track"></div><span class="val best">0</span></div>
 </div>
 
-<div class="card"><h2>Impact: affected files found</h2><div class="note">out of 123</div>
-<div class="row"><span class="who">zerograph</span><div class="track"><div class="bar" style="width:100%;background:var(--z)"></div></div><span class="val best">123</span></div>
-<div class="row"><span class="who">graphify</span><div class="track"><div class="bar" style="width:46.3%;background:var(--g)"></div></div><span class="val">57</span></div>
-<div class="row"><span class="who">GitNexus</span><div class="track"><div class="bar" style="width:63.4%;background:var(--n)"></div></div><span class="val">78</span></div>
+<!-- 2: blast radius + build -->
+<div class="card">
+<h2>Blast radius and cost to build</h2>
+<div class="note">Same run · impact over 16 targets, trace over 8 pairs, changes over 8 diffs</div>
+<table>
+<tr><th></th><th>zerograph</th><th>graphify</th><th>GitNexus</th></tr>
+<tr><td>impact — files found / 123</td><td class="best">123</td><td>57</td><td>78</td></tr>
+<tr><td>trace — correct / 8</td><td class="best">8</td><td>5</td><td>2</td></tr>
+<tr><td>changes — symbols found / 1,844</td><td class="best">1,783</td><td>—</td><td>68</td></tr>
+<tr><td>median latency, impact</td><td class="best">42 ms</td><td>392 ms</td><td>919 ms</td></tr>
+<tr><td>build wall time</td><td>139 s</td><td class="best">23 s<sup>†</sup></td><td>215 s</td></tr>
+<tr><td>size on disk</td><td class="best">32 MB</td><td>123 MB</td><td>598 MB</td></tr>
+<tr><td>LLM tokens to build</td><td class="best">0</td><td>14.6 M<sup>‡</sup></td><td>0</td></tr>
+</table>
+<div class="note" style="margin:12px 0 0">zerograph 139 s = 1 s lexical graph + 135 s local embedding of 7,408 rows. † graphify off a warm semantic cache. ‡ graphify's cold build is LLM extraction: 14,597,195 tokens.</div>
 </div>
 
-<div class="card"><h2>Paraphrase, by embedder</h2><div class="note">out of 60 · solid: embedder alone · light: with <code>--rerank</code></div>
-<div class="row"><span class="who">e5-small</span><div class="track"><div class="bar" style="width:80%;background:var(--r);opacity:.35"></div><div class="bar" style="width:40%;background:var(--r)"></div></div><span class="val">24 → 48</span></div>
-<div class="row"><span class="who">gemma</span><div class="track"><div class="bar" style="width:83.3%;background:var(--z);opacity:.35"></div><div class="bar" style="width:58.3%;background:var(--z)"></div></div><span class="val">35 → 50</span></div>
-<div class="row"><span class="who">arctic-l</span><div class="track"><div class="bar" style="width:86.7%;background:var(--n);opacity:.35"></div><div class="bar" style="width:65%;background:var(--n)"></div></div><span class="val best">39 → 52</span></div>
+<!-- 3: embedders x rerank -->
+<div class="card">
+<h2>Embedders, with and without rerank</h2>
+<div class="note">Widened paraphrase arm, 60 cases · enriched store · rerank = sonnet, depth 200</div>
+<table>
+<tr><th>embedder</th><th>dim</th><th>no rerank</th><th>+ rerank</th><th>embed time</th><th>vectors</th><th>peak RSS</th></tr>
+<tr><td>multilingual-e5-small</td><td>384</td><td>24/60</td><td>48/60</td><td class="best">144 s</td><td class="best">51 MB</td><td>1.8 GB</td></tr>
+<tr><td>embeddinggemma-300m<span class="tag">default</span></td><td>768</td><td>35/60</td><td>50/60</td><td>733 s</td><td>103 MB</td><td class="best">1.3 GB</td></tr>
+<tr><td>snowflake-arctic-embed-l-v2.0<span class="tag alt">upgrade</span></td><td>1024</td><td class="best">39/60</td><td class="best">52/60</td><td>1,944 s</td><td>137 MB</td><td>2.0 GB</td></tr>
+</table>
+<div class="metric" style="margin-top:16px"><div class="lbl">Paraphrase hits / 60 — solid: embedder alone · light: added by rerank</div>
+<div class="row"><span class="who">e5-small</span><div class="track" style="position:relative"><div class="bar" style="width:80%;background:var(--r);opacity:.35;position:absolute;inset:0 auto 0 0"></div><div class="bar" style="width:40%;background:var(--r);position:absolute;inset:0 auto 0 0"></div></div><span class="val">24 → 48</span></div>
+<div class="row"><span class="who">gemma</span><div class="track" style="position:relative"><div class="bar" style="width:83.3%;background:var(--z);opacity:.35;position:absolute;inset:0 auto 0 0"></div><div class="bar" style="width:58.3%;background:var(--z);position:absolute;inset:0 auto 0 0"></div></div><span class="val">35 → 50</span></div>
+<div class="row"><span class="who">arctic-l</span><div class="track" style="position:relative"><div class="bar" style="width:86.7%;background:var(--n);opacity:.35;position:absolute;inset:0 auto 0 0"></div><div class="bar" style="width:65%;background:var(--n);position:absolute;inset:0 auto 0 0"></div></div><span class="val best">39 → 52</span></div>
+</div>
+<div class="note" style="margin:6px 0 0">Embed time: whole store, 33,525 rows, first build. A later <code>update</code> re-embeds only changed rows.</div>
 </div>
 
-<div class="card"><h2>Model tokens per question ↓</h2><div class="note">rerank is opt-in, the only step that spends any</div>
-<div class="row"><span class="who">ask</span><div class="track"></div><span class="val best">0</span></div>
-<div class="row"><span class="who">--rerank</span><div class="track"><div class="bar" style="width:100%;background:var(--r)"></div></div><span class="val">≥14.4k</span></div>
-<div class="row"><span class="who">answer text</span><div class="track"><div class="bar" style="width:1.6%;background:var(--z)"></div></div><span class="val">~230</span></div>
+<!-- 4: token usage -->
+<div class="card">
+<h2>Token usage per question</h2>
+<div class="note">82 recorded cases · rerank row measured 2026-09-09, 2 runs, identical picks</div>
+<div class="big">
+<div class="kpi"><div class="k">answer handed to the agent, p90</div><div class="v">~230 <small>tokens</small></div></div>
+<div class="kpi"><div class="k">model tokens, plain <code>ask</code></div><div class="v" style="color:var(--z)">0</div></div>
+<div class="kpi"><div class="k">model tokens, <code>ask --rerank</code></div><div class="v">≥14.4k <small>input</small></div></div>
+</div>
+<table>
+<tr><th></th><th>paraphrase</th><th>keyword</th><th>code</th><th>model tokens</th><th>latency</th></tr>
+<tr><td><code>ask</code> (e5-small store)</td><td>15/30</td><td class="best">40/40</td><td class="best">12/12</td><td class="best">0</td><td class="best">~0.3 s</td></tr>
+<tr><td><code>ask --rerank</code>, sonnet, depth 200</td><td class="best">29/30</td><td class="best">40/40</td><td class="best">12/12</td><td>≥14.4k</td><td>~4.3 s</td></tr>
+</table>
+<div class="note" style="margin:12px 0 0">Rerank is opt-in and the only step that spends model tokens. Its cost is metered in bytes (58 KB median prompt) and divided by four, so it is a floor. The default store now reads 21/30 without rerank.</div>
 </div>
 
 </div>
-<div class="foot">beauty-crm at 502e8a6d, Apple M3 Pro, CPU only. Tools: docs/bench/2026-09-04-three-graphs-results.md (zerograph 0.4.0, small embedder). Embedders and rerank: docs/bench/2026-09-22-embedders-results.md, docs/history.md.</div>
+
+<div class="foot">Sources in the repository: docs/bench/2026-09-04-three-graphs-results.md (three tools; zerograph 0.4.0) · docs/history.md (graphify build tokens, rerank rows) · docs/bench/2026-09-22-embedders-results.md (embedders and the 60-case arm). The panels come from different dates and store configurations and are not one run; compare within a panel.</div>
 </body></html>
