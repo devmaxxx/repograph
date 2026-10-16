@@ -1,74 +1,46 @@
 <!doctype html>
 <html><head><meta charset="utf-8"><title>zerograph comparison</title>
 <style>
-:root{--bg:#0d1117;--card:#161b22;--line:#30363d;--fg:#e6edf3;--mut:#8b949e;--z0:#1a7f37;--z1:#2ea043;--z2:#3fb950;--r1:#56d364;--r2:#7ee787;--r3:#aff5b4;--g:#d29922;--n:#a371f7}
+:root{--bg:#0d1117;--card:#161b22;--line:#30363d;--fg:#e6edf3;--mut:#8b949e;--z0:#1a7f37;--z1:#2ea043;--z2:#3fb950;--r:#7ee787;--g:#d29922;--n:#a371f7}
 *{box-sizing:border-box;margin:0}
-body{background:var(--bg);color:var(--fg);font:17px/1.4 -apple-system,"SF Pro Text","Segoe UI",Inter,sans-serif;width:1000px;padding:36px}
-h1{font-size:36px;letter-spacing:-.5px}
+body{background:var(--bg);color:var(--fg);font:18px/1.4 -apple-system,"SF Pro Text","Segoe UI",Inter,sans-serif;width:900px;padding:32px}
+h1{font-size:34px;letter-spacing:-.5px}
 h1 b{color:var(--z2)}
-.sub{color:var(--mut);margin:8px 0 22px;font-size:16px}
-.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:24px 26px}
-.metric{margin:4px 0 24px}
-.metric:last-child{margin-bottom:4px}
-.lbl{font-size:18px;font-weight:600;margin-bottom:8px}
+.sub{color:var(--mut);margin:6px 0 20px;font-size:16px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:22px 24px}
+.metric{margin-bottom:22px}
+.metric:last-child{margin-bottom:2px}
+.lbl{font-size:19px;font-weight:600;margin-bottom:8px}
 .lbl span{color:var(--mut);font-weight:400;font-size:15px}
-.row{display:grid;grid-template-columns:290px 1fr 110px;align-items:center;gap:12px;margin:5px 0}
-.who{font-size:15px;color:var(--mut);white-space:nowrap}
+.row{display:grid;grid-template-columns:240px 1fr 80px;align-items:center;gap:12px;margin:6px 0}
+.who{font-size:16px;color:var(--mut);white-space:nowrap}
 .who b{color:var(--fg);font-weight:500}
-.track{height:20px;background:#21262d;border-radius:4px;overflow:hidden}
+.track{height:22px;background:#21262d;border-radius:4px;overflow:hidden}
 .bar{height:100%;border-radius:4px}
-.val{font-size:17px;font-variant-numeric:tabular-nums;text-align:right;white-space:nowrap}
+.val{font-size:18px;font-variant-numeric:tabular-nums;text-align:right;white-space:nowrap}
 .best{color:var(--z2);font-weight:600}
-.foot{color:var(--mut);font-size:14px;margin-top:16px;line-height:1.5}
+.foot{color:var(--mut);font-size:14px;margin-top:14px}
 </style></head><body>
 
 <h1><b>zerograph 0.6.0</b> vs graphify vs GitNexus</h1>
-<div class="sub">82 questions on one repository — Russian requirement docs and a TypeScript monorepo, ~8.3k nodes. Every number measured. graphify 0.9.48, GitNexus 1.6.9.</div>
+<div class="sub">Same repository, same 82 questions. graphify 0.9.48, GitNexus 1.6.9.</div>
 
 <div class="card">
-
-<div class="metric"><div class="lbl">Keyword <span>out of 40</span></div>
-<div class="row"><span class="who"><b>zerograph</b> · no embedder</span><div class="track"><div class="bar" style="width:97.5%;background:var(--z0)"></div></div><span class="val">39</span></div>
-<div class="row"><span class="who"><b>zerograph</b> · e5-small</span><div class="track"><div class="bar" style="width:100%;background:var(--z1)"></div></div><span class="val best">40</span></div>
-<div class="row"><span class="who"><b>zerograph</b> · gemma (default)</span><div class="track"><div class="bar" style="width:100%;background:var(--z2)"></div></div><span class="val best">40</span></div>
-<div class="row"><span class="who"><b>zerograph</b> · e5-small + rerank haiku</span><div class="track"><div class="bar" style="width:100%;background:var(--r1)"></div></div><span class="val best">40</span></div>
-<div class="row"><span class="who"><b>zerograph</b> · gemma + rerank haiku</span><div class="track"><div class="bar" style="width:100%;background:var(--r2)"></div></div><span class="val best">40</span></div>
-<div class="row"><span class="who"><b>zerograph</b> · gemma + rerank sonnet</span><div class="track"><div class="bar" style="width:100%;background:var(--r3)"></div></div><span class="val best">40</span></div>
-<div class="row"><span class="who">graphify</span><div class="track"><div class="bar" style="width:55%;background:var(--g)"></div></div><span class="val">22</span></div>
-<div class="row"><span class="who">GitNexus</span><div class="track"><div class="bar" style="width:0%;background:var(--n)"></div></div><span class="val">0</span></div>
+<div class="metric"><div class="lbl">Questions answered <span>out of 82</span></div>
+<div class="row"><span class="who"><b>zerograph</b> · no embedder</span><div class="track"><div class="bar" style="width:70.7%;background:var(--z0)"></div></div><span class="val">58</span></div>
+<div class="row"><span class="who"><b>zerograph</b> · e5-small</span><div class="track"><div class="bar" style="width:74.4%;background:var(--z1)"></div></div><span class="val">61</span></div>
+<div class="row"><span class="who"><b>zerograph</b> · gemma (default)</span><div class="track"><div class="bar" style="width:87.8%;background:var(--z2)"></div></div><span class="val">72</span></div>
+<div class="row"><span class="who"><b>zerograph</b> · gemma + rerank</span><div class="track"><div class="bar" style="width:100%;background:var(--r)"></div></div><span class="val best">82</span></div>
+<div class="row"><span class="who">graphify</span><div class="track"><div class="bar" style="width:39%;background:var(--g)"></div></div><span class="val">32</span></div>
+<div class="row"><span class="who">GitNexus</span><div class="track"><div class="bar" style="width:14.6%;background:var(--n)"></div></div><span class="val">12</span></div>
 </div>
 
-<div class="metric"><div class="lbl">Paraphrase <span>out of 30 — the question in other words than the document's</span></div>
-<div class="row"><span class="who"><b>zerograph</b> · no embedder</span><div class="track"><div class="bar" style="width:23.3%;background:var(--z0)"></div></div><span class="val">7</span></div>
-<div class="row"><span class="who"><b>zerograph</b> · e5-small</span><div class="track"><div class="bar" style="width:30%;background:var(--z1)"></div></div><span class="val">9</span></div>
-<div class="row"><span class="who"><b>zerograph</b> · gemma (default)</span><div class="track"><div class="bar" style="width:66.7%;background:var(--z2)"></div></div><span class="val">20</span></div>
-<div class="row"><span class="who"><b>zerograph</b> · e5-small + rerank haiku</span><div class="track"><div class="bar" style="width:86.7%;background:var(--r1)"></div></div><span class="val">26</span></div>
-<div class="row"><span class="who"><b>zerograph</b> · gemma + rerank haiku</span><div class="track"><div class="bar" style="width:96.7%;background:var(--r2)"></div></div><span class="val">29</span></div>
-<div class="row"><span class="who"><b>zerograph</b> · gemma + rerank sonnet</span><div class="track"><div class="bar" style="width:100%;background:var(--r3)"></div></div><span class="val best">30</span></div>
-<div class="row"><span class="who">graphify</span><div class="track"><div class="bar" style="width:3.3%;background:var(--g)"></div></div><span class="val">1</span></div>
-<div class="row"><span class="who">GitNexus</span><div class="track"><div class="bar" style="width:0%;background:var(--n)"></div></div><span class="val">0</span></div>
+<div class="metric"><div class="lbl">LLM tokens to build the graph <span>lower is better</span></div>
+<div class="row"><span class="who"><b>zerograph</b></span><div class="track"></div><span class="val best">0</span></div>
+<div class="row"><span class="who">graphify</span><div class="track"><div class="bar" style="width:100%;background:var(--g)"></div></div><span class="val">14.6 M</span></div>
+<div class="row"><span class="who">GitNexus</span><div class="track"></div><span class="val best">0</span></div>
+</div>
 </div>
 
-<div class="metric"><div class="lbl">Code <span>out of 12</span></div>
-<div class="row"><span class="who"><b>zerograph</b> · every setup above</span><div class="track"><div class="bar" style="width:100%;background:var(--z2)"></div></div><span class="val best">12</span></div>
-<div class="row"><span class="who">graphify</span><div class="track"><div class="bar" style="width:75%;background:var(--g)"></div></div><span class="val">9</span></div>
-<div class="row"><span class="who">GitNexus</span><div class="track"><div class="bar" style="width:100%;background:var(--n)"></div></div><span class="val best">12</span></div>
-</div>
-
-<div class="metric"><div class="lbl">Answer size <span>median characters handed to the agent, lower is better</span></div>
-<div class="row"><span class="who"><b>zerograph</b></span><div class="track"><div class="bar" style="width:8.9%;background:var(--z2)"></div></div><span class="val best">593</span></div>
-<div class="row"><span class="who">graphify</span><div class="track"><div class="bar" style="width:100%;background:var(--g)"></div></div><span class="val">6,688</span></div>
-<div class="row"><span class="who">GitNexus</span><div class="track"><div class="bar" style="width:93.4%;background:var(--n)"></div></div><span class="val">6,246</span></div>
-</div>
-
-<div class="metric"><div class="lbl">Model tokens <span>to build the graph · per question</span></div>
-<div class="row"><span class="who"><b>zerograph</b></span><div class="track"></div><span class="val best">0 · 0</span></div>
-<div class="row"><span class="who"><b>zerograph</b> + rerank</span><div class="track"></div><span class="val">0 · ≥14k</span></div>
-<div class="row"><span class="who">graphify</span><div class="track"><div class="bar" style="width:100%;background:var(--g)"></div></div><span class="val">14.6 M · 0</span></div>
-<div class="row"><span class="who">GitNexus</span><div class="track"></div><span class="val best">0 · 0</span></div>
-</div>
-
-</div>
-
-<div class="foot">zerograph rows: 0.6.0, store built without enrich, embedders multilingual-e5-small and embeddinggemma-300m run locally on CPU; rerank over a 200-deep pool, opt-in, the only step that spends model tokens. graphify and GitNexus as their own builds produce; answer size was measured in the same run as their rows, on an earlier zerograph. Sources: bench/history/runs.jsonl, docs/bench/ three-graphs results, docs/history.md.</div>
+<div class="foot">Rerank (sonnet) is opt-in and the only step that spends model tokens, about 14k a question.</div>
 </body></html>

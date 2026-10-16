@@ -26,7 +26,7 @@ quoted in comments) and answers questions about it in a few lines of text.
   point from a question in ordinary words, in about 200 tokens an answer.
 - **Built for agents.** `--json` on every reader, an MCP server, and hooks that keep the graph fresh.
 
-[![zerograph against graphify and GitNexus: keyword, paraphrase and code questions answered by each embedder with and without rerank, answer size, and model tokens](docs/assets/comparison.png)](docs/assets/comparison.png)
+[![zerograph against graphify and GitNexus: questions answered by each embedder and with rerank, and LLM tokens to build](docs/assets/comparison.png)](docs/assets/comparison.png)
 
 Sources: [the three-tool run](docs/bench/2026-09-04-three-graphs-results.md) and the 0.6.0 rows of `bench/history/runs.jsonl`.
 
