@@ -42,7 +42,7 @@ zerograph build                            # full build into .zerograph/ (add it
 zerograph ask cancellation policy          # answer in a few lines
 ```
 
-- Windows needs a few extra steps: [running on Windows](docs/windows.md).
+- On Windows: [Windows notes](docs/install.md#windows-notes).
 - Upgrading from repograph: the old store, config and variables are read where they are, see
   [coming from repograph](docs/install.md#coming-from-repograph).
 
@@ -111,7 +111,7 @@ All reference material lives in [docs/](docs/README.md):
 
 - **Use it:** [install](docs/install.md), [commands](docs/commands.md),
   [keeping fresh](docs/keeping-fresh.md), [serve](docs/serve.md), [MCP](docs/mcp.md),
-  [configuration](docs/configuration.md), [running on Windows](docs/windows.md)
+  [configuration](docs/configuration.md), [Windows notes](docs/install.md#windows-notes)
 - **Understand it:** [how it works](docs/how-it-works.md), [the graph model](docs/graph-model.md),
   [languages](docs/languages.md), [embeddings](docs/embeddings.md), [rerank](docs/rerank.md)
 - **Measure it:** [benchmarks](docs/benchmarks.md), [the measurements](docs/history.md),

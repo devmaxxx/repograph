@@ -7,7 +7,7 @@ cargo install --path .             # from source; Rust 1.98, pinned in rust-tool
 ```
 
 npm is the recommended route on every platform: it carries a provenance attestation, and on
-Windows it never meets SmartScreen (see [running on Windows](windows.md)).
+Windows it never meets SmartScreen (see [Windows notes](#windows-notes)).
 
 The npm package carries all three binaries and a launcher that runs the one for this platform,
 so a lockfile written on one platform installs on the others, nothing runs at install time, and
@@ -86,9 +86,27 @@ What zerograph reads from the old install:
   that removes it). Codex's old script stays until `~/.codex/hooks.json` points at
   `zerograph-hook.mjs`; the install prints the block to paste.
 
-## On Windows
+## Windows notes
 
-Windows 10 1903, Windows 11 or Server 2022, CPU inference, and a handful of platform-specific
-traps — SmartScreen on a browser-fetched zip (npm avoids it), Defender scanning the model as it
-lands, PowerShell's code page on a *piped* answer, and keeping the repository out of a OneDrive
-tree. All of it is in [running on Windows](windows.md).
+Install through npm; nothing else is required. What can still trip a Windows user:
+
+- **Floor.** Windows 10 1903, Windows 11 or Server 2022. The binary links ONNX Runtime's DirectML
+  build, so an older system fails at load. Inference runs on the CPU.
+- **SmartScreen.** The binary is not Authenticode-signed. A zip fetched with a browser and opened
+  through Explorer shows "Windows protected your PC"; npm, pnpm, `curl` and `gh release download`
+  never do. `Unblock-File .\zerograph.exe` clears it. [Verifying a download](#verifying-a-download)
+  proves the file is ours.
+- **Defender.** It scans the model as it lands (about 1.2 GB for the default) and the store on every
+  write; the first download prints the `Add-MpPreference -ExclusionPath` line, which is optional. A
+  heuristic false positive is restored from Protection History.
+- **Serve.** `zerograph serve --detach` starts one with no window, `zerograph stop` ends it and
+  removes its socket. `npm i -g` upgrades under a running one; `cargo install` does not, so stop
+  it first.
+- **PowerShell encoding.** Output is UTF-8, but a *piped or captured* answer is decoded with
+  `[Console]::OutputEncoding`, so Cyrillic turns to mojibake on a non-UTF-8 code page. Set it to
+  UTF-8 in your profile.
+- **Git Bash.** `FASTEMBED_CACHE_DIR`, `XDG_CONFIG_HOME` and `ZEROGRAPH_CONFIG` must be Windows-form
+  paths even when set there.
+- **Long paths.** A tree deeper than 260 characters needs `git config core.longpaths true`.
+- **Synced folders.** Keep the repository out of OneDrive, Dropbox or Google Drive: every store
+  write is a rename the client re-uploads, and the socket is a reparse point they do not know.
