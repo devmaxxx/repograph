@@ -6,9 +6,9 @@
 const { spawnSync } = require("node:child_process");
 
 const PACKAGES = {
-  "darwin-arm64": "@devmaxxx/zerograph-darwin-arm64",
-  "linux-x64": "@devmaxxx/zerograph-linux-x64",
-  "win32-x64": "@devmaxxx/zerograph-win32-x64",
+  "darwin-arm64": "zerograph-darwin-arm64",
+  "linux-x64": "zerograph-linux-x64",
+  "win32-x64": "zerograph-win32-x64",
 };
 
 // Cargo names the Windows binary with its extension, and `require.resolve` tries none of its own

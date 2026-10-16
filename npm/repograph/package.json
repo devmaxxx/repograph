@@ -1,7 +1,7 @@
 {
   "name": "@devmaxxx/repograph",
   "version": "0.6.0",
-  "description": "Renamed to @devmaxxx/zerograph. This package installs it and runs it under the old name.",
+  "description": "Renamed to zerograph. This package installs it from the npm registry and runs it under the old name.",
   "license": "MIT",
   "repository": {
     "type": "git",
@@ -19,7 +19,7 @@
     "node": ">=18"
   },
   "dependencies": {
-    "@devmaxxx/zerograph": "0.6.0"
+    "zerograph": "0.6.0"
   },
   "publishConfig": {
     "registry": "https://npm.pkg.github.com"

@@ -1,7 +1,7 @@
 {
-  "name": "@devmaxxx/zerograph-win32-x64",
+  "name": "zerograph-win32-x64",
   "version": "0.6.0",
-  "description": "zerograph binary for Windows on x86-64 (MSVC); installed through @devmaxxx/zerograph",
+  "description": "zerograph binary for Windows on x86-64 (MSVC); installed through zerograph",
   "license": "MIT",
   "repository": {
     "type": "git",
@@ -15,8 +15,5 @@
   ],
   "files": [
     "bin/zerograph.exe"
-  ],
-  "publishConfig": {
-    "registry": "https://npm.pkg.github.com"
-  }
+  ]
 }

@@ -1,12 +1,13 @@
 # @devmaxxx/repograph
 
 repograph is now **zerograph**. This package depends on
-[`@devmaxxx/zerograph`](https://github.com/devmaxxx/zerograph) and runs it as `repograph`, so an
-existing install keeps working. Switch to the new name:
+[`zerograph`](https://www.npmjs.com/package/zerograph), on the public npm registry, and runs it as
+`repograph`, so an existing install keeps working. Switch to the new name, which needs no
+`.npmrc`:
 
 ```sh
 pnpm remove @devmaxxx/repograph
-pnpm add @devmaxxx/zerograph
+pnpm add zerograph
 ```
 
 The upgrade steps — stores, config and hooks under the old name — are in

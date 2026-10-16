@@ -338,7 +338,7 @@ so the suite is obvious (`paraphrase60:<model>[+rerank]`).
 
 ## Cutting a release
 
-Seven steps, in order. Each one exists because skipping it once cost a release run.
+Eight steps, in order. Each one exists because skipping it once cost a release run.
 
 1. **Prove the binaries first.**
    ```bash
@@ -365,15 +365,27 @@ Seven steps, in order. Each one exists because skipping it once cost a release r
    ```bash
    git fetch origin main && SHA=$(git rev-parse origin/main) && git log -1 --format=%B $SHA | grep -iE '\[(skip ci|ci skip|no ci|skip actions|actions skip)\]'
    ```
-   A match means the tag's push will start no run, and step 6 has to dispatch one.
+   A match means the tag's push will start no run, and step 7 has to dispatch one.
 
-5. **Tag and push.**
+5. **Once per package name: the first npm version by hand.** npm's trusted publishing, which the
+   release job uses, can only be set up on a package that exists. Before the first tag that ships
+   a new name (`zerograph`, `zerograph-darwin-arm64`, `zerograph-linux-x64`,
+   `zerograph-win32-x64`), `npm login` as the owner and publish a placeholder of each:
+   ```bash
+   d=$(mktemp -d) && for n in zerograph zerograph-darwin-arm64 zerograph-linux-x64 zerograph-win32-x64; do
+     (cd "$d" && npm init -y --init-version 0.0.0 >/dev/null && npm pkg set name=$n && npm publish --access public)
+   done
+   ```
+   Then on npmjs.com, each package's Settings → Trusted publishing: GitHub Actions, repository
+   `devmaxxx/zerograph`, workflow `release.yml`. A name already set up skips this step.
+
+6. **Tag and push.**
    ```bash
    git tag v<version> $SHA && gh auth switch --hostname github.com --user devmaxxx && git push origin v<version>
    ```
    The tag goes on the commit step 4 read, and it is pushed from the account that owns the repository.
 
-6. **Exactly one publishing run.** If step 4 matched, dispatch at once:
+7. **Exactly one publishing run.** If step 4 matched, dispatch at once:
    ```bash
    gh workflow run release.yml --ref v<version>
    ```
@@ -381,10 +393,11 @@ Seven steps, in order. Each one exists because skipping it once cost a release r
    minutes, or dispatch then. A dispatch from the tag publishes because the publish steps test
    `startsWith(github.ref, 'refs/tags/')`. Two runs would race to publish the same assets.
 
-7. **Verify.**
+8. **Verify.**
    ```bash
    gh api repos/devmaxxx/zerograph/releases/latest --jq .tag_name
-   npm view @devmaxxx/zerograph@<version> version --registry=https://npm.pkg.github.com
+   npm view zerograph@<version> version
+   npm view @devmaxxx/repograph@<version> version --registry=https://npm.pkg.github.com
    ```
    The first prints the tag, the release carries three assets, and the second prints the version: a
    release is done when someone else can install it, not when the tag exists.

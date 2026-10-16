@@ -245,8 +245,8 @@ jobs:
           [Console]::OutputEncoding = [Text.Encoding]::UTF8
           bash scripts/npm-pack.sh 0.0.0-ci ${{ matrix.pack }}=${{ matrix.exe }}
           if ($LASTEXITCODE -ne 0) { throw "the pack script failed: $LASTEXITCODE" }
-          $platform = (Get-Item "dist/npm/devmaxxx-zerograph-${{ matrix.pack }}-0.0.0-ci.tgz").FullName
-          $launcher = (Get-Item "dist/npm/devmaxxx-zerograph-0.0.0-ci.tgz").FullName
+          $platform = (Get-Item "dist/npm/zerograph-${{ matrix.pack }}-0.0.0-ci.tgz").FullName
+          $launcher = (Get-Item "dist/npm/zerograph-0.0.0-ci.tgz").FullName
           $old = (Get-Item "dist/npm/devmaxxx-repograph-0.0.0-ci.tgz").FullName
           $version = (Select-String -Path Cargo.toml -Pattern '^version = "(.*)"').Matches[0].Groups[1].Value
 
@@ -256,9 +256,9 @@ jobs:
           New-Item -ItemType Directory -Force -Path $proj | Out-Null
           Set-Content -Encoding utf8 (Join-Path $proj 'package.json') '{ "name": "consumer", "version": "1.0.0", "private": true }'
           Push-Location $proj
-          # `--omit=optional` keeps npm off GitHub Packages, which answers 401 to an anonymous
-          # request for the two platform packages this runner is not. The one it is comes in by
-          # name, through the same `require.resolve` walk a published install ends at.
+          # `--omit=optional` keeps npm from fetching the two platform packages this runner is not,
+          # which at this commit's version are on no registry. The one it is comes in by name,
+          # through the same `require.resolve` walk a published install ends at.
           npm i --omit=optional --no-audit --no-fund $platform $launcher
           if ($LASTEXITCODE -ne 0) { throw "the install failed: $LASTEXITCODE" }
           $reported = ((npx zerograph --version) | Out-String).Trim()
@@ -267,9 +267,9 @@ jobs:
           # still runs.
           $aliased = ((npx repograph --version) | Out-String).Trim()
           if ($aliased -ne "zerograph $version") { throw "the repograph alias ran something else: $aliased" }
-          # The old package, unpacked beside the launcher rather than installed: its dependency is
-          # on GitHub Packages, which answers an anonymous runner 401. What it ships is the one
-          # require, and that resolves the same either way.
+          # The old package, unpacked beside the launcher rather than installed: it lives on GitHub
+          # Packages, which answers an anonymous runner 401. What it ships is the one require, and
+          # that resolves the same either way.
           New-Item -ItemType Directory -Force -Path 'node_modules/@devmaxxx/repograph' | Out-Null
           tar -xzf $old -C 'node_modules/@devmaxxx/repograph' --strip-components=1
           $renamed = ((node node_modules/@devmaxxx/repograph/bin/repograph.js --version) | Out-String).Trim()

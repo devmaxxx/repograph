@@ -1,7 +1,7 @@
 {
-  "name": "@devmaxxx/zerograph-linux-x64",
+  "name": "zerograph-linux-x64",
   "version": "0.6.0",
-  "description": "zerograph binary for Linux on x86-64 (glibc); installed through @devmaxxx/zerograph",
+  "description": "zerograph binary for Linux on x86-64 (glibc); installed through zerograph",
   "license": "MIT",
   "repository": {
     "type": "git",
@@ -15,8 +15,5 @@
   ],
   "files": [
     "bin/zerograph"
-  ],
-  "publishConfig": {
-    "registry": "https://npm.pkg.github.com"
-  }
+  ]
 }
