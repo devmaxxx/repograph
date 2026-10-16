@@ -26,20 +26,9 @@ quoted in comments) and answers questions about it in a few lines of text.
   point from a question in ordinary words, in about 200 tokens an answer.
 - **Built for agents.** `--json` on every reader, an MCP server, and hooks that keep the graph fresh.
 
-Measured against `graphify`, the LLM-extracted graph it replaces:
+[![zerograph against graphify and GitNexus: questions answered, answer size, build tokens, impact, embedders with rerank, and model tokens](docs/assets/comparison.png)](docs/assets/comparison.png)
 
-| | zerograph | graphify |
-| --- | --- | --- |
-| Paraphrase questions | **7/14** | 0/14 |
-| Keyword questions | **24/24** | 11/24 |
-| Tokens per answer (median) | **197** | 1,027-1,555 |
-| Tokens to build | **0** | 14.6 M |
-
-Details: [the head-to-head](docs/history.md#the-head-to-head-against-the-graph-it-replaces).
-
-[![zerograph against graphify and GitNexus: retrieval, blast radius, build cost, embedders with and without rerank, and token use](docs/assets/comparison.png)](docs/assets/comparison.png)
-
-The image is rendered from [comparison.html](docs/assets/comparison.html); its sources are listed at its foot.
+Sources: [the three-tool run](docs/bench/2026-09-04-three-graphs-results.md) and [the embedder readings](docs/bench/2026-09-22-embedders-results.md).
 
 ## Get started
 
