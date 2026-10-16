@@ -6,18 +6,18 @@
 
 **Report being answered:** "when we build/rebuild graph it uses 90% resources of system and fan out of memory", then "investigate all commands which can use a lot of resources".
 
-**Architecture:** repograph is a Rust CLI (`src/`) over a `.repograph/` store. The writers (`build`, `update`, `enrich`, `embed`, `watch`) walk the tree, extract, save the graph, then `embed_all` → `DenseIndex::sync` → `Embedder::embed` over every row whose hash is new. The embedder is an ONNX Runtime session (`ort` 2.0.0-rc.13, pyke's static binaries, no OpenMP) opened with no thread configuration; its intra-op pool is sized by ORT to the performance-core count and spins between operators. Texts are batched 64 at a time by byte length and padded to the batch's longest member (`length_batches`, `BATCH = 64`, `MAX_TOKENS = 256`). The readers (`ask`, `serve`, `bench`, `dump`) open the same session for one query at a time; `--rerank-local` opens a second, 2.1 GB session beside it.
+**Architecture:** zerograph is a Rust CLI (`src/`) over a `.zerograph/` store. The writers (`build`, `update`, `enrich`, `embed`, `watch`) walk the tree, extract, save the graph, then `embed_all` → `DenseIndex::sync` → `Embedder::embed` over every row whose hash is new. The embedder is an ONNX Runtime session (`ort` 2.0.0-rc.13, pyke's static binaries, no OpenMP) opened with no thread configuration; its intra-op pool is sized by ORT to the performance-core count and spins between operators. Texts are batched 64 at a time by byte length and padded to the batch's longest member (`length_batches`, `BATCH = 64`, `MAX_TOKENS = 256`). The readers (`ask`, `serve`, `bench`, `dump`) open the same session for one query at a time; `--rerank-local` opens a second, 2.1 GB session beside it.
 
 **Tech Stack:** Rust 2021 pinned to 1.98.0 (`rust-toolchain.toml`), `cargo test --release`, `cargo clippy --release --all-targets -- -D warnings`; bash 3.2; `/usr/bin/time -l` and `top -l 2 -pid` for the measurements; no new dependencies (`rayon` is already a direct dependency).
 
 ## Global constraints
 
-- Work in this worktree: `W=/Users/max/Documents/projects/repograph/.claude/worktrees/graph-build-resource-usage-b554bc`, branch `claude/graph-build-resource-usage-b554bc`. Never `cd` into the main checkout; use `cargo … --manifest-path "$W/Cargo.toml"` and absolute paths. `B="$W/target/release/repograph"`, rebuilt before any measurement.
-- The fixture `F=/Users/max/bench/beauty-crm-502e8a6d` is read-only: `ask --stale`, `bench`, `dump` only. Every writer runs on a copy. A copy with no `repograph.toml` re-embeds its rows whole under the default (large) model on the first writer — that is the reproduction, and also the trap: pin `embed_model = "intfloat/multilingual-e5-small"` in a copy's `repograph.toml` whenever the large model is not the thing being measured.
-- Scratch for this work: `S=/private/tmp/claude-502/-Users-max-Documents-projects-repograph--claude-worktrees-graph-build-resource-usage-b554bc/d854dd4b-1b8c-403b-a458-5463278607fa/scratchpad` holds the plan phase's copies and logs (`$S/log/summary.txt`, one `.time`/`.samples`/`.out` per run, `$S/measure.sh`, the harness under `$S/harness`). A reboot removes it; the build phase copies what it reuses to `$G=/Users/max/bench/resources-2026-09-07` first (Task 0).
+- Work in this worktree: `W=/Users/max/Documents/projects/zerograph/.claude/worktrees/graph-build-resource-usage-b554bc`, branch `claude/graph-build-resource-usage-b554bc`. Never `cd` into the main checkout; use `cargo … --manifest-path "$W/Cargo.toml"` and absolute paths. `B="$W/target/release/zerograph"`, rebuilt before any measurement.
+- The fixture `F=/Users/max/bench/beauty-crm-502e8a6d` is read-only: `ask --stale`, `bench`, `dump` only. Every writer runs on a copy. A copy with no `zerograph.toml` re-embeds its rows whole under the default (large) model on the first writer — that is the reproduction, and also the trap: pin `embed_model = "intfloat/multilingual-e5-small"` in a copy's `zerograph.toml` whenever the large model is not the thing being measured.
+- Scratch for this work: `S=/private/tmp/claude-502/-Users-max-Documents-projects-zerograph--claude-worktrees-graph-build-resource-usage-b554bc/d854dd4b-1b8c-403b-a458-5463278607fa/scratchpad` holds the plan phase's copies and logs (`$S/log/summary.txt`, one `.time`/`.samples`/`.out` per run, `$S/measure.sh`, the harness under `$S/harness`). A reboot removes it; the build phase copies what it reuses to `$G=/Users/max/bench/resources-2026-09-07` first (Task 0).
 - Comments say why, never what; no ticket ids in code; tool directives stay. Test names are `snake_case` sentences in the style of the file they join. Commit subjects are Conventional (`perf(embed): …`, `feat(config): …`, `docs: …`); no AI trailers; a heredoc and a `git commit` go in two shell commands.
 - No model tokens are spent: `enrich` is measured with a stub command only.
-- Measurements export `REPOGRAPH_NO_SERVE=1` and `REPOGRAPH_EMBED_MODEL`; `cargo test` must run in a shell where neither is set (§3), and a writer on a copy must have the model it is meant to measure pinned by file, not by an inherited variable.
+- Measurements export `ZEROGRAPH_NO_SERVE=1` and `ZEROGRAPH_EMBED_MODEL`; `cargo test` must run in a shell where neither is set (§3), and a writer on a copy must have the model it is meant to measure pinned by file, not by an inherited variable.
 
 ---
 
@@ -31,12 +31,12 @@ Machine: Apple Silicon, 12 logical cores = 6 performance + 6 efficiency (`hw.per
 |---|---|---|---|---|---|---|
 | build-nodense | `build --no-dense` (wipe, re-extract 908 files, save 12 MB JSON + 10 MB mirror) | 1.91 s | 0.93 s | 0.07 GB | single-threaded | — |
 | update-nodense | `update --no-dense`, nothing changed | 0.07 s | 0.04 s | 0.07 GB | — | — |
-| build-small-vectors-kept | `build` with `REPOGRAPH_EMBED_MODEL=…-e5-small` on the small-model store: every hash matches, 0 rows embedded | 1.63 s | 1.50 s | 1.57 GB | — | — |
+| build-small-vectors-kept | `build` with `ZEROGRAPH_EMBED_MODEL=…-e5-small` on the small-model store: every hash matches, 0 rows embedded | 1.63 s | 1.50 s | 1.57 GB | — | — |
 | embed-A-small-full | `embed`, small model, store copied without `vectors.*`: all 33,533 rows | 214.1 s | 1,051 s | 1.63 GB | 399% (≈330%) | 18, 6 running |
 | embed-B-large-320longest | `embed`, large model, a store cut to the 320 longest passages (all ≥ 256 tokens): five forwards of 64×256 | 110.8 s | 627 s | **2.70 GB** | 402% (377%) | 18, 6 running |
 | embed-C-small-320longest | the same 320 through the small model | 10.7 s | 55.9 s | 2.18 GB | 377% (309%) | 18 |
 | embed-D-large-full | `embed`, **default (large) model, all 33,533 rows** — what `build`, `update`, `enrich`, `embed` and `watch` all do on a store whose rows are the small model's, or on any store after `embed_model` changed | **2,582.5 s (43 min)** | 13,342 s (5.2 cores for 43 min) | **2.96 GB** | 444% (372%) | 18, 6 running |
-| enrich | not run: `--parallel` (default 8) headless `claude -p` processes cost tokens. repograph's own share is the graph and the questions, ≈ 0.1 GB; the eight children are the cost and are already bounded by the flag | — | — | — | — | — |
+| enrich | not run: `--parallel` (default 8) headless `claude -p` processes cost tokens. zerograph's own share is the graph and the questions, ≈ 0.1 GB; the eight children are the cost and are already bounded by the flag | — | — | — | — | — |
 
 ### 1.2 The readers
 
@@ -71,11 +71,11 @@ Machine: Apple Silicon, 12 logical cores = 6 performance + 6 efficiency (`hw.per
 
 **What is not a cause.** Walk, parse, lexical, store, `impact`, `trace`, `changes`, `import-legacy`, `verify`, `explain`: all under 0.2 s and 0.2 GB. `enrich`'s cost is its eight `claude` children, already bounded by `--parallel`. `serve`/`watch` hold the model by design (1.4 GB small, ≈1.8 GB large) and are idle otherwise.
 
-**The immediate workaround, no code:** `embed_model = "intfloat/multilingual-e5-small"` in `repograph.toml` (214 s and 1.63 GB for the whole store instead of 43 minutes and 2.96 GB), or `--no-dense` on the writer to skip the embedder altogether.
+**The immediate workaround, no code:** `embed_model = "intfloat/multilingual-e5-small"` in `zerograph.toml` (214 s and 1.63 GB for the whole store instead of 43 minutes and 2.96 GB), or `--no-dense` on the writer to skip the embedder altogether.
 
 ### 1.4 The levers, measured before they are designed
 
-`$S/harness` is a 120-line Cargo project pinning the same `ort`/`tokenizers` versions and sharing `$W/target` (so the ORT binaries are reused), with repograph's tokenize → forward → pool loop and four switches as arguments: intra-op threads, a texts-per-forward cap, a padded-token budget per forward, memory-pattern and spin-wait on/off. Run over the same 320 longest passages as B, large model, `/usr/bin/time -l` and the sampler around it (`$S/log/H*.{time,samples}`):
+`$S/harness` is a 120-line Cargo project pinning the same `ort`/`tokenizers` versions and sharing `$W/target` (so the ORT binaries are reused), with zerograph's tokenize → forward → pool loop and four switches as arguments: intra-op threads, a texts-per-forward cap, a padded-token budget per forward, memory-pattern and spin-wait on/off. Run over the same 320 longest passages as B, large model, `/usr/bin/time -l` and the sampler around it (`$S/log/H*.{time,samples}`):
 
 | run | threads | cap × budget | mem pattern | spin | wall | user | max RSS | CPU% peak (avg) | threads |
 |---|---|---|---|---|---|---|---|---|---|
@@ -91,7 +91,7 @@ Machine: Apple Silicon, 12 logical cores = 6 performance + 6 efficiency (`hw.per
 | H9 (the shipped combination) | 4 | 64 × 2,048 | on | on | 134.1 s (+25%) | 531 s | **1.93 GB** | **293%** | 16 |
 | H9-full: the same over all 33,525 rows (`texts-all.json`, the store's passages and questions) | 4 | 64 × 2,048 | on | on | **1,821 s (30 min; D: 2,582)** | **7,214 s (D: 13,342)** | **2.11 GB (D: 2.96)** | **294% (D: 444%)** | 16 (D: 18) |
 
-Reading it: (1) **the token budget is free** — 8 × 256 forwards run the whole set in the same 104 s as 64 × 256 while max RSS falls from 3.63 GB to 1.93 GB, within 0.2 GB of the weights the run touches; the pool is saturated by a 2,048 × 1,024 GEMM already, and every larger batch only buys arena. (2) **The thread cap is a straight trade** — user time is flat (613 → 559 s) so nothing is wasted in spin, and wall grows as the cap shrinks: 4 threads is −31% peak CPU for +39% wall. (3) Memory-pattern off and spin-control off each cost wall (+11%, +21%) for less than the budget buys: rejected. (4) The harness reads 0.9 GB above repograph's own B on the identical shapes (3.63 vs 2.70 GB; it tokenises all 320 texts in one parallel pass before the forwards, repograph one batch at a time), so its rows compare against each other, not against §1.1 — the after-fix number is re-measured in repograph (§4). (5) **The full store under the shipped combination is faster than today on four threads, not slower**: 30 minutes against 43, with 46% less CPU time, 0.85 GB less memory and a third less peak CPU. The wall win is padding: today's batches are sorted by byte length, which interleaves Cyrillic and Latin texts of very different token counts and pads sixty-four of them to the longest; sorting by tokens and closing on a budget (776 forwards, most of them 64 × ~20-token questions and 8 × 256 passages) means the attention that is quadratic in the padded length is spent on real tokens. So the thread cap's +39% (reading 2) is paid out of a −46%, and the rebuild still ends sooner.
+Reading it: (1) **the token budget is free** — 8 × 256 forwards run the whole set in the same 104 s as 64 × 256 while max RSS falls from 3.63 GB to 1.93 GB, within 0.2 GB of the weights the run touches; the pool is saturated by a 2,048 × 1,024 GEMM already, and every larger batch only buys arena. (2) **The thread cap is a straight trade** — user time is flat (613 → 559 s) so nothing is wasted in spin, and wall grows as the cap shrinks: 4 threads is −31% peak CPU for +39% wall. (3) Memory-pattern off and spin-control off each cost wall (+11%, +21%) for less than the budget buys: rejected. (4) The harness reads 0.9 GB above zerograph's own B on the identical shapes (3.63 vs 2.70 GB; it tokenises all 320 texts in one parallel pass before the forwards, zerograph one batch at a time), so its rows compare against each other, not against §1.1 — the after-fix number is re-measured in zerograph (§4). (5) **The full store under the shipped combination is faster than today on four threads, not slower**: 30 minutes against 43, with 46% less CPU time, 0.85 GB less memory and a third less peak CPU. The wall win is padding: today's batches are sorted by byte length, which interleaves Cyrillic and Latin texts of very different token counts and pads sixty-four of them to the longest; sorting by tokens and closing on a budget (776 forwards, most of them 64 × ~20-token questions and 8 × 256 passages) means the attention that is quadratic in the padded length is spent on real tokens. So the thread cap's +39% (reading 2) is paid out of a −46%, and the rebuild still ends sooner.
 
 ---
 
@@ -116,7 +116,7 @@ Reading it: (1) **the token budget is free** — 8 × 256 forwards run the whole
 
 ### 2.2 Defaults and overrides
 
-- `threads`: an integer in `repograph.toml` **and** in the machine file (it describes the machine, like `enrich_model`); `REPOGRAPH_THREADS` outranks both for one run; absent or `0` means the default. Default: **`max(1, available_parallelism() / 3)`** — 4 on this 12-logical-core machine, two of the six performance cores left for the person (H1: 294% peak instead of 426%, +39% wall on its own — and with the token budget beside it the 43-minute rebuild becomes 30, §1.4 reading 5); a third rather than a half because ORT already ignores efficiency cores on Apple Silicon, so "half the logical cores" would be exactly today's pool and change nothing. The cap is a trade with no free side (§1.4 reading 2), so it is one word to undo: `threads = 6` in `~/.config/repograph/config.toml` restores ORT's own pick, `REPOGRAPH_THREADS=6` does it for one run, and a CI box that wants every core says so once. `1` is the floor.
+- `threads`: an integer in `zerograph.toml` **and** in the machine file (it describes the machine, like `enrich_model`); `ZEROGRAPH_THREADS` outranks both for one run; absent or `0` means the default. Default: **`max(1, available_parallelism() / 3)`** — 4 on this 12-logical-core machine, two of the six performance cores left for the person (H1: 294% peak instead of 426%, +39% wall on its own — and with the token budget beside it the 43-minute rebuild becomes 30, §1.4 reading 5); a third rather than a half because ORT already ignores efficiency cores on Apple Silicon, so "half the logical cores" would be exactly today's pool and change nothing. The cap is a trade with no free side (§1.4 reading 2), so it is one word to undo: `threads = 6` in `~/.config/zerograph/config.toml` restores ORT's own pick, `ZEROGRAPH_THREADS=6` does it for one run, and a CI box that wants every core says so once. `1` is the floor.
 - Token budget per forward: a constant, `TOKEN_BUDGET = 2048` in `embed.rs`, beside `BATCH = 64` (kept as the count cap: sixty-four twenty-token questions are 1,280 tokens and hit the count first). Not configurable: H4–H6 show it costs nothing to bound, and a user who wants a faster run has `threads`.
 - Chunk size for the streaming sync: `SYNC_CHUNK = 1024` rows (a checkpoint about every minute on the large model here — H9-full ran at 18.4 rows/s; 33 checkpoints for the whole store, each an append of ≤ 4 MB plus a 3 MB `vectors.json` rewrite).
 
@@ -125,7 +125,7 @@ Reading it: (1) **the token budget is free** — 8 × 256 forwards run the whole
 **`src/config.rs`**
 - `Config`: add `pub threads: usize` with a doc comment on why it is a machine setting and what `0` means. `Default` sets `0`.
 - `Machine`: add `threads: Option<usize>`.
-- `Config::load`: layer `threads` the way `reranker_dir` is layered (project key wins when named, else machine, else default) — the existing `layer` closure is `String`-typed; add a second closure or make it generic over `T: Clone`. Then `REPOGRAPH_THREADS`: parsed as `usize`; empty is unset; anything else that does not parse is an error naming the variable (the file's own rule: a setting silently ignored is worse than a refusal).
+- `Config::load`: layer `threads` the way `reranker_dir` is layered (project key wins when named, else machine, else default) — the existing `layer` closure is `String`-typed; add a second closure or make it generic over `T: Clone`. Then `ZEROGRAPH_THREADS`: parsed as `usize`; empty is unset; anything else that does not parse is an error naming the variable (the file's own rule: a setting silently ignored is worse than a refusal).
 - Update the doc comment on `Machine` and the README's "may set only …" sentence (§2.3 README).
 
 **`src/index/embed.rs`**
@@ -155,17 +155,17 @@ Reading it: (1) **the token budget is free** — 8 × 256 forwards run the whole
 - `embed_all`'s `after_chunk` is `|idx, p| { idx.save(store)?; eprintln!(progress line); Ok(()) }`. `save` already appends only the rows past `persisted`, so a checkpoint is the chunk's bytes plus the metadata rewrite.
 - Doc comment on `sync_chunked`: why a checkpoint is consistent mid-sync, and why compaction waits.
 
-**`README.md`**: the settings table gains `threads` (`the run` row: `REPOGRAPH_THREADS`; the machine file "may set only …" list gains `threads`); a short "Resources" paragraph under the Performance section with the before/after numbers from §4 and the `embed_model = small` / `--no-dense` workarounds; the `watch`/`serve` "1.3 GB" mentions updated to the measured 1.4 GB (small) / 1.8 GB (large).
+**`README.md`**: the settings table gains `threads` (`the run` row: `ZEROGRAPH_THREADS`; the machine file "may set only …" list gains `threads`); a short "Resources" paragraph under the Performance section with the before/after numbers from §4 and the `embed_model = small` / `--no-dense` workarounds; the `watch`/`serve` "1.3 GB" mentions updated to the measured 1.4 GB (small) / 1.8 GB (large).
 
 **`docs/bench/2026-09-07-resource-usage-results.md`** (new): §1's tables, the harness table, and the after-fix re-measurement (§4), in the style of `docs/bench/2026-09-06-perf-results.md`.
 
-Nothing changes in the store format, the CLI flags, or the socket protocol. `repograph.toml` files without `threads` load as before (serde default); a file naming `threads` is refused by an older binary (`deny_unknown_fields`), exactly as `embed_model` was when it arrived.
+Nothing changes in the store format, the CLI flags, or the socket protocol. `zerograph.toml` files without `threads` load as before (serde default); a file naming `threads` is refused by an older binary (`deny_unknown_fields`), exactly as `embed_model` was when it arrived.
 
 ---
 
 ## 3. Tests
 
-All inline `#[cfg(test)]` modules, no model download, run by `cargo test --release --manifest-path "$W/Cargo.toml"` (today: 445 unit tests pass, 2 `#[ignore]`d ones need models, and `tests/serve.rs` adds 12 that spawn the binary — measured green on this worktree at `868f4c1`, `$S/log/cargo-test-serve-clean.txt`). Run it with no `REPOGRAPH_*` variable in the environment: `REPOGRAPH_NO_SERVE=1` left over from a measurement makes every client `ask` skip the socket and fails nine serve tests with "serve never answered over the socket". Names are the assertion.
+All inline `#[cfg(test)]` modules, no model download, run by `cargo test --release --manifest-path "$W/Cargo.toml"` (today: 445 unit tests pass, 2 `#[ignore]`d ones need models, and `tests/serve.rs` adds 12 that spawn the binary — measured green on this worktree at `868f4c1`, `$S/log/cargo-test-serve-clean.txt`). Run it with no `ZEROGRAPH_*` variable in the environment: `ZEROGRAPH_NO_SERVE=1` left over from a measurement makes every client `ask` skip the socket and fails nine serve tests with "serve never answered over the socket". Names are the assertion.
 
 **`src/index/embed.rs`** (module `tests`)
 - `token_batches_close_on_the_padded_token_budget_and_cover_every_text_once` — lens `[10, 300, 20, 256, 5]`, cap 64, budget 512: batches `[[4,0,2],[3],[1]]` (4 × 256 = 1,024 and 2 × 300 = 600 both exceed the budget; 3 × 20 = 60 does not), every index exactly once.
@@ -179,8 +179,8 @@ All inline `#[cfg(test)]` modules, no model download, run by `cargo test --relea
 **`src/config.rs`** (module `tests`, inside the `ENV` lock helper `with_machine`)
 - `threads_defaults_to_zero_and_reads_from_the_project_file` — absent → 0; `threads = 3` → 3.
 - `the_machine_file_may_set_threads_and_the_project_still_wins` — machine `threads = 2`, project `threads = 5` → 5; project silent → 2.
-- `the_environment_beats_the_project_for_threads` — `REPOGRAPH_THREADS=4` over `threads = 2` → 4; empty env → 2.
-- `a_threads_value_that_is_not_a_number_is_an_error_naming_the_file` — `threads = "many"` in the project file errors with `repograph.toml` in the message; `REPOGRAPH_THREADS=lots` errors naming `REPOGRAPH_THREADS`.
+- `the_environment_beats_the_project_for_threads` — `ZEROGRAPH_THREADS=4` over `threads = 2` → 4; empty env → 2.
+- `a_threads_value_that_is_not_a_number_is_an_error_naming_the_file` — `threads = "many"` in the project file errors with `zerograph.toml` in the message; `ZEROGRAPH_THREADS=lots` errors naming `ZEROGRAPH_THREADS`.
 - Existing `the_machine_file_may_not_set_a_corpus_key` stays green (unchanged rule).
 
 **`src/index/dense.rs`** (module `tests`, using the existing `fake` embedder and `wide()` graph)
@@ -202,7 +202,7 @@ All inline `#[cfg(test)]` modules, no model download, run by `cargo test --relea
 Run from `$W` after every task, in this order; the numbers that count as fixed are next to each.
 
 ```bash
-W=/Users/max/Documents/projects/repograph/.claude/worktrees/graph-build-resource-usage-b554bc; B="$W/target/release/repograph"
+W=/Users/max/Documents/projects/zerograph/.claude/worktrees/graph-build-resource-usage-b554bc; B="$W/target/release/zerograph"
 cargo build --release --manifest-path "$W/Cargo.toml" 2>&1 | tail -1
 cargo test --release --manifest-path "$W/Cargo.toml" 2>&1 | grep -E "^test result|FAILED|panicked"
 cargo clippy --release --all-targets --manifest-path "$W/Cargo.toml" -- -D warnings 2>&1 | tail -3
@@ -212,23 +212,23 @@ Expected: every `test result: ok`, the counts 445 (unit) and 12 (serve) plus the
 **The rebuild (D, after):** the same store copy, the same sampler.
 ```bash
 G=/Users/max/bench/resources-2026-09-07; S=…scratchpad (or $G/scratch after Task 0)
-rm -rf "$G/store-D2" && mkdir -p "$G/store-D2" && cp -a "$G/store-pristine" "$G/store-D2/.repograph" && rm -f "$G/store-D2/.repograph/vectors.*"
+rm -rf "$G/store-D2" && mkdir -p "$G/store-D2" && cp -a "$G/store-pristine" "$G/store-D2/.zerograph" && rm -f "$G/store-D2/.zerograph/vectors.*"
 "$S/measure.sh" embed-D2-large-full-after "$G/log" -- "$B" --repo "$G/store-D2" embed
 ```
-Fixed when, against `embed-D-large-full` (2,582 s, 2.96 GB, 444%/372% CPU, 18 threads): max RSS ≤ **2.3 GB** (H9-full read 2.11 in the harness, which runs above repograph); CPU% peak ≤ **310%** and average ≤ 300% (four threads: H9-full 294% peak, 289% average) and the thread count ≤ **9** (main + three ORT workers + ORT's own + a rayon pool of four); wall ≤ **2,000 s** (H9-full: 1,821 s, against 2,582 today — the fix must not be slower, and this predicts it is faster); `stderr` shows a progress line at least every 60 s; and `kill -INT` at minute 5 followed by a second `embed` finishes with `dense: embedded <fewer than 33525> rows` — the checkpoint held. Then the overrides, on the 320-row copy (`$G/store-B`, vectors removed before each run): `REPOGRAPH_THREADS=2 "$B" --repo "$G/store-B" embed` samples at ≤ 2 running threads and ≤ 160% CPU with top's thread column ≤ 6 (main + one ORT worker + a rayon pool capped at two, plus ORT's housekeeping thread) — today's 18; `threads = 2` in that copy's `repograph.toml` reads the same; `threads = 6` reads today's 18 threads and ≈ 400%. Record each in `$G/log/t1-threads-<n>.samples`.
+Fixed when, against `embed-D-large-full` (2,582 s, 2.96 GB, 444%/372% CPU, 18 threads): max RSS ≤ **2.3 GB** (H9-full read 2.11 in the harness, which runs above zerograph); CPU% peak ≤ **310%** and average ≤ 300% (four threads: H9-full 294% peak, 289% average) and the thread count ≤ **9** (main + three ORT workers + ORT's own + a rayon pool of four); wall ≤ **2,000 s** (H9-full: 1,821 s, against 2,582 today — the fix must not be slower, and this predicts it is faster); `stderr` shows a progress line at least every 60 s; and `kill -INT` at minute 5 followed by a second `embed` finishes with `dense: embedded <fewer than 33525> rows` — the checkpoint held. Then the overrides, on the 320-row copy (`$G/store-B`, vectors removed before each run): `ZEROGRAPH_THREADS=2 "$B" --repo "$G/store-B" embed` samples at ≤ 2 running threads and ≤ 160% CPU with top's thread column ≤ 6 (main + one ORT worker + a rayon pool capped at two, plus ORT's housekeeping thread) — today's 18; `threads = 2` in that copy's `zerograph.toml` reads the same; `threads = 6` reads today's 18 threads and ≈ 400%. Record each in `$G/log/t1-threads-<n>.samples`.
 
 **The readers, unchanged or better:** re-run `$S/quick.sh`'s ask/bench/dump lines on `$G/fixture`; every max RSS within 5% of §1.2 (a `--rerank-local` ask may drop with the thread cap, never rise), every wall within 10%.
 
 **The bench floors — must not move.** The floors are constants in `src/bench.rs::FLOORS`; this work does not touch them. The measured lines must still pass:
 ```bash
-cd "$W" && ARMS="dense lexical" NOTE="resource-usage after" bash bench/history/run-repograph.sh
+cd "$W" && ARMS="dense lexical" NOTE="resource-usage after" bash bench/history/run-zerograph.sh
 ```
 Expected: exit 0 and the two summary lines identical to the last `bench:dense+enriched` / `bench:lexical+enriched` rows for commit `502e8a6d` in `bench/history/runs.jsonl` (`python3 bench/history/track.py report` prints the reading). The fixture's rows are the small model's and are not re-embedded, so the dense line cannot move through this change; it is run because `Lexical::build` now runs under a capped rayon pool.
 
 **The re-embedded store, floors held:** the token-budgeted batches change padding, so a re-embedded store's vectors differ at float precision. Prove it does not cost a case:
 ```bash
-rm -rf "$G/e5large2" && mkdir -p "$G/e5large2" && cp -a /Users/max/bench/gaps-2026-09-05/e5large/.repograph "$G/e5large2/.repograph" && cp /Users/max/bench/gaps-2026-09-05/e5large/repograph.toml "$G/e5large2/"
-rm -f "$G/e5large2/.repograph/vectors.*"; "$B" --repo "$G/e5large2" embed 2>&1 | tail -1
+rm -rf "$G/e5large2" && mkdir -p "$G/e5large2" && cp -a /Users/max/bench/gaps-2026-09-05/e5large/.zerograph "$G/e5large2/.zerograph" && cp /Users/max/bench/gaps-2026-09-05/e5large/zerograph.toml "$G/e5large2/"
+rm -f "$G/e5large2/.zerograph/vectors.*"; "$B" --repo "$G/e5large2" embed 2>&1 | tail -1
 "$B" --repo "$G/e5large2" bench 2>&1 | tail -1
 ```
 Expected: `keyword 40/40  paraphrase ≥22/30  code 12/12  p90 ≤230 … model=large gated=true`, exit 0 (the large floors, README "Bench"). Record the line in the results doc beside the pre-change `t5-large-enriched-1.txt` reading (`40/40 22/30 12/12`).
@@ -243,7 +243,7 @@ Every comment added by this plan explains a why the code cannot say: why the poo
 
 ## 6. Side findings, not in this plan
 
-- `serve` cannot bind when `<repo>/.repograph/serve.sock` exceeds 104 bytes (`SUN_LEN`); the error names the cause. A repo deep under `/private/tmp/…` cannot use `serve` at all. Worth its own issue: bind a shorter socket in `$TMPDIR` keyed by a hash of the canonical path, or say so in the README.
+- `serve` cannot bind when `<repo>/.zerograph/serve.sock` exceeds 104 bytes (`SUN_LEN`); the error names the cause. A repo deep under `/private/tmp/…` cannot use `serve` at all. Worth its own issue: bind a shorter socket in `$TMPDIR` keyed by a hash of the canonical path, or say so in the README.
 - A `serve` killed with SIGTERM leaves `serve.sock` behind (`Unlink` is a `Drop`, and there is no signal handler); the next `serve` removes a dead one before binding and a client's connect just fails, so it is harmless, but `--idle` is the only clean exit.
 - The fixture's `manifest.json` stamps were whole-second mtimes after its restore; the first reader rewrote them to the nanosecond ones. Content unchanged.
 
@@ -255,7 +255,7 @@ Every comment added by this plan explains a why the code cannot say: why the poo
 
 **Files:** none in the repo.
 
-- [ ] **Step 1**: `G=/Users/max/bench/resources-2026-09-07; mkdir -p "$G/log"`; copy from `$S`: `repograph-store-pristine` → `$G/store-pristine`, `fixture` → `$G/fixture` (the git-initialised copy: `changes` needs a base commit), `harness` → `$G/harness`, `measure.sh`, `quick.sh` (edit its `S=` line to `$G`), `log/` → `$G/log-before`. `ls -la "$G"` into `$G/task0.txt`.
+- [ ] **Step 1**: `G=/Users/max/bench/resources-2026-09-07; mkdir -p "$G/log"`; copy from `$S`: `zerograph-store-pristine` → `$G/store-pristine`, `fixture` → `$G/fixture` (the git-initialised copy: `changes` needs a base commit), `harness` → `$G/harness`, `measure.sh`, `quick.sh` (edit its `S=` line to `$G`), `log/` → `$G/log-before`. `ls -la "$G"` into `$G/task0.txt`.
 - [ ] **Step 2**: confirm the before numbers are on disk: `grep -c . "$G/log-before/summary.txt"` ≥ 30 and `grep embed-D-large-full "$G/log-before/summary.txt"` prints the §1.1 line.
 
 ### Task 1: `threads` — the key, the cap, both sessions, both pools
@@ -263,9 +263,9 @@ Every comment added by this plan explains a why the code cannot say: why the poo
 **Files:** `src/config.rs`, `src/index/embed.rs`, `src/index/cross.rs`, `src/ask.rs`, `src/bench.rs`, `src/dump.rs`, `src/main.rs`; README settings table.
 
 - [ ] **Step 1 — failing tests first**: add the `config.rs` and `embed.rs` tests of §3 (`threads_from`, the four config tests). `cargo test --release … threads` fails to compile.
-- [ ] **Step 2**: `Config.threads`, `Machine.threads`, the layering and `REPOGRAPH_THREADS` in `Config::load` (§2.3). Tests green.
+- [ ] **Step 2**: `Config.threads`, `Machine.threads`, the layering and `ZEROGRAPH_THREADS` in `Config::load` (§2.3). Tests green.
 - [ ] **Step 3**: `embed::threads`/`threads_from`, `session_builder(threads)`, `Embedder::open(model, threads)`, `CrossEncoder::open(dir, threads)`; thread the argument through `ask.rs`, `bench.rs`, `dump.rs`, `main.rs`. `cap_pools` in `main.rs` with its test.
-- [ ] **Step 4**: `cargo test --release`, `cargo clippy … -D warnings`, then the override check from §4 (`REPOGRAPH_THREADS=2` → thread count) on `$G/store-B`-style copy (320 rows, `$S/store-B` copied to `$G`), recorded in `$G/log/t1-*.txt`.
+- [ ] **Step 4**: `cargo test --release`, `cargo clippy … -D warnings`, then the override check from §4 (`ZEROGRAPH_THREADS=2` → thread count) on `$G/store-B`-style copy (320 rows, `$S/store-B` copied to `$G`), recorded in `$G/log/t1-*.txt`.
 - [ ] **Step 5**: commit `feat(config): threads caps the model sessions and the tokenizer pool` with the measured before/after of the 320-row run in the body.
 
 ### Task 2: token-budgeted batches
@@ -274,7 +274,7 @@ Every comment added by this plan explains a why the code cannot say: why the poo
 
 - [ ] **Step 1 — failing tests**: the four `token_batches_*` tests of §3 (renaming the three `length_batches_*` ones). Fails to compile.
 - [ ] **Step 2**: `token_batches`, the length pass in `embed()`, `TOKEN_BUDGET = 2048`, the doc comment. Tests green, clippy silent.
-- [ ] **Step 3**: the 320-row run again (`$G/log/t2-embed-320.txt`): max RSS ≤ 2.0 GB against B's 2.70 (the harness went 3.63 → 1.93 on the same shapes; repograph starts 0.9 GB lower), wall within 10% of B's 111 s × 1.39 (the thread cap from Task 1) ≈ 155 s.
+- [ ] **Step 3**: the 320-row run again (`$G/log/t2-embed-320.txt`): max RSS ≤ 2.0 GB against B's 2.70 (the harness went 3.63 → 1.93 on the same shapes; zerograph starts 0.9 GB lower), wall within 10% of B's 111 s × 1.39 (the thread cap from Task 1) ≈ 155 s.
 - [ ] **Step 4**: commit `perf(embed): batches close on a token budget, so the largest shape is bounded` with B/H9/t2 numbers in the body.
 
 ### Task 3: the streaming sync — checkpoints and a progress line
@@ -293,4 +293,4 @@ Every comment added by this plan explains a why the code cannot say: why the poo
 - [ ] **Step 1**: §4's `embed-D2-large-full-after` run (≈ 1,821 s expected, ≤ 2,000 s required), the readers' re-run, the bench floors run, the `e5large2` re-embed and bench. Every output under `$G/log`.
 - [ ] **Step 2**: write the results doc: §1's tables verbatim, the harness table, the after table, verdicts. README edits of §2.3.
 - [ ] **Step 3**: commit `docs: resource usage measured before and after, and how to bound it`.
-- [ ] **Step 4**: open the PR to `devmaxxx/repograph`, base `main`, body = the results doc's summary and the §4 numbers; do not merge.
+- [ ] **Step 4**: open the PR to `devmaxxx/zerograph`, base `main`, body = the results doc's summary and the §4 numbers; do not merge.

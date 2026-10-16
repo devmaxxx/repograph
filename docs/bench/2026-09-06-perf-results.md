@@ -55,7 +55,7 @@ streams each: **10 of 10 identical**, 797 / 311 / 408 / 1525 / 5966 bytes — th
 round of Task 4 reports (`$S/perf5-headcheck.txt`). The committed build reproduced its own
 `sha1 d85d38a618f3f69446c4815222d01c202b57e4dc` from Task 4.
 
-**Method.** `REPOGRAPH_TIMING=1 <binary> [--no-dense] ask --stale 'штраф за отмену записи'` in the
+**Method.** `ZEROGRAPH_TIMING=1 <binary> [--no-dense] ask --stale 'штраф за отмену записи'` in the
 fixture, one warm-up round discarded, then seven measured rounds; medians of seven.
 Script `$S/perf5-stages.py`, raw per-run stage lines `$S/perf5-stages-raw.txt`, table
 `$S/perf5-stages-table.txt`. A second sitting two minutes later, `$S/perf5-stages-raw-2.txt` and
@@ -187,10 +187,10 @@ including the shape that refreshes and prints notices (`$S/perf4fix3-askout.txt`
 
 ### P3b — `83aa8e1` … `4ec3062`, `src/serve.rs`: the resident process
 
-`serve` is `watch`'s poll loop plus a Unix socket at `.repograph/serve.sock`, holding one
+`serve` is `watch`'s poll loop plus a Unix socket at `.zerograph/serve.sock`, holding one
 `ask::Context`. `ask` uses it without being told to and answers in its own process whenever it
 cannot — no socket, a socket nobody listens on, another binary's version, a timeout, `--no-serve`,
-`REPOGRAPH_NO_SERVE`. The client never deletes the socket file: a refused connect is also what a
+`ZEROGRAPH_NO_SERVE`. The client never deletes the socket file: a refused connect is also what a
 live server with a full listen backlog gives.
 
 ## `serve` against in-process
@@ -215,8 +215,8 @@ model opening in the server: `Context::open` reads the graph, the questions and 
 the model is opened by the first answer that actually needs it, and then kept. A `--no-dense`
 server has no such first answer to pay for.
 
-**What is left in a resident answer.** The process floor — starting `repograph` and parsing its
-arguments — is 4.8 ms (median of six `repograph --version`). The socket round trip is
+**What is left in a resident answer.** The process floor — starting `zerograph` and parsing its
+arguments — is 4.8 ms (median of six `zerograph --version`). The socket round trip is
 sub-millisecond. Everything else is the answer itself.
 
 The spec's targets were dense under 100 ms and lexical under 30 ms after the first question.
@@ -310,7 +310,7 @@ built before the change:
 ask path base b23806c vs head: identical 18 differing 0 (of 18)
 ```
 
-`$S/perf4fix3-askout.txt`, with nothing listening on either repo and `REPOGRAPH_NO_SERVE` unset, so
+`$S/perf4fix3-askout.txt`, with nothing listening on either repo and `ZEROGRAPH_NO_SERVE` unset, so
 it is the real no-server path rather than the switched-off one. The same 18 came back identical in
 each of Task 4's three fix rounds.
 
@@ -320,9 +320,9 @@ Every one of the 142 bench cases (82 recorded + 60 developer) asked twice in bot
 the socket and with `--no-serve` — 284 comparisons, on the copy, never on the fixture:
 
 ```
-binary /Users/max/Documents/projects/repograph/.worktrees/perf/target/release/repograph
+binary /Users/max/Documents/projects/zerograph/.worktrees/perf/target/release/zerograph
 sha1   d85d38a618f3f69446c4815222d01c202b57e4dc
-bound  pid 91840: serve: .../bc-perf/.repograph/serve.sock every 30s, batch 1, idle 1800s
+bound  pid 91840: serve: .../bc-perf/.zerograph/serve.sock every 30s, batch 1, idle 1800s
 identical 284 differing 0
 answered by the resident process 284, fell back 0
 ```
@@ -357,7 +357,7 @@ Four limits, all measured or read out of the code during Task 4, all in the READ
   writes `vectors.*`; neither moves the manifest. Run either against a repo with a `serve` on it
   and the resident answers keep the questions and the vectors they started with. Stop the server,
   or ask with `--no-serve`.
-- **The configuration is read once, at start-up.** `serve` stamps `repograph.toml` before it opens
+- **The configuration is read once, at start-up.** `serve` stamps `zerograph.toml` before it opens
   anything and compares it at every poll; when it moves, the server prints one line and exits, so
   the next `ask` answers in its own process under the new file. Up to one poll interval (30 s by
   default) can pass between the edit and the exit.

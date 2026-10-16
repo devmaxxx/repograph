@@ -13,7 +13,7 @@ did not find the question in the store tells it to verify, to say "not found", o
 ## The signals
 
 All from the plain fused path; an answer whose exact seeds cover the whole question is confident by
-construction and never flagged. Per question, from `repograph dump`'s record:
+construction and never flagged. Per question, from `zerograph dump`'s record:
 
 - **coverage** `cov = max(best_p / att_p, best_q / att_q)` — the BM25 coverage the admission
   already computes, over the passage list and, where enriched, the questions list.
@@ -42,7 +42,7 @@ read.
 
 ## Results, 2026-10-08
 
-Read with `repograph dump` over both suites on each store, and replayed offline. The offline hit
+Read with `zerograph dump` over both suites on each store, and replayed offline. The offline hit
 count matched `bench` on both stores before any rule was read: 40/14/12 and dev 34/60 under
 e5-small, 40/20/12 and dev 36/60 under embeddinggemma-300m.
 

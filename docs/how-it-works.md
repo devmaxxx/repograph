@@ -24,8 +24,8 @@ came from, so it can be argued with.
 ## Design
 
 The full design note and implementation plan are in
-[`docs/superpowers/specs/2026-09-01-repograph-design.md`](superpowers/specs/2026-09-01-repograph-design.md)
-and [`docs/superpowers/plans/2026-09-01-repograph.md`](superpowers/plans/2026-09-01-repograph.md).
+[`docs/superpowers/specs/2026-09-01-zerograph-design.md`](superpowers/specs/2026-09-01-zerograph-design.md)
+and [`docs/superpowers/plans/2026-09-01-zerograph.md`](superpowers/plans/2026-09-01-zerograph.md).
 The plan's deviations table lists four simplifications against the spec, none of which change the
 node/edge model or the answer shape; one of them moved a measured number, and
 [ADR-001](adr/ADR-001-paraphrase-recall-was-a-prediction.md) says which.

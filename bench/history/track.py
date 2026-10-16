@@ -121,7 +121,7 @@ def git(repo, *args):
 
 
 def parse_bench(text):
-    """A `repograph bench` transcript into per-case scores and the summary metrics.
+    """A `zerograph bench` transcript into per-case scores and the summary metrics.
 
     A case's score is the share of its anchors the answer reached, so a case that expects three
     places and is pointed at one scores 0.33 -- a partial answer, which the chronic and flaky
@@ -225,7 +225,7 @@ def headroom(metrics, floor):
 
 
 def tool_dirty(repo=None):
-    """Whether repograph's own tree differs from its commit, the run file itself excepted.
+    """Whether zerograph's own tree differs from its commit, the run file itself excepted.
 
     Recording the first arm of a run appends to `runs.jsonl`, so without the exception the
     second arm of the same run would always read dirty against the same commit and the same
@@ -247,7 +247,7 @@ def build_row(parsed, corpus, corpus_commit, note, tool_commit, dirty, floor_tab
     room = headroom(parsed["metrics"], floor) if gated else None
     return {
         "when": datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
-        "tool": "repograph",
+        "tool": "zerograph",
         "source": "bench",
         "arm": arm_name(parsed),
         "suite": parsed["suite"],
@@ -320,6 +320,8 @@ def cmd_import(args):
     """One row per tool from a `bench/compare/run.py` result file."""
     d = json.loads(Path(args.result).read_text())
     for tool, block in d["tools"].items():
+        # Result files written before the rename key the tool by its old name.
+        tool = "zerograph" if tool == "repograph" else tool
         cases = dict(scored(r) for r in block["rows"])
         append({
             "when": d.get("when") or datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
@@ -350,7 +352,7 @@ def cmd_agent(args):
     cases = {k: sum(v) / len(v) for k, v in attempts.items()}
     append({
         "when": datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
-        "tool": "repograph",
+        "tool": "zerograph",
         "source": "agent",
         "suite": "agent",
         "gated": False,
@@ -635,7 +637,7 @@ def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = p.add_subparsers(dest="cmd", required=True)
 
-    r = sub.add_parser("record", help="append a `repograph bench` transcript")
+    r = sub.add_parser("record", help="append a `zerograph bench` transcript")
     r.add_argument("transcript", help="file holding the run's stdout, or - for stdin")
     r.add_argument("--corpus", default="beauty-crm")
     r.add_argument("--corpus-path", default=None, help="corpus checkout, to record its commit")

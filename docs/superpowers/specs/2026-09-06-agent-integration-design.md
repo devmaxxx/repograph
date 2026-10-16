@@ -4,7 +4,7 @@
 > binary. It was replaced by [`2026-09-06-agent-surface.md`](../plans/2026-09-06-agent-surface.md), merged in #24, which decided that no MCP
 > server is built. Nothing below is implemented; it is kept as the record of the alternative that was weighed.
 
-repograph exists so that a coding agent gets a precise answer in a tenth of the characters a
+zerograph exists so that a coding agent gets a precise answer in a tenth of the characters a
 grep-and-read loop spends. Today it is reachable as a CLI shaped for a person. This note decides
 what the surface for an agent is, what it costs before a single call, who keeps the store fresh
 under it, what an agent is told when the graph has no answer, and — written here before any
@@ -16,17 +16,17 @@ fixture measured, and names its source; no number below is a prediction.
 
 ## What an agent has today
 
-- **In repograph itself:** nothing. `watch`'s doc comment names "editors, MCP servers" as the
+- **In zerograph itself:** nothing. `watch`'s doc comment names "editors, MCP servers" as the
   readers it exists to supply (`src/main.rs:66`); nothing implements one. Three readers take
   `--json` (`ask`, `impact`, `changes`); `explain` and `trace` do not. Every reader refreshes
   the store against the tree before answering, except `explain` and `verify`, which read the
   store as it stands.
 - **In `beauty-crm`, by hand:** a `.claude/CLAUDE.md` section with the two rules (impact before
   editing a symbol, `changes` before committing), a `repo-query` skill that routes a question
-  to `repograph`, `rg` or `ast-grep` by cost, and a `PreToolUse` hook on `Read|Grep|Glob` that
+  to `zerograph`, `rg` or `ast-grep` by cost, and a `PreToolUse` hook on `Read|Grep|Glob` that
   prints a notice once per session and a one-line reminder every fortieth call
-  (`.claude/hooks/repograph-notice.mjs`). Every one of those calls the binary through
-  `Bash(pnpm exec repograph …)`. It works, and it lives in one repository.
+  (`.claude/hooks/zerograph-notice.mjs`). Every one of those calls the binary through
+  `Bash(pnpm exec zerograph …)`. It works, and it lives in one repository.
 - **Before that, GitNexus:** a user-level MCP server of seventeen tools and two hooks that ran
   `augment` on every `Grep`/`Glob`/`Bash` with a 7 s budget. Of the seventeen, `beauty-crm`'s
   rules used five (`impact`, `detect_changes`, `context`, `trace`, `query`,
@@ -56,7 +56,7 @@ never starts one. In MCP the harness owns the process by construction.
 
 ## Decision
 
-**The surface is an MCP server in the binary, `repograph mcp`, exposing the five readers as
+**The surface is an MCP server in the binary, `zerograph mcp`, exposing the five readers as
 five tools; a Claude Code plugin packages it with one skill, one setup command and one reminder
 hook; and underneath both, the CLI becomes a machine-readable contract — `--json` on every
 reader and a `status` command — so that any harness with a shell reaches the same answers
@@ -121,11 +121,11 @@ of it, because MCP has no stderr that reaches the model.
 - **What an agent sees when the tree had moved:** the answer's first line is the existing
   notice, `refresh: 3 changed, 1 removed`. When the store cannot be written, `refresh: skipped
   (…)` and the answer that follows may be behind — the same contract `ask` has.
-- **A cold repository:** every tool returns the same one-line refusal naming `repograph
+- **A cold repository:** every tool returns the same one-line refusal naming `zerograph
   build`, with `isError: true`, and writes nothing. **No tool builds a store.** A lexical build
   is ~1 s per 800 files, but the dense index is ~103 s on the small model and ~2,680 s on the
   default (README, Embeddings) — a person's choice of model and of minutes, made in the shell,
-  and the plugin's `/repograph:setup` command walks them through it. The refusal is also what
+  and the plugin's `/zerograph:setup` command walks them through it. The refusal is also what
   keeps the server's poll from building: a poll on an empty manifest would otherwise re-extract
   the whole tree, which is the runbook's trap 7 in reverse.
 - **How long an agent waits.** The lexical refresh is bounded by the edit. The vectors are
@@ -164,7 +164,7 @@ session's own tool listing shows it); the ceiling is set for the harness that do
   on the next fused question (676 ms). `impact`, `trace`, `changes`, `explain` and an exact-id
   `ask` never open it.
 - **The repository is the nearest ancestor of the process's working directory holding a
-  `.repograph/`, else the nearest holding `.git`** — a linked worktree's `.git` is a file and
+  `.zerograph/`, else the nearest holding `.git`** — a linked worktree's `.git` is a file and
   is found the same way — so a harness opened in `apps/api` still asks the repository's store
   and two worktrees each get their own. `--repo` overrides it.
 - **A running `serve` is used, never started.** The `ask` tool tries the socket first with the
@@ -205,10 +205,10 @@ A claim never exceeds its evidence, and an agent reads only the result text, so:
 
 | Claude Code-specific | common to every harness |
 |---|---|
-| the plugin layout (`plugin/.claude-plugin/plugin.json`, `skills/`, `commands/`, `hooks/hooks.json`), the marketplace file at the repository root | `repograph mcp` — stdio JSON-RPC, protocol `2025-06-18`, negotiating down to `2024-11-05` |
-| the `/repograph:setup` command | the `status --json` line and `--json` on all five readers |
+| the plugin layout (`plugin/.claude-plugin/plugin.json`, `skills/`, `commands/`, `hooks/hooks.json`), the marketplace file at the repository root | `zerograph mcp` — stdio JSON-RPC, protocol `2025-06-18`, negotiating down to `2024-11-05` |
+| the `/zerograph:setup` command | the `status --json` line and `--json` on all five readers |
 | the `PreToolUse` reminder hook | the risk thresholds, the answer shape, the caps |
-| `--plugin-dir` for the measurement | `codex mcp add repograph -- repograph mcp`; an `AGENTS.md` paragraph |
+| `--plugin-dir` for the measurement | `codex mcp add zerograph -- zerograph mcp`; an `AGENTS.md` paragraph |
 
 The MCP server is exercised in the plan by a Rust integration test driving it over stdio the way
 any harness does, and by a stdlib Python client that checks the 142 recorded and developer
@@ -228,10 +228,10 @@ fewer tokens, and that is a measurement of agents, not of retrieval:
   targets of the narrow tier ("list the direct callers of X and say whether changing it is
   low, medium or high risk"), 4 `trace` pairs that have a path ("how does A reach B; name every
   symbol on the way"). Truth is the case's own anchor, or `truth.py`'s rg-derived lists, never
-  repograph's answer.
+  zerograph's answer.
 - **Three arms**, each `claude -p` headless in the copy with the same read-only tool
   allowance: **A** bare (Read, Grep, Glob, `rg`); **B** the plugin without its `.mcp.json` —
-  the skill and the hook, the CLI through `Bash(repograph *)`; **C** the plugin plus the MCP
+  the skill and the hook, the CLI through `Bash(zerograph *)`; **C** the plugin plus the MCP
   server. The agent command is a template, so another harness can be substituted; the parser
   for its usage is written for `claude`'s `stream-json` and says so.
 - **What is read per task:** correctness (the anchor in the final answer); context-shaped

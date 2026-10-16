@@ -1,10 +1,7 @@
 #!/usr/bin/env bash
 # Assembles the npm packages from prebuilt binaries and packs them into dist/npm/.
 # Publishing stays a separate, deliberate step: a version number, once published, is spent —
-# neither registry takes a second upload of it, even after the first is deleted. zerograph and its
-# platform packages go to the npm registry; the old name, @devmaxxx/repograph, stays on GitHub
-# Packages through its publishConfig, because that is the registry an old install's .npmrc names
-# for the scope.
+# the registry never takes a second upload of it, even after the first is deleted.
 #
 #   scripts/npm-pack.sh [version] [darwin-arm64=<binary>] [linux-x64=<binary>] [win32-x64=<binary.exe>]
 #
@@ -61,18 +58,11 @@ pack_platform() {
   npm pack --silent --pack-destination "$root/$out"
 )
 
-# The old name, last of all: it depends on the launcher at this version and only runs it.
-(
-  cd npm/repograph
-  npm pkg set version="$version" "dependencies.zerograph=$version"
-  npm pack --silent --pack-destination "$root/$out"
-)
-
 echo "packed $version into $out:"
 ls -1 "$out"
 echo
-echo "publish the platform packages first, then the launcher, then the old name:"
-for t in "$out"/*-arm64-*.tgz "$out"/*-x64-*.tgz "$out"/zerograph-"$version".tgz "$out"/devmaxxx-repograph-"$version".tgz; do
+echo "publish the platform packages first, then the launcher:"
+for t in "$out"/*-arm64-*.tgz "$out"/*-x64-*.tgz "$out"/zerograph-"$version".tgz; do
   [ -e "$t" ] && echo "  npm publish $t"
 done
 true

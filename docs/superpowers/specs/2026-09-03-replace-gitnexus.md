@@ -1,14 +1,14 @@
-# Replacing GitNexus with repograph — gap analysis and design
+# Replacing GitNexus with zerograph — gap analysis and design
 
 > Paths have moved since this was written: `src/code` is grouped by family. The TypeScript walks (`symbols.rs`, `calls.rs`, `idrefs.rs`) and `vue/` are under `src/code/typescript/`, Java and Kotlin under `src/code/jvm/`, and C# and Razor under `src/code/dotnet/`. Line numbers are as of the commit the document names.
 
 Source: the 2026-09-03 three-graph measurement of `beauty-crm` @ `aba308b1` (82 recorded cases,
 `bench/cases.jsonl`; artifact "Три графа beauty-crm"), the GitNexus rules `beauty-crm` ran under
-until `d04b19a4`, and the current repograph 0.3.0 graph model.
+until `d04b19a4`, and the current zerograph 0.3.0 graph model.
 
 ## What the measurement said
 
-| | repograph 0.3.0 | gitnexus 1.6.9 |
+| | zerograph 0.3.0 | gitnexus 1.6.9 |
 |---|---|---|
 | by requirement id | 61/82 (67 after enrich, 79–81 with `--rerank`) | 12/82 — **0 of 70** requirement ids |
 | by file | 75/82 | 54/82 |
@@ -16,7 +16,7 @@ until `d04b19a4`, and the current repograph 0.3.0 graph model.
 | median answer | 594 chars · 347 ms | 6008 chars · 1422 ms |
 | build | 103 s, 0 tokens, 31 MB | 233 s, 0 tokens, 598 MB |
 
-The artifact's verdict kept GitNexus "beside" repograph for one reason: *blast radius and call
+The artifact's verdict kept GitNexus "beside" zerograph for one reason: *blast radius and call
 traces*. It indexes code, not the PRD, and its `impact`/`detect_changes` were what
 `beauty-crm`'s agent rules leaned on before every edit and every commit.
 
@@ -32,7 +32,7 @@ From the generated `AGENTS.md` block and the six `gitnexus-*` skills (both remov
 | MUST warn on HIGH/CRITICAL | risk thresholds | a documented threshold table |
 | "Who calls it? callees? flows?" | `context({name})` | in/out edges of one symbol |
 | "How does A reach B?" | `trace({from, to})` | shortest call path |
-| find execution flows by concept | `query` | covered: `repograph ask` scores 40/40 keywords, 12/12 symbols |
+| find execution flows by concept | `query` | covered: `zerograph ask` scores 40/40 keywords, 12/12 symbols |
 | rename across the call graph | `rename` | an edit tool, not a graph question |
 | taint findings | `explain` with `--pdg` | never used in this repository |
 | clusters / processes resources | community detection, flow mining | never used by a rule; only the two MUSTs were enforced |
@@ -43,7 +43,7 @@ call graph or a blast radius is the question: `gitnexus analyze -f --embeddings 
 (233 s)" — in `.claude/CLAUDE.md`, the `repo-query` skill, two ignore-file lines, and the
 user-level MCP server + two hooks in `~/.claude/settings.json` that serve ten other repositories.
 
-## What repograph already has
+## What zerograph already has
 
 `verify` on `beauty-crm`: 8306 nodes (4322 `Symbol`, 908 `File`), 29 610 edges — `Declares`
 7293, `Imports` 1330 (file → file, imported names in `context`), `ReExports` 247, `Extends` 56,
@@ -128,9 +128,9 @@ are the working tree's.
 ### CLI
 
 ```
-repograph impact <symbol> [--depth 3] [--down] [--json] [--stale]
-repograph trace <from> <to> [--depth 6] [--stale]
-repograph changes [--base HEAD] [--depth 2] [--json] [--stale]
+zerograph impact <symbol> [--depth 3] [--down] [--json] [--stale]
+zerograph trace <from> <to> [--depth 6] [--stale]
+zerograph changes [--base HEAD] [--depth 2] [--json] [--stale]
 ```
 
 `explain` gains `Calls` lines for free — that alone answers "who calls it" at depth 1.
@@ -139,25 +139,25 @@ repograph changes [--base HEAD] [--depth 2] [--json] [--stale]
 
 | GitNexus | Replacement |
 |---|---|
-| `impact` | `repograph impact` |
-| `detect_changes` | `repograph changes` |
-| `context` | `repograph explain` (now with `Calls`) + `impact`/`impact --down` |
-| `trace` | `repograph trace` |
-| `query` | `repograph ask` |
-| `rename` | `repograph impact <old>` for the file list, then the editor's rename or `ast-grep`; `repograph changes` to confirm the scope |
+| `impact` | `zerograph impact` |
+| `detect_changes` | `zerograph changes` |
+| `context` | `zerograph explain` (now with `Calls`) + `impact`/`impact --down` |
+| `trace` | `zerograph trace` |
+| `query` | `zerograph ask` |
+| `rename` | `zerograph impact <old>` for the file list, then the editor's rename or `ast-grep`; `zerograph changes` to confirm the scope |
 | clusters, processes, `cypher`, `pdg_query`, taint | not replaced — no rule in `beauty-crm` used them; the measured question set never asks for them |
-| PreToolUse hook injecting `augment` hits (up to 7 s per `Grep`) | already replaced by `repograph-notice.mjs` (a text notice, no query) |
+| PreToolUse hook injecting `augment` hits (up to 7 s per `Grep`) | already replaced by `zerograph-notice.mjs` (a text notice, no query) |
 
 ## Scope
 
-**In:** repograph 0.4.0 (the four items above, README, release); `beauty-crm` wiring —
-`@devmaxxx/repograph` 0.4.0, `.claude/CLAUDE.md` rules (the two MUSTs move from GitNexus to
+**In:** zerograph 0.4.0 (the four items above, README, release); `beauty-crm` wiring —
+`@devmaxxx/zerograph` 0.4.0, `.claude/CLAUDE.md` rules (the two MUSTs move from GitNexus to
 `impact`/`changes`), `repo-query` routes, the notice hook text, the two ignore lines, the
 escape-hatch paragraphs.
 
 **Out, decision for Max:** the user-level `~/.claude/settings.json` GitNexus hooks, the
 `gitnexus` MCP server in `~/.claude.json`, and `~/.gitnexus/registry.json` — all serve ten
-`bonliva-*` repositories repograph does not index (not TypeScript-plus-markdown corpora on the
+`bonliva-*` repositories zerograph does not index (not TypeScript-plus-markdown corpora on the
 same conventions). They stay until those repositories move; in `beauty-crm` both handlers exit
 on the missing `.gitnexus/`.
 
@@ -166,9 +166,9 @@ on the missing `.gitnexus/`.
 - `verify` on `beauty-crm` reports a `Calls` count > 0 and every other count unchanged from
   0.3.0 (`Symbol` 4322, `Declares` 7293, `Imports` 1330, `ReExports` 247, `Extends` 56,
   `DecoratedBy` 340, `References` 18448).
-- `repograph impact StaffService` lists `StaffController.create` at d=1 with `path:line` and
+- `zerograph impact StaffService` lists `StaffController.create` at d=1 with `path:line` and
   `staff.module.ts` among importers.
-- `repograph changes` on a working tree with one edited method names that method and its
+- `zerograph changes` on a working tree with one edited method names that method and its
   callers; on a clean tree prints `changed: 0 symbols`.
 - `bench` floors unchanged: 40/40 · 14/30 dense (11/30 no-dense) · 12/12 · p90 ≤ 230.
 - `cargo test`, `cargo clippy --all-targets` clean.

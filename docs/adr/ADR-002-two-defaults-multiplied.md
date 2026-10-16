@@ -53,13 +53,13 @@ about four times the number the embedder decision was taken on.
 ## Decision
 
 **The default `embed_model` returns to `intfloat/multilingual-e5-small`.
-`intfloat/multilingual-e5-large` stays fully supported as one line of `repograph.toml`.** Nothing
+`intfloat/multilingual-e5-large` stays fully supported as one line of `zerograph.toml`.** Nothing
 about the large model is removed, deprecated or made harder to reach: its floors stay in `bench`
 keyed by the embedder, `vectors.json` still records it, and every reader still opens whatever model
 wrote the store it is reading.
 
 **The principle this rests on.** A default is the answer given to someone about whom nothing is
-known. Someone installing repograph for the first time does not know whether they will ask
+known. Someone installing zerograph for the first time does not know whether they will ask
 paraphrased questions; they do know they are waiting on a 2.1 GB download and a first build measured
 in hours. The cost is immediate, visible and paid by everyone. The benefit is deferred, discovered
 later, and collected only by the subset whose questions need it. Where the two are that asymmetric,
@@ -83,7 +83,7 @@ holding this decision should be retaken:
 - **The switching cost is bounded, and nobody is stranded.** A store records the model its vectors
   were written with and every reader opens the recorded one, so an existing large-model store keeps
   answering with the large model after this change, with nothing to do and nothing to re-embed.
-  Moving is one line and one `repograph embed`; changing your mind twice pays both embeddings —
+  Moving is one line and one `zerograph embed`; changing your mind twice pays both embeddings —
   214 s + 1,930 s, under 36 minutes of foreground work on the whole fixture. And no released install
   is touched at all: the last tag is `v0.4.0`, whose embedder is the small model by a hard-coded
   constant, and the large default landed after it in a 0.5.0 that has never been tagged. This
@@ -107,14 +107,14 @@ constraint for a real corpus in someone's hands, or the large model's price fall
   2026-09-05 was graded against — and a large-model store against ≥22/30 and ≥17/30, exactly as
   before. `bench.rs` pins the large model's name by literal rather than to `DEFAULT_MODEL` for this
   reason; the comment there anticipated this flip before it happened.
-- `repograph.toml` follows the default rather than pinning the large model. That file's stated job
+- `zerograph.toml` follows the default rather than pinning the large model. That file's stated job
   is to set every key to the shipped default so it can double as the README's worked example, and a
   pin would have made the example a lie about the tool it configures.
 - The README states the large model's numbers wherever it used to say "the default", with the model
   named. No measurement was deleted to make the flip read cleanly.
 - **What could make the whole trade-off moot, and what it now costs to find out.** The hub carries
   `onnx/model_qint8_avx512_vnni.onnx` for both models — 562 MB for the large one, **118 MB for the
-  small** — and the small model's copy is already in `~/.cache/repograph/fastembed`. Measuring int8
+  small** — and the small model's copy is already in `~/.cache/zerograph/fastembed`. Measuring int8
   on the default therefore costs no download at all, where [G25](../bench/next-version-gaps.md) was
   written as though it cost 562 MB; that sentence is corrected. If int8 held the recall at a
   fraction of the weights, the memory floor under every reading in both resource rounds would move

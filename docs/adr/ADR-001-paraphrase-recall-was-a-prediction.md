@@ -4,13 +4,13 @@
 
 ## Context
 
-The design note ([`docs/superpowers/specs/2026-09-01-repograph-design.md`](../superpowers/specs/2026-09-01-repograph-design.md))
+The design note ([`docs/superpowers/specs/2026-09-01-zerograph-design.md`](../superpowers/specs/2026-09-01-zerograph-design.md))
 proposed exact-id → BM25 → local embeddings, fused by reciprocal rank, then a one-hop expansion over
 the hand-written id graph. Its "Measurements that drive the design" table labels the fused
 approach's paraphrase score `target ≥12/14` — the one row whose number is not a measurement. Two
 sections later its alternatives table prints the same `≥12/14` bare, and its phase table makes it the
 phase-4 gate ("paraphrase ≥12/14 on `bench/cases.jsonl`"). From there it travelled unchanged into
-the implementation plan's gates line (`docs/superpowers/plans/2026-09-01-repograph.md`: "paraphrase
+the implementation plan's gates line (`docs/superpowers/plans/2026-09-01-zerograph.md`: "paraphrase
 ≥7/14 with `--no-dense`, ≥12/14 with dense") as though it had been measured rather than guessed.
 
 It hadn't been. Every paraphrase number this project measured, in the order it measured them:
@@ -20,7 +20,7 @@ It hadn't been. Every paraphrase number this project measured, in the order it m
 | graphify (LLM graph, BFS depth 2)                             | 0/14         |
 | BM25 over requirement bodies, Russian stemming (prototyped)   | 4/14         |
 | BM25 seed + one-hop over the hand-written id graph (prototyped) | 7/14       |
-| **repograph, shipped: exact → BM25 → dense, RRF-fused, one hop** | **5/14** at `--seeds 5` |
+| **zerograph, shipped: exact → BM25 → dense, RRF-fused, one hop** | **5/14** at `--seeds 5` |
 
 `--seeds` trades cost for a little more recall — 4/14 at `--seeds 3`, 5/14 at `--seeds 5`, 6/14 at
 `--seeds 8` — one extra hit per step, each step costing roughly 1.5× the tokens (median 131 → 202 →
@@ -59,9 +59,9 @@ wider expansion cap.
 ## Consequences
 
 - `bench`'s floors, and the README's Bench section, state 5/14 (dense) and 2/14 (`--no-dense`) as
-  what was measured. `repograph` still beats graphify — the incumbent it replaces — on every axis:
+  what was measured. `zerograph` still beats graphify — the incumbent it replaces — on every axis:
   paraphrase, keyword, tokens per answer, and tokens to build the graph.
-- The implementation plan's deviations table (`docs/superpowers/plans/2026-09-01-repograph.md`)
+- The implementation plan's deviations table (`docs/superpowers/plans/2026-09-01-zerograph.md`)
   claims "None of these changes the accuracy gates" for its four spec deviations. That claim is false
   for one of the four: reproducing the BM25-over-bodies prototype's configuration on the shipped
   hand-rolled index scores 2/14, where `tantivy` recorded 4/14 on the same prototype. The claim has
@@ -225,7 +225,7 @@ that store — and `enrich` spends money. Built from scratch on the same corpus 
 and never enriched, the store reads `keyword 40/40  paraphrase 9/30  code 12/12  p90 221 tok`
 with embeddings and `keyword 39/40  paraphrase 7/30  code 12/12  p90 226 tok` with `--no-dense`,
 each arm run twice with identical results. Against a paraphrase floor of 14 and 11 and an exact
-keyword floor, `repograph bench` therefore failed on any honestly built index whose owner had not
+keyword floor, `zerograph bench` therefore failed on any honestly built index whose owner had not
 paid for enrichment, and read as a broken setup rather than as an option not taken.
 
 `bench::passes` now takes the store's state alongside the arm. A store carrying questions on at
@@ -245,7 +245,7 @@ through an exit code cannot afford.
 second thing the old grading hid. Run today, the reference store reads
 `keyword 40/40  paraphrase 15/30  code 12/12  p90 226 tok  enriched=true (1996/1996 nodes)` with
 embeddings, and `keyword 37/40  paraphrase 15/30  code 12/12  p90 220 tok` with `--no-dense`,
-where `repograph bench` exits 1 on `FR-WH-53`, `FR-PH-43` and `W-206`. The mechanism is fusion
+where `zerograph bench` exits 1 on `FR-WH-53`, `FR-PH-43` and `W-206`. The mechanism is fusion
 order, not the floor: on the plain path `query::ask` pushes the generated-questions BM25 list into
 `fuse::interleave` before the passage list, so the questions lead the interleave and displace two
 exact keyword seeds; the arm with embeddings is unaffected because the dense passage list is
@@ -354,7 +354,7 @@ overstated it; the scale-free form is gap G8, not tried.
 
 **Three things made reproducible.** Amendment 6's before-column could not be produced from any
 commit, because the leave-one-out fix and the gate landed together and the older binary reads the
-leak (0.955). `REPOGRAPH_QUESTIONS_GATE=0` on the shipped binary now is that column, and reads
+leak (0.955). `ZEROGRAPH_QUESTIONS_GATE=0` on the shipped binary now is that column, and reads
 105/400 and 113/400. The lexical held-out arm the amendment cites was an offline replication,
 because `dump` hard-coded the embeddings arm; `dump --no-dense` now records it, and `compare`
 refuses to pair the arms. And `bench:lexical+enriched`'s `tool_dirty: true` beside the dense row's

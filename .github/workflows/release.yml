@@ -8,7 +8,7 @@ on:
 jobs:
   # npm-pack.sh versions the packages from the tag and the binary reports Cargo.toml's, so a tag
   # that names another version would publish one under the other's number, and a number spent on
-  # GitHub Packages is never given back.
+  # the npm registry is never given back.
   version:
     runs-on: ubuntu-latest
     steps:
@@ -99,25 +99,3 @@ jobs:
           }
           for t in dist/npm/*-arm64-*.tgz dist/npm/*-x64-*.tgz; do publish "$t"; done
           publish dist/npm/zerograph-"${GITHUB_REF_NAME#v}".tgz
-  # The old name stays on GitHub Packages, the registry an install made before the rename names for
-  # the @devmaxxx scope in its .npmrc, so an upgrade there lands on the stub. The stub's dependency
-  # is unscoped and resolves from the npm registry, so it waits for the job above.
-  npm-stub:
-    needs: npm
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      packages: write
-    env:
-      NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          registry-url: "https://npm.pkg.github.com"
-          scope: "@devmaxxx"
-      - run: |
-          scripts/npm-pack.sh "${GITHUB_REF_NAME#v}"
-          t=dist/npm/devmaxxx-repograph-"${GITHUB_REF_NAME#v}".tgz
-          if [ -n "$(npm view "@devmaxxx/repograph@${GITHUB_REF_NAME#v}" version 2>/dev/null)" ]; then echo "the stub is published already"; else npm publish "$t"; fi

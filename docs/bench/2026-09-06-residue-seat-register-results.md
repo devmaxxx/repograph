@@ -278,7 +278,7 @@ the loss is *register*. `src/enrich.rs` was never changed for it and no token wa
 `$M/bc-r1`: the fixture's graph and vectors, `questions.json` emptied so every eligible node is
 stale, `embed_model` pinned to the small model before any writer ran, `enrich_model = "haiku"` —
 what `src/config.rs` ships as the default — named in the copy's own toml so the record says which
-generator. No `REPOGRAPH_ENRICH_MODEL` override and no machine config file. The prompt is the only
+generator. No `ZEROGRAPH_ENRICH_MODEL` override and no machine config file. The prompt is the only
 variable against the fixture, which the same generator enriched under the old prompt.
 
 `enrich`: 1,996 nodes, 167 batches, 0 failed, 1,046 s, then a second pass for the 12 nodes the

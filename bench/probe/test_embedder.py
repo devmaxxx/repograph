@@ -20,9 +20,9 @@ OTHER = "BAAI/bge-m3"
 # tests: none of the four gets far enough to need one.
 SCRIPTS = {
     "reset.sh": [],
-    "readers.sh": ["bin/repograph", "wt", "log", "1"],
-    "embed.sh": ["control-1", "bin/repograph", "wt", "log"],
-    "arms.sh": ["bin/repograph", "wt", "log", "tag"],
+    "readers.sh": ["bin/zerograph", "wt", "log", "1"],
+    "embed.sh": ["control-1", "bin/zerograph", "wt", "log"],
+    "arms.sh": ["bin/zerograph", "wt", "log", "tag"],
 }
 
 

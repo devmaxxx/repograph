@@ -6,7 +6,7 @@
 unit + 11 serve, 3 ignored (101 s); the 30 `enrich::`/`rerank::` tests with `Git\bin` and `Git\usr\bin`
 off PATH (1 s); the dense arm on e5-small through the socket, cache restored (11 s, resident fused ask
 31 ms median); a lexical `build` + `changes --base HEAD` on the checkout (207 s — 202 s of it a
-`cargo run --release` compile, 5 s of judging). The release dispatch smokes `repograph.exe --version`.
+`cargo run --release` compile, 5 s of judging). The release dispatch smokes `zerograph.exe --version`.
 
 **What runs nowhere:** the `bench` job is gated on `BENCH_REPO_TOKEN`, which is unset — it prints a
 warning in 3 s on every run. The unix `test` job and the Windows `cargo test` are the same set apart
@@ -26,26 +26,26 @@ have Claude Code's shell find `claude`, ask it eight times at once.
 - The unix path stays byte-identical: tests only, `cfg` gates only where a platform cannot make
   the case, no Cargo change (socket2 and windows-sys are already Windows deps, and `tests/serve.rs`
   already carries the transport seam).
-- Every step after `cargo test` reuses `target\debug\repograph.exe` and the built test binaries:
+- Every step after `cargo test` reuses `target\debug\zerograph.exe` and the built test binaries:
   zero compile. Every Windows verdict is a CI run; nothing here is verifiable on the Mac.
 
 ## (i) Do now
 
 ### 1. Pay for everything: the `changes` step on the debug exe — saves 3 min 22 s
-Not a test; the budget. `cargo test` has already built `target\debug\repograph.exe` (the bin is what
-`CARGO_BIN_EXE_repograph` points the serve tests at). The step judges `git -C` and the stripped
+Not a test; the budget. `cargo test` has already built `target\debug\zerograph.exe` (the bin is what
+`CARGO_BIN_EXE_zerograph` points the serve tests at). The step judges `git -C` and the stripped
 path, not codegen; the release bytes are the release workflow's job (item 12). Replace the two
-`cargo run --release --quiet --` with `.\target\debug\repograph.exe`. Job drops to ~4 min 10 s.
+`cargo run --release --quiet --` with `.\target\debug\zerograph.exe`. Job drops to ~4 min 10 s.
 
 ### 2. The user's day, in one pwsh step: a Cyrillic path with a space, the README's own recipe
 *Proves:* the `### On Windows` section verbatim on a runner, and the branch's path work end to
 end — canonicalize/`plain()`, the walk, the store's renames, the socket under `sun_path`, `git -C`,
 and `sh` spawned from a Cyrillic working directory — none of which any test runs together, and
-none under a non-ASCII repository path (the runner's is `D:\a\repograph\repograph`).
+none under a non-ASCII repository path (the runner's is `D:\a\zerograph\zerograph`).
 *Where:* `.github/workflows/ci.yml`, `windows` job, after the `changes` step.
-*Shape* (`$R = "$env:RUNNER_TEMP\Проект beauty crm"`, `$X = target\debug\repograph.exe`):
+*Shape* (`$R = "$env:RUNNER_TEMP\Проект beauty crm"`, `$X = target\debug\zerograph.exe`):
 1. `Copy-Item docs, README.md` into `$R`; `git init`, `git add`, `git commit` there.
-2. Write `repograph.toml` with **Windows PowerShell 5.1** — `powershell.exe -c "... | Out-File
+2. Write `zerograph.toml` with **Windows PowerShell 5.1** — `powershell.exe -c "... | Out-File
    -Encoding utf8"` — which writes BOM + CRLF, the bytes a user's editor writes. Keys:
    `id_families` and `embed_model = "intfloat/multilingual-e5-small"` (the cache is restored).
    toml_parser 1.1.3 strips the BOM in its lexer (`lexer/mod.rs:35`), so this is expected green;
@@ -58,12 +58,12 @@ none under a non-ASCII repository path (the runner's is `D:\a\repograph\repograp
 5. `enrich` with the **default** `enrich_command` and a fake `claude`: a directory prepended to
    PATH holding `claude` (no extension, `#!/bin/sh`, body `awk '/^### /{printf "%s\tq for %s\n",
    $2, $2}'` — the shape npm's own shim has, which is why it is a sh script and not a `.cmd`).
-   Assert `.repograph\questions.json` has entries. This is the line a beauty-crm user actually
+   Assert `.zerograph\questions.json` has entries. This is the line a beauty-crm user actually
    runs: `MAX_THINKING_TOKENS=0 claude -p --model haiku … --tools ""` through Git's `sh`, which no
    test spawns today (they pass an awk command, never the default).
 6. Append a line to `$R\README.md`; `update` — assert `changed 1`; `changes --base HEAD` — assert
    the output names `README.md`.
-7. `Stop-Process -Name repograph`; assert `serve.sock` is still there (`Get-Item -Force`; the
+7. `Stop-Process -Name zerograph`; assert `serve.sock` is still there (`Get-Item -Force`; the
    README says so and nothing pins it); `& $X --repo $R --no-dense serve --idle 1` — assert exit 0
    within 10 s and the file gone: the sweep over a killed predecessor's socket, then the guard.
 *Cost:* ~30 s. *Red when:* the resident line never comes (serve failed under the path, or the
@@ -101,31 +101,31 @@ Each ~1–3 s, on unix too (the unix job gains them; nothing it had changes).
   process on Windows: today only its primitive is unit-tested, and an `id()` that returned `None`
   would make the guard a silent no-op.
 - `no_serve_and_its_environment_variable_both_answer_here_under_a_live_server`: `--no-serve` and
-  `REPOGRAPH_NO_SERVE=1` (on the child) each answer with no `serve:` line, same stdout. The
+  `ZEROGRAPH_NO_SERVE=1` (on the child) each answer with no `serve:` line, same stdout. The
   variable is untested anywhere.
 - `a_repository_under_a_cyrillic_directory_with_a_space_is_built_served_and_asked`: `tempdir` →
   `Проект beauty crm` → build, `git init` + commit, serve, resident ask, edit, `changes --base
   HEAD`. `#[cfg(not(target_os = "macos"))]` with the arithmetic in the comment: macOS's temp is
-  ~66 bytes, plus 23 for the name and 22 for `\.repograph\serve.sock` passes its 103-byte
+  ~66 bytes, plus 23 for the name and 22 for `\.zerograph\serve.sock` passes its 103-byte
   `sun_path`; Linux and Windows do not. Item 2 is the recipe on the checkout; this is the same
   path property, reproducible on Linux and readable in Rust.
 
 ### 5. The npm install path a beauty-crm user takes, on the runner
-*Proves:* `bin/repograph.js` resolving `bin/repograph.exe`, npm's `.cmd` shim, the `files`
+*Proves:* `bin/zerograph.js` resolving `bin/zerograph.exe`, npm's `.cmd` shim, the `files`
 whitelist, exit-code passthrough, a Cyrillic argument through `%*`, and `scripts/npm-pack.sh`
 under Git Bash — none of which any test or step touches (the transport plan's launcher check was
 a `node -e` with `process.platform` stubbed, on the Mac).
 *Where:* `ci.yml`, `windows` job, last (the pack rewrites `npm/*/package.json` versions in the
 checkout; `git checkout -- npm/` after, and it must run after `changes`).
-*Shape:* `bash scripts/npm-pack.sh 0.0.0-ci win32-x64=target/debug/repograph.exe` (node and npm
+*Shape:* `bash scripts/npm-pack.sh 0.0.0-ci win32-x64=target/debug/zerograph.exe` (node and npm
 are on the image; no `setup-node`). In `$env:RUNNER_TEMP\проект node`: `npm init -y`, then
 `npm i <win32 tgz> <launcher tgz>` — the launcher's darwin/linux optionals point at GitHub
 Packages, which answers 401 anonymously; npm skips a failed optional, and if this image's npm
 aborts instead, `--omit=optional` with the win32 tgz named explicitly resolves the same
 `require.resolve` walk. Then, with `[Console]::OutputEncoding = [Text.Encoding]::UTF8`:
-`npx repograph --version` → `repograph 0.5.0`; `npx repograph --repo $R --no-dense ask штраф` →
+`npx zerograph --version` → `zerograph 0.5.0`; `npx zerograph --repo $R --no-dense ask штраф` →
 output contains `Штраф за отмену` (bytes through `stdio: inherit` and the shim, decoded once);
-`npx repograph --repo $R explain nope; $LASTEXITCODE` → 1; the launcher alone with
+`npx zerograph --repo $R explain nope; $LASTEXITCODE` → 1; the launcher alone with
 `--omit=optional` → exit 2 and `is not installed` on stderr.
 *Cost:* ~30 s. *Red when:* the `.exe` resolution, the pack script's Windows arm, the shim's
 argument passing, or the exit code breaks.
@@ -133,7 +133,7 @@ argument passing, or the exit code breaks.
 ### 6. The model cache under a Cyrillic profile
 *Proves:* hf-hub's cache walk, tokenizers' file read and ORT's `commit_from_file` (its own
 UTF-16 conversion on Windows) under `C:\Users\Максим\.cache\…` — the box's actual path. The job's
-cache is `D:\a\repograph\repograph\.model-cache`, ASCII; the branch's Cyrillic test covers the
+cache is `D:\a\zerograph\zerograph\.model-cache`, ASCII; the branch's Cyrillic test covers the
 socket only.
 *Where:* `ci.yml`, after the fused smoke. *Shape:* `Copy-Item -Recurse .model-cache
 "$env:RUNNER_TEMP\Максим\.cache\fastembed"` (470 MB; a junction would resolve back to the ASCII
@@ -157,11 +157,11 @@ sides. Serve on `dir.path()`, ask on `plain(dir.path().canonicalize())`; precond
 `assert_ne!` on the two spellings so the test says when the image stops giving short names
 rather than passing vacuously. ~1 s. *Red when:* `--repo` stops being canonicalized on one side.
 
-### 9. The machine file at `%USERPROFILE%\.config\repograph\config.toml`
+### 9. The machine file at `%USERPROFILE%\.config\zerograph\config.toml`
 Integration test spawning the binary with `USERPROFILE` (Windows) / `HOME` (unix) set to a tempdir
 holding a machine file whose `enrich_command` is the awk line, `XDG_CONFIG_HOME` and
-`REPOGRAPH_CONFIG` removed on the child; `enrich` writes `questions.json` ⇒ the file was read from
-the documented place. Today only the `REPOGRAPH_CONFIG` route is tested, in-process. ~1 s. *Red
+`ZEROGRAPH_CONFIG` removed on the child; `enrich` writes `questions.json` ⇒ the file was read from
+the documented place. Today only the `ZEROGRAPH_CONFIG` route is tested, in-process. ~1 s. *Red
 when:* home resolution moves to `HOME`, which a Windows console never sets.
 
 ### 10. Unix and Windows answer the docs tree byte for byte
@@ -202,7 +202,7 @@ cache key and the fused smoke joins for ~15 s more. Dispatch and tag only, so it
 - **Console encoding.** `[Console]::OutputEncoding` is PowerShell's decoding; the bytes are UTF-8
   through a pipe in every serve test on Windows, and item 5 asserts them once more under UTF-8.
   The code-page-866 mojibake case tests PowerShell.
-- **A BOM in `repograph.toml` as a unit test.** toml_parser strips it; item 2 writes one through
+- **A BOM in `zerograph.toml` as a unit test.** toml_parser strips it; item 2 writes one through
   PowerShell 5.1 for free; a pin would judge a `=`-pinned dependency.
 - **`--rerank-local` on Windows.** `cross.rs`'s ignored test needs an exported model nobody
   publishes; nothing for a runner to fetch.

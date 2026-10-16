@@ -2,7 +2,7 @@
 
 Sixty questions written the way a developer asks them while implementing — 18 to 43 words, product
 and code vocabulary mixed, Russian and English, several right places per question — run against
-the pinned fixture (`beauty-crm` at `502e8a6d`) on 2026-09-05, in both arms, at repograph `7d65aad`.
+the pinned fixture (`beauty-crm` at `502e8a6d`) on 2026-09-05, in both arms, at zerograph `7d65aad`.
 The recorded 82-case suite measured the same day, on the same binary, reads exactly what it read
 before: `keyword 40/40 paraphrase 15/30 code 12/12 p90 220` with embeddings and `39/40 14/30 12/12
 p90 215` without.
@@ -267,7 +267,7 @@ not re-measured here: an `ask` at 0.8 s against 0.55 s with the model opening in
 is 137.3 MB against the fixture's 51.5 MB (`ls -l`, decimal megabytes).
 
 Shipped as a property of the store (`9f83517`, `a34214f`, `8142ebd`): `embed_model` in
-`repograph.toml` names what writers write with, `vectors.json` records it, readers open the model
+`zerograph.toml` names what writers write with, `vectors.json` records it, readers open the model
 the store records, `bench` and `dump` refuse a width mismatch and `ask` warns and answers
 lexical-only. The default stays `intfloat/multilingual-e5-small` and the floors stay the small
 model's, so a store on the larger model is measured against them rather than graded by them.
@@ -302,7 +302,7 @@ gains `FR-VIS-01`, `FR-AI-21`, `FR-STAFF-45`, `FR-CRM-11` and `N-109` and loses 
 Not shipped as the default. The rule was written before the numbers and is not re-read to fit them,
 and a lever that trades four is-this-allowed answers for paraphrase is the trade the developer
 suite exists to catch; `ENRICH_COMMAND` stays haiku. Nothing about it is out of reach: `enrich_command`
-is per-store configuration, so a store can choose sonnet today in one line of `repograph.toml`, at
+is per-store configuration, so a store can choose sonnet today in one line of `zerograph.toml`, at
 roughly five times the token cost and with `rule` as the thing to watch. One prompt is written for
 every kind of document, which is the gap this opens — G14.
 
@@ -311,7 +311,7 @@ every kind of document, which is the gap this opens — G14.
 Shipped from this campaign, in order: `c3aef20` — a symbol carries its doc comment and a file its
 head comment, for the enrichment prompt and for display, while the passage index keeps a symbol's
 declaring line and no file at all; `c11dcbe` — `enrich --code`, questions about code behind a flag,
-with the documents' coverage and floors untouched; `b438249` — `repograph embed`, which re-embeds a
+with the documents' coverage and floors untouched; `b438249` — `zerograph embed`, which re-embeds a
 store copy under another model; `32c047b` and `fb369ca` — the code questions in an index of their
 own, reaching the reranked pool and never the plain fusion; `9f83517`, `a34214f` and `8142ebd` —
 the embedding model as a property of the store. The test suite reads 410 tests at `8142ebd`. No

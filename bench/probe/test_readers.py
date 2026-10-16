@@ -18,7 +18,7 @@ ORIGINAL = "export const cn = (...a) => a.join(' ')\n"
 TOUCHED = "// touched for the changes measurement"
 
 QUIET = """#!/bin/bash
-echo "quiet: idle=99.0% load1=0.10 ac=1 busy=0 (cargo/rustc/repograph: 0, node ≥5.0%: 0)"
+echo "quiet: idle=99.0% load1=0.10 ac=1 busy=0 (cargo/rustc/zerograph: 0, node ≥5.0%: 0)"
 """
 
 # The binary and the clock stand still: what this suite reads is readers.sh's own plumbing — what
@@ -65,7 +65,7 @@ class Suite(unittest.TestCase):
         (self.tmp / "log").mkdir()
 
     def run_suite(self, worktree="wt", **env):
-        return subprocess.run(["bash", "probe/readers.sh", "./bin/repograph", worktree, "log", "1"],
+        return subprocess.run(["bash", "probe/readers.sh", "./bin/zerograph", worktree, "log", "1"],
                               cwd=self.tmp, capture_output=True, text=True,
                               env={**{k: v for k, v in os.environ.items() if k != "ZEROGRAPH_EMBED_MODEL"},
                                    "REPOGRAPH_EMBED_MODEL": SMALL, **env})

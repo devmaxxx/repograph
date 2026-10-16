@@ -19,8 +19,7 @@
     "claude-code"
   ],
   "bin": {
-    "zerograph": "bin/zerograph.js",
-    "repograph": "bin/zerograph.js"
+    "zerograph": "bin/zerograph.js"
   },
   "files": [
     "bin/zerograph.js",

@@ -1,6 +1,6 @@
 # The three-graph comparison
 
-One corpus, one commit, the same questions to repograph, graphify and gitnexus.
+One corpus, one commit, the same questions to zerograph, graphify and gitnexus.
 This file is the protocol; `bench/compare/` is the code that runs it. Re-running it
 on a new commit, a new repository or a new version of any tool takes one command
 and produces a result file that can be set beside every earlier one.
@@ -10,7 +10,7 @@ Four files sit around this one and each answers a different question:
 | | |
 |---|---|
 | [`2026-09-04-three-graphs-results.md`](2026-09-04-three-graphs-results.md) | the second three-tool run — 32 blast cases, `rank`/`mrr` for all three tools for the first time, a harness repo-resolution defect found in gitnexus's invocation and worked around, and which of its numbers can and cannot be read against the run below |
-| [`2026-09-04-repograph-0.5.0-results.md`](2026-09-04-repograph-0.5.0-results.md) | repograph alone on the same 32 blast cases, `enrich` on opus, and which comparisons to the run below are not deltas |
+| [`2026-09-04-zerograph-0.5.0-results.md`](2026-09-04-zerograph-0.5.0-results.md) | zerograph alone on the same 32 blast cases, `enrich` on opus, and which comparisons to the run below are not deltas |
 | [`2026-09-03-three-graphs-results.md`](2026-09-03-three-graphs-results.md) | the first three-tool run, and what was decided because of it |
 | [`runbook.md`](runbook.md) | how to run it again — pre-flight, the six traps, the cleanup |
 | [`next-version-gaps.md`](next-version-gaps.md) | the weak spots those numbers exposed, each with its gate |
@@ -61,7 +61,7 @@ with the truth file is wrong about the repository, not about a rival's model.
 
 The soft criterion exists because graphify and gitnexus answer with files and
 symbols rather than requirement ids; without it the comparison would be unfair to
-them. The gap between strict and soft is the portrait of a tool: repograph loses
+them. The gap between strict and soft is the portrait of a tool: zerograph loses
 cases on it (right file, neighbouring requirement), gitnexus gains dozens (always
 in the right file, never naming the id).
 
@@ -76,22 +76,22 @@ blast radius that omits it is a blast radius its reader cannot trust.
 cd ~/Documents/projects/beauty-crm && git rev-parse --short HEAD
 
 # 2. each tool's index must be fresh, and how it got fresh is part of the result
-repograph --repo . build                  # or let `ask` refresh it; zero tokens, and no
+zerograph --repo . build                  # or let `ask` refresh it; zero tokens, and no
                                           # generated questions unless `enrich` has been run
 graphify update <path> --force            # AST layer, semantic cache, 0 tokens
 gitnexus analyze -f --embeddings --skip-agents-md
 
 # 3. run both suites against all three
-cd ~/Documents/projects/repograph/bench/compare
+cd ~/Documents/projects/zerograph/bench/compare
 python3 run.py \
   --repo ~/Documents/projects/beauty-crm \
-  --repograph ~/Documents/projects/repograph/target/release/zerograph \
+  --zerograph ~/Documents/projects/zerograph/target/release/zerograph \
   --graphify-graph <path>/graphify-out/graph.json \
   --truth /tmp/truth.json \
   --out ../results/$(date +%F)-beauty-crm.json
 ```
 
-Useful flags: `--tools repograph` to run one, `--suites blast` to skip the slow
+Useful flags: `--tools zerograph` to run one, `--suites blast` to skip the slow
 retrieval pass, `--strip-prefix <dir>` when graphify reads a graph built in a
 worktree and its paths carry that directory, `--truth <path>` to reuse a truth file
 instead of rebuilding it, `--cases <path>` / `--blast <path>` to run against a case
@@ -102,7 +102,7 @@ Every tool is invoked through its own command line, without hints:
 
 | | retrieval | impact | trace | changes |
 |---|---|---|---|---|
-| repograph | `ask` | `impact --depth 3` | `trace` | `changes --base` |
+| zerograph | `ask` | `impact --depth 3` | `trace` | `changes --base` |
 | graphify | `query --graph` | `affected --depth 3` | `path` | — |
 | gitnexus | `query -r` | `impact -d upstream --depth 3` | `trace` | `detect-changes -s compare -b` |
 
@@ -133,7 +133,7 @@ commit itself had when the case was chosen, not the mix a later run will find.
 `bench/corpora/<name>/blast.jsonl` (and `cases.jsonl` where the corpus has its own ids and
 prose) are run with `--blast` / `--cases`; the result goes to `bench/results/<date>-<name>.json`.
 The first one is `beauty-crm-mobile`: eight Kotlin `impact` targets that score 0 on every
-repograph before 0.6.0, written down so that the Kotlin extractor is measured on the day it
+zerograph before 0.6.0, written down so that the Kotlin extractor is measured on the day it
 lands rather than predicted. No language ships without its file here and a result beside it.
 This corpus has no Kotlin symbol at hub scale — its widest target has eight referencing
 files — so its tiers read wide and narrow only, not lopsided against the same cutoffs the
@@ -150,7 +150,7 @@ main suite uses.
   language's declaration carries `exts`, so a mixed corpus judges it on that language alone.
 - **Mixed windows.** A `changes` window carrying several languages is judged through the row's
   `by_ext`, one slot per extension, so one language's misses cannot hide behind another's hits.
-- **The case directories 0.6.0 added:** `beauty-crm-sql`, `beauty-crm-hcl`, `repograph`,
+- **The case directories 0.6.0 added:** `beauty-crm-sql`, `beauty-crm-hcl`, `zerograph`,
   `agent-orchestrator` and `pawfice`, beside `beauty-crm-mobile`.
 
 ## Reading a result file
@@ -182,7 +182,7 @@ altogether is refused rather than scored as a miss.
 - gitnexus prints at most 15 changed symbols from `detect-changes`, then `... and N
   more`. Its MCP payload carries all of them. The CLI number is what the table
   reports; the payload was checked by hand and is quoted in the notes where it differs.
-- The case set lives in the repograph repository and was written against it.
+- The case set lives in the zerograph repository and was written against it.
   Keywords and code symbols are taken by all three; the paraphrases make the set hard.
 - A `changes` case's truth is the diff from its base to the corpus's live HEAD, not a
   fixed window, so its want-totals grow as the corpus moves forward on its own. Two
@@ -198,15 +198,15 @@ altogether is refused rather than scored as a miss.
   separate limitation and the same change does not close both. `declarations` now derives a
   file's declarations from `blanked_source` in both dialects and `changed_symbols` reads them.
   The 2026-09-04 numbers were taken before that fix, earlier the same day, and are not restated;
-  restating them moves the symbol fractions in repograph's favour by an unmeasured amount.
-- **repograph answers differently before and after `enrich`, and the build above leaves it
+  restating them moves the symbol fractions in zerograph's favour by an unmeasured amount.
+- **zerograph answers differently before and after `enrich`, and the build above leaves it
   before.** The generated questions are what its paraphrase floor rests on: on this corpus at
   `502e8a6d` the same binary reads 9/30 paraphrase without them and 15/30 with them, with
   embeddings on, and code does not move. Keyword does not move either, now that the questions
   list is admitted to the fusion only when its best BM25 score is at least 0.85 of the passage
   list's — a constant of this store, window (0.802, 0.866] on the 82 recorded cases; before that
   gate an equal turn cost the lexical-only arm two cases. `enrich` spends model tokens
-  (~$2.5 of Haiku here), so a run of this protocol measures repograph's zero-token configuration
+  (~$2.5 of Haiku here), so a run of this protocol measures zerograph's zero-token configuration
   unless it pays for one first — and either way the result should say which, as `bench`'s own
   summary line does with `enriched=`.
 - **The pattern that decided a rank over-matched — closed by `8e40a19`, 2026-09-04.** `run.py`'s
@@ -215,7 +215,7 @@ altogether is refused rather than scored as a miss.
   competitor, inflating that row's rank and pulling MRR down, so an MRR published before the fix
   — 0.635 on 2026-09-04 — may be pessimistic by an unmeasured amount. The error only ever ran
   that way; it could not flatter a tool. `ID_TOKEN` is now built from `load_id_families()`, so
-  only the families `repograph.toml` lists compete. The 2026-09-04 numbers were taken before that
+  only the families `zerograph.toml` lists compete. The 2026-09-04 numbers were taken before that
   fix, earlier the same day, and restating them means asking all 82 questions again.
 
 ## When a blast delta counts

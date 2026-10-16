@@ -1,7 +1,7 @@
 # The measurements this tool was built on
 
 Everything here was in `README.md` until 2026-09-10, when the README was cut to what a reader — or
-an agent — needs in order to *use* repograph. None of it is deleted, because every number in it
+an agent — needs in order to *use* zerograph. None of it is deleted, because every number in it
 paid for a decision that is still in the code: which model is the default, which list joins the
 fusion, which floors `bench` grades against, why `--rerank` is opt-in and ungraded.
 
@@ -18,7 +18,7 @@ that recall costs is the rest of this section: an `ask` in 0.8 s against 0.30 s 
 embed the fixture's 33,525 rows against 266 s at the default `resources = "balanced"`
 ([2026-09-09](bench/2026-09-09-normal-band-only-results.md)): a first build is half an hour
 under the large model where the default's is four minutes. The large model is one
-line and one `repograph embed` away, and a store already on it keeps answering by it whatever this
+line and one `zerograph embed` away, and a store already on it keeps answering by it whatever this
 file says afterwards; [ADR-002](adr/ADR-002-two-defaults-multiplied.md) weighs the two and
 says why the cheaper one is the default.
 
@@ -218,7 +218,7 @@ the arms differ by a few tokens at p90 according to where their seeds fall; the 
 The paraphrase cases are the noisy half, and the set was grown to narrow them: Wilson 95% on 14/30
 is 0.30–0.64, against 0.27–0.73 when the same gate rested on 14 cases. It is still a wide interval,
 so retrieval changes are judged on a second set:
-`repograph dump --queries qs.jsonl --out lists.json` writes,
+`zerograph dump --queries qs.jsonl --out lists.json` writes,
 for every question in a `{"q", "expect", "kind"}` JSONL, the four retriever lists 300 deep (dense
 and BM25, over passages and over the generated questions) with their scores, the query vector,
 the exact ids and the answer `ask` would give — and, for a question that is itself a stored
@@ -299,7 +299,7 @@ zero tokens throughout reads 40/40, 9/30, 12/12 at 221 p90 and 39/40, 7/30, 12/1
 [Bench](benchmarks.md#bench) floors each state on its own numbers.
 
 The prior art on the same corpus was an LLM-extracted graph that cost **14.6 million input tokens
-over 13 runs** — see the table at the top of this document for how it and repograph compare on the
+over 13 runs** — see the table at the top of this document for how it and zerograph compare on the
 38 questions of the day. Cost is not the only reason to replace it, but it is the easiest one to
 state.
 
@@ -371,8 +371,8 @@ performance cores and rayon all twelve — 18 threads, 6 running, 178.1 s — ag
 6 running and 168.8 s when rayon is capped at the same six, for the same 814 user seconds either
 way. Twelve tokenizer threads queueing for six cores cost more than they add.
 
-Set it in `repograph.toml`, or once for the machine in `~/.config/repograph/config.toml`, or
-`REPOGRAPH_RESOURCES=full` for one run. Readers take the level too, but it is not what it is for:
+Set it in `zerograph.toml`, or once for the machine in `~/.config/zerograph/config.toml`, or
+`ZEROGRAPH_RESOURCES=full` for one run. Readers take the level too, but it is not what it is for:
 every reader but `ask --rerank-local` is under a second.
 
 A writer also stops making its own copy of the model's weights: it reads them from the
@@ -386,7 +386,7 @@ The level follows the machine: `balanced`'s 30% of the logical cores is one thre
 six-core box, and on Linux `available_parallelism` honours a container's `--cpus` quota, so a
 devcontainer gets 30% of what it was given rather than 30% of the host. A build server with
 nobody at the keyboard wants `resources = "full"`, one line in
-`~/.config/repograph/config.toml`; a laptop you are working on wants `"low"`.
+`~/.config/zerograph/config.toml`; a laptop you are working on wants `"low"`.
 
 On a machine with 8 GB the model is the lever and the level is not: a rebuild under
 `embed_model = "intfloat/multilingual-e5-large"` touches about 1.6 GB of weights whatever the level
@@ -425,7 +425,7 @@ Measured on the same corpus and the same 38 keyword/paraphrase questions against
 LLM-extracted graph it replaces. That head-to-head is the case set as it stood then; the recorded
 set has since grown to 82 cases, which the [Bench](benchmarks.md#bench) floors are measured on:
 
-|                           | graphify (the incumbent) | repograph           |
+|                           | graphify (the incumbent) | zerograph           |
 | ------------------------- | ------------------------ | ------------------- |
 | paraphrase questions      | 0/14                     | 7/14                |
 | keyword questions         | 11/24                    | 24/24               |
@@ -452,7 +452,7 @@ are in [Configuration](configuration.md).
 | key | stage | what the model does there | what it has to be good at | measured | pick |
 | --- | --- | --- | --- | --- | --- |
 | `embed_model` | the dense index — `build`, `update`, `enrich`, `embed`, `watch` write with it, `ask` reads with what the store records | embeds every passage and every query. A sentence embedder named by its Hugging Face id, downloaded once and opened in-process through `ort`: not a command and not an LLM, so no Claude, GPT or local chat model can sit here, and an API embedder would need a transport this key does not have | putting a question and the sentence that answers it near each other, in Russian and English at once, over a 256-token passage | the default `intfloat/multilingual-e5-small` reads paraphrase 15/30 on the enriched fixture, ~0.30 s an `ask`, 470 MB on disk; `intfloat/multilingual-e5-large` reads 22/30 for ~0.8 s, 2.1 GB, and a first build measured in hours rather than minutes once the background band multiplies the embed | the small one, unless paraphrase recall is the job — [ADR-002](adr/ADR-002-two-defaults-multiplied.md) weighs the two |
-| `enrich_command` + `enrich_model` | `repograph enrich` | writes twelve everyday questions and a line of synonyms for each requirement-like node, as `id<TAB>question` lines, Russian and English together | being cheap over thousands of nodes, holding a strict line format across a batch, and asking in a reader's words rather than the document's | haiku reads paraphrase 15/30 and 5/9 of the developer suite's `rule` answers; a stronger model reads 17/30 and 2/9 — the register the questions are written in beats the model that writes them ([the G14 diagnostic](bench/2026-09-06-g14-second-diagnostic.md)). 1,971 eligible nodes cost ~$2.5 and 16 minutes at 8-way parallelism; the corpus is 1,996 nodes now | the cheapest model that keeps the format — `haiku` |
+| `enrich_command` + `enrich_model` | `zerograph enrich` | writes twelve everyday questions and a line of synonyms for each requirement-like node, as `id<TAB>question` lines, Russian and English together | being cheap over thousands of nodes, holding a strict line format across a batch, and asking in a reader's words rather than the document's | haiku reads paraphrase 15/30 and 5/9 of the developer suite's `rule` answers; a stronger model reads 17/30 and 2/9 — the register the questions are written in beats the model that writes them ([the G14 diagnostic](bench/2026-09-06-g14-second-diagnostic.md)). 1,971 eligible nodes cost ~$2.5 and 16 minutes at 8-way parallelism; the corpus is 1,996 nodes now | the cheapest model that keeps the format — `haiku` |
 | `rerank_command` + `rerank_model` | `ask --rerank` | picks up to five ids out of a 200-deep pool it is shown as `id<TAB>title — 120 characters` | reading a mostly Cyrillic prompt of near-duplicate candidates — **median 58,314 bytes, p90 60,843**, metered over thirty prompts — and answering with ids and nothing else | sonnet on the 82 recorded cases, two runs on 2026-09-09: paraphrase 29/30 both times, keyword 40/40, code 12/12, p90 228 and 231 tokens, ~4.3 s a question. The prompt is measured in **bytes**, because `claude -p --output-format text` returns the picked ids and no usage block; bytes ÷ 4 is ≈14.6k tokens and is a floor on this corpus, where a Cyrillic character is two bytes — so ≈$0.03 a question at Sonnet 5's $2 per million is a floor too. On the older 41-case pool haiku read 11/14 and opus 14/14 paraphrase but 23/24 keyword | `sonnet`: opus buys nothing and costs a keyword hit, haiku loses three paraphrases |
 | `reranker_dir` | `ask --rerank-local` | scores the same pool with a local cross-encoder instead of a model command, at zero tokens | the same pick, without a network or an account | measured and rejected as a floor candidate on 2026-09-04: 17.9 seconds a question against a bar of one, keyword 39/40 | not this, unless tokens are impossible |
 
@@ -510,7 +510,7 @@ behind these numbers and the evidence that the bytes do not move are in
 
 The socket path is limited to 108 bytes on Linux and Windows and 104 on macOS; the bytes are UTF-8,
 so a Cyrillic user name costs two a letter, and
-`C:\Users\Максим\OneDrive - <company>\Documents\projects\beauty-crm\.repograph\serve.sock` is about
+`C:\Users\Максим\OneDrive - <company>\Documents\projects\beauty-crm\.zerograph\serve.sock` is about
 100 of the 107 a path may use. A repository deep enough to exceed it cannot start `serve`, and `ask` answers in its own process as it would with no
 server at all. On a store neither `enrich` nor `embed` has moved under it, and a server of this
 build serving the arm asked for, the answer is the same bytes either way; that is checked on all

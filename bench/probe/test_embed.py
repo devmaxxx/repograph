@@ -94,9 +94,9 @@ class SamplerRefusal(unittest.TestCase):
         # 4 and not 3: 3 is the binary's verdict status everything else in this kit reads as a
         # reading, and an operator — or a harness — reading this script's 3 the same way would take
         # a half-written store for an answered question.
-        r = sourced("refuse_partial_store 'no repograph to sample' /tmp/beauty-crm-test")
+        r = sourced("refuse_partial_store 'no zerograph to sample' /tmp/beauty-crm-test")
         self.assertEqual(r.returncode, 4)
-        self.assertIn("no repograph to sample", r.stderr)
+        self.assertIn("no zerograph to sample", r.stderr)
         self.assertIn("/tmp/beauty-crm-test/.repograph/", r.stderr)
         self.assertIn("partial", r.stderr)
         self.assertIn("reset.sh", r.stderr)

@@ -20,12 +20,11 @@ The dense retriever downloads a 470 MB embedding model into `~/.cache/zerograph/
 never touches it, and `embed_model = "intfloat/multilingual-e5-large"` in `zerograph.toml` swaps it
 for a 2.1 GB one that reads paraphrase 22/30 against the default's 15/30.
 
-This package was `@devmaxxx/repograph` until 0.6.0. It still installs a `repograph` command beside
-`zerograph`, and reads a `.repograph/` store, `repograph.toml`, `REPOGRAPH_*` variables and the old
-model cache where they are; the first write moves the store to `.zerograph/`. Installed globally,
-remove the old package first (`npm uninstall -g @devmaxxx/repograph` or `pnpm remove -g
-@devmaxxx/repograph`): npm and pnpm 11 refuse to install over its `repograph` command. The rules
-are in `docs/install.md`, under "Coming from repograph".
+This package was `@devmaxxx/repograph` until 0.6.0. It installs only the `zerograph` command, and
+reads a `.repograph/` store, `repograph.toml`, `REPOGRAPH_*` variables and the old model cache
+where they are; the first write moves the store to `.zerograph/`. Remove the old package
+(`pnpm remove @devmaxxx/repograph`, or `npm uninstall -g @devmaxxx/repograph` if it was installed
+globally). The rules are in `docs/install.md`, under "Coming from repograph".
 
 Full documentation, the measured comparison against graphify and GitNexus, and the bench live in
 the repository: https://github.com/devmaxxx/zerograph

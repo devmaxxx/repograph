@@ -33,7 +33,7 @@ L=$(cd "$L" && pwd -P) || exit 2
 F=$(cd "$F" && pwd -P) || exit 2
 # And the binary, for the first reason again: `measure.sh` runs `$B` after this script has changed
 # directory into `$F`, so a relative BINARY resolves inside the worktree — every row exits 127 and
-# `judge.py medians` refuses the suite, or, worse, a corpus that happens to carry `bin/repograph`
+# `judge.py medians` refuses the suite, or, worse, a corpus that happens to carry `bin/zerograph`
 # gets measured instead of the candidate. A bare name is left alone: that one is a PATH lookup and
 # means the same thing from either directory, and a path whose directory does not exist is left to
 # fail where it is read rather than refused here.

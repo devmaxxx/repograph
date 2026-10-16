@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# One repograph-only benchmark run against the pinned fixture, recorded into the history.
+# One zerograph-only benchmark run against the pinned fixture, recorded into the history.
 #
 # The fixture is a corpus checkout that never moves, so two runs of this script differ only by
-# repograph's own code. That is the whole point: `bench/compare/run.py` answers "how do the
+# zerograph's own code. That is the whole point: `bench/compare/run.py` answers "how do the
 # three tools compare", which needs the other two indexes and half an hour; this answers "did
 # my change help", which needs neither.
 set -euo pipefail
@@ -29,7 +29,7 @@ trap 'rm -rf "$OUT"' EXIT
 [ -f "$FIXTURE/.zerograph/graph.json" ] || [ -f "$FIXTURE/.repograph/graph.json" ] || { echo "fixture has no store — see bench/history/README.md" >&2; exit 1; }
 
 # A run recorded against a fixture that moved is a run whose history rows cannot be compared,
-# and the comparison would silently look like a regression in repograph.
+# and the comparison would silently look like a regression in zerograph.
 PINNED=$(git -C "$FIXTURE" rev-parse --short HEAD)
 [ "$PINNED" = "502e8a6d" ] || { echo "fixture is at $PINNED, expected 502e8a6d" >&2; exit 1; }
 # `graphify-out/` is tracked in the corpus and rebuilt in place by graphify, so it is dirty by

@@ -39,14 +39,14 @@ OSI licence.
   a small-model store in a repository that names no `embed_model` moves to gemma at its next
   `update`: one 1.2 GB download and one whole re-embed in the background band. Pinning
   `embed_model = "intfloat/multilingual-e5-small"` keeps it where it is.
-- A model named in `repograph.toml` that differs from the store's is switched to without a manual
-  `repograph model`: the next `ask` says so on stderr, answers from the stored vectors, and starts a
+- A model named in `zerograph.toml` that differs from the store's is switched to without a manual
+  `zerograph model`: the next `ask` says so on stderr, answers from the stored vectors, and starts a
   background `update`.
 - `bench` gains `Floors::Gemma` for the enriched dense arm only, at 40/19: one paraphrase under
   the 20/30 it read on two rebuilds, the slack the small model's floor has. Its raw
   dense arm was never measured and is not graded. The small model keeps its four rows, and the
   fixture's store is still the small model's.
 - The licence is Gemma's terms, not an OSI one, and it was weighed and accepted for the default:
-  repograph does not redistribute the weights — the hub download puts them on the user's machine,
+  zerograph does not redistribute the weights — the hub download puts them on the user's machine,
   so the user takes the terms. A project that cannot take them pins the small model or arctic
   ([Embeddings](../embeddings.md#licence)).

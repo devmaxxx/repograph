@@ -173,10 +173,10 @@ def clear(f: Facts, name: str) -> bool:
 
 
 def store_id(repo: Path, f: Facts, name: str, decl: str) -> str:
-    """The id repograph's store gives the one declaration of `name`: `sym:<file>::<local>`, where a
+    """The id zerograph's store gives the one declaration of `name`: `sym:<file>::<local>`, where a
     component's local is its file's stem and a C# type's is its name under every type that encloses
-    it, `Outer.Inner`. A bare name is ambiguous to repograph once another language declares it too,
-    so repograph is asked by this id; the other tools keep the bare name. `decl` is `name`'s one
+    it, `Outer.Inner`. A bare name is ambiguous to zerograph once another language declares it too,
+    so zerograph is asked by this id; the other tools keep the bare name. `decl` is `name`'s one
     declaring file, already known to every caller (`f.owners(name)`'s single member)."""
     if name in f.components:
         return f"sym:{decl}::{name}"

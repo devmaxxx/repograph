@@ -251,7 +251,7 @@ one sitting and reported as a cost, not judged.
 Pass: `CODE_SEAT = true` and `CODE_GATE = c_code` in `src/query.rs`, the resident context
 building the code index for plain answers on a store that has code questions, and ADR-001
 Amendment 9 carrying the numbers. Fail: `CODE_SEAT` stays `false`, `CODE_GATE` carries the derived
-constant and its provenance in its comment, the override `REPOGRAPH_CODE_SEAT=1` stays for the
+constant and its provenance in its comment, the override `ZEROGRAPH_CODE_SEAT=1` stays for the
 next measurement, and G13 records which clause and by how much.
 
 ---
@@ -287,7 +287,7 @@ rewording is a re-measure, and this is that measure.
 ### The generator, and why it is the default one
 
 The run is on the **default enricher** (`enrich_model = "haiku"` as `src/config.rs` ships it),
-named explicitly in the copy's `repograph.toml`, with the prompt as the only variable against the
+named explicitly in the copy's `zerograph.toml`, with the prompt as the only variable against the
 fixture — which was enriched by the same generator under the old prompt. A prompt that ships
 becomes what every default `enrich` produces, and this project does not ship a configuration it
 has not measured. A second run on the stronger generator, which is where the register loss was

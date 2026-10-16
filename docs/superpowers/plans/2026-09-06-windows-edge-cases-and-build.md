@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Max's target is the beauty-crm repository on a Windows 11 machine, indexed and asked with a resident `serve`, at the speed the unix binary gives. Branch `feat/windows-serve` (tip `7dd7011`, plan `docs/superpowers/plans/2026-09-06-windows-serve-transport.md`) made the crate compile on `x86_64-pc-windows-msvc`, put the socket behind a seam, added a green `windows-latest` CI job and a green three-target release dry run, and wired the npm `win32-x64` package. PR #15 (`olkp1`, `fix/file-id-on-stable`, being rebased as this is written) restores the socket file's identity on Windows through `GetFileInformationByHandle`. What is still missing is in two parts. (A) Nothing that run produced can be downloaded: the dry run compiles `repograph.exe` and uploads it nowhere, because the upload is gated on a tag. (B) The CI job is green on a runner that is not a user's machine: it carries Git for Windows' `usr\bin` on `PATH`, an ASCII path, admin rights, no sync client, and it never opens the embedding model. This plan produces the download and then walks every Windows edge that was asked about, reading the branch's code before saying anything about it, and sorts each edge into must-fix, should-fix or documented-only.
+**Goal:** Max's target is the beauty-crm repository on a Windows 11 machine, indexed and asked with a resident `serve`, at the speed the unix binary gives. Branch `feat/windows-serve` (tip `7dd7011`, plan `docs/superpowers/plans/2026-09-06-windows-serve-transport.md`) made the crate compile on `x86_64-pc-windows-msvc`, put the socket behind a seam, added a green `windows-latest` CI job and a green three-target release dry run, and wired the npm `win32-x64` package. PR #15 (`olkp1`, `fix/file-id-on-stable`, being rebased as this is written) restores the socket file's identity on Windows through `GetFileInformationByHandle`. What is still missing is in two parts. (A) Nothing that run produced can be downloaded: the dry run compiles `zerograph.exe` and uploads it nowhere, because the upload is gated on a tag. (B) The CI job is green on a runner that is not a user's machine: it carries Git for Windows' `usr\bin` on `PATH`, an ASCII path, admin rights, no sync client, and it never opens the embedding model. This plan produces the download and then walks every Windows edge that was asked about, reading the branch's code before saying anything about it, and sorts each edge into must-fix, should-fix or documented-only.
 
-**Architecture:** unchanged from the transport plan. `serve` (`src/serve.rs`) binds `.repograph/serve.sock` through `mod sys` — std's Unix socket on unix, socket2's `AF_UNIX` on Windows — and `ask` (`src/main.rs:396–425`) tries the socket first. `main.rs:353` canonicalizes `--repo` before anything reads it, which on Windows means every path in the process, the socket's included, carries the `\\?\` verbatim prefix. `enrich`/`ask --rerank` shell out through `sh -c` (`src/enrich.rs:252`). The store writes through `write_atomic` (`src/store.rs:92`, a temp file and a rename). The embedder fetches through `hf-hub` into `cache_root()` (`src/index/mod.rs:12`) and opens an `ort` session with no execution provider named (`src/index/embed.rs:127`). This plan adds no module; it adds one function to `enrich.rs`, one to `main.rs`, one to `store.rs`, tests beside each, two CI steps, one release step, and words.
+**Architecture:** unchanged from the transport plan. `serve` (`src/serve.rs`) binds `.zerograph/serve.sock` through `mod sys` — std's Unix socket on unix, socket2's `AF_UNIX` on Windows — and `ask` (`src/main.rs:396–425`) tries the socket first. `main.rs:353` canonicalizes `--repo` before anything reads it, which on Windows means every path in the process, the socket's included, carries the `\\?\` verbatim prefix. `enrich`/`ask --rerank` shell out through `sh -c` (`src/enrich.rs:252`). The store writes through `write_atomic` (`src/store.rs:92`, a temp file and a rename). The embedder fetches through `hf-hub` into `cache_root()` (`src/index/mod.rs:12`) and opens an `ort` session with no execution provider named (`src/index/embed.rs:127`). This plan adds no module; it adds one function to `enrich.rs`, one to `main.rs`, one to `store.rs`, tests beside each, two CI steps, one release step, and words.
 
 **Tech Stack:** Rust 1.98.0 pinned, every dependency `=`-pinned (`windows-sys =0.61.2` arrives with PR #15 under `[target.'cfg(windows)'.dependencies]`; this plan adds nothing to `Cargo.toml`). GitHub Actions: `windows-latest` is the `windows-2025-vs2026` image (read from the job log), with Git for Windows' `bin` and `usr\bin` on `PATH`. No Windows toolchain on the Mac, none installed; every Windows verdict is a CI run whose URL the step records. `gh 2.92.0` on the Mac.
 
@@ -12,7 +12,7 @@
 
 ## Global Constraints
 
-- The worktree is `/Users/max/Documents/projects/repograph/.worktrees/windows-serve`, branch `feat/windows-serve`. Another agent is rebasing PR #15 there now: **Task 0 waits for `gh pr view 15` to say `MERGED`** and only then touches the worktree. Never `cd` into the main checkout; use `git -C` or run from the worktree.
+- The worktree is `/Users/max/Documents/projects/zerograph/.worktrees/windows-serve`, branch `feat/windows-serve`. Another agent is rebasing PR #15 there now: **Task 0 waits for `gh pr view 15` to say `MERGED`** and only then touches the worktree. Never `cd` into the main checkout; use `git -C` or run from the worktree.
 - No step builds for Windows on this machine. Every Windows-affecting task ends with a push and a watched CI run (`gh auth switch --user devmaxxx && gh run watch …`), and the run's verdict is the step's verdict.
 - The unix path stays byte-identical: every Windows change is behind `#[cfg(windows)]` or an `if cfg!(windows)`, and the unix half of each seam is the line that is there today. The wire format does not change. The bench floors are untouched because no retrieval code is.
 - Cargo dependencies stay `=`-pinned. Nothing is added: PR #15's `windows-sys` carries `Win32_Storage_FileSystem`, which holds every constant this plan's Windows tests need (`FILE_SHARE_READ` and friends).
@@ -32,8 +32,8 @@ Facts this plan stands on, each from a file on this machine or a log fetched her
 1. `src/serve.rs:69` (branch tip): `sys::id` returns `None` on Windows; the `Unlink` guard (`serve.rs:320–325`) therefore removes nothing there, and the identity test is `#[cfg(unix)]` (`serve.rs:350`). PR #15's diff touches only `id` and `Cargo.{toml,lock}`: after it lands the identity exists on Windows and **no test on the Windows job reads it** until the `cfg` comes off.
 2. `src/main.rs:353`: `let repo = cli.repo.canonicalize()?;` — on Windows, std's `canonicalize` opens the directory and asks `GetFinalPathNameByHandleW` (`std/src/sys/fs/windows.rs:1593`), which answers in the `\\?\C:\…` form. Every path in the process is derived from it: the socket (`serve::socket_path`), the store, the walk root, and `git -C` (`src/changes.rs:144`).
 3. Windows CI job `101506740337` (run `34040679754`, green): `446 passed; 2 ignored` unit, `11 passed` in `tests/serve.rs`; the twenty `enrich::tests` and `rerank::tests::a_successful_commands_output_is_parsed_into_picks` passed — the runner resolves `sh` and `awk`. The whole job is under three minutes (clippy 1m08s, test build 1m12s, tests 5 s).
-4. Release dry run `34040652089` (green, three build jobs, `npm` skipped): the Windows job printed `repograph 0.5.0` from `.\target\x86_64-pc-windows-msvc\release\repograph.exe --version` and packed the zip; no `upload-artifact` step exists, so nothing was kept.
-5. `src/enrich.rs:252`: `Command::new("sh").arg("-c").arg(command)`. The only program repograph ever spawns by name is `sh` (and `git`, `changes.rs:144`); `awk`/`printf` appear only inside test command strings (`enrich.rs:421,466,494,503,514,565,589,598`; `rerank.rs:143`) and reach the OS through that `sh`. The default commands (`src/config.rs:43–44`) are `MAX_THINKING_TOKENS=0 claude -p --model {model} --output-format text --tools "" --setting-sources "" --no-session-persistence` — POSIX syntax (a `VAR=value` prefix, `""` quoting) on both keys.
+4. Release dry run `34040652089` (green, three build jobs, `npm` skipped): the Windows job printed `zerograph 0.5.0` from `.\target\x86_64-pc-windows-msvc\release\zerograph.exe --version` and packed the zip; no `upload-artifact` step exists, so nothing was kept.
+5. `src/enrich.rs:252`: `Command::new("sh").arg("-c").arg(command)`. The only program zerograph ever spawns by name is `sh` (and `git`, `changes.rs:144`); `awk`/`printf` appear only inside test command strings (`enrich.rs:421,466,494,503,514,565,589,598`; `rerank.rs:143`) and reach the OS through that `sh`. The default commands (`src/config.rs:43–44`) are `MAX_THINKING_TOKENS=0 claude -p --model {model} --output-format text --tools "" --setting-sources "" --no-session-persistence` — POSIX syntax (a `VAR=value` prefix, `""` quoting) on both keys.
 6. Claude Code's setup page (fetched): on native Windows, Git for Windows is optional and is what gives Claude Code its Bash tool; the path to it is `CLAUDE_CODE_GIT_BASH_PATH`, default `C:\Program Files\Git\bin\bash.exe`.
 7. `socket2-0.6.5/src/sys/windows.rs:1023–1057`: the address builder requires the path to be UTF-8 (`to_str`, error `path must be valid UTF-8`), refuses `bytes.len() >= 108` (error `path must be shorter than SUN_LEN`, so 107 bytes is the most), and its own comment says Windows expects UTF-8 in `sun_path`.
 8. `std/src/sys/paths/windows.rs:174–179` (1.98.0): `home_dir()` reads `USERPROFILE` (non-empty) and otherwise the profile API. `HOME` is never consulted on Windows.
@@ -43,8 +43,8 @@ Facts this plan stands on, each from a file on this machine or a log fetched her
 12. CRLF: `src/doc/requirements.rs:50` splits with `.lines()` (which strips a trailing `\r`), joins bodies with `"\n"` and trims; `src/code/symbols.rs:34,45,262,347` take every body through `.lines()`/`flatten`/`comment_text`; `src/index/lexical.rs:30` splits tokens on anything not alphanumeric or `-`; `src/enrich.rs:36–41` hashes `label\nbody`. Nothing slices a body out of the raw text by byte offset.
 13. `hf-hub-0.5.0/src/api/sync.rs:435–449`: on Windows the snapshot pointer is a symlink if `symlink_file` succeeds and otherwise the blob is **renamed** into place; no privilege is needed for the second path.
 14. `ort-sys-2.0.0-rc.13/build/download/dist.tsv:9`: the only feature-less `x86_64-pc-windows-msvc` row is the `directml` build; `build/static_link/mod.rs:60–65` links `dxguid DXCORE DXGI D3D12 DirectML` — load-time imports of the exe. `src/index/embed.rs:127–129` and `cross.rs:76–78` name no execution provider, so ORT runs its CPU provider. `ort-2.0.0-rc.13/src/util/mod.rs:80–88` passes the model path as UTF-16 on Windows.
-15. `npm/repograph/bin/repograph.js`: `spawnSync(found.path, argv, {stdio: "inherit"})` on an absolute `.exe` path from `require.resolve` — no shell in between; exit `128` when `status` is `null`.
-16. Byte counts (UTF-8, computed here) for `<repo>\.repograph\serve.sock`: `C:\Users\maxim\Documents\projects\beauty-crm` 66; `C:\Users\Максим\Documents\projects\beauty-crm` 73; `C:\Users\Максим Иванов\OneDrive\Documents\projects\beauty-crm` 95; `C:\Users\Максим\OneDrive - Efisco Sp. z o.o\Documents\projects\beauty-crm` 101; a `.worktrees\<branch>` under the Cyrillic Documents case 99. Add 4 for the `\\?\` prefix fact 2 puts on all of them: the worst case here is 105 of the 107 allowed.
+15. `npm/zerograph/bin/zerograph.js`: `spawnSync(found.path, argv, {stdio: "inherit"})` on an absolute `.exe` path from `require.resolve` — no shell in between; exit `128` when `status` is `null`.
+16. Byte counts (UTF-8, computed here) for `<repo>\.zerograph\serve.sock`: `C:\Users\maxim\Documents\projects\beauty-crm` 66; `C:\Users\Максим\Documents\projects\beauty-crm` 73; `C:\Users\Максим Иванов\OneDrive\Documents\projects\beauty-crm` 95; `C:\Users\Максим\OneDrive - Efisco Sp. z o.o\Documents\projects\beauty-crm` 101; a `.worktrees\<branch>` under the Cyrillic Documents case 99. Add 4 for the `\\?\` prefix fact 2 puts on all of them: the worst case here is 105 of the 107 allowed.
 17. The runner's temp directory is spelled with an 8.3 component (`C:\Users\RUNNER~1\…`); tests bind through that spelling and `ask` connects through the canonical `\\?\C:\Users\runneradmin\…` spelling; `a_reply_from_another_version_is_ignored` passed (fact 3). So the kernel resolves `sun_path` as a file path — `\\?\` accepted, short and long names one file.
 18. The "566 ms" figure in the brief is in no file read here; the only judged bound on the stale-socket fallback is `tests/serve.rs:207`'s `< 5 s` over the whole `ask` process (spawn, store load, connect, answer).
 
@@ -63,15 +63,15 @@ Facts this plan stands on, each from a file on this machine or a log fetched her
       - if: github.event_name == 'workflow_dispatch'
         uses: actions/upload-artifact@v4
         with:
-          name: repograph-${{ matrix.target }}
-          path: repograph-${{ matrix.target }}.${{ matrix.ext }}
+          name: zerograph-${{ matrix.target }}
+          path: zerograph-${{ matrix.target }}.${{ matrix.ext }}
           if-no-files-found: error
           retention-days: 14
 ```
 
 - Workflow: `release.yml`, not `ci.yml`. The release job builds `--release` with `lto = "thin"` and runs the load smoke; the CI job builds the dev profile and never packs. What Max downloads must be the bytes a tag would publish.
 - Which run: `workflow_dispatch` only. A tag run has `event_name == 'push'` and is unchanged line for line.
-- Artifact name: `repograph-x86_64-pc-windows-msvc` (the matrix produces the two unix ones too, which costs nothing and gives a Mac build of the same commit). Contents: the one file `repograph-x86_64-pc-windows-msvc.zip`, byte-identical to the release asset a tag would upload.
+- Artifact name: `zerograph-x86_64-pc-windows-msvc` (the matrix produces the two unix ones too, which costs nothing and gives a Mac build of the same commit). Contents: the one file `zerograph-x86_64-pc-windows-msvc.zip`, byte-identical to the release asset a tag would upload.
 - Retention: 14 days — long enough to fetch after a weekend, short enough that a stale branch build cannot be mistaken for a release months later.
 - `actions/upload-artifact@v4` matches the file's `checkout@v4` era; the current major is v7.0.1 (read from the release list) with the same inputs (`name`, `path`, `if-no-files-found`, `retention-days`), and either is acceptable.
 
@@ -80,25 +80,25 @@ Facts this plan stands on, each from a file on this machine or a log fetched her
 From the Mac (dispatch, wait, download):
 
 ```bash
-gh auth switch --user devmaxxx && gh workflow run release.yml --repo devmaxxx/repograph --ref feat/windows-serve
-sleep 20; gh auth switch --user devmaxxx && RUN=$(gh run list --repo devmaxxx/repograph --workflow release --event workflow_dispatch --branch feat/windows-serve --limit 1 --json databaseId --jq '.[0].databaseId') && gh run watch --repo devmaxxx/repograph --exit-status "$RUN" | tail -4 && echo "$RUN"
-gh auth switch --user devmaxxx && gh run download "$RUN" --repo devmaxxx/repograph -n repograph-x86_64-pc-windows-msvc -D ~/bench/windows-edge-2026-09-06/win
-ls -l ~/bench/windows-edge-2026-09-06/win   # repograph-x86_64-pc-windows-msvc.zip
+gh auth switch --user devmaxxx && gh workflow run release.yml --repo devmaxxx/zerograph --ref feat/windows-serve
+sleep 20; gh auth switch --user devmaxxx && RUN=$(gh run list --repo devmaxxx/zerograph --workflow release --event workflow_dispatch --branch feat/windows-serve --limit 1 --json databaseId --jq '.[0].databaseId') && gh run watch --repo devmaxxx/zerograph --exit-status "$RUN" | tail -4 && echo "$RUN"
+gh auth switch --user devmaxxx && gh run download "$RUN" --repo devmaxxx/zerograph -n zerograph-x86_64-pc-windows-msvc -D ~/bench/windows-edge-2026-09-06/win
+ls -l ~/bench/windows-edge-2026-09-06/win   # zerograph-x86_64-pc-windows-msvc.zip
 ```
 
 On the Windows box (PowerShell; `gh` once via `winget install --id GitHub.cli`, then `gh auth login` — the artifacts API needs a token even on this public repository):
 
 ```powershell
-gh run download <RUN> --repo devmaxxx/repograph -n repograph-x86_64-pc-windows-msvc -D $env:USERPROFILE\Downloads\repograph
-Expand-Archive $env:USERPROFILE\Downloads\repograph\repograph-x86_64-pc-windows-msvc.zip -DestinationPath $env:USERPROFILE\.local\bin -Force
-repograph --version
+gh run download <RUN> --repo devmaxxx/zerograph -n zerograph-x86_64-pc-windows-msvc -D $env:USERPROFILE\Downloads\zerograph
+Expand-Archive $env:USERPROFILE\Downloads\zerograph\zerograph-x86_64-pc-windows-msvc.zip -DestinationPath $env:USERPROFILE\.local\bin -Force
+zerograph --version
 ```
 
 `$env:USERPROFILE\.local\bin` is where Claude Code's native installer already put `claude.exe`, so it is on `PATH`. A file that arrives through `gh` carries no mark-of-the-web (Go's HTTP client writes no `Zone.Identifier` stream), so no SmartScreen dialog; see edge 10 for the browser route.
 
 ### Artifact or `cargo install --git`?
 
-`cargo install --git https://github.com/devmaxxx/repograph --branch feat/windows-serve --locked` on the Windows box would work — PR #15's author built and tested the branch on Windows 11 with 1.98.0 — and it has one advantage: a rebuild after every push without waiting for a runner. Against it: it needs rustup and the MSVC Build Tools with the Windows SDK (several gigabytes, an interactive installer) to compile oniguruma, tree-sitter and blake3's assembly; it downloads the pyke ONNX Runtime archive during the build; `cargo install --git` builds in a temporary checkout, so the repository's `rust-toolchain.toml` is not what selects the compiler — the user's default toolchain is, which merely has to be ≥ 1.98; and the binary it produces is one nobody but that machine has seen. The artifact is the bytes a runner built, smoked with `--version`, and (after Task 4) drove through the dense arm; it needs nothing installed but `gh`. **Recommend the artifact** for the first working build and for every check that follows; `cargo install --git` only if Max wants to change Windows code on the box itself, and then the CI job is still the judge of what gets merged. The npm route cannot deliver a branch build at all — GitHub Packages spends a version number per publish, and `0.5.0`'s `win32-x64` package does not exist until a tag.
+`cargo install --git https://github.com/devmaxxx/zerograph --branch feat/windows-serve --locked` on the Windows box would work — PR #15's author built and tested the branch on Windows 11 with 1.98.0 — and it has one advantage: a rebuild after every push without waiting for a runner. Against it: it needs rustup and the MSVC Build Tools with the Windows SDK (several gigabytes, an interactive installer) to compile oniguruma, tree-sitter and blake3's assembly; it downloads the pyke ONNX Runtime archive during the build; `cargo install --git` builds in a temporary checkout, so the repository's `rust-toolchain.toml` is not what selects the compiler — the user's default toolchain is, which merely has to be ≥ 1.98; and the binary it produces is one nobody but that machine has seen. The artifact is the bytes a runner built, smoked with `--version`, and (after Task 4) drove through the dense arm; it needs nothing installed but `gh`. **Recommend the artifact** for the first working build and for every check that follows; `cargo install --git` only if Max wants to change Windows code on the box itself, and then the CI job is still the judge of what gets merged. The npm route cannot deliver a branch build at all — GitHub Packages spends a version number per publish, and `0.5.0`'s `win32-x64` package does not exist until a tag.
 
 ---
 
@@ -108,11 +108,11 @@ Each: what breaks, how a user sees it, the fix, what judges it, and what the bra
 
 ### 1. `sh -c` for enrich and rerank — **[must]**
 
-*What breaks.* Fact 5: the program spawned is `sh`; `awk` and `printf` are never spawned by repograph. What PR #15's author hit is `sh` not resolving on a real box: Git for Windows' installer default ("Git from the command line and also from 3rd-party software") puts `<Git>\cmd` on `PATH` — `git.exe` and nothing else — and only the opt-in "Use Git and optional Unix tools" puts `<Git>\bin` and `<Git>\usr\bin` there, which is what the runner image has (fact 3). The error is `spawn \`…\`: program not found` from `enrich.rs:254`'s context, and the author read it as awk missing because the failing tests' commands are awk one-liners.
+*What breaks.* Fact 5: the program spawned is `sh`; `awk` and `printf` are never spawned by zerograph. What PR #15's author hit is `sh` not resolving on a real box: Git for Windows' installer default ("Git from the command line and also from 3rd-party software") puts `<Git>\cmd` on `PATH` — `git.exe` and nothing else — and only the opt-in "Use Git and optional Unix tools" puts `<Git>\bin` and `<Git>\usr\bin` there, which is what the runner image has (fact 3). The error is `spawn \`…\`: program not found` from `enrich.rs:254`'s context, and the author read it as awk missing because the failing tests' commands are awk one-liners.
 
-*How a user sees it.* A beauty-crm user in PowerShell or cmd with the default Git install: `repograph enrich` prints `enrich: spawn \`MAX_THINKING_TOKENS=0 claude -p …\`: program not found` once per batch, generates nothing, and reports every node still left; `ask --rerank` prints `rerank: spawn …: program not found; answering from the fused order` and answers unreranked. A user with no Git for Windows at all sees the same. A user *inside* Git Bash sees neither, because that shell's `PATH` holds `/usr/bin`.
+*How a user sees it.* A beauty-crm user in PowerShell or cmd with the default Git install: `zerograph enrich` prints `enrich: spawn \`MAX_THINKING_TOKENS=0 claude -p …\`: program not found` once per batch, generates nothing, and reports every node still left; `ask --rerank` prints `rerank: spawn …: program not found; answering from the fused order` and answers unreranked. A user with no Git for Windows at all sees the same. A user *inside* Git Bash sees neither, because that shell's `PATH` holds `/usr/bin`.
 
-*Options.* (a) Require Git Bash on `PATH` and say so — the branch's README sentence at line 486 — leaves the default install broken and puts the fix on the user. (b) A `cfg(windows)` `cmd /C` or PowerShell rendering: the default command (fact 5) is POSIX — `MAX_THINKING_TOKENS=0` as a prefix is a program name to `cmd`, `--tools ""` survives `cmd`'s parsing only by luck, and every user-written `enrich_command` in a `repograph.toml` would mean one thing on unix and another on Windows; that forks the meaning of a config key by platform, which is worse than a missing shell. Rejected. (c) Make the tests not need awk — they do not, once `sh` is found, since Git for Windows' `usr\bin` carries gawk and `printf` is a builtin; and the tests are not what a user runs. (d) **Find `sh` the way the platform makes it findable**: on `PATH` if it is there (the runner, a Git Bash user — unchanged behaviour), otherwise beside `git` (the default install has `<Git>\cmd\git.exe` on `PATH`, and `<Git>\bin\sh.exe` is two directories over), otherwise where Claude Code says its Git Bash is (`CLAUDE_CODE_GIT_BASH_PATH`, fact 6), otherwise the installer's default locations (`%ProgramFiles%\Git`, `%ProgramW6432%\Git`, `%LOCALAPPDATA%\Programs\Git`); when found by discovery rather than `PATH`, put `<Git>\usr\bin` at the front of the child's `PATH` so `awk`, `wc`, `tr` and the rest resolve inside `sh -c` as they do in Git Bash. A machine with none of these gets one line: `sh is not on PATH and no Git for Windows was found beside git or under Program Files: enrich and rerank run their command under sh, which Git for Windows provides`. Chosen: (d), with the README sentence rewritten. The unix side keeps `Command::new("sh")` verbatim.
+*Options.* (a) Require Git Bash on `PATH` and say so — the branch's README sentence at line 486 — leaves the default install broken and puts the fix on the user. (b) A `cfg(windows)` `cmd /C` or PowerShell rendering: the default command (fact 5) is POSIX — `MAX_THINKING_TOKENS=0` as a prefix is a program name to `cmd`, `--tools ""` survives `cmd`'s parsing only by luck, and every user-written `enrich_command` in a `zerograph.toml` would mean one thing on unix and another on Windows; that forks the meaning of a config key by platform, which is worse than a missing shell. Rejected. (c) Make the tests not need awk — they do not, once `sh` is found, since Git for Windows' `usr\bin` carries gawk and `printf` is a builtin; and the tests are not what a user runs. (d) **Find `sh` the way the platform makes it findable**: on `PATH` if it is there (the runner, a Git Bash user — unchanged behaviour), otherwise beside `git` (the default install has `<Git>\cmd\git.exe` on `PATH`, and `<Git>\bin\sh.exe` is two directories over), otherwise where Claude Code says its Git Bash is (`CLAUDE_CODE_GIT_BASH_PATH`, fact 6), otherwise the installer's default locations (`%ProgramFiles%\Git`, `%ProgramW6432%\Git`, `%LOCALAPPDATA%\Programs\Git`); when found by discovery rather than `PATH`, put `<Git>\usr\bin` at the front of the child's `PATH` so `awk`, `wc`, `tr` and the rest resolve inside `sh -c` as they do in Git Bash. A machine with none of these gets one line: `sh is not on PATH and no Git for Windows was found beside git or under Program Files: enrich and rerank run their command under sh, which Git for Windows provides`. Chosen: (d), with the README sentence rewritten. The unix side keeps `Command::new("sh")` verbatim.
 
 *What judges it.* Two things. A unit test of the resolver over a mock tree (`<root>\cmd\git.exe`, `<root>\bin\sh.exe`, `<root>\usr\bin\` as empty files in a tempdir, a synthetic `PATH` holding only `<root>\cmd`) — Windows-only, deterministic. And a CI step in the Windows job that strips `\Git\bin` and `\Git\usr\bin` from `PATH`, asserts `sh` no longer resolves, and runs `cargo test -- enrich:: rerank::` — red on the branch as it stands (the author's failure, reproduced on the runner), green after the change. Task 2.
 
@@ -122,9 +122,9 @@ Each: what breaks, how a user sees it, the fix, what judges it, and what the bra
 
 *What breaks.* Facts 7 and 16: 107 bytes of UTF-8, and the canonicalized path (fact 2) spends four of them on `\\?\`. The realistic beauty-crm cases are 66–105 bytes with the prefix: under the limit, but the OneDrive-with-company-name case has two bytes to spare, and one more `.worktrees\<branch>` level takes it over. Cyrillic is two bytes a letter in UTF-8, which is why the user name matters; socket2 requires UTF-8 (fact 7) and Windows paths are UTF-16, so any real user name converts — the failure mode is length, never encoding.
 
-*How a user sees it.* `serve` exits at once with `Error: bind \\?\C:\Users\…\.repograph\serve.sock` and, beneath it, `path must be shorter than SUN_LEN` (socket2's text, fact 7; std's unix text is the same words). `ask` sees no socket file (`sys::present` false, `serve.rs:137`) and answers in its own process, printing nothing about it — clean, and silent about why there is no server.
+*How a user sees it.* `serve` exits at once with `Error: bind \\?\C:\Users\…\.zerograph\serve.sock` and, beneath it, `path must be shorter than SUN_LEN` (socket2's text, fact 7; std's unix text is the same words). `ask` sees no socket file (`sys::present` false, `serve.rs:137`) and answers in its own process, printing nothing about it — clean, and silent about why there is no server.
 
-*The fix.* Take the prefix off after `canonicalize` on Windows only (`main.rs:353`): std re-applies `\\?\` inside every call that needs it (fact 9), so nothing is lost for long paths, and four bytes come back to the socket, every message reads `C:\…` rather than `\\?\C:\…`, and `git -C` gets the form it is documented to take (edge 12). The relative-path trick (`set_current_dir` then bind `.repograph/serve.sock`) is still rejected: it would change where `enrich`'s command runs from. 8.3 short names were considered and rejected: not generated on every volume, and a socket name that differs by who computed it is a socket nobody finds. The limit itself stays documented; the README sentence gains the byte arithmetic so a user can count their own path.
+*The fix.* Take the prefix off after `canonicalize` on Windows only (`main.rs:353`): std re-applies `\\?\` inside every call that needs it (fact 9), so nothing is lost for long paths, and four bytes come back to the socket, every message reads `C:\…` rather than `\\?\C:\…`, and `git -C` gets the form it is documented to take (edge 12). The relative-path trick (`set_current_dir` then bind `.zerograph/serve.sock`) is still rejected: it would change where `enrich`'s command runs from. 8.3 short names were considered and rejected: not generated on every volume, and a socket name that differs by who computed it is a socket nobody finds. The limit itself stays documented; the README sentence gains the byte arithmetic so a user can count their own path.
 
 *What judges it.* Unit tests on the prefix function (Windows-only: `\\?\C:\a\b` → `C:\a\b`, `\\?\UNC\srv\share\x` → `\\srv\share\x`, a plain path untouched, and `fs::metadata` on the stripped canonical temp dir succeeds). A unit test in `serve.rs` that binds under a tempdir joined with `Максим` (UTF-8 in `sun_path`, judged on the Windows job — the runner's own path is ASCII and proves nothing about it). Task 5 and Task 3.
 
@@ -132,7 +132,7 @@ Each: what breaks, how a user sees it, the fix, what judges it, and what the bra
 
 ### 3. OneDrive / Dropbox / Google Drive — **[doc]**
 
-*What is known.* `Documents` under a Microsoft account is frequently redirected into `OneDrive\Documents`, so a repository cloned there has `.repograph\` inside a synced tree. Everything in `.repograph\` is a regular file except `serve.sock`, which `bind` creates as an NTFS reparse point with tag `IO_REPARSE_TAG_AF_UNIX`. A sync client uploads regular files as it sees them close; the store files are rewritten by rename (fact 10), so the client sees a new file each time and uploads it again — for beauty-crm's `vectors.f32` and `graph.json` that is tens of megabytes per `build`, nothing per `ask`. While the client holds a file open for upload, a rename over it can fail (edge 5). Files On-Demand can dehydrate a store file to a placeholder; a `std::fs::read` hydrates it on the next `ask`, at network speed, once.
+*What is known.* `Documents` under a Microsoft account is frequently redirected into `OneDrive\Documents`, so a repository cloned there has `.zerograph\` inside a synced tree. Everything in `.zerograph\` is a regular file except `serve.sock`, which `bind` creates as an NTFS reparse point with tag `IO_REPARSE_TAG_AF_UNIX`. A sync client uploads regular files as it sees them close; the store files are rewritten by rename (fact 10), so the client sees a new file each time and uploads it again — for beauty-crm's `vectors.f32` and `graph.json` that is tens of megabytes per `build`, nothing per `ask`. While the client holds a file open for upload, a rename over it can fail (edge 5). Files On-Demand can dehydrate a store file to a placeholder; a `std::fs::read` hydrates it on the next `ask`, at network speed, once.
 
 *What is unverified.* What OneDrive does with a reparse point of a tag it does not know: it cannot upload it, and whether it merely badges the folder with an error, logs and skips it, or attempts to delete it is not something a runner can show — GitHub's Windows image has no signed-in sync client. Nothing was found here that says a client deletes foreign reparse points, and the `serve` code survives deletion anyway (`serve` re-creates on start; a running server whose file vanished is unreachable until restarted — `ask` sees no file and answers itself).
 
@@ -148,7 +148,7 @@ Each: what breaks, how a user sees it, the fix, what judges it, and what the bra
 
 ### 5. File sharing and locking — **[should]**
 
-*What breaks.* Fact 9: std shares `READ|WRITE|DELETE` on every open, so repograph's own processes never block one another — a concurrent `ask` mid-read of `graph.json` does not stop `write_atomic`'s rename (the `ACCESS_DENIED` it would get is retried with POSIX rename semantics, and a handle with `FILE_SHARE_DELETE` permits that). `serve` holds no store file open between requests and there is no mmap (fact 10). The hole is *other* programs: Windows Search, a sync client mid-upload, an editor with the file open, a backup agent — anything that opens `graph.json` without `FILE_SHARE_DELETE`. Then `MoveFileExW` fails with `ERROR_SHARING_VIOLATION` (os error 32), std returns it as is, and `write_atomic` fails.
+*What breaks.* Fact 9: std shares `READ|WRITE|DELETE` on every open, so zerograph's own processes never block one another — a concurrent `ask` mid-read of `graph.json` does not stop `write_atomic`'s rename (the `ACCESS_DENIED` it would get is retried with POSIX rename semantics, and a handle with `FILE_SHARE_DELETE` permits that). `serve` holds no store file open between requests and there is no mmap (fact 10). The hole is *other* programs: Windows Search, a sync client mid-upload, an editor with the file open, a backup agent — anything that opens `graph.json` without `FILE_SHARE_DELETE`. Then `MoveFileExW` fails with `ERROR_SHARING_VIOLATION` (os error 32), std returns it as is, and `write_atomic` fails.
 
 *How a user sees it.* `Error: rename graph.json` … `The process cannot access the file because it is being used by another process. (os error 32)` from `build`/`update`/`enrich`, or `serve: … os error 32` in the server's log from a poll's refresh. The store is intact (the temp file was written first, `store.rs:95`), so the next command simply tries again — but a `build` that ran for a minute and lost its save at the last step is a minute lost.
 
@@ -158,7 +158,7 @@ Each: what breaks, how a user sees it, the fix, what judges it, and what the bra
 
 ### 6. CRLF — **[should]** (a pinning test; no code change expected)
 
-*What happens.* Git for Windows' installer default is `core.autocrlf=true`, so a fresh beauty-crm checkout has CRLF in every text file. Fact 12: the doc extractor splits with `.lines()`, which strips a trailing `\r`, and builds bodies by joining with `\n`; the code extractor takes every body through `.lines()`/`flatten`/`comment_text`; tree-sitter counts `\r\n` as one newline, so rows — the `line` fields — agree; BM25 tokens split on anything not alphanumeric; the passage hash is over `label\nbody`. So node ids, labels, bodies, line numbers, BM25 documents and `questions.json`'s hashes are identical to a LF checkout's, and a `questions.json` copied from the Mac still hits on a CRLF tree (no tokens re-spent). What differs is the manifest's blake3 over raw bytes (`walk.rs:85`), and that is per machine: `.repograph/` is gitignored and nothing compares it against a committed expectation. The `\u{feff}` BOM is handled at `requirements.rs:50`. The CI job sets `core.autocrlf false` because the *test fixtures* are compared by bytes — that protects the tests, and says nothing about a CRLF corpus.
+*What happens.* Git for Windows' installer default is `core.autocrlf=true`, so a fresh beauty-crm checkout has CRLF in every text file. Fact 12: the doc extractor splits with `.lines()`, which strips a trailing `\r`, and builds bodies by joining with `\n`; the code extractor takes every body through `.lines()`/`flatten`/`comment_text`; tree-sitter counts `\r\n` as one newline, so rows — the `line` fields — agree; BM25 tokens split on anything not alphanumeric; the passage hash is over `label\nbody`. So node ids, labels, bodies, line numbers, BM25 documents and `questions.json`'s hashes are identical to a LF checkout's, and a `questions.json` copied from the Mac still hits on a CRLF tree (no tokens re-spent). What differs is the manifest's blake3 over raw bytes (`walk.rs:85`), and that is per machine: `.zerograph/` is gitignored and nothing compares it against a committed expectation. The `\u{feff}` BOM is handled at `requirements.rs:50`. The CI job sets `core.autocrlf false` because the *test fixtures* are compared by bytes — that protects the tests, and says nothing about a CRLF corpus.
 
 *What is not judged.* The property above is by construction, not by test: one future `text[a..b]` slice in an extractor would break it silently.
 
@@ -170,7 +170,7 @@ Fact 11: `rel` is `/`-joined at the one place it is made, so doc ids (`file:docs
 
 ### 8. `cache_root()` and `HOME` — handled, one caveat **[doc]**
 
-Fact 8: on Windows std reads `USERPROFILE`, never `HOME`. Git Bash sets `HOME=/c/Users/x` and inherits `USERPROFILE=C:\Users\x` from Windows, so a native `repograph.exe` started from Git Bash, PowerShell or cmd lands on one cache, `C:\Users\x\.cache\repograph`, and one machine config. `the_cache_root_is_under_the_home_the_platform_names` passed on the Windows job (fact 3). The caveat: `FASTEMBED_CACHE_DIR` and `XDG_CONFIG_HOME`, if a user sets them *inside* Git Bash in MSYS form (`/c/Users/x/…`), reach a native exe unconverted — MSYS converts arguments that look like paths, not arbitrary environment values — and `PathBuf::from("/c/Users/x")` is a path on the current drive. One README line. Task 8.
+Fact 8: on Windows std reads `USERPROFILE`, never `HOME`. Git Bash sets `HOME=/c/Users/x` and inherits `USERPROFILE=C:\Users\x` from Windows, so a native `zerograph.exe` started from Git Bash, PowerShell or cmd lands on one cache, `C:\Users\x\.cache\zerograph`, and one machine config. `the_cache_root_is_under_the_home_the_platform_names` passed on the Windows job (fact 3). The caveat: `FASTEMBED_CACHE_DIR` and `XDG_CONFIG_HOME`, if a user sets them *inside* Git Bash in MSYS form (`/c/Users/x/…`), reach a native exe unconverted — MSYS converts arguments that look like paths, not arbitrary environment values — and `PathBuf::from("/c/Users/x")` is a path on the current drive. One README line. Task 8.
 
 ### 9. Long paths past `MAX_PATH` — **[doc]**
 
@@ -178,22 +178,22 @@ Fact 9: std prefixes `\\?\` on open, stat and readdir when the path needs it, an
 
 ### 10. Unsigned binary — **[doc]**
 
-The release zip is not Authenticode-signed (a certificate is out of scope). A browser download carries the mark-of-the-web on the zip; Explorer's "Extract All" propagates it to the exe; **double-clicking** such an exe shows SmartScreen's "Windows protected your PC"; running it from a terminal does not — SmartScreen is invoked by the shell, not by `CreateProcess`. `Unblock-File .\repograph.exe` clears the mark. `gh run download`, `curl` and npm write no mark. Defender: an unsigned Rust binary can draw a heuristic false positive (a quarantine, the file "vanishes"); the documented remedy is to restore it from Protection History and add an exclusion. Real-time scanning also touches every write: the 2.2 GB `model.onnx_data` (e5-large, fact from the hub headers: 2 235 363 328 bytes plus a 546 KB graph; the small model is one 470 MB file) is scanned once as it lands, and each `graph.json`/`vectors.f32` rewrite is scanned on close; `Add-MpPreference -ExclusionPath` on `%USERPROFILE%\.cache\repograph` and on the repository's `.repograph` is the optional speed-up. All documented, nothing fixed. Task 8.
+The release zip is not Authenticode-signed (a certificate is out of scope). A browser download carries the mark-of-the-web on the zip; Explorer's "Extract All" propagates it to the exe; **double-clicking** such an exe shows SmartScreen's "Windows protected your PC"; running it from a terminal does not — SmartScreen is invoked by the shell, not by `CreateProcess`. `Unblock-File .\zerograph.exe` clears the mark. `gh run download`, `curl` and npm write no mark. Defender: an unsigned Rust binary can draw a heuristic false positive (a quarantine, the file "vanishes"); the documented remedy is to restore it from Protection History and add an exclusion. Real-time scanning also touches every write: the 2.2 GB `model.onnx_data` (e5-large, fact from the hub headers: 2 235 363 328 bytes plus a 546 KB graph; the small model is one 470 MB file) is scanned once as it lands, and each `graph.json`/`vectors.f32` rewrite is scanned on close; `Add-MpPreference -ExclusionPath` on `%USERPROFILE%\.cache\zerograph` and on the repository's `.zerograph` is the optional speed-up. All documented, nothing fixed. Task 8.
 
 ### 11. The npm launcher on Windows — handled, one line **[doc]**
 
-Fact 15. `require.resolve` returns `C:\…\node_modules\@devmaxxx\repograph-win32-x64\bin\repograph.exe` (a drive-letter path is a path); `spawnSync` of an absolute `.exe` with `stdio: "inherit"` involves no shell, so spaces and Cyrillic in the install path are inert, and the child inherits the console handle so its UTF-8 output is rendered through `WriteConsoleW` regardless of code page. npm's `repograph.cmd` shim passes `%*` through `cmd` once, which mangles unbalanced quotes and `%` — the same for every npm CLI and not ours to fix. `run.status` is `null` on Windows only when `run.error` is set (already handled above it); a console Ctrl-C ends the child with `STATUS_CONTROL_C_EXIT` (`0xC000013A`), which the launcher passes to `process.exit` verbatim — a large exit code, harmless. The one thing worth a line: PowerShell decodes a *piped or captured* native command's output with `[Console]::OutputEncoding`, which on a Russian-locale Windows is code page 866 unless the system UTF-8 option or a profile line sets UTF-8 — Cyrillic answers piped into `Out-File` or `$x = repograph ask …` come out as mojibake, while Windows Terminal and Claude Code's Bash tool (bytes, UTF-8) are fine. Task 8.
+Fact 15. `require.resolve` returns `C:\…\node_modules\@devmaxxx\zerograph-win32-x64\bin\zerograph.exe` (a drive-letter path is a path); `spawnSync` of an absolute `.exe` with `stdio: "inherit"` involves no shell, so spaces and Cyrillic in the install path are inert, and the child inherits the console handle so its UTF-8 output is rendered through `WriteConsoleW` regardless of code page. npm's `zerograph.cmd` shim passes `%*` through `cmd` once, which mangles unbalanced quotes and `%` — the same for every npm CLI and not ours to fix. `run.status` is `null` on Windows only when `run.error` is set (already handled above it); a console Ctrl-C ends the child with `STATUS_CONTROL_C_EXIT` (`0xC000013A`), which the launcher passes to `process.exit` verbatim — a large exit code, harmless. The one thing worth a line: PowerShell decodes a *piped or captured* native command's output with `[Console]::OutputEncoding`, which on a Russian-locale Windows is code page 866 unless the system UTF-8 option or a profile line sets UTF-8 — Cyrillic answers piped into `Out-File` or `$x = zerograph ask …` come out as mojibake, while Windows Terminal and Claude Code's Bash tool (bytes, UTF-8) are fine. Task 8.
 
 ### 12. Everything else found while reading
 
-- **`\\?\` and `git -C`** (fact 2, `changes.rs:144`): `repograph changes` runs `git -C \\?\C:\… diff …`. Whether Git for Windows accepts the verbatim form is not something read here can settle; the CI job runs no `changes` integration. Task 5 adds a CI step that builds the checkout and runs `changes` — red-first on the branch to *see*, then green after the prefix strip. **[should]**
+- **`\\?\` and `git -C`** (fact 2, `changes.rs:144`): `zerograph changes` runs `git -C \\?\C:\… diff …`. Whether Git for Windows accepts the verbatim form is not something read here can settle; the CI job runs no `changes` integration. Task 5 adds a CI step that builds the checkout and runs `changes` — red-first on the branch to *see*, then green after the prefix strip. **[should]**
 - **`current_exe` and the build stamp** (`serve.rs:102–104`): `GetModuleFileNameW`; the file cannot change under a running image, so the stamp is stable, which is why the replaced-binary test is unix-only. The flip side: `npm i -g`, `cargo install` and `Expand-Archive -Force` over a running `serve` fail with a sharing error — stop `serve` first. **[doc]**
 - **`Path::exists` on the reparse point**: avoided (`serve.rs:55` uses `symlink_metadata`); the presence test passed on the Windows job. Handled.
 - **Timeouts**: `SO_RCVTIMEO`/`SO_SNDTIMEO` are honoured by winsock and surface as `TimedOut`, which `hello_line` (`serve.rs:267`) already treats with `WouldBlock`. Not judged by any test on any platform (a thirty-second test); left.
 - **Threads and the rendezvous channel**: std, platform-neutral; the twelve serve tests passed.
 - **ORT's DirectML build without a GPU** (fact 14): no execution provider is registered, so ORT runs the CPU provider; DirectML is a link-time fact, not a runtime one. What it does cost: `DirectML.dll`, `dxcore.dll`, `d3d12.dll`, `dxgi.dll` are load-time imports, inbox since Windows 10 1903 — so the floor is **Windows 10 1903 / Windows 11 / Server 2022+**, above Rust's 1809 (Server 2019 and 10 LTSC 2019 fail at load with `STATUS_DLL_NOT_FOUND`), and Server Core is out. The `--version` smoke on a GPU-less Azure runner proves loading; only an actual session proves inference on the CPU provider — Task 4's dense smoke on that same GPU-less runner is that proof. **[must]** (the proof), **[doc]** (the floor)
 - **Windows Defender Firewall on `AF_UNIX`**: the firewall filters IP traffic at WFP's ALE layers; `afunix.sys` is not an IP transport and registers no WFP callouts, so there is neither a prompt nor a block — consistent with the runner (firewall on, no interaction possible, eleven socket tests green). Reasoned, not proven; nothing to do. **[doc]** (one clause)
-- **`serve` in the background from PowerShell**: `&` is not a job operator there; `Start-Process repograph -ArgumentList 'serve','--idle','86400' -WindowStyle Hidden` is, and `--idle` or `Stop-Process -Name repograph` ends it (no `Drop`, so the file stays for the next sweep — edge 4). **[doc]**
+- **`serve` in the background from PowerShell**: `&` is not a job operator there; `Start-Process zerograph -ArgumentList 'serve','--idle','86400' -WindowStyle Hidden` is, and `--idle` or `Stop-Process -Name zerograph` ends it (no `Drop`, so the file stays for the next sweep — edge 4). **[doc]**
 - **`--repo` from Git Bash**: MSYS converts a `/c/Users/…` argument to `C:\Users\…` before the exe sees it; `canonicalize` then resolves 8.3 spellings and symlinks so server and client name one socket however each was started (fact 17). Handled.
 - **hf-hub on a box without Developer Mode** (fact 13): the symlink attempt fails and the blob is renamed into the snapshot; ORT resolves `model.onnx_data` beside `model.onnx` in that same directory. The runner (admin) very likely takes the symlink branch and Max's box the rename branch; Task 4 states which branch it exercised. **[doc]**
 - **The README after PR #15**: lines 205–208 say "Windows gives std no identity to read there" — false once #15 lands. Task 8.
@@ -261,13 +261,13 @@ Fact 15. `require.resolve` returns `C:\…\node_modules\@devmaxxx\repograph-win3
 - [ ] **Step 1: Wait for #15, then fast-forward the worktree**
 
 ```bash
-gh auth switch --user devmaxxx && gh pr view 15 --repo devmaxxx/repograph --json state,mergeCommit --jq '"\(.state) \(.mergeCommit.oid // "")"'
+gh auth switch --user devmaxxx && gh pr view 15 --repo devmaxxx/zerograph --json state,mergeCommit --jq '"\(.state) \(.mergeCommit.oid // "")"'
 ```
 
 Expected: `MERGED <sha>`. Anything else: stop; the rebase is still in flight and the worktree is not this plan's to touch.
 
 ```bash
-W=/Users/max/Documents/projects/repograph/.worktrees/windows-serve
+W=/Users/max/Documents/projects/zerograph/.worktrees/windows-serve
 git -C "$W" status --porcelain; git -C "$W" fetch origin && git -C "$W" pull --ff-only origin feat/windows-serve && git -C "$W" log --oneline -3
 grep -n 'GetFileInformationByHandle' "$W/src/serve.rs" | head -2
 grep -n 'cfg(unix)' "$W/src/serve.rs"
@@ -280,7 +280,7 @@ Expected: a clean tree; the tip is #15's merge; `GetFileInformationByHandle` is 
 ```bash
 M=/Users/max/bench/windows-edge-2026-09-06; mkdir -p "$M"
 cd "$W" && cargo clippy --all-targets -- -D warnings 2>&1 | tail -1 && cargo test --release 2>&1 | grep 'test result' | tee "$M/task0.txt"
-cp /Users/max/Documents/projects/repograph/docs/superpowers/plans/2026-09-06-windows-serve-transport.md "$W/docs/superpowers/plans/" 2>/dev/null; cp /Users/max/Documents/projects/repograph/docs/superpowers/plans/2026-09-06-windows-edge-cases-and-build.md "$W/docs/superpowers/plans/"
+cp /Users/max/Documents/projects/zerograph/docs/superpowers/plans/2026-09-06-windows-serve-transport.md "$W/docs/superpowers/plans/" 2>/dev/null; cp /Users/max/Documents/projects/zerograph/docs/superpowers/plans/2026-09-06-windows-edge-cases-and-build.md "$W/docs/superpowers/plans/"
 git -C "$W" add docs/superpowers/plans/2026-09-06-windows-serve-transport.md docs/superpowers/plans/2026-09-06-windows-edge-cases-and-build.md
 git -C "$W" commit -F - <<'MSG'
 docs(plans): the Windows transport plan and the edge-case plan on the branch
@@ -307,26 +307,26 @@ git -C "$W" add .github/workflows/release.yml
 git -C "$W" commit -F - <<'MSG'
 build(release): a dispatch run keeps its archives as run artifacts
 
-The dry run compiled and smoked repograph.exe and kept nothing, because the upload is a release
+The dry run compiled and smoked zerograph.exe and kept nothing, because the upload is a release
 step and a branch has no release. The archive is now an artifact of the run for fourteen days, so
 the file a runner proved can be fetched and tried on a real machine; a tag run is unchanged.
 MSG
 git -C "$W" push
-gh auth switch --user devmaxxx && gh workflow run release.yml --repo devmaxxx/repograph --ref feat/windows-serve
-sleep 20; gh auth switch --user devmaxxx && RUN=$(gh run list --repo devmaxxx/repograph --workflow release --event workflow_dispatch --branch feat/windows-serve --limit 1 --json databaseId --jq '.[0].databaseId') && gh run watch --repo devmaxxx/repograph --exit-status "$RUN" | tail -6 | tee "$M/task1-release.txt" && echo "$RUN" >> "$M/task1-release.txt"
+gh auth switch --user devmaxxx && gh workflow run release.yml --repo devmaxxx/zerograph --ref feat/windows-serve
+sleep 20; gh auth switch --user devmaxxx && RUN=$(gh run list --repo devmaxxx/zerograph --workflow release --event workflow_dispatch --branch feat/windows-serve --limit 1 --json databaseId --jq '.[0].databaseId') && gh run watch --repo devmaxxx/zerograph --exit-status "$RUN" | tail -6 | tee "$M/task1-release.txt" && echo "$RUN" >> "$M/task1-release.txt"
 ```
 
-Expected: three `build` jobs green, `npm` skipped, and each build job's log ends with `Artifact repograph-<target> has been successfully uploaded`.
+Expected: three `build` jobs green, `npm` skipped, and each build job's log ends with `Artifact zerograph-<target> has been successfully uploaded`.
 
 - [ ] **Step 3: Fetch it here, and prove the artifact is the archive**
 
 ```bash
-gh auth switch --user devmaxxx && gh run download "$RUN" --repo devmaxxx/repograph -n repograph-x86_64-pc-windows-msvc -D "$M/win" && ls -l "$M/win"
-unzip -l "$M/win/repograph-x86_64-pc-windows-msvc.zip"
-gh auth switch --user devmaxxx && gh run view "$RUN" --repo devmaxxx/repograph --json url --jq .url | tee -a "$M/task1-release.txt"
+gh auth switch --user devmaxxx && gh run download "$RUN" --repo devmaxxx/zerograph -n zerograph-x86_64-pc-windows-msvc -D "$M/win" && ls -l "$M/win"
+unzip -l "$M/win/zerograph-x86_64-pc-windows-msvc.zip"
+gh auth switch --user devmaxxx && gh run view "$RUN" --repo devmaxxx/zerograph --json url --jq .url | tee -a "$M/task1-release.txt"
 ```
 
-Expected: one file, `repograph-x86_64-pc-windows-msvc.zip`, listing `repograph.exe` at its root. Record the run URL. Report DONE with the PowerShell fetch block from *Part A — Fetching it* and the run id, so Max can pull this first build onto the box now — the later tasks change the exe and a second dispatch (Task 8 Step 4) replaces it.
+Expected: one file, `zerograph-x86_64-pc-windows-msvc.zip`, listing `zerograph.exe` at its root. Record the run URL. Report DONE with the PowerShell fetch block from *Part A — Fetching it* and the run id, so Max can pull this first build onto the box now — the later tasks change the exe and a second dispatch (Task 8 Step 4) replaces it.
 
 ---
 
@@ -363,8 +363,8 @@ Red on purpose: this is the PATH a default Git for Windows install leaves, and t
 tests spawn is not on it. The commit that finds the shell beside git turns it green.
 MSG
 git -C "$W" push
-gh auth switch --user devmaxxx && gh run watch --repo devmaxxx/repograph --exit-status $(gh run list --repo devmaxxx/repograph --branch feat/windows-serve --workflow ci --limit 1 --json databaseId --jq '.[0].databaseId'); true
-gh auth switch --user devmaxxx && gh run view --repo devmaxxx/repograph --log-failed $(gh run list --repo devmaxxx/repograph --branch feat/windows-serve --workflow ci --limit 1 --json databaseId --jq '.[0].databaseId') | grep -m5 'program not found\|FAILED\|panicked' | tee "$M/task2-red.txt"
+gh auth switch --user devmaxxx && gh run watch --repo devmaxxx/zerograph --exit-status $(gh run list --repo devmaxxx/zerograph --branch feat/windows-serve --workflow ci --limit 1 --json databaseId --jq '.[0].databaseId'); true
+gh auth switch --user devmaxxx && gh run view --repo devmaxxx/zerograph --log-failed $(gh run list --repo devmaxxx/zerograph --branch feat/windows-serve --workflow ci --limit 1 --json databaseId --jq '.[0].databaseId') | grep -m5 'program not found\|FAILED\|panicked' | tee "$M/task2-red.txt"
 ```
 
 Expected: `test` green, `windows` red at the new step with `spawn \`awk …\`: program not found` (or the OS's own words for it) in the failed tests — the author's eight, reproduced on a runner. If the step is *green*, the pattern did not strip the directory that holds `sh.exe`: print `$env:PATH` in the step, fix the pattern, and only then continue — a step that cannot go red judges nothing.
@@ -402,7 +402,7 @@ In `src/enrich.rs`, replace `std::process::Command::new("sh")` at line 252 with 
 
 ```rust
 /// The shell the configured command runs under: `sh`, on every platform. The commands in
-/// `repograph.toml` are written in its syntax — a `VAR=value` prefix, `""` for an empty argument —
+/// `zerograph.toml` are written in its syntax — a `VAR=value` prefix, `""` for an empty argument —
 /// and a `cmd /C` or PowerShell rendering on Windows would make one key mean two things.
 #[cfg(unix)]
 fn shell() -> Result<std::process::Command> { Ok(std::process::Command::new("sh")) }
@@ -459,7 +459,7 @@ git, at the bash Claude Code names, and under Program Files, with Git's usr\bin 
 command's PATH so awk and the rest resolve as they do in Git Bash. Unix spawns the same sh it did.
 MSG
 git -C "$W" push
-gh auth switch --user devmaxxx && gh run watch --repo devmaxxx/repograph --exit-status $(gh run list --repo devmaxxx/repograph --branch feat/windows-serve --workflow ci --limit 1 --json databaseId --jq '.[0].databaseId') | tail -4 | tee "$M/task2-ci.txt"
+gh auth switch --user devmaxxx && gh run watch --repo devmaxxx/zerograph --exit-status $(gh run list --repo devmaxxx/zerograph --branch feat/windows-serve --workflow ci --limit 1 --json databaseId --jq '.[0].databaseId') | tail -4 | tee "$M/task2-ci.txt"
 ```
 
 Expected: unix counts unchanged (the new test is Windows-only; the grep prints `2` — one removed line, one added, both the unix `Command::new("sh")`); both jobs green, the stripped-`PATH` step showing the enrich and rerank tests passing. Record the run URL.
@@ -549,7 +549,7 @@ under a second; and a socket binds under a Cyrillic directory name, which a runn
 never checks.
 MSG
 git -C "$W" push
-gh auth switch --user devmaxxx && gh run watch --repo devmaxxx/repograph --exit-status $(gh run list --repo devmaxxx/repograph --branch feat/windows-serve --workflow ci --limit 1 --json databaseId --jq '.[0].databaseId') | tail -4 | tee "$M/task3-ci.txt"
+gh auth switch --user devmaxxx && gh run watch --repo devmaxxx/zerograph --exit-status $(gh run list --repo devmaxxx/zerograph --branch feat/windows-serve --workflow ci --limit 1 --json databaseId --jq '.[0].databaseId') | tail -4 | tee "$M/task3-ci.txt"
 ```
 
 Expected: `5 passed` in `serve::tests` on unix; both jobs green; the Windows log lists all five `serve::tests` as `ok`. Record the run URL.
@@ -579,18 +579,18 @@ Append to `tests/serve.rs`:
 /// cache restored between runs, and it is the one place the ONNX Runtime build the Windows
 /// binary links opens a session and embeds.
 #[test]
-#[ignore = "needs the small model in FASTEMBED_CACHE_DIR or ~/.cache/repograph/fastembed; the Windows CI job runs it"]
+#[ignore = "needs the small model in FASTEMBED_CACHE_DIR or ~/.cache/zerograph/fastembed; the Windows CI job runs it"]
 fn a_fused_answer_is_resident_on_the_small_model() {
     let dir = tempfile::tempdir().unwrap();
     std::fs::create_dir_all(dir.path().join("docs")).unwrap();
     std::fs::write(dir.path().join("docs/pay.md"), "**FR-PAY-1 · MUST · Штраф за отмену**\n\nШтраф списывается сам (INV-1).\n\n**INV-1 · MUST · Деньги не сгорают**\n\nОтмена не сжигает деньги.\n").unwrap();
     std::fs::write(dir.path().join("docs/cal.md"), "**FR-CAL-1 · MUST · Перенос визита**\n\nПеренос не считается отменой.\n").unwrap();
-    std::fs::write(dir.path().join("repograph.toml"), "id_families = [\"FR-PAY\", \"FR-CAL\", \"INV\"]\nembed_model = \"intfloat/multilingual-e5-small\"\n").unwrap();
-    let out = repograph().arg("--repo").arg(dir.path()).arg("build").output().unwrap();
+    std::fs::write(dir.path().join("zerograph.toml"), "id_families = [\"FR-PAY\", \"FR-CAL\", \"INV\"]\nembed_model = \"intfloat/multilingual-e5-small\"\n").unwrap();
+    let out = zerograph().arg("--repo").arg(dir.path()).arg("build").output().unwrap();
     let err = String::from_utf8_lossy(&out.stderr);
     assert!(out.status.success(), "{err}");
     assert!(!err.contains("dense: model unavailable"), "the model did not open: {err}");
-    assert!(std::fs::metadata(dir.path().join(".repograph/vectors.f32")).map(|m| m.len() > 0).unwrap_or(false), "no vectors were written");
+    assert!(std::fs::metadata(dir.path().join(".zerograph/vectors.f32")).map(|m| m.len() > 0).unwrap_or(false), "no vectors were written");
     let (want, err) = ask_in(FUSED, dir.path(), &["--no-serve"], &["штраф"]);
     assert!(want.contains("FR-PAY-1"), "{want}");
     assert!(!err.contains("dense: model unavailable"), "{err}");
@@ -619,7 +619,7 @@ Run on the Mac, where the small model is cached (the bench notes say the campaig
 cd "$W" && cargo test --release --test serve -- --ignored --nocapture a_fused_answer_is_resident_on_the_small_model 2>&1 | grep -E 'median|test result|panicked' | tee "$M/task4-mac.txt"
 ```
 
-Expected: `1 passed` and a `median … ms` line. If the model is not cached, this downloads it once into `~/.cache/repograph/fastembed`; that is fine.
+Expected: `1 passed` and a `median … ms` line. If the model is not cached, this downloads it once into `~/.cache/zerograph/fastembed`; that is fine.
 
 - [ ] **Step 2: The job**
 
@@ -656,8 +656,8 @@ median; it is ignored by default and the Windows job runs it with the model cach
 on a runner with no GPU.
 MSG
 git -C "$W" push
-gh auth switch --user devmaxxx && gh run watch --repo devmaxxx/repograph --exit-status $(gh run list --repo devmaxxx/repograph --branch feat/windows-serve --workflow ci --limit 1 --json databaseId --jq '.[0].databaseId') | tail -4 | tee "$M/task4-ci-1.txt"
-gh auth switch --user devmaxxx && gh run view --repo devmaxxx/repograph --log $(gh run list --repo devmaxxx/repograph --branch feat/windows-serve --workflow ci --limit 1 --json databaseId --jq '.[0].databaseId') | grep -E 'median of 11|Cache (saved|restored|not found)' | tee -a "$M/task4-ci-1.txt"
+gh auth switch --user devmaxxx && gh run watch --repo devmaxxx/zerograph --exit-status $(gh run list --repo devmaxxx/zerograph --branch feat/windows-serve --workflow ci --limit 1 --json databaseId --jq '.[0].databaseId') | tail -4 | tee "$M/task4-ci-1.txt"
+gh auth switch --user devmaxxx && gh run view --repo devmaxxx/zerograph --log $(gh run list --repo devmaxxx/zerograph --branch feat/windows-serve --workflow ci --limit 1 --json databaseId --jq '.[0].databaseId') | grep -E 'median of 11|Cache (saved|restored|not found)' | tee -a "$M/task4-ci-1.txt"
 ```
 
 Expected on the first run: `Cache not found`, the model downloaded (the `hf-hub` progress lines), `1 passed`, a `median` line, and `Cache saved` at the end. Then re-run the workflow (`gh run rerun <id>` or an empty commit) and expect `Cache restored` and the same `1 passed` — the second run is the one that judges the cache's handling of whatever `hf-hub` wrote (a symlink tree on an admin runner, or renamed blobs). Record both URLs and both medians.
@@ -744,7 +744,7 @@ so carrying it bought nothing and cost four bytes of the socket name, a prefix i
 and a spelling git -C is not promised to take. Unix is untouched.
 MSG
 git -C "$W" push
-gh auth switch --user devmaxxx && gh run watch --repo devmaxxx/repograph --exit-status $(gh run list --repo devmaxxx/repograph --branch feat/windows-serve --workflow ci --limit 1 --json databaseId --jq '.[0].databaseId') | tail -4 | tee "$M/task5-ci.txt"
+gh auth switch --user devmaxxx && gh run watch --repo devmaxxx/zerograph --exit-status $(gh run list --repo devmaxxx/zerograph --branch feat/windows-serve --workflow ci --limit 1 --json databaseId --jq '.[0].databaseId') | tail -4 | tee "$M/task5-ci.txt"
 ```
 
 Expected: unix counts unchanged (the test is Windows-only, the unix `plain` is the identity); both jobs green, including the `changes` step and all serve tests (the socket path now `C:\…`). Record the URL.
@@ -777,7 +777,7 @@ Append to `src/store.rs`'s `mod tests`:
         let d = tempfile::tempdir().unwrap();
         let store = Store::new(d.path());
         store.write_atomic("graph.json", b"old").unwrap();
-        let holder = hold_open_for(&d.path().join(".repograph/graph.json"), 100);
+        let holder = hold_open_for(&d.path().join(".zerograph/graph.json"), 100);
         store.write_atomic("graph.json", b"new").unwrap();
         holder.join().unwrap();
         assert_eq!(store.read_bytes("graph.json").unwrap().as_deref(), Some(&b"new"[..]));
@@ -789,7 +789,7 @@ Append to `src/store.rs`'s `mod tests`:
         let d = tempfile::tempdir().unwrap();
         let store = Store::new(d.path());
         store.write_atomic("graph.json", b"old").unwrap();
-        let holder = hold_open_for(&d.path().join(".repograph/graph.json"), 1500);
+        let holder = hold_open_for(&d.path().join(".zerograph/graph.json"), 1500);
         let err = store.write_atomic("graph.json", b"new").unwrap_err();
         assert!(format!("{err:#}").contains("os error 32"), "{err:#}");
         holder.join().unwrap();
@@ -833,13 +833,13 @@ git -C "$W" add src/store.rs
 git -C "$W" commit -F - <<'MSG'
 fix(store): a rename over a briefly held file waits it out on Windows
 
-Every std open shares delete, so repograph's own processes never block a save; other programs —
+Every std open shares delete, so zerograph's own processes never block a save; other programs —
 an indexer, a sync client, a scanner — open without it, and the rename fails with a sharing
 violation for the milliseconds their handle lives. std retries only access-denied; this retries
 that one error with back-off to about half a second. Unix renames as it did.
 MSG
 git -C "$W" push
-gh auth switch --user devmaxxx && gh run watch --repo devmaxxx/repograph --exit-status $(gh run list --repo devmaxxx/repograph --branch feat/windows-serve --workflow ci --limit 1 --json databaseId --jq '.[0].databaseId') | tail -4 | tee "$M/task6-ci.txt"
+gh auth switch --user devmaxxx && gh run watch --repo devmaxxx/zerograph --exit-status $(gh run list --repo devmaxxx/zerograph --branch feat/windows-serve --workflow ci --limit 1 --json databaseId --jq '.[0].databaseId') | tail -4 | tee "$M/task6-ci.txt"
 ```
 
 Expected: unix counts unchanged; both jobs green with both new `store::tests` `ok` on Windows. If the "held past the budget" test reports a different os error, the log says which — `ERROR_ACCESS_DENIED` (5) means std's own POSIX-rename retry ran and the handle's share mode was not what the test set; adjust the test's share mode, not the retry.
@@ -901,10 +901,10 @@ Anchors are text on the branch tip; re-find by text.
 - [ ] **Step 1: `README.md`**
 
 - The serve paragraph, the sentence beginning `On unix it removes the one it bound itself, told from a replacement's by the socket file's device and inode; Windows gives std no identity to read there, so a \`serve\` exiting leaves the file and the next one removes it before binding, which is what both platforms already do after a Ctrl-C.` → `It removes the one it bound itself, told from a replacement's by the socket file's identity — device and inode on unix, the volume serial and NTFS file reference number on Windows, read off a handle there because std's accessors for them are unstable. A Ctrl-C, a \`Stop-Process\` or a \`kill\` runs no such removal on any platform: the file stays, and the next \`serve\` removes it before binding.`
-- The limit sentence: after `104 on macOS;` insert `the bytes are UTF-8, so a Cyrillic user name costs two a letter, and \`C:\Users\Максим\OneDrive - <company>\Documents\projects\beauty-crm\.repograph\serve.sock\` is about 100 of the 107 allowed;`.
-- The `sh` sentence: `Both run under \`sh -c\`; on Windows that is Git for Windows' \`sh\`, which has to be on \`PATH\` — nothing else in repograph needs a shell.` → `Both run under \`sh -c\`; on Windows that is Git for Windows' \`sh\`, taken from \`PATH\` when it is there and otherwise found beside \`git\`, at the bash Claude Code names in \`CLAUDE_CODE_GIT_BASH_PATH\`, or under Program Files, with Git's \`usr\bin\` put on the command's own \`PATH\` — nothing else in repograph needs a shell. Without Git for Windows, \`enrich\` and \`ask --rerank\` refuse with a line that says so, and everything else runs.`
-- A new subsection after the install block's launcher paragraph, `### On Windows`, in this order, one short paragraph each: the floor (Windows 10 1903 / Windows 11 / Server 2022 — the ONNX Runtime build imports DirectML and DirectX 12 at load; no GPU is used, inference runs on the CPU, proven on a GPU-less runner: cite `$M/task4-ci-1.txt`'s URL); an unsigned binary (SmartScreen on an Explorer-launched copy from a browser download, `Unblock-File`, none from a terminal or from `gh`/npm; Defender's scan of the 2.2 GB model download and of `.repograph`, and `Add-MpPreference -ExclusionPath` as the optional speed-up); running `serve` in the background (`Start-Process repograph -ArgumentList 'serve','--idle','86400' -WindowStyle Hidden`; `--idle` or `Stop-Process -Name repograph` ends it); stop `serve` before replacing the binary; keep the repository out of a OneDrive/Dropbox-synced tree (the store is per machine and the socket file is a reparse point a sync client cannot upload; what it does with one is unverified); console output is UTF-8 — Windows Terminal renders it, and PowerShell decodes a piped or captured answer with `[Console]::OutputEncoding`, which on a Russian-locale system is code page 866 unless set to UTF-8; environment paths (`FASTEMBED_CACHE_DIR`, `XDG_CONFIG_HOME`, `REPOGRAPH_CONFIG`) must be Windows-form even when set inside Git Bash; git needs `core.longpaths=true` for a tree deeper than 260 characters, and repograph then follows it.
-- The embeddings paragraph: `(\`%USERPROFILE%\.cache\repograph\fastembed\` on Windows; the layout is the hub client's, so a cache populated by an earlier release is reused as is)` gains `— where the client links each file into its snapshot, or on a Windows account without symlink rights moves it there`.
+- The limit sentence: after `104 on macOS;` insert `the bytes are UTF-8, so a Cyrillic user name costs two a letter, and \`C:\Users\Максим\OneDrive - <company>\Documents\projects\beauty-crm\.zerograph\serve.sock\` is about 100 of the 107 allowed;`.
+- The `sh` sentence: `Both run under \`sh -c\`; on Windows that is Git for Windows' \`sh\`, which has to be on \`PATH\` — nothing else in zerograph needs a shell.` → `Both run under \`sh -c\`; on Windows that is Git for Windows' \`sh\`, taken from \`PATH\` when it is there and otherwise found beside \`git\`, at the bash Claude Code names in \`CLAUDE_CODE_GIT_BASH_PATH\`, or under Program Files, with Git's \`usr\bin\` put on the command's own \`PATH\` — nothing else in zerograph needs a shell. Without Git for Windows, \`enrich\` and \`ask --rerank\` refuse with a line that says so, and everything else runs.`
+- A new subsection after the install block's launcher paragraph, `### On Windows`, in this order, one short paragraph each: the floor (Windows 10 1903 / Windows 11 / Server 2022 — the ONNX Runtime build imports DirectML and DirectX 12 at load; no GPU is used, inference runs on the CPU, proven on a GPU-less runner: cite `$M/task4-ci-1.txt`'s URL); an unsigned binary (SmartScreen on an Explorer-launched copy from a browser download, `Unblock-File`, none from a terminal or from `gh`/npm; Defender's scan of the 2.2 GB model download and of `.zerograph`, and `Add-MpPreference -ExclusionPath` as the optional speed-up); running `serve` in the background (`Start-Process zerograph -ArgumentList 'serve','--idle','86400' -WindowStyle Hidden`; `--idle` or `Stop-Process -Name zerograph` ends it); stop `serve` before replacing the binary; keep the repository out of a OneDrive/Dropbox-synced tree (the store is per machine and the socket file is a reparse point a sync client cannot upload; what it does with one is unverified); console output is UTF-8 — Windows Terminal renders it, and PowerShell decodes a piped or captured answer with `[Console]::OutputEncoding`, which on a Russian-locale system is code page 866 unless set to UTF-8; environment paths (`FASTEMBED_CACHE_DIR`, `XDG_CONFIG_HOME`, `ZEROGRAPH_CONFIG`) must be Windows-form even when set inside Git Bash; git needs `core.longpaths=true` for a tree deeper than 260 characters, and zerograph then follows it.
+- The embeddings paragraph: `(\`%USERPROFILE%\.cache\zerograph\fastembed\` on Windows; the layout is the hub client's, so a cache populated by an earlier release is reused as is)` gains `— where the client links each file into its snapshot, or on a Windows account without symlink rights moves it there`.
 
 - [ ] **Step 2: Read back, commit, push**
 
@@ -920,8 +920,8 @@ git -C "$W" push
 - [ ] **Step 3: The second dispatch — the build Max keeps**
 
 ```bash
-gh auth switch --user devmaxxx && gh workflow run release.yml --repo devmaxxx/repograph --ref feat/windows-serve
-sleep 20; gh auth switch --user devmaxxx && RUN=$(gh run list --repo devmaxxx/repograph --workflow release --event workflow_dispatch --branch feat/windows-serve --limit 1 --json databaseId --jq '.[0].databaseId') && gh run watch --repo devmaxxx/repograph --exit-status "$RUN" | tail -6 | tee "$M/task8-release.txt" && echo "$RUN" >> "$M/task8-release.txt"
+gh auth switch --user devmaxxx && gh workflow run release.yml --repo devmaxxx/zerograph --ref feat/windows-serve
+sleep 20; gh auth switch --user devmaxxx && RUN=$(gh run list --repo devmaxxx/zerograph --workflow release --event workflow_dispatch --branch feat/windows-serve --limit 1 --json databaseId --jq '.[0].databaseId') && gh run watch --repo devmaxxx/zerograph --exit-status "$RUN" | tail -6 | tee "$M/task8-release.txt" && echo "$RUN" >> "$M/task8-release.txt"
 ```
 
 Expected: three green build jobs, three artifacts. Report DONE with the run id and the PowerShell fetch block.
@@ -932,12 +932,12 @@ Not a step this machine runs; the block Max runs, whose numbers go into the PR b
 
 ```powershell
 cd C:\...\beauty-crm
-repograph --version
-repograph build                                      # first run downloads the model the project's repograph.toml names
-Start-Process repograph -ArgumentList 'serve','--idle','86400' -WindowStyle Hidden
-Start-Sleep 5; repograph ask штраф за отмену          # expect "serve: answered by the resident process" on stderr
-1..11 | ForEach-Object { (Measure-Command { repograph ask штраф за отмену | Out-Null }).TotalMilliseconds } | Sort-Object | Select-Object -Index 5
-repograph enrich --limit 2                           # exercises sh discovery against the real claude
+zerograph --version
+zerograph build                                      # first run downloads the model the project's zerograph.toml names
+Start-Process zerograph -ArgumentList 'serve','--idle','86400' -WindowStyle Hidden
+Start-Sleep 5; zerograph ask штраф за отмену          # expect "serve: answered by the resident process" on stderr
+1..11 | ForEach-Object { (Measure-Command { zerograph ask штраф за отмену | Out-Null }).TotalMilliseconds } | Sort-Object | Select-Object -Index 5
+zerograph enrich --limit 2                           # exercises sh discovery against the real claude
 ```
 
 The median is compared with the README's `serve` row and the Mac's `$M/task4-mac.txt`; "unix-equivalent" is a number on the same corpus, not a feeling.
@@ -956,7 +956,7 @@ If the transport plan's Task 7 opened a PR, `gh pr edit` its body; otherwise `gh
 ## Windows edges, and the build
 
 - The archive of every dispatch run is a run artifact: <URL from $M/task8-release.txt>; fetch with
-  `gh run download <id> -n repograph-x86_64-pc-windows-msvc`.
+  `gh run download <id> -n zerograph-x86_64-pc-windows-msvc`.
 - `sh` is found where a default Git for Windows install leaves it; judged by a CI step that strips
   Git's shell directories from PATH, red at <$M/task2-red.txt's run> and green at <$M/task2-ci.txt>.
 - The socket file's identity from #15 is tested on Windows; a stale socket's connect is refused in

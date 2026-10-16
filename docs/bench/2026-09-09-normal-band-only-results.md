@@ -11,8 +11,8 @@ Method, copied byte for byte from
 [the 2026-09-07 kit](2026-09-07-resource-usage-results.md): `/usr/bin/time -l` for wall, user and
 max RSS; a one-second `top -l 2 -s 1 -pid … -stats pid,cpu,mem,th` sampler for CPU% (100% = one
 core) and thread count, from which `peak` is the largest sample and the parenthesised figure the
-mean of all of them. `REPOGRAPH_NO_SERVE=1` on every row but `serve`. Every writer runs on its own
-pristine copy of the fixture's `.repograph` with `vectors.*` removed; the pinned fixture is never
+mean of all of them. `ZEROGRAPH_NO_SERVE=1` on every row but `serve`. Every writer runs on its own
+pristine copy of the fixture's `.zerograph` with `vectors.*` removed; the pinned fixture is never
 rebuilt and was verified clean afterwards.
 
 > **The machine was not quiet, and every row below was taken on it anyway.** One-minute load
@@ -26,8 +26,8 @@ rebuilt and was verified clean afterwards.
 
 ## 1 · The three levels, on a whole-store re-embed
 
-`repograph embed` over a store with `vectors.*` removed: all 33,525 rows, the default model, the
-level passed only in `REPOGRAPH_RESOURCES` so the three copies' `repograph.toml` files stay
+`zerograph embed` over a store with `vectors.*` removed: all 33,525 rows, the default model, the
+level passed only in `ZEROGRAPH_RESOURCES` so the three copies' `zerograph.toml` files stay
 byte-identical.
 
 | level | threads it asks for | wall | user | sys | max RSS | peak CPU (mean) | threads / running | transcript |
@@ -43,7 +43,7 @@ other two levels are single runs.
 
 Every level was passed through the environment and reached the pools it was meant to reach: the
 thread samples read 8/4, 12/6 and 4/2 for the whole length of each run, and the `balanced` row was
-taken with no `REPOGRAPH_RESOURCES` set at all, which is what proves the default is the built-in
+taken with no `ZEROGRAPH_RESOURCES` set at all, which is what proves the default is the built-in
 rule rather than a word anyone typed.
 
 ### 1.1 What `full` should mean, decided by measuring both
@@ -214,7 +214,7 @@ rows 33525 dim 384
 order — the five ids 2026-09-07 §4.3 recorded. Bar C6 met on both halves.
 
 One footnote on how that answer was taken, because the transcript would otherwise look odd. The
-resumed store is a bare `.repograph` with no source tree beside it, and an `ask` against it
+resumed store is a bare `.zerograph` with no source tree beside it, and an `ask` against it
 refreshes against an empty tree and empties the graph — which is what happened here, to this
 session's own probe, after the row counts had already been recorded. The graph was restored from
 the pinned fixture (it is the same bytes the copy started from; the vectors are the resumed run's)
@@ -225,7 +225,7 @@ and the answer taken in a tree. The row-count half of C6 predates the probe and 
 ## 5 · The floors
 
 ```
-ARMS="dense lexical" NOTE="levels only" bench/history/run-repograph.sh
+ARMS="dense lexical" NOTE="levels only" bench/history/run-zerograph.sh
 ```
 
 Exit 0, both rows appended to `bench/history/runs.jsonl` against corpus `502e8a6d`, tool `99ab6fe`:

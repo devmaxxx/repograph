@@ -38,12 +38,12 @@ carrying the line each table row was read from. Commands under a second have no 
 |---|---|---|---|---|---|---|
 | build-nodense | `build --no-dense` (wipe, re-extract 908 files, save 12 MB JSON + 10 MB mirror) | 1.91 s | 0.93 s | 0.07 GB | single-threaded | — |
 | update-nodense | `update --no-dense`, nothing changed | 0.07 s | 0.04 s | 0.07 GB | — | — |
-| build-small-vectors-kept | `build` with `REPOGRAPH_EMBED_MODEL=…-e5-small` on the small-model store: every hash matches, 0 rows embedded | 1.63 s | 1.50 s | 1.57 GB | — | — |
+| build-small-vectors-kept | `build` with `ZEROGRAPH_EMBED_MODEL=…-e5-small` on the small-model store: every hash matches, 0 rows embedded | 1.63 s | 1.50 s | 1.57 GB | — | — |
 | embed-A-small-full | `embed`, small model, store copied without `vectors.*`: all 33,533 rows | 214.1 s | 1,051 s | 1.63 GB | 399% (≈330%) | 18, 6 running |
 | embed-B-large-320longest | `embed`, large model, a store cut to the 320 longest passages (all ≥ 256 tokens): five forwards of 64×256 | 110.8 s | 627 s | **2.70 GB** | 402% (377%) | 18 |
 | embed-C-small-320longest | the same 320 through the small model | 10.7 s | 55.9 s | 2.18 GB | 377% (309%) | 18 |
 | embed-D-large-full | `embed`, **default (large) model, all 33,533 rows** — what `build`, `update`, `enrich`, `embed` and `watch` all do on a store whose rows are the small model's, or on any store after `embed_model` changed | **2,582.5 s (43 min)** | 13,342 s (5.2 cores for 43 min) | **2.96 GB** | 444% (372%) | 18, 6 running |
-| enrich | not run: `--parallel` (default 8) headless `claude -p` processes cost tokens. repograph's own share is the graph and the questions, ≈ 0.1 GB; the eight children are the cost and are already bounded by the flag | — | — | — | — | — |
+| enrich | not run: `--parallel` (default 8) headless `claude -p` processes cost tokens. zerograph's own share is the graph and the questions, ≈ 0.1 GB; the eight children are the cost and are already bounded by the flag | — | — | — | — | — |
 
 ### 1.2 The readers
 
@@ -98,13 +98,13 @@ length, so the longest sixty-four passages of the corpus always formed one 16,38
 whatever the machine had.
 
 **The immediate workaround, then and now, with no code at all:**
-`embed_model = "intfloat/multilingual-e5-small"` in `repograph.toml` (214 s and 1.63 GB for the
+`embed_model = "intfloat/multilingual-e5-small"` in `zerograph.toml` (214 s and 1.63 GB for the
 whole store instead of 43 minutes and 2.96 GB), or `--no-dense` on the writer.
 
 ## 2. The levers, measured before they were designed
 
 A 120-line harness (`$G/harness`) pinning the same `ort` and `tokenizers` versions, with
-repograph's tokenize → forward → pool loop and four switches as arguments, over the same 320
+zerograph's tokenize → forward → pool loop and four switches as arguments, over the same 320
 longest passages as B, large model:
 
 | run | threads | cap × budget | mem pattern | spin | wall | user | max RSS | CPU% peak (avg) | threads |
@@ -131,9 +131,9 @@ Reading it:
    spin: wall grows as the cap shrinks, and four threads is −31% peak CPU for +39% wall.
 3. **Memory-pattern off and spin-control off** each cost wall (+11%, +21%) for less than the budget
    gives: both rejected.
-4. The harness reads ~0.9 GB above repograph on identical shapes (3.63 vs 2.70 GB; it tokenises all
-   320 texts in one parallel pass before the forwards, repograph one batch at a time), so its rows
-   compare against each other and never against §1. The after numbers are re-measured in repograph.
+4. The harness reads ~0.9 GB above zerograph on identical shapes (3.63 vs 2.70 GB; it tokenises all
+   320 texts in one parallel pass before the forwards, zerograph one batch at a time), so its rows
+   compare against each other and never against §1. The after numbers are re-measured in zerograph.
 5. **The full store under the combination is faster than before, not slower**: 30 minutes against
    43, with 46% less CPU time, 0.85 GB less memory and a third less peak CPU. The wall win is
    padding — sorting by tokens and closing on a budget spends the quadratic attention on real
@@ -143,7 +143,7 @@ Reading it:
 
 | lever | verdict |
 |---|---|
-| `threads` config key capping `with_intra_threads` on both sessions | **shipped** — `repograph.toml`, the machine file, `REPOGRAPH_THREADS`; `0` = a third of the logical cores |
+| `threads` config key capping `with_intra_threads` on both sessions | **shipped** — `zerograph.toml`, the machine file, `ZEROGRAPH_THREADS`; `0` = a third of the logical cores |
 | rayon's global pool capped to the same number | **shipped** — one number bounds every pool the binary owns |
 | token-budgeted batches (`TOKEN_BUDGET` = 2,048 padded tokens, `BATCH` = 64 kept) | **shipped** |
 | `DenseIndex::sync_chunked` — a checkpoint and a progress line every 1,024 rows | **shipped** |
@@ -156,7 +156,7 @@ Reading it:
 | walk / parse / lexical / store | rejected: 1.9 s and 70 MB for the whole tree |
 | `--rerank-local`'s 44 s and 3.4 GB | out of scope; the reranker's session takes the same cap, and a candidate depth below 200 is a retrieval question |
 
-Nothing in the store format, the CLI flags or the socket protocol moved. A `repograph.toml` without
+Nothing in the store format, the CLI flags or the socket protocol moved. A `zerograph.toml` without
 `threads` loads exactly as before.
 
 ## 4. After
@@ -197,9 +197,9 @@ The 320 longest passages, large model, vectors removed before each run
 | run | wall | user | max RSS | CPU% peak (avg) | threads/running |
 |---|---|---|---|---|---|
 | `embed-B-large-320longest`, before | 110.8 s | 627.0 s | 2.70 GB | 401.6% (377%) | 18 / 6 |
-| `REPOGRAPH_THREADS=2` | 268.8 s | 536.1 s | 2.69 GB | 148.1% (145.7%) | 4 / 2 |
-| `threads = 2` in `repograph.toml` | 269.2 s | 537.0 s | 2.69 GB | 148.5% (145.6%) | 4 / 2 |
-| `threads = 6` in `repograph.toml` | 103.4 s | 597.9 s | 2.70 GB | 434.3% (411.4%) | 12 / 6 |
+| `ZEROGRAPH_THREADS=2` | 268.8 s | 536.1 s | 2.69 GB | 148.1% (145.7%) | 4 / 2 |
+| `threads = 2` in `zerograph.toml` | 269.2 s | 537.0 s | 2.69 GB | 148.5% (145.6%) | 4 / 2 |
+| `threads = 6` in `zerograph.toml` | 103.4 s | 597.9 s | 2.70 GB | 434.3% (411.4%) | 12 / 6 |
 | `t2-embed-320`: the defaults, cap and budget together | 133.3 s | 525.1 s | **1.82 GB** | 292.6% (288.4%) | 8 / 4 |
 
 The environment and the project file read the same to the second. `threads = 6` is the one word
@@ -278,7 +278,7 @@ re-embedding mid-measurement, which the before run happened not to do; the one-s
 
 ### 4.5 The floors
 
-**The bench floors did not move.** `ARMS="dense lexical" bench/history/run-repograph.sh` against
+**The bench floors did not move.** `ARMS="dense lexical" bench/history/run-zerograph.sh` against
 the pinned fixture, exit 0, both arms green and gated, both lines identical to the `502e8a6d` rows
 already in `bench/history/runs.jsonl`:
 
@@ -305,7 +305,7 @@ Case for case and token for token, exit 0. The padding was never part of the ans
 
 ## 5. Side findings, not fixed here
 
-- `serve` cannot bind when `<repo>/.repograph/serve.sock` exceeds `SUN_LEN` (104 bytes on macOS);
+- `serve` cannot bind when `<repo>/.zerograph/serve.sock` exceeds `SUN_LEN` (104 bytes on macOS);
   the error names the cause. A repo deep under `/private/tmp/…` cannot use `serve` at all. Worth
   its own issue: bind a shorter socket in `$TMPDIR` keyed by a hash of the canonical path, or say
   so in the README.

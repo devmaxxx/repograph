@@ -1,7 +1,7 @@
 # Registry — every checkout this machine has built a graph for
 
 Decided with Max 2026-09-03 after the GitNexus replacement analysis
-(`2026-09-03-replace-gitnexus.md`). Ships as repograph 0.5.0, after the 0.4.0 release
+(`2026-09-03-replace-gitnexus.md`). Ships as zerograph 0.5.0, after the 0.4.0 release
 `beauty-crm` is waiting on.
 
 ## Why
@@ -11,7 +11,7 @@ name. Its rows were written by hand and never checked: today it lists eleven rep
 which three exist as code, two share the name `bonliva-erp`, and six are empty fix-clones with
 six markdown files each. The rows nobody used rotted.
 
-repograph needs the same three things — address a repository by name from anywhere, list what is
+zerograph needs the same three things — address a repository by name from anywhere, list what is
 indexed and how fresh it is, build a worktree without paying the ~100 s embedding cost again —
 without a file anyone maintains.
 
@@ -24,7 +24,7 @@ path is gone. A row is either confirmed by use or removed. There is no `register
 
 ## What is stored
 
-`~/.config/repograph/registry.json` (override: `REPOGRAPH_REGISTRY`; same convention as
+`~/.config/zerograph/registry.json` (override: `ZEROGRAPH_REGISTRY`; same convention as
 `FASTEMBED_CACHE_DIR`), written atomically through a temp file and a rename.
 
 ```json
@@ -54,7 +54,7 @@ path is gone. A row is either confirmed by use or removed. There is no `register
 
 ## Hot path stays hot
 
-`build` and `update` run git once and cache `{key, name, main}` in `.repograph/identity.json`.
+`build` and `update` run git once and cache `{key, name, main}` in `.zerograph/identity.json`.
 Every other command reads that file, reads the branch from `.git/HEAD` (following a linked
 worktree's `gitdir:` pointer), and loads the registry — three small files, no subprocess — and
 writes the registry only when this checkout's `last_used` is older than ten minutes. A store
@@ -89,7 +89,7 @@ the tree: none is indexed twice. Hidden directories (`.claude/worktrees`) were a
 ## `repos`
 
 ```
-$ repograph repos
+$ zerograph repos
 beauty-crm  bc97b44e
   /Users/max/Documents/projects/beauty-crm  main  main  8306 nodes / 29610 edges  fresh
   /Users/max/Documents/projects/beauty-crm/.claude/worktrees/tasks-coordination  worktree-tasks-coordination  8291 nodes / 29540 edges  stale: 3 changed, 1 removed
@@ -109,14 +109,14 @@ visible in `repos`); any MCP server.
 
 ## Acceptance
 
-- `repograph build` in `beauty-crm`, then `repograph --repo beauty-crm ask FR-PAY-22` from `/tmp`
-  answers; `repograph --repo beauty-crm@worktree-tasks-coordination verify` answers from the
+- `zerograph build` in `beauty-crm`, then `zerograph --repo beauty-crm ask FR-PAY-22` from `/tmp`
+  answers; `zerograph --repo beauty-crm@worktree-tasks-coordination verify` answers from the
   worktree's store.
-- `repograph build` in a fresh `git worktree add` of `beauty-crm` prints `seeded from …`,
+- `zerograph build` in a fresh `git worktree add` of `beauty-crm` prints `seeded from …`,
   finishes in under 10 s with the model cached, and `verify` shows the same counts as the parent
   plus or minus the branch's own changes.
 - `repos` lists both checkouts under one `beauty-crm`; after `rm -rf` of the worktree, the next
-  `repograph` command in any project drops the row.
+  `zerograph` command in any project drops the row.
 - An `ask` on the exact-id path measures no more than 1 ms slower than 0.4.0
-  (`REPOGRAPH_TIMING=1`).
+  (`ZEROGRAPH_TIMING=1`).
 - `cargo test`, `cargo clippy --all-targets` clean; bench floors unchanged.

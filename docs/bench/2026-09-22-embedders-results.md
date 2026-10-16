@@ -34,10 +34,10 @@ arm in `~/bench/embedders-2026-09-21/out/<label>.{txt,embed.txt,ask.txt,size.txt
 
 *flips* are the paraphrase cases this model hits that the control misses and the ones it misses that
 the control hits, with the exact two-sided McNemar p on that pair. *embed s* is the wall clock of one
-whole `embed` over the 33,525 rows, model open included, at `REPOGRAPH_RESOURCES=full`. *peak RSS*
+whole `embed` over the 33,525 rows, model open included, at `ZEROGRAPH_RESOURCES=full`. *peak RSS*
 is `maximum resident set size` from `/usr/bin/time -l` on that embed, in decimal GB. *cold ask* is
 the median of seven. *cache on disk* is `du -sh` of the model's directory under
-`~/.cache/repograph/fastembed` after the run.
+`~/.cache/zerograph/fastembed` after the run.
 
 ## What the readings say
 
@@ -109,9 +109,9 @@ are where the next improvement is, and no model in this field is it.
 
 ## Changing the seat
 
-`repograph model` prints what wrote the store, what is configured, and the catalogue: the control
-and the recommendation, two of the nine rows above. `repograph model <hub id>` takes any hub id,
-listed or not — it opens the model first, writes `embed_model` into `repograph.toml`
+`zerograph model` prints what wrote the store, what is configured, and the catalogue: the control
+and the recommendation, two of the nine rows above. `zerograph model <hub id>` takes any hub id,
+listed or not — it opens the model first, writes `embed_model` into `zerograph.toml`
 only once it opens, and re-embeds. Changing the model drops every row the previous one wrote — a
 change of dimension rewrites the index whole rather than extending it — so the switch costs the
 embed column above, once.
@@ -153,8 +153,8 @@ suite is not the graded one — `RECORDED_SHAPE` in `src/bench.rs` still names 4
 
 ## What the catalogue offers
 
-`repograph model` lists two of the nine: the default and `snowflake-arctic-embed-l-v2.0`. The other
+`zerograph model` lists two of the nine: the default and `snowflake-arctic-embed-l-v2.0`. The other
 seven stay in this document, which is the record of what was measured rather than a menu. Removing
-a model from the catalogue does not remove support for it: `embed_model` and `REPOGRAPH_EMBED_MODEL`
+a model from the catalogue does not remove support for it: `embed_model` and `ZEROGRAPH_EMBED_MODEL`
 still take any hub id, and the per-model profiles — pooling, prefixes, decoder inputs — are all
 still in `src/index/embed.rs`.

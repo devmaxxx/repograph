@@ -2,11 +2,11 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan step by step. Each step moves one language and ends at its gate (§5); a step whose gate does not pass does not merge.
 
-**Goal:** One engine reads every language. Detection, parsing, declarations, ids, spans, bodies, citations, path imports and same-name resolution are shared and driven by data. Per-language Rust survives only as a resolve hook, and only where a measurement shows name-only resolution writes wrong edges or loses too many right ones. Max, 2026-10-10: "I don't wanna split code parsing by language, I need unified interfaces to detect and use." After the fourteen existing languages are ported, nine languages repograph does not read today arrive as `Spec`s with queries, data and no hooks, one per step (§6.2): Lua, Go, C, C++, Ruby, PHP, Scala, Elixir and OCaml.
+**Goal:** One engine reads every language. Detection, parsing, declarations, ids, spans, bodies, citations, path imports and same-name resolution are shared and driven by data. Per-language Rust survives only as a resolve hook, and only where a measurement shows name-only resolution writes wrong edges or loses too many right ones. Max, 2026-10-10: "I don't wanna split code parsing by language, I need unified interfaces to detect and use." After the fourteen existing languages are ported, nine languages zerograph does not read today arrive as `Spec`s with queries, data and no hooks, one per step (§6.2): Lua, Go, C, C++, Ruby, PHP, Scala, Elixir and OCaml.
 
 **Architecture:** Each language is a `Spec`: the grammar `lang.rs` already names, two tree-sitter queries compiled once per process from `.scm` files embedded in the binary, a few data fields (comment syntax, body recipe, export rule, visibility, ambiguity) and a `Hooks` table of optional function pointers, which is the successor of PR #170's `Reader`. The engine runs the queries, turns captures into `Facts` (definitions, references, imports, citations, locals), writes nodes and `Declares` edges generically, resolves bare names by the spec's visibility model, and hands the parsed file to whichever hooks the spec names. Old and new paths coexist per language until that language's gate passes. Detection and grammars come from `ast-grep-language =0.45.3` behind our own front: `detect` tries our overrides, then its `SupportLang` extension table, then a shebang, and `Lang::grammar` hands out its grammars. Bicep, PostgreSQL, GraphQL and OCaml keep their own pinned crates behind the same front. Every grammar version stays pinned with `=`, and the query runner is ours, seeded from upstream `tags.scm` (§2.8 records the library decisions).
 
-**Tech Stack:** Rust 2021, `tree-sitter =0.27.0` (`Query`, `QueryCursor`; `streaming-iterator =0.1.9` is already pinned), the grammar crates already in `Cargo.toml`, `ast-grep-language =0.45.3` with its default features off (added in step 0), `bench/probe/graphdiff.py` plus a new scoped classifier, `bench/compare/run.py` for blast clauses, and `repograph bench` on the pinned fixture. §6.2 adds nine grammars: eight through `ast-grep-language` features and OCaml as its own crate, checked against crates.io on 2026-10-10 but not yet in `Cargo.toml`.
+**Tech Stack:** Rust 2021, `tree-sitter =0.27.0` (`Query`, `QueryCursor`; `streaming-iterator =0.1.9` is already pinned), the grammar crates already in `Cargo.toml`, `ast-grep-language =0.45.3` with its default features off (added in step 0), `bench/probe/graphdiff.py` plus a new scoped classifier, `bench/compare/run.py` for blast clauses, and `zerograph bench` on the pinned fixture. §6.2 adds nine grammars: eight through `ast-grep-language` features and OCaml as its own crate, checked against crates.io on 2026-10-10 but not yet in `Cargo.toml`.
 
 **Base:** branch `refactor/code-general-pipeline` (PR #170) at `b02f388`. Its `graph.json` and `headers.json` are byte-identical to `store-base` on the 776-file polyglot corpus.
 
@@ -601,7 +601,7 @@ needs it. Real code is the kit corpus, the scratchpad corpus and the fixture; a 
 
 The procedure below still measures each kind, with "the old path" now meaning today's graph.
 
-The criterion is applied per language L and per edge kind K in {Calls, References, Extends, Implements, DecoratedBy}. Compare N, L on the new path with K resolved by default, against O, L on the old path. Both come from the same binary through `REPOGRAPH_LEGACY` (§5.2). Compare L's files only.
+The criterion is applied per language L and per edge kind K in {Calls, References, Extends, Implements, DecoratedBy}. Compare N, L on the new path with K resolved by default, against O, L on the old path. Both come from the same binary through `ZEROGRAPH_LEGACY` (§5.2). Compare L's files only.
 
 1. `added` = N ∖ O and `missed` = O ∖ N, with edges compared as `(from, to, kind, context)`.
 2. **Hand read.** Every added edge is read by hand when `|added| ≤ 50`. Otherwise a seeded sample of 50 is read and the wrong count is scaled up. An added edge read as right is a find of the new path, not an error.
@@ -808,13 +808,13 @@ What callers see:
   - the `widen` loop iterates over specs;
   - `files_only_note` is unchanged.
 - **`tests/parse_census.rs`** is untouched.
-- **The `dump_tree` case** gains `REPOGRAPH_DUMP_CAPTURES=1`, which prints every match's captures and properties. Every port writes its queries with it.
+- **The `dump_tree` case** gains `ZEROGRAPH_DUMP_CAPTURES=1`, which prints every match's captures and properties. Every port writes its queries with it.
 
 ## 5 · The gate
 
 ### 5.1 The kit
 
-Step 0 copies the corpus (a 6.6 MB git repo), `store-base` and `repograph-base` from this session's scratchpad to `~/bench/engine-2026-10-10/`, because `/private/tmp` does not survive a reboot. It confirms that `graphdiff.py` reads zero between the copied `store-base` and a fresh build by `repograph-base` there. `K` below is that directory.
+Step 0 copies the corpus (a 6.6 MB git repo), `store-base` and `zerograph-base` from this session's scratchpad to `~/bench/engine-2026-10-10/`, because `/private/tmp` does not survive a reboot. It confirms that `graphdiff.py` reads zero between the copied `store-base` and a fresh build by `zerograph-base` there. `K` below is that directory.
 
 ### 5.2 The procedure
 
@@ -824,16 +824,16 @@ Every commit on a step runs this. `<exts>` are the step language's extensions.
 df -h /                                                  # stop below 10 GiB free
 CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0 cargo test
 cargo build --release
-B=target/release/repograph
-rm -rf $K/corpus/.repograph
-REPOGRAPH_LEGACY=<lang> $B --repo $K/corpus build --no-dense && mv $K/corpus/.repograph $K/old-<step>
-$B --repo $K/corpus build --no-dense && mv $K/corpus/.repograph $K/new-<step>
+B=target/release/zerograph
+rm -rf $K/corpus/.zerograph
+ZEROGRAPH_LEGACY=<lang> $B --repo $K/corpus build --no-dense && mv $K/corpus/.zerograph $K/old-<step>
+$B --repo $K/corpus build --no-dense && mv $K/corpus/.zerograph $K/new-<step>
 python3 -I bench/probe/graphdiff.py $K/store-base/graph.json $K/old-<step>/graph.json   # old path untouched
 python3 -I bench/probe/langdiff.py --lang <exts> $K/old-<step> $K/new-<step>
 cmp $K/old-<step>/headers.json $K/new-<step>/headers.json
 ```
 
-`REPOGRAPH_LEGACY` takes a comma-separated list of languages, or `all`, and forces the old path for them. O and N then come from one binary, so the gate does not drift when `main` moves under the branch. When `main` changes graph output, `store-base` is rebuilt with `REPOGRAPH_LEGACY=all` at the new base. Step 14 removes the variable.
+`ZEROGRAPH_LEGACY` takes a comma-separated list of languages, or `all`, and forces the old path for them. O and N then come from one binary, so the gate does not drift when `main` moves under the branch. When `main` changes graph output, `store-base` is rebuilt with `ZEROGRAPH_LEGACY=all` at the new base. Step 14 removes the variable.
 
 `bench/probe/langdiff.py` is new in step 0, with a test beside `test_graphdiff.py`.
 
@@ -843,7 +843,7 @@ cmp $K/old-<step>/headers.json $K/new-<step>/headers.json
 
 **Build time** is part of every step's gate from step 10 on (2026-10-12). Before that it was taken at steps 0, 6, 9, 13 and 14, as a median of three.
 
-- **The reading.** Five `build --no-dense` runs of the corpus, each from an empty store, interleaved with five of the step-0 binary (`bin/repograph-step0`), the pairs written to `log/buildtime-step<N>.txt`. The step's figure is its median over step 0's median from the same run.
+- **The reading.** Five `build --no-dense` runs of the corpus, each from an empty store, interleaved with five of the step-0 binary (`bin/zerograph-step0`), the pairs written to `log/buildtime-step<N>.txt`. The step's figure is its median over step 0's median from the same run.
 - **The bar.** At most 1.20×.
 - **When a step crosses it,** the engine is fixed first, as SQL's compile warm-up and Rust's start depth were, and the step is measured again. A language's own exception is not where the time is bought back.
 - **When the bar cannot be held,** the step stops with its numbers reported and does not land over it.
@@ -876,12 +876,12 @@ cmp $K/old-<step>/headers.json $K/new-<step>/headers.json
 
 ### 5.4 The bench
 
-The bench runs at the steps whose language is in the fixture: Shell, HCL (`.tf`), SQL, Kotlin and TypeScript (`.ts`, `.tsx`, `.mjs`). It also runs at step 0 (the base) and at step 14. `run-repograph.sh` reads the fixture's own store and does not rebuild it, so the store is built here in the writable worktree:
+The bench runs at the steps whose language is in the fixture: Shell, HCL (`.tf`), SQL, Kotlin and TypeScript (`.ts`, `.tsx`, `.mjs`). It also runs at step 0 (the base) and at step 14. `run-zerograph.sh` reads the fixture's own store and does not rebuild it, so the store is built here in the writable worktree:
 
 ```bash
-BIN=$PWD/$B REPOGRAPH_EMBED_MODEL=<declared> bench/probe/reset.sh
+BIN=$PWD/$B ZEROGRAPH_EMBED_MODEL=<declared> bench/probe/reset.sh
 $B --repo ~/bench/beauty-crm-test build --no-dense
-python3 -I bench/probe/langdiff.py --lang <exts> $K/fixture-base ~/bench/beauty-crm-test/.repograph
+python3 -I bench/probe/langdiff.py --lang <exts> $K/fixture-base ~/bench/beauty-crm-test/.zerograph
 $B --repo ~/bench/beauty-crm-test --no-dense bench
 ```
 
@@ -903,11 +903,11 @@ Steps 13 and 14 also run the dense arm with a full build in the worktree. Its fl
 
 | corpus | languages |
 |---|---|
-| `repograph/shell-blast.jsonl` | Shell |
+| `zerograph/shell-blast.jsonl` | Shell |
 | `beauty-crm-hcl` | HCL |
 | `pawfice` | Dart, Swift |
 | `beauty-crm-sql` | SQL |
-| `repograph`, `agent-orchestrator` | Rust, Python |
+| `zerograph`, `agent-orchestrator` | Rust, Python |
 | `beauty-crm-mobile` | Kotlin |
 
 The private corpora for Java, C#, Razor, GraphQL, Bicep and Vue are not on this machine. Decision 5 restores them if a copy turns up; none did on 2026-10-10 (§9). Until one does, the corpus diff and the cases decide alone for those languages, and the results document says the blast clause was not read.
@@ -952,7 +952,7 @@ Wire up callers and tooling:
 
 - `changes.rs` and `main.rs` read the spec;
 - the contract test, with one probe query per grammar so it is not vacuous;
-- `REPOGRAPH_DUMP_CAPTURES` and `REPOGRAPH_LEGACY`;
+- `ZEROGRAPH_DUMP_CAPTURES` and `ZEROGRAPH_LEGACY`;
 - `langdiff.py` and its test.
 
 Record the base:
@@ -978,7 +978,7 @@ This step alone closes the three reviewer defects. About 1,200 lines of Rust are
 
 - `Spec::queries` is `Sources { decl, refs }`, two lists instead of one, because the two queries compile and run separately (§2.6).
 - `embed` returns `Embedded::{Unread, View(text, Lang), Empty}`: the view carries its own grammar, so `Spec::view` is not read by the front.
-- `Spec::legacy` holds each old `extract`, now `fn(&Resolver, &File, &mut Extraction)`. `read` takes it while a language has no `decl` query or is named in `REPOGRAPH_LEGACY`.
+- `Spec::legacy` holds each old `extract`, now `fn(&Resolver, &File, &mut Extraction)`. `read` takes it while a language has no `decl` query or is named in `ZEROGRAPH_LEGACY`.
 - `collect` and `header` keep their `(rel, source)` signature until each port, since collect-time parses stay until then.
 - `detect` adds the shebang rule only. The walk's manifest and dotted-directory rules stay in `Resolver::new`.
 - `Resolver::new` reads an unnamed globbed file for its shebang and hands the same text to `collect`, so it is still read once.
@@ -1004,7 +1004,7 @@ This step alone closes the three reviewer defects. About 1,200 lines of Rust are
 
 **Step 1 as built.** Where the code differs from the text above, the code is the record:
 
-- The old graph comes from the step-0 binary (`bin/repograph-step0`) and `store-base`, not from `REPOGRAPH_LEGACY`: Shell's old reader is deleted in this step, so no switch can force it.
+- The old graph comes from the step-0 binary (`bin/zerograph-step0`) and `store-base`, not from `ZEROGRAPH_LEGACY`: Shell's old reader is deleted in this step, so no switch can force it.
 - The queries are `src/code/queries/shell/{decl,refs}.scm`, embedded through `queries::sources`. `.gitattributes` pins `*.scm` to LF, so a Windows checkout embeds the same text.
 - The hooks live in `src/code/exceptions/computed_paths.rs`, named for the rule: a path a script computes from its own location (§2.7). It holds what `paths.rs` and the run detection in `commands.rs` did. `collect` keeps its own parse and `(rel, source)` signature, and records each `source` site's candidate paths by the command's start byte. `import` picks the first candidate that is a globbed script. The run-by-path References are written by `resolve`, not by `import`, because a run is no import.
 - `ImportHook` takes the importer's path, `fn(&Resolver, &str, &Import)`. The transitive walk holds only the declarations of the files it reaches, not a `File`, and it now asks the hook for each of them. Before this step it computed their imports with the default paths, which cannot evaluate `$HERE/lib.sh`.
@@ -1028,7 +1028,7 @@ This step alone closes the three reviewer defects. About 1,200 lines of Rust are
 **Step 2 as built.** Where the code differs from the text above, the code is the record:
 
 - Two step-1 review findings were fixed first, in their own commit. A `source` site is now keyed by its operand, which the Shell query captures as `@import.path`, and not by the command's start byte. An editor's buffer that differs from the collected text no longer drops the Imports edge, and a case pins this. `files_only_note` takes the repository root and relative paths, so its tests no longer depend on the process's directory. The step-1 fixture row was re-recorded clean on `00022dd` and supersedes the `tool_dirty` row; the old row stays.
-- The old graph comes from the step-1 binary built on the clean commit (`bin/repograph-step1c`), not from `REPOGRAPH_LEGACY`, because Bicep's old reader is deleted in this step.
+- The old graph comes from the step-1 binary built on the clean commit (`bin/zerograph-step1c`), not from `ZEROGRAPH_LEGACY`, because Bicep's old reader is deleted in this step.
 - **References is a hook (§3.3).** With the read sites and locals in the query, the default resolution matches all 4,344 corpus References (P = R = 1). Five Bicep cases fail under it, though. A decorator's argument is read from the file, not from the declaration it decorates (two cases). A call names a `param` or `var` of the same name. `vnet::subnet` names nothing. A child resource's short name inside its parent names nothing. So References is in `hooks.owns`, and `exceptions/symbolic_names.rs` reproduces the old reader exactly. The query picks every read, the binders are locals, and the rule decides what each read names and which declaration reads it.
 - **Module reach** is `exceptions/module_reach.rs`, as §3.4 predicted, but it also carries an `import` hook. The default path with the `.bicep`, absolute and registry predicates in the query reproduces the old imports in every way but one: a module naming its own file. The hook drops that. `Resolver::facts` replaces the old collect pass and its `Files` state, so Bicep has no `collect` and no `state`. The resolve hook is one closure in the spec row that calls both rules.
 - **Locals bind to their own pattern's scope (engine).** A `@local.definition` whose own match also captures a `@local.scope` binds in that scope alone. Otherwise it binds in the innermost scope that holds it, as before. Without this the old shadowing cannot be written: a loop variable covers the loop's body and not the iterable beside it (`[for x in x: x]` reads the `param x`), and a function's parameters cover its result type and body but not the parameter types. Shell has no locals, so nothing else moved.
@@ -1328,7 +1328,7 @@ This step alone closes the three reviewer defects. About 1,200 lines of Rust are
 
 - **Queries:** items; `impl` as `@scope.owner`; `mod` as a `/` container; `///` doc through `Adjacent` and `Stripped`; `pub` as `Words { show }`; citations.
 - **Hooks:** `collect` (the crate module tree), `import` (`use` flattening), `resolve` owning Calls.
-- **Gate:** Calls (1,068) by the corpus; the `repograph` and `agent-orchestrator` blasts.
+- **Gate:** Calls (1,068) by the corpus; the `zerograph` and `agent-orchestrator` blasts.
 - **Pause (decision 3):** before step 10 starts, the results document gets a re-read of steps 0–9 for Max:
   - Rust lines removed and hook lines kept, against §6's estimates;
   - the build time against the 1.20× bar;
@@ -1421,7 +1421,7 @@ This step alone closes the three reviewer defects. About 1,200 lines of Rust are
 - **Cases** moved to `src/code/cases/kotlin.rs`, with the shared module's `fixture` and `cross` tests. A `super::header(src)` call became `header("", src)`. No assertion was rewritten.
 - **Timing:** median of five, interleaved, on the corpus: step 0 1.276 s, step 10 1.509 s, 1.18× (`log/buildtime-step10.txt`). A first run on the same code read 1.16×.
 - **Size:** `src/code/jvm/kotlin/` held 1,191 lines outside its cases. The exception keeps 1,096, so −95, against the re-estimate's −350 to −500 and its 700–850 kept. The walk was not split: 775 of the 1,096 lines are the receiver walk, which no query replaces. Added: 100 lines of query, 26 net in the spec, 3 in `queries.rs` and 11 in the engine.
-- **Review fix re-verified.** `330b9aa` declares the members of a type inside a Kotlin companion. Its binary (`bin/repograph-step10b`) against step 10's added no edge and removed none on any input. The kit (`new-10` → `new-10b`) is byte-identical, 9,885 nodes and 19,757 edges. The fixture's edge set equals `fixture-8p`'s (41,116 edges), and the scratchpad corpus is byte-identical too. Langdiff `--lang kt` reads 0 on all three (`log/langdiff-step10b-{kit,fixture-vs-8p}.txt`). The fix costs no measurable time. Three medians of five, interleaved, at load 6–10: 1.155×, 1.182× and 1.189× step 0 (`log/buildtime-step10b-{4,5}.txt`, `log/buildtime-step11-3.txt`).
+- **Review fix re-verified.** `330b9aa` declares the members of a type inside a Kotlin companion. Its binary (`bin/zerograph-step10b`) against step 10's added no edge and removed none on any input. The kit (`new-10` → `new-10b`) is byte-identical, 9,885 nodes and 19,757 edges. The fixture's edge set equals `fixture-8p`'s (41,116 edges), and the scratchpad corpus is byte-identical too. Langdiff `--lang kt` reads 0 on all three (`log/langdiff-step10b-{kit,fixture-vs-8p}.txt`). The fix costs no measurable time. Three medians of five, interleaved, at load 6–10: 1.155×, 1.182× and 1.189× step 0 (`log/buildtime-step10b-{4,5}.txt`, `log/buildtime-step11-3.txt`).
 - **Open, not fixed:**
   - Members the grammar wraps in an `ERROR` inside a `class_body` are not declared. The old reader flattened an `ERROR` child of the body and declared what it held. Ten probe shapes did not reproduce it: step 9's binary and step 10b's read them alike.
   - `receivers::resolve` wrote into a throwaway `Extraction` and copied its edges to the sink, because the shared `link` and `decorate` still took an `Extraction` for Java's reader. Step 11 moved them, and the walk, to the sink, which removed the copy (`bb4aa59`).
@@ -1523,8 +1523,8 @@ This step alone closes the three reviewer defects. About 1,200 lines of Rust are
   - `namespace_scope/lookup.rs` is unchanged apart from paths.
   - `rendered_components` reads the blanked view by C#'s queries. The wrapper class and every name under it take the component's name. The wrapper's node becomes the component's: the whole file, its first line, exported. The rest is the old Razor logic, through the sink.
   - Without the `resolve` hooks, 37 of the 74 C# cases fail and 23 of the 60 Razor cases fail. On the kit, C# keeps 0 of 324 Calls and 0 of 20 Imports. Both hooks stay.
-- **Gate:** langdiff on four inputs, read with `bin/repograph-step12` (the first query). The final binary, `bin/repograph-step12c`, writes stores identical to it on the kit, the Razor-globbed kit and the scratchpad corpus.
-  - Kit corpus (`old-12` → `new-12`, `--lang cs,csproj`): R3 = 1 and body-above 1, both accepted below. Every other class is 0. The 19,757 edges are identical. C# holds Declares 498 (282 `export`), Imports 20 and Calls 324. `old-12` is step 12a's binary under `REPOGRAPH_LEGACY=csharp`, and is identical to `new-11`.
+- **Gate:** langdiff on four inputs, read with `bin/zerograph-step12` (the first query). The final binary, `bin/zerograph-step12c`, writes stores identical to it on the kit, the Razor-globbed kit and the scratchpad corpus.
+  - Kit corpus (`old-12` → `new-12`, `--lang cs,csproj`): R3 = 1 and body-above 1, both accepted below. Every other class is 0. The 19,757 edges are identical. C# holds Declares 498 (282 `export`), Imports 20 and Calls 324. `old-12` is step 12a's binary under `ZEROGRAPH_LEGACY=csharp`, and is identical to `new-11`.
   - Kit corpus with `.razor` and `.cshtml` globbed (step 11's binary → step 12's): cs as above, and razor R3 = 18, accepted below. The 1,242 edges are identical. Razor holds Declares 380 (255 `export`), Imports 1 and Calls 19.
   - Scratchpad corpus (vs `store-base`): cs R3 = 1 and body-above 1, the same two nodes as the kit. The rest is the accepted py R3 = 12, rs R3 = 3 and body-above 7, SQL body-above 11 and Swift R3 = 1. Against step 11's store only the two cs bodies differ.
   - Fixture: byte-identical to `fixture-8p` (13,002 nodes, 41,116 edges). Against `fixture-base` only step 6's accepted SQL diffs and R7 = 1 read. The fixture holds no C# or Razor, so there is no bench.
@@ -1609,14 +1609,14 @@ This step alone closes the three reviewer defects. About 1,200 lines of Rust are
 
     No `Doc` reads a comment above a wrapper, and no `Line` reads a whole function. The hook stays.
   - `single_file_components` (186 lines) is the old Vue reader's script extraction and component symbol, through the sink. Without it no `.vue` file declares anything. On the kit its 8 files hold Declares 46, Imports 2, Extends 4 and Calls 7. The hook stays.
-- **Gate:** langdiff with `bin/repograph-step13` on three inputs. The readings are in `log/langdiff-step13-{kit,scratch,fixture}.txt`.
+- **Gate:** langdiff with `bin/zerograph-step13` on three inputs. The readings are in `log/langdiff-step13-{kit,scratch,fixture}.txt`.
   - Kit (`new-12c` → `new-13`): tsx R2 = 2. Every other class is 0 in every language.
   - Scratchpad corpus (vs `store-base`): the same tsx R2 = 2, plus the accepted cs R3 1 and body-above 1, py R3 12, rs R3 3 and body-above 7, SQL body-above 11, and Swift R3 1.
   - Fixture (old-reader store → `fixture-13`, and the same against `fixture-8p`): ts R2 = 10, and References −7 / +7. R7 = R8 = R9 = 0 on all three.
   - Accepted, each hand-read:
     - R2 = 2 on the kit and 10 on the fixture: a decorated class not written `export` now starts at its decorator's row, one line up (`App.tsx::App` 55 → 54). The grammar folds the decorator into the class node. An exported class's decorator sits outside it in `export_statement`, and keeps its line. A line that skips the decorators was tried in the engine and moved 403 field members' lines, so it was reverted.
     - References ±7: comment cites inside `@Module({…})` above `export class` now belong to the class, not the file. They are BE-M02, FR-DM-06 and FR-SEC-30 in `app.module.ts`, BE-M02, FR-SEC-30 and FR-VIS-47 in `identity.module.ts`, and N-104 in `database.module.ts`.
-- **Outside the inputs.** `beauty-crm` main (`b71459e9b`) and its two worktrees (`5cdd0d15e`, `546dfa96a`) were exported by `git archive` to the scratchpad. Each was built with the old reader (`repograph-step13d`) and the new one, `--no-dense`, and read with `--lang ts,tsx,js,mjs,cjs,jsx,vue` (`log/langdiff-step13-outside.txt`):
+- **Outside the inputs.** `beauty-crm` main (`b71459e9b`) and its two worktrees (`5cdd0d15e`, `546dfa96a`) were exported by `git archive` to the scratchpad. Each was built with the old reader (`zerograph-step13d`) and the new one, `--no-dense`, and read with `--lang ts,tsx,js,mjs,cjs,jsx,vue` (`log/langdiff-step13-outside.txt`):
 
   | revision | R1 | R2 | R4 | R5 | Calls − / + | References − / + |
   |---|---|---|---|---|---|---|
@@ -1629,7 +1629,7 @@ This step alone closes the three reviewer defects. About 1,200 lines of Rust are
   - R2: the decorated non-exported classes, as on the fixture. All 31 move one line.
   - References from the file to the class: the decorator rule, as on the fixture. Main has 43: comments inside `@Module` and strings in a controller's decorators.
   - Calls and cites from the class to the method, 22 on main: a member decorator separated from the method by a comment. An example is `@RequireAction` above a comment above `@Header` in `appointment.controller.ts`. The old reader stopped at the comment and gave the decorator to the class. The new one skips comments and gives it to the method, as it does when no comment stands between.
-- **Bench**, on the fixture at `241b838`, from a store built by `repograph-step13`:
+- **Bench**, on the fixture at `241b838`, from a store built by `zerograph-step13`:
   - `--no-dense`: `keyword 39/40 paraphrase 7/30 code 12/12 p90 238 tok`. The transcript is identical to step 10's, so zero flips.
   - Dense: a full build of 2 min 44 s, 11,593 rows embedded in 162 s. Then `keyword 40/40 paraphrase 9/30 code 12/12 p90 237 tok`, under e5-small, with zero flips against the last dense raw row. §5.4's floors under the small model are 40/40, ≥ 9/30, 12/12 and ≤ 250, and all hold.
   - Both rows are in `bench/history/runs.jsonl`.
@@ -1649,20 +1649,20 @@ This step alone closes the three reviewer defects. About 1,200 lines of Rust are
   - The exceptions now hold 889: `import_bindings` 634, `single_file_components` 186 and `statement_prose` 69. The engine, `syntax`, the spec and the module lists add 88, and the queries 165.
   - Net Rust outside the case files is −527 against the estimate's −700. Part of that is the inline tests, which moved into the cases.
   - The kept hook is 889 lines against the estimate's 600. What no query replaces is the import-bound lookup and the statement's prose.
-- **Review fix re-verified.** `082861f` reads a decorated class member's line from its first child that is not a decorator. Before, the line was the first one not opening with `@`, so `@Input() name: string;` read as empty and a decorator spread over lines read as its own inner line. The same commit assigns cite owners after the nested cites are dropped, and hashes a file's text into its fingerprint only when it differs from the source. Its binary is `bin/repograph-step13b`.
+- **Review fix re-verified.** `082861f` reads a decorated class member's line from its first child that is not a decorator. Before, the line was the first one not opening with `@`, so `@Input() name: string;` read as empty and a decorator spread over lines read as its own inner line. The same commit assigns cite owners after the nested cites are dropped, and hashes a file's text into its fingerprint only when it differs from the source. Its binary is `bin/zerograph-step13b`.
   - Kit (`new-13` → `new-13b`, `--lang ts,tsx,vue`): ts R3 = 121 and vue R3 = 2. Every other class is 0 in every language. All 19,757 edges are identical (`log/langdiff-step13b-kit.txt`).
   - Scratchpad corpus (vs `store-base`): the same ts R3 = 121 and vue R3 = 2 on top of step 13's readings (`-scratch.txt`).
   - Fixture (vs `fixture-13`, step 13's own store rebuilt for this reading): `graph.json` and `headers.json` are byte-identical. No fixture class member is decorated on a line of its own.
   - Hand read, all 123 accepted. In 121 the old line was a decorator's inner line (`type: Number,`, `description: '…'`, `default: 1,`) and the new one is the field (`notDistributed!: number`, `limit?: number = 20`). In 2, Vue's `@Prop() mode: string` read as empty and now reads `mode: string`. None of the new lines is a comment, a decorator or empty. The 123 sit in 13 files, nearly all NestJS DTOs.
-  - Bench on `082861f`, from a store built by `repograph-step13b`: `--no-dense` `keyword 39/40 paraphrase 7/30 code 12/12 p90 238 tok`; dense `keyword 40/40 paraphrase 9/30 code 12/12 p90 237 tok` under e5-small, with 50 rows re-embedded after the reset. Both transcripts match step 13's case for case, so zero flips. Both rows are in `bench/history/runs.jsonl`.
+  - Bench on `082861f`, from a store built by `zerograph-step13b`: `--no-dense` `keyword 39/40 paraphrase 7/30 code 12/12 p90 238 tok`; dense `keyword 40/40 paraphrase 9/30 code 12/12 p90 237 tok` under e5-small, with 50 rows re-embedded after the reset. Both transcripts match step 13's case for case, so zero flips. Both rows are in `bench/history/runs.jsonl`.
 - **Still open after step 14:**
   - A literal behind `as unknown as` or `({…}) satisfies T` names no member, above.
-  - A call through a renamed export targets a node nobody writes. With `function a() {}` and `export { a as b }` in `lib.ts`, `import { b } from './lib'; b()` calls `sym:lib.ts::b`, while the node is `sym:lib.ts::a`. A re-export under a new name, `export { b as c } from './lib'`, does the same one file further. `repograph-step0` writes the same two edges, so the port did not cause this.
+  - A call through a renamed export targets a node nobody writes. With `function a() {}` and `export { a as b }` in `lib.ts`, `import { b } from './lib'; b()` calls `sym:lib.ts::b`, while the node is `sym:lib.ts::a`. A re-export under a new name, `export { b as c } from './lib'`, does the same one file further. `zerograph-step0` writes the same two edges, so the port did not cause this.
   - A cite in a class's own decorator belongs to the class, while a call or value in it belongs to the file. A case pins the second (`identifiers_in_di_objects_and_arrays_are_arg_edges_within_one_file`). Since step 14 both read one list, `syntax::Decorators`, and differ only in that condition.
 
 **Step 14 · Remove the old paths.** M, net negative. Remove:
 
-- `legacy`, `Reader`, `REPOGRAPH_LEGACY`;
+- `legacy`, `Reader`, `ZEROGRAPH_LEGACY`;
 - the per-family declaration walkers;
 - `prose::declare`, `prose::cite`, `idrefs`.
 
@@ -1677,7 +1677,7 @@ Then:
 **Step 14 as built.** Where the code differs from the text above, the code is the record. The work is in `198dab5`, `f9479b6`, `0617036`, `5bdaf64` and `0fab918`.
 
 - **Removed** (`0617036`, 62 lines out and 10 in):
-  - The front's switch, so `engine::extract` is the only reader. Gone with it are `REPOGRAPH_LEGACY`, the spec's `legacy` field and the `Legacy` type.
+  - The front's switch, so `engine::extract` is the only reader. Gone with it are `ZEROGRAPH_LEGACY`, the spec's `legacy` field and the `Legacy` type.
   - Every `dead_code` allowance that covered code whose callers were still to land: the engine, the spec table, blanking, `Lang`, `Family` and `Index::under`. The build and clippy are clean without them, so they hid no dead code.
   - The spec row Vue and Razor start from is renamed from `UNPORTED` to `HOOKS_ONLY`.
   - The plan's other items had gone with their ports. No per-language declaration walker is left, and `prose::declare`, `prose::cite` and `idrefs` are gone. `Reader` in `namespace_scope/walk.rs` is the C# reference pass's own struct, not the old trait.
@@ -1689,11 +1689,11 @@ Then:
 - **Decorators read once per file** (`f9479b6`). Engine cites and TypeScript call sites each found their decorator by a cursor descent from the root. `syntax::Decorators::of` now lists a file's outermost decorators in one walk, and a site looks itself up by binary search. A grammar with no `decorator` kind skips the walk.
   - The two rules stay two. `said_at` takes any decorator, and `member_at` only one in a class body, which a case pins.
   - Kit, scratchpad corpus and fixture: byte-identical to `082861f`'s stores in every language (`log/langdiff-step14a-*.txt`).
-  - Corpus build, median of five interleaved runs (`log/buildtime-step14a.txt`): `repograph-step13b` 1.390 s wall and 1.852 s CPU; with both fixes, 1.374 s and 1.816 s. That is 16 ms wall and 36 ms CPU less, within the noise.
+  - Corpus build, median of five interleaved runs (`log/buildtime-step14a.txt`): `zerograph-step13b` 1.390 s wall and 1.852 s CPU; with both fixes, 1.374 s and 1.816 s. That is 16 ms wall and 36 ms CPU less, within the noise.
 - **Regressions:** from `langdiff.py` over every language on three inputs, against `082861f`'s stores. All three are byte-identical, so R1–R9 = 0 (`log/langdiff-step14-{kit,scratch,fixture}.txt`).
   - Against the base stores, only the accepted diffs remain (`-cumulative.txt`). On the scratchpad corpus and the kit (`store-base`) they are swift R3 1, sql body-above 11, py R3 12, rs R3 3 and body-above 7, cs R3 1 and body-above 1, tsx R2 2, ts R3 121 and vue R3 2. R7–R9 are 0.
   - On the fixture (`fixture-base`) they are step 6's SQL R1 3, R4 3, body-above 15 and R7 1, and step 13's ts R2 10 and References ±7.
-- **Bench** on the fixture at `0fab918`, from a store built by `repograph-step14`. The reset settles with `repograph-step13b`, since a GRAMMAR 6 binary re-reads the fixture's older store.
+- **Bench** on the fixture at `0fab918`, from a store built by `zerograph-step14`. The reset settles with `zerograph-step13b`, since a GRAMMAR 6 binary re-reads the fixture's older store.
   - `--no-dense`: `keyword 39/40 paraphrase 7/30 code 12/12 p90 238 tok`.
   - Dense: `keyword 40/40 paraphrase 9/30 code 12/12 p90 237 tok`, under e5-small, with 50 rows re-embedded.
   - Both match `082861f` case for case, so there are zero flips and the floors hold. Both rows are in `bench/history/runs.jsonl`.
@@ -1702,7 +1702,7 @@ Then:
 
 ### 6.2 New languages, steps 15–24
 
-These are languages repograph does not read today. The engine makes each one a `Spec` with queries, data and `hooks: NONE`. Each joins through its own step's gate. Until step 24, a new language is read only when a config or `REPOGRAPH_CODE_GLOBS` names its globs, as Razor is.
+These are languages zerograph does not read today. The engine makes each one a `Spec` with queries, data and `hooks: NONE`. Each joins through its own step's gate. Until step 24, a new language is read only when a config or `ZEROGRAPH_CODE_GLOBS` names its globs, as Razor is.
 
 **Selection.** A candidate stays only when its grammar crate passes four checks:
 
@@ -1953,7 +1953,7 @@ No new definition kind is needed:
   - Every `@owner` of a match joins with `.` in source order, so `A<T>::B::f` is `A.B.f`, the same id the in-class definition of `B`'s method would have. A plain scope before the class may be a namespace and qualifies nothing, so `A::B::f` is `B.f`.
   - An unnamed namespace's functions are `export "never"`, as `static` ones are.
   - `.h` is `Lang::Cpp` (below).
-- **Exception, `attribute_macros` (an `embed` hook returning a blanked view):** a capitalised macro between `class`/`struct`/`union` and the name, one after a declarator with an argument list that holds no two adjacent words (`GUARDED_BY(mu_)`, `LOCKS_EXCLUDED(mu_)`), and one standing alone as a member before an access label or `friend` (`Q_OBJECT`) are blanked, rows and columns kept. Without it (`bin/repograph-cpp-nohook`), leveldb fails the criterion: 25 of 131 files lose a definition (19.1%), recall is member 0.9054, method 0.8917, type 0.8810, function 1.000, and Calls 0.8335 (986 of 1,183). On hiredis it changes only `qt.h` and `example-qt.h`.
+- **Exception, `attribute_macros` (an `embed` hook returning a blanked view):** a capitalised macro between `class`/`struct`/`union` and the name, one after a declarator with an argument list that holds no two adjacent words (`GUARDED_BY(mu_)`, `LOCKS_EXCLUDED(mu_)`), and one standing alone as a member before an access label or `friend` (`Q_OBJECT`) are blanked, rows and columns kept. Without it (`bin/zerograph-cpp-nohook`), leveldb fails the criterion: 25 of 131 files lose a definition (19.1%), recall is member 0.9054, method 0.8917, type 0.8810, function 1.000, and Calls 0.8335 (986 of 1,183). On hiredis it changes only `qt.h` and `example-qt.h`.
 - **Engine additions, inert for every earlier language** (byte-identity below):
   - **Implicit owner.** `#set! receiver "owner"` on a reference pattern with no `@receiver` makes the owner implicit: in a method, a bare name names `Owner.name` first, in the declaring files the index gives, else, through `nested()`, in the one file of the family whose outermost type is `Owner`'s and which declares that member below its top level. A member found is the name's meaning even when it is the caller, so a recursive method never falls through to a free function. Go's and Lua's `receiver "owner"` patterns all carry a receiver or bind a local, so none reaches it.
   - **`#set! parent "none"`** (`QueryMeta.detached`): a friend defined in its class is the file's function.
@@ -2155,7 +2155,7 @@ No new definition kind is needed:
   - `#set! outside "<kind> <word>"`: a pattern is dropped inside a node of that kind whose first child spells the word. Elixir's `quote` and `@` are calls and unary operators like any other; the word tells `quote do … end` from a call of `f`. A value without a space takes the old path (`word` is `None`).
   - `#set! binds "alias"` and `"open"` on an `@import` (`Meta.binds`, `Import.binds`). In `lexical`, an alias in scope whose name is the reference's first segment rewrites the reference to the alias's path, and that path is the only candidate: `alias Plug.Conn` makes `Conn.f` `Plug.Conn.f`, and `alias Plug.Router.Utils, as: U` makes `U.build` `Plug.Router.Utils.build`. The alias is `@import.alias`, else the path's last segment; of two in scope the later wins. An open import adds `path/name` for a bare name after the lexical candidates, so the own module wins. An import is in scope after its site, within the innermost definition holding it, or to the end of the file when none does. Only `elixir/decl.scm` sets `binds`, and with no binding import in a file `lexical` returns the candidates it did before.
   - `Import.binds` is a `pub` field, so `tests/engine.rs`'s literal `Import` gains `binds: None`.
-  - Inertness: the scratchpad corpus and the kit, with their own globs and with `REPOGRAPH_CODE_GLOBS` set to the Elixir globs, and luarocks, gin, hiredis, leveldb, Slim and rack with their globs and with the Elixir globs added, are byte-identical to `repograph-merge19`.
+  - Inertness: the scratchpad corpus and the kit, with their own globs and with `ZEROGRAPH_CODE_GLOBS` set to the Elixir globs, and luarocks, gin, hiredis, leveldb, Slim and rack with their globs and with the Elixir globs added, are byte-identical to `zerograph-merge19`.
 - **Known misses on plug:** calls to functions a `use Plug.Builder` or `use Plug.Router` imports (`plug` 52, `resp` 31, `assign` 5, `send_resp` 2, `halt` 1, `match` 1), and `Plug.Parsers.ParseError.exception`, which `defexception` generates. `import X, only: […]` opens all of `X`. A `defimpl` inside a module is named under that module (`Plug.DebuggerTest.Plug.Exception/ActionableError`), where Elixir names it `Plug.Exception.Plug.DebuggerTest.ActionableError`; no call names an implementation module.
 - **Parse census:** 78 files, 0 with an ERROR or MISSING node.
 - **For steps 23–24:**
@@ -2231,7 +2231,7 @@ No new definition kind is needed:
 
    Every test passes, and none is edited. The contract test covers the new queries.
 2. **Parse census.** `tests/parse_census.rs` gains the language. On the pinned corpus, at most 2% of the language's files may hold an ERROR or MISSING node, and the results document names each one. Above 2%, the step is held for Max. C and C++ are gated on losses instead (Max, 2026-10-13): their grammars cannot see through macros, so raw ERROR counts run high on files that lose nothing. At most 2% of the files may lose a definition the text census finds, per-kind recall stays at 0.97 or above, and the raw ERROR and MISSING counts are still recorded.
-3. **Hand-read precision.** The corpus is built with `REPOGRAPH_CODE_GLOBS` set to the defaults plus the new globs, then `build --no-dense`:
+3. **Hand-read precision.** The corpus is built with `ZEROGRAPH_CODE_GLOBS` set to the defaults plus the new globs, then `build --no-dense`:
    - zero dangling edges (R5);
    - a seeded sample of 50 symbols, read against the source, with zero wrong ids, lines or ends;
    - for five seeded files, the symbol count against a hand count of their declarations, with every difference explained;
@@ -2254,7 +2254,7 @@ git -C ~/bench/corpora-public/gin -c advice.detachedHead=false checkout v1.12.0
 git -C ~/bench/corpora-public/gin rev-parse HEAD
 ```
 
-The SHA goes into the results document, so a tag moved upstream is caught on the next fetch. Each corpus is fetched the same way into `~/bench/corpora-public/<repo name>`, with its own repo and tag. The clone is read-only apart from the `.repograph/` store each build writes into it.
+The SHA goes into the results document, so a tag moved upstream is caught on the next fetch. Each corpus is fetched the same way into `~/bench/corpora-public/<repo name>`, with its own repo and tag. The clone is read-only apart from the `.zerograph/` store each build writes into it.
 
 | step | repo | tag |
 |---|---|---|
@@ -2287,13 +2287,13 @@ Expected net for the whole plan, steps 0–24:
    - a text predicate on an optional capture that did not match passes vacuously;
    - quantified captures arrive in an order that must be pinned.
 
-   The strict classes (R1–R4) catch every visible effect. The contract test and `REPOGRAPH_DUMP_CAPTURES` catch most of them before the corpus does.
+   The strict classes (R1–R4) catch every visible effect. The contract test and `ZEROGRAPH_DUMP_CAPTURES` catch most of them before the corpus does.
 2. **Knob creep.** Every review rejects a new `Spec` field with one user. A step that wants one adds a hook instead, and a later step that finds a second user promotes it.
 3. **Thin corpora.** Swift (11 symbols), Java (35), Vue (46), Razor (0) and non-Terraform HCL (0) decide on cases alone, so a default that is wrong on real code in those languages could ship. Mitigation: the default keeps a kind there only when the cases pass unedited. Otherwise the hook stays. Restoring the private corpora (decision 5) would close the gap; no copy was found on 2026-10-10.
 4. **Hooks reading `Facts`.** The heavy resolvers were written against their own `Declared` structs. Adapting them is most of the work in steps 9–13, and the likeliest place for subtle diffs. Kinds a hook owns are gated strictly, so no diff there passes.
 5. **Cost.** Two cursor passes per file replace one hand walk, and the Postgres grammar compiles slowly. The build-time gate (1.20×) is read five times, and compile time is measured in step 0.
 6. **Pathological files.** Deep or huge lists are bounded by the match limit and named on stderr. The deepest corpus file is timed in step 0.
-7. **Base drift.** A fix that lands on `main` in a language not yet ported goes into its old reader. A fix in a ported language goes into its query or hook. `REPOGRAPH_LEGACY` keeps O and N in one binary, so the gate compares like with like; `store-base` is rebuilt when `main` moves the graph.
+7. **Base drift.** A fix that lands on `main` in a language not yet ported goes into its old reader. A fix in a ported language goes into its query or hook. `ZEROGRAPH_LEGACY` keeps O and N in one binary, so the gate compares like with like; `store-base` is rebuilt when `main` moves the graph.
 8. **Coexistence.** Each language carries two paths for one step's lifetime. Step 14 is a step with its own gate, not a cleanup to forget.
 9. **GRAMMAR.** It moves once per release: at step 14, or at step 24 when both ship together (decision 1). A release cut in the middle of the migration can leave old doc lines in stores until their files change. Retrieval never reads those lines; rerank and explain do.
 10. **The `parse_census` coupling.** For steps 0–14, `lang.rs` gains nothing, and `spec.rs` and `queries.rs` sit beside it. From step 15, each new language adds to `lang.rs` one `Lang` variant, its `SupportLang` arm and its ast-grep feature, or its own crate for OCaml. `tests/parse_census.rs` compiles that file by path. The census therefore names the new language in the same commit.
@@ -2301,7 +2301,7 @@ Expected net for the whole plan, steps 0–24:
 
     A language can therefore pass with low recall on real code. That is acceptable by the first global constraint, because a missing edge is not a wrong one. What would not be acceptable is a wrong-edge rate the 50-edge sample happened to miss: at P = 0.99, a sample of 50 shows no error 61% of the time. The mitigation is that every engine addition is shared, so a later step's sample re-reads it.
 12. **Binary size.** The nine grammars are estimated at +20 MB stripped and +1.1 MB compressed. OCaml's parser sources alone are 62 MB, about 6.5 MB stripped by the Postgres scale, and Scala's and C++'s are 26 MB and 17 MB. The per-step bar (8 MB stripped, 1 MB compressed) holds a step for Max before it merges. The release archive's 0.6.0 bar, `v0.5.3`'s asset + 3.5 MB, is read again at step 24.
-13. **Adapting upstream queries.** Upstream `tags.scm` relies on general predicates the engine refuses, and its captures name a different contract. Every adaptation is a place where a pattern can quietly stop matching. The contract test, `REPOGRAPH_DUMP_CAPTURES` and the 50-symbol declaration sample are the guard. A declaration a pattern silently lost shows up only as a missing symbol, so the sample counts symbols per file against a hand count for five files.
+13. **Adapting upstream queries.** Upstream `tags.scm` relies on general predicates the engine refuses, and its captures name a different contract. Every adaptation is a place where a pattern can quietly stop matching. The contract test, `ZEROGRAPH_DUMP_CAPTURES` and the 50-symbol declaration sample are the guard. A declaration a pattern silently lost shows up only as a missing symbol, so the sample counts symbols per file against a hand count for five files.
 14. **`.h` is ambiguous.** One extension is C, C++ or Objective-C. ast-grep's table, like `Lang::of`, reads the extension only and says C. Step 18's census picks one grammar for every `.h`, and the other kind of header loses members. No content-aware detector is planned (§2.8).
 15. **Upstream licence notices.** A query copied from a crate keeps its notice. The `cpp`, `ruby` and `lua` crates ship no LICENSE file, so the notice is taken from the grammar repository at the pinned tag. Elixir's grammar is Apache-2.0, whose NOTICE terms are read in step 22.
 16. **Version age and ranges.** Each step pins with `=` the newest version that is at least two weeks old when the step starts, as the 0.6.0 pins did, and that `ast-grep-language 0.45.3`'s range admits. For seven of the eight crates it carries, that is the version in §6.2's table. For PHP it is 0.24.2 (2025-08-18), because `^0.24.0` excludes 0.25.1.

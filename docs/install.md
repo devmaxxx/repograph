@@ -23,16 +23,13 @@ write by zerograph moves the store (below) out from under it.
    background) or a `repograph watch` that outlives the move reads the store as empty and builds a
    second `.repograph/` of its own. `pkill -f 'repograph.* (serve|watch)'`, and end the agent
    sessions that use the old MCP server.
-2. **Swap the package.** `pnpm remove @devmaxxx/repograph`, then `pnpm add -D zerograph`;
-   the launcher still answers to `repograph` as well, so a script that calls the old name keeps
-   running. Installed globally, remove the old package first (`npm uninstall -g
-   @devmaxxx/repograph` or `pnpm remove -g @devmaxxx/repograph`): npm and pnpm 11 refuse to install
-   over its `repograph` command. Installed from source, run `cargo uninstall repograph`, or the old
-   binary stays on `PATH` and goes on writing a `.repograph/` of its own. An upgrade that keeps the
-   old name lands on zerograph too: from 0.6.0, `@devmaxxx/repograph` is released to GitHub
-   Packages as a stub that depends on `zerograph` at the same version and runs it as `repograph`.
-   zerograph itself comes from the public npm registry, so the `@devmaxxx` lines in `~/.npmrc` are
-   needed only while something still installs the old name.
+2. **Swap the package.** `pnpm remove @devmaxxx/repograph`, then `pnpm add -D zerograph`, and
+   change scripts that call `repograph` to call `zerograph`: there is no command under the old name,
+   and `@devmaxxx/repograph` gets no release after 0.5. Installed globally, `npm uninstall -g
+   @devmaxxx/repograph` or `pnpm remove -g @devmaxxx/repograph`. Installed from source, run `cargo
+   uninstall repograph`, or the old binary stays on `PATH` and goes on writing a `.repograph/` of
+   its own. zerograph comes from the public npm registry, so the `@devmaxxx` lines in `~/.npmrc` can
+   go.
 3. **Re-run `zerograph install-agent`** with the flags you used before, straight away. The old hook
    script looks for `.repograph/` only, so once the store has moved it says nothing, and the
    install is what replaces it.

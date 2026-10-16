@@ -4,7 +4,7 @@
 
 **Goal:** Land, in the 0.5.0 line, whichever of three changes clears a rule committed before its numbers are read: the coverage denominator that stops rewarding an index for a narrow vocabulary (G8's residue), one seat for the code list on the plain path under a constant of its own (G13), and the documents' enrichment prompt asked for both registers from one generator (G14, retiring L4 as framed). Record every measurement, passed or failed, in a results document, the gaps file, ADR-001 and the run history.
 
-**Architecture:** repograph is a Rust CLI (`src/`) over a `.repograph/` store. Retrieval fuses ranked lists round-robin into five seeds (`src/query.rs::ask`, `src/index/fuse.rs::interleave`). On the plain path the generated-questions BM25 list joins when its *coverage* — best over `LexicalIndex::attainable` — reaches `QUESTIONS_GATE = 0.761` of the passage list's (`src/query.rs:47`); the code-questions list is pooled on the reranked path only. `dump` records every list and the three `attainable_*` denominators per query so `bench/admission.py` can replay the plain fusion offline under any rule and `check` that the replay is the binary. Every retrieval change is replayed first, confirmed live on the read-only fixture and on store copies, judged by the spec's clauses, and recorded.
+**Architecture:** zerograph is a Rust CLI (`src/`) over a `.zerograph/` store. Retrieval fuses ranked lists round-robin into five seeds (`src/query.rs::ask`, `src/index/fuse.rs::interleave`). On the plain path the generated-questions BM25 list joins when its *coverage* — best over `LexicalIndex::attainable` — reaches `QUESTIONS_GATE = 0.761` of the passage list's (`src/query.rs:47`); the code-questions list is pooled on the reranked path only. `dump` records every list and the three `attainable_*` denominators per query so `bench/admission.py` can replay the plain fusion offline under any rule and `check` that the replay is the binary. Every retrieval change is replayed first, confirmed live on the read-only fixture and on store copies, judged by the spec's clauses, and recorded.
 
 **Tech Stack:** Rust 2021 (`cargo test --release`, `cargo clippy --release --all-targets -- -D warnings`; CI runs the debug variants), Python 3 stdlib only (`bench/admission.py`, `bench/heldout.py`, `bench/history/track.py`, their `test_*.py` under `unittest`), bash 3.2, the `claude` CLI as the question generator (Task 6 Step 5 only).
 
@@ -12,18 +12,18 @@
 
 ## Where the repository actually is
 
-The local `main` checkout at `/Users/max/Documents/projects/repograph` is **stale at `d87c607`** (PR #6). The real tip is `origin/main` at `32577e2` (PR #13). This plan and its spec were written into the stale checkout's `docs/superpowers/` because that is the working directory; Task 0 creates a fresh worktree off `origin/main` and Task 1 copies both documents into it and commits them there, before any measurement. Nothing is built or measured from the stale checkout, and it is never `cd`'d into. The existing worktrees under `.worktrees/` (`coverage` at `32577e2` on branch `facts`, with untracked files that belong to another session) are not reused.
+The local `main` checkout at `/Users/max/Documents/projects/zerograph` is **stale at `d87c607`** (PR #6). The real tip is `origin/main` at `32577e2` (PR #13). This plan and its spec were written into the stale checkout's `docs/superpowers/` because that is the working directory; Task 0 creates a fresh worktree off `origin/main` and Task 1 copies both documents into it and commits them there, before any measurement. Nothing is built or measured from the stale checkout, and it is never `cd`'d into. The existing worktrees under `.worktrees/` (`coverage` at `32577e2` on branch `facts`, with untracked files that belong to another session) are not reused.
 
 ## Global Constraints
 
-- **Worktree.** `R=/Users/max/Documents/projects/repograph`; `W=$R/.worktrees/rsr`, branch `feat/residue-seat-register` from `origin/main` (`32577e2`), created in Task 0. Every git command is `git -C "$W" …`, every cargo command `--manifest-path "$W/Cargo.toml"`, every path absolute. `B="$W/target/release/repograph"`, rebuilt with `cargo build --release --manifest-path "$W/Cargo.toml"` after every code change and before any measurement; `shasum "$B"` is written beside every set of dumps it produces. The base binary is kept as `$M/repograph-base` for the whole plan.
+- **Worktree.** `R=/Users/max/Documents/projects/zerograph`; `W=$R/.worktrees/rsr`, branch `feat/residue-seat-register` from `origin/main` (`32577e2`), created in Task 0. Every git command is `git -C "$W" …`, every cargo command `--manifest-path "$W/Cargo.toml"`, every path absolute. `B="$W/target/release/zerograph"`, rebuilt with `cargo build --release --manifest-path "$W/Cargo.toml"` after every code change and before any measurement; `shasum "$B"` is written beside every set of dumps it produces. The base binary is kept as `$M/zerograph-base` for the whole plan.
 - **Scratch.** `M=/Users/max/bench/residue-seat-register-2026-09-06`, created in Task 0. Every number written into a doc, a commit, a test comment or a ledger line comes from a named file under `$M` (or the earlier campaigns' `$G=/Users/max/bench/gaps-2026-09-05`, `$O=/Users/max/bench/coverage-2026-09-06`) or from a test run. A token cost is the one estimate allowed and says it is one.
 - **The fixture** `F=/Users/max/bench/beauty-crm-502e8a6d` is **read-only**: `bench`, `dump`, `ask --stale`. Never `build`, `update`, `enrich`, `embed`, `serve`, `watch`; never edit its files. Its `git status --porcelain -- ':(exclude)graphify-out'` is empty before and after every task.
-- **Store copies** live under `$M` (and `$G` for the two that survive from 2026-09-05) and are the only stores a writer may touch. Before any `enrich` or `embed` on a copy, its `repograph.toml` names `embed_model = "intfloat/multilingual-e5-small"` — the default is the large model and a writer rewrites the rows whole under the configured model. Run `dump` and `bench` on copies, and `ask` only with `--stale` (a copy has no source tree beside it, and a non-`--stale` ask walks the tree, finds nothing and empties the graph — runbook trap 7). A copy whose `questions.json` is written by a script carries no `questions.bin`: a mirror behind an edited JSON is passed over by stamp, but the rule is simpler to keep than to reason about.
+- **Store copies** live under `$M` (and `$G` for the two that survive from 2026-09-05) and are the only stores a writer may touch. Before any `enrich` or `embed` on a copy, its `zerograph.toml` names `embed_model = "intfloat/multilingual-e5-small"` — the default is the large model and a writer rewrites the rows whole under the configured model. Run `dump` and `bench` on copies, and `ask` only with `--stale` (a copy has no source tree beside it, and a non-`--stale` ask walks the tree, finds nothing and empties the graph — runbook trap 7). A copy whose `questions.json` is written by a script carries no `questions.bin`: a mirror behind an edited JSON is passed over by stamp, but the rule is simpler to keep than to reason about.
 - **Rules are written before numbers and never re-read to fit them.** They are the spec's three rules, repeated in each task. The order of operations is `bench/heldout.py`'s header and the spec's: a constant is derived on the held-out dumps and written to a file before `score` opens a suite; live, the held-out compare is read before any bench line. A change that fails is recorded with its numbers and stays out; no constant is tuned after a suite has been read.
 - **Held-out sets** are built by `bench/heldout.py build` with the recorded seed 20260905 and kind `synthetic`; `compare` refuses to pair dumps from different arms or question sets.
 - **Commit hygiene.** Conventional Commits subjects (`feat(query): …`, `feat(enrich): …`, `chore(bench): …`, `docs(bench): …`); prose bodies with the measured numbers and the files they came from. The hook rejects `Co-Authored-By`, `Claude-Session` and any `claude.ai` link — none in a commit or the PR body. The hook also rejects a single shell command holding both a heredoc and a literal `git commit`: `git commit -F "$M/msg.txt"` after writing the message in a separate command, or `git commit -F - <<'MSG'` with the Conventional subject as the heredoc's first line. In zsh, quote `===` in `echo`.
-- **Any `gh` call**: `gh auth switch --user devmaxxx && gh …` in the same command. The PR goes to `devmaxxx/repograph`, base `main`; the executor does not merge.
+- **Any `gh` call**: `gh auth switch --user devmaxxx && gh …` in the same command. The PR goes to `devmaxxx/zerograph`, base `main`; the executor does not merge.
 - **Comments say why, never what**; no ticket ids in code comments; tool directives stay. Test names are `snake_case` sentences in the style of their neighbours.
 - **Python is stdlib only**; tests run as `cd "$W/bench" && python3 -m unittest test_admission test_heldout` and `cd "$W/bench/history" && python3 -m unittest test_track`. bash is 3.2.
 - **Implementers never dispatch subagents.** Model tokens are spent at exactly one step, Task 6 Step 5, on the copy `$M/bc-r1`.
@@ -53,7 +53,7 @@ Task order: 0 → 1 → 2 → 3 → 4 → 5 → 6 → 7. Task 3 runs only if Tas
 ### Task 0: Worktree, base binary, baselines, the copies checked
 
 **Files:**
-- Create (outside the repo): `$M/`, `$M/repograph-base`, `$M/base-*.json`, `$M/base-*.txt`, `$M/bc-raw/`, `$M/task0.txt`
+- Create (outside the repo): `$M/`, `$M/zerograph-base`, `$M/base-*.json`, `$M/base-*.txt`, `$M/bc-raw/`, `$M/task0.txt`
 - Nothing in the repo changes; no commit.
 
 **Interfaces:**
@@ -62,7 +62,7 @@ Task order: 0 → 1 → 2 → 3 → 4 → 5 → 6 → 7. Task 3 runs only if Tas
 - [ ] **Step 1: The worktree, off `origin/main`**
 
 ```bash
-R=/Users/max/Documents/projects/repograph
+R=/Users/max/Documents/projects/zerograph
 git -C "$R" fetch origin
 git -C "$R" worktree add "$R/.worktrees/rsr" -b feat/residue-seat-register origin/main
 W="$R/.worktrees/rsr"; git -C "$W" log --oneline -1
@@ -76,10 +76,10 @@ Expected: `32577e2 feat(config): the model is a setting, in the project or on th
 M=/Users/max/bench/residue-seat-register-2026-09-06; mkdir -p "$M"
 cargo build --release --manifest-path "$W/Cargo.toml" 2>&1 | tail -1
 cargo test --release --manifest-path "$W/Cargo.toml" 2>&1 | grep 'test result'
-B="$W/target/release/repograph"; cp "$B" "$M/repograph-base"; shasum "$B" "$M/repograph-base" | tee "$M/base-binary.txt"
+B="$W/target/release/zerograph"; cp "$B" "$M/zerograph-base"; shasum "$B" "$M/zerograph-base" | tee "$M/base-binary.txt"
 ```
 
-Expected: `444 passed; 0 failed; 2 ignored` and `12 passed` (the `serve` tests); the two shas equal. `B0="$M/repograph-base"` is the base binary for the rest of the plan.
+Expected: `444 passed; 0 failed; 2 ignored` and `12 passed` (the `serve` tests); the two shas equal. `B0="$M/zerograph-base"` is the base binary for the rest of the plan.
 
 - [ ] **Step 3: Baselines on the fixture, and the proof they are the shipped form's**
 
@@ -107,9 +107,9 @@ Expected, verbatim from `docs/bench/2026-09-06-coverage-admission-results.md`: r
 The raw arms have no questions index, so no admission and no `attainable` — untouched by construction. Rule R still names four arms, so the two raw lines are read rather than assumed, on a copy of the fixture's store with nothing `enrich` paid for (the shape `$G/e5large-raw` took):
 
 ```bash
-mkdir -p "$M/bc-raw/.repograph"
-for f in graph.json graph.bin manifest.json vectors.json vectors.f32; do cp "$F/.repograph/$f" "$M/bc-raw/.repograph/"; done
-printf 'embed_model = "intfloat/multilingual-e5-small"\n' > "$M/bc-raw/repograph.toml"
+mkdir -p "$M/bc-raw/.zerograph"
+for f in graph.json graph.bin manifest.json vectors.json vectors.f32; do cp "$F/.zerograph/$f" "$M/bc-raw/.zerograph/"; done
+printf 'embed_model = "intfloat/multilingual-e5-small"\n' > "$M/bc-raw/zerograph.toml"
 for arm in dense lexical; do
   nd=""; [ $arm = lexical ] && nd="--no-dense"
   "$B0" --repo "$M/bc-raw" $nd bench 2>&1 | tail -1 | tee "$M/base-raw-bench-$arm.txt"
@@ -124,14 +124,14 @@ Expected (ADR-001 Amendment 7's raw lines, on the small model): `keyword 40/40  
 python3 - <<'PY'
 import json
 G="/Users/max/bench/gaps-2026-09-05"; F="/Users/max/bench/beauty-crm-502e8a6d"
-f=json.load(open(f"{F}/.repograph/questions.json"))["entries"]
+f=json.load(open(f"{F}/.zerograph/questions.json"))["entries"]
 for d in ["bc-d1","bc-a1"]:
-    v=json.load(open(f"{G}/{d}/.repograph/vectors.json")); q=json.load(open(f"{G}/{d}/.repograph/questions.json"))["entries"]
+    v=json.load(open(f"{G}/{d}/.zerograph/vectors.json")); q=json.load(open(f"{G}/{d}/.zerograph/questions.json"))["entries"]
     code=[k for k in q if k.startswith(("sym:","file:"))]
     docs_same=sum(1 for k in f if q.get(k,{}).get("questions")==f[k]["questions"])
-    print(d, "model", repr(v.get("model")), "dim", v["dim"], "rows", len(v["ids"]), "entries", len(q), "code", len(code), "document entries identical to the fixture's", docs_same, "/", len(f), "toml:", open(f"{G}/{d}/repograph.toml").read().strip())
+    print(d, "model", repr(v.get("model")), "dim", v["dim"], "rows", len(v["ids"]), "entries", len(q), "code", len(code), "document entries identical to the fixture's", docs_same, "/", len(f), "toml:", open(f"{G}/{d}/zerograph.toml").read().strip())
 PY
-python3 "$W/bench/heldout.py" build --store "$F/.repograph" --out "$M/heldout-400-syn.jsonl"
+python3 "$W/bench/heldout.py" build --store "$F/.zerograph" --out "$M/heldout-400-syn.jsonl"
 cmp "$M/heldout-400-syn.jsonl" "$G/heldout-400-syn.jsonl" && echo "held-out set identical to the campaign's"
 df -h /Users/max | tail -1
 ```
@@ -336,7 +336,7 @@ for k, v in shift.items():
         print(f"  attainable_{k}: unchanged on {unchanged[k]}, new/old median {statistics.median(v):.3f}, max {max(v):.3f}")
 PY
 for arm in dense lexical; do for s in rec dev ho; do python3 "$M/lists.py" "$M/base-$s-$arm.json" "$M/t2-$s-$arm.json"; done; done 2>&1 | tee "$M/t2-lists.txt"
-cd "$W/bench" && python3 admission.py check --store "$F/.repograph" --form coverage --c 0.761 "$M"/t2-rec-*.json "$M"/t2-dev-*.json "$M"/t2-ho-*.json 2>&1 | tee "$M/t2-check-old-constant.txt"
+cd "$W/bench" && python3 admission.py check --store "$F/.zerograph" --form coverage --c 0.761 "$M"/t2-rec-*.json "$M"/t2-dev-*.json "$M"/t2-ho-*.json 2>&1 | tee "$M/t2-check-old-constant.txt"
 ```
 
 Required: six `every list identical` lines with no assertion; the `check` at the *old* constant replicates 82/82, 60/60, 400/400 in both arms — the binary and the replay are still one function, now over the new denominators. A moved list means `search` changed, which this task must not do: stop and fix before anything is derived.
@@ -353,7 +353,7 @@ Expected shape: `form=coverage c=<C1>  (400 questions with a questions list, …
 
 ```bash
 C1=$(head -1 "$M/t2-crossover.txt" | sed 's/.*c=\([0-9.]*\).*/\1/'); echo "C1=$C1" | tee "$M/t2-constant.txt"
-cd "$W/bench" && python3 admission.py score --store "$F/.repograph" --form coverage --c "$C1" \
+cd "$W/bench" && python3 admission.py score --store "$F/.zerograph" --form coverage --c "$C1" \
   --rec "$M/t2-rec-dense.json" "$M/t2-rec-lexical.json" --dev "$M/t2-dev-dense.json" "$M/t2-dev-lexical.json" \
   --ho "$M/t2-ho-dense.json" "$M/t2-ho-lexical.json" --ho-base "$M/base-ho-dense.json" "$M/base-ho-lexical.json" 2>&1 | tee "$M/t2-score.txt"
 ```
@@ -400,7 +400,7 @@ for arm in dense lexical; do
   "$B" --repo "$F" $nd dump --queries "$W/bench/dev-cases.jsonl" --out "$M/t3-dev-$arm.json" >/dev/null 2>&1
   "$B" --repo "$F" $nd dump --queries "$G/heldout-400-syn.jsonl" --out "$M/t3-ho-$arm.json"  >/dev/null 2>&1
 done
-cd "$W/bench" && python3 admission.py check --store "$F/.repograph" --form coverage --c "$C1" "$M"/t3-rec-*.json "$M"/t3-dev-*.json "$M"/t3-ho-*.json 2>&1 | tee "$M/t3-check.txt"
+cd "$W/bench" && python3 admission.py check --store "$F/.zerograph" --form coverage --c "$C1" "$M"/t3-rec-*.json "$M"/t3-dev-*.json "$M"/t3-ho-*.json 2>&1 | tee "$M/t3-check.txt"
 ```
 
 Required (R5): 82/82, 60/60, 400/400 replicated in both arms, exit 0.
@@ -434,7 +434,7 @@ Required: R1 — every line `gated=true`, exit 0, p90 ≤ 230 (`grep -c 'gated=t
 
 ```bash
 "$B" --repo "$G/bc-a1" --no-dense dump --queries "$W/bench/dev-cases.jsonl" --out "$M/t3-a1-dev-lexical.json" >/dev/null 2>&1
-cd "$W/bench" && python3 admission.py g13 --dump "$M/t3-a1-dev-lexical.json" --store "$G/bc-a1/.repograph" | tee "$M/t3-g13.md"
+cd "$W/bench" && python3 admission.py g13 --dump "$M/t3-a1-dev-lexical.json" --store "$G/bc-a1/.zerograph" | tee "$M/t3-g13.md"
 ```
 
 Expected: 27 rows, the `coverage` column now under the charged denominator (the code index lacks many document terms, so its coverages fall from `$O/g13.md`'s); the table is evidence for Task 4 and is not scored against anything.
@@ -531,9 +531,9 @@ In `bench/history/track.py`'s `cmd_record`, after `build_row` returns, `if args.
 - [ ] **Step 4: The three held-out files on `bc-a1`**
 
 ```bash
-python3 "$W/bench/heldout.py" build --store "$G/bc-a1/.repograph" --only documents --out "$M/heldout-a1-docs.jsonl"
+python3 "$W/bench/heldout.py" build --store "$G/bc-a1/.zerograph" --only documents --out "$M/heldout-a1-docs.jsonl"
 cmp "$M/heldout-a1-docs.jsonl" "$G/heldout-400-syn.jsonl" && echo "the documents' set on bc-a1 is the fixture's set"
-python3 "$W/bench/heldout.py" build --store "$G/bc-a1/.repograph" --only code --out "$M/heldout-a1-code.jsonl"
+python3 "$W/bench/heldout.py" build --store "$G/bc-a1/.zerograph" --only code --out "$M/heldout-a1-code.jsonl"
 cat "$M/heldout-a1-docs.jsonl" "$M/heldout-a1-code.jsonl" > "$M/heldout-a1-mixed.jsonl"; wc -l "$M"/heldout-a1-*.jsonl
 python3 -c "
 import json; rows=[json.loads(l) for l in open('$M/heldout-a1-code.jsonl')]
@@ -560,7 +560,7 @@ for arm in dense lexical; do
   tail -1 "$M/t4-off-bench-rec-$arm-full.txt" > "$M/t4-off-bench-rec-$arm.txt"; tail -1 "$M/t4-off-bench-dev-$arm-full.txt" > "$M/t4-off-bench-dev-$arm.txt"
 done
 "$B" --repo "$G/bc-a1" --no-dense dump --queries "$M/heldout-a1-mixed.jsonl" --out "$M/t4-off-ho-mixed-lexical.json" >/dev/null 2>&1
-cd "$W/bench" && python3 admission.py check --store "$G/bc-a1/.repograph" --form coverage --c "$C" "$M"/t4-off-*.json 2>&1 | tee "$M/t4-off-check.txt"
+cd "$W/bench" && python3 admission.py check --store "$G/bc-a1/.zerograph" --form coverage --c "$C" "$M"/t4-off-*.json 2>&1 | tee "$M/t4-off-check.txt"
 cat "$M"/t4-off-bench-*.txt
 ```
 
@@ -578,7 +578,7 @@ Expected shape: `form=coverage c=<C_CODE>  (<n> questions with a code list, …)
 - [ ] **Step 7: The offline verdict**
 
 ```bash
-cd "$W/bench" && python3 admission.py score --store "$G/bc-a1/.repograph" --form coverage --c "$C" --code-seat --code-c "$C_CODE" \
+cd "$W/bench" && python3 admission.py score --store "$G/bc-a1/.zerograph" --form coverage --c "$C" --code-seat --code-c "$C_CODE" \
   --rec "$M/t4-off-rec-dense.json" "$M/t4-off-rec-lexical.json" --dev "$M/t4-off-dev-dense.json" "$M/t4-off-dev-lexical.json" \
   --ho "$M/t4-off-ho-docs-dense.json" "$M/t4-off-ho-docs-lexical.json" "$M/t4-off-ho-code-dense.json" "$M/t4-off-ho-code-lexical.json" 2>&1 | tee "$M/t4-score.txt"
 ```
@@ -608,7 +608,7 @@ Runs only if `$M/t4-verdict.txt` says `pass`.
 
 **Interfaces:**
 - Consumes: `C` (`$M/t4-constant-c.txt`), `C_CODE` (`$M/t4-constant-code.txt`).
-- Produces: `pub(crate) fn code_seat() -> bool` read by `ask::Context`; `REPOGRAPH_CODE_SEAT=1|0` for a measurement; `const CODE_SEAT: bool` (`false` until this task's verdict, `true` on a pass); `const CODE_GATE: f64 = C_CODE`.
+- Produces: `pub(crate) fn code_seat() -> bool` read by `ask::Context`; `ZEROGRAPH_CODE_SEAT=1|0` for a measurement; `const CODE_SEAT: bool` (`false` until this task's verdict, `true` on a pass); `const CODE_GATE: f64 = C_CODE`.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -673,10 +673,10 @@ const CODE_SEAT: bool = false;
 /// rounded, not tuned; if the seat fails, the seat fails.
 const CODE_GATE: f64 = C_CODE;
 
-/// `REPOGRAPH_CODE_SEAT=1` or `0` overrides `CODE_SEAT` for a measurement and for nothing else,
+/// `ZEROGRAPH_CODE_SEAT=1` or `0` overrides `CODE_SEAT` for a measurement and for nothing else,
 /// so one binary reads a store with the seat and without it. Anything else is ignored.
 pub(crate) fn code_seat() -> bool {
-    code_seat_from(std::env::var("REPOGRAPH_CODE_SEAT").ok().as_deref())
+    code_seat_from(std::env::var("ZEROGRAPH_CODE_SEAT").ok().as_deref())
 }
 
 fn code_seat_from(override_: Option<&str>) -> bool {
@@ -717,19 +717,19 @@ Run: `cargo test --release --manifest-path "$W/Cargo.toml" 2>&1 | grep 'test res
 C=$(cut -d= -f2 "$M/t4-constant-c.txt"); C_CODE=$(cut -d= -f2 "$M/t4-constant-code.txt")
 for arm in dense lexical; do
   nd=""; [ $arm = lexical ] && nd="--no-dense"
-  REPOGRAPH_CODE_SEAT=1 "$B" --repo "$G/bc-a1" $nd dump --queries "$W/bench/cases.jsonl"     --out "$M/t5-on-rec-$arm.json"     >/dev/null 2>&1
-  REPOGRAPH_CODE_SEAT=1 "$B" --repo "$G/bc-a1" $nd dump --queries "$W/bench/dev-cases.jsonl" --out "$M/t5-on-dev-$arm.json"     >/dev/null 2>&1
-  REPOGRAPH_CODE_SEAT=1 "$B" --repo "$G/bc-a1" $nd dump --queries "$M/heldout-a1-docs.jsonl" --out "$M/t5-on-ho-docs-$arm.json" >/dev/null 2>&1
-  REPOGRAPH_CODE_SEAT=1 "$B" --repo "$G/bc-a1" $nd dump --queries "$M/heldout-a1-code.jsonl" --out "$M/t5-on-ho-code-$arm.json" >/dev/null 2>&1
-  REPOGRAPH_CODE_SEAT=1 "$B" --repo "$G/bc-a1" $nd bench                                    > "$M/t5-on-bench-rec-$arm-full.txt" 2>&1
-  REPOGRAPH_CODE_SEAT=1 "$B" --repo "$G/bc-a1" $nd bench --cases "$W/bench/dev-cases.jsonl" > "$M/t5-on-bench-dev-$arm-full.txt" 2>&1
+  ZEROGRAPH_CODE_SEAT=1 "$B" --repo "$G/bc-a1" $nd dump --queries "$W/bench/cases.jsonl"     --out "$M/t5-on-rec-$arm.json"     >/dev/null 2>&1
+  ZEROGRAPH_CODE_SEAT=1 "$B" --repo "$G/bc-a1" $nd dump --queries "$W/bench/dev-cases.jsonl" --out "$M/t5-on-dev-$arm.json"     >/dev/null 2>&1
+  ZEROGRAPH_CODE_SEAT=1 "$B" --repo "$G/bc-a1" $nd dump --queries "$M/heldout-a1-docs.jsonl" --out "$M/t5-on-ho-docs-$arm.json" >/dev/null 2>&1
+  ZEROGRAPH_CODE_SEAT=1 "$B" --repo "$G/bc-a1" $nd dump --queries "$M/heldout-a1-code.jsonl" --out "$M/t5-on-ho-code-$arm.json" >/dev/null 2>&1
+  ZEROGRAPH_CODE_SEAT=1 "$B" --repo "$G/bc-a1" $nd bench                                    > "$M/t5-on-bench-rec-$arm-full.txt" 2>&1
+  ZEROGRAPH_CODE_SEAT=1 "$B" --repo "$G/bc-a1" $nd bench --cases "$W/bench/dev-cases.jsonl" > "$M/t5-on-bench-dev-$arm-full.txt" 2>&1
   tail -1 "$M/t5-on-bench-rec-$arm-full.txt" > "$M/t5-on-bench-rec-$arm.txt"; tail -1 "$M/t5-on-bench-dev-$arm-full.txt" > "$M/t5-on-bench-dev-$arm.txt"
   grep '^where' "$M/t5-on-bench-dev-$arm-full.txt" > "$M/t5-on-where-$arm.txt"
   # The fixture has no code index: with the seat on it must answer byte for byte as it did without.
-  REPOGRAPH_CODE_SEAT=1 "$B" --repo "$F" $nd dump --queries "$W/bench/cases.jsonl" --out "$M/t5-fixture-rec-$arm.json" >/dev/null 2>&1
+  ZEROGRAPH_CODE_SEAT=1 "$B" --repo "$F" $nd dump --queries "$W/bench/cases.jsonl" --out "$M/t5-fixture-rec-$arm.json" >/dev/null 2>&1
   cmp "$M/t5-fixture-rec-$arm.json" "$M/t3-rec-$arm.json" && echo "fixture $arm: unmoved by the seat"
 done 2>&1 | tee "$M/t5-fixture.txt"
-cd "$W/bench" && python3 admission.py check --store "$G/bc-a1/.repograph" --form coverage --c "$C" --code-seat --code-c "$C_CODE" "$M"/t5-on-*.json 2>&1 | tee "$M/t5-check.txt"
+cd "$W/bench" && python3 admission.py check --store "$G/bc-a1/.zerograph" --form coverage --c "$C" --code-seat --code-c "$C_CODE" "$M"/t5-on-*.json 2>&1 | tee "$M/t5-check.txt"
 ```
 
 Required: S1's fixture half — both `cmp` silent (if Task 3 did not ship, compare against `$M/base-rec-$arm.json` instead); S5 — 82/82, 60/60, 400/400, 400/400 replicated in both arms.
@@ -768,7 +768,7 @@ B, repo = sys.argv[1], sys.argv[2]
 def block(seat):
     t = []
     for _ in range(11):
-        env = dict(os.environ, REPOGRAPH_NO_SERVE="1", REPOGRAPH_CODE_SEAT=seat)
+        env = dict(os.environ, ZEROGRAPH_NO_SERVE="1", ZEROGRAPH_CODE_SEAT=seat)
         s = time.perf_counter(); subprocess.run([B, "--repo", repo, "--no-dense", "ask", "--stale", "штраф за отмену записи"], env=env, capture_output=True, check=True); t.append((time.perf_counter() - s) * 1000)
     return statistics.median(t)
 rows = {"0": [], "1": []}
@@ -871,15 +871,15 @@ The module doc comment's first paragraph ("Questions a reader might ask to reach
 - [ ] **Step 4: The copy, with the writer trap closed**
 
 ```bash
-mkdir -p "$M/bc-r1/.repograph"
-for f in graph.json graph.bin manifest.json vectors.json vectors.f32; do cp "$F/.repograph/$f" "$M/bc-r1/.repograph/"; done
-printf '{"entries":{}}\n' > "$M/bc-r1/.repograph/questions.json"      # every eligible node stale; no questions.bin
-cat > "$M/bc-r1/repograph.toml" <<'TOML'
+mkdir -p "$M/bc-r1/.zerograph"
+for f in graph.json graph.bin manifest.json vectors.json vectors.f32; do cp "$F/.zerograph/$f" "$M/bc-r1/.zerograph/"; done
+printf '{"entries":{}}\n' > "$M/bc-r1/.zerograph/questions.json"      # every eligible node stale; no questions.bin
+cat > "$M/bc-r1/zerograph.toml" <<'TOML'
 embed_model = "intfloat/multilingual-e5-small"
 enrich_model = "haiku"
 enrich_command = "tee -a /Users/max/bench/residue-seat-register-2026-09-06/t6-prompts.txt | MAX_THINKING_TOKENS=0 claude -p --model {model} --output-format text --tools '' --setting-sources '' --no-session-persistence | tee -a /Users/max/bench/residue-seat-register-2026-09-06/t6-outputs.txt"
 TOML
-ls "$M/bc-r1/.repograph"; test -z "${REPOGRAPH_ENRICH_MODEL:-}" && test ! -e "$HOME/.config/repograph/config.toml" && echo "no override, no machine file"; claude --version
+ls "$M/bc-r1/.zerograph"; test -z "${ZEROGRAPH_ENRICH_MODEL:-}" && test ! -e "$HOME/.config/zerograph/config.toml" && echo "no override, no machine file"; claude --version
 ```
 
 Expected: six files and no `questions.bin`; `no override, no machine file`; the CLI's version line, written into `$M/task6.txt`. `enrich_model = "haiku"` is what `src/config.rs` ships as the default; it is named so the record says which generator, not so it changes.
@@ -896,11 +896,11 @@ Expected: `enrich: 1996 nodes written, 0 dropped, 0 still without questions, 167
 python3 - <<'PY'
 import json, statistics
 M="/Users/max/bench/residue-seat-register-2026-09-06"; F="/Users/max/bench/beauty-crm-502e8a6d"
-r=json.load(open(f"{M}/bc-r1/.repograph/questions.json"))["entries"]; f=json.load(open(f"{F}/.repograph/questions.json"))["entries"]
+r=json.load(open(f"{M}/bc-r1/.zerograph/questions.json"))["entries"]; f=json.load(open(f"{F}/.zerograph/questions.json"))["entries"]
 print("bc-r1 entries", len(r), "median questions/node", statistics.median(len(v["questions"]) for v in r.values()), "total", sum(len(v["questions"]) for v in r.values()))
 print("fixture entries", len(f), "median", statistics.median(len(v["questions"]) for v in f.values()), "total", sum(len(v["questions"]) for v in f.values()))
 print("questions identical to the fixture's:", sum(q in set(f.get(k,{}).get("questions",[])) for k,v in r.items() for q in v["questions"]))
-v=json.load(open(f"{M}/bc-r1/.repograph/vectors.json")); print("rows", len(v["ids"]), "model", repr(v.get("model")), "dim", v["dim"])
+v=json.load(open(f"{M}/bc-r1/.zerograph/vectors.json")); print("rows", len(v["ids"]), "model", repr(v.get("model")), "dim", v["dim"])
 PY
 wc -c "$M/t6-prompts.txt" "$M/t6-outputs.txt" | tee "$M/t6-bytes.txt"
 ```
@@ -910,13 +910,13 @@ Expected: 1,996 entries at a median near 13 (twelve questions and a synonyms lin
 - [ ] **Step 6: The neutral held-out set**
 
 ```bash
-python3 "$W/bench/heldout.py" build --store "$G/bc-d1/.repograph" --out "$M/heldout-d1-400.jsonl"   # bc-d1 holds document entries only, so no --only is needed and Task 4 need not have run
+python3 "$W/bench/heldout.py" build --store "$G/bc-d1/.zerograph" --out "$M/heldout-d1-400.jsonl"   # bc-d1 holds document entries only, so no --only is needed and Task 4 need not have run
 python3 - <<'PY'
 import json
 M="/Users/max/bench/residue-seat-register-2026-09-06"; G="/Users/max/bench/gaps-2026-09-05"; F="/Users/max/bench/beauty-crm-502e8a6d"
 d1=[json.loads(l) for l in open(f"{M}/heldout-d1-400.jsonl")]; fx=[json.loads(l) for l in open(f"{G}/heldout-400-syn.jsonl")]
 print("same 400 anchor nodes as the fixture's set:", [r["expect"] for r in d1] == [r["expect"] for r in fx])
-for name, path in (("fixture", f"{F}/.repograph/questions.json"), ("bc-r1", f"{M}/bc-r1/.repograph/questions.json")):
+for name, path in (("fixture", f"{F}/.zerograph/questions.json"), ("bc-r1", f"{M}/bc-r1/.zerograph/questions.json")):
     q=json.load(open(path))["entries"]
     print(name, "holds", sum(r["q"] in q.get(r["expect"],{}).get("questions",[]) for r in d1), "of the 400 neutral questions verbatim")
 PY
@@ -950,7 +950,7 @@ for kind in ("long", "cross", "multi", "where", "rule"):
         row.append(f"{statistics.fmean(vals):.3f}" if vals else "—")
     print(f"| {kind} | {sum(c['kind'] == kind for c in cases)} | " + " | ".join(row) + " |")
 PY
-python3 "$M/register-share.py" "$W/bench/dev-cases.jsonl" "fixture=$F/.repograph/questions.json" "bc-d1=$G/bc-d1/.repograph/questions.json" "bc-r1=$M/bc-r1/.repograph/questions.json" | tee "$M/t6-register-share.txt"
+python3 "$M/register-share.py" "$W/bench/dev-cases.jsonl" "fixture=$F/.zerograph/questions.json" "bc-d1=$G/bc-d1/.zerograph/questions.json" "bc-r1=$M/bc-r1/.zerograph/questions.json" | tee "$M/t6-register-share.txt"
 ```
 
 Expected: the fixture and `bc-d1` columns reproduce the second diagnostic's shape — `rule` 0.195 against 0.139, `long` 0.186 against 0.245 (`g14-ranks.txt`'s metric; small differences from that script's tokenisation are noted, not chased); the `bc-r1` column is the mechanism check — on `rule` it should sit at or above the fixture's if the prompt moved register, and wherever it sits is recorded. Information, not a clause.
@@ -974,7 +974,7 @@ for arm in dense lexical; do
 done 2>&1 | tee "$M/t6-heldout.txt"
 CFINAL=$(grep -o 'QUESTIONS_GATE: f64 = [0-9.]*' "$W/src/query.rs" | awk '{print $NF}')
 SEAT=""; if grep -q 'const CODE_SEAT: bool = true' "$W/src/query.rs"; then SEAT="--code-seat --code-c $(grep -o 'CODE_GATE: f64 = [0-9.]*' "$W/src/query.rs" | awk '{print $NF}')"; fi
-cd "$W/bench" && python3 admission.py check --store "$M/bc-r1/.repograph" --form coverage --c "$CFINAL" $SEAT "$M"/t6-r1-rec-*.json "$M"/t6-r1-dev-*.json 2>&1 | tee "$M/t6-check.txt"
+cd "$W/bench" && python3 admission.py check --store "$M/bc-r1/.zerograph" --form coverage --c "$CFINAL" $SEAT "$M"/t6-r1-rec-*.json "$M"/t6-r1-dev-*.json 2>&1 | tee "$M/t6-check.txt"
 ```
 
 Required: G4 — the two `ho-d1` compares (the first of each pair) not significantly worse; G5 — `check` replicates 82/82 and 60/60 in both arms on `bc-r1` (pass `--code-seat` only if `CODE_SEAT` shipped `true`; the store has no code index either way). Recorded: the two `ho-fx` compares, with the sentence that the fixture has its home advantage on that set.
@@ -1036,14 +1036,14 @@ Each edit names the passage as it reads today so the diff is reviewable:
 
 - **Spending tokens on purpose**, the admission paragraph ("Each list is asked what fraction of the question its best document actually reached: `best / attainable`, where `attainable` is the idf the query could have collected in that index at all."): if R shipped, `attainable` is the idf of every term the query asked, a term the index never saw at df = 0, and the constant is the re-derived one with one sentence on why it moved; if not, unchanged.
 - The code paragraph ("The code questions are an index of their own, searched for the `--rerank` pool and nowhere else: the plain `ask` fusion is byte for byte the fusion of a store without them …"): if S shipped, the code list takes one seat on the plain path under the coverage admission at a constant of its own, with the `where` and held-out numbers, the history of A3/A4 kept as history, and "a store without code questions is therefore the old index byte for byte" kept because it is still true; if not, one sentence that the seat was measured under the coverage form and what it cost.
-- The enrich paragraph ("**`repograph enrich`** asks a model, once per requirement-like node, for twelve questions a reader might ask to find that node in everyday words plus a line of synonyms"): if G shipped, six in the asker's own words and six in the entry's, why, and the numbers; if not, unchanged, and the "with `rule` as the thing to watch" sentence beside `enrich_model` stays.
+- The enrich paragraph ("**`zerograph enrich`** asks a model, once per requirement-like node, for twelve questions a reader might ask to find that node in everyday words plus a line of synonyms"): if G shipped, six in the asker's own words and six in the entry's, why, and the numbers; if not, unchanged, and the "with `rule` as the thing to watch" sentence beside `enrich_model` stays.
 - **Asking a resident process** / the perf rows: if S shipped, one sentence that a one-shot lexical `ask` on a store with code questions builds the code index again (`$M/t5-cost.txt`), a resident `serve` once.
 
 - [ ] **Step 5: History rows**
 
 ```bash
-cd "$W" && NOTE="residue/seat/register: R <shipped|rejected>, S <shipped|rejected>, G <shipped|rejected|no effect>" bench/history/run-repograph.sh 2>&1 | tee "$M/t7-history-rec.txt"
-cd "$W" && CASES=bench/dev-cases.jsonl NOTE="same" bench/history/run-repograph.sh 2>&1 | tee "$M/t7-history-dev.txt"
+cd "$W" && NOTE="residue/seat/register: R <shipped|rejected>, S <shipped|rejected>, G <shipped|rejected|no effect>" bench/history/run-zerograph.sh 2>&1 | tee "$M/t7-history-rec.txt"
+cd "$W" && CASES=bench/dev-cases.jsonl NOTE="same" bench/history/run-zerograph.sh 2>&1 | tee "$M/t7-history-dev.txt"
 for arm in dense lexical; do
   python3 "$W/bench/history/track.py" record "$M/t5-on-bench-rec-$arm-full.txt" --corpus beauty-crm --corpus-path "$G/bc-a1" --tag a1-seat --note "bc-a1 with the code seat on (Task 5)"
   python3 "$W/bench/history/track.py" record "$M/t5-on-bench-dev-$arm-full.txt" --corpus beauty-crm --corpus-path "$G/bc-a1" --tag a1-seat --note "bc-a1 with the code seat on (Task 5)"
@@ -1060,7 +1060,7 @@ Docs and history in one commit: `git -C "$W" add docs README.md bench/history/ru
 
 ```bash
 git -C "$W" push -u origin feat/residue-seat-register
-gh auth switch --user devmaxxx && gh pr create --repo devmaxxx/repograph --base main --head feat/residue-seat-register --title "feat: the residue, the seat and the register — 0.5.0 line" --body-file "$M/t7-pr.md"
+gh auth switch --user devmaxxx && gh pr create --repo devmaxxx/zerograph --base main --head feat/residue-seat-register --title "feat: the residue, the seat and the register — 0.5.0 line" --body-file "$M/t7-pr.md"
 ```
 
 `$M/t7-pr.md` is the results document's "What ships and what stays open" section — the three-rule table, the rejected list, the test counts; no AI trailers, no session links. The executor does not merge.

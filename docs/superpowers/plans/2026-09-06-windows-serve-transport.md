@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** `repograph ask` on Windows (win32-x64) is answered by a resident `repograph serve` the way it is on unix — same socket file, same handshake, same speed — and a Windows user gets there honestly: the crate compiles on `x86_64-pc-windows-msvc`, the release carries a `repograph.exe`, the npm launcher resolves a `win32-x64` package, and the model cache lands somewhere on a machine that never sets `HOME`. Today the crate does not compile on Windows at all (`src/serve.rs:7` imports `std::os::unix::net` unconditionally), the npm launcher has no `win32-x64` entry and points at a `cargo install` that cannot succeed, and a cfg-gate that would drop `serve` on Windows was refused by Max: "must be fast".
+**Goal:** `zerograph ask` on Windows (win32-x64) is answered by a resident `zerograph serve` the way it is on unix — same socket file, same handshake, same speed — and a Windows user gets there honestly: the crate compiles on `x86_64-pc-windows-msvc`, the release carries a `zerograph.exe`, the npm launcher resolves a `win32-x64` package, and the model cache lands somewhere on a machine that never sets `HOME`. Today the crate does not compile on Windows at all (`src/serve.rs:7` imports `std::os::unix::net` unconditionally), the npm launcher has no `win32-x64` entry and points at a `cargo install` that cannot succeed, and a cfg-gate that would drop `serve` on Windows was refused by Max: "must be fast".
 
-**Architecture:** repograph is a Rust CLI (`src/`) over a `.repograph/` store. `serve` (`src/serve.rs`) binds `.repograph/serve.sock`, accepts on a thread of its own, hands each connection to the one thread holding the model and the indexes through a rendezvous channel, and answers one JSON line with one JSON line; `ask` (`src/main.rs:403`) tries the socket first unless `--no-serve` / `REPOGRAPH_NO_SERVE`. Staleness is decided by three stamps — the executable's (`build_stamp`), `repograph.toml`'s (`config_stamp`), and the socket file's own identity (`socket_id`, device + inode) which is what lets a server exiting remove only the socket it bound. This plan puts the transport behind a two-function-family seam (`Listener`/`Stream`, `bind`/`connect`/`accept`/`present`/`id`) with a unix half that is std's `UnixListener`/`UnixStream` verbatim and a Windows half that is the same `AF_UNIX` socket through `socket2`. Nothing above the seam changes.
+**Architecture:** zerograph is a Rust CLI (`src/`) over a `.zerograph/` store. `serve` (`src/serve.rs`) binds `.zerograph/serve.sock`, accepts on a thread of its own, hands each connection to the one thread holding the model and the indexes through a rendezvous channel, and answers one JSON line with one JSON line; `ask` (`src/main.rs:403`) tries the socket first unless `--no-serve` / `ZEROGRAPH_NO_SERVE`. Staleness is decided by three stamps — the executable's (`build_stamp`), `zerograph.toml`'s (`config_stamp`), and the socket file's own identity (`socket_id`, device + inode) which is what lets a server exiting remove only the socket it bound. This plan puts the transport behind a two-function-family seam (`Listener`/`Stream`, `bind`/`connect`/`accept`/`present`/`id`) with a unix half that is std's `UnixListener`/`UnixStream` verbatim and a Windows half that is the same `AF_UNIX` socket through `socket2`. Nothing above the seam changes.
 
 **Tech Stack:** Rust 2021 pinned at 1.98.0 (`rust-toolchain.toml`), every dependency `=`-pinned; GitHub Actions (`ci.yml` on push and pull_request, `release.yml` on `v*` tags); bash 3.2 for `scripts/npm-pack.sh`; Node ≥ 18 for the launcher. There is no Windows toolchain on the Mac (`rustup target list --installed` → `aarch64-apple-darwin` only) and none is to be installed: Windows is judged by CI and only by CI.
 
@@ -12,7 +12,7 @@
 
 ## Global Constraints
 
-- The worktree is `/Users/max/Documents/projects/repograph/.worktrees/windows-serve`, branch `feat/windows-serve`, cut from `origin/main` at `32577e2` (`feat(config): the model is a setting, in the project or on the machine (#13)`). Local `main` is at `d87c607` (#6) and is seven PRs behind; nothing is read from it. Never `cd` into the main checkout; use `git -C` or run from the worktree.
+- The worktree is `/Users/max/Documents/projects/zerograph/.worktrees/windows-serve`, branch `feat/windows-serve`, cut from `origin/main` at `32577e2` (`feat(config): the model is a setting, in the project or on the machine (#13)`). Local `main` is at `d87c607` (#6) and is seven PRs behind; nothing is read from it. Never `cd` into the main checkout; use `git -C` or run from the worktree.
 - **No step builds for Windows on this machine.** Not `cargo check --target x86_64-pc-windows-msvc`, not a mingw toolchain, not a VM. Every Windows-affecting task ends with a push and a watched CI run (`gh auth switch --user devmaxxx && gh run watch`), and the run's verdict is the step's verdict. `cargo tree --target x86_64-pc-windows-msvc` is allowed — it resolves the lock without compiling, and it ran during planning.
 - The unix path keeps today's behaviour byte for byte: the code compiled on unix after Task 2 differs from today's by two type names, one function moved into a module, and an `accept` loop spelled out where `incoming()` was. The wire format (`Hello`/`Reply`, one line each) does not change on any platform. The twelve `tests/serve.rs` tests and a timing spot check on a self-index (Task 3 Step 6) are the judge; the bench floors are untouched because no retrieval code is.
 - Cargo dependencies stay `=`-pinned. The one dependency added (`socket2 =0.6.5`, Windows only) is already in `Cargo.lock` at that version through `hf-hub → reqwest → hyper-util`; on unix the set of compiled crates does not change.
@@ -30,19 +30,19 @@
 
 Three candidates were on the table. The requirement that decides between them is not "does it connect" — all three do — but what each one does to the four things `serve` already gets right on unix: the socket is private to the repository's owner, a dead socket costs a client nothing, a live server's identity can be told from its name, and the code above the transport is written once.
 
-### (a) TCP on 127.0.0.1, ephemeral port in `.repograph/serve.port` — rejected
+### (a) TCP on 127.0.0.1, ephemeral port in `.zerograph/serve.port` — rejected
 
 std-only, no new dependency. Everything else is worse.
 
-*Access.* Any process of any user on the machine can connect to a loopback port; Windows has no `SO_PEERCRED`. A `serve` answers questions about the repository (its contents, effectively) and, on a `--rerank` question, runs the *server's* configured `rerank_command` — the user's Claude tokens, spent by whoever connects. So (a) needs an authentication token. It would live in a file beside the port file, and the file's protection is whatever NTFS ACL `.repograph/` inherited: under `C:\Users\<me>\…` that is the owner, SYSTEM and Administrators; on a data drive (`D:\src\…`) the default for a newly created tree is often `Authenticated Users: Modify`, i.e. readable by every local account. Fixing that means writing a DACL from Rust (`SetNamedSecurityInfoW` through `windows-sys`'s `Win32_Security_Authorization`), which is more Windows code than the whole transport, none of it testable here. The residual after all of that is the same as on unix — any process running *as the user* holds the token — but the road there is long and unverifiable.
+*Access.* Any process of any user on the machine can connect to a loopback port; Windows has no `SO_PEERCRED`. A `serve` answers questions about the repository (its contents, effectively) and, on a `--rerank` question, runs the *server's* configured `rerank_command` — the user's Claude tokens, spent by whoever connects. So (a) needs an authentication token. It would live in a file beside the port file, and the file's protection is whatever NTFS ACL `.zerograph/` inherited: under `C:\Users\<me>\…` that is the owner, SYSTEM and Administrators; on a data drive (`D:\src\…`) the default for a newly created tree is often `Authenticated Users: Modify`, i.e. readable by every local account. Fixing that means writing a DACL from Rust (`SetNamedSecurityInfoW` through `windows-sys`'s `Win32_Security_Authorization`), which is more Windows code than the whole transport, none of it testable here. The residual after all of that is the same as on unix — any process running *as the user* holds the token — but the road there is long and unverifiable.
 
 *Staleness, the one that kills it.* On unix a dead server leaves a socket file nobody listens on, and a connect is refused at once. On TCP a dead server leaves a port number, and Windows hands ephemeral ports back out: the next process to listen there — a dev server, a database, a debugger — accepts the client's connect, receives a `Hello` line it does not understand, and says nothing. The client then waits out `IO_TIMEOUT`, thirty seconds, before answering in its own process. The token does not help (the stranger never replies); only a protocol change (a server banner before the client speaks) or a PID-liveness check would, and the first changes the unix wire format this plan is forbidden to touch while the second is a guess. A `serve` exists to make `ask` faster; a transport that can make it thirty seconds slower is disqualified.
 
 *Also unverified:* whether Windows Defender Firewall prompts on a loopback-only listener (it should not; it sometimes does).
 
-### (b) Named pipe `\\.\pipe\repograph-…` — rejected
+### (b) Named pipe `\\.\pipe\zerograph-…` — rejected
 
-Needs `windows-sys` features `Win32_System_Pipes`, `Win32_Security`, `Win32_Storage_FileSystem` (the crate is in the lock, the features are not compiled today). The pipe namespace is machine-global, so the name must encode the repository path *and* the user, or two users with the same checkout path collide. The default DACL of a pipe created with a null security descriptor grants Everyone read — a client needs write to send a `Hello`, so other users cannot ask, but a name is a name: a process that creates `\\.\pipe\repograph-<hash>` *first* (any user, any time) is the server every client of that repository will talk to, and its `Reply` is taken as the answer. Guarding against that means `FILE_FLAG_FIRST_PIPE_INSTANCE` on the server, an explicit owner-only DACL, and `GetNamedPipeServerProcessId` plus an owner check on the client — the classic named-pipe squatting defences — again more security code than transport, and again untestable from here. Structurally it is also a different loop: a pipe instance is created per connection (`CreateNamedPipeW` + `ConnectNamedPipe`), there is no `incoming()`, and `serve`'s accept thread would need rewriting rather than re-typing. The one genuine advantage — no stale file, a pipe name disappears with its last handle — does not pay for the rest.
+Needs `windows-sys` features `Win32_System_Pipes`, `Win32_Security`, `Win32_Storage_FileSystem` (the crate is in the lock, the features are not compiled today). The pipe namespace is machine-global, so the name must encode the repository path *and* the user, or two users with the same checkout path collide. The default DACL of a pipe created with a null security descriptor grants Everyone read — a client needs write to send a `Hello`, so other users cannot ask, but a name is a name: a process that creates `\\.\pipe\zerograph-<hash>` *first* (any user, any time) is the server every client of that repository will talk to, and its `Reply` is taken as the answer. Guarding against that means `FILE_FLAG_FIRST_PIPE_INSTANCE` on the server, an explicit owner-only DACL, and `GetNamedPipeServerProcessId` plus an owner check on the client — the classic named-pipe squatting defences — again more security code than transport, and again untestable from here. Structurally it is also a different loop: a pipe instance is created per connection (`CreateNamedPipeW` + `ConnectNamedPipe`), there is no `incoming()`, and `serve`'s accept thread would need rewriting rather than re-typing. The one genuine advantage — no stale file, a pipe name disappears with its last handle — does not pay for the rest.
 
 ### (c) `AF_UNIX` on Windows through `socket2` — **chosen**
 
@@ -50,7 +50,7 @@ Windows 10 1803 (build 17063) added `AF_UNIX` stream sockets to winsock; Rust 1.
 
 What it keeps, and why that is the whole argument:
 
-- **The path.** `socket_path` stays `.repograph/serve.sock` on every platform. The socket file is an NTFS reparse point created by `bind`; Microsoft's own write-up states that connecting needs write permission on that file and binding needs write permission on its directory — the same security model as unix, enforced by the same thing (the repository directory's ACL), with no token and no DACL code.
+- **The path.** `socket_path` stays `.zerograph/serve.sock` on every platform. The socket file is an NTFS reparse point created by `bind`; Microsoft's own write-up states that connecting needs write permission on that file and binding needs write permission on its directory — the same security model as unix, enforced by the same thing (the repository directory's ACL), with no token and no DACL code.
 - **The refusal.** A dead server leaves a file nobody listens on; a connect to it fails, and the client falls back at once. Nothing can reuse the name except another `serve` in that directory. The client still never deletes the file, for the reason `try_ask`'s comment gives.
 - **The code.** `run`, `answer`, `hello_line`, `try_ask`, the accept thread and the rendezvous channel are written once against `Listener` and `Stream`. The Windows half of the seam is forty lines.
 - **Speed.** A loopback `AF_UNIX` connect on Windows costs what a TCP loopback connect costs — well under a millisecond — and the rest of an answer is the same code. The unix half is std's types, so unix pays nothing at all.
@@ -77,7 +77,7 @@ What was verified during planning, from sources on this machine, and what only t
 | `symlink_metadata` gives `Some` for `file_index`/`volume_serial_number`; `stat`/`try_exists` accept `ERROR_CANT_ACCESS_FILE` | read `~/.rustup/toolchains/stable-aarch64-apple-darwin/lib/rustlib/src/rust/library/std/src/sys/fs/windows.rs` (1.98.0) | Task 2's unit test on Windows CI |
 | `std::env::home_dir()` is un-deprecated on 1.98.0 | compiled a one-liner with `rustc -D warnings` (1.98.0); printed `Some("/Users/max")` | — |
 | `ort-sys 2.0.0-rc.13` has `x86_64-pc-windows-msvc` prebuilt rows; a no-EP build resolves to the `directml` row and links `onnxruntime` statically plus `dxguid DXCORE DXGI D3D12 DirectML` | read `build/download/{dist.tsv,resolve.rs}` and `build/static_link/mod.rs` | — |
-| `repograph.exe` loads on a machine with only the inbox `DirectML.dll` (no DLL shipped beside it) | *not verifiable here*; ort's docs say the DirectML build "require[s] helper dylibs" and repograph does not enable `copy-dylibs` | Task 1's `cargo test` (spawns the exe a dozen times) and Task 5's release smoke step `repograph.exe --version`; contingency in Task 5 Step 5 |
+| `zerograph.exe` loads on a machine with only the inbox `DirectML.dll` (no DLL shipped beside it) | *not verifiable here*; ort's docs say the DirectML build "require[s] helper dylibs" and zerograph does not enable `copy-dylibs` | Task 1's `cargo test` (spawns the exe a dozen times) and Task 5's release smoke step `zerograph.exe --version`; contingency in Task 5 Step 5 |
 | `onig_sys 69.9.3` builds on MSVC without bindgen (`config.h.win64`, `generate` feature off) | read its `build.rs:89` | Task 1 |
 | `tree-sitter 0.27`, `tokenizers 0.22` (`onig`), `blake3` (MASM), `hf-hub 0.5` (`schannel`, symlink-or-rename cache) compile on `x86_64-pc-windows-msvc` | *not verified here*; all are routinely built there upstream | Task 1 |
 | Windows `AF_UNIX`: 10 1803+, reparse-point file, not unlinked on close, ACL-secured like unix | Microsoft's announcement (devblogs, fetched) | Task 3's tests on Windows CI |
@@ -97,9 +97,9 @@ What was verified during planning, from sources on this machine, and what only t
 | `tests/serve.rs` | the test-side seam; `symlink_metadata` for presence; the timed fallback; the replaced-binary test unix-only | 3 |
 | `src/index/mod.rs`, `src/index/embed.rs`, `src/index/cross.rs`, `src/config.rs` | `cache_root()`; home through `std::env::home_dir` at the three `HOME` sites | 4 |
 | `.github/workflows/release.yml` | Windows in the matrix, `.zip`, the load smoke, `workflow_dispatch`, the npm job's third platform | 5 |
-| `scripts/npm-pack.sh` | `win32-x64=<repograph.exe>` | 5 |
-| `npm/repograph-win32-x64/package.json` (new), `npm/repograph/package.json`, `npm/repograph/bin/repograph.js`, `.gitignore` | the platform package, the optional dependency, the `.exe` resolution | 5 |
-| `README.md`, `npm/repograph/README.md`, `src/config.rs` doc comment | the Windows story in words | 6 |
+| `scripts/npm-pack.sh` | `win32-x64=<zerograph.exe>` | 5 |
+| `npm/zerograph-win32-x64/package.json` (new), `npm/zerograph/package.json`, `npm/zerograph/bin/zerograph.js`, `.gitignore` | the platform package, the optional dependency, the `.exe` resolution | 5 |
+| `README.md`, `npm/zerograph/README.md`, `src/config.rs` doc comment | the Windows story in words | 6 |
 
 ---
 
@@ -110,12 +110,12 @@ What was verified during planning, from sources on this machine, and what only t
 - Nothing in the repo changes; no commit.
 
 **Interfaces:**
-- Produces: the base binary `$M/repograph-base` for Task 3's timing spot check; the unix test counts every later task is held to.
+- Produces: the base binary `$M/zerograph-base` for Task 3's timing spot check; the unix test counts every later task is held to.
 
 - [ ] **Step 1: The worktree, off `origin/main`**
 
 ```bash
-R=/Users/max/Documents/projects/repograph
+R=/Users/max/Documents/projects/zerograph
 git -C "$R" fetch origin
 git -C "$R" worktree add "$R/.worktrees/windows-serve" -b feat/windows-serve origin/main
 W="$R/.worktrees/windows-serve"; git -C "$W" log --oneline -1
@@ -129,15 +129,15 @@ Expected: `32577e2 feat(config): the model is a setting, in the project or on th
 M=/Users/max/bench/windows-serve-2026-09-06; mkdir -p "$M"
 cd "$W" && cargo clippy --all-targets -- -D warnings 2>&1 | tail -1
 cargo test --release 2>&1 | grep 'test result'
-cp target/release/repograph "$M/repograph-base"
-cargo tree --target x86_64-pc-windows-msvc --edges normal -p repograph --depth 1 | tee "$M/win-deps-before.txt"
+cp target/release/zerograph "$M/zerograph-base"
+cargo tree --target x86_64-pc-windows-msvc --edges normal -p zerograph --depth 1 | tee "$M/win-deps-before.txt"
 ```
 
 Expected: clippy clean; `444 passed; 0 failed; 2 ignored` for the unit tests and `12 passed` for `tests/serve.rs` (the counts the 2026-09-06 residue plan recorded at the same tip — a different count is a tip that moved, see Step 1); the Windows dependency list has no `socket2` line at depth 1. `cargo tree` with a target the host cannot build for resolves without compiling — that is the only Windows-facing command this plan runs locally.
 
 - [ ] **Step 3: The task record**
 
-`$M/task0.txt`: the worktree's commit, the three counts, the sha of `$M/repograph-base`. Report DONE with that path.
+`$M/task0.txt`: the worktree's commit, the three counts, the sha of `$M/zerograph-base`. Report DONE with that path.
 
 ---
 
@@ -181,8 +181,8 @@ first compile. The seam that turns it green is the next commit; a job added gree
 nothing about it.
 MSG
 git -C "$W" push -u origin feat/windows-serve
-gh auth switch --user devmaxxx && gh run watch --repo devmaxxx/repograph --exit-status $(gh run list --repo devmaxxx/repograph --branch feat/windows-serve --workflow ci --limit 1 --json databaseId --jq '.[0].databaseId'); true
-gh auth switch --user devmaxxx && gh run view --repo devmaxxx/repograph --log-failed $(gh run list --repo devmaxxx/repograph --branch feat/windows-serve --workflow ci --limit 1 --json databaseId --jq '.[0].databaseId') | grep -n "error\[E\|error:" | head -20 | tee "$M/task1-red.txt"
+gh auth switch --user devmaxxx && gh run watch --repo devmaxxx/zerograph --exit-status $(gh run list --repo devmaxxx/zerograph --branch feat/windows-serve --workflow ci --limit 1 --json databaseId --jq '.[0].databaseId'); true
+gh auth switch --user devmaxxx && gh run view --repo devmaxxx/zerograph --log-failed $(gh run list --repo devmaxxx/zerograph --branch feat/windows-serve --workflow ci --limit 1 --json databaseId --jq '.[0].databaseId') | grep -n "error\[E\|error:" | head -20 | tee "$M/task1-red.txt"
 ```
 
 Expected: `test` green, `windows` red, and the first error names `src/serve.rs` and `std::os::unix` (`E0433` unresolved path or the like). **Any error before that one** — a dependency that does not build on MSVC, the toolchain action failing — is a finding this plan could not make from the Mac: record it in `$M/task1-red.txt`, and if it is in a dependency, stop and report; the transport is moot until the crate's dependencies build there.
@@ -330,12 +330,12 @@ The comment above `run`'s `_guard` and the comment on `hello_line` (the macOS `E
 ```bash
 cd "$W" && cargo clippy --all-targets -- -D warnings 2>&1 | tail -1
 cargo test --release 2>&1 | grep 'test result'
-cargo tree --target x86_64-pc-windows-msvc --edges normal -p repograph --depth 1 | grep socket2
+cargo tree --target x86_64-pc-windows-msvc --edges normal -p zerograph --depth 1 | grep socket2
 git diff --stat Cargo.lock; git diff Cargo.lock | grep '^[+-] '
 git diff src/serve.rs | grep '^[+-]' | grep -v '^[+-]\s*//' | wc -l
 ```
 
-Expected: clippy clean; `445 passed` (the new unit test) and `12 passed`; `socket2 v0.6.5` listed under `repograph` for the Windows target; the lock diff is exactly one added line, `+ "socket2",` in the `repograph` package's dependency list; the non-comment diff of `serve.rs` is the seam plus the re-typed lines named in Step 3 and nothing else — read it and confirm no line of `run`'s loop, `answer`, or the handshake moved.
+Expected: clippy clean; `445 passed` (the new unit test) and `12 passed`; `socket2 v0.6.5` listed under `zerograph` for the Windows target; the lock diff is exactly one added line, `+ "socket2",` in the `zerograph` package's dependency list; the non-comment diff of `serve.rs` is the seam plus the re-typed lines named in Step 3 and nothing else — read it and confirm no line of `run`'s loop, `answer`, or the handshake moved.
 
 - [ ] **Step 5: Commit**
 
@@ -444,7 +444,7 @@ A test-side copy of the seam, the socket file's presence read from its own metad
 fallback timed, and the replaced-binary test unix-only: Windows will not replace a running image.
 MSG
 git -C "$W" push
-gh auth switch --user devmaxxx && gh run watch --repo devmaxxx/repograph --exit-status $(gh run list --repo devmaxxx/repograph --branch feat/windows-serve --workflow ci --limit 1 --json databaseId --jq '.[0].databaseId') | tail -5 | tee "$M/task3-ci.txt"
+gh auth switch --user devmaxxx && gh run watch --repo devmaxxx/zerograph --exit-status $(gh run list --repo devmaxxx/zerograph --branch feat/windows-serve --workflow ci --limit 1 --json databaseId --jq '.[0].databaseId') | tail -5 | tee "$M/task3-ci.txt"
 ```
 
 Expected: `test` and `windows` both green; the Windows log shows `12 passed` for `tests/serve.rs` minus one (`11 passed`, the replaced-binary test compiled out) and the unit count one higher than Task 0's. Record the run URL in `$M/task3-ci.txt`.
@@ -462,11 +462,11 @@ Not a bench: a check that the unix binary after Task 2 answers over the socket i
 
 ```bash
 cd "$W" && cargo build --release 2>&1 | tail -1
-B1="$W/target/release/repograph"; B0="$M/repograph-base"
+B1="$W/target/release/zerograph"; B0="$M/zerograph-base"
 "$B1" --repo "$W" --no-dense build >/dev/null 2>&1
 for b in "$B0" "$B1"; do
   "$b" --repo "$W" --no-dense serve --every 3600 --idle 120 >/dev/null 2>"$M/serve-$(basename $b).log" & pid=$!
-  until [ -S "$W/.repograph/serve.sock" ]; do sleep 0.05; done
+  until [ -S "$W/.zerograph/serve.sock" ]; do sleep 0.05; done
   "$b" --repo "$W" --no-dense ask paraphrase >/dev/null 2>&1   # the first answer pays the open
   for i in $(seq 11); do /usr/bin/time -p "$b" --repo "$W" --no-dense ask paraphrase levers 2>&1 >/dev/null | awk '/^real/{print $2}'; done | sort -n | sed -n 6p | tee -a "$M/task3-timing.txt"
   kill $pid; wait $pid 2>/dev/null
@@ -484,9 +484,9 @@ Expected: two medians within the noise of each other (tens of milliseconds on th
 - Modify: `src/index/mod.rs`, `src/index/embed.rs`, `src/index/cross.rs`, `src/config.rs`
 
 **Interfaces:**
-- Produces: `crate::index::cache_root() -> Result<PathBuf>` = the home directory's `.cache/repograph`; `embed::cache_dir` and `cross::default_dir` join `fastembed` / `reranker` onto it; `config::machine_path` reads home the same way.
+- Produces: `crate::index::cache_root() -> Result<PathBuf>` = the home directory's `.cache/zerograph`; `embed::cache_dir` and `cross::default_dir` join `fastembed` / `reranker` onto it; `config::machine_path` reads home the same way.
 
-Background the brief cannot know: three sites read `HOME` from the environment — `src/index/embed.rs:76` (the model cache, an error without it), `src/index/cross.rs:24` (the reranker), `src/config.rs:111` (the machine config, silently `None` without it). A Windows console sets `USERPROFILE`, never `HOME`, so on Windows the first fused `ask` would fail with "neither FASTEMBED_CACHE_DIR nor HOME is set" and the machine config would never be read. `std::env::home_dir()` — un-deprecated, verified to compile under `-D warnings` on 1.98.0 — reads `$HOME` on unix (the same lookup as today, falling back to the passwd entry only when it is unset, where today errors) and `USERPROFILE` then the profile API on Windows. The config tests set `REPOGRAPH_CONFIG`, never `HOME`, so they are unaffected; `embed.rs` tests set the cache through `set_cache_dir`, likewise.
+Background the brief cannot know: three sites read `HOME` from the environment — `src/index/embed.rs:76` (the model cache, an error without it), `src/index/cross.rs:24` (the reranker), `src/config.rs:111` (the machine config, silently `None` without it). A Windows console sets `USERPROFILE`, never `HOME`, so on Windows the first fused `ask` would fail with "neither FASTEMBED_CACHE_DIR nor HOME is set" and the machine config would never be read. `std::env::home_dir()` — un-deprecated, verified to compile under `-D warnings` on 1.98.0 — reads `$HOME` on unix (the same lookup as today, falling back to the passwd entry only when it is unset, where today errors) and `USERPROFILE` then the profile API on Windows. The config tests set `ZEROGRAPH_CONFIG`, never `HOME`, so they are unaffected; `embed.rs` tests set the cache through `set_cache_dir`, likewise.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -501,7 +501,7 @@ mod tests {
     #[test]
     fn the_cache_root_is_under_the_home_the_platform_names() {
         let home = std::env::home_dir().expect("a home directory");
-        assert_eq!(super::cache_root().unwrap(), home.join(".cache").join("repograph"));
+        assert_eq!(super::cache_root().unwrap(), home.join(".cache").join("zerograph"));
     }
 }
 ```
@@ -515,18 +515,18 @@ Run: `cd "$W" && cargo test --release the_cache_root 2>&1 | tail -3` — expecte
 ```rust
 use anyhow::Context as _;
 
-/// `~/.cache/repograph`, the root of every cache this process keeps: the embedder's files and the
+/// `~/.cache/zerograph`, the root of every cache this process keeps: the embedder's files and the
 /// exported reranker. Read through the platform's idea of home rather than `$HOME`, which a
 /// Windows console never sets; there it is the profile directory.
 pub fn cache_root() -> anyhow::Result<std::path::PathBuf> {
     let home = std::env::home_dir().context("no home directory to keep the model cache under")?;
-    Ok(home.join(".cache").join("repograph"))
+    Ok(home.join(".cache").join("zerograph"))
 }
 ```
 
 `src/index/embed.rs` `cache_dir`: the last two lines become `Ok(crate::index::cache_root()?.join("fastembed"))`, the `HOME` line and its message deleted.
-`src/index/cross.rs` `default_dir`: body becomes `Ok(crate::index::cache_root()?.join("reranker"))`; its doc comment's `$HOME/.cache/repograph/reranker` becomes `~/.cache/repograph/reranker`.
-`src/config.rs` `machine_path`: `None => Path::new(&named("HOME")?).join(".config"),` → `None => std::env::home_dir()?.join(".config"),`; the doc comment's `$HOME/.config/repograph/config.toml` becomes `~/.config/repograph/config.toml`, and the sentence "`None` when the environment names no home at all" stays true. The `reranker_dir` field's doc comment (`$HOME/.cache/repograph/reranker`) becomes `~/.cache/repograph/reranker`.
+`src/index/cross.rs` `default_dir`: body becomes `Ok(crate::index::cache_root()?.join("reranker"))`; its doc comment's `$HOME/.cache/zerograph/reranker` becomes `~/.cache/zerograph/reranker`.
+`src/config.rs` `machine_path`: `None => Path::new(&named("HOME")?).join(".config"),` → `None => std::env::home_dir()?.join(".config"),`; the doc comment's `$HOME/.config/zerograph/config.toml` becomes `~/.config/zerograph/config.toml`, and the sentence "`None` when the environment names no home at all" stays true. The `reranker_dir` field's doc comment (`$HOME/.cache/zerograph/reranker`) becomes `~/.cache/zerograph/reranker`.
 
 - [ ] **Step 3: Green on unix, pushed, green on Windows**
 
@@ -542,7 +542,7 @@ errored, and the machine config was silently absent. One helper reads home throu
 $HOME on unix as before and the profile directory on Windows.
 MSG
 git -C "$W" push
-gh auth switch --user devmaxxx && gh run watch --repo devmaxxx/repograph --exit-status $(gh run list --repo devmaxxx/repograph --branch feat/windows-serve --workflow ci --limit 1 --json databaseId --jq '.[0].databaseId') | tail -3 | tee "$M/task4-ci.txt"
+gh auth switch --user devmaxxx && gh run watch --repo devmaxxx/zerograph --exit-status $(gh run list --repo devmaxxx/zerograph --branch feat/windows-serve --workflow ci --limit 1 --json databaseId --jq '.[0].databaseId') | tail -3 | tee "$M/task4-ci.txt"
 ```
 
 Expected: `446 passed` on unix; both jobs green; no literal `"HOME"` left in `src/`.
@@ -552,13 +552,13 @@ Expected: `446 passed` on unix; both jobs green; no literal `"HOME"` left in `sr
 ### Task 5: A Windows binary in the release, and a launcher that finds it
 
 **Files:**
-- Modify: `.github/workflows/release.yml`, `scripts/npm-pack.sh`, `npm/repograph/package.json`, `npm/repograph/bin/repograph.js`, `.gitignore`
-- Create: `npm/repograph-win32-x64/package.json`
+- Modify: `.github/workflows/release.yml`, `scripts/npm-pack.sh`, `npm/zerograph/package.json`, `npm/zerograph/bin/zerograph.js`, `.gitignore`
+- Create: `npm/zerograph-win32-x64/package.json`
 
 **Interfaces:**
-- Produces: release asset `repograph-x86_64-pc-windows-msvc.zip` holding `repograph.exe` at its root; npm package `@devmaxxx/repograph-win32-x64` with `bin/repograph.exe`; the launcher resolving `bin/repograph.exe` on `win32`.
+- Produces: release asset `zerograph-x86_64-pc-windows-msvc.zip` holding `zerograph.exe` at its root; npm package `@devmaxxx/zerograph-win32-x64` with `bin/zerograph.exe`; the launcher resolving `bin/zerograph.exe` on `win32`.
 
-Background the brief cannot know: `release.yml` builds a two-target matrix, tars `repograph` from `target/<target>/release`, uploads with `softprops/action-gh-release@v2`, then an `npm` job on ubuntu downloads `repograph-*.tar.gz`, untars into `bin/<platform>/`, calls `scripts/npm-pack.sh` and publishes platform packages first, launcher last. `npm-pack.sh` requires `-x` on the binary, copies it to `npm/repograph-<platform>/bin/repograph` and `chmod 755`s it — a downloaded `.exe` on Linux has no execute bit and must be named `repograph.exe`. The launcher's `require.resolve(\`${pkg}/bin/repograph\`)` tries no extension of its own for a file that is not `.js`/`.json`/`.node`. On Windows, `run:` steps execute in PowerShell and a native command's non-zero exit fails the step. The release workflow runs only on tags and a tag is Max's to push, so this task adds `workflow_dispatch` with the publish steps gated on a tag ref: the build, the smoke and the zip can be exercised on the branch.
+Background the brief cannot know: `release.yml` builds a two-target matrix, tars `zerograph` from `target/<target>/release`, uploads with `softprops/action-gh-release@v2`, then an `npm` job on ubuntu downloads `zerograph-*.tar.gz`, untars into `bin/<platform>/`, calls `scripts/npm-pack.sh` and publishes platform packages first, launcher last. `npm-pack.sh` requires `-x` on the binary, copies it to `npm/zerograph-<platform>/bin/zerograph` and `chmod 755`s it — a downloaded `.exe` on Linux has no execute bit and must be named `zerograph.exe`. The launcher's `require.resolve(\`${pkg}/bin/zerograph\`)` tries no extension of its own for a file that is not `.js`/`.json`/`.node`. On Windows, `run:` steps execute in PowerShell and a native command's non-zero exit fails the step. The release workflow runs only on tags and a tag is Max's to push, so this task adds `workflow_dispatch` with the publish steps gated on a tag ref: the build, the smoke and the zip can be exercised on the branch.
 
 - [ ] **Step 1: `release.yml`**
 
@@ -585,33 +585,33 @@ The steps after `cargo build --release --target ${{ matrix.target }}`:
 
 ```yaml
       - if: runner.os != 'Windows'
-        run: tar -C target/${{ matrix.target }}/release -czf repograph-${{ matrix.target }}.tar.gz repograph
+        run: tar -C target/${{ matrix.target }}/release -czf zerograph-${{ matrix.target }}.tar.gz zerograph
       # Run before it is packed: the pyke ONNX Runtime build for Windows is compiled with the
       # DirectML provider and imports its DLL, and a binary that cannot load says so here, on a
       # runner with nothing but the inbox copy, rather than on a user's machine.
       - if: runner.os == 'Windows'
         run: |
-          .\target\${{ matrix.target }}\release\repograph.exe --version
-          Compress-Archive -Path .\target\${{ matrix.target }}\release\repograph.exe -DestinationPath repograph-${{ matrix.target }}.zip
+          .\target\${{ matrix.target }}\release\zerograph.exe --version
+          Compress-Archive -Path .\target\${{ matrix.target }}\release\zerograph.exe -DestinationPath zerograph-${{ matrix.target }}.zip
       - if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
-        with: { files: "repograph-${{ matrix.target }}.${{ matrix.ext }}" }
+        with: { files: "zerograph-${{ matrix.target }}.${{ matrix.ext }}" }
 ```
 
 The `npm` job gains `if: startsWith(github.ref, 'refs/tags/')` beside `needs: build`, and its two `run` steps become:
 
 ```yaml
-      - run: gh release download "$GITHUB_REF_NAME" --pattern 'repograph-*.tar.gz' --pattern 'repograph-*.zip'
+      - run: gh release download "$GITHUB_REF_NAME" --pattern 'zerograph-*.tar.gz' --pattern 'zerograph-*.zip'
         env: { GH_TOKEN: "${{ github.token }}" }
       - run: |
           mkdir -p bin/darwin-arm64 bin/linux-x64 bin/win32-x64
-          tar -C bin/darwin-arm64 -xzf repograph-aarch64-apple-darwin.tar.gz
-          tar -C bin/linux-x64 -xzf repograph-x86_64-unknown-linux-gnu.tar.gz
-          unzip -q repograph-x86_64-pc-windows-msvc.zip -d bin/win32-x64
-          scripts/npm-pack.sh "${GITHUB_REF_NAME#v}" darwin-arm64=bin/darwin-arm64/repograph linux-x64=bin/linux-x64/repograph win32-x64=bin/win32-x64/repograph.exe
+          tar -C bin/darwin-arm64 -xzf zerograph-aarch64-apple-darwin.tar.gz
+          tar -C bin/linux-x64 -xzf zerograph-x86_64-unknown-linux-gnu.tar.gz
+          unzip -q zerograph-x86_64-pc-windows-msvc.zip -d bin/win32-x64
+          scripts/npm-pack.sh "${GITHUB_REF_NAME#v}" darwin-arm64=bin/darwin-arm64/zerograph linux-x64=bin/linux-x64/zerograph win32-x64=bin/win32-x64/zerograph.exe
 ```
 
-The publish loop's globs (`*-arm64-*.tgz`, `*-x64-*.tgz`) already match `repograph-win32-x64-<v>.tgz`; the job's comment "its two platform packages" becomes "its three platform packages".
+The publish loop's globs (`*-arm64-*.tgz`, `*-x64-*.tgz`) already match `zerograph-win32-x64-<v>.tgz`; the job's comment "its two platform packages" becomes "its three platform packages".
 
 - [ ] **Step 2: `scripts/npm-pack.sh`**
 
@@ -623,69 +623,69 @@ The publish loop's globs (`*-arm64-*.tgz`, `*-x64-*.tgz`) already match `repogra
 pack_platform() {
   local platform=$1 src=$2 name=$3 dir
   [ -f "$src" ] || { echo "$platform: $src is not a file" >&2; exit 2; }
-  dir=npm/repograph-$platform
+  dir=npm/zerograph-$platform
   mkdir -p "$dir/bin"
   cp "$src" "$dir/bin/$name" && chmod 755 "$dir/bin/$name"
   (cd "$dir" && npm pkg set version="$version" && npm pack --silent --pack-destination "$root/$out")
 }
 
-[ -n "$darwin_arm64" ] && pack_platform darwin-arm64 "$darwin_arm64" repograph
-[ -n "$linux_x64" ] && pack_platform linux-x64 "$linux_x64" repograph
-[ -n "$win32_x64" ] && pack_platform win32-x64 "$win32_x64" repograph.exe
+[ -n "$darwin_arm64" ] && pack_platform darwin-arm64 "$darwin_arm64" zerograph
+[ -n "$linux_x64" ] && pack_platform linux-x64 "$linux_x64" zerograph
+[ -n "$win32_x64" ] && pack_platform win32-x64 "$win32_x64" zerograph.exe
 ```
 
 - The launcher loop: `for platform in darwin-arm64 linux-x64 win32-x64; do`.
 
 - [ ] **Step 3: The packages and the launcher**
 
-`npm/repograph-win32-x64/package.json`, the linux one with these fields changed:
+`npm/zerograph-win32-x64/package.json`, the linux one with these fields changed:
 
 ```json
-  "name": "@devmaxxx/repograph-win32-x64",
-  "description": "repograph binary for Windows on x86-64 (MSVC); installed through @devmaxxx/repograph",
+  "name": "@devmaxxx/zerograph-win32-x64",
+  "description": "zerograph binary for Windows on x86-64 (MSVC); installed through @devmaxxx/zerograph",
   "os": ["win32"],
   "cpu": ["x64"],
-  "files": ["bin/repograph.exe"],
+  "files": ["bin/zerograph.exe"],
 ```
 
-`npm/repograph/package.json` `optionalDependencies`: add `"@devmaxxx/repograph-win32-x64": "0.5.0"`.
+`npm/zerograph/package.json` `optionalDependencies`: add `"@devmaxxx/zerograph-win32-x64": "0.5.0"`.
 
-`npm/repograph/bin/repograph.js`:
+`npm/zerograph/bin/zerograph.js`:
 
 ```js
 const PACKAGES = {
-  "darwin-arm64": "@devmaxxx/repograph-darwin-arm64",
-  "linux-x64": "@devmaxxx/repograph-linux-x64",
-  "win32-x64": "@devmaxxx/repograph-win32-x64",
+  "darwin-arm64": "@devmaxxx/zerograph-darwin-arm64",
+  "linux-x64": "@devmaxxx/zerograph-linux-x64",
+  "win32-x64": "@devmaxxx/zerograph-win32-x64",
 };
 
 // Cargo names the Windows binary with its extension, and `require.resolve` tries none of its
 // own for a file that is not a module.
-const BINARY = process.platform === "win32" ? "bin/repograph.exe" : "bin/repograph";
+const BINARY = process.platform === "win32" ? "bin/zerograph.exe" : "bin/zerograph";
 ```
 
-and `require.resolve(\`${pkg}/bin/repograph\`)` → `require.resolve(\`${pkg}/${BINARY}\`)`.
+and `require.resolve(\`${pkg}/bin/zerograph\`)` → `require.resolve(\`${pkg}/${BINARY}\`)`.
 
-`.gitignore`: `/npm/*/bin/repograph` → add the line `/npm/*/bin/repograph.exe`.
+`.gitignore`: `/npm/*/bin/zerograph` → add the line `/npm/*/bin/zerograph.exe`.
 
 - [ ] **Step 4: Judged on the Mac — the script and the launcher**
 
 ```bash
 cd "$W" && bash -n scripts/npm-pack.sh && echo "syntax ok"
-cp target/release/repograph "$M/fake.exe"     # the script never runs the binary; any file will do
-scripts/npm-pack.sh 0.5.0 darwin-arm64=target/release/repograph win32-x64="$M/fake.exe" | tail -8
-tar tzf dist/npm/devmaxxx-repograph-win32-x64-0.5.0.tgz
-tar xzf dist/npm/devmaxxx-repograph-0.5.0.tgz -O package/package.json | grep -A3 optionalDependencies
+cp target/release/zerograph "$M/fake.exe"     # the script never runs the binary; any file will do
+scripts/npm-pack.sh 0.5.0 darwin-arm64=target/release/zerograph win32-x64="$M/fake.exe" | tail -8
+tar tzf dist/npm/devmaxxx-zerograph-win32-x64-0.5.0.tgz
+tar xzf dist/npm/devmaxxx-zerograph-0.5.0.tgz -O package/package.json | grep -A3 optionalDependencies
 git status --porcelain npm/   # the copied binaries must be ignored
 # The launcher: the map, the error path, and the .exe resolution — process.platform stubbed.
-node -e 'Object.defineProperty(process,"platform",{value:"win32"});Object.defineProperty(process,"arch",{value:"x64"});require("./npm/repograph/bin/repograph.js")'; echo "exit $?"
-mkdir -p "$M/nm/node_modules/@devmaxxx/repograph-win32-x64/bin" && printf '#!/bin/sh\necho fake-exe "$@"\n' > "$M/nm/node_modules/@devmaxxx/repograph-win32-x64/bin/repograph.exe" && chmod 755 "$M/nm/node_modules/@devmaxxx/repograph-win32-x64/bin/repograph.exe"
-cp npm/repograph/bin/repograph.js "$M/nm/launcher.js"
+node -e 'Object.defineProperty(process,"platform",{value:"win32"});Object.defineProperty(process,"arch",{value:"x64"});require("./npm/zerograph/bin/zerograph.js")'; echo "exit $?"
+mkdir -p "$M/nm/node_modules/@devmaxxx/zerograph-win32-x64/bin" && printf '#!/bin/sh\necho fake-exe "$@"\n' > "$M/nm/node_modules/@devmaxxx/zerograph-win32-x64/bin/zerograph.exe" && chmod 755 "$M/nm/node_modules/@devmaxxx/zerograph-win32-x64/bin/zerograph.exe"
+cp npm/zerograph/bin/zerograph.js "$M/nm/launcher.js"
 (cd "$M/nm" && node -e 'Object.defineProperty(process,"platform",{value:"win32"});Object.defineProperty(process,"arch",{value:"x64"});process.argv=[process.argv[0],"x","ask","hi"];require("./launcher.js")'); echo "exit $?"
 rm -rf dist/npm
 ```
 
-Expected, in order: `syntax ok`; the pack lists `devmaxxx-repograph-win32-x64-0.5.0.tgz` and the launcher's tarball; the tar listing shows `package/bin/repograph.exe` and `package/package.json`; the launcher's `optionalDependencies` names all three at `0.5.0`; `git status` shows only `npm/repograph-win32-x64/package.json` as new (the binaries ignored); the first `node` run prints `repograph: @devmaxxx/repograph-win32-x64 is not installed …` and `exit 2`; the second prints `fake-exe ask hi` and `exit 0` — the `.exe` path resolved and was spawned. (`npm pkg set` rewrote the three `package.json` versions to `0.5.0`, which is what they already say; `git diff npm/` must be the win32 entries only.)
+Expected, in order: `syntax ok`; the pack lists `devmaxxx-zerograph-win32-x64-0.5.0.tgz` and the launcher's tarball; the tar listing shows `package/bin/zerograph.exe` and `package/package.json`; the launcher's `optionalDependencies` names all three at `0.5.0`; `git status` shows only `npm/zerograph-win32-x64/package.json` as new (the binaries ignored); the first `node` run prints `zerograph: @devmaxxx/zerograph-win32-x64 is not installed …` and `exit 2`; the second prints `fake-exe ask hi` and `exit 0` — the `.exe` path resolved and was spawned. (`npm pkg set` rewrote the three `package.json` versions to `0.5.0`, which is what they already say; `git diff npm/` must be the win32 entries only.)
 
 - [ ] **Step 5: Judged on a runner — the release workflow from the branch**
 
@@ -696,24 +696,24 @@ build(release): a Windows binary, zipped and smoked, and the win32-x64 npm packa
 
 x86_64-pc-windows-msvc joins the matrix; the exe is run once on the runner before it is packed,
 because the ONNX Runtime build it links is compiled with DirectML and a load failure belongs in
-the log, not on a user's machine. The npm launcher resolves bin/repograph.exe on win32.
+the log, not on a user's machine. The npm launcher resolves bin/zerograph.exe on win32.
 workflow_dispatch builds and smokes without publishing, so a tag is not spent to find out.
 MSG
 git -C "$W" push
-gh auth switch --user devmaxxx && gh workflow run release.yml --repo devmaxxx/repograph --ref feat/windows-serve
-sleep 20; gh auth switch --user devmaxxx && gh run watch --repo devmaxxx/repograph --exit-status $(gh run list --repo devmaxxx/repograph --branch feat/windows-serve --workflow release --limit 1 --json databaseId --jq '.[0].databaseId') | tail -8 | tee "$M/task5-release.txt"
+gh auth switch --user devmaxxx && gh workflow run release.yml --repo devmaxxx/zerograph --ref feat/windows-serve
+sleep 20; gh auth switch --user devmaxxx && gh run watch --repo devmaxxx/zerograph --exit-status $(gh run list --repo devmaxxx/zerograph --branch feat/windows-serve --workflow release --limit 1 --json databaseId --jq '.[0].databaseId') | tail -8 | tee "$M/task5-release.txt"
 ```
 
-Expected: three `build` jobs green, the Windows one's log showing `repograph 0.5.0` from the smoke step and `Compress-Archive` completing; the upload and `npm` steps skipped (not a tag). Record the run URL in `$M/task5-release.txt`.
+Expected: three `build` jobs green, the Windows one's log showing `zerograph 0.5.0` from the smoke step and `Compress-Archive` completing; the upload and `npm` steps skipped (not a tag). Record the run URL in `$M/task5-release.txt`.
 
-**Contingency, decided by that log and nothing else.** If the smoke step fails with `STATUS_DLL_NOT_FOUND` (exit `0xC0000135`) or "entry point not found": the exe's import table is not satisfied by the runner's inbox `DirectML.dll`. Then, in one further commit: add `ort = { version = "=2.0.0-rc.13", features = ["copy-dylibs"] }` under `[target.'cfg(windows)'.dependencies]` (a feature added for one target; unix compiles what it did), which makes `ort-sys` place the pyke archive's DLLs beside the built exe; change the Windows archive step to `Compress-Archive -Path .\target\…\release\repograph.exe, .\target\…\release\*.dll`; extend the win32 package's `files` to `["bin/repograph.exe", "bin/*.dll"]`; make `npm-pack.sh`'s win32 arm copy `*.dll` from the source's directory; and say in the README that the Windows binary ships the DirectML DLL its ONNX Runtime build imports. Re-run Step 5. If the smoke step passes, none of this exists and the README says nothing about it.
+**Contingency, decided by that log and nothing else.** If the smoke step fails with `STATUS_DLL_NOT_FOUND` (exit `0xC0000135`) or "entry point not found": the exe's import table is not satisfied by the runner's inbox `DirectML.dll`. Then, in one further commit: add `ort = { version = "=2.0.0-rc.13", features = ["copy-dylibs"] }` under `[target.'cfg(windows)'.dependencies]` (a feature added for one target; unix compiles what it did), which makes `ort-sys` place the pyke archive's DLLs beside the built exe; change the Windows archive step to `Compress-Archive -Path .\target\…\release\zerograph.exe, .\target\…\release\*.dll`; extend the win32 package's `files` to `["bin/zerograph.exe", "bin/*.dll"]`; make `npm-pack.sh`'s win32 arm copy `*.dll` from the source's directory; and say in the README that the Windows binary ships the DirectML DLL its ONNX Runtime build imports. Re-run Step 5. If the smoke step passes, none of this exists and the README says nothing about it.
 
 ---
 
 ### Task 6: The story in words
 
 **Files:**
-- Modify: `README.md`, `npm/repograph/README.md`
+- Modify: `README.md`, `npm/zerograph/README.md`
 
 **Interfaces:**
 - Produces: every sentence that named two platforms names three; the serve section says what the Windows socket is; the cache and config paths have their Windows spelling; the one thing that still needs a POSIX shell on Windows says so.
@@ -723,22 +723,22 @@ Anchors are at `origin/main` `32577e2`; re-find by text, not by line.
 - [ ] **Step 1: `README.md`**
 
 - Install block comment (line 71): `# npm: prebuilt binary for macOS arm64 and Linux x64` → `# npm: prebuilt binary for macOS arm64, Linux x64 and Windows x64`.
-- The launcher paragraph (line 75): `… comes from \`@devmaxxx/repograph-darwin-arm64\` or \`@devmaxxx/repograph-linux-x64\`, …` → the three names; `Both are under the same scope` → `All three are under the same scope`; `build both binaries as GitHub release assets` → `build all three binaries as GitHub release assets (a tarball for the unix ones, a zip holding \`repograph.exe\` for Windows)`.
+- The launcher paragraph (line 75): `… comes from \`@devmaxxx/zerograph-darwin-arm64\` or \`@devmaxxx/zerograph-linux-x64\`, …` → the three names; `Both are under the same scope` → `All three are under the same scope`; `build both binaries as GitHub release assets` → `build all three binaries as GitHub release assets (a tarball for the unix ones, a zip holding \`zerograph.exe\` for Windows)`.
 - Serve section (line 184): `\`serve\` opens them once and answers over a Unix socket:` → `\`serve\` opens them once and answers over a Unix socket — on Windows too, where the same socket file has existed since Windows 10 1803 and is protected the way the repository directory is:`. After the fallback paragraph, one sentence: `The socket path is limited to 108 bytes on Linux and Windows and 104 on macOS; a repository deep enough to exceed it cannot start \`serve\`, and \`ask\` answers in its own process as it would with no server at all.`
-- Config table (line 485): `else \`~/.config/repograph/config.toml\`` → `else \`~/.config/repograph/config.toml\` (\`%USERPROFILE%\.config\repograph\config.toml\` on Windows)`.
-- Embeddings (line 526): `else \`~/.cache/repograph/fastembed\`` → `else \`~/.cache/repograph/fastembed\` (\`%USERPROFILE%\.cache\repograph\fastembed\` on Windows)`.
-- Spending tokens, the paragraph beginning `\`enrich_command\` is any` (line 569): append `Both commands run under \`sh -c\`; on Windows that is Git for Windows' \`sh\`, which must be on \`PATH\` — nothing else in repograph needs a shell.`
+- Config table (line 485): `else \`~/.config/zerograph/config.toml\`` → `else \`~/.config/zerograph/config.toml\` (\`%USERPROFILE%\.config\zerograph\config.toml\` on Windows)`.
+- Embeddings (line 526): `else \`~/.cache/zerograph/fastembed\`` → `else \`~/.cache/zerograph/fastembed\` (\`%USERPROFILE%\.cache\zerograph\fastembed\` on Windows)`.
+- Spending tokens, the paragraph beginning `\`enrich_command\` is any` (line 569): append `Both commands run under \`sh -c\`; on Windows that is Git for Windows' \`sh\`, which must be on \`PATH\` — nothing else in zerograph needs a shell.`
 - The `serve` row of the status table (line 47) is unchanged: the numbers there are the unix measurement and nothing in this plan re-measures.
 
-- [ ] **Step 2: `npm/repograph/README.md`**
+- [ ] **Step 2: `npm/zerograph/README.md`**
 
 Line 23: the three package names; line 26: the Windows cache path in parentheses as above.
 
 - [ ] **Step 3: Read back, commit, push**
 
 ```bash
-cd "$W" && grep -n "both binaries\|Both are\|and Linux x64\b" README.md npm/repograph/README.md; echo "(expected: nothing)"
-git -C "$W" add README.md npm/repograph/README.md
+cd "$W" && grep -n "both binaries\|Both are\|and Linux x64\b" README.md npm/zerograph/README.md; echo "(expected: nothing)"
+git -C "$W" add README.md npm/zerograph/README.md
 git -C "$W" commit -F - <<'MSG'
 docs: the Windows story — the socket, the paths, the shell, the packages
 MSG
@@ -756,15 +756,15 @@ CI runs again (docs only; it should be green as before).
 - [ ] **Step 1: Open it**
 
 ```bash
-gh auth switch --user devmaxxx && gh pr create --repo devmaxxx/repograph --base main --head feat/windows-serve \
+gh auth switch --user devmaxxx && gh pr create --repo devmaxxx/zerograph --base main --head feat/windows-serve \
   --title "feat(serve): the resident answer on Windows, and a Windows binary in the release" \
   --body-file - <<'BODY'
 ## What
 
-`repograph ask` on Windows is answered by `repograph serve` the way it is on unix: the same
+`zerograph ask` on Windows is answered by `zerograph serve` the way it is on unix: the same
 socket file, the same handshake, AF_UNIX through socket2 where std has no Unix socket. The crate
 compiles on x86_64-pc-windows-msvc, CI runs clippy and the tests there, the release carries
-`repograph.exe` in a zip, the npm launcher resolves `@devmaxxx/repograph-win32-x64`, and the
+`zerograph.exe` in a zip, the npm launcher resolves `@devmaxxx/zerograph-win32-x64`, and the
 model cache and the machine config are found under the profile directory.
 
 ## Why AF_UNIX and not TCP or a named pipe
