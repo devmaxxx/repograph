@@ -33,7 +33,7 @@ def read_run(path):
                 name, inp = b.get("name"), b.get("input") or {}
                 if name == "Bash":
                     cmd = str(inp.get("command", ""))
-                    if "zerograph" in cmd or "zerograph" in cmd:
+                    if "zerograph" in cmd or "repograph" in cmd:
                         out["asked"] += 1
                     if GREP.search(cmd):
                         out["grepped"] += 1

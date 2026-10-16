@@ -620,7 +620,7 @@ MSG
 **Files:**
 - Modify: `bench/history/runs.jsonl` (appended by the script, never edited)
 - Modify: `bench/history/README.md` (the `## The fixture` section: one paragraph)
-- Filesystem: `/Users/max/bench/beauty-crm-502e8a6d/.zerograph` (archived and replaced — the only permitted write to the fixture, and only as described)
+- Filesystem: `/Users/max/bench/beauty-crm-502e8a6d/.repograph` (archived and replaced — the only permitted write to the fixture, and only as described)
 
 **Interfaces:**
 - Consumes: `bench/history/run-zerograph.sh` (records the built-in suite; `CASES=bench/dev-cases.jsonl` records the developer suite), the `$S/bc-a1/.zerograph` store (A1 graph at `502e8a6d`, document + code questions, vectors by the small model), the controller's ruling on Task 1.

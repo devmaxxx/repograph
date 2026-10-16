@@ -566,9 +566,13 @@ fn answer(mut stream: sys::Stream, watcher: &mut crate::Watcher, ctx: &mut ask::
         // The same refresh a one-shot ask does before answering: batch 1 applies any change now.
         adopt_if_moved(watcher, ctx, 1)?;
     }
-    let stdout = ctx.answer(&hello.req)?;
+    let answered = ctx.answer(&hello.req);
+    // Taken before the `?`: a model command started by an answer that then failed was still paid
+    // for, and its count must not ride out on the next client's reply.
+    let reranked = ctx.take_reranked();
+    let stdout = answered?;
     let stderr = ctx.notices();
-    let reply = Reply { stdout, stderr, reranked: ctx.take_reranked(), ..header(ctx, build) };
+    let reply = Reply { stdout, stderr, reranked, ..header(ctx, build) };
     writeln!(stream, "{}", serde_json::to_string(&reply)?)?;
     Ok(true)
 }

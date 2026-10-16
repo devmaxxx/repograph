@@ -146,7 +146,7 @@ Two directories, both `git worktree lock`ed so `git worktree remove` refuses the
 
 **Interfaces:**
 - Consumes: `FIX=~/bench/beauty-crm-502e8a6d` and `WT=~/bench/beauty-crm-test`, both locked worktrees of the corpus at `502e8a6d`, as the rule leaves them — this task creates no worktree of the corpus.
-- Produces: `~/bench/levers-2026-09-10/bin/zerograph-main` built at `d688e56`; `~/bench/levers-2026-09-10/log/`; `~/bench/levers-2026-09-10/main-src`, a detached worktree of this repository.
+- Produces: `~/bench/levers-2026-09-10/bin/repograph-main` built at `d688e56`; `~/bench/levers-2026-09-10/log/`; `~/bench/levers-2026-09-10/main-src`, a detached worktree of this repository.
 
 - [x] **Step 1: Branch off `main` and prove the baseline is green**
 
@@ -168,8 +168,8 @@ Expected: every test binary `test result: ok`; clippy prints nothing but `Finish
 mkdir -p ~/bench/levers-2026-09-10/log ~/bench/levers-2026-09-10/bin
 git -C /Users/max/Documents/projects/zerograph worktree add --detach ~/bench/levers-2026-09-10/main-src d688e56
 cargo build --release --manifest-path ~/bench/levers-2026-09-10/main-src/Cargo.toml 2>&1 | tail -1
-cp ~/bench/levers-2026-09-10/main-src/target/release/zerograph ~/bench/levers-2026-09-10/bin/zerograph-main
-~/bench/levers-2026-09-10/bin/zerograph-main --version
+cp ~/bench/levers-2026-09-10/main-src/target/release/repograph ~/bench/levers-2026-09-10/bin/repograph-main
+~/bench/levers-2026-09-10/bin/repograph-main --version
 ```
 
 Expected: `zerograph 0.5.0`. `main-src` is a worktree of zerograph, not of beauty-crm: the rule is about the corpus a store is built from — one writable copy of that tree — and a checkout of this repository's `main` to build a binary from is not that. It is removed after the merge (Task 12).
@@ -356,8 +356,8 @@ cd /Users/max/Documents/projects/zerograph && git add bench/probe/arms.sh docs/b
 - Modify: `docs/bench/2026-09-10-next-version-levers-results.md` (§1 reading)
 
 **Interfaces:**
-- Consumes: `bin/zerograph-main` from Task 0; `FIX` and `WT` as Task 0 Step 3 found them.
-- Produces: `reset.sh` (reads `FIX`, `WT`, `PIN`, `BIN` from the environment, defaults to this machine's paths and `bin/zerograph-main`; exit 2 and nothing touched when `$WT` is not the locked, detached worktree at `$PIN` or is `$FIX`; exit 1 when the settle walk changed anything or its counts differ from the fixture's `graph.json`); `readers.sh BIN WORKTREE LOG [N]` (ten rows, every row `--stale`); `embed.sh NAME BIN WORKTREE LOG` (refuses the fixture by path); `judge.py medians <summary.txt>` → lines `row wall=<s> maxrss=<GB> peak_cpu=<%> n=<k>`; `judge.py control <A> <B>` (exit 1 on any row outside 10%/5%); `judge.py compare <ref> <new>` (same bars, deltas signed); `judge.py cadence <stamped.err>` → `first=<s> max=<s> median=<s> ratio=<x> n=<k>`; `graphdiff.py <a.json> <b.json>` → `nodes: same|differ (…)`, `edges: same|differ (…)`, `pending: <n>`, `bytes: <a> <b> <ratio>`. Later tasks (6, 8, 11) call these.
+- Consumes: `bin/repograph-main` from Task 0; `FIX` and `WT` as Task 0 Step 3 found them.
+- Produces: `reset.sh` (reads `FIX`, `WT`, `PIN`, `BIN` from the environment, defaults to this machine's paths and `bin/repograph-main`; exit 2 and nothing touched when `$WT` is not the locked, detached worktree at `$PIN` or is `$FIX`; exit 1 when the settle walk changed anything or its counts differ from the fixture's `graph.json`); `readers.sh BIN WORKTREE LOG [N]` (ten rows, every row `--stale`); `embed.sh NAME BIN WORKTREE LOG` (refuses the fixture by path); `judge.py medians <summary.txt>` → lines `row wall=<s> maxrss=<GB> peak_cpu=<%> n=<k>`; `judge.py control <A> <B>` (exit 1 on any row outside 10%/5%); `judge.py compare <ref> <new>` (same bars, deltas signed); `judge.py cadence <stamped.err>` → `first=<s> max=<s> median=<s> ratio=<x> n=<k>`; `graphdiff.py <a.json> <b.json>` → `nodes: same|differ (…)`, `edges: same|differ (…)`, `pending: <n>`, `bytes: <a> <b> <ratio>`. Later tasks (6, 8, 11) call these.
 
 **The decision, stated:** the kit at `~/bench/resources-2026-09-07` is vendored into `bench/probe/`, because the bars it sets are what every cost-family reading is judged against, and a harness nobody can review in a diff is part of the gap it measures. What is vendored is the scripts and the ten queries; the store copies and 41 MB legacy graph stay out of tree, and the `import-legacy` row is dropped from the reader suite because it writes the store — the one row that could move the index under the suite, which is the cause G23 names. Two more things change because the suite reads the fixture's store where the rule puts writers (see "One writable directory"): every row is `--stale` — the four `ask` rows, `impact`, `trace`, `changes` — so no row can walk, and the suite writes nothing, which Step 8 proves with the store's checksums; and the kit's `ask-stale` row goes, since it is now the same command as `ask-fused`. The walk a non-stale reader pays is not in the suite any more; its number is Task 3's `tree walked` stage. `changes` keeps its one touched line in `packages/ui/src/lib/cn.ts`, copied aside with `cp -p` and moved back, so the tree is put back to the byte and to the nanosecond stamp (`cp -p` keeps it on this machine; a plain `cp` would leave a new mtime behind).
 
@@ -941,7 +941,7 @@ set -u
 FIX=${FIX:-$HOME/bench/beauty-crm-502e8a6d}
 WT=${WT:-$HOME/bench/beauty-crm-test}
 PIN=${PIN:-502e8a6d}
-BIN=${BIN:-$HOME/bench/levers-2026-09-10/bin/zerograph-main}
+BIN=${BIN:-$HOME/bench/levers-2026-09-10/bin/repograph-main}
 
 refuse() { echo "reset: refusing — $1" >&2; exit 2; }
 
@@ -1178,7 +1178,7 @@ Wait for the machine to be quiet (`bench/probe/quiet.sh` until it exits 0 — pl
 cd /Users/max/Documents/projects/zerograph && FIX=~/bench/beauty-crm-502e8a6d; WT=~/bench/beauty-crm-test; export FIX WT
 L=~/bench/levers-2026-09-10/log/g23; mkdir -p $L
 bench/probe/reset.sh && shasum $WT/.zerograph/* > $L/store-before.sha
-bench/probe/readers.sh ~/bench/levers-2026-09-10/bin/zerograph-main $WT $L/A 5 && bench/probe/readers.sh ~/bench/levers-2026-09-10/bin/zerograph-main $WT $L/B 5
+bench/probe/readers.sh ~/bench/levers-2026-09-10/bin/repograph-main $WT $L/A 5 && bench/probe/readers.sh ~/bench/levers-2026-09-10/bin/repograph-main $WT $L/B 5
 shasum $WT/.zerograph/* > $L/store-after.sha && cmp $L/store-before.sha $L/store-after.sha && echo "the suite wrote nothing"
 python3 bench/probe/judge.py control $L/A/medians.txt $L/B/medians.txt
 ```
@@ -1432,9 +1432,9 @@ Expected: every `test result: ok`; clippy clean.
 As numbered: (1) reset — `$WT`'s store is then the fixture's, built under the 49-family list, and the reset's own settle walk is a no-op that derives nothing; (2) one changed-tree `update`, which derives 54 + 5, prints `families: +…` and re-reads the tree — today's behaviour and not the number wanted; (3) the one-file update, five times, timed; (4) the file put back. Nothing on disk is compared in this task — `$L/stages.txt` is the whole artefact — so nothing is copied out, and the next task that touches the corpus resets before it starts.
 
 ```bash
-cd /Users/max/Documents/projects/zerograph && cargo build --release 2>&1 | tail -1 && cp target/release/zerograph ~/bench/levers-2026-09-10/bin/zerograph-t3
+cd /Users/max/Documents/projects/zerograph && cargo build --release 2>&1 | tail -1 && cp target/release/zerograph ~/bench/levers-2026-09-10/bin/repograph-t3
 FIX=~/bench/beauty-crm-502e8a6d; WT=~/bench/beauty-crm-test; export FIX WT
-B=~/bench/levers-2026-09-10/bin/zerograph-t3; L=~/bench/levers-2026-09-10/log/g35; mkdir -p $L
+B=~/bench/levers-2026-09-10/bin/repograph-t3; L=~/bench/levers-2026-09-10/log/g35; mkdir -p $L
 bench/probe/reset.sh
 D=docs/prd-2026-08-16/prd/06-payments.md
 printf '\n' >> $WT/$D && $B --repo $WT --no-dense update 2>&1 | tail -2
@@ -2147,7 +2147,7 @@ cd /Users/max/Documents/projects/zerograph && git add -A src tests README.md && 
 - [ ] **Step 1: Build the binary**
 
 ```bash
-cd /Users/max/Documents/projects/zerograph && cargo build --release 2>&1 | tail -1 && cp target/release/zerograph ~/bench/levers-2026-09-10/bin/zerograph-t5 && git rev-parse --short HEAD
+cd /Users/max/Documents/projects/zerograph && cargo build --release 2>&1 | tail -1 && cp target/release/zerograph ~/bench/levers-2026-09-10/bin/repograph-t5 && git rev-parse --short HEAD
 ```
 
 Record the short hash as the section's binary name.
@@ -2160,9 +2160,9 @@ Two builds in one directory, so the second overwrites the first; as numbered: (1
 cd /Users/max/Documents/projects/zerograph && FIX=~/bench/beauty-crm-502e8a6d; WT=~/bench/beauty-crm-test; export FIX WT
 L=~/bench/levers-2026-09-10/log/g39; mkdir -p $L/main $L/branch
 bench/probe/reset.sh && rm -rf $WT/.zerograph
-~/bench/levers-2026-09-10/bin/zerograph-main --repo $WT --no-dense build 2>&1 | tail -3 && cp $WT/.zerograph/graph.json $L/main/graph.json
+~/bench/levers-2026-09-10/bin/repograph-main --repo $WT --no-dense build 2>&1 | tail -3 && cp $WT/.zerograph/graph.json $L/main/graph.json
 rm -rf $WT/.zerograph
-~/bench/levers-2026-09-10/bin/zerograph-t5 --repo $WT --no-dense build 2>&1 | tail -3 && cp $WT/.zerograph/graph.json $L/branch/graph.json
+~/bench/levers-2026-09-10/bin/repograph-t5 --repo $WT --no-dense build 2>&1 | tail -3 && cp $WT/.zerograph/graph.json $L/branch/graph.json
 ls -l $L/main/graph.json $L/branch/graph.json
 python3 bench/probe/graphdiff.py $L/main/graph.json $L/branch/graph.json | tee $L/graphdiff.txt
 ```
@@ -2174,8 +2174,8 @@ Expected: both builds print the same `families: … · milestones: …` line (54
 Each timed build is from an empty store like the two above, so the six are alike:
 
 ```bash
-for i in 1 2 3; do rm -rf $WT/.zerograph; bench/probe/measure.sh build-main-$i $L -- ~/bench/levers-2026-09-10/bin/zerograph-main --repo $WT --no-dense build; done
-for i in 1 2 3; do rm -rf $WT/.zerograph; bench/probe/measure.sh build-t5-$i $L -- ~/bench/levers-2026-09-10/bin/zerograph-t5 --repo $WT --no-dense build; done
+for i in 1 2 3; do rm -rf $WT/.zerograph; bench/probe/measure.sh build-main-$i $L -- ~/bench/levers-2026-09-10/bin/repograph-main --repo $WT --no-dense build; done
+for i in 1 2 3; do rm -rf $WT/.zerograph; bench/probe/measure.sh build-t5-$i $L -- ~/bench/levers-2026-09-10/bin/repograph-t5 --repo $WT --no-dense build; done
 python3 bench/probe/judge.py medians $L/summary.txt
 ```
 
@@ -2186,7 +2186,7 @@ Expected: `build-t5` wall median within 10% of `build-main`'s (the 2026-09-09 re
 The corpus cites `OQ` 1,771 times and defines it nowhere. The last build above is the branch's, so the store in `$WT` is settled under it — and the tree is clean, since nothing here has touched it.
 
 ```bash
-B=~/bench/levers-2026-09-10/bin/zerograph-t5
+B=~/bench/levers-2026-09-10/bin/repograph-t5
 $B --repo $WT verify | grep -E 'held aside|dangling|gaps' | tee $L/verify-before.txt
 : > $L/oq-stages.txt
 for i in 1 2 3 4 5; do
@@ -2208,7 +2208,7 @@ Wait for `quiet.sh`. As numbered: (1) reset — the store is the fixture's again
 
 ```bash
 cd /Users/max/Documents/projects/zerograph && FIX=~/bench/beauty-crm-502e8a6d; WT=~/bench/beauty-crm-test; export FIX WT
-B=~/bench/levers-2026-09-10/bin/zerograph-t5; L=~/bench/levers-2026-09-10/log/g39
+B=~/bench/levers-2026-09-10/bin/repograph-t5; L=~/bench/levers-2026-09-10/log/g39
 bench/probe/reset.sh
 ZEROGRAPH_NO_SERVE=1 $B --repo $WT --no-dense ask FR-PAY-22 > /dev/null 2>&1 && head -c 4 $WT/.zerograph/graph.bin; echo
 bench/probe/readers.sh $B $WT $L/readers 5 && python3 bench/probe/judge.py compare ~/bench/levers-2026-09-10/log/readers-reference.txt $L/readers/medians.txt | tee $L/readers-compare.txt
@@ -2450,11 +2450,11 @@ Expected: `ok`.
 *Before* is the build Task 6 copied out — `log/g39/branch/graph.json`, `zerograph-t5`'s build from an empty store; the store Task 6 left in `$WT` has been through five `oq` add-and-remove cycles and a settle, and is not trusted as a baseline. *After* is a build from an empty store by `zerograph-t8`, copied out before the diff. As numbered: (1) reset; (2) empty the store; (3) build; (4) copy out; (5) diff the copies.
 
 ```bash
-cd /Users/max/Documents/projects/zerograph && cargo build --release 2>&1 | tail -1 && cp target/release/zerograph ~/bench/levers-2026-09-10/bin/zerograph-t8
+cd /Users/max/Documents/projects/zerograph && cargo build --release 2>&1 | tail -1 && cp target/release/zerograph ~/bench/levers-2026-09-10/bin/repograph-t8
 FIX=~/bench/beauty-crm-502e8a6d; WT=~/bench/beauty-crm-test; export FIX WT
 L=~/bench/levers-2026-09-10/log/g34; mkdir -p $L/t8
 bench/probe/reset.sh && rm -rf $WT/.zerograph
-~/bench/levers-2026-09-10/bin/zerograph-t8 --repo $WT --no-dense build 2>&1 | tail -1 && cp $WT/.zerograph/graph.json $L/t8/graph.json
+~/bench/levers-2026-09-10/bin/repograph-t8 --repo $WT --no-dense build 2>&1 | tail -1 && cp $WT/.zerograph/graph.json $L/t8/graph.json
 python3 bench/probe/graphdiff.py ~/bench/levers-2026-09-10/log/g39/branch/graph.json $L/t8/graph.json | tee $L/graphdiff.txt
 ```
 
@@ -2589,10 +2589,10 @@ Expected: green, clean, `OK` (the compare harness reads `families --json`'s `fam
 In `$WT` as Task 8 Step 5 left it — `zerograph-t8`'s build over a clean tree. `families` reads the graph, walks the tree and writes nothing, so it needs a store in step with its tree and nothing else; if anything has run in the directory since Task 8 Step 5 (an interrupted task, a stray command), repeat that step's reset, `rm -rf` and build first rather than trusting what is on disk.
 
 ```bash
-cd /Users/max/Documents/projects/zerograph && cargo build --release 2>&1 | tail -1 && cp target/release/zerograph ~/bench/levers-2026-09-10/bin/zerograph-t9
+cd /Users/max/Documents/projects/zerograph && cargo build --release 2>&1 | tail -1 && cp target/release/zerograph ~/bench/levers-2026-09-10/bin/repograph-t9
 WT=~/bench/beauty-crm-test; export WT
 L=~/bench/levers-2026-09-10/log/g38; mkdir -p $L
-~/bench/levers-2026-09-10/bin/zerograph-t9 --repo $WT families > $L/families.txt 2>$L/families.err
+~/bench/levers-2026-09-10/bin/repograph-t9 --repo $WT families > $L/families.txt 2>$L/families.err
 awk '/^mention-only prefixes/{p=1; next} p && /^  /{print; n++} n==5{exit}' $L/families.txt
 grep -c 'defined once' $L/families.txt; grep 'defined once' $L/families.txt
 ```
@@ -2628,9 +2628,9 @@ The shipped half (`enrich::unenriched_note`, the README sentence) is on `main`. 
 The *before* arms are the baseline read once more, on the fixture — `bench` loads the store as it stands and writes nothing:
 
 ```bash
-cd /Users/max/Documents/projects/zerograph && cargo build --release 2>&1 | tail -1 && cp target/release/zerograph ~/bench/levers-2026-09-10/bin/zerograph-t10
+cd /Users/max/Documents/projects/zerograph && cargo build --release 2>&1 | tail -1 && cp target/release/zerograph ~/bench/levers-2026-09-10/bin/repograph-t10
 FIX=~/bench/beauty-crm-502e8a6d; WT=~/bench/beauty-crm-test; export FIX WT
-B=~/bench/levers-2026-09-10/bin/zerograph-t10; L=~/bench/levers-2026-09-10/log/g32; mkdir -p $L/after
+B=~/bench/levers-2026-09-10/bin/repograph-t10; L=~/bench/levers-2026-09-10/log/g32; mkdir -p $L/after
 bench/probe/arms.sh $B $FIX $L g32-before 2>&1 | grep -E '^(keyword|long|anchors|bench)'
 ```
 
@@ -2642,7 +2642,7 @@ As numbered: (1) reset — the store is the fixture's, questions and vectors inc
 
 ```bash
 cd /Users/max/Documents/projects/zerograph && FIX=~/bench/beauty-crm-502e8a6d; WT=~/bench/beauty-crm-test; export FIX WT
-B=~/bench/levers-2026-09-10/bin/zerograph-t10; L=~/bench/levers-2026-09-10/log/g32
+B=~/bench/levers-2026-09-10/bin/repograph-t10; L=~/bench/levers-2026-09-10/log/g32
 export ZEROGRAPH_EMBED_MODEL=intfloat/multilingual-e5-small
 bench/probe/reset.sh && git -C $WT status --porcelain | wc -l
 $B --repo $WT build 2>$L/build.err | tee $L/build.out; cat $L/build.err
@@ -2847,13 +2847,13 @@ Expected: green, clean.
 As numbered: (1) reset; (2) the control's three runs — `embed.sh` removes the vectors before each; (3) reset again, so both binaries start from the same bytes; (4) one warm non-stale `--no-dense ask` through the branch binary for its own `RGM2` mirrors — `embed` loads the graph and the questions through their mirrors, and without this the candidate would parse 12 MB of JSON at start-up that the control does not, inside the `first` interval and the RSS; (5) the candidate's three runs. Every artefact is what `embed.sh` writes into `$L` — `.err`, `.out`, `.samples`, `.quiet` and the summary lines — nothing in `$WT` is compared, so nothing is copied out.
 
 ```bash
-cd /Users/max/Documents/projects/zerograph && cargo build --release 2>&1 | tail -1 && cp target/release/zerograph ~/bench/levers-2026-09-10/bin/zerograph-t11
+cd /Users/max/Documents/projects/zerograph && cargo build --release 2>&1 | tail -1 && cp target/release/zerograph ~/bench/levers-2026-09-10/bin/repograph-t11
 FIX=~/bench/beauty-crm-502e8a6d; WT=~/bench/beauty-crm-test; export FIX WT
 L=~/bench/levers-2026-09-10/log/g19; mkdir -p $L
 bench/probe/reset.sh
-for i in 1 2 3; do bench/probe/embed.sh control-$i ~/bench/levers-2026-09-10/bin/zerograph-main $WT $L; done
-bench/probe/reset.sh && ZEROGRAPH_NO_SERVE=1 ~/bench/levers-2026-09-10/bin/zerograph-t11 --repo $WT --no-dense ask FR-PAY-22 > /dev/null 2>&1 && head -c 4 $WT/.zerograph/graph.bin; echo
-for i in 1 2 3; do bench/probe/embed.sh tokens-$i ~/bench/levers-2026-09-10/bin/zerograph-t11 $WT $L; done
+for i in 1 2 3; do bench/probe/embed.sh control-$i ~/bench/levers-2026-09-10/bin/repograph-main $WT $L; done
+bench/probe/reset.sh && ZEROGRAPH_NO_SERVE=1 ~/bench/levers-2026-09-10/bin/repograph-t11 --repo $WT --no-dense ask FR-PAY-22 > /dev/null 2>&1 && head -c 4 $WT/.zerograph/graph.bin; echo
+for i in 1 2 3; do bench/probe/embed.sh tokens-$i ~/bench/levers-2026-09-10/bin/repograph-t11 $WT $L; done
 python3 bench/probe/judge.py medians $L/summary.txt; grep -E '^(control|tokens)-[123] ' $L/summary.txt
 ```
 

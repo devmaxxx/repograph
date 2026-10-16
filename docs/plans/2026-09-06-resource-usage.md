@@ -227,7 +227,7 @@ Expected: exit 0 and the two summary lines identical to the last `bench:dense+en
 
 **The re-embedded store, floors held:** the token-budgeted batches change padding, so a re-embedded store's vectors differ at float precision. Prove it does not cost a case:
 ```bash
-rm -rf "$G/e5large2" && mkdir -p "$G/e5large2" && cp -a /Users/max/bench/gaps-2026-09-05/e5large/.zerograph "$G/e5large2/.zerograph" && cp /Users/max/bench/gaps-2026-09-05/e5large/zerograph.toml "$G/e5large2/"
+rm -rf "$G/e5large2" && mkdir -p "$G/e5large2" && cp -a /Users/max/bench/gaps-2026-09-05/e5large/.repograph "$G/e5large2/.zerograph" && cp /Users/max/bench/gaps-2026-09-05/e5large/repograph.toml "$G/e5large2/"
 rm -f "$G/e5large2/.zerograph/vectors.*"; "$B" --repo "$G/e5large2" embed 2>&1 | tail -1
 "$B" --repo "$G/e5large2" bench 2>&1 | tail -1
 ```

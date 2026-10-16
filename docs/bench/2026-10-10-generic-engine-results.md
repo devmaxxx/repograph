@@ -11,7 +11,7 @@ written in `~/bench/beauty-crm-test` after `bench/probe/reset.sh`.
 ## Step 0 · Engine and front
 
 The base readings are recorded in the plan's "Step 0 as built" note. The fixture base was taken
-at the start of step 1 with the step-0 binary, `bin/zerograph-step0`:
+at the start of step 1 with the step-0 binary, `bin/repograph-step0`:
 
 - bench (`--no-dense`, `intfloat/multilingual-e5-small`): keyword 39/40, paraphrase 7/30,
   code 12/12, p90 238 tok, green. The transcript is `log/bench-step0.txt`, and the row is in
@@ -20,7 +20,7 @@ at the start of step 1 with the step-0 binary, `bin/zerograph-step0`:
 
 ## Step 1 · Shell
 
-Old: `bin/zerograph-step0`. New: `bin/zerograph-step1`. Shell's old reader is deleted, so the old
+Old: `bin/repograph-step0`. New: `bin/repograph-step1`. Shell's old reader is deleted, so the old
 graph cannot come from `ZEROGRAPH_LEGACY`.
 
 - **Regressions:** R1–R9 = 0 on the kit corpus (`old-1` vs `new-1`), on the scratchpad corpus
@@ -41,8 +41,8 @@ graph cannot come from `ZEROGRAPH_LEGACY`.
 
 ## Step 2 · Bicep
 
-Old: `bin/zerograph-step1c`, the step-1 binary rebuilt on the clean commit `00022dd` (below). New:
-`bin/zerograph-step2`. Bicep's old reader is deleted, so the old graph cannot come from
+Old: `bin/repograph-step1c`, the step-1 binary rebuilt on the clean commit `00022dd` (below). New:
+`bin/repograph-step2`. Bicep's old reader is deleted, so the old graph cannot come from
 `ZEROGRAPH_LEGACY`.
 
 - **Step 1 re-recorded.** The step-1 fixture row was taken from an uncommitted tree on `c7e8b68`
@@ -69,7 +69,7 @@ Old: `bin/zerograph-step1c`, the step-1 binary rebuilt on the clean commit `0002
 
 ## Step 3 · HCL and Terraform
 
-Old: `bin/zerograph-step2`. New: `bin/zerograph-step3`, built on the clean commit `23748b5`. HCL's
+Old: `bin/repograph-step2`. New: `bin/repograph-step3`, built on the clean commit `23748b5`. HCL's
 old reader is deleted, so the old graph cannot come from `ZEROGRAPH_LEGACY`.
 
 - **Step-2 review fixes** landed first (`e9caf84`). On both corpora, `graph.json` and
@@ -107,12 +107,12 @@ old reader is deleted, so the old graph cannot come from `ZEROGRAPH_LEGACY`.
 
 ## Step 4 · Swift
 
-Old: `bin/zerograph-step3`. New: `bin/zerograph-step4`. Swift's old reader is deleted, so the old
+Old: `bin/repograph-step3`. New: `bin/repograph-step4`. Swift's old reader is deleted, so the old
 graph cannot come from `ZEROGRAPH_LEGACY`.
 
 - **Step-3 review fixes** landed first (`2d3be08`). On both corpora and the fixture, `graph.json` and
   `headers.json` are byte-identical to `new-3`, `store-step3` and `fixture-base`
-  (`bin/zerograph-step4a`).
+  (`bin/repograph-step4a`).
 - **Regressions:** R1–R9 = 0 from `langdiff.py --lang swift` on two inputs: the kit corpus (`new-3`
   vs `new-4`) and the scratchpad corpus (`store-base` vs `store-step4`). The readings are in
   `log/langdiff-step4-kit.txt` and `log/langdiff-step4-scratch.txt`. The fixture holds no `.swift`.
@@ -143,7 +143,7 @@ graph cannot come from `ZEROGRAPH_LEGACY`.
 
 ## Exception sweep · 2026-10-12
 
-Old: today's stores (`new-4`, `store-step4` and `fixture-base`). New: `bin/zerograph-sweep`, built
+Old: today's stores (`new-4`, `store-step4` and `fixture-base`). New: `bin/repograph-sweep`, built
 on the clean commit `b2521b5`. Every exception was measured under §3.3's rule of 2026-10-12, and the
 table, the accepted diff and the rewritten assertions are in the plan's §3.5.
 
@@ -176,8 +176,8 @@ table, the accepted diff and the rewritten assertions are in the plan's §3.5.
 
 ## Step 6 · SQL
 
-Old: `bin/zerograph-5`, with its stores (`new-5`, the scratchpad's step-5 store and `fixture-base`).
-New: `bin/zerograph-step6`, built on `f7358e1`. `bin/zerograph-step6a`, built on the clean commit
+Old: `bin/repograph-5`, with its stores (`new-5`, the scratchpad's step-5 store and `fixture-base`).
+New: `bin/repograph-step6`, built on `f7358e1`. `bin/repograph-step6a`, built on the clean commit
 `8c2e454` before the compile warm-up, ran the bench. Both write byte-identical graphs on both
 corpora. SQL's old reader is deleted, so the old graph cannot come from `ZEROGRAPH_LEGACY`.
 
@@ -217,8 +217,8 @@ corpora. SQL's old reader is deleted, so the old graph cannot come from `ZEROGRA
 
 ## Step 7 · Dart
 
-New: `bin/zerograph-step7a`, built on `47e6c4f` (the `within` key alone), and `bin/zerograph-step7`,
-built on the Dart port. Dart's old reader is deleted. The step-6 binary `bin/zerograph-step6b-head`
+New: `bin/repograph-step7a`, built on `47e6c4f` (the `within` key alone), and `bin/repograph-step7`,
+built on the Dart port. Dart's old reader is deleted. The step-6 binary `bin/repograph-step6b-head`
 (`fd3de01`) is the old graph.
 
 - **Regressions:** from `langdiff.py --lang dart` and `--lang sql` on three inputs. All three
@@ -252,8 +252,8 @@ built on the Dart port. Dart's old reader is deleted. The step-6 binary `bin/zer
 
 ## Step 8 · Python
 
-New: `bin/zerograph-step8a`, built on `8bac67f` (`within` placed by the outermost capture), and
-`bin/zerograph-step8`, built on the Python port. Python's old reader is deleted. The step-8a
+New: `bin/repograph-step8a`, built on `8bac67f` (`within` placed by the outermost capture), and
+`bin/repograph-step8`, built on the Python port. Python's old reader is deleted. The step-8a
 binary still carried the old reader and is the old graph (`sweep/s8-base`); its graphs on the kit,
 the scratchpad corpus and the fixture are byte-identical to step 7's.
 
@@ -294,7 +294,7 @@ the scratchpad corpus and the fixture are byte-identical to step 7's.
 
 Written after step 10, since the re-read below found this section missing. The readings come from
 the plan's "Step 9 as built" note and the kit's stores. The engine's additions are `145ab3e` and the
-port is `e1a4c68`; their binaries are `bin/zerograph-step9e` and `bin/zerograph-step9`. Rust's old
+port is `e1a4c68`; their binaries are `bin/repograph-step9e` and `bin/repograph-step9`. Rust's old
 reader is deleted.
 
 - **Regressions:** from `langdiff.py --lang rs` on three inputs.
@@ -575,7 +575,7 @@ Review findings left unfixed, and divergences documented but not fixed:
 
 ## Step 10 · Kotlin
 
-New: `bin/zerograph-step10`, built on `f064778`. Kotlin's old reader (`src/code/jvm/kotlin/`) is
+New: `bin/repograph-step10`, built on `f064778`. Kotlin's old reader (`src/code/jvm/kotlin/`) is
 deleted. What Kotlin and Java share moved from `src/code/jvm/mod.rs` to
 `src/code/exceptions/package_scope.rs`; Java still reads through its own walk until step 11.
 
@@ -631,7 +631,7 @@ deleted. What Kotlin and Java share moved from `src/code/jvm/mod.rs` to
 
 ## Step 11 · Java
 
-New: `bin/zerograph-step11`, built on `bb4aa59`. Java's old reader (`src/code/jvm/java/`) and
+New: `bin/repograph-step11`, built on `bb4aa59`. Java's old reader (`src/code/jvm/java/`) and
 `src/code/jvm/` are deleted. Java's lookup lives in `src/code/exceptions/package_scope/` beside
 Kotlin's, as `java.rs` and `java/calls.rs`.
 
@@ -680,7 +680,7 @@ Kotlin's, as `java.rs` and `java/calls.rs`.
 
 ## Step 12 · C#, Razor
 
-New: `bin/zerograph-step12c`. `bin/zerograph-step12` holds the first, slower query, and the two
+New: `bin/repograph-step12c`. `bin/repograph-step12` holds the first, slower query, and the two
 write identical stores on the kit, the Razor-globbed kit and the scratchpad corpus. C#'s and Razor's
 old readers and `src/code/dotnet/` are deleted.
 C#'s lookup lives in `src/code/exceptions/namespace_scope/`, and Razor's components in
@@ -738,7 +738,7 @@ package and imports types.
 
 ## Step 13 · TypeScript, TSX, Vue
 
-New: `bin/zerograph-step13`, built at `241b838`. The old reader is `bin/zerograph-step13d`, and
+New: `bin/repograph-step13`, built at `241b838`. The old reader is `bin/repograph-step13d`, and
 `src/code/typescript/` is deleted. TypeScript and TSX declare through
 `queries/typescript/decl.scm`: 14 patterns, about 52 ms to compile per grammar. Three exceptions keep
 what no query says: `import_bindings`, `statement_prose` and `single_file_components`.
@@ -797,7 +797,7 @@ what no query says: `import_bindings`, `statement_prose` and `single_file_compon
 
 ### Step 13 · review fix `082861f`
 
-New: `bin/zerograph-step13b`. A decorated class member reads its line from its first child that is
+New: `bin/repograph-step13b`. A decorated class member reads its line from its first child that is
 not a decorator, where it read the first line not opening with `@`.
 
 - **Regressions:** from `langdiff.py --lang ts,tsx,vue`, in `log/langdiff-step13b-{kit,scratch,fixture}.txt`.
@@ -814,10 +814,10 @@ not a decorator, where it read the first line not opening with `@`.
 
 ## Step 14 · Remove the old paths
 
-New: `bin/zerograph-step14`, built at `0fab918`. The front calls the engine alone, and
+New: `bin/repograph-step14`, built at `0fab918`. The front calls the engine alone, and
 `ZEROGRAPH_LEGACY` is gone. `walk::GRAMMAR` moves from 5 to 6. Before that, two fixes from step 13's
 review: an update drops the read-ahead it did not use (`198dab5`), and a file's decorators are read
-in one walk (`f9479b6`, binary `bin/zerograph-step14a`).
+in one walk (`f9479b6`, binary `bin/repograph-step14a`).
 
 - **Regressions:** from `langdiff.py` over every language, in `log/langdiff-step14{a,}-{kit,scratch,fixture}.txt`.
   - `step14a` and `step14` against `082861f`'s stores: byte-identical on the kit, the scratchpad
@@ -842,7 +842,7 @@ in one walk (`f9479b6`, binary `bin/zerograph-step14a`).
 
 ## Step 15 · Lua
 
-New: `bin/zerograph-step15`, built at `c9415d7`. Parent: `bin/zerograph-step14b`, built at
+New: `bin/repograph-step15`, built at `c9415d7`. Parent: `bin/repograph-step14b`, built at
 `eb316a2`. Lua is read only when a config or `ZEROGRAPH_CODE_GLOBS` names `**/*.lua`.
 
 - **Corpus:** `luarocks/luarocks` at `v3.13.0`, `3421bedc2ce2b64e79530bb97497531b014899a8`, 162
@@ -901,7 +901,7 @@ New: `bin/zerograph-step15`, built at `c9415d7`. Parent: `bin/zerograph-step14b`
 
 ### Step 15 · review fix `03f3c21`
 
-New: `bin/zerograph-step15r`, built at `03f3c21`. Parent: `bin/zerograph-step15`. The fix reads a
+New: `bin/repograph-step15r`, built at `03f3c21`. Parent: `bin/repograph-step15`. The fix reads a
 receiver by what the required file exposes (`@export.root`, or its unowned top-level definitions),
 resolves `M.f()` on the file's own table and `self` in a member (`#set! receiver "owner"`), and tells a
 `require` alias from a value by node type.
@@ -950,7 +950,7 @@ resolves `M.f()` on the file's own table and `self` in a member (`#set! receiver
 
 ## Step 16 · item 0 · Lua leftovers
 
-New: `bin/zerograph-step16a`, built from the item 0 tree. Parent: `bin/zerograph-step15r`.
+New: `bin/repograph-step16a`, built from the item 0 tree. Parent: `bin/repograph-step15r`.
 
 - **What changed:** `return setmetatable(M, …)` is an export root; a file-level `return require(…)`
   is a `ReExports` edge whose target's members a receiver reaches; `self` reads its binding
@@ -978,7 +978,7 @@ New: `bin/zerograph-step16a`, built from the item 0 tree. Parent: `bin/zerograph
 
 ## Step 16 · Go
 
-New: `bin/zerograph-step16`, built at the tree committed as `e8510ae`. Parent: `bin/zerograph-step16a`,
+New: `bin/repograph-step16`, built at the tree committed as `e8510ae`. Parent: `bin/repograph-step16a`,
 built at `904039b`. Go is read only when a config or `ZEROGRAPH_CODE_GLOBS` names `**/*.go`.
 
 - **Corpus:** `gin-gonic/gin` at `v1.12.0`, `73726dc606796a025971fe451f0aa6f1b9b847f6`, 98 `.go`
@@ -1065,7 +1065,7 @@ built at `904039b`. Go is read only when a config or `ZEROGRAPH_CODE_GLOBS` name
 
 ### Step 16 · review fix `5cd204b`, re-verified
 
-New: `bin/zerograph-step16r`, built at `5cd204b`. Parent: `bin/zerograph-step16`. The fix names an
+New: `bin/repograph-step16r`, built at `5cd204b`. Parent: `bin/repograph-step16`. The fix names an
 unaliased import by the package most of its files declare, unquotes a raw-string import path, and
 binds a generic receiver's type parameters in the method.
 
@@ -1084,8 +1084,8 @@ binds a generic receiver's type parameters in the method.
 
 ## Step 17 · C
 
-New: `bin/zerograph-step17`, built at the tree committed as `77b7d8f` (measured as `step17w`, the
-same tree). Parent: `bin/zerograph-step16r`, built at `5cd204b`; item 0 is `f22c2a1`, which
+New: `bin/repograph-step17`, built at the tree committed as `77b7d8f` (measured as `step17w`, the
+same tree). Parent: `bin/repograph-step16r`, built at `5cd204b`; item 0 is `f22c2a1`, which
 changed no store. C is read only when a config or `ZEROGRAPH_CODE_GLOBS` names `**/*.c` and `**/*.h`.
 
 - **Corpus:** `redis/hiredis` at `v1.4.1`, `616f2286ba5503f74ae96e720623fa11dbc690af`, 25 `.c` and
@@ -1193,8 +1193,8 @@ changed no store. C is read only when a config or `ZEROGRAPH_CODE_GLOBS` names `
 
 ## Step 18 · C++
 
-New: `bin/zerograph-cpp12`, built at the non-test source committed as `67c09fa`. Parent:
-`bin/zerograph-cpp-base`, built at `4d262b1`. C++ is read only when a config or
+New: `bin/repograph-cpp12`, built at the non-test source committed as `67c09fa`. Parent:
+`bin/repograph-cpp-base`, built at `4d262b1`. C++ is read only when a config or
 `ZEROGRAPH_CODE_GLOBS` names its extensions; the store below names `**/*.cc **/*.h`.
 
 - **Corpus:** `google/leveldb` at `1.23`, `99b3c03b3284f5886f9ef9a4ef703d57373e61be`, 75 `.cc` and
@@ -1212,7 +1212,7 @@ New: `bin/zerograph-cpp12`, built at the non-test source committed as `67c09fa`.
 - **Parse census, gated on losses:** 0 of 131 leveldb files lose a definition. Raw: 32 of 131 hold
   an ERROR or MISSING node (140 and 75). On hiredis after the move: C 25 files, 6 bad; C++ 28 files
   (27 headers and `example-qt.cpp`), 12 bad.
-- **Exception, no-hook numbers** (`bin/zerograph-cpp-nohook`, the same tree with `hooks: NONE`): 25
+- **Exception, no-hook numbers** (`bin/repograph-cpp-nohook`, the same tree with `hooks: NONE`): 25
   of 131 files lose a definition (19.1%); recall function 1.000, member 0.9054 (651 of 719), method
   0.8917 (1,021 of 1,145), type 0.8810 (222 of 252), Calls 0.8335 (986 of 1,183, 1,000 edges). With
   the hook every kind reads 1.000. On hiredis the hook changes only `qt.h` and `example-qt.h`.
@@ -1302,7 +1302,7 @@ New: `bin/zerograph-cpp12`, built at the non-test source committed as `67c09fa`.
 
 ### Step 18 · review fix `829623c`
 
-New: `bin/zerograph-cpp-fix`, built at `829623c`'s source. Parent: `bin/zerograph-cpp12`. `b93426c`
+New: `bin/repograph-cpp-fix`, built at `829623c`'s source. Parent: `bin/repograph-cpp12`. `b93426c`
 between them changes only an operator spelled with `/`, which neither leveldb nor hiredis writes.
 The fix resolves qualified calls through their whole qualifier, names a nested out-of-line method by
 every class around it, drops a namespace its own file opens from a definition, and repairs two
@@ -1372,7 +1372,7 @@ tokenizer cases of the attribute-macro view. Plan, step 18 as built, has each fi
 
 ## Step 19 · Ruby
 
-New: `bin/zerograph-ruby`, built at the tree committed as `ffeaabf`. Parent: `bin/zerograph-step17`,
+New: `bin/repograph-ruby`, built at the tree committed as `ffeaabf`. Parent: `bin/repograph-step17`,
 built at `77b7d8f`. Ruby is read only when a config or `ZEROGRAPH_CODE_GLOBS` names `**/*.rb`,
 `**/*.rbw`, `**/*.gemspec` and `**/*.rake`.
 
@@ -1476,7 +1476,7 @@ built at `77b7d8f`. Ruby is read only when a config or `ZEROGRAPH_CODE_GLOBS` na
 
 ### Step 19 · review fix `6943fdc`
 
-New: `bin/zerograph-ruby-fix`, built at `6943fdc`'s source. Parent: `bin/zerograph-ruby-rev`, built at
+New: `bin/repograph-ruby-fix`, built at `6943fdc`'s source. Parent: `bin/repograph-ruby-rev`, built at
 `67e2c99`. The fix keeps `require` and `autoload` to `lib/` and `require_relative` to the requirer's
 directory through a new `#set! import` key, takes a path already ending in `.rb` as written, and
 stops a value's singleton class declaring its methods after a bare `private`. Plan, step 19 as
@@ -1529,8 +1529,8 @@ built, has each finding.
 
 ## Step 20 · PHP
 
-New: `bin/zerograph-php`, built at the tree committed on `feat/engine-php`. Parent:
-`bin/zerograph-step17`. PHP is read only when a config or `ZEROGRAPH_CODE_GLOBS` names `**/*.php`.
+New: `bin/repograph-php`, built at the tree committed on `feat/engine-php`. Parent:
+`bin/repograph-step17`. PHP is read only when a config or `ZEROGRAPH_CODE_GLOBS` names `**/*.php`.
 
 - **Corpus:** `slimphp/Slim` at `4.15.3`, `3675bf6baac66b07032575b7bef4200b60b7974b`, 125 `.php`,
   MIT. It is read as data only: no script of it was run. One root `composer.json`: `Slim\` →
@@ -1615,8 +1615,8 @@ New: `bin/zerograph-php`, built at the tree committed on `feat/engine-php`. Pare
 
 ## Step 21 · Scala
 
-New: `bin/zerograph-scala`, built at the tree committed on `feat/engine-scala`. Parent:
-`bin/zerograph-merge19`. Scala is read only when a config or `ZEROGRAPH_CODE_GLOBS` names
+New: `bin/repograph-scala`, built at the tree committed on `feat/engine-scala`. Parent:
+`bin/repograph-merge19`. Scala is read only when a config or `ZEROGRAPH_CODE_GLOBS` names
 `**/*.scala` or `**/*.sc`.
 
 - **Corpus:** `com-lihaoyi/os-lib` at `0.11.8`, `b14ae532fbbf082b2c22d9f58f7f475be3e3fe79`, 59
@@ -1701,8 +1701,8 @@ New: `bin/zerograph-scala`, built at the tree committed on `feat/engine-scala`. 
 
 ## Step 22 · Elixir
 
-New: `bin/zerograph-elixir`, built at the tree committed as `7276359`. Parent:
-`bin/zerograph-merge19`. Elixir is read only when a config or `ZEROGRAPH_CODE_GLOBS` names
+New: `bin/repograph-elixir`, built at the tree committed as `7276359`. Parent:
+`bin/repograph-merge19`. Elixir is read only when a config or `ZEROGRAPH_CODE_GLOBS` names
 `**/*.ex` and `**/*.exs`.
 
 - **Corpus:** `elixir-plug/plug` at `v1.20.3`, `9fa11c8ebedbe68531eba25d8f81b9282e0514da`, 42 `.ex`
@@ -1784,8 +1784,8 @@ New: `bin/zerograph-elixir`, built at the tree committed as `7276359`. Parent:
 
 ## Step 23 · OCaml
 
-New: `bin/zerograph-ocaml`, built at the tree committed on `feat/engine-ocaml`. Parent:
-`bin/zerograph-merge19`. OCaml is read only when a config or `ZEROGRAPH_CODE_GLOBS` names `**/*.ml`
+New: `bin/repograph-ocaml`, built at the tree committed on `feat/engine-ocaml`. Parent:
+`bin/repograph-merge19`. OCaml is read only when a config or `ZEROGRAPH_CODE_GLOBS` names `**/*.ml`
 and `**/*.mli`.
 
 - **Corpus:** `ocaml/ocaml-re` at `1.14.0`, `4367d9c785f9d8a59029bf2a1bea2e2060ac2c64`, 71 `.ml`
@@ -1878,7 +1878,7 @@ and `**/*.mli`.
 
 ## Step 23 · review fix
 
-New: `bin/zerograph-ocaml-rev`. An `open` or `include` now reaches only the sites after it inside
+New: `bin/repograph-ocaml-rev`. An `open` or `include` now reaches only the sites after it inside
 the module holding it, an alias to a module the file defines (`module Id = Ids.Id`) reads that
 module rather than a file its name spells, and `above()` keeps the doc above a `type`, `exception`
 and `class`.

@@ -12,7 +12,7 @@ Method, copied byte for byte from
 max RSS; a one-second `top -l 2 -s 1 -pid … -stats pid,cpu,mem,th` sampler for CPU% (100% = one
 core) and thread count, from which `peak` is the largest sample and the parenthesised figure the
 mean of all of them. `ZEROGRAPH_NO_SERVE=1` on every row but `serve`. Every writer runs on its own
-pristine copy of the fixture's `.zerograph` with `vectors.*` removed; the pinned fixture is never
+pristine copy of the fixture's `.repograph` with `vectors.*` removed; the pinned fixture is never
 rebuilt and was verified clean afterwards.
 
 > **The machine was not quiet, and every row below was taken on it anyway.** One-minute load

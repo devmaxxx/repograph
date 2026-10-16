@@ -53,8 +53,8 @@ class Rules(unittest.TestCase):
         self.assertEqual(decided(row + "\n", "project"), row)
 
     def test_a_zerograph_at_zero_percent_refuses_under_any_name_it_is_built_as(self):
-        for path in ("/Users/max/bench/bin/zerograph-main", "/Users/max/bench/bin/zerograph-main",
-                     "/Users/max/src/target/release/zerograph", "/Users/max/src/target/release/zerograph"):
+        for path in ("/Users/max/bench/bin/repograph-main", "/Users/max/bench/bin/repograph-main",
+                     "/Users/max/src/target/release/zerograph", "/Users/max/src/target/release/repograph"):
             with self.subTest(path=path):
                 row = f"{self.other} 0.0 {path}"
                 self.assertEqual(decided(row + "\n", "project"), row)

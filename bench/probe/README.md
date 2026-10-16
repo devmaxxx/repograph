@@ -9,7 +9,7 @@ Two directories, both locked: `~/bench/beauty-crm-502e8a6d`, the pinned fixture,
 `~/bench/beauty-crm-test`, the one writable worktree, where every writer and every reader row runs.
 
 - `quiet.sh` — the precondition every row is read under: ≥ 85% idle, 1-minute load < 3.0, AC power,
-  no `cargo`/`rustc`/`zerograph`/`zerograph` at all, and no other `node` at or above 5.0% CPU. The two
+  no `cargo`/`rustc`/`zerograph`/`repograph` at all, and no other `node` at or above 5.0% CPU. The two
   rules differ because the two kinds of noise do. This project's own tools are bursty, so presence
   is the whole rule for them: a `cargo` at 0% is between two crates and a `zerograph` at 0% is
   about to embed. A `node` at 0% is a sibling harness or an MCP server asleep, and a process

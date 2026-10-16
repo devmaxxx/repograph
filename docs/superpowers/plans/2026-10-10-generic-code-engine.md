@@ -843,7 +843,7 @@ cmp $K/old-<step>/headers.json $K/new-<step>/headers.json
 
 **Build time** is part of every step's gate from step 10 on (2026-10-12). Before that it was taken at steps 0, 6, 9, 13 and 14, as a median of three.
 
-- **The reading.** Five `build --no-dense` runs of the corpus, each from an empty store, interleaved with five of the step-0 binary (`bin/zerograph-step0`), the pairs written to `log/buildtime-step<N>.txt`. The step's figure is its median over step 0's median from the same run.
+- **The reading.** Five `build --no-dense` runs of the corpus, each from an empty store, interleaved with five of the step-0 binary (`bin/repograph-step0`), the pairs written to `log/buildtime-step<N>.txt`. The step's figure is its median over step 0's median from the same run.
 - **The bar.** At most 1.20×.
 - **When a step crosses it,** the engine is fixed first, as SQL's compile warm-up and Rust's start depth were, and the step is measured again. A language's own exception is not where the time is bought back.
 - **When the bar cannot be held,** the step stops with its numbers reported and does not land over it.
@@ -881,7 +881,7 @@ The bench runs at the steps whose language is in the fixture: Shell, HCL (`.tf`)
 ```bash
 BIN=$PWD/$B ZEROGRAPH_EMBED_MODEL=<declared> bench/probe/reset.sh
 $B --repo ~/bench/beauty-crm-test build --no-dense
-python3 -I bench/probe/langdiff.py --lang <exts> $K/fixture-base ~/bench/beauty-crm-test/.zerograph
+python3 -I bench/probe/langdiff.py --lang <exts> $K/fixture-base ~/bench/beauty-crm-test/.repograph
 $B --repo ~/bench/beauty-crm-test --no-dense bench
 ```
 
@@ -1004,7 +1004,7 @@ This step alone closes the three reviewer defects. About 1,200 lines of Rust are
 
 **Step 1 as built.** Where the code differs from the text above, the code is the record:
 
-- The old graph comes from the step-0 binary (`bin/zerograph-step0`) and `store-base`, not from `ZEROGRAPH_LEGACY`: Shell's old reader is deleted in this step, so no switch can force it.
+- The old graph comes from the step-0 binary (`bin/repograph-step0`) and `store-base`, not from `ZEROGRAPH_LEGACY`: Shell's old reader is deleted in this step, so no switch can force it.
 - The queries are `src/code/queries/shell/{decl,refs}.scm`, embedded through `queries::sources`. `.gitattributes` pins `*.scm` to LF, so a Windows checkout embeds the same text.
 - The hooks live in `src/code/exceptions/computed_paths.rs`, named for the rule: a path a script computes from its own location (§2.7). It holds what `paths.rs` and the run detection in `commands.rs` did. `collect` keeps its own parse and `(rel, source)` signature, and records each `source` site's candidate paths by the command's start byte. `import` picks the first candidate that is a globbed script. The run-by-path References are written by `resolve`, not by `import`, because a run is no import.
 - `ImportHook` takes the importer's path, `fn(&Resolver, &str, &Import)`. The transitive walk holds only the declarations of the files it reaches, not a `File`, and it now asks the hook for each of them. Before this step it computed their imports with the default paths, which cannot evaluate `$HERE/lib.sh`.
@@ -1028,7 +1028,7 @@ This step alone closes the three reviewer defects. About 1,200 lines of Rust are
 **Step 2 as built.** Where the code differs from the text above, the code is the record:
 
 - Two step-1 review findings were fixed first, in their own commit. A `source` site is now keyed by its operand, which the Shell query captures as `@import.path`, and not by the command's start byte. An editor's buffer that differs from the collected text no longer drops the Imports edge, and a case pins this. `files_only_note` takes the repository root and relative paths, so its tests no longer depend on the process's directory. The step-1 fixture row was re-recorded clean on `00022dd` and supersedes the `tool_dirty` row; the old row stays.
-- The old graph comes from the step-1 binary built on the clean commit (`bin/zerograph-step1c`), not from `ZEROGRAPH_LEGACY`, because Bicep's old reader is deleted in this step.
+- The old graph comes from the step-1 binary built on the clean commit (`bin/repograph-step1c`), not from `ZEROGRAPH_LEGACY`, because Bicep's old reader is deleted in this step.
 - **References is a hook (§3.3).** With the read sites and locals in the query, the default resolution matches all 4,344 corpus References (P = R = 1). Five Bicep cases fail under it, though. A decorator's argument is read from the file, not from the declaration it decorates (two cases). A call names a `param` or `var` of the same name. `vnet::subnet` names nothing. A child resource's short name inside its parent names nothing. So References is in `hooks.owns`, and `exceptions/symbolic_names.rs` reproduces the old reader exactly. The query picks every read, the binders are locals, and the rule decides what each read names and which declaration reads it.
 - **Module reach** is `exceptions/module_reach.rs`, as §3.4 predicted, but it also carries an `import` hook. The default path with the `.bicep`, absolute and registry predicates in the query reproduces the old imports in every way but one: a module naming its own file. The hook drops that. `Resolver::facts` replaces the old collect pass and its `Files` state, so Bicep has no `collect` and no `state`. The resolve hook is one closure in the spec row that calls both rules.
 - **Locals bind to their own pattern's scope (engine).** A `@local.definition` whose own match also captures a `@local.scope` binds in that scope alone. Otherwise it binds in the innermost scope that holds it, as before. Without this the old shadowing cannot be written: a loop variable covers the loop's body and not the iterable beside it (`[for x in x: x]` reads the `param x`), and a function's parameters cover its result type and body but not the parameter types. Shell has no locals, so nothing else moved.
@@ -1421,7 +1421,7 @@ This step alone closes the three reviewer defects. About 1,200 lines of Rust are
 - **Cases** moved to `src/code/cases/kotlin.rs`, with the shared module's `fixture` and `cross` tests. A `super::header(src)` call became `header("", src)`. No assertion was rewritten.
 - **Timing:** median of five, interleaved, on the corpus: step 0 1.276 s, step 10 1.509 s, 1.18× (`log/buildtime-step10.txt`). A first run on the same code read 1.16×.
 - **Size:** `src/code/jvm/kotlin/` held 1,191 lines outside its cases. The exception keeps 1,096, so −95, against the re-estimate's −350 to −500 and its 700–850 kept. The walk was not split: 775 of the 1,096 lines are the receiver walk, which no query replaces. Added: 100 lines of query, 26 net in the spec, 3 in `queries.rs` and 11 in the engine.
-- **Review fix re-verified.** `330b9aa` declares the members of a type inside a Kotlin companion. Its binary (`bin/zerograph-step10b`) against step 10's added no edge and removed none on any input. The kit (`new-10` → `new-10b`) is byte-identical, 9,885 nodes and 19,757 edges. The fixture's edge set equals `fixture-8p`'s (41,116 edges), and the scratchpad corpus is byte-identical too. Langdiff `--lang kt` reads 0 on all three (`log/langdiff-step10b-{kit,fixture-vs-8p}.txt`). The fix costs no measurable time. Three medians of five, interleaved, at load 6–10: 1.155×, 1.182× and 1.189× step 0 (`log/buildtime-step10b-{4,5}.txt`, `log/buildtime-step11-3.txt`).
+- **Review fix re-verified.** `330b9aa` declares the members of a type inside a Kotlin companion. Its binary (`bin/repograph-step10b`) against step 10's added no edge and removed none on any input. The kit (`new-10` → `new-10b`) is byte-identical, 9,885 nodes and 19,757 edges. The fixture's edge set equals `fixture-8p`'s (41,116 edges), and the scratchpad corpus is byte-identical too. Langdiff `--lang kt` reads 0 on all three (`log/langdiff-step10b-{kit,fixture-vs-8p}.txt`). The fix costs no measurable time. Three medians of five, interleaved, at load 6–10: 1.155×, 1.182× and 1.189× step 0 (`log/buildtime-step10b-{4,5}.txt`, `log/buildtime-step11-3.txt`).
 - **Open, not fixed:**
   - Members the grammar wraps in an `ERROR` inside a `class_body` are not declared. The old reader flattened an `ERROR` child of the body and declared what it held. Ten probe shapes did not reproduce it: step 9's binary and step 10b's read them alike.
   - `receivers::resolve` wrote into a throwaway `Extraction` and copied its edges to the sink, because the shared `link` and `decorate` still took an `Extraction` for Java's reader. Step 11 moved them, and the walk, to the sink, which removed the copy (`bb4aa59`).
@@ -1523,7 +1523,7 @@ This step alone closes the three reviewer defects. About 1,200 lines of Rust are
   - `namespace_scope/lookup.rs` is unchanged apart from paths.
   - `rendered_components` reads the blanked view by C#'s queries. The wrapper class and every name under it take the component's name. The wrapper's node becomes the component's: the whole file, its first line, exported. The rest is the old Razor logic, through the sink.
   - Without the `resolve` hooks, 37 of the 74 C# cases fail and 23 of the 60 Razor cases fail. On the kit, C# keeps 0 of 324 Calls and 0 of 20 Imports. Both hooks stay.
-- **Gate:** langdiff on four inputs, read with `bin/zerograph-step12` (the first query). The final binary, `bin/zerograph-step12c`, writes stores identical to it on the kit, the Razor-globbed kit and the scratchpad corpus.
+- **Gate:** langdiff on four inputs, read with `bin/repograph-step12` (the first query). The final binary, `bin/repograph-step12c`, writes stores identical to it on the kit, the Razor-globbed kit and the scratchpad corpus.
   - Kit corpus (`old-12` → `new-12`, `--lang cs,csproj`): R3 = 1 and body-above 1, both accepted below. Every other class is 0. The 19,757 edges are identical. C# holds Declares 498 (282 `export`), Imports 20 and Calls 324. `old-12` is step 12a's binary under `ZEROGRAPH_LEGACY=csharp`, and is identical to `new-11`.
   - Kit corpus with `.razor` and `.cshtml` globbed (step 11's binary → step 12's): cs as above, and razor R3 = 18, accepted below. The 1,242 edges are identical. Razor holds Declares 380 (255 `export`), Imports 1 and Calls 19.
   - Scratchpad corpus (vs `store-base`): cs R3 = 1 and body-above 1, the same two nodes as the kit. The rest is the accepted py R3 = 12, rs R3 = 3 and body-above 7, SQL body-above 11 and Swift R3 = 1. Against step 11's store only the two cs bodies differ.
@@ -1609,7 +1609,7 @@ This step alone closes the three reviewer defects. About 1,200 lines of Rust are
 
     No `Doc` reads a comment above a wrapper, and no `Line` reads a whole function. The hook stays.
   - `single_file_components` (186 lines) is the old Vue reader's script extraction and component symbol, through the sink. Without it no `.vue` file declares anything. On the kit its 8 files hold Declares 46, Imports 2, Extends 4 and Calls 7. The hook stays.
-- **Gate:** langdiff with `bin/zerograph-step13` on three inputs. The readings are in `log/langdiff-step13-{kit,scratch,fixture}.txt`.
+- **Gate:** langdiff with `bin/repograph-step13` on three inputs. The readings are in `log/langdiff-step13-{kit,scratch,fixture}.txt`.
   - Kit (`new-12c` → `new-13`): tsx R2 = 2. Every other class is 0 in every language.
   - Scratchpad corpus (vs `store-base`): the same tsx R2 = 2, plus the accepted cs R3 1 and body-above 1, py R3 12, rs R3 3 and body-above 7, SQL body-above 11, and Swift R3 1.
   - Fixture (old-reader store → `fixture-13`, and the same against `fixture-8p`): ts R2 = 10, and References −7 / +7. R7 = R8 = R9 = 0 on all three.
@@ -1649,7 +1649,7 @@ This step alone closes the three reviewer defects. About 1,200 lines of Rust are
   - The exceptions now hold 889: `import_bindings` 634, `single_file_components` 186 and `statement_prose` 69. The engine, `syntax`, the spec and the module lists add 88, and the queries 165.
   - Net Rust outside the case files is −527 against the estimate's −700. Part of that is the inline tests, which moved into the cases.
   - The kept hook is 889 lines against the estimate's 600. What no query replaces is the import-bound lookup and the statement's prose.
-- **Review fix re-verified.** `082861f` reads a decorated class member's line from its first child that is not a decorator. Before, the line was the first one not opening with `@`, so `@Input() name: string;` read as empty and a decorator spread over lines read as its own inner line. The same commit assigns cite owners after the nested cites are dropped, and hashes a file's text into its fingerprint only when it differs from the source. Its binary is `bin/zerograph-step13b`.
+- **Review fix re-verified.** `082861f` reads a decorated class member's line from its first child that is not a decorator. Before, the line was the first one not opening with `@`, so `@Input() name: string;` read as empty and a decorator spread over lines read as its own inner line. The same commit assigns cite owners after the nested cites are dropped, and hashes a file's text into its fingerprint only when it differs from the source. Its binary is `bin/repograph-step13b`.
   - Kit (`new-13` → `new-13b`, `--lang ts,tsx,vue`): ts R3 = 121 and vue R3 = 2. Every other class is 0 in every language. All 19,757 edges are identical (`log/langdiff-step13b-kit.txt`).
   - Scratchpad corpus (vs `store-base`): the same ts R3 = 121 and vue R3 = 2 on top of step 13's readings (`-scratch.txt`).
   - Fixture (vs `fixture-13`, step 13's own store rebuilt for this reading): `graph.json` and `headers.json` are byte-identical. No fixture class member is decorated on a line of its own.
@@ -1953,7 +1953,7 @@ No new definition kind is needed:
   - Every `@owner` of a match joins with `.` in source order, so `A<T>::B::f` is `A.B.f`, the same id the in-class definition of `B`'s method would have. A plain scope before the class may be a namespace and qualifies nothing, so `A::B::f` is `B.f`.
   - An unnamed namespace's functions are `export "never"`, as `static` ones are.
   - `.h` is `Lang::Cpp` (below).
-- **Exception, `attribute_macros` (an `embed` hook returning a blanked view):** a capitalised macro between `class`/`struct`/`union` and the name, one after a declarator with an argument list that holds no two adjacent words (`GUARDED_BY(mu_)`, `LOCKS_EXCLUDED(mu_)`), and one standing alone as a member before an access label or `friend` (`Q_OBJECT`) are blanked, rows and columns kept. Without it (`bin/zerograph-cpp-nohook`), leveldb fails the criterion: 25 of 131 files lose a definition (19.1%), recall is member 0.9054, method 0.8917, type 0.8810, function 1.000, and Calls 0.8335 (986 of 1,183). On hiredis it changes only `qt.h` and `example-qt.h`.
+- **Exception, `attribute_macros` (an `embed` hook returning a blanked view):** a capitalised macro between `class`/`struct`/`union` and the name, one after a declarator with an argument list that holds no two adjacent words (`GUARDED_BY(mu_)`, `LOCKS_EXCLUDED(mu_)`), and one standing alone as a member before an access label or `friend` (`Q_OBJECT`) are blanked, rows and columns kept. Without it (`bin/repograph-cpp-nohook`), leveldb fails the criterion: 25 of 131 files lose a definition (19.1%), recall is member 0.9054, method 0.8917, type 0.8810, function 1.000, and Calls 0.8335 (986 of 1,183). On hiredis it changes only `qt.h` and `example-qt.h`.
 - **Engine additions, inert for every earlier language** (byte-identity below):
   - **Implicit owner.** `#set! receiver "owner"` on a reference pattern with no `@receiver` makes the owner implicit: in a method, a bare name names `Owner.name` first, in the declaring files the index gives, else, through `nested()`, in the one file of the family whose outermost type is `Owner`'s and which declares that member below its top level. A member found is the name's meaning even when it is the caller, so a recursive method never falls through to a free function. Go's and Lua's `receiver "owner"` patterns all carry a receiver or bind a local, so none reaches it.
   - **`#set! parent "none"`** (`QueryMeta.detached`): a friend defined in its class is the file's function.

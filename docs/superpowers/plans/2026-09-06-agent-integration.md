@@ -43,7 +43,7 @@
 | `src/ask.rs` | `Context::graph`, `model_open`, `release_model`; later `inline_rows`, `embed_pending` | 2, 4 |
 | `src/mcp.rs` (new) | the protocol loop, `find_root`, the five tools, the ceilings | 3 |
 | `tests/mcp.rs` (new) | the server driven over stdio the way a harness drives it | 3 |
-| `plugin/` (new) | `.claude-plugin/plugin.json`, `.mcp.json`, `bin/zerograph-mcp`, `skills/zerograph/SKILL.md`, `commands/setup.md`, `hooks/hooks.json`, `hooks/notice.py`, `hooks/test_notice.py` | 5 |
+| `plugin/` (new) | `.claude-plugin/plugin.json`, `.mcp.json`, `bin/repograph-mcp`, `skills/zerograph/SKILL.md`, `commands/setup.md`, `hooks/hooks.json`, `hooks/notice.py`, `hooks/test_notice.py` | 5 |
 | `.claude-plugin/marketplace.json` (new, repository root) | the one-entry marketplace pointing at `./plugin` | 5 |
 | `README.md` | Status rows for `mcp` and `status`; a "For agents" section | 5, 7 |
 | `bench/agent/` (new) | `mcp_client.py`, `tasks.py`, `run.py`, `test_agent.py`, `tasks.jsonl`, `runs.jsonl` | 3, 6, 7 |
@@ -1856,7 +1856,7 @@ The version tracks `Cargo.toml`; a release bump PR moves both, as PR #7 moved th
 ```json
 {
   "mcpServers": {
-    "zerograph": { "command": "${CLAUDE_PLUGIN_ROOT}/bin/zerograph-mcp", "args": [] }
+    "zerograph": { "command": "${CLAUDE_PLUGIN_ROOT}/bin/repograph-mcp", "args": [] }
   }
 }
 ```

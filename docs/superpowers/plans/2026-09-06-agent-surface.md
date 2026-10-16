@@ -25,7 +25,7 @@ This plan's Tasks 0–8 stand as written. Five things landed under it since it w
 ## Global Constraints
 
 - The worktree is `/Users/max/Documents/projects/zerograph/.worktrees/agent-surface`, branch `feat/agent-surface`, cut from `origin/main`. `main` carries `868f4c1` (#14) at the time of writing; Task 0 records the tip it actually found. This plan file lives on `docs/weak-spots-residue-seat-register` and is not part of the feature branch's diff.
-- **The fixture `~/bench/beauty-crm-502e8a6d` is read-only.** Every command against it is `--stale --no-dense` (or `bench`/`dump`/`verify`/`explain`, which do not refresh), never `build`/`update`/`enrich`/`embed`, never a hook that writes. Agents are never run *in* the fixture: the harness runs them in a disposable linked worktree of the beauty-crm repository at the same commit, with the fixture's `.zerograph/` copied in (Task 0). Runbook trap 7 does not apply there — the copy has its own identical tree beside it — but the copy is still never written by a hook (hooks pass `--stale`; the one exception, the PostToolUse risk hook, is argued in the Decision and confined to the harness worktree and to consuming repositories).
+- **The fixture `~/bench/beauty-crm-502e8a6d` is read-only.** Every command against it is `--stale --no-dense` (or `bench`/`dump`/`verify`/`explain`, which do not refresh), never `build`/`update`/`enrich`/`embed`, never a hook that writes. Agents are never run *in* the fixture: the harness runs them in a disposable linked worktree of the beauty-crm repository at the same commit, with the fixture's `.repograph/` copied in (Task 0). Runbook trap 7 does not apply there — the copy has its own identical tree beside it — but the copy is still never written by a hook (hooks pass `--stale`; the one exception, the PostToolUse risk hook, is argued in the Decision and confined to the harness worktree and to consuming repositories).
 - **Hooks never open the dense model.** Every hook invocation carries `--no-dense`. A `serve` that happens to be up answers a `--no-dense` question lexically, so nothing changes when one is running.
 - **No model token is spent by a task that does not name its ceiling.** The harness caps each agent run with `--max-budget-usd`; the escalate measurement runs the model only on the subset the offline gate selected and states the count first; the repo-scout measurement is the harness again. Enrichment is never re-run.
 - **Numbers.** Everything measured during planning is labelled with the command that produced it (the *Measured during planning* ledger). Token sizes of command output are UTF-8 bytes / 4, the README's proxy, which counts Cyrillic at roughly double; the harness measures tokens the model was actually billed (`modelUsage` in the result message). A number this plan cannot measure now is written as "to be measured in Task N". ADR-001 applies: a floor is committed before its number is read.
@@ -206,7 +206,7 @@ Every number above, with the command that produced it. `$S` is the planning scra
 - Nothing in the repo changes; no commit.
 
 **Interfaces:**
-- Produces: `$M/wt` — beauty-crm at `502e8a6d` with the fixture's `.zerograph/` beside it; `$M/bin/zerograph`; the test counts every later task is held to.
+- Produces: `$M/wt` — beauty-crm at `502e8a6d` with the fixture's `.repograph/` beside it; `$M/bin/repograph`; the test counts every later task is held to.
 
 - [ ] **Step 1: The feature worktree**
 
@@ -227,7 +227,7 @@ M=/Users/max/bench/agent-surface-2026-09-07; mkdir -p "$M/bin"
 F=/Users/max/bench/beauty-crm-502e8a6d
 git -C /Users/max/Documents/projects/beauty-crm worktree add --detach "$M/wt" 502e8a6d
 cp -R "$F/.zerograph" "$M/wt/.zerograph"
-ln -sf "$W/target/release/zerograph" "$M/bin/zerograph"
+ln -sf "$W/target/release/zerograph" "$M/bin/repograph"
 cd "$M/wt" && PATH="$M/bin:$PATH" zerograph --no-dense ask --stale FR-PAY-22 | head -1
 PATH="$M/bin:$PATH" zerograph --no-dense ask FR-PAY-22 2>&1 >/dev/null | grep -c refresh; echo "(expected 0: same tree, nothing to refresh)"
 git -C "$M/wt" status --porcelain | grep -v '^?? .zerograph' | wc -l
@@ -274,7 +274,7 @@ Also here, before any Rust changes: `cp "$W/target/release/zerograph" "$M/zerogr
 
 **Interfaces:**
 - Produces: `run.sh <config> <model> [--repeat N]` → `$M/runs/<stamp>-<config>-<model>/<task>.jsonl` + `summary.json`; `score.py <run-dir>` → one JSON row; `track.py agent <summary.json> --note …` → a `runs.jsonl` row with `source: "agent"`.
-- Consumes: `$M/wt`, `$M/bin/zerograph`, the overlays.
+- Consumes: `$M/wt`, `$M/bin/repograph`, the overlays.
 
 Background the brief cannot know: the fixture's `.claude/` has 29 skills (7 own, 22 symlinks into `.agents/skills`), five hooks and a `settings.json` that also sets `autoCompactWindow`; overlay B copies `CLAUDE.md`, `settings.json`, `hooks/zerograph-notice.mjs`, `hooks/precompact-brief.mjs`, `hooks/compact-state.mjs` and `skills/repo-query/` — the zerograph surface as it is — and nothing else, so the skill list is `repo-query` alone in B and C and empty in A. `run.sh` swaps `$M/wt/.claude` per configuration (`rm -rf` + `cp -R` of the overlay; the worktree is disposable) and resets the working tree between tasks (`git -C $M/wt checkout -- . && git clean -fd -e .zerograph`), since the `precommit` task edits a file.
 
@@ -423,7 +423,7 @@ Expected: tests green; the first four `agent:` rows in `runs.jsonl`.
 
 - [ ] **Step 1: The failing tests first**
 
-`agent/hooks/zerograph-hook.test.mjs`, `node --test`. It spawns the hook with a fake payload on stdin, `PATH` pointing at a fake `zerograph` (`$TMP/bin/zerograph`, a shell script that echoes canned lines and records its argv to a file), `TMPDIR` fresh per test, and `CLAUDE_PROJECT_DIR`/`cwd` set to a temp root that has or lacks `.zerograph/manifest.json`. Cases, each an assertion on stdout JSON or on its absence:
+`agent/hooks/zerograph-hook.test.mjs`, `node --test`. It spawns the hook with a fake payload on stdin, `PATH` pointing at a fake `zerograph` (`$TMP/bin/repograph`, a shell script that echoes canned lines and records its argv to a file), `TMPDIR` fresh per test, and `CLAUDE_PROJECT_DIR`/`cwd` set to a temp root that has or lacks `.zerograph/manifest.json`. Cases, each an assertion on stdout JSON or on its absence:
 
 - `session_start_prints_the_brief_and_nothing_where_there_is_no_store` — `SessionStart` with `source: "startup"`: output has `hookEventName: "SessionStart"` and `additionalContext` beginning `zerograph` (the fake prints `verify`'s two lines), ≤ 700 bytes; with no store: no output.
 - `bash_rg_with_a_word_asks_once_with_three_seeds_and_only_seed_lines` — `Bash` `rg -n "cancellation policy" apps/` → argv recorded is `--repo <root> --no-dense ask --stale --seeds 3 cancellation policy`; `additionalContext` has exactly the fake's three top-level lines, none indented, each ≤ 160 chars; the same payload again → no output (dedup).
@@ -981,7 +981,7 @@ A new section **For agents** after *Asking a resident process*: the stanza as it
 ```bash
 cd "$W" && python3 bench/history/track.py report | tail -20
 git -C /Users/max/Documents/projects/beauty-crm worktree remove "$M/wt" --force && git -C /Users/max/Documents/projects/beauty-crm worktree prune
-ls /Users/max/bench/beauty-crm-502e8a6d/.zerograph/graph.json && git -C /Users/max/bench/beauty-crm-502e8a6d status --porcelain -- ':(exclude)graphify-out' | wc -l; echo "(expected 0: the fixture was never written)"
+ls /Users/max/bench/beauty-crm-502e8a6d/.repograph/graph.json && git -C /Users/max/bench/beauty-crm-502e8a6d status --porcelain -- ':(exclude)graphify-out' | wc -l; echo "(expected 0: the fixture was never written)"
 git -C "$W" add README.md docs/bench/ bench/history/README.md agent/README.md
 git -C "$W" commit -F - <<'MSG'
 docs: the agent surface — what a session pays, what the harness read, what shipped and what did not

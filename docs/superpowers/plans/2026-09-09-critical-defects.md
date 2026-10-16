@@ -502,7 +502,7 @@ Run: `cargo test --manifest-path Cargo.toml serve::tests`
 Expected: PASS.
 
 ```bash
-D=$(mktemp -d)/$(python3 -c "print('d/'*40)") && mkdir -p "$D" && cp -R ~/bench/beauty-crm-502e8a6d/.zerograph "$D/" && cd "$D" && /Users/max/Documents/projects/zerograph/target/debug/zerograph serve --idle 30 & sleep 3; /Users/max/Documents/projects/zerograph/target/debug/zerograph --repo "$D" --no-dense ask --stale отмена записи | head -3
+D=$(mktemp -d)/$(python3 -c "print('d/'*40)") && mkdir -p "$D" && cp -R ~/bench/beauty-crm-502e8a6d/.repograph "$D/" && cd "$D" && /Users/max/Documents/projects/zerograph/target/debug/zerograph serve --idle 30 & sleep 3; /Users/max/Documents/projects/zerograph/target/debug/zerograph --repo "$D" --no-dense ask --stale отмена записи | head -3
 ```
 
 Expected: the answer arrives; before this task it fails with a bind error naming `sun_path`.

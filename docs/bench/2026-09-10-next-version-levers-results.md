@@ -178,7 +178,7 @@ read the baseline table of §2 exactly. Failing (a), (b) or (e) stops the branch
 
 **Read 2026-09-23 on `v0.5.0` (`b21fb0f`), 0.6.0 plan Task 3.** The levers branch merged as #27
 and #28 and is `v0.5.0`, so `v0.5.0` stands in for the branch binary; `main` is the
-`~/bench/levers-2026-09-10/bin/zerograph-main` binary. Transcripts:
+`~/bench/levers-2026-09-10/bin/repograph-main` binary. Transcripts:
 `~/bench/0.6.0-2026-09-11/log/master-t3/g39/`.
 
 (a) and (b) — each a `--no-dense build` from an empty store in `~/bench/beauty-crm-test` after

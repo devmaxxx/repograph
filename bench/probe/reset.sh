@@ -31,7 +31,7 @@ embedder_declared || exit 2
 FIX=${FIX:-$HOME/bench/beauty-crm-502e8a6d}
 WT=${WT:-$HOME/bench/beauty-crm-test}
 PIN=${PIN:-502e8a6d}
-BIN=${BIN:-$HOME/bench/levers-2026-09-10/bin/zerograph-main}
+BIN=${BIN:-$HOME/bench/levers-2026-09-10/bin/repograph-main}
 
 refuse() { echo "reset: refusing — $1" >&2; exit 2; }
 
