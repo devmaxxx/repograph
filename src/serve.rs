@@ -386,6 +386,7 @@ pub fn stop(repo: &Path) -> Result<bool> {
     }
     let start = Instant::now();
     while sys::present(&path) && start.elapsed() < STOP_WAIT { std::thread::sleep(Duration::from_millis(50)); }
+    if sys::present(&path) { anyhow::bail!("serve said it is leaving, but {} is still there after {}s", path.display(), STOP_WAIT.as_secs()); }
     Ok(true)
 }
 

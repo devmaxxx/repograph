@@ -319,7 +319,7 @@ fn keeps_weights_beside(model_len: u64) -> bool { model_len < EXTERNAL_DATA_STUB
 /// Windows; an exclusion is the reader's to grant, so this names the command and runs nothing.
 #[cfg(windows)]
 fn scan_hint(cache: &Path) {
-    eprintln!("embed: first download of this model; Defender scans it as it lands. To skip that, an administrator can run: Add-MpPreference -ExclusionPath '{}'", cache.display());
+    eprintln!("embed: first download of this model; Defender scans it as it lands. To skip that, an administrator can run: Add-MpPreference -ExclusionPath '{}'", cache.display().to_string().replace('\'', "''"));
 }
 
 #[cfg(not(windows))]

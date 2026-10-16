@@ -39,19 +39,34 @@ function runnable(path) {
     const root = join(process.env.LOCALAPPDATA, "zerograph", "bin");
     const dir = join(root, version);
     const copy = join(dir, "zerograph.exe");
-    // The size tells a finished copy from one a killed launcher left, and two packs of one version
-    // apart; npm writes every file with the same fixed mtime, so the time cannot.
-    if (fs.existsSync(copy) && fs.statSync(copy).size === fs.statSync(path).size) return copy;
+    // npm writes every file with one fixed mtime, so two packs of one version are told apart by
+    // when this install created the file: a reinstall writes a new one and moves the stamp.
+    const src = fs.statSync(path);
+    const key = `${src.size}:${src.ctimeMs}`;
+    const stamp = join(dir, "stamp");
+    const read = (f) => { try { return fs.readFileSync(f, "utf8"); } catch { return ""; } };
+    if (fs.existsSync(copy) && read(stamp) === key) return copy;
     fs.mkdirSync(dir, { recursive: true });
+    // Left by a launcher killed mid-copy; one another launcher is still writing stays locked.
+    for (const f of fs.readdirSync(dir)) {
+      if (f.endsWith(".tmp")) { try { fs.rmSync(join(dir, f), { force: true }); } catch {} }
+    }
     const tmp = `${copy}.${process.pid}.tmp`;
-    fs.copyFileSync(path, tmp);
+    try {
+      fs.copyFileSync(path, tmp);
+    } catch (e) {
+      // A copy cut short by a full disk would otherwise stay beside the real one for good.
+      fs.rmSync(tmp, { force: true });
+      throw e;
+    }
     try {
       fs.renameSync(tmp, copy);
     } catch {
       // Another launcher won the race, or the old copy is running; neither copy is ours to keep.
       fs.rmSync(tmp, { force: true });
-      if (!fs.existsSync(copy) || fs.statSync(copy).size !== fs.statSync(path).size) return path;
+      if (read(stamp) !== key) return path;
     }
+    fs.writeFileSync(stamp, key);
     // Copies of other versions go once nothing runs them; one still running stays for next time.
     for (const other of fs.readdirSync(root)) {
       if (other !== version) {
