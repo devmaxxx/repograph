@@ -22,15 +22,10 @@
     "zerograph": "bin/zerograph.js"
   },
   "files": [
-    "bin/zerograph.js",
+    "bin/",
     "README.md"
   ],
   "engines": {
     "node": ">=18"
-  },
-  "optionalDependencies": {
-    "zerograph-darwin-arm64": "0.6.0",
-    "zerograph-linux-x64": "0.6.0",
-    "zerograph-win32-x64": "0.6.0"
   }
 }

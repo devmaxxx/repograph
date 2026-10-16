@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
-# Assembles the npm packages from prebuilt binaries and packs them into dist/npm/.
+# Assembles the npm package from prebuilt binaries and packs it into dist/npm/.
 # Publishing stays a separate, deliberate step: a version number, once published, is spent —
 # the registry never takes a second upload of it, even after the first is deleted.
 #
 #   scripts/npm-pack.sh [version] [darwin-arm64=<binary>] [linux-x64=<binary>] [win32-x64=<binary.exe>]
 #
 # The version defaults to Cargo.toml's. On an Apple-silicon Mac, darwin-arm64 defaults to
-# target/release/zerograph; any platform not given is left out of this pack run, and the
-# launcher's optional dependency on it simply goes unresolved until it is published.
+# target/release/zerograph; any platform not given is left out of this pack run, and the launcher
+# says so on that platform.
 # Plain variables rather than an associative array: macOS still ships bash 3.2.
 set -euo pipefail
 
@@ -34,35 +34,26 @@ done
 out=dist/npm
 rm -rf "$out" && mkdir -p "$out"
 
+bin=npm/zerograph/bin
+# What an earlier run left must not ride along under this version.
+for platform in darwin-arm64 linux-x64 win32-x64; do rm -rf "${bin:?}/$platform"; done
+
 # A file, not an executable: the Windows binary reaches this script out of a zip on a Linux
 # runner, where it has no execute bit to carry and needs none to be packed.
-pack_platform() {
-  local platform=$1 src=$2 name=$3 dir
+add() {
+  local platform=$1 src=$2 name=$3
   [ -f "$src" ] || { echo "$platform: $src is not a file" >&2; exit 2; }
-  dir=npm/zerograph-$platform
-  mkdir -p "$dir/bin"
-  cp "$src" "$dir/bin/$name" && chmod 755 "$dir/bin/$name"
-  (cd "$dir" && npm pkg set version="$version" && npm pack --silent --pack-destination "$root/$out")
+  mkdir -p "$bin/$platform"
+  cp "$src" "$bin/$platform/$name" && chmod 755 "$bin/$platform/$name"
 }
 
-[ -n "$darwin_arm64" ] && pack_platform darwin-arm64 "$darwin_arm64" zerograph
-[ -n "$linux_x64" ] && pack_platform linux-x64 "$linux_x64" zerograph
-[ -n "$win32_x64" ] && pack_platform win32-x64 "$win32_x64" zerograph.exe
+[ -n "$darwin_arm64" ] && add darwin-arm64 "$darwin_arm64" zerograph
+[ -n "$linux_x64" ] && add linux-x64 "$linux_x64" zerograph
+[ -n "$win32_x64" ] && add win32-x64 "$win32_x64" zerograph.exe
 
-(
-  cd npm/zerograph
-  npm pkg set version="$version"
-  for platform in darwin-arm64 linux-x64 win32-x64; do
-    npm pkg set "optionalDependencies.zerograph-$platform=$version"
-  done
-  npm pack --silent --pack-destination "$root/$out"
-)
+(cd npm/zerograph && npm pkg set version="$version" && npm pack --silent --pack-destination "$root/$out")
 
 echo "packed $version into $out:"
 ls -1 "$out"
 echo
-echo "publish the platform packages first, then the launcher:"
-for t in "$out"/*-arm64-*.tgz "$out"/*-x64-*.tgz "$out"/zerograph-"$version".tgz; do
-  [ -e "$t" ] && echo "  npm publish $t"
-done
-true
+echo "publish with: npm publish $out/zerograph-$version.tgz"

@@ -5,13 +5,13 @@ pnpm add -D zerograph              # npm: prebuilt binary for macOS arm64, Linux
 cargo install --path .             # from source; Rust 1.98, pinned in rust-toolchain.toml
 ```
 
-The npm package is a launcher: the binary comes from `zerograph-darwin-arm64`,
-`zerograph-linux-x64` or `zerograph-win32-x64`, pulled in as an optional dependency, so a lockfile
-written on one platform installs on the others. All four are on the public npm registry and need
-no `.npmrc`. Tagged releases (`v*`) build all three binaries as GitHub release assets (a tarball
-for the unix ones, a zip holding `zerograph.exe` for Windows) and cut the npm packages from those
+The npm package carries all three binaries and a launcher that runs the one for this platform,
+so a lockfile written on one platform installs on the others, nothing runs at install time, and
+nothing is fetched beyond the package itself (about 40 MB). It is on the public npm registry and
+needs no `.npmrc`. Tagged releases (`v*`) build all three binaries as GitHub release assets (a tarball
+for the unix ones, a zip holding `zerograph.exe` for Windows) and cut the npm package from those
 same files (`.github/workflows/release.yml`, publishing through npm's trusted publishing, so each
-version carries a provenance attestation; `scripts/npm-pack.sh` packs the same tarballs by hand).
+version carries a provenance attestation; `scripts/npm-pack.sh` packs the same tarball by hand).
 
 ## Coming from repograph
 

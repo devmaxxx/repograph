@@ -1,40 +1,32 @@
 #!/usr/bin/env node
 "use strict";
 
-// The binary ships in a per-platform package pulled in as an optional dependency, so a
-// platform without a prebuilt binary installs cleanly and fails only when it actually runs.
+// Every prebuilt binary ships inside this one package, under bin/<platform>-<arch>/, so an
+// install needs no second package, no install script and no network beyond the tarball.
 const { spawnSync } = require("node:child_process");
+const { existsSync } = require("node:fs");
+const { join } = require("node:path");
 
-const PACKAGES = {
-  "darwin-arm64": "zerograph-darwin-arm64",
-  "linux-x64": "zerograph-linux-x64",
-  "win32-x64": "zerograph-win32-x64",
-};
-
-// Cargo names the Windows binary with its extension, and `require.resolve` tries none of its own
-// for a file that is not a module.
-const BINARY = process.platform === "win32" ? "bin/zerograph.exe" : "bin/zerograph";
+const PLATFORMS = new Set(["darwin-arm64", "linux-x64", "win32-x64"]);
 
 const FALLBACK =
   "cargo install --git https://github.com/devmaxxx/zerograph --locked";
 
 function binaryPath() {
   const key = `${process.platform}-${process.arch}`;
-  const pkg = PACKAGES[key];
-  if (!pkg) {
+  if (!PLATFORMS.has(key)) {
     return {
       error: `zerograph: no prebuilt binary for ${key}; build one with \`${FALLBACK}\``,
     };
   }
-  try {
-    return { path: require.resolve(`${pkg}/${BINARY}`) };
-  } catch {
+  const path = join(__dirname, key, process.platform === "win32" ? "zerograph.exe" : "zerograph");
+  // Only a pack run that was not given this platform's binary leaves it out.
+  if (!existsSync(path)) {
     return {
-      error:
-        `zerograph: ${pkg} is not installed. Optional dependencies were skipped (\`--no-optional\`, ` +
-        `or a lockfile written on another platform); reinstall with them enabled, or \`${FALLBACK}\``,
+      error: `zerograph: this package was packed without the ${key} binary; reinstall a published version, or \`${FALLBACK}\``,
     };
   }
+  return { path };
 }
 
 const found = binaryPath();

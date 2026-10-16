@@ -367,17 +367,15 @@ Eight steps, in order. Each one exists because skipping it once cost a release r
    ```
    A match means the tag's push will start no run, and step 7 has to dispatch one.
 
-5. **Once per package name: the first npm version by hand.** npm's trusted publishing, which the
-   release job uses, can only be set up on a package that exists. Before the first tag that ships
-   a new name (`zerograph`, `zerograph-darwin-arm64`, `zerograph-linux-x64`,
-   `zerograph-win32-x64`), `npm login` as the owner and publish a placeholder of each:
+5. **Once: the first npm version by hand.** npm's trusted publishing, which the release job uses,
+   can only be set up on a package that exists. Before the first tag, `npm login` as the owner and
+   publish a placeholder, with the current code from the authenticator:
    ```bash
-   d=$(mktemp -d) && for n in zerograph zerograph-darwin-arm64 zerograph-linux-x64 zerograph-win32-x64; do
-     (cd "$d" && npm init -y --init-version 0.0.0 >/dev/null && npm pkg set name=$n && npm publish --access public)
-   done
+   d=$(mktemp -d) && cd "$d" && npm init -y --init-version 0.0.0 >/dev/null \
+     && npm pkg set name=zerograph && npm publish --access public --otp=<code>
    ```
-   Then on npmjs.com, each package's Settings → Trusted publishing: GitHub Actions, repository
-   `devmaxxx/zerograph`, workflow `release.yml`. A name already set up skips this step.
+   Then on npmjs.com, the package's Settings → Trusted publishing: GitHub Actions, repository
+   `devmaxxx/zerograph`, workflow `release.yml`. Once set up, this step is skipped.
 
 6. **Tag and push.**
    ```bash

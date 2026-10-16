@@ -11,9 +11,9 @@ npx zerograph ask отмена записи       # refreshes the graph first if
 npx zerograph explain FR-PAY-22
 ```
 
-This package is a launcher: the binary itself comes from a per-platform package pulled in as an
-optional dependency (`zerograph-darwin-arm64`, `zerograph-linux-x64`, `zerograph-win32-x64`). On any other platform the launcher explains how to build from
-source with `cargo install`.
+This package carries the binaries for macOS on Apple silicon, Linux x64 and Windows x64, and runs
+the one for the platform it is on. On any other platform it explains how to build from source
+with `cargo install`.
 
 The dense retriever downloads its embedding model, `embeddinggemma-300m` (about 1.2 GB in the
 cache), into `~/.cache/zerograph/fastembed` (`%USERPROFILE%\.cache\zerograph\fastembed` on

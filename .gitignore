@@ -5,8 +5,7 @@
 /.superpowers
 /.fastembed_cache
 /dist
-/npm/*/bin/zerograph
-/npm/*/bin/zerograph.exe
+/npm/zerograph/bin/*/
 /npm/*/node_modules
 /bench/compare/__pycache__
 
