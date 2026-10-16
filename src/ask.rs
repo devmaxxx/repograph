@@ -610,7 +610,7 @@ mod tests {
         assert_eq!(first, second);
         assert!(first.contains("FR-PAY-1"), "{first}");
         let exact = ctx.answer(&Request { words: vec!["FR-CAL-1".into()], ..req }).unwrap();
-        assert!(exact.starts_with("FR-CAL-1"), "{exact}");
+        assert!(exact.lines().next().unwrap().contains("  FR-CAL-1  "), "{exact}");
     }
 
     /// The dense arm as a machine without the model has it, prepared once for the whole binary:

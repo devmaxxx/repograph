@@ -309,7 +309,7 @@ pub fn render(answer: &Answer, graph: &Graph, opts: &Options) -> String {
     }
     let mut out = String::new();
     for h in &answer.seeds {
-        out.push_str(&format!("{}  {}:{}  {}\n", h.id, h.file, h.line, headline(&h.label)));
+        out.push_str(&format!("{}\n", hit_line(h)));
         if opts.bodies {
             if let Some(n) = graph.nodes.get(&h.id) {
                 if n.kind == crate::model::NodeKind::Text {
@@ -324,11 +324,30 @@ pub fn render(answer: &Answer, graph: &Graph, opts: &Options) -> String {
                 }
             }
         }
+        for n in answer.expanded.iter().filter(|n| n.via.as_deref() == Some(h.id.as_str())) {
+            out.push_str(&format!("  └ {}\n", hit_line(n)));
+        }
     }
-    for h in &answer.expanded {
-        out.push_str(&format!("  {}  {}:{}  {}  ← {}\n", h.id, h.file, h.line, headline(&h.label), h.via.as_deref().unwrap_or("")));
+    let orphans = answer.expanded.iter().filter(|n| !answer.seeds.iter().any(|s| n.via.as_deref() == Some(s.id.as_str())));
+    for n in orphans {
+        out.push_str(&format!("  └ {}  ← {}\n", hit_line(n), n.via.as_deref().unwrap_or("")));
     }
     out
+}
+
+/// Location first so a terminal can open it. A code, file or entity id only repeats the location
+/// and the name beside it, so it is left out; a document id (`BE-M10/T05`) is what a reader quotes, so it stays.
+fn hit_line(h: &Hit) -> String {
+    let at = format!("{}:{}", h.file, h.line);
+    let label = headline(&h.label);
+    if h.id == format!("file:{}", h.file) || h.id == format!("entity:{}", h.label) {
+        return format!("{at}  {label}");
+    }
+    match h.id.strip_prefix("sym:").and_then(|r| r.strip_prefix(h.file.as_str())).and_then(|r| r.strip_prefix("::")) {
+        Some(name) if name == h.label => format!("{at}  {label}"),
+        Some(name) => format!("{at}  {name}  {label}"),
+        None => format!("{at}  {}  {label}", h.id),
+    }
 }
 
 /// What wraps a word in a sentence and is never part of an id: `FR-CAL-40,`, `(INV-07)`, `«…»`.
@@ -947,14 +966,37 @@ mod tests {
     }
 
     #[test]
-    fn render_shape_is_id_path_line_headline() {
+    fn render_shape_is_path_line_id_headline_with_neighbours_under_their_seed() {
         let g = graph();
         let a = ask(&g, &lex(&g), None, None, &["FR-PAY-22".to_string()], &opts());
         let out = render(&a, &g, &opts());
-        let first = out.lines().next().unwrap();
-        assert!(first.starts_with("FR-PAY-22  docs/06.md:385  `CancellationPolicy`"), "{first}");
-        assert!(out.lines().any(|l| l.starts_with("  N-151  docs/never.md:12  ") && l.ends_with("← FR-PAY-22")));
+        let mut lines = out.lines();
+        let first = lines.next().unwrap();
+        assert!(first.starts_with("docs/06.md:385  FR-PAY-22  `CancellationPolicy`"), "{first}");
+        assert!(lines.take_while(|l| l.starts_with("  └ ")).any(|l| l.starts_with("  └ docs/never.md:12  N-151  ")), "{out}");
+        assert!(!out.contains('←'), "{out}");
         assert!(out.len() / 4 < 130);
+    }
+
+    #[test]
+    fn a_code_hit_prints_its_location_and_name_once() {
+        let h = Hit { id: "sym:a/b.ts::run".into(), file: "a/b.ts".into(), line: 3, label: "run".into(), score: 0.0, via: None };
+        assert_eq!(hit_line(&h), "a/b.ts:3  run");
+        let f = Hit { id: "file:a/b.ts".into(), label: "b.ts".into(), ..h.clone() };
+        assert_eq!(hit_line(&f), "a/b.ts:3  b.ts");
+        let e = Hit { id: "entity:Fee".into(), label: "Fee".into(), ..h.clone() };
+        assert_eq!(hit_line(&e), "a/b.ts:3  Fee");
+        let m = Hit { id: "sym:a/b.ts::Box.run".into(), label: "run(x)".into(), ..h };
+        assert_eq!(hit_line(&m), "a/b.ts:3  Box.run  run(x)");
+    }
+
+    #[test]
+    fn a_neighbour_whose_seed_is_not_shown_names_it() {
+        let g = graph();
+        let seed = Hit { id: "FR-PAY-22".into(), file: "docs/06.md".into(), line: 385, label: "x".into(), score: 1.0, via: None };
+        let stray = Hit { id: "N-151".into(), file: "docs/never.md".into(), line: 12, label: "y".into(), score: 0.0, via: Some("GONE-1".into()) };
+        let out = render(&Answer { seeds: vec![seed], expanded: vec![stray] }, &g, &opts());
+        assert_eq!(out, "docs/06.md:385  FR-PAY-22  x\n  └ docs/never.md:12  N-151  y  ← GONE-1\n");
     }
 
     #[test]

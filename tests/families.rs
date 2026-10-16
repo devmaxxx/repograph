@@ -50,7 +50,7 @@ fn a_repository_gets_its_families_from_the_documents_and_says_when_they_move() {
     // The point of all of it: a family nobody configured answers exactly.
     let (ok, out, err) = zerograph(repo, &["ask", "REQ-7"]);
     assert!(ok, "{out}{err}");
-    assert!(out.lines().next().unwrap().starts_with("REQ-7"), "{out}");
+    assert!(out.lines().next().unwrap().starts_with("docs/req.md:3  REQ-7  "), "{out}");
 
     let (ok, out, err) = zerograph(repo, &["families"]);
     assert!(ok, "{out}{err}");
