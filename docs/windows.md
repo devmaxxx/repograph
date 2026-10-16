@@ -11,22 +11,29 @@ provider is registered, so inference runs on the CPU — a GPU-less runner build
 vectors and answers a fused question through a resident `serve`
 ([run](https://github.com/devmaxxx/zerograph/actions/runs/34064881516)).
 
-The binary is not signed. A zip fetched with a browser carries the mark of the web, Explorer's
-"Extract All" passes it to the exe, and double-clicking such a copy shows SmartScreen; running it
-from a terminal does not, and `Unblock-File .\zerograph.exe` clears the mark for good. `gh run
-download`, `curl` and npm write no mark at all. Defender scans the model as it lands — 470 MB for
-the default `multilingual-e5-small`, 2.2 GB where `embed_model` names the large one — and every
-`graph.json` and `vectors.f32` rewrite on close;
-`Add-MpPreference -ExclusionPath` on `%USERPROFILE%\.cache\zerograph` and on the repository's
-`.zerograph` is an optional speed-up, not a requirement. An unsigned Rust binary can also draw a
-heuristic false positive: restore it from Protection History and add an exclusion.
+Install through npm: `npm install -g zerograph` or `pnpm add -g zerograph`. The binary is not
+Authenticode-signed, and SmartScreen judges only files that carry the mark of the web, which a
+browser writes and npm, pnpm, `gh release download` and `curl` do not — so the npm route never shows
+the "Windows protected your PC" screen. A zip fetched with a browser and opened through Explorer
+does; `Unblock-File .\zerograph.exe` clears the mark for good, and running it from a terminal does
+not trigger the screen at all. Unsigned is not unverifiable: every release binary carries a build
+provenance attestation and a line in `SHA256SUMS`, and [verifying a download](install.md#verifying-a-download)
+shows both checks. An unsigned Rust binary can still draw a heuristic false positive from Defender:
+restore it from Protection History and add an exclusion.
 
-PowerShell has no `&` job operator, so a resident server is started with
-`Start-Process zerograph -ArgumentList 'serve','--idle','86400' -WindowStyle Hidden`; `--idle` ends
-it, and so does `Stop-Process -Name zerograph`. Neither runs the exit that removes the socket file,
-which is what the next `serve` sweeps before binding. Stop the server before replacing the binary:
-`npm i -g`, `cargo install` and `Expand-Archive -Force` all fail with a sharing error against a
-running image.
+Defender scans the model as it lands — about 1.2 GB for the default `embeddinggemma-300m` — and
+every `graph.json` and `vectors.f32` rewrite on close. The first download prints the
+`Add-MpPreference -ExclusionPath` line for the model cache; it and one for the repository's
+`.zerograph` are an optional speed-up, not a requirement.
+
+`zerograph serve --detach` starts a resident server with no console window and returns once it
+listens; its output goes to `.zerograph/serve.log`. `zerograph stop` ends it through the same exit
+an idle timeout takes, which removes the socket file — `Stop-Process` does not, and leaves the file
+for the next `serve` to sweep. Upgrading while a server runs is safe through npm: the launcher runs
+a per-version copy of the binary from `%LOCALAPPDATA%\zerograph\bin`, so `npm i -g` can replace
+the package's file under a live server, and the old copy is removed by the first launch after the
+server that ran it has gone. `cargo install` and `Expand-Archive -Force` still replace the running
+file itself, so stop the server before either.
 
 A reader over its refresh budget, and the git hooks `install-agent` writes, start `zerograph update`
 detached: no console, a process group of its own, and out of the caller's job object where the job
