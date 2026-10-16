@@ -28,8 +28,12 @@ jobs:
     runs-on: ${{ matrix.os }}
     # New repos default GITHUB_TOKEN to read-only; softprops/action-gh-release's own
     # README states it needs contents: write to create a release and upload assets.
+    # id-token and attestations sign the provenance below through Sigstore, under this
+    # workflow's identity; nothing is stored and no key is kept.
     permissions:
       contents: write
+      id-token: write
+      attestations: write
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@1.98.0
@@ -44,6 +48,14 @@ jobs:
         run: |
           .\target\${{ matrix.target }}\release\zerograph.exe --version
           Compress-Archive -Path .\target\${{ matrix.target }}\release\zerograph.exe -DestinationPath zerograph-${{ matrix.target }}.zip
+      # The binary is attested as well as the archive, because npm installs the binary alone and
+      # that is the file a user has to hand when they run `gh attestation verify`.
+      - if: startsWith(github.ref, 'refs/tags/')
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: |
+            zerograph-${{ matrix.target }}.${{ matrix.ext }}
+            target/${{ matrix.target }}/release/zerograph${{ runner.os == 'Windows' && '.exe' || '' }}
       # A dispatch run has no release to put the archive on. It is kept as a run artifact instead,
       # so the file a runner just built and smoked can be fetched with `gh run download` and tried
       # on a real machine before a tag is spent; a tag run skips this and publishes as it did.
@@ -57,6 +69,22 @@ jobs:
       - if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with: { files: "zerograph-${{ matrix.target }}.${{ matrix.ext }}" }
+  # One file a user can check a download against without trusting anything but the release page.
+  # Written after every archive is up, from the archives as they are on the release, so it names
+  # the bytes a browser fetches rather than the files a runner happened to keep.
+  checksums:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - run: |
+          gh release download "$GITHUB_REF_NAME" -R "$GITHUB_REPOSITORY" --pattern 'zerograph-*.tar.gz' --pattern 'zerograph-*.zip'
+          sha256sum zerograph-* > SHA256SUMS
+          cat SHA256SUMS
+          gh release upload "$GITHUB_REF_NAME" -R "$GITHUB_REPOSITORY" SHA256SUMS --clobber
+        env: { GH_TOKEN: "${{ github.token }}" }
   # The npm package carries all three binaries, cut from the release assets above, so the binary
   # an `npm install` runs is byte-for-byte the one on the release page. It goes to the npm
   # registry through trusted publishing: npm trusts this workflow's OIDC token, so there is no
