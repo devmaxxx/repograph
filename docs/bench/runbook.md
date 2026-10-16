@@ -369,11 +369,12 @@ Eight steps, in order. Each one exists because skipping it once cost a release r
 
 5. **Once: the first npm version by hand.** npm's trusted publishing, which the release job uses,
    can only be set up on a package that exists. Before the first tag, `npm login` as the owner and
-   publish a placeholder, with the current code from the authenticator:
+   publish an empty `zerograph@0.0.0` from a temporary directory:
    ```bash
-   d=$(mktemp -d) && cd "$d" && npm init -y --init-version 0.0.0 >/dev/null \
-     && npm pkg set name=zerograph && npm publish --access public --otp=<code>
+   scripts/npm-placeholder.sh <code>   # the authenticator's current code; omit it in a terminal and npm asks
    ```
+   Never `npm publish` inside `npm/zerograph/`: until the release job fills `bin/`, that publishes
+   the real version number with no binary in it, and a version is never given back.
    Then on npmjs.com, the package's Settings → Trusted publishing: GitHub Actions, repository
    `devmaxxx/zerograph`, workflow `release.yml`. Once set up, this step is skipped.
 
