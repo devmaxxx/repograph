@@ -70,21 +70,22 @@ passed over and how many more there are.
 Answers are lines of the form:
 
 ```
-ID  path:line  headline
-  ID  path:line  headline  ← seed-id
+path:line  [ID]  headline
+  └ path:line  [ID]  headline
 ```
 
-Top-level lines are the seeds the query matched. An indented line is a neighbour reached by one hop
-over the id graph, and the `←` names the seed it came from. A real run, against `beauty-crm`:
+Top-level lines are the seeds the query matched, location first so a terminal can open it. A
+document id (`BE-M10/T05`) is printed; a code, file or entity id is not, because the location and
+the name already say it. A `└` line is a neighbour reached by one hop over the id graph, printed
+under the seed it came from. A real run, against `beauty-crm`:
 
 ```
 $ zerograph --repo beauty-crm ask cancellation
-sym:packages/db/src/schema/salon/scheduling.ts::CANCELLATION_CONSEQUENCES  packages/db/src/schema/salon/scheduling.ts:110  CANCELLATION_CONSEQUENCES
-BE-M10/T05  docs/prd-2026-08-16/plans/milestones/backend/BE-M10-payments-provider-stripe-connect-implementation-deposits-car.md:80  Cancellation policy engine (`packages/domain/policy.ts`): inputs policy + appoin…
-PLAT-M12/T09  docs/prd-2026-08-16/plans/milestones/platform/PLAT-M12-billing.md:48  Cancel semantics N-141: immediate stop of future charges, accrued usage as dated…
-PLAT-M12/T04  docs/prd-2026-08-16/plans/milestones/platform/PLAT-M12-billing.md:43  Panel subscription page: plan, next invoice, cancel with end-of-access date, exp…
-BE-M10/T07  docs/prd-2026-08-16/plans/milestones/backend/BE-M10-payments-provider-stripe-connect-implementation-deposits-car.md:82  EOD fee charger worker: `chargeOffSession` for due fees → intent(purpose=cancell…
-  BE-M10  docs/prd-2026-08-16/plans/milestones/backend/BE-M10-payments-provider-stripe-connect-implementation-deposits-car.md:1  BE-M10 Payments provider: Stripe Connect implementation, deposits, card-on-file …  ← BE-M10/T05
+docs/prd-2026-08-16/plans/milestones/backend/BE-M05-slot-engine-scheduling-api-appointments-conflicts-requests-t.md:270  BE-M05/T15  `BookingRules` + `CancellationPolicy` CRUD, policy **snapshot** attached to the …
+packages/db/src/schema/salon/scheduling.ts:110  CANCELLATION_CONSEQUENCES
+docs/prd-2026-08-16/plans/milestones/backend/BE-M10-payments-provider-stripe-connect-implementation-deposits-car.md:80  BE-M10/T05  Cancellation policy engine (`packages/domain/policy.ts`): inputs policy + appoin…
+packages/db/migrations/0008_first_slice.sql:808  salon_ctx/cancellation_policy  cancellation_policy
+  └ packages/db/sql/0002_rls.sql:135  salon_ctx/cancellation_policy  cancellation_policy
 ```
 
 ### Answering a program instead of a person

@@ -259,7 +259,7 @@ fn a_family_a_document_grows_while_the_server_runs_reaches_the_store_it_writes()
         // Read from the store on disk, which is the server's own writing: a poll that extracted
         // the file under the old set would leave a `file:` node and nothing else.
         let (out, _) = ask(dir.path(), &["--no-serve", "--stale"], &["NEW-1"]);
-        if out.lines().next().is_some_and(|l| l.starts_with("NEW-1")) { break; }
+        if out.lines().next().is_some_and(|l| l.starts_with("docs/new.md:1  NEW-1  ")) { break; }
         assert!(start.elapsed() < Duration::from_secs(20), "the server never wrote NEW-1: {out}");
         std::thread::sleep(Duration::from_millis(100));
     }
