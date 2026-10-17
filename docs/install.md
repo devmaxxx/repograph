@@ -85,6 +85,10 @@ What zerograph reads from the old install:
   as `repograph` once `zerograph` is registered (one in another scope is named, with the command
   that removes it). Codex's old script stays until `~/.codex/hooks.json` points at
   `zerograph-hook.mjs`; the install prints the block to paste.
+- **The skill (0.6.4).** It is `zerograph` now, in `.claude/skills/zerograph/` and
+  `.codex/skills/zerograph/`, with the release that wrote it as `metadata.version`. The install
+  removes the `repo-query` directory beside it when it holds only the `SKILL.md` 0.6.0–0.6.3 wrote;
+  an edited one, a link or one with files of its own is left and named.
 
 ## Windows notes
 
