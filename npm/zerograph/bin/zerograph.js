@@ -33,32 +33,60 @@ function binaryPath() {
 // failed with EBUSY. The binary runs from a copy under LOCALAPPDATA instead, and the package's own
 // file is never held open. Any failure here runs the package's file as before.
 //
-// One slot per install, not per version: a project's devDependency and a global install, or two
-// packs of one version, each keep their own copy rather than evicting each other's on every run.
-// npm writes every file with one fixed mtime, so an install is told apart by its size and the time
-// it created the file.
+// One slot per version and size, so a project's devDependency and a global install at different
+// versions keep their own copies instead of evicting each other on every run, and a reinstall of
+// the same version reuses its copy rather than adding a 95 MB one. The size is not proof of the
+// bytes (the linker pads a PE file to 512 bytes, so a rebuild often keeps it), so an install the
+// slot has not seen is hashed once against the copy; `seen` remembers the installs that matched.
+// npm writes every file with one fixed mtime, so an install is told apart by when it created it.
 const SLOT_TTL_MS = 30 * 24 * 3600 * 1000;
 const TOUCH_MS = 24 * 3600 * 1000;
 
-function runnable(path) {
-  if (process.platform !== "win32" || !process.env.LOCALAPPDATA) return path;
+function sha256(file) {
+  const hash = require("node:crypto").createHash("sha256");
+  const fd = fs.openSync(file, "r");
+  try {
+    const buf = Buffer.alloc(1 << 20);
+    let n;
+    while ((n = fs.readSync(fd, buf, 0, buf.length, null)) > 0) hash.update(buf.subarray(0, n));
+  } finally {
+    fs.closeSync(fd);
+  }
+  return hash.digest("hex");
+}
+
+function runnable(path, { platform = process.platform, localAppData = process.env.LOCALAPPDATA, now = Date.now() } = {}) {
+  if (platform !== "win32" || !localAppData) return path;
   try {
     const { version } = require("../package.json");
-    const root = join(process.env.LOCALAPPDATA, "zerograph", "bin");
+    const root = join(localAppData, "zerograph", "bin");
     const src = fs.statSync(path);
-    const slot = `${version}-${src.size}-${Math.trunc(src.ctimeMs)}`;
+    const slot = `${version}-${src.size}`;
+    const install = `${src.size}:${Math.trunc(src.ctimeMs)}`;
     const dir = join(root, slot);
     const copy = join(dir, "zerograph.exe");
     const used = join(dir, "used");
-    const now = Date.now();
-    if (fs.existsSync(copy)) {
-      // Marked at most once a day, so a slot in use is never the one the sweep below removes.
+    const seen = join(dir, "seen");
+    const digest = join(dir, "sha256");
+    const read = (f) => { try { return fs.readFileSync(f, "utf8"); } catch { return ""; } };
+    const mark = () => {
+      // At most once a day, so a slot in use is never the one the sweep below removes.
       try {
-        if (now - fs.statSync(used).mtimeMs > TOUCH_MS) fs.utimesSync(used, new Date(), new Date());
+        if (now - fs.statSync(used).mtimeMs <= TOUCH_MS) return;
       } catch {
         fs.writeFileSync(used, "");
       }
-      return copy;
+      fs.utimesSync(used, new Date(now), new Date(now));
+    };
+    let hash;
+    if (fs.existsSync(copy)) {
+      if (read(seen).split("\n").includes(install)) { mark(); return copy; }
+      hash = sha256(path);
+      if (hash === read(digest).trim()) {
+        fs.appendFileSync(seen, `${install}\n`);
+        mark();
+        return copy;
+      }
     }
     fs.mkdirSync(dir, { recursive: true });
     // Left by a launcher killed mid-copy; one another launcher is still writing stays locked.
@@ -70,11 +98,14 @@ function runnable(path) {
       fs.copyFileSync(path, tmp);
       fs.renameSync(tmp, copy);
     } catch (e) {
-      // A full disk, or another launcher that renamed the same bytes into place first.
+      // A full disk, an older build of these bytes still running, or another launcher that renamed
+      // the same bytes into place first: only the last leaves a copy that is ours to run.
       fs.rmSync(tmp, { force: true });
-      if (!fs.existsSync(copy)) throw e;
+      if (!fs.existsSync(copy) || (hash ?? sha256(path)) !== sha256(copy)) return path;
     }
-    fs.writeFileSync(used, "");
+    fs.writeFileSync(digest, hash ?? sha256(path));
+    fs.writeFileSync(seen, `${install}\n`);
+    mark();
     // Slots nothing has launched for a month; one whose binary still runs fails the delete and
     // stays.
     for (const other of fs.readdirSync(root)) {
@@ -92,16 +123,27 @@ function runnable(path) {
   }
 }
 
-const found = binaryPath();
-if (found.error) {
-  console.error(found.error);
-  process.exit(2);
+// A sweep in another launcher can remove an old slot between `runnable` and the spawn.
+function spawnBinary(exe, pkg, args, spawn = spawnSync) {
+  const run = spawn(exe, args, { stdio: "inherit" });
+  if (run.error && run.error.code === "ENOENT" && exe !== pkg) return spawn(pkg, args, { stdio: "inherit" });
+  return run;
 }
 
-const run = spawnSync(runnable(found.path), process.argv.slice(2), { stdio: "inherit" });
-if (run.error) {
-  console.error(`zerograph: ${run.error.message}`);
-  process.exit(2);
+function main() {
+  const found = binaryPath();
+  if (found.error) {
+    console.error(found.error);
+    process.exit(2);
+  }
+  const run = spawnBinary(runnable(found.path), found.path, process.argv.slice(2));
+  if (run.error) {
+    console.error(`zerograph: ${run.error.message}`);
+    process.exit(2);
+  }
+  // A signal death has no status; report it the way a shell would.
+  process.exit(run.status === null ? 128 : run.status);
 }
-// A signal death has no status; report it the way a shell would.
-process.exit(run.status === null ? 128 : run.status);
+
+if (require.main === module) main();
+module.exports = { runnable, spawnBinary };
