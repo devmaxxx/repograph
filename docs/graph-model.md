@@ -34,7 +34,8 @@ semantics of the three walking commands.
    one line of output. A second expanded line measured +1 hit per
    extra neighbour against ~+90 tokens per answer. `File` nodes and decorator nodes are never
    expanded _to_ — they are hubs and would drown the answer.
-6. **Render.** `ID  path:line  headline`, headline cut to 80 characters.
+6. **Render.** `path:line  ID  headline`, headline cut to 80 characters; the id is left out when it
+   only repeats the location or the name, and a neighbour prints under its seed after `└`.
 
 The lexical index is built in memory rather than stored on disk, and since 0.5.0 it is built once
 per context rather than once per question: a one-shot `ask` pays one build, and a resident `serve`

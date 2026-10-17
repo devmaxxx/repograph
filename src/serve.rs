@@ -490,6 +490,9 @@ pub fn run(repo: &Path, cfg: &config::Config, every: u64, batch: usize, idle: u6
             Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
             Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => anyhow::bail!("the listener stopped accepting"),
         }
+        // Ahead of the poll: a poll that embeds a pull can outlast `stop`'s wait, and a stop
+        // reported as failed while the server is in fact leaving sends the caller to kill it.
+        if terminated() { eprintln!("serve: terminated, exiting"); return Ok(()); }
         if last_poll.elapsed() >= Duration::from_secs(every) {
             last_poll = Instant::now();
             // The configuration is read once, at start: an id family added, a model or a rerank
@@ -504,7 +507,6 @@ pub fn run(repo: &Path, cfg: &config::Config, every: u64, batch: usize, idle: u6
             // A poll between requests answers nobody: its notices are the server's own.
             log(&mut ctx);
         }
-        if terminated() { eprintln!("serve: terminated, exiting"); return Ok(()); }
         if drop_model_now(idle_model, last_request.elapsed(), ctx.model_open()) {
             ctx.drop_model();
             eprintln!("serve: no question for {idle_model}s, dropped the model — the next fused question pays the open");
