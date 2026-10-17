@@ -6,6 +6,8 @@
 /.fastembed_cache
 /dist
 /npm/zerograph/bin/*/
+# Cut from the root README by scripts/npm-pack.sh.
+/npm/zerograph/README.md
 /npm/*/node_modules
 /bench/compare/__pycache__
 
