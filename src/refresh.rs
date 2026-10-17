@@ -148,7 +148,13 @@ pub(crate) const RUN_MARKER: &str = "refresh: started";
 /// none of this process's standard streams: a caller reading this reader's output through a pipe
 /// would otherwise wait for the refresh to close it too, which is the wait this exists to remove.
 pub(crate) fn spawn_detached(repo: &Path, no_dense: bool, args: &[&str]) -> anyhow::Result<Alive> {
-    let log = log_file(repo)?;
+    spawn_detached_logging(repo, no_dense, args, "background.log")
+}
+
+/// `spawn_detached` into a log of its own name: a detached `serve` runs for hours, and its lines
+/// in `background.log` would sit between a refresh's marker and the progress read back after it.
+pub(crate) fn spawn_detached_logging(repo: &Path, no_dense: bool, args: &[&str], log: &str) -> anyhow::Result<Alive> {
+    let log = log_named(repo, log)?;
     let mut cmd = std::process::Command::new(std::env::current_exe()?);
     cmd.arg("--repo").arg(repo);
     if no_dense { cmd.arg("--no-dense"); }
@@ -161,8 +167,11 @@ pub(crate) fn spawn_detached(repo: &Path, no_dense: bool, args: &[&str]) -> anyh
     Ok(reap(detach(&mut cmd)?))
 }
 
-fn log_file(repo: &Path) -> anyhow::Result<std::fs::File> {
-    let p = crate::store::Store::new(repo).ensure_dir()?.join("background.log");
+#[cfg(test)]
+fn log_file(repo: &Path) -> anyhow::Result<std::fs::File> { log_named(repo, "background.log") }
+
+fn log_named(repo: &Path, name: &str) -> anyhow::Result<std::fs::File> {
+    let p = crate::store::Store::new(repo).ensure_dir()?.join(name);
     let long = std::fs::metadata(&p).is_ok_and(|m| m.len() > LOG_CAP);
     // Windows refuses to rename a file another process holds open; that run keeps truncating.
     let rotated = long && std::fs::rename(&p, p.with_extension("log.1")).is_ok();
@@ -193,6 +202,17 @@ fn detach(cmd: &mut std::process::Command) -> std::io::Result<std::process::Chil
     const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
     const CREATE_BREAKAWAY_FROM_JOB: u32 = 0x0100_0000;
     let flags = DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP;
+    // CreateProcess passes every inheritable handle, and this process's own standard handles are
+    // inheritable when its parent made them so: the child kept a caller's pipe open, and a caller
+    // reading this command's output waited for the server to exit. std duplicates whatever a later
+    // child is given, so clearing the flag on the originals costs no other spawn anything.
+    {
+        use std::os::windows::io::AsRawHandle;
+        use windows_sys::Win32::Foundation::{SetHandleInformation, HANDLE_FLAG_INHERIT};
+        for h in [std::io::stdin().as_raw_handle(), std::io::stdout().as_raw_handle(), std::io::stderr().as_raw_handle()] {
+            if !h.is_null() { unsafe { SetHandleInformation(h as _, HANDLE_FLAG_INHERIT, 0) }; }
+        }
+    }
     match cmd.creation_flags(flags | CREATE_BREAKAWAY_FROM_JOB).spawn() {
         Ok(child) => Ok(child),
         Err(_) => cmd.creation_flags(flags).spawn(),

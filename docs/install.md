@@ -2,8 +2,12 @@
 
 ```bash
 pnpm add -D zerograph              # npm: prebuilt binary for macOS arm64, Linux x64 and Windows x64
+npm install -g zerograph           # or globally; pnpm add -g zerograph works the same
 cargo install --path .             # from source; Rust 1.98, pinned in rust-toolchain.toml
 ```
+
+npm is the recommended route on every platform: it carries a provenance attestation, and on
+Windows it never meets SmartScreen (see [Windows notes](#windows-notes)).
 
 The npm package carries all three binaries and a launcher that runs the one for this platform,
 so a lockfile written on one platform installs on the others, nothing runs at install time, and
@@ -12,6 +16,30 @@ needs no `.npmrc`. Tagged releases (`v*`) build all three binaries as GitHub rel
 for the unix ones, a zip holding `zerograph.exe` for Windows) and cut the npm package from those
 same files (`.github/workflows/release.yml`, publishing through npm's trusted publishing, so each
 version carries a provenance attestation; `scripts/npm-pack.sh` packs the same tarball by hand).
+
+## Verifying a download
+
+Each release binary is built by `.github/workflows/release.yml` on a GitHub runner, and that
+workflow signs a build provenance attestation for both the archive and the binary inside it, through
+Sigstore, under its own identity. With the GitHub CLI, any copy can be checked against it — the
+archive from the release page, or the binary an npm install unpacked:
+
+```bash
+gh attestation verify zerograph-x86_64-pc-windows-msvc.zip -R devmaxxx/zerograph
+gh attestation verify "$(npm root -g)/zerograph/bin/linux-x64/zerograph" -R devmaxxx/zerograph
+```
+
+A pass names the repository, the workflow and the commit the file was built from. Every release
+also carries `SHA256SUMS` for its archives, for a check that needs nothing but a hash tool:
+
+```bash
+sha256sum -c SHA256SUMS --ignore-missing                                   # Linux
+shasum -a 256 -c SHA256SUMS --ignore-missing                               # macOS
+(Get-FileHash zerograph-x86_64-pc-windows-msvc.zip).Hash                   # Windows, compare by eye
+```
+
+The npm package itself is published through trusted publishing with npm provenance: its page on
+npmjs.com links the workflow run that built it, and `npm audit signatures` checks it locally.
 
 ## Coming from repograph
 
@@ -58,9 +86,27 @@ What zerograph reads from the old install:
   that removes it). Codex's old script stays until `~/.codex/hooks.json` points at
   `zerograph-hook.mjs`; the install prints the block to paste.
 
-## On Windows
+## Windows notes
 
-Windows 10 1903, Windows 11 or Server 2022, CPU inference, an unsigned binary, and a handful of
-platform-specific traps — SmartScreen on a browser-fetched zip, Defender scanning the model as it
-lands, `Start-Process` instead of `&`, PowerShell's code page on a *piped* answer, and keeping the
-repository out of a OneDrive tree. All of it is in [running on Windows](windows.md).
+Install through npm; nothing else is required. What can still trip a Windows user:
+
+- **Floor.** Windows 10 1903, Windows 11 or Server 2022. The binary links ONNX Runtime's DirectML
+  build, so an older system fails at load. Inference runs on the CPU.
+- **SmartScreen.** The binary is not Authenticode-signed. A zip fetched with a browser and opened
+  through Explorer shows "Windows protected your PC"; npm, pnpm, `curl` and `gh release download`
+  never do. `Unblock-File .\zerograph.exe` clears it. [Verifying a download](#verifying-a-download)
+  proves the file is ours.
+- **Defender.** It scans the model as it lands (about 1.2 GB for the default) and the store on every
+  write; the first download prints the `Add-MpPreference -ExclusionPath` line, which is optional. A
+  heuristic false positive is restored from Protection History.
+- **Serve.** `zerograph serve --detach` starts one with no window, `zerograph stop` ends it and
+  removes its socket. `npm i -g` upgrades under one a 0.6.1 or later launcher started; a
+  0.6.0 server, or `cargo install`, needs the server stopped first.
+- **PowerShell encoding.** Output is UTF-8, but a *piped or captured* answer is decoded with
+  `[Console]::OutputEncoding`, so Cyrillic turns to mojibake on a non-UTF-8 code page. Set it to
+  UTF-8 in your profile.
+- **Git Bash.** `FASTEMBED_CACHE_DIR`, `XDG_CONFIG_HOME` and `ZEROGRAPH_CONFIG` must be Windows-form
+  paths even when set there.
+- **Long paths.** A tree deeper than 260 characters needs `git config core.longpaths true`.
+- **Synced folders.** Keep the repository out of OneDrive, Dropbox or Google Drive: every store
+  write is a rename the client re-uploads, and the socket is a reparse point they do not know.

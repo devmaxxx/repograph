@@ -103,7 +103,11 @@ enum Cmd {
         #[arg(long, default_value_t = 1800)] idle: u64,
         /// Seconds without a question after which the model is dropped and the process stays.
         #[arg(long, default_value_t = 300)] idle_model: u64,
+        /// Starts the server in a process of its own and returns once it listens.
+        #[arg(long)] detach: bool,
     },
+    /// Ends the `serve` answering for this repository, through the exit that removes its socket.
+    Stop,
     /// Keeps the store in step with the tree for readers that do not refresh themselves —
     /// editors, MCP servers. Polls, applies the same incremental update `ask` does, and embeds
     /// what changed. Ctrl-C stops it; every write is a rename, so there is nothing to clean up.
@@ -221,7 +225,7 @@ impl Cmd {
             | Cmd::Prime { json, .. } | Cmd::Families { json, .. } | Cmd::Model { json, .. } => *json,
             // Listed rather than `_`, so a command that gains `--json` fails to compile here
             // until its errors are given the JSON form too.
-            Cmd::Build | Cmd::Update { .. } | Cmd::Serve { .. } | Cmd::Watch { .. }
+            Cmd::Build | Cmd::Update { .. } | Cmd::Serve { .. } | Cmd::Stop | Cmd::Watch { .. }
             | Cmd::InstallAgent { .. } | Cmd::Embed | Cmd::Bench { .. } | Cmd::Dump { .. }
             | Cmd::ImportLegacy { .. } | Cmd::Mcp => false,
         }
@@ -1023,7 +1027,19 @@ fn run(cli: Cli) -> anyhow::Result<()> {
             ctx.timing().stage("printed");
             std::process::exit(0)
         }
-        Cmd::Serve { every, batch, idle, idle_model } => {
+        Cmd::Serve { every, batch, idle, idle_model, detach: true } => {
+            let args = ["serve", "--every", &every.to_string(), "--batch", &batch.to_string(), "--idle", &idle.to_string(), "--idle-model", &idle_model.to_string()]
+                .map(String::from);
+            serve::detach(&repo, cli.no_dense, &args)
+        }
+        Cmd::Stop => {
+            match serve::stop(&repo)? {
+                true => eprintln!("stop: serve has stopped"),
+                false => eprintln!("stop: no serve answers here"),
+            }
+            Ok(())
+        }
+        Cmd::Serve { every, batch, idle, idle_model, detach: false } => {
             let cfg = load_cfg()?;
             cap_pools(index::embed::threads(cfg.resources));
             serve::run(&repo, &cfg, every, batch, idle, idle_model, cli.no_dense)

@@ -15,7 +15,7 @@
 | [benchmarks](benchmarks.md) | `bench`, the floors, exit codes, measured numbers |
 | [the graph model](graph-model.md) | node and edge kinds, what the extractors take, what `impact` and `changes` can and cannot prove |
 | [the measurements](history.md) | every reading that decided a default |
-| [running on Windows](windows.md) | the platform floor, SmartScreen, Defender, PowerShell |
+| [Windows notes](install.md#windows-notes) | the platform floor, SmartScreen, Defender, PowerShell |
 | [`bench/`](bench/) | the campaign documents, the runbook, and the open gap ledger |
 | [`adr/`](adr/) | the decisions that outlived their arguments |
 | [`releases/`](releases/) | the notes each release page carries: what changed, and what to do before upgrading |

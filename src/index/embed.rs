@@ -315,6 +315,16 @@ const EXTERNAL_DATA_STUB: u64 = 64 << 20;
 
 fn keeps_weights_beside(model_len: u64) -> bool { model_len < EXTERNAL_DATA_STUB }
 
+/// Defender scans every file of a model as it lands, which is most of a first download's wait on
+/// Windows; an exclusion is the reader's to grant, so this names the command and runs nothing.
+#[cfg(windows)]
+fn scan_hint(cache: &Path) {
+    eprintln!("embed: first download of this model; Defender scans it as it lands. To skip that, an administrator can run: Add-MpPreference -ExclusionPath '{}'", cache.display().to_string().replace('\'', "''"));
+}
+
+#[cfg(not(windows))]
+fn scan_hint(_cache: &Path) {}
+
 /// Cache hits never touch the network; the first run downloads with a progress bar.
 fn fetch(model: &str) -> Result<Files> { fetch_from(&cache_dir()?, None, model) }
 
@@ -323,6 +333,7 @@ fn fetch_from(cache: &Path, endpoint: Option<&str>, model: &str) -> Result<Files
     if let Some(e) = endpoint { builder = builder.with_endpoint(e.to_string()); }
     let api = builder.build()?;
     let name = model.to_string();
+    if !cache.join(format!("models--{}", name.replace('/', "--"))).exists() { scan_hint(cache); }
     let repo = match revision(&name) {
         Some(rev) => {
             let pinned = hf_hub::Repo::with_revision(name.clone(), hf_hub::RepoType::Model, rev.to_string());

@@ -579,3 +579,55 @@ fn a_fused_answer_is_resident_on_the_small_model() {
     server.kill().unwrap();
     let _ = server.wait();
 }
+
+fn stop(dir: &std::path::Path) -> std::process::Output {
+    zerograph().arg("--repo").arg(dir).arg("stop").output().unwrap()
+}
+
+#[test]
+fn stop_ends_a_running_server_through_the_exit_that_removes_its_socket() {
+    let dir = repo_with_docs();
+    let mut server = serve(dir.path(), &["--every", "3600", "--idle", "600"]);
+    ask_until_resident(dir.path(), &["штраф"]);
+    let out = stop(dir.path());
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(out.status.success(), "{err}");
+    assert!(err.contains("serve has stopped"), "{err}");
+    let start = Instant::now();
+    let status = loop {
+        if let Some(status) = server.try_wait().unwrap() { break status; }
+        assert!(start.elapsed() < Duration::from_secs(10), "the server outlived its stop");
+        std::thread::sleep(Duration::from_millis(50));
+    };
+    let mut log = String::new();
+    std::io::Read::read_to_string(&mut server.stderr.take().unwrap(), &mut log).unwrap();
+    assert!(status.success(), "{status}: {log}");
+    assert!(log.contains("terminated, exiting"), "it left for some other reason: {log}");
+    assert!(std::fs::symlink_metadata(dir.path().join(".zerograph/serve.sock")).is_err(), "the socket file outlived its server: {log}");
+}
+
+#[test]
+fn stop_with_no_server_says_so_and_succeeds() {
+    let dir = repo_with_docs();
+    let out = stop(dir.path());
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(out.status.success(), "{err}");
+    assert!(err.contains("no serve answers here"), "{err}");
+}
+
+/// The command returns while the server it started keeps answering, which is the whole of
+/// `--detach`: no shell job, no `Start-Process`, and the next question already resident.
+#[test]
+fn a_detached_server_answers_after_the_command_returns_and_stop_ends_it() {
+    let dir = repo_with_docs();
+    let out = zerograph().args(LEXICAL).arg("--repo").arg(dir.path()).args(["serve", "--detach", "--every", "3600", "--idle", "600"]).output().unwrap();
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(out.status.success(), "{err}");
+    assert!(err.contains("started in the background"), "{err}");
+    let (_, asked) = ask(dir.path(), &[], &["штраф"]);
+    assert!(asked.contains("serve: answered by the resident process"), "{asked}");
+    assert!(stop(dir.path()).status.success());
+    let log = std::fs::read_to_string(dir.path().join(".zerograph/serve.log")).unwrap();
+    assert!(log.contains("terminated, exiting"), "{log}");
+    assert!(std::fs::symlink_metadata(dir.path().join(".zerograph/serve.sock")).is_err(), "{log}");
+}

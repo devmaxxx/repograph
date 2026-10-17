@@ -10,6 +10,8 @@ zerograph serve                  # .zerograph/serve.sock, poll every 30 s, exit 
 zerograph serve --idle 86400     # a day rather than half an hour before it gives up
 zerograph serve --idle-model 60  # forget the model after a minute unasked; the process stays
 zerograph serve --no-dense       # lexical only; a fused `ask` is told so and answers in its own process
+zerograph serve --detach         # in a process of its own, output in .zerograph/serve.log; returns once it listens
+zerograph stop                   # end the server answering here, socket file and all
 zerograph ask --no-serve отмена  # answer here even while one is listening
 ```
 
@@ -39,8 +41,9 @@ temporary directory as `zerograph-<hash of the repository path>.sock`. A reposit
 enough path could not run `serve` at all before that fallback, and both the server and every client
 compute the name the same way, so nothing has to be told which one is in use — the startup line
 prints it. A `serve` that is killed with `SIGTERM` or `SIGINT` takes its socket file with it,
-because it leaves through the same exit as an idle timeout; on Windows there is no equivalent
-signal and the file is left for the next `serve`, which removes a dead socket before it binds.
+because it leaves through the same exit as an idle timeout, and so does one ended by `zerograph
+stop`, on every platform. On Windows a `Stop-Process` sends no signal and the file is left for the
+next `serve`, which removes a dead socket before it binds.
 
 `ask` uses it without being told to and answers in this process whenever it cannot — no socket, a
 socket nobody listens on, a server of another version or another build of the same version, a
