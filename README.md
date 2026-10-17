@@ -37,11 +37,13 @@ npm install -g zerograph                   # or: pnpm add -D zerograph
 echo .zerograph/ >> .gitignore             # the graph is built per checkout
 zerograph build                            # first run downloads the embedding model (~1.2 GB)
 zerograph ask cancellation policy          # stays fresh with your edits, no update to run
-zerograph install-agent --claude           # optional: MCP server + git hooks (or --codex)
+zerograph install-agent --claude           # optional: MCP server + git hooks for your agent
 ```
 
 Prebuilt for macOS arm64, Linux x64 and Windows x64. Defaults read markdown and code in 24
-languages; a `zerograph.toml` changes that ([Configuration](docs/configuration.md)).
+languages; a `zerograph.toml` changes that ([Configuration](docs/configuration.md)). `install-agent`
+takes `--claude`, `--codex`, `--cursor`, `--copilot`, `--gemini` or `--opencode`, several at once
+([MCP](docs/mcp.md#other-agents)).
 
 - On Windows: [Windows notes](docs/install.md#windows-notes).
 - Upgrading from repograph: the old store, config and variables are read where they are, see
