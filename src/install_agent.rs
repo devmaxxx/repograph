@@ -146,10 +146,15 @@ pub fn merged_settings(existing: &str, hook_path: &str) -> Result<(String, Vec<S
     let mut retired = Vec::new();
     for (event, matcher, entry) in hook_entries(hook_path) {
         let mut ours = entry;
-        ours.as_object_mut().unwrap().insert("matcher".into(), serde_json::json!(matcher));
         let list = hooks.as_object_mut().unwrap().entry(event).or_insert_with(|| serde_json::json!([]));
         let Some(arr) = list.as_array_mut() else { anyhow::bail!("`hooks.{event}` is not an array") };
         if arr.iter().any(|e| e.to_string().contains("repograph-notice")) { retired.push(event.to_string()); }
+        // A matcher already on our entry is the repository's choice (one narrowed to keep the hook
+        // off Bash, say), so a re-run keeps it; only a fresh entry gets the default.
+        let kept = arr.iter()
+            .filter(|e| ["zerograph-hook", "repograph-hook"].iter().any(|s| e.to_string().contains(s)))
+            .find_map(|e| e.get("matcher").cloned());
+        ours.as_object_mut().unwrap().insert("matcher".into(), kept.unwrap_or_else(|| serde_json::json!(matcher)));
         // Ours by the script it runs, never by position: a repository's own entries keep theirs.
         // `repograph-hook` is this hook under the name it had before the rename.
         arr.retain(|e| !["zerograph-hook", "repograph-hook", "repograph-notice"].iter().any(|s| e.to_string().contains(s)));
@@ -1127,6 +1132,25 @@ mod tests {
         assert!(r.notes.iter().any(|n| n.contains("repograph-notice") && n.contains("SessionStart")),
                 "{:?}", r.notes);
         assert!(arr[0]["hooks"][0]["command"].as_str().unwrap().contains("CLAUDE_PROJECT_DIR"));
+    }
+
+    /// A narrowed matcher is a choice someone made, such as keeping the hook off Bash calls; a
+    /// re-run that put the default back would undo it on every upgrade.
+    #[test]
+    fn a_matcher_set_on_our_entry_survives_a_re_run() {
+        let dir = root();
+        std::fs::create_dir_all(dir.path().join(".claude")).unwrap();
+        std::fs::write(dir.path().join(".claude/settings.json"), r#"{"hooks":{"PreToolUse":[
+            {"matcher":"Grep|Glob|Agent","hooks":[{"type":"command","command":"node /old/path/zerograph-hook.mjs"}]}
+        ]}}"#).unwrap();
+        install(dir.path(), Target::Claude, "zerograph").unwrap();
+        let v: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(dir.path().join(".claude/settings.json")).unwrap()).unwrap();
+        let arr = v["hooks"]["PreToolUse"].as_array().unwrap();
+        assert_eq!(arr.len(), 1, "{arr:?}");
+        assert_eq!(arr[0]["matcher"], "Grep|Glob|Agent");
+        assert!(arr[0]["hooks"][0]["command"].as_str().unwrap().contains("CLAUDE_PROJECT_DIR"), "the rest of the entry is still ours to update");
+        assert_eq!(v["hooks"]["SessionStart"][0]["matcher"], "startup|resume|clear|compact", "a fresh entry gets the default");
     }
 
     #[test]
