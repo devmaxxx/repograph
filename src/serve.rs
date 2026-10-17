@@ -473,7 +473,7 @@ pub fn run(repo: &Path, cfg: &config::Config, every: u64, batch: usize, idle: u6
     // within seconds: waiting `--every` for the first poll handed that question everything a pull
     // changed — 1469 vectors, 17 s on beauty-crm. Catching up now spends the same time before
     // anyone has asked.
-    adopt_if_moved(&mut watcher, &mut ctx, batch, Priority::Background)?;
+    adopt_if_moved(&mut watcher, &mut ctx, batch)?;
     log(&mut ctx);
     eprintln!("serve: {} every {every}s, batch {batch}, idle {idle}s, model idle {idle_model}s; Ctrl-C stops", path.display());
     let (mut last_poll, mut last_request) = (Instant::now(), Instant::now());
@@ -503,7 +503,7 @@ pub fn run(repo: &Path, cfg: &config::Config, every: u64, batch: usize, idle: u6
                 eprintln!("serve: {} changed, exiting — start serve again to answer under it", config::project_file_name(repo));
                 return Ok(());
             }
-            adopt_if_moved(&mut watcher, &mut ctx, batch, Priority::Background)?;
+            adopt_if_moved(&mut watcher, &mut ctx, batch)?;
             // A poll between requests answers nobody: its notices are the server's own.
             log(&mut ctx);
         }
@@ -557,23 +557,12 @@ fn log(ctx: &mut ask::Context) {
     for n in ctx.notices() { eprintln!("{}", crate::terminal_safe(&format!("serve: {n}"))); }
 }
 
-/// Whether a poll is a question's, which someone is waiting on, or the server's own between them.
-#[derive(Clone, Copy)]
-enum Priority { Asked, Background }
-
 /// The poll `ask` does before it answers, and the one case the poll's own answer does not
 /// name: a store some other process wrote, which the poll read back into the watcher. Either
 /// way the watcher now holds a graph the context does not, and only an adopt leaves a reader
 /// where a one-shot `ask` would have been after loading that store from disk.
-fn adopt_if_moved(watcher: &mut crate::Watcher, ctx: &mut ask::Context, batch: usize, priority: Priority) -> Result<()> {
-    let polled = match priority {
-        Priority::Asked => watcher.poll(batch)?,
-        // On a thread of its own that ends with the poll: the loop's thread answers the next
-        // question, and on Linux a thread lowered once cannot be raised back.
-        Priority::Background => std::thread::scope(|s| s.spawn(|| { crate::priority::background_thread(); watcher.poll(batch) }).join())
-            .map_err(|_| anyhow::anyhow!("the background poll panicked"))??,
-    };
-    match polled {
+fn adopt_if_moved(watcher: &mut crate::Watcher, ctx: &mut ask::Context, batch: usize) -> Result<()> {
+    match watcher.poll(batch)? {
         crate::Polled::Refreshed(r) => ctx.adopt(watcher, Some(r))?,
         _ if watcher.reloaded => ctx.adopt(watcher, None)?,
         _ => {}
@@ -660,7 +649,7 @@ fn answer(mut stream: sys::Stream, watcher: &mut crate::Watcher, ctx: &mut ask::
         if watcher.reload_if_moved()? { ctx.adopt(watcher, None)?; }
     } else {
         // The same refresh a one-shot ask does before answering: batch 1 applies any change now.
-        adopt_if_moved(watcher, ctx, 1, Priority::Asked)?;
+        adopt_if_moved(watcher, ctx, 1)?;
     }
     let answered = ctx.answer(&hello.req);
     // Taken before the `?`: a model command started by an answer that then failed was still paid

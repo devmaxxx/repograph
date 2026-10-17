@@ -50,7 +50,8 @@ for a repository that has no index at all.
 
 The rest keeps itself fresh: the git hooks start `{{command}} update --detach` after a pull or a
 branch switch, a `serve` polls between questions, and a reader whose refresh would not fit hands it
-to a detached update. All of it runs at background priority and yields to builds, tests and editors.
+to a detached update. The detached update runs at background priority and yields to builds, tests
+and editors.
 
 - **Owed vectors.** A lexical-only write (`--no-dense`) leaves rows without vectors, and a
   paraphrase misses them until they are embedded. The MCP `status` tool prints `vectors: N rows,

@@ -154,7 +154,7 @@ pub(crate) fn spawn_detached(repo: &Path, no_dense: bool, args: &[&str]) -> anyh
 
 /// `spawn_detached` into a log of its own name: a detached `serve` runs for hours, and its lines
 /// in `background.log` would sit between a refresh's marker and the progress read back after it.
-/// `background` is false for that `serve`, which answers questions and lowers only its poll.
+/// `background` is false for that `serve`: a question can be waiting behind anything it does.
 pub(crate) fn spawn_detached_logging(repo: &Path, no_dense: bool, background: bool, args: &[&str], log: &str) -> anyhow::Result<Alive> {
     let log = log_named(repo, log)?;
     let mut cmd = std::process::Command::new(std::env::current_exe()?);

@@ -1,6 +1,5 @@
 //! What runs at background priority and what does not, read from outside the process the way
-//! another program on the machine sees it: `watch` and a detached refresh are lowered, a `serve`
-//! that answers questions is not.
+//! another program on the machine sees it: `watch` and a detached refresh are lowered.
 #![cfg(any(target_os = "macos", target_os = "linux"))]
 
 mod common;
@@ -59,13 +58,4 @@ fn the_flag_a_detached_refresh_is_started_with_lowers_the_process() {
     // `--background` on a command that would otherwise run in the foreground: the flag, not the
     // command, is what a detached `update` or `model` is lowered by.
     assert!(settled(start(dir.path(), &["--background", "watch", "--every", "3600"])));
-}
-
-#[test]
-fn serve_keeps_normal_priority_for_the_questions_it_answers() {
-    let dir = built();
-    let child = start(dir.path(), &["serve", "--every", "1", "--idle", "60"]);
-    // Through a couple of its own polls, which lower only the thread that runs them.
-    std::thread::sleep(Duration::from_millis(2500));
-    assert!(!settled(child));
 }

@@ -67,23 +67,22 @@ embedded 400/1683 (14.2 rows/s, ~90 s left)
 
 ### Background priority
 
-Every write zerograph starts on its own runs at background priority: the detached `update` a reader,
-a git hook or the MCP `reindex` and `switch_model` tools start, `watch`, and `serve`'s poll between
-questions. A command someone is waiting on — `ask`, `build`, `update` without `--detach`, `embed`,
-`model` — keeps normal priority, and so does `serve` answering a question: its poll runs on a thread
-of its own that is lowered and then ends.
+The detached `update` that a reader, a git hook or the MCP `reindex` and `switch_model` tools start
+runs at background priority, and so does `watch`. A command someone is waiting on — `ask`, `build`,
+`update` without `--detach`, `embed`, `model` — keeps normal priority, and so does `serve`: a
+question can be waiting behind its poll, and the poll re-reads only the files that changed.
 
-| platform | the process (`update --detach`, `watch`) | `serve`'s poll thread |
-| --- | --- | --- |
-| macOS | `PRIO_DARWIN_PROCESS` background band: CPU and disk I/O throttled | `PRIO_DARWIN_THREAD` |
-| Linux | nice 19 and the idle I/O class, set before any thread starts so every pool inherits them | the same, on that thread |
-| Windows | `PROCESS_MODE_BACKGROUND_BEGIN` | `THREAD_MODE_BACKGROUND_BEGIN` |
+| platform | what the process gets |
+| --- | --- |
+| macOS | the `PRIO_DARWIN_BG` band: CPU and disk I/O throttled |
+| Linux | nice 19 and the idle I/O class, set before any thread starts so every pool inherits them |
+| Windows | `PROCESS_MODE_BACKGROUND_BEGIN` |
 
 The embed under it is still bounded by [`resources`](configuration.md#resources), 30% of the logical
 cores by default. A platform that refuses the call costs a line in the run's log and nothing else.
 The price is wall time when the machine is busy: the band waits for the cores nothing else wants,
 which is the point, and a foreground `update` that finds a background one holding the store waits
-for it.
+for it. `ask` never waits on it: it answers from the store as it stands and says so.
 
 A dense `update` embeds every row the store is owed, whoever left it owed: the rows are matched to
 the stored graph by hash, not to what that run re-read, so one over a tree nothing moved still pays

@@ -338,8 +338,9 @@ everyone who ever rebuilt, to buy something only a person sitting at a loaded ma
 [The unnoticeable results](bench/2026-09-07-unnoticeable-results.md) are what it measured while
 it existed; none of those numbers is carried forward here, because they are the band's.
 
-Since 0.6.4 a band is back, for work nobody waits on and nothing else: a detached `update`, `watch`
-and `serve`'s poll ([keeping fresh](keeping-fresh.md#background-priority)). The 2026-09-09
+Since 0.6.4 a band is back, for work nobody waits on and nothing else: a detached `update` and
+`watch` ([keeping fresh](keeping-fresh.md#background-priority)); `serve` stays in the normal band,
+because a question can be waiting behind its poll. The 2026-09-09
 objection was to the price landing on everyone who rebuilt; a foreground writer still runs in the
 normal band, and the wall a detached catch-up loses is time no command was waiting through. It
 followed a repository whose hooks ran `update --no-dense` for fear of the embed loading the machine,
