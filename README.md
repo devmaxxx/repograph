@@ -36,10 +36,47 @@ Sources: [the three-tool run](docs/bench/2026-09-04-three-graphs-results.md) and
 pnpm add -D zerograph                      # prebuilt: macOS arm64, Linux x64, Windows x64
 pnpm add -g zerograph                      # or globally with pnpm
 npm install -g zerograph                   # or globally with npm
-
-zerograph build                            # full build into .zerograph/ (add it to .gitignore)
-zerograph ask cancellation policy          # answer in a few lines
 ```
+
+### Set up a project
+
+Run these from the repository root.
+
+1. **Keep the store out of git.** The graph lives in `.zerograph/`, built per checkout:
+
+   ```bash
+   echo .zerograph/ >> .gitignore
+   ```
+
+2. **Build the graph.** The first build downloads the embedding model once (about 1.2 GB, cached
+   under `~/.cache/zerograph`); `--no-dense` skips it and answers by id and keyword only.
+
+   ```bash
+   zerograph build
+   ```
+
+3. **Ask.** Every reader catches the graph up with your edits before it answers, so there is no
+   `update` to remember.
+
+   ```bash
+   zerograph ask cancellation policy
+   ```
+
+4. **Connect your agent** (optional). Writes the agent's config (`--claude` also registers the MCP
+   server) and `post-merge` and `post-checkout` git hooks that refresh the graph after a pull or a
+   branch switch:
+
+   ```bash
+   zerograph install-agent --claude           # or --codex
+   zerograph install-agent --claude --command "pnpm exec zerograph"   # installed as a dev dependency
+   ```
+
+5. **Tune what is read** (optional). With no config, markdown and code in all 24 languages are read
+   and `node_modules`, `dist` and build output are skipped. A `zerograph.toml` at the root narrows
+   or widens that — see [Configuration](docs/configuration.md).
+
+For repeated questions, `zerograph serve --detach` keeps the model loaded between them
+([serve](docs/serve.md)).
 
 - On Windows: [Windows notes](docs/install.md#windows-notes).
 - Upgrading from repograph: the old store, config and variables are read where they are, see
