@@ -162,6 +162,14 @@ enum Cmd {
         #[arg(long)] claude: bool,
         /// Codex's `.codex/`.
         #[arg(long)] codex: bool,
+        /// Cursor: `.cursor/mcp.json` and an always-on rule.
+        #[arg(long)] cursor: bool,
+        /// VS Code with GitHub Copilot: `.vscode/mcp.json` and `.github/copilot-instructions.md`.
+        #[arg(long)] copilot: bool,
+        /// Gemini CLI: `.gemini/settings.json` and `GEMINI.md`.
+        #[arg(long)] gemini: bool,
+        /// opencode: `opencode.json` and `AGENTS.md`.
+        #[arg(long)] opencode: bool,
         /// How this repository invokes the binary, in every file the install writes.
         #[arg(long, default_value = "zerograph")] command: String,
     },
@@ -1105,14 +1113,30 @@ fn run(cli: Cli) -> anyhow::Result<()> {
             if graph.nodes.is_empty() { anyhow::bail!("graph is empty — run `zerograph build`"); }
             Ok(())
         }
-        Cmd::InstallAgent { claude, codex, command } => {
+        Cmd::InstallAgent { claude, codex, cursor, copilot, gemini, opencode, command } => {
+            use install_agent::Editor;
+            let editors: Vec<Editor> = [(cursor, Editor::Cursor), (copilot, Editor::Copilot), (gemini, Editor::Gemini), (opencode, Editor::Opencode)]
+                .into_iter().filter(|(on, _)| *on).map(|(_, e)| e).collect();
+            if !claude && !codex && editors.is_empty() {
+                anyhow::bail!("name an agent: --claude, --codex, --cursor, --copilot, --gemini or --opencode (several at once is fine)");
+            }
             let targets: Vec<install_agent::Target> = match (claude, codex) {
-                (false, false) => anyhow::bail!("name a harness: --claude, --codex, or both"),
+                (false, false) => Vec::new(),
                 // Codex first: its stanza goes into the root `AGENTS.md`, which a `CLAUDE.md` link
                 // usually points at, so the Claude pass finds nothing left to write through the link.
                 (c, x) => [(x, install_agent::Target::Codex), (c, install_agent::Target::Claude)]
                     .into_iter().filter(|(on, _)| *on).map(|(_, t)| t).collect(),
             };
+            // Editors first: opencode writes the root `AGENTS.md`, which a `CLAUDE.md` link usually
+            // points at, so the Claude pass below finds it written rather than a link to refuse.
+            for editor in editors {
+                let r = install_agent::install_editor(&repo, editor, &command)?;
+                match r.written {
+                    0 => println!("{editor:?}: already installed, nothing written"),
+                    n => println!("{editor:?}: wrote {n} files\n  {}", r.paths.join("\n  ")),
+                }
+                for note in &r.notes { println!("{editor:?}: {note}"); }
+            }
             for target in targets {
                 let r = install_agent::install(&repo, target, &command)?;
                 match r.written {

@@ -10,6 +10,29 @@ registered alone, and prints the command to run by hand where `claude` is not on
 protocol is newline-delimited JSON-RPC on stdout and nothing else; diagnostics go to stderr. A tool
 that fails returns an `isError` result and the server carries on.
 
+### Other agents
+
+```bash
+zerograph install-agent --cursor --copilot --gemini --opencode   # any subset, with --claude or --codex too
+```
+
+Each flag writes the agent's project MCP file with a `zerograph` server in it and the stanza into
+the instructions file that agent reads always. A file already there is merged: its other servers and
+settings stay.
+
+| flag | MCP file | instructions |
+| --- | --- | --- |
+| `--cursor` | `.cursor/mcp.json` | `.cursor/rules/zerograph.mdc`, `alwaysApply: true` |
+| `--copilot` | `.vscode/mcp.json` (VS Code) | `.github/copilot-instructions.md` |
+| `--gemini` | `.gemini/settings.json` | `GEMINI.md` |
+| `--opencode` | `opencode.json` | `AGENTS.md` |
+
+These files are committed, so they carry no absolute path. Cursor and VS Code expand
+`${workspaceFolder}` into `--repo`; Gemini CLI and opencode start the server in the directory they
+were started in, so start them at the repository root. An `mcp.json` with comments in it is not
+rewritten: the entry to paste is printed instead. Windsurf reads MCP servers only from a
+machine-wide file, so it is not covered; `zerograph mcp` is the command to give it.
+
 | tool | does |
 | --- | --- |
 | `ask` | `question` (plus `seeds`, `bodies`, `rerank`, `rerank_local`, `depth`, `stale`) to the answer `ask` prints, with the low-confidence line when the retrievers disagree. `rerank` spends tokens on the agent's word, so one server process runs at most `mcp_reranks` of them (25 by default, set in the machine config) and answers the rest from the fused order, saying so |

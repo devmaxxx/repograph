@@ -1,5 +1,6 @@
 //! `zerograph install-agent`: writes the agent-facing surface into a consuming repository, for
-//! Claude Code or for Codex. The texts are embedded with `include_str!` rather than copied from a
+//! Claude Code or for Codex, and an MCP entry and the stanza for Cursor, VS Code with Copilot,
+//! Gemini CLI and opencode. The texts are embedded with `include_str!` rather than copied from a
 //! checkout, so a binary and the surface it installs cannot disagree about what the tool can do.
 //!
 //! Idempotent by construction: a second run rewrites the same bytes and reports nothing written.
@@ -296,6 +297,122 @@ pub fn install(root: &Path, target: Target, command: &str) -> Result<Report> {
     Ok(report)
 }
 
+/// An editor or CLI that reads a project MCP file and an instructions file, and none of the
+/// hooks, skills or subagents above: for these the install is the server entry and the stanza.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Editor { Cursor, Copilot, Gemini, Opencode }
+
+impl Editor {
+    fn mcp_file(self) -> &'static str {
+        match self {
+            Editor::Cursor => ".cursor/mcp.json",
+            Editor::Copilot => ".vscode/mcp.json",
+            Editor::Gemini => ".gemini/settings.json",
+            Editor::Opencode => "opencode.json",
+        }
+    }
+
+    fn servers_key(self) -> &'static str {
+        match self {
+            Editor::Cursor | Editor::Gemini => "mcpServers",
+            Editor::Copilot => "servers",
+            Editor::Opencode => "mcp",
+        }
+    }
+
+    /// The server entry for `argv`. These files are committed and shared, so no absolute path
+    /// goes in them: Cursor and VS Code expand `${workspaceFolder}` themselves, and Gemini CLI
+    /// and opencode start the server in the directory they were started in, which is the
+    /// repository root `zerograph` already defaults to.
+    fn server(self, argv: &[String]) -> serde_json::Value {
+        let (program, rest) = argv.split_first().expect("argv is never empty");
+        let workspace = ["--repo", "${workspaceFolder}", "mcp"];
+        let args = |tail: &[&str]| rest.iter().cloned().chain(tail.iter().map(|s| s.to_string())).collect::<Vec<String>>();
+        match self {
+            Editor::Cursor => serde_json::json!({ "command": program, "args": args(&workspace) }),
+            Editor::Copilot => serde_json::json!({ "type": "stdio", "command": program, "args": args(&workspace) }),
+            Editor::Gemini => serde_json::json!({ "command": program, "args": args(&["mcp"]) }),
+            Editor::Opencode => serde_json::json!({
+                "type": "local",
+                "command": std::iter::once(program.clone()).chain(args(&["mcp"])).collect::<Vec<_>>(),
+                "enabled": true,
+            }),
+        }
+    }
+
+    /// The always-on instructions file. Cursor ignores plain markdown under `.cursor/rules/`, so
+    /// its stanza is a rule file of our own; opencode reads the root `AGENTS.md`, as Codex does.
+    fn instructions(self) -> &'static str {
+        match self {
+            Editor::Cursor => ".cursor/rules/zerograph.mdc",
+            Editor::Copilot => ".github/copilot-instructions.md",
+            Editor::Gemini => "GEMINI.md",
+            Editor::Opencode => "AGENTS.md",
+        }
+    }
+}
+
+const CURSOR_RULE_HEADER: &str = "---\ndescription: Query the zerograph index before reading files\nalwaysApply: true\n---\n\n";
+
+/// The project MCP file with our server entry in it, every other key and server kept. A file
+/// that is not plain JSON (VS Code allows comments in `mcp.json`) is an error the caller turns
+/// into a note, so a hand-kept file is never rewritten without its comments.
+pub fn merged_mcp_file(existing: &str, editor: Editor, argv: &[String]) -> Result<String> {
+    let mut root: serde_json::Value = match existing.trim().is_empty() {
+        true => match editor {
+            Editor::Opencode => serde_json::json!({ "$schema": "https://opencode.ai/config.json" }),
+            _ => serde_json::json!({}),
+        },
+        false => serde_json::from_str(existing).context("not plain JSON")?,
+    };
+    let Some(object) = root.as_object_mut() else { anyhow::bail!("not a JSON object") };
+    let key = editor.servers_key();
+    let servers = object.entry(key).or_insert_with(|| serde_json::json!({}));
+    let Some(servers) = servers.as_object_mut() else { anyhow::bail!("`{key}` is not an object") };
+    servers.insert(MCP_NAME.into(), editor.server(argv));
+    Ok(serde_json::to_string_pretty(&root)? + "\n")
+}
+
+/// Installs the MCP entry and the stanza for one editor. Neither failure stops the other: a
+/// commented `mcp.json` still gets its instructions, and says what to paste.
+pub fn install_editor(root: &Path, editor: Editor, command: &str) -> Result<Report> {
+    let mut report = Report::default();
+    let argv = split_words(command);
+    if argv.is_empty() { anyhow::bail!("--command is empty"); }
+
+    let mcp = root.join(editor.mcp_file());
+    // Only a missing file is empty: one that exists but cannot be read must not be mistaken for
+    // blank and rewritten from scratch over whatever it holds.
+    let existing = match std::fs::read_to_string(&mcp) {
+        Ok(text) => Ok(text),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(String::new()),
+        Err(e) => Err(anyhow::Error::from(e).context("unreadable")),
+    };
+    let merged = existing.and_then(|text| merged_mcp_file(&text, editor, &argv));
+    let unchanged = merged.as_ref().is_ok_and(|m| std::fs::read_to_string(&mcp).is_ok_and(|old| &old == m));
+    match merged {
+        Ok(_) if !unchanged && is_symlink(&mcp) => report.notes.push(format!(
+            "{} is a symlink, so the server entry was not written through it", mcp.display())),
+        Ok(merged) => write_if_changed(&mcp, &merged, &mut report)?,
+        Err(e) => report.notes.push(format!(
+            "{} is left as it is ({e:#}); add this under `{}`:\n\"{MCP_NAME}\": {}",
+            mcp.display(), editor.servers_key(), serde_json::to_string_pretty(&editor.server(&argv))?)),
+    }
+
+    let instructions = root.join(editor.instructions());
+    let text = match editor {
+        Editor::Cursor => format!("{CURSOR_RULE_HEADER}{}", with_command(STANZA, command)),
+        _ => merged_instructions(&std::fs::read_to_string(&instructions).unwrap_or_default(), command),
+    };
+    let unchanged = std::fs::read_to_string(&instructions).is_ok_and(|old| old == text);
+    match !unchanged && is_symlink(&instructions) {
+        true => report.notes.push(format!(
+            "{} is a symlink, so the stanza was not written through it", instructions.display())),
+        false => write_if_changed(&instructions, &text, &mut report)?,
+    }
+    Ok(report)
+}
+
 fn holds_stanza(path: &Path) -> bool {
     std::fs::read_to_string(path).is_ok_and(|t| t.contains(BEGIN) || t.contains(LEGACY_BEGIN))
 }
@@ -565,6 +682,78 @@ mod tests {
         let err = install(dir.path(), Target::Claude, "zerograph").unwrap_err().to_string();
         assert!(err.contains("symlink"), "{err}");
         assert_eq!(std::fs::read_to_string(&victim).unwrap(), "{}");
+    }
+
+    fn read_json(path: &Path) -> serde_json::Value {
+        serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap()
+    }
+
+    #[test]
+    fn each_editor_gets_its_server_entry_and_its_stanza_and_a_second_run_writes_nothing() {
+        let dir = root();
+        for editor in [Editor::Cursor, Editor::Copilot, Editor::Gemini, Editor::Opencode] {
+            let first = install_editor(dir.path(), editor, "pnpm exec zerograph").unwrap();
+            assert_eq!(first.written, 2, "{editor:?}: {:?}", first.paths);
+            assert_eq!(install_editor(dir.path(), editor, "pnpm exec zerograph").unwrap().written, 0, "{editor:?}");
+        }
+        let cursor = read_json(&dir.path().join(".cursor/mcp.json"));
+        assert_eq!(cursor["mcpServers"]["zerograph"], serde_json::json!({
+            "command": "pnpm", "args": ["exec", "zerograph", "--repo", "${workspaceFolder}", "mcp"] }));
+        let copilot = read_json(&dir.path().join(".vscode/mcp.json"));
+        assert_eq!(copilot["servers"]["zerograph"]["type"], "stdio");
+        assert_eq!(copilot["servers"]["zerograph"]["args"][3], "${workspaceFolder}");
+        let gemini = read_json(&dir.path().join(".gemini/settings.json"));
+        assert_eq!(gemini["mcpServers"]["zerograph"], serde_json::json!({ "command": "pnpm", "args": ["exec", "zerograph", "mcp"] }));
+        let opencode = read_json(&dir.path().join("opencode.json"));
+        assert_eq!(opencode["mcp"]["zerograph"], serde_json::json!({
+            "type": "local", "command": ["pnpm", "exec", "zerograph", "mcp"], "enabled": true }));
+
+        let rule = std::fs::read_to_string(dir.path().join(".cursor/rules/zerograph.mdc")).unwrap();
+        assert!(rule.starts_with("---\n") && rule.contains("alwaysApply: true"), "{rule}");
+        for file in [".cursor/rules/zerograph.mdc", ".github/copilot-instructions.md", "GEMINI.md", "AGENTS.md"] {
+            let text = std::fs::read_to_string(dir.path().join(file)).unwrap();
+            assert!(text.contains(BEGIN) && text.contains("pnpm exec zerograph ask"), "{file}");
+        }
+    }
+
+    #[test]
+    fn a_projects_own_servers_and_settings_survive_the_merge() {
+        let dir = root();
+        std::fs::create_dir_all(dir.path().join(".gemini")).unwrap();
+        std::fs::write(dir.path().join(".gemini/settings.json"),
+            r#"{"theme":"dark","mcpServers":{"other":{"command":"x"},"zerograph":{"command":"stale"}}}"#).unwrap();
+        install_editor(dir.path(), Editor::Gemini, "zerograph").unwrap();
+        let merged = read_json(&dir.path().join(".gemini/settings.json"));
+        assert_eq!(merged["theme"], "dark");
+        assert_eq!(merged["mcpServers"]["other"]["command"], "x");
+        assert_eq!(merged["mcpServers"]["zerograph"]["command"], "zerograph");
+    }
+
+    #[test]
+    fn a_commented_mcp_file_is_left_alone_and_the_entry_is_printed_instead() {
+        let dir = root();
+        let mcp = dir.path().join(".vscode/mcp.json");
+        std::fs::create_dir_all(mcp.parent().unwrap()).unwrap();
+        let mine = "{\n  // ours\n  \"servers\": {}\n}\n";
+        std::fs::write(&mcp, mine).unwrap();
+        let r = install_editor(dir.path(), Editor::Copilot, "zerograph").unwrap();
+        assert_eq!(std::fs::read_to_string(&mcp).unwrap(), mine);
+        assert!(r.notes.iter().any(|n| n.contains("\"zerograph\"") && n.contains("${workspaceFolder}")), "{:?}", r.notes);
+        assert!(dir.path().join(".github/copilot-instructions.md").exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_linked_mcp_file_is_not_written_through_and_the_stanza_still_lands() {
+        let dir = root();
+        let elsewhere = dir.path().join("shared.json");
+        std::fs::write(&elsewhere, "{}").unwrap();
+        std::fs::create_dir_all(dir.path().join(".cursor")).unwrap();
+        std::os::unix::fs::symlink(&elsewhere, dir.path().join(".cursor/mcp.json")).unwrap();
+        let r = install_editor(dir.path(), Editor::Cursor, "zerograph").unwrap();
+        assert_eq!(std::fs::read_to_string(&elsewhere).unwrap(), "{}");
+        assert!(r.notes.iter().any(|n| n.contains("symlink")), "{:?}", r.notes);
+        assert!(dir.path().join(".cursor/rules/zerograph.mdc").exists());
     }
 
     #[cfg(unix)]
