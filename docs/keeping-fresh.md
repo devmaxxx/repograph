@@ -65,6 +65,33 @@ embed is every two seconds:
 embedded 400/1683 (14.2 rows/s, ~90 s left)
 ```
 
+### Background priority
+
+Every write zerograph starts on its own runs at background priority: the detached `update` a reader,
+a git hook or the MCP `reindex` and `switch_model` tools start, `watch`, and `serve`'s poll between
+questions. A command someone is waiting on — `ask`, `build`, `update` without `--detach`, `embed`,
+`model` — keeps normal priority, and so does `serve` answering a question: its poll runs on a thread
+of its own that is lowered and then ends.
+
+| platform | the process (`update --detach`, `watch`) | `serve`'s poll thread |
+| --- | --- | --- |
+| macOS | `PRIO_DARWIN_PROCESS` background band: CPU and disk I/O throttled | `PRIO_DARWIN_THREAD` |
+| Linux | nice 19 and the idle I/O class, set before any thread starts so every pool inherits them | the same, on that thread |
+| Windows | `PROCESS_MODE_BACKGROUND_BEGIN` | `THREAD_MODE_BACKGROUND_BEGIN` |
+
+The embed under it is still bounded by [`resources`](configuration.md#resources), 30% of the logical
+cores by default. A platform that refuses the call costs a line in the run's log and nothing else.
+The price is wall time when the machine is busy: the band waits for the cores nothing else wants,
+which is the point, and a foreground `update` that finds a background one holding the store waits
+for it.
+
+A dense `update` embeds every row the store is owed, whoever left it owed: the rows are matched to
+the stored graph by hash, not to what that run re-read, so one over a tree nothing moved still pays
+for an `update --no-dense` or a lexical `ask` before it. A hook written as `update --no-dense
+--detach` never does, and a fused `ask` misses the rows it leaves until something dense runs — the
+MCP `status` tool counts them as `owed`. Leave `--no-dense` out of the hooks: the background band
+is what keeps the embed out of the way.
+
 Readers that do not refresh themselves — an editor plugin, an MCP server — can be kept supplied by
 a poller instead:
 

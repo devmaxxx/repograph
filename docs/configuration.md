@@ -243,7 +243,9 @@ machine in `~/.config/zerograph/config.toml`, or `ZEROGRAPH_RESOURCES=full` for 
 server wants `full`; a laptop you are working on wants `low`.
 
 `resources` is the only resource lever there is: `threads` and `priority` were removed on
-2026-09-09, and `full` is now both the most of the machine you can ask for and the fastest setting
+2026-09-09, and the background priority that work nobody waits on has run at since 0.6.4
+([keeping fresh](keeping-fresh.md#background-priority)) is not a setting and never reaches a
+foreground writer; and `full` is now both the most of the machine you can ask for and the fastest setting
 the tool has. A long embed checkpoints every 1,024 rows and says where it is, so an interrupt
 resumes rather than restarts. What a rebuild costs the person beside it, why `full` is half the
 logical cores rather than no cap, and what the removed scheduling band bought and cost are in

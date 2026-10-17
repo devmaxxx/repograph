@@ -24,7 +24,8 @@ quoted in comments) and answers questions about it in a few lines of text.
   tokens and is opt-in.
 - **A better door, not a better graph.** Exact id, BM25 and local dense retrieval find the entry
   point from a question in ordinary words, in about 200 tokens an answer.
-- **Built for agents.** `--json` on every reader, an MCP server, and hooks that keep the graph fresh.
+- **Built for agents.** `--json` on every reader, an MCP server, and hooks that keep the graph fresh
+  at background priority.
 
 [![zerograph against graphify and GitNexus: questions answered by each embedder and with rerank, and LLM tokens to build](docs/assets/comparison.png)](docs/assets/comparison.png)
 

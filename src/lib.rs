@@ -16,6 +16,7 @@ mod legacy;
 mod mcp;
 mod model;
 mod prime;
+mod priority;
 mod query;
 mod refresh;
 mod serve;
@@ -55,6 +56,9 @@ struct Cli {
     repo: PathBuf,
     #[arg(long, global = true)]
     no_dense: bool,
+    /// Runs at background priority. What a detached refresh is started with; nobody waits on it.
+    #[arg(long, global = true, hide = true)]
+    background: bool,
     #[command(subcommand)]
     cmd: Cmd,
 }
@@ -72,8 +76,8 @@ fn depth(s: &str) -> Result<usize, String> {
 enum Cmd {
     Build,
     Update {
-        /// Starts the update in a process of its own and returns at once; its output goes to
-        /// `.zerograph/background.log`. What the git hooks `install-agent` writes run.
+        /// Starts the update in a process of its own, at background priority, and returns at once;
+        /// its output goes to `.zerograph/background.log`. What the git hooks `install-agent` writes run.
         #[arg(long)] detach: bool,
     },
     Ask {
@@ -110,7 +114,8 @@ enum Cmd {
     Stop,
     /// Keeps the store in step with the tree for readers that do not refresh themselves —
     /// editors, MCP servers. Polls, applies the same incremental update `ask` does, and embeds
-    /// what changed. Ctrl-C stops it; every write is a rename, so there is nothing to clean up.
+    /// what changed, at background priority. Ctrl-C stops it; every write is a rename, so there is
+    /// nothing to clean up.
     Watch {
         /// Seconds between polls.
         #[arg(long, default_value_t = 30)] every: u64,
@@ -638,18 +643,29 @@ fn embed_all(repo: &std::path::Path, no_dense: bool, cfg: &config::Config) -> an
 /// rows are owed to, and opening a second session of it would cost the reader a second wait for
 /// nothing.
 fn embed_opened(repo: &std::path::Path, model: &str, emb: &mut index::embed::Embedder) -> anyhow::Result<()> {
+    let t = std::time::Instant::now();
+    let dim = emb.dim()?;
+    let n = pay_owed(repo, model, dim, &mut |texts, forwarded| emb.embed_with(texts, forwarded))?;
+    println!("dense: embedded {n} rows in {:.1}s", t.elapsed().as_secs_f32());
+    Ok(())
+}
+
+/// Every row the stored graph is owed, whoever left it owed: this run's own refresh, or an
+/// `update --no-dense` or a lexical `ask` before it. The rows are matched by hash against the
+/// graph as stored, not against what this run changed, so a dense `update` over a tree nothing
+/// moved still pays them.
+#[allow(clippy::type_complexity)]
+fn pay_owed(repo: &std::path::Path, model: &str, dim: usize, embed: &mut dyn FnMut(&[String], &mut dyn FnMut(usize)) -> anyhow::Result<Vec<Vec<f32>>>) -> anyhow::Result<usize> {
     let store = store::Store::new(repo);
     let graph_at = store.stamp("graph.json");
     let (graph, _) = store.load()?;
     let mut dense = index::dense::DenseIndex::load(&store)?;
-    let t = std::time::Instant::now();
-    dense.written_by(model, emb.dim()?);
+    dense.written_by(model, dim);
     let mut meter = Meter::new(dense.owed(&graph));
-    let n = dense.sync_chunked(&graph, &mut |texts| emb.embed_with(texts, &mut |k| meter.add(k)), SYNC_CHUNK, &mut |idx, _| idx.save(&store))?;
+    let n = dense.sync_chunked(&graph, &mut |texts| embed(texts, &mut |k| meter.add(k)), SYNC_CHUNK, &mut |idx, _| idx.save(&store))?;
     dense.synced_against(graph_at);
     dense.save(&store)?;
-    println!("dense: embedded {n} rows in {:.1}s", t.elapsed().as_secs_f32());
-    Ok(())
+    Ok(n)
 }
 
 /// How often a foreground embed says where it is. A checkpoint is a minute's work, and a person
@@ -943,6 +959,8 @@ pub fn main() -> std::process::ExitCode {
 }
 
 fn run(cli: Cli) -> anyhow::Result<()> {
+    // First of all, before anything here starts a thread that would keep the old priority.
+    if cli.background || matches!(cli.cmd, Cmd::Watch { .. }) { priority::background_process(); }
     let repo = plain(cli.repo.canonicalize()?);
     // Loaded per command: `bench` reads its own from `ZEROGRAPH_BENCH_REPO`, and `explain`/`verify`
     // must not fail on a broken `zerograph.toml` they never read. `embed` does read it — the model
@@ -1357,6 +1375,30 @@ mod tests {
         let manifest = store.load().unwrap().1;
         assert_eq!(manifest.stamps.len(), manifest.files.len());
         assert_eq!(std::fs::read(repo.join(".zerograph/graph.json")).unwrap(), graph_before);
+    }
+
+    /// The rows a lexical write leaves owed — a git hook's `update --no-dense`, a `--no-dense`
+    /// ask — are paid by the next dense update, even one that finds nothing changed on disk.
+    #[test]
+    fn a_dense_update_pays_the_rows_a_lexical_update_left_owed() {
+        let dir = doc_repo(ONE);
+        let (repo, cfg) = (dir.path(), config::Config::default());
+        built(repo, &cfg);
+        let fake = |texts: &[String], forwarded: &mut dyn FnMut(usize)| -> anyhow::Result<Vec<Vec<f32>>> {
+            forwarded(texts.len());
+            Ok(texts.iter().map(|t| vec![t.len() as f32, 1.0, 0.0]).collect())
+        };
+        let store = store::Store::new(repo);
+        let owed = || index::dense::DenseIndex::load(&store).unwrap().owed(&store.load().unwrap().0);
+        assert!(pay_owed(repo, "fake", 3, &mut fake.clone()).unwrap() > 0);
+        assert_eq!(owed(), 0);
+        std::fs::write(repo.join("docs/b.md"), "# B\n\n**FR-PAY-24 · MUST · chargeback**\n\nbody\n").unwrap();
+        assert_eq!(run_update(repo, &cfg, false).unwrap().changed, 1, "the lexical write");
+        let left = owed();
+        assert!(left > 0, "the new file's rows are owed");
+        assert_eq!(run_update(repo, &cfg, false).unwrap().changed, 0, "the dense update finds nothing to re-read");
+        assert_eq!(pay_owed(repo, "fake", 3, &mut fake.clone()).unwrap(), left, "and embeds exactly what was owed");
+        assert_eq!(owed(), 0);
     }
 
     /// The resolver reads every Java file's header and declarations ahead of extraction, and an
