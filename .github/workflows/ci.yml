@@ -286,8 +286,8 @@ jobs:
           if ($IsWindows) {
             npx zerograph --repo $R --no-dense serve --detach --idle 600
             if ($LASTEXITCODE -ne 0) { throw "serve --detach through the launcher failed: $LASTEXITCODE" }
-            $copy = Join-Path $env:LOCALAPPDATA 'zerograph\bin\0.0.0-ci\zerograph.exe'
-            if (-not (Test-Path $copy)) { throw "the launcher kept no copy at $copy" }
+            $copy = Get-ChildItem (Join-Path $env:LOCALAPPDATA 'zerograph\bin\0.0.0-ci-*\zerograph.exe') -ErrorAction SilentlyContinue
+            if (-not $copy) { throw "the launcher kept no copy under $env:LOCALAPPDATA\zerograph\bin" }
             $pkg = Join-Path $proj 'node_modules\zerograph\bin\win32-x64\zerograph.exe'
             Copy-Item -Force $pkg "$pkg.new"
             Move-Item -Force "$pkg.new" $pkg

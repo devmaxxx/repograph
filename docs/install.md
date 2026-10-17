@@ -100,8 +100,8 @@ Install through npm; nothing else is required. What can still trip a Windows use
   write; the first download prints the `Add-MpPreference -ExclusionPath` line, which is optional. A
   heuristic false positive is restored from Protection History.
 - **Serve.** `zerograph serve --detach` starts one with no window, `zerograph stop` ends it and
-  removes its socket. `npm i -g` upgrades under a running one; `cargo install` does not, so stop
-  it first.
+  removes its socket. `npm i -g` upgrades under one a 0.6.1 or later launcher started; a
+  0.6.0 server, or `cargo install`, needs the server stopped first.
 - **PowerShell encoding.** Output is UTF-8, but a *piped or captured* answer is decoded with
   `[Console]::OutputEncoding`, so Cyrillic turns to mojibake on a non-UTF-8 code page. Set it to
   UTF-8 in your profile.

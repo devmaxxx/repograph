@@ -30,22 +30,36 @@ function binaryPath() {
 }
 
 // Windows refuses to replace an image a process is running, so an `npm i -g` over a live `serve`
-// failed with EBUSY. The binary runs from a copy kept per version under LOCALAPPDATA instead, and
-// the package's own file is never held open. Any failure here runs the package's file as before.
+// failed with EBUSY. The binary runs from a copy under LOCALAPPDATA instead, and the package's own
+// file is never held open. Any failure here runs the package's file as before.
+//
+// One slot per install, not per version: a project's devDependency and a global install, or two
+// packs of one version, each keep their own copy rather than evicting each other's on every run.
+// npm writes every file with one fixed mtime, so an install is told apart by its size and the time
+// it created the file.
+const SLOT_TTL_MS = 30 * 24 * 3600 * 1000;
+const TOUCH_MS = 24 * 3600 * 1000;
+
 function runnable(path) {
   if (process.platform !== "win32" || !process.env.LOCALAPPDATA) return path;
   try {
     const { version } = require("../package.json");
     const root = join(process.env.LOCALAPPDATA, "zerograph", "bin");
-    const dir = join(root, version);
-    const copy = join(dir, "zerograph.exe");
-    // npm writes every file with one fixed mtime, so two packs of one version are told apart by
-    // when this install created the file: a reinstall writes a new one and moves the stamp.
     const src = fs.statSync(path);
-    const key = `${src.size}:${src.ctimeMs}`;
-    const stamp = join(dir, "stamp");
-    const read = (f) => { try { return fs.readFileSync(f, "utf8"); } catch { return ""; } };
-    if (fs.existsSync(copy) && read(stamp) === key) return copy;
+    const slot = `${version}-${src.size}-${Math.trunc(src.ctimeMs)}`;
+    const dir = join(root, slot);
+    const copy = join(dir, "zerograph.exe");
+    const used = join(dir, "used");
+    const now = Date.now();
+    if (fs.existsSync(copy)) {
+      // Marked at most once a day, so a slot in use is never the one the sweep below removes.
+      try {
+        if (now - fs.statSync(used).mtimeMs > TOUCH_MS) fs.utimesSync(used, new Date(), new Date());
+      } catch {
+        fs.writeFileSync(used, "");
+      }
+      return copy;
+    }
     fs.mkdirSync(dir, { recursive: true });
     // Left by a launcher killed mid-copy; one another launcher is still writing stays locked.
     for (const f of fs.readdirSync(dir)) {
@@ -54,24 +68,23 @@ function runnable(path) {
     const tmp = `${copy}.${process.pid}.tmp`;
     try {
       fs.copyFileSync(path, tmp);
-    } catch (e) {
-      // A copy cut short by a full disk would otherwise stay beside the real one for good.
-      fs.rmSync(tmp, { force: true });
-      throw e;
-    }
-    try {
       fs.renameSync(tmp, copy);
-    } catch {
-      // Another launcher won the race, or the old copy is running; neither copy is ours to keep.
+    } catch (e) {
+      // A full disk, or another launcher that renamed the same bytes into place first.
       fs.rmSync(tmp, { force: true });
-      if (read(stamp) !== key) return path;
+      if (!fs.existsSync(copy)) throw e;
     }
-    fs.writeFileSync(stamp, key);
-    // Copies of other versions go once nothing runs them; one still running stays for next time.
+    fs.writeFileSync(used, "");
+    // Slots nothing has launched for a month; one whose binary still runs fails the delete and
+    // stays.
     for (const other of fs.readdirSync(root)) {
-      if (other !== version) {
-        try { fs.rmSync(join(root, other), { recursive: true, force: true }); } catch {}
-      }
+      if (other === slot) continue;
+      const o = join(root, other);
+      try {
+        let last;
+        try { last = fs.statSync(join(o, "used")).mtimeMs; } catch { last = fs.statSync(o).mtimeMs; }
+        if (now - last > SLOT_TTL_MS) fs.rmSync(o, { recursive: true, force: true });
+      } catch {}
     }
     return copy;
   } catch {
