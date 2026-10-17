@@ -381,8 +381,18 @@ pub fn install_editor(root: &Path, editor: Editor, command: &str) -> Result<Repo
     if argv.is_empty() { anyhow::bail!("--command is empty"); }
 
     let mcp = root.join(editor.mcp_file());
-    let existing = std::fs::read_to_string(&mcp).unwrap_or_default();
-    match merged_mcp_file(&existing, editor, &argv) {
+    // Only a missing file is empty: one that exists but cannot be read must not be mistaken for
+    // blank and rewritten from scratch over whatever it holds.
+    let existing = match std::fs::read_to_string(&mcp) {
+        Ok(text) => Ok(text),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(String::new()),
+        Err(e) => Err(anyhow::Error::from(e).context("unreadable")),
+    };
+    let merged = existing.and_then(|text| merged_mcp_file(&text, editor, &argv));
+    let unchanged = merged.as_ref().is_ok_and(|m| std::fs::read_to_string(&mcp).is_ok_and(|old| &old == m));
+    match merged {
+        Ok(_) if !unchanged && is_symlink(&mcp) => report.notes.push(format!(
+            "{} is a symlink, so the server entry was not written through it", mcp.display())),
         Ok(merged) => write_if_changed(&mcp, &merged, &mut report)?,
         Err(e) => report.notes.push(format!(
             "{} is left as it is ({e:#}); add this under `{}`:\n\"{MCP_NAME}\": {}",
@@ -730,6 +740,20 @@ mod tests {
         assert_eq!(std::fs::read_to_string(&mcp).unwrap(), mine);
         assert!(r.notes.iter().any(|n| n.contains("\"zerograph\"") && n.contains("${workspaceFolder}")), "{:?}", r.notes);
         assert!(dir.path().join(".github/copilot-instructions.md").exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_linked_mcp_file_is_not_written_through_and_the_stanza_still_lands() {
+        let dir = root();
+        let elsewhere = dir.path().join("shared.json");
+        std::fs::write(&elsewhere, "{}").unwrap();
+        std::fs::create_dir_all(dir.path().join(".cursor")).unwrap();
+        std::os::unix::fs::symlink(&elsewhere, dir.path().join(".cursor/mcp.json")).unwrap();
+        let r = install_editor(dir.path(), Editor::Cursor, "zerograph").unwrap();
+        assert_eq!(std::fs::read_to_string(&elsewhere).unwrap(), "{}");
+        assert!(r.notes.iter().any(|n| n.contains("symlink")), "{:?}", r.notes);
+        assert!(dir.path().join(".cursor/rules/zerograph.mdc").exists());
     }
 
     #[cfg(unix)]

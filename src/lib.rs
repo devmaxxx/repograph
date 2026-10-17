@@ -1127,6 +1127,16 @@ fn run(cli: Cli) -> anyhow::Result<()> {
                 (c, x) => [(x, install_agent::Target::Codex), (c, install_agent::Target::Claude)]
                     .into_iter().filter(|(on, _)| *on).map(|(_, t)| t).collect(),
             };
+            // Editors first: opencode writes the root `AGENTS.md`, which a `CLAUDE.md` link usually
+            // points at, so the Claude pass below finds it written rather than a link to refuse.
+            for editor in editors {
+                let r = install_agent::install_editor(&repo, editor, &command)?;
+                match r.written {
+                    0 => println!("{editor:?}: already installed, nothing written"),
+                    n => println!("{editor:?}: wrote {n} files\n  {}", r.paths.join("\n  ")),
+                }
+                for note in &r.notes { println!("{editor:?}: {note}"); }
+            }
             for target in targets {
                 let r = install_agent::install(&repo, target, &command)?;
                 match r.written {
@@ -1153,14 +1163,6 @@ fn run(cli: Cli) -> anyhow::Result<()> {
                               ~/.codex/hooks/ and adjust the path if this checkout may go away.",
                              install_agent::codex_hooks_block(&abs.display().to_string()));
                 }
-            }
-            for editor in editors {
-                let r = install_agent::install_editor(&repo, editor, &command)?;
-                match r.written {
-                    0 => println!("{editor:?}: already installed, nothing written"),
-                    n => println!("{editor:?}: wrote {n} files\n  {}", r.paths.join("\n  ")),
-                }
-                for note in &r.notes { println!("{editor:?}: {note}"); }
             }
             // Once whatever the harnesses: git runs these, not the agent.
             let r = install_agent::install_git_hooks(&repo, &command)?;
