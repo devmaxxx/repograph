@@ -330,7 +330,10 @@ pub fn render(answer: &Answer, graph: &Graph, opts: &Options) -> String {
     }
     let orphans = answer.expanded.iter().filter(|n| !answer.seeds.iter().any(|s| n.via.as_deref() == Some(s.id.as_str())));
     for n in orphans {
-        out.push_str(&format!("  └ {}  ← {}\n", hit_line(n), n.via.as_deref().unwrap_or("")));
+        match n.via.as_deref() {
+            Some(via) => out.push_str(&format!("  └ {}  ← {via}\n", hit_line(n))),
+            None => out.push_str(&format!("  └ {}\n", hit_line(n))),
+        }
     }
     out
 }
