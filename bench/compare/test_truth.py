@@ -1,5 +1,6 @@
 """What counts as a reference, on the lines that were miscounted."""
 
+import random
 import shutil
 import subprocess
 import tempfile
@@ -812,7 +813,7 @@ class DotnetReaders(unittest.TestCase):
             repo = Path(tmp)
             (repo / "src").mkdir()
             (repo / "src" / "A.ts").write_text("export class A { b: B; go() { this.b.go(); } }\n", encoding="utf8")
-            self.assertEqual(T.di_call_graph(repo, []), {"edges": {}, "declared": {}})
+            self.assertEqual(T.di_call_graph(repo, []), {"edges": {}, "declared": {}, "shared": []})
 
     def test_a_comment_opener_inside_a_code_block_string_hides_nothing(self):
         # A `<!--` in a C# string is text; read as an opener, it would pair with a later markup
@@ -955,6 +956,34 @@ class JavaDeclarations(unittest.TestCase):
             (13, "find"), (18, "open"), (24, "close"),
         ])
 
+
+UNBALANCED_JAVA = "public class Desk {\n    @Weird(value = 1\n    void open() {}\n    void close() {}\n}\n\nclass After {}\n"
+UNBALANCED_KOTLIN = "class Desk {\n    @Weird(value = 1\n    fun open() {}\n    fun close() {}\n}\n\nclass After\n"
+
+
+class UnbalancedAnnotations(unittest.TestCase):
+    """An annotation whose argument list never closes costs its own line, never the rest of the file."""
+
+    def test_java_declarations_after_it_are_still_read(self):
+        lines, found = T.declarations("shop/Desk.java", UNBALANCED_JAVA)
+        self.assertEqual(found, [(1, "Desk"), (3, "open"), (4, "close"), (7, "After")])
+        self.assertEqual(T.declaration_end(lines, 1), 5)
+
+    def test_kotlin_declarations_after_it_are_still_read(self):
+        lines, found = T.declarations("shop/Desk.kt", UNBALANCED_KOTLIN)
+        self.assertEqual(found, [(1, "Desk"), (3, "open"), (4, "close"), (7, "After")])
+        self.assertEqual(T.declaration_end(lines, 1), 5)
+
+    def test_a_closing_bracket_of_another_kind_does_not_close_it(self):
+        lines, found = T.declarations("shop/Desk.java", "public class Desk {\n    @Weird(value = 1}\n    void open() {}\n}\n\nclass After {}\n")
+        self.assertEqual(found, [(1, "Desk"), (3, "open"), (6, "After")])
+
+    def test_a_balanced_annotation_and_a_label_are_left_as_they_were(self):
+        kotlin = '@Json(\n    name = "x",\n)\nclass A {\n    fun f() { xs.forEach { return@forEach }; this@A.g(1) }\n}\n'
+        self.assertEqual(T.blank_kotlin(kotlin), T._blank_source(kotlin, kotlin=True))
+        java = '@Audited(level = Level.of(2),\n    tags = {"a"})\nclass A {}\n'
+        self.assertEqual(T.blank_java(java), T._blank_source(java, kotlin=True, nested_comments=False))
+
 class KotlinConstructorProperties(unittest.TestCase):
     """Read for the declarations clause only; `changed_symbols` does not count them."""
 
@@ -1056,6 +1085,126 @@ class JvmCallGraph(unittest.TestCase):
                 "    public void run() { helper.go(); }\n}\n")
             edges = T.di_call_graph(root, ["android"])["edges"]
             self.assertEqual(edges["Widget"], ["Inner.go"])
+
+
+KOTLIN_SCOPES = """package p
+
+class Store(private val db: Db) {
+    fun save() { db.write() }
+}
+
+object Registry {
+    private val cache: Cache = Cache()
+    fun get() { cache.read() }
+}
+
+interface Port {
+    val clock: Clock
+    fun now() = clock.tick()
+}
+
+enum class Mode(private val flags: Flags) {
+    A, B;
+    fun on() { flags.set() }
+}
+
+private class Hidden(private val vault: Vault) {
+    fun open() { vault.unlock() }
+}
+
+class Outer(private val log: Log) {
+    companion object {
+        private val pool: Pool = Pool()
+        fun make() { pool.take() }
+    }
+    class Inner(private val bus: Bus) {
+        fun go() { bus.send() }
+    }
+    fun after() { log.write() }
+}
+
+fun loose(store: Store) {
+    val queue: Queue = Queue()
+    queue.push()
+}
+"""
+
+
+class KotlinCallScopes(unittest.TestCase):
+    """Every Kotlin type is its own call-graph owner, a companion belongs to its class, and the
+    graph says which names more than one scope declares."""
+
+    def graph(self, files: dict[str, str]) -> dict:
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            for rel, body in files.items():
+                (root / rel).parent.mkdir(parents=True, exist_ok=True)
+                (root / rel).write_text(body)
+            return T.di_call_graph(root, ["mobile"])
+
+    def test_objects_interfaces_enums_and_any_modifier_open_a_scope_of_their_own(self):
+        graph = self.graph({"mobile/Scopes.kt": KOTLIN_SCOPES})
+        self.assertEqual(graph["edges"], {
+            "Store": ["Db.write"],
+            "Registry": ["Cache.read"],
+            "Port": ["Clock.tick"],
+            "Mode": ["Flags.set"],
+            "Hidden": ["Vault.unlock"],
+            # The companion's members are the class's, and the class resumes after a nested type ends.
+            "Outer": ["Log.write", "Pool.take"],
+            "Inner": ["Bus.send"],
+        })
+        self.assertNotIn("Companion", graph["declared"])
+        self.assertEqual(graph["shared"], [])
+
+    def test_a_type_named_only_in_a_comment_or_a_string_opens_no_scope(self):
+        src = 'class Real(private val db: Db) {\n    // class Fake {\n    val label = "object Ghost {"\n    fun go() { db.write() }\n}\n'
+        graph = self.graph({"mobile/Real.kt": src})
+        self.assertEqual(graph["edges"], {"Real": ["Db.write"]})
+        self.assertEqual(sorted(graph["declared"]), ["Real"])
+
+    def test_a_name_two_scopes_declare_is_shared(self):
+        graph = self.graph({
+            "mobile/A.kt": "class A {\n    class Builder(private val db: Db) {\n        fun build() { db.write() }\n    }\n}\n",
+            "mobile/B.kt": "class B {\n    class Builder(private val bus: Bus) {\n        fun build() { bus.send() }\n    }\n}\n",
+        })
+        self.assertEqual(graph["shared"], ["Builder"])
+        self.assertEqual(graph["edges"]["Builder"], ["Bus.send", "Db.write"])
+
+    def test_a_default_lambda_in_the_header_does_not_open_the_body(self):
+        for header in (
+            "class Adapter(private val repo: Repo, private val onClick: () -> Unit = {}) :\n    Base() {\n",
+            "class Adapter(private val repo: Repo, private val onClick: () -> Unit = {})\n    : Base() {\n",
+        ):
+            with self.subTest(header=header):
+                graph = self.graph({"mobile/Adapter.kt": header + "    fun f() { repo.load() }\n}\n"})
+                self.assertEqual(graph["edges"], {"Adapter": ["Repo.load"]})
+
+
+class ShortestPaths(unittest.TestCase):
+    """One walk from a root answers every destination exactly as one walk per pair does."""
+
+    @staticmethod
+    def graphs() -> list[dict]:
+        diamond = {"A": ["B.x", "C.y"], "B": ["D.z"], "C": ["A.q", "D.w"], "D": ["E.v"]}
+        # Longer than the hop limit, so both walks must stop at the same depth.
+        chain = {f"N{i}": [f"N{i + 1}.m"] for i in range(9)}
+        rng = random.Random(7)
+        names = [f"T{i}" for i in range(12)]
+        shuffled = [
+            {n: sorted({f"{rng.choice(names)}.m{rng.randrange(3)}" for _ in range(rng.randrange(5))}) for n in names}
+            for _ in range(40)
+        ]
+        return [{"edges": e, "declared": {}} for e in [diamond, chain, *shuffled]]
+
+    def test_every_pair_matches_the_per_pair_walk(self):
+        for graph in self.graphs():
+            nodes = set(graph["edges"]) | {e.split(".")[0] for calls in graph["edges"].values() for e in calls}
+            for a in sorted(nodes):
+                paths = T.shortest_paths(graph, a)
+                self.assertNotIn(a, paths)
+                for b in sorted(nodes - {a}):
+                    self.assertEqual(paths.get(b), T.shortest_path(graph, a, b), (a, b))
 
 
 SQL_MIGRATION = """CREATE SCHEMA app;

@@ -37,11 +37,15 @@ class DiReader:
     `cls` puts a class name in group 1 at the class's start, and `di_call_graph` cuts the file
     at each such match. Inside a class, `field` puts a field in group 1 and its declared type in
     group 2, and `call` puts the receiver field in group 1 and the method in group 2.
+
+    `scopes`, when set, replaces `cls`: it takes a file's text and returns (name, text) for every
+    class in it, for a language whose classes nest and resume, which a cut at each start cannot say.
     """
 
     cls: re.Pattern[str]
     field: re.Pattern[str]
     call: re.Pattern[str]
+    scopes: Callable[[str], list[tuple[str, str]]] | None = None
 
 
 TYPESCRIPT_DI = DiReader(CLASS, FIELD, CALL)
@@ -212,12 +216,68 @@ def blank_typescript(src: str) -> str:
     return _blank_source(src, kotlin=False)
 
 
+# A `@` straight after a word or a backtick is a label (`return@forEach`, `this@Outer`), not an annotation.
+KOTLIN_ANNOTATION = re.compile(r"(?<![\w`@])@(?:\w+:)?\w+(?:\.\w+)*(?=\()")
+# `@interface` declares an annotation type rather than applying one, so it is not an annotation here.
+JAVA_ANNOTATION = re.compile(r"@(?!interface\b)[\w$]+(?:[ \t]*\.[ \t]*[\w$]+)*")
+CLOSERS = {"(": ")", "[": "]", "{": "}"}
+
+
+def _arguments_end(blanked: str, opener: int) -> int | None:
+    """The index after the bracket closing the one at `opener`, or None if it never closes.
+
+    A closer of the wrong kind ends the walk: it belongs to an enclosing body, and counting it
+    against the annotation would hand that body's brackets to the argument list.
+    """
+    expected: list[str] = []
+    for i in range(opener, len(blanked)):
+        char = blanked[i]
+        if char in CLOSERS:
+            expected.append(CLOSERS[char])
+        elif char in ")]}":
+            if char != expected.pop():
+                return None
+            if not expected:
+                return i + 1
+    return None
+
+
+def _annotation_opener(blanked: str, end: int) -> int | None:
+    """The `(` of the argument list after an annotation name ending at `end`, if it has one."""
+    after = end
+    while after < len(blanked) and blanked[after] in " \t\n":
+        after += 1
+    return after if after < len(blanked) and blanked[after] == "(" else None
+
+
+def _bound_unbalanced_annotations(blanked: str, annotation: re.Pattern[str]) -> str:
+    """`blanked` with each argument list that never closes blanked from its `(` to the end of that line.
+
+    Every reader downstream counts brackets: an open `(` stops `_scoped_declarations` reading any
+    declaration after it and keeps `declaration_end` from ever closing, so one malformed annotation
+    would cost every declaration below it. Losing the rest of its line costs at most that line.
+    """
+    out: list[str] = []
+    last = 0
+    for m in annotation.finditer(blanked):
+        opener = _annotation_opener(blanked, m.end())
+        if m.start() < last or opener is None or _arguments_end(blanked, opener) is not None:
+            continue
+        line_end = blanked.find("\n", opener)
+        line_end = len(blanked) if line_end < 0 else line_end
+        out.append(blanked[last:opener])
+        out.append(" " * (line_end - opener))
+        last = line_end
+    out.append(blanked[last:])
+    return "".join(out)
+
+
 def blank_kotlin(src: str) -> str:
-    return _blank_source(src, kotlin=True)
+    return _bound_unbalanced_annotations(_blank_source(src, kotlin=True), KOTLIN_ANNOTATION)
 
 
 def blank_java(src: str) -> str:
-    return _blank_source(src, kotlin=True, nested_comments=False)
+    return _bound_unbalanced_annotations(_blank_source(src, kotlin=True, nested_comments=False), JAVA_ANNOTATION)
 
 
 def blanked_source(rel: str, src: str) -> str:
@@ -380,8 +440,6 @@ JAVA_MODIFIER = (
     "public|private|protected|abstract|static|final|sealed|non-sealed|strictfp|default|"
     "synchronized|native|transient|volatile"
 )
-# `@interface` declares an annotation type rather than applying one, so it is not an annotation here.
-JAVA_ANNOTATION = re.compile(r"@(?!interface\b)[\w$]+(?:[ \t]*\.[ \t]*[\w$]+)*")
 JAVA_DECL = re.compile(
     rf"^[ \t]*(?:(?:{JAVA_MODIFIER})[ \t]+)*"
     rf"(?P<kw>class|interface|enum|record|@interface)\b"
@@ -408,29 +466,16 @@ def _blank_java_annotations(blanked: str) -> str:
     Skipped by structure rather than matched by the member pattern: an argument list nests
     parentheses and braces and may span lines, and a pattern that tried to consume it could back
     out of `@GetMapping(` and read `Mapping(` as a constructor. The text is already blanked, so a
-    bracket inside a string cannot unbalance the walk.
+    bracket inside a string cannot unbalance the walk, and `blank_java` has already cut an argument
+    list that never closes back to its own line, so only the name is left to blank there.
     """
     out: list[str] = []
     last = 0
     for m in JAVA_ANNOTATION.finditer(blanked):
         if m.start() < last:
             continue
-        end = m.end()
-        after = end
-        while after < len(blanked) and blanked[after] in " \t\n":
-            after += 1
-        if after < len(blanked) and blanked[after] == "(":
-            depth = 0
-            for i in range(after, len(blanked)):
-                if blanked[i] in "([{":
-                    depth += 1
-                elif blanked[i] in ")]}":
-                    depth -= 1
-                    if depth == 0:
-                        end = i + 1
-                        break
-            else:
-                end = len(blanked)
+        opener = _annotation_opener(blanked, m.end())
+        end = (_arguments_end(blanked, opener) if opener is not None else None) or m.end()
         out.append(blanked[last : m.start()])
         out.append(re.sub(r"[^\n]", " ", blanked[m.start() : end]))
         last = end
@@ -862,7 +907,66 @@ class ComponentDiReader(DiReader):
 CSHARP_DI = DiReader(CS_CLASS, CS_FIELD, CS_CALL)
 RAZOR_DI = ComponentDiReader(NO_CLASS, RAZOR_FIELD, CS_CALL)
 
-KT_CLASS = re.compile(r"^[ \t]*(?:(?:public|internal|expect|actual|abstract|open|data|sealed)\s+)*class\s+(\w+)", re.M)
+def _kotlin_type_end(lines: list[str], start: int) -> int:
+    """The 0-based last line of the Kotlin type whose header is on line `start` (0-based).
+
+    `declaration_end` alone ends `class A(val x: X) :\\n    Base() {` on its first line, where the
+    brackets balance before the body opens; a header that carries on is followed to its body.
+    """
+    depth, opened = 0, False
+    for n in range(start, len(lines)):
+        line = lines[n]
+        for ch in line:
+            # Only a `{` outside the header's brackets opens the body: one inside them is a
+            # default lambda (`onClick: () -> Unit = {}`), and the header may carry on after it.
+            if ch == "{" and depth == 0:
+                opened = True
+            if ch in "{[(":
+                depth += 1
+            elif ch in "}])":
+                depth -= 1
+        if depth > 0:
+            continue
+        if opened:
+            return n
+        tail = line.rstrip()
+        head = lines[n + 1].strip() if n + 1 < len(lines) else ""
+        carries_on = (bool(tail) and (tail[-1] in HEADER_TAIL or bool(HEADER_TAIL_WORD.search(tail)))) or (
+            bool(head) and (head[0] in HEADER_HEAD or bool(HEADER_HEAD_WORD.search(head)))
+        )
+        if not carries_on:
+            return n
+    return len(lines) - 1
+
+
+def kotlin_scopes(src: str) -> list[tuple[str, str]]:
+    """(name, text) of every named Kotlin type in `src`: its own lines, none of a nested type's.
+
+    A type ends where its brackets close, read on blanked text so that a type named in a comment or
+    a string is none, and the lines after a nested type's body are the enclosing type's again. A
+    companion is no owner of its own, because the store makes a class and its companion one symbol;
+    an unnamed `object` is either that or an expression. File-level code belongs to no type.
+    """
+    raw = src.split("\n")
+    lines = blank_kotlin(src).split("\n")
+    owner: list[int | None] = [None] * len(lines)
+    names: list[str] = []
+    for i, line in enumerate(lines):
+        m = KOTLIN_DECL.match(line)
+        if not m or " ".join(m.group("kw").split()) not in KOTLIN_TYPE_KEYWORDS:
+            continue
+        if m.group("name") is None or re.search(r"\bcompanion\b", line[: m.start("kw")]):
+            continue
+        names.append(m.group("name").strip("`"))
+        # Later headers are nested ones, so overwriting leaves each line with its innermost type.
+        for n in range(i, _kotlin_type_end(lines, i) + 1):
+            owner[n] = len(names) - 1
+    return [
+        (name, "\n".join(raw[n] for n, o in enumerate(owner) if o == index))
+        for index, name in enumerate(names)
+    ]
+
+
 KT_FIELD = re.compile(r"\b(?:val|var)\s+(\w+)\s*:\s*(\w+)")
 # `files.delete()` and `this.files.delete()` are one call in both JVM languages; `?.` is Kotlin's
 # safe call on a nullable injected field, which reads as one call too.
@@ -876,7 +980,7 @@ JAVA_CLASS = re.compile(
 # nested-class type (`Outer.Inner`) is named by its last segment, as `CS_FIELD` also does, so the
 # graph's `Type.method` edges never carry a second dot.
 JAVA_FIELD = re.compile(r"\b(?=[A-Z][\w.]*(?:<[^;=(){}]*>)?(?:\[\])*\s+(\w+)\s*[;=])(?:[A-Z]\w*\.)*([A-Z]\w*)")
-KOTLIN_DI = DiReader(KT_CLASS, KT_FIELD, JVM_CALL)
+KOTLIN_DI = DiReader(NO_CLASS, KT_FIELD, JVM_CALL, scopes=kotlin_scopes)
 JAVA_DI = DiReader(JAVA_CLASS, JAVA_FIELD, JVM_CALL)
 
 
@@ -1713,14 +1817,19 @@ def di_call_graph(repo: Path, roots: list[str]) -> dict:
     Each file is read by the call reader its extension is registered with, else by its
     `DiReader`, and a file of an extension with neither is skipped: another language's source read
     with TypeScript's patterns matches nothing today and could match anything tomorrow.
+
+    The graph is keyed by name, so two classes of one name are one owner with both edges, and
+    `declared` keeps one file for it. `shared` lists those names, for a caller that must not
+    mistake the merge for one class.
     """
     if not roots:
         # ripgrep reads the whole tree when handed no path at all; a tree with none of the
         # roots the caller offered must scan nothing, not everything.
-        return {"edges": {}, "declared": {}}
+        return {"edges": {}, "declared": {}, "shared": []}
     files = rg(repo, ["--files", *code_globs(), *roots])
     edges: dict[str, set[str]] = defaultdict(set)
     declared: dict[str, str] = {}
+    homes: dict[str, list[str]] = defaultdict(list)
     for rel in files:
         ext = Path(rel).suffix
         if ext in CALL_READERS:
@@ -1728,21 +1837,17 @@ def di_call_graph(repo: Path, roots: list[str]) -> dict:
             for caller, callee in CALL_READERS[ext](src):
                 declared.setdefault(caller, rel)
                 edges[caller].add(callee)
+                # A call reader yields one pair per call, so only a second file is a second owner.
+                if rel not in homes[caller]:
+                    homes[caller].append(rel)
             continue
         reader = DI_READERS.get(ext)
         if reader is None:
             continue
         src = (repo / rel).read_text(encoding="utf8", errors="replace")
-        if isinstance(reader, ComponentDiReader):
-            # The Razor compiler names a component's class after its file; `Checkout.razor` is `Checkout`.
-            marks = [(0, Path(rel).name.split(".")[0])]
-        else:
-            marks = [(m.start(), m.group(1)) for m in reader.cls.finditer(src)]
-        marks.append((len(src), None))
-        for i in range(len(marks) - 1):
-            start, name = marks[i]
-            body = src[start : marks[i + 1][0]]
+        for name, body in _di_scopes(reader, rel, src):
             declared[name] = rel
+            homes[name].append(rel)
             # A nested generic (`IDictionary<string, List<int>>`) gives a spurious second match
             # starting at its inner argument; the first match, left to right, is always the
             # outermost type, so it must win, not the last one written.
@@ -1753,7 +1858,20 @@ def di_call_graph(repo: Path, roots: list[str]) -> dict:
                 target = fields.get(m.group(1))
                 if target:
                     edges[name].add(f"{target}.{m.group(2)}")
-    return {"edges": {k: sorted(v) for k, v in edges.items()}, "declared": declared}
+    shared = sorted(name for name, where in homes.items() if len(where) > 1)
+    return {"edges": {k: sorted(v) for k, v in edges.items()}, "declared": declared, "shared": shared}
+
+
+def _di_scopes(reader: DiReader, rel: str, src: str) -> list[tuple[str, str]]:
+    """(name, text) of every class `reader` finds in the file `rel`."""
+    if reader.scopes is not None:
+        return reader.scopes(src)
+    if isinstance(reader, ComponentDiReader):
+        # The Razor compiler names a component's class after its file; `Checkout.razor` is `Checkout`.
+        return [(Path(rel).name.split(".")[0], src)]
+    marks = [(m.start(), m.group(1)) for m in reader.cls.finditer(src)]
+    marks.append((len(src), None))
+    return [(marks[i][1], src[marks[i][0] : marks[i + 1][0]]) for i in range(len(marks) - 1)]
 
 
 def shortest_path(graph: dict, src: str, dst: str, max_hops: int = 6) -> list[str] | None:
@@ -1772,6 +1890,31 @@ def shortest_path(graph: dict, src: str, dst: str, max_hops: int = 6) -> list[st
                 seen.add(owner)
                 queue.append((owner, path + [edge]))
     return None
+
+
+def shortest_paths(graph: dict, src: str, max_hops: int = 6) -> dict[str, list[str]]:
+    """Every owner `src` reaches, mapped to the path `shortest_path(graph, src, owner)` returns.
+
+    One walk serves every destination because the per-pair walk only differs from this one after it
+    first meets its destination, which is the moment it returns: up to then both have queued, marked
+    and popped the same owners in the same order.
+    """
+    edges = graph["edges"]
+    paths: dict[str, list[str]] = {}
+    queue = [(src, [src])]
+    seen = {src}
+    while queue:
+        cur, path = queue.pop(0)
+        if len(path) > max_hops:
+            continue
+        for edge in edges.get(cur, ()):
+            owner = edge.split(".")[0]
+            if owner != src and owner not in paths:
+                paths[owner] = path + [edge]
+            if owner not in seen:
+                seen.add(owner)
+                queue.append((owner, path + [edge]))
+    return paths
 
 
 def declaration_end(lines: list[str], start: int) -> int:
