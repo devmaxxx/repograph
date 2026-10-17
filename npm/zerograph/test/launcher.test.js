@@ -81,6 +81,9 @@ test("launching an old copy marks it, so the next sweep keeps it", () => {
 test("a rebuild of the same version and size runs the new bytes, not the old copy", () => {
   const s = sandbox();
   runnable(s.pkg, s.win());
+  // Linux stamps ctime from a coarse clock, so a rewrite within one tick would keep the install's
+  // key; on Windows the stamp is 100 ns and two installs never share it.
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 50);
   fs.rmSync(s.pkg);
   fs.writeFileSync(s.pkg, "y".repeat(1000));
   const copy = runnable(s.pkg, s.win());

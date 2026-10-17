@@ -12,7 +12,7 @@ has since grown to the 82 cases [Bench](benchmarks.md#bench) floors.
 
 Exact id or symbol first, then BM25 over passages, then a
 dense list, interleaved rank by rank; the surviving seeds expand one hop over the id graph, and the
-answer is rendered as `ID  path:line  headline`. The node kinds, the edge kinds, what the
+answer is rendered as `path:line  ID  headline`, each neighbour under its seed. The node kinds, the edge kinds, what the
 TypeScript and markdown extractors take, and what `impact`, `trace` and `changes` can and cannot
 prove are in [the graph model](graph-model.md).
 
