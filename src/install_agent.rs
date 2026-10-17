@@ -155,19 +155,17 @@ pub fn merged_settings(existing: &str, hook_path: &str, prior_hook: &str) -> Res
     let hooks = root.as_object_mut().unwrap().entry("hooks").or_insert_with(|| serde_json::json!({}));
     if !hooks.is_object() { anyhow::bail!("`hooks` in the settings file is not an object"); }
     let mut retired = Vec::new();
-    for (event, matcher, entry) in hook_entries(hook_path) {
-        let mut ours = entry;
+    // A hook from before the stamp has none, and its release wrote today's defaults.
+    let stamp = prior_hook.lines().nth(1).unwrap_or_default();
+    for (event, matcher, mut ours) in hook_entries(hook_path) {
         let list = hooks.as_object_mut().unwrap().entry(event).or_insert_with(|| serde_json::json!([]));
         let Some(arr) = list.as_array_mut() else { anyhow::bail!("`hooks.{event}` is not an array") };
         if arr.iter().any(|e| e.to_string().contains("repograph-notice")) { retired.push(event.to_string()); }
-        let existing = arr.iter()
+        let theirs = arr.iter()
             .filter(|e| ["zerograph-hook", "repograph-hook"].iter().any(|s| e.to_string().contains(s)))
-            .find_map(|e| e.get("matcher").and_then(|m| m.as_str()).map(str::to_string));
-        // A hook from before the stamp was written by a release whose defaults were today's.
-        let wrote = |m: &str| m == matcher || prior_hook.lines().nth(1).is_some_and(|l|
-            l.starts_with("// zerograph ") && l.split(' ').any(|t| t == format!("{event}={m}")));
-        let chosen = existing.filter(|m| !wrote(m)).unwrap_or_else(|| matcher.to_string());
-        ours.as_object_mut().unwrap().insert("matcher".into(), serde_json::json!(chosen));
+            .find_map(|e| e["matcher"].as_str())
+            .filter(|m| *m != matcher && !stamp.split(' ').any(|t| t == format!("{event}={m}")));
+        ours["matcher"] = serde_json::json!(theirs.unwrap_or(matcher));
         // Ours by the script it runs, never by position: a repository's own entries keep theirs.
         // `repograph-hook` is this hook under the name it had before the rename.
         arr.retain(|e| !["zerograph-hook", "repograph-hook", "repograph-notice"].iter().any(|s| e.to_string().contains(s)));
