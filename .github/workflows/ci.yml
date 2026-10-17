@@ -75,7 +75,7 @@ jobs:
         uses: actions/setup-node@v4
         with: { node-version: '20' }
       - if: ${{ !cancelled() }}
-        run: node --test agent/hook.test.mjs
+        run: node --test agent/hook.test.mjs npm/zerograph/test/launcher.test.js
 
       # A default Git for Windows install puts `git` on PATH and not `sh` — the Unix tools are an
       # opt-in — so `ask --rerank` looks for one. Route 1: Git's shell directories
@@ -281,8 +281,8 @@ jobs:
           npx zerograph --repo $R --no-dense trace write refund
           if ($LASTEXITCODE -ne 3) { throw "a verdict through the shim should exit 3, not $LASTEXITCODE" }
 
-          # An upgrade under a live server: the launcher runs a per-version copy, so the package's
-          # own binary can be overwritten while a detached `serve` answers, and `stop` ends it.
+          # An upgrade under a live server: the launcher runs a copy kept under LOCALAPPDATA, so the
+          # package's own binary can be overwritten while a detached `serve` answers, and `stop` ends it.
           if ($IsWindows) {
             npx zerograph --repo $R --no-dense serve --detach --idle 600
             if ($LASTEXITCODE -ne 0) { throw "serve --detach through the launcher failed: $LASTEXITCODE" }

@@ -97,7 +97,9 @@ jobs:
   # can only be configured on a package that exists, so its first version was published by
   # hand (docs/bench/runbook.md). scripts/npm-pack.sh packs the same tarball.
   npm:
-    needs: build
+    # After `verify`, so a version whose attestation failed is never published: npm will not take
+    # the same version twice, and the docs promise every binary it ships verifies.
+    needs: [build, verify]
     # Only a tag has a release to download from and a version to publish under.
     if: startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest

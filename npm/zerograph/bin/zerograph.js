@@ -33,28 +33,26 @@ function binaryPath() {
 // failed with EBUSY. The binary runs from a copy under LOCALAPPDATA instead, and the package's own
 // file is never held open. Any failure here runs the package's file as before.
 //
-// One slot per install, not per version: a project's devDependency and a global install, or two
-// packs of one version, each keep their own copy rather than evicting each other's on every run.
-// npm writes every file with one fixed mtime, so an install is told apart by its size and the time
-// it created the file.
+// One slot per version and size, so a project's devDependency and a global install at different
+// versions keep their own copies instead of evicting each other on every run, and a reinstall of
+// the same version reuses its copy rather than adding a 95 MB one. A published version's bytes
+// never change, so the size only tells unpublished packs apart.
 const SLOT_TTL_MS = 30 * 24 * 3600 * 1000;
 const TOUCH_MS = 24 * 3600 * 1000;
 
-function runnable(path) {
-  if (process.platform !== "win32" || !process.env.LOCALAPPDATA) return path;
+function runnable(path, { platform = process.platform, localAppData = process.env.LOCALAPPDATA, now = Date.now() } = {}) {
+  if (platform !== "win32" || !localAppData) return path;
   try {
     const { version } = require("../package.json");
-    const root = join(process.env.LOCALAPPDATA, "zerograph", "bin");
-    const src = fs.statSync(path);
-    const slot = `${version}-${src.size}-${Math.trunc(src.ctimeMs)}`;
+    const root = join(localAppData, "zerograph", "bin");
+    const slot = `${version}-${fs.statSync(path).size}`;
     const dir = join(root, slot);
     const copy = join(dir, "zerograph.exe");
     const used = join(dir, "used");
-    const now = Date.now();
     if (fs.existsSync(copy)) {
       // Marked at most once a day, so a slot in use is never the one the sweep below removes.
       try {
-        if (now - fs.statSync(used).mtimeMs > TOUCH_MS) fs.utimesSync(used, new Date(), new Date());
+        if (now - fs.statSync(used).mtimeMs > TOUCH_MS) fs.utimesSync(used, new Date(now), new Date(now));
       } catch {
         fs.writeFileSync(used, "");
       }
@@ -75,6 +73,7 @@ function runnable(path) {
       if (!fs.existsSync(copy)) throw e;
     }
     fs.writeFileSync(used, "");
+    fs.utimesSync(used, new Date(now), new Date(now));
     // Slots nothing has launched for a month; one whose binary still runs fails the delete and
     // stays.
     for (const other of fs.readdirSync(root)) {
@@ -92,16 +91,26 @@ function runnable(path) {
   }
 }
 
-const found = binaryPath();
-if (found.error) {
-  console.error(found.error);
-  process.exit(2);
+function main() {
+  const found = binaryPath();
+  if (found.error) {
+    console.error(found.error);
+    process.exit(2);
+  }
+  const args = process.argv.slice(2);
+  const exe = runnable(found.path);
+  let run = spawnSync(exe, args, { stdio: "inherit" });
+  // A sweep in another launcher can remove an old slot between our check and the spawn.
+  if (run.error && run.error.code === "ENOENT" && exe !== found.path) {
+    run = spawnSync(found.path, args, { stdio: "inherit" });
+  }
+  if (run.error) {
+    console.error(`zerograph: ${run.error.message}`);
+    process.exit(2);
+  }
+  // A signal death has no status; report it the way a shell would.
+  process.exit(run.status === null ? 128 : run.status);
 }
 
-const run = spawnSync(runnable(found.path), process.argv.slice(2), { stdio: "inherit" });
-if (run.error) {
-  console.error(`zerograph: ${run.error.message}`);
-  process.exit(2);
-}
-// A signal death has no status; report it the way a shell would.
-process.exit(run.status === null ? 128 : run.status);
+if (require.main === module) main();
+module.exports = { runnable };
