@@ -36,7 +36,6 @@ Sources: [the three-tool run](docs/bench/2026-09-04-three-graphs-results.md) and
 pnpm add -D zerograph                      # prebuilt: macOS arm64, Linux x64, Windows x64
 pnpm add -g zerograph                      # or globally with pnpm
 npm install -g zerograph                   # or globally with npm
-cargo install --path .                     # or from source
 
 zerograph build                            # full build into .zerograph/ (add it to .gitignore)
 zerograph ask cancellation policy          # answer in a few lines
