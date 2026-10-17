@@ -916,9 +916,15 @@ def _kotlin_type_end(lines: list[str], start: int) -> int:
     depth, opened = 0, False
     for n in range(start, len(lines)):
         line = lines[n]
-        opened = opened or "{" in line
-        depth += line.count("{") + line.count("[") + line.count("(")
-        depth -= line.count("}") + line.count("]") + line.count(")")
+        for ch in line:
+            # Only a `{` outside the header's brackets opens the body: one inside them is a
+            # default lambda (`onClick: () -> Unit = {}`), and the header may carry on after it.
+            if ch == "{" and depth == 0:
+                opened = True
+            if ch in "{[(":
+                depth += 1
+            elif ch in "}])":
+                depth -= 1
         if depth > 0:
             continue
         if opened:

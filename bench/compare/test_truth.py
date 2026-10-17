@@ -1171,6 +1171,15 @@ class KotlinCallScopes(unittest.TestCase):
         self.assertEqual(graph["shared"], ["Builder"])
         self.assertEqual(graph["edges"]["Builder"], ["Bus.send", "Db.write"])
 
+    def test_a_default_lambda_in_the_header_does_not_open_the_body(self):
+        for header in (
+            "class Adapter(private val repo: Repo, private val onClick: () -> Unit = {}) :\n    Base() {\n",
+            "class Adapter(private val repo: Repo, private val onClick: () -> Unit = {})\n    : Base() {\n",
+        ):
+            with self.subTest(header=header):
+                graph = self.graph({"mobile/Adapter.kt": header + "    fun f() { repo.load() }\n}\n"})
+                self.assertEqual(graph["edges"], {"Adapter": ["Repo.load"]})
+
 
 class ShortestPaths(unittest.TestCase):
     """One walk from a root answers every destination exactly as one walk per pair does."""
