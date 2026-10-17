@@ -28,7 +28,7 @@ quoted in comments) and answers questions about it in a few lines of text.
 
 [![zerograph against graphify and GitNexus: questions answered by each embedder and with rerank, and LLM tokens to build](docs/assets/comparison.png)](docs/assets/comparison.png)
 
-Sources: [the three-tool run](docs/bench/2026-09-04-three-graphs-results.md) and the 0.6.0 rows of `bench/history/runs.jsonl`.
+Sources: [the three-tool run](docs/bench/2026-09-04-three-graphs-results.md) and the 0.6.3 rows of `bench/history/runs.jsonl`.
 
 ## Get started
 
@@ -84,12 +84,12 @@ zerograph explain FR-PAY-22                # one node and everything attached to
 
 ## Benchmarks
 
-On the recorded 82 cases with the default embedder, at 244 p90 tokens an answer:
+On the recorded 82 cases with the default embedder, at 222 p90 tokens an answer:
 
 | Suite | Cases | Default | `--no-dense` |
 | --- | --- | --- | --- |
 | Keyword | 40 | 40/40 | 39/40 |
-| Paraphrase | 30 | 19/30 | 7/30 |
+| Paraphrase | 30 | 20/30 | 7/30 |
 | Code | 12 | 12/12 | 12/12 |
 
 The graph itself costs nothing to build. Floors, exit codes and the full tables:
