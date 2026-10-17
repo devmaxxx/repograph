@@ -7,7 +7,7 @@ const assert = require("node:assert");
 const fs = require("node:fs");
 const os = require("node:os");
 const { join } = require("node:path");
-const { runnable } = require("../bin/zerograph.js");
+const { runnable, spawnBinary } = require("../bin/zerograph.js");
 const { version } = require("../package.json");
 
 const DAY = 24 * 3600 * 1000;
@@ -76,4 +76,33 @@ test("launching an old copy marks it, so the next sweep keeps it", () => {
   assert.strictEqual(runnable(s.pkg, s.win(now)), mine);
   const used = fs.statSync(join(mine, "..", "used")).mtimeMs;
   assert.ok(now - used < DAY, "the launch did not mark the slot");
+});
+
+test("a rebuild of the same version and size runs the new bytes, not the old copy", () => {
+  const s = sandbox();
+  runnable(s.pkg, s.win());
+  fs.rmSync(s.pkg);
+  fs.writeFileSync(s.pkg, "y".repeat(1000));
+  const copy = runnable(s.pkg, s.win());
+  assert.strictEqual(fs.readFileSync(copy, "utf8"), "y".repeat(1000));
+});
+
+test("a copy swept before the spawn falls back to the package's binary", () => {
+  const calls = [];
+  const spawn = (exe) => {
+    calls.push(exe);
+    return exe === "copy.exe" ? { error: Object.assign(new Error("gone"), { code: "ENOENT" }) } : { status: 0 };
+  };
+  assert.strictEqual(spawnBinary("copy.exe", "pkg.exe", [], spawn).status, 0);
+  assert.deepStrictEqual(calls, ["copy.exe", "pkg.exe"]);
+});
+
+test("a binary that fails for another reason is not run twice", () => {
+  const calls = [];
+  const spawn = (exe) => {
+    calls.push(exe);
+    return { error: Object.assign(new Error("denied"), { code: "EACCES" }) };
+  };
+  assert.strictEqual(spawnBinary("copy.exe", "pkg.exe", [], spawn).error.code, "EACCES");
+  assert.deepStrictEqual(calls, ["copy.exe"]);
 });
