@@ -152,3 +152,34 @@ class MemberCalls(unittest.TestCase):
             self.assertIn("Invoice.send", S.T.di_call_graph(repo, ["android"])["edges"]["Checkout"])
             S.select(repo, out)
             self.assertEqual(traces(out), [("Screen", "Checkout")])
+
+
+class SharedNames(unittest.TestCase):
+    """The truth graph keys an owner by its name, so a hop through a name two scopes declare cannot be
+    told apart from the other scope's hop, and a case resting on it is dropped."""
+
+    def test_a_path_whose_via_hop_two_scopes_declare_is_dropped(self):
+        twin = {**SHOP, "android/legacy/Checkout.kt": (
+            "package legacy\n\nimport shop.Invoice\n\nclass Checkout(private val invoice: Invoice) {\n"
+            "    fun pay() { invoice.send() }\n}\n")}
+        with tempfile.TemporaryDirectory() as d:
+            repo, out = Path(d) / "corpus", Path(d) / "out"
+            repo.mkdir()
+            repository(repo, [twin])
+            graph = S.T.di_call_graph(repo, ["android"])
+            self.assertEqual(graph["shared"], ["Checkout"])
+            self.assertEqual(S.T.shortest_path(graph, "Screen", "Invoice"), ["Screen", "Checkout.pay", "Invoice.send"])
+            got = S.select(repo, out)
+            self.assertEqual(traces(out), [])
+            self.assertEqual((got["trace_end_not_one_jvm_type"], got["trace_name_two_scopes_share"]), (2, 1))
+
+    def test_an_end_a_nested_type_elsewhere_also_names_is_dropped(self):
+        nested = {**SHOP, "android/app/Panel.kt": (
+            "package app\n\nclass Panel {\n    class Invoice(private val ledger: Ledger) {\n"
+            "        fun send() { ledger.post() }\n    }\n}\n")}
+        with tempfile.TemporaryDirectory() as d:
+            repo, out = Path(d) / "corpus", Path(d) / "out"
+            repo.mkdir()
+            repository(repo, [nested])
+            S.select(repo, out)
+            self.assertEqual(traces(out), [("Screen", "Checkout")])

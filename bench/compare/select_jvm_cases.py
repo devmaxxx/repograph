@@ -130,11 +130,13 @@ def reaches(rel: str, body: str, scope: str, target: str, method: str) -> bool:
     return any(m.group(1) in receivers and m.group(2) == method for m in reader.call.finditer(scope))
 
 
-def trace_cases(repo: Path, files: list[str], roots: list[str]) -> tuple[list[dict], int, int, int]:
+def trace_cases(repo: Path, files: list[str], roots: list[str]) -> tuple[list[dict], int, int, int, int]:
     """A call path through a Java type, longest first: a path wholly between Kotlin classes reads Kotlin.
     Its ends are top-level JVM types declared once, so each has one store id to be asked by; a field
     typed by a library class gives the graph an edge to a type the corpus never declares, and no
-    tool can be asked for a path to that."""
+    tool can be asked for a path to that. No owner on it, end or hop, may be a name two classes
+    declare, nested ones included: the graph merges their calls under that name, so a hop it reports
+    may be the other class's, and `member_chain` checks only the one `declared` kept."""
     graph = T.di_call_graph(repo, roots)
     declared: dict[str, list[str]] = {}
     for rel in files:
@@ -144,20 +146,25 @@ def trace_cases(repo: Path, files: list[str], roots: list[str]) -> tuple[list[di
     targets = sorted({edge.split(".")[0] for calls in graph["edges"].values() for edge in calls})
     found = []
     for a in sorted(graph["edges"]):
+        paths = T.shortest_paths(graph, a)
         for b in targets:
-            path = T.shortest_path(graph, a, b) if a != b else None
+            path = paths.get(b)
             if not path:
                 continue
             owners = [a] + [edge.split(".")[0] for edge in path[1:]]
             if any(o in java_types for o in owners):
                 found.append((-len(path), a, b, path))
     found.sort()
-    cases, undeclared, unmade = [], 0, 0
+    shared = set(graph["shared"])
+    cases, undeclared, ambiguous, unmade = [], 0, 0, 0
     for _, a, b, path in found:
         if len(cases) == TRACE_MAX:
             break
         if len(declared.get(a, ())) != 1 or len(declared.get(b, ())) != 1:
             undeclared += 1
+            continue
+        if any(edge.split(".")[0] in shared for edge in [a, *path[1:]]):
+            ambiguous += 1
             continue
         if not member_chain(repo, graph, path):
             unmade += 1
@@ -166,7 +173,7 @@ def trace_cases(repo: Path, files: list[str], roots: list[str]) -> tuple[list[di
                       "from_id": store_id(declared[a][0], a), "to_id": store_id(declared[b][0], b),
                       "expect": "path", "via": [edge.split(".")[0] for edge in path[1:-1]],
                       "lang": ".java", "exts": list(JVM)})
-    return cases, len(found), undeclared, unmade
+    return cases, len(found), undeclared, ambiguous, unmade
 
 
 def changes_cases(repo: Path) -> tuple[list[dict], int]:
@@ -188,7 +195,7 @@ def select(repo: Path, out: Path) -> dict:
     files = sorted(f for f in git(repo, "ls-files", "-z", "*.java", "*.kt").split("\0") if f)
     roots = sorted({f.split("/", 1)[0] if "/" in f else "." for f in files})
     impact, impact_candidates = impact_cases(repo, files)
-    trace, trace_candidates, trace_undeclared, trace_unmade = trace_cases(repo, files, roots)
+    trace, trace_candidates, trace_undeclared, trace_ambiguous, trace_unmade = trace_cases(repo, files, roots)
     changes, windows = changes_cases(repo)
     truth = T.build(repo, [], impact + trace + changes, roots=roots)
     kept = [c for c in impact if truth["impact"][c["target"]]["refs"]]
@@ -207,6 +214,7 @@ def select(repo: Path, out: Path) -> dict:
         "impact_candidates": impact_candidates,
         "trace_candidates": trace_candidates,
         "trace_end_not_one_jvm_type": trace_undeclared,
+        "trace_name_two_scopes_share": trace_ambiguous,
         "trace_no_member_call": trace_unmade,
         "windows": windows,
         "kept": {kind: sum(c["kind"] == kind for c in kept) for kind in WAIVERS},
