@@ -47,6 +47,15 @@ add() {
   cp "$src" "$bin/$platform/$name" && chmod 755 "$bin/$platform/$name"
 }
 
+# The npm page shows the README packed with the version, so it is the repository's own, cut at
+# pack time: a hand-kept copy drifted from it. npm resolves no relative path, so each one is
+# pinned to this version's tag — images to the raw file, links to the GitHub page.
+repo=https://github.com/devmaxxx/zerograph
+sed -E \
+  -e "s#!\[([^]]*)\]\(([^):\#][^):]*)\)#![\1](https://raw.githubusercontent.com/devmaxxx/zerograph/v$version/\2)#g" \
+  -e "s#\]\(([^):\#][^):]*)\)#]($repo/blob/v$version/\1)#g" \
+  README.md >npm/zerograph/README.md
+
 [ -n "$darwin_arm64" ] && add darwin-arm64 "$darwin_arm64" zerograph
 [ -n "$linux_x64" ] && add linux-x64 "$linux_x64" zerograph
 [ -n "$win32_x64" ] && add win32-x64 "$win32_x64" zerograph.exe
